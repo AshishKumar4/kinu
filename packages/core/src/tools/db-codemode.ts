@@ -7,14 +7,18 @@
 
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import type { CodemodeProvider } from './sandbox-contract';
-import { TOOL_REACH } from './registry';
-import { branchableToolCall } from './outcome';
+import type { CodemodeProvider } from '../types/codemode';
+import { serve } from '../operations/operation';
+import {
+  ACTOR_COLUMN, ColumnSchema, DB, IDENTIFIER, OperatorCarrierSchema, OpSchema, PredicateOperationSchema, PredicateSchema,
+  SELECT_LIMIT_DEFAULT, SelectSchema, TableNameSchema, TableSpecSchema, WhereSchema, type AppColumnType,
+} from '../operations/db';
+import { codemodeNamespace } from './operation-surfaces';
 import type { RawSqlExec, SqlExecutor, SqlValue } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { DeferredRunEvent, RunEventRecorder } from '../events/recorder';
-import { KinuError, refusalOf, renderCauseChain } from '../obs/error';
-import { settle, settleSync } from '../obs/effect';
+import { KinuError, renderCauseChain } from '../obs/error';
+import { settleSync } from '../obs/effect';
 import { currentWorkMode, workModeRefusal } from '../execution/work-mode';
 import { JsonValueSchema, parseJsonValue, type JsonValue } from '../utils/json';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
@@ -31,12 +35,6 @@ const APP_TABLE_PREFIX = 'app_';
 /** Deliberately outside `app_`, so no logical name can address the catalogue. */
 const AGENT_DATA_CATALOG = 'agent_data_tables';
 
-/** Host-injected from the bound handle; rejected as a declared column on either scope. */
-const ACTOR_COLUMN = 'actor_id';
-
-const APP_COLUMN_TYPES = ['text', 'integer', 'real', 'blob', 'json'] as const;
-
-export type AppColumnType = (typeof APP_COLUMN_TYPES)[number];
 
 /** `json` is TEXT encoded at the boundary; SQLite has no JSON affinity. */
 const SQLITE_TYPE = {
@@ -47,133 +45,18 @@ const SQLITE_TYPE = {
   json: 'TEXT',
 } satisfies Readonly<Record<AppColumnType, string>>;
 
-const APP_COMPARISONS = ['=', '!=', '<', '<=', '>', '>=', 'like'] as const;
 
 /** Bounds refuse with their limit, never silently clamp. */
 const MAX_TABLES = 64;
 
-const MAX_COLUMNS = 32;
-
-const MAX_ROWS_PER_INSERT = 200;
-
-const MAX_BATCH_OPS = 100;
-
-const MAX_IN_VALUES = 200;
-
-const MAX_ORDER_TERMS = 8;
-
-const SELECT_LIMIT_DEFAULT = 100;
-
-const SELECT_LIMIT_MAX = 1000;
 
 /** Bound values per INSERT; longer runs are chunked, not refused. */
 const MAX_BINDINGS_PER_STATEMENT = 800;
 
-/** Re-applied in {@link quoted}, the only function that emits an identifier. */
-const IDENTIFIER = /^[a-z][a-z0-9_]{0,47}$/u;
 
 /** Drivers expose SQLite failures only by message; unrecognised errors stay `io`. */
 const SQLITE_REJECTED_VALUE = /\b(constraint failed|constraint|datatype mismatch)\b/iu;
 
-const IdentifierSchema = v.pipe(
-  v.string(),
-  v.regex(IDENTIFIER, 'a name must be lowercase letters, digits and underscores, start with a letter, and be at most 48 characters'),
-);
-
-const TableNameSchema = IdentifierSchema;
-
-const ColumnNameSchema = v.pipe(
-  IdentifierSchema,
-  v.check(
-    (name) => name !== ACTOR_COLUMN,
-    `\`${ACTOR_COLUMN}\` is the host's own column on an actor-scoped table and cannot be declared, read or written`,
-  ),
-);
-
-// `v.readonly()` so readonly caller specs (e.g. `as const` fixtures) type-check.
-const ColumnSchema = v.pipe(v.strictObject({
-  name: ColumnNameSchema,
-  type: v.picklist(APP_COLUMN_TYPES),
-  notNull: v.optional(v.boolean()),
-  primaryKey: v.optional(v.boolean()),
-  unique: v.optional(v.boolean()),
-}), v.readonly());
-
-const TableSpecSchema = v.pipe(v.strictObject({
-  name: TableNameSchema,
-  scope: v.picklist(APP_TABLE_SCOPES),
-  columns: v.pipe(
-    v.array(ColumnSchema),
-    v.minLength(1, 'a table needs at least one column'),
-    v.maxLength(MAX_COLUMNS, `a table may declare at most ${MAX_COLUMNS} columns`),
-    v.check(
-      (columns) => new Set(columns.map((column) => column.name)).size === columns.length,
-      'two columns cannot share a name',
-    ),
-    v.readonly(),
-  ),
-}), v.readonly());
-
-/** Parsed separately so `{ op: 'drop' }` is a bad predicate, not a JSON value. */
-const PredicateOperationSchema = v.union([
-  v.strictObject({ op: v.picklist(APP_COMPARISONS), value: JsonValueSchema }),
-  v.strictObject({
-    op: v.literal('in'),
-    values: v.pipe(v.array(JsonValueSchema), v.maxLength(MAX_IN_VALUES, `\`in\` accepts at most ${MAX_IN_VALUES} values`)),
-  }),
-  v.strictObject({ op: v.picklist(['isNull', 'notNull']) }),
-]);
-
-/** Order is the contract: an object with `op` is a predicate; compare documents via `{ op: '=', value }`. */
-const PredicateSchema = v.union([PredicateOperationSchema, JsonValueSchema]);
-
-const OperatorCarrierSchema = v.object({ op: v.string() });
-
-const WhereSchema = v.record(ColumnNameSchema, PredicateSchema);
-
-const SelectSchema = v.strictObject({
-  where: v.optional(WhereSchema),
-  columns: v.optional(v.pipe(
-    v.array(ColumnNameSchema),
-    v.minLength(1, 'name at least one column, or omit `columns` for all of them'),
-  )),
-  orderBy: v.optional(v.pipe(
-    v.array(v.strictObject({ column: ColumnNameSchema, dir: v.optional(v.picklist(['asc', 'desc'])) })),
-    v.maxLength(MAX_ORDER_TERMS, `order by at most ${MAX_ORDER_TERMS} columns`),
-  )),
-  limit: v.optional(v.pipe(
-    v.number(), v.integer(), v.minValue(1),
-    v.maxValue(SELECT_LIMIT_MAX, `one read returns at most ${SELECT_LIMIT_MAX} rows; page with \`offset\` or narrow the query`),
-  )),
-  offset: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0))),
-});
-
-const RowSchema = v.record(ColumnNameSchema, JsonValueSchema);
-
-const OpSchema = v.variant('op', [
-  v.strictObject({
-    op: v.literal('insert'),
-    table: TableNameSchema,
-    rows: v.pipe(
-      v.array(RowSchema),
-      v.minLength(1, 'insert at least one row'),
-      v.maxLength(MAX_ROWS_PER_INSERT, `insert at most ${MAX_ROWS_PER_INSERT} rows per operation`),
-    ),
-  }),
-  v.strictObject({
-    op: v.literal('update'),
-    table: TableNameSchema,
-    set: v.pipe(RowSchema, v.check((set) => Object.keys(set).length > 0, 'update needs at least one column in `set`')),
-    where: WhereSchema,
-  }),
-  v.strictObject({ op: v.literal('delete'), table: TableNameSchema, where: WhereSchema }),
-]);
-
-const BatchSchema = v.pipe(
-  v.array(OpSchema),
-  v.minLength(1, 'a batch needs at least one operation'),
-  v.maxLength(MAX_BATCH_OPS, `a batch runs at most ${MAX_BATCH_OPS} operations`),
-);
 
 export type AppColumn = v.InferOutput<typeof ColumnSchema>;
 
@@ -1032,143 +915,22 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
   };
 }
 
-/** Lives here, not in a prompt section, so it ships only where the provider is wired. */
-const DB_TYPES = `type DbValue = null | boolean | number | string | DbValue[] | { [key: string]: DbValue };
-type DbColumnType = 'text' | 'integer' | 'real' | 'blob' | 'json';
-type DbColumn = { name: string; type: DbColumnType; notNull?: boolean; primaryKey?: boolean; unique?: boolean };
-type DbTable = { name: string; scope: 'actor' | 'workspace'; columns: DbColumn[]; createdBy: string; createdAt: number };
-type DbPredicate = DbValue
-  | { op: '=' | '!=' | '<' | '<=' | '>' | '>=' | 'like'; value: DbValue }
-  | { op: 'in'; values: DbValue[] }
-  | { op: 'isNull' | 'notNull' };
-type DbWhere = { [column: string]: DbPredicate };
-type DbQuery = { where?: DbWhere; columns?: string[]; orderBy?: { column: string; dir?: 'asc' | 'desc' }[]; limit?: number; offset?: number };
-type DbWrite =
-  | { op: 'insert'; table: string; rows: { [column: string]: DbValue }[] }
-  | { op: 'update'; table: string; set: { [column: string]: DbValue }; where: DbWhere }
-  | { op: 'delete'; table: string; where: DbWhere };
-/**
- * Tables in this workspace's database: rows you filter, sort, count and update. No operation takes SQL;
- * each statement is built from these arguments against the table's declared columns. \`scope: 'actor'\`
- * rows are yours alone, \`scope: 'workspace'\` rows are shared with every agent here. \`where: {}\` matches
- * every row you can reach; an object with \`op\` is a predicate, so compare a JSON document with
- * \`{ op: '=', value: { ... } }\`.
- */
-export declare const db: {
-  /** Re-declaring the same shape does nothing; a different shape under an existing name is refused.
-   *  \`blob\` columns take and return base64, \`json\` columns any JSON document. */
-  createTable(spec: { name: string; scope: 'actor' | 'workspace'; columns: DbColumn[] }): Promise<DbTable | Refusal>;
-  listTables(): Promise<DbTable[] | Refusal>;
-  schema(table: string): Promise<DbTable | Refusal>;
-  /** ${SELECT_LIMIT_DEFAULT} rows unless \`limit\` says otherwise, at most ${SELECT_LIMIT_MAX}; page with \`offset\`. */
-  select(table: string, query?: DbQuery): Promise<{ [column: string]: DbValue }[] | Refusal>;
-  count(table: string, where?: DbWhere): Promise<number | Refusal>;
-  /** Up to ${MAX_ROWS_PER_INSERT} rows per call. */
-  insert(table: string, rows: { [column: string]: DbValue }[]): Promise<{ rowsAffected: number } | Refusal>;
-  update(table: string, set: { [column: string]: DbValue }, where: DbWhere): Promise<{ rowsAffected: number } | Refusal>;
-  deleteRows(table: string, where: DbWhere): Promise<{ rowsAffected: number } | Refusal>;
-  /** Up to ${MAX_BATCH_OPS} writes in one transaction: all land or none does; \`failedIndex\` names the one that failed. */
-  batch(ops: DbWrite[]): Promise<{ rowsAffected: number }[] | Refusal>;
-  /** Drop a table you declared, with its rows. Build turns only; an actor-scope table is refused while another agent holds rows in it. */
-  dropTable(table: string): Promise<{ ok: true } | Refusal>;
-};`;
-
-/** `planAllowed` marks members that can run on Plan; the store decides per call by scope. */
+/** `db.*` for programs: the catalog's db operations over one actor's store. A refused batch names its operation. */
 export function createDbCodemodeProvider(store: AppDataStore): CodemodeProvider {
-  return {
-    name: TOOL_REACH.db.codemode,
-    types: DB_TYPES,
-    positionalArgs: true,
-    tools: {
-      createTable: {
-        planAllowed: true,
-        description: 'Declare a table: db.createTable({ name, scope: "actor" | "workspace", columns }).',
-        execute: (...args) => branchableToolCall(() => settle(Effect.map(
-          parseInput(TableSpecSchema, { value: args[0], where: 'db.createTable(spec)' }),
-          (spec) => store.createTable(spec),
-        ))),
-      },
-      listTables: {
-        planAllowed: true,
-        description: 'List this workspace\'s tables with their scope and who declared each.',
-        execute: () => branchableToolCall(() => settle(Effect.sync(() => [...store.listTables()]))),
-      },
-      schema: {
-        planAllowed: true,
-        description: 'Read one table\'s column declaration.',
-        execute: (...args) => branchableToolCall(() => settle(Effect.map(
-          parseInput(TableNameSchema, { value: args[0], where: 'db.schema(table)' }),
-          (table) => store.schema(table),
-        ))),
-      },
-      select: {
-        planAllowed: true,
-        description: 'Read rows: db.select(table, { where?, columns?, orderBy?, limit?, offset? }).',
-        execute: (...args) => branchableToolCall(() => settle(Effect.gen(function* () {
-          const table = yield* parseInput(TableNameSchema, { value: args[0], where: 'db.select(table, query?)' });
-          const query = args[1] === undefined ? undefined : yield* parseInput(SelectSchema, { value: args[1], where: 'db.select(table, query?)' });
+  return codemodeNamespace('db', [
+    serve(DB.createTable, ({ spec }) => classified(() => store.createTable(spec))),
+    serve(DB.listTables, () => classified(() => [...store.listTables()])),
+    serve(DB.schema, ({ table }) => classified(() => store.schema(table))),
+    serve(DB.select, ({ table, ...query }) => classified(() => store.select(table, query))),
+    serve(DB.count, ({ table, where }) => classified(() => store.count(table, where))),
+    serve(DB.insert, ({ table, rows }) => classified(() => ({ rowsAffected: store.apply({ op: 'insert', table, rows }).rowsAffected }))),
+    serve(DB.update, ({ table, set, where }) => classified(() => ({ rowsAffected: store.apply({ op: 'update', table, set, where }).rowsAffected }))),
+    serve(DB.deleteRows, ({ table, where }) => classified(() => ({ rowsAffected: store.apply({ op: 'delete', table, where }).rowsAffected }))),
+    serve(DB.batch, ({ ops }) => classified(() => store.batch(ops).map(({ rowsAffected }) => ({ rowsAffected })))),
+    serve(DB.dropTable, ({ table }) => classified(() => {
+      store.dropTable(table);
 
-          return store.select(table, query);
-        }))),
-      },
-      count: {
-        planAllowed: true,
-        description: 'Count matching rows: db.count(table, where?).',
-        execute: (...args) => branchableToolCall(() => settle(Effect.gen(function* () {
-          const table = yield* parseInput(TableNameSchema, { value: args[0], where: 'db.count(table, where?)' });
-          const where = args[1] === undefined ? undefined : yield* parseInput(WhereSchema, { value: args[1], where: 'db.count(table, where?)' });
-
-          return store.count(table, where);
-        }))),
-      },
-      insert: {
-        planAllowed: true,
-        description: 'Insert rows: db.insert(table, rows).',
-        execute: (...args) => branchableToolCall(() => settle(Effect.map(parseInput(OpSchema, {
-          value: { op: 'insert', table: args[0], rows: args[1] },
-          where: 'db.insert(table, rows)',
-        }), (op) => ({ rowsAffected: store.apply(op).rowsAffected })))),
-      },
-      update: {
-        planAllowed: true,
-        description: 'Update matching rows: db.update(table, set, where).',
-        execute: (...args) => branchableToolCall(() => settle(Effect.map(parseInput(OpSchema, {
-          value: { op: 'update', table: args[0], set: args[1], where: args[2] },
-          where: 'db.update(table, set, where)',
-        }), (op) => ({ rowsAffected: store.apply(op).rowsAffected })))),
-      },
-      // Not `delete`: codemode registers reserved words as `delete_`, breaking hosted calls
-      // (see `cf-backend/tests/workerd/db-capability.test.ts`).
-      deleteRows: {
-        planAllowed: true,
-        description: 'Delete matching rows: db.deleteRows(table, where).',
-        execute: (...args) => branchableToolCall(() => settle(Effect.map(parseInput(OpSchema, {
-          value: { op: 'delete', table: args[0], where: args[1] },
-          where: 'db.deleteRows(table, where)',
-        }), (op) => ({ rowsAffected: store.apply(op).rowsAffected })))),
-      },
-      batch: {
-        planAllowed: true,
-        description: 'Run several writes in one all-or-nothing transaction: db.batch(ops).',
-        // Not `branchableToolCall`: that helper cannot carry `failedIndex`.
-        execute: (...args) => settle(Effect.flatMap(parseInput(BatchSchema, { value: args[0], where: 'db.batch(ops)' }), (ops) => classified(
-          () => store.batch(ops).map((result) => ({ rowsAffected: result.rowsAffected })),
-        )).pipe(Effect.catch((refused) => Effect.succeed(refused instanceof AppBatchError
-          ? { ...refusalOf(refused), failedIndex: refused.failedIndex }
-          : refusalOf(refused))))),
-      },
-      dropTable: {
-        planAllowed: false,
-        description: 'Retire a table you declared, with its rows.',
-        execute: (...args) => branchableToolCall(() => settle(Effect.map(
-          parseInput(TableNameSchema, { value: args[0], where: 'db.dropTable(table)' }),
-          (table) => {
-            store.dropTable(table);
-
-            return { ok: true };
-          },
-        ))),
-      },
-    },
-  };
+      return null;
+    })),
+  ]);
 }

@@ -53,7 +53,7 @@ async function reopened(workspace: Parameters<typeof hostedMainActor>[0], links:
   const shown = present(file.toModelOutput, 'the image output');
 
   const numbers = await Promise.all(links.map(async (path) => {
-    const output = JSON.stringify(await shown({ toolCallId: path, input: {}, output: await read({ action: 'read', path }) }));
+    const output = JSON.stringify(await shown({ toolCallId: path, input: {}, output: await read({ op: 'read', path }) }));
 
     return Array.from({ length: SHOTS }, (_, n) => n).find((n) => output.includes(screenshot(n))) ?? -1;
   }));
@@ -86,7 +86,7 @@ function conversationTurn(run: RecordedGatewayRun, sent: string): Response {
   const step = messages.filter((message) => message.role === 'tool').length;
 
   return step < SHOTS
-    ? toolCallCompletion(run, { tool: 'file', args: { action: 'read', path: `/home/main/shots/screen-${String(step)}.png` } }, `shot_${String(step)}`)
+    ? toolCallCompletion(run, { tool: 'file', args: { op: 'read', path: `/home/main/shots/screen-${String(step)}.png` } }, `shot_${String(step)}`)
     : chatCompletion(run, 'Screen 7 shows the error.');
 }
 
@@ -122,7 +122,7 @@ function searchTurn(run: RecordedGatewayRun, tier?: string): Response {
 
   return searched ? chatCompletion(run, 'Searched.') : toolCallCompletion(run, {
     tool: 'agents',
-    args: { action: 'swarm', task: SEARCH_TASK, preset: 'custom', from: 'ideate', label: 'inherited-screens', branches: 1, config: { context: 'inherit' }, ...(tier !== undefined && { tier }) },
+    args: { op: 'swarm', task: SEARCH_TASK, preset: 'custom', from: 'ideate', label: 'inherited-screens', branches: 1, config: { context: 'inherit' }, ...(tier !== undefined && { tier }) },
   }, 'search_0');
 }
 

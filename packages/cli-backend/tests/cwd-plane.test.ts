@@ -270,7 +270,7 @@ describe('addressing the bound directory', () => {
     const rt = agentRuntime(state, 'solo', project);
     const { file, asked } = agentTools(rt, () => 'deny');
 
-    await expect(file({ action: 'write', path: '../outside.txt', content: 'climbed' })).rejects.toMatchObject({ code: 'denied' });
+    await expect(file({ op: 'write', path: '../outside.txt', content: 'climbed' })).rejects.toMatchObject({ code: 'denied' });
     expect(asked).toEqual([`file write ${outside}`]);
     expect(existsSync(outside)).toBe(false);
   });
@@ -284,21 +284,21 @@ describe('addressing the bound directory', () => {
     let answer: ShellApprovalOutcome = 'deny';
     const { file, writeFile, asked } = agentTools(rt, () => answer);
 
-    expect(await file({ action: 'read', path: notes })).toEqual(expect.stringContaining('beside the project'));
+    expect(await file({ op: 'read', path: notes })).toEqual(expect.stringContaining('beside the project'));
     expect(asked).toEqual([]);
 
     const created = join(beside, 'created.txt');
-    await expect(file({ action: 'write', path: created, content: 'unasked' })).rejects.toMatchObject({ code: 'denied' });
+    await expect(file({ op: 'write', path: created, content: 'unasked' })).rejects.toMatchObject({ code: 'denied' });
     expect(await writeFile(join(beside, 'codemode.txt'), 'unasked')).toMatchObject({ success: false, reason: 'denied' });
     // A new directory outside is itself a change; the one a write lands in already exists.
-    await expect(file({ action: 'write', path: join(beside, 'fresh', 'a.txt'), content: 'unasked' })).rejects.toMatchObject({ code: 'denied' });
+    await expect(file({ op: 'write', path: join(beside, 'fresh', 'a.txt'), content: 'unasked' })).rejects.toMatchObject({ code: 'denied' });
     expect(asked).toEqual([`file write ${created}`, `file write ${join(beside, 'codemode.txt')}`, `file mkdir ${join(beside, 'fresh')}`]);
     expect([existsSync(created), existsSync(join(beside, 'codemode.txt')), existsSync(join(beside, 'fresh'))]).toEqual([false, false, false]);
 
     answer = 'allow';
-    expect(await file({ action: 'write', path: created, content: 'approved' })).toMatchObject({ ok: true });
+    expect(await file({ op: 'write', path: created, content: 'approved' })).toMatchObject({ action: 'created' });
     expect(readFileSync(created, 'utf8')).toBe('approved');
-    expect(await file({ action: 'write', path: join(project, 'inside.txt'), content: 'own' })).toMatchObject({ ok: true });
+    expect(await file({ op: 'write', path: join(project, 'inside.txt'), content: 'own' })).toMatchObject({ action: 'created' });
     expect(asked).toHaveLength(4);
   });
 
@@ -311,11 +311,11 @@ describe('addressing the bound directory', () => {
     const rt = agentRuntime(state, 'solo', project);
     const { file } = agentTools(rt, () => 'deny');
 
-    expect(await file({ action: 'list', path: 'vfs://' })).toMatchObject({ entries: expect.arrayContaining(['local']) });
-    expect(await file({ action: 'list', path: 'vfs://local' })).toMatchObject({ entries: expect.arrayContaining(['same.txt']) });
+    expect(await file({ op: 'list', path: 'vfs://' })).toMatchObject({ entries: expect.arrayContaining(['local']) });
+    expect(await file({ op: 'list', path: 'vfs://local' })).toMatchObject({ entries: expect.arrayContaining(['same.txt']) });
 
     for (const path of ['local://same.txt', 'vfs://local/same.txt', join(state, 'solo', 'local', 'same.txt')]) {
-      expect(await file({ action: 'read', path })).toEqual(expect.stringContaining('one copy'));
+      expect(await file({ op: 'read', path })).toEqual(expect.stringContaining('one copy'));
     }
   });
 
@@ -331,7 +331,7 @@ describe('addressing the bound directory', () => {
     const landed = realpathSync(outside);
 
     for (const path of ['local://linked/new.txt', 'vfs://linked/own.txt', 'local://dangling']) {
-      await expect(file({ action: 'write', path, content: 'escaped' })).rejects.toMatchObject({ code: 'denied' });
+      await expect(file({ op: 'write', path, content: 'escaped' })).rejects.toMatchObject({ code: 'denied' });
     }
 
     expect(asked).toEqual([`file write ${join(landed, 'new.txt')}`, `file write ${join(landed, 'own.txt')}`, `file write ${join(landed, 'dangling.txt')}`]);
@@ -356,13 +356,13 @@ describe('addressing the bound directory', () => {
     const spellings = ['local://linked/a.txt', 'vfs://local/linked/a.txt', join(space, 'local', 'linked', 'a.txt'), join(project, 'linked', 'a.txt'), 'linked/a.txt'];
 
     for (const path of spellings) {
-      await expect(file({ action: 'write', path, content: 'escaped' })).rejects.toMatchObject({ code: 'denied' });
+      await expect(file({ op: 'write', path, content: 'escaped' })).rejects.toMatchObject({ code: 'denied' });
     }
 
     expect(asked).toEqual(spellings.map(() => `file write ${join(realpathSync(outside), 'a.txt')}`));
     expect(readdirSync(outside)).toEqual([]);
 
-    await file({ action: 'write', path: join(space, 'local', 'plain.txt'), content: 'in the folder' });
+    await file({ op: 'write', path: join(space, 'local', 'plain.txt'), content: 'in the folder' });
     // `<space>/local` is the folder's link, so the shell follows it as the file tool does.
     expect([readFileSync(join(project, 'plain.txt'), 'utf8'), readlinkSync(join(space, 'local'))]).toEqual(['in the folder', project]);
 
@@ -388,7 +388,7 @@ describe('addressing the bound directory', () => {
 
     rt.setApprovalDeferrals?.(deferrals);
 
-    await expect(file({ action: 'write', path: created, content: 'unattended' })).rejects.toMatchObject({ code: 'unavailable' });
+    await expect(file({ op: 'write', path: created, content: 'unattended' })).rejects.toMatchObject({ code: 'unavailable' });
     expect((await present(rt.shell, 'the placed shell').exec('rm -rf build')).stderr).toContain('NOT RUN — queued');
 
     expect(parked).toEqual(['rm -rf build']);
@@ -403,8 +403,8 @@ describe('addressing the bound directory', () => {
     rt.actor.config.setShellApprovalMode('deny_all');
     const { file, asked } = agentTools(rt, () => 'allow');
 
-    await file({ action: 'read', path: notes });
-    await expect(file({ action: 'write', path: notes, content: 'replaced' })).rejects.toMatchObject({ code: 'denied' });
+    await file({ op: 'read', path: notes });
+    await expect(file({ op: 'write', path: notes, content: 'replaced' })).rejects.toMatchObject({ code: 'denied' });
     expect(asked).toEqual([]);
     expect(readFileSync(notes, 'utf8')).toBe('kept\n');
   });
@@ -418,11 +418,11 @@ describe('addressing the bound directory', () => {
     rt.actor.config.setShellApprovalMode('deny_all');
 
     expect((await present(rt.shell, 'the placed shell').exec('cat .env')).exitCode).not.toBe(0);
-    await expect(file({ action: 'read', path: '.env' })).rejects.toMatchObject({ code: 'denied' });
-    expect(await file({ action: 'read', path: 'README.md' })).toEqual(expect.stringContaining('# the project'));
+    await expect(file({ op: 'read', path: '.env' })).rejects.toMatchObject({ code: 'denied' });
+    expect(await file({ op: 'read', path: 'README.md' })).toEqual(expect.stringContaining('# the project'));
 
     rt.actor.config.setShellApprovalMode('strict');
-    expect(await file({ action: 'read', path: '.env' })).toEqual(expect.stringContaining('TOKEN=planted'));
+    expect(await file({ op: 'read', path: '.env' })).toEqual(expect.stringContaining('TOKEN=planted'));
   });
 
   test('a directory whose own name contains dots is not mistaken for an escape', async () => {
@@ -633,18 +633,18 @@ test('local Plan file inspection remains useful without granting native project 
 
   if (file === undefined) throw new Error('No Plan file tool');
   const inspect = toolExecute(file);
-  expect(await inspect({ action: 'list', path: '.' })).toMatchObject({ entries: expect.arrayContaining(['inspect.txt']) });
-  expect(await inspect({ action: 'stat', path: 'inspect.txt' })).toMatchObject({ isDir: false, size: 18 });
-  expect(await inspect({ action: 'search', path: 'inspect.txt', query: 'needle' })).toMatchObject({ matches: [{ line: 2, text: 'needle' }] });
-  expect(await inspect({ action: 'read', path: 'inspect.txt' })).toEqual(expect.stringContaining('needle'));
-  await expect(inspect({ action: 'write', path: 'inspect.txt', content: 'changed' })).rejects.toMatchObject({ code: 'denied' });
+  expect(await inspect({ op: 'list', path: '.' })).toMatchObject({ entries: expect.arrayContaining(['inspect.txt']) });
+  expect(await inspect({ op: 'stat', path: 'inspect.txt' })).toMatchObject({ isDir: false, size: 18 });
+  expect(await inspect({ op: 'search', path: 'inspect.txt', query: 'needle' })).toMatchObject({ matches: [{ line: 2, text: 'needle' }] });
+  expect(await inspect({ op: 'read', path: 'inspect.txt' })).toEqual(expect.stringContaining('needle'));
+  await expect(inspect({ op: 'write', path: 'inspect.txt', content: 'changed' })).rejects.toMatchObject({ code: 'denied' });
   expect(readFileSync(join(project, 'inspect.txt'), 'utf8')).toBe('alpha\nneedle\nomega');
   const buildFile = buildBuiltinTools({ rt, workMode: 'build', conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)) }).file;
 
   if (buildFile === undefined) throw new Error('No Build file tool');
   const build = toolExecute(buildFile);
-  await build({ action: 'read', path: 'inspect.txt' });
-  expect(await build({ action: 'write', path: 'inspect.txt', content: 'built' })).toMatchObject({ ok: true });
+  await build({ op: 'read', path: 'inspect.txt' });
+  expect(await build({ op: 'write', path: 'inspect.txt', content: 'built' })).toMatchObject({ bytes: 5 });
   expect(readFileSync(join(project, 'inspect.txt'), 'utf8')).toBe('built');
 });
 
@@ -656,10 +656,10 @@ test('a file the agent writes in its folder is named local://', async () => {
 
     if (file === undefined) throw new Error('No Build file tool');
 
-    return toolExecute(file)({ action: 'write', path: 'notes/plan.md', content: 'ship it' });
+    return toolExecute(file)({ op: 'write', path: 'notes/plan.md', content: 'ship it' });
   };
 
-  expect(await write(agentRuntime(state, 'bound', project))).toMatchObject({ ok: true, reference: 'local://notes/plan.md' });
+  expect(await write(agentRuntime(state, 'bound', project))).toMatchObject({ reference: 'local://notes/plan.md' });
   expect(readFileSync(join(project, 'notes/plan.md'), 'utf8')).toBe('ship it');
 });
 
@@ -671,17 +671,18 @@ test('the agent\'s own space is real files beside its database, and only its wor
   const space = join(state, 'solo');
   const file = toolExecute(present(buildBuiltinTools({ rt, workMode: 'build', conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)) }).file, 'the file tool'));
 
-  expect(await file({ action: 'write', path: 'vfs://slates/board/index.ts', content: 'board' })).toMatchObject({ reference: 'vfs://slates/board/index.ts' });
-  expect(await file({ action: 'write', path: join(space, 'slates/widgets/package.json'), content: '{}' })).toMatchObject({ ok: true });
-  expect(await file({ action: 'write', path: 'vfs://home/main/notes.md', content: 'scratch' })).toMatchObject({ ok: true });
-  expect(await file({ action: 'write', path: 'src/app.ts', content: 'work' })).toMatchObject({ reference: 'local://src/app.ts' });
+  expect(await file({ op: 'write', path: 'vfs://slates/board/index.ts', content: 'board' })).toMatchObject({ reference: 'vfs://slates/board/index.ts' });
+  expect(await file({ op: 'write', path: join(space, 'slates/widgets/package.json'), content: '{}' })).toMatchObject({ action: 'created' });
+  expect(await file({ op: 'write', path: 'vfs://home/main/notes.md', content: 'scratch' })).toMatchObject({ action: 'created' });
+  expect(await file({ op: 'write', path: 'src/app.ts', content: 'work' })).toMatchObject({ reference: 'local://src/app.ts' });
 
   expect(readFileSync(join(space, 'slates/board/index.ts'), 'utf8')).toBe('board');
   expect(readFileSync(join(space, 'slates/widgets/package.json'), 'utf8')).toBe('{}');
   expect(readFileSync(join(space, 'home/main/notes.md'), 'utf8')).toBe('scratch');
   expect(readFileSync(join(project, 'src/app.ts'), 'utf8')).toBe('work');
   expect(readdirSync(project)).toEqual(['src']);
-  expect(await file({ action: 'read', path: join(space, 'home/main/notes.md') })).toContain('scratch');
+  expect(await file({ op: 'read', path: 'vfs://skills/slates/SKILL.md' })).toContain('slate');
+  expect(await file({ op: 'read', path: join(space, 'home/main/notes.md') })).toContain('scratch');
   // The shell is the machine's, and its HOME is the one `~` names.
   expect((await present(rt.shell, 'the shell').exec('echo "$HOME"')).stdout.trim()).toBe(rt.planes.home);
 });
@@ -693,7 +694,7 @@ test('the file tool shows the agent a screenshot the rung moved out, from the li
   const rt = agentRuntime(state, 'shots', project);
   const { links } = await compactedScreenshots(rt);
   const file = present(buildBuiltinTools({ rt, conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)) }).file, 'the file tool');
-  const read = await toolExecute(file)({ action: 'read', path: links[0] ?? '' });
+  const read = await toolExecute(file)({ op: 'read', path: links[0] ?? '' });
 
   expect(links[0]).toStartWith('vfs://home/main/attachments/');
   expect(existsSync(join(state, 'shots', (links[0] ?? '').slice('vfs://'.length)))).toBe(true);
@@ -713,8 +714,8 @@ describe('main\'s state keeps its writer, whatever path reaches it', () => {
     symlinkSync(memory, join(project, 'notes-link'));
     const file = toolExecute(present(buildBuiltinTools({ rt, workMode: 'build', conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)) }).file, 'the file tool'));
 
-    expect(await file({ action: 'read', path: 'notes-link/MEMORY.md' })).toContain('learned something');
-    await expect(file({ action: 'write', path: 'notes-link/MEMORY.md', content: 'forged' })).rejects.toThrow('EROFS');
+    expect(await file({ op: 'read', path: 'notes-link/MEMORY.md' })).toContain('learned something');
+    await expect(file({ op: 'write', path: 'notes-link/MEMORY.md', content: 'forged' })).rejects.toThrow('EROFS');
     expect(await refusalOf(() => writeText(rt.storage.vfs, join(project, 'notes-link/MEMORY.md'), 'forged'))).toBe('EROFS');
     expect(await refusalOf(() => rt.storage.vfs.unlink(join(project, 'notes-link/MEMORY.md')))).toBe('EROFS');
     expect(readFileSync(join(memory, 'MEMORY.md'), 'utf8')).toContain('learned something');

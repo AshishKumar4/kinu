@@ -76,11 +76,13 @@ export function actorReadHandle(sql: SqlExecutor, row: WorkspaceActor): ActorHan
   return bindActorHandle(sql, identity, () => Effect.void);
 }
 
-/** `root` binds nothing; every row is read through its own actor's handle. */
+/** `root` binds nothing; every row is read through its own actor's handle. An agent in its own isolate keeps its plans
+ *  there, so `hostedPlans` carries what each one's isolate answered (D9). */
 export function readWorkspaceWork(
   sql: SqlExecutor,
   root: ActorHandle,
   actors: readonly WorkspaceActor[],
+  hostedPlans: ReadonlyMap<string, readonly PlanReview[]> = new Map(),
 ): WorkspaceWork {
   root.assertCurrent();
   const hasReviews = tableExists(sql, 'plan_reviews');
@@ -98,14 +100,12 @@ export function readWorkspaceWork(
       path: conversationPath(row, byId, root.actorId),
     };
 
-    if (hasReviews) {
-      const reviews = new PlanReviewStore(sql, actor).listPage('default', { limit: 50 });
+    const reviews = hostedPlans.get(row.actorId) ?? (hasReviews ? new PlanReviewStore(sql, actor).listPage('default', { limit: 50 }).items : []);
 
-      for (const plan of reviews.items) {
-        const linked = hasTasks ? readPlanTasks(sql, actor, plan) : [];
+    for (const plan of reviews) {
+      const linked = hasTasks ? readPlanTasks(sql, actor, plan) : [];
 
-        plans.push({ owner, plan, tasks: linked });
-      }
+      plans.push({ owner, plan, tasks: linked });
     }
 
     if (hasTasks) {

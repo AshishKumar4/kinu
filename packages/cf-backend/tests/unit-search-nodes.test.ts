@@ -31,7 +31,7 @@ function searching(node: (run: RecordedGatewayRun) => Response) {
 
     return stepOf(run) === 0
       ? toolCallCompletion(run, {
-        tool: 'agents', args: { action: 'swarm', task: TASK, preset: 'ideate', branches: 2, depth: 1 },
+        tool: 'agents', args: { op: 'swarm', task: TASK, preset: 'ideate', branches: 2, depth: 1 },
       }, 'swarm_0')
       : chatCompletion(run, 'Searching.');
   });

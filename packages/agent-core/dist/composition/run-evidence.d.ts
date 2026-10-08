@@ -1,8 +1,7 @@
-import { RunEvidencePort, RunMergePort, RunSourceRevisionPort, RunSpawnPort, SettlementEvidencePort, type AcceptanceId, type AcceptanceReceiptEvidence, type AbandonedRewriteEvidence, type ControlCommitEvidence, type AdministerControlEvidence, type DeliveryCommitEvidence, type ForcedCancellationEvidence, type ReceiptCommitEvidence, type RunCommit, type RunConfigurationSnapshot, type SettlementAuditObligation, type SpawnAttenuation, type SpawnReservation, type SynthesisCommitEvidence, type TurnAdmissionHandle } from "../agents/index.js";
+import { RunEvidencePort, RunMergePort, RunSourceRevisionPort, RunSpawnPort, SettlementEvidencePort, type AcceptanceId, type AcceptanceReceiptEvidence, type AbandonedRewriteEvidence, type AgentPolicyId, type AgentPolicyRevisionRecord, type ControlCommitEvidence, type ControlEffectAttempt, type ControlPreparedInvocation, type AdministerControlEvidence, type DeliveryCommitEvidence, type ForcedCancellationEvidence, type ReceiptCommitEvidence, type RunCommit, type RunConfigurationSnapshot, type SettlementAuditObligation, type SourcePin, type SpawnAttenuation, type SpawnReservation, type SynthesisCommitEvidence, type TurnAdmissionHandle } from "../agents/index.js";
 import type { Receipt } from "../invocations/index.js";
 import type { AuditRecordId, EventId, InvocationId, RouteReservationId } from "../interaction-references/index.js";
 import type { ApprovalId, EffectAttemptId, ReceiptId } from "../invocation-references/index.js";
-import type { TreeMergePolicy } from "../definition/index.js";
 import type { RunCommitId } from "../execution-references/index.js";
 export interface CanonicalRunEvidenceSource<Transaction> {
     receipt(transaction: Transaction, receipt: ReceiptId, audit: AuditRecordId): ReceiptCommitEvidence | undefined;
@@ -10,6 +9,8 @@ export interface CanonicalRunEvidenceSource<Transaction> {
     control(transaction: Transaction, receipt: ReceiptId, audit: AuditRecordId): ControlCommitEvidence | undefined;
     abandonedRewrite?(transaction: Transaction, receipt: ReceiptId, audit: AuditRecordId): AbandonedRewriteEvidence | undefined;
     storedReceipt?(transaction: Transaction, receipt: ReceiptId): Receipt | undefined;
+    storedAttempt?(transaction: Transaction, attempt: EffectAttemptId): ControlEffectAttempt | undefined;
+    storedInvocation?(transaction: Transaction, invocation: InvocationId): ControlPreparedInvocation | undefined;
     publishedHandle?(transaction: Transaction, invocation: InvocationId, itemIndex: number, itemKey: string): TurnAdmissionHandle | undefined;
     synthesis(transaction: Transaction, receipt: ReceiptId): SynthesisCommitEvidence | undefined;
     administer?(transaction: Transaction, receipt: ReceiptId, audit: AuditRecordId): AdministerControlEvidence | undefined;
@@ -24,6 +25,8 @@ export declare class CanonicalRunEvidencePort<Transaction> extends RunEvidencePo
     control(transaction: Transaction, receipt: ReceiptId, audit: AuditRecordId): ControlCommitEvidence | undefined;
     abandonedRewrite(transaction: Transaction, receipt: ReceiptId, audit: AuditRecordId): AbandonedRewriteEvidence | undefined;
     storedReceipt(transaction: Transaction, receipt: ReceiptId): Receipt | undefined;
+    storedAttempt(transaction: Transaction, attempt: EffectAttemptId): ControlEffectAttempt | undefined;
+    storedInvocation(transaction: Transaction, invocation: InvocationId): ControlPreparedInvocation | undefined;
     publishedHandle(transaction: Transaction, invocation: InvocationId, itemIndex: number, itemKey: string): TurnAdmissionHandle | undefined;
     synthesis(transaction: Transaction, receipt: ReceiptId): SynthesisCommitEvidence | undefined;
     administer(transaction: Transaction, receipt: ReceiptId, audit: AuditRecordId): AdministerControlEvidence | undefined;
@@ -63,20 +66,21 @@ export declare class CanonicalRunSpawnPort<Transaction> extends RunSpawnPort<Tra
 }
 export interface CanonicalMergeSource<Transaction> {
     concat(transaction: Transaction, commit: RunCommit, target: RunCommit, source: RunCommit): boolean;
-    tree(transaction: Transaction, commit: RunCommit, target: RunCommit, source: RunCommit): boolean;
+    treeBase(transaction: Transaction, commit: RunCommit, target: RunCommit, source: RunCommit): boolean;
     /**
-     * The `policies.treeMerge` the merge's own pinned PolicySet declares (SPEC §5.2.1). A
-     * composition whose Blueprint declared none answers nothing, and the Run plane refuses
-     * the merges that would have needed a side.
+     * The effective-policy source revision exactly this pin names by id and revision (SPEC
+     * §5.2.1, §9.2). The Run plane checks it against the pin and reads `policies.treeMerge` off
+     * the bytes the pinned digest addresses, so this answers where the bytes are, not what
+     * they declare.
      */
-    declaredTreeMerge(transaction: Transaction, commit: RunCommit): TreeMergePolicy | undefined;
+    effectivePolicy(transaction: Transaction, pin: SourcePin<AgentPolicyId>): AgentPolicyRevisionRecord | undefined;
 }
 export declare class CanonicalRunMergePort<Transaction> extends RunMergePort<Transaction> {
     private readonly source;
     constructor(source: CanonicalMergeSource<Transaction>);
     verifyConcat(transaction: Transaction, commit: RunCommit, target: RunCommit, source: RunCommit): boolean;
-    verifyTree(transaction: Transaction, commit: RunCommit, target: RunCommit, source: RunCommit): boolean;
-    declaredTreeMerge(transaction: Transaction, commit: RunCommit): TreeMergePolicy | undefined;
+    verifyTreeBase(transaction: Transaction, commit: RunCommit, target: RunCommit, source: RunCommit): boolean;
+    effectivePolicy(transaction: Transaction, pin: SourcePin<AgentPolicyId>): AgentPolicyRevisionRecord | undefined;
 }
 export interface CanonicalRunSource<Transaction> {
     verify(transaction: Transaction, snapshot: RunConfigurationSnapshot): boolean;

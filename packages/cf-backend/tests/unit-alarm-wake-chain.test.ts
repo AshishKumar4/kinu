@@ -323,7 +323,7 @@ describe('the workspace keeps exactly one wake per job', () => {
     // Started by a dead activation: this one's first pass re-drives it.
     jobsOver(db).create({
       id: 'bgjob-search', kind: 'agents', workMode: 'build', now: Date.now() - 60_000, label: 'search: tokenize faster',
-      input: JSON.stringify({ action: 'swarm', task, preset: 'ideate', branches: 1, depth: 1 }),
+      input: JSON.stringify({ op: 'swarm', task, preset: 'ideate', branches: 1, depth: 1 }),
     });
 
     try {

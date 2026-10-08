@@ -55,7 +55,7 @@ for (const cold of [false, true]) {
 
     if (!tool) throw new Error('The first child turn has no tool response.');
     expect(tool).toMatchObject({ content: [{ toolName: 'memory', output: {
-      type: 'json', value: { ok: true, key: 'child-only-tool-context' },
+      type: 'json', value: { key: 'child-only-tool-context' },
     } }] });
 
     const { agent } = cold

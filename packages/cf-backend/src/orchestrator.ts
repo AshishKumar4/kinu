@@ -31,7 +31,7 @@ import {
   type SqlExec, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
   isSubordinateOrigin,
   whenActorTakesInput,
-  type PlanEdit, type PlanReviewResult,
+  type PlanEdit, type PlanReview, type PlanReviewResult, actorReadHandle,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { agentFacet, agentStateShellId, AgentMemory, AgentStoreBroker, AgentWorkspaceHost, headDeltas, uiChunks, type AgentFacetPlacement } from "./agent-facets";
@@ -41,6 +41,7 @@ import { AgentTurns } from "./agent-turns";
 import { AgentWakes } from "./agent-wakes";
 import type { AgentTurnActivity, AgentSnapshot, StoredRow } from '@kinu.run/core';
 import type { SerializedMessage } from '@kinu.run/core';
+import { callOperation, listOperations, type OperationCaller, type OperationListing, type OperationResult } from '@kinu.run/core';
 import type { AgentFacet, AgentFacetCalls } from "./agent-facet/agent-facet";
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
@@ -72,7 +73,7 @@ import {
 } from "./hosted-actors";
 import { createCodemodeToolFactory } from "./codemode-tool";
 import { compactionDiagnostics, hostedActorCompaction } from "@kinu.run/compaction";
-import { publishSubordinateReport, temporaryRunSettles, type ReportToolDeps } from "@kinu.run/core";
+import { publishSubordinateReport, temporaryRunSettles, type ReportDeps } from "@kinu.run/core";
 import type { ToolSet } from "ai";
 import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
@@ -668,6 +669,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   private readonly agentIsolateSlots = new AgentIsolateSlots(this.ctx);
 
+  /** Each `callOperation` still running, by its call id, so `cancelOperation` can stop it. */
+  private readonly operationCalls = new Map<string, AbortController>();
+
   protected async agentCalls(actorId: string): Promise<AgentFacetCalls> {
     const key = `kinu-agent:${this.agentOf(actorId).storageKey}`;
 
@@ -1109,7 +1113,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const webSearch = this.ownedModelServices.getWebSearchProvider();
 
     // `report` belongs only to a parent-driven turn: an owner chat with this actor carries it neither natively nor in eval.
-    const report: ReportToolDeps | undefined = !turn.parentDriven ? undefined : {
+    const report: ReportDeps | undefined = !turn.parentDriven ? undefined : {
       report: async (input) => {
         const relayed = await publishSubordinateReport({ mode: turn.input.mode, reports: turn.reports }, {
           status: input.status, content: input.content, origin: 'report_tool',
@@ -1154,6 +1158,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       webSearch,
       jobs: this.hireJobs(turn.actor, turn.input.mode),
       ...(report !== undefined && { report }),
+      // The owner's own Plan turn, and its plan's feedback turn; a hirer's turn is never asked for the owner's review.
+      ...(turn.input.mode === 'plan' && !turn.parentDriven && { submitPlan: { submit: async (edits) => await this.hostedPlanSubmit(turn, edits) } }),
     };
 
     const built = buildActorTools(deps);
@@ -2239,9 +2245,22 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
-  /** A hosted agent's Plan turn submits through this, into its own store (`submitPlan` on its turn's tool surface). */
-  protected async hostedPlanSubmit(actorId: string, edits: readonly PlanEdit[]): Promise<PlanReviewResult> {
-    return await (await this.agentCalls(actorId)).submitPlan(this.agentSnapshot(actorId), edits);
+  /** A hosted agent's Plan turn submits into its own isolate's store, judged by the metadata the agent admitted it under. */
+  private async hostedPlanSubmit(turn: HostedTaskTurn, edits: readonly PlanEdit[]): Promise<PlanReviewResult> {
+    const actorId = turn.actor.handle.actorId;
+    const result = await (await this.agentCalls(actorId)).submitPlan(this.agentSnapshot(actorId), edits, turn.driving);
+
+    if (result.ok) turn.actor.stores.config.setHoldsPlans();
+
+    return result;
+  }
+
+  /** Each agent's plans from its own isolate (D9); only an agent that has submitted one is asked, retired ones included. */
+  private async hostedPlans(): Promise<Map<string, readonly PlanReview[]>> {
+    const holders = this.workspaceActors().list({ retired: true })
+      .filter((row) => row.parentActorId !== null && actorReadHandle(this.boundSql, row).config.getHoldsPlans());
+
+    return new Map(await Promise.all(holders.map(async (row) => [row.actorId, await (await this.agentCalls(row.actorId)).planReviews(this.agentSnapshot(row.actorId))] as const)));
   }
 
   private hirerName(record: WorkspaceActor): string {
@@ -2257,11 +2276,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const requirePeer = async (agent: string): Promise<void> => {
       this.requireOwnerUserId();
 
-      if (agent === this.name) throw new KinuError('bad_input', 'that is this agent: pick another peer (action:"list")');
+      if (agent === this.name) throw new KinuError('bad_input', 'that is this agent: pick another peer (op:"list")');
       const { stub, caller } = await this.userHub();
       const known = await stub.hasWorkspace(caller, agent);
 
-      if (!known) throw new KinuError('missing', `unknown peer "${agent}": list your team with action:"list"`);
+      if (!known) throw new KinuError('missing', `unknown peer "${agent}": list your team with op:"list"`);
     };
 
     return {
@@ -2907,6 +2926,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       this.boundSql,
       this.actorHandle(),
       this.workspaceActors().list({ retired: true }),
+      await this.hostedPlans(),
     );
   }
 
@@ -3539,10 +3559,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Host-owned: SLATE_READ_MODELS excludes this queue so a preview cannot counterfeit approvals. */
   @callable() async listPendingActions(): Promise<PendingAction[]> {
-    return this.pendingActions();
+    return this.pendingActions(await this.hostedPlans());
   }
 
-  private pendingActions(): PendingAction[] {
+  private pendingActions(hostedPlans: ReadonlyMap<string, readonly PlanReview[]>): PendingAction[] {
     // The queue row needs the unseen count, newest time, and how many entries offer keep/revert.
     const unseen = getUnseenChangelog(this.boundSql, this.rt.actor);
 
@@ -3555,8 +3575,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         latestAt: unseen[0]?.at ?? Date.now(),
       },
       curriculum: listProposedTasks(this.rt, 'pending'),
-      pendingPlans: listPendingPlanReviews(this.boundSql),
+      pendingPlans: [...listPendingPlanReviews(this.boundSql), ...this.hostedPendingPlans(hostedPlans)].sort((a, b) => b.updatedAt - a.updatedAt),
     });
+  }
+
+  private hostedPendingPlans(hostedPlans: ReadonlyMap<string, readonly PlanReview[]>): { owner: string; id: string; revision: number; content: string; updatedAt: number }[] {
+    return [...hostedPlans].flatMap(([actorId, plans]) => plans
+      .filter((plan) => plan.status === 'pending')
+      .map((plan) => ({ owner: this.agentOf(actorId).name, id: plan.id, revision: plan.revision, content: plan.content, updatedAt: plan.updatedAt })));
   }
 
   /** Run-level swarm search ledger, newest-updated first; identifies the latest search without node ordering. */
@@ -4292,8 +4318,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const warms = this.eventRecorder.readRecentByType('model_call', windowLimit)
       .flatMap((e) => (e.type === 'model_call' && e.source === 'warming' ? [e] : []));
 
-    const measures = this.eventRecorder.readContextMeasures();
-    const newest = measures.provider?.step;
+    const newest = this.eventRecorder.newestMeasuredStep() ?? undefined;
     const deviceId = newest?.egress?.startsWith('device ') === true ? newest.egress.slice('device '.length) : null;
 
     return {
@@ -4311,7 +4336,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // Null rather than a default: a share-of-window shown against a guessed
       // window would be a made-up percentage.
       contextWindow: this.modelCatalog.contextWindow(),
-      fill: contextFill(measures, this.modelCatalog.contextWindow()),
+      fill: contextFill(this.eventRecorder.readContextMeasures(), this.modelCatalog.contextWindow()),
       // Every step in the window, reporting or not: `summarizeSteps` counts the
       // silent ones into `stepsWithoutUsage` so the totals carry their own
       // denominator instead of quietly under-counting.
@@ -4501,6 +4526,38 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   async slateCallAs(caller: SlateCaller, id: string, name: string, request: SlateCallRequest): Promise<SlateCallResult> {
     return this.slates.surfaceCall(caller, id, name, request);
+  }
+
+  async callOperation(caller: OperationCaller, id: string, input: JsonValue, call: { readonly callId: string }): Promise<OperationResult> {
+    const stop = new AbortController();
+
+    this.operationCalls.set(call.callId, stop);
+
+    const cancelled = () => new KinuError('cancelled', `${id} was cancelled by its caller`);
+
+    // A refusal is the call's answer, as it left the operation; a cancelled call's answer is its cancellation, however
+    // the operation ended.
+    return await settle(Effect.ensuring(
+      Effect.promise(() => this.withReachedOperations(this.operationActor(caller.actorId), caller.mode, (providers) => callOperation(providers, id, input, { callId: call.callId, signal: stop.signal })))
+        .pipe(
+          Effect.catchCause((cause) => (stop.signal.aborted ? Effect.fail(cancelled()) : Effect.failCause(cause))),
+          Effect.flatMap((answer) => (stop.signal.aborted ? Effect.fail(cancelled()) : Effect.succeed(answer))),
+        ),
+      Effect.sync(() => { this.operationCalls.delete(call.callId); }),
+    ));
+  }
+
+  async listOperations(caller: OperationCaller): Promise<readonly OperationListing[]> {
+    return await this.withReachedOperations(this.operationActor(caller.actorId), caller.mode, async (providers) => listOperations(providers));
+  }
+
+  async cancelOperation(callId: string): Promise<void> {
+    this.operationCalls.get(callId)?.abort(new KinuError('cancelled', 'The caller cancelled the operation'));
+  }
+
+  /** The workspace actor is reached as itself; any other by its live directory entry. */
+  private operationActor(actorId: string): ActorReference | null {
+    return actorId === this.actorHandle().actorId ? null : actorReferenceOf(this.liveAgentOf(actorId));
   }
 
   /** The share route has already verified the request; admission and routing live on the slate host,
@@ -4938,16 +4995,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const pendingConsents = new DeviceConsentStore(this.boundSql).live(Date.now());
 
-    const [activePlan, listing] = await Promise.all([
+    const [activePlan, listing, hostedPlans] = await Promise.all([
       this.getActivePlanReview(),
       this.slates.list(ROOT_SLATE_CALLER),
+      this.hostedPlans(),
     ]);
 
     const pictures = this.pictures.digests();
     const shares = await this.slates.shareCards(new Map(listing.slates.map((slate) => [slate.id, slate.title])));
 
     const inputs = {
-      pendingActions: this.pendingActions(),
+      pendingActions: this.pendingActions(hostedPlans),
       pendingConsents,
       activePlan,
       slates: listing.slates.map((slate) => ({

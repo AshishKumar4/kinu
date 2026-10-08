@@ -290,7 +290,7 @@ test('an agent handed a message reads working from the handoff, before its drain
   named();
   expect((await activities(agent)).Scribe).toBe('idle');
 
-  await tools.agents?.execute?.({ action: 'msg', agent: name, message: 'Count the files.' }, { toolCallId: 'm', messages: [], context: undefined });
+  await tools.agents?.execute?.({ op: 'message', agent: name, message: 'Count the files.' }, { toolCallId: 'm', messages: [], context: undefined });
   endTick(agent);
 
   expect(named()).toContain('listWorkspaceAgents');

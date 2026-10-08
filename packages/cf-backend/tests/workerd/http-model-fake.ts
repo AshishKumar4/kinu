@@ -486,7 +486,7 @@ function toolBody(body: OutboundBody, callId: string, narration?: string): Respo
         type: 'function',
         function: {
           name: 'file',
-          arguments: JSON.stringify({ action: 'read', path: 'probe-fixture.txt' }),
+          arguments: JSON.stringify({ op: 'read', path: 'probe-fixture.txt' }),
         },
       }],
     }),
@@ -539,7 +539,7 @@ async function parityBody(body: OutboundBody): Promise<Response> {
       sseChunk({
         tool_calls: [{
           index: 0, id: 'call_parity_1', type: 'function',
-          function: { name: 'file', arguments: JSON.stringify({ action: 'read', path: 'probe-fixture.txt' }) },
+          function: { name: 'file', arguments: JSON.stringify({ op: 'read', path: 'probe-fixture.txt' }) },
         }],
       }),
       sseChunk({ role: 'assistant' }, 'tool_calls'),

@@ -1,10 +1,12 @@
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
-import { jsonSchema, tool, type ToolSet } from 'ai';
-import { buildSystemPromptSync, compilePromptSurface, currentDateForPrompt, BUILTIN_ROLE_DEFINITIONS, turnReasonForMetadata, workModeForTurnMetadata, buildBuiltinTools, permitInPlan, skillIndexLine, type SkillHeader } from '../src/index';
-
-import { createTestRuntime, scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
+import * as v from 'valibot';
+import { asSchema, jsonSchema, tool, type ToolSet } from 'ai';
+import { AGENTS_OPS, BUILTIN_SKILLS, buildSystemPromptSync, compilePromptSurface, currentDateForPrompt, BUILTIN_ROLE_DEFINITIONS, turnReasonForMetadata, workModeForTurnMetadata, buildBuiltinTools, permitInPlan, skillIndexLine, type SkillHeader } from '../src/index';
+import { createAgentsTool } from '../src/delegation/agents-operations';
+import { swarmSeats } from './helpers-actor-host';
+import { createTestRuntime, scriptedTurnModel, unobservedSearchSeams, type ScriptedTurnResult } from '@kinu.run/test-utils';
 import { conversationsFor } from './helpers';
 import { sessionFixture } from './helpers-session';
 
@@ -81,7 +83,7 @@ describe('buildSystemPromptSync', () => {
           return {
             content: index < 2
               ? [{ type: 'tool-call', toolName: 'file', toolCallId: `file-${requests}`,
-                input: JSON.stringify(index === 0 ? { action: 'read', path } : { action: 'write', path, content: 'changed' }) }]
+                input: JSON.stringify(index === 0 ? { op: 'read', path } : { op: 'write', path, content: 'changed' }) }]
               : [{ type: 'text', text: 'done' }],
             finishReason: { unified: index < 2 ? 'tool-calls' : 'stop', raw: undefined },
             usage: {
@@ -130,3 +132,20 @@ describe('buildSystemPromptSync', () => {
 });
 
 // Prefix caching stops at the first differing byte, so what every workspace shares comes first.
+
+test('no built-in skill body calls an op or a field the agents tool does not have', async () => {
+  // Nothing typechecks a template string, so a renamed op or field drifts silently. The tool is the production one,
+  // wired for searches, which is what the skills call.
+  const { rt, testSql } = createTestRuntime();
+  const agents = createAgentsTool({ mode: 'build', swarms: true, swarm: { rt, ...swarmSeats({ rt, db: testSql.db }, () => { throw new Error('no model here'); }), ...unobservedSearchSeams() } });
+  const offered = v.parse(v.object({ properties: v.record(v.string(), v.unknown()) }), await asSchema(agents.inputSchema).jsonSchema);
+  const fields = Object.keys(offered.properties);
+
+  for (const skill of BUILTIN_SKILLS) {
+    for (const [, op] of skill.body.matchAll(/op:\s*["'](\w+)["']/g)) expect<readonly string[]>(AGENTS_OPS).toContain(op);
+
+    for (const [, call] of skill.body.matchAll(/agents\(\{([^}]*)\}/g)) {
+      for (const [, key] of call.matchAll(/(\w+):/g)) expect(fields).toContain(key);
+    }
+  }
+});

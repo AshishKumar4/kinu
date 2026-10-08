@@ -8,7 +8,8 @@ import { KinuError } from '../src/obs/error';
 import { FileRefusalError } from '../src/types/file-edits';
 import { McpToolError } from '../src/tools/mcp-error';
 import type { JsonValue } from '../src/utils/json';
-import { imageCarrier, imageModelOutput } from '../src/tools/image-results';
+import { imageModelOutput } from '../src/tools/image-results';
+import { imageCarrier } from '../src/types/tool-images';
 
 async function drive(results: readonly (Error | JsonValue)[], history: ModelMessage[] = []) {
   let step = 0;

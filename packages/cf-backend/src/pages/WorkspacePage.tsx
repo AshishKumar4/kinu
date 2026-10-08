@@ -1,5 +1,5 @@
 import { Effect, Cause } from 'effect';
-import { Fragment, startTransition, useState, useRef, useEffect, useCallback, useMemo, type RefObject } from "react";
+import { Fragment, createContext, startTransition, useContext, useState, useRef, useEffect, useCallback, useMemo, type RefObject } from "react";
 import { useParams, useLocation, Link, useMatch, useNavigate, useSearchParams } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -12,7 +12,7 @@ import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   isPlaceholderMission, summarizeRestorePlan,
 } from "@kinu.run/core";
-import type { AlternateTakeSet, DiffAnchor, FileRestoreChange, Rpc, TakePickOutcome } from "@kinu.run/core";
+import type { AlternateTakeSet, DiffAnchor, FileRestoreChange, PlanReview, Rpc, TakePickOutcome } from "@kinu.run/core";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { useActorChat, useKinu, type WorkspaceNotice } from "@/hooks/use-kinu";
 import { useAutogrow } from "@/hooks/use-autogrow";
@@ -165,10 +165,10 @@ export function ChatErrorCard({ message, refused, streaming, onRetry, onDismiss 
         <WarningCircleIcon size={16} className={`shrink-0 mt-0.5 ${refused ? "p-text-3" : "p-danger"}`} weight="fill" />
         <div className="min-w-0 flex-1">
           {refused
-            ? <div className="text-xs p-text font-medium break-all">This tab couldn't reconnect: {message}</div>
+            ? <h3 className="text-xs p-text font-medium break-all">This tab couldn't reconnect: {message}</h3>
             : (
               <>
-                <div className="text-xs p-text font-medium">The last turn failed and produced no answer</div>
+                <h3 className="text-xs p-text font-medium">The last turn failed and produced no answer</h3>
                 <code className="block mt-1 p-t-code p-text-2 break-all p-card rounded-sm px-2 py-1 max-h-28 overflow-y-auto">{message}</code>
                 <div className="p-meta p-text-3 mt-1.5">Retry reuses this message in the same conversation.</div>
               </>
@@ -179,7 +179,7 @@ export function ChatErrorCard({ message, refused, streaming, onRetry, onDismiss 
         <button onClick={onDismiss}
           className="px-2.5 py-1 p-t-control rounded-md p-text-3 hover:p-text cursor-pointer">Dismiss</button>
         {!refused && (
-          <button onClick={onRetry} disabled={streaming}
+          <button onClick={onRetry} disabled={streaming} data-retry
             className="px-2.5 py-1 p-t-control rounded-md p-accent-bg p-accent hover:opacity-90 disabled:opacity-40 cursor-pointer flex items-center gap-1">
             <ArrowsClockwiseIcon size={11} />Retry this turn
           </button>
@@ -512,6 +512,24 @@ function routedAgentPath({ subName, "*": below }: Readonly<Record<string, string
   return [subName, ...(below ?? "").split("/").filter(Boolean)].join("/");
 }
 
+/** The shown agent's plan and its window's RPC: an agent's plan is reviewed through its own window (D9), so the work
+ *  surface takes both from the agent's pane, never from the workspace's socket. */
+interface AgentPlanWindow {
+  readonly plan: PlanReview | null;
+  readonly rpc: Rpc;
+}
+
+const AgentPlanWindowContext = createContext<(window: AgentPlanWindow | null) => void>(() => {});
+
+/** The plan the work surface reviews and the RPC its decisions go through: the workspace's own on the main pane, the
+ *  shown agent's from its pane otherwise. */
+function useReviewedPlan(subName: string | undefined, root: AgentPlanWindow) {
+  const [agentWindow, setAgentWindow] = useState<AgentPlanWindow | null>(null);
+  const shown = subName === undefined ? root : agentWindow ?? { plan: null, rpc: root.rpc };
+
+  return { plan: shown.plan, planRpc: shown.rpc, showAgentWindow: setAgentWindow };
+}
+
 /** The work read names an owner by its own name, the last of its path. */
 function planOwnerName(subName: string | undefined, agentId: string | undefined): string {
   if (subName !== undefined) return subName.slice(subName.lastIndexOf("/") + 1);
@@ -561,6 +579,10 @@ function SubordinateChatColumn({
   const input = ui.draft;
   const setInput = ui.setDraft;
   usePlanApprovedMode(state.activePlan, ui.setMode);
+  const showPlanWindow = useContext(AgentPlanWindowContext);
+
+  useEffect(() => { showPlanWindow({ plan: state.activePlan, rpc: state.rpc }); }, [showPlanWindow, state.activePlan, state.rpc]);
+  useEffect(() => () => { showPlanWindow(null); }, [showPlanWindow]);
 
   const chat = useChatThread({
     rpc: state.rpc, live: state.messages, seeded: state.transcriptSeeded,
@@ -840,7 +862,8 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
     reportSide(source, describeError({ cause: Cause.squash(failed) }));
   }), [reportSide]);
 
-  const visiblePlan = state.activePlan;
+  const reviewed = useReviewedPlan(subName, { plan: state.activePlan, rpc: state.rpc });
+  const visiblePlan = reviewed.plan;
   const [surface, setSurface] = useState<SurfaceKind>("Work");
   const [changesFocus, setChangesFocus] = useState<ChangesFocus | null>(null);
   const workbench = useRef<WorkbenchHandle | null>(null);
@@ -1130,8 +1153,10 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
               <SwarmNodePane key={shownNode} main={state} node={shownNode} ownerPath={nodeOwner} agent={shownAgent} rosterLoaded={rosterLoaded} />
             )}
             {shownNode === null && (subName ? (
-              <AgentChatColumn key={subName} workspace={agentId} subName={subName} subordinates={state.subordinates} rpc={state.rpc} ids={linkIds}
-                input={shownAgent?.input ?? true} />
+              <AgentPlanWindowContext.Provider value={reviewed.showAgentWindow}>
+                <AgentChatColumn key={subName} workspace={agentId} subName={subName} subordinates={state.subordinates} rpc={state.rpc} ids={linkIds}
+                  input={shownAgent?.input ?? true} />
+              </AgentPlanWindowContext.Provider>
             ) : (
             <div className="@container relative flex flex-col flex-1 min-h-0" data-agent-pane={`${agentId}/main`}
               {...chatDrop}>
@@ -1273,6 +1298,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
             changesFocus={changesFocus}
             filesFocus={filesFocus}
             planOwner={planOwnerName(subName, agentId)}
+            planRpc={reviewed.planRpc}
             workspacePlanArrival={state.workspacePlanArrival}
             onReviewActor={async (name, actorId) => {
               await navigate(`${helperBase(agentId, name).slice(0, -1)}${actorId === undefined ? "" : `?actor=${encodeURIComponent(actorId)}`}`);

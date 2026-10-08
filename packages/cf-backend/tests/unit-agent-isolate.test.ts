@@ -25,12 +25,12 @@ test('a planner a Build turn hires cannot write files through the workspace', as
     const answered = toolOutputs(run) !== '[]';
 
     if (openingOf(run).includes('Plan the change.')) {
-      return answered ? chatCompletion(run, 'Planned.') : toolCallCompletion(run, { tool: 'file', args: { action: 'write', path, content: 'x' } }, 'call_leak');
+      return answered ? chatCompletion(run, 'Planned.') : toolCallCompletion(run, { tool: 'file', args: { op: 'write', path, content: 'x' } }, 'call_leak');
     }
 
     return answered
       ? chatCompletion(run, 'Root waits.')
-      : toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'planner', lifetime: 'task', mission: 'Plan the change.' } }, 'call_planner');
+      : toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'planner', lifetime: 'task', mission: 'Plan the change.' } }, 'call_planner');
   });
 
   const workspace = gatewayWorkspace(gateway);
@@ -152,7 +152,7 @@ test("a hire made with context=inherit carries its hirer's working conversation 
     if (!opening.includes('The code word is OTTER.')) return chatCompletion(run, 'Root noted.');
 
     return toolOutputs(run) === '[]'
-      ? toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', lifetime: 'task', context: 'inherit', mission: 'Pass it on.' } }, 'call_inherit')
+      ? toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'task', context: 'inherit', mission: 'Pass it on.' } }, 'call_inherit')
       : chatCompletion(run, 'Hired.');
   });
 
@@ -193,7 +193,7 @@ test("a hired agent's conversation recall searches its own conversation", async 
     if (!openingOf(run).includes('Recall the word.')) return chatCompletion(run, 'Noted the word.');
 
     return toolOutputs(run) === '[]'
-      ? toolCallCompletion(run, { tool: 'memory', args: { action: 'conversations', query: 'OTTER' } }, 'call_recall')
+      ? toolCallCompletion(run, { tool: 'memory', args: { op: 'searchConversations', query: 'OTTER' } }, 'call_recall')
       : chatCompletion(run, 'Recalled.');
   });
 
@@ -231,7 +231,7 @@ test("a hired agent's model spend counts in the workspace's and the account's to
 
 test("a hired agent's working context is read and edited where its conversation is, by it and by its hirer", async () => {
   const EDIT = 'Edit your context.';
-  const edit = { action: 'edit', path: '/context/working.jsonl', edits: [{ old_text: 'First task OTTERX.', new_text: 'First task OTTERX. INJECTED-NOTE' }] };
+  const edit = { op: 'edit', path: '/context/working.jsonl', edits: [{ old_text: 'First task OTTERX.', new_text: 'First task OTTERX. INJECTED-NOTE' }] };
 
   // The hire edits with its own file tool: read, then edit, then answer.
   const gateway = stubAiBinding((run) => {
@@ -241,7 +241,7 @@ test("a hired agent's working context is read and edited where its conversation 
     if (opened < 0) return chatCompletion(run, 'Done.');
     const step = messages.slice(opened).filter((message) => message.role === 'tool').length;
 
-    if (step === 0) return toolCallCompletion(run, { tool: 'file', args: { action: 'read', path: '/context/working.jsonl' } }, 'call_read');
+    if (step === 0) return toolCallCompletion(run, { tool: 'file', args: { op: 'read', path: '/context/working.jsonl' } }, 'call_read');
 
     return step === 1 ? toolCallCompletion(run, { tool: 'file', args: edit }, 'call_edit') : chatCompletion(run, 'Done.');
   });
@@ -267,7 +267,7 @@ test("a hired agent's working context is read and edited where its conversation 
     .flatMap((run) => requestOf(run).messages.flatMap((message) => (message.role === 'tool' ? [String(message.content)] : [])));
 
   expect(answers.some((answer) => answer.includes('First task OTTERX.'))).toBe(true);
-  expect(answers.some((answer) => answer.startsWith('{"ok":true'))).toBe(true);
+  expect(answers.some((answer) => answer.includes('"applied":[{'))).toBe(true);
   expect(await main()).toContain('First task OTTERX. INJECTED-NOTE');
   await wakeForDelegatedTask(workspace, middleId, 'Third task.');
   await driveUntil(workspace, 'the third turn never ended', () => ended() > 2);
@@ -278,7 +278,7 @@ test("a hired agent's working context is read and edited where its conversation 
 test("a child's client snapshot counts its own chat inputs and answers", async () => {
   const gateway = stubAiBinding((run) => openingOf(run).includes('Counter task.') || toolOutputs(run) !== '[]'
     ? chatCompletion(run, 'Done.')
-    : toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', lifetime: 'durable', mission: 'Counter task.' } }, 'call_counter'));
+    : toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'durable', mission: 'Counter task.' } }, 'call_counter'));
 
   const workspace = gatewayWorkspace(gateway);
 

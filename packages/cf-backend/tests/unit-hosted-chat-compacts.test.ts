@@ -136,7 +136,7 @@ test("an added agent's chat compacts, hires, starts a search, and keeps answerin
     if (text.includes(SEARCH_ASK) && !called.swarm) {
       called.swarm = true;
 
-      return toolCallCompletion(run, { tool: 'agents', args: { action: 'swarm', task: SEARCH_TASK, preset: 'ideate', branches: 1, depth: 1 } }, 'swarm_0');
+      return toolCallCompletion(run, { tool: 'agents', args: { op: 'swarm', task: SEARCH_TASK, preset: 'ideate', branches: 1, depth: 1 } }, 'swarm_0');
     }
 
     if (text.includes(HIRE_ASK) && !called.hire) {
@@ -146,7 +146,7 @@ test("an added agent's chat compacts, hires, starts a search, and keeps answerin
       if (hiring.length === 1) return Response.json(TOO_LONG, { status: 400 });
       called.hire = true;
 
-      return toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', mission: HIRE_BRIEF } }, 'hire_0');
+      return toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', mission: HIRE_BRIEF } }, 'hire_0');
     }
 
     return chatCompletion(run, hiring.length === 0 ? ANSWER : 'Done.');

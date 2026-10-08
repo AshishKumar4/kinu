@@ -4,7 +4,7 @@ import { catalogTurn, GATEWAY_CATALOG, orchestratorHarness, type RecordedUserPla
 import { requestOf, scriptedGateway } from './helpers/platform-gateway';
 
 test('a workspace listing its team sees the account\'s other workspaces and not itself', async () => {
-  const gateway = scriptedGateway([{ tool: 'agents', args: { action: 'list' } }]);
+  const gateway = scriptedGateway([{ tool: 'agents', args: { op: 'list' } }]);
 
   const userPlane: RecordedUserPlaneCalls = {
     warmConnections: [], failWarm: null, titles: [],

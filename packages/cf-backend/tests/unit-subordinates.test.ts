@@ -9,7 +9,7 @@ import { MemoryRouter } from 'react-router-dom';
 import * as v from 'valibot';
 import {
   actorConnectionTag, BUILTIN_TOOLS, DEPS_GATED_TOOLS,
-  observedActionEnum, REPORT_TOOL, SubordinateInspectionRequestSchema, type JsonValue, type Rpc, TASK_TURN_ENDINGS, terminalTaskReport,
+  observedOpEnum, REPORT_TOOL, SubordinateInspectionRequestSchema, type JsonValue, type Rpc, TASK_TURN_ENDINGS, terminalTaskReport,
 } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 import { KeptTranscript } from '../src/components/KeptTranscript';
@@ -101,8 +101,8 @@ describe('subordinate wiring', () => {
     expect(subKeys).not.toContain('record_evidence');
     expect(subKeys).not.toContain('record_decision');
     // `hire scope=workspace` mints a fresh tree root, so holding it would let a subordinate escape its depth cap.
-    expect(observedActionEnum(subTools.get('agents')?.inputSchema)).not.toContain('reply');
-    expect(observedActionEnum(subTools.get('agents')?.inputSchema)).toContain('hire');
+    expect(observedOpEnum(subTools.get('agents')?.inputSchema)).not.toContain('reply');
+    expect(observedOpEnum(subTools.get('agents')?.inputSchema)).toContain('hire');
     expect(subTools.get('eval')?.description).toContain('declare const report:');
     expect(orchTools.eval?.description).not.toContain('declare const report:');
   });
@@ -203,7 +203,7 @@ describe('a dismissed agent keeps its conversation reachable', () => {
 describe('the call that asked a one-question helper opens its chat', () => {
   const asked = (output: JsonValue): UIMessage => ({
     id: 'a1', role: 'assistant',
-    parts: [{ type: 'tool-agents', toolCallId: 'agents_0', state: 'output-available', input: { action: 'hire', lifetime: 'task' }, output }],
+    parts: [{ type: 'tool-agents', toolCallId: 'agents_0', state: 'output-available', input: { op: 'assign', lifetime: 'task' }, output }],
   });
 
   const markup = (base: string | null, output: JsonValue, parent: string | null = null) => renderToStaticMarkup(createElement(MemoryRouter, null,
@@ -231,7 +231,7 @@ describe('a subordinate below a direct child is reached by its path', () => {
     const answered = requestOf(run).messages.some((message) => message.role === 'tool');
 
     return asked && !answered
-      ? toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', agent: 'ask-checker-a1', role: 'task', mission: 'Check the ledger.' } }, 'agents_0')
+      ? toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', name: 'ask-checker-a1', role: 'task', mission: 'Check the ledger.' } }, 'agents_0')
       : chatCompletion(run, 'Done.');
   });
 

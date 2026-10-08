@@ -136,7 +136,7 @@ describe('built-in input schemas per model, as the registry resolves it', () => 
       provider,
       modelId,
       doGenerate: () => (step++ === 0
-        ? { content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'tasks', input: JSON.stringify({ action: 'update', id: 't1', status: 'Done' }) }], finishReason: { unified: 'tool-calls', raw: undefined }, usage, warnings: [] }
+        ? { content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'tasks', input: JSON.stringify({ op: 'update', id: 't1', status: 'Done' }) }], finishReason: { unified: 'tool-calls', raw: undefined }, usage, warnings: [] }
         : { content: [{ type: 'text', text: 'done' }], finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [] }),
     });
 

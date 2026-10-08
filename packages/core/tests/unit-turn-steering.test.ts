@@ -16,7 +16,7 @@ import {
 } from '../src/index';
 import type { JsonObject } from '../src/utils/json';
 import { makeSqlExec } from './helpers';
-import { createFileTool, type FileToolInput } from '../src/tools/file-tool';
+import { createFileTool } from '../src/tools/file-operations';
 import { cloudPlanes } from '../src/vfs/resolve';
 import { TurnContextBudget } from '../src/context-budget';
 
@@ -31,7 +31,7 @@ async function fileProgressTurn(opts: { readonly readAt: number; readonly editAt
     ledger: orch.acc.files, budget: new TurnContextBudget(),
   });
 
-  const executeFile = toolExecute<FileToolInput, unknown>(file);
+  const executeFile = toolExecute<JsonObject, unknown>(file);
   let issued = 0;
   let executed = 0;
 
@@ -55,9 +55,9 @@ async function fileProgressTurn(opts: { readonly readAt: number; readonly editAt
     execute: async (_input, options) => {
       const at = executed++;
 
-      if (at === opts.readAt) await executeFile({ action: 'read', path: '/a.ts' }, options);
+      if (at === opts.readAt) await executeFile({ op: 'read', path: '/a.ts' }, options);
 
-      if (at === opts.editAt) await executeFile({ action: 'edit', path: '/a.ts', edits: [{ old_text: 'alpha', new_text: 'omega' }] }, options);
+      if (at === opts.editAt) await executeFile({ op: 'edit', path: '/a.ts', edits: [{ old_text: 'alpha', new_text: 'omega' }] }, options);
 
       return `poll ${at}`;
     },

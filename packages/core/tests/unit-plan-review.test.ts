@@ -311,7 +311,7 @@ describe('submit_plan native tool', () => {
     });
 
     expect(received).toEqual([[{ start: 1, content: '# Plan' }]]);
-    expect(result).toMatchObject({ ok: true, planId: 'plan-1', revision: 1 });
+    expect(result).toMatchObject({ planId: 'plan-1', revision: 1, status: 'pending' });
     expect(JSON.stringify(result)).toContain('awaiting review');
   });
 });

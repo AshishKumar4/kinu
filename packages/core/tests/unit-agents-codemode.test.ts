@@ -1,18 +1,15 @@
-// The `agents.*` codemode namespace: the delegation tool projected into the sandbox, gated by agentsActionsFor.
+// The `agents.*` codemode namespace: the delegation operations, gated by wiring as the native tool is.
 // Real sandbox execution is covered in the two backend suites.
 import { describe, expect, test } from 'bun:test';
 import { createTestRuntime, present, unobservedSearchSeams } from '@kinu.run/test-utils';
-import { hostedSeatsOver, refuseHostNode } from './helpers-actor-host';
+import { hostedSeatsOver } from './helpers-actor-host';
 import { MockLanguageModelV3 } from 'ai/test';
+import { asSchema } from 'ai';
 import * as v from 'valibot';
 import {
-  AGENTS_TOOL_ACTIONS,
-  
   createAgentsCodemodeProvider,
   createAgentsTool,
   delegationChoices,
-  parseAgentsToolInput,
-
   resolveTurnProfile,
   validateSwarmProfileSnapshot,
   profileCatalogDigest,
@@ -24,34 +21,9 @@ import {
   type AgentsSwarmDeps,
   type AgentsToolDeps,
 } from '../src/index';
-import {
-  AGENTS_ACTION_FIELDS as ACTION_FIELDS,
-  
-  
-  dispatchAgentsAction,
-} from '../src/delegation/agents-tool';
-import { NAMED_SWARM_PRESETS, SWARM_PRESETS } from '../src/strategy/swarm';
 import { makeTeam, makePeers, rosterEntry } from './helpers-agents';
 
 const ErrorResultSchema = v.object({ error: v.string() });
-
-const ToolSchemaContract = v.object({
-  jsonSchema: v.object({
-    properties: v.record(v.string(), v.unknown()),
-  }),
-});
-
-const ActionVariantSchemaContract = v.object({
-  jsonSchema: v.object({
-    oneOf: v.array(v.object({
-      properties: v.object({
-        action: v.object({ const: v.string() }),
-        scope: v.union([v.object({ const: v.string() }), v.literal(false)]),
-      }),
-      required: v.array(v.string()),
-    })),
-  }),
-});
 
 const SpawnCallInputSchema = v.object({
   role: v.string(),
@@ -102,33 +74,26 @@ function fullDeps(): AgentsToolDeps {
   return withBuildMode({ swarm: swarmDeps(), team: makeTeam().deps, peers: makePeers().deps });
 }
 
+/** The operations the native tool offers under the same wiring. */
+function nativeOps(deps: AgentsToolDeps): string[] {
+  return v.parse(v.object({ properties: v.object({ op: v.object({ enum: v.array(v.string()) }) }) }),
+    asSchema(createAgentsTool(deps).inputSchema).jsonSchema).properties.op.enum;
+}
+
 describe('agents.* codemode namespace — dep gating', () => {
-  test('the exploration substrate (CLI / subordinate) exposes the search member alone', () => {
-    const deps = withBuildMode({ swarm: swarmDeps() });
-    // `swarm` needs a model and a workspace; with both, the namespace exposes it.
-    expect(Object.keys(namespaceOf(() => deps))).toEqual(['swarm']);
+  test('the namespace offers exactly the operations the native tool does, whatever the wiring', () => {
+    for (const deps of [withBuildMode({ swarm: swarmDeps() }), fullDeps(), withBuildMode({ team: makeTeam().deps })]) {
+      expect(Object.keys(namespaceOf(() => deps))).toEqual(nativeOps(deps));
+    }
+
+    expect(Object.keys(namespaceOf(() => ({ swarm: swarmDeps() })))).toEqual(['swarm']);
+    expect(Object.keys(namespaceOf(() => ({ team: makeTeam().deps })))).toEqual(['hire', 'assign', 'message', 'list', 'dismiss']);
   });
 
-  test('full deps (the workspace orchestrator) expose every action', () => {
-    const deps = fullDeps();
-    expect(Object.keys(namespaceOf(() => deps))).toEqual([...AGENTS_TOOL_ACTIONS]);
-  });
-
-  test('team-without-peers keeps the subordinate verbs', () => {
-    const deps = withBuildMode({ team: makeTeam().deps });
-    expect(Object.keys(namespaceOf(() => deps))).toEqual(['hire', 'msg', 'list', 'dismiss']);
-  });
-
-  test('the codemode declaration exposes no elapsed deadline field', () => {
-    const provider = createAgentsCodemodeProvider(() => fullDeps());
-    expect(provider.types).not.toContain('timeout_seconds');
-    expect(provider.types).not.toContain('timeoutMs');
-  });
-
-  test('an ungated action is structurally absent, not a runtime refusal', () => {
-    const ns = namespaceOf(() => ({ swarm: swarmDeps() }));
-    expect(ns.hire).toBeUndefined();
-    expect(ns.msg).toBeUndefined();
+  test('the declarations expose no elapsed deadline field', () => {
+    const declared = JSON.stringify(createAgentsCodemodeProvider(() => fullDeps()).declarations);
+    expect(declared).not.toContain('timeout_seconds');
+    expect(declared).not.toContain('timeoutMs');
   });
 });
 
@@ -139,7 +104,7 @@ describe('agents.* codemode namespace — dispatch', () => {
     const provider = createAgentsCodemodeProvider(() => ({ mode: currentMode, swarms: true, team: team.deps }));
     currentMode = 'build';
 
-    await member(provider.tools, 'msg').execute({ agent: 'researcher', message: 'inspect only' });
+    await member(provider.tools, 'message').execute('researcher', 'inspect only');
 
     expect(team.calls[0]).toMatchObject({
       action: 'message',
@@ -150,35 +115,24 @@ describe('agents.* codemode namespace — dispatch', () => {
   test('Plan mode does not narrow the search surface', async () => {
     // Plan mode constrains what a helper may do, never which members exist.
     const provider = createAgentsCodemodeProvider(() => ({ mode: 'plan', swarms: true, swarm: swarmDeps() }));
-    expect(await member(provider.tools, 'swarm').execute({ task: 'research' }))
-      .toMatchObject({ reason: 'bad_input' });
+    expect(await member(provider.tools, 'swarm').execute('research')).toMatchObject({ reason: 'bad_input' });
     expect(Object.keys(provider.tools))
       .toEqual(Object.keys(createAgentsCodemodeProvider(() => withBuildMode({ swarm: swarmDeps() })).tools));
   });
 
-  test('the search contract is the tool\'s, not re-implemented here', async () => {
-    // Same dispatch, same classified refusals: no preset is refused, and `settle` is refused as an unknown
-    // field.
+  test('the search contract is the native tool\'s: the same refusals, by field', async () => {
     const ns = namespaceOf(() => ({ swarm: swarmDeps() }));
-    expect(await member(ns, 'swarm').execute({ task: 't' })).toMatchObject({ reason: 'bad_input' });
+    expect(await member(ns, 'swarm').execute('t')).toMatchObject({ reason: 'bad_input' });
 
-    const stale = v.parse(ErrorResultSchema, await member(ns, 'swarm').execute({
-      task: 't', settle: 'mcts', preset: 'ideate',
-    }));
+    const stale = v.parse(ErrorResultSchema, await member(ns, 'swarm').execute('t', { settle: 'mcts', preset: 'ideate' }));
 
-    expect(stale.error).toContain('unknown field "settle"');
-    expect(stale.error).toContain(
-      'action "swarm" takes: task, preset, objective, key, config, from, label, name, branches, '
-      + 'depth, nodes, models, role, tier, budget_usd, budget_tokens, budget_label',
-    );
+    expect(stale.error).toContain('no option settle');
   });
 
   test('typed search fields reach the dispatch exactly as the tool sends them', async () => {
-    // The same parsed input reaches the same dispatcher; no second parse lives in the sandbox bridge.
     const ns = namespaceOf(() => ({ swarm: swarmDeps() }));
 
-    const refused = v.parse(v.object({ reason: v.string(), error: v.string() }), await member(ns, 'swarm').execute({
-      task: 'ship it',
+    const refused = v.parse(v.object({ reason: v.string(), error: v.string() }), await member(ns, 'swarm').execute('ship it', {
       preset: 'ideate',
       objective: {
         kind: 'scalar', metric: 'ms', unit: 'ms', direction: 'minimise', scale: 'linear',
@@ -191,31 +145,31 @@ describe('agents.* codemode namespace — dispatch', () => {
     expect(refused.error).toMatch(/`ideate` is flat and has no value signal/);
   });
 
-  test('hire / msg / list / dismiss reach the same transports', async () => {
+  test('hire / assign / message / reply / list / dismiss reach the same transports', async () => {
     const team = makeTeam();
     const peers = makePeers();
     const deps = withBuildMode({ swarm: swarmDeps(), team: team.deps, peers: peers.deps, profile: profileDeps().profile });
     const ns = namespaceOf(() => deps);
 
-    expect(await member(ns, 'hire').execute({ role: 'researcher', mission: 'Map the landscape' }))
+    expect(await member(ns, 'hire').execute('researcher', 'Map the landscape'))
       .toEqual({ name: 'researcher', displayName: 'Researcher' });
-    expect(await member(ns, 'hire').execute({ agent: 'researcher', message: 'Survey auth', deliverable: 'a note' }))
+    expect(await member(ns, 'assign').execute('researcher', 'Survey auth', { deliverable: 'a note' }))
       .toMatchObject({ status: 'working', agent: 'researcher' });
-    expect(await member(ns, 'msg').execute({ agent: 'researcher', message: 'also check the CLI' }))
+    expect(await member(ns, 'message').execute('researcher', 'also check the CLI'))
       .toMatchObject({ status: 'delivered', agent: 'researcher', delivery: 'starts_now', event_id: 'evt-starts_now' });
-    expect(await member(ns, 'msg').execute({ event_id: 'pe1', message: 'here you go' })).toEqual({ ok: true });
+    expect(await member(ns, 'reply').execute('pe1', 'here you go')).toEqual({ ok: true });
     expect(await member(ns, 'list').execute()).toEqual({ subordinates: [rosterEntry], peers: [{ name: 'scout', displayName: 'Scout' }] });
-    expect(await member(ns, 'dismiss').execute({ agent: 'researcher' }))
+    expect(await member(ns, 'dismiss').execute('researcher'))
       .toEqual({ ok: true, name: 'researcher', historyKept: true, stoppedJobs: [] });
 
     expect(team.calls.map((c) => c.action)).toEqual(['spawn', 'assign', 'message', 'dismiss']);
     expect(peers.calls.map((c) => c.action)).toEqual(['reply']);
   });
 
-  test('a peer hire from the sandbox rides the peer transport without a deadline', async () => {
+  test('a peer assignment from the sandbox rides the peer transport without a deadline', async () => {
     const peers = makePeers();
     const ns = namespaceOf(() => ({ peers: peers.deps }));
-    expect(await member(ns, 'hire').execute({ agent: 'scout', message: 'What changed?', topic: 'research' }))
+    expect(await member(ns, 'assign').execute('scout', 'What changed?', { topic: 'research' }))
       .toEqual({ status: 'replied', from: 'scout', reply: 'answer' });
     expect(peers.calls[0].input).toEqual({
       agent: 'scout', topic: 'research', message: 'What changed?', mode: 'build',
@@ -239,9 +193,9 @@ describe('agents.* codemode namespace — dispatch', () => {
     });
 
     // Each call rebuilds the deps, so the second call sees the later binding.
-    await member(ns, 'swarm').execute({ task: 'a' });
-    await member(ns, 'swarm').execute({ task: 'b' });
-    expect(generation).toBe(3);
+    await member(ns, 'swarm').execute('a');
+    await member(ns, 'swarm').execute('b');
+    expect(generation).toBe(4);
   });
 
   test('deps failures come back as inspectable values, never thrown into the script', async () => {
@@ -249,293 +203,16 @@ describe('agents.* codemode namespace — dispatch', () => {
     team.deps.spawn = async () => { throw new Error('kaboom'); };
 
     const ns = namespaceOf(() => ({ team: team.deps, profile: profileDeps().profile }));
-
-    const result = v.parse(ErrorResultSchema, await member(ns, 'hire').execute({
-      role: 'researcher', mission: 'map the landscape',
-    }));
+    const result = v.parse(ErrorResultSchema, await member(ns, 'hire').execute('researcher', 'map the landscape'));
 
     expect(result.error).toMatch(/kaboom/);
   });
-});
 
-describe('agents.* codemode namespace — sandbox input handling', () => {
-  test('the member decides the action — a script cannot smuggle another one', async () => {
-    const team = makeTeam();
-    const peers = makePeers();
-    const ns = namespaceOf(() => ({ team: team.deps, peers: peers.deps }));
-    // `dismiss` would archive the subordinate; the member called was `list`.
-    expect(await member(ns, 'list').execute({ action: 'dismiss', agent: 'researcher' })).toEqual({ roster: [rosterEntry] });
-    expect(team.calls.map((c) => c.action)).toEqual(['status']);
-  });
+  test('a direct model spec is refused on hire and swarm, naming the field', async () => {
+    const ns = namespaceOf(() => profileDeps());
 
-  test('a zero-arg call on the node backend sees the exec context, not an input', async () => {
-    const team = makeTeam();
-    const ns = namespaceOf(() => ({ team: team.deps }));
-    // The node sandbox appends `{ signal }`, so `agents.list()` arrives as list({ signal }) and must still
-    // list.
-    expect(await member(ns, 'list').execute({ signal: new AbortController().signal })).toEqual({ subordinates: [rosterEntry] });
-    expect(team.calls).toEqual([]);
-  });
-
-  test('the retired timeout_seconds field is a sharp error', async () => {
-    const team = makeTeam();
-    const peers = makePeers();
-    const ns = namespaceOf(() => ({ team: team.deps, peers: peers.deps }));
-
-    const result = v.parse(ErrorResultSchema, await member(ns, 'hire').execute({
-      agent: 'researcher', message: 'go', timeout_seconds: 30,
-    }));
-
-    expect(result.error).toContain('agents.hire: unknown field "timeout_seconds"');
-    expect(team.calls).toEqual([]);
-  });
-
-  test('the exec context is not read as a field, even beside the script\'s own options', async () => {
-    const team = makeTeam();
-    const ns = namespaceOf(() => ({ team: team.deps }));
-    // The host's `{ signal }` may also trail the script's object; it must never reach the parse.
-    expect(await member(ns, 'list').execute(
-      { agent: 'researcher' },
-      { signal: new AbortController().signal },
-    )).toEqual({ roster: [rosterEntry] });
-  });
-
-  test('a malformed field is an inspectable error, never a throw into the script', async () => {
-    const peers = makePeers();
-    const ns = namespaceOf(() => ({ peers: peers.deps }));
-    // Sandbox input has no schema validation, so a wrong-typed field comes back as a readable value.
-    const result = v.parse(ErrorResultSchema, await member(ns, 'msg').execute({ agent: 'scout', message: 'hi', topic: 42 }));
-    expect(result.error).toMatch(/Expected string/);
-    expect(peers.calls).toEqual([]);
-  });
-
-  test('the trailing exec context carries cancellation into the search', async () => {
-    // The trailing `{ signal }` is the host's and is taken out of the input; `runSwarmAction` reads
-    // `abortSignal` off it.
-    const ns = namespaceOf(() => ({ swarm: swarmDeps() }));
-    const controller = new AbortController();
-
-    const result = v.parse(ErrorResultSchema, await member(ns, 'swarm').execute(
-      { task: 't' }, { signal: controller.signal },
-    ));
-
-    expect(result.error).toContain('swarm needs `preset`');
-    expect(result.error).not.toContain('unknown field "signal"');
-  });
-
-  test('a non-object argument is a classified refusal, not a deps call', async () => {
-    const team = makeTeam();
-    const ns = namespaceOf(() => ({ team: team.deps }));
-    // Reason first, so a script can branch on the class without parsing prose.
-    expect(await member(ns, 'hire').execute('just a string'))
-      .toEqual({ success: false, reason: 'bad_input', error: 'agents.hire: expects a single options object' });
-    expect(await member(ns, 'dismiss').execute(['researcher']))
-      .toEqual({ success: false, reason: 'bad_input', error: 'agents.dismiss: expects a single options object' });
-    expect(await member(ns, 'hire').execute({ role: 'r', mission: 'm', budgetUsd: 5 }))
-      .toMatchObject({ reason: 'bad_input', error: expect.stringContaining('budgetUsd') });
-    expect(team.calls).toEqual([]);
-  });
-
-  test('missing required fields stay the tool\'s own sharp errors', async () => {
-    const ns = namespaceOf(() => fullDeps());
-    expect(await member(ns, 'msg').execute({ agent: 'researcher' }))
-      .toEqual({ success: false, reason: 'bad_input', error: 'msg requires a message' });
-    // The refusal carries its classification, exactly as the declared type promises.
-    expect(await member(ns, 'swarm').execute({})).toEqual({ success: false, reason: 'bad_input', error: expect.stringContaining('swarm needs `preset`') });
-  });
-
-  test('native and codemode reject the same capability-inapplicable fields', async () => {
-    const deps = withBuildMode(fullDeps());
-
-    const nativeInput = parseAgentsToolInput({
-      input: {
-        action: 'hire',
-        scope: 'workspace',
-        mission: 'own the specialist workspace',
-        message: 'begin',
-        role: 'researcher',
-      },
-    });
-
-    const native = dispatchAgentsAction(deps, nativeInput);
-    await expect(native).rejects.toMatchObject({ code: 'bad_input', message: 'field "role" is not available for action "hire" on this actor' });
-
-    const codemode = await member(namespaceOf(fullDeps), 'hire').execute({
-      scope: 'workspace',
-      mission: 'own the specialist workspace',
-      message: 'begin',
-      role: 'researcher',
-    });
-
-    expect(codemode).toEqual({ success: false, reason: 'bad_input', error: 'field "role" is not available for action "hire" on this actor' });
-  });
-});
-
-describe('agents.* codemode namespace — declared types', () => {
-  test('declares exactly the gated members', () => {
-    const searchOnly = createAgentsCodemodeProvider(() => withBuildMode({ swarm: swarmDeps() })).types ?? '';
-    expect(searchOnly).toContain('swarm(input: {');
-    expect(searchOnly).not.toContain('hire(input: {');
-    expect(searchOnly).not.toContain('dismiss(input: {');
-
-    const full = createAgentsCodemodeProvider(fullDeps).types ?? '';
-
-    for (const action of AGENTS_TOOL_ACTIONS) expect(full).toContain(`${action}(input`);
-  });
-
-  test('the declared preset union is every preset the tool advertises', () => {
-    // Derived from the schema, so the sandbox declaration cannot offer a different preset set.
-    const types = createAgentsCodemodeProvider(() => withBuildMode({ swarm: swarmDeps() })).types ?? '';
-
-    for (const preset of SWARM_PRESETS) expect(types).toContain(`"${preset}"`);
-    expect(types).toContain(`preset?: ${SWARM_PRESETS.map((preset) => `"${preset}"`).join(' | ')};`);
-    expect(types).toContain(`from?: ${NAMED_SWARM_PRESETS.map((preset) => `"${preset}"`).join(' | ')};`);
-  });
-
-  test('the same action set renders byte-identically whatever built the deps', () => {
-    // One literal per action, so the cf and node declarations must not differ by a byte.
-    const a = createAgentsCodemodeProvider(() => withBuildMode({ swarm: swarmDeps() })).types;
-
-    const b = createAgentsCodemodeProvider(() => withBuildMode({
-      swarm: {
-        rt: createTestRuntime().rt, model: () => new MockLanguageModelV3(),
-        // Reads the declaration and runs nothing, so no seat is asked for.
-        hostNode: refuseHostNode('this case renders declarations and runs no node'),
-        ...unobservedSearchSeams(),
-      },
-    })).types;
-
-    expect(a).toBe(b);
-  });
-
-  test('members are declared in the canonical ladder order', () => {
-    const types = createAgentsCodemodeProvider(fullDeps).types ?? '';
-    const order = [...types.matchAll(/^ {2}(\w+)\(input/gm)].map((m) => m[1]);
-    expect(order).toEqual([...AGENTS_TOOL_ACTIONS]);
-  });
-
-  test('hire declares only the routes and requirements the native actor wires', () => {
-    const hireType = (types: string): string => {
-      const start = types.indexOf('hire(input:');
-      const end = types.indexOf('msg(input:', start);
-
-      return types.slice(start, end);
-    };
-
-    const teamOnly = hireType(createAgentsCodemodeProvider(
-      () => withBuildMode({ team: makeTeam().deps }),
-    ).types ?? '');
-
-    expect(teamOnly).toContain('role: string;');
-    expect(teamOnly).toContain('mission: string;');
-    expect(teamOnly).not.toContain('scope');
-    // `message` reaches this actor only on the existing-agent variant.
-    expect(teamOnly).toContain('agent: string;');
-
-    const peersOnly = hireType(createAgentsCodemodeProvider(
-      () => withBuildMode({ peers: makePeers().deps }),
-    ).types ?? '');
-
-    expect(peersOnly).not.toContain('role');
-    expect(peersOnly).not.toContain('tier');
-    expect(peersOnly).not.toContain('lifetime');
-    expect(peersOnly).toContain('mission: string;');
-    expect(peersOnly).toContain('scope: "workspace";');
-    expect(peersOnly).toContain('message: string;');
-
-    const both = hireType(createAgentsCodemodeProvider(fullDeps).types ?? '');
-    expect(both).toContain('scope?: "subordinate";');
-    expect(both).toContain('scope: "workspace";');
-    expect(both).not.toContain('role?: string;');
-    expect(both).toContain('message: string;');
-  });
-});
-
-describe('agents surface — one action-field source', () => {
-
-  test('the native schema declares the same capability-aware hire variants', () => {
-    const hireVariants = (deps: TestAgentsToolDeps) => v.parse(
-      ActionVariantSchemaContract,
-      createAgentsTool(withBuildMode(deps)).inputSchema,
-    ).jsonSchema.oneOf.filter(variant => variant.properties.action.const === 'hire');
-
-    const teamOnly = hireVariants({ team: makeTeam().deps });
-    expect(teamOnly).toEqual([{
-      properties: { action: { const: 'hire' }, scope: { const: 'subordinate' } },
-      required: ['action', 'role', 'mission'],
-    }, {
-      properties: { action: { const: 'hire' }, scope: false },
-      required: ['action', 'agent', 'message'],
-    }]);
-
-    const peersOnly = hireVariants({ peers: makePeers().deps });
-    expect(peersOnly).toEqual([{
-      properties: { action: { const: 'hire' }, scope: false },
-      required: ['action', 'agent', 'message'],
-    }, {
-      properties: { action: { const: 'hire' }, scope: { const: 'workspace' } },
-      required: ['action', 'mission', 'scope', 'message'],
-    }]);
-
-    // The existing-agent variant is one branch, not one per transport, so the union carries it once.
-    expect(hireVariants(fullDeps())).toEqual([teamOnly[0], teamOnly[1], peersOnly[1]]);
-  });
-
-  test('native and codemode hide fields whose transport is not wired', () => {
-    const advertised = (deps: TestAgentsToolDeps) => new Set(Object.keys(v.parse(
-      ToolSchemaContract,
-      createAgentsTool(withBuildMode(deps)).inputSchema,
-    ).jsonSchema.properties));
-
-    const teamOnly = advertised({ team: makeTeam().deps });
-
-    for (const field of ['scope', 'topic', 'event_id']) expect(teamOnly.has(field)).toBe(false);
-
-    for (const field of ['role', 'tier', 'deliverable', 'lifetime', 'keep_history']) {
-      expect(teamOnly.has(field)).toBe(true);
-    }
-
-    const peersOnly = advertised({ peers: makePeers().deps });
-
-    for (const field of ['role', 'tier', 'deliverable', 'lifetime', 'keep_history']) {
-      expect(peersOnly.has(field)).toBe(false);
-    }
-
-    for (const field of ['scope', 'topic', 'event_id']) expect(peersOnly.has(field)).toBe(true);
-  });
-
-  test('the swarm member carries `name` — the drift that was measured', async () => {
-    const types = createAgentsCodemodeProvider(fullDeps).types ?? '';
-    const swarm = types.slice(types.indexOf('swarm(input:'), types.indexOf('hire(input:'));
-    expect(swarm).toContain('name?: string;');
-    expect(swarm).toContain('role?: string;');
-    // A tier is any catalog id, so the declaration is open; the schema enum carries the catalog's list per
-    // call.
-    expect(swarm).toContain('tier?: string;');
-  });
-
-  test('the native tool schema advertises the same per-action fields it parses', () => {
-    // Read raw: the contract parse narrows to the fields it names.
-    const schema = v.parse(
-      ToolSchemaContract,
-      createAgentsTool(withBuildMode({ swarm: swarmDeps(), team: makeTeam().deps, peers: makePeers().deps })).inputSchema,
-    );
-
-    const advertised = new Set(Object.keys(schema.jsonSchema.properties).filter((k) => k !== 'action'));
-
-    for (const action of AGENTS_TOOL_ACTIONS) {
-      for (const field of ACTION_FIELDS[action]) expect(advertised.has(field)).toBe(true);
-    }
-
-    expect(advertised.has('model')).toBe(false);
-    expect(advertised.has('tier')).toBe(true);
-  });
-
-  test('a direct model spec is refused on hire and swarm, naming tier instead', () => {
-    expect(() => parseAgentsToolInput({ input: { action: 'hire', role: 'researcher', mission: 'm', model: 'openai/gpt' } }))
-      .toThrow(/model/);
-    expect(() => parseAgentsToolInput({ input: { action: 'swarm', preset: 'ideate', task: 't', model: 'openai/gpt' } }))
-      .toThrow(/model/);
+    expect(v.parse(ErrorResultSchema, await member(ns, 'hire').execute('researcher', 'm', { model: 'openai/gpt' })).error).toContain('model');
+    expect(v.parse(ErrorResultSchema, await member(ns, 'swarm').execute('t', { preset: 'ideate', model: 'openai/gpt' })).error).toContain('model');
   });
 });
 
@@ -578,7 +255,7 @@ describe('agents delegation — role/tier/preset precedence', () => {
   test('hire resolves an explicit role through the catalog: role default tier, provenance recorded', async () => {
     const team = makeTeam();
     const tools = namespaceOf(() => profileDeps({ team: team.deps }));
-    await member(tools, 'hire').execute?.({ role: 'researcher', mission: 'map the landscape' });
+    await member(tools, 'hire').execute('researcher', 'map the landscape');
     const call = present(team.calls.find((c) => c.action === 'spawn'), 'the spawn call');
     const input = v.parse(SpawnCallInputSchema, call.input);
     expect(input.role).toBe('researcher');
@@ -590,7 +267,7 @@ describe('agents delegation — role/tier/preset precedence', () => {
   test('an explicit tier override rides to the identity; a spawn-forbidden role is refused', async () => {
     const team = makeTeam();
     const tools = namespaceOf(() => profileDeps({ team: team.deps }));
-    await member(tools, 'hire').execute?.({ role: 'planner', mission: 'plan', tier: 'deep' });
+    await member(tools, 'hire').execute('planner', 'plan', { tier: 'deep' });
 
     const input = v.parse(
       SpawnCallInputSchema,
@@ -632,7 +309,7 @@ describe('agents delegation — role/tier/preset precedence', () => {
     });
 
     const tools2 = namespaceOf(() => restricted);
-    const refused = await member(tools2, 'hire').execute?.({ role: 'auditor', mission: 'x' });
+    const refused = await member(tools2, 'hire').execute('auditor', 'x');
     expect(refused).toMatchObject({ reason: 'bad_input' });
     expect(v.parse(ErrorResultSchema, refused).error).toContain('auditor');
   });
@@ -642,7 +319,7 @@ describe('agents delegation — role/tier/preset precedence', () => {
     // `preset`.
     const deps = profileDeps();
     const tools = namespaceOf(() => deps);
-    const noPreset = await member(tools, 'swarm').execute?.({ task: 'explore angles' });
+    const noPreset = await member(tools, 'swarm').execute('explore angles');
     // researcher is not the caller (general), so this resolves general→ideate.
     expect(noPreset).not.toMatchObject({ reason: 'bad_input', error: expect.stringContaining('preset') });
     const swarm = deps.swarm;
@@ -660,13 +337,13 @@ describe('agents delegation — role/tier/preset precedence', () => {
 
   test('without a wired catalog, swarm demands an explicit preset and hire refuses', async () => {
     const tools = namespaceOf(() => ({ swarm: swarmDeps(), team: makeTeam().deps }));
-    const refused = await member(tools, 'swarm').execute?.({ task: 'angles only' });
+    const refused = await member(tools, 'swarm').execute('angles only');
     expect(refused).toMatchObject({ reason: 'bad_input' });
     expect(v.parse(ErrorResultSchema, refused).error).toContain('preset');
 
     const team = makeTeam();
     const noCatalog = namespaceOf(() => ({ swarm: swarmDeps(), team: team.deps }));
-    const hireRefused = await member(noCatalog, 'hire').execute?.({ role: 'researcher', mission: 'scan' });
+    const hireRefused = await member(noCatalog, 'hire').execute('researcher', 'scan');
     expect(hireRefused).toMatchObject({ reason: 'denied' });
     expect(team.calls).toEqual([]);
   });

@@ -99,10 +99,10 @@ describe('the gated tabs appear only with content', () => {
   });
 });
 
-/** The label of every strip button the markup marks current. */
+/** The label of every strip tab the markup marks selected. */
 const currentTabs = (html: string): string[] => html.split('<button').slice(1)
   .map((button) => button.slice(0, button.indexOf('>')))
-  .filter((attributes) => attributes.includes('aria-current="true"'))
+  .filter((attributes) => attributes.includes('role="tab"') && attributes.includes('aria-selected="true"'))
   .map((attributes) => attributes.slice(attributes.indexOf('aria-label="') + 'aria-label="'.length).split('"')[0] ?? '');
 
 describe('the first frame marks the tab a request lands on', () => {

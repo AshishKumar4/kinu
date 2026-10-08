@@ -107,7 +107,7 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
       return {
         ok: false,
         reason: 'empty_anchor',
-        message: `${at(i, anchors.length)} is empty in ${path}. Give the exact text to replace; use action=write to create or replace the whole file.`,
+        message: `${at(i, anchors.length)} is empty in ${path}. Give the exact text to replace; use op=write to create or replace the whole file.`,
       };
     }
 
@@ -249,7 +249,7 @@ export function formatFileSlice(
 
   // Past here the output carries a marker; reserve its worst-case length before choosing lines.
   const continuation = (last: number, reason: string): string => {
-    const tail = `${reason} stopped it; continue with action=read offset=${last + 1}]`;
+    const tail = `${reason} stopped it; continue with op=read offset=${last + 1}]`;
 
     return affordable(
       `\n\n[showing lines ${first}-${last} of ${total} in ${opts.path}: ${tail}`,

@@ -24,14 +24,14 @@ const agent = fakeClient({
       agent.emit({
         type: 'tool-call', toolName: 'file', toolCallId: 'call-1',
         args: {
-          action: 'edit',
+          op: 'edit',
           path: 'src/state.ts',
           edits: [{ old_text: 'export const ready = false;', new_text: 'export const ready = true;' }],
         },
       });
       agent.emit({
         type: 'tool-result', toolName: 'file', toolCallId: 'call-1',
-        result: JSON.stringify({ ok: true, path: 'src/state.ts', applied: [{ line: 12, removed_lines: 1, added_lines: 1 }] }),
+        result: JSON.stringify({ path: 'src/state.ts', reference: 'root://src/state.ts', applied: [{ line: 12, removedLines: 1, addedLines: 1 }] }),
         success: true,
       });
     }

@@ -86,7 +86,7 @@ test('a CLI turn runs what its row claims, restores a clamped output from the pa
     () => ({ name: 'shell', input: { command: Object.values(RUNTIME_PROGRAMS).join('; ') } }),
     () => ({ name: 'shell', input: { command: BIG } }),
     (shown) => ({ name: 'shell', input: { command: `grep FINAL-ERROR-LINE ${offload(shown)}` } }),
-    (shown) => ({ name: 'file', input: { action: 'read', path: offload(shown) } }),
+    (shown) => ({ name: 'file', input: { op: 'read', path: offload(shown) } }),
     (shown) => ({ name: 'shell', input: { runtime: 'device', command: `grep FINAL-ERROR-LINE ${offload(shown)}` } }),
   ], requests);
 

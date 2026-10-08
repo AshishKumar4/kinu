@@ -5,12 +5,12 @@ import { describe, expect, test } from 'bun:test';
 import { scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils/turn-model';
 import { createMemoryVfs, createTestRuntime, toolExecute } from '@kinu.run/test-utils';
 import { runChat, type ChatEvent } from '../src/index';
-import { createFileTool } from '../src/tools/file-tool';
+import { createFileTool } from '../src/tools/file-operations';
 import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { TurnContextBudget } from '../src/context-budget';
-import { createTasksCodemodeProvider } from '../src/tools/tasks-codemode';
-import { createReportCodemodeProvider } from '../src/delegation/report-codemode';
-import { buildBuiltinTools, type ReportToolDeps } from '../src/tools/builtins';
+import { createTasksCodemodeProvider } from '../src/tools/tasks-operations';
+import { createReportCodemodeProvider, type ReportDeps } from '../src/tools/report-operations';
+import { buildBuiltinTools } from '../src/tools/builtins';
 import { initAllTables, initTaskListTable, TaskListStore } from '../src/index';
 
 import type { JsonObject, JsonValue } from '../src/utils/json';
@@ -80,7 +80,7 @@ async function toolResults(input: JsonObject, seed: Record<string, string>) {
 describe('a tool call the schema refuses', () => {
   test('never reaches the tool, and is recorded as the model\'s bad input naming the field', async () => {
     // An edit without new_text: before the schema was checked, the missing field could reach the edit as a deletion.
-    const { results, store } = await toolResults({ action: 'edit', path: 'a.ts', edits: [{ old_text: 'alpha' }] }, { 'a.ts': 'alpha\n' });
+    const { results, store } = await toolResults({ op: 'edit', path: 'a.ts', edits: [{ old_text: 'alpha' }] }, { 'a.ts': 'alpha\n' });
 
     expect(results).toHaveLength(1);
     expect(results[0]).toMatchObject({ success: false, reason: 'bad_input' });
@@ -89,22 +89,22 @@ describe('a tool call the schema refuses', () => {
   });
 
   test('the model is told why in the schema\'s words, classified, not the SDK\'s JSON dump', async () => {
-    const { results, fedBack } = await toolResults({ action: 'edit', path: 'a.ts', edits: [{ old_text: 'alpha' }] }, { 'a.ts': 'alpha\n' });
+    const { results, fedBack } = await toolResults({ op: 'edit', path: 'a.ts', edits: [{ old_text: 'alpha' }] }, { 'a.ts': 'alpha\n' });
 
     expect(fedBack).toEqual([{ type: 'error-json', value: { reason: 'bad_input', error: expect.stringContaining('new_text') } }]);
     // Neither the event nor the model's feedback carries zod's or the SDK's JSON dump of the issues.
     expect(JSON.stringify([results[0]?.error, fedBack])).not.toContain('\\"code\\"');
   });
 
-  test('an off-vocabulary action is refused the same way, before any read', async () => {
-    const { results } = await toolResults({ action: 'delete', path: 'a.ts' }, { 'a.ts': 'alpha\n' });
+  test('an off-vocabulary op is refused the same way, before any read', async () => {
+    const { results } = await toolResults({ op: 'delete', path: 'a.ts' }, { 'a.ts': 'alpha\n' });
 
     expect(results[0]).toMatchObject({ success: false, reason: 'bad_input' });
-    expect(results[0]?.error).toContain('action');
+    expect(results[0]?.error).toContain('unknown op "delete"');
   });
 
   test('a well-formed call still runs', async () => {
-    const { results } = await toolResults({ action: 'stat', path: 'a.ts' }, { 'a.ts': 'alpha\n' });
+    const { results } = await toolResults({ op: 'stat', path: 'a.ts' }, { 'a.ts': 'alpha\n' });
 
     expect(results[0]).toMatchObject({ success: true });
   });
@@ -140,7 +140,7 @@ describe('a call base ran is still run', () => {
   test('does not refuse a call that ran before: a report longer than the advertised 20,000 characters is delivered', async () => {
     const delivered: string[] = [];
 
-    const report: ReportToolDeps['report'] = async ({ content }) => {
+    const report: ReportDeps['report'] = async ({ content }) => {
       delivered.push(content);
 
       return { ok: true };
@@ -167,11 +167,11 @@ describe('a call base ran is still run', () => {
       recall: () => null, forget: () => {}, recentTopK: () => [], all: () => [],
     };
 
-    const memory = toolExecute<{ action: string; key: string; value: string; confidence: number }, JsonValue>(
+    const memory = toolExecute<{ op: string; key: string; value: string; confidence: number }, JsonValue>(
       buildBuiltinTools({ rt, facts, conversations: conversationsFor(rt) }).memory,
     );
 
-    expect(await memory({ action: 'remember', key: 'deploy.target', value: 'production', confidence: 95 })).toMatchObject({ ok: true });
+    expect(await memory({ op: 'remember', key: 'deploy.target', value: 'production', confidence: 95 })).toEqual({ key: 'deploy.target' });
     expect(saved).toEqual([1]);
   });
 
@@ -189,16 +189,16 @@ describe('a call base ran is still run', () => {
       buildBuiltinTools({ rt, conversations: conversationsFor(rt), submitPlan: { submit } }).submit_plan,
     );
 
-    await submitPlan({ edits: Array.from({ length: 101 }, (_, index) => ({ start: index + 1, content: 'x', reason: 'first' })) });
+    await expect(submitPlan({ edits: Array.from({ length: 101 }, (_, index) => ({ start: index + 1, content: 'x', reason: 'first' })) }))
+      .rejects.toMatchObject({ code: 'bad_input', message: 'recorded' });
 
     expect(received.map((edits) => [edits.length, edits[0]])).toEqual([[101, { start: 1, content: 'x' }]]);
   });
 
-  test('tasks.mode(null) reads the active role, as no argument does', async () => {
+  test('tasks.role() reads the active role', async () => {
     const { rt, tasks } = taskWorld();
     const provider = createTasksCodemodeProvider(tasks, rt.actor.config);
 
-    expect(await provider.tools.mode?.execute(null)).toEqual(await provider.tools.mode?.execute());
-    expect(await provider.tools.mode?.execute(null)).toMatchObject({ role: expect.any(String) });
+    expect(await provider.tools.role?.execute()).toMatchObject({ role: expect.any(String) });
   });
 });

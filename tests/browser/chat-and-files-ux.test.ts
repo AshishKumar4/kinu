@@ -32,7 +32,7 @@ import { join } from 'node:path';
 import type { Page } from 'puppeteer';
 
 import { withGallery } from '../../scripts/gallery-harness';
-import { CHECKPOINTS_UNAVAILABLE_NO_GIT, parseJsonValue, redactPayload, type JsonObject } from '@kinu.run/core';
+import { CHECKPOINTS_UNAVAILABLE_NO_GIT, executorLabel, parseJsonValue, redactPayload, type JsonObject } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 
 
@@ -199,13 +199,13 @@ async function readChatRows(page: Page): Promise<Record<string, ChatRow>> {
       const card = row.querySelector('[data-system-event]');
       // The drawn box, not the full-width row: a centred card and a
       // right-pushed bubble both live inside a full-width block.
-      const drawn = card ?? row.querySelector('.p-user-bubble') ?? row.firstElementChild ?? row;
+      const drawn = card ?? row.querySelector('[data-user-bubble]') ?? row.firstElementChild ?? row;
       const column = row.parentElement ?? row;
       const drawnBox = drawn.getBoundingClientRect();
       const columnBox = column.getBoundingClientRect();
       const body = card?.querySelector('.truncate, .whitespace-pre-wrap') ?? null;
       measured[row.getAttribute('data-chat-row') ?? ''] = {
-        userBubbles: row.querySelectorAll('.p-user-bubble').length,
+        userBubbles: row.querySelectorAll('[data-user-bubble]').length,
         systemEvent: card?.getAttribute('data-system-event') ?? null,
         folded: body === null ? false : body.scrollWidth > body.clientWidth,
         offsetFromCentrePx: Math.round(
@@ -359,9 +359,9 @@ async function run(): Promise<Observed> {
       (cards) => cards.map((card) => [
         card.getAttribute('data-chat-error') ?? '',
         {
-          heading: card.querySelector('.font-medium')?.textContent ?? '',
+          heading: card.querySelector('h1, h2, h3, h4, h5, h6, [role="heading"]')?.textContent ?? '',
           border: getComputedStyle(card).borderTopColor,
-          retry: [...card.querySelectorAll('button')].some((button) => /retry/i.test(button.textContent ?? '') && !button.disabled),
+          retry: [...card.querySelectorAll('[data-retry]')].some((button) => button instanceof HTMLButtonElement && !button.disabled),
         },
       ]),
     ));
@@ -573,8 +573,8 @@ async function run(): Promise<Observed> {
     await env.waitForSelector('[data-env-card]');
 
     const envCards = await env.$$eval('[data-env-card]', (cards) => cards.map((card) => ({
-      name: card.querySelector('.font-medium')?.textContent ?? '',
-      kind: [...card.querySelectorAll('.p-meta')].map((el) => el.textContent ?? '').join('|'),
+      name: card.querySelector('h1, h2, h3, h4, h5, h6, [role="heading"]')?.textContent ?? '',
+      kind: card.querySelector('[data-env-kind]')?.textContent ?? '',
       status: card.querySelector('[data-env-status]')?.textContent ?? '',
       mount: card.querySelector('[data-env-mount]')?.textContent ?? '',
     })));
@@ -747,7 +747,7 @@ describe('a turn the harness wrote, as the browser attributes it', () => {
     // THE INCIDENT, as a browser draws it. This row is the production shape:
     // a bare UUID id and `kinuEvent: fork_interrupted`, no author stamp,
     // which is what five rows in the owner's live workspaces look like. Under
-    // the four-name allowlist this rendered right-aligned in `.p-user-bubble`.
+    // the four-name allowlist this rendered right-aligned as the person's bubble.
     const fork = observed.chat[UNSTAMPED_FORK_ROW];
     expect(fork.userBubbles).toBe(0);
     expect(fork.systemEvent).toBe('fork_interrupted');
@@ -959,7 +959,7 @@ describe('the Environment tab, as a user reads it', () => {
   test('one card per environment: status, mount path, and the device wears its own name', () => {
     const byName = Object.fromEntries(observed.envCards.map((card) => [card.name, card]));
     expect(byName["Ashish's MacBook"]?.status).toBe('active');
-    expect(byName["Ashish's MacBook"]?.kind).toContain('Your PC');
+    expect(byName["Ashish's MacBook"]?.kind).toBe(executorLabel('device'));
     expect(byName["Ashish's MacBook"]?.mount).toBe('/pc');
     expect(byName['Workspace']?.mount).toBe('/');
     expect(byName['Sandbox']?.mount).toBe('/sandbox');
@@ -1186,7 +1186,7 @@ describe('a hosted actor’s cards stay out of the workspace’s own chat', () =
       await page.setViewport({ width: 1440, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('nav[aria-label="Chats"]');
-      await page.waitForSelector('.p-thread-column');
+      await page.waitForSelector('[data-thread]');
 
       // The refiner's own card first, stamped with its actor, then the
       // workspace's own drain with no stamp. The order is the failure's: the
@@ -1207,17 +1207,17 @@ describe('a hosted actor’s cards stay out of the workspace’s own chat', () =
       });
 
       await page.waitForFunction(() => (
-        document.querySelector('.p-thread-column')?.textContent?.includes('a payout of 240.00 settled') === true
+        document.querySelector('[data-thread]')?.textContent?.includes('a payout of 240.00 settled') === true
       ));
 
-      const thread = await page.$eval('.p-thread-column', (el) => el.textContent ?? '');
+      const thread = await page.$eval('[data-thread]', (el) => el.textContent ?? '');
 
       expect(thread).not.toContain('reviewed 3 graded turns and changed nothing');
       expect(thread).not.toContain('refiner');
       // One card, not two: the count is the assertion, because a dropped frame
       // and a rendered-but-scrolled-away one read the same in a text search.
       expect(await page.$$eval(
-        '.p-thread-column button',
+        '[data-thread] button',
         (buttons) => buttons.filter((button) => button.innerText.includes('settled') || button.innerText.includes('graded turns')).length,
       )).toBe(1);
 
@@ -1229,7 +1229,7 @@ describe('a hosted actor’s cards stay out of the workspace’s own chat', () =
 /** Each row of `?frame=provenance` as a reader meets it: whose bubble, which card, and what each drained event says. */
 function readProvenance(page: Page) {
   return page.$$eval('[data-chat-row]', (rows) => Object.fromEntries(rows.map((row) => [row.getAttribute('data-chat-row') ?? '', {
-    bubble: row.querySelector('.p-user-bubble') !== null,
+    bubble: row.querySelector('[data-user-bubble]') !== null,
     card: row.querySelector('[data-signal-card]') !== null,
     systemEvent: row.querySelector('[data-system-event]')?.getAttribute('data-system-event') ?? null,
     advisor: row.querySelector('[data-advisor-severity]')?.getAttribute('data-advisor-severity') ?? null,
@@ -1246,7 +1246,7 @@ function readProvenance(page: Page) {
 
 /** The loose cards in the workspace's thread, each by its state and the briefs it lists. */
 function threadCards(page: Page): Promise<{ state: string | null; briefs: string[] }[]> {
-  return page.$$eval('.p-thread-column [data-signal-card]', (cards) => cards.map((card) => ({
+  return page.$$eval('[data-thread] [data-signal-card]', (cards) => cards.map((card) => ({
     state: card.getAttribute('data-signal-card'),
     briefs: [...card.querySelectorAll('[data-drained-event]')].map((event) => event.lastElementChild?.textContent ?? ''),
   })));
@@ -1319,20 +1319,20 @@ describe('whose words a turn is', () => {
       const page = await newPage();
       await page.setViewport({ width: 1440, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('.p-thread-column');
+      await page.waitForSelector('[data-thread]');
       const cardsBriefing = async (brief: string) => (await threadCards(page)).filter((card) => card.briefs.includes(brief));
 
       await pushFrames(page, [webhookCard('sig-life', 'a refund of 12.00 settled')]);
-      await page.waitForFunction(() => document.querySelector('.p-thread-column')?.textContent?.includes('a refund of 12.00 settled') === true);
+      await page.waitForFunction(() => document.querySelector('[data-thread]')?.textContent?.includes('a refund of 12.00 settled') === true);
       expect(await cardsBriefing('a refund of 12.00 settled')).toEqual([{ state: 'pending', briefs: ['a refund of 12.00 settled'] }]);
 
       await pushFrames(page, [{ type: 'signal_card', id: 'sig-life', state: 'shown' }]);
-      await page.waitForSelector('.p-thread-column [data-signal-card="shown"]');
+      await page.waitForSelector('[data-thread] [data-signal-card="shown"]');
       expect(await cardsBriefing('a refund of 12.00 settled')).toEqual([{ state: 'shown', briefs: ['a refund of 12.00 settled'] }]);
 
       // Delivered again after it was shown: the same card, pending once more and saying the new words.
       await pushFrames(page, [webhookCard('sig-life', 'a refund of 12.00 settled twice')]);
-      await page.waitForFunction(() => document.querySelector('.p-thread-column')?.textContent?.includes('settled twice') === true);
+      await page.waitForFunction(() => document.querySelector('[data-thread]')?.textContent?.includes('settled twice') === true);
       expect(await cardsBriefing('a refund of 12.00 settled')).toEqual([]);
       expect(await cardsBriefing('a refund of 12.00 settled twice')).toEqual([{ state: 'pending', briefs: ['a refund of 12.00 settled twice'] }]);
 
@@ -1345,13 +1345,13 @@ describe('whose words a turn is', () => {
         { type: 'signal_card', id: 'sig-odd', state: 'elsewhere', text: 'odd', metadata: { kinuEvent: 'event_drain' } },
         webhookCard('sig-after', 'a payout of 3.00 settled'),
       ]);
-      await page.waitForFunction(() => document.querySelector('.p-thread-column')?.textContent?.includes('a payout of 3.00 settled') === true);
+      await page.waitForFunction(() => document.querySelector('[data-thread]')?.textContent?.includes('a payout of 3.00 settled') === true);
       expect(await cardsBriefing('a refund of 12.00 settled twice')).toEqual([]);
       expect((await threadCards(page)).length).toBe(before);
 
       // Cards keep arrival order, and a flood keeps the newest fifty.
       await pushFrames(page, Array.from({ length: 60 }, (_, at) => webhookCard(`sig-flood-${String(at)}`, `flood ${String(at).padStart(2, '0')}`)));
-      await page.waitForFunction(() => document.querySelector('.p-thread-column')?.textContent?.includes('flood 59') === true);
+      await page.waitForFunction(() => document.querySelector('[data-thread]')?.textContent?.includes('flood 59') === true);
       const flood = (await threadCards(page)).flatMap((card) => card.briefs).filter((brief) => brief.startsWith('flood'));
       expect(flood).toEqual(Array.from({ length: 50 }, (_, at) => `flood ${String(at + 10)}`));
       await page.close();
@@ -2337,7 +2337,7 @@ describe('composer and message continuity at browser boundaries', () => {
 
         const measured = await page.evaluate(() => {
           const read = (selector: string) => {
-            const bubble = document.querySelector<HTMLElement>(`${selector} .p-user-bubble`);
+            const bubble = document.querySelector<HTMLElement>(`${selector} [data-user-bubble]`);
 
             return {
               clientWidth: bubble?.clientWidth ?? 0,
@@ -3443,11 +3443,33 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.evaluate(() => { document.documentElement.dataset.previewArrived = '1'; });
       await page.waitForSelector('[data-preview-ready]');
       await waitForInspectorWidth(page, 'open');
-      expect(await page.$eval('[aria-label="Work"]', (el) => el.getAttribute('aria-current'))).toBe('true');
+      expect(await page.$eval('[aria-label="Work"]', (el) => el.getAttribute('aria-selected'))).toBe('true');
 
       await page.click('[data-preview-ready]');
-      await page.waitForSelector('[aria-label="Arrived app"][aria-current="true"]');
+      await page.waitForSelector('[aria-label="Arrived app"][aria-selected="true"]');
       expect(await page.$('[data-preview-ready]')).toBeNull();
+
+      // The strip is one tab stop: arrows move focus, Home and End reach its ends, and only Enter opens a tab.
+      const strip = '[role="tablist"][aria-label="Workspace panels"]';
+      const tabLabels = await page.$$eval(`${strip} [role="tab"]`, (tabs) => tabs.map((tab) => tab.getAttribute('aria-label') ?? ''));
+      const focusedTab = () => page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? '');
+
+      expect(await page.$$eval(`${strip} [role="tab"]`, (tabs) => tabs.filter((tab) => tab.getAttribute('tabindex') === '0').length)).toBe(1);
+      await page.focus(`${strip} [role="tab"][aria-selected="true"]`);
+      await page.keyboard.press('Home');
+      expect(await focusedTab()).toBe(tabLabels[0]);
+      await page.keyboard.press('End');
+      expect(await focusedTab()).toBe(tabLabels[tabLabels.length - 1]);
+      await page.keyboard.press('ArrowRight');
+      expect(await focusedTab()).toBe(tabLabels[0]);
+      expect(await page.$eval('[aria-label="Arrived app"]', (el) => el.getAttribute('aria-selected'))).toBe('true');
+      await page.keyboard.press('Enter');
+      await page.waitForSelector(`${strip} [role="tab"][aria-label="${tabLabels[0]}"][aria-selected="true"]`);
+      // The one panel is named by the tab that opened it.
+      expect(await page.$eval('#work-surface-panel', (panel) => [panel.getAttribute('role'), panel.getAttribute('aria-labelledby')]))
+        .toEqual(['tabpanel', await page.$eval(`${strip} [role="tab"][aria-label="${tabLabels[0]}"]`, (tab) => tab.id)]);
+      await page.click('[aria-label="Arrived app"]');
+      await page.waitForSelector('[aria-label="Arrived app"][aria-selected="true"]');
 
       // A keyboard resize is an explicit size: it survives a reload. One
       // ArrowRight step is five percentage points, which lands the 340px

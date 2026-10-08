@@ -416,15 +416,15 @@ test('a slate\'s file and memory calls use the caller\'s own plane and lose reac
   const memory = (asCaller: SlateCaller, member: string, args: JsonValue[]) => surface(parent.agent, asCaller, 'native-reader')(['memory', member], args);
 
   expect(await read()).toContain('root note');
-  expect(await memory(caller, 'remember', ['slate-key', 'child fact'])).toMatchObject({ ok: true, value: { ok: true } });
-  expect(await memory(ROOT_SLATE_CALLER, 'recall', ['slate-key'])).toMatchObject({ ok: true, value: { found: false } });
+  expect(await memory(caller, 'remember', ['slate-key', 'child fact'])).toMatchObject({ ok: true, value: { key: 'slate-key' } });
+  expect(await memory(ROOT_SLATE_CALLER, 'recall', ['slate-key'])).toMatchObject({ ok: true, value: null });
   parent.agent.harnessInstallCatalog({
     roles: { scribe: { description: 'Only memory.', instructions: 'Write.', tier: 'default', preset: 'ideate', allowedTools: ['memory'] } },
     tiers: { default: { model: DEFAULT_WORKERS_AI_MODEL_SPEC } },
   });
   child.actor.stores.config.setRoleSelection('scribe');
   expect(await read()).toContain('"reason":"denied"');
-  expect(await memory(caller, 'recall', ['slate-key'])).toMatchObject({ ok: true, value: { found: true, value: 'child fact' } });
+  expect(await memory(caller, 'recall', ['slate-key'])).toMatchObject({ ok: true, value: { key: 'slate-key', value: 'child fact' } });
   child.actor.stores.config.setRoleSelection('task');
   expect(await read()).toContain('root note');
 });
@@ -436,7 +436,7 @@ test('a slate never reaches what only the agent does', async () => {
   await writeText(files, '/slates/limited/package.json', JSON.stringify({ main: 'server.ts' }));
   const call = (path: string[], args: JsonValue[] = []) => surface(actor.agent, ROOT_SLATE_CALLER, 'limited')(path, args);
 
-  for (const path of [['agents', 'hire'], ['agent', 'hire'], ['workspace', 'createTool'], ['workspace', 'slate'], ['report', 'send'], ['tasks', 'mode']]) {
+  for (const path of [['agents', 'hire'], ['agent', 'hire'], ['workspace', 'createTool'], ['workspace', 'slate'], ['report', 'send'], ['tasks', 'switchRole']]) {
     expect(await call(path, [{ mission: 'should not run' }]), path.join('.')).toMatchObject({ ok: false, reason: 'denied' });
   }
 

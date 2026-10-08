@@ -18,7 +18,7 @@ function gate() {
 
 type TestToolResult = object | string;
 
-interface SwarmInput { action: string; task?: string }
+interface SwarmInput { op: string; task?: string }
 
 interface ShellToolInput { command: string }
 
@@ -113,7 +113,7 @@ describe('wrapToolsForBackground — swarm is spawn-shaped, run/eval are result-
     const exploration = gate();
     const raw: ToolSet = { agents: fakeSwarmTool(exploration.held, () => { explored = true; }) };
     const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
-    const out = await executeTool(wrapped, 'agents')({ action: 'swarm', task: 't' });
+    const out = await executeTool(wrapped, 'agents')({ op: 'swarm', task: 't' });
 
     expect(crossings).toEqual(['agents']);
     // An ordering, not a wall-clock bound: the exploration is still held at detach.
@@ -141,7 +141,7 @@ describe('wrapToolsForBackground — swarm is spawn-shaped, run/eval are result-
     const exploration = gate();
     const raw: ToolSet = { agents: fakeSwarmTool(exploration.held) };
     const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
-    const pending = executeTool(wrapped, 'agents')({ action: 'swarm', task: 't' });
+    const pending = executeTool(wrapped, 'agents')({ op: 'swarm', task: 't' });
     timer.tick();
     exploration.release();
     const out = await pending;
@@ -197,7 +197,7 @@ describe('wrapToolsForBackground — swarm is spawn-shaped, run/eval are result-
     });
 
     const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
-    const out = await executeTool(wrapped, 'agents')({ action: 'list' });
+    const out = await executeTool(wrapped, 'agents')({ op: 'list' });
     expect(ran).toBe(true);
     expect(out).toEqual({ subordinates: [] });
   });

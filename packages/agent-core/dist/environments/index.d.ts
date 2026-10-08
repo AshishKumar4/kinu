@@ -9,6 +9,7 @@ export { EnvironmentSession, EnvironmentSessionCapability, EnvironmentSessionSta
 export type { EnvironmentSessionStateName } from "./session.js";
 export { EnvironmentSnapshot, environmentSnapshotContentRetention, EnvironmentSnapshotState } from "./snapshot.js";
 export type { EnvironmentSnapshotStateName } from "./snapshot.js";
+export { TreeCheckpoint, TreeCheckpointEntry } from "./tree-checkpoint.js";
 export { EnvironmentStore, MemoryEnvironmentStore } from "./store.js";
 export type { EnvironmentContentCustody } from "./store.js";
 export type { EnvironmentStoredRecordKind, EnvironmentStoredRow, EnvironmentStoreImage } from "./store.js";

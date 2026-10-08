@@ -1,25 +1,24 @@
 /**
- * `agent.*` codemode namespace: the agent's own curriculum and scheduled turns. Every method calls
- * the host, so both backends register this one provider. `forkAgent` is excluded (it clones the DO
- * and rejects mid-turn); delegation is `agents.*` (delegation/agents-codemode.ts).
+ * `agent.*`: the agent's own curriculum, scaffold, schedules and background jobs, served from the catalog's declarations
+ * over the host both backends build (orchestrator/agent-self-host.ts). `forkAgent` is not here: it clones the actor and
+ * refuses mid-turn.
  */
-import * as v from 'valibot';
-import type { CodemodeProvider } from './sandbox-contract';
+import { Effect } from 'effect';
+import type { CodemodeProvider } from '../types/codemode';
 import { readMissionLimits, type MissionGovernor } from '../mission-budget';
 import { nextCronFire } from '../events/hub/cron';
-import { BACKGROUND_POLICY } from '../types/jobs';
 import type { BackgroundJob } from '../types/jobs';
 import { PROPOSED_TASK_STATUSES, type ProposedTask } from '../types/proposals';
-import type { ModifyResult } from '../types/scaffold';
-import type { ScaffoldVersionView } from '../types/scaffold';
+import type { ModifyResult, ScaffoldVersionView } from '../types/scaffold';
 import type { QualityDay } from '../types/quality';
 import type { TimerTrigger } from '../events/ingress/triggers';
 import type { TrustLevel } from '../events/hub/types';
 import { nanoid } from '../utils/nanoid';
-import { TOOL_REACH } from './registry';
-import { decodeJsonValue, JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
-import { Effect } from 'effect';
-import { KinuError, settle } from '../obs/index';
+import type { JsonObject } from '../utils/json';
+import { KinuError } from '../obs/index';
+import { serve } from '../operations/operation';
+import { AGENT } from '../operations/agent';
+import { codemodeNamespace } from './operation-surfaces';
 
 type CurriculumStatus = (typeof PROPOSED_TASK_STATUSES)[number];
 
@@ -51,49 +50,6 @@ export interface AgentSelfHost {
   armCompactNow(): void;
 }
 
-const CURRICULUM_STATUS_UNION = PROPOSED_TASK_STATUSES.map((s) => `'${s}'`).join(' | ');
-
-const TYPES = `/** Your own lifecycle. */
-export declare const agent: {
-  proposeCurriculum(count?: number): Promise<unknown>;
-  listCurriculum(status?: ${CURRICULUM_STATUS_UNION}): Promise<unknown>;
-  acceptCurriculumTask(id: string): Promise<unknown>;
-  /** A new version of your scaffold: \`code\` exports \`async function* run(rt, task)\` and reaches the host
-   *  only through \`host.*\`; \`rationale\` is at least 50 characters. It goes live only after winning a
-   *  shadow evaluation against the current version. \`baseVersion\` branches from an archived one. */
-  proposeScaffold(rationale: string, code: string, baseVersion?: number):
-    Promise<{ ok: boolean; version?: number; error?: string; stage?: number } | Refusal>;
-  /** Your scaffold versions with status, lineage and shadow-evaluation record. */
-  scaffoldVersions(limit?: number): Promise<unknown>;
-  /** A future turn: \`cron\` recurs, \`atMs\` (epoch ms) fires once. \`budget_usd\`/\`budget_tokens\` cap
-   *  everything its turns spend, across fires; \`budget_label\` shares one ledger between schedules. */
-  schedule(opts: {
-    cron?: string; atMs?: number; label?: string; payload?: object;
-    budget_usd?: number; budget_tokens?: number; budget_label?: string;
-  }): Promise<{ id: string; kind: string; nextFireAt: number | null; budget?: unknown } | Refusal>;
-  cancelSchedule(id: string): Promise<{ ok: boolean; changed: boolean } | Refusal>;
-  /** One mission budget, or with no label every budget this turn spends against; [] when uncapped. */
-  budget(label?: string): Promise<unknown>;
-  /** A background job's row. A running job has no result yet; its result wakes you when it settles. */
-  jobResult(jobId: string): Promise<{ id: string; kind: string; status: 'running' | 'completed' | 'failed' | 'cancelled'; result?: string | null; error?: string | null; note?: string } | null | Refusal>;
-  backgroundJobs(limit?: number): Promise<unknown>;
-  /** Compact the conversation when the next turn is assembled; the folded range stays archived. */
-  compactNow(): Promise<{ armed: boolean; appliesAt: 'next-turn-assembly' } | Refusal>;
-  /** How satisfied users were with your turns per day, oldest first: mean rating 1-5 with a 95% interval. */
-  quality(days?: number): Promise<unknown>;
-};
-`;
-
-/** Thresholds read from BACKGROUND_POLICY: the provider is built once per DO but the threshold is per turn. */
-const BACKGROUND_DESCRIPTION =
-  'Read a background job\'s settled result. A fork backgrounds the moment it spawns on a live chat '
-  + 'session; other long tool calls background once they outrun this turn\'s threshold '
-  + `(${BACKGROUND_POLICY.interactive.detachAfterMs / 1000}s on a chat turn a human is watching, `
-  + `${BACKGROUND_POLICY['one-shot'].detachAfterMs / 1000}s on an autonomous turn woken by an event, `
-  + 'a timer or a job). Either way the call hands back { jobId } and you are WOKEN with the result '
-  + 'when the job settles: the wake is the delivery. Call this for the job a wake named, or to '
-  + 're-read an old result; a job still running has no result to read.';
-
 /** A running job reads as the wake contract, not an empty row, so a poll loop has nothing to spin on. */
 interface RunningJobRead {
   id: string;
@@ -118,160 +74,41 @@ function formatJobRead(job: BackgroundJob | null): BackgroundJob | RunningJobRea
   };
 }
 
-const OptionalNumberSchema = v.optional(v.number());
-
-const OptionalCurriculumStatusSchema = v.optional(
-  v.picklist(PROPOSED_TASK_STATUSES),
-);
-
-const NonEmptyStringSchema = v.pipe(v.string(), v.minLength(1));
-
-const OptionalBaseVersionSchema = v.optional(
-  v.pipe(v.number(), v.integer(), v.minValue(0)),
-);
-
-const ScheduleOptionsSchema = v.object({
-  cron: v.optional(v.pipe(v.string(), v.minLength(1))),
-  atMs: v.optional(v.pipe(v.number(), v.finite())),
-  label: v.optional(v.string()),
-  payload: v.optional(JsonObjectSchema),
-  budget_usd: v.optional(v.number()),
-  budget_tokens: v.optional(v.number()),
-  budget_label: v.optional(v.string()),
-});
-
-function argument<T>(schema: v.GenericSchema<unknown, T>, input: { value: unknown }, refusal: string): Effect.Effect<T, KinuError> {
-  const parsed = v.safeParse(schema, input.value);
-
-  return parsed.success ? Effect.succeed(parsed.output) : Effect.fail(new KinuError('bad_input', refusal));
-}
-
-function withArgument<T, R>(parsed: Effect.Effect<T, KinuError>, call: (value: T) => R | Promise<R>): Effect.Effect<R, KinuError> {
-  return Effect.flatMap(parsed, (value) => Effect.promise(() => Promise.resolve(call(value))));
-}
-
 export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
-  return {
-    name: TOOL_REACH.agent.codemode,
-    types: TYPES,
-    positionalArgs: true,
-    tools: {
-      proposeCurriculum: {
-        description: 'Propose N self-curriculum tasks (Voyager-style) for your own improvement; returns the proposals.',
-        execute: (...args: unknown[]) => settle(withArgument(
-          argument(OptionalNumberSchema, { value: args[0] }, 'agent.proposeCurriculum: count must be a number when given'),
-          (count) => host.proposeCurriculumTasks(count),
-        )),
-      },
-      listCurriculum: {
-        description: 'List your proposed curriculum tasks, optionally filtered by status (pending/accepted/rejected/completed).',
-        execute: (...args: unknown[]) => settle(withArgument(
-          argument(OptionalCurriculumStatusSchema, { value: args[0] }, 'agent.listCurriculum: invalid status'),
-          (status) => host.listCurriculumTasks(status),
-        )),
-      },
-      acceptCurriculumTask: {
-        description: 'Accept a proposed curriculum task by id so it becomes runnable.',
-        execute: (...args: unknown[]) => settle(withArgument(
-          argument(NonEmptyStringSchema, { value: args[0] }, 'agent.acceptCurriculumTask: id must be a non-empty string'),
-          (id) => host.setCurriculumTaskStatus(id, 'accepted'),
-        )),
-      },
-      proposeScaffold: {
-        description: 'Propose a new version of your own agentic-loop scaffold. Routed through the 4-gate validation + misevolution gate + shadow evaluation; only goes live after winning the promotion gate. rationale at least 50 chars; code must export async function* run(rt, task) and use the host.* bridge. Optional baseVersion branches from an archived variant.',
-        execute: (...args: unknown[]) => {
-          const [rationale, code, baseVersion] = args;
+  return codemodeNamespace('agent', [
+    serve(AGENT.proposeCurriculum, async ({ count }) => await host.proposeCurriculumTasks(count)),
+    serve(AGENT.listCurriculum, async ({ status }) => await host.listCurriculumTasks(status)),
+    serve(AGENT.acceptCurriculumTask, async ({ id }) => await host.setCurriculumTaskStatus(id, 'accepted')),
+    serve(AGENT.proposeScaffold, async ({ rationale, code, baseVersion }) => await host.proposeScaffold(rationale, code, baseVersion)),
+    serve(AGENT.scaffoldVersions, async ({ limit }) => await host.listScaffoldVersions(limit)),
+    serve(AGENT.schedule, (opts) => Effect.gen(function* () {
+      const { cron, atMs } = opts;
 
-          return settle(withArgument(Effect.all([
-            argument(NonEmptyStringSchema, { value: rationale }, 'agent.proposeScaffold: rationale must be a non-empty string'),
-            argument(NonEmptyStringSchema, { value: code }, 'agent.proposeScaffold: code must be a non-empty string'),
-            argument(OptionalBaseVersionSchema, { value: baseVersion }, 'agent.proposeScaffold: baseVersion must be a non-negative integer when given'),
-          ]), ([rationaleText, codeText, base]) => host.proposeScaffold(rationaleText, codeText, base)));
-        },
-      },
-      scaffoldVersions: {
-        description: 'Read-only scaffold archive: versions with status, lineage (parent_version) and shadow-eval record: the stepping stones proposeScaffold can branch from.',
-        execute: (...args: unknown[]) => settle(withArgument(
-          argument(OptionalNumberSchema, { value: args[0] }, 'agent.scaffoldVersions: limit must be a number when given'),
-          (limit) => host.listScaffoldVersions(limit),
-        )),
-      },
-      schedule: {
-        description: 'Schedule a future autonomous turn: { cron } recurring OR { atMs } one-shot (epoch ms), with optional label/payload. The reactor wakes you when it fires. Optional budget_usd / budget_tokens give the whole schedule a cumulative host-enforced spend cap covering every turn it wakes and everything those turns spawn.',
-        execute: (...args: unknown[]) => settle(Effect.gen(function* () {
-          const opts = yield* argument(ScheduleOptionsSchema, { value: args[0] ?? {} }, 'agent.schedule: invalid schedule options');
-          const { cron, atMs } = opts;
+      if (cron === undefined && atMs === undefined) return yield* new KinuError('bad_input', 'agent.schedule: provide { cron } or { atMs }');
 
-          if (!cron && atMs === undefined) return yield* new KinuError('bad_input', 'agent.schedule: provide { cron } or { atMs }');
+      if (cron !== undefined && nextCronFire(cron, Date.now()) === null) return yield* new KinuError('bad_input', `agent.schedule: unsupported cron expression: ${cron}`);
 
-          if (cron && nextCronFire(cron, Date.now()) === null) return yield* new KinuError('bad_input', `agent.schedule: unsupported cron expression: ${cron}`);
+      if (atMs !== undefined && atMs <= Date.now()) return yield* new KinuError('bad_input', 'agent.schedule: atMs must be in the future');
+      // Declared before the trigger so the first fire carries the label; a named label re-enters its row.
+      const limits = readMissionLimits({ budget_usd: opts.budgetUsd, budget_tokens: opts.budgetTokens });
+      const declaredLabel = opts.budgetLabel?.trim();
+      // A blank label names no sub-ledger; the generated one keeps it addressable.
+      const label = declaredLabel === undefined || declaredLabel === '' ? `schedule-${nanoid()}` : declaredLabel;
+      const missionLabel = limits === null ? undefined : label;
+      const budget = limits === null ? undefined : host.budget.declare(label, limits);
+      const trigger = yield* Effect.promise(() => host.createTimerTrigger({ cron, atMs, missionLabel, label: opts.label, payload: opts.payload }));
 
-          if (atMs !== undefined && atMs <= Date.now()) return yield* new KinuError('bad_input', 'agent.schedule: atMs must be in the future');
-          // Declared before the trigger so the first fire carries the label; a named label re-enters its row.
-          const limits = readMissionLimits(opts);
+      return budget === undefined ? trigger : { ...trigger, budget };
+    })),
+    serve(AGENT.cancelSchedule, async ({ id }) => await host.cancelTrigger(id, 'self')),
+    serve(AGENT.budget, async ({ label }) => host.budget.snapshot(label)),
+    serve(AGENT.jobResult, async ({ jobId }) => formatJobRead(await host.jobResult(jobId))),
+    serve(AGENT.backgroundJobs, async ({ limit }) => await host.listBackgroundJobs(limit)),
+    serve(AGENT.compactNow, async () => {
+      host.armCompactNow();
 
-          const declaredLabel = opts.budget_label?.trim();
-          let missionLabel: string | undefined;
-
-          // A blank label names no sub-ledger; the generated one keeps it addressable.
-          if (limits) missionLabel = declaredLabel === undefined || declaredLabel === '' ? `schedule-${nanoid()}` : declaredLabel;
-
-          const budget = limits && missionLabel ? host.budget.declare(missionLabel, limits) : undefined;
-
-          const result: TimerTrigger & { budget?: JsonValue } = yield* Effect.promise(() => host.createTimerTrigger({
-            cron, atMs, missionLabel,
-            label: opts.label,
-            payload: opts.payload,
-          }));
-
-          if (budget) result.budget = decodeJsonValue({ value: budget });
-
-          return result;
-        })),
-      },
-      budget: {
-        description: 'Read a mission budget: pass a label, or omit to read whatever the current turn spends against. Returns [] when this run is uncapped (the default).',
-        execute: (...args: unknown[]) => settle(withArgument(
-          argument(v.optional(v.string()), { value: args[0] }, 'agent.budget: label must be a string when given'),
-          (label) => host.budget.snapshot(label),
-        )),
-      },
-      cancelSchedule: {
-        description: 'Cancel a previously-scheduled trigger by id (idempotent).',
-        execute: (...args: unknown[]) => settle(withArgument(
-          argument(NonEmptyStringSchema, { value: args[0] }, 'agent.cancelSchedule: id must be a non-empty string'),
-          (id) => host.cancelTrigger(id, 'self'),
-        )),
-      },
-      jobResult: {
-        description: BACKGROUND_DESCRIPTION,
-        execute: (...args: unknown[]) => settle(withArgument(
-          argument(NonEmptyStringSchema, { value: args[0] }, 'agent.jobResult: jobId must be a non-empty string'),
-          async (jobId) => formatJobRead(await host.jobResult(jobId)),
-        )),
-      },
-      backgroundJobs: {
-        description: 'List your recent background jobs (newest first) with their status.',
-        execute: (...args: unknown[]) => settle(withArgument(
-          argument(OptionalNumberSchema, { value: args[0] }, 'agent.backgroundJobs: limit must be a number when given'),
-          (limit) => host.listBackgroundJobs(limit),
-        )),
-      },
-      compactNow: {
-        description: 'Fold the conversation now: arm the compaction ladder so your NEXT turn is assembled from a fresh handoff checkpoint instead of waiting for the token trigger. Use it at a phase boundary. The folded range is archived verbatim and listed in the checkpoint\'s Compaction Archive manifest, so nothing is lost.',
-        execute: async () => {
-          host.armCompactNow();
-
-          return { armed: true, appliesAt: 'next-turn-assembly' };
-        },
-      },
-      quality: {
-        description: 'Read how satisfied users were with your turns, one row per day over the last `days` (default 30): the mean rating from 1 to 5 with its 95% interval, the share of turns where the user had to correct you, and how many turns were rated. A move inside the interval is noise, not progress.',
-        execute: (...args: unknown[]) => settle(withArgument(
-          argument(OptionalNumberSchema, { value: args[0] }, 'agent.quality: days must be a number when given'),
-          (days) => host.getQuality(days),
-        )),
-      },
-    },
-  };
+      return { armed: true as const, appliesAt: 'next-turn-assembly' as const };
+    }),
+    serve(AGENT.quality, async ({ days }) => await host.getQuality(days)),
+  ]);
 }

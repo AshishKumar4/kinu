@@ -84,6 +84,7 @@ export function agentCallsThrough(through: <A>(call: (isolate: AgentFacetCalls) 
     run: (...args) => settle(through((isolate) => isolate.run(...args))),
     submitPlan: (...args) => settle(through((isolate) => isolate.submitPlan(...args))),
     activePlanReview: (...args) => settle(through((isolate) => isolate.activePlanReview(...args))),
+    planReviews: (...args) => settle(through((isolate) => isolate.planReviews(...args))),
     savePlanReviewAnnotations: (...args) => settle(through((isolate) => isolate.savePlanReviewAnnotations(...args))),
     dismissPlanReview: (...args) => settle(through((isolate) => isolate.dismissPlanReview(...args))),
     decidePlanReview: (...args) => settle(through((isolate) => isolate.decidePlanReview(...args))),

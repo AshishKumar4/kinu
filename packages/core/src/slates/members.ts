@@ -1,8 +1,17 @@
 /**
- * What each namespace member a slate calls does, as agent-core's impact; a member no table names is `administer`
- * (fail closed). `toolCallEffect` reads `NATIVE_ACTION_EFFECTS` from here.
+ * What each namespace member a slate calls does, as its catalog operation's impact: a member the catalog keeps from
+ * slates is the agent's alone, and an executor member it does not declare is `administer` (fail closed).
+ * `toolCallEffect` reads `NATIVE_ACTION_EFFECTS` from here.
  */
 import type { Impact } from '@agent-core/core/facets';
+import type { Operation } from '../operations/operation';
+import { AGENTS_IMPACTS } from '../operations/agents';
+import { DB } from '../operations/db';
+import { DEVICE, SANDBOX, WORKSPACE } from '../operations/executors';
+import { FILE } from '../operations/file';
+import { MEMORY } from '../operations/memory';
+import { TASKS } from '../operations/tasks';
+import { WEB, WEB_SANDBOX_IMPACTS } from '../operations/web';
 
 /** `workspace.ai.run({ prompt, system?, tier? })`: a model call, never the `shell` tool, whose run was renamed. */
 export const AI_RUN_MEMBER = 'run';
@@ -10,43 +19,34 @@ export const AI_RUN_MEMBER = 'run';
 /** A tool call's chip: whether it only looked. */
 export type ActionEffect = 'read' | 'mutate';
 
-/**
- * The eval namespaces' members a slate reaches, each with its impact; a member absent here is the agent's alone. One
- * table until the operation catalog states each operation's impact and slate reach for itself.
- */
+const impacts = (ops: Readonly<Record<string, Operation>>, slate: boolean): Readonly<Record<string, Impact>> => Object.fromEntries(
+  Object.values(ops).filter((op) => !slate || op.slate).map((op) => [op.name, op.impact]),
+);
+
+/** The eval namespaces' members a slate reaches, each with its impact; a member absent here is the agent's alone. */
 const SLATE_MEMBER_IMPACTS = {
-  memory: { search: 'observe', recall: 'observe', conversations: 'observe', save: 'mutate', remember: 'mutate', forget: 'mutate' },
-  // `tasks.mode` switches the agent's own role: steering itself, which a slate never does.
-  tasks: { list: 'observe', add: 'mutate', update: 'mutate' },
-  web: {
-    search: 'observe', fetch: 'observe', screenshot: 'observe', browsers: 'observe',
-    openBrowser: 'execute', closeBrowser: 'mutate', connectBrowser: 'execute', pageTools: 'observe', callPageTool: 'execute',
-  },
-  db: {
-    listTables: 'observe', schema: 'observe', select: 'observe', count: 'observe',
-    createTable: 'mutate', insert: 'mutate', update: 'mutate', deleteRows: 'mutate', batch: 'mutate', dropTable: 'mutate',
-  },
+  memory: impacts(MEMORY, true),
+  tasks: impacts(TASKS, true),
+  web: { ...impacts(WEB, true), ...WEB_SANDBOX_IMPACTS },
+  db: impacts(DB, true),
 } as const satisfies Readonly<Record<string, Readonly<Record<string, Impact>>>>;
 
-/** An executor's own members (`workspace`, `sandbox`, `device`); its process and port members fall to `administer`. */
-const EXECUTOR_MEMBER_IMPACTS = {
-  readFile: 'observe', readdir: 'observe', exists: 'observe', stat: 'observe', searchMemory: 'observe', listTools: 'observe',
-  writeFile: 'mutate', editFile: 'mutate', mkdir: 'mutate', remove: 'mutate', saveNote: 'mutate', exec: 'execute', git: 'execute',
-} as const satisfies Readonly<Record<string, Impact>>;
+/** An executor's own members (`workspace`, `sandbox`, `device`), by name across them. */
+const EXECUTOR_MEMBER_IMPACTS = { ...impacts(DEVICE, true), ...impacts(SANDBOX, true), ...impacts(WORKSPACE, true) };
 
 const effectOfImpact = (impact: Impact): ActionEffect => (impact === 'observe' ? 'read' : 'mutate');
 
-function effects(impacts: Readonly<Record<string, Impact>>): Readonly<Record<string, ActionEffect>> {
-  return Object.fromEntries(Object.entries(impacts).map(([name, impact]) => [name, effectOfImpact(impact)]));
+function effects(table: Readonly<Record<string, Impact>>): Readonly<Record<string, ActionEffect>> {
+  return Object.fromEntries(Object.entries(table).map(([name, impact]) => [name, effectOfImpact(impact)]));
 }
 
-/** Per native action; the native web tool writes (a spilled page, a screenshot). */
+/** Per native operation, as each capability tool's `op` names it. */
 export const NATIVE_ACTION_EFFECTS = {
-  file: { read: 'read', list: 'read', stat: 'read', search: 'read', write: 'mutate', edit: 'mutate' },
-  memory: effects(SLATE_MEMBER_IMPACTS.memory),
-  tasks: { ...effects(SLATE_MEMBER_IMPACTS.tasks), mode: 'mutate' },
-  web: { search: 'read', fetch: 'mutate', screenshot: 'mutate' },
-  agents: { list: 'read', swarm: 'mutate', hire: 'mutate', msg: 'mutate', dismiss: 'mutate' },
+  file: effects(impacts(FILE, false)),
+  memory: effects(impacts(MEMORY, false)),
+  tasks: effects(impacts(TASKS, false)),
+  web: effects(impacts(WEB, false)),
+  agents: effects(AGENTS_IMPACTS),
 } as const satisfies Readonly<Record<string, Readonly<Record<string, ActionEffect>>>>;
 
 const lookup = <T>(table: Readonly<Record<string, T>>, name: string): T | undefined => Object.entries(table).find(([key]) => key === name)?.[1];

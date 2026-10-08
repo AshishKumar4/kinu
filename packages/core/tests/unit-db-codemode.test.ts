@@ -15,6 +15,7 @@ import {
 } from '../src/tools/db-codemode';
 import { RunEventRecorder, parseStoredRunEvent } from '../src/events/recorder';
 import { codemodeCapabilitiesFor, narrowToolSurface, TOOL_REACH } from '../src/tools/registry';
+import { namespaceDeclaration } from '../src/tools/operation-surfaces';
 import { inWorkMode, providersInWorkMode } from '../src/execution/work-mode';
 import { archiveSqlFromDatabase, restoreWorkspaceArchive, writeWorkspaceArchive } from '../src/index';
 import type { ActorHandle } from '../src/identity/actor-handle';
@@ -765,8 +766,8 @@ describe('role and Plan authority', () => {
     try {
       const provider = createDbCodemodeProvider(w.store(w.a));
       expect(provider.name).toBe('db');
-      const types = provider.types ?? '';
-      expect(types.match(/export declare const db:/gu)).toHaveLength(1);
+      const types = namespaceDeclaration(provider.name, provider.declarations ?? {}, new Set());
+      expect(types.match(/declare const db:/gu)).toHaveLength(1);
       expect(types).toContain("scope: 'actor'");
       expect(types).toContain('No operation takes SQL');
       expect(types).not.toContain('env.db');

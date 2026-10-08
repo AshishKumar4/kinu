@@ -558,17 +558,6 @@ export function createDeviceTunnelExecutor(
     )),
     disconnect: async () => { /* the hub owns the socket lifecycle */ },
     tools,
-    types: `/**
- * The user's own machine; \`unavailable\` means none is attached, and the error says how to attach one.
- * With several machines connected, name one with \`{ device: "<name>" }\`.
- */
-declare namespace device {
-  function exec(command: string, opts?: { device?: string }): Promise<string | Refusal>;
-  function readFile(path: string, opts?: { device?: string }): Promise<string | Refusal>;
-  function writeFile(path: string, content: string, opts?: { device?: string }): Promise<string | Refusal>;
-  function readdir(path: string, opts?: { device?: string }): Promise<string[] | Refusal>;
-  function exists(path: string, opts?: { device?: string }): Promise<boolean | Refusal>;
-}`,
     positionalArgs: true,
     // The PC is behind the user's NAT; no inbound ports. Use `sandbox` for previewable URLs.
     async exposePort(port: number) {

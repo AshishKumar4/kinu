@@ -216,7 +216,7 @@ describe('createNodeCodemodeToolFactory — a failing host call can never kill t
 
     expect(out.result).toBe('caught:ENOENT: nope');
     expect(successfulToolOutcome('eval', { output: out })).toEqual({ success: true, failures: [
-      { success: false, tool: 'file', action: null, reason: null, error: 'ENOENT: nope' },
+      { success: false, tool: 'file', op: null, reason: null, error: 'ENOENT: nope' },
     ] });
   });
 

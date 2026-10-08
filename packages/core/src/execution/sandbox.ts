@@ -157,15 +157,6 @@ function resizedText(resized: SandboxResize, sizes: SandboxSizes): string | Refu
   }
 }
 
-/** The declaration codemode shows for `sandbox.resize`, from the host's table. */
-function resizeDeclaration(sizes: SandboxSizes | undefined): string {
-  if (sizes === undefined) return '';
-  const choices = sizes.sizes.map((row) => `${row.size}: ${String(row.vcpu)} vCPU, ${String(Math.round(row.memoryMib / 102.4) / 10)} GiB`).join('; ');
-
-  return `\n  /** ${choices}. A running sandbox restarts at the new size: files stay, supervised servers and ports come back, a running command ends. */`
-    + `\n  function resize(size: ${sizes.sizes.map((row) => `'${row.size}'`).join(' | ')}): Promise<string | Refusal>;`;
-}
-
 const NOT_CONFIGURED =
   'Sandbox executor not configured. Add the KinuDevbox binding ' +
   'and its container to wrangler.jsonc (see docs/EXECUTION-LAYER-SPEC.md).';
@@ -713,36 +704,6 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
     };
   }
 
-  const types = `
-/**
- * A Linux container of your own with its own files. Relative paths resolve in /workspace. It has no
- * docker, python3, make, gcc, clang or tsc. A start can be refused when the platform has no room (503)
- * or on a burst of starts (429); \`unavailable\` means this deployment has no container. A server
- * started with startProcess comes back when the container restarts; a nohup job does not.
- */
-declare namespace sandbox {
-  function exec(command: string): Promise<string | Refusal>;
-  function readFile(path: string): Promise<string | Refusal>;
-  function writeFile(path: string, content: string): Promise<string | Refusal>;
-  /** The executor's working directory when path is omitted or empty. */
-  function listFiles(path?: string): Promise<string | Refusal>;
-  /** Alias for listFiles. */
-  function readdir(path?: string): Promise<string | Refusal>;
-  function deleteFile(path: string): Promise<string | Refusal>;
-  /** "true" or "false". */
-  function exists(path: string): Promise<string | Refusal>;
-  /** Supervised background process: returns JSON {processId,restartable:true}. */
-  function startProcess(command: string, opts?: { cwd?: string }): Promise<string | Refusal>;
-  function stopProcess(processId: string): Promise<string | Refusal>;
-  /** JSON rows {processId,pid,status,restartable,command}. */
-  function listProcesses(): Promise<string | Refusal>;
-  /** 'now' saves and stops it, ending what runs; 'keep' runs on until it asks again. */
-  function rest(answer: 'now' | 'keep'): Promise<string | Refusal>;
-  function exposePort(port: number, name?: string): Promise<string | Refusal>;
-  function unexposePort(port: number): Promise<string | Refusal>;
-  function listPorts(): Promise<string | Refusal>;${resizeDeclaration(sizes)}
-}
-`.trim();
 
   // Probed in the deployed image (docs/EXECUTION-LAYER-SPEC.md); these are routing instructions for the model,
   // so only list what runs. python and docker are absent (exit 127).
@@ -778,7 +739,6 @@ declare namespace sandbox {
       /workspace to R2 periodically and restores in its container-start hook,
       before any executor can observe the container. Not this no-op close. */ },
     tools,
-    types,
     positionalArgs: true,
 
     async exposePort(port, opts) {

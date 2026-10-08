@@ -194,7 +194,7 @@ function workingNode(input: { readonly proposeAtDepth1: boolean }): ScriptedNode
         content.push({ type: 'text', text: 'Reading the current implementation first.' });
         content.push({
           type: 'tool-call', toolCallId: `read-${String(generations)}`, toolName: 'file',
-          input: JSON.stringify({ action: 'read', path: REFERENCE_PATH }),
+          input: JSON.stringify({ op: 'read', path: REFERENCE_PATH }),
         });
         calls.push('file');
       } else if (proposes && own === 1) {
@@ -520,10 +520,9 @@ describe('the mission ledger a search charges', () => {
 
     const provider = createAgentsCodemodeProvider(() => deps);
 
-    const out = await provider.tools.swarm.execute({
+    const out = await provider.tools.swarm.execute(TASK, {
       preset: 'custom',
       label: 'agent-nodes',
-      task: TASK,
       objective: wireObjective(),
       config: agentConfig(),
       depth: input.depth,

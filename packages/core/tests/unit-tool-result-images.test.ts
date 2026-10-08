@@ -13,7 +13,7 @@ const IMAGE = { type: 'file' as const, data: { type: 'data' as const, data: 'iVB
 
 const HISTORY: ModelMessage[] = [
   { role: 'user', content: 'screenshot example.com' },
-  { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'web', input: { action: 'screenshot', url: 'https://example.com/' } }] },
+  { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'web', input: { op: 'screenshot', url: 'https://example.com/' } }] },
   {
     role: 'tool',
     content: [{

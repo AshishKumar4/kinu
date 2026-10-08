@@ -147,6 +147,13 @@ const WritableSchema = v.object({ write: v.function(), lost: v.function() });
 
 export const OutputSinkSchema = v.custom<OutputSink>((value) => v.is(WritableSchema, value));
 
+/** The background job a call runs as, once it outlives its window. */
+export interface CallJob {
+  readonly id: string;
+  readonly detached: AbortSignal;
+  readonly output: OutputSink;
+}
+
 /** A tool call that may outrun its window: once `detached` fires, it is job `id`'s. */
 export interface ShellCallJob {
   readonly id: string;

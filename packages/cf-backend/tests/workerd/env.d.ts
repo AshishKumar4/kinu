@@ -195,8 +195,6 @@ interface DeviceUserProbeRpc extends Rpc.DurableObjectBranded {
 
 interface HireProbeRpc extends Rpc.DurableObjectBranded {
   setup(workspace: string, model: string, script: import('./hire-shapes').ChildScript): Promise<void>;
-  submitChildPlan(workspace: string, name: string, edits: import('@kinu.run/core').PlanEdit[]): Promise<import('@kinu.run/core').PlanReviewResult>;
-  childLines(workspace: string, name: string): Promise<string[]>;
   releaseChild(): Promise<void>;
   childSpoke(): Promise<void>;
   modelSaw(workspace: string, texts: readonly string[]): Promise<void>;

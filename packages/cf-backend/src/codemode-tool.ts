@@ -8,7 +8,7 @@ import * as v from 'valibot';
 import { createCodeTool } from "@cloudflare/codemode/ai";
 import { type Tool, type ToolSet } from 'ai';
 import { execCallArgs, readDeviceRequestChannel, type ActorHandle, type AgentsToolDeps, type CodemodeSurface, type DeviceRequestChannel, type ExecutionRouter } from "@kinu.run/core";
-import { createAgentsCodemodeProvider, createWebCodemodeProvider, createStateCodemodeProvider, renderCodemodeDescription, nativeToolFunctions, CRAFTED_TOOL_NAMESPACE, type BrowserSessions, type WebSearchProvider, type CodemodeProvider, type WorkMode, currentWorkMode, permitInPlan, toolsInWorkMode, providersInWorkMode, withCraftedToolDeclarations, codemodeInputSchema, withCodemodeProgram, craftedFailureFunctions, codemodeFunction, JsonValueSchema, type JsonObject, type JsonValue, type ToolSurfaceNarrowing } from "@kinu.run/core";
+import { executorNamespace, createAgentsCodemodeProvider, createWebCodemodeProvider, createStateCodemodeProvider, renderCodemodeDescription, nativeToolFunctions, toolsNamespace, CRAFTED_TOOL_NAMESPACE, type BrowserSessions, type WebSearchProvider, type CodemodeProvider, type WorkMode, currentWorkMode, permitInPlan, toolsInWorkMode, providersInWorkMode, withCraftedToolDeclarations, codemodeInputSchema, withCodemodeProgram, craftedFailureFunctions, codemodeFunction, JsonValueSchema, type JsonObject, type JsonValue, type ToolSurfaceNarrowing } from "@kinu.run/core";
 import { KinuError } from '@kinu.run/core/obs';
 import {
   KinuSandboxExecutor, renderToolsPrelude, type ProgramLaunch,
@@ -42,9 +42,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
   const stateProvider = createStateCodemodeProvider(rt.actor.programState);
   const agentsProvider = options.agents ? createAgentsCodemodeProvider(options.agents) : null;
 
-  const webProvider = createWebCodemodeProvider({
-    provider: webSearch, files: rt.storage, sessions: { sessions: options.browserSessions }, prelude: { source: BROWSER_PRELUDE },
-  });
+  const webProvider = createWebCodemodeProvider({ provider: webSearch, files: rt.storage, sessions: options.browserSessions, prelude: { source: BROWSER_PRELUDE } });
 
   const executorProviders = (rt.executionRouter?.getProviders() ?? []).map((p) => {
     const wrapped: typeof p.tools = {};
@@ -64,7 +62,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
       };
     }
 
-    return { name: p.name, tools: wrapped, types: p.types, positionalArgs: p.positionalArgs };
+    return executorNamespace({ ...p, tools: wrapped });
   });
 
   return {
@@ -111,14 +109,9 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
       const build = (mode: WorkMode, signal: AbortSignal | undefined): Tool => {
         const executor = new KinuSandboxExecutor(options.launch(mode !== 'plan'));
 
-        // No prelude here: createCodeTool drops every one; the per-call executor below restores them.
-        const toolsProvider: CodemodeProvider = {
-          name: CRAFTED_TOOL_NAMESPACE,
-          tools: nativeToolFunctions(reachable, signal),
-          // Declared by schemas
-          types: '',
-          positionalArgs: true,
-        };
+        // No prelude here: createCodeTool drops every one; the per-call executor below restores them. A native name
+        // shadows an external one.
+        const toolsProvider = toolsNamespace({ ...toolsInWorkMode(mode, reach(surface.external())), ...reachable }, signal);
 
         const providers: CodemodeProvider[] = [stateProvider];
 
@@ -130,7 +123,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
 
         const built = createCodeTool({
           // Composed here: the vendor's `{{types}}` replace reads `$` as a pattern.
-          description: renderCodemodeDescription(bound.map((provider) => provider.types)),
+          description: renderCodemodeDescription(bound, surface.native),
           tools: bound,
           executor: {
             // Crafted set and prelude are read as the program starts.
@@ -138,13 +131,10 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
               const crafted = surface.craftedTools();
               const failures = Object.fromEntries(Object.entries(craftedFailureFunctions(crafted)).map(([name, entry]) => [name, entry.execute]));
 
-              const external = Object.fromEntries(Object.entries(nativeToolFunctions(toolsInWorkMode(mode, reach(surface.external())), signal))
-                .map(([name, entry]) => [name, entry.execute]));
-
               const live = Array.isArray(resolved)
                 ? resolved.map((provider) => {
                   if (provider.name === CRAFTED_TOOL_NAMESPACE) {
-                    return { name: provider.name, fns: { ...external, ...provider.fns, ...failures }, prelude: renderToolsPrelude(crafted, { workspace: options.workspace, cwd: surface.cwd }) };
+                    return { name: provider.name, fns: { ...provider.fns, ...failures }, prelude: renderToolsPrelude(crafted, { workspace: options.workspace, cwd: surface.cwd }) };
                   }
 
                   const prelude = bound.find((declared) => declared.name === provider.name)?.prelude;
@@ -180,7 +170,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
             } finally {
               deviceRequests = outer;
             }
-          });
+          }, context.abortSignal);
         },
       }), surface.craftedTools);
     },

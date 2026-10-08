@@ -17,6 +17,12 @@ import type { SqlValue } from '@nimbus-sh/core';
 import type { ExecutorToolResult } from '../src/execution/types';
 import { present } from '@kinu.run/test-utils';
 import { CommandResultSchema } from '../src/execution/exec-result';
+import { executorNamespace } from '../src/tools/executor-operations';
+import { namespaceDeclaration } from '../src/tools/operation-surfaces';
+
+/** An executor's namespace as the model reads it. */
+const declared = (provider: Parameters<typeof executorNamespace>[0]): string => namespaceDeclaration(provider.name, executorNamespace(provider).declarations ?? {}, new Set());
+
 
 function toolText(result: ExecutorToolResult): string {
   return v.parse(v.string(), result);
@@ -104,8 +110,8 @@ describe('hosted Nimbus workspace provider', () => {
 
     expect(provider.name).toBe('workspace');
     expect(provider.kind).toBe('workspace');
-    expect(provider.types).toContain('namespace workspace');
-    expect(provider.types).not.toContain('namespace nimbus');
+    expect(declared(provider)).toContain('declare const workspace');
+    expect(declared(provider)).toContain('runCode(');
     const router = new DefaultExecutionRouter({ mode: () => 'allow_all' });
     router.register(provider);
     expect(router.getProviders().map((entry) => entry.name)).toEqual(['workspace']);

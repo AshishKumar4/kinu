@@ -21,7 +21,7 @@ export const REFUSAL_TYPE = [
 export const BindingFailureSchema = v.object({
   ...ToolFailureValueSchema.entries,
   tool: v.string(),
-  action: v.nullable(v.string()),
+  op: v.nullable(v.string()),
 });
 
 export type BindingFailure = v.InferOutput<typeof BindingFailureSchema>;

@@ -46,7 +46,7 @@ const TOOL_KINDS = new Map<string, ToolKind>([
  *  name: a read and a write present differently in an ACP client. */
 function toolKind(name: string, args: JsonObject): ToolKind {
   if (name === 'file') {
-    return args.action === 'read' ? 'read' : 'edit';
+    return args.op === 'read' ? 'read' : 'edit';
   }
 
   return TOOL_KINDS.get(name) ?? 'other';
@@ -57,10 +57,9 @@ function toolTitle(name: string, args: JsonObject): string {
   const parsedCommand = v.safeParse(v.string(), command);
 
   if (name === 'shell' && parsedCommand.success) return parsedCommand.output;
-  const action = args.action;
-  const parsedAction = v.safeParse(v.string(), action);
+  const op = v.safeParse(v.string(), args.op);
 
-  if (parsedAction.success) return `${name}: ${parsedAction.output}`;
+  if (op.success) return `${name}: ${op.output}`;
 
   return name;
 }

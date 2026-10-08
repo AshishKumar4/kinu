@@ -17,7 +17,7 @@ const LESSON = 'Name `path` in every file read.';
 
 /** The turns' scripted calls; the fast tier's reflection, asked for a lesson, answers one. */
 function struggler(prompts: string[]) {
-  const turn = toolSequenceModel([{ name: 'file', input: { action: 'read' } }], (options) => { prompts.push(JSON.stringify(options.prompt)); });
+  const turn = toolSequenceModel([{ name: 'file', input: { op: 'read' } }], (options) => { prompts.push(JSON.stringify(options.prompt)); });
   const lesson = fakeModel(JSON.stringify({ update: null, text: LESSON }));
   const asksForLesson = (prompt: readonly PromptMessage[]) => JSON.stringify(prompt).includes('spared this turn the struggle');
 

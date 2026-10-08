@@ -25,7 +25,7 @@ function swarmAsker(offered: string[][]): TestLanguageModelV2 {
       const last = options.prompt.at(-1);
       const asks = agents !== undefined && last?.role === 'user' && last.content.some((part) => part.type === 'text' && TURNS.includes(part.text));
 
-      if (asks) offered.push(v.parse(v.object({ properties: v.object({ action: v.object({ enum: v.array(v.string()) }) }) }), agents.inputSchema).properties.action.enum);
+      if (asks) offered.push(v.parse(v.object({ properties: v.object({ op: v.object({ enum: v.array(v.string()) }) }) }), agents.inputSchema).properties.op.enum);
 
       return {
         stream: new ReadableStream({
@@ -33,7 +33,7 @@ function swarmAsker(offered: string[][]): TestLanguageModelV2 {
             controller.enqueue({ type: 'stream-start', warnings: [] });
 
             if (asks) {
-              controller.enqueue({ type: 'tool-call', toolCallId: crypto.randomUUID(), toolName: 'agents', input: JSON.stringify({ action: 'swarm', task: 'rank three caching designs' }) });
+              controller.enqueue({ type: 'tool-call', toolCallId: crypto.randomUUID(), toolName: 'agents', input: JSON.stringify({ op: 'swarm', task: 'rank three caching designs' }) });
               controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage: USAGE });
             } else {
               controller.enqueue({ type: 'text-start', id: '0' });

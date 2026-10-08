@@ -87,14 +87,14 @@ describe('a hosted subordinate runs as its own home', () => {
     const child = await hostedSubordinateHarness(parent, { ...hire, name: 'builder-2' });
     const tools = buildBuiltinTools({ rt: child.actor.runtime, workMode: 'build', conversations: conversationsFor(child.actor.runtime) });
     const shell = toolExecute<{ command: string }, string>(present(tools.shell, 'shell'));
-    const file = toolExecute<{ action: 'read'; path: string; offset?: number; limit?: number }, string>(present(tools.file, 'file'));
+    const file = toolExecute<{ op: 'read'; path: string; offset?: number; limit?: number }, string>(present(tools.file, 'file'));
 
     const clamped = await shell({ command: 'seq 1 20000' });
     const saved = present(/full result at ([^\]]+)\]/u.exec(clamped)?.[1], 'the saved path');
 
     expect(clamped).not.toContain('the full result was not saved');
     expect(saved).toStartWith(`${agentHome(actorHomeName({ origin: 'agent', storageKey: child.actor.handle.storageKey }))}/.kinu/tool-output/`);
-    expect(await file({ action: 'read', path: saved, offset: 19_999, limit: 2 })).toContain('20000');
+    expect(await file({ op: 'read', path: saved, offset: 19_999, limit: 2 })).toContain('20000');
     expect(await shell({ command: `cd /tmp && tail -n 1 ${saved}` })).toContain('20000');
   });
 

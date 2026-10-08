@@ -310,12 +310,12 @@ export function publicMessage(error: KinuError): string | null {
   return error.message.length > 0 ? error.message : null;
 }
 
-/** The zod refusal under the SDK's wrappers. */
-function zodErrorIn(error: Error): z.ZodError | undefined {
+/** The first link of `error`'s cause chain that `is` accepts: a refusal under the SDK's wrappers. */
+function causeIn<E extends Error>(error: Error, is: (link: Error) => link is E): E | undefined {
   const seen = new Set<Error>();
 
   for (let link: unknown = error; link instanceof Error && !seen.has(link); link = link.cause) {
-    if (link instanceof z.ZodError) return link;
+    if (is(link)) return link;
     seen.add(link);
   }
 
@@ -324,7 +324,11 @@ function zodErrorIn(error: Error): z.ZodError | undefined {
 
 /** `call` refused as `bad_input` in zod's rendering; not its cause, whose message is the issues as JSON. */
 export function refusedInput(call: string, error: Error): KinuError {
-  const refusal = zodErrorIn(error);
+  // Already said by field, as an operation's own check says it, wherever the SDK wrapped it.
+  const said = causeIn(error, (link): link is KinuError => link instanceof KinuError);
+
+  if (said !== undefined) return said;
+  const refusal = causeIn(error, (link): link is z.ZodError => link instanceof z.ZodError);
 
   if (refusal === undefined) return new KinuError('bad_input', call, { cause: error });
   const problems = z.prettifyError(refusal).split('\n').map((line) => line.trim()).filter((line) => line !== '').join(' ');

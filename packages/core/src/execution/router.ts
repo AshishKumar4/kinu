@@ -1,8 +1,8 @@
 import type {
   ExecutionRouter,
   ExecutorProvider,
-  ExecutorInfo,
   ExecutorProviderSurface,
+  ExecutorInfo,
 } from './types';
 import * as v from 'valibot';
 import { gateProviderExec } from './approval';
@@ -30,19 +30,7 @@ export class DefaultExecutionRouter implements ExecutionRouter {
   }
 
   getProviders(): ExecutorProviderSurface[] {
-    const result: ExecutorProviderSurface[] = [];
-
-    for (const provider of this.providers.values()) {
-      if (!provider.isAvailable()) continue;
-      result.push({
-        name: provider.name,
-        tools: provider.tools,
-        types: provider.types,
-        positionalArgs: provider.positionalArgs,
-      });
-    }
-
-    return result;
+    return [...this.providers.values()].filter((provider) => provider.isAvailable());
   }
 
   listExecutors(): ExecutorInfo[] {

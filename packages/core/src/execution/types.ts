@@ -26,12 +26,6 @@ export interface ExecutorTool {
   execute: (...args: unknown[]) => Promise<ExecutorToolResult>;
 }
 
-export interface ExecutorProviderSurface {
-  name: string;
-  tools: Record<string, ExecutorTool>;
-  types?: string;
-  positionalArgs?: boolean;
-}
 
 /** Render order for a capability set; load-bearing, since iteration order would re-fingerprint the dynamic-context block. */
 export const EXECUTOR_CAPABILITIES = [
@@ -106,6 +100,9 @@ export interface ExecutorStatus {
 }
 
 /** An executor registered as a named codemode provider; matches @cloudflare/codemode's ToolProvider shape. */
+/** What a program reaches of an executor: its members, and the status that sizes `sandbox.resize`. */
+export type ExecutorProviderSurface = Pick<ExecutorProvider, 'name' | 'tools' | 'positionalArgs' | 'getStatus'>;
+
 export interface ExecutorProvider {
   readonly name: string;
 
@@ -151,9 +148,6 @@ export interface ExecutorProvider {
    * `{ signal }`; cancellation strength per transport is documented only in execution/signal.ts.
    */
   readonly tools: Record<string, ExecutorTool>;
-
-  /** TypeScript declarations for the LLM; auto-generated if omitted. */
-  readonly types?: string;
 
   readonly positionalArgs?: boolean;
 
@@ -225,6 +219,7 @@ export interface ExecutionRouter {
   getProvider(name: string): ExecutorProvider | undefined;
 
   /** Available providers only, formatted for createExecuteTool's `providers`. */
+  /** The executors attached and available now, as programs reach them. */
   getProviders(): ExecutorProviderSurface[];
 
   listExecutors(): ExecutorInfo[];

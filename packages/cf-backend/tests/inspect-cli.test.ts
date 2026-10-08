@@ -38,8 +38,8 @@ function answer(agent: HarnessOrchestratorAgent, method: string, args: readonly 
 
 /** The turn both backends run: a file written, then one that is not there read, then an answer. */
 const CALLS = [
-  { tool: 'file', args: { action: 'write', path: 'notes/plan.md', content: 'ship it' } },
-  { tool: 'file', args: { action: 'read', path: 'notes/missing.md' } },
+  { tool: 'file', args: { op: 'write', path: 'notes/plan.md', content: 'ship it' } },
+  { tool: 'file', args: { op: 'read', path: 'notes/missing.md' } },
 ] as const;
 
 const TASK = 'Write the plan, then read the missing notes.';

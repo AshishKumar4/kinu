@@ -152,7 +152,7 @@ const TargetSchema = v.pipe(v.string(), v.trim(), v.nonEmpty());
 
 /** The first line of the argument that says what a call acted on. */
 function actionTarget(args: ToolCallRecord['args']): string {
-  for (const key of ['path', 'action', 'command', 'code']) {
+  for (const key of ['path', 'op', 'command', 'code']) {
     const value = v.safeParse(TargetSchema, args[key]);
 
     if (value.success) return (value.output.split('\n')[0] ?? '').slice(0, ACTION_TARGET_CHARS);

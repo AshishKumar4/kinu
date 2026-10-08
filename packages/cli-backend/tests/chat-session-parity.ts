@@ -68,7 +68,7 @@ function drainWindowModel(answer: string) {
               controller.enqueue({ type: 'stream-start', warnings: [] });
               controller.enqueue({
                 type: 'tool-call', toolCallId: 'call-1', toolName: 'memory',
-                input: JSON.stringify({ action: 'recall', key: 'probe' }),
+                input: JSON.stringify({ op: 'recall', key: 'probe' }),
               });
               await stepGate.promise;
               controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage: USAGE });

@@ -4,19 +4,14 @@
  * "Accepted and ignored".
  */
 import { REAL_CLOCK } from '../types/clock';
-import { tool, jsonSchema } from 'ai';
-import { currentWorkMode, inWorkMode, permitInPlan, workModeRefusal } from '../execution/work-mode';
-import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
+import { currentWorkMode, inWorkMode, workModeRefusal } from '../execution/work-mode';
+import type { LanguageModel, ModelMessage } from 'ai';
 import * as v from 'valibot';
 import {
   AGENTS_TOOL_ACTIONS,
-  AGENTS_TOOL_NOTES,
-  BUILTIN_TOOL_SPECS,
-  renderToolSchemaDescription,
   type AgentsToolAction,
 } from '../tools/registry';
 import { SwarmConfigSchema, SwarmModelsSchema, SwarmNodeAssignmentsSchema, SwarmObjectiveSchema } from '../tools/swarm-input';
-import { actionFieldRefusal, nearestField } from '../tools/field-names';
 import {
   PEER_REPLY_TOPIC,
   type PeerAskOutcome, type PeerReplyOutcome, type PeerSendOutcome,
@@ -61,9 +56,8 @@ import { SWARMS_BETA_SETTING } from '../types/profile';
 import type { DelegationChoices } from '../types/dynamic-context';
 import { nanoid } from '../utils/nanoid';
 import {
-  diagnostics, KinuError, renderThrownChain, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, type TurnTrace,
+  KinuError, renderThrownChain, toKinuError, type ErrorCode, type Refusal, type TurnTrace,
 } from '../obs/index';
-import { endWhenSettled } from '../turn-trace';
 import {
   delegationDepthRefusal,
   delegationExhausted,
@@ -78,7 +72,6 @@ import {
 import {
   parseJsonObject,
   type JsonObject,
-  type JsonValue,
 } from '../utils/json';
 import {
   countedMsgSend,
@@ -353,24 +346,8 @@ export function agentsActionsFor(deps: { swarm?: object; swarms: boolean; team?:
 }
 
 /** The deps with the substrate withheld while the account's swarms are off, so every rendering omits `swarm`. */
-function offered(deps: AgentsToolDeps): AgentsToolDeps {
+export function offered(deps: AgentsToolDeps): AgentsToolDeps {
   return deps.swarms ? deps : { ...deps, swarm: undefined };
-}
-
-/** The spec's notes an actor's wiring can act on: a description never promises an unwired action. */
-export function renderAgentsToolDescription(wired: AgentsToolDeps): string {
-  const deps = offered(wired);
-  const converse = deps.team !== undefined || deps.peers !== undefined;
-
-  const notes = [
-    ...(deps.swarm ? [AGENTS_TOOL_NOTES.swarm] : []),
-    ...(converse ? [AGENTS_TOOL_NOTES.hire] : []),
-    ...(deps.team?.temporary ? [AGENTS_TOOL_NOTES.task] : []),
-    ...(converse ? [AGENTS_TOOL_NOTES.converse] : []),
-    ...(deps.peers ? [AGENTS_TOOL_NOTES.peers] : []),
-  ];
-
-  return renderToolSchemaDescription({ ...BUILTIN_TOOL_SPECS.agents, notes });
 }
 
 export interface AgentsToolInput {
@@ -413,7 +390,7 @@ export interface AgentsToolInput {
   context?: 'fresh' | 'inherit';
 }
 
-export type AgentsToolInputField = Exclude<keyof AgentsToolInput, 'action'>;
+type AgentsToolInputField = Exclude<keyof AgentsToolInput, 'action'>;
 
 /**
  * Which fields each action's handler reads. `gate:agents-fields` holds each list to the `input.<field>`
@@ -469,318 +446,10 @@ const AgentsInputEntries = {
   lifetime: v.optional(v.picklist(SUBORDINATE_LIFETIMES)),
 };
 
-/** Codemode declaration type per input field; a new field without an entry fails to compile. */
-export const AGENTS_FIELD_TS_TYPES = {
-  context: `"${SWARM_CONTEXTS.join('" | "')}"`,
-  task: 'string',
-  budget_usd: 'number',
-  budget_tokens: 'number',
-  budget_label: 'string',
-  preset: `"${SWARM_PRESETS.join('" | "')}"`,
-  objective: 'object',
-  key: 'string',
-  config: 'object',
-  from: `"${NAMED_SWARM_PRESETS.join('" | "')}"`,
-  label: 'string',
-  name: 'string',
-  branches: 'number',
-  depth: 'number',
-  nodes: '{ prompt: string; task: string }[]',
-  models: 'string[]',
-  role: 'string',
-  tier: 'string',
-  agent: 'string',
-  mission: 'string',
-  scope: '"subordinate" | "workspace"',
-  message: 'string',
-  topic: 'string',
-  deliverable: 'string',
-  event_id: 'string',
-  keep_history: 'boolean',
-  lifetime: `"${SUBORDINATE_LIFETIMES.join('" | "')}"`,
-} as const satisfies Record<AgentsToolInputField, string>;
+/** The engine's input, checked as each operation's fields are mapped onto it: a field it does not declare is refused. */
+export const AgentsEngineInputSchema = v.strictObject(AgentsInputEntries);
 
-/** Fields each action's caller must supply; dispatch arms re-check them because the sandbox parse cannot. */
-const AGENTS_ACTION_REQUIRED_FIELDS = {
-  swarm: ['task'],
-  // The create variant, which a bare `hire` means; read only by the single-variant path.
-  hire: ['role', 'mission'],
-  msg: ['message'],
-  list: [],
-  dismiss: ['agent'],
-} as const satisfies Record<AgentsToolAction, readonly AgentsToolInputField[]>;
-
-/** Creating a helper: `lifetime` only where the task port is wired, `scope` only beside `peers`. */
-const HIRE_CREATE_FIELDS = [
-  'role', 'mission', 'agent', 'tier', 'context',
-] as const satisfies readonly AgentsToolInputField[];
-
-const HIRE_WORKSPACE_FIELDS = [
-  'agent', 'mission', 'scope', 'message',
-] as const satisfies readonly AgentsToolInputField[];
-
-/** An existing agent; selected by the absence of `role`. */
-const HIRE_EXISTING_FIELDS = [
-  'agent', 'message',
-] as const satisfies readonly AgentsToolInputField[];
-
-export interface AgentsActionInputVariant {
-  readonly required: readonly AgentsToolInputField[];
-  readonly fields: readonly AgentsToolInputField[];
-  readonly scope?: 'subordinate' | 'workspace';
-  readonly scopeOptional?: boolean;
-  /** Fields that must be absent for this variant: the XOR between targets with no discriminant field.
-   *  The schema states it; the dispatch enforces it. */
-  readonly excludes?: readonly AgentsToolInputField[];
-}
-
-export function agentsActionInputVariantsFor(
-  deps: AgentsToolDeps,
-  action: AgentsToolAction,
-): readonly AgentsActionInputVariant[] {
-  if (action === 'hire') return hireInputVariants(deps);
-
-  if (action === 'msg') return msgInputVariants(deps);
-
-  return [{
-    fields: agentsActionFieldsFor(deps, action),
-    required: AGENTS_ACTION_REQUIRED_FIELDS[action],
-  }];
-}
-
-function hireInputVariants(deps: AgentsToolDeps): readonly AgentsActionInputVariant[] {
-  const variants: AgentsActionInputVariant[] = [];
-
-  if (deps.team) {
-    const fields: AgentsToolInputField[] = [...HIRE_CREATE_FIELDS];
-
-    // Deps-gated like the rung: with no task port, `lifetime` is structurally absent.
-    if (deps.team.temporary) fields.push('lifetime');
-
-    if (deps.peers) fields.push('scope');
-    variants.push({
-      fields,
-      required: ['role', 'mission'],
-      scope: 'subordinate',
-      scopeOptional: true,
-    });
-  }
-
-  const existing: AgentsToolInputField[] = [...HIRE_EXISTING_FIELDS];
-
-  if (deps.team) existing.push('deliverable');
-
-  if (deps.peers) existing.push('topic');
-  variants.push({
-    fields: existing,
-    required: ['agent', 'message'],
-    // Exclusive with `role`.
-    excludes: deps.team?.temporary ? ['role', 'lifetime'] : ['role'],
-  });
-
-  if (deps.peers) {
-    variants.push({
-      fields: HIRE_WORKSPACE_FIELDS,
-      required: ['mission', 'scope', 'message'],
-      scope: 'workspace',
-    });
-  }
-
-  return variants;
-}
-
-/** `msg`'s targets, exactly one: `agent`, or the inbound `event_id` (peers only). */
-function msgInputVariants(deps: AgentsToolDeps): readonly AgentsActionInputVariant[] {
-  const named: AgentsToolInputField[] = ['agent', 'message'];
-
-  if (deps.peers) named.push('topic');
-
-  const byName: AgentsActionInputVariant = {
-    fields: named,
-    required: ['agent', 'message'],
-  };
-
-  if (deps.peers) Object.assign(byName, { excludes: ['event_id'] });
-  const variants: AgentsActionInputVariant[] = [byName];
-
-  if (deps.peers) {
-    variants.push({
-      fields: ['event_id', 'message'],
-      required: ['event_id', 'message'],
-      excludes: ['agent'],
-    });
-  }
-
-  return variants;
-}
-
-function agentsActionFieldsFor(
-  deps: AgentsToolDeps,
-  action: AgentsToolAction,
-): readonly AgentsToolInputField[] {
-  const fields = AGENTS_ACTION_FIELDS[action];
-
-  switch (action) {
-    case 'swarm':
-      return deps.swarm ? fields : [];
-    case 'hire':
-    case 'msg':
-      return [...new Set(
-        agentsActionInputVariantsFor(deps, action).flatMap((variant) => variant.fields),
-      )];
-    case 'list':
-      return deps.team || deps.peers ? fields : [];
-    case 'dismiss':
-      return deps.team ? fields : [];
-  }
-}
-
-function agentsJsonSchemaVariants(
-  deps: AgentsToolDeps,
-  actions: readonly AgentsToolAction[],
-) {
-  return actions.flatMap(action =>
-    agentsActionInputVariantsFor(deps, action).map((variant) => {
-      const properties = {
-        action: { const: action },
-        scope: variant.scope === undefined ? false : { const: variant.scope },
-      };
-
-      const branch = {
-        type: 'object' as const,
-        properties,
-        required: ['action', ...variant.required],
-      };
-
-      // Exclusivity as JSON Schema: without it a call naming both targets matches both branches.
-      if (variant.excludes && variant.excludes.length > 0) {
-        Object.assign(branch, {
-          not: { anyOf: variant.excludes.map((field) => ({ required: [field] })) },
-        });
-      }
-
-      return branch;
-    }));
-}
-
-/** The model-facing parse: `strictObject`, so an unrecognised field (a camelCase cap) is refused, not dropped. */
-const AgentsToolInputSchema = v.strictObject(AgentsInputEntries);
-
-/** The replay parse over a durable job row: unknown entries are dropped (logged by `resumableAgentsInput`),
- *  and `action` is a plain string so retired actions can be translated. */
-const StoredAgentsInputSchema = v.object({ ...AgentsInputEntries, action: v.string() });
-
-const AGENTS_INPUT_FIELDS: readonly string[] = Object.keys(AgentsInputEntries)
-  .filter((field) => field !== 'action');
-
-const FieldNamesSchema = v.record(v.string(), v.unknown());
-
-function fieldNames(value: JsonValue): readonly string[] {
-  const parsed = v.safeParse(FieldNamesSchema, value);
-
-  return parsed.success ? Object.keys(parsed.output) : [];
-}
-
-const FIELD_RULE = 'A field the called action cannot act on is refused rather than dropped: a cap'
-  + ' that never reached the run is a cap that was never applied.';
-
-/**
- * What is wrong with the field names of `input` (unknown, or misplaced for the called action), or
- * undefined. Runs ahead of the strict schemas, which still refuse anything this misses.
- */
-function agentsFieldRefusal(call: { input: unknown }): string | undefined {
-  const parsed = v.safeParse(FieldNamesSchema, call.input);
-
-  if (!parsed.success) return undefined;
-  const declared = v.safeParse(v.picklist(AGENTS_TOOL_ACTIONS), parsed.output['action']);
-  const sent = Object.keys(parsed.output);
-
-  if (declared.success) {
-    const refusal = actionFieldRefusal({ fields: AGENTS_ACTION_FIELDS, action: declared.output, sent });
-
-    return refusal === undefined ? undefined : `${refusal} ${FIELD_RULE}`;
-  }
-
-  // No action yet: only a field no action reads is named, with the nearest one that is.
-  const problems = sent.filter((field) => field !== 'action' && !Object.hasOwn(AgentsInputEntries, field)).map((field) => {
-    const meant = nearestField(field, AGENTS_INPUT_FIELDS);
-
-    return meant === undefined ? `unknown field "${field}".` : `unknown field "${field}": did you mean "${meant}"?`;
-  });
-
-  return problems.length === 0 ? undefined : `${problems.join(' ')} Fields are: ${AGENTS_INPUT_FIELDS.join(', ')}. ${FIELD_RULE}`;
-}
-
-/** The one parse for the `agents` tool and its codemode namespace. */
-export function parseAgentsToolInput(call: { input: unknown }): AgentsToolInput {
-  const refusal = agentsFieldRefusal(call);
-
-  if (refusal) throw new Error(refusal);
-
-  return v.parse(AgentsToolInputSchema, call.input);
-}
-
-type StoredAgentsRow = v.InferOutput<typeof StoredAgentsInputSchema>;
-
-function swarmFieldsOf(row: StoredAgentsRow): Partial<AgentsToolInput> {
-  const carried: Partial<AgentsToolInput> = {};
-
-  for (const field of AGENTS_ACTION_FIELDS.swarm) {
-    const value = row[field];
-
-    if (value !== undefined) Object.assign(carried, { [field]: value });
-  }
-
-  return carried;
-}
-
-/** What the re-drive lost, named per field. */
-function recordDroppedFields(kind: string, input: JsonValue, resumed: AgentsToolInput): void {
-  const carried = new Set(Object.keys(resumed));
-  const dropped = fieldNames(input).filter((field) => !carried.has(field));
-
-  if (dropped.length === 0) return;
-  diagnostics.event('agents.resume.fields_dropped', {
-    kind,
-    fields: dropped.join(','),
-    count: dropped.length,
-  });
-}
-
-/** Rewrite a stored row's retired `config.context` value; runs before the replay parse. */
-const StoredSwarmContextSchema = v.looseObject({
-  config: v.optional(v.looseObject({ context: v.optional(v.string()) })),
-});
-
-type StoredSwarmContext = v.InferOutput<typeof StoredSwarmContextSchema>;
-
-function translateStoredSwarmContext(row: StoredSwarmContext): StoredSwarmContext {
-  if (row.config?.context !== 'fork') return row;
-
-  return { ...row, config: { ...row.config, context: 'inherit' } };
-}
-
-/**
- * Background-job resume filter and detach gate (orchestrator/background-tools.ts): a call that cannot be
- * re-driven must never be detached. Returns the input to re-execute, or null.
- * Only a swarm row resumes; `config.context:'fork'` becomes `inherit`, and each dropped field is logged.
- */
-export function resumableAgentsInput(kind: string, input: JsonValue): AgentsToolInput | null {
-  if (kind !== 'agents') return null;
-  const rewritten = v.safeParse(StoredSwarmContextSchema, input);
-  const parsed = v.safeParse(StoredAgentsInputSchema, rewritten.success ? translateStoredSwarmContext(rewritten.output) : input);
-
-  if (!parsed.success) return null;
-  const row = parsed.output;
-
-  if (row.action !== 'swarm') return null;
-  const resumed: AgentsToolInput = { action: 'swarm', ...swarmFieldsOf(row) };
-  recordDroppedFields(kind, input, resumed);
-
-  return resumed;
-}
-
-interface AgentsToolCallOptions {
+export interface AgentsToolCallOptions {
   abortSignal?: AbortSignal;
   trace?: TurnTrace;
 }
@@ -1042,12 +711,6 @@ async function runSwarmAction({ deps, input, mode, toolOptions, budget }: SwarmA
   return output;
 }
 
-/** JSON-Schema properties an action may advertise, derived from AGENTS_ACTION_FIELDS. */
-type SchemaPropertiesFor<Action extends AgentsToolAction> =
-  { [Field in (typeof AGENTS_ACTION_FIELDS)[Action][number]]?: JsonObject };
-
-type SwarmSchemaProperties = SchemaPropertiesFor<'swarm'>;
-
 /** The roles and tiers this actor's `role` and `tier` take, for its step context: in the schema they would make each
  *  account's tool bytes its own. Null with no catalog. */
 export function delegationChoices(ctx: AgentsProfileContext | null): DelegationChoices | null {
@@ -1070,128 +733,8 @@ export function delegationChoices(ctx: AgentsProfileContext | null): DelegationC
 }
 
 /** Registered instruments with their `spec` keys, from `VERIFIER_KIND_DOC`, so the schema matches `swarmValidity`. */
-function verifierKinds(): string {
+export function verifierKinds(): string {
   return VERIFIER_KINDS.map((kind) => `${kind} (spec {${VERIFIER_KIND_DOC[kind].specFields.join(', ')}})`).join(', ');
-}
-
-/** `role` and `tier` serve swarm and hire under one key each, so one description states both. */
-function roleProperties(deps: AgentsToolDeps): Pick<SchemaPropertiesFor<'swarm'>, 'role' | 'tier'> {
-  const uses = [
-    ...(deps.team ? ['for hire, the one to create the helper under'] : []),
-    ...(deps.swarm ? ['for swarm, the one every node runs under (default: yours)'] : []),
-  ].join('; ');
-
-  return {
-    role: { type: 'string', maxLength: 64, description: `Catalog role id: ${uses}. Your step context lists the roles.` },
-    tier: {
-      type: 'string',
-      description: 'Inference tier id, one your step context lists; default: the role\'s. A lifetime:"task" hire refuses it.',
-    },
-  };
-}
-
-function swarmProperties(deps: AgentsToolDeps): SwarmSchemaProperties {
-  if (!deps.swarm) return {};
-
-  return {
-    task: { type: 'string', description: 'For swarm: what the search is for, stated once for every node. The measured quantity goes in `objective`.' },
-    preset: { type: 'string', enum: [...SWARM_PRESETS], description: `For swarm: the search's shape. ${SWARM_PRESET_DOCTRINE.join(' ')}` },
-    objective: {
-      type: 'object',
-      description: 'For swarm, optional: what a verifier measures, which turns the judged sweep into a measured search. '
-        + '{kind:"scalar", metric, unit, direction:"minimise"|"maximise", scale:"linear"|"log", target, verify:{kind, spec}}, '
-        + 'optionally floor:{value, kind:"certificate", proof, best_known_honest}. '
-        + `verify.kind is a registered instrument: ${verifierKinds()}. `
-        + 'kind "instanced" (one metric over `instances`) and "vector" (several `components`) need advance:"pareto"; kind "witness" needs a scalar `proxy`.',
-    },
-    key: { type: 'string', description: 'For swarm with advance:"archive", where it is required: the quantity elites are binned by, one the objective\'s verifier reports.' },
-    config: { type: 'object', description: 'For swarm with preset:"custom" only: the axes unit, context, expand, score, advance and carry, overriding `from`\'s or all six without it.' },
-    from: { type: 'string', enum: [...NAMED_SWARM_PRESETS], description: 'For swarm with preset:"custom": the named preset whose axes `config` overrides.' },
-    label: { type: 'string', maxLength: 120, description: 'For swarm with preset:"custom", required: a name for the composed shape.' },
-    name: { type: 'string', maxLength: 60, description: 'For swarm: a two-to-four-word name for the search; default: derived from `task`.' },
-    branches: { type: 'integer', minimum: 1, description: 'For swarm: candidates per expansion; default: the preset\'s. Not with `nodes`.' },
-    nodes: {
-      type: 'array',
-      minItems: 1,
-      items: {
-        type: 'object',
-        properties: {
-          task: { type: 'string', minLength: 1, description: 'This node\'s own question, distinct from the others\'.' },
-          prompt: { type: 'string', minLength: 1, description: 'The brief this node works under.' },
-        },
-        required: ['task', 'prompt'],
-      },
-      description: 'For swarm: the first level, one entry per node; its length is the branch count. Not with `branches`.',
-    },
-    models: {
-      type: 'array',
-      minItems: 1,
-      items: { type: 'string', minLength: 1 },
-      description: 'For swarm: model specs, node i runs models[i % length]. Route for capability or cost, not for variety. Not with `tier`.',
-    },
-    depth: { type: 'integer', minimum: 1, description: 'For swarm: maximum tree depth; default: the preset\'s. advance:"none" fixes it at 1.' },
-    ...roleProperties(deps),
-    budget_usd: { type: 'number', minimum: 0, description: 'For swarm: USD cap on everything the search spawns; default: none.' },
-    budget_tokens: { type: 'integer', minimum: 1, description: 'For swarm: token cap, same scope as budget_usd.' },
-    budget_label: { type: 'string', maxLength: 120, description: 'For swarm: a ledger name, so several calls share one budget.' },
-  };
-}
-
-type ConverseSchemaProperties = SchemaPropertiesFor<Exclude<AgentsToolAction, 'swarm'>>;
-
-function converseTargets(deps: AgentsToolDeps): string {
-  if (deps.team && deps.peers) {
-    return 'a subordinate here or a peer workspace agent (a subordinate wins a name collision)';
-  }
-
-  if (deps.team) return 'a subordinate';
-
-  return 'a peer workspace agent';
-}
-
-function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
-  if (!deps.team && !deps.peers) return {};
-
-  const properties: ConverseSchemaProperties = {
-    agent: {
-      type: 'string',
-      description: `Agent name, ${converseTargets(deps)}. On hire without \`role\`, the existing agent that takes the workstream; with \`role\`, an optional name for the new one. The target of msg and dismiss; filters list.`,
-    },
-    mission: { type: 'string', maxLength: 20000, description: 'For hire with `role`: the brief, run as the new agent\'s first turn; for lifetime:"task", the whole question.' },
-    message: { type: 'string', maxLength: 20000, description: 'The work for a hire of an existing `agent`, the text of a msg, or the first task of a scope:"workspace" hire.' },
-  };
-
-  if (deps.peers) {
-    Object.assign(properties, {
-      scope: { type: 'string', enum: ['subordinate', 'workspace'], description: 'For hire: subordinate (default) hires into this workspace; workspace creates or reuses a specialist workspace, sends it `message` and waits for the result.' },
-      topic: { type: 'string', maxLength: 80, description: 'A short label for a message to a peer workspace agent; default: "message".' },
-      event_id: { type: 'string', description: 'For msg: the incoming agent message you are answering. Not with `agent`.' },
-    });
-  }
-
-  if (deps.team) {
-    Object.assign(properties, {
-      context: { type: 'string', enum: [...SWARM_CONTEXTS], description: 'For hire with `role`: fresh (default) starts from the mission and a digest of your recent messages; inherit also carries your recent turns.' },
-      ...roleProperties(deps),
-      deliverable: { type: 'string', maxLength: 2000, description: 'For a hire of an existing subordinate: what the finished result is.' },
-      keep_history: { type: 'boolean', description: 'For dismiss: false deletes its storage for good; default true archives it with its context.' },
-    });
-
-    if (deps.team.temporary !== undefined) {
-      Object.assign(properties, {
-        lifetime: { type: 'string', enum: [...SUBORDINATE_LIFETIMES], description: 'For hire with `role`: durable (default) stays in your roster; task answers one question, as a later message, and is archived.' },
-      });
-    }
-  }
-
-  return properties;
-}
-
-function agentsInputProperties(deps: AgentsToolDeps) {
-  return {
-    ...swarmProperties(deps),
-    ...converseProperties(deps),
-  };
 }
 
 /** The peer topic for a hire or msg, or a refusal when the caller claimed the transport's reserved one. */
@@ -1206,7 +749,7 @@ function requestedTopic(input: AgentsToolInput): { topic: string } {
 }
 
 /** The refusal of a `swarm` the account's beta withholds; null when the beta is not what stops it. */
-function withheldBeta(wired: AgentsToolDeps, action: AgentsToolInput['action']): string | null {
+export function withheldBeta(wired: AgentsToolDeps, action: AgentsToolInput['action']): string | null {
   if (action !== 'swarm' || wired.swarm === undefined || wired.swarms) return null;
 
   return `swarm is a beta this account has not turned on: "${SWARMS_BETA_SETTING}" in Settings, Beta`;
@@ -1342,7 +885,7 @@ async function hireCreate({ deps, team, input, mode, lifetime }: CreateHireCall)
 
     if (!temporary) {
       throw new KinuError('denied', 'lifetime:"task" needs a task-agent substrate, which this actor has none of: '
-        + 'omit `lifetime` for a durable hire, or name an existing agent with `agent` (action:"list" shows the roster).');
+        + 'omit `lifetime` for a durable hire, or name an existing agent with `agent` (op:"list" shows the roster).');
     }
 
     const delegatedTask = resolveDelegatedProfile(ctx, input.role, undefined);
@@ -1464,7 +1007,7 @@ async function runHireAction(
       );
     }
 
-    return badInput(`unknown agent "${input.agent}": check the roster with action:"list"`);
+    return badInput(`unknown agent "${input.agent}": check the roster with op:"list"`);
   }
 
   // From here the hire creates, which spends a tree level.
@@ -1595,7 +1138,7 @@ export async function dispatchAgentsAction(
           );
         }
 
-        return badInput(`unknown agent "${input.agent}": check the roster with action:"list"`);
+        return badInput(`unknown agent "${input.agent}": check the roster with op:"list"`);
       }
 
       case 'list': {
@@ -1613,7 +1156,7 @@ export async function dispatchAgentsAction(
 
         if (peerRoster) Object.assign(roster, { peers: peerRoster });
 
-        if (empty) Object.assign(roster, { note: 'No helper agents yet: create one with action:"hire".' });
+        if (empty) Object.assign(roster, { note: 'No helper agents yet: create one with op:"hire".' });
 
         return roster;
       }
@@ -1638,56 +1181,9 @@ export async function dispatchAgentsAction(
   }
 }
 
-/** Build the `agents` tool; callers ensure at least one deps group is present. */
-function nestingRoom(delegation: DelegationBudget): string {
+/** How much further a hire may delegate, said on `hire`. */
+export function nestingRoom(delegation: DelegationBudget): string {
   if (delegation.maxDepth > 1) return `A subordinate you hire can hire its own, ${delegation.maxDepth - 1} level(s) further.`;
 
   return 'A subordinate you hire cannot hire its own.';
-}
-
-const DELEGATING_ACTIONS: readonly AgentsToolAction[] = ['swarm', 'hire', 'msg'];
-
-export function createAgentsTool(wired: AgentsToolDeps): ToolSet[string] {
-  const deps = offered(wired);
-  const actions = agentsActionsFor(deps);
-  const team = deps.team;
-
-  return permitInPlan(tool({
-    description: renderAgentsToolDescription(deps),
-    inputSchema: jsonSchema<AgentsToolInput>({
-      type: 'object',
-      required: ['action'],
-      properties: {
-        action: team === undefined ? { type: 'string', enum: actions } : { type: 'string', enum: actions, description: nestingRoom(team.delegation) },
-        ...agentsInputProperties(deps),
-      },
-      oneOf: agentsJsonSchemaVariants(deps, actions),
-      // No `additionalProperties: false`: the parse below refuses an unknown field, naming the fields the action
-      // takes. The SDK checks nothing against this schema (it carries no validator); the tool surface checks its fields.
-    }),
-    execute: async (input: AgentsToolInput, toolOptions?: AgentsToolCallOptions) => {
-      // The native surface parses too: its inputs are type-checked but not name-checked.
-      let parsed: AgentsToolInput;
-
-      try {
-        parsed = parseAgentsToolInput({ input });
-      } catch (error) {
-        // Reason first: a parse refusal is bad input, not a broken tool.
-        throw new KinuError('bad_input', renderThrownChain({ cause: error }), { cause: error });
-      }
-
-      const trace = toolOptions?.trace;
-
-      if (trace === undefined || !DELEGATING_ACTIONS.includes(parsed.action)) return dispatchAgentsAction(wired, parsed, toolOptions);
-
-      const timer = trace.begin('turn.delegation');
-      const action = parsed.action;
-      const stamp = (span: ScopedSpan): void => { span.setAttribute('kinu.delegation.action', action); };
-
-      return endWhenSettled(dispatchAgentsAction(wired, parsed, toolOptions), timer, {
-        stamp,
-        failed: (span) => { stamp(span); span.fail(new KinuError('io', 'the delegation failed')); },
-      });
-    },
-  }));
 }

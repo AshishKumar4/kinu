@@ -253,12 +253,12 @@ export {
   formatBlueprintId, parseBlueprintId, blueprintPagePath,
   BlueprintInspectionSchema, BlueprintViewSchema, BlueprintForkSchema, BlueprintBundleSchema, PublishedBlueprintSchema,
   SharedLibrarySchema, SlateShareRecordSchema,
-  ShareGrantSchema, SlateCapabilityGraphSchema,
+  ShareGrantSchema, SlateCapabilityGraphSchema, ShareCardSchema,
   LiveShareRecordSchema, LiveShareCreatedSchema, ViewerCallSchema, ViewerRequestRecordSchema, ShareViewerClaimSchema,
   type ShareKind, type LiveShareVisibility, type BlueprintAddress, type BlueprintInspection, type BlueprintView,
   type BlueprintFork, type BlueprintBundle,
   type PublishedBlueprint, type SharedLibrary, type SharedRow, type OwnedSlate, type SlateShareRecord, type BlueprintEntry,
-  type ShareGrantMember, type ShareGrant,
+  type ShareGrantMember, type ShareGrant, type ShareCard,
   type SlateGraphMember, type SlateGraphNamespace, type SlateCapabilityGraph,
   type LiveShareRecord, type LiveShareCreated, type ViewerCall, type ViewerRequestRecord, type ShareViewerClaim,
 } from './slates/sharing';
@@ -472,11 +472,6 @@ export {
   replayPolicyFor,
   type ReplayPolicy,
   AGENTS_TOOL_ACTIONS,
-  TASKS_TOOL_ACTIONS,
-  WEB_TOOL_ACTIONS,
-  FILE_TOOL_ACTIONS,
-  memoryActionsFor,
-  AGENTS_TOOL_NOTES,
   renderToolSchemaDescription,
   renderCodemodeDescription, CODEMODE_CODE_DESCRIPTION,
   TOOL_REACH,
@@ -494,21 +489,27 @@ export {
 export {
   CRAFTED_TOOL_NAMESPACE,
   craftedToolDescription, codemodeInputSchema,
-  renderCraftedToolsDeclaration, nativeToolFunctions, codemodeFunction, craftedFailureFunctions, renderCraftedDefinitions,
+  renderCraftedToolsDeclaration, nativeToolFunctions, toolsNamespace, codemodeFunction, craftedFailureFunctions, renderCraftedDefinitions,
   slateToolReach, callCodemodeMember,
   withCraftedToolDeclarations, craftedToolDeclarations,
   type CraftedDeclaration,
   type CodemodeProvider, type CodemodeResult,
 } from './tools/sandbox-contract';
 
-export { createStateCodemodeProvider } from './tools/state-codemode';
+export { createStateCodemodeProvider } from './tools/state-operations';
+
+export { executorNamespace } from './tools/executor-operations';
+
+export { DB, type AppColumnType } from './operations/db';
+
+export { STATE } from './operations/state';
 
 export { initCodemodeStateTable, createProgramStateStore, type ProgramStateStore } from './identity/program-state';
 
 export {
   APP_TABLE_SCOPES, APP_MUTATIONS,
   initAgentDataTables, createAppDataStore, createDbCodemodeProvider,
-  type AppColumn, type AppColumnType, type AppTableScope, type AppMutation,
+  type AppColumn, type AppTableScope, type AppMutation,
   type AppTableSpec, type AppTableRecord, type AppPredicate, type AppWhere,
   type AppSelect, type AppOp, type AppOpResult, type AppRow,
   type AppDataStore, type AppDataStoreDeps, type DbOpRecord,
@@ -558,9 +559,9 @@ export {
 } from './tools/mcp-surface';
 
 export {
-  createAgentsTool, agentsActionsFor, renderAgentsToolDescription, resumableAgentsInput,
-  parseAgentsToolInput, agentsProfileContext, delegationChoices,
-  AGENTS_ACTION_FIELDS, AGENTS_FIELD_TS_TYPES,
+  agentsActionsFor,
+  agentsProfileContext, delegationChoices,
+  AGENTS_ACTION_FIELDS,
   type AgentsToolInput, type AgentsProfileContext, type DelegatedProfile,
 } from './delegation/agents-tool';
 
@@ -569,7 +570,9 @@ export {
   type HostedAgentRef, type LocalPeerEndpoint, type LocalPeerEndpointDeps,
 } from './tools/local-peer';
 
-export { createAgentsCodemodeProvider } from './delegation/agents-codemode';
+export { createAgentsCodemodeProvider, createAgentsTool, resumableAgentsInput } from './delegation/agents-operations';
+
+export { AGENTS_OPS } from './operations/agents';
 
 export { createAgentSelfProvider, type AgentSelfHost } from './tools/agent-self';
 
@@ -632,7 +635,6 @@ export {
   codemodeSurface,
   type BuiltinToolDeps,
   type CodemodeBuilder, type CodemodeSurface,
-  type ReportToolDeps,
 } from './tools/builtins';
 
 // An actor surface is buildBuiltinTools plus `agents`; see delegation/actor-tools.ts.
@@ -658,17 +660,31 @@ export * from './web/index';
 
 // Codemode-only, no native tool: see tools/builtins.ts.
 
-export { createMemoryCodemodeProvider } from './tools/memory-codemode';
+export { createMemoryCodemodeProvider, serveMemory, type MemoryDeps } from './tools/memory-operations';
 
-export { createMemoryDispatcher, type MemoryToolDeps, type MemoryToolInput } from './tools/memory-tool';
+export { MEMORY } from './operations/memory';
 
-export { createTasksCodemodeProvider } from './tools/tasks-codemode';
+export {
+  nativeTool, nativeToolSchema, codemodeNamespace, callOperation, listOperations, type OperationCaller, type OperationListing,
+} from './tools/operation-surfaces';
 
-export { createTasksDispatcher, type TasksToolInput } from './tools/tasks-tool';
+export {
+  defineOperation, serve, operationId, allowedInPlan, inputJsonSchema,
+  type Operation, type OperationCall, type OperationResult, type Served, type Impact,
+} from './operations/operation';
 
-export { createReportCodemodeProvider } from './delegation/report-codemode';
+export { createTasksCodemodeProvider, serveTasks, type RoleSwitch, type RoleSwitchOutcome } from './tools/tasks-operations';
 
-export { createFileDispatcher, type FileToolDeps, type FileToolInput } from './tools/file-tool';
+export { TASK_STATUSES, TASKS } from './operations/tasks';
+
+
+export { createReportCodemodeProvider, serveReport, type ReportDeps } from './tools/report-operations';
+
+export { REPORT } from './operations/report';
+
+export { createFileCodemodeProvider, createFileTool, serveFile, type FileDeps } from './tools/file-operations';
+
+export { FILE } from './operations/file';
 
 export { imageModelOutput } from './tools/image-results';
 
@@ -1538,7 +1554,7 @@ export {
   BackgroundJobStore, initBackgroundJobsTable, serializeJobResult, withBackgroundThreshold, withSpawnDetach,
   backgroundJobNotice,
   isBackgroundHandle, SPAWN_STARTED_OPTION, readSpawnStarted,
-  DEVICE_REQUEST_OPTION, readDeviceRequestChannel, DeviceRequestOwnership, execCallArgs,
+  DEVICE_REQUEST_OPTION, readDeviceRequestChannel, DeviceRequestOwnership, execCallArgs, execContext,
   BackgroundJobRunner, JobNotResumable, BACKGROUND_POLICY, JOB_STAMP_ENV, MAX_CONCURRENT_DETACHED_JOBS, recordServingJobs, type PortHolders,
   invocationBackgroundPolicy,
   backgroundJobWakeTrigger, BACKGROUND_FIBER_PREFIX,
@@ -1551,7 +1567,7 @@ export {
 } from './jobs/index';
 
 export {
-  TaskListStore, initTaskListTable, TASK_STATUSES, MAX_TASK_TITLE_CHARS,
+  TaskListStore, initTaskListTable, MAX_TASK_TITLE_CHARS,
   type AgentTask, type AgentTaskTree, type TaskStatus,
   type TaskAddResult, type TaskAddRejection,
 } from './tools/task-store';
@@ -1795,7 +1811,7 @@ export type {
 // Backend conformance gate
 export {
   BACKEND_CONFORMANCE, CONFORMANCE_PLANES, CONFORMANCE_PRODUCERS, CONFORMANCE_ROOTS, PLANE_UNIVERSE, WIRED,
-  compareSurface, normalizeObservedTables, observedActionEnum, phantomCallables, wiredProducers,
+  compareSurface, normalizeObservedTables, observedOpEnum, phantomCallables, wiredProducers,
   renderConformanceFindings,
 } from './conformance/index';
 

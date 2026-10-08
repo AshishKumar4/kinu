@@ -312,17 +312,6 @@ function formatStartResult(result: NimbusStartResult): CommandResult {
 }
 
 /** The live session's members, declared inside the workspace namespace. */
-const SESSION_TYPES = `
-  function runCode(code: string, options?: { language?: 'javascript'|'typescript'|'python'|'ruby'|'shell'; install?: 'never'|'ifMissing' }): Promise<string | Refusal>;
-  function startProcess(command: string, options?: { cwd?: string; timeoutMs?: number; env?: Record<string,string> }): Promise<string | Refusal>;
-  function killProcess(pid: number | { pid: number }): Promise<string | Refusal>;
-  function logs(pid: number | { pid: number; lines?: number; bytes?: number }): Promise<string | Refusal>;
-  function exposePort(port: number | { port: number }): Promise<string | Refusal>; // the URL, then 'verified: ...' or 'not reached: ...'
-  function unexposePort(port: number | { port: number }): Promise<string | Refusal>;
-  function listPorts(): Promise<string | Refusal>;
-  function installRuntime(spec: string): Promise<string | Refusal>;
-  function listRuntimes(): Promise<string | Refusal>;`;
-
 /** The live Nimbus session's process, port and runtime members, and the lifecycle the workspace executor reports. */
 export function nimbusSession(opts: NimbusSessionOpts) {
   const box = opts.box;
@@ -577,7 +566,6 @@ export function nimbusSession(opts: NimbusSessionOpts) {
 
   return {
     tools,
-    types: SESSION_TYPES,
     capabilities,
     // A recorded failure outranks activity.
     getStatus: (): ExecutorStatus => (lastError === undefined
