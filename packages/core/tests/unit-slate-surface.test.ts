@@ -80,6 +80,8 @@ test('ai.run routes one model call, the tier the call names', () => {
   expect(call(['ai', 'run'], [{ prompt: 'p', system: 's', tier: 'deep' }]).route).toEqual({ kind: 'ai', prompt: 'p', system: 's', tier: 'deep' });
   expect(() => call(['ai', 'run'], [])).toThrow('ai.run takes one { prompt, system?, tier? } object');
   expect(() => call(['ai', 'run'], [{ prompt: 4 }])).toThrow('ai.run takes one { prompt, system?, tier? } object');
+  // The run tool's rename to `shell` is not the model call's.
+  expect(() => call(['ai', 'shell'], [{ prompt: 'p' }])).toThrow(expect.objectContaining({ code: 'denied' }));
 });
 
 test('what only the agent does is refused before it is routed', () => {
@@ -111,7 +113,7 @@ const viewerCall = (path: string[], args: JsonValue[] = []) => routeViewerCall({
 });
 
 test('a viewer call refuses what the owner call refuses, then what the grant does not name', () => {
-  expect(() => viewerCall(['agents', 'hire'])).toThrow("agents.hire is the agent's alone");
+  expect(() => viewerCall(['agents', 'hire'])).toThrow("agents.hire is not on a slate's surface");
   expect(() => viewerCall(['writeFile'], ['/a', 'x'])).toThrow('Slate issues does not grant workspace.writeFile to viewers');
 });
 

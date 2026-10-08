@@ -10,7 +10,7 @@ import { settleSync } from '../obs/effect';
 import { isSlateMethodName } from './rpc';
 import { SLATE_READ_MODELS, type SlateReadModel } from './read-models';
 import { grantAdmits } from './capability-graph';
-import { slateAddressImpact } from './members';
+import { AI_RUN_MEMBER, slateAddressImpact } from './members';
 import type { Impact } from '@agent-core/core/facets';
 import type { ShareGrant } from './sharing';
 
@@ -205,7 +205,7 @@ function route(id: string, request: SlateCallRequest, chain: readonly string[]):
 
     if (namespace === 'agent' && first === 'send') return routeAgent(id, args);
 
-    if (namespace === 'ai' && first === 'run') return routeAi(args);
+    if (namespace === 'ai' && first === AI_RUN_MEMBER) return routeAi(args);
 
     return Effect.succeed({ kind: 'namespace', namespace, member: first, args });
   });
@@ -214,7 +214,7 @@ function route(id: string, request: SlateCallRequest, chain: readonly string[]):
 function routed(id: string, request: SlateCallRequest, chain: readonly string[]): Effect.Effect<SlateCall, KinuError> {
   const address = slateCallAddress(request.path);
   const impact = slateAddressImpact(address);
-  const refused = new KinuError('denied', `${address.namespace}.${address.member} is the agent's alone; a slate does not reach it`);
+  const refused = new KinuError('denied', `${address.namespace}.${address.member} is not on a slate's surface: what only the agent does, or no member at all`);
 
   if (impact === null) return Effect.fail(refused);
 

@@ -24,6 +24,8 @@ test('the impact table is what the grant, the graph and the audit row read', () 
   // A member the agent keeps from slates is not on the surface at all: switching its own role is one.
   expect(impact('tasks', 'mode')).toBeNull();
   expect(impact('memory', 'reformat')).toBeNull();
+  // `ai` has the one model call; the run tool's `shell` rename is not it.
+  expect(impact('ai', 'shell')).toBeNull();
 });
 
 test('a native tool\'s chip reads the same impact a slate\'s call of that member is shown with', () => {
