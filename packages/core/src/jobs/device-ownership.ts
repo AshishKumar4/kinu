@@ -4,6 +4,7 @@
  * via `owningJobId` (transferring them would race their own INSERT).
  */
 
+import type { ExecCallContext } from '../execution/signal';
 import * as v from 'valibot';
 
 /** The tool call's view: report issued ids, read the current owner. */
@@ -53,14 +54,13 @@ export class DeviceRequestOwnership implements DeviceRequestChannel {
   }
 }
 
-/** A program's `exec` call, its cancel and job merged into the options argument executors read; another shape is left as is. */
-export function execCallArgs(args: readonly unknown[], call: { readonly signal?: AbortSignal | undefined; readonly channel?: DeviceRequestChannel | undefined }): unknown[] {
-  const { signal, channel } = call;
-  const options = v.safeParse(v.looseObject({}), args[1]);
+type ExecCall = { readonly signal?: AbortSignal | undefined; readonly channel?: DeviceRequestChannel | undefined };
 
-  if ((signal === undefined && channel === undefined) || (args[1] !== undefined && !options.success)) return [...args];
+/** What an `exec` call carries beyond its arguments: its stop signal and its device-request ownership, when it has any. */
+export function execContext({ signal, channel }: ExecCall): ExecCallContext | undefined {
+  if (signal === undefined && channel === undefined) return undefined;
 
-  const context = {
+  return {
     ...(signal !== undefined && { signal }),
     ...(channel !== undefined && {
       onDeviceRequest: (requestId: string) => { channel.report(requestId); },
@@ -69,6 +69,14 @@ export function execCallArgs(args: readonly unknown[], call: { readonly signal?:
       detached: channel.detached,
     }),
   };
+}
+
+/** A program's `exec` call, its cancel and job merged into the options argument executors read; another shape is left as is. */
+export function execCallArgs(args: readonly unknown[], call: ExecCall): unknown[] {
+  const options = v.safeParse(v.looseObject({}), args[1]);
+  const context = execContext(call);
+
+  if (context === undefined || (args[1] !== undefined && !options.success)) return [...args];
 
   return [args[0], options.success ? { ...options.output, ...context } : context, ...args.slice(2)];
 }

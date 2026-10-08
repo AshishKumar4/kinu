@@ -156,7 +156,7 @@ import {
   resolveAgentTurnProfile, resolveRoutingProfile, ownProfileChoices, ancestorPins, createAgentConfigStore, type PinnedProfile,
   captureOperationProfile, currentOperationProfile, withOperationProfile,
   type OperationProfile,
-  agentRoleSwitch, executorNamespace, createMemoryCodemodeProvider, createFileCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider, createAgentsCodemodeProvider,
+  agentRoleSwitch, executorNamespace, toolsNamespace, createStateCodemodeProvider, runWorkModeInvocation, createMemoryCodemodeProvider, createFileCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider, createAgentsCodemodeProvider,
   resolveModelRoute, completeOnRoute, routedLlm, tierRefusals, type TierRefusals, type ModelRouteResolution,
   narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, inWorkMode,
   toolSurfaceTokens, McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
@@ -484,6 +484,16 @@ function hostedActorSurface(actor: HostedActor, webSearch: WebSearchProvider, co
 interface SlateAuthority {
   readonly mode: WorkMode;
   readonly reach: ToolSurfaceNarrowing;
+}
+
+/** `use` over the namespaces and tools an authority reaches, in its mode; each tool is reached through its record. */
+async function reachedIn<A>(
+  authority: SlateAuthority, providers: CodemodeProvider[], tools: ToolSet, use: (reached: readonly CodemodeProvider[]) => Promise<A>,
+): Promise<A> {
+  const reachedTools = Object.fromEntries(Object.entries(toolsInWorkMode(authority.mode, tools)).filter(([name]) => authority.reach.allowsTool(name)));
+  const narrowed = authority.reach.narrowProviders(providersInWorkMode(authority.mode, providers));
+
+  return await runWorkModeInvocation(authority.mode, () => use([...narrowed, toolsNamespace(reachedTools, undefined)]));
 }
 
 export abstract class ActorAgent extends Agent<Env> {
@@ -3134,6 +3144,30 @@ export abstract class ActorAgent extends Agent<Env> {
     });
 
     return { mode: profile.workMode, reach: narrowToolSurface(profile.allowedTools) };
+  }
+
+  /**
+   * The operations an actor reaches now, for a caller outside eval (a slate, an isolate running its turn): its
+   * namespaces and its tools, MCP and extension tools included on this actor, narrowed by its role in the mode that
+   * role leaves `requested`. `use` runs in that mode, while a hosted actor is held.
+   */
+  protected async withReachedOperations<A>(
+    actor: ActorReference | null, requested: WorkMode, use: (providers: readonly CodemodeProvider[]) => Promise<A>,
+  ): Promise<A> {
+    if (actor !== null) {
+      return await this.actorHost().run(actor, async (hosted) => {
+        const surface = hostedActorSurface(hosted, this.ownedModelServices.getWebSearchProvider(), this.agentStores(hosted.handle.actorId).conversations());
+        const authority = await this.hostedSlateAuthority(hosted, requested, surface.providers, Object.keys(surface.native));
+
+        return await reachedIn(authority, [...surface.providers, createStateCodemodeProvider(hosted.runtime.actor.programState)], surface.native, use);
+      });
+    }
+
+    const providers = [...this.slateNamespaces(), createStateCodemodeProvider(this.rt.actor.programState)];
+    const mcp = await this.buildUserMcpTools(this.getRawToolsForWorkMode(requested), Promise.resolve(this.modelCatalog));
+    const authority = await this.slateAuthority(requested, providers, Object.keys(mcp));
+
+    return await reachedIn(authority, providers, { ...this.extensions.tools(), ...mcp, ...this.getRawToolsForWorkMode(authority.mode) }, use);
   }
 
   /** Unconditional on every ActorAgent; tasks reuses `this.taskList`, the store the snapshot reads. */

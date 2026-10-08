@@ -328,6 +328,10 @@ const ORCHESTRATOR_METHODS = [
   // A browser cannot mint a caller.
   'slateAs',
   'slateBindingCallAs',
+  // An isolate running an actor's turn, or a slate, calls the actor's operations here.
+  'callOperation',
+  'listOperations',
+  'cancelOperation',
   // Reachable by a DO stub in this Worker, never a browser; none is `@callable`.
   'routeSlateShare',
   'readLiveShare',

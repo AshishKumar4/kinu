@@ -11,12 +11,16 @@ import { Effect } from 'effect';
 import { KinuError, settle, settleSync } from '../obs/index';
 import { permitInPlan } from '../execution/work-mode';
 import type { CodemodeProvider, MemberDeclaration } from '../types/codemode';
+import type { WorkMode } from '../types/turn';
 import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { branchableToolCall, programSignal } from './outcome';
 import { readCallJob } from './call-job';
 import { imageModelOutput } from './image-results';
 import type { TracedToolOptions } from '../obs/index';
-import { allowedInPlan, inputJsonSchema, inputProblem, JSON_VALUE_MARK, jsonOf, operationId, typeJsonSchema, type Operation, type Served } from '../operations/operation';
+import {
+  allowedInPlan, inputJsonSchema, inputProblem, JSON_VALUE_MARK, jsonOf, operationId, typeJsonSchema,
+  type Impact, type Operation, type OperationCall, type OperationResult, type Served,
+} from '../operations/operation';
 
 const typeOf = (schema: JsonSchema): string => jsonSchemaToType(schema, 'T').replace(/^type T = /u, '').replaceAll(`"${JSON_VALUE_MARK}"`, 'JsonValue');
 
@@ -245,6 +249,7 @@ export function codemodeNamespace(ns: string, members: readonly Served[]): Codem
   return {
     name: ns,
     positionalArgs: true,
+    operations: members,
     declarations: Object.fromEntries(members.map(({ op }) => [op.name, { full: operationDeclaration(op), call: callForm(op) }])),
     tools: Object.fromEntries(members.map((served) => [served.op.name, {
       description: served.op.help,
@@ -287,4 +292,41 @@ export function namespaceDeclaration(ns: string, declarations: Readonly<Record<s
   const reference = byReference.length === 0 ? [] : [`  // As the native ${ns} tool declares them, returning what it says: ${byReference.join(', ')}.`];
 
   return [`declare const ${ns}: {`, ...reference, ...own, '};'].join('\n');
+}
+
+/** Who calls an operation from outside eval: an actor, in the work mode it asks for, in a turn when one is open. */
+export interface OperationCaller {
+  readonly actorId: string;
+  readonly turnId: string | null;
+  readonly mode: WorkMode;
+}
+
+/** An operation a caller reaches, as `listOperations` names it. */
+export interface OperationListing {
+  readonly id: string;
+  readonly help: string;
+  readonly impact: Impact;
+  readonly inputSchema: JsonSchema;
+}
+
+/** Each served operation whose member the narrowing and the work mode left in its namespace. */
+function reachedOperations(providers: readonly CodemodeProvider[]): readonly Served[] {
+  return providers.flatMap((provider) => (provider.operations ?? []).filter((served) => Object.hasOwn(provider.tools, served.op.name)));
+}
+
+/** The operations `providers` reach, for a caller outside eval: each id, what it does, and its input's schema. */
+export function listOperations(providers: readonly CodemodeProvider[]): readonly OperationListing[] {
+  return reachedOperations(providers).map(({ op }) => ({ id: operationId(op), help: op.help, impact: op.impact, inputSchema: inputJsonSchema(op) }));
+}
+
+/**
+ * The one dispatch outside eval: `ns.op` among the operations `providers` reach, run on its JSON input exactly as a
+ * program's call runs it. An id they do not reach is refused, never resolved some other way.
+ */
+export async function callOperation(providers: readonly CodemodeProvider[], id: string, input: JsonValue, call: OperationCall): Promise<OperationResult> {
+  const served = reachedOperations(providers).find(({ op }) => operationId(op) === id);
+
+  if (served === undefined) return settleSync(Effect.fail(new KinuError('missing', `${id} is not an operation this caller reaches now`)));
+
+  return await served.run(input, call);
 }

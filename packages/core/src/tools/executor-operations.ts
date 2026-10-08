@@ -10,12 +10,23 @@ import { answeredRefusal } from '../execution/exec-result';
 import { KinuError, settleSync } from '../obs/index';
 import { serve, type Operation, type Served } from '../operations/operation';
 import { DEVICE, PARENT, SANDBOX, WORKSPACE, sandboxResize } from '../operations/executors';
-import { JsonObjectSchema, projectJsonValue } from '../utils/json';
+import { JsonObjectSchema, projectJsonValue, type JsonValue } from '../utils/json';
+import { programExecContext } from './outcome';
 import type { CodemodeProvider } from '../types/codemode';
 import { callArgs, codemodeNamespace } from './operation-surfaces';
 
 /** Each executor's declared members, by the executor's name. */
 const DECLARED = new Map<string, Readonly<Record<string, Operation>>>([['workspace', WORKSPACE], ['sandbox', SANDBOX], ['parent', PARENT], ['device', DEVICE]]);
+
+/** A shell call's arguments, with what the running program's backend says its shell calls carry. */
+function withExecContext(op: Operation, args: readonly JsonValue[]): unknown[] {
+  const context = op.name === 'exec' ? programExecContext() : undefined;
+
+  if (context === undefined) return [...args];
+  const [command, options] = args;
+
+  return [command, { ...v.parse(v.optional(JsonObjectSchema, {}), options), ...context }];
+}
 
 /** Each declared member the executor implements, forwarded with the arguments it is called with. */
 function forwarded(provider: Pick<ExecutorProviderSurface, 'name' | 'tools'>, ops: readonly Operation[]): Served[] {
@@ -24,7 +35,7 @@ function forwarded(provider: Pick<ExecutorProviderSurface, 'name' | 'tools'>, op
 
     if (member === undefined) return [];
 
-    return [serve(op, (input) => Effect.flatMap(Effect.promise(() => member.execute(...callArgs(op, v.parse(JsonObjectSchema, projectJsonValue({ value: input }))))), (answer) => {
+    return [serve(op, (input) => Effect.flatMap(Effect.promise(() => member.execute(...withExecContext(op, callArgs(op, v.parse(JsonObjectSchema, projectJsonValue({ value: input })))))), (answer) => {
       const refusal = answeredRefusal(projectJsonValue({ value: answer }));
 
       if (refusal !== null) return Effect.fail(new KinuError(refusal.reason ?? 'io', refusal.error, refusal.execution === undefined ? undefined : { execution: refusal.execution }));

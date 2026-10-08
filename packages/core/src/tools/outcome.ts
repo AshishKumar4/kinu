@@ -6,6 +6,7 @@ import { FileRefusalError } from '../types/file-edits';
 import { BindingFailureSchema, ToolFailureValueSchema, type BindingFailure, type ToolOutcome } from '../types/tool-outcome';
 import type { JsonObject, JsonValue } from '../utils/json';
 import { McpToolError } from './mcp-error';
+import type { ExecCallContext } from '../execution/signal';
 
 export { ToolOutcomeSchema, type ToolOutcome } from '../types/tool-outcome';
 
@@ -82,6 +83,8 @@ interface ProgramInvocation {
   pending: Promise<JsonValue | undefined>[];
   /** The eval's own: stopping the program stops what it called. */
   readonly signal: AbortSignal | undefined;
+  /** What the program's shell calls carry beyond their arguments: device-request ownership, the stop signal. */
+  readonly execContext: ExecCallContext | undefined;
 }
 
 const program = new AsyncLocalStorage<ProgramInvocation>();
@@ -89,6 +92,11 @@ const program = new AsyncLocalStorage<ProgramInvocation>();
 /** The running program's stop signal, for an operation it called. */
 export function programSignal(): AbortSignal | undefined {
   return program.getStore()?.signal;
+}
+
+/** What the running program's shell calls carry beyond their arguments, when its backend says. */
+export function programExecContext(): ExecCallContext | undefined {
+  return program.getStore()?.execContext;
 }
 
 const ProgramFailuresSchema = v.object({ failures: v.array(BindingFailureSchema) });
@@ -145,9 +153,10 @@ export function bindProgramCall<Args extends unknown[]>(
 export async function withCodemodeProgram<Result extends { result?: unknown; logs?: string[] }>(
   invoke: () => Promise<Result>,
   signal?: AbortSignal,
+  execContext?: ExecCallContext,
 ): Promise<Result & { failures?: BindingFailure[] }> {
   if (program.getStore() !== undefined) return invoke();
-  const active: ProgramInvocation = { failures: [], pending: [], signal };
+  const active: ProgramInvocation = { failures: [], pending: [], signal, execContext };
 
   const settled = Effect.promise(() => Promise.all(active.pending));
 

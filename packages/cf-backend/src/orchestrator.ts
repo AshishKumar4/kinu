@@ -40,6 +40,7 @@ import { AgentTurns } from "./agent-turns";
 import { AgentWakes } from "./agent-wakes";
 import type { AgentTurnActivity, AgentSnapshot, StoredRow } from '@kinu.run/core';
 import type { SerializedMessage } from '@kinu.run/core';
+import { callOperation, listOperations, type OperationCaller, type OperationListing, type OperationResult } from '@kinu.run/core';
 import type { AgentFacet, AgentFacetCalls } from "./agent-facet/agent-facet";
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
@@ -666,6 +667,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private readonly agentIsolateSlots = new AgentIsolateSlots(this.ctx);
+
+  /** Each `callOperation` still running, by its call id, so `cancelOperation` can stop it. */
+  private readonly operationCalls = new Map<string, AbortController>();
 
   protected async agentCalls(actorId: string): Promise<AgentFacetCalls> {
     const key = `kinu-agent:${this.agentOf(actorId).storageKey}`;
@@ -4492,6 +4496,32 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   async slateBindingCallAs(caller: SlateCaller, id: string, name: string, request: SlateBindingRequest): Promise<SlateCallResult> {
     return this.slates.bindingCall(caller, id, name, request);
+  }
+
+  async callOperation(caller: OperationCaller, id: string, input: JsonValue, call: { readonly callId: string }): Promise<OperationResult> {
+    const stop = new AbortController();
+
+    this.operationCalls.set(call.callId, stop);
+
+    // A refusal is the call's answer, as it left the operation; a cancelled call's answer is its cancellation.
+    return await settle(Effect.ensuring(
+      Effect.promise(() => this.withReachedOperations(this.operationActor(caller.actorId), caller.mode, (providers) => callOperation(providers, id, input, { callId: call.callId, signal: stop.signal })))
+        .pipe(Effect.flatMap((answer) => (stop.signal.aborted ? Effect.fail(new KinuError('cancelled', `${id} was cancelled by its caller`)) : Effect.succeed(answer)))),
+      Effect.sync(() => { this.operationCalls.delete(call.callId); }),
+    ));
+  }
+
+  async listOperations(caller: OperationCaller): Promise<readonly OperationListing[]> {
+    return await this.withReachedOperations(this.operationActor(caller.actorId), caller.mode, async (providers) => listOperations(providers));
+  }
+
+  async cancelOperation(callId: string): Promise<void> {
+    this.operationCalls.get(callId)?.abort(new KinuError('cancelled', 'The caller cancelled the operation'));
+  }
+
+  /** The workspace actor is reached as itself; any other by its live directory entry. */
+  private operationActor(actorId: string): ActorReference | null {
+    return actorId === this.actorHandle().actorId ? null : actorReferenceOf(this.liveAgentOf(actorId));
   }
 
   /** The share route has already verified the request; admission and routing live on the slate host,

@@ -1,3 +1,5 @@
+import type { Served } from '../operations/operation';
+
 /** Host-side result before JSON validation at the VM boundary; no functions or symbols. */
 export type CodemodeResult = object | string | number | boolean | null | undefined;
 
@@ -23,6 +25,8 @@ export interface CodemodeProvider {
   readonly declarations?: Readonly<Record<string, MemberDeclaration>>;
   readonly positionalArgs?: boolean;
   readonly prelude?: string;
+  /** The catalog operations its members run, for a caller outside eval (`callOperation`) to reach the same ones. */
+  readonly operations?: readonly Served[];
 }
 
 /** The one namespace every tool, builtin or crafted, is callable in on every backend. */

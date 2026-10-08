@@ -2,7 +2,8 @@
  * file and execution operations need no owner RPC. */
 
 import type {
-  BlueprintBundle, BlueprintFork, LiveShareRecord, ShareViewerClaim, SlateAnswer, SlateBindingRequest, SlateCallResult, SlateOperation, SlateShareRecord,
+  BlueprintBundle, BlueprintFork, JsonValue, LiveShareRecord, OperationCaller, OperationListing, OperationResult, ShareViewerClaim, SlateAnswer,
+  SlateBindingRequest, SlateCallResult, SlateOperation, SlateShareRecord,
 } from '@kinu.run/core';
 import type { BlueprintReading, ShareUser } from '@kinu.run/core/slates';
 import type { SlateCaller } from './slates/bindings';
@@ -12,6 +13,11 @@ import type { ObjectNamespace } from '@kinu.run/core';
 export interface WorkspaceOwnerRpc {
   slateAs(caller: SlateCaller, operation: SlateOperation): Promise<SlateCallResult>;
   slateBindingCallAs(caller: SlateCaller, id: string, name: string, request: SlateBindingRequest): Promise<SlateCallResult>;
+  /** An actor's operation, by `ns.op`, as eval runs it; refused when the actor does not reach it now. */
+  callOperation(caller: OperationCaller, id: string, input: JsonValue, call: { readonly callId: string }): Promise<OperationResult>;
+  listOperations(caller: OperationCaller): Promise<readonly OperationListing[]>;
+  /** Stops a `callOperation` still running; one that has answered is not touched. */
+  cancelOperation(callId: string): Promise<void>;
   readBlueprint(share: string): Promise<SlateAnswer<BlueprintReading>>;
   blueprintBundle(share: string): Promise<SlateAnswer<BlueprintBundle>>;
   shareBlueprintWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<SlateShareRecord>>;

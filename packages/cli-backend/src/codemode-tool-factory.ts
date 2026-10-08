@@ -12,10 +12,10 @@ import type {
 import { renderThrownChain } from '@kinu.run/core/obs';
 import {
   CRAFTED_TOOL_NAMESPACE,
-  decodeJsonValue, explainSandboxError, nativeToolFunctions,
+  decodeJsonValue, explainSandboxError, toolsNamespace,
   renderCodemodeDescription, codemodeInputSchema,
   withCraftedToolDeclarations, craftedFailureFunctions, renderCraftedDefinitions,
-  codemodeFunction, withCodemodeProgram, execCallArgs, readDeviceRequestChannel,
+  codemodeFunction, withCodemodeProgram, execContext, readDeviceRequestChannel,
 } from '@kinu.run/core';
 import { tool } from 'ai';
 import { programBody } from './executor';
@@ -90,17 +90,15 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
         try {
           const signal = options.abortSignal;
           const context = signal ? { signal } : undefined;
-          const channel = readDeviceRequestChannel({ toolOptions: options });
           const toolBindings: Record<string, CodemodeExecute> = {};
           // Read per call so a tool crafted a step ago is callable now; each body is defined in the program below.
           const crafted = surface.craftedTools();
 
           // `requireBuild` above refused Plan, so nothing here runs in it.
-          const external = nativeToolFunctions(surface.external(), signal);
-          const native = nativeToolFunctions(surface.native, signal);
+          // A native name shadows an external one, and a crafted name both, as in the CF prelude.
+          const tools = toolsNamespace({ ...surface.external(), ...surface.native }, signal);
 
-          // A crafted name shadows a native one, as in the CF prelude.
-          for (const [name, entry] of Object.entries({ ...external, ...native, ...craftedFailureFunctions(crafted) })) {
+          for (const [name, entry] of Object.entries({ ...tools.tools, ...craftedFailureFunctions(crafted) })) {
             toolBindings[name] = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, entry.execute);
           }
 
@@ -110,14 +108,8 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
             const nsp: Record<string, CodemodeExecute> = {};
 
             for (const [toolName, t] of Object.entries(p.tools)) {
-              const exec = toolName === 'exec' && p.positionalArgs === true;
-              // An operation namespace reads the program's signal from its scope; its arguments are the program's own.
-
-              const call = (toolArgs: unknown[]) => {
-                if (exec) return execCallArgs(toolArgs, { signal, channel });
-
-                return p.declarations === undefined ? [...toolArgs, context] : toolArgs;
-              };
+              // An operation namespace reads the program's signal and shell context from its scope; its arguments are the program's own.
+              const call = (toolArgs: unknown[]) => (p.declarations === undefined ? [...toolArgs, context] : toolArgs);
 
               nsp[toolName] = codemodeFunction(p.name, toolName, (...toolArgs) => t.execute(...call(toolArgs)));
             }
@@ -158,7 +150,7 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
           const message = explainSandboxError(renderThrownChain({ cause: error }));
           throw new Error(logs.length > 0 ? message + '\nConsole output:\n' + logs.join('\n') : message, { cause: error });
         }
-      }, options.abortSignal),
+      }, options.abortSignal, execContext({ signal: options.abortSignal, channel: readDeviceRequestChannel({ toolOptions: options }) })),
     }), () => surface.craftedTools().map(({ name, description }) => ({ name, description })));
   };
 }

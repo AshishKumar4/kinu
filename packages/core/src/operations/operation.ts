@@ -16,7 +16,7 @@ import type { ToolExecutionOptions } from 'ai';
 export type { Impact };
 
 /** Object inputs only: a native composite folds each operation's fields into its own branch. */
-export type OperationInput = v.ObjectSchema<v.ObjectEntries, undefined> | v.StrictObjectSchema<v.ObjectEntries, undefined>;
+export type OperationInput = v.ObjectSchema<v.ObjectEntries, undefined> | v.StrictObjectSchema<v.ObjectEntries, undefined> | v.LooseObjectSchema<v.ObjectEntries, undefined>;
 
 export interface Operation<I extends OperationInput = OperationInput, O extends v.GenericSchema = v.GenericSchema> {
   readonly ns: string;
@@ -132,6 +132,18 @@ export const JSON_VALUE_MARK = '__JsonValue__';
 
 /** Schemas a field's description states better than their full JSON Schema would. */
 const OPAQUE = new WeakMap<v.GenericSchema, JsonSchema>();
+
+/**
+ * An input its implementation validates itself (a tool's own schema, an MCP server's): every field passes through,
+ * and the model, a program's d.ts and `listOperations` are given `stated`.
+ */
+export function statedInput(stated: JsonSchema): v.LooseObjectSchema<v.ObjectEntries, undefined> {
+  const input = v.looseObject({});
+
+  OPAQUE.set(input, stated);
+
+  return input;
+}
 
 /** Validated in full on every call; the model is given `stated` and the field's own description. */
 export function opaque<S extends v.GenericSchema>(schema: S, stated: JsonSchema) {
