@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
 import { CheckCircleIcon, ChatCircleDotsIcon, NotePencilIcon, TrashIcon } from "@phosphor-icons/react";
 import {
-  admitReviewAnnotations,
   freshNotes,
   planReviewAwaitingDecision,
   type GeneralNote,
@@ -12,7 +11,7 @@ import {
   type ReviewAnnotation,
   type PlanReviewResult,
 } from "@kinu.run/core";
-import { Effect, Cause, Result } from "effect";
+import { Effect, Cause } from "effect";
 import { Viewer } from "@/components/plan-review/Viewer";
 import { AnnotationPanel } from "@/components/plan-review/AnnotationPanel";
 import { CommentThread } from "@/components/plan-review/CommentThread";
@@ -34,11 +33,7 @@ const isReply = (note: ReviewAnnotation): note is NoteReply => note.type === "RE
 
 const isPassage = (note: ReviewAnnotation): note is PassageNote => note.type === "COMMENT" || note.type === "DELETION";
 
-function storedNotes(plan: PlanReview | null): ReviewAnnotation[] {
-  const admission = admitReviewAnnotations({ value: plan?.annotations ?? [] });
-
-  return Result.isFailure(admission) ? [] : admission.success;
-}
+const notesOf = (plan: PlanReview | null): ReviewAnnotation[] => [...(plan?.annotations ?? [])];
 
 const FILE_TREE_BRANCH = /^\s*(?:[│|]\s*)*(?:├──|└──|\|--|`--)\s+\S/;
 
@@ -244,7 +239,7 @@ function PlanHeaderActions({ comments, unread, panelOpen, onToggle, mode, onMode
 }
 
 export default function PlanReviewView({ plan, rpc, readOnly = false, agentName = "Kinu" }: PlanReviewViewProps) {
-  const [notes, setNotes] = useState<ReviewAnnotation[]>(() => storedNotes(plan));
+  const [notes, setNotes] = useState<ReviewAnnotation[]>(() => notesOf(plan));
   const [selected, setSelected] = useState<string | null>(null);
   const [mode, setMode] = useState<EditorMode>("comment");
   const [saving, setSaving] = useState(false);
@@ -283,7 +278,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
   }), [planId, planKey, planRevision, rpc]);
 
   useEffect(() => {
-    setNotes(storedNotes(plan));
+    setNotes(notesOf(plan));
     setSelected(null);
     setPanelOpen(false);
     setSaving(false);
@@ -292,8 +287,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
 
   const editable = !readOnly && plan?.status === "pending";
   // An open revision is the reviewer's draft; any other follows the review, so the agent's replies arrive as written.
-  const stored = useMemo(() => storedNotes(plan), [plan]);
-  const shown = editable ? notes : stored;
+  const shown = editable ? notes : notesOf(plan);
   const roots = useMemo(() => shown.filter(isRoot), [shown]);
   const rootsById = useMemo(() => new Map(roots.map((note) => [note.id, note])), [roots]);
   const replies = useMemo(() => shown.filter(isReply).sort((left, right) => left.createdA - right.createdA), [shown]);

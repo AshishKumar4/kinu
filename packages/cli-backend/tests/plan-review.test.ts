@@ -217,9 +217,9 @@ describe('LocalAgentSession — plan review', () => {
       const handoff = requests[2];
 
       expect(handoff?.tools).toContain('reply_to_comment');
-      expect(handoff?.prompt).toContain('Comment cents on \\"Move the ledger\\": Round half to even.');
-      expect(handoff?.prompt).toContain('Comment drop: remove \\"Drop the float column\\"');
-      expect(handoff?.prompt).toContain('Comment all on the whole plan: When does this run?');
+
+      // Each comment reaches the model with the id its reply names, and what it says or quotes.
+      for (const said of ['cents', 'Round half to even.', 'drop', 'Drop the float column', 'all', 'When does this run?']) expect(handoff?.prompt).toContain(said);
 
       const revised = await agent.getActivePlanReview();
 

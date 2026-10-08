@@ -2374,7 +2374,7 @@ export class LocalAgentSession {
 
   /** A root whose plan the owner sent back with comments the agent may answer. */
   private planReplyOpen(): boolean {
-    return this.planReviewSurface() && this.planActions.awaitingReply();
+    return this.planReviewSurface() && this.planActions.awaitingReply(this.turnDriving);
   }
 
   /** The typed mode, under core's plan hold. Mirrors the cloud orchestrator's `workModeForMetadata`. */
@@ -2780,7 +2780,7 @@ export class LocalAgentSession {
     }
 
     if (this.planReplyOpen()) {
-      deps.replyToComment = { reply: (comment, text) => this.planActions.reply(comment, text) };
+      deps.replyToComment = { reply: (comment, text) => this.planActions.reply(comment, text, this.turnDriving) };
     }
 
     return deps;

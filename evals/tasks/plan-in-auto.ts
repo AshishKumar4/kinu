@@ -4,8 +4,13 @@ import type { EvalPart } from '../src/task';
 // Asked in Auto for a plan, the agent submits it for the owner's review: not a plan written in chat, a file or a slate,
 // and nothing built before the owner approves it. It leaves a review pending, so it runs last.
 
-/** A write to the workspace's files, a file slate's included, natively or from an eval program. */
-const WRITES = /"op":"(write|edit)"|\.(writeFile|editFile)\(/;
+/** A call that changes files, by tool: the file tool's writing ops, an eval program's file or slate writes, and a shell
+ *  command that writes, moves, removes or installs. Inspection (reads, searches, `ls`, `git log`) passes. */
+const MUTATES = new Map([
+  ['file', /"op":"(write|edit|delete|remove|rename|move|mkdir)"/],
+  ['eval', /\b(file|workspace)\.(write|edit|writeFile|editFile|delete|remove|rename|move|mkdir)\(|slates[.[][^\n]*\$(create|write|save)\(/],
+  ['shell', /(^|[^0-9&>])>(?!&)(?!\s*\/dev\/null)|\b(tee|touch|mkdir|cp|mv|rm|install)\b|sed -i|\bgit (add|commit|apply)\b|\b(npm|bun|pnpm|yarn) (i|add|install)\b/],
+]);
 
 export const planInAuto: EvalPart = {
   id: 'plan',
@@ -26,10 +31,16 @@ export const planInAuto: EvalPart = {
       });
 
       await verifier.check('built-nothing-before-approval', async () => {
-        const writes = calls.filter((call) => (call.name === 'file' || call.name === 'eval') && WRITES.test(call.args));
+        const writes = calls.filter((call) => MUTATES.get(call.name)?.test(call.args) === true);
         const inline = verifier.replies.flatMap(slateUiSegments).filter((segment) => segment.kind === 'slate').length;
 
-        return { pass: writes.length === 0 && inline === 0, evidence: { writes: writes.map((call) => call.args.slice(0, 200)), inline } };
+        return {
+          pass: writes.length === 0 && inline === 0,
+          evidence: {
+            writes: writes.map((call) => `${call.name}: ${call.args.slice(0, 200)}`), inline,
+            blindSpot: 'read from the calls, not the files: a write spelled another way, or past a call\'s first 800 characters, is not seen',
+          },
+        };
       });
     },
   }],

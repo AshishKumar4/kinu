@@ -2303,13 +2303,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (turn.parentDriven || !turn.actor.stores.config.getHoldsPlans()) return false;
     const actorId = turn.actor.handle.actorId;
 
-    return planAwaitingReply(await (await this.agentCalls(actorId)).activePlanReview(this.agentSnapshot(actorId)));
+    return planAwaitingReply(await (await this.agentCalls(actorId)).activePlanReview(this.agentSnapshot(actorId)), turn.driving);
   }
 
   private async hostedPlanReply(turn: HostedTaskTurn, comment: string, text: string): Promise<PlanReviewResult> {
     const actorId = turn.actor.handle.actorId;
 
-    return await (await this.agentCalls(actorId)).replyPlanComment(this.agentSnapshot(actorId), comment, text);
+    return await (await this.agentCalls(actorId)).replyPlanComment(this.agentSnapshot(actorId), comment, text, turn.driving);
   }
 
   /** Each agent's plans from its own isolate (D9); only an agent that has submitted one is asked, retired ones included. */
