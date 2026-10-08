@@ -42,6 +42,7 @@ import {
   CACHE_BLIND_SPOTS, cacheEnabled, defaultStoreDirectory, gateEnvironment, gateEnvNames, keyFor, planGate, recordGreen, pathNodeVersion, storeAt, toolVersions,
 } from './ladder-cache';
 import type { GateCacheRequest, Plan, Store, ToolVersions } from './ladder-cache';
+import { fromEnvironment } from './ladder-proofs';
 import { auditClosure } from './ladder-audit';
 import { driftFinding, installDrift } from './install-parity';
 import { deriveClosure, repoAt } from './ladder-closure';
@@ -1072,7 +1073,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 --isolate scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts scripts/deadline.test.ts scripts/gate-cost.test.ts scripts/install-parity.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts scripts/ladder-proofs.test.ts scripts/deadline.test.ts scripts/gate-cost.test.ts scripts/install-parity.test.ts',
     label: 'Gate ladder wiring and cache soundness',
     tier: 'push',
     // Measured 2026-09-16 on the 24-thread workstation (load 8.1): 1.25/1.20 s
@@ -4155,6 +4156,9 @@ if (import.meta.main) {
   // hashes, cache or `--no-cache`, so a recorded verdict and a fresh one are
   // taken in one environment.
   const caching = cacheEnabled({ hammer: rowGate?.phase === 'hammer', noCache: process.argv.includes('--no-cache') });
+  // Read, and deleted from the environment, before any gate spawns: no row sees the bucket's credentials.
+  const remoteStore = fromEnvironment(process.env);
+  const remote = caching ? remoteStore : undefined;
   const tools = toolVersions(root, await pathNodeVersion());
   const store = storeAt(defaultStoreDirectory());
   const revision = fullRevision();
@@ -4183,7 +4187,16 @@ if (import.meta.main) {
     }
 
     const argv = missing === undefined ? undefined : [...(missing[0]?.argv.slice(0, -1) ?? []), ...missing.flatMap((proof) => proof.argv.slice(-1))];
-    const plan = caching && !nativeChanged ? planGate({ run: gate.run, inputs: gate.inputs, repo, tools, store }) : undefined;
+    let plan = caching && !nativeChanged ? planGate({ run: gate.run, inputs: gate.inputs, repo, tools, store }) : undefined;
+
+    // A proof an earlier container recorded, under the same closure key, copied in only when its HMAC checks.
+    if (plan?.kind === 'miss' && remote !== undefined) {
+      const pulled = await remote.pull(plan.key, store);
+      const stored = store.lookup(plan.key);
+
+      if (stored.kind === 'entry') plan = { kind: 'hit', key: plan.key, entry: stored.entry, closure: plan.closure };
+      else if (pulled.kind !== 'absent') notes.add(`${gate.run}: the bucket's proof under ${plan.key.slice(0, 12)} is ${'why' in pulled ? `unreachable (${pulled.why})` : pulled.kind}, so it runs`);
+    }
 
     if (plan?.kind === 'hit') {
       // A reused CI verdict names the revision that proved it, and carries the file walls that proof measured.
@@ -4344,6 +4357,10 @@ if (import.meta.main) {
       );
 
       if (proofRecorded) recorded.push(gate.run);
+
+      if (proofRecorded && remote !== undefined) {
+        for (const lost of await remote.push([plan.key], store)) notes.add(`${gate.run}: its proof did not reach the bucket (${lost})`);
+      }
 
       return;
     }
