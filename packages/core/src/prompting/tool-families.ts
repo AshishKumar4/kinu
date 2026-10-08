@@ -11,7 +11,7 @@ type FamilyNotes = Readonly<Partial<Record<BuiltinToolName, readonly string[]>>>
 const FAMILY_TOOL_NOTES: Readonly<Partial<Record<PromptModelFamily, FamilyNotes>>> = {
   claude: {
     agents: [
-      'Use a helper when tasks can run in parallel, need isolated context, or are independent workstreams. For simple tasks, sequential steps, single-file edits, or work that needs context shared across steps, work directly rather than delegating.',
+      'Use a helper only for large, separable work that clearly costs more to do than to brief and check: tasks that can run in parallel, need isolated context, or are independent workstreams. For simple tasks, sequential steps, single-file edits, or tightly coupled work, work directly rather than delegating.',
       'A helper costs more than it looks: you write its brief, you see only its report, and trusting that report means reading what it touched. Once you have delegated something, do not also do it yourself.',
     ],
   },

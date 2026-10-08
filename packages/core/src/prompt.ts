@@ -236,7 +236,7 @@ function listed(items: readonly string[]): string {
   return items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1) ?? ''}`;
 }
 
-function renderAgentStateSection(surface: PromptSurface, render: RenderSection): string {
+function renderAgentStateSection(surface: PromptSurface, render: RenderSection, isHired: boolean): string {
   const tools = surface.builtinTools;
   const parts: string[] = [render(PERSISTENCE_SECTION, {})];
 
@@ -244,7 +244,7 @@ function renderAgentStateSection(surface: PromptSurface, render: RenderSection):
     parts.push(render(CODE_EXECUTION_SECTION, {}));
   }
 
-  if (hasTool(tools, 'agents') || hasTool(tools, 'report')) {
+  if (hasTool(tools, 'agents') || isHired) {
     // Gated on the actions this actor's deps wire (surface.agentsActions), like the tool's enum.
     const actions = surface.agentsActions;
     const has = (action: (typeof actions)[number]) => actions.includes(action);
@@ -255,6 +255,7 @@ function renderAgentStateSection(surface: PromptSurface, render: RenderSection):
       hasHire: has('hire'),
       rungsInCode: actions.length > 0 && hasTool(tools, 'eval'),
       hasReport: hasTool(tools, 'report'),
+      isHired,
     }));
   }
 
@@ -337,7 +338,7 @@ export function buildSystemPromptSync(
     hasTool(surface.builtinTools, 'file') && hasTool(surface.builtinTools, 'shell') && hasTool(surface.builtinTools, 'eval')
       ? render(TOOL_USE_SECTION, { familyDelta: promptFamilyDelta(TOOL_USE_SECTION.id, surface.model.family) })
       : '',
-    renderAgentStateSection(surface, render),
+    renderAgentStateSection(surface, render, rt.actor.parentActorId !== null),
     ...(lead ? [
       render(LEAD_RESPONSIBILITY, { hasTaskHire: surface.temporaryAsk }),
       render(LEAD_BRIEF, { familyDelta: promptFamilyDelta(LEAD_BRIEF.id, surface.model.family) }),

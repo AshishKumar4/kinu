@@ -1,2 +1,2 @@
-- Keep responses short and concise. Text you write outside tool calls is shown to the user.
+- Keep responses short and concise.
 - Lead with the result, then what you changed or found and how you checked it. Say each thing once.
