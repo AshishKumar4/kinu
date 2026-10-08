@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
-import {
-  CheckCircleIcon, CheckIcon, ChatCircleDotsIcon, CopyIcon, NotePencilIcon,
-  TrashIcon, WarningCircleIcon,
-} from "@phosphor-icons/react";
+import { CheckCircleIcon, ChatCircleDotsIcon, NotePencilIcon, TrashIcon } from "@phosphor-icons/react";
 import {
   admitReviewAnnotations,
+  freshNotes,
   planReviewAwaitingDecision,
+  type GeneralNote,
+  type NoteReply,
+  type PassageNote,
   type PlanReview,
   type ReviewAnnotation,
   type PlanReviewResult,
@@ -14,35 +15,29 @@ import {
 import { Effect, Cause, Result } from "effect";
 import { Viewer } from "@/components/plan-review/Viewer";
 import { AnnotationPanel } from "@/components/plan-review/AnnotationPanel";
-import type { Annotation, Block, EditorMode } from "@plannotator/ui/types";
-import {
-  exportAnnotations, extractFrontmatter, parseMarkdownToBlocks,
-} from "@plannotator/ui/utils/parser";
+import { CommentThread } from "@/components/plan-review/CommentThread";
+import { editorAnnotationOf } from "@/components/plan-review/notes";
+import type { Block, EditorMode } from "@plannotator/ui/types";
+import { extractFrontmatter, parseMarkdownToBlocks } from "@plannotator/ui/utils/parser";
 import type { Rpc } from "@kinu.run/core";
 import { createPlanAnnotationSaveQueue } from "@kinu.run/core";
 import { renderThrownChain, showing, detach } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
-import { annotationType } from "./annotation-type";
-import { copyLabel, useCopy, type CopyStatus } from "@/hooks/use-copy";
 import { usePlanDecision } from "@/hooks/use-plan-decision";
+import { usePlanRepliesSeen } from "@/hooks/use-plan-replies-seen";
 
-const COPY_ICON = {
-  idle: CopyIcon,
-  copied: CheckIcon,
-  failed: WarningCircleIcon,
-} satisfies Record<CopyStatus, typeof CopyIcon>;
+type RootNote = PassageNote | GeneralNote;
 
-function parsePlanAnnotations(values: readonly ReviewAnnotation[]): Annotation[] {
-  const admission = admitReviewAnnotations({ value: values });
+const isRoot = (note: ReviewAnnotation): note is RootNote => note.type !== "REPLY";
 
-  if (Result.isFailure(admission)) return [];
+const isReply = (note: ReviewAnnotation): note is NoteReply => note.type === "REPLY";
 
-  return admission.success.map((annotation) => ({
-    ...annotation,
-    type: annotationType(annotation.type),
-    author: annotation.author ?? "Owner",
-    mathTargets: annotation.mathTargets ? [...annotation.mathTargets] : undefined,
-  }));
+const isPassage = (note: ReviewAnnotation): note is PassageNote => note.type === "COMMENT" || note.type === "DELETION";
+
+function storedNotes(plan: PlanReview | null): ReviewAnnotation[] {
+  const admission = admitReviewAnnotations({ value: plan?.annotations ?? [] });
+
+  return Result.isFailure(admission) ? [] : admission.success;
 }
 
 const FILE_TREE_BRANCH = /^\s*(?:[│|]\s*)*(?:├──|└──|\|--|`--)\s+\S/;
@@ -139,7 +134,7 @@ function footerNote(
   if (status === "dismissed") return "Dismissed. The conversation is no longer held in Plan.";
   const approved = status === "approved";
 
-  if (editable) return "Approve this revision, or annotate the text that needs work.";
+  if (editable) return "Approve this revision, or comment on what needs work.";
 
   if (handoffPending) {
     return approved
@@ -156,6 +151,8 @@ export interface PlanReviewViewProps {
   plan: PlanReview | null;
   rpc: Rpc;
   readOnly?: boolean;
+  /** The agent that wrote the plan, as its replies name it. */
+  agentName?: string;
 }
 
 function DismissPlan({ plan, rpc, readOnly, deciding, saving, onError }: {
@@ -190,27 +187,28 @@ function DismissPlan({ plan, rpc, readOnly, deciding, saving, onError }: {
   );
 }
 
-export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanReviewViewProps) {
-  const [annotations, setAnnotations] = useState<Annotation[]>(() => parsePlanAnnotations(plan?.annotations ?? []));
+export default function PlanReviewView({ plan, rpc, readOnly = false, agentName = "Kinu" }: PlanReviewViewProps) {
+  const [notes, setNotes] = useState<ReviewAnnotation[]>(() => storedNotes(plan));
   const [selected, setSelected] = useState<string | null>(null);
   const [mode, setMode] = useState<EditorMode>("comment");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
-  const { status: copyStatus, copy } = useCopy();
   const planId = plan?.id ?? null;
   const planRevision = plan?.revision ?? null;
   const planKey = planId === null || planRevision === null ? null : `${planId}:${planRevision}`;
   const activePlanKey = useRef(planKey);
   activePlanKey.current = planKey;
+  const seen = usePlanRepliesSeen(planId);
 
-  const annotationSaves = useMemo(() => createPlanAnnotationSaveQueue<Annotation>(async (next) => {
+  // The reviewer writes only this revision's own notes; the review keeps the threads carried from earlier ones.
+  const noteSaves = useMemo(() => createPlanAnnotationSaveQueue<ReviewAnnotation>(async (next) => {
     if (planId === null || planRevision === null) return false;
 
     if (activePlanKey.current === planKey) setError(null);
 
     try {
-      const result = await rpc<PlanReviewResult>("savePlanReviewAnnotations", [planId, planRevision, next]);
+      const result = await rpc<PlanReviewResult>("savePlanReviewAnnotations", [planId, planRevision, freshNotes(next)]);
 
       if (!result.ok) {
         if (activePlanKey.current === planKey) setError(result.error);
@@ -229,12 +227,24 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
   }), [planId, planKey, planRevision, rpc]);
 
   useEffect(() => {
-    setAnnotations(parsePlanAnnotations(plan?.annotations ?? []));
+    setNotes(storedNotes(plan));
     setSelected(null);
     setPanelOpen(false);
     setSaving(false);
     setError(null);
   }, [plan?.id, plan?.revision]);
+
+  const editable = !readOnly && plan?.status === "pending";
+  // An open revision is the reviewer's draft; any other follows the review, so the agent's replies arrive as written.
+  const stored = useMemo(() => storedNotes(plan), [plan]);
+  const shown = editable ? notes : stored;
+  const roots = useMemo(() => shown.filter(isRoot), [shown]);
+  const rootsById = useMemo(() => new Map(roots.map((note) => [note.id, note])), [roots]);
+  const replies = useMemo(() => shown.filter(isReply).sort((left, right) => left.createdA - right.createdA), [shown]);
+  const written = useMemo(() => freshNotes(shown), [shown]);
+  // Carried passages quote an earlier text, so only this revision's own are marked in it.
+  const passages = useMemo(() => written.filter(isPassage), [written]);
+  const unread = replies.some((reply) => reply.author === "agent" && reply.createdA > seen.seenAt);
 
   const blocks = useMemo(() => planReviewBlocks(plan?.content ?? ""), [plan?.content]);
   const frontmatter = useMemo(() => extractFrontmatter(plan?.content ?? "").frontmatter, [plan?.content]);
@@ -248,18 +258,14 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
 
   const titleBlocks = useMemo(() => titleBlock === null ? [] : [titleBlock], [titleBlock]);
 
-  const titleAnnotations = useMemo(
-    () => titleBlock === null
-      ? []
-      : annotations.filter((annotation) => annotation.blockId === titleBlock.id),
-    [annotations, titleBlock],
+  const titlePassages = useMemo(
+    () => titleBlock === null ? [] : passages.filter((note) => note.blockId === titleBlock.id),
+    [passages, titleBlock],
   );
 
-  const documentAnnotations = useMemo(
-    () => titleBlock === null
-      ? annotations
-      : annotations.filter((annotation) => annotation.blockId !== titleBlock.id),
-    [annotations, titleBlock],
+  const documentPassages = useMemo(
+    () => titleBlock === null ? passages : passages.filter((note) => note.blockId !== titleBlock.id),
+    [passages, titleBlock],
   );
 
   const documentBlocks = useMemo(
@@ -267,35 +273,32 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
     [blocks, titleBlock],
   );
 
-  const editable = !readOnly && plan?.status === "pending";
-
   const handoffPending = !readOnly && plan != null && !plan.handoffAccepted
     && (plan.status === "approved" || plan.status === "changes_requested");
 
-  const save = useCallback(async (next: Annotation[]): Promise<boolean> => {
+  const save = useCallback(async (next: ReviewAnnotation[]): Promise<boolean> => {
     if (readOnly || planKey === null) return false;
-    setAnnotations(next);
+    setNotes(next);
     setSaving(true);
-    const saved = await annotationSaves.enqueue(next);
+    const saved = await noteSaves.enqueue(next);
 
-    if (annotationSaves.pending() === 0 && activePlanKey.current === planKey) {
+    if (noteSaves.pending() === 0 && activePlanKey.current === planKey) {
       setSaving(false);
     }
 
     return saved;
-  }, [annotationSaves, planKey, readOnly]);
+  }, [noteSaves, planKey, readOnly]);
 
   const { busy: decisionBusy, inFlight: decisionInFlight, decide } = usePlanDecision({
     plan,
     editable,
     handoffPending,
     rpc,
-    save: () => save(annotations),
-    feedback: () => exportAnnotations(blocks, annotations, [], "Plan Feedback", "plan"),
+    save: () => save(notes),
     onError: setError,
   });
 
-  const changeAnnotations = useCallback((next: Annotation[]) => detach(Effect.gen(function* () {
+  const changeNotes = useCallback((next: ReviewAnnotation[]) => detach(Effect.gen(function* () {
     if (decisionInFlight()) return;
     // Decided after the handler so a superseded revision does not read as a failed save.
     let thrown: { readonly cause: unknown } | undefined;
@@ -310,24 +313,33 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
     if (thrown !== undefined && activePlanKey.current === planKey) {
       setError(renderThrownChain({ cause: thrown.cause }));
 
-      if (annotationSaves.pending() === 0) setSaving(false);
+      if (noteSaves.pending() === 0) setSaving(false);
     }
-  })), [annotationSaves, decisionInFlight, planKey, save]);
+  })), [noteSaves, decisionInFlight, planKey, save]);
 
-  const addAnnotation = useCallback((annotation: Annotation) => {
-    if (decisionInFlight()) return;
-    const next = [...annotations, annotation];
-    setSelected(annotation.id);
+  const openPanel = useCallback(() => {
+    seen.markSeen();
     setPanelOpen(true);
+  }, [seen]);
 
-    return changeAnnotations(next);
-  }, [annotations, changeAnnotations, decisionInFlight]);
+  const addNote = useCallback((note: RootNote) => {
+    if (decisionInFlight()) return;
+    setSelected(note.id);
+    openPanel();
 
-  const selectAnnotation = useCallback((id: string | null) => {
+    return changeNotes([...notes, note]);
+  }, [notes, changeNotes, decisionInFlight, openPanel]);
+
+  const reply = useCallback((root: string, text: string) => changeNotes([
+    ...notes,
+    { id: crypto.randomUUID(), type: "REPLY", inReplyTo: root, text, author: "owner", createdA: Date.now() },
+  ]), [notes, changeNotes]);
+
+  const selectNote = useCallback((id: string | null) => {
     setSelected(id);
 
-    if (id !== null) setPanelOpen(true);
-  }, []);
+    if (id !== null) openPanel();
+  }, [openPanel]);
 
   if (!plan) {
     return (
@@ -335,7 +347,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
         <div className="max-w-sm text-center">
           <NotePencilIcon size={30} className="mx-auto mb-3 text-muted-foreground" />
           <h3 className="text-sm font-medium text-foreground">No plan submitted yet</h3>
-          <p className="mt-1 text-xs text-muted-foreground">Choose Plan in the composer. The agent investigates and submits a plan for your review.</p>
+          <p className="mt-1 text-xs text-muted-foreground">Ask the agent for a plan, or choose Plan in the composer. The agent investigates and submits a plan for your review.</p>
         </div>
       </div>
     );
@@ -347,8 +359,8 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
   };
 
   const updatedAt = new Date(plan.updatedAt);
-  const CopyStateIcon = COPY_ICON[copyStatus];
   const retryLabel = plan.status === "approved" ? "Retry implementation" : "Retry revision";
+  const reviewing = editable && decisionBusy === null;
 
   return (
     <section
@@ -373,12 +385,12 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
               <div id="plan-document-title" data-plan-title className="p-display p-text mt-2 text-2xl leading-tight sm:text-3xl">
                 <Viewer
                   blocks={titleBlocks}
-                  annotations={titleAnnotations}
-                  onAddAnnotation={addAnnotation}
-                  onSelectAnnotation={selectAnnotation}
+                  annotations={titlePassages}
+                  onAddAnnotation={addNote}
+                  onSelectAnnotation={selectNote}
                   selectedAnnotationId={selected}
                   mode={mode}
-                  readOnly={!editable || decisionBusy !== null}
+                  readOnly={!reviewing}
                 />
               </div>
             )}
@@ -386,9 +398,9 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
               <time className="p-annotation p-text-3" dateTime={updatedAt.toISOString()} title={updatedAt.toLocaleString()}>
                 Updated {updatedAt.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
               </time>
-              {saving && <span aria-live="polite" className="p-annotation p-info">Saving annotations…</span>}
+              {saving && <span aria-live="polite" className="p-annotation p-info">Saving comments…</span>}
             </div>
-            {editable && annotations.length === 0 && (
+            {editable && roots.length === 0 && (
               <p className="p-meta p-text-3 mt-2">Select text to comment or mark it for removal.</p>
             )}
           </div>
@@ -397,23 +409,15 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
             <Button
               type="button"
               size="sm"
-              variant="ghost"
-              onClick={() => copy(plan.content)}
-              icon={<CopyStateIcon size={13} />}
-              aria-live="polite"
-            >
-              {copyLabel(copyStatus)}
-            </Button>
-            <Button
-              type="button"
-              size="sm"
               variant={panelOpen ? "secondary" : "ghost"}
-              onClick={() => panelOpen ? closePanel() : setPanelOpen(true)}
+              onClick={() => panelOpen ? closePanel() : openPanel()}
               icon={<ChatCircleDotsIcon size={13} />}
               aria-expanded={panelOpen}
-              data-plan-annotations-toggle
+              aria-label={`Comments, ${String(roots.length)}${unread ? ", new replies" : ""}`}
+              data-plan-comments-toggle
             >
-              Annotations <span className="p-num">{annotations.length}</span>
+              Comments <span className="p-num">{roots.length}</span>
+              {unread && <span data-plan-comments-unread className="size-1.5 rounded-full p-dot-accent" aria-hidden="true" />}
             </Button>
             {editable && (
               <div className="flex items-center rounded-md border p-border p-recessed p-0.5" aria-label="Annotation mode">
@@ -451,12 +455,12 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
             <Viewer
               blocks={documentBlocks}
               frontmatter={frontmatter}
-              annotations={documentAnnotations}
-              onAddAnnotation={addAnnotation}
-              onSelectAnnotation={selectAnnotation}
+              annotations={documentPassages}
+              onAddAnnotation={addNote}
+              onSelectAnnotation={selectNote}
               selectedAnnotationId={selected}
               mode={mode}
-              readOnly={!editable || decisionBusy !== null}
+              readOnly={!reviewing}
             />
           </div>
         </div>
@@ -464,29 +468,48 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
           <button
             type="button"
             data-plan-scrim
-            aria-label="Close annotations"
+            aria-label="Close comments"
             className="p-scrim"
             onClick={closePanel}
           />
         )}
         <AnnotationPanel
           isOpen={panelOpen}
-          annotations={annotations}
+          title="Comments"
+          annotations={roots.map(editorAnnotationOf)}
           selectedId={selected}
           onSelect={setSelected}
           onDelete={(id) => {
             if (selected === id) setSelected(null);
 
-            return changeAnnotations(annotations.filter((annotation) => annotation.id !== id));
+            return changeNotes(notes.filter((note) => note.id !== id && !(note.type === "REPLY" && note.inReplyTo === id)));
           }}
-          onEdit={(id, updates) => changeAnnotations(annotations.map((annotation) => annotation.id === id ? { ...annotation, ...updates } : annotation))}
+          onEdit={(id, updates) => changeNotes(notes.map((note) => (
+            note.id === id && isRoot(note) && updates.text !== undefined ? { ...note, text: updates.text } : note
+          )))}
           onClose={closePanel}
-          readOnly={!editable || decisionBusy !== null}
+          readOnly={!reviewing}
+          isLocked={(annotation) => rootsById.get(annotation.id)?.revision !== undefined}
+          placeOf={(annotation) => {
+            const from = rootsById.get(annotation.id)?.revision;
+
+            return from === undefined ? undefined : `From revision ${String(from)}`;
+          }}
+          renderThread={(annotation) => (
+            <CommentThread
+              replies={replies.filter((each) => each.inReplyTo === annotation.id)}
+              agentName={agentName}
+              seenAt={seen.since}
+              onReply={reviewing ? (text) => reply(annotation.id, text) : undefined}
+              onDelete={reviewing ? (id) => changeNotes(notes.filter((note) => note.id !== id)) : undefined}
+            />
+          )}
           width="min(var(--plan-rail-width), 100%)"
         />
       </div>
 
-      <footer data-plan-footer className="p-surface shrink-0 border-t p-border px-4 py-3">
+      {/* Sticky, so the decision stays in reach when an ancestor, not the plan's own scroller, scrolls. */}
+      <footer data-plan-footer className="p-surface sticky bottom-0 z-10 shrink-0 border-t p-border px-4 py-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           {error ? (
             <p role="alert" className="p-notice-danger p-meta px-3 py-2 sm:mr-auto">{error}</p>
@@ -503,14 +526,14 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
                 size="sm"
                 variant="secondary"
                 onClick={() => detach(Effect.promise(async () => decide("request_changes")))}
-                disabled={decisionBusy !== null || saving || annotations.length === 0}
+                disabled={decisionBusy !== null || saving || written.length === 0}
               >
                 {decisionBusy === "request" ? <Loader size="sm" /> : "Request changes"}
               </Button>
               <FilledButton
                 className="w-full sm:w-auto"
                 onClick={() => detach(Effect.promise(async () => decide("approve")))}
-                disabled={decisionBusy !== null || saving || annotations.length > 0}
+                disabled={decisionBusy !== null || saving || written.length > 0}
               >
                 {decisionBusy === "approve" ? <Loader size="sm" /> : <><CheckCircleIcon size={14} />Approve &amp; implement</>}
               </FilledButton>

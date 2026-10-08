@@ -5,7 +5,7 @@ import { AnnotationToolbar } from "@plannotator/ui/components/AnnotationToolbar"
 import { CommentPopover } from "@plannotator/ui/components/CommentPopover";
 import { AnnotationType } from "@plannotator/ui/types";
 import {
-  ALL_CHANGES_BLOCK, anchoredText, createPlanAnnotationSaveQueue, type ChangeNotesResult, type DiffAnchor, type FileDiff, type ReviewAnnotation,
+  anchoredText, createPlanAnnotationSaveQueue, type ChangeNote, type ChangeNotesResult, type DiffAnchor, type FileDiff,
 } from "@kinu.run/core";
 import { describeError } from "@/hooks/use-async-resource";
 import { storedType } from "../annotation-type";
@@ -39,18 +39,21 @@ function followingElement(range: Range | null): HTMLElement {
   return element;
 }
 
-function nextId(notes: readonly ReviewAnnotation[]): string {
+function nextId(notes: readonly ChangeNote[]): string {
   return `note-${String(notes.length + 1)}-${String(Date.now())}`;
 }
 
-export function noteOf(fields: { id: string; type: AnnotationType; quote: string; createdA: number; anchor?: DiffAnchor; text?: string }): ReviewAnnotation {
+/** A note on a place in the changes, or, without `anchor`, on all of them: that one has no block, offsets or quote. */
+export function noteOf(fields: { id: string; type: AnnotationType; quote: string; createdA: number; anchor?: DiffAnchor; text?: string }): ChangeNote {
   const { anchor, text } = fields;
-  const lines = anchor === undefined || anchor.scope === "file" ? { startOffset: 0, endOffset: 0 } : { startOffset: anchor.lineStart, endOffset: anchor.lineEnd };
+
+  if (anchor === undefined) return { id: fields.id, type: "GLOBAL_COMMENT", text: text ?? "", createdA: fields.createdA };
+  const lines = anchor.scope === "file" ? { startOffset: 0, endOffset: 0 } : { startOffset: anchor.lineStart, endOffset: anchor.lineEnd };
+  const type = storedType(fields.type);
 
   return {
-    id: fields.id, type: storedType(fields.type), originalText: fields.quote, createdA: fields.createdA,
-    blockId: anchor === undefined ? ALL_CHANGES_BLOCK : anchor.path, ...lines,
-    ...(anchor !== undefined && { anchor }), ...(text !== undefined && { text }),
+    id: fields.id, type: type === "DELETION" ? "DELETION" : "COMMENT", originalText: fields.quote, createdA: fields.createdA,
+    blockId: anchor.path, ...lines, anchor, ...(text !== undefined && { text }),
   };
 }
 
@@ -61,7 +64,8 @@ function quoteOf(anchor: DiffAnchor, files: readonly FileDiff[]): string | null 
   return file === undefined ? null : anchoredText(file, anchor);
 }
 
-function moved(note: ReviewAnnotation, files: readonly FileDiff[]): boolean {
+function moved(note: ChangeNote, files: readonly FileDiff[]): boolean {
+  if (note.type === "GLOBAL_COMMENT") return false;
   const anchor = note.anchor;
 
   if (anchor === undefined || anchor.scope === "file") return false;
@@ -75,7 +79,7 @@ function moved(note: ReviewAnnotation, files: readonly FileDiff[]): boolean {
 /** Each answers the change-set notes' result; a transport failure is already folded into its `error`. */
 export interface NotesStore {
   load(): Effect.Effect<ChangeNotesResult>;
-  save(notes: readonly ReviewAnnotation[]): Effect.Effect<ChangeNotesResult>;
+  save(notes: readonly ChangeNote[]): Effect.Effect<ChangeNotesResult>;
   send(): Effect.Effect<ChangeNotesResult>;
 }
 
@@ -89,12 +93,12 @@ export function NotesProvider({ baseline, files, store, initial = [], writing, n
   baseline: string;
   files: readonly FileDiff[];
   store: NotesStore | null;
-  initial?: readonly ReviewAnnotation[];
+  initial?: readonly ChangeNote[];
   writing?: OpenDraft;
   now: () => number;
   children: ReactNode;
 }) {
-  const [notes, setNotes] = useState<readonly ReviewAnnotation[]>(initial);
+  const [notes, setNotes] = useState<readonly ChangeNote[]>(initial);
   const [draft, setDraft] = useState<Draft | null>(() => (writing === undefined ? null : { ...writing, target: followingElement(null), stage: "comment" }));
   const [selected, setSelected] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -102,7 +106,7 @@ export function NotesProvider({ baseline, files, store, initial = [], writing, n
   const touched = useRef(false);
   const failed = (...rejection: [unknown]): void => { setFailure(describeError({ cause: rejection[0] })); };
 
-  const saves = useMemo(() => (store === null ? null : createPlanAnnotationSaveQueue<ReviewAnnotation>((next) => settle(Effect.map(store.save(next), (saved) => {
+  const saves = useMemo(() => (store === null ? null : createPlanAnnotationSaveQueue<ChangeNote>((next) => settle(Effect.map(store.save(next), (saved) => {
     setFailure(saved.ok ? null : saved.error);
 
     return saved.ok;
@@ -122,7 +126,7 @@ export function NotesProvider({ baseline, files, store, initial = [], writing, n
     return () => { live = false; };
   }, [store]);
 
-  const change = useCallback((next: readonly ReviewAnnotation[]): void => {
+  const change = useCallback((next: readonly ChangeNote[]): void => {
     touched.current = true;
     setNotes(next);
     detach(saves === null ? Effect.void : Effect.catchCause(Effect.promise(() => saves.enqueue(next)), (cause) => Effect.sync(() => failed(Cause.squash(cause)))));

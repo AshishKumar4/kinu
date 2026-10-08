@@ -2,7 +2,7 @@
  * Design-system gallery: the real components over mock data, so signed-in surfaces can be screenshotted without auth.
  * Served by gallery.vite.config.ts; `?frame=` selects a frame (full list: the dispatch in `mount()`). /api/user/* GETs are stubbed in-page.
  */
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Link, MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
@@ -51,7 +51,7 @@ import { QualityView } from "@/components/surfaces/evolution-panels";
 import { Modal } from "@/components/ui/Modal";
 import { inputCls } from "@/components/ui/form";
 import { FeedbackButton } from "@/components/FeedbackButton";
-import { FEEDBACK_ENDPOINT } from "@kinu.run/core";
+import { admitReviewAnnotations, FEEDBACK_ENDPOINT } from "@kinu.run/core";
 import { CLIENT_ERROR_ENDPOINT } from "@kinu.run/core";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AgentsNavProvider } from "@/hooks/use-agents-nav";
@@ -1665,16 +1665,40 @@ const GALLERY_PLAN_CONTENTS = new Map([
 
 const GALLERY_PLAN_CONTENT = GALLERY_PLAN_CONTENTS.get(GALLERY_PLAN_VARIANT ?? "") ?? GALLERY_PLAN_MARKDOWN;
 
-const GALLERY_PLAN_ANNOTATIONS: readonly ReviewAnnotation[] =
-  GALLERY_PLAN_VARIANT === "annotated-heading" ? [GALLERY_PLAN_TITLE_NOTE] : [];
+/* A review the owner sent back: a comment on a passage and one on the whole plan, each answered by the agent. */
+const GALLERY_PLAN_THREAD: readonly ReviewAnnotation[] = [
+  {
+    id: "gallery-plan-scope", type: "COMMENT", blockId: "block-1", startOffset: 0, endOffset: 64, author: "Owner",
+    originalText: "The checkout accepts archived coupons because the eligibility guard",
+    text: "Does this also cover coupons whose campaign expires mid-checkout?", createdA: NOW - 20 * 60e3,
+  },
+  { id: "gallery-plan-all", type: "GLOBAL_COMMENT", text: "Split the route change into its own step so it can ship later.", author: "Owner", createdA: NOW - 19 * 60e3 },
+  {
+    id: "gallery-plan-reply-scope", type: "REPLY", inReplyTo: "gallery-plan-scope", author: "agent", createdA: NOW - 2 * 60e3,
+    text: "Yes: the guard reads the campaign inside the same transaction, so an expiry between reads is caught. The revision says so in Scope.",
+  },
+  {
+    id: "gallery-plan-reply-all", type: "REPLY", inReplyTo: "gallery-plan-all", author: "agent", createdA: NOW - 60e3,
+    text: "The route adapter needs no change, so there is no route step to split; the revision drops it from Files.",
+  },
+];
 
-const GALLERY_PLAN_STATUS: PlanReview["status"] =
-  GALLERY_PLAN_VARIANT === "read-only" ? "superseded" : "pending";
+/* `threads`: the next revision, carrying that exchange read-only; `replied`: the revision sent back, as the replies land. */
+const GALLERY_PLAN_ANNOTATIONS: readonly ReviewAnnotation[] = new Map<string | null, readonly ReviewAnnotation[]>([
+  ["annotated-heading", [GALLERY_PLAN_TITLE_NOTE]],
+  ["threads", GALLERY_PLAN_THREAD.map((note) => ({ ...note, revision: 1 }))],
+  ["replied", GALLERY_PLAN_THREAD],
+]).get(GALLERY_PLAN_VARIANT) ?? [];
+
+const GALLERY_PLAN_STATUS: PlanReview["status"] = new Map<string | null, PlanReview["status"]>([
+  ["read-only", "superseded"],
+  ["replied", "changes_requested"],
+]).get(GALLERY_PLAN_VARIANT) ?? "pending";
 
 let galleryAgentPlan: PlanReview = {
   id: "gallery-agent-plan",
   sessionId: "default",
-  revision: 1,
+  revision: GALLERY_PLAN_VARIANT === "threads" ? 2 : 1,
   content: GALLERY_PLAN_CONTENT,
   status: GALLERY_PLAN_STATUS,
   annotations: GALLERY_PLAN_ANNOTATIONS,
@@ -1852,6 +1876,10 @@ let annotationSavesInFlight = 0;
 
 async function galleryAnnotationSave(args?: unknown[]): Promise<JsonValue> {
   const [, , annotations] = v.parse(v.tuple([v.string(), v.number(), v.array(v.looseObject({ text: v.optional(v.string()) }))]), args);
+  // The store's own admission, so the gallery refuses what the workspace would.
+  const admitted = admitReviewAnnotations({ value: annotations, kept: galleryAgentPlan.annotations.filter((note) => note.revision !== undefined) });
+
+  if (Result.isFailure(admitted)) return { ok: false, error: admitted.failure.error };
   const root = document.documentElement;
 
   annotationSavesAsked += 1;

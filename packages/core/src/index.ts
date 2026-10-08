@@ -483,7 +483,7 @@ export {
   type ToolReach,
   type BuiltinToolName,
   type BuiltinToolSpec,
-  REPORT_TOOL, SUBMIT_PLAN_TOOL, DEPS_GATED_TOOLS,
+  REPORT_TOOL, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, DEPS_GATED_TOOLS,
 } from './tools/registry';
 
 export {
@@ -1312,6 +1312,10 @@ export {
   PlanReviewStore,
   PlanReviewSchema,
   admitReviewAnnotations,
+  ReviewAnnotationSchema,
+  freshNotes,
+  planAwaitingReply,
+  reviewFeedbackText,
   DiffAnchorSchema,
   applyPlanEdits,
   formatPlanWithLineNumbers,
@@ -1328,6 +1332,9 @@ export {
   type PlanAnnotationTextPosition,
   type PlanReview,
   type ReviewAnnotation,
+  type GeneralNote,
+  type NoteReply,
+  type PassageNote,
   type DiffAnchor,
   type DiffSide,
   type PlanReviewDecision,
@@ -1335,6 +1342,7 @@ export {
   type PlanReviewStatus,
   type PlanReviewStoreOptions,
   type SubmitPlanToolDeps,
+  type ReplyToCommentToolDeps,
 } from './plans/index';
 
 export {
@@ -1898,10 +1906,10 @@ export {
 } from './read-models/change-view';
 
 export {
-  ALL_CHANGES_BLOCK, changeNotesCard, initChangeNotesTable, inNoteOrder, readChangeNotes, saveChangeNotes, sendChangeNotes,
+  ALL_CHANGES_BLOCK, changeNoteAnchor, changeNotesCard, initChangeNotesTable, inNoteOrder, readChangeNotes, saveChangeNotes, sendChangeNotes,
 } from './read-models/change-notes';
 
-export type { ChangeNotesCard, ChangeNotesResult, NotedChanges } from './read-models/change-notes';
+export type { ChangeNote, ChangeNotesCard, ChangeNotesResult, NotedChanges } from './read-models/change-notes';
 
 export type {
   ChangeBlock, ChangeBody, ChangePair, ChangeRow, ChangeSet, ChangeSpan, ChangeTreeRow,

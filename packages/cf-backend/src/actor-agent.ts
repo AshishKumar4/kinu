@@ -124,7 +124,7 @@ import {
   inheritedContextFromTranscript,
   PlanReviewActions, planHandoffStillOwed, type PlanDecisionOutcome,
   type PlanEdit, type PlanReview, type ReviewAnnotation,
-  type PlanReviewDecision, type PlanReviewResult, type SubmitPlanToolDeps,
+  type PlanReviewDecision, type PlanReviewResult, type ReplyToCommentToolDeps, type SubmitPlanToolDeps,
   answerParentRpc,
   type ParentExecResult,
   type ParentRpcWrite,
@@ -159,7 +159,7 @@ import {
   resolveModelRoute, completeOnRoute, routedLlm, tierRefusals, type TierRefusals, type ModelRouteResolution,
   narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, requireCodemodeMember, inWorkMode,
   toolSurfaceTokens, McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
-  SUBMIT_PLAN_TOOL, REPORT_TOOL,
+  SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ProfileCatalogEnvelope,
   toolsInWorkMode, type TaskPlan, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
@@ -387,8 +387,10 @@ export interface ActorToolDeps {
   peers?: PeersToolDeps;
   /** Subordinate-only. */
   report?: ReportDeps;
-  /** Present on actors whose current turn belongs to the owner; surfaced only in Plan mode. */
+  /** Present on actors whose current turn belongs to the owner, in either mode. */
   submitPlan?: SubmitPlanToolDeps;
+  /** Present while the owner's sent-back review holds comments the agent may answer. */
+  replyToComment?: ReplyToCommentToolDeps;
 }
 
 /** BUILTIN_TOOLS filtered to what this actor's deps wire; the prompt and activeTools must not
@@ -715,6 +717,11 @@ export abstract class ActorAgent extends Agent<Env> {
 
   protected submitPlanEdits(edits: readonly PlanEdit[]): PlanReviewResult | Promise<PlanReviewResult> {
     return this.planActions.submit(edits, this.turnDrivingMetadata());
+  }
+
+  /** The reply tool's deps while the owner's sent-back review awaits answers; absent otherwise. */
+  protected planReplyDeps(): ReplyToCommentToolDeps | undefined {
+    return this.planActions.awaitingReply() ? { reply: (comment, text) => this.planActions.reply(comment, text) } : undefined;
   }
 
   /** An agent's window reviews that agent's plans, which live in its own isolate; the root's window, the root's. */
@@ -3792,7 +3799,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const profileKey = actorActiveTools(actorDeps).join(',');
     // Key includes crafted_tools quality (score filtering depends on recency) and the actor profile,
     // so an owner chat never reuses an assigned turn's upward-reporting surface.
-    const cacheKey = `${mode}:${profileKey}:${this.operationProfile()?.profile.digest ?? ''}:${this._craftCacheKey()}:${String(this._accountSwarms)}`;
+    const cacheKey = `${mode}:${profileKey}:${this.operationProfile()?.profile.digest ?? ''}:${this._craftCacheKey()}:${String(this._accountSwarms)}:${String(actorDeps.replyToComment !== undefined)}`;
 
     // Only the chat surface is cached; a scoped rollout's surface is built once per rollout.
     if (claimScope === undefined && this._cachedTools && cacheKey === this._cachedToolsKey) {
@@ -3842,7 +3849,9 @@ export abstract class ActorAgent extends Agent<Env> {
 
       if (actorDeps.report) builtinDeps.report = actorDeps.report;
 
-      if (mode === 'plan' && actorDeps.submitPlan) builtinDeps.submitPlan = actorDeps.submitPlan;
+      if (actorDeps.submitPlan) builtinDeps.submitPlan = actorDeps.submitPlan;
+
+      if (actorDeps.replyToComment) builtinDeps.replyToComment = actorDeps.replyToComment;
       const toolsets = buildActorTools(builtinDeps);
 
       if (claimScope === undefined) {
@@ -4230,7 +4239,10 @@ export abstract class ActorAgent extends Agent<Env> {
       toolset: (mode) => (mode === input.requestedWorkMode ? input.tools : this.actorToolsets(mode).turn),
       // MCP tools were admitted against the request's model in `readTurnInputs`.
       externalTools: async () => ({ ...extensionTools, ...reads.mcpTools }),
-      wiredToolNames: (mode) => (mode === 'plan' && turnActorDeps.submitPlan ? [SUBMIT_PLAN_TOOL] : []),
+      wiredToolNames: () => [
+        ...(turnActorDeps.submitPlan ? [SUBMIT_PLAN_TOOL] : []),
+        ...(turnActorDeps.replyToComment ? [REPLY_TO_COMMENT_TOOL] : []),
+      ],
       // `agent` / `llm` are reachable only inside `eval`: derived from the providers wired for this mode.
       codemodeCapabilities: (mode) => codemodeCapabilitiesFor(this.ownNamespaces(mode)),
       agentsActions: () => actorAgentsActions(turnActorDeps, this._accountSwarms === true),

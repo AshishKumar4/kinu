@@ -1,4 +1,4 @@
-export { MAX_PLAN_ANNOTATIONS_BYTES, admitReviewAnnotations, DiffAnchorSchema } from './annotation-admission';
+export { MAX_PLAN_ANNOTATIONS_BYTES, admitReviewAnnotations, DiffAnchorSchema, ReviewAnnotationSchema } from './annotation-admission';
 
 export {
   MAX_PLAN_CONTENT_BYTES,
@@ -6,6 +6,9 @@ export {
   PlanReviewStore,
   PlanReviewSchema,
   applyPlanEdits,
+  freshNotes,
+  planAwaitingReply,
+  reviewFeedbackText,
   formatPlanWithLineNumbers,
   initPlanReviewTable,
   listPendingPlanReviews,
@@ -20,6 +23,9 @@ export {
   type PlanAnnotationTextPosition,
   type PlanReview,
   type ReviewAnnotation,
+  type GeneralNote,
+  type NoteReply,
+  type PassageNote,
   type DiffAnchor,
   type DiffSide,
   type PlanReviewDecision,
@@ -27,4 +33,5 @@ export {
   type PlanReviewStatus,
   type PlanReviewStoreOptions,
   type SubmitPlanToolDeps,
+  type ReplyToCommentToolDeps,
 } from './review';
