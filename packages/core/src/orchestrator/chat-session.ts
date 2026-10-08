@@ -52,7 +52,7 @@ import type { MessageReference } from '../session/messages';
 import type { ContextSelection } from '../session/context';
 import { subordinateTurnContext } from '../subordinates/support';
 import { taskTurnEnding, type OwedReport, type TaskTurnEnding } from '../subordinates/temporary';
-import { TURN_END_METADATA_KEY } from '../read-models/background-event';
+import { TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY } from '../read-models/background-event';
 import { TaskReminders, TASK_REMINDER_EVENT } from '../tasks/reminder';
 import type { TaskListStore } from '../tools/task-store';
 import { inheritedAsModelMessage } from '../heads/head-inference';
@@ -192,9 +192,13 @@ export interface OwedTerminalEffectsInput {
 }
 
 async function answerMetadata(
-  ports: ChatSessionPorts, turnId: string, texts: () => Promise<readonly string[]>, ending: string,
+  ports: ChatSessionPorts, turnId: string, texts: () => Promise<readonly string[]>, end: RunEndClassification,
 ): Promise<JsonObject | null> {
-  const metadata: JsonObject = { ...await ports.answerMetadata?.(turnId, texts), ...(ending === 'incomplete' && { [TURN_END_METADATA_KEY]: ending }) };
+  const metadata: JsonObject = {
+    ...await ports.answerMetadata?.(turnId, texts),
+    ...(end.reason === 'incomplete' && { [TURN_END_METADATA_KEY]: end.reason }),
+    ...(end.error !== undefined && { [TURN_FAILURE_METADATA_KEY]: end.error }),
+  };
 
   return Object.keys(metadata).length === 0 ? null : metadata;
 }
@@ -1205,7 +1209,7 @@ export class ChatSession {
     const finalText = execution.claim === null ? execution.finalTextReference
       : await this.actorSession.recordTranscriptText(execution.claim, 'answer', fullText, execution.outputReferences);
 
-    const metadata = await answerMetadata(this.ports, lease.turnId, () => this.transcript.narration(answerParts(execution.outputPartReferences, finalText)), end.reason);
+    const metadata = await answerMetadata(this.ports, lease.turnId, () => this.transcript.narration(answerParts(execution.outputPartReferences, finalText)), end);
 
     const preparedAssistant = streamed || !interrupted ? await this.transcript.prepareAssistant({
       id: this.messageId, turnId: lease.turnId, runId: lease.runId, parts: execution.outputPartReferences, finalText,

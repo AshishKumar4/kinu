@@ -152,6 +152,13 @@ export function endedMidWork(row: { metadata: unknown }): boolean {
   return metadataField(row, TURN_END_METADATA_KEY, v.string()) === 'incomplete';
 }
 
+/** Metadata key on a settled answer whose turn failed: the failure in its own words, a provider's refusal in the provider's. */
+export const TURN_FAILURE_METADATA_KEY = 'kinuTurnFailure';
+
+export function turnFailure(row: { metadata: unknown }): string | null {
+  return metadataField(row, TURN_FAILURE_METADATA_KEY, v.string()) ?? null;
+}
+
 export interface SignalCard {
   readonly id: string;
   readonly metadata: Readonly<JsonObject>;

@@ -641,7 +641,8 @@ function SubordinateChatColumn({
           rows={(before) => thread.entries.map(({ message: msg, steers }, i) => (
             <Fragment key={msg.id}>
               {before(msg.id)}
-              <MessageView message={msg} steers={steers} answerSlates={answerChat} liveTail={i === thread.entries.length - 1 ? tail : null} />
+              <MessageView message={msg} steers={steers} answerSlates={answerChat} liveTail={i === thread.entries.length - 1 ? tail : null}
+                onRetry={i === thread.entries.length - 1 && !live ? state.retryLastMessage : undefined} />
             </Fragment>
           ))}>
           <ChatLiveTail tail={tail} />
@@ -1185,6 +1186,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
                       steers={steers}
                       answerSlates={WORKSPACE_CHAT}
                       liveTail={i === thread.entries.length - 1 ? mainTail : null}
+                      onRetry={i === thread.entries.length - 1 && !live ? state.retryLastMessage : undefined}
                       onFork={onForkMessage}
                       onFeedback={onMessageFeedback}
                       feedback={feedbackByMessage[msg.id] ?? null}
