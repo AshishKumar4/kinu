@@ -616,7 +616,8 @@ describe('one workspace database, many logical actors', () => {
 
     await run([1], undefined, 'work');
     expect((await recoverActorTurns(fx.host)).stalled.map((turn) => turn.claim.turnId)).toEqual(['turn-a']);
-    expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'settled', outcome: 'error', epoch: 2 * POISON_WORK_CUTS });
+    // The run that finished a step and was then cut in its work is the first of the six.
+    expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'settled', outcome: 'error', epoch: (POISON_WORK_CUTS - 1) + POISON_WORK_CUTS });
     fx.host.releaseAll();
     fx.db.close();
   });

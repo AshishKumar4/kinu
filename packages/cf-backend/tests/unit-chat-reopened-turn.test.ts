@@ -27,6 +27,7 @@ import {
 } from './helpers/actor-harness';
 import { answeringGateway, requestOf, stubAiBinding, toolCallCompletion, type StubbedAiBinding } from './helpers/platform-gateway';
 import { socketConnection } from './helpers/bindings';
+import { joinHarnessFibers } from './helpers/agents-sdk';
 
 const FrameSchema = v.looseObject({
   type: v.string(), id: v.optional(v.string()), body: v.optional(v.string()), done: v.optional(v.boolean()),
@@ -435,6 +436,21 @@ test("a person's open tab redials into each re-drive across two restarts and dra
 /** Cuts in a step's own work that settle a turn (D12). */
 const POISON_WORK_CUTS = 6;
 
+/**
+ * Until `holds`, in real time, joining fibers between looks: a re-opened turn's resume runs through the activation's
+ * recovery and the re-read history, which grow with each reset, so an event-loop lap count is no bound for it.
+ */
+async function eventually(holds: () => boolean, what: string): Promise<void> {
+  for (let waited = 0; waited < 300; waited += 1) {
+    await joinHarnessFibers();
+
+    if (holds()) return;
+    await Bun.sleep(50);
+  }
+
+  throw new Error(`${what}: never held in 15 s`);
+}
+
 /** The claim of the turn `id`, as the next decision reads it. */
 function claimOf(harness: StartedHarness, id: string): { outcome: string | null; epoch: number } | null {
   return harness.db.query<{ outcome: string | null; epoch: number }, [string]>('SELECT outcome, epoch FROM actor_turn_claims WHERE turn_id = ?').get(id);
@@ -503,7 +519,7 @@ test('a turn cut while it waits on the provider, at one step, by six resets in a
     await last.started;
     await last.agent.terminalRetryPass();
     const final = last;
-    await until(() => claimOf(final, 'req-outside')?.outcome != null, 'the turn ended');
+    await eventually(() => claimOf(final, 'req-outside')?.outcome != null, 'the turn ended');
 
     expect(claimOf(last, 'req-outside')).toEqual({ outcome: 'completed', epoch: 7 });
     expect(answering.runs.length).toBe(1);
@@ -537,7 +553,7 @@ test('a step that ends its own process every time it runs is settled at the sixt
       await last.started;
       await last.agent.terminalRetryPass();
       const current = last;
-      await until(() => asked.n === run || claimOf(current, 'req-poison')?.outcome != null, `activation ${String(run)} decided`);
+      await eventually(() => asked.n === run || claimOf(current, 'req-poison')?.outcome != null, `activation ${String(run)} decided`);
     }
   } finally {
     setSystemTime();
@@ -569,7 +585,7 @@ test('a turn cut inside its own work is asked again only after the backoff, whic
   expect(armedWakes(second.db).some((wake) => wake.time > Date.now())).toBe(true);
 
   // The process that holds it asks once the backoff (the shared one, 2 s for a first cut) is over.
-  for (let waited = 0; waited < 100 && claimOf(second, 'req-backoff')?.outcome == null; waited += 1) await Bun.sleep(100);
+  await eventually(() => claimOf(second, 'req-backoff')?.outcome != null, 'the turn ran after its backoff');
   expect(answering.runs.length).toBe(1);
   expect(claimOf(second, 'req-backoff')).toEqual({ outcome: 'completed', epoch: 2 });
 });
