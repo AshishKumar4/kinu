@@ -470,10 +470,9 @@ describe('a capability reached through codemode counts as used', () => {
     expect(buildAdvisorPrompt(swarmed('```js\nawait agents.swarm({})\n```'), ['agents'])).toContain('did not use: (none recorded)');
   });
 
-  test('a shared namespace reports both its capabilities reached, never neither', () => {
-    // `shell` and `file` both reach `workspace`; over-reporting reach is harmless here.
-    const prompt = buildAdvisorPrompt(swarmed('await workspace.exec("ls")'), ['shell', 'file']);
-    expect(prompt).toContain('did not use: (none recorded)');
+  test('each capability is reached through its own namespace', () => {
+    expect(buildAdvisorPrompt(swarmed('await workspace.exec("ls")'), ['shell', 'file'])).toContain('did not use: file');
+    expect(buildAdvisorPrompt(swarmed('await file.read("a.md")'), ['shell', 'file'])).toContain('did not use: shell');
   });
 });
 
