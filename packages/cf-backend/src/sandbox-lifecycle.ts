@@ -55,8 +55,6 @@ const STAGE_KEYS: readonly IncidentStage[] = Object.keys(STAGE_CONSEQUENCE).filt
 
 const SANDBOX_LIFECYCLE_STAGES = STAGE_KEYS;
 
-export type SandboxLifecycleStage = IncidentStage;
-
 /** Required `attempts` cannot be derived here, so older envelopes are refused, never defaulted. */
 const SANDBOX_LIFECYCLE_ENVELOPE_VERSION = 2;
 

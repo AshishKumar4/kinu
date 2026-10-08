@@ -2235,6 +2235,8 @@ export {
   type SessionRecoveryCallbacks, type SessionRecoveryOptions, type SessionRecovery,
 } from './utils/session-recovery';
 
+export { loadRouteChunk } from './utils/chunk-recovery';
+
 export {
   isModelInferenceCredentialKey,
 } from './providers/inference-credentials';

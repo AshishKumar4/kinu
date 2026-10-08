@@ -24,7 +24,8 @@ import type { HTTPRequest, Page } from 'puppeteer';
 import { renderThrownChain, detach } from '@kinu.run/core/obs';
 
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
-import { CHUNK_FIXED_KEY, CHUNK_RELOAD_KEY } from '../../packages/cf-backend/src/lazy-route';
+import { CHUNK_FIXED_KEY } from '../../packages/cf-backend/src/lazy-route';
+import { CHUNK_RELOAD_KEY } from '../../packages/core/src/utils/chunk-recovery';
 
 const LOADED_SHA = 'abc1234';
 
