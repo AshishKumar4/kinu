@@ -30,26 +30,33 @@ function fence(text: string): string {
   return `${marks}\n${chunked(text.replace(/\n$/, ''))}\n${marks}`;
 }
 
-/** Inline for a short scalar, fenced for anything that would otherwise be one long line. */
-function value(json: JsonValue | undefined): string {
+/** Inline for a short scalar, fenced for anything that would otherwise be one long line; past `clip` characters, cut. */
+function value(json: JsonValue | undefined, clip = Infinity): string {
   if (json === undefined) return '_none_';
-  const text = redact(v.is(v.string(), json) ? json : JSON.stringify(json, null, 2));
+  const whole = redact(v.is(v.string(), json) ? json : JSON.stringify(json, null, 2));
+  const text = whole.length > clip ? `${whole.slice(0, clip)}\u2026 (${String(whole.length - clip)} more characters)` : whole;
 
   return text.includes('\n') || text.length > 120 || text.includes('`') ? `\n${fence(text)}` : `\`${text}\``;
 }
 
-function entry(event: TranscriptEntry): string {
+/** How much of each part a trimmed trajectory keeps: what the model said and asked whole enough to judge, and the
+ *  answers it got cut to their start, which says whether a call worked. */
+export type Clip = { readonly said: number; readonly asked: number; readonly answered: number };
+
+const WHOLE: Clip = { said: Infinity, asked: Infinity, answered: Infinity };
+
+function entry(event: TranscriptEntry, clip: Clip): string {
   switch (event.type) {
     case 'message':
       // Fenced rather than inlined: an agent's Markdown would otherwise add headings to this document.
-      return `**${event.role}** ${value(event.content)}`;
+      return `**${event.role}** ${value(event.content, clip.said)}`;
     case 'tool_call':
       return [`\u2192 \`${event.name}\` \`${event.id}\``,
-        ...Object.entries(event.arguments ?? {}).map(([key, argument]) => `- ${key}: ${value(argument)}`)].join('\n');
+        ...Object.entries(event.arguments ?? {}).map(([key, argument]) => `- ${key}: ${value(argument, clip.asked)}`)].join('\n');
     case 'tool_result':
       return event.error !== undefined
-        ? `\u2190 \`${event.name ?? 'tool'}\` failed: ${value(event.error.message)}`
-        : `\u2190 \`${event.name ?? 'tool'}\`: ${value(event.content)}`;
+        ? `\u2190 \`${event.name ?? 'tool'}\` failed: ${value(event.error.message, clip.answered)}`
+        : `\u2190 \`${event.name ?? 'tool'}\`: ${value(event.content, clip.answered)}`;
   }
 }
 
@@ -65,8 +72,8 @@ function stepTokens(step: StepUsage): string {
     + `${count(uncached)} uncached · ${count(step.cacheReadTokens)} cache read · ${count(step.cacheWriteTokens)} cache write · ${count(step.outputTokens)} output`;
 }
 
-/** One trial's section: its checks turn by turn, its errors, and its whole transcript. */
-export function renderTrial(run: HarnessRun, verdict: { status: 'passed' | 'failed'; durationMs: number }): string {
+/** One trial's section: its checks turn by turn, its errors, and its transcript, whole unless `clip` trims it. */
+export function renderTrial(run: HarnessRun, verdict: { status: 'passed' | 'failed'; durationMs: number }, clip: Clip = WHOLE): string {
   const { taskId, arm } = run.session.metadata;
   const cost = run.usage.metadata.costUsd;
 
@@ -97,7 +104,7 @@ export function renderTrial(run: HarnessRun, verdict: { status: 'passed' | 'fail
     lines.push('', '### Prompt tokens by model step', '', ...run.usage.metadata.steps.map(stepTokens));
   }
 
-  lines.push('', '### Transcript', '', run.session.events.map(entry).join('\n\n'));
+  lines.push('', '### Transcript', '', run.session.events.map((event) => entry(event, clip)).join('\n\n'));
 
   return lines.join('\n');
 }
