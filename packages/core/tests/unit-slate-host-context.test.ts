@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import {
-  isSlateFrameMessage, slateFrameSrc, slateInlineHeight, slateLinkId,
-  SLATE_HOST_CONTEXT_MESSAGE, SLATE_INLINE_HEIGHT, SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE,
+  isSlateFrameMessage, slateFrameSrc, slateLinkId,
+  SLATE_HOST_CONTEXT_MESSAGE, SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE,
 } from '../src/slates/host-context';
 import { SLATE_CLIENT_MODULE } from '../src/slates/runtime-modules';
 import { parseSlateProject } from '../src/slates/project';
@@ -22,14 +22,8 @@ test('the generated client module and the host vocabulary share one spelling', (
   expect(SLATE_CLIENT_MODULE).toContain(`"${SLATE_SIZE_CHANGED_MESSAGE}"`);
 });
 
-test('slateInlineHeight clamps to the schema band and the schema reads the same bounds', () => {
-  expect(slateInlineHeight(900)).toBe(SLATE_INLINE_HEIGHT.max);
-  expect(slateInlineHeight(10)).toBe(SLATE_INLINE_HEIGHT.min);
-  expect(slateInlineHeight(240)).toBe(240);
-
-  expect(parseSlateProject({ main: 'server.js', slate: { inline: { height: 240 } } }).slate.inline.height).toBe(240);
-  expect(() => parseSlateProject({ main: 'server.js', slate: { inline: { height: 900 } } })).toThrow('height');
-  expect(() => parseSlateProject({ main: 'server.js', slate: { inline: { height: 10 } } })).toThrow('height');
+test('a slate is sized by what it holds: package.json declares no inline height', () => {
+  expect(() => parseSlateProject({ main: 'server.js', slate: { inline: { height: 240 } } })).toThrow('slate.inline');
 });
 
 test('isSlateFrameMessage checks the frame, the origin and the envelope', () => {

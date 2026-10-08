@@ -125,6 +125,7 @@ describe('which account a call spends', () => {
     const deps: ModelCallDeps = {
       env: {},
       sessionAffinity: 'kinu-test',
+      workspaceAffinity: 'kinu-test',
       async getAuth(key) { return stored.includes(key) ? { headers: { authorization: `Bearer ${key}` } } : null; },
       async hasCredential(key) { return stored.includes(key); },
       async listCredentialKeys() { return [...stored]; },
@@ -174,7 +175,7 @@ describe('which account a call spends', () => {
     const stored = [accountCredentialKey(KEYED, 'work')];
 
     const deps: ModelCallDeps = {
-      env: {}, sessionAffinity: 'kinu-test', getAuth: async () => null,
+      env: {}, sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test', getAuth: async () => null,
       hasCredential: async (key) => stored.includes(key), listCredentialKeys: async () => [...stored],
     };
 
@@ -207,7 +208,7 @@ describe('which account a call spends', () => {
     const stored = [accountCredentialKey(KEYED, 'a'), accountCredentialKey(KEYED, 'b')];
 
     const deps: ModelCallDeps = {
-      env: {}, sessionAffinity: 'kinu-test', getAuth: async () => null, accountFor: () => account,
+      env: {}, sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test', getAuth: async () => null, accountFor: () => account,
       hasCredential: async (key) => stored.includes(key), listCredentialKeys: async () => [...stored],
     };
 
@@ -241,7 +242,7 @@ describe('which account a call spends', () => {
     let readable = false;
 
     const deps: ModelCallDeps = {
-      env: {}, sessionAffinity: 'kinu-test', getAuth: async () => null,
+      env: {}, sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test', getAuth: async () => null,
       hasCredential: async (key) => {
         if (!readable) throw new Error('the credential store did not answer');
 
@@ -302,6 +303,7 @@ describe('what a call tells the ledger about its account', () => {
     const deps: ModelCallDeps = {
       env: {},
       sessionAffinity: 'kinu-test',
+      workspaceAffinity: 'kinu-test',
       async getAuth(key) {
         return key === 'openai-compat.default@work'
           ? { headers: { Authorization: 'Bearer key-work' }, baseURL: `http://localhost:${String(server.port)}/v1` }
@@ -350,6 +352,7 @@ describe('what a call tells the ledger about its account', () => {
     const deps: ModelCallDeps = {
       env: {},
       sessionAffinity: 'kinu-test',
+      workspaceAffinity: 'kinu-test',
       fetch: asFetchFunction(async () => new Response(body, { headers: { 'content-type': 'text/event-stream', ...headers } })),
       async getAuth(key) { return stored[key] ?? null; },
       async hasCredential(key) { return key in stored; },

@@ -1,9 +1,9 @@
 import { Effect } from 'effect';
 import type { LanguageModel } from 'ai';
 import {
-  agentAffinityKey, parseModelSpec, reasoningEffortOptions,
+  actorAffinity, parseModelSpec, reasoningEffortOptions,
   providerSnapshotOf, providerListingOf, ProviderListingCache,
-  type ProviderListing, type ProviderSnapshotRead, type ReasoningEffort,
+  type ModelAffinity, type ProviderListing, type ProviderSnapshotRead, type ReasoningEffort,
   type ProviderWaitInfo,
   type WebSearchProvider,
   type ProviderEnv, type WorkersAIBinding,
@@ -34,6 +34,8 @@ export interface OwnedModelServicesOptions<Id> {
   readonly env: OwnedModelEnv<Id>;
   /** Lazy: a facet's logical name is set by async `_cf_initAsFacet` after construction. */
   readonly agentName: () => string;
+  /** The workspace whose conversations share a prompt cache (`actorAffinity`). */
+  readonly workspaceId: () => string;
   readonly appTitle: string;
   readonly ownerRequired: boolean;
   readonly getOwnerUserId: () => string | null;
@@ -63,8 +65,12 @@ export class OwnedModelServices<Id = DurableObjectId> {
   constructor(private readonly options: OwnedModelServicesOptions<Id>) {}
 
   /** Lazy so it reads the facet's logical name at call time. */
+  get affinity(): ModelAffinity {
+    return actorAffinity({ name: this.options.agentName(), workspaceId: this.options.workspaceId() });
+  }
+
   get affinityKey(): string {
-    return agentAffinityKey(this.options.agentName());
+    return this.affinity.sessionAffinity;
   }
 
   providerRegistry(): AgentProviderRegistry {
@@ -100,7 +106,7 @@ export class OwnedModelServices<Id = DurableObjectId> {
     const normalized = registry.normalizeSpecSync(spec);
 
     if (this.modelCache?.spec === normalized) return this.modelCache.model;
-    const model = registry.resolveModel(normalized, this.affinityKey);
+    const model = registry.resolveModel(normalized, this.affinity);
     this.modelCache = { spec: normalized, model };
 
     return model;

@@ -791,7 +791,7 @@ describe('the record adapters write the rows their boundaries promise', () => {
       'orchestrator', 'workers-ai', 'deepseek-v4', '', '', '',
     ]);
     // The trailing 0 is `attempts`: a turn is not a delivery.
-    expect(point.doubles).toEqual([1, 4200, 0, 6, 9, 1200, 340, 900, 12, 45, 7, 0.0031, 1, 0]);
+    expect(point.doubles).toEqual([1, 4200, 0, 6, 9, 1200, 340, 900, 12, 45, 7, 0.0031, 1, 0, 0]);
   });
 
   test('an unpriced call reports priced 0, so an average cost cannot be diluted', () => {
@@ -819,7 +819,7 @@ describe('the record adapters write the rows their boundaries promise', () => {
     expect(point.doubles?.[1]).toBe(91);
     expect(point.doubles?.[4]).toBe(1);
     // No token report or price on a tool row: a zero would pool into spend aggregates.
-    expect(point.doubles?.slice(5)).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    expect(point.doubles?.slice(5)).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
   });
 
   test('a first-token row is its own kind, so a silent turn is absent rather than zero', () => {

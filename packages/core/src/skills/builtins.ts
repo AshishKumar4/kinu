@@ -66,29 +66,51 @@ a recap of what you implemented.
 
 const SLATES_SRC = `---
 name: slates
-description: Build a slate, a small live app with a server class and a React client, for any app, game, dashboard, form or other interface a user asks for. Read this before writing one.
+description: Build any interface the user asks for, an app, game, dashboard, chart, form, picker or card, as a slate. Read this before writing one.
 ---
 
 # Slates
 
-A slate is a small application that lives in this workspace: a server class with its own storage, a React client in a sandboxed iframe, and an RPC link between them. Users rarely ask for "a slate". They ask for a game, a tracker, a dashboard, a picker, a form, a live view over workspace data. Each of those is a slate.
+A slate is an interface the user sees in the chat: a page you write into your answer, or a small application in \`/slates/<id>/\` with a server class and storage of its own.
 
-A slate is a directory \`/slates/<id>/\`. \`/slates\` is the workspace's, not one agent's: a hired agent makes, edits, previews and removes slates there too; in a CLI workspace it is the project's own \`slates/\` folder. Each slate has a \`package.json\`:
+## Build the real one, then check it
+
+Write the slate itself: the \`<slate-ui>\` block in your answer, or the slate's files. Never build a prototype, scratch page or test app first. Then check the finished slate as it renders: for a slate with files, \`await workspace.slates.<id>.$preview()\` answers its URL and \`web.screenshot({ url })\` shows it to you; fix what you see in the slate itself. A page in your answer is drawn in the chat once your answer is stored.
+
+## It looks like the chat
+
+A slate is drawn in the app's theme already, dark and light: its text, font, colours, buttons and inputs. Write plain HTML or JSX and add layout only. Set no page background, text colour or font. Where you need a colour, use the theme's: \`var(--c-text)\`, \`--c-text-2\`, \`--c-text-3\`, \`--c-accent\`, \`--c-border\`, \`--c-surface\`, \`--c-elevated\`, \`--c-success\`, \`--c-warning\`, \`--c-danger\`.
+
+In the chat a slate is as tall as its content, like the text around it. Never size to the viewport (no \`100vh\`, no \`height: 100%\` on \`html\` or \`body\`) and add no scroller of your own. Make it work at a phone's width: one column, large touch targets. \`alert()\` and \`confirm()\` are blocked.
+
+## A page in your answer
+
+For a view with nothing to remember, write the page into your answer on lines of its own, never in a code fence:
+
+<slate-ui name="funnel">
+<title>Checkout funnel</title>
+<p id="total"></p>
+<button id="retry">Retry the import</button>
+<script type="module">
+  import { workspace } from "kinu:slate";
+  document.getElementById("total").textContent = await workspace.readFile("/home/main/funnel.txt");
+  document.getElementById("retry").onclick = () => workspace.agent.send({ text: "Retry the import." });
+</script>
+</slate-ui>
+
+The chat draws it in place once your answer is stored, called by its \`<title>\`, and the user can keep it as a slate of the workspace. Give each block in an answer its own name. A page that must remember anything is a slate with files.
+
+## A slate with files
 
 \`\`\`json
-{ "main": "server.ts", "browser": "client.tsx",
-  "slate": { "title": "Deploy checklist", "inline": { "height": 320 } } }
+{ "main": "server.ts", "browser": "client.tsx", "slate": { "title": "Deploy checklist" } }
 \`\`\`
 
-\`main\` exports the server class. \`browser\` exports the React component. You may put both in one \`slate.tsx\`: point \`main\` and \`browser\` at the same file. The build splits it, so keep server code out of the component and React out of the class.
-
-## The class is the API
-
-\`server.ts\` exports a class named \`Slate\` that extends \`SlateObject\` from \`kinu:slate\`. Every public method on it is callable from the client. There is no fetch handler to write and no routes to declare.
+\`slate.title\` is what the user sees it called. \`browser\` is a React component, or an \`.html\` page written as a block's is. \`main\` exports a class named \`Slate\` extending \`SlateObject\` from \`kinu:slate\`; every public method is callable from the client, with JSON arguments and results, and functions passed by reference. Both may live in one \`slate.tsx\`; keep server code out of the component and React out of the class.
 
 \`\`\`ts
+// server.ts
 import { SlateObject } from "kinu:slate";
-
 export class Slate extends SlateObject {
   async add(text: string) {
     const items = (await this.storage.get("items")) ?? [];
@@ -98,125 +120,35 @@ export class Slate extends SlateObject {
   }
   async list() { return (await this.storage.get("items")) ?? []; }
 }
-\`\`\`
-
-Methods whose names start with \`_\`, the constructor, \`fetch\`, and anything set on the instance (\`this.x = ...\`) are never reachable over RPC. Arguments and results are JSON values, plus functions passed by reference. An error thrown in a method reaches the caller as an error.
-
-State lives in two places:
-
-- \`this.storage\` is a key-value store: \`get(key)\`, \`put(key, value)\`, \`delete(key)\`, \`list({ prefix?, limit? })\` returns \`[key, value]\` pairs sorted by key. It lives in the workspace's own database, so it persists today across code edits, restarts and eviction. Use it for anything the user expects to keep.
-- \`this.sql\` is the slate's own SQLite, the Durable Object \`SqlStorage\` API: \`this.sql.exec("SELECT ...", ...params).toArray()\`. It persists across code edits, restarts and eviction: the slate is a durable Nimbus application and keeps its facet until you remove the slate. Use it for tables, joins and caches.
-
-Memory on the class (\`this.count = 0\`) is a cache, nothing more.
-
-Define \`fetch(request)\` on the class only when the slate must answer plain HTTP on a path of its own, for a download or a static asset. The page, the client bundle and the RPC route are served for you.
-
-## The client
-
-\`client.tsx\` exports a React component as its default export. Kinu provides React 19: import from \`react\`, \`react-dom/client\` and \`react/jsx-runtime\` as usual; do not install them. The component is mounted for you.
-
-\`\`\`tsx
+// client.tsx: the default export is mounted for you; Kinu provides React 19.
 import { useEffect, useState } from "react";
 import { slate } from "kinu:slate";
-
 export default function App() {
-  const [items, setItems] = useState<{ text: string; done: boolean }[]>([]);
+  const [items, setItems] = useState<{ text: string }[]>([]);
   useEffect(() => { void slate.list().then(setItems); }, []);
-  return (
-    <ul>{items.map((item, i) => <li key={i}>{item.text}</li>)}
-      <li><button onClick={() => slate.add("new").then(setItems)}>Add</button></li>
-    </ul>
-  );
+  return <ul>{items.map((item, i) => <li key={i}>{item.text}</li>)}<li><button onClick={() => slate.add("new").then(setItems)}>Add</button></li></ul>;
 }
 \`\`\`
 
-\`slate\` is a Cap'n Web stub of your server class: \`slate.method(...args)\` calls the same-named method and returns its promise. Cap'n Web is bidirectional: pass a function as an argument and the server receives a stub it can call back. That is how you push updates:
-
-\`\`\`ts
-// server
-watchers = new Set<(items: unknown) => void>();
-async subscribe(callback: (items: unknown) => void) {
-  const held = callback.dup();          // the argument stub is disposed when this call returns; dup() keeps it
-  this.watchers.add(held);
-  held.onRpcBroken(() => this.watchers.delete(held));
-  held(await this.list());
-}
-// client
-useEffect(() => { void slate.subscribe(setItems); }, []);
-\`\`\`
-
-Broadcast from any method by calling every watcher. The client reconnects when the socket drops; subscribe again in that case.
-
-Also from \`kinu:slate\`: \`useSlate()\` returns the stub; \`useHostContext()\` returns \`{ theme: "dark" | "light", styles: { variables }, containerDimensions: { width, height }, display: "inline" | "pane" }\`. Kinu's colour tokens are set on \`:root\` before your component mounts (\`var(--c-bg)\`, \`var(--c-text)\`, \`var(--c-accent)\`, \`var(--c-border)\`, \`var(--c-surface)\`, ...), so a slate looks native in both themes with no CSS of its own. \`resize(height)\` asks the chat card for a height when the automatic measurement is wrong.
-
-Neither side reaches the network. Both reach the world only through \`workspace\`.
+\`this.storage\` is a key-value store (\`get\`, \`put\`, \`delete\`, \`list({ prefix?, limit? })\`) and \`this.sql\` the slate's own SQLite (\`this.sql.exec(query, ...params).toArray()\`); what either holds persists across code edits, restarts and eviction. Memory on the class is a cache. Methods named \`_x\`, the constructor and \`fetch\` are not callable; define \`fetch(request)\` only to serve a download of your own. To push updates, take a callback: \`subscribe(callback)\` keeps \`callback.dup()\` and calls it, and \`held.onRpcBroken(...)\` forgets it; the client subscribes again when its socket drops. \`useHostContext()\` answers \`{ theme, display }\`.
 
 ## workspace: your reach, as you
 
-Every slate gets one \`workspace\`: the namespaces your \`eval\` programs reach, called as you, as of each call and gated as your own call would be. The server has it as \`this.env.workspace\`; a page imports it from \`kinu:slate\`. Call it from inside methods: a call from the constructor or from module top level is refused, because there is no request to run it under. \`this.storage\` has no such rule. There is nothing to declare: \`package.json\` names no capabilities.
+Every slate gets \`workspace\`, the namespaces your \`eval\` programs reach, called as you as of each call: \`this.env.workspace\` in the class, \`import { workspace } from "kinu:slate"\` in a page. Call it from inside methods, never at module top level or in the constructor.
 
-- \`workspace.memory.*\`, \`workspace.tasks.*\`, \`workspace.web.*\`, \`workspace.db.*\`, and each executor's members (\`workspace.workspace.readFile(path)\`, or \`workspace.readFile(path)\` for short), as a program calls them.
-- \`workspace.web.openBrowser()\` then \`workspace.web.connectBrowser(id)\` drive a browser from the class, as in a program: a session you opened, or a new Kitesurf one. A page asks its class.
-- \`workspace.agent.send({ text, data? })\` puts a message in your inbox as an event of kind \`slate\`. This is the one way a slate reaches you; use it when a user acts and you should react.
-- \`workspace.ai.run({ prompt, system?, tier? })\` runs one model call through your catalog and tiers and answers \`{ text, model, tier, usage }\`.
-- \`workspace.mcp.<server>.<tool>(args)\` calls a tool of a connected MCP server, \`workspace.tools.<name>(input)\` a crafted tool, \`workspace.reads.<model>()\` a read model, and \`workspace.slates.<id>.<method>(...args)\` another slate's method.
+- \`workspace.readFile(path)\`, \`workspace.memory.*\`, \`workspace.tasks.*\`, \`workspace.web.*\` and \`workspace.db.*\`, as a program calls them; \`workspace.ai.run({ prompt, system?, tier? })\` is one model call.
+- \`workspace.mcp.<server>.<tool>(args)\`, \`workspace.tools.<name>(input)\`, \`workspace.reads.<model>()\` and \`workspace.slates.<id>.<method>(...args)\`.
+- \`workspace.agent.send({ text, data? })\` puts a \`slate\` event in your inbox: the one way a slate reaches you, as when the user picks an option on a card.
 
-A slate never delegates, steers you, makes tools or changes slates: \`agents\`, \`eval\`, your own \`agent\` controls, \`report\`, \`createTool\` and the \`$\` lifecycle are yours alone. What a slate has called is what \`$graph()\` shows and a share can grant.
+A slate never delegates, steers you, makes tools or changes slates.
 
-## A choice card in the chat
+## Showing and keeping slates
 
-The chat previews each slate your turn changed after your answer, at \`slate.inline.height\` pixels (default 320, at most 720), growing to fit. To show one you did not change, write \`slate://<id>\` on its own line. A card that asks the user something:
+The chat shows each slate your turn changed after your answer; write \`slate://<id>\` on its own line to show another. In \`eval\`, \`workspace.slates.<id>\` is the same stub the client gets, and its \`$\` members are its lifecycle:
 
-\`\`\`ts
-// server.ts
-export class Slate extends SlateObject {
-  async options() { return (await this.storage.get("options")) ?? []; }
-  async choose(option: string) {
-    await this.storage.put("chosen", option);
-    await this.env.workspace.agent.send({ text: \`The user chose \${option}.\`, data: { option } });
-  }
-}
-// client.tsx
-export default function App() {
-  const [options, setOptions] = useState<string[]>([]);
-  useEffect(() => { void slate.options().then(setOptions); }, []);
-  return <div>{options.map((o) => <button key={o} onClick={() => slate.choose(o)}>{o}</button>)}</div>;
-}
-\`\`\`
-
-Seed the options with \`await workspace.slates.<id>.seed([...])\` (a \`seed(options)\` method that stores them), reply with the \`slate://<id>\` line, and the user's click arrives as a \`slate\` event in your next step.
-
-## A slate in your answer
-
-For a view that needs no files of its own, write the page into your answer as a block, on lines of its own and never inside a code fence: a fenced block is shown as its source, not drawn. These lines, as they stand:
-
-<slate-ui name="funnel">
-<!doctype html>
-<html><head><title>Checkout funnel</title></head>
-<body>
-  <p id="total"></p>
-  <button id="retry">Retry the import</button>
-  <script type="module">
-    import { workspace } from "kinu:slate";
-    document.getElementById("total").textContent = await workspace.readFile("/home/main/funnel.txt");
-    document.getElementById("retry").onclick = () => workspace.agent.send({ text: "Retry the import." });
-  </script>
-</body></html>
-</slate-ui>
-
-The chat draws it in place once your answer is stored. The block is HTML only, with the theme's tokens set on \`:root\` as for any slate. \`workspace\` is the same reach as any slate's, as of each call; \`workspace.agent.send({ text, data? })\` reaches your inbox as a \`slate\` event. Give each block in an answer its own name. It has no storage, sql, versions or \`$share\`: a UI that needs those is a slate with files.
-
-## Working with a slate
-
-In \`eval\`, \`workspace.slates.<id>\` is the same stub the client gets: \`await workspace.slates.whiteboard.addStroke(stroke)\` calls \`addStroke\` on the whiteboard slate and returns its result. Members named with \`$\` are the slate's lifecycle; no class method can take such a name.
-
-- \`workspace.slates.<id>.$preview()\` compiles and boots it and returns \`{ url, port, inline }\`; the chat and the work surface load the same URL. The URL is durable: it is the same on every launch and keeps working after eviction. Compile errors come back as \`bad_input\` with the file and line: fix and preview again. Edits reload the running slate; \`this.storage\` and \`this.sql\` keep their data across the reload.
-- \`workspace.slates.<id>.$methods()\` lists the methods its class exports.
-- \`workspace.slates.<id>.$remove()\` ends a slate: its process, its URL, its \`this.sql\` and its files. Committed versions stay.
-- \`$commit()\` freezes the source as a version, \`$history(after?)\` lists the versions oldest first (pass the answer's \`next\` to continue), \`$restore(version)\` puts one's source back, and \`workspace.slates.$fork(version)\` copies one into a new slate. \`workspace.slates.$list()\` answers \`{ slates: [{ id, title }], problems: [{ id, reason, error }] }\`: every slate, and why any failed to load.
-- Only the workspace's own agent shares, never a hired one. \`$graph()\` lists each namespace member a slate has called, with its impact (\`observe\`, \`mutate\`, \`externalSend\`, \`execute\`, ...). \`$share({ visibility: 'users' | 'public', approved: [{ slate, namespace, member }], fork? })\` makes a live share: observing members are granted, and a member that acts only when \`approved\` names it. Exercise a slate before you share it: what it never called is not in its graph. \`$inspect(version, include?)\` shows what a blueprint of a committed version ships and \`$publish(version, include?)\` publishes it; \`include\` names top-level paths. \`workspace.slates.$shares()\` lists blueprints, \`$liveShares()\` live shares, \`$viewerRequests(share)\` a share's viewer requests, and \`$unshare(share)\` revokes one.
-- Make the UI usable on a phone: one column, large touch targets. Never \`alert()\` or \`confirm()\`; the sandbox blocks them.
-- Do not import \`RpcTarget\`; pass functions, not classes.
+- \`$preview()\` compiles and boots it and answers \`{ url, port, sized }\`; a compile error is \`bad_input\` naming the file and line. \`$methods()\` lists its methods. \`$remove()\` ends it: process, URL, data and files.
+- \`$commit()\` freezes a version, \`$history(after?)\` lists them, \`$restore(version)\` puts one back, and \`workspace.slates.$fork(version)\` copies one into a new slate. \`workspace.slates.$list()\` answers every slate and why any failed to load. \`workspace.slates.$save(page)\` keeps an answer's page, \`<message id>/<name>\`, as a slate.
+- Sharing is the workspace root's alone. \`$graph()\` lists what a slate has called; exercise it before you share. \`$share({ visibility: 'users' | 'public', approved: [{ slate, namespace, member }], fork? })\` makes a live share, \`$inspect(version, include?)\` and \`$publish(version, include?)\` a blueprint; \`workspace.slates.$shares()\`, \`$liveShares()\`, \`$viewerRequests(share)\` and \`$unshare(share)\` list and end them.
 `;
 
 function parseBuiltin(src: string): ParsedSkill {

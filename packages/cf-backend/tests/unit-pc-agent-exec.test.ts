@@ -10,7 +10,7 @@ import { describe, expect, test } from 'bun:test';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
-import { closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 
@@ -650,15 +650,10 @@ function heldMkfifo(dir: string) {
   };
 }
 
-/** Lets the command held on `gate` finish; throws (ENXIO) rather than waits when nothing reads the gate. */
-function release(gate: string): void {
-  const fd = openSync(gate, constants.O_WRONLY | constants.O_NONBLOCK);
-
-  try {
-    writeSync(fd, 'go\n');
-  } finally {
-    closeSync(fd);
-  }
+/** Lets the command held on `gate` finish. The command may not have opened the gate yet when its supervisor is
+ *  already known, so the writer waits for its reader instead of refusing with ENXIO. */
+async function release(gate: string): Promise<void> {
+  await Bun.spawn(['sh', '-c', 'echo go > "$1"', 'release', gate]).exited;
 }
 
 /** A process holding `dir`'s `life` FIFO open for writing from its start, as a supervisor does; it is no supervisor. */
@@ -697,7 +692,7 @@ describe('pc-agent durable supervisor', () => {
     expect(reply.error?.message).toContain(`the supervisor of ${id} (pid ${String(pid)}) exited without recording the command's result`);
     expect(reply.error?.message).toContain(`process group ${String(group)}`);
     // The command outlived its supervisor: let it finish, so the run leaves nothing behind.
-    release(gate);
+    await release(gate);
   });
 
   test('a daemon that adopted a supervisor after a restart hears of its death too', async () => {
@@ -717,7 +712,7 @@ describe('pc-agent durable supervisor', () => {
 
     await expect(restarted.result(id)).rejects.toThrow(`the supervisor of ${id} (pid ${String(pid)}) exited without recording the command's result`);
     await ws.answerTo(id);
-    release(gate);
+    await release(gate);
   });
 
   // A supervisor gone between the daemon's identity check and the step it waits on: each wait hears of its death.

@@ -40,6 +40,7 @@ function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch):
   return {
     env: {},
     sessionAffinity: 'kinu-test',
+    workspaceAffinity: 'kinu-test',
     fetch: fetchFn,
     async getAuth(key) { return store.get(key) ?? null; },
     async hasCredential(key) { return store.has(key); },
@@ -184,7 +185,7 @@ describe('Anthropic provider contract', () => {
 });
 
 describe('Codex provider contract', () => {
-  test('attaches every WAF-bypass header returned by getAuth', async () => {
+  test('attaches every WAF-bypass header returned by getAuth, and the conversation it caches under', async () => {
     const mock = createMockFetch([
       { match: 'chatgpt.com/backend-api/codex', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },
     ]);
@@ -210,6 +211,8 @@ describe('Codex provider contract', () => {
     expect(req.headers['authorization']).toBe('Bearer codex-token');
     expect(req.headers['originator']).toBe('codex_cli_rs');
     expect(req.headers['chatgpt-account-id']).toBe('acct-test-123');
+    expect(req.headers['session_id']).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
+    expect(req.headers['x-client-request-id']).toBe(req.headers['conversation_id']);
   });
 
   test('sends system instructions in the shape required by the Codex backend', async () => {
@@ -293,6 +296,7 @@ describe('Codex provider contract', () => {
     const deps: ModelCallDeps = {
       env: {},
       sessionAffinity: 'kinu-test',
+      workspaceAffinity: 'kinu-test',
       async getAuth(key, opts) {
         if (key !== CODEX_CRED_KEY) return null;
 

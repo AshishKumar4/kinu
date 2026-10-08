@@ -375,6 +375,7 @@ describe('exact turn admission', () => {
 const NO_DEPS: ModelCallDeps = {
   env: {},
   sessionAffinity: 'kinu-test',
+  workspaceAffinity: 'kinu-test',
   getAuth: async () => ({ headers: { 'x-api-key': 'k' } }),
   hasCredential: async () => true,
 };

@@ -42,6 +42,7 @@ function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch):
   return {
     env: {},
     sessionAffinity: 'kinu-test',
+    workspaceAffinity: 'kinu-test',
     fetch: fetchFn,
     async getAuth(key) { return store.get(key) ?? null; },
     async hasCredential(key) { return store.has(key); },
@@ -242,7 +243,7 @@ async function truncatedAnthropicTurn(tools: ToolSet): Promise<{
     system: 'sys',
     history: [{ role: 'user', content: 'what is the answer' }],
     tools,
-    cache: { providerId: 'anthropic', modelId: 'claude-opus-4-7', sessionKey: 'kinu-xprov' },
+    cache: { providerId: 'anthropic', modelId: 'claude-opus-4-7' },
   });
 
   const done = doneOf(events);
@@ -280,7 +281,7 @@ async function replayOnCompat(
   if (destination.providerId !== undefined) {
     options = {
       ...options,
-      cache: { providerId: destination.providerId, modelId: 'llama-4', sessionKey: 'kinu-xprov' },
+      cache: { providerId: destination.providerId, modelId: 'llama-4' },
     };
   }
 
@@ -312,7 +313,7 @@ async function reasonedCompatTurn(tools: ToolSet): Promise<{
     system: 'sys',
     history: [{ role: 'user', content: 'what is the answer' }],
     tools,
-    cache: { providerId: 'openai-compat', modelId: 'llama-4', sessionKey: 'kinu-xprov' },
+    cache: { providerId: 'openai-compat', modelId: 'llama-4' },
   }));
 
   return { mock, responseMessages: done.responseMessages, text: done.text };
@@ -342,7 +343,7 @@ async function replayOnAnthropic(
     system: 'sys',
     history: [...history, { role: 'user', content: 'are you sure' }],
     tools,
-    cache: { providerId: 'anthropic', modelId: 'claude-opus-4-7', sessionKey: 'kinu-xprov' },
+    cache: { providerId: 'anthropic', modelId: 'claude-opus-4-7' },
   });
 
   return mock;
@@ -510,7 +511,7 @@ describe('a search the provider ran itself, replayed', () => {
       system: 'sys',
       history: [{ role: 'user', content: 'when does it ship' }],
       tools: {},
-      cache: { providerId: 'anthropic', modelId: 'claude-opus-4-7', sessionKey: 'kinu-xprov' },
+      cache: { providerId: 'anthropic', modelId: 'claude-opus-4-7' },
     }));
 
     const replayed = v.parse(AnthropicMessagesSchema, bodyOf(await replayOnAnthropic(first.responseMessages, {}), 0).messages);

@@ -53,7 +53,22 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'pendingNimbusTasks');
     Reflect.deleteProperty(this, 'executorRows');
     Reflect.deleteProperty(this, 'runShell');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'portReservations', 'runProgram', 'forgetActivation', 'pendingNimbusTasks', 'executorRows', 'runShell']);
+    Reflect.deleteProperty(this, 'previewTabs');
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'portReservations', 'runProgram', 'forgetActivation', 'pendingNimbusTasks', 'executorRows', 'runShell', 'previewTabs']);
+  }
+
+  /** What the work surface's strip is drawn from: the workspace's listed preview ports, and the slates with their ports. */
+  async previewTabs(): Promise<{ ports: { port: number; name: string | null }[]; slates: { id: string; title: string; port: number | null }[] }> {
+    const listed = await this.getExposedPorts('workspace');
+    const slates = await this.slate({ op: 'list' });
+
+    if (!slates.ok) throw new Error(`slate list refused: ${slates.reason}: ${slates.error}`);
+
+    return {
+      ports: listed.ports.map((port) => ({ port: port.port, name: port.name ?? null })),
+      slates: v.parse(v.object({ slates: v.array(v.object({ id: v.string(), title: v.string(), port: v.optional(v.number()) })) }), slates.value)
+        .slates.map((slate) => ({ id: slate.id, title: slate.title, port: slate.port ?? null })),
+    };
   }
 
   async portReservations(): Promise<DurabilityReservation[]> {
@@ -145,7 +160,7 @@ export { ObservedOrchestrator as OrchestratorAgent };
  *  reaches it through `workspaceOwner()`, as production's actor does. */
 type SlateTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'writeExecutorFileChunk' | 'executeInExecutor' | 'routeSlateShare'> & Pick<ObservedOrchestrator,
-  'portReservations' | 'runProgram' | 'forgetActivation' | 'pendingNimbusTasks' | 'executorRows' | 'runShell'>;
+  'portReservations' | 'runProgram' | 'forgetActivation' | 'pendingNimbusTasks' | 'executorRows' | 'runShell' | 'previewTabs'>;
 
 /** `ObservedOrchestrator` is installed under the `OrchestratorAgent` name, so every stub carries
  *  the fixture read. */
@@ -330,6 +345,10 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     const page = await target.routeSlateShare(handle, { userId: null, source: 'probe-viewer', consented: true }, new Request('https://share.invalid/'), '/');
 
     return { owner, reached, viewer: await page.text() };
+  }
+
+  async previewTabs(workspace: string): Promise<{ ports: { port: number; name: string | null }[]; slates: { id: string; title: string; port: number | null }[] }> {
+    return (await this.workspaceTarget(workspace)).previewTabs();
   }
 
   async portReservations(workspace: string): Promise<DurabilityReservation[]> {

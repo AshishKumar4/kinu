@@ -20,6 +20,7 @@ function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch):
   return {
     env: {},
     sessionAffinity: 'kinu-test',
+    workspaceAffinity: 'kinu-test',
     fetch: fetchFn,
     async getAuth(key) { return store.get(key) ?? null; },
     async hasCredential(key) { return store.has(key); },
@@ -156,7 +157,7 @@ describe('Anthropic cache breakpoints on the wire', () => {
       tools: chatTools(),
       stopWhen: isStepCount(3),
       cache: {
-        providerId: 'anthropic', modelId: 'claude-opus-4-7', sessionKey: 'kinu-test',
+        providerId: 'anthropic', modelId: 'claude-opus-4-7',
         retention,
       },
     });
@@ -258,7 +259,7 @@ describe('one TTL per request, in the order Anthropic reads it', () => {
     await drain({
       modelSpec: 'test/model',
       model: provider.createModel('claude-opus-5-5', deps), system: 'You are Kinu.', history: GPT_THEN_CLAUDE,
-      tools: chatTools(), cache: { providerId: route, modelId: 'claude-opus-5-5', sessionKey: 'kinu-test', retention },
+      tools: chatTools(), cache: { providerId: route, modelId: 'claude-opus-5-5', retention },
     });
 
     const ttls = breakpointTtls(bodyOf(mock, 0));
@@ -286,7 +287,7 @@ describe('one TTL per request, in the order Anthropic reads it', () => {
       }],
       cooldowns: createFallbackCooldowns(),
       system: 'You are Kinu.', history: GPT_THEN_CLAUDE, tools: chatTools(),
-      cache: { providerId: 'openai', modelId: 'gpt-5.5', sessionKey: 'kinu-test' },
+      cache: { providerId: 'openai', modelId: 'gpt-5.5' },
     });
 
     const sent = mock.requests.findIndex((request) => request.url.includes('api.anthropic.com'));
@@ -300,8 +301,10 @@ describe('one TTL per request, in the order Anthropic reads it', () => {
   });
 });
 
-describe('OpenAI prompt_cache_key on the wire', () => {
-  test('openai (responses API): promptCacheKey serializes as prompt_cache_key', async () => {
+// No request carries a cache key: the static prompt every conversation and workspace shares is cached once for all of
+// them (the owner, 2026-10-08; OpenAI caches a prefix with or without one, measured 2026-10-08).
+describe('OpenAI caches by prefix, with no key on the wire', () => {
+  test('openai (responses API): no prompt_cache_key', async () => {
     const mock = createMockFetch([
       { match: 'api.openai.com', respond: { status: 400, body: {} } },
     ]);
@@ -311,10 +314,10 @@ describe('OpenAI prompt_cache_key on the wire', () => {
     await expect(drain({
       modelSpec: 'test/model',
       model, system: 'sys', history: [...HISTORY], tools: {},
-      cache: { providerId: 'openai', modelId: 'gpt-5.5', sessionKey: 'kinu-agent:default' },
+      cache: { providerId: 'openai', modelId: 'gpt-5.5' },
     })).rejects.toThrow();
     const body = bodyOf(mock, 0);
-    expect(body.prompt_cache_key).toBe('kinu-agent:default');
+    expect(body.prompt_cache_key).toBeUndefined();
     expect(body.prompt_cache_retention).toBeUndefined();
     expect(countCacheControl(body)).toBe(0);
   });
@@ -329,12 +332,12 @@ describe('OpenAI prompt_cache_key on the wire', () => {
     await expect(drain({
       modelSpec: 'test/model',
       model, system: 'sys', history: [...HISTORY], tools: {},
-      cache: { providerId: 'openai', modelId: 'gpt-5.5', sessionKey: 'k', retention: 'long' },
+      cache: { providerId: 'openai', modelId: 'gpt-5.5', retention: 'long' },
     })).rejects.toThrow();
     expect(bodyOf(mock, 0).prompt_cache_retention).toBe('24h');
   });
 
-  test("retention 'none' routes no cache key at all", async () => {
+  test("retention 'none' asks for no retention either", async () => {
     const mock = createMockFetch([
       { match: 'api.openai.com', respond: { status: 400, body: {} } },
     ]);
@@ -344,7 +347,7 @@ describe('OpenAI prompt_cache_key on the wire', () => {
     await expect(drain({
       modelSpec: 'test/model',
       model, system: 'sys', history: [...HISTORY], tools: {},
-      cache: { providerId: 'openai', modelId: 'gpt-5.5', sessionKey: 'k', retention: 'none' },
+      cache: { providerId: 'openai', modelId: 'gpt-5.5', retention: 'none' },
     })).rejects.toThrow();
     const body = bodyOf(mock, 0);
     expect(body.prompt_cache_key).toBeUndefined();
@@ -363,15 +366,15 @@ describe('OpenRouter cache addressing on the wire', () => {
     await expect(drain({
       modelSpec: 'test/model',
       model, system: 'sys', history: [...HISTORY], tools: {},
-      cache: { providerId: 'openrouter', modelId, sessionKey: 'kinu-or' },
+      cache: { providerId: 'openrouter', modelId },
     })).rejects.toThrow();
 
     return bodyOf(mock, 0);
   }
 
-  test('claude behind openrouter: prompt_cache_key + cache_control on system and tail', async () => {
+  test('claude behind openrouter: cache_control on system and tail, and no key', async () => {
     const body = await runOpenRouterTurn('anthropic/claude-sonnet-4.6');
-    expect(body.prompt_cache_key).toBe('kinu-or');
+    expect(body.prompt_cache_key).toBeUndefined();
 
     const messages = field(body, 'messages', OpenAiMessagesSchema);
     const system = messages.find((m) => m.role === 'system');
@@ -382,9 +385,9 @@ describe('OpenRouter cache addressing on the wire', () => {
     expect(countCacheControl(body)).toBeLessThanOrEqual(4);
   });
 
-  test('non-anthropic model: prompt_cache_key only, no cache_control markers', async () => {
+  test('non-anthropic model: neither a key nor cache_control markers', async () => {
     const body = await runOpenRouterTurn('meta-llama/llama-4-maverick');
-    expect(body.prompt_cache_key).toBe('kinu-or');
+    expect(body.prompt_cache_key).toBeUndefined();
     expect(countCacheControl(body)).toBe(0);
     const messages = field(body, 'messages', OpenAiMessagesSchema);
     expect(messages[0]).toEqual({ role: 'system', content: 'sys' });
@@ -392,7 +395,7 @@ describe('OpenRouter cache addressing on the wire', () => {
 });
 
 describe('openai-compat + no-op providers', () => {
-  test('openai-compat endpoint gets prompt_cache_key in the body', async () => {
+  test('an openai-compat endpoint is sent no cache key', async () => {
     const mock = createMockFetch([
       { match: 'groq.example', respond: { status: 400, body: {} } },
     ]);
@@ -405,10 +408,10 @@ describe('openai-compat + no-op providers', () => {
     await expect(drain({
       modelSpec: 'test/model',
       model, system: 'sys', history: [...HISTORY], tools: {},
-      cache: { providerId: 'openai-compat', modelId: 'llama-4', sessionKey: 'kinu-compat' },
+      cache: { providerId: 'openai-compat', modelId: 'llama-4' },
     })).rejects.toThrow();
     const body = bodyOf(mock, 0);
-    expect(body.prompt_cache_key).toBe('kinu-compat');
+    expect(body.prompt_cache_key).toBeUndefined();
     expect(countCacheControl(body)).toBe(0);
   });
 
@@ -426,7 +429,7 @@ describe('openai-compat + no-op providers', () => {
     await expect(drain({
       modelSpec: 'test/model',
       model, system: 'sys', history: [...HISTORY], tools: {},
-      cache: { providerId: 'workers-ai', modelId: '@cf/moonshotai/kimi-k2.6', sessionKey: 'kinu-x' },
+      cache: { providerId: 'workers-ai', modelId: '@cf/moonshotai/kimi-k2.6' },
     })).rejects.toThrow();
     const body = bodyOf(mock, 0);
     expect(body.prompt_cache_key).toBeUndefined();

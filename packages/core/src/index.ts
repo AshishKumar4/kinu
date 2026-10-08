@@ -19,7 +19,7 @@ export {
 export { SleepTimeLane, initSleepTimeUpdatesTable, type SleepTimeLaneDeps } from './orchestrator/sleep-time-lane';
 
 export {
-  assembleActorTurn, withCompactionTrigger, promptCacheKey, vfsTurnSkills, materializeTurnSources, turnSourcesFromBundle, metadataTier,
+  assembleActorTurn, withCompactionTrigger, conversationKey, vfsTurnSkills, materializeTurnSources, turnSourcesFromBundle, metadataTier,
   type AssembledTurn, type RunTurnSources, type TurnSourcesBundle, type LocalTurnSources, type PinValues, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources,
 } from './orchestrator/turn-assembly';
 
@@ -45,6 +45,8 @@ export {
 } from './identity/effect-tombstones';
 
 export { readActivityLog, writeActivityLog, type ActivityLogEntry } from './identity/activity-log';
+
+export { initActivationTable, listActivations, recordActivation, type Activation } from './identity/activations';
 
 export { ChatHistoryEntrySchema } from './types/chat';
 
@@ -246,7 +248,7 @@ export type * from './types/evaluation';
 
 // Slate stores live in `@kinu.run/core/slates`: they touch `node:util`, and client
 // code value-imports this barrel. Keep worker-only modules off it.
-export { parseSlateProject, type SlateProject } from './slates/project';
+export { parseSlateProject, slateTitle, type SlateProject } from './slates/project';
 
 export {
   SHARE_KINDS, SHARE_VIEWER_REQUESTS_PER_MINUTE, SHARE_SPEND_CAP_USD_PER_DAY, shareSpendLabel, VIEWER_EXCHANGE_PATH,
@@ -279,7 +281,7 @@ export { SLATE_READ_MODELS, type SlateReadModel } from './slates/read-models';
 export type { SlateProcess } from './slates/process';
 
 export {
-  isSlateMethodName, SLATE_METHOD_NAME_SOURCE, SlateOperationSchema, requireSlateWorkMode, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult, type SlateAnswer,
+  isSlateMethodName, SLATE_METHOD_NAME_SOURCE, SlateOperationSchema, slateIdFor, requireSlateWorkMode, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult, type SlateAnswer,
   type SlateSummary, type SlateProblem,
 } from './slates/rpc';
 
@@ -287,8 +289,8 @@ export { initSlateStateTable, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, routeSl
 
 // Browser-safe slate vocabulary, so it belongs on this value-imported barrel.
 export {
-  buildSlateHostContext, isSlateFrameMessage, slateFrameSrc, slateInlineHeight, slateLinkId,
-  SLATE_HOST_CONTEXT_MESSAGE, SLATE_INLINE_HEIGHT, SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE, SLATE_THEME_TOKENS,
+  buildSlateHostContext, isSlateFrameMessage, slateFrameSrc, slateLinkId,
+  SLATE_HOST_CONTEXT_MESSAGE, SLATE_INLINE_HEIGHT_LIMIT, SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE, SLATE_THEME_TOKENS,
   SlateFrameMessageSchema, type SlateHostContext,
 } from './slates/host-context';
 
@@ -2189,6 +2191,10 @@ export {
 } from './http/public-shell';
 
 export { THEME_CSS, THEME_TOKENS, type Mode, type PublicToken, type RadiusRole, type TokenSet } from './web/theme';
+
+export { SLATE_IMPORT_MAP, SLATE_PAGE_HEAD, SLATE_PAGE_PREAMBLE } from './web/slate-page';
+
+export { APP_FONTS_PATH, appFontFile, SLATE_FONTS_PATH } from './web/fonts';
 
 export {
   approvalDocument, authDocument, installDocument, loginDocument, type BuiltinSignIn, type LoginProvider,
