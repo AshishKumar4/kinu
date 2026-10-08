@@ -305,7 +305,8 @@ export function prepareHostedTurn(
     const actor = run?.inference.actor ?? (yield* Effect.promise(() => seams.host.acquire(reference)));
     const { turn, model } = yield* hostedTaskTurn(seams, actor, task, run);
 
-    if (!task.parentDriven && run === undefined) ownerAnswersWait(seams, actor);
+    // Only the owner's own words answer: the agent's naming and a restart's re-read prepare a turn of no words.
+    if (!task.parentDriven && run === undefined && task.body !== '') ownerAnswersWait(seams, actor);
 
     const profile = run === undefined
       ? yield* Effect.promise(() => seams.taskProfile(turn))

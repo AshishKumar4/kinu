@@ -293,13 +293,6 @@ function accountProfileFixture(path: string, method: string, body: BodyInit | nu
     });
   }
 
-  // The session's own read: `&noname=1` signed in with Cloudflare, which shares no name.
-  if (path === "/api/auth/me" && frame === "welcome") {
-    return new URLSearchParams(location.search).get("noname") === "1"
-      ? fixtureJson({ user: { id: "new", email: "new@example.com", provider: "cloudflare", signedInWith: "Cloudflare", displayName: null } })
-      : fixtureJson({ user: { id: "owner", email: "owner@example.com", provider: "google", signedInWith: "Google", displayName: "Owner" } });
-  }
-
   if (path === "/api/user/profile") {
     // The wizard's profile step renders only without a display name: `&noname=1` answers that account.
     if (frame === "welcome" && new URLSearchParams(location.search).get("noname") === "1") {
@@ -953,6 +946,13 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
 
   if (ACCOUNT_FIXTURE_FRAMES.has(frame) && path.startsWith("/api/user/")) {
     return userSettingsFixture(path, method, init?.body);
+  }
+
+  // The session's own read in setup: `&noname=1` signed in with Cloudflare, which shares no name.
+  if (path === "/api/auth/me" && frame === "welcome") {
+    return Promise.resolve(new URLSearchParams(location.search).get("noname") === "1"
+      ? fixtureJson({ user: { id: "new", email: "new@example.com", provider: "cloudflare", signedInWith: "Cloudflare", displayName: null } })
+      : fixtureJson({ user: { id: "owner", email: "owner@example.com", provider: "google", signedInWith: "Google", displayName: "Owner" } }));
   }
 
   if (connectFixtureActive && path.startsWith("/api/user/devices")) {
