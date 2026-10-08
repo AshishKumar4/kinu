@@ -627,8 +627,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   agentOf(actorId: string): WorkspaceActor & { readonly homeName: string; readonly shellId: string } {
     const record = this.actorHost().describe(actorId);
 
-    // Main is the workspace's own agent: its home is the workspace root and its shell the workspace's own (D9).
-    if (record !== null && record.parentActorId === null) return { ...record, homeName: MAIN_AGENT, shellId: this.shellId() };
+    // Main is the workspace's own agent: its home is the workspace root and its shell the workspace's own (D9). Its
+    // storage key is the workspace's name, which a reset's new main reuses, so its facet is named by its id instead.
+    if (record !== null && record.parentActorId === null) return { ...record, storageKey: record.actorId, homeName: MAIN_AGENT, shellId: this.shellId() };
     const placement = record === null ? null : hostedActorPlacement(record);
 
     if (record !== null && placement?.homeName != null) return { ...record, homeName: placement.homeName, shellId: placement.shellId };

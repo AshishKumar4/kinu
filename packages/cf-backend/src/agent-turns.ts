@@ -248,12 +248,14 @@ export class AgentTurns {
   async prepareChat(actorId: string, request: ChatTurnRequest): Promise<PreparedAgentTurn> {
     const turnId = request.turnId ?? crypto.randomUUID();
 
+    const hosted: HostedTurnRequest = {
+      sequenceId: announcementOf(turnId), body: request.userText, mode: request.mode, parentDriven: request.parentDriven, driving: request.driving,
+      ...(request.opening !== undefined && { opening: request.opening }),
+    };
+
     const turn: OpenTurn = {
       reference: this.deps.reference(actorId),
-      request: {
-        sequenceId: announcementOf(turnId), body: request.userText, mode: request.mode, parentDriven: request.parentDriven, driving: request.driving,
-        ...(request.opening !== undefined && { opening: request.opening }),
-      },
+      request: hosted,
       ...(request.explicitTier !== undefined && { explicitTier: request.explicitTier }),
       prepared: null,
       profile: null,

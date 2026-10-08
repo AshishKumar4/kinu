@@ -32,7 +32,7 @@ export interface HostedTaskTurn {
 }
 
 /** Main answers its own tool names; an agent's are derived from its tools. */
-export type HostedTurnSources = RunTurnSources & Partial<Pick<TurnAssemblySources, 'wiredToolNames' | 'codemodeCapabilities'>>;
+type HostedTurnSources = RunTurnSources & Partial<Pick<TurnAssemblySources, 'wiredToolNames' | 'codemodeCapabilities'>>;
 
 /** A hosted turn's tools, and where its turn is assembled from: the prompt's tool index is rendered from them. */
 export interface HostedTaskProfile {
