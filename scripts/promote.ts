@@ -162,7 +162,7 @@ function evalsRunOf(argument: string): number {
   return run;
 }
 
-/** THE STATISTICS GATE PRODUCTION: the ten-trial run dispatched against `sha` on staging, by its verdict job. */
+/** THE STATISTICS GATE PRODUCTION: the five-trial run dispatched against `sha` on staging, by its verdict job. */
 function assertEvalVerdict(sha: string, record: Verified): void {
   if (record.evalsRun === undefined) {
     throw new Error(`${sha}'s record names no evals run: bun scripts/evals-dispatch.ts ${sha} on a quiet staging, then bun scripts/promote.ts evals <run>`);

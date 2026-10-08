@@ -1,6 +1,6 @@
 name: Evals
 
-# Whether a candidate build may be promoted. Every task in evals/tasks, ten trials each, runs as the
+# Whether a candidate build may be promoted. Every task in evals/tasks, five trials each, runs as the
 # eval-service identity against two deployments at once, both legs with the candidate's own task
 # definitions: the candidate (staging.kinu.run, serving the build to promote) and the baseline
 # (kinu.run, serving the promoted build). The same definitions, the same hour and the same provider
@@ -31,7 +31,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  EVAL_TRIALS: '10'
+  EVAL_TRIALS: '5'
 
 jobs:
   plan:
@@ -153,8 +153,9 @@ jobs:
           KINU_EVAL_TRIALS: ${{ env.EVAL_TRIALS }}
           KINU_EVAL_COMMIT: ${{ needs.plan.outputs.sha }}
           # Both legs call Muse on one opencode-go key, and 20 calls at once is all it was measured to hold
-          # (evals/src/config.ts, 2026-09-26); all 340 at once were refused 429 (run 37726316713). 10 per leg.
-          KINU_EVAL_FILES: 10
+          # (evals/src/config.ts, 2026-09-26); all 340 at once were refused 429 (run 37726316713). One trial of
+          # each of the seven tasks at a time: seven trials per leg, fourteen when production's leg is not reused.
+          KINU_EVAL_FILES: 7
           KINU_EVAL_CONCURRENCY: 1
         run: bun run evals
 

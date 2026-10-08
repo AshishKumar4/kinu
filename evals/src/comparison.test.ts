@@ -198,6 +198,23 @@ describe('compareEvalResults', () => {
     expect(rendered).toMatch(/\| t \| 90\.0% \(0 pp\) \|[^\n]*\| 2\.0 \(\+1\.0\) \|/u);
   });
 
+  // The exact test needs four trials a side to call any fall; below that a run cannot say a task held.
+  test.each([
+    { trials: 3, before: 3, after: 0, verdict: 'regressed' },
+    { trials: 3, before: 1, after: 0, verdict: 'regressed' },
+    { trials: 3, before: 3, after: 1, verdict: 'inconclusive' },
+    { trials: 3, before: 3, after: 3, verdict: 'inconclusive' },
+    { trials: 4, before: 4, after: 4, verdict: 'unchanged' },
+    { trials: 5, before: 5, after: 1, verdict: 'regressed' },
+    { trials: 5, before: 5, after: 2, verdict: 'unchanged' },
+  ])('$before/$trials \u2192 $after/$trials is $verdict', ({ trials, before, after, verdict }) => {
+    const comparison = compareEvalResults(report('t', trialsOf(before, trials), BASE), report('t', trialsOf(after, trials), NEXT));
+
+    expect(comparison.verdict).toBe(verdict);
+
+    if (verdict === 'inconclusive') expect(renderEvalComparison(comparison)).toContain('Too few trials to tell any fall from noise');
+  });
+
   test('a significant fall on any task is a regression, whatever else rose', () => {
     const comparison = compareEvalResults(report('order-book', trialsOf(9, 10), BASE), report('order-book', trialsOf(2, 10), NEXT));
 

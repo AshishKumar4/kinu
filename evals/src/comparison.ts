@@ -535,20 +535,35 @@ function buggier(platform: PlatformRows | null): PlatformRows['tasks'] {
     && baseline !== null && candidate !== null && candidate.bugTrials / candidate.trials > baseline.bugTrials / baseline.trials);
 }
 
+/** A task the candidate passed in no trial while the baseline passed in some: a regression however few trials ran, which
+ *  the exact test alone cannot call below four a side (3/3 against 0/3 is p = 0.10). */
+function collapsed(row: ComparedRow): boolean {
+  return row.candidate.trials > 0 && row.candidate.passed === 0 && row.baseline.passed > 0;
+}
+
+/** Whether a task's trials could show any fall at all: a baseline passing every trial against a candidate passing none
+ *  is the strongest there is. At 3 a side it is p = 0.10, so no fall reaches significance and the run cannot say the
+ *  task held; at 4, p = 0.029; at 5, a fall from 5/5 to 1/5 is p = 0.048 and to 2/5 is p = 0.17. */
+export function canTellAFall(row: Pick<ComparedRow, 'baseline' | 'candidate'>): boolean {
+  return fisherExact({ passed: row.baseline.trials, trials: row.baseline.trials }, { passed: 0, trials: row.candidate.trials }) < SIGNIFICANCE;
+}
+
 function verdictOf(rows: readonly EvalComparisonRow[], profiled: EvalComparison['profiles'], platform: PlatformRows | null): EvalVerdict {
   const compared = rows.flatMap((row) => row.reason === null ? [row] : []);
 
   if (compared.length === 0) return 'inconclusive';
   const moved = compared.filter((row) => row.pValue < SIGNIFICANCE);
 
-  if (moved.some((row) => passRate(row.candidate) < passRate(row.baseline)) || compared.some(resetMore)) return 'regressed';
+  if (moved.some((row) => passRate(row.candidate) < passRate(row.baseline)) || compared.some(resetMore) || compared.some(collapsed)) return 'regressed';
 
   if (compared.some((row) => worsened(row).length > 0) || belowCacheTarget(profiled).length > 0 || buggier(platform).length > 0) return 'regressed';
+
+  // Too few trials to tell a fall from noise is no evidence that nothing fell, and a promotion needs that evidence.
+  if (!compared.every(canTellAFall)) return 'inconclusive';
 
   return moved.length > 0 ? 'improved' : 'unchanged';
 }
 
-/** Compare two reports. With no baseline, every row is the candidate's alone and the verdict is inconclusive. */
 /** Why a side's platform logs say nothing, or null when they were read. */
 function unreadWhy(read: PlatformReport | null): string | null {
   if (read === null) return 'not read';
@@ -580,6 +595,7 @@ function platformRows(baseline: readonly Assertion[], candidate: readonly Assert
   };
 }
 
+/** Compare two reports. With no baseline, every row is the candidate's alone and the verdict is inconclusive. */
 export function compareEvalResults(
   baselineText: string | null, candidateText: string, questions: CommitQuestions = {}, reads: PlatformReads = { baseline: null, candidate: null },
 ): EvalComparison {
@@ -730,7 +746,8 @@ function verdictReason(comparison: EvalComparison, shared: Shared): string {
   const change = (row: ComparedRow) => `${rowName(row, shared)} ${String(row.baseline.passed)}/${String(row.baseline.trials)} \u2192 `
     + `${String(row.candidate.passed)}/${String(row.candidate.trials)} (p = ${row.pValue.toFixed(2)})`;
 
-  const falls = moved.filter((row) => passRate(row.candidate) < passRate(row.baseline)).map(change);
+  const compared = comparison.rows.flatMap((row) => row.reason === null ? [row] : []);
+  const falls = compared.filter((row) => (moved.includes(row) ? passRate(row.candidate) < passRate(row.baseline) : collapsed(row))).map(change);
   const rises = moved.filter((row) => passRate(row.candidate) > passRate(row.baseline)).map(change);
 
   const resets = comparison.rows.flatMap((row) => row.reason === null && resetMore(row)
@@ -745,7 +762,17 @@ function verdictReason(comparison: EvalComparison, shared: Shared): string {
   const uncached = belowCacheTarget(comparison.profiles).map(({ model, candidate }) => `${model} ${rate(candidate.steadyCacheHitRate)}`);
 
   switch (comparison.verdict) {
-    case 'inconclusive': return `No task can be compared: ${[...new Set(comparison.rows.flatMap((row) => row.reason ?? []))].join(', ')}.`;
+    case 'inconclusive': {
+      const reasons = [...new Set(comparison.rows.flatMap((row) => row.reason ?? []))];
+
+      const blind = compared.filter((row) => !canTellAFall(row)).map((row) => rowName(row, shared));
+
+      return [
+        ...reasons.length > 0 ? [`Not compared: ${reasons.join(', ')}.`] : [],
+        ...blind.length > 0 ? [`Too few trials to tell any fall from noise, so not shown to hold: ${blind.join(', ')}.`] : [],
+      ].join(' ') || 'No task can be compared.';
+    }
+
     case 'unchanged': return `No task moved beyond what ${shared.trials === null ? 'these' : String(shared.trials)} runs can tell apart from noise.`;
     case 'improved': return `Rose: ${rises.join(', ')}.`;
     case 'regressed': return [

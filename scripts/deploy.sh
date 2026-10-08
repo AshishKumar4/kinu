@@ -51,7 +51,7 @@
 #   bash scripts/deploy.sh --rollback
 #
 # `--evals` runs the real-model evals a deploy can start: on staging, the
-# evals.yml dispatch (ten trials on staging against production) and the soak;
+# evals.yml dispatch (five trials on staging against production) and the soak;
 # on a promotion, the soak on production. Without it a deploy runs no real-model
 # eval (the owner, 2026-10-08): evals run on a staging that has stopped moving,
 # against production, and staging stays quiet while they run, so they are
