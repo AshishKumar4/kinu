@@ -471,7 +471,6 @@ export {
   BUILTIN_TOOL_SPECS,
   replayPolicyFor,
   type ReplayPolicy,
-  AGENTS_TOOL_ACTIONS,
   renderToolSchemaDescription,
   renderCodemodeDescription, CODEMODE_CODE_DESCRIPTION,
   TOOL_REACH,
@@ -480,7 +479,6 @@ export {
   codemodeCapabilitiesFor,
   type ToolSurfaceNarrowing,
   type ToolReach,
-  type AgentsToolAction,
   type BuiltinToolName,
   type BuiltinToolSpec,
   REPORT_TOOL, SUBMIT_PLAN_TOOL, DEPS_GATED_TOOLS,
@@ -561,8 +559,7 @@ export {
 export {
   agentsActionsFor,
   agentsProfileContext, delegationChoices,
-  AGENTS_ACTION_FIELDS,
-  type AgentsToolInput, type AgentsProfileContext, type DelegatedProfile,
+  type AgentsCall, type AgentsProfileContext, type DelegatedProfile,
 } from './delegation/agents-tool';
 
 export {
@@ -577,7 +574,7 @@ export {
   type SurfaceActor, type SurfaceCall, type SurfacePolicy, type SurfaceWeb,
 } from './delegation/actor-surface';
 
-export { AGENTS_OPS } from './operations/agents';
+export { AGENTS_OPS, type AgentsOp } from './operations/agents';
 
 export { createAgentSelfProvider, type AgentSelfHost } from './tools/agent-self';
 

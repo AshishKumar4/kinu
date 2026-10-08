@@ -509,17 +509,6 @@
       "loadAtStart": 4.61,
       "exit": 0
     },
-    "bun run gate:agents-fields": {
-      "wallSeconds": 0.52,
-      "cpuSeconds": 0.88,
-      "peakRssMb": 351.19,
-      "peakRunnable": 2,
-      "peakCpuThreads": 1.97,
-      "meanThreads": 1.7,
-      "samples": 8,
-      "loadAtStart": 4.45,
-      "exit": 0
-    },
     "bun run gate:mutation-fences": {
       "wallSeconds": 1.56,
       "cpuSeconds": 1.48,

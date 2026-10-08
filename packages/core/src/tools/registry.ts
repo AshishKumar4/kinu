@@ -195,12 +195,6 @@ export interface BuiltinToolSpec {
   example: string;
 }
 
-/** Every `agents` action; per-actor availability is agentsActionsFor in delegation/agents-tool.ts. */
-export const AGENTS_TOOL_ACTIONS = [
-  'swarm', 'hire', 'msg', 'list', 'dismiss',
-] as const;
-
-export type AgentsToolAction = (typeof AGENTS_TOOL_ACTIONS)[number];
 
 
 
