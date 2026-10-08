@@ -225,6 +225,7 @@ import {
 } from "@kinu.run/core/analytics";
 import {
   agentSelfHost, createAgentSelfProvider,
+  WorkspaceProposals, WorkspaceProposalStore, type WorkspaceProposalAnswer,
   DeviceConsentRegistry, DeviceConsentStore,
   type DeviceConsentAnswer, type DeviceConsentDecision,
   type DeviceConsentRequest, type PendingDeviceConsent,
@@ -2370,6 +2371,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         // Owner's revoke path; drops the webhook secret with the row.
         cancelTrigger: (id, caller) => this.cancelTrigger(id, caller),
         armCompactNow: () => { this.compactionState.armCompaction(this.name); },
+        proposeWorkspace: (proposal) => this.proposals.propose(proposal),
       })),
     ];
   }
@@ -3037,6 +3039,34 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
+  // Lazy like `consents`. A proposed workspace is created through the account's one creation path, under its owner.
+  private _proposals: WorkspaceProposals | null = null;
+  private get proposals(): WorkspaceProposals {
+    return this._proposals ??= new WorkspaceProposals({
+      store: new WorkspaceProposalStore(this.boundSql),
+      newId: () => `wsp-${nanoid(10)}`,
+      now: () => Date.now(),
+      create: async ({ displayName, purpose, soul }) => {
+        const { stub: userDO, caller } = await this.userHub();
+
+        return createCloudWorkspaceForUser({ env: this.env, userId: this.requireOwnerUserId(), userDO, caller, input: { displayName, purpose }, soul });
+      },
+      link: (workspace) => `${this.env.CLI_PUBLIC_ORIGIN ?? ''}/workspace/${encodeURIComponent(workspace)}`,
+      // Read through `this.orch` at delivery time, never captured, as the deferrals' inbox is.
+      inbox: { send: (signal) => this.orch.inbox.send(signal) },
+      announce: () => { this.overviewChanged(); },
+    });
+  }
+
+  /** The owner's one decision on a workspace the agent proposed; a second answer decides nothing. */
+  @callable()
+  async decideWorkspaceProposal(id: string, answer: WorkspaceProposalAnswer): Promise<{ decided: boolean; workspace: string | null }> {
+    const asked = v.parse(v.object({ id: v.string(), answer: v.picklist(['approve', 'decline']) }), { id, answer });
+    const decided = await settle(this.proposals.decide(asked.id, asked.answer));
+
+    return { decided: decided !== null, workspace: decided?.workspace ?? null };
+  }
+
   /** Called by the UserDO over DO RPC. Resolves on decision or `timeout`; `timeout` is not
    *  `deny`, since an unanswered prompt means the owner was away. */
   async awaitDeviceConsent(req: DeviceConsentRequest): Promise<DeviceConsentDecision> {
@@ -3591,6 +3621,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return buildPendingActions({
       scaffoldVersions: listScaffoldVersions(this.boundSql, this.rt.actor, 20),
       deferredActions: this.deferrals.list(),
+      workspaceProposals: this.proposals.open(),
       unseenChanges: {
         count: unseen.length,
         revertable: unseen.filter((entry) => entry.revert !== undefined).length,

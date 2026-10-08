@@ -32,6 +32,7 @@ import { holdForRelease } from '../packages/test-utils/src/scratch';
 import { DESKTOP } from './live-app-harness';
 import {
   AGENT_PLAN_ASK, FLOW_MEMORY_NOTE, FLOW_SHELL_PROBE, FLOW_SLATE, MEMORY_ASK, SLATE_ASK, STORM_ASK, STORM_DIR, STORM_FILES, STORM_SEED_ASK, WRITE_FILE_ASK,
+  PROPOSAL_LINK_REPLY, WORKSPACE_PROPOSAL_ASK,
 } from './flows-script';
 import { FALLBACK_ANSWER } from './scripted-protocol';
 import {
@@ -663,6 +664,84 @@ export async function agentPlanIsReviewedInItsPane(target: FlowTarget): Promise<
     return { pane, planReviewShown, approveControl, planStatus: v.parse(v.string(), await page.evaluate(PLAN_STATUS)) };
   } finally {
     await removeFlowWorkspace(target, workspace);
+  }
+}
+
+export interface WorkspaceProposalVerdict {
+  /** What the Needs-you card offered the owner before anything existed. */
+  readonly cardTitle: string;
+  readonly cardSoul: string;
+  /** Whether the account already listed a workspace of that name before the approval. */
+  readonly existedBeforeApproval: boolean;
+  /** The link the agent repeated from its wake, and the workspace it names. */
+  readonly link: string;
+  readonly created: { readonly name: string; readonly displayName: string } | null;
+}
+
+const PROPOSAL_CARD = '#inspector [data-workspace-proposal]';
+
+const ListedSchema = v.object({
+  entries: v.array(v.object({ name: v.string(), displayName: v.optional(v.string()) })),
+  nextCursor: v.nullable(v.string()),
+});
+
+/** Every workspace on the account with its title, page by page, as the sidebar's roster lists them. */
+async function listedWorkspaces(target: FlowTarget): Promise<Array<{ name: string; displayName: string }>> {
+  const rows: Array<{ name: string; displayName: string }> = [];
+  let cursor: string | null = null;
+
+  do {
+    const url = `${target.origin}/api/user/workspaces${cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`}`;
+    const page: v.InferOutput<typeof ListedSchema> = v.parse(ListedSchema, await (await fetch(url, { headers: webHeaders(target.identity) })).json());
+
+    rows.push(...page.entries.map((entry) => ({ name: entry.name, displayName: entry.displayName ?? '' })));
+    cursor = page.nextCursor;
+  } while (cursor !== null);
+
+  return rows;
+}
+
+/** A button in the proposal card, by its words. */
+function proposalButton(words: string): string {
+  return `[...document.querySelectorAll(${JSON.stringify(`${PROPOSAL_CARD} button`)})].find((button) => ${words}.test(button.textContent ?? ''))?.click()`;
+}
+
+/**
+ * Row: the workspace's main agent proposes a new workspace, the owner approves it once in Work → Needs you, and it
+ * exists under the owner's account with the proposed name, while the agent that asked is woken with its link.
+ */
+export async function agentProposesAWorkspace(target: FlowTarget): Promise<WorkspaceProposalVerdict> {
+  const workspace = await createFlowWorkspace(target, 'proposal');
+  let created: string | null = null;
+
+  try {
+    const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
+
+    await sendAndSettle(page, WORKSPACE_PROPOSAL_ASK);
+    await openInspector(page);
+    await page.evaluate(stripTab('Work'));
+    await until(page, 'the proposal in Work → Needs you', `document.querySelector(${JSON.stringify(PROPOSAL_CARD)}) !== null`);
+    const cardTitle = v.parse(v.string(), await page.evaluate(`document.querySelector(${JSON.stringify(PROPOSAL_CARD)})?.textContent ?? ''`));
+
+    await page.evaluate(proposalButton('/show its soul/iu'));
+    await until(page, 'the soul approving writes', `document.querySelector('[data-workspace-proposal-soul]') !== null`);
+    const cardSoul = v.parse(v.string(), await page.evaluate(`document.querySelector('[data-workspace-proposal-soul]')?.textContent ?? ''`));
+    const before = new Set((await listedWorkspaces(target)).map((row) => row.name));
+
+    await page.evaluate(proposalButton('/create workspace/iu'));
+    await until(page, "the agent's reply with the new workspace's link",
+      `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(PROPOSAL_LINK_REPLY)})`);
+    const said = v.parse(v.string(), await page.evaluate(`document.querySelector('#chat')?.textContent ?? ''`));
+    const link = /https?:\/\/\S+?\/workspace\/[a-z0-9-]+/u.exec(said.slice(said.lastIndexOf(PROPOSAL_LINK_REPLY)))?.[0] ?? '';
+
+    created = /\/workspace\/([a-z0-9-]+)$/u.exec(link)?.[1] ?? null;
+    const row = (await listedWorkspaces(target)).find((entry) => entry.name === created);
+
+    return { cardTitle, cardSoul, link, existedBeforeApproval: created !== null && before.has(created), created: row ?? null };
+  } finally {
+    await removeFlowWorkspace(target, workspace);
+
+    if (created !== null) await removeFlowWorkspace(target, created);
   }
 }
 

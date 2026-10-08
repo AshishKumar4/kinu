@@ -16,6 +16,7 @@ import type { TrustLevel } from '../events/hub/types';
 import { nanoid } from '../utils/nanoid';
 import type { JsonObject } from '../utils/json';
 import { KinuError } from '../obs/index';
+import type { WorkspaceProposalInput, WorkspaceProposalReceipt } from '../safety/workspace-proposals';
 import { serve } from '../operations/operation';
 import { AGENT } from '../operations/agent';
 import { codemodeNamespace } from './operation-surfaces';
@@ -48,6 +49,8 @@ export interface AgentSelfHost {
   /** Arm the compaction ladder's forced rebuild for this session's NEXT turn
    *  assembly — the same one-shot flag overflow recovery uses. */
   armCompactNow(): void;
+  /** Parks a proposed workspace for the owner; absent where no owner account can hold one (a local session). */
+  readonly proposeWorkspace?: (proposal: WorkspaceProposalInput) => Effect.Effect<WorkspaceProposalReceipt, KinuError>;
 }
 
 /** A running job reads as the wake contract, not an empty row, so a poll loop has nothing to spin on. */
@@ -80,6 +83,8 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
     serve(AGENT.listCurriculum, async ({ status }) => await host.listCurriculumTasks(status)),
     serve(AGENT.acceptCurriculumTask, async ({ id }) => await host.setCurriculumTaskStatus(id, 'accepted')),
     serve(AGENT.proposeScaffold, async ({ rationale, code, baseVersion }) => await host.proposeScaffold(rationale, code, baseVersion)),
+    serve(AGENT.proposeWorkspace, (proposal) => host.proposeWorkspace?.(proposal)
+      ?? Effect.fail(new KinuError('unsupported', 'agent.proposeWorkspace: this session has no owner account to create a workspace under'))),
     serve(AGENT.scaffoldVersions, async ({ limit }) => await host.listScaffoldVersions(limit)),
     serve(AGENT.schedule, (opts) => Effect.gen(function* () {
       const { cron, atMs } = opts;

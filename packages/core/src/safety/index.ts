@@ -144,6 +144,19 @@ export {
 } from './device-consent';
 
 export {
+  WorkspaceProposals,
+  WorkspaceProposalStore,
+  initWorkspaceProposalsTable,
+  proposedSoul,
+  WORKSPACE_PROPOSAL_SIGNAL,
+  type WorkspaceProposal,
+  type WorkspaceProposalAnswer,
+  type WorkspaceProposalInput,
+  type WorkspaceProposalReceipt,
+  type WorkspaceProposalDeps,
+} from './workspace-proposals';
+
+export {
   refusedHostname,
 } from './egress-destination';
 

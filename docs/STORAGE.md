@@ -524,7 +524,7 @@ its own DDL, all of it `IF NOT EXISTS`, all of it run from the same
 | Conversation search | `conversation_fts` (derived FTS5 index) | `core/src/memory/conversation-search.ts`, created by the store on first use |
 | Background jobs | `background_jobs` | `core/src/jobs/store.ts` |
 | Task list | `agent_tasks` (one plan per actor; note and plan link are columns) | `core/src/tools/task-store.ts` |
-| Approvals | `deferred_approvals`, `device_consent_requests`, `instruction_approvals` | `core/src/safety/deferred-approval.ts`, `device-consent.ts`, `instruction-trust.ts` |
+| Approvals | `deferred_approvals`, `device_consent_requests`, `instruction_approvals`, `workspace_proposals` | `core/src/safety/deferred-approval.ts`, `device-consent.ts`, `instruction-trust.ts`, `workspace-proposals.ts` |
 | Plan review | `plan_reviews` | `core/src/plans/review.ts` |
 | Curriculum | `proposed_tasks` | `core/src/curriculum/proposer.ts` |
 | Imported experience | `imported_experience` (staged until a turn outcome settles it) | `core/src/experience/imports.ts` |

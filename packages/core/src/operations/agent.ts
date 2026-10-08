@@ -49,6 +49,17 @@ export const AGENT = {
     }),
     output: v.unknown(),
   }),
+  proposeWorkspace: agentOp({
+    name: 'proposeWorkspace', impact: 'administer',
+    help: 'A new workspace under your owner\'s account, which your owner approves once in the Work tab before it exists. '
+      + '`name` titles it (one line), `brief` is its mission, which its first turn acts on, and `soul` is the rest of its '
+      + 'SOUL.md: who it is and how it works. The call answers { status: "pending" }; the decision wakes you, with the '
+      + 'new workspace\'s link when it is approved.',
+    input: v.strictObject({
+      name: v.pipe(v.string(), v.nonEmpty()), soul: v.string(), brief: v.pipe(v.string(), v.nonEmpty()),
+    }),
+    output: v.strictObject({ status: v.literal('pending'), proposal: v.string(), note: v.string() }),
+  }),
   scaffoldVersions: agentOp({
     name: 'scaffoldVersions', help: 'Your scaffold versions with status, lineage and shadow-evaluation record.', impact: 'observe',
     input: v.strictObject({ limit: Count('Most versions to list.') }), output: v.unknown(),
