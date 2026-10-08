@@ -28,7 +28,7 @@ import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import {
   makeSql, soulIn, type CLIRuntime,
 } from '../../packages/cli-backend/src/runtime';
-import { buildEvalAgentSurface, collectStepText, createStepToolCallLog } from './harness';
+import { buildEvalAgentSurface, collectStepText, createStepToolCallLog, type LiveToolCall } from './harness';
 import { localTargetFolder, provisionLocalTarget } from './target-local';
 import { seedTranscriptEntry, finalIntegerAnswer,
 liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, toolExecute,
@@ -102,7 +102,7 @@ async function chatTurn(
   rt: CLIRuntime,
   tools: ToolSet,
   userMessage: string,
-): Promise<CompletedTurn> {
+): Promise<CompletedTurn & { readonly calls: readonly LiveToolCall[] }> {
   const start = Date.now();
   const soul = soulIn(rt.space) ?? '';
   const knowledge = (await rt.memory.read('memory/MEMORY.md'))?.slice(0, 1500) ?? '';
@@ -135,7 +135,8 @@ async function chatTurn(
   return {
     userMessage,
     assistantResponse: responseText,
-    toolCalls: log.records,
+    toolCalls: log.records(),
+    calls: log.calls,
     steps: log.steps,
     durationMs: Date.now() - start,
     feedback: null,
@@ -250,7 +251,7 @@ describe('E2E Full Lifecycle', () => {
     console.log(`  Response (${turn.assistantResponse.length} chars): ${turn.assistantResponse.slice(0, 200)}`);
     console.log(`  Steps: ${turn.steps}, Tools: ${turn.toolCalls.map(t => t.name).join(', ') || 'none'}`);
 
-    const execution = turn.toolCalls.find((call) => call.name === 'eval');
+    const execution = turn.calls.find((call) => call.name === 'eval');
     expect(execution, 'the model did not use eval').toBeDefined();
     const output = v.parse(v.object({ logs: v.array(v.string()) }), execution?.result);
     expect(output.logs.map((line) => tolerate(() => extractJsonObject(line), 'malformed-input')))
@@ -269,11 +270,11 @@ describe('E2E Full Lifecycle', () => {
     console.log(`  Response (${turn.assistantResponse.length} chars): ${turn.assistantResponse.slice(0, 200)}`);
     console.log(`  Steps: ${turn.steps}, Tools: ${turn.toolCalls.map(t => t.name).join(', ') || 'none'}`);
 
-    const wrote = turn.toolCalls.find((call) => call.name === 'memory'
+    const wrote = turn.calls.find((call) => call.name === 'memory'
       && (call.args.action === 'save' || call.args.action === 'remember'));
 
     expect(wrote, 'the model never wrote through the memory tool — it called '
-      + (turn.toolCalls.map((call) => `${call.name}.${actionName(call.args)}`).join(', ')
+      + (turn.calls.map((call) => `${call.name}.${actionName(call.args)}`).join(', ')
         || 'nothing'))
       .toBeDefined();
     const where = storedMemoryFact(db, await rt.memory.read('memory/MEMORY.md'));

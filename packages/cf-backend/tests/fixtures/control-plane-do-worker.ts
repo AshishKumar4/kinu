@@ -175,6 +175,15 @@ async function runStep(env: ControlPlaneEnv, step: Step): Promise<ControlPlaneSe
 
 export default {
   async fetch(request: Request, env: ControlPlaneEnv): Promise<Response> {
+    const url = new URL(request.url);
+
+    // The driver's drain: this line is written after every line an earlier step wrote.
+    if (url.pathname === '/drain') {
+      console.log(url.searchParams.get('line') ?? '');
+
+      return new Response(null, { status: 204 });
+    }
+
     const parsed = v.safeParse(StepsSchema, await request.json());
 
     if (!parsed.success) {

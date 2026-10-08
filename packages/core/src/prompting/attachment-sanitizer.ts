@@ -56,30 +56,39 @@ const OVERSIZE_ACCEPTED_DOC_MAX_BYTES = 1024 * 1024;
 
 const ATTACHMENTS_DIR = SPILL_DIRS.attachments;
 
-/** Copy-on-write per message; untouched messages keep referential identity. */
+/** Copy-on-write per message, and of the list from its first changed message: untouched messages keep referential
+ *  identity, and an untouched history is returned as given. Every step sanitizes the whole history. */
 export async function sanitizeAttachmentsForModel(
   messages: readonly ModelMessage[],
   policy: AttachmentPolicy,
-): Promise<ModelMessage[]> {
-  const out: ModelMessage[] = [];
+): Promise<readonly ModelMessage[]> {
+  let out: ModelMessage[] | undefined;
 
-  for (const message of messages) {
-    if (message.role === 'user') {
-      if (Array.isArray(message.content)) {
-        out.push(await sanitizeUserMessage(message, message.content, policy));
-      } else {
-        const replacement = await sanitizeUserText(message.content, policy);
-        out.push(replacement === null ? message : { ...message, content: replacement });
-      }
-    } else if (message.role === 'assistant' && Array.isArray(message.content) && message.content.some((part) => part.type === 'file')) {
-      // Only a file part can carry an attachment: the rest of a long turn's answers pass without a copy or an await.
-      out.push(await sanitizeAssistantMessage(message, message.content, policy));
-    } else {
-      out.push(message);
-    }
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index];
+    const sanitized = mayCarryAttachments(message) ? await sanitizeMessage(message, policy) : message;
+
+    if (sanitized !== message) out ??= messages.slice(0, index);
+    out?.push(sanitized);
   }
 
-  return out;
+  return out ?? messages;
+}
+
+/** Only a file part can carry an attachment: the rest of a long turn's answers pass without a copy or an await. */
+function mayCarryAttachments(message: ModelMessage): boolean {
+  return message.role === 'user' || (message.role === 'assistant' && Array.isArray(message.content) && message.content.some((part) => part.type === 'file'));
+}
+
+async function sanitizeMessage(message: ModelMessage, policy: AttachmentPolicy): Promise<ModelMessage> {
+  if (message.role === 'assistant' && Array.isArray(message.content)) return sanitizeAssistantMessage(message, message.content, policy);
+
+  if (message.role !== 'user') return message;
+
+  if (Array.isArray(message.content)) return sanitizeUserMessage(message, message.content, policy);
+  const replacement = await sanitizeUserText(message.content, policy);
+
+  return replacement === null ? message : { ...message, content: replacement };
 }
 
 type UserPart = Exclude<UserModelMessage['content'], string>[number];

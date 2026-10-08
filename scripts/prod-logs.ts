@@ -213,7 +213,7 @@ async function live(args: Args): Promise<void> {
 
 // ---- telemetry client ------------------------------------------------------
 
-interface Filter {
+export interface Filter {
   readonly key: string;
   readonly operation: 'eq' | 'neq' | 'includes' | 'exists';
   readonly value?: string;
@@ -261,6 +261,14 @@ const Calculation = v.looseObject({
   series: v.optional(v.array(v.looseObject({ time: v.string(), data: v.array(Aggregate) })), []),
 });
 
+const TelemetryFields = v.looseObject({
+  sequence: v.optional(v.string()), owed: v.optional(v.string()),
+  workspace: v.optional(v.string()), actor: v.optional(v.string()),
+  sameBuild: v.optional(v.string()), midStep: v.optional(v.boolean()),
+  stepsKept: v.optional(v.number()), fiber: v.optional(v.string()), fiberId: v.optional(v.string()),
+  cause: v.optional(v.string()),
+});
+
 const TelemetryEvent = v.looseObject({
   timestamp: v.number(),
   // A plain log line's source is a string; only a structured line has these keys.
@@ -268,14 +276,21 @@ const TelemetryEvent = v.looseObject({
     event: v.optional(v.string(), ''),
     code: v.optional(v.string(), ''),
     cause: v.optional(v.string(), ''),
-    fields: v.fallback(v.looseObject({ sequence: v.optional(v.string()), owed: v.optional(v.string()) }), {}),
+    message: v.optional(v.string()),
+    fields: v.fallback(TelemetryFields, {}),
   }), { event: '', code: '', cause: '', fields: {} }),
   $workers: v.optional(v.looseObject({
     durableObjectId: v.optional(v.string()),
     eventType: v.optional(v.string()),
     outcome: v.optional(v.string()),
+    scriptVersion: v.optional(v.looseObject({ id: v.optional(v.string()) })),
+    wallTimeMs: v.optional(v.number()),
+    event: v.optional(v.looseObject({ rpcMethod: v.optional(v.string()), rpcMethods: v.optional(v.array(v.string())) })),
   }), {}),
-  $metadata: v.optional(v.looseObject({ type: v.optional(v.string()), message: v.optional(v.string()) }), {}),
+  $metadata: v.optional(v.looseObject({
+    type: v.optional(v.string()), message: v.optional(v.string()), error: v.optional(v.string()),
+    id: v.optional(v.string()), requestId: v.optional(v.string()), traceId: v.optional(v.string()),
+  }), {}),
 });
 
 const TelemetryResult = v.looseObject({
@@ -288,7 +303,7 @@ const TelemetryResult = v.looseObject({
 
 type Aggregate = v.InferOutput<typeof Aggregate>;
 
-type TelemetryEvent = v.InferOutput<typeof TelemetryEvent>;
+export type TelemetryEvent = v.InferOutput<typeof TelemetryEvent>;
 
 /** One event of a version's signal as a fixer reads it: what was thrown or owed, by which object, in which request. */
 const SampleEvent = v.looseObject({
@@ -300,6 +315,7 @@ const SampleEvent = v.looseObject({
   }), { fields: {} }),
   $workers: v.optional(v.looseObject({ durableObjectId: v.optional(v.string()), entrypoint: v.optional(v.string()) }), {}),
   $metadata: v.optional(v.looseObject({ error: v.optional(v.string()), requestId: v.optional(v.string()), traceId: v.optional(v.string()) }), {}),
+  timestamp: v.optional(v.number(), 0),
 });
 
 type SampleEvent = v.InferOutput<typeof SampleEvent>;
@@ -308,7 +324,7 @@ const SampleResult = v.looseObject({
   result: v.looseObject({ events: v.optional(v.looseObject({ events: v.optional(v.array(SampleEvent), []) }), { events: [] }) }),
 });
 
-async function readToken(): Promise<string> {
+export async function readToken(): Promise<string> {
   const tokenFile = `${process.env['HOME']}/.config/kinu/obs-token`;
 
   const token = process.env['KINU_OBS_TOKEN']
@@ -325,13 +341,13 @@ async function readToken(): Promise<string> {
   return token;
 }
 
-class Telemetry {
+export class Telemetry {
   /** Largest sampling level any answer carried; above 1 the counts are estimates. */
   sampling = 1;
 
   constructor(
     private readonly token: string,
-    private readonly args: Args,
+    private readonly args: Pick<Args, 'worker' | 'from' | 'to'>,
   ) {}
 
   /** The answer's JSON text; `result` parses it. */
@@ -514,7 +530,7 @@ const GAP_BUCKETS: readonly [string, number][] = [
   ['<10s', 10], ['10-60s', 60], ['1-5m', 300], ['5-60m', 3600], ['>1h', Number.POSITIVE_INFINITY],
 ];
 
-function gapStats(timestamps: readonly number[]): GapStats {
+export function gapStats(timestamps: readonly number[]): GapStats {
   const gaps = timestamps.slice(1).map((t, i) => (t - timestamps[i]) / 1000).sort((a, b) => a - b);
   const pick = (p: number): number | null => gaps.length === 0 ? null : Math.round(gaps[Math.floor(p * (gaps.length - 1))]);
   const buckets: Record<string, number> = {};
@@ -891,35 +907,50 @@ export function versionFindings(read: VersionRead): VersionFinding[] {
   return findings;
 }
 
-/** One exception per entrypoint in `entrypoints`: the text the runtime logged for the request, and the object of the
- *  invocation, or, for an RPC entrypoint, of the call in its trace that has one. The first sampled exception a code
- *  update did not cause is the one shown. */
+/** One exception per entrypoint in `entrypoints`, each sampled from that entrypoint's own: one sample of all of them
+ *  held none of an entrypoint that threw 20 times beside two that threw 184 (staging, 2026-10-08). Its text is the last
+ *  line the request logged, the error that ended it; the object is the invocation's, or, for an RPC entrypoint, the
+ *  call's in its trace that has one. The first exception a code update did not cause is the one shown. */
 async function exceptionSamples(t: Telemetry, scope: readonly Filter[], entrypoints: ReadonlySet<string>): Promise<ExceptionSample[]> {
-  const ended = await t.sampleEvents([...scope, eq('$metadata.type', 'cf-worker-event'), eq('$workers.outcome', 'exception')], 50);
   const samples: ExceptionSample[] = [];
 
+  for (const entrypoint of entrypoints) {
+    const sample = await exceptionSample(t, scope, entrypoint);
+
+    if (sample !== undefined) samples.push(sample);
+  }
+
+  return samples;
+}
+
+async function exceptionSample(t: Telemetry, scope: readonly Filter[], entrypoint: string): Promise<ExceptionSample | undefined> {
+  const ended = await t.sampleEvents([
+    ...scope, eq('$metadata.type', 'cf-worker-event'), eq('$workers.outcome', 'exception'), eq('$workers.entrypoint', entrypoint),
+  ], 10);
+
   for (const event of ended) {
-    const entrypoint = event.$workers.entrypoint ?? '';
     const request = event.$metadata.requestId ?? '';
 
-    if (!entrypoints.has(entrypoint) || request === '' || samples.some((sample) => sample.entrypoint === entrypoint)) continue;
-    const logged = await t.sampleEvents([eq('$metadata.requestId', request), eq('$metadata.type', 'cf-worker')], 5);
-    const message = logged.map((line) => line.$metadata.error ?? line.source.message ?? '').find((text) => text !== '') ?? '';
+    if (request === '') continue;
+    const logged = await t.sampleEvents([eq('$metadata.requestId', request), eq('$metadata.type', 'cf-worker')], 20);
+
+    const message = [...logged].sort((a, b) => b.timestamp - a.timestamp)
+      .map((line) => line.$metadata.error ?? line.source.message ?? '').find((text) => text !== '') ?? '';
 
     if (message === CODE_UPDATE_RESET) continue;
     const own = event.$workers.durableObjectId ?? '';
     const trace = event.$metadata.traceId ?? '';
     const traced = own !== '' || trace === '' ? [] : await t.sampleEvents([eq('$metadata.traceId', trace), eq('$metadata.type', 'cf-worker-event')], 20);
 
-    samples.push({
+    return {
       entrypoint,
       message,
       object: own !== '' ? own : traced.map((call) => call.$workers.durableObjectId ?? '').find((id) => id !== '') ?? '',
       request,
-    });
+    };
   }
 
-  return samples;
+  return undefined;
 }
 
 /** The first event of `event` for the version, as an effect sample. */

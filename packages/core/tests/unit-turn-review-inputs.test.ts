@@ -1,4 +1,5 @@
 /** What the turn review reads besides the rating itself: the trivial-turn pre-filter and the provisional-lesson corroboration mechanics. */
+import { compactToolCall } from '../src/evolution/tool-call-record';
 import { describe, test, expect } from 'bun:test';
 import { createTestActor, createTestWorkspace } from './helpers';
 import { recordLesson, listLessons, corroborateLessonsForTurn } from '../src/evolution/lessons';
@@ -38,7 +39,7 @@ describe('isTrivialTurn — the LLM-call pre-filter', () => {
   });
 
   test('a turn that ran tools is never trivial', () => {
-    expect(isTrivialTurn(turn('ok', [{ name: 'eval', args: {}, result: 1 }]))).toBe(false);
+    expect(isTrivialTurn(turn('ok', [compactToolCall({ name: 'eval', args: {}, result: 1 })]))).toBe(false);
   });
 });
 

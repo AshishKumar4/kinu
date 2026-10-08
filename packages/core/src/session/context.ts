@@ -34,7 +34,11 @@ function keptPrefix(current: readonly ContextEntry[], next: readonly ContextEntr
  * as many entries: positions are dense, so those fix the membership. A revision written again after a rolled-back
  * transaction opens rows with other messages, or a different count, whatever its stamp.
  */
-interface KeptHead { readonly revision: number; readonly opened: string; readonly entries: readonly ContextEntry[] }
+interface KeptHead {
+  readonly revision: number; readonly opened: string; readonly entries: readonly ContextEntry[];
+  /** The entries' ids; an append extends the superseded head's set instead of collecting a new one. */
+  readonly ids: Set<string>;
+}
 
 /** `recordUnchanged`: an authored edit is a statement even when it moves nothing. */
 interface RevisionOrigin {
@@ -120,20 +124,25 @@ export class SessionContext {
   }
 
   private headEntries(selection: ContextSelection): readonly ContextEntry[] {
+    return this.keptHead(selection).entries;
+  }
+
+  private keptHead(selection: ContextSelection): KeptHead {
     const { contextId, revision } = selection;
     const actorId = this.actor.actorId;
     const kept = this.heads.get(contextId);
 
-    if (kept?.revision === revision && this.holds(selection, kept)) return kept.entries;
+    if (kept?.revision === revision && this.holds(selection, kept)) return kept;
 
     const rows = this.sql<MemberRow & { from_revision: number }>`SELECT entry_id,position,message_id,from_revision FROM context_memberships
       WHERE actor_id=${actorId} AND context_id=${contextId} AND to_revision IS NULL ORDER BY position`;
 
     const entries = Object.freeze(rows.map(entryOf));
+    const opened = openedKey(rows.filter(row => row.from_revision === revision).map(entryOf));
+    const head = { revision, opened, entries, ids: new Set(entries.map(entry => entry.entryId)) };
+    this.heads.set(contextId, head);
 
-    this.heads.set(contextId, { revision, opened: openedKey(rows.filter(row => row.from_revision === revision).map(entryOf)), entries });
-
-    return entries;
+    return head;
   }
 
   /** A head revision `kept` still names: the rows it opened, then its live count, both read by index. */
@@ -171,19 +180,21 @@ export class SessionContext {
       const selected = this.selected() ?? (expected === null ? this.initialize() : null);
 
       if (selected === null || (expected !== null && (selected.contextId !== expected.contextId || selected.revision !== expected.revision))) throw new KinuError('denied', 'context changed during preparation');
-      const current = this.headEntries(selected);
+      const head = this.keptHead(selected);
+      const current = head.entries;
       const next = mutate(current);
       // A sealed step appends one entry to a head of hundreds: only what the mutation changed is checked.
       const kept = keptPrefix(current, next);
+      const keptIds = kept === current.length ? head.ids : new Set(current.slice(0, kept).map(entry => entry.entryId));
       const ids = new Set<string>();
-
-      for (let position = 0; position < kept; position++) ids.add(next[position].entryId);
       const prior = new Map(current.slice(kept).map(entry => [entry.entryId, entry]));
 
       for (let position = kept; position < next.length; position++) {
         const entry = next[position];
 
-        if (entry.position !== position || ids.has(entry.entryId)) throw new KinuError('bad_input', 'context entries must have unique identities and dense positions');
+        if (entry.position !== position || keptIds.has(entry.entryId) || ids.has(entry.entryId)) {
+          throw new KinuError('bad_input', 'context entries must have unique identities and dense positions');
+        }
 
         if (prior.get(entry.entryId)?.messageId !== entry.messageId) {
           const message = this.sql<{ origin: string }>`SELECT origin FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id=${entry.messageId}`[0];
@@ -195,7 +206,7 @@ export class SessionContext {
       }
 
       // An empty authored edit is still recorded: an explicitly empty history is a statement.
-      return this.revise(selected, current, next, { author: proposal?.author ?? this.actor.actorId, cause, turnId, proposalId: proposal?.id ?? null,
+      return this.revise(selected, head, next, { author: proposal?.author ?? this.actor.actorId, cause, turnId, proposalId: proposal?.id ?? null,
         recordUnchanged: proposal !== undefined || cause === 'edit' });
     })));
   }
@@ -209,14 +220,15 @@ export class SessionContext {
       this.actor.assertCurrent();
       yield* request.assertEpoch();
       const selected = this.selected() ?? this.initialize();
-      const current = this.headEntries(selected);
+      const head = this.keptHead(selected);
+      const current = head.entries;
       const kept = at.replaces ? this.conversationOf(current) : current;
       const anchor = kept.findIndex(entry => entry.entryId === at.before);
       const index = anchor < 0 ? kept.length : anchor;
       const added = { entryId: crypto.randomUUID(), messageId: reference.messageId, position: index };
       const next = [...kept.slice(0, index), added, ...kept.slice(index)].map((entry, position) => ({ ...entry, position }));
 
-      return this.revise(selected, current, next, { author: this.actor.actorId, cause: 'render', turnId: request.turnId, proposalId: null, recordUnchanged: false });
+      return this.revise(selected, head, next, { author: this.actor.actorId, cause: 'render', turnId: request.turnId, proposalId: null, recordUnchanged: false });
     })));
   }
 
@@ -226,7 +238,8 @@ export class SessionContext {
       this.actor.assertCurrent();
       const head = this.head(contextId);
       const expected = head === null ? this.fork(null, contextId) : { contextId, revision: head };
-      const current = this.headEntries(expected);
+      const kept = this.keptHead(expected);
+      const current = kept.entries;
 
       const next = messages.map((message, position) => {
         const same = current[position];
@@ -234,11 +247,12 @@ export class SessionContext {
         return same?.messageId === message.messageId && same.entryId === String(position) ? same : { messageId: message.messageId, entryId: String(position), position };
       });
 
-      return this.revise(expected, current, next, { author: this.actor.actorId, cause: 'render', turnId: null, proposalId: null, recordUnchanged: false });
+      return this.revise(expected, kept, next, { author: this.actor.actorId, cause: 'render', turnId: null, proposalId: null, recordUnchanged: false });
     });
   }
 
-  private revise(expected: ContextSelection, current: readonly ContextEntry[], next: readonly ContextEntry[], origin: RevisionOrigin): ContextSelection {
+  private revise(expected: ContextSelection, head: KeptHead, next: readonly ContextEntry[], origin: RevisionOrigin): ContextSelection {
+    const current = head.entries;
     const kept = keptPrefix(current, next);
     const prior = new Map(current.slice(kept).map(entry => [entry.entryId, entry]));
     const retained = new Set<string>();
@@ -266,7 +280,10 @@ export class SessionContext {
         VALUES(${actorId},${expected.contextId},${entry.entryId},${revision},${entry.position},${entry.messageId})`;
     }
 
-    this.heads.set(expected.contextId, { revision, opened: openedKey(next.slice(kept).filter(entry => !retained.has(entry.entryId))), entries: Object.freeze(next) });
+    const ids = kept === current.length ? head.ids : new Set(current.slice(0, kept).map(entry => entry.entryId));
+
+    for (let position = kept; position < next.length; position++) ids.add(next[position].entryId);
+    this.heads.set(expected.contextId, { revision, opened: openedKey(next.slice(kept).filter(entry => !retained.has(entry.entryId))), entries: Object.freeze(next), ids });
 
     return { contextId: expected.contextId, revision };
   }

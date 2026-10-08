@@ -14,7 +14,7 @@ import type { TurnSteeringTrigger } from '../events/types';
 import type { ShownLesson } from '../types/dynamic-context';
 import { sqlCheckList } from '../identity/schema';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
-import { parseJsonValue, type JsonValue } from '../utils/json';
+import { parseJsonValue } from '../utils/json';
 import { nowMs } from '../utils/date';
 import { jsonObjectOnlyInstruction } from '../providers/structured';
 
@@ -174,12 +174,10 @@ const STRUGGLE_TEXT = {
 export function struggleLessonPrompt(
   turn: CompletedTurn, struggle: Struggle & { readonly tool: string }, known: readonly ToolLesson[],
 ): string {
-  const window = (value: JsonValue | undefined): string => evidenceWindow(JSON.stringify(value ?? null), EVIDENCE_BUDGETS.patternToolCall);
-
   const calls = turn.toolCalls
     .filter((call) => call.name === struggle.tool)
     .slice(-REFLECTOR_CALLS)
-    .map((call) => `- ${call.name}(${window(call.args)}) -> ${call.outcome?.success === false ? 'failed' : 'ok'}: ${window(call.result)}`);
+    .map((call) => `- ${call.name}(${call.argsWindow}) -> ${call.outcome?.success === false ? 'failed' : 'ok'}: ${call.resultWindow ?? 'null'}`);
 
   const lessons = known.map((lesson) => `- [${lesson.id}] ${lesson.text} (helped ${String(lesson.helpful)}, hurt ${String(lesson.harmful)})`);
 

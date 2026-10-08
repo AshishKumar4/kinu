@@ -542,12 +542,22 @@ export class Inbox implements AgentInbox {
       }
 
       if (result.status === 'queued') return 'queued';
-      reason = 'preempted';
-      diagnostics.failure(
-        'signal.preempted',
-        new KinuError('unavailable', 'the host pre-empted the signal turn; compensating'),
-        { signal: signal.kind },
-      );
+
+      if (result.status === 'failed') {
+        reason = 'turn_failed';
+        diagnostics.failure(
+          'signal.turn_failed',
+          new KinuError('unavailable', `the signal's turn ended on its error: ${result.reason ?? 'unstated'}`),
+          { signal: signal.kind },
+        );
+      } else {
+        reason = 'preempted';
+        diagnostics.failure(
+          'signal.preempted',
+          new KinuError('unavailable', 'the host pre-empted the signal turn; compensating'),
+          { signal: signal.kind },
+        );
+      }
     } catch (err) {
       reason = 'failed';
       diagnostics.failure(

@@ -32,7 +32,7 @@ import {
 } from '../../packages/core/src/index';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import { soulIn, type CLIRuntime } from '../../packages/cli-backend/src/runtime';
-import { buildEvalAgentSurface, collectStepText, createStepToolCallLog } from './harness';
+import { buildEvalAgentSurface, collectStepText, createStepToolCallLog, type LiveToolCall } from './harness';
 import { localTargetFolder, provisionLocalTarget, type LocalTarget } from './target-local';
 import { seedTranscriptEntry, EVAL_BACKEND_ENV, liveChatModel, liveModelTarget,
 recordLiveModelSpend, reportLiveModelSpend, resolveEvalBackend, UNCONFIGURED_LLM, workspaceDatabase,
@@ -83,6 +83,7 @@ const DB_PATH = join(TEST_DIR, 'agent.db');
 /** One turn's result, plus the exact message list that turn HANDED THE MODEL. */
 interface ConversationTurn {
   readonly turn: CompletedTurn;
+  readonly calls: readonly LiveToolCall[];
   readonly sent: readonly ModelMessage[];
 }
 
@@ -154,8 +155,9 @@ async function chatTurn(turn: ChatTurn): Promise<ConversationTurn> {
 
   return {
     sent,
+    calls: log.calls,
     turn: {
-      userMessage, assistantResponse: responseText, toolCalls: log.records,
+      userMessage, assistantResponse: responseText, toolCalls: log.records(),
       steps: log.steps, durationMs: Date.now() - start, feedback: null, hadError: false,
     },
   };
@@ -168,6 +170,7 @@ describe('E2E Lifecycle', () => {
   let engine: EvolutionEngine;
   let events: EvolutionEvent[];
   let turns: CompletedTurn[];
+  let callsPerTurn: (readonly LiveToolCall[])[];
   let model: LanguageModel;
   let target: LocalTarget;
 
@@ -197,6 +200,7 @@ describe('E2E Lifecycle', () => {
     engine = new EvolutionEngine(rt, rt.stores.history, { enabled: true });
     engine.onEvent(e => events.push(e));
     turns = [];
+    callsPerTurn = [];
 
     // Model first: the production actor root builds `agents` from deps carrying
     // the model a search expands with, so a surface built before it would be the
@@ -252,9 +256,10 @@ describe('E2E Lifecycle', () => {
 
     for (const [i, message] of messages.entries()) {
       console.log(`  Turn ${i + 1}: ${message.slice(0, 50)}...`);
-      const { turn, sent } = await chatTurn({ model, rt, tools, history, userMessage: message });
+      const { turn, calls, sent } = await chatTurn({ model, rt, tools, history, userMessage: message });
       sentPerTurn.push(sent);
       turns.push(turn);
+      callsPerTurn.push(calls);
       await engine.reviewTurn(turn, null);
       expect(turn.assistantResponse.length).toBeGreaterThan(0);
       console.log(`    Response: ${turn.assistantResponse.slice(0, 80)}...`);
@@ -308,7 +313,7 @@ describe('E2E Lifecycle', () => {
       'turn 4 called no tool at all — "Search your memory" was answered from context, not memory')
       .toBeGreaterThan(0);
 
-    const hits = search.toolCalls.filter((call) =>
+    const hits = (callsPerTurn[3] ?? []).filter((call) =>
       JSON.stringify(call.result ?? '').includes('input types'));
 
     expect(hits.length,

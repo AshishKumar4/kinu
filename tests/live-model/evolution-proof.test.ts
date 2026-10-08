@@ -32,7 +32,7 @@ import {
 import { type CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import {
   buildEvalAgentSurface, collectStepText, createStepToolCallLog, recordRequestSurface,
-  type EvalAgentSurface, type RequestSurfaceEvidence,
+  type EvalAgentSurface, type LiveToolCall, type RequestSurfaceEvidence,
 } from './harness';
 import { provisionLocalTarget, type LocalTarget } from './target-local';
 import { seedTranscriptEntry, finalIntegerAnswer, letterKey,
@@ -93,6 +93,7 @@ type ReuseMode = 'instructed' | 'autonomous';
 interface TurnResult {
   text: string;
   toolCalls: ToolCallRecord[];
+  calls: readonly LiveToolCall[];
   steps: number;
   durationMs: number;
   reuseMode: ReuseMode;
@@ -150,7 +151,8 @@ async function chatTurn(turn: ChatTurn): Promise<TurnResult> {
 
   return {
     text: responseText,
-    toolCalls: log.records,
+    toolCalls: log.records(),
+    calls: log.calls,
     steps: log.steps,
     durationMs: Date.now() - start,
     reuseMode,
@@ -876,7 +878,7 @@ return report;`,
       const bucket = reuseByMode[result.reuseMode];
       bucket.eligible += 1;
 
-      const reusedInherited = result.toolCalls.some((call) => {
+      const reusedInherited = result.calls.some((call) => {
         const args = JSON.stringify(call.args);
 
         return inheritedToolNames.some((name) => args.includes(name));

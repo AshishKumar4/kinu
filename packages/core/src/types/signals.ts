@@ -16,8 +16,9 @@ export interface UserSignalIdentity {
 
 export const USER_MESSAGE_SIGNAL_KIND = 'user_message';
 
-/** 'preempted': a newer turn generation won the queue slot; 'failed': the enqueue threw. */
-export type SignalUndeliveredReason = 'preempted' | 'failed';
+/** 'preempted': a newer turn generation won the queue slot; 'turn_failed': the turn ran and ended on its error before it
+ *  answered; 'failed': the enqueue threw. */
+export type SignalUndeliveredReason = 'preempted' | 'turn_failed' | 'failed';
 
 /**
  * 'mid-turn': pending in an existing turn. 'queued': started its own turn. 'yielded': an operator

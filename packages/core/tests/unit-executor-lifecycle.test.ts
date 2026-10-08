@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { present } from "@kinu.run/test-utils";
 import { sandboxHandleLifecycle } from "./helpers/sandbox-handle-lifecycle";
+import { executorNamespace } from "../src/tools/executor-operations";
 import { createTestRuntime } from "./helpers";
 import {
   DefaultExecutionRouter,
@@ -403,5 +404,25 @@ describe("sandbox transient error classification", () => {
   test("a real fault is NOT retryable, so the classifier can say no", () => {
     // A predicate true for everything would make the two above meaningless.
     expect(isSandboxTransientError(new Error('command not found: nope'))).toBe(false);
+  });
+});
+
+describe("the sandbox namespace a program calls", () => {
+  test("exposePort(port, { name }) exposes the port under that name", async () => {
+    const handle = sandboxHandle();
+    const named: (string | undefined)[] = [];
+
+    // A server answers the port's health probe.
+    handle.exec = async () => ({ stdout: "200|0", exitCode: 0 });
+    handle.exposePort = async (port, opts) => {
+      named.push(opts?.name);
+
+      return { url: `https://${port}.example.test`, port, route: { reached: true } };
+    };
+
+    const sandbox = executorNamespace(createSandboxExecutor(handle, { previewHostSuffix: "kinu.example.test" })).tools;
+
+    await present(sandbox.exposePort, "sandbox.exposePort").execute(8787, { name: "api" });
+    expect(named).toEqual(["api"]);
   });
 });
