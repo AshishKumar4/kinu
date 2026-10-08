@@ -247,24 +247,23 @@ describe('turn-pipeline correctness wiring', () => {
 
   test('a pinned model is the model the next turn\'s request names', async () => {
     // The turn runs on the `setModel` pin, not the role tier's account default.
-    const harness = orchestratorHarness();
-    const agent = harness.agent;
-    agent.harnessInstallCatalog({
-      tiers: { default: { model: 'workers-ai/account-default' } },
-      availableModels: ['workers-ai/account-default', 'workers-ai/pinned-model'],
-    });
+    const pinned = 'ai-gateway/workers-ai/@cf/harness/pinned';
+    const served: string[] = [];
 
-    const pinned = await agent.setModel('workers-ai/pinned-model');
-    expect(pinned).toEqual({ ok: true, spec: 'workers-ai/pinned-model' });
+    const harness = gatewayWorkspace(stubAiBinding((run) => {
+      served.push(JSON.stringify(run.query));
 
-    const config = await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'hello' }] });
+      return chatCompletion(run, 'Noted.');
+    }));
 
-    expect(await agent.getAgentStatus()).toMatchObject({
-      tierId: 'default', model: 'workers-ai/pinned-model', reasoningEffort: 'medium',
-    });
-    // The request names the pinned model, not the tier's default.
-    const request = v.parse(v.object({ model: v.object({ modelId: v.string() }) }), config ?? {});
-    expect(request.model.modelId).toContain('pinned-model');
+    harness.agent.harnessInstallCatalog({ ...GATEWAY_CATALOG, availableModels: [GATEWAY_MODEL, pinned] });
+    harness.agent.harnessCatalogModels({ [pinned]: { contextWindow: 128_000 } });
+    expect(await harness.agent.setModel(pinned)).toEqual({ ok: true, spec: pinned });
+    await catalogTurn(harness.agent, 'hello');
+
+    expect(await harness.agent.getAgentStatus()).toMatchObject({ tierId: 'default', model: pinned, reasoningEffort: 'medium' });
+    // What the binding was asked for, read where the request left.
+    expect(served.at(-1)).toContain('@cf/harness/pinned');
   });
 
   test('a model set mid-turn sizes the next request, not the one in flight', async () => {
