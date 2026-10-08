@@ -27,7 +27,7 @@ export const TOOL_REACH = {
   eval: { native: true, codemode: null, replay: 'claimed' },
   shell: { native: true, codemode: 'workspace', replay: 'claimed' },
   // Reads and writes share one policy, so it is the write-safe one.
-  file: { native: true, codemode: 'workspace', replay: 'claimed' },
+  file: { native: true, codemode: 'file', replay: 'claimed' },
   agents: { native: true, codemode: 'agents', replay: 'claimed' },
   // Two saves leave two notes.
   memory: { native: true, codemode: 'memory', replay: 'claimed' },
@@ -97,7 +97,7 @@ const CODEMODE_ONLY_REACH: readonly CapabilityReach[] = Object.freeze(
   }),
 );
 
-/** Capabilities per codemode namespace; `workspace` survives while either `shell` or `file` does. */
+/** Capabilities per codemode namespace; `workspace` survives while either `shell` or `slate` does. */
 const CAPABILITIES_BY_NAMESPACE: Readonly<Record<string, readonly CapabilityName[]>> = (() => {
   const index: Record<string, CapabilityName[]> = {};
 
