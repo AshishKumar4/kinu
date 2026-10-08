@@ -22,12 +22,15 @@ const ConditionalOkReplySchema = v.object({ ok: v.literal(true), revision: VfsRe
 
 const ConflictReplySchema = v.object({ error: v.string(), revision: VfsRevisionSchema });
 
+/** A file opened for an edit carries the revision its save must name. */
+const OpenedSchema = v.looseObject({ revision: VfsRevisionSchema });
+
 interface Workspace {
   agent: HarnessOrchestratorAgent;
   files: VFS;
   /** The file's bytes as the workspace now holds them, or null when it holds none. */
   held(): Promise<Uint8Array | null>;
-  /** The revision the workspace's own plane gives the file now. */
+  /** The revision the Files pane opens the file at now, as the workspace's own plane gives it. */
   revision(): Promise<VfsRevision>;
 }
 
@@ -39,7 +42,7 @@ function workspace(): Workspace {
     agent,
     files,
     held: async () => ((await files.stat(PATH)) === null ? null : files.readFile(PATH)),
-    revision: async () => v.parse(VfsRevisionSchema, (await files.stat(PATH))?.revision),
+    revision: async () => v.parse(OpenedSchema, await agent.readExecutorFile('workspace', PATH)).revision,
   };
 }
 
