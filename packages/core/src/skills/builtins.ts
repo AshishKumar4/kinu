@@ -188,9 +188,8 @@ Seed the options with \`await workspace.slates.<id>.seed([...])\` (a \`seed(opti
 
 ## A slate in your answer
 
-For a view that needs no files of its own, write the page into your answer as a block, on lines of its own:
+For a view that needs no files of its own, write the page into your answer as a block, on lines of its own and never inside a code fence: a fenced block is shown as its source, not drawn. These lines, as they stand:
 
-\`\`\`html
 <slate-ui name="funnel">
 <!doctype html>
 <html><head><title>Checkout funnel</title></head>
@@ -204,7 +203,6 @@ For a view that needs no files of its own, write the page into your answer as a 
   </script>
 </body></html>
 </slate-ui>
-\`\`\`
 
 The chat draws it in place once your answer is stored. The block is HTML only, with the theme's tokens set on \`:root\` as for any slate. \`workspace\` is the same reach as any slate's, as of each call; \`workspace.agent.send({ text, data? })\` reaches your inbox as a \`slate\` event. Give each block in an answer its own name. It has no storage, sql, versions or \`$share\`: a UI that needs those is a slate with files.
 
