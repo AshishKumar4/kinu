@@ -107,6 +107,17 @@ function recoveryReport(argument: number) {
   }), JSON.parse(readFileSync(process.argv[argument + 1] ?? '', 'utf8')));
 }
 
+/** The registry token production's devbox holds and the deploy's REST token (secrets.env), not wrangler's OAuth token,
+ *  which expired mid-run (2026-10-08: the fixture's snapshot cleanup answered 401 minutes after it started). */
+function fixtureTokens() {
+  const token = process.env['DEVBOX_REGISTRY_TOKEN']?.trim() ?? '';
+  const rest = restApiToken();
+
+  if (token === '' || rest === '') throw new Error('the real-container tier needs DEVBOX_REGISTRY_TOKEN and KINU_CLOUDFLARE_API_TOKEN (secrets.env)');
+
+  return { token, rest };
+}
+
 async function main(): Promise<void> {
   const identity = tierIdentity(process.env);
   const recoveryArgument = process.argv.indexOf('--cleanup-report');
@@ -120,12 +131,7 @@ async function main(): Promise<void> {
   const app = `${worker}-contractbox`;
   const scratch = recovering === undefined ? mkdtempSync(join(tmpdir(), 'kinu-devbox-contracts-')) : dirname(process.argv[recoveryArgument + 1] ?? '');
   process.env['WRANGLER_LOG_PATH'] = join(scratch, 'wrangler');
-  // The registry token production's devbox holds (secrets.env), not wrangler's OAuth token, which expired mid-run
-  // (2026-10-08: the fixture's snapshot cleanup answered 401 minutes after it started).
-  const token = process.env['DEVBOX_REGISTRY_TOKEN']?.trim() ?? '';
-  const rest = restApiToken();
-
-  if (token === '' || rest === '') throw new Error('the real-container tier needs DEVBOX_REGISTRY_TOKEN and KINU_CLOUDFLARE_API_TOKEN (secrets.env)');
+  const { token, rest } = fixtureTokens();
   const report = join(scratch, 'report.json');
   const steps: Step[] = recovering?.steps ?? [];
   const snapshots = new Set<string>(recovering?.snapshots);
