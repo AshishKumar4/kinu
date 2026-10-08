@@ -40,6 +40,12 @@ export function procFile(pid: number | string, name: string): string | undefined
   return tolerate(() => tolerate(() => readFileSync(`/proc/${String(pid)}/${name}`, 'utf8'), 'esrch'), 'enoent');
 }
 
+/** The uid owning `/proc/<pid>/<name>`, or undefined once the process is gone: it can exit between the listing and
+ *  the stat, which answers ESRCH, not ENOENT. */
+export function procUid(pid: number | string, name = ''): number | undefined {
+  return tolerate(() => tolerate(() => statSync(`/proc/${String(pid)}/${name}`).uid, 'esrch'), 'enoent');
+}
+
 /** Field 22 of `/proc/<pid>/stat`, counted after the parenthesised command name, which may hold
  *  spaces; undefined once the process is gone. */
 export function processStartTicks(pid: number): number | undefined {
