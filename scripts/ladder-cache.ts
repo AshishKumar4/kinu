@@ -49,10 +49,10 @@ const ToolVersionsSchema = v.object({
 
 export type ToolVersions = v.InferOutput<typeof ToolVersionsSchema>;
 
-/** A CI part reuses its own store too (`.github/workflows/ci.yml` carries it between runs); a hammer run never does,
- *  since repeating the suite under contention is all it is for. */
-export function cacheEnabled(options: { readonly changedFrom?: string; readonly ciPart?: string; readonly noCache: boolean }): boolean {
-  return !options.noCache && options.ciPart?.startsWith('hammer-') !== true;
+/** A CI row reuses its container's store too; a hammer run never does, since repeating the suite under contention is
+ *  all it is for. */
+export function cacheEnabled(options: { readonly hammer?: boolean; readonly noCache: boolean }): boolean {
+  return !options.noCache && options.hammer !== true;
 }
 
 const PackageVersion = v.object({ version: v.string() });

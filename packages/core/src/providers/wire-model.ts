@@ -1,7 +1,4 @@
 // The one place a wire protocol becomes an SDK model.
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { createOpenAI } from '@ai-sdk/openai';
-import { createAnthropic } from '@ai-sdk/anthropic';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import { wrapLanguageModel, type LanguageModel } from 'ai';
 import * as v from 'valibot';
@@ -68,14 +65,16 @@ export function createWireModel(input: WireModelInput): LanguageModelV4 {
   const { name, modelId, baseURL, headers } = input;
   const fetched = { fetch: heardFetch(input.fetch ?? globalFetch) };
 
-  if (input.protocol === 'messages') return createAnthropic({ name, baseURL, ...anthropicAuth(headers ?? {}), ...fetched })(modelId);
+  if (input.protocol === 'messages') {
+    return lazyModel(name, modelId, async () => (await import('@ai-sdk/anthropic')).createAnthropic({ name, baseURL, ...anthropicAuth(headers ?? {}), ...fetched })(modelId));
+  }
 
   return input.protocol === 'responses'
     ? wrapLanguageModel({
-      model: createOpenAI({ name, baseURL, apiKey: 'placeholder', headers, ...fetched }).responses(modelId),
+      model: lazyModel(`${name}.responses`, modelId, async () => (await import('@ai-sdk/openai')).createOpenAI({ name, baseURL, apiKey: 'placeholder', headers, ...fetched }).responses(modelId)),
       middleware: statelessResponses(input.reasoning),
     })
-    : createOpenAICompatible({ name, baseURL, headers, ...fetched }).chatModel(modelId);
+    : lazyModel(`${name}.chat`, modelId, async () => (await import('@ai-sdk/openai-compatible')).createOpenAICompatible({ name, baseURL, headers, ...fetched }).chatModel(modelId));
 }
 
 /** The one stack every model is called through, applied where it is resolved (`registry.resolve`). */
@@ -98,6 +97,14 @@ function anthropicAuth(given: Readonly<Record<string, string>>) {
   if (apiKey !== undefined && apiKey !== '') return { apiKey, headers };
 
   return { authToken: bearer === undefined || bearer === '' ? 'placeholder' : bearer, headers };
+}
+
+/** A model whose SDK is imported when it is first used: an SDK no turn speaks is never compiled, and its schemas are never
+ *  built. Middleware reads `provider` before the SDK loads, so it is the id that SDK names the model with. */
+export function lazyModel(provider: string, modelId: string, load: () => Promise<LanguageModelV4>): LanguageModelV4 {
+  let loaded: Promise<LanguageModelV4> | undefined;
+
+  return deferredModel(provider, modelId, () => (loaded ??= load()));
 }
 
 /** `createModel` is synchronous and the wire is read from the catalog: resolved per call. */

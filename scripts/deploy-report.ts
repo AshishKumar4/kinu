@@ -13,6 +13,7 @@
  *   bun scripts/deploy-report.ts note <dir> <phase> <what> <finding>    a step of the deploy's own that went red
  *   bun scripts/deploy-report.ts dispatched <dir> <what> <url>          work the deploy started and does not wait for
  *   bun scripts/deploy-report.ts mark <dir> <mark> <seconds>            when the deploy reached <mark>
+ *   bun scripts/deploy-report.ts runner <dir> <phase> <exit>             a phase's runner's exit: a red when it said none
  *   bun scripts/deploy-report.ts render <dir> [after-soak]              write report.md; print its path; exit 1 on a red
  */
 import { execFileSync } from 'node:child_process';
@@ -128,6 +129,13 @@ export function recordRed(dir: string, red: {
 /** A step that went red outside any row: one of the deploy's own, or a phase whose runner reported no rows. */
 export function recordStep(dir: string, step: { readonly phase: string; readonly what: string; readonly finding: string }): void {
   append(dir, { kind: 'step', phase: step.phase, what: step.what, finding: step.finding });
+}
+
+/** A phase's runner that exited non-zero with no red of its own on record crashed before it reported one (the soak's
+ *  planner, 2026-10-07): its exit is the red, or the render reads the phase as clean. */
+export function recordRunner(dir: string, phase: string, exit: number): void {
+  if (exit === 0 || entriesOf(dir).some((entry) => (entry.kind === 'red' || entry.kind === 'step') && entry.phase === phase)) return;
+  recordStep(dir, { phase, what: `the ${phase} runner`, finding: `it exited ${String(exit)} without reporting a red; its own output is ${phase}.log beside this report` });
 }
 
 /** Something a fixer should act on that is not a red: the deploy's verdict does not read it. */
@@ -407,6 +415,11 @@ if (import.meta.main) {
 
   if (command === 'dispatched' && rest.length === 2) {
     append(first, { kind: 'dispatched', what: rest[0] ?? '', url: rest[1] ?? '' });
+    process.exit(0);
+  }
+
+  if (command === 'runner' && rest.length === 2) {
+    recordRunner(first, rest[0] ?? '', Number(rest[1]));
     process.exit(0);
   }
 

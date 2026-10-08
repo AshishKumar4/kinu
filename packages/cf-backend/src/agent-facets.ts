@@ -14,7 +14,10 @@ import type { AgentFacet, AgentFacetCalls, AgentFacetEnv } from './agent-facet/a
 
 export const AGENT_BUNDLE_DIRECTORY = '/_agent';
 
-const AGENT_BUNDLE_PATH = `${AGENT_BUNDLE_DIRECTORY}/agent.js`;
+/** The bundle's modules by name, `agent.js` the main one (vite-agent-bundle.ts). */
+const AGENT_BUNDLE_PATH = `${AGENT_BUNDLE_DIRECTORY}/modules.json`;
+
+const AgentModulesSchema = v.record(v.string(), v.string());
 
 const AGENT_FACET_CLASS = 'AgentFacet';
 
@@ -69,7 +72,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   parentReport(report: Parameters<AgentWorkspace['parentReport']>[0]) { return this.answers.parentReport(report); }
   autoTitle(subject: string, title: string | null) { return this.answers.autoTitle(subject, title); }
   hireAdvisor(advisor: AdvisorRecoverySnapshot) { return this.answers.hireAdvisor(advisor); }
-  owes(next: number | null) { return this.answers.owes(next); }
+  owes(next: number | null, holds: boolean) { return this.answers.owes(next, holds); }
   birthContext(drainTurnId: string) { return this.answers.birthContext(drainTurnId); }
   steerSkills(text: string, alreadyActive: readonly string[]) { return this.answers.steerSkills(text, alreadyActive); }
   getAuth(key: string, opts?: AuthRequest) { return this.answers.getAuth(key, opts); }
@@ -143,7 +146,7 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   parentReport(report: Parameters<AgentWorkspace['parentReport']>[0]) { return relayedAnswer(this.host().parentReport(report)); }
   autoTitle(subject: string, title: string | null) { return relayedAnswer(this.host().autoTitle(subject, title)); }
   hireAdvisor(advisor: AdvisorRecoverySnapshot) { return relayedAnswer(this.host().hireAdvisor(advisor)); }
-  owes(next: number | null) { return relayedAnswer(this.host().owes(next)); }
+  owes(next: number | null, holds: boolean) { return relayedAnswer(this.host().owes(next, holds)); }
   birthContext(drainTurnId: string) { return relayedAnswer(this.host().birthContext(drainTurnId)); }
   steerSkills(text: string, alreadyActive: readonly string[]) { return relayedAnswer(this.host().steerSkills(text, alreadyActive)); }
   getAuth(key: string, opts?: AuthRequest) { return relayedAnswer(this.host().getAuth(key, opts)); }
@@ -201,7 +204,7 @@ function agentBundle(assets: Fetcher): Effect.Effect<Response, KinuError> {
     .pipe(Effect.flatMap((response) => {
       const type = response.headers.get('content-type') ?? '';
 
-      return response.ok && type.includes('javascript')
+      return response.ok && type.includes('json')
         ? Effect.succeed(response)
         : Effect.fail(new KinuError(
           'unavailable', `The agent bundle is missing from this deployment (${AGENT_BUNDLE_PATH} answered ${response.status} ${type}). `
@@ -264,11 +267,11 @@ export function agentFacet<Facet extends AgentFacet = AgentFacet>(
   return settle(agentBundleTag(env.ASSETS).pipe(Effect.map((tag) => {
     const worker = env.LOADER.get(`kinu-agent:${tag}:${workspace}:${placement.storageKey}`, () => settle(agentCompatibility(env.ASSETS).pipe(
       Effect.flatMap((compatibility) => agentBundle(env.ASSETS).pipe(
-        Effect.flatMap((response) => attempt({ doing: 'reading the agent bundle', otherwise: 'unavailable' }, () => response.text())),
-        Effect.map((source) => ({
+        Effect.flatMap((response) => attempt({ doing: 'reading the agent bundle', otherwise: 'unavailable' }, async () => v.parse(AgentModulesSchema, await response.json()))),
+        Effect.map((modules) => ({
           ...compatibility,
           mainModule: 'agent.js',
-          modules: { 'agent.js': source },
+          modules,
           env: facetEnv,
         })),
       )),

@@ -210,7 +210,8 @@ export class SessionHistory {
     const messages: ModelMessage[] = [];
     const renders: { readonly message: ModelMessage; readonly at: number }[] = [];
 
-    for (const [index, member] of members.entries()) {
+    for (let index = 0; index < members.length; index++) {
+      const member = members[index];
       const message = all[index];
 
       if (message === undefined) throw new KinuError('io', 'a context member did not materialize');
