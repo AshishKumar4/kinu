@@ -1736,8 +1736,7 @@ export class LocalAgentSession {
   /** What this turn owes, via core's `declareTerminalRoster`; this session supplies values, never
    *  decisions, so the CLI cannot drift from the Durable Object. */
   private owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[] {
-    // A child titles from its brief, as a hosted actor does; the workspace mission names only the root.
-    const mission = this.rt.actor.parentActorId === null ? missionOf(soulIn(this.rt.space)) : null;
+    const root = this.rt.actor.parentActorId === null;
 
     // Decided on the live turn: `shouldGate` reads RAM a restart lacks, so the row's existence carries it.
     const gated = this.rt.shell !== undefined
@@ -1775,9 +1774,12 @@ export class LocalAgentSession {
       parts.advisor = projectJsonValue({ value: this.actorSession.advisorSnapshot(scoped, input.reachableTools) });
     }
 
-    parts.autoTitle = { mission };
+    // The workspace mission names the root. A child is named once, from its brief (the turn that opened its
+    // conversation), however that turn ended: a later turn's words ("Continue") are no name for it.
+    if (root) parts.autoTitle = { mission: missionOf(soulIn(this.rt.space)) };
+    else if (input.opensConversation) parts.autoTitle = { mission: input.userText, standIn: true };
     // The workspace's own conversation compresses into its facts; a hire's does not, as on cf.
-    parts.sleepTime = this.rt.actor.parentActorId === null;
+    parts.sleepTime = root;
 
     // One claimed effect; the sequence id is the parent's dedupe key, so a replay is recognised.
     if (input.owedReport !== null && relay !== null) {

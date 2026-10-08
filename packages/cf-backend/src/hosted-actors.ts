@@ -173,13 +173,13 @@ export async function admitHostedTask(
     if (input.messageId !== undefined) admission.messageId = input.messageId;
 
     if (input.idempotencyKey !== undefined) admission.idempotencyKey = input.idempotencyKey;
-    const result = admitSubordinateTask(new EventLog(seams.exec, actor.handle), admission);
+    const log = new EventLog(seams.exec, actor.handle);
+    const brief = log.query({ variant: 'subordinate_task', limit: 1 }).length === 0;
+    const result = admitSubordinateTask(log, admission);
 
-    // No chat session means no `auto_title` effect: the first admitted message lands a stand-in title
-    // here; the naming model runs after the turn (`settleHostedTask`), never inside admission.
-    if (result.admitted && input.kind === 'message' && await titleActorFromMessage(actor.handle, input.body)) {
-      seams.announce(actor);
-    }
+    // The first work an agent is given is its brief: its stand-in title shows at once, before the turn that opens its
+    // chat names it from the same words. A later message ("Continue") never titles it.
+    if (result.admitted && brief && await titleActorFromMessage(actor.handle, input.body)) seams.announce(actor);
 
     if (result.admitted) seams.armWake();
 
