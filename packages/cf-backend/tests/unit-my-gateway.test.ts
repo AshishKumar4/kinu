@@ -65,7 +65,11 @@ function uncatalogued(fetch: typeof globalThis.fetch): typeof globalThis.fetch {
 }
 
 describe('my-gateway request shape', () => {
-  test('routes through the account /ai/v1 endpoint with bearer + cf-aig-gateway-id', async () => {
+  // A Workers AI model goes by its own `@cf/` id: production, 2026-10-05, answered 400 "No such model workers-ai/@cf/…".
+  test.each([
+    ['my-gateway/google/gemini-2.5-flash', 'google/gemini-2.5-flash'],
+    ['my-gateway/workers-ai/@cf/zai-org/glm-5.3', '@cf/zai-org/glm-5.3'],
+  ])('%s routes through the account /ai/v1 endpoint with bearer + cf-aig-gateway-id, as %s', async (spec, wireModel) => {
     const seen: Array<{ url: string; auth: string | null; gateway: string | null; model: unknown }> = [];
 
     const reg = createAgentProviderRegistry({
@@ -81,21 +85,14 @@ describe('my-gateway request shape', () => {
           model: body.model,
         });
 
-        return chatCompletionResponse('google/gemini-2.5-flash');
+        return chatCompletionResponse(wireModel);
       })),
     });
 
-    const result = await generateText({
-      model: reg.resolveModel('my-gateway/google/gemini-2.5-flash', 'kinu-test'),
-      prompt: 'ping',
-    });
+    const result = await generateText({ model: reg.resolveModel(spec, 'kinu-test'), prompt: 'ping' });
 
     expect(result.text).toBe('ok');
-    expect(seen).toHaveLength(1);
-    expect(seen[0].url).toBe(`${AI_BASE_URL}/chat/completions`);
-    expect(seen[0].auth).toBe('Bearer cf-user-token');
-    expect(seen[0].gateway).toBe('prod-gw');
-    expect(seen[0].model).toBe('google/gemini-2.5-flash');
+    expect(seen).toEqual([{ url: `${AI_BASE_URL}/chat/completions`, auth: 'Bearer cf-user-token', gateway: 'prod-gw', model: wireModel }]);
   });
 
   test('a mid-flight 401 forces one refresh and retries with the fresh token', async () => {
