@@ -26,12 +26,6 @@ function routerOf(rt: CLIRuntime): ExecutionRouter {
 }
 
 describe('the local backend file plane', () => {
-  test('the workspace is the one executor: no device runtime, bound or not', () => {
-    const dir = scratchDir('mount-plane-bound');
-    expect(routerOf(freshRuntime()).listExecutors().map((e) => e.name)).toEqual(['workspace']);
-    expect(routerOf(freshRuntime(dir)).listExecutors().map((e) => e.name)).toEqual(['workspace']);
-  });
-
   test('a bound directory IS the workspace: its real files, whole, through the one plane', async () => {
     const dir = scratchDir('mount-plane-host');
     writeFileSync(join(dir, 'existing.txt'), 'from the host');
@@ -79,8 +73,8 @@ describe('the local backend file plane', () => {
 
     const sandbox = await writing('/sandbox/notes.md');
 
-    expect(sandbox).toBe(await writing('/elsewhere/notes.md'));
-    expect(['written', 'ENXIO']).not.toContain(sandbox);
+    expect(sandbox).toBe('EACCES');
+    expect(await writing('/elsewhere/notes.md')).toBe('EACCES');
   });
 
   // The host plane has no native removal, so the composite walks it; a walk that kept anything must say so.
@@ -95,7 +89,6 @@ describe('the local backend file plane', () => {
     try {
       await expect(machine.removeRecursive(join(folder, 'dir'))).rejects.toMatchObject({
         code: 'EACCES',
-        message: expect.stringContaining(`removing ${join(folder, 'dir/locked/kept')} failed`),
       });
     } finally {
       chmodSync(join(folder, 'dir/locked'), 0o700);

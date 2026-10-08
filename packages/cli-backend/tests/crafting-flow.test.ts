@@ -7,7 +7,7 @@ import { expect, test } from 'bun:test';
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import type { LanguageModelV2Prompt } from '@ai-sdk/provider';
 import * as v from 'valibot';
-import { CRAFT_NEUTRAL_PRIOR, initWorkspaceSchema, narrowToolSurface, toolsInWorkMode, type JsonValue, type RunEvent } from '@kinu.run/core';
+import { initWorkspaceSchema, narrowToolSurface, toolsInWorkMode, type JsonValue, type RunEvent } from '@kinu.run/core';
 import { present, scratchDir, scratchPath, toolExecute, workspaceDatabase } from '@kinu.run/test-utils';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
@@ -112,11 +112,11 @@ test('a crafted tool is made, called, scored out, shared with a node, and still 
     expect(built[1]).toContain('"wrote":"saved"');
     expect(built[1]).toContain('"doubled":42');
     expect(await readText(rt.storage.vfs, 'reports/output.txt')).toBe('saved');
-    expect(built[3]).toContain('[crafted:brokenIt]');
+    expect(built[3]).toContain('nope');
     expect(built[7]).toContain('undefined');
 
     expect(present(score('doubleIt'), 'doubleIt').uses).toBe(1);
-    expect(present(score('doubleIt'), 'doubleIt').score).toBeGreaterThan(CRAFT_NEUTRAL_PRIOR);
+    expect(present(score('doubleIt'), 'doubleIt').score).toBeGreaterThan(0.5);
     expect(present(score('brokenIt'), 'brokenIt')).toMatchObject({ uses: 4 });
     expect(present(score('brokenIt'), 'brokenIt').score).toBeLessThan(0.2);
 
@@ -140,7 +140,7 @@ test('a crafted tool is made, called, scored out, shared with a node, and still 
     await session.send('Triple it, with learning off.', { id: crypto.randomUUID() });
 
     expect(results().at(-1)).toContain('21');
-    expect(score('tripleIt')).toEqual({ score: CRAFT_NEUTRAL_PRIOR, uses: 0 });
+    expect(score('tripleIt')).toEqual({ score: 0.5, uses: 0 });
     expect(v.parse(v.number(), present(score('doubleIt'), 'doubleIt').uses)).toBe(1);
   } finally {
     await session.end();

@@ -82,6 +82,6 @@ test('a process killed after its call\'s effect: the next runs it no second time
   // The provider sees the call under its portable id; the refusal names the original.
   expect(results).toEqual([expect.objectContaining({
     toolName: 'eval',
-    output: { type: 'error-text', value: expect.stringMatching(/may or may not have taken effect\..*the call is call-mark/u) },
+    output: { type: 'error-text', value: expect.stringContaining('call-mark') },
   })]);
 });

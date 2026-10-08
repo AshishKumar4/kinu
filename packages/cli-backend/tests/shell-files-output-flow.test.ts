@@ -4,9 +4,10 @@
  * duration, the refused one too.
  */
 import { expect, test } from 'bun:test';
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import * as v from 'valibot';
 import type { LanguageModelV2CallOptions, LanguageModelV2Prompt } from '@ai-sdk/provider';
-import { DEFAULT_TOOL_RESULT_MAX_CHARS, TOOLCHAIN_PROBE_BINARIES, TOOLCHAIN_PROBED_CAPABILITIES, TOOLCHAIN_UNPROBEABLE, initWorkspaceSchema, toolchainCapabilities, type JsonObject } from '@kinu.run/core';
+import { initWorkspaceSchema, type JsonObject } from '@kinu.run/core';
 import { scratchDir, scratchPath, workspaceDatabase } from '@kinu.run/test-utils';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession } from '../src/local-session';
@@ -16,6 +17,14 @@ import { TestLanguageModelV2 } from './test-language-model';
 const USAGE = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
 
 const BIG = `awk 'BEGIN { for (i = 0; i < 9000; i++) print "padding log line", i; print "FINAL-ERROR-LINE" }'`;
+
+const RUNTIME_PROGRAMS = {
+  javascript: `bun -e 'process.stdout.write("CAP:javascript\\n")'`,
+  typescript: `bun -e 'const value: number = 7; if (value === 7) process.stdout.write("CAP:typescript\\n")'`,
+  python: `python3 -c 'print("CAP:python")'`,
+  npm: 'npm --version >/dev/null && printf "CAP:npm\\n"',
+  git: 'git --version >/dev/null && printf "CAP:git\\n"',
+};
 
 /** Every tool result the model was shown, in order, as the text it reads. */
 function results(prompt: LanguageModelV2Prompt): string[] {
@@ -60,14 +69,21 @@ function scripted(steps: ReadonlyArray<(shown: string[]) => { name: string; inpu
 test('a CLI turn runs what its row claims, restores a clamped output from the path it names, and times every call', async () => {
   const db = workspaceDatabase(scratchPath('shell-files-output-flow', 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { cwd: scratchDir('shell-files-output-flow-folder'), llm: DUMMY_LLM });
+  const folder = scratchDir('shell-files-output-flow-folder');
+  const rt = createCLIRuntime(db, { cwd: folder, llm: DUMMY_LLM });
   rt.actor.config.setLearning(false);
 
   const requests: LanguageModelV2CallOptions[] = [];
-  const offload = (shown: string[]): string => /full result at (\S+?)\]/.exec(shown[1] ?? '')?.[1] ?? 'no-offload-path';
+
+  const offload = (shown: string[]): string => {
+    const text = v.parse(v.object({ value: v.string() }), JSON.parse(shown[1] ?? '{}')).value;
+
+    return [...text.matchAll(/(?:vfs:\/\/|local:\/\/|\/)[^\s\]]+/g)].map((match) => match[0])
+      .find((path) => path !== folder) ?? 'no-offload-path';
+  };
 
   const model = scripted([
-    () => ({ name: 'shell', input: { command: `for b in ${TOOLCHAIN_PROBE_BINARIES.join(' ')}; do command -v "$b" >/dev/null && echo "on-path:$b"; done; true` } }),
+    () => ({ name: 'shell', input: { command: Object.values(RUNTIME_PROGRAMS).join('; ') } }),
     () => ({ name: 'shell', input: { command: BIG } }),
     (shown) => ({ name: 'shell', input: { command: `grep FINAL-ERROR-LINE ${offload(shown)}` } }),
     (shown) => ({ name: 'file', input: { action: 'read', path: offload(shown) } }),
@@ -88,24 +104,25 @@ test('a CLI turn runs what its row claims, restores a clamped output from the pa
 
   // The row claims a toolchain exactly where a binary that runs it answers in the turn's own shell.
   const row = /- workspace: active[^,]*, runs: ([^\\]*)/.exec(JSON.stringify(requests[0]?.prompt))?.[1] ?? '';
-  const [claimedPart = '', unmeasured = ''] = row.split(', not measured here: ');
-  const probed = new Set<string>(TOOLCHAIN_PROBED_CAPABILITIES);
+  const [claimedPart = ''] = row.split(', not measured here: ');
+  const probed = new Set(Object.keys(RUNTIME_PROGRAMS));
   const claimed = claimedPart.split(', ').filter((capability) => probed.has(capability));
-  const onPath = [...(shown[0] ?? '').matchAll(/on-path:([\w.-]+)/g)].flatMap((match) => (match[1] === undefined ? [] : [match[1]]));
+  const ran = [...(shown[0] ?? '').matchAll(/CAP:(\w+)/g)].flatMap((match) => (match[1] === undefined ? [] : [match[1]]));
 
-  expect(onPath).toContain('bun');
-  expect(claimed.sort()).toEqual(toolchainCapabilities(onPath).sort());
-  expect(unmeasured.split(', ')).toEqual(TOOLCHAIN_UNPROBEABLE.map(([capability]) => capability));
+  expect(ran).toContain('javascript');
+  expect(claimed.sort()).toEqual(ran.sort());
 
   // A clamped output names where it is whole; the shell and the file tool both reach what it left out there.
   const text = (at: number): string => v.parse(v.object({ value: v.string() }), JSON.parse(shown[at] ?? '{}')).value;
   const clamped = text(1);
   const hidden = Array.from({ length: 9000 }, (_, i) => `padding log line ${String(i)}\n`).find((line) => !clamped.includes(line)) ?? '';
 
-  expect(clamped.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
-  expect(clamped).toContain('[truncated;');
+  const fullOutput = Array.from({ length: 9000 }, (_, index) => `padding log line ${String(index)}\n`).join('') + 'FINAL-ERROR-LINE\n';
+  const saved = await readText(rt.storage.vfs, offload(shown));
+
+  expect(clamped.length).toBeLessThan(fullOutput.length);
+  expect(saved.slice(saved.indexOf('padding log line 0\n'))).toBe(fullOutput);
   expect(clamped).toContain('FINAL-ERROR-LINE');
-  expect(clamped).not.toContain('runtime "workspace"');
   expect(hidden).not.toBe('');
   expect(text(2)).toContain('FINAL-ERROR-LINE');
   expect(text(3)).toContain(hidden);

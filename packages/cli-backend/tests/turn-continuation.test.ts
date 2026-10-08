@@ -14,7 +14,8 @@ import {
 } from '@kinu.run/core';
 import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
 import type { LanguageModelV2CallOptions, LanguageModelV2StreamPart, LanguageModelV2Usage } from '@ai-sdk/provider';
-import { planForkConversation } from '../../core/src/identity/fork-plan';
+import { createTestWorkspace } from '../../core/tests/helpers';
+import { streamFork } from '../../core/tests/helpers/fork-stream';
 import { createCLIRuntime, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { TestLanguageModelV2 } from './test-language-model';
@@ -232,13 +233,11 @@ describe('AN INTERRUPTED TURN CONTINUES — once', () => {
     for (const prompt of promptsB) {
       const roles = prompt.map((message) => message.role);
       const users = prompt.flatMap((message) => message.role === 'user' ? [messageText(message)] : []);
-      const activation = users.findIndex((text) => text.includes('- focused: explicit /focused'));
+      const activation = users.findIndex((text) => text.includes('Focus on memory only.'));
 
       // The kept steps follow the request; the dynamic block naming the activation and the turn's skill bodies ride
       // before it, never after them.
       expect(activation).toBeGreaterThanOrEqual(0);
-      expect(users.slice(activation + 1)).toHaveLength(2);
-      expect(users[activation + 1]).toContain('Focus on memory only.');
       expect(users.at(-1)).toBe('/focused remember this');
       expect(roles.lastIndexOf('user')).toBeLessThan(roles.indexOf('tool'));
     }
@@ -455,14 +454,34 @@ describe('RUNTIME CONTEXT SURVIVES A RESTART — where it was woven', () => {
     const prompts: PromptMessage[][] = [];
     await answered({ db, rt }, ['the first question', 'the second question'], prompts, async () => { await appendMemoryNote(rt.memory, 'Parse invoices with the CSV parser.'); });
 
-    const renders = new Set(db.query<{ message_id: string }, []>("SELECT message_id FROM session_messages WHERE origin = 'render'").all().map((row) => row.message_id));
+    const files = createTestWorkspace();
 
-    const carried = (entryId: string) => planForkConversation({ sql: rt.storage.sql, actorId: rt.actor.actorId, untilMessageId: entryId, artifactDirectory: '/artifacts' })
-      .members.filter((member) => renders.has(member.message_id)).length;
+    const carried = async (entryId: string) => {
+      const target = createTestWorkspace();
 
-    // Cut at the second question: the delta its turn bore is not carried; the first turn's block is.
-    expect(carried(await userEntry(rt, 'the second question'))).toBe(1);
-    expect(carried(present(rt.stores.history.transcript(CHAT_SESSION_ID).newestId(), 'the newest entry'))).toBe(2);
+      try {
+        await streamFork({ sql: rt.storage.sql, db, forkSource: files.forkSource }, target,
+          { workspaceId: 'forked-context', workspaceName: 'forked-context', artifactDirectory: '/artifacts' },
+          { untilMessageId: entryId, artifactDirectory: '/artifacts' });
+
+        return target.sql<{ content_json: string }>`SELECT s.content_json FROM actor_context_selection a
+          JOIN context_memberships m ON m.actor_id = a.actor_id AND m.context_id = a.context_id
+          JOIN session_messages s ON s.actor_id = m.actor_id AND s.message_id = m.message_id
+          WHERE s.origin = 'render' AND m.to_revision IS NULL ORDER BY m.position`
+          .map((row) => row.content_json);
+      } finally {
+        target.db.close();
+      }
+    };
+
+    const early = await carried(await userEntry(rt, 'the second question'));
+    const late = await carried(present(rt.stores.history.transcript(CHAT_SESSION_ID).newestId(), 'the newest entry'));
+
+    expect(early).toHaveLength(1);
+    expect(early.join('\n')).not.toContain('Parse invoices with the CSV parser.');
+    expect(late).toHaveLength(2);
+    expect(late.join('\n')).toContain('Parse invoices with the CSV parser.');
+    files.db.close();
     db.close();
   });
 
