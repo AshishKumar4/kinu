@@ -105,12 +105,23 @@ export interface WorkSurfaceProps {
   onForkLandingOpened?: () => void;
 }
 
+/** The strip's tabs in drawn order: the slates, the previews, then each surface `shown` keeps. */
+function stripTabs(slates: readonly SlateSummary[] | undefined, ports: readonly PinnedPort[], shown: (s: (typeof SURFACES)[number]) => boolean): SurfaceKind[] {
+  return [
+    ...(slates ?? []).map((slate) => slateSurface(slate.id)),
+    ...ports.map((port): SurfaceKind => `preview:${port.executor}:${port.port}`),
+    ...SURFACES.filter(shown),
+  ];
+}
+
 /** The one panel every tab of the strip opens. */
 const WORK_PANEL_ID = "work-surface-panel";
 
-/** A tab's element id, so the panel names the tab that opened it. */
-function tabElementId(kind: string): string {
-  return `work-tab-${kind}`;
+/** A tab's element id, so the panel names the tab that opened it; no surface open names none. */
+function tabElementId(kind: string): string;
+function tabElementId(kind: string | null): string | undefined;
+function tabElementId(kind: string | null): string | undefined {
+  return kind === null ? undefined : `work-tab-${kind}`;
 }
 
 /** A surface can be selected without a click (deep link, restored tab); keep its tab in view. */
@@ -243,13 +254,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
   const openConnect = useCallback(() => setConnecting(true), []);
   const closeConnect = useCallback(() => setConnecting(false), []);
 
-  const tabIds: SurfaceKind[] = [
-    ...(props.slates ?? []).map((slate) => slateSurface(slate.id)),
-    ...ports.map((port): SurfaceKind => `preview:${port.executor}:${port.port}`),
-    ...SURFACES.filter((s) => s === surface || surfaceHasContent(s, content)),
-  ];
-
-  const roving = useRovingTabs(strip, tabIds, surface);
+  const roving = useRovingTabs(strip, stripTabs(props.slates, ports, (s) => s === surface || surfaceHasContent(s, content)), surface);
   useSelectedTabInView(strip, surface);
   useWheelScrollsSideways(strip);
   const bodyFit = previewSelected ? "overflow-hidden" : "overflow-y-auto py-[18px] pl-[18px] pr-6";
@@ -312,7 +317,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
       </div>
 
       {/* One panel, named by whichever tab opened it. */}
-      <div role="tabpanel" id={WORK_PANEL_ID} aria-labelledby={surface === null ? undefined : tabElementId(surface)} className="flex min-h-0 flex-1 flex-col">
+      <div role="tabpanel" id={WORK_PANEL_ID} aria-labelledby={tabElementId(surface)} className="flex min-h-0 flex-1 flex-col">
       <div className={`flex-1 min-h-0 ${surface === "Changes" ? "hidden" : bodyFit}`}>
         <div className={surface === "Work" ? "" : "hidden"}>
           <ErrorBoundary label="Work">
