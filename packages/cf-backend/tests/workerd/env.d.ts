@@ -255,6 +255,7 @@ interface AccountResetProbeRpc extends Rpc.DurableObjectBranded {
 }
 
 interface AgentFacetProbeRpc extends Rpc.DurableObjectBranded {
+  probeUnderLoad(workspace: string, burns: number, iterations: number): Promise<import('./agent-facet-shapes').ProbeContention>;
   deletedWorkspaceFacet(workspace: string): Promise<{ readonly before: string[]; readonly after: string[] }>;
   onePlane(workspace: string, agent: string): Promise<OnePlaneObservation>;
   swarmNode(workspace: string): Promise<ReadableStream<Uint8Array>>;

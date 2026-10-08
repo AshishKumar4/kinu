@@ -345,6 +345,41 @@ describe('BackgroundJobRunner — a detached job whose work stops answering', ()
     expect(enqueued.map((turn) => turn.metadata?.status)).toEqual(['failed']);
   });
 
+  test('a lost job re-driven while its first executor still runs settles once, by the attempt that holds it', async () => {
+    const clock = handClock(Date.now());
+    const first = Promise.withResolvers<string>();
+    const redrive = Promise.withResolvers<string>();
+    const redriveSignals: AbortSignal[] = [];
+
+    const { runner, store, enqueued } = setup({
+      clock,
+      // The first executor's context is slow, not gone: its probe is never answered in time, its work still finishes.
+      alive: () => new Promise(() => {}),
+      resume: async (_kind, _input, _mode, signal) => {
+        redriveSignals.push(signal);
+
+        return await redrive.promise;
+      },
+    });
+
+    const jobId = runner.create('agents', { op: 'swarm', task: 'rank the designs' }, 'build', new AbortController());
+
+    runner.detach(jobId, 'agents', first.promise);
+    clock.advance(silence);
+    await flush();
+    await runner.recoverDueResumes();
+    expect(redriveSignals).toHaveLength(1);
+
+    // The first executor finishes after it was given up: its answer is refused, and it leaves the re-drive in charge.
+    first.resolve('the stale answer');
+    await flush();
+    expect({ status: store.get(jobId)?.status, woken: enqueued.length }).toEqual({ status: 'running', woken: 0 });
+
+    // The owner's cancel still reaches the attempt that holds the job.
+    await runner.cancel(jobId);
+    expect(redriveSignals.map((signal) => signal.aborted)).toEqual([true]);
+  });
+
   test('a job whose context keeps answering runs on however long it takes: the bound is silence, not a deadline', async () => {
     const clock = handClock(Date.now());
     const { runner, store, enqueued } = setup({ clock, alive: async () => {} });

@@ -1,17 +1,15 @@
 // developers.openai.com/siwc, ADR P1.
-import { authenticatedSend } from './authenticated-send';
-import { EventSourceParserStream, type EventSourceMessage } from '@ai-sdk/provider-utils';
-import type { JSONObject, LanguageModelV4CallOptions, LanguageModelV4Message } from '@ai-sdk/provider';
+import { authenticatedSend, signedSend } from './authenticated-send';
+import type { JSONObject, LanguageModelV4CallOptions, LanguageModelV4Message, LanguageModelV4StreamPart, LanguageModelV4StreamResult } from '@ai-sdk/provider';
 import { APICallError, wrapLanguageModel, type LanguageModel, type LanguageModelMiddleware } from 'ai';
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import { attempt, diagnostics, KinuError, settle, tolerate, type ErrorCode } from '../obs/index';
 import { chatgptCatalogRows, shownCatalogRows } from './codex';
-import { asFetchFunction, copyHeaders } from './fetch-shim';
+import { asFetchFunction } from './fetch-shim';
 import { withCallAccount } from './quota';
 import type { AuthRequest, AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './types';
 import { StaleModelList, statelessResponses } from './util';
-import { JsonObjectSchema } from '../utils/json';
 import { streamedGenerate } from './middleware/stream-generate';
 import { heardFetch } from './middleware/attempt';
 import { lazyModel } from './wire-model';
@@ -47,10 +45,7 @@ export interface ChatGptProviderOptions {
   readonly device?: ChatGptDeviceRoute;
 }
 
-const REFUSED_FIELDS = [
-  'background', 'conversation', 'max_output_tokens', 'max_tool_calls', 'metadata', 'moderation', 'multi_agent', 'prompt',
-  'prompt_cache_retention', 'previous_response_id', 'safety_identifier', 'temperature', 'top_logprobs', 'top_p', 'truncation', 'user',
-] as const;
+const RESPONSES_URL = `${CHATGPT_BASE_URL}/responses`;
 
 function namespacedCall(message: LanguageModelV4Message, functions: ReadonlySet<string>): LanguageModelV4Message {
   if (message.role !== 'assistant') return message;
@@ -165,23 +160,24 @@ function refusalError(input: {
   });
 }
 
-function refusalOf(res: Response, url: string): Effect.Effect<APICallError | null> {
-  if (res.ok) return Effect.succeed(null);
+/** A refusal the route answered with this status and body, in its words, or null when it is not one the plan names. */
+function refusalFrom(answer: { readonly url: string; readonly status: number; readonly headers: Headers; readonly text: string }): APICallError | null {
+  const body = tolerate<unknown>(() => JSON.parse(answer.text), 'malformed-input') ?? answer.text;
+  const envelope = v.safeParse(PlanErrorBodySchema, body);
+  const said = envelope.success ? planErrorOf({ error: envelope.output.error }) : null;
+  const admission = v.safeParse(AdmissionBodySchema, body);
+  const refusal = (said?.code ? PLAN_REFUSALS.get(said.code) : undefined) ?? ADMISSION_REFUSALS.get(answer.status);
+  const words = said?.message ?? (admission.success ? admission.output.detail : null);
 
-  return Effect.map(Effect.promise(() => res.clone().text()), (text) => {
-    const body = tolerate<unknown>(() => JSON.parse(text), 'malformed-input') ?? text;
-    const envelope = v.safeParse(PlanErrorBodySchema, body);
-    const said = envelope.success ? planErrorOf({ error: envelope.output.error }) : null;
-    const admission = v.safeParse(AdmissionBodySchema, body);
-    const refusal = (said?.code ? PLAN_REFUSALS.get(said.code) : undefined) ?? ADMISSION_REFUSALS.get(res.status);
-    const words = said?.message ?? (admission.success ? admission.output.detail : null);
-
-    return refusal === undefined ? null : refusalError({ url, refusal, said, words, headers: res.headers, body });
-  });
+  return refusal === undefined ? null : refusalError({ url: answer.url, refusal, said, words, headers: answer.headers, body });
 }
 
-function requestUrl(input: RequestInfo | URL): string {
-  return input instanceof Request ? input.url : input.toString();
+/** The SDK's error for a call the route refused before its stream opened, in the plan's words; a 503 is the model
+ *  stack's to wait out and ask again. */
+function planRefusal(cause: APICallError): APICallError {
+  if (cause.statusCode === undefined || cause.statusCode === 503) return cause;
+
+  return refusalFrom({ url: cause.url, status: cause.statusCode, headers: new Headers(cause.responseHeaders), text: cause.responseBody ?? '' }) ?? cause;
 }
 
 const EventSchema = v.object({ type: v.string() });
@@ -200,11 +196,12 @@ const IncompleteSchema = v.object({
   response: v.object({ incomplete_details: v.optional(v.nullable(v.object({ reason: v.optional(v.nullable(v.string())) }))) }),
 });
 
-function eventOf(message: EventSourceMessage): { readonly type: string; readonly value: unknown } | null {
-  const value = tolerate<unknown>(() => JSON.parse(message.data), 'malformed-input');
-  const typed = v.safeParse(EventSchema, value);
+/** A raw part's event as the SDK parsed it off the wire. */
+function eventOf(part: LanguageModelV4StreamPart): { readonly type: string; readonly value: unknown } | null {
+  if (part.type !== 'raw') return null;
+  const typed = v.safeParse(EventSchema, part.rawValue);
 
-  return typed.success ? { type: typed.output.type, value } : null;
+  return typed.success ? { type: typed.output.type, value: part.rawValue } : null;
 }
 
 function streamRefusal(event: { readonly type: string; readonly value: unknown }, url: string, headers: Headers): APICallError | KinuError {
@@ -232,51 +229,45 @@ function incompleteFailure(reason: string, headers: Headers): KinuError {
   return failure;
 }
 
-function guardedStream(res: Response, url: string): Response {
-  let ended = false;
+/** The plan's answer read from the events the SDK parsed (its raw chunks): a failed or filtered answer, or one cut off
+ *  before `response.completed` (an output-limit stop aside), fails its stream; a refused call is the plan's refusal. */
+function planAnswer(open: () => PromiseLike<LanguageModelV4StreamResult>): Effect.Effect<LanguageModelV4StreamResult> {
+  return Effect.gen(function* () {
+    const opened = yield* Effect.tryPromise({ try: () => open(), catch: (cause) => cause }).pipe(
+      Effect.catch((cause) => Effect.die(APICallError.isInstance(cause) ? planRefusal(cause) : cause)),
+    );
 
-  const guard = new TransformStream<EventSourceMessage, string>({
-    transform(message, controller) {
-      const event = eventOf(message);
+    const headers = new Headers(opened.response?.headers);
+    let ended = false;
 
-      if (event !== null && (event.type === 'response.failed' || event.type === 'error')) {
-        controller.error(streamRefusal(event, url, res.headers));
+    const guard = new TransformStream<LanguageModelV4StreamPart, LanguageModelV4StreamPart>({
+      transform(part, controller) {
+        const event = eventOf(part);
 
-        return;
-      }
+        if (event !== null && (event.type === 'response.failed' || event.type === 'error')) {
+          controller.error(streamRefusal(event, RESPONSES_URL, headers));
 
-      const reason = event?.type === INCOMPLETE ? incompleteReason(event) : null;
+          return;
+        }
 
-      if (reason !== null && reason !== OUTPUT_LIMIT) {
-        controller.error(incompleteFailure(reason, res.headers));
+        const reason = event?.type === INCOMPLETE ? incompleteReason(event) : null;
 
-        return;
-      }
+        if (reason !== null && reason !== OUTPUT_LIMIT) {
+          controller.error(incompleteFailure(reason, headers));
 
-      if (event?.type === COMPLETED || reason === OUTPUT_LIMIT) ended = true;
-      controller.enqueue(`${message.event === undefined ? '' : `event: ${message.event}\n`}data: ${message.data}\n\n`);
-    },
-    flush(controller) {
-      if (!ended) controller.error(new KinuError('unavailable', ENDED_EARLY));
-    },
+          return;
+        }
+
+        if (event?.type === COMPLETED || reason === OUTPUT_LIMIT) ended = true;
+
+        // The SDK finishes a stream cut short too.
+        if (part.type === 'finish' && !ended) controller.error(new KinuError('unavailable', ENDED_EARLY));
+        else controller.enqueue(part);
+      },
+    });
+
+    return { ...opened, stream: opened.stream.pipeThrough(guard) };
   });
-
-  const body = res.body?.pipeThrough(new TextDecoderStream()).pipeThrough(new EventSourceParserStream()).pipeThrough(guard).pipeThrough(new TextEncoderStream());
-
-  return new Response(body ?? null, { status: res.status, statusText: res.statusText, headers: res.headers });
-}
-
-/** The plan streams every call: a generate is its stream collected (`streamedGenerate`). */
-function planRequest(init: RequestInit | undefined): RequestInit | undefined {
-  const text = v.safeParse(v.string(), init?.body);
-  const parsed = text.success ? v.safeParse(JsonObjectSchema, tolerate<unknown>(() => JSON.parse(text.output), 'malformed-input')) : null;
-
-  if (parsed?.success !== true) return init;
-  const body = { ...parsed.output };
-
-  for (const field of REFUSED_FIELDS) delete body[field];
-
-  return { ...init, body: JSON.stringify({ ...body, stream: true }) };
 }
 
 function resolvedAuth(deps: ProviderDeps): Effect.Effect<AuthResolution | null, KinuError> {
@@ -324,7 +315,12 @@ export function createChatGptProvider(opts: ChatGptProviderOptions = {}): ModelP
         const res = yield* attempt({ doing: 'listing the ChatGPT models', otherwise: 'unavailable' }, () => (route?.fetch ?? deps.fetch ?? fetch)(url, { headers: auth.headers }))
           .pipe(Effect.catch((failure) => Effect.fail(stale(failure.message, failure))));
 
-        if (!res.ok) return yield* Effect.fail(stale((yield* refusalOf(res, url))?.message ?? `api.openai.com answered HTTP ${String(res.status)}`));
+        if (!res.ok) {
+          const text = yield* Effect.promise(() => res.text());
+
+          return yield* Effect.fail(stale(refusalFrom({ url, status: res.status, headers: res.headers, text })?.message ?? `api.openai.com answered HTTP ${String(res.status)}`));
+        }
+
         const body: unknown = yield* Effect.promise(() => res.json());
 
         // OpenAI's rule for this route (developers.openai.com/siwc/token-sharing-open-source/models-and-inference).
@@ -333,49 +329,35 @@ export function createChatGptProvider(opts: ChatGptProviderOptions = {}): ModelP
     },
 
     createModel(modelId, deps): LanguageModel {
-      const customFetch = asFetchFunction(async (input, requested) => {
-        const init = planRequest(requested);
-        const url = requestUrl(input);
+      // The sign-in and the machine that carry a call: its request and answer are the SDK's, shaped by `PLAN_REQUEST` and
+      // read by `planAnswer`.
+      const customFetch = asFetchFunction(async (input, init) => {
         const route = await relayed(deps);
-
-        // The raw answer reports its keepalives: `guardedStream` re-reads it and drops comments.
         const send = heardFetch(route?.fetch ?? deps.fetch ?? fetch);
 
         // A device's own sign-in renews nowhere from here: its 401 is the answer.
         const deviceLogin = async (_key: string, request?: AuthRequest): Promise<AuthResolution | null> => (request === undefined ? { headers: {} } : null);
 
-        const sendWith = (auth: AuthResolution): Promise<Response> => {
-          const merged = copyHeaders(init?.headers);
-
-          for (const [name, value] of Object.entries(auth.headers)) merged.set(name, value);
-
-          return send(input, { ...init, headers: merged });
-        };
-
         return settle(Effect.gen(function* () {
           // A refusal the transport raised is the owner's answer and passes through unchanged.
           const answer = yield* Effect.promise(() => authenticatedSend({
-            key: CHATGPT_CRED_KEY, getAuth: route === null ? deps.getAuth : deviceLogin, send: sendWith,
+            key: CHATGPT_CRED_KEY, getAuth: route === null ? deps.getAuth : deviceLogin, send: signedSend(send, input, init),
           }));
 
           if (answer.kind === 'absent') return yield* Effect.fail(new KinuError('missing', 'No ChatGPT sign-in with plan usage on this machine'));
-          const res = answer.response;
-          // A 503 is the model stack's to wait out and ask again; every other refusal is the plan's answer.
-          const refusal = res.status === 503 ? null : yield* refusalOf(res, url);
 
-          if (refusal !== null) return yield* Effect.die(refusal);
-          const answered = withCallAccount(res, 'chatgpt', CHATGPT_CRED_KEY);
-
-          if (!answered.ok || (init?.method ?? 'GET').toUpperCase() !== 'POST') return answered;
-
-          return guardedStream(answered, url);
+          return withCallAccount(answer.response, 'chatgpt', CHATGPT_CRED_KEY);
         }));
       });
 
       const model = lazyModel('openai.responses', modelId, async () => (await import('@ai-sdk/openai'))
         .createOpenAI({ baseURL: CHATGPT_BASE_URL, apiKey: 'chatgpt-plan', fetch: customFetch }).responses(modelId));
 
-      return wrapLanguageModel({ model, middleware: [statelessResponses(true), PLAN_REQUEST, streamedGenerate] });
+      return wrapLanguageModel({ model, middleware: [statelessResponses(true), PLAN_REQUEST, streamedGenerate, {
+        specificationVersion: 'v4',
+        transformParams: async ({ params }) => ({ ...params, includeRawChunks: true }),
+        wrapStream: ({ doStream }) => settle(planAnswer(doStream)),
+      }] });
     },
   };
 }

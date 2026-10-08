@@ -14,16 +14,16 @@ import { hostedActorPlacement } from '../../src/actor-hosting';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import { AgentWorkspaceRPC } from '../../src/agent-facets';
 import { ROOT_SLATE_CALLER, SlateBinding } from '../../src/slates/bindings';
-import { createRuntimeExecutor } from '../../src/codemode-sandbox';
+import { createRuntimeExecutor, jobContextAnswers } from '../../src/codemode-sandbox';
 import { SLATE_STORAGE_BINDING, type SlateCallResult } from '@kinu.run/core';
 import type { AgentFacet } from './agent-facet-probe-agent';
-import type { AgentFacetAnswer, CraftedFromNodeObservation, NodeJobObservation, OnePlaneObservation, RelayedAnswer, SwarmFacetObservation } from './agent-facet-shapes';
+import type { AgentFacetAnswer, CraftedFromNodeObservation, NodeJobObservation, OnePlaneObservation, ProbeContention, RelayedAnswer, SwarmFacetObservation } from './agent-facet-shapes';
 
 export * from '../../src/server';
 
 const PROBE_OWNER_ID = 'a9e1c0de5eed0000a9e1c0de5eed0000';
 
-const PROBE_RPC = ['markedFacet', 'facetMarks', 'onePlane', 'swarmNode', 'agentFor', 'craftedFromNode', 'swarmJobNode', 'jobWindowArmed', 'outrunJobWindow', 'jobRows', 'taskEvents'];
+const PROBE_RPC = ['probeLatencies', 'burn', 'markedFacet', 'facetMarks', 'onePlane', 'swarmNode', 'agentFor', 'craftedFromNode', 'swarmJobNode', 'jobWindowArmed', 'outrunJobWindow', 'jobRows', 'taskEvents'];
 
 /** Reads `probe_marks` from whatever facet storage it starts over. */
 const MARKS_READER = `import { DurableObject } from 'cloudflare:workers';
@@ -50,6 +50,29 @@ export class OrchestratorAgent extends ProductionOrchestrator {
   }
 
   /** A hired agent whose facet storage holds one row; its storage key, to read the facet after a wipe. */
+  /** A running job's probe, `rounds` times back to back: how long each answer took to reach this object. */
+  async probeLatencies(rounds: number): Promise<number[]> {
+    const latencies: number[] = [];
+
+    for (let round = 0; round < rounds; round += 1) {
+      const asked = Date.now();
+
+      await jobContextAnswers();
+      latencies.push(Date.now() - asked);
+    }
+
+    return latencies;
+  }
+
+  /** CPU-bound work holding this object's one thread, as a heavy invocation does. */
+  burn(iterations: number): Promise<number> {
+    let mixed = 0;
+
+    for (let step = 0; step < iterations; step += 1) mixed = Math.imul(mixed ^ step, 2_654_435_761) >>> 0;
+
+    return Promise.resolve(mixed);
+  }
+
   async markedFacet(name: string): Promise<{ readonly storageKey: string; readonly marks: string[] }> {
     const directory = this.actorDirectoryStore();
     const child = directory.create({ parent: directory.main(), name, creationId: name, origin: 'user', lifetime: 'durable' });
@@ -264,7 +287,7 @@ interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
 
 export class AgentFacetProbeRoot extends DurableObject<ProbeRootEnv> {
   private async target(workspace: string): Promise<Pick<OrchestratorAgent,
-    'markedFacet' | 'facetMarks' | 'destroyAgent' | 'onePlane' | 'swarmNode' | 'agentFor' | 'craftedFromNode' | 'setModel' | 'setSoul' | 'swarmJobNode' | 'jobWindowArmed' | 'outrunJobWindow' | 'jobRows'
+    'probeLatencies' | 'burn' | 'markedFacet' | 'facetMarks' | 'destroyAgent' | 'onePlane' | 'swarmNode' | 'agentFor' | 'craftedFromNode' | 'setModel' | 'setSoul' | 'swarmJobNode' | 'jobWindowArmed' | 'outrunJobWindow' | 'jobRows'
     | 'taskEvents' | 'cancelBackgroundJob'>> {
     const owner = await ownerCaller(this.env);
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(PROBE_OWNER_ID));
@@ -279,6 +302,27 @@ export class AgentFacetProbeRoot extends DurableObject<ProbeRootEnv> {
 
   async onePlane(workspace: string, agent: string): Promise<OnePlaneObservation> {
     return await (await this.target(workspace)).onePlane(agent);
+  }
+
+  /**
+   * A running job's probe, answered while `burns` invocations of `iterations` CPU each queue on the same object; the
+   * same probe with nothing queued first. Each latency runs from the probe's call to its continuation on the object.
+   */
+  async probeUnderLoad(workspace: string, burns: number, iterations: number): Promise<ProbeContention> {
+    const root = await this.target(workspace);
+    // Alone, a burn's span is its CPU: nothing else holds the thread. The clock moves at the call's answer.
+    const alone = Date.now();
+
+    await root.burn(iterations);
+    const burnMs = Date.now() - alone;
+    const quiet = await root.probeLatencies(PROBE_ROUNDS);
+    const started = Date.now();
+    const probing = root.probeLatencies(PROBE_ROUNDS);
+
+    await Promise.all(Array.from({ length: burns }, async () => await root.burn(iterations)));
+    const loadedMs = Date.now() - started;
+
+    return { quiet, loaded: await probing, loadedMs, burnMs };
   }
 
   /** A hired agent's facet storage before and after the shipped workspace delete. */
@@ -417,3 +461,6 @@ export class AgentFacetProbeRoot extends DurableObject<ProbeRootEnv> {
     return await root.swarmNode();
   }
 }
+
+/** Probe rounds per sample. */
+const PROBE_ROUNDS = 12;

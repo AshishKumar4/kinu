@@ -149,7 +149,7 @@ describe('Beta: swarms in account Settings', () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 1280, height: 1100 });
-      const presetChoice = () => page.evaluate(() => document.body.textContent?.includes('Default swarm preset') === true);
+      const presetChoice = () => page.evaluate(() => document.querySelector('[aria-label="Default swarm preset"]') !== null);
 
       await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=models`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[aria-label="Description"]');

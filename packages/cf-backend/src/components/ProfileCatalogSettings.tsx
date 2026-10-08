@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Button } from '@cloudflare/kumo';
-import { BrainIcon, IdentificationCardIcon, PlusIcon, TrashIcon, XIcon } from '@phosphor-icons/react';
+import { BrainIcon, CaretRightIcon, CheckIcon, IdentificationCardIcon, MinusIcon, PlusIcon, TrashIcon, XIcon } from '@phosphor-icons/react';
 import {
   BUILTIN_ROLE_DEFINITIONS,
   BUILTIN_SKILL_HEADERS,
@@ -33,9 +33,9 @@ import { Effect, type Exit } from 'effect';
 import { hold, showing } from '@kinu.run/core/obs';
 import { getProfileCatalog, listAvailableModels, testModel, updateProfileCatalog, type ModelMenu } from '../lib/user-api';
 import { AccountPicker, ModelPicker, reasoningEffortLabel, specOnAccount } from './ModelPicker';
-import { BrandMark, providerBrand } from './ui/BrandMark';
 import { Card, Choice, Field, composing, inputCls, tabCls } from './ui/form';
 import { FilledButton } from './ui/FilledButton';
+import { Segmented } from './ui/Segmented';
 
 const EMPTY_MENU: ModelMenu = { models: [], failures: [] };
 
@@ -43,37 +43,33 @@ interface CatalogOperation {
   promise: Promise<Exit.Exit<void>> | null;
 }
 
-/** The model that rates each turn from the user's reply (`evolution/ratings.ts`); absent is the default. */
-function DecisionModelField({ value, onChange }: {
-  value: string | undefined;
-  onChange: (model: (typeof DECISION_MODELS)[number]) => void;
-}) {
-  return (
-    <div className="border-t p-border pt-3" data-section="decision-model">
-      <Field inline label="Decision model"
-        hint="Rates each turn from your reply to it, so the agent learns what served you. Your thumbs override it.">
-        <select
-          className={`${selectSmCls} w-56`}
-          aria-label="Decision model"
-          value={value ?? DEFAULT_DECISION_MODEL}
-          onChange={(event) => {
-            const model = DECISION_MODELS.find((spec) => spec === event.target.value);
+interface TierWords {
+  readonly name: string;
+  readonly use: string;
+}
 
-            if (model !== undefined) onChange(model);
-          }}
-        >
-          {DECISION_MODELS.map((model) => <option key={model} value={model}>{model.slice(model.lastIndexOf('/') + 1)}</option>)}
-        </select>
-      </Field>
-    </div>
-  );
+/** The built-in tiers as a person picks them (`profiles/model-route.ts` says what runs on each); an added tier goes by
+ *  its own name. */
+const TIER_WORDS: ReadonlyMap<TierId, TierWords> = new Map([
+  ['default', { name: 'Main', use: 'Every chat and every new workspace' }],
+  ['deep', { name: 'Deep', use: 'Planning, reviews and judging work' }],
+  ['fast', { name: 'Quick', use: 'Summaries, titles, reflection and research' }],
+]);
+
+function tierWords(id: TierId): TierWords {
+  return TIER_WORDS.get(id) ?? { name: id, use: 'The roles that name this tier' };
+}
+
+/** `clef-flash` reads "Clef Flash". */
+function decisionModelName(spec: string): string {
+  return spec.slice(spec.lastIndexOf('/') + 1).split('-').map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
 }
 
 /** Overrides `inputCls` to the combobox's `size="sm"` metrics; `!` because same-property
  *  utilities resolve by order, not intent. */
 const selectSmCls = `${inputCls} !h-6.5 !px-2 !py-0 !text-xs`;
 
-export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: boolean }) {
+export function ProfileCatalogSettings() {
   const [envelope, setEnvelope] = useState<ProfileCatalogEnvelope | null>(null);
   const [draft, setDraft] = useState<ProfileCatalog | null>(null);
   const [menu, setMenu] = useState<ModelMenu>(EMPTY_MENU);
@@ -283,19 +279,19 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
     if (model === newChainModel) setNewChainModel('');
   };
 
-  const dropChain = (model: string) => editChain(model, []);
-
   const chainedModels = draft === null ? [] : [...new Set([...Object.keys(draft.modelFallbacks ?? {}), ...(newChainModel ? [newChainModel] : [])])];
 
-  const saveWhat = tiersOnly ? 'Save tiers' : 'Save roles and tiers';
+  const tuning = (tierId: TierId, assignment: TierAssignment) => (
+    <TierTuning tierId={tierId} assignment={assignment} menu={menu}
+      onEffort={(effort) => setTierEffort(tierId, effort)} onFallbacks={(fallbacks) => setTierFallbacks(tierId, fallbacks)} />
+  );
 
-  const defaultModel = draft === null ? '' : draft.tiers.default.model;
-  const defaultLabel = labelOfSpec(menu, defaultModel);
+  const retries = draft?.retries ?? DEFAULT_PROVIDER_RETRIES;
 
   return (
     <>
-      <Card title="Model tiers" icon={BrainIcon}
-        description="The default tier is the model this account runs on and the one a new workspace starts with. Tier changes apply account-wide next turn.">
+      <Card title="Models" icon={BrainIcon}
+        description="The models your agents think with, in every workspace you own. A change applies from the next turn.">
         {!draft || !envelope ? (
           <div className="flex items-center gap-2 p-row-text p-text-3">
             <span>{busy ? 'Loading account profiles…' : 'Profiles are unavailable.'}</span>
@@ -304,139 +300,134 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
           </div>
         ) : (
           <>
-            <div>
-              {tierIdsOf(draft).map((tierId) => {
-                const assignment = tierId === 'default' ? draft.tiers.default : draft.tiers[tierId];
-                const resolved = assignment ?? draft.tiers.default;
-                const builtin = TIER_IDS.some((id) => id === tierId);
-
-                const entry = menu.models.find((model) => model.spec === specWithoutAccount(resolved.model));
-
-                const efforts = offeredReasoningEfforts(
-                  entry?.reasoningEfforts,
-                  assignment?.reasoningEffort,
-                );
-
-                const brand = providerBrand(entry?.provider ?? '');
-
-                return (
-                  <div key={tierId} data-tier={tierId} className="grid gap-x-3 gap-y-2 border-t p-border py-3 first:border-t-0 first:pt-0 md:grid-cols-[8rem_minmax(0,1fr)_9rem] md:items-center">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex min-w-0 items-center gap-1.5">
-                        {brand !== undefined && <BrandMark brand={brand} size={13} bare />}
-                        <div className="min-w-0">
-                          <div className="truncate font-mono text-xs p-text">{tierId}</div>
-                          {assignment === undefined && <div className="p-meta p-text-3">uses default</div>}
-                          {tierId === 'default' && <div className="p-meta p-text-3">account default</div>}
-                        </div>
-                      </div>
-                      {!builtin && (
-                        <Button variant="ghost" size="sm"
-                          icon={<TrashIcon size={12} />}
-                          aria-label={`Remove tier ${tierId}`}
-                          onClick={() => removeTier(tierId)} />
-                      )}
-                    </div>
-                    <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 [&>:first-child]:min-w-0 [&>:first-child]:flex-1">
-                      <ModelPicker
-                        models={menu.models}
-                        failures={menu.failures}
-                        accounts={menu.accounts}
-                        value={assignment?.model ?? ''}
-                        onChange={(model) => setTier(tierId, model)}
-                        clearable={tierId !== 'default'}
-                        placeholder={tierId === 'default' ? resolved.model : `Use default: ${defaultLabel}`}
-                        label={`${tierId} model`}
-                        test={testModel}
-                        size="sm"
-                      />
-                    </div>
-                    <Choice<ReasoningEffort | ''>
-                      label={`${tierId} reasoning effort`}
-                      size="sm"
-                      value={assignment?.reasoningEffort ?? ''}
-                      disabled={efforts.length === 0}
-                      options={[
-                        { value: '', label: 'Model default' },
-                        ...efforts.map((effort) => ({ value: effort, label: reasoningEffortLabel(effort) })),
-                      ]}
-                      onChange={(effort) => setTierEffort(tierId, effort)}
-                    />
-                    <FallbackChain
-                      label={tierId}
-                      chain={resolved.fallbacks ?? []}
-                      model={resolved.model}
-                      menu={menu}
-                      onChange={(fallbacks) => setTierFallbacks(tierId, fallbacks)}
-                    />
-                  </div>
-                );
-              })}
-            </div>
-            <Field inline label="Add a tier"
-              hint="Lowercase letters, digits and hyphens. Roles refer to a tier by this name.">
-              <input
-                className={`${selectSmCls} w-56`}
-                placeholder="e.g. review"
-                value={newTierId}
-                aria-label="New tier id"
-                onChange={(event) => setNewTierId(event.target.value)}
-                onKeyDown={(event) => { if (event.key === 'Enter' && !composing(event.nativeEvent)) addTier(); }}
-              />
-              <Button size="sm" variant="secondary" disabled={!newTierId.trim()} onClick={addTier}>Add</Button>
-            </Field>
-            <div className="border-t p-border pt-3" data-section="retry-and-fallback">
-              <Field inline label="Retries"
-                hint="How many times the last model of a chain retries a failure that may pass. Earlier models hand over at once.">
-                <input
-                  type="number"
-                  min={0}
-                  max={10}
-                  className={`${selectSmCls} w-20`}
-                  aria-label="Retries"
-                  value={draft.retries ?? DEFAULT_PROVIDER_RETRIES}
-                  onChange={(event) => setRetries(event.target.valueAsNumber)}
+            <div data-tier="default" className="space-y-3">
+              <Field label="Main model" hint="Every chat and every new workspace runs on it.">
+                <ModelPicker
+                  models={menu.models}
+                  failures={menu.failures}
+                  accounts={menu.accounts}
+                  value={draft.tiers.default.model}
+                  onChange={(model) => setTier('default', model)}
+                  placeholder={draft.tiers.default.model}
+                  label="default model"
+                  test={testModel}
+                  className="w-full sm:w-80"
                 />
               </Field>
-              <div className="p-meta p-text-3 pt-2">A model's own chain runs instead of its tier's, whichever tier runs it.</div>
-              {chainedModels.map((model) => (
-                <div key={model} data-model-chain={model} className="grid gap-x-3 gap-y-2 py-2 md:grid-cols-[8rem_minmax(0,1fr)_9rem] md:items-center">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="truncate text-xs p-text">{labelOfSpec(menu, model)}</span>
-                    <Button variant="ghost" size="sm" icon={<TrashIcon size={12} />} aria-label={`Remove the ${model} chain`}
-                      onClick={() => dropChain(model)} />
-                  </div>
-                  <FallbackChain
-                    label={model}
-                    chain={draft.modelFallbacks?.[model] ?? []}
-                    model={model}
-                    menu={menu}
-                    onChange={(chain) => editChain(model, chain)}
-                  />
+              {tuning('default', draft.tiers.default)}
+            </div>
+
+            <div className="border-t p-border pt-4" data-section="tiers">
+              <div className="p-row-text font-medium p-text">For particular work</div>
+              <p className="mt-0.5 p-meta p-text-3">Left unset, each uses the main model.</p>
+              <div className="mt-1">
+                {tierIdsOf(draft).filter((tierId) => tierId !== 'default').map((tierId) => {
+                  const assignment = draft.tiers[tierId];
+                  const words = tierWords(tierId);
+
+                  return (
+                    <div key={tierId} data-tier={tierId}
+                      className="grid gap-x-4 gap-y-2 border-t p-border py-3 first:border-t-0 md:grid-cols-[11rem_minmax(0,1fr)]">
+                      <div className="flex items-start justify-between gap-2 md:pt-0.5">
+                        <div className="min-w-0">
+                          <div className="p-row-text p-text">{words.name}</div>
+                          <div className="p-meta p-text-3">{words.use}</div>
+                        </div>
+                        {!TIER_IDS.some((id) => id === tierId) && (
+                          <Button variant="ghost" size="sm" icon={<TrashIcon size={12} />}
+                            aria-label={`Remove tier ${tierId}`} onClick={() => removeTier(tierId)} />
+                        )}
+                      </div>
+                      <div className="min-w-0 space-y-2">
+                        <ModelPicker
+                          models={menu.models}
+                          failures={menu.failures}
+                          accounts={menu.accounts}
+                          value={assignment?.model ?? ''}
+                          onChange={(model) => setTier(tierId, model)}
+                          clearable
+                          placeholder={`Main model · ${labelOfSpec(menu, draft.tiers.default.model)}`}
+                          label={`${tierId} model`}
+                          test={testModel}
+                          size="sm"
+                        />
+                        {assignment !== undefined && tuning(tierId, assignment)}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <Disclosure label="Advanced" summary="Retries, backups for one model, turn rating, more tiers" section="advanced">
+              <Field inline label="Retries"
+                hint="How many more times the last backup is asked after a failure that may pass. Earlier models hand over at once.">
+                <div className="flex items-center gap-1" role="group" aria-label="Retries">
+                  <Button size="sm" variant="secondary" icon={<MinusIcon size={12} />} aria-label="Fewer retries"
+                    disabled={retries === 0} onClick={() => setRetries(retries - 1)} />
+                  <span className="w-8 text-center p-num p-row-text p-text" data-retries>{retries}</span>
+                  <Button size="sm" variant="secondary" icon={<PlusIcon size={12} />} aria-label="More retries"
+                    disabled={retries === 10} onClick={() => setRetries(retries + 1)} />
                 </div>
-              ))}
-              <Field inline label="Add a model chain">
+              </Field>
+
+              <div data-section="retry-and-fallback" className="space-y-2">
+                <Field label="Backups for one model"
+                  hint="When a particular model fails, these run instead of its tier's backups, whichever tier runs it." />
+                {chainedModels.map((model) => (
+                  <div key={model} data-model-chain={model}
+                    className="grid gap-x-4 gap-y-1.5 border-t p-border py-2.5 first:border-t-0 md:grid-cols-[11rem_minmax(0,1fr)] md:items-center">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate p-row-text p-text">{labelOfSpec(menu, model)}</span>
+                      <Button variant="ghost" size="sm" icon={<TrashIcon size={12} />} aria-label={`Remove the ${model} chain`}
+                        onClick={() => editChain(model, [])} />
+                    </div>
+                    <BackupChain label={model} chain={draft.modelFallbacks?.[model] ?? []} model={model} menu={menu}
+                      onChange={(chain) => editChain(model, chain)} />
+                  </div>
+                ))}
                 <ModelPicker
                   models={menu.models.filter((entry) => !chainedModels.includes(entry.spec))}
                   failures={menu.failures}
                   value=""
                   onChange={(spec) => setNewChainModel(spec)}
-                  placeholder="Pick a model…"
+                  placeholder="Choose a model to give backups…"
                   label="Add a model chain"
                   test={testModel}
                   size="sm"
-                  className="w-56"
+                  className="w-full md:w-72"
                 />
+              </div>
+
+              <div data-section="decision-model">
+                <Field inline label="Turn rating"
+                  hint="Rates each turn from your reply to it, so agents learn what served you. Your thumbs override it.">
+                  <Segmented label="Decision model"
+                    segments={DECISION_MODELS.map((model) => ({ id: model, label: decisionModelName(model) }))}
+                    value={draft.decisionModel ?? DEFAULT_DECISION_MODEL}
+                    onChange={setDecisionModel} />
+                </Field>
+              </div>
+
+              <Field inline label="Another tier" hint="Roles can name it. Lowercase letters, digits and hyphens.">
+                <input
+                  className={`${selectSmCls} w-40`}
+                  placeholder="e.g. review"
+                  value={newTierId}
+                  aria-label="New tier id"
+                  onChange={(event) => setNewTierId(event.target.value)}
+                  onKeyDown={(event) => { if (event.key === 'Enter' && !composing(event.nativeEvent)) addTier(); }}
+                />
+                <Button size="sm" variant="secondary" disabled={!newTierId.trim()} onClick={addTier}>Add</Button>
               </Field>
-            </div>
-            <DecisionModelField value={draft.decisionModel} onChange={setDecisionModel} />
+            </Disclosure>
           </>
         )}
       </Card>
 
-      {(draft && envelope && !tiersOnly) && (
+      {(draft && envelope) && (
         <Card title="Agent roles" icon={IdentificationCardIcon}
-          description="Roles select instructions, tools, skills, a tier, and a swarm preset.">
+          description="What each kind of agent is for: its brief, its model and what it may use.">
           <div className="grid gap-5 md:grid-cols-[13rem_minmax(0,1fr)]">
             {/* A scrolling tab strip below md, the accent-tinted list row at md and up. */}
             <nav ref={roleNav} aria-label="Agent roles"
@@ -460,7 +451,7 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
                     <span className="min-w-0 flex-1 text-left">
                       <span className="flex items-center gap-1.5">
                         <span className="truncate">{entry?.label ?? deriveRoleLabel(roleId)}</span>
-                        {draft !== null && roleId in draft.roles && (
+                        {roleId in draft.roles && (
                           <span title="Customized" aria-label="Customized"
                             className="p-dot-accent inline-block size-1.5 shrink-0 rounded-full" />
                         )}
@@ -523,18 +514,14 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
         </Card>
       )}
 
-      {/* Docked (`sticky bottom-3`) on the settings page; in flow inside the wizard's scroll
-          panel, where stickiness would float it over the providers. */}
       {(draft && envelope) && (
-        <div className={tiersOnly
-          ? "p-card p-surface px-4 py-3"
-          : "sticky bottom-3 z-10 p-card p-surface px-4 py-3 shadow-[var(--shadow-composer)]"}>
+        <div className="sticky bottom-3 z-10 p-card p-surface px-4 py-3 shadow-[var(--shadow-composer)]">
           {error && <div className="mb-3 rounded-md px-3 py-2 text-xs p-notice-danger">{error}</div>}
           <div className="flex items-center justify-between gap-3">
             {dirty && <span className="p-meta p-warning">Unsaved changes</span>}
             <div className="ml-auto flex gap-2">
               <Button size="sm" variant="secondary" disabled={!dirty || busy} onClick={() => setDraft(envelope.catalog)}>Discard</Button>
-              <FilledButton disabled={!dirty || busy} onClick={save}>{busy ? 'Saving…' : saveWhat}</FilledButton>
+              <FilledButton disabled={!dirty || busy} onClick={save}>{busy ? 'Saving…' : 'Save'}</FilledButton>
             </div>
           </div>
         </div>
@@ -550,7 +537,54 @@ function labelOfSpec(menu: ModelMenu, spec: string): string {
   return account === undefined ? label : `${label} · ${account}`;
 }
 
-function FallbackChain(props: {
+/** A section the page opens on closed: `summary` says what is inside. */
+function Disclosure(props: { label: string; summary: string; section: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="border-t p-border pt-3" data-section={props.section}>
+      <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}
+        className="flex w-full min-w-0 items-center gap-2 text-left">
+        <CaretRightIcon size={12} className={`shrink-0 p-fold-turn p-text-3 ${open ? 'rotate-90' : ''}`} />
+        <span className="shrink-0 p-row-text font-medium p-text">{props.label}</span>
+        <span className="min-w-0 truncate p-meta p-text-3">{props.summary}</span>
+      </button>
+      {open && <div className="mt-4 space-y-5 md:pl-5">{props.children}</div>}
+    </div>
+  );
+}
+
+/** How hard a tier's model thinks, and what runs when it fails. */
+function TierTuning(props: {
+  tierId: TierId;
+  assignment: TierAssignment;
+  menu: ModelMenu;
+  onEffort: (effort: ReasoningEffort | '') => void;
+  onFallbacks: (fallbacks: readonly string[]) => void;
+}) {
+  const entry = props.menu.models.find((model) => model.spec === specWithoutAccount(props.assignment.model));
+  const efforts = offeredReasoningEfforts(entry?.reasoningEfforts, props.assignment.reasoningEffort);
+
+  return (
+    <div className="space-y-2">
+      {efforts.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <span className="w-16 shrink-0 p-meta p-text-3">Thinking</span>
+          <Segmented<ReasoningEffort | 'auto'>
+            label={`${props.tierId} reasoning effort`}
+            segments={[{ id: 'auto', label: 'Auto' }, ...efforts.map((effort) => ({ id: effort, label: reasoningEffortLabel(effort) }))]}
+            value={props.assignment.reasoningEffort ?? 'auto'}
+            onChange={(effort) => props.onEffort(effort === 'auto' ? '' : effort)}
+          />
+        </div>
+      )}
+      <BackupChain label={props.tierId} chain={props.assignment.fallbacks ?? []} model={props.assignment.model}
+        menu={props.menu} onChange={props.onFallbacks} />
+    </div>
+  );
+}
+
+function BackupChain(props: {
   label: string;
   chain: readonly string[];
   model: string;
@@ -567,35 +601,37 @@ function FallbackChain(props: {
   const freeVariant = (spec: string) => variants(spec).find((variant) => !taken.has(variant));
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5 md:col-span-2 md:col-start-2" role="group" aria-label={`${props.label} fallbacks`}>
-      <span className="p-meta p-text-3">Fallbacks</span>
-      {props.chain.map((spec, index) => (
-        <span key={spec} data-spec={spec} className="inline-flex items-center gap-1 rounded-md border p-border px-2 py-0.5 text-xs p-text">
-          <span className="p-text-3">{index + 1}.</span>
-          {labelOfSpec(props.menu, spec)}
-          <AccountPicker spec={spec} accounts={accountsOf(spec)} label={`${props.label} fallback ${index + 1} account`}
-            onChange={(next) => props.onChange(props.chain.map((entry, at) => (at === index ? next : entry)))} />
-          <button type="button" className="p-text-3 hover:p-text" aria-label={`Remove ${spec} from the ${props.label} fallbacks`}
-            onClick={() => props.onChange(props.chain.filter((entry) => entry !== spec))}>
-            <XIcon size={11} />
-          </button>
-        </span>
-      ))}
-      <ModelPicker
-        models={props.menu.models.filter((entry) => freeVariant(entry.spec) !== undefined)}
-        failures={props.menu.failures}
-        value=""
-        onChange={(spec) => {
-          const free = spec === '' ? undefined : freeVariant(spec);
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5" role="group" aria-label={`${props.label} fallbacks`}>
+      <span className="w-16 shrink-0 p-meta p-text-3">If it fails</span>
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+        {props.chain.map((spec, index) => (
+          <span key={spec} data-spec={spec} className="inline-flex items-center gap-1 rounded-md border p-border px-2 py-0.5 text-xs p-text">
+            <span className="p-text-3">{index + 1}.</span>
+            {labelOfSpec(props.menu, spec)}
+            <AccountPicker spec={spec} accounts={accountsOf(spec)} label={`${props.label} fallback ${index + 1} account`}
+              onChange={(next) => props.onChange(props.chain.map((entry, at) => (at === index ? next : entry)))} />
+            <button type="button" className="p-text-3 hover:p-text" aria-label={`Remove ${spec} from the ${props.label} fallbacks`}
+              onClick={() => props.onChange(props.chain.filter((entry) => entry !== spec))}>
+              <XIcon size={11} />
+            </button>
+          </span>
+        ))}
+        <ModelPicker
+          models={props.menu.models.filter((entry) => freeVariant(entry.spec) !== undefined)}
+          failures={props.menu.failures}
+          value=""
+          onChange={(spec) => {
+            const free = spec === '' ? undefined : freeVariant(spec);
 
-          if (free !== undefined) props.onChange([...props.chain, free]);
-        }}
-        placeholder={props.chain.length === 0 ? 'Add a fallback model…' : 'Add another…'}
-        label={`${props.label} add fallback`}
-        test={testModel}
-        size="sm"
-        className="w-56"
-      />
+            if (free !== undefined) props.onChange([...props.chain, free]);
+          }}
+          placeholder={props.chain.length === 0 ? 'Add a backup model…' : 'Add another…'}
+          label={`${props.label} add fallback`}
+          test={testModel}
+          size="sm"
+          className="w-48"
+        />
+      </div>
     </div>
   );
 }
@@ -615,101 +651,104 @@ function RoleEditor(props: {
   const set = <Key extends keyof RoleDefinition>(key: Key, value: RoleDefinition[Key]) =>
     props.onChange({ ...props.role, [key]: value });
 
+  const builtin = props.id in BUILTIN_ROLE_DEFINITIONS;
+  const origin = builtin ? 'Built in' : 'Yours';
+
   return (
     <div className="min-w-0 space-y-5">
-      <div className="flex items-center justify-between gap-3">
-        <span className="p-annotation p-text-3">{props.id}</span>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="p-title p-text">{props.role.label ?? deriveRoleLabel(props.id)}</h3>
+          <div className="p-meta p-text-3">
+            {props.customized ? 'Customized' : origin} · <span className="p-annotation">{props.id}</span>
+          </div>
+        </div>
         <Button size="xs" variant="secondary" disabled={!props.customized} onClick={props.onReset}>
-          {props.id in BUILTIN_ROLE_DEFINITIONS ? 'Reset built-in role' : 'Delete custom role'}
+          {builtin ? 'Reset to built-in' : 'Delete role'}
         </Button>
       </div>
       <div className="grid gap-x-6 gap-y-5 sm:grid-cols-2">
-        <Field label="Label">
+        <Field label="Name">
           <input className={inputCls} aria-label="Label"
             value={props.role.label ?? deriveRoleLabel(props.id)}
             onChange={(event) => set('label', event.target.value)} />
         </Field>
-        <Field label="Default tier" hint="The tier this role runs on.">
+        <Field label="Model">
           <Choice label="Default tier"
             value={props.role.tier}
-            options={props.tiers.map((tier) => ({ value: tier, label: tier }))}
+            options={props.tiers.map((tier) => ({ value: tier, label: `${tierWords(tier).name} model` }))}
             onChange={(tier) => set('tier', tier)} />
         </Field>
         <div className="sm:col-span-2">
-          <Field label="Description" hint="One line in the role list: when an agent should use this role.">
+          <Field label="When to use it" hint="Shown in the role list, and read by an agent deciding whom to hire.">
             <input className={inputCls} aria-label="Description"
               value={props.role.description}
               onChange={(event) => set('description', event.target.value)} />
           </Field>
         </div>
-        <div className="sm:col-span-2">
-          <Field label="Instructions" hint="The standing brief this role works under, as the prompt reads it.">
-            <textarea rows={10} aria-label="Instructions"
-              className={`${inputCls} p-t-code max-h-[33rem] min-h-56 resize-y overflow-y-auto`}
-              value={props.role.instructions}
-              onChange={(event) => set('instructions', event.target.value)} />
-          </Field>
-        </div>
-        {props.swarms && (
-          <Field label="Default swarm preset">
-            <Choice label="Default swarm preset"
-              value={props.role.preset}
-              options={NAMED_SWARM_PRESETS.map((preset) => ({ value: preset, label: preset }))}
-              onChange={(preset) => set('preset', preset)} />
-          </Field>
-        )}
-        <Field label="Plan mode" hint="This role opens its workspace in Plan mode.">
-          <label className="flex w-fit items-center gap-2 p-row-text p-text-2">
-            <input type="checkbox" aria-label="Start in Plan mode"
-              className="accent-[var(--c-accent)]"
-              checked={props.role.plan === true}
-              onChange={(event) => set('plan', event.target.checked ? true : undefined)} />
-            Start in Plan mode
-          </label>
-        </Field>
       </div>
-      <div className="grid gap-x-6 gap-y-5 md:grid-cols-2">
-        <MemberSet
-          label="Tools"
-          about="Every tool unless narrowed. Unchecking one takes it away from this role."
-          options={BUILTIN_TOOLS.map((name) => ({ id: name, about: BUILTIN_TOOL_SPECS[name].summary }))}
-          selected={props.role.allowedTools}
-          onChange={(next) => set('allowedTools', next)}
-        />
-        <MemberSet
-          label="Skills"
-          about="Shipped skills this role loads. A workspace's own skills are enabled in that workspace."
-          options={BUILTIN_SKILL_HEADERS.map((skill) => ({ id: skill.name, about: skill.description }))}
-          selected={props.role.skills ?? []}
-          onChange={(next) => set('skills', next !== undefined && next.length > 0 ? next : undefined)}
-          emptyMeansNone
-        />
-        <MemberSet
-          label="Roles this role can hire"
-          about="Every role unless narrowed."
-          options={props.roleIds.map((id) => ({ id, about: null }))}
-          selected={props.role.spawns === '*' ? undefined : props.role.spawns}
-          onChange={(next) => set('spawns', next)}
-          wide
-        />
+      <label className="flex w-fit items-center gap-2 p-row-text p-text-2">
+        <input type="checkbox" aria-label="Start in Plan mode"
+          className="accent-[var(--c-accent)]"
+          checked={props.role.plan === true}
+          onChange={(event) => set('plan', event.target.checked ? true : undefined)} />
+        Starts in Plan mode: it designs before it changes anything
+      </label>
+      {props.swarms && (
+        <Field inline label="Swarm preset">
+          <Choice label="Default swarm preset" size="sm" className="w-40"
+            value={props.role.preset}
+            options={NAMED_SWARM_PRESETS.map((preset) => ({ value: preset, label: preset }))}
+            onChange={(preset) => set('preset', preset)} />
+        </Field>
+      )}
+      <Field label="Instructions" hint="The standing brief this role works under, as the prompt reads it.">
+        <textarea rows={8} aria-label="Instructions"
+          className={`${inputCls} p-t-code max-h-[33rem] min-h-40 resize-y overflow-y-auto`}
+          value={props.role.instructions}
+          onChange={(event) => set('instructions', event.target.value)} />
+      </Field>
+      <div>
+        <div className="p-row-text font-medium p-text">What it can use</div>
+        <div className="mt-1">
+          <Allowance
+            label="Tools"
+            options={BUILTIN_TOOLS.map((name) => ({ id: name, about: BUILTIN_TOOL_SPECS[name].summary }))}
+            selected={props.role.allowedTools}
+            onChange={(next) => set('allowedTools', next)}
+          />
+          <Allowance
+            label="Skills"
+            options={BUILTIN_SKILL_HEADERS.map((skill) => ({ id: skill.name, about: skill.description }))}
+            selected={props.role.skills ?? []}
+            onChange={(next) => set('skills', next !== undefined && next.length > 0 ? next : undefined)}
+            emptyMeansNone
+          />
+          <Allowance
+            label="Can hire"
+            options={props.roleIds.map((id) => ({ id, about: null }))}
+            selected={props.role.spawns === '*' ? undefined : props.role.spawns}
+            onChange={(next) => set('spawns', next)}
+          />
+        </div>
       </div>
     </div>
   );
 }
 
 /**
- * `selected` absent means the whole list (the catalog's convention for `allowedTools` and
- * `spawns`); checking the last box restores absent. With `emptyMeansNone`, absent is empty.
+ * One row that says what a role may use and opens to change it. `selected` absent means the whole list (the
+ * catalog's convention for `allowedTools` and `spawns`); turning the last one on restores absent. With
+ * `emptyMeansNone`, absent is empty.
  */
-function MemberSet(props: {
+function Allowance(props: {
   label: string;
-  about: string;
   options: ReadonlyArray<{ id: string; about: string | null }>;
   selected: readonly string[] | undefined;
   onChange(next: readonly string[] | undefined): void;
   emptyMeansNone?: boolean;
-  wide?: boolean;
 }) {
+  const [open, setOpen] = useState(false);
   const all = props.options.map((option) => option.id);
   const current = props.selected ?? (props.emptyMeansNone ? [] : all);
 
@@ -720,29 +759,39 @@ function MemberSet(props: {
     props.onChange(!props.emptyMeansNone && whole ? undefined : next);
   };
 
+  const some = current.length === all.length ? `All ${String(all.length)}` : `${String(current.length)} of ${String(all.length)}`;
+  const count = current.length === 0 ? 'None' : some;
+
   return (
-    <div className={props.wide ? 'md:col-span-2' : 'min-w-0'}>
-      <Field label={props.label} hint={props.about}>
-        <div role="group" aria-label={props.label}
-          className={`grid gap-x-3 gap-y-1 ${props.wide ? 'sm:grid-cols-2 md:grid-cols-3' : ''}`}>
-          {props.options.map((option) => (
-            <label key={option.id} className="flex min-w-0 items-start gap-2 py-0.5" title={option.about ?? undefined}>
-              <input
-                type="checkbox"
-                className="mt-0.5 shrink-0 accent-[var(--c-accent)]"
-                checked={current.includes(option.id)}
-                onChange={(event) => toggle(option.id, event.target.checked)}
+    <div className="border-t p-border py-2 first:border-t-0" data-allowance={props.label}>
+      <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}
+        className="flex w-full min-w-0 items-center gap-3 text-left">
+        <span className="w-20 shrink-0 p-row-text p-text">{props.label}</span>
+        <span className="min-w-0 flex-1 truncate p-meta p-text-3">
+          {count}{current.length > 0 && current.length < all.length ? `: ${current.join(', ')}` : ''}
+        </span>
+        <CaretRightIcon size={12} className={`shrink-0 p-fold-turn p-text-3 ${open ? 'rotate-90' : ''}`} />
+      </button>
+      {open && (
+        <div role="group" aria-label={props.label} className="mt-2 flex flex-wrap gap-1.5">
+          {props.options.map((option) => {
+            const on = current.includes(option.id);
+
+            return (
+              <button key={option.id} type="button" aria-pressed={on} title={option.about ?? undefined}
                 aria-label={`${props.label}: ${option.id}`}
-              />
-              <span className="min-w-0 flex-1">
-                <span className="p-row-text p-text">{option.id}</span>
-                {option.about && <span className="line-clamp-2 p-meta p-text-3">{option.about}</span>}
-              </span>
-            </label>
-          ))}
+                onClick={() => toggle(option.id, !on)}
+                className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs ${
+                  on ? 'border-[var(--c-accent)] p-accent-bg p-accent' : 'p-border p-text-3 hover:p-text'
+                }`}>
+                {on && <CheckIcon size={11} />}
+                {option.id}
+              </button>
+            );
+          })}
           {props.options.length === 0 && <span className="p-meta p-text-3">none shipped</span>}
         </div>
-      </Field>
+      )}
     </div>
   );
 }
