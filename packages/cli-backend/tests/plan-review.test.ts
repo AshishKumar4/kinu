@@ -110,7 +110,7 @@ describe('LocalAgentSession — plan review', () => {
    * A second plan, dismissed, lifts the hold with no handoff. Write authority is read off each turn's own write.
    */
   test('one plan through hold, revision, a lost acceptance and its replay, then a dismissed plan', async () => {
-    const write = (path: string) => ({ call: 'file', input: { action: 'write', path: `vfs://home/main/${path}`, content: path } });
+    const write = (path: string) => ({ call: 'file', input: { op: 'write', path: `vfs://home/main/${path}`, content: path } });
 
     const { db, agent, events, taken } = session([
       { call: 'submit_plan', input: { edits: [{ start: 1, content: PLAN_BODY }] } },
@@ -198,7 +198,7 @@ describe('LocalAgentSession — plan review', () => {
 
       expect(turnModes(agent)).toEqual(['plan']);
       expect(events.find((event) => event.type === 'tool-result' && event.toolName === 'submit_plan'))
-        .toMatchObject({ output: { ok: false } });
+        .toMatchObject({ success: false, reason: 'bad_input' });
       expect(await agent.getActivePlanReview()).toBeNull();
       expect(planBroadcasts(events)).toEqual([]);
     } finally {

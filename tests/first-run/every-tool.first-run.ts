@@ -55,14 +55,13 @@ function isToolCallEnd(event: RunEvent): event is ToolCallEnd {
   return event.type === 'tool_call_end';
 }
 
-/** The one field every action-shaped tool call carries; anything else is the
- *  tool's own business. */
-const ActionArgsSchema = v.looseObject({ action: v.optional(v.string()) });
+/** The operation a capability tool's call names; anything else is the tool's own business. */
+const OpArgsSchema = v.looseObject({ op: v.optional(v.string()) });
 
-function actionOf(call: ToolCallEnd): string {
-  const parsed = v.safeParse(ActionArgsSchema, call.args);
+function opOf(call: ToolCallEnd): string {
+  const parsed = v.safeParse(OpArgsSchema, call.args);
 
-  return parsed.success ? (parsed.output.action ?? '') : '';
+  return parsed.success ? (parsed.output.op ?? '') : '';
 }
 
 /** A result as the text a reader greps: a string as-is, anything else as JSON. */
@@ -212,10 +211,9 @@ describe(SUITE, () => {
 
         const memory = calls.filter((call) => call.name === 'memory');
 
-        // `save` or `remember`: the prompt says "save the fact", and the tool
-        // takes both words — `save` appends a note to MEMORY.md, `remember`
-        // writes a keyed fact (`memory-tool.ts` `case 'save'` vs
-        // `runFactAction`). WHAT THE SEARCH MUST NAME therefore depends on
+        // `note` or `remember`: the prompt says "save the fact", and the tool
+        // offers both — `note` appends a note to MEMORY.md, `remember` writes a
+        // keyed fact (`operations/memory.ts`). WHAT THE SEARCH MUST NAME therefore depends on
         // which the turn used, and the two render differently: a fact hit as
         // `[fact: <stored key>]` — folded lowercase, whitespace to
         // underscores, never the spelling the call carried — and a note hit as
@@ -226,7 +224,7 @@ describe(SUITE, () => {
         // (`[memory/MEMORY.md:1-4] … every-tool probe: ok`) and the row still
         // read "search naming the fact missing".
         const saved = memory.find((call) =>
-          (actionOf(call) === 'save' || actionOf(call) === 'remember') && answered(call));
+          (opOf(call) === 'note' || opOf(call) === 'remember') && answered(call));
 
         const names = (result: JsonValue | undefined): boolean => {
           const text = textOf(result);
@@ -235,17 +233,17 @@ describe(SUITE, () => {
         };
 
         const found = memory.find((call) =>
-          actionOf(call) === 'search' && answered(call) && names(call.result));
+          opOf(call) === 'search' && answered(call) && names(call.result));
 
         subgoals.push({
           what: 'memory-saved-and-found', reached: saved !== undefined && found !== undefined,
           detail: saved !== undefined && found !== undefined
-            ? `memory#${saved.toolCallId} (${actionOf(saved) || '?'}) wrote, search memory#${found.toolCallId} answered with `
+            ? `memory#${saved.toolCallId} (${opOf(saved) || '?'}) wrote, search memory#${found.toolCallId} answered with `
               + excerpt(textOf(found.result))
             : `write ${saved === undefined ? 'missing' : 'ok'}, search naming what was written `
               + `${found === undefined ? 'missing' : 'ok'}; memory calls: `
               + (memory.length === 0 ? 'none' : memory.map((call) =>
-                `${actionOf(call) || '?'} ${describeFailure(call)} result=${excerpt(textOf(call.result), 80)}`).join('; ')),
+                `${opOf(call) || '?'} ${describeFailure(call)} result=${excerpt(textOf(call.result), 80)}`).join('; ')),
         });
 
         const tasks = calls.filter((call) => call.name === 'tasks');
@@ -255,7 +253,7 @@ describe(SUITE, () => {
           what: 'tasks-written', reached: taskWritten !== undefined,
           detail: taskWritten === undefined
             ? refusedDetail('tasks', tasks)
-            : `tasks#${taskWritten.toolCallId} (${actionOf(taskWritten) || '?'}) answered with ${excerpt(textOf(taskWritten.result))}`,
+            : `tasks#${taskWritten.toolCallId} (${opOf(taskWritten) || '?'}) answered with ${excerpt(textOf(taskWritten.result))}`,
         });
         subgoals.push(callCarrying({
           what: 'web-fetched', calls, name: 'web', mark: '"ok":true',
@@ -268,7 +266,7 @@ describe(SUITE, () => {
           what: 'no-agents-call', reached: delegated.length === 0,
           detail: delegated.length === 0
             ? 'no agents call in this turn'
-            : `agents called: ${delegated.map((call) => `${actionOf(call) || '?'}#${call.toolCallId}`).join(', ')}`,
+            : `agents called: ${delegated.map((call) => `${opOf(call) || '?'}#${call.toolCallId}`).join(', ')}`,
         });
 
         const offenders = calls.filter((call) => !answered(call));

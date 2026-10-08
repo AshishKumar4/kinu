@@ -42,7 +42,7 @@ function isToolCallEnd(event: RunEvent): event is ToolCallEnd {
   return event.type === 'tool_call_end';
 }
 
-const SearchArgsSchema = v.looseObject({ action: v.literal('search'), query: v.pipe(v.string(), v.minLength(1)) });
+const SearchArgsSchema = v.looseObject({ op: v.literal('search'), query: v.pipe(v.string(), v.minLength(1)) });
 
 /** A result as the text a reader greps: a string as-is, anything else as JSON. */
 function textOf(value: JsonValue | undefined): string {

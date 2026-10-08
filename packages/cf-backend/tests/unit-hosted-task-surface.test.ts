@@ -30,9 +30,9 @@ function systemPrompt(runs: readonly RecordedGatewayRun[]): string {
 
 test('a hired subordinate saves and searches memory and lists its roster in its assigned turn', async () => {
   const gateway = scriptedGateway([
-    { tool: 'memory', args: { action: 'save', content: NOTE } },
-    { tool: 'memory', args: { action: 'search', query: 'streaming parser' } },
-    { tool: 'agents', args: { action: 'list' } },
+    { tool: 'memory', args: { op: 'note', content: NOTE } },
+    { tool: 'memory', args: { op: 'search', query: 'streaming parser' } },
+    { tool: 'agents', args: { op: 'list' } },
   ]);
 
   const workspace = gatewayWorkspace(gateway);
@@ -46,7 +46,7 @@ test('a hired subordinate saves and searches memory and lists its roster in its 
 
   const results = toolResults(gateway.runs);
   expect(results).toHaveLength(3);
-  expect(results[0]).toContain('Note saved to memory.');
+  expect(results[0]).toContain('saved');
   expect(results[1]).toContain('streaming parser');
   // An empty roster is right for a child that has hired nobody; what matters is that the rung answers.
   expect(results[2]).toContain('subordinates');

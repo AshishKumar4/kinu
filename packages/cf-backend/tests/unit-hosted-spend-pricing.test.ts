@@ -34,7 +34,7 @@ test('a researcher hire\'s steps are priced at its fast tier\'s rate, not the ro
     const step = requestOf(run).messages.filter((message) => message.role === 'tool').length;
 
     return step === 0
-      ? toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'researcher', agent: 'profiler', mission: MISSION } }, 'hire_0')
+      ? toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'researcher', name: 'profiler', mission: MISSION } }, 'hire_0')
       : chatCompletion(run, 'Handed off.');
   });
 
@@ -81,8 +81,8 @@ for (const kind of ['hire', 'swarm'] as const) {
 
       if (!child) return step === 0
         ? toolCallCompletion(run, { tool: 'agents', args: kind === 'hire'
-          ? { action: 'hire', role: 'researcher', agent: 'counter', mission: 'Count the parser paths.' }
-          : { action: 'swarm', preset: 'ideate', task: 'Count the parser paths.', branches: 1, depth: 1 } }, 'start')
+          ? { op: 'hire', role: 'researcher', name: 'counter', mission: 'Count the parser paths.' }
+          : { op: 'swarm', preset: 'ideate', task: 'Count the parser paths.', branches: 1, depth: 1 } }, 'start')
         : chatCompletion(run, 'Handed off.');
 
       const usage = step === 0
@@ -90,7 +90,7 @@ for (const kind of ['hire', 'swarm'] as const) {
         : { prompt_tokens: 2000, completion_tokens: 100, total_tokens: 2100, prompt_tokens_details: { cached_tokens: 1800 } };
 
       const delta = step === 0
-        ? { tool_calls: [{ index: 0, id: 'inspect', type: 'function', function: { name: 'tasks', arguments: '{"action":"list"}' } }] }
+        ? { tool_calls: [{ index: 0, id: 'inspect', type: 'function', function: { name: 'tasks', arguments: '{"op":"list"}' } }] }
         : { content: 'Counted.' };
 
       const frames = [

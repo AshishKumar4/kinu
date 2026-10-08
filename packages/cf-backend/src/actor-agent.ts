@@ -129,7 +129,7 @@ import {
   answerParentRpc,
   type ParentExecResult,
   type ParentRpcWrite,
-  type TeamToolDeps, type PeersToolDeps, type ReportToolDeps,
+  type TeamToolDeps, type PeersToolDeps, type ReportDeps,
   type SubordinateRuntime, type TemporaryAgentPort,
   SubordinateRosterStore, subordinateTitle,
   createTeamToolDeps, createTemporaryAgentPort, receiveSubordinateEvent,
@@ -156,13 +156,13 @@ import {
   resolveAgentTurnProfile, resolveRoutingProfile, ownProfileChoices, ancestorPins, createAgentConfigStore, type PinnedProfile,
   captureOperationProfile, currentOperationProfile, withOperationProfile,
   type OperationProfile,
-  agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider,
+  agentRoleSwitch, executorNamespace, toolsNamespace, createStateCodemodeProvider, runWorkModeInvocation, createMemoryCodemodeProvider, createFileCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider, createAgentsCodemodeProvider,
   resolveModelRoute, completeOnRoute, routedLlm, tierRefusals, type TierRefusals, type ModelRouteResolution,
   narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, inWorkMode,
   toolSurfaceTokens, McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ProfileCatalogEnvelope,
-  type TaskPlan, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
+  toolsInWorkMode, type TaskPlan, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
   type AgentInbox,
   type NimbusSandboxHandle, childContextResolver, localContextTree,
@@ -392,7 +392,7 @@ export interface ActorToolDeps {
    * (see AgentsToolDeps.peers in core delegation/agents-tool.ts). */
   peers?: PeersToolDeps;
   /** Subordinate-only. */
-  report?: ReportToolDeps;
+  report?: ReportDeps;
   /** Present on actors whose current turn belongs to the owner; surfaced only in Plan mode. */
   submitPlan?: SubmitPlanToolDeps;
 }
@@ -469,13 +469,17 @@ function hostedActorSurface(actor: HostedActor, web: { readonly search: WebSearc
   }
 
   const providers: CodemodeProvider[] = [
-    ...(runtime.executionRouter?.getProviders() ?? []),
+    ...(runtime.executionRouter?.getProviders() ?? []).map(executorNamespace),
     // A slate's web writes nothing into the workspace, since a share visitor may call it; its browser is the actor's own.
-    createWebCodemodeProvider({ provider: webSearch, files: null, sessions: { sessions: web.sessions }, prelude: { missing: SLATE_BROWSER_DRIVER } }),
+    createWebCodemodeProvider({ provider: webSearch, files: null, sessions: web.sessions, prelude: { missing: SLATE_BROWSER_DRIVER } }),
     createDbCodemodeProvider(actor.stores.appData),
     createTasksCodemodeProvider(actor.stores.taskList, actor.stores.config),
     createMemoryCodemodeProvider(() => ({
       memory: runtime.memory, vectorStore: runtime.vectorStore, facts: actor.stores.facts, actor: actor.handle, conversations,
+    })),
+    createFileCodemodeProvider(() => ({
+      vfs: runtime.toolFiles, home: runtime.storage.home, planes: runtime.planes, memory: runtime.memory,
+      ledger: actor.session.orchestrator.acc.files, budget: actor.session.orchestrator.acc.context,
     })),
   ];
 
@@ -492,6 +496,16 @@ function hostedActorSurface(actor: HostedActor, web: { readonly search: WebSearc
 interface SlateAuthority {
   readonly mode: WorkMode;
   readonly reach: ToolSurfaceNarrowing;
+}
+
+/** `use` over the namespaces and tools an authority reaches, in its mode; each tool is reached through its record. */
+async function reachedIn<A>(
+  authority: SlateAuthority, providers: CodemodeProvider[], tools: ToolSet, use: (reached: readonly CodemodeProvider[]) => Promise<A>,
+): Promise<A> {
+  const reachedTools = Object.fromEntries(Object.entries(toolsInWorkMode(authority.mode, tools)).filter(([name]) => authority.reach.allowsTool(name)));
+  const narrowed = authority.reach.narrowProviders(providersInWorkMode(authority.mode, providers));
+
+  return await runWorkModeInvocation(authority.mode, () => use([...narrowed, toolsNamespace(reachedTools, undefined)]));
 }
 
 export abstract class ActorAgent extends Agent<Env> {
@@ -3184,12 +3198,53 @@ export abstract class ActorAgent extends Agent<Env> {
     return { mode: profile.workMode, reach: narrowToolSurface(profile.allowedTools) };
   }
 
+  /**
+   * The operations an actor reaches now, for a caller outside eval (a slate, an isolate running its turn): its
+   * namespaces and its tools, MCP and extension tools included on this actor, narrowed by its role in the mode that
+   * role leaves `requested`. `use` runs in that mode, while a hosted actor is held.
+   */
+  protected async withReachedOperations<A>(
+    actor: ActorReference | null, requested: WorkMode, use: (providers: readonly CodemodeProvider[]) => Promise<A>,
+  ): Promise<A> {
+    if (actor !== null) {
+      return await this.actorHost().run(actor, async (hosted) => {
+        const surface = hostedActorSurface(hosted, {
+          search: this.ownedModelServices.getWebSearchProvider(), sessions: this.browserSessionsFor(hosted.handle.actorId),
+        }, this.agentStores(hosted.handle.actorId).conversations());
+
+        const authority = await this.hostedSlateAuthority(hosted, requested, surface.providers, Object.keys(surface.native));
+
+        return await reachedIn(authority, [...surface.providers, createStateCodemodeProvider(hosted.runtime.actor.programState)], surface.native, use);
+      });
+    }
+
+    // The actor's own surface, as its eval has it: a screenshot is saved into its workspace, and it delegates.
+    const providers = [
+      ...(this.rt.executionRouter?.getProviders() ?? []).map(executorNamespace),
+      createWebCodemodeProvider({
+        provider: this.ownedModelServices.getWebSearchProvider(), files: this.rt.storage,
+        sessions: this.browserSessionsFor(this.rt.actor.actorId), prelude: { missing: SLATE_BROWSER_DRIVER },
+      }),
+      createAgentsCodemodeProvider(() => this.getAgentsToolDeps(requested)),
+      ...this.turnCodemodeProviders(),
+      createStateCodemodeProvider(this.rt.actor.programState),
+    ];
+
+    const mcp = await this.buildUserMcpTools(this.getRawToolsForWorkMode(requested), Promise.resolve(this.modelCatalog));
+    const authority = await this.slateAuthority(requested, providers, Object.keys(mcp));
+
+    return await reachedIn(authority, providers, { ...this.extensions.tools(), ...mcp, ...this.getRawToolsForWorkMode(authority.mode) }, use);
+  }
+
   /** Unconditional on every ActorAgent; tasks reuses `this.taskList`, the store the snapshot reads. */
   private baseCodemodeProviders(): CodemodeProvider[] {
     return [
       createMemoryCodemodeProvider(() => ({
         memory: this.rt.memory, vectorStore: this.rt.vectorStore,
         facts: this.facts, actor: this.actorHandle(), conversations: this.ownConversations(),
+      })),
+      createFileCodemodeProvider(() => ({
+        vfs: this.rt.toolFiles, home: this.rt.storage.home, planes: this.rt.planes, memory: this.rt.memory, ledger: this.acc.files, budget: this.acc.context,
       })),
       createTasksCodemodeProvider(this.taskList, this.config),
     ];
@@ -3216,9 +3271,9 @@ export abstract class ActorAgent extends Agent<Env> {
    */
   protected slateNamespaces(): CodemodeProvider[] {
     return [
-      ...(this.rt.executionRouter?.getProviders() ?? []),
+      ...(this.rt.executionRouter?.getProviders() ?? []).map(executorNamespace),
       createWebCodemodeProvider({
-        provider: this.ownedModelServices.getWebSearchProvider(), files: null, sessions: { sessions: this.browserSessionsFor(this.rt.actor.actorId) },
+        provider: this.ownedModelServices.getWebSearchProvider(), files: null, sessions: this.browserSessionsFor(this.rt.actor.actorId),
         prelude: { missing: SLATE_BROWSER_DRIVER },
       }),
       ...this.turnCodemodeProviders(),

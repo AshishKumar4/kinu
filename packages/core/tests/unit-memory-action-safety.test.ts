@@ -11,7 +11,7 @@ import type { Fact, FactsStore } from '../src/memory/facts';
 import type { JsonValue } from '../src/utils/json';
 
 interface MemoryToolProbeInput {
-  action: string;
+  op: string;
   key?: string;
   value?: JsonValue;
 }
@@ -70,7 +70,7 @@ function memoryTool(facts: FactsStore) {
 describe('the memory tool refuses actions it does not know', () => {
   test('a misspelled action is named back to the model, not guessed at', async () => {
     const facts = recordingFacts();
-    await expect(memoryTool(facts).execute({ action: 'forgt', key: 'deploy.target' }))
+    await expect(memoryTool(facts).execute({ op: 'forgt', key: 'deploy.target' }))
       .rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('forgt') });
   });
 
@@ -78,7 +78,7 @@ describe('the memory tool refuses actions it does not know', () => {
     const facts = recordingFacts();
     facts.upsert('deploy.target', 'production');
 
-    await expect(memoryTool(facts).execute({ action: 'forgt', key: 'deploy.target' })).rejects.toMatchObject({ code: 'bad_input' });
+    await expect(memoryTool(facts).execute({ op: 'forgt', key: 'deploy.target' })).rejects.toMatchObject({ code: 'bad_input' });
 
     expect(facts.forgotten).toEqual([]);
     expect(facts.recall('deploy.target')?.value).toBe('production');
@@ -90,8 +90,8 @@ describe('the memory tool refuses actions it does not know', () => {
     const tool = memoryTool(facts);
 
     // Near-misses: a prefix/substring dispatch would let these through.
-    for (const action of ['delete', 'remove', 'forget_all', 'rememberr', 'Forget', 'recall_all', '']) {
-      await expect(tool.execute({ action, key: 'user.tz' })).rejects.toMatchObject({ code: 'bad_input' });
+    for (const op of ['delete', 'remove', 'forget_all', 'rememberr', 'Forget', 'recall_all', '']) {
+      await expect(tool.execute({ op, key: 'user.tz' })).rejects.toMatchObject({ code: 'bad_input' });
     }
 
     expect(facts.forgotten).toEqual([]);
@@ -104,13 +104,13 @@ describe('the memory tool refuses actions it does not know', () => {
     const facts = recordingFacts();
     const tool = memoryTool(facts);
 
-    await tool.execute({ action: 'remember', key: 'user.tz', value: 'Europe/Berlin' });
-    expect(await tool.execute({ action: 'recall', key: 'user.tz' }))
-      .toMatchObject({ found: true, value: 'Europe/Berlin' });
+    await tool.execute({ op: 'remember', key: 'user.tz', value: 'Europe/Berlin' });
+    expect(await tool.execute({ op: 'recall', key: 'user.tz' }))
+      .toMatchObject({ value: 'Europe/Berlin' });
 
-    await tool.execute({ action: 'forget', key: 'user.tz' });
+    await tool.execute({ op: 'forget', key: 'user.tz' });
     expect(facts.forgotten).toEqual(['user.tz']);
-    expect(await tool.execute({ action: 'recall', key: 'user.tz' })).toMatchObject({ found: false });
+    expect(await tool.execute({ op: 'recall', key: 'user.tz' })).toBeNull();
   });
 
   test('forget still requires a key rather than treating a missing one as "all"', async () => {
@@ -118,7 +118,7 @@ describe('the memory tool refuses actions it does not know', () => {
     facts.upsert('a', 1);
     facts.upsert('b', 2);
 
-    await expect(memoryTool(facts).execute({ action: 'forget' })).rejects.toMatchObject({ code: 'bad_input' });
+    await expect(memoryTool(facts).execute({ op: 'forget' })).rejects.toMatchObject({ code: 'bad_input' });
 
     expect(facts.forgotten).toEqual([]);
     expect(facts.recall('a')).not.toBeNull();

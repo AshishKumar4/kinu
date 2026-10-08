@@ -19,9 +19,9 @@ export const HIRE_FORK_PREFIX = [
 
 export function hireForkModel(context?: 'fresh' | 'inherit', lifetime: 'durable' | 'task' = 'durable') {
   const childRequests: ScriptedTurnOptions[] = [];
-  const hireInput = { action: 'hire', role: 'researcher', mission: HIRE_FORK_MISSION, lifetime };
+  const hireInput = { op: 'hire', role: 'researcher', mission: HIRE_FORK_MISSION, lifetime };
 
-  if (lifetime === 'durable') Object.assign(hireInput, { agent: 'forked-reader' });
+  if (lifetime === 'durable') Object.assign(hireInput, { name: 'forked-reader' });
 
   if (context !== undefined) Object.assign(hireInput, { context });
 
@@ -81,9 +81,9 @@ export function hireRetentionModel() {
     const child = followsUp || users.some((message) => message.content === HIRE_FORK_MISSION
       || message.content.includes(`task: ${HIRE_FORK_MISSION}`));
 
-    const called = (name: string, action: string) => options.prompt.some((message) => message.role === 'assistant'
+    const called = (name: string, op: string) => options.prompt.some((message) => message.role === 'assistant'
       && message.content.some((part) => part.type === 'tool-call' && part.toolName === name
-        && JSON.stringify(part.input).includes(`"action":"${action}"`)));
+        && JSON.stringify(part.input).includes(`"op":"${op}"`)));
 
     const parentFollowup = users.some((message) => message.content === HIRE_FORK_FOLLOWUP_REQUEST);
     let call: { id: string; name: string; input: object } | undefined;
@@ -93,14 +93,14 @@ export function hireRetentionModel() {
 
       if (!followsUp && !called('memory', 'remember')) call = {
         id: 'child-context', name: 'memory',
-        input: { action: 'remember', key: 'CHILD-ONLY-TOOL-CONTEXT', value: 'The first audit finding.' },
+        input: { op: 'remember', key: 'CHILD-ONLY-TOOL-CONTEXT', value: 'The first audit finding.' },
       };
-    } else if (parentFollowup && !called('agents', 'msg')) {
+    } else if (parentFollowup && !called('agents', 'message')) {
       call = { id: 'msg-reader', name: 'agents',
-        input: { action: 'msg', agent: 'forked-reader', message: HIRE_FORK_FOLLOWUP } };
+        input: { op: 'message', agent: 'forked-reader', message: HIRE_FORK_FOLLOWUP } };
     } else if (!parentFollowup && users.some((message) => message.content === HIRE_FORK_REQUEST) && !called('agents', 'hire')) {
       call = { id: 'hire-reader', name: 'agents', input: {
-        action: 'hire', role: 'researcher', agent: 'forked-reader',
+        op: 'hire', role: 'researcher', name: 'forked-reader',
         mission: HIRE_FORK_MISSION, lifetime: 'durable', context: 'inherit',
       } };
     }

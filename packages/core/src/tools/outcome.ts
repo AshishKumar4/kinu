@@ -6,6 +6,7 @@ import { FileRefusalError } from '../types/file-edits';
 import { BindingFailureSchema, ToolFailureValueSchema, type BindingFailure, type ToolOutcome } from '../types/tool-outcome';
 import type { JsonObject, JsonValue } from '../utils/json';
 import { McpToolError } from './mcp-error';
+import type { ExecCallContext } from '../execution/signal';
 
 export { ToolOutcomeSchema, type ToolOutcome } from '../types/tool-outcome';
 
@@ -57,16 +58,46 @@ export function failedToolOutcome(input: Parameters<typeof renderThrownChain>[0]
 /** A namespace call returns typed operation refusals for authored code to handle. */
 export function branchableToolCall<Result>(call: () => Promise<Result>) {
   return settle(Effect.tryPromise({ try: call, catch: (cause) => ({ cause }) }).pipe(
-    Effect.catch((failed) => Effect.succeed({ ...failedToolOutcome(failed), error: renderThrownChain(failed) })),
+    Effect.catch((failed) => Effect.succeed({ ...failedToolOutcome(failed), error: renderThrownChain(failed), ...failedIndexOf(failed) })),
   ));
+}
+
+const FailedIndexSchema = v.object({ failedIndex: v.number() });
+
+/** A refused batch's failed operation (db.batch), part of the refusal a program branches on. */
+function failedIndexOf(input: { readonly cause: unknown }) {
+  const seen = new Set<Error>();
+
+  for (let error = input.cause; error instanceof Error && !seen.has(error); error = error.cause) {
+    seen.add(error);
+    const indexed = v.safeParse(FailedIndexSchema, error);
+
+    if (indexed.success) return { failedIndex: indexed.output.failedIndex };
+  }
+
+  return undefined;
 }
 
 interface ProgramInvocation {
   failures: BindingFailure[];
   pending: Promise<JsonValue | undefined>[];
+  /** The eval's own: stopping the program stops what it called. */
+  readonly signal: AbortSignal | undefined;
+  /** What the program's shell calls carry beyond their arguments: device-request ownership, the stop signal. */
+  readonly execContext: ExecCallContext | undefined;
 }
 
 const program = new AsyncLocalStorage<ProgramInvocation>();
+
+/** The running program's stop signal, for an operation it called. */
+export function programSignal(): AbortSignal | undefined {
+  return program.getStore()?.signal;
+}
+
+/** What the running program's shell calls carry beyond their arguments, when its backend says. */
+export function programExecContext(): ExecCallContext | undefined {
+  return program.getStore()?.execContext;
+}
 
 const ProgramFailuresSchema = v.object({ failures: v.array(BindingFailureSchema) });
 
@@ -85,7 +116,7 @@ class CodemodeProgramError extends Data.TaggedError('CodemodeProgramError')<{ re
 
 /** Capture the invocation before crossing RPC, whose callback has no caller async context. */
 export function bindProgramCall<Args extends unknown[]>(
-  binding: { tool: string; action: string | null },
+  binding: { tool: string; op: string | null },
   invoke: (...args: Args) => Promise<JsonValue | undefined>,
   returnedRefusals = false,
 ): (...args: Args) => Promise<JsonValue | undefined> {
@@ -104,9 +135,10 @@ export function bindProgramCall<Args extends unknown[]>(
       const failure = strict ?? recovered;
 
       if (failure === null) return value;
-      const input = v.safeParse(v.object({ action: v.string() }), args[0]);
-      const action = binding.action ?? (binding.tool !== 'shell' && input.success ? input.output.action : null);
-      active?.failures.push({ ...failure, tool: binding.tool, action });
+      // A native tool called from a program names its operation in its input.
+      const input = v.safeParse(v.object({ op: v.string() }), args[0]);
+      const op = binding.op ?? (input.success ? input.output.op : null);
+      active?.failures.push({ ...failure, tool: binding.tool, op });
 
       return failure;
     });
@@ -120,9 +152,11 @@ export function bindProgramCall<Args extends unknown[]>(
 /** Program recovery is success; returning or throwing a binding refusal propagates it. */
 export async function withCodemodeProgram<Result extends { result?: unknown; logs?: string[] }>(
   invoke: () => Promise<Result>,
+  signal?: AbortSignal,
+  execContext?: ExecCallContext,
 ): Promise<Result & { failures?: BindingFailure[] }> {
   if (program.getStore() !== undefined) return invoke();
-  const active: ProgramInvocation = { failures: [], pending: [] };
+  const active: ProgramInvocation = { failures: [], pending: [], signal, execContext };
 
   const settled = Effect.promise(() => Promise.all(active.pending));
 

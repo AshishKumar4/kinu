@@ -1227,7 +1227,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     const main = fakeClient({
       name: 'checkout',
       history: async () => [
-        { id: 'c1', role: 'tool_call', content: '', toolName: 'agents', toolCallId: 'agents_0', args: '{"action":"hire","lifetime":"task"}' },
+        { id: 'c1', role: 'tool_call', content: '', toolName: 'agents', toolCallId: 'agents_0', args: '{"op":"hire","lifetime":"task"}' },
         { id: 'r1', role: 'tool_result', content: JSON.stringify(answered), toolName: 'agents', toolCallId: 'agents_0', success: true },
       ],
       inspectSubordinate: async (request) => {

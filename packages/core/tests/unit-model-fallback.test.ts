@@ -136,7 +136,7 @@ const SCREENSHOT = 'iVBORw0KGgoAAAANSUhEUg==';
 
 const WITH_SCREENSHOT: ModelMessage[] = [
   { role: 'user', content: 'what does the page show?' },
-  { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'web', input: { action: 'screenshot', url: 'https://example.com/' } }] },
+  { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'web', input: { op: 'screenshot', url: 'https://example.com/' } }] },
   { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'web', output: { type: 'content', value: [{ type: 'text', text: 'Screenshot of https://example.com/' }, { type: 'file', data: { type: 'data', data: SCREENSHOT }, mediaType: 'image/png' }] } }] },
 ];
 

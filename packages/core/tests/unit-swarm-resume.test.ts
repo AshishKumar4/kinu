@@ -16,7 +16,8 @@ import { MctsSearchStore, initMctsSearchTable } from '../src/mcts/search-store';
 import { initSearchTables } from '../src/mcts/schemas';
 import { HeadJournal } from '../src/heads/journal';
 import { createRecordingLogger } from '../src/obs/index';
-import { createAgentsTool, type AgentsToolDeps, type AgentsToolInput } from '../src/delegation/agents-tool';
+import type { AgentsToolDeps } from '../src/delegation/agents-tool';
+import { createAgentsTool } from '../src/delegation/agents-operations';
 import { resumeBackgroundJob } from '../src/orchestrator/background-tools';
 import { BackgroundJobRunner } from '../src/jobs/runner';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
@@ -519,9 +520,9 @@ interface SearchCaps {
 
 const DEEP_SEARCH: SearchCaps = { depth: 2, branches: 2 };
 
-function swarmCall(caps: SearchCaps = DEEP_SEARCH): AgentsToolInput {
+function swarmCall(caps: SearchCaps = DEEP_SEARCH) {
   return {
-    action: 'swarm',
+    op: 'swarm',
     preset: 'custom',
     label: 'resume-proof',
     task: TASK,
@@ -613,7 +614,7 @@ function nodeModel(opts: {
         content.push({ type: 'text', text: 'Reading the current implementation first.' });
         content.push({
           type: 'tool-call', toolCallId: `read-${String(generations)}`, toolName: 'file',
-          input: JSON.stringify({ action: 'read', path: REFERENCE_PATH }),
+          input: JSON.stringify({ op: 'read', path: REFERENCE_PATH }),
         });
       } else if (own === 1) {
         content.push({

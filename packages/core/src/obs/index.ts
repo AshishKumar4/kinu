@@ -9,6 +9,7 @@ export {
   type SpanActor,
   type TracedInvocation,
   type TurnIdentity,
+  type TracedToolOptions,
   type TurnTrace,
   type TurnTracing,
   type TurnUnitTimer,

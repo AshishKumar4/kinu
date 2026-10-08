@@ -18,7 +18,7 @@ export {
 export {
   compareSurface,
   normalizeObservedTables,
-  observedActionEnum,
+  observedOpEnum,
   phantomCallables,
   renderConformanceFindings,
   wiredProducers,

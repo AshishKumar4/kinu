@@ -93,7 +93,7 @@ export interface DynamicContext {
   /** Every machine by name, never "the device"; absent where a backend has no fleet. */
   devices?: readonly DeviceFleetEntry[];
   jobs?: ActiveRoster<DynamicJob>;
-  /** Open items only; settled ones are read back via `tasks({action:'list'})`. */
+  /** Open items only; settled ones are read back via `tasks({op:'list'})`. */
   tasks?: ActiveRoster<DynamicTask>;
   delegates?: ActiveRoster<DynamicDelegate>;
   /** Oldest first: the longest-blocked matters most. */
@@ -102,7 +102,7 @@ export interface DynamicContext {
   missingCapabilities?: readonly MissingCapability[];
 }
 
-/** The search roster as delegates, in the surface's words (`agents({action:'swarm'})`, nodes), never `fork` or
+/** The search roster as delegates, in the surface's words (`agents({op:'swarm'})`, nodes), never `fork` or
  *  "head", which the model cannot invoke. */
 export function searchDelegates(
   runs: ReadonlyArray<{ rootId: string; rationale: string; running: number; total: number }>,

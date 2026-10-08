@@ -53,7 +53,7 @@ import {
   type AdmittedSubordinateReport,
   type BoundActor,
   type HostedActor,
-  type ReportToolDeps,
+  type ReportDeps,
   type SubordinateReportOrigin,
   type SubordinateEventResult,
   type SubordinateReportHandoff,
@@ -1064,7 +1064,7 @@ export class LocalAgentHost {
   }
 
   /** The report spine for one subordinate; roots get none. The session limits it to assigned turns. */
-  private buildReport(child: HostEntry): ReportToolDeps {
+  private buildReport(child: HostEntry): ReportDeps {
     return {
       report: async ({ status, content, handoff }) => {
         const relayed = await publishSubordinateReport({ mode: child.relay?.mode ?? 'build', reports: child.relay }, {

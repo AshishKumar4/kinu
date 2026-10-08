@@ -133,7 +133,7 @@ async function scriptedBody(inputs: { readonly stream?: boolean; readonly messag
       }
 
       if (model.nest && steps === HELPER_STEPS) {
-        const hire = { id: `sub-${String(model.calls)}`, name: 'agents', arguments: { action: 'hire', role: 'task', lifetime: 'task', mission: 'SUB-HELPER: answer done.' } };
+        const hire = { id: `sub-${String(model.calls)}`, name: 'agents', arguments: { op: 'hire', role: 'task', lifetime: 'task', mission: 'SUB-HELPER: answer done.' } };
 
         return `data: ${JSON.stringify({ response: '', tool_calls: [hire] })}\n\n${USAGE}data: [DONE]\n\n`;
       }
@@ -144,7 +144,7 @@ async function scriptedBody(inputs: { readonly stream?: boolean; readonly messag
       // A helper works a page per step, with a cheap tool call, then answers in one word.
       if (steps < HELPER_STEPS) {
         const page = 'word '.repeat(Math.ceil(model.answerBytes / 5)).slice(0, model.answerBytes);
-        const call = { id: `work-${String(model.calls)}`, name: 'tasks', arguments: { action: 'list' } };
+        const call = { id: `work-${String(model.calls)}`, name: 'tasks', arguments: { op: 'list' } };
 
         return `data: ${JSON.stringify({ response: page, tool_calls: [call] })}\n\n${USAGE}data: [DONE]\n\n`;
       }
@@ -156,7 +156,7 @@ async function scriptedBody(inputs: { readonly stream?: boolean; readonly messag
 
     const calls = hiring
       ? Array.from({ length: model.hires }, (_, at) => ({ id: `hire-${String(model.calls)}-${String(at)}`, name: 'agents',
-        arguments: { action: 'hire', role: 'task', lifetime: 'task', mission: `Helper ${String(at)}: write one page, then stop.` } }))
+        arguments: { op: 'hire', role: 'task', lifetime: 'task', mission: `Helper ${String(at)}: write one page, then stop.` } }))
       : [];
 
     return `data: ${JSON.stringify(calls.length > 0 ? { response: '', tool_calls: calls } : { response: 'done' })}\n\n${USAGE}data: [DONE]\n\n`;
@@ -164,7 +164,7 @@ async function scriptedBody(inputs: { readonly stream?: boolean; readonly messag
 
   if (model.toolSteps > 0) {
     model.toolSteps -= 1;
-    const call = { id: `step-${String(seq)}`, name: 'file', arguments: JSON.stringify({ action: 'stat', path: '.' }) };
+    const call = { id: `step-${String(seq)}`, name: 'file', arguments: JSON.stringify({ op: 'stat', path: '.' }) };
 
     return `data: ${JSON.stringify({ response: '', tool_calls: [call] })}\n\ndata: ${JSON.stringify({ response: '', usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })}\n\ndata: [DONE]\n\n`;
   }
@@ -212,7 +212,7 @@ async function compatAnswer(body: string): Promise<Response> {
     const page = 'word '.repeat(Math.ceil(model.stepBytes / 5)).slice(0, model.stepBytes);
 
     answer = model.toolSteps > 0
-      ? { toolCall: { name: 'file', arguments: { action: 'write', path: `notes/step-${String(seq)}.md`, content: page } } }
+      ? { toolCall: { name: 'file', arguments: { op: 'write', path: `notes/step-${String(seq)}.md`, content: page } } }
       : { text: 'done' };
 
     if (model.toolSteps > 0) model.toolSteps -= 1;

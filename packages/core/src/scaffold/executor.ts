@@ -7,6 +7,8 @@
  * A throw or missing 'done' reports ok=false (or synthesizes 'done').
  */
 
+import { namespaceDeclaration } from '../tools/operation-surfaces';
+import { executorNamespace } from '../tools/executor-operations';
 import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ChatEvent } from '../chat';
@@ -545,7 +547,7 @@ export function scaffoldProviders(
 ): Array<{ name: string; fns: SandboxFunctions; types?: string }> {
   const out: Array<{ name: string; fns: SandboxFunctions; types?: string }> = [];
 
-  const routerProviders = rt.executionRouter?.getProviders() ?? [];
+  const routerProviders = (rt.executionRouter?.getProviders() ?? []).map(executorNamespace);
 
   for (const p of routerProviders) {
     const fns: SandboxFunctions = {};
@@ -559,7 +561,7 @@ export function scaffoldProviders(
       });
     }
 
-    out.push({ name: p.name, fns, types: p.types });
+    out.push({ name: p.name, fns, types: p.declarations === undefined ? p.types : namespaceDeclaration(p.name, p.declarations, new Set()) });
   }
 
   return out;

@@ -176,7 +176,7 @@ describe('fire-and-forget (send)', () => {
 
     const batch = present(buildDrainBatch(pendingPeerEvents(bob)), 'the drain batch');
     expect(batch.text).toContain('peer agent (alice)');
-    expect(batch.text).not.toContain("action:'msg'");
+    expect(batch.text).not.toContain("op:'message'");
 
     expect(outboxRows(alice)[0].state).toBe('sent');
   });
@@ -199,7 +199,7 @@ describe('send-and-await (ask) round-trip', () => {
     expect(events).toHaveLength(1);
     expect(peerPayload(events[0]).reply_expected).toBe(true);
     const batch = present(buildDrainBatch(events), 'the drain batch');
-    expect(batch.text).toContain(`agents({action:'msg', event_id:'${events[0].id}'`);
+    expect(batch.text).toContain(`agents({op:'reply', eventId:'${events[0].id}'`);
 
     const replied = await bob.hub.reply({ eventId: events[0].id, message: 'v2 API landed' });
     expect(replied).toEqual({ ok: true });

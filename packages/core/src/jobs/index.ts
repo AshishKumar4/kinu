@@ -66,7 +66,7 @@ export {
   type JobOutputTail,
 } from './live-output';
 
-export { DeviceRequestOwnership, execCallArgs, type DeviceRequestChannel } from './device-ownership';
+export { DeviceRequestOwnership, execCallArgs, execContext, type DeviceRequestChannel } from './device-ownership';
 
 export {
   wrapToolsForBackground,

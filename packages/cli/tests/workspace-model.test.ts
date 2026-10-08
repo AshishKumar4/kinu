@@ -34,7 +34,8 @@ interface Endpoint {
   readonly log: string;
   /** `opened` / `aborted` per request under the endpoint's never-answering `/blackhole/`. */
   readonly blackholeLog: string;
-  readonly stop: () => void;
+  /** Ends the endpoint and resolves once its process has exited. */
+  readonly stop: () => Promise<void>;
 }
 
 /** A KINU_HOME and the one endpoint it can reach. */
@@ -46,8 +47,9 @@ interface Machine {
 
 const running: Endpoint[] = [];
 
-afterEach(() => {
-  for (const endpoint of running.splice(0)) endpoint.stop();
+// Awaited: a kill only signals, and an endpoint still exiting when the file ends is a process it left running.
+afterEach(async () => {
+  await Promise.all(running.splice(0).map((endpoint) => endpoint.stop()));
 });
 
 async function startEndpoint(models: readonly string[], refuse: readonly string[] = []): Promise<Endpoint> {
@@ -85,7 +87,10 @@ async function startEndpoint(models: readonly string[], refuse: readonly string[
     proxy: `http://127.0.0.1:${String(ports.proxy)}`,
     log,
     blackholeLog,
-    stop: () => { proc.kill(); },
+    stop: async () => {
+      proc.kill('SIGKILL');
+      await proc.exited;
+    },
   };
 
   running.push(endpoint);

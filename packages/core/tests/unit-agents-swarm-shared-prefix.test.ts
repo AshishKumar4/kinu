@@ -12,9 +12,10 @@ import { swarmSeats } from './helpers-actor-host';
 import {
   createAgentsTool,
   type AgentRuntime,
-  type AgentsSwarmDeps, type AgentsToolDeps, type AgentsToolInput,
+  type AgentsSwarmDeps, type AgentsToolDeps,
 } from '../src/index';
 import { SOLUTION_FILE } from '../src/strategy/exec-ratio';
+import type { JsonObject } from '../src/utils/json';
 import { sharedPrefix } from '../src/strategy/swarm-expansion';
 import type { TreeNode } from '../src/strategy/swarm-tree';
 import { createRecordingLogger } from '../src/obs/index';
@@ -87,13 +88,13 @@ function agentsTool(deps: AgentsToolDeps) {
 
   if (!entry) throw new Error('Expected agents tool to be created');
 
-  return { ...entry, execute: toolExecute<AgentsToolInput, object>(entry) };
+  return { ...entry, execute: toolExecute<JsonObject, object>(entry) };
 }
 
 /** `best-first` takes each node once, so root -> child -> grandchild is the one legal depth-2 chain; `uct` re-widens the root. */
 function forkCall(branches: number) {
   return {
-    action: 'swarm' as const,
+    op: 'swarm' as const,
     preset: 'custom' as const,
     label: 'shared-prefix',
     task: 'find the cheapest correct implementation',

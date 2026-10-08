@@ -151,7 +151,7 @@ function onReport(body: OutboundBody): boolean {
 }
 
 interface AgentsToolArgs {
-  readonly action: 'hire' | 'msg';
+  readonly op: 'hire' | 'message';
   readonly lifetime?: 'task' | 'durable';
   readonly role?: string;
   readonly mission?: string;
@@ -267,11 +267,11 @@ function rootLane(run: HireRun, body: OutboundBody, results: readonly string[]):
 
   // `job`: a durable hire, so the hire outlives its brief and its job wakes it.
   if (run.childScript === 'job') {
-    return toolCallBody(model, 'call_hire_job', 'agents', { action: 'hire', lifetime: 'durable', role: 'auditor', mission: JOB_MISSION });
+    return toolCallBody(model, 'call_hire_job', 'agents', { op: 'hire', lifetime: 'durable', role: 'auditor', mission: JOB_MISSION });
   }
 
   return toolCallBody(model, 'call_hire_1', 'agents', {
-    action: 'hire',
+    op: 'hire',
     // `nest-park`'s middle helper is durable: the owner dismisses it while it waits on its own task hire.
     lifetime: run.childScript === 'nest-park' ? 'durable' : 'task',
     role: 'auditor',
@@ -288,7 +288,7 @@ async function durableLane(run: HireRun, body: OutboundBody, results: readonly s
 
   if (name === null) {
     return toolCallBody(model, 'call_durable_1', 'agents', {
-      action: 'hire',
+      op: 'hire',
       lifetime: 'durable',
       role: 'auditor',
       mission: run.childScript === 'chain' ? NEST_MISSION : HIRE_MISSION,
@@ -300,7 +300,7 @@ async function durableLane(run: HireRun, body: OutboundBody, results: readonly s
 
   if (!sent) {
     return toolCallBody(model, 'call_durable_2', 'agents', {
-      action: 'msg',
+      op: 'message',
       agent: name,
       message: 'HIRE-MSG-BODY',
     });
@@ -320,13 +320,13 @@ async function childLane(run: HireRun, body: OutboundBody, results: readonly str
   if (run.childScript !== 'answer' && run.childScript !== 'throw' && run.childScript !== 'park' && allUsers(body).includes(NEST_MISSION)) {
     if (onReport(body)) return textBody(model, `${NEST_RELAY} ${lastUser(body)}`.slice(0, 600));
 
-    // At the depth cap `hire` is not among this helper's actions: it is the bottom of the chain, so it answers.
-    if (results.some((result) => result.includes('"reason":"unsupported"') && result.includes('hire'))) return textBody(model, CHAIN_BOTTOM);
+    // At the depth cap `hire` is not among this helper's operations: it is the bottom of the chain, so it answers.
+    if (results.some((result) => result.includes('unknown op') && result.includes('hire'))) return textBody(model, CHAIN_BOTTOM);
 
     if (results.length !== 0) return textBody(model, 'HELPER-WAITS');
 
     return toolCallBody(model, 'call_nested_hire_1', 'agents', {
-      action: 'hire',
+      op: 'hire',
       lifetime: 'task',
       role: 'auditor',
       mission: run.childScript === 'chain' ? NEST_MISSION : HIRE_MISSION,

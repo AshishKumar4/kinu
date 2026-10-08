@@ -79,7 +79,7 @@ const PROGRAM = { kind: 'builtin' as const, version: 0, digest: null, build: nul
 
 /** The two steps of one scripted turn: a file write the model asks for, then its answer. */
 function toolCall(turn: number): ModelMessage {
-  return { role: 'assistant', content: [{ type: 'tool-call', toolCallId: `call-${String(turn)}`, toolName: 'file', input: { action: 'write', path: `notes/${String(turn)}.md`, content: `note ${String(turn)}` } }] };
+  return { role: 'assistant', content: [{ type: 'tool-call', toolCallId: `call-${String(turn)}`, toolName: 'file', input: { op: 'write', path: `notes/${String(turn)}.md`, content: `note ${String(turn)}` } }] };
 }
 
 function toolResult(turn: number): ModelMessage {

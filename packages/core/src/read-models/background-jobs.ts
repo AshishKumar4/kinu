@@ -7,11 +7,12 @@ import type { ToolExecutionOptions, ToolSet } from 'ai';
 
 import type { BackgroundJob, BackgroundJobStore } from '../jobs/store';
 import type { JobOutputFeeds, JobOutputTail } from '../jobs/live-output';
-import { CALL_JOB_OPTION, type CallJob } from '../tools/call-job';
+import { CALL_JOB_OPTION } from '../tools/call-job';
+import type { CallJob } from '../types/primitives';
 import type { BackgroundRetryRequest } from '../jobs/runner';
 import type { WorkMode } from '../types/turn';
 import { decodeJsonValue, parseJsonValue, type JsonValue } from '../utils/json';
-import { resumableAgentsInput } from '../delegation/agents-tool';
+import { resumableAgentsInput } from '../delegation/agents-operations';
 import { Effect } from 'effect';
 import { renderThrownChain, settle, settleSync } from '../obs/index';
 

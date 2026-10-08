@@ -28,7 +28,7 @@ interface ShellToolInput {
 }
 
 interface FileToolInput {
-  action: string;
+  op: string;
   path: string;
   content?: string;
   offset?: number;
@@ -280,14 +280,14 @@ describe('tool result budget (behavior through the public tool surface)', () => 
     const tools = buildBuiltinTools({ rt, conversations: conversationsFor(rt) });
     const file = toolExecute<FileToolInput, JsonValue>(tools.file);
     const lines = Array.from({ length: 4_000 }, (_, i) => `line ${i + 1} ${'padding '.repeat(5)}`);
-    await file({ action: 'write', path: 'big.txt', content: lines.join('\n') });
+    await file({ op: 'write', path: 'big.txt', content: lines.join('\n') });
 
-    const page = v.parse(v.string(), await file({ action: 'read', path: 'big.txt' }));
+    const page = v.parse(v.string(), await file({ op: 'read', path: 'big.txt' }));
     expect(page.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
-    expect(page).toContain('continue with action=read offset=');
+    expect(page).toContain('continue with op=read offset=');
 
     const next = Number(/offset=(\d+)/.exec(page)?.[1]);
-    const second = v.parse(v.string(), await file({ action: 'read', path: 'big.txt', offset: next }));
+    const second = v.parse(v.string(), await file({ op: 'read', path: 'big.txt', offset: next }));
     expect(second.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
     expect(second.split('\n')[0]).toBe(lines[next - 1]);
 

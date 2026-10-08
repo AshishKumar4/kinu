@@ -666,12 +666,12 @@ function scratchProbeModel(arrive: () => Promise<void>, scratchPathFor: (name: s
         input: JSON.stringify(input),
       }], 'tool-calls');
 
-      if (step === 1) return fileCall({ action: 'write', path: scratchPathFor(marker), content: `scratch-of-${marker}` });
+      if (step === 1) return fileCall({ op: 'write', path: scratchPathFor(marker), content: `scratch-of-${marker}` });
 
       if (step === 2) {
         await arrive();
 
-        return fileCall({ action: 'read', path: scratchPathFor(marker) });
+        return fileCall({ op: 'read', path: scratchPathFor(marker) });
       }
 
       return envelope([{ type: 'text' as const, text: 'done' }], 'stop');

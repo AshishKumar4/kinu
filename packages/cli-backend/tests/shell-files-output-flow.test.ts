@@ -70,7 +70,7 @@ test('a CLI turn runs what its row claims, restores a clamped output from the pa
     () => ({ name: 'shell', input: { command: `for b in ${TOOLCHAIN_PROBE_BINARIES.join(' ')}; do command -v "$b" >/dev/null && echo "on-path:$b"; done; true` } }),
     () => ({ name: 'shell', input: { command: BIG } }),
     (shown) => ({ name: 'shell', input: { command: `grep FINAL-ERROR-LINE ${offload(shown)}` } }),
-    (shown) => ({ name: 'file', input: { action: 'read', path: offload(shown) } }),
+    (shown) => ({ name: 'file', input: { op: 'read', path: offload(shown) } }),
     (shown) => ({ name: 'shell', input: { runtime: 'device', command: `grep FINAL-ERROR-LINE ${offload(shown)}` } }),
   ], requests);
 

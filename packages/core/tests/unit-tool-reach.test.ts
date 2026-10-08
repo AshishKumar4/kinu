@@ -85,7 +85,6 @@ describe('the reach declaration', () => {
           screenshot: async (url: string) => ({ url, retrievedAt: new Date(0).toISOString(), bytes: new Uint8Array() }),
         },
         files: rt.storage,
-        sessions: { missing: 'this suite opens no browser' },
       }),
       report: () => createReportCodemodeProvider(() => ({ report: async () => ({ delivered: true }) })),
       agent: () => createAgentSelfProvider(agentSelfHost(rt.storage, rt.actor)),

@@ -3,7 +3,6 @@
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import { asSchema, type ToolSet } from 'ai';
-import { z } from 'zod';
 import { JsonObjectSchema, decodeJsonValue, type JsonValue } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
 import { hasPlanPermission, workModeRefusal } from '../execution/work-mode';
@@ -11,11 +10,13 @@ import type { WorkMode } from '../types/turn';
 import { branchableToolCall, bindProgramCall } from './outcome';
 import { TOOL_REACH, CODEMODE_CODE_DESCRIPTION, type ToolSurfaceNarrowing } from './registry';
 import { slateReaches } from '../slates/surface';
-import { KinuError, settle, settleSync } from '../obs';
+import { KinuError, settle } from '../obs';
 import { CRAFTED_TOOL_NAMESPACE, type CodemodeProvider } from '../types/codemode';
 import { parsesAsExpression } from '../craft/source';
 import type { CraftedToolSource } from './crafted-executor';
 import { toolDescription } from '../utils/tool-description';
+import { allowedInPlan, defineOperation, serve, statedInput, type Served } from '../operations/operation';
+import { operationInputSchema } from './operation-surfaces';
 
 export {
   CRAFTED_TOOL_NAMESPACE, type CodemodeProvider, type CodemodeResult,
@@ -29,11 +30,19 @@ export function craftedToolDescription(name: string, description?: string): stri
 }
 
 
-const CodemodeInputSchema = z.object({ code: z.string().describe(CODEMODE_CODE_DESCRIPTION) });
+/** `eval`'s one input: the program it runs. */
+const PROGRAM = defineOperation({
+  ns: 'eval', name: 'run', slate: false, impact: 'execute', plan: true,
+  help: 'Run a JavaScript program over the namespaces this turn reaches.',
+  input: v.strictObject({ code: v.pipe(v.string(), v.description(CODEMODE_CODE_DESCRIPTION)) }),
+  output: v.unknown(),
+});
+
+const CODEMODE_INPUT = operationInputSchema(PROGRAM);
 
 /** Shared by both backends; CF reassigns it over `createCodeTool`'s own schema. */
-export function codemodeInputSchema(): typeof CodemodeInputSchema {
-  return CodemodeInputSchema;
+export function codemodeInputSchema(): typeof CODEMODE_INPUT {
+  return CODEMODE_INPUT;
 }
 
 export interface CraftedDeclaration {
@@ -103,54 +112,96 @@ export function renderCraftedToolsDeclaration(crafted: readonly CraftedDeclarati
   return `export declare const ${CRAFTED_TOOL_NAMESPACE}: {\n${lines.join('\n')}\n};\n`;
 }
 
-function receivedKind(argument: { readonly value: unknown }): string {
-  if (v.is(v.number(), argument.value)) return 'a number';
+/**
+ * A tool as a catalog record: its own schema and description, one argument object, run by its own `execute`. A
+ * program's `tools.<name>(input)` and a caller outside eval (`callOperation`) run this same record.
+ */
+function toolOperation(name: string, entry: ToolSet[string]): Served | null {
+  const { execute } = entry;
 
-  if (v.is(v.boolean(), argument.value)) return 'a boolean';
+  if (name === SANDBOX_TOOL || execute === undefined) return null;
+  const stated = v.safeParse(JsonObjectSchema, asSchema(entry.inputSchema).jsonSchema);
+  const planAllowed = hasPlanPermission(entry);
 
-  return Array.isArray(argument.value) ? 'an array' : 'an object';
+  const op = defineOperation({
+    ns: CRAFTED_TOOL_NAMESPACE, name, help: toolDescription(entry) ?? name, slate: false,
+    // What a tool does is its own to say; one a Plan turn may run observes.
+    impact: planAllowed ? 'observe' : 'execute', plan: planAllowed,
+    input: statedInput(stated.success ? stated.output : { type: 'object' }), output: v.unknown(),
+  });
+
+  return serve(op, async (input, { callId, signal }) => {
+    const result = await execute(input, { toolCallId: callId, messages: [], context: undefined, ...(signal !== undefined && { abortSignal: signal }) });
+
+    return result === undefined ? null : decodeJsonValue({ value: result });
+  });
 }
 
-/** Omitted reads as empty text; any other non-string is refused here. */
-export function codemodeText(argument: { readonly value: unknown; readonly parameter: string }): string {
-  if (argument.value === undefined || argument.value === null) return '';
-  const text = v.safeParse(v.string(), argument.value);
+const CraftedDeclarationsSchema = v.object({ craftedDeclarations: v.function() });
 
-  if (!text.success) return settleSync(Effect.fail(new KinuError('bad_input', `${argument.parameter} takes a string, not ${receivedKind(argument)}`)));
+const ProgramResultSchema = v.object({ result: v.optional(v.unknown()) });
 
-  return text.output;
+/**
+ * Each crafted tool `eval` holds, as a record that runs its body as a program through that `eval`: a body is defined
+ * only in a program, so a caller outside one reaches it the way a program does.
+ */
+function craftedOperations(sandbox: ToolSet[string] | undefined): Served[] {
+  const declared = v.safeParse(CraftedDeclarationsSchema, sandbox);
+  const execute = sandbox?.execute;
+
+  if (!declared.success || execute === undefined) return [];
+  const crafted = v.parse(v.array(v.object({ name: v.string(), description: v.string() })), declared.output.craftedDeclarations());
+
+  return crafted.map(({ name, description }) => serve(defineOperation({
+    ns: CRAFTED_TOOL_NAMESPACE, name, help: craftedToolDescription(name, description), slate: false,
+    impact: 'execute', plan: false, input: statedInput({ type: 'object' }), output: v.unknown(),
+  }), async (input, { callId, signal }) => {
+    const code = `return await tools[${JSON.stringify(name)}](${JSON.stringify(input)});`;
+    const ran = await execute({ code }, { toolCallId: callId, messages: [], context: undefined, ...(signal !== undefined && { abortSignal: signal }) });
+    const { result } = v.parse(ProgramResultSchema, decodeJsonValue({ value: ran }));
+
+    return result ?? null;
+  }));
 }
 
-/** `signal` is the calling program's: a tool it reaches here is stopped with the eval that called it. */
-export function nativeToolFunctions(tools: ToolSet, signal: AbortSignal | undefined): CodemodeProvider['tools'] {
-  const out: Record<string, CodemodeProvider['tools'][string]> = {};
+/** `tools.*`: each tool as its record; `signal` is the calling program's, so a tool it reaches stops with its eval. */
+export function toolsNamespace(tools: ToolSet, signal: AbortSignal | undefined): CodemodeProvider {
+  // A crafted name shadows a native one, as a program's own definition does.
+  const named = new Map([...Object.entries(tools).flatMap(([name, entry]) => toolOperation(name, entry) ?? []), ...craftedOperations(tools[SANDBOX_TOOL])]
+    .map((record) => [record.op.name, record]));
 
-  for (const [name, tool] of Object.entries(tools)) {
-    const execute = tool.execute;
+  const records = [...named.values()];
 
-    if (name === SANDBOX_TOOL || execute === undefined) continue;
-    out[name] = {
-      description: toolDescription(tool) ?? name,
-      planAllowed: hasPlanPermission(tool),
+  return {
+    name: CRAFTED_TOOL_NAMESPACE,
+    // Declared by each tool's own schema, never here.
+    types: '',
+    positionalArgs: true,
+    operations: records,
+    tools: Object.fromEntries(records.map((record) => [record.op.name, {
+      description: record.op.help,
+      planAllowed: allowedInPlan(record.op),
       execute: async (...args: unknown[]) => {
         const input = v.safeParse(JsonObjectSchema, args[0] === undefined ? {} : args[0]);
+        const { name } = record.op;
 
         return branchableToolCall(() => settle(Effect.gen(function* () {
           if (!input.success || args.length > 1) {
             return yield* new KinuError('bad_input', `tools.${name}(input): input must be one JSON object, the same shape the native \`${name}\` tool takes`);
           }
 
-          const output = input.output;
-          const options = { toolCallId: 'codemode-' + nanoid(), messages: [], context: undefined, ...(signal !== undefined && { abortSignal: signal }) };
-          const result = yield* Effect.promise(() => Promise.resolve(execute(output, options)));
+          const answered = yield* Effect.promise(() => record.run(input.output, { callId: `codemode-${nanoid()}`, ...(signal !== undefined && { signal }) }));
 
-          return result === undefined ? undefined : decodeJsonValue({ value: result });
+          return answered.value;
         })));
       },
-    };
-  }
+    }])),
+  };
+}
 
-  return out;
+/** `tools.*` members, as `toolsNamespace` builds them. */
+export function nativeToolFunctions(tools: ToolSet, signal: AbortSignal | undefined): CodemodeProvider['tools'] {
+  return toolsNamespace(tools, signal).tools;
 }
 
 /** Failures of these members are accounted to `file`, not the exposing namespace. */
@@ -170,7 +221,7 @@ export function codemodeFunction<Result>(namespace: string, member: string, invo
   const owner = Object.entries(TOOL_REACH).find(([name, reach]) => name === namespace && reach.codemode === namespace);
   const tool = accountedTool(namespace, member, owner?.[0]);
 
-  const call = bindProgramCall({ tool, action: owner === undefined ? null : member }, async (...args: unknown[]) => {
+  const call = bindProgramCall({ tool, op: owner === undefined ? null : member }, async (...args: unknown[]) => {
     const value = await invoke(...args);
 
     return value === undefined ? undefined : decodeJsonValue({ value });

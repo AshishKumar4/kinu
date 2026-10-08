@@ -6,9 +6,8 @@ const impact = (namespace: string, member: string) => slateAddressImpact({ names
 
 test('the impact table is what the grant, the graph and the audit row read', () => {
   const rows: readonly [string, string, string][] = [
-    ['workspace', 'readFile', 'observe'], ['workspace', 'readdir', 'observe'], ['sandbox', 'exists', 'observe'], ['workspace', 'stat', 'observe'],
-    ['workspace', 'writeFile', 'mutate'], ['workspace', 'editFile', 'mutate'], ['workspace', 'mkdir', 'mutate'], ['workspace', 'remove', 'mutate'],
-    ['workspace', 'exec', 'execute'], ['device', 'git', 'execute'],
+    ['workspace', 'readFile', 'observe'], ['workspace', 'readdir', 'observe'], ['sandbox', 'exists', 'observe'],
+    ['workspace', 'writeFile', 'mutate'], ['workspace', 'exec', 'execute'], ['sandbox', 'exposePort', 'administer'],
     ['db', 'select', 'observe'], ['db', 'insert', 'mutate'], ['db', 'dropTable', 'mutate'],
     ['memory', 'search', 'observe'], ['memory', 'recall', 'observe'], ['memory', 'remember', 'mutate'], ['memory', 'forget', 'mutate'],
     ['tasks', 'list', 'observe'], ['tasks', 'add', 'mutate'],
@@ -22,7 +21,7 @@ test('the impact table is what the grant, the graph and the audit row read', () 
   // An executor member no table names fails closed, as the heaviest impact.
   expect(impact('workspace', 'reformatHardDrive')).toBe('administer');
   // A member the agent keeps from slates is not on the surface at all: switching its own role is one.
-  expect(impact('tasks', 'mode')).toBeNull();
+  expect(impact('tasks', 'switchRole')).toBeNull();
   expect(impact('memory', 'reformat')).toBeNull();
   // `ai` has the one model call; the run tool's `shell` rename is not it.
   expect(impact('ai', 'shell')).toBeNull();
@@ -30,11 +29,11 @@ test('the impact table is what the grant, the graph and the audit row read', () 
 
 test('a native tool\'s chip reads the same impact a slate\'s call of that member is shown with', () => {
   for (const [tool, action] of [['memory', 'search'], ['memory', 'remember'], ['tasks', 'list'], ['tasks', 'add']] as const) {
-    expect([tool, action, toolCallEffect(tool, { action })]).toEqual([tool, action, impact(tool, action) === 'observe' ? 'read' : 'mutate']);
+    expect([tool, action, toolCallEffect(tool, { op: action })]).toEqual([tool, action, impact(tool, action) === 'observe' ? 'read' : 'mutate']);
   }
 
-  expect(toolCallEffect('tasks', { action: 'mode', role: 'researcher' })).toBe('mutate');
-  expect(toolCallEffect('tasks', { action: 'mode' })).toBe('read');
-  expect(toolCallEffect('file', { action: 'read' })).toBe('read');
-  expect(toolCallEffect('file', { action: 'write' })).toBe('mutate');
+  expect(toolCallEffect('tasks', { op: 'switchRole', role: 'researcher' })).toBe('mutate');
+  expect(toolCallEffect('tasks', { op: 'role' })).toBe('read');
+  expect(toolCallEffect('file', { op: 'read' })).toBe('read');
+  expect(toolCallEffect('file', { op: 'write' })).toBe('mutate');
 });

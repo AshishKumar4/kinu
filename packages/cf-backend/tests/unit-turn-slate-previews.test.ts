@@ -32,10 +32,10 @@ test('an answer carries each slate its turn wrote, once, and nothing else', asyn
   if (tools.file === undefined) throw new Error('Build has no file tool');
   const write = toolExecute<JsonValue, JsonValue>(tools.file);
 
-  await write({ action: 'write', path: '/slates/board/client.tsx', content: 'export default () => null;' });
-  await write({ action: 'write', path: '/slates/board/server.ts', content: 'export class Slate {}' });
-  await write({ action: 'write', path: '/slates/notes/client.tsx', content: 'export default () => null;' });
-  await write({ action: 'write', path: '/home/main/readme.md', content: 'not a slate' });
+  await write({ op: 'write', path: '/slates/board/client.tsx', content: 'export default () => null;' });
+  await write({ op: 'write', path: '/slates/board/server.ts', content: 'export class Slate {}' });
+  await write({ op: 'write', path: '/slates/notes/client.tsx', content: 'export default () => null;' });
+  await write({ op: 'write', path: '/home/main/readme.md', content: 'not a slate' });
   await turns.settle({ messageId: 'a-board', text: 'Added the column.' });
 
   const answer = (await storedChat(harness)).filter((message) => message.role === 'assistant').at(-1);
@@ -65,7 +65,7 @@ test('a slate written outside any turn is not claimed by the next answer', async
 // hire's own answer; the root's next answer does not claim it.
 test("a hire's slate edit is previewed on the hire's answer, and nowhere else", async () => {
   const gateway = scriptedGateway([
-    { tool: 'file', args: { action: 'write', path: '/slates/board/client.tsx', content: 'export default () => null;' } },
+    { tool: 'file', args: { op: 'write', path: '/slates/board/client.tsx', content: 'export default () => null;' } },
   ], 'Updated the board.');
 
   const workspace = gatewayWorkspace(gateway);
@@ -135,7 +135,7 @@ test('a slate the turn wrote and then removed is not previewed', async () => {
   const { tools } = await turns.prepare({ messages: [{ role: 'user', content: 'Try a board, then drop it.' }] });
 
   if (tools.file === undefined) throw new Error('Build has no file tool');
-  await toolExecute<JsonValue, JsonValue>(tools.file)({ action: 'write', path: '/slates/scratch/client.tsx', content: 'x' });
+  await toolExecute<JsonValue, JsonValue>(tools.file)({ op: 'write', path: '/slates/scratch/client.tsx', content: 'x' });
   expect(await agent.execWorkspaceCommand('rm -rf /slates/scratch')).toMatchObject({ exitCode: 0 });
   expect(await agent.statWorkspaceFile('/slates/scratch')).toBeNull();
   await turns.settle({ messageId: 'a-scratch', text: 'Dropped it.' });
@@ -166,7 +166,7 @@ async function boardTurn(also: (tools: Awaited<ReturnType<ReturnType<typeof chat
   const { tools } = await turns.prepare({ messages: [{ role: 'user', content: 'Add an expiry column.' }] });
 
   if (tools.file === undefined) throw new Error('Build has no file tool');
-  await toolExecute<JsonValue, JsonValue>(tools.file)({ action: 'write', path: '/slates/board/client.tsx', content: 'x' });
+  await toolExecute<JsonValue, JsonValue>(tools.file)({ op: 'write', path: '/slates/board/client.tsx', content: 'x' });
   await also(tools);
   await turns.settle({ messageId: 'a-board', text });
 
@@ -208,7 +208,7 @@ test("a write under an earlier turn's operation leaves the running turn's previe
   const { tools } = await turns.prepare({ messages: [{ role: 'user', content: 'Add an expiry column.' }] });
 
   if (tools.file === undefined) throw new Error('Build has no file tool');
-  await toolExecute<JsonValue, JsonValue>(tools.file)({ action: 'write', path: '/slates/board/client.tsx', content: 'x' });
+  await toolExecute<JsonValue, JsonValue>(tools.file)({ op: 'write', path: '/slates/board/client.tsx', content: 'x' });
 
   const earlier = captureOperationProfile({
     actor: workspaceMainActor(harness.db), profile: mergePolicyProfile(), inputs: null, runId: 'run-earlier', turnId: 'turn-earlier',
@@ -230,7 +230,7 @@ test('a longer id beginning with the same letters does not count as the slate', 
 
 test("a hire whose report quotes the slate's line gets no second preview", async () => {
   const gateway = scriptedGateway([
-    { tool: 'file', args: { action: 'write', path: '/slates/board/client.tsx', content: 'x' } },
+    { tool: 'file', args: { op: 'write', path: '/slates/board/client.tsx', content: 'x' } },
   ], 'Updated the board.\n\nslate://board');
 
   const workspace = gatewayWorkspace(gateway);

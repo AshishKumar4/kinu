@@ -80,20 +80,6 @@ export function createParentWorkspaceVfs(handle: ParentWorkspaceHandle): VFS {
   };
 }
 
-const TYPES = `declare namespace parent {
-  /** Read a file from the parent workspace, in the parent's own paths. */
-  function readFile(path: string): Promise<string | Refusal>;
-  function writeFile(path: string, content: string): Promise<string | Refusal>;
-  function readdir(path: string): Promise<string[] | Refusal>;
-  function exists(path: string): Promise<boolean | Refusal>;
-  /**
-   * Run a command in the parent workspace's REAL shell: the same ~95
-   * coreutils, pipes, redirects and loops its own agent has. This is the fast
-   * way to search it: \`grep -rn TODO .\`, \`find . -name '*.ts'\`.
-   */
-  function exec(command: string): Promise<string | Refusal>;
-}`;
-
 /** Register the parent workspace as an executor. `vfs` may be pre-wrapped (e.g. `observeWrites`) for attribution. */
 export function createParentExecutor(deps: {
   handle: ParentWorkspaceHandle;
@@ -125,7 +111,6 @@ export function createParentExecutor(deps: {
     connect: async () => {},
     disconnect: async () => {},
     positionalArgs: true,
-    types: TYPES,
     tools: {
       readFile: {
         planAllowed: true,

@@ -21,3 +21,7 @@ export declare function revisionData(revision: Revision): number;
 export declare function revisionFromData(value: JsonValue | undefined, subject: string): Revision;
 export declare function digestFromData(value: JsonValue | undefined, subject: string): Digest;
 export declare function bytesEqual(left: Uint8Array, right: Uint8Array): boolean;
+/** Two optional values are equal when both are absent or both are present and equal. */
+export declare function optionalRefsEqual<Value extends {
+    equals(other: Value): boolean;
+}>(left: Value | undefined, right: Value | undefined): boolean;

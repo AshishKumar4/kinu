@@ -15,7 +15,8 @@ import { conversationsFor } from './helpers';
 type TasksResult = object | string | number | boolean | null | undefined;
 
 interface TasksTestInput {
-  action: string;
+  op: string;
+  note?: string | null;
   titles?: (string | number)[];
   parent?: string;
   id?: string;
@@ -75,7 +76,7 @@ describe('tasks tool', () => {
 
     const res = v.parse(
       AddedSchema,
-      await tasks({ action: 'add', titles: ['Reproduce the 502', 'Patch the timeout'] }),
+      await tasks({ op: 'add', titles: ['Reproduce the 502', 'Patch the timeout'] }),
     );
 
     expect(res.added.map((t) => t.id)).toEqual(['t1', 't2']);
@@ -84,42 +85,36 @@ describe('tasks tool', () => {
 
   test('parent files new titles as subtasks of a task already written', async () => {
     const tasks = setup();
-    await tasks({ action: 'add', titles: ['Ship the fix'] });
-    await tasks({ action: 'add', titles: ['Write it', 'Test it'], parent: 't1' });
-    const res = v.parse(TaskListSchema, await tasks({ action: 'list' }));
+    await tasks({ op: 'add', titles: ['Ship the fix'] });
+    await tasks({ op: 'add', titles: ['Write it', 'Test it'], parent: 't1' });
+    const res = v.parse(TaskListSchema, await tasks({ op: 'list' }));
     expect(res.tasks.length).toBe(1);
     expect(res.tasks[0]?.subtasks?.map((subtask) => subtask.id)).toEqual(['t2', 't3']);
   });
 
   test('update moves an item and names what closing a parent leaves open', async () => {
     const tasks = setup();
-    await tasks({ action: 'add', titles: ['Ship the fix'] });
-    await tasks({ action: 'add', titles: ['Write it', 'Test it'], parent: 't1' });
-    await tasks({ action: 'update', id: 't2', status: 'done' });
+    await tasks({ op: 'add', titles: ['Ship the fix'] });
+    await tasks({ op: 'add', titles: ['Write it', 'Test it'], parent: 't1' });
+    await tasks({ op: 'update', id: 't2', status: 'done' });
 
-    const closed = v.parse(v.object({
-      id: v.string(), status: v.string(), open_subtasks: v.optional(v.number()),
-    }), await tasks({ action: 'update', id: 't1', status: 'done' }));
+    const closed = v.parse(v.object({ id: v.string(), status: v.string(), openSubtasks: v.number() }), await tasks({ op: 'update', id: 't1', status: 'done' }));
 
     expect(closed.status).toBe('done');
-    expect(closed.open_subtasks).toBe(1);
+    expect(closed.openSubtasks).toBe(1);
 
-    await tasks({ action: 'update', id: 't3', status: 'done' });
+    await tasks({ op: 'update', id: 't3', status: 'done' });
 
-    const clean = v.parse(v.object({
-      open_subtasks: v.optional(v.number()),
-    }), await tasks({ action: 'update', id: 't1', status: 'done' }));
-
-    expect(clean.open_subtasks).toBeUndefined();
+    expect(await tasks({ op: 'update', id: 't1', status: 'done' })).toMatchObject({ openSubtasks: 0 });
   });
 
   test('a bad call is refused with what was wrong, never silently', async () => {
     const tasks = setup();
-    await expect(tasks({ action: 'add', titles: [] })).rejects.toThrow('tasks.add requires `titles`: one or more task titles');
-    await expect(tasks({ action: 'update', status: 'done' })).rejects.toThrow('tasks.update requires `id`');
-    await expect(tasks({ action: 'update', id: 't1', status: 'finished' })).rejects.toThrow('one of open, active, done, dropped; got "finished"');
-    await expect(tasks({ action: 'update', id: 't9', status: 'done' })).rejects.toThrow('no task t9');
-    await expect(tasks({ action: 'sort' })).rejects.toThrow('one of add, update, list, mode; got "sort"');
+    await expect(tasks({ op: 'add', titles: [] })).rejects.toThrow('"titles"');
+    await expect(tasks({ op: 'update', status: 'done' })).rejects.toThrow('"id" is required');
+    await expect(tasks({ op: 'update', id: 't1', status: 'finished' })).rejects.toThrow('"status"');
+    await expect(tasks({ op: 'update', id: 't9', status: 'done' })).rejects.toThrow('no task t9');
+    await expect(tasks({ op: 'sort' })).rejects.toThrow('unknown op "sort"; the ops are: add, update, note, list, role, switchRole');
   });
 
   test('a refused title is reported beside the ones that landed', async () => {
@@ -128,7 +123,7 @@ describe('tasks tool', () => {
     const res = v.parse(v.object({
       added: v.array(v.object({ id: v.string() })),
       rejected: v.array(v.object({ title: v.string(), reason: v.string() })),
-    }), await tasks({ action: 'add', titles: ['a real step', '   '] }));
+    }), await tasks({ op: 'add', titles: ['a real step', '   '] }));
 
     expect(res.added.map((t) => t.id)).toEqual(['t1']);
     expect(res.rejected).toEqual([{ title: '   ', reason: 'empty title' }]);
@@ -139,7 +134,7 @@ describe('tasks tool', () => {
     const example = BUILTIN_TOOL_SPECS.tasks.example;
 
     const args = v.parse(v.object({
-      action: v.literal('add'), titles: v.array(v.string()), parent: v.optional(v.string()),
+      op: v.literal('add'), titles: v.array(v.string()), parent: v.optional(v.string()),
     }), JSON.parse(
       example
         .replace(/^tasks\(/, '')
@@ -166,36 +161,35 @@ describe('tasks tool', () => {
     expect(res.added.map((t) => t.id)).toEqual(['t1', 't2', 't3']);
   });
 
-  // A program's call reaches the entry unchecked by the SDK, so `action` is whatever it passed.
-  describe('a model-supplied action outside the vocabulary is answered WITH the vocabulary', () => {
-    test('the exact production payload is refused by naming all four actions', async () => {
+  // A program's call reaches the entry unchecked by the SDK, so `op` is whatever it passed.
+  describe('a model-supplied op outside the vocabulary is answered WITH the vocabulary', () => {
+    test('the exact production payload is refused by naming every op', async () => {
       const tasks = setup();
-      const pending = tasks({ action: 'list">' });
+      const pending = tasks({ op: 'list">' });
 
-      for (const action of ['add', 'update', 'list', 'mode']) await expect(pending).rejects.toThrow(action);
-      await expect(pending).rejects.not.toThrow('unknown tasks action');
+      for (const op of ['add', 'update', 'note', 'list', 'role', 'switchRole']) await expect(pending).rejects.toThrow(op);
     });
 
-    test('every wrong shape of action is refused the same way, not crashed on', async () => {
+    test('every wrong shape of op is refused the same way, not crashed on', async () => {
       const tasks = setup();
 
-      for (const action of ['', 'LIST', 'listen', 'add ', '{"action":"list"}']) {
-        await expect(tasks({ action })).rejects.toThrow('one of add, update, list, mode');
+      for (const op of ['', 'LIST', 'listen', 'add ', '{"op":"list"}']) {
+        await expect(tasks({ op })).rejects.toThrow('the ops are: add, update, note, list, role, switchRole');
       }
     });
 
     test('a valid action still works, and the list is untouched by a refused call', async () => {
       const tasks = setup();
-      await tasks({ action: 'add', titles: ['ship it'] });
-      await expect(tasks({ action: 'list">' })).rejects.toMatchObject({ code: 'bad_input' });
-      const listed = v.parse(TaskListSchema, await tasks({ action: 'list' }));
+      await tasks({ op: 'add', titles: ['ship it'] });
+      await expect(tasks({ op: 'list">' })).rejects.toMatchObject({ code: 'bad_input' });
+      const listed = v.parse(TaskListSchema, await tasks({ op: 'list' }));
       expect(listed.tasks.map((t) => t.id)).toEqual(['t1']);
     });
 
     test('titles of the wrong type are refused, not fed to `raw.trim()`', async () => {
       // TaskListStore.add trims each title: a non-string element must be refused, not thrown as a TypeError.
       const tasks = setup();
-      await expect(tasks({ action: 'add', titles: [1, 2] })).rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('titles[0]') });
+      await expect(tasks({ op: 'add', titles: [1, 2] })).rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('"titles.0"') });
     });
   });
 });
@@ -217,12 +211,12 @@ describe('tasks.* codemode — the SAME dispatcher and store the native tool use
 
     // The native tool's dispatcher over the same store sees it: one implementation, two callers.
     const executeNative = nativeTasks(rt);
-    const listed = v.parse(TaskListSchema, await executeNative({ action: 'list' }));
+    const listed = v.parse(TaskListSchema, await executeNative({ op: 'list' }));
     expect(listed.tasks.map((t) => t.title)).toEqual(['Reproduce the bug', 'Write the fix']);
 
     const firstId = added.added[0]?.id ?? '';
     await codemodeExecute(provider, 'update')(firstId, 'done');
-    const after = v.parse(TaskListSchema, await executeNative({ action: 'list' }));
+    const after = v.parse(TaskListSchema, await executeNative({ op: 'list' }));
     expect(after.tasks.find((task) => task.id === firstId)?.status).toBe('done');
   });
 
@@ -233,7 +227,7 @@ describe('tasks.* codemode — the SAME dispatcher and store the native tool use
     const taskList = new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync.bind(rt.storage));
     const provider = createTasksCodemodeProvider(taskList, rt.actor.config);
     await codemodeExecute(provider, 'add')(['Parent task']);
-    await codemodeExecute(provider, 'add')(['Child task'], 't1');
+    await codemodeExecute(provider, 'add')(['Child task'], { parent: 't1' });
     await codemodeExecute(provider, 'update')('t2', 'dropped');
     const result = v.parse(TaskListSchema, await codemodeExecute(provider, 'list')());
     expect(result.tasks.length).toBe(1);
@@ -263,7 +257,7 @@ describe('tasks action=mode — the agent\'s durable role', () => {
   test('a role switch persists for the next prompt', async () => {
     const { tasks, rt, config } = roleSetup();
     expect(config.getRoleSelection()).toBe('task');
-    expect(await tasks({ action: 'mode', role: 'researcher' })).toEqual({ role: 'researcher'});
+    expect(await tasks({ op: 'switchRole', role: 'researcher' })).toEqual({ role: 'researcher'});
     expect(config.getRoleSelection()).toBe('researcher');
 
     const prompt = buildSystemPromptSync(rt, { roleSection: roleSection('researcher') });
@@ -273,23 +267,23 @@ describe('tasks action=mode — the agent\'s durable role', () => {
 
   test('mode with no role reads the current role', async () => {
     const { tasks } = roleSetup();
-    expect(await tasks({ action: 'mode' })).toEqual({ role: 'task' });
-    await tasks({ action: 'mode', role: 'auditor' });
-    expect(await tasks({ action: 'mode' })).toEqual({ role: 'auditor' });
+    expect(await tasks({ op: 'role' })).toEqual({ role: 'task' });
+    await tasks({ op: 'switchRole', role: 'auditor' });
+    expect(await tasks({ op: 'role' })).toEqual({ role: 'auditor' });
   });
 
   test('an unknown role is refused and changes nothing', async () => {
     const { tasks } = roleSetup();
-    await tasks({ action: 'mode', role: 'auditor' });
-    await expect(tasks({ action: 'mode', role: 'yolo' }))
+    await tasks({ op: 'switchRole', role: 'auditor' });
+    await expect(tasks({ op: 'switchRole', role: 'yolo' }))
       .rejects.toMatchObject({ code: 'bad_input', message: expect.stringMatching(/"yolo"[^]*Known roles: auditor/) });
-    expect(await tasks({ action: 'mode' })).toEqual({ role: 'auditor' });
+    expect(await tasks({ op: 'role' })).toEqual({ role: 'auditor' });
   });
 
   test('switching to task during a Plan turn does not lift the Plan bar', async () => {
     const { tasks, rt } = roleSetup();
-    await tasks({ action: 'mode', role: 'researcher' });
-    expect(await tasks({ action: 'mode', role: 'task' })).toEqual({ role: 'task'});
+    await tasks({ op: 'switchRole', role: 'researcher' });
+    expect(await tasks({ op: 'switchRole', role: 'task' })).toEqual({ role: 'task'});
 
     const plan = buildSystemPromptSync(rt, {
       roleSection: roleSection('task'),

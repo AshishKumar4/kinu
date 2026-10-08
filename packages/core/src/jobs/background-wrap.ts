@@ -7,7 +7,8 @@
 import type { ToolExecutionOptions, ToolSet } from 'ai';
 import { DEVICE_REQUEST_OPTION, SPAWN_STARTED_OPTION, withBackgroundThreshold, withSpawnDetach } from './threshold';
 import { DeviceRequestOwnership } from './device-ownership';
-import { CALL_JOB_OPTION, type CallJob } from '../tools/call-job';
+import { CALL_JOB_OPTION } from '../tools/call-job';
+import type { CallJob } from '../types/primitives';
 import { newJobId, type BackgroundJobRunner } from './runner';
 import type { WorkMode } from '../types/turn';
 import { decodeJsonValue, type JsonValue } from '../utils/json';

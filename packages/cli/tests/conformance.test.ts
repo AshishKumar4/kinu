@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path';
 import type { LanguageModel } from 'ai';
 import type { LanguageModelV2 } from '@ai-sdk/provider';
 import {
-  compareSurface, observedActionEnum, wiredProducers,
+  compareSurface, observedOpEnum, wiredProducers,
   renderConformanceFindings, NO_COUNT_ENDPOINT, BUILTIN_PROFILE_CATALOG, profileCatalogDigest,
   type ObservedSurface, type ProfileCatalog,
 } from '@kinu.run/core';
@@ -154,8 +154,8 @@ async function observeCli(): Promise<{ observed: ObservedSurface; captured: Capt
       root: 'cli',
       planes: {
         tool: new Set(byName.keys()),
-        'agents-action': observedActionEnum(byName.get('agents')?.inputSchema),
-        'memory-action': observedActionEnum(byName.get('memory')?.inputSchema),
+        'agents-op': observedOpEnum(byName.get('agents')?.inputSchema),
+        'memory-op': observedOpEnum(byName.get('memory')?.inputSchema),
         producer: wiredProducers(runtime),
       },
     },
@@ -172,9 +172,9 @@ describe('cli backend conformance', () => {
 
     expect(captured.length).toBeGreaterThanOrEqual(5);
     expect(present(observed.planes.tool, 'the tool plane').has('eval')).toBe(true);
-    // `event_id` is in the advertised schema exactly when the host wired peer transport.
-    expect(present(observed.planes['agents-action'], 'the agents-action plane').has('msg')).toBe(true);
+    // `reply` and its `eventId` are advertised exactly when the host wired peer transport.
+    expect(present(observed.planes['agents-op'], 'the agents-op plane').has('reply')).toBe(true);
     expect(JSON.stringify(captured.find((tool) => tool.name === 'agents') ?? {}))
-      .toContain('event_id');
+      .toContain('eventId');
   });
 });
