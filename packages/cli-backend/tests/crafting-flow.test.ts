@@ -7,7 +7,7 @@ import { expect, test } from 'bun:test';
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import type { LanguageModelV2Prompt } from '@ai-sdk/provider';
 import * as v from 'valibot';
-import { initWorkspaceSchema, narrowToolSurface, toolsInWorkMode, type JsonValue, type RunEvent } from '@kinu.run/core';
+import { initWorkspaceSchema, narrowToolSurface, toolsInWorkMode, type JsonValue, type RunEvent, type WebSearchProvider } from '@kinu.run/core';
 import { present, scratchDir, scratchPath, toolExecute, workspaceDatabase } from '@kinu.run/test-utils';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
@@ -16,6 +16,14 @@ import { DUMMY_LLM } from './helpers/local-session';
 import { TestLanguageModelV2 } from './test-language-model';
 
 const USAGE = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+
+/** The node's programs here read files and call tools; none reaches the web. */
+const UNREACHED_WEB: WebSearchProvider = {
+  search: async () => { throw new Error('this flow reaches no web'); },
+  fetch: async () => { throw new Error('this flow reaches no web'); },
+  render: async () => { throw new Error('this flow reaches no web'); },
+  screenshot: async () => { throw new Error('this flow reaches no web'); },
+};
 
 const REPORT = JSON.stringify({ testResults: [{ assertionResults: [
   { status: 'passed', duration: 2.5 },
@@ -131,7 +139,7 @@ test('a crafted tool is made, called, scored out, shared with a node, and still 
 
     // Crafted tools are the workspace's: a swarm node's eval calls main's, and main's scoring retired the same one there.
     const seat = await session.hostNode({ nodeId: 'crafting-node', rootId: 'crafting-swarm', depth: 1 });
-    const nodeEval = present(toolsInWorkMode('build', { eval: hostedCodemodeTool(seat.actor, [])({}, narrowToolSurface(undefined)) }).eval, 'the node\'s eval');
+    const nodeEval = present(toolsInWorkMode('build', { eval: hostedCodemodeTool(seat.actor, UNREACHED_WEB)({}, narrowToolSurface(undefined)) }).eval, 'the node\'s eval');
     const node = await toolExecute<{ code: string }, { result: JsonValue }>(nodeEval)({ code: 'return [await tools.doubleIt(21), typeof tools.brokenIt];' });
 
     expect(node.result).toEqual([42, 'undefined']);

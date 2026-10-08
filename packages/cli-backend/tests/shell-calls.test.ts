@@ -6,7 +6,7 @@ import { expect, test } from 'bun:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ToolExecutionOptions } from 'ai';
-import { codemodeSurface, createBashShell, DEVICE_REQUEST_OPTION, DeviceRequestOwnership } from '@kinu.run/core';
+import { codemodeSurface, createBashShell, DEVICE_REQUEST_OPTION, DeviceRequestOwnership, executorNamespace } from '@kinu.run/core';
 import { narrowToolSurface } from '@kinu.run/core';
 import { scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
@@ -24,10 +24,12 @@ const evalDirectory = scratchDir('cli-shell-eval');
 
 writeFileSync(join(evalDirectory, 'package.json'), '{"name":"probe"}');
 
-const { execute } = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) })({
-  ...codemodeSurface(createCLIRuntime(workspaceDatabase(join(scratchDir('cli-shell-calls'), 'agent.db')), { llm: null, agentName: 'calls', cwd: evalDirectory }), {}),
-  craftedTools: () => [],
-});
+const evalRuntime = createCLIRuntime(workspaceDatabase(join(scratchDir('cli-shell-calls'), 'agent.db')), { llm: null, agentName: 'calls', cwd: evalDirectory });
+
+// Its executors alone: these cases call `workspace.exec` and nothing else.
+const { execute } = createNodeCodemodeToolFactory({
+  reach: narrowToolSurface(undefined), namespaces: (evalRuntime.executionRouter?.getProviders() ?? []).map(executorNamespace),
+})({ ...codemodeSurface(evalRuntime, {}), craftedTools: () => [] });
 
 /** `eval` over the directory's runtime, called with the tool options a turn hands it. */
 function run(code: string, options: Partial<ToolExecutionOptions<unknown>> & { [DEVICE_REQUEST_OPTION]?: DeviceRequestOwnership } = {}) {

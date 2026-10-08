@@ -71,7 +71,7 @@ export interface HostedActorSeams {
   /** The same provisioner the host uses, so the home a node is told about is the one it has. */
   nodeHome(actor: HostedActor): Promise<NodeWorkspace>;
   /** Typed as `Tool`: core widens `HeadToolDeps.codemodeTool` to `unknown`, this seam need not. */
-  codemodeTool(runtime: CFRuntime, webSearch: WebSearchProvider): (finished: ToolSet, reach: ToolSurfaceNarrowing) => Tool;
+  codemodeTool(actor: HostedActor, runtime: CFRuntime, webSearch: WebSearchProvider): (finished: ToolSet, reach: ToolSurfaceNarrowing) => Tool;
   /** The workspace journal, so a depth-2 head's spawn row and step rows join. */
   recordStep(headId: HeadId, seq: number, step: HeadStep): Promise<void>;
   readonly publishDelta: ReportHeadDelta;
@@ -570,7 +570,7 @@ export async function hostHead(seams: HostedActorSeams, input: HeadInput): Promi
       })));
     },
     codemodeTool: (seat) => settleSync(cfRuntimeOf(seat.actor, 'a hosted head').pipe(
-      Effect.map((runtime) => seams.codemodeTool(runtime, seams.webSearch())),
+      Effect.map((runtime) => seams.codemodeTool(seat.actor, runtime, seams.webSearch())),
     )),
     webSearch: seams.webSearch(),
     split: (seat, head) => settleSync(cfRuntimeOf(seat.actor, 'a hosted head').pipe(
@@ -619,7 +619,7 @@ export async function hostNodeSeat(
 
 /** A swarm node's `eval`, over the hosted actor the node runs as. */
 export function nodeCodemodeTool(seams: HostedActorSeams, actor: HostedActor): (finished: ToolSet, reach: ToolSurfaceNarrowing) => Tool {
-  return settleSync(cfRuntimeOf(actor, 'a swarm node').pipe(Effect.map((runtime) => seams.codemodeTool(runtime, seams.webSearch()))));
+  return settleSync(cfRuntimeOf(actor, 'a swarm node').pipe(Effect.map((runtime) => seams.codemodeTool(actor, runtime, seams.webSearch()))));
 }
 
 /**

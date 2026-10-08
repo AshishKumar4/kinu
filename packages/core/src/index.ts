@@ -572,6 +572,11 @@ export {
 
 export { createAgentsCodemodeProvider, createAgentsTool, resumableAgentsInput } from './delegation/agents-operations';
 
+export {
+  actorNamespaces, hostedSurfaceActor, SURFACE_POLICY,
+  type SurfaceActor, type SurfaceCall, type SurfacePolicy, type SurfaceWeb,
+} from './delegation/actor-surface';
+
 export { AGENTS_OPS } from './operations/agents';
 
 export { createAgentSelfProvider, type AgentSelfHost } from './tools/agent-self';
@@ -1014,7 +1019,7 @@ export {
   type NimbusSandboxHandle,
   type NimbusStartResult, type NimbusExecOptions, type NimbusExecResult, type NimbusPortInfo,
   EXECUTOR_CAPABILITIES, NO_TIMER_DEADLINE_MS,
-  type ExecutorCapability, type ExecutorKind, type ExecutorProvider,
+  type ExecutorCapability, type ExecutorKind, type ExecutorProvider, type ExecutorProviderSurface,
   type ExecutorLifecycleStatus, type ExecutorStatus,
   type ExecutorInfo, type ExecutionRouter, type ResourceLimits, type PreviewRouteCheck,
   type SandboxSize, type SandboxSizes,
