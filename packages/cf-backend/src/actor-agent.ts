@@ -1220,9 +1220,13 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.eventRecorder.openRun() !== null || this.pendingSends.restore().length > 0;
   }
 
-  /** Constructing the loop re-opens the last open turn and reruns acknowledged sends. */
+  /** Constructing the loop re-opens the last open turn and reruns acknowledged sends; a re-opened turn waiting out its
+   *  backoff is asked again by the wake that ends it. */
   protected resumeChatLoop(): ChatSession {
-    return this.chatLoop;
+    const loop = this.chatLoop;
+    loop.reaskDue();
+
+    return loop;
   }
 
   /** Reads SQL, not the RAM drain, which an eviction loses. Only turn-bound rows are steers;

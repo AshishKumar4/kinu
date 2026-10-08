@@ -864,8 +864,10 @@ them over. Six cuts in the step's own work settle the turn (a tool that ends its
 own process), so five outside resets never do. Twenty cuts in a provider wait
 settle it too: none is the step's fault, but task-j7gjjr's model wait outlasted
 the workspace's memory and time limits fifteen times in a day (2026-09-25).
-Each re-ask after a repeated cut waits the shared capped backoff, held by the
-turn's wake; the first provider-wait cut is asked again at once.
+Each re-ask after a repeated cut waits the shared capped backoff, and the
+turn's wake is what asks it again, in a live process or a new one; the first
+provider-wait cut is asked again at once. The CLI has no wake, and a person's
+start is its restart, so it asks at once.
 
 ## Deploy ladder
 
