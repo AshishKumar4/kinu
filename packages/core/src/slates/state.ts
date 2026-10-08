@@ -4,7 +4,6 @@ import { KinuError } from '../obs/error';
 import { settleSync } from '../obs/effect';
 import type { RawSqlExec, SqlExec, SqlExecRow } from '../types/primitives';
 import { JsonValueSchema, parseJsonValue, renderIssues, type JsonValue } from '../utils/json';
-import type { SlateBindingRequest } from './bindings';
 
 /** Implicit on every slate; answered from the workspace object's `slate_state` table. */
 export const SLATE_STORAGE_BINDING = '__storage';
@@ -35,7 +34,13 @@ export type SlateStorageOp =
   | { readonly op: 'delete'; readonly key: string }
   | { readonly op: 'list'; readonly prefix?: string; readonly limit?: number };
 
-function oneKey(request: SlateBindingRequest): Effect.Effect<string, KinuError> {
+/** A `__storage` call: the member is the path's one name. */
+interface StorageRequest {
+  readonly member: string;
+  readonly args: readonly JsonValue[];
+}
+
+function oneKey(request: StorageRequest): Effect.Effect<string, KinuError> {
   if (request.args.length !== 1) return Effect.fail(new KinuError('bad_input', `slate storage ${request.member} takes one key`));
 
   const parsed = v.safeParse(Key, request.args[0]);
@@ -46,11 +51,11 @@ function oneKey(request: SlateBindingRequest): Effect.Effect<string, KinuError> 
 }
 
 /** Unknown members are `denied`; malformed arguments are `bad_input` naming the broken signature. */
-export function routeSlateStorageCall(request: SlateBindingRequest): SlateStorageOp {
+export function routeSlateStorageCall(request: StorageRequest): SlateStorageOp {
   return settleSync(storageOp(request));
 }
 
-function storageOp(request: SlateBindingRequest): Effect.Effect<SlateStorageOp, KinuError> {
+function storageOp(request: StorageRequest): Effect.Effect<SlateStorageOp, KinuError> {
   switch (request.member) {
     case 'get': return Effect.map(oneKey(request), (key): SlateStorageOp => ({ op: 'get', key }));
     case 'delete': return Effect.map(oneKey(request), (key): SlateStorageOp => ({ op: 'delete', key }));

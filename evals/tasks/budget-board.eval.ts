@@ -6,7 +6,7 @@ import { defineEvalTask, type EvidenceCall } from '../src/task';
 import { matchesReference, SlateRefusal, type EvalCheckOutcome, type EvalVerifier, type Normalize, type Script, type SlateClient } from '../src/verifier';
 
 // Two slates that depend on each other: a ledger of team expenses, and a budget board that reads
-// the ledger through an app binding instead of keeping its own copy. The board gets a page, checked
+// the ledger by calling it, slate to slate, instead of keeping its own copy. The board gets a page, checked
 // in the browser as its owner sees it: in the work surface and in the chat, its buttons pressed, one
 // of them asking the agent. Euros and an exchange-rate file arrive, the ledger's listing is replaced
 // by pages, then the board is asked a question. The checker records every expense itself and
@@ -390,7 +390,7 @@ A slate with id "ledger" keeps every expense in its own storage:
   Every expense, or those of one team and/or one month, sorted by dateIso then id.
 
 A slate with id "board" keeps monthly budgets and reads spending from the ledger slate itself,
-through an app binding, whenever it is asked. It keeps no copy of the expenses.
+by calling it, whenever it is asked. It keeps no copy of the expenses.
 - setBudget({ team, month, amountCents }) -> { ok: true } | { ok: false, error }
   Setting a team's budget for a month again replaces it. Same "UNKNOWN_TEAM" and "BAD_AMOUNT" rules.
 - status({ month }) -> { teams: Array<{ team, budgetCents, spentCents, remainingCents, over }> }

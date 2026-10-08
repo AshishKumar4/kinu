@@ -92,6 +92,7 @@ export const FIRST_RUN_CASES = [
   'public-share',
   'share-capability-cut',
   'blueprint-fork',
+  'slate-browser',
   'drive',
   'device-link',
   'background-settle',
@@ -245,12 +246,20 @@ export const FIRST_RUN_DEFECTS = {
       + 'so the red direction is proved at the grant itself: '
       + '`grantAdmits` admitting every member lets the viewer\'s mutate() run in packages/cf-backend/tests/workerd/slate-share.test.ts.',
   },
+  'slate-browser': {
+    id: 'slate-browser',
+    found: 'A slate\'s class opened a Chrome session as its caller, connected it through the eval program\'s browser gate, loaded a page and read its title, and did the same with a Kitesurf browser.',
+    missedBecause: 'The slate surface exposed openBrowser but refused connectBrowser: the sandbox half of driving a browser was installed only in eval programs, and a slate\'s egress carried no actor, so the gate refused every Chrome session.',
+    provedRedAt: null,
+    redDirection: 'Green requires title(engine, url) to answer \'Example Domain\' for both chrome and kitesurf. Before this, connectBrowser from a slate answered "runs only inside an eval program"; '
+      + 'packages/cf-backend/tests/workerd/slate-share.test.ts proves the gate admits the caller\'s own session and refuses another\'s.',
+  },
   'blueprint-fork': {
     id: 'blueprint-fork',
-    found: 'A blueprint published from a slate carried no mapped bindings; a second workspace imported it with bindings unmapped in the read model, and mapping one to its own MCP server made the slate serve.',
+    found: 'A blueprint published from a slate named what it reaches and carried nothing of its owner\'s; a second workspace imported it, its MCP call refused until that workspace connected its own server of the same name, which made the call answer.',
     missedBecause: 'Unit proofs cover publish and admit in isolation; nothing drove the app-host publish, public read, fork, and forker-side serve for the same bytes on the deployed product.',
     provedRedAt: null,
-    redDirection: 'Green requires publish to answer inspection plus link, the owner\'s Drive library to list the slate and the blueprint, the public blueprint read to name both bindings credentialed, the fork to answer two requirements with an unmapped graph problem, and hello() to answer, and the importer\'s own MCP roster to answer a list the mapping would read from.',
+    redDirection: 'Green requires publish to answer inspection plus link, the owner\'s Drive library to list the slate and the blueprint, the public blueprint read and the fork to name the two namespaces the slate reached, the fork\'s MCP call refused before its own server is connected, hello() to answer, and the call to answer through the importer\'s own MCP server.',
   },
   'drive': {
     id: 'drive',
@@ -745,6 +754,7 @@ const SHORT_SUBJECT = {
   'public-share': 'public',
   'share-capability-cut': 'cut',
   'blueprint-fork': 'fork',
+  'slate-browser': 'browse',
   'drive': 'drive',
   'device-link': 'link',
   'background-settle': 'wake',

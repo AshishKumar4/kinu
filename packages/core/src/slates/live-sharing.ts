@@ -14,7 +14,7 @@ export async function shareLiveSlate(input: {
   readonly shares: SlateLiveShareStore;
   readonly graph: SlateCapabilityGraph;
   readonly visibility: LiveShareVisibility;
-  readonly approved: readonly { slate: string; binding: string; member: string }[];
+  readonly approved: readonly { slate: string; namespace: string; member: string }[];
   readonly fork?: boolean;
   readonly url: (handle: string) => Promise<string | null>;
 }): Promise<LiveShareCreated> {

@@ -9,6 +9,17 @@ import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/u
 import { resetRecordedMcp } from './helpers/agents-sdk';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '../src/slates/bindings';
 
+type Owner = ReturnType<typeof orchestratorHarness>;
+
+/** What the slate reaches, as its owner runs it: each call is recorded where the host routes it, whatever it answers. */
+async function exerciseIssuesSlate(owner: Owner): Promise<void> {
+  for (const [path, args] of [
+    [['mcp', 'github', 'read_issue'], [{}]], [['readFile'], ['/slates/issues/src/server.ts']], [['memory', 'recall'], ['seen']], [['slates', 'other', 'summary'], []],
+  ] as const) {
+    await owner.agent.slateCallAs(ROOT_SLATE_CALLER, 'issues', 'workspace', { path: [...path], args: [...args], invocation: null });
+  }
+}
+
 function answered<Schema extends v.GenericSchema>(result: SlateAnswer<unknown>, schema: Schema): v.InferOutput<Schema> {
   if (!result.ok) throw new Error(result.reason + ': ' + result.error);
 
@@ -21,12 +32,7 @@ async function authorIssuesSlate(files: AgentRuntime['storage']['vfs'], extra: R
   await files.mkdir(root + '/scratch', { recursive: true });
   await writeText(files, root + '/package.json', JSON.stringify({
     name: 'issues', description: 'Triage the open issues', main: 'src/server.ts',
-    slate: { title: 'Issue triage', bindings: {
-      GITHUB: { kind: 'mcp', server: 'connection-id', tools: ['read_issue'] },
-      FILES: { kind: 'namespace', namespace: 'workspace', members: ['readFile'] },
-      NOTES: { kind: 'memory', members: ['recall'] },
-      PEER: { kind: 'app', id: 'other' },
-    } },
+    slate: { title: 'Issue triage' },
   }));
   await writeText(files, root + '/src/server.ts', 'export default { fetch() { return new Response("issues"); } };');
   await writeText(files, root + '/scratch/notes.txt', 'owner scratch, not for the blueprint');
@@ -57,11 +63,12 @@ test('a blueprint admits with every requirement unsatisfied and carries nothing 
 
     const files = workspaceFiles(owner.agent);
     await authorIssuesSlate(files);
+    await exerciseIssuesSlate(owner);
     const committed = answered(await owner.agent.slate({ op: 'commit', id: 'issues' }), v.object({ id: v.string() }));
 
     const inspection = answered(await owner.agent.slate({ op: 'inspect', id: 'issues', version: committed.id, include: ['src'] }), BlueprintInspectionSchema);
     expect(inspection.entries.filter((entry) => entry.included).map((entry) => entry.path)).toEqual(['package.json', 'src', 'src/server.ts']);
-    expect(inspection.bindings.filter((binding) => binding.credentialed).map((binding) => binding.name)).toEqual(['GITHUB', 'FILES', 'NOTES']);
+    expect(inspection.reaches).toEqual(['mcp.github', 'memory', 'slates.other', 'workspace']);
     expect(inspection.warnings).toEqual([]);
 
     const published = answered(await owner.agent.slate({ op: 'publish', id: 'issues', version: committed.id, include: ['src'] }), PublishedBlueprintSchema);
@@ -88,13 +95,10 @@ test('a blueprint admits with every requirement unsatisfied and carries nothing 
     const fork = answered(await forker.agent.admitBlueprint(bundle), BlueprintForkSchema);
     expect(fork.workspace).toBe('issues-fork');
     expect(fork.requirements).toEqual([
-      { name: 'files', facet: 'kinu.slate.namespace' },
-      { name: 'github', facet: 'kinu.slate.mcp' },
-      { name: 'notes', facet: 'kinu.slate.memory' },
-      { name: 'peer', facet: 'kinu.slate.app' },
-    ]);
-    expect(fork.bindings.map((binding) => [binding.name, binding.kind, binding.credentialed])).toEqual([
-      ['GITHUB', 'mcp', true], ['FILES', 'namespace', true], ['NOTES', 'memory', true], ['PEER', 'app', false],
+      { name: 'mcp.github', facet: 'kinu.slate.mcp' },
+      { name: 'memory', facet: 'kinu.slate.memory' },
+      { name: 'slates.other', facet: 'kinu.slate.slates' },
+      { name: 'workspace', facet: 'kinu.slate.workspace' },
     ]);
     const forkerFiles = workspaceFiles(forker.agent);
     const landed = '/slates/' + fork.slate;
@@ -104,10 +108,10 @@ test('a blueprint admits with every requirement unsatisfied and carries nothing 
 
     for (const secret of [mcpHeader, providerKey, vaultSecret, vault.placeholder]) expect(admittedTree).not.toContain(secret);
 
-    expect((await forker.agent.listSlates()).slates).toEqual([{ id: fork.slate, title: 'Issue triage', bindings: ['GITHUB', 'FILES', 'NOTES', 'PEER'], port: undefined }]);
+    expect((await forker.agent.listSlates()).slates).toEqual([{ id: fork.slate, title: 'Issue triage', port: undefined }]);
 
-    // Bindings resolve in the forker's workspace, where the owner's MCP connection is absent.
-    expect(await forker.agent.slateBindingCallAs(ROOT_SLATE_CALLER, fork.slate, 'GITHUB', { member: 'read_issue', args: [{}], invocation: null }))
+    // The fork calls the forker's own surface, where no MCP server of that name is connected.
+    expect(await forker.agent.slateCallAs(ROOT_SLATE_CALLER, fork.slate, 'workspace', { path: ['mcp', 'github', 'read_issue'], args: [{}], invocation: null }))
       .toMatchObject({ ok: false, reason: 'missing' });
 
     // S6 for blueprints.

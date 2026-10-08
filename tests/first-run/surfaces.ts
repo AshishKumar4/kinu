@@ -53,7 +53,7 @@ export const STRIP_ROWS = {
   Agent: ['snapshot-after-turn', 'every-tool'],
   Environment: ['sandbox-mount-write', 'sandbox-exec-output', 'device-link'],
   Activity: ['every-tool', 'codemode-craft'],
-  slate: ['slate', 'public-share', 'share-capability-cut', 'blueprint-fork'],
+  slate: ['slate', 'public-share', 'share-capability-cut', 'blueprint-fork', 'slate-browser'],
   preview: ['preview-address', 'slate'],
 } as const satisfies Record<(typeof SURFACES)[number] | 'Activity' | 'slate' | 'preview', Rows>;
 
@@ -77,6 +77,7 @@ export const CAPABILITY_ROWS = {
   'a long command on the owner\'s machine, its output seen while it runs': ['device-job-output'],
   'a swarm whose nodes run as hosted agents and settle': ['exploration'],
   'a live web search': ['web-search'],
+  'a slate driving a browser its caller opened': ['slate-browser'],
   'an internal address refused on every fetch path': ['capability-isolation'],
   'a correction sent while the agent works': ['steer-correction'],
   'several accounts of one provider, each listed and chosen per workspace': ['multi-account'],

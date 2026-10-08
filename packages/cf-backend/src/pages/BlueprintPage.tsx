@@ -8,33 +8,13 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useParams } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import { FileIcon, FolderIcon, GitBranchIcon, LinkIcon, WarningIcon, type Icon } from "@phosphor-icons/react";
-import type { BlueprintView, SlateBindingDeclaration, SlateBindingKind } from "@kinu.run/core";
+import type { BlueprintView } from "@kinu.run/core";
 import { KinuLogo } from "@/components/ui/KinuLogo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { ForkDialog } from "@/components/shared/ForkDialog";
+import { reachConnection } from "@/components/slates/ForkReachPanel";
 import { getBlueprint, signedInEmail } from "@/lib/shared-api";
 import type { WorkspaceEntry } from "@/lib/user-api";
-
-export const BINDING_KIND_LABEL: Record<SlateBindingKind, string> = {
-  mcp: "MCP server",
-  tool: "Tool",
-  namespace: "Executor",
-  app: "Another slate",
-  rpc: "Workspace read models",
-  memory: "Workspace memory",
-  tasks: "Workspace tasks",
-  web: "Web access",
-  agent: "Your agent",
-  ai: "Model inference",
-};
-
-const KIND_ORDER: readonly SlateBindingKind[] = ["mcp", "tool", "namespace", "app", "ai", "agent", "web", "memory", "tasks", "rpc"];
-
-function bindingsByKind(bindings: readonly SlateBindingDeclaration[]): Array<{ kind: SlateBindingKind; bindings: SlateBindingDeclaration[] }> {
-  return KIND_ORDER
-    .map((kind) => ({ kind, bindings: bindings.filter((binding) => binding.kind === kind) }))
-    .filter((group) => group.bindings.length > 0);
-}
 
 export function SecretWarning({ warnings, children }: { warnings: BlueprintView["warnings"]; children: ReactNode }) {
   if (warnings.length === 0) return null;
@@ -61,24 +41,20 @@ const ENTRY_ICON: Record<BlueprintView["entries"][number]["kind"], Icon> = {
 function BlueprintBody({ view }: { view: BlueprintView }) {
   return (
     <>
-      <section className="space-y-2" aria-label="Declared bindings">
-        <h2 className="p-eyebrow">Bindings a fork must connect</h2>
-        {view.bindings.length === 0 ? (
-          <p className="text-xs p-text-3">This slate declares no bindings. A fork runs on its own.</p>
-        ) : bindingsByKind(view.bindings).map((group) => (
-          <div key={group.kind} className="p-card px-4 py-3">
-            <div className="p-meta p-text-3">{BINDING_KIND_LABEL[group.kind]}</div>
-            <ul className="mt-1 space-y-1">
-              {group.bindings.map((binding) => (
-                <li key={binding.name} className="flex flex-wrap items-baseline gap-x-2 text-sm">
-                  <span className="font-mono p-text">{binding.name}</span>
-                  {binding.target && <span className="p-text-2 text-xs">→ {binding.target}</span>}
-                  {binding.credentialed && <span className="p-badge-neutral rounded-sm px-1.5 py-0.5 text-[10px]">runs as you</span>}
-                </li>
-              ))}
-            </ul>
-          </div>
-        ))}
+      <section className="space-y-2" aria-label="What it reaches">
+        <h2 className="p-eyebrow">What a fork calls, as you</h2>
+        {view.reaches.length === 0 ? (
+          <p className="text-xs p-text-3">It was published calling nothing of its publisher&apos;s. A fork runs on its own.</p>
+        ) : (
+          <ul className="p-card space-y-1 px-4 py-3">
+            {view.reaches.map((namespace) => (
+              <li key={namespace} className="flex flex-wrap items-baseline gap-x-2 text-sm">
+                <span className="font-mono p-text">{namespace}</span>
+                <span className="p-text-2 text-xs">{reachConnection(namespace).text}</span>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
       <SecretWarning warnings={view.warnings}>
         A blueprint never carries your connected credentials, but it can carry text someone pasted into the source. These lines look like secrets. Check them before you use this blueprint.
@@ -155,7 +131,7 @@ export default function BlueprintPage({ fixture, viewer, workspaces }: {
                 <h1 className="p-display text-2xl">{view.title}</h1>
                 {view.description && <p className="mt-1 text-sm p-text-2">{view.description}</p>}
                 <p className="mt-2 p-meta p-text-3">
-                  A committed version of a slate, with every binding unmapped. A fork runs in your workspace on your own connections. Nothing of the publisher's comes with it.
+                  A committed version of a slate. A fork runs in your workspace, as you, on your own connections. Nothing of the publisher's comes with it.
                 </p>
               </div>
               <FilledButton onClick={fork} disabled={email === undefined} className="!h-9 shrink-0 !px-4 !text-sm">

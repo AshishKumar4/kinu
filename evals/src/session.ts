@@ -543,7 +543,6 @@ export type PublicCraftedTool = v.InferOutput<typeof CraftedToolSchema>;
 const SlateSummarySchema = v.object({
   id: v.string(),
   title: v.string(),
-  bindings: v.array(v.string()),
   port: v.optional(v.number()),
 });
 

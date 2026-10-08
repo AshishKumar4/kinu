@@ -1,10 +1,11 @@
 /** A non-main agent's chat in its own isolate (D9). */
 import {
   CHAT_SESSION_ID, ChatSession, EventLog, HeadCapture, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TerminalTransitions,
-  announcementOf, assembleActorTurn, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork, planHandoffStillOwed, projectJsonValue,
+  PlanReviewActions, announcementOf, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork,
+  planHandoffStillOwed, projectJsonValue,
   metadataTier, subordinateTerminalEffects, withCompactionTrigger,
   bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
-  type ActorTurnLease, type ChatTurnInput, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
+  type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type JsonObject, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
   type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalTurnFacts, type TerminalTurnParts,
   type ProviderEnv, type SessionEvent, type TurnAssemblyRequest, type WorkMode,
 } from '@kinu.run/core';
@@ -38,6 +39,14 @@ export class FacetChat {
   /** Whether the turn running answers the agent's hirer (a delegated task), not its owner. */
   private parentDriven = false;
 
+  /** The turn in flight's input, whose author decides whether it may submit a plan. */
+  private item: ChatTurnInput | null = null;
+
+  private readonly planUpdates: BroadcastEvent[] = [];
+
+  /** Its own plan reviews, in its own store: the owner reviews them through its window (D9). */
+  readonly plans: PlanReviewActions;
+
   private activeSkills: readonly string[] = [];
 
   private terminalTransitions: TerminalTransitions | null = null;
@@ -52,6 +61,7 @@ export class FacetChat {
     const sql = actor.runtime.storage.sql;
 
     this.trigger = { state: createCompactionStateStore(sql, actor.handle), key: actor.record.actorId };
+    this.plans = new PlanReviewActions(actor.stores.planReviews, { broadcast: (event) => { this.planUpdates.push(event); } });
     this.spend = new FacetSpend(workspace);
 
     this.session = new ChatSession({
@@ -117,7 +127,9 @@ export class FacetChat {
   private async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn> {
     const { actor, database, workspace } = this.deps;
     const mode = actor.session.workMode;
-    this.parentDriven = item.kind === 'programmatic';
+    this.item = item;
+    // A plan's feedback or approval is the owner's decision, so its turn keeps the owner's lane, not the hirer's.
+    this.parentDriven = item.kind === 'programmatic' && item.metadata?.kinuEvent !== 'plan_feedback' && item.metadata?.kinuEvent !== 'plan_approved';
     // The workspace reads the turn's sources for the tier it runs on, and the turn is assembled on that same tier.
     const explicitTier = metadataTier(item.metadata);
     const prepared = await workspace.prepareChat({ turnId: lease.turnId, mode, userText: item.text, parentDriven: this.parentDriven, ...(explicitTier !== undefined && { explicitTier }) });
@@ -137,6 +149,20 @@ export class FacetChat {
       execution: withCompactionTrigger(assembled.execution, state, key, historyLength),
       sessionKey: key, contextWindow: assembled.window.contextWindow, historyLength,
     };
+  }
+
+  /** The turn in flight's metadata, author-stamped as the root's is, for a plan it submits. */
+  drivingMetadata(): JsonObject | undefined {
+    return this.session.turnInFlight() && this.item !== null ? authoredTurnMetadata(this.item) : undefined;
+  }
+
+  /** A plan action, then each update it announced, delivered to the agent's window before it answers. */
+  async planned<A>(act: (plans: PlanReviewActions) => A | Promise<A>): Promise<A> {
+    const result = await act(this.plans);
+
+    for (const event of this.planUpdates.splice(0)) await this.deps.workspace.chatEvent({ type: 'broadcast', event });
+
+    return result;
   }
 
   private async composeRequest(): Promise<ComposedRequest> {

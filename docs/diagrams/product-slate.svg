@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="640" height="1456" viewBox="0 0 640 1456" style="max-width:100%;height:auto;display:block" role="img" aria-labelledby="slate-title slate-desc">
 <title id="slate-title">CURRENT: A slate from source to preview</title>
-<desc id="slate-desc">A slate is source under the canonical workspace file plane. Its strict package manifest introduces only declared, admitted bindings. Preview compiles and starts a caller-scoped resident; the browser opens a separate preview origin and talks to authored HTTP. The caller does not acquire a callee author’s authority. Source and committed versions are durable; resident processes and preview URLs are derived. Hosted Worker previews and sandbox Node applications retain distinct execution boundaries.</desc>
-<!-- Sources: docs/LIVE-UI.md; packages/core/src/slates/project.ts; packages/core/src/slates/bindings.ts; packages/cf-backend/src/slates/host.ts. Current-source baseline: d6a88d8e736e0ca4aa934cbabf5fa52327e5792b. -->
+<desc id="slate-desc">A slate is source under the canonical workspace file plane. Its package manifest declares no capabilities: the slate calls its caller's own reach through one workspace surface. Preview compiles and starts a caller-scoped resident; the browser opens a separate preview origin and talks to authored HTTP. The caller does not acquire a callee author’s authority. Source and committed versions are durable; resident processes and preview URLs are derived. Hosted Worker previews and sandbox Node applications retain distinct execution boundaries.</desc>
+<!-- Sources: docs/LIVE-UI.md; packages/core/src/slates/project.ts; packages/core/src/slates/surface.ts; packages/cf-backend/src/slates/host.ts. Current-source baseline: d6a88d8e736e0ca4aa934cbabf5fa52327e5792b. -->
 <style>text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}path,rect{vector-effect:non-scaling-stroke}</style>
 <defs>
 <marker id="slate-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -33,11 +33,11 @@
 <g>
 <rect x="48" y="366" width="544" height="168" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
 <text x="68" y="401" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
-<tspan x="68" dy="0">Declare narrow bindings</tspan>
+<tspan x="68" dy="0">Call one workspace surface</tspan>
 </text>
 <text x="68" y="435" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
-<tspan x="68" dy="0">namespace / read-model RPC / MCP / app</tspan>
-<tspan x="68" dy="30">Declarations do not grant permission.</tspan>
+<tspan x="68" dy="0">eval namespaces / reads / MCP / slates</tspan>
+<tspan x="68" dy="30">Nothing is declared or granted.</tspan>
 <tspan x="68" dy="30">Use the originating caller’s authority.</tspan>
 </text>
 </g>

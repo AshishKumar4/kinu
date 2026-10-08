@@ -75,8 +75,8 @@ import { DrivePageFrame, DriveRoute, installDriveFixture } from "@/gallery-drive
 import { driveDesignFrame } from "@/gallery-drive-design";
 import BlueprintPage from "@/pages/BlueprintPage";
 import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
-import { UnmappedBindingsPanel } from "@/components/slates/UnmappedBindingsPanel";
-import type { BlueprintInspection, BlueprintView, LiveShareRecord, SlateBindingDeclaration, SlateCapabilityGraph } from "@kinu.run/core";
+import { ForkReachPanel } from "@/components/slates/ForkReachPanel";
+import type { BlueprintInspection, BlueprintView, LiveShareRecord, SlateCapabilityGraph } from "@kinu.run/core";
 import UserSettingsPage from "@/pages/UserSettingsPage";
 import { DeviceRow } from "@/components/devices/DeviceRow";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
@@ -750,7 +750,7 @@ const STOCK_OVERVIEWS = new Map(Object.entries({
   "checkout-fixes": {
     activity: "working", decisionsWaiting: 2, hasUpdates: true,
     latestRun: { status: "error", task: "Investigate intermittent checkout failures in the coupon migration" },
-    slates: [{ id: "coupon-board", title: "Coupon board", picture: null, bindings: 0, visibility: null }], shares: [],
+    slates: [{ id: "coupon-board", title: "Coupon board", picture: null, visibility: null }], shares: [],
   },
   "perf-audit": {
     activity: "working", decisionsWaiting: 0, hasUpdates: false,
@@ -1743,7 +1743,7 @@ function galleryPortListing(executor: string | undefined): GalleryListing | null
 function gallerySlates() {
   return {
     slates: ["Board", "Notes", "Tally"].slice(0, Number(new URLSearchParams(location.search).get("slates") ?? 0))
-      .map((title) => ({ id: title.toLowerCase(), title, bindings: [] })),
+      .map((title) => ({ id: title.toLowerCase(), title })),
     problems: [],
   };
 }
@@ -4664,12 +4664,7 @@ const PENDING_ACTIONS: PendingAction[] = [
 const SHELL_PENDING_ACTIONS = PENDING_ACTIONS.filter((action) => action.kind === "plan_review");
 
 
-const BLUEPRINT_BINDINGS: SlateBindingDeclaration[] = [
-  { name: "GITHUB", kind: "mcp", target: "github", credentialed: true },
-  { name: "FILES", kind: "namespace", target: "workspace", credentialed: true },
-  { name: "NOTES", kind: "memory", target: "recall, remember", credentialed: true },
-  { name: "PEER", kind: "app", target: "digest", credentialed: false },
-];
+const BLUEPRINT_REACHES = ["mcp.github", "workspace", "memory", "slates.digest"];
 
 const BLUEPRINT_ID = "checkout-fixes~k7Qm2pV9xRt3aB4c~mfrq6zk3p2xw7ha";
 
@@ -4677,8 +4672,7 @@ const BLUEPRINT_VIEW: BlueprintView = {
   id: BLUEPRINT_ID,
   title: "Issue triage",
   description: "Reads the open issues of a repository, groups them by area, and writes a triage note into workspace memory every morning.",
-  bindings: BLUEPRINT_BINDINGS,
-  credentialed: BLUEPRINT_BINDINGS.filter((binding) => binding.credentialed),
+  reaches: BLUEPRINT_REACHES,
   entries: [
     { path: "package.json", kind: "file", included: true },
     { path: "src", kind: "directory", included: true },
@@ -4695,7 +4689,7 @@ const BLUEPRINT_VIEW: BlueprintView = {
 const BLUEPRINT_INSPECTION: BlueprintInspection = {
   slate: "issue-triage", version: "v2k9q1c7xw4m", title: BLUEPRINT_VIEW.title, description: BLUEPRINT_VIEW.description,
   entries: [...BLUEPRINT_VIEW.entries, { path: "scratch", kind: "directory", included: false }, { path: "scratch/notes.md", kind: "file", included: false }],
-  bindings: BLUEPRINT_BINDINGS, credentialed: BLUEPRINT_VIEW.credentialed, warnings: BLUEPRINT_VIEW.warnings,
+  reaches: BLUEPRINT_REACHES, warnings: BLUEPRINT_VIEW.warnings,
 };
 
 /** As core draws it: every member classified, each mutating one's risk worded for the visibility, and the digest slate behind the peer hop. */
@@ -4706,28 +4700,30 @@ const NO_RISK = { public: "", users: "" };
 const SHARE_GRAPH: SlateCapabilityGraph = {
   slate: "issue-triage",
   slates: ["issue-triage", "digest"],
-  bindings: [
-    { slate: "issue-triage", name: "GITHUB", kind: "mcp", capability: { kind: "mcp", server: "github", title: "GitHub" }, members: [
-      { member: "read_issue", effect: "read", risk: NO_RISK },
-      { member: "create_issue", effect: "mutate", risk: RISK("Calls create_issue on GitHub with your credentials. The server does not mark it read-only, so it can create or change data there.") },
+  namespaces: [
+    { slate: "issue-triage", namespace: "mcp.github", title: "GitHub", members: [
+      { member: "read_issue", impact: "observe", risk: NO_RISK },
+      { member: "create_issue", impact: "externalSend", risk: RISK("Calls create_issue on GitHub with your credentials. The server does not mark it read-only, so it can create or change data there.") },
     ] },
-    { slate: "issue-triage", name: "FILES", kind: "namespace", capability: { kind: "executor", namespace: "workspace" }, members: [
-      { member: "readFile", effect: "read", risk: NO_RISK },
-      { member: "writeFile", effect: "mutate", risk: RISK("Writes, edits or deletes files in workspace checkout-fixes as you.") },
+    { slate: "issue-triage", namespace: "workspace", title: "workspace", members: [
+      { member: "readFile", impact: "observe", risk: NO_RISK },
+      { member: "writeFile", impact: "mutate", risk: RISK("Writes, edits or deletes files in workspace checkout-fixes as you.") },
     ] },
-    { slate: "issue-triage", name: "NOTES", kind: "memory", capability: { kind: "memory" }, members: [
-      { member: "recall", effect: "read", risk: NO_RISK },
-      { member: "remember", effect: "mutate", risk: RISK("Changes your workspace memory as you: notes and remembered facts your agent reads back later.") },
+    { slate: "issue-triage", namespace: "memory", title: "memory", members: [
+      { member: "recall", impact: "observe", risk: NO_RISK },
+      { member: "remember", impact: "mutate", risk: RISK("Changes your workspace memory as you: notes and remembered facts your agent reads back later.") },
     ] },
-    { slate: "issue-triage", name: "ASK", kind: "agent", capability: { kind: "agent" }, members: [
-      { member: "send", effect: "mutate", risk: RISK("Sends a message to your agent's inbox as this slate. Your agent reads it and acts on it in workspace checkout-fixes.") },
+    { slate: "issue-triage", namespace: "agent", title: "agent", members: [
+      { member: "send", impact: "externalSend", risk: RISK("Sends agent.send out of workspace checkout-fixes as you: your agent reads it and acts on it.") },
     ] },
-    { slate: "issue-triage", name: "BRAIN", kind: "ai", capability: { kind: "model", tier: "fast" }, members: [
-      { member: "shell", effect: "mutate", risk: RISK("Runs a model call on your fast tier. Every call spends your inference.") },
+    { slate: "issue-triage", namespace: "ai", title: "ai", members: [
+      { member: "run", impact: "execute", risk: RISK("Runs a model call on your inference. Every call spends it.") },
     ] },
-    { slate: "issue-triage", name: "PEER", kind: "app", capability: { kind: "slate", id: "digest" }, members: [] },
-    { slate: "digest", name: "DIGEST_FILES", kind: "namespace", capability: { kind: "executor", namespace: "workspace" }, members: [
-      { member: "readFile", effect: "read", risk: NO_RISK },
+    { slate: "issue-triage", namespace: "slates.digest", title: "slates.digest", members: [
+      { member: "summary", impact: "observe", risk: NO_RISK },
+    ] },
+    { slate: "digest", namespace: "workspace", title: "workspace", members: [
+      { member: "readFile", impact: "observe", risk: NO_RISK },
     ] },
   ],
 };
@@ -4735,10 +4731,11 @@ const SHARE_GRAPH: SlateCapabilityGraph = {
 const LIVE_SHARE: LiveShareRecord = {
   id: "live-board-1", slate: "issue-triage", visibility: "public", handle: "3f9a1c7e02",
   grant: { slates: ["issue-triage", "digest"], members: [
-    { slate: "issue-triage", binding: "GITHUB", member: "read_issue", effect: "read" },
-    { slate: "issue-triage", binding: "FILES", member: "readFile", effect: "read" },
-    { slate: "issue-triage", binding: "NOTES", member: "recall", effect: "read" },
-    { slate: "digest", binding: "DIGEST_FILES", member: "readFile", effect: "read" },
+    { slate: "issue-triage", namespace: "mcp.github", member: "read_issue", impact: "observe" },
+    { slate: "issue-triage", namespace: "workspace", member: "readFile", impact: "observe" },
+    { slate: "issue-triage", namespace: "memory", member: "recall", impact: "observe" },
+    { slate: "issue-triage", namespace: "slates.digest", member: "summary", impact: "observe" },
+    { slate: "digest", namespace: "workspace", member: "readFile", impact: "observe" },
   ] },
   createdAt: NOW - 864e5, revokedAt: null, users: [],
 };
@@ -6587,7 +6584,7 @@ const snapshotRaceRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promi
   const executors = current ? [{ name: "current-executor", type: "workspace", cwd: "/workspace" }] : [];
   const activePlan = current ? v.parse(JsonValueSchema, { ...galleryAgentPlan, id: "current-plan" }) : null;
   const tabPresence = { work: current, explorations: false };
-  const slates = current ? [{ id: "current-slate", title: "Current slate", bindings: [] }] : [];
+  const slates = current ? [{ id: "current-slate", title: "Current slate" }] : [];
   const seeded = { memoryContent, executors, activePlan, tabPresence, slates };
 
   if (method === "getWorkspaceSnapshot") {
@@ -6683,10 +6680,10 @@ async function mount() {
     ["providerwait", { node: <ProviderWaitFrame />, entries: ["/"] }],
     ["sharedialog", { node: <ShareDialogFrame mode="live" />, entries: ["/"] }],
     ["sharedialog-blueprint", { node: <ShareDialogFrame mode="blueprint" />, entries: ["/"] }],
-    ["unmapped", {
+    ["fork-reach", {
       node: (
         <div className="h-screen w-[720px] p-sidebar p-text">
-          <UnmappedBindingsPanel slate="issue-triage" title="Issue triage" rpc={workRpc} onOpen={() => {}} fixture={BLUEPRINT_BINDINGS} />
+          <ForkReachPanel title="Issue triage" reaches={BLUEPRINT_REACHES} onOpen={() => {}} />
         </div>
       ), entries: ["/"],
     }],

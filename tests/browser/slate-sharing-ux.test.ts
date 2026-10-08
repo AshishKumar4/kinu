@@ -1,4 +1,4 @@
-/** Real-browser share access, grant consent, credential redaction and blueprint bindings at both widths and themes. */
+/** Real-browser share access, grant consent, credential redaction and blueprint reach at both widths and themes. */
 import { describe, expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
 
@@ -57,7 +57,7 @@ describe('slate sharing surfaces', () => {
             expect(text).toContain('src/config.ts:4');
             expect(text).not.toContain('AKIA');
             expect(text).toContain('Fork into Kinu');
-            expect(text).toContain('MCP server');
+            expect(text).toContain('Connect an MCP server named "github"');
             
           } finally {
             await blueprint.close();
@@ -108,17 +108,16 @@ describe('slate sharing surfaces', () => {
             const text = await live.$eval('[role="dialog"]', (element) => element.textContent ?? '');
             // Read members are granted with no click; changes wait for one.
             expect(await live.$$eval('[role="dialog"] input[data-approve]', (boxes) => boxes.filter((box) => box instanceof HTMLInputElement && box.checked).length)).toBe(0);
-            expect(await live.$eval('[data-grant-summary]', (element) => element.textContent ?? '')).toContain('People get 4 read-only members. You allowed 0 of 5 changes.');
+            expect(await live.$eval('[data-grant-summary]', (element) => element.textContent ?? '')).toContain('People get 5 read-only members. You allowed 0 of 5 changes.');
             // The risk statement is per member: the act, the workspace, who can trigger it.
             expect(text).toContain('Calls create_issue on GitHub with your credentials.');
             expect(text).toContain('Writes, edits or deletes files in workspace checkout-fixes as you.');
-            expect(text).toContain("Sends a message to your agent's inbox as this slate.");
-            expect(text).toContain('Runs a model call on your fast tier. Every call spends your inference.');
+            expect(text).toContain('Sends agent.send out of workspace checkout-fixes as you');
+            expect(text).toContain('Runs a model call on your inference. Every call spends it.');
             expect(text).toContain('Anyone you named on this share can trigger it.');
             // The app hop is drawn as a subtree of the slate it names.
-            expect(text).toContain('via PEER → digest');
-            expect(text).toContain('DIGEST_FILES');
-            await live.click('[data-approve="ASK.send"]');
+            expect(text).toContain('via issue-triage → digest');
+            await live.click('[data-approve="agent.send"]');
             expect(await live.$eval('[data-grant-summary]', (element) => element.textContent ?? '')).toContain('You allowed 1 of 5');
             // Public wording follows the access choice.
             await live.click('[data-share-access]');
@@ -134,9 +133,8 @@ describe('slate sharing surfaces', () => {
           try {
             const text = await dialog.$eval('[role="dialog"]', (element) => element.textContent ?? '');
             expect(text).toContain('Publish');
-            // Only a credentialed binding asks the forker to connect; the app hop is not one.
-            expect(await dialog.$eval('[data-blueprint-connect]', (element) => element.textContent ?? '')).toContain('GITHUB');
-            expect(text).not.toContain('PEER (app');
+            // The forker connects their own of what the slate reaches.
+            expect(await dialog.$eval('[data-blueprint-connect]', (element) => element.textContent ?? '')).toContain('mcp.github');
             expect(await dialog.$('[role="dialog"] [role="alert"]')).not.toBeNull();
             expect(text).not.toMatch(/per minute|spend|\$/);
             
@@ -144,11 +142,11 @@ describe('slate sharing surfaces', () => {
             await dialog.close();
           }
 
-          const panel = await freshPage(gallery, 'unmapped', theme, viewport);
+          const panel = await freshPage(gallery, 'fork-reach', theme, viewport);
 
           try {
-            const text = await panel.$eval('[data-unmapped-bindings]', (element) => element.textContent ?? '');
-            expect(text).toContain('needs its bindings connected');
+            const text = await panel.$eval('[data-fork-reach]', (element) => element.textContent ?? '');
+            expect(text).toContain('runs as you here');
             expect(text).toContain('Connect an MCP server named "github"');
             expect(text).toContain('Open the preview');
             

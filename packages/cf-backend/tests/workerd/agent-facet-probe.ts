@@ -324,8 +324,8 @@ export class AgentFacetProbeRoot extends DurableObject<ProbeRootEnv> {
     await this.target(workspace);
     const props = { workspace, id: 'relay-probe', name: SLATE_STORAGE_BINDING, caller: ROOT_SLATE_CALLER };
     const binding = new SlateBinding(Object.create(this.ctx, { props: { value: props } }), this.env);
-    await binding.call('put', ['seen', 'kept'], null);
-    const answer = await binding.call('get', ['seen'], null);
+    await binding.call(['put'], ['seen', 'kept'], null);
+    const answer = await binding.call(['get'], ['seen'], null);
 
     return { answer: { ...answer }, carriesDisposer: Symbol.dispose in answer };
   }

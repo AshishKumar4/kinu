@@ -34,7 +34,7 @@ const MALFORMED_REFERENCE = v.parse(
   { path: ['courier'], id: '', revision: 0 },
 );
 
-const SLATES: SlateSummary[] = [{ id: 'dashboard', title: 'Dashboard', bindings: [], port: 8789 }];
+const SLATES: SlateSummary[] = [{ id: 'dashboard', title: 'Dashboard', port: 8789 }];
 
 const SANDBOX_URL = 'https://8080-sandbox-aaaaaaaaaaaaaaaa.preview.example.test/';
 
@@ -175,7 +175,7 @@ export function PreviewTabsGallery() {
       <button data-break-plans onClick={() => setFailHistory(value => !value)}>Toggle history failure</button>
       <button data-worker-plan onClick={() => setWorkerPlan({ ...workerPlan, revision: 2, createdAt: 20, status: "pending", handoffAccepted: false, content: "# Worker revision two" })}>Submit worker plan</button>
       <button data-open-workspace onClick={() => setOwner('main')}>Back to workspace conversation</button>
-      <button data-new-preview onClick={() => { setSlates([...SLATES, { id: 'report', title: 'Report', bindings: [] }]); setFocus('slate:report'); }}>New preview</button>
+      <button data-new-preview onClick={() => { setSlates([...SLATES, { id: 'report', title: 'Report' }]); setFocus('slate:report'); }}>New preview</button>
       <button data-new-plan onClick={() => { setPlan(ROOT_PLAN); setPlanFocus('plan-dashboard:2'); }}>Submit plan</button>
       <button data-refresh-preview onClick={() => setReload(n => n + 1)}>Refresh source</button>
       <button data-add-diff onClick={() => setEdited(EDITED)}>Edit file</button>
