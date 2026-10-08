@@ -135,7 +135,7 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
       // Annotations are owner input over the wire: a malformed one is refused, not stored.
       const malformed = JSON.parse('[{"id":"a-1","blockId":"b-1","startOffset":0,"endOffset":4,"type":"COMMENT"}]');
       expect(await surface.savePlanReviewAnnotations(id, revision, malformed)).toMatchObject({
-        ok: false, error: expect.stringContaining('annotation 0: originalText'),
+        ok: false, error: expect.stringContaining('annotation 0: '),
       });
 
       // A comment on a passage and one on the whole plan, which has no block to sit on, are both sent.

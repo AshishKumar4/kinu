@@ -129,7 +129,7 @@ import { ActorSession, type ActorTurnLease,
   McpToolSurfaceCache, toolSurfaceTokens, type McpServedSurface, type McpSurfaceBudget,
   createActorHost, defaultLoopOrigin,
   type ActorHost, type AgentRuntime, type HostedActor, type SqlExec, type AgentOrchestratorDeps, type LoopOrigin, type WriteObserver,
-  PlanReviewActions, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, workModeUnderReview, authoredTurnMetadata, planHandoffStillOwed,
+  PlanReviewActions, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, planSubmissionReach, workModeUnderReview, authoredTurnMetadata, planHandoffStillOwed,
   type PlanDecisionOutcome, type PlanEdit, type PlanReview, type ReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult,
   ChatSession, CHAT_SESSION_ID, checkpointAvailability, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore,
@@ -1687,9 +1687,9 @@ export class LocalAgentSession {
         return this.extraTools;
       },
       // Built into the turn's tool set by its gates, and outside the builtins, so named here.
-      wiredToolNames: () => [
+      wiredToolNames: (mode) => [
         ...(this.reportDeps !== null && item.kind === 'programmatic' ? [REPORT_TOOL] : []),
-        ...(this.planSubmissionOpen() ? [SUBMIT_PLAN_TOOL] : []),
+        ...(this.planSubmissionOpen(mode) ? [SUBMIT_PLAN_TOOL] : []),
         ...(this.planReplyOpen() ? [REPLY_TO_COMMENT_TOOL] : []),
       ],
       codemodeCapabilities: (mode) => codemodeCapabilitiesFor(this.codemodeProviders(mode)),
@@ -2367,9 +2367,9 @@ export class LocalAgentSession {
     return this.reportDeps !== null && this.turnIsParentAssigned;
   }
 
-  /** A root (only its plan has an owner), in either mode. Cloud: `OrchestratorAgent.actorToolDeps`. */
-  private planSubmissionOpen(): boolean {
-    return this.planReviewSurface();
+  /** A root (only its plan has an owner) on a turn core's `planSubmissionReach` offers it. Cloud: `ActorAgent.submitsPlans`. */
+  private planSubmissionOpen(mode: WorkMode): boolean {
+    return this.planReviewSurface() && planSubmissionReach(mode, this.turnDriving);
   }
 
   /** A root whose plan the owner sent back with comments the agent may answer. */
@@ -2775,7 +2775,7 @@ export class LocalAgentSession {
     // The toolset is rebuilt per turn, so `report` exists only on parent-driven turns.
     if (this.reportGateOpen() && this.reportDeps) deps.report = this.reportDeps;
 
-    if (this.planSubmissionOpen()) {
+    if (this.planSubmissionOpen(mode)) {
       deps.submitPlan = { submit: (edits) => this.submitPlanEdits(edits) };
     }
 
@@ -2798,7 +2798,7 @@ export class LocalAgentSession {
 
   /** The tool set this turn's gates (`report`, `submit_plan`, `reply_to_comment`) build; rebuilt when they moved, never re-resolving a model. */
   private turnToolSet(mode: WorkMode): ToolSet {
-    const gates = `${String(this.reportGateOpen())}:${String(this.planReviewSurface())}:${String(this.planReplyOpen())}`;
+    const gates = `${String(this.reportGateOpen())}:${String(this.planSubmissionOpen('build'))}:${String(this.planReviewSurface())}:${String(this.planReplyOpen())}`;
 
     if (this.toolSets[mode] === undefined || this.toolSetGates !== gates) {
       this.buildToolSets();

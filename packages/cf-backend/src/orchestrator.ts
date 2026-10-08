@@ -201,7 +201,7 @@ import {
   setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
   type EvolutionConfigView,
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
-  workModeUnderReview, planAwaitingReply,
+  workModeUnderReview, planAwaitingReply, planSubmissionReach,
   JsonValueSchema, type JsonValue, type JsonObject, type KinuEvent,
   EVENT_VARIANTS,
   boundEventQuery,
@@ -1199,7 +1199,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       slate: (operation) => this.slateAs({ path: [{ name: turn.actor.record.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, operation),
       ...(report !== undefined && { report }),
       // The owner's own turns, and its plan's feedback turn; a hirer's turn is never asked for the owner's review.
-      ...(!turn.parentDriven && { submitPlan: { submit: async (edits) => await this.hostedPlanSubmit(turn, edits) } }),
+      ...(!turn.parentDriven && planSubmissionReach(turn.input.mode, turn.driving) && { submitPlan: { submit: async (edits) => await this.hostedPlanSubmit(turn, edits) } }),
       ...(await this.hostedPlanAwaitsReply(turn) && { replyToComment: { reply: async (comment, text) => await this.hostedPlanReply(turn, comment, text) } }),
     };
 

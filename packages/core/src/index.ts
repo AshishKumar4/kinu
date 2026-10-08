@@ -1314,6 +1314,7 @@ export {
   admitReviewAnnotations,
   freshNotes,
   planAwaitingReply,
+  planSubmissionReach,
   reviewFeedbackText,
   DiffAnchorSchema,
   applyPlanEdits,

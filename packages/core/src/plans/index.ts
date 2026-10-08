@@ -8,6 +8,7 @@ export {
   applyPlanEdits,
   freshNotes,
   planAwaitingReply,
+  planSubmissionReach,
   reviewFeedbackText,
   formatPlanWithLineNumbers,
   initPlanReviewTable,

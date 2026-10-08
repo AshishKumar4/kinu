@@ -244,6 +244,19 @@ function noteLine(note: Exclude<ReviewAnnotation, NoteReply>): string {
   return `Comment ${note.id} on ${quoted(note.originalText)}${carried}: ${note.text ?? ''}`;
 }
 
+/**
+ * Whether a turn may offer `submit_plan`: any Plan turn, which a submission from the harness then refuses with its
+ * reason; and in Build, only the owner's own turn or their review's feedback turn, so no harness turn is offered it.
+ */
+export function planSubmissionReach(mode: WorkMode, driving: JsonObject | undefined): boolean {
+  return mode === 'plan' || planSubmissionAllowed(driving);
+}
+
+/** The owner's own turn, or the feedback turn of their review: the only turns whose plan is the owner's to review. */
+function planSubmissionAllowed(driving: JsonObject | undefined): boolean {
+  return turnAuthor({ metadata: driving }) === 'operator' || driving?.kinuEvent === 'plan_feedback';
+}
+
 /** Whether `plan`, the active revision, was sent back with comments the agent may answer: the reply tool's gate. */
 export function planAwaitingReply(plan: PlanReview | null): boolean {
   return plan?.status === 'changes_requested' && freshNotes(plan.annotations).some((note) => note.type !== 'REPLY' || note.author === 'owner');
@@ -649,7 +662,7 @@ export class PlanReviewActions {
 
   /** `driving`: the calling turn's metadata. */
   submit(edits: readonly PlanEdit[], driving: JsonObject | undefined): PlanReviewResult {
-    if (turnAuthor({ metadata: driving }) !== 'operator' && driving?.kinuEvent !== 'plan_feedback') {
+    if (!planSubmissionAllowed(driving)) {
       return {
         ok: false,
         error: 'a plan is submitted only from a turn the owner wrote or from its feedback turn; this turn was started by the harness',
