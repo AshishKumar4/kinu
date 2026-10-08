@@ -101,7 +101,7 @@ import {
   MissionGovernor, type MissionSeam, type MissionBudgetRefusal,
   normalizeUsage, priceCall, type Usage,
   generateReported, streamTextReported, type GenerateRequest, type StreamRequest,
-  WORKSPACE_RUN_ID, type ModelCallReport, type ModelOperationSink, type ModelOperationEvent, type CacheWarmingLane,
+  WORKSPACE_RUN_ID, signalCardId, TurnReplies, type ModelCallReport, type ModelOperationSink, type ModelOperationEvent, type CacheWarmingLane,
   recordModelOperations, type ProviderWaitInfo,
   // Prices a model_call row only when the rate belongs to that call's own model.
   buildModelCallEvent,
@@ -1784,9 +1784,13 @@ export abstract class ActorAgent extends Agent<Env> {
     return this._chatLoop;
   }
 
+  /** Each slate `agent.ask` reply, fed by this actor's own turns. */
+  protected readonly replies = new TurnReplies();
+
   private _chatTransport: ChatWireTransport | null = null;
   protected get chatTransport(): ChatWireTransport {
     this._chatTransport ??= new ChatWireTransport({
+      replies: this.replies,
       turnOwed: () => this.chatLoopOwesWork(),
       steps: () => {
         const run = this.eventRecorder.openRun();
@@ -2171,7 +2175,11 @@ export abstract class ActorAgent extends Agent<Env> {
     if (!this._host) {
       const armWake = this.durableWakeOwner();
       this._host = {
-        broadcast: (event) => this.broadcast(JSON.stringify(event)),
+        broadcast: (event) => {
+          // A slate's asked message lands where its card is shown, in the turn running then.
+          this.replies.card(event, this._chatLoop?.currentTurnId ?? null);
+          this.broadcast(JSON.stringify(event));
+        },
         enqueueTurn: (input) => this.chatLoop.enqueueTurn(input),
         // Synchronous read plus same-tick buffer push means the observed turn's prepareStep drains
         // the signal; a turn that settles first re-delivers it from settle().
@@ -3097,15 +3105,24 @@ export abstract class ActorAgent extends Agent<Env> {
 
           if (route.viewer !== undefined) metadata.viewer = route.viewer;
 
-          const outcome = yield* Effect.promise(async () => this.slateInbox().send({
-            kind: 'slate',
-            text: route.viewer === undefined
-              ? `Slate ${route.slate}: ${route.text}`
-              : `Slate ${route.slate} (viewer ${route.viewer}): ${route.text}`,
-            metadata,
-          }));
+          const said = route.viewer === undefined ? `Slate ${route.slate}: ${route.text}` : `Slate ${route.slate} (viewer ${route.viewer}): ${route.text}`;
 
-          return { outcome };
+          if (route.ask !== true) return { outcome: yield* Effect.promise(async () => this.slateInbox().send({ kind: 'slate', text: said, metadata })) };
+
+          // Asked: the reply is open before the message is sent, so the turn it lands in feeds it from its first word. A
+          // send that opens a turn settles only when that turn ends, so the reply is answered now and only the wait is
+          // detached; a message that never lands says so on its card, which ends the reply.
+          const key = `ask:${crypto.randomUUID()}`;
+          const reply = this.replies.open(signalCardId(key));
+
+          const sent = this.slateInbox().send({
+            kind: 'slate', idempotencyKey: key, metadata,
+            text: `${said}\nYour answer's text streams to slate ${route.slate} as you write it: answer it in prose.`,
+          });
+
+          this.detachOwned(Effect.promise(async () => { await this.keepAliveWhile(async () => sent); }));
+
+          return { reply };
         }
 
         case 'ai': return yield* Effect.promise(async () => this.slateAiRun(route));
