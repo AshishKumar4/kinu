@@ -77,6 +77,17 @@
     "claimed_at INTEGER NOT NULL",
     "PRIMARY KEY(actor_id,turn_id)"
   ],
+  "actor_turn_cuts@packages/core/src/orchestrator/actor-claims.ts": [
+    "actor_id TEXT NOT NULL",
+    "turn_id TEXT NOT NULL",
+    "epoch INTEGER NOT NULL",
+    "build TEXT",
+    "phase TEXT NOT NULL CHECK(phase IN ('provider','work'))",
+    "phase_at INTEGER NOT NULL",
+    "work_cuts INTEGER NOT NULL",
+    "provider_cuts INTEGER NOT NULL",
+    "PRIMARY KEY(actor_id,turn_id)"
+  ],
   "agent_data_tables@packages/core/src/tools/db-codemode.ts": [
     "name TEXT PRIMARY KEY",
     "scope TEXT NOT NULL CHECK(scope IN ('actor','workspace'))",

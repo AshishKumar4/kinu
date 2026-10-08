@@ -115,14 +115,14 @@ function consumedEvidence(stores: Pick<AgentStores, 'claims'>, claim: StoredActo
  * must outlast five resets from outside, the bar tardigrade's kill5 sets (2026-10-08: two such resets inside one long
  * step ended Kinu's turn), so the sixth cut in the step's own work is the step's.
  */
-export const POISON_WORK_CUTS = 6;
+const POISON_WORK_CUTS = 6;
 
 /**
  * Cuts while the step waits on the provider, likewise counted, that settle it. None is the step's fault, but a wait can
  * be the turn's: task-j7gjjr's model wait outlasted the workspace's memory and time limits fifteen times in a day
  * (2026-09-25), dropping every tab's socket each time. Twenty covers five outside resets four times over.
  */
-export const STALLED_PROVIDER_CUTS = 20;
+const STALLED_PROVIDER_CUTS = 20;
 
 /** The dead execution's cuts, itself counted ({@link TurnCut}); a host that stamps no build counts none. */
 function cutsOf(stores: Pick<AgentStores, 'claims'>, claim: StoredActorClaim, installedBuild: string | null) {

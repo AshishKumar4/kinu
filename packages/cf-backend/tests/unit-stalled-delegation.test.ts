@@ -11,7 +11,6 @@
 import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import { AwaitedList } from '@kinu.run/test-utils';
-import { STALLED_PROVIDER_CUTS } from '@kinu.run/core';
 import { abandonHarnessFibers, joinHarnessFibers } from './helpers/agents-sdk';
 import {
   GATEWAY_CATALOG, eventsOver, gatewayWorkspace, reactivateOrchestratorHarness, rosterOver, wakeForDelegatedTask,
@@ -20,6 +19,9 @@ import {
 import { chatCompletion, openingOf, stubAiBinding, type StubbedAiBinding } from './helpers/platform-gateway';
 
 const TASK = 'Probe what the stalled run reaches.';
+
+/** Cuts in a provider wait, on one build with no step finishing, that settle a turn (D12). */
+const STALLED_PROVIDER_CUTS = 20;
 
 /** The build every activation runs unless a deploy ships another; recovery verifies a claim's program by it. */
 const BUILD = 'build-stalled';

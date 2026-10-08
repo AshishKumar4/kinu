@@ -979,6 +979,7 @@ export class ChatSession {
 
   /** The re-opened turn waits out its backoff: this process's timer brings it back, and the wake a process after it. */
   private deferReask(at: number): Promise<void> {
+    diagnostics.event('turn.reask_deferred', { turn: this.queue[0]?.turnId ?? null, dueInMs: at - Date.now() });
     this.reaskTimer ??= setTimeout(() => {
       this.reaskTimer = null;
 

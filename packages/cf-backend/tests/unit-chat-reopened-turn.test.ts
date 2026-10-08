@@ -18,7 +18,9 @@ import { createRoot } from 'react-dom/client';
 import { useAgentChat } from '@cloudflare/ai-chat/react';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import type { Connection } from 'agents';
-import type { UIMessage } from 'ai';
+import { tool, type UIMessage } from 'ai';
+import { z } from 'zod';
+import type { KinuExtension } from '@kinu.run/core';
 import * as v from 'valibot';
 import { AwaitedList } from '@kinu.run/test-utils';
 import {
@@ -431,6 +433,9 @@ test("a person's open tab redials into each re-drive across two restarts and dra
   await view.close();
 });
 
+/** Cuts in a step's own work that settle a turn (D12). */
+const POISON_WORK_CUTS = 6;
+
 /** The claim of the turn `id`, as the next decision reads it. */
 function claimOf(harness: StartedHarness, id: string): { outcome: string | null; epoch: number } | null {
   return harness.db.query<{ outcome: string | null; epoch: number }, [string]>('SELECT outcome, epoch FROM actor_turn_claims WHERE turn_id = ?').get(id);
@@ -449,15 +454,18 @@ async function opened(first: StartedHarness, id: string, steps: number): Promise
   expect(await Promise.race([answered, streamed])).toBe('streamed');
 }
 
-/** Each activation ends inside the step's own work: the tool `call_0` starts and its result never lands. */
-const POISONED = [{ name: 'poisoned-step', onToolResult: () => new Promise<never>(() => {}) }];
+/** Each activation ends inside the step's own work: the tool starts and never returns, as one that ends its process. */
+const POISONED: readonly KinuExtension[] = [{
+  name: 'poisoned-step',
+  registerTools: () => ({ poison: tool({ description: 'Ends the process it runs in.', inputSchema: z.object({}), execute: () => new Promise<never>(() => {}) }) }),
+}];
 
-/** A model that answers step 0 with the call the poisoned step runs, and counts how often it is asked. */
+/** A model that answers with the poisoned call, and counts how often it is asked. */
 function poisonedModel(asked: { n: number }): StubbedAiBinding {
   return stubAiBinding((run) => {
     asked.n += 1;
 
-    return toolCallCompletion(run, { tool: 'shell', args: { command: 'echo 1' } }, 'call_0');
+    return toolCallCompletion(run, { tool: 'poison', args: {} }, 'call_0');
   });
 }
 
@@ -515,7 +523,7 @@ test('a step that ends its own process every time it runs is settled at the sixt
   expect(await Promise.race([answered, Promise.resolve('inside the step')])).toBe('inside the step');
 
   try {
-    for (let run = 2; run <= 7; run += 1) {
+    for (let run = 2; run <= POISON_WORK_CUTS + 1; run += 1) {
       // Past the backoff a cut in the step's own work earns, so this activation asks again at once.
       at += 120_000;
       setSystemTime(new Date(at));
@@ -531,8 +539,8 @@ test('a step that ends its own process every time it runs is settled at the sixt
     setSystemTime();
   }
 
-  expect(asked.n).toBe(6);
-  expect(claimOf(last, 'req-poison')).toEqual({ outcome: 'error', epoch: 6 });
+  expect(asked.n).toBe(POISON_WORK_CUTS);
+  expect(claimOf(last, 'req-poison')).toEqual({ outcome: 'error', epoch: POISON_WORK_CUTS });
 });
 
 test('a turn cut inside its own work is asked again only after the backoff, which its wake carries', async () => {
