@@ -105,7 +105,9 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
           <div className="flex items-center gap-2 mb-2">
             <span className="p-label">Environments</span>
           </div>
-          <div className="grid gap-2 @[38rem]:grid-cols-2 @[64rem]:grid-cols-3">
+          {/* A track of minmax(0, 1fr) at every width: an implicit one sized to the widest card's content, its size choice
+              the widest, and pushed every card past the panel (staging, 2026-10-08). */}
+          <div className="grid grid-cols-1 gap-2 @[38rem]:grid-cols-2 @[64rem]:grid-cols-3">
             {mounts.map((m) => (
               <EnvironmentCard
                 key={m.name}
@@ -219,7 +221,7 @@ function EnvironmentCard({ rpc, mount, exec, active, onSelect, onOpenFiles, onCo
     <div
       data-env-card={mount.name}
       onClick={onSelect}
-      className={`p-card rounded-lg px-3 py-2.5 space-y-1.5 cursor-pointer transition-colors border ${
+      className={`p-card min-w-0 rounded-lg px-3 py-2.5 space-y-1.5 cursor-pointer transition-colors border ${
         active ? "border-[rgba(224,164,88,.4)] bg-[rgba(224,164,88,.05)]" : "p-border hover:border-[var(--c-border-strong)]"
       } ${mount.live ? "" : "border-dashed"}`}
     >

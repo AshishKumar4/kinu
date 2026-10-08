@@ -396,14 +396,16 @@ export function createTeamToolDeps(deps: {
       : yield* requiredText(input.mission ?? '', 'mission');
 
     const typedName = input.name?.trim();
-    const name = typedName === undefined || typedName === '' ? deps.createName(roleLabel) : typedName;
+    const named = typedName !== undefined && typedName !== '';
+    const name = named ? typedName : deps.createName(roleLabel);
     requireSubordinateActorName(name);
 
     if (deps.roster.get(name)) return yield* Effect.die(new Error(`subordinate "${name}" already exists`));
 
-    // A typed title is the owner's and final; a role yields `auto`; nothing gives the slug's codename,
-    // which the title policy may claim once.
-    const chosen = optionalText(input.displayName);
+    // A typed title is final, and so is a name the hire gave (a hire told "named tidepool" showed "Planner",
+    // staging 2026-10-08); a role alone yields `auto`; nothing gives the slug's codename, which the title policy may
+    // claim once.
+    const chosen = optionalText(input.displayName) ?? (named ? name : undefined);
     const provisional = ownerCreated && input.role === undefined;
     const displayName = chosen ?? (provisional ? codenameFor(name) : displayNameForRole(roleLabel));
     const nameOrigin: 'user' | 'auto' = chosen ? 'user' : 'auto';

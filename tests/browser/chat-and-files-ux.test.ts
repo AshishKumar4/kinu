@@ -4202,3 +4202,21 @@ describe('the composer while a turn runs and under a status row', () => {
     });
   });
 });
+
+describe('the Environment cards', () => {
+  // Staging, 2026-10-08: at the inspector's default width every card ran past the panel's right edge.
+  test('fit a panel as narrow as the inspector', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 340, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=environment`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-env-card="sandbox"] [data-env-size]');
+
+      const past = await page.$$eval('[data-env-card]', (cards) => cards
+        .map((card) => [card.getAttribute('data-env-card'), Math.round(card.getBoundingClientRect().right - document.documentElement.clientWidth)])
+        .filter(([, beyond]) => Number(beyond) > 0));
+
+      expect(past).toEqual([]);
+    });
+  });
+});
