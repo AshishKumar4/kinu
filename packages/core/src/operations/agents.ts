@@ -6,6 +6,9 @@ export const AGENTS_OPS = ['swarm', 'hire', 'assign', 'hireWorkspace', 'message'
 
 export type AgentsOp = (typeof AGENTS_OPS)[number];
 
+/** Who reaches them from a slate: only the workspace owner's own slate, calling as the owner (`Operation.slate`). */
+export const AGENTS_SLATE = 'owner' as const;
+
 /** What each operation does, whatever the wiring offers. */
 export const AGENTS_IMPACTS = {
   swarm: 'delegate', hire: 'delegate', assign: 'delegate', hireWorkspace: 'delegate',

@@ -653,6 +653,13 @@
     "source_message_created_at INTEGER NOT NULL",
     "forked_at INTEGER NOT NULL"
   ],
+  "fork_notices@packages/core/src/heads/fork-notices.ts": [
+    "notice_key TEXT PRIMARY KEY",
+    "signal TEXT NOT NULL",
+    "attempts INTEGER NOT NULL",
+    "due_at INTEGER NOT NULL",
+    "started_at INTEGER"
+  ],
   "fork_staged_files@packages/core/src/identity/schema.ts": [
     "path TEXT PRIMARY KEY"
   ],

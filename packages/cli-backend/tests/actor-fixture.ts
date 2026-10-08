@@ -152,7 +152,7 @@ export function headSeatFactory(
       name: explorationActorKey(input.id), creationId: input.id, origin: 'swarm', lifetime: 'task',
     });
 
-    const agentName = actorHomeName({ origin: 'swarm', storageKey: binding.storageKey });
+    const agentName = actorHomeName({ origin: 'swarm', name: binding.name, storageKey: binding.storageKey });
     writes?.set(binding.reference.actorId, observer);
     const actor = await host.acquire(binding.reference);
 

@@ -10,7 +10,7 @@ import { chatCompletion, stubAiBinding } from './helpers/platform-gateway';
 async function helper() {
   const workspace = gatewayWorkspace(stubAiBinding((run) => chatCompletion(run, 'done')));
   const child = await hostedSubordinateHarness(workspace, { name: 'scout', displayName: 'Scout', nameOrigin: 'user', mission: 'read' });
-  const sql = agentSql(child.actor.handle.actorId);
+  const sql = agentSql(workspace, child.actor.handle.actorId);
 
   await workspace.agent.accountSpend();
 

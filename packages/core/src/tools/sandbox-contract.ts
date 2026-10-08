@@ -273,9 +273,10 @@ export function craftedFailureFunctions(crafted: readonly CraftedDeclaration[]):
 /**
  * The caller's reach as a slate holds it: every namespace narrowed to the members a slate reaches. A crafted tool's
  * body runs on these providers too, so what a slate cannot call directly it cannot call through a tool either.
+ * `owner`: the owner's own slate calling as the owner, which alone keeps `agents`.
  */
-export function slateToolReach(caller: ToolSurfaceNarrowing): ToolSurfaceNarrowing {
-  const allowsNamespace = (name: string) => name !== 'agent' && name !== 'agents' && caller.allowsNamespace(name);
+export function slateToolReach(caller: ToolSurfaceNarrowing, owner = false): ToolSurfaceNarrowing {
+  const allowsNamespace = (name: string) => name !== 'agent' && (owner || name !== 'agents') && caller.allowsNamespace(name);
 
   return {
     allowsTool: (name) => name !== 'agents' && name !== 'agent' && name !== 'eval' && caller.allowsTool(name),

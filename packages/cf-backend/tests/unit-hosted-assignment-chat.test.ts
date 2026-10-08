@@ -38,7 +38,7 @@ test("a durable grandchild that only worked its assignment shows the task, from 
     SELECT actor_id AS id FROM workspace_actors WHERE parent_actor_id = ${middle.actor.handle.actorId}`[0]?.id;
 
   // The agent's runs are in its own database.
-  const ended = (actorId: string): boolean => (agentSql(actorId)<{ n: number }>`
+  const ended = (actorId: string): boolean => (agentSql(workspace, actorId)<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${actorId} AND type = 'run_end'`[0]?.n ?? 0) > 0;
 
   await wakeForDelegatedTask(workspace, middle.actor.handle.actorId, 'Middle task.');

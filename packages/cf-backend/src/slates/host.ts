@@ -842,7 +842,9 @@ export class SlateHost {
 
       // An answer's page calls as its author as of now, in the mode the author's next turn runs in.
       const callsAs = source.kind === 'message' ? source.author : caller;
-      const call = routeSlateCall({ id, request: parsed.output, chain });
+      // Only the owner's own slate, calling as the owner, hires or messages helpers; a hosted actor's slate never does.
+      const call = routeSlateCall({ id, request: parsed.output, chain, hosted: callsAs.path.length > 0 });
+
       // An answer's page is never shared or published, so what it calls is no slate's graph.
       const record = (namespace: string, member: string) => { if (source.kind !== 'message') this.usage.record(id, { namespace, member }); };
 

@@ -239,7 +239,9 @@ describe('a workspace is named by its first prompt, and that name is what a pers
       expect(childPrompt).toBeDefined();
       expect(childPrompt).toContain(`You are "Researcher", a subagent in the workspace "${TITLE}".`);
       expect(childPrompt?.replaceAll(join(AGENT_HOME, SLUG), '')).not.toContain(SLUG);
-      expect(childPrompt).not.toContain(created.name);
+      // Named from its mission, it is told its title; its name shows only in its home's path (`/home/<name>`).
+      expect(created.name).toBe('read-callback-handler');
+      expect(childPrompt?.replaceAll(`/home/${created.name}`, '')).not.toContain(created.name);
     } finally {
       await host.close();
     }

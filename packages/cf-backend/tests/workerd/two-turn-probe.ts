@@ -397,9 +397,9 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
 
     // The SDK's holds: `keepAliveWhile` arms its heartbeat alarm in the future, so no alarm is yet due.
     if (this._keepAliveRefs > 0) busy.push(`${String(this._keepAliveRefs)} keepAlive hold(s)`);
-    const fibers = this.unmetered('SELECT id FROM cf_agents_runs').toArray().length;
+    const fibers = this.unmetered('SELECT id FROM fibers').toArray().length;
 
-    if (fibers > 0) busy.push(`${String(fibers)} durable fiber(s)`);
+    if (fibers > 0) busy.push(`${String(fibers)} open lane(s)`);
     const alarm = await this.actorState.storage.getAlarm();
 
     if (alarm !== null && alarm <= Date.now()) busy.push('an alarm due');

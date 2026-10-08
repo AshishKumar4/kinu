@@ -830,6 +830,30 @@ waits for leave (`ChatOptions.paceStep`): the facet asks
 `step(turnId)`, and that call grants the waiting step and answers once it has
 ended (`StepPacer`). Any turn the isolate runs is paced, whoever started it.
 
+D11. Kinu owns no SDK fiber lane; what a dead activation left is re-driven by
+the next one's `onStart`. Amends D7's carrier, not its shape: delegation still
+runs off the wake. Decided 2026-10-08 under the owner's rule (ONSTART-0926):
+wake-time init runs in `onStart`, bounded by algorithm, never by a timeout, with
+no once-guard outside it, and model work is started there, not awaited. The
+SDK re-offered a `cf_agents_runs` row through `onFiberRecovered` inside
+`blockConcurrencyWhile`, under a 10 s hook timeout and a scan deadline
+(`fiberRecoveryHookTimeoutMs`, `fiberRecoveryScanDeadlineMs`); Kinu answered
+with a classifier and redelivery sleeps, and ran its fork reconcile from the
+alarm behind the in-memory `activationRecoveryPending`.
+What changes. Every lane runs under `ActorAgent.holdLane` (`keepAliveWhile`).
+Terminal effects and delegation keep no lane row: their ledger rows already
+were the obligation. A background job's lane and the evolution lane write the
+CLI's own `fibers` row (`createSqlFiber`); the last statement of `onStart`
+takes every row from before the activation began (`recoverDeadActivation`, 256
+a statement) and re-drives it, a job's row being the only record of a settled
+job whose wake never landed. The same seam reconciles the fork journal once,
+sealing every pre-cutoff steer branch first, and every maintenance pass joins
+it; the open turn the wake re-opens counts as a live run, so the start does
+not re-open it. A fork-interrupted notice is a `fork_notices` row until the
+inbox takes it; a refusal makes it due again at the shared capped backoff, and
+the wake fold reads that instant. Dead-activation leases re-pend 256 a pass,
+the rest under the wake (f2619ff00).
+
 ## Deploy ladder
 
 L1. The deploy wave is scheduled by a thread budget, not a gate count. Each

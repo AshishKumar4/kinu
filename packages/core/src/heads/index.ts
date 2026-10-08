@@ -46,6 +46,8 @@ export {
   type ReportHeadDelta, type PublishHeadStream,
 } from './head-stream';
 
+export { ForkNotices, forkNoticeDeliveries, initForkNoticeTable, type ForkNotice } from './fork-notices';
+
 export {
   reconcileInterruptedForks, jobRedriveResumeGate, resumableForkRoots,
   FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,

@@ -23,7 +23,7 @@ import {
 } from "@phosphor-icons/react";
 import "virtual:kinu-theme.css";
 import "./index.css";
-import { KINU_MARK, MARK_IDS, mark, codenameFor, WorkspaceTerminalInputSchema } from "@kinu.run/core";
+import { KINU_MARK, MARK_IDS, mark, codenameFor, mintAgentName, WorkspaceTerminalInputSchema } from "@kinu.run/core";
 import { ephemeralSlateAddress, hostedActorSocketPath, mcpPresetById, READS_CHANGED_EVENT, readsWrittenBy, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
 import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT, PositionCursorSchema, sanitizeWorkspaceLogoSvg } from "@kinu.run/core";
 import type { AlternateTakeSet, ParkedWriteReview, ReasoningEffort, TakePickOutcome } from "@kinu.run/core";
@@ -1540,7 +1540,6 @@ const GALLERY_SUBS: {
   status: string; currentTask: string | null; createdAt: number; dismissedAt: number | null;
 }[] = [];
 
-let gallerySubSeq = 0;
 
 const AGENTS_PANEL = new URLSearchParams(location.search).get("agents") === "panel";
 
@@ -2026,6 +2025,11 @@ function galleryPlanRpc(method: string, args?: unknown[]): GalleryAnswer {
   return { value: { ok: true, plan: galleryAgentPlan, queued: true } };
 }
 
+/** Named as the workspace names an owner's chat: from its opening words, else its role, numbered past every name had. */
+function galleryChatName(opening: string | null): string {
+  return mintAgentName({ brief: opening, role: "task" }, () => (name) => GALLERY_SUBS.some((sub) => sub.name === name));
+}
+
 function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
   if (method === "listSubordinates") return { value: [...GALLERY_SUBS] };
 
@@ -2042,7 +2046,7 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
 
   if (method === "createSubordinateAgent") {
     maybeRefuseCreate();
-    const name = `agent-${++gallerySubSeq}`;
+    const name = galleryChatName(v.is(v.string(), args?.[0]) ? args[0] : null);
 
     const entry = {
       name, actorId: galleryActorId(name), displayName: codenameFor(name), role: "agent", nameOrigin: "auto", origin: "user", lifetime: "durable",

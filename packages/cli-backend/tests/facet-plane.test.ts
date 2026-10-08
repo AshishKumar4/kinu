@@ -7,7 +7,7 @@ import { actorHomeName, codemodeSurface, executorNamespace, narrowToolSurface, t
 import { scratchDir, toolExecute, workspaceDatabase } from '@kinu.run/test-utils';
 import { cleanupFacetScratch, createCLIRuntime, shareLocalWorkspacePlane, type CLIRuntime } from '../src/runtime';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
-import { registerLocalActor } from '@kinu.run/core';
+import { actorReferenceOf, localActorDirectory, recoverLocalActorRetirements, registerLocalActor } from '@kinu.run/core';
 
 interface LocalRoot {
   readonly rt: CLIRuntime;
@@ -26,7 +26,7 @@ function rootRuntime(state: string, cwd = scratchDir('facet-plane-folder')): Loc
 /** A child over its root's database: same handle, same file, its own actor row. */
 function childRuntime(parent: CLIRuntime, root: LocalRoot, name: string): CLIRuntime {
   const binding = registerLocalActor(parent.actor, { name, creationId: crypto.randomUUID(), origin: 'agent', lifetime: 'durable' });
-  const facet = actorHomeName({ origin: 'agent', storageKey: binding.storageKey });
+  const facet = actorHomeName({ origin: 'agent', name: binding.name, storageKey: binding.storageKey });
   const child = createCLIRuntime(root.db, { llm: null, cwd: parent.cwd, facet, actorBinding: binding });
 
   return shareLocalWorkspacePlane(child, parent);
@@ -46,7 +46,7 @@ describe('local actor file-plane identity', () => {
     mkdirSync(project);
     const root = rootRuntime(state, project);
     const child = childRuntime(root.rt, root, 'reader');
-    const key = actorHomeName({ origin: 'agent', storageKey: child.actor.storageKey });
+    const key = actorHomeName({ origin: 'agent', name: child.actor.name, storageKey: child.actor.storageKey });
     expect((await exec(child, 'pwd; echo "$HOME"; echo "$TMPDIR"')).stdout.trim().split('\n')).toEqual([
       resolve(project), join(state, 'home', key), join(state, 'home', key, 'tmp'),
     ]);
@@ -54,6 +54,42 @@ describe('local actor file-plane identity', () => {
     expect(await readText(root.rt.storage.vfs, join(project, 'shared.txt'))).toBe('shared\n');
     expect(readdirSync(project)).toEqual(['shared.txt']);
     expect(child.identity.name).toBe('reader');
+  });
+
+  // Named for its brief, a child's home repeats across workspaces; the named shells it keeps on the machine must not.
+  test('two workspaces\' children of one name keep their own named shells', async () => {
+    const children = ['one', 'two'].map((workspace) => {
+      const state = scratchDir(`facet-plane-shells-${workspace}`);
+      const project = join(state, 'project');
+      mkdirSync(join(project, workspace), { recursive: true });
+      const root = rootRuntime(state, project);
+
+      return childRuntime(root.rt, root, 'fix-coupon-expiry');
+    });
+
+    const [one, two] = children;
+
+    if (!one?.shell || !two?.shell) throw new Error('The children have no shell.');
+    expect(children.map((child) => actorHomeName({ origin: 'agent', name: child.actor.name, storageKey: child.actor.storageKey })))
+      .toEqual(['fix-coupon-expiry', 'fix-coupon-expiry']);
+
+    await one.shell.exec('cd one && export WHERE=one', { name: 'build' });
+
+    expect((await two.shell.exec('pwd; echo "where=$WHERE"', { name: 'build' })).stdout).toBe(`${resolve(two.cwd)}\nwhere=\n`);
+  });
+
+  // Keyed by its name, a child's storage key is not its id, and the recovery's cleanup looks the child up by id.
+  test('a retirement the process left half done is finished for the child it began on', async () => {
+    const root = rootRuntime(scratchDir('facet-plane-retire'));
+    const child = childRuntime(root.rt, root, 'fix-coupon-expiry');
+    const reference = actorReferenceOf(child.actor);
+
+    localActorDirectory(root.rt.actor).directory.apply(root.rt.actor, [], { action: 'retire', name: 'fix-coupon-expiry', reference });
+    const cleaned: (readonly [readonly string[], string])[] = [];
+
+    await recoverLocalActorRetirements(root.rt.actor, async (path, owner) => { cleaned.push([path, owner.actorId]); });
+
+    expect(cleaned).toEqual([[['fix-coupon-expiry'], child.actor.actorId]]);
   });
 
   test('hostile logical names are refused before a physical child is allocated', () => {
@@ -73,8 +109,8 @@ describe('local actor file-plane identity', () => {
     const one = childRuntime(root.rt, root, 'one');
     const two = childRuntime(root.rt, root, 'two');
     expect((await exec(one, 'echo keep > keep.txt')).exitCode).toBe(0);
-    const oneKey = actorHomeName({ origin: 'agent', storageKey: one.actor.storageKey });
-    const twoKey = actorHomeName({ origin: 'agent', storageKey: two.actor.storageKey });
+    const oneKey = actorHomeName({ origin: 'agent', name: one.actor.name, storageKey: one.actor.storageKey });
+    const twoKey = actorHomeName({ origin: 'agent', name: two.actor.name, storageKey: two.actor.storageKey });
     expect(existsSync(join(state, 'home', oneKey))).toBe(true);
     cleanupFacetScratch(state, oneKey);
     expect(existsSync(join(state, 'home', oneKey))).toBe(false);

@@ -16,7 +16,7 @@ import {
   SESSION_UID,
   type NodeIdentity,
   type NodeWorkspace,
-  type NodeWorkspaceProvisioner, actorHomeName } from '@kinu.run/core';
+  type NodeWorkspaceProvisioner, actorHomeName, explorationActorKey } from '@kinu.run/core';
 import type { NimbusSandboxHandle } from '@kinu.run/core';
 import { nimbusSessionFiles, readExecutorFile, writeExecutorFileOp, type ExecutorFileLookup, WORKSPACE_ROOT } from '@kinu.run/core';
 import { createWorkspace, workspaceGenerationStorage } from '@kinu.run/core/workspace';
@@ -77,9 +77,9 @@ async function openFixture(): Promise<Fixture> {
     runtime: composed.runtime,
     // Keyed on the node actor's storage key, not the raw node id: a rename must not move the home, and
     // two actors that briefly shared a name across a retirement must not share one.
-    provision: (identity: NodeIdentity) => facetHomeProvisioner(wiring)(actorHomeName({ origin: 'swarm', storageKey: identity.nodeId })),
+    provision: (identity: NodeIdentity) => facetHomeProvisioner(wiring)(actorHomeName({ origin: 'swarm', name: explorationActorKey(identity.nodeId), storageKey: identity.nodeId })),
     reprovision: (identity: NodeIdentity) =>
-      facetHomeProvisioner({ ...wiring, root: workspace.vfs.as(ROOT) })(actorHomeName({ origin: 'swarm', storageKey: identity.nodeId })),
+      facetHomeProvisioner({ ...wiring, root: workspace.vfs.as(ROOT) })(actorHomeName({ origin: 'swarm', name: explorationActorKey(identity.nodeId), storageKey: identity.nodeId })),
   };
 }
 
@@ -555,7 +555,7 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
     // One counter row bumped per open: the second workspace is the next generation of the same database.
     const first = createWorkspace({ sql, transactions, generation: workspaceGenerationStorage(sql) });
     const provision = facetHomeProvisioner(first.privileged().then((host) => ({ ...host, sql })));
-    const identity = await provision(actorHomeName({ origin: 'swarm', storageKey: node('reset').nodeId }));
+    const identity = await provision(actorHomeName({ origin: 'swarm', name: explorationActorKey('reset'), storageKey: node('reset').nodeId }));
 
     if (identity.isolation !== 'private-home') throw new Error('node needs its own home');
     const child = await first.asAgent(identity);
@@ -586,8 +586,8 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
       workspace.privileged().then((privileged) => ({ ...privileged, sql })),
     );
 
-    const a = await provision(actorHomeName({ origin: 'swarm', storageKey: node('aX9').nodeId }));
-    const b = await provision(actorHomeName({ origin: 'swarm', storageKey: node('bK2').nodeId }));
+    const a = await provision(actorHomeName({ origin: 'swarm', name: explorationActorKey('aX9'), storageKey: node('aX9').nodeId }));
+    const b = await provision(actorHomeName({ origin: 'swarm', name: explorationActorKey('bK2'), storageKey: node('bK2').nodeId }));
 
     if (a.isolation !== 'private-home' || b.isolation !== 'private-home') {
       throw new Error('the in-isolate seam must provision credentials');

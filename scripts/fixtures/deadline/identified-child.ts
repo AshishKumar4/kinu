@@ -30,7 +30,13 @@ const readAtBoundary = function (...args: Parameters<typeof fs.readFileSync>) {
 
     // The lookup has already found a live, owned PID. At the next read it is either ending or still executing.
     // `exec` keeps its arguments unreadable through the detector's existing settle bound; no test owns that clock.
-    if (mode === 'exiting') child.kill();
+    // `exiting` is gone (a zombie this blocked loop cannot reap) before the read returns: a SIGTERM the child had
+    // not yet acted on let a loaded machine read it as live and end it (armada, batch 58).
+    if (mode === 'exiting') {
+      child.kill('SIGKILL');
+
+      while (fs.existsSync(`/proc/${child.pid}`) && !/\) Z /u.test(read(`/proc/${child.pid}/stat`, 'utf8'))) Bun.sleepSync(1);
+    }
 
     return '';
   }
