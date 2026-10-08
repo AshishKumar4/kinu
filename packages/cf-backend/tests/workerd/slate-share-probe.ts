@@ -42,7 +42,7 @@ const TRIAGE = {
     ['memory', 'recall'], ['memory', 'remember'], ['agent', 'send'], ['slates', 'triage-digest', 'summary'],
   ],
   'triage-digest': [['readFile'], ['slates', 'issues', 'refresh']],
-  // What a slate never reaches: control of its calling agent, delegation, or making tools.
+  // What a slate never reaches: control of its calling agent, or making tools; and helpers, the owner's own slate's alone.
   overreach: [['agents', 'hire'], ['agent', 'hire'], ['workspace', 'createTool']],
 } as const;
 
@@ -283,7 +283,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
    */
   async previewAsHire(): Promise<{ preview: SlateCallResult; removed: SlateCallResult; left: boolean }> {
     const identity = { uid: 2001, gid: 2001 };
-    const home = provisionAgentHome(this.vfs.as(CRED_KERNEL), actorHomeName({ origin: 'agent', storageKey: 'builder' }), identity);
+    const home = provisionAgentHome(this.vfs.as(CRED_KERNEL), actorHomeName({ origin: 'agent', name: 'builder', storageKey: 'builder' }), identity);
     const hire: SlateCaller = { path: [{ name: 'builder' }], cred: agentCred(identity), workMode: 'build' };
     const dir = slateDirectory(new SlateId('widgets'));
     const files = this.vfs.as(hire.cred);

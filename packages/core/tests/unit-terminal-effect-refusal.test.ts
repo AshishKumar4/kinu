@@ -254,11 +254,7 @@ test('settled turns under an owner-fixable refusal leave one row per effect and 
   expect(transitions.nextRetryAt()).toBeNull();
   expect(transitions.hasIncomplete()).toBe(false);
 
-  // An activation for any other reason arms nothing for them.
   const armed = wakes.length;
-
-  await transitions.armOwedRecovery();
-  expect(wakes.length).toBe(armed);
 
   // The owner's change: both fall due on one wake.
   await transitions.modelSettingsChanged();

@@ -63,7 +63,6 @@ export const ELAPSED_WORK_SOURCE_ROOTS = {
     "packages/cli-backend/src/opencode-provider.ts",
     "packages/cf-backend/src/actor-agent.ts",
     "packages/cf-backend/src/orchestrator.ts",
-    "packages/cf-backend/src/fiber-recovery.ts",
   ],
   delegation: [
     "packages/core/src/subordinates/",

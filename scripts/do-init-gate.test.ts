@@ -107,154 +107,23 @@ describe('DO init-gate purity', () => {
 
 describe('DO init-gate purity — the SDK-awaited recovery hook', () => {
   /**
-   * The shipped defect, recovered from the diff and not invented. This is
-   * `ActorAgent.onFiberRecovered` exactly as the audit found it:
-   *
-   *   override async onFiberRecovered(ctx: FiberRecoveryContext): Promise<FiberRecoveryResult> {
-   *     return recoverLaneFiber(this.fiberLanes, ctx);
-   *   }
-   *
-   * Nothing about it looks expensive. `recoverLaneFiber` was `async` and its arms
-   * awaited `reviewAdvisorSnapshot` (a model call), `runDueSessionEvolution`
-   * (model calls and tool loops), a settled job's wake (which resolves when the
-   * turn it queues ENDS) and `replayOwedTerminalSequences` (SMTP round trips and
-   * waits on another agent's live head) — all inside `blockConcurrencyWhile`.
+   * The shipped defect: `ActorAgent.onFiberRecovered` as the audit found it, awaiting a lane's re-drive (model calls,
+   * a job wake that resolves when its turn ENDS, SMTP) inside `blockConcurrencyWhile`. Its fix classified
+   * synchronously; the hook itself is now gone, because the SDK bounds it with a timeout, which is no bound.
    */
-  const SHIPPED_RECOVERY = `export class ActorAgent extends Think {
-    override async onFiberRecovered(ctx: FiberRecoveryContext): Promise<FiberRecoveryResult> {
-      return recoverLaneFiber(this.fiberLanes, ctx);
+  test('overriding a hook the SDK awaits in the gate is refused, however little it does', () => {
+    for (const hook of ['onFiberRecovered', '_handleInternalFiberRecovery']) {
+      const found = reasons(`export class ActorAgent extends Think {
+        override ${hook}(ctx: FiberRecoveryContext): Promise<FiberRecoveryResult> {
+          return Promise.resolve({ status: 'completed', snapshot: null });
+        }
+      }`);
+
+      expect(found).toEqual([expect.stringContaining('Kinu owns no SDK fiber lane')]);
     }
-  }`;
-
-  const LANDED = `export class ActorAgent extends Think {
-    override onFiberRecovered(ctx: FiberRecoveryContext): Promise<FiberRecoveryResult> {
-      return Promise.resolve(classifyRecoveredFiber(this.fiberLanes, ctx));
-    }
-  }`;
-
-  test('the shipped defect is reported, on both of its independent grounds', () => {
-    const found = reasons(SHIPPED_RECOVERY);
-    expect(found).toHaveLength(2);
-    expect(found[0]).toContain('async');
-    // The one that matters, and the one no `await` check could reach: the awaits
-    // were a module away, in the roster this hook handed the gate.
-    expect(found[1]).toContain('must hand its work to `classifyRecoveredFiber`');
-  });
-
-  test('a hook that awaits the model call itself is reported too', () => {
-    const inGateLlm = `export class ActorAgent extends Think {
-      override async onFiberRecovered(ctx: FiberRecoveryContext): Promise<FiberRecoveryResult> {
-        const disposition = await this.runAdvisorReview(advisorSnapshotOf(ctx));
-        return { status: 'completed', snapshot: { disposition } };
-      }
-    }`;
-
-    expect(reasons(inGateLlm)).toEqual([
-      expect.stringContaining('async'),
-      expect.stringContaining('awaits in its own scope'),
-    ]);
-  });
-
-  test('the landed shape is clean', () => {
-    expect(reasons(LANDED)).toEqual([]);
-  });
-
-  /**
-   * The escape the `async`/`await` checks cannot see, and the reason this
-   * population needs a hand-off rule at all: a method that is neither `async`
-   * nor contains an `await` can still hand the gate a promise that resolves when
-   * a model call, an SMTP round trip or a whole queued turn finishes. The SDK
-   * awaits exactly that.
-   */
-  test('returning the unbounded promise is a violation even with no async and no await', () => {
-    const handedOff = `export class ActorAgent extends Think {
-      override onFiberRecovered(ctx: FiberRecoveryContext): Promise<FiberRecoveryResult> {
-        return this.terminal.replayOwedAndRearm();
-      }
-    }`;
-
-    expect(reasons(handedOff))
-      .toEqual([expect.stringContaining('must hand its work to `classifyRecoveredFiber`')]);
-  });
-
-  test('a decision resolved inline is clean — there is nothing to await', () => {
-    // The warn-and-release shape a non-actor DO legitimately has. It reaches no
-    // lane, so requiring the roster here would be a rule about style.
-    const inline = `export class MonitorDO extends Agent {
-      override onFiberRecovered(ctx: FiberRecoveryContext): Promise<FiberRecoveryResult> {
-        return Promise.resolve({ status: 'error', error: 'no lane owns ' + ctx.name });
-      }
-    }`;
-
-    expect(reasons(inline)).toEqual([]);
-  });
-
-  test('a missing return annotation is a violation — a `void` result strands a managed row', () => {
-    const unannotated = `export class ActorAgent extends Think {
-      override onFiberRecovered(ctx) { return Promise.resolve(classifyRecoveredFiber(this.fiberLanes, ctx)); }
-    }`;
-
-    expect(reasons(unannotated))
-      .toEqual([expect.stringContaining('must annotate what its promise resolves to')]);
-  });
-
-  test('every name the vendored init chain awaits is held to the same rule', () => {
-    const internal = `export class ActorAgent extends Agent {
-      override async _handleInternalFiberRecovery(ctx: FiberRecoveryContext): Promise<boolean> {
-        await this.replayChatTurn(ctx);
-        return true;
-      }
-    }`;
-
-    const found = auditFile('actor-agent.ts', internal);
-    expect(found.inspected.map((i) => `${i.member}:${i.hook}`)).toEqual([
-      '_handleInternalFiberRecovery:recovery',
-    ]);
-    expect(found.violations.filter((v) => v.reason.includes('async'))).toHaveLength(1);
-  });
-
-  test('the classifier itself may not be async — that is the replacement bound', () => {
-    // The other half of the rule. With an async classifier the hook shape above
-    // is unchanged and the gate would still be reporting on it, while the promise
-    // it hands back is once again the work.
-    const seam = `export async function classifyRecoveredFiber(
-      transports: FiberLaneTransports, ctx: FiberRecoveryContext,
-    ): Promise<FiberRecoveryResult> {
-      await transports.reviewAdvisorSnapshot(snapshot);
-      return { status: 'completed' };
-    }`;
-
-    const found = auditFile('fiber-recovery.ts', seam);
-    expect(found.classifier).toMatchObject({ file: 'fiber-recovery.ts', async: true });
-    expect(found.violations).toEqual([expect.objectContaining({
-      member: 'classifyRecoveredFiber',
-      reason: expect.stringContaining('declared `async`'),
-    })]);
-  });
-
-  test('a synchronous classifier is what the rule is satisfied by', () => {
-    const seam = `export function classifyRecoveredFiber(
-      transports: FiberLaneTransports, ctx: FiberRecoveryContext,
-    ): FiberRecoveryResult {
-      transports.redrive(ctx.name, ctx.snapshot, () => transports.runDueSessionEvolution());
-      return { status: 'completed' };
-    }`;
-
-    const found = auditFile('fiber-recovery.ts', seam);
-    expect(found.classifier).toMatchObject({ async: false });
-    expect(found.violations).toEqual([]);
   });
 });
 
-// ── The class of work, not the shape of the wait ─────────────────────────────
-//
-// The three rules above all ask what the GATE WAITS ON. `OrchestratorAgent.onStart`
-// satisfied every one of them — not async, annotated `: void`, no own-scope await,
-// no nested gate — while spawning a fire-and-forget task whose chain ran
-// `hydrateTitle` → `readSoul` → `applyAutoTitle` → `suggestTitle` → `generateText`.
-// An LLM call on the init path of every cold start of every claimed workspace,
-// against an activation whose gate is still open, cancelled on eviction with its
-// rejection swallowed. Detaching work takes it out of the wait, not off the path.
 describe('DO init-gate purity — model work spawned from the init gate', () => {
   /**
    * The shipped defect, recovered from the diff and not invented. This is the
@@ -288,7 +157,7 @@ describe('DO init-gate purity — model work spawned from the init gate', () => 
     // ONE finding, from the one rule that descends into what the hook spawns.
     // Every wait-shaped check passes on this method, which is why it shipped.
     expect(found).toEqual([expect.stringContaining('reaches `applyAutoTitle`')]);
-    expect(found[0]).toContain('Detaching it does not move it off that path');
+    expect(found[0]).toContain('owed work is started, never awaited');
     expect(found.some((reason) => reason.includes('async')
       || reason.includes('awaits in its own scope')
       || reason.includes('nested `blockConcurrencyWhile`')
@@ -349,38 +218,10 @@ describe('DO init-gate purity — model work spawned from the init gate', () => 
 
     expect(reasons(bounded)).toEqual([]);
   });
-
-
-  test('a recovery hook is exempt — the re-drive it detaches may reach the model', () => {
-    // Deliberate, and printed on the success path rather than left to be
-    // discovered: this population's sanctioned answer is to hand each re-drive
-    // to a detached durable carrier, and a re-drive is allowed to reach a model.
-    // Holding it to the sink list would refuse the prescribed fix.
-    const recovery = `export class ActorAgent extends Think {
-      override onFiberRecovered(ctx: FiberRecoveryContext): Promise<FiberRecoveryResult> {
-        this.redriveRecoveredLane(ctx.name, ctx.snapshot, () => this.runDueSessionEvolution());
-        return Promise.resolve(classifyRecoveredFiber(this.fiberLanes, ctx));
-      }
-    }`;
-
-    expect(reasons(recovery)).toEqual([]);
-  });
 });
 
 describe('DO init-gate purity, against the real tree', () => {
   const SOURCES = readSources();
-
-
-  test('it found the classification seam, and that seam is synchronous', () => {
-    // The recovery rule's other half, over the real tree: pinned to a name
-    // nothing declared, the hand-off check would pass for every hook — which
-    // reads exactly like every hook obeying it.
-    expect(audit(SOURCES).classifier).toEqual({
-      file: 'packages/cf-backend/src/fiber-recovery.ts',
-      line: expect.any(Number),
-      async: false,
-    });
-  });
 
   test('the real tree passes', () => {
     expect(audit(SOURCES).violations).toEqual([]);
@@ -481,36 +322,21 @@ ${hold.body}
   });
 
 
-  test('cut the wire: re-inlining the real terminal replay in the recovery hook goes red', () => {
-    // The P1 defect, restored against the real file: the hook hands the gate the
-    // replay's own promise instead of the classification. It is not `async` and
-    // contains no `await`, so only the hand-off rule can see it.
+  test('cut the wire: restoring a fiber recovery hook on the real ActorAgent goes red', () => {
     const file = 'packages/cf-backend/src/actor-agent.ts';
     const real = present(SOURCES.get(file), `the ${file} source`);
 
-    const inlined = real.replace(
-      'return Promise.resolve(classifyRecoveredFiber(this.fiberLanes, ctx));',
-      'return this.terminal.replayOwedAndRearm();',
+    const restored = real.replace(
+      'export abstract class ActorAgent extends Agent<Env> {',
+      `export abstract class ActorAgent extends Agent<Env> {
+  override onFiberRecovered(_ctx: FiberRecoveryContext): Promise<FiberRecoveryResult> {
+    return Promise.resolve({ status: 'completed', snapshot: null });
+  }`,
     );
 
-    expect(inlined).not.toBe(real);
-    const { violations } = auditFile(file, inlined);
+    expect(restored).not.toBe(real);
+    const { violations } = auditFile(file, restored);
     expect(violations.map((v) => `${v.owner}.${v.member}`)).toEqual(['ActorAgent.onFiberRecovered']);
-    expect(violations[0].reason).toContain('must hand its work to `classifyRecoveredFiber`');
-  });
-
-  test('cut the wire: making the real classifier async goes red', () => {
-    const file = 'packages/cf-backend/src/fiber-recovery.ts';
-    const real = present(SOURCES.get(file), `the ${file} source`);
-
-    const widened = real.replace(
-      'export function classifyRecoveredFiber(', 'export async function classifyRecoveredFiber(',
-    );
-
-    expect(widened).not.toBe(real);
-    const { violations, classifier } = auditFile(file, widened);
-    expect(classifier).toMatchObject({ async: true });
-    expect(violations.map((v) => v.reason)).toEqual([expect.stringContaining('declared `async`')]);
   });
 
   test('cut the wire: re-spawning the auto-title task from the real onStart goes red', () => {

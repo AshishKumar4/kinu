@@ -22,6 +22,7 @@ import {
   deriveChildDelegationBudget,
   admitSubordinateReport,
   admitSubordinateTask,
+  agentNamer,
   createTeamToolDeps,
   describeSubordinateHandoff,
   subordinateDescriptorSource,
@@ -329,7 +330,8 @@ interface TeamHarness {
 
 const HARNESS_OWN_MISSION = 'Keep the release train moving.';
 
-function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarness {
+/** `namedFromBriefs`: names minted as the backends mint them, not one fixed name. */
+function makeTeamHarness(inheritedContext: SerializedMessage[] = [], { namedFromBriefs = false } = {}): TeamHarness {
   // One database: a hire's origin is read from its actor row, beside the roster.
   const actorDb = new Database(':memory:');
   const roster = makeRosterStore(actorDb);
@@ -403,7 +405,7 @@ function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarnes
     delegation: ROOT_DELEGATION_BUDGET,
     roster,
     runtime,
-    createName: () => 'researcher-a1b2c3',
+    createName: namedFromBriefs ? agentNamer(directory, roster) : () => 'researcher-a1b2c3',
     now: () => 1_700_000_000_000,
     inheritedContext: async () => inheritedContext,
     ownMission: () => HARNESS_OWN_MISSION,
@@ -420,6 +422,20 @@ function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarnes
       return actorReferenceOf(actor);
     } };
 }
+
+describe('a hire\'s name', () => {
+  test('is its mission\'s first telling words, an owner\'s agent\'s those it was opened with, numbered past every name had', async () => {
+    const h = makeTeamHarness([], { namedFromBriefs: true });
+    const hired = await h.team.spawn({ role: 'researcher', mission: 'Audit every coupon rule for expiry handling.', mode: 'build' });
+    const again = await h.team.spawn({ role: 'researcher', mission: 'Audit each coupon rule, once more.', mode: 'build' });
+    const opened = await h.team.create({ brief: 'Fix the coupon expiry check' });
+    // Opened with no words: named for its role, and its mission is still the workspace's.
+    const silent = await h.team.create({});
+
+    expect([hired.name, again.name, opened.name, silent.name]).toEqual(['audit-coupon-rule', 'audit-coupon-rule-2', 'fix-coupon-expiry', 'task']);
+    expect(h.seeds.map((seed) => seed.mission).slice(2)).toEqual([HARNESS_OWN_MISSION, HARNESS_OWN_MISSION]);
+  });
+});
 
 describe('team action routing', () => {
   test('owner creation seeds an idle identity without starting work or mirroring a task', async () => {

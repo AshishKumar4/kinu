@@ -75,7 +75,7 @@ async function hostedHead(files: Record<string, string> = {}, id = 'head-1', use
 
   if (!isCFRuntime(rt)) throw new Error('the hosted head did not receive a CF runtime');
 
-  const home = agentHome(actorHomeName({ origin: 'swarm', storageKey: head.actor.record.storageKey }));
+  const home = agentHome(actorHomeName({ origin: 'swarm', name: head.actor.record.name, storageKey: head.actor.record.storageKey }));
 
   return { workspace, head, rt, home };
 }
@@ -122,7 +122,7 @@ describe('a head forks its parent workspace', () => {
     const identity = await shell.exec('printf "%s %s" "$HOME" "$TMPDIR"');
     expect(identity.exitCode).toBe(0);
     expect(identity.stdout.split(' '))
-      .toEqual([home, agentTmpRoot(actorHomeName({ origin: 'swarm', storageKey: head.actor.record.storageKey }))]);
+      .toEqual([home, agentTmpRoot(actorHomeName({ origin: 'swarm', name: head.actor.record.name, storageKey: head.actor.record.storageKey }))]);
   });
 
   test('exec planes are keyed to the PARENT workspace, not the head actor', async () => {

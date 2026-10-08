@@ -138,7 +138,7 @@ test("a hired agent's Codex call from its own isolate goes out through the owner
   const hire = await hostedSubordinateHarness(actor, { name: 'coder', displayName: 'Coder', nameOrigin: 'user', mission: 'code' });
   const hireId = hire.actor.handle.actorId;
 
-  const ended = (): string[] => agentSql(hireId)<{ payload: string }>`
+  const ended = (): string[] => agentSql(actor, hireId)<{ payload: string }>`
     SELECT payload FROM run_events WHERE actor_id = ${hireId} AND type = 'run_end'`.map((row) => row.payload);
 
   await wakeForDelegatedTask(actor, hireId, 'Write the thing.');

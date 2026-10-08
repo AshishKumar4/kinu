@@ -140,7 +140,7 @@ Every slate gets \`workspace\`, the namespaces your \`eval\` programs reach, cal
 - \`workspace.mcp.<server>.<tool>(args)\`, \`workspace.tools.<name>(input)\`, \`workspace.reads.<model>()\` and \`workspace.slates.<id>.<method>(...args)\`.
 - \`workspace.agent.send({ text, data? })\` puts a \`slate\` event in your inbox: the one way a slate reaches you, as when the user picks an option on a card.
 
-A slate never delegates, steers you, makes tools or changes slates.
+Your own slate, run by the user, may also hire and message helpers as you: \`workspace.agents.*\` (\`hire\`, \`assign\`, \`message\`, \`reply\`, \`list\`, \`dismiss\`, \`swarm\`). A shared slate, or a helper's slate, never does. No slate steers you, makes tools or changes slates.
 
 ## Showing and keeping slates
 
