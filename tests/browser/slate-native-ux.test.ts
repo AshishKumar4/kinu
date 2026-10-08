@@ -9,7 +9,7 @@ import type { Frame, Page } from 'puppeteer';
 import { SLATE_PAGE_PREAMBLE } from '@kinu.run/core';
 import { SLATE_CLIENT_MODULE } from '@kinu.run/core/slates';
 import { detach } from '@kinu.run/core/obs';
-import { contrast, rgba, withGallery } from '../../scripts/gallery-harness';
+import { contrast, rgba, withGallery, type Rgba } from '../../scripts/gallery-harness';
 import { TEST_REQUIREMENTS } from '../../scripts/test-requirements';
 
 /** The answer's page as its author wrote it: a title, a heading, rows, and a paragraph that sets no colour. */
@@ -70,6 +70,23 @@ async function openPage(page: Page, origin: string, theme: 'dark' | 'light', vie
   return frame;
 }
 
+/** One colour painted over another, as the frame's own canvas lies over the chat's surface. */
+function over(top: Rgba, bottom: Rgba): Rgba {
+  const mix = (a: number, b: number): number => a * top.a + b * (1 - top.a);
+
+  return { r: mix(top.r, bottom.r), g: mix(top.g, bottom.g), b: mix(top.b, bottom.b), a: 1 };
+}
+
+/** Once the card has eased to the height its page last said. */
+async function eased(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    await Promise.allSettled(document.getAnimations()
+      .filter((animation) => animation.effect?.getComputedTiming().endTime !== Infinity)
+      .map((animation) => animation.finished));
+    await new Promise<void>((resolve) => { requestAnimationFrame(() => requestAnimationFrame(() => resolve())); });
+  });
+}
+
 const frameHeight = (page: Page): Promise<number> => page.$eval(`${CARD} iframe`, (frame) => frame.getBoundingClientRect().height);
 
 /** How far the page inside the frame moved when asked to scroll: nothing, when it shows all it holds. */
@@ -92,11 +109,13 @@ describe('an answer\'s page in the chat', () => {
         const before = await frameHeight(page);
         await frame.evaluate(() => { document.getElementById('rows')?.insertAdjacentHTML('beforeend', '<li>WELCOME10</li>'.repeat(20)); });
         await page.waitForFunction((card, was) => (document.querySelector(`${card} iframe`)?.getBoundingClientRect().height ?? 0) > was, {}, CARD, before);
+        await eased(page);
         expect(await innerScroll(frame)).toBe(0);
 
         const grown = await frameHeight(page);
         await frame.evaluate(() => { document.getElementById('rows')?.replaceChildren(); });
         await page.waitForFunction((card, was) => (document.querySelector(`${card} iframe`)?.getBoundingClientRect().height ?? 0) < was, {}, CARD, grown);
+        await eased(page);
         expect(await innerScroll(frame)).toBe(0);
         expect(await frameHeight(page)).toBeLessThan(before);
       } finally { await page.close(); }
@@ -128,9 +147,12 @@ describe('an answer\'s page in the chat', () => {
 
           expect(inner.text).toBe(host.text);
           expect(inner.face).toBe(host.face);
-          // Nothing of its own behind the text: the chat's surface shows through, and the text reads on it.
-          expect(rgba(inner.ground).a).toBe(0);
-          expect(contrast(rgba(inner.text), rgba(host.ground))).toBeGreaterThanOrEqual(TEST_REQUIREMENTS.wcagTextContrast.values.normal);
+          // The chat's own face is loaded in the frame, not a fallback named the same.
+          const family = host.face.split(',')[0]?.trim() ?? '';
+
+          expect(await frame.evaluate(async (face) => (await document.fonts.load(`16px ${face}`)).map((loaded) => loaded.family), family)).not.toEqual([]);
+          // The text reads on what is behind it: whatever the page paints over the chat's surface.
+          expect(contrast(rgba(inner.text), over(rgba(inner.ground), rgba(host.ground)))).toBeGreaterThanOrEqual(TEST_REQUIREMENTS.wcagTextContrast.values.normal);
         } finally { await page.close(); }
       });
     });

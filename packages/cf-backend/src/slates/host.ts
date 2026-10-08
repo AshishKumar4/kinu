@@ -48,6 +48,8 @@ export interface SlateDispatchContext {
   readonly nested: (namespace: string, member: string) => void;
 }
 
+type SharingOp = 'inspect' | 'publish' | 'unshare' | 'shares' | 'share' | 'liveShares' | 'viewerRequests';
+
 interface SlateApps extends DurableApps {
   url(port: number, capability: string): Promise<WorkspacePreviewUrl>;
   /** Each held port's owner, the slate whose application serves on it. */
@@ -568,42 +570,44 @@ export class SlateHost {
         case 'commit': return { ok: true, value: projectJsonValue({ value: (await (await this.sources(caller.cred)).commit(new SlateId(operation.id))).toData() }) };
         case 'fork': return { ok: true, value: projectJsonValue({ value: (await (await this.sources(caller.cred)).fork(new SlateVersionId(operation.version))).toData() }) };
         case 'restore': return { ok: true, value: projectJsonValue({ value: (await (await this.sources(caller.cred)).restore(new SlateId(operation.id), new SlateVersionId(operation.version))).toData() }) };
-        // Publishing and sharing are the owner's alone; a hosted actor never exports on the owner's behalf.
         case 'inspect':
         case 'publish':
         case 'unshare':
         case 'shares':
         case 'share':
         case 'liveShares':
-        case 'viewerRequests': {
-          if (caller.path.length > 0) throw new KinuError('denied', 'Only the workspace root publishes, shares or revokes slates');
-          const blueprints = await this.blueprints();
-
-          switch (operation.op) {
-            case 'inspect': return { ok: true, value: projectJsonValue({ value: blueprints.inspect(operation.id, operation.version, operation.include) }) };
-            case 'publish': return await this.changedShares({ ok: true, value: projectJsonValue({ value: await blueprints.publish(operation.id, operation.version, operation.include) }) });
-            case 'unshare': return await this.changedShares(await this.unshare(operation.share, blueprints));
-
-            case 'shares': return { ok: true, value: projectJsonValue({ value: blueprints.list() }) };
-            case 'share': {
-              const created = await shareLiveSlate({
-                shares: this.live, graph: await this.graph(operation.id), visibility: operation.visibility, approved: operation.approved,
-                fork: operation.fork, url: (handle) => this.deps.shareUrl(handle),
-              });
-
-              return await this.changedShares({ ok: true, value: projectJsonValue({ value: created }) });
-            }
-
-            case 'liveShares': return { ok: true, value: projectJsonValue({ value: this.live.list().map((row) => ({ ...row, paused: this.sharePaused(row) })) }) };
-            case 'viewerRequests': return { ok: true, value: projectJsonValue({ value: this.live.requests(operation.share) }) };
-          }
-        }
+        case 'viewerRequests': return await this.sharing(caller, operation);
 
         case 'graph': return { ok: true, value: projectJsonValue({ value: await this.graph(operation.id) }) };
         case 'save': return await this.savePage(caller, operation.page);
       }
     } catch (cause) {
       return { ok: false, ...refusalOf(toKinuError({ doing: 'slate operation', cause, otherwise: 'io' })) };
+    }
+  }
+
+  /** Publishing and sharing are the owner's alone; a hosted actor never exports on the owner's behalf. */
+  private async sharing(caller: SlateCaller, operation: Extract<SlateOperation, { op: SharingOp }>): Promise<SlateCallResult> {
+    if (caller.path.length > 0) throw new KinuError('denied', 'Only the workspace root publishes, shares or revokes slates');
+    const blueprints = await this.blueprints();
+
+    switch (operation.op) {
+      case 'inspect': return { ok: true, value: projectJsonValue({ value: blueprints.inspect(operation.id, operation.version, operation.include) }) };
+      case 'publish': return await this.changedShares({ ok: true, value: projectJsonValue({ value: await blueprints.publish(operation.id, operation.version, operation.include) }) });
+      case 'unshare': return await this.changedShares(await this.unshare(operation.share, blueprints));
+
+      case 'shares': return { ok: true, value: projectJsonValue({ value: blueprints.list() }) };
+      case 'share': {
+        const created = await shareLiveSlate({
+          shares: this.live, graph: await this.graph(operation.id), visibility: operation.visibility, approved: operation.approved,
+          fork: operation.fork, url: (handle) => this.deps.shareUrl(handle),
+        });
+
+        return await this.changedShares({ ok: true, value: projectJsonValue({ value: created }) });
+      }
+
+      case 'liveShares': return { ok: true, value: projectJsonValue({ value: this.live.list().map((row) => ({ ...row, paused: this.sharePaused(row) })) }) };
+      case 'viewerRequests': return { ok: true, value: projectJsonValue({ value: this.live.requests(operation.share) }) };
     }
   }
 

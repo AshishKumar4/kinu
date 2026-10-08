@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useEffectEvent, useId, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type Ref } from "react";
+import { useCallback, useContext, useEffect, useEffectEvent, useId, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type Ref, type RefObject } from "react";
 import { Loader } from "@cloudflare/kumo/components/loader";
 import { ArrowSquareOutIcon, CaretRightIcon, CheckIcon, PushPinIcon } from "@phosphor-icons/react";
 import * as v from "valibot";
@@ -97,11 +97,20 @@ function usePainted(): boolean {
 }
 
 /** An answer's page kept as a slate of the workspace's own, under its title: once kept, the control opens it. */
-function SaveControl({ name, save, open }: { name: string; save: () => Promise<{ id: string; title: string }>; open?: (id: string) => void }) {
+function SaveControl({ name, save, open }: { name: string; save: () => Promise<SlateCallResult>; open?: (id: string) => void }) {
   const [saved, setSaved] = useState<{ id: string; title: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   const control = "p-text-3 hover:p-text p-1 shrink-0 inline-flex rounded-md transition-colors hover:bg-[var(--c-elevated)]";
+
+  const keep = useCallback(() => detach(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+    setBusy(true);
+    setFailed(null);
+    const result = yield* Effect.promise(save);
+
+    if (result.ok) setSaved(v.parse(SavedSlateSchema, result.value));
+    else setFailed(`${result.reason}: ${result.error}`);
+  }), showing(setFailed)), Effect.sync(() => { setBusy(false); }))), [save]);
 
   if (saved !== null) {
     return (
@@ -111,12 +120,6 @@ function SaveControl({ name, save, open }: { name: string; save: () => Promise<{
       </button>
     );
   }
-
-  const keep = (): void => {
-    setBusy(true);
-    setFailed(null);
-    detach(Effect.ensuring(Effect.catchCause(Effect.map(Effect.promise(save), setSaved), showing(setFailed)), Effect.sync(() => { setBusy(false); })));
-  };
 
   return (
     <button type="button" data-slate-save onClick={keep} disabled={busy} aria-label={`Save ${name} as a slate`}
@@ -133,7 +136,7 @@ function SlateCard({ id, block, measure, save, children }: {
   block?: string;
   measure: Ref<HTMLSpanElement>;
   /** An answer's page only: a slate with files is the workspace's already. */
-  save?: () => Promise<{ id: string; title: string }>;
+  save?: () => Promise<SlateCallResult>;
   children: ReactNode;
 }) {
   const inline = useContext(SlateInlineContext);
@@ -200,6 +203,69 @@ function SlateCard({ id, block, measure, save, children }: {
   );
 }
 
+/** The frame's style, whether its page has yet to say its height, and the height it last had. */
+interface InlineHeight {
+  readonly style: CSSProperties | undefined;
+  readonly waiting: boolean;
+  readonly known: number | undefined;
+}
+
+/**
+ * An in-chat frame's height: what its page last said, kept for the slate across redraws. A page that sizes itself is
+ * hidden until it has said, then drawn at that height with nothing inside it to scroll; one that stays silent past a
+ * bounded wait, or never sizes itself, is drawn at a fixed height.
+ */
+function useInlineHeight({ id, inline, sized, frame, previewOrigin, loaded, drawn }: {
+  id: string;
+  inline: boolean;
+  sized: boolean;
+  frame: RefObject<HTMLIFrameElement | null>;
+  previewOrigin: string | null;
+  loaded: boolean;
+  /** What a new drawing of the frame is keyed by: its height is heard again. */
+  drawn: string | null;
+}): InlineHeight {
+  // How many heights the page has said: the first is drawn at once, and each later one eases in.
+  const [said, setSaid] = useState<{ readonly height: number | null; readonly times: number }>({ height: null, times: 0 });
+  const [late, setLate] = useState(false);
+  const known = KNOWN_HEIGHTS.get(id);
+  const { height } = said;
+  const waiting = inline && sized && height === null && !late;
+
+  useEffect(() => {
+    setSaid({ height: null, times: 0 });
+    setLate(false);
+  }, [drawn]);
+
+  useEffect(() => {
+    if (!inline || previewOrigin === null) return;
+
+    const onMessage = (event: MessageEvent): void => {
+      if (!isSlateFrameMessage(event, frame.current?.contentWindow ?? null, previewOrigin)) return;
+      const next = Math.min(v.parse(SlateFrameMessageSchema, event.data).height, SLATE_INLINE_HEIGHT_LIMIT);
+      KNOWN_HEIGHTS.set(id, next);
+      setSaid((was) => (was.height === next ? was : { height: next, times: was.times + 1 }));
+    };
+
+    window.addEventListener('message', onMessage);
+
+    return () => window.removeEventListener('message', onMessage);
+  }, [inline, previewOrigin, id, frame]);
+
+  useEffect(() => {
+    if (!waiting || !loaded) return;
+    const timer = setTimeout(() => { setLate(true); }, SIZE_WAIT_MS);
+
+    return () => { clearTimeout(timer); };
+  }, [waiting, loaded]);
+
+  if (!inline) return { style: undefined, waiting, known };
+
+  if (waiting) return { style: { height: 0, visibility: 'hidden' }, waiting, known };
+
+  return { style: { height: height ?? known ?? UNSIZED_HEIGHT, ...(said.times <= 1 && { transition: 'none' }) }, waiting, known };
+}
+
 export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }: {
   id: string;
   /** The `<slate-ui>` block's name when the slate is an answer's own. */
@@ -213,8 +279,6 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
   const { attach, size } = useElementSize();
   const [preview, setPreview] = useState<SlatePreview | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
-  // What the page says it is, this mount; until then the card holds the height it last had, or a loader.
-  const [height, setHeight] = useState<number | null>(null);
   const frame = useRef<HTMLIFrameElement | null>(null);
 
   // The iframe src snapshots this once via `contextRef`; later values go over postMessage.
@@ -236,7 +300,6 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
     let live = true;
     setPreview(null);
     setRefusal(null);
-    setHeight(null);
 
     detach(Effect.catchCause(Effect.map(Effect.promise(() => rpc<SlateCallResult>("previewSlate", [id])), (result) => {
       if (!live) return;
@@ -282,45 +345,10 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
     window_.postMessage({ kinu: SLATE_HOST_CONTEXT_MESSAGE, context }, previewOrigin);
   }, [context, previewOrigin, loaded]);
 
-  useEffect(() => {
-    if (display !== 'inline' || previewOrigin === null) return;
-
-    const onMessage = (event: MessageEvent): void => {
-      if (!isSlateFrameMessage(event, frame.current?.contentWindow ?? null, previewOrigin)) return;
-      const next = Math.min(v.parse(SlateFrameMessageSchema, event.data).height, SLATE_INLINE_HEIGHT_LIMIT);
-      KNOWN_HEIGHTS.set(id, next);
-      setHeight(next);
-    };
-
-    window.addEventListener('message', onMessage);
-
-    return () => window.removeEventListener('message', onMessage);
-  }, [display, previewOrigin, id]);
-
   const pane = display === 'pane';
   const previewUrl = preview?.url;
-  const known = KNOWN_HEIGHTS.get(id);
-  const [late, setLate] = useState(false);
-  // A page that sizes itself is drawn once it has: at its height, with nothing inside it to scroll.
-  const waiting = !pane && preview?.sized === true && height === null && !late;
-
-  useEffect(() => {
-    if (!waiting || !loaded) return;
-    const timer = setTimeout(() => { setLate(true); }, SIZE_WAIT_MS);
-
-    return () => { clearTimeout(timer); };
-  }, [waiting, loaded]);
-  let frameStyle: CSSProperties | undefined;
-
-  if (!pane) frameStyle = waiting ? { height: 0, visibility: 'hidden' } : { height: height ?? known ?? UNSIZED_HEIGHT };
-
-  const save = useMemo(() => (block === undefined ? undefined : async () => {
-    const result = await rpc<SlateCallResult>("slate", [{ op: 'save', page: id }]);
-
-    if (!result.ok) throw new Error(`${result.reason}: ${result.error}`);
-
-    return v.parse(SavedSlateSchema, result.value);
-  }), [block, rpc, id]);
+  const { style: frameStyle, waiting, known } = useInlineHeight({ id, inline: !pane, sized: preview?.sized === true, frame, previewOrigin, loaded, drawn: src });
+  const save = useMemo(() => (block === undefined ? undefined : async () => rpc<SlateCallResult>("slate", [{ op: 'save', page: id }])), [block, rpc, id]);
 
   let content: ReactNode = null;
 

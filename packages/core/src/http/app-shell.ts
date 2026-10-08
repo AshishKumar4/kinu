@@ -9,15 +9,23 @@ interface AppShellEnv extends PreviewSuffixEnv, PreviewPortEnv {
 }
 
 /** The app's own faces: a slate's page, on a preview host, sets its text in them as the chat does. Public, credential-free. */
-const SHARED_FONTS = '/assets/fonts/';
+export const APP_FONTS_PATH = '/assets/fonts/';
+
+/** What an app asset's response adds for another origin: only the faces are read cross-origin, by a slate's page. */
+export function appAssetCorsHeaders(pathname: string): Readonly<Record<string, string>> {
+  return pathname.startsWith(APP_FONTS_PATH) ? { 'access-control-allow-origin': '*' } : {};
+}
 
 export async function serveApp(request: Request, env: AppShellEnv): Promise<Response> {
   const suffix = previewHostSuffix(env);
   const asset = await env.ASSETS.fetch(request);
 
-  if (new URL(request.url).pathname.startsWith(SHARED_FONTS) && asset.ok) {
+  const cors = Object.entries(appAssetCorsHeaders(new URL(request.url).pathname));
+
+  if (cors.length > 0 && asset.ok) {
     const headers = new Headers(asset.headers);
-    headers.set('access-control-allow-origin', '*');
+
+    for (const [name, value] of cors) headers.set(name, value);
 
     return new Response(asset.body, { status: asset.status, statusText: asset.statusText, headers });
   }

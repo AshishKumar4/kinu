@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-08",
-  "files": 3036,
-  "functions": 79600,
+  "files": 3051,
+  "functions": 79669,
   "ceiling": 87,
   "line": 27,
   "inventory": [
@@ -139,10 +139,6 @@
     },
     {
       "key": "packages/cf-backend/src/gallery.tsx#mcpServersFixture",
-      "complexity": 31
-    },
-    {
-      "key": "packages/cf-backend/src/slates/host.ts#SlateHost.operation",
       "complexity": 31
     },
     {

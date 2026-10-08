@@ -71,7 +71,7 @@ description: Build any interface the user asks for, an app, game, dashboard, cha
 
 # Slates
 
-A slate is an interface the user sees in the chat: a page you write into your answer, or a small application in \`/slates/<id>/\` with a server class and storage of its own. Build it yourself, in this turn.
+A slate is an interface the user sees in the chat: a page you write into your answer, or a small application in \`/slates/<id>/\` with a server class and storage of its own.
 
 ## Build the real one, then check it
 

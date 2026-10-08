@@ -293,7 +293,7 @@ export {
 } from './slates/host-context';
 
 export {
-  addressedBlock, ephemeralSlateAddress, ephemeralSlateId, pageTitle, slateUiSegments, SLATE_UI_ATTRIBUTE,
+  addressedBlock, ephemeralSlateAddress, ephemeralSlateId, slateUiSegments, SLATE_UI_ATTRIBUTE,
   type EphemeralSlateAddress, type SlateUiBlock, type SlateUiSegment,
 } from './slates/ui-blocks';
 
@@ -2159,7 +2159,7 @@ export { PRIVATE_NO_STORE, publicHtmlHeaders, withAppSecurityHeaders } from './h
 
 export { desktopClientUrl } from './http/desktop-client';
 
-export { serveApp } from './http/app-shell';
+export { appAssetCorsHeaders, serveApp } from './http/app-shell';
 
 export { ingressAdmission, ingressAdmitted, ingressDenied, peerIp, type IngressAdmission } from './http/ingress-budget';
 
