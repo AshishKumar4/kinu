@@ -1,6 +1,6 @@
 // Both rails pick a UserDO by name: refuse malformed ids and over-budget sources before any
 // idFromName, so a random user id never wakes a Durable Object.
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setSystemTime, test } from "bun:test";
 import { type PcIngressEnv, type PcUserNamespace } from "@kinu.run/core";
 import { pcRoutes } from "../src/pc-routes";
 import type { UserCaller } from "@kinu.run/core";
@@ -192,14 +192,21 @@ describe("/pc/connect upgrade", () => {
     const userDO = makeUserDO();
     const env = makeEnv(userDO);
 
-    for (let knock = 0; knock < KNOCKS_PER_WINDOW; knock++) {
-      const response = await pcRoutes.fetch(connectRequest(CONNECT_URL), env);
-      expect(response.status).toBe(200);
-    }
+    // The budget is per minute window: every knock lands inside one, however slowly the run goes.
+    setSystemTime(new Date('2026-01-01T00:00:00Z'));
 
-    const denied = await pcRoutes.fetch(connectRequest(CONNECT_URL), env);
-    expect(denied.status).toBe(429);
-    expect(userDO.fetched.length).toBe(KNOCKS_PER_WINDOW);
+    try {
+      for (let knock = 0; knock < KNOCKS_PER_WINDOW; knock++) {
+        const response = await pcRoutes.fetch(connectRequest(CONNECT_URL), env);
+        expect(response.status).toBe(200);
+      }
+
+      const denied = await pcRoutes.fetch(connectRequest(CONNECT_URL), env);
+      expect(denied.status).toBe(429);
+      expect(userDO.fetched.length).toBe(KNOCKS_PER_WINDOW);
+    } finally {
+      setSystemTime();
+    }
   });
 });
 
