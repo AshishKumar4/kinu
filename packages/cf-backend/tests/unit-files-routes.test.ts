@@ -314,7 +314,8 @@ describe("files route — GET", () => {
     // The object answers an empty chunk where a byte is owed.
     const agent: FilesRouteAgent = { ...delegating(ws.agent), readExecutorFileChunk: async () => ({ bytes: new Uint8Array(0) }) };
 
-    await expect(collect(await route(new Request(URL_), agent))).rejects.toThrow();
+    // The stream ends where the bytes stopped, at 0 of the 1 owed.
+    await expect(collect(await route(new Request(URL_), agent))).rejects.toThrow('0 of 1');
   });
 
   test("a file over the total limit is a 413 before one chunk is read", async () => {
