@@ -1,5 +1,5 @@
 import { WORKSPACE_ROOT } from '@kinu.run/core';
-import { defineEvalTask, type SeedFile } from '../src/task';
+import type { EvalPart, SeedFile } from '../src/task';
 import type { EvalVerifier } from '../src/verifier';
 import { Seeded } from './seeded';
 
@@ -7,7 +7,6 @@ import { Seeded } from './seeded';
 // agent tidies it the way it is asked. Graded on what the Files tab lists afterwards and on every
 // kept file's content, byte for byte what was dropped in.
 
-const MISSION = "Tern Street Deli's workspace. Deliveries, invoices and photos of the stock land in our inbox.";
 
 type Kind = 'invoice' | 'photo' | 'note';
 
@@ -65,9 +64,12 @@ async function holdsExactly(verifier: EvalVerifier, id: string, dir: string, fil
   });
 }
 
-export const fileHousekeeping = defineEvalTask({
-  id: 'file-housekeeping',
-  mission: MISSION,
+export const fileHousekeeping: EvalPart = {
+  id: 'inbox',
+  objectives: [
+    'Move every invoice to archive/invoices/ and every photo to archive/photos/, names and bytes unchanged.',
+    'Drop exact duplicates, keeping the copy without " (1)" or " copy" in its name, and leave the notes in inbox/.',
+  ],
   turns: [{
     seed: SEED,
     prompt: `Tidy up inbox/. Move every invoice into archive/invoices/ and every photo into archive/photos/,
@@ -79,4 +81,4 @@ the copy without " (1)" or " copy" in its name. Leave the notes in inbox/ where 
       await holdsExactly(verifier, 'only-the-notes-stay-in-the-inbox', `${WORKSPACE_ROOT}/inbox`, kept('note'));
     },
   }],
-});
+};

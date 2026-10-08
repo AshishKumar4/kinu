@@ -1,7 +1,7 @@
 import * as v from 'valibot';
 import { JsonValueSchema, type JsonValue, WORKSPACE_ROOT } from '@kinu.run/core';
 import { defineTaskEval } from '../src/eval';
-import { defineEvalTask, type SeedFile } from '../src/task';
+import { defineEvalTask, type EvalPart, type SeedFile } from '../src/task';
 import type { EvalVerifier } from '../src/verifier';
 import { Seeded } from './seeded';
 import { aSwarmRan } from './swarm-runs';
@@ -271,9 +271,12 @@ function sameDealers(answered: JsonValue, expected: readonly string[]): boolean 
 
 // ── The task ─────────────────────────────────────────────────────────
 
-const task = defineEvalTask({
-  id: 'swarm-research',
-  mission: MISSION,
+const recall: EvalPart = {
+  id: 'recall',
+  objectives: [
+    'Put a research swarm on the 42-document corpus and write recall/brief.json: the faulty firmware, the batch that carried it, the delivered bikes, the dealers who received them, the quality contact and the notice date.',
+    'When the late Porto note arrives, update the bike count and the dealers.',
+  ],
   turns: [{
     seed: SEEDS,
     prompt: `Riders say their bikes cut out on hills, and we need to decide on a recall. Everything we have is in
@@ -341,6 +344,6 @@ Tell me when the brief is written.`,
       }));
     },
   }],
-});
+};
 
-defineTaskEval(task);
+defineTaskEval(defineEvalTask({ id: 'swarm', mission: MISSION, parts: [recall] }));

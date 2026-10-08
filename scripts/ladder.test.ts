@@ -27,7 +27,7 @@ import {
   CI_EXEMPT, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
   DEPLOY_PHASES, browserModules, deployOrder, deployPlan, gatesFor, liveTierTargets, packageScripts, phaseWave,
   localDeployGates, reportCIVerdicts, runnableArgv, sharedBrowserModules, sharedOf, tierRun, tierSchedule, tierWave, trackedTestFiles, waveCaps, type WaveRow,
-  HAMMER_REPEATS, ciUnits, changedTestGate, splitCIGate, type Gate, armadaPhaseRows, armadaRowVerdicts, onArmada,
+  HAMMER_REPEATS, ciUnits, changedTestGate, splitCIGate, type Gate, armadaPhaseRows, armadaPhaseRun, armadaRowVerdicts, onArmada, secretGroup,
 } from './ladder';
 import {
   ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite,
@@ -100,24 +100,13 @@ const NON_BUN_RUNNERS: readonly {
  * does not; CI_EXEMPT carries that too.
  */
 const AFTER_CI_SUITES = {
-  'evals/tasks/budget-board.eval.ts': 'bun run evals',
+  'evals/tasks/chat-app.eval.ts': 'bun run evals',
   'evals/tasks/chess.eval.ts': 'bun run evals',
-  'evals/tasks/file-housekeeping.eval.ts': 'bun run evals',
-  'evals/tasks/freight-desk.eval.ts': 'bun run evals',
-  'evals/tasks/helper-report.eval.ts': 'bun run evals',
-  'evals/tasks/latency-chart.eval.ts': 'bun run evals',
-  'evals/tasks/launch-prep.eval.ts': 'bun run evals',
-  'evals/tasks/ledger-reconcile.eval.ts': 'bun run evals',
-  'evals/tasks/memory-recall.eval.ts': 'bun run evals',
-  'evals/tasks/offsite-venue.eval.ts': 'bun run evals',
-  'evals/tasks/order-book.eval.ts': 'bun run evals',
-  'evals/tasks/pricing-treatments.eval.ts': 'bun run evals',
-  'evals/tasks/request-logs.eval.ts': 'bun run evals',
-  'evals/tasks/site-preview.eval.ts': 'bun run evals',
-  'evals/tasks/swarm-audit.eval.ts': 'bun run evals',
-  'evals/tasks/swarm-optimise.eval.ts': 'bun run evals',
-  'evals/tasks/swarm-research.eval.ts': 'bun run evals',
-  'evals/tasks/true-myth-combinators.eval.ts': 'bun run evals',
+  'evals/tasks/coding.eval.ts': 'bun run evals',
+  'evals/tasks/dashboards.eval.ts': 'bun run evals',
+  'evals/tasks/delegation.eval.ts': 'bun run evals',
+  'evals/tasks/office.eval.ts': 'bun run evals',
+  'evals/tasks/swarm.eval.ts': 'bun run evals',
   'scripts/deadline-capability.test.ts': 'bun test --timeout=0 scripts/deadline-capability.test.ts',
   'tests/browser/live-app-layout.test.ts': 'bun test --timeout=0 tests/browser/live-app-layout.test.ts',
   'tests/browser/live-app-plans.test.ts': 'bun test --timeout=0 tests/browser/live-app-plans.test.ts',
@@ -704,10 +693,33 @@ describe('a deploy\'s armada rows', () => {
     }).toEqual({
       rows: [
         'preflight bun scripts/preflight.ts', 'source bun test --timeout=0 scripts/deadline-capability.test.ts', 'upload bun run gate:infra',
-        'post-publish bun run gate:devbox-e2e',
       ],
       reasons: true, atDeploy: true, local: here.length,
     });
+  });
+});
+
+describe('a deploy row with secrets of its own', () => {
+  // gate:devbox-e2e holds the deploy's REST token and the store's R2 keys; armada gives secrets per job, so it runs in a
+  // job of its own and no other post-publish container holds them.
+  test('runs in an armada job of its own, given its secrets with the deployment\'s, and its plan names only it', () => {
+    const rows = armadaPhaseRows(['post-publish']);
+    const own = rows.filter((gate) => secretGroup(gate) !== '');
+    const sha = 'a'.repeat(40);
+    const shared = armadaPhaseRun('post-publish', rows.filter((gate) => secretGroup(gate) === ''), sha, 'https://staging.kinu.run');
+    const devbox = armadaPhaseRun('post-publish', own, sha, 'https://staging.kinu.run');
+    const secretsOf = (argv: readonly string[]) => argv.find((arg) => arg.startsWith('--secrets='))?.slice('--secrets='.length).split(',').sort((a, b) => a.localeCompare(b));
+
+    expect({ own: own.map((gate) => gate.run), shared: secretsOf(shared), devbox: secretsOf(devbox), plan: devbox.slice(devbox.indexOf('--') + 1) }).toEqual({
+      own: ['bun run gate:devbox-e2e'],
+      shared: ['KINU_EVAL_STAGING_WEB_IDENTITY', 'KINU_SCRIPTED_MODEL_KEY'],
+      devbox: ['DEVBOX_REGISTRY_TOKEN', 'KINU_CLOUDFLARE_API_TOKEN', 'KINU_EVAL_STAGING_WEB_IDENTITY', 'KINU_SCRIPTED_MODEL_KEY', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY'],
+      plan: [
+        '--deploy-phase=post-publish', '--deploy-origin=https://staging.kinu.run',
+        '--deploy-secrets=DEVBOX_REGISTRY_TOKEN,KINU_CLOUDFLARE_API_TOKEN,KINU_EVAL_STAGING_WEB_IDENTITY,R2_ACCESS_KEY_ID,R2_SECRET_ACCESS_KEY',
+      ],
+    });
+    expect(() => armadaPhaseRun('post-publish', rows, sha, 'https://staging.kinu.run')).toThrow('different secrets');
   });
 });
 

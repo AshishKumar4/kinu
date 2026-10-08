@@ -1,7 +1,6 @@
 import * as v from 'valibot';
 import { JsonValueSchema, WORKSPACE_ROOT, type JsonValue, type RunEvent } from '@kinu.run/core';
-import { defineTaskEval } from '../src/eval';
-import { defineEvalTask } from '../src/task';
+import type { EvalPart } from '../src/task';
 import { answersWithSlates, madeNoApp } from './ephemeral';
 import { Seeded } from './seeded';
 
@@ -9,8 +8,6 @@ import { Seeded } from './seeded';
 // ends its own turn instead of checking on the helper, and answers from the report once it arrives. Then a chart of
 // the same numbers in the chat, which the lead draws itself with no helper and no app. Every answer is the checker's
 // own, computed from the file it seeds.
-
-const MISSION = "Larkspur Cycles' customer support workspace.";
 
 const TICKETS = `${WORKSPACE_ROOT}/support/tickets.jsonl`;
 
@@ -85,9 +82,13 @@ function sameMedians(answered: JsonValue): boolean {
     && Object.entries(MEDIANS).every(([product, median]) => Math.abs((entries.output[product] ?? Number.NaN) - median) <= 0.5);
 }
 
-const task = defineEvalTask({
-  id: 'helper-report',
-  mission: MISSION,
+export const helperReport: EvalPart = {
+  id: 'report',
+  objectives: [
+    'Hire a helper for each product\'s median first-response time, then end the turn rather than check on it, and answer from its report once the report wakes a new turn.',
+    'Name the slowest product and how many minutes it trails the fastest, as the tickets have them.',
+    'Draw the medians as a bar chart in the chat, with no helper and no app.',
+  ],
   turns: [{
     seed: [{ path: TICKETS, content: TICKETS_FILE }],
     prompt: `Hire a helper to go through ${TICKETS} and write ${REPORT}: an object from each product to the
@@ -136,6 +137,4 @@ product has the slowest median first response and by how many minutes it trails 
       });
     },
   }],
-});
-
-defineTaskEval(task);
+};

@@ -205,6 +205,9 @@ export interface Gate {
   /** Where its evidence lands under the deploy's report, for a row armada runs: the row writes it under
    *  BENCH_ARTIFACTS in its container, its verdict carries it back, and the deploy unpacks it there. */
   readonly evidence?: string;
+  /** The armada secrets a deploy row needs beyond its deployment's own ({@link armadaPhaseRun}), by name. Secrets are
+   *  given per armada job, so a row that names any runs in a job of its own, and no other row's container holds them. */
+  readonly secrets?: readonly string[];
 }
 
 /** The environment names the by-name projections in `packages/test-utils`
@@ -2427,15 +2430,16 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:devbox-e2e',
     label: 'Devbox contracts on real golden containers',
-    here: 'until it moves: it deploys its own Worker, bucket and containers through this machine\'s wrangler session '
-      + 'and R2 keys, which no armada run carries yet.',
+    // Its Worker, bucket and containers through the deploy's REST token, never a wrangler login; its desktop client in
+    // the container's own Chrome. The staging identity whatever the deployment: production is never its authority.
+    secrets: ['DEVBOX_REGISTRY_TOKEN', 'KINU_CLOUDFLARE_API_TOKEN', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'KINU_EVAL_STAGING_WEB_IDENTITY'],
     shared: 'browser',
     phase: 'post-publish',
     alone: 'uses the staging eval identity on its own throwaway Worker, application, bucket and boxes; the browser lane owns its desktop client.',
     tier: 'deploy',
     // 2026-10-06, dc20261006045352da6d8: 17 contracts and verified cleanup, 370 s whole run (D72).
     seconds: 370,
-    catches: 'tools and FUSE missing from the real golden; lost exec bytes, unsafe process kills or trust; a broken desktop click; '
+    catches: 'tools and FUSE missing from the real golden; lost exec bytes, unsafe process kills or trust; a desktop that opens empty or cannot launch; '
       + 'snapshot and R2 recovery data loss, whole-file deltas, failed compaction, serial mounts and disk-pressure failures.',
     blind: 'long snapshot lifetime, account saturation, the model path, and a product adapter no contract drives. No Docker image is built or started.',
     inputs: { kind: 'live', why: 'deploys eval-owned Cloudflare fixtures from this tree, copies staging tools, runs real containers and R2, and verifies complete cleanup.' },
@@ -3037,11 +3041,16 @@ function armadaTaskName(gate: Gate): string {
   return gate.label.toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-|-$/gu, '').slice(0, 80);
 }
 
-/** The matrix of a deploy phase's armada rows (`armada run <sha> -- --deploy-phase=<phase>`), weighed by their
- *  declared seconds so the longest start first. */
-function armadaPlan(phases: readonly DeployPhase[], origin: string | undefined): CIMatrix {
+/** A row's own secrets as one name (`--deploy-secrets=`): the armada job it runs in. Empty for a row that names none. */
+export function secretGroup(gate: Gate): string {
+  return [...gate.secrets ?? []].sort((left, right) => left.localeCompare(right)).join(',');
+}
+
+/** The matrix of a deploy phase's armada rows whose own secrets are `group` (`armada run <sha> -- --deploy-phase=<phase>
+ *  --deploy-secrets=<group>`), weighed by their declared seconds so the longest start first. */
+function armadaPlan(phases: readonly DeployPhase[], origin: string | undefined, group: string): CIMatrix {
   return {
-    include: armadaPhaseRows(phases).map((gate) => {
+    include: armadaPhaseRows(phases).filter((gate) => secretGroup(gate) === group).map((gate) => {
       const entry: CIMatrixEntry = { name: armadaTaskName(gate), row: gate.run, weight: Math.round(gate.seconds), rows: [gate.run] };
 
       if (readsDeployment(gate) && origin !== undefined) entry.origin = origin;
@@ -3616,17 +3625,23 @@ function unpackEvidence(report: string, evidence: { readonly dir: string; readon
   if (unpacked.exitCode !== 0) throw new Error(`unpacking evidence into ${into}: ${unpacked.stderr.toString().trim()}`);
 }
 
-/** The `armada run` of a deploy phase's rows at this exact SHA. A row that drives the deployment gets its origin
- *  through its matrix entry, and the stable secrets it needs by name: the scripted model's bearer and that
- *  deployment's own identity (evalWebIdentityEnv). */
-function armadaPhaseRun(phase: string, rows: readonly Gate[], sha: string): string[] {
-  const origin = rows.some(readsDeployment) ? process.env['KINU_EVAL_ORIGIN'] : undefined;
+/** The `armada run` of a deploy phase's rows at this exact SHA, all of one {@link secretGroup}. A row that drives the
+ *  deployment gets its origin through its matrix entry, and the stable secrets it needs by name: the scripted model's
+ *  bearer and that deployment's own identity (evalWebIdentityEnv); the group's own secrets join them. */
+export function armadaPhaseRun(phase: string, rows: readonly Gate[], sha: string, origin = process.env['KINU_EVAL_ORIGIN']): string[] {
+  const group = rows[0] === undefined ? '' : secretGroup(rows[0]);
 
-  if (rows.some(readsDeployment) && origin === undefined) throw new Error(`the ${phase} rows drive the deployment, and KINU_EVAL_ORIGIN names none`);
-  const secrets = origin === undefined ? [] : [`--secrets=${SCRIPTED_MODEL_KEY_ENV},${evalWebIdentityEnv(origin)}`];
-  const planArgs = [`--deploy-phase=${phase}`, ...origin === undefined ? [] : [`--deploy-origin=${origin}`]];
+  if (rows.some((gate) => secretGroup(gate) !== group)) throw new Error(`the ${phase} rows of one armada job name different secrets`);
+  const driven = rows.some(readsDeployment) ? origin : undefined;
 
-  return [resolve(root, 'node_modules/.bin/armada'), 'run', sha, `--label=deploy ${phase}`, ...secrets, '--', ...planArgs];
+  if (rows.some(readsDeployment) && driven === undefined) throw new Error(`the ${phase} rows drive the deployment, and KINU_EVAL_ORIGIN names none`);
+  const names = [...new Set([...driven === undefined ? [] : [SCRIPTED_MODEL_KEY_ENV, evalWebIdentityEnv(driven)], ...group === '' ? [] : group.split(',')])];
+  const planArgs = [`--deploy-phase=${phase}`, ...driven === undefined ? [] : [`--deploy-origin=${driven}`], ...group === '' ? [] : [`--deploy-secrets=${group}`]];
+
+  return [
+    resolve(root, 'node_modules/.bin/armada'), 'run', sha, `--label=deploy ${phase}${group === '' ? '' : ` (${String(rows.length)} row with its own secrets)`}`,
+    ...names.length === 0 ? [] : [`--secrets=${names.join(',')}`], '--', ...planArgs,
+  ];
 }
 
 /** `argv` run here, its output printed as it comes, with its exit code and everything it printed. */
@@ -3692,6 +3707,15 @@ function recordArmadaRow(report: string, gate: Gate, verdict: ArmadaRow | undefi
  * the run could not grade them.
  */
 async function armadaPhase(phases: readonly DeployPhase[], rows: readonly Gate[], report: string): Promise<string[]> {
+  const groups = new Map<string, Gate[]>();
+
+  for (const gate of rows) groups.set(secretGroup(gate), [...groups.get(secretGroup(gate)) ?? [], gate]);
+
+  return (await Promise.all([...groups.values()].map(async (group) => armadaPhaseJob(phases, group, report)))).flat();
+}
+
+/** One armada job of a phase's rows that share their own secrets. */
+async function armadaPhaseJob(phases: readonly DeployPhase[], rows: readonly Gate[], report: string): Promise<string[]> {
   const sha = fullRevision();
   const phase = phases.join(',');
   const argv = armadaPhaseRun(phase, rows, sha);
@@ -3699,7 +3723,7 @@ async function armadaPhase(phases: readonly DeployPhase[], rows: readonly Gate[]
   console.log(`\n── armada: ${String(rows.length)} row(s) of ${phase} at ${sha.slice(0, 12)}, as one job: ${argv.slice(1).join(' ')}`);
   const { exitCode, said } = await echoed(argv);
   const graded = armadaReport(said);
-  const reproduce = `node_modules/.bin/armada run ${sha} -- --deploy-phase=${phase}`;
+  const reproduce = `node_modules/.bin/armada run ${sha} -- ${argv.slice(argv.indexOf('--') + 1).join(' ')}`;
 
   if (report !== '' && graded !== undefined) recordNotice(report, { phase: phases[0] ?? 'source', what: `armada job ${graded.job}`, notice: `the ${phase} rows armada ran, at ${sha}: their logs and outputs are in that job` });
 
@@ -3790,7 +3814,7 @@ async function ciCommand(): Promise<number | undefined> {
   if (process.argv.includes('--ci-plan')) {
     const phases = phasesNamed(option('deploy-phase'));
 
-    console.log(JSON.stringify(phases === undefined ? ciPlan(ciPlanCosts()) : armadaPlan(phases, option('deploy-origin'))));
+    console.log(JSON.stringify(phases === undefined ? ciPlan(ciPlanCosts()) : armadaPlan(phases, option('deploy-origin'), option('deploy-secrets') ?? '')));
 
     return 0;
   }
