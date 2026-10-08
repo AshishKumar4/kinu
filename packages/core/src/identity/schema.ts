@@ -45,7 +45,9 @@ const ACTOR_DDL = [
     executor   TEXT NOT NULL,
     command    TEXT NOT NULL,
     stdout     TEXT,
+    stdout_len INTEGER,
     stderr     TEXT,
+    stderr_len INTEGER,
     exit_code  INTEGER,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
     PRIMARY KEY (actor_id, id)
