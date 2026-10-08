@@ -695,6 +695,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected async agentCalls(actorId: string): Promise<AgentFacetCalls> {
     const key = `kinu-agent:${this.agentOf(actorId).storageKey}`;
 
+    this.openedIsolates.add(actorId);
+
     return agentCallsThrough((call) => this.agentIsolateSlots.held(key, () => this.agentIsolate(actorId), call));
   }
 
@@ -704,6 +706,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   protected dropAgentFacet(storageKey: string): void {
     this.ctx.facets.delete(storageKey);
+  }
+
+  /** The agents whose isolate this activation opened: only these can hold calls open on it. */
+  private readonly openedIsolates = new Set<string>();
+
+  /** An agent's isolate has nothing open on this object: its turns' ends, reports and lanes have all been answered. */
+  private async agentQuiet(actorId: string): Promise<void> {
+    await (await this.agentCalls(actorId)).idle();
   }
 
   agentSnapshot(actorId: string): AgentSnapshot {
@@ -773,6 +783,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   agentWorkspace(actorId: string): AgentWorkspaceHost {
+    if (this.deleting.signal.aborted) return settleSync(Effect.fail(new KinuError('missing', 'This workspace was deleted.')));
     this.agentOf(actorId);
     const credentials = async () => await this.userHub();
 
@@ -869,7 +880,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         return await parent.orchestrator.inbox.send(signal);
       },
-    });
+    }, this.deleting.signal);
   }
 
   private agentBound(actorId: string): BoundActor {
@@ -952,6 +963,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         const own = record !== null && hostedActorPlacement(record).homeName !== null;
 
         if (own) await this.agentTurns.beforeRetirement(record.actorId, retirement.destroy || retirement.interrupt);
+
+        // Its isolate goes with it: the calls it still has open on this object are answered first, so none is left
+        // to a relay whose caller is gone.
+        if (own && retirement.destroy && this.openedIsolates.has(record.actorId)) await this.agentQuiet(record.actorId);
         await host.retire(parent, retirement);
 
         if (own) {
@@ -4118,7 +4133,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       if (ownerUserId !== null && ownerUserId !== expectedOwnerUserId) return yield* new KinuError('denied', 'Agent owner mismatch; refusing to destroy.');
 
-      if (this.wipe === undefined) yield* Effect.promise(async () => this.releaseOutsideState());
+      if (this.wipe === undefined) {
+        // Quieted already when its owner's teardown asked first; a deletion resumed after a restart quiets here.
+        yield* Effect.promise(async () => this.quietAgents());
+        yield* Effect.promise(async () => this.releaseOutsideState());
+      }
 
       const wipe = this.wipe ??= { ownerUserId, done: this.wipeStorage() };
       yield* Effect.promise(() => wipe.done);
@@ -4147,6 +4166,36 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private wipe: { readonly ownerUserId: string | null; readonly done: Promise<void> } | undefined;
+
+  /**
+   * The owner's teardown asks this first, while the workspace still holds its authority: its agents stop and every
+   * call they still have open here is answered. A call cut by the revoke or the wipe that follow hangs its relay, and
+   * one that finishes after the wipe re-arms a wake on the emptied object. Not @callable: as `destroyAgent`.
+   */
+  quietForDeletion(expectedOwnerUserId: string): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (this.wipe !== undefined) return;
+      // Never claimed, or storage from before a reset: nothing it holds can be checked, and no agent of it runs here.
+      const ownerUserId = this.storageRefusal === undefined ? this.getOwnerUserId() : null;
+
+      if (ownerUserId !== null && ownerUserId !== expectedOwnerUserId) return yield* new KinuError('denied', 'Agent owner mismatch; refusing to quiet for deletion.');
+      yield* Effect.promise(async () => this.quietAgents());
+    }));
+  }
+
+  /** Aborted once a deletion began: no agent's call reaches this object's stores after it, and each still open is
+   *  refused then. */
+  private readonly deleting = new AbortController();
+
+  private async quietAgents(): Promise<void> {
+    if (!this.deleting.signal.aborted) this.deleting.abort(new KinuError('missing', 'This workspace was deleted.'));
+
+    for (const actorId of this.openedIsolates) {
+      if (!this.liveActor(actorId)) continue;
+      await this.agentTurns.beforeRetirement(actorId, true);
+      await this.agentQuiet(actorId);
+    }
+  }
 
   private async wipeStorage(): Promise<void> {
     // Drops SDK tables, alarms and storage, every agent facet's included (measured in tests/workerd/delete-all.test.ts,

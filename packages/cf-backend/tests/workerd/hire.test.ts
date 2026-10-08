@@ -178,6 +178,18 @@ describe('hire', () => {
     expect(observed.reports.join(' ')).toContain(CHILD_ANSWER);
   });
 
+  it('deleting a workspace while its hire works quiets the hire first and leaves no alarm', async () => {
+    const workspace = 'hire-delete';
+    const owner = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
+
+    // The auditor's command is held in its call's window: a call its workspace is still answering when it is deleted.
+    await probe(workspace).setup(workspace, 'hire-root', 'job', owner);
+    await probe(workspace).openHire(workspace, 'Hire an auditor to run the job.');
+    await probe(workspace).jobWindowArmed(workspace, 1);
+
+    expect(await probe(workspace).deleteWhileChildWorks(workspace, owner)).toEqual({ alarm: null });
+  });
+
   it('the owner\'s Stop ends a parked delegated turn, and a restart does not run it again', async () => {
     const workspace = 'hire-stop';
 

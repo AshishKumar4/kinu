@@ -194,7 +194,9 @@ interface DeviceUserProbeRpc extends Rpc.DurableObjectBranded {
 }
 
 interface HireProbeRpc extends Rpc.DurableObjectBranded {
-  setup(workspace: string, model: string, script: import('./hire-shapes').ChildScript): Promise<void>;
+  setup(workspace: string, model: string, script: import('./hire-shapes').ChildScript, ownerUserId?: string): Promise<void>;
+  /** The owner deletes the workspace while its hire's turn is parked; the alarm the deleted object holds. */
+  deleteWhileChildWorks(workspace: string, ownerUserId: string): Promise<{ readonly alarm: number | null }>;
   releaseChild(): Promise<void>;
   childSpoke(): Promise<void>;
   modelSaw(workspace: string, texts: readonly string[]): Promise<void>;

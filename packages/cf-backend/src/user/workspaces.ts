@@ -2,7 +2,7 @@ import { Effect } from 'effect';
 import {
   autoTitleMayReplace, nameOriginOf, type NameOrigin, WORKSPACE_KEYED_ROWS, armCapabilityReconcile, clearCapabilityReconcile, commitWorkspaceCapability, freshWorkspaceCapability, pendingCapabilityReconcile, revokeWorkspaceCapability, workspaceCapabilityHash, type UserCaller, validateWorkspaceName, sanitizeWorkspaceLogoSvg, resolveWorkspaceTitle, WorkspaceOverviewSchema, type WorkspaceOverview,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, settle, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, settle, settleLogged, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { openAnalyticsWindow } from '@kinu.run/core/analytics';
 import { rosterCounts, rosterPage, rosterRow, rosterSockets, sendRosterFrame, type RosterPage, type RosterQuery } from './roster';
@@ -475,12 +475,17 @@ export class UserWorkspaces {
   }
 
   /**
-   * Mark, stop its MCP calls and revoke in one synchronous turn before the destroy await, so a dying
-   * workspace keeps no authority. Destroy the DO before dropping the row; on failure the marked row
-   * stays and the revoke is not undone.
+   * Mark it, then let its agents finish what they have open on it while it still holds its authority, then stop its MCP
+   * calls and revoke in one synchronous turn before the destroy await, so a dying workspace keeps no authority past
+   * its quiet. Destroy the DO before dropping the row; on failure the marked row stays and the revoke is not undone.
    */
   async tearDownWorkspace(name: string, ownerUserId: string): Promise<void> {
     this.host.sqlx(`UPDATE user_workspaces SET delete_pending = 1 WHERE name = ?`, name);
+    const stub = this.host.env.OrchestratorAgent.get(this.host.env.OrchestratorAgent.idFromName(name));
+
+    // A call the revoke cuts hangs its relay; a quiet that fails leaves the deletion to go on without it.
+    await settleLogged('workspace.quiet_failed', { doing: 'quieting the workspace\'s agents before its deletion', otherwise: 'unavailable' },
+      async () => { await stub.quietForDeletion(ownerUserId); }, { workspace: name });
     this.host.mcpServers.stopWorkspaceMcpCalls(name);
     revokeWorkspaceCapability(this.host.ctx.storage.sql, name);
     this.rosterChanged(name);
@@ -490,7 +495,6 @@ export class UserWorkspaces {
     this.deleteWorkspaceRows(name, 'before-destroy');
 
     try {
-      const stub = this.host.env.OrchestratorAgent.get(this.host.env.OrchestratorAgent.idFromName(name));
       await stub.destroyAgent(ownerUserId);
     } catch (err) {
       // agents-SDK destroy aborts its own isolate after the wipe; the 'destroyed' error means success.
