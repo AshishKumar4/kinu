@@ -1,7 +1,7 @@
 /** First-run setup wizard; an unfinished account lands here from any URL. */
 import { Cause, Effect } from 'effect';
 import { useState, useCallback, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import {
   AppWindowIcon, DesktopTowerIcon, SparkleIcon,
@@ -76,9 +76,12 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
   const account = useAccount();
   const navigate = useNavigate();
   const profile = lastValue(account.profile);
+  // `?step=` names the step to open on: a sign-in that left this page returns to the step it left from.
+  const [search] = useSearchParams();
+  const opened = ONBOARDING_STEPS.findIndex((candidate) => candidate.id === search.get("step"));
 
   // `null` until touched, so a slow profile load never overwrites an edit.
-  const [step, setStep] = useState(() => Math.min(Math.max(0, initialStep), LAST_STEP));
+  const [step, setStep] = useState(() => (opened >= 0 ? opened : Math.min(Math.max(0, initialStep), LAST_STEP)));
   const [reached, setReached] = useState(step);
   const [name, setName] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -198,7 +201,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
 
                 {s.id === 'providers' && (
                   <div className="space-y-5">
-                    <ProvidersPanel returnTo={APP_ROUTES.welcome} />
+                    <ProvidersPanel returnTo={`${APP_ROUTES.welcome}?step=${s.id}`} />
                   </div>
                 )}
 

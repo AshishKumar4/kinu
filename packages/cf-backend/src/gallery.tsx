@@ -78,6 +78,7 @@ import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
 import { ForkReachPanel } from "@/components/slates/ForkReachPanel";
 import type { BlueprintInspection, BlueprintView, LiveShareRecord, SlateCapabilityGraph } from "@kinu.run/core";
 import UserSettingsPage from "@/pages/UserSettingsPage";
+import ConnectedPage from "@/pages/ConnectedPage";
 import { DeviceRow } from "@/components/devices/DeviceRow";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
@@ -314,6 +315,9 @@ const CHATGPT_DEVICE = new URLSearchParams(location.search).get("chatgpt") === "
 
 const MODELS_FAIL = new URLSearchParams(location.search).get("models") === "fail";
 
+/** `&cloudflare=off`: an account that has not connected Cloudflare, so its providers offer the connect. */
+const CLOUDFLARE_OFF = new URLSearchParams(location.search).get("cloudflare") === "off";
+
 const WORKSPACE_GONE = new URLSearchParams(location.search).get("gone") === "1";
 
 /** `&snapshot=failed`: the workspace's first read fails, so nothing has loaded. */
@@ -460,7 +464,7 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
     // Different effort lists per model: the tier levels are the model's, never a fixed three.
     return fixtureJson({
       models: [
-        { spec: "workers-ai/llama-4", label: "Llama 4", provider: "workers-ai", reasoningEfforts: [] },
+        ...CLOUDFLARE_OFF ? [] : [{ spec: "workers-ai/llama-4", label: "Llama 4", provider: "workers-ai", reasoningEfforts: [] }],
         { spec: "anthropic/claude-opus-4-7", label: "Claude Opus 4.7", provider: "anthropic", reasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
         ...settingsChatGptSignedIn ? [{ spec: "chatgpt/gpt-5.5", label: "GPT-5.5", provider: "chatgpt", reasoningEfforts: [] }] : [],
         ...settingsSavedCredentials.has("groq.bearer")
@@ -6701,7 +6705,13 @@ async function mount() {
     // `&panel=providers|mcp|cli` picks the modal's body.
     ["setupmodal", { node: <SetupModalFrame />, entries: ["/"] }],
     // `&step=0..3` picks the wizard panel.
-    ["welcome", { node: <WelcomeFrame />, entries: ["/welcome"] }],
+    // `&route=` is the app's own address for the wizard (`/welcome?step=providers`), as a sign-in returns to it.
+    ["welcome", { node: <WelcomeFrame />, entries: [new URLSearchParams(location.search).get("route") ?? "/welcome"] }],
+    // Where a sign-in ends in its helper window; `&next=` is where it began.
+    ["connected", {
+      node: <ConnectedPage />,
+      entries: [`${APP_ROUTES.connected}?${new URLSearchParams({ next: new URLSearchParams(location.search).get("next") ?? "/" }).toString()}`],
+    }],
     // `&view=list` seeds the workspaces page's stored choice.
     ["workspaces", { node: <WorkspacesFrame />, entries: ["/workspaces"] }],
     ["chatcode", { node: <ChatCodeFrame />, entries: ["/"] }],
