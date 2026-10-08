@@ -18,7 +18,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { cpus } from 'node:os';
 import { basename, join, relative, resolve } from 'node:path';
 import { childEnv, git, initRepo, scratchDir } from '@kinu.run/test-utils';
@@ -26,7 +26,7 @@ import * as v from 'valibot';
 import {
   CI_EXEMPT, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
   DEPLOY_PHASES, browserModules, deployOrder, deployPlan, gatesFor, liveTierTargets, packageScripts, phaseWave,
-  ciParts, localDeployGates, reportCIVerdicts, runnableArgv, sharedBrowserModules, sharedOf, tierRun, tierSchedule, tierWave, trackedTestFiles, waveCaps, type WaveRow,
+  localDeployGates, reportCIVerdicts, runnableArgv, sharedBrowserModules, sharedOf, tierRun, tierSchedule, tierWave, trackedTestFiles, waveCaps, type WaveRow,
   HAMMER_REPEATS, ciUnits, changedTestGate, splitCIGate, type Gate,
 } from './ladder';
 import {
@@ -38,7 +38,7 @@ import { declaredName, parse, walk } from './syntax';
 import { auditClosure } from './ladder-audit';
 import { gateEnvironment } from './ladder-cache';
 import { deriveClosure, repoAt } from './ladder-closure';
-import { checkCoverage, checkFileCoverage, pushRun, readFileTimings, readHostedCosts, requireCIGreen, withRunnerCosts } from './ci-verdicts';
+import { armadaVerdict, readFileTimings, readHostedCosts, withRunnerCosts } from './ci-verdicts';
 import { COST_TABLE, type CostTable } from './gate-cost';
 import { costTableFaults } from './cost-table';
 
@@ -703,33 +703,13 @@ describe('CI is not a silent subset of deploy', () => {
     expect(stale).toEqual([]);
   });
 
-  const Workflow = v.object({
-    jobs: v.record(v.string(), v.object({ steps: v.optional(v.array(v.object({ run: v.optional(v.string()) })), []) })),
-  });
-
-  /** Every command line a workflow's steps run, off the parsed YAML: a `run: |` block is several, and a
-   *  step inside a comment is none. */
-  const workflowCommands = (text: string): string[] => Object.values(v.parse(Workflow, Bun.YAML.parse(text)).jobs)
-    .flatMap((job) => job.steps.flatMap((step) => (step.run ?? '').split('\n').map((line) => line.trim()).filter((line) => line !== '')));
-
-  const enumerates = (command: string): boolean => /^bun (test|run (test|layergate|check|gate:))/.test(command);
-
-  test('ci.yml delegates to the ladder instead of keeping its own list', () => {
+  test('CI on armada delegates to the ladder instead of keeping its own list', () => {
     // Three lists is worse than two. CI must not be able to enumerate suites
     // independently, because that is how it came to skip five packages.
-    const commands = workflowCommands(readFileSync(resolve(root, '.github/workflows/ci.yml'), 'utf8'));
+    const config = v.parse(v.object({ plan: v.object({ command: v.array(v.string()) }), task: v.object({ command: v.array(v.string()) }) }), JSON.parse(readFileSync(resolve(root, '.armada.json'), 'utf8')));
 
-    expect(commands.filter(enumerates)).toEqual([]);
-  });
-
-  test('a commented-out ladder step delegates nothing, and a suite inside a run block is enumerated', () => {
-    const commands = workflowCommands([
-      'jobs:', '  gate:', '    steps:', '      # - run: bun scripts/ladder.ts --tier=ci',
-      '      - run: |', '          bun install', '          bun test packages/core', '',
-    ].join('\n'));
-
-    expect(commands).toEqual(['bun install', 'bun test packages/core']);
-    expect(commands.filter(enumerates)).toEqual(['bun test packages/core']);
+    expect([config.plan.command.slice(0, 3), config.task.command.slice(0, 4)])
+      .toEqual([['bun', 'scripts/ladder.ts', '--ci-plan'], ['bun', 'scripts/ladder.ts', '--tier=ci', '--ci-row={row}']]);
   });
 });
 
@@ -1146,58 +1126,42 @@ describe('CI verdicts belong to the exact pushed revision and the complete row p
   const second = { run: 'bun test b.test.ts', exitCode: 1, seconds: 2, output: 'a real failure' };
   const rows = [first, second];
 
-  test('another SHA, duplicate rows, missing rows and unknown commands cannot stand for the plan', () => {
-    const file = { sha, part: 'all', rows };
-    const expected = rows.map((row) => row.run);
+  // armada graded the plan's every row before it stored the verdict; the ladder reads it through Kinu's pinned armada.
+  test('the verdict armada stored for a commit is read as it is, none is null, and an error is never taken for none', () => {
+    const directory = scratchDir('armada-verdict');
+    const bin = join(directory, 'node_modules', '.bin');
+    const answer = (stdout: string, exit: number) => writeFileSync(join(bin, 'armada'), `#!/bin/sh\nprintf '%s\\n' '${stdout}'\necho 'armada: the connection failed' >&2\nexit ${String(exit)}\n`, { mode: 0o755 });
 
-    expect(() => checkCoverage({ ...file, sha: 'b'.repeat(40) }, sha, expected)).toThrow('not the deployed revision');
-    expect(() => checkCoverage({ ...file, rows: [first, first] }, sha, expected)).toThrow('twice');
-    expect(() => checkCoverage({ ...file, rows: [first] }, sha, expected)).toThrow('missing is not green');
-    expect(() => checkCoverage(file, sha, [first.run])).toThrow('outside this plan');
-    checkCoverage(file, sha, expected);
-    expect(file.rows.find((row) => row.exitCode !== 0)?.output).toBe('a real failure');
+    mkdirSync(bin, { recursive: true });
+    answer(JSON.stringify({ sha, part: 'all', rows }), 1);
+    const red = armadaVerdict(directory, sha);
+
+    answer('null', 2);
+    const none = armadaVerdict(directory, sha);
+
+    answer('', 2);
+    expect({ red: red?.rows.map((row) => row.exitCode), none }).toEqual({ red: [0, 1], none: null });
+    expect(() => armadaVerdict(directory, sha)).toThrow(`armada verdict ${sha} exited 2: armada: the connection failed`);
   });
 
-  test('only a push of this full SHA, never a PR merge or another revision, is accepted', () => {
-    const run = { id: 17, run_attempt: 1, head_sha: sha, event: 'push', status: 'in_progress', html_url: 'https://github.com/o/r/actions/runs/17' };
-
-    expect(() => pushRun({ ...run, event: 'pull_request' }, sha)).toThrow('not a push');
-    expect(() => pushRun({ ...run, head_sha: 'b'.repeat(40) }, sha)).toThrow('not a push');
-  });
-
-  test('pending, failed or canceled CI and a missing or red hammer never verify the revision', () => {
-    const run = pushRun({ id: 17, run_attempt: 1, head_sha: sha, event: 'push', status: 'in_progress', html_url: 'https://github.com/o/r/actions/runs/17' }, sha);
-
-    expect(() => requireCIGreen(run)).toThrow('in_progress');
-    expect(() => requireCIGreen({ ...run, status: 'completed', conclusion: 'failure' })).toThrow('failure');
-    expect(() => requireCIGreen({ ...run, status: 'completed', conclusion: 'cancelled' })).toThrow('cancelled');
-    const expected = ciUnits().map((unit) => unit.gate.run);
+  test('a missing or red hammer run never verifies the revision', () => {
     const hammer = ciUnits().find((unit) => unit.gate.phase === 'hammer')?.gate.run ?? '';
-    const proved = expected.map((command) => ({ run: command, exitCode: command === hammer ? 1 : 0, seconds: 1, output: '' }));
+    const proved = ciUnits().map((unit) => ({ run: unit.gate.run, exitCode: unit.gate.run === hammer ? 1 : 0, seconds: 1, output: '' }));
 
-    expect(() => checkCoverage({ sha, part: 'all', rows: proved.filter((row) => row.run !== hammer) }, sha, expected)).toThrow('missing is not green');
-    expect(reportCIVerdicts({ sha, part: 'all', rows: proved }, run.html_url, '')).toBe(false);
+    expect(reportCIVerdicts({ sha, part: 'all', rows: proved }, 'armada verdict', '')).toBe(false);
+    expect(reportCIVerdicts({ sha, part: 'all', rows }, 'armada verdict', '')).toBe(false);
   });
 
-  test('the cost shards cover every CI row once, isolate the hammer, and leave no CI source work in the deploy', () => {
-    const parts = ciParts();
-    const expected = ciUnits().map((unit) => unit.gate.run);
-    const runs = parts.flatMap((part) => part.runs);
-
-    expect([...runs].sort()).toEqual([...expected].sort());
-    expect(new Set(runs).size).toBe(runs.length);
-    const hammer = parts.filter((part) => part.name.startsWith('hammer-')).flatMap((part) => part.runs);
+  test('CI runs the hammer six times, each a unit of its own, and leaves no CI source work in the deploy', () => {
+    const hammer = ciUnits().filter((unit) => unit.gate.phase === 'hammer').map((unit) => unit.gate.run);
 
     expect(hammer).toEqual(Array.from({ length: HAMMER_REPEATS }, (_, index) => 'bun scripts/hammer.ts --run=' + String(index + 1)));
-    expect(parts.filter((part) => !part.name.startsWith('hammer-')).some((part) => part.runs.some((run) => hammer.includes(run)))).toBe(false);
     const local = localDeployGates(deployOrder());
-
     const canonical = new Set(tierRun('ci').map((gate) => gate.run));
 
     expect(local.filter((gate) => gate.phase !== 'preflight').some((gate) => canonical.has(gate.run))).toBe(false);
     expect(local.some((gate) => gate.run === 'bun run gate:first-run')).toBe(true);
     expect(local.some((gate) => gate.run === 'bash scripts/eval-pass-tier.sh')).toBe(true);
-    expect(reportCIVerdicts({ sha, part: 'all', rows }, 'https://github.com/o/r/actions/runs/17', '')).toBe(false);
   });
 
   test('a red live run provides resource admission but remains a red correctness verdict', () => {
@@ -1211,7 +1175,7 @@ describe('CI verdicts belong to the exact pushed revision and the complete row p
 
     expect(live?.row.rssMb).toBe(2048);
     expect(live?.row.threads).toBe(1);
-    expect(reportCIVerdicts({ sha, part: 'all', rows: [{ run, exitCode: 1, seconds: 30, output: 'failed live case' }] }, 'https://github.com/o/r/actions/runs/17', '')).toBe(false);
+    expect(reportCIVerdicts({ sha, part: 'all', rows: [{ run, exitCode: 1, seconds: 30, output: 'failed live case' }] }, 'armada verdict', '')).toBe(false);
   });
 
   // The container runner (armada, `.armada.json`) runs the same units one task each, weighed by what it measured.
@@ -1226,13 +1190,7 @@ describe('CI verdicts belong to the exact pushed revision and the complete row p
       .toEqual({ timed: 1e6, others: true, file: 2 });
   });
 
-  test('all six contended runs have independent runners instead of a sequential hammer tail', () => {
-    const parts = ciParts();
-
-    expect(parts.filter((part) => part.name.startsWith('hammer')).length).toBe(6);
-  });
-
-  test('file partitions execute every original suite file once and missing timing evidence refuses collection', () => {
+  test('file partitions execute every original suite file once, each timed', () => {
     const directory = scratchDir('ci-file-partitions');
     const files = Array.from({ length: 5 }, (_, index) => join(directory, String(index) + '.test.ts'));
 
@@ -1260,11 +1218,6 @@ describe('CI verdicts belong to the exact pushed revision and the complete row p
 
     expect(measured.sort()).toEqual(expected.sort());
     expect(new Set(measured).size).toBe(expected.length);
-    const file = { sha, part: 'all', rows: observed };
-    const coverage = units.map((unit) => ({ run: unit.run, files: claims(unit.run, files).map((name) => relative(root, name)) }));
-
-    checkFileCoverage(file, coverage);
-    expect(() => checkFileCoverage({ ...file, rows: observed.map((row) => ({ ...row, timings: {} })) }, coverage)).toThrow('file coverage differs');
   });
 
 });

@@ -1,8 +1,8 @@
 /**
- * The devbox tools tarball (D65, D78): built on armada from cloudflare/debian-trixie by tools-setup.sh and
- * tools-build.sh, and pinned in packages/devbox/block-lower/upstream.json, the way the image is. A box reads it from its
- * environment's store bucket in parts of at most 256 MiB, `devbox-tools/<sha256>.tgz.0` first, and checks the whole
- * against the pin.
+ * The devbox tools tarball (D65, D78): built on armada by the `devbox-tools` task (armada/devbox-tools.ts) from
+ * cloudflare/debian-trixie, tools-setup.sh and tools-build.sh, and pinned in packages/devbox/block-lower/upstream.json,
+ * the way the image is. A box reads it from its environment's store bucket in parts of at most 256 MiB,
+ * `devbox-tools/<sha256>.tgz.0` first, and checks the whole against the pin.
  *
  *   bun scripts/devbox-tools.ts build [<file>]     builds it, prints the `tools` record for upstream.json, and writes it
  *                                                   to <file> (for devbox-container-tier.ts --tools)
@@ -15,13 +15,12 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import * as v from 'valibot';
 import { AwsClient } from 'aws4fetch';
-import { cmd, recipe } from 'armada';
+import { devboxTools } from '../armada/devbox-tools';
 import { deployedConfig } from './infra-manifest';
 import { r2ObjectSize, wranglerSessionToken } from './cloudflare-rest';
-import { trackedFiles } from './sources';
 
 const BLOCK_LOWER = join(import.meta.dir, '..', 'packages/devbox/block-lower');
 
@@ -81,54 +80,12 @@ async function missingPart(bucket: string, tools: v.InferOutput<typeof ToolsReco
   return undefined;
 }
 
-/** Where the recipe's install leaves the tarball, in the environment its tasks start from. */
-const BUILD_DIR = '/home/ci/devbox-tools';
+/** The tarball the `devbox-tools` task builds, with the job that built it. */
+export async function buildTools(): Promise<{ readonly bytes: Uint8Array; readonly sha256: string; readonly job: string }> {
+  const job = devboxTools.stream([null], { label: 'devbox tools' });
+  const [bytes] = await job.values();
 
-/** What one task hands back: armada keeps an output of 64 MiB and refuses one of 128 (measured, D78). */
-const RETURN_PART_BYTES = 32 * 1024 * 1024;
-
-/** More parts than the tarball's 336 MB fills; a task past its end hands back nothing. */
-const RETURN_PARTS = 16;
-
-/** The block lower's own sources, as release-config.test.ts's A8 pins them: the install unpacks them, so the
- *  environment's key covers them. */
-function blockLowerSources(): readonly string[] {
-  const under = 'packages/devbox/block-lower/';
-
-  return trackedFiles().filter(file => file.startsWith(under)).map(file => file.slice(under.length))
-    .filter(file => ['Cargo.toml', 'Cargo.lock'].includes(file) || /^src\/[^/]+\.rs$/u.test(file)).sort();
-}
-
-/**
- * How armada builds the tarball (D78): cloudflare/debian-trixie with every package from one day of the archive
- * (tools-setup.sh, as root, once per environment), then this tree's block lower compiled and everything packed
- * (tools-build.sh, as the user). `smoke` is the recipe's own check; another value keys another environment, which is
- * how a second build of the same inputs is had.
- */
-export function toolsRecipe(smoke = 'true') {
-  const unpack = blockLowerSources().map(file => `mkdir -p block-lower/${dirname(file)} && `
-    + `printf %s ${readFileSync(join(BLOCK_LOWER, file)).toString('base64')} | base64 -d > block-lower/${file}`);
-
-  return recipe({
-    base: 'cloudflare/debian-trixie', size: 'medium', smoke,
-    setup: readFileSync(join(BLOCK_LOWER, 'tools-setup.sh'), 'utf8'),
-    install: ['set -eu', `rm -rf ${BUILD_DIR} && mkdir -p ${BUILD_DIR} && cd ${BUILD_DIR}`, ...unpack, readFileSync(join(BLOCK_LOWER, 'tools-build.sh'), 'utf8')].join('\n'),
-  });
-}
-
-/** The tarball an environment of `built` holds, handed back in parts by one map over it. */
-export async function buildTools(built = toolsRecipe()): Promise<{ readonly bytes: Buffer; readonly sha256: string; readonly job: string }> {
-  const part = cmd(built, (index: number) => [
-    'sh', '-c', `dd if=${BUILD_DIR}/tools.tgz of="$ARMADA_OUT" bs=${String(RETURN_PART_BYTES)} skip="$1" count=1 status=none`, 'part', String(index),
-  ], { output: 'bytes', timeout: 900 });
-
-  const job = part.map(Array.from({ length: RETURN_PARTS }, (_, index) => index), { pool: 4, label: 'devbox tools' });
-  const parts = await job.values();
-  // A part past the tarball's end is empty.
-  const end = parts.findIndex(bytes => bytes.byteLength === 0);
-  const bytes = Buffer.concat(end === -1 ? parts : parts.slice(0, end));
-
-  if (bytes.byteLength >= RETURN_PARTS * RETURN_PART_BYTES) throw new Error(`the tarball fills all ${String(RETURN_PARTS)} parts: hand back more`);
+  if (bytes === undefined) throw new Error('the devbox-tools job answered nothing');
 
   return { bytes, sha256: createHash('sha256').update(bytes).digest('hex'), job: await job.id };
 }

@@ -15,10 +15,11 @@
 #
 # Deploys the cf-backend Worker (`kinu-staging`, or `kinu` under `--promote`)
 # with the KinuDevbox Durable Object and its container, and the
-# local-device executor routes. Pipeline: preflight → the upload gates (the
-# account and the secret scan) → vite build → CLI source archive → wrangler
-# deploy → smoke test → staging tiers beside the rows CI cannot host → CI's
-# exact-SHA verdicts (including its isolated hammer) → the record. Promotion: the record → the upload gates →
+# local-device executor routes. Pipeline: preflight → armada's exact-SHA CI
+# verdict, its six hammer runs included (L25) → the upload gates (the account
+# and the secret scan) → vite build → CLI source archive → wrangler deploy →
+# smoke test → staging tiers beside the rows CI cannot host → the record.
+# Promotion: the record → the upload gates →
 # vite build → staging's downloads → wrangler deploy → smoke test → post-deploy
 # tiers.
 #
@@ -26,8 +27,8 @@
 # red, so one deploy captures every failure, and the deploy ends with one report
 # file, every red row with its finding, grouped by phase, whose path it prints
 # (scripts/deploy-report.ts). Only the preflight, the precondition for any
-# verdict, and the two upload gates, whose damage the next deploy cannot undo,
-# stop a deploy early. A red build on staging is fine: staging is the test
+# verdict, CI's verdict, and the two upload gates, whose damage the next deploy
+# cannot undo, stop a deploy early. A red build on staging is fine: staging is the test
 # environment and the next deploy replaces it. The record production promotes
 # from is written only when every phase is green.
 #
@@ -284,7 +285,7 @@ json_field() {
 # Phases, in the ladder's DEPLOY_PHASES order: `preflight` alone before
 # anything; `upload`, the account gate and the secret scan, before any upload;
 # 'post-publish', the tiers against the deployment, in one wave with 'source',
-# only what CI cannot host. The isolated hammer runs on GitHub, not after this wave (L23).
+# only what CI cannot host. The hammer runs in CI on armada, not after this wave (L25).
 # 'soak', the real-model eval pass, starts once the deployment serves and is never awaited (L24).
 # A gate's row in scripts/ladder.ts declares which, and why.
 #
@@ -392,10 +393,13 @@ echo ""
 stop_phase preflight
 mark preflight
 
-KINU_CI_RUN="$KINU_DEPLOY_REPORT/ci-run.json"
+# CI's verdict for this exact revision, which armada stored when its push to integration/** or main was proved
+# (L25): every row of it goes into the report, and a red or missing one ends the deploy before anything is built.
+# A promotion takes staging's record instead, which only a deploy past this gate wrote.
 if [ "$KINU_PROMOTE" != "1" ]; then
   KINU_CI_SHA="$(git -C "$KINU_ROOT" rev-parse HEAD)"
-  bun "$KINU_ROOT/scripts/ladder.ts" --ci-find="$KINU_CI_SHA" --ci-run="$KINU_CI_RUN" || { step_red ci "push-CI" "No push-CI proof for $KINU_CI_SHA. Push the branch holding this clean revision; nothing was built or uploaded."; finish; }
+  bun "$KINU_ROOT/scripts/ladder.ts" --ci-verdict="$KINU_CI_SHA" || { step_red ci "armada CI" "armada has no green verdict for $KINU_CI_SHA, so nothing was built or uploaded."; finish; }
+  mark ci
 fi
 
 # ── Pre-flight: verify npx + wrangler auth ───────────────────────
@@ -455,12 +459,7 @@ fi
 # withdrawn. Every other gate's red is recoverable on staging, so it runs after
 # the upload and gates the promotion instead.
 if [ "$KINU_PROMOTE" != "1" ]; then
-  # CI's upload proof and the local account check are independent; both still hold every upload.
-  run_phase upload &
-  KINU_UPLOAD_PID=$!
-  bun "$KINU_ROOT/scripts/ladder.ts" --ci-upload --ci-run="$KINU_CI_RUN" || KINU_REDS=1
-  wait "$KINU_UPLOAD_PID" || KINU_REDS=1
-  if [ "$KINU_REDS" != "0" ]; then
+  if ! run_phase upload; then
     echo -e "${RED}The upload checks are red, so nothing was built or uploaded.${NC}"
     finish
   fi
@@ -472,8 +471,6 @@ mark upload
 if [ "$KINU_GATES_ONLY" = "1" ]; then
   run_phase source
   mark source
-  bun "$KINU_ROOT/scripts/ladder.ts" --ci-await --ci-run="$KINU_CI_RUN" || KINU_REDS=1
-  mark ci
   echo "Gates only: stopping before the build, as asked."
   finish
 fi
@@ -484,7 +481,7 @@ fi
 # KINU_PUBLISH_FINDING saying which and why. After that nothing that reads the
 # deployment can test this build, while every local gate still can: the deploy
 # records the step, skips only the rows that read the deployment, and runs the
-# remaining local wave to the end, then imports CI's verdict, including the isolated hammer (L23).
+# remaining local wave to the end.
 KINU_PUBLISH_FINDING=""
 publish_red() {
   KINU_PUBLISH_FINDING="$1"
@@ -1001,11 +998,6 @@ else
     run_phase source
   fi
   mark wave
-
-  # CI's source shards and isolated hammer ran concurrently with this build and the live tiers. Their exact-SHA
-  # verdicts are part of this deploy: no local repeat, no retry of a red, no record without the complete proof.
-  bun "$KINU_ROOT/scripts/ladder.ts" --ci-await --ci-run="$KINU_CI_RUN" || KINU_REDS=1
-  mark ci
 fi
 
 # ── Step 5: Post-deploy infrastructure verification ──────────────
