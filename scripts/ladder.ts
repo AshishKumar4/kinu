@@ -31,7 +31,7 @@
 
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
-import { cpus, tmpdir } from 'node:os';
+import { cpus } from 'node:os';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
 import { plantedInputs, readCensusLock } from './census-plants';
@@ -3087,7 +3087,8 @@ function adoptDeployEntry(gate: Gate): string | undefined {
   }
 
   if (gate.evidence === undefined) return undefined;
-  const dir = join(tmpdir(), 'kinu-evidence', gate.evidence);
+  // In the checkout, as bench-retention's default root is: it refuses a root under the swept temp directory.
+  const dir = join(root, 'bench-artifacts', 'deploy-evidence', gate.evidence);
 
   mkdirSync(dir, { recursive: true });
   process.env['BENCH_ARTIFACTS'] = dir;
@@ -3095,18 +3096,27 @@ function adoptDeployEntry(gate: Gate): string | undefined {
   return dir;
 }
 
-/** The longest string JavaScriptCore holds, `JSString::MaxLength` (JSString.h): `int32_t`'s maximum, in UTF-16 units. A
- *  row's verdict is one JSON text, read and written as one string on both sides. */
-const JSC_MAX_STRING = 2 ** 31 - 1;
-
-/** The most evidence, compressed, a row's verdict carries back: base64 writes 4 characters per 3 bytes, and 1 MiB is
- *  left for the rest of the verdict. Past it the verdict says so and the evidence stays in the job's log. */
-const EVIDENCE_BYTES = Math.floor((JSC_MAX_STRING - 1024 * 1024) / 4) * 3;
+/** The most evidence, compressed, a row's verdict carries back. The largest a real run left is first-run's report
+ *  directory, 92,683 bytes before compression (bench-artifacts/first-run-reports-cloud-pm8myk, 2026-10). No deploy has
+ *  carried a soak's back yet, and it holds every trial's transcript, so the cap leaves it room. Past it the verdict
+ *  says so and the evidence stays in the job's log. */
+const EVIDENCE_BYTES = 64 * 1024 * 1024;
 
 /** A row's evidence for its verdict, or a note why its verdict does not carry it. */
 interface PackedEvidence {
   readonly evidence?: NonNullable<CIVerdict['evidence']>;
   readonly note?: string;
+}
+
+/** A row's CI verdict, with its evidence when it declares some (`evidenceDir`). */
+function ciVerdictRow(gate: Gate, outcome: { readonly exitCode: number; readonly seconds: number; readonly stdout: string; readonly stderr: string }, timings: CIVerdict['timings'], evidenceDir: string | undefined): CIVerdict {
+  const packed: PackedEvidence = evidenceDir === undefined ? {} : packEvidence(gate, evidenceDir);
+  const output = outcome.exitCode === 0 ? '' : outcome.stdout + outcome.stderr;
+  const row: CIVerdict = { run: gate.run, exitCode: outcome.exitCode, seconds: outcome.seconds, output: packed.note === undefined ? output : `${packed.note}\n${output}`, timings };
+
+  if (packed.evidence !== undefined) row.evidence = packed.evidence;
+
+  return row;
 }
 
 /** `dir` as a base64 tar.gz for a row's verdict, or a note why it is not there. */
@@ -3620,25 +3630,22 @@ function unpackEvidence(report: string, evidence: { readonly dir: string; readon
   if (unpacked.exitCode !== 0) throw new Error(`unpacking evidence into ${into}: ${unpacked.stderr.toString().trim()}`);
 }
 
-/**
- * A deploy phase's armada rows, as one armada job at this exact SHA (`armadaPlan`), each row's
- * verdict into the deploy's report as one run here would put it. Answers the rows that are not green: red, or never
- * graded because the run could not grade them.
- */
-async function armadaPhase(phases: readonly DeployPhase[], rows: readonly Gate[], report: string): Promise<string[]> {
-  const sha = fullRevision();
-  const phase = phases.join(',');
-  // A row that drives the deployment gets its origin through its matrix entry, and the stable secrets it needs by
-  // name: the scripted model's bearer and that deployment's own identity (evalWebIdentityEnv).
+/** The `armada run` of a deploy phase's rows at this exact SHA. A row that drives the deployment gets its origin
+ *  through its matrix entry, and the stable secrets it needs by name: the scripted model's bearer and that
+ *  deployment's own identity (evalWebIdentityEnv). */
+function armadaPhaseRun(phase: string, rows: readonly Gate[], sha: string): string[] {
   const origin = rows.some(readsDeployment) ? process.env['KINU_EVAL_ORIGIN'] : undefined;
 
   if (rows.some(readsDeployment) && origin === undefined) throw new Error(`the ${phase} rows drive the deployment, and KINU_EVAL_ORIGIN names none`);
   const secrets = origin === undefined ? [] : [`--secrets=${SCRIPTED_MODEL_KEY_ENV},${evalWebIdentityEnv(origin)}`];
   const planArgs = [`--deploy-phase=${phase}`, ...origin === undefined ? [] : [`--deploy-origin=${origin}`]];
-  const argv = [resolve(root, 'node_modules/.bin/armada'), 'run', sha, `--label=deploy ${phase}`, ...secrets, '--', ...planArgs];
 
-  console.log(`\n── armada: ${String(rows.length)} row(s) of ${phase} at ${sha.slice(0, 12)}, as one job: ${argv.slice(1).join(' ')}`);
-  const run = Bun.spawn(argv, { cwd: root, stdout: 'pipe', stderr: 'inherit' });
+  return [resolve(root, 'node_modules/.bin/armada'), 'run', sha, `--label=deploy ${phase}`, ...secrets, '--', ...planArgs];
+}
+
+/** `argv` run here, its output printed as it comes, with its exit code and everything it printed. */
+async function echoed(argv: readonly string[]): Promise<{ readonly exitCode: number; readonly said: string }> {
+  const run = Bun.spawn([...argv], { cwd: root, stdout: 'pipe', stderr: 'inherit' });
   let said = '';
 
   for await (const chunk of run.stdout) {
@@ -3648,43 +3655,60 @@ async function armadaPhase(phases: readonly DeployPhase[], rows: readonly Gate[]
     await writeFully(process.stdout, text);
   }
 
-  const exitCode = await run.exited;
+  return { exitCode: await run.exited, said };
+}
+
+type ArmadaReport = v.InferOutput<typeof ArmadaReportSchema>;
+
+type ArmadaRow = NonNullable<ArmadaReport['verdicts']>['rows'][number];
+
+/** One armada row's verdict into the deploy's report, its evidence unpacked beside it; whether it is green. */
+function recordArmadaRow(report: string, gate: Gate, verdict: ArmadaRow | undefined, why: { readonly found: string; readonly reproduce: string; readonly said: string }): boolean {
+  if (report !== '' && verdict?.evidence !== undefined) unpackEvidence(report, verdict.evidence);
+
+  if (report !== '' && verdict !== undefined) recordTiming(report, { phase: gate.phase ?? 'source', what: gate.label, command: gate.run, seconds: verdict.seconds });
+
+  if (verdict?.exitCode === 0) {
+    console.log(`ok  ${gate.run}  (${verdict.seconds.toFixed(1)}s on armada, ${why.found})`);
+
+    return true;
+  }
+
+  const found = verdict === undefined ? `armada did not grade it: ${why.found}` : `red on armada, ${why.found}`;
+
+  console.error(`\nFAILED  ${gate.run}  ${found}`);
+
+  if (report !== '') {
+    recordRed(report, {
+      phase: gate.phase ?? 'source', what: gate.label, command: gate.run, verdict: verdict === undefined ? 'not graded' : `exit ${String(verdict.exitCode)}`,
+      reproduce: why.reproduce, finding: found, output: verdict?.output ?? why.said.slice(-4000),
+    });
+  }
+
+  return false;
+}
+
+/**
+ * A deploy phase's armada rows, as one armada job at this exact SHA (`armadaPlan`), each row's verdict into the
+ * deploy's report as one run here would put it. Answers the rows that are not green: red, or never graded because
+ * the run could not grade them.
+ */
+async function armadaPhase(phases: readonly DeployPhase[], rows: readonly Gate[], report: string): Promise<string[]> {
+  const sha = fullRevision();
+  const phase = phases.join(',');
+  const argv = armadaPhaseRun(phase, rows, sha);
+
+  console.log(`\n── armada: ${String(rows.length)} row(s) of ${phase} at ${sha.slice(0, 12)}, as one job: ${argv.slice(1).join(' ')}`);
+  const { exitCode, said } = await echoed(argv);
   const reportPath = /^report: (.+)$/mu.exec(said)?.[1]?.trim();
   const graded = reportPath === undefined || !existsSync(reportPath) ? undefined : v.parse(ArmadaReportSchema, JSON.parse(readFileSync(reportPath, 'utf8')));
   const verdicts = new Map((graded?.verdicts?.rows ?? []).map((row) => [row.run, row]));
-  const notGreen: string[] = [];
+  const found = graded === undefined ? `\`armada run\` exited ${String(exitCode)} and wrote no report` : `job ${graded.job}`;
+  const reproduce = `node_modules/.bin/armada run ${sha} -- --deploy-phase=${phase}`;
 
   if (report !== '' && graded !== undefined) recordNotice(report, { phase: phases[0] ?? 'source', what: `armada job ${graded.job}`, notice: `the ${phase} rows armada ran, at ${sha}: their logs and outputs are in that job` });
 
-  for (const gate of rows) {
-    const verdict = verdicts.get(gate.run);
-
-    if (report !== '' && verdict?.evidence !== undefined) unpackEvidence(report, verdict.evidence);
-
-    if (report !== '' && verdict !== undefined) recordTiming(report, { phase: gate.phase ?? 'source', what: gate.label, command: gate.run, seconds: verdict.seconds });
-
-    if (verdict?.exitCode === 0) {
-      console.log(`ok  ${gate.run}  (${verdict.seconds.toFixed(1)}s on armada, job ${graded?.job ?? ''})`);
-
-      continue;
-    }
-
-    const found = verdict === undefined
-      ? `armada did not grade it: \`armada run\` exited ${String(exitCode)}${graded === undefined ? ' and wrote no report' : ` (job ${graded.job})`}`
-      : `red on armada, job ${graded?.job ?? ''}`;
-
-    notGreen.push(gate.run);
-    console.error(`\nFAILED  ${gate.run}  ${found}`);
-
-    if (report !== '') {
-      recordRed(report, {
-        phase: gate.phase ?? 'source', what: gate.label, command: gate.run, verdict: verdict === undefined ? 'not graded' : `exit ${String(verdict.exitCode)}`,
-        reproduce: `node_modules/.bin/armada run ${sha} -- --deploy-phase=${phase}`, finding: found, output: verdict?.output ?? said.slice(-4000),
-      });
-    }
-  }
-
-  return notGreen;
+  return rows.filter((gate) => !recordArmadaRow(report, gate, verdicts.get(gate.run), { found, reproduce, said })).map((gate) => gate.run);
 }
 
 /** CI's exact-SHA rows stay visible in the deploy's report; a red is imported as red and never run until green. */
@@ -4268,12 +4292,7 @@ if (import.meta.main) {
     const { seconds } = outcome;
 
     if (verdictPath !== undefined) {
-      const packed: PackedEvidence = evidenceDir === undefined ? {} : packEvidence(gate, evidenceDir);
-      const output = outcome.exitCode === 0 ? '' : outcome.stdout + outcome.stderr;
-      const row: CIVerdict = { run: gate.run, exitCode: outcome.exitCode, seconds, output: packed.note === undefined ? output : `${packed.note}\n${output}`, timings: readFileTimings(timingPath) };
-
-      if (packed.evidence !== undefined) row.evidence = packed.evidence;
-      ciRows.push(row);
+      ciRows.push(ciVerdictRow(gate, { ...outcome, seconds }, readFileTimings(timingPath), evidenceDir));
       writeVerdicts(verdictPath, { sha: revision, part: 'all', rows: ciRows });
     }
 
