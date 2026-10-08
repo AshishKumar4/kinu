@@ -1,9 +1,9 @@
 // Codex via ChatGPT subscription (chatgpt.com/backend-api/codex/responses).
 import { APICallError, wrapLanguageModel, type LanguageModel, type LanguageModelMiddleware } from 'ai';
-import type { ModelProvider, ModelInfo, ModelInputModality } from './types';
+import type { ModelAffinity, ModelProvider, ModelInfo, ModelInputModality } from './types';
 import { MODEL_INPUT_MODALITIES } from './types';
 import { authenticatedSend, signedSend } from './authenticated-send';
-import { authCacheKey, cloneModelInfos, positiveInteger, StaleModelList, statelessResponses } from './util';
+import { authCacheKey, cloneModelInfos, conversationUuid, positiveInteger, StaleModelList, statelessResponses } from './util';
 import { asFetchFunction } from './fetch-shim';
 import { withCallAccount } from './quota';
 import { nonEmptyString } from '../utils/json';
@@ -24,6 +24,24 @@ const CODEX_DEFAULT_MODEL = 'gpt-5.5';
 
 /** Evolution's mechanical-call tier. */
 const CODEX_FAST_MODEL = 'gpt-6-luna';
+
+/**
+ * ChatGPT's backend caches under a session id, as Codex CLI and oh-my-pi send one: the workspace's, so its conversations
+ * share their static prompt, each named by its own conversation id, as oh-my-pi names a fork under its root's session.
+ * Measured on chatgpt.com/backend-api/codex (2026-10-08), conversations of six appended steps on a ~7,300-token prefix:
+ * - without these headers nothing was read until the sixth step, and with a `prompt_cache_key` alone nothing in six;
+ * - one session per conversation: 7,168 tokens read on 123 of 135 later steps and none on the rest (52 of 60 with a key
+ *   as well); a second conversation's first step on the same prefix read nothing, 13 of 13;
+ * - one session shared by two conversations, each with its own `conversation_id` and `x-client-request-id`: 73 of 80
+ *   later steps, and the second conversation's first step read 7,040–7,168 in 6 of 8.
+ */
+export function chatgptSessionHeaders(affinity: ModelAffinity) {
+  const conversation = conversationUuid(`kinu-chatgpt-conversation:${affinity.sessionAffinity}`);
+
+  return {
+    session_id: conversationUuid(`kinu-chatgpt-session:${affinity.workspaceAffinity}`), conversation_id: conversation, 'x-client-request-id': conversation,
+  };
+}
 
 /** A dead ChatGPT login's remedy. */
 const CODEX_DEAD_LOGIN = 'Your ChatGPT login is no longer valid.';
@@ -169,7 +187,8 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
       })));
 
       const model = lazyModel('openai.responses', modelId, async () => (await import('@ai-sdk/openai'))
-        .createOpenAI({ baseURL, apiKey: 'oauth-placeholder', fetch: heardFetch(customFetch) }).responses(modelId));
+        .createOpenAI({ baseURL, apiKey: 'oauth-placeholder', headers: chatgptSessionHeaders(deps), fetch: heardFetch(customFetch) })
+        .responses(modelId));
 
       return wrapLanguageModel({ model, middleware: [statelessResponses(true), CODEX_INSTRUCTIONS] });
     },

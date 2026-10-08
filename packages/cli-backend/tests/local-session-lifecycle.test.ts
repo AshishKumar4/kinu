@@ -367,7 +367,6 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     // ride beside it for the model stack, which this bare test model is not inside.
     expect(providerOptions).toEqual({
       openai: {
-        promptCacheKey: expect.any(String),
         reasoningEffort: 'high',
         contextManagement: [{ type: 'compaction', compactThreshold: expect.any(Number) }],
       },
@@ -427,7 +426,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const spec = 'opencode-go/muse-spark-1.3-contributor';
 
     const model = registry.resolve(spec, {
-      env: {}, sessionAffinity: 'kinu-test', fetch: mock.fetch,
+      env: {}, sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test', fetch: mock.fetch,
       getAuth: async () => ({ headers: { Authorization: 'Bearer key' } }),
       hasCredential: async () => true,
       listCredentialKeys: async () => ['opencode-go.bearer'],

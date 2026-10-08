@@ -5,7 +5,7 @@ import { APICallError, generateText, jsonSchema, streamText, tool, type Language
 import * as v from 'valibot';
 import {
   asFetchFunction, CHATGPT_CRED_KEY, createChatGptProvider, createProviderRegistry, generateReported, JsonObjectSchema, silenceBoundMs,
-  type AuthRequest, type JsonObject, type ModelCallDeps,
+  type AuthRequest, type JsonObject, type ModelAffinity, type ModelCallDeps,
 } from '../src/index';
 import { KinuError, createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 import { withModelStack } from '../src/providers/wire-model';
@@ -15,6 +15,8 @@ interface Sent {
   readonly url: string;
   readonly method: string;
   readonly authorization: string | null;
+  /** `session_id`, `conversation_id` and `x-client-request-id`. */
+  readonly session: readonly (string | null)[];
   readonly body: JsonObject | null;
 }
 
@@ -32,6 +34,7 @@ function openai(...answers: Answer[]) {
       url: input instanceof Request ? input.url : input.toString(),
       method: (init?.method ?? 'GET').toUpperCase(),
       authorization: new Headers(init?.headers).get('authorization'),
+      session: ['session_id', 'conversation_id', 'x-client-request-id'].map((name) => new Headers(init?.headers).get(name)),
       body: text.success ? v.parse(JsonObjectSchema, JSON.parse(text.output)) : null,
     });
     const next = queue.shift();
@@ -93,6 +96,7 @@ function signedIn(fetch: typeof globalThis.fetch) {
   const deps: ModelCallDeps = {
     env: {},
     sessionAffinity: 'kinu-test',
+    workspaceAffinity: 'kinu-test',
     fetch,
     async getAuth(key, opts) {
       if (key !== CHATGPT_CRED_KEY) return null;
@@ -148,8 +152,6 @@ describe('the request the preview accepts', () => {
       maxRetries: 0,
       instructions: 'You are Kinu.',
       tools: { read_file: tool({ description: 'Read a file.', inputSchema: jsonSchema({ type: 'object', properties: { path: { type: 'string' } } }) }) },
-      // As a turn's cache plan asks it: a key, and no retention the plan would refuse.
-      providerOptions: { openai: { promptCacheKey: 'conversation-1' } },
       messages: [
         { role: 'user', content: 'Read notes.md.' },
         { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'call_1', toolName: 'read_file', input: { path: 'notes.md' } }] },
@@ -164,7 +166,7 @@ describe('the request the preview accepts', () => {
     expect(request?.authorization).toBe('Bearer at-1');
     const body = request?.body ?? {};
 
-    expect(body).toMatchObject({ model: 'gpt-6.1-sol', store: false, stream: true, prompt_cache_key: 'conversation-1' });
+    expect(body).toMatchObject({ model: 'gpt-6.1-sol', store: false, stream: true });
 
     // preview-limitations (2026-09-30), whole, and `previous_response_id`, which nothing stored can answer.
     for (const refused of PREVIEW_REFUSED_FIELDS) expect(body).not.toHaveProperty(refused);
@@ -178,6 +180,23 @@ describe('the request the preview accepts', () => {
       type: 'namespace', name: 'functions', description: '',
       tools: [{ type: 'function', name: 'read_file', description: 'Read a file.', parameters: { type: 'object', properties: { path: { type: 'string' } } }, strict: false }],
     }]);
+  });
+
+  // codex.ts `chatgptSessionHeaders`: the backend caches under the session, which a workspace's conversations share.
+  test('every call carries its workspace as the session and its own conversation, which another conversation does not share', async () => {
+    const api = openai(answered(), answered(), answered(), answered());
+    const { deps } = signedIn(api.fetch);
+    const provider = createChatGptProvider();
+    const model = (affinity: Partial<ModelAffinity>) => provider.createModel('gpt-6.1-sol', { ...deps, ...affinity });
+    const [first, sibling, elsewhere] = [model({}), model({ sessionAffinity: 'kinu-hire' }), model({ workspaceAffinity: 'kinu-workspace-other' })];
+
+    for (const called of [first, first, sibling, elsewhere]) expect(await streamText({ model: called, maxRetries: 0, prompt: 'hello' }).text).toBe('ok');
+
+    const [[session, conversation, request] = [], again, [hireSession, hireConversation] = [], [otherSession] = []] = api.sent.map((sent) => sent.session);
+
+    expect(session).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
+    expect([again, request]).toEqual([[session, conversation, request], conversation]);
+    expect([hireSession === session, hireConversation === conversation, otherSession === session]).toEqual([true, false, false]);
   });
 
   test('a call that wants one answer still streams, and the stream becomes that answer', async () => {
@@ -425,6 +444,7 @@ describe('on the web, through the machine that signed in', () => {
     const deps: ModelCallDeps = {
       env: {},
       sessionAffinity: 'kinu-test',
+      workspaceAffinity: 'kinu-test',
       async getAuth(key) {
         asked.push(key);
 

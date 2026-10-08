@@ -36,27 +36,28 @@ a plain build turn states no mode, because operating guidance says that no mode 
 
 ## Where each provider caches
 
-| Provider | Markers | Cache key | Idle lifetime Kinu assumes (default / long retention) |
+| Provider | Markers | Routed by | Idle lifetime Kinu assumes (default / long retention) |
 |---|---|---|---|
-| Anthropic | Last tool (cloud only), end of the system prompt, and the last two messages, moved to the new tail on every step | none | 5 minutes / 1 hour |
-| OpenAI, Codex | none: the provider caches the prefix itself | `prompt_cache_key` | 60 minutes / 24 hours |
-| ChatGPT sign-in | none | `prompt_cache_key` | 60 minutes |
-| OpenRouter, Claude models | Same places as Anthropic, as `cache_control` | `prompt_cache_key` | 5 minutes / 1 hour |
-| OpenRouter other models, AI Gateway | none | `prompt_cache_key` | 60 minutes |
-| Workers AI | none: `x-session-affinity` pins the agent to one replica, whose prefix cache holds the request | the affinity key | 60 minutes |
-| any other provider | none | none | 60 minutes |
+| Anthropic | Last tool (cloud only), end of the system prompt, and the last two messages, moved to the new tail on every step | the prefix | 5 minutes / 1 hour |
+| OpenAI | none: the provider caches the prefix itself | the prefix | 60 minutes / 24 hours |
+| Codex | none | `session_id`, the workspace; `conversation_id` and `x-client-request-id`, the conversation (`chatgptSessionHeaders`, `providers/codex.ts`) | 60 minutes / 24 hours |
+| ChatGPT sign-in | none | the same headers | 60 minutes |
+| OpenRouter, Claude models | Same places as Anthropic, as `cache_control` | the prefix | 5 minutes / 1 hour |
+| OpenRouter other models, AI Gateway | none | the prefix | 60 minutes |
+| Workers AI | none: `x-session-affinity` pins the conversation to one replica, whose prefix cache holds the request | the conversation | 60 minutes |
+| any other provider | none | the prefix | 60 minutes |
 
 The strategy map and the lifetimes are `resolvePromptCacheStrategy` and `promptCacheLifetimeMs` in
 `packages/core/src/prompting/cache-breakpoints.ts`. The lifetimes are the providers' documented ones where a
 provider documents one, and 60 minutes where none does; none is measured here. A request with retention `none`
-gets no markers and no key.
+gets no markers. No request carries a `prompt_cache_key`: one would split the static prompt's cache by conversation.
 
-The cache key names whose prefix it is:
+The conversation and workspace a call is routed under (`actorAffinity`, `providers/workers-ai.ts`):
 
-- The workspace's own agent on the cloud: `kinu-<agent name>`, one key across its conversations (`agentAffinityKey`, `owned-model-services.ts`).
-- A hired agent on the cloud: `kinu-<its own name>`, through the same key function (`agent-facet/agent-turn.ts`).
-- A CLI session: `<conversation>:<session id>` (`cacheIdentity`, `local-session.ts`).
-- A swarm node or a head: `kinu-<search root id>`, so every node of one search shares a key (`head-inference.ts`).
+- The workspace's own agent on the cloud: `kinu-<agent name>`, one key across its conversations and its swarm nodes (`owned-model-services.ts`).
+- A hired agent on the cloud: `kinu-<its own name>` (`agent-facet/agent-turn.ts`).
+- A CLI session: `kinu-<workspace name>` (`local-session.ts`); a CLI hire, `kinu-<its own name>` (`runtime.ts`).
+- Every actor's workspace: `kinu-workspace-<workspace id>`, so the conversations of one workspace share ChatGPT's session.
 
 At each step the request is the previous request plus the new tool calls and results, and perhaps one delta
 block. The previous request's tail markers sit just before the new messages, so the whole previous request is

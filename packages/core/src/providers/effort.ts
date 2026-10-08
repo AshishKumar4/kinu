@@ -15,7 +15,7 @@ export type ProviderOptions = NonNullable<Parameters<typeof streamText>[0]['prov
 
 /** The key an OpenAI-compatible adapter reads a provider's options under: its name in camelCase. ai 7 reads the kebab
  *  spelling too, but warns on every request. */
-export function compatOptionsKey(name: string): string {
+function compatOptionsKey(name: string): string {
   return name.replace(/[_-]([a-z])/gu, (_match, letter: string) => letter.toUpperCase());
 }
 

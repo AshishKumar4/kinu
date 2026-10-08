@@ -6,7 +6,8 @@ import { Effect, Result } from 'effect';
 import { renderThrownChain, settle } from '../obs/index';
 import { callRetries } from './middleware/retry';
 import { streamTextReported } from './model-invocation';
-import { agentAffinityKey } from './workers-ai';
+import { actorAffinity } from './workers-ai';
+import type { ModelAffinity } from './types';
 import type { ModelCallSink } from '../events/model-call';
 
 export type ModelTestFailure = 'signed-out' | 'spent' | 'unknown-model' | 'unreachable' | 'refused';
@@ -28,7 +29,7 @@ export const ModelTestResultSchema: v.GenericSchema<ModelTestResult> = v.union([
 /** Unretried; output uncapped by rule. Each test is a conversation of its own. */
 export function testModel(input: {
   readonly spec: string;
-  readonly resolve: (spec: string, conversation: string) => LanguageModel;
+  readonly resolve: (spec: string, affinity: ModelAffinity) => LanguageModel;
   readonly report?: ModelCallSink;
   readonly signal?: AbortSignal;
   readonly now?: () => number;
@@ -37,7 +38,7 @@ export function testModel(input: {
     const now = input.now ?? performance.now.bind(performance);
 
     const resolved = yield* Effect.result(Effect.try({
-      try: () => input.resolve(input.spec, agentAffinityKey(`model-test-${crypto.randomUUID()}`)),
+      try: () => input.resolve(input.spec, actorAffinity({ name: `model-test-${crypto.randomUUID()}`, workspaceId: crypto.randomUUID() })),
       catch: (cause) => ({ cause }),
     }));
 

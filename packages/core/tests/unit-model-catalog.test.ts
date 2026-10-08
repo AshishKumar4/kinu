@@ -20,6 +20,7 @@ function deps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): Mod
   return {
     env: {},
     sessionAffinity: 'kinu-test',
+    workspaceAffinity: 'kinu-test',
     fetch: fetchFn,
     async getAuth(key) { return store.get(key) ?? null; },
     async hasCredential(key) { return store.has(key); },

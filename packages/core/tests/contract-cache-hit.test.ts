@@ -24,7 +24,7 @@ import { createMockFetch, testActorHandle, type MockFetchHandle, type RecordedRe
 import { makeExecRaw, makeSql } from './helpers';
 
 interface WireView {
-  /** The cache route (prompt-cache key or affinity header); a different route sees an empty cache. */
+  /** The cache route (session or affinity header, or a prompt-cache key); a different route sees an empty cache. */
   route?: string;
   /** The addressed prompt chain: marker dialects end at the last breakpoint; key-routed take the whole chain. */
   elements: string[];
@@ -170,8 +170,8 @@ const ResponsesBodySchema = v.looseObject({
   prompt_cache_key: v.optional(v.unknown()),
 });
 
-/** Responses API (openai + codex): instructions, tools, then input items. */
-function responsesView(body: JsonObject): WireView {
+/** Responses API (openai + codex): instructions, tools, then input items. ChatGPT's backend routes on the session header. */
+function responsesView(body: JsonObject, request: RecordedRequest): WireView {
   const parsed = v.parse(ResponsesBodySchema, body);
   const elements: string[] = [];
 
@@ -182,7 +182,7 @@ function responsesView(body: JsonObject): WireView {
   for (const item of parsed.input ?? []) elements.push(`item:${canon(item)}`);
 
   return {
-    route: v.is(v.string(), parsed.prompt_cache_key) ? parsed.prompt_cache_key : undefined,
+    route: request.headers['session_id'] ?? (v.is(v.string(), parsed.prompt_cache_key) ? parsed.prompt_cache_key : undefined),
     elements,
   };
 }
@@ -326,6 +326,7 @@ function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch):
   return {
     env: {},
     sessionAffinity: SESSION_KEY,
+    workspaceAffinity: SESSION_KEY,
     fetch: fetchFn,
     async getAuth(key) { return store.get(key) ?? null; },
     async hasCredential(key) { return store.has(key); },
@@ -435,7 +436,7 @@ function viewOf(entry: ProviderCase, request: RecordedRequest): WireView {
 
   if (entry.dialect === 'anthropic') return anthropicView(body);
 
-  if (entry.dialect === 'responses') return responsesView(body);
+  if (entry.dialect === 'responses') return responsesView(body, request);
 
   return compatView(body, request, entry.markers === true);
 }
@@ -521,7 +522,7 @@ async function driveTurn(
     stopWhen: isStepCount(5),
     extensions,
     dynamicContext: opts.dynamic ? { ledger: new DynamicContextLedger(), snapshot: opts.dynamic, instructions: opts.instructions } : undefined,
-    cache: { providerId: entry.providerId, modelId: entry.modelId, sessionKey: SESSION_KEY },
+    cache: { providerId: entry.providerId, modelId: entry.modelId },
     ...plane,
   })) {
     if (event.type === 'step-finish') {

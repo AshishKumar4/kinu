@@ -19,7 +19,7 @@ export {
 export { SleepTimeLane, initSleepTimeUpdatesTable, type SleepTimeLaneDeps } from './orchestrator/sleep-time-lane';
 
 export {
-  assembleActorTurn, withCompactionTrigger, promptCacheKey, vfsTurnSkills, materializeTurnSources, turnSourcesFromBundle, metadataTier,
+  assembleActorTurn, withCompactionTrigger, conversationKey, vfsTurnSkills, materializeTurnSources, turnSourcesFromBundle, metadataTier,
   type AssembledTurn, type RunTurnSources, type TurnSourcesBundle, type LocalTurnSources, type PinValues, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources,
 } from './orchestrator/turn-assembly';
 

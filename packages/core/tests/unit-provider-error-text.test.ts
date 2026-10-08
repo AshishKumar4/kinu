@@ -265,7 +265,7 @@ describe('a Cloudflare AI refusal reaches the user in Cloudflare\'s words', () =
   const REFUSED = { errors: [{ message: 'AiError: No such model: No such model workers-ai/@cf/zai-org/glm-5.3 or task', code: 5007 }], success: false, result: {}, messages: [] };
 
   const deps: ModelCallDeps = {
-    env: {}, sessionAffinity: 'kinu-test',
+    env: {}, sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test',
     fetch: asFetchFunction(async () => Response.json(REFUSED, { status: 400, statusText: 'Bad Request' })),
     getAuth: async () => ({ baseURL: 'https://api.cloudflare.com/client/v4/accounts/A/ai/v1', headers: { Authorization: 'Bearer t', 'cf-aig-gateway-id': 'default' } }),
     hasCredential: async () => true,
