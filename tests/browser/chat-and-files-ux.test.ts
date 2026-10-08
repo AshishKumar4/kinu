@@ -3447,11 +3447,33 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.evaluate(() => { document.documentElement.dataset.previewArrived = '1'; });
       await page.waitForSelector('[data-preview-ready]');
       await waitForInspectorWidth(page, 'open');
-      expect(await page.$eval('[aria-label="Work"]', (el) => el.getAttribute('aria-current'))).toBe('true');
+      expect(await page.$eval('[aria-label="Work"]', (el) => el.getAttribute('aria-selected'))).toBe('true');
 
       await page.click('[data-preview-ready]');
-      await page.waitForSelector('[aria-label="Arrived app"][aria-current="true"]');
+      await page.waitForSelector('[aria-label="Arrived app"][aria-selected="true"]');
       expect(await page.$('[data-preview-ready]')).toBeNull();
+
+      // The strip is one tab stop: arrows move focus, Home and End reach its ends, and only Enter opens a tab.
+      const strip = '[role="tablist"][aria-label="Workspace panels"]';
+      const tabLabels = await page.$$eval(`${strip} [role="tab"]`, (tabs) => tabs.map((tab) => tab.getAttribute('aria-label') ?? ''));
+      const focusedTab = () => page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? '');
+
+      expect(await page.$$eval(`${strip} [role="tab"]`, (tabs) => tabs.filter((tab) => tab.getAttribute('tabindex') === '0').length)).toBe(1);
+      await page.focus(`${strip} [role="tab"][aria-selected="true"]`);
+      await page.keyboard.press('Home');
+      expect(await focusedTab()).toBe(tabLabels[0]);
+      await page.keyboard.press('End');
+      expect(await focusedTab()).toBe(tabLabels.at(-1));
+      await page.keyboard.press('ArrowRight');
+      expect(await focusedTab()).toBe(tabLabels[0]);
+      expect(await page.$eval('[aria-label="Arrived app"]', (el) => el.getAttribute('aria-selected'))).toBe('true');
+      await page.keyboard.press('Enter');
+      await page.waitForSelector(`${strip} [role="tab"][aria-label="${tabLabels[0]}"][aria-selected="true"]`);
+      // The one panel is named by the tab that opened it.
+      expect(await page.$eval('#work-surface-panel', (panel) => [panel.getAttribute('role'), panel.getAttribute('aria-labelledby')]))
+        .toEqual(['tabpanel', await page.$eval(`${strip} [role="tab"][aria-label="${tabLabels[0]}"]`, (tab) => tab.id)]);
+      await page.click('[aria-label="Arrived app"]');
+      await page.waitForSelector('[aria-label="Arrived app"][aria-selected="true"]');
 
       // A keyboard resize is an explicit size: it survives a reload. One
       // ArrowRight step is five percentage points, which lands the 340px

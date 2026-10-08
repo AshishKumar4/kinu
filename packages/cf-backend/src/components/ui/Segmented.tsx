@@ -1,12 +1,11 @@
-/** Roving tabindex: the strip is one tab stop, arrows move inside it. */
-import { useRef, useState } from "react";
+import { useRef } from "react";
+import { useRovingTabs } from "./use-roving-tabs";
 
 export interface SegmentOption<T extends string> {
   readonly id: T;
   readonly label: string;
   readonly count?: number;
 }
-
 
 export function Segmented<T extends string>({ label, segments, value, onChange }: {
   label: string;
@@ -15,41 +14,10 @@ export function Segmented<T extends string>({ label, segments, value, onChange }
   onChange: (id: T) => void;
 }) {
   const strip = useRef<HTMLDivElement>(null);
-  // The tab a keystroke or click focused; null means "the selected one".
-  const [focusId, setFocusId] = useState<T | null>(null);
+  const roving = useRovingTabs(strip, segments.map((segment) => segment.id), value);
 
   return (
-    <div
-      ref={strip}
-      role="tablist"
-      aria-label={label}
-      className="flex min-w-0 items-center gap-0.5 rounded-lg p-recessed p-0.5"
-      onBlur={(event) => {
-        if (!(event.relatedTarget instanceof Node) || !strip.current?.contains(event.relatedTarget)) setFocusId(null);
-      }}
-      onKeyDown={(event) => {
-        if (segments.length === 0) return;
-
-        const index = segments.findIndex((segment) => segment.id === (focusId ?? value));
-        let nextIndex: number;
-
-        switch (event.key) {
-          case "ArrowLeft": nextIndex = (index - 1 + segments.length) % segments.length; break;
-          case "ArrowRight": nextIndex = (index + 1) % segments.length; break;
-          case "Home": nextIndex = 0; break;
-          case "End": nextIndex = segments.length - 1; break;
-          default: return;
-        }
-
-        event.preventDefault();
-
-        const next = segments[nextIndex];
-
-        if (next === undefined) return;
-        setFocusId(next.id);
-        strip.current?.querySelector<HTMLElement>(`[data-segment="${next.id}"]`)?.focus();
-      }}
-    >
+    <div ref={strip} {...roving.list} aria-label={label} className="flex min-w-0 items-center gap-0.5 rounded-lg p-recessed p-0.5">
       {segments.map((segment) => {
         const selected = segment.id === value;
 
@@ -57,12 +25,9 @@ export function Segmented<T extends string>({ label, segments, value, onChange }
           <button
             key={segment.id}
             type="button"
-            role="tab"
+            {...roving.tab(segment.id)}
             data-segment={segment.id}
-            aria-selected={selected}
-            tabIndex={(focusId ?? value) === segment.id ? 0 : -1}
             onClick={() => onChange(segment.id)}
-            onFocus={() => setFocusId(segment.id)}
             className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1.5 p-t-control${selected ? " p-surface p-text shadow-[0_1px_2px_var(--c-shadow-drop)]" : " p-text-3 hover:p-text"}`}
           >
             {segment.label}
