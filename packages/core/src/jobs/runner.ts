@@ -217,6 +217,13 @@ export function wakeText(job: BackgroundJob, reader: 'agent' | 'inline' = 'agent
     + `what you changed.`;
 }
 
+interface JobAttempt {
+  /** Its row as the attempt started. */
+  readonly job: BackgroundJob;
+  readonly epoch: number;
+  readonly controller: AbortController | null;
+}
+
 interface WatchedJob {
   at: number;
   probe: Promise<void> | null;
@@ -385,13 +392,17 @@ export class BackgroundJobRunner {
         await this.deps.fiber(`${BACKGROUND_FIBER_PREFIX}${kind}`, async (ctx) => {
           ctx.stash({ phase: 'running', jobId, kind });
           let status: string;
+          let attempt: JobAttempt | null = null;
           // Started here, in the context the work runs in: that context's answers are the ones asked for.
           const unwatch = this.watch(jobId);
 
           try {
-            await this.settleAndWake(jobId, exec);
-            // A fenced write is a no-op (§5.3), so the store decides whether the job settled.
-            status = this.deps.store.get(jobId)?.status ?? 'missing';
+            attempt = this.attemptOf(jobId);
+            await this.settleAndWake(jobId, attempt, exec);
+            // A fenced write is a no-op (§5.3), so the store decides whether the job settled, and whether by this attempt.
+            const row = this.deps.store.get(jobId);
+
+            status = row?.epoch === attempt.epoch ? row.status : 'superseded';
           } catch (err) {
             // Must not reject: both fiber implementations delete their recovery row in `finally`.
             diagnostics.failure(
@@ -399,7 +410,7 @@ export class BackgroundJobRunner {
               toKinuError({ doing: 'settle a background job and wake the agent', cause: err, otherwise: 'io' }),
               { jobId },
             );
-            status = this.failUnsettled(jobId, { cause: err }) ? 'failed' : 'running';
+            status = this.failUnsettled(jobId, attempt?.epoch ?? null, { cause: err }) ? 'failed' : 'running';
           } finally {
             unwatch();
           }
@@ -414,17 +425,20 @@ export class BackgroundJobRunner {
           { jobId, kind },
         );
 
+        let attempt: JobAttempt | null = null;
+
         try {
-          if (this.deps.store.get(jobId)?.status === 'running') {
-            await this.settleAndWake(jobId, async () => { throw cause; });
-          }
+          attempt = this.deps.store.get(jobId)?.status === 'running' ? this.attemptOf(jobId) : null;
+
+          if (attempt !== null) await this.settleAndWake(jobId, attempt, async () => { throw cause; });
         } catch (err) {
           diagnostics.failure(
             'jobs.settlement_failed',
             toKinuError({ doing: 'settle a background job and wake the agent', cause: err, otherwise: 'io' }),
             { jobId },
           );
-          this.failUnsettled(jobId, { cause: err });
+
+          this.failUnsettled(jobId, attempt?.epoch ?? null, { cause: err });
         }
       } finally {
         if (driver && this.fiberDrivers.get(jobId) === driver) this.fiberDrivers.delete(jobId);
@@ -459,7 +473,9 @@ export class BackgroundJobRunner {
 
     return () => {
       watched.disarm();
-      this.heard.delete(jobId);
+
+      // Only its own: a re-drive watches its own context under the same id.
+      if (this.heard.get(jobId) === watched) this.heard.delete(jobId);
     };
   }
 
@@ -484,12 +500,22 @@ export class BackgroundJobRunner {
     }
   }
 
-  /** Throws only when a store write or the durable retry breadcrumb fails. */
-  private async settleAndWake<T>(jobId: string, exec: () => Promise<T>): Promise<void> {
+  /**
+   * The attempt that holds the job as its work starts: the epoch its writes are fenced on, and the controller that
+   * stops it. A re-drive claims the job under a new epoch first, so an attempt given up as lost that still finishes
+   * is refused every write (§5.3) and settles nothing.
+   */
+  private attemptOf(jobId: string): JobAttempt {
     const job = this.deps.store.get(jobId);
 
     if (job === null) throw new Error('Cannot execute a background job with no durable authority record');
-    const epoch = job.epoch;
+
+    return { job, epoch: job.epoch, controller: this.controllers.get(jobId) ?? null };
+  }
+
+  /** Throws only when a store write or the durable retry breadcrumb fails. */
+  private async settleAndWake<T>(jobId: string, attempt: JobAttempt, exec: () => Promise<T>): Promise<void> {
+    const { job, epoch } = attempt;
 
     type Recorded =
       | { readonly kind: 'settled'; readonly result: T }
@@ -505,7 +531,8 @@ export class BackgroundJobRunner {
         : { kind: 'failed', error: renderThrownChain({ cause: err }) };
     }
 
-    this.controllers.delete(jobId);
+    // Only its own: a re-drive that took the job over holds the controller now.
+    if (attempt.controller !== null && this.controllers.get(jobId) === attempt.controller) this.controllers.delete(jobId);
 
     // Already cancelled: do not relabel the abort as a failure.
     if (this.deps.store.get(jobId)?.status === 'cancelled') return;
@@ -517,11 +544,19 @@ export class BackgroundJobRunner {
         return;
       }
 
+      const settled = outcome.kind === 'settled'
+        ? this.deps.store.settle(jobId, epoch, serializeJobResult({ value: outcome.result }), Date.now())
+        : this.deps.store.fail(jobId, epoch, outcome.error, Date.now());
+
+      // Refused: the job was taken over or already settled, and owes this attempt no word.
+      if (!settled) {
+        diagnostics.event('jobs.attempt_refused', { jobId, epoch });
+
+        return;
+      }
+
       // A re-driven attempt that finished owes no account of the one that was lost.
       this.interrupted.delete(jobId);
-
-      if (outcome.kind === 'settled') this.deps.store.settle(jobId, epoch, serializeJobResult({ value: outcome.result }), Date.now());
-      else this.deps.store.fail(jobId, epoch, outcome.error, Date.now());
       this.deps.logActivity?.('bg_job_settled',
         outcome.kind === 'settled' ? `${jobId} completed` : `${jobId} failed: ${outcome.error}`);
       this.notifySettled(jobId);
@@ -544,19 +579,20 @@ export class BackgroundJobRunner {
     const harvested = job ? await this.harvestOf(job) : { ok: true, value: null } as const;
     const now = Date.now();
     const interrupted = this.interrupted.get(jobId) ?? EVICTION_INTERRUPT_ERROR;
+    let settled: boolean;
 
     this.interrupted.delete(jobId);
 
     if (!harvested.ok) {
-      this.deps.store.fail(jobId, epoch, `${interrupted}: ${why}, and reading `
+      settled = this.deps.store.fail(jobId, epoch, `${interrupted}: ${why}, and reading `
         + `what it had produced failed: ${harvested.error}`, now);
       this.deps.logActivity?.('bg_job_bounded', `${jobId} failed unreadable: ${why}`);
     } else if (harvested.value === null) {
-      this.deps.store.fail(jobId, epoch, `${interrupted}: ${why}, and it had `
+      settled = this.deps.store.fail(jobId, epoch, `${interrupted}: ${why}, and it had `
         + 'produced no partial result to hand back', now);
       this.deps.logActivity?.('bg_job_bounded', `${jobId} failed empty: ${why}`);
     } else {
-      this.deps.store.settle(jobId, epoch, serializeJobResult({ value: {
+      settled = this.deps.store.settle(jobId, epoch, serializeJobResult({ value: {
         partial: true,
         why: `This result is PARTIAL: ${why}. It is what the work had completed, not a `
           + 'finished answer: say so if you use it.',
@@ -566,6 +602,8 @@ export class BackgroundJobRunner {
       this.deps.logActivity?.('bg_job_bounded', `${jobId} settled partial: ${why}`);
     }
 
+    // Refused: another attempt holds or settled the job, and owes this one's caller no word.
+    if (!settled) return;
     this.notifySettled(jobId);
     await this.wake(jobId);
   }
@@ -592,16 +630,20 @@ export class BackgroundJobRunner {
     }
   }
 
-  /** Last-resort terminal write; keeps an already-recorded outcome and attempts no wake. */
-  private failUnsettled(jobId: string, thrown: { cause: unknown }): boolean {
+  /**
+   * Last-resort terminal write; keeps an already-recorded outcome and attempts no wake.
+   * Under the attempt's own epoch: an attempt whose settlement failed cannot fail the re-drive that took it over.
+   * `null` when the attempt could not read its row: it holds no epoch, and fails the job as it stands.
+   */
+  private failUnsettled(jobId: string, epoch: number | null, thrown: { cause: unknown }): boolean {
     if (this.cancelling.has(jobId)) return false;
 
     try {
       const job = this.deps.store.get(jobId);
 
-      if (!job || job.status !== 'running') return true;
-      this.deps.store.fail(jobId, job.epoch, renderThrownChain(thrown), Date.now());
-      this.notifySettled(jobId);
+      if (!job || job.status !== 'running' || (epoch !== null && job.epoch !== epoch)) return true;
+
+      if (this.deps.store.fail(jobId, job.epoch, renderThrownChain(thrown), Date.now())) this.notifySettled(jobId);
 
       return true;
     } catch (failErr) {

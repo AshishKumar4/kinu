@@ -134,9 +134,10 @@ function Board({ cards, workspace, loaded, open }: { cards: readonly Card[]; wor
     return <p className="rounded-xl border border-dashed p-border px-4 py-6 text-center p-meta p-text-3">No tasks yet. When an agent plans its work with the tasks tool, each task lands here.</p>;
   }
 
+  // The lanes reflow with the page's width, never past it: four abreast, two by two, then one under another on a phone.
   return (
-    <div className="-mx-5 overflow-x-auto px-5 sm:mx-0 sm:px-0">
-      <div className="grid min-w-[760px] grid-cols-4 gap-3">
+    <div className="@container">
+      <div className="grid grid-cols-1 gap-3 @lg:grid-cols-2 @3xl:grid-cols-4">
         {LANES.map(({ lane, title }) => {
           const shown = cards.filter((card) => card.lane === lane);
 

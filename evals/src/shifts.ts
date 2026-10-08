@@ -30,8 +30,9 @@ export const MEASURE_NAMES: readonly Measure[] = Object.keys(MEASURES).filter(is
 /** A measure across one side's trials: its median and quartiles. */
 export type Spread = { readonly median: number; readonly q1: number; readonly q3: number };
 
-/** One measure on both sides, and the two-sided chance of a difference at least this large between equally good builds. */
-export type Shift = { readonly measure: Measure; readonly baseline: Spread; readonly candidate: Spread; readonly pValue: number };
+/** One measure on both sides, the two-sided chance of a difference at least this large between equally good builds, and
+ *  whether the candidate's trials averaged more. */
+export type Shift = { readonly measure: Measure; readonly baseline: Spread; readonly candidate: Spread; readonly pValue: number; readonly rose: boolean };
 
 /** The value at `fraction` of the way through sorted `values`, interpolated between neighbours. */
 function quantile(sorted: readonly number[], fraction: number): number {
@@ -97,10 +98,13 @@ export function mannWhitney(baseline: readonly number[], candidate: readonly num
 /** Every measure both sides recorded for every trial, compared; one a trial lacks is left out rather than read as zero. */
 export function shifts(baseline: readonly Assertion[], candidate: readonly Assertion[]): Shift[] {
   const known = (values: readonly (number | undefined)[]): values is number[] => values.every((value) => value !== undefined);
+  const mean = (values: readonly number[]) => values.reduce((sum, value) => sum + value, 0) / values.length;
 
   return MEASURE_NAMES.flatMap((measure) => {
     const before = baseline.map(MEASURES[measure]), after = candidate.map(MEASURES[measure]);
 
-    return known(before) && known(after) ? [{ measure, baseline: spread(before), candidate: spread(after), pValue: mannWhitney(before, after) }] : [];
+    return known(before) && known(after)
+      ? [{ measure, baseline: spread(before), candidate: spread(after), pValue: mannWhitney(before, after), rose: mean(after) > mean(before) }]
+      : [];
   });
 }

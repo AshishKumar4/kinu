@@ -147,16 +147,9 @@ describe('the request the preview accepts', () => {
       model,
       maxRetries: 0,
       instructions: 'You are Kinu.',
-      temperature: 0.2,
-      topP: 0.9,
-      maxOutputTokens: 512,
       tools: { read_file: tool({ description: 'Read a file.', inputSchema: jsonSchema({ type: 'object', properties: { path: { type: 'string' } } }) }) },
-      providerOptions: {
-        openai: {
-          metadata: { run: 'r1' }, previousResponseId: 'resp_0', promptCacheRetention: '24h', safetyIdentifier: 'owner',
-          user: 'owner', truncation: 'auto', maxToolCalls: 3, promptCacheKey: 'conversation-1', logprobs: 3, conversation: 'conv_1',
-        },
-      },
+      // As a turn's cache plan asks it: a key, and no retention the plan would refuse.
+      providerOptions: { openai: { promptCacheKey: 'conversation-1' } },
       messages: [
         { role: 'user', content: 'Read notes.md.' },
         { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'call_1', toolName: 'read_file', input: { path: 'notes.md' } }] },

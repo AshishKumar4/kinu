@@ -53,11 +53,14 @@ export const LATEST_RESET_KEY = 'resets/latest.json';
 /** The words a production reset is confirmed with. */
 export const PRODUCTION_CONFIRMATION = 'reset production';
 
+/** It names its own version on every answer, as the product does (`x-kinu-version`), so a deploy's smoke test can tell
+ *  the placeholder still answering at an edge from the build it deployed. */
 const PLACEHOLDER = `const notice = { ok: false, resetting: true, build: null, message: 'Kinu is being reset to a fresh deployment. Back in a few minutes.' };
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     const health = new URL(request.url).pathname === '/api/health';
-    return new Response(JSON.stringify(notice), { status: health ? 200 : 503, headers: { 'content-type': 'application/json', 'retry-after': '300' } });
+    const headers = { 'content-type': 'application/json', 'retry-after': '300', 'x-kinu-version': env.CF_VERSION_METADATA.id };
+    return new Response(JSON.stringify(notice), { status: health ? 200 : 503, headers });
   },
 };
 `;
@@ -189,6 +192,7 @@ function cloudflareTarget(environment: InfraEnvironment, config: DeployedConfig,
         compatibility_date: config.compatibility_date,
         workers_dev: false,
         routes: config.routes,
+        version_metadata: { binding: 'CF_VERSION_METADATA' },
         exports: Object.fromEntries(classes.map((name) => [name, { type: 'durable-object', state: 'deleted' }])),
       }));
 
