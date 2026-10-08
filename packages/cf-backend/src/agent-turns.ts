@@ -9,7 +9,7 @@ import {
   type HeadInput, type RunInference, type HeadReport, type SqlExecutor, type MissionBudgetPort, type Executor,
 } from '@kinu.run/core';
 import { prepareHostedTurn, type HostedActorSeams, type HostedTurnRequest, type PreparedHostedTurn } from './hosted-actors';
-import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentToolDescriptor, AgentTrace, AgentTurnEnd, PreparedAgentTurn, StoredRow } from '@kinu.run/core';
+import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentToolDescriptor, AgentTrace, AgentTurnEnd, JsonObject, PreparedAgentTurn, StoredRow } from '@kinu.run/core';
 
 export interface AgentTurnsDeps {
   readonly sql: SqlExecutor;
@@ -29,6 +29,8 @@ export interface ChatTurnRequest {
   readonly mode: WorkMode;
   readonly userText: string;
   readonly parentDriven: boolean;
+  /** The turn's author-stamped metadata, as the agent admitted it. */
+  readonly driving?: JsonObject | undefined;
   /** The tier the agent's chat runs the turn on, when the turn names one; its sources are read for that tier's models. */
   readonly explicitTier?: TierId;
 }
@@ -224,11 +226,11 @@ export class AgentTurns {
   }
 
   /** A workspace that restarted mid-turn reads a chat turn again. */
-  private async reread(actorId: string, call: Pick<AgentToolCall, 'turnId' | 'mode'>): Promise<void> {
+  private async reread(actorId: string, call: Pick<AgentToolCall, 'turnId' | 'mode' | 'parentDriven' | 'driving'>): Promise<void> {
     const known = this.open.get(call.turnId);
 
     if (known !== undefined && (known.prepared !== null || known.request.run !== undefined)) return;
-    await this.prepareChat(actorId, { turnId: call.turnId, mode: call.mode, userText: '', parentDriven: call.turnId.startsWith('programmatic:') });
+    await this.prepareChat(actorId, { turnId: call.turnId, mode: call.mode, userText: '', parentDriven: call.parentDriven, driving: call.driving });
   }
 
   private mode(turn: OpenTurn, prepared: PreparedHostedTurn): WorkMode {
@@ -246,7 +248,10 @@ export class AgentTurns {
 
     const turn: OpenTurn = {
       reference: this.deps.reference(actorId),
-      request: { sequenceId: announcementOf(turnId), body: request.userText, mode: request.mode, parentDriven: request.parentDriven },
+      request: {
+        sequenceId: announcementOf(turnId), body: request.userText, mode: request.mode, parentDriven: request.parentDriven,
+        ...(request.driving !== undefined && { driving: request.driving }),
+      },
       ...(request.explicitTier !== undefined && { explicitTier: request.explicitTier }),
       prepared: null,
       profile: null,

@@ -7,7 +7,7 @@
 import { abortAllDurableObjects, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { DELEGATION_MAX_DEPTH, ORCHESTRATOR_AGENT_SLUG, hostedActorSocketPath } from '@kinu.run/core';
-import { CHAIN_BOTTOM, CHILD_ANSWER, HIRE_MISSION, NEST_RELAY, type HireObservation, type LogRow } from './hire-shapes';
+import { CHAIN_BOTTOM, CHILD_ANSWER, HIRE_MISSION, HIRE_PLAN_ASK, NEST_RELAY, type HireObservation, type LogRow } from './hire-shapes';
 import * as v from 'valibot';
 import { HireRosterSchema, hireSocket } from '../helpers/hire-socket';
 
@@ -329,7 +329,7 @@ describe('hire', () => {
     }
   });
 
-  it('a hired agent\'s plan is reviewed in its own window, and the owner\'s feedback starts its next turn there', async () => {
+  it('a hired agent\'s Plan turn submits through its own tool, its plan is reviewed in its window and queued in Work, and the feedback turn revises it', async () => {
     const app = env.HIRE_APP;
 
     const created = await app.fetch('http://localhost/api/user/workspaces', {
@@ -356,33 +356,40 @@ describe('hire', () => {
       await root.completed();
       const [auditor] = (await root.rpc('listSubordinates', [], HireRosterSchema)).filter((row) => row.lifetime === 'durable');
       const name = auditor?.name ?? '';
-      const submitted = await probe(workspace).submitChildPlan(workspace, name, [{ start: 1, content: '# Audit plan\n\n1. Read the ledger.' }]);
-
-      expect(submitted.ok).toBe(true);
       const pane = await hireSocket(app, `${workspacePath}/${hostedActorSocketPath(name)}`, CHILD_ANSWER);
 
       try {
+        // The owner's Plan message in the agent's own pane: its model calls `submit_plan`, offered on that turn alone.
+        const planned = pane.nextAnswer();
+
+        pane.send(HIRE_PLAN_ASK, 'plan');
+        await planned;
         const shown = await pane.rpc('getActivePlanReview', [], PlanSchema);
 
-        expect(shown?.status).toBe('pending');
+        expect(shown).toMatchObject({ status: 'pending', revision: 1 });
         expect(shown?.content).toContain('Read the ledger');
-        // The plan is the agent's own: the root's window shows none, and the agent's snapshot shows this one.
+        // The plan is the agent's own: the root's window shows none, while Work and the review queue list it by its owner.
         expect(await root.rpc('getActivePlanReview', [], PlanSchema)).toBeNull();
-        expect((await pane.rpc('getActorSnapshot', [name], v.looseObject({ activePlan: PlanSchema }))).activePlan?.id).toBe(shown?.id);
+        expect((await root.rpc('getActorSnapshot', [name], v.looseObject({ activePlan: PlanSchema }))).activePlan?.id).toBe(shown?.id);
+        const work = await root.rpc('listWorkspaceWork', [], v.looseObject({ plans: v.array(v.looseObject({ owner: v.looseObject({ name: v.string() }), plan: v.looseObject({ id: v.string() }) })) }));
 
-        const feedbackAnswered = pane.nextAnswer();
+        expect(work.plans.map((row) => [row.owner.name, row.plan.id])).toContainEqual([name, shown?.id]);
+        const queue = await root.rpc('listPendingActions', [], v.array(v.looseObject({ kind: v.string() })));
+
+        expect(JSON.stringify(queue)).toContain(shown?.id ?? 'no plan');
+
+        const revised = pane.nextAnswer();
 
         const decided = await pane.rpc('decidePlanReview', [shown?.id ?? '', shown?.revision ?? 0, 'request_changes', 'Name the ledger files.'],
           v.looseObject({ ok: v.boolean(), queued: v.optional(v.boolean()) }));
 
         expect(decided).toMatchObject({ ok: true, queued: true });
-        expect((await pane.rpc('getActivePlanReview', [], PlanSchema))?.status).toBe('changes_requested');
+        // The feedback turn, in the agent's own chat and on the owner's lane, revises through the same tool: no clock.
+        await revised;
+        const next = await pane.rpc('getActivePlanReview', [], PlanSchema);
 
-        // The feedback is the agent's next turn, in its own chat, streamed to its window: no clock, so a turn that never comes hangs here.
-        await feedbackAnswered;
-        const lines = await probe(workspace).childLines(workspace, name);
-
-        expect(lines.find((line) => line.includes('Name the ledger files.'))).toContain('The owner requested changes to plan');
+        expect(next).toMatchObject({ status: 'pending', revision: 2 });
+        expect(next?.content).toContain('ledger.csv');
       } finally {
         pane.close();
       }

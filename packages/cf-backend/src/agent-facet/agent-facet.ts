@@ -18,7 +18,7 @@ import { runAgentTask, type AgentWorkspace } from './agent-turn';
 import { FacetChat } from './agent-chat';
 import type {
   AgentAnswerTexts, AgentRecovery, AgentSnapshot, AgentTurnEnd, AgentTurnTask, EnqueueTurnResult, ProgrammaticTurn, PromptFile, SendLanding, SendOptions, TurnRequestAt,
-  PlanDecisionOutcome, PlanEdit, PlanReview, PlanReviewDecision, PlanReviewResult, ReviewAnnotation,
+  JsonObject, PlanDecisionOutcome, PlanEdit, PlanReview, PlanReviewDecision, PlanReviewResult, ReviewAnnotation,
 } from '@kinu.run/core';
 
 export type { AgentWorkspace } from './agent-turn';
@@ -121,9 +121,12 @@ export interface AgentFacetCalls {
   recover(snapshot: AgentSnapshot): Promise<AgentRecovery>;
   archivePage(snapshot: AgentSnapshot, cursor: ArchiveSqlCursor | null, maxBytes: number): Promise<ArchiveAgentPage>;
   deliverAdvice(snapshot: AgentSnapshot, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean>;
-  /** Its plan reviews, in its own store: submitted by its turn, reviewed by the owner through its window. */
-  submitPlan(snapshot: AgentSnapshot, edits: readonly PlanEdit[]): Promise<PlanReviewResult>;
+  /** Its plan reviews, in its own store: submitted by its turn, under that turn's author-stamped metadata, and reviewed by
+   *  the owner through its window. */
+  submitPlan(snapshot: AgentSnapshot, edits: readonly PlanEdit[], driving: JsonObject | undefined): Promise<PlanReviewResult>;
   activePlanReview(snapshot: AgentSnapshot): Promise<PlanReview | null>;
+  /** Newest first, for Work and the review queue; a retained retired agent answers too. */
+  planReviews(snapshot: AgentSnapshot): Promise<readonly PlanReview[]>;
   savePlanReviewAnnotations(snapshot: AgentSnapshot, id: string, revision: number, annotations: ReviewAnnotation[]): Promise<PlanReviewResult>;
   dismissPlanReview(snapshot: AgentSnapshot, id: string, revision: number): Promise<PlanReviewResult>;
   /** The feedback or approval turn is queued in its own chat. */
@@ -243,12 +246,16 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return await settle(this.withChat(snapshot, (chat) => chat.modelSettingsChanged()));
   }
 
-  async submitPlan(snapshot: AgentSnapshot, edits: readonly PlanEdit[]): Promise<PlanReviewResult> {
-    return await settle(this.withChat(snapshot, (chat) => chat.planned((plans) => plans.submit(edits, chat.drivingMetadata()))));
+  async submitPlan(snapshot: AgentSnapshot, edits: readonly PlanEdit[], driving: JsonObject | undefined): Promise<PlanReviewResult> {
+    return await settle(this.withChat(snapshot, (chat) => chat.planned((plans) => plans.submit(edits, driving))));
   }
 
   async activePlanReview(snapshot: AgentSnapshot): Promise<PlanReview | null> {
-    return await settle(this.withChat(snapshot, (chat) => chat.plans.active()));
+    return this.open(snapshot).activePlan();
+  }
+
+  async planReviews(snapshot: AgentSnapshot): Promise<readonly PlanReview[]> {
+    return this.open(snapshot).planReviews();
   }
 
   async savePlanReviewAnnotations(snapshot: AgentSnapshot, id: string, revision: number, annotations: ReviewAnnotation[]): Promise<PlanReviewResult> {

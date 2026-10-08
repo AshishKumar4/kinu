@@ -5,7 +5,7 @@ import { currentDateForPrompt, publishSubordinateReport, type ConversationRecall
 import type { LanguageModel, ModelMessage, Tool, ToolSet } from 'ai';
 import { EventLog, HeadCapture, titleActorFromMessage, spawnSeatedHead, admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus, receiveSubordinateEvent, subordinateRelaysTurnEnd, subordinateForkContext, type SubordinateInheritedContext, inheritedAsModelMessage, collectDynamicContext, explorationActorKey, headStatusUnsettled, storedHeadReportStatus, subordinateDelegatesOf, registeredParent, subordinateDescendants, actorReferenceOf, TEMPORARY_LIFETIME, terminalTaskReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, type ActorHost, type ActorReference, type BoundActor, type DelegationBudget, type DynamicContext, type HeadId, type HeadInput, type RunInference, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedActor, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff, type SubordinateLifetime, type SubordinateReportOrigin, type SubordinateReportHandoff, type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime, type SubordinateSeed, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
 import { attempt, KinuError, settle, settleSync } from '@kinu.run/core/obs';
-import type { AgentRuntime, HeadSeat, OwedReport, RunTurnSources } from '@kinu.run/core';
+import type { AgentRuntime, HeadSeat, JsonObject, OwedReport, RunTurnSources } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { isCFRuntime, type CFRuntime } from './runtime';
 import { actorRetirementFor, type ActorRetirementRequest } from './actor-hosting';
@@ -18,6 +18,8 @@ export interface HostedTaskTurn {
   /** The turn's id: keys its claim and effects. */
   readonly turnId: string;
   readonly parentDriven: boolean;
+  /** The author-stamped metadata the agent admitted the turn under: what a plan it submits is judged by. */
+  readonly driving?: JsonObject;
   readonly actor: HostedActor;
   readonly runtime: CFRuntime;
   readonly reports: SubordinateReportLedger;
@@ -281,6 +283,7 @@ export interface HostedTurnRequest {
   readonly inheritedContext?: SubordinateInheritedContext;
   /** A hirer's turn carries `report`; an owner's chat with the actor does not. */
   readonly parentDriven: boolean;
+  readonly driving?: JsonObject;
   readonly run?: { readonly input: HeadInput; readonly inference: RunInference };
 }
 
@@ -339,7 +342,7 @@ function hostedTaskTurn(
     yield* Effect.promise(() => seams.priceAs(actor, model));
 
     const turn: HostedTaskTurn = {
-      turnId: task.sequenceId, parentDriven: task.parentDriven, actor, runtime, reports: { spoke: false, settled: false }, input,
+      turnId: task.sequenceId, parentDriven: task.parentDriven, ...(task.driving !== undefined && { driving: task.driving }), actor, runtime, reports: { spoke: false, settled: false }, input,
       capture: run?.inference.capture ?? new HeadCapture(),
       model: seams.resolveModel(model),
       profile: resolved,
