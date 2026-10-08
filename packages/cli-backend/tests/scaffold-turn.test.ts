@@ -62,7 +62,7 @@ async function provision(opts: { provisionScaffold?: boolean } = {}) {
   return { db, rt };
 }
 
-function openSession(db: ReturnType<typeof workspaceDatabase>, rt: AgentRuntime, defaultAnswer: string) {
+function openSession(db: ReturnType<typeof workspaceDatabase>, rt: ReturnType<typeof createCLIRuntime>, defaultAnswer: string) {
   const events: SessionEvent[] = [];
   const started = Promise.withResolvers<void>();
 
