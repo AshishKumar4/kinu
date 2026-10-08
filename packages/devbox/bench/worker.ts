@@ -3,15 +3,10 @@
  *
  * Not part of any product deploy. It exists so a driver can raise a real
  * container with a real object store and run the shipped durability strategy
- * against it. It runs two ways:
- *
- *   `wrangler dev` — a local container, a local store, and NO container outbound
- *   interception. The snapshot chain measures its extraction path there and says
- *   so. That is enough for a smoke test and it is not a measurement.
- *
- *   `wrangler deploy` — an ephemeral Worker on a real account. The only place a
- *   number means anything: `wrangler dev --remote` refuses Durable Objects, so
- *   there is no middle ground.
+ * against it. It runs one way: `wrangler deploy`, an ephemeral Worker on a real account.
+ * `wrangler dev` starts no container here (`dev.enable_containers` is off in wrangler.jsonc):
+ * a local one needs the Docker CLI, which Kinu no longer keeps (2026-10-08), and its numbers
+ * meant nothing anyway (below). `wrangler dev --remote` refuses Durable Objects.
  *
  * WHAT THE DRIVER ASSERTS BEFORE IT MEASURES. The driver composes the normal
  * short lifecycle requests — write, checkpoint, stop, wake, exec, state, and

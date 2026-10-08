@@ -53,6 +53,8 @@
 
   // The durable_object scheduling policy: the box chooses its image and instance size at each
   // start (D50). Devbox starts the image named `devbox`.
+  // No local container: `wrangler dev` would need the Docker CLI for one (worker.ts).
+  "dev": { "enable_containers": false },
   "containers": [
     {
       "class_name": "SnapshotChainBox",

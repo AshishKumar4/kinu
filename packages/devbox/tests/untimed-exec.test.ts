@@ -1,5 +1,7 @@
 // D37: an untimed command runs on `ctx.container.exec`, and ending it ends everything it started. Here the
-// runtime's exec is a real local process, so the output, the exit code and the process tree are real.
+// runtime's exec is a real local process, so the output, the exit code and the process tree are real. It stays
+// local: what it proves is the box's own end of an exec (how it reads, times and ends one), and a real container's
+// exec is held to its bytes and exit by gate:devbox-e2e's exec contract.
 import { TestDevbox } from './support/test-devbox';
 import { afterAll, describe, expect, setSystemTime, test } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

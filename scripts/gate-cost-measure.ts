@@ -57,13 +57,13 @@
  *     [--quiet-wait=<s>] [--shared-wait=<s>] [--deployment=<origin>]
  */
 
-import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync } from 'node:fs';
+import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, readdirSync, readlinkSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { tolerate } from '@kinu.run/core/obs';
 import { writeFully } from './deadline';
 import { writeResourceCost } from './gate-cost';
-import { procFile } from './process-owner';
+import { procFile, procUid } from './process-owner';
 import {
   COST_TABLE, KINU_WORK, QUIET_LOAD, type RowCost, costRssMb, costThreads, holdsCheckoutResource, machineName, readCosts, writeCosts,
 } from './gate-cost';
@@ -317,7 +317,7 @@ function contention(own: number): Contention | undefined {
 
     if (!KINU_WORK.test(command)) continue;
     // Another user's working directory is unreadable, and no checkout here is theirs.
-    const owner = tolerate(() => statSync(`/proc/${entry}`).uid, 'enoent');
+    const owner = procUid(entry);
     const cwd = owner === process.getuid?.() ? tolerate(() => readlinkSync(`/proc/${entry}/cwd`), 'enoent') : undefined;
 
     if (holdsCheckoutResource({ command, cwd }, root)) {
