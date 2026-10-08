@@ -5,14 +5,13 @@ import { Database } from 'bun:sqlite';
 import { asSchema, type ModelMessage } from 'ai';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { DELEGATION_MAX_DEPTH, ROOT_DELEGATION_BUDGET, delegationExhausted, SubordinateRosterStore, TEMPORARY_LIFETIME, EventLog, TASK_TURN_ENDINGS, agentsActionsFor, initEventsHubTables, terminalTaskReport, createAgentsCodemodeProvider, createTeamToolDeps, createTemporaryAgentPort, taskAnswerIsLater, deriveChildDelegationBudget, delegationDepthRefusal, receiveSubordinateEvent, type SubordinateEventResult, type SubordinateReportHandoff, TOOL_REACH, type AgentsToolDeps, type AgentsProfileContext, type SubordinateHandoff, type SubordinateRuntime, type TemporaryAgentPort, type WorkMode, type AgentsToolInput, type CodemodeResult, BUILTIN_PROFILE_CATALOG, profileCatalogDigest, DEFAULT_WORKERS_AI_MODEL_SPEC, recoverSubordinateLifecycles } from '../src/index';
-import { dispatchAgentsAction } from '../src/delegation/agents-tool';
+import { DELEGATION_MAX_DEPTH, ROOT_DELEGATION_BUDGET, delegationExhausted, SubordinateRosterStore, TEMPORARY_LIFETIME, EventLog, TASK_TURN_ENDINGS, agentsActionsFor, initEventsHubTables, terminalTaskReport, createAgentsCodemodeProvider, createTeamToolDeps, createTemporaryAgentPort, taskAnswerIsLater, deriveChildDelegationBudget, delegationDepthRefusal, receiveSubordinateEvent, type SubordinateEventResult, type SubordinateReportHandoff, TOOL_REACH, type AgentsToolDeps, type AgentsProfileContext, type SubordinateHandoff, type SubordinateRuntime, type TemporaryAgentPort, type WorkMode, type AgentsOp, type CodemodeResult, callOperation, BUILTIN_PROFILE_CATALOG, profileCatalogDigest, DEFAULT_WORKERS_AI_MODEL_SPEC, recoverSubordinateLifecycles } from '../src/index';
 import { createAgentsTool } from '../src/delegation/agents-operations';
 import { createMemoryVfs } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw, makeSqlExec } from './helpers';
 import type { ActorReference } from '../src/identity/actor-handle';
 import { createTestActors, present } from '@kinu.run/test-utils';
-import type { JsonObject } from '../src/utils/json';
+import type { JsonObject, JsonValue } from '../src/utils/json';
 
 const TEST_MODEL = DEFAULT_WORKERS_AI_MODEL_SPEC;
 
@@ -89,7 +88,8 @@ interface Scene {
     handoff?: SubordinateReportHandoff;
     quiet?: true;
   }): Promise<SubordinateEventResult>;
-  call(input: AgentsToolInput, signal?: AbortSignal): Promise<object>;
+  /** One served `agents` operation, as a program calls it. */
+  call(op: AgentsOp, fields: JsonObject, signal?: AbortSignal): Promise<JsonValue>;
   sandbox(): SandboxNamespace;
   files: VFS;
   /** A registered task hire named `name`, for a roster row written directly. */
@@ -120,6 +120,7 @@ function makeScene(options: {
   const briefs: string[] = [];
   const assignments: Array<Parameters<SubordinateRuntime['assign']>[1]> = [];
   let sequence = 0;
+  let callSequence = 0;
   const wakes: number[] = [];
   const eventSql = makeSqlExec(eventDb);
   initEventsHubTables(eventSql);
@@ -252,11 +253,8 @@ function makeScene(options: {
       sequenceId: `temp:${++sequence}`,
       mode: 'build',
     }, NOW),
-    call: (input, signal) => dispatchAgentsAction(
-      deps,
-      input,
-      signal ? { abortSignal: signal } : undefined,
-    ),
+    call: async (op, fields, signal) =>
+      (await callOperation([createAgentsCodemodeProvider(() => deps)], `agents.${op}`, fields, { callId: `call-${++callSequence}`, signal })).value,
     sandbox: () => {
       const provider = createAgentsCodemodeProvider(() => deps);
       const members: SandboxNamespace = {};
@@ -277,8 +275,8 @@ function nativeRefusal(deps: AgentsToolDeps, input: JsonObject): string | null {
 }
 
 /** A task hire, which returns at once with its child working. */
-async function startRun(scene: Scene, input: Omit<AgentsToolInput, 'action'>): Promise<v.InferOutput<typeof WorkingOutcome>> {
-  return v.parse(WorkingOutcome, await scene.call({ action: 'hire', lifetime: 'task', ...input }));
+async function startRun(scene: Scene, input: JsonObject): Promise<v.InferOutput<typeof WorkingOutcome>> {
+  return v.parse(WorkingOutcome, await scene.call('hire', { lifetime: 'task', ...input }));
 }
 
 const WorkingOutcome = v.object({
@@ -319,7 +317,7 @@ describe('a task-lifetime hire returns at once and its answer arrives as a messa
     const conversation: ModelMessage[] = Array.from({ length: 51 }, () => ({ role: 'user', content: 'Earlier turn.' }));
     conversation.push({ role: 'assistant', content: 'A'.repeat(1000) + 'B'.repeat(1000) });
     const scene = makeScene({ fail: 'spawn', originContext: conversation });
-    await expect(scene.call({ action: 'hire', role: 'auditor', mission: 'Continue the audit.', context: 'inherit' }))
+    await expect(scene.call('hire', { role: 'auditor', mission: 'Continue the audit.', context: 'inherit' }))
       .rejects.toMatchObject({ code: 'unavailable' });
     const inherited = scene.roster.requireExisting('auditor-a1b2c3').birth?.assignment?.inheritedContext;
     expect(inherited?.kind).toBe('fork');
@@ -344,7 +342,7 @@ describe('a task-lifetime hire returns at once and its answer arrives as a messa
     await scene.report({ content: 'The ledger balances.' });
     expect(scene.roster.list()).toEqual([]);
 
-    const hired = await scene.call({ action: 'hire', role: 'auditor', mission: 'Audit the ledger.' });
+    const hired = await scene.call('hire', { role: 'auditor', mission: 'Audit the ledger.' });
     expect(hired).toMatchObject({ name: expect.any(String) });
     expect(hired).not.toHaveProperty('answer');
     expect(scene.roster.list().map((entry) => entry.lifetime)).toEqual(['durable']);
@@ -432,7 +430,7 @@ describe('a task-lifetime hire returns at once and its answer arrives as a messa
     await startRun(scene, { role: 'auditor', mission: 'Audit the ledger.' });
     await scene.report({ status: 'progress', content: 'Reading the March export.', origin: 'report_tool' });
     expect(scene.published()).toBe(1);
-    expect(await scene.call({ action: 'list' })).toMatchObject({
+    expect(await scene.call('list', {})).toMatchObject({
       subordinates: [{ name: TEMP_NAME, lifetime: 'task', status: 'working' }],
     });
     await scene.report({ content: 'Totals reconcile.' });
@@ -473,18 +471,18 @@ describe('the roster shows a temporary agent while it runs and keeps its history
     expect(await startRun(scene, { role: 'auditor', mission: 'Audit the ledger.' })).toMatchObject({ status: 'working' });
     expect(scene.lastReport()).toMatchObject({ content: 'The answer reaches the parent before its assignment acknowledgement.' });
     expect(scene.wakes).toEqual([1]);
-    expect(await scene.call({ action: 'list' })).toMatchObject({ subordinates: [] });
+    expect(await scene.call('list', {})).toMatchObject({ subordinates: [] });
   });
 
   test('running under lifetime task, released into history, never a subordinate', async () => {
     const scene = makeScene();
-    expect(await scene.call({ action: 'list' })).toEqual({
+    expect(await scene.call('list', {})).toEqual({
       subordinates: [],
       note: 'No helper agents yet: create one with op:"hire".',
     });
 
     await startRun(scene, { role: 'auditor', mission: 'Audit the ledger.' });
-    const running = await scene.call({ action: 'list' });
+    const running = await scene.call('list', {});
     expect(running).toMatchObject({
       subordinates: [{
         name: TEMP_NAME,
@@ -501,7 +499,7 @@ describe('the roster shows a temporary agent while it runs and keeps its history
 
     await scene.report({ content: 'Totals reconcile.' });
 
-    const after = await scene.call({ action: 'list' });
+    const after = await scene.call('list', {});
     expect(after).toMatchObject({ subordinates: [] });
     expect(after).not.toHaveProperty('temporary_history');
     expect(scene.roster.listAll()).toMatchObject([{
@@ -515,17 +513,17 @@ describe('the roster shows a temporary agent while it runs and keeps its history
     await startRun(scene, { role: 'auditor', mission: 'Audit the ledger.' });
     await scene.report({ content: 'Totals reconcile.' });
 
-    expect(await scene.call({ action: 'list' })).toMatchObject({ subordinates: [] });
-    expect(await scene.call({ action: 'list', agent: TEMP_NAME })).toMatchObject({
+    expect(await scene.call('list', {})).toMatchObject({ subordinates: [] });
+    expect(await scene.call('list', { agent: TEMP_NAME })).toMatchObject({
       roster: { name: TEMP_NAME, lifetime: 'task', status: 'dismissed' },
     });
-    await expect(scene.call({ action: 'hire', agent: TEMP_NAME, message: 'one more thing' }))
+    await expect(scene.call('assign', { agent: TEMP_NAME, message: 'one more thing' }))
       .rejects.toMatchObject({ code: 'bad_input' });
   });
 
   test('a lost spawn acknowledgement retains its admitted birth for recovery', async () => {
     const scene = makeScene({ fail: 'spawn' });
-    const failed = v.parse(FailedOutcome, await scene.call({ action: 'hire', lifetime: 'task', role: 'auditor', mission: 'Audit the ledger.' }));
+    const failed = v.parse(FailedOutcome, await scene.call('hire', { lifetime: 'task', role: 'auditor', mission: 'Audit the ledger.' }));
     expect(failed.status).toBe('failed');
     expect(failed.reason).toBe('unavailable');
     expect(failed.answer).toContain('the facet substrate is unavailable');
@@ -547,9 +545,7 @@ describe('the roster shows a temporary agent while it runs and keeps its history
     expect(before).toHaveLength(1);
     scene.calls.length = 0;
 
-    const failed = v.parse(FailedOutcome, await scene.call({
-      action: 'hire', lifetime: 'task', role: 'auditor', mission: 'Audit the ledger.',
-    }));
+    const failed = v.parse(FailedOutcome, await scene.call('hire', { lifetime: 'task', role: 'auditor', mission: 'Audit the ledger.' }));
 
     expect(failed.status).toBe('failed');
     expect(failed.transcript).toBe('none');
@@ -561,7 +557,7 @@ describe('the roster shows a temporary agent while it runs and keeps its history
 
   test('a lost first-assignment acknowledgement retains the same issued actor', async () => {
     const scene = makeScene({ fail: 'assign' });
-    const failed = v.parse(FailedOutcome, await scene.call({ action: 'hire', lifetime: 'task', role: 'auditor', mission: 'Audit the ledger.' }));
+    const failed = v.parse(FailedOutcome, await scene.call('hire', { lifetime: 'task', role: 'auditor', mission: 'Audit the ledger.' }));
     expect(failed.reason).toBe('unavailable');
     expect(failed.answer).toContain('admission refused');
     const actor = scene.roster.requireExisting(TEMP_NAME).actorReference;
@@ -573,7 +569,7 @@ describe('the roster shows a temporary agent while it runs and keeps its history
 
   test('a failed recovery cleanup preserves both failure evidence and deletion intent', async () => {
     const scene = makeScene({ fail: 'assign', failRelease: true });
-    const failed = v.parse(FailedOutcome, await scene.call({ action: 'hire', lifetime: 'task', role: 'auditor', mission: 'Audit the ledger.' }));
+    const failed = v.parse(FailedOutcome, await scene.call('hire', { lifetime: 'task', role: 'auditor', mission: 'Audit the ledger.' }));
     expect(failed.answer).toContain('admission refused');
     const actor = scene.roster.requireExisting(TEMP_NAME).actorReference;
 
@@ -684,22 +680,12 @@ describe('the two hire targets are decided by `role`', () => {
   test('a task-lifetime hire refuses a name, because the row is archived before anyone could use it', async () => {
     const scene = makeScene();
 
-    const pending = scene.call({
-      action: 'hire', lifetime: 'task', agent: 'named-helper', role: 'auditor', mission: 'go',
-    });
+    const pending = scene.call('hire', { lifetime: 'task', name: 'named-helper', role: 'auditor', mission: 'go' });
 
     await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
     await expect(pending).rejects.toThrow('never addressable');
     expect(scene.calls).toEqual([]);
     expect(scene.roster.listAll()).toEqual([]);
-  });
-
-  test('naming neither target is refused by naming both options', async () => {
-    const scene = makeScene();
-    const pending = scene.call({ action: 'hire' });
-    await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
-    await expect(pending).rejects.toThrow('`role`');
-    await expect(pending).rejects.toThrow('`agent`');
   });
 
   test('a hire to an existing agent is unchanged: it reports back later, it does not resolve here', async () => {
@@ -709,7 +695,7 @@ describe('the two hire targets are decided by `role`', () => {
       mission: 'Investigate.', mode: 'build',
     });
     scene.calls.length = 0;
-    expect(await scene.call({ action: 'hire', agent: 'researcher', message: 'Find the cause.' }))
+    expect(await scene.call('assign', { agent: 'researcher', message: 'Find the cause.' }))
       .toMatchObject({ status: 'working', agent: 'researcher', event_id: 'evt-1' });
     expect(scene.roster.list().map((entry) => [entry.name, entry.lifetime]))
       .toEqual([['researcher', 'durable']]);
@@ -760,9 +746,10 @@ describe('the rung is structural, and so is its absence', () => {
     const declared = present(createAgentsCodemodeProvider(() => scene.deps).declarations?.hire, 'agents.hire is declared').full;
     expect(declared).toContain('hire(');
     expect(declared).not.toContain('lifetime');
-    const pending = scene.call({ action: 'hire', lifetime: 'task', role: 'auditor', mission: 'go' });
-    await expect(pending).rejects.toMatchObject({ code: 'denied' });
-    await expect(pending).rejects.toThrow('lifetime:"task"');
+    // The field is not on the surface it reaches, so the call is refused before any agent is created.
+    const pending = scene.call('hire', { lifetime: 'task', role: 'auditor', mission: 'go' });
+    await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
+    await expect(pending).rejects.toThrow('unknown field "lifetime"');
     expect(agentsActionsFor(scene.deps)).toContain('hire');
   });
 
@@ -775,18 +762,15 @@ describe('the rung is structural, and so is its absence', () => {
 
     if (!team) throw new Error('the depth fixture has no team');
     const expected = delegationDepthRefusal(team.delegation);
-    const taskRefusal = capped.call({ action: 'hire', lifetime: 'task', role: 'auditor', mission: 'Audit the ledger.' });
+    const taskRefusal = capped.call('hire', { lifetime: 'task', role: 'auditor', mission: 'Audit the ledger.' });
     await expect(taskRefusal).rejects.toMatchObject({ code: expected.reason, message: expected.error });
-    const hireRefusal = capped.call({ action: 'hire', role: 'auditor', mission: 'Audit the ledger.' });
+    const hireRefusal = capped.call('hire', { role: 'auditor', mission: 'Audit the ledger.' });
     await expect(hireRefusal).rejects.toMatchObject({ code: expected.reason, message: expected.error });
     expect(capped.calls).toEqual([]);
     expect(capped.roster.listAll()).toEqual([]);
 
     // Handing work to an existing agent adds no depth, so it stays available at the cap.
-    await expect(capped.call({ action: 'hire', agent: 'nobody', message: 'x' }))
-      .rejects.toMatchObject({ code: 'bad_input' });
-    // An empty role is a handoff, not a spawn, on both sides of the cap.
-    await expect(capped.call({ action: 'hire', agent: 'nobody', role: '', message: 'x' }))
+    await expect(capped.call('assign', { agent: 'nobody', message: 'x' }))
       .rejects.toMatchObject({ code: 'bad_input' });
   });
 

@@ -19,7 +19,7 @@ export const DISK_STREAM: StreamProfile = { partBytes: 16 * MIB, partsInFlight: 
 
 /** Publishes the archive as it grows (D57), past the mount (D15). Exits: 1 the store, 2 usage, 3 the
  *  store's account of the object, 4 the archiver or its input, 5 no archive. */
-const STREAM_SCRIPT = `// devbox-stream-v1
+const STREAM_SCRIPT = `// devbox-stream-v2
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, openSync, readSync, rmSync, statSync } from 'node:fs';
@@ -58,6 +58,9 @@ function tag(text, name) {
 /** A part is final once the archiver has written a little past it. */
 const MARGIN = 1024 * 1024;
 const md5 = (bytes) => createHash('md5').update(bytes).digest();
+const sha256 = (bytes) => createHash('sha256').update(bytes).digest();
+/** Each part's SHA-256, by part number: the layer's digest is the SHA-256 of them in order (layerDigest). */
+const hashes = [];
 /** The store's digest of what it holds: R2 answers each part, and each whole object, with an MD5 etag. */
 const etagOf = (response) => (response.headers.get('etag') ?? '').replaceAll('"', '').toLowerCase();
 
@@ -145,6 +148,7 @@ async function send(number, size) {
   if (number > 1 && !md5(read(number, size)).equals(digest)) throw new Error('part ' + number + ' changed after it was uploaded');
   pace();
   digests[number - 1] = digest;
+  hashes[number - 1] = sha256(bytes);
 
   // Punching a range waits for its pages to be written, so it runs beside the loop, never in it.
   if (number > 1 && exit === undefined) {
@@ -253,6 +257,7 @@ try {
     const bytes = read(1, size);
     const put = await answered('PUT', await fetch(url, { method: 'PUT', body: bytes }));
     etag = etagOf(put);
+    hashes[0] = sha256(bytes);
 
     if (etag !== md5(bytes).toString('hex')) throw new Error('the store holds ' + url + ' as ' + etag + ', not ' + md5(bytes).toString('hex'));
   } else {
@@ -299,7 +304,7 @@ const landed = Number(head.headers.get('content-length'));
 if (landed !== size) refuse(3, 'the store reports ' + landed + ' bytes for ' + url + ' where ' + size + ' were sent');
 
 if (etagOf(head) !== etag) refuse(3, 'the store reports ' + url + ' as ' + etagOf(head) + ' where the parts sent make ' + etag);
-process.stdout.write(size + ' ' + etag);
+process.stdout.write(size + ' ' + etag + ' ' + sha256(Buffer.concat(hashes)).toString('hex'));
 `;
 
 /** Base64, so no byte of it can become shell syntax. */

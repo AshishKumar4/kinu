@@ -40,7 +40,7 @@ function modelChain(ports: DiskChainPorts): DiskChain {
       const state = yield* attempt('io', () => ports.readState());
       const at = ports.now();
       yield* attempt('io', () => ports.mountStore());
-      yield* attempt('io', () => ports.writeState({ format: 'disk-chain/2', rev: (state?.rev ?? 0) + 1, base: { key: 'base', bytes: 1, committedAt: at }, deltas: [], committedAt: at }, state?.rev ?? null));
+      yield* attempt('io', () => ports.writeState({ format: 'disk-chain/2', rev: (state?.rev ?? 0) + 1, base: { key: 'base', bytes: 1, committedAt: at, digest: { sha256: '0'.repeat(64), partBytes: 1 } }, deltas: [], committedAt: at }, state?.rev ?? null));
       asked.push(`commit ${kind}`);
 
       return { kind: 'committed', reason: undefined, bytes: 1, movedBytes: 1 };

@@ -80,7 +80,6 @@
   "packages/core/src/craft/ema.ts#emaUpdate (unreached-export)",
   "packages/core/src/craft/in-episode.ts#craftFailureMarker (unreached-export)",
   "packages/core/src/curriculum/proposer.ts#CurriculumProposerOpts.learnabilityWindow (unsupplied-field)",
-  "packages/core/src/delegation/agents-tool.ts#AGENTS_ACTION_FIELDS (unreached-export)",
   "packages/core/src/events/hub/content-spill.ts#eventContentPath (unreached-export)",
   "packages/core/src/events/hub/dedupe.ts#dedupeKeyFor (unreached-export)",
   "packages/core/src/events/hub/log.ts#QueryFilter.trace_id (unsupplied-field)",

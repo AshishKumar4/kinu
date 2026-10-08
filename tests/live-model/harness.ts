@@ -8,7 +8,7 @@ import type { LanguageModel, ModelMessage, StepResult, ToolSet } from 'ai';
 import * as v from 'valibot';
 
 import type {
-  AgentRuntime, AgentsToolAction, AgentsSwarmDeps, AgentsToolDeps, BuiltinToolName,
+  AgentRuntime, AgentsOp, AgentsSwarmDeps, AgentsToolDeps, BuiltinToolName,
   LLMProviderConfig, ProfileCatalog, ProfileCatalogEnvelope, RuntimeFacts,
   ProviderCatalogSnapshot, ToolCallRecord, JsonObject, JsonValue, ToolOutcome,
 } from '../../packages/core/src/index';
@@ -58,7 +58,7 @@ const REPO_ROOT = resolve(import.meta.dir, '..', '..');
  *     `renderAgentStateSection` (prompt.ts:236) skip the whole delegation
  *     ladder. The model is then not shown the surface it is being scored on
  *     reaching for.
- *   - without the codemode namespaces production wires as `extraProviders`
+ *   - without the codemode namespaces production builds with `actorNamespaces`
  *     (`agents.*`, `web.*`, `memory.*`, `tasks.*`), `eval` code the
  *     prompt teaches throws `not a function` inside the eval only.
  *
@@ -106,7 +106,7 @@ export interface EvalAgentSurface {
   readonly builtinTools: readonly BuiltinToolName[];
   /** The `agents` actions this surface's deps actually wire, from the same
    *  `agentsActionsFor` the tool's own input enum is built from. */
-  readonly agentsActions: readonly AgentsToolAction[];
+  readonly agentsActions: readonly AgentsOp[];
   /**
    * One turn's first request as production frames it: the system prompt, and the history with the dynamic block
    * (backend, model, directory, date, live state) woven before the turn's input by the ledger the step pipeline

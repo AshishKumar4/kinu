@@ -130,7 +130,7 @@ function makeTeam(delivery: SubordinateDelivery) {
 
 describe('agents.msg.sent', () => {
   // THE RED PROOF. Delete the `countedMsgSend` wrapper from the peer arm of
-  // `dispatchAgentsAction` and the transport still delivers both messages —
+  // `dispatchAgentsCall` and the transport still delivers both messages —
   // every existing assertion about delivery stays green — while this one fails
   // on `0 !== 2`. That asymmetry is the whole point: a counter is the one kind
   // of code whose absence is invisible to every other test in the tree.
@@ -147,7 +147,7 @@ describe('agents.msg.sent', () => {
     expect(sent).toHaveLength(calls.length);
 
     expect(sent[0]?.fields).toMatchObject({
-      action: 'msg',
+      action: 'message',
       transport: 'peer',
       addressing: 'agent',
       target: 'scout',
@@ -192,15 +192,15 @@ describe('agents.msg.sent', () => {
     expect(linesFor(logger, 'agents.msg.sent').map((line) => [
       line.fields.action, line.fields.transport, line.fields.addressing, line.fields.outcome,
     ])).toEqual([
-      ['msg', 'peer', 'agent', 'queued'],
-      ['msg', 'peer', 'agent', 'rejected'],
-      ['msg', 'peer', 'event', 'delivered'],
+      ['message', 'peer', 'agent', 'queued'],
+      ['message', 'peer', 'agent', 'rejected'],
+      ['reply', 'peer', 'event', 'delivered'],
       // `replied` and not `delivered`: an ask's wait contains the other agent's
       // whole turn, and folding it in with an enqueue would put a think time
       // and a hand-off in one distribution.
-      ['hire', 'peer', 'agent', 'replied'],
-      ['msg', 'subordinate', 'agent', 'queued'],
-      ['hire', 'subordinate', 'agent', 'queued'],
+      ['assign', 'peer', 'agent', 'replied'],
+      ['message', 'subordinate', 'agent', 'queued'],
+      ['assign', 'subordinate', 'agent', 'queued'],
     ]);
   });
 
