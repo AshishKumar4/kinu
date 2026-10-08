@@ -20,6 +20,8 @@ function account(failing?: keyof ResetTarget) {
 
   const placeholders: string[] = [];
 
+  const checkpoints: string[] = [];
+
   const state = {
     serving,
     applications: [
@@ -31,6 +33,7 @@ function account(failing?: keyof ResetTarget) {
     records: new Map<string, Reset>(),
     placeholders,
     sessions: true,
+    checkpoints,
   };
 
   const step = (name: keyof ResetTarget): void => {
@@ -70,6 +73,10 @@ function account(failing?: keyof ResetTarget) {
     forgetSessions: () => {
       state.sessions = false;
     },
+    checkpoint: (taken) => {
+      step('checkpoint');
+      state.checkpoints.push(`${taken} with ${String(state.placeholders.length)} placeholder(s)`);
+    },
   };
 
   return { state, target };
@@ -106,6 +113,15 @@ describe('a reset stopped anywhere can be finished', () => {
     // A deploy whose upload failed after the reset runs it again: it is done, so nothing more is deleted or uploaded.
     expect(await wipe(input)).toEqual(done);
     expect(state.placeholders).toHaveLength(1);
+    // Taken before the placeholder deleted them; each resumed run checks what its restore is owed instead.
+    expect(state.checkpoints).toEqual(['capture with 0 placeholder(s)', 'owed with 1 placeholder(s)', 'owed with 1 placeholder(s)']);
+  });
+
+  test('a reset that cannot take eval-service\'s credentials deletes and records nothing', async () => {
+    const { state, target } = account('checkpoint');
+
+    await expect(wipe({ environment: 'staging', config, recordFile, restToken: 'a-rest-token', target })).rejects.toThrow('checkpoint failed');
+    expect([state.placeholders, state.records.size, state.applications.length, state.sessions]).toEqual([[], 0, 3, true]);
   });
 
   // The placeholder IS the first deletion: wrangler can report a failure for an upload the platform applied, so the
