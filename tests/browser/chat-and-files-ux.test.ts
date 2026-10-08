@@ -1326,6 +1326,42 @@ describe('a chat\'s events', () => {
       await page.close();
     });
   });
+
+  test('a machine gone offline and a model taking over are rows too, the same hand-off twice drawn once', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1440, height: 2400 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&devices=none`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('.p-thread-column');
+      const handOff = 'anthropic/claude-sonnet-4 took over from anthropic/claude-opus-4: provider stream reset';
+
+      await pushFrames(page, [
+        { type: 'model_fallback', message: handOff },
+        { type: 'model_fallback', message: handOff },
+        { type: 'model_fallback', message: 'workers-ai/llama-4 took over from anthropic/claude-sonnet-4: rate limited' },
+      ]);
+      await page.waitForSelector('[data-device-offline]');
+      await page.waitForFunction(() => document.querySelectorAll('[data-model-fallback]').length === 2);
+
+      const drawn = await page.evaluate(() => ({
+        handOffs: [...document.querySelectorAll('[data-model-fallback]')]
+          .map((row) => [row.querySelector('[data-event-brief]')?.textContent?.slice(0, 18), row.querySelector('[data-event-repeats]')?.textContent ?? '1']),
+        offline: document.querySelector('[data-device-offline] [data-event-brief]')?.textContent,
+        connect: document.querySelector('[data-device-offline] a')?.getAttribute('href'),
+      }));
+
+      expect(drawn).toEqual({
+        handOffs: [['anthropic/claude-s', '×2'], ['workers-ai/llama-4', '1']],
+        offline: 'No machine connected',
+        connect: '/devices',
+      });
+
+      // One line until opened, as every event row is.
+      await page.click('[data-model-fallback] button');
+      await page.waitForFunction(() => document.querySelector('[data-model-fallback] [data-event-brief]')?.classList.contains('whitespace-pre-wrap') === true);
+      await page.close();
+    });
+  });
 });
 
 describe('whose words a turn is', () => {

@@ -1347,7 +1347,7 @@ window.WebSocket = new Proxy(RealWebSocket, {
 
 /** A frame the gate makes the server send: cards and steers carry an actor stamp, which no fixture read can produce; `reads_changed` names reads to redo; `turn_claim` is the root's claim as it changes; `head_stream` and `head_activity` are a swarm head's live paint and landed step. */
 const GalleryPushFrameSchema = v.object({
-  type: v.picklist(["signal_card", "steer_status", READS_CHANGED_EVENT, TURN_CLAIM_FRAME, "head_stream", "head_activity", "subordinate_event"]),
+  type: v.picklist(["signal_card", "steer_status", READS_CHANGED_EVENT, TURN_CLAIM_FRAME, "head_stream", "head_activity", "subordinate_event", "model_fallback"]),
   reads: v.optional(v.array(v.string())),
   claim: v.optional(JsonObjectSchema),
   headId: v.optional(v.string()),
@@ -1366,6 +1366,8 @@ const GalleryPushFrameSchema = v.object({
   content: v.optional(v.string()),
   task: v.optional(v.string()),
   timestamp: v.optional(v.number()),
+  // Another model taking over a turn (`model_fallback`).
+  message: v.optional(v.string()),
 });
 
 window.addEventListener("gallery:push-frame", (event: Event) => {
