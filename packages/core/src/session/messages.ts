@@ -4,7 +4,7 @@ import type { ActorHandle } from '../identity/actor-handle';
 import type { SqlExecutor } from '../types/primitives';
 import { KinuError } from '../obs/error';
 import { sha256Hex } from '../safety/argument-digest';
-import { encodeModelMessage, decodeModelMessageValues, decodeOwnModelMessage } from './message-codec';
+import { encodeModelMessage, decodeModelMessageValues, decodeOwnModelMessage, recordCarries } from './message-codec';
 import { JsonObjectSchema, isParsedJsonObject, jsonObjectElements, type JsonObject, type JsonValue } from '../utils/json';
 import { freezeTree } from '../utils/freeze';
 import type { SessionPayloads, SessionPayloadReader, SessionPayload } from './payload';
@@ -299,7 +299,7 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     this.actor.assertCurrent();
     const recorded = decodeOwnModelMessage(native);
 
-    if (!carries(recorded, message)) throw new KinuError('io', 'native output differs from its recorded content');
+    if (!recordCarries(recorded, message)) throw new KinuError('io', 'native output differs from its recorded content');
     this.cache(reference, recorded, 'output');
     this.sources.set(message, reference);
     this.sources.set(recorded, reference);
@@ -491,32 +491,6 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
 
     return decoded;
   }
-}
-
-/** Compares codec encodings: same role and envelope, every message part in order within the record. */
-function carries(recorded: ModelMessage, message: ModelMessage): boolean {
-  const { content: recordedContent, ...recordedEnvelope } = encodeModelMessage(recorded);
-  const { content: wantedContent, ...wantedEnvelope } = encodeModelMessage(message);
-
-  if (JSON.stringify(recordedEnvelope) !== JSON.stringify(wantedEnvelope)) return false;
-
-  if (!Array.isArray(recordedContent) || !Array.isArray(wantedContent)) {
-    return JSON.stringify(recordedContent) === JSON.stringify(wantedContent);
-  }
-
-  const recordedParts = recordedContent.map((part) => JSON.stringify(part));
-  let at = 0;
-
-  for (const part of wantedContent) {
-    const encoded = JSON.stringify(part);
-
-    while (at < recordedParts.length && recordedParts[at] !== encoded) at += 1;
-
-    if (at === recordedParts.length) return false;
-    at += 1;
-  }
-
-  return true;
 }
 
 function replyOf(value: JsonObject, calls: ToolCallIndex): StoredPart['replyTo'] {

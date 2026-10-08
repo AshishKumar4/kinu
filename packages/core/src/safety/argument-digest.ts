@@ -6,16 +6,23 @@
 import { createHash } from 'node:crypto';
 import { isJsonObject, type JsonValue } from '../utils/json';
 
-/** Deterministic JSON serializer (object keys sorted). */
+/** Deterministic JSON serializer (object keys sorted). An object appends one string: a part list joined at every
+ *  depth copied each tool call's arguments once per level. */
 export function stableStringify(value: JsonValue): string {
   if (value === null) return 'null';
 
+  // `join` keeps what stored digests were taken over: a hole or an undefined item is empty.
   if (Array.isArray(value)) return '[' + value.map(stableStringify).join(',') + ']';
 
   if (!isJsonObject(value)) return JSON.stringify(value);
   const keys = Object.keys(value).sort();
+  let out = '{';
 
-  return '{' + keys.map((key) => JSON.stringify(key) + ':' + stableStringify(value[key])).join(',') + '}';
+  for (let index = 0; index < keys.length; index++) {
+    out += (index === 0 ? '' : ',') + JSON.stringify(keys[index]) + ':' + stableStringify(value[keys[index]]);
+  }
+
+  return out + '}';
 }
 
 /** Hex SHA-256; `hexChars` truncates (omit for the full collision-resistant digest). */

@@ -21,7 +21,7 @@ import type { EventLog } from '../events/hub/log';
 import type { ExecutionRecoveryRecord } from '../events/types';
 import type { PrepareStepContext, KinuExtension } from '../extension';
 import type { BackendHost } from '../types/backend-host';
-import type { AgentSignal } from '../types/signals';
+import type { AgentSignal, SignalUndeliveredReason } from '../types/signals';
 import type { EvolutionEngine } from '../evolution/engine';
 import type { ClaimedWindow, DeferredReviewDrain } from '../evolution/session-window';
 import type { RecoveryFinding } from '../evolution/recovery';
@@ -426,11 +426,14 @@ export class AgentOrchestrator {
   /**
    * Compensation: put a refused signal's events back, then re-arm, or pending rows are unreachable.
    * Uses the durable wake, not `scheduleDrain`: the debounce would spin against the same pre-emption.
+   * Events whose turn ran and failed go back parked: a wake would only fail them again, so they ride the next drain
+   * something else starts (a settled turn, a new event).
    */
-  private returnEventsToPending(ids: readonly string[]): void {
+  private returnEventsToPending(ids: readonly string[], reason: SignalUndeliveredReason): void {
     for (const id of ids) {
       settleLoggedSync('event.unbind_failed', { doing: 'return a bound event to pending', otherwise: 'io' }, () => {
-        this.deps.eventLog.unbind(id);
+        if (reason === 'turn_failed') this.deps.eventLog.park(id);
+        else this.deps.eventLog.unbind(id);
       }, { eventId: id });
     }
 
@@ -497,7 +500,7 @@ export class AgentOrchestrator {
         // The rows are already bound to `turnId`, so it routes the queued half through the host's durable
         // admission ledger; a re-delivery of the same drain collapses to one turn.
         idempotencyKey: turnId,
-        compensate: () => this.returnEventsToPending(ids),
+        compensate: (reason) => this.returnEventsToPending(ids, reason),
         metadata,
       };
 

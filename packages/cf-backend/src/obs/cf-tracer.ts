@@ -28,7 +28,7 @@ export function createWorkersTracer(): Tracer {
             return native.isTraced;
           },
           setAttribute(key: string, value: SpanAttributeValue): void {
-            native.setAttributes({ [key]: value });
+            native.setAttribute(key, value);
           },
           fail: failed,
         };

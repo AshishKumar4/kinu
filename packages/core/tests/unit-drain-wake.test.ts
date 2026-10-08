@@ -23,10 +23,10 @@ function newEventLog(): EventLog {
   return new EventLog(sql, createTestActorsOver(db).main);
 }
 
-function webhook(deliveryId: string): IngressDescriptor {
+function webhook(deliveryId: string, x = 1): IngressDescriptor {
   return {
     ingress: 'webhook_hmac', variant: 'webhook',
-    payload: { webhook_id: 'w1', http_method: 'POST', http_headers: {}, body: { x: 1 }, delivery_id: deliveryId },
+    payload: { webhook_id: 'w1', http_method: 'POST', http_headers: {}, body: { x }, delivery_id: deliveryId },
     auth_outcome: 'verified', webhook_id: 'w1',
   };
 }
@@ -39,7 +39,7 @@ function selfEmitted(): IngressDescriptor {
 }
 
 /** `setTimer` never fires: firing would hide whether anything durable was armed. */
-function watchedHost(opts: { refuse?: boolean } = {}) {
+function watchedHost(opts: { refuse?: boolean; fail?: boolean } = {}) {
   const enqueued: ProgrammaticTurn[] = [];
   const debounces: number[] = [];
   let durableArms = 0;
@@ -48,6 +48,8 @@ function watchedHost(opts: { refuse?: boolean } = {}) {
     broadcast: () => {},
     enqueueTurn: async (input) => {
       enqueued.push(input);
+
+      if (opts.fail === true) return { status: 'failed', reason: 'the provider refused the request (HTTP 429)' };
 
       return { status: opts.refuse === true ? 'skipped' : 'queued' };
     },
@@ -179,6 +181,27 @@ describe('every drain path re-establishes the wake', () => {
     expect(log.pending()).toHaveLength(1);
     expect(log.nextPendingDrainAt(now)).not.toBeNull();
     expect(durableArms()).toBeGreaterThan(armsBefore);
+  });
+
+  test('a signal turn that ran and failed parks its events: they wake nothing, and the next drain carries them', async () => {
+    const log = newEventLog();
+    const now = Date.now();
+    log.publish({ descriptor: webhook('d1'), now });
+
+    await new AgentOrchestrator({ host: watchedHost({ fail: true }).host, engine: inertEngine(), eventLog: log }).drainPendingEvents();
+
+    expect(log.pending()).toHaveLength(1);
+    expect(log.nextPendingDrainAt(now)).toBeNull();
+
+    log.publish({ descriptor: webhook('d2', 2), now });
+    expect(log.nextPendingDrainAt(now)).toBe(now);
+    const accepting = watchedHost();
+
+    await new AgentOrchestrator({ host: accepting.host, engine: inertEngine(), eventLog: log }).drainPendingEvents();
+
+    expect(accepting.enqueued).toHaveLength(1);
+    expect(log.pending()).toEqual([]);
+    expect(log.nextPendingDrainAt(now)).toBeNull();
   });
 
   test('an accepted signal turn leaves its events bound and owes no second wake', async () => {

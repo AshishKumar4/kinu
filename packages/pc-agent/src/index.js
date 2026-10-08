@@ -1021,6 +1021,14 @@ async function psOutput(args) {
   return stdout;
 }
 
+/**
+ * Whether a read of `/proc/<pid>/...` failed because that process is gone: no entry (ENOENT), or one reaped between
+ * the open and the read, which answers the read ESRCH.
+ */
+function procEntryGone(err) {
+  return Boolean(err) && (err.code === 'ENOENT' || err.code === 'ESRCH');
+}
+
 async function processStartIdentity(pid) {
   if (process.platform === 'linux') {
     const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
@@ -1076,7 +1084,7 @@ async function startedAs(pid, start) {
     return (await processStartIdentity(pid)) === start;
   } catch (err) {
     // Linux: no /proc entry. Darwin: `ps -p` found no such process and exited 1.
-    if (err && (err.code === 'ENOENT' || (process.platform === 'darwin' && err.code === 1))) {
+    if (procEntryGone(err) || (process.platform === 'darwin' && err && err.code === 1)) {
       return false;
     }
 
@@ -1099,7 +1107,7 @@ async function processGroupHasLiveProcess(group) {
 
         if (Number(fields[2]) === group && fields[0] !== 'Z') return true;
       } catch (err) {
-        if (err && err.code === 'ENOENT') continue;
+        if (procEntryGone(err)) continue;
         throw err;
       }
     }
@@ -3428,7 +3436,7 @@ async function processRunsThisDaemon(pid) {
 
     return false;
   } catch (err) {
-    if (err && (err.code === 'ENOENT' || err.code === 'EACCES' || err.code === 'EPERM')) return false;
+    if (procEntryGone(err) || (err && (err.code === 'EACCES' || err.code === 'EPERM'))) return false;
 
     // `ps -p` found no such process.
     if (process.platform === 'darwin' && err && err.code === 1) return false;
