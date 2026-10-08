@@ -54,6 +54,8 @@ function parseContext() {
 
 let context = parseContext();
 const listeners = new Set();
+// Set once \`fit\` has started measuring; until then the page has not asked to be sized.
+let fitted = false;
 
 // The host names its own origin inside the context it composes; the referrer
 // is the fallback for older hosts. When neither says who the parent is,
@@ -71,16 +73,26 @@ window.addEventListener("message", (event) => {
   context = message.context;
   applyContext();
   for (const listener of listeners) listener();
+  // Answered with the height, so a host waiting to show the frame at its size hears it once the frame has loaded.
+  if (fitted) resize(documentHeight());
 });
+
 
 function applyContext() {
   const root = document.documentElement;
   // The frame is transparent over the chat; a scheme other than the host's paints an opaque canvas.
   if (context && context.theme !== undefined) { root.dataset.mode = context.theme; root.style.colorScheme = context.theme; }
+  if (context && typeof context.display === "string") root.dataset.display = context.display;
   const variables = context && context.styles ? context.styles.variables : undefined;
   if (variables && typeof variables === "object") {
     for (const [name, value] of Object.entries(variables)) root.style.setProperty(name, String(value));
   }
+}
+
+/** The document's own height, never the frame's: a document fills at least its frame, so its scroll height could only
+ *  ever grow. */
+function documentHeight() {
+  return Math.ceil(document.documentElement.getBoundingClientRect().height);
 }
 
 // One session for the tab's life: per-call sockets would kill callback stubs
@@ -137,15 +149,18 @@ export function resize(height) {
 
 let resizeQueued = false;
 
-/** The host's theme now and as it changes, and the page's height as it grows: what every slate page needs of its host. */
+/** The host's theme now and as it changes, and the page's height as it grows and shrinks: what every slate page needs of
+ *  its host. */
 export function fit() {
   applyContext();
+  if (fitted) return;
+  fitted = true;
   new ResizeObserver(() => {
     if (resizeQueued) return;
     resizeQueued = true;
     requestAnimationFrame(() => {
       resizeQueued = false;
-      resize(document.documentElement.scrollHeight);
+      resize(documentHeight());
     });
   }).observe(document.documentElement);
 }

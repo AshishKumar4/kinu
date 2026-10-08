@@ -6,7 +6,9 @@ import type { NamespaceFs } from '@nimbus-sh/core/runtime/process-files.js';
 import { CRED_KERNEL, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { ComposedFacetManager, LongRunningWorkerSpawnOptions } from '@nimbus-sh/worker/workspace-host';
 import type { WorkspaceSession } from '@kinu.run/core/workspace';
-import { SLATE_DRIVEN_MEMBERS, SLATE_METHOD_NAME_SOURCE, type SlateProcess, type SlateProject } from '@kinu.run/core';
+import {
+  SLATE_DRIVEN_MEMBERS, SLATE_IMPORT_MAP, SLATE_METHOD_NAME_SOURCE, SLATE_PAGE_HEAD, SLATE_PAGE_PREAMBLE, slateTitle, type SlateProcess, type SlateProject,
+} from '@kinu.run/core';
 import { attempt, diagnostics, KinuError, settle } from '@kinu.run/core/obs';
 import { slateCredentialKey } from './bindings';
 import { SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE } from '@kinu.run/core/slates';
@@ -341,29 +343,12 @@ export function slateRunnerSource(
   ].join('\n');
 }
 
-/** Where a page's bare specifiers resolve: every module the runner serves under `/__kinu/`. */
-const IMPORT_MAP = `<script type="importmap">${JSON.stringify({ imports: {
-  'react': '/__kinu/react.js',
-  'react-dom/client': '/__kinu/react.js',
-  'react/jsx-runtime': '/__kinu/react.js',
-  'capnweb': '/__kinu/capnweb.js',
-  'kinu:slate': '/__kinu/slate.js',
-} })}</script>`;
-
 /** A slate with no class still runs as a module whose import nothing reads. */
 const NO_APPLICATION = 'export {};\n';
 
 function isPageEntry(browser: string): boolean {
   return browser.endsWith('.html');
 }
-
-/**
- * Zero-specificity defaults so a page reads as part of the answer it sits in, until its own styles say otherwise. A page
- * no host embeds (a share's own host) is given no `--c-text`, so its text is the canvas's own for the scheme `fit` sets.
- */
-const PAGE_BASE = ':where(html){background:transparent;color:var(--c-text,CanvasText);font:16px/1.625 var(--font-ui,system-ui,sans-serif)}:where(body){margin:0}';
-
-const PAGE_PREAMBLE = `${IMPORT_MAP}<style>${PAGE_BASE}</style><script type="module">import { fit } from "kinu:slate"; fit();</script>`;
 
 /** The page as written, opened with the import map and kinu:slate's `fit`, so it takes the host's theme and height. A
  *  fragment with no `<html>` is opened in front. */
@@ -373,11 +358,11 @@ async function slatePage(html: string): Promise<string> {
   const page = await new HTMLRewriter().on('html', {
     element(element) {
       opened = true;
-      element.prepend(PAGE_PREAMBLE, { html: true });
+      element.prepend(SLATE_PAGE_PREAMBLE, { html: true });
     },
   }).transform(new Response(html)).text();
 
-  return opened ? page : PAGE_PREAMBLE + page;
+  return opened ? page : SLATE_PAGE_PREAMBLE + page;
 }
 
 function escapeHtml(text: string): string {
@@ -397,7 +382,8 @@ function slateShell(input: { readonly title: string; readonly assets: readonly {
     '  <meta charset="utf-8">',
     '  <meta name="viewport" content="width=device-width, initial-scale=1">',
     `  <title>${escapeHtml(input.title)}</title>`,
-    `  ${IMPORT_MAP}`,
+    `  ${SLATE_IMPORT_MAP}`,
+    `  ${SLATE_PAGE_HEAD}`,
     styles,
     '</head>',
     '<body>',
@@ -504,7 +490,7 @@ interface BrowserSurface {
 }
 
 /** What the page is served: an HTML entry as written, needing no build; a component compiled into the shell; or none. */
-function browserSurface(build: SlateBuild, project: SlateProject, read: (entry: string) => string): Effect.Effect<BrowserSurface, KinuError> {
+function browserSurface(build: SlateBuild, id: string, project: SlateProject, read: (entry: string) => string): Effect.Effect<BrowserSurface, KinuError> {
   return Effect.gen(function* () {
     const { browser } = project;
 
@@ -523,7 +509,7 @@ function browserSurface(build: SlateBuild, project: SlateProject, read: (entry: 
 
     if (client.errors.length !== 0) return yield* new KinuError('bad_input', client.errors.map((error) => error.text).join('\n'));
 
-    return { assets: client.outputFiles, shell: slateShell({ title: project.slate.title ?? project.name ?? 'slate', assets: client.outputFiles }) };
+    return { assets: client.outputFiles, shell: slateShell({ title: slateTitle(project, id), assets: client.outputFiles }) };
   });
 }
 
@@ -576,7 +562,7 @@ export class ResidentSlateProcesses {
 
       const build: SlateBuild = { bundler, root: input.root, entries: entriesDir, provision };
       const application = yield* serverModule(build, input.project);
-      const { assets, shell } = yield* browserSurface(build, input.project, (entry) => input.read(entry) ?? '');
+      const { assets, shell } = yield* browserSurface(build, input.owner, input.project, (entry) => input.read(entry) ?? '');
 
       const modules = {
         [MAIN_MODULE]: slateRunnerSource(assets, shell, main === undefined ? 'surface' : 'class'),

@@ -57,7 +57,7 @@ import {
 } from "./providers/agent-registry";
 import { ownerCaller, type UserCaller } from "@kinu.run/core";
 import { adaptMemory, backfillMemoryVectors } from "@kinu.run/core";
-import { agentAffinityKey } from "@kinu.run/core";
+import { actorAffinity } from "@kinu.run/core";
 import { nimbusPreviewConfigured } from "./nimbus-route";
 
 /**
@@ -675,7 +675,7 @@ function createProfileLaneLLM(options: ProfileLaneOptions): LLM | undefined {
 
       return bindRoute({
         normalize: (spec) => registry.normalizeSpecSync(spec),
-        resolve: (spec) => registry.resolveModel(spec, agentAffinityKey(options.agent.name)),
+        resolve: (spec) => registry.resolveModel(spec, actorAffinity({ name: options.agent.name, workspaceId: options.actor.actor.workspaceId })),
       }, serving);
     }, route, { report, operations: options.modelOperations }),
   });

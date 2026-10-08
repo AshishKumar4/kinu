@@ -267,3 +267,35 @@ describe('the Agents panel lists every agent in the workspace', () => {
     expect((await read()).find((agent) => agent.label === 'idle-one')?.figures).toEqual({ activeMs: 0, cacheEma: null });
   });
 });
+
+// Production, 2026-10-08: a hash of each agent alone gave two of a workspace's few agents one colour.
+describe("each agent's mascot colour", () => {
+  test('is its birth rank: one per chat and hire, kept when another is born, and a swarm worker wears its owner\'s', async () => {
+    const { db, main, hire, read } = workspace();
+
+    const born = (ms: number, birth: () => ActorHandle): ActorHandle => {
+      setSystemTime(ms);
+
+      try {
+        return birth();
+      } finally {
+        setSystemTime();
+      }
+    };
+
+    const colours = (listed: readonly PanelAgent[]) => Object.fromEntries(listed.map((agent) => [agent.label, agent.colour]));
+    const alice = born(1_000, () => hire(main, 'alice', { origin: 'user' }));
+    born(2_000, () => hire(alice, 'scout', {}));
+    const before = colours(await read());
+
+    born(3_000, () => hire(main, 'carol', { origin: 'user' }));
+    db.query('INSERT INTO head_runs (actor_id, root_id, rationale, spawned_at) VALUES (?, ?, ?, ?)').run(main.actorId, 'run-1', 'compare two parsers', 10);
+    db.query(`INSERT INTO head_journal (actor_id, id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
+      VALUES (?, 'h-a', NULL, 'run-1', 0, 'Try the PEG parser', 'r', 'running', 11, 'synthesize')`).run(main.actorId);
+
+    expect({ before, after: colours(await read()) }).toEqual({
+      before: { Main: 0, alice: 1, scout: 2 },
+      after: { Main: 0, alice: 1, scout: 2, carol: 3, 'Try the PEG parser': 0 },
+    });
+  });
+});

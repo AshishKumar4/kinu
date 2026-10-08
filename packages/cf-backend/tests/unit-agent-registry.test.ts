@@ -49,7 +49,7 @@ describe('AgentProviderRegistry composition', () => {
       fetch: mock.fetch,
     });
 
-    const model = reg.resolveModel('opencode-go/muse-spark-1.3-contributor', 'kinu-hosted-conversation');
+    const model = reg.resolveModel('opencode-go/muse-spark-1.3-contributor', { sessionAffinity: 'kinu-hosted-conversation', workspaceAffinity: 'kinu-hosted-conversation' });
 
     await generateText({ model, prompt: 'hello' });
     await generateText({ model, prompt: 'continue' });
@@ -111,7 +111,7 @@ describe('AgentProviderRegistry composition', () => {
     // KINU-001(b): a bound AI alone routes nothing directly; the eval identity's email is not even an input.
     const unflagged = createAgentProviderRegistry({ env: { AI: directBinding }, userDO: fakeUserDOStub() });
 
-    await expect(generateText({ model: unflagged.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6', 'kinu-test'), prompt: 'reply' })).rejects.toThrow();
+    await expect(generateText({ model: unflagged.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6', { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }), prompt: 'reply' })).rejects.toThrow();
     expect(calls).toEqual([]);
 
     const env = {
@@ -121,7 +121,7 @@ describe('AgentProviderRegistry composition', () => {
 
     const reg = createAgentProviderRegistry({ env, userDO: fakeUserDOStub() });
     expect(await present(reg.registry.get('workers-ai'), 'the workers-ai provider').isAvailable(reg.deps)).toBe(true);
-    const model = reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6', 'kinu-test');
+    const model = reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6', { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' });
     const generated = await generateText({ model, prompt: 'reply' });
     expect(generated.text).toBe('direct binding');
     const streamed = streamText({ model, prompt: 'reply again' });
@@ -231,7 +231,7 @@ describe('what a model call asks of the account', () => {
     const reg = createAgentProviderRegistry({ env: {}, userDO: { stub: counted, caller: owner }, fetch: mock.fetch });
 
     try {
-      await generateText({ model: reg.resolveModel('openai/gpt-5.5', 'kinu-test'), prompt: 'hello' });
+      await generateText({ model: reg.resolveModel('openai/gpt-5.5', { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }), prompt: 'hello' });
 
       expect(asked).toHaveLength(1);
       expect(mock.requests[0]?.headers.authorization).toBe('Bearer sk-one-trip');

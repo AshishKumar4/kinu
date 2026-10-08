@@ -1,21 +1,23 @@
 /** Once-only claim in front of effectful tools (KINU-019), over real SQL. */
 import { describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
 import { createTestActors, createTestSql, present, toolExecute } from '@kinu.run/test-utils';
 import type { JsonObject } from '../src/utils/json';
 import { jsonSchema, tool, type ToolExecutionOptions, type ToolSet } from 'ai';
 import {
   buildMcpToolSet, claimToolEffect, initToolEffectClaimTable,
-  settleToolEffect, TurnContextBudget,
+  settleToolEffect, DEFAULT_TOOL_RESULT_MAX_CHARS, PLATFORM_CATALOG,
   withEffectClaims, replayPolicyFor, settleUnpairedToolCalls, INTERRUPTED_TOOL_RESULT, type EffectClaimDeps, type JsonValue,
   type SerializableToolDescriptor,
 } from '../src/index';
 import { createMemoryVfs } from '@kinu.run/test-utils';
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { lostToolCall } from '../src/tools/effect-claim';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 
 /** `ToolSet`'s index type erases the registry's input type, so the call shape is restated once here. */
-function mcpCall(tools: ToolSet, name: string): (args: JsonObject, options: ToolExecutionOptions<unknown>) => Promise<string> {
-  const entry: { execute?: (args: JsonObject, options: ToolExecutionOptions<unknown>) => PromiseLike<string> }
+function mcpCall(tools: ToolSet, name: string): (args: JsonObject, options: ToolExecutionOptions<unknown>) => Promise<JsonValue> {
+  const entry: { execute?: (args: JsonObject, options: ToolExecutionOptions<unknown>) => PromiseLike<JsonValue> }
     = present(tools[name], `the ${name} tool`);
 
   return async (args, options) => await toolExecute(entry)(args, options);
@@ -288,7 +290,7 @@ describe('tool effect claims', () => {
             return `charged-${Number(args.amount)}`;
           },
           effectClaims: { sql, actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
-          clamp: { files: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT }, budget: new TurnContextBudget(), producer: 'external_tool' },
+          spill: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT },
         },
       );
 
@@ -298,6 +300,56 @@ describe('tool effect claims', () => {
 
       expect(await call({ amount: 5 }, { toolCallId: 'call-1', messages: [], context: undefined })).toBe('charged-5');
       expect(dispatched).toBe(1);
+    });
+
+    test('a remote result reaches the program whole: nothing cuts or re-quotes what the program reads', async () => {
+      const { sql, execRaw } = createTestSql();
+
+      initToolEffectClaimTable(execRaw);
+
+      const actor = createTestActors(sql, execRaw).main;
+      // Past the cut a model's tool result takes; the program that reads it bounds what it hands the model.
+      const rows = JSON.stringify(Array.from({ length: DEFAULT_TOOL_RESULT_MAX_CHARS / 10 }, (_, i) => ({ id: `zone-${i}`, plan: 'Free' })));
+      const result = { content: [{ type: 'text', text: rows }] };
+
+      const tools = buildMcpToolSet(
+        [descriptor('zones', { readOnly: true })],
+        {
+          call: async () => result,
+          effectClaims: { sql, actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
+          spill: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT },
+        },
+      );
+
+      expect(await mcpCall(tools, 'mcp__srv__zones')({}, { toolCallId: 'c1', messages: [], context: undefined })).toEqual(result);
+    });
+
+    test('a result past what its claim keeps in one row is cut, and saved whole where the program can read it', async () => {
+      const { sql, execRaw } = createTestSql();
+
+      initToolEffectClaimTable(execRaw);
+
+      const actor = createTestActors(sql, execRaw).main;
+      const { vfs } = createMemoryVfs();
+      const rowBytes = PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value;
+      const whole = 'x'.repeat(rowBytes + 1);
+
+      const tools = buildMcpToolSet(
+        [descriptor('dump')],
+        {
+          call: async () => ({ content: [{ type: 'text', text: whole }] }),
+          effectClaims: { sql, actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
+          spill: { vfs, home: WORKSPACE_ROOT },
+        },
+      );
+
+      const read = await mcpCall(tools, 'mcp__srv__dump')({}, { toolCallId: 'c1', messages: [], context: undefined });
+      const saved = /read the full result at (\S+)\]/u.exec(v.parse(v.string(), read))?.[1];
+
+      // The row a replay reads stays inside the platform's bound, and nothing of the result is lost.
+      expect(sql<{ n: number }>`SELECT length(result_json) AS n FROM tool_effect_claims`[0].n).toBeLessThan(rowBytes);
+      expect(saved).toBeDefined();
+      expect(JSON.parse(await readText(vfs, saved ?? ''))).toEqual({ content: [{ type: 'text', text: whole }] });
     });
 
     test('an absent annotation is not read-only — it is claimed', async () => {
@@ -312,7 +364,7 @@ describe('tool effect claims', () => {
         {
           call: async () => 'ok',
           effectClaims: { sql, actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
-          clamp: { files: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT }, budget: new TurnContextBudget(), producer: 'external_tool' },
+          spill: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT },
         },
       );
 
@@ -338,7 +390,7 @@ describe('tool effect claims', () => {
             return `lookup-${String(dispatched)}`;
           },
           effectClaims: { sql, actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
-          clamp: { files: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT }, budget: new TurnContextBudget(), producer: 'external_tool' },
+          spill: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT },
         },
       );
 

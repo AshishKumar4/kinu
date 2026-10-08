@@ -28,6 +28,9 @@ function children(dir: string): string[] {
   return [...new Set(names)];
 }
 
+/** Each tool source `workspace.createTool` was sent, as the host receives it. */
+const created: string[] = [];
+
 const workspace = {
   name: 'workspace',
   fns: {
@@ -47,6 +50,11 @@ const workspace = {
     readdir: async (...args: unknown[]) => children(text(args, 0)),
     exists: async (...args: unknown[]) => files.has(text(args, 0)),
     exec: async (...args: unknown[]) => `ran: ${text(args, 0)}`,
+    createTool: async (...args: unknown[]) => {
+      created.push(text(args, 2));
+
+      return { name: text(args, 0), action: 'created' };
+    },
   },
 };
 
@@ -71,6 +79,11 @@ const stateProvider = {
       state.set(text(args, 0), decodeJsonValue({ value: args[1] }));
 
       return { ok: true };
+    },
+    delete: async (...args: unknown[]) => {
+      state.delete(text(args, 0));
+
+      return null;
     },
   },
 };
@@ -227,6 +240,22 @@ describe('the eval sandbox under workerd', () => {
       waited: 15,
       failure: expect.stringContaining('[crafted:value] is not a function: its stored source evaluates to number'),
     });
+  });
+
+  test('a program reaches a member by the name it wrote, logs a value as JSON, and saves a tool from the function itself', async () => {
+    const result = await executor.execute([
+      '// clear a key, show what is left, and save a tool',
+      "await state.set('gone', 1);",
+      "await state.delete('gone');",
+      "console.log({ left: await state.get('gone') }, [], 'as written');",
+      String.raw`return await workspace.createTool('greet', 'Greets by name', async (args) => 'it\'s ' + args.name);`,
+    ].join('\n'), [toolsProvider([]), stateProvider, workspace]);
+
+    expect(result.error).toBeUndefined();
+    expect(result.result).toEqual({ name: 'greet', action: 'created' });
+    expect(result.logs).toEqual(['{"left":null} [] as written']);
+    // Its source as the program wrote it, escapes and all: nothing read it as a string first.
+    expect(created).toEqual([String.raw`async (args) => 'it\'s ' + args.name`]);
   });
 
   test('state survives between two programs, and a host failure is attributed to its namespace member', async () => {

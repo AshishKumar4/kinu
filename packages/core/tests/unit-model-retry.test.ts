@@ -319,7 +319,7 @@ describe('the model stack retries every call once, in one place', () => {
     });
 
     const model = withModelStack(createWorkersAIProvider().createModel('@cf/moonshotai/kimi-k2.6', {
-      env: {}, sessionAffinity: 'kinu-test', fetch, hasCredential: async () => true,
+      env: {}, sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test', fetch, hasCredential: async () => true,
       getAuth: async () => ({ headers: { authorization: 'Bearer cf' }, baseURL: 'https://api.cloudflare.com/client/v4/accounts/a/ai/v1' }),
     }), { provider: 'workers-ai', lane: LANE, sleep: async () => {}, pacer: new ProviderPacer({ sleep: async () => {} }) });
 

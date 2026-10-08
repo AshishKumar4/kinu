@@ -386,6 +386,14 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return rows;
   }
 
+  /** The turn the conversation's first user message opened: an agent's brief, or its owner's first words. */
+  firstUserTurnId(): string | null {
+    this.actor.assertCurrent();
+
+    return this.sql<{ turn_id: string | null }>`SELECT turn_id FROM conversation_entries WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId}
+      AND role = 'user' ORDER BY position ASC LIMIT 1`[0]?.turn_id ?? null;
+  }
+
   newestUserId(): string | null {
     this.actor.assertCurrent();
 

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { ALERT_THRESHOLDS } from '@kinu.run/core/analytics';
-import { idleWakeHours, terminalEffectStates, type VersionRead, versionFindings } from './prod-logs';
+import { canaryActivations } from './durability-canary-telemetry';
+import { idleWakeHours, ordinalHours, settledRead, terminalEffectStates, type VersionRead, versionFindings } from './prod-logs';
 
 const HOUR = 3_600_000;
 
@@ -129,4 +130,53 @@ describe('what one deployed version did, as a deploy reports it', () => {
       { what: 'idle wakes', finding: 'object turn-ended woke 4 time(s) with nothing to watch in the hour from 1970-01-01T01:00:00Z' },
     ]);
   });
+});
+
+// Staging 2026-10-08: an 08:19:16Z row was absent from a read at 10:25Z and present at 10:50Z.
+describe('a read that issues a verdict', () => {
+  const reader = (counts: readonly number[]) => {
+    let clock = 0;
+    let at = 0;
+
+    return {
+      read: () => Promise.resolve(counts[Math.min(at++, counts.length - 1)] ?? 0),
+      fingerprint: (count: number) => String(count), rows: (count: number) => count,
+      now: () => clock,
+      sleep: (ms: number) => {
+        clock += ms;
+
+        return Promise.resolve();
+      },
+      gapMs: 10, capMs: 60,
+    };
+  };
+
+  test('is settled once two reads a gap apart agree, and names what landed after the first', async () => {
+    expect(await settledRead(reader([5, 7, 7]))).toEqual({ settled: true, value: 7, reads: 3, lateRows: 2 });
+  });
+
+  test('is unsettled when its counts still move at the cap, however close they came', async () => {
+    expect(await settledRead(reader([1, 2, 3, 4, 5, 6, 7, 8]))).toEqual({ settled: false, last: 7, reads: 7, lateRows: 6 });
+  });
+});
+
+// Staging 2026-10-08: the canary's workspace started six times, and analytics kept two of its startup rows.
+test('activations are the ordinals\' deltas, so a dropped startup row loses no count', () => {
+  const hour = (at: number, first: number, last: number, object = 'canary') => ({ object, name: 'eval-canary', hour: at * HOUR, first, last });
+
+  expect(ordinalHours([hour(1, 4, 6), hour(2, 9, 9), hour(1, 1, 1, 'quiet')]).map((row) => [row.object, row.startups])).toEqual([
+    ['canary', 3], ['canary', 3], ['quiet', 1],
+  ]);
+});
+
+const startup = (timestamp: number, activation: number) => ({
+  timestamp, source: { event: 'actor.startup', code: '', cause: '', fields: { activation } }, $workers: { scriptVersion: { id: 'v' } }, $metadata: {},
+});
+
+// Staging 2026-10-08: the canary's object started six times and telemetry kept four of the startup rows.
+test('a dropped startup row is an activation still: the ordinals count it, at an unknown time', () => {
+  const read = canaryActivations(null, [startup(10, 3), startup(40, 6), startup(20, 4)]);
+
+  expect(read.map((activation) => [activation.ordinal, activation.at])).toEqual([[3, 10], [4, 20], [5, null], [6, 40]]);
+  expect(canaryActivations([{ ordinal: 9, at: 5, version: null }], [startup(10, 3)])).toEqual([{ ordinal: 9, at: 5, version: null }]);
 });

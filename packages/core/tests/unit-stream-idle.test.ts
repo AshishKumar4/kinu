@@ -74,7 +74,7 @@ function turnOver(primary: ScriptedStream) {
     createModel: (modelId, deps) => createChatModel({ kind: 'openai-compat', name: 'stub', baseURL: 'https://stub.invalid/v1', headers: {}, modelId, ...(deps.fetch !== undefined && { fetch: deps.fetch }) }),
   });
 
-  const deps: ModelCallDeps = { env: {}, sessionAffinity: 'kinu-stub', getAuth: async () => null, hasCredential: async () => false, fetch };
+  const deps: ModelCallDeps = { env: {}, sessionAffinity: 'kinu-stub', workspaceAffinity: 'kinu-stub', getAuth: async () => null, hasCredential: async () => false, fetch };
   const model = (modelId: string) => registry.resolve(`stub/${modelId}`, deps);
 
   const fallback: ChatFallback = { spec: 'stub/fallback', accepts: new Set(), window: { contextWindow: null, modelOutputLimit: null }, bind: () => ({ model: model('fallback'), provider: 'stub' }) };
@@ -343,7 +343,7 @@ describe('keepalives reach the bound on every transport a model answers through'
       },
     };
 
-    const deps: ModelCallDeps = { env: {}, sessionAffinity: 'kinu-stub', getAuth: async () => null, hasCredential: async () => false };
+    const deps: ModelCallDeps = { env: {}, sessionAffinity: 'kinu-stub', workspaceAffinity: 'kinu-stub', getAuth: async () => null, hasCredential: async () => false };
     const model = withModelStack(createWorkersAIProvider(Object.create(binding)).createModel('@cf/stub/model', deps), { provider: 'workers-ai', lane: 'workers-ai|' });
     const result = streamText({ model, prompt: 'go', maxRetries: 0 });
 
@@ -401,7 +401,7 @@ describe('a side request inside the attempt', () => {
       }),
     });
 
-    const deps: ModelCallDeps = { env: {}, sessionAffinity: 'kinu-stub', getAuth: async () => null, hasCredential: async () => false, fetch };
+    const deps: ModelCallDeps = { env: {}, sessionAffinity: 'kinu-stub', workspaceAffinity: 'kinu-stub', getAuth: async () => null, hasCredential: async () => false, fetch };
     const result = streamText({ model: registry.resolve('side/m', deps), prompt: 'go', maxRetries: 0 });
 
     for (let comment = 0; comment < 3; comment++) {

@@ -135,17 +135,19 @@ export async function receiveSubordinateEvent(
     return { id: '', disposition: 'not_awaited' };
   }
 
+  // Before the spill, so a relay this workspace does not admit leaves no file behind; and before a Stop's quiet report,
+  // which settles only a row its parent awaits: the owner's Stop in their own chat, which awaits nothing, marked that
+  // chat as waiting on them for good (production, 2026-10-08).
+  if (!parentAdmitsSubordinateReport({ entry: subordinate })) {
+    return { id: '', disposition: 'not_awaited' };
+  }
+
   if (input.quiet === true) {
     deps.transaction(() => { deps.roster.applyReport(input.fromSubordinate, input.status, input.origin, now); });
 
     if (settlesTask) deps.temporary?.release(input.fromSubordinate);
 
     return { id: '', disposition: 'admitted' };
-  }
-
-  // Before the spill, so a relay this workspace does not admit leaves no file behind.
-  if (!parentAdmitsSubordinateReport({ entry: subordinate })) {
-    return { id: '', disposition: 'not_awaited' };
   }
 
   const content = normalizeReportContent(input.content);
