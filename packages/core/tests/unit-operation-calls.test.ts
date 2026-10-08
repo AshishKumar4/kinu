@@ -42,7 +42,7 @@ describe('callOperation', () => {
 
   test('Plan refuses an operation it does not permit, and lists only what it does', async () => {
     const note = (name: string, impact: 'observe' | 'mutate') => serve(defineOperation({
-      ns: 'notes', name, help: `${name} a note.`, impact, availability: 'code', slate: false, input: v.strictObject({}), output: v.string(),
+      ns: 'notes', name, help: `${name} a note.`, impact, slate: false, input: v.strictObject({}), output: v.string(),
     }), async () => name);
 
     const providers = providersInWorkMode('plan', [codemodeNamespace('notes', [note('read', 'observe'), note('write', 'mutate')])]);

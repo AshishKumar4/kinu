@@ -22,7 +22,7 @@ const ConversationSummary = v.strictObject({ conversationId: v.string(), message
 /** A memory operation; a write is planning too, so Plan turns keep it. */
 const memoryOp = <const I extends v.StrictObjectSchema<v.ObjectEntries, undefined>, const O extends v.GenericSchema>(
   op: Pick<Operation<I, O>, 'name' | 'help' | 'impact' | 'input' | 'output'>,
-) => defineOperation({ ns: 'memory', availability: 'both', slate: true, plan: true, ...op });
+) => defineOperation({ ns: 'memory', slate: true, plan: true, ...op });
 
 export const MEMORY = {
   remember: memoryOp({

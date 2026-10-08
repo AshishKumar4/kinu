@@ -216,7 +216,7 @@ interface NodeScratch {
  * rather than a schema error.
  */
 const PROPOSE_BRANCH = defineOperation({
-  ns: 'head', name: 'proposeBranch', availability: 'native', slate: false, impact: 'delegate', plan: true,
+  ns: 'head', name: 'proposeBranch', slate: false, impact: 'delegate', plan: true,
   help: `Ask the search to spend part of its budget exploring ${String(BRANCH_PROPOSAL_WIDTH.min)}-`
     + `${String(BRANCH_PROPOSAL_WIDTH.max)} narrower threads of your task. You are PROPOSING, `
     + 'not spawning: the search decides against a depth cap and a shared budget you cannot see, '

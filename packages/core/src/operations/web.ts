@@ -21,7 +21,7 @@ export const WEB_SANDBOX_IMPACTS = { connectBrowser: 'execute', pageTools: 'obse
 
 export const WEB = {
   search: defineOperation({
-    ns: 'web', name: 'search', help: 'Search the web.', impact: 'observe', availability: 'both', slate: true,
+    ns: 'web', name: 'search', help: 'Search the web.', impact: 'observe', slate: true,
     input: v.strictObject({ query: v.pipe(v.string(), v.nonEmpty()), limit: v.optional(described(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(20)), 'Default 5.')) }),
     output: v.strictObject({
       query: v.string(),
@@ -40,7 +40,7 @@ export const WEB = {
     },
   }),
   fetch: defineOperation({
-    ns: 'web', name: 'fetch', help: 'A page as Markdown. Private and internal addresses are blocked.', impact: 'observe', availability: 'both', slate: true,
+    ns: 'web', name: 'fetch', help: 'A page as Markdown. Private and internal addresses are blocked.', impact: 'observe', slate: true,
     input: v.strictObject({
       url: Url,
       render: v.optional(described(v.boolean(), 'Load the page in a browser first, for a page its scripts build; slower.')),
@@ -52,7 +52,7 @@ export const WEB = {
   }),
   // It saves a file, so a Plan turn has none.
   screenshot: defineOperation({
-    ns: 'web', name: 'screenshot', help: 'A screenshot of a page, saved under screenshots/ and shown to you.', impact: 'observe', plan: false, availability: 'both', slate: true,
+    ns: 'web', name: 'screenshot', help: 'A screenshot of a page, saved under screenshots/ and shown to you.', impact: 'observe', plan: false, slate: true,
     input: v.strictObject({ url: Url, fullPage: v.optional(described(v.boolean(), 'The whole page, saved only; you get its path.')), engine: Engine }),
     output: v.strictObject({
       url: v.string(), retrievedAt: v.string(),
@@ -63,16 +63,16 @@ export const WEB = {
   openBrowser: defineOperation({
     ns: 'web', name: 'openBrowser',
     help: 'A browser for connectBrowser. Chrome: kept across programs and turns until closed or idle 20 min; liveView lets the owner watch or take over (a login, a captcha), so give it to them; lab enables the page\'s WebMCP tools. Kitesurf: lighter, with WebMCP; each connect starts a browser that ends with its program, and it has no Live View.',
-    impact: 'execute', availability: 'code', slate: true,
+    impact: 'execute', slate: true,
     input: v.strictObject({ browser: v.optional(described(v.picklist(['chrome', 'kitesurf']), 'Default chrome.')), lab: v.optional(described(v.boolean(), 'Chrome only.')) }),
     output: v.strictObject({ id: v.string(), liveView: v.nullable(v.string()) }),
   }),
   browsers: defineOperation({
-    ns: 'web', name: 'browsers', help: 'Your open Chrome sessions.', impact: 'observe', availability: 'code', slate: true,
+    ns: 'web', name: 'browsers', help: 'Your open Chrome sessions.', impact: 'observe', slate: true,
     input: v.strictObject({}), output: v.array(SessionView),
   }),
   closeBrowser: defineOperation({
-    ns: 'web', name: 'closeBrowser', help: 'Close a Chrome session.', impact: 'mutate', availability: 'code', slate: true,
+    ns: 'web', name: 'closeBrowser', help: 'Close a Chrome session.', impact: 'mutate', slate: true,
     input: v.strictObject({ id: v.pipe(v.string(), v.nonEmpty()) }), output: v.null(),
   }),
 } as const;

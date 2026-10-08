@@ -24,7 +24,6 @@ export interface Operation<I extends OperationInput = OperationInput, O extends 
   /** One line, what it does; the native tool's and the eval function's description. */
   readonly help: string;
   readonly impact: Impact;
-  readonly availability: 'native' | 'code' | 'both';
   /** Whether a Plan turn reaches it; by default, an observe operation only. */
   readonly plan?: boolean;
   /** Reachable from a slate. */

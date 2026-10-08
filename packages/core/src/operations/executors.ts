@@ -20,7 +20,7 @@ const Text = v.string();
 /** An executor's member; Plan keeps only what observes. */
 const executorOp = (ns: string) => <const I extends v.StrictObjectSchema<v.ObjectEntries, undefined>, const O extends v.GenericSchema>(
   op: Pick<Operation<I, O>, 'name' | 'help' | 'input' | 'output'> & { readonly impact: Impact },
-) => defineOperation({ ns, availability: 'code', slate: true, ...op });
+) => defineOperation({ ns, slate: true, ...op });
 
 const ws = executorOp('workspace');
 

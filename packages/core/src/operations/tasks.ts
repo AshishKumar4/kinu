@@ -21,7 +21,7 @@ const Listed = v.strictObject({ ...Entry, note: v.optional(v.string()) });
 // The list is read every step, so writing it is planning: Plan turns keep it.
 const tasksOp = <const I extends v.StrictObjectSchema<v.ObjectEntries, undefined>, const O extends v.GenericSchema>(
   op: Pick<Operation<I, O>, 'name' | 'help' | 'impact' | 'input' | 'output'>,
-) => defineOperation({ ns: 'tasks', availability: 'both', slate: op.name !== 'switchRole', plan: true, ...op });
+) => defineOperation({ ns: 'tasks', slate: op.name !== 'switchRole', plan: true, ...op });
 
 export const TASKS = {
   add: tasksOp({

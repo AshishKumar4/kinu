@@ -5,7 +5,7 @@ import { defineOperation } from './operation';
 
 export const PLAN = {
   submit: defineOperation({
-    ns: 'plan', name: 'submit', impact: 'externalSend', plan: true, availability: 'native', slate: false,
+    ns: 'plan', name: 'submit', impact: 'externalSend', plan: true, slate: false,
     help: [
       'Submit the current Markdown implementation plan for interactive owner review.',
       'On the first call, write the full plan with one edit starting at line 1. After changes are requested, use the line numbers in the feedback turn to make targeted edits.',

@@ -21,7 +21,7 @@ const FileEditSchema = v.strictObject({
 
 const fileOp = <const I extends v.StrictObjectSchema<v.ObjectEntries, undefined>, const O extends v.GenericSchema>(
   op: Pick<Operation<I, O>, 'name' | 'help' | 'impact' | 'input' | 'output'>,
-) => defineOperation({ ns: 'file', availability: 'both', slate: true, ...op });
+) => defineOperation({ ns: 'file', slate: true, ...op });
 
 export const FILE = {
   read: fileOp({

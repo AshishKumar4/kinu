@@ -25,12 +25,12 @@ const HELP = 'Report progress, completion or a blocker on your assignment. The a
 
 export const REPORT = {
   send: defineOperation({
-    ns: 'report', name: 'send', help: HELP, impact: 'externalSend', plan: true, availability: 'both', slate: false,
+    ns: 'report', name: 'send', help: HELP, impact: 'externalSend', plan: true, slate: false,
     input: v.strictObject({ ...Body, ...HANDOFF }), output: v.nullable(JsonValueSchema),
   }),
   /** The same operation where the destination takes the body alone: a handoff sent anyway is dropped, as it always was. */
   sendBody: defineOperation({
-    ns: 'report', name: 'send', help: HELP, impact: 'externalSend', plan: true, availability: 'both', slate: false,
+    ns: 'report', name: 'send', help: HELP, impact: 'externalSend', plan: true, slate: false,
     input: v.object(Body), output: v.nullable(JsonValueSchema),
   }),
 } as const;

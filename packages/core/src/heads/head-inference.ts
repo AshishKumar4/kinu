@@ -77,7 +77,7 @@ import type { Clock } from '../types/clock';
 /** A head's accumulators: what it gathered and decided, for the merge synthesis to read. Plan heads keep both. */
 const HEAD_RECORDS = {
   evidence: defineOperation({
-    ns: 'head', name: 'recordEvidence', availability: 'native', slate: false, impact: 'mutate', plan: true,
+    ns: 'head', name: 'recordEvidence', slate: false, impact: 'mutate', plan: true,
     help: "Record a piece of evidence you've gathered. Use this for facts you want surfaced in the merge synthesis.",
     input: v.strictObject({
       kind: v.picklist(EVIDENCE_KINDS), body: v.string(), ref: v.optional(v.string()),
@@ -87,7 +87,7 @@ const HEAD_RECORDS = {
     output: v.string(),
   }),
   decision: defineOperation({
-    ns: 'head', name: 'recordDecision', availability: 'native', slate: false, impact: 'mutate', plan: true,
+    ns: 'head', name: 'recordDecision', slate: false, impact: 'mutate', plan: true,
     help: 'Record a decision the head considered.',
     input: v.strictObject({ question: v.string(), choice: v.string(), rationale: v.string(), supportingEvidence: v.optional(v.array(v.string())) }),
     output: v.string(),

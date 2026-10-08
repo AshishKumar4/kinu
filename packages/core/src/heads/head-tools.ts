@@ -50,7 +50,7 @@ export interface HeadToolDeps {
 
 /** A head's split into child heads; the width is shown, and the backend's split enforces it. */
 const SPLIT = defineOperation({
-  ns: 'head', name: 'split', availability: 'native', slate: false, impact: 'delegate', plan: true,
+  ns: 'head', name: 'split', slate: false, impact: 'delegate', plan: true,
   help: "Spawn 2-4 child heads recursively to explore narrower sub-questions. Children's findings merge into a single narrative.",
   input: v.strictObject({
     rationale: v.string(),

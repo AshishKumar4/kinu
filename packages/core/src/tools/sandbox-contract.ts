@@ -32,7 +32,7 @@ export function craftedToolDescription(name: string, description?: string): stri
 
 /** `eval`'s one input: the program it runs. */
 const PROGRAM = defineOperation({
-  ns: 'eval', name: 'run', availability: 'native', slate: false, impact: 'execute', plan: true,
+  ns: 'eval', name: 'run', slate: false, impact: 'execute', plan: true,
   help: 'Run a JavaScript program over the namespaces this turn reaches.',
   input: v.strictObject({ code: v.pipe(v.string(), v.description(CODEMODE_CODE_DESCRIPTION)) }),
   output: v.unknown(),
@@ -124,7 +124,7 @@ function toolOperation(name: string, entry: ToolSet[string]): Served | null {
   const planAllowed = hasPlanPermission(entry);
 
   const op = defineOperation({
-    ns: CRAFTED_TOOL_NAMESPACE, name, help: toolDescription(entry) ?? name, availability: 'code', slate: false,
+    ns: CRAFTED_TOOL_NAMESPACE, name, help: toolDescription(entry) ?? name, slate: false,
     // What a tool does is its own to say; one a Plan turn may run observes.
     impact: planAllowed ? 'observe' : 'execute', plan: planAllowed,
     input: statedInput(stated.success ? stated.output : { type: 'object' }), output: v.unknown(),
@@ -153,7 +153,7 @@ function craftedOperations(sandbox: ToolSet[string] | undefined): Served[] {
   const crafted = v.parse(v.array(v.object({ name: v.string(), description: v.string() })), declared.output.craftedDeclarations());
 
   return crafted.map(({ name, description }) => serve(defineOperation({
-    ns: CRAFTED_TOOL_NAMESPACE, name, help: craftedToolDescription(name, description), availability: 'code', slate: false,
+    ns: CRAFTED_TOOL_NAMESPACE, name, help: craftedToolDescription(name, description), slate: false,
     impact: 'execute', plan: false, input: statedInput({ type: 'object' }), output: v.unknown(),
   }), async (input, { callId, signal }) => {
     const code = `return await tools[${JSON.stringify(name)}](${JSON.stringify(input)});`;

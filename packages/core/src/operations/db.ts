@@ -146,7 +146,7 @@ const Changed = v.strictObject({ rowsAffected: v.number() });
 /** Every db operation runs on Plan: the store decides per call, by the table's scope, whether Plan may write it. */
 const dbOp = <const I extends v.StrictObjectSchema<v.ObjectEntries, undefined>, const O extends v.GenericSchema>(
   op: Pick<Operation<I, O>, 'name' | 'help' | 'impact' | 'input' | 'output'> & { readonly plan?: boolean },
-) => defineOperation({ ns: 'db', availability: 'code', slate: true, plan: true, ...op });
+) => defineOperation({ ns: 'db', slate: true, plan: true, ...op });
 
 export const DB = {
   createTable: dbOp({

@@ -16,7 +16,7 @@ const Id = v.pipe(v.string(), v.nonEmpty());
 
 const agentOp = <const I extends v.StrictObjectSchema<v.ObjectEntries, undefined>, const O extends v.GenericSchema>(
   op: Pick<Operation<I, O>, 'name' | 'help' | 'impact' | 'input' | 'output'> & { readonly plan?: boolean },
-) => defineOperation({ ns: 'agent', availability: 'code', slate: false, ...op });
+) => defineOperation({ ns: 'agent', slate: false, ...op });
 
 const BACKGROUND_HELP = 'A background job\'s settled result. A search backgrounds the moment it spawns on a live chat '
   + 'session; other long calls background once they outrun this turn\'s threshold '

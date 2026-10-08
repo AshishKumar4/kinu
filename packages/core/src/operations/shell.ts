@@ -9,7 +9,7 @@ const RUNTIME = "Default workspace; or sandbox, or a user's machine by its nickn
 /** `shell.run` over the runtimes a router registered: its schema names them, and any other string is a device nickname. */
 export function shellRun(runtimes: readonly string[]) {
   return defineOperation({
-    ns: 'shell', name: 'run', impact: 'execute', availability: 'both', slate: true,
+    ns: 'shell', name: 'run', impact: 'execute', slate: true,
     help: 'Run a shell command and get its output: the directory it started in, both streams (labelled when both wrote), and the exit code when not zero.',
     input: v.strictObject({
       command: v.pipe(v.string(), v.nonEmpty()),

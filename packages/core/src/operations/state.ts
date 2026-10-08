@@ -9,7 +9,7 @@ const Key = v.pipe(KeySchema, v.description('A non-empty key of at most 512 char
 /** Program state is scratch for programs, so Plan turns keep all of it. */
 const stateOp = <const I extends v.StrictObjectSchema<v.ObjectEntries, undefined>, const O extends v.GenericSchema>(
   op: Pick<Operation<I, O>, 'name' | 'help' | 'impact' | 'input' | 'output'>,
-) => defineOperation({ ns: 'state', availability: 'code', slate: false, plan: true, ...op });
+) => defineOperation({ ns: 'state', slate: false, plan: true, ...op });
 
 export const STATE = {
   get: stateOp({
