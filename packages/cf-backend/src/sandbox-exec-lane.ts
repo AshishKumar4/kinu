@@ -4,7 +4,7 @@
  * and an abort kills the process, not just the wait. See `SandboxHandle.exec`.
  */
 
-import { jsonResultOrVoid, SandboxPending, WORKSPACE_BACKUP_DIR, type OutputSink, type SandboxHandle } from '@kinu.run/core';
+import { jsonResultOrVoid, REAL_CLOCK, SandboxPending, WORKSPACE_BACKUP_DIR, type Clock, type OutputSink, type SandboxHandle } from '@kinu.run/core';
 import { attempt, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, toKinuError, type ErrorCode } from "@kinu.run/core/obs";
 import { collectExecRecords, devboxFailure, type DevboxErrorCode } from '@kinu.run/devbox';
 import { Effect } from 'effect';
@@ -44,6 +44,61 @@ function fromDevbox(thrown: { readonly cause: unknown }): KinuError {
   if (failure === undefined) return new KinuError(classifyErrorCode(thrown) ?? 'io', renderThrownChain(thrown), { cause });
 
   return new KinuError(DEVBOX_FAILURE_CODES[failure.code], failure.code === 'refused' ? `${REFUSED_NEXT}: ${failure.message}` : failure.message, { cause });
+}
+
+type Readiness = Awaited<ReturnType<ContainerOperations['resolveReadiness']>>;
+
+/** How often a call held for a box's base snapshot asks again (D79). */
+const BASE_ASK_MS = 1_000;
+
+/**
+ * A base build that names no new step for this long has stopped: the call gets the box's words. Its longest step,
+ * the base image's first start, is given up by the builder at 120 s, and a fresh install took at most 31 s (D66).
+ */
+const BASE_STALL_MS = 180_000;
+
+/** After `ms`, or at once when `signal` aborts. */
+function pause(clock: Clock, ms: number, signal: AbortSignal | undefined): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  const disarm = clock.after(ms, resolve);
+
+  const abort = (): void => {
+    disarm();
+    resolve();
+  };
+
+  signal?.addEventListener('abort', abort, { once: true });
+
+  return promise.finally(() => { signal?.removeEventListener('abort', abort); });
+}
+
+/**
+ * The box's readiness, held while it waits for its base snapshot to be built (D79): the box starts by itself once the
+ * build verifies (D66), so a call asks again instead of handing its agent a refusal to retry. Bounded by the build's
+ * progress, never by a total: each new step re-arms the bound, a failed build and every other pending are answered at
+ * once, and a build that names no new step for {@link BASE_STALL_MS} is refused in the box's words.
+ */
+async function readinessPastBase(
+  handle: Pick<ContainerOperations, 'resolveReadiness'>, clock: Clock, signal: AbortSignal | undefined,
+): Promise<Readiness> {
+  let readiness = await handle.resolveReadiness();
+  let step: string | null | undefined;
+  let movedAt = clock.now();
+
+  while (readiness.kind === 'pending' && readiness.building !== undefined) {
+    if (readiness.building.step !== step) {
+      step = readiness.building.step;
+      movedAt = clock.now();
+    } else if (clock.now() - movedAt >= BASE_STALL_MS) {
+      return { kind: 'pending', reason: `the base snapshot's build made no progress in ${String(BASE_STALL_MS / 1000)} s (at: ${step ?? 'not begun'}); ${readiness.reason}` };
+    }
+
+    await pause(clock, BASE_ASK_MS, signal);
+    signal?.throwIfAborted();
+    readiness = await handle.resolveReadiness();
+  }
+
+  return readiness;
 }
 
 function callDevbox<A>(run: () => PromiseLike<A>): Effect.Effect<A, KinuError> {
@@ -111,7 +166,11 @@ export function adaptCloudflareSandbox(
   handle: ContainerOperations,
   configure: () => Promise<void>,
   previews: SandboxPreviewExposures | null,
-  portsMoved?: () => Promise<void>,
+  { portsMoved, clock = REAL_CLOCK }: {
+    readonly portsMoved?: () => Promise<void>;
+    /** Times a hold for the box's base snapshot (D79). */
+    readonly clock?: Clock;
+  } = {},
 ): SandboxHandle {
   // Memoized on the promise so concurrent first calls share it; failures are not cached.
   let inFlight: Promise<void> | null = null;
@@ -129,10 +188,11 @@ export function adaptCloudflareSandbox(
     }
   };
 
-  const onContainer = <T>(run: () => Promise<T>): Effect.Effect<T, KinuError> => Effect.tryPromise({
+  // `signal`: the call's own, which ends a hold for the box's base as it ends the call.
+  const onContainer = <T>(run: () => Promise<T>, signal?: AbortSignal): Effect.Effect<T, KinuError> => Effect.tryPromise({
     try: async () => {
       await configured();
-      const readiness = await handle.resolveReadiness();
+      const readiness = await readinessPastBase(handle, clock, signal);
 
       if (readiness.kind === 'pending') throw new SandboxPending(readiness.reason);
 
@@ -149,7 +209,7 @@ export function adaptCloudflareSandbox(
       const signals = [opts?.signal, opts?.timeout === undefined ? undefined : AbortSignal.timeout(opts.timeout)].filter((held) => held !== undefined);
       const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
       const execId = crypto.randomUUID();
-      const ready = onContainer(() => Promise.resolve());
+      const ready = onContainer(() => Promise.resolve(), signal);
       const run = callDevbox(() => execWithoutDeadline(handle, command, { cwd: opts?.cwd, signal, env: opts?.env, execId }, opts?.output));
       // The exec call itself gave no verdict, and nothing cancelled it: it may or may not have reached the box.
       const lost = (failure: KinuError): boolean => signal?.aborted !== true && failure.code === 'io' && devboxFailure({ cause: failure.cause }) === undefined;

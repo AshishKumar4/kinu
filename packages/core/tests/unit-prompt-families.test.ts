@@ -7,6 +7,7 @@ const MODELS: Readonly<Record<PromptModelFamily, PromptModelContext>> = {
   gpt: { id: 'gpt-5-codex', provider: 'openai' },
   claude: { id: 'claude-sonnet-4-7', provider: 'anthropic' },
   gemini: { id: 'gemini-3-pro', provider: 'google' },
+  muse: { id: 'muse-spark-1.3-contributor', provider: 'opencode-go' },
   generic: { id: 'unknown-model', provider: 'other' },
 };
 
