@@ -20,7 +20,7 @@ import type { WorkspaceOverview } from '@kinu.run/core';
 import { OwnedModelServices } from '../../src/owned-model-services';
 import type { HostedTaskProfile, HostedTaskTurn } from '../../src/hosted-actors';
 import type { ChatWireTransport } from '../../src/chat-transport';
-import { isWorkMode, workModeForTurnMetadata, type KinuExtension } from '@kinu.run/core';
+import { isWorkMode, workModeForTurnMetadata } from '@kinu.run/core';
 import { ActorClaimStore, admitSubordinateTask, agentArtifactDirectory, agentHome, CHAT_SESSION_ID, createParentWorkspaceVfs, EventLog, SubordinateRosterStore, MAIN_AGENT, openWorkspaceMainActor, SessionHistory, TerminalTransitions, WorkspaceActorDirectory } from '@kinu.run/core';
 import { sqlOver } from '@kinu.run/test-utils';
 import {
@@ -1534,7 +1534,6 @@ export interface HarnessActorWorld {
   freshScaffold?: boolean;
   /** The platform AI binding the gateway provider calls; a recording stub by default. */
   aiGateway?: StubbedAiBinding;
-  turnExtensions?: readonly KinuExtension[];
   /** The deployed build's version id at `env.CF_VERSION_METADATA`: a claim on the built-in program names it. Unset,
    *  the object runs on {@link HARNESS_BUILD}, as every deployed object runs on a named build; null runs it on none,
    *  for a test about a host that stamps no build. */
