@@ -10,6 +10,9 @@ import { TerminalTransitions } from '../src/orchestrator/terminal-transition';
 import { assembleActorTurn } from '../src/orchestrator/turn-assembly';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import type { AgentTracing } from '../src/obs/agent-tracing';
+import type { RunTurnSources } from '../src/orchestrator/turn-assembly';
+import type { HostedActor } from '../src/state/actor-host';
+import type { CacheWarmingLane } from '../src/providers/cache-warming';
 import { fixtureCompaction, fixtureRunSources, hostedSeatsOver } from './helpers-actor-host';
 import { makeSqlExec } from './helpers';
 
@@ -22,6 +25,9 @@ export async function sessionFixture(input: {
   readonly main?: boolean;
   /** Ports a case answers itself, in place of the fixture's. */
   readonly ports?: Partial<Pick<ChatSessionPorts, 'prepareTurn' | 'owedTerminalEffects'>>;
+  /** The models and catalog a case's turns are assembled from, in place of the fixture's one model. */
+  readonly sources?: Partial<Pick<RunTurnSources, 'models' | 'profileInputs'>>;
+  readonly cacheWarming?: (actor: HostedActor) => CacheWarmingLane;
 }) {
   const { rt, testSql } = createTestRuntime();
   const db = testSql.db;
@@ -59,6 +65,7 @@ export async function sessionFixture(input: {
     externalTools: async () => ({}),
     wiredToolNames: () => Object.keys(tools),
     codemodeCapabilities: () => [],
+    ...input.sources,
   };
 
   const chat = new ChatSession({
@@ -94,6 +101,7 @@ export async function sessionFixture(input: {
       driverGate: () => null, armTurnWake: async () => {},
       taskList: () => actor.stores.taskList, hasPendingAsyncWake: () => false,
       steerSkills: async () => null, stillOwed: () => true,
+      ...(input.cacheWarming !== undefined && { cacheWarming: input.cacheWarming(actor) }),
       ...input.ports,
     },
   });

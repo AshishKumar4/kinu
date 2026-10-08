@@ -15,6 +15,9 @@
   // The image Devbox's storage needs: squashfuse, the block lower and the container's sync
   // (`packages/devbox/block-lower`), pinned by digest like the product's. Under the durable_object
   // scheduling policy the box starts the image named `devbox` at the size it chose (D50).
+  // No local container: `wrangler dev` would need the Docker CLI for one. The example runs
+  // deployed, through scripts/bench-devbox-standalone.ts.
+  "dev": { "enable_containers": false },
   "containers": [
     {
       "class_name": "ExampleBox",

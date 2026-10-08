@@ -1,12 +1,12 @@
 // The user's own Cloudflare AI Gateway via their Workers AI OAuth credential (`ai-gateway` is the platform's).
-// Wire: POST {account}/ai/v1/{chat/completions|responses} with `cf-aig-gateway-id`; specs are `my-gateway/{author}/{model}`.
+// Wire: OpenAI's and Anthropic's own APIs at the gateway's endpoints for them, every other author at
+// {account}/ai/v1/chat/completions with `cf-aig-gateway-id` (`createCloudflareAIFetch`); specs are `my-gateway/{author}/{model}`.
 import type { LanguageModel } from 'ai';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import { type ModelProvider, type ModelInfo, type ProviderDeps } from './types';
 import { authCacheKey, cloneModelInfos, settleModelList, StaleModelList } from './util';
 import { listModelsDevProviderModels } from './models-dev';
-import { createWireModel, gatewayWire, OPENAI_AUTHOR } from './wire-model';
-import { asFetchFunction } from './fetch-shim';
+import { createWireModel, gatewayWire } from './wire-model';
 import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, cloudflareAccountAPIRoot } from './cloudflare-oauth';
 import { createCloudflareAIFetch, mapGatewayError } from './cloudflare-ai-fetch';
 import { Effect } from 'effect';
@@ -129,39 +129,8 @@ export interface GatewayTransport {
 
 export function gatewayWireModel(name: string, modelId: string, transport: GatewayTransport): LanguageModelV4 {
   const wire = gatewayWire(modelId);
-  const send = transport.fetch ?? fetch;
-  const model = { name, ...transport, modelId: wire.modelId, protocol: wire.protocol, reasoning: false };
 
-  // Each SDK names the model its own way; the gateway takes the authored id.
-  if (wire.protocol === 'messages') return createWireModel({ ...model, fetch: claudeForGateway(send, modelId) });
-
-  return createWireModel(wire.protocol === 'responses' ? { ...model, fetch: authored(send) } : model);
-}
-
-const MessagesBodySchema = v.looseObject({ system: v.optional(v.array(v.looseObject({ text: v.string() }))) });
-
-/** The gateway's id, and `system` as the one string its `/messages` takes (2026-10-06). */
-function claudeForGateway(send: typeof fetch, gatewayId: string): typeof fetch {
-  return asFetchFunction(async (input, init) => {
-    const text = v.safeParse(v.string(), init?.body);
-    const body = text.success ? v.safeParse(MessagesBodySchema, JSON.parse(text.output)) : null;
-
-    if (body?.success !== true) return await send(input, init);
-    const { system, ...rest } = body.output;
-
-    return await send(input, { ...init, body: JSON.stringify({
-      ...rest, model: gatewayId, ...(system !== undefined && { system: system.map((block) => block.text).join('\n\n') }),
-    }) });
-  });
-}
-
-function authored(send: typeof fetch): typeof fetch {
-  return asFetchFunction(async (input, init) => {
-    const text = v.safeParse(v.string(), init?.body);
-    const body = text.success ? v.safeParse(v.looseObject({ model: v.string() }), JSON.parse(text.output)) : null;
-
-    return await send(input, body?.success === true ? { ...init, body: JSON.stringify({ ...body.output, model: `${OPENAI_AUTHOR}${body.output.model}` }) } : init);
-  });
+  return createWireModel({ name, ...transport, modelId: wire.modelId, protocol: wire.protocol, reasoning: false });
 }
 
 /** Only an `authoritative` empty menu may be published and cached. */

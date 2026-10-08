@@ -47,3 +47,24 @@ it("a tool main crafted is callable from a swarm node's eval, and main's score r
   expect(JSON.parse(seen.called)).toMatchObject({ result: 42 });
   expect(seen.retired).toContain('double');
 });
+
+// job.context_silence_ms bounds how long a live job's context may leave its probe unanswered: the probe waits for its
+// object's one thread and nothing else, so under load it is late by the CPU queued ahead of it, never more.
+it("a running job's probe under queued CPU-bound invocations answers once the work ahead of it has run", async () => {
+  const probe = env.AGENT_FACET_PROBE.get(env.AGENT_FACET_PROBE.idFromName('probe-contention'));
+  const seen = await probe.probeUnderLoad('probe-contention', QUEUED_BURNS, BURN_ITERATIONS);
+  const worstQuiet = Math.max(...seen.quiet);
+
+  const worstLoaded = Math.max(...seen.loaded);
+
+  // The load held the thread for about its CPU, and a probe sent into it waited behind work queued ahead of it.
+  expect(seen.loadedMs).toBeGreaterThanOrEqual(QUEUED_BURNS * seen.burnMs / 2);
+  expect(worstLoaded).toBeGreaterThan(worstQuiet + seen.burnMs);
+  // It waited for that work and nothing else: never past the load's own end.
+  expect(worstLoaded).toBeLessThanOrEqual(seen.loadedMs + worstQuiet);
+});
+
+/** Forty invocations of a few tens of milliseconds of CPU each, queued on one object at once. */
+const QUEUED_BURNS = 40;
+
+const BURN_ITERATIONS = 20_000_000;

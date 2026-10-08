@@ -13,9 +13,11 @@ import { asFetchFunction } from './fetch-shim';
 
 export type WireProtocol = 'responses' | 'messages' | 'chat-completions';
 
-export const OPENAI_AUTHOR = 'openai/';
+const OPENAI_AUTHOR = 'openai/';
 
 const ANTHROPIC_AUTHOR = 'anthropic/';
+
+const WORKERS_AI_AUTHOR = 'workers-ai/';
 
 /** The API a gateway model is spoken to in, and the id its SDK is built with. */
 export interface GatewayWire {
@@ -30,7 +32,13 @@ export function gatewayWire(modelId: string): GatewayWire {
 
   if (modelId.startsWith(OPENAI_AUTHOR)) return { protocol: 'responses', modelId: modelId.slice(OPENAI_AUTHOR.length) };
 
-  return { protocol: 'chat-completions', modelId };
+  return { protocol: 'chat-completions', modelId: workersAiModelId(modelId) };
+}
+
+/** A Workers AI model by its own `@cf/` id: no endpoint takes the `workers-ai/` author a gateway spec names it under
+ *  (`No such model workers-ai/@cf/zai-org/glm-5.3`, code 5007, production 2026-10-05 and staging 2026-10-08). */
+export function workersAiModelId(modelId: string): string {
+  return modelId.startsWith(WORKERS_AI_AUTHOR) ? modelId.slice(WORKERS_AI_AUTHOR.length) : modelId;
 }
 
 /** The API an AI SDK package speaks (models.dev and OpenCode name a model's by its npm package); reasoning never picks it. */

@@ -4,6 +4,7 @@
  * refused and one resend. A revoked login reads as no login (`usableLogin`), so there is no third outcome to classify.
  * Each vendor keeps its words: it maps `absent` and `refused` to its own response.
  */
+import { copyHeaders } from './fetch-shim';
 import { refusedLogin, type AuthRequest, type AuthResolution } from './types';
 
 export type AuthenticatedAnswer =
@@ -33,4 +34,15 @@ export async function authenticatedSend(input: {
   return second.status === 401
     ? { kind: 'refused', reason: 'the renewed login was refused too', response: second }
     : { kind: 'answered', response: second, auth: renewed };
+}
+
+/** A send of one request through `transport` with a login's headers set over the request's own. */
+export function signedSend(transport: typeof fetch, input: RequestInfo | URL, init: RequestInit | undefined): (auth: AuthResolution) => Promise<Response> {
+  return (auth) => {
+    const merged = copyHeaders(init?.headers);
+
+    for (const [name, value] of Object.entries(auth.headers)) merged.set(name, value);
+
+    return transport(input, { ...init, headers: merged });
+  };
 }
