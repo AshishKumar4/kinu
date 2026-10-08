@@ -19,8 +19,8 @@ describe('a trial review', () => {
 
     const refused = (review: TrialReview) => () => parseReview(JSON.stringify(review), AT);
 
-    expect(refused({ ...REVIEW, objectives: [...REVIEW.objectives].reverse() })).toThrow('not the task\u2019s objectives in order');
-    expect(refused({ ...REVIEW, frictions: [{ ...REVIEW.frictions[0], turn: 3 }] })).toThrow('past the trial\u2019s 2');
+    expect(refused({ ...REVIEW, objectives: [...REVIEW.objectives].reverse() })).toThrow('objectives in order');
+    expect(refused({ ...REVIEW, frictions: [{ ...REVIEW.frictions[0], turn: 3 }] })).toThrow('a turn past the trial');
     expect(refused({ ...REVIEW, frictions: [{ ...REVIEW.frictions[0], file: 'src/made-up.ts' }] })).toThrow('src/made-up.ts');
     expect(refused({ ...REVIEW, use: { clean: true, findings: REVIEW.use.findings } })).toThrow('clean');
     expect(() => parseReview('Here it is: {}', AT)).toThrow();
