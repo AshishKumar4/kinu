@@ -1,10 +1,9 @@
 import {
-  AGENTS_TOOL_ACTIONS,
   BUILTIN_TOOLS,
   BUILTIN_TOOL_NAMES,
-  type AgentsToolAction,
   type BuiltinToolName,
 } from '../tools/registry';
+import { AGENTS_OPS, type AgentsOp } from '../operations/agents';
 import type { ExecutorInfo } from '../execution/types';
 import {
   resolvePromptModelProfile,
@@ -72,8 +71,8 @@ export interface PromptSurfaceOptions {
   registeredExecutors?: string[];
   executors?: readonly PromptExecutorInfo[];
   availableTools?: readonly BuiltinToolName[];
-  /** Wired `agents` actions (see agentsActionsFor). Defaults to all when the `agents` tool is on, else none. */
-  agentsActions?: readonly AgentsToolAction[];
+  /** Wired `agents` operations (see agentsActionsFor). Defaults to all when the `agents` tool is on, else none. */
+  agentsActions?: readonly AgentsOp[];
   /** Whether `ask` can target a role (temporary rung); gates decomposition guidance so it is never advertised where refused. */
   temporaryAsk?: boolean;
   backend?: PromptBackend;
@@ -85,7 +84,7 @@ export interface PromptSurfaceOptions {
 
 export interface PromptSurface {
   builtinTools: BuiltinToolName[];
-  agentsActions: AgentsToolAction[];
+  agentsActions: AgentsOp[];
   temporaryAsk: boolean;
   executors: PromptExecutorInfo[];
   configuredExecutors: PromptExecutorInfo[];
@@ -150,13 +149,13 @@ function uniqueBuiltinTools(tools: readonly BuiltinToolName[] | undefined): Buil
 }
 
 function uniqueAgentsActions(
-  actions: readonly AgentsToolAction[] | undefined,
+  actions: readonly AgentsOp[] | undefined,
   builtinTools: readonly BuiltinToolName[],
-): AgentsToolAction[] {
+): AgentsOp[] {
   if (!builtinTools.includes('agents')) return [];
-  const source = actions ?? AGENTS_TOOL_ACTIONS;
+  const source = actions ?? AGENTS_OPS;
 
-  return AGENTS_TOOL_ACTIONS.filter((action) => source.includes(action));
+  return AGENTS_OPS.filter((op) => source.includes(op));
 }
 
 export function compilePromptSurface(opts: PromptSurfaceOptions): PromptSurface {

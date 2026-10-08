@@ -614,6 +614,33 @@ describe('ChatWireTransport', () => {
     await h.land(answered);
   });
 
+  test('a finished step the relay replays is whole, one delta a part, and the step still streaming is replayed as it came', async () => {
+    const h = openRequest();
+    const { answered } = await h.open(h.connection('c1'), 'req-1', 'hello');
+    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+
+    const tokens = (id: string, words: readonly string[]): UIMessageChunk[] => words.map((delta) => ({ type: 'text-delta', id, delta }));
+
+    await h.transport.observe(chunks([
+      { type: 'start' }, { type: 'start-step' }, { type: 'text-start', id: 't0' }, ...tokens('t0', ['o', 'n', 'e']), { type: 'text-end', id: 't0' },
+      { type: 'tool-input-start', toolCallId: 'c0', toolName: 'eval' },
+      { type: 'tool-input-delta', toolCallId: 'c0', inputTextDelta: '{"co' }, { type: 'tool-input-delta', toolCallId: 'c0', inputTextDelta: 'de":1}' },
+      { type: 'finish-step' },
+      { type: 'start-step' }, { type: 'text-start', id: 't1' }, ...tokens('t1', ['t', 'w']),
+    ]));
+
+    const joining = h.connection('c2');
+    await h.transport.onConnect(joining);
+    await h.transport.onMessage(joining, JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: 'req-1' }));
+
+    expect(replayOf(h.connectionFrames('c2'))).toEqual([
+      'start', 'start-step', 'text-start', 'text-delta one', 'text-end', 'tool-input-start c0', 'tool-input-delta c0', 'finish-step',
+      'start-step', 'text-start', 'text-delta t', 'text-delta w', 'complete',
+    ]);
+    await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: 'one', toolCalls: [], steps: 2, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
+    await h.land(answered);
+  });
+
   test('a step the ledger records before its last chunk went out is replayed from the relay, and the rest follows live', async () => {
     const h = openRequest();
     const { answered } = await h.open(h.connection('c1'), 'req-1', 'hello');

@@ -87,7 +87,6 @@
     "gate:bench-corpus": "bun scripts/bench-corpus-gate.ts",
     "gate:scratch-ownership": "bun scripts/scratch-ownership.ts",
     "gate:commit-message": "bun scripts/commit-hygiene.ts",
-    "gate:agents-fields": "bun scripts/agents-fields.ts",
     "gate:infra": "bun scripts/infra-verify.ts",
     "gate:devbox-e2e": "bun scripts/devbox-container-tier.ts",
     "infra:provision": "bun scripts/infra-provision.ts",

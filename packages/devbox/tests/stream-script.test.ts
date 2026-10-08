@@ -19,6 +19,15 @@ const md5 = (bytes: Uint8Array): Buffer => createHash('md5').update(bytes).diges
 
 const md5Hex = (bytes: Uint8Array): string => createHash('md5').update(bytes).digest('hex');
 
+/** What a reader of the stored object recomputes: the SHA-256 of each part's SHA-256, in order. */
+function layerDigest(bytes: Uint8Array, partBytes: number): string {
+  const parts = createHash('sha256');
+
+  for (let at = 0; at < bytes.byteLength; at += partBytes) parts.update(createHash('sha256').update(bytes.subarray(at, at + partBytes)).digest());
+
+  return parts.digest('hex');
+}
+
 /** A multipart store. It answers the first part only once a second has arrived, so a publisher with one part in
  *  flight never finishes. `corruptPart` stores that
  *  part with one byte changed; `arrived` hears of each part as it lands. */
@@ -147,11 +156,13 @@ test('an archive many times the window streams in concurrent parts and the store
   const landed = store.object();
   const direct = join(root, 'direct.sqsh');
   Bun.spawnSync(['mksquashfs', source, direct, '-noappend', '-comp', 'zstd', '-no-progress']);
-  const [code, size] = stdout.split(' ');
+  const [code, size, , digest] = stdout.split(' ');
 
   expect({ code, stderr, partsAtOnce: store.partsAtOnce(), tree: listing(landed, 'landed') })
     .toEqual({ code: '0', stderr: '', partsAtOnce: true, tree: listing(Bun.file(direct).size > 0 ? new Uint8Array(await Bun.file(direct).arrayBuffer()) : undefined, 'direct') });
   expect(Number(size)).toBe(landed?.byteLength ?? -1);
+  // The parts went up out of order, the first last; the digest is of the object as stored.
+  expect(digest).toBe(layerDigest(landed ?? new Uint8Array(), SMALL.partBytes));
 });
 
 test('a small archive is one PUT whose digest the store confirms', async () => {
@@ -161,7 +172,9 @@ test('a small archive is one PUT whose digest the store confirms', async () => {
   await store.stop();
   const landed = store.object();
 
-  expect({ stdout, stderr, multipart: store.partsAtOnce() }).toEqual({ stdout: `0 ${String(landed?.byteLength)} ${md5Hex(landed ?? new Uint8Array())}`, stderr: '', multipart: false });
+  expect({ stdout, stderr, multipart: store.partsAtOnce() }).toEqual({
+    stdout: `0 ${String(landed?.byteLength)} ${md5Hex(landed ?? new Uint8Array())} ${layerDigest(landed ?? new Uint8Array(), SMALL.partBytes)}`, stderr: '', multipart: false,
+  });
 });
 
 test('a part the store holds as other bytes refuses the publication and aborts the upload', async () => {
@@ -211,7 +224,7 @@ open(sys.argv[2]).read(1)' '${archive}' '${go}'`;
   const { stdout, stderr } = await stream(tree('tail', 0, 0), store.url, archiver);
   await store.stop();
 
-  expect({ stdout, stderr, landed: store.object()?.byteLength }).toEqual({ stdout: expect.stringMatching(/^0 12582912 [0-9a-f]{32}-3$/), stderr: '', landed: 12582912 });
+  expect({ stdout, stderr, landed: store.object()?.byteLength }).toEqual({ stdout: expect.stringMatching(/^0 12582912 [0-9a-f]{32}-3 [0-9a-f]{64}$/), stderr: '', landed: 12582912 });
 });
 
 test('an archiver failure refuses the publication with exit 4', async () => {
