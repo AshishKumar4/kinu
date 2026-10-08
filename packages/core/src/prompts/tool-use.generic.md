@@ -1,0 +1,2 @@
+- Make independent calls together in one step; make a call that needs an earlier result after it.
+- Read and search files with `file` or a shell, whichever fits; for a large file, read only the part you need.

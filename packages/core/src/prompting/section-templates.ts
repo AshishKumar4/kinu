@@ -12,6 +12,7 @@ import builtinToolLine from "../prompts/builtin-tool-line.md" with { type: 'text
 import operatingGuidance from "../prompts/operating-guidance.md" with { type: 'text' };
 import roleSection from "../prompts/role-section.md" with { type: 'text' };
 import toolsSection from "../prompts/tools-section.md" with { type: 'text' };
+import toolUseSection from "../prompts/tool-use-section.md" with { type: 'text' };
 import workspaceExecutorLine from "../prompts/workspace-executor-line.md" with { type: 'text' };
 import sandboxExecutorLine from "../prompts/sandbox-executor-line.md" with { type: 'text' };
 import deviceExecutorLine from "../prompts/device-executor-line.md" with { type: 'text' };
@@ -26,7 +27,7 @@ import verificationSection from "../prompts/verification-section.md" with { type
 import outputFormatSection from "../prompts/output-format-section.md" with { type: 'text' };
 import workspaceInstructionsSection from "../prompts/workspace-instructions-section.md" with { type: 'text' };
 // Lead/worker doctrine adapted from AshishKumar4/oh-my-pi c6a7d56cc6,
-// fusion-lead/direct-edit-reminder and agents/sidekick (MIT-licensed sources:
+// fusion-lead and agents/sidekick (MIT-licensed sources:
 // opencode-fusion and OpenHands; upstream THIRD-PARTY-NOTICES.txt).
 import leadResponsibility from '../prompts/lead-responsibility.md' with { type: 'text' };
 import leadBrief from '../prompts/lead-brief.md' with { type: 'text' };
@@ -34,10 +35,23 @@ import leadParallel from '../prompts/lead-parallel.md' with { type: 'text' };
 import leadReview from '../prompts/lead-review.md' with { type: 'text' };
 import leadInterruptions from '../prompts/lead-interruptions.md' with { type: 'text' };
 import leadDelivery from '../prompts/lead-delivery.md' with { type: 'text' };
-import leadDirectEdit from '../prompts/lead-direct-edit.md' with { type: 'text' };
-import operatingKimi from '../prompts/operating-guidance.kimi.md' with { type: 'text' };
+// Each family's wording follows its vendor's prompting guide: OpenAI's GPT-6 guide and Codex's instructions
+// (THIRD_PARTY_NOTICES.md), Anthropic's Claude best practices, Google's Gemini strategies, Meta's Muse Spark docs.
+import operatingGeneric from '../prompts/operating-guidance.generic.md' with { type: 'text' };
 import operatingGpt from '../prompts/operating-guidance.gpt.md' with { type: 'text' };
+import operatingClaude from '../prompts/operating-guidance.claude.md' with { type: 'text' };
 import operatingGemini from '../prompts/operating-guidance.gemini.md' with { type: 'text' };
+import operatingMuse from '../prompts/operating-guidance.muse.md' with { type: 'text' };
+import toolUseGeneric from '../prompts/tool-use.generic.md' with { type: 'text' };
+import toolUseGpt from '../prompts/tool-use.gpt.md' with { type: 'text' };
+import toolUseClaude from '../prompts/tool-use.claude.md' with { type: 'text' };
+import toolUseGemini from '../prompts/tool-use.gemini.md' with { type: 'text' };
+import toolUseMuse from '../prompts/tool-use.muse.md' with { type: 'text' };
+import outputGeneric from '../prompts/output-format.generic.md' with { type: 'text' };
+import outputGpt from '../prompts/output-format.gpt.md' with { type: 'text' };
+import outputClaude from '../prompts/output-format.claude.md' with { type: 'text' };
+import outputGemini from '../prompts/output-format.gemini.md' with { type: 'text' };
+import outputMuse from '../prompts/output-format.muse.md' with { type: 'text' };
 import briefGpt from '../prompts/lead-brief.gpt.md' with { type: 'text' };
 import { definePromptSection, type PromptSection } from './template';
 import type { PromptModelFamily } from './model-profile';
@@ -89,6 +103,13 @@ export const TOOLS_SECTION = definePromptSection(
   toolsSection.trimEnd(),
 );
 
+/** How to use the tools above, worded per family; the index stays family-neutral. */
+export const TOOL_USE_SECTION = definePromptSection(
+  "tools/use",
+  '{{familyDelta}}',
+  toolUseSection.trimEnd(),
+);
+
 /** Hosted, `workspace` is the authoritative Nimbus session. The ceiling is prose fed
  * from the `worker.isolate.memory` catalog fact, not a measured `resourceLimits`. */
 export const WORKSPACE_EXECUTOR_LINE = definePromptSection(
@@ -126,7 +147,7 @@ export const GENERIC_EXECUTOR_LINE = definePromptSection(
  */
 export const EXECUTORS_SECTION = definePromptSection(
   "executors/section",
-  "{{deviceNamespaces}}{{executorLines}}{{exposeCalls}}{{workspaceRoot}}{{#if hasFolder}}{{/if}}{{#if hasSandbox}}{{/if}}{{#if hasDevices}}{{/if}}{{#if hasPreview}}{{/if}}{{#if workspacePreview}}{{/if}}",
+  "{{deviceNamespaces}}{{executorLines}}{{exposeCalls}}{{workspaceRoot}}{{#if hasFolder}}{{/if}}{{#if hasSandbox}}{{/if}}{{#if hasDevices}}{{/if}}{{#if hasPreview}}{{/if}}{{#if workspacePreview}}{{/if}}{{#if hasHire}}{{/if}}",
   executorsSection.trimEnd(),
 );
 
@@ -147,20 +168,20 @@ export const PERSISTENCE_SECTION = definePromptSection(
  * that. States only the two habits and where the contracts are. */
 export const CODE_EXECUTION_SECTION = definePromptSection(
   "state/code-execution",
-  "{{craftedNamespace}}",
+  "",
   codeExecutionSection.trimEnd(),
 );
 
 /** Names the helper lifetimes; which rung to pick lives in the `agents` tool description. */
 export const DELEGATION_SECTION = definePromptSection(
   "state/delegation",
-  "{{#if hasActions}}{{/if}}{{#if hasHire}}{{/if}}{{#if hasReport}}{{/if}}{{#if hasSwarm}}{{/if}}{{#if hasTemporaryAsk}}{{/if}}{{#if rungsInCode}}{{/if}}",
+  "{{#if hasActions}}{{/if}}{{#if hasHire}}{{/if}}{{#if hasReport}}{{/if}}{{#if hasSwarm}}{{/if}}{{#if hasTemporaryAsk}}{{/if}}{{#if rungsInCode}}{{/if}}{{#if isHired}}{{/if}}",
   delegationSection.trimEnd(),
 );
 
 export const BACKGROUND_WORK_SECTION = definePromptSection(
   "state/background-work",
-  "",
+  "{{#if hasHire}}{{/if}}",
   backgroundWorkSection.trimEnd(),
 );
 
@@ -177,7 +198,7 @@ export const VERIFICATION_SECTION = definePromptSection(
 
 export const OUTPUT_FORMAT_SECTION = definePromptSection(
   "state/output-format",
-  "",
+  "{{familyDelta}}",
   outputFormatSection.trimEnd(),
 );
 
@@ -194,7 +215,7 @@ export const LEAD_RESPONSIBILITY = definePromptSection('lead/responsibility', '{
 
 export const LEAD_BRIEF = definePromptSection('lead/brief', '{{familyDelta}}', leadBrief.trimEnd());
 
-export const LEAD_PARALLEL = definePromptSection('lead/parallel', '{{#if hasTaskHire}}{{/if}}', leadParallel.trimEnd());
+export const LEAD_PARALLEL = definePromptSection('lead/parallel', '', leadParallel.trimEnd());
 
 export const LEAD_REVIEW = definePromptSection('lead/review', '', leadReview.trimEnd());
 
@@ -202,31 +223,55 @@ export const LEAD_INTERRUPTION = definePromptSection('lead/interruptions', '', l
 
 export const LEAD_DELIVERY = definePromptSection('lead/delivery', '', leadDelivery.trimEnd());
 
-export const LEAD_DIRECT_EDIT = definePromptSection('lead/direct-edit', '', leadDirectEdit.trimEnd());
+// A family's wording for a section, from its vendor's guide; any other model reads the generic text, which alone
+// carries every behaviour (Kimi's and GLM's guides add nothing a prompt can say). The familyDelta slot survives promotion.
+const delta = (id: string, source: string) => definePromptSection(id, '', source.trimEnd());
 
-// Files contain only differing paragraphs; no entry means base wording. The familyDelta slot
-// survives promotion. GPT/Gemini wording comes from the fork cited above; Claude uses the base.
-const FAMILY_DELTAS = new Map<string, Readonly<Partial<Record<PromptModelFamily, PromptSection<''>>>>>([
+const OPERATING_GENERIC = delta('delta/operating-generic', operatingGeneric);
+
+const TOOL_USE_GENERIC = delta('delta/tool-use-generic', toolUseGeneric);
+
+const OUTPUT_GENERIC = delta('delta/output-generic', outputGeneric);
+
+const FAMILY_DELTAS = new Map<string, Readonly<Partial<Record<PromptModelFamily, readonly PromptSection<''>[]>>>>([
   [OPERATING_GUIDANCE.id, {
-    kimi: definePromptSection('delta/operating-kimi', '', operatingKimi.trimEnd()),
-    gpt: definePromptSection('delta/operating-gpt', '', operatingGpt.trimEnd()),
-    gemini: definePromptSection('delta/operating-gemini', '', operatingGemini.trimEnd()),
+    generic: [OPERATING_GENERIC],
+    kimi: [OPERATING_GENERIC],
+    gpt: [delta('delta/operating-gpt', operatingGpt)],
+    claude: [delta('delta/operating-claude', operatingClaude)],
+    gemini: [delta('delta/operating-gemini', operatingGemini)],
+    muse: [OPERATING_GENERIC, delta('delta/operating-muse', operatingMuse)],
+  }],
+  [TOOL_USE_SECTION.id, {
+    generic: [TOOL_USE_GENERIC],
+    kimi: [TOOL_USE_GENERIC],
+    gpt: [delta('delta/tool-use-gpt', toolUseGpt)],
+    claude: [delta('delta/tool-use-claude', toolUseClaude)],
+    gemini: [delta('delta/tool-use-gemini', toolUseGemini)],
+    muse: [delta('delta/tool-use-muse', toolUseMuse)],
+  }],
+  [OUTPUT_FORMAT_SECTION.id, {
+    generic: [OUTPUT_GENERIC],
+    kimi: [OUTPUT_GENERIC],
+    gpt: [delta('delta/output-gpt', outputGpt)],
+    claude: [delta('delta/output-claude', outputClaude)],
+    gemini: [delta('delta/output-gemini', outputGemini)],
+    muse: [delta('delta/output-muse', outputMuse)],
   }],
   [LEAD_BRIEF.id, {
-    gpt: definePromptSection('delta/brief-gpt', '', briefGpt.trimEnd()),
+    gpt: [delta('delta/brief-gpt', briefGpt)],
   }],
 ]);
 
 export function promptFamilyDelta(sectionId: string, family: PromptModelFamily): string {
-  const delta = FAMILY_DELTAS.get(sectionId)?.[family];
-
-  return delta ? `\n${delta.render({})}` : '';
+  return (FAMILY_DELTAS.get(sectionId)?.[family] ?? []).map((section) => `\n${section.render({})}`).join('');
 }
 
 export const PROMPT_SECTIONS: readonly PromptSection<string>[] = [
   OPERATING_GUIDANCE,
   ROLE_SECTION,
   TOOLS_SECTION,
+  TOOL_USE_SECTION,
   EXECUTORS_SECTION,
   PERSISTENCE_SECTION,
   CODE_EXECUTION_SECTION,
@@ -241,7 +286,6 @@ export const PROMPT_SECTIONS: readonly PromptSection<string>[] = [
   LEAD_REVIEW,
   LEAD_INTERRUPTION,
   LEAD_DELIVERY,
-  LEAD_DIRECT_EDIT,
 ];
 
 /** Absent means built-in sources, the state the layergate prefix digest is locked against. */
