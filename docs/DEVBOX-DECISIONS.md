@@ -4446,6 +4446,39 @@ asks the golden again, which answers `ready` once one is built.
 green held; `devbox/tests/golden.test.ts` and `golden-start.test.ts` pin the
 step the golden answers and the box passes on.
 
+D80. Opening the desktop shows a desktop: a background, a panel with a
+terminal and a browser to launch, and the windows open (2026-10-08). On
+production (`beaf28a46`), the owner opened Env → Desktop on a fresh box and
+saw a cursor on black. Nothing had failed: D70's start script brought up
+Xkasmvnc and a bare openbox, the tools held no panel and no terminal, and
+openbox's only way in is its right-click root menu, whose terminal entry had
+nothing to run. The tier's desktop check could not see it: it launched its own
+kiosk page first and clicked that.
+
+The tools now carry tint2, xterm, `x11-xserver-utils` and
+`fonts-dejavu-core` (D66: the golden installs the tarball's list, so nothing
+is installed at open). The start script sets the root background and starts
+tint2 after openbox, writing the panel's configuration and its two launchers
+as it writes Chromium's flags; it waits for the panel's window, so the first
+frame shows it. tint2 resolves a background id as it reads it, so the
+backgrounds come first: named before they are defined, the panel took the
+transparent background 0 and drew black (probe on armada, trixie with the
+tools' packages, job `20261008203914-30819315`). The launchers sit at fixed
+centres (24 and 60 px, 18 px above the foot) because the padding fixes them.
+
+The tier's desktop step is now what a person does: a box no other contract
+touched, its desktop opened through the product's client and routes with
+nothing launched; within 30 s of the client's first frame the screen shows
+the background a quarter in from its corner and the panel at its foot, and a
+click on each launcher opens an xterm and a Chromium window in the box. Not
+the screen's middle: X starts its pointer there, and the client draws it,
+lightening the pixel by a quarter on either session. The foreign-socket
+refusal stays. Red on the desktop production runs (run
+`dc202610082057400e72f`: `{"desktop":[0,0,0],"panel":[0,0,0]}` 30 s after the
+first frame, the black screen); green on this one (`dc2026100820574061df2`:
+the desktop step in 5.9 s, every other contract green, cleanup verified). The tarball is `5046244c…`, 349,830,567
+bytes (armada job `20261008204556-b92029c0`), 14 MB above D78's.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

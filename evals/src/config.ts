@@ -34,8 +34,14 @@ export function reviewModelOverride(env: Env): string | null {
 /** The product as deployed, with no workspace setting changed. */
 export const DEFAULT_ARM = 'product';
 
-/** Trials per task, model and arm; a pass rate over fewer cannot separate a regression from noise. */
-export const DEFAULT_TRIALS = 10;
+/**
+ * Trials per task, model and arm. Five is the fewest at which the exact test calls a fall in one task at all
+ * (`canTellAFall`, src/comparison.ts): 5/5 to 1/5 is p = 0.048 and a collapse to 0/5 always regresses, while 5/5 to
+ * 2/5 (p = 0.17) reads as unchanged. At three no fall but a collapse can be told from noise, and the verdict says
+ * inconclusive. Seven tasks of parts, five trials each, one trial of each task at a time: seven trials at once on a
+ * leg, as the ten of the eighteen tasks before them were.
+ */
+export const DEFAULT_TRIALS = 5;
 
 
 /** The paths whose changes can move an eval result; a change elsewhere is not named in the report. */

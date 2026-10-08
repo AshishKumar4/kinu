@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import type { RunEvent } from '@kinu.run/core';
-import { measurePromptUsage } from './results';
+import { measurePlanUsage, measurePromptUsage, steadyCacheP5, steadyCacheShare, type StepUsage } from './results';
 
 const events: [RunEvent, RunEvent] = [
   { type: 'step_finish', runId: 'trial-run', eventIndex: 1, stepIndex: 1, timestamp: '2026-10-02T19:00:00Z', usage: { input: 100, cacheRead: 20, output: 10 } },
@@ -44,4 +44,30 @@ test('requests from separate actors retain their identities and use chronologica
   expect(usage.inputTokens).toBe(300);
   expect(usage.outputTokens).toBe(40);
   expect(usage.metadata.cache?.ema).toBeCloseTo(0.34, 14);
+});
+
+// A whole request read from nothing is what the token-weighted share hides and the fifth percentile shows.
+test('the steady cache leaves each actor\u2019s first request out, and its p5 names a whole request that missed', () => {
+  const step = (actor: string, index: number, inputTokens: number, cacheReadTokens: number): StepUsage => ({
+    actor, timestamp: `2026-10-08T00:00:${String(index).padStart(2, '0')}Z`, runId: 'run', stepIndex: index,
+    inputTokens, outputTokens: 10, cacheReadTokens, cacheWriteTokens: 0,
+  });
+
+  const warm = Array.from({ length: 19 }, (_, index) => step('main', index + 1, 1000, 990));
+  const runs = [[step('main', 0, 1000, 0), ...warm, step('main', 20, 1000, 0)], [step('helper', 0, 1000, 0)]];
+
+  expect(steadyCacheShare(runs)).toBeCloseTo((19 * 990) / 20_000, 12);
+  expect(steadyCacheP5(runs)).toBe(0);
+  expect(steadyCacheP5([[step('main', 0, 1000, 0), ...warm]])).toBe(0.99);
+  expect(steadyCacheP5([[step('main', 0, 1000, 0)]])).toBeNull();
+});
+
+test('a plan window is read from the first call\u2019s quota to the last call\u2019s, per account and window', () => {
+  const finish = (index: number, at: number, usedPercent: number): RunEvent => ({
+    type: 'step_finish', runId: 'run', eventIndex: index, stepIndex: index, timestamp: '2026-10-08T00:00:00Z',
+    account: { provider: 'chatgpt', name: 'owner', quota: { at, windows: [{ measure: 'primary', usedPercent }, { measure: 'tokens' }] } },
+  });
+
+  expect(measurePlanUsage([{ actor: 'main', events: [finish(2, 2000, 14), finish(1, 1000, 12)] }, { actor: 'helper', events: [finish(3, 3000, 15)] }]))
+    .toEqual([{ account: 'chatgpt@owner', measure: 'primary', from: 12, to: 15 }]);
 });

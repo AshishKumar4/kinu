@@ -1,5 +1,5 @@
 import { WORKSPACE_ROOT } from '@kinu.run/core';
-import { defineEvalTask } from '../src/task';
+import type { EvalPart } from '../src/task';
 import type { EvalVerifier } from '../src/verifier';
 import { Seeded } from './seeded';
 
@@ -7,7 +7,6 @@ import { Seeded } from './seeded';
 // missing on one side, or booked for another amount. The agent writes the reconciliation and then
 // answers with a sum nobody computes in their head. Every answer is computed here from the same rows.
 
-const MISSION = "Fernhill Bakery's workspace. We keep our books here and reconcile them against the bank every month.";
 
 const DIR = `${WORKSPACE_ROOT}/ledger`;
 
@@ -122,9 +121,12 @@ async function checkReport(verifier: EvalVerifier): Promise<void> {
   });
 }
 
-export const ledgerReconcile = defineEvalTask({
-  id: 'ledger-reconcile',
-  mission: MISSION,
+export const ledgerReconcile: EvalPart = {
+  id: 'books',
+  objectives: [
+    'Write reconcile/report.csv with every mismatch between ledger/bank.csv and ledger/books.csv and nothing else, sorted by id.',
+    'Answer with the sum of the absolute differences.',
+  ],
   turns: [{
     seed: [
       { path: `${DIR}/bank.csv`, content: csv(LEDGERS.bank) },
@@ -149,4 +151,4 @@ absolute differences over every row of the report, counting a missing amount as 
       });
     },
   }],
-});
+};

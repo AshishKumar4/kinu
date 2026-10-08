@@ -1,7 +1,6 @@
 import { WORKSPACE_ROOT } from '@kinu.run/core';
 import { shows, type Sight } from '../src/sight';
-import { defineTaskEval } from '../src/eval';
-import { defineEvalTask } from '../src/task';
+import type { EvalPart } from '../src/task';
 import { answerShows, answersWithSlates, madeNoApp, madeNoPrototype } from './ephemeral';
 import { Seeded } from './seeded';
 
@@ -11,7 +10,6 @@ import { Seeded } from './seeded';
 // page must chart it too. Each hour's values are planted so every common percentile rule gives the same p95 and the
 // hour's maximum is not it.
 
-const MISSION = "Atlas Payments' API on-call workspace.";
 
 const LOG_PATH = `${WORKSPACE_ROOT}/logs/api.jsonl`;
 
@@ -65,9 +63,13 @@ const SEEDED = charts(P95);
 
 const GROWN = charts({ ...P95, [LATE_HOUR.hour]: LATE_HOUR.p95 });
 
-const task = defineEvalTask({
-  id: 'latency-chart',
-  mission: MISSION,
+export const latencyChart: EvalPart = {
+  id: 'chart',
+  objectives: [
+    `Answer with an in-chat chart of each hour's p95 latency in logs/api.jsonl, every hour labelled and its p95 written on it.`,
+    'The chart reads the log each time it is shown, so an hour added to the file appears without another turn.',
+    'A one-off view: no file slate, and no prototype page, server or browser check before it.',
+  ],
   turns: [{
     seed: [{ path: LOG_PATH, content: LOG }],
     prompt: `Chart the p95 latency of the requests in ${LOG_PATH} by hour, labelling each hour like 09:00 and
@@ -88,9 +90,7 @@ read the file each time it's shown rather than keep a copy of today's numbers.`,
       });
     },
   }],
-});
+};
 
 // Every hour's planted p95 is distinct, so one shown value cannot stand for two hours.
 if (new Set([...Object.values(P95), LATE_HOUR.p95]).size !== Object.keys(P95).length + 1) throw new Error('two hours share a planted p95');
-
-defineTaskEval(task);

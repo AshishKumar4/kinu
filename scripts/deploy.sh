@@ -46,9 +46,17 @@
 # Step 3 asserts this from wrangler's own output rather than trusting it.
 #
 # Usage:
-#   bun run deploy [--promote | --rollback] [--reset]
-#   bash scripts/deploy.sh [--promote] [--reset] [--bootstrap] [--gates-only]
+#   bun run deploy [--promote | --rollback] [--reset] [--evals]
+#   bash scripts/deploy.sh [--promote] [--reset] [--bootstrap] [--gates-only] [--evals]
 #   bash scripts/deploy.sh --rollback
+#
+# `--evals` runs the real-model evals a deploy can start: on staging, the
+# evals.yml dispatch (five trials on staging against production) and the soak;
+# on a promotion, the soak on production. Without it a deploy runs no real-model
+# eval (the owner, 2026-10-08): evals run on a staging that has stopped moving,
+# against production, and staging stays quiet while they run, so they are
+# dispatched by hand once it has (`bun scripts/evals-dispatch.ts <sha>`, then
+# `bun scripts/promote.ts evals <run>` names the run in the build's record).
 #
 # `--promote` deploys production, and only the build staging verified: the
 # record staging's green deploy of HEAD wrote (scripts/promote.ts) stands for
@@ -131,6 +139,7 @@ KINU_GATES_ONLY=0
 KINU_PROMOTE=0
 KINU_ROLLBACK=0
 KINU_RESET=0
+KINU_EVALS=0
 for option in "$@"; do
   case "$option" in
     --promote) KINU_PROMOTE=1 ;;
@@ -138,9 +147,10 @@ for option in "$@"; do
     --bootstrap) KINU_BOOTSTRAP=1 ;;
     --gates-only) KINU_GATES_ONLY=1 ;;
     --reset) KINU_RESET=1 ;;
+    --evals) KINU_EVALS=1 ;;
     *)
       echo -e "${RED}Unknown option '$option'.${NC}"
-      echo "Usage: scripts/deploy.sh [--promote] [--reset] [--bootstrap] [--gates-only] | --rollback"
+      echo "Usage: scripts/deploy.sh [--promote] [--reset] [--bootstrap] [--gates-only] [--evals] | --rollback"
       exit 2
       ;;
   esac
@@ -969,7 +979,7 @@ fi
 
 if [ "$KINU_PROMOTE" = "1" ]; then
   if [ -z "$KINU_TIERS_WHY" ]; then
-    if provision_eval_keys "$KINU_EVAL_ORIGIN"; then start_soak; fi
+    if [ "$KINU_EVALS" = "1" ] && provision_eval_keys "$KINU_EVAL_ORIGIN"; then start_soak; fi
     run_phase post-publish
   else
     skip_phase post-publish "$KINU_TIERS_WHY"
@@ -979,7 +989,7 @@ else
   # Started first, so its hours run while the wave runs here. Without its run
   # this build has no verdict to be promoted on, so a failed dispatch is a red.
   KINU_EVAL_KEYS=0
-  if [ "$KINU_SERVING" = "1" ]; then
+  if [ "$KINU_EVALS" = "1" ] && [ "$KINU_SERVING" = "1" ]; then
     if provision_eval_keys "$KINU_EVAL_ORIGIN" "$EVAL_BASELINE_ORIGIN"; then
       KINU_EVAL_KEYS=1
       dispatch_evals \
@@ -1085,7 +1095,10 @@ echo "          version ${KINU_VERSION:-unknown}"
 echo "          build   $KINU_SHA"
 echo ""
 echo -e "${GREEN}✅ Kinu Worker deployed and verified.${NC}"
-if [ "$KINU_ENV" = "staging" ]; then
+if [ "$KINU_ENV" = "staging" ] && [ -z "$KINU_EVALS_RUN" ]; then
+  echo "No eval ran. Once staging has stopped moving: bun scripts/evals-dispatch.ts $KINU_SHA, then bun scripts/promote.ts evals <its run>;"
+  echo "a green Verdict lets it be promoted with: bun run deploy --promote"
+elif [ "$KINU_ENV" = "staging" ]; then
   echo "Promote it to production with: bun run deploy --promote"
 else
   echo "Return production to the build it took before with: bun run deploy --rollback"
