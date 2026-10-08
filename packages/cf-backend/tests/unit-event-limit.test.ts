@@ -3,12 +3,13 @@
 // A real `OrchestratorAgent` over bun:sqlite, because the defect was in what SQL did with the value.
 import { describe, test, expect } from 'bun:test';
 import { serveFamily } from './helpers/api';
-import { boundEventQuery, type IngressDescriptor } from '@kinu.run/core';
+import type { IngressDescriptor } from '@kinu.run/core';
 
-/** Asked of `boundEventQuery` rather than restated here. */
-const DEFAULT_PAGE = boundEventQuery().limit;
+/** The page an unstated limit reads, and the most an untrusted caller can ask for: stated here, not asked of the
+ *  bound under test. */
+const DEFAULT_PAGE = 100;
 
-const UNTRUSTED_CEILING = boundEventQuery({ limit: Number.MAX_SAFE_INTEGER }).limit;
+const UNTRUSTED_CEILING = 500;
 
 import { eventsOver, orchestratorHarness } from './helpers/actor-harness';
 import type { HubEnv, HubResolver } from '../src/events/routes';

@@ -28,7 +28,7 @@ import { createCFRuntime, type CFRuntime, type CFRuntimeHooks, type WorkspaceBox
 import type { LiveRead, TemporaryAgentPort } from '@kinu.run/core';
 
 /** The root agents-SDK members a hosted actor's runtime borrows; projected from `Agent` so upstream drift fails to compile. */
-export type HostRootAgent = Pick<Agent<Env>, 'name' | 'sql' | 'runFiber'>;
+type HostRootAgent = Pick<Agent<Env>, 'name' | 'sql' | 'runFiber'>;
 
 /** Everything the root lends hosted actors; anything absent here a child builds for itself. */
 export interface WorkspaceHostSeams {

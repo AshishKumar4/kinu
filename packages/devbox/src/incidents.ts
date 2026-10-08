@@ -27,7 +27,7 @@ export interface IncidentRow extends DevboxIncident {
 
 /** Caps the ledger: a failing box records an incident per retry and every pass reads all rows.
  *  Only settled rows are reaped, oldest first; pending rows are never dropped. */
-export const INCIDENT_LEDGER_MAX_ROWS = 100;
+const INCIDENT_LEDGER_MAX_ROWS = 100;
 
 export interface IncidentStore {
   get(key: string): Promise<IncidentRow | undefined>;

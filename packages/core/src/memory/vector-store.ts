@@ -7,7 +7,7 @@ import { renderIssues, type JsonObject } from '../utils/json';
 import { diagnostics, settle, toKinuError } from '../obs/index';
 
 /** Duck-typed so core stays dependency-free. */
-export interface VectorMutation {
+interface VectorMutation {
   ids?: string[];
 }
 

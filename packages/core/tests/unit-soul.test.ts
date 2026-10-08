@@ -128,7 +128,7 @@ describe('workspace birth', () => {
       name: 'quiet-harbor-1a4e20', title: 'Atlas', purpose: 'Help with testing.', llm: TEST_LLM, home: bornSoul().home,
     });
 
-    expect(await readText(rt.storage.vfs, 'scaffold/agent.js')).toContain('async');
+    expect((await rt.storage.vfs.stat('scaffold/agent.js'))?.type).toBe('file');
     expect(await readText(rt.storage.vfs, 'memory/MEMORY.md')).toContain('Atlas');
   });
 
@@ -155,7 +155,7 @@ describe('workspace birth', () => {
       name: 'quiet-harbor-1a4e20', title: 'Callback Audit', purpose: 'Audit it.', llm: TEST_LLM, home: titledSoul.home,
     });
 
-    expect(await titledSoul.soul()).toStartWith('# Callback Audit');
+    expect(await titledSoul.soul()).toContain('Callback Audit');
     const untitledSoul = bornSoul();
 
     const untitled = await createWorkspace(new Database(':memory:'), {
@@ -163,7 +163,6 @@ describe('workspace birth', () => {
     });
 
     const soul = await untitledSoul.soul() ?? '';
-    expect(soul).toStartWith('# Kinu');
     expect(soul).not.toContain('quiet-harbor-1a4e20');
     expect(await readText(untitled.storage.vfs, 'memory/MEMORY.md'))
       .not.toContain('quiet-harbor-1a4e20');

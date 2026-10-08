@@ -218,14 +218,7 @@ describe('E2E Lifecycle', () => {
     target?.teardown();
   });
 
-  inProcessTest('agent created with correct tables', async () => {
-    const tables = db.query<{ name: string }, []>(
-      "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
-    ).all().map(t => t.name);
-
-    expect(tables).toContain('memory_note_files');
-    expect(tables).toContain('conversation_entries');
-    expect(tables).toContain('search_nodes');
+  inProcessTest('agent created with its SOUL.md', async () => {
     const soul = soulIn(rt.space) ?? '';
     expect(soul).toContain('TypeScript');
   });

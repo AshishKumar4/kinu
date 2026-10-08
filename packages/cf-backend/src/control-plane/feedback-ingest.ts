@@ -9,7 +9,7 @@ import { controlPlaneStub, hasControlPlane, type ControlPlaneEnv } from './stub'
 import type { ControlPlaneDO } from './control-plane-do';
 import { internalCaller } from './admin-caller';
 
-export type FeedbackSink = Pick<ControlPlaneDO, 'recordFeedback'>;
+type FeedbackSink = Pick<ControlPlaneDO, 'recordFeedback'>;
 
 /** Optional: absence is reported to the reporter, not counted as a refused write. */
 export type FeedbackIngestEnv<Id> = Partial<ControlPlaneEnv<Id, FeedbackSink>>;

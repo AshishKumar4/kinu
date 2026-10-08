@@ -202,7 +202,7 @@ export function markSwarmNodeMerged(
 }
 
 /** One node of an interrupted search, as the re-entry hands it back. */
-export interface ReenteredSwarmNode {
+interface ReenteredSwarmNode {
   readonly id: string;
   readonly parentId: string | null;
   readonly depth: number;
@@ -493,7 +493,7 @@ function reconstructedTurns(steps: readonly HeadStep[]): ModelMessage[] {
 }
 
 /** One candidate an unfinished search already measured. */
-export interface HarvestedCandidate {
+interface HarvestedCandidate {
   readonly nodeId: string;
   readonly depth: number;
   /** `search_nodes.observation`. */

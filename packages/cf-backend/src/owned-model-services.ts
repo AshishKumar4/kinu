@@ -20,7 +20,7 @@ import type { ObjectNamespace } from '@kinu.run/core';
 type MarkdownConversion = NonNullable<Parameters<typeof buildCfWebSearchProvider>[0]['AI']>['toMarkdown'];
 
 /** The `env.AI` binding. HTML→markdown is optional: without it core keeps raw HTML, and a gateway-only binding stays usable. */
-export interface OwnedAiBinding extends WorkersAIBinding {
+interface OwnedAiBinding extends WorkersAIBinding {
   toMarkdown?: MarkdownConversion;
 }
 

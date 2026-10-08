@@ -6,17 +6,13 @@
  */
 import { expect, test } from 'bun:test';
 import { jsonSchema, tool } from 'ai';
-import { createTestRuntime, scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
-import { hostedSeatsOver } from './helpers-actor-host';
+import { scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
+import { sessionFixture } from './helpers-session';
 import { recoverActorTurns } from '../src/state/actor-host';
-import {
-  createAgentsTool, profileCatalogDigest, resolveTurnProfile, ROOT_DELEGATION_BUDGET,
-  type ProfileCatalog, type SubordinateHandoff, type SubordinateRosterEntry, type TeamToolDeps,
-} from '../src/index';
+import { createAgentsTool, ROOT_DELEGATION_BUDGET, type SubordinateHandoff, type SubordinateRosterEntry, type TeamToolDeps } from '../src/index';
 import {
   createAgentTracing, createRecordingTracer,
 } from '../src/obs/index';
-import { analyticsDigest } from '../src/obs/analytics/privacy';
 
 const TASK = 'Write the secret plan to plan.txt, then tell the researcher about it.';
 
@@ -62,11 +58,8 @@ function team() {
 }
 
 test('a turn records admitted, each step, tool run and delegation, and settled, each closed where it opens, joined by the turn, with no text', async () => {
-  const { rt, testSql } = createTestRuntime();
   const tracer = createRecordingTracer();
-  const tracing = createAgentTracing({ tracer, isolateGen: 3, selfPath: [], actor: { id: rt.actor.actorId, kind: 'main' } });
-  const seats = hostedSeatsOver({ rt, db: testSql.db, tracing });
-  const { actor } = await seats.seat('planner', 'agent');
+  const tracing = createAgentTracing({ tracer, isolateGen: 3, selfPath: [], actor: { id: 'root-trace', kind: 'main' } });
   const { deps, messages } = team();
 
   const tools = {
@@ -74,13 +67,6 @@ test('a turn records admitted, each step, tool run and delegation, and settled, 
     agents: createAgentsTool({ mode: 'build', swarms: true, team: deps }),
   };
 
-  const catalog = { roles: { planner: { description: 'Plan', instructions: 'Plan.',
-    tier: 'default', preset: 'ideate', allowedTools: ['file', 'agents'] } }, tiers: { default: { model: 'test-model' } } } satisfies ProfileCatalog;
-
-  const inputs = { envelope: { authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog },
-    provider: { revision: 'trace-test', availableModels: ['test-model'] } } satisfies Parameters<typeof actor.session.bindProfile>[2];
-
-  const profile = resolveTurnProfile({ ...inputs, roleId: 'planner', workMode: 'build', availableTools: Object.keys(tools), activeSkills: [] });
   let calls = 0;
 
   const model = scriptedTurnModel({ doGenerate: (): ScriptedTurnResult => {
@@ -98,29 +84,16 @@ test('a turn records admitted, each step, tool run and delegation, and settled, 
         outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [] };
   } });
 
+  const fixture = await sessionFixture({
+    model, tools, tracing, actorId: '00000000-0000-4000-8000-000000000003',
+  });
+
   try {
-    const lease = actor.session.beginTurn({ runId: 'run-trace', turnId: 'turn-trace' }, 'build', 0);
-    actor.session.bindProfile(lease, profile, inputs);
-    await actor.session.openTurnInput(lease, { item: {}, message: { role: 'user', content: TASK }, birthContext: async () => [] });
-
-    try {
-      const result = await actor.session.execute(lease, {
-        task: TASK, loopVersion: await actor.runtime.identity.scaffold.version(),
-        chat: { modelSpec: 'test/model', model, system: 'Plan.', tools }, extensions: [],
-        dynamic: () => ({ factsBlock: '' }),
-      }, () => {});
-
-      expect(result.failure).toBeNull();
-      expect(messages).toEqual([MESSAGE]);
-      // As the chat loop does once the answer is durable.
-      actor.session.settleTurnClaim(lease, 'completed');
-    } finally {
-      actor.session.finishTurn(lease);
-    }
-  } finally {
-    seats.host.releaseAll();
-    testSql.close();
-  }
+    await fixture.chat.send(TASK, { id: 'turn-trace' });
+    expect(messages).toEqual([MESSAGE]);
+    expect(fixture.events.filter(event => event.type === 'turn-end')).toHaveLength(1);
+    expect(fixture.actor.stores.claims.unsettled(1)).toEqual([]);
+  } finally { fixture.close(); }
 
   const spans = tracer.opened;
 
@@ -149,11 +122,11 @@ test('a turn records admitted, each step, tool run and delegation, and settled, 
 
   for (const span of spans) {
     // The join: one digested turn id and its epoch on every span, since no span is another's parent.
-    expect(span.attributes.get('kinu.turn')).toBe(analyticsDigest('turn-trace'));
+    expect(span.attributes.get('kinu.turn')).toBe('36a55a83331e87fe');
     expect(span.attributes.get('kinu.turn.epoch')).toBe(1);
     expect(span.attributes.get('kinu.duration_ms')).toBeGreaterThanOrEqual(0);
     // The hosted actor, not the object's root, owns every span of its turn.
-    expect(span.attributes.get('kinu.actor')).toBe(analyticsDigest(actor.handle.actorId));
+    expect(span.attributes.get('kinu.actor')).toBe('cc1ea3f2cd703a7c');
     expect(span.attributes.get('kinu.actor_kind')).toBe('subordinate');
     expect(span.exceptions).toEqual([]);
   }
@@ -166,11 +139,15 @@ test('a turn records admitted, each step, tool run and delegation, and settled, 
 });
 
 test('a turn a dead process left admitted is recorded settled when recovery closes it, once', async () => {
-  const { rt, testSql } = createTestRuntime();
   const tracer = createRecordingTracer();
-  const tracing = createAgentTracing({ tracer, isolateGen: 3, selfPath: [], actor: { id: rt.actor.actorId, kind: 'main' } });
-  const seats = hostedSeatsOver({ rt, db: testSql.db, tracing });
-  const { actor } = await seats.seat('planner', 'agent');
+  const tracing = createAgentTracing({ tracer, isolateGen: 3, selfPath: [], actor: { id: 'root-trace', kind: 'main' } });
+
+  const fixture = await sessionFixture({
+    model: scriptedTurnModel({ doGenerate: () => { throw new Error('recovery must not request inference'); } }),
+    tracing, actorId: '00000000-0000-4000-8000-000000000004',
+  });
+
+  const { actor, seats } = fixture;
 
   try {
     const admitted = await actor.stores.claims.admit({
@@ -180,7 +157,7 @@ test('a turn a dead process left admitted is recorded settled when recovery clos
     });
 
     // The process that admitted it died before its first request was recorded.
-    testSql.db.exec("DELETE FROM actor_requests WHERE turn_id = 'turn-dead'");
+    actor.runtime.storage.execRaw("DELETE FROM actor_requests WHERE turn_id = 'turn-dead'");
 
     expect(await recoverActorTurns(seats.host)).toMatchObject({ failed: ['turn-dead'] });
     expect(await recoverActorTurns(seats.host)).toMatchObject({ failed: [] });
@@ -188,13 +165,12 @@ test('a turn a dead process left admitted is recorded settled when recovery clos
     expect(tracer.opened.map((span) => span.name)).toEqual(['turn.settled']);
     const [settled] = tracer.opened;
     expect(Object.fromEntries(settled?.attributes ?? [])).toMatchObject({
-      'kinu.turn': analyticsDigest('turn-dead'), 'kinu.turn.epoch': admitted.epoch,
+      'kinu.turn': 'dad8e99b8d206857', 'kinu.turn.epoch': admitted.epoch,
       'kinu.turn.outcome': 'error', 'kinu.turn.recovered': true,
-      'kinu.actor': analyticsDigest(actor.handle.actorId), 'kinu.actor_kind': 'subordinate',
+      'kinu.actor': 'cd1ea585cc7038e9', 'kinu.actor_kind': 'subordinate',
     });
     expect(settled?.openAcrossAwait).toBe(false);
   } finally {
-    seats.host.releaseAll();
-    testSql.close();
+    fixture.close();
   }
 });

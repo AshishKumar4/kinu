@@ -6,7 +6,6 @@
 import { describe, expect, test } from 'bun:test';
 import { chatgptLoginIssuer, OAuthTokenError, type OAuthCredential } from '@kinu.run/core';
 import { refreshTokens } from '../../pc-agent/src/chatgpt.js';
-import { daemonSource, GENERATED } from '../../../scripts/daemon-generated';
 
 const SCOPES = ['chatgpt.tokens.use.direct', 'email', 'offline_access', 'openid', 'profile', 'resource.invoke'];
 
@@ -41,25 +40,22 @@ async function coreDecides(endpoint: typeof fetch): Promise<Decision> {
   }
 }
 
-const ANSWERS: ReadonlyArray<readonly [string, number, string]> = [
-  ['a full rotation', 200, JSON.stringify({ access_token: 'at-2', refresh_token: 'rt-2', expires_in: 3600 })],
-  ['a rotation that keeps the refresh token', 200, JSON.stringify({ access_token: 'at-2', expires_in: 3600 })],
-  ['an answer with only an ID token', 200, JSON.stringify({ id_token: 'header.claims.signature' })],
-  ['a malformed answer', 200, '<html>not json</html>'],
-  ['a spent refresh token', 400, JSON.stringify({ error: 'invalid_grant' })],
-  ['a client refusal', 401, JSON.stringify({ error: 'invalid_client' })],
+const ANSWERS: ReadonlyArray<readonly [string, number, string, Decision]> = [
+  ['a full rotation', 200, JSON.stringify({ access_token: 'at-2', refresh_token: 'rt-2', expires_in: 3600 }),
+    { accessToken: 'at-2', refreshToken: 'rt-2', scopes: SCOPES }],
+  ['a rotation that keeps the refresh token', 200, JSON.stringify({ access_token: 'at-2', expires_in: 3600 }),
+    { accessToken: 'at-2', refreshToken: 'rt-1', scopes: SCOPES }],
+  ['an answer with only an ID token', 200, JSON.stringify({ id_token: 'header.claims.signature' }), { refused: true, spent: false }],
+  ['a malformed answer', 200, '<html>not json</html>', { refused: true, spent: false }],
+  ['a spent refresh token', 400, JSON.stringify({ error: 'invalid_grant' }), { refused: true, spent: true }],
+  ['a client refusal', 401, JSON.stringify({ error: 'invalid_client' }), { refused: true, spent: false }],
 ];
 
 describe('a ChatGPT refresh, decided by both sign-ins', () => {
-  test('the machine carries core\'s protocol, generated: run scripts/daemon-generated.ts after changing it', () => {
-    const { committed, fresh } = daemonSource(GENERATED.chatgptProtocol);
-
-    expect(committed === fresh).toBe(true);
-  });
-
-  test.each(ANSWERS)('%s', async (_name, status, body) => {
+  test.each(ANSWERS)('%s', async (_name, status, body, expected) => {
     const endpoint = tokenEndpoint(status, body);
 
-    expect(await machineDecides(endpoint)).toEqual(await coreDecides(endpoint));
+    expect(await machineDecides(endpoint)).toEqual(expected);
+    expect(await coreDecides(endpoint)).toEqual(expected);
   });
 });

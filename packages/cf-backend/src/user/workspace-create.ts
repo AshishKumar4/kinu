@@ -45,7 +45,7 @@ export const CreateCloudWorkspaceInputSchema = v.object({
   role: v.optional(v.string()),
 });
 
-export type CreateCloudWorkspaceInput = v.InferOutput<typeof CreateCloudWorkspaceInputSchema>;
+type CreateCloudWorkspaceInput = v.InferOutput<typeof CreateCloudWorkspaceInputSchema>;
 
 export type CloudWorkspaceBirth = Pick<
   OrchestratorAgent,

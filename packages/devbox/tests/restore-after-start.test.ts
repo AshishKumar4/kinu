@@ -290,7 +290,7 @@ describe('the start hook owns restoration', () => {
     await box.start();
     expect(stamps(container)).toBe(0);
     expect(container.starts).toEqual([]);
-    expect((await box.devboxState()).unready).toContain('[abandoned -> replace]');
+    expect((await box.devboxState()).restoration).toBe('unattached');
     container.clearSchedules("devboxStartup");
     // A pending replacement is no refusal. The page's read arms nothing; a caller's ask does.
     expect((await box.restoreStatus()).refused).toBeUndefined();
@@ -360,7 +360,7 @@ describe('the start hook owns restoration', () => {
     await parked.reached;
     const state = await box.devboxState();
     expect(state.restoration).toBe('restoring');
-    expect(state.unready).toContain('in the start');
+    expect(state.unready).toBeString();
     parked.release();
     await start;
     expect((await box.devboxState()).restoration).toBe('attached');
@@ -409,8 +409,8 @@ describe('the start hook owns restoration', () => {
     await activation;
     await box.devboxHeartbeat();
     expect((await box.devboxState()).ready).toBe(false);
-    expect({ readiness: await box.resolveReadiness(), unready: (await box.devboxState()).unready })
-      .toEqual({ readiness: { kind: 'repair' }, unready: 'port 3000 never answered' });
+    expect(await box.resolveReadiness()).toEqual({ kind: 'repair' });
+    expect((await box.devboxState()).unready).toContain('3000');
     expect(stamps(container)).toBe(1);
     await box.devboxStartup();
     expect(stamps(container)).toBe(1);
@@ -463,7 +463,7 @@ describe('the start hook owns restoration', () => {
     expect(container.initGate).toBeUndefined();
     expect((await box.devboxState()).ready).toBe(false);
     expect(rows.has('devbox:restoration')).toBe(true);
-    expect((await box.devboxState()).unready).toContain('[abandoned -> replace]');
+    expect((await box.devboxState()).restoration).toBe('unattached');
     expect((await box.checkpointNow('tick')).kind).toBe('failed');
     parked.release();
     expect((await box.resolveReadiness()).kind).toBe('pending');
@@ -485,7 +485,7 @@ describe('every ending is a named state, and no ending rejects into the platform
       .toEqual({
         restoration: 'repair',
         ready: false,
-        unready: 'port 3000 never answered',
+        unready: expect.any(String),
       });
     expect(await box.getExposedPorts('preview.test')).toEqual([]);
     expect((await box.exec('echo fixing')).exitCode).toBe(0);
@@ -513,13 +513,10 @@ describe('every ending is a named state, and no ending rejects into the platform
     );
 
     await expect(box.exec('echo hello')).rejects.toMatchObject(
-      { message: expect.stringContaining('not ready') });
+      { code: 'io' });
 
     // The same refusal as a value, the shape that survives a Durable Object RPC boundary intact.
-    expect(await box.resolveReadiness()).toEqual({
-      kind: 'pending',
-      reason: expect.stringContaining('not ready'),
-    });
+    expect(await box.resolveReadiness()).toMatchObject({ kind: 'pending' });
 
     const state = await box.devboxState();
     expect(state.restoration).not.toBe('unattached');

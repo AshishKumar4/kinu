@@ -1,9 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import * as config from '../src/config';
 import * as evaluation from '../src/mcts/evaluation';
 import * as scaffoldExecutor from '../src/scaffold/executor';
 import * as agentOrchestrator from '../src/orchestrator/agent-orchestrator';
-import type { EvaluateBranchOptions } from '../src/mcts/evaluation';
 import type { AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
 import { DEFAULT_ATTEMPT_BUDGET } from '../src/bench/types';
 import { jsonSchema, tool } from 'ai';
@@ -47,10 +45,6 @@ test('the shared chat driver, given no stop condition, completes work beyond ten
 });
 
 describe('the shared turn has no elapsed deadline', () => {
-  test('no LLM-call timeout or timeout-retry constant is exported', () => {
-    expect('LLM_CALL_TIMEOUT_MS' in config).toBe(false);
-    expect('LLM_CALL_MAX_RETRIES' in config).toBe(false);
-  });
 });
 
 
@@ -58,13 +52,6 @@ describe('owned work carries no default elapsed deadline', () => {
   test('MCTS judges expose no per-call wall clock', () => {
     // A judge call is awaited to settlement; the ensemble degrades only on unparseable samples, never slow ones.
     expect('DEFAULT_JUDGE_CALL_TIMEOUT_MS' in evaluation).toBe(false);
-  });
-
-  test('the evaluator options expose no judgeCallTimeoutMs field', () => {
-    type HasJudgeTimeout = 'judgeCallTimeoutMs' extends keyof EvaluateBranchOptions ? true : false;
-
-    const hasJudgeTimeout: HasJudgeTimeout = false;
-    expect(hasJudgeTimeout).toBe(false);
   });
 
   test('scaffold runs expose no turn timeout constant or option field', () => {

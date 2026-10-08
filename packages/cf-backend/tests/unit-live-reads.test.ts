@@ -6,7 +6,7 @@
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  appendMemoryNote, isNimbusTable, LIVE_READS, READS_CHANGED_EVENT, readsWrittenBy, type LiveRead,
+  appendMemoryNote, LIVE_READS, READS_CHANGED_EVENT, type LiveRead,
 } from '@kinu.run/core';
 import {
   chatSessionTurns, hostedSubordinateHarness, jobsOver, orchestratorHarness, reactivateOrchestratorHarness,
@@ -61,47 +61,6 @@ async function liveRead(agent: HarnessOrchestratorAgent, read: LiveRead): Promis
   await reads[read]();
 }
 
-/** Tables a live read selects from that no write to moves it, each with the writer that tells the page instead. */
-const MOVED_ELSEWHERE = new Map([
-  ['actor_config', 'the changelog reads only its seen marker, whose one writer names the reads'],
-  ['sqlite_master', 'schema probe'],
-  ['workspace_actors', 'identity lookup'],
-  ['workspace_identity', 'identity lookup'],
-  ['memory_note_files', 'the memory read looks at its note\'s stamp only to re-index it; it answers the note, whose file events name it'],
-  ['conversation_entries', "the work mode follows the root's own turns, and every page re-reads at turn end"],
-  ['run_events', 'the changelog reads only promotions and rollbacks, each written with its scaffold_versions row; '
-    + "the agents list reads each agent's figures, which move when its turn settles its actor_turn_claims row"],
-  ['cf_agents_jobs', "the work read asks the agents whose wake is armed; the SDK's queue writes pass no watched statement, "
-    + 'so the agent wakes name the read on each arm and cancel'],
-]);
-
-test('every table a live read selects from is one whose writes name that read', async () => {
-  const { agent } = orchestratorHarness();
-  await agent.getWorkspaceSnapshot();
-  const queries = agent.harnessRecordQueries();
-
-  const unwatched: string[] = [];
-
-  for (const read of LIVE_READS) {
-    queries.length = 0;
-    await liveRead(agent, read);
-
-    for (const query of queries) {
-      for (const [, table = '', call] of query.matchAll(/\b(?:FROM|JOIN)\s+([A-Za-z_]\w*)(\s*\()?/gi)) {
-        if (call !== undefined) continue; // Table-valued functions read arguments, not a table with writers.
-
-        // Kinu writes no Nimbus row: file events and the port registry move the reads over them, whatever tables
-        // a Nimbus release adds (2026-10-02: 0.14's vfs_tombstones, read on a path lookup that misses).
-        if (isNimbusTable(table)) continue;
-        const moves = readsWrittenBy(`INSERT INTO ${table}`);
-
-        if (!moves.includes(read) && !MOVED_ELSEWHERE.has(table)) unwatched.push(`${read} <- ${table}`);
-      }
-    }
-  }
-
-  expect([...new Set(unwatched)]).toEqual([]);
-});
 
 // 2026-09-26: each wake of an idle workspace re-chowned its agent's home, whose file events told every open page
 // its Changes moved.

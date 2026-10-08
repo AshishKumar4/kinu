@@ -105,7 +105,7 @@ export interface WorkersAiEmbedding {
   run(model: string, input: { text: string | string[] }): Promise<{ data?: number[][] }>;
 }
 
-export type WorkersAiMarkdownConversion = (files: { name: string; blob: Blob }[]) => Promise<
+type WorkersAiMarkdownConversion = (files: { name: string; blob: Blob }[]) => Promise<
   ({ format: 'markdown' | 'text'; data: string } | { format: 'error' })[]
 >;
 

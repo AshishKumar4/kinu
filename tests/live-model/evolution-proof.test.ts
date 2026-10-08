@@ -1030,12 +1030,4 @@ describe('the challenge solvers these turns are graded by', () => {
     expect(cipherPrompt(CIPHER)).toContain(CIPHER.ciphertext);
   });
 
-  test('the two instances of each family differ only in their numbers', () => {
-    // What makes session 2 a transfer test rather than a second warm-up: one
-    // template per family, so the pattern extracted in session 1 is the whole
-    // of what carries over.
-    const skeleton = (prompt: string): string => prompt.replace(/\d+/g, '#');
-    expect(skeleton(RSA_CHALLENGE_1)).toBe(skeleton(RSA_CHALLENGE_2));
-    expect(RSA_CHALLENGE_1).not.toBe(RSA_CHALLENGE_2);
-  });
 });

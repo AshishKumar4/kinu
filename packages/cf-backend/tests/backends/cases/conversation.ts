@@ -33,7 +33,6 @@ function contextRows(sql: SqlExecutor, actor: ActorHandle): number[] {
 export const CONVERSATION_CASES: readonly SharedCase[] = [
   {
     title: 'an empty message is refused at the door and records nothing',
-    covers: ['send'],
     async run({ surface, history }) {
       await expect(surface.send('   ')).rejects.toThrow('send requires the message text');
       expect(await spoken(history)).toEqual([]);
@@ -41,7 +40,6 @@ export const CONVERSATION_CASES: readonly SharedCase[] = [
   },
   {
     title: 'a message id already sent is refused, and the words are not sent twice',
-    covers: ['send'],
     async run({ surface, history }) {
       await exchange(history, 'q-1', 'Name the release.', 'Aurora.');
 
@@ -51,7 +49,6 @@ export const CONVERSATION_CASES: readonly SharedCase[] = [
   },
   {
     title: 'a send reads settled under the turn that took it once answered; an id never sent reads none',
-    covers: ['sendState', 'awaitSend'],
     async run({ surface }) {
       await surface.send('Name the release.', 'q-1');
       const settled = { status: 'settled', turnId: 'q-1', landed: 'turn', outcome: 'completed' } as const;
@@ -63,7 +60,6 @@ export const CONVERSATION_CASES: readonly SharedCase[] = [
   },
   {
     title: 'reverting to a message drops it and everything after; an unknown entry is refused',
-    covers: ['revertConversation'],
     async run({ surface, history }) {
       await exchange(history, 'q-1', 'Name the release.', 'Aurora.');
       await exchange(history, 'q-2', 'Shorter.', 'Aur.');
@@ -75,7 +71,6 @@ export const CONVERSATION_CASES: readonly SharedCase[] = [
   },
   {
     title: 'a clear while a turn runs is refused and keeps the conversation; once idle it empties it',
-    covers: ['clearConversation'],
     async run({ surface, history, holdTurn }) {
       await exchange(history, 'q-1', 'Name the release.', 'Aurora.');
       const running = await holdTurn('Shorter.', 'build');
@@ -93,7 +88,6 @@ export const CONVERSATION_CASES: readonly SharedCase[] = [
   },
   {
     title: 'a fence refusing after the revert has forked rolls the whole transaction back',
-    covers: ['revertConversation'],
     async run({ history, sql, actor }) {
       await exchange(history, 'q-1', 'Name the release.', 'Aurora.');
       await exchange(history, 'q-2', 'Shorter.', 'Aur.');
@@ -114,7 +108,6 @@ export const CONVERSATION_CASES: readonly SharedCase[] = [
   },
   {
     title: 'a redirect branches only a running Build turn: a Plan turn refuses it before any head runs',
-    covers: ['branchTurn'],
     async run({ surface, holdTurn }) {
       await expect(surface.branchTurn('   ')).rejects.toThrow('branchTurn requires the redirect text');
       expect(await surface.branchTurn('Try the other route.'))
@@ -134,7 +127,6 @@ export const CONVERSATION_CASES: readonly SharedCase[] = [
   },
   {
     title: 'an optimisation with no low-rated turns has nothing to learn from, and no model runs',
-    covers: ['runOptimization'],
     async run({ surface }) {
       expect(await surface.runOptimization()).toEqual({ kind: 'idle' });
     },

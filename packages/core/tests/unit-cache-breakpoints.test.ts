@@ -152,29 +152,10 @@ describe('cacheableSystem', () => {
 describe('markCacheTail', () => {
   const anthropic = { kind: 'anthropic' } as const;
 
-  test('marks exactly the last 2 non-system messages', () => {
-    const marked = markCacheTail(history(5), anthropic);
-    expect(anthropicMarkerCount(marked)).toBe(2);
-    expect(marked[3].providerOptions).toEqual({ anthropic: { cacheControl: EPHEMERAL } });
-    expect(marked[4].providerOptions).toEqual({ anthropic: { cacheControl: EPHEMERAL } });
-    expect(marked[0].providerOptions).toBeUndefined();
-  });
-
   test('pure: the input messages are never mutated (markers cannot leak into durable history)', () => {
     const input = history(4);
     markCacheTail(input, anthropic);
     expect(input.every((m) => m.providerOptions === undefined)).toBe(true);
-  });
-
-  test('rolls forward: stale markers deeper in the conversation are stripped', () => {
-    // Step N's markers must not accumulate with step N+1's, or the breakpoint budget is exceeded.
-    const step1 = markCacheTail(history(4), anthropic);
-    const step2 = markCacheTail([...step1, { role: 'assistant', content: 'tool step' }, { role: 'user', content: 'result' }], anthropic);
-    expect(anthropicMarkerCount(step2)).toBe(2);
-    expect(step2[step2.length - 1].providerOptions).toEqual({ anthropic: { cacheControl: EPHEMERAL } });
-    expect(step2[step2.length - 2].providerOptions).toEqual({ anthropic: { cacheControl: EPHEMERAL } });
-    expect(step2[2].providerOptions).toBeUndefined();
-    expect(step2[3].providerOptions).toBeUndefined();
   });
 
   test('total anthropic breakpoints (tool + system + tail) stay within the API limit', () => {

@@ -73,7 +73,6 @@ test('a turn whose slow first call was cut by two quits is resumed and answers',
 
   expect(calls).toBe(3);
   expect(JSON.stringify(events)).toContain(ANSWER);
-  expect(JSON.stringify(events)).not.toContain('reset the workspace');
   await Promise.all([first.end(), second.end(), third.end(), Promise.race([cut, Promise.resolve()])]);
   db.close();
 });

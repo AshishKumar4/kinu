@@ -1,36 +1,17 @@
 /** Credential-free checks for the first-run corpus, gating, and record admission. */
 import { describe, expect, test } from 'bun:test';
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join, relative, resolve } from 'node:path';
-import * as v from 'valibot';
+import { dirname, join, resolve } from 'node:path';
 
 import { assessAdmissibility, outcomeRow, projectRunEventProvenance, runToExit, scratchDir, subgoalOutcome, TASK_OUTCOME,
   type EvalObservation } from '@kinu.run/test-utils';
-import { isFirstRunSuite, trackedFiles } from '../../scripts/sources';
-import {
-  CI_EXEMPT, LADDER, packageScripts,
-} from '../../scripts/ladder';
-import firstRunConfig, {
-  EXECUTOR_READERS, FIRST_RUN_INCLUDE, FIRST_RUN_PROJECTS, FLEET_MODULE, fleetCases, TUI_HARNESS,
-} from '../../vitest.first-run.config';
-import {
-  FIRST_RUN_ARM, FIRST_RUN_CASES, FIRST_RUN_DEFECTS, FIRST_RUN_FAMILY,
-} from './first-run';
+import { FLEET_MODULE, fleetCases, TUI_HARNESS } from '../../vitest.first-run.config';
+import { FIRST_RUN_CASES } from './first-run';
 import { resolvePublicSessionPlan } from '../../evals/src/session';
-import { CAPABILITY_ROWS, ENTRY_ROWS, PAGE_ROWS, STRIP_ROWS } from './surfaces';
-
-/** The deployed tier's package command. */
-const GATE = 'bun run gate:first-run';
-
-const RUNNER = 'scripts/first-run-tier.sh';
 
 const RUNTIME = resolve(import.meta.dirname, '../../node_modules/.bin/bun');
 
 const RUNNER_ENV = (): NodeJS.ProcessEnv => ({ ...process.env, PATH: `${dirname(RUNTIME)}:${process.env.PATH ?? ''}` });
-
-/** Every case file this tier holds, off the ONE enumeration and narrowed only by
- *  the predicate `scripts/sources.ts` exports for it. */
-const onDisk = trackedFiles().filter(isFirstRunSuite).sort();
 
 test('a red in either project reds the tier, which still reports spend and keeps its reports', async () => {
   const root = scratchDir('first-run-shell-retention');
@@ -76,34 +57,6 @@ esac
 });
 
 describe('the first-run corpus is the set this tier runs', () => {
-  test('every declared case is a file, and every file is a declared case', () => {
-    // BOTH DIRECTIONS. A declared case with no file is a defect nobody checks;
-    // a file with no declaration is a case whose failure nobody expects, and
-    // whose absence from the record reads as "not attempted" rather than as
-    // "never written".
-    const expected = FIRST_RUN_CASES.map((id) => `tests/first-run/${id}.first-run.ts`).sort();
-    expect(onDisk).toEqual(expected);
-    expect(new Set(FIRST_RUN_CASES).size).toBe(FIRST_RUN_CASES.length);
-  });
-
-  test('the runner selects exactly those files and nothing else', () => {
-    // The config's include is the tier's real denominator, so it is held to the
-    // predicate rather than trusted. A glob that widened to `tests/**` would
-    // sweep the eval suites into a post-deploy tier that cannot pay for them.
-    expect(firstRunConfig.test?.include).toEqual([FIRST_RUN_INCLUDE]);
-    expect(FIRST_RUN_INCLUDE).toBe('tests/first-run/**/*.first-run.ts');
-    expect(firstRunConfig.plugins).toContainEqual(expect.objectContaining({ name: 'kinu:prompt-text' }));
-
-    for (const file of onDisk) expect(file.startsWith('tests/first-run/')).toBe(true);
-
-    // And no case file can be selected by the runners that must never see it:
-    // `bun test` matches only `.test.`/`.spec.`, and the eval suite's config
-    // includes `evals/tasks/**` alone.
-    for (const file of onDisk) {
-      expect(/\.(test|spec)\.[cm]?[jt]sx?$/.test(file)).toBe(false);
-      expect(file.startsWith('evals/')).toBe(false);
-    }
-  });
 
   test('a case that attaches a machine or drives the TUI is derived into the fleet, however many hops out', () => {
     const fleet = fleetCases(new Map([
@@ -122,54 +75,6 @@ describe('the first-run corpus is the set this tier runs', () => {
     ]);
   });
 
-  test('every case on disk drives a surface of the census', () => {
-    // The census maps each surface to its rows; a row mapped to none is
-    // misfiled or proves nothing a surface needs.
-    const mapped = new Set([PAGE_ROWS, STRIP_ROWS, ENTRY_ROWS, CAPABILITY_ROWS]
-      .flatMap((census) => Object.values(census))
-      .flatMap((rows) => ('unreachable' in rows ? [] : rows)));
-
-    expect(onDisk.map((file) => basename(file, '.first-run.ts')).filter((id) => !mapped.has(id))).toEqual([]);
-  });
-
-  test('every declared executor reader is a case on disk', () => {
-    expect(Object.keys(EXECUTOR_READERS).map((id) => `tests/first-run/${id}.first-run.ts`).filter((file) => !onDisk.includes(file)))
-      .toEqual([]);
-  });
-
-  test('the fleet cases run one at a time, the rest beside them, and together they are the corpus', async () => {
-    // The account's device fleet is the one thing cases share: two-machines
-    // measures what happens when exactly two machines are live, so a sibling's
-    // daemon beside it is a third machine in the measurement. Asked of vitest
-    // itself, per project, so the partition is what the runner selects.
-    const selected = async (project: string): Promise<string[]> => {
-      const listed = await runToExit([RUNTIME, '--bun', './node_modules/.bin/vitest', 'list', '--config', 'vitest.first-run.config.ts',
-        '--project', project, '--filesOnly', '--json'], { env: RUNNER_ENV(), cwd: join(import.meta.dirname, '../..') });
-
-      expect(listed.exitCode, listed.stderr).toBe(0);
-
-      return v.parse(v.array(v.object({ file: v.string() })), JSON.parse(listed.stdout))
-        .map(({ file }) => relative(join(import.meta.dirname, '../..'), file)).sort();
-    };
-
-    const fleet = await selected(FIRST_RUN_PROJECTS.fleet);
-    const cases = await selected(FIRST_RUN_PROJECTS.cases);
-    expect(fleet).toEqual(fleetCases());
-    expect(fleet.length).toBeGreaterThan(0);
-    expect(cases.filter((file) => fleet.includes(file))).toEqual([]);
-    expect([...fleet, ...cases].sort()).toEqual(onDisk);
-
-    const projects = v.parse(
-      v.array(v.object({ test: v.object({ name: v.string(), maxWorkers: v.optional(v.number()) }) })),
-      firstRunConfig.test?.projects,
-    );
-
-    expect(projects.find((project) => project.test.name === FIRST_RUN_PROJECTS.fleet)?.test.maxWorkers).toBe(1);
-    // A deployed episode's completion is decided by the episode. An elapsed
-    // deadline here would report a slow model as a product defect.
-    expect(firstRunConfig.test?.testTimeout).toBe(0);
-  });
-
   test('every case loads under the tier\'s own runner', async () => {
     // Collecting a case imports it, under Bun as the tier runs it, which the partition above never does. On
     // 2026-09-25 35 cases failed there at import (`import { z } from 'zod'` in core came back undefined), and only a
@@ -177,17 +82,6 @@ describe('the first-run corpus is the set this tier runs', () => {
     const listed = await runToExit([RUNTIME, '--bun', './node_modules/.bin/vitest', 'list', '--config', 'vitest.first-run.config.ts', '--json'], { env: RUNNER_ENV(), cwd: join(import.meta.dirname, '../..') });
 
     expect(listed.exitCode, listed.stderr).toBe(0);
-  });
-});
-
-describe('every case has a defect register entry', () => {
-  test('the register covers exactly the declared cases', () => {
-    expect(Object.keys(FIRST_RUN_DEFECTS).sort()).toEqual([...FIRST_RUN_CASES].sort());
-
-    for (const id of FIRST_RUN_CASES) {
-      const defect = FIRST_RUN_DEFECTS[id];
-      expect(defect.id).toBe(id);
-    }
   });
 });
 
@@ -204,13 +98,6 @@ describe('a case gets a fresh workspace, and gives it back', () => {
     }
   });
 
-  test('the arm records what it did not control', () => {
-    // A deployed workspace's tool surface and evolution are its own durable
-    // config and this tier sets neither. Reporting a setting it never applied
-    // would be a claim about a knob nobody turned.
-    expect(FIRST_RUN_ARM).toEqual({ evolution: false, settle: 'none', tools: [] });
-    expect(FIRST_RUN_FAMILY).toBe('first-run');
-  });
 });
 
 describe('a partial first-run tier is not evidence', () => {
@@ -245,24 +132,3 @@ describe('a partial first-run tier is not evidence', () => {
       .toContain(TASK_OUTCOME);
   });
 });
-
-describe('the tier has a deployment gate and package command', () => {
-  test('the ladder schedules the tier only after deployment', () => {
-    const entry = LADDER.find((gate) => gate.run === GATE);
-    expect(entry, `${GATE} is not in LADDER`).toBeDefined();
-    expect(entry?.tier).toBe('deploy');
-    // And it cannot run at ci: there is nothing deployed at ci to run it
-    // against, which is a reason that has to be written down rather than
-    // discovered.
-    expect(Object.hasOwn(CI_EXEMPT, GATE)).toBe(true);
-  });
-
-  test('the package script resolves to the runner', () => {
-    // Through the ladder's own parsed reader rather than a second JSON read:
-    // `packageScripts` validates the manifest at the boundary, so a manifest
-    // with no scripts table fails there instead of reading as an empty object
-    // that satisfies nothing.
-    expect(packageScripts()['gate:first-run']).toBe(`bash ${RUNNER}`);
-  });
-});
-

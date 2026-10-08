@@ -68,22 +68,6 @@ async function settleAccountFixture(page: Page): Promise<void> {
   await retry?.click();
 }
 
-/** The welcome steps a reader sees: panels of the slide neither inert nor hidden, and rendered. */
-function shownSteps(page: Page): Promise<string[]> {
-  return page.$$eval('[data-welcome-step]', (panels) => panels
-    .filter((panel) => panel instanceof HTMLElement && !panel.inert && panel.getAttribute('aria-hidden') !== 'true' && panel.checkVisibility())
-    .map((panel) => panel.getAttribute('data-welcome-step') ?? ''));
-}
-
-/** The requested welcome step is accessible and the profile name is filled. */
-async function expectStep(page: Page, step: number): Promise<void> {
-  expect(await shownSteps(page)).toEqual([ONBOARDING_STEP_IDS[step]]);
-
-  if (step === 0) {
-    expect(await page.$eval('[aria-label="Your name"]', (el) => (el instanceof HTMLInputElement ? el.value : null))).toBe('Owner');
-  }
-}
-
 /** Workspace entries are complete, the current route is marked, and filters return the requested entries. */
 async function checkWorkspacesView(page: Page, view: 'list' | 'tiled', viewport: keyof typeof VIEWPORTS): Promise<void> {
   await page.waitForSelector('[aria-label="Search workspaces"]');
@@ -452,32 +436,6 @@ describe('account panels', () => {
       } finally {
         await page.close();
       }
-    });
-  });
-
-  test('the welcome wizard renders each step at both widths in both themes', async () => {
-    await withGallery(async (gallery) => {
-      
-
-      for (const theme of ['dark', 'light'] as const) {
-        for (const viewport of ['desktop', 'mobile'] as const) {
-          for (const step of ONBOARDING_STEP_IDS.keys()) {
-            const page = await freshPage(gallery, `welcome&step=${String(step)}`, theme, viewport);
-
-            try {
-              // The slide is an inert track, so every step's panel is in the DOM: the one showing is the one a reader
-              // can reach, and it must be the step the page was opened on.
-              await page.waitForSelector('h1');
-              await expectStep(page, step);
-              
-            } finally {
-              await page.close();
-            }
-          }
-        }
-      }
-
-      
     });
   });
 

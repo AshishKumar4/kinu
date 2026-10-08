@@ -11,7 +11,6 @@ const PATH = workspaceSkillPath('focused');
 export const OWNER_DESK_CASES: readonly SharedCase[] = [
   {
     title: 'an instruction approval binds the bytes the owner read; a revoke keeps the refusal',
-    covers: ['readInstructionApproval', 'approveInstruction', 'listInstructionApprovals', 'revokeInstruction'],
     async run({ surface, files }) {
       await files.mkdir(`${WORKSPACE_SKILLS_DIR}/focused`, { recursive: true });
       await writeText(files, PATH, SKILL);
@@ -42,7 +41,6 @@ export const OWNER_DESK_CASES: readonly SharedCase[] = [
   },
   {
     title: 'answering "always" to a parked command runs it and grants exactly the rule it tripped',
-    covers: ['listDeferredApprovals', 'decideDeferredApprovals'],
     async run({ surface, sql, actor }) {
       const requestedAt = Date.now();
       const command = 'git push --force origin main';

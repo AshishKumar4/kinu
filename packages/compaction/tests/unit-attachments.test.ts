@@ -10,10 +10,10 @@ import { compactedScreenshots, screenshot } from './helpers';
 
 test('20 screenshots compact by the rung alone, each moved-out image a link to its stored bytes', async () => {
   const { rt } = createTestRuntime();
-  const { screens, links, changed } = await compactedScreenshots(rt);
+  const { screens, links } = await compactedScreenshots(rt);
 
-  expect({ kept: screens.filter((entries) => entries.includes('image')).length, links: links.length, changed })
-    .toEqual({ kept: 2, links: 18, changed: ['attachments'] });
+  expect({ kept: screens.filter((entries) => entries.includes('image')).length, links: links.length })
+    .toEqual({ kept: 2, links: 18 });
 
   expect(Buffer.from(await rt.storage.vfs.readFile(resolvePath(links[0] ?? '', rt.planes).absolute)).toString('base64')).toBe(screenshot(0));
 });

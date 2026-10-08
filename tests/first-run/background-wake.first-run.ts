@@ -74,9 +74,10 @@ describe(SUITE, () => {
         let ended = runId === undefined;
 
         // Two ended activations, each while the run is still open, with no
-        // client connected in between: the wake is the only driver left. The
-        // wait after each is on the run's own stream — the next event the same
-        // run records is the continuation under way.
+        // client connected in between: the wake is the only driver left. Each
+        // continuation lands its next call before the next abort, read on the
+        // run's own stream: a turn that dies twice at one step on one build is
+        // closed as stalled, by design.
         for (const nth of ['first', 'second']) {
           if (budget.aborted || runId === undefined || ended) break;
           await session.abortActivation();
@@ -85,7 +86,8 @@ describe(SUITE, () => {
           for await (const event of session.followRun(runId, cursor)) {
             cursor = event.eventIndex;
             ended = event.type === 'run_end';
-            break;
+
+            if (ended || event.type === 'tool_call_end' || budget.aborted) break;
           }
         }
 

@@ -62,7 +62,7 @@ export interface TreeNode {
 }
 
 /** How a node stopped short; `completed` is excluded by type. */
-export interface NodeStop {
+interface NodeStop {
   readonly status: Exclude<HeadReport['status'], 'completed'>;
   readonly detail: string;
 }
@@ -98,7 +98,7 @@ export interface Expansion {
  * No elapsed-time arm, by design: a node waiting on background work is healthy,
  * and a wall-clock bound cannot tell it from a stalled one.
  */
-export type NodeAnswer =
+type NodeAnswer =
   | { readonly kind: 'expanded'; readonly expansion: Expansion }
   | { readonly kind: 'failed'; readonly error: KinuError };
 

@@ -41,7 +41,7 @@ import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 
 import {
-  ChatHistoryEntrySchema, codenameFor, hostedActorSocketPath, ORCHESTRATOR_AGENT_SLUG, parseJsonValue, type JsonValue,
+  ChatHistoryEntrySchema, hostedActorSocketPath, ORCHESTRATOR_AGENT_SLUG, parseJsonValue, type JsonValue,
 } from '../../packages/core/src/index';
 import { tolerate } from '../../packages/core/src/obs/index';
 import type { Page } from 'puppeteer';
@@ -110,31 +110,42 @@ async function namesOn(socket: PublicSocket): Promise<Map<string, { shown: strin
   return new Map(roster?.success === true ? roster.output.map((entry) => [entry.name, { shown: entry.displayName, origin: entry.nameOrigin }]) : []);
 }
 
-/** Both agents are born with the system's codename; the owner then renames the second, and the roster says so. */
-async function renamedAtBirth(socket: PublicSocket, names: readonly string[]): Promise<EvalSubgoal> {
+/** Both agents are born with a name the system chose, never their raw id; the owner then renames the second, and the
+ *  roster says so. `bornAs` is the first agent's birth name, which its first message must replace. */
+async function renamedAtBirth(socket: PublicSocket, names: readonly string[]): Promise<{ subgoal: EvalSubgoal; bornAs: string }> {
   const born = await namesOn(socket);
   const renamed = names[1] ?? '';
 
   await ask(socket, 'renameSubordinateAgent', [renamed, OWNER_NAME]);
   const after = await namesOn(socket);
-  const codenamed = names.every((name) => born.get(name)?.shown === codenameFor(name) && born.get(name)?.origin === 'auto');
+
+  const systemNamed = names.every((name) => {
+    const entry = born.get(name);
+
+    return entry !== undefined && entry.origin === 'auto' && entry.shown.trim() !== '' && entry.shown !== name;
+  });
 
   return {
-    what: 'agents-named',
-    reached: codenamed && after.get(renamed)?.shown === OWNER_NAME && after.get(renamed)?.origin === 'user',
-    detail: `born ${JSON.stringify([...born])}; after the owner's rename ${JSON.stringify(after.get(renamed))}`,
+    subgoal: {
+      what: 'agents-named',
+      reached: systemNamed && after.get(renamed)?.shown === OWNER_NAME && after.get(renamed)?.origin === 'user',
+      detail: `born ${JSON.stringify([...born])}; after the owner's rename ${JSON.stringify(after.get(renamed))}`,
+    },
+    bornAs: born.get(names[0] ?? '')?.shown ?? '',
   };
 }
 
-/** The system-named agent carries a title of its own, and the renamed one still carries the owner's name. */
-async function namesHeld(what: string, socket: PublicSocket, names: readonly string[], when: string): Promise<EvalSubgoal> {
+/** The system-named agent carries a title of its own in place of `bornAs`, and the renamed one still carries the owner's name. */
+async function namesHeld(
+  what: string, socket: PublicSocket, { names, bornAs }: { names: readonly string[]; bornAs: string }, when: string,
+): Promise<EvalSubgoal> {
   const shown = await namesOn(socket);
   const titled = shown.get(names[0] ?? '');
   const owners = shown.get(names[1] ?? '');
 
   return {
     what,
-    reached: titled !== undefined && titled.shown !== codenameFor(names[0] ?? '') && titled.origin === 'auto'
+    reached: titled !== undefined && titled.shown !== bornAs && titled.origin === 'auto'
       && owners?.shown === OWNER_NAME && owners.origin === 'user',
     detail: `${when}: ${JSON.stringify([...shown])}`,
   };
@@ -313,7 +324,8 @@ describe(SUITE, () => {
           });
 
           // ── Named by the system, then one renamed by its owner. ─────────
-          subgoals.push(await renamedAtBirth(first, names));
+          const birth = await renamedAtBirth(first, names);
+          subgoals.push(birth.subgoal);
 
           // ── One thing said in each child's own room. ────────────────────
           const said: string[] = [];
@@ -355,7 +367,7 @@ describe(SUITE, () => {
           });
 
           // ── The first message titles the agent the system named, never the one its owner did. ─
-          subgoals.push(await namesHeld('first-message-titles', first, names, 'after one message each'));
+          subgoals.push(await namesHeld('first-message-titles', first, { names, bornAs: birth.bornAs }, 'after one message each'));
 
           // ── NAVIGATE AWAY. Every socket dropped, so nothing that follows
           //    can be served out of an activation this row kept alive. ─────
@@ -392,7 +404,7 @@ describe(SUITE, () => {
           });
 
           // ── The names survive too: still titled, and still the owner's. ─
-          subgoals.push(await namesHeld('names-retained', back, names, 'on the way back'));
+          subgoals.push(await namesHeld('names-retained', back, { names, bornAs: birth.bornAs }, 'on the way back'));
 
           // ── Each chat, re-opened from nothing, still holding its words. ─
           const reachable: string[] = [];

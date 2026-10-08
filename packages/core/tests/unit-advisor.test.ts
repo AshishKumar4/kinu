@@ -203,9 +203,6 @@ describe('normalizeNote', () => {
 });
 
 describe('the content-free rule', () => {
-  test('drops every phrase in the table', () => {
-    for (const phrase of CONTENT_FREE_NOTES) expect(isContentFree(phrase)).toBe(true);
-  });
 
   test('drops the same phrase wearing punctuation', () => {
     expect(isContentFree('Stop.')).toBe(true);

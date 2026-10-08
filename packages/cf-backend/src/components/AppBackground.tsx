@@ -27,7 +27,7 @@ const SHOWN_ROUTES: Partial<Record<ReportedRoute, true>> = {
   [APP_ROUTES.home]: true,
 };
 
-export interface AppBackgroundHandle {
+interface AppBackgroundHandle {
   renderer(): 'webgpu' | 'canvas' | 'static' | 'pending';
   frameTimes(): FrameTimes;
   time(): number;
@@ -36,7 +36,7 @@ export interface AppBackgroundHandle {
 }
 
 /** Gallery-only stepping controls; attached only when `__kinuGalleryStepping` is set before the shell mounts. */
-export interface AppBackgroundStepping {
+interface AppBackgroundStepping {
   advance(dt: number): void;
   freeze(): void;
   thaw(): void;

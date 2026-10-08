@@ -17,7 +17,7 @@ const DUST_STILL_SECONDS = 6;
 
 const STATIC_STEP = 1 / 30;
 
-export interface HeroDustHandle {
+interface HeroDustHandle {
   renderer(): 'canvas' | 'static' | 'pending';
   frameTimes(): FrameTimes;
   time(): number;

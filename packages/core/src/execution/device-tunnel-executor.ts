@@ -116,7 +116,7 @@ function terminateDeviceExec(
  * `timeoutMs: 0`: no work deadline. `requestId`: the id the daemon registers the process group under; needed to cancel.
  * `backgroundJobId`: owning background job at issue time (never sent to the device). `deviceId`: the hub routes on it.
  */
-export interface DeviceExecOptions {
+interface DeviceExecOptions {
   timeoutMs?: number;
   requestId?: string;
   backgroundJobId?: string;

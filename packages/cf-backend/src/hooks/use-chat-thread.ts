@@ -29,7 +29,7 @@ export interface ChatHistory {
   readonly reset: () => void;
 }
 
-export interface ChatReserves {
+interface ChatReserves {
   readonly top: ReserveRange | null;
   readonly before: ReadonlyMap<string, ReserveRange>;
   readonly tail: ReserveRange | null;

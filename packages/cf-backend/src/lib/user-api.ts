@@ -116,8 +116,6 @@ const ModelMenuSchema = v.object({
 
 export type CliSetup = v.InferOutput<typeof CliSetupSchema>;
 
-export type PollResult = v.InferOutput<typeof PollResultSchema>;
-
 /** '' when the body is not a JSON `{error}` envelope. */
 async function errorDetail(res: Response): Promise<string> {
   const parsed = v.safeParse(ErrorBodySchema, await tolerateAsync(() => res.json(), 'malformed-input'));
@@ -224,8 +222,6 @@ export const removeWorkspace    = (name: string) =>
   settle(api(OkSchema, 'DELETE', `/workspaces/${encodeURIComponent(name)}`));
 
 export type UserDevice = v.InferOutput<typeof UserDeviceSchema>;
-
-export type RegisteredDevice = v.InferOutput<typeof RegisteredDeviceSchema>;
 
 const DeviceSandboxSchema = v.object({
   tier: v.picklist(DEVICE_TIERS),

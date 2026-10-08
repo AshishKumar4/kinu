@@ -7,7 +7,7 @@ import type { DeferredApprovalQueue } from '../safety/deferred-approval';
 import { Effect } from 'effect';
 import { KinuError, settle } from '../obs/index';
 
-export interface WritePreview {
+interface WritePreview {
   readonly path: string;
   /** Null: nothing is there, so the write creates the file. */
   readonly currentBytes: number | null;

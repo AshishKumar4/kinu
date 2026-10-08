@@ -357,7 +357,7 @@ function handleUserDetail<Id>(control: ControlContext<Id>, userId: string, url: 
   });
 }
 
-export type ReconcileReport =
+type ReconcileReport =
   | { status: 'ok' }
   | { status: 'failed'; reason: string }
   | { status: 'skipped'; reason: string };
@@ -467,11 +467,11 @@ async function handleWorkspaceDetail<Id>(
 }
 
 /** Never a silent `null`: a missing panel and an empty one are different facts. */
-export type SettledPanel<Value> =
+type SettledPanel<Value> =
   | { status: 'ok'; value: Value }
   | { status: 'failed'; reason: string };
 
-export interface WorkspaceDetail {
+interface WorkspaceDetail {
   workspace: string;
   /** Echoed so action buttons bind to the pair the read proved, not the address bar. */
   userId: string;

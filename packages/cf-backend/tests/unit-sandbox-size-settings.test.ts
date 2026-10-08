@@ -14,7 +14,8 @@ import { sandboxSizeText, startRefusedNote, workspaceSizeNote, workspaceSizeOpti
 import { settingsSection } from '../src/components/SettingsRail';
 import { serveFamily } from './helpers/api';
 import { unreachableNamespace, workerContext } from './helpers/bindings';
-import { TEST_CREDENTIAL_ENCRYPTION_KEY, createTestUserDO, testOwner, type TestUserDO } from './helpers/user-do';
+import { TEST_CREDENTIAL_ENCRYPTION_KEY, createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
+import { orchestratorHarness } from './helpers/actor-harness';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
@@ -164,5 +165,31 @@ describe('sandbox.resize through the adapter', () => {
 
     await expect(adaptCloudflareSandbox(box, async () => {}, null).resize('huge'))
       .rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('no box size huge') });
+  });
+});
+
+describe('what the Environment card reads', () => {
+  // Staging 2026-10-08: the account said small and the card said medium, the box's default from before the change.
+  test('the size the next start uses follows the account default the owner just changed', async () => {
+    const user = createTestUserDO({ durableObjectId: USER_ID });
+    await user.userDO.ensureProfile(await testOwner(), IDENTITY.email, IDENTITY.displayName ?? undefined);
+    const token = await provisionTestWorkspace(user, 'sized', 'Sized');
+    // The box still holds the default the account had when it last started; with none chosen, that is its size.
+    let stored: string | null = 'medium';
+
+    const box = {
+      useDefaultSize: async (size: string | null) => { stored = size; },
+      boxSize: async () => ({ size: stored ?? 'medium', chosen: undefined, running: undefined, startRefused: undefined }),
+    };
+
+    const { agent } = orchestratorHarness(undefined, { userDO: user.userDO, workspace: 'sized', ownerUserId: USER_ID, container: true, box: () => box });
+    agent.harnessHoldsCapability(token);
+
+    try {
+      expect((await sizeRoute(routeEnv(user.userDO), 'PUT', 'small')).status).toBe(200);
+      expect(await agent.getSandboxSize()).toEqual({ account: 'small', chosen: null, size: 'small', running: null, startRefused: null });
+    } finally {
+      user.close();
+    }
   });
 });

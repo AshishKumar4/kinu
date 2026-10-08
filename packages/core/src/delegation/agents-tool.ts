@@ -390,7 +390,7 @@ export interface AgentsToolInput {
   context?: 'fresh' | 'inherit';
 }
 
-export type AgentsToolInputField = Exclude<keyof AgentsToolInput, 'action'>;
+type AgentsToolInputField = Exclude<keyof AgentsToolInput, 'action'>;
 
 /**
  * Which fields each action's handler reads. `gate:agents-fields` holds each list to the `input.<field>`

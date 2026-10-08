@@ -24,7 +24,7 @@ const EmailThreadAddrSchema = v.object({
 
 const ReplyPayloadSchema = v.object({ content: v.optional(JsonValueSchema) });
 
-export interface EmailThreadingHeaders {
+interface EmailThreadingHeaders {
   'In-Reply-To'?: string;
   References?: string;
 }

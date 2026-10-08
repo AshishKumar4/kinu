@@ -40,6 +40,9 @@ import type {
   EffectStatus,
   HeldClose,
   HeldCloseRecovered,
+  KillJourney,
+  KillLanded,
+  KillPoint,
   DriveOnceInput,
   DriveOnceResult,
   ExerciseResult,
@@ -74,6 +77,7 @@ import {
   ReactorEvictionSchema,
   WakeDriveResultSchema,
   WakeRowsSchema,
+  KILL_FILE,
   WAKE_MARKER,
   type WakeDriveResult,
   type WakeRows,
@@ -758,6 +762,20 @@ function effectStatuses(rows: ParityRows): EffectStatus[] {
   return rows.terminalEffects.map(({ effectName, status }) => ({ effectName, status }));
 }
 
+/** Ends the activation as the platform would. `ctx.abort` rejects the call that asked for it: that rejection is the
+ *  abort's receipt, and any other answer is a failure. */
+async function abortedBy(target: Pick<QueueTarget, 'evalAbortActivation'>): Promise<void> {
+  let receipt: string | null = null;
+
+  try {
+    await target.evalAbortActivation();
+  } catch (cause) {
+    receipt = renderThrownChain({ cause });
+  }
+
+  if (receipt?.includes('aborted') !== true) throw new Error(`the activation did not end on its abort: ${receipt ?? 'it answered'}`);
+}
+
 function drawsLogoCall(call: HttpCall): boolean {
   return call.users.some((message) => message.startsWith('Design the logo'));
 }
@@ -773,7 +791,7 @@ const NOTED: NotedChanges = { source: 'workspace', label: 'Workspace', mode: 'vf
 
 type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'setModel' | 'setSoul' | 'setEvolutionConfig' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp' | 'evalAbortActivation' | 'workspaceTitle'
-  | 'createSubordinateAgent'>
+  | 'createSubordinateAgent' | 'readWorkspaceFile'>
   & Pick<ProductionOrchestrator, 'getChangeNotes' | 'saveChangeNotes' | 'sendChangeNotes'>
   & Pick<ObservedOrchestrator, 'refuseDriving' | 'refuseReservations' | 'owedSends' | 'latestClaimOutcome' | 'recoveryPass'
   | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'answerSlates' | 'answerPageModes' | 'cutTerminal' | 'terminalState' | 'alienEffect' | 'inspectWork' | 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
@@ -1026,7 +1044,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
   /** Only the remote model response is held; peer ingress queues a durable event-drain
    * submission while both socket inputs are pending, so its inherited lastBody belongs to B. */
-  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'agent-slate' | 'page-modes' | 'terminal-cut' | 'terminal-stuck' | 'close'>): Promise<QueuedConversation> {
+  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'agent-slate' | 'page-modes' | 'terminal-cut' | 'terminal-stuck' | 'close' | 'kill'>): Promise<QueuedConversation> {
     const workspace = `queue-${mode}-workspace`;
     const owner = `queue-${mode}-owner`;
 
@@ -1636,6 +1654,56 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       turnCalls: calls.filter((call) => !drawsLogoCall(call)).length,
       answers: (await target.chatHistoryPage()).items.filter((message) => message.role === 'assistant').length,
       runEnds: await target.runEnds(),
+    };
+  }
+
+  /**
+   * A turn of {@link KILL_STEPS} shell steps whose activation is aborted at each planned point, as the platform ends
+   * one: the eval-only abort, with no client connected afterwards. Each kill's revival is the object asking for the
+   * cut step again on its own, measured from the abort to that request.
+   */
+  async killedTurn(plan: ReadonlyArray<{ readonly step: number; readonly attempt: number; readonly at: KillPoint }>): Promise<KillJourney> {
+    const { workspace } = await this.claimQueueWorkspace('kill');
+    const opening: QueueTarget = await this.queueTarget(workspace);
+    const control = 'http://probe-control.invalid';
+
+    await opening.setModel('openai-compat/probe-kill');
+    await fetch(`${control}/kill/plan`, { method: 'POST', body: JSON.stringify(plan) });
+    // Its answer never comes back on this call: the first kill ends the activation that holds it.
+    const asked = opening.runTaskFromMcp('Write the kill steps.').then(() => 'answered', () => 'cut by a kill');
+    const kills: KillLanded[] = [];
+
+    const arrival = async (step: number, attempt: number): Promise<number> => v.parse(
+      v.object({ at: v.number() }),
+      await (await fetch(`${control}/kill/arrived?step=${String(step)}&attempt=${String(attempt)}`)).json(),
+    ).at;
+
+    for (const { step, attempt, at } of plan) {
+      await arrival(step, attempt);
+      const killed = Date.now();
+      const stub: QueueTarget = await this.queueTarget(workspace);
+
+      await abortedBy(stub);
+      kills.push({ step, at, revivalMs: (await arrival(step, attempt + 1)) - killed });
+    }
+
+    await asked;
+    await fetch(`${control}/kill/done`);
+    const target: QueueTarget = await this.queueTarget(workspace);
+
+    await awaitSettled(target);
+    const calls = (await this.probeLog()).calls.filter((call) => call.model === 'probe-kill' && !drawsLogoCall(call));
+    const TallySchema = v.array(v.object({ step: v.number(), calls: v.number(), ran: v.number() }));
+    const steps = v.parse(TallySchema, await (await fetch(`${control}/kill/tally`)).json());
+
+    return {
+      kills,
+      file: new TextDecoder().decode(await target.readWorkspaceFile(KILL_FILE)),
+      issued: calls.at(-1)?.toolCalls.map((call) => call.id) ?? [],
+      steps,
+      answers: (await target.chatHistoryPage()).items.filter((message) => message.role === 'assistant').length,
+      runEnds: await target.runEnds(),
+      claimOutcome: await target.latestClaimOutcome(),
     };
   }
 

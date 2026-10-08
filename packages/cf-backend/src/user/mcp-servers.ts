@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import {
-  nanoid, type JsonObject, type JsonValue, JsonObjectSchema, decodeJsonValue, type UserCaller, compareCodeUnits, type McpPresetId, mcpPresetById, describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, validateMcpServerName, parseAllowedTools, parseMcpHeaders, type McpTransport, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk,
+  nanoid, type JsonObject, type JsonValue, JsonObjectSchema, decodeJsonValue, type UserCaller, compareCodeUnits, type McpPresetId, mcpPresetById, describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, validateMcpServerName, readAllowedTools, parseMcpHeaders, type McpTransport, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk,
 } from '@kinu.run/core';
 import type { MCPClientManager } from 'agents/mcp/client';
 import { DurableObjectOAuthClientProvider } from 'agents/mcp/do-oauth-client-provider';
@@ -86,7 +86,7 @@ interface McpCallInFlight {
   workspace: string | null;
 }
 
-export interface McpServerUnavailable {
+interface McpServerUnavailable {
   server: string;
   reason: string;
 }
@@ -304,7 +304,9 @@ export class UserMcpServers {
     return rows.map((r): McpServerSummary => {
       const conn = connections[r.id];
       const status = mapConnectionStatus(conn?.connectionState);
-      const allowed = parseAllowedTools(r.allowed_tools);
+      const read = readAllowedTools(r.allowed_tools, r.name);
+      // A corrupt list allows none: an empty list, and why, on the server's card.
+      const allowed = 'failure' in read ? [] : read.allowed;
       const listing = conn?.connectionState === 'connected' ? this._mcpToolLists.get(r.id) : undefined;
       const lenient = listing !== undefined && 'listed' in listing ? listing.listed : null;
 
@@ -312,12 +314,12 @@ export class UserMcpServers {
         ? conn?.tools ?? []
         : lenient.tools.filter((tool) => 'admitted' in describeMcpTool({ id: r.id, name: r.name }, tool));
 
-      let problems: string[] = [];
+      let problems: string[] = 'failure' in read ? [read.failure.message] : [];
 
       if (listing !== undefined) {
-        problems = 'failure' in listing
+        problems = [...problems, ...('failure' in listing
           ? [listing.failure]
-          : mcpListingRefusals({ id: r.id, name: r.name }, listing.listed).map((refusal) => refusal.reason);
+          : mcpListingRefusals({ id: r.id, name: r.name }, listing.listed).map((refusal) => refusal.reason))];
       }
 
       const toolsCount = allowed ? tools.filter((t: { name: string }) => allowed.includes(t.name)).length : tools.length;
@@ -602,14 +604,19 @@ export class UserMcpServers {
     if (rows.length === 0) return JSON.stringify({ descriptors: [], unavailable: [] } satisfies McpToolSurface);
 
     const allowedById = new Map<string, ReadonlySet<string> | null>();
+    // A corrupt list offers nothing of its server, and says why where the turn reads the unavailable ones.
+    const unreadable = new Map<string, string>();
 
     for (const r of rows) {
-      const allowed = parseAllowedTools(r.allowed_tools);
-      allowedById.set(r.id, allowed ? new Set(allowed) : null);
+      const read = readAllowedTools(r.allowed_tools, r.name);
+
+      if ('failure' in read) unreadable.set(r.id, read.failure.message);
+      else allowedById.set(r.id, read.allowed ? new Set(read.allowed) : null);
     }
 
     const out: SerializableToolDescriptor[] = [];
     const refused: McpToolSurface['unavailable'] = [];
+
     const connections = this.host.mcp.mcpConnections;
 
     // Readiness comes from the SDK connection, not descriptors: a ready server may expose zero tools.
@@ -655,6 +662,9 @@ export class UserMcpServers {
       .filter((r) => !offered.has(r.id))
       .map((r) => {
         const listing = listingFor(r.id);
+        const broken = unreadable.get(r.id);
+
+        if (broken !== undefined) return { server: r.name, reason: broken };
 
         if (listing !== undefined && 'failure' in listing) {
           return { server: r.name, reason: `connected, but its tool list could not be read, so it offers no tools: ${listing.failure}` };
@@ -721,11 +731,16 @@ export class UserMcpServers {
     )[0];
 
     if (!row) throw new KinuError('missing', `Unknown MCP server: ${serverId}`);
-    const allowed = parseAllowedTools(row.allowed_tools);
+    const read = readAllowedTools(row.allowed_tools, serverId);
 
-    if (allowed && !allowed.includes(name)) {
-      throw new KinuError('denied', `Tool '${name}' is not in the allowed_tools list for this server.`);
+    // A corrupt list refuses the call too, never lets it through as if no list were set.
+    let refusal: KinuError | null = 'failure' in read ? read.failure : null;
+
+    if ('allowed' in read && read.allowed !== null && !read.allowed.includes(name)) {
+      refusal = new KinuError('denied', `Tool '${name}' is not in the allowed_tools list for this server.`);
     }
+
+    if (refusal !== null) throw refusal;
 
     const parsedParams = v.safeParse(JsonObjectSchema, args);
     const params = parsedParams.success ? parsedParams.output : {};

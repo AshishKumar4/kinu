@@ -35,7 +35,7 @@ import type {
   AgentLogEvent, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
   PendingSteer, PendingSteerFile, PreparedConversation, QueuedConversation, QueueProbeMode, ReactorWake,
   ParityCompleted, ParityPrepared, RawChatProbeResult, WakeDriveResult, ChangeNotesCompleted, ChangeNotesPrepared, OwedRepliesRecovered, ClaimUnderRecovery, StrandedWork, AgentHeldWork, AgentSlateUi, AnswerPageModes, TerminalState, AlienEffect,
-  HeldClose, HeldCloseRecovered,
+  HeldClose, HeldCloseRecovered, KillJourney,
 } from './two-turn-shapes';
 import type {
   DurabilityReservation, PreviewAnswer, RemovedSlate, RpcAnswer, ServedSlate,
@@ -116,6 +116,7 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   recoverOwedReplies(workspace: string): Promise<OwedRepliesRecovered>;
   heldCloseWorkspace(): Promise<HeldClose>;
   recoverHeldClose(workspace: string): Promise<HeldCloseRecovered>;
+  killedTurn(plan: ReadonlyArray<{ readonly step: number; readonly attempt: number; readonly at: 'request' | 'stream' | 'delivered' }>): Promise<KillJourney>;
   hostedActorTab(): Promise<{ name: string; snapshot: string; jobs: string; frames: number }>;
   firstChatAfterGenesis(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; inbox: { busy: boolean }; landed: string | null; transcript: Array<{ id: string; role: string }>; failures: Array<{ event: string; code: string; cause: string }> }>;
   parityPrepare(): Promise<ParityPrepared>;

@@ -41,9 +41,13 @@ source "$ROOT/scripts/repo-runtime.sh"
 # vite plugin's redirect target (dist/kinu/wrangler.json, "../client").
 # dist/kinu/assets/ is NOT an asset dir — it is the worker bundle's
 # code-split chunk output, uploaded as worker modules. See scripts/deploy.sh.
+# --unsigned stops before signing and leaves the version and sha it would have signed in
+# dist/release-unsigned.json: the deploy builds on armada and signs here, where the key is.
+UNSIGNED=""
+if [ "${1:-}" = "--unsigned" ]; then UNSIGNED=1; shift; fi
 OUT_DIR="${1:-$ROOT/packages/cf-backend/dist/client/downloads}"
 BUN="$ROOT/node_modules/.bin/bun"
-"$BUN" "$ROOT/scripts/sign-release.ts" --check
+[ -n "$UNSIGNED" ] || "$BUN" "$ROOT/scripts/sign-release.ts" --check
 
 # Cloudflare's static-asset limit, per file, on both plans. A file over it
 # publishes nothing, and the assets route then answers the SPA shell in its
@@ -236,6 +240,10 @@ publish "$CPYTHON_ARTIFACT"
 # verify against the public key pinned in their bundles before any download
 # reaches a live path. Written from the SAME stamp the bundle carries — one
 # stamping site, one source. A build without the signing key is refused.
+if [ -n "$UNSIGNED" ]; then
+  printf '{"version":"%s","sha":"%s"}\n' "$version" "$sha" > "$ROOT/packages/cf-backend/dist/release-unsigned.json"
+  exit 0
+fi
 "$BUN" "$ROOT/scripts/sign-release.ts" "$OUT_DIR" "$version" "$sha" || {
   echo "build-cli-dist: the release could not be signed" >&2
   exit 1
