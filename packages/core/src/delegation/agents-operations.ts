@@ -21,7 +21,7 @@ import type { CodemodeProvider } from '../types/codemode';
 import { defineOperation, opaque, serve, type Served } from '../operations/operation';
 import { codemodeNamespace, nativeTool } from '../tools/operation-surfaces';
 import { BUILTIN_TOOL_DESCRIPTIONS } from '../tools/registry';
-import { AGENTS_IMPACTS, type AgentsOp } from '../operations/agents';
+import { AGENTS_IMPACTS, AGENTS_SLATE, type AgentsOp } from '../operations/agents';
 
 const described = <S extends v.GenericSchema>(schema: S, text: string) => v.pipe(schema, v.description(text));
 
@@ -31,7 +31,7 @@ const optional = <S extends v.GenericSchema>(schema: S) => v.optional(schema);
 
 /** Fields join by wiring, so an operation's entries are assembled, not declared whole. */
 const agentsOp = (name: AgentsOp, help: string, plan: boolean, entries: v.ObjectEntries) =>
-  defineOperation({ ns: 'agents', name, help, impact: AGENTS_IMPACTS[name], plan, slate: false, input: v.strictObject(entries), output: JsonValueSchema });
+  defineOperation({ ns: 'agents', name, help, impact: AGENTS_IMPACTS[name], plan, slate: AGENTS_SLATE, input: v.strictObject(entries), output: JsonValueSchema });
 
 /** A search's fields; `role` and `tier` are described as the wiring has them. */
 function swarmEntries(role: v.GenericSchema, tier: v.GenericSchema): v.ObjectEntries {

@@ -1874,13 +1874,13 @@ function useWorkspaceReads(link: ChatLink) {
       subordinates,
       subordinateEvents,
       signalCards,
-      /** The server answers a blank displayName; the UI shows "New agent" until the titler lands. */
-      createSubordinate: async () => {
+      /** The server answers a blank displayName; the UI shows "New agent" until the titler lands. `opening` names it. */
+      createSubordinate: async (opening?: string) => {
         const result = await rpc<{
           name: string;
           displayName: string;
           subordinate: SubordinateRosterEntry;
-        }>("createSubordinateAgent", []);
+        }>("createSubordinateAgent", opening === undefined ? [] : [opening]);
 
         await writeRoster((current) => [
           ...current.filter((entry) => entry.name !== result.subordinate.name),

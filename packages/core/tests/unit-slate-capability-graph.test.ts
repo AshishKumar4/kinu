@@ -93,6 +93,18 @@ test('a cut grant is every observing member plus exactly the approved ones that 
   expect(() => cutShareGrant(graph, [{ slate: 'issues', namespace: 'workspace', member: 'remove' }])).toThrow('is not a member of slate issues that acts');
 });
 
+test('helpers an owner\'s slate hired are in its graph, but no share carries them: not even listing them', () => {
+  const hiring = slateCapabilityGraph({
+    slate: 'board', workspace: 'w', catalog: { mcp: [], slates: ['board'] }, usage: () => used('agents.list', 'agents.hire', 'workspace.readFile'),
+  });
+
+  expect(hiring.namespaces.find((each) => each.namespace === 'agents')?.members.map((member) => [member.member, member.impact])).toEqual([
+    ['list', 'observe'], ['hire', 'delegate'],
+  ]);
+  expect(cutShareGrant(hiring, []).members).toEqual([{ slate: 'board', namespace: 'workspace', member: 'readFile', impact: 'observe' }]);
+  expect(() => cutShareGrant(hiring, [{ slate: 'board', namespace: 'agents', member: 'hire' }])).toThrow("agents.hire runs only in its owner's own slate; a share cannot grant it");
+});
+
 test('a dotted slate or server name is walked and looked up whole', () => {
   const dotted = slateCapabilityGraph({
     slate: 'root', workspace: 'w',

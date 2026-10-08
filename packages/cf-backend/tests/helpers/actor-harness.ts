@@ -8,7 +8,7 @@ import { agentCallsThrough } from '../../src/dynamic-worker-slots';
 import { Database } from 'bun:sqlite';
 import { setSystemTime } from 'bun:test';
 import { makeSqlExec } from '../../../core/tests/helpers';
-import type { AgentContext, Connection, FiberRecoveryContext, FiberRecoveryResult, WSMessage } from 'agents';
+import type { AgentContext, Connection, WSMessage } from 'agents';
 import type { LanguageModel, ModelMessage, ToolSet, UIMessage } from 'ai';
 import * as v from 'valibot';
 import { scriptedTurnModel, type ModelStreamPart, type ScriptedTurnOptions, type ScriptedTurnResult } from '@kinu.run/test-utils/turn-model';
@@ -23,7 +23,7 @@ import type { ChatTurnInput, ActorTurnLease, PreparedTurn, TurnOpening } from '@
 import type { ChatWireTransport } from '../../src/chat-transport';
 import { isWorkMode, workModeForTurnMetadata, ChatSession, ExtensionHost, type KinuExtension } from '@kinu.run/core';
 import { ActorClaimStore, admitSubordinateTask, agentArtifactDirectory, agentHome, CHAT_SESSION_ID, createParentWorkspaceVfs, EventLog, SubordinateRosterStore, MAIN_AGENT, openWorkspaceMainActor, SessionHistory, TerminalTransitions, WorkspaceActorDirectory } from '@kinu.run/core';
-import { sqlOver } from '@kinu.run/test-utils';
+import { present, sqlOver } from '@kinu.run/test-utils';
 import {
   createCompositeLogger, createConsoleLogger, renderCauseChain, setDiagnosticsSink, toKinuError, type Logger,
 } from '@kinu.run/core/obs';
@@ -49,7 +49,7 @@ import {
   type SleepTimeUpdate,
   type EgressSecretSummary,
 } from '@kinu.run/core';
-import { HARNESS_AGENT, harnessFibersRunning, harnessHolds, joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
+import { HARNESS_AGENT, harnessFibersRunning, harnessHolds, joinHarnessFibers, mockAgentsSdk, trackHarnessLane } from './agents-sdk';
 import { fleetPlaneForTest, fleetPointWritten, openAnalyticsWindowForTest, type FleetPoint } from './analytics-plane';
 import { inProcessWorkerLoader } from './worker-loader';
 import { agentDatabase, inProcessAgentFacets } from './agent-facets';
@@ -167,8 +167,11 @@ export class HarnessDynamicWorkers {
   }
 }
 
+/** The storage each activation was built over, by its context: its agents' facets are that storage's. */
+const activationStorage = new WeakMap<object, Database>();
+
 export class HarnessOrchestratorAgent extends OrchestratorAgent {
-  private readonly harnessAgentFacets = inProcessAgentFacets(makeCtx);
+  private readonly harnessAgentFacets = inProcessAgentFacets(makeCtx, () => present(activationStorage.get(this.ctx), 'the activation\'s storage'));
 
   /** The platform's count of this object's Dynamic Workers, which the agents' isolates are. */
   readonly harnessDynamicWorkers = new HarnessDynamicWorkers();
@@ -176,6 +179,11 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   /** This object's Dynamic Worker ledger, as Nimbus keeps it. */
   harnessDynamicWorkerLedger(): DurableObjectState {
     return this.ctx;
+  }
+
+  /** Joined with the fibers and not with the keep-alives, as production's lanes were fibers before D11. */
+  protected override holdLane<T>(body: () => Promise<T>): Promise<T> {
+    return trackHarnessLane(body());
   }
 
   protected override async agentIsolate(actorId: string): Promise<AgentFacetCalls> {
@@ -480,8 +488,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
   /** The background-job registry; its store owns lease epoch and resume counter policy. */
   /** One post-turn evolution lane, started exactly as a completed turn does. */
-  /** One activation's alarm housekeeping: runs the interrupted-fiber scan with no client. */
-  harnessAlarmHousekeeping(): Promise<void> { return this._onAlarmHousekeeping(); }
 
   /** The user message this turn runs for; `turnWorkMode()` reads its metadata. */
   harnessDrivingUserMessage(text: string, metadata?: JsonObject): void {
@@ -712,11 +718,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   /** The wake arm that resumes the loop after a restart. */
   harnessResumeChatLoop(): void { this.resumeChatLoop(); }
 
-  /** The recovery hook's decision, which the scan hides. */
-  harnessRecoverFiber(ctx: FiberRecoveryContext): Promise<void | FiberRecoveryResult> {
-    return this.onFiberRecovered(ctx);
-  }
-
   /** Issue the workspace capability token as a claim does: one row. */
   harnessHoldsCapability(token: string): void {
     void this.sql`INSERT OR REPLACE INTO workspace_capability (id, token) VALUES (1, ${token})`;
@@ -729,8 +730,10 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
   harnessJoinDetachedFibers(): Promise<void> { return joinHarnessFibers(); }
 
+
+  /** Every actor's open lanes, as the next activation would find them. */
   harnessOpenFiberRows(): { id: string; name: string }[] {
-    return this.sql<{ id: string; name: string }>`SELECT id, name FROM cf_agents_runs ORDER BY created_at`;
+    return this.sql<{ id: string; name: string }>`SELECT id, name FROM fibers ORDER BY created_at, rowid`;
   }
 
   /** Advisor notes recorded for one turn, counted from storage because the guard reads storage. */
@@ -738,9 +741,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     return this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM evolution_events
       WHERE type = 'advisor_note' AND json_extract(data, '$.turnId') = ${turnId}`[0]?.n ?? 0;
   }
-  harnessSeedOrphanFiber(name: string, snapshot: JsonValue): string {
-    return seedOrphanFiberRow(this.ctx.storage, name, snapshot);
-  }
+
 }
 
 /** The workspace's files as a fork reaches them: core's parent adapter over the object's public
@@ -946,17 +947,22 @@ export async function admittedTurnClaim(
   });
 }
 
+/** The facet database of a non-main agent: named, as production names it, by the agent's storage key. */
+export function ownDatabase(harness: Pick<ActorHarness<HarnessOrchestratorAgent>, 'agent' | 'db'>, actorId: string): Database {
+  return agentDatabase(harness.db, harness.agent.agentOf(actorId).storageKey);
+}
+
 /** A non-main agent's own runs, claims and conversation in its facet database. */
-export function agentSql(actorId: string): SqlExecutor {
-  return sqlOver(agentDatabase(actorId));
+export function agentSql(harness: Pick<ActorHarness<HarnessOrchestratorAgent>, 'agent' | 'db'>, actorId: string): SqlExecutor {
+  return sqlOver(ownDatabase(harness, actorId));
 }
 
 /**
  * An agent's own conversation store, over its own database, once its facet copied its roster rows there (any
  * read of its chat through the workspace does): to seed its chat, or to read it as its pane does.
  */
-export function agentHistory(harness: Pick<ActorHarness<HarnessOrchestratorAgent>, 'agent'>, actorId: string) {
-  const db = agentDatabase(actorId);
+export function agentHistory(harness: Pick<ActorHarness<HarnessOrchestratorAgent>, 'agent' | 'db'>, actorId: string) {
+  const db = ownDatabase(harness, actorId);
   const actor = actorOver(db, actorId);
 
   return { actor, history: historyOver({ agent: harness.agent, db }, actor) };
@@ -1012,6 +1018,16 @@ export async function seedMission(harness: { db: Database; agent: Pick<HarnessOr
 }
 
 /** The workspace's main actor as its durable identity rows name it, read through core's directory. */
+/** The row a dead activation leaves: the root's lane, opened before this activation began. */
+export function seedOrphanFiber(db: Database, name: string, snapshot: JsonValue): string {
+  const id = `orphan-${crypto.randomUUID().slice(0, 8)}`;
+
+  db.query('INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run(workspaceMainActor(db).actorId, id, name, JSON.stringify(snapshot), Date.now() - 60_000);
+
+  return id;
+}
+
 /** A hired actor's handle over the object's stored rows, whether or not it is hosted now. */
 export function actorOver(db: Database, actorId: string): ActorHandle {
   const sql = sqlOver(db);
@@ -1737,6 +1753,7 @@ function instantiate<T extends WorkspaceHostTarget>(
   // The platform fixes the name before the constructor runs, and the constructor records it.
   const name = objectName ?? world?.workspace ?? 'harness-parent';
   const ctx = makeCtx(db, 'harness-actor', name);
+  activationStorage.set(ctx, db);
 
   if (world !== undefined) activationWorlds.set(ctx, world);
   const agent = new Actor(ctx, builtEnv);

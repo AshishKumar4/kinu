@@ -6,8 +6,7 @@
 import { expect, test } from 'bun:test';
 import { actorConnectionTag, WORKSPACE_TITLE_SYSTEM_PROMPT } from '@kinu.run/core';
 import { asPane, joinHarnessFibers } from './helpers/agents-sdk';
-import { agentDatabase } from './helpers/agent-facets';
-import { agentSql, driveUntil, gatewayWorkspace, rosterOver, type StartedHarness } from './helpers/actor-harness';
+import { agentSql, driveUntil, gatewayWorkspace, ownDatabase, rosterOver, type StartedHarness } from './helpers/actor-harness';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, type RecordedGatewayRun } from './helpers/platform-gateway';
 
 /** The owner's message, asked of the agent's model: the agent naming itself after it is not one. */
@@ -29,14 +28,14 @@ async function ownersAgent(workspace: StartedHarness) {
 }
 
 /** The agent's turns that have ended, from its own run log. */
-const turnsEnded = (actorId: string): number => agentSql(actorId)<{ n: number }>`
+const turnsEnded = (workspace: StartedHarness, actorId: string): number => agentSql(workspace, actorId)<{ n: number }>`
   SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${actorId} AND type = 'run_end'`[0]?.n ?? 0;
 
 /** Once the agent's turn has ended and everything it owed (its report to the workspace, its naming) has settled. */
 async function settled(workspace: StartedHarness, actorId: string, turns: number): Promise<void> {
-  const owed = () => agentDatabase(workspace.agent.agentOf(actorId).storageKey).query<{ n: number }, []>('SELECT COUNT(*) AS n FROM terminal_effects').get()?.n ?? 0;
+  const owed = () => ownDatabase(workspace, actorId).query<{ n: number }, []>('SELECT COUNT(*) AS n FROM terminal_effects').get()?.n ?? 0;
 
-  await driveUntil(workspace, "the agent's turn never ended", () => turnsEnded(actorId) >= turns);
+  await driveUntil(workspace, "the agent's turn never ended", () => turnsEnded(workspace, actorId) >= turns);
   await joinHarnessFibers();
   await workspace.agent.harnessAgentsIdle();
   await driveUntil(workspace, "what the agent's turn owed never settled", () => owed() === 0);

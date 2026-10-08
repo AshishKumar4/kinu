@@ -229,12 +229,12 @@ if (import.meta.main) {
   const sources = readMatching((file) => isParseable(file) && file.startsWith('packages/') && !isTestFile(file));
   const { findings, statements, tablesRead } = findViolations(vendor, sources);
 
-  const measured = assertMeasured('vendor-schema', [
+  // None is the target state (D11 took the last, `cf_agents_runs`); the scan itself is what must not be empty, and its
+  // parser is proven on fixtures by vendor-schema.test.ts.
+  const measured = `${assertMeasured('vendor-schema', [
     ['vendor tables built', vendor.size],
     ['product files read', sources.size],
-    ['statements over vendor tables prepared', statements],
-    ['vendor tables Kinu names', tablesRead.size],
-  ]);
+  ])}, ${String(statements)} statements over vendor tables prepared, ${String(tablesRead.size)} vendor tables Kinu names`;
 
   if (findings.length > 0) {
     console.error(`vendor-schema: ${String(findings.length)} statement(s) the installed vendor cannot serve — ${measured}`);

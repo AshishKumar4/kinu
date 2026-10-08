@@ -7,7 +7,7 @@ import * as v from 'valibot';
 import { readSources } from './sources';
 import { parseJsonc } from './jsonc';
 import {
-  blockBodyOf, classMembers, declaredName, functionOf, identifierCalleeName, identifierText,
+  blockBodyOf, classMembers, declaredName, functionOf, identifierCalleeName,
   isAsync, isFunctionLike, memberCalleeName, methodKind, parse, returnTypeOf, superClassName,
   type Parsed, type SyntaxNode, walk,
 } from './syntax';
@@ -15,42 +15,26 @@ import {
 
 /**
  * Subclass hooks the vendored init chain AWAITS inside the same gate, each with
- * the call site that proves it. Pinned by equality for the same reason the
- * container bases are: this set is the governed surface, so widening it — or
- * failing to widen it when a vendor bump awaits a new hook — must be an edit
- * somebody makes here rather than a silent change of subject.
+ * the call site that proves it. Kinu overrides none: the SDK re-offers a fiber
+ * row through them inside `blockConcurrencyWhile`, under a timeout, and a
+ * timeout is not a bound. A lane's obligation is its own row, which `onStart`
+ * classifies and re-drives (`OrchestratorAgent.recoverDeadActivation`). Pinned
+ * by equality so a vendor bump that awaits a new hook is an edit made here.
  *
- *   • `onFiberRecovered` — `agents/dist/index.js:2602`, awaited by
- *     `_runFiberRecoveryHook` per interrupted row, from `_checkRunFibers`
- *     (`:1033`), which `startAgent` awaits before it calls `onStart`. NOT timed
- *     out: the SDK's own docs say user hooks are not
- *     (`agent-tool-types-*.d.ts:3131`).
- *   • `_handleInternalFiberRecovery` — `:2601`, the framework's own half of the
- *     same hook, wrapped in `_withFiberRecoveryTimeout`. Governed anyway,
- *     because a timeout is not a bound: it abandons the work and leaves the gate
- *     held for however long the timeout is.
+ *   • `onFiberRecovered` — awaited by `_runFiberRecoveryHook` per interrupted
+ *     row, from `_checkRunFibers`, which `startAgent` awaits before `onStart`.
+ *   • `_handleInternalFiberRecovery` — the framework's own half of the same
+ *     hook, wrapped in `_withFiberRecoveryTimeout`.
  */
 const RECOVERY_HOOKS: readonly string[] = [
   'onFiberRecovered', '_handleInternalFiberRecovery',
 ];
 
 /**
- * The seam a recovery hook must hand the gate, instead of the work.
- *
- * The replacement bound for this population, and the same kind of pin as
- * `withContainerStartDeadline` — with one more property, which is why this rule
- * can be complete without a call graph: the gate also requires the DECLARATION
- * of this name to be synchronous, and a synchronous function cannot await. So
- * "the gate waits on classification only" follows from two syntactic facts (a
- * non-async hook, a non-async classifier) rather than from a claim about
- * everything the classifier reaches.
- */
-const RECOVERY_CLASSIFIER = 'classifyRecoveredFiber';
-
-/**
- * Calls that reach OFF the machine, pinned by name — the class of work no
- * `onStart` may launch, awaited or not: provider round trips and external
- * delivery dispatch alike.
+ * Calls that reach OFF the machine, pinned by name — the class of work `onStart`
+ * never names in its own body: provider round trips and external delivery
+ * dispatch alike. The hook classifies; what the last activation left owed is
+ * started, never awaited, by `OrchestratorAgent.recoverDeadActivation`.
  *
  * Pinned by equality for the same reason {@link RECOVERY_HOOKS} is: this list
  * IS the rule, so widening it — or failing to widen it when a new model seam
@@ -68,8 +52,8 @@ const RECOVERY_CLASSIFIER = 'classifyRecoveredFiber';
  *     one name, and the advisor's hire, which starts an agent's turn.
  *   • `resumeAll`, `replayOwedAndRearm`, `owedDeliveryWork` — the delivery
  *     lanes: owed event replies are external mail and an interrupted terminal
- *     transition replays SMTP and model work. An activation CLASSIFIES and
- *     ARMS the durable wake; the alarm frame dispatches.
+ *     transition replays SMTP and model work. An activation arms the durable
+ *     wake for them; the alarm frame dispatches.
  *
  * Names, not a call graph: "Why this shape" above applies unchanged, and the
  * honest limit — a hook that reaches a model under a name not on this list — is
@@ -117,25 +101,12 @@ export interface Violation {
   readonly reason: string;
 }
 
-/** Where the corpus declares {@link RECOVERY_CLASSIFIER}, and whether that
- *  declaration is synchronous — the second half of the recovery rule. */
-export interface ClassifierDeclaration {
-  readonly file: string;
-  readonly line: number;
-  readonly async: boolean;
-}
-
-
 export interface InitGateAudit {
   /** Every governed hook found — the denominator, split by which rule it was
    *  held to, so a hook silently reclassified into a narrower population is
    *  visible in the headline rather than hidden by it. */
   readonly inspected: readonly { file: string; owner: string; member: string; hook: HookKind }[];
   readonly violations: readonly Violation[];
-  /** The classification seam's declaration, or `null` when this corpus declares
-   *  it nowhere. Null over the WHOLE tree is a stale pin and a gate failure: the
-   *  hand-off rule would otherwise be satisfied by a name nothing declares. */
-  readonly classifier: ClassifierDeclaration | null;
 }
 
 /** Which framework awaits this hook, and therefore which rule it is held to. */
@@ -300,60 +271,6 @@ function modelSinkCalls(body: SyntaxNode): { readonly name: string; readonly nod
   return found;
 }
 
-/** Every expression this method's own scope hands back, unwrapped through one
- *  `Promise.resolve(…)`. A hook cannot await, so what it RETURNS is the only
- *  other thing the gate can end up waiting on — and `Promise.resolve` adopts a
- *  thenable, so the wrapper is transparent to the gate and must be transparent
- *  here too. Own scope only: a `return` inside a detached callback is that
- *  callback's. */
-function handedBack(body: SyntaxNode): SyntaxNode[] {
-  const handed: SyntaxNode[] = [];
-
-  const collect = (node: SyntaxNode): void => {
-    for (const child of node.children) {
-      if (isFunctionLike(child)) continue;
-
-      if (child.type === 'ReturnStatement') {
-        const returned = child.children[0];
-
-        if (returned === undefined) {
-          handed.push(child);
-          continue;
-        }
-
-        handed.push(memberCalleeName(returned) === 'resolve'
-          && identifierText(returned.children[0]?.children[0] ?? returned) === 'Promise'
-          ? returned.children[1] ?? returned
-          : returned);
-        continue;
-      }
-
-      collect(child);
-    }
-  };
-
-  collect(body);
-
-  return handed;
-}
-
-
-/** The declaration of {@link RECOVERY_CLASSIFIER} in one file, if it is here.
- *  A top-level function only: the seam is a module function by design, so a
- *  method or an arrow-typed field of that name is not it. */
-function classifierIn(parsed: Parsed, file: string): ClassifierDeclaration | null {
-  let found: ClassifierDeclaration | null = null;
-  walk(parsed.root, (node) => {
-    if (found !== null || node.type !== 'FunctionDeclaration') return;
-
-    if (declaredName(node) !== RECOVERY_CLASSIFIER) return;
-    found = { file, line: parsed.lineAt(node.start), async: isAsync(node) };
-  });
-
-  return found;
-}
-
-
 /** Which rule a member is held to, decided by the member name first — the
  *  recovery hooks are awaited in the same gate whatever the base is — and then
  *  by the base class for the two `onStart` populations. A member no rule
@@ -391,6 +308,12 @@ export function auditFile(
       inspected.push({ file, owner, member: name, hook });
       const fail = (reason: string): void => void violations.push({ file, line, owner, member: name, reason });
 
+      if (hook === 'recovery') {
+        fail('overrides a hook the SDK awaits inside `blockConcurrencyWhile`, under a timeout — record the '
+          + "obligation in its own row and re-drive it from onStart; Kinu owns no SDK fiber lane");
+        continue;
+      }
+
       // Common to all three: `async` is what lets an unbounded await into the
       // gate, and a nested gate is the same gate by another name. ONE admitted
       // exception, the owner's ruling: work that is provably bounded and owed
@@ -401,7 +324,7 @@ export function auditFile(
       // admitting a new one is a conscious edit HERE.
       //
       // Container hooks return the pinned singleflight directly; their async
-      // continuation carries the raced bound. Recovery hooks remain synchronous.
+      // continuation carries the raced bound.
       const admittedAsyncGate = isAsync(member) && hook === 'per-request';
 
       if (admittedAsyncGate) {
@@ -430,14 +353,9 @@ export function auditFile(
         fail('declared `async` — its promise is what `blockConcurrencyWhile` waits on');
       }
 
-      // The annotation is not decoration: the bases accept
-      // `void | Promise<void>` and `Promise<void | FiberRecoveryResult>`, so the
-      // return type silently changes the moment `async` is added, and the
-      // widening is invisible in review. Which annotation is required differs — a
-      // per-request hook must not hand the gate a promise; a recovery hook
-      // has no choice about the promise (the SDK awaits it either way) and states
-      // instead WHAT it resolves to, because a `void` recovery result leaves a
-      // managed fiber row `interrupted` for good.
+      // The annotation is not decoration: the base accepts `void | Promise<void>`, so
+      // the return type silently changes the moment `async` is added, and the
+      // widening is invisible in review.
       const returns = returnTypeOf(member);
 
       const annotated = returns === undefined
@@ -448,11 +366,6 @@ export function auditFile(
         // An admitted-async gate annotates the promise it now returns.
         if (annotated !== 'Promise<void>') {
           fail(`must annotate \`: Promise<void>\` explicitly (found \`${annotated ?? 'no annotation'}\`)`);
-        }
-      } else if (hook === 'recovery') {
-        if (annotated === undefined || !annotated.startsWith('Promise<')) {
-          fail('must annotate what its promise resolves to, explicitly '
-            + `(found \`${annotated ?? 'no annotation'}\`)`);
         }
       } else {
         const wanted = 'void';
@@ -477,68 +390,32 @@ export function auditFile(
       // The class of work, not the shape of the wait. Every check above asks
       // what the gate waits on; this one asks what the hook LAUNCHES, and so it
       // descends into the nested function expression a detached task is written
-      // as. The recovery population is exempt: handing a re-drive to a detached
-      // durable carrier is its sanctioned answer, and a re-drive may reach the
-      // model.
-      if (hook !== 'recovery') {
-        for (const sink of modelSinkCalls(body)) {
-          fail(`reaches \`${sink.name}\` at line ${String(parsed.lineAt(sink.node.start))} — a `
-            + 'model call on the init path. Detaching it does not move it off that path: the '
-            + 'promise runs against an activation whose gate is still open, and eviction cancels '
-            + 'it with its rejection swallowed. Run it from a request frame instead');
-        }
-      }
-
-
-      if (hook !== 'recovery') continue;
-
-      // What a non-async method hands back is the only other thing the gate can
-      // wait on, and the SDK awaits it. A call to the pinned classifier is the
-      // sanctioned answer; a value with nothing to await (a decision taken
-      // inline) is the other. Anything else — `return this.reviewTurn(...)`,
-      // `return someOtherLane(...)` — is the whole defect this population
-      // exists for, and it is invisible to the `async`/`await` checks above.
-      for (const returned of handedBack(body)) {
-        if (identifierCalleeName(returned) === RECOVERY_CLASSIFIER) continue;
-
-        if (returned.type === 'ObjectExpression' || returned.type === 'Literal') continue;
-        fail(`must hand its work to \`${RECOVERY_CLASSIFIER}\` (or resolve a decision inline) — `
-          + 'the SDK awaits whatever this returns, inside the init gate, with no timeout');
+      // as.
+      for (const sink of modelSinkCalls(body)) {
+        fail(`reaches \`${sink.name}\` at line ${String(parsed.lineAt(sink.node.start))} — a `
+          + 'model call in the init hook itself. The hook classifies; owed work is started, never '
+          + 'awaited, by the activation\'s recovery (`recoverDeadActivation`), off the promise the gate waits on');
       }
     }
   });
-  const classifier = classifierIn(parsed, file);
 
-  if (classifier !== null && classifier.async) {
-    violations.push({
-      file, line: classifier.line, owner: RECOVERY_CLASSIFIER, member: RECOVERY_CLASSIFIER,
-      reason: 'declared `async` — a recovery hook hands the gate whatever this returns, so an '
-        + 'await here is an await inside `blockConcurrencyWhile`; classify synchronously and '
-        + 'hand each re-drive to a detached durable carrier',
-    });
-  }
-
-  return { inspected, violations, classifier };
+  return { inspected, violations };
 }
 
 export function audit(sources: ReadonlyMap<string, string>): InitGateAudit {
   const inspected: { file: string; owner: string; member: string; hook: HookKind }[] = [];
   const violations: Violation[] = [];
-  let classifier: ClassifierDeclaration | null = null;
 
   for (const [file, text] of sources) {
     // The corpus is narrowed by the names this gate governs, so a file that
-    // declares none of them is not parsed. The classifier's own module is in the
-    // set because its declaration is half of the recovery rule.
-    if (!text.includes('onStart') && !RECOVERY_HOOKS.some((name) => text.includes(name))
-      && !text.includes(RECOVERY_CLASSIFIER)) continue;
+    // declares none of them is not parsed.
+    if (!text.includes('onStart') && !RECOVERY_HOOKS.some((name) => text.includes(name))) continue;
     const one = auditFile(file, text);
     inspected.push(...one.inspected);
     violations.push(...one.violations);
-    classifier ??= one.classifier;
   }
 
-  return { inspected, violations, classifier };
+  return { inspected, violations };
 }
 
 /* ── Constructors ──────────────────────────────────────────────────────────
@@ -729,7 +606,7 @@ export function auditConstructors(sources: ReadonlyMap<string, string>, declared
 if (import.meta.main) {
   const sources = readSources();
   const audited = audit(sources);
-  const { inspected, classifier } = audited;
+  const { inspected } = audited;
   const violations = [...audited.violations];
 
   // Denominator. A gate that finds nothing because it looked nowhere is the
@@ -760,26 +637,11 @@ if (import.meta.main) {
     problems.push('parsed none of the Durable Object classes wrangler.jsonc declares');
   }
 
-  const empty = {
-    'per-request': 'the matcher is not matching',
-    recovery: `no class overrides one of ${RECOVERY_HOOKS.join(', ')}`,
-  } satisfies Record<HookKind, string>;
-
-  for (const hook of ['per-request', 'recovery'] as const) {
-    if (inspected.some((i) => i.hook === hook)) continue;
-    problems.push(`found 0 ${hook} hook implementations — ${empty[hook]}`);
+  if (!inspected.some((i) => i.hook === 'per-request')) {
+    problems.push('found 0 per-request hook implementations — the matcher is not matching');
   }
 
-  // The recovery rule's other half. A pin nothing declares is a rule every hook
-  // passes, which reads exactly like a rule every hook obeys.
-  if (classifier === null) {
-    problems.push(`no source declares \`${RECOVERY_CLASSIFIER}\` — the recovery hand-off rule `
-      + 'is pinned to a name that no longer exists');
-  }
-
-
-  // The sink rule's other half, and the same argument the classifier pin makes:
-  // a name no source mentions is a rule every hook passes, which reads exactly
+  // The sink rule's other half: a name no source mentions is a rule every hook passes, which reads exactly
   // like a rule every hook obeys.
   const unmentioned = MODEL_SINKS.filter(
     (sink) => ![...sources].some(([, text]) => text.includes(sink)),
@@ -795,31 +657,21 @@ if (import.meta.main) {
     process.exit(1);
   }
 
-  const counted = (hook: HookKind): number => inspected.filter((i) => i.hook === hook).length;
-
   if (violations.length === 0) {
     console.log(
-      `do-init-gate: ok — ${inspected.length} governed hook(s) across `
-      + `${new Set(inspected.map((i) => i.owner)).size} class(es) `
-      + `(${counted('per-request')} per-request onStart, ${counted('recovery')} SDK-awaited recovery), `
+      `do-init-gate: ok — ${inspected.length} onStart hook(s) across `
+      + `${new Set(inspected.map((i) => i.owner)).size} class(es), no SDK-awaited recovery hook, `
       + `${String(constructors.inspected.length)} DO constructors with the same-class methods they call; `
       + `${ours.length}/${declared.length} wrangler-declared DO classes defined here and parsed`
       + (vendor.length > 0 ? `; not ours: ${vendor.join(', ')}` : '')
       // The blind spots, on the SUCCESS path, because a limitation visible only
       // in red output is invisible exactly when the tree is green.
-      + `\ndo-init-gate: blind to — what \`${RECOVERY_CLASSIFIER}\``
-      + ` (${classifier?.file ?? '(unknown)'}:${classifier?.line ?? 0}) CALLS: this gate proves`
-      + ' it is synchronous, and a synchronous function cannot await, but the arms\' own'
-      + '\n  discipline (hand every re-drive to a detached durable carrier, never join one) is'
-      + ' held by packages/cf-backend/tests/unit-eviction-durability.test.ts, not here;'
-      + `\n  recovery hooks outside \`RECOVERY_HOOKS\` — the set is pinned from the vendored`
+      + `\ndo-init-gate: blind to — recovery hooks outside \`RECOVERY_HOOKS\`: the set is pinned from the vendored`
       + ' Agent lifecycle chain, so a vendor bump that awaits a NEW subclass hook in the gate'
       + '\n  is ungoverned until the name is added here'
       + `;\n  what an onStart-spawned call REACHES beyond the ${String(MODEL_SINKS.length)} pinned`
       + ' `MODEL_SINKS` names: the rule is by NAME, so a helper spawned there that reaches a'
-      + '\n  model under a name not on the list is ungoverned — and the recovery hooks are exempt'
-      + ' from that rule outright, because their sanctioned answer hands a re-drive (which may'
-      + '\n  reach the model) to a detached durable carrier'
+      + '\n  model under a name not on the list is ungoverned'
       + ';\n  what a constructor reaches through getters, imported functions or other objects: it follows'
       + ' `this.method()` calls within its own class chain only'
       + (vendor.length > 0
@@ -835,12 +687,10 @@ if (import.meta.main) {
   console.error(
     '\nAnything the init chain awaits stalls every request on the object, and at 30s'
     + '\nthe runtime cancels blockConcurrencyWhile and RESETS the Durable Object.'
-    + '\nPer-request hook: preconditions that need I/O belong on the turn path'
-    + `\nRecovery hook: classify synchronously through \`${RECOVERY_CLASSIFIER}\` and hand`
-    + '\nevery re-drive to a detached durable carrier (ActorAgent.redriveRecoveredLane).'
-    + '\nEither onStart, whatever the gate waits on: a call named in `MODEL_SINKS` is refused'
-    + '\noutright — detaching a model call does not move it off the init path. Run it from a'
-    + '\nrequest frame (a @callable or a turn).',
+    + '\nPer-request hook: preconditions that need I/O belong on the turn path.'
+    + '\nRecovery hook: none; a lane\'s own row is classified and re-driven from onStart.'
+    + '\nA call named in `MODEL_SINKS` is refused in onStart\'s own body: owed work is started,'
+    + '\nnever awaited, by the activation\'s recovery (OrchestratorAgent.recoverDeadActivation).',
   );
   process.exit(1);
 }

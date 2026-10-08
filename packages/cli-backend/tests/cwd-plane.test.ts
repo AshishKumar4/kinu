@@ -136,7 +136,7 @@ describe('peers over one directory', () => {
     const { state, project } = roots('cwd-plane-subordinate');
     const parent = agentRuntime(state, 'parent', project);
     const binding = registerLocalActor(parent.actor, { name: 'child', creationId: 'child-birth', origin: 'agent', lifetime: 'durable' });
-    const physicalName = actorHomeName({ origin: 'agent', storageKey: binding.storageKey });
+    const physicalName = actorHomeName({ origin: 'agent', name: binding.name, storageKey: binding.storageKey });
 
     const child = shareLocalWorkspacePlane(
       createCLIRuntime(parent.db, { llm: null, cwd: project, facet: physicalName, actorBinding: binding }),

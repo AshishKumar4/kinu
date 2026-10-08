@@ -28,13 +28,14 @@ import { createCFRuntime, type CFRuntime, type CFRuntimeHooks, type WorkspaceBox
 import type { LiveRead, TemporaryAgentPort } from '@kinu.run/core';
 
 /** The root agents-SDK members a hosted actor's runtime borrows; projected from `Agent` so upstream drift fails to compile. */
-type HostRootAgent = Pick<Agent<Env>, 'name' | 'sql' | 'runFiber'>;
+type HostRootAgent = Pick<Agent<Env>, 'name' | 'sql'>;
 
 /** Everything the root lends hosted actors; anything absent here a child builds for itself. */
 export interface WorkspaceHostSeams {
   readonly env: Env;
   readonly ctx: AgentContext;
   readonly agent: HostRootAgent;
+  holdLane<T>(body: () => Promise<T>): Promise<T>;
   currentTurn(reference: ActorReference): string | null;
   /** The root's own runtime: inheriting children read the retained program from it. */
   rootRuntime(): AgentRuntime;
@@ -229,6 +230,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
       const runtime = createCFRuntime(seams.agent, {
         env: seams.env,
         ctx: seams.ctx,
+        holdLane: (body) => seams.holdLane(body),
         workspaceBox: (shellId) => seams.workspaceBox(shellId),
       }, {
         actor: bound.handle,
