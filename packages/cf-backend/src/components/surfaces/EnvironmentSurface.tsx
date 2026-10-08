@@ -23,7 +23,11 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { SandboxSizeRow } from "@/components/SandboxSize";
 
 /** The terminal (xterm, 333 KB of the workspace's first chunk on 2026-10-08) loads with a command lane's first view. */
-const TerminalPane = lazyRoute<TerminalPaneProps>(async () => ({ default: (await import("@/components/TerminalPane")).TerminalPane }));
+const TerminalPane = lazyRoute<TerminalPaneProps>(async () => {
+  const { TerminalPane: pane } = await import("@/components/TerminalPane");
+
+  return { default: pane };
+});
 
 export interface EnvironmentSurfaceProps {
   rpc: Rpc;

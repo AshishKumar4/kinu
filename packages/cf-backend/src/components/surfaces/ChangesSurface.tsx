@@ -1,14 +1,22 @@
 import { Effect, Cause } from 'effect';
 import { detach } from '@kinu.run/core/obs';
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   executorLabel, executorSortKey, isActiveExecutionDevice, keepUnchanged, oneAtATime, pickDefaultExecutor,
   workspacePath, WORKSPACE_ROOT, type ChangeNotesResult, type ChangeSet, type ExecutorDiffResult, type ExecutorInfo, type ReviewAnnotation, type Rpc,
 } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { describeError, lastValue, useAsyncResource } from "@/hooks/use-async-resource";
-import { ChangesPanel } from "./changes/ChangesPanel";
-import { NotesProvider, type NotesStore } from "./changes/notes-provider";
+import { Loader } from "@cloudflare/kumo";
+import { lazyRoute } from "@/lazy-route";
+import type { NotesStore } from "./changes/notes-provider";
+import type { ChangesViewProps } from "./changes/ChangesView";
+
+const ChangesView = lazyRoute<ChangesViewProps>(async () => {
+  const { ChangesView: view } = await import("./changes/ChangesView");
+
+  return { default: view };
+});
 
 function changeSetOf(source: string, result: ExecutorDiffResult): ChangeSet {
   const error = result.error ?? (result.notGitRepo === true ? "Its folder holds no git repository, so there is nothing to compare." : undefined);
@@ -120,6 +128,12 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = nul
   const [reviewed, setReviewed] = useState<Reviewed | null>(null);
   const [undoable, setUndoable] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  // The panel is drawn, and its chunk loaded, from the first time Changes is shown; the counts load before it.
+  const [opened, setOpened] = useState(active);
+
+  useEffect(() => {
+    if (active) setOpened(true);
+  }, [active]);
 
   // Executor status arrives after mount: follow the default until the reader picks a source.
   useEffect(() => {
@@ -251,18 +265,21 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = nul
 
   const now = Date.now();
 
+  if (!opened) return null;
+
   return (
-    <NotesProvider key={shown.source} baseline={shown.baseline ?? ""} files={shown.files} store={store} now={Date.now}>
-      <div className="flex h-full min-h-0 flex-col">
-        {failure !== null && <p role="alert" className="mx-3 mt-3 rounded-md px-3 py-2 text-xs p-notice-danger">{failure}</p>}
-        {resource.status === "error" && <LoadFailure what="the latest change-set" message={resource.message} onRetry={reload} className="mx-3 mt-3" />}
-        <div className="min-h-0 flex-1">
-          <ChangesPanel key={focus?.nonce ?? 0} file={focus?.path ?? null} sets={sets} source={shown.source}
-            onSource={(next) => { picked.current = true; setSource(next); }} now={now}
-            reviewedAt={reviewedAt} onReviewed={() => detach(markReviewed())} onUndo={undoable ? undoReviewed : null}
-            onOpenInFiles={openInFiles} />
-        </div>
-      </div>
-    </NotesProvider>
+    <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader size="sm" /></div>}>
+      <ChangesView key={shown.source} notes={{ baseline: shown.baseline ?? "", files: shown.files, store, now: Date.now }} panelKey={focus?.nonce ?? 0}
+        banner={<>
+          {failure !== null && <p role="alert" className="mx-3 mt-3 rounded-md px-3 py-2 text-xs p-notice-danger">{failure}</p>}
+          {resource.status === "error" && <LoadFailure what="the latest change-set" message={resource.message} onRetry={reload} className="mx-3 mt-3" />}
+        </>}
+        panel={{
+          file: focus?.path ?? null, sets, source: shown.source,
+          onSource: (next) => { picked.current = true; setSource(next); }, now,
+          reviewedAt, onReviewed: () => detach(markReviewed()), onUndo: undoable ? undoReviewed : null,
+          onOpenInFiles: openInFiles,
+        }} />
+    </Suspense>
   );
 }
