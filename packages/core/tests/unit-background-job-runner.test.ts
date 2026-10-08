@@ -189,6 +189,28 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
     expect(notified).toEqual([{ id, status: 'failed' }]);
   });
 
+  test('a detached job and how it ended are logged where a request trace can find them', async () => {
+    const recording = createRecordingLogger();
+    const restore = setDiagnosticsSink(recording);
+
+    try {
+      const { runner, store, settled } = setup();
+      const deps = runner.thresholdDeps({}, 'build', new AbortController());
+      const outcome = await deps.onThreshold('eval', Promise.reject(new Error('cut off')));
+
+      await settled();
+      const jobId = outcome.detached ? outcome.jobId : 'not detached';
+
+      expect(store.get(jobId)?.status).toBe('failed');
+      expect(recording.emitted.filter((line) => line.event.startsWith('jobs.')).map(({ event, fields }) => ({ event, fields }))).toEqual([
+        { event: 'jobs.detached', fields: { jobId, kind: 'eval' } },
+        { event: 'jobs.ended', fields: { jobId, kind: 'eval', status: 'failed' } },
+      ]);
+    } finally {
+      restore();
+    }
+  });
+
   test('both settle and fail reach logActivity, not just start/cancel/resume', async () => {
     const { runner, settled, logs } = setup();
     const ok = runner.create('think', {}, 'build', new AbortController());
