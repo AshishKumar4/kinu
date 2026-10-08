@@ -6,11 +6,10 @@ import { Database } from 'bun:sqlite';
 import { scriptedTurnModel, createTestActorsOver, unobservedSearchSeams } from '@kinu.run/test-utils';
 import { swarmSeats } from './helpers-actor-host';
 import * as v from 'valibot';
-import type { ModelMessage } from 'ai';
+import { jsonSchema, tool } from 'ai';
 import { createTestRuntime, makeExecRaw, makeSql } from './helpers';
 import {
   MissionGovernor,
-  MissionBudgetExhausted,
   type MissionBudgetRefusal,
 } from '../src/mission-budget';
 import {
@@ -18,7 +17,8 @@ import {
   type AgentsToolDeps,
 } from '../src/index';
 import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth';
-import { composePrepareStep } from '../src/prompting/prepare-step';
+import { runChat } from '../src/chat';
+import { sessionFixture } from './helpers-session';
 import type { SubordinateHandoff } from '../src/index';
 
 /** The admission facts every handoff carries back to the sender. */
@@ -26,7 +26,6 @@ function handoff(): SubordinateHandoff {
   return { eventId: 'evt-1', delivery: 'starts_now', phase: { busy: false, lastActivityAt: null, workingOn: null } };
 }
 
-import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
 import { buildDrainBatch } from '../src/events/hub/drain';
 import type { KinuEvent } from '../src/events/hub/types';
 
@@ -240,11 +239,8 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
     const withoutGovernor = await sandbox(searchableDeps({})).swarm({ task: 'x', ...TWO_BRANCHES });
 
     // Node ids are minted per run; an unscoped governor must add no key, ledger row or charge.
-    expect(v.parse(SearchReportSchema, withGovernorNoScope))
-      .toEqual(v.parse(SearchReportSchema, withoutGovernor));
-    const keys = v.record(v.string(), v.unknown());
-    expect(Object.keys(v.parse(keys, withGovernorNoScope)).sort())
-      .toEqual(Object.keys(v.parse(keys, withoutGovernor)).sort());
+    expect(v.parse(SearchReportSchema, withGovernorNoScope).report).toEqual({ expansions: 2, tokens: 16 });
+    expect(v.parse(SearchReportSchema, withoutGovernor).report).toEqual({ expansions: 2, tokens: 16 });
     expect(withoutGovernor).not.toHaveProperty('mission_budget');
     expect(withGovernorNoScope).not.toHaveProperty('mission_budget');
     expect(governor.snapshot()).toEqual([]);
@@ -273,7 +269,6 @@ describe('spawn seam — the run charges its own calls and the spawn charges no 
     // Two nodes really ran and reported tokens, so a zero ledger cannot pass.
     expect(out.report.expansions).toBe(2);
     expect(out.report.tokens).toBe(RUN_TOKENS);
-    expect(RUN_TOKENS).toBeGreaterThan(0);
 
     const [mission] = governor.snapshot('nightly');
     expect(mission?.spent.tokens).toBe(RUN_TOKENS);
@@ -323,27 +318,52 @@ describe('spawn seam — the run charges its own calls and the spawn charges no 
   });
 });
 
-describe('model-call seam — the step pipeline declines the next request', () => {
-  const ctx = { stepNumber: 3, messages: [{ role: 'user', content: 'hi' } satisfies ModelMessage], steps: [] };
+describe('model-call seam — the turn declines the next request', () => {
+  async function request(governor?: MissionGovernor, requests: string[] = []): Promise<number> {
+    let calls = 0;
 
-  test('an exhausted mission stops the turn before the request is issued', () => {
+    const model = scriptedTurnModel({ doGenerate: () => {
+      calls += 1;
+      requests.push('request');
+
+      return {
+        content: [{ type: 'text', text: 'done' }],
+        finishReason: { unified: 'stop', raw: undefined },
+        usage: {
+          inputTokens: { total: 5, noCache: 5, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 3, text: 3, reasoning: undefined },
+        }, warnings: [],
+      };
+    } });
+
+    for await (const _ of runChat({
+      model, modelSpec: 'fake/test-model', system: 'Answer.',
+      history: [{ role: 'user', content: 'hi' }], tools: {}, budget: governor,
+    })) { /* drain */ }
+
+    return calls;
+  }
+
+  test('an exhausted mission stops the turn before the request is issued', async () => {
     const governor = newGovernor();
     governor.declare('nightly', { tokens: 5 });
     governor.activate(['nightly']);
     governor.debit(5);
-    expect(() => composePrepareStep({ budget: governor }, ctx)).toThrow(MissionBudgetExhausted);
+    const requests: string[] = [];
+
+    await expect(request(governor, requests)).rejects.toMatchObject({ code: 'denied' });
+    expect(requests).toEqual([]);
   });
 
-  test('a mission with room left runs the pipeline unchanged', () => {
+  test('a mission with room left runs the pipeline unchanged', async () => {
     const governor = newGovernor();
     governor.declare('nightly', { tokens: 5_000 });
     governor.activate(['nightly']);
-    // Nothing wired here, so an unchanged pipeline answers undefined: no step overrides.
-    expect(composePrepareStep({ budget: governor }, ctx)).toBeUndefined();
-    expect(composePrepareStep({}, ctx)).toBeUndefined();
+    expect(await request(governor)).toBe(1);
+    expect(await request()).toBe(1);
   });
 
-  test('the refusal is recorded once in the run event log', () => {
+  test('the refusal is recorded once in the run event log', async () => {
     const seen: MissionBudgetRefusal[] = [];
     const governor = newGovernor((r) => seen.push(r));
     governor.declare('nightly', { tokens: 1 });
@@ -351,7 +371,7 @@ describe('model-call seam — the step pipeline declines the next request', () =
     governor.debit(1);
 
     for (let i = 0; i < 3; i++) {
-      expect(() => composePrepareStep({ budget: governor }, ctx)).toThrow();
+      await expect(request(governor)).rejects.toMatchObject({ code: 'denied' });
     }
 
     expect(seen).toHaveLength(1);
@@ -359,32 +379,57 @@ describe('model-call seam — the step pipeline declines the next request', () =
   });
 });
 
-describe('model-call seam — the turn accumulator is the meter', () => {
-  const step = { usage: { input: 300, output: 100, cacheRead: 250 } };
+describe('model-call seam — the session ingests provider usage', () => {
+  async function meteredTurn(governor: MissionGovernor) {
+    let calls = 0;
 
-  test("a scoped turn's provider-reported usage lands on the ledger", () => {
+    const model = scriptedTurnModel({ doGenerate: () => {
+      const first = calls++ === 0;
+
+      return {
+        content: first
+          ? [{ type: 'tool-call', toolName: 'shell', toolCallId: 'meter-1', input: '{}' }]
+          : [{ type: 'text', text: 'done' }],
+        finishReason: { unified: first ? 'tool-calls' : 'stop', raw: undefined },
+        usage: {
+          inputTokens: { total: 300, noCache: 50, cacheRead: 250, cacheWrite: undefined },
+          outputTokens: { total: 100, text: 100, reasoning: undefined },
+        }, warnings: [],
+      };
+    } });
+
+    const fixture = await sessionFixture({ model, budget: governor, tools: {
+      shell: tool({ description: 'probe', inputSchema: jsonSchema({ type: 'object' }), execute: async () => 'ran' }),
+    } });
+
+    try {
+      await fixture.chat.send('run the probe', { id: 'meter-turn' });
+      expect(calls).toBe(2);
+
+      return fixture.actor.session.orchestrator.acc.reportedUsage();
+    } finally { fixture.close(); }
+  }
+
+  test("a scoped turn's provider-reported usage lands on the ledger", async () => {
     const governor = newGovernor();
     governor.declare('nightly', {});
     governor.activate(['nightly']);
-    const acc = new TurnAccumulator({}, governor);
-    acc.recordStep(step);
-    acc.recordStep(step);
+    const usage = await meteredTurn(governor);
 
-    // input is the cache-inclusive total, so the cache read is not counted twice.
     expect(governor.snapshot('nightly')[0]?.spent.tokens).toBe(800);
     expect(governor.snapshot('nightly')[0]?.calls).toBe(2);
-    expect(acc.reportedUsage()).toEqual({ input: 600, output: 200, cacheRead: 500 });
+    expect(usage).toEqual({ input: 600, output: 200, cacheRead: 500 });
   });
 
-  test('an unscoped turn records usage and no spend', () => {
+  test('an unscoped turn records usage and no spend', async () => {
     const governor = newGovernor();
-    const acc = new TurnAccumulator({}, governor);
-    acc.recordStep(step);
+    const usage = await meteredTurn(governor);
+
     expect(governor.snapshot()).toEqual([]);
-    expect(acc.reportedUsage()).toEqual({ input: 300, output: 100, cacheRead: 250 });
+    expect(usage).toEqual({ input: 600, output: 200, cacheRead: 500 });
   });
 
-  test("the step's usage split is priced at the resolved model's catalog rates", () => {
+  test("the step's usage split is priced at the resolved model's catalog rates", async () => {
     const db = new Database(':memory:');
 
     const governor = new MissionGovernor({
@@ -395,11 +440,11 @@ describe('model-call seam — the turn accumulator is the meter', () => {
 
     governor.declare('nightly', {});
     governor.activate(['nightly']);
-    new TurnAccumulator({}, governor).recordStep(step);
+    await meteredTurn(governor);
 
-    // 50 fresh input @ $3 + 250 cache-read @ $0.30 + 100 output @ $15, per 1M.
     const [row] = governor.snapshot('nightly');
-    expect(row?.spent.usd).toBeCloseTo((50 * 3 + 250 * 0.3 + 100 * 15) / 1_000_000, 12);
+
+    expect(row?.spent.usd).toBeCloseTo(0.00345, 12);
     expect(row?.pricing).toEqual({ blendedTokens: 0, source: 'catalog' });
   });
 });

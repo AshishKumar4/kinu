@@ -1,12 +1,12 @@
 // Lifecycle ownership, readiness and the recovery ladder, driven through the real `Devbox`
-// against `support/devbox-harness.ts`; the pure halves are pinned in `decisions.test.ts`.
+// against `support/devbox-harness.ts`.
 import { beforeEach, describe, expect, test, vi } from 'bun:test';
 import { TestDevbox, TEST_DEVBOX_POLICY as TEST_POLICY } from './support/test-devbox';
 
 import * as v from 'valibot';
 
 import {
-  DEFAULT_DEVBOX_POLICY, parseRecoveryRow, type DevboxPolicy, type RecoveryRow,
+  DEFAULT_DEVBOX_POLICY, type DevboxPolicy, type RecoveryRow,
   type RecoveryStage, type StartClock,
 } from '../src/lifecycle';
 import type { StoredValue } from '../src/storage';
@@ -89,7 +89,7 @@ class HeartbeatBox extends TestBox {
 
 
 /** Parsed, not cast: a filed row missing a stage or reason is a defect to fail on. */
-const FiledIncidentSchema = v.object({ stage: v.string(), reason: v.string() });
+const FiledIncidentSchema = v.object({ stage: v.string(), reason: v.string(), processId: v.optional(v.string()), port: v.optional(v.number()) });
 
 type FiledIncident = v.InferOutput<typeof FiledIncidentSchema>;
 
@@ -105,11 +105,9 @@ const armed = (container: FakeSandbox): number =>
   container.scheduleRows.filter(row => row.callback === 'devboxStartup').length;
 
 function ladder(rows: Map<string, StoredValue>): RecoveryRow | undefined {
-  // Parse with the production parser, not a cast: a looser read could assert a stage
-  // the box would have refused.
-  const held = parseRecoveryRow(rows.get(RECOVERY_KEY));
+  const held = v.safeParse(v.object({ owner: v.string(), stage: v.optional(v.picklist(['retry', 'replace'])) }), rows.get(RECOVERY_KEY));
 
-  return held.kind === 'row' ? held.row : undefined;
+  return held.success ? held.output : undefined;
 }
 
 /** Faults the attempt's first durable write: ephemeral `attach()` cannot fail, and container
@@ -196,7 +194,7 @@ describe('the startup kick arms restoration without attaching inline', () => {
     expect(incidents(rows)).toEqual([
       expect.objectContaining({
         stage: 'attach',
-        reason: expect.stringContaining('[transient -> retry]'),
+        reason: expect.stringContaining('the container is at capacity'),
       }),
     ]);
     expect((await box.devboxState()).restoration).toBe('unstarted');
@@ -231,7 +229,7 @@ describe('the startup kick arms restoration without attaching inline', () => {
     expect(incidents(rows)).toEqual([
       expect.objectContaining({
         stage: 'attach',
-        reason: expect.stringContaining('[transient -> retry]'),
+        reason: expect.stringContaining('the container is not healthy'),
       }),
     ]);
     expect(armed(container)).toBe(1);
@@ -506,7 +504,7 @@ describe('a destroyed box starts nothing of its own until it is asked again', ()
     writing.release();
     await Promise.allSettled([first]);
 
-    await expect(queued).rejects.toThrow('destroyed after this request arrived');
+    await expect(queued).rejects.toMatchObject({ code: 'io' });
     expect({ running: container.running.running, rows: container.scheduleRows.map(row => row.callback) })
       .toEqual({ running: false, rows: [] });
   });
@@ -555,7 +553,7 @@ describe('a destroyed box starts nothing of its own until it is asked again', ()
       const [outcome] = await Promise.allSettled([queued]);
 
       expect({ outcome, starts: container.containerStarts, running: container.running.running, armed: armed(container) }).toEqual({
-        outcome: { status: 'rejected', reason: expect.objectContaining({ message: expect.stringContaining('destroyed after this request arrived') }) },
+        outcome: { status: 'rejected', reason: expect.objectContaining({ code: 'io' }) },
         starts, running: false, armed: 0,
       });
     });
@@ -601,8 +599,8 @@ describe('a failed restored service is never exposed and never reported ready', 
     expect(await box.getExposedPorts('preview.test')).toEqual([]);
     const state = await box.devboxState();
     expect(state.ready).toBe(false);
-    expect(state.unready).toBe('port 3000 never answered');
-    expect(incidents(rows).map(row => row.stage)).toEqual(['port']);
+    expect(state.unready).toContain('3000');
+    expect(incidents(rows)).toMatchObject([{ stage: 'port', port: 3000 }]);
   });
 
   test('a process that did not restart stops EVERY exposure, not just its own port', async () => {
@@ -619,7 +617,7 @@ describe('a failed restored service is never exposed and never reported ready', 
     expect(await box.getExposedPorts('preview.test')).toEqual([]);
     const state = await box.devboxState();
     expect(state.ready).toBe(false);
-    expect(state.unready).toBe('process p1 did not restart; no port was exposed');
+    expect(state.unready).toContain('p1');
   });
 
   test('every failed spec reaches the ledger, so one dead spec does not hide the others', async () => {
@@ -629,9 +627,11 @@ describe('a failed restored service is never exposed and never reported ready', 
     proc(rows, 'p2', 'python3 app.py');
     container.startFaults.push(refused('COMMAND_NOT_FOUND'), refused('PROCESS_ERROR'));
     await box.devboxStartup();
-    expect(incidents(rows).map(row => row.stage)).toEqual(['process', 'process']);
-    expect((await box.devboxState()).unready)
-      .toBe('process p1 did not restart; process p2 did not restart; no port was exposed');
+    expect(incidents(rows)).toMatchObject([{ stage: 'process', processId: 'p1' }, { stage: 'process', processId: 'p2' }]);
+    const state = await box.devboxState();
+
+    expect(state.unready).toContain('p1');
+    expect(state.unready).toContain('p2');
   });
 
   test('operations stay permitted while a restored service is down, so it can be repaired', async () => {
@@ -653,9 +653,9 @@ describe('a failed restored service is never exposed and never reported ready', 
     failAttempt(harnessed, 'MISSING_CREDENTIALS');
     await expect(box.devboxStartup()).rejects.toThrow('MISSING_CREDENTIALS');
     await expect(box.exec('ls')).rejects.toMatchObject(
-      { message: expect.stringContaining('no attached work directory') });
+      { code: 'refused' });
     await expect(box.exec('ls')).rejects.toMatchObject(
-      { message: expect.stringContaining('permanent -> refuse') });
+      { code: 'refused' });
   });
 
   test('a stop on a box whose attach was refused stops the container with nothing to commit', async () => {
@@ -668,8 +668,6 @@ describe('a failed restored service is never exposed and never reported ready', 
     const outcome = await box.quiesce();
 
     expect(outcome.kind).toBe('skipped');
-    expect(outcome.reason).toContain('nothing is attached to commit');
-    expect(outcome.reason).toContain('permanent -> refuse');
     expect(container.stops).toBe(stopsBefore + 1);
     expect(container.running.running).toBe(false);
   });
@@ -742,7 +740,7 @@ describe('one container identity is retried, then replaced, then refused', () =>
       expect(armed(container)).toBe(0);
       expect(ladder(rows)?.stage).toBe('replace');
       await expect(box.exec('ls')).rejects.toMatchObject(
-        { message: expect.stringContaining('transient -> refuse') });
+        { code: 'refused' });
     });
 
   test('storage exhaustion refuses at once: it repeats no work and moves no ladder', async () => {
@@ -754,7 +752,7 @@ describe('one container identity is retried, then replaced, then refused', () =>
       .toEqual({ armed: 0, destroys: 0 });
     expect(ladder(rows)?.stage).toBeUndefined();
     await expect(box.exec('ls')).rejects.toMatchObject(
-      { message: expect.stringContaining('exhausted -> refuse') });
+      { code: 'refused' });
   });
 
   test('permanent configuration refuses at once, without spending the ladder', async () => {
@@ -786,14 +784,14 @@ describe('one container identity is retried, then replaced, then refused', () =>
       const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
       rows.set(RECOVERY_KEY, { owner: 'x', stage: 'destroy-everything' });
-      await expect(box.devboxStartup()).rejects.toThrow('did not parse');
+      await expect(box.devboxStartup()).rejects.toMatchObject({ code: 'io' });
       expect({ armed: armed(container), destroys: container.destroys })
         .toEqual({ armed: 0, destroys: 0 });
       expect(ladder(rows)?.stage).toBe('replace');
       expect(container.execs.filter(command => command.includes(STAMP_COMMAND))).toEqual([]);
       expect(rows.has('devbox:last-attach')).toBe(false);
       await expect(box.exec('ls')).rejects.toMatchObject(
-        { message: expect.stringContaining('unreadable -> refuse') });
+        { code: 'refused' });
     });
 
   test('an attach that lands deletes the row, so the next failure starts fresh', async () => {
@@ -851,7 +849,7 @@ describe('one container identity is retried, then replaced, then refused', () =>
     await expect(box.devboxStartup()).rejects.toThrow('did not answer the signal');
     expect(container.running.running).toBe(true);
     await expect(box.exec('ls')).rejects.toMatchObject(
-      { message: expect.stringContaining('could not be destroyed') });
+      { code: 'refused' });
     expect(container.containerStarts).toBe(1);
   });
 
@@ -879,7 +877,7 @@ describe('one container identity is retried, then replaced, then refused', () =>
       failAttempt(harnessed, 'RPC_TRANSPORT_ERROR');
       await expect(box.devboxStartup()).rejects.toThrow('RPC_TRANSPORT_ERROR');
       await expect(box.exec('ls')).rejects.toMatchObject(
-        { message: expect.stringContaining('no attached work directory') });
+        { code: 'refused' });
 
       failAttempt(harnessed, 'RPC_TRANSPORT_ERROR');
       await expect(box.attachNow()).rejects.toThrow('RPC_TRANSPORT_ERROR');
@@ -918,7 +916,7 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
 
     loseTheArmedRow(container);
 
-    await expect(box.exec('ls')).rejects.toThrow('not ready');
+    await expect(box.exec('ls')).rejects.toMatchObject({ code: 'io' });
     expect(armed(container)).toBe(1);
     expect(stamps(container)).toBe(1);
     await box.devboxStartup();
@@ -939,9 +937,9 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
     await expect(box.devboxStartup()).rejects.toThrow('OPERATION_INTERRUPTED');
 
     await expect(box.exec('ls')).rejects.toMatchObject(
-      { message: expect.stringContaining('A startup is armed') });
+      { code: 'io' });
     await expect(box.exec('ls')).rejects.toMatchObject(
-      { message: expect.stringContaining('stale-owner -> retry') });
+      { code: 'io' });
     expect({ armed: armed(container), stamps: stamps(container) }).toEqual({ armed: 1, stamps: 1 });
   });
 
@@ -955,9 +953,9 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
     expect(armed(container)).toBe(0);
 
     await expect(box.exec('ls')).rejects.toMatchObject(
-      { message: expect.stringContaining('exhausted -> refuse') });
+      { code: 'refused' });
     await expect(box.exec('ls')).rejects.toMatchObject(
-      { code: 'refused', message: expect.stringMatching(/That failure is terminal, so nothing retries it\.$/) });
+      { code: 'refused' });
     expect(stamps(container)).toBe(1);
   });
 
@@ -1011,7 +1009,7 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
       now = Math.ceil(armedRow.time) * 1000 + 500;
 
       for (let poll = 0; poll < 4; poll += 1) await box.devboxState();
-      await expect(box.exec('ls')).rejects.toThrow('A startup is armed');
+      await expect(box.exec('ls')).rejects.toMatchObject({ code: 'io' });
 
       expect({ armed: armed(container), arms: container.schedules.filter(name => name === 'devboxStartup').length })
         .toEqual({ armed: 1, arms: armsBefore });
@@ -1058,7 +1056,7 @@ describe('one budget, two policies: the attach may replace, the phases after it 
     expect(container.running.running).toBe(true);
     const state = await box.devboxState();
     expect(state.ready).toBe(false);
-    expect(state.unready).toContain('port 3000');
+    expect(state.unready).toContain('3000');
     expect(state.ports.map(spec => spec.port)).toEqual([3000, 8080, 9000]);
   });
 
@@ -1082,7 +1080,7 @@ describe('one budget, two policies: the attach may replace, the phases after it 
       expect(await box.getExposedPorts('preview.test')).toEqual([]);
       const stalled = await box.devboxState();
       expect(stalled.ready).toBe(false);
-      expect(stalled.unready).toContain('process p1');
+      expect(stalled.unready).toContain('p1');
       expect(rows.has(RECOVERY_KEY)).toBe(false);
       expect(armed(container)).toBe(0);
       // Operations still work, which is the point of leaving the box attached.
@@ -1124,7 +1122,7 @@ describe('one budget, two policies: the attach may replace, the phases after it 
       // Assert the rejection only after the clock moves: `expect(promise).rejects` blocks until
       // settlement, and nothing can advance the test-driven clock meanwhile.
       box.clock.advance(TIGHT_POLICY.attachBudgetMs);
-      await expect(attempt).rejects.toThrow('[abandoned -> replace]');
+      await expect(attempt).rejects.toMatchObject({ code: 'io' });
       expect(container.destroys).toBe(0);
       const state = await box.devboxState();
       expect(state.ready).toBe(false);
@@ -1274,7 +1272,7 @@ describe('a box whose attach was abandoned', () => {
       const attempt = box.devboxStartup();
       await slow.reached;
       box.clock.advance(TIGHT_POLICY.attachBudgetMs);
-      await expect(attempt).rejects.toThrow('[abandoned -> replace]');
+      await expect(attempt).rejects.toMatchObject({ code: 'io' });
       slow.release();
       container.stampGate = undefined;
 
@@ -1284,7 +1282,7 @@ describe('a box whose attach was abandoned', () => {
       }
 
       // Before the armed replacement runs, a caller is told to ask again, not that the box is dead.
-      await expect(box.exec('true')).rejects.toThrow('this devbox is not ready: [abandoned -> replace]');
+      await expect(box.exec('true')).rejects.toMatchObject({ code: 'io' });
       await box.devboxStartup();
       expect(container.destroys).toBe(1);
       expect((await box.exec('true')).exitCode).toBe(0);

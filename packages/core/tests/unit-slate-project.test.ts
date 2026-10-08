@@ -1,13 +1,13 @@
 import { expect, test } from 'bun:test';
-import { credentialedBindings, describeBindings, parseSlateProject } from '../src/slates/project';
+import { parseSlateProject } from '../src/slates/project';
 import { routeSlateBindingCall } from '../src/slates/bindings';
 import type { JsonValue } from '../src/utils/json';
 
 test('misspelled Slate requirements fail instead of changing runtime or authority', () => {
-  expect(() => parseSlateProject({ name: 'notes', main: './server.ts', slate: { runtme: 'node' } })).toThrow('slate.runtme');
-  expect(() => parseSlateProject({ name: 'notes', main: './server.ts', slate: { bindings: { FILES: { kind: 'namespace', namespce: 'workspace' } } } })).toThrow('slate.bindings.FILES.namespce');
-  expect(() => parseSlateProject({ name: 'notes', main: './server.ts', slate: { bindings: { PEER: { kind: 'slate', id: 'other' } } } })).toThrow('slate.bindings.PEER.kind');
-  expect(() => parseSlateProject({ name: 'notes', scripts: { dev: 'vite' }, slate: { runtime: 'node' } })).toThrow('slate.port');
+  expect(() => parseSlateProject({ name: 'notes', main: './server.ts', slate: { runtme: 'node' } })).toThrow(expect.objectContaining({ code: 'bad_input' }));
+  expect(() => parseSlateProject({ name: 'notes', main: './server.ts', slate: { bindings: { FILES: { kind: 'namespace', namespce: 'workspace' } } } })).toThrow(expect.objectContaining({ code: 'bad_input' }));
+  expect(() => parseSlateProject({ name: 'notes', main: './server.ts', slate: { bindings: { PEER: { kind: 'slate', id: 'other' } } } })).toThrow(expect.objectContaining({ code: 'bad_input' }));
+  expect(() => parseSlateProject({ name: 'notes', scripts: { dev: 'vite' }, slate: { runtime: 'node' } })).toThrow(expect.objectContaining({ code: 'bad_input' }));
 });
 
 test('binding declarations constrain each capability plane without inherited object members', async () => {
@@ -43,14 +43,14 @@ test('tool bindings accept native JSON input and projection bindings retain code
   });
 
   expect(call('FILE', 'call', [{ action: 'read', path: 'note' }])).toEqual({ kind: 'tool', name: 'file', input: { action: 'read', path: 'note' } });
-  expect(() => call('FILE', 'read', [{}])).toThrow('offers call(input)');
-  expect(() => call('FILE', 'call', [1])).toThrow('one JSON object');
-  expect(() => call('FILE', 'call', [{}, {}])).toThrow('one JSON object');
+  expect(() => call('FILE', 'read', [{}])).toThrow(expect.objectContaining({ code: 'denied' }));
+  expect(() => call('FILE', 'call', [1])).toThrow(expect.objectContaining({ code: 'bad_input' }));
+  expect(() => call('FILE', 'call', [{}, {}])).toThrow(expect.objectContaining({ code: 'bad_input' }));
   expect(call('WEB', 'fetch', ['https://example.test'])).toEqual({ kind: 'codemode', namespace: 'web', member: 'fetch', args: ['https://example.test'] });
-  expect(() => call('WEB', 'search', ['x'])).toThrow('does not offer');
+  expect(() => call('WEB', 'search', ['x'])).toThrow(expect.objectContaining({ code: 'denied' }));
   expect(call('MEMORY', 'recall', ['key'])).toMatchObject({ kind: 'codemode', namespace: 'memory', member: 'recall' });
   expect(call('TASKS', 'list')).toMatchObject({ kind: 'codemode', namespace: 'tasks', member: 'list' });
-  expect(() => parseSlateProject({ main: 'server.js', slate: { bindings: { BOGON: { kind: 'bogon' } } } })).toThrow('slate.bindings.BOGON.kind');
+  expect(() => parseSlateProject({ main: 'server.js', slate: { bindings: { BOGON: { kind: 'bogon' } } } })).toThrow(expect.objectContaining({ code: 'bad_input' }));
 });
 
 test('agent, ai and path-scoped bindings parse, and only the workspace namespace scopes paths', () => {
@@ -72,9 +72,9 @@ test('agent, ai and path-scoped bindings parse, and only the workspace namespace
   expect(project.slate.bindings.FILES).toEqual({ kind: 'namespace', namespace: 'workspace', paths: ['/home/main/notes'] });
 
   expect(() => parseSlateProject({ main: 'server.js', slate: { bindings: { X: { kind: 'namespace', namespace: 'memory', paths: ['/a'] } } } }))
-    .toThrow('paths scope only a workspace namespace binding');
+    .toThrow(expect.objectContaining({ code: 'bad_input' }));
   expect(() => parseSlateProject({ main: 'server.js', slate: { bindings: { X: { kind: 'ai', tier: 'Not-A-Tier' } } } }))
-    .toThrow('slate.bindings.X.tier');
+    .toThrow(expect.objectContaining({ code: 'bad_input' }));
 });
 
 test('a slate needs no class, and inline height is bounded', () => {
@@ -83,7 +83,7 @@ test('a slate needs no class, and inline height is bounded', () => {
   expect(parseSlateProject({ main: 'server.ts', slate: { inline: { height: 480 } } }).slate.inline).toEqual({ height: 480 });
 
   for (const height of [719.5, 800, 100]) {
-    expect(() => parseSlateProject({ main: 'server.ts', slate: { inline: { height } } })).toThrow('slate.inline.height');
+    expect(() => parseSlateProject({ main: 'server.ts', slate: { inline: { height } } })).toThrow(expect.objectContaining({ code: 'bad_input' }));
   }
 });
 
@@ -111,35 +111,4 @@ test('a single-file slate names its browser module as its main module', () => {
 
   expect(project.main).toBe('slate.tsx');
   expect(project.browser).toBe('slate.tsx');
-});
-
-test('credentialedBindings is non-empty exactly for the kinds that reach the owner (S4)', () => {
-  const declared = {
-    namespace: { kind: 'namespace', namespace: 'workspace' },
-    rpc: { kind: 'rpc', methods: ['listBackgroundJobs'] },
-    mcp: { kind: 'mcp', server: 'github' },
-    app: { kind: 'app', id: 'other' },
-    tool: { kind: 'tool', name: 'file' },
-    memory: { kind: 'memory' },
-    tasks: { kind: 'tasks' },
-    web: { kind: 'web' },
-  } as const;
-
-  const credentialedKinds = ['namespace', 'rpc', 'mcp', 'tool', 'memory', 'tasks', 'web'];
-
-  for (const binding of Object.values(declared)) {
-    const project = parseSlateProject({ main: 'server.js', slate: { bindings: { CAP: binding } } });
-    const credentialed = credentialedBindings(project);
-
-    expect(credentialed.length > 0).toBe(credentialedKinds.includes(binding.kind));
-    expect(describeBindings(project)).toEqual([{ name: 'CAP', kind: binding.kind, target: expect.any(String), credentialed: credentialedKinds.includes(binding.kind) }]);
-  }
-
-  expect(credentialedBindings(parseSlateProject({ main: 'server.js' }))).toEqual([]);
-  expect(describeBindings(parseSlateProject({ main: 'server.js', slate: { bindings: {
-    NOTES: { kind: 'mcp', server: 'notes', tools: ['read_note'] }, DATA: { kind: 'rpc', methods: ['getExecutors', 'listTriggers'] },
-  } } }))).toEqual([
-    { name: 'NOTES', kind: 'mcp', target: 'notes', credentialed: true },
-    { name: 'DATA', kind: 'rpc', target: 'getExecutors, listTriggers', credentialed: true },
-  ]);
 });

@@ -1509,7 +1509,7 @@ export interface RecordedUserPlaneCalls {
   /** Set to record the turns the object asks the hub to stop device work for; unset, that ask is unreachable. */
   turnCancels?: string[];
   /** Set to record the roster tiles the object pushes, in order; unset, a push lands nowhere. */
-  overviews?: WorkspaceOverview[];
+  overviews?: { push(overview: WorkspaceOverview): void };
   /** What the owner's object throws at each push, in order, before it takes one. */
   refuseOverviews?: Error[];
   /** Set to hold every push until it settles. */

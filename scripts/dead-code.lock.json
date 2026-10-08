@@ -102,7 +102,6 @@
   "packages/core/src/strategy/records.ts#bestInCell (test-only)",
   "packages/core/src/strategy/records.ts#objectiveIdOf (test-only)",
   "packages/core/src/strategy/records.ts#recordHandleOf (test-only)",
-  "packages/core/src/strategy/settle.ts#deriveStop (test-only)",
   "packages/core/src/strategy/settle.ts#measuredCellsFor (test-only)",
   "packages/core/src/strategy/settle.ts#witnessVerdict (test-only)",
   "packages/core/src/strategy/swarm-expansion.ts#branchPrompt (test-only)",

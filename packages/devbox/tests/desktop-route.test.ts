@@ -67,7 +67,7 @@ test('the desktop is a WebSocket only, and starts nothing for anything else', as
 test('the desktop\'s port is never a preview', async () => {
   const { box } = await startedBox();
 
-  await expect(box.exposePort(6080, { hostname: 'preview.test' })).rejects.toThrow('6080');
+  await expect(box.exposePort(6080, { hostname: 'preview.test' })).rejects.toMatchObject({ code: 'invalid-input' });
   expect(await box.getExposedPorts('preview.test')).toEqual([]);
 });
 
@@ -76,7 +76,7 @@ test('the desktop\'s port is never a preview', async () => {
 test('the desktop\'s port mints no token, so nothing is left for a restore to expose', async () => {
   const { box, rows } = await startedBox();
 
-  await expect(box.portToken(6080)).rejects.toThrow('6080');
+  await expect(box.portToken(6080)).rejects.toMatchObject({ code: 'invalid-input' });
   expect(rows.has('devbox:port:6080')).toBe(false);
 });
 

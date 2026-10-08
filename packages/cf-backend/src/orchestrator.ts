@@ -852,8 +852,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.actorHost().bindStores(actorReferenceOf(this.liveAgentOf(actorId)));
   }
 
+  /** The tile reads an agent's chat turn as its room hears it open and close. */
   private async hostedChatEvent(actorId: string, event: SessionEvent): Promise<void> {
-    if (event.type === 'turn-start') this.agentTurns.chatOpened(actorId, event.turnId);
+    if (event.type === 'turn-start') {
+      this.agentTurns.chatOpened(actorId, event.turnId);
+      this.overviewChanged();
+    }
 
     await this.chatRooms.hostedRoom(actorId)?.deliver(event);
   }
@@ -861,6 +865,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private async hostedTurnEnded(actorId: string, event: SessionEvent, figures: AgentFigures): Promise<void> {
     await this.hostedChatEvent(actorId, event);
     this.agentTurns.chatClosed(actorId);
+    this.overviewChanged();
 
     if (!this.liveActor(actorId)) return;
     recordAgentFigures(this.boundSql, actorId, figures);
@@ -1639,6 +1644,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           }))));
 
         openTurns.close(opened);
+        // The tile reads the agent working while the hand-off is out: this is where that ends.
+        this.overviewChanged();
 
         if (!this.liveActor(record.actorId)) return;
 

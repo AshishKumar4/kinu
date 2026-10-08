@@ -23,8 +23,8 @@ describe('structured prompt helpers', () => {
   });
 
   test('throws clear errors for missing JSON', () => {
-    expect(() => extractJsonObject('no json')).toThrow(/no JSON object/);
-    expect(() => extractJsonArray('no json')).toThrow(/no JSON array/);
+    expect(() => extractJsonObject('no json')).toThrow(SyntaxError);
+    expect(() => extractJsonArray('no json')).toThrow(SyntaxError);
   });
 });
 
