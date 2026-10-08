@@ -5774,6 +5774,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * happens in this invocation; the incident id makes caller retries safe.
    */
   async acceptSandboxLifecycleIncident(body: JsonValue): Promise<SandboxLifecycleIncidentResult> {
+    // A deleted workspace's box can outlive it holding an incident: nobody is left to tell, and a throw here was
+    // `undelivered`, so the box re-offered it every five minutes for hours (staging beaf28a46, six boxes).
+    if (this.storageRefusal !== undefined || !this.workspaceBorn()) return { status: 'rejected', reason: 'the workspace no longer exists' };
 
     return acceptSandboxLifecycleIncident({
       sql: this.boundSql,

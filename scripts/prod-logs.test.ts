@@ -4,7 +4,7 @@ import { idleWakeHours, terminalEffectStates, type VersionRead, versionFindings 
 
 const HOUR = 3_600_000;
 
-const quiet: VersionRead = { ended: [], thrown: [], deployResets: [], effects: { failed: 0, failedTurns: 0, terminal: { observations: 0, settled: [], owed: [] } }, startups: [], idleWakes: [] };
+const quiet: VersionRead = { ended: [], thrown: [], deployResets: [], effects: { failed: 0, failedTurns: 0, terminal: { observations: 0, settled: [], owed: [], parked: [], deleted: [] } }, startups: [], idleWakes: [] };
 
 const HUNG = 'The Workers runtime canceled this request because it detected that your Worker\'s code had hung and would never generate a response.';
 
@@ -32,6 +32,28 @@ describe('what one deployed version did, as a deploy reports it', () => {
     expect(findings[0]?.finding).not.toContain('recovered');
   });
 
+  // Staging beaf28a46, 2026-10-08: both "still owed" sequences were task reminders in eval workspaces deleted 1.6 s
+  // later; an effect parked on an owner-fixable refusal is owed by design (T1-T3) until the owner acts.
+  test('a sequence parked on the owner or ended by its workspace\'s deletion is not owed work; a parked effect that failed since is', () => {
+    const at = (timestamp: number, event: string, sequence: string, fields: Record<string, string> = {}) => ({
+      timestamp, $workers: { durableObjectId: fields.object ?? 'object-a' }, source: { event, code: '', cause: '', fields: { sequence, ...fields } },
+    });
+
+    const read = terminalEffectStates([
+      at(10, 'turn.terminal_effect_parked', 'quota', { effect: 'v1:turn_lessons:a' }),
+      at(11, 'turn.terminal_effects_owed', 'quota', { owed: 'v1:turn_lessons:a' }),
+      at(10, 'turn.terminal_effect_parked', 'refused-then-broke', { effect: 'v1:turn_lessons:b' }),
+      at(20, 'turn.terminal_effect_failed', 'refused-then-broke', { effect: 'v1:turn_lessons:b' }),
+      at(21, 'turn.terminal_effects_owed', 'refused-then-broke', { owed: 'v1:turn_lessons:b' }),
+      at(30, 'turn.terminal_effects_owed', 'reminder', { owed: 'v1:task_reminder:c', object: 'deleted-workspace' }),
+      at(30, 'turn.terminal_effects_owed', 'reminder', { owed: 'v1:task_reminder:d', object: 'live-workspace' }),
+    ], new Map([['deleted-workspace', 32]]));
+
+    expect(read.parked.map((sample) => sample.sequence)).toEqual(['quota']);
+    expect(read.deleted.map((sample) => `${sample.object}/${sample.sequence}`)).toEqual(['deleted-workspace/reminder']);
+    expect(read.owed.map((sample) => `${sample.object}/${sample.sequence}`)).toEqual(['object-a/refused-then-broke', 'live-workspace/reminder']);
+  });
+
   // Staging's versions f62dfcb9 and b39035fc, 2026-09-30: 19 hung SupervisorRPC calls made by one orchestrator, and a
   // sleep_time effect failed and left owed, while 609 canceled sandbox calls were callers going away.
   test('an uncaught exception, a platform kill and a failed or owed effect are each a finding, with what a fixer starts from', () => {
@@ -47,7 +69,7 @@ describe('what one deployed version did, as a deploy reports it', () => {
       effects: {
         failed: 2, failedTurns: 2,
         failedSample: { object: '5c7e7ea536ffeb1e', sequence: 'dd25fbbb/42219f95', detail: 'v1:sleep_time:42219f95 (unavailable): the sleep-time compute returned no usable update' },
-        terminal: { observations: 3, settled: [], owed: [{ object: '5c7e7ea536ffeb1e', sequence: 'dd25fbbb/42219f95', detail: 'owed v1:sleep_time:42219f95' }] },
+        terminal: { observations: 3, settled: [], owed: [{ object: '5c7e7ea536ffeb1e', sequence: 'dd25fbbb/42219f95', detail: 'owed v1:sleep_time:42219f95' }], parked: [], deleted: [] },
       },
     });
 

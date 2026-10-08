@@ -277,7 +277,7 @@ const Calculation = v.looseObject({
 });
 
 const TelemetryFields = v.looseObject({
-  sequence: v.optional(v.string()), owed: v.optional(v.string()),
+  sequence: v.optional(v.string()), owed: v.optional(v.string()), effect: v.optional(v.string()),
   workspace: v.optional(v.string()), actor: v.optional(v.string()),
   sameBuild: v.optional(v.string()), midStep: v.optional(v.boolean()),
   stepsKept: v.optional(v.number()), fiber: v.optional(v.string()), fiberId: v.optional(v.string()),
@@ -792,15 +792,31 @@ export interface EffectSample {
   readonly detail: string;
 }
 
+/** An effect's events that say whether it waits on the owner: parked, or failed some other way since. */
+const EFFECT_MARKS: ReadonlyMap<string, 'parked' | 'failed'> = new Map([
+  ['turn.terminal_effect_parked', 'parked'], ['turn.terminal_effect_failed', 'failed'], ['turn.terminal_effect_blocked', 'failed'],
+]);
+
 export interface TerminalEffectStates {
   readonly observations: number;
   readonly settled: readonly EffectSample[];
   readonly owed: readonly EffectSample[];
+  /** Owed, but every owed effect is parked on an owner-fixable refusal: correct until the owner acts (T1-T3). */
+  readonly parked: readonly EffectSample[];
+  /** Owed when its workspace was deleted: the deletion ended it. */
+  readonly deleted: readonly EffectSample[];
 }
 
-/** Summarizes the version's terminal-effect observations for its deploy report. */
-export function terminalEffectStates(events: readonly Pick<TelemetryEvent, 'timestamp' | 'source' | '$workers'>[]): TerminalEffectStates {
+/**
+ * Summarizes the version's terminal-effect observations for its deploy report. `destroyedAt`: when each object was
+ * destroyed, if it was. Staging beaf28a46: both sequences the report called owed belonged to eval workspaces deleted
+ * a second and a half after the sequence owed its task reminder.
+ */
+export function terminalEffectStates(
+  events: readonly Pick<TelemetryEvent, 'timestamp' | 'source' | '$workers'>[], destroyedAt: ReadonlyMap<string, number> = new Map(),
+): TerminalEffectStates {
   const states = new Map<string, Map<string, { latest: (typeof events)[number]; observed: boolean }>>();
+  const marks = effectMarks(events);
   let observations = 0;
 
   for (const event of events) {
@@ -830,20 +846,62 @@ export function terminalEffectStates(events: readonly Pick<TelemetryEvent, 'time
     }
   }
 
-  const settled: EffectSample[] = [];
-  const owed: EffectSample[] = [];
+  const sorted: Record<keyof Omit<TerminalEffectStates, 'observations'>, EffectSample[]> = { settled: [], owed: [], parked: [], deleted: [] };
 
   for (const [object, sequences] of states) {
     for (const [sequence, { latest, observed }] of sequences) {
-      if (!observed) continue;
-      const isSettled = latest.source.event === 'turn.terminal_effects_settled';
-      const sample = { object, sequence, detail: isSettled ? 'settled after owing' : `owed ${latest.source.fields.owed ?? ''}` };
-
-      (isSettled ? settled : owed).push(sample);
+      if (observed) sorted[sequenceState({ object, sequence, latest, marks, destroyedAt })].push(sampleOf(object, sequence, latest));
     }
   }
 
-  return { observations, settled, owed };
+  return { observations, ...sorted };
+}
+
+type EffectMarks = { readonly parkedAt: ReadonlyMap<string, number>; readonly failedAt: ReadonlyMap<string, number> };
+
+/** Per object, sequence and effect: when it last parked on a refusal, and when it last failed some other way. */
+function effectMarks(events: readonly Pick<TelemetryEvent, 'timestamp' | 'source' | '$workers'>[]): EffectMarks {
+  const parkedAt = new Map<string, number>();
+  const failedAt = new Map<string, number>();
+
+  for (const event of events) {
+    const mark = EFFECT_MARKS.get(event.source.event);
+    const { sequence, effect } = event.source.fields;
+
+    if (mark === undefined || sequence === undefined || effect === undefined) continue;
+    const at = mark === 'parked' ? parkedAt : failedAt;
+    const key = effectKey(event.$workers.durableObjectId ?? '', sequence, effect);
+
+    at.set(key, Math.max(at.get(key) ?? 0, event.timestamp));
+  }
+
+  return { parkedAt, failedAt };
+}
+
+function effectKey(object: string, sequence: string, effect: string): string {
+  return `${object}\u0000${sequence}\u0000${effect}`;
+}
+
+function sequenceState(at: {
+  readonly object: string; readonly sequence: string; readonly latest: Pick<TelemetryEvent, 'timestamp' | 'source'>;
+  readonly marks: EffectMarks; readonly destroyedAt: ReadonlyMap<string, number>;
+}): keyof Omit<TerminalEffectStates, 'observations'> {
+  if (at.latest.source.event === 'turn.terminal_effects_settled') return 'settled';
+  const effects = (at.latest.source.fields.owed ?? '').split(',').filter((key) => key !== '');
+
+  const waitsOnOwner = effects.length > 0 && effects.every((effect) => {
+    const key = effectKey(at.object, at.sequence, effect);
+
+    return (at.marks.parkedAt.get(key) ?? -1) > (at.marks.failedAt.get(key) ?? 0);
+  });
+
+  if (waitsOnOwner) return 'parked';
+
+  return (at.destroyedAt.get(at.object) ?? -1) >= at.latest.timestamp ? 'deleted' : 'owed';
+}
+
+function sampleOf(object: string, sequence: string, latest: Pick<TelemetryEvent, 'source'>): EffectSample {
+  return { object, sequence, detail: latest.source.event === 'turn.terminal_effects_settled' ? 'settled after owing' : `owed ${latest.source.fields.owed ?? ''}` };
 }
 
 /** What one version did, as `version` reads it. */
@@ -1033,10 +1091,20 @@ async function versionRead(t: Telemetry, versionId: string): Promise<VersionRead
   });
 
   const failed = await t.count({ filters: [...scope, eq('event', 'turn.terminal_effect_failed')], groupBy: ['fields.sequence'], limit: 500 });
-  const { events: terminal, sampling: terminalSampling } = await t.events([...scope, { key: 'event', operation: 'includes', value: 'turn.terminal_effects_', type: 'string' }], EVENT_CAP);
+  // `turn.terminal_effect`: the sequences' owed and settled rows, and their effects' parks and failures.
+  const { events: terminal, sampling: terminalSampling } = await t.events([...scope, { key: 'event', operation: 'includes', value: 'turn.terminal_effect', type: 'string' }], EVENT_CAP);
 
   if (terminal.length === EVENT_CAP || terminalSampling > 1) {
     throw new Error('terminal-effect history is capped or sampled; narrow the window before classifying its sequences');
+  }
+
+  // The SDK's `destroy()` aborts the isolate with this reason once its storage is gone.
+  const { events: destroyedRows } = await t.events([...scope, eq('$metadata.message', 'destroyed')], EVENT_CAP);
+  const destroyedAt = new Map<string, number>();
+
+  for (const row of destroyedRows) {
+    const object = row.$workers.durableObjectId ?? '';
+    destroyedAt.set(object, Math.min(destroyedAt.get(object) ?? row.timestamp, row.timestamp));
   }
 
   const alarm = eq('$workers.eventType', 'alarm');
@@ -1059,7 +1127,7 @@ async function versionRead(t: Telemetry, versionId: string): Promise<VersionRead
     effects: {
       failed: total(failed), failedTurns: failed.length,
       failedSample: failed.length === 0 ? undefined : await effectSample(t, scope, 'turn.terminal_effect_failed'),
-      terminal: terminalEffectStates(terminal),
+      terminal: terminalEffectStates(terminal, destroyedAt),
     },
     startups: await startupHours(t, scope),
     idleWakes: idleWakeHours(alarms, [...called, ...modelCalls]),
@@ -1106,7 +1174,10 @@ async function versionCommand(args: Args): Promise<number> {
   console.log(args.json
     ? JSON.stringify({ window, version: subject, worker: args.worker, findings, terminalEffects: terminal, sampling }, null, 1)
     : [`${args.worker} version ${subject}, ${window.from} .. ${window.to}:`, ...findings.length === 0 ? ['  nothing to report'] : findings.map((found) => `  ${found.finding}`),
-      ...terminal === undefined ? [] : [`terminal effects: ${String(terminal.observations)} owed observation(s), ${String(terminal.settled.length + terminal.owed.length)} sequence(s): ${String(terminal.settled.length)} settled after owing, ${String(terminal.owed.length)} still owed at the window's end`],
+      ...terminal === undefined ? [] : [`terminal effects: ${String(terminal.observations)} owed observation(s), `
+        + `${String(terminal.settled.length + terminal.owed.length + terminal.parked.length + terminal.deleted.length)} sequence(s): `
+        + `${String(terminal.settled.length)} settled after owing, ${String(terminal.parked.length)} parked on the owner, `
+        + `${String(terminal.deleted.length)} ended by their workspace's deletion, ${String(terminal.owed.length)} still owed at the window's end`],
       ...sampling > 1 ? [`note: the API sampled this window (level ${String(sampling)}); counts are estimates.`] : []].join('\n'));
 
   return findings.length === 0 ? 0 : 1;
