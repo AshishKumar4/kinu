@@ -122,6 +122,14 @@ function optionalText(value: string | undefined): string | undefined {
   return text === undefined || text === '' ? undefined : text;
 }
 
+/**
+ * What names a new hire: a model's hire its mission; an owner's agent the words it was opened with or the mission
+ * they gave it, never the workspace's mission it inherits.
+ */
+function namingBrief(input: { readonly brief?: string; readonly mission?: string }, ownerCreated: boolean, mission: string): string | null {
+  return ownerCreated ? optionalText(input.brief) ?? optionalText(input.mission) ?? null : mission;
+}
+
 /** Only the birth assignment carries a fork; later tasks have no new prefix. */
 export function subordinateForkContext(context?: SubordinateInheritedContext): SerializedMessage[] {
   return context?.kind === 'fork' ? context.messages : [];
@@ -331,13 +339,17 @@ interface SubordinateStatusView {
 
 
 /**
- * Names a parent's new hires ({@link mintAgentName}): free in the workspace's directory, and in the parent's own roster,
- * where a birth waits before its directory row exists.
+ * Names a parent's new hires ({@link mintAgentName}): free in the workspace's directory, read once, and in the parent's
+ * own roster, where a birth waits before its directory row exists.
  */
 export function agentNamer(
-  directory: Pick<WorkspaceActorDirectory, 'nameTaken'>, roster: Pick<SubordinateRosterStore, 'get'>,
+  directory: Pick<WorkspaceActorDirectory, 'namesFrom'>, roster: Pick<SubordinateRosterStore, 'get'>,
 ): (role: string, brief: string | null) => string {
-  return (role, brief) => mintAgentName({ role, brief }, (name) => directory.nameTaken(name) || roster.get(name) !== null);
+  return (role, brief) => mintAgentName({ role, brief }, (base) => {
+    const had = directory.namesFrom(base);
+
+    return (name) => had.has(name) || roster.get(name) !== null;
+  });
 }
 
 /** Roster transitions precede facet admission and are restored exactly if it fails; broadcasts follow both. */
@@ -411,9 +423,7 @@ export function createTeamToolDeps(deps: {
 
     const typedName = input.name?.trim();
     const named = typedName !== undefined && typedName !== '';
-    // A model's hire is named from its mission; an owner's agent from the words it was opened with, not the
-    // workspace's mission it inherits.
-    const name = named ? typedName : deps.createName(roleLabel, ownerCreated ? optionalText(input.brief) ?? null : mission);
+    const name = named ? typedName : deps.createName(roleLabel, namingBrief(input, ownerCreated, mission));
     requireSubordinateActorName(name);
 
     if (deps.roster.get(name)) return yield* Effect.die(new Error(`subordinate "${name}" already exists`));

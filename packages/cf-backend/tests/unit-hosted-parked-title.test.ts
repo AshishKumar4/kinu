@@ -7,8 +7,7 @@
 import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import { RECOVERY_BACKOFF_CEILING_MS, WORKSPACE_TITLE_SYSTEM_PROMPT } from '@kinu.run/core';
-import { actorOver, agentWakes, driveUntil, gatewayWorkspace, runDelegatedTask, until, type StartedHarness } from './helpers/actor-harness';
-import { agentDatabase } from './helpers/agent-facets';
+import { actorOver, agentWakes, driveUntil, gatewayWorkspace, ownDatabase, runDelegatedTask, until, type StartedHarness } from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding } from './helpers/platform-gateway';
 
 afterEach(() => { setSystemTime(); });
@@ -38,7 +37,7 @@ async function parkedTitle(): Promise<ParkedTitle> {
   await workspace.agent.setSoul('# Purpose\n\nGreet whoever asks.');
   const { subordinate } = await workspace.agent.createSubordinateAgent();
   const actorId = v.parse(v.string(), subordinate.actorId);
-  const ledger = agentDatabase(workspace.agent.agentOf(actorId).storageKey);
+  const ledger = ownDatabase(workspace, actorId);
 
   const title = () => ledger.query<{ status: string }, []>(`SELECT status FROM terminal_effects WHERE effect_name = 'auto_title'`)
     .all().map((row) => row.status);

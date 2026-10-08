@@ -55,10 +55,14 @@ export function nameFromBrief(brief: string): string | null {
 
 /**
  * A new child's name, one no actor of its workspace has had: its brief's first telling words, else its role's, numbered
- * on a clash ("fix-coupon-expiry-2"). Unique in the workspace, it can be the child's home (`/home/<name>`).
+ * on a clash ("fix-coupon-expiry-2"). Unique in the workspace, it can be the child's home (`/home/<name>`). `takenFrom`
+ * reads once what a base's names are taken.
  */
-export function mintAgentName(input: { readonly brief: string | null; readonly role: string }, taken: (name: string) => boolean): string {
+export function mintAgentName(
+  input: { readonly brief: string | null; readonly role: string }, takenFrom: (base: string) => (name: string) => boolean,
+): string {
   const base = (input.brief === null ? null : nameFromBrief(input.brief)) ?? (slugifyName(input.role) || 'agent');
+  const taken = takenFrom(base);
   let name = base;
 
   for (let clash = 2; taken(name); clash += 1) name = `${base}-${String(clash)}`;

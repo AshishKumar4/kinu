@@ -60,7 +60,7 @@ async function helperWorkspace(respond: (run: RecordedGatewayRun) => Response | 
   const sql = sqlOver(workspace.db);
 
   // A hire's runs are in its own database.
-  const count = (actorId: string, type: 'run_start' | 'run_end'): number => agentSql(actorId)<{ n: number }>`
+  const count = (actorId: string, type: 'run_start' | 'run_end'): number => agentSql(workspace, actorId)<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${actorId} AND type = ${type}`[0]?.n ?? 0;
 
   const hired = (): string | undefined => sql<{ id: string }>`
@@ -262,7 +262,7 @@ test("an agent the owner added keeps its own Stop: a root Stop skips it, and its
   const added = subordinate.actorId ?? '';
 
   // A hire's runs are in its own database.
-  const ended = (actorId: string): number => agentSql(actorId)<{ n: number }>`
+  const ended = (actorId: string): number => agentSql(workspace, actorId)<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${actorId} AND type = 'run_end'`[0]?.n ?? 0;
 
   await wakeForDelegatedTask(workspace, added, 'Added task.');
@@ -426,6 +426,6 @@ test("each model step of a hired agent's turn runs under a call its workspace ma
   await runDelegatedTask(workspace, child.actor.handle.actorId, 'Count twice.');
 
   expect(workspace.agent.harnessAgentTraceCalls().filter((call) => call === 'paceStep')).toHaveLength(3);
-  expect(agentSql(child.actor.handle.actorId)<{ n: number }>`
+  expect(agentSql(workspace, child.actor.handle.actorId)<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${child.actor.handle.actorId} AND type = 'run_end'`[0]?.n).toBe(1);
 });

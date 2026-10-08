@@ -298,6 +298,16 @@ export class WorkspaceActorDirectory {
     return this.sql<{ taken: number }>`SELECT 1 AS taken FROM workspace_actors WHERE name = ${name} OR storage_key = ${name} LIMIT 1`.length > 0;
   }
 
+  /** Every name and key this workspace's actors have had that is `base` or numbered from it (`base-2`), in one read. */
+  namesFrom(base: string): ReadonlySet<string> {
+    const numbered = `${base}-%`;
+
+    const rows = this.sql<{ name: string; storage_key: string }>`SELECT name, storage_key FROM workspace_actors
+      WHERE name = ${base} OR storage_key = ${base} OR name LIKE ${numbered} OR storage_key LIKE ${numbered}`;
+
+    return new Set(rows.flatMap((row) => [row.name, row.storage_key]));
+  }
+
   /** Null when there is no bindable child; decided on row state, not by catching `open`'s `missing`. */
   resolveChild(parent: ActorHandle, name: string): ActorHandle | null {
     const actor = this.describe(parent);

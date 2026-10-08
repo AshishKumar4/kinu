@@ -23,7 +23,7 @@ import type { ChatTurnInput, ActorTurnLease, PreparedTurn, TurnOpening } from '@
 import type { ChatWireTransport } from '../../src/chat-transport';
 import { isWorkMode, workModeForTurnMetadata, ChatSession, ExtensionHost, type KinuExtension } from '@kinu.run/core';
 import { ActorClaimStore, admitSubordinateTask, agentArtifactDirectory, agentHome, CHAT_SESSION_ID, createParentWorkspaceVfs, EventLog, SubordinateRosterStore, MAIN_AGENT, openWorkspaceMainActor, SessionHistory, TerminalTransitions, WorkspaceActorDirectory } from '@kinu.run/core';
-import { sqlOver } from '@kinu.run/test-utils';
+import { present, sqlOver } from '@kinu.run/test-utils';
 import {
   createCompositeLogger, createConsoleLogger, renderCauseChain, setDiagnosticsSink, toKinuError, type Logger,
 } from '@kinu.run/core/obs';
@@ -167,8 +167,11 @@ export class HarnessDynamicWorkers {
   }
 }
 
+/** The storage each activation was built over, by its context: its agents' facets are that storage's. */
+const activationStorage = new WeakMap<object, Database>();
+
 export class HarnessOrchestratorAgent extends OrchestratorAgent {
-  private readonly harnessAgentFacets = inProcessAgentFacets(makeCtx);
+  private readonly harnessAgentFacets = inProcessAgentFacets(makeCtx, () => present(activationStorage.get(this.ctx), 'the activation\'s storage'));
 
   /** The platform's count of this object's Dynamic Workers, which the agents' isolates are. */
   readonly harnessDynamicWorkers = new HarnessDynamicWorkers();
@@ -946,17 +949,22 @@ export async function admittedTurnClaim(
   });
 }
 
+/** The facet database of a non-main agent: named, as production names it, by the agent's storage key. */
+export function ownDatabase(harness: Pick<ActorHarness<HarnessOrchestratorAgent>, 'agent' | 'db'>, actorId: string): Database {
+  return agentDatabase(harness.db, harness.agent.agentOf(actorId).storageKey);
+}
+
 /** A non-main agent's own runs, claims and conversation in its facet database. */
-export function agentSql(actorId: string): SqlExecutor {
-  return sqlOver(agentDatabase(actorId));
+export function agentSql(harness: Pick<ActorHarness<HarnessOrchestratorAgent>, 'agent' | 'db'>, actorId: string): SqlExecutor {
+  return sqlOver(ownDatabase(harness, actorId));
 }
 
 /**
  * An agent's own conversation store, over its own database, once its facet copied its roster rows there (any
  * read of its chat through the workspace does): to seed its chat, or to read it as its pane does.
  */
-export function agentHistory(harness: Pick<ActorHarness<HarnessOrchestratorAgent>, 'agent'>, actorId: string) {
-  const db = agentDatabase(actorId);
+export function agentHistory(harness: Pick<ActorHarness<HarnessOrchestratorAgent>, 'agent' | 'db'>, actorId: string) {
+  const db = ownDatabase(harness, actorId);
   const actor = actorOver(db, actorId);
 
   return { actor, history: historyOver({ agent: harness.agent, db }, actor) };
@@ -1737,6 +1745,7 @@ function instantiate<T extends WorkspaceHostTarget>(
   // The platform fixes the name before the constructor runs, and the constructor records it.
   const name = objectName ?? world?.workspace ?? 'harness-parent';
   const ctx = makeCtx(db, 'harness-actor', name);
+  activationStorage.set(ctx, db);
 
   if (world !== undefined) activationWorlds.set(ctx, world);
   const agent = new Actor(ctx, builtEnv);

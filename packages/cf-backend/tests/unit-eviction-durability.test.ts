@@ -223,7 +223,7 @@ describe('the post-turn lanes', () => {
   const notes = (harness: Harness): number => count(harness, "SELECT COUNT(*) AS n FROM evolution_events WHERE type = 'advisor_note'");
 
   const advisorsWorking = (harness: Harness): number =>
-    count(harness, "SELECT COUNT(*) AS n FROM actor_subordinates WHERE name LIKE 'ask-advisor-%' AND status = 'working'");
+    count(harness, "SELECT COUNT(*) AS n FROM actor_subordinates WHERE (name = 'ask-advisor' OR name LIKE 'ask-advisor-%') AND status = 'working'");
 
   test('a hire cut before it ran is replayed by the next activation and lands exactly one note', async () => {
     const { harness, calls, restart } = await cutReview();

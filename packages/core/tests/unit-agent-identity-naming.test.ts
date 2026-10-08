@@ -304,7 +304,7 @@ describe('automatic workspace titling — applying it', () => {
 });
 
 describe('a minted agent name', () => {
-  const free = (): boolean => false;
+  const free = () => (): boolean => false;
 
   test('is the first telling words of what the agent was first asked', () => {
     expect(nameFromBrief('Fix the coupon expiry check in pricing.ts')).toBe('fix-coupon-expiry');
@@ -326,7 +326,7 @@ describe('a minted agent name', () => {
   test('a name the workspace has had is numbered until it is new', () => {
     const had = new Set(['fix-coupon-expiry', 'fix-coupon-expiry-2']);
 
-    expect(mintAgentName({ brief: 'Fix the coupon expiry check', role: 'task' }, (name) => had.has(name))).toBe('fix-coupon-expiry-3');
+    expect(mintAgentName({ brief: 'Fix the coupon expiry check', role: 'task' }, () => (name) => had.has(name))).toBe('fix-coupon-expiry-3');
   });
 
   test('satisfies the name contract spawnSubordinate enforces', () => {
