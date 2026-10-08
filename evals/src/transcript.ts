@@ -102,6 +102,31 @@ export function toTranscript(events: readonly RunEvent[]): TranscriptEvent[] {
   return transcript;
 }
 
+/** The ledger's failed tool calls by tool and cause (`ToolFailure`, results.ts), most first. */
+export function toolFailures(events: readonly RunEvent[]): { tool: string; cause: string; count: number }[] {
+  const counts = new Map<string, { tool: string; cause: string; count: number }>();
+
+  const count = (tool: string, cause: string): void => {
+    const key = `${tool}\u0000${cause}`;
+
+    counts.set(key, { tool, cause, count: (counts.get(key)?.count ?? 0) + 1 });
+  };
+
+  for (const event of events) {
+    if (event.type !== 'tool_call_end') continue;
+
+    if (failed(event)) {
+      const refused = event.outcome?.success === false ? event.outcome.reason : null;
+
+      count(event.name, refused ?? (OFFERED_TOOLS.has(event.name) ? 'error' : 'unknown_tool'));
+    }
+
+    for (const failure of event.outcome?.failures ?? []) count(failure.tool, failure.reason ?? 'error');
+  }
+
+  return [...counts.values()].sort((left, right) => right.count - left.count || left.tool.localeCompare(right.tool) || left.cause.localeCompare(right.cause));
+}
+
 /** Model steps, tool calls, failed tool calls and waits on the model provider's rate limit, counted off the ledger. A
  *  `stall` wait is the provider failing to send anything, not the limit, and the run's own rows carry it. */
 export function measure(events: readonly RunEvent[]): EvalMetrics {
