@@ -392,6 +392,8 @@ function terminalRefusal(failure: { doing: string; cause: unknown }): string {
   return renderThrownChain({ cause: error });
 }
 
+type SandboxBox = ReturnType<NonNullable<Env['KinuDevbox']>['getByName']>;
+
 interface HostedTarget {
   readonly handle: ActorHandle;
   readonly entry: NonNullable<ReturnType<SubordinateRosterStore['get']>>;
@@ -4728,33 +4730,29 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable() async getSandboxSize(): Promise<SandboxSizeState | null> {
-    const box = this.env.KinuDevbox?.getByName(sandboxIdForWorkspace(this.name));
-
-    if (box === undefined) return null;
-    const [account, size] = await Promise.all([this.accountSandboxSize(), box.boxSize()]);
-
-    return { account, chosen: size.chosen ?? null, size: size.size, running: size.running ?? null, startRefused: size.startRefused ?? null };
+    return await this.withSizedBox(async () => {});
   }
 
   /** The owner's try-again for a refused start: the box's one start path, which clears the refusal. */
   @callable() async startSandbox(): Promise<SandboxSizeState | null> {
-    const box = this.env.KinuDevbox?.getByName(sandboxIdForWorkspace(this.name));
-
-    if (box === undefined) return null;
-    await box.useDefaultSize(await this.accountSandboxSize());
-    await box.start();
-
-    return await this.getSandboxSize();
+    return await this.withSizedBox(async (box) => { await box.start(); });
   }
 
   @callable() async resizeSandbox(size: string | null): Promise<SandboxSizeState | null> {
+    return await this.withSizedBox(async (box) => { await box.resize(size); });
+  }
+
+  /** The box keeps the account default its next start uses, so every read and change pushes the owner's current one. */
+  private async withSizedBox(act: (box: SandboxBox) => Promise<void>): Promise<SandboxSizeState | null> {
     const box = this.env.KinuDevbox?.getByName(sandboxIdForWorkspace(this.name));
 
     if (box === undefined) return null;
-    await box.useDefaultSize(await this.accountSandboxSize());
-    await box.resize(size);
+    const account = await this.accountSandboxSize();
+    await box.useDefaultSize(account);
+    await act(box);
+    const size = await box.boxSize();
 
-    return await this.getSandboxSize();
+    return { account, chosen: size.chosen ?? null, size: size.size, running: size.running ?? null, startRefused: size.startRefused ?? null };
   }
 
   private async accountSandboxSize(): Promise<BoxSize | null> {
