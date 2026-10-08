@@ -431,9 +431,11 @@ export function createCFRuntime(
       },
       // The edge proves a preview hostname from `AUTH_KV` without creating the per-name DO.
       env.AUTH_KV ? sandboxPreviewExposures(env.AUTH_KV, sandboxId) : null,
-      async () => {
-        hooks.liveReadsMoved?.(['getExposedPorts']);
-        await hooks.servingMoved();
+      {
+        portsMoved: async () => {
+          hooks.liveReadsMoved?.(['getExposedPorts']);
+          await hooks.servingMoved();
+        },
       });
 
       sandboxHandle = handle;

@@ -62,10 +62,11 @@ export type RestoreAdmission =
   | { readonly kind: 'repair' };
 
 /** `pending` is returned, not thrown: Workers RPC normalises a thrown error's `name` to
- *  `Error`, so a thrown refusal loses the transient classification the caller needs. */
+ *  `Error`, so a thrown refusal loses the transient classification the caller needs. `building`: the box
+ *  waits for its base snapshot to be built and starts once told, the build being at `step` (D79). */
 export type RestoreReadiness =
   | RestoreAdmission
-  | { readonly kind: 'pending'; readonly reason: string };
+  | { readonly kind: 'pending'; readonly reason: string; readonly building?: { readonly step: string | null } };
 
 /** `opened` once, each {@link RestorePhase} as it lands, then `settled` once. */
 export type RestoreClockPhase = 'opened' | RestorePhase | 'settled';

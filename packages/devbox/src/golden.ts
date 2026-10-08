@@ -28,11 +28,19 @@ export const GoldenStateSchema = v.object({
   /** Told once when a build verifies or fails. */
   waiting: v.array(v.string()),
   failure: v.optional(v.string()),
+  /** The step a build under way is at, so a box's caller can tell a moving build from a stuck one. */
+  building: v.optional(v.string()),
 });
 
 export type GoldenState = v.InferOutput<typeof GoldenStateSchema>;
 
-export type GoldenAnswer = { readonly kind: 'ready'; readonly id: string; readonly tools: string } | { readonly kind: 'pending'; readonly reason: string };
+/**
+ * `building` is present while the golden is being built, never after a failed build: the box waits to be told, and
+ * `step` is the build's own (null before it begins).
+ */
+export type GoldenAnswer =
+  | { readonly kind: 'ready'; readonly id: string; readonly tools: string }
+  | { readonly kind: 'pending'; readonly reason: string; readonly building?: { readonly step: string | null } };
 
 export interface GoldenPorts {
   readonly tools: string;
@@ -81,7 +89,9 @@ export function goldenFor(ports: GoldenPorts, box: string, lost?: string): Effec
     if (serving !== undefined) return { kind: 'ready', id: serving.id, tools: serving.tools };
     ports.write({ ...state, waiting: [...new Set([...state.waiting, box])] });
 
-    return { kind: 'pending', reason: state.failure ?? REBUILDING };
+    return state.failure === undefined
+      ? { kind: 'pending', reason: REBUILDING, building: { step: state.building ?? null } }
+      : { kind: 'pending', reason: state.failure };
   });
 }
 
@@ -93,8 +103,8 @@ export function buildGolden(ports: GoldenPorts, keepAlive: boolean): Effect.Effe
     const after = ports.read();
 
     const state: GoldenState = Result.isSuccess(built)
-      ? { ...after, ...built.success, waiting: [], failure: undefined }
-      : { ...after, waiting: [], failure: `the base snapshot could not be built: ${built.failure.message}` };
+      ? { ...after, ...built.success, waiting: [], failure: undefined, building: undefined }
+      : { ...after, waiting: [], failure: `the base snapshot could not be built: ${built.failure.message}`, building: undefined };
 
     ports.write(state);
 
@@ -116,7 +126,11 @@ export function buildGolden(ports: GoldenPorts, keepAlive: boolean): Effect.Effe
 }
 
 function build(ports: GoldenPorts, before: GoldenState): Effect.Effect<Pick<GoldenState, 'current' | 'previous'>, DevboxError> {
+  // Each step is recorded as it begins: a waiting box's caller holds while the step moves on (D79).
+  const at = (step: string) => Effect.sync(() => { ports.write({ ...ports.read(), building: step }); });
+
   const run = (doing: string, command: string) => Effect.gen(function* () {
+    yield* at(doing);
     const ran = yield* attempt('io', () => ports.exec(command), doing);
 
     return ran.exitCode === 0 ? ran.stdout.trim() : yield* Effect.fail(new DevboxError('io', `${doing} exited ${String(ran.exitCode)}: ${(ran.stderr || ran.stdout).trim().slice(-600)}`));
@@ -130,12 +144,15 @@ function build(ports: GoldenPorts, before: GoldenState): Effect.Effect<Pick<Gold
       return { current, previous: before.previous };
     }
 
+    yield* at('starting the base image');
     yield* attempt('io', () => ports.start({ image: GOLDEN_BASE }), 'starting the base image');
     const base = yield* run('reading the base', BASE_COMMAND);
 
+    yield* at('fetching the tools');
     yield* ports.pipe(toolsKey(ports.tools), ARCHIVE);
     yield* run('installing the tools', toolsInstallCommand(ARCHIVE, ports.tools));
     yield* run('checking the tools', VERIFY_COMMAND);
+    yield* at('snapshotting the base');
     const id = yield* attempt('io', () => ports.snapshot(`${toolsKey(ports.tools).slice(13, 21)}-${String(ports.now())}`), 'snapshotting the base');
     yield* attempt('io', () => ports.destroy());
 
