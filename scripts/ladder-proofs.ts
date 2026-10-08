@@ -12,8 +12,10 @@
  * in the bucket, or copied under another key, reads as absent, and so does one the bucket cannot answer for. Absent
  * is a run, never a pass. The bucket expires objects after 90 days; an expired proof is a run too.
  *
- * The credentials are armada secrets every CI task holds (R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY). {@link fromEnvironment}
- * reads them and deletes them from the environment before any gate spawns, so no row sees them.
+ * The credentials are armada secrets every CI task holds, under names of their own (KINU_PROOFS_ACCESS_KEY_ID,
+ * KINU_PROOFS_SECRET_ACCESS_KEY). {@link fromEnvironment} reads them and deletes them from the environment before any
+ * gate spawns, so no row sees them. `R2_*` is left alone: gate:devbox-e2e copies the staging tools with it, and on
+ * 2026-10-08 (the f69a2671a staging deploy) the proof store deleting it failed that gate.
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { S3Client } from 'bun';
@@ -26,8 +28,8 @@ export const PROOFS_BUCKET = 'kinu-ci-proofs';
 /** The account the bucket lives in; scripts/deploy.sh and the devbox tools name the same one. */
 const ACCOUNT = 'f44999d1ddda7012e9a87729eba250f1';
 
-/** The names of the two secrets, removed from the environment once read. */
-export const PROOF_SECRET_NAMES = ['R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY'] as const;
+/** The names of the two secrets, removed from the environment once read. Never a gate's own names. */
+export const PROOF_SECRET_NAMES = ['KINU_PROOFS_ACCESS_KEY_ID', 'KINU_PROOFS_SECRET_ACCESS_KEY'] as const;
 
 /** The bucket as this module uses it: an object's text or null when there is none, and a write. */
 export interface ProofBucket {

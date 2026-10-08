@@ -104,6 +104,7 @@ const AFTER_CI_SUITES = {
   'evals/tasks/chess.eval.ts': 'bun run evals',
   'evals/tasks/file-housekeeping.eval.ts': 'bun run evals',
   'evals/tasks/freight-desk.eval.ts': 'bun run evals',
+  'evals/tasks/helper-report.eval.ts': 'bun run evals',
   'evals/tasks/latency-chart.eval.ts': 'bun run evals',
   'evals/tasks/launch-prep.eval.ts': 'bun run evals',
   'evals/tasks/ledger-reconcile.eval.ts': 'bun run evals',

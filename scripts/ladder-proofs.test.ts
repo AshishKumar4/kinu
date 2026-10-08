@@ -161,12 +161,20 @@ describe('a proof carried to a fresh container', () => {
 
 describe('the bucket credentials', () => {
   test('are deleted from the environment before any gate can inherit them, whether or not both are set', () => {
-    const full: NodeJS.ProcessEnv = { R2_ACCESS_KEY_ID: 'id', R2_SECRET_ACCESS_KEY: 'secret', PATH: '/bin' };
-    const half: NodeJS.ProcessEnv = { R2_ACCESS_KEY_ID: 'id', PATH: '/bin' };
+    const full: NodeJS.ProcessEnv = { KINU_PROOFS_ACCESS_KEY_ID: 'id', KINU_PROOFS_SECRET_ACCESS_KEY: 'secret', PATH: '/bin' };
+    const half: NodeJS.ProcessEnv = { KINU_PROOFS_ACCESS_KEY_ID: 'id', PATH: '/bin' };
 
     expect(fromEnvironment(full)).toBeDefined();
     expect(fromEnvironment(half)).toBeUndefined();
     expect([full, half].map((env) => PROOF_SECRET_NAMES.filter((name) => name in env))).toEqual([[], []]);
     expect(full['PATH']).toBe('/bin');
+  });
+
+  test("leave a gate's own R2 keys where it reads them, and are not those keys", () => {
+    // gate:devbox-e2e copies the staging tools with R2_*: deleting them failed it on the f69a2671a staging deploy.
+    const env: NodeJS.ProcessEnv = { R2_ACCESS_KEY_ID: 'gate-id', R2_SECRET_ACCESS_KEY: 'gate-secret' };
+
+    expect(fromEnvironment(env)).toBeUndefined();
+    expect(env).toEqual({ R2_ACCESS_KEY_ID: 'gate-id', R2_SECRET_ACCESS_KEY: 'gate-secret' });
   });
 });

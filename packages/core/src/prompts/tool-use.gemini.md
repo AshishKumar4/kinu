@@ -1,0 +1,3 @@
+- Make independent calls together in one step; make a call that needs an earlier result after it.
+- Read and search files with `file` or a shell, whichever fits; for a large file, read only the part you need.
+- Before a tool call, write at most a plain sentence about what you are doing, never a JSON, YAML or XML block.

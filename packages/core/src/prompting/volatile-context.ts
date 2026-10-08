@@ -471,7 +471,7 @@ const DYNAMIC_SECTION_TITLES = {
   executors: '## Execution status',
   devices: '## Your user\'s machines (the `device` runtime)',
   tasks: '## Your task list: what is still open (you keep this with the `tasks` tool)',
-  jobs: '## Background work still running (collect it before you finish)',
+  jobs: '## Background work still running',
   delegates: '## Delegates working for you',
   approvals: '## Waiting on the user (not on you)',
   missingCapabilities: '## Configured but not available this turn (plan without these, and say so if asked)',
