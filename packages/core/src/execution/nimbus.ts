@@ -271,6 +271,8 @@ const ProcessInputSchema = v.union([
 
 const PortInputSchema = v.union([v.number(), v.object({ port: v.number() })]);
 
+const LogLimitsSchema = v.optional(v.object({ lines: v.optional(v.number()), bytes: v.optional(v.number()) }), {});
+
 function parseInput<TSchema extends v.GenericSchema>(
   schema: TSchema,
   input: { value: unknown },
@@ -430,18 +432,15 @@ export function nimbusSession(opts: NimbusSessionOpts) {
         const readLogs = processes.logs.bind(processes);
         const input = parseInput(ProcessInputSchema, { value: args[0] });
         const pid = v.is(v.number(), input) ? input : input?.pid;
+        const limits = parseInput(LogLimitsSchema, { value: args[1] });
 
-        if (pid === undefined || !Number.isFinite(pid)) {
+        if (pid === undefined || !Number.isFinite(pid) || limits === undefined) {
           return refusalOf(new KinuError('bad_input',
-            `nimbus logs: invalid pid ${stringifyResult({ value: args[0] })}`));
+            `nimbus logs: takes a pid and its limits as one object, \`{ lines?, bytes? }\`; got ${stringifyResult({ value: args })}`));
         }
 
-        const options = input !== undefined && !v.is(v.number(), input)
-          ? { lines: input.lines, bytes: input.bytes }
-          : undefined;
-
         try {
-          return stringifyResult({ value: await touch(() => readLogs(pid, options)) });
+          return stringifyResult({ value: await touch(() => readLogs(pid, limits)) });
         } catch (err) {
           return refusalOf(workspaceExecFailure({ doing: `nimbus logs ${pid}`, cause: err }));
         }

@@ -22,6 +22,7 @@ export function settleUnpairedToolCalls(
   lost?: (call: { readonly toolCallId: string; readonly toolName: string }) => LostToolCall | null,
 ): ModelMessage[] | undefined {
   // Copied only once a call needs a result: every step reads the whole history, and almost every history is paired.
+  // Indexed walks: an iterator would allocate a result per part of every message, every step.
   let settled: ModelMessage[] | undefined;
   const pending = new Map<string, string>();
 
@@ -30,13 +31,17 @@ export function settleUnpairedToolCalls(
     settled?.push(message);
 
     if (message.role === 'assistant' && Array.isArray(message.content)) {
-      for (const part of message.content) {
+      for (let at = 0; at < message.content.length; at++) {
+        const part = message.content[at];
+
         if (part.type === 'tool-call' && part.providerExecuted !== true) {
           pending.set(part.toolCallId, part.toolName);
         }
       }
     } else if (message.role === 'tool') {
-      for (const part of message.content) {
+      for (let at = 0; at < message.content.length; at++) {
+        const part = message.content[at];
+
         if (part.type === 'tool-result') pending.delete(part.toolCallId);
       }
     }

@@ -42,8 +42,11 @@ const BinaryEnvelopeSchema = v.object({
 
 const UrlEnvelopeSchema = v.object({ $url: v.string() });
 
-// Source objects carrying a reserved key are wrapped in `{ $plain: … }` so the codec is total.
-const RESERVED = ['$binary', '$url', '$plain'] as const;
+/** Defined, not assigned: a key named `__proto__` stays data and never sets the prototype. */
+function setOwn<T>(target: Record<string, T>, key: string, value: T): void {
+  if (key === '__proto__') Object.defineProperty(target, key, { value, enumerable: true, writable: true, configurable: true });
+  else target[key] = value;
+}
 
 function isNativeArray(value: NativeValue): value is readonly NativeValue[] {
   return Array.isArray(value);
@@ -66,14 +69,19 @@ function encodeValue(value: NativeValue): StoredValue {
 
   if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
 
-  // fromEntries defines each key, so a key named `__proto__` stays data and never sets the prototype.
-  const mapped: Record<string, StoredValue> = Object.fromEntries(Object.keys(value).flatMap((key) => {
+  // Built in place: entry pairs for `fromEntries` cost every key of every message two arrays on each write.
+  const mapped: Record<string, StoredValue> = {};
+  const keys = Object.keys(value);
+
+  for (let index = 0; index < keys.length; index++) {
+    const key = keys[index];
     const item = value[key];
 
-    return item === undefined ? [] : [[key, encodeValue(item)]];
-  }));
+    if (item !== undefined) setOwn(mapped, key, encodeValue(item));
+  }
 
-  return RESERVED.some((key) => Object.hasOwn(value, key)) ? { $plain: mapped } : mapped;
+  // A source object carrying a reserved key is wrapped, so the codec is total.
+  return reserved(value) ? { $plain: mapped } : mapped;
 }
 
 interface Truncation { readonly decoded: number; readonly declared: number }
@@ -104,12 +112,17 @@ function decodeValue(value: StoredValue, truncated: Truncation[]): NativeValue {
   if (url?.success === true) return new URL(url.output.$url);
   const plain = value.$plain;
   const inner = plain !== undefined && isParsedJsonObject(plain) ? plain : value;
+  const object: Record<string, NativeValue> = {};
+  const keys = Object.keys(inner);
 
-  return Object.fromEntries(Object.keys(inner).flatMap((key) => {
+  for (let index = 0; index < keys.length; index++) {
+    const key = keys[index];
     const item = inner[key];
 
-    return item === undefined ? [] : [[key, decodeValue(item, truncated)]];
-  }));
+    if (item !== undefined) setOwn(object, key, decodeValue(item, truncated));
+  }
+
+  return object;
 }
 
 function validated(message: NativeValue, position: number): Effect.Effect<ModelMessage, KinuError> {
@@ -136,6 +149,106 @@ function decoded(value: StoredValue, position: number): Effect.Effect<ModelMessa
 
 export function encodeModelMessageValues(messages: readonly ModelMessage[]): JsonValue[] {
   return messages.map(encoded);
+}
+
+type NativeObject = { readonly [key: string]: NativeValue };
+
+function isNativeObject(value: NativeValue): value is NativeObject {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    && !(value instanceof Uint8Array) && !(value instanceof ArrayBuffer) && !(value instanceof URL);
+}
+
+function reserved(value: NativeObject): boolean {
+  return Object.hasOwn(value, '$binary') || Object.hasOwn(value, '$url') || Object.hasOwn(value, '$plain');
+}
+
+/** Whether `recorded` stores every part of `message`, in order, under the same role and envelope. Compared in place:
+ *  encoding and serializing both cost each sealed step four copies of its output. */
+export function recordCarries(recorded: ModelMessage, message: ModelMessage): boolean {
+  const record = v.parse(NativeValueSchema, recorded);
+  const wanted = v.parse(NativeValueSchema, message);
+
+  if (!isNativeObject(record) || !isNativeObject(wanted)) return false;
+
+  // A root with a reserved key stores whole, wrapped, so only the whole message compares.
+  if (reserved(record) || reserved(wanted)) return sameStoredValue(record, wanted);
+  const { content: recordedContent, ...recordedEnvelope } = record;
+  const { content: wantedContent, ...wantedEnvelope } = wanted;
+
+  if (!sameStoredValue(recordedEnvelope, wantedEnvelope)) return false;
+
+  if (!isNativeArray(recordedContent) || !isNativeArray(wantedContent)) return sameStoredValue(recordedContent, wantedContent);
+
+  // An undefined part stores as null; a sparse slot, as the encoding's own list kept it, matches only another.
+  const carried = (at: number, index: number): boolean => (at in recordedContent) === (index in wantedContent)
+    && (!(at in recordedContent) || sameStoredValue(recordedContent[at] ?? null, wantedContent[index] ?? null));
+
+  let at = 0;
+
+  for (let index = 0; index < wantedContent.length; index++) {
+    while (at < recordedContent.length && !carried(at, index)) at += 1;
+
+    if (at === recordedContent.length) return false;
+    at += 1;
+  }
+
+  return true;
+}
+
+/** Whether two values store as the same JSON, read without encoding either: a key whose value is undefined is absent,
+ *  as an undefined item is null; bytes compare by content, a URL by its href. */
+function sameStoredValue(left: NativeValue, right: NativeValue): boolean {
+  if (left === right) return true;
+
+  if (left instanceof Uint8Array || right instanceof Uint8Array) return left instanceof Uint8Array && right instanceof Uint8Array && sameBytes(left, right);
+
+  if (left instanceof ArrayBuffer || right instanceof ArrayBuffer) {
+    return left instanceof ArrayBuffer && right instanceof ArrayBuffer && sameBytes(new Uint8Array(left), new Uint8Array(right));
+  }
+
+  if (left instanceof URL || right instanceof URL) return left instanceof URL && right instanceof URL && left.href === right.href;
+
+  if (isNativeArray(left) || isNativeArray(right)) {
+    if (!isNativeArray(left) || !isNativeArray(right) || left.length !== right.length) return false;
+
+    for (let index = 0; index < left.length; index++) {
+      if (!sameStoredValue(left[index] ?? null, right[index] ?? null)) return false;
+    }
+
+    return true;
+  }
+
+  return isNativeObject(left) && isNativeObject(right) && reserved(left) === reserved(right) && sameEntries(left, right);
+}
+
+/** The defined entries of both, in order: serialized JSON compares key order too. */
+function sameEntries(left: NativeObject, right: NativeObject): boolean {
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  let at = 0;
+
+  for (let index = 0; index < leftKeys.length; index++) {
+    const value = left[leftKeys[index]];
+
+    if (value === undefined) continue;
+
+    while (at < rightKeys.length && right[rightKeys[at]] === undefined) at += 1;
+
+    if (at === rightKeys.length || rightKeys[at] !== leftKeys[index] || !sameStoredValue(value, right[rightKeys[at]])) return false;
+    at += 1;
+  }
+
+  while (at < rightKeys.length && right[rightKeys[at]] === undefined) at += 1;
+
+  return at === rightKeys.length;
+}
+
+function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.byteLength !== right.byteLength) return false;
+
+  for (let index = 0; index < left.byteLength; index++) if (left[index] !== right[index]) return false;
+
+  return true;
 }
 
 export function encodeModelMessage(message: ModelMessage): JsonObject {

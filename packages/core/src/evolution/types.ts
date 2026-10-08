@@ -1,6 +1,5 @@
 
 import type { Usage } from '../usage';
-import type { JsonObject, JsonValue } from '../utils/json';
 import type { MissionGovernor } from '../mission-budget';
 import type { ToolOutcome } from '../tools/outcome';
 import type { Struggle } from './struggles';
@@ -9,10 +8,15 @@ import type { TrialTurn } from './trial-rules';
 export interface ToolCallRecord {
   toolCallId?: string;
   name: string;
-  args: JsonObject;
-  result?: JsonValue;
-  /** Absent on turns recorded before invocation outcomes were persisted. */
   outcome?: ToolOutcome;
+  argsWindow: string;
+  resultWindow?: string;
+  target: string;
+  program?: string;
+  op: string | null;
+  argsDigest: string | null;
+  writtenPaths: string[];
+  revisitedPaths: string[];
 }
 
 export interface CompletedTurn {

@@ -1,3 +1,4 @@
+import { compactToolCall } from '../src/evolution/tool-call-record';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** The advisor's decision half: each suppression rule alone, and the reply
  *  delivery an advisor agent's answer takes, asserted on observable calls. */
@@ -22,7 +23,7 @@ import type { CompletedTurn } from '../src/evolution/types';
 const aTurn = (over: Partial<CompletedTurn> = {}): CompletedTurn => ({
   userMessage: 'rotate the staging keys',
   assistantResponse: 'rotated them',
-  toolCalls: [{ name: 'shell', args: { command: 'kinu rotate' }, result: 'exit 1' }],
+  toolCalls: [compactToolCall({ name: 'shell', args: { command: 'kinu rotate' }, result: 'exit 1' })],
   steps: 3,
   durationMs: 900,
   feedback: null,
@@ -395,8 +396,8 @@ describe('the prompt', () => {
 
   test('the advisor receives producer outcomes even when returned data is identical', () => {
     const result = { error: 'business data' };
-    const succeeded = buildAdvisorPrompt(aTurn({ toolCalls: [{ name: 'shell', args: {}, result, outcome: { success: true } }] }));
-    const failed = buildAdvisorPrompt(aTurn({ toolCalls: [{ name: 'shell', args: {}, result, outcome: { success: false, reason: 'denied' } }] }));
+    const succeeded = buildAdvisorPrompt(aTurn({ toolCalls: [compactToolCall({ name: 'shell', args: {}, result, outcome: { success: true } })] }));
+    const failed = buildAdvisorPrompt(aTurn({ toolCalls: [compactToolCall({ name: 'shell', args: {}, result, outcome: { success: false, reason: 'denied' } })] }));
     expect(succeeded).toContain('"success":true');
     expect(failed).toContain('"success":false');
     expect(failed).toContain('"reason":"denied"');
@@ -435,7 +436,7 @@ describe('the missed-capability class', () => {
 // unused and prompted a note to delegate.
 describe('a capability reached through codemode counts as used', () => {
   const swarmed = (code: string): CompletedTurn => aTurn({
-    toolCalls: [{ name: 'eval', args: { code }, result: 'ok' }],
+    toolCalls: [compactToolCall({ name: 'eval', args: { code }, result: 'ok' })],
   });
 
   test('a codemode agents.swarm is never reported unused', () => {
@@ -470,10 +471,9 @@ describe('a capability reached through codemode counts as used', () => {
     expect(buildAdvisorPrompt(swarmed('```js\nawait agents.swarm({})\n```'), ['agents'])).toContain('did not use: (none recorded)');
   });
 
-  test('a shared namespace reports both its capabilities reached, never neither', () => {
-    // `shell` and `file` both reach `workspace`; over-reporting reach is harmless here.
-    const prompt = buildAdvisorPrompt(swarmed('await workspace.exec("ls")'), ['shell', 'file']);
-    expect(prompt).toContain('did not use: (none recorded)');
+  test('each capability is reached through its own namespace', () => {
+    expect(buildAdvisorPrompt(swarmed('await workspace.exec("ls")'), ['shell', 'file'])).toContain('did not use: file');
+    expect(buildAdvisorPrompt(swarmed('await file.read("a.md")'), ['shell', 'file'])).toContain('did not use: shell');
   });
 });
 
@@ -538,11 +538,11 @@ describe('advisor prompt secret obfuscation', () => {
 
   test('tool args and results carrying credentials reach the prompt obfuscated, by shape class', () => {
     const prompt = buildAdvisorPrompt(aTurn({
-      toolCalls: [{
+      toolCalls: [compactToolCall({
         name: 'shell',
         args: { command: 'deploy', token: bearer, key: providerKey },
         result: `deployed with ${awsKey} as ${kinuToken}\n${privateKey}`,
-      }],
+      })],
     }));
 
     expect(prompt).not.toContain(bearer);
@@ -560,11 +560,11 @@ describe('advisor prompt secret obfuscation', () => {
     const commit = 'deadbeef'.repeat(5);
 
     const prompt = buildAdvisorPrompt(aTurn({
-      toolCalls: [{
+      toolCalls: [compactToolCall({
         name: 'shell',
         args: { command: 'kinu rotate', commit, hint: 'pass a Bearer token along' },
         result: 'exit 1',
-      }],
+      })],
     }));
 
     expect(prompt).toContain('kinu rotate');

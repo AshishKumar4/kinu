@@ -227,12 +227,11 @@ describe('explainSandboxError', () => {
     }
   });
 
-  test('shell and file point at workspace; the six namespace owners point at themselves', () => {
+  test('shell points at workspace; the namespace owners point at themselves', () => {
     // Spelled out so the derivation above cannot pass by agreeing with a wrong declaration.
     expect(explainSandboxError('shell is not defined')).toContain('`workspace` namespace');
-    expect(explainSandboxError('file is not defined')).toContain('`workspace` namespace');
 
-    for (const name of ['agents', 'memory', 'tasks', 'web', 'report'] as const) {
+    for (const name of ['file', 'agents', 'memory', 'tasks', 'web', 'report'] as const) {
       expect(explainSandboxError(`${name} is not defined`)).toContain(`\`${name}\` namespace`);
     }
   });

@@ -6,7 +6,8 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
  */
 
 import { describe, test, expect } from 'bun:test';
-import { toolExecute } from '@kinu.run/test-utils';
+import { present, toolExecute } from '@kinu.run/test-utils';
+import { executorNamespace } from '../src/tools/executor-operations';
 import { TurnContextBudget } from '../src/context-budget';
 import { createSandboxExecutor, WORKSPACE_BACKUP_DIR, type SandboxHandle } from '../src/execution/sandbox';
 import { nativeFileRead } from './helpers/sandbox-handle-lifecycle';
@@ -225,16 +226,16 @@ describe('the file tool across the /sandbox mount', () => {
 });
 
 describe('the codemode sandbox namespace', () => {
-	test("listFiles('') and listFiles('.') list the working directory — the mount's /workspace view", async () => {
+	test("a program's listFiles({ path: '' }), listFiles({ path: '.' }) and listFiles() list the working directory — the mount's /workspace view", async () => {
 		const fs = new ContainerFs();
 		const { executor, file } = rig(fs);
 
 		await file({ op: 'write', path: '/sandbox/workspace/a.mjs', content: 'a\n' });
 
-		const listFiles = executor.tools.listFiles;
+		const listFiles = present(executorNamespace(executor).tools.listFiles, 'sandbox.listFiles');
 
 		const [empty, dot, absent] = await Promise.all([
-			listFiles.execute(''), listFiles.execute('.'), listFiles.execute(),
+			listFiles.execute({ path: '' }), listFiles.execute({ path: '.' }), listFiles.execute(),
 		]);
 
 		for (const listing of [empty, dot, absent]) {
@@ -251,13 +252,14 @@ describe('the codemode sandbox namespace', () => {
 		expect(root).toMatchObject({ path: '/sandbox/workspace', entries: ['a.mjs'] });
 	});
 
-	test('readdir answers what listFiles answers', async () => {
+	test("a program's readdir({ path: '' }) lists the working directory, as listFiles does", async () => {
 		const fs = new ContainerFs();
 		const { executor, file } = rig(fs);
 
 		await file({ op: 'write', path: '/sandbox/workspace/a.mjs', content: 'a\n' });
 
-		expect(await executor.tools.readdir.execute(''))
-			.toBe(await executor.tools.listFiles.execute(''));
+		const readdir = present(executorNamespace(executor).tools.readdir, 'sandbox.readdir');
+
+		expect(await readdir.execute({ path: '' })).toContain('- a.mjs');
 	});
 });

@@ -15,6 +15,7 @@
  *   bun scripts/reset.ts plan <environment>           what a reset deletes, read from wrangler.jsonc
  *   bun scripts/reset.ts wipe <environment> <record>  delete it, recorded in <record> and the releases bucket;
  *                                                     production asks for `reset production` typed at a terminal
+ *   bun scripts/reset.ts pending <environment>        the tag of a reset whose build never uploaded, or `none`
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -234,15 +235,25 @@ function record(target: ResetTarget, file: string, reset: Reset): void {
 
 /** A version that binds no class is a reset's placeholder: this reset, then, which stopped before it was done or
  *  finished before its build uploaded. Only its record can say which, and what is left. */
+/** The reset `worker` is still in: it serves a placeholder, binding no class, that the newest record names. Its build
+ *  never uploaded, so its classes are gone and the next deploy creates them. */
+export function pendingReset(worker: string, live: Serving, latest: Reset | undefined): Reset | undefined {
+  if (live.bound.size !== 0 || latest === undefined || latest.worker !== worker) return undefined;
+
+  return latest.placeholderVersion === '' || latest.placeholderVersion === live.versionId ? latest : undefined;
+}
+
 function resumed(worker: string, live: Serving, latest: Reset | undefined): Reset {
-  if (latest === undefined || latest.worker !== worker || (latest.placeholderVersion !== '' && latest.placeholderVersion !== live.versionId)) {
+  const pending = pendingReset(worker, live, latest);
+
+  if (pending === undefined) {
     throw new Error(`version ${live.versionId} of ${worker} binds no class, as a reset placeholder does, and no reset record names it: `
       + 'deploy without --reset (with --bootstrap, the classes being gone)');
   }
 
-  console.log(`reset: ${worker} serves the placeholder of ${latest.tag}, whose record is ${latest.state ?? 'done'}; finishing it`);
+  console.log(`reset: ${worker} serves the placeholder of ${pending.tag}, whose record is ${pending.state ?? 'done'}; finishing it`);
 
-  return { ...latest, placeholderVersion: live.versionId };
+  return { ...pending, placeholderVersion: live.versionId };
 }
 
 /** Everything checked, the record and the barrier written `started`, then the placeholder that deletes the classes. */
@@ -395,7 +406,16 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
     return 0;
   }
 
-  console.error('usage: bun scripts/reset.ts plan <environment> | wipe <environment> <record>');
+  if (known && command === 'pending' && recordFile === undefined) {
+    const { config } = plan(environment);
+    const target = cloudflareTarget(environment, config, scratch);
+
+    console.log(pendingReset(config.name ?? '', target.serving(), target.latest())?.tag ?? 'none');
+
+    return 0;
+  }
+
+  console.error('usage: bun scripts/reset.ts plan <environment> | wipe <environment> <record> | pending <environment>');
 
   return 2;
 }

@@ -119,9 +119,11 @@ export class SessionPayloads extends SessionPayloadReader {
 
   prepare(value: JsonValue): Promise<SessionPayload> {
     const json = JSON.stringify(value);
+
+    // Most payloads are inline: they need no file and no runner, nor an encoding, as a UTF-16 unit is three bytes at most.
+    if (json.length * 3 <= INLINE_BYTES) return Promise.resolve({ json, path: null, digest: null });
     const bytes = new TextEncoder().encode(json);
 
-    // Most payloads are inline: they need no file and no runner.
     if (bytes.byteLength <= INLINE_BYTES) return Promise.resolve({ json, path: null, digest: null });
 
     return settle(Effect.gen({ self: this }, function* () {

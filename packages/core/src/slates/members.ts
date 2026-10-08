@@ -1,15 +1,17 @@
 /**
- * What each namespace member a slate calls does, as its catalog operation's impact: a member the catalog keeps from
- * slates is the agent's alone, and an executor member it does not declare is `administer` (fail closed).
- * `toolCallEffect` reads `NATIVE_ACTION_EFFECTS` from here.
+ * What each namespace member a slate calls does, read from its catalog operation alone: a slate reaches an operation
+ * its entry marks `slate`, with that entry's impact. Anything the catalog does not declare, or keeps from slates, is
+ * off a slate's surface (fail closed). `toolCallEffect` reads `NATIVE_ACTION_EFFECTS` from here.
  */
 import type { Impact } from '@agent-core/core/facets';
 import type { Operation } from '../operations/operation';
+import { AGENT } from '../operations/agent';
 import { AGENTS_IMPACTS } from '../operations/agents';
 import { DB } from '../operations/db';
-import { DEVICE, SANDBOX, WORKSPACE } from '../operations/executors';
+import { DEVICE, PARENT, SANDBOX, WORKSPACE } from '../operations/executors';
 import { FILE } from '../operations/file';
 import { MEMORY } from '../operations/memory';
+import { STATE } from '../operations/state';
 import { TASKS } from '../operations/tasks';
 import { WEB, WEB_SANDBOX_IMPACTS } from '../operations/web';
 
@@ -19,20 +21,15 @@ export const AI_RUN_MEMBER = 'run';
 /** A tool call's chip: whether it only looked. */
 export type ActionEffect = 'read' | 'mutate';
 
-const impacts = (ops: Readonly<Record<string, Operation>>, slate: boolean): Readonly<Record<string, Impact>> => Object.fromEntries(
-  Object.values(ops).filter((op) => !slate || op.slate).map((op) => [op.name, op.impact]),
+/** Every eval namespace the catalog declares, each operation by its name. */
+const DECLARED = new Map(Object.entries({
+  memory: MEMORY, tasks: TASKS, web: WEB, file: FILE, db: DB, state: STATE, agent: AGENT,
+  workspace: WORKSPACE, sandbox: SANDBOX, device: DEVICE, parent: PARENT,
+}).map(([namespace, ops]) => [namespace, new Map(Object.values<Operation>(ops).map((op) => [op.name, op]))]));
+
+const impacts = (ops: Readonly<Record<string, Operation>>): Readonly<Record<string, Impact>> => Object.fromEntries(
+  Object.values(ops).map((op) => [op.name, op.impact]),
 );
-
-/** The eval namespaces' members a slate reaches, each with its impact; a member absent here is the agent's alone. */
-const SLATE_MEMBER_IMPACTS = {
-  memory: impacts(MEMORY, true),
-  tasks: impacts(TASKS, true),
-  web: { ...impacts(WEB, true), ...WEB_SANDBOX_IMPACTS },
-  db: impacts(DB, true),
-} as const satisfies Readonly<Record<string, Readonly<Record<string, Impact>>>>;
-
-/** An executor's own members (`workspace`, `sandbox`, `device`), by name across them. */
-const EXECUTOR_MEMBER_IMPACTS = { ...impacts(DEVICE, true), ...impacts(SANDBOX, true), ...impacts(WORKSPACE, true) };
 
 const effectOfImpact = (impact: Impact): ActionEffect => (impact === 'observe' ? 'read' : 'mutate');
 
@@ -42,22 +39,24 @@ function effects(table: Readonly<Record<string, Impact>>): Readonly<Record<strin
 
 /** Per native operation, as each capability tool's `op` names it. */
 export const NATIVE_ACTION_EFFECTS = {
-  file: effects(impacts(FILE, false)),
-  memory: effects(impacts(MEMORY, false)),
-  tasks: effects(impacts(TASKS, false)),
-  web: effects(impacts(WEB, false)),
+  file: effects(impacts(FILE)),
+  memory: effects(impacts(MEMORY)),
+  tasks: effects(impacts(TASKS)),
+  web: effects(impacts(WEB)),
   agents: effects(AGENTS_IMPACTS),
 } as const satisfies Readonly<Record<string, Readonly<Record<string, ActionEffect>>>>;
 
-const lookup = <T>(table: Readonly<Record<string, T>>, name: string): T | undefined => Object.entries(table).find(([key]) => key === name)?.[1];
+/** The browser members a program's sandbox holds, declared beside `web`'s operations. */
+const SANDBOX_WEB = new Map<string, Impact>(Object.entries(WEB_SANDBOX_IMPACTS));
 
-/** A namespace's member, or an executor's; `null` for one the agent keeps from slates. */
+/** A declared operation a slate may call, by its catalog entry; `null` for one it may not, or one never declared. */
 function namespaceMemberImpact(namespace: string, member: string): Impact | null {
-  const table = lookup<Readonly<Record<string, Impact>>>(SLATE_MEMBER_IMPACTS, namespace);
+  const sandboxWeb = namespace === 'web' ? SANDBOX_WEB.get(member) : undefined;
 
-  if (table !== undefined) return lookup(table, member) ?? null;
+  if (sandboxWeb !== undefined) return sandboxWeb;
+  const op = DECLARED.get(namespace)?.get(member);
 
-  return lookup<Impact>(EXECUTOR_MEMBER_IMPACTS, member) ?? 'administer';
+  return op?.slate === true ? op.impact : null;
 }
 
 /**

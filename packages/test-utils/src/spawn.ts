@@ -9,7 +9,8 @@ import { closeSync, fstatSync, openSync, readFileSync } from 'node:fs';
 export function isRunning(pid: number): boolean {
   if (process.platform !== 'linux') return tolerate(() => process.kill(pid, 0), 'esrch') === true;
 
-  const status = tolerate(() => readFileSync(`/proc/${String(pid)}/status`, 'utf8'), 'enoent');
+  // A process reaped between the open and the read answers that read ESRCH: its entry was there and is gone.
+  const status = tolerate(() => tolerate(() => readFileSync(`/proc/${String(pid)}/status`, 'utf8'), 'esrch'), 'enoent');
 
   return status !== undefined && !/^State:\s*Z/mu.test(status);
 }

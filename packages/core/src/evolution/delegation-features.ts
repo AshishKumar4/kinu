@@ -1,7 +1,4 @@
 import type { CompletedTurn, ToolCallRecord } from './types';
-import * as v from 'valibot';
-import { decodeJsonValue, isJsonObject, type JsonValue } from '../utils/json';
-import { stableStringify } from '../safety/argument-digest';
 
 /** Judge-free wasted-motion signals a trace proves on its own. */
 export interface ExecutionPathSignals {
@@ -25,15 +22,6 @@ export interface DelegationFeatures extends ExecutionPathSignals {
 type TurnProcessRecord = Pick<CompletedTurn, 'toolCalls' | 'steps' | 'durationMs'>;
 
 const MAX_CYCLE_LENGTH = 4;
-
-/** Name plus key-order-independent arguments; null for argument-less calls, which have no identity to repeat. */
-function fingerprint(call: ToolCallRecord): string | null {
-  const keys = Object.keys(call.args);
-
-  if (keys.length === 0) return null;
-
-  return `${call.name}:${stableStringify(decodeJsonValue({ value: call.args }))}`;
-}
 
 function countRedundant(prints: ReadonlyArray<string>): number {
   return prints.length - new Set(prints).size;
@@ -78,92 +66,21 @@ function blockEquals(prints: ReadonlyArray<string>, a: number, b: number, length
   return true;
 }
 
-/** Code-mode and shell path effects (the `file` tool is read via `fileToolPath`). Deliberately narrow: an invented effect would poison the evidence. */
-const WRITE_PATTERNS: ReadonlyArray<RegExp> = [
-  /\bworkspace\.writeFile\s*\(\s*['"`]([^'"`]+)/g,
-  /(?:^|[|;&\n]|\s)>>?\s*(\S+)/g,
-  /(?:^|[|;&\n]|\s)tee\s+(?:-\S+\s+)*(\S+)/g,
-];
-
-const REVISIT_PATTERNS: ReadonlyArray<RegExp> = [
-  /\bworkspace\.readFile\s*\(\s*['"`]([^'"`]+)/g,
-  /(?:^|[|;&\n]|\s)(?:cat|head|tail)\s+(?:-\S+\s+)*(\S+)/g,
-  /(?:^|[|;&\n]|\s)rm\s+(?:-\S+\s+)*(\S+)/g,
-  /\bgit\s+(?:checkout\s+--|restore)\s+(\S+)/g,
-];
-
-function stringLeaves(value: JsonValue, into: string[] = []): string[] {
-  const text = v.safeParse(v.string(), value);
-
-  if (text.success) into.push(text.output);
-  else if (Array.isArray(value)) for (const item of value) stringLeaves(item, into);
-  else if (isJsonObject(value)) {
-    for (const item of Object.values(value)) stringLeaves(item, into);
-  }
-
-  return into;
-}
-
-/** Only path-shaped tokens count, keeping English words and `>` comparisons out of the path sets. */
-function normalizePath(raw: string): string | null {
-  const path = raw.replace(/^['"`]+/, '').replace(/['"`;,)]+$/, '');
-
-  return /[/.]/.test(path) ? path : null;
-}
-
-function pathsMatching(text: ReadonlyArray<string>, patterns: ReadonlyArray<RegExp>): Set<string> {
-  const found = new Set<string>();
-
-  for (const chunk of text) {
-    for (const pattern of patterns) {
-      for (const match of chunk.matchAll(pattern)) {
-        const path = match[1] === undefined ? null : normalizePath(match[1]);
-
-        if (path) found.add(path);
-      }
-    }
-  }
-
-  return found;
-}
-
-/** `write`/`edit` change the file, `read` revisits it. */
-function fileToolPath(call: ToolCallRecord): { path: string; effect: 'write' | 'revisit' } | null {
-  if (call.name !== 'file') return null;
-  const { op, path } = call.args;
-
-  if (!v.is(v.string(), path)) return null;
-
-  if (op === 'write' || op === 'edit') return { path, effect: 'write' };
-
-  if (op === 'read') return { path, effect: 'revisit' };
-
-  return null;
-}
-
 function countBacktracks(calls: ReadonlyArray<ToolCallRecord>): number {
   const written = new Set<string>();
   let backtracks = 0;
 
   for (const call of calls) {
-    const text = stringLeaves(decodeJsonValue({ value: call.args }));
-    const revisited = pathsMatching(text, REVISIT_PATTERNS);
-    const touched = fileToolPath(call);
+    if (call.revisitedPaths.some((path) => written.has(path))) backtracks += 1;
 
-    if (touched?.effect === 'revisit') revisited.add(touched.path);
-
-    if ([...revisited].some((path) => written.has(path))) backtracks += 1;
-
-    for (const path of pathsMatching(text, WRITE_PATTERNS)) written.add(path);
-
-    if (touched?.effect === 'write') written.add(touched.path);
+    for (const path of call.writtenPaths) written.add(path);
   }
 
   return backtracks;
 }
 
 export function executionPathSignals(calls: ReadonlyArray<ToolCallRecord>): ExecutionPathSignals {
-  const prints = calls.map(fingerprint).filter((print): print is string => print !== null);
+  const prints = calls.map((call) => call.argsDigest).filter((print): print is string => print !== null);
 
   return {
     loopedCalls: countLooped(prints),
@@ -172,12 +89,8 @@ export function executionPathSignals(calls: ReadonlyArray<ToolCallRecord>): Exec
   };
 }
 
-/** The `agents` tool is separated by operation. */
 function agentsAction(call: ToolCallRecord): string | null {
-  if (call.name !== 'agents') return null;
-  const input = v.safeParse(v.object({ op: v.optional(v.string()) }), call.args);
-
-  return input.success ? input.output.op ?? null : null;
+  return call.name === 'agents' ? call.op : null;
 }
 
 const STAFFING_ACTIONS = { hire: true, assign: true, hireWorkspace: true, list: true, dismiss: true } satisfies Record<string, true>;

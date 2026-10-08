@@ -80,8 +80,8 @@ async function solveProblem(
   recordLiveModelSpend(result.usage);
 
   const response = result.text.trim();
-  const toolCallRecords = log.records;
-  const toolNames = log.records.map((record) => record.name);
+  const toolCallRecords = log.records();
+  const toolNames = toolCallRecords.map((record) => record.name);
   const stepCount = log.steps;
 
   // Store in DB
