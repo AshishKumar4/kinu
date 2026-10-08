@@ -2,7 +2,7 @@
  * Environment: one card per environment with the selected terminal below. Capability
  * doctrine stays model-facing (core/src/prompting/volatile-context.ts); file browsing lives in Files.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import {
   CircleIcon, DesktopIcon, FolderOpenIcon, LockSimpleIcon, PlugIcon, TerminalIcon,
@@ -15,10 +15,15 @@ import {
   type ExecutorInfo,
 } from "@kinu.run/core";
 import type { ExecutorOutput } from "@/hooks/use-kinu";
-import { TerminalPane } from "@/components/TerminalPane";
+import { lazyRoute } from "@/lazy-route";
+import type { TerminalPaneProps } from "@/components/TerminalPane";
+import { Loader } from "@cloudflare/kumo";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { SandboxSizeRow } from "@/components/SandboxSize";
+
+/** The terminal (xterm, 333 KB of the workspace's first chunk on 2026-10-08) loads with a command lane's first view. */
+const TerminalPane = lazyRoute<TerminalPaneProps>(async () => ({ default: (await import("@/components/TerminalPane")).TerminalPane }));
 
 export interface EnvironmentSurfaceProps {
   rpc: Rpc;
@@ -185,12 +190,14 @@ function SelectedEnvironmentPane({ mount, exec, workspace, executorOutputs, onEx
       <div className="flex-1 min-h-0">
         {showDesktop && <iframe data-desktop title="Desktop" src={desktopClientUrl(location, workspace)} className="w-full h-full border-0" />}
         {!showDesktop && (exec ? (
-          <TerminalPane
-            workspace={workspace}
-            executor={exec.name}
-            outputs={executorOutputs.get(exec.name) ?? []}
-            onExecute={(cmd) => onExecute(exec.name, cmd)}
-          />
+          <Suspense fallback={<div className="h-full flex items-center justify-center"><Loader size="sm" /></div>}>
+            <TerminalPane
+              workspace={workspace}
+              executor={exec.name}
+              outputs={executorOutputs.get(exec.name) ?? []}
+              onExecute={(cmd) => onExecute(exec.name, cmd)}
+            />
+          </Suspense>
         ) : (
           <div className="h-full flex items-center justify-center text-xs p-text-3">
             This environment has no command lane.

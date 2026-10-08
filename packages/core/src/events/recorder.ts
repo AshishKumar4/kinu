@@ -212,8 +212,6 @@ export interface ContextMeasures {
  *  window, since a narrowed window would be a truncated denominator. */
 export const RUN_EVENT_LIMIT_MAX = 500;
 
-const RUN_EVENT_PAGE_BYTES = PLATFORM_CATALOG['run_events.page_bytes'].limit.value;
-
 export interface StoredRunEvent {
   readonly eventIndex: number;
   readonly type: string;
@@ -409,6 +407,9 @@ export class RunEventRecorder {
   readText(runId: string, opts: BoundedRunEventQuery): StoredRunEvent[] {
     this.actor.assertCurrent();
     const types = opts.types !== undefined && opts.types.length > 0 ? JSON.stringify(opts.types) : null;
+    // Read here, not at module scope: the browser imports this module's schemas, and a module-scope read of the
+    // catalog ships all of it (89 KB) to every page.
+    const pageBytes = PLATFORM_CATALOG['run_events.page_bytes'].limit.value;
 
     const rows = this.sql<{ event_index: number; type: string; payload: string }>`
       SELECT event_index, type, payload FROM (
@@ -421,7 +422,7 @@ export class RunEventRecorder {
           LIMIT ${opts.limit}
         )
       )
-      WHERE running <= ${RUN_EVENT_PAGE_BYTES} OR running = size
+      WHERE running <= ${pageBytes} OR running = size
       ORDER BY event_index ASC`;
 
     return rows.map((row) => ({ eventIndex: row.event_index, type: row.type, payload: row.payload }));
