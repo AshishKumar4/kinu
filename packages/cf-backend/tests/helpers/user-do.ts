@@ -24,6 +24,7 @@ import {
 import { makeExecRaw, makeSql } from '../../../core/tests/helpers';
 import * as v from 'valibot';
 import type { PictureBucket } from '../../src/slates/pictures';
+import type { ShareCardRecipient } from '../../src/user/share-cards';
 
 mockAgentsSdk();
 
@@ -142,6 +143,8 @@ export function testOwner(): Promise<UserCaller> {
 }
 
 export interface TestUserDOOptions {
+  /** The accounts this one writes to by id, as `env.UserDO` resolves them: a share's recipients. */
+  accounts?: (userId: string) => ShareCardRecipient;
   /** Without a connected device every device call short-circuits before the consent path. */
   connectedDeviceId?: string;
   /** Build stamp and CLI checksums served via `ASSETS` under `/downloads/`; absent, the hub pushes no UPDATE. */
@@ -232,6 +235,7 @@ function servedAsset(pathname: string, build: TestUserDOOptions['servedBuild']):
 }
 
 interface TestUserEnvironment {
+  UserDO?: { idFromName(name: string): string; get(id: string): ShareCardRecipient };
   CREDENTIAL_ENCRYPTION_KEY: string;
   SLATE_PICTURES?: PictureBucket;
   CLI_PUBLIC_ORIGIN?: string;
@@ -487,6 +491,9 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
       transactionSync: <T,>(closure: () => T): T => db.transaction(closure)(),
       // The SDK's `destroy()` runs these before the abort; dropping every table matches `deleteAll`.
       deleteAlarm: async (): Promise<void> => {},
+      // The SDK's Lifecycle arms its job queue's alarm; `UserDO.alarm()` runs the due jobs, as the platform's would.
+      setAlarm: async (): Promise<void> => {},
+      getAlarm: async (): Promise<number | null> => null,
       deleteAll: async (): Promise<void> => {
         // Virtual tables first: dropping an FTS table takes its shadows, and a lone dropped
         // shadow leaves the virtual table undroppable.
@@ -516,6 +523,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     ...(options.cloudflareOAuthClientId !== undefined && { CLOUDFLARE_OAUTH_CLIENT_ID: options.cloudflareOAuthClientId }),
     ...(options.cloudflareOAuthClientSecret !== undefined && { CLOUDFLARE_OAUTH_CLIENT_SECRET: options.cloudflareOAuthClientSecret }),
     CLI_PUBLIC_ORIGIN: 'https://kinu.example.com',
+    ...(options.accounts !== undefined && { UserDO: { idFromName: (name: string) => name, get: options.accounts } }),
     ASSETS: { fetch: async (input: Request) => servedAsset(new URL(input.url).pathname, options.servedBuild) },
     SLATE_PICTURES: options.slatePictures,
     OrchestratorAgent: {

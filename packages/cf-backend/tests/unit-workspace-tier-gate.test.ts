@@ -272,12 +272,13 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
 
   {
     capability: 'shares',
-    name: 'sharesReceived_add',
-    run: (u, c) => u.sharesReceived_add(c, {
-      ownerUserId: USER_ID, ownerEmail: 'owner@x', workspace: WORKSPACE,
-      shareId: 'share-1',
+    name: 'shareCards_put',
+    run: (u, c) => u.shareCards_put(c, {
+      ownerUserId: USER_ID, workspace: WORKSPACE, shareId: 'share-1', card: { kind: 'blueprint', title: 'Board', description: '', createdAt: 1, owner: 'owner@x' },
     }),
   },
+  { capability: 'shares', name: 'shareCards_remove', run: (u, c) => u.shareCards_remove(c, USER_ID, WORKSPACE, 'share-1') },
+  { capability: 'shares', name: 'shareCards_withdraw', run: (u, c) => u.shareCards_withdraw(c) },
   { capability: 'shares', name: 'sharesReceived_list', run: (u, c) => u.sharesReceived_list(c) },
   { capability: 'shares', name: 'sharesReceived_forget', run: (u, c) => u.sharesReceived_forget(c, USER_ID) },
 

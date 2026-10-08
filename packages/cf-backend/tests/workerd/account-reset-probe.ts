@@ -72,11 +72,11 @@ export class AccountResetProbeDO extends UserDO {
       await this.ensureWorkspaceCapability(name, claim.capabilityHash);
     }
 
-    await this.sharesReceived_add(owner, {
-      ownerUserId: 'f'.repeat(32), ownerEmail: 'sam@example.test', workspace: 'their-ws', shareId: 'share-1',
+    await this.shareCards_put(owner, {
+      ownerUserId: 'f'.repeat(32), workspace: 'their-ws', shareId: 'share-1', card: { kind: 'blueprint', title: 'Board', description: '', createdAt: 1, owner: 'sam@example.test' },
     });
-    await this.sharesReceived_add(owner, {
-      ownerUserId: 'e'.repeat(32), ownerEmail: 'ana@example.test', workspace: 'her-ws', shareId: 'share-2',
+    await this.shareCards_put(owner, {
+      ownerUserId: 'e'.repeat(32), workspace: 'her-ws', shareId: 'share-2', card: { kind: 'blueprint', title: 'Board', description: '', createdAt: 1, owner: 'ana@example.test' },
     });
     this.ctx.storage.sql.exec(
       `INSERT INTO user_mcp_servers (id, name, server_url, transport) VALUES ('srv-1', 'github', 'https://mcp.example/v1', 'auto')`,
@@ -122,7 +122,7 @@ export class AccountResetProbeDO extends UserDO {
 
   /** Who the received shares name. */
   async receivedFrom(): Promise<string[]> {
-    return (await this.sharesReceived_list(await ownerCaller(this.env))).map((row) => row.ownerEmail).sort();
+    return (await this.sharesReceived_list(await ownerCaller(this.env))).map((row) => row.card.owner).sort();
   }
 
   /** Another owner deleted their account: their delete tells each recipient to forget them (`forgetSharesGiven`). */

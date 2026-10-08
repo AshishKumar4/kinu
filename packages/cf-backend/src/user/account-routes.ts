@@ -14,7 +14,7 @@ import {
   displayNameProblem,
   EXPERIENCE_KINDS,
   err, json, safeJson,
-  type UserCaller,
+  type OwnerCapabilityEnv, type UserCaller,
 } from '@kinu.run/core';
 import { ownerGate, type ApiVariables, type FamilyEnv } from '../api/context';
 
@@ -31,7 +31,7 @@ export type AccountAuthority = Pick<
   UserDO, 'completeOnboarding' | 'searchExperience' | 'deleteAccount' | 'setDisplayName' | 'heldRows'
 >;
 
-export interface AccountRoutesEnv<Id> extends SharesGivenEnv<Id> {
+export interface AccountRoutesEnv<Id> extends SharesGivenEnv<Id>, OwnerCapabilityEnv {
   UserDO: ObjectNamespace<Id, ShareRosterAuthority & AccountAuthority>;
 }
 
@@ -82,7 +82,7 @@ accountRoutes.delete('/api/user/account', ownerGate(), (c) => {
       return err(400, 'Type the account email to confirm.');
     }
 
-    // Share recipients are named only inside the workspaces the delete destroys; forget them first.
+    // The account's record of share recipients goes with it; each is told to forget its cards first.
     yield* Effect.promise(async () => forgetSharesGiven(c.env, identity.userId, owner));
 
     yield* Effect.catchCause(Effect.gen(function* () {

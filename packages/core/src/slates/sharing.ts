@@ -5,6 +5,7 @@
 import * as v from 'valibot';
 import type { Impact } from '@agent-core/core/facets';
 import { LiveShareVisibilitySchema } from './live-share-visibility';
+import type { WorkspaceOverviewShare } from '../read-models/workspace-overview';
 
 
 export const SHARE_KINDS = ['blueprint', 'live'] as const;
@@ -233,6 +234,27 @@ const SharedRowSchema = v.object({
 });
 
 export type SharedRow = v.InferOutput<typeof SharedRowSchema>;
+
+/** A share as its recipient's Drive holds it, written only by the owner's account; `owner` is the owner's email. */
+export const ShareCardSchema = v.object({
+  kind: v.picklist(SHARE_KINDS),
+  title: v.string(),
+  description: v.string(),
+  createdAt: v.number(),
+  owner: v.string(),
+  visibility: v.optional(LiveShareVisibilitySchema),
+  fork: v.optional(v.boolean()),
+});
+
+export type ShareCard = v.InferOutput<typeof ShareCardSchema>;
+
+export function shareCardOf(share: WorkspaceOverviewShare, owner: string): ShareCard {
+  return {
+    kind: share.kind, title: share.title, description: share.description, createdAt: share.createdAt, owner,
+    ...(share.visibility !== undefined && { visibility: share.visibility }),
+    ...(share.fork !== undefined && { fork: share.fork }),
+  };
+}
 
 const OwnedSlateSchema = v.object({
   id: v.string(),

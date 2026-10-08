@@ -7,7 +7,7 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  LiveShareRecordSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE, SharedLibrarySchema,
+  LiveShareRecordSchema, LiveShareCreatedSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE, SharedLibrarySchema,
   type AgentRuntime, type SlateAnswer,
 } from '@kinu.run/core';
 import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles } from './helpers/actor-harness';
@@ -21,6 +21,7 @@ import { handleSlateShareHostRequest } from '../src/slate-share-route';
 import type { AuthIdentity } from '../src/auth/session';
 import { present } from '@kinu.run/test-utils';
 import { KinuError } from '@kinu.run/core/obs';
+import { deriveUserId } from '../src/auth/store';
 
 function answered<Schema extends v.GenericSchema>(result: SlateAnswer<unknown>, schema: Schema): v.InferOutput<Schema> {
   if (!result.ok) throw new Error(result.reason + ': ' + result.error);
@@ -68,8 +69,11 @@ interface World {
   readonly close: () => void;
 }
 
-async function userWorld(userId: string, workspace: string, kv: ReturnType<typeof makeKv>): Promise<{ user: TestUserDO; agent: ActorHarness<HarnessOrchestratorAgent> }> {
-  const user = createTestUserDO({ durableObjectId: userId });
+/** Each account by id, as every account's own `env.UserDO` resolves it: a share's card goes to the account its email names. */
+async function userWorld(
+  userId: string, workspace: string, kv: ReturnType<typeof makeKv>, accounts: ReadonlyMap<string, TestUserDO>,
+): Promise<{ user: TestUserDO; agent: ActorHarness<HarnessOrchestratorAgent> }> {
+  const user = createTestUserDO({ durableObjectId: userId, accounts: (id) => present(accounts.get(id), `the account ${id}`).userDO });
   const capability = await provisionTestWorkspace(user, workspace);
   const agent = orchestratorHarness(undefined, { userDO: user.userDO, workspace, ownerUserId: userId });
   // Declared before anything touches `slates`: its deps memoize.
@@ -92,21 +96,23 @@ async function twoUserWorld(): Promise<World> {
   resetRecordedMcp();
   // One KV behind the edge route and every workspace object, as AUTH_KV in production.
   const kv = makeKv();
-  const ownerSide = await userWorld(OWNER_ID, 'issues-owner', kv);
+  const users = new Map<string, TestUserDO>();
+  const ownerSide = await userWorld(OWNER_ID, 'issues-owner', kv, users);
 
   // Seeded on the newest MCP manager, so before the viewer's account builds its own: these are the owner's tools.
   seedMcpTools('connection-id', [
     { name: 'read_issue', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } },
     { name: 'create_issue', inputSchema: { type: 'object' } },
   ]);
-  const viewerSide = await userWorld(VIEWER_ID, 'viewer-home', kv);
+  const viewerSide = await userWorld(VIEWER_ID, 'viewer-home', kv, users);
 
   const agents = new Map<string, HarnessOrchestratorAgent>([
     ['issues-owner', ownerSide.agent.agent],
     ['viewer-home', viewerSide.agent.agent],
   ]);
 
-  const users = new Map<string, TestUserDO>([[OWNER_ID, ownerSide.user], [VIEWER_ID, viewerSide.user]]);
+  // pat@example.test is the viewer: a card sent to the account that email names lands in the viewer's.
+  for (const [id, side] of [[OWNER_ID, ownerSide], [VIEWER_ID, viewerSide], [await deriveUserId('pat@example.test'), viewerSide]] as const) users.set(id, side.user);
   const acquired: string[] = [];
 
   const partialEnv: Partial<Env> = {};
@@ -442,4 +448,64 @@ test('a change whose card cannot reach the tile is made and says the list is beh
 
   expect(behind.status).toBe(200);
   expect(await jsonBody(behind, v.object({ listing: v.optional(v.literal('pending')) }))).toEqual({ listing: 'pending' });
+});
+
+test("a named person's Drive holds the share's card from the owner's account, wakes no owner workspace, and loses it on revoke", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const owner = identityOf(OWNER_ID, 'owner@example.test');
+  const viewer = identityOf(VIEWER_ID, 'pat@example.test');
+
+  const library = async () => {
+    world.acquired.splice(0);
+    const answer = present(await sharedRequest(world.env, viewer, new Request('https://app.test/api/shared')), 'the library answer');
+
+    return { received: (await jsonBody(answer, SharedLibrarySchema)).received, woke: [...world.acquired] };
+  };
+
+  const shared = present(await sharedRequest(world.env, owner, post('/api/shared/live', {
+    workspace: 'issues-owner', slate: 'issues', visibility: 'users', emails: ['pat@example.test'],
+  })), 'the share answer');
+
+  expect(shared.status).toBe(201);
+  const created = await jsonBody(shared, LiveShareCreatedSchema);
+
+  // Delivered by the owner's account's job, not by the request: until it runs, the Drive holds nothing.
+  expect((await library()).received).toEqual([]);
+  await world.ownerUser.userDO.alarm();
+  const delivered = await library();
+
+  expect(delivered.received).toEqual([expect.objectContaining({
+    id: created.share.id, kind: 'live', share: created.share.id, title: 'Issue triage', workspace: 'issues-owner', owner: 'owner@example.test',
+  })]);
+  expect(delivered.woke).not.toContain('issues-owner');
+
+  const revoked = present(await sharedRequest(world.env, owner, post('/api/shared/revoke', { workspace: 'issues-owner', share: created.share.id })), 'the revoke answer');
+
+  expect(revoked.status).toBe(200);
+  await world.ownerUser.userDO.alarm();
+  expect((await library()).received).toEqual([]);
+});
+
+test("a share whose recipients' tile cannot be pushed says the list is behind, whichever write it was", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const userDO = world.ownerUser.userDO;
+  const push = userDO.putWorkspaceOverview.bind(userDO);
+
+  // Only the tile that names the recipient fails: the share's own push lands, and the cards are sent from that tile.
+  Object.assign(userDO, {
+    putWorkspaceOverview: async (...args: Parameters<typeof push>) => {
+      if (args[2].shares.some((share) => share.users.length > 0)) throw new KinuError('unavailable', 'the roster is unavailable');
+
+      return await push(...args);
+    },
+  });
+
+  const answer = present(await sharedRequest(world.env, identityOf(OWNER_ID, 'owner@example.test'), post('/api/shared/live', {
+    workspace: 'issues-owner', slate: 'issues', visibility: 'users', emails: ['pat@example.test'],
+  })), 'the share answer');
+
+  expect(answer.status).toBe(201);
+  expect(await jsonBody(answer, v.object({ listing: v.optional(v.literal('pending')) }))).toEqual({ listing: 'pending' });
 });
