@@ -252,7 +252,7 @@ it('a slate\'s class reads ai.stream a piece at a time, as the model writes it, 
 
   const pieces: unknown = JSON.parse(await probe.typed('live'));
 
-  // Whole and in order, and in more than one read: the class had text before the model was done.
+  // Whole and in order, in more than one read: the model's last piece came only once the class held the first.
   expect(v.parse(v.array(v.string()), pieces).join('')).toBe('Typing live');
   expect(v.parse(v.array(v.string()), pieces).length).toBeGreaterThan(1);
 });
