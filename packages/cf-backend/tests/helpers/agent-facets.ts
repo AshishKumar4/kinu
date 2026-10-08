@@ -1,6 +1,9 @@
 /** An agent's isolate for bun suites: the shipped AgentFacet in this process over its own database. */
+import { mock } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import type { LanguageModel } from 'ai';
 import { WORKSPACE_ROOT } from '@kinu.run/core';
+import * as shippedRegistry from '../../src/providers/agent-registry';
 import type { AgentContext } from 'agents';
 import { AgentFacet, type AgentFacetCalls, type AgentFacetEnv } from '../../src/agent-facet/agent-facet';
 import { agentCallsThrough } from '../../src/dynamic-worker-slots';
@@ -10,6 +13,30 @@ import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import { agentStateShellId, type AgentFacetPlacement, type AgentWorkspaceHost } from '../../src/agent-facets';
 
 const databases = new Map<string, Database>();
+
+/** Models a suite scripts, by the conversation (`agentAffinityKey`) their calls are routed under. */
+const scriptedModels = new Map<string, () => LanguageModel>();
+
+const shippedProviderRegistry = shippedRegistry.createAgentProviderRegistry;
+
+// An agent's isolate resolves its models through the shipped registry; a model a suite scripts for its conversation is
+// answered first. Harness only: production holds no hook for it.
+const registered = mock.module('../../src/providers/agent-registry', () => ({
+  ...shippedRegistry,
+  createAgentProviderRegistry: (deps: shippedRegistry.AgentProviderDeps): shippedRegistry.AgentProviderRegistry => {
+    const registry = shippedProviderRegistry(deps);
+
+    return { ...registry, resolveModel: (spec, conversation) => scriptedModels.get(conversation)?.() ?? registry.resolveModel(spec, conversation) };
+  },
+}));
+
+if (registered !== undefined) throw new Error('mock.module(agent-registry) must register synchronously');
+
+/** Every model call routed under `conversation`, in any isolate, is answered by `model`; null answers it as shipped. */
+export function scriptConversationModel(conversation: string, model: (() => LanguageModel) | null): void {
+  if (model === null) scriptedModels.delete(conversation);
+  else scriptedModels.set(conversation, model);
+}
 
 export interface InProcessAgentFacets {
   open(placement: AgentFacetPlacement, workspace: AgentWorkspaceHost): Promise<AgentFacetCalls>;
@@ -58,6 +85,8 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
   const traceCalls: string[] = [];
 
   contextOver = makeCtx;
+  // A new workspace answers its model calls as shipped until its suite scripts them.
+  scriptedModels.clear();
 
   return {
     open: async (placement, host) => {

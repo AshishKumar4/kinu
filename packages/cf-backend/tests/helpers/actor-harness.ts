@@ -37,7 +37,7 @@ import {
   type ActorHost, type HostedActor, type SubordinateSeed,
 } from '@kinu.run/core';
 import {
-  BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest,
+  BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest, agentAffinityKey,
   type AgentRuntime, type DynamicContext, type LLM,
   type ProfileCatalog, type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
   type RoleCatalog, type ResolvedTurnProfile, type SqlExecutor,
@@ -52,7 +52,7 @@ import {
 import { HARNESS_AGENT, harnessFibersRunning, harnessHolds, joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
 import { fleetPlaneForTest, fleetPointWritten, openAnalyticsWindowForTest, type FleetPoint } from './analytics-plane';
 import { inProcessWorkerLoader } from './worker-loader';
-import { agentDatabase, inProcessAgentFacets } from './agent-facets';
+import { agentDatabase, inProcessAgentFacets, scriptConversationModel } from './agent-facets';
 import type { AgentFacetCalls } from '../../src/agent-facet/agent-facet';
 import { GATEWAY_MODEL, openingOf, platformGatewayEnv, type RecordedGatewayRun, type StubbedAiBinding } from './platform-gateway';
 import {
@@ -590,6 +590,8 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     Object.defineProperty(this, 'modelFactory', { configurable: true, value: factory });
     const turn = () => model;
     Object.defineProperty(this, 'turnModel', { configurable: true, value: turn });
+    // Main's turns run in its own isolate, whose calls are routed under main's conversation.
+    scriptConversationModel(agentAffinityKey(this.name), factory);
   }
   harnessFleetTurnRows(): FleetPoint[] {
     return fleetPlaneForTest(this.env).agent.points.map((point) => ({ ...point }));

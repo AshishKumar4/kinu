@@ -4048,6 +4048,22 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Main's turn in its own facet, as this workspace serves it: what its tools run under and may reach through eval. */
   private _facetTurn: { readonly turnId: string; readonly inputs: ProfileAuthorityInputs; readonly external: ToolSet } | null = null;
 
+  /** The facet turn whose item this workspace holds, from its preparation through its settle. */
+  private _facetTurnId: string | null = null;
+
+  /** The item belongs to the turn only while the turn holds it (through settle). Read the loop only if it exists: an
+   *  idle read must not build it. */
+  private turnItemLive(): boolean {
+    return this._facetTurnId !== null || this._chatLoop?.turnInFlight() === true;
+  }
+
+  /** Main's facet turn settled: its item, profile and reach are no longer the live turn's. */
+  protected mainFacetTurnEnded(): void {
+    this._facetTurnId = null;
+    this._facetTurn = null;
+    this._turnOperation = null;
+  }
+
   /**
    * Main's turn as its facet asks for it (D9): its own tools and sources, read as its in-object turn read them. Its MCP
    * and extension tools are reached through eval, so the facet's profile admits them by name.
@@ -4055,6 +4071,8 @@ export abstract class ActorAgent extends Agent<Env> {
   protected async mainTaskProfile(turn: HostedTaskTurn): Promise<HostedTaskProfile> {
     const driving = turn.driving ?? {};
     const item: ChatTurnInput = { kind: turnAuthor({ metadata: driving }) === 'operator' ? 'user' : 'programmatic', text: turn.input.task, metadata: driving };
+
+    this._facetTurnId = turn.turnId;
     const { tools, reads } = await this.openTurnSurface(item, turn.opening ?? null);
     const sources = this.turnSources({ tools, reads, requestedWorkMode: turn.input.mode, item });
     const external = await sources.externalTools(this.modelCatalog.window());
@@ -4345,7 +4363,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   protected async preparedWorkMode(): Promise<WorkMode> {
-    if (this._chatLoop?.turnInFlight() === true) return this.turnWorkMode();
+    if (this.turnItemLive()) return this.turnWorkMode();
 
     return this.workModeForMetadata(await this.chatTranscript.lastUserMetadata());
   }
@@ -4358,7 +4376,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Author-stamped, so the plan hold tells the owner's turn from the harness's. */
   private turnDrivingMetadata(): JsonObject | undefined {
     const metadata = this.turnUserMetadata();
-    const item = this._chatLoop?.turnInFlight() === true ? this._turnItem : null;
+    const item = this.turnItemLive() ? this._turnItem : null;
 
     return item === null ? metadata : authoredTurnMetadata({ kind: item.kind, metadata });
   }
@@ -4366,9 +4384,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Active turn metadata only. Idle operations await canonical metadata in
    *  preparedWorkMode before constructing their synchronous tool surface. */
   protected turnUserMetadata(): JsonObject | undefined {
-    // The item belongs to the turn only while the loop holds it (through settle).
-    // Read the loop only if it exists: an idle read must not build it.
-    const metadata = this._chatLoop?.turnInFlight() === true ? this._turnItem?.metadata : undefined;
+    const metadata = this.turnItemLive() ? this._turnItem?.metadata : undefined;
 
     if (metadata === undefined) return undefined;
     const parsed = v.safeParse(JsonObjectSchema, metadata);

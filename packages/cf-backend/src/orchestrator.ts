@@ -882,6 +882,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private async hostedTurnEnded(actorId: string, event: SessionEvent, figures: AgentFigures): Promise<void> {
     await this.hostedChatEvent(actorId, event);
     this.agentTurns.chatClosed(actorId);
+
+    if (actorId === this.actorHandle().actorId) this.mainFacetTurnEnded();
     this.overviewChanged();
 
     if (!this.liveActor(actorId)) return;
