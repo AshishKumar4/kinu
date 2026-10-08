@@ -634,6 +634,9 @@ if [ "$KINU_RESET" = "1" ]; then
   echo ""
   echo -e "${BOLD}Step 2b: Resetting $KINU_WORKER${NC}"
   KINU_RESET_RECORD="$(mktemp -t kinu-reset.XXXXXX.json)"
+  # Eval-service's credentials, the reviewer's login among them, outlive the reset: restored once the build serves.
+  bun "$KINU_ROOT/scripts/credential-checkpoint.ts" save "$KINU_URL" \
+    || { publish_red "eval-service's credentials were not captured, as the line above says, so nothing was reset or deployed"; return 1; }
   bun "$KINU_ROOT/scripts/reset.ts" wipe "$KINU_ENV" "$KINU_RESET_RECORD" \
     || { publish_red "the reset failed; its lines in the deploy's output say what it deleted before it stopped, and a deploy with --reset finishes it from its record"; return 1; }
   KINU_RECORD_ARGS=("$KINU_RESET_RECORD")
@@ -969,7 +972,11 @@ start_soak() {
 # of the owner here, in the foreground, and only for a login the deployment does not hold, so only after a reset wiped
 # it. The soak's provisioning runs detached and cannot ask. A login not approved is a notice in the report, never a red:
 # the reviewer explains a run, and the build is not what it measures.
-if [ "$KINU_SERVING" = "1" ]; then bun "$KINU_ROOT/evals/scripts/reviewer-sign-in.ts" "$KINU_EVAL_ORIGIN"; fi
+if [ "$KINU_SERVING" = "1" ]; then
+  bun "$KINU_ROOT/scripts/credential-checkpoint.ts" restore "$KINU_EVAL_ORIGIN" \
+    || step_red provision "eval-service's credentials" "the checkpoint was not restored, as the line above says; its file stays for the next deploy to finish"
+  bun "$KINU_ROOT/evals/scripts/reviewer-sign-in.ts" "$KINU_EVAL_ORIGIN"
+fi
 
 if [ "$KINU_PROMOTE" = "1" ]; then
   if [ -z "$KINU_TIERS_WHY" ]; then
