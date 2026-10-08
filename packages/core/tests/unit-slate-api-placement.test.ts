@@ -8,6 +8,12 @@ import { BUILTIN_SKILLS } from '../src/skills/builtins';
 import { SLATE_PROGRAM_MEMBERS } from '../src/slates/rpc';
 import { createInlineExecutor } from '../src/tools/inline-executor';
 import { createTestRuntime } from './helpers';
+import { executorNamespace } from '../src/tools/executor-operations';
+import { namespaceDeclaration } from '../src/tools/operation-surfaces';
+
+/** An executor's namespace as the model reads it. */
+const declared = (provider: Parameters<typeof executorNamespace>[0]): string => namespaceDeclaration(provider.name, executorNamespace(provider).declarations ?? {}, new Set());
+
 
 const MEMBERS = Object.keys(SLATE_PROGRAM_MEMBERS).map((op) => `$${op}(`);
 
@@ -21,7 +27,7 @@ test('the slates skill names every lifecycle member eval accepts, and eval decla
   });
 
   const skill = present(BUILTIN_SKILLS.find((entry) => entry.name === 'slates'), 'the slates skill');
-  const types = present(provider.types, "eval's declaration");
+  const types = declared(provider);
 
   expect(MEMBERS.filter((member) => !skill.body.includes(member))).toEqual([]);
   expect(MEMBERS.filter((member) => types.includes(member))).toEqual([]);

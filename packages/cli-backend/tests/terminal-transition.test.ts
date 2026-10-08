@@ -182,7 +182,7 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
     // The gate triggers on tool calls plus a completed stream, so the turn must call something.
     const { model } = scriptedModel(
       'I renamed them',
-      { toolCall: { name: 'fact', input: { action: 'recall', key: 'probe' } } },
+      { toolCall: { name: 'fact', input: { op: 'recall', key: 'probe' } } },
     );
 
     const events: SessionEvent[] = [];
@@ -660,7 +660,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
     const release = Promise.withResolvers<void>();
 
     const { model } = scriptedModel('I renamed them', {
-      toolCall: { name: 'fact', input: { action: 'recall', key: 'probe' } },
+      toolCall: { name: 'fact', input: { op: 'recall', key: 'probe' } },
       onStream: async (prompt) => {
         if (!JSON.stringify(prompt).includes('output of ')) return;
         await release.promise;
@@ -861,7 +861,7 @@ describe('a turn\'s lessons are one owed terminal effect', () => {
   /** Calls `file` with no path, which its schema refuses; asked for a lesson, answers one, or refuses while
    *  `refusing`. */
   function struggler(state: { lessonAsks: number; refusing: boolean }) {
-    const turn = toolSequenceModel([{ name: 'file', input: { action: 'read' } }]);
+    const turn = toolSequenceModel([{ name: 'file', input: { op: 'read' } }]);
     const lesson = fakeModel(JSON.stringify({ update: null, text: LESSON }));
 
     const answering = (prompt: readonly PromptMessage[]) => {

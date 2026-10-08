@@ -347,7 +347,7 @@ describe('toolOutcomes — structural attribution with an observed denominator',
     const store = eventStore();
 
     for (const id of ['t1', 't2']) emit(store, 'run-a', 'tool_call_end', {
-      name: 'file', toolCallId: id, args: { action: 'edit' }, outcome: { success: false, reason: 'not_found' }, result: 'no details',
+      name: 'file', toolCallId: id, args: { op: 'edit' }, outcome: { success: false, reason: 'not_found' }, result: 'no details',
     });
     emit(store, 'run-a', 'tool_call_end', {
       name: 'shell', toolCallId: 't3', outcome: { success: false, reason: null, execution: { exitCode: 1 } }, result: 'no details',
@@ -366,7 +366,7 @@ describe('toolOutcomes — structural attribution with an observed denominator',
     emit(store, 'run-a', 'tool_call_end', {
       name: 'eval', toolCallId: 't1', outcome: {
         success: true,
-        failures: [{ success: false, tool: 'file', action: null, reason: 'missing', error: 'ENOENT: no such directory, home/user/skills' }],
+        failures: [{ success: false, tool: 'file', op: null, reason: 'missing', error: 'ENOENT: no such directory, home/user/skills' }],
       },
     });
     emit(store, 'run-a', 'tool_call_end', { name: 'shell', toolCallId: 't2', outcome: { success: true } });

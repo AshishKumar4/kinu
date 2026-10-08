@@ -7,6 +7,12 @@ import type { ExecutorProvider, SandboxSizes } from '../src/execution/types';
 import { buildSystemPromptSync } from '../src/index';
 import { createTestRuntime } from '@kinu.run/test-utils';
 import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
+import { executorNamespace } from '../src/tools/executor-operations';
+import { namespaceDeclaration } from '../src/tools/operation-surfaces';
+
+/** An executor's namespace as the model reads it. */
+const declared = (provider: Parameters<typeof executorNamespace>[0]): string => namespaceDeclaration(provider.name, executorNamespace(provider).declarations ?? {}, new Set());
+
 
 /** A table of the host's shape; its figures are the ones the model must read back. */
 const SIZES: SandboxSizes = {
@@ -51,16 +57,16 @@ async function resize(provider: ExecutorProvider, size: string): Promise<ReturnT
 
 describe('the declaration the model reads', () => {
   test('names each size from the table, and none of the retired figures', () => {
-    const { types } = createSandboxExecutor(boxAnswering(async (size) => ({ kind: 'recorded', size })), { sizes: SIZES });
+    const types = declared(createSandboxExecutor(boxAnswering(async (size) => ({ kind: 'recorded', size })), { sizes: SIZES }));
 
-    expect(types).toContain('/** small: 1 vCPU, 4 GiB; medium: 2 vCPU, 8 GiB; large: 4 vCPU, 12 GiB. A running sandbox restarts at the new size');
-    expect(types).toContain("function resize(size: 'small' | 'medium' | 'large'): Promise<string | Refusal>;");
+    expect(types).toContain('small: 1 vCPU, 4 GiB; medium: 2 vCPU, 8 GiB; large: 4 vCPU, 12 GiB. A running sandbox restarts at the new size');
+    expect(types).toContain('resize(size: "small" | "medium" | "large"): Promise<string | Refusal>;');
     expect(types).not.toContain('6 GB');
     expect(types).not.toContain('10 instances');
   });
 
   test('declares no resize where the host names no sizes', () => {
-    expect(createSandboxExecutor(boxAnswering(async (size) => ({ kind: 'recorded', size }))).types).not.toContain('resize');
+    expect(declared(createSandboxExecutor(boxAnswering(async (size) => ({ kind: 'recorded', size }))))).not.toContain('resize');
   });
 
   test('the prompt line names the default and every choice, and only where a sandbox is sized', () => {

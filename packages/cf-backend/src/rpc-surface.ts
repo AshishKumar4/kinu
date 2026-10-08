@@ -219,7 +219,9 @@ const USER_DO_METHODS = [
   'watchDeviceStatus',
   'revokeAllCliTokens',
   'getCredentialsRevision',
-  'sharesReceived_add',
+  'shareCards_put',
+  'shareCards_remove',
+  'shareCards_withdraw',
   'sharesReceived_forget',
   'sharesReceived_list',
   'libraryTiles',
@@ -328,6 +330,10 @@ const ORCHESTRATOR_METHODS = [
   // A browser cannot mint a caller.
   'slateAs',
   'slateCallAs',
+  // An isolate running an actor's turn, or a slate, calls the actor's operations here.
+  'callOperation',
+  'listOperations',
+  'cancelOperation',
   // Reachable by a DO stub in this Worker, never a browser; none is `@callable`.
   'routeSlateShare',
   'readLiveShare',

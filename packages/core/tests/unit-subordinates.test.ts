@@ -30,7 +30,7 @@ import {
   readSubordinateLiveStatus,
   receiveSubordinateEvent,
   SUBORDINATE_REPORT_HANDOFF_MAX_CHARS,
-  type ReportToolDeps,
+  type ReportDeps,
   type SubordinateIngressDeps,
   subordinateRelaysTurnEnd,
   type SerializedMessage,
@@ -54,8 +54,8 @@ import { createMemoryVfs, createTestActors, type MemoryVfs } from '@kinu.run/tes
 import {
   makeSql as makeTagged, makeSqlExec, makeExecRaw, createTestActor, createTestWorkspace,
 } from './helpers';
-import type { z } from 'zod';
-import { dispatchReport, ReportToolInputSchema, type ReportToolResult } from '../src/tools/report-tool';
+import { serveReport } from '../src/tools/report-operations';
+import type { JsonObject, JsonValue } from '../src/utils/json';
 
 /** A hire chain `depth` levels below the root. */
 const budgetAt = (depth: number) =>
@@ -1277,7 +1277,7 @@ describe('the parent ingress, in the order it runs', () => {
 
 /** The full report spine in production order: the tool's schema strips unnamed fields, so a dropped handoff only shows end to end. */
 describe('the structured handoff a report carries', () => {
-  function childReportingTo(scene: ParentScene): ReportToolDeps {
+  function childReportingTo(scene: ParentScene): ReportDeps {
     return {
       report: async ({ status, content, handoff }) => {
         const relayed = await receiveSubordinateEvent(scene.deps, {
@@ -1290,9 +1290,9 @@ describe('the structured handoff a report carries', () => {
     };
   }
 
-  /** Parsed as the SDK parses the native tool's input. */
-  async function send(deps: ReportToolDeps, input: z.input<typeof ReportToolInputSchema>): Promise<ReportToolResult> {
-    return await dispatchReport(deps, ReportToolInputSchema.parse(input));
+  /** Checked by the operation's own schema, as every caller's input is. */
+  async function send(deps: ReportDeps, input: JsonObject): Promise<JsonValue> {
+    return (await serveReport(() => deps).run(input, { callId: 'report-1' })).value;
   }
 
   function reportOn(scene: ParentScene): SubordinateReportPayload {
@@ -1352,7 +1352,7 @@ describe('the structured handoff a report carries', () => {
 
   test('a destination that reads only the body is offered no handoff, and is handed none', async () => {
     const scene = parentScene();
-    const bodyOnlyDestination = { ...childReportingTo(scene), bodyOnly: true } satisfies ReportToolDeps;
+    const bodyOnlyDestination = { ...childReportingTo(scene), bodyOnly: true } satisfies ReportDeps;
 
     await send(bodyOnlyDestination, {
       status: 'completed', content: 'Candidate submitted.',

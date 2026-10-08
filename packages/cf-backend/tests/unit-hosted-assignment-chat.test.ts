@@ -18,7 +18,7 @@ test("a durable grandchild that only worked its assignment shows the task, from 
     if (opening.includes('Middle task.')) {
       return answered
         ? chatCompletion(run, 'Middle done.')
-        : toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', mission: 'Durable task.' } }, 'call_durable');
+        : toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', mission: 'Durable task.' } }, 'call_durable');
     }
 
     return chatCompletion(run, 'Durable done.');

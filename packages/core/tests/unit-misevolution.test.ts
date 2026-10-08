@@ -130,7 +130,7 @@ describe('checkMisevolution — judged on the syntax tree, not the spelling', ()
   });
 
   test('the audited web tool is the approved path: asking it to fetch is not egress', () => {
-    const code = 'async (args) => { return tools.web({ action: "fetch", url: args.url }); }';
+    const code = 'async (args) => { return tools.web({ op: "fetch", url: args.url }); }';
 
     for (const surface of ['scaffold', 'craft', 'import'] as const) {
       expect(checkMisevolutionForSurface({ code }, surface)).toEqual({ ok: true });

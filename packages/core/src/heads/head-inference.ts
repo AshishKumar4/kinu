@@ -2,12 +2,10 @@
 // strategy/node-agent.ts). Every turn is a claimed actor turn on `ActorSession`.
 // Inherited context: docs/EXPLORATION.md "Inherited context".
 
-import { z } from 'zod';
-import { invalidToolCallRefusal, oneOf } from '../tools/tool-schema';
-import {
-  tool,
-  type ToolSet, type ModelMessage, type StepResult, type ToolExecutionOptions,
-} from 'ai';
+import { invalidToolCallRefusal } from '../tools/tool-schema';
+import { operationTool } from '../tools/operation-surfaces';
+import { defineOperation, serve } from '../operations/operation';
+import { type ToolSet, type ModelMessage, type StepResult, type ToolExecutionOptions } from 'ai';
 import type { ObserveStream } from '../chat';
 import type { HostedActor } from '../state/actor-host';
 import type { WorkMode } from '../types/turn';
@@ -74,45 +72,43 @@ export interface HeadToolCall extends ToolCallRecord {
   outcome: ToolOutcome;
 }
 
-import { permitInPlan } from '../execution/work-mode';
 import type { Clock } from '../types/clock';
 
-const RecordEvidenceInputSchema = z.object({
-  kind: oneOf(EVIDENCE_KINDS),
-  body: z.string(),
-  ref: z.string().optional(),
-  confidence: z.number().meta({ minimum: 0, maximum: 1 }).optional(),
-});
-
-const RecordDecisionInputSchema = z.object({
-  question: z.string(),
-  choice: z.string(),
-  rationale: z.string(),
-  supportingEvidence: z.array(z.string()).optional(),
-});
+/** A head's accumulators: what it gathered and decided, for the merge synthesis to read. Plan heads keep both. */
+const HEAD_RECORDS = {
+  evidence: defineOperation({
+    ns: 'head', name: 'recordEvidence', slate: false, impact: 'mutate', plan: true,
+    help: "Record a piece of evidence you've gathered. Use this for facts you want surfaced in the merge synthesis.",
+    input: v.strictObject({
+      kind: v.picklist(EVIDENCE_KINDS), body: v.string(), ref: v.optional(v.string()),
+      // Shown, not checked: an out-of-range confidence is still evidence.
+      confidence: v.optional(v.pipe(v.number(), v.metadata({ minimum: 0, maximum: 1 }))),
+    }),
+    output: v.string(),
+  }),
+  decision: defineOperation({
+    ns: 'head', name: 'recordDecision', slate: false, impact: 'mutate', plan: true,
+    help: 'Record a decision the head considered.',
+    input: v.strictObject({ question: v.string(), choice: v.string(), rationale: v.string(), supportingEvidence: v.optional(v.array(v.string())) }),
+    output: v.string(),
+  }),
+} as const;
 
 export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
   return {
-    record_evidence: permitInPlan(tool({
-      description:
-        "Record a piece of evidence you've gathered. Use this for facts you want surfaced in the merge synthesis.",
-      inputSchema: RecordEvidenceInputSchema,
-      execute: async ({ kind, body, ref, confidence }) => {
-        const ev: Evidence = { id: `ev-${nanoid(6)}`, kind, body, ref, confidence };
-        capture.recordEvidence(ev);
+    record_evidence: operationTool(HEAD_RECORDS.evidence.help, serve(HEAD_RECORDS.evidence, async ({ kind, body, ref, confidence }) => {
+      const ev: Evidence = { id: `ev-${nanoid(6)}`, kind, body, ref, confidence };
 
-        return `evidence recorded (id=${ev.id})`;
-      },
+      capture.recordEvidence(ev);
+
+      return `evidence recorded (id=${ev.id})`;
     })),
-    record_decision: permitInPlan(tool({
-      description: 'Record a decision the head considered.',
-      inputSchema: RecordDecisionInputSchema,
-      execute: async ({ question, choice, rationale, supportingEvidence }) => {
-        const d: Decision = { question, choice, rationale, supportingEvidence };
-        capture.recordDecision(d);
+    record_decision: operationTool(HEAD_RECORDS.decision.help, serve(HEAD_RECORDS.decision, async ({ question, choice, rationale, supportingEvidence }) => {
+      const d: Decision = { question, choice, rationale, supportingEvidence };
 
-        return 'decision recorded';
-      },
+      capture.recordDecision(d);
+
+      return 'decision recorded';
     })),
   };
 }
@@ -258,7 +254,7 @@ function renderHeadToolConventions(
   }
 
   if (hasHeadTool(tools, 'web')) {
-    lines.push('- Loop `web` action=search to gather, then action=fetch to read the promising results; record_evidence each finding worth surfacing.');
+    lines.push('- Loop `web` op=search to gather, then op=fetch to read the promising results; record_evidence each finding worth surfacing.');
   }
 
   if (hasHeadTool(tools, 'split_subheads')) {

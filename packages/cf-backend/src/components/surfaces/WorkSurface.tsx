@@ -8,6 +8,7 @@ import type { WorkspacePlanArrival } from "@/hooks/use-kinu";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { FilesFocus, HeadDeltas } from "@kinu.run/core";
 import { tabCls, tabStripH } from "@/components/ui/form";
+import { useRovingTabs } from "@/components/ui/use-roving-tabs";
 import type { AgentStatus, ExecutorOutput, ReadMoves } from "@/hooks/use-kinu";
 import type { AsyncResource } from "@/hooks/use-async-resource";
 import { executorLabel, type ExecutorInfo, type InspectedWork } from "@kinu.run/core";
@@ -104,6 +105,25 @@ export interface WorkSurfaceProps {
   onForkLandingOpened?: () => void;
 }
 
+/** The strip's tabs in drawn order: the slates, the previews, then each surface `shown` keeps. */
+function stripTabs(slates: readonly SlateSummary[] | undefined, ports: readonly PinnedPort[], shown: (s: (typeof SURFACES)[number]) => boolean): SurfaceKind[] {
+  return [
+    ...(slates ?? []).map((slate) => slateSurface(slate.id)),
+    ...ports.map((port): SurfaceKind => `preview:${port.executor}:${port.port}`),
+    ...SURFACES.filter(shown),
+  ];
+}
+
+/** The one panel every tab of the strip opens. */
+const WORK_PANEL_ID = "work-surface-panel";
+
+/** A tab's element id, so the panel names the tab that opened it; no surface open names none. */
+function tabElementId(kind: string): string;
+function tabElementId(kind: string | null): string | undefined;
+function tabElementId(kind: string | null): string | undefined {
+  return kind === null ? undefined : `work-tab-${kind}`;
+}
+
 /** A surface can be selected without a click (deep link, restored tab); keep its tab in view. */
 function useSelectedTabInView(strip: RefObject<HTMLDivElement | null>, surface: SurfaceKind | null): void {
   useEffect(() => {
@@ -112,7 +132,7 @@ function useSelectedTabInView(strip: RefObject<HTMLDivElement | null>, surface: 
     if (!container) return;
 
     const reveal = () => {
-      const selected = container.querySelector('[aria-current="true"]');
+      const selected = container.querySelector('[aria-selected="true"]');
 
       if (!selected) return;
       const viewport = container.getBoundingClientRect();
@@ -234,6 +254,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
   const openConnect = useCallback(() => setConnecting(true), []);
   const closeConnect = useCallback(() => setConnecting(false), []);
 
+  const roving = useRovingTabs(strip, stripTabs(props.slates, ports, (s) => s === surface || surfaceHasContent(s, content)), surface);
   useSelectedTabInView(strip, surface);
   useWheelScrollsSideways(strip);
   const bodyFit = previewSelected ? "overflow-hidden" : "overflow-y-auto py-[18px] pl-[18px] pr-6";
@@ -242,12 +263,11 @@ export function WorkSurface(props: WorkSurfaceProps) {
     <div className="@container flex flex-col h-full p-sidebar">
       {/* Activity sits outside the strip so it does not scroll away. */}
       <div className={`border-b p-border shrink-0 flex items-stretch ${tabStripH}`}>
-        <div ref={strip} className={`p-tabstrip [--scroll-ground:var(--c-sidebar)] flex items-center min-w-0 flex-1 px-3 gap-0.5 -mb-px ${tabStripH}`}>
+        <div ref={strip} {...roving.list} aria-label="Workspace panels" className={`p-tabstrip [--scroll-ground:var(--c-sidebar)] flex items-center min-w-0 flex-1 px-3 gap-0.5 -mb-px ${tabStripH}`}>
           {props.slates?.map(slate => {
             const kind = slateSurface(slate.id);
 
-            return <button key={kind} onClick={() => choose(kind)} title={slate.title} aria-label={slate.title}
-              aria-current={surface === kind ? "true" : undefined}
+            return <button key={kind} {...roving.tab(kind)} id={tabElementId(kind)} aria-controls={WORK_PANEL_ID} onClick={() => choose(kind)} title={slate.title} aria-label={slate.title}
               className={`${tabCls} text-left shrink-0 ${surface === kind ? "p-tab-active" : ""}`}>
               <SparkleIcon size={14} /><span>{slate.title}</span>
             </button>;
@@ -256,13 +276,11 @@ export function WorkSurface(props: WorkSurfaceProps) {
             const kind: SurfaceKind = `preview:${port.executor}:${port.port}`;
             const title = port.name === undefined || port.name === "" ? `${port.executor} :${port.port}` : port.name;
 
-            return <button key={kind} onClick={() => choose(kind)} title={title} aria-label={title}
-              aria-current={surface === kind ? "true" : undefined}
+            return <button key={kind} {...roving.tab(kind)} id={tabElementId(kind)} aria-controls={WORK_PANEL_ID} onClick={() => choose(kind)} title={title} aria-label={title}
               className={`${tabCls} text-left shrink-0 ${surface === kind ? "p-tab-active" : ""}`}>{title}</button>;
           })}
           {SURFACES.filter(s => s === surface || surfaceHasContent(s, content)).map(s => (
-            <button key={s} onClick={() => choose(s)} title={s} aria-label={s}
-              aria-current={surface === s ? "true" : undefined}
+            <button key={s} {...roving.tab(s)} id={tabElementId(s)} aria-controls={WORK_PANEL_ID} onClick={() => choose(s)} title={s} aria-label={s}
               className={`${tabCls} ${surface === s ? "p-tab-active p-accent" : ""}`}>
               <span>{SURFACE_LABEL[s]}</span>
               {s === "Work" && props.pendingActions.length > 0 && <span className="p-accent p-t-status">{props.pendingActions.length}</span>}
@@ -288,6 +306,8 @@ export function WorkSurface(props: WorkSurfaceProps) {
         )}
         <button
           onClick={() => choose(ACTIVITY_SURFACE)}
+          id={tabElementId(ACTIVITY_SURFACE)}
+          aria-pressed={surface === ACTIVITY_SURFACE}
           aria-label="Activity"
           title="Context, cost, and cache"
           className={`${tabCls} mr-2 px-2.5 ${surface === ACTIVITY_SURFACE ? "p-tab-active" : ""}`}>
@@ -296,6 +316,8 @@ export function WorkSurface(props: WorkSurfaceProps) {
         </div>
       </div>
 
+      {/* One panel, named by whichever tab opened it. */}
+      <div role="tabpanel" id={WORK_PANEL_ID} aria-labelledby={tabElementId(surface)} className="flex min-h-0 flex-1 flex-col">
       <div className={`flex-1 min-h-0 ${surface === "Changes" ? "hidden" : bodyFit}`}>
         <div className={surface === "Work" ? "" : "hidden"}>
           <ErrorBoundary label="Work">
@@ -362,6 +384,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
         <ChangesSurface executors={props.executors} lastActiveExecutor={props.lastActiveExecutor} rpc={props.rpc} focus={props.changesFocus ?? null}
           active={surface === "Changes"} moved={props.changesMoved} turnLive={props.isStreaming} onOpenFile={openChangedFile}
           onCount={setChangeCount} />
+      </div>
       </div>
       <ListingStatus error={props.previewError} starting={props.previewStarting} onRetry={props.onRefreshPorts} />
       {connecting && <ConnectDeviceDialog onClose={closeConnect} />}

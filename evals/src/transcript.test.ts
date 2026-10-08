@@ -28,7 +28,7 @@ describe('the transcript', () => {
   // The ledger's own row digests a large argument, and a large argument is the code the agent wrote.
   test('a tool call carries its whole arguments, as the model sent them, not the ledger row\'s digest', () => {
     const source = `export class Slate {\n${'  async book() { return this.storage.get("book"); }\n'.repeat(40)}}\n`;
-    const input = { action: 'write', path: '/slates/exchange/server.ts', content: source };
+    const input = { op: 'write', path: '/slates/exchange/server.ts', content: source };
     const base = { runId: 'run-1', timestamp: '2026-09-26T00:00:00.000Z' };
 
     const events: RunEvent[] = [

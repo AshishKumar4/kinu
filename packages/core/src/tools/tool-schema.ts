@@ -1,6 +1,5 @@
 import * as v from 'valibot';
 import { asSchema, InvalidToolInputError, type Schema, type ToolSet } from 'ai';
-import { z } from 'zod';
 import { Effect } from 'effect';
 import { KinuError, refusedInput, settle } from '../obs/index';
 
@@ -113,13 +112,6 @@ export function withCheckedInput(name: string, entry: ToolSet[string]): ToolSet[
       return yield* Effect.promise(async () => execute(input, options));
     })),
   };
-}
-
-/** A choice whose refusal names the vocabulary and echoes what arrived. */
-export function oneOf<const Values extends readonly string[]>(values: Values) {
-  return z.enum(values, {
-    error: (issue) => `one of ${values.join(', ')}; got ${issue.input === undefined ? 'nothing' : JSON.stringify(issue.input)}`,
-  });
 }
 
 /** `asSchema` wraps a zod or standard schema anew on each call, and the SDK's step loop calls it on every step, so one

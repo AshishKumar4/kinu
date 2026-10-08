@@ -6,12 +6,12 @@ import { cleanupChats, fakeClient, mountChat } from './helpers/chat-app-fixture'
 
 afterEach(cleanupChats);
 
-function editResult(path: string, applied: Array<{ line: number; removed_lines: number; added_lines: number }>): string {
-  return JSON.stringify({ ok: true, path, applied });
+function editResult(path: string, applied: Array<{ line: number; removedLines: number; addedLines: number }>): string {
+  return JSON.stringify({ path, reference: `root://${path}`, applied });
 }
 
 function writeResult(path: string, action: 'created' | 'replaced', bytes: number): string {
-  return JSON.stringify({ ok: true, path, bytes, action });
+  return JSON.stringify({ path, reference: `root://${path}`, bytes, action });
 }
 
 describe('the file diff card', () => {
@@ -22,14 +22,14 @@ describe('the file diff card', () => {
     agent.emit({
       type: 'tool-call', toolName: 'file', toolCallId: 'call-1',
       args: {
-        action: 'edit',
+        op: 'edit',
         path: 'src/state.ts',
         edits: [{ old_text: 'export const ready = false;', new_text: 'export const ready = true;' }],
       },
     });
     agent.emit({
       type: 'tool-result', toolName: 'file', toolCallId: 'call-1',
-      result: editResult('src/state.ts', [{ line: 12, removed_lines: 1, added_lines: 1 }]),
+      result: editResult('src/state.ts', [{ line: 12, removedLines: 1, addedLines: 1 }]),
       success: true,
     });
 
@@ -50,7 +50,7 @@ describe('the file diff card', () => {
 
     agent.emit({
       type: 'tool-call', toolName: 'file', toolCallId: 'call-1',
-      args: { action: 'write', path: 'notes/todo.md', content: 'alpha\nbeta' },
+      args: { op: 'write', path: 'notes/todo.md', content: 'alpha\nbeta' },
     });
     agent.emit({
       type: 'tool-result', toolName: 'file', toolCallId: 'call-1',
@@ -76,7 +76,7 @@ describe('the file diff card', () => {
     agent.emit({
       type: 'tool-call', toolName: 'file', toolCallId: 'call-1',
       args: {
-        action: 'edit',
+        op: 'edit',
         path: 'src/state.ts',
         edits: [
           { old_text: 'const one = 1;', new_text: 'const one = 101;' },
@@ -87,8 +87,8 @@ describe('the file diff card', () => {
     agent.emit({
       type: 'tool-result', toolName: 'file', toolCallId: 'call-1',
       result: editResult('src/state.ts', [
-        { line: 3, removed_lines: 1, added_lines: 1 },
-        { line: 40, removed_lines: 1, added_lines: 1 },
+        { line: 3, removedLines: 1, addedLines: 1 },
+        { line: 40, removedLines: 1, addedLines: 1 },
       ]),
       success: true,
     });
@@ -112,7 +112,7 @@ describe('the file diff card', () => {
 
     agent.emit({
       type: 'tool-call', toolName: 'file', toolCallId: 'call-1',
-      args: { action: 'write', path: 'src/large.txt', content },
+      args: { op: 'write', path: 'src/large.txt', content },
     });
     agent.emit({
       type: 'tool-result', toolName: 'file', toolCallId: 'call-1',
@@ -134,7 +134,7 @@ describe('the file diff card', () => {
 
     agent.emit({
       type: 'tool-call', toolName: 'file', toolCallId: 'call-1',
-      args: { action: 'write', path: 'src/app.ts', content: 'const app = 1;\n' },
+      args: { op: 'write', path: 'src/app.ts', content: 'const app = 1;\n' },
     });
     agent.emit({
       type: 'tool-result', toolName: 'file', toolCallId: 'call-1',
@@ -156,7 +156,7 @@ describe('the file diff card', () => {
 
     agent.emit({
       type: 'tool-result', toolName: 'file', toolCallId: 'orphan',
-      result: editResult('src/orphaned.ts', [{ line: 1, removed_lines: 2, added_lines: 3 }]),
+      result: editResult('src/orphaned.ts', [{ line: 1, removedLines: 2, addedLines: 3 }]),
       success: true,
     });
 
@@ -174,21 +174,21 @@ describe('the file diff card', () => {
 
     agent.emit({
       type: 'tool-call', toolName: 'file', toolCallId: 'edit-a',
-      args: { action: 'edit', path: 'a.ts', edits: [{ old_text: 'const one = 1;', new_text: 'const one = 101;' }] },
+      args: { op: 'edit', path: 'a.ts', edits: [{ old_text: 'const one = 1;', new_text: 'const one = 101;' }] },
     });
     agent.emit({
       type: 'tool-call', toolName: 'file', toolCallId: 'edit-b',
-      args: { action: 'edit', path: 'b.ts', edits: [{ old_text: 'const two = 2;', new_text: 'const two = 202;' }] },
+      args: { op: 'edit', path: 'b.ts', edits: [{ old_text: 'const two = 2;', new_text: 'const two = 202;' }] },
     });
     // Results arrive in call order: positional pairing alone would hand b.ts's call to a.ts's result.
     agent.emit({
       type: 'tool-result', toolName: 'file', toolCallId: 'edit-a',
-      result: editResult('a.ts', [{ line: 1, removed_lines: 1, added_lines: 1 }]),
+      result: editResult('a.ts', [{ line: 1, removedLines: 1, addedLines: 1 }]),
       success: true,
     });
     agent.emit({
       type: 'tool-result', toolName: 'file', toolCallId: 'edit-b',
-      result: editResult('b.ts', [{ line: 9, removed_lines: 1, added_lines: 1 }]),
+      result: editResult('b.ts', [{ line: 9, removedLines: 1, addedLines: 1 }]),
       success: true,
     });
     await screen.waitFor('both cards', () => screen.frame().includes('+ const two = 202;'));
@@ -208,7 +208,7 @@ describe('the file diff card', () => {
 
     agent.emit({
       type: 'tool-call', toolName: 'file', toolCallId: 'call-1',
-      args: { action: 'edit', path: 'src/state.ts', edits: [{ old_text: 'nope', new_text: 'yep' }] },
+      args: { op: 'edit', path: 'src/state.ts', edits: [{ old_text: 'nope', new_text: 'yep' }] },
     });
     agent.emit({
       type: 'tool-result', toolName: 'file', toolCallId: 'call-1',

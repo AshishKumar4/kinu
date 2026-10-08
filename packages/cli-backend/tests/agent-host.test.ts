@@ -223,7 +223,7 @@ function treeModel(script: { readonly park: string; readonly hire?: { readonly b
               controller.enqueue({ type: 'stream-start', warnings: [] });
               controller.enqueue({
                 type: 'tool-call', toolCallId: 'call_hire', toolName: 'agents',
-                input: JSON.stringify({ action: 'hire', role: 'task', mission: script.hire?.mission }),
+                input: JSON.stringify({ op: 'hire', role: 'task', mission: script.hire?.mission }),
               });
               controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
               controller.close();
@@ -566,7 +566,7 @@ function replyingModel(answer: string) {
                 type: 'tool-call',
                 toolCallId: `reply-${answered.size}`,
                 toolName: 'agents',
-                input: JSON.stringify({ action: 'msg', event_id: replyTo, message: answer }),
+                input: JSON.stringify({ op: 'reply', eventId: replyTo, message: answer }),
               });
             } else {
               controller.enqueue({ type: 'text-start', id: '0' });
@@ -592,7 +592,7 @@ function replyingModel(answer: string) {
 
 function askedEventId(prompt: LanguageModelV2CallOptions['prompt']): string | null {
   const matches = [...renderPromptText(prompt)
-    .matchAll(/the sender awaits your answer[\s\S]*?event_id:'([^']+)'/gu)];
+    .matchAll(/the sender awaits your answer[\s\S]*?eventId:'([^']+)'/gu)];
 
   return matches[matches.length - 1]?.[1] ?? null;
 }
@@ -763,7 +763,7 @@ describe('LocalAgentHost', () => {
 
     if (!tool) throw new Error('The first child turn has no tool response.');
     expect(tool).toMatchObject({ content: [{ toolName: 'memory', output: {
-      type: 'json', value: { ok: true, key: 'child-only-tool-context' },
+      type: 'json', value: { key: 'child-only-tool-context' },
     } }] });
     const { host: restored } = makeHost(state, model, refs);
 

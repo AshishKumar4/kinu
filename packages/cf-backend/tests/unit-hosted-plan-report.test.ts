@@ -48,7 +48,7 @@ async function takingUpThePlanReport(calls: readonly GatewayToolCall[]): Promise
     }
 
     return step === 0
-      ? toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', lifetime: 'task', mission: BRIEF } }, 'call_hire')
+      ? toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'task', mission: BRIEF } }, 'call_hire')
       : chatCompletion(run, 'Hired a planner.');
   }));
 

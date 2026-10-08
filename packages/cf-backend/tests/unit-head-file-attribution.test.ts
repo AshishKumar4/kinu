@@ -42,7 +42,7 @@ test('two heads writing at the same time each report only their own file', async
     await arrive();
 
     return toolCallCompletion(run, {
-      tool: 'file', args: { action: 'write', path: `${homes.get(task) ?? ''}/notes.md`, content: `${task}\n` },
+      tool: 'file', args: { op: 'write', path: `${homes.get(task) ?? ''}/notes.md`, content: `${task}\n` },
     }, 'write_0');
   });
 

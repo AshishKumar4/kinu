@@ -92,13 +92,13 @@ export function createLocalPeerEndpoint(deps: LocalPeerEndpointDeps): LocalPeerE
   /** Fails so a typo renders as a tool error instead of queueing a row that can only dead-letter. */
   const requirePeer = (name: string): Effect.Effect<void> => {
     if (name === deps.self.name) {
-      return Effect.die(new Error('that is this agent: pick another peer (action:"list")'));
+      return Effect.die(new Error('that is this agent: pick another peer (op:"list")'));
     }
 
     return reachable().some((ref) => ref.name === name)
       ? Effect.void
       : Effect.die(new Error(`unknown peer "${name}" in workspace "${deps.self.workspaceId}"`
-        + '; list the ones you can reach with action:"list"'));
+        + '; list the ones you can reach with op:"list"'));
   };
 
   return {

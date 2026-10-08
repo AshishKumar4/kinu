@@ -1,3 +1,5 @@
+import type { Served } from '../operations/operation';
+
 /** Host-side result before JSON validation at the VM boundary; no functions or symbols. */
 export type CodemodeResult = object | string | number | boolean | null | undefined;
 
@@ -5,6 +7,12 @@ export type CodemodeResult = object | string | number | boolean | null | undefin
  * `positionalArgs`: `ns.fn(a, b)` reaches `execute(a, b)`, else `execute({…})`. `prelude` runs in the
  * sandbox after the namespace proxy exists, for members that must be real in-sandbox functions.
  */
+/** A member's whole declaration, and the call form that names it where a native tool already declares it. */
+export interface MemberDeclaration {
+  readonly full: string;
+  readonly call: string;
+}
+
 export interface CodemodeProvider {
   readonly name: string;
   readonly tools: Record<string, {
@@ -13,8 +21,12 @@ export interface CodemodeProvider {
     readonly execute: (...args: unknown[]) => Promise<CodemodeResult>;
   }>;
   readonly types?: string;
+  /** Per member, rendered from its schema; the namespace is composed from these, never from `types`. */
+  readonly declarations?: Readonly<Record<string, MemberDeclaration>>;
   readonly positionalArgs?: boolean;
   readonly prelude?: string;
+  /** The catalog operations its members run, for a caller outside eval (`callOperation`) to reach the same ones. */
+  readonly operations?: readonly Served[];
 }
 
 /** The one namespace every tool, builtin or crafted, is callable in on every backend. */

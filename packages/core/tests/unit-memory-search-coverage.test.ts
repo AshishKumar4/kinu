@@ -3,10 +3,24 @@ import { createTestRuntime, toolExecute } from '@kinu.run/test-utils';
 import {
   buildBuiltinTools, createFactsStore, createMemoryCodemodeProvider, initAllTables,
   initFactsTable,
-  type MemoryToolInput, type VectorStore,
+  type VectorStore,
 } from '../src/index';
+import * as v from 'valibot';
+
+const SearchSchema = v.object({ semantic: v.boolean(), hits: v.array(v.object({ ref: v.string(), text: v.string(), score: v.number() })) });
+
+/** A memory search's hits, as `ref: text` lines, and whether it was semantic. */
+async function searched(pending: Promise<unknown>): Promise<{ semantic: boolean; hits: string[] }> {
+  const { semantic, hits } = v.parse(SearchSchema, await pending);
+
+  return { semantic, hits: hits.map((hit) => `${hit.ref}: ${hit.text}`) };
+}
+
+type MemoryCall = JsonObject;
+
 import { conversationsFor, storesFor } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
+import type { JsonObject } from '../src/utils/json';
 
 const unavailableIndex: VectorStore = {
   available: false,
@@ -45,7 +59,7 @@ describe('memory search coverage across backend capabilities', () => {
       initAllTables(testSql.execRaw, testSql.sql);
       rt.memory.search = needleIndex('needle');
       const { history } = storesFor(rt);
-      const native = toolExecute<MemoryToolInput, string>(buildBuiltinTools({ rt, vectorStore, conversations: conversationsFor(rt, history) }).memory);
+      const native = toolExecute<MemoryCall, unknown>(buildBuiltinTools({ rt, vectorStore, conversations: conversationsFor(rt, history) }).memory);
 
       const provider = createMemoryCodemodeProvider(() => ({
         memory: rt.memory, actor: rt.actor, vectorStore,
@@ -57,19 +71,10 @@ describe('memory search coverage across backend capabilities', () => {
       if (!search) throw new Error('memory.search is missing');
 
       for (const query of ['needle', 'absent']) {
-        const result = await native({ action: 'search', query });
-        const hit = query === 'needle' ? '[memory.md:1-1]' : 'No results found.';
+        const result = await searched(native({ op: 'search', query }));
 
-        if (vectorStore?.available) {
-          expect(result).toContain(hit);
-          expect(result).not.toContain('Lexical search only');
-        } else {
-          expect(result).toContain('Lexical search only; semantic recall is unavailable.');
-          expect(result).toContain(
-            query === 'needle' ? '[memory.md:1-1] (score 1.00)\nneedle' : 'No results found.');
-        }
-
-        expect(await search.execute(query)).toBe(result);
+        expect(result).toEqual({ semantic: vectorStore?.available === true, hits: query === 'needle' ? ['memory.md:1-1: needle'] : [] });
+        expect(await searched(search.execute(query))).toEqual(result);
       }
     });
 
@@ -81,17 +86,15 @@ describe('memory search coverage across backend capabilities', () => {
       const facts = createFactsStore(testSql.sql, rt.actor);
       const { history } = storesFor(rt);
 
-      const native = toolExecute<MemoryToolInput, string>(
+      const native = toolExecute<MemoryCall, unknown>(
         buildBuiltinTools({ rt, vectorStore, facts, conversations: conversationsFor(rt, history) }).memory);
 
       // remember landed but search never saw it: the failure this guards.
-      await native({ action: 'remember', key: 'every-tool probe', value: 'ok' });
+      await native({ op: 'remember', key: 'every-tool probe', value: 'ok' });
 
-      const result = await native({ action: 'search', query: 'every-tool probe' });
+      const result = await searched(native({ op: 'search', query: 'every-tool probe' }));
 
-      expect(result).toContain('[fact: every-tool_probe]');
-      expect(result).toContain('ok');
-      expect(result).not.toContain('No results found.');
+      expect(result.hits).toEqual([expect.stringMatching(/^fact: every-tool_probe: .*ok/u)]);
 
       const provider = createMemoryCodemodeProvider(() => ({
         memory: rt.memory, actor: rt.actor, vectorStore, facts,
@@ -102,7 +105,7 @@ describe('memory search coverage across backend capabilities', () => {
 
       if (!search) throw new Error('memory.search is missing');
 
-      expect(await search.execute('every-tool probe')).toBe(result);
+      expect(await searched(search.execute('every-tool probe'))).toEqual(result);
     });
 
     test(`${backend}: a term that only lives in a fact's value still finds it`, async () => {
@@ -111,15 +114,14 @@ describe('memory search coverage across backend capabilities', () => {
       initFactsTable(testSql.execRaw);
       const facts = createFactsStore(testSql.sql, rt.actor);
 
-      const native = toolExecute<MemoryToolInput, string>(
+      const native = toolExecute<MemoryCall, unknown>(
         buildBuiltinTools({ rt, vectorStore, facts, conversations: conversationsFor(rt) }).memory);
 
-      await native({ action: 'remember', key: 'deploy.target', value: 'staging' });
+      await native({ op: 'remember', key: 'deploy.target', value: 'staging' });
 
-      const result = await native({ action: 'search', query: 'staging' });
+      const result = await searched(native({ op: 'search', query: 'staging' }));
 
-      expect(result).toContain('[fact: deploy.target]');
-      expect(result).toContain('staging');
+      expect(result.hits).toEqual([expect.stringMatching(/^fact: deploy\.target: .*staging/u)]);
     });
 
     test(`${backend}: notes and remembered facts fuse into one ranked list`, async () => {
@@ -129,17 +131,14 @@ describe('memory search coverage across backend capabilities', () => {
       rt.memory.search = needleIndex('the needle note');
       const facts = createFactsStore(testSql.sql, rt.actor);
 
-      const native = toolExecute<MemoryToolInput, string>(
+      const native = toolExecute<MemoryCall, unknown>(
         buildBuiltinTools({ rt, vectorStore, facts, conversations: conversationsFor(rt) }).memory);
 
-      await native({ action: 'remember', key: 'needle policy', value: 'keep it sharp' });
+      await native({ op: 'remember', key: 'needle policy', value: 'keep it sharp' });
 
-      const result = await native({ action: 'search', query: 'needle' });
+      const result = await searched(native({ op: 'search', query: 'needle' }));
 
-      expect(result).toContain('[memory.md:1-1]');
-      expect(result).toContain('the needle note');
-      expect(result).toContain('[fact: needle_policy]');
-      expect(result).toContain('keep it sharp');
+      expect(result.hits).toEqual(expect.arrayContaining(['memory.md:1-1: the needle note', expect.stringMatching(/^fact: needle_policy: .*keep it sharp/u)]));
     });
 
     test(`${backend}: a wired-but-unmatched facts store changes nothing`, async () => {
@@ -149,34 +148,14 @@ describe('memory search coverage across backend capabilities', () => {
       rt.memory.search = needleIndex('needle');
       const facts = createFactsStore(testSql.sql, rt.actor);
 
-      const native = toolExecute<MemoryToolInput, string>(
+      const native = toolExecute<MemoryCall, unknown>(
         buildBuiltinTools({ rt, vectorStore, facts, conversations: conversationsFor(rt) }).memory);
 
-      await native({ action: 'remember', key: 'deploy.target', value: 'staging' });
+      await native({ op: 'remember', key: 'deploy.target', value: 'staging' });
 
       for (const query of ['needle', 'absent']) {
-        const result = await native({ action: 'search', query });
-
-        if (query === 'needle') {
-          expect(result).toContain('[memory.md:1-1]');
-          expect(result).not.toContain('fact:');
-        } else {
-          expect(result).toContain('No results found.');
-        }
+        expect((await searched(native({ op: 'search', query }))).hits).toEqual(query === 'needle' ? ['memory.md:1-1: needle'] : []);
       }
     });
   }
-
-  test('no FactsStore: the lexical-only render is byte-identical to before', async () => {
-    // No facts wired: search answers from the note index alone, same header and row shape.
-    const { rt, testSql } = createTestRuntime();
-    initAllTables(testSql.execRaw, testSql.sql);
-    rt.memory.search = needleIndex('needle');
-    const native = toolExecute<MemoryToolInput, string>(buildBuiltinTools({ rt, vectorStore: null, conversations: conversationsFor(rt) }).memory);
-
-    expect(await native({ action: 'search', query: 'needle' })).toBe(
-      'Lexical search only; semantic recall is unavailable.\n[memory.md:1-1] (score 1.00)\nneedle');
-    expect(await native({ action: 'search', query: 'absent' })).toBe(
-      'Lexical search only; semantic recall is unavailable.\nNo results found.');
-  });
 });

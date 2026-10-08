@@ -4,7 +4,7 @@ import { exists, readText as nimbusReadText, type VFS, writeText } from '@nimbus
 import { expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
-import { createTestSql, createTestActors, testActorHandle, createMemoryVfs } from '@kinu.run/test-utils';
+import { createTestSql, createTestActors, testActorHandle, createMemoryVfs, toolExecute } from '@kinu.run/test-utils';
 import { ActorClaimStore, initActorClaimTables, type ActorTurnClaim } from '../src/orchestrator/actor-claims';
 import { SessionHistory } from '../src/session/history';
 import type { ContextSelection } from '../src/session/context';
@@ -16,14 +16,14 @@ import { decodeModelMessageValues, encodeModelMessageValues } from '../src/sessi
 import { composePrepareStep, type StepContextPlane } from '../src/prompting/prepare-step';
 import type { StepPruneBudget } from '../src/prompting/step-prune';
 import { DynamicContextLedger } from '../src/prompting/volatile-context';
-import { createFileDispatcher } from '../src/tools/file-tool';
+import { createFileTool } from '../src/tools/file-operations';
 import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { TurnContextBudget } from '../src/context-budget';
 import type { ActorContextStores, ChildContextResolver, ContextFileHeader } from '../src/vfs/context-plane';
 import type { ContextEditEvent } from '../src/types/context-plane';
 import type { SqlExecutor, SqlValue } from '../src/types/primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
-import { JsonValueSchema, type JsonValue } from '../src/utils/json';
+import { JsonValueSchema, type JsonValue, type JsonObject } from '../src/utils/json';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { cloudPlanes } from '../src/vfs/resolve';
 
@@ -171,12 +171,12 @@ function stepsOf(bound: Bound, claim: ActorTurnClaim): StepContextPlane {
 }
 
 function fileTool(vfs: VFS): (input: {
-  action: 'read' | 'write' | 'edit' | 'list' | 'stat';
+  op: 'read' | 'write' | 'edit' | 'list' | 'stat';
   path: string;
   content?: string;
   edits?: Array<{ old_text: string; new_text: string }>;
 }) => Promise<JsonValue> {
-  return createFileDispatcher({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget() });
+  return toolExecute<JsonObject, JsonValue>(createFileTool({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget() }));
 }
 
 async function readText(vfs: VFS, path: string): Promise<string> {
@@ -429,23 +429,23 @@ test('the native file tool reads, edits and re-reads the working history over th
   ]);
   const file = fileTool(vfs);
 
-  const shown = v.parse(v.string(), await file({ action: 'read', path: '/context/working.jsonl' }));
+  const shown = v.parse(v.string(), await file({ op: 'read', path: '/context/working.jsonl' }));
   expect(shown).toContain('remember the wrong fact');
 
   const applied = await file({
-    action: 'edit',
+    op: 'edit',
     path: '/context/working.jsonl',
     edits: [{ old_text: 'remember the wrong fact', new_text: 'remember the RIGHT fact' }],
   });
 
-  expect(applied).toMatchObject({ ok: true });
+  expect(applied).toMatchObject({ applied: [{ line: 2, removedLines: 1, addedLines: 1 }] });
 
   const pending = await stagedMessages(actor);
   expect(pending[0]).toEqual({ role: 'user', content: 'remember the RIGHT fact' });
   expect(pending[1]).toEqual({ role: 'assistant', content: 'noted' });
   // The tool's own ledger refuses a second edit from the same read.
   await expect(file({
-    action: 'edit',
+    op: 'edit',
     path: '/context/working.jsonl',
     edits: [{ old_text: 'remember the RIGHT fact', new_text: 'again' }],
   })).rejects.toMatchObject({ verdict: 'stale' });

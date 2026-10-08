@@ -165,10 +165,10 @@ export function ChatErrorCard({ message, refused, streaming, onRetry, onDismiss 
         <WarningCircleIcon size={16} className={`shrink-0 mt-0.5 ${refused ? "p-text-3" : "p-danger"}`} weight="fill" />
         <div className="min-w-0 flex-1">
           {refused
-            ? <div className="text-xs p-text font-medium break-all">This tab couldn't reconnect: {message}</div>
+            ? <h3 className="text-xs p-text font-medium break-all">This tab couldn't reconnect: {message}</h3>
             : (
               <>
-                <div className="text-xs p-text font-medium">The last turn failed and produced no answer</div>
+                <h3 className="text-xs p-text font-medium">The last turn failed and produced no answer</h3>
                 <code className="block mt-1 p-t-code p-text-2 break-all p-card rounded-sm px-2 py-1 max-h-28 overflow-y-auto">{message}</code>
                 <div className="p-meta p-text-3 mt-1.5">Retry reuses this message in the same conversation.</div>
               </>
@@ -179,7 +179,7 @@ export function ChatErrorCard({ message, refused, streaming, onRetry, onDismiss 
         <button onClick={onDismiss}
           className="px-2.5 py-1 p-t-control rounded-md p-text-3 hover:p-text cursor-pointer">Dismiss</button>
         {!refused && (
-          <button onClick={onRetry} disabled={streaming}
+          <button onClick={onRetry} disabled={streaming} data-retry
             className="px-2.5 py-1 p-t-control rounded-md p-accent-bg p-accent hover:opacity-90 disabled:opacity-40 cursor-pointer flex items-center gap-1">
             <ArrowsClockwiseIcon size={11} />Retry this turn
           </button>

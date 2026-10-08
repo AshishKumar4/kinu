@@ -719,7 +719,7 @@ export const SUPPLY = new Map<string, Supply>([
       + 'as the eval identity on both.',
     minted: {
       paste: false,
-      keep: 'in .dev.vars, as the variable the eval tooling reads for this deployment (`evalWebIdentityEnv`): '
+      keep: 'in ~/.config/kinu/secrets.env, as the variable the eval tooling reads for this deployment (`evalWebIdentityEnv`): '
         + 'KINU_EVAL_WEB_IDENTITY for production, KINU_EVAL_STAGING_WEB_IDENTITY for staging',
     },
   }],

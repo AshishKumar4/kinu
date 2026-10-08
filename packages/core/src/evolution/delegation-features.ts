@@ -130,14 +130,13 @@ function pathsMatching(text: ReadonlyArray<string>, patterns: ReadonlyArray<RegE
 /** `write`/`edit` change the file, `read` revisits it. */
 function fileToolPath(call: ToolCallRecord): { path: string; effect: 'write' | 'revisit' } | null {
   if (call.name !== 'file') return null;
-  const action = call.args.action;
-  const path = call.args.path;
+  const { op, path } = call.args;
 
   if (!v.is(v.string(), path)) return null;
 
-  if (action === 'write' || action === 'edit') return { path, effect: 'write' };
+  if (op === 'write' || op === 'edit') return { path, effect: 'write' };
 
-  if (action === 'read') return { path, effect: 'revisit' };
+  if (op === 'read') return { path, effect: 'revisit' };
 
   return null;
 }
@@ -173,18 +172,17 @@ export function executionPathSignals(calls: ReadonlyArray<ToolCallRecord>): Exec
   };
 }
 
-/** The unified `agents` tool is separated by action. */
+/** The `agents` tool is separated by operation. */
 function agentsAction(call: ToolCallRecord): string | null {
   if (call.name !== 'agents') return null;
-  const input = v.safeParse(v.object({ action: v.optional(v.string()) }), call.args);
+  const input = v.safeParse(v.object({ op: v.optional(v.string()) }), call.args);
 
-  return input.success ? input.output.action ?? null : null;
+  return input.success ? input.output.op ?? null : null;
 }
 
-const STAFFING_ACTIONS = { hire: true, list: true, dismiss: true } satisfies Record<string, true>;
+const STAFFING_ACTIONS = { hire: true, assign: true, hireWorkspace: true, list: true, dismiss: true } satisfies Record<string, true>;
 
-/** Includes the three pre-collapse verbs so stored rows still classify. */
-const MESSAGING_ACTIONS = { msg: true, ask: true, send: true, reply: true } satisfies Record<string, true>;
+const MESSAGING_ACTIONS = { message: true, reply: true } satisfies Record<string, true>;
 
 const EXPLORATION_ACTIONS = { swarm: true } satisfies Record<string, true>;
 

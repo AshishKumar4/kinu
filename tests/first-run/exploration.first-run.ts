@@ -85,7 +85,7 @@ afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observati
 
 type ToolCallEnd = Extract<RunEvent, { type: 'tool_call_end' }>;
 
-const SwarmArgsSchema = v.looseObject({ action: v.literal('swarm') });
+const SwarmArgsSchema = v.looseObject({ op: v.literal('swarm') });
 
 const HeadSchema = v.looseObject({
   id: v.string(), depth: v.number(), status: v.string(), summary: v.nullable(v.string()), lastStepAt: v.nullable(v.number()),

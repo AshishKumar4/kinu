@@ -1,6 +1,6 @@
 /**
  * A model's judgement of what a check cannot compute, asked as the diagnosis asks one (`askOnce`): a workspace of its
- * own on the deployment, on the reviewer's model (`REVIEW_MODELS`), the pictures written into it, one yes-or-no question, one word
+ * own on the deployment, on the reviewer's model (`REVIEW_LOGIN`), the pictures written into it, one yes-or-no question, one word
  * back. `evals/scripts/calibrate-judge.ts` measures how often it agrees with renders whose answer is known; a check that
  * asks it cites that agreement.
  */

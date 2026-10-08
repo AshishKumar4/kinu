@@ -287,7 +287,7 @@ test('invalid native argument containers cannot become an empty successful call'
 });
 
 test('router namespace effects use the same lifetime admission as host effects', async () => {
-  const { rt } = await runtime('async function run() { await workspace.writeFile(); await workspace.writeFile(); }');
+  const { rt } = await runtime("async function run() { await workspace.writeFile('a.txt', 'one'); await workspace.writeFile('b.txt', 'two'); }");
 
   if (rt.executionRouter === undefined) throw new Error('the runtime fixture has no execution router');
   const started = Promise.withResolvers<void>();

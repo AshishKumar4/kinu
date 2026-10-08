@@ -24,15 +24,10 @@ export function toolCallEffect(toolName: string, input: JsonValue | undefined): 
   const parsed = v.safeParse(JsonObjectSchema, input);
 
   if (!parsed.success) return 'unknown';
-  const action = str(parsed.output, 'action');
+  const op = str(parsed.output, 'op');
+  const ops: Readonly<Record<string, ActionEffect>> | undefined = Object.entries(NATIVE_ACTION_EFFECTS).find(([name]) => name === toolName)?.[1];
 
-  if (toolName === 'tasks' && action === 'mode') {
-    return str(parsed.output, 'role') ? 'mutate' : 'read';
-  }
-
-  const actions: Readonly<Record<string, ActionEffect>> | undefined = Object.entries(NATIVE_ACTION_EFFECTS).find(([name]) => name === toolName)?.[1];
-
-  return actions !== undefined && Object.hasOwn(actions, action) ? actions[action] : 'unknown';
+  return ops !== undefined && Object.hasOwn(ops, op) ? ops[op] : 'unknown';
 }
 
 /** Collapse whitespace and clip, marking the clip. */
@@ -80,12 +75,12 @@ function codemodeIntent(code: string): string {
   return first.startsWith("//") ? clip(first.slice(2), 72) : "";
 }
 
-/** Unified delegation tool. */
+/** The delegation tool, by the operation its call names. */
 function summarizeAgents(input: JsonObject): string {
-  const action = str(input, "action");
+  const op = str(input, "op");
   const agent = str(input, "agent");
 
-  switch (action) {
+  switch (op) {
     case "swarm": {
       const preset = str(input, "preset");
       const task = quoted(str(input, "task"), 56);
@@ -95,63 +90,59 @@ function summarizeAgents(input: JsonObject): string {
     }
 
     case "hire": {
-      if (str(input, "scope") === "workspace") return actionOn("hire workspace", agent, str(input, "mission"));
+      const name = str(input, "name");
       const role = str(input, "role");
 
-      // No `role`: a hire handed to an existing agent; `message` is the workstream.
-      if (!role) return actionOn(action, agent, str(input, "message"));
-
-      return actionOn(str(input, "lifetime") === "task" ? "hire (task)" : action, agent || role, agent ? role : "");
+      return actionOn(str(input, "lifetime") === "task" ? "hire (task)" : op, name || role, name ? role : "");
     }
 
-    case "msg":
-      return agent
-        ? actionOn(action, agent, str(input, "topic") || str(input, "message"))
-        : actionOn(action, undefined, str(input, "message"));
-    default:
-      return actionOn(action, agent);
+    case "hireWorkspace": return actionOn("hire workspace", agent, str(input, "mission"));
+    case "assign": return actionOn(op, agent, str(input, "message"));
+    case "message": return actionOn(op, agent, str(input, "topic") || str(input, "message"));
+    case "reply": return actionOn(op, undefined, str(input, "message"));
+    default: return actionOn(op, agent);
   }
 }
 
 function summarizeMemory(input: JsonObject): string {
-  const action = str(input, "action");
+  const op = str(input, "op");
 
-  if (action === "save") return actionOn(action, undefined, str(input, "content"));
+  if (op === "note") return actionOn(op, undefined, str(input, "content"));
   const key = str(input, "key");
 
-  if (key) return actionOn(action, key);
+  if (key) return actionOn(op, key);
   const query = str(input, "query");
 
-  return query ? `${action} ${quoted(query, 56)}` : action;
+  return query ? `${op} ${quoted(query, 56)}` : op;
 }
 
-/** Every action reads by its path; an edit also reports its replacement count. */
+/** Every operation reads by its path; an edit also reports its replacement count. */
 function summarizeFile(input: JsonObject): string {
-  const action = str(input, "action");
+  const op = str(input, "op");
   const path = str(input, "path");
   const edits = input.edits;
 
-  if (action === "edit" && Array.isArray(edits) && edits.length > 1) {
-    return `${action} ${clip(path, 56)} (${edits.length} edits)`;
+  if (op === "edit" && Array.isArray(edits) && edits.length > 1) {
+    return `${op} ${clip(path, 56)} (${edits.length} edits)`;
   }
 
-  return path ? `${action} ${clip(path, 60)}` : action;
+  return path ? `${op} ${clip(path, 60)}` : op;
 }
 
 function summarizeWeb(input: JsonObject): string {
-  const action = str(input, "action");
+  const op = str(input, "op");
   const url = str(input, "url");
 
-  if (url) return `${action} ${clip(url, 56)}`;
+  if (url) return `${op} ${clip(url, 56)}`;
   const query = str(input, "query");
 
-  return query ? `${action} ${quoted(query, 56)}` : action;
+  return query ? `${op} ${quoted(query, 56)}` : op;
 }
 
 function summarizeTasks(input: JsonObject): string {
-  const action = str(input, "action");
+  const op = str(input, "op");
 
-  if (action === "add") {
+  if (op === "add") {
     const titles = Array.isArray(input.titles) ? input.titles.filter((title): title is string => v.is(v.string(), title)) : [];
     const parent = str(input, "parent");
     const head = titles.length > 1 ? `add ${titles.length} tasks` : "add";
@@ -160,9 +151,9 @@ function summarizeTasks(input: JsonObject): string {
     return titles.length === 1 ? actionOn(target, undefined, titles[0]) : target;
   }
 
-  if (action === "update") return actionOn(action, str(input, "id"), str(input, "status"));
+  if (op === "update") return actionOn(op, str(input, "id"), str(input, "status"));
 
-  return action;
+  return op;
 }
 
 type ToolSummarizer = (input: JsonObject) => string;
@@ -232,7 +223,7 @@ export function describeCommand(command: string): string {
 }
 
 const FILE_VERBS = new Map(Object.entries({
-  read: "Read", write: "Wrote", edit: "Edited", list: "Listed", search: "Searched",
+  read: "Read", write: "Wrote", edit: "Edited", list: "Listed", stat: "Checked", search: "Searched",
 }));
 
 const TASK_VERBS = new Map(Object.entries({
@@ -240,7 +231,7 @@ const TASK_VERBS = new Map(Object.entries({
 }));
 
 const MEMORY_VERBS = new Map(Object.entries({
-  save: "Saved to memory", search: "Searched memory",
+  note: "Saved to memory", remember: "Saved to memory", recall: "Recalled from memory", forget: "Forgot a memory", search: "Searched memory",
 }));
 
 function basename(path: string): string {
@@ -253,34 +244,35 @@ function basename(path: string): string {
 }
 
 function describeWeb(input: JsonObject): string {
-  if (str(input, "action") === "fetch") return "Fetched a page";
+  if (str(input, "op") === "fetch") return "Fetched a page";
 
-  if (str(input, "action") === "screenshot") return "Took a screenshot";
+  if (str(input, "op") === "screenshot") return "Took a screenshot";
 
   return str(input, "query") ? "Searched the web" : "";
 }
 
 function describeAgents(input: JsonObject): string {
-  const action = str(input, "action");
   const agent = str(input, "agent");
 
-  switch (action) {
+  switch (str(input, "op")) {
     case "swarm": {
       const preset = str(input, "preset");
 
       return preset ? `Ran a ${preset} search` : "Ran a search";
     }
 
-    case "hire":
-      if (str(input, "scope") === "workspace") return "Hired a workspace";
+    case "hire": {
+      const name = str(input, "name");
 
-      // No `role` is a hire handed to an agent that already exists.
-      if (!str(input, "role")) return agent ? `Asked ${agent}` : "Asked a subordinate";
+      if (str(input, "lifetime") === "task") return name ? `Asked ${name} for one answer` : "Asked one agent for one answer";
 
-      if (str(input, "lifetime") === "task") return agent ? `Asked ${agent} for one answer` : "Asked one agent for one answer";
+      return name ? `Hired ${name}` : "Hired a subordinate";
+    }
 
-      return agent ? `Hired ${agent}` : "Hired a subordinate";
-    case "msg":     return agent ? `Messaged ${agent}` : "Answered an agent message";
+    case "hireWorkspace": return "Hired a workspace";
+    case "assign":  return agent ? `Asked ${agent}` : "Asked a subordinate";
+    case "message": return agent ? `Messaged ${agent}` : "Messaged an agent";
+    case "reply":   return "Answered an agent message";
     case "dismiss": return agent ? `Dismissed ${agent}` : "Dismissed a subordinate";
     case "list":    return "Listed the roster";
     default:        return "";
@@ -292,7 +284,7 @@ type ToolDescriber = (input: JsonObject) => string;
 const DESCRIBERS = new Map<string, ToolDescriber>(Object.entries({
   shell: (input) => describeCommand(str(input, "command")),
   file: (input) => {
-    const verb = FILE_VERBS.get(str(input, "action"));
+    const verb = FILE_VERBS.get(str(input, "op"));
 
     if (!verb) return "";
     const path = str(input, "path");
@@ -300,8 +292,8 @@ const DESCRIBERS = new Map<string, ToolDescriber>(Object.entries({
     return path ? `${verb} ${basename(path)}` : verb;
   },
   agents: describeAgents,
-  memory: (input) => MEMORY_VERBS.get(str(input, "action")) ?? "",
-  tasks: (input) => TASK_VERBS.get(str(input, "action")) ?? "",
+  memory: (input) => MEMORY_VERBS.get(str(input, "op")) ?? "",
+  tasks: (input) => TASK_VERBS.get(str(input, "op")) ?? "",
   web: describeWeb,
   eval: (input) => codemodeIntent(str(input, "code")) || "Ran a tool program",
   report: (input) => (str(input, "status") ? `Reported ${str(input, "status")}` : "Reported back"),

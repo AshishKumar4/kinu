@@ -107,5 +107,13 @@ export declare class SqliteTenantAuthorityPermitStore extends TenantAuthorityTra
     projectEvidence(transaction: TransactionalSqlite, evidence: TargetLeaseEvidence): TargetLeaseEvidence;
     issued(transaction: TransactionalSqlite, nonce: string): AuthorityPermit | undefined;
     issue(transaction: TransactionalSqlite, permit: AuthorityPermit): AuthorityPermit;
+    /**
+     * The same bounded prune the target-side store offers, over the issued rows this
+     * Tenant writes. Issued rows are the other half of every mediated call's residue, and a
+     * retention sweep that can reach only the target side leaves the issuing side to grow
+     * without bound; forwarding keeps the inner store private while making this store
+     * prunable by exactly one driver shape.
+     */
+    prune(transaction: TransactionalSqlite, before: Date, limit: number, after?: string): AuthorityPermitPrunePage;
     private requireTransaction;
 }

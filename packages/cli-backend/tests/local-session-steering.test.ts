@@ -290,7 +290,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
                 controller.enqueue({ type: 'stream-start', warnings: [] });
                 controller.enqueue({
                   type: 'tool-call', toolCallId: 'call-1', toolName: 'fact',
-                  input: JSON.stringify({ action: 'recall', key: 'probe' }),
+                  input: JSON.stringify({ op: 'recall', key: 'probe' }),
                 });
                 await toolStep.promise;
                 controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
@@ -547,7 +547,7 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
                 controller.enqueue({ type: 'stream-start', warnings: [] });
                 controller.enqueue({
                   type: 'tool-call', toolCallId: 'call-1', toolName: 'fact',
-                  input: JSON.stringify({ action: 'recall', key: 'probe' }),
+                  input: JSON.stringify({ op: 'recall', key: 'probe' }),
                 });
                 await stepGate.promise;
                 controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
@@ -1266,7 +1266,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
     );
 
     expect(dispatch.args).toMatchObject({
-      action: 'swarm', task: 'explore two angles', preset: 'ideate', branches: 2, depth: 1,
+      op: 'swarm', task: 'explore two angles', preset: 'ideate', branches: 2, depth: 1,
     });
 
     const job = v.parse(
@@ -1842,8 +1842,8 @@ describe('agents.* codemode namespace — node sandbox', () => {
 
     const result = await run(`
       const angles = ['auth', 'billing'];
-      const searched = await Promise.all(angles.map((a) => agents.swarm({
-        task: 'review ' + a, preset: 'ideate', branches: 2, depth: 1,
+      const searched = await Promise.all(angles.map((a) => agents.swarm('review ' + a, {
+        preset: 'ideate', branches: 2, depth: 1,
       })));
       const ran = searched.filter((s) => !s.reason && s.report.expansions === 2);
       return { count: ran.length, branches: ran.map((s) => s.caps.branches.value) };
@@ -1861,7 +1861,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
 
     const dispatched = v.parse(
       v.object({ result: v.object({ preset: v.string(), report: v.object({ expansions: v.number() }) }) }),
-      await run(`return await agents.swarm({ task: 'pick an approach', preset: 'ideate', branches: 2, depth: 1 });`),
+      await run(`return await agents.swarm('pick an approach', { preset: 'ideate', branches: 2, depth: 1 });`),
     );
 
     expect(dispatched.result.preset).toBe('ideate');
@@ -1876,8 +1876,8 @@ describe('agents.* codemode namespace — node sandbox', () => {
         + SWARM_PRESET_DOCTRINE.join(' '),
     };
 
-    await expect(run(`return await agents.swarm({ task: 'pick an approach' });`)).rejects.toEqual(expect.objectContaining({
-      outcome: { ...refusal, failures: [{ ...refusal, tool: 'agents', action: 'swarm' }] },
+    await expect(run(`return await agents.swarm('pick an approach');`)).rejects.toEqual(expect.objectContaining({
+      outcome: { ...refusal, failures: [{ ...refusal, tool: 'agents', op: 'swarm' }] },
     }));
     expect(calls).toHaveLength(expanded);
   });
@@ -1887,8 +1887,8 @@ describe('agents.* codemode namespace — node sandbox', () => {
 
     // `ideate` is flat, so an objective on it is refused; the script reads the refusal as a return value.
     const result = await sandboxWith(deps)(`
-      const searched = await agents.swarm({
-        task: 't', preset: 'ideate',
+      const searched = await agents.swarm('t', {
+        preset: 'ideate',
         objective: {
           kind: 'scalar', metric: 'ms', unit: 'ms', direction: 'minimise',
           scale: 'linear', target: 1, verify: { kind: 'exec-ratio', spec: {} },
@@ -1900,7 +1900,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     expect(result).toEqual({
       result: 'recovered: true',
       failures: [{
-        tool: 'agents', action: 'swarm', success: false, reason: 'bad_input',
+        tool: 'agents', op: 'swarm', success: false, reason: 'bad_input',
         error: '`ideate` is flat and has no value signal by design; an objective here would be measured and then ignored, which is a silent lie about what the run did. Use preset:"optimise" to measure something, or drop `objective`.',
       }],
     });
@@ -1916,7 +1916,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     const result = v.parse(
       v.object({ result: v.object({ report: v.object({ stop: v.string(), expansions: v.number() }) }) }),
       await sandboxWith(deps)(
-        `return await agents.swarm({ task: 't', preset: 'ideate', branches: 2, depth: 1 });`,
+        `return await agents.swarm('t', { preset: 'ideate', branches: 2, depth: 1 });`,
         { abortSignal: controller.signal, toolCallId: 'swarm-abort-test', messages: [], context: undefined },
       ),
     );
@@ -2100,7 +2100,7 @@ describe('LocalAgentSession — provenance and durable roles reach the model', (
 
     const setter = new LocalAgentSession({
       rt, db, onEvent: (e) => events.push(e),
-      model: toolSequenceModel([{ name: 'tasks', input: { action: 'mode', role: 'researcher' } }]),
+      model: toolSequenceModel([{ name: 'tasks', input: { op: 'switchRole', role: 'researcher' } }]),
     });
 
     await setter.send('work carefully from here', { id: crypto.randomUUID() });
@@ -2232,7 +2232,7 @@ test('an authorized Build turn queued behind Plan regains native file authority'
       return { stream: new ReadableStream<LanguageModelV2StreamPart>({
         start(controller) {
           controller.enqueue({ type: 'stream-start', warnings: [] });
-          controller.enqueue({ type: 'tool-call', toolCallId: 'file-' + current, toolName: 'file', input: JSON.stringify({ action: 'write', path: 'vfs://home/main/queued-build.txt', content: 'authorized Build' }) });
+          controller.enqueue({ type: 'tool-call', toolCallId: 'file-' + current, toolName: 'file', input: JSON.stringify({ op: 'write', path: 'vfs://home/main/queued-build.txt', content: 'authorized Build' }) });
           controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage: { inputTokens: 5, outputTokens: 7, totalTokens: 12 } });
           controller.close();
         },

@@ -234,6 +234,19 @@ const SharedRowSchema = v.object({
 
 export type SharedRow = v.InferOutput<typeof SharedRowSchema>;
 
+/** A share as its recipient's Drive holds it, written only by the owner's account; `owner` is the owner's email. */
+export const ShareCardSchema = v.object({
+  kind: v.picklist(SHARE_KINDS),
+  title: v.string(),
+  description: v.string(),
+  createdAt: v.number(),
+  owner: v.string(),
+  visibility: v.optional(LiveShareVisibilitySchema),
+  fork: v.optional(v.boolean()),
+});
+
+export type ShareCard = v.InferOutput<typeof ShareCardSchema>;
+
 const OwnedSlateSchema = v.object({
   id: v.string(),
   title: v.string(),

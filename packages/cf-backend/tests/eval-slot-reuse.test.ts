@@ -41,12 +41,12 @@ describe('one eval slot, reused by trial after trial', () => {
   test('a trial that leaves an account row behind is named with its count, and its workspace is not', async () => {
     await provisionTestWorkspace(harness, 'eval-order-book-3-bbb222');
     await harness.userDO.setConfig(owner, 'theme', 'dark');
-    await harness.userDO.sharesReceived_add(owner, {
-      ownerUserId: 'f'.repeat(32), ownerEmail: 'sam@example.test', workspace: 'their-ws', shareId: 'share-1',
+    await harness.userDO.shareCards_put(owner, {
+      ownerUserId: 'f'.repeat(32), workspace: 'their-ws', shareId: 'share-1', card: { kind: 'blueprint', title: 'Board', description: '', createdAt: 1, owner: 'sam@example.test' },
     });
     await harness.userDO.removeWorkspace(owner, 'eval-order-book-3-bbb222', USER_ID);
 
-    expect(await inherited()).toEqual({ user_config: 1, user_shares_received: 1 });
+    expect(await inherited()).toEqual({ user_config: 1, user_share_cards: 1 });
 
     // Gone once the account forgets them: the slot opens again.
     await harness.userDO.sharesReceived_forget(owner, 'f'.repeat(32));

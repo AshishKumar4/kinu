@@ -4,7 +4,7 @@
  */
 import * as v from 'valibot';
 
-import { diffLines, MAX_LINES_PER_FILE, parseJsonValue, type DiffLine, type FileStatus } from '@kinu.run/core';
+import { diffLines, FILE, MAX_LINES_PER_FILE, parseJsonValue, type DiffLine, type FileStatus } from '@kinu.run/core';
 import { TUI_MARKS } from '@kinu.run/core/tui';
 import { tolerate } from '@kinu.run/core/obs';
 
@@ -14,31 +14,14 @@ import { useTuiTheme } from './theme';
 /** The expanded tool-result line budget, shared with the card. */
 export const EXPANDED_RESULT_LINES = 20;
 
-const EditResultSchema = v.object({
-  ok: v.literal(true),
-  path: v.string(),
-  // A landed edit always reports a span, so empty means another tool's payload.
-  applied: v.pipe(v.array(v.object({ line: v.number(), removed_lines: v.number(), added_lines: v.number() })), v.minLength(1)),
-});
+// The `file` operations' own contracts: a landed edit always reports a span, so an empty one is another tool's payload.
+const EditResultSchema = v.object({ ...FILE.edit.output.entries, applied: v.pipe(FILE.edit.output.entries.applied, v.minLength(1)) });
 
-const WriteResultSchema = v.object({
-  ok: v.literal(true),
-  path: v.string(),
-  action: v.picklist(['created', 'replaced']),
-  bytes: v.optional(v.number()),
-});
+const WriteResultSchema = FILE.write.output;
 
-const EditCallSchema = v.object({
-  action: v.literal('edit'),
-  path: v.string(),
-  edits: v.array(v.object({ old_text: v.string(), new_text: v.string() })),
-});
+const EditCallSchema = v.object({ op: v.literal('edit'), ...FILE.edit.input.entries });
 
-const WriteCallSchema = v.object({
-  action: v.literal('write'),
-  path: v.string(),
-  content: v.string(),
-});
+const WriteCallSchema = v.object({ op: v.literal('write'), ...FILE.write.input.entries });
 
 /** `hunks === null` renders "diff unavailable". */
 interface FileEditDiffView {
@@ -134,8 +117,8 @@ export function fileEditDiffView(
     const counts = { added: 0, removed: 0 };
 
     for (const span of body.body.applied) {
-      counts.added += span.added_lines;
-      counts.removed += span.removed_lines;
+      counts.added += span.addedLines;
+      counts.removed += span.removedLines;
     }
 
     // Call row absent or unreadable: keep the result's true counts.

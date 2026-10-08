@@ -42,7 +42,7 @@ function contentFor({ reported, read }: { reported: boolean; read: boolean }): L
       type: 'tool-call',
       toolCallId: 'read-1',
       toolName: 'file',
-      input: JSON.stringify({ action: 'read', path: REFERENCE_PATH }),
+      input: JSON.stringify({ op: 'read', path: REFERENCE_PATH }),
     },
   ];
 }

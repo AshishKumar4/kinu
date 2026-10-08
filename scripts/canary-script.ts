@@ -82,9 +82,9 @@ export function canaryScript(request: ScriptedRequest): ScriptedAnswer | null {
     return made < load.helperSteps ? sleepStep(who, made, load.sleepSeconds) : { text: `${CANARY_PREFIX}_${who.toUpperCase()}_DONE` };
   }
 
-  if (made === 0) return { text: 'Starting the swarm.', toolCall: { name: 'agents', arguments: { action: 'swarm', preset: 'ideate', task: loadText('node', load) } } };
+  if (made === 0) return { text: 'Starting the swarm.', toolCall: { name: 'agents', arguments: { op: 'swarm', preset: 'ideate', task: loadText('node', load) } } };
 
-  if (made === 1) return { text: 'Hiring the helper.', toolCall: { name: 'agents', arguments: { action: 'hire', lifetime: 'task', role: 'task', mission: loadText('helper', load) } } };
+  if (made === 1) return { text: 'Hiring the helper.', toolCall: { name: 'agents', arguments: { op: 'hire', lifetime: 'task', role: 'task', mission: loadText('helper', load) } } };
 
   const job = made - 2;
 

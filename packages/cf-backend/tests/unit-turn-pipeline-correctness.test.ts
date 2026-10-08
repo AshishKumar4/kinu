@@ -181,14 +181,14 @@ describe('turn-pipeline correctness wiring', () => {
     // The agent edits its own working context with its file tool; a stale edit's refusal is core's
     // (unit-context-plane.test.ts).
 
-    const file = toolExecute<{ action: string; path: string; edits?: { old_text: string; new_text: string }[] }, unknown>(
+    const file = toolExecute<{ op: string; path: string; edits?: { old_text: string; new_text: string }[] }, unknown>(
       agent.getTools().file,
     );
 
-    await file({ action: 'read', path: '/context/working.jsonl' });
+    await file({ op: 'read', path: '/context/working.jsonl' });
     expect(await file({
-      action: 'edit', path: '/context/working.jsonl', edits: [{ old_text: 'OLD premise', new_text: 'NEW premise' }],
-    })).toMatchObject({ ok: true });
+      op: 'edit', path: '/context/working.jsonl', edits: [{ old_text: 'OLD premise', new_text: 'NEW premise' }],
+    })).toMatchObject({ applied: [expect.objectContaining({ line: expect.any(Number) })] });
     const prepared = await chatSessionTurns(agent).prepare(turn([first, reply, next]));
     await chatSessionTurns(agent).settle({ messageId: 'edited-answer-2', text: 'second answer', requestId: 'edited-req-2' });
 
@@ -886,8 +886,8 @@ describe('turn-pipeline correctness wiring', () => {
     const turn = (content: string) => chatSessionTurns(agent).prepare({ messages: [{ role: 'user' as const, content }] });
 
     await turn('open the turn');
-    const setMode = toolExecute<{ action: 'mode'; role: string }, unknown>(agent.getTools().tasks);
-    const result = v.parse(RoleResultSchema, await setMode({ action: 'mode', role: 'auditor' }));
+    const setMode = toolExecute<{ op: 'switchRole'; role: string }, unknown>(agent.getTools().tasks);
+    const result = v.parse(RoleResultSchema, await setMode({ op: 'switchRole', role: 'auditor' }));
     expect(result.role).toBe('auditor');
     // Settle first: a second message during a running turn would splice into it.
     await chatSessionTurns(agent).settle({ messageId: 'role-set-answer', text: 'switched' });

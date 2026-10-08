@@ -1,86 +1,28 @@
 /**
- * Shares an account has given, read by the account-delete sweep.
- * Delete needs revoked shares too: their recipients still hold the `sharesReceived_add` row.
- * Worker code only: it claims ownership via the session plane and derives ids from emails.
+ * The account-delete sweep of shares an account has given: every account it sent a card is told to forget them.
+ * The account's own record of what it sent names them, so no workspace is woken to list its shares.
  */
-import { Effect, Result } from 'effect';
-import * as v from 'valibot';
 import { retryTransientDO, type UserCaller } from '@kinu.run/core';
-import {
-  claimOwnedWorkspace,
-  type WorkspaceOwnerClaim, type WorkspaceOwnershipEnv, type WorkspaceRegistry,
-} from './workspace-ownership';
-import { workspaceOwner, type WorkspaceOwnerRpc } from '../workspace-owner-rpc';
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { UserDO } from './user-do';
-import { ROOT_SLATE_CALLER } from '../slates/bindings';
-import { deriveUserId } from '../auth/store';
-import { KinuError, settle } from '@kinu.run/core/obs';
 
-const ShareRowSchema = v.object({
-  id: v.string(), slate: v.string(), createdAt: v.number(), revokedAt: v.nullable(v.number()),
-  users: v.array(v.string()),
-});
+export type ShareRosterAuthority = Pick<UserDO, 'shareCards_withdraw' | 'sharesReceived_forget'>;
 
-interface WorkspaceShares {
-  workspace: string;
-  shares: Array<v.InferOutput<typeof ShareRowSchema>>;
-}
-
-/** A workspace the claim refuses is skipped; one that answered the claim but cannot list its
- *  shares is a broken read and throws. */
-export type ShareRosterAuthority =
-  WorkspaceRegistry & Pick<UserDO, 'listActiveWorkspaces' | 'sharesReceived_forget'>;
-
-export interface SharesGivenEnv<Id>
-  extends WorkspaceOwnershipEnv<Id, WorkspaceOwnerClaim & WorkspaceOwnerRpc> {
+export interface SharesGivenEnv<Id> {
   UserDO: ObjectNamespace<Id, ShareRosterAuthority>;
 }
 
-function sharesGiven<Id>(
-  env: SharesGivenEnv<Id>, owner: UserCaller, userId: string,
-): Effect.Effect<WorkspaceShares[], KinuError> {
-  return Effect.gen(function* () {
-    const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
-    const answer: WorkspaceShares[] = [];
-
-    for (const workspace of (yield* Effect.promise(async () => userDO.listActiveWorkspaces(owner)))) {
-      const claim = yield* Effect.promise(async () => claimOwnedWorkspace(env, userId, workspace.name));
-
-      if (Result.isFailure(claim)) continue;
-
-      const owned = workspaceOwner(env, workspace.name);
-      const listing = yield* Effect.promise(async () => owned.slateAs(ROOT_SLATE_CALLER, { op: 'shares' }));
-
-      if (!listing.ok) return yield* new KinuError('io', `listing blueprints of ${workspace.name}: ${listing.reason}: ${listing.error}`);
-      answer.push({ workspace: workspace.name, shares: v.parse(v.array(ShareRowSchema), listing.value) });
-    }
-
-    return answer;
-  });
-}
-
 /**
- * Must run before the account's own object is torn down: recipients are listed only in the
- * workspaces teardown destroys. Idempotent, so a retried delete does no harm here.
+ * Must run before the account's own object is torn down, which takes its record of recipients with it. Its card jobs
+ * are withdrawn first, so none lands after the forget. Idempotent, so a retried delete does no harm here.
  */
-export function forgetSharesGiven<Id>(
-  env: SharesGivenEnv<Id>, userId: string, owner: UserCaller,
-): Promise<{ recipients: number }> {
-  return settle(Effect.gen(function* () {
-    const emails = new Set<string>();
+export async function forgetSharesGiven<Id>(env: SharesGivenEnv<Id>, userId: string, owner: UserCaller): Promise<{ recipients: number }> {
+  const recipients = await env.UserDO.get(env.UserDO.idFromName(userId)).shareCards_withdraw(owner);
 
-    for (const { shares } of (yield* sharesGiven(env, owner, userId))) {
-      for (const share of shares) {
-        for (const email of share.users) emails.add(email.toLowerCase());
-      }
-    }
+  for (const recipientId of recipients) {
+    const recipient = env.UserDO.get(env.UserDO.idFromName(recipientId));
+    await retryTransientDO('sharesReceived_forget', () => recipient.sharesReceived_forget(owner, userId));
+  }
 
-    for (const email of emails) {
-      const recipient = env.UserDO.get(env.UserDO.idFromName(yield* Effect.promise(async () => deriveUserId(email))));
-      yield* Effect.promise(async () => retryTransientDO('sharesReceived_forget', () => recipient.sharesReceived_forget(owner, userId)));
-    }
-
-    return { recipients: emails.size };
-  }));
+  return { recipients: recipients.length };
 }

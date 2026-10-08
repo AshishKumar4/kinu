@@ -36,7 +36,7 @@ function searchingWith(answer: (run: RecordedGatewayRun) => Response) {
     if (fromTheOwner(run)) {
       return stepOf(run) === 0
         ? toolCallCompletion(run, {
-          tool: 'agents', args: { action: 'swarm', task: 'Name one way to tokenize faster.', preset: 'ideate', branches: 1, depth: 1 },
+          tool: 'agents', args: { op: 'swarm', task: 'Name one way to tokenize faster.', preset: 'ideate', branches: 1, depth: 1 },
         }, 'swarm_0')
         : chatCompletion(run, 'Searching.');
     }

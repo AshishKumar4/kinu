@@ -1,12 +1,6 @@
 import type { ToolExecutionOptions } from 'ai';
 import * as v from 'valibot';
-import { OutputSinkSchema, type OutputSink } from '../types/primitives';
-
-export interface CallJob {
-  readonly id: string;
-  readonly detached: AbortSignal;
-  readonly output: OutputSink;
-}
+import { OutputSinkSchema, type CallJob } from '../types/primitives';
 
 export const CALL_JOB_OPTION = 'kinuJob';
 

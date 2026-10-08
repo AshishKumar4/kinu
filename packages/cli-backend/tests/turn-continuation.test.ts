@@ -325,7 +325,7 @@ describe('RUNTIME CONTEXT SURVIVES A RESTART — where it was woven', () => {
     // The dead process answers a turn, keeps one step of the next and dies inside the one after.
     const promptsA: PromptMessage[][] = [];
     const eventsA = new AwaitedList<SessionEvent>();
-    const search = memoryCall('kept', '{"action":"search","query":"invoices"}');
+    const search = memoryCall('kept', '{"op":"search","query":"invoices"}');
     rt.actor.config.setLearning(false);
     const a = new LocalAgentSession({ rt, db, model: scriptedModel([answer('the first answer'), search, parked('part-')], promptsA), cwd: WORKSPACE, onEvent: (event) => eventsA.push(event) });
     await a.send('the first question', { id: crypto.randomUUID() });

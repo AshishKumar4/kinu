@@ -1,5 +1,7 @@
 import type { ToolSet } from 'ai';
 import { REFUSAL_TYPE } from '../types/tool-outcome';
+import type { CodemodeProvider } from '../types/codemode';
+import { namespaceDeclaration, nativeOperations } from './operation-surfaces';
 
 /** Canonical built-in tool names, reach, and descriptions. Renaming one breaks prompts and UI. */
 
@@ -200,42 +202,12 @@ export const AGENTS_TOOL_ACTIONS = [
 
 export type AgentsToolAction = (typeof AGENTS_TOOL_ACTIONS)[number];
 
-/** `agents` notes by the wiring each needs; `renderAgentsToolDescription` keeps the wired ones. */
-export const AGENTS_TOOL_NOTES = {
-  swarm: '`swarm` runs short-lived nodes in parallel over this workspace and returns what they found, judged, or measured by your verifier when you give an `objective`. It takes minutes; on a live session it runs in the background and its result wakes you.',
-  hire: '`hire` gives one workstream to one agent: a new one from `role` and `mission`, or an existing `agent` with `message`. It returns at once; the agent\'s report, or its failure, arrives later as a message that opens your next turn, so end your turn when you have nothing else to do. A hired subordinate stays in your roster, with its context, after it reports.',
-  task: '`lifetime:"task"` creates an agent for one question: the call returns at once, its answer arrives later as a message, and the agent is archived once it answers.',
-  converse: '`msg` messages an agent without handing it a workstream; `list` reads the roster. A subordinate\'s report and a peer\'s reply arrive later as events.',
-  peers: '`hire` with `scope:"workspace"` creates a specialist workspace; `msg` with `event_id` answers an incoming agent message.',
-} as const;
 
-// Keyed-fact memory actions exist only where a FactsStore is wired; the docstring uses the same gate.
 
-/** Always present: every runtime has `rt.memory` and the transcript. */
-export const MEMORY_NOTE_ACTIONS = ['save', 'search', 'conversations'] as const;
-
-/** Present only where a FactsStore is wired. */
-export const MEMORY_FACT_ACTIONS = ['remember', 'recall', 'forget'] as const;
-
-/** Memory actions a runtime can perform: the single facts gate for the enum, refusals and dispatch. */
-export function memoryActionsFor(hasFacts: boolean): readonly MemoryToolAction[] {
-  return hasFacts ? [...MEMORY_NOTE_ACTIONS, ...MEMORY_FACT_ACTIONS] : MEMORY_NOTE_ACTIONS;
-}
-
-export const WEB_TOOL_ACTIONS = ['search', 'fetch', 'screenshot'] as const;
-
-export type WebToolAction = (typeof WEB_TOOL_ACTIONS)[number];
-
-export const FILE_TOOL_ACTIONS = ['read', 'write', 'edit', 'list', 'stat', 'search'] as const;
 
 // `tasks` is separate from `memory`: live plan state for current work, not durable recall.
 
-export const TASKS_TOOL_ACTIONS = ['add', 'update', 'list', 'mode'] as const;
 
-
-export type MemoryToolAction =
-  | (typeof MEMORY_NOTE_ACTIONS)[number]
-  | (typeof MEMORY_FACT_ACTIONS)[number];
 
 /** Memory spec gated on facts; `BUILTIN_TOOL_SPECS.memory` is the full surface. */
 export function memoryToolSpec(hasFacts: boolean): BuiltinToolSpec {
@@ -244,10 +216,10 @@ export function memoryToolSpec(hasFacts: boolean): BuiltinToolSpec {
     summary: hasFacts
       ? 'Durable memory across turns: keyed facts, notes, and your past conversations.'
       : 'Durable memory across turns: notes and your past conversations.',
-    notes: hasFacts ? ['`remember` on an existing key replaces its value.'] : [],
+    notes: [],
     example: hasFacts
-      ? "memory({action:'remember', key:'deploy.target', value:'staging'})"
-      : "memory({action:'save', content:'Staging deploys need the tunnel up first.'})",
+      ? "memory({op:'remember', key:'deploy.target', value:'staging'})"
+      : "memory({op:'note', content:'Staging deploys need the tunnel up first.'})",
   };
 }
 
@@ -286,37 +258,32 @@ export const BUILTIN_TOOL_SPECS = {
     name: 'file',
     summary: 'Read, list, stat, search, edit or write files in your workspace.',
     notes: [
-      'Read a file before editing or overwriting it; the change is refused otherwise, or when the file changed after that read.',
-      'A read that stops early names the offset that continues it.',
       'An edit fails when its target text is not there; `sed -i`, heredocs and scripts in `shell` write regardless.',
     ],
-    example: "file({action:'edit', path:'src/api.ts', edits:[{old_text:'timeout: 30', new_text:'timeout: 60'}]})",
+    example: "file({op:'edit', path:'src/api.ts', edits:[{old_text:'timeout: 30', new_text:'timeout: 60'}]})",
   },
   agents: {
     name: 'agents',
     summary: 'Delegate work to other agents and message them.',
-    notes: Object.values(AGENTS_TOOL_NOTES),
+    notes: [],
     // Cheapest complete call: `ideate` is the one preset that takes no `objective`.
-    example: "agents({action:'swarm', preset:'ideate', task:'Three ways to stop staging 502ing under load'})",
+    example: "agents({op:'swarm', preset:'ideate', task:'Three ways to stop staging 502ing under load'})",
   },
   memory: memoryToolSpec(true),
   tasks: {
     name: 'tasks',
     summary: 'Your task list, shown in your context at every step, and your active role.',
     notes: [],
-    example: "tasks({action:'add', titles:['Reproduce the 502', 'Patch the gateway timeout', 'Add a regression test']})",
+    example: "tasks({op:'add', titles:['Reproduce the 502', 'Patch the gateway timeout', 'Add a regression test']})",
   },
   web: {
     name: 'web',
     summary: 'Search the web, fetch one URL as markdown, or take a screenshot of it.',
     notes: [
-      'Private and internal addresses are blocked.',
       'A fetched page too long to return is saved to the workspace, and the result names the file.',
-      'A plain fetch reads the page as the server sends it; `render: true` loads it in a browser first, for a page its scripts build.',
-      "Rendering and screenshots use the light Kitesurf browser; `engine: 'chrome'` gets through some bot-checked and rate-limited sites. Where Browser Run is not reachable they refuse, naming what is missing.",
-      'A screenshot is saved under `screenshots/` and shown to you.',
+      'Where Browser Run is not reachable, a rendered fetch or a screenshot refuses, naming what is missing.',
     ],
-    example: "web({action:'search', query:'durable objects sqlite storage limits'})",
+    example: "web({op:'search', query:'durable objects sqlite storage limits'})",
   },
   report: {
     name: 'report',
@@ -358,7 +325,16 @@ export const CODEMODE_CODE_DESCRIPTION = 'The JavaScript program.';
  * every namespace declaration in order.
  * Both backends compose it here, never through a template token: a `$` in a declaration is text.
  */
-export function renderCodemodeDescription(declarations: readonly (string | undefined)[], substrate: SandboxSubstrate = 'hosted'): string {
+export function renderCodemodeDescription(
+  providers: readonly Pick<CodemodeProvider, 'name' | 'types' | 'declarations' | 'tools'>[], native: ToolSet, substrate: SandboxSubstrate = 'hosted',
+): string {
+  const described = new Set(Object.values(native).flatMap(nativeOperations));
+  // Only the members a narrowing or the work mode left are declared.
+
+  const declarations = providers.map(({ name, types, declarations: members, tools }) => (members === undefined
+    ? types
+    : namespaceDeclaration(name, Object.fromEntries(Object.entries(members).filter(([member]) => Object.hasOwn(tools, member))), described)));
+
   return [
     BUILTIN_TOOL_DESCRIPTIONS.eval,
     `- ${SANDBOX_RUNS[substrate]}`,

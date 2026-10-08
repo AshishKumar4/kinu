@@ -285,7 +285,7 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
 describe('BackgroundJobRunner.create — descriptive labels', () => {
   test('a backgrounded search labels the task it is running', () => {
     const { runner, store } = setup();
-    const id = runner.create('agents', { action: 'swarm', task: 'investigate the flaky test' }, 'build', new AbortController());
+    const id = runner.create('agents', { op: 'swarm', task: 'investigate the flaky test' }, 'build', new AbortController());
     expect(store.get(id)?.label).toBe('search: investigate the flaky test');
   });
 
@@ -303,7 +303,7 @@ describe('BackgroundJobRunner.create — descriptive labels', () => {
 
   test('an unrecognized shape gets no label rather than a guess', () => {
     const { runner, store } = setup();
-    const id = runner.create('agents', { action: 'hire', agent: 'x' }, 'build', new AbortController());
+    const id = runner.create('agents', { op: 'assign', agent: 'x' }, 'build', new AbortController());
     expect(store.get(id)?.label).toBeNull();
   });
 });
@@ -1366,7 +1366,7 @@ describe('a background job gives up its turn, and hands over what it has', () =>
 
   test('a failed job is not told to retry — that advice is what minted a second search', async () => {
     const { runner, store, enqueued, settled } = setup();
-    const id = runner.create('agents', { action: 'swarm' }, 'build', new AbortController());
+    const id = runner.create('agents', { op: 'swarm' }, 'build', new AbortController());
     runner.detach(id, 'agents', Promise.reject(new Error('the provider refused')));
     await settled();
 
@@ -1386,10 +1386,10 @@ test('a recovered Plan job cannot mutate project files through a Build-shaped ca
 
   if (file === undefined) throw new Error('No file tool');
   const write = toolExecute<JsonValue, JsonValue>(file);
-  await write({ action: 'read', path });
+  await write({ op: 'read', path });
   const first = setup();
   first.store.create({ id: 'plan-write', kind: 'shell', workMode: 'plan', input: '{}', now: Date.now() });
-  const recovered = setup({ db: first.db, resume: async () => write({ action: 'write', path, content: 'changed' }) });
+  const recovered = setup({ db: first.db, resume: async () => write({ op: 'write', path, content: 'changed' }) });
   await recovered.runner.recover({ jobId: 'plan-write', phase: 'running' });
   await recovered.settled();
   expect(await readText(rt.storage.vfs, path)).toBe('original');

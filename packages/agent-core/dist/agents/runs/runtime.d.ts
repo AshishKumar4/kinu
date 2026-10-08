@@ -1,4 +1,5 @@
 import { Revision } from "../../core/index.js";
+import type { ContentStore } from "../../content/index.js";
 import type { PrincipalRef } from "../../identity/index.js";
 import type { RunCommitId, TurnId } from "../../execution-references/index.js";
 import type { ReceiptId } from "../../invocation-references/index.js";
@@ -15,6 +16,7 @@ import { RunId, type AcceptanceId, type RunBranchId } from "./id.js";
 import type { TurnAdmissionHandle } from "./handle.js";
 import { RunInvocationDelivery } from "./invocation-delivery.js";
 import { type LeaseToken } from "./lease.js";
+import { MergeContent } from "./merge-content.js";
 import { RunConfigurationSnapshot } from "./pins.js";
 import { TurnPlacementSnapshot } from "./placement.js";
 import { Run, RunBranch } from "./run.js";
@@ -122,8 +124,14 @@ export declare class RunRuntime<Transaction> {
     appendTurnCommitInTransaction(tx: Transaction, commit: RunCommit, expectedBranchRevision: Revision, now: Date): void;
     appendSystemEvidenceCommit(commit: RunCommit, expectedBranchRevision: Revision, now: Date): void;
     appendSystemEvidenceCommitInTransaction(tx: Transaction, commit: RunCommit, expectedBranchRevision: Revision, now: Date): void;
-    mergeRun(commit: RunCommit, expectedBranchRevision: Revision, now: Date): void;
-    mergeRunInTransaction(tx: Transaction, commit: RunCommit, expectedBranchRevision: Revision, now: Date): void;
+    /**
+     * Reads, before the merge's synchronous span, every content a merge of `commit` can read:
+     * its parents' trees, its own tree and common-ancestor tree, and the bytes of the PolicySet
+     * its pins name. Pass the result to `mergeRun`; content this did not read is refused there.
+     */
+    loadMergeContent(store: ContentStore, commit: RunCommit): Promise<MergeContent>;
+    mergeRun(commit: RunCommit, expectedBranchRevision: Revision, now: Date, content?: MergeContent): void;
+    mergeRunInTransaction(tx: Transaction, commit: RunCommit, expectedBranchRevision: Revision, now: Date, content?: MergeContent): void;
     undoRun(commit: RunCommit, expectedBranchRevision: Revision, now: Date): void;
     undoRunInTransaction(tx: Transaction, commit: RunCommit, expectedBranchRevision: Revision, now: Date): void;
     /**
@@ -269,6 +277,14 @@ export declare class RunRuntime<Transaction> {
     effectiveTranscriptInTransaction(tx: Transaction, runId: RunId, branchId: RunBranchId, base?: RunCommitId): readonly RunCommit[];
     private appendInTransaction;
     private validateMerge;
+    /**
+     * The `policies.treeMerge` of the PolicySet this merge's pins name (§5.2.1, §9.2), read
+     * off the prefetched bytes whose digest is the pinned one — never off a host's answer. The
+     * source record must be the one the pin names by id, revision and digest, and the bytes
+     * must hash to that digest before they are decoded.
+     */
+    private declaredTreeMerge;
+    private validateTreeResolution;
     /**
      * A merge authorized by one item of a declared fold must be the step that item declared.
      * The declaration is the ordered `administer` payload (§5.2); the merge chain below this

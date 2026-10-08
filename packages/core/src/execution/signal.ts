@@ -8,6 +8,15 @@ import * as v from 'valibot';
 
 const ExecContextSchema = v.object({ signal: v.optional(v.instance(AbortSignal)) });
 
+/** What an `exec` call carries beyond its arguments: its stop signal, and the device-request ownership of its job. */
+export interface ExecCallContext {
+  readonly signal?: AbortSignal;
+  readonly onDeviceRequest?: (requestId: string) => void;
+  readonly deviceRequestOwner?: () => string | null;
+  readonly job?: string;
+  readonly detached?: AbortSignal;
+}
+
 export function readExecSignal(input: { context: unknown }): AbortSignal | undefined {
   const parsed = v.safeParse(ExecContextSchema, input.context);
 

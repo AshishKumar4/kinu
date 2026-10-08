@@ -1090,7 +1090,7 @@ describe('the public session speaks the frames the web client speaks', () => {
     // different tool being broken.
     expect(turn.toolCalls[0]?.result).toBe('Wrote note.txt');
     expect(turn.toolCalls[0]?.args).toEqual({
-      action: 'write', path: 'note.txt', content: 'public session ok',
+      op: 'write', path: 'note.txt', content: 'public session ok',
     });
     // Two `finish-step` chunks, two steps. The step count is the primary
     // instrument for the deployed loop's stop condition, so an off-by-one here
