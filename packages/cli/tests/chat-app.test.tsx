@@ -6,7 +6,7 @@ import { KinuError } from '@kinu.run/core/obs';
 import { scratchDir } from '@kinu.run/test-utils';
 
 import type { AgentClient, AgentClientStatus, AgentTranscriptMessage } from '../src/agent-client';
-import { JOB_OUTPUT_EVENT, missingSubordinateHistory, READS_CHANGED_EVENT, type AgentModelMenu, type JobOutputTail, type SubordinateChild } from '@kinu.run/core';
+import { JOB_OUTPUT_EVENT, missingSubordinateHistory, READS_CHANGED_EVENT, TURN_FAILURE_METADATA_KEY, type AgentModelMenu, type JobOutputTail, type SubordinateChild } from '@kinu.run/core';
 import type { TuiHubData } from '../src/tui/hubs';
 import { asFetchFunction, codenameFor } from '@kinu.run/core';
 
@@ -702,6 +702,20 @@ const EXPORTED_HISTORY = async (): Promise<AgentTranscriptMessage[]> => [
   { id: '3', role: 'tool_result', content: 'schema.sql', toolName: 'shell', toolCallId: 't', success: true },
   { id: '4', role: 'assistant', content: 'The old table keeps its rows.' },
 ];
+
+// The final walk on 04a4dd0ab: a refused turn left the owner's message alone once the conversation was opened again.
+test('a reopened conversation shows a refused turn\'s failure in the provider\'s words, as the live turn did', async () => {
+  const agent = fakeClient({ name: 'refused', history: async () => [
+    { id: 'q-1', role: 'user', content: 'Plan the quarterly offsite.' },
+    { id: 'a-1', role: 'assistant', content: '', metadata: { [TURN_FAILURE_METADATA_KEY]: 'opencode-go is rate-limited until 2026-10-17 00:18 UTC: Go usage limit exceeded' } },
+  ] });
+
+  const screen = await mountChat(agent.client);
+
+  // One render draws the whole reopened conversation, its failure with it.
+  await screen.waitFor('the reopened conversation', () => screen.frame().includes('Plan the quarterly offsite.'));
+  expect(screen.frame().indexOf('Go usage limit exceeded')).toBeGreaterThan(screen.frame().indexOf('Plan the quarterly offsite.'));
+});
 
 test('/copy hands the last answer to the clipboard, and says when there is none', async () => {
   const answered = fakeClient({ name: 'copies', history: EXPORTED_HISTORY });
