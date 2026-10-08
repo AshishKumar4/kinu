@@ -324,7 +324,7 @@ export async function typeIntoComposer(page: Page, text: string): Promise<Elemen
 /** Type into the chat column's live composer and press its Send; resolves once
  *  the pane shows the words and the turn they started has ended. */
 /** + then the first message, as a person opens a chat; resolves once that opening turn has settled. */
-async function startNewChat(page: Page): Promise<void> {
+export async function startNewChat(page: Page): Promise<void> {
   await page.click(`${CHATS} a[aria-label="New chat"]`);
   await until(page, 'the new-chat question', `document.querySelector('[data-new-chat] textarea') !== null`);
   await page.type('[data-new-chat] textarea', NEW_CHAT_OPENING);

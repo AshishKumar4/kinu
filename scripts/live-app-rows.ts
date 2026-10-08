@@ -22,7 +22,7 @@ import { DESKTOP, withLiveApp, createWorkspace, listWorkspaces, type LiveApp } f
 import {
   CHAT_COMPOSER_LIVE, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, OPEN_NAMES, recordDeadEnds,
   countRpc, frameLedger, named, openInspector, painted, pressUntil, recordRenderTasks, rendered, sendInChat, settled, settledAfter,
-  until, waitOn, type ControlAttempt, type RpcCounter,
+  startNewChat, until, waitOn, type ControlAttempt, type RpcCounter,
 } from './product-flows';
 import { rowVerdicts, type RowVerdicts } from './row-verdicts';
 import {
@@ -31,11 +31,11 @@ import {
   SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK,
   laterReconnectTurn, toldBackTurn, unsentFirstTurn,
   DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, registerScriptedModel,
-  startScriptedModel, type HeldCall, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, planTasksProbe, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn,
+  startScriptedModel, type HeldCall, PLAN_MISSION, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, planTasksProbe, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn,
 } from './scripted-model';
 import { FALLBACK_ANSWER, type ScriptedRequest } from './scripted-protocol';
 import { openPublicSocket } from '../tests/first-run/public-socket';
-import { drivePlanReview, type WalkthroughVerdict } from './plan-demo-film';
+import { drivePlanReview, PLAN_STATUS, type WalkthroughVerdict } from './plan-demo-film';
 
 /** Screenshots land beside the other lanes' evidence, outside the worktree. */
 const SHOTS = join(import.meta.dir, '..', '..', 'kinu-logs', 'wave2-0917', 'browser');
@@ -194,6 +194,7 @@ export interface TierVerdicts {
   geometry: GeometryVerdict | null;
   controls: ControlsVerdict | null;
   walkthrough: WalkthroughVerdict | null;
+  agentPlan: AgentPlanVerdict | null;
   keptTab: KeptTabVerdict | null;
   chatScroll: ChatScrollVerdict | null;
   midThought: MidThoughtVerdict | null;
@@ -510,6 +511,51 @@ async function measureWalkthrough(newPage: LiveApp['newPage'], origin: string): 
   await page.close();
 
   return verdict;
+}
+
+/** The agent-plan row: the pane the owner reviewed in, the review it saw there and the decision it took. */
+export interface AgentPlanVerdict {
+  readonly pane: string;
+  readonly planReviewShown: boolean;
+  readonly approveControl: string;
+  readonly planStatus: string;
+}
+
+const PLAN_DECISION_LIVE = `[...document.querySelectorAll('#inspector [data-plan-decisions] button:not([disabled])')]
+  .some((button) => button.getClientRects().length > 0)`;
+
+/** An added agent's own Plan turn, in its own pane: the plan it submits comes back for review beside that pane and is
+ *  decided through that agent's window (D9), as the walkthrough row's plan is through the workspace's. */
+async function measureAgentPlan(newPage: LiveApp['newPage'], origin: string): Promise<AgentPlanVerdict> {
+  const workspace = await createWorkspace(origin, { name: `live-row-agent-plan-${RUN_ID}`, purpose: 'agent plan review', model: SCRIPTED_MODEL_SPEC });
+  const page = await newPage();
+
+  await page.goto(`${origin}/workspace/${workspace}`, { waitUntil: 'load' });
+  await startNewChat(page);
+  const pane = v.parse(v.string(), await page.evaluate('location.pathname'));
+
+  const planMode = `[...document.querySelectorAll('#chat [aria-label="Turn mode"] button')].find((button) => /^plan$/iu.test(button.textContent?.trim() ?? ''))`;
+
+  await page.evaluate(`${planMode}?.click()`);
+  await until(page, "the agent pane's composer in Plan", `${planMode}?.getAttribute('aria-pressed') === 'true'`);
+  await sendInChat(page, PLAN_MISSION);
+  await until(page, "the agent's plan, decidable beside its pane", PLAN_DECISION_LIVE);
+  const planReviewShown = await page.evaluate(`document.querySelector('#inspector [data-plan-body]') !== null`) === true;
+
+  const approveControl = v.parse(v.string(), await page.evaluate(`(() => {
+    const approve = [...document.querySelectorAll('#inspector [data-plan-decisions] button:not([disabled])')]
+      .find((button) => /approve/iu.test(button.getAttribute('aria-label') ?? button.textContent ?? ''));
+    approve?.click();
+    return approve === undefined ? '' : (approve.getAttribute('aria-label') ?? approve.textContent ?? '').trim();
+  })()`));
+
+  await until(page, 'the approval, recorded on the plan', `${PLAN_STATUS} === 'Approved'`);
+  const planStatus = v.parse(v.string(), await page.evaluate(PLAN_STATUS));
+
+  await shoot(page, 'agent-plan-approved');
+  await page.close();
+
+  return { pane, planReviewShown, approveControl, planStatus };
 }
 
 const MARKED_TAB = `(document.querySelector('#inspector .p-tabstrip [aria-current="true"]')?.getAttribute('aria-label') ?? null)`;
@@ -1694,7 +1740,7 @@ async function measureState(app: LiveApp): Promise<StateVerdict> {
 /** A row a file can run, by the name its log line carries, in the order the suite ran them. */
 export const LIVE_ROWS = [
   'live-indicator', 'opened-mid-turn', 'reconnect', 'observed-reconnect', 'slept', 'watched-slept', 'answered',
-  'unsent-answer', 'plan-tabs', 'geometry', 'controls', 'walkthrough', 'kept-tab', 'chat-scroll', 'mid-thought', 'dropped-file', 'cleared', 'plan-tasks',
+  'unsent-answer', 'plan-tabs', 'geometry', 'controls', 'walkthrough', 'agent-plan', 'kept-tab', 'chat-scroll', 'mid-thought', 'dropped-file', 'cleared', 'plan-tasks',
   'slate-ui', 'state',
 ] as const;
 
@@ -1717,7 +1763,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
   const observed: TierVerdicts = {
     liveIndicator: null, openedMidTurn: null, reconnect: null, observedReconnect: null, slept: null, watchedSlept: null, answered: null,
     unsentAnswer: null, bootFailure: null, planTabs: null, geometry: null,
-    controls: null, walkthrough: null, keptTab: null, chatScroll: null, midThought: null, droppedFile: null, cleared: null, planTasks: null, slateUi: null, state: null,
+    controls: null, walkthrough: null, agentPlan: null, keptTab: null, chatScroll: null, midThought: null, droppedFile: null, cleared: null, planTasks: null, slateUi: null, state: null,
   };
 
   // Set once the dev server is up: a row that breaks names the file its server's output is kept in.
@@ -1771,6 +1817,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
         'geometry': async () => { observed.geometry = await attempt('geometry', () => measureGeometry(newPage, origin)); },
         'controls': async () => { observed.controls = await attempt('controls', () => measureControls(newPage, origin)); },
         'walkthrough': async () => { observed.walkthrough = await attempt('walkthrough', () => measureWalkthrough(newPage, origin)); },
+        'agent-plan': async () => { observed.agentPlan = await attempt('agent-plan', () => measureAgentPlan(newPage, origin)); },
         'kept-tab': async () => { observed.keptTab = await attempt('kept-tab', () => measureKeptTab(newPage, origin)); },
         'chat-scroll': async () => { observed.chatScroll = await attempt('chat-scroll', () => measureChatScroll(newPage, origin)); },
         'mid-thought': async () => { observed.midThought = await attempt('mid-thought', () => measureMidThought(newPage, origin)); },
