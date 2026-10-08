@@ -1554,6 +1554,7 @@ export {
   type ReportHeadDelta, type PublishHeadStream,
   reconcileInterruptedForks, jobRedriveResumeGate, resumableForkRoots,
   FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
+  ForkNotices, forkNoticeDeliveries, initForkNoticeTable, type ForkNotice,
   HeadController, runHeadSplit, type HeadRuntime, type HeadGrounding, type SpawnedHead, type MergeLLMFn,
   type SplitPhaseEvent,
   type HeadJournalPort,

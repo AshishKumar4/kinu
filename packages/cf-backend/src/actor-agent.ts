@@ -8,7 +8,6 @@ import type { VfsDirent, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 import {
   Agent, callable, getCurrentAgent,
   type AgentContext, type Connection, type ConnectionContext,
-  type FiberRecoveryContext, type FiberRecoveryResult,
   type WSMessage,
 } from "agents";
 import {
@@ -43,7 +42,7 @@ import {
 import { codemodeSurface, hostedWindowMay, PAGE_KEEPALIVE, readsWrittenBy, requiredRpcAccess, ROSTER_READS, rpcMovesOverview, type LiveRead, type SqlExec } from "@kinu.run/core";
 import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
-import { createAgentTracing, hold, logged, recording, renderThrownChain, type AgentTracing, settle, settleSync, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
+import { createAgentTracing, hold, recording, renderThrownChain, type AgentTracing, settle, settleSync, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
 import {
   createActorCompaction, type CompactionExtension,
   createCompactionStateStore,
@@ -175,14 +174,6 @@ import {
   hostNodeSeat, nodeCodemodeTool, hostedSubordinateRuntime,
   type HostedActorSeams,
 } from "./hosted-actors";
-import {
-  classifyRecoveredFiber, EVOLUTION_LANE_FIBER,
-  TERMINAL_LANE_FIBER,
-  // Recovery budget this backend declares to the SDK, applied before the framework allocates.
-  sweepUnrecoverableFibers, fiberRowStore,
-  FIBER_RECOVERY_MAX_AGE_MS,
-  type FiberLaneTransports,
-} from "./fiber-recovery";
 import {
   // Shared retry pace for notice carrier, this tick's re-arm and the job runner's deferral.
   recoveryBackoffMs,
@@ -509,6 +500,9 @@ async function reachedIn<A>(
 
   return await runWorkModeInvocation(authority.mode, () => use([...narrowed, toolsNamespace(reachedTools, undefined)]));
 }
+
+/** The evolution lane's `fibers` row name. */
+export const EVOLUTION_LANE_FIBER = 'evolution:settle';
 
 export abstract class ActorAgent extends Agent<Env> {
   // Actor profile: these members are the whole difference between actor kinds.
@@ -1338,10 +1332,9 @@ export abstract class ActorAgent extends Agent<Env> {
       turnIsLive: (turnId) => this.chatLoop.turnMayStillRun(turnId),
       scheduleRetry: async (atMs: number) => { await this.scheduleTerminalRetry(atMs); },
       settled: async () => {},
-      // A durable fiber, since a bare promise is not a wake: its run row hands leftovers to classifyRecoveredFiber. Rests
-      // once the close has left the held set, so of a close's end and a quiet pump, whichever comes last rests the actor.
-      hold: (close) => this.runFiber(TERMINAL_LANE_FIBER, async (ctx) => {
-        ctx.stash({ lane: TERMINAL_LANE_FIBER });
+      // Kept alive, not recovered: the ledger row is the obligation and the terminal wake replays it. Rests once the
+      // close has left the held set, so of a close's end and a quiet pump, whichever comes last rests the actor.
+      hold: (close) => this.holdLane(async () => {
         await close();
         await this.restWhenIdle();
       }).finally(() => { this.overviewChanged(); }),
@@ -1731,6 +1724,9 @@ export abstract class ActorAgent extends Agent<Env> {
   private _chatLoop: ChatSession | null = null;
   /** A read never builds the chat to ask. */
   protected get chatTurnOwed(): boolean { return this._chatLoop?.turnOwed ?? false; }
+
+  /** The runs the loop drives, without constructing it: constructing re-opens the open turn. */
+  protected drivenChatRuns(): readonly string[] { return this._chatLoop?.drivenRuns() ?? []; }
   protected get chatLoop(): ChatSession {
     if (!this._chatLoop) {
       this._chatLoop = new ChatSession({
@@ -2033,17 +2029,15 @@ export abstract class ActorAgent extends Agent<Env> {
   private _evolutionSettling: AsyncTaskOwner | null = null;
 
   /**
-   * Settle both evolution lanes (turn lane and cadence session pass) in a durable fiber, detached so
-   * the chat queue is not blocked. A fiber, not `keepAliveWhile`: its `cf_agents_runs` row lets
-   * {@link onFiberRecovered} resume a lane lost to deploy/restart. Inputs are re-read from durable
-   * queues, so the stash holds only the lane name. One lane at a time.
+   * Settle both evolution lanes (turn lane and cadence session pass) in a durable fiber, detached so the chat queue is
+   * not blocked. Inputs are re-read from durable queues, so the row needs no checkpoint: one an earlier activation left
+   * is re-driven by the next (`OrchestratorAgent.recoverDeadActivation`). One lane at a time.
    */
   protected settleEvolutionInBackground(): void {
     if (this._evolutionSettling !== null) return;
     const owner: AsyncTaskOwner = { promise: null };
     this._evolutionSettling = owner;
-    owner.promise = hold(Effect.ensuring(Effect.catchCause(Effect.promise(() => this.runFiber(EVOLUTION_LANE_FIBER, async (ctx) => {
-      ctx.stash({ lane: EVOLUTION_LANE_FIBER });
+    owner.promise = hold(Effect.ensuring(Effect.catchCause(Effect.promise(() => this.rt.schedule.fiber(EVOLUTION_LANE_FIBER, async () => {
       await this.orch.settleTracked();
       await this.orch.runDueSessionEvolution();
     })), recording({ doing: 'settling the turn and session evolution lanes', otherwise: 'unavailable' }, (failure) => {
@@ -2557,11 +2551,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return null;
   }
 
-  /** Re-drives a recovered job fiber. */
-  protected workspaceJobs(): FiberLaneTransports['jobs'] {
-    return this.jobAuthorities;
-  }
-
   /** Every actor's runner; null addresses the root's sockets. */
   protected actorJobRunner(owner: string | null, actor: ActorJobSeams): BackgroundJobRunner {
     const { notifySettled, ...own } = actor;
@@ -2916,6 +2905,7 @@ export abstract class ActorAgent extends Agent<Env> {
       const runtime = createCFRuntime(this, {
         env: this.env,
         ctx: this.ctx,
+        holdLane: (body) => this.holdLane(body),
         workspaceBox: (shellId) => this.workspaceBox(shellId),
         acc: () => this.acc,
         getCliCwdForDevice: () => this.getCliCwdForDevice(),
@@ -4474,72 +4464,18 @@ export abstract class ActorAgent extends Agent<Env> {
     return (await this.modelForSource('judge')).model;
   }
 
-  // Work that outlives its request goes through `runFiber` (a `cf_agents_runs` row);
-  // recovery classification lives in ./fiber-recovery.ts.
-
-  /**
-   * Not `async` on purpose: the SDK awaits this inside `blockConcurrencyWhile`, which resets the object
-   * at `do.block_concurrency.cancel_ms`; re-drives go to {@link redriveRecoveredLane}. Must never throw.
-   */
-  override onFiberRecovered(ctx: FiberRecoveryContext): Promise<FiberRecoveryResult> {
-    this.actorHandle();
-
-    return Promise.resolve(classifyRecoveredFiber(this.fiberLanes, ctx));
-  }
-
-  /** Built fresh per recovery rather than captured at interruption time. */
-  private get fiberLanes(): FiberLaneTransports {
-    return {
-      jobs: this.workspaceJobs(),
-      runDueSessionEvolution: () => this.orch.runDueSessionEvolution(),
-      armOwedTerminalRecovery: () => this.terminal.armOwedRecovery(),
-      deliverSignal: (signal) => this.orch.inbox.send(signal),
-      redrive: (lane, checkpoint, body) => this.redriveRecoveredLane(lane, checkpoint, body),
-    };
-  }
-
-  /** Declared so the value Kinu reads and the SDK enforces are the same (see fiber-recovery.ts). */
-  static options = {
-    fiberRecoveryMaxAgeMs: FIBER_RECOVERY_MAX_AGE_MS,
-  };
-
-  /** Set when this activation's fiber sweep ran to its end; later ticks skip it. */
-  private fiberSweepFinished = false;
-
-  /**
-   * Cleanup only; called from `onStart`, synchronous and bounded so safe in the init gate.
-   * Failures are logged and dropped so activation still succeeds.
-   */
-  protected sweepUnrecoverableFiberRows(activation: boolean): boolean {
-    // Once per activation: only a truncated or failed pass leaves rows for the wake's ticks.
-    if (this.fiberSweepFinished && !activation) return false;
-    // A failed pass reports truncated so the caller arms the wake and retries.
-    let truncated = true;
-
-    settleLoggedSync('fiber.unrecoverable_sweep_failed', { doing: 'dropping the interrupted-fiber rows the recovery budget refused', otherwise: 'io' }, () => {
-      const result = sweepUnrecoverableFibers(fiberRowStore(this.boundSql), Date.now());
-
-      if (result.dropped > 0 || result.truncated) {
-        diagnostics.event('fiber.unrecoverable_rows_dropped', {
-          dropped: result.dropped,
-          scanned: result.scanned,
-          truncated: result.truncated,
-        });
-      }
-
-      truncated = result.truncated;
-      this.fiberSweepFinished = !truncated;
-    }, { workspace: this.name });
-
-    return truncated;
-  }
-
   /**
    * Async maintenance that may queue turns or cross objects, so it runs in the alarm, never activation.
    * Idempotent; returns whether the budget filled and work must continue next tick.
    */
   protected async maintenanceWork(): Promise<boolean> {
     return recoverSubordinateLifecycles(this.subordinateRoster, this.subordinateRuntime());
+  }
+
+  /** A lane: work held alive whose own row outlives the activation running it, so the next one re-drives what it left
+   *  (D11). Not a fiber: the platform's recovery hook runs under a timeout. */
+  protected holdLane<T>(body: () => Promise<T>): Promise<T> {
+    return this.keepAliveWhile(body);
   }
 
   /** Detached work this actor owns until its lexical error boundary settles. */
@@ -4576,26 +4512,9 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /** Every budgeted activation sweep; subclasses fold in their own. True if any pass filled its
-   *  budget (caller arms the wake). Synchronous so the init gate can run the same seam. `activation`:
-   *  the pass `onStart` runs, which sweeps the fiber table whatever a previous pass on this instance found. */
-  protected maintenanceSweeps(activation = false): boolean {
-    return this.sweepUnrecoverableFiberRows(activation);
-  }
-
-  /**
-   * Re-drive one interrupted lane off the init gate via `runFiber`, whose synchronous prefix writes
-   * the durable `cf_agents_runs` row before this returns; one dispatch per entry (own checkpoint).
-   */
-  protected redriveRecoveredLane(
-    lane: string, checkpoint: JsonValue, body: () => Promise<void>,
-  ): void {
-    this.detachOwned(logged('fiber.lane_redrive_failed', { doing: `re-driving the "${lane}" lane an interruption left behind`, otherwise: 'unavailable' }, async () => {
-      // The stash wrapper writes `initialSnapshot` in the same synchronous prefix as the row insert,
-      // so a reset never finds a recoverable lane with a null payload.
-      await this._runFiberWithStashWrapper(lane, async () => { await body(); }, {
-        initialSnapshot: checkpoint,
-      });
-    }, { workspace: this.name, lane }));
+   *  budget (caller arms the wake). Synchronous so the init gate can run the same seam. */
+  protected maintenanceSweeps(): boolean {
+    return false;
   }
 
   protected invalidateModelCaches(): void {

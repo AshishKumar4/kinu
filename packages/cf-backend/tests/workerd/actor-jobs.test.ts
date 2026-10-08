@@ -9,7 +9,7 @@
 
 import { abortAllDurableObjects, env } from 'cloudflare:test';
 import { getAgentByName } from 'agents';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as v from 'valibot';
 import { HOSTED_ACTOR_ID_HEADER, hostedActorSocketPath, ORCHESTRATOR_AGENT_SLUG } from '@kinu.run/core';
 import { JOB_NOTED, JOB_OUTPUT, type ActorRow } from './hire-shapes';
@@ -88,7 +88,7 @@ describe("a hired agent's job", () => {
       expect(wake).toEqual([expect.stringContaining(JOB_OUTPUT)]);
       expect((await chat(workspace)).at(-1)).toContain(JOB_NOTED);
 
-      // A restart's fiber recovery that finds the job settled re-delivers its wake; the auditor is woken once all the same.
+      // A restart that finds the job's lane row over a settled job re-delivers its wake; the auditor is woken once all the same.
       await probe(workspace).redeliverJobWake(workspace, job.id);
 
       const admitted = (await probe(workspace).observe(workspace)).log
@@ -133,8 +133,8 @@ describe("a hired agent's job", () => {
     expect((await probe(workspace).jobRows(workspace)).find((row) => row.id === job.id)?.status).toBe('cancelled');
   });
 
-  it.each(['retained', 'expired'] as const)("is settled, and its auditor woken without a client, after a restart with a %s fiber", async (fiberKind) => {
-    const workspace = `hire-job-restart-${fiberKind}`;
+  it('is settled, and its auditor woken without a client, after a restart that left its lane row', async () => {
+    const workspace = 'hire-job-restart';
     const { pane, job } = await hiredJob(workspace);
 
     pane.close();
@@ -142,26 +142,24 @@ describe("a hired agent's job", () => {
     const before = await probe(workspace).jobWatchState(workspace);
     expect(before).toMatchObject({ terminalRetry: false, agentWakes: 0, fibers: 1 });
 
-    // No row is deleted by the fixture: the installed SDK's max-age policy expires it on activation.
-    if (fiberKind === 'expired') expect(await probe(workspace).ageJobFiber(workspace, job.id)).toBe(1);
-
     await abortAllDurableObjects();
 
-    // A passive witness outside the workspace reads what its first restarted alarm returned after
-    // expiry and after any recovery wake ended. Neither observer addresses the workspace.
-    if (fiberKind === 'retained') await probe(workspace).modelSaw(workspace, [job.id, 'failed']);
+    // A passive witness outside the workspace reads what the restart did; it does not address the workspace.
+    await probe(workspace).modelSaw(workspace, [job.id, 'failed']);
 
-    const watch = fiberKind === 'expired'
-      ? await probe(workspace).restartAlarm(workspace, before.incarnation)
-      : await probe(workspace).jobWatchState(workspace);
+    // The lane row carries the re-drive until the wake it delivers has ended; then nothing is owed and no wake is armed.
+    const watch = await vi.waitFor(async () => {
+      const state = await probe(workspace).jobWatchState(workspace);
+
+      expect(state).toMatchObject({ fibers: 0, terminalRetry: false, started: true });
+
+      return state;
+    }, { timeout: 30_000, interval: 250 });
 
     const row = watch.jobs.find((entry) => entry.id === job.id);
 
     console.log('orphan-job.restart', JSON.stringify({ watch, row }));
     expect(row?.status).toBe('failed');
-    await probe(workspace).modelSaw(workspace, [job.id, 'failed']);
-
-    if (fiberKind === 'expired') expect(watch).toMatchObject({ terminalRetry: false, fibers: 0, started: true });
   });
 });
 

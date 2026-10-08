@@ -15,8 +15,7 @@ import {
   type EgressSecretBinding,
   createSandboxExecutor, createDeviceTunnelExecutor, type DeviceTransport,
   type NimbusSandboxHandle,
-  createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
-  decodeJsonValue,
+  createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore, createSqlFiber,
   createRoutedModelLane, routedLlm, bindRoute,
   createScaffoldSurface,
   type FixedTierSource,
@@ -61,14 +60,16 @@ import { actorAffinity } from "@kinu.run/core";
 import { nimbusPreviewConfigured } from "./nimbus-route";
 
 /**
- * Every logical actor in a workspace is built over the root object's `name`, `sql` and `runFiber`; runtimes
+ * Every logical actor in a workspace is built over the root object's `name` and `sql`; runtimes
  * differ only by `ActorRuntimeIdentity`. The root passes `this` cast to this view to open protected `env`/`ctx`.
  */
-type AgentHost = Pick<Agent<Env>, 'name' | 'sql' | 'runFiber'>;
+type AgentHost = Pick<Agent<Env>, 'name' | 'sql'>;
 
 export interface CFRuntimeAccess {
   readonly env: Env;
   readonly ctx: DurableObjectState;
+  /** Keeps the root alive while a lane runs whose `fibers` row outlives its activation (`ActorAgent.holdLane`). */
+  holdLane<T>(body: () => Promise<T>): Promise<T>;
   /** One box per workspace: a child composing its own gets a second, empty filesystem
      *  (tests/unit-head-fork.test.ts). Actors are separated by `shellId` and credential. */
   workspaceBox(shellId: string): NimbusSandboxHandle;
@@ -303,7 +304,7 @@ export function createCFRuntime(
     },
   };
 
-  const schedule = createRealSchedule(agent);
+  const schedule = createRealSchedule(access, sql, actor.actor);
   const identity = createIdentity(actor.actor, originVfs, sql, actor.scaffoldPath);
 
   // Main vs hosted is stated (`rootActor`), never derived from the name. Grants are only written to
@@ -681,19 +682,16 @@ function createProfileLaneLLM(options: ProfileLaneOptions): LLM | undefined {
   });
 }
 
-function createRealSchedule(agent: AgentHost): Schedule {
+/** A lane's `fibers` row, the CLI's own, outlives the activation running it; the next one re-drives it
+ *  (`OrchestratorAgent.recoverDeadActivation`). */
+function createRealSchedule(access: Pick<CFRuntimeAccess, 'holdLane'>, sql: SqlExecutor, actor: ActorHandle): Schedule {
+  const fiber = createSqlFiber(sql, actor);
+
   return {
     after: async (ms, fn) => { setTimeout(() => detach(Effect.promise(fn)), ms); },
     cron: async () => {},
-    fiber: async <T>(name: string, fn: (ctx: FiberCtx) => Promise<T>): Promise<T> => {
-      return agent.runFiber(name, async (sdkCtx) => {
-        const snapshot = sdkCtx.snapshot === null
-          ? null
-          : decodeJsonValue({ value: sdkCtx.snapshot });
-
-        return fn({ stash: sdkCtx.stash.bind(sdkCtx), snapshot });
-      });
-    },
+    // The row first: the keep-alive awaits before its body runs, and a lane is owed from the moment it is started.
+    fiber: <T>(name: string, fn: (ctx: FiberCtx) => Promise<T>): Promise<T> => fiber(name, (ctx) => access.holdLane(() => fn(ctx))),
   };
 }
 

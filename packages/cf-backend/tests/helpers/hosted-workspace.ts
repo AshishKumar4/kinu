@@ -107,14 +107,8 @@ export async function hostedWorkspace(
         strings: TemplateStringsArray,
         ...values: (string | number | boolean | null)[]
       ): Row[] => db.prepare<Row, (string | number | boolean | null)[]>(strings.join('?')).all(...values),
-      // Runs inline, handing the body a real context so `stash` is callable.
-      runFiber: (name, body) => body({
-        id: `fiber:${name}`,
-        signal: new AbortController().signal,
-        stash: () => undefined,
-        snapshot: null,
-      }),
     },
+    holdLane: (body) => body(),
     workspaceBox: (shellId) => workspace.box(shellId),
     homeHost: () => workspace.bundle.privileged()
       .then((privileged) => ({ ...privileged, sql: ctx.storage.sql })),

@@ -4,7 +4,8 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
  * An eviction keeps storage and loses the isolate: attempt one freezes on a never-settling call;
  * attempt two shares only the database and workspace. Spec: docs/EXPLORATION.md.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, setSystemTime, test } from 'bun:test';
+import { Effect } from 'effect';
 import { Database } from 'bun:sqlite';
 import type { LanguageModelV4Content } from '@ai-sdk/provider';
 import type { LanguageModel } from 'ai';
@@ -22,6 +23,9 @@ import { resumeBackgroundJob } from '../src/orchestrator/background-tools';
 import { BackgroundJobRunner } from '../src/jobs/runner';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
 import { Inbox } from '../src/orchestrator/inbox';
+import { ForkNotices, forkNoticeDeliveries, initForkNoticeTable } from '../src/heads/fork-notices';
+import { recoveryBackoffMs } from '../src/utils/recovery-backoff';
+import type { SendOutcome } from '../src/types/signals';
 import { readForkRun } from '../src/read-models/fork-runs';
 import {
   reconcileInterruptedForks, FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
@@ -1533,5 +1537,74 @@ describe('the swarm ledger row', () => {
     store.reclaim('r1');
     expect(() => beganSwarm(store, 'r1', 2_000)).toThrow();
     expect(store.list().find((run) => run.rootId === 'r1')).toMatchObject({ status: 'running', epoch: 1 });
+  });
+});
+
+/** The reconcile that minted a notice retired its forks, so the row is its only carrier until the inbox takes it. */
+describe('a fork-interrupted notice the inbox has not taken', () => {
+  const NOTICE = { kind: FORK_INTERRUPTED_SIGNAL, text: 'Your forks stopped with the last process.' };
+
+  function held(outcomes: SendOutcome[]) {
+    const db = new Database(':memory:');
+    const sent: string[] = [];
+    const armed: number[] = [];
+    const cutoff = 1_000_000;
+
+    initForkNoticeTable(makeExecRaw(db));
+    const notices = new ForkNotices(makeSql(db), cutoff);
+    notices.hold('fork:dead', NOTICE, cutoff - 60_000);
+
+    const deliver = async (now: number): Promise<void> => {
+      await Promise.all(forkNoticeDeliveries(notices, {
+        send: (signal) => {
+          sent.push(signal.text);
+
+          return Promise.resolve(outcomes.shift() ?? 'queued');
+        },
+        arm: (dueAt) => {
+          armed.push(dueAt);
+
+          return Promise.resolve();
+        },
+        workspace: 'w',
+      }, now).map((delivery) => Effect.runPromise(delivery)));
+    };
+
+    return { notices, db, sent, armed, deliver };
+  }
+
+  test('one its turn did not take stays owed at the backoff, the wake is armed for then, and that wake delivers it', async () => {
+    const { notices, db, sent, armed, deliver } = held(['undelivered', 'queued']);
+    const dueAt = 1_000_000 + recoveryBackoffMs(1);
+
+    setSystemTime(new Date(1_000_000));
+
+    try {
+      await deliver(1_000_000);
+      expect(notices.nextDueAt()).toBe(dueAt);
+      expect(armed).toEqual([dueAt]);
+      // Not due before its instant, and not started twice.
+      await deliver(1_000_001);
+      expect(sent).toHaveLength(1);
+
+      await deliver(dueAt);
+      expect(sent).toEqual([NOTICE.text, NOTICE.text]);
+      expect(db.query('SELECT 1 FROM fork_notices').all()).toEqual([]);
+    } finally {
+      setSystemTime();
+    }
+  });
+
+  test('one the next activation finds started by the last is due again; one this activation started is not', async () => {
+    const { db, sent, deliver } = held([]);
+    db.run('UPDATE fork_notices SET started_at = ?', [999_000]);
+
+    await deliver(1_000_000);
+    expect(sent).toHaveLength(1);
+
+    const inFlight = held([]);
+    inFlight.db.run('UPDATE fork_notices SET started_at = ?', [1_000_000]);
+    await inFlight.deliver(1_000_000);
+    expect(inFlight.sent).toEqual([]);
   });
 });

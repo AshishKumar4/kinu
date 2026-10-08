@@ -9,7 +9,7 @@ import { createRecordingLogger } from '@kinu.run/core/obs';
 import { makeSql } from '../../core/tests/helpers';
 import {
   armedWakes, catalogTurn, fireSoonestWake, gatewayWorkspace, hostedSubordinateHarness, jobsOver, orchestratorHarness, chatSessionTurns, reactivateOrchestratorHarness,
-  runDelegatedTask, tapDiagnostics, until,
+  runDelegatedTask, tapDiagnostics, until, seedOrphanFiber,
 } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import { present } from '@kinu.run/test-utils';
@@ -74,15 +74,15 @@ const DEAD_LEASES = LEASE_SWEEP_ROWS + 40;
 const LEASED = "SELECT COUNT(*) AS held FROM agent_log WHERE turn_id LIKE 'evt-dead-%' AND consumed_at IS NOT NULL";
 
 /** Assignments a dead activation had leased: each holds its drain turn's id, consumed a minute before this one began. */
-function seedDeadLeases(db: Database, count: number): void {
+function seedDeadLeases(db: Database, count: number, actorId = 'gone-actor'): void {
   const insert = db.prepare(
     `INSERT INTO agent_log (actor_id, id, kind, turn_id, step_idx, variant, trace_id, payload, received_at, consumed_at)
-     VALUES ('gone-actor', ?, 'event', ?, 0, 'subordinate_task', ?, '{"body":"brief"}', ?, ?)`,
+     VALUES (?, ?, 'event', ?, 0, 'subordinate_task', ?, '{"body":"brief"}', ?, ?)`,
   );
 
   const at = Date.now() - 60_000;
 
-  for (let n = 0; n < count; n++) insert.run(`dead-task-${String(n)}`, `evt-dead-${String(n)}`, `trace-dead-${String(n)}`, at, at);
+  for (let n = 0; n < count; n++) insert.run(actorId, `dead-task-${String(n)}`, `evt-dead-${String(n)}`, `trace-dead-${String(n)}`, at, at);
 }
 
 function orphanRow(db: Database, id: string): { step_idx: number | null; dismissed: string | null } {
@@ -150,32 +150,6 @@ describe('a refiner answer stored with no waiter', () => {
 });
 
 describe('the workspace keeps exactly one wake per job', () => {
-  test('a beyond-budget FIBER backlog also arms the wake, and the wake drains it', async () => {
-    const { agent, db, started } = orchestratorHarness();
-    await started;
-    db.exec(`CREATE TABLE IF NOT EXISTS cf_agents_runs (
-      id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, snapshot TEXT, created_at INTEGER NOT NULL)`);
-
-    const insert = db.prepare(
-      `INSERT INTO cf_agents_runs (id, name, snapshot, created_at) VALUES (?, ?, NULL, ?)`,
-    );
-
-    const expired = Date.now() - 25 * 60 * 60 * 1000;
-
-    for (let i = 0; i < 4096 + 40; i++) insert.run(`fiber-${i}`, 'bg:stale', expired);
-
-    await agent.activateActor();
-    await until(() => wakeArmed(db), 'the truncated fiber sweep armed the maintenance wake');
-
-    const seededFibers = `SELECT COUNT(*) AS held FROM cf_agents_runs WHERE id LIKE 'fiber-%'`;
-
-    expect(held(db, seededFibers)).toBe(40);
-    expect(wakeArmed(db)).toBe(true);
-
-    await agent.terminalRetryPass();
-    expect(held(db, seededFibers)).toBe(0);
-  });
-
   test('a beyond-budget backlog of dead leases arms the wake, and the wake drains it', async () => {
     const { agent, db, started } = orchestratorHarness();
     await started;
@@ -190,42 +164,22 @@ describe('the workspace keeps exactly one wake per job', () => {
     expect(held(db, LEASED)).toBe(0);
   });
 
-  test('an activation whose fiber sweep finished does not sweep again on its ticks', async () => {
-    // 2026-09-28: the sweep ran on every tick, so a retry tick inside a turn read the fiber table again.
-    const { agent, db, started } = orchestratorHarness();
-    await started;
-    await agent.activateActor();
-    const expired = Date.now() - 25 * 60 * 60 * 1000;
-    db.prepare(`INSERT INTO cf_agents_runs (id, name, snapshot, created_at) VALUES ('after-sweep', 'bg:stale', NULL, ?)`).run(expired);
-
-    await agent.terminalRetryPass();
-
-    // The next activation's sweep takes it.
-    expect(held(db, "SELECT COUNT(*) AS held FROM cf_agents_runs WHERE id = 'after-sweep'")).toBe(1);
-  });
-
   test('a quiet turn keeps the wake a truncated sweep still needs', async () => {
     // Unfinished maintenance is found only by running a pass, so a turn settling over it must not take its wake.
     const workspace = gatewayWorkspace(answeringGateway('done'));
     const { agent, db } = workspace;
     await workspace.started;
-    db.exec(`CREATE TABLE IF NOT EXISTS cf_agents_runs (
-      id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, snapshot TEXT, created_at INTEGER NOT NULL)`);
-
-    const insert = db.prepare(`INSERT INTO cf_agents_runs (id, name, snapshot, created_at) VALUES (?, ?, NULL, ?)`);
-    const expired = Date.now() - 25 * 60 * 60 * 1000;
-
-    for (let i = 0; i < 4096 + 40; i++) insert.run(`fiber-${i}`, 'bg:stale', expired);
+    seedDeadLeases(db, DEAD_LEASES);
 
     await agent.activateActor();
-    await until(() => wakeArmed(db), 'the truncated fiber sweep armed the maintenance wake');
+    await until(() => wakeArmed(db), 'the truncated lease sweep armed the maintenance wake');
 
     await catalogTurn(agent, 'a turn over an unfinished sweep');
     await joinHarnessFibers();
 
     expect(wakeArmed(db)).toBe(true);
     await agent.terminalRetryPass();
-    expect(held(db, `SELECT COUNT(*) AS held FROM cf_agents_runs WHERE id LIKE 'fiber-%'`)).toBe(0);
+    expect(held(db, LEASED)).toBe(0);
   });
 
   test('a hired child shares the workspace wake, and its backlog drains through it', async () => {
@@ -241,28 +195,16 @@ describe('the workspace keeps exactly one wake per job', () => {
 
     const rootId = harnessActorId(workspace.db);
     expect(child.actor.handle.actorId).not.toBe(rootId);
-    workspace.db.exec(`CREATE TABLE IF NOT EXISTS cf_agents_runs (
-      id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, snapshot TEXT, created_at INTEGER NOT NULL)`);
-
-    const insert = workspace.db.prepare(
-      `INSERT INTO cf_agents_runs (id, name, snapshot, created_at) VALUES (?, ?, NULL, ?)`,
-    );
-
-    const expired = Date.now() - 25 * 60 * 60 * 1000;
-
-    for (let i = 0; i < 4096 + 12; i++) insert.run(`sub-fiber-${i}`, 'bg:stale', expired);
+    seedDeadLeases(workspace.db, DEAD_LEASES, child.actor.handle.actorId);
 
     await workspace.agent.activateActor();
-    await until(() => wakeArmed(workspace.db), 'the truncated fiber sweep armed the shared wake');
+    await until(() => wakeArmed(workspace.db), 'the truncated lease sweep armed the shared wake');
 
-    // Seeded rows only: the activation's own terminal-lane fiber writes a fresh carrier row here.
-    const seededChildFibers = `SELECT COUNT(*) AS held FROM cf_agents_runs WHERE id LIKE 'sub-fiber-%'`;
-
-    expect(held(workspace.db, seededChildFibers)).toBe(12);
+    expect(held(workspace.db, LEASED)).toBe(DEAD_LEASES - LEASE_SWEEP_ROWS);
     expect(armedAt(workspace.db, TERMINAL_RETRY_JOB)).toHaveLength(1);
 
     await workspace.agent.terminalRetryPass();
-    expect(held(workspace.db, seededChildFibers)).toBe(0);
+    expect(held(workspace.db, LEASED)).toBe(0);
   });
 
   // Review of 4028013fc, 2026-10-03: the root's runner kept a wake at a hire's deferred instant, yet could never recover a
@@ -330,7 +272,7 @@ describe('the workspace keeps exactly one wake per job', () => {
     // The activation's own pass: the job below starts after it, as one a turn detaches does.
     await agent.terminalRetryPass();
     jobsOver(db).create({ id: 'bgjob-serving', kind: 'shell', workMode: 'build', input: JSON.stringify({ command: 'serve' }), now: Date.now(), label: 'serve' });
-    agent.harnessSeedOrphanFiber('bg:shell', { phase: 'running', jobId: 'bgjob-serving', kind: 'shell' });
+    seedOrphanFiber(db, 'bg:shell', { phase: 'running', jobId: 'bgjob-serving', kind: 'shell' });
 
     await agent.terminalRetryPass();
 
@@ -360,20 +302,11 @@ describe('the workspace keeps exactly one wake per job', () => {
     });
 
     try {
-      if (carrier === 'fiber-recovered') agent.harnessSeedOrphanFiber('bg:agents', { phase: 'running', jobId: 'bgjob-search', kind: 'agents' });
+      if (carrier === 'fiber-recovered') seedOrphanFiber(db, 'bg:agents', { phase: 'running', jobId: 'bgjob-search', kind: 'agents' });
 
+      // The activation's own recovery re-drives it; a lane row offers the same job, and the lease epoch lets one drive take it.
       await agent.activateActor();
-
-      if (carrier === 'fiber-recovered') {
-        await agent.harnessAlarmHousekeeping();
-        // The SDK owns the drive before the workspace sweep offers the same job.
-        await agent.terminalRetryPass();
-      } else {
-        await until(() => wakeArmed(db), 'the orphan job armed its activation wake');
-        // A direct pass does not consume the firing row or carry its lap pace.
-        await fireSoonestWake(agent, db);
-        await modelReached.promise;
-      }
+      await modelReached.promise;
 
       const redriven = present(jobsOver(db).get('bgjob-search'), 'the re-driven job');
       expect(redriven).toMatchObject({ status: 'running', resumeAttempts: 1 });
@@ -442,11 +375,9 @@ describe('the workspace keeps exactly one wake per job', () => {
     expect(status('late-stale-head')).toBe('errored');
   });
 
-  test('a live swarm ledger row created after activation survives the tick', async () => {
+  test('a live swarm ledger row created after the cutoff survives the activation and its tick', async () => {
     // `closeUnclaimed` must not fail swarm rows created after construction.
     const { agent, db } = orchestratorHarness();
-    await agent.activateActor();
-    await joinHarnessFibers();
 
     const actorId = harnessActorId(db);
 
@@ -465,15 +396,16 @@ describe('the workspace keeps exactly one wake per job', () => {
     insertRun('stale-swarm', Date.now() - 60_000);
     insertRun('live-swarm', Date.now() + 5);
 
+    // Construction stamped the cutoff; the activation's recovery reconciles, and a tick after it changes nothing.
+    await agent.activateActor();
+    await joinHarnessFibers();
     await agent.terminalRetryPass();
     expect(status('stale-swarm')).toBe('failed');
     expect(status('live-swarm')).toBe('running');
   });
 
-  test('a live run-event start after activation is not terminalized by the tick', async () => {
+  test('a live run-event start after the cutoff is not terminalized by the activation or its tick', async () => {
     const { agent, db } = orchestratorHarness();
-    await agent.activateActor();
-    await joinHarnessFibers();
 
     const actorId = harnessActorId(db);
 
@@ -493,6 +425,9 @@ describe('the workspace keeps exactly one wake per job', () => {
     start('stale-run', Date.now() - 60_000);
     start('live-run', Date.now() + 5);
 
+    // Construction stamped the cutoff; the activation's recovery reconciles, and a tick after it changes nothing.
+    await agent.activateActor();
+    await joinHarnessFibers();
     await agent.terminalRetryPass();
     expect(ended('stale-run')).toBe(true);
     expect(ended('live-run')).toBe(false);
