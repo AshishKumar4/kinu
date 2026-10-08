@@ -1,0 +1,1 @@
+- On a long task, keep the goal, the decisions made and the remaining steps written down, in your task list or a notes file, and update them as you finish steps.

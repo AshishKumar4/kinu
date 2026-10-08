@@ -29,7 +29,7 @@ import * as v from 'valibot';
 import { isJsonObject, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
 import { attempt, diagnostics, hold, renderThrownChain, toKinuError, type KinuError } from '../obs/index';
 import { Cause, Exit } from 'effect';
-import { BUILTIN_TOOL_NAMES, type BuiltinToolName } from '../tools/registry';
+import { BUILTIN_TOOL_NAMES } from '../tools/registry';
 import { assembleActorTurn, withCompactionTrigger, type RunTurnSources, type TurnAssemblySources } from '../orchestrator/turn-assembly';
 import type { CompactionTriggerReader } from '../orchestrator/turn-context';
 import type { ActorTurnClaim, ClaimOutcome } from '../orchestrator/actor-claims';
@@ -174,128 +174,32 @@ function recordingTool<Entry extends ToolSet[string]>(
   });
 }
 
-const HEAD_PROMPT_TOOL_NAMES = [
-  'record_evidence',
-  'record_decision',
-  'eval',
-  'shell',
-  'file',
-  'web',
-  'split_subheads',
-] as const;
+const HEAD_PROMPT_TOOL_NAMES = ['record_evidence', 'record_decision', 'split_subheads'] as const;
 
-const HEAD_WORK_TOOLS = ['eval', 'shell', 'file'] as const satisfies readonly BuiltinToolName[];
-
-export type HeadWorkspaceLayout = 'shared-workspace' | 'private-scratch';
-
-function hasHeadTool(tools: ReadonlySet<string>, ...names: readonly string[]): boolean {
-  return names.some((name) => tools.has(name));
-}
-
-function renderHeadToolConventions(
-  input: HeadInput,
-  workspaceLayout: HeadWorkspaceLayout,
-  availableToolNames?: readonly string[],
-): string[] {
+/** Only what is a head's own: the tools every agent has are described by the system prompt and their schemas. */
+function renderHeadConventions(input: HeadInput, availableToolNames?: readonly string[]): string[] {
   const tools = new Set(availableToolNames ?? HEAD_PROMPT_TOOL_NAMES);
   const lines: string[] = ['Conventions:'];
 
-  if (hasHeadTool(tools, 'record_evidence')) {
-    lines.push('- record_evidence whenever you learn something worth surfacing in the merge.');
-  }
+  if (tools.has('record_evidence')) lines.push('- record_evidence whenever you learn something worth surfacing in the merge.');
 
-  if (hasHeadTool(tools, 'record_decision')) {
-    lines.push('- record_decision when you make a substantive choice the parent might want to reconcile.');
-  }
+  if (tools.has('record_decision')) lines.push('- record_decision when you make a substantive choice the parent might want to reconcile.');
 
-  if (hasHeadTool(tools, 'eval')) {
-    const executionDoctrine = workspaceLayout === 'shared-workspace'
-      ? '- eval runs JavaScript against the SAME resources your parent agent has. Each environment is its own filesystem in its own paths: '
-        + '`workspace.*` is the canonical workspace you were forked from (start there: the code and data you were spawned to study usually live in it), '
-        + '`sandbox.*` is its container, and `device.*` is the user\'s machine. '
-        + '`workspace.exec` runs a real shell in the workspace, so `grep -rn X .` searches it in one call. '
-        + '`web.*` is also in scope.'
-      : '- eval runs JavaScript across the environments exposed to this local head: '
-        + '`workspace.*` is your private scratch, `parent.*` is the canonical parent workspace containing the task\'s code and data, '
-        + 'and `device.*` is the user\'s machine. Start with `parent.*` for project work; use `workspace.*` only for private scratch. '
-        + '`web.*` is also in scope.';
-
-    lines.push(
-      executionDoctrine,
-      ...(input.mode === 'plan'
-        ? ['- This is a Plan research head: use eval only for read-only inspection. Do not call mutating workspace, process, port, release, or deployment operations.']
-        : []),
-    );
-  }
-
-  if (hasHeadTool(tools, 'shell')) {
-    const runDoctrine = workspaceLayout === 'shared-workspace'
-      ? '- run executes one shell command. Name the runtime: `sandbox` / `device` are the parent agent\'s separate environments, '
-        + 'and the default `workspace` runtime is the canonical workspace you were forked from.'
-      : '- run executes one shell command. The runtime `parent` is the canonical parent workspace, the default `workspace` runtime is private scratch, '
-        + 'and runtime `device` is the user\'s machine.';
-
-    lines.push(
-      runDoctrine,
-      ...(input.mode === 'plan'
-        ? ['- In Plan mode, run only read-only inspection commands. Do not install, write, launch servers, expose ports, or change system state.']
-        : []),
-    );
-  }
-
-  if (hasHeadTool(tools, 'file')) {
-    const filePlane = workspaceLayout === 'shared-workspace'
-      ? 'the canonical workspace filesystem'
-      : 'your private scratch filesystem; use parent.* inside eval for the canonical parent workspace';
-
-    lines.push(input.mode === 'plan'
-      ? `- file is available for reading ${filePlane}. Do not edit, write, or delete files in Plan mode.`
-      : `- file reads and edits ${filePlane}. Read a file before you edit or overwrite it, and edit by replacing exact text you copied out of the read `
-        + 'rather than rewriting the file or shelling out to sed.');
-  }
-
-  if (hasHeadTool(tools, 'web')) {
-    lines.push('- Loop `web` op=search to gather, then op=fetch to read the promising results; record_evidence each finding worth surfacing.');
-  }
-
-  if (hasHeadTool(tools, 'split_subheads')) {
-    lines.push('- split_subheads to recursively explore deeper if needed (depth-budgeted).');
-  }
+  lines.push(tools.has('split_subheads')
+    ? '- split_subheads to recursively explore deeper if needed (depth-budgeted).'
+    : '- Do not propose recursive subheads; split_subheads is not available in this run.');
 
   lines.push(
     '- Final text response: 2-4 sentences summarizing what you found + recommending what should happen next.',
     '- Stay focused on YOUR task. Don\'t try to do sibling heads\' work.',
   );
-  lines.push('- If you need to share findings but no shared scratch tool exists, put the finding in your final response and record_evidence if available.');
 
-  if (!hasHeadTool(tools, ...HEAD_WORK_TOOLS)) {
-    lines.push('- You have no filesystem or command tool in this run: reason from inherited context and the available accumulator tools only.');
-  }
-
-  if (!hasHeadTool(tools, 'split_subheads')) {
-    lines.push('- Do not propose recursive subheads; split_subheads is not available in this run.');
-  }
-
-  return [...lines, '', renderIsolationDoctrine(input, workspaceLayout)];
+  return [...lines, '', input.mode === 'plan'
+    ? 'You are ONE OF SEVERAL Plan research heads with read access to the parent workspace. Inspect it read-only, do not create scratch files or worktrees, and return evidence and recommendations to the parent plan.'
+    : `You are ONE OF SEVERAL heads running concurrently against the same agent's resources. When you touch a SHARED MUTABLE resource, isolate yourself so you don't race a sibling: for any git repo, create your own worktree (\`git worktree add ../head-${input.id.slice(0, 8)} <branch>\`) before working; for shared files, write under your own head-namespaced path (\`shared/findings/${input.id}/...\` in the parent workspace). Read-only inspection of shared resources is always fine.`];
 }
 
-function renderIsolationDoctrine(input: HeadInput, workspaceLayout: HeadWorkspaceLayout): string {
-  if (input.mode === 'plan') {
-    return 'You are ONE OF SEVERAL Plan research heads with read access to the parent workspace. Inspect it read-only, do not create scratch files or worktrees, and return evidence and recommendations to the parent plan.';
-  }
-
-  if (workspaceLayout === 'shared-workspace') {
-    return `You are ONE OF SEVERAL heads running concurrently against the same agent's resources. When you touch a SHARED MUTABLE resource, isolate yourself so you don't race a sibling: for any git repo, create your own worktree (\`git worktree add ../head-${input.id.slice(0, 8)} <branch>\`) before working; for shared files, write under your own head-namespaced path (\`shared/findings/${input.id}/...\` in the parent workspace). Read-only inspection of shared resources is always fine.`;
-  }
-
-  return `Your workspace and file tools are private scratch. The canonical parent workspace exposed through parent.* is shared with sibling heads; isolate any mutation there (for a git repo, create a worktree such as \`git worktree add ../head-${input.id.slice(0, 8)} <branch>\`). Read-only inspection is always fine.`;
-}
-
-export function buildHeadSystemPrompt(
-  input: HeadInput,
-  availableToolNames?: readonly string[],
-  workspaceLayout: HeadWorkspaceLayout = 'shared-workspace',
-): string {
+export function buildHeadSystemPrompt(input: HeadInput, availableToolNames?: readonly string[]): string {
   return [
     `You are a "head": one of several parallel reasoning threads in a self-evolving agent runtime.`,
     ``,
@@ -303,7 +207,7 @@ export function buildHeadSystemPrompt(
     `Why you were spawned: ${input.rationale}`,
     `Merge strategy: ${input.mergeStrategy} (your work will be combined with sibling heads via this strategy).`,
     ``,
-    ...renderHeadToolConventions(input, workspaceLayout, availableToolNames),
+    ...renderHeadConventions(input, availableToolNames),
     ``,
     // At depth 0 split_subheads is not on the surface (head-tools.ts), so the clause is dropped.
     'Take the time the task needs: there is no time or token limit on this run.'

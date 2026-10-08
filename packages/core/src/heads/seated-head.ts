@@ -46,7 +46,7 @@ export function spawnSeatedHead(input: HeadInput, deps: SeatedHeadDeps): Spawned
         codemodeTool: deps.codemodeTool(seat), webSearch: deps.webSearch, split: deps.split(seat, input),
         jobs: { jobRunner: runner, backgroundable: CONFINED_BACKGROUNDABLE_TOOLS, mode: () => input.mode },
       }),
-      brief: (callable) => buildHeadSystemPrompt(input, callable, 'shared-workspace'),
+      brief: (callable) => buildHeadSystemPrompt(input, callable),
       capture,
       signal: abort.signal,
       isAborted: () => stopped !== null,

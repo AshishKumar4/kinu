@@ -236,7 +236,8 @@ export const BUILTIN_TOOL_SPECS = {
       '`tools.<name>(input)` calls a native tool with the input its schema declares; a tool saved with `workspace.createTool` joins `tools` from the next program, declared in dynamic_context.',
       '`require()` loads Node builtins, plus `fs`, `fs/promises` and `child_process` over your workspace files and shell; `process.cwd()` is the workspace root. Only promise forms work: `execSync`, `spawn` and `fs.*Sync` throw.',
       '`console.log` output comes back with the result. Variables do not survive between programs; `state` does.',
-      'A refused call, in any namespace, resolves to a `Refusal` instead of throwing; returning it fails the call with that reason.',
+      'A refused call, in any namespace, resolves to a `Refusal` instead of throwing: check for one before reading a result\'s fields. Returning it fails the call with that reason.',
+      'Run independent calls together with `await Promise.all([...])`, and `return` the values you need rather than logging them.',
       'Start with one `//` comment naming the operation and its target; the interface shows it as the call\'s intent.',
     ],
     example: "eval({code:\"// List the newest reports\\nconst fs = require('fs/promises');\\nconst files = await fs.readdir('reports');\\nreturn files.slice(0, 5)\"})",
@@ -258,14 +259,19 @@ export const BUILTIN_TOOL_SPECS = {
     name: 'file',
     summary: 'Read, list, stat, search, edit or write files in your workspace.',
     notes: [
-      'An edit fails when its target text is not there; `sed -i`, heredocs and scripts in `shell` write regardless.',
+      'Find before you read: `search` a file for the lines you need, then `read` around them. Read a large file in pages with `offset` and `limit`.',
+      'Read a file before you `edit` it. An edit matches the text as last read, and fails when its `old_text` is absent or occurs more than once: copy just enough to be unique.',
     ],
     example: "file({op:'edit', path:'src/api.ts', edits:[{old_text:'timeout: 30', new_text:'timeout: 60'}]})",
   },
   agents: {
     name: 'agents',
     summary: 'Delegate work to other agents and message them.',
-    notes: [],
+    notes: [
+      'Do the work yourself by default. A helper costs more than it looks: you write its brief, you see only its report, and trusting that report means reading what it touched.',
+      'Delegate only when the work is large, separable from your next step, and clearly costs more to do than to brief and check: independent pieces that can run at the same time, or a long side task whose raw output would flood your context.',
+      'Do it yourself when it takes a handful of calls, when your next step depends on it, or when you would redo it to trust the result. Never delegate one small piece, and never split one modest job across several helpers.',
+    ],
     // Cheapest complete call: `ideate` is the one preset that takes no `objective`.
     example: "agents({op:'swarm', preset:'ideate', task:'Three ways to stop staging 502ing under load'})",
   },
@@ -273,7 +279,9 @@ export const BUILTIN_TOOL_SPECS = {
   tasks: {
     name: 'tasks',
     summary: 'Your task list, shown in your context at every step, and your active role.',
-    notes: [],
+    notes: [
+      'Keep a list for work of three or more steps, never for a one-step request. Update it in the same step as the work it tracks, and mark an item done as soon as it is.',
+    ],
     example: "tasks({op:'add', titles:['Reproduce the 502', 'Patch the gateway timeout', 'Add a regression test']})",
   },
   web: {

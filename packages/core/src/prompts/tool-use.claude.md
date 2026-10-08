@@ -1,0 +1,3 @@
+- If you intend to call several tools and there are no dependencies between them, make all of the independent calls in the same response. First list privately what you need next, then request every item that doesn't depend on another's result.
+- Use concrete values rather than placeholders in tool calls.
+- Read and search files with `file` or a shell, whichever fits. Edit surgically: change the lines that need it rather than rewriting the whole file.

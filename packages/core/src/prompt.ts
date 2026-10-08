@@ -39,12 +39,12 @@ import {
   WORKSPACE_EXECUTOR_LINE,
   WORKSPACE_INSTRUCTIONS_SECTION,
   LEAD_RESPONSIBILITY,
+  TOOL_USE_SECTION,
   LEAD_BRIEF,
   LEAD_PARALLEL,
   LEAD_REVIEW,
   LEAD_INTERRUPTION,
   LEAD_DELIVERY,
-  LEAD_DIRECT_EDIT,
   sectionRenderer,
   promptFamilyDelta,
   type PromptSectionOverrides,
@@ -56,7 +56,6 @@ import { SKILLS_VIEW, WORKSPACE_SKILLS_DIR } from './skills/types';
 import { PLATFORM_CATALOG } from './platform-catalog';
 import { sandboxSizeLabel } from './execution/sandbox';
 import type { SandboxSizes } from './execution/types';
-import { CRAFTED_TOOL_NAMESPACE } from './tools/sandbox-contract';
 
 export type { TurnReason, WorkMode } from './types/turn';
 
@@ -207,6 +206,7 @@ function renderExecutorSection(surface: PromptSurface, render: RenderSection): s
     // The slate route exists only on workspaces that can publish a preview on their own origin.
     workspacePreview: previewExecutors.some((exec) => exec.name === 'workspace'),
     exposeCalls: previewExecutors.map((exec) => `${exec.name}.exposePort(port)`).join(' or '),
+    hasHire: surface.agentsActions.includes('hire'),
   });
 }
 
@@ -236,15 +236,15 @@ function listed(items: readonly string[]): string {
   return items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1) ?? ''}`;
 }
 
-function renderAgentStateSection(surface: PromptSurface, render: RenderSection): string {
+function renderAgentStateSection(surface: PromptSurface, render: RenderSection, isHired: boolean): string {
   const tools = surface.builtinTools;
   const parts: string[] = [render(PERSISTENCE_SECTION, {})];
 
   if (hasTool(tools, 'eval')) {
-    parts.push(render(CODE_EXECUTION_SECTION, { craftedNamespace: CRAFTED_TOOL_NAMESPACE }));
+    parts.push(render(CODE_EXECUTION_SECTION, {}));
   }
 
-  if (hasTool(tools, 'agents') || hasTool(tools, 'report')) {
+  if (hasTool(tools, 'agents') || isHired) {
     // Gated on the actions this actor's deps wire (surface.agentsActions), like the tool's enum.
     const actions = surface.agentsActions;
     const has = (action: (typeof actions)[number]) => actions.includes(action);
@@ -255,17 +255,18 @@ function renderAgentStateSection(surface: PromptSurface, render: RenderSection):
       hasHire: has('hire'),
       rungsInCode: actions.length > 0 && hasTool(tools, 'eval'),
       hasReport: hasTool(tools, 'report'),
+      isHired,
     }));
   }
 
   if (hasTool(tools, 'shell') || hasTool(tools, 'eval') || hasTool(tools, 'agents')) {
-    parts.push(render(BACKGROUND_WORK_SECTION, {}));
+    parts.push(render(BACKGROUND_WORK_SECTION, { hasHire: surface.agentsActions.includes('hire') }));
   }
 
   parts.push(render(VERIFICATION_SECTION, {
     hasShell: hasTool(tools, 'shell') || hasTool(tools, 'eval'),
   }));
-  parts.push(render(OUTPUT_FORMAT_SECTION, {}));
+  parts.push(render(OUTPUT_FORMAT_SECTION, { familyDelta: promptFamilyDelta(OUTPUT_FORMAT_SECTION.id, surface.model.family) }));
 
   return parts.join('\n\n');
 }
@@ -334,15 +335,17 @@ export function buildSystemPromptSync(
     // Execution doctrine before the tool index: a rule read after the menu is applied late.
     renderExecutorSection(surface, render),
     renderToolsSection(surface, render),
-    renderAgentStateSection(surface, render),
+    hasTool(surface.builtinTools, 'file') && hasTool(surface.builtinTools, 'shell') && hasTool(surface.builtinTools, 'eval')
+      ? render(TOOL_USE_SECTION, { familyDelta: promptFamilyDelta(TOOL_USE_SECTION.id, surface.model.family) })
+      : '',
+    renderAgentStateSection(surface, render, rt.actor.parentActorId !== null),
     ...(lead ? [
       render(LEAD_RESPONSIBILITY, { hasTaskHire: surface.temporaryAsk }),
       render(LEAD_BRIEF, { familyDelta: promptFamilyDelta(LEAD_BRIEF.id, surface.model.family) }),
-      render(LEAD_PARALLEL, { hasTaskHire: surface.temporaryAsk }),
+      render(LEAD_PARALLEL, {}),
       render(LEAD_REVIEW, {}),
       render(LEAD_INTERRUPTION, {}),
       render(LEAD_DELIVERY, {}),
-      render(LEAD_DIRECT_EDIT, {}),
     ] : []),
     renderPlanesSection(rt.planes, render),
     readSoulForPrompt(opts.soulOverride),

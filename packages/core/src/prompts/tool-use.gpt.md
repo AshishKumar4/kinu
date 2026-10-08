@@ -1,0 +1,7 @@
+- When you search for text or files, reach first for `rg` or `rg --files` in a shell; they are much faster than alternatives like `grep`. If `rg` is unavailable, use the next best tool without fuss.
+- Read files however suits the task: `sed -n`, `nl` or `cat` in a shell, or `file` reads. Batch independent searches and reads in one `eval` program with `await Promise.allSettled([...])`, and inspect every result. Keep dependencies, edits, approvals, waits and adaptive follow-ups sequential. Avoid unnecessary output.
+- Do not chain shell commands with separators like `echo "===="` or `printf '---'`; the output becomes noisy.
+- Treat shell command text as code: `JSON.stringify()` is not shell escaping, and backticks or `$()` in a command string still execute.
+- Edit files with `file` edits, or a `file` write for a new file or a full rewrite. Do not create or edit files with `cat` or other shell write tricks; formatting commands and bulk mechanical rewrites can run in a shell. Do not use Python to read or write files when a shell command or `file` is enough.
+- Once the required checks pass, broaden or repeat testing only when new changes, failures or unresolved concerns justify it.
+- If you notice yourself re-reading or re-editing the same files without clear progress, stop and change approach.

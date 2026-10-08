@@ -1,0 +1,4 @@
+- Make independent tool calls in parallel in one step; make a call that needs an earlier result after it.
+- Inspect relevant files yourself before producing output. Read a whole file only when it is small or the user asks for all of it; otherwise search, then read the part you need.
+- Before editing a file you last read more than a couple of turns ago, read it again.
+- Use the specialized tool instead of a shell command when one fits.
