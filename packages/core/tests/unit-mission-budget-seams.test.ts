@@ -160,7 +160,7 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
     governor.activate(['nightly']);
 
     const deps = searchableDeps({ budget: governor });
-    const result = v.parse(SearchReportSchema, await sandbox(deps).swarm({ task: 'explore', ...TWO_BRANCHES }));
+    const result = v.parse(SearchReportSchema, await sandbox(deps).swarm('explore', TWO_BRANCHES));
     expect(result.report.expansions).toBe(2);
     expect(result.report.tokens).toBe(RUN_TOKENS);
 
@@ -175,7 +175,7 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
     governor.activate(['nightly']);
 
     const deps = searchableDeps({ budget: governor });
-    await sandbox(deps).swarm({ task: 'explore', ...TWO_BRANCHES, budget_tokens: 5_000, budget_label: 'sweep' });
+    await sandbox(deps).swarm('explore', { ...TWO_BRANCHES, budgetTokens: 5_000, budgetLabel: 'sweep' });
 
     expect(governor.snapshot('sweep')[0]?.spent.tokens).toBe(RUN_TOKENS);
     expect(governor.snapshot('sweep')[0]?.parent).toBe('nightly');
@@ -190,7 +190,7 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
 
     const out = v.parse(
       SearchBudgetSchema,
-      await sandbox(deps).swarm({ task: 'x', ...TWO_BRANCHES, budget_tokens: 1_000, budget_label: 'sweep' }),
+      await sandbox(deps).swarm('x', { ...TWO_BRANCHES, budgetTokens: 1_000, budgetLabel: 'sweep' }),
     );
 
     expect(out.mission_budget?.label).toBe('sweep');
@@ -236,8 +236,8 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
 
   test('no governor and no scope leave the search path unbudgeted, and identically so', async () => {
     const governor = newGovernor();
-    const withGovernorNoScope = await sandbox(searchableDeps({ budget: governor })).swarm({ task: 'x', ...TWO_BRANCHES });
-    const withoutGovernor = await sandbox(searchableDeps({})).swarm({ task: 'x', ...TWO_BRANCHES });
+    const withGovernorNoScope = await sandbox(searchableDeps({ budget: governor })).swarm('x', TWO_BRANCHES);
+    const withoutGovernor = await sandbox(searchableDeps({})).swarm('x', TWO_BRANCHES);
 
     // Node ids are minted per run; an unscoped governor must add no key, ledger row or charge.
     expect(v.parse(SearchReportSchema, withGovernorNoScope))
@@ -267,7 +267,7 @@ describe('spawn seam — the run charges its own calls and the spawn charges no 
 
     const out = v.parse(
       SearchReportSchema,
-      await sandbox(deps).swarm({ task: 'explore', ...TWO_BRANCHES }),
+      await sandbox(deps).swarm('explore', TWO_BRANCHES),
     );
 
     // Two nodes really ran and reported tokens, so a zero ledger cannot pass.
@@ -290,7 +290,7 @@ describe('spawn seam — the run charges its own calls and the spawn charges no 
     governor.activate(['nightly']);
 
     const deps = searchableDeps({ budget: governor, usage: 'silent' });
-    const out = v.parse(SearchReportSchema, await sandbox(deps).swarm({ task: 'explore', ...TWO_BRANCHES }));
+    const out = v.parse(SearchReportSchema, await sandbox(deps).swarm('explore', TWO_BRANCHES));
     expect(out.report.expansions).toBe(2);
     expect(out.report.tokens).toBeNull();
 
@@ -308,8 +308,8 @@ describe('spawn seam — the run charges its own calls and the spawn charges no 
 
     const deps = searchableDeps({ budget: governor });
 
-    const out = v.parse(SearchReportSchema, await sandbox(deps).swarm({
-      task: 'explore', preset: 'custom', from: 'ideate', label: 'toolless',
+    const out = v.parse(SearchReportSchema, await sandbox(deps).swarm('explore', {
+      preset: 'custom', from: 'ideate', label: 'toolless',
       config: { unit: { kind: 'thought' } }, branches: 2, depth: 1,
     }));
 

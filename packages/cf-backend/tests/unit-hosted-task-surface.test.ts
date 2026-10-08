@@ -46,7 +46,7 @@ test('a hired subordinate saves and searches memory and lists its roster in its 
 
   const results = toolResults(gateway.runs);
   expect(results).toHaveLength(3);
-  expect(results[0]).toContain('Note saved to memory.');
+  expect(results[0]).toContain('saved');
   expect(results[1]).toContain('streaming parser');
   // An empty roster is right for a child that has hired nobody; what matters is that the rung answers.
   expect(results[2]).toContain('subordinates');

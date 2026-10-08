@@ -14,7 +14,7 @@ import {
   type SwarmAdvance, type SwarmConfig, type SwarmInput,
 } from '../src/strategy/swarm';
 import { VERIFIER_KINDS, resolveVerifier, unregisteredKindRefusal } from '../src/strategy/verifier-registry';
-import { JsonObjectSchema, JsonValueSchema, type JsonObject } from '../src/utils/json';
+import { JsonObjectSchema, JsonValueSchema, projectJsonValue, type JsonObject } from '../src/utils/json';
 import { createAgentsTool } from '../src/delegation/agents-operations';
 import { asSchema } from 'ai';
 import { createTestRuntime, present, unobservedSearchSeams } from '@kinu.run/test-utils';
@@ -78,10 +78,11 @@ const Validated = v.object({ success: v.boolean(), error: v.optional(v.instance(
 
 /** A call's fields, once the native tool takes it; throws its refusal. */
 function parsed(sent: { readonly call: object }): JsonObject {
-  const { op: _op, ...fields } = v.parse(v.objectWithRest({ op: v.string() }, JsonValueSchema), sent.call);
   const checked = v.parse(Validated, present(asSchema(AGENTS.inputSchema).validate, 'the agents tool validates').call(null, sent.call));
 
   if (checked.error !== undefined) throw checked.error;
+  // As JSON carries the call: a field set to undefined is absent.
+  const { op: _op, ...fields } = v.parse(v.objectWithRest({ op: v.string() }, JsonValueSchema), projectJsonValue({ value: sent.call }));
 
   return fields;
 }

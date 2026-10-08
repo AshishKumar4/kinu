@@ -8,13 +8,13 @@ import * as v from 'valibot';
 import { toolExecute } from '@kinu.run/test-utils';
 import { chatSessionTurns, jobsOver, orchestratorHarness } from './helpers/actor-harness';
 
-function agentsActions(tools: ToolSet): readonly string[] {
+function agentsOps(tools: ToolSet): readonly string[] {
   const agents = tools.agents;
 
   if (agents === undefined) throw new Error('the turn offered no agents tool');
-  const schema = v.parse(v.object({ properties: v.object({ action: v.object({ enum: v.array(v.string()) }) }) }), asSchema(agents.inputSchema).jsonSchema);
+  const schema = v.parse(v.object({ properties: v.object({ op: v.object({ enum: v.array(v.string()) }) }) }), asSchema(agents.inputSchema).jsonSchema);
 
-  return schema.properties.action.enum;
+  return schema.properties.op.enum;
 }
 
 async function turnTools(betaSwarms: boolean): Promise<ToolSet> {
@@ -30,13 +30,13 @@ describe('a turn offers swarm only when the account turned the beta on', () => {
   test('off: no swarm in the tool, and a swarm call is refused naming the setting', async () => {
     const tools = await turnTools(false);
 
-    expect(agentsActions(tools)).not.toContain('swarm');
+    expect(agentsOps(tools)).not.toContain('swarm');
     await expect(toolExecute<{ op: string; task: string }, unknown>(tools.agents)({ op: 'swarm', task: 'rank them' }))
       .rejects.toMatchObject({ code: 'denied', message: expect.stringContaining('"Beta: swarms"') });
   });
 
   test('on: the tool offers swarm', async () => {
-    expect(agentsActions(await turnTools(true))).toContain('swarm');
+    expect(agentsOps(await turnTools(true))).toContain('swarm');
   });
 });
 

@@ -4,11 +4,11 @@ import type { PublicMessage } from '../../evals/src/session';
 
 type ToolCallEnd = Extract<RunEvent, { type: 'tool_call_end' }>;
 
-const ActionSchema = v.object({
-  action: v.string(), lifetime: v.optional(v.picklist(['durable', 'task'])), agent: v.optional(v.string()),
+const OpSchema = v.object({
+  op: v.string(), lifetime: v.optional(v.picklist(['durable', 'task'])), agent: v.optional(v.string()),
 });
 
-const TaskHireArgsSchema = v.looseObject({ action: v.literal('hire'), lifetime: v.literal('task'), mission: v.string() });
+const TaskHireArgsSchema = v.looseObject({ op: v.literal('hire'), lifetime: v.literal('task'), mission: v.string() });
 
 /** A task hire as `agents` answers it: at once, its helper still at work (cafab2bfc, SUBAGENTS.md s4). */
 const HiredSchema = v.looseObject({ status: v.literal('working'), lifetime: v.literal('task'), agent: v.string() });
@@ -26,12 +26,12 @@ const StepMessagesSchema = v.array(v.looseObject({
   ]),
 }));
 
-function calls(events: readonly RunEvent[], action: string): ToolCallEnd[] {
+function calls(events: readonly RunEvent[], op: string): ToolCallEnd[] {
   return events.filter((event): event is ToolCallEnd => {
     if (event.type !== 'tool_call_end' || event.name !== 'agents') return false;
-    const args = v.safeParse(ActionSchema, event.args);
+    const args = v.safeParse(OpSchema, event.args);
 
-    return args.success && args.output.action === action
+    return args.success && args.output.op === op
       && event.error === undefined && event.outcome?.success !== false;
   });
 }
@@ -97,7 +97,7 @@ export function finalAnswer(events: readonly RunEvent[]): string {
 /** The durable hire a turn made, by the name it answered with, and whether that turn's roster listed it. */
 export function observeDurableHire(events: readonly RunEvent[]) {
   const durableHire = calls(events, 'hire').find((call) =>
-    v.parse(ActionSchema, call.args).lifetime !== 'task' && v.safeParse(HireSchema, call.result).success);
+    v.parse(OpSchema, call.args).lifetime !== 'task' && v.safeParse(HireSchema, call.result).success);
 
   const durable = v.safeParse(HireSchema, durableHire?.result);
   const durableName = durable.success ? durable.output.name : null;
@@ -114,7 +114,7 @@ export function observeDurableHire(events: readonly RunEvent[]) {
 
 export function observeDelegationRetirement(events: readonly RunEvent[], name: string) {
   const dismisses = calls(events, 'dismiss').filter((call) =>
-    v.parse(ActionSchema, call.args).agent === name);
+    v.parse(OpSchema, call.args).agent === name);
 
   const retired = calls(events, 'list').some((call) => {
     const roster = v.safeParse(RosterSchema, call.result);

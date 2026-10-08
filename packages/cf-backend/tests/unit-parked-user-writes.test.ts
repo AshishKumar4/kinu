@@ -111,7 +111,7 @@ const digest = (text: string): string => new Bun.CryptoHasher('sha256').update(t
 test('a new file on the user\u2019s machine needs no approval', async () => {
   const { machine, file, device, parked } = await workspaceWithMachine();
 
-  expect(await file({ op: 'write', path: `${PC}${DEVICE_HOME}/new.md`, content: 'from the file tool\n' })).toMatchObject({ ok: true });
+  expect(await file({ op: 'write', path: `${PC}${DEVICE_HOME}/new.md`, content: 'from the file tool\n' })).toMatchObject({ action: 'created' });
   expect(await device.writeFile?.execute(`${DEVICE_HOME}/other.md`, 'from codemode\n')).toBe(`Written 14 bytes to ${DEVICE_HOME}/other.md`);
 
   expect(machine.get(`${DEVICE_HOME}/new.md`)).toBe('from the file tool\n');
@@ -155,7 +155,7 @@ test('"always" writes the parked bytes and lets the next overwrite run unasked',
   expect(machine.get(NOTES)).toBe('first\n');
 
   await file({ op: 'read', path: `${PC}${NOTES}` });
-  expect(await file({ op: 'write', path: `${PC}${NOTES}`, content: 'second\n' })).toMatchObject({ ok: true });
+  expect(await file({ op: 'write', path: `${PC}${NOTES}`, content: 'second\n' })).toMatchObject({ action: 'replaced' });
   expect(machine.get(NOTES)).toBe('second\n');
   expect(await parked()).toEqual([]);
 });

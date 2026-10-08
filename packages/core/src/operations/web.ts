@@ -13,6 +13,8 @@ const Engine = v.optional(described(v.picklist(['kitesurf', 'chrome']), 'kitesur
 
 const SessionView = v.strictObject({ id: v.string(), liveView: v.string() });
 
+/** Search, fetch and screenshot observe: the page a fetch spills or the image a screenshot saves is incidental, so a
+ *  shared slate's viewer may use all three without approval (an owner decision). */
 export const WEB = {
   search: defineOperation({
     ns: 'web', name: 'search', help: 'Search the web.', impact: 'observe', availability: 'both', slate: true,

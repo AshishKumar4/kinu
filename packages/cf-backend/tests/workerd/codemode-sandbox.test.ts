@@ -316,8 +316,8 @@ describe('the eval sandbox under workerd', () => {
       tools: { success: false, reason: 'unavailable' },
     });
     expect(successfulToolOutcome('eval', { output: ran })).toMatchObject({ success: true, failures: [
-      { tool: 'web', action: 'connectBrowser', reason: 'denied' },
-      { tool: 'web', action: 'pageTools', reason: 'unavailable' },
+      { tool: 'web', op: 'connectBrowser', reason: 'denied' },
+      { tool: 'web', op: 'pageTools', reason: 'unavailable' },
     ] });
   });
 

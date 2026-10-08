@@ -162,7 +162,7 @@ describe('built-in input schemas per model, as the registry resolves it', () => 
     for (const [provider, modelId] of [['google.chat', 'gemini-2.5-pro'], ['openai.responses', 'gpt-5.5']] as const) {
       const { results } = await builtinTurn(provider, modelId);
 
-      expect({ provider, outcome: results[0] }).toMatchObject({ provider, outcome: { success: false, reason: 'bad_input', error: expect.stringContaining('got "Done"') } });
+      expect({ provider, outcome: results[0] }).toMatchObject({ provider, outcome: { success: false, reason: 'bad_input', error: expect.stringContaining('received "Done"') } });
     }
   });
 });

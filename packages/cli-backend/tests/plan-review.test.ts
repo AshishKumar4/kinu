@@ -198,7 +198,7 @@ describe('LocalAgentSession — plan review', () => {
 
       expect(turnModes(agent)).toEqual(['plan']);
       expect(events.find((event) => event.type === 'tool-result' && event.toolName === 'submit_plan'))
-        .toMatchObject({ output: { ok: false } });
+        .toMatchObject({ success: false, reason: 'bad_input' });
       expect(await agent.getActivePlanReview()).toBeNull();
       expect(planBroadcasts(events)).toEqual([]);
     } finally {

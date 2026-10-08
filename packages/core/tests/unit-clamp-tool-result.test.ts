@@ -284,7 +284,7 @@ describe('tool result budget (behavior through the public tool surface)', () => 
 
     const page = v.parse(v.string(), await file({ op: 'read', path: 'big.txt' }));
     expect(page.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
-    expect(page).toContain('continue with action=read offset=');
+    expect(page).toContain('continue with op=read offset=');
 
     const next = Number(/offset=(\d+)/.exec(page)?.[1]);
     const second = v.parse(v.string(), await file({ op: 'read', path: 'big.txt', offset: next }));

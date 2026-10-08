@@ -165,7 +165,8 @@ describe('ChatEvent tool success/error fidelity', () => {
     const events = await collect(toolThenTextModel({ toolName: 'agents', input: JSON.stringify(input) }), { agents: createAgentsTool(deps) });
     expect(events.find((event) => event.type === 'tool-result')).toMatchObject({ success: false, reason, result: expect.stringContaining(detail) });
     const namespace = createAgentsCodemodeProvider(() => deps);
-    expect(await namespace.tools.swarm?.execute(input)).toMatchObject({ reason, error: expect.stringContaining(detail) });
+    const { op: _op, task, ...options } = input;
+    expect(await namespace.tools.swarm?.execute(task, options)).toMatchObject({ reason, error: expect.stringContaining(detail) });
   });
 
   test('a throwing tool yields a tool-result with success:false and the error text', async () => {

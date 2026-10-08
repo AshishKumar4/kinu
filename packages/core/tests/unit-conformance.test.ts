@@ -5,7 +5,7 @@ import {
   BACKEND_CONFORMANCE, CONFORMANCE_PLANES, CONFORMANCE_ROOTS, PLANE_UNIVERSE,
   compareSurface, normalizeObservedTables, observedOpEnum, phantomCallables,
   renderConformanceFindings,
-  AGENTS_TOOL_ACTIONS, BUILTIN_TOOLS,
+  AGENTS_OPS, BUILTIN_TOOLS,
   type ConformanceManifest, type ObservedSurface, type RootStatuses,
 } from '../src/index';
 import { renderForLLM } from '../src/events/hub/index';
@@ -85,7 +85,7 @@ describe('manifest hygiene', () => {
   test('the closed planes cover their registry universe exactly', () => {
     // The Record key type catches this at compile time; this locks the runtime view.
     expect(Object.keys(BACKEND_CONFORMANCE.tool).sort()).toEqual([...PLANE_UNIVERSE.tool].sort());
-    expect(Object.keys(BACKEND_CONFORMANCE['agents-op']).sort()).toEqual([...AGENTS_TOOL_ACTIONS].sort());
+    expect(Object.keys(BACKEND_CONFORMANCE['agents-op']).sort()).toEqual([...PLANE_UNIVERSE['agents-op']].sort());
     expect(Object.keys(BACKEND_CONFORMANCE['memory-op']).sort()).toEqual([...PLANE_UNIVERSE['memory-op']].sort());
     expect(Object.keys(BACKEND_CONFORMANCE.producer).sort()).toEqual([...PLANE_UNIVERSE.producer].sort());
   });
@@ -118,9 +118,9 @@ describe('normalizeObservedTables', () => {
 });
 
 describe('observedOpEnum', () => {
-  test('reads the action enum from the JSON Schema a provider is sent', () => {
-    expect([...observedOpEnum({ type: 'object', properties: { action: { type: 'string', enum: ['hire', 'fork'] } } })].sort())
-      .toEqual(['fork', 'hire']);
+  test('reads the op enum from the JSON Schema a provider is sent', () => {
+    expect([...observedOpEnum({ type: 'object', properties: { op: { type: 'string', enum: ['hire', 'assign'] } } })].sort())
+      .toEqual(['assign', 'hire']);
   });
   test('an absent schema observes as empty, not as everything', () => {
     expect(observedOpEnum(undefined).size).toBe(0);
@@ -147,7 +147,7 @@ describe('phantomCallables', () => {
 });
 
 describe('event briefs name only real callables', () => {
-  const CALLABLES = new Set<string>([...BUILTIN_TOOLS, ...AGENTS_TOOL_ACTIONS.map((a) => `agents.${a}`)]);
+  const CALLABLES = new Set<string>([...BUILTIN_TOOLS, ...AGENTS_OPS.map((op) => `agents.${op}`)]);
 
   const EVENT_BASE = {
     id: 'eid', trace_id: 'tid', caused_by: null,

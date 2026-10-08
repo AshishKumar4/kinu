@@ -297,9 +297,9 @@ describe('addressing the bound directory', () => {
     expect([existsSync(created), existsSync(join(beside, 'codemode.txt')), existsSync(join(beside, 'fresh'))]).toEqual([false, false, false]);
 
     answer = 'allow';
-    expect(await file({ op: 'write', path: created, content: 'approved' })).toMatchObject({ ok: true });
+    expect(await file({ op: 'write', path: created, content: 'approved' })).toMatchObject({ action: 'created' });
     expect(readFileSync(created, 'utf8')).toBe('approved');
-    expect(await file({ op: 'write', path: join(project, 'inside.txt'), content: 'own' })).toMatchObject({ ok: true });
+    expect(await file({ op: 'write', path: join(project, 'inside.txt'), content: 'own' })).toMatchObject({ action: 'created' });
     expect(asked).toHaveLength(4);
   });
 
@@ -645,7 +645,7 @@ test('local Plan file inspection remains useful without granting native project 
   if (buildFile === undefined) throw new Error('No Build file tool');
   const build = toolExecute(buildFile);
   await build({ op: 'read', path: 'inspect.txt' });
-  expect(await build({ op: 'write', path: 'inspect.txt', content: 'built' })).toMatchObject({ ok: true });
+  expect(await build({ op: 'write', path: 'inspect.txt', content: 'built' })).toMatchObject({ bytes: 5 });
   expect(readFileSync(join(project, 'inspect.txt'), 'utf8')).toBe('built');
 });
 
@@ -660,7 +660,7 @@ test('a file the agent writes in its folder is named local://', async () => {
     return toolExecute(file)({ op: 'write', path: 'notes/plan.md', content: 'ship it' });
   };
 
-  expect(await write(agentRuntime(state, 'bound', project))).toMatchObject({ ok: true, reference: 'local://notes/plan.md' });
+  expect(await write(agentRuntime(state, 'bound', project))).toMatchObject({ reference: 'local://notes/plan.md' });
   expect(readFileSync(join(project, 'notes/plan.md'), 'utf8')).toBe('ship it');
 });
 
@@ -673,8 +673,8 @@ test('the agent\'s own space is real files beside its database, and only its wor
   const file = toolExecute(present(buildBuiltinTools({ rt, workMode: 'build', conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)) }).file, 'the file tool'));
 
   expect(await file({ op: 'write', path: 'vfs://slates/board/index.ts', content: 'board' })).toMatchObject({ reference: 'vfs://slates/board/index.ts' });
-  expect(await file({ op: 'write', path: join(space, 'slates/widgets/package.json'), content: '{}' })).toMatchObject({ ok: true });
-  expect(await file({ op: 'write', path: 'vfs://home/main/notes.md', content: 'scratch' })).toMatchObject({ ok: true });
+  expect(await file({ op: 'write', path: join(space, 'slates/widgets/package.json'), content: '{}' })).toMatchObject({ action: 'created' });
+  expect(await file({ op: 'write', path: 'vfs://home/main/notes.md', content: 'scratch' })).toMatchObject({ action: 'created' });
   expect(await file({ op: 'write', path: 'src/app.ts', content: 'work' })).toMatchObject({ reference: 'local://src/app.ts' });
 
   expect(readFileSync(join(space, 'slates/board/index.ts'), 'utf8')).toBe('board');

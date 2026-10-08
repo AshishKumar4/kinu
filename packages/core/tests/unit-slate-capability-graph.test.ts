@@ -166,6 +166,7 @@ test('a cut grant is every read member plus exactly the approved mutations', () 
     { slate: 'issues', binding: 'FILES', member: 'readFile', effect: 'read' },
     { slate: 'issues', binding: 'NOTES', member: 'recall', effect: 'read' },
     { slate: 'issues', binding: 'TODO', member: 'list', effect: 'read' },
+    { slate: 'issues', binding: 'TODO', member: 'role', effect: 'read' },
     { slate: 'issues', binding: 'NET', member: 'search', effect: 'read' },
     { slate: 'issues', binding: 'NET', member: 'fetch', effect: 'read' },
     { slate: 'issues', binding: 'NET', member: 'screenshot', effect: 'read' },
@@ -187,8 +188,9 @@ test('a cut grant is every read member plus exactly the approved mutations', () 
     .toEqual({ slate: 'issues', binding: 'GITHUB', member: 'create_issue', effect: 'mutate' });
 });
 
-test('a default share reads through the web namespace, but never lets the native web tool write', () => {
-  // The native tool's fetch spills a page and its screenshot saves an image into the workspace; the namespace writes nothing.
+test('a default share reads the web through the namespace and the native tool alike', () => {
+  // One declaration per operation: search, fetch and screenshot observe, whichever surface the slate binds (an owner
+  // decision; a spilled page or a saved image is incidental).
   const project = parseSlateProject({
     main: 'server.js',
     slate: { bindings: { NATIVE: { kind: 'tool', name: 'web' }, NET: { kind: 'web' } } },
@@ -199,7 +201,7 @@ test('a default share reads through the web namespace, but never lets the native
   }), []);
 
   expect(shared.members.map(({ binding, member, effect }) => `${binding}.${member}:${effect}`)).toEqual([
-    'NATIVE.search:read', 'NET.search:read', 'NET.fetch:read', 'NET.screenshot:read',
+    'NATIVE.search:read', 'NATIVE.fetch:read', 'NATIVE.screenshot:read', 'NET.search:read', 'NET.fetch:read', 'NET.screenshot:read',
   ]);
 });
 

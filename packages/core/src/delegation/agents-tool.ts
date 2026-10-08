@@ -749,7 +749,7 @@ function requestedTopic(input: AgentsToolInput): { topic: string } {
 }
 
 /** The refusal of a `swarm` the account's beta withholds; null when the beta is not what stops it. */
-function withheldBeta(wired: AgentsToolDeps, action: AgentsToolInput['action']): string | null {
+export function withheldBeta(wired: AgentsToolDeps, action: AgentsToolInput['action']): string | null {
   if (action !== 'swarm' || wired.swarm === undefined || wired.swarms) return null;
 
   return `swarm is a beta this account has not turned on: "${SWARMS_BETA_SETTING}" in Settings, Beta`;

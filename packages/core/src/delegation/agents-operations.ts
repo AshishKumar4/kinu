@@ -5,7 +5,7 @@
 import * as v from 'valibot';
 import { Cause, Effect } from 'effect';
 import {
-  AgentsEngineInputSchema, dispatchAgentsAction, nestingRoom, offered, verifierKinds,
+  AgentsEngineInputSchema, dispatchAgentsAction, nestingRoom, offered, verifierKinds, withheldBeta,
   type AgentsToolCallOptions, type AgentsToolDeps, type AgentsToolInput,
 } from './agents-tool';
 import { NAMED_SWARM_PRESETS, SWARM_PRESETS, SWARM_PRESET_DOCTRINE } from '../strategy/swarm';
@@ -207,9 +207,14 @@ function serveAgents(deps: () => AgentsToolDeps): readonly Served[] {
   }));
 }
 
-/** The native `agents` tool: each operation it offers is described with it, so it promises only what is wired. */
+/**
+ * The native `agents` tool: each operation it offers is described with it, so it promises only what is wired. A swarm
+ * the account's beta withholds is not offered, and a call to it is refused naming the setting.
+ */
 export function createAgentsTool(deps: AgentsToolDeps) {
-  return nativeTool(BUILTIN_TOOL_DESCRIPTIONS.agents, serveAgents(() => deps));
+  const beta = withheldBeta(deps, 'swarm');
+
+  return nativeTool(BUILTIN_TOOL_DESCRIPTIONS.agents, serveAgents(() => deps), beta === null ? new Map() : new Map([['swarm', beta]]));
 }
 
 /**

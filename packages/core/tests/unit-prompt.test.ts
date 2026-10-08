@@ -1,7 +1,8 @@
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
-import { jsonSchema, tool, type ModelMessage, type ToolSet } from 'ai';
+import * as v from 'valibot';
+import { asSchema, jsonSchema, tool, type ModelMessage, type ToolSet } from 'ai';
 import {
   assertToolsSupportedByModel,
   buildSystemPromptSync,
@@ -19,21 +20,22 @@ import {
   DynamicContextLedger, collectDynamicContext, createAgentStores, initWorkspaceSchema,
   buildBuiltinTools, runChat, permitInPlan, toolsInWorkMode, resolveTurnProfile, profileCatalogDigest,
   splitPromptSections,
-  AGENTS_TOOL_ACTIONS,
+  AGENTS_OPS,
   BUILTIN_SKILLS,
   SWARM_PRESET_DOCTRINE,
   skillIndexLine, skillViewPath,
   type SkillHeader,
   type PromptExecutorInfo,
 } from '../src/index';
-import { AGENTS_ACTION_FIELDS } from '../src/delegation/agents-tool';
+import { createAgentsTool } from '../src/delegation/agents-operations';
+import { swarmSeats } from './helpers-actor-host';
 import { OPERATING_GUIDANCE } from '../src/prompting/section-templates';
 import type { SystemPromptOptions } from '../src/prompt';
 import {
   NAMED_SWARM_PRESETS, SWARM_PRESETS, SWARM_PRESET_POINTS, resolveSwarm,
   type SwarmInput,
 } from '../src/strategy/swarm';
-import { createTestRuntime, createTestActors, scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
+import { createTestRuntime, createTestActors, scriptedTurnModel, unobservedSearchSeams, type ScriptedTurnResult } from '@kinu.run/test-utils';
 import { makeSqlExec, conversationsFor } from './helpers';
 import { createAgentSelfProvider, type AgentSelfHost } from '../src/tools/agent-self';
 
@@ -156,21 +158,19 @@ describe('buildSystemPromptSync', () => {
     }
   });
 
-  test('no built-in skill body calls an action or a field the tool surface does not have', () => {
-    // Nothing typechecks a template string, so a renamed action or field drifts silently.
-    const liveActions: readonly string[] = AGENTS_TOOL_ACTIONS;
-    const swarmFields: readonly string[] = AGENTS_ACTION_FIELDS.swarm;
+  test('no built-in skill body calls an op or a field the agents tool does not have', async () => {
+    // Nothing typechecks a template string, so a renamed op or field drifts silently. The tool is the production one,
+    // wired for searches, which is what the skills call.
+    const { rt, testSql } = createTestRuntime();
+    const agents = createAgentsTool({ mode: 'build', swarms: true, swarm: { rt, ...swarmSeats({ rt, db: testSql.db }, () => { throw new Error('no model here'); }), ...unobservedSearchSeams() } });
+    const offered = v.parse(v.object({ properties: v.record(v.string(), v.unknown()) }), await asSchema(agents.inputSchema).jsonSchema);
+    const fields = Object.keys(offered.properties);
 
     for (const skill of BUILTIN_SKILLS) {
-      for (const [, action] of skill.body.matchAll(/action:\s*["'](\w+)["']/g)) {
-        expect(liveActions).toContain(action);
-      }
+      for (const [, op] of skill.body.matchAll(/op:\s*["'](\w+)["']/g)) expect<readonly string[]>(AGENTS_OPS).toContain(op);
 
-      for (const [, field] of skill.body.matchAll(/agents\(\{([^}]*)\}/g)) {
-        for (const [, key] of field.matchAll(/(\w+):/g)) {
-          if (key === 'action') continue;
-          expect(swarmFields).toContain(key);
-        }
+      for (const [, call] of skill.body.matchAll(/agents\(\{([^}]*)\}/g)) {
+        for (const [, key] of call.matchAll(/(\w+):/g)) expect(fields).toContain(key);
       }
     }
   });

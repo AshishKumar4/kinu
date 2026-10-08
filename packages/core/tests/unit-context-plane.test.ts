@@ -438,7 +438,7 @@ test('the native file tool reads, edits and re-reads the working history over th
     edits: [{ old_text: 'remember the wrong fact', new_text: 'remember the RIGHT fact' }],
   });
 
-  expect(applied).toMatchObject({ ok: true });
+  expect(applied).toMatchObject({ applied: [{ line: 2, removedLines: 1, addedLines: 1 }] });
 
   const pending = await stagedMessages(actor);
   expect(pending[0]).toEqual({ role: 'user', content: 'remember the RIGHT fact' });

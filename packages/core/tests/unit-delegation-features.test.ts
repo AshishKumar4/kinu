@@ -12,8 +12,8 @@ const write = (path: string): ToolCallRecord =>
   call('eval', { code: `await workspace.writeFile("${path}", body);` });
 
 describe('delegationFeatures', () => {
-  test('counts agents actions from a completed turn record', () => {
-    // The unified `agents` tool: rungs are separated by action.
+  test('counts agents operations from a completed turn record', () => {
+    // The `agents` tool: rungs are separated by op; a call naming no op counts in none.
     const toolCalls: ToolCallRecord[] = [
       call('eval', { code: 'a()' }),
       call('agents', { op: 'hire', role: 'r' }),
@@ -30,7 +30,7 @@ describe('delegationFeatures', () => {
       stepCount: 41,
       teamCalls: 3,
       thinkCalls: 1,
-      peerCalls: 3,
+      peerCalls: 2,
       executeCodemodeCalls: 1,
       wallClockMs: 372_000,
       loopedCalls: 0,

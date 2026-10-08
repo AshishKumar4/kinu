@@ -21,7 +21,7 @@ function hiring(run: RecordedGatewayRun, agent: string | undefined, lifetime?: '
   const step = requestOf(run).messages.filter((message) => message.role === 'tool').length;
 
   return step === 0
-    ? toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', mission: MISSION, ...(agent !== undefined && { agent }), ...(lifetime && { lifetime }) } }, 'hire_0')
+    ? toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', mission: MISSION, ...(agent !== undefined && { name: agent }), ...(lifetime && { lifetime }) } }, 'hire_0')
     : chatCompletion(run, 'Handed off.');
 }
 

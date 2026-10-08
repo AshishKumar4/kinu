@@ -193,7 +193,7 @@ describe('the file tool across the /sandbox mount', () => {
 			op: 'write', path: '/sandbox/workspace/broken.mjs', content: 'export const x = 1;\n',
 		});
 
-		expect(written).toMatchObject({ ok: true, action: 'created' });
+		expect(written).toMatchObject({ action: 'created' });
 		expect(new TextDecoder().decode(fs.files.get('/workspace/broken.mjs'))).toBe('export const x = 1;\n');
 		expect(await file({ op: 'read', path: '/sandbox/workspace/broken.mjs' }))
 			.toBe('export const x = 1;\n');
@@ -209,7 +209,7 @@ describe('the file tool across the /sandbox mount', () => {
 			op: 'write', path: '/sandbox/workspace/broken.mjs', content: 'v2\n',
 		});
 
-		expect(replaced).toMatchObject({ ok: true, action: 'replaced' });
+		expect(replaced).toMatchObject({ action: 'replaced' });
 		expect(await file({ op: 'read', path: '/sandbox/workspace/broken.mjs' })).toBe('v2\n');
 	});
 

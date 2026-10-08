@@ -148,7 +148,7 @@ test('an ask spliced into genesis survives the skills it activates', async () =>
     const call = v.parse(ToolCallSchema, message.tool_calls?.[0]);
 
     const args = v.parse(v.pipe(v.string(), v.parseJson(), v.object({
-      action: v.literal('write'), path: v.string(), content: v.string(),
+      op: v.literal('write'), path: v.string(), content: v.string(),
     })), call.function.arguments);
 
     expect(args.path).toBe(`/slates/${HELLO_SLATE_ID}/${file}`);

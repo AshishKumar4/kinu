@@ -10,7 +10,7 @@ import type { TurnContextBudget } from '../context-budget';
 import type { CallJob, Shell, ShellExecOptions } from '../types/primitives';
 import { attempt, KinuError, settle, type Logger } from '../obs/index';
 import { serve, type Served } from '../operations/operation';
-import { SHELL } from '../operations/shell';
+import { shellRun } from '../operations/shell';
 
 /** What the call hands its runtime: absent keys stay absent, so a runtime reads presence. */
 function shellCallOptions(
@@ -69,7 +69,9 @@ export interface ShellDeps {
 export function serveShell({ shell, router, files, budget, escalations, logger }: ShellDeps): Served {
   const fileToolSteer = createFileToolSteer();
 
-  return serve(SHELL.run, async (args, { signal, job }) => await settle(Effect.gen(function* () {
+  const runtimes = [...new Set(['workspace', ...(router?.listExecutors().map(({ name }) => name) ?? [])])];
+
+  return serve(shellRun(runtimes), async (args, { signal, job }) => await settle(Effect.gen(function* () {
         // Approval lives at the execution seam (execution/approval.ts), not here.
 
         // The file steer is composed into the clamped text so one cap covers it (shell-file-steer.ts).

@@ -236,7 +236,7 @@ describe('db.* in the local codemode sandbox', () => {
       };
 
       await expect(s.run(`return await db.dropTable('slots');`, scout)).rejects.toEqual(expect.objectContaining({
-        outcome: { ...refusal, failures: [{ ...refusal, tool: 'db', action: 'dropTable' }] },
+        outcome: { ...refusal, failures: [{ ...refusal, tool: 'db', op: 'dropTable' }] },
       }));
       expect(s.sql<{ n: number }>`SELECT COUNT(*) AS n FROM app_slots`[0]?.n).toBe(2);
     }
@@ -262,7 +262,7 @@ describe('db.* in the local codemode sandbox', () => {
           { op: 'insert', table: 'events', rows: [{ k: 'b' }] },
         ]);
       `)).rejects.toEqual(expect.objectContaining({
-        outcome: { ...refusal, failures: [{ ...refusal, tool: 'db', action: 'batch' }] },
+        outcome: { ...refusal, failures: [{ ...refusal, tool: 'db', op: 'batch' }] },
       }));
 
       expect(s.sql<{ n: number }>`SELECT COUNT(*) AS n FROM app_events`[0]?.n).toBe(0);

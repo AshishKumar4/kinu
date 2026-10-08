@@ -188,7 +188,7 @@ describe('turn-pipeline correctness wiring', () => {
     await file({ op: 'read', path: '/context/working.jsonl' });
     expect(await file({
       op: 'edit', path: '/context/working.jsonl', edits: [{ old_text: 'OLD premise', new_text: 'NEW premise' }],
-    })).toMatchObject({ ok: true });
+    })).toMatchObject({ applied: [expect.objectContaining({ line: expect.any(Number) })] });
     const prepared = await chatSessionTurns(agent).prepare(turn([first, reply, next]));
     await chatSessionTurns(agent).settle({ messageId: 'edited-answer-2', text: 'second answer', requestId: 'edited-req-2' });
 

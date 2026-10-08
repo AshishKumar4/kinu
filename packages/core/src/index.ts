@@ -668,7 +668,7 @@ export { nativeTool, nativeToolSchema, codemodeNamespace } from './tools/operati
 
 export {
   defineOperation, serve, operationId, allowedInPlan, inputJsonSchema,
-  type Operation, type OperationCall, type Served, type Impact,
+  type Operation, type OperationCall, type OperationResult, type Served, type Impact,
 } from './operations/operation';
 
 export { createTasksCodemodeProvider, serveTasks, type RoleSwitch, type RoleSwitchOutcome } from './tools/tasks-operations';

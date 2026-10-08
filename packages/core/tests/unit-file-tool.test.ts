@@ -201,7 +201,7 @@ describe('the honest read, scanned rather than made resident', () => {
     const capped = await slice(file, { maxChars: CAP });
     expect(capped.omitted).toBeGreaterThan(0);
     expect(capped.output).toContain('of 10 in /f');
-    expect(capped.output).toMatch(/action=read offset=\d+/);
+    expect(capped.output).toMatch(/op=read offset=\d+/);
     // The marker counts against the budget.
     expect(capped.output.length).toBeLessThanOrEqual(CAP);
   });
@@ -310,7 +310,7 @@ describe('the honest read, scanned rather than made resident', () => {
 
     const capped = await slice(file, { maxChars: CAP, path: deep });
     expect(capped.output.length).toBeLessThanOrEqual(CAP);
-    expect(capped.output).toContain(`continue with action=read offset=${capped.last + 1}`);
+    expect(capped.output).toContain(`continue with op=read offset=${capped.last + 1}`);
     expect(capped.output).not.toContain(deep);
 
     const empty = await slice('', { maxChars: CAP, path: deep });
@@ -492,7 +492,7 @@ describe('file tool', () => {
       edits: [{ old_text: 'const x = 1;', new_text: 'const x = 2;' }],
     });
 
-    expect(edited).toEqual({ ok: true, path: 'a.ts', reference: 'vfs://home/main/a.ts', applied: [{ line: 1, removed_lines: 1, added_lines: 1 }] });
+    expect(edited).toEqual({ path: 'a.ts', reference: 'vfs://home/main/a.ts', applied: [{ line: 1, removedLines: 1, addedLines: 1 }] });
     expect(vfs.files.get('a.ts')).toBe('const x = 2;\n');
   });
 
@@ -505,7 +505,7 @@ describe('file tool', () => {
       edits: [{ old_text: 'const x = 1;', new_text: 'const x = 2;' }],
     });
 
-    await expect(result).rejects.toThrow('action=read path=a.ts');
+    await expect(result).rejects.toThrow('op=read path=a.ts');
     expect(vfs.files.get('a.ts')).toBe('const x = 1;\n');
     expect(ledger.snapshot().failures).toEqual({ unread: 1 });
   });
@@ -560,7 +560,7 @@ describe('file tool', () => {
     expect(vfs.files.get('big.ts')).toBe(body);
     expect(await call({
       op: 'edit', path: 'big.ts', edits: [{ old_text: 'line 1\nline 2\n', new_text: 'line 1\nLINE 2\n' }],
-    })).toMatchObject({ ok: true });
+    })).toMatchObject({ path: 'big.ts', applied: [expect.objectContaining({ line: expect.any(Number) })] });
   });
 
   test('paging to the end earns the overwrite — the gate is never a dead end', async () => {
@@ -569,7 +569,7 @@ describe('file tool', () => {
     const { call } = toolFor(vfs);
     await call({ op: 'read', path: 's.txt', limit: 1 });
     await call({ op: 'read', path: 's.txt', offset: 2 });
-    expect(await call({ op: 'write', path: 's.txt', content: 'z\n' })).toMatchObject({ ok: true, action: 'replaced' });
+    expect(await call({ op: 'write', path: 's.txt', content: 'z\n' })).toMatchObject({ action: 'replaced' });
   });
 
   test('a BOM is never shown, so the first line the read returns can be matched', async () => {
@@ -581,7 +581,7 @@ describe('file tool', () => {
 
     if (firstLine === undefined) throw new Error('file read returned no first line');
     expect(await call({ op: 'edit', path: 'a.cs', edits: [{ old_text: firstLine, new_text: 'using X;' }] }))
-      .toMatchObject({ ok: true });
+      .toMatchObject({ path: 'a.cs', applied: [expect.objectContaining({ line: expect.any(Number) })] });
     expect(vfs.files.get('a.cs')).toBe('\uFEFFusing X;\nclass A {}\n');
   });
 
@@ -593,7 +593,7 @@ describe('file tool', () => {
     await expect(result).rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('edits[0].new_text') });
     expect(vfs.files.get('a.ts')).toBe('alpha\n');
     expect(await call({ op: 'edit', path: 'a.ts', edits: [{ old_text: 'alpha', new_text: '' }] }))
-      .toMatchObject({ ok: true });
+      .toMatchObject({ path: 'a.ts', applied: [expect.objectContaining({ line: expect.any(Number) })] });
     expect(vfs.files.get('a.ts')).toBe('\n');
   });
 
@@ -638,7 +638,7 @@ describe('file tool', () => {
     const vfs = memoryVfs();
     const { call } = toolFor(vfs);
     expect(await call({ op: 'write', path: 'new.txt', content: 'hi' }))
-      .toEqual({ ok: true, path: 'new.txt', reference: 'vfs://home/main/new.txt', bytes: 2, action: 'created' });
+      .toEqual({ path: 'new.txt', reference: 'vfs://home/main/new.txt', bytes: 2, action: 'created' });
     expect(vfs.files.get('new.txt')).toBe('hi');
   });
 
@@ -650,7 +650,7 @@ describe('file tool', () => {
     expect(vfs.files.get('a.txt')).toBe('original');
     await call({ op: 'read', path: 'a.txt' });
     expect(await call({ op: 'write', path: 'a.txt', content: 'replacement' }))
-      .toMatchObject({ ok: true, action: 'replaced' });
+      .toMatchObject({ action: 'replaced' });
     expect(vfs.files.get('a.txt')).toBe('replacement');
   });
 
@@ -659,7 +659,7 @@ describe('file tool', () => {
     const { call } = toolFor(vfs);
     await call({ op: 'write', path: 'a.txt', content: 'alpha\n' });
     expect(await call({ op: 'edit', path: 'a.txt', edits: [{ old_text: 'alpha', new_text: 'beta' }] }))
-      .toMatchObject({ ok: true });
+      .toMatchObject({ path: 'a.txt', applied: [expect.objectContaining({ line: expect.any(Number) })] });
   });
 
   test('a missing file reports the VFS error with the addressing correction', async () => {
@@ -716,7 +716,7 @@ describe('a `file` read never makes the file resident', () => {
     const { call } = toolFor(vfs);
     expect(await call({ op: 'read', path: 'a.cs' })).toBe('using System;\nclass A {}\n');
     expect(await call({ op: 'edit', path: 'a.cs', edits: [{ old_text: 'using System;', new_text: 'using X;' }] }))
-      .toMatchObject({ ok: true });
+      .toMatchObject({ path: 'a.cs', applied: [expect.objectContaining({ line: expect.any(Number) })] });
     expect(vfs.files.get('a.cs')).toBe('\uFEFFusing X;\nclass A {}\n');
   });
 
@@ -763,7 +763,7 @@ describe('a `file` read never makes the file resident', () => {
     // Four windows, no whole read (the later overwrite does read the file).
     expect(vfs.wholeReads).toEqual([]);
     expect(await call({ op: 'write', path: 'big.ts', content: 'replacement\n' }))
-      .toMatchObject({ ok: true, action: 'replaced' });
+      .toMatchObject({ action: 'replaced' });
   });
 
   test('a gap between windows does not, and the refusal names the line to resume from', async () => {

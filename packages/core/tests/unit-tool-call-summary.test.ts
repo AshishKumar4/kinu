@@ -76,7 +76,7 @@ describe('tool call summaries — truthfulness', () => {
     expect(summarizeToolCall('file', undefined)).toBe('');
     expect(summarizeToolCall('shell', {})).toBe('');
     expect(summarizeToolCall('shell', 'git status')).toBe('');
-    expect(summarizeToolCall('agents', { op: 'assign', agent: 'scout' })).toBe('hire scout');
+    expect(summarizeToolCall('agents', { op: 'assign', agent: 'scout' })).toBe('assign scout');
   });
 
   test('unknown (MCP / crafted) tools show a lone string argument and nothing else', () => {
@@ -113,8 +113,9 @@ describe('toolCallEffect — consequence controls activity density', () => {
     expect(toolCallEffect('memory', { op: 'search', query: 'deploy' })).toBe('read');
   });
 
-  test('network fetches and delegation remain consequential', () => {
-    expect(toolCallEffect('web', { op: 'fetch', url: 'https://example.com' })).toBe('mutate');
+  test('a fetch and a screenshot read; delegation is consequential', () => {
+    expect(toolCallEffect('web', { op: 'fetch', url: 'https://example.com' })).toBe('read');
+    expect(toolCallEffect('web', { op: 'screenshot', url: 'https://example.com' })).toBe('read');
     expect(toolCallEffect('agents', { op: 'assign' })).toBe('mutate');
     expect(toolCallEffect('agents', { op: 'list' })).toBe('read');
   });

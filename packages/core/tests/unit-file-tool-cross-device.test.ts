@@ -109,7 +109,7 @@ describe('a file on another machine', () => {
     await file({ op: 'read', path: '/pc/ashish@studio/home/notes.md' });
 
     expect(await file({ op: 'write', path: '/pc/ashish@studio/home/notes.md', content: 'moved here' }))
-      .toMatchObject({ ok: true, reference: 'ashish@studio://home/notes.md' });
+      .toMatchObject({ reference: 'ashish@studio://home/notes.md' });
     expect(transport.frames.filter((frame) => frame.method === 'writeFile'))
       .toEqual([{ method: 'writeFile', path: '/home/notes.md', deviceId: 'dev-studio' }]);
   });
@@ -122,11 +122,11 @@ describe('a file on another machine', () => {
 
     await file({ op: 'read', path: '/pc/ashish@studio/home/notes.md' });
     expect(await file({ op: 'write', path: '/pc/ashish@studio/home/notes.md', content: 'moved here' }))
-      .toMatchObject({ ok: true, undo });
+      .toMatchObject({ undo });
     // This fleet never keeps a write, so the edit reads the machine's own bytes first.
     await file({ op: 'read', path: '/pc/ashish@studio/home/notes.md' });
     expect(await file({ op: 'edit', path: '/pc/ashish@studio/home/notes.md', edits: [{ old_text: 'kept', new_text: 'moved' }] }))
-      .toMatchObject({ ok: true, undo });
+      .toMatchObject({ undo });
   });
 
   test('an overwrite the owner approves still says undo cannot restore it, from the file tool and from codemode', async () => {
@@ -137,7 +137,7 @@ describe('a file on another machine', () => {
 
     await file({ op: 'read', path: '/pc/ashish@studio/home/notes.md' });
     expect(await file({ op: 'write', path: '/pc/ashish@studio/home/notes.md', content: 'moved here' }))
-      .toMatchObject({ ok: true, undo });
+      .toMatchObject({ undo });
 
     await readFile('/pc/ashish@studio/home/notes.md');
     expect(await writeFile('/pc/ashish@studio/home/notes.md', 'moved again')).toContain(undo);

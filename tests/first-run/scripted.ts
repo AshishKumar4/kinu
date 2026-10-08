@@ -151,7 +151,7 @@ const delegation: Script = (request) => {
     ], ([, roster]) => `ROSTER ${namesIn(roster?.result ?? '').join(' ')}`);
   }
 
-  const dismissed = /^Dismiss the durable helper with your agents tool: action dismiss, agent (".*?")\. /.exec(ask)?.[1];
+  const dismissed = /^Dismiss the durable helper with your agents tool: op dismiss, agent (".*?")\. /.exec(ask)?.[1];
 
   if (dismissed === undefined) return null;
 

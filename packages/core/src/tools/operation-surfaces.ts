@@ -98,8 +98,9 @@ function nativeCall(resolve: (input: JsonObject) => NativeCall | KinuError, said
  * A capability's native tool. `op` is its one required field and names the operation; every other field is any of
  * its operations' fields, described with the operations that take it. A call is held to its own operation's schema,
  * so a missing field is refused by name. Each operation's result is said here once, for a program calling it too.
+ * An operation the wiring has but `withheld` names is not offered, and a call to it is refused with the reason.
  */
-export function nativeTool(description: string, members: readonly Served[]): Tool {
+export function nativeTool(description: string, members: readonly Served[], withheld: ReadonlyMap<string, string> = new Map()): Tool {
   const ops = members.map(({ op }) => op.name).join(', ');
 
   return nativeCall((input) => {
@@ -107,6 +108,10 @@ export function nativeTool(description: string, members: readonly Served[]): Too
 
     if (!named.success) return new KinuError('bad_input', `\`op\` is required; the ops are: ${ops}`);
     const served = members.find((member) => member.op.name === named.output.op);
+
+    const reason = withheld.get(named.output.op);
+
+    if (reason !== undefined) return new KinuError('denied', reason);
 
     if (served === undefined) return new KinuError('bad_input', `unknown op "${named.output.op}"; the ops are: ${ops}`);
     const { op: _op, ...fields } = input;

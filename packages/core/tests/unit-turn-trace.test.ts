@@ -142,7 +142,7 @@ test('a turn records admitted, each step, tool run and delegation, and settled, 
   expect(attribute('turn.step', 'gen_ai.usage.output_tokens')).toEqual([1, 1, 1]);
   expect(attribute('turn.tool_call', 'gen_ai.tool.name')).toEqual(['file', 'agents']);
   expect(attribute('turn.tool_call', 'kinu.step')).toEqual([0, 1]);
-  expect(attribute('turn.delegation', 'kinu.delegation.action')).toEqual(['msg']);
+  expect(attribute('turn.delegation', 'kinu.delegation.action')).toEqual(['message']);
   expect(attribute('turn.delegation', 'kinu.step')).toEqual([1]);
   expect(attribute('turn.settled', 'kinu.turn.steps')).toEqual([3]);
   expect(attribute('turn.settled', 'kinu.turn.outcome')).toEqual(['completed']);

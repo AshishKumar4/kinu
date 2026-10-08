@@ -366,7 +366,7 @@ describe('toolOutcomes — structural attribution with an observed denominator',
     emit(store, 'run-a', 'tool_call_end', {
       name: 'eval', toolCallId: 't1', outcome: {
         success: true,
-        failures: [{ success: false, tool: 'file', action: null, reason: 'missing', error: 'ENOENT: no such directory, home/user/skills' }],
+        failures: [{ success: false, tool: 'file', op: null, reason: 'missing', error: 'ENOENT: no such directory, home/user/skills' }],
       },
     });
     emit(store, 'run-a', 'tool_call_end', { name: 'shell', toolCallId: 't2', outcome: { success: true } });

@@ -99,7 +99,7 @@ export interface BuiltinToolDeps {
   escalations?: TurnEscalationLedger;
   /** Test seam; defaults to one JSON line per event on `console`. */
   logger?: Logger;
-  /** Absent: role switches (tasks action=mode) refuse. */
+  /** Absent: role switches (tasks op=switchRole) refuse. */
   roleSwitch?: RoleSwitch;
 }
 

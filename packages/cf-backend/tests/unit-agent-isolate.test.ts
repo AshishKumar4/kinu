@@ -266,7 +266,7 @@ test("a hired agent's working context is read and edited where its conversation 
     .flatMap((run) => requestOf(run).messages.flatMap((message) => (message.role === 'tool' ? [String(message.content)] : [])));
 
   expect(answers.some((answer) => answer.includes('First task OTTERX.'))).toBe(true);
-  expect(answers.some((answer) => answer.startsWith('{"ok":true'))).toBe(true);
+  expect(answers.some((answer) => answer.includes('"applied":[{'))).toBe(true);
   expect(await main()).toContain('First task OTTERX. INJECTED-NOTE');
   await wakeForDelegatedTask(workspace, middleId, 'Third task.');
   await driveUntil(workspace, 'the third turn never ended', () => ended() > 2);

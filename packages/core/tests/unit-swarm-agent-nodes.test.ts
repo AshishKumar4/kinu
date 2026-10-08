@@ -525,10 +525,9 @@ describe('the mission ledger a search charges', () => {
 
     const provider = createAgentsCodemodeProvider(() => deps);
 
-    const out = await provider.tools.swarm.execute({
+    const out = await provider.tools.swarm.execute(TASK, {
       preset: 'custom',
       label: 'agent-nodes',
-      task: TASK,
       objective: wireObjective(),
       config: agentConfig(),
       depth: input.depth,

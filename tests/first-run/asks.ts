@@ -33,7 +33,7 @@ export const ISOLATION_ASK = 'This workspace must not reach addresses inside our
   + 'Use each of these tools exactly once, in this order, and report what each one said. '
   + `1. With the web tool, fetch ${INTERNAL_URL} `
   + `2. With eval, run exactly this program: ${INTERNAL_FETCH_PROGRAM} `
-  + '3. With your agents tool, hire one helper: action hire, lifetime task, role task, mission '
+  + '3. With your agents tool, hire one helper: op hire, lifetime task, role task, mission '
   + `"${INTERNAL_FETCH_MISSION}" `
   + 'When all three are done, reply with ONE line that starts with DONE.';
 
@@ -45,7 +45,7 @@ export function sayWordMission(word: string): string {
   return `Reply with exactly the word ${word} and nothing else.`;
 }
 
-export const DELEGATION_TASK_ASK = 'Use your agents tool to hire one helper: action hire, lifetime task, role task, '
+export const DELEGATION_TASK_ASK = 'Use your agents tool to hire one helper: op hire, lifetime task, role task, '
   + `mission "${sayWordMission(DELEGATION_WORD)}" `
   + 'Its answer arrives later, as a message that opens your next turn; '
   + 'when it does, reply with one line: HIRED <its answer>.';
@@ -53,15 +53,15 @@ export const DELEGATION_TASK_ASK = 'Use your agents tool to hire one helper: act
 /** delegation: the durable helper's mission. */
 export const STANDBY_MISSION = 'Stand by for one question.';
 
-export const DELEGATION_ROSTER_ASK = 'Use your agents tool to hire one durable helper: action hire, role task, '
+export const DELEGATION_ROSTER_ASK = 'Use your agents tool to hire one durable helper: op hire, role task, '
   + `mission "${STANDBY_MISSION}" A durable hire omits the lifetime field and stays `
-  + 'in the roster. Then list the roster (agents action list) and reply with one line: '
+  + 'in the roster. Then list the roster (agents op list) and reply with one line: '
   + 'ROSTER <every name the roster shows>.';
 
 /** delegation: retire the durable helper by the name the roster gave it. */
 export function delegationDismissAsk(name: string): string {
-  return `Dismiss the durable helper with your agents tool: action dismiss, agent ${JSON.stringify(name)}. `
-    + 'Then list the roster (agents action list) and reply with one line: RETIRED.';
+  return `Dismiss the durable helper with your agents tool: op dismiss, agent ${JSON.stringify(name)}. `
+    + 'Then list the roster (agents op list) and reply with one line: RETIRED.';
 }
 
 /** agent-nested-chat: the task the grandchild owns, which the Work tab lists under its name. */
@@ -75,7 +75,7 @@ export const NESTED_MISSION = `Use your tasks tool to add one task titled ${JSON
   + sayWordMission(NESTED_WORD);
 
 /** agent-nested-chat: what the owner's helper is told. A durable hire answers after the helper's turn, as a report. */
-export const NESTED_HIRE_ASK = 'Use your agents tool to hire one helper: action hire, role task, no lifetime (durable). '
+export const NESTED_HIRE_ASK = 'Use your agents tool to hire one helper: op hire, role task, no lifetime (durable). '
   + `Its mission: "${NESTED_MISSION}" When it answers, reply with exactly its answer and nothing else.`;
 
 /** delegation-tree: the word the deep helper says, two levels below the root. */
@@ -85,11 +85,11 @@ export const TREE_DEEP_WORD = 'emberfall';
 export const TREE_SHALLOW_WORD = 'tidewater';
 
 /** delegation-tree: the first helper's mission, which hires the deep helper and relays its answer. */
-export const RELAY_MISSION = 'Use your agents tool to hire one helper with action hire, lifetime task '
+export const RELAY_MISSION = 'Use your agents tool to hire one helper with op hire, lifetime task '
   + `and role task, whose mission is: ${sayWordMission(TREE_DEEP_WORD)} When it `
   + 'answers, reply with exactly its answer and nothing else.';
 
-export const TREE_ASK = 'Use your agents tool to hire two helpers, each with action hire, lifetime task and role task. '
+export const TREE_ASK = 'Use your agents tool to hire two helpers, each with op hire, lifetime task and role task. '
   + `The first helper's mission: "${RELAY_MISSION}" `
   + `The second helper's mission: "${sayWordMission(TREE_SHALLOW_WORD)}" `
   + 'Their answers arrive later, each as a message that opens your next turn; '
@@ -98,7 +98,7 @@ export const TREE_ASK = 'Use your agents tool to hire two helpers, each with act
 /** exploration: what every node of the swarm is asked. */
 export const SWARM_TASK = 'Name one fruit whose skin is yellow. Report only the fruit\'s name.';
 
-export const SWARM_ASK = `Use your agents tool with action swarm and preset ideate, with this task: "${SWARM_TASK}" `
+export const SWARM_ASK = `Use your agents tool with op swarm and preset ideate, with this task: "${SWARM_TASK}" `
   + 'When the swarm settles, reply with one line: SWARM <the names it returned>.';
 
 export const CONSENT_ASK = 'Use the shell tool with runtime "device" to run the command `hostname` on my computer, '

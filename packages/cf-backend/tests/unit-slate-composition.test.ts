@@ -401,7 +401,7 @@ test('native tool bindings use the caller file plane and lose reach immediately 
 
   expect(await call()).toMatchObject({ ok: true, value: expect.stringContaining('root note') });
   const memory = (asCaller: SlateCaller, member: string, args: JsonValue[]) => parent.agent.slateBindingCallAs(asCaller, 'native-reader', 'NOTES', { member, args, invocation: null });
-  expect(await memory(caller, 'remember', ['slate-key', 'child fact'])).toMatchObject({ ok: true, value: { ok: true } });
+  expect(await memory(caller, 'remember', ['slate-key', 'child fact'])).toMatchObject({ ok: true, value: { key: 'slate-key' } });
   expect(await memory(ROOT_SLATE_CALLER, 'recall', ['slate-key'])).toMatchObject({ ok: true, value: { found: false } });
   parent.agent.harnessInstallCatalog({
     roles: { scribe: { description: 'Only memory.', instructions: 'Write.', tier: 'default', preset: 'ideate', allowedTools: ['memory'] } },

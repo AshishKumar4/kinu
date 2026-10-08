@@ -30,7 +30,7 @@ test('a real Plan turn reads files but cannot edit them, even after a Build turn
   if (buildFile === undefined) throw new Error('Build has no file tool');
   const build = toolExecute<JsonValue, JsonValue>(buildFile);
   await build({ op: 'read', path });
-  expect(await build({ op: 'write', path, content: 'built' })).toMatchObject({ ok: true });
+  expect(await build({ op: 'write', path, content: 'built' })).toMatchObject({ action: 'replaced' });
   expect(await readText(files, path)).toBe('built');
   await expect(plan({ op: 'write', path, content: 'late Plan overwrite' })).rejects.toMatchObject({ code: 'denied' });
   expect(await readText(files, path)).toBe('built');
@@ -73,7 +73,7 @@ test('a planner role records Plan authority for deferred work even when the mess
   const submitted = configured.tools.submit_plan;
 
   if (submitted === undefined) throw new Error('Role-imposed Plan has no plan submission operation');
-  expect(await toolExecute(submitted)({ edits: [{ start: 1, content: '# Plan\nInspect the source before implementation.' }] })).toMatchObject({ ok: true, status: 'pending' });
+  expect(await toolExecute(submitted)({ edits: [{ start: 1, content: '# Plan\nInspect the source before implementation.' }] })).toMatchObject({ status: 'pending' });
   expect(await agent.getActivePlanReview()).toMatchObject({ status: 'pending' });
   await chatSessionTurns(agent).settle({ messageId: 'role-plan-answer', text: 'Plan ready.', requestId: 'role-plan-answer' });
   const runs = await agent.listRuns();
