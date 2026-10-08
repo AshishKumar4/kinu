@@ -394,6 +394,8 @@ folder, or one whose folder is gone; there is no adoption. Evals and fixtures bi
 | Mounts on the file plane | `/pc`, `/sandbox`, `/skills`, `/shared` (Drive), `/context` | `/skills`, `/shared`, `/context`, `/agent`; `/shared` answers `ENXIO` without a Drive; `/pc` and `/sandbox` are native host paths, never device/container mounts |
 | Mounts in the shell | the same table, through `mountedAuthority` | none: `/pc` in the host shell is the machine's own path |
 
+File checkpoints have one engine, `core/src/checkpoints/engine.ts`. The CLI runs it (`cli-backend/src/checkpoints.ts`), and the device daemon carries a generated copy (`scripts/daemon-generated.ts`), so both take and restore snapshots by the same rules: no wall clock on git, one store operation at a time, a failed snapshot never blocks the mutation it precedes, and a write's workdir climbs from the entry itself and stops at the temp directory and the home folder. `cli-backend/tests/checkpoint-engine.test.ts` holds each rule on both hosts.
+
 Both backends mount through one Kinu API: `withMountTable(base, mounts)`
 (`core/src/vfs/mounts.ts`) gives the `file` tool its view.
 `WorkspaceBundle.mountTable(plane, cred)` (`core/src/vfs/nimbus-workspace.ts`)
