@@ -14,18 +14,18 @@ import {
   ingressAdmitted,
   parseSlateProject, routeSlateStorageCall, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
   SlateCallRequestSchema, SlateOperationSchema, requireSlateWorkMode, requireWorkModePermission, routeSlateCall, issuedSlateInvocation,
-  routeViewerCall, admitNestedViewerCall, SLATE_DRIVEN_MEMBERS, slateCallAddress, slateAddressImpact, JsonValueSchema, projectJsonValue, isSlateMethodName, answeredRefusal, reoriginateRequest,
+  routeViewerCall, admitNestedViewerCall, slateCallAddress, slateAddressImpact, JsonValueSchema, projectJsonValue, isSlateMethodName, answeredRefusal, reoriginateRequest,
   escapeHtml, publicPage, UsageSchema, usageTotal,
   SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, shareSpendLabel, VIEWER_EXCHANGE_PATH,
   type BlueprintBundle, type BlueprintFork, type JsonValue, type SlateAnswer, type SlateProject, type SlateShareRecord,
-  type SlateRoute, type SlateCall, type SlateCallRequest, type SlateCallResult, type SlateInvocation, type SlateOperation, type SlateSummary, type SlateProblem, type WorkspacePreviewUrl,
+  type SlateRoute, type SlateCallRequest, type SlateCallResult, type SlateInvocation, type SlateOperation, type SlateSummary, type SlateProblem, type WorkspacePreviewUrl,
   type SlateSurfaceCatalog, type LiveShareRecord, type SlateViewer, type ViewerCall, type ShareViewerClaim,
   type MissionGovernor, type WorkspaceOverviewShare, slateCapabilityGraph, type SlateCapabilityGraph,
   ephemeralSlateAddress, type EphemeralSlateAddress,
 } from '@kinu.run/core';
 import { SLATES_ROOT } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
-import { ERROR_CODES, KinuError, classifyErrorCode, refusalOf, toKinuError, type Refusal } from '@kinu.run/core/obs';
+import { ERROR_CODES, KinuError, classifyErrorCode, refusalOf, settleSync, toKinuError, type Refusal } from '@kinu.run/core/obs';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
 import { slateBatchStub } from './rpc-transport';
 import { ROOT_SLATE_CALLER, slateCallerKey, slateCredentialKey, shareCaller, type SlateBinding, type SlateBindingProps, type SlateCaller } from './bindings';
@@ -83,17 +83,6 @@ export interface SlateHostDeps extends ResidentSlateDeps {
  */
 function heldKey(caller: SlateCaller, id: string): string {
   return ephemeralSlateAddress(id) === null ? `${slateCallerKey(caller)}#${id}` : `page#${id}`;
-}
-
-/** A call that asks only to be authorized must name a member its class runs itself: a browser member, nothing else. */
-function authorizable(call: SlateCall, request: SlateCallRequest): SlateCall {
-  const driven = call.route.kind === 'namespace' && call.address.namespace === 'web' && SLATE_DRIVEN_MEMBERS.includes(call.address.member);
-
-  if (request.authorize === true && !driven) {
-    throw new KinuError('bad_input', `${call.address.namespace}.${call.address.member} runs at the host; only ${SLATE_DRIVEN_MEMBERS.map((member) => `web.${member}`).join(', ')} are authorized and run by the class`);
-  }
-
-  return call;
 }
 
 /** The one surface every slate is given, as its process sees it. */
@@ -776,7 +765,7 @@ export class SlateHost {
 
       // An answer's page calls as its author as of now, in the mode the author's next turn runs in.
       const callsAs = source.kind === 'message' ? source.author : caller;
-      const call = authorizable(routeSlateCall({ id, request: parsed.output, chain }), parsed.output);
+      const call = routeSlateCall({ id, request: parsed.output, chain });
       // An answer's page is never shared or published, so what it calls is no slate's graph.
       const record = (namespace: string, member: string) => { if (source.kind !== 'message') this.usage.record(id, { namespace, member }); };
 
@@ -835,11 +824,11 @@ export class SlateHost {
         throw new KinuError('budget', 'This share is paused for today');
       }
 
-      const call = authorizable(routeViewerCall({ id, request, chain, viewer, grant: share.grant }), request);
+      const call = routeViewerCall({ id, request, chain, viewer, grant: share.grant });
       row = { slate: id, ...call.address, impact: call.impact, ok: false };
 
       // What the call reaches inside itself meets the grant as it stands then: a revoke mid-call ends it there.
-      const nested = (namespace: string, member: string) => { admitNestedViewerCall(this.live.live(input.share).grant, id, { namespace, member }); };
+      const nested = (namespace: string, member: string) => { settleSync(admitNestedViewerCall(this.live.live(input.share).grant, id, { namespace, member })); };
 
       const result = await this.run(caller, call.route, { nested, ...(request.authorize && { authorizeOnly: true }) }, viewer);
       row = { ...row, ok: result.ok };

@@ -50,3 +50,15 @@ it('a program draws the issue house on a real whiteboard slate through workspace
     },
   });
 });
+
+it("a share's viewer runs the owner's approved crafted tool only as far as the grant reaches, and none of the owner's browsers", async () => {
+  const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('crafted-tool-share'));
+  const ran = await subject.craftedToolUnderShare({ workspace: 'crafted-tool-share', owner: 'tool-owner' });
+
+  // The owner's run lists the owner's browsers and writes, and what the tool reached inside itself is the slate's reach.
+  expect(JSON.parse(ran.owner)).toMatchObject({ result: { browsers: [], wrote: 'owner' } });
+  expect(ran.reached).toEqual(expect.arrayContaining(['tools.helper:execute', 'workspace.writeFile:mutate', 'web.browsers:observe']));
+
+  // Shared granting the tool alone: its write is not granted, and it holds no browser session of the owner's.
+  expect(JSON.parse(ran.viewer)).toEqual({ browsers: null, refused: expect.stringContaining('does not grant workspace.writeFile to viewers') });
+});

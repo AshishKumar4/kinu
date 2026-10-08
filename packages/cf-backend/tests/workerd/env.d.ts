@@ -298,6 +298,7 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   }): Promise<ServedSlate>;
   portReservations(workspace: string): Promise<DurabilityReservation[]>;
   programOnWhiteboard(input: { workspace: string; owner: string; program: string }): Promise<string>;
+  craftedToolUnderShare(input: { workspace: string; owner: string }): Promise<{ owner: string; reached: string[]; viewer: string }>;
   forgetActivation(workspace: string): Promise<void>;
   pendingNimbusTasks(workspace: string): Promise<{ tasks: Array<{ id: string; time: number }>; alarm: number | null }>;
   drivePreview(url: string): Promise<PreviewAnswer>;

@@ -3025,6 +3025,11 @@ export abstract class ActorAgent extends Agent<Env> {
    */
   slateCallDispatch(path: readonly SlateCallerHop[], route: SlateRoute, mode: WorkMode, context: SlateDispatchContext): Promise<JsonValue> {
     return settle(Effect.gen({ self: this }, function* () {
+      // Only a namespace member is checked without running it; anything else asked about alone would run.
+      if (context.authorizeOnly && route.kind !== 'namespace') {
+        return yield* new KinuError('bad_input', `A ${route.kind} route runs at the host; it is not authorized to run elsewhere`);
+      }
+
       // Hops resolve hosted actors through the directory, inside this object, so an unreachable
       // name is refused here rather than as a rejected RPC deeper down.
       const [next, ...rest] = path;
@@ -3165,8 +3170,6 @@ export abstract class ActorAgent extends Agent<Env> {
   }): Promise<JsonValue> {
     const { rt, providers, reach, route, mode, context } = input;
     const executorNames = new Set(rt.executionRouter?.getProviders().map((provider) => provider.name) ?? []);
-
-    if (context.authorizeOnly) throw new KinuError('bad_input', `tools.${route.name} runs at the host; it is not authorized to run elsewhere`);
 
     const factory = createCodemodeToolFactory({
       launch: this.codemodeLaunch(context.viewer ? null : rt.actor.actorId), rt,

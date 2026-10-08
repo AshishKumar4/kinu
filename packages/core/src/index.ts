@@ -271,7 +271,7 @@ export {
 
 export {
   SlateCallRequestSchema, SLATE_DRIVEN_MEMBERS, routeSlateCall, issuedSlateInvocation, routeViewerCall, admitNestedViewerCall, slateCallAddress,
-  type SlateCallRequest, type SlateRoute, type SlateCall, type SlateInvocation, type SlateViewer,
+  type SlateCallRequest, type SlateRoute, type SlateInvocation, type SlateViewer,
 } from './slates/surface';
 
 export { SLATE_READ_MODELS, type SlateReadModel } from './slates/read-models';
