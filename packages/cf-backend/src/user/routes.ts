@@ -631,26 +631,29 @@ const MemoryDecisionSchema = v.object({ decision: v.picklist(['accept', 'decline
 
 const MemoryFactSchema = v.object({ value: JsonValueSchema, workspace: v.optional(v.pipe(v.string(), v.nonEmpty())) });
 
-/** A memory write's body, parsed, or the refusal that says why not. */
-function memoryWrite<S extends v.GenericSchema>(c: UserContext, schema: S, doing: string, write: (body: v.InferOutput<S>) => Promise<Response>): Promise<Response> {
-  return settle(Effect.gen(function* () {
-    const body = yield* Effect.promise(async () => safeJson(c.req.raw, schema));
+userRoutes.post('/api/user/memory/proposals/:id', (c) => settle(Effect.gen(function* () {
+  const body = yield* Effect.promise(async () => safeJson(c.req.raw, MemoryDecisionSchema));
 
-    if (body === null) return err(400, 'Body must be JSON in the shape this route reads');
+  if (body === null) return err(400, 'Body must be JSON: { "decision": "accept" | "decline" }');
 
-    return yield* Effect.tryPromise({ try: async () => await write(body), catch: (cause) => authoredRefusal({ doing, cause }) });
-  }));
-}
-
-userRoutes.post('/api/user/memory/proposals/:id', (c) => memoryWrite(c, MemoryDecisionSchema, 'deciding this account memory proposal', async (body) => {
-  const decided = await c.get('stub').accountMemory_decide(c.get('owner'), decodeURIComponent(rawParam(c, 'id')), body.decision);
+  const decided = yield* Effect.tryPromise({
+    try: async () => await c.get('stub').accountMemory_decide(c.get('owner'), decodeURIComponent(rawParam(c, 'id')), body.decision),
+    catch: (cause) => authoredRefusal({ doing: 'deciding this account memory proposal', cause }),
+  });
 
   return decided ? json({ body: { ok: true } }) : err(404, 'No pending proposal has that id');
-}));
+})));
 
 // An edit, or the owner promoting a workspace fact: `workspace` names where it came from.
-userRoutes.put('/api/user/memory/facts/:key', (c) => memoryWrite(c, MemoryFactSchema, 'saving this account fact', async (body) => json({
-  body: { key: await c.get('stub').accountMemory_put(c.get('owner'), decodeURIComponent(rawParam(c, 'key')), body.value, body.workspace) },
+userRoutes.put('/api/user/memory/facts/:key', (c) => settle(Effect.gen(function* () {
+  const body = yield* Effect.promise(async () => safeJson(c.req.raw, MemoryFactSchema));
+
+  if (body === null) return err(400, 'Body must be JSON: { "value": …, "workspace"?: string }');
+
+  return yield* Effect.tryPromise({
+    try: async () => json({ body: { key: await c.get('stub').accountMemory_put(c.get('owner'), decodeURIComponent(rawParam(c, 'key')), body.value, body.workspace) } }),
+    catch: (cause) => authoredRefusal({ doing: 'saving this account fact', cause }),
+  });
 })));
 
 userRoutes.delete('/api/user/memory/facts/:key', (c) => settle(Effect.tryPromise({

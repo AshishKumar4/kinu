@@ -36,6 +36,15 @@ Zechner, 2025-2026 Can Bölük and 2026 Stencil Labs, Inc., under the MIT
 License. The required copyright notice and license text sit in
 [`third_party/oh-my-pi-LICENSE-MIT`](third_party/oh-my-pi-LICENSE-MIT).
 
+Kinu's memory recall and extraction follow oh-my-pi's mnemopi package at commit
+`317f2b8653` (2026-10-08): the stop words, synonym groups, word-form matching,
+identifier parts and group relevance in `packages/core/src/memory/lexical-recall.ts`;
+the importance and veracity weights and keyword score in
+`packages/core/src/memory/facts.ts`; and the extraction rules in
+`packages/core/src/memory/sleep-time-compute.ts`. mnemopi is copyright
+2025-2026 Can Bölük and 2026 Stencil Labs, Inc., under the MIT License, the same
+text as above.
+
 ## Codex
 
 Parts of Kinu's system prompt for GPT-family models (`packages/core/src/prompts/*.gpt.md`) and its autonomy and

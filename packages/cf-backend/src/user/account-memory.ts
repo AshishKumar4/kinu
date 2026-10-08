@@ -10,7 +10,6 @@ import {
   type AccountMemoryProposal, type AccountMemoryView, type AccountNote, type AccountNoteHit, type AccountProposal, type Fact, type FactOrigin,
   type FactsStore, type JsonValue, type SqlExecutor, type UserCaller,
 } from '@kinu.run/core';
-import { KinuError } from '@kinu.run/core/obs';
 import type { SqlRow, UserObjectHost } from './user-host';
 
 export interface AccountMemoryHost extends UserObjectHost {
@@ -19,6 +18,9 @@ export interface AccountMemoryHost extends UserObjectHost {
 }
 
 const ProposalDecisionSchema = v.picklist(['accept', 'decline']);
+
+/** A key as the store keeps it: normalized, and something left once it is. */
+const FactKeySchema = v.pipe(v.string(), v.maxLength(200), v.transform(normalizeFactKey), v.nonEmpty('An account fact needs a key.'));
 
 interface ProposalRow extends SqlRow {
   id: string;
@@ -124,9 +126,8 @@ export class UserAccountMemory {
   /** The owner's own write: an edit, or a workspace fact promoted from its world model (`workspace` names it). */
   async accountMemory_put(caller: UserCaller, key: string, value: JsonValue, workspace?: string): Promise<string> {
     await this.host.requireTier(caller, 'memory.account.manage');
-    const stored = normalizeFactKey(v.parse(v.pipe(v.string(), v.nonEmpty(), v.maxLength(200)), key));
+    const stored = v.parse(FactKeySchema, key);
 
-    if (stored === '') throw new KinuError('bad_input', 'An account fact needs a key.');
     this.facts.upsert(stored, value, { veracity: 'stated', origin: { by: 'owner', ...(workspace !== undefined && { workspace }) } });
 
     return stored;

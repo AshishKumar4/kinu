@@ -192,15 +192,7 @@ function fused({ lexical, semantic, factArm, accountNotes, finalK, rrfK, rehydra
     const f = byIdFact.get(m.id);
     const s = byIdSem.get(m.id);
     const n = byIdNote.get(m.id);
-    const sources: Array<'lexical' | 'semantic' | 'fact' | 'account-note'> = [];
-
-    if (l) sources.push('lexical');
-
-    if (f) sources.push('fact');
-
-    if (s) sources.push('semantic');
-
-    if (n) sources.push('account-note');
+    const sources = hitSources({ l, f, s, n });
     // Fact and account note hits carry their text, so only semantic-only note hits need rehydrating.
     let snippet = l?.snippet ?? f?.snippet ?? n?.text ?? s?.text ?? '';
 
@@ -223,8 +215,7 @@ function fused({ lexical, semantic, factArm, accountNotes, finalK, rrfK, rehydra
       snippet,
       rrfScore: m.rrfScore,
       sources,
-      label: hitLabel(f, n),
-      scope: f?.scope ?? (n ? 'account' : 'workspace'),
+      ...hitScope(f, n),
       lexicalScore: l?.score,
       semanticScore: s?.score,
     };
@@ -233,8 +224,18 @@ function fused({ lexical, semantic, factArm, accountNotes, finalK, rrfK, rehydra
   }), { concurrency: 'unbounded' });
 }
 
-function hitLabel(fact: FactSearchHit | undefined, note: AccountNoteHit | undefined): string | undefined {
-  if (fact !== undefined) return `${fact.scope === 'account' ? 'account fact' : 'fact'}: ${fact.key}`;
+type HitSource = HybridHit['sources'][number];
 
-  return note === undefined ? undefined : `account note: ${note.id.slice('account-note:'.length)}`;
+/** Which arms found a hit, in the order the merge reads them. */
+function hitSources(found: { readonly l?: object; readonly f?: object; readonly s?: object; readonly n?: object }): HitSource[] {
+  const arms: ReadonlyArray<readonly [object | undefined, HitSource]> = [[found.l, 'lexical'], [found.f, 'fact'], [found.s, 'semantic'], [found.n, 'account-note']];
+
+  return arms.flatMap(([hit, source]) => (hit === undefined ? [] : [source]));
+}
+
+/** A fact or account note hit's label and scope; a note chunk's is the workspace's, labelled by its path. */
+function hitScope(fact: FactSearchHit | undefined, note: AccountNoteHit | undefined): Pick<HybridHit, 'label' | 'scope'> {
+  if (fact !== undefined) return { label: `${fact.scope === 'account' ? 'account fact' : 'fact'}: ${fact.key}`, scope: fact.scope };
+
+  return note === undefined ? { scope: 'workspace' } : { label: `account note: ${note.id.slice('account-note:'.length)}`, scope: 'account' };
 }

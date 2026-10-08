@@ -143,6 +143,29 @@ const GALLERY_ROSTER: { entries: WorkspaceEntry[]; total: number } =
 
 const STUB_DATA = v.parse(JsonObjectSchema, {
   "/api/user/config/sandbox_size": { key: "sandbox_size", value: null },
+  // Settings → Memory: one fact an agent proposed and the owner accepted, one the owner promoted, one note, one waiting.
+  "/api/user/memory": {
+    facts: [
+      {
+        key: "owner_name", value: "Ashish", importance: 0.9, veracity: "stated", lastObservedAt: NOW - 3 * 864e5,
+        origin: { by: "agent", workspace: "Support inbox", agent: "main" },
+        history: [{ value: "Ashish", origin: { by: "agent", workspace: "Support inbox", agent: "main" }, at: NOW - 3 * 864e5 }],
+      },
+      {
+        key: "reply_language", value: "English, short answers", importance: 0.7, veracity: "stated", lastObservedAt: NOW - 864e5,
+        origin: { by: "owner" },
+        history: [
+          { value: "English, short answers", origin: { by: "owner" }, at: NOW - 864e5 },
+          { value: "English", origin: { by: "owner", workspace: "Storefront" }, at: NOW - 6 * 864e5 },
+        ],
+      },
+    ],
+    notes: [{ id: "acn_1", content: "Invoices go to accounts@example.com on the first of each month.", origin: { by: "agent", workspace: "Support inbox", agent: "main" }, createdAt: NOW - 2 * 864e5 }],
+    pending: [{
+      id: "amp_1", proposal: { kind: "fact", key: "timezone", value: "Asia/Kolkata" },
+      origin: { by: "background", workspace: "Storefront" }, createdAt: NOW - 36e5,
+    }],
+  },
   // Every field the client's `UserProfileSchema` requires; a fixture that type-checks can still fail that parse.
   "/api/user/profile": {
     email: "ashish@example.com", displayName: "Ashish",

@@ -20,7 +20,7 @@ export const VERACITIES = ['stated', 'inferred', 'tool', 'imported', 'unknown'] 
 export type Veracity = (typeof VERACITIES)[number];
 
 /** mnemopi's `VERACITY_WEIGHTS` (`core/veracity-consolidation.ts`): how far a match of each kind is trusted. */
-export const VERACITY_WEIGHTS: Readonly<Record<Veracity, number>> = { stated: 1, inferred: 0.7, tool: 0.5, imported: 0.6, unknown: 0.8 };
+const VERACITY_WEIGHTS: Readonly<Record<Veracity, number>> = { stated: 1, inferred: 0.7, tool: 0.5, imported: 0.6, unknown: 0.8 };
 
 /** Who wrote a fact's value: an agent's own call, the background pass, the owner, or a copy from elsewhere. */
 export const FactOriginSchema = v.object({

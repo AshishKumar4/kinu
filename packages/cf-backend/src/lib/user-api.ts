@@ -6,6 +6,7 @@ import {
   type Credential,
   type DeviceTier,
   type JsonValue,
+  JsonValueSchema,
   ModelTestResultSchema,
   type ModelTestResult,
   type ProfileCatalog,
@@ -378,6 +379,44 @@ export const getAccountSandboxSize = (): Promise<BoxSize | null> =>
   settle(Effect.map(api(v.object({ key: v.string(), value: v.nullable(v.string()) }), 'GET', SANDBOX_SIZE_PATH), (row) => accountSandboxSize(row.value)));
 
 export const setAccountSandboxSize = (size: BoxSize) => settle(api(OkSchema, 'PUT', SANDBOX_SIZE_PATH, { value: size }));
+
+const MemoryOriginSchema = v.nullable(v.object({ by: v.picklist(['agent', 'background', 'owner', 'import']), workspace: v.optional(v.string()), agent: v.optional(v.string()) }));
+
+const AccountMemorySchema = v.object({
+  facts: v.array(v.object({
+    key: v.string(), value: JsonValueSchema, importance: v.number(), veracity: v.string(), lastObservedAt: v.number(), origin: MemoryOriginSchema,
+    history: v.array(v.object({ value: v.nullable(JsonValueSchema), origin: MemoryOriginSchema, at: v.number() })),
+  })),
+  notes: v.array(v.object({ id: v.string(), content: v.string(), origin: MemoryOriginSchema, createdAt: v.number() })),
+  pending: v.array(v.object({
+    id: v.string(),
+    proposal: v.variant('kind', [
+      v.object({ kind: v.literal('fact'), key: v.string(), value: JsonValueSchema }),
+      v.object({ kind: v.literal('note'), content: v.string() }),
+    ]),
+    origin: MemoryOriginSchema,
+    createdAt: v.number(),
+  })),
+});
+
+export type AccountMemoryState = v.InferOutput<typeof AccountMemorySchema>;
+
+export type MemoryOrigin = v.InferOutput<typeof MemoryOriginSchema>;
+
+const MEMORY_PATH = '/memory';
+
+export const getAccountMemory = (): Promise<AccountMemoryState> => settle(api(AccountMemorySchema, 'GET', MEMORY_PATH));
+
+export const decideAccountMemory = (id: string, decision: 'accept' | 'decline') =>
+  settle(api(OkSchema, 'POST', `${MEMORY_PATH}/proposals/${encodeURIComponent(id)}`, { decision }));
+
+/** An edit, or a workspace fact promoted to the account: `workspace` names where it came from. */
+export const putAccountFact = (key: string, value: JsonValue, workspace?: string) =>
+  settle(api(v.object({ key: v.string() }), 'PUT', `${MEMORY_PATH}/facts/${encodeURIComponent(key)}`, { value, ...(workspace !== undefined && { workspace }) }));
+
+export const forgetAccountFact = (key: string) => settle(api(v.object({ existed: v.boolean() }), 'DELETE', `${MEMORY_PATH}/facts/${encodeURIComponent(key)}`));
+
+export const forgetAccountNote = (id: string) => settle(api(v.object({ existed: v.boolean() }), 'DELETE', `${MEMORY_PATH}/notes/${encodeURIComponent(id)}`));
 
 export type { ModelTestResult };
 

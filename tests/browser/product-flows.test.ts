@@ -11,14 +11,14 @@ import { resolveWebIdentity } from '../../evals/src/session';
 import { withBrowser } from '../../scripts/live-app-harness';
 import {
   DRIVE_SLATE, INSPECTOR_SHUT_PX,
-  agentIsThereOnReturn, agentPlanIsReviewedInItsPane, agentProposesAWorkspace, driveKeepsWhatIsDone, driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState,
+  agentIsThereOnReturn, agentPlanIsReviewedInItsPane, agentProposesAWorkspace, accountMemoryCrossesWorkspaces, driveKeepsWhatIsDone, driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState,
   slateOpensFromMyStuff, slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer,
   writtenFileShowsInFilesAndChanges, changesStormStaysBounded, openMemoryFollowsItsWriter,
-  type AgentPlanVerdict, type AgentReturnVerdict, type WorkspaceProposalVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
+  type AgentPlanVerdict, type AgentReturnVerdict, type WorkspaceProposalVerdict, type AccountMemoryVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
   type FlowTarget, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
   type StampedCardVerdict, type WrittenFileVerdict,
 } from '../../scripts/product-flows';
-import { FLOW_MEMORY_NOTE, FLOW_PROBE, FLOW_SHELL_PROBE, FLOW_SLATE, PROPOSED_WORKSPACE, STORM_FILES } from '../../scripts/flows-script';
+import { ACCOUNT_FACT, ACCOUNT_RECALL_REPLY, FLOW_MEMORY_NOTE, FLOW_PROBE, FLOW_SHELL_PROBE, FLOW_SLATE, PROPOSED_WORKSPACE, STORM_FILES } from '../../scripts/flows-script';
 import { rowVerdicts } from '../../scripts/row-verdicts';
 
 interface FlowVerdicts {
@@ -27,6 +27,7 @@ interface FlowVerdicts {
   agentReturn: AgentReturnVerdict | null;
   agentPlan: AgentPlanVerdict | null;
   proposal: WorkspaceProposalVerdict | null;
+  accountMemory: AccountMemoryVerdict | null;
   panel: PanelVerdict | null;
   stamped: StampedCardVerdict | null;
   writtenFile: WrittenFileVerdict | null;
@@ -40,7 +41,7 @@ interface FlowVerdicts {
 }
 
 const observed: FlowVerdicts = {
-  welcome: null, firstAnswer: null, agentReturn: null, agentPlan: null, proposal: null, panel: null, stamped: null, writtenFile: null, storm: null, liveMemory: null, slate: null, drive: null,
+  welcome: null, firstAnswer: null, agentReturn: null, agentPlan: null, proposal: null, accountMemory: null, panel: null, stamped: null, writtenFile: null, storm: null, liveMemory: null, slate: null, drive: null,
   driveOpens: null, slateOpens: null, slateShare: null,
 };
 
@@ -76,6 +77,7 @@ beforeAll(async () => {
     observed.agentReturn = await attempt('agent-return', () => agentIsThereOnReturn(target));
     observed.agentPlan = await attempt('agent-plan', () => agentPlanIsReviewedInItsPane(target));
     observed.proposal = await attempt('workspace-proposal', () => agentProposesAWorkspace(target));
+    observed.accountMemory = await attempt('account-memory', () => accountMemoryCrossesWorkspaces(target));
     observed.panel = await attempt('panel', () => rightPanelKeepsItsState(target));
     observed.stamped = await attempt('stamped', () => eachPaneKeepsItsTranscript(target));
     observed.writtenFile = await attempt('written-file', () => writtenFileShowsInFilesAndChanges(target));
@@ -124,6 +126,20 @@ describe("an agent made with '+' has its plan reviewed beside its own pane", () 
     expect(flow.planReviewShown).toBeTrue();
     expect(flow.approveControl).toMatch(/approve/iu);
     expect(flow.planStatus).toBe('Approved');
+  });
+});
+
+describe("a fact about the owner said in one workspace is every workspace's once the owner accepts it", () => {
+  test('it is offered in Settings → Memory, another workspace knows nothing of it before, and recalls it after', () => {
+    const flow = verdictOf(observed.accountMemory, 'account-memory');
+
+    expect(flow.offered).toContain(ACCOUNT_FACT.value);
+    expect(flow.before).toBe(`${ACCOUNT_RECALL_REPLY} nowhere I know of`);
+    expect(flow.after).toBe(`${ACCOUNT_RECALL_REPLY} ${ACCOUNT_FACT.value}`);
+  });
+
+  test("a request without the owner's session reads none of it", () => {
+    expect([401, 403]).toContain(verdictOf(observed.accountMemory, 'account-memory').viewerStatus);
   });
 });
 

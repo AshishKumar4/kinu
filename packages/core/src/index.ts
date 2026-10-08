@@ -1169,7 +1169,7 @@ export {
 // Top-K recent agent_facts render into the system prompt every turn.
 export {
   initFactsTable, createFactsStore, renderFactsBlock, searchFacts, normalizeFactKey, unifiedFacts,
-  ACCOUNT_FACTS_ACTOR, FactOriginSchema, VERACITIES, VERACITY_WEIGHTS,
+  ACCOUNT_FACTS_ACTOR, FactOriginSchema, VERACITIES,
   type Fact, type FactsStore, type FactSearchHit, type FactUpsertResult, type FactOrigin, type FactRevision, type FactWrite,
   type MemoryScope, type ScopedFact, type Veracity,
 } from './memory/facts';

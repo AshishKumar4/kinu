@@ -71,7 +71,7 @@ function hasCjk(text: string): boolean {
 }
 
 /** Lower-cased letter, digit and underscore runs, stop words dropped. */
-export function tokenize(text: string): string[] {
+function tokenize(text: string): string[] {
   return (text.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? []).filter((token) => !STOP_WORDS.has(token));
 }
 
@@ -104,7 +104,7 @@ const FINAL_Y_ENDINGS = ['ies', 'ied'];
  * Two forms of one word: the longer is the shorter plus an inflectional or common derivational ending. The shorter
  * needs four characters, so `pass` never finds `password` or `passport`. Deliberately not a stemmer.
  */
-export function matchesWordForm(left: string, right: string): boolean {
+function matchesWordForm(left: string, right: string): boolean {
   const [shorter, longer] = left.length <= right.length ? [left, right] : [right, left];
 
   if (shorter.length < 4 || longer.length === shorter.length) return false;

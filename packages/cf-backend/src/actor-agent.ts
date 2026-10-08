@@ -3432,7 +3432,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** The account's facts for one turn's memory block; a user object that does not answer costs the turn that block's
    *  account lines, never the turn. */
-  protected accountFactsForTurn(): Promise<readonly Fact[]> {
+  accountFactsForTurn(): Promise<readonly Fact[]> {
     return settle(Effect.catch(attempt({ doing: "reading the account's facts for the turn", otherwise: 'unavailable' }, async () => await this.accountMemory(this.actorHandle().name).facts()),
       (failure) => Effect.sync(() => {
         diagnostics.failure('memory.account_read_failed', failure, { workspace: this.name });
