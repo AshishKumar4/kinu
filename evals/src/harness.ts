@@ -6,7 +6,7 @@ import { platformFact, type EvalAccount, type RunEvent } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { DeploymentAnswer, evalNameSlug, INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
 import { gatherEvidence, writeEvidence, type EvidenceReads, type WorkspaceEvidence } from './evidence';
-import { HarnessRunSchema, measurePromptUsage, type ActorLedger } from './results';
+import { HarnessRunSchema, measurePlanUsage, measurePromptUsage, type ActorLedger } from './results';
 import type { KinuPublicSession } from './session';
 import { claimTrialAccount, trialTarget } from './slot';
 import { ARMS, deployedBuild, openWorkspace, type EvalArm, type EvalTarget } from './target';
@@ -15,7 +15,7 @@ import {
   type HarnessError, type TurnRun,
 } from './task';
 import { redact } from './redact';
-import { cutButCompleted, measure, toTranscript } from './transcript';
+import { cutButCompleted, measure, toolFailures, toTranscript } from './transcript';
 import { TrialTimeline } from './timeline';
 import { EvalVerifier } from './verifier';
 import { duringTrial, trialCancel } from './cancel';
@@ -397,6 +397,8 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
       const promptUsage = measurePromptUsage(ledgers);
       const usageMetadata = promptUsage.metadata;
 
+      usageMetadata.plan = measurePlanUsage(ledgers);
+
       if (costUsd !== undefined) usageMetadata.costUsd = costUsd;
 
       const checks = turns.flatMap((turn) => turn.checks);
@@ -421,7 +423,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
       const result = {
         output: {
           success, turns,
-          metrics,
+          metrics, toolFailures: toolFailures(events),
         },
         events: transcript,
         usage: {

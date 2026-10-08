@@ -133,7 +133,10 @@ export type EvalMetrics = {
   modelTurns: number; toolCalls: number; toolErrors: number; badInputCalls: number; unknownToolCalls: number; providerWaits: number; providerWaitMs: number;
 };
 
-export type EvalRunOutput = { success: boolean; turns: EvalTurnResult[]; metrics: EvalMetrics };
+/** `toolFailures`: the trial's failed tool calls by tool and cause (`ToolFailure`, results.ts). */
+export type EvalRunOutput = {
+  success: boolean; turns: EvalTurnResult[]; metrics: EvalMetrics; toolFailures?: { tool: string; cause: string; count: number }[];
+};
 
 /**
  * Why a run failed, in the one line its reporter prints: the turn the deployment did not end as completed, with what held

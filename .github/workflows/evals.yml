@@ -98,8 +98,10 @@ jobs:
         include:
           - leg: candidate
             origin: https://staging.kinu.run
+            worker: kinu-staging
           - leg: baseline
             origin: https://kinu.run
+            worker: kinu
     steps:
       - uses: actions/checkout@v4
         with:
@@ -156,6 +158,15 @@ jobs:
           KINU_EVAL_CONCURRENCY: 1
         run: bun run evals
 
+      # What Workers Logs said of the leg's workspaces: exceptions, invocations ended for their limits, idle wakes. Read
+      # once the trials end, and stored with a reused baseline; without the token the leg is written as not read.
+      - name: Read the platform's logs of the leg's workspaces
+        if: matrix.leg == 'candidate' || steps.stored.outputs.id == ''
+        continue-on-error: true
+        env:
+          KINU_OBS_TOKEN: ${{ secrets.KINU_OBS_TOKEN }}
+        run: bun evals/scripts/platform-bugs.ts bench-artifacts/evals/results.json --worker ${{ matrix.worker }} --out bench-artifacts/evals/platform.json
+
       - name: Summarize the report
         id: complete
         continue-on-error: true
@@ -168,7 +179,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.stored.outputs.name }}
-          path: bench-artifacts/evals/results.json
+          path: |
+            bench-artifacts/evals/results.json
+            bench-artifacts/evals/platform.json
           if-no-files-found: error
           retention-days: 90
 
@@ -176,7 +189,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kinu-evals-results-${{ matrix.leg }}
-          path: bench-artifacts/evals/results.json
+          path: |
+            bench-artifacts/evals/results.json
+            bench-artifacts/evals/platform.json
           if-no-files-found: error
           retention-days: 30
 
@@ -244,6 +259,8 @@ jobs:
           args=(--candidate artifacts/candidate/results.json --candidate-build "$CANDIDATE" --baseline-build "$BASELINE"
             --out artifacts/comparison --trials "$EVAL_TRIALS")
           if [[ -f artifacts/baseline/results.json ]]; then args+=(--baseline artifacts/baseline/results.json); fi
+          if [[ -f artifacts/candidate/platform.json ]]; then args+=(--candidate-platform artifacts/candidate/platform.json); fi
+          if [[ -f artifacts/baseline/platform.json ]]; then args+=(--baseline-platform artifacts/baseline/platform.json); fi
           bun evals/scripts/compare.ts "${args[@]}"
           bun evals/scripts/trajectories.ts artifacts/candidate/results.json artifacts/comparison/trajectories.md
           cat artifacts/comparison/comparison.md >> "$GITHUB_STEP_SUMMARY"
