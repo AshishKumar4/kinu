@@ -1,14 +1,14 @@
 /**
  * The eval suite's runner: `bun run evals [evals/tasks/<id>.eval.ts]`, under Bun like every suite
  * here. One task file is one task, each trial on its own workspace. Every file runs at once, each in
- * its own worker, and every trial of a file at once unless `KINU_EVAL_CONCURRENCY` caps it: a trial
+ * its own worker, and every trial of a file at once unless `KINU_EVAL_FILES` and `KINU_EVAL_CONCURRENCY` cap them: a trial
  * waits on the deployment and its model, so the suite takes as long as its slowest trial.
  */
 import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 import { promptText } from '../packages/cf-backend/vite-prompt-text';
-import { evalConcurrency } from './src/config';
+import { evalConcurrency, evalFiles } from './src/config';
 
 const TASK_FILES = readdirSync(new URL('tasks', import.meta.url)).filter((name) => name.endsWith('.eval.ts')).length;
 
@@ -31,7 +31,7 @@ export default defineConfig({
     testTimeout: 0,
     hookTimeout: 0,
     maxConcurrency: evalConcurrency(process.env),
-    maxWorkers: TASK_FILES,
+    maxWorkers: Math.min(TASK_FILES, evalFiles(process.env)),
     env: {
       // A recording would serialise tool input and output verbatim; none is made.
       VITEST_EVALS_REPLAY_MODE: 'off',

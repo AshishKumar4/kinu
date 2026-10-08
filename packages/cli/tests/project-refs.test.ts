@@ -13,7 +13,6 @@ import {
   AGENT_HOME,
   agentDbPath,
   agentDir,
-  defaultVirtualWorkspaceId,
   listAgentDirs,
   listLocalRefsAllProjects,
   loadConfigFile,
@@ -151,10 +150,12 @@ describe('virtual workspaces group agents inside one project', () => {
   });
 
   test('a workspace label with no explicit choice comes from the project directory', async () => {
-    const cwd = project();
-    await create('default-label', cwd);
+    const cwd = join(scratchDir('project'), 'My Shop');
+    mkdirSync(cwd);
+    await create('default-label', realpathSync(cwd));
 
-    expect(workspaceLabels(cwd)).toEqual([defaultVirtualWorkspaceId(cwd)]);
+    // The directory's name, as a label can spell it.
+    expect(workspaceLabels(realpathSync(cwd))).toEqual(['my-shop']);
   });
 });
 

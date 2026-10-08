@@ -18,7 +18,7 @@ test('a slate needs no class, and inline height is bounded', () => {
   expect(parseSlateProject({ main: 'server.ts', slate: { inline: { height: 480 } } }).slate.inline).toEqual({ height: 480 });
 
   for (const height of [719.5, 800, 100]) {
-    expect(() => parseSlateProject({ main: 'server.ts', slate: { inline: { height } } })).toThrow('slate.inline.height');
+    expect(() => parseSlateProject({ main: 'server.ts', slate: { inline: { height } } })).toThrow(expect.objectContaining({ code: 'bad_input' }));
   }
 });
 

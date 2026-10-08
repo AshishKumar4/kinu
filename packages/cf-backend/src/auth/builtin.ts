@@ -19,7 +19,7 @@ import type { UserDO } from '../user/user-do';
 import type { ApiVariables, FamilyEnv } from '../api/context';
 import type { ObjectNamespace } from '@kinu.run/core';
 
-export type BuiltinAuthority = AuthRoutesAuthority & Pick<UserDO,
+type BuiltinAuthority = AuthRoutesAuthority & Pick<UserDO,
   | 'builtinAdmissible' | 'builtinCreateInvite' | 'builtinInvitedEmail' | 'builtinIsOwner' | 'builtinIssueChallenge' | 'builtinPasskeyAccount'
   | 'builtinPasswordAccount' | 'builtinRecordPasskeyUse' | 'builtinRegister' | 'builtinSpendChallenge'
   | 'builtinReserveAttempt' | 'builtinClearAttempts' | 'builtinReplacePassword'

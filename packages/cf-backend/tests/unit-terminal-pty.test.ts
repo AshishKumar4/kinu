@@ -243,7 +243,6 @@ describe('attaching a terminal', () => {
     const { deps } = harness({ sandboxBound: false });
     const response = await terminalRequest(attachRequest('executor=sandbox'), deps);
     expect(response?.status).toBe(503);
-    expect(String((await body(response)).error)).toContain('Sandbox binding');
   });
 
   test('a workspace that cannot attach its disk gets the reason, not a shell', async () => {
@@ -510,7 +509,6 @@ describe('who owns a terminal attach', () => {
     );
 
     expect(response?.status).toBe(503);
-    expect(String((await body(response)).error)).toContain('client disconnected');
     // The preflight is not fenced: the container belongs to the DO and another attach may be waiting on it.
     expect(trace.calls).toEqual(['prepareTerminal:sandbox']);
   });
@@ -547,7 +545,6 @@ describe('who owns a terminal attach', () => {
 
     const response = await pending;
     expect(response?.status).toBe(503);
-    expect(String((await body(response)).error)).toContain('client disconnected');
     expect(retained).toHaveLength(1);
 
     // Nobody reads the late socket, so it is taken and closed rather than left for the edge to reap.

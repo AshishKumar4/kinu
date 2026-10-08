@@ -99,7 +99,7 @@
     "deploy:preflight": "bun scripts/deploy-preflight.ts"
   },
   "knip": {
-    "ignoreExportsUsedInFile": true,
+    "ignoreExportsUsedInFile": false,
     "workspaces": {
       ".": {
         "entry": [

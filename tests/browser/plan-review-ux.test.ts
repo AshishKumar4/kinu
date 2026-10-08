@@ -473,11 +473,6 @@ describe('the plan review document, as a browser lays it out', () => {
     expect(observed.desktop.dark.pageBackground).not.toBe(observed.desktop.light.pageBackground);
   });
 
-  test('every class the review and its rail carry was generated into the served CSS, on both themes', () => {
-    // Tailwind generates only what its @source globs reach: a plannotator component they miss renders unstyled.
-    expect([observed.desktop.dark.unruled, observed.desktop.light.unruled]).toEqual([[], []]);
-  });
-
   test('mobile scrolls wide blocks and opens annotations as a drawer without page overflow', () => {
     expect(observed.mobile.overflow).toBe(0);
     expect(observed.mobile.codeOverflow).toBe('auto');

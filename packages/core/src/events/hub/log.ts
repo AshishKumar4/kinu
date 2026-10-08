@@ -248,18 +248,26 @@ const RevisitConditionSchema = v.variant('kind', [
 
 const AssignmentRowSchema = v.object({ actor_id: v.string(), id: v.string(), payload: v.string() });
 
+/**
+ * Settles every assignment no drain will run: an actor outside `actors.drained` takes none. One still `live` is told
+ * so in its own words; only an actor that is no longer live is said to be retired or gone.
+ */
 export function dismissOrphanedAssignments(
-  sql: SqlExec, live: ReadonlySet<string>,
-): readonly { readonly actorId: string; readonly id: EventId }[] {
+  sql: SqlExec, actors: { readonly live: ReadonlySet<string>; readonly drained: ReadonlySet<string> },
+): readonly { readonly actorId: string; readonly id: EventId; readonly reason: string }[] {
   const rows = sql.exec(
     `SELECT actor_id, id, payload FROM agent_log
      WHERE kind = 'event' AND variant = 'subordinate_task'
        AND turn_id IS NULL AND (step_idx IS NULL OR step_idx >= 0)`,
-  ).toArray().map((row) => v.parse(AssignmentRowSchema, row)).filter((row) => !live.has(row.actor_id));
+  ).toArray().map((row) => v.parse(AssignmentRowSchema, row)).filter((row) => !actors.drained.has(row.actor_id))
+    .map((row) => ({
+      ...row,
+      reason: actors.live.has(row.actor_id) ? 'no drain runs tasks for its actor\'s kind' : 'its actor is retired or gone',
+    }));
 
   for (const row of rows) {
     const payload = parseJsonObject(row.payload);
-    payload.__dismissed = { reason: 'its actor is retired or gone', by: 'system', at: Date.now() };
+    payload.__dismissed = { reason: row.reason, by: 'system', at: Date.now() };
     sql.exec(
       `UPDATE agent_log SET payload = ?, step_idx = -2, turn_id = NULL, consumed_at = NULL
        WHERE actor_id = ? AND id = ?`,
@@ -267,7 +275,7 @@ export function dismissOrphanedAssignments(
     );
   }
 
-  return rows.map((row) => ({ actorId: row.actor_id, id: row.id }));
+  return rows.map((row) => ({ actorId: row.actor_id, id: row.id, reason: row.reason }));
 }
 
 export class EventLog {

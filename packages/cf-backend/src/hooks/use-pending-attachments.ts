@@ -8,7 +8,7 @@ import { dataUrlRawBytes } from "@/components/AttachmentChip";
 import { Cause, Effect, type Exit } from "effect";
 import { diagnostics, hold, renderThrownChain } from "@kinu.run/core/obs";
 
-export interface AttachmentAdmission {
+interface AttachmentAdmission {
   readonly parts: readonly FileUIPart[];
   readonly refused: readonly string[];
 }
@@ -16,7 +16,7 @@ export interface AttachmentAdmission {
 const partName = (part: FileUIPart): string => part.filename ?? "an attachment";
 
 /** In offer order, not best-fit: best-fit would reorder the user's message. */
-export function admitAttachments(
+function admitAttachments(
   current: readonly FileUIPart[],
   offered: readonly FileUIPart[],
   limitBytes: number,

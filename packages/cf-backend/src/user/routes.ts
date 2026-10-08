@@ -27,6 +27,8 @@ import * as v from 'valibot';
 
 const OptionalLabelSchema = v.object({ label: v.optional(v.string()) });
 
+const CheckpointSchema = v.array(v.object({ key: v.string(), sealed: v.string() }));
+
 /** Every UserDO call `/api/user/*` makes: one gate holds one stub. */
 export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   UserDO,
@@ -34,7 +36,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'fetch' | 'listWorkspaces' | 'touchWorkspace' | 'removeWorkspace' | 'hasWorkspace'
   | 'listDevices' | 'acknowledgeUnstoppedDevice' | 'revokeDevice' | 'renameDevice' | 'listDeviceConsents'
   | 'setDeviceTier' | 'revokeDeviceConsent'
-  | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'listUnrevokedGrants' | 'dismissUnrevokedGrant' | 'listActiveWorkspaces' | 'getAuthHeaders'
+  | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'checkpointCredentials' | 'restoreCredentials' | 'listUnrevokedGrants' | 'dismissUnrevokedGrant' | 'listActiveWorkspaces' | 'getAuthHeaders'
   | 'getCodexStatus' | 'disconnectCodex' | 'startCodexDeviceFlow' | 'pollCodexDeviceFlow' | 'startClaudeSignIn' | 'finishClaudeSignIn'
   | 'chatgptPlan' | 'startChatGptSignIn' | 'cancelChatGptSignIn' | 'startChatGptPasteSignIn' | 'finishChatGptPasteSignIn' | 'signOutChatGpt'
   | 'listConfig' | 'getConfig' | 'setConfig' | 'listConnectedProviders'
@@ -360,6 +362,20 @@ userRoutes.delete('/api/user/credentials/:key', (c) => {
 
     return json({ body: { ok: true } });
   }));
+});
+
+/** The eval identity's own credentials, carried across a reset by scripts/credential-checkpoint.ts; no other identity's. */
+userRoutes.on(['GET', 'POST'], '/api/user/credential-checkpoint', async (c) => {
+  const { provider, userId } = c.get('identity');
+
+  if (provider !== 'dev') return err(404, 'No such user route');
+
+  if (c.req.method === 'GET') return json({ body: await c.get('stub').checkpointCredentials(c.get('owner'), userId) });
+  const checkpoint = await safeJson(c.req.raw, CheckpointSchema);
+
+  if (checkpoint === null) return err(400, 'Body must be a credential checkpoint');
+
+  return json({ body: { restored: await c.get('stub').restoreCredentials(c.get('owner'), userId, checkpoint) } });
 });
 
 userRoutes.get('/api/user/unrevoked-grants', async (c) => json({ body: await c.get('stub').listUnrevokedGrants(c.get('owner')) }));

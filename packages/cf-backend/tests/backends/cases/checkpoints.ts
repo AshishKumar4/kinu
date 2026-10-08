@@ -11,7 +11,6 @@ const byPath = (files: readonly FileRestoreChange[]) => [...files].sort((left, r
 export const CHECKPOINT_CASES: readonly SharedCase[] = [
   {
     title: 'a snapshot is listed under its turn alone, plans the changes since it, and restores them',
-    covers: ['checkpointStatus', 'listFileCheckpoints', 'planFileRestore', 'restoreFileCheckpoint'],
     async run({ surface, snapshot }) {
       const project = scratchDir('shared-checkpoint-project');
       writeFileSync(join(project, 'notes.txt'), 'before the turn');
@@ -42,7 +41,6 @@ export const CHECKPOINT_CASES: readonly SharedCase[] = [
   },
   {
     title: 'a machine without git has no store, and says why instead of answering empty',
-    covers: ['checkpointStatus', 'listFileCheckpoints'],
     opens: () => ({ gitBin: join(scratchDir('shared-checkpoint-no-git'), 'git') }),
     async run({ surface }) {
       const unavailable = { available: false, reason: CHECKPOINTS_UNAVAILABLE_NO_GIT };
@@ -53,7 +51,6 @@ export const CHECKPOINT_CASES: readonly SharedCase[] = [
   },
   {
     title: 'a session id carrying a carriage return still files the snapshot under its turn',
-    covers: ['listFileCheckpoints'],
     async run({ surface, snapshot }) {
       const project = scratchDir('shared-checkpoint-carriage-return');
       writeFileSync(join(project, 'notes.txt'), 'before the turn');

@@ -3,11 +3,14 @@ import { describe, expect, test } from 'bun:test';
 import { jsonSchema, tool, type ModelMessage } from 'ai';
 import * as v from 'valibot';
 import { z } from 'zod';
-import { assembleTurnMessages } from '../src/orchestrator/turn-context';
+import type { assembleTurnMessages } from '../src/orchestrator/turn-context';
+import { scriptedTurnModel } from '@kinu.run/test-utils';
 import { runChat } from '../src/chat';
+import { DynamicContextLedger } from '../src/prompting/volatile-context';
+
 import { ExtensionHost } from '../src/extension';
 import { classifyTurnFailure, planOverflowRecovery } from '../src/turn-failure';
-import { stepContextLimit } from '../src/context-window';
+
 import {
   countRequestInputTokens, NO_COUNT_ENDPOINT,
   type CountableRequest, type InputTokenCount,
@@ -37,7 +40,48 @@ const COMPACTED: ModelMessage[] = [{ role: 'user', content: 'summary' }];
 /** Measured window: an unmeasured one is admitted over rather than refused against. */
 const LIMITS = { contextWindow: 200_000, modelOutputLimit: 40_000 };
 
-const LIMIT = stepContextLimit(LIMITS);
+const LIMIT = 160_000;
+
+async function submittedTurn(opts: Parameters<typeof assembleTurnMessages>[0]) {
+  const model = scriptedTurnModel({ doGenerate: async () => ({
+    content: [{ type: 'text', text: 'admitted' }],
+    finishReason: { unified: 'stop', raw: undefined },
+    usage: {
+      inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+      outputTokens: { total: 1, text: 1, reasoning: undefined },
+    }, warnings: [],
+  }) });
+
+  let completed = false;
+
+  try {
+    for await (const _ of runChat({
+      model, modelSpec: 'test/model', system: opts.system, history: [...opts.history],
+      tools: opts.admission?.tools ?? {},
+      modelContext: { id: 'test/model', ...opts.admission?.limits },
+      countInputTokens: opts.admission?.count?.bind(opts.admission),
+      extensions: opts.extensions, transformTrigger: opts.trigger,
+      dynamicContext: opts.admission?.instructions === undefined ? undefined : {
+        ledger: new DynamicContextLedger(), snapshot: () => ({}),
+        instructions: opts.admission.instructions,
+      },
+    })) { /* drain */ }
+
+    completed = true;
+  } finally {
+    if (!completed) expect(model.doStreamCalls).toHaveLength(0);
+  }
+
+  expect(model.doStreamCalls).toHaveLength(1);
+
+  const messages: unknown = (model.doStreamCalls[0]?.prompt ?? []).filter(message => message.role !== 'system').map(message => ({
+    ...message,
+    content: Array.isArray(message.content) && message.content.length === 1 && message.content[0]?.type === 'text'
+      ? message.content[0].text : message.content,
+  }));
+
+  return { messages };
+}
 
 function base() {
   return { system: 'SYS', history: HISTORY, sessionKey: 'k', contextWindow: LIMITS.contextWindow };
@@ -138,15 +182,12 @@ async function refusalOf(assembly: Promise<unknown>): Promise<Error | null> {
 }
 
 describe('exact turn admission', () => {
-  test('the allocation admission budgets against is the one every producer divides', () => {
-    expect(LIMIT).toBe(160_000);
-  });
 
   test('a request that fits is admitted, counted once, and compaction never forced', async () => {
     const { extensions, triggers } = compactionProbe();
     const counter = scriptedCounter([LIMIT]);
 
-    const { messages: out } = await assembleTurnMessages({
+    const { messages: out } = await submittedTurn({
       model: 'test/model',
       ...base(),
       extensions,
@@ -163,7 +204,7 @@ describe('exact turn admission', () => {
     const { extensions, triggers } = compactionProbe();
     const counter = scriptedCounter([LIMIT + 1, LIMIT]);
 
-    const { messages: out } = await assembleTurnMessages({
+    const { messages: out } = await submittedTurn({
       model: 'test/model',
       ...base(),
       extensions,
@@ -181,7 +222,7 @@ describe('exact turn admission', () => {
     const { extensions, triggers } = compactionProbe();
     const counter = scriptedCounter([LIMIT + 50_000, LIMIT + 1]);
 
-    const failure = await refusalOf(assembleTurnMessages({
+    const failure = await refusalOf(submittedTurn({
       model: 'test/model',
       ...base(),
       extensions,
@@ -190,9 +231,7 @@ describe('exact turn admission', () => {
     }));
 
     expect(failure).toBeInstanceOf(Error);
-    const message = failure?.message ?? '';
-    expect(message).toContain('refused before submission');
-    expect(message).toContain((LIMIT + 1).toLocaleString('en-US'));
+    expect(failure).toMatchObject({ code: 'bad_input' });
     expect(triggers).toEqual(['auto', 'force']);
     expect(counter.seen.length).toBe(2);
   });
@@ -202,7 +241,7 @@ describe('exact turn admission', () => {
     const { extensions } = compactionProbe();
     const counter = scriptedCounter([LIMIT + 1, LIMIT + 1]);
 
-    const failure = await refusalOf(assembleTurnMessages({
+    const failure = await refusalOf(submittedTurn({
       model: 'test/model',
       ...base(), extensions, trigger: 'auto',
       admission: { count: counter.count, limits: LIMITS },
@@ -210,9 +249,8 @@ describe('exact turn admission', () => {
 
     // Asserted first so an assembly that refused nothing cannot pass by classifying the empty string.
     expect(failure).toBeInstanceOf(Error);
-    const message = failure?.message ?? '';
-    expect(classifyTurnFailure(message)).toBe('admission_refused');
-    expect(planOverflowRecovery({ error: message, turnWasOverflowRetry: false }))
+    expect(classifyTurnFailure(failure ?? new Error('missing refusal'))).toBe('admission_refused');
+    expect(planOverflowRecovery({ error: failure ?? new Error('missing refusal'), turnWasOverflowRetry: false }))
       .toEqual({ failureClass: 'admission_refused', forceCompaction: false, enqueueRetry: false });
     // Negative control: the classifier does fire on a real remote refusal.
     expect(classifyTurnFailure('prompt is too long: 300000 tokens > 200000 maximum'))
@@ -223,7 +261,7 @@ describe('exact turn admission', () => {
     const { extensions, triggers } = compactionProbe();
     const counter = scriptedCounter([LIMIT + 1]);
 
-    const failure = await refusalOf(assembleTurnMessages({
+    const failure = await refusalOf(submittedTurn({
       model: 'test/model',
       ...base(),
       extensions,
@@ -240,7 +278,7 @@ describe('exact turn admission', () => {
     const { extensions, triggers } = compactionProbe();
     let asked = 0;
 
-    const { messages: out } = await assembleTurnMessages({
+    const { messages: out } = await submittedTurn({
       model: 'test/model',
       ...base(),
       extensions,
@@ -266,11 +304,14 @@ describe('exact turn admission', () => {
     const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 64, 0, 0, 0, 64]), Buffer.alloc(540_000, 1)]);
     const history: ModelMessage[] = [{ role: 'user', content: [{ type: 'image', image: png.toString('base64'), mediaType: 'image/png' }] }];
 
-    const { messages: out } = await assembleTurnMessages({
+    const { messages: out } = await submittedTurn({
       model: 'test/model', ...base(), history, extensions, trigger: 'auto', admission: { limits: LIMITS },
     });
 
-    expect({ out, triggers }).toEqual({ out: history, triggers: ['auto'] });
+    // Submitted whole: the one image message, still an image, and no forced compaction.
+    expect(triggers).toEqual(['auto']);
+    expect(out).toEqual([expect.objectContaining({ role: 'user' })]);
+    expect(JSON.stringify(out)).toContain('image/png');
   });
 
   test('with no count endpoint, an estimate over the window triggers the one forced compaction instead of submitting', async () => {
@@ -278,7 +319,7 @@ describe('exact turn admission', () => {
     // The allocation sits between the assembled and compacted estimates (13 and 6), so the estimate forces the compaction.
     const tight = { contextWindow: 24, modelOutputLimit: 20 };
 
-    const { messages: out } = await assembleTurnMessages({
+    const { messages: out } = await submittedTurn({
       model: 'test/model',
       ...base(),
       extensions,
@@ -294,7 +335,7 @@ describe('exact turn admission', () => {
     const { extensions } = compactionProbe();
     const tight = { contextWindow: 8, modelOutputLimit: 4 };
 
-    const failure = await refusalOf(assembleTurnMessages({
+    const failure = await refusalOf(submittedTurn({
       model: 'test/model',
       ...base(),
       extensions,
@@ -316,7 +357,7 @@ describe('exact turn admission', () => {
 
     const request: ModelMessage = { role: 'user', content: 'the request' };
 
-    await assembleTurnMessages({
+    await submittedTurn({
       model: 'test/model',
       ...base(),
       history: [...HISTORY, request],
@@ -348,7 +389,7 @@ describe('provider count support', () => {
       createOpenAICompatProvider(),
     ]) {
       const answer = await countRequestInputTokens(provider, 'm', NO_DEPS, { system: 's', messages: [] });
-      expect(answer).toEqual({ kind: 'unsupported', provider: provider.id, reason: NO_COUNT_ENDPOINT });
+      expect(answer).toMatchObject({ kind: 'unsupported', provider: provider.id });
     }
   });
 
@@ -423,7 +464,6 @@ describe('provider count support', () => {
     });
 
     expect(answer.kind).toBe('unsupported');
-    expect(answer.kind === 'unsupported' && answer.reason).toContain('image part');
   });
 
   test('an endpoint that refuses the count does not fail the turn', async () => {

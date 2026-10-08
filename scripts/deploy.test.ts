@@ -35,10 +35,15 @@ function skipped(why: string): string {
   return `${phaseRun("post-publish")} --skip=${why}`;
 }
 
+/** The deploy's build, on armada (scripts/release-build.ts): the fixture's fails on purpose. */
+function armadaBuild(environment: string, ...options: string[]): string {
+  return ["bun scripts/release-build.ts", environment, "testsha", ...options].join(" ");
+}
+
 /** What a staging deploy runs after the fixture's build, which fails on purpose: the rows that read the deployment
  *  named as not run, then every local gate and the hammer, to their end. */
 const AFTER_A_FAILED_BUILD: readonly string[] = [
-  skipped("staging does not serve this build: vite build failed"), phaseRun("source"),
+  skipped("staging does not serve this build: the build on armada failed"), phaseRun("source"),
 ];
 
 /** The commands one phase of the plan runs. */
@@ -114,6 +119,9 @@ fi
 if [ "$KINU_DEPLOY_FAIL" = "$command_line" ]; then
   exit 47
 fi
+if [[ "$1" == */scripts/release-build.ts ]]; then
+  exit 86
+fi
 exit 0
 `;
 }
@@ -162,7 +170,6 @@ function runDeploy({
   // a run here, nor one here a real deploy. Another deploy holding it is `flock` holding it around this one's whole run.
   const held = lockHeld ? ["flock", join(fixture, `kinu-deploy-${option === "--promote" ? "production" : "staging"}.lock`)] : [];
   const log = join(fixture, "events.log");
-  const buildEnvironmentLog = join(fixture, "build-environment.log");
   const phaseLog = join(fixture, "infra-phase.log");
   const infraEnvironmentLog = join(fixture, "infra-environment.log");
 
@@ -188,7 +195,6 @@ exit 0
 `);
   executable(join(fixture, "node_modules", ".bin", "bunx"), `#!/usr/bin/bash
 printf 'MUTATE bunx %s\\n' "$*" >> "$KINU_DEPLOY_GATE_LOG"
-printf '%s\n' "\${CLOUDFLARE_ENV:-root}" > "$KINU_DEPLOY_BUILD_ENV_LOG"
 exit 86
 `);
   executable(join(fixture, "npx"), `#!/usr/bin/bash
@@ -213,7 +219,6 @@ exit 87
       TMPDIR: fixture,
       KINU_DEPLOY_GATE_LOG: log,
       KINU_DEPLOY_ROOT: fixture,
-      KINU_DEPLOY_BUILD_ENV_LOG: buildEnvironmentLog,
       KINU_DEPLOY_PHASE_LOG: phaseLog,
       KINU_DEPLOY_INFRA_ENV_LOG: infraEnvironmentLog,
       // Always set, so the assertion that the script overrides it is about the
@@ -245,10 +250,6 @@ exit 87
   const report = logged.filter((event) => event.startsWith(REPORT))
     .map((event) => event.slice(REPORT.length).replace(/^(\w+) report( |$)/u, "$1$2").replace(/^mark (\S+) \d+$/u, "mark $1"));
 
-  const buildEnvironment = existsSync(buildEnvironmentLog)
-    ? readFileSync(buildEnvironmentLog, "utf8").trim()
-    : null;
-
   const infraPhase = existsSync(phaseLog) ? readFileSync(phaseLog, "utf8").trim() : null;
 
   const infraEnvironment = existsSync(infraEnvironmentLog) ? readFileSync(infraEnvironmentLog, "utf8").trim() : null;
@@ -259,7 +260,6 @@ exit 87
     report,
     ci: logged.filter((event) => event.startsWith('bun scripts/ladder.ts --ci-')),
     stdout: run.stdout.toString(),
-    buildEnvironment,
     infraPhase,
     infraEnvironment,
   };
@@ -297,8 +297,7 @@ describe("deploy gate", () => {
     const run = runDeploy();
 
     expect(run.status).toBe(1);
-    expect(run.events).toEqual([...STOPS, WITHDRAW, "MUTATE bunx vite build", ...AFTER_A_FAILED_BUILD]);
-    expect(run.buildEnvironment).toBe("staging");
+    expect(run.events).toEqual([...STOPS, WITHDRAW, armadaBuild("staging"), ...AFTER_A_FAILED_BUILD]);
     expect(run.infraEnvironment).toBe("staging");
   });
 
@@ -306,7 +305,7 @@ describe("deploy gate", () => {
     const run = runDeploy({ failingGate: WITHDRAW });
 
     expect(run.status).toBe(1);
-    expect(run.events.some((event) => event.startsWith("MUTATE "))).toBe(false);
+    expect(run.events.some((event) => event.startsWith("MUTATE ") || event.startsWith("bun scripts/release-build.ts"))).toBe(false);
     expect(run.events).toEqual([
       ...STOPS, WITHDRAW,
       skipped("staging does not serve this build: testsha's record on staging could not be withdrawn, so this deploy will not replace what it verified"),
@@ -326,10 +325,9 @@ describe("deploy gate", () => {
 
     expect(run.status).toBe(1);
     expect(run.events).toEqual([
-      phaseRun("preflight"), PROMOTION_CHECK, phaseRun("upload"), "MUTATE bunx vite build",
-      skipped("production does not serve this build: vite build failed"),
+      phaseRun("preflight"), PROMOTION_CHECK, phaseRun("upload"), armadaBuild("production", "--promote"),
+      skipped("production does not serve this build: the build on armada failed"),
     ]);
-    expect(run.buildEnvironment).toBe("root");
     expect(run.infraEnvironment).toBe("production");
   });
 
@@ -385,7 +383,7 @@ describe("deploy gate", () => {
     const failedBuild = runDeploy({ option: "--reset" });
 
     expect(failedBuild.events).toContain("bun scripts/reset.ts plan staging");
-    expect(failedBuild.events).toContain("MUTATE bunx vite build");
+    expect(failedBuild.events).toContain(armadaBuild("staging"));
     expect(wiped(failedBuild.events)).toEqual([]);
 
     const redGate = runDeploy({ option: "--reset", failingGate: phaseRun("upload") });
@@ -453,7 +451,7 @@ describe("deploy gate", () => {
     expect(run.status).toBe(1);
     // 128 + SIGKILL. The status is the child's fate, not a claim the runner made.
     expect(run.stdout).toContain("the source phase failed (exit 137)");
-    expect(run.events).toEqual([...STOPS, WITHDRAW, "MUTATE bunx vite build", ...AFTER_A_FAILED_BUILD]);
+    expect(run.events).toEqual([...STOPS, WITHDRAW, armadaBuild("staging"), ...AFTER_A_FAILED_BUILD]);
     expect(run.report).toContain(
       "note source the source phase's runner it ended with exit 137 and no verdict of its own, so a row it had not reported on may be red and unnamed",
     );
@@ -482,7 +480,7 @@ describe("deploy gate", () => {
     expect(blocked.stdout).toContain("Another staging deploy is running on this machine");
 
     expect(runDeploy({ lockHeld: true, option: "--promote" }).status).toBe(75);
-    expect(runDeploy().events).toEqual([...STOPS, WITHDRAW, "MUTATE bunx vite build", ...AFTER_A_FAILED_BUILD]);
+    expect(runDeploy().events).toEqual([...STOPS, WITHDRAW, armadaBuild("staging"), ...AFTER_A_FAILED_BUILD]);
   });
 
   // REPORT-ALL. After the upload gates nothing stops a deploy: every phase runs
@@ -492,7 +490,7 @@ describe("deploy gate", () => {
       const run = runDeploy({ failingGate: phaseRun("source"), option });
 
       const expected = option === undefined
-        ? [...STOPS, WITHDRAW, "MUTATE bunx vite build", ...AFTER_A_FAILED_BUILD]
+        ? [...STOPS, WITHDRAW, armadaBuild("staging"), ...AFTER_A_FAILED_BUILD]
         : [...STOPS, phaseRun("source")];
 
       expect(run.status, `a red source phase under ${option ?? "a deploy"} did not fail it`).toBe(1);
@@ -542,7 +540,7 @@ describe("deploy gate", () => {
     // Same phases, same order, same failure semantics as any other deploy. This
     // is the assertion that would catch a future `--bootstrap` that skipped a
     // check rather than re-scoping one.
-    expect(bootstrap.events).toEqual([...STOPS, WITHDRAW, "MUTATE bunx vite build", ...AFTER_A_FAILED_BUILD]);
+    expect(bootstrap.events).toEqual([...STOPS, WITHDRAW, armadaBuild("staging"), ...AFTER_A_FAILED_BUILD]);
     expect(bootstrap.infraPhase).toBe("bootstrap");
     // The operator is told what is deferred and what is not, before the gates run.
     expect(bootstrap.stdout).toContain("BOOTSTRAP");

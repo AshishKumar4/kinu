@@ -231,7 +231,7 @@ function refuseKept(path: string, kept: PartialRemoval | null): void {
 }
 
 /** What the workspace shell reads to serve this table. */
-export interface VfsMountRouting {
+interface VfsMountRouting {
 	mountOf(path: string): string | null;
 	mountPoints(): readonly string[];
 	/** Every mount, connected or not: each is a mount point on the workspace shell's namespace. */

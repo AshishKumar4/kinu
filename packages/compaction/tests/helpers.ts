@@ -246,6 +246,5 @@ export async function compactedScreenshots(rt: { readonly storage: Pick<Storage,
   return {
     screens,
     links: screens.flatMap((entries) => entries.flatMap((entry) => /→ (vfs:\/\/\S+)\]$/u.exec(entry)?.[1] ?? [])),
-    changed: (ports.plans.snapshots.get('screenshots')?.stages ?? []).filter((stage) => stage.changedParts > 0).map((stage) => stage.name),
   };
 }

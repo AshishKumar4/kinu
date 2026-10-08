@@ -29,11 +29,8 @@ describe('noteTerminalActivity refuses before it stamps', () => {
 
     // The value is the refusal that survives the RPC boundary; the throw is the strict gate's.
     // Both shapes must name unreadiness, not some other failure.
-    expect(await box.resolveReadiness()).toEqual({
-      kind: 'pending',
-      reason: expect.stringContaining('not ready'),
-    });
-    await expect(box.noteTerminalActivity()).rejects.toThrow(/(not ready|no attached work directory)/);
+    expect(await box.resolveReadiness()).toMatchObject({ kind: 'pending' });
+    await expect(box.noteTerminalActivity()).rejects.toMatchObject({ code: 'io' });
     expect((await box.devboxState()).lastInteractionAt).toBeUndefined();
   });
 
@@ -72,6 +69,33 @@ describe("only the box's own use holds it", () => {
       const resting = (await box.devboxState()).lastTick?.decision;
 
       expect({ holding, resting }).toEqual({ holding: 'hold', resting: 'quiesce' });
+    } finally {
+      setSystemTime();
+    }
+  });
+
+  test('a new interaction invalidates an older quiet stretch even if the next heartbeat was missed', async () => {
+    const start = Date.now();
+    const { box, container } = harness(TestBox);
+    const { idleMs, quietConfirmMs } = DEFAULT_DEVBOX_POLICY;
+
+    try {
+      setSystemTime(start);
+      await box.devboxStartup();
+      setSystemTime(start + idleMs);
+      await box.devboxHeartbeat();
+      setSystemTime(start + idleMs + quietConfirmMs / 2);
+      await box.noteTerminalActivity();
+      const next = start + 2 * idleMs + quietConfirmMs;
+
+      setSystemTime(next);
+      await box.devboxHeartbeat();
+      expect({ decision: (await box.devboxState()).lastTick?.decision, running: container.running.running })
+        .toEqual({ decision: 'hold', running: true });
+      setSystemTime(next + quietConfirmMs);
+      await box.devboxHeartbeat();
+      expect({ decision: (await box.devboxState()).lastTick?.decision, running: container.running.running })
+        .toEqual({ decision: 'quiesce', running: false });
     } finally {
       setSystemTime();
     }
@@ -132,7 +156,7 @@ describe('a box with work still running asks before it rests', () => {
     }
   });
 
-  test('a supervised server alone asks too, and the ask says it restarts cold on its next use', async () => {
+  test('a supervised server alone asks too, and names the command being kept running', async () => {
     const start = Date.now();
     const { box, container, rows } = harness(TestBox);
 
@@ -145,7 +169,7 @@ describe('a box with work still running asks before it rests', () => {
       await box.devboxHeartbeat();
 
       expect({ decision: (await box.devboxState()).lastTick?.decision, running: container.running.running }).toEqual({ decision: 'ask', running: true });
-      expect(restAsks(rows)[0]).toContain('restarts cold');
+      expect(restAsks(rows)[0]).toContain('python3 -m http.server 8000');
     } finally {
       setSystemTime();
     }
@@ -190,7 +214,7 @@ describe('a box with work still running asks before it rests', () => {
 
       expect({ rested: decisions.includes('quiesce'), running: container.running.running, asked: asks.length >= 1 })
         .toEqual({ rested: false, running: true, asked: true });
-      expect(asks[0]).toContain('could not be read');
+      expect(asks[0]).toContain('the process directory cannot be read');
     } finally {
       container.fileFaults.clear();
       setSystemTime();

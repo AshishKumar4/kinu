@@ -20,7 +20,7 @@ import type { AuthIdentity } from '../auth/session';
 export type FeedbackRegistry = Pick<UserDO, 'hasWorkspace'>;
 
 /** The write, and the delete that removes an object no row ever pointed at. */
-export type FeedbackBucket = Pick<R2Bucket, 'put' | 'delete'>;
+type FeedbackBucket = Pick<R2Bucket, 'put' | 'delete'>;
 
 /** Structural so the generated `Env` satisfies it. The optional bindings are answered states: missing
  *  control plane is reported, no bucket refuses screenshots, no analytics makes the marker a no-op. */

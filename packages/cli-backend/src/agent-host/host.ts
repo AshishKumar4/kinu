@@ -1518,10 +1518,16 @@ export class LocalAgentHost {
     const { parentKey } = entry;
 
     if (parentKey === null) {
-      const hires = entry.tree.directory.list().filter((record) => isSubordinateOrigin(record.origin));
+      const live = entry.tree.directory.list();
 
-      for (const orphan of dismissOrphanedAssignments(makeSqlExec(entry.tree.db), new Set(hires.map((record) => record.actorId)))) {
-        diagnostics.event('subordinate.assignment_orphaned', { agent: entry.key, actor: orphan.actorId, assignment: orphan.id });
+      // Any hosted actor can be handed a task; the drain runs hires only.
+      const orphans = dismissOrphanedAssignments(makeSqlExec(entry.tree.db), {
+        live: new Set(live.map((record) => record.actorId)),
+        drained: new Set(live.filter((record) => isSubordinateOrigin(record.origin)).map((record) => record.actorId)),
+      });
+
+      for (const orphan of orphans) {
+        diagnostics.event('subordinate.assignment_orphaned', { agent: entry.key, actor: orphan.actorId, assignment: orphan.id, reason: orphan.reason });
       }
 
       return;

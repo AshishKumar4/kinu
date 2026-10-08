@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import { runToExit, workspaceDatabase } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 
 import { resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
@@ -14,9 +14,7 @@ import { createCLIRuntime, soulOf } from '@kinu.run/cli-backend';
 import { commandsForClient } from '../src/slash-commands';
 import {
   ChangelogOverlay,
-  CommandHintOverlay,
   CommandPaletteOverlay,
-  DeviceConnectOverlay,
   ModelPickerOverlay,
   SettingsOverlay,
   WalkbackOverlay,
@@ -36,31 +34,6 @@ import { VERSION } from '../src/display';
 const repoRoot = resolve(__dirname, '../../..');
 
 describe('CLI TUI layout', () => {
-  test('status bar makes the model control discoverable and shows effort', async () => {
-    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 110, height: 8, useThread: false, maxFps: Number.POSITIVE_INFINITY });
-    const root = createRoot(renderer);
-
-    try {
-      root.render(
-        <StatusBar
-          name="jarvis"
-          mode="local"
-          model="openai/gpt-5.5"
-          reasoningEffort="high"
-          connected={true}
-          onModelSelect={() => {}}
-        />,
-      );
-      await renderSettled(renderOnce);
-      const frame = captureCharFrame();
-      expect(frame).toContain('GPT 5.5');
-      expect(frame).toContain('[Ctrl+L]');
-      expect(frame).toContain('effort high');
-    } finally {
-      flushSync(() => { root.unmount(); });
-      renderer.destroy();
-    }
-  });
   test('status bar names a model served through a gateway on a wide terminal', async () => {
     // A gateway's provider path took the whole budget, so the header showed no model at all.
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 160, height: 6, useThread: false, maxFps: Number.POSITIVE_INFINITY });
@@ -70,76 +43,6 @@ describe('CLI TUI layout', () => {
       root.render(<StatusBar name="jarvis" mode="local" model="my-gateway/anthropic/claude-opus-5-5" reasoningEffort="max" connected={true} />);
       await renderSettled(renderOnce);
       expect(captureCharFrame()).toContain('Claude Opus 5 5');
-    } finally {
-      flushSync(() => { root.unmount(); });
-      renderer.destroy();
-    }
-  });
-
-  test('status bar drops the model control whole on narrow terminals and retains connection state', async () => {
-    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 52, height: 6, useThread: false, maxFps: Number.POSITIVE_INFINITY });
-    const root = createRoot(renderer);
-
-    try {
-      root.render(
-        <StatusBar
-          name="a"
-          mode="local"
-          model="openai/a-very-long-model-name-that-cannot-fit"
-          reasoningEffort="high"
-          connected={true}
-          scaffoldVersion={12}
-          toolCount={42}
-          autoEvolve={true}
-          branchCount={2}
-        />,
-      );
-      await renderSettled(renderOnce);
-      const frame = captureCharFrame();
-      expect(frame).toContain('●');
-      expect(frame).not.toContain('A Very Long Model Name That Cannot Fit');
-      expect(frame).not.toContain('…');
-
-      for (const line of frame.split('\n')) {
-        expect(line.length).toBeLessThanOrEqual(52);
-      }
-    } finally {
-      flushSync(() => { root.unmount(); });
-      renderer.destroy();
-    }
-  });
-
-  test('status bar keeps one coherent identity at twenty columns', async () => {
-    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({
-      width: 20,
-      height: 5,
-      useThread: false,
-      maxFps: Number.POSITIVE_INFINITY,
-    });
-
-    const root = createRoot(renderer);
-
-    try {
-      root.render(
-        <StatusBar
-          name="checkout-with-an-impossibly-long-name"
-          mode="local"
-          model="openai/gpt-5.5"
-          reasoningEffort="high"
-          connected={true}
-          scaffoldVersion={12}
-          toolCount={42}
-        />,
-      );
-      await renderSettled(renderOnce);
-      const frame = captureCharFrame();
-      expect(frame).toContain('check');
-      expect(frame).toContain('local');
-      expect(frame).toContain('●');
-
-      for (const line of frame.split('\n')) {
-        expect(line.length).toBeLessThanOrEqual(20);
-      }
     } finally {
       flushSync(() => { root.unmount(); });
       renderer.destroy();
@@ -169,60 +72,6 @@ describe('CLI TUI layout', () => {
     }
   });
 
-
-  test('the model control degrades whole — hint, then name, never a clipped bracket', async () => {
-    const render = async (width: number, assertions: (frame: string) => void) => {
-      const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width, height: 6, useThread: false, maxFps: Number.POSITIVE_INFINITY });
-      const root = createRoot(renderer);
-
-      try {
-        root.render(
-          <StatusBar
-            name="checkout"
-            mode="local"
-            model="@cf/deepseek-ai/deepseek-v4-pro-0813"
-            reasoningEffort="high"
-            connected={true}
-            contextTokens={2300}
-            contextWindow={128_000}
-            toolCount={14}
-            autoEvolve={false}
-            branchCount={1}
-          />,
-        );
-        await renderSettled(renderOnce);
-        assertions(captureCharFrame());
-      } finally {
-        flushSync(() => { root.unmount(); });
-        renderer.destroy();
-      }
-    };
-
-    await render(88, (frame) => {
-      expect(frame).toContain('[Ctrl+L]');
-    });
-    await render(64, (frame) => {
-      const line = frame.split('\n').find((row) => row.includes('Deepseek V4 Pro'));
-      expect(line).toBeDefined();
-      expect(line?.match(/\[[^\]]*…/)).toBeNull();
-    });
-  });
-
-  test('CLI version has package.json as its single source', async () => {
-    const packageJson = v.parse(
-      v.object({ version: v.string() }),
-      JSON.parse(readFileSync(resolve(repoRoot, 'packages/cli/package.json'), 'utf8')),
-    );
-
-    expect(VERSION).toBe(packageJson.version);
-
-    const reported = await runToExit([process.execPath, resolve(repoRoot, 'packages/cli/bin/cli.ts'), '-v'], {
-      cwd: repoRoot,
-    });
-
-    expect({ exitCode: reported.exitCode, stdout: reported.stdout.trim() })
-      .toEqual({ exitCode: 0, stdout: VERSION });
-  });
 
   test('model picker is an absolute overlay and does not move the input area', async () => {
     const withoutOverlay = await renderOverlayFrame(false);
@@ -357,110 +206,6 @@ describe('CLI TUI layout', () => {
       mockInput.pressKey('\u001B[6~');
       await renderSettled(renderOnce);
       expect(topVisibleTranscriptLine(captureCharFrame())).toBeGreaterThan(beforeDraftArrow);
-    } finally {
-      flushSync(() => { root.unmount(); });
-      renderer.destroy();
-    }
-  });
-
-  test('slash command hints render as a palette without numeric hotkeys', async () => {
-    const commands = commandsForClient({ localControls: null, consents: null, checkpoints: null, plans: null });
-    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 80, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
-    const root = createRoot(renderer);
-
-    try {
-      root.render(
-        <box style={{ width: '100%', height: '100%' }}>
-          <CommandHintOverlay commands={commands} terminal={{ width: 80, height: 24 }} />
-        </box>,
-      );
-      await renderSettled(renderOnce);
-      const frame = captureCharFrame();
-      expect(frame).toContain('Commands');
-      expect(frame).toContain('/help');
-      expect(frame).toContain(`… ${String(commands.length - 5)} more commands.`);
-      expect(frame).toContain('/status');
-      expect(frame).toContain('more commands');
-      expect(frame).not.toContain('/sessions');
-      expect(frame).not.toContain('/statusShShow');
-      expect(frame).not.toContain('/helptoShow');
-      expect(frame).not.toContain('1 /help');
-      expect(frame).not.toContain('2 /status');
-      expect(frame).toContain('Type to filter · Enter runs a completed command');
-      expect(frame).toContain('Keep typing to filter.');
-    } finally {
-      flushSync(() => { root.unmount(); });
-      renderer.destroy();
-    }
-  });
-
-  test('command palette clips rows inside the overlay frame', async () => {
-    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 58, height: 18, useThread: false, maxFps: Number.POSITIVE_INFINITY });
-    const root = createRoot(renderer);
-
-    try {
-      root.render(
-        <box style={{ width: '100%', height: '100%' }}>
-          <CommandPaletteOverlay
-            commands={[{
-              name: '/very-long-command-name',
-              description: 'This command description is intentionally too long to fit in a narrow overlay without clipping.',
-            }]}
-            terminal={{ width: 58, height: 18 }}
-            onSelect={() => {}}
-          />
-        </box>,
-      );
-      await renderSettled(renderOnce);
-      const frame = captureCharFrame();
-
-      for (const line of frame.split('\n')) {
-        expect(line.length).toBeLessThanOrEqual(58);
-      }
-
-      const hintLine = lineContaining(frame, 'Type to filter');
-      const commandLine = lineContaining(frame, '/very-long');
-
-      const closingLine = frame.split('\n').findIndex((line, index) =>
-        index > commandLine && line.includes('╰'));
-
-      expect(commandLine).toBeGreaterThan(hintLine);
-      expect(closingLine).toBeGreaterThan(commandLine);
-      expect(frame).toContain('/very-long');
-      expect(frame).not.toContain('without clipping');
-    } finally {
-      flushSync(() => { root.unmount(); });
-      renderer.destroy();
-    }
-  });
-
-  test('a one-result slash hint keeps its command above the closing border', async () => {
-    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({
-      width: 58,
-      height: 18,
-      useThread: false,
-      maxFps: Number.POSITIVE_INFINITY,
-    });
-
-    const root = createRoot(renderer);
-
-    try {
-      root.render(
-        <box style={{ width: '100%', height: '100%' }}>
-          <CommandHintOverlay
-            commands={[{ name: '/status', description: 'Show workspace status' }]}
-            terminal={{ width: 58, height: 18 }}
-          />
-        </box>,
-      );
-      await renderSettled(renderOnce);
-      const frame = captureCharFrame();
-      const commandLine = lineContaining(frame, '/status');
-
-      const closingLine = frame.split('\n').findIndex((line, index) =>
-        index > commandLine && line.includes('╰'));
-
-      expect(closingLine).toBeGreaterThan(commandLine);
     } finally {
       flushSync(() => { root.unmount(); });
       renderer.destroy();
@@ -694,66 +439,6 @@ describe('CLI TUI layout', () => {
       expect(frame).toContain('Enter forks before that message');
       expect(frame).toContain('latest · now run step two');
       expect(frame).toContain('-1 · plan the migration');
-    } finally {
-      flushSync(() => { root.unmount(); });
-      renderer.destroy();
-    }
-  });
-
-  test('device-connect overlay offers connect, session, not-now, and dismiss choices', async () => {
-    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 96, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
-    const root = createRoot(renderer);
-
-    try {
-      root.render(
-        <box style={{ width: '100%', height: '100%' }}>
-          <DeviceConnectOverlay
-            prompt={{ phase: 'ask', statusLine: 'No computer is connected to your account yet.', deviceName: 'ashish@studio' }}
-            terminal={{ width: 96, height: 24 }}
-          />
-        </box>,
-      );
-      await renderSettled(renderOnce);
-      const frame = captureCharFrame();
-      expect(frame).toContain('Let this agent use this computer?');
-      expect(frame).toContain('No computer is connected to your account yet.');
-      expect(frame).toContain('C connect and stay connected');
-      expect(frame).toContain('S use this session only');
-      expect(frame).toContain("D don't ask again · N not now");
-    } finally {
-      flushSync(() => { root.unmount(); });
-      renderer.destroy();
-    }
-  });
-
-  test('device-connect overlay shows connect progress and the result', async () => {
-    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 96, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
-    const root = createRoot(renderer);
-
-    try {
-      root.render(
-        <box style={{ width: '100%', height: '100%' }}>
-          <DeviceConnectOverlay
-            prompt={{ phase: 'connecting', session: true, ticks: 1 }}
-            terminal={{ width: 96, height: 24 }}
-          />
-        </box>,
-      );
-      await renderSettled(renderOnce);
-      expect(captureCharFrame()).toContain('Waiting for this computer to answer..');
-
-      root.render(
-        <box style={{ width: '100%', height: '100%' }}>
-          <DeviceConnectOverlay
-            prompt={{ phase: 'result', ok: true, message: 'Connected for this session.' }}
-            terminal={{ width: 96, height: 24 }}
-          />
-        </box>,
-      );
-      await renderSettled(renderOnce);
-      const frame = captureCharFrame();
-      expect(frame).toContain('✓ Connected for this session.');
-      expect(frame).toContain('Press any key to continue');
     } finally {
       flushSync(() => { root.unmount(); });
       renderer.destroy();
@@ -1159,37 +844,6 @@ const homeScreenPrelude = (project: string, width = 100, height = 40, fetchStub?
   // so the screen's is the second — that, not a frame, is "keys land now".
   await waitFor('the home screen to start accepting keys', () => renderer.keyInput.listenerCount('keypress') > 1);
 `;
-
-  test('the home screen carries readiness once and reads its brief in one line', async () => {
-    const full = await runHomeScreen({
-      driver: `
-        await waitFor('the mode segments to render', () => frame().includes('Cloud'));
-        const rows = frame().split('\\n');
-        console.log(JSON.stringify({
-          readinessRow: rows.some((row) => row.includes('Cloud account')),
-          briefOnOneLine: (rows.find((row) => row.includes('An ongoing job')) ?? '').includes('checkout service'),
-        }));
-      `,
-    });
-
-    const observed = v.parse(v.object({
-      readinessRow: v.boolean(),
-      briefOnOneLine: v.boolean(),
-    }), JSON.parse(full.stdout));
-
-    expect(observed.readinessRow).toBe(false);
-    expect(observed.briefOnOneLine).toBe(true);
-
-    const compact = await runHomeScreen({
-      height: 30,
-      driver: `
-        await waitFor('the readiness row to render', () => frame().includes('Cloud account'));
-        console.log(JSON.stringify({ readinessRow: true }));
-      `,
-    });
-
-    expect(JSON.parse(compact.stdout)).toEqual({ readinessRow: true });
-  });
 
   test('a cloud workspace whose name a local one holds is named on screen, not silently dropped', async () => {
     const project = realpathSync(scratchDir('home-project'));

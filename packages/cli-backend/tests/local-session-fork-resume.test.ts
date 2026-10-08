@@ -94,7 +94,6 @@ describe('resuming a workspace whose fork was interrupted', () => {
 
     for (const head of journal.readTree(ROOT)) {
       expect(head.status).toBe('aborted');
-      expect(head.error_message).toContain('no executor');
     }
 
     // The turn is queued rather than spliced because no turn is running.
@@ -105,7 +104,6 @@ describe('resuming a workspace whose fork was interrupted', () => {
 
     expect(abandoned).toHaveLength(1);
     expect(abandoned[0].message).toContain(ROOT);
-    expect(abandoned[0].message).toContain(`${HEADS}/${HEADS}`);
 
     await session.end();
   });

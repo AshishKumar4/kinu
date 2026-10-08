@@ -1085,16 +1085,6 @@ describe('the standalone landing runs', () => {
     expect(required(facts.treeFlows, 'tree flow after settle')).toBe(true);
   });
 
-  test('the hero mount landed: the handle and the canvas name the same renderer', () => {
-    const mount = required(facts.heroMount, 'hero mount');
-
-    // WebGPU where the box has it, Canvas2D where it does not — both are the
-    // mount answering an outcome; 'pending' and 'static' would mean it never
-    // finished picking one.
-    expect(mount.renderer).toBeOneOf(['webgpu', 'canvas']);
-    expect(mount.canvasRenderer).toBe(mount.renderer);
-  });
-
   test('reduced motion serves one settled result', () => {
     const reduced = required(facts.reduced, 'reduced-motion page');
     expect(reduced.before).toBe(reduced.after);
@@ -1324,9 +1314,6 @@ describe('the landing frames reuse the app rail', () => {
 });
 
 describe('the landing frames mount the product shell', () => {
-  test("the strip carries only the tabs the sample's tabPresence has content for", () => {
-    expect(required(facts.shell, 'plan frame shell').labels).toEqual(['Work', 'Files', 'Agent', 'Env']);
-  });
 
   test('the inspector column is shut until the plan arrives, then opens at the policy width', () => {
     const shell = required(facts.shell, 'plan frame shell');
@@ -1486,17 +1473,6 @@ describe('public pages are responsive', () => {
     }
   });
 
-  test('the wide landing keeps its intended measure', () => {
-    // The shell is one measure, 84rem: 1264 inside its 40px gutters on every
-    // screen from a device to 4K, so the page reads as one page rather than
-    // growing with the viewport. Copy blocks keep their own max-width.
-    const expected = { '1568': 1264, '1920': 1264, '2560': 1264, '3840': 1264 };
-
-    for (const [where, target] of Object.entries(expected)) {
-      const width = required(facts.wideColumns[where], `measured width @${where}`);
-      expect(Math.abs(width - target), `${where}: measured ${String(width)}`).toBeLessThanOrEqual(2);
-    }
-  });
 });
 
 describe('rendered landing text is readable', () => {

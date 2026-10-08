@@ -15,7 +15,7 @@ export type { FileEditOutcomeReason, FileEditSnapshot } from '../types/file-edit
 /** `part` suffices to anchor an edit; `whole` is required to discard the file's contents. */
 export type FileSeenNeed = 'part' | 'whole';
 
-export type FileSeenState =
+type FileSeenState =
   | 'seen'
   /** Seen, but only part of it, and this operation needs the whole. */
   | 'partial'

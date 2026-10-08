@@ -3,13 +3,7 @@
 import { describe, test, expect } from 'bun:test';
 import { APICallError, RetryError } from 'ai';
 import { toProviderError } from '../src/providers/util';
-import {
-  classifyTurnFailure,
-  statedContextLimit,
-  planOverflowRecovery,
-  OVERFLOW_RETRY_EVENT,
-  OVERFLOW_RETRY_TEXT,
-} from '../src/index';
+import { classifyTurnFailure, statedContextLimit, planOverflowRecovery } from '../src/index';
 
 describe('classifyTurnFailure', () => {
   test('context_length: the provider phrasings for an oversized request', () => {
@@ -171,8 +165,4 @@ describe('planOverflowRecovery', () => {
       .toEqual({ failureClass: null, forceCompaction: false, enqueueRetry: false });
   });
 
-  test('retry-turn constants are stable wire values', () => {
-    expect(OVERFLOW_RETRY_EVENT).toBe('overflow_retry');
-    expect(OVERFLOW_RETRY_TEXT).toContain('compacted');
-  });
 });

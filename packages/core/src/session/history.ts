@@ -48,7 +48,7 @@ interface LandedInput {
 }
 
 /** `before`/`after`: the conversation messages around it. */
-export interface CarriedRender {
+interface CarriedRender {
   readonly message: ModelMessage;
   readonly before: ModelMessage | null;
   readonly after: ModelMessage | null;

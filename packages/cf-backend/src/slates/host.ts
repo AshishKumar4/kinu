@@ -32,9 +32,9 @@ import { ROOT_SLATE_CALLER, slateCallerKey, slateCredentialKey, shareCaller, typ
 import { codemodeEgress } from '../codemode-egress';
 import { SlateSources, type MessageBlock, type SlateSource } from './sources';
 
-export type SlateCapabilityRoute = Exclude<SlateRoute, { kind: 'app' }>;
+type SlateCapabilityRoute = Exclude<SlateRoute, { kind: 'app' }>;
 
-export interface SlateApps extends DurableApps {
+interface SlateApps extends DurableApps {
   url(port: number, capability: string): Promise<WorkspacePreviewUrl>;
 }
 

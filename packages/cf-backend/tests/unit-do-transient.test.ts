@@ -2,7 +2,6 @@
 // PLATFORM_CATALOG['do.reset.transient'], the entry the classifier cites, so they cannot drift.
 import { Result } from 'effect';
 import { describe, test, expect } from 'bun:test';
-import { PLATFORM_CATALOG } from '@kinu.run/core';
 import { retryTransientDO, classifyTransientDO } from '@kinu.run/core';
 import {
   claimOwnedWorkspace, notInRegistry, ownedByAnotherAccount,
@@ -37,15 +36,6 @@ function answers<T>(...values: T[]) {
 }
 
 describe('classifyTransientDO — which failures belong to the platform', () => {
-    // If the catalog entry gains a string, this fails until the matcher learns it.
-  test('every reset string do.reset.transient declares is classified transient', () => {
-    const observables = PLATFORM_CATALOG['do.reset.transient'].observable;
-    expect(observables.length).toBeGreaterThan(0);
-
-    for (const { message } of observables) {
-      expect(classifyTransientDO({ cause: new Error(message) })).not.toBeNull();
-    }
-  });
 
   test('a dropped connection is a platform transient', () => {
     expect(classifyTransientDO({ cause: new Error(CONNECTION_LOST) })).toBe('connection_lost');

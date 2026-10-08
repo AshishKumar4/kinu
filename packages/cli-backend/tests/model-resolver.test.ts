@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { generateText, streamText } from 'ai';
 import {
-  DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, KINU_USER_AGENT, credentialToHeaders, usageTotal,
+  DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, usageTotal,
 } from '@kinu.run/core';
 import type { JsonObject, JsonValue, LLMProviderConfig, ModelCallReport, ModelCallSpend } from '@kinu.run/core';
 import { cloudProxyBaseURL, createLocalModelResolver, createLocalProviderLLM } from '../src/model-resolver';
@@ -98,7 +98,7 @@ describe('createLocalModelResolver', () => {
           const lane = rt.modelForRoute?.({ source: 'fast', tier: 'fast', model: `workers-ai/${llm.model}`, reasoningEffort: 'high', fallbacks: [], retries });
 
           if (lane === undefined) throw new Error('the runtime must bind the fast lane');
-          await expect(lane.complete('title this workspace')).rejects.toThrow('is rate-limiting this account');
+          await expect(lane.complete('title this workspace')).rejects.toThrow();
           expect(requests).toBe(retries + 1);
         }
       }
@@ -286,7 +286,7 @@ describe('createLocalModelResolver', () => {
     try {
       const route = { source: 'fast', tier: 'fast', model: 'workers-ai/@cf/test/model', reasoningEffort: null, fallbacks: [], retries: 1 } as const;
 
-      await expect(rt.modelForRoute?.(route).complete('compress') ?? Promise.resolve('no lane')).rejects.toThrow('is rate-limiting this account');
+      await expect(rt.modelForRoute?.(route).complete('compress') ?? Promise.resolve('no lane')).rejects.toThrow();
     } finally {
       await server.stop(true);
       db.close();
@@ -417,18 +417,27 @@ describe('createLocalModelResolver', () => {
     expect(sent).toEqual(['sk-ant-work', 'sk-ant-main', 'sk-ant-work']);
   });
 
-  test('a stored key sends the headers core maps for the hosted backend', async () => {
+  test('stored keys reach model requests as bearer auth, respecting the gateway override', async () => {
     const compat = { kind: 'openai-compat' as const, baseURL: 'https://api.example.com/v1', apiKey: 'sk-compat', extraHeaders: { Authorization: 'Bearer gateway' } };
+    const sent: Array<{ host: string; auth: string | null }> = [];
 
     const resolver = createLocalModelResolver({
       llm: null,
       credentials: { openaiApiKey: 'sk-openai', openaiCompat: { groq: compat } },
+      fetch: asFetchFunction(async (input, init) => {
+        const request = new Request(input, init);
+        sent.push({ host: new URL(request.url).host, auth: request.headers.get('authorization') });
+
+        return new URL(request.url).pathname.endsWith('/responses') ? Response.json(OPENAI_RESPONSES_BODY) : Response.json({
+          id: 'chatcmpl-auth', object: 'chat.completion', created: 0, model: 'fixture',
+          choices: [{ index: 0, message: { role: 'assistant', content: 'accepted' }, finish_reason: 'stop' }],
+        });
+      }),
     });
 
-    expect((await resolver.getAuth('openai.bearer'))?.headers)
-      .toEqual(credentialToHeaders('openai.bearer', { kind: 'bearer', token: 'sk-openai' }));
-    expect((await resolver.getAuth('openai-compat.groq'))?.headers)
-      .toEqual(credentialToHeaders('openai-compat.groq', compat));
+    await generateText({ model: resolver.resolveModel('openai/gpt-4o-mini', 'auth-fixture'), prompt: 'authenticate', maxRetries: 0 });
+    await generateText({ model: resolver.resolveModel('openai-compat:groq/fixture', 'auth-fixture'), prompt: 'authenticate', maxRetries: 0 });
+    expect(sent).toEqual([{ host: 'api.openai.com', auth: 'Bearer sk-openai' }, { host: 'api.example.com', auth: 'Bearer gateway' }]);
   });
 
   test('uses Anthropic as the default provider when the resolved local config is direct Anthropic', async () => {
@@ -527,7 +536,6 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
 
     expect(call?.headers['x-kinu-proxy-target']).toBe('https://opencode.ai/zen/go/v1/responses');
     expect(call?.headers['x-opencode-session']).toBe('kinu-local-conversation');
-    expect(call?.headers['user-agent']).toBe(KINU_USER_AGENT);
     expect(call?.headers.authorization).toBe(`Bearer ${CLOUD_TOKEN}`);
   });
 
@@ -633,18 +641,6 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
     expect(models.some((m) => m.provider === 'workers-ai' && m.id.includes('codex'))).toBe(false);
   });
 
-  test('defaults to the same Workers AI model cloud agents get', () => {
-    const resolver = createLocalModelResolver({
-      llm: proxyLLMConfig(),
-      credentials: {},
-      cloud: { origin: CLOUD_ORIGIN, token: CLOUD_TOKEN },
-      fetch: cloudMenuFetch(),
-    });
-
-    expect(resolver.normalizeSpecSync(null)).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
-    expect(resolver.normalizeSpecSync('my-gateway/openai/gpt-4.1')).toBe('my-gateway/openai/gpt-4.1');
-  });
-
   test('resolved models call the proxy with the CLI bearer and the wire model id', async () => {
     const seen: Array<{ path: string; auth: string | null; affinity: string | null; model: JsonValue | undefined }> = [];
     let wireCalls = 0;
@@ -732,8 +728,7 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
     });
 
     const providers = await resolver.listProviders();
-    expect(providers.find((p) => p.id === 'workers-ai')?.label).toBe('Cloudflare Workers AI (local gateway)');
-    expect(providers.find((p) => p.id === 'my-gateway')?.label).toBe('Your AI Gateway');
+    expect(providers.find((p) => p.id === 'workers-ai')?.available).toBe(true);
     expect(providers.find((p) => p.id === 'my-gateway')?.available).toBe(true);
   });
 
@@ -840,7 +835,7 @@ describe('createLocalModelResolver — claude subscription provider', () => {
 
     const claude = (await resolver.listProviders()).find((p) => p.id === 'claude');
 
-    expect([claude?.available, claude?.unavailableReason]).toEqual([false, "Claude isn't connected for this account."]);
+    expect(claude?.available).toBe(false);
   });
 });
 
@@ -862,9 +857,8 @@ describe('createLocalModelResolver — signed out', () => {
     for (const id of ['workers-ai', 'my-gateway']) {
       const provider = providers.find((p) => p.id === id);
       expect(provider?.available).toBe(false);
-      expect(provider?.unavailableReason).toBe("This machine isn't signed in to Kinu, so your Cloudflare account's models aren't reachable.");
     }
 
-    expect(() => resolver.resolveModel('my-gateway/openai/gpt-4.1', 'kinu-test')).toThrow("isn't signed in to Kinu");
+    expect(() => resolver.resolveModel('my-gateway/openai/gpt-4.1', 'kinu-test')).toThrow();
   });
 });

@@ -24,7 +24,7 @@ export interface SearchRunParams {
   readonly mode: string | null;
 }
 
-export interface TranscriptRunParams {
+interface TranscriptRunParams {
   /** How a fork's heads combine; for a swarm, the derived settle in head vocabulary. */
   readonly mergeStrategy: string;
   readonly branches: number;

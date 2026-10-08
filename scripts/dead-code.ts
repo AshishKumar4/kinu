@@ -10,9 +10,11 @@
  * precisely to be used by production and never was.
  *
  * So this gate reports four classes and keeps them apart:
- *   test-only         — production never reaches it; only a test does. The
- *                       `ensureActorSchema` case. Wire it, or delete it and its
- *                       test.
+ *   test-only         — production never reaches it, not even in its own file;
+ *                       only a test does. The `ensureActorSchema` case. Wire
+ *                       it, or delete it and its test. An export production
+ *                       reads in its own file and a test imports is live code
+ *                       whose export serves the test: not dead, not reported.
  *   unreferenced      — nothing anywhere reaches it. The `runCraftedToolGepa`
  *                       case.
  *   unreachable-file  — no entry point reaches the FILE, so none of its exports
@@ -33,6 +35,12 @@
  * a symbol reported in production mode but NOT in the default mode is reached
  * only by tests. That set difference IS the classification. Two knip runs, no
  * reference resolver of our own.
+ *
+ * A reference inside the declaring file is NOT a use of the EXPORT
+ * (`ignoreExportsUsedInFile: false` in the knip block): an export whose only
+ * reader is its own file needs no `export`, and is reported. Until 2026-10-07 it
+ * counted, and 125 such exports were invisible. It still counts as production
+ * reaching the CODE, so it decides test-only above.
  *
  * The FOURTH is derived here instead, and the reason is measured rather than
  * stylistic. knip's dependency pass reported `vitest-evals` unused until
@@ -243,12 +251,11 @@ export function classify(
 
     for (const e of names) {
       if (!declarations.has(e.name)) continue;
-      found.push({
-        file,
-        name: e.name,
-        line: e.line,
-        kind: unreferenced.has(`${file}#${e.name}`) ? 'unreferenced' : 'test-only',
-      });
+      const kind: DeadClass = unreferenced.has(`${file}#${e.name}`) ? 'unreferenced' : 'test-only';
+
+      // Production reads it where it is declared; the export is a test's, and the code is live.
+      if (kind === 'test-only' && readInOwnFile(file, read(file), e.name)) continue;
+      found.push({ file, name: e.name, line: e.line, kind });
     }
   }
 
@@ -256,6 +263,17 @@ export function classify(
 }
 
 export const keyOf = (d: DeadExport): string => `${d.file}#${d.name} (${d.kind})`;
+
+/** Whether `name` is read in `text` beyond the identifier that declares it. */
+function readInOwnFile(file: string, text: string, name: string): boolean {
+  let seen = 0;
+
+  walk(parse(file, text).root, (node) => {
+    if ((node.raw.type === 'Identifier' || node.raw.type === 'JSXIdentifier') && 'name' in node.raw && node.raw.name === name) seen += 1;
+  });
+
+  return seen > 1;
+}
 
 /* ── Declared and imported by nothing ─────────────────────────────────── */
 

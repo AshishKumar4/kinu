@@ -137,7 +137,7 @@ export async function retryBackgroundJob(deps: BackgroundJobPlaneDeps, jobId: st
 }
 
 /** `unknown` is an honest daemon result, not success: the request may still be running. */
-export interface DeviceStopOutcome {
+interface DeviceStopOutcome {
   /** The daemon's process-group id; absent only when the sweep itself could not run. */
   readonly requestId?: string;
   readonly outcome: 'terminated' | 'unknown' | 'failed';

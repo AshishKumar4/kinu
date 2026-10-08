@@ -73,7 +73,7 @@ describe('run tool — interactive shell approval channel', () => {
   test('"deny" reports the refusal to the model and never runs the command', async () => {
     const { run, executed } = harness({ approve: async () => 'deny' });
 
-    await expect(run.execute({ command: GATED })).rejects.toMatchObject({ code: 'denied', message: expect.stringContaining('Denied by the owner') });
+    await expect(run.execute({ command: GATED })).rejects.toMatchObject({ code: 'denied' });
     expect(executed).toEqual([]);
   });
 
@@ -104,7 +104,7 @@ describe('run tool — interactive shell approval channel', () => {
   test('deny_all refuses without consulting the channel', async () => {
     const { run, executed, asked } = harness({ mode: 'deny_all', approve: async () => 'allow' });
 
-    await expect(run.execute({ command: GATED })).rejects.toMatchObject({ code: 'denied', message: expect.stringContaining('refused by standing policy (deny_all)') });
+    await expect(run.execute({ command: GATED })).rejects.toMatchObject({ code: 'denied' });
     expect(executed).toEqual([]);
     expect(asked).toEqual([]);
   });

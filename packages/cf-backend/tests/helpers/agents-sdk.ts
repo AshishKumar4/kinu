@@ -94,7 +94,11 @@ let paneConnection: { readonly id: string; readonly tags: readonly string[] } | 
 
 /** Runs `call` as a socket carrying `tags` would: the product reads which pane addressed it. */
 export async function asPane<T>(tags: readonly string[], call: () => Promise<T>): Promise<T> {
-  paneConnection = { id: crypto.randomUUID(), tags };
+  return await asConnection({ id: crypto.randomUUID(), tags }, call);
+}
+
+async function asConnection<T>(connection: { readonly id: string; readonly tags: readonly string[] }, call: () => Promise<T>): Promise<T> {
+  paneConnection = connection;
 
   try {
     return await call();
@@ -102,6 +106,11 @@ export async function asPane<T>(tags: readonly string[], call: () => Promise<T>)
     paneConnection = undefined;
   }
 }
+
+/** A frame the SDK dispatches as a call (`isRPCRequest`, `agents/dist/src-BZeu-SCD.js:1357`). */
+const RpcRequestSchema = v.pipe(v.string(), v.parseJson(), v.looseObject({
+  type: v.literal('rpc'), id: v.string(), method: v.string(), args: v.array(v.unknown()),
+}));
 
 export function harnessFibersRunning(): boolean {
   return harnessFiberBodies.size > 0;
@@ -241,7 +250,33 @@ export function mockAgentsSdk(): void {
         return this.ctx.storage.sql.exec(query, ...values).toArray();
       }
       onConnect(_connection: Connection, _ctx: ConnectionContext): void {}
-      onMessage(_connection: Connection, _message: WSMessage): void {}
+      /** The SDK's dispatch of a call frame (`agents/dist/src-BZeu-SCD.js:2022`): a `@callable` method runs as that
+       *  socket's call and answers on it. Streaming methods are not served; any other frame is dropped, as the SDK's own
+       *  handler drops it. */
+      async onMessage(connection: Connection, message: WSMessage): Promise<void> {
+        const frame = v.safeParse(RpcRequestSchema, message);
+
+        if (!frame.success) return;
+        const rpc = frame.output;
+
+        try {
+          // `this[method]`, as the SDK reads it: the class's own, up its prototype chain.
+          const chain: object[] = [];
+
+          for (let owner: object | null = Object.getPrototypeOf(this); owner !== null; owner = Object.getPrototypeOf(owner)) chain.push(owner);
+          const method = chain.map((owner) => v.safeParse(v.function(), Object.getOwnPropertyDescriptor(owner, rpc.method)?.value)).find((found) => found.success);
+
+          if (method?.success !== true) throw new Error(`Method ${rpc.method} does not exist`);
+
+          if (!declaredCallables.has(rpc.method)) throw new Error(`Method ${rpc.method} is not callable`);
+
+          connection.send(await asConnection(connection, async () => JSON.stringify({
+            done: true, id: rpc.id, result: await method.output.apply(this, rpc.args), success: true, type: 'rpc',
+          })));
+        } catch (error) {
+          connection.send(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error occurred', id: rpc.id, success: false, type: 'rpc' }));
+        }
+      }
       onClose(_connection: Connection, _code: number, _reason: string, _wasClean: boolean): void {}
       onRequest(_request: Request): Response {
         return new Response('Not implemented', { status: 404 });

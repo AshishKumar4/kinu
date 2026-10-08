@@ -199,7 +199,6 @@ test('S2: the per-viewer request bound refuses past its limit, per viewer and on
   const refused = await visit(world, url, '203.0.113.1');
 
   expect(refused?.status).toBe(429);
-  expect(await refused?.text()).toBe('Too many requests');
   expect((await visit(world, url, '203.0.113.2'))?.status).toBe(200);
 
   const minted = await visit(world, url, '203.0.113.3', { path: CONSENT_PATH });

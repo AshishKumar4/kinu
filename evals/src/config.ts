@@ -77,6 +77,11 @@ export function evalConcurrency(env: Env): number {
   return positiveInteger(env, 'KINU_EVAL_CONCURRENCY', Number.MAX_SAFE_INTEGER);
 }
 
+/** How many task files run at once: all of them, unless `KINU_EVAL_FILES` caps it for the same reason. */
+export function evalFiles(env: Env): number {
+  return positiveInteger(env, 'KINU_EVAL_FILES', Number.MAX_SAFE_INTEGER);
+}
+
 /** The cohorts one run measures, parsed before any trial spends inference. */
 export function evalMatrix(env: Env, knownArms: readonly string[]): EvalMatrix {
   const [models = [], arms = []] = [env.KINU_EVAL_MODELS, env.KINU_EVAL_ARMS]

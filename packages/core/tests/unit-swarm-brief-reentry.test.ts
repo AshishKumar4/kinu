@@ -109,7 +109,7 @@ describe('a node keeps its assigned question across re-entry', () => {
 
     expect(slot.id).toBe('child-1');
     expect(prompt.user).toContain('Inspect transaction visibility');
-    expect(prompt.user).toContain('Your angle: Read the committed row after reconnecting.');
+    expect(prompt.user).toContain('Read the committed row after reconnecting.');
     expect(prompt.user).toContain('Trace the revision across a credential rotation');
   });
 });

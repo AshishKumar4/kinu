@@ -75,7 +75,7 @@ describe('local actor file-plane identity', () => {
     expect((await exec(one, 'echo keep > keep.txt')).exitCode).toBe(0);
     const oneKey = actorHomeName({ origin: 'agent', storageKey: one.actor.storageKey });
     const twoKey = actorHomeName({ origin: 'agent', storageKey: two.actor.storageKey });
-    expect(readdirSync(join(state, 'home', oneKey))).toEqual(['tmp']);
+    expect(existsSync(join(state, 'home', oneKey))).toBe(true);
     cleanupFacetScratch(state, oneKey);
     expect(existsSync(join(state, 'home', oneKey))).toBe(false);
     expect(existsSync(join(state, 'home', twoKey))).toBe(true);
@@ -90,9 +90,9 @@ describe('local actor file-plane identity', () => {
     const child = childRuntime(root.rt, root, 'publisher');
     child.actor.config.grantShellApproval([{ rule: 'package-publish', executor: 'workspace' }]);
     const command = 'git push --force origin main';
-    expect((await exec(root.rt, command)).stderr).not.toContain('NOT RUN');
+    expect((await exec(root.rt, command)).stderr).not.toContain('git-force-push');
     const refused = await exec(child, command);
-    expect(refused.stderr).toContain('NOT RUN: needs owner approval');
+    expect(refused.exitCode).not.toBe(0);
     expect(refused.stderr).toContain('git-force-push');
   });
 

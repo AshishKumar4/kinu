@@ -46,7 +46,7 @@ export interface WorkspaceHostTarget {
 }
 
 /** The supervisor entrypoint resolves its host from an id, never a name. */
-export interface WorkspaceHostNamespace<Id> extends ObjectNamespace<Id, WorkspaceHostTarget> {
+interface WorkspaceHostNamespace<Id> extends ObjectNamespace<Id, WorkspaceHostTarget> {
   idFromString(id: string): Id;
 }
 

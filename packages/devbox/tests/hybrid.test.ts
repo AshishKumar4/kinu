@@ -2,7 +2,6 @@
 // recovers from the chain and says so. The chain is chain-box's model; the deploy tier runs the real one.
 import { afterEach, expect, jest, setSystemTime, spyOn, test } from 'bun:test';
 import * as v from 'valibot';
-import { DiskChainStateSchema } from '../src/disk-chain';
 import { ChainTestBox, asked, chainBox } from './support/chain-box';
 import type { SnapshotRegistry } from '../src/snapshot-registry';
 
@@ -71,19 +70,19 @@ test('a rest commits the chain, then takes the snapshot the next wake starts fro
 });
 
 test('a snapshot wake that is not admitted within the cutover starts from the image and tells the agent when it restored to', async () => {
+  setSystemTime(new Date('2026-09-30T00:00:00Z'));
   const { box, container, rows } = await rested();
-  const committedAt = Date.now();
   container.snapshots.set('snapshot-1', 'hang');
   const destroys = container.destroys;
   await box.devboxStartup();
-  const notices = (await box.devboxIncidentReasons()).map(row => row.reason).filter(reason => reason.includes('restored from its backup'));
+  const notices = await box.devboxIncidentReasons();
 
   expect({
     starts: container.startOptions.map(startedFrom), asked, destroyed: container.destroys - destroys, snapshotKept: rows.has('devbox:snapshot'),
-    notices: notices.length, restoredTo: notices[0]?.includes(new Date(committedAt).toISOString().slice(0, 16)), rebuild: notices[0]?.includes('node_modules'),
+    notices: notices.map(row => row.stage), restoredTo: notices[0]?.reason.includes('2026-09-30T00:00'),
   }).toEqual({
     starts: ['image', 'snapshot-1', 'image'], asked: ['attach from image', 'commit quiesce', 'attach from image'], destroyed: 1, snapshotKept: false,
-    notices: 1, restoredTo: true, rebuild: true,
+    notices: ['recovered'], restoredTo: true,
   });
 });
 
@@ -107,16 +106,17 @@ test('a snapshot the platform no longer has starts from the image at once, and l
 
 test('a snapshot the chain has moved past, or one past its 29 days, is not woken', async () => {
   const moved = await rested();
-  const chain = v.parse(DiskChainStateSchema, moved.rows.get('devbox:disk-chain'));
+  await moved.box.devboxStartup();
+  expect((await moved.box.checkpointNow('tick')).kind).toBe('committed');
+  await moved.container.stop();
 
-  moved.rows.set('devbox:disk-chain', { ...chain, rev: 99 });
   await moved.box.devboxStartup();
   const old = await rested();
   setSystemTime(Date.now() + 30 * 24 * 60 * 60 * 1000);
   await old.box.devboxStartup();
 
   expect({ moved: moved.container.startOptions.map(startedFrom), old: old.container.startOptions.map(startedFrom) }).toEqual({
-    moved: ['image', 'image'], old: ['image', 'image'],
+    moved: ['image', 'snapshot-1', 'image'], old: ['image', 'image'],
   });
 });
 
@@ -153,7 +153,7 @@ test('a rest whose snapshot is refused still rests, says why, and the next wake 
 
   expect({
     rest: rest.kind, running: container.running.running, starts: container.startOptions.map(startedFrom),
-    said: reasons.some(reason => reason.includes('took no snapshot') && reason.includes('snapshot quota exceeded')),
+    said: reasons.some(reason => reason.includes('snapshot quota exceeded')),
   }).toEqual({ rest: 'committed', running: true, starts: ['image', 'image'], said: true });
 });
 

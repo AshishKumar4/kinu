@@ -4,7 +4,7 @@
  */
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
-import { openWorkspaceMainActor, recoveryBackoffMs } from '@kinu.run/core';
+import { openWorkspaceMainActor } from '@kinu.run/core';
 import { createRecordingLogger } from '@kinu.run/core/obs';
 import { makeSql } from '../../core/tests/helpers';
 import {
@@ -15,6 +15,9 @@ import { joinHarnessFibers } from './helpers/agents-sdk';
 import { present } from '@kinu.run/test-utils';
 import { answeringGateway, chatCompletion, openingOf, stubAiBinding } from './helpers/platform-gateway';
 import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB, type WakeJob } from '../src/wake-jobs';
+
+/** The longest a recovery waits before it tries again: a minute, stated here rather than asked of the backoff. */
+const RECOVERY_CEILING_MS = 60_000;
 
 /** Journal, job registry and search ledger are actor-private: seeds must carry the owner the agent resolves. */
 function harnessActorId(db: Database): string {
@@ -521,6 +524,30 @@ describe('the workspace keeps exactly one wake per job', () => {
     expect(wakeArmed(db)).toBe(false);
   });
 
+  test('a task for a live actor no drain runs settles, never said to be for an actor that is gone', async () => {
+    const { agent, db } = orchestratorHarness();
+    await agent.activateActor();
+    await joinHarnessFibers();
+
+    // Any hosted actor can be handed a task; the drain runs hires only, so the root's settles undone.
+    const insert = db.prepare(
+      `INSERT INTO agent_log (actor_id, id, kind, variant, trace_id, payload, received_at)
+       VALUES (?, ?, 'event', 'subordinate_task', 'trace-unrun', '{"body":"brief"}', ?)`,
+    );
+
+    insert.run(harnessActorId(db), 'unrun-task', Date.now());
+    insert.run('gone-actor', 'gone-task', Date.now());
+
+    await agent.terminalRetryPass();
+    await joinHarnessFibers();
+
+    const [unrun, gone] = [orphanRow(db, 'unrun-task'), orphanRow(db, 'gone-task')];
+
+    expect([unrun.step_idx, gone.step_idx]).toEqual([-2, -2]);
+    // The live root's reason is its own, not the reason a gone actor's task is given.
+    expect(unrun.dismissed).not.toBe(gone.dismissed);
+  });
+
   test('a task left for a retired hire settles, and a live hire\'s task still runs', async () => {
     const { agent, db } = orchestratorHarness();
     await agent.activateActor();
@@ -579,7 +606,7 @@ describe('the workspace keeps exactly one wake per job', () => {
     }
 
     for (let lap = 1; lap < lapDelays.length; lap++) expect(lapDelays[lap]).toBeGreaterThanOrEqual(lapDelays[lap - 1] ?? 0);
-    const ceiling = recoveryBackoffMs(Infinity);
+    const ceiling = RECOVERY_CEILING_MS;
     expect(lapDelays.at(-1)).toBe(ceiling);
     expect(Math.max(...lapDelays)).toBe(ceiling);
   });
@@ -696,7 +723,7 @@ describe('the workspace keeps exactly one wake per job', () => {
     expect(failed).toHaveLength(1);
     expect(JSON.stringify(failed[0])).toContain('re-arming the wake that keeps the timer chain alive');
     // Retried after every in-process attempt failed: the chain survives at the capped backoff.
-    expect(armedAt(db, KINU_TIMER_JOB)[0]).toBeGreaterThanOrEqual(Date.now() + recoveryBackoffMs(Infinity) - 1000);
+    expect(armedAt(db, KINU_TIMER_JOB)[0]).toBeGreaterThanOrEqual(Date.now() + RECOVERY_CEILING_MS - 1000);
   });
 
   test('an activation restores a wake that went missing', async () => {
@@ -820,7 +847,7 @@ describe('the workspace keeps exactly one wake per job', () => {
     setSystemTime(new Date(openedAt));
     const request = await turns.prepare({ messages: [{ role: 'user', content: 'a turn that opens' }] });
 
-    expect(armedAt(db, TERMINAL_RETRY_JOB)).toEqual([landing(openedAt + recoveryBackoffMs(Infinity))]);
+    expect(armedAt(db, TERMINAL_RETRY_JOB)).toEqual([landing(openedAt + RECOVERY_CEILING_MS)]);
 
     await turns.settle({ messageId: request.identity.messageId, text: 'done' });
   });

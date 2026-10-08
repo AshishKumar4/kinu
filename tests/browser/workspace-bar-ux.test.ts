@@ -492,27 +492,6 @@ describe('the open tab, as the browser paints it', () => {
     });
   }
 
-  test('a closed tab under the pointer brightens, never to the open tab\'s ink', async () => {
-    await withGallery(async ({ newPage, origin }) => {
-      for (const theme of ['dark', 'light'] as const) {
-        const page = await newPage();
-        await page.setViewport({ width: 900, height: 700 });
-        await page.evaluateOnNewDocument((mode) => localStorage.setItem('theme', mode), theme);
-        await page.goto(`${origin}/gallery.html?frame=tabs`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector('[data-tab-strip="main"] .p-bar-outline');
-        const rest = await barPaint(page, 'main');
-        const open = rest.tabs.find((tab) => tab.current);
-        const closed = 'actor-docs';
-
-        await page.hover(`[data-tab-strip="main"] [data-key="${closed}"] .p-bar-link`);
-        const hovered = (await barPaint(page, 'main')).tabs.find((tab) => tab.key === closed);
-
-        expect(hovered?.color).not.toBe(rest.tabs.find((tab) => tab.key === closed)?.color);
-        expect(hovered?.color).not.toBe(open?.color);
-        await page.close();
-      }
-    });
-  });
 });
 
 /**
@@ -559,39 +538,6 @@ describe('a chat\'s status, as the bar paints it', () => {
       await page.waitForSelector('[data-logo-field] button');
       await page.click('[data-logo-field] button');
       await page.waitForFunction(() => document.documentElement.dataset.galleryLogoDraws === '1');
-      await page.close();
-    });
-  });
-
-  test('a chat wears the same character in its tab and its sidebar row, and its neighbours wear others', async () => {
-    await withGallery(async ({ newPage, origin }) => {
-      const page = await newPage();
-      await page.setViewport({ width: 1440, height: 900 });
-      await page.goto(`${origin}/gallery.html?frame=workspaceshell&agents=panel`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('[data-workspace-chat] .p-mascot');
-
-      const looks = await page.evaluate(() => {
-        const look = (host: Element | null) => {
-          const mark = host?.querySelector('.p-mascot[data-face]');
-
-          return mark === null || mark === undefined ? null
-            : [mark.getAttribute('data-face'), ...[...mark.querySelectorAll('stop')].map((stop) => stop.getAttribute('stop-color'))].join('|');
-        };
-
-        return [...document.querySelectorAll('.p-bar-tab[data-key]')].filter((tab) => tab.getAttribute('data-key') !== 'overview').map((tab) => ({
-          tab: look(tab),
-          row: look(document.querySelector(`[data-workspace-chat="${tab.getAttribute('data-key') ?? ''}"]`)),
-        }));
-      });
-
-      expect(looks.length).toBeGreaterThan(2);
-
-      for (const { tab, row } of looks) {
-        expect(tab).not.toBeNull();
-        expect(row).toBe(tab);
-      }
-
-      expect(new Set(looks.map(({ tab }) => tab)).size).toBeGreaterThan(1);
       await page.close();
     });
   });

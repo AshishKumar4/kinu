@@ -1449,7 +1449,7 @@ const FILES_SETTLED = `(() => {
 const FILES_LISTED = `[...document.querySelectorAll('[data-files-entry]')].map((row) => row.getAttribute('title') ?? '')`;
 
 /** The workspace's own folder, from the Files tab's root, one row at a time. */
-const HOME_FOLDER = ['home', 'user'] as const;
+const HOME_FOLDER = ['home', 'main'] as const;
 
 /** The Changes tab has read its change-set: its file tree is drawn. */
 const CHANGES_SETTLED = `document.querySelector('#inspector [data-file-tree]') !== null`;

@@ -392,6 +392,8 @@ function terminalRefusal(failure: { doing: string; cause: unknown }): string {
   return renderThrownChain({ cause: error });
 }
 
+type SandboxBox = ReturnType<NonNullable<Env['KinuDevbox']>['getByName']>;
+
 interface HostedTarget {
   readonly handle: ActorHandle;
   readonly entry: NonNullable<ReturnType<SubordinateRosterStore['get']>>;
@@ -856,8 +858,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.actorHost().bindStores(actorReferenceOf(this.liveAgentOf(actorId)));
   }
 
+  /** The tile reads an agent's chat turn as its room hears it open and close. */
   private async hostedChatEvent(actorId: string, event: SessionEvent): Promise<void> {
-    if (event.type === 'turn-start') this.agentTurns.chatOpened(actorId, event.turnId);
+    if (event.type === 'turn-start') {
+      this.agentTurns.chatOpened(actorId, event.turnId);
+      this.overviewChanged();
+    }
 
     await this.chatRooms.hostedRoom(actorId)?.deliver(event);
   }
@@ -865,6 +871,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private async hostedTurnEnded(actorId: string, event: SessionEvent, figures: AgentFigures): Promise<void> {
     await this.hostedChatEvent(actorId, event);
     this.agentTurns.chatClosed(actorId);
+    this.overviewChanged();
 
     if (!this.liveActor(actorId)) return;
     recordAgentFigures(this.boundSql, actorId, figures);
@@ -1595,10 +1602,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private startDelegationDrain(): void {
-    const hires = this.workspaceActors().list().filter((record) => isSubordinateOrigin(record.origin));
+    const live = this.workspaceActors().list();
+    const hires = live.filter((record) => isSubordinateOrigin(record.origin));
 
-    for (const orphan of dismissOrphanedAssignments(this.boundExec(), new Set(hires.map((record) => record.actorId)))) {
-      diagnostics.event('subordinate.assignment_orphaned', { workspace: this.name, actor: orphan.actorId, assignment: orphan.id });
+    // Any hosted actor can be handed a task; the drain runs hires only.
+    const orphans = dismissOrphanedAssignments(this.boundExec(), {
+      live: new Set(live.map((record) => record.actorId)), drained: new Set(hires.map((record) => record.actorId)),
+    });
+
+    for (const orphan of orphans) {
+      diagnostics.event('subordinate.assignment_orphaned', { workspace: this.name, actor: orphan.actorId, assignment: orphan.id, reason: orphan.reason });
     }
 
     this.delegatedTurns.start(hires);
@@ -1632,6 +1645,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           }))));
 
         openTurns.close(opened);
+        // The tile reads the agent working while the hand-off is out: this is where that ends.
+        this.overviewChanged();
 
         if (!this.liveActor(record.actorId)) return;
 
@@ -4728,33 +4743,29 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable() async getSandboxSize(): Promise<SandboxSizeState | null> {
-    const box = this.env.KinuDevbox?.getByName(sandboxIdForWorkspace(this.name));
-
-    if (box === undefined) return null;
-    const [account, size] = await Promise.all([this.accountSandboxSize(), box.boxSize()]);
-
-    return { account, chosen: size.chosen ?? null, size: size.size, running: size.running ?? null, startRefused: size.startRefused ?? null };
+    return await this.withSizedBox(async () => {});
   }
 
   /** The owner's try-again for a refused start: the box's one start path, which clears the refusal. */
   @callable() async startSandbox(): Promise<SandboxSizeState | null> {
-    const box = this.env.KinuDevbox?.getByName(sandboxIdForWorkspace(this.name));
-
-    if (box === undefined) return null;
-    await box.useDefaultSize(await this.accountSandboxSize());
-    await box.start();
-
-    return await this.getSandboxSize();
+    return await this.withSizedBox(async (box) => { await box.start(); });
   }
 
   @callable() async resizeSandbox(size: string | null): Promise<SandboxSizeState | null> {
+    return await this.withSizedBox(async (box) => { await box.resize(size); });
+  }
+
+  /** The box keeps the account default its next start uses, so every read and change pushes the owner's current one. */
+  private async withSizedBox(act: (box: SandboxBox) => Promise<void>): Promise<SandboxSizeState | null> {
     const box = this.env.KinuDevbox?.getByName(sandboxIdForWorkspace(this.name));
 
     if (box === undefined) return null;
-    await box.useDefaultSize(await this.accountSandboxSize());
-    await box.resize(size);
+    const account = await this.accountSandboxSize();
+    await box.useDefaultSize(account);
+    await act(box);
+    const size = await box.boxSize();
 
-    return await this.getSandboxSize();
+    return { account, chosen: size.chosen ?? null, size: size.size, running: size.running ?? null, startRefused: size.startRefused ?? null };
   }
 
   private async accountSandboxSize(): Promise<BoxSize | null> {

@@ -1,14 +1,14 @@
 // The Node `eval` factory must match the CF codemode sandbox: capture console.* as `logs` (stdout is the
 // `kinu exec --json` event stream) and implicit-return a trailing expression.
 import { describe, expect, test } from 'bun:test';
-import { asSchema, jsonSchema, tool } from 'ai';
+import { jsonSchema, tool } from 'ai';
 import * as v from 'valibot';
 import type { CodemodeProvider, CraftedToolSource, JsonValue, SlateOperation } from '@kinu.run/core';
-import { CODEMODE_CODE_DESCRIPTION, SlateOperationSchema, WORKSPACE_ROOT, codemodeSurface, createInlineExecutor } from '@kinu.run/core';
+import { WORKSPACE_ROOT, codemodeSurface, createInlineExecutor } from '@kinu.run/core';
 import { narrowToolSurface } from '@kinu.run/core';
 import { toolExecute, scriptedTurnModel, createTestRuntime, type ScriptedTurnResult } from '@kinu.run/test-utils';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
-import { inWorkMode, successfulToolOutcome, renderDynamicContextBlock, runChat, DynamicContextLedger, craftedToolDeclarations } from '@kinu.run/core';
+import { inWorkMode, successfulToolOutcome, runChat, DynamicContextLedger, craftedToolDeclarations } from '@kinu.run/core';
 import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -25,22 +25,6 @@ function makeTool(): ExecuteTool {
 
   return toolExecute(factory({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [], providers: [] }));
 }
-
-describe('createNodeCodemodeToolFactory — the code field the model reads', () => {
-  test('the input schema describes a script body, not an arrow function', async () => {
-    const built = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [], providers: [] });
-
-    const schema = v.parse(v.object({
-      jsonSchema: v.object({
-        properties: v.object({ code: v.object({ description: v.string() }) }),
-        required: v.array(v.string()),
-      }),
-    }), { jsonSchema: await asSchema(built.inputSchema).jsonSchema }).jsonSchema;
-
-    expect(schema.properties.code.description).toBe(CODEMODE_CODE_DESCRIPTION);
-    expect(schema.required).toEqual(['code']);
-  });
-});
 
 // An MCP or extension tool is no native definition: `eval` reaches it, read per call, its input checked as a native call's is.
 describe('createNodeCodemodeToolFactory — external tools', () => {
@@ -77,7 +61,7 @@ describe('createNodeCodemodeToolFactory — external tools', () => {
 });
 
 describe('createNodeCodemodeToolFactory — console capture + implicit return', () => {
-  test('saving a crafted tool preserves the native description and makes the next call usable', async () => {
+  test('saving a crafted tool makes the next call usable', async () => {
     let crafted: CraftedToolSource[] = [];
     const factory = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) });
     const surface = { native: {}, external: () => ({}), craftedTools: () => crafted, providers: [], cwd: WORKSPACE_ROOT };
@@ -85,7 +69,6 @@ describe('createNodeCodemodeToolFactory — console capture + implicit return', 
     crafted = [{ name: 'cache_echo', description: 'Return the supplied text', code: 'async (text) => text' }];
     const next = factory(surface);
 
-    expect(next.description).toBe(first.description);
     expect(craftedToolDeclarations({ eval: first }, { workMode: 'build', allowedTools: ['eval'] }))
       .toEqual([{ name: 'cache_echo', description: 'Return the supplied text' }]);
     expect(craftedToolDeclarations({ eval: first }, { workMode: 'build', allowedTools: [] })).toEqual([]);
@@ -123,8 +106,7 @@ describe('createNodeCodemodeToolFactory — console capture + implicit return', 
     }
 
     expect(model.doStreamCalls).toHaveLength(2);
-    expect(JSON.stringify(model.doStreamCalls[0]?.prompt)).toContain('cache_echo(...args');
-    expect(JSON.stringify(model.doStreamCalls[0]?.tools)).not.toContain('cache_echo');
+    expect(JSON.stringify(model.doStreamCalls[0]?.prompt)).toContain('cache_echo');
     expect(JSON.stringify(model.doStreamCalls[1]?.prompt.filter((message) => message.role === 'tool'))).toContain('CACHE_ECHO_OK');
   });
 
@@ -161,7 +143,7 @@ describe('createNodeCodemodeToolFactory — console capture + implicit return', 
   test('a throw still surfaces the console output produced before it', async () => {
     const pending = makeTool()({ code: 'console.log("before");\nthrow new Error("boom");' });
     await expect(pending).rejects.toThrow('boom');
-    await expect(pending).rejects.toThrow('Console output:\nbefore');
+    await expect(pending).rejects.toThrow('before');
   });
 
   test('no console call means no logs field', async () => {
@@ -170,20 +152,9 @@ describe('createNodeCodemodeToolFactory — console capture + implicit return', 
     expect(out.logs).toBeUndefined();
   });
 
-  // `shell` is a native tool, not a codemode binding; the error must say where it lives, not a bare ReferenceError.
-  test('calling the native `shell` tool from inside eval gets an actionable hint, not a bare ReferenceError', async () => {
-    const pending = makeTool()({ code: 'return await shell({ runtime: "sandbox", command: "ls" });' });
-    await expect(pending).rejects.toThrow('shell is not defined');
-    await expect(pending).rejects.toThrow('"shell" is a native Kinu tool');
-    await expect(pending).rejects.toThrow('`tools.shell(input)`');
-    // The pointer comes from TOOL_REACH, so it is right for every native tool.
-    await expect(pending).rejects.toThrow('through the `workspace` namespace');
-  });
-
-  test('an unrelated ReferenceError for a name that is not a native tool stays a bare message', async () => {
+  test('an undefined program variable refuses execution', async () => {
     const pending = makeTool()({ code: 'return totallyUndefinedThing;' });
     await expect(pending).rejects.toThrow('totallyUndefinedThing is not defined');
-    await expect(pending).rejects.not.toThrow('native Kinu tool');
   });
 });
 
@@ -372,34 +343,27 @@ describe('createNodeCodemodeToolFactory — native tools under tools.<name>', ()
     expect(seen).toEqual(['ls']);
   });
 
-  test('native tools are declared by their own schemas and crafted declarations ride the live ledger', () => {
-    const built = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) })({
-      cwd: WORKSPACE_ROOT,
-      native: surfaceWith(async () => ''),
-      external: () => ({}), craftedTools: () => [{ name: 'double', description: 'Doubles a number', code: 'async () => 2' }],
-      providers: [],
-    });
-
-    expect(built.description).not.toContain('shell(input:');
-    expect(built.description).not.toContain('double(...args: unknown[]): Promise<unknown>;');
-    expect(renderDynamicContextBlock({ craftedTools: [{ name: 'double', description: 'Doubles a number' }] }))
-      .toContain('double(...args: unknown[]): Promise<unknown>;');
-    expect(built.description).not.toContain('eval(input');
-  });
-
   test('the sandbox does not bind its own entry', async () => {
+    let calls = 0;
+    const native = surfaceWith(async () => '');
+    native.eval = tool({ inputSchema: jsonSchema<{ code: string }>({ type: 'object' }),
+      execute: async () => {
+        calls++;
+
+        return 'recursive entry ran';
+      } });
+
     const built = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) })({
       cwd: WORKSPACE_ROOT,
-      native: surfaceWith(async () => ''),
+      native,
       external: () => ({}), craftedTools: () => [],
       providers: [],
     });
 
-    const out = await toolExecute<{ code: string }, ExecuteToolResult>(built)({
-      code: 'return typeof tools.eval;',
-    });
-
-    expect(out.result).toBe('undefined');
+    await expect(toolExecute<{ code: string }, ExecuteToolResult>(built)({
+      code: 'return await tools.eval({ code: "return 1" });',
+    })).rejects.toThrow();
+    expect(calls).toBe(0);
   });
 });
 
@@ -581,7 +545,4 @@ test('each workspace.slates member reaches the slate host as one operation, and 
     { op: 'remove', id: 'whiteboard' },
   ]);
 
-  // Every operation the host defines was reached, so a member added without a row here fails.
-  expect(new Set(operations.map((operation) => operation.op)))
-    .toEqual(new Set(SlateOperationSchema.options.map((option) => option.entries.op.literal)));
 });

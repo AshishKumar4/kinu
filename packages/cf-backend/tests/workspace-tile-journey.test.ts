@@ -1,21 +1,27 @@
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * One workspace's tile on its owner's home, followed from install to teardown: the real orchestrator folds its stores
- * and pushes the tile to the owner's object, which refuses, holds or takes each push. Defends: a tile that misses a
- * change, repeats one, reads a run that is not the person's, or a push that is lost when the owner's object is away.
+ * and pushes the tile to the owner's object, which refuses, holds or takes each push. Every change reaches it as
+ * production makes it: the owner's calls over a tab's socket, an approval ladder parking a command, a child's own
+ * turn. Defends: a tile that misses a change, repeats one, reads a run that is not the person's, or a push that is
+ * lost when the owner's object is away.
  */
 import { describe, expect, setSystemTime, test } from 'bun:test';
+import * as v from 'valibot';
 import {
-  DeferredApprovalStore, DeviceConsentStore, TURN_AUTHOR_METADATA_KEY, createFactsStore, type WorkspaceOverview,
+  actorConnectionTag, DeviceConsentStore, JsonValueSchema, PlanReviewStore, TURN_AUTHOR_METADATA_KEY, type JsonValue, type WorkspaceOverview,
 } from '@kinu.run/core';
+import { AwaitedList } from '@kinu.run/test-utils';
 import type { Database } from 'bun:sqlite';
 import { TERMINAL_RETRY_JOB } from '../src/wake-jobs';
 import { bindAgentSql } from '../src/runtime';
 import {
-  armedWakes, chatSessionTurns, fireSoonestWake, nextTurn, orchestratorHarness, hostedSubordinateHarness, seedMission, until,
-  workspaceMainActor, workspaceFiles, type RecordedUserPlaneCalls,
+  actorOver, armedWakes, chatSessionTurns, fireSoonestWake, GATEWAY_CATALOG, nextTurn, orchestratorHarness, hostedSubordinateHarness, seedMission,
+  until, wakeForDelegatedTask, workspaceFiles, type HarnessOrchestratorAgent, type RecordedUserPlaneCalls,
 } from './helpers/actor-harness';
 import { mockAgentsSdk } from './helpers/agents-sdk';
+import { socketConnection } from './helpers/bindings';
+import { chatCompletion, openingOf, stubAiBinding } from './helpers/platform-gateway';
 
 mockAgentsSdk();
 
@@ -31,14 +37,76 @@ async function settled(): Promise<void> {
 
 const UNAVAILABLE = () => new Error('the owner object is unavailable');
 
+const RpcReplySchema = v.looseObject({ id: v.string(), success: v.boolean(), result: v.optional(JsonValueSchema), error: v.optional(JsonValueSchema) });
+
+/** An owner's tab on the workspace, or on one agent's window when `tags` name it: each call is a frame on its socket,
+ *  through the workspace's frame gate, answered on it as the SDK answers. */
+function ownerTab(agent: HarnessOrchestratorAgent, tags: readonly string[] = []) {
+  const replies = new Map<string, v.InferOutput<typeof RpcReplySchema>>();
+  const gate = agent.harnessChatGate();
+  let calls = 0;
+
+  const wire = socketConnection({
+    id: `owner-tab-${crypto.randomUUID()}`, tags: [...tags],
+    send: (data: string) => {
+      const reply = v.parse(RpcReplySchema, JSON.parse(data));
+
+      replies.set(reply.id, reply);
+    },
+  });
+
+  return async (method: string, ...args: JsonValue[]): Promise<JsonValue> => {
+    const id = `owner-rpc-${String(calls++)}`;
+
+    await gate(wire, JSON.stringify({ type: 'rpc', id, method, args }));
+    const reply = replies.get(id);
+
+    if (reply?.success !== true) throw new Error(`${method} was not answered: ${JSON.stringify(reply?.error)}`);
+
+    return reply.result ?? null;
+  };
+}
+
+const AddedAgentSchema = v.looseObject({ name: v.string(), subordinate: v.looseObject({ actorId: v.string() }) });
+
+const MAPPING = 'Map the failure surface.';
+
+const NOTING = 'Note what the ledger is missing.';
+
 describe("a workspace's tile on its owner's home", () => {
   test('lands though the owner was away, follows work, decisions and children, and drops a child torn down', async () => {
-    const overviews: WorkspaceOverview[] = [];
+    const tiles = new AwaitedList<WorkspaceOverview>();
+    const overviews = tiles.items;
     const refusals: Error[] = [UNAVAILABLE()];
-    const owner: RecordedUserPlaneCalls = { warmConnections: [], failWarm: null, titles: [], overviews, refuseOverviews: refusals };
-    const workspace = orchestratorHarness(owner);
+    const owner: RecordedUserPlaneCalls = { warmConnections: [], failWarm: null, titles: [], overviews: tiles, refuseOverviews: refusals };
+    // The children's model: each one's turn holds until the suite answers it.
+    const scoutAsked = Promise.withResolvers<void>();
+    const scoutAnswer = Promise.withResolvers<void>();
+    const addedAsked = Promise.withResolvers<void>();
+    const addedAnswer = Promise.withResolvers<void>();
+
+    const gateway = stubAiBinding(async (run) => {
+      const opening = openingOf(run);
+
+      if (opening.includes(MAPPING)) {
+        scoutAsked.resolve();
+        await scoutAnswer.promise;
+      }
+
+      if (opening.includes(NOTING)) {
+        addedAsked.resolve();
+        await addedAnswer.promise;
+      }
+
+      return chatCompletion(run, 'Noted.');
+    });
+
+    const workspace = orchestratorHarness(owner, { aiGateway: gateway });
     const { agent, db } = workspace;
+    const tab = ownerTab(agent);
     const last = () => overviews.at(-1);
+
+    agent.harnessInstallCatalog(GATEWAY_CATALOG);
 
     try {
       // ── Installed while the owner's object is away: the first tile is owed to a wake, not lost. ──
@@ -68,10 +136,8 @@ describe("a workspace's tile on its owner's home", () => {
       const consent = agent.awaitDeviceConsent({ deviceId: 'dev-1', deviceLabel: 'device', method: 'shell', command: 'git push' });
 
       await until(() => last()?.decisionsWaiting === 1, 'the raised consent is pushed');
-      const approvals = new DeferredApprovalStore(bindAgentSql(agent), workspaceMainActor(db));
-
-      approvals.create({ id: 'deploy', command: 'bun run deploy', executor: 'workspace', reason: 'owner approval', requestedAt: Date.now() }, []);
-      await agent.requestOverviewPush();
+      // The approval ladder parks a gated command nobody is there to answer.
+      expect(await tab('executeInExecutor', 'workspace', 'npm publish --dry-run')).toMatchObject({ refusal: { reason: 'unavailable' } });
       await until(() => last()?.decisionsWaiting === 2, 'the parked command is pushed');
       // A wake folds again with nothing moved.
       await agent.terminalRetryPass();
@@ -80,10 +146,11 @@ describe("a workspace's tile on its owner's home", () => {
       const [pending] = await agent.listPendingConsents();
 
       if (!pending) throw new Error('expected a pending device consent');
-      await agent.resolveDeviceConsent(pending.consentId, 'deny');
+      await tab('resolveDeviceConsent', pending.consentId, 'deny');
       await expect(consent).resolves.toBe('deny');
-      approvals.decide('deploy', 'denied', Date.now());
-      await agent.requestOverviewPush();
+      const parked = await agent.listDeferredApprovals();
+
+      await tab('decideDeferredApprovals', parked.map((action) => action.id), 'denied');
       await until(() => last()?.decisionsWaiting === 0, 'both decisions are pushed');
       expect(overviews.slice(before, before + 2).map((each) => each.decisionsWaiting)).toEqual([1, 2]);
 
@@ -98,21 +165,32 @@ describe("a workspace's tile on its owner's home", () => {
 
       // ── Children: one working reads Working; one torn down takes its pending plan with it. ──
       const { actor: scout } = await hostedSubordinateHarness(workspace, { name: 'scout', displayName: 'Scout', nameOrigin: 'user', mission: 'map the failure surface' });
-      const lease = scout.session.beginTurn({ runId: 'child-run', turnId: 'child-turn' }, 'build', Date.now());
 
-      await agent.requestOverviewPush();
-      await until(() => last()?.activity === 'working', "the child's turn is pushed");
-      scout.session.finishTurn(lease);
-      await agent.requestOverviewPush();
+      // Admitted as its hirer's agents tool admits a task; the wake's drain hands it to the child's own chat.
+      await wakeForDelegatedTask(workspace, scout.handle.actorId, MAPPING);
+      await scoutAsked.promise;
+      // The hand-off holds a fiber of this object's open until the child answers, so the tile is waited on as it lands.
+      await tiles.until((landed) => landed.at(-1)?.activity === 'working');
+      scoutAnswer.resolve();
       await until(() => last()?.activity === 'idle', "the child's closed turn is pushed");
 
-      const { actor: planner } = await hostedSubordinateHarness(workspace, { name: 'planner', displayName: 'Planner', nameOrigin: 'user', mission: 'prepare a plan' });
+      // The owner adds an agent and asks it something in its own window: its turn reads Working until it answers.
+      await tab('setSoul', '# Purpose\n\nKeep the ledger balanced.');
+      const added = v.parse(AddedAgentSchema, await tab('createSubordinateAgent'));
+      const addedWindow = ownerTab(agent, [actorConnectionTag(added.subordinate.actorId)]);
 
-      expect(planner.stores.planReviews.submit('default', [{ start: 1, content: '# Repair the ledger' }]).ok).toBe(true);
-      await agent.requestOverviewPush();
+      await addedWindow('send', NOTING, crypto.randomUUID());
+      await addedAsked.promise;
+      await until(() => last()?.activity === 'working', "the added agent's turn is pushed");
+      addedAnswer.resolve();
+      await until(() => last()?.activity === 'idle', "the added agent's answered turn is pushed");
+
+      // No hosted turn submits a plan in this build, so the one the agent holds is the row an earlier build left; the
+      // next tick of the wake carries it.
+      expect(new PlanReviewStore(bindAgentSql(agent), actorOver(db, added.subordinate.actorId)).submit('default', [{ start: 1, content: '# Repair the ledger' }]).ok).toBe(true);
+      await agent.terminalRetryPass();
       await until(() => last()?.decisionsWaiting === 1, "the child's plan is pushed");
-      await agent.actorDirectory({ action: 'retire', name: 'planner', reference: planner.reference });
-      await agent.requestOverviewPush();
+      await tab('dismissSubordinate', added.name, false);
       await until(() => last()?.decisionsWaiting === 0, 'the retired child takes its plan from the tile');
 
       // ── An app the workspace authors shows by its own title, following its files. ──
@@ -123,6 +201,7 @@ describe("a workspace's tile on its owner's home", () => {
       expect((await agent.foldOverview()).slates).toEqual([{ id: 'board', title: 'First', picture: null, visibility: null }]);
       await writeText(files, '/slates/board/package.json', JSON.stringify({ name: 'board', main: 'server.ts', slate: { title: 'Renamed' } }));
       expect((await agent.foldOverview()).slates).toEqual([{ id: 'board', title: 'Renamed', picture: null, visibility: null }]);
+      await until(() => last()?.slates.at(0)?.title === 'Renamed', 'the renamed app is pushed');
 
       // Every push so far carried a change: a fold that moved nothing was never sent again.
       expect(overviews.filter((each, at) => at > 0 && JSON.stringify(each) === JSON.stringify(overviews[at - 1]))).toEqual([]);
@@ -133,12 +212,11 @@ describe("a workspace's tile on its owner's home", () => {
       const owed = retryWakes(db);
 
       refusals.push(Object.assign(new Error('Unrecognized workspace capability token.'), { name: 'CapabilityDeniedError', remote: true }));
-      createFactsStore(bindAgentSql(agent), workspaceMainActor(db)).upsert('preferred_language', 'French');
-      await agent.requestOverviewPush();
+      await writeText(files, '/slates/board/package.json', JSON.stringify({ name: 'board', main: 'server.ts', slate: { title: 'Ledger' } }));
       await until(() => refusals.length === 0, 'the revoked push is refused');
       await settled();
       expect([overviews.length, retryWakes(db)]).toEqual([pushed, owed]);
-      await agent.requestOverviewPush();
+      await writeText(files, '/slates/board/package.json', JSON.stringify({ name: 'board', main: 'server.ts', slate: { title: 'Ledger board' } }));
       await until(() => overviews.length === pushed + 1, 'the next change pushes');
     } finally {
       setSystemTime();

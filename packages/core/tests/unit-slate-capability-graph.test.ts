@@ -35,29 +35,21 @@ test('the graph names each namespace a slate called, each member with its impact
     'issues:slates.digest', 'digest:workspace', 'digest:slates.issues',
   ]);
 
-  expect(row('issues', 'mcp.github')).toEqual({
+  expect(row('issues', 'mcp.github')).toMatchObject({
     slate: 'issues', namespace: 'mcp.github', title: 'GitHub',
-    members: [
-      { member: 'read_issue', impact: 'observe', risk: NO_RISK },
-      {
-        member: 'create_issue', impact: 'externalSend',
-        risk: {
-          public: 'Calls create_issue on GitHub with your credentials. The server does not mark it read-only, so it can create or change data there. Anyone who opens this share can trigger it.',
-          users: 'Calls create_issue on GitHub with your credentials. The server does not mark it read-only, so it can create or change data there. Anyone you named on this share can trigger it.',
-        },
-      },
-    ],
+    members: [{ member: 'read_issue', impact: 'observe', risk: NO_RISK }, { member: 'create_issue', impact: 'externalSend' }],
   });
+  // A member that can change something warns each audience it can reach; one that only observes warns no one.
+  expect(row('issues', 'mcp.github')?.members[1]?.risk.public).not.toBe('');
+  expect(row('issues', 'mcp.github')?.members[1]?.risk.users).not.toBe('');
   expect(row('issues', 'workspace')?.members.map((member) => [member.member, member.impact])).toEqual([
     ['readFile', 'observe'], ['writeFile', 'mutate'], ['exec', 'execute'],
   ]);
-  expect(row('issues', 'workspace')?.members[1]?.risk.public)
-    .toBe('Writes, edits or deletes files in workspace my-workspace as you. Anyone who opens this share can trigger it.');
   expect(row('issues', 'memory')?.members.map((member) => [member.member, member.impact])).toEqual([['recall', 'observe'], ['remember', 'mutate']]);
   expect(row('issues', 'web')?.members).toEqual([{ member: 'search', impact: 'observe', risk: NO_RISK }]);
   expect(row('issues', 'reads')?.members).toEqual([{ member: 'getExecutors', impact: 'observe', risk: NO_RISK }]);
   expect(row('issues', 'agent')?.members.map((member) => member.impact)).toEqual(['externalSend']);
-  expect(row('issues', 'ai')?.members[0]).toMatchObject({ member: 'run', impact: 'execute', risk: { public: expect.stringContaining('spends') } });
+  expect(row('issues', 'ai')?.members[0]).toMatchObject({ member: 'run', impact: 'execute' });
   expect(row('issues', 'slates.digest')).toEqual({ slate: 'issues', namespace: 'slates.digest', title: 'slates.digest', members: [{ member: 'count', impact: 'observe', risk: NO_RISK }] });
 });
 

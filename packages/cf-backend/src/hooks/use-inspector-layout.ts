@@ -36,18 +36,18 @@ function readAccountKey(): Promise<InspectorAccount> {
   ));
 }
 
-export type InspectorPanelProps = Pick<
+type InspectorPanelProps = Pick<
   PanelProps,
   "id" | "minSize" | "defaultSize" | "collapsible" | "collapsedSize" | "panelRef" | "className"
 >;
 
 /** `disableDoubleClick`: `resetToDefault` is the one reset, not the library's dblclick. */
-export interface InspectorSeparatorProps {
+interface InspectorSeparatorProps {
   readonly elementRef: (element: HTMLDivElement | null) => void;
   readonly disableDoubleClick: boolean;
 }
 
-export interface InspectorGroupProps {
+interface InspectorGroupProps {
   readonly defaultLayout: Layout | undefined;
   readonly onLayoutChanged: (layout: Layout) => void;
   readonly elementRef: (element: HTMLDivElement | null) => void;

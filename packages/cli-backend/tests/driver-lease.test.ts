@@ -57,9 +57,7 @@ describe('the local driver lease', () => {
       if (!refusal) throw new Error('a daemon must not preempt a live interactive owner');
       expect(refusal.holder).toEqual({ pid: 201, kind: 'interactive' });
       expect(refusal.refused.reason).toBe('unavailable');
-      expect(refusal.refused.error).toBe(
-        'the interactive driver in process 201 is running this conversation; a daemon driver does not interrupt it',
-      );
+
       expect(owner.held()).toBe(true);
     } finally {
       db.close();

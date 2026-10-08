@@ -247,24 +247,23 @@ describe('turn-pipeline correctness wiring', () => {
 
   test('a pinned model is the model the next turn\'s request names', async () => {
     // The turn runs on the `setModel` pin, not the role tier's account default.
-    const harness = orchestratorHarness();
-    const agent = harness.agent;
-    agent.harnessInstallCatalog({
-      tiers: { default: { model: 'workers-ai/account-default' } },
-      availableModels: ['workers-ai/account-default', 'workers-ai/pinned-model'],
-    });
+    const pinned = 'ai-gateway/workers-ai/@cf/harness/pinned';
+    const served: string[] = [];
 
-    const pinned = await agent.setModel('workers-ai/pinned-model');
-    expect(pinned).toEqual({ ok: true, spec: 'workers-ai/pinned-model' });
+    const harness = gatewayWorkspace(stubAiBinding((run) => {
+      served.push(JSON.stringify(run.query));
 
-    const config = await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'hello' }] });
+      return chatCompletion(run, 'Noted.');
+    }));
 
-    expect(await agent.getAgentStatus()).toMatchObject({
-      tierId: 'default', model: 'workers-ai/pinned-model', reasoningEffort: 'medium',
-    });
-    // The request's model is the memoized instance for the pinned spec.
-    const request = v.safeParse(v.object({ model: v.unknown() }), config ?? {});
-    expect(request.success && request.output.model).toBe(agent.getModel());
+    harness.agent.harnessInstallCatalog({ ...GATEWAY_CATALOG, availableModels: [GATEWAY_MODEL, pinned] });
+    harness.agent.harnessCatalogModels({ [pinned]: { contextWindow: 128_000 } });
+    expect(await harness.agent.setModel(pinned)).toEqual({ ok: true, spec: pinned });
+    await catalogTurn(harness.agent, 'hello');
+
+    expect(await harness.agent.getAgentStatus()).toMatchObject({ tierId: 'default', model: pinned, reasoningEffort: 'medium' });
+    // What the binding was asked for, read where the request left.
+    expect(served.at(-1)).toContain('@cf/harness/pinned');
   });
 
   test('a model set mid-turn sizes the next request, not the one in flight', async () => {
@@ -473,7 +472,7 @@ describe('turn-pipeline correctness wiring', () => {
 
     const userPlane: RecordedUserPlaneCalls = { warmConnections: [], failWarm: null, titles: [], turnCancels: [], mcp };
     const { agent } = orchestratorHarness(userPlane);
-    const key = mcpToolKey('tracker', 'find_issue');
+    const key = 'mcp_tracker_find_issue';
     const prepared = await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'find the login issue' }] });
 
     if (!prepared) throw new Error('the turn must prepare a configuration');
@@ -482,7 +481,9 @@ describe('turn-pipeline correctness wiring', () => {
     expect(JSON.stringify(prepared.system)).not.toContain(key);
 
     const said = spoken(prepared.prompt ?? []).map((message) => message.text).join('\n');
-    expect(said).toContain(`- tools[${JSON.stringify(key)}](input): Find an issue by title. Input schema: {"type":"object","properties":{"title":{"type":"string"}},"required":["title"]}`);
+    // Declared to the model by the name eval calls it by, with the server's own description.
+    expect(said).toContain(`tools[${JSON.stringify(key)}]`);
+    expect(said).toContain('Find an issue by title.');
 
     const evaluated = await toolExecute<JsonValue, JsonValue>(present(prepared.tools.eval, 'eval'))({
       code: `return await tools[${JSON.stringify(key)}]({ title: 'login' });`,

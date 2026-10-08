@@ -3,9 +3,9 @@ import { Cause, Effect } from "effect";
 import type { PlanDecisionOutcome, PlanReview, Rpc } from "@kinu.run/core";
 import { attempt, KinuError, renderThrownChain, settle } from "@kinu.run/core/obs";
 
-export type PlanDecisionKind = "request_changes" | "approve";
+type PlanDecisionKind = "request_changes" | "approve";
 
-export type DecisionBusy = "request" | "approve" | null;
+type DecisionBusy = "request" | "approve" | null;
 
 export interface PlanDecisionInput {
   readonly plan: PlanReview | null | undefined;

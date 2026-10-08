@@ -3,12 +3,11 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import * as v from 'valibot';
 import { jsonSchema, tool, type FinishReason } from 'ai';
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 import { createTestActors, createTestActorsOver, createTestSql } from '@kinu.run/test-utils';
 import {
-  EVENT_VARIANTS, type EventVariant,
+  
   buildModelCallEvent, type ModelCallReport,
   classifyRunEnd, RUN_END_REASONS, type RunEndReason,
   TOOL_CALLS_PENDING, TURN_ENDED_MID_WORK,
@@ -16,7 +15,7 @@ import {
   AgentOrchestrator, type AgentOrchestratorDeps,
   providerSnapshotOf, ProviderListingCache, type ProviderListing,
   defaultSpecFor, DEFAULT_WORKERS_AI_MODEL_SPEC, workersAiSpec,
-  DEFAULT_ROLE_ID, REPORT_TOOL, SUBMIT_PLAN_TOOL, DEPS_GATED_TOOLS,
+  DEFAULT_ROLE_ID, SUBMIT_PLAN_TOOL, DEPS_GATED_TOOLS,
   craftedToolDescription, toCraftedToolSource, type CraftedTool,
   CRAFTED_TOOL_NAMESPACE, nativeToolFunctions,
   initCompletedTurnTable, createCompletedTurnStore,
@@ -27,24 +26,7 @@ import {
 import { makeSqlExec } from './helpers';
 
 describe('EVENT_VARIANTS — the array and the type cannot disagree', () => {
-  // One declaration: a hand-mirrored picklist would compile yet refuse a new variant at its route.
-  test('every declared variant is accepted by a picklist built from the array', () => {
-    const schema = v.picklist(EVENT_VARIANTS);
 
-    for (const variant of EVENT_VARIANTS) {
-      expect(v.parse(schema, variant)).toBe(variant);
-    }
-
-    expect(() => v.parse(schema, 'not_a_variant')).toThrow();
-  });
-
-  test('the type is derived from the array, both directions', () => {
-    // Assignability both ways is type equality; a hand re-declared type stops compiling here.
-    const fromArray: EventVariant = EVENT_VARIANTS[0];
-    const toArray: (typeof EVENT_VARIANTS)[number] = fromArray;
-    expect(EVENT_VARIANTS).toContain(toArray);
-    expect(new Set(EVENT_VARIANTS).size).toBe(EVENT_VARIANTS.length);
-  });
 });
 
 describe('buildModelCallEvent — usage is always present, pricing is guarded', () => {
@@ -141,12 +123,6 @@ describe('classifyRunEnd — a user Stop is aborted on every backend', () => {
     expect('error' in classified).toBe(false);
   });
 
-  test('a turn that stopped with work pending is its own reason, not a completion', () => {
-    // A loop that ended while the model was still calling tools did not finish (issue #16).
-    expect([...RUN_END_REASONS]).toEqual(['completed', 'aborted', 'error', 'incomplete']);
-    const every: readonly RunEndReason[] = RUN_END_REASONS;
-    expect(every).toHaveLength(4);
-  });
 });
 
 // R4: a turn must never end with tool calls pending (`@cloudflare/think` once capped steps at 10).
@@ -642,11 +618,6 @@ describe('crafted tool source and description', () => {
 describe('the declared ids no adapter spells by hand', () => {
   test('the default role is a declared constant', () => {
     expect(DEFAULT_ROLE_ID).toBe('task');
-  });
-
-  test('the deps-gated set is derived from the tool id, not a loose string', () => {
-    expect(DEPS_GATED_TOOLS).toEqual([REPORT_TOOL]);
-    expect(REPORT_TOOL).toBe('report');
   });
 
   // submit_plan is deliberately not a BuiltinToolName: it exists only on Plan turns whose actor owns

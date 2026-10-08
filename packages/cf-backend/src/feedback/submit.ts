@@ -28,7 +28,7 @@ import {
 } from '@kinu.run/core';
 
 /** Narrower than `R2Bucket` so the policy can be driven without one. */
-export interface FeedbackStore {
+interface FeedbackStore {
   put(key: string, bytes: Uint8Array): Promise<void>;
   delete(key: string): Promise<void>;
 }

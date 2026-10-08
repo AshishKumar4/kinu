@@ -1,5 +1,5 @@
 import * as v from 'valibot';
-import { WAKE_MARKER, WakeHoldPlacementSchema, type CallRecord, type WakeHoldPlacement } from './two-turn-shapes';
+import { KILL_FILE, WAKE_MARKER, WakeHoldPlacementSchema, type CallRecord, type KillPoint, type WakeHoldPlacement } from './two-turn-shapes';
 import { aiLane, type AiRun } from '../helpers/workers-ai-binding';
 import { WORKERS_AI_MODELS_DEV } from '@kinu.run/test-utils/models-dev';
 /**
@@ -102,6 +102,128 @@ let proxyHold: {
   readonly readers: { readonly count: number; readonly resolve: () => void }[];
 } | null = null;
 
+/** The N-kill model's turn: this many shell steps, each appending its own line to {@link KILL_FILE}. */
+const KILL_STEPS = 5;
+
+/** Requests for each step so far (`step:attempt` → its gate), and the planned kill per `step:attempt`. */
+const killRequests = new Map<string, HeldGate>();
+
+let killPlan = new Map<string, KillPoint>();
+
+/** Resolved when the N-kill turn's final answer is sent. */
+let killDone = Promise.withResolvers<void>();
+
+/** Per step, as the newest request's history has it: how many of its calls the model holds an answer for, and how
+ *  many of those answers say it ran (show its line). */
+let killTally: ReadonlyArray<{ readonly step: number; readonly calls: number; readonly ran: number }> = [];
+
+/** A step's line as the shell printed it (the file's `cat`), not as the command spelled it (`echo step-K >>`). */
+const STEP_LINE = /step-(\d+)(?=\\n|\n|"|$)/gu;
+
+const killAsked = new Map<number, number>();
+
+/** The gate a request for `step`'s `attempt` reaches: `arrived` on arrival (or, for a `delivered` kill, once its body
+ *  is sent); `release` is never resolved for a kill, since the activation it answers is aborted. */
+function killGate(step: number, attempt: number): HeldGate {
+  const key = `${String(step)}:${String(attempt)}`;
+  const known = killRequests.get(key);
+
+  if (known !== undefined) return known;
+  const gate = { arrived: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() };
+
+  killRequests.set(key, gate);
+
+  return gate;
+}
+
+/** Each step's calls in `messages` (the product names them its own way), matched to their answers by id. */
+function tallied(messages: OutboundBody['messages'] & {}): Array<{ step: number; calls: number; ran: number }> {
+  const stepOf = new Map<string, number>();
+
+  for (const call of messages.flatMap((m) => m.tool_calls ?? [])) {
+    const named = /echo step-(\d+) >>/u.exec(call.function.arguments ?? '');
+
+    if (named !== null) stepOf.set(call.id, Number(named[1]));
+  }
+
+  const tally = new Map<number, { step: number; calls: number; ran: number }>();
+
+  for (const message of messages) {
+    const step = message.role === 'tool' ? stepOf.get(message.tool_call_id ?? '') : undefined;
+
+    if (step === undefined) continue;
+    const entry = tally.get(step) ?? { step, calls: 0, ran: 0 };
+    const ran = [...textOf(message.content).matchAll(STEP_LINE)].some((match) => Number(match[1]) === step);
+
+    tally.set(step, { step, calls: entry.calls + 1, ran: entry.ran + (ran ? 1 : 0) });
+  }
+
+  return [...tally.values()].sort((left, right) => left.step - right.step);
+}
+
+/** The N-kill model: step K's request asks the workspace shell to wait, append `step-K` to {@link KILL_FILE} and print
+ *  it; the next step is the one after the highest line any tool result shows, so a call whose result never came is
+ *  asked for again as a fresh call. A planned request is parked, or its call is delivered, at its {@link KillPoint}. */
+async function killBody(body: OutboundBody): Promise<Response> {
+  const messages = body.messages ?? [];
+
+  killTally = tallied(messages);
+
+  const done = Math.max(0, ...messages.filter((m) => m.role === 'tool')
+    .flatMap((m) => [...textOf(m.content).matchAll(STEP_LINE)].map((match) => Number(match[1]))));
+
+  if (done >= KILL_STEPS) {
+    killDone.resolve();
+
+    return sseResponse([sseChunk({ content: 'echo:kill-done' }), sseChunk({ role: 'assistant' }, 'stop'), sseDone()]);
+  }
+
+  const step = done + 1;
+  const attempt = (killAsked.get(step) ?? 0) + 1;
+  killAsked.set(step, attempt);
+  const gate = killGate(step, attempt);
+  const point = killPlan.get(`${String(step)}:${String(attempt)}`);
+  const encoder = new TextEncoder();
+
+  const call = sseChunk({
+    tool_calls: [{
+      index: 0, id: `call_kill_${String(step)}_${String(attempt)}`, type: 'function',
+      function: { name: 'shell', arguments: JSON.stringify({ runtime: 'workspace', command: `sleep 6 && echo step-${String(step)} >> ${KILL_FILE} && cat ${KILL_FILE}` }) },
+    }],
+  });
+
+  const tail = [call, sseChunk({ role: 'assistant' }, 'tool_calls'), sseDone()];
+
+  if (point === 'request') {
+    gate.arrived.resolve();
+    await gate.release.promise;
+  }
+
+  if (point === 'stream') {
+    return new Response(new ReadableStream<Uint8Array>({
+      async start(controller) {
+        controller.enqueue(encoder.encode(sseChunk({ content: `Writing step ${String(step)}. ` })));
+        gate.arrived.resolve();
+        await gate.release.promise;
+
+        for (const chunk of tail) controller.enqueue(encoder.encode(chunk));
+        controller.close();
+      },
+    }), { headers: { 'content-type': 'text/event-stream' } });
+  }
+
+  if (point !== 'delivered') gate.arrived.resolve();
+
+  return new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of tail) controller.enqueue(encoder.encode(chunk));
+      controller.close();
+
+      if (point === 'delivered') gate.arrived.resolve();
+    },
+  }), { headers: { 'content-type': 'text/event-stream' } });
+}
+
 /** Park a scripted call numbered `from` onward (counted per model) until `/queue/release`. */
 async function holdQueuedCall(model: string): Promise<void> {
   const hold = heldRequest;
@@ -122,10 +244,11 @@ const NullableMessageContentSchema = v.union([v.null(), MessageContentSchema]);
 
 const OutboundMessageSchema = v.object({
   role: v.optional(v.string()),
+  tool_call_id: v.optional(v.string()),
   content: v.optional(NullableMessageContentSchema),
   tool_calls: v.optional(v.array(v.object({
     id: v.string(),
-    function: v.object({ name: v.string() }),
+    function: v.object({ name: v.string(), arguments: v.optional(v.string()) }),
   }))),
 });
 
@@ -469,6 +592,7 @@ async function modelsBody(): Promise<Response> {
       { id: 'probe-parity' },
       { id: 'probe-wake' },
       { id: 'probe-steer' },
+      { id: 'probe-kill' },
     ],
   });
 }
@@ -550,6 +674,48 @@ async function proxyControl(url: URL, request: Request): Promise<Response> {
 }
 
 /** The probe control host: holds, the call log, and the reset between drives. */
+/** The N-kill model's controls: arm a plan, wait for a planned request, read how often a step was asked, and wait
+ *  for the turn's final answer. */
+async function killControl(url: URL, request: Request): Promise<Response> {
+  if (url.pathname === '/kill/plan' && request.method === 'POST') {
+    const plan = v.parse(v.array(v.object({ step: v.number(), attempt: v.number(), at: v.picklist(['request', 'stream', 'delivered']) })), JSON.parse(await request.text()));
+    killPlan = new Map(plan.map(({ step, attempt, at }) => [`${String(step)}:${String(attempt)}`, at]));
+    killRequests.clear();
+    killAsked.clear();
+    killTally = [];
+    killDone = Promise.withResolvers<void>();
+
+    return Response.json({ ok: true });
+  }
+
+  // Answers once the request for `step`'s `attempt` has arrived (or, for a `delivered` kill, been answered), with when.
+  if (url.pathname === '/kill/arrived' && request.method === 'GET') {
+    await killGate(Number(url.searchParams.get('step')), Number(url.searchParams.get('attempt'))).arrived.promise;
+
+    return Response.json({ at: Date.now() });
+  }
+
+  if (url.pathname === '/kill/asked' && request.method === 'GET') {
+    return Response.json({ asked: killAsked.get(Number(url.searchParams.get('step'))) ?? 0 });
+  }
+
+  if (url.pathname === '/kill/done' && request.method === 'GET') {
+    await killDone.promise;
+
+    return Response.json({ ok: true });
+  }
+
+  if (url.pathname === '/kill/tally' && request.method === 'GET') return Response.json(killTally);
+
+  throw new Error(`probe-control: unhandled ${request.method} ${url.pathname}`);
+}
+
+/** The scripted models' own controls, by path prefix. */
+const MODEL_CONTROLS: ReadonlyArray<readonly [string, (url: URL, request: Request) => Promise<Response>]> = [
+  ['/parity/', (url, request) => parityControl(url.pathname, request)],
+  ['/kill/', killControl],
+];
+
 async function probeControl(url: URL, request: Request): Promise<Response> {
   if (url.pathname === '/queue/hold' && request.method === 'POST') {
     const raw = await request.text();
@@ -573,7 +739,9 @@ async function probeControl(url: URL, request: Request): Promise<Response> {
     return Response.json({ ok: true });
   }
 
-  if (url.pathname.startsWith('/parity/')) return parityControl(url.pathname, request);
+  const scripted = MODEL_CONTROLS.find(([prefix]) => url.pathname.startsWith(prefix));
+
+  if (scripted !== undefined) return scripted[1](url, request);
 
   if (url.pathname.startsWith('/proxy/')) return proxyControl(url, request);
 
@@ -683,6 +851,9 @@ export async function probeOutbound(request: Request): Promise<Response> {
         case 'probe-tools': return toolBody(body, 'call_probe_1', 'I will read that fixture file.');
         case 'probe-tools-only': return toolBody(body, 'call_probe_only_1');
         case 'probe-error': return errorBody(body);
+        case 'probe-kill': return body.messages?.some((m) => m.role === 'user' && textOf(m.content).startsWith('Design the logo')) === true
+          ? sseResponse([sseChunk({ content: '<svg/>' }), sseChunk({ role: 'assistant' }, 'stop'), sseDone()])
+          : killBody(body);
         default: throw new Error(`fake-models: unknown model ${JSON.stringify(body.model)}`);
       }
     }

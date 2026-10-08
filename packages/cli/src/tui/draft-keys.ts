@@ -7,7 +7,7 @@ import type { TuiActionId } from './actions';
 import type { InputEffect, InputMachineEvent } from '@kinu.run/core';
 import type { ActiveSurface } from './chat-app';
 
-export interface PromptHistoryCursor {
+interface PromptHistoryCursor {
   index: number;
   draft: string;
 }
