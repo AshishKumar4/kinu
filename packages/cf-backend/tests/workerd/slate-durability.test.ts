@@ -221,6 +221,20 @@ it('the workspace terminal is the runtime shell: a typed line runs and its outpu
   }
 });
 
+// Staging 2026-10-08: a 20 MB print failed its row's write (SQLITE_TOOBIG) as an uncaught rejection.
+it('a print past the row limit runs, and its row keeps the head a reader shows with its true length', async () => {
+  const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('clip'));
+  const workspace = 'durability-clip';
+  const printed = 3_000_000;
+  await subject().serveSlate({ workspace, owner: 'durability-owner', id: 'beside-clip', body: 'served' });
+
+  expect((await subject().runInWorkspace(workspace, `node -e "process.stdout.write('x'.repeat(${String(printed)}))"`)).exitCode).toBe(0);
+  const [row] = await subject().executorOutputs(workspace);
+
+  expect(row?.stdout_len).toBe(printed);
+  expect(row?.stdout).toBe('x'.repeat(16 * 1024));
+});
+
 it('a node run leaves its log janitor as an alarm the object sleeps on, not a timer it stays awake for', async () => {
   const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('janitor'));
   const workspace = 'durability-janitor';

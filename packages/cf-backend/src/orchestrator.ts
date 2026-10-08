@@ -1,5 +1,5 @@
 import { exists as nimbusExists, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
-import { GitHubFactSchema, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs } from '@kinu.run/core';
+import { PLATFORM_CATALOG, GitHubFactSchema, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs } from '@kinu.run/core';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -333,6 +333,24 @@ const EXECUTOR_OUTPUT_CLIP = 16 * 1024;
 
 /** The terminal rows a reload shows per executor, and all `executor_output` keeps: an older row reaches no reader. */
 const EXECUTOR_HISTORY_ROWS = 50;
+
+/** Chars one stored field keeps. A row over do.sqlite.row_bytes fails its write (a 20 MB print did, SQLITE_TOOBIG), and
+ *  three fields of at most three UTF-8 bytes a char fit it with room for the rest of the row. */
+const EXECUTOR_FIELD_CHARS = Math.floor(PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value / 10);
+
+/** Ends a field clipped on store and names its true length; every reader sees the head, so the tail is free for it. */
+const CLIPPED_MARKER = /\n\[kinu: clipped from (\d+) chars\]$/u;
+
+function storedField(text: string): string {
+  return text.length <= EXECUTOR_FIELD_CHARS ? text : `${text.slice(0, EXECUTOR_FIELD_CHARS)}\n[kinu: clipped from ${String(text.length)} chars]`;
+}
+
+/** A stored field's true length: its own, or the one its clip marker names. */
+function fieldLength(stored: number, tail: string): number {
+  const clipped = CLIPPED_MARKER.exec(tail);
+
+  return clipped === null ? stored : Number(clipped[1]);
+}
 
 /** `stdout_len`/`stderr_len` are the stored lengths, so a reader can tell a short command
  *  from a clipped one. */
@@ -4830,14 +4848,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Streams are clipped to {@link EXECUTOR_OUTPUT_CLIP} chars with true length beside them.
    * Must filter by actor: executor ids are shared across actors in the workspace box.
    */
-  async getExecutorOutput(executorId: string) {
-    return this.sql<ExecutorOutputRow>`SELECT id, executor, command,
-        substr(stdout, 1, ${EXECUTOR_OUTPUT_CLIP}) AS stdout, length(stdout) AS stdout_len,
-        substr(stderr, 1, ${EXECUTOR_OUTPUT_CLIP}) AS stderr, length(stderr) AS stderr_len,
+  async getExecutorOutput(executorId: string): Promise<ExecutorOutputRow[]> {
+    const rows = this.sql<ExecutorOutputRow & { stdout_tail: string; stderr_tail: string }>`SELECT id, executor, command,
+        substr(stdout, 1, ${EXECUTOR_OUTPUT_CLIP}) AS stdout, length(stdout) AS stdout_len, substr(stdout, -64) AS stdout_tail,
+        substr(stderr, 1, ${EXECUTOR_OUTPUT_CLIP}) AS stderr, length(stderr) AS stderr_len, substr(stderr, -64) AS stderr_tail,
         exit_code, created_at
       FROM executor_output
       WHERE actor_id = ${this.actorHandle().actorId} AND executor = ${executorId}
       ORDER BY created_at DESC, rowid DESC LIMIT ${EXECUTOR_HISTORY_ROWS}`;
+
+    return rows.map(({ stdout_tail, stderr_tail, ...row }) => ({
+      ...row, stdout_len: fieldLength(row.stdout_len, stdout_tail ?? ''), stderr_len: fieldLength(row.stderr_len, stderr_tail ?? ''),
+    }));
   }
 
   private recordExecutorOutput(
@@ -4845,8 +4867,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   ): void {
     const actorId = this.actorHandle().actorId;
 
+    const stdout = output.stdout === null ? null : storedField(output.stdout);
     void this.sql`INSERT INTO executor_output (actor_id, executor, command, stdout, stderr, exit_code)
-      VALUES (${actorId}, ${executorId}, ${command}, ${output.stdout}, ${output.stderr}, ${output.exitCode})`;
+      VALUES (${actorId}, ${executorId}, ${storedField(command)}, ${stdout}, ${storedField(output.stderr)}, ${output.exitCode})`;
     void this.sql`DELETE FROM executor_output WHERE actor_id = ${actorId} AND executor = ${executorId}
       AND rowid NOT IN (SELECT rowid FROM executor_output WHERE actor_id = ${actorId} AND executor = ${executorId}
         ORDER BY created_at DESC, rowid DESC LIMIT ${EXECUTOR_HISTORY_ROWS})`;
