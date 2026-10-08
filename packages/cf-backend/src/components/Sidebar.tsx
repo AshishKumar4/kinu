@@ -89,7 +89,11 @@ function SidebarRenameEditor({ workspace, onSaved, onCancel }: {
           maxLength={60}
           onFocus={(event) => event.currentTarget.select()}
           onChange={(event) => setValue(event.target.value)}
-          onKeyDown={(event) => { if (event.key === "Escape" && !composing(event.nativeEvent) && !saving) onCancel(); }}
+          onKeyDown={(event) => {
+            if (event.key !== "Escape" || composing(event.nativeEvent) || saving) return;
+            event.preventDefault();
+            onCancel();
+          }}
           className="min-w-0 flex-1 rounded-sm px-1.5 py-1 text-xs p-elevated p-text border p-border focus:outline-none focus:border-[var(--c-accent)] focus:ring-1 focus:ring-[var(--c-accent-subtle)]"
           aria-label={`Rename ${workspaceDisplayTitle(workspace)}`}
         />

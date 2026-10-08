@@ -371,6 +371,35 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
     });
   });
 
+  test('on a phone, Escape closes the menu, and the bar\'s toggle then brings the workspace pane up', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      const toggle = '.p-bar [data-inspector-toggle]';
+
+      try {
+        await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
+        await page.goto(`${origin}/gallery.html?frame=workspaceshell`, { waitUntil: 'networkidle0' });
+        await page.waitForSelector(toggle);
+        await page.tap('.p-bar-menu button');
+        await page.waitForSelector('[data-drawer]');
+        await page.keyboard.press('Escape');
+        // A touch where the toggle is drawn: a menu still standing over the bar would take it instead.
+        await page.tap(toggle);
+        await page.evaluate(async () => {
+          await Promise.allSettled(document.getAnimations()
+            .filter((animation) => animation.effect?.getComputedTiming().endTime !== Infinity)
+            .map((animation) => animation.finished));
+          await new Promise<void>((resolve) => { requestAnimationFrame(() => requestAnimationFrame(() => resolve())); });
+        });
+        expect(await page.$eval(toggle, (button) => button.getAttribute('aria-pressed'))).toBe('true');
+
+        // The workspace pane is the one on screen: its Files tab takes a touch.
+        await page.tap('#inspector button[aria-label="Files"]');
+        await page.waitForSelector('#inspector button[aria-label="Files"][aria-current="true"]');
+      } finally { await page.close(); }
+    });
+  });
+
   test('each conversation keeps its own draft across tab switches', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await openWorkspacePage(newPage, origin);
