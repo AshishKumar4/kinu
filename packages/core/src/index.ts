@@ -1042,6 +1042,8 @@ export { explainSandboxError } from './tools/sandbox-errors';
 
 export { callableToolNames, currentWorkMode, inWorkMode, runWorkModeInvocation, permitInPlan, hasPlanPermission, requireBuild, requireWorkModePermission, toolsInWorkMode, toolsForInvocation, providersInWorkMode } from './execution/work-mode';
 
+export { ProgramsInFlight, launched } from './execution/programs-in-flight';
+
 // Client-safe only: the Nimbus workspace host is exported from
 // `@kinu.run/core/workspace` so a browser bundle cannot pull in the server runtime.
 export {

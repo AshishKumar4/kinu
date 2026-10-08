@@ -7,7 +7,7 @@ import { DynamicWorkerExecutor, sanitizeToolName } from '@cloudflare/codemode';
 import { normalizeCode } from '@cloudflare/codemode/normalize';
 import {
   explainSandboxError, renderCraftedDefinitions,
-  NO_TIMER_DEADLINE_MS, bindTaskPlan, codemodeFunction, decodeJsonValue, relayedAnswer,
+  NO_TIMER_DEADLINE_MS, bindTaskPlan, launched, codemodeFunction, decodeJsonValue, relayedAnswer,
   type CraftedToolSource, type ExecuteResult, type Executor, type ResolvedProvider as HostProvider,
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -120,8 +120,9 @@ export class CodemodeLauncher extends WorkerEntrypoint<{ readonly LOADER: Worker
   answer(): void {}
 }
 
+/** Each run is counted by the invocation whose work launched it, when that invocation holds its programs (`launched`). */
 export function codemodeLauncher(props: CodemodeLauncherProps): ProgramLaunch {
-  return { run: (source, providers) => exports.CodemodeLauncher({ props }).run(source, providers) };
+  return { run: (source, providers) => launched(exports.CodemodeLauncher({ props }).run(source, providers)) };
 }
 
 /** A context the platform dropped delivers no answer, this one's included, so a job whose context stops answering
