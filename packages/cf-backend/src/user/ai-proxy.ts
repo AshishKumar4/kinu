@@ -66,7 +66,7 @@ aiProxyRoutes.get(`${USER_AI_PROXY_PATH}/models`, async (c) => {
   });
 });
 
-/** The APIs a gateway model is spoken to in (`gatewayWireModel`); the account endpoint serves each. */
+/** The APIs a gateway model is spoken to in (`gatewayWireModel`), each forwarded where `createCloudflareAIFetch` sends it. */
 for (const endpoint of ['chat/completions', 'responses', 'messages'] as const) {
   aiProxyRoutes.post(`${USER_AI_PROXY_PATH}/${endpoint}`, (c) => settle(proxyCompletion(endpoint, c.req.raw, c.env, c.get('cli').userDO)));
 }
@@ -88,7 +88,8 @@ function proxyCompletion<Id>(
 
     const workersAI = model.startsWith('@cf/');
 
-    if (!workersAI && !model.includes('/')) {
+    // OpenAI's and Anthropic's own APIs carry the author's own id (`gpt-6.1-sol`); a unified chat call names its author.
+    if (endpoint === 'chat/completions' && !workersAI && !model.includes('/')) {
       return errorResponse(400, `Cannot route model "${model}": use "@cf/{model}" (Workers AI) or "{provider}/{model}" (your AI Gateway).`);
     }
 

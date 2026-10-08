@@ -13,7 +13,7 @@ import { asFetchFunction } from './fetch-shim';
 
 export type WireProtocol = 'responses' | 'messages' | 'chat-completions';
 
-export const OPENAI_AUTHOR = 'openai/';
+const OPENAI_AUTHOR = 'openai/';
 
 const ANTHROPIC_AUTHOR = 'anthropic/';
 
