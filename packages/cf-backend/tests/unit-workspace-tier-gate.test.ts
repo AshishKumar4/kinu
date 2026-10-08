@@ -67,6 +67,8 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'credentials.other', name: 'getCredentialEndpoint(github)', run: (u, c) => u.getCredentialEndpoint(c, 'github') },
   { capability: 'credentials.other', name: 'setCredential', run: (u, c) => u.setCredential(c, 'github', { kind: 'bearer', token: 'ghp_x' }) },
   { capability: 'credentials.other', name: 'deleteCredential', run: (u, c) => u.deleteCredential(c, 'github') },
+  { capability: 'credentials.other', name: 'checkpointCredentials', run: (u, c) => u.checkpointCredentials(c, 'account') },
+  { capability: 'credentials.other', name: 'restoreCredentials', run: (u, c) => u.restoreCredentials(c, 'account', []) },
   { capability: 'credentials.other', name: 'listUnrevokedGrants', run: (u, c) => u.listUnrevokedGrants(c) },
   { capability: 'credentials.other', name: 'dismissUnrevokedGrant', run: (u, c) => u.dismissUnrevokedGrant(c, 'codex') },
 
