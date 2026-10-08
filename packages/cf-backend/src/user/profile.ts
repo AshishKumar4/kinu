@@ -6,6 +6,7 @@ import * as v from 'valibot';
 import { libraryTiles } from './roster';
 import { singletonValue, type UserObjectHost } from './user-host';
 import type { UserWorkspaces } from './workspaces';
+import { ReceivedShareSchema, type ReceivedShare } from './share-cards';
 
 export interface UserProfile {
   email: string;
@@ -18,15 +19,6 @@ export interface UserProfile {
   /** Counted like `listWorkspaces`' `total`. An account owning a workspace never sees the
    *  wizard, stamp or not. */
   workspaceCount: number;
-}
-
-/** `createdAt` is absent on the write side. */
-export interface SharedBlueprintReceipt {
-  ownerUserId: string;
-  ownerEmail: string;
-  workspace: string;
-  shareId: string;
-  createdAt?: number;
 }
 
 /** A typed result, not an exception: error classes do not survive the DO RPC boundary. */
@@ -346,18 +338,21 @@ export class UserProfileStore {
     return { ok: true, envelope: this.profileCatalogEnvelope(nextVersion, parsed) };
   }
 
-  /**
-   * A projection: the owner's workspace object is the authority and every read re-asks it, so a
-   * revoked share lists once and refuses. Idempotent per (owner, workspace, share).
-   */
-  async sharesReceived_add(caller: UserCaller, row: SharedBlueprintReceipt): Promise<void> {
+  /** Written only by the owner's account, which records what it sent; idempotent per (owner, workspace, share). */
+  async shareCards_put(caller: UserCaller, row: ReceivedShare): Promise<void> {
     await this.host.requireTier(caller, 'shares');
+    const held = v.parse(ReceivedShareSchema, row);
+
     this.host.sqlx(
-      `INSERT INTO user_shares_received (owner_user_id, owner_email, workspace, share_id)
-       VALUES (?, ?, ?, ?)
-       ON CONFLICT (owner_user_id, workspace, share_id) DO UPDATE SET owner_email = excluded.owner_email`,
-      row.ownerUserId, row.ownerEmail, row.workspace, row.shareId,
+      `INSERT INTO user_share_cards (owner_user_id, workspace, share_id, card) VALUES (?, ?, ?, ?)
+       ON CONFLICT (owner_user_id, workspace, share_id) DO UPDATE SET card = excluded.card`,
+      held.ownerUserId, held.workspace, held.shareId, JSON.stringify(held.card),
     );
+  }
+
+  async shareCards_remove(caller: UserCaller, ownerUserId: string, workspace: string, shareId: string): Promise<void> {
+    await this.host.requireTier(caller, 'shares');
+    this.host.sqlx(`DELETE FROM user_share_cards WHERE owner_user_id = ? AND workspace = ? AND share_id = ?`, ownerUserId, workspace, shareId);
   }
 
   async libraryTiles(caller: UserCaller): Promise<Array<{ workspace: string; overview: WorkspaceOverview }>> {
@@ -366,24 +361,22 @@ export class UserProfileStore {
     return libraryTiles(this.host.ctx.storage.sql);
   }
 
-  async sharesReceived_list(caller: UserCaller): Promise<SharedBlueprintReceipt[]> {
+  /** The cards this account holds, newest first: what their owners last sent, read without asking any of them. */
+  async sharesReceived_list(caller: UserCaller): Promise<ReceivedShare[]> {
     await this.host.requireTier(caller, 'shares');
 
-    return this.host.sqlx<{ owner_user_id: string; owner_email: string; workspace: string; share_id: string; created_at: number }>(
-      `SELECT owner_user_id, owner_email, workspace, share_id, created_at
-       FROM user_shares_received ORDER BY created_at DESC, share_id`,
-    ).map((row) => ({
-      ownerUserId: row.owner_user_id, ownerEmail: row.owner_email, workspace: row.workspace,
-      shareId: row.share_id, createdAt: row.created_at,
-    }));
+    return this.host.sqlx<{ owner_user_id: string; workspace: string; share_id: string; card: string }>(
+      `SELECT owner_user_id, workspace, share_id, card FROM user_share_cards`,
+    ).map((row) => v.parse(ReceivedShareSchema, { ownerUserId: row.owner_user_id, workspace: row.workspace, shareId: row.share_id, card: JSON.parse(row.card) }))
+      .sort((a, b) => b.card.createdAt - a.card.createdAt || a.shareId.localeCompare(b.shareId));
   }
 
   /**
-   * Reverse of `sharesReceived_add`, run on each recipient when the owner deletes their account,
-   * so no row lists a blueprint no object can answer for.
+   * Every card an owner sent, dropped at once when the owner deletes their account,
+   * so no card lists a share no object can answer for.
    */
   async sharesReceived_forget(caller: UserCaller, ownerUserId: string): Promise<void> {
     await this.host.requireTier(caller, 'shares');
-    this.host.sqlx(`DELETE FROM user_shares_received WHERE owner_user_id = ?`, ownerUserId);
+    this.host.sqlx(`DELETE FROM user_share_cards WHERE owner_user_id = ?`, ownerUserId);
   }
 }

@@ -5,7 +5,6 @@ import * as v from 'valibot';
 import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
 import { accountRoutes, type AccountRoutesEnv } from '../src/user/account-routes';
 import { serveFamily } from './helpers/api';
-import { unreachableNamespace } from './helpers/bindings';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import type { AuthIdentity } from '../src/auth/session';
@@ -33,16 +32,14 @@ function setup(deleteOutcome: 'ok' | 'destroyed' | 'io') {
     ? Stub : never = {
     completeOnboarding: refuse('completeOnboarding'),
     setDisplayName: refuse('setDisplayName'),
-    hasWorkspace: refuse('hasWorkspace'),
-    ensureWorkspaceCapability: refuse('ensureWorkspaceCapability'),
     sharesReceived_forget: refuse('sharesReceived_forget'),
-    async searchExperience(_caller: UserCaller, options: { kind?: string; limit?: number } = {}) {
-      calls.push(`experience:${options.kind ?? '-'}:${String(options.limit)}`);
+    async shareCards_withdraw(_caller: UserCaller) {
+      calls.push('cards:withdraw');
 
       return [];
     },
-    async listActiveWorkspaces(_caller: UserCaller) {
-      calls.push('workspaces:list');
+    async searchExperience(_caller: UserCaller, options: { kind?: string; limit?: number } = {}) {
+      calls.push(`experience:${options.kind ?? '-'}:${String(options.limit)}`);
 
       return [];
     },
@@ -65,7 +62,6 @@ function setup(deleteOutcome: 'ok' | 'destroyed' | 'io') {
   const env: AccountRoutesEnv<string> = {
     UserDO: { idFromName: (name) => name, get: () => userDO },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-    OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
   };
 
   return { env, calls };
@@ -101,7 +97,7 @@ describe('DELETE /api/user/account', () => {
 
     expect(response?.status).toBe(200);
     expect(v.parse(DeletedSchema, await response?.json())).toEqual({ deleted: true });
-    expect(calls).toEqual(['workspaces:list', `account:delete:${USER_ID}`]);
+    expect(calls).toEqual(['cards:withdraw', `account:delete:${USER_ID}`]);
   });
 
   test("the SDK's own abort sentinel is a completed delete", async () => {
@@ -109,7 +105,7 @@ describe('DELETE /api/user/account', () => {
     const response = await account(request(JSON.stringify({ confirm: 'owner@example.test' })), env);
 
     expect(response?.status).toBe(200);
-    expect(calls).toEqual(['workspaces:list', `account:delete:${USER_ID}`]);
+    expect(calls).toEqual(['cards:withdraw', `account:delete:${USER_ID}`]);
   });
 
   test('any other failure is a 500 naming its class; its cause goes to the log alone', async () => {

@@ -241,8 +241,14 @@ grant, created, revoked), `slate_live_share_users` (share id, user id, email)
 and `slate_viewer_requests` (share id, viewer, path, calls, outcome, created,
 settled), all in `packages/core/src/slates/live-shares.ts`. Blueprints:
 `slate_shares` and `slate_share_users` in `packages/core/src/slates/shares.ts`,
-used by `packages/core/src/slates/blueprints.ts`. User object:
-`user_shares_received`, for the Drive's "Shared with you". There is no public
+used by `packages/core/src/slates/blueprints.ts`. User object: `user_share_cards`,
+the cards the Drive's "Shared with you" lists, and `share_cards_sent`, what this
+account last sent each person a share names. Every overview a workspace pushes
+reconciles the two (`packages/cf-backend/src/user/share-cards.ts`): each
+difference is a Lifecycle job per recipient and share, retried until the
+recipient's account takes it, so a share reaches its people even when their
+account is briefly unreachable, and listing them wakes no owner's workspace. A
+card opened after its share was revoked refuses at the owner's object. There is no public
 index: the Drive lists only your own and what was shared with you by name, and
 the index that fed the removed Public list was deleted with its last reader.
 A public gallery must build its index anew and treat every row as a projection,

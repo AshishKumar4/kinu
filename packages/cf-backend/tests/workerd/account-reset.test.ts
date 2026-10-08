@@ -19,7 +19,7 @@ describe('deleting an account on real workerd', () => {
 
     const before = await probe().counts();
     expect(before).toMatchObject({
-      user_workspaces: 2, user_shares_received: 2, user_mcp_servers: 1, user_credentials: 1, device_consent: 1, user_profile: 1,
+      user_workspaces: 2, user_share_cards: 2, user_mcp_servers: 1, user_credentials: 1, device_consent: 1, user_profile: 1,
     });
 
     // Sam deletes their own account: only the share Sam gave is forgotten here.
