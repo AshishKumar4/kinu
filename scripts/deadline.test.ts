@@ -26,6 +26,8 @@ describe('a run under a deadline', () => {
     expect(outcome.exitCode).toBe(DEADLINE_EXIT_CODE);
     expect(outcome.stdout).toContain('hanging');
     expect(outcome.stderr).toContain(deadlineLine({ label: 'Hang fixture', seconds: 1 }, outcome.seconds));
+    // What it was waiting on when it was killed: the fixture's own process, by its command.
+    expect(outcome.stderr).toMatch(/it was waiting in:\n {2}\d+ [A-Z] \S+ \S*bun \S*deadline\/hang\.ts/u);
   });
 
   // ci-0965z: the CLI suite passed 484 tests in 476 s and was killed at its 480 s bound; it was slow, not hung.

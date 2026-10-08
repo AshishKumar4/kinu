@@ -359,11 +359,13 @@ export class PlanReviewStore {
     return settleSync(Effect.gen({ self: this }, function* (): Effect.gen.Return<PlanReviewResult> {
       const current = this.getActive(sessionId);
 
-      if (current?.status === 'pending') {
+      // A pending revision nobody has annotated is the author's to correct: a resubmit replaces it. Once the owner
+      // marks it up, it waits for their decision.
+      if (current?.status === 'pending' && current.annotations.length > 0) {
         return { ok: false, error: `plan ${current.id} revision ${current.revision} is awaiting review`, plan: current };
       }
 
-      const revising = current?.status === 'changes_requested' ? current : null;
+      const revising = current?.status === 'changes_requested' || current?.status === 'pending' ? current : null;
       const existingLines = revising ? revising.content.split('\n') : [];
 
       const edited = yield* Effect.matchCause(Effect.sync(() => applyPlanEdits(existingLines, edits).join('\n')), {
@@ -373,6 +375,8 @@ export class PlanReviewStore {
 
       if ('refused' in edited) return { ok: false, error: edited.refused, plan: current };
       const { content } = edited;
+
+      if (content.trim() === '') return { ok: false, error: 'the plan is empty: write it in full with one edit starting at line 1', plan: current };
 
       if (byteLength(content) + byteLength('[]') > MAX_PLAN_REVIEW_ROW_BYTES) {
         return { ok: false, error: `plan content exceeds the stored row size of ${MAX_PLAN_REVIEW_ROW_BYTES} bytes`, plan: current };
@@ -393,7 +397,7 @@ export class PlanReviewStore {
       if (revising) {
         void this.sql`UPDATE plan_reviews SET status='superseded', updated_at=${now}
         WHERE actor_id=${this.actorId} AND id=${revising.id} AND revision=${revising.revision}
-          AND status='changes_requested'`;
+          AND status IN ('changes_requested', 'pending')`;
       }
 
       return this.written(id, revision);
