@@ -43,9 +43,9 @@ const NO_FIGURES = { activeMs: 0, cacheEma: null };
 
 /** A project's day-to-day chats. */
 export const LANDING_CHATS: readonly PanelAgent[] = [
-  { key: 'main', label: 'Main', category: 'main', activity: 'working', parent: null, open: { kind: 'chat', path: null }, tab: true, input: true, figures: NO_FIGURES },
-  { key: 'actor-gift-cards', label: 'Should checkout support gift cards?', category: 'user', activity: 'waiting', parent: 'main', open: { kind: 'chat', path: 'gift-cards' }, tab: true, input: true, figures: NO_FIGURES },
-  { key: 'actor-cart', label: 'Speed up cart render', category: 'user', activity: 'working', parent: 'main', open: { kind: 'chat', path: 'cart-render' }, tab: true, input: true, figures: NO_FIGURES },
+  { colour: 0, key: 'main', label: 'Main', category: 'main', activity: 'working', parent: null, open: { kind: 'chat', path: null }, tab: true, input: true, figures: NO_FIGURES },
+  { colour: 1, key: 'actor-gift-cards', label: 'Should checkout support gift cards?', category: 'user', activity: 'waiting', parent: 'main', open: { kind: 'chat', path: 'gift-cards' }, tab: true, input: true, figures: NO_FIGURES },
+  { colour: 2, key: 'actor-cart', label: 'Speed up cart render', category: 'user', activity: 'working', parent: 'main', open: { kind: 'chat', path: 'cart-render' }, tab: true, input: true, figures: NO_FIGURES },
 ];
 
 /** Served by the `landing.tsx` fetch shim; the frame's workspace is first so the rail marks it open. */

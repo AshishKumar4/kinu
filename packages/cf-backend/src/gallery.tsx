@@ -1336,7 +1336,7 @@ window.WebSocket = new Proxy(RealWebSocket, {
 
 /** A frame the gate makes the server send: cards and steers carry an actor stamp, which no fixture read can produce; `reads_changed` names reads to redo; `turn_claim` is the root's claim as it changes; `head_stream` and `head_activity` are a swarm head's live paint and landed step. */
 const GalleryPushFrameSchema = v.object({
-  type: v.picklist(["signal_card", "steer_status", READS_CHANGED_EVENT, TURN_CLAIM_FRAME, "head_stream", "head_activity"]),
+  type: v.picklist(["signal_card", "steer_status", READS_CHANGED_EVENT, TURN_CLAIM_FRAME, "head_stream", "head_activity", "subordinate_event"]),
   reads: v.optional(v.array(v.string())),
   claim: v.optional(JsonObjectSchema),
   headId: v.optional(v.string()),
@@ -1350,6 +1350,11 @@ const GalleryPushFrameSchema = v.object({
   steerId: v.optional(v.string()),
   status: v.optional(v.string()),
   atStep: v.optional(v.number()),
+  // An agent given work or reporting on it (`subordinate_event`), at the time it happened.
+  subordinate: v.optional(v.string()),
+  content: v.optional(v.string()),
+  task: v.optional(v.string()),
+  timestamp: v.optional(v.number()),
 });
 
 window.addEventListener("gallery:push-frame", (event: Event) => {
@@ -2144,32 +2149,32 @@ const GALLERY_GITHUB: WorkspaceGitHubView = {
 };
 
 const GALLERY_AGENTS: PanelAgent[] = [
-  { key: "main", label: "Main", category: "main", activity: "working", parent: null, open: { kind: "chat", path: null }, tab: true, input: true,
+  { colour: 0, key: "main", label: "Main", category: "main", activity: "working", parent: null, open: { kind: "chat", path: null }, tab: true, input: true,
     actorId: galleryActorId(WORKSPACE_PAGE_NAME), figures: { tokens: 184_300, usd: 0.42, activeMs: 21 * 60_000, cacheEma: 0.94 } },
-  { key: galleryActorId("docs"), label: "Fix SAVE20 coupon 500s", category: "user", activity: "waiting", parent: "main", open: { kind: "chat", path: "docs" }, tab: true, input: true,
+  { colour: 1, key: galleryActorId("docs"), label: "Fix SAVE20 coupon 500s", category: "user", activity: "waiting", parent: "main", open: { kind: "chat", path: "docs" }, tab: true, input: true,
     figures: { tokens: 12_400, usd: 0.03, activeMs: 3 * 60_000, cacheEma: 0.88 } },
-  { key: galleryActorId("perf"), label: "Should checkout support gift cards?", category: "user", activity: "idle", parent: "main", open: { kind: "chat", path: "perf" }, tab: true, input: true,
+  { colour: 2, key: galleryActorId("perf"), label: "Should checkout support gift cards?", category: "user", activity: "idle", parent: "main", open: { kind: "chat", path: "perf" }, tab: true, input: true,
     figures: { tokens: 31_000, usd: 0.07, activeMs: 9 * 60_000, cacheEma: 0.9 } },
-  { key: galleryActorId("i18n"), label: "Speed up cart render", category: "user", activity: "failed", parent: "main", open: { kind: "chat", path: "i18n" }, tab: true, input: true,
+  { colour: 3, key: galleryActorId("i18n"), label: "Speed up cart render", category: "user", activity: "failed", parent: "main", open: { kind: "chat", path: "i18n" }, tab: true, input: true,
     figures: { tokens: 8_200, activeMs: 2 * 60_000, cacheEma: null } },
-  { key: galleryActorId("review"), label: "Review: payments refactor", category: "user", activity: "working", parent: "main", open: { kind: "chat", path: "review" }, tab: true, input: true,
+  { colour: 4, key: galleryActorId("review"), label: "Review: payments refactor", category: "user", activity: "working", parent: "main", open: { kind: "chat", path: "review" }, tab: true, input: true,
     figures: { tokens: 22_600, usd: 0.05, activeMs: 4 * 60_000, cacheEma: 0.86 } },
-  { key: "a-scout", label: "Coupon auditor", category: "hired", activity: "working", parent: "main", open: { kind: "chat", path: "coupon-auditor" }, tab: false, input: true,
+  { colour: 5, key: "a-scout", label: "Coupon auditor", category: "hired", activity: "working", parent: "main", open: { kind: "chat", path: "coupon-auditor" }, tab: false, input: true,
     actorId: galleryActorId("coupon-auditor"), figures: { tokens: 48_900, usd: 0.11, activeMs: 7 * 60_000, cacheEma: 0.91 } },
-  { key: "a-check", label: "Checkout tester", category: "hired", activity: "waiting", parent: "a-scout", open: { kind: "chat", path: "coupon-auditor/tester" }, tab: false, input: true,
+  { colour: 6, key: "a-check", label: "Checkout tester", category: "hired", activity: "waiting", parent: "a-scout", open: { kind: "chat", path: "coupon-auditor/tester" }, tab: false, input: true,
     figures: { tokens: 6_100, activeMs: 45_000, cacheEma: null } },
-  { key: "a-copy", label: "Changelog writer", category: "hired", activity: "idle", parent: galleryActorId("docs"), open: { kind: "chat", path: "docs/changelog" }, tab: false, input: true,
+  { colour: 7, key: "a-copy", label: "Changelog writer", category: "hired", activity: "idle", parent: galleryActorId("docs"), open: { kind: "chat", path: "docs/changelog" }, tab: false, input: true,
     figures: { tokens: 2_100, activeMs: 30_000, cacheEma: null } },
-  { key: "root-merge-1/root-merge-1-h0", label: "packages/checkout/src/apply-coupon.ts", category: "swarm", activity: "done", parent: "main",
+  { colour: 0, key: "root-merge-1/root-merge-1-h0", label: "packages/checkout/src/apply-coupon.ts", category: "swarm", activity: "done", parent: "main",
     open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h0", owner: null }, tab: false, input: false,
     figures: { tokens: 9_800, activeMs: 94_000, cacheEma: null } },
-  { key: "root-merge-1/root-merge-1-h1", label: "packages/cart/src/serializer.ts", category: "swarm", activity: "working", parent: "main",
+  { colour: 0, key: "root-merge-1/root-merge-1-h1", label: "packages/cart/src/serializer.ts", category: "swarm", activity: "working", parent: "main",
     open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h1", owner: null }, tab: false, input: false, actorId: "swarm-actor-h1", figures: { activeMs: 0, cacheEma: null } },
-  { key: "root-merge-1/root-merge-1-h3", label: "packages/checkout/src/pricing.ts", category: "swarm", activity: "working", parent: "main",
+  { colour: 0, key: "root-merge-1/root-merge-1-h3", label: "packages/checkout/src/pricing.ts", category: "swarm", activity: "working", parent: "main",
     open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h3", owner: null }, tab: false, input: false, figures: { activeMs: 0, cacheEma: null } },
-  { key: "a-refine", label: "Prompt refiner", category: "background", activity: "idle", parent: "main", open: { kind: "chat", path: "refiner" }, tab: false, input: false,
+  { colour: 8, key: "a-refine", label: "Prompt refiner", category: "background", activity: "idle", parent: "main", open: { kind: "chat", path: "refiner" }, tab: false, input: false,
     figures: { tokens: 2_300, usd: 0.004, activeMs: 20_000, cacheEma: 0.5 } },
-  { key: "a-sampler", label: "Prompt sampler", category: "hired", activity: "idle", parent: "a-refine", open: { kind: "chat", path: "refiner/sampler" }, tab: false, input: true,
+  { colour: 9, key: "a-sampler", label: "Prompt sampler", category: "hired", activity: "idle", parent: "a-refine", open: { kind: "chat", path: "refiner/sampler" }, tab: false, input: true,
     figures: { tokens: 900, activeMs: 8_000, cacheEma: null } },
 ];
 
@@ -2177,12 +2182,12 @@ const NO_GALLERY_FIGURES = { activeMs: 0, cacheEma: null };
 
 /** Main, the page's chats, and the fixture's agents when asked for. */
 function galleryWorkspaceAgents(): PanelAgent[] {
-  const created = GALLERY_SUBS.map((sub): PanelAgent => ({
-    key: sub.actorId, label: sub.displayName || codenameFor(sub.name), category: "user", activity: "idle", parent: "main",
+  const created = GALLERY_SUBS.map((sub, index): PanelAgent => ({
+    colour: index + 1, key: sub.actorId, label: sub.displayName || codenameFor(sub.name), category: "user", activity: "idle", parent: "main",
     open: { kind: "chat", path: sub.name }, tab: true, input: true, actorId: sub.actorId, figures: NO_GALLERY_FIGURES,
   }));
 
-  const main: PanelAgent = { key: "main", label: GALLERY_MAIN_TITLE.value, category: "main", activity: "idle", parent: null, open: { kind: "chat", path: null }, tab: true, input: true, figures: NO_GALLERY_FIGURES };
+  const main: PanelAgent = { colour: 0, key: "main", label: GALLERY_MAIN_TITLE.value, category: "main", activity: "idle", parent: null, open: { kind: "chat", path: null }, tab: true, input: true, figures: NO_GALLERY_FIGURES };
 
   return AGENTS_PANEL ? [...GALLERY_AGENTS, ...created.filter((agent) => !GALLERY_AGENTS.some((fixed) => fixed.key === agent.key))] : [main, ...created];
 }
@@ -3419,10 +3424,10 @@ function ForkLiveFrame({ pinned }: { pinned: number | null }) {
 
 /** The bar over fixture chats: working, waiting, failed. */
 const GALLERY_CHATS: readonly PanelAgent[] = [
-  { key: "main", label: "Main", category: "main", activity: "working", parent: null, open: { kind: "chat", path: null }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
-  { key: galleryActorId("docs"), label: "Fix SAVE20 coupon 500s", category: "user", activity: "waiting", parent: "main", open: { kind: "chat", path: "docs" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
-  { key: galleryActorId("agent-4f2c"), label: "Speed up cart render", category: "user", activity: "failed", parent: "main", open: { kind: "chat", path: "agent-4f2c" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
-  { key: galleryActorId("review"), label: "Review: payments refactor", category: "user", activity: "working", parent: "main", open: { kind: "chat", path: "review" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
+  { colour: 0, key: "main", label: "Main", category: "main", activity: "working", parent: null, open: { kind: "chat", path: null }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
+  { colour: 1, key: galleryActorId("docs"), label: "Fix SAVE20 coupon 500s", category: "user", activity: "waiting", parent: "main", open: { kind: "chat", path: "docs" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
+  { colour: 2, key: galleryActorId("agent-4f2c"), label: "Speed up cart render", category: "user", activity: "failed", parent: "main", open: { kind: "chat", path: "agent-4f2c" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
+  { colour: 3, key: galleryActorId("review"), label: "Review: payments refactor", category: "user", activity: "working", parent: "main", open: { kind: "chat", path: "review" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
 ];
 
 function GalleryWorkspaceHeader({ active = "main" }: { active?: string }) {

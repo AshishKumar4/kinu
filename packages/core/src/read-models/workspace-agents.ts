@@ -35,6 +35,10 @@ export interface PanelAgent {
   readonly input: boolean;
   readonly actorId?: string;
   readonly figures: AgentFigures;
+  /** Its mascot's colour, as a birth rank: Main is 0, then each chat and hire by when it was born, retired ones
+   *  keeping theirs, so no two agents born within a palette's length of each other share a colour, and none changes.
+   *  A swarm worker wears the colour of the agent that runs its search. */
+  readonly colour: number;
 }
 
 const SWARM_RUNS = 20;
@@ -141,9 +145,9 @@ function swarmRuns(sql: SqlExecutor, owner: ActorHandle): HeadRunView[] {
   return [...older.filter((run) => run !== null), ...recent];
 }
 
-function rosterAgents({ sql, exec, root, actors, paths, handleOf, now }: Walk): PanelAgent[] {
+function rosterAgents({ sql, exec, root, actors, paths, handleOf, now }: Walk): Uncoloured[] {
   const byId = new Map(actors.map((row) => [row.actorId, row]));
-  const agents: PanelAgent[] = [];
+  const agents: Uncoloured[] = [];
 
   for (const row of treeOrder(root.actorId, actors)) {
     const parentRow = row.parentActorId === root.actorId ? null : byId.get(row.parentActorId ?? '');
@@ -171,8 +175,8 @@ function rosterAgents({ sql, exec, root, actors, paths, handleOf, now }: Walk): 
   return agents;
 }
 
-function swarmAgents({ sql, root, actors, paths, handleOf }: Walk): PanelAgent[] {
-  const agents: PanelAgent[] = [];
+function swarmAgents({ sql, root, actors, paths, handleOf }: Walk): Uncoloured[] {
+  const agents: Uncoloured[] = [];
 
   for (const owner of [root, ...actors.filter((row) => isSubordinateOrigin(row.origin) && row.deletedAt === null).map(handleOf)]) {
     const ownerKey = owner.actorId === root.actorId ? 'main' : owner.actorId;
@@ -202,6 +206,29 @@ function swarmAgents({ sql, root, actors, paths, handleOf }: Walk): PanelAgent[]
   return agents;
 }
 
+type Uncoloured = Omit<PanelAgent, 'colour'>;
+
+/** Each agent's birth rank ({@link PanelAgent.colour}); a swarm worker takes its search owner's. */
+function coloured(actors: readonly WorkspaceActor[], agents: readonly Uncoloured[]): PanelAgent[] {
+  // Every chat and hire ever born here, retired ones too, so a rank never moves once given.
+  const born = actors.filter((row) => isSubordinateOrigin(row.origin))
+    .sort((a, b) => a.createdAt - b.createdAt || a.actorId.localeCompare(b.actorId));
+
+  const rank = new Map<string, number>([['main', 0], ...born.map((row, index): [string, number] => [row.actorId, index + 1])]);
+  const byKey = new Map(agents.map((agent) => [agent.key, agent]));
+
+  const colourOf = (agent: Uncoloured): number => {
+    const own = rank.get(agent.key);
+    const parent = agent.parent === null ? undefined : byKey.get(agent.parent);
+
+    if (own !== undefined || parent === undefined) return own ?? 0;
+
+    return colourOf(parent);
+  };
+
+  return agents.map((agent) => ({ ...agent, colour: colourOf(agent) }));
+}
+
 export async function readWorkspaceAgents(input: {
   readonly sql: SqlExecutor;
   readonly exec: SqlExec;
@@ -223,14 +250,14 @@ export async function readWorkspaceAgents(input: {
   const hired = tableExists(sql, 'actor_subordinates') ? rosterAgents(walk) : [];
   const swarms = tableExists(sql, 'head_journal') ? swarmAgents(walk) : [];
 
-  const main: PanelAgent = {
+  const main: Uncoloured = {
     key: 'main', label: root.config.getChatTitle() ?? 'Main', category: 'main', parent: null,
     // A device's consent request names no actor: it is the workspace's, so Main is the chat that needs the person.
     activity: deviceAsks(sql, walk.now) ? 'waiting' : chatActivity(sql, root.actorId, turnOpen(sql, root.actorId) || input.queued || turnOwed(walk, root)),
     open: { kind: 'chat', path: null }, tab: true, input: true, actorId: root.actorId, figures: NO_FIGURES,
   };
 
-  const listed = [main, ...hired, ...swarms];
+  const listed = coloured(input.actors, [main, ...hired, ...swarms]);
   const figures = await input.figures(listed.flatMap((agent) => (agent.actorId === undefined ? [] : [agent.actorId])));
 
   return listed.map((agent) => {

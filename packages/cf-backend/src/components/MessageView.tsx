@@ -49,6 +49,28 @@ function messageCreatedAt(message: UIMessage): string | number | Date | undefine
   return parsed.success ? parsed.output.createdAt : undefined;
 }
 
+/** When the message was written, in ms since the epoch; undefined when the transport did not stamp it. */
+export function messageTime(message: UIMessage): number | undefined {
+  const at = messageCreatedAt(message);
+
+  if (at === undefined) return undefined;
+
+  if (at instanceof Date) return at.getTime();
+  const ms = typeof at === "number" ? at : Date.parse(at);
+
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
+/** What a turn nobody typed draws as, to fold the same one in a row; null for a turn a person wrote. */
+export function eventTurnKey(message: UIMessage): string | null {
+  const programmatic = classifyProgrammaticTurn({ metadata: message.metadata, id: message.id });
+  const kind = programmatic?.kind ?? (message.role === "system" ? "system" : null);
+
+  if (kind === null || kind === "workspace_created") return null;
+
+  return JSON.stringify([kind, rowText(message)]);
+}
+
 function formatTime(date: Date): string {
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
@@ -498,9 +520,11 @@ function SteeredMark({ state }: { state: "queued" | "landed" }) {
 // referential identity and skips re-rendering.
 export const MessageView = memo(function MessageView({
   message, liveTail: tail = null, onFork, onFeedback, feedback, onRevert, takesChip,
-  signalState, steers, onOpenChangeNote, answerSlates, onRetry,
+  signalState, steers, onOpenChangeNote, answerSlates, onRetry, repeats = 1,
 }: {
   message: UIMessage;
+  /** A turn nobody typed that came this many times in a row ({@link eventTurnKey}), drawn once. */
+  repeats?: number;
   /** Resolved once by the thread owner (`threadLiveTail`), passed to the last row only; null means history. */
   liveTail?: LiveTail | null;
   signalState?: CardState;
@@ -533,13 +557,13 @@ export const MessageView = memo(function MessageView({
   if (programmatic) {
     return (
       <ProgrammaticTurnCard
-        turn={programmatic} text={rowText(message)} state={signalState ?? "shown"} />
+        turn={programmatic} text={rowText(message)} state={signalState ?? "shown"} count={repeats} />
     );
   }
 
   if (message.role === "system") {
     return <ProgrammaticTurnCard turn={{ kind: "system_event", event: "system" }}
-      text={rowText(message)} state={signalState ?? "shown"} />;
+      text={rowText(message)} state={signalState ?? "shown"} count={repeats} />;
   }
 
   const sentNotes = isUser ? changeNotesCard({ metadata: message.metadata }) : null;

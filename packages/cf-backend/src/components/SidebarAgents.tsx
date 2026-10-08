@@ -3,7 +3,7 @@ import { ArrowLeftIcon, CaretRightIcon } from "@phosphor-icons/react";
 import { fmtPct, fmtSpan, fmtTokens, fmtUsd, type PanelAgent } from "@kinu.run/core";
 import type { WorkspaceAgentsPanel } from "@/hooks/use-agents-nav";
 import { AgentStatusMark } from "./AgentStatus";
-import { ChatMascot, mascotSeed } from "./Marks";
+import { ChatMascot, mascotColour, mascotSeed } from "./Marks";
 import { navRowCls } from "./nav";
 
 /** Agents nobody talks to: listed apart, folded until asked for. */
@@ -75,8 +75,9 @@ function AgentRow({ agent, panel }: { agent: PanelAgent; panel: WorkspaceAgentsP
     <button type="button" onClick={() => panel.open(agent)} data-agent-row={agent.key} data-status={agent.activity}
       aria-current={shown ? "page" : undefined} title={figures === "" ? undefined : figures}
       className={`p-halo relative flex w-full min-w-0 items-center gap-2 rounded-lg py-[6px] pl-2.5 pr-3 text-left transition-colors ${navRowCls(shown)}`}>
-      {agent.tab
-        ? <ChatMascot seed={mascotSeed(panel.workspace, agent.key)} activity={agent.activity} />
+      {/* A chat and a hire each wear their own mascot; a swarm worker or a background helper, its state mark. */}
+      {agent.tab || agent.category === "hired" || agent.category === "user"
+        ? <ChatMascot seed={mascotSeed(panel.workspace, agent.key)} colour={mascotColour(panel.workspace, agent.colour)} activity={agent.activity} />
         : <span className="flex w-4 shrink-0 justify-center"><AgentStatusMark activity={agent.activity} /></span>}
       <span className="p-status-label min-w-0 flex-1 truncate p-row-text">{agent.label}</span>
     </button>

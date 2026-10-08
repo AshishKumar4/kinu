@@ -1662,6 +1662,8 @@ body > .annotation-toolbar {
   transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
 }
 .p-bar-icon:hover, .p-bar-icon:focus-visible { outline: none; background: var(--c-neutral-tint); color: var(--c-text); }
+/* The header's count of agents at work out of sight: the accent, so it reads in dark and light alike. */
+.p-agents-badge { background: var(--c-accent); color: var(--c-accent-on); box-shadow: 0 0 0 1.5px var(--c-bg); }
 .p-bar-icon[aria-current="page"], .p-bar-icon[aria-pressed="true"] { color: var(--c-text); }
 .p-bar-trailing { display: flex; flex-shrink: 0; align-items: center; gap: 2px; padding: 0 10px 0 6px; }
 .p-bar-outline { position: absolute; top: 8px; bottom: 0; left: 0; pointer-events: none; }

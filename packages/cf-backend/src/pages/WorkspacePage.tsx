@@ -4,9 +4,9 @@ import { useParams, useLocation, Link, useMatch, useNavigate, useSearchParams } 
 import { Button, Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import {
-  ArrowsClockwiseIcon, GitBranchIcon, CheckCircleIcon, GearIcon, ListIcon, UsersThreeIcon,
-  ClockIcon, WarningCircleIcon, DesktopTowerIcon, PaperclipIcon,
-  ClockCounterClockwiseIcon, UserPlusIcon, type Icon,
+  ArrowsClockwiseIcon, GitBranchIcon, GearIcon, ListIcon, UsersThreeIcon,
+  WarningCircleIcon, DesktopTowerIcon, PaperclipIcon,
+  ClockCounterClockwiseIcon,
 } from "@phosphor-icons/react";
 import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
@@ -32,6 +32,7 @@ import { Modal } from "@/components/ui/Modal";
 import { RevertTurnDialog, type DeviceRestorePlan } from "@/components/RevertTurnDialog";
 import { ChatLiveTail, DeviceOfflineRow, HelperChatBase, MessageView, ModelFallbackRows, SteerBubble } from "@/components/MessageView";
 import { ProgrammaticTurnCard } from "@/components/ProgrammaticTurnCard";
+import { foldEventTurns, placeEvents, subordinateEventRow, type PlacedEvent } from "@/components/ChatEvents";
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { cloudPlanes, filesFocusOf, hasComparableTakes, referencePrefixes, WORKSPACE_ROOT, type FilesFocus } from "@kinu.run/core";
 import { classifyProgrammaticTurn, messageSignalId, messagesUpTo, threadLiveTail, turnRows } from "@kinu.run/core";
@@ -54,7 +55,7 @@ import { WorkspaceOverview } from "@/components/workspaces/WorkspaceOverview";
 import { WorkspaceSettings } from "@/pages/SettingsPage";
 import { useLayoutDrawer } from "@/components/layout";
 import { Composer, useProviderWaitNotice, workspaceLoadNotice, type ComposerNotice } from "@/components/Composer";
-import { revealMisrepresenting, workspaceDisplayTitle, workspaceTitleDraft, type PendingConsent, type SubordinateActivityEvent } from "@kinu.run/core";
+import { revealMisrepresenting, workspaceDisplayTitle, workspaceTitleDraft, type PendingConsent } from "@kinu.run/core";
 import { settleLogged, showing, detach, settle } from "@kinu.run/core/obs";
 import { InspectorToggle, WorkbenchPanels, type InspectorControl, type WorkbenchHandle } from "@/components/WorkbenchPanels";
 import { useCarriedAttachments, useOpeningMessage } from "@/components/workspaces/NewChatView";
@@ -215,43 +216,6 @@ function TerminalCloseBoundary({ close, onRetry }: {
   );
 }
 
-type EventOutcome = "done" | "failed" | "progress";
-
-function eventOutcome(status: string | undefined): EventOutcome {
-  if (status === "completed") return "done";
-
-  if (status === "failed" || status === "error") return "failed";
-
-  return "progress";
-}
-
-const OUTCOME_MARK: Record<EventOutcome, { Icon: Icon; verb: string; tone: string }> = {
-  done: { Icon: CheckCircleIcon, verb: "reported done", tone: "p-success" },
-  failed: { Icon: WarningCircleIcon, verb: "hit an error", tone: "p-danger" },
-  progress: { Icon: ClockIcon, verb: "reported progress", tone: "p-text-3" },
-};
-
-function SubordinateEventCard({ event, workspace }: { event: SubordinateActivityEvent; workspace: string }) {
-  const { Icon: outcomeIcon, verb: outcomeVerb, tone } = OUTCOME_MARK[eventOutcome(event.status)];
-  const assigned = event.kind === "task";
-  const Icon = assigned ? UserPlusIcon : outcomeIcon;
-  const verb = assigned ? "assigned" : outcomeVerb;
-  const detail = event.task === undefined || event.task === "" ? event.content : event.task;
-
-  return (
-    <div className="flex justify-center animate-fade-in py-1">
-      <Link
-        to={`/workspace/${workspace}/agents/${event.subordinate}`}
-        title={detail}
-        className="inline-flex max-w-[80%] items-center gap-2 rounded-full border p-border p-elevated px-3 py-1.5 p-row-text p-text-2 p-card-hover transition-colors"
-      >
-        <Icon size={13} className={`${tone} shrink-0`} weight="fill" />
-        <span className="truncate"><span className="font-medium p-text">{event.subordinate}</span> {verb}: {detail}</span>
-      </Link>
-    </div>
-  );
-}
-
 function ForkModal({
   sourceName, messagesUpToHere, onCancel, onSubmit,
 }: {
@@ -380,7 +344,7 @@ function SwarmNodeColumn({ main, ownerPath, runId, nodeId, agent }: {
 const WORKSPACE_CHAT = { actorId: null } as const;
 
 const MAIN_AGENT: PanelAgent = {
-  key: "main", label: "Main", category: "main", activity: "idle", parent: null,
+  colour: 0, key: "main", label: "Main", category: "main", activity: "idle", parent: null,
   open: { kind: "chat", path: null }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null },
 };
 
@@ -593,6 +557,7 @@ function SubordinateChatColumn({
   const answerChat = useMemo(() => (state.paneActorId === null ? undefined : { actorId: state.paneActorId }), [state.paneActorId]);
 
   const { thread } = chat;
+  const repeats = useMemo(() => foldEventTurns(thread.entries.map(({ message }) => message)), [thread.entries]);
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -641,8 +606,8 @@ function SubordinateChatColumn({
           rows={(before) => thread.entries.map(({ message: msg, steers }, i) => (
             <Fragment key={msg.id}>
               {before(msg.id)}
-              <MessageView message={msg} steers={steers} answerSlates={answerChat} liveTail={i === thread.entries.length - 1 ? tail : null}
-                onRetry={i === thread.entries.length - 1 && !live ? state.retryLastMessage : undefined} />
+              {repeats[i] !== 0 && <MessageView message={msg} steers={steers} answerSlates={answerChat} liveTail={i === thread.entries.length - 1 ? tail : null}
+                repeats={repeats[i]} onRetry={i === thread.entries.length - 1 && !live ? state.retryLastMessage : undefined} />}
             </Fragment>
           ))}>
           <ChatLiveTail tail={tail} />
@@ -737,6 +702,8 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
   const [removing, setRemoving] = useState(false);
   const [deleting, setDeleting] = useState<{ title: string; path: string } | null>(null);
 
+  const working = agents.filter((agent) => !agent.tab && agent.activity === "working").length;
+
   const chats = agents.filter((agent) => agent.tab).map((agent) => chatTab(workspace, agent, {
     renameMain: async (name) => { await state.rpc("renameMainChat", [name]); },
     renameChat: async (path, name) => { await state.renameSubordinate(path, name); },
@@ -757,8 +724,14 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
         newChat={`/workspace/${workspace}/new`}
         leading={drawer && <button type="button" onClick={drawer} className="p-bar-icon" aria-label="Open menu"><ListIcon size={18} /></button>}
         trailing={<>
-          <button type="button" onClick={() => agentsNav.enter(workspace)} className="p-bar-icon" aria-label="All agents" title="All agents">
+          <button type="button" onClick={() => agentsNav.enter(workspace)} className="p-bar-icon relative" aria-label="All agents" title="All agents">
             <UsersThreeIcon size={16} />
+            {/* The agents at work out of sight, those with no tab of their own, counted where the owner can open them. */}
+            {working > 0 && (
+              <span data-working-agents={working} className="p-agents-badge absolute -right-0.5 -top-0.5 min-w-[14px] rounded-full px-[3px] text-center text-[9px] font-semibold leading-[14px] tabular-nums">
+                {working}
+              </span>
+            )}
           </button>
           <Link to={`/workspace/${workspace}/settings`} className="p-bar-icon" aria-current={view === "settings" ? "page" : undefined}
             aria-label="Workspace settings" title="Workspace settings"><GearIcon size={16} /></Link>
@@ -1011,12 +984,25 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
     return id ? [id] : [];
   })), [transcript]);
 
-  const looseCards = useMemo(() => state.signalCards.flatMap((card) => {
-    if (messageCardIds.has(card.id)) return [];
-    const turn = classifyProgrammaticTurn({ metadata: card.metadata });
+  // A signal spliced into a running turn, and an agent given work or reporting, each where it happened.
+  const looseEvents = useMemo((): PlacedEvent[] => [
+    ...state.signalCards.flatMap((card): PlacedEvent[] => {
+      if (messageCardIds.has(card.id)) return [];
+      const turn = classifyProgrammaticTurn({ metadata: card.metadata });
 
-    return turn ? [{ card, turn }] : [];
-  }), [state.signalCards, messageCardIds]);
+      return turn ? [{
+        key: card.id,
+        at: card.at,
+        fold: JSON.stringify([turn.kind, card.text, card.state]),
+        draw: (count) => <ProgrammaticTurnCard turn={turn} text={card.text} state={card.state} count={count} />,
+      }] : [];
+    }),
+    ...state.subordinateEvents.map((event) => subordinateEventRow(event, agentId ?? "")),
+  ], [state.signalCards, state.subordinateEvents, messageCardIds, agentId]);
+
+  const threadMessages = useMemo(() => thread.entries.map(({ message }) => message), [thread.entries]);
+  const placed = useMemo(() => placeEvents(threadMessages, looseEvents), [threadMessages, looseEvents]);
+  const repeats = useMemo(() => foldEventTurns(threadMessages), [threadMessages]);
 
   const mainTail = threadLiveTail({ last: thread.entries.at(-1)?.message, liveness: state.liveness });
   const providerWait = useProviderWaitNotice(state.providerWait);
@@ -1181,8 +1167,10 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
                 return (
                   <Fragment key={msg.id}>
                     {before(msg.id)}
-                    <MessageView
+                    {placed.before.get(i)}
+                    {repeats[i] !== 0 && <MessageView
                       message={msg}
+                      repeats={repeats[i]}
                       steers={steers}
                       answerSlates={WORKSPACE_CHAT}
                       liveTail={i === thread.entries.length - 1 ? mainTail : null}
@@ -1196,14 +1184,12 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
                         : undefined}
                       signalState={signalId === null ? undefined : cardStates.get(signalId)}
                       onOpenChangeNote={openChangeNote}
-                    />
+                    />}
                   </Fragment>
                 );
               })}>
               <ChatLiveTail tail={mainTail} />
-              {looseCards.map(({ card, turn }) => (
-                <ProgrammaticTurnCard key={card.id} turn={turn} text={card.text} state={card.state} />
-              ))}
+              {placed.after}
               {thread.trailing.map((steer) => <SteerBubble key={steer.id} steer={steer} />)}
               {state.branchRuns.map((run) => (
                 <BranchRunChip
@@ -1216,9 +1202,6 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
                   onPick={onPickTake}
                   onDismiss={() => state.dismissBranchRun(run.branchId)}
                 />
-              ))}
-              {state.subordinateEvents.map((event) => (
-                <SubordinateEventCard key={event.id} event={event} workspace={agentId} />
               ))}
               <ModelFallbackRows notices={state.modelFallbacks} />
               <DeviceOfflineRow devices={state.unavailableDevices} />

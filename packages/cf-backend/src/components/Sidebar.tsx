@@ -16,7 +16,8 @@ import { FeedbackButton } from "./FeedbackButton";
 import { isPlaceholderWorkspaceTitle, shortAge, workspaceDisplayTitle, type PanelAgent } from "@kinu.run/core";
 import { renderCauseChain, detach } from "@kinu.run/core/obs";
 import { SidebarAgents } from "./SidebarAgents";
-import { ChatMascot, WorkspaceLogo, mascotSeed } from "./Marks";
+import { ChatMascot, WorkspaceLogo, mascotColour, mascotSeed } from "./Marks";
+import { AgentStatusMark } from "./AgentStatus";
 import { RemoveWorkspaceDialog } from "./RemoveWorkspaceDialog";
 import { useAgentsNav, useOpenAgentsPanel, type WorkspaceAgentsPanel } from "@/hooks/use-agents-nav";
 import { navActive, navRowCls, PRIMARY_NAV } from "./nav";
@@ -330,6 +331,8 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
 function WorkspaceChats({ panel, trigger, onAgents }: { panel: WorkspaceAgentsPanel; trigger: RefObject<HTMLButtonElement | null>; onAgents: () => void }) {
   const chats = panel.list.filter((agent) => agent.tab);
   const others = panel.list.length - chats.length;
+  // The agents with no tab of their own work out of sight: their row says so while any of them does.
+  const working = panel.list.some((agent) => !agent.tab && agent.activity === "working");
 
   return (
     <ul className="p-nest mb-1 ml-[26px] mr-2 mt-0.5 space-y-px" aria-label="Chats">
@@ -338,7 +341,7 @@ function WorkspaceChats({ panel, trigger, onAgents }: { panel: WorkspaceAgentsPa
           <button type="button" onClick={() => panel.open(chat)} data-workspace-chat={chat.key} data-status={chat.activity}
             aria-current={panel.shown === chat.key ? "page" : undefined}
             className={`p-halo relative flex w-full min-w-0 items-center gap-2 rounded-lg py-[6px] pl-2 pr-3 text-left transition-colors ${navRowCls(panel.shown === chat.key)}`}>
-            <ChatMascot seed={mascotSeed(panel.workspace, chat.key)} activity={chat.activity} />
+            <ChatMascot seed={mascotSeed(panel.workspace, chat.key)} colour={mascotColour(panel.workspace, chat.colour)} activity={chat.activity} />
             <span className="p-status-label min-w-0 flex-1 truncate p-row-text">{chat.label}</span>
           </button>
         </li>
@@ -353,6 +356,7 @@ function WorkspaceChats({ panel, trigger, onAgents }: { panel: WorkspaceAgentsPa
           className={`flex w-full items-center gap-2 rounded-lg py-[6px] pl-2 pr-3 text-left p-row-text transition-colors ${navRowCls(false, "p-text-3")}`}>
           <UsersThreeIcon size={13} className="w-[13px] shrink-0" aria-hidden />
           <span className="flex-1">All agents</span>
+          {working && <AgentStatusMark activity="working" />}
           {others > 0 && <span className="p-meta tabular-nums p-text-4">{others}</span>}
           <CaretRightIcon size={11} aria-hidden />
         </button>
