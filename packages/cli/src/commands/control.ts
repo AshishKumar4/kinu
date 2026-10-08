@@ -1,5 +1,5 @@
 import { requireAuthConfig } from '../config';
-import { isReasoningEffort, projectJsonValue, REASONING_EFFORTS, type JsonValue, type ModelMenu, type ReasoningEffort, type TimerTrigger, type TimerTriggerOpts } from '@kinu.run/core';
+import { isReasoningEffort, projectJsonValue, REASONING_EFFORTS, ReasoningEffortSchema, type JsonValue, type ModelMenu, type ReasoningEffort, type TimerTrigger, type TimerTriggerOpts } from '@kinu.run/core';
 import { resolveAgentTarget } from '../agent-target';
 import {
   cancelLocalTrigger,
@@ -48,9 +48,9 @@ interface ControlOpts {
   json?: boolean;
 }
 
-const EffortSetResultSchema = v.object({ ok: v.literal(true), effort: v.picklist(['low', 'medium', 'high']) });
+const EffortSetResultSchema = v.object({ ok: v.literal(true), effort: ReasoningEffortSchema });
 
-const StoredEffortSchema = v.object({ effort: v.nullable(v.picklist(['low', 'medium', 'high'])) });
+const StoredEffortSchema = v.object({ effort: v.nullable(ReasoningEffortSchema) });
 
 const ModelSetResultSchema = v.object({ ok: v.literal(true), spec: v.string() });
 

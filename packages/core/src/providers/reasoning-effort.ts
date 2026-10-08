@@ -13,7 +13,8 @@ export const REASONING_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'x
 
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 
-const ReasoningEffortSchema = v.picklist(REASONING_EFFORTS);
+/** Every client and route parses a level against this, so none accepts fewer levels than a model offers. */
+export const ReasoningEffortSchema = v.picklist(REASONING_EFFORTS);
 
 export function isReasoningEffort<Value>(value: Value): value is Value & ReasoningEffort {
   return v.safeParse(ReasoningEffortSchema, value).success;

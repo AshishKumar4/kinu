@@ -44,7 +44,7 @@ import {
   type HeadRunView,
   type JsonObject,
   type ResolvedTurnProfile,
-  type EventVariant,
+  EVENT_VARIANTS,
   type KinuEvent,
   type QueryFilter,
   type RunEvent,
@@ -78,7 +78,7 @@ import {
   type WorkspaceSpend,
   type AccountSpend,
   MEMORY_PATH,
-  missionOf,
+  agentStatusFacts,
   type MemorySearchResult,
 } from '@kinu.run/core';
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
@@ -95,21 +95,7 @@ import { KinuError } from '@kinu.run/core/obs';
 
 type SqliteDb = Database;
 
-const EventVariantSchema = v.picklist([
-  'chat',
-  'webhook',
-  'process_done',
-  'timer',
-  'peer_agent',
-  'subordinate_task',
-  'subordinate_report',
-  'file_changed',
-  'email',
-  'internal',
-  'reply_request',
-  'mcp_chat',
-  'mcp_third_party',
-] satisfies EventVariant[]);
+const EventVariantSchema = v.picklist(EVENT_VARIANTS);
 
 export interface LocalExecutorInfo {
   name: string;
@@ -731,35 +717,19 @@ export function getLocalActorInfo(name: string, actorId: string): LocalAgentInfo
   });
 }
 
+/** The cloud's status fold (`agentStatusFacts`), over SOUL.md where it lies in the workspace's space. */
 function getLocalStatus(db: SqliteDb): LocalStatus {
-  const hasIdentity = tableExists(db, 'workspace_identity');
   const actor = mainActor(db);
 
-  const identity = hasIdentity
-    ? all<{ name: string; created_at: number }>(
-      db, `SELECT name, created_at FROM workspace_identity LIMIT 1`).at(0)
-    : null;
+  if (actor === null) {
+    return { name: null, purpose: '', createdAt: null, scaffoldVersion: 0, searchNodeCount: 0, messageCount: 0, model: null, reasoningEffort: null };
+  }
 
-  // SOUL.md read where it lies in the workspace's space, without opening a filesystem.
-  const mission = missionOf(soulOf(db));
+  const { name, purpose, createdAt, scaffoldVersion, searchNodeCount, messageCount } = agentStatusFacts(makeSql(db), actor, soulOf(db), actor.name);
 
   return {
-    name: identity?.name ?? null,
-    purpose: mission ?? '',
-    createdAt: identity?.created_at ?? null,
-    scaffoldVersion: actor && tableExists(db, 'scaffold_versions') ? getCurrentScaffoldVersion(makeSql(db), actor) ?? 0 : 0,
-    searchNodeCount: actor && tableExists(db, 'search_nodes')
-      ? countOf(db, `SELECT COUNT(*) AS c FROM search_nodes WHERE actor_id = ?`, actor.actorId)
-      : 0,
-    messageCount: actor && tableExists(db, 'conversation_entries')
-      ? countOf(db, `SELECT COUNT(*) AS c FROM conversation_entries WHERE actor_id = ?`, actor.actorId)
-      : 0,
-    model: tableExists(db, 'actor_config')
-      ? openWorkspaceMainActor(makeSql(db)).config.getModel()
-      : null,
-    reasoningEffort: tableExists(db, 'actor_config')
-      ? openWorkspaceMainActor(makeSql(db)).config.getReasoningEffort()
-      : null,
+    name, purpose, createdAt, scaffoldVersion, searchNodeCount, messageCount,
+    model: actor.config.getModel(), reasoningEffort: actor.config.getReasoningEffort(),
   };
 }
 
