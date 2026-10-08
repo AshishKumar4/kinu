@@ -1,10 +1,10 @@
 /**
  * A turn the workspace object's activation ended inside (a deploy, a reset, an eviction) is re-driven by the next
  * activation's wake under a request id that activation mints: the request the client sent lived only in the dead
- * activation's memory. The stream therefore names the turn by its opening message, and the client whose message that
- * is follows the turn there to its end. Defends the F2 probe on staging a4e564ce1 (2026-09-30): a 12-step turn, the
- * activation ended after step 2, all 12 files written, and the eval client failed at the run's end with "the turn's
- * run ended before its stream could be resumed, so its answer was never observed".
+ * activation's memory. A tab that redials acks the stream it is told of and draws the turn there to its end; where its
+ * own send ended a client asks the workspace (`awaitSend`). Defends the F2 probe on staging a4e564ce1 (2026-09-30): a
+ * 12-step turn, the activation ended after step 2, all 12 files written, and the eval client failed at the run's end
+ * with "the turn's run ended before its stream could be resumed, so its answer was never observed".
  *
  * A client joining an open turn, a tab's reload or a redial into the activation that re-drives it, is told the steps
  * the ledger records first, restated from it, then the relay's chunks of the steps after them: one path for both.
@@ -29,8 +29,8 @@ import { answeringGateway, requestOf, stubAiBinding, toolCallCompletion, type St
 import { socketConnection } from './helpers/bindings';
 
 const FrameSchema = v.looseObject({
-  type: v.string(), id: v.optional(v.string()), turnId: v.optional(v.string()), body: v.optional(v.string()), done: v.optional(v.boolean()),
-  replayComplete: v.optional(v.boolean()), restated: v.optional(v.boolean()),
+  type: v.string(), id: v.optional(v.string()), body: v.optional(v.string()), done: v.optional(v.boolean()),
+  replayComplete: v.optional(v.boolean()),
 });
 
 type Frame = v.InferOutput<typeof FrameSchema>;
@@ -108,7 +108,7 @@ function nextActivation(first: StartedHarness, model: StubbedAiBinding): Promise
   });
 }
 
-test('the client whose request opened a turn follows it into the activation that re-opens it, to its end', async () => {
+test('a tab that redials into the activation that re-opens its turn draws the turn there, to its end', async () => {
   const request = 'req-count';
   const rest = 'Three, and done.';
   const first = firstActivation();
@@ -131,8 +131,8 @@ test('the client whose request opened a turn follows it into the activation that
     const frame = v.parse(FrameSchema, JSON.parse(raw));
     heard.push(frame);
 
-    // The client acks a stream named for its own turn, whatever request id the activation gave it.
-    if (frame.type === CHAT_MESSAGE_TYPES.STREAM_RESUMING && (frame.id === request || frame.turnId === request)) {
+    // As the SDK's hook acks it: the stream it is told of, whatever request id the activation gave it.
+    if (frame.type === CHAT_MESSAGE_TYPES.STREAM_RESUMING) {
       acks.push(Promise.resolve(next.agent.onMessage(socket, JSON.stringify({ type: CHAT_MESSAGE_TYPES.STREAM_RESUME_ACK, id: frame.id }))));
     }
   });
@@ -144,22 +144,20 @@ test('the client whose request opened a turn follows it into the activation that
 
   const resumed = heard.items.find((frame) => frame.type === CHAT_MESSAGE_TYPES.STREAM_RESUMING);
   const followed = heard.items.filter((frame) => resumed !== undefined && frame.type === CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE && frame.id === resumed.id);
-  const restated = followed.filter((frame) => frame.restated === true);
+  const kinds = followed.map((frame) => chunkOf(frame)?.type);
 
-  // The two steps before the restart are restated from the ledger, ahead of every chunk the relay holds, and marked
-  // so a client that streamed them before can skip them; the relay adds the answer's own step.
+  // The two steps before the restart are restated from the ledger, ahead of every chunk the relay holds; the relay
+  // adds the answer's own step.
   expect({
     toldPending: heard.items.some((frame) => frame.type === CHAT_MESSAGE_TYPES.STREAM_PENDING),
-    resumedTurn: resumed?.turnId,
-    restated: calls(restated),
-    restatedFirst: followed.slice(0, restated.length + 1).every((frame) => frame.restated === true || chunkOf(frame)?.type === 'start'),
+    restatedFirst: kinds.indexOf('text-delta') > kinds.lastIndexOf('tool-input-available'),
     calls: calls(followed),
     cuts: counted(followed, 'data-kinu-step-cut'),
     steps: counted(followed, 'finish-step'),
     rest: followed.flatMap((frame) => chunkOf(frame)?.delta ?? []).join(''),
     ended: followed.at(-1)?.done === true,
   }).toEqual({
-    toldPending: true, resumedTurn: request, restated: ['call_0', 'call_1'], restatedFirst: true, calls: ['call_0', 'call_1'],
+    toldPending: true, restatedFirst: true, calls: ['call_0', 'call_1'],
     steps: 3, cuts: 0, rest, ended: true,
   });
 });
@@ -519,10 +517,8 @@ test("a person's tab that reloads inside a turn draws its finished steps restate
   await act(async () => { await reloaded.heard.until((frames) => frames.some((frame) => frame.replayComplete === true)); });
   await reloaded.answered();
 
-  expect({
-    drawn: drawnSteps(again.shown()),
-    restated: calls(reloaded.heard.items.filter((frame) => frame.restated === true)),
-    relayed: calls(reloaded.heard.items.filter((frame) => frame.restated !== true)),
-  }).toEqual({ drawn: ['echo 1: output-available', 'echo 2: output-available'], restated: ['call_0', 'call_1'], relayed: [] });
+  // Restated from the ledger and not relayed again: each call is heard once.
+  expect({ drawn: drawnSteps(again.shown()), heard: calls(reloaded.heard.items) })
+    .toEqual({ drawn: ['echo 1: output-available', 'echo 2: output-available'], heard: ['call_0', 'call_1'] });
   await again.close();
 });

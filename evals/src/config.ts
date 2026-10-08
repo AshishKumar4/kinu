@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { accountCredentialKey, CHATGPT_CRED_KEY } from '@kinu.run/core';
 
 /**
  * The models a run measures unless `KINU_EVAL_MODELS` names others: Muse Spark alone, the owner's choice (2026-10-02).
@@ -10,19 +11,22 @@ export const DEFAULT_MODELS: readonly [string, ...string[]] = [
 ];
 
 /**
- * The owner's ChatGPT Pro logins the reviewer runs on (2026-10-07), first to last, each the eval identity's own Codex
+ * The owner's ChatGPT Pro logins the reviewer runs on (2026-10-07), first to last, each the eval identity's own ChatGPT
  * sign-in on a deployment, asked of the owner only when the deployment lacks it (`evals/scripts/reviewer-sign-in.ts`).
  */
 export const REVIEW_ACCOUNTS = ['ashishkmr472', 'aksnip4284'] as const;
 
-/** GPT 6.1 Sol through Codex on one of {@link REVIEW_ACCOUNTS}. */
-export function codexReviewModel(account: (typeof REVIEW_ACCOUNTS)[number]): string {
-  return `codex@${account}/gpt-6.1-sol`;
+export type ReviewAccount = (typeof REVIEW_ACCOUNTS)[number];
+
+/** GPT 6.1 Sol through ChatGPT on one of {@link REVIEW_ACCOUNTS}, and the login it is served on: a menu names no account,
+ *  so the spec is never listed, and it is the reviewer's once its login is held. */
+export function reviewLogin(account: ReviewAccount) {
+  return { spec: `chatgpt@${account}/gpt-6.1-sol`, key: accountCredentialKey(CHATGPT_CRED_KEY, account) } as const;
 }
 
 /**
  * GPT 6.1 Sol through the `openrouter.bearer` key every eval account holds (`scripts/eval-provider-keys.ts`, which
- * requires it listed): the reviewer's last resort, when neither Codex login is held. Staging listed it on 2026-10-07.
+ * requires it listed): the reviewer's last resort, when neither ChatGPT login is held. Staging listed it on 2026-10-07.
  */
 export const REVIEW_KEYED_MODEL = 'openrouter/openai/gpt-6.1-sol';
 
@@ -31,7 +35,7 @@ export const REVIEW_KEYED_MODEL = 'openrouter/openai/gpt-6.1-sol';
  * trajectory review and the judge of what no check computes. GPT 6.1 Sol, first choice first; a review runs on the
  * first its deployment lists for the eval identity, and falls back to the others it lists (`reviewerModels`).
  */
-export const REVIEW_MODELS: readonly string[] = [...REVIEW_ACCOUNTS.map(codexReviewModel), REVIEW_KEYED_MODEL];
+export const REVIEW_MODELS: readonly string[] = [...REVIEW_ACCOUNTS.map((account) => reviewLogin(account).spec), REVIEW_KEYED_MODEL];
 
 /** A reviewer `KINU_EVAL_REVIEW_MODEL` names in place of {@link REVIEW_MODELS}, or null. */
 export function reviewModelOverride(env: Env): string | null {

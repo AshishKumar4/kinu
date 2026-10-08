@@ -18,6 +18,7 @@ import type { CompactionTrigger, ExtensionHost } from '../extension';
 import { KinuError, diagnostics } from '../obs/index';
 import { ADMISSION_REFUSAL_MARK } from '../turn-failure';
 import { estimateTokens } from '../token-estimate';
+import { messageTokens } from '../prompting/media-tokens';
 
 export interface TurnContextInput {
   system: string;
@@ -47,7 +48,7 @@ export interface AssembledTurn {
 }
 
 /**
- * Without `count` (or on `unsupported`) the gate still applies via `estimateTokens`.
+ * Without `count` (or on `unsupported`) the gate still applies via the estimate, its media priced ({@link messageTokens}).
  * An unknown window leaves the limit unbounded, so only a known one refuses.
  */
 export interface TurnAdmission {
@@ -166,9 +167,8 @@ export function assembleTurnMessages(input: TurnContextInput): Promise<Assembled
         });
       }
 
-      return estimateTokens(JSON.stringify({
-        system: input.system, messages, tools: admission.tools,
-      }).length);
+      // Priced for the model it is built for, as the compaction ladder prices it: an image by its size, not its base64.
+      return estimateTokens(JSON.stringify({ system: input.system, tools: admission.tools }).length) + messageTokens(input.model, messages);
     };
 
     const tokens = yield* Effect.promise(() => measure(assembled));

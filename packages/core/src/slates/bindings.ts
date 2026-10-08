@@ -11,7 +11,7 @@ import { isSlateMethodName } from './rpc';
 import type { SlateReadModel } from './read-models';
 import type { SlateBinding, SlateProject } from './project';
 import { grantAdmits } from './capability-graph';
-import { memberEffect, toolActionEffect, toolActionMember } from './members';
+import { AI_RUN_MEMBER, memberEffect, toolActionEffect, toolActionMember } from './members';
 import type { ShareGrant } from './sharing';
 
 /** A slate runs on the cloud: its own space is the root, so `vfs://x` is `/x`. */
@@ -216,7 +216,7 @@ function routeAiCall(binding: Extract<SlateBinding, { kind: 'ai' }>, request: Sl
   const { member, args } = request;
   const payload = args[0];
 
-  if (member !== 'shell') return Effect.fail(new KinuError('denied', `${name} offers run({ prompt, system?, tier? }) for one model call`));
+  if (member !== AI_RUN_MEMBER) return Effect.fail(new KinuError('denied', `${name} offers run({ prompt, system?, tier? }) for one model call`));
 
   if (args.length !== 1 || !isJsonObject(payload)) return Effect.fail(new KinuError('bad_input', `${name}.run takes one { prompt, system?, tier? } object`));
 
@@ -374,7 +374,7 @@ function admitViewer(route: SlateBindingRoute, input: ViewerBindingCallInput): E
     }
 
     case 'agent': return Effect.map(admitted('send', 'mutate'), (call) => ({ ...call, route: { ...route, viewer: input.viewer.subject } }));
-    case 'ai': return admitted('shell', 'mutate');
+    case 'ai': return admitted(AI_RUN_MEMBER, 'mutate');
     case 'app': {
       if (!grant.slates.includes(route.id)) {
         return Effect.fail(new KinuError('denied', `Slate ${id} does not grant ${name}.${route.method} to viewers`));

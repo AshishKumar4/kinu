@@ -140,7 +140,7 @@ export interface ActivitySnapshot {
 		context: ContextComposition | null;
 		modelId: string | null;
 		/** A machine's `name` is read now: null once it is removed. */
-		route: { kind: 'device'; id: string; name: string | null } | { kind: 'container' } | null;
+		route: { kind: 'device'; id: string; name: string | null } | null;
 	} | null;
 	/** Resolved model's context window; null when the catalog has not answered. */
 	contextWindow: number | null;

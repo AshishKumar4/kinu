@@ -1,28 +1,26 @@
 #!/usr/bin/env bun
 /**
- * THE EVAL REVIEWER'S CODEX LOGINS, on a deployment that lacks them. The reviewer moves to the owner's ChatGPT Pro logins
- * (`REVIEW_ACCOUNTS`, evals/src/config.ts), and each is the eval identity's own sign-in through the product's device-code
+ * THE EVAL REVIEWER'S CHATGPT LOGINS, on a deployment that lacks them. The reviewer runs on the owner's ChatGPT Pro logins
+ * (`REVIEW_ACCOUNTS`, evals/src/config.ts), and each is the eval identity's own sign-in through the product's paste-back
  * flow: a login's refresh token rotates on use, so none is copied from a machine that holds one. For each login
- * `GET /api/user/credentials` does not list, this starts the sign-in for that account, prints where to approve it and
- * the code, and waits while the owner approves it in a browser. One the deployment holds is left alone, so a deploy asks
+ * `GET /api/user/credentials` does not list, this starts the sign-in for that account, prints where to sign in, and reads
+ * the address the owner's browser lands on, pasted back here. One the deployment holds is left alone, so a deploy asks
  * only after a reset wiped it. With no terminal to ask at, it asks nothing and says which login is missing. Then it reads
- * whether the reviewer's model answers a real call on each login, which `REVIEW_MODELS` tries first. It prints
- * outcomes and ChatGPT account ids, never a token; whatever is missing is a notice in the deploy's report and the exit
- * is 1.
+ * whether the reviewer's model answers a real call on each login, which `REVIEW_MODELS` tries first. It prints outcomes
+ * and the signed-in email, never a token; whatever is missing is a notice in the deploy's report and the exit is 1.
  *   bun evals/scripts/reviewer-sign-in.ts <origin>
  */
-import { setTimeout as sleep } from 'node:timers/promises';
 import * as v from 'valibot';
-import { accountCredentialKey, CODEX_CRED_KEY, DEV_IDENTITY_HEADER, ModelTestResultSchema } from '@kinu.run/core';
+import { DEV_IDENTITY_HEADER, ModelTestResultSchema } from '@kinu.run/core';
 import { evalWebIdentityEnv } from '@kinu.run/test-utils';
-import { codexReviewModel, REVIEW_ACCOUNTS } from '../src/config';
+import { REVIEW_ACCOUNTS, reviewLogin, type ReviewAccount } from '../src/config';
 import { recordNotice } from '../../scripts/deploy-report';
 
 const CredentialsSchema = v.array(v.looseObject({ key: v.string() }));
 
-const StartSchema = v.object({ userCode: v.string(), portalURL: v.string(), pollIntervalSec: v.number() });
+const StartSchema = v.object({ authorizeUrl: v.string(), redirectUri: v.string() });
 
-const PollSchema = v.object({ connected: v.boolean(), accountId: v.optional(v.string()), error: v.optional(v.string()) });
+const FinishedSchema = v.object({ outcome: v.string(), email: v.nullable(v.string()) });
 
 /** One call to the deployment as eval-service, its answer parsed by `schema`; a refusal throws in the deployment's words. */
 async function answered<Schema extends v.GenericSchema>(schema: Schema, origin: string, path: string, init: RequestInit): Promise<v.InferOutput<Schema>> {
@@ -33,33 +31,31 @@ async function answered<Schema extends v.GenericSchema>(schema: Schema, origin: 
   return v.parse(schema, await response.json());
 }
 
-/** Sign `account` in by the device code, waiting on the owner's approval; the outcome, said without a token. */
-async function signIn(origin: string, headers: Record<string, string>, account: string): Promise<string | null> {
-  const started = await answered(StartSchema, origin, '/api/user/codex/start', {
-    method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ account }),
-  });
+/** The next line typed here: the address the owner's browser landed on. */
+async function pasted(): Promise<string> {
+  for await (const line of console) return line.trim();
 
-  console.log(`reviewer-sign-in: approve the reviewer's ChatGPT login ${account} at ${started.portalURL} with the code ${started.userCode}`);
+  return '';
+}
 
-  // The device code expires on OpenAI's side, which the poll answers as an error; nothing here bounds the wait.
-  for (;;) {
-    await sleep(started.pollIntervalSec * 1000);
+/** Sign `account` in by paste-back, waiting on the owner; what went wrong, said without a token, or null. */
+async function signIn(origin: string, headers: Record<string, string>, account: ReviewAccount): Promise<string | null> {
+  const posted = (body: string) => ({ method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body });
+  const started = await answered(StartSchema, origin, '/api/user/chatgpt/paste/start', posted(JSON.stringify({ account })));
 
-    const polled = await answered(PollSchema, origin, '/api/user/codex/poll', { method: 'POST', headers });
+  console.log(`reviewer-sign-in: sign the reviewer's ChatGPT login ${account} in at ${started.authorizeUrl}`);
+  console.log(`reviewer-sign-in: then paste the address your browser lands on (${started.redirectUri}?…) and press Enter`);
+  const finished = await answered(FinishedSchema, origin, '/api/user/chatgpt/paste/finish', posted(JSON.stringify({ url: await pasted() })));
 
-    if (polled.connected) {
-      console.log(`reviewer-sign-in: ${account} signed in at ${origin} as ChatGPT account ${polled.accountId ?? 'unnamed'}`);
+  if (finished.outcome !== 'signed_in') return `${account} was not signed in: ${finished.outcome}`;
+  console.log(`reviewer-sign-in: ${account} signed in at ${origin} as ${finished.email ?? 'an unnamed ChatGPT account'}`);
 
-      return null;
-    }
-
-    if (polled.error !== undefined) return `${account} was not signed in: ${polled.error}`;
-  }
+  return null;
 }
 
 /** The login `account` held, or asked of the owner when it is not and a terminal is here to ask at; what is missing. */
-async function provision(origin: string, headers: Record<string, string>, held: ReadonlySet<string>, account: string): Promise<string | null> {
-  if (held.has(accountCredentialKey(CODEX_CRED_KEY, account))) {
+async function provision(origin: string, headers: Record<string, string>, held: ReadonlySet<string>, account: ReviewAccount): Promise<string | null> {
+  if (held.has(reviewLogin(account).key)) {
     console.log(`reviewer-sign-in: ${origin} holds the reviewer's login ${account}`);
 
     return null;
@@ -102,9 +98,9 @@ if (import.meta.main) {
   }
 
   // A real call, as the reviewer will make it: the menu lists no account-qualified spec, and refuses a provider whose
-  // several accounts have no default, so a listing cannot say whether `codex@<account>/…` answers.
+  // several accounts have no default, so a listing cannot say whether `chatgpt@<account>/…` answers.
   for (const account of REVIEW_ACCOUNTS) {
-    const spec = codexReviewModel(account);
+    const { spec } = reviewLogin(account);
 
     const tested = await answered(ModelTestResultSchema, origin, '/api/user/models/test', {
       method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ spec }),
@@ -119,7 +115,7 @@ if (import.meta.main) {
   for (const found of findings) {
     console.error(`reviewer-sign-in: ${found}`);
 
-    if (report !== '') recordNotice(report, { phase: 'provision', what: "the eval reviewer's Codex logins", notice: found });
+    if (report !== '') recordNotice(report, { phase: 'provision', what: "the eval reviewer's ChatGPT logins", notice: found });
   }
 
   process.exit(findings.length === 0 ? 0 : 1);

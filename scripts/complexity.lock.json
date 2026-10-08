@@ -282,10 +282,6 @@
       "complexity": 28
     },
     {
-      "key": "scripts/egress-interception.ts#containerUseReasons>walk",
-      "complexity": 28
-    },
-    {
       "key": "scripts/error-model.ts#mechanismOf",
       "complexity": 28
     },

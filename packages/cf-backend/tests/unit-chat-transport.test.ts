@@ -15,7 +15,7 @@ import { socketConnection } from './helpers/bindings';
 
 const FrameSchema = v.looseObject({
   type: v.string(), id: v.optional(v.string()), body: v.optional(v.string()), done: v.optional(v.boolean()), landed: v.optional(v.string()),
-  replay: v.optional(v.boolean()), replayComplete: v.optional(v.boolean()), restated: v.optional(v.boolean()),
+  replay: v.optional(v.boolean()), replayComplete: v.optional(v.boolean()),
 });
 
 /** The loop's side of the wire: a refused send rejects with the loop's classified error, a faulting one
@@ -173,13 +173,13 @@ function chunks(parts: UIMessageChunk[]): ReadableStream<UIMessageChunk> {
 const turnStart = (turnId: string, messageId: string, carried: readonly string[] = [], finishedSteps = 0): SessionEvent =>
   ({ type: 'turn-start', kind: 'user', text: 'x', workMode: 'build', turnId, messageId, carried, finishedSteps });
 
-/** A tab's replay, a frame a line: `R ` marks a chunk of a step restated from the ledger. */
+/** A tab's replay, a frame a line: `R ` marks a chunk of a step restated from the ledger, by the id it is drawn under. */
 function replayOf(frames: readonly string[]): string[] {
   return frames.map((text) => v.parse(FrameSchema, JSON.parse(text))).filter((frame) => frame.replay === true).map((frame) => {
     if (frame.replayComplete === true) return 'complete';
-    const chunk = v.parse(v.looseObject({ type: v.string(), delta: v.optional(v.string()), toolCallId: v.optional(v.string()) }), JSON.parse(frame.body ?? ''));
+    const chunk = v.parse(v.looseObject({ type: v.string(), id: v.optional(v.string()), delta: v.optional(v.string()), toolCallId: v.optional(v.string()) }), JSON.parse(frame.body ?? ''));
 
-    return [frame.restated === true ? 'R' : '', chunk.type, chunk.delta ?? '', chunk.toolCallId ?? ''].filter((word) => word !== '').join(' ');
+    return [chunk.id?.startsWith('restated:') === true ? 'R' : '', chunk.type, chunk.delta ?? '', chunk.toolCallId ?? ''].filter((word) => word !== '').join(' ');
   });
 }
 
@@ -522,7 +522,7 @@ describe('ChatWireTransport', () => {
     const second = h.connection('c2');
     h.history.push({ id: 'input-req-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] });
     await h.transport.onConnect(second);
-    expect(JSON.parse(h.connectionFrames('c2')[0] ?? '{}')).toEqual({ type: 'cf_agent_stream_resuming', id: 'req-1', turnId: 'input-req-1' });
+    expect(JSON.parse(h.connectionFrames('c2')[0] ?? '{}')).toEqual({ type: 'cf_agent_stream_resuming', id: 'req-1' });
     expect(v.parse(v.looseObject({ type: v.string(), messages: v.array(v.object({ id: v.string() })) }), JSON.parse(h.connectionFrames('c2')[1] ?? '{}'))).toMatchObject({
       type: 'cf_agent_chat_messages', messages: [{ id: 'input-req-1' }],
     });
@@ -593,7 +593,7 @@ describe('ChatWireTransport', () => {
     await h.transport.onMessage(joining, JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: 'req-1' }));
 
     expect(replayOf(h.connectionFrames('c2'))).toEqual([
-      'start', 'R start-step', 'R text-start', 'R text-delta one', 'R text-end', 'R finish-step', 'start-step', 'text-start', 'text-delta tw', 'complete',
+      'start', 'start-step', 'R text-start', 'R text-delta one', 'R text-end', 'finish-step', 'start-step', 'text-start', 'text-delta tw', 'complete',
     ]);
     await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: 'one', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
     await h.land(answered);
@@ -653,8 +653,8 @@ describe('ChatWireTransport', () => {
     await revived.onMessage(joining, JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: resuming.id }));
 
     expect(replayOf(h.connectionFrames('c2'))).toEqual([
-      'start', 'R start-step', 'R tool-input-available call_0', 'R tool-output-available call_0', 'R finish-step',
-      'R start-step', 'R tool-input-available call_1', 'R tool-output-error call_1', 'R finish-step',
+      'start', 'start-step', 'tool-input-available call_0', 'tool-output-available call_0', 'finish-step',
+      'start-step', 'tool-input-available call_1', 'tool-output-error call_1', 'finish-step',
       'start-step', 'text-start', 'text-delta three', 'complete',
     ]);
   });
@@ -667,7 +667,7 @@ describe('ChatWireTransport', () => {
   // evicted turn left active; the resumed turn opened a new stream and the tab, pending for the old one, missed it.
   // 2026-09-30 (F2, staging a4e564ce1): told nothing resumes, a tab had no partial to read (the transcript holds an
   // answer from its commit), and the re-drive streamed under an id no client held, so the eval client never heard it.
-  test('a tab that connects after an eviction waits on the owed turn, then follows its re-drive by the turn\'s id', async () => {
+  test('a tab that connects after an eviction waits on the owed turn, then follows its re-drive', async () => {
     const h = harness();
     const first = h.connection('c1');
     await h.transport.onMessage(first, chatRequest('req-1', 'hello'));
@@ -684,7 +684,7 @@ describe('ChatWireTransport', () => {
 
     expect(told.map((frame) => frame.type))
       .toEqual(['cf_agent_stream_pending', 'cf_agent_chat_messages', 'cf_agent_stream_pending', 'cf_agent_stream_resuming']);
-    expect(resuming).toMatchObject({ turnId: 'input-req-1', probeId: 'p-1' });
+    expect(resuming).toMatchObject({ probeId: 'p-1' });
 
     await revived.onMessage(second, JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: resuming?.id }));
     await revived.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 'text-0' }, { type: 'text-delta', id: 'text-0', delta: 'resumed' }]));
