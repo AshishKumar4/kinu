@@ -22,10 +22,17 @@
  *  - `wakes`: objects ranked by startups per hour; `findWakeLoops` flags loops.
  *  - `version <version-id>`: what one deployed version did on its own (L18), each a finding however its tests went:
  *    an invocation that ended in an uncaught exception or that the platform ended (a reset), a terminal effect that
- *    failed or was left owed, and an object woken {@link ALERT_THRESHOLDS}.startupsPerHour or more times in an hour,
- *    by startups (a wake loop) or alarms (a storm). Exits 1 on a finding, and writes each into the deploy's report
- *    when KINU_DEPLOY_REPORT names one. Staging, under the tiers and the evals on 2026-09-30, took a median of 2
- *    alarms per object-hour, p90 4, at most 16.
+ *    failed or was left owed, an object started {@link ALERT_THRESHOLDS}.startupsPerHour or more times in an hour (a
+ *    wake loop), and any idle wake: an alarm with nothing to watch, no invocation of its object but alarms and no
+ *    model call the object opened within {@link IDLE_WAKE_DISTANCE_MS}, the same target 0 as the durability canary's
+ *    idle window. It does not count alarms busy beside their object's work: the SDK's keepAlive heartbeat, a lap or
+ *    a timer that served a live turn, or a turn that runs inside alarm invocations. Raw alarm counts measured that
+ *    work instead (staging fb848438c, 2026-10-08: 46 object-hours at 30-122 alarms, every one of 2,600 alarms within
+ *    five minutes of its object's own work), while the event-drain storm's 3,041 alarms came 709 then 2,332 an hour
+ *    with none. What an alarm watches without a call or a model call reads as idle here, and its finding names the
+ *    object for `timeline` to say which: Nimbus's 5-second resident keep-alive while a silent socket is attached, a
+ *    devbox's minute heartbeat for its container, a timer whose work makes no model call. Exits 1 on a finding, and
+ *    writes each into the deploy's report when KINU_DEPLOY_REPORT names one.
  *
  * A startup is counted by `actor.startup` (one per workspace object
  * activation). Hours before that event shipped fall back to
@@ -84,6 +91,14 @@ const WRANGLER = parseJsonc(readFileSync(WRANGLER_CONFIG, 'utf8'), WranglerRef, 
 const ACCOUNT = WRANGLER.account_id;
 
 const HOUR_MS = 3_600_000;
+
+const MINUTE_MS = 60_000;
+
+/** An alarm this close to its object's own work served it; past it, nothing was left to watch. */
+export const IDLE_WAKE_DISTANCE_MS = 5 * MINUTE_MS;
+
+/** Objects a per-minute read keeps; a read that reaches it is capped, and an object it drops would read as idle. */
+const MINUTE_GROUPS_CAP = 2000;
 
 const MODES = ['live', 'query', 'timeline', 'errors', 'wakes', 'version'] as const;
 
@@ -426,9 +441,14 @@ export class Telemetry {
 
   /** Counts per group per hour. */
   async hourly(opts: { filters: readonly Filter[]; groupBy: readonly string[]; limit?: number }): Promise<{ groups: string[]; hour: number; count: number }[]> {
+    return (await this.buckets(opts, HOUR_MS)).map(({ groups, at, count }) => ({ groups, hour: at, count }));
+  }
+
+  /** Counts per `bucketMs` bucket; `at` is the bucket's start. */
+  async buckets(opts: { filters: readonly Filter[]; groupBy: readonly string[]; limit?: number }, bucketMs: number): Promise<{ groups: string[]; at: number; count: number }[]> {
     const result = await this.result({
       view: 'calculations',
-      granularity: HOUR_MS,
+      granularity: bucketMs,
       parameters: {
         datasets: ['cloudflare-workers'],
         filters: this.filters(opts.filters),
@@ -442,7 +462,7 @@ export class Telemetry {
     return (result.calculations[0]?.series ?? []).flatMap((bucket) => bucket.data.map((a) => ({
       groups: a.groups.map((g) => g.value),
       // The API writes UTC bucket starts as `YYYY-MM-DD HH:MM:SS`.
-      hour: Math.floor(Date.parse(`${bucket.time.replace(' ', 'T')}Z`) / HOUR_MS) * HOUR_MS,
+      at: Math.floor(Date.parse(`${bucket.time.replace(' ', 'T')}Z`) / bucketMs) * bucketMs,
       count: a.value,
     })));
   }
@@ -840,7 +860,33 @@ export interface VersionRead {
     readonly terminal: TerminalEffectStates;
   };
   readonly startups: readonly StartupHour[];
-  readonly alarms: readonly { readonly object: string; readonly hour: number; readonly count: number }[];
+  /** Alarms with nothing to watch, by object-hour; see {@link idleWakeHours}. */
+  readonly idleWakes: readonly ObjectHourCount[];
+}
+
+export interface ObjectMinuteCount { readonly object: string; readonly minute: number; readonly count: number }
+
+export interface ObjectHourCount { readonly object: string; readonly hour: number; readonly count: number }
+
+/** The alarms in `alarms` with no `work` minute of their object within {@link IDLE_WAKE_DISTANCE_MS}, by object-hour. */
+export function idleWakeHours(alarms: readonly ObjectMinuteCount[], work: readonly ObjectMinuteCount[]): ObjectHourCount[] {
+  const worked = new Set(work.map((row) => `${row.object}@${String(row.minute)}`));
+  const idle = new Map<string, ObjectHourCount>();
+
+  for (const alarm of alarms) {
+    let near = false;
+
+    for (let offset = -IDLE_WAKE_DISTANCE_MS; offset <= IDLE_WAKE_DISTANCE_MS && !near; offset += MINUTE_MS) {
+      near = worked.has(`${alarm.object}@${String(alarm.minute + offset)}`);
+    }
+
+    if (near) continue;
+    const hour = Math.floor(alarm.minute / HOUR_MS) * HOUR_MS;
+    const key = `${alarm.object}@${String(hour)}`;
+    idle.set(key, { object: alarm.object, hour, count: (idle.get(key)?.count ?? 0) + alarm.count });
+  }
+
+  return [...idle.values()];
 }
 
 /** One finding: `what` names its kind, stable from deploy to deploy, so a report can say whether it is new. */
@@ -900,8 +946,8 @@ export function versionFindings(read: VersionRead): VersionFinding[] {
     findings.push({ what: 'a wake loop', finding: `object ${loop.object} started ${String(loop.peakPerHour)} times in an hour, ${String(loop.loopHours)} such hour(s)` });
   }
 
-  for (const storm of read.alarms.filter((row) => row.count >= ALERT_THRESHOLDS.startupsPerHour)) {
-    findings.push({ what: 'an alarm storm', finding: `object ${storm.object} took ${String(storm.count)} alarms in the hour from ${iso(storm.hour)}` });
+  for (const idle of read.idleWakes) {
+    findings.push({ what: 'idle wakes', finding: `object ${idle.object} woke ${String(idle.count)} time(s) with nothing to watch in the hour from ${iso(idle.hour)}` });
   }
 
   return findings;
@@ -993,7 +1039,10 @@ async function versionRead(t: Telemetry, versionId: string): Promise<VersionRead
     throw new Error('terminal-effect history is capped or sampled; narrow the window before classifying its sequences');
   }
 
-  const alarms = await t.hourly({ filters: [...invocations, eq('$workers.eventType', 'alarm')], groupBy: [DO_ID], limit: 500 });
+  const alarm = eq('$workers.eventType', 'alarm');
+  const alarms = await perMinute(t, [...invocations, alarm]);
+  const called = await perMinute(t, [...invocations, { ...alarm, operation: 'neq' }]);
+  const modelCalls = await perMinute(t, [...scope, eq('$metadata.type', 'cf-worker'), eq('event', 'provider.stream_opened')]);
   const total = (rows: readonly { readonly count: number }[]): number => rows.reduce((sum, row) => sum + row.count, 0);
 
   const read = {
@@ -1013,8 +1062,19 @@ async function versionRead(t: Telemetry, versionId: string): Promise<VersionRead
       terminal: terminalEffectStates(terminal),
     },
     startups: await startupHours(t, scope),
-    alarms: alarms.map((row) => ({ object: row.groups[0] ?? '', hour: row.hour, count: row.count })),
+    idleWakes: idleWakeHours(alarms, [...called, ...modelCalls]),
   };
+}
+
+/** Per object and minute. */
+async function perMinute(t: Telemetry, filters: readonly Filter[]): Promise<ObjectMinuteCount[]> {
+  const rows = await t.buckets({ filters, groupBy: [DO_ID], limit: MINUTE_GROUPS_CAP }, MINUTE_MS);
+
+  if (new Set(rows.map((row) => row.groups[0])).size >= MINUTE_GROUPS_CAP) {
+    throw new Error('a per-minute read reached its object cap; narrow the window before reading idle wakes');
+  }
+
+  return rows.map((row) => ({ object: row.groups[0] ?? '', minute: row.at, count: row.count }));
 }
 
 /** `version`: its findings printed and, under a deploy, written into its report. A window that cannot be read is a

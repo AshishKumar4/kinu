@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import { ALERT_THRESHOLDS } from '@kinu.run/core/analytics';
-import { terminalEffectStates, type VersionRead, versionFindings } from './prod-logs';
+import { idleWakeHours, terminalEffectStates, type VersionRead, versionFindings } from './prod-logs';
 
 const HOUR = 3_600_000;
 
-const quiet: VersionRead = { ended: [], thrown: [], deployResets: [], effects: { failed: 0, failedTurns: 0, terminal: { observations: 0, settled: [], owed: [] } }, startups: [], alarms: [] };
+const quiet: VersionRead = { ended: [], thrown: [], deployResets: [], effects: { failed: 0, failedTurns: 0, terminal: { observations: 0, settled: [], owed: [] } }, startups: [], idleWakes: [] };
 
 const HUNG = 'The Workers runtime canceled this request because it detected that your Worker\'s code had hung and would never generate a response.';
 
@@ -77,19 +77,34 @@ describe('what one deployed version did, as a deploy reports it', () => {
     ]);
   });
 
-  // Staging under the tiers and the evals, 2026-09-30: at most 16 alarms in an object-hour, and at most 3 startups.
-  test('an object woken as often as the product calls a wake loop, by startups or alarms, is a finding, and the measured busiest is none', () => {
+  // Staging under the tiers and the evals, 2026-09-30: at most 3 startups in an object-hour.
+  test('an object started as often as the product calls a wake loop is a finding, and the measured busiest is none', () => {
     const loop = ALERT_THRESHOLDS.startupsPerHour;
 
     const findings = versionFindings({
       ...quiet,
       startups: [{ object: 'looping', hour: 0, startups: loop }, { object: 'busiest-measured', hour: 0, startups: 3 }],
-      alarms: [{ object: 'storming', hour: HOUR, count: loop }, { object: 'busiest-measured', hour: HOUR, count: 16 }],
     });
 
-    expect(findings).toEqual([
-      { what: 'a wake loop', finding: `object looping started ${String(loop)} times in an hour, 1 such hour(s)` },
-      { what: 'an alarm storm', finding: `object storming took ${String(loop)} alarms in the hour from 1970-01-01T01:00:00Z` },
+    expect(findings).toEqual([{ what: 'a wake loop', finding: `object looping started ${String(loop)} times in an hour, 1 such hour(s)` }]);
+  });
+
+  // Staging 36acc5de2 and fb848438c, 2026-10-08: a failed drain re-armed a second ahead after its eval ended (1,816 alarms
+  // in an hour, nothing else of its object), while live turns took 30-122 alarms an hour beside their own model calls.
+  test('an alarm with nothing to watch is an idle wake, however few; an alarm beside its object\'s own work is none', () => {
+    const minute = 60_000;
+
+    const minutes = (object: string, from: number, to: number, count = 1) =>
+      Array.from({ length: to - from }, (_, at) => ({ object, minute: HOUR + (from + at) * minute, count }));
+
+    const alarms = [...minutes('storming', 0, 60, 30), ...minutes('live-turn', 0, 60, 2), ...minutes('turn-ended', 0, 12)];
+    const work = [...minutes('storming', 0, 1), ...minutes('live-turn', 0, 60).filter((_, at) => at % 4 === 0), ...minutes('turn-ended', 0, 3)];
+    const idle = idleWakeHours(alarms, work);
+
+    expect(idle).toEqual([{ object: 'storming', hour: HOUR, count: 54 * 30 }, { object: 'turn-ended', hour: HOUR, count: 4 }]);
+    expect(versionFindings({ ...quiet, idleWakes: idle })).toEqual([
+      { what: 'idle wakes', finding: 'object storming woke 1620 time(s) with nothing to watch in the hour from 1970-01-01T01:00:00Z' },
+      { what: 'idle wakes', finding: 'object turn-ended woke 4 time(s) with nothing to watch in the hour from 1970-01-01T01:00:00Z' },
     ]);
   });
 });
