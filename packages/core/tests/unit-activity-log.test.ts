@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { initAllTables, readActivityLog, writeActivityLog } from '../src/index';
+import { initActivationTable, initAllTables, listActivations, readActivityLog, recordActivation, writeActivityLog } from '../src/index';
 import { makeSql, makeExecRaw } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
@@ -61,5 +61,24 @@ describe('readActivityLog', () => {
   test('an empty log reads empty', () => {
     const { sql, actor } = setup();
     expect(readActivityLog(sql, actor, 10)).toEqual([]);
+  });
+});
+
+// Telemetry dropped startup rows (staging 2026-10-08), so activations are counted from the ordinals the store keeps.
+describe('the activation ring', () => {
+  test('numbers every start in order and keeps the newest, never more than its slots', () => {
+    const db = new Database(':memory:');
+    const sql = makeSql(db);
+    // The ring's slot count.
+    const slots = 256;
+    initActivationTable(makeExecRaw(db));
+
+    const ordinals = Array.from({ length: slots + 44 }, (_, start) => recordActivation(sql, start, start % 2 === 0 ? 'v1' : null));
+    const kept = listActivations(sql);
+
+    expect(ordinals).toEqual(Array.from({ length: slots + 44 }, (_, start) => start + 1));
+    expect(kept).toHaveLength(slots);
+    expect(kept[0]).toEqual({ ordinal: 45, startedAt: 44, version: 'v1' });
+    expect(kept.at(-1)).toEqual({ ordinal: slots + 44, startedAt: slots + 43, version: null });
   });
 });

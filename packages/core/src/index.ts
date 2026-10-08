@@ -46,6 +46,8 @@ export {
 
 export { readActivityLog, writeActivityLog, type ActivityLogEntry } from './identity/activity-log';
 
+export { initActivationTable, listActivations, recordActivation, type Activation } from './identity/activations';
+
 export { ChatHistoryEntrySchema } from './types/chat';
 
 // Every composition root calls this and nothing else (tests/contract-workspace-schema.test.ts).

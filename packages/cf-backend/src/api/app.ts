@@ -26,6 +26,7 @@ import { clientErrorRoutes } from '../client-error/route';
 import { hubRoutes, webhookDeliveryRoutes } from '../events/routes';
 import { runEventsRoutes } from '../run-events-routes';
 import { evalAbortRoutes } from '../eval/abort-route';
+import { activationRoutes } from './activations-route';
 import { filesRoutes } from '../files-routes';
 import { terminalRouteDeps, terminalRoutes } from '../terminal-route';
 import { routeError, apiPath, beneath, type FamilyEnv } from './context';
@@ -117,6 +118,8 @@ app.use('/api/workspaces/:name/*', workspaceGate);
 mount(runEventsRoutes(REAL_CLOCK, workspaceAgent));
 
 mount(evalAbortRoutes);
+
+mount(activationRoutes);
 
 mount(hubRoutes(workspaceAgent));
 

@@ -88,7 +88,7 @@ import { nextAlarmTime } from '@kinu.run/core';
 import { accountDeps, CacheWarmingLane, CacheWarmStore } from '@kinu.run/core';
 import {
   EvolutionEngine, initWorkspaceActorTable, WorkspaceActorDirectory, ChildActorOperationSchema, type ActorHandle, type ActorReference, type ChildActorOperation, type ActorDirectoryResult,
-  readActivityLog,
+  readActivityLog, initActivationTable, listActivations, recordActivation, type Activation,
   summarizeSteps,
   // Whole-workspace spend by producer; `summarizeSteps` covers only this agent's turns.
   workspaceSpend, headStepSources, mergeAccountSpend, type SpendLedger,
@@ -2732,6 +2732,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * `rpc-surface.ts`, eval-service identity only (`eval/abort-route.ts`). ARCHITECTURE-DECISIONS
    * C3.
    */
+  /** The kept activations, oldest first: how often this workspace started, and on which build. */
+  activations(): Activation[] {
+    return this.storageRefusal === undefined ? listActivations(this.boundSql) : [];
+  }
+
   evalAbortActivation(): void {
     this.ctx.abort('eval-service: the activation was aborted on request');
   }
@@ -3159,6 +3164,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     )`);
     // Owned by this root: the container is the workspace's; subordinates ride their parent's.
     initSandboxLifecycleTable(execRaw);
+    initActivationTable(execRaw);
   }
 
   /** Written by the first claim or a fork, never by a start. */
@@ -3181,7 +3187,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async onStart(): Promise<void> {
     // A sibling's first RPC starts it too (agents 0.25); it is no workspace, so it records no startup.
     if (this.nimbusSibling) return;
-    diagnostics.event('actor.startup', { workspace: this.name });
+
+    // The ordinal is the count readers use; a pre-reset store, which takes no writes, numbers nothing.
+    if (this.storageRefusal === undefined) {
+      diagnostics.event('actor.startup', { workspace: this.name, activation: recordActivation(this.boundSql, Date.now(), this.env.CF_VERSION_METADATA?.id ?? null) });
+    }
 
     // An unborn workspace owes nothing: its first claim writes it.
     if (this.storageRefusal !== undefined || !this.workspaceBorn()) return;

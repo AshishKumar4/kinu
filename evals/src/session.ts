@@ -350,6 +350,10 @@ const WorkspaceEntrySchema = v.object({
   displayName: v.optional(v.string()),
 });
 
+const ActivationSchema = v.object({ ordinal: v.number(), startedAt: v.number(), version: v.nullable(v.string()) });
+
+const ActivationsSchema = v.object({ activations: v.array(ActivationSchema) });
+
 const RunPageSchema = v.variant('status', [
   v.object({
     status: v.literal('more'),
@@ -1938,6 +1942,13 @@ export class KinuPublicSession {
       this.socket?.close();
       this.socket = null;
     }
+  }
+
+  /** The workspace's kept activations, oldest first (`core/src/identity/activations.ts`). */
+  async activations(): Promise<readonly v.InferOutput<typeof ActivationSchema>[]> {
+    const answer = await this.getJson(`/api/workspaces/${encodeURIComponent(this.workspace)}/activations`, ActivationsSchema, 'read the workspace activations');
+
+    return answer.activations;
   }
 
   /** Every run id the workspace has recorded, newest activity first, over the paged `/runs` route. */

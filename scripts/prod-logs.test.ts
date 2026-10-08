@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { ALERT_THRESHOLDS } from '@kinu.run/core/analytics';
-import { idleWakeHours, terminalEffectStates, type VersionRead, versionFindings } from './prod-logs';
+import { idleWakeHours, ordinalHours, settledRead, terminalEffectStates, type VersionRead, versionFindings } from './prod-logs';
 
 const HOUR = 3_600_000;
 
@@ -129,4 +129,41 @@ describe('what one deployed version did, as a deploy reports it', () => {
       { what: 'idle wakes', finding: 'object turn-ended woke 4 time(s) with nothing to watch in the hour from 1970-01-01T01:00:00Z' },
     ]);
   });
+});
+
+// Staging 2026-10-08: an 08:19:16Z row was absent from a read at 10:25Z and present at 10:50Z.
+describe('a read that issues a verdict', () => {
+  const reader = (counts: readonly number[]) => {
+    let clock = 0;
+    let at = 0;
+
+    return {
+      read: () => Promise.resolve(counts[Math.min(at++, counts.length - 1)] ?? 0),
+      fingerprint: (count: number) => String(count), rows: (count: number) => count,
+      now: () => clock,
+      sleep: (ms: number) => {
+        clock += ms;
+
+        return Promise.resolve();
+      },
+      gapMs: 10, capMs: 60,
+    };
+  };
+
+  test('is settled once two reads a gap apart agree, and names what landed after the first', async () => {
+    expect(await settledRead(reader([5, 7, 7]))).toEqual({ settled: true, value: 7, reads: 3, lateRows: 2 });
+  });
+
+  test('is unsettled when its counts still move at the cap, however close they came', async () => {
+    expect(await settledRead(reader([1, 2, 3, 4, 5, 6, 7, 8]))).toEqual({ settled: false, last: 7, reads: 7, lateRows: 6 });
+  });
+});
+
+// Staging 2026-10-08: the canary's workspace started six times, and analytics kept two of its startup rows.
+test('activations are the ordinals\' deltas, so a dropped startup row loses no count', () => {
+  const hour = (at: number, first: number, last: number, object = 'canary') => ({ object, name: 'eval-canary', hour: at * HOUR, first, last });
+
+  expect(ordinalHours([hour(1, 4, 6), hour(2, 9, 9), hour(1, 1, 1, 'quiet')]).map((row) => [row.object, row.startups])).toEqual([
+    ['canary', 3], ['canary', 3], ['quiet', 1],
+  ]);
 });

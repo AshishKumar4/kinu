@@ -54,10 +54,15 @@ the workspace of the invocation it runs in, read from the Agents SDK's per-invoc
 (`attributeWorkspace`). Until 2026-09-26 such lines were unattributed: 366,725 of the 371,749
 event rows in the preceding 7 days had an empty index.
 
-Each workspace object writes an `actor.startup` row when it activates, and a
-wake pass that re-arms itself over unfinished work writes one
-`wake.unfinished_arms` row per arm, once per streak. The Metrics tab's
-`startups` panel lists the busiest workspace-hours. On 2026-09-26 two restart
+Each workspace object numbers every activation in its own storage
+(`core/src/identity/activations.ts`, a 256-row ring) and writes an
+`actor.startup` row carrying that ordinal. Every reader counts activations as
+ordinal deltas, never as rows: on 2026-10-08 telemetry dropped startup rows
+(17 of 257 objects one version served logged none) and Analytics Engine kept 2
+of one workspace's 6, while a later ordinal counts every lost one. A wake pass
+that re-arms itself over unfinished work writes one `wake.unfinished_arms` row
+per arm, once per streak. The Metrics tab's `startups` panel lists the busiest
+workspace-hours. On 2026-09-26 two restart
 loops ran at 120 activations an hour while 1,421 of 1,854 active object-hours
 in the week had under 5.
 
@@ -86,7 +91,7 @@ Measurements come from Analytics Engine and telemetry over the 7 days to 2026-09
 
 | Signal | Reads | Crosses | Measured |
 | --- | --- | --- | --- |
-| `fleet.wake_loop` | `actor.startup` rows per workspace-hour | 30+ startups in each of two consecutive hours | 1,421 of 1,854 object-hours with a startup had under 5 and 264 had 60+; 23 of 1,153 objects reached 30 in some hour. warm-forge-4d6acc02 peaked at 120 and the eval loop at 129. |
+| `fleet.wake_loop` | activations per workspace-hour, the `actor.startup` ordinal's delta | 30+ startups in each of two consecutive hours | 1,421 of 1,854 object-hours with a startup had under 5 and 264 had 60+; 23 of 1,153 objects reached 30 in some hour. warm-forge-4d6acc02 peaked at 120 and the eval loop at 129. |
 | `fleet.platform_kill` | invocation outcomes (`KINU_OBS_TOKEN`) | any out-of-memory kill, or 3+ objects over the wall-time limit, in an hour | Steady state is 0. The 71 OOM kills on 09-22..24 were one incident. On 09-26: 108 wall-time kills on 3 objects, all of them loopers. |
 | `fleet.provider_down` | `provider.error` by code | 5+ `denied`, or 100+ of any code, in an hour | one `denied` in 168 hours; the worst hour had 72 errors, from one 404 source |
 | `fleet.turn_failures` | settled turns | over 25% failed, once there are 20+ turns in the hour | 32 hours had 20+ turns; the failed share was p50 0% and p90 19%, and 27%, 45% and 86% in the incident hours |
