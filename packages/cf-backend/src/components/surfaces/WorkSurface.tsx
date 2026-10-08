@@ -1,13 +1,10 @@
 /** Workspace navigation: titled live previews first, then work/read surfaces. */
-import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
-import {
-  GaugeIcon, SparkleIcon,
-} from "@phosphor-icons/react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { GlobeIcon, SparkleIcon } from "@phosphor-icons/react";
 import type { SlateSummary, PendingAction, PlanReview } from "@kinu.run/core";
 import type { WorkspacePlanArrival } from "@/hooks/use-kinu";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { FilesFocus, HeadDeltas } from "@kinu.run/core";
-import { tabCls, tabStripH } from "@/components/ui/form";
 import type { AgentStatus, ExecutorOutput, ReadMoves } from "@/hooks/use-kinu";
 import type { AsyncResource } from "@/hooks/use-async-resource";
 import { executorLabel, type ExecutorInfo, type InspectedWork } from "@kinu.run/core";
@@ -32,22 +29,13 @@ import {
   type PanelAgent, type SlateSurfaceKind, type SurfaceKind,
 } from "@kinu.run/core";
 import { useSurfaceFocus } from "./use-surface-focus";
-import { useWheelScrollsSideways } from "@/hooks/use-wheel-scrolls-sideways";
+import { InspectorBar, type PageTab, type ToolTab } from "./InspectorBar";
 import { ConnectDeviceDialog } from "@/components/ConnectDevicePanel";
 
 const slateSurface = (id: string): SlateSurfaceKind => `${SLATE_PREFIX}${id}`;
 
 const slateId = (surface: SurfaceKind | null): string | null =>
   surface?.startsWith(SLATE_PREFIX) === true ? surface.slice(SLATE_PREFIX.length) : null;
-
-const SURFACE_LABEL = {
-  Changes: "Changes",
-  Work: "Work",
-  Files: "Files",
-  Swarms: "Swarms",
-  Agent: "Agent",
-  Environment: "Env",
-} satisfies Record<(typeof SURFACES)[number], string>;
 
 export interface WorkSurfaceProps {
   surface: SurfaceKind;
@@ -104,37 +92,6 @@ export interface WorkSurfaceProps {
   onForkLandingOpened?: () => void;
 }
 
-/** A surface can be selected without a click (deep link, restored tab); keep its tab in view. */
-function useSelectedTabInView(strip: RefObject<HTMLDivElement | null>, surface: SurfaceKind | null): void {
-  useEffect(() => {
-    const container = strip.current;
-
-    if (!container) return;
-
-    const reveal = () => {
-      const selected = container.querySelector('[aria-current="true"]');
-
-      if (!selected) return;
-      const viewport = container.getBoundingClientRect();
-      const tab = selected.getBoundingClientRect();
-
-      // Not laid out yet; scrolling now strands the strip.
-      if (container.clientWidth < tab.width) return;
-      const left = viewport.left + container.clientLeft;
-      const right = left + container.clientWidth;
-
-      if (tab.left < left) container.scrollLeft += tab.left - left;
-      else if (tab.right > right) container.scrollLeft += tab.right - right;
-    };
-
-    reveal();
-    const resized = new ResizeObserver(reveal);
-    resized.observe(container);
-
-    return () => resized.disconnect();
-  }, [strip, surface]);
-}
-
 /** The open Slate's pane: a fork's reach on landing, else its frame. */
 function OpenSlatePanel(props: WorkSurfaceProps & { readonly slate: string; readonly summary: SlateSummary | undefined }) {
   const reloadKey = props.slateReloads?.get(props.slate) ?? 0;
@@ -165,7 +122,6 @@ function ListingStatus({ error, starting = [], onRetry }: { error: string | null
 
 export function WorkSurface(props: WorkSurfaceProps) {
   const requested = props.surface;
-  const strip = useRef<HTMLDivElement>(null);
   const [changeCount, setChangeCount] = useState<number | null>(null);
   const content = { tabPresence: props.tabPresence, mctsTrees: props.mctsTrees, slates: props.slates, hasChanges: changeCount !== null };
   const ports = props.pinnedPorts.filter(port => !props.slates?.some(slate => port.executor === "workspace" && slate.port === port.port));
@@ -234,45 +190,37 @@ export function WorkSurface(props: WorkSurfaceProps) {
   const openConnect = useCallback(() => setConnecting(true), []);
   const closeConnect = useCallback(() => setConnecting(false), []);
 
-  useSelectedTabInView(strip, surface);
-  useWheelScrollsSideways(strip);
+  const pages: PageTab[] = [
+    ...(props.slates ?? []).map((slate) => ({
+      key: slateSurface(slate.id), title: slate.title, Icon: SparkleIcon,
+      action: props.workspace === undefined ? undefined : <ShareSlateControl workspace={props.workspace} slate={slate} rpc={props.rpc} />,
+    })),
+    ...ports.map((port) => ({
+      key: `preview:${port.executor}:${port.port}` as const,
+      title: port.name === undefined || port.name === "" ? `${port.executor} :${port.port}` : port.name,
+      Icon: GlobeIcon,
+    })),
+  ];
+
+  const waiting = props.pendingActions.length;
+
+  // Work counts what waits on the reader, in the accent; Changes counts the files moved.
+  const tools: ToolTab[] = [
+    ...SURFACES.filter((s) => s === surface || surfaceHasContent(s, content)).map((key): ToolTab => {
+      if (key === "Work" && waiting > 0) return { key, count: { value: waiting, accent: true } };
+
+      if (key === "Changes" && changeCount !== null && changeCount > 0) return { key, count: { value: changeCount, accent: false } };
+
+      return { key };
+    }),
+    { key: ACTIVITY_SURFACE },
+  ];
+
   const bodyFit = previewSelected ? "overflow-hidden" : "overflow-y-auto py-[18px] pl-[18px] pr-6";
 
   return (
     <div className="@container flex flex-col h-full p-sidebar">
-      {/* Activity sits outside the strip so it does not scroll away. */}
-      <div className={`border-b p-border shrink-0 flex items-stretch ${tabStripH}`}>
-        <div ref={strip} className={`p-tabstrip [--scroll-ground:var(--c-sidebar)] flex items-center min-w-0 flex-1 px-3 gap-0.5 -mb-px ${tabStripH}`}>
-          {props.slates?.map(slate => {
-            const kind = slateSurface(slate.id);
-
-            return <button key={kind} onClick={() => choose(kind)} title={slate.title} aria-label={slate.title}
-              aria-current={surface === kind ? "true" : undefined}
-              className={`${tabCls} text-left shrink-0 ${surface === kind ? "p-tab-active" : ""}`}>
-              <SparkleIcon size={14} /><span>{slate.title}</span>
-            </button>;
-          })}
-          {ports.map(port => {
-            const kind: SurfaceKind = `preview:${port.executor}:${port.port}`;
-            const title = port.name === undefined || port.name === "" ? `${port.executor} :${port.port}` : port.name;
-
-            return <button key={kind} onClick={() => choose(kind)} title={title} aria-label={title}
-              aria-current={surface === kind ? "true" : undefined}
-              className={`${tabCls} text-left shrink-0 ${surface === kind ? "p-tab-active" : ""}`}>{title}</button>;
-          })}
-          {SURFACES.filter(s => s === surface || surfaceHasContent(s, content)).map(s => (
-            <button key={s} onClick={() => choose(s)} title={s} aria-label={s}
-              aria-current={surface === s ? "true" : undefined}
-              className={`${tabCls} ${surface === s ? "p-tab-active p-accent" : ""}`}>
-              <span>{SURFACE_LABEL[s]}</span>
-              {s === "Work" && props.pendingActions.length > 0 && <span className="p-accent p-t-status">{props.pendingActions.length}</span>}
-              {s === "Changes" && changeCount !== null && changeCount > 0 && <span className="p-t-status p-text-3">{changeCount}</span>}
-            </button>
-          ))}
-        </div>
-        {/* Icons sit inside the strip's own bottom rule; `-mb-px` would leave a step. */}
-        <div className={`flex shrink-0 items-center border-b p-border ${tabStripH}`}>
-        <ShareSlateControl workspace={props.workspace} slate={openSlateSummary} rpc={props.rpc} />
+      <InspectorBar surface={surface} pages={pages} tools={tools} choose={choose} trailing={<>
         {chip !== null && (
           <button
             type="button"
@@ -280,21 +228,13 @@ export function WorkSurface(props: WorkSurfaceProps) {
             data-preview-ready
             title={chip.title}
             aria-label={`Preview ready: ${chip.title}`}
-            className="my-auto mr-1 inline-flex shrink-0 items-center gap-1.5 rounded-full border p-border p-accent-subtle px-2.5 py-1 text-[11px] font-medium p-accent transition-colors hover:p-elevated"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-full border p-border p-accent-subtle px-2.5 py-1 text-[11px] font-medium p-accent transition-colors hover:p-elevated"
           >
             <span className="size-1.5 rounded-full p-dot-accent p-dot-pulse" aria-hidden="true" />
             Preview ready
           </button>
         )}
-        <button
-          onClick={() => choose(ACTIVITY_SURFACE)}
-          aria-label="Activity"
-          title="Context, cost, and cache"
-          className={`${tabCls} mr-2 px-2.5 ${surface === ACTIVITY_SURFACE ? "p-tab-active" : ""}`}>
-          <GaugeIcon size={14} />
-        </button>
-        </div>
-      </div>
+      </>} />
 
       <div className={`flex-1 min-h-0 ${surface === "Changes" ? "hidden" : bodyFit}`}>
         <div className={surface === "Work" ? "" : "hidden"}>

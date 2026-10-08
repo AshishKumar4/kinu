@@ -878,10 +878,8 @@ const ClickScripts = {
     main.click();
   })()`,
   filesTab: `(() => {
-    const files = [...document.querySelectorAll('.p-tabstrip')]
-      .flatMap((el) => [...el.querySelectorAll('button')])
-      .find((b) => b.textContent?.trim() === 'Files');
-    if (files === undefined) throw new Error('no Files tab');
+    const files = document.querySelector('nav[aria-label="Workspace"] button[aria-label="Files"]');
+    if (!(files instanceof HTMLElement)) throw new Error('no Files tab');
     files.click();
   })()`,
 } as const;
@@ -1055,12 +1053,12 @@ export async function rightPanelKeepsItsState(target: FlowTarget): Promise<Panel
 
     await page.evaluate(ClickScripts.filesTab);
     await until(page, 'the Files tab, active',
-      `[...document.querySelectorAll('.p-tabstrip')].flatMap(el => [...el.querySelectorAll('button')]).some(b => b.textContent.trim() === 'Files' && b.className.includes('p-tab-active'))`);
+      `document.querySelector('nav[aria-label="Workspace"] button[aria-label="Files"][aria-current="true"]') !== null`);
 
     const marked = v.parse(
       v.object({ ok: v.literal(true), scrollTop: v.number() }),
       await page.evaluate(() => {
-        const strip = document.querySelector('#inspector .p-tabstrip');
+        const strip = document.querySelector('#inspector nav[aria-label="Workspace"]');
         const content = strip?.parentElement?.parentElement?.children[1];
 
         if (!content) return { ok: false as const, scrollTop: -1 };

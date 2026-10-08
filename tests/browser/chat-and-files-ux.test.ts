@@ -906,7 +906,7 @@ describe('the drive, browsing the one composite plane', () => {
     expect(observed.filesRoot.entries).toEqual(expect.arrayContaining(['home', 'pc', 'sandbox']));
     // The origin badge names the machine, not the executor id — the device
     // wears the user's own device name, per the consent naming contract.
-    expect(observed.filesRoot.badges).toEqual(expect.arrayContaining(["Ashish's MacBook", 'Sandbox']));
+    expect(observed.filesRoot.badges).toEqual(expect.arrayContaining(["Ashish's MacBook", 'Cloud computer']));
   });
 
   test('crossing into /pc lists the machines; a machine lands inside its consented directory', () => {
@@ -962,7 +962,7 @@ describe('the Environment tab, as a user reads it', () => {
     expect(byName["Ashish's MacBook"]?.kind).toContain('Your PC');
     expect(byName["Ashish's MacBook"]?.mount).toBe('/pc');
     expect(byName['Workspace']?.mount).toBe('/');
-    expect(byName['Sandbox']?.mount).toBe('/sandbox');
+    expect(byName['Cloud computer']?.mount).toBe('/sandbox');
   });
 
   test('capability doctrine is model-facing and renders NOWHERE in user UI', () => {
@@ -2189,9 +2189,9 @@ describe('linking a machine happens on the surface that asked for it', () => {
       const page = await newPage();
       await page.setViewport({ width: 1100, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=environment&offline=device&connect=1`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('[data-env-card="device"] [data-env-connect]');
+      await page.waitForSelector('[data-env-connect]');
 
-      await page.click('[data-env-card="device"] [data-env-connect]');
+      await page.click('[data-env-connect]');
       await page.waitForSelector('[role="dialog"] [data-connect-state="ready"]');
       // In place: the Environment surface is still mounted behind the dialog,
       // and the URL never moved.
@@ -2234,8 +2234,8 @@ describe('linking a machine happens on the surface that asked for it', () => {
       const page = await newPage();
       await page.setViewport({ width: 1100, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=environment&offline=device&connect=stall`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('[data-env-card="device"] [data-env-connect]');
-      await page.click('[data-env-card="device"] [data-env-connect]');
+      await page.waitForSelector('[data-env-connect]');
+      await page.click('[data-env-connect]');
       await page.waitForSelector('[role="dialog"] [data-connect-start]');
       await page.click('[role="dialog"] [data-connect-start]');
       await page.waitForSelector('[data-connect-waiting]');
@@ -2262,7 +2262,7 @@ describe('linking a machine happens on the surface that asked for it', () => {
       const page = await newPage();
       await page.setViewport({ width: 1100, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=environment&offline=device&connect=fail-first`, { waitUntil: 'networkidle0' });
-      await page.click('[data-env-card="device"] [data-env-connect]');
+      await page.click('[data-env-connect]');
       await page.waitForSelector('[role="dialog"] [data-connect-start]');
 
       await page.click('[role="dialog"] [data-connect-start]');
@@ -3108,7 +3108,7 @@ describe('Now lists what is still owed, by the phase its store records', () => {
       const page = await newPage();
       await page.setViewport({ width: 1280, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage&owed=all`, { waitUntil: 'networkidle0' });
-      await page.click('.p-tabstrip button[aria-label="Work"]');
+      await page.click('nav[aria-label="Workspace"] button[aria-label="Work"]');
       // The frame's plan awaits review, so the tab opens on it.
       await page.click('[data-back-to-work]');
       await page.waitForSelector('[data-inspected]');

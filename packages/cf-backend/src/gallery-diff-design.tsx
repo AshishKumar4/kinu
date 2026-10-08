@@ -2,7 +2,6 @@ import { Effect } from "effect";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import type { UIMessage } from "ai";
-import { GaugeIcon } from "@phosphor-icons/react";
 import {
   diffLines, fileDiff, inNoteOrder, parseGitDiff, type ChangeNotesCard, type ChangeSet, type DiffAnchor, type FileDiff, type FileStatus,
   type PanelAgent, type ReviewAnnotation, type TurnLiveness,
@@ -12,7 +11,7 @@ import { WorkspaceHeader } from "@/components/WorkspaceHeader";
 import { MessageView } from "@/components/MessageView";
 import { Composer, type ChatMode } from "@/components/Composer";
 import { ModelPicker } from "@/components/ModelPicker";
-import { tabCls, tabStripH } from "@/components/ui/form";
+import { InspectorBar } from "@/components/surfaces/InspectorBar";
 import { ChangesPanel, LAYOUT_KEY } from "@/components/surfaces/changes/ChangesPanel";
 import { ReviewBar } from "@/diff-design/ReviewBar";
 import { FeedbackCard } from "@/components/surfaces/changes/FeedbackCard";
@@ -526,24 +525,6 @@ function ChatColumn({ wide, sent, onOpenNote }: { wide: boolean; sent: readonly 
   );
 }
 
-function TabStrip({ label, count }: { label: string; count: number | null }) {
-  return (
-    <div className={`flex shrink-0 items-stretch border-b p-border ${tabStripH}`}>
-      <div className={`p-tabstrip [--scroll-ground:var(--c-sidebar)] -mb-px flex min-w-0 flex-1 items-center gap-0.5 px-3 ${tabStripH}`}>
-        {["Work", label, "Files", "Agent", "Environment"].map((tab) => (
-          <button key={tab} type="button" aria-current={tab === label ? "true" : undefined} className={`${tabCls} ${tab === label ? "p-tab-active p-accent" : ""}`}>
-            <span>{tab}</span>
-            {tab === label && count !== null && <span className="p-t-status p-text-3">{count}</span>}
-          </button>
-        ))}
-      </div>
-      <div className={`flex shrink-0 items-center border-b p-border ${tabStripH}`}>
-        <button type="button" aria-label="Activity" className={`${tabCls} mr-2 px-2.5`}><GaugeIcon size={14} /></button>
-      </div>
-    </div>
-  );
-}
-
 function useWide(): boolean {
   const query = "(min-width: 768px)";
   const [wide, setWide] = useState(() => window.matchMedia(query).matches);
@@ -692,9 +673,14 @@ function Scene({ params }: { params: URLSearchParams }) {
     setOpened((prior) => ({ file: anchor?.path ?? null, n: prior.n + 1 }));
   };
 
+  const changed = reviewedAt !== null || shown?.error !== undefined ? null : shown?.files.length ?? null;
+
   const panel = (
     <>
-      <TabStrip label="Changes" count={reviewedAt !== null || shown?.error !== undefined ? null : shown?.files.length ?? null} />
+      <InspectorBar surface="Changes" pages={[]} choose={() => {}} trailing={null} tools={[
+        { key: "Work" }, { key: "Changes", count: changed === null ? undefined : { value: changed, accent: false } },
+        { key: "Files" }, { key: "Agent" }, { key: "Environment" }, { key: "Activity" },
+      ]} />
       <div className="min-h-0 flex-1">
         <ChangesPanel key={opened.n} sets={sets} source={source} onSource={setSource} now={NOW} file={opened.file}
           menuOpen={params.get("menu") === "source"} notesOpen={params.get("annotations") === "1"}

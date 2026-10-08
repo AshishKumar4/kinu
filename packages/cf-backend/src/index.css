@@ -1453,13 +1453,14 @@ body > .annotation-toolbar {
    outline scrolls with its tab, and glide when the selection moves. */
 .p-bar {
   --bar-line: var(--c-border-strong);
+  --bar-ground: var(--c-bg);
   --flare: 8px;
   position: relative;
   display: flex;
   flex-shrink: 0;
   align-items: stretch;
   height: 46px;
-  background: var(--c-bg);
+  background: var(--bar-ground);
 }
 [data-mode="light"] .p-bar { --bar-line: var(--c-border); }
 .p-bar > :not(.p-bar-strip) { border-bottom: 1px solid var(--bar-line); }
@@ -1477,8 +1478,8 @@ body > .annotation-toolbar {
   opacity: 0;
   transition: opacity var(--dur-base) ease-out;
 }
-.p-bar-strip::before { left: 0; background: linear-gradient(to left, transparent, var(--c-bg)); }
-.p-bar-strip::after { right: 0; background: linear-gradient(to right, transparent, var(--c-bg)); }
+.p-bar-strip::before { left: 0; background: linear-gradient(to left, transparent, var(--bar-ground)); }
+.p-bar-strip::after { right: 0; background: linear-gradient(to right, transparent, var(--bar-ground)); }
 .p-bar-strip:is([data-overflow="start"], [data-overflow="both"])::before,
 .p-bar-strip:is([data-overflow="end"], [data-overflow="both"])::after { opacity: 1; }
 .p-bar-tabs {
@@ -1642,6 +1643,21 @@ body > .annotation-toolbar {
 @media (prefers-reduced-motion: reduce) {
   .p-bar-outline[data-glide] > span { transition: none; }
 }
+
+/* The inspector's bar, in the same grammar on the column's ground: its pages are tabs on the left, and the
+   workspace's own tools are pinned at the right as icon tabs, the way a browser pins tabs. A pinned tool is as
+   wide as its icon and count, never squeezed, and draws no divider: the icons space themselves. */
+.p-bar-inspector { --bar-ground: var(--c-sidebar); }
+/* The column opens at 340px, so a page's tab gives way sooner than a chat's: the tools keep their room. */
+.p-bar-inspector .p-bar-tab { min-width: 96px; }
+.p-bar-trailing:empty { padding: 0; }
+.p-bar-tools { flex: none; }
+.p-bar-tools .p-bar-tabs { flex: none; padding: 0 6px 0 0; }
+.p-bar-tools .p-bar-tab { flex: none; min-width: 0; }
+.p-bar-tools .p-bar-tab::before { content: none; }
+.p-bar-tools :is(.p-bar-sizer, .p-bar-link) { gap: 3px; padding: 0 calc(var(--flare) + 2px) 2px; }
+.p-bar-tools .p-bar-link:focus-visible { text-decoration: none; }
+.p-bar-tools .p-bar-link:focus-visible > svg { border-radius: 4px; outline: 1.5px solid var(--c-accent); outline-offset: 3px; }
 
 /* An agent's status, read by shape as well as hue: a turning arc while it
    works, the accent with a slow halo when it needs the person, a small

@@ -656,7 +656,7 @@ async function chooseMode(page: Page, mode: string): Promise<void> {
 
 /** Opens the workspace's pending plan from the Work tab and presses one of its controls; the server then says the plan moved. */
 async function decidePlan(page: Page, control: string, landed: string): Promise<void> {
-  await page.click('.p-tabstrip button[aria-label="Work"]');
+  await page.click('nav[aria-label="Workspace"] button[aria-label="Work"]');
   await page.waitForSelector('[data-plan-review-root]');
   await page.$$eval('[data-plan-review-root] button', (buttons, label) => {
     const button = buttons.find((each) => each.textContent?.includes(label));
