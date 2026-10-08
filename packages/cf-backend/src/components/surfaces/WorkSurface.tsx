@@ -297,7 +297,8 @@ export function WorkSurface(props: WorkSurfaceProps) {
       </div>
 
       <div className={`flex-1 min-h-0 ${surface === "Changes" ? "hidden" : bodyFit}`}>
-        <div className={surface === "Work" ? "" : "hidden"}>
+        {/* Full height, so a plan under review fills the tab and keeps its decision bar in view; a longer list still scrolls here. */}
+        <div className={surface === "Work" ? "h-full" : "hidden"}>
           <ErrorBoundary label="Work">
             {/* Keyed by workspace, never by agent: a chat-tab switch must not remount Work. */}
             <WorkTab key="workspace"

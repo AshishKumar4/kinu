@@ -18,6 +18,12 @@ interface PanelProps {
   /** Offered while the host has no note on the whole document yet. */
   onAddGlobal?: () => void;
   globalLabel?: string;
+  /** What the panel calls its notes. */
+  title?: string;
+  /** A note the reviewer cannot edit or delete, though the rest are open. */
+  isLocked?: (annotation: Annotation) => boolean;
+  /** The note's thread, shown under it. */
+  renderThread?: (annotation: Annotation) => ReactNode;
 }
 
 const COMMENT_KIND = { label: 'Comment', color: 'text-annotation-comment' } as const;
@@ -35,6 +41,7 @@ interface CardProps {
   selected: boolean;
   readOnly: boolean;
   place?: ReactNode;
+  thread?: ReactNode;
   onSelect: () => void;
   onDelete: () => void;
   onEdit?: (updates: Partial<Annotation>) => void;
@@ -45,6 +52,7 @@ const AnnotationCard = ({
   selected,
   readOnly,
   place,
+  thread,
   onSelect,
   onDelete,
   onEdit,
@@ -100,6 +108,7 @@ const AnnotationCard = ({
       ) : annotation.text && (
         <p className="mt-2 whitespace-pre-wrap text-xs text-foreground/90">{annotation.text}</p>
       )}
+      {thread}
       {!readOnly && !editing && (
         <div className="mt-2 flex justify-end gap-1" onClick={(event) => event.stopPropagation()}>
           {annotation.type !== AnnotationType.DELETION && onEdit && (
@@ -125,6 +134,9 @@ export const AnnotationPanel = ({
   placeOf,
   onAddGlobal,
   globalLabel = 'Add a global comment',
+  title = 'Annotations',
+  isLocked,
+  renderThread,
 }: PanelProps) => {
   const isMobile = useIsMobile();
   const listRef = useRef<HTMLDivElement>(null);
@@ -148,25 +160,26 @@ export const AnnotationPanel = ({
     >
       <div className="flex h-11 items-center justify-between border-b border-border/50 px-3">
         <div className="flex items-center gap-2">
-          <h2 className="text-xs font-medium text-foreground">Annotations</h2>
+          <h2 className="text-xs font-medium text-foreground">{title}</h2>
           <span className="rounded-full bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary">{annotations.length}</span>
         </div>
         {isMobile && onClose && (
-          <button type="button" className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={onClose} aria-label="Close annotations">×</button>
+          <button type="button" className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={onClose} aria-label={`Close ${title.toLowerCase()}`}>×</button>
         )}
       </div>
       <div ref={listRef} className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-2">
         {sorted.length === 0 && !onAddGlobal ? (
           <div className="grid flex-1 place-items-center px-4 text-center">
-            <div><p className="text-xs text-muted-foreground">No annotations yet</p><p className="mt-1 text-[11px] text-muted-foreground/70">Select text to annotate</p></div>
+            <div><p className="text-xs text-muted-foreground">No {title.toLowerCase()} yet</p><p className="mt-1 text-[11px] text-muted-foreground/70">Select text to annotate</p></div>
           </div>
         ) : sorted.map((annotation) => (
           <AnnotationCard
             key={annotation.id}
             annotation={annotation}
             selected={selectedId === annotation.id}
-            readOnly={readOnly}
+            readOnly={readOnly || isLocked?.(annotation) === true}
             place={placeOf?.(annotation)}
+            thread={renderThread?.(annotation)}
             onSelect={() => onSelect(annotation.id)}
             onDelete={() => onDelete(annotation.id)}
             onEdit={onEdit ? (updates) => onEdit(annotation.id, updates) : undefined}

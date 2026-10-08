@@ -36,6 +36,8 @@ export interface ChatWire {
   history(limit?: number): Promise<UIMessage[]>;
   /** A durable row or an accepted send's reservation: the hook resends its whole list per request. */
   admitted(id: string): Promise<boolean>;
+  /** Each slate `agent.ask` reply: fed a turn's text deltas, and told when the turn ends. */
+  readonly replies?: { feed(turnId: string, delta: string): void; ended(turnId: string, failure: string | null): void };
   /** Rejects when the loop refuses the message: nothing was written and no turn ran. */
   send(input: { readonly text: string; readonly files: readonly PromptFile[]; readonly id: string; readonly mode: WorkMode }): Promise<SendLanding>;
   retry(claim: (turnId: string) => void): Promise<SendLanding>;
@@ -125,6 +127,7 @@ function compactStep(relayed: RelayedChunk[], step: number): void {
 
 interface LiveStream {
   readonly requestId: string;
+  readonly turnId: string;
   /** Requests of the other messages a rerun carried, answered when it closes. */
   readonly carried: readonly string[];
   /** The answer's row id, on every provider call's `start`, so the answer stays one message. */
@@ -484,7 +487,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     this.releaseWaiters();
 
     const live: LiveStream = {
-      requestId, carried, messageId: turn.messageId, open: new OpenParts(), relayed: [],
+      requestId, turnId: turn.turnId, carried, messageId: turn.messageId, open: new OpenParts(), relayed: [],
       finished: turn.finishedSteps, joined: new Set(), broken: false, failure: null,
     };
 
@@ -507,6 +510,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     }
 
     this.live = null;
+    this.wire.replies?.ended(live.turnId, live.failure);
 
     const history = await this.wire.history(TRANSCRIPT_WINDOW);
 
@@ -550,8 +554,12 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
         if (live === null) return;
 
-        // A Stop is not a failure: an `error` frame here makes the SDK client paint an error card.
-        if (event.message === INTERRUPTED_TURN) return;
+        // A Stop is not a failure: an `error` frame here makes the SDK client paint an error card. A reply ends on it.
+        if (event.message === INTERRUPTED_TURN) {
+          this.wire.replies?.ended(live.turnId, event.message);
+
+          return;
+        }
 
         // Their resume names this stream: its own terminal frame, with the error, settles it.
         this.pendingResume.clear();
@@ -617,6 +625,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
           compactStep(live.relayed, live.finished);
           live.finished += 1;
         }
+
+        if (chunk.type === 'text-delta') this.wire.replies?.feed(live.turnId, chunk.delta);
       }
     } catch (cause) {
       this.degradeRelay(live, toKinuError({
