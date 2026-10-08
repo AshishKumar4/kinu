@@ -122,6 +122,9 @@ fi
 if [[ "$1" == */scripts/release-build.ts ]]; then
   exit 86
 fi
+if [[ "$1" == */scripts/reset.ts ]] && [ "$2" = "pending" ]; then
+  printf '%s\\n' "\${KINU_DEPLOY_PENDING_RESET:-none}"
+fi
 exit 0
 `;
 }
@@ -150,6 +153,8 @@ interface DeployRun {
   readonly lockHeld?: boolean;
   readonly ciAbsent?: boolean;
   readonly ciRed?: boolean;
+  /** The reset the environment is still in: its placeholder serves and its build never uploaded. */
+  readonly pendingReset?: string;
 }
 
 function runDeploy({
@@ -164,6 +169,7 @@ function runDeploy({
   lockHeld = false,
   ciAbsent = false,
   ciRed = false,
+  pendingReset = "none",
 }: DeployRun = {}) {
   const fixture = scratchDir("deploy-gate");
   // The deploy lock lives in the runtime directory: the fixture's own, so a real deploy on this machine never blocks
@@ -220,6 +226,7 @@ exit 87
       KINU_DEPLOY_GATE_LOG: log,
       KINU_DEPLOY_ROOT: fixture,
       KINU_DEPLOY_PHASE_LOG: phaseLog,
+      KINU_DEPLOY_PENDING_RESET: pendingReset,
       KINU_DEPLOY_INFRA_ENV_LOG: infraEnvironmentLog,
       // Always set, so the assertion that the script overrides it is about the
       // script rather than about whichever shell ran the suite.
@@ -391,6 +398,19 @@ describe("deploy gate", () => {
     expect(redGate.status).not.toBe(0);
     expect(redGate.events.some((event) => event.startsWith("MUTATE "))).toBe(false);
     expect(wiped(redGate.events)).toEqual([]);
+  });
+
+  // 2026-10-08: a staging reset stopped at its upload after the wipe. Its rerun with --reset failed the account gate on
+  // every class the wipe had deleted, and went through only with --bootstrap, which nothing said to pass.
+  test("a reset whose build never uploaded is finished by the next reset deploy, its pre-deploy phase the bootstrap one", () => {
+    const resumed = runDeploy({ option: "--reset", pendingReset: "reset-20261008T050500Z" });
+    const fresh = runDeploy({ option: "--reset" });
+
+    expect({
+      phase: resumed.infraPhase, asked: resumed.events.includes("bun scripts/reset.ts pending staging"),
+      planned: resumed.events.includes("bun scripts/reset.ts plan staging"), said: resumed.stdout.includes("RESET: finishing reset-20261008T050500Z"),
+    }).toEqual({ phase: "bootstrap", asked: true, planned: false, said: true });
+    expect({ phase: fresh.infraPhase, planned: fresh.events.includes("bun scripts/reset.ts plan staging") }).toEqual({ phase: "full", planned: true });
   });
 
   test("an ambient environment variable cannot point the account gate at the other deployment", () => {

@@ -287,6 +287,18 @@ export function classifyRecovery(thrown: { readonly cause: unknown }): RecoveryC
   }
 }
 
+/** The platform's words when the account has no room for another container (staging, 2026-10-08). */
+const ACCOUNT_LIMIT = 'Account resource limit exceeded';
+
+/** A start refused for want of room: it says nothing about what the box started from, so that source stays good. */
+export function isCapacityRefusal(thrown: { readonly cause: unknown }): boolean {
+  for (let value = thrown.cause; value instanceof Error; value = value.cause) {
+    if (value.message.includes(ACCOUNT_LIMIT)) return true;
+  }
+
+  return false;
+}
+
 /** Stages are actions: retry the same identity, then replace it; a failure at `replace` is
  *  terminal. Stored durably: `onStart` is a container hook, so an alarm-woken object skips it. */
 const RECOVERY_STAGES = ['retry', 'replace'] as const;

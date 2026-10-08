@@ -7,12 +7,11 @@ import type { EvolutionLaneRequest } from '../identity/evolution-helpers';
 import type { AgentSignal, SendOutcome } from '../types/signals';
 import type { CompletedTurn, ToolCallRecord } from '../evolution/types';
 import { CompletedTurnSchema } from '../evolution/session-window';
-import { codemodeProgramOf, codemodeReaches } from '../tools/codemode-reach';
+import { codemodeReaches } from '../tools/codemode-reach';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
 import { tolerate } from '../obs/index';
 import { stableStringify } from '../safety/argument-digest';
-import { isJsonObject, type JsonObject, type JsonValue } from '../utils/json';
 import { ADVISOR_SEVERITIES, isAdvisorSeverity, type AdvisorSeverity } from '../types/advisor';
 
 export {
@@ -146,74 +145,11 @@ const AdvisorReplySchema = v.object({
   class: v.optional(v.string()),
 });
 
-/** Secrets are redacted before the review prompt: the deep lane may be a different vendor. Shapes mirror
- *  `scripts/secret-scan.ts` (not imported: core cannot depend on scripts); private-key blocks go first. */
-const ADVISOR_PRIVATE_KEY_BLOCK = /-----BEGIN[^-]*PRIVATE KEY[^-]*-----[\s\S]*?-----END[^-]*PRIVATE KEY[^-]*-----|-----BEGIN[^-]*PRIVATE KEY[^-]*-----/gu;
-
-const ADVISOR_BEARER_TOKEN = /Bearer\s+[A-Za-z0-9\-._~+/=]{20,}/gu;
-
-const ADVISOR_AWS_ACCESS_KEY = /AKIA[0-9A-Z]{16}/gu;
-
-const ADVISOR_PROVIDER_SECRET = /\b(?:[sr]k_live_[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{40,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|npm_[A-Za-z0-9]{36}|sk-ant-[A-Za-z0-9-]{20,}|sk-proj-[A-Za-z0-9_-]{20,})/gu;
-
-const ADVISOR_KINU_TOKEN = /\bp(?:ta|tc|dt)_[0-9a-f]{8,}/gu;
-
-const AdvisorStringSchema = v.string();
-
-function obfuscateAdvisorString(value: string): string {
-  return value
-    .replace(ADVISOR_PRIVATE_KEY_BLOCK, '[redacted private-key]')
-    .replace(ADVISOR_BEARER_TOKEN, '[redacted bearer]')
-    .replace(ADVISOR_AWS_ACCESS_KEY, '[redacted api-key]')
-    .replace(ADVISOR_PROVIDER_SECRET, '[redacted api-key]')
-    .replace(ADVISOR_KINU_TOKEN, '[redacted kinu-token]');
-}
-
-/** Rebuilds containers only along paths that changed. */
-function obfuscateAdvisorSecrets(value: JsonValue): JsonValue {
-  if (v.is(AdvisorStringSchema, value)) return obfuscateAdvisorString(value);
-
-  if (Array.isArray(value)) {
-    let changed = false;
-
-    const next = value.map((entry) => {
-      const obfuscated = obfuscateAdvisorSecrets(entry);
-
-      if (obfuscated !== entry) changed = true;
-
-      return obfuscated;
-    });
-
-    return changed ? next : value;
-  }
-
-  if (!isJsonObject(value)) return value;
-
-  let changed = false;
-  const next: JsonObject = {};
-
-  for (const [field, fieldValue] of Object.entries(value)) {
-    const obfuscated = obfuscateAdvisorSecrets(fieldValue);
-
-    if (obfuscated !== fieldValue) changed = true;
-
-    next[field] = obfuscated;
-  }
-
-  return changed ? next : value;
-}
-
-/** Arguments and result share the pattern extractor's per-call budget; secrets are obfuscated first. */
 function renderToolCall(call: ToolCallRecord): string {
-  const args = evidenceWindow(stableStringify(obfuscateAdvisorSecrets(call.args)), EVIDENCE_BUDGETS.patternToolCall);
-
-  const result = call.result === undefined
-    ? ''
-    : `\n    result: ${evidenceWindow(stableStringify(obfuscateAdvisorSecrets(call.result)), EVIDENCE_BUDGETS.patternToolCall)}`;
-
+  const result = call.resultWindow === undefined ? '' : `\n    result: ${call.resultWindow}`;
   const outcome = call.outcome === undefined ? 'unmeasured' : stableStringify(call.outcome);
 
-  return `  - ${call.name}(${args}) outcome=${outcome}${result}`;
+  return `  - ${call.name}(${call.argsWindow}) outcome=${outcome}${result}`;
 }
 
 /** Silence is the stated default: a reviewer asked to review always finds something. Negative space ported from
@@ -229,7 +165,7 @@ export function buildAdvisorPrompt(
   const called = new Set(turn.toolCalls.map((call) => call.name));
 
   const programs = turn.toolCalls
-    .map((call) => codemodeProgramOf(call.name, call.args))
+    .map((call) => call.program ?? '')
     .filter((program) => program !== '');
 
   const unused = reachable.filter((name) => !called.has(name)

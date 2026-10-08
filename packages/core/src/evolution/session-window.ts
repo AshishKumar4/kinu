@@ -11,7 +11,7 @@ import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { CompletedTurn } from './types';
-import { JsonObjectSchema, JsonValueSchema, parseJsonValue } from '../utils/json';
+import { parseJsonValue } from '../utils/json';
 import { UsageSchema } from '../usage';
 import { Effect } from 'effect';
 import { diagnostics, recording, settleSync, toKinuError, tolerate } from '../obs/index';
@@ -31,9 +31,15 @@ export const CompletedTurnSchema: v.GenericSchema<CompletedTurn> = v.object({
   toolCalls: v.array(v.object({
     toolCallId: v.optional(v.string()),
     name: v.string(),
-    args: JsonObjectSchema,
-    result: v.optional(JsonValueSchema),
     outcome: v.optional(ToolOutcomeSchema),
+    argsWindow: v.string(),
+    resultWindow: v.optional(v.string()),
+    target: v.string(),
+    program: v.optional(v.string()),
+    op: v.nullable(v.string()),
+    argsDigest: v.nullable(v.string()),
+    writtenPaths: v.array(v.string()),
+    revisitedPaths: v.array(v.string()),
   })),
   craftedToolsUsed: v.optional(v.array(v.string())),
   steps: v.number(),

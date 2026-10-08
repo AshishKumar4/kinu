@@ -15,6 +15,7 @@ import {
   type Evidence, type Decision, type ArtifactRef,
 } from './types';
 import type { ToolCallRecord } from '../evolution/types';
+import { compactToolCall, type ToolCallInput } from '../evolution/tool-call-record';
 import { missionGate, type MissionBudgetRefusal, type MissionScope, type MissionSeam, type SpendGate } from '../mission-budget';
 import { failedToolOutcome, type ToolOutcome } from '../tools/outcome';
 import { addUsage, normalizeUsage, usageReported, type Usage } from '../usage';
@@ -61,11 +62,11 @@ export class HeadCapture {
   recordArtifact(a: ArtifactRef): void { this.artifacts.push(a); }
   /** `result` is the projected output. */
   recordToolCall(call: HeadToolCall): void {
-    this.toolCalls.push(call);
+    this.toolCalls.push(compactToolCall(call));
   }
 }
 
-export interface HeadToolCall extends ToolCallRecord {
+export interface HeadToolCall extends ToolCallInput {
   toolCallId: string;
   args: JsonObject;
   result: JsonValue;
