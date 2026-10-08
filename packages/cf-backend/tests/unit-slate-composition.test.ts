@@ -494,7 +494,7 @@ test('the owner\'s own slate hires a helper and lists it as the owner does; a hi
 
   // The helper's own slate reaches no helpers: refused where the host routes it, before any actor is asked.
   const child = await hostedSubordinateHarness(parent, { name: 'reader', displayName: 'Reader', nameOrigin: 'user', roleId: 'task', mission: 'Read' });
-  const asChild = await childCaller(parent.db, actorHomeName({ origin: 'agent', storageKey: child.actor.handle.storageKey }), 'reader');
+  const asChild = await childCaller(parent.db, actorHomeName({ origin: 'agent', name: child.actor.handle.name, storageKey: child.actor.handle.storageKey }), 'reader');
   const own = child.actor.runtime.storage.vfs;
   await own.mkdir('/slates/own', { recursive: true });
   await writeText(own, '/slates/own/package.json', JSON.stringify({ main: 'server.ts' }));
