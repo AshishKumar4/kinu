@@ -55,6 +55,8 @@ export const SlateOperationSchema = v.variant('op', [
   }),
   v.strictObject({ op: v.literal('liveShares') }),
   v.strictObject({ op: v.literal('viewerRequests'), share: ShareId }),
+  // Keeps an answer's `<slate-ui>` page, addressed as the chat draws it, as a slate with files under its title.
+  v.strictObject({ op: v.literal('save'), page: v.pipe(v.string(), v.minLength(1)) }),
 ]);
 
 export type SlateOperation = v.InferOutput<typeof SlateOperationSchema>;
@@ -79,6 +81,7 @@ export const SLATE_PROGRAM_MEMBERS = {
   inspect: { on: 'slate', params: ['version', 'include'] },
   publish: { on: 'slate', params: ['version', 'include'] },
   share: { on: 'slate', params: ['...'] },
+  save: { on: 'directory', params: ['page'] },
 } as const satisfies Record<Exclude<SlateOperation['op'], 'call'>, SlateMemberSpec>;
 
 function programMember(operation: SlateOperation): string {
@@ -91,7 +94,7 @@ const READ_ONLY_OPERATIONS: Record<SlateOperation['op'], boolean> = {
   list: true, history: true, inspect: true, shares: true,
   graph: true, liveShares: true, viewerRequests: true,
   preview: false, methods: false, call: false, commit: false, fork: false, restore: false, remove: false, publish: false, unshare: false,
-  share: false,
+  share: false, save: false,
 };
 
 /** Reads run in Plan; the rest change resources or run authored code, as `methods` does by booting the slate. */
@@ -102,7 +105,7 @@ export function requireSlateWorkMode(operation: SlateOperation, mode: WorkMode):
 export interface SlateSummary {
   readonly id: string;
   readonly title: string;
-  /** Existing caller-scoped resident for exposed-port preview deduplication. */
+  /** The port its application holds, so the preview listing does not show the slate a second time. */
   readonly port?: number;
 }
 
@@ -111,3 +114,14 @@ export interface SlateProblem extends Refusal {
 }
 
 export const SLATES_CHANGED_EVENT = 'slates_changed';
+
+/** A directory name for a slate called `title`, free in `/slates`: its words lower-cased and joined by dashes. */
+export function slateIdFor(title: string, taken: (id: string) => boolean): string {
+  const base = title.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').slice(0, 48).replace(/^-+|-+$/g, '') || 'page';
+  const candidate = (n: number): string => (n === 1 ? base : `${base}-${String(n)}`);
+  let n = 1;
+
+  while (taken(candidate(n))) n += 1;
+
+  return candidate(n);
+}

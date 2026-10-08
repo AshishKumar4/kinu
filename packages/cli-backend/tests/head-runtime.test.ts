@@ -117,7 +117,7 @@ function headDeps(
       };
     },
     reportModelCall: () => {},
-    webSearch: stubWeb, codemodeExtras: () => [],
+    webSearch: stubWeb,
     governor: () => governor, journal: () => journal, ...over,
   };
 }

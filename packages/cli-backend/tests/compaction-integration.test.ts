@@ -180,7 +180,7 @@ describe('default compaction over the real storage plane', () => {
         tools: {},
         stopWhen: isStepCount(1),
         extensions: new ExtensionHost().register(extension),
-        cache: { sessionKey: SESSION },
+        conversationKey: SESSION,
       };
 
       if (transformTrigger) options.transformTrigger = transformTrigger;
@@ -376,7 +376,7 @@ describe('default compaction over the real storage plane', () => {
         tools: {},
         stopWhen: isStepCount(1),
         extensions: new ExtensionHost().register(extension),
-        cache: { sessionKey: SESSION },
+        conversationKey: SESSION,
       };
 
       if (providerReportedTokens !== undefined) options.providerReportedTokens = providerReportedTokens;

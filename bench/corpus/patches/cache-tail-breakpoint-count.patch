@@ -1,10 +1,10 @@
 diff --git a/packages/core/src/prompting/cache-breakpoints.ts b/packages/core/src/prompting/cache-breakpoints.ts
-index 0b8319455..272f2c2e9 100644
+index 07672a78e..ec19051df 100644
 --- a/packages/core/src/prompting/cache-breakpoints.ts
 +++ b/packages/core/src/prompting/cache-breakpoints.ts
-@@ -27,7 +27,7 @@ export type PromptCacheStrategy =
-      *  breakpoints through `openaiCompatible` metadata for Claude models (OpenRouter passes them through). */
-   | { kind: 'openai-compat'; bodyNamespace: string; markers: boolean; ttl?: '1h' };
+@@ -28,7 +28,7 @@ export type PromptCacheStrategy =
+    *  `markers` (Claude models, which OpenRouter passes them through to). */
+   | { kind: 'openai-compat'; markers: boolean; ttl?: '1h' };
  
 -const TAIL_BREAKPOINTS = ANTHROPIC_MAX_BREAKPOINTS - 2;
 +const TAIL_BREAKPOINTS = ANTHROPIC_MAX_BREAKPOINTS - 1;

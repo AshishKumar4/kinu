@@ -21,7 +21,7 @@ const REMOTE_SCHEMA: JsonObject = {
   ],
 };
 
-const DEPS: ModelCallDeps = { env: {}, sessionAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false };
+const DEPS: ModelCallDeps = { env: {}, sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false };
 
 async function sentSchema(gemini: boolean, schema: JsonObject = REMOTE_SCHEMA): Promise<JsonObject> {
   const model = scriptedTurnModel({

@@ -122,5 +122,5 @@ export async function testAvailableModel<Id>(input: {
   const stub = env.UserDO.get(env.UserDO.idFromName(userId));
   const registry = createAgentProviderRegistry({ env, userDO: { stub, caller }, fetch });
 
-  return testModel({ spec: input.spec, resolve: (spec, conversation) => registry.resolveModel(spec, conversation), signal: input.signal });
+  return testModel({ spec: input.spec, resolve: (spec, affinity) => registry.resolveModel(spec, affinity), signal: input.signal });
 }

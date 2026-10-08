@@ -2,7 +2,7 @@ import { WORKSPACE_ROOT } from '@kinu.run/core';
 import { shows, type Sight } from '../src/sight';
 import { defineTaskEval } from '../src/eval';
 import { defineEvalTask } from '../src/task';
-import { answerShows, answersWithSlates, madeNoApp } from './ephemeral';
+import { answerShows, answersWithSlates, madeNoApp, madeNoPrototype } from './ephemeral';
 import { Seeded } from './seeded';
 
 // A one-off visual answer over live data: a chart of an API's hourly p95 latency, read from a log that keeps
@@ -76,6 +76,7 @@ read the file each time it's shown rather than keep a copy of today's numbers.`,
     verify: async (verifier) => {
       await answersWithSlates(verifier, 1);
       await madeNoApp(verifier);
+      await madeNoPrototype(verifier);
 
       await verifier.check('the-chart-shows-each-hours-p95', () => answerShows(verifier, SEEDED.names, SEEDED.done));
       await verifier.check('a-reload-shows-the-same', () => answerShows(verifier, SEEDED.names, SEEDED.done));

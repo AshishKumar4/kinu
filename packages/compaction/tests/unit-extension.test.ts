@@ -707,7 +707,7 @@ describe('summaries', () => {
     ];
 
     const gpt = createOpenAIProvider().createModel('gpt-5.5', {
-      env: {}, sessionAffinity: SESSION, fetch: mock.fetch,
+      env: {}, sessionAffinity: SESSION, workspaceAffinity: SESSION, fetch: mock.fetch,
       getAuth: async () => ({ headers: { Authorization: 'Bearer sk-test' } }), hasCredential: async (key) => key === OPENAI_CRED_KEY,
     });
 
@@ -717,7 +717,7 @@ describe('summaries', () => {
       model: gpt, modelSpec: 'openai/gpt-5.5', modelContext: { id: 'openai/gpt-5.5', contextWindow: 200_000 },
       fallbacks: [{ spec: 'openai-compat/m', accepts: new Set(), window: { contextWindow: null, modelOutputLimit: null }, bind: () => ({ model: compat, provider: 'openai-compat' }) }],
       cooldowns: createFallbackCooldowns(), extensions: new ExtensionHost().register(rig().extension),
-      cache: { sessionKey: SESSION }, system: 'sys', history: compacted, tools: {},
+      conversationKey: SESSION, system: 'sys', history: compacted, tools: {},
     })) { /* drain */ }
 
     const fallback = mock.requests.find((request) => request.url.includes('compat.invalid'));

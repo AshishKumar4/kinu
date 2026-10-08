@@ -128,6 +128,11 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           enqueueTurn: (input) => host.enqueueTurn(input),
           executeTool: (call) => host.executeTool(call),
           observe: (lines) => host.observe(lines),
+          paceStep: (turnId) => {
+            traceCalls.push('paceStep');
+
+            return host.paceStep(turnId);
+          },
           answerMetadata: (turnId, narration) => host.answerMetadata(turnId, narration),
           getAuth: (key, opts) => host.getAuth(key, opts),
           listCredentials: () => host.listCredentials(),

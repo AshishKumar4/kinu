@@ -334,11 +334,11 @@ describe('CloudAgentClient protocol', () => {
     }
   });
 
-  test('reasoning effort reads and writes through the agent RPC seam', async () => {
+  test('reasoning effort reads and writes, past low to high, through the agent RPC seam', async () => {
     const mock = startMockAgentServer();
     const client = newClient(mock);
     await expect(client.getReasoningEffort()).resolves.toBe('medium');
-    await expect(client.setReasoningEffort('high')).resolves.toEqual({ effort: 'high' });
+    await expect(client.setReasoningEffort('xhigh')).resolves.toEqual({ effort: 'xhigh' });
     await client.close();
   });
 

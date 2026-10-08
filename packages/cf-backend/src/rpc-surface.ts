@@ -349,6 +349,7 @@ const ORCHESTRATOR_METHODS = [
   'supervisorOp',
   'agentWorkspace',
   'workspaceTitle',
+  'activations',
   // Eval-only. Never `@callable`; the route admits only the eval-service identity.
   'evalAbortActivation',
 ] as const satisfies readonly (keyof OrchestratorAgent)[];

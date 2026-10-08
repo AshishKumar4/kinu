@@ -69,7 +69,7 @@ describe("createConfiguredLocalModelResolver — signed in, no BYO keys", () => 
         const { llmConfig, resolver } = createConfiguredLocalModelResolver();
         const providers = await resolver.listProviders();
         const { models } = await resolver.listModels();
-        const turn = await generateText({ model: resolver.resolveModel(null, 'kinu-jarvis'), prompt: 'ping' });
+        const turn = await generateText({ model: resolver.resolveModel(null, { sessionAffinity: 'kinu-jarvis', workspaceAffinity: 'kinu-jarvis' }), prompt: 'ping' });
         console.log(JSON.stringify({
           llmName: llmConfig.name,
           defaultSpec: resolver.normalizeSpecSync(null),
@@ -155,7 +155,7 @@ describe("createConfiguredLocalModelResolver — registry-only providers", () =>
       const { resolver } = createConfiguredLocalModelResolver({ model: 'claude/claude-opus-4-7' });
       const providers = await resolver.listProviders();
       const claude = providers.find((p) => p.id === 'claude');
-      const turn = await generateText({ model: resolver.resolveModel('claude/claude-opus-4-7', 'kinu-test'), prompt: 'ping' });
+      const turn = await generateText({ model: resolver.resolveModel('claude/claude-opus-4-7', { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }), prompt: 'ping' });
       console.log(JSON.stringify({ claudeAvailable: claude?.available === true, turn: turn.text, sent }));
     `;
 

@@ -89,7 +89,7 @@ describe('my-gateway request shape', () => {
       })),
     });
 
-    const result = await generateText({ model: reg.resolveModel(spec, 'kinu-test'), prompt: 'ping' });
+    const result = await generateText({ model: reg.resolveModel(spec, { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }), prompt: 'ping' });
 
     expect(result.text).toBe('ok');
     expect(seen).toEqual([{ url: `${AI_BASE_URL}/chat/completions`, auth: 'Bearer cf-user-token', gateway: 'prod-gw', model: wireModel }]);
@@ -116,7 +116,7 @@ describe('my-gateway request shape', () => {
     });
 
     const result = await generateText({
-      model: reg.resolveModel('my-gateway/xai/grok-4.7', 'kinu-test'),
+      model: reg.resolveModel('my-gateway/xai/grok-4.7', { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }),
       prompt: 'ping',
     });
 
@@ -372,7 +372,7 @@ describe('my-gateway error mapping', () => {
     });
 
     try {
-      await generateText({ model: reg.resolveModel('my-gateway/minimax/m3', 'kinu-test'), prompt: 'ping' });
+      await generateText({ model: reg.resolveModel('my-gateway/minimax/m3', { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }), prompt: 'ping' });
       throw new Error('expected generateText to fail');
     } catch (err) {
       return err instanceof Error ? err.message : String(err);
@@ -416,7 +416,7 @@ describe('my-gateway registry precedence', () => {
 
     // `workers-ai/...` resolves through the bespoke workers-ai provider —
     // same /ai/v1 endpoint, no my-gateway involvement.
-    await generateText({ model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6', 'kinu-test'), prompt: 'ping' });
+    await generateText({ model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6', { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }), prompt: 'ping' });
     expect(wire).toEqual([`${AI_BASE_URL}/chat/completions`]);
     expect(reg.registry.get('my-gateway')).toBeDefined();
     expect(reg.registry.canResolve('my-gateway')).toBe(true);

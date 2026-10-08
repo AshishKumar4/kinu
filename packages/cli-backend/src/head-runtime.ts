@@ -5,13 +5,13 @@
 import type { ToolSet } from 'ai';
 import {
   type HeadRuntime, type HeadGrounding, type HeadInput, type HeadSeat,
-  type WebSearchProvider, type CodemodeProvider,
+  type WebSearchProvider,
   type RouteModelBinder, type ResolvedTurnProfile,
   type PublishHeadStream,
   type MissionGovernor, type ModelCallSink, type ModelOperationSink,
   type HostedActor, type WriteObserver,
   runHeadSplit, HeadController, REAL_CLOCK, type HeadJournal,
-  codemodeSurface, createDbCodemodeProvider, createStateCodemodeProvider,
+  codemodeSurface, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, ConversationSearchStore,
   headMergeLLM, spawnSeatedHead,
   localMissionScope, type ToolSurfaceNarrowing,
 } from '@kinu.run/core';
@@ -24,8 +24,6 @@ export interface CLIHeadRuntimeDeps {
   bindMergeModel: RouteModelBinder;
   parentRuntime: CLIRuntime;
   webSearch: WebSearchProvider;
-  /** Extra codemode namespaces, without `agents.*`/`agent.*`: a head never inherits authority to delegate. */
-  codemodeExtras: () => CodemodeProvider[];
   /** Grounds head outcomes and the merge. Omit ⇒ neutral scores + n=1 merge. */
   grounding?: HeadGrounding;
   /** Read per head: the runtime is built before the governor exists. */
@@ -50,7 +48,7 @@ export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
   const runtime: HeadRuntime = {
     spawnHead: async (input) => spawnSeatedHead(input, {
       seat: deps.hostHead,
-      codemodeTool: (seat) => hostedCodemodeTool(seat.actor, deps.codemodeExtras()),
+      codemodeTool: (seat) => hostedCodemodeTool(seat.actor, deps.webSearch),
       webSearch: deps.webSearch,
       split: () => (request) => runHeadSplit(new HeadController(createCLIHeadRuntime(deps), deps.journal(), REAL_CLOCK), input, request),
       mission: () => localMissionScope(deps.governor(), input.missionLabels ?? []),
@@ -69,13 +67,19 @@ export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
 }
 
 /**
- * `eval` over one hosted actor: `state.*` and `db` bind off the actor's own handle and stores, never the
- * parent's (a fork must not move its parent's program state), and code routes through its own runtime.
+ * `eval` over one hosted actor, a head or a swarm node, as a confined copy's programs reach it
+ * (`SURFACE_POLICY.confined`): everything binds off the actor's own handle, stores and runtime, never the parent's (a
+ * fork must not move its parent's program state), and it never inherits the authority to delegate.
  */
 export function hostedCodemodeTool(
-  actor: HostedActor, extras: readonly CodemodeProvider[],
+  actor: HostedActor, search: WebSearchProvider,
 ): (finished: ToolSet, reach: ToolSurfaceNarrowing) => ToolSet[string] {
-  const extraProviders = [...extras, createStateCodemodeProvider(actor.handle.programState), createDbCodemodeProvider(actor.stores.appData)];
+  // A program here runs in this process, which holds no Browser Run socket client.
+  const surface = hostedSurfaceActor(actor, {
+    web: { search, files: actor.runtime.storage, browser: null },
+    conversations: new ConversationSearchStore(actor.runtime.storage.sql, actor.handle, (sessionId) => actor.stores.history.transcript(sessionId)),
+    vectorStore: null,
+  });
 
-  return (finished, reach) => createNodeCodemodeToolFactory({ extraProviders, reach })(codemodeSurface(actor.runtime, finished));
+  return (finished, reach) => createNodeCodemodeToolFactory({ namespaces: actorNamespaces(surface, SURFACE_POLICY.confined), reach })(codemodeSurface(actor.runtime, finished));
 }

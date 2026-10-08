@@ -71,6 +71,14 @@ function evaluate(expr: string, group: readonly Row[]): Cell {
 
   if (sum !== null) return group.reduce((total, row) => total + number(row._sample_interval) * (sum[2] === undefined ? 1 : number(row[sum[2]])), 0);
 
+  const extreme = /^(MAX|MIN)\((double\d+)\)$/u.exec(expr);
+
+  if (extreme !== null) return (extreme[1] === 'MAX' ? Math.max : Math.min)(...group.map((row) => number(row[extreme[2] ?? ''])));
+
+  const terms = /^(.+?) - (.+?) \+ (\d+)$/u.exec(expr);
+
+  if (terms !== null) return number(evaluate(terms[1] ?? '', group)) - number(evaluate(terms[2] ?? '', group)) + Number(terms[3]);
+
   const ratio = topLevel(expr, ' / ');
 
   if (ratio.length === 2) {
@@ -114,6 +122,10 @@ function matches(condition: string, row: Row, now: number): boolean {
   const listed = /^(blob\d+) IN \((.+)\)$/u.exec(condition);
 
   if (listed !== null) return topLevel(listed[2] ?? '', ',').map((item) => item.replace(/^'|'$/gu, '')).includes(String(row[listed[1] ?? ''] ?? ''));
+
+  const above = /^(double\d+) > (\d+)$/u.exec(condition);
+
+  if (above !== null) return number(row[above[1] ?? '']) > Number(above[2]);
 
   const compared = /^(blob\d+|index1) (=|!=) '([^']*)'$/u.exec(condition);
 

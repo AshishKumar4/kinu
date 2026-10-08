@@ -53,7 +53,7 @@ import { convertToModelMessages } from "ai";
 import type { LanguageModel, ModelMessage, ToolSet } from "ai";
 
 import {
-  EvolutionEngine, recoverSubordinateLifecycles, actorReferenceOf, sameActorReference, createDbCodemodeProvider,
+  EvolutionEngine, recoverSubordinateLifecycles, actorReferenceOf, sameActorReference,
   type ActorHandle, type ActorHost, type ActorReference, type ChildActorOperation,
   type ActorDirectoryResult, type HostedActor, type WorkspaceActorDirectory,
   type ScaffoldRunOptions,
@@ -141,7 +141,7 @@ import {
   delegationExhausted, deriveChildDelegationBudget, type DelegationBudget,
   readSoul, bootstrapScaffold,
   applyWorkspaceTitle, suggestWorkspaceTitle, type NameOrigin,
-  parseModelSpec, specModelInfo, assembleActorTurn, withCompactionTrigger, promptCacheKey, vfsTurnSkills, type AssembledTurn, type TurnAssemblyRequest, type TurnAssemblySources,
+  parseModelSpec, specModelInfo, assembleActorTurn, withCompactionTrigger, conversationKey, vfsTurnSkills, type AssembledTurn, type TurnAssemblyRequest, type TurnAssemblySources,
   type ModelWindow, type AgentsMdSources,
   ModelCatalogSession, resolveEffectiveModelSpec, type ModelCatalogRead, type ModelInfo,
   // Shared turn-context assembly: the same ordering runChat runs on the CLI
@@ -156,7 +156,7 @@ import {
   resolveAgentTurnProfile, resolveRoutingProfile, ownProfileChoices, ancestorPins, createAgentConfigStore, type PinnedProfile,
   captureOperationProfile, currentOperationProfile, withOperationProfile,
   type OperationProfile,
-  agentRoleSwitch, executorNamespace, toolsNamespace, createStateCodemodeProvider, runWorkModeInvocation, createMemoryCodemodeProvider, createFileCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider, createAgentsCodemodeProvider,
+  agentRoleSwitch, toolsNamespace, runWorkModeInvocation, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost, type CodemodeSurface,
   resolveModelRoute, completeOnRoute, routedLlm, tierRefusals, type TierRefusals, type ModelRouteResolution,
   narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, requireCodemodeMember, inWorkMode,
   toolSurfaceTokens, McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
@@ -193,7 +193,8 @@ import {
   AdvisorRecoverySnapshotSchema,
   type TerminalEffectFault, type TerminalEffectTable,
 } from "@kinu.run/core";
-import { createCodemodeToolFactory, type CodemodeFactory } from "./codemode-tool";
+import { createCodemodeToolFactory, type CodemodeFactory, type CodemodeScope } from "./codemode-tool";
+import { BROWSER_PRELUDE } from './browser-prelude';
 import { codemodeLauncher, jobContextAnswers, type ProgramLaunch } from "./codemode-sandbox";
 import { createHeadRuntime } from "./head-runtime";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
@@ -464,8 +465,6 @@ async function slateMember(
 }
 
 /** Where a slate's `connectBrowser`, `pageTools` and `callPageTool` run: in its class's isolate, which holds the socket. */
-const SLATE_BROWSER_DRIVER = "a slate drives a browser from its class (this.env.workspace.web.connectBrowser); its page asks the class";
-
 /**
  * A slate calling as a hosted actor reaches only that actor's own files, tables, tasks and facts, never the
  * workspace actor's (pinned by `tests/unit-slate-composition.test.ts`).
@@ -479,20 +478,10 @@ function hostedActorSurface(actor: HostedActor, web: { readonly search: WebSearc
     throw new KinuError('unsupported', 'a hosted actor on this backend must run on the cf runtime');
   }
 
-  const providers: CodemodeProvider[] = [
-    ...(runtime.executionRouter?.getProviders() ?? []).map(executorNamespace),
-    // A slate's web writes nothing into the workspace, since a share visitor may call it; its browser is the actor's own.
-    createWebCodemodeProvider({ provider: webSearch, files: null, sessions: web.sessions, prelude: { missing: SLATE_BROWSER_DRIVER } }),
-    createDbCodemodeProvider(actor.stores.appData),
-    createTasksCodemodeProvider(actor.stores.taskList, actor.stores.config),
-    createMemoryCodemodeProvider(() => ({
-      memory: runtime.memory, vectorStore: runtime.vectorStore, facts: actor.stores.facts, actor: actor.handle, conversations,
-    })),
-    createFileCodemodeProvider(() => ({
-      vfs: runtime.toolFiles, home: runtime.storage.home, planes: runtime.planes, memory: runtime.memory,
-      ledger: actor.session.orchestrator.acc.files, budget: actor.session.orchestrator.acc.context,
-    })),
-  ];
+  const surface = hostedSurfaceActor(actor, {
+    web: { search: webSearch, files: runtime.storage, browser: { sessions: web.sessions, prelude: BROWSER_PRELUDE } },
+    conversations, vectorStore: runtime.vectorStore,
+  });
 
   const native = buildBuiltinTools({
     rt: runtime, vectorStore: runtime.vectorStore, facts: actor.stores.facts, webSearch,
@@ -500,7 +489,7 @@ function hostedActorSurface(actor: HostedActor, web: { readonly search: WebSearc
     fileLedger: actor.session.orchestrator.acc.files, contextBudget: actor.session.orchestrator.acc.context,
   });
 
-  return { providers, native };
+  return { actor: surface, native };
 }
 
 /** What a slate binding call runs with: the mode its actor's role leaves it, and that role's tool reach. */
@@ -660,7 +649,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Spliced between `agents` and `web` so provider order (and the LLM-visible type description)
    *  is stable across actor kinds. */
-  protected extraCodemodeProviders(): CodemodeProvider[] { return []; }
+  /** `agent.*`, its own lifecycle: only the workspace's main actor has one. */
+  protected agentSelf(): AgentSelfHost | null { return null; }
 
   protected abstract get engine(): EvolutionEngine;
 
@@ -1020,6 +1010,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected readonly ownedModelServices = new OwnedModelServices({
     env: this.env,
     agentName: () => this.actorHandle().name,
+    workspaceId: () => this.actorHandle().workspaceId,
     appTitle: 'Kinu',
     ownerRequired: true,
     getOwnerUserId: () => this.getOwnerUserId(),
@@ -2133,7 +2124,7 @@ export abstract class ActorAgent extends Agent<Env> {
       profile: async () => {
         const mode = await this.preparedWorkMode();
 
-        return this.routingProfile([...Object.keys(this.getRawToolsForWorkMode(mode)), ...codemodeCapabilitiesFor(this.turnCodemodeProviders())], mode);
+        return this.routingProfile([...Object.keys(this.getRawToolsForWorkMode(mode)), ...codemodeCapabilitiesFor(this.ownNamespaces(mode))], mode);
       },
       bindModel: spec => this.ownedModelServices.resolveModel(spec),
       modelContext: spec => this.modelCatalog.contextFor(spec),
@@ -2260,9 +2251,7 @@ export abstract class ActorAgent extends Agent<Env> {
           turnId: () => currentOperationProfile(this.actorHandle())?.turnId ?? this._chatLoop?.currentTurnId ?? WORKSPACE_RUN_ID,
           durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
         },
-        clamp: {
-          files: this.rt.storage, budget: this.acc.context, producer: 'external_tool',
-        },
+        spill: this.rt.storage,
       }));
 
     return this._mcpToolsCache;
@@ -2270,7 +2259,9 @@ export abstract class ActorAgent extends Agent<Env> {
 
   // The eval sandbox reads craftStore.list() on every execute, so saved tools appear without
   // cache coherence work.
-  private readonly _codemodeFactories = new Map<string, CodemodeFactory>();
+  private _codemodeFactory: CodemodeFactory | null = null;
+  /** A slate's crafted-tool calls, by the actor whose programs they launch; null for a share's viewer. */
+  private readonly _slateToolFactories = new Map<string | null, CodemodeFactory>();
 
   /** Lazy: `boundSql` is not touched until a store is first read, so this can be built here
    *  rather than in the constructor body. */
@@ -3001,15 +2992,16 @@ export abstract class ActorAgent extends Agent<Env> {
           search: this.ownedModelServices.getWebSearchProvider(), sessions: this.browserSessionsFor(actor.handle.actorId),
         }, this.agentStores(actor.handle.actorId).conversations());
 
+        const providers = actorNamespaces(surface.actor, SURFACE_POLICY.slate);
         // Narrow by the child's own durable, per-actor role, in the mode that role leaves the caller.
-        const authority = await this.hostedSlateAuthority(actor, mode, surface.providers, Object.keys(surface.native));
+        const authority = await this.hostedSlateAuthority(actor, mode, providers, Object.keys(surface.native));
         const reach = slateToolReach(authority.reach);
 
         if (route.kind === 'tool') {
-          return this.callSlateTool({ rt: actor.runtime, providers: surface.providers, reach, route, mode: authority.mode, context });
+          return this.callSlateTool({ rt: actor.runtime, actor: surface.actor, reach, route, mode: authority.mode, context });
         }
 
-        return await slateMember(reach.narrowProviders(providersInWorkMode(authority.mode, surface.providers)), route, context);
+        return await slateMember(reach.narrowProviders(providersInWorkMode(authority.mode, providers)), route, context);
       }));
     });
   }
@@ -3049,18 +3041,17 @@ export abstract class ActorAgent extends Agent<Env> {
 
       switch (route.kind) {
         case 'namespace': {
-          const authority = yield* Effect.promise(async () => this.slateAuthority(mode, this.slateNamespaces()));
-          const providers = providersInWorkMode(authority.mode, this.slateNamespaces());
+          const authority = yield* Effect.promise(async () => this.slateAuthority(mode, this.slateNamespaces(mode)));
+          const providers = providersInWorkMode(authority.mode, this.slateNamespaces(mode));
 
           return yield* Effect.promise(async () => slateMember(slateToolReach(authority.reach).narrowProviders(providers), route, context));
         }
 
         case 'tool': {
-          const providers = this.slateNamespaces();
-          const authority = yield* Effect.promise(async () => this.slateAuthority(mode, providers));
+          const authority = yield* Effect.promise(async () => this.slateAuthority(mode, this.slateNamespaces(mode)));
 
           return yield* Effect.promise(async () => this.callSlateTool({
-            rt: this.rt, providers, reach: slateToolReach(authority.reach), route, mode: authority.mode, context,
+            rt: this.rt, actor: this.surfaceActor(mode), reach: slateToolReach(authority.reach), route, mode: authority.mode, context,
           }));
         }
 
@@ -3078,7 +3069,7 @@ export abstract class ActorAgent extends Agent<Env> {
             return yield* new KinuError('denied', `${descriptor.toolKey} is read-granted to viewers but ${route.server} does not mark it read-only`);
           }
 
-          const authority = yield* Effect.promise(async () => this.slateAuthority(mode, this.slateNamespaces(), [descriptor.toolKey]));
+          const authority = yield* Effect.promise(async () => this.slateAuthority(mode, this.slateNamespaces(mode), [descriptor.toolKey]));
 
           requireWorkModePermission(authority.mode, descriptor.readOnly === true, descriptor.toolKey);
 
@@ -3174,21 +3165,22 @@ export abstract class ActorAgent extends Agent<Env> {
    * its program reaches passes `context.nested` first, and a viewer's program holds no browser session of this actor's.
    */
   private async callSlateTool(input: {
-    rt: HostedActor['runtime']; providers: CodemodeProvider[];
+    rt: HostedActor['runtime']; actor: SurfaceActor;
     reach: ToolSurfaceNarrowing; route: Extract<SlateRoute, { kind: 'tool' }>; mode: WorkMode; context: SlateDispatchContext;
   }): Promise<JsonValue> {
-    const { rt, providers, reach, route, mode, context } = input;
-    const executorNames = new Set(rt.executionRouter?.getProviders().map((provider) => provider.name) ?? []);
+    const { rt, actor, reach, route, mode, context } = input;
+    const launch = context.viewer ? null : rt.actor.actorId;
+    const policy = context.viewer ? SURFACE_POLICY.slateToolForViewer : SURFACE_POLICY.slateTool;
+    let factory = this._slateToolFactories.get(launch);
 
-    const factory = createCodemodeToolFactory({
-      launch: this.codemodeLaunch(context.viewer ? null : rt.actor.actorId), rt,
-      workspace: this.workspaceName(), webSearch: this.ownedModelServices.getWebSearchProvider(), reach,
-      ...(!context.viewer && { browserSessions: this.browserSessionsFor(rt.actor.actorId) }),
-      extraProviders: () => providers.filter((provider) => !executorNames.has(provider.name) && provider.name !== 'web'),
-      nested: context.nested,
-    });
+    if (factory === undefined) {
+      factory = createCodemodeToolFactory({ launch: this.codemodeLaunch(launch), workspace: this.workspaceName() });
+      this._slateToolFactories.set(launch, factory);
+    }
 
-    return await inWorkMode(mode, () => factory.callTool(codemodeSurface(rt, {}), route.name, route.input)) ?? null;
+    const scope: CodemodeScope = { reach, nested: context.nested, namespaces: (executor) => actorNamespaces(actor, policy, { executor }) };
+
+    return await inWorkMode(mode, () => factory.callTool(codemodeSurface(rt, {}), route.name, route.input, scope)) ?? null;
   }
 
   /** Workspace read models belong to the root; the orchestrator supplies them. */
@@ -3244,23 +3236,14 @@ export abstract class ActorAgent extends Agent<Env> {
           search: this.ownedModelServices.getWebSearchProvider(), sessions: this.browserSessionsFor(hosted.handle.actorId),
         }, this.agentStores(hosted.handle.actorId).conversations());
 
-        const authority = await this.hostedSlateAuthority(hosted, requested, surface.providers, Object.keys(surface.native));
+        const providers = actorNamespaces(surface.actor, SURFACE_POLICY.operations);
+        const authority = await this.hostedSlateAuthority(hosted, requested, providers, Object.keys(surface.native));
 
-        return await reachedIn(authority, [...surface.providers, createStateCodemodeProvider(hosted.runtime.actor.programState)], surface.native, use);
+        return await reachedIn(authority, providers, surface.native, use);
       });
     }
 
-    // The actor's own surface, as its eval has it: a screenshot is saved into its workspace, and it delegates.
-    const providers = [
-      ...(this.rt.executionRouter?.getProviders() ?? []).map(executorNamespace),
-      createWebCodemodeProvider({
-        provider: this.ownedModelServices.getWebSearchProvider(), files: this.rt.storage,
-        sessions: this.browserSessionsFor(this.rt.actor.actorId), prelude: { missing: SLATE_BROWSER_DRIVER },
-      }),
-      createAgentsCodemodeProvider(() => this.getAgentsToolDeps(requested)),
-      ...this.turnCodemodeProviders(),
-      createStateCodemodeProvider(this.rt.actor.programState),
-    ];
+    const providers = actorNamespaces(this.surfaceActor(requested), SURFACE_POLICY.operations);
 
     const mcp = await this.buildUserMcpTools(this.getRawToolsForWorkMode(requested), Promise.resolve(this.modelCatalog));
     const authority = await this.slateAuthority(requested, providers, Object.keys(mcp));
@@ -3268,27 +3251,9 @@ export abstract class ActorAgent extends Agent<Env> {
     return await reachedIn(authority, providers, { ...this.extensions.tools(), ...mcp, ...this.getRawToolsForWorkMode(authority.mode) }, use);
   }
 
-  /** Unconditional on every ActorAgent; tasks reuses `this.taskList`, the store the snapshot reads. */
-  private baseCodemodeProviders(): CodemodeProvider[] {
-    return [
-      createMemoryCodemodeProvider(() => ({
-        memory: this.rt.memory, vectorStore: this.rt.vectorStore,
-        facts: this.facts, actor: this.actorHandle(), conversations: this.ownConversations(),
-      })),
-      createFileCodemodeProvider(() => ({
-        vfs: this.rt.toolFiles, home: this.rt.storage.home, planes: this.rt.planes, memory: this.rt.memory, ledger: this.acc.files, budget: this.acc.context,
-      })),
-      createTasksCodemodeProvider(this.taskList, this.config),
-    ];
-  }
-
-  /**
-   * Single list read by `beforeTurn` (nameable capabilities) and `getCodemodeToolFactory` (narrowing).
-   * Providers outside this list cannot be named by a role nor narrowed, so `db` belongs here.
-   * The db provider decides Plan per table scope at invocation.
-   */
-  protected turnCodemodeProviders(): CodemodeProvider[] {
-    return [...this.baseCodemodeProviders(), createDbCodemodeProvider(this.stores.appData), ...this.extraCodemodeProviders()];
+  /** The namespaces this actor's own programs reach in `mode`: what a role names and narrows. */
+  protected ownNamespaces(mode: WorkMode): CodemodeProvider[] {
+    return actorNamespaces(this.surfaceActor(mode), SURFACE_POLICY.program);
   }
 
   /** The Chrome sessions `actorId` opened; the table lives on the workspace object every actor shares. */
@@ -3301,50 +3266,55 @@ export abstract class ActorAgent extends Agent<Env> {
    * `state`; the host refuses what else only the agent does. Read per call: executors attach and detach while this
    * object lives.
    */
-  protected slateNamespaces(): CodemodeProvider[] {
-    return [
-      ...(this.rt.executionRouter?.getProviders() ?? []).map(executorNamespace),
-      createWebCodemodeProvider({
-        provider: this.ownedModelServices.getWebSearchProvider(), files: null, sessions: this.browserSessionsFor(this.rt.actor.actorId),
-        prelude: { missing: SLATE_BROWSER_DRIVER },
-      }),
-      ...this.turnCodemodeProviders(),
-    ];
+  protected slateNamespaces(mode: WorkMode): CodemodeProvider[] {
+    return actorNamespaces(this.surfaceActor(mode), SURFACE_POLICY.slate);
   }
 
-  /** Built once per DO; crafted tools saved mid-turn still work because craftStore is re-read per call. */
-  private getCodemodeToolFactory(mode: WorkMode, profileKey: string): CodemodeFactory {
-    // The profile digest is part of the key: two roles can share tool names yet reach
-    // different namespaces.
-    const profile = this.operationProfile()?.profile;
-    const narrowing = narrowToolSurface(profile?.allowedTools);
-    const key = `${mode === 'plan' ? 'plan' : 'default'}:${profileKey}:${profile?.digest ?? ''}:${String(this._accountSwarms)}`;
+  /** This actor as every caller's namespaces are built over it (`actorNamespaces`); it delegates in `mode`. */
+  protected surfaceActor(mode: WorkMode): SurfaceActor {
+    return {
+      executors: () => this.rt.executionRouter?.getProviders() ?? [],
+      web: {
+        search: this.ownedModelServices.getWebSearchProvider(), files: this.rt.storage,
+        browser: { sessions: this.browserSessionsFor(this.rt.actor.actorId), prelude: BROWSER_PRELUDE },
+      },
+      memory: () => ({
+        memory: this.rt.memory, vectorStore: this.rt.vectorStore, facts: this.facts, actor: this.actorHandle(), conversations: this.ownConversations(),
+      }),
+      files: () => ({
+        vfs: this.rt.toolFiles, home: this.rt.storage.home, planes: this.rt.planes, memory: this.rt.memory, ledger: this.acc.files, budget: this.acc.context,
+      }),
+      // `this.taskList` is the store the turn's snapshot reads; the role switch is the native `tasks` tool's.
+      tasks: () => ({ list: this.taskList, config: this.config, roleSwitch: agentRoleSwitch(() => this.operationProfile()?.inputs?.envelope ?? null) }),
+      // Plan is decided per table scope at invocation.
+      db: this.stores.appData,
+      programState: this.rt.actor.programState,
+      agents: () => this.getAgentsToolDeps(mode),
+      self: this.agentSelf(),
+    };
+  }
 
-    if (!this._codemodeFactories.has(key)) {
-      this._codemodeFactories.set(key, createCodemodeToolFactory({
-        launch: this.codemodeLaunch(this.rt.actor.actorId),
-        rt: this.rt,
-        browserSessions: this.browserSessionsFor(this.rt.actor.actorId),
-        reach: narrowing,
-        workspace: this.workspaceName(),
-        webSearch: this.ownedModelServices.getWebSearchProvider(),
-        agents: () => this.getAgentsToolDeps(mode),
-        // Narrowed by the same set as the native surface, so the sandbox cannot bypass a role.
-        extraProviders: () => narrowing.narrowProviders(this.turnCodemodeProviders()),
-        // Drives the UI's default executor; one upsert per executor per turn (reset in beforeTurn).
-        onExecutorUsed: (name) => {
-          if (this._executorsUsedThisTurn.has(name)) return;
-          this._executorsUsedThisTurn.add(name);
-          this.config.setLastActiveExecutor(name);
-        },
-      }));
-    }
+  /**
+   * This actor's eval: its namespaces as its own programs reach them, narrowed by the turn's profile, so the sandbox
+   * cannot bypass a role. Crafted tools saved mid-turn still work because craftStore is re-read per call.
+   */
+  private evalTool(surface: CodemodeSurface, mode: WorkMode) {
+    this._codemodeFactory ??= createCodemodeToolFactory({
+      launch: this.codemodeLaunch(this.rt.actor.actorId),
+      workspace: this.workspaceName(),
+      // Drives the UI's default executor; one upsert per executor per turn (reset in beforeTurn).
+      onExecutorUsed: (name) => {
+        if (this._executorsUsedThisTurn.has(name)) return;
+        this._executorsUsedThisTurn.add(name);
+        this.config.setLastActiveExecutor(name);
+      },
+    });
+    const actor = this.surfaceActor(mode);
 
-    const factory = this._codemodeFactories.get(key);
-
-    if (factory === undefined) throw new KinuError('io', `eval profile ${key} was not built`);
-
-    return factory;
+    return this._codemodeFactory.toolFor(surface, {
+      reach: narrowToolSurface(this.operationProfile()?.profile?.allowedTools),
+      namespaces: (executor) => actorNamespaces(actor, SURFACE_POLICY.program, { executor }),
+    });
   }
 
   /** One object so a cost can never be filed for an operation that was never opened. */
@@ -3817,7 +3787,7 @@ export abstract class ActorAgent extends Agent<Env> {
           durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
         },
         // The sandbox declares the finished native surface, so core builds it last over all other tools.
-        codemode: (surface) => this.getCodemodeToolFactory(mode, profileKey).toolFor(surface),
+        codemode: (surface) => this.evalTool(surface, mode),
         external: () => this._turnExternalTools,
         // Lives on the accumulator so the cached toolset keeps a stable reference and resets per turn.
         contextBudget: this.acc.context,
@@ -4227,7 +4197,7 @@ export abstract class ActorAgent extends Agent<Env> {
       externalTools: async () => ({ ...extensionTools, ...reads.mcpTools }),
       wiredToolNames: (mode) => (mode === 'plan' && turnActorDeps.submitPlan ? [SUBMIT_PLAN_TOOL] : []),
       // `agent` / `llm` are reachable only inside `eval`: derived from the providers wired for this mode.
-      codemodeCapabilities: () => codemodeCapabilitiesFor(this.turnCodemodeProviders()),
+      codemodeCapabilities: (mode) => codemodeCapabilitiesFor(this.ownNamespaces(mode)),
       agentsActions: () => actorAgentsActions(turnActorDeps, this._accountSwarms === true),
       temporaryAsk: () => turnActorDeps.team?.temporary !== undefined,
       soul: async () => this.getSoulText(),
@@ -4235,7 +4205,7 @@ export abstract class ActorAgent extends Agent<Env> {
       identity: async () => reads.identity,
       artifacts: () => this.turnArtifacts(),
       taskPlan: () => Object.freeze({ sql: Object.freeze([this.boundSql, this.rt.storage.sql]), plan: this.approvedTaskPlan(input.item) }),
-      cacheKey: () => promptCacheKey(this.ownedModelServices.affinityKey, CHAT_SESSION_ID),
+      conversationKey: () => conversationKey(this.ownedModelServices.affinityKey, CHAT_SESSION_ID),
       budget: this.budget,
       operations: this.modelOperations,
       scaffoldSpend: { source: 'scaffold', report: (report) => this.reportModelCall(report), operations: this.modelOperations },

@@ -3,7 +3,7 @@ import {
   createAIGatewayProvider, createChatGptProvider, createCodexProvider, createModelRegistry, createMyGatewayProvider,
   createWorkersAIProvider, normalizeModelSpec, retryTransientDO,
   bindingDecisionRun, restDecisionRun, type DecisionRun,
-  type ActorReference, type AuthRequest, type AuthResolution, type AuthResolver, type ProviderDeps, type ProviderEnv,
+  type ActorReference, type AuthRequest, type AuthResolution, type AuthResolver, type ModelAffinity, type ProviderDeps, type ProviderEnv,
   type ProviderRegistry, type ProviderWaitInfo, type SpecDefault, type UserCaller,
   accountDeps, countRequestInputTokens, parseModelSpec, type TurnModelSources,
 } from '@kinu.run/core';
@@ -48,8 +48,8 @@ export interface AgentProviderDeps {
 export interface AgentProviderRegistry {
   registry: ProviderRegistry;
   deps: ProviderDeps;
-  /** `conversation`: the affinity key (`agentAffinityKey`) the calls are routed and cached under. */
-  resolveModel(spec: string, conversation: string): LanguageModel;
+  /** `affinity`: the conversation and workspace the calls are routed and cached under (`actorAffinity`). */
+  resolveModel(spec: string, affinity: ModelAffinity): LanguageModel;
   /** A `provider/model` spec, or a bare `@cf/...` Workers AI id. */
   normalizeSpecSync(spec: string): string;
 }
@@ -160,8 +160,8 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     registry,
     deps,
 
-    resolveModel(spec, conversation): LanguageModel {
-      return registry.resolve(spec, { ...deps, sessionAffinity: conversation });
+    resolveModel(spec, affinity): LanguageModel {
+      return registry.resolve(spec, { ...deps, ...affinity });
     },
 
     normalizeSpecSync: (spec) => normalizeModelSpec(spec, registry, fallback),

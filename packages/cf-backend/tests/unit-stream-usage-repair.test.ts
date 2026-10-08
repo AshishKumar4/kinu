@@ -49,7 +49,7 @@ function accountModel(body: string, modelId = '@cf/zai-org/glm-5.2'): LanguageMo
     fetch: Object.assign(async () => eventStreamOf(body), { preconnect: globalThis.fetch.preconnect }),
   });
 
-  return reg.resolveModel(`workers-ai/${modelId}`, 'kinu-jarvis');
+  return reg.resolveModel(`workers-ai/${modelId}`, { sessionAffinity: 'kinu-jarvis', workspaceAffinity: 'kinu-jarvis' });
 }
 
 async function usageOf(model: LanguageModel): Promise<LanguageModelUsage> {

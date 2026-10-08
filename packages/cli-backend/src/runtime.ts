@@ -17,7 +17,7 @@ import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, rmSync, chmodS
 import { homedir, constants as osConstants } from 'node:os';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import {
-  type LLMProviderConfig, type SessionFilePlane, actorScaffoldPath, actorReferenceOf, buildRuntime, agentHome, agentArtifactDirectory, actorHomeName, agentAffinityKey, MAIN_AGENT,
+  type LLMProviderConfig, type SessionFilePlane, actorScaffoldPath, actorReferenceOf, buildRuntime, agentHome, agentArtifactDirectory, actorHomeName, actorAffinity, MAIN_AGENT,
   observeNamespace, withMountTable, type WriteObserver,
   WORKSPACE_IDENTITY_DDL,
   answerParentRpc, createParentExecutor, createParentWorkspaceVfs,
@@ -316,7 +316,7 @@ function buildCLIRuntime(
 
   let modelRouteFactory = (resolution: ModelRouteResolution): LLM => createLocalProviderLLM({
     llm: config.llm,
-    conversation: agentAffinityKey(actor.name),
+    affinity: actorAffinity(actor),
     credentials: config.providerCredentials,
     oauthStore: config.oauthStore,
     route: resolution,

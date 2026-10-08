@@ -10,7 +10,7 @@ import { createRecordingLogger, KinuError, setDiagnosticsSink } from '@kinu.run/
 import { makeSqlExec } from '../../core/tests/helpers';
 import { asPane, joinHarnessFibers, joinHarnessKeepAlives } from './helpers/agents-sdk';
 import {
-  actorOver, agentSql, catalogTurn, driveUntil, gatewayWorkspace, hostedSubordinateHarness, wakeForDelegatedTask,
+  actorOver, agentSql, catalogTurn, driveUntil, gatewayWorkspace, hostedSubordinateHarness, runDelegatedTask, wakeForDelegatedTask,
 } from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
 
@@ -412,4 +412,20 @@ test("a Stop skips a turn the stopped agent's runner had already picked up", asy
   await workspace.agent.cancelCurrentWork();
 
   await expect(driveUntil(workspace, 'the second turn never ran', () => secondRan)).rejects.toThrow('the second turn never ran');
+});
+
+// A facet's CPU budget is about 30 s for whatever runs under one call into it, and a turn held inside the call that
+// handed it over died after 22 steps (platform catalog do.facet.cpu_ms): each step is run under a call of its own.
+test("each model step of a hired agent's turn runs under a call its workspace makes into it", async () => {
+  const workspace = gatewayWorkspace(stubAiBinding((run) => toolResults(run) < 2
+    ? toolCallCompletion(run, { tool: 'eval', args: { code: 'return 1' } }, `call_${String(toolResults(run))}`)
+    : chatCompletion(run, 'Counted.')));
+
+  const child = await hostedSubordinateHarness(workspace, { name: 'counter', displayName: 'Counter', nameOrigin: 'user', mission: 'count' });
+
+  await runDelegatedTask(workspace, child.actor.handle.actorId, 'Count twice.');
+
+  expect(workspace.agent.harnessAgentTraceCalls().filter((call) => call === 'paceStep')).toHaveLength(3);
+  expect(agentSql(child.actor.handle.actorId)<{ n: number }>`
+    SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${child.actor.handle.actorId} AND type = 'run_end'`[0]?.n).toBe(1);
 });

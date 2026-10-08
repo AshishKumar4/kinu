@@ -191,7 +191,6 @@ async function main(): Promise<void> {
     // spend ledger is not part of the instrument.
     reportModelCall: () => {},
     webSearch: noWeb,
-    codemodeExtras: () => [],
     governor: () => governor,
     journal: () => journal,
     // The execution-grounded evaluator the MCTS engine uses, so each fork's

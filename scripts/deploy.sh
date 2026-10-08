@@ -1035,10 +1035,12 @@ fi
 # this deploy published, read through `scripts/prod-logs.ts version` once the
 # tiers have driven it (the soak may still run), with zero users the traffic being our
 # own: an invocation that ended in an uncaught exception or that the platform
-# ended, a terminal effect that failed or was left owed, an object woken as
-# often as the product calls a wake loop, by startups or by alarms. Each is a
-# red of this deploy whatever its tests said, in the report under `telemetry`
-# (L18); so is telemetry it cannot read.
+# ended, a terminal effect that failed or was left owed, an object started as
+# often as the product calls a wake loop, an alarm with nothing to watch. Each
+# is a red of this deploy whatever its tests said, in the report under
+# `telemetry` (L18); so is telemetry it cannot read, and telemetry whose counts
+# still move after an hour of re-reads (it re-reads every ten minutes until
+# two reads agree, since rows land late).
 if [ "$KINU_ENV" = "staging" ] && [ "${DEPLOY_PUBLISHED:-0}" = "1" ] && [ -n "$KINU_VERSION" ]; then
   echo ""
   echo -e "${BOLD}Step 5b: What version $KINU_VERSION did on staging${NC}"

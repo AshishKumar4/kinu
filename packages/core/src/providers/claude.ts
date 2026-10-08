@@ -14,6 +14,7 @@ import { sha256Hex } from '../safety/argument-digest';
 import { JsonObjectSchema, JsonValueSchema, parseJsonObject, parseJsonValue } from '../utils/json';
 import { xxHash64 } from '../utils/xxhash64';
 import { heardFetch } from './middleware/attempt';
+import { conversationUuid } from './util';
 import { lazyModel } from './wire-model';
 
 export const CLAUDE_CRED_KEY = 'claude.oauth';
@@ -300,13 +301,6 @@ function attested(body: WireBody): Effect.Effect<string, KinuError> {
   return Effect.succeed(`${text.slice(0, placeholder)}cch=${cch}${text.slice(placeholder + CCH_PLACEHOLDER.length)}`);
 }
 
-function claudeSessionId(affinity: string): string {
-  const hex = sha256Hex(`kinu-claude-session:${affinity}`, 32);
-  const variant = ((Number.parseInt(hex.charAt(16), 16) & 0x3) | 0x8).toString(16);
-
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
-}
-
 function localToolNameInEvent(line: string): string {
   if (!line.startsWith('data:') || !line.includes('"tool_use"')) return line;
   const event = parseJsonObject(line.slice('data:'.length));
@@ -515,7 +509,7 @@ export function createClaudeProvider(): ModelProvider {
           const transport = deps.fetch ?? fetch;
 
           const call: ClaudeCall = {
-            deps, modelId, version, sessionId: claudeSessionId(deps.sessionAffinity),
+            deps, modelId, version, sessionId: conversationUuid(`kinu-claude-session:${deps.sessionAffinity}`),
             authenticated: (context, request, auth) => authenticatedSend({
               key: CLAUDE_CRED_KEY, auth, getAuth: deps.getAuth,
               send: (next) => settle(sendAtAcceptedVersion(context, request, next)),

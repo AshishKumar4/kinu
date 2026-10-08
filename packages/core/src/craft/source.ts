@@ -3,6 +3,7 @@
 
 import * as acorn from 'acorn';
 import { Effect, Result } from 'effect';
+import * as v from 'valibot';
 import { renderThrownChain, settleSync } from '../obs/index';
 import { CRAFTED_TOOL_BODY } from '../types/codemode';
 
@@ -107,6 +108,23 @@ function stripExports(program: acorn.Program, source: string): string {
   return out + source.slice(cursor);
 }
 
+const ParseLocationSchema = v.object({ loc: v.object({ line: v.number(), column: v.number() }) });
+
+/**
+ * The source around where a parse failed, so the refusal shows what did not parse. Source sent as a string was read by
+ * the program first: a `\'` in a quoted body arrives as `'`, which is why the function itself can be sent instead.
+ */
+function shownAt(source: string, failure: { readonly cause: unknown }): string {
+  const at = v.safeParse(ParseLocationSchema, failure.cause);
+
+  if (!at.success) return '';
+  const { line, column } = at.output.loc;
+  const text = source.split('\n')[line - 1] ?? '';
+
+  return `, at \`${text.slice(Math.max(0, column - 40), column + 20).trim()}\` (a string body's escapes were read once `
+    + 'already by the program that sent it: send the function itself, `createTool(name, description, async (args) => { ... })`)';
+}
+
 /** Every refusal names the forms a tool takes, so a model that wrote statements reads how to write one. */
 function refused(reason: string): CraftedSourceAdmission {
   return {
@@ -127,7 +145,7 @@ export function admitCraftedSource(source: string, preferredName: string): Craft
 
     const parsed = yield* Effect.result(Effect.try({ try: () => acorn.parse(trimmed, ECMA), catch: (cause) => ({ cause }) }));
 
-    if (Result.isFailure(parsed)) return refused(`the tool source does not parse as JavaScript: ${renderThrownChain(parsed.failure)}`);
+    if (Result.isFailure(parsed)) return refused(`the tool source does not parse as JavaScript: ${renderThrownChain(parsed.failure)}${shownAt(trimmed, parsed.failure)}`);
     const program = parsed.success;
     const exported = exportedExpression(program, trimmed);
     const { functions, variables } = topLevelDeclarations(program);

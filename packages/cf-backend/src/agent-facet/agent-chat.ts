@@ -13,6 +13,7 @@ import { createCompactionStateStore, type CompactionStateStore } from '@kinu.run
 import { attempt, diagnostics, hold, logged, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import type { AgentDatabase } from './agent-database';
+import type { StepPacer } from './step-pacer';
 import { FacetSpend, facetTurnSources, facetTurnTools, type AgentWorkspace, type LiveTurn } from './agent-turn';
 
 /** The words reach the room on the turn's own stream, and a turn's end on its own call. */
@@ -24,6 +25,7 @@ export interface FacetChatDeps {
   readonly workspace: AgentWorkspace;
   readonly providers: ProviderEnv;
   readonly storage: DurableObjectStorage;
+  readonly pacer: StepPacer;
 }
 
 /** A hirer's or the harness's turn runs in the hirer's lane, with `report`; the owner's, and a plan's feedback or approval
@@ -113,14 +115,14 @@ export class FacetChat {
   }
 
   private async assemble(prepared: PreparedAgentTurn, turn: { readonly id: string; readonly mode: WorkMode; readonly runId: string }, asked: TurnAssemblyRequest, bind?: Parameters<typeof assembleActorTurn>[0]['settle']) {
-    const { actor, database, workspace, providers } = this.deps;
+    const { actor, database, workspace, providers, pacer } = this.deps;
     const live: LiveTurn = { dynamic: prepared.dynamic };
 
     const tools = facetTurnTools(workspace, prepared, actor, {
       id: turn.id, mode: turn.mode, parentDriven: this.parentDriven, driving: this.driving, live, capture: new HeadCapture(), database,
     });
 
-    const { sources: bundle } = facetTurnSources({ actor, workspace, providers, prepared, spend: this.spend, live, runId: turn.runId, turnId: turn.id });
+    const { sources: bundle } = facetTurnSources({ actor, workspace, providers, prepared, spend: this.spend, live, runId: turn.runId, turnId: turn.id, pacer });
 
     return await assembleActorTurn({
       ...bundle,
@@ -335,10 +337,10 @@ export class FacetChat {
 
   /** Down the fast tier's chain on the agent's own models, as every actor's title is named. */
   private async suggestTitle(mission: string): Promise<string | null> {
-    const { actor, workspace, providers } = this.deps;
+    const { actor, workspace, providers, pacer } = this.deps;
     const workMode = actor.session.workMode;
     const prepared = await workspace.prepareChat({ turnId: null, mode: workMode, userText: '', parentDriven: false });
-    const { sources } = facetTurnSources({ actor, workspace, providers, prepared, spend: this.spend, live: { dynamic: prepared.dynamic }, runId: prepared.runId, turnId: 'title' });
+    const { sources } = facetTurnSources({ actor, workspace, providers, prepared, spend: this.spend, live: { dynamic: prepared.dynamic }, runId: prepared.runId, turnId: 'title', pacer });
     const inputs = await sources.profileInputs();
     const profile = resolveAgentTurnProfile({ ...inputs, ...ownProfileChoices(sources.config, inputs, sources.ancestors?.()), workMode, availableTools: [], activeSkills: [] });
     const route = resolveModelRoute('fast', profile);
