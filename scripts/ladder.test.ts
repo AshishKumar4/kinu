@@ -27,7 +27,7 @@ import {
   CI_EXEMPT, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
   DEPLOY_PHASES, browserModules, deployOrder, deployPlan, gatesFor, liveTierTargets, packageScripts, phaseWave,
   localDeployGates, reportCIVerdicts, runnableArgv, sharedBrowserModules, sharedOf, tierRun, tierSchedule, tierWave, trackedTestFiles, waveCaps, type WaveRow,
-  HAMMER_REPEATS, ciUnits, changedTestGate, splitCIGate, type Gate,
+  HAMMER_REPEATS, ciUnits, changedTestGate, splitCIGate, type Gate, ARMADA_DEPLOY_ROWS, armadaPhaseRows,
 } from './ladder';
 import {
   ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite,
@@ -664,6 +664,24 @@ describe('the ladder is monotone — commit ⊆ push ⊆ ci ⊆ deploy', () => {
     expect(regressions).toEqual([]);
   });
 
+});
+
+describe('a deploy\'s armada rows', () => {
+  test('are deploy rows the CI tier does not run, in the source phase, and none measures this machine', () => {
+    const atCi = new Set(tierRun('ci').map((gate) => gate.run));
+    const rows = armadaPhaseRows(DEPLOY_PHASES);
+
+    expect({
+      everyDeclared: rows.map((gate) => gate.run).sort(), atCi: rows.filter((gate) => atCi.has(gate.run)).map((gate) => gate.run),
+      phases: [...new Set(rows.map((gate) => gate.phase ?? 'source'))], exempt: rows.filter((gate) => !Object.hasOwn(CI_EXEMPT, gate.run)).map((gate) => gate.run),
+    }).toEqual({ everyDeclared: [...ARMADA_DEPLOY_ROWS].sort(), atCi: [], phases: ['source'], exempt: [] });
+  });
+
+  test('leave the source phase on this machine only the row that measures it: the capability runner', () => {
+    const here = localDeployGates(deployOrder()).filter((gate) => (gate.phase ?? 'source') === 'source' && !ARMADA_DEPLOY_ROWS.includes(gate.run));
+
+    expect(here.map((gate) => gate.run)).toEqual(['bun test --timeout=0 scripts/deadline-capability.test.ts']);
+  });
 });
 
 describe('CI is not a silent subset of deploy', () => {
