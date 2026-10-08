@@ -10,7 +10,7 @@ import { present, killAndAwaitExit, recordedIn, scratchDir } from '@kinu.run/tes
 import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
-  bunResolutionShell, deviceFiles, DEVICE_EXEC_ACK_METHOD, DEVICE_TOKEN_ROTATION_ACK, JsonValueSchema,
+  bunResolutionShell, deviceFiles, DEVICE_EXEC_ACK_METHOD, DEVICE_FRAMES, DEVICE_TOKEN_ROTATION_ACK, JsonValueSchema,
   parseJsonObject, type DeviceStatus, type DeviceTransport, type JsonObject,
 } from '@kinu.run/core';
 import {
@@ -454,22 +454,24 @@ describe('a socket the hub drops', () => {
     await served.sockets.until((hellos) => hellos[0] !== undefined);
     const socket = present(served.sockets.items[0], 'the HELLO');
 
-    // Both FIFOs are open for reading before the command runs. `started` ends once a descendant of the command holds
-    // `life` open; `life` ends only once no process holds it, so a group left running is a read that never ends.
-    const dir = scratchDir('daemon-dropped-socket');
-    const [started, life] = [join(dir, 'started'), join(dir, 'life')];
-    execFileSync('mkfifo', [started, life]);
-    const begun = readFile(started, 'utf8');
+    // Open for reading before the command runs, `life` ends only once no process holds it: a group left running is a
+    // read that never ends. A descendant of the command holds it, then prints.
+    const life = join(scratchDir('daemon-dropped-socket'), 'life');
+    execFileSync('mkfifo', [life]);
     const ended = readFile(life, 'utf8');
+    const id = 'rpc-dropsocket-1';
 
     socket.send({
-      id: 'rpc-dropsocket-1',
+      id,
       method: 'exec',
-      params: [`(exec 3>'${life}'; echo up >'${started}'; exec sleep 600) & sleep 600`],
+      params: [`(exec 3>'${life}'; echo up; exec sleep 600) & sleep 600`],
       sandbox: { tier: 'raw', agentHome: '', roots: [] },
+      output: true,
     });
 
-    expect(await begun).toBe('up\n');
+    // The command's output reaches the hub one flush after it was printed, so the daemon holds the command as running
+    // by then, and the drop meets a command already started.
+    await socket.frames.until((frames) => frames.some((frame) => frame.type === DEVICE_FRAMES.execOutput && frame.request === id));
     socket.drop();
     expect(await ended).toBe('');
   });
