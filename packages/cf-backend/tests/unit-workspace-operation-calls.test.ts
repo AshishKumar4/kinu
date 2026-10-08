@@ -17,6 +17,9 @@ const call = () => ({ callId: crypto.randomUUID() });
 
 test('each actor reaches its own state: what one saves, another does not read', async () => {
   const workspace = orchestratorHarness();
+
+  // An added agent takes the workspace's mission.
+  await workspace.agent.setSoul('# Purpose\n\nKeep the drafts.');
   const root = { actorId: workspaceActorId(workspace.db), turnId: null, mode: 'build' as const };
   const { subordinate } = await workspace.agent.createSubordinateAgent();
   const hosted = { actorId: v.parse(v.string(), subordinate.actorId), turnId: null, mode: 'build' as const };

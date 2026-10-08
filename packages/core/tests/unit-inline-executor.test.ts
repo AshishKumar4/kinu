@@ -59,11 +59,11 @@ function buildExec(rt: ReturnType<typeof createTestRuntime>['rt'], slate?: Inlin
 }
 
 describe('workspace provider (InlineExecutor)', () => {
-  test('invalid file and memory arguments are classified binding values, never refusal-shaped text', async () => {
+  test('invalid file arguments are classified binding values, never refusal-shaped text', async () => {
     const { rt } = createTestRuntime();
     const provider = buildExec(rt);
 
-    for (const name of ['readFile', 'searchMemory', 'saveNote']) {
+    for (const name of ['readFile', 'writeFile', 'readdir']) {
       expect(await callCodemodeMember([provider], 'workspace', name, [null])).toMatchObject({ success: false, reason: 'bad_input' });
     }
   });

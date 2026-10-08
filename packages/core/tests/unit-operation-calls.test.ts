@@ -5,11 +5,13 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { jsonSchema, tool, type ToolSet } from 'ai';
+import * as v from 'valibot';
 import { createTestSql } from '@kinu.run/test-utils';
 import { createProgramStateStore, initCodemodeStateTable } from '../src/identity/program-state';
 import { providersInWorkMode, runWorkModeInvocation } from '../src/execution/work-mode';
 import { createStateCodemodeProvider } from '../src/tools/state-operations';
-import { callOperation, listOperations } from '../src/tools/operation-surfaces';
+import { callOperation, codemodeNamespace, listOperations } from '../src/tools/operation-surfaces';
+import { defineOperation, serve } from '../src/operations/operation';
 import { toolsNamespace, withCraftedToolDeclarations } from '../src/tools/sandbox-contract';
 
 function stateProvider() {
@@ -39,10 +41,14 @@ describe('callOperation', () => {
   });
 
   test('a member the work mode left out is not reached, though its namespace is', async () => {
-    const providers = providersInWorkMode('plan', [stateProvider()]);
+    const note = (name: string, impact: 'observe' | 'mutate') => serve(defineOperation({
+      ns: 'notes', name, help: `${name} a note.`, impact, availability: 'code', slate: false, input: v.strictObject({}), output: v.string(),
+    }), async () => name);
 
-    await expect(runWorkModeInvocation('plan', () => callOperation(providers, 'state.set', { key: 'k', value: 1 }, CALL))).rejects.toMatchObject({ code: 'missing' });
-    expect(await runWorkModeInvocation('plan', () => callOperation(providers, 'state.list', {}, CALL))).toEqual({ value: [] });
+    const providers = providersInWorkMode('plan', [codemodeNamespace('notes', [note('read', 'observe'), note('write', 'mutate')])]);
+
+    await expect(runWorkModeInvocation('plan', () => callOperation(providers, 'notes.write', {}, CALL))).rejects.toMatchObject({ code: 'missing' });
+    expect(await runWorkModeInvocation('plan', () => callOperation(providers, 'notes.read', {}, CALL))).toEqual({ value: 'read' });
   });
 
   test('a tool is one record: a program and a caller outside eval run the same execute on the same object', async () => {

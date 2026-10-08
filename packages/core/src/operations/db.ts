@@ -30,8 +30,11 @@ export const SELECT_LIMIT_DEFAULT = 100;
 
 const SELECT_LIMIT_MAX = 1000;
 
-/** Re-applied in {@link quoted}, the only function that emits an identifier. */
-export const IDENTIFIER = /^[a-z][a-z0-9_]{0,47}$/u;
+/**
+ * Re-applied in {@link quoted}, the only function that emits an identifier. No flag: JSON Schema's `pattern` carries
+ * none, and an ASCII class needs none.
+ */
+export const IDENTIFIER = /^[a-z][a-z0-9_]{0,47}$/;
 
 const IdentifierSchema = v.pipe(
   v.string(),

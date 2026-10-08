@@ -58,7 +58,8 @@ export function executorNamespace(provider: ExecutorProviderSurface): CodemodePr
   const declared = DECLARED.get(provider.name);
 
   if (declared === undefined) return settleSync(Effect.die(new Error(`executor ${provider.name} has no declared members`)));
-  const sizes = provider.getStatus?.().sizes;
+  // Only a sandbox with sizes has `resize`, declared over them.
+  const sizes = provider.tools.resize === undefined ? undefined : provider.getStatus?.().sizes;
   const ops = sizes === undefined ? Object.values(declared) : [...Object.values(declared), sandboxResize(sizes.sizes)];
   const namespace = codemodeNamespace(provider.name, forwarded(provider, ops));
   const slates = provider.tools.slates;
