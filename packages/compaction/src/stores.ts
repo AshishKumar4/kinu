@@ -103,7 +103,9 @@ const PlanStageSchema = v.object({
 });
 
 const PlanSnapshotSchema: v.GenericSchema<PlanSnapshot> = v.object({
-  attachmentPolicyKey: v.optional(v.string()),
+  // A plan saved before 2026-10-08 named the model it was priced for ahead of the policy (`<model>|recent:2`); read as
+  // the policy alone, the plan an owner's fold made survives the deploy as it survives a failover.
+  attachmentPolicyKey: v.optional(v.pipe(v.string(), v.transform((key) => key.slice(key.indexOf('|') + 1)))),
   attachmentLinks: v.optional(v.record(v.string(), v.string())),
   bypassSummaries: v.optional(v.boolean()),
   sessionId: v.string(),

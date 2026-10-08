@@ -175,9 +175,15 @@ describe('createCompactionStateStore', () => {
   // every plan, a `/compact` fold included, was thrown away on the next turn.
   test('a plan keeps its attachment key, links and bypass through the durable row', async () => {
     const { store } = stateRig();
-    const snap: PlanSnapshot = { ...snapshot('s1'), attachmentPolicyKey: 'anthropic/claude-opus-4-7|recent:2', attachmentLinks: { 'turn:item': 'vfs://home/main/attachments/a.png' }, bypassSummaries: true };
+    const snap: PlanSnapshot = { ...snapshot('s1'), attachmentPolicyKey: 'recent:2', attachmentLinks: { 'turn:item': 'vfs://home/main/attachments/a.png' }, bypassSummaries: true };
     await store.plans.save('s1', snap);
     expect(store.plans.load('s1')).toEqual(snap);
+  });
+
+  test('a plan saved under its model\'s key before 2026-10-08 loads under the policy\'s, and so still replays', async () => {
+    const { store } = stateRig();
+    await store.plans.save('s1', { ...snapshot('s1'), attachmentPolicyKey: 'anthropic/claude-opus-4-7|recent:2' });
+    expect(await store.plans.load('s1')).toMatchObject({ attachmentPolicyKey: 'recent:2' });
   });
 
   test('save(null) clears a stale plan but keeps the prompt-token signal', async () => {

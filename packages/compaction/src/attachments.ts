@@ -13,10 +13,13 @@ export interface AttachmentDeps {
 
 const KEEP_RECENT_IMAGES = 2;
 
-/** Priced for the model serving the request; the key names it, so a plan saved under another model re-plans. */
+/**
+ * Priced for the model serving the request. The key names the policy alone: a plan belongs to the history, so any
+ * serving model replays it and one with less room folds further on top (owner, 2026-10-07).
+ */
 export function kinuAttachments(deps: AttachmentDeps, model: string): AttachmentPolicy {
   return {
-    key: `${model}|recent:${KEEP_RECENT_IMAGES}`,
+    key: `recent:${KEEP_RECENT_IMAGES}`,
     keepRecentImages: KEEP_RECENT_IMAGES,
     list: (item) => carriedMedia(item).flatMap((media) => {
       const attachment = attachmentOf(media);
