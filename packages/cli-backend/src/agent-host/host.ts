@@ -909,11 +909,8 @@ export class LocalAgentHost {
 
     if (entry.parentKey === null) {
       // Finish a retirement this process interrupted; only the recorded storage path lives outside the database.
-      await recoverLocalActorRetirements(entry.ws.rt.actor, async (path) => {
-        const storageKey = path[path.length - 1];
-
-        if (storageKey === undefined) return;
-        const record = entry.tree.host.describe(storageKey);
+      await recoverLocalActorRetirements(entry.ws.rt.actor, async (_path, reference) => {
+        const record = entry.tree.host.describe(reference.actorId);
 
         if (record) await this.discardActorBytes(entry.ws, record);
       });

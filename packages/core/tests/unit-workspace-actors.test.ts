@@ -55,7 +55,7 @@ describe('one workspace actor directory', () => {
     const hire = (parent: typeof main, name: string) => directory.describe(directory.create({ parent, name, origin: 'agent', lifetime: 'durable', creationId: crypto.randomUUID() }));
     const fresh = hire(main, 'fix-coupon-expiry');
 
-    expect([fresh.storageKey, actorHomeName(fresh), directory.nameTaken('fix-coupon-expiry')]).toEqual(['fix-coupon-expiry', 'fix-coupon-expiry', true]);
+    expect([fresh.storageKey, actorHomeName(fresh), directory.namesFrom('fix-coupon-expiry').has('fix-coupon-expiry')]).toEqual(['fix-coupon-expiry', 'fix-coupon-expiry', true]);
 
     // A cousin's name keys nothing: one home per name.
     const cousin = hire(directory.open(fresh.actorId), 'fix-coupon-expiry');

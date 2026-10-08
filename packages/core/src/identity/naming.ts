@@ -34,7 +34,7 @@ const FILLER_WORDS = new Set([
 const BRIEF_NAME_WORDS = 3;
 
 /** A short name from what an agent was first asked: its first telling words, slugged ("fix-coupon-expiry"). */
-export function nameFromBrief(brief: string): string | null {
+function nameFromBrief(brief: string): string | null {
   const words = (brief.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().match(/[a-z0-9]+/g) ?? [])
     .filter((word) => !FILLER_WORDS.has(word) && !/^[a-z]$/.test(word));
 

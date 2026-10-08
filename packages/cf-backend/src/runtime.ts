@@ -401,7 +401,9 @@ export function createCFRuntime(
   }));
   const previewSuffix = previewHostSuffix(env) ?? undefined;
   const sandboxId = sandboxIdForWorkspace(actor.workspaceName);
-  const machineShells = { scope: actor.shellId, stateDirectory: '~/.kinu/shells' };
+  // One directory on a machine holds its owner's shells from every workspace, and an agent's shell id is unique only
+  // in its own; the root's (`agent:<workspace>`) already names it.
+  const machineShells = { scope: actor.rootActor ? actor.shellId : `${actor.workspaceName}/${actor.shellId}`, stateDirectory: '~/.kinu/shells' };
   let sandboxHandle: SandboxHandle | null = null;
 
   if (env.KinuDevbox) {

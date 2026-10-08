@@ -140,7 +140,6 @@ export {
   deriveWorkspaceTitle,
   fallbackWorkspaceIdentity,
   mintAgentName,
-  nameFromBrief,
   parseWorkspaceTitle,
   planWorkspaceTitle, autoTitleMayReplace, nameOriginOf, persistAutoTitle, titleActorFromMessage,
   resolveWorkspaceTitle,

@@ -7,7 +7,7 @@ import { actorHomeName, codemodeSurface, executorNamespace, narrowToolSurface, t
 import { scratchDir, toolExecute, workspaceDatabase } from '@kinu.run/test-utils';
 import { cleanupFacetScratch, createCLIRuntime, shareLocalWorkspacePlane, type CLIRuntime } from '../src/runtime';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
-import { registerLocalActor } from '@kinu.run/core';
+import { actorReferenceOf, localActorDirectory, recoverLocalActorRetirements, registerLocalActor } from '@kinu.run/core';
 
 interface LocalRoot {
   readonly rt: CLIRuntime;
@@ -54,6 +54,42 @@ describe('local actor file-plane identity', () => {
     expect(await readText(root.rt.storage.vfs, join(project, 'shared.txt'))).toBe('shared\n');
     expect(readdirSync(project)).toEqual(['shared.txt']);
     expect(child.identity.name).toBe('reader');
+  });
+
+  // Named for its brief, a child's home repeats across workspaces; the named shells it keeps on the machine must not.
+  test('two workspaces\' children of one name keep their own named shells', async () => {
+    const children = ['one', 'two'].map((workspace) => {
+      const state = scratchDir(`facet-plane-shells-${workspace}`);
+      const project = join(state, 'project');
+      mkdirSync(join(project, workspace), { recursive: true });
+      const root = rootRuntime(state, project);
+
+      return childRuntime(root.rt, root, 'fix-coupon-expiry');
+    });
+
+    const [one, two] = children;
+
+    if (!one?.shell || !two?.shell) throw new Error('The children have no shell.');
+    expect(children.map((child) => actorHomeName({ origin: 'agent', name: child.actor.name, storageKey: child.actor.storageKey })))
+      .toEqual(['fix-coupon-expiry', 'fix-coupon-expiry']);
+
+    await one.shell.exec('cd one && export WHERE=one', { name: 'build' });
+
+    expect((await two.shell.exec('pwd; echo "where=$WHERE"', { name: 'build' })).stdout).toBe(`${resolve(two.cwd)}\nwhere=\n`);
+  });
+
+  // Keyed by its name, a child's storage key is not its id, and the recovery's cleanup looks the child up by id.
+  test('a retirement the process left half done is finished for the child it began on', async () => {
+    const root = rootRuntime(scratchDir('facet-plane-retire'));
+    const child = childRuntime(root.rt, root, 'fix-coupon-expiry');
+    const reference = actorReferenceOf(child.actor);
+
+    localActorDirectory(root.rt.actor).directory.apply(root.rt.actor, [], { action: 'retire', name: 'fix-coupon-expiry', reference });
+    const cleaned: (readonly [readonly string[], string])[] = [];
+
+    await recoverLocalActorRetirements(root.rt.actor, async (path, owner) => { cleaned.push([path, owner.actorId]); });
+
+    expect(cleaned).toEqual([[['fix-coupon-expiry'], child.actor.actorId]]);
   });
 
   test('hostile logical names are refused before a physical child is allocated', () => {

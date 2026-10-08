@@ -283,19 +283,16 @@ export class WorkspaceActorDirectory {
     if (this.childRow(parent.actorId, name)) throw new KinuError('denied', 'The sibling name already exists.');
     const actorId = crypto.randomUUID();
     // A hire whose name no actor of this workspace has had is keyed, and so housed (`actorHomeName`), by that name;
-    // a cousin's name, or one used before, keys nothing, and the fresh id does.
-    const storageKey = isSubordinateOrigin(input.origin) && !mimicsDerivedHome(name) && !this.nameTaken(name) ? name : actorId;
-    this.insert({ actorId, parentActorId: parent.actorId, name, storageKey, profile: actorPreset(input.origin, input.lifetime), creationId, ended: null });
+    // a cousin's name, or one used before, keys nothing, and the fresh id does. `insert` decides it as it writes.
+    this.insert({
+      actorId, parentActorId: parent.actorId, name, storageKey: actorId, keyByName: isSubordinateOrigin(input.origin) && !mimicsDerivedHome(name),
+      profile: actorPreset(input.origin, input.lifetime), creationId, ended: null,
+    });
     const row = this.retained(actorId);
 
     if (!row) throw new KinuError('io', 'The child actor was not recorded.');
 
     return this.issue(row);
-  }
-
-  /** Some actor of this workspace, under any parent, live or gone, has had `name` as its name or its key. */
-  nameTaken(name: string): boolean {
-    return this.sql<{ taken: number }>`SELECT 1 AS taken FROM workspace_actors WHERE name = ${name} OR storage_key = ${name} LIMIT 1`.length > 0;
   }
 
   /** Every name and key this workspace's actors have had that is `base` or numbered from it (`base-2`), in one read. */
@@ -387,15 +384,24 @@ export class WorkspaceActorDirectory {
     return row;
   }
   /** `ended` stamps a creation that is retired and released as it is recorded. */
+  /**
+   * `keyByName`: keyed by its name instead of `storageKey` when no actor of the workspace, under any parent, live or
+   * gone, has had that name as its name or key. Decided in the one statement that writes, so a second connection
+   * cannot claim the name between the check and the row.
+   */
   private insert(row: {
     readonly actorId: string; readonly parentActorId: string | null; readonly name: string; readonly storageKey: string;
-    readonly profile: ActorProfile; readonly creationId: string; readonly ended: number | null;
+    readonly keyByName?: boolean; readonly profile: ActorProfile; readonly creationId: string; readonly ended: number | null;
   }): void {
     const { profile } = row;
+    const keyByName = row.keyByName === true ? 1 : 0;
 
     void this.sql`INSERT INTO workspace_actors
       (actor_id, parent_actor_id, name, storage_key, origin, tab, input, lifetime, evolves, created_at, creation_id, retiring_at, deleted_at)
-      VALUES (${row.actorId}, ${row.parentActorId}, ${row.name}, ${row.storageKey}, ${profile.origin}, ${profile.tab ? 1 : 0},
+      VALUES (${row.actorId}, ${row.parentActorId}, ${row.name},
+        CASE WHEN ${keyByName} = 1 AND NOT EXISTS (SELECT 1 FROM workspace_actors WHERE name = ${row.name} OR storage_key = ${row.name})
+          THEN ${row.name} ELSE ${row.storageKey} END,
+        ${profile.origin}, ${profile.tab ? 1 : 0},
         ${profile.input ? 1 : 0}, ${profile.lifetime}, ${profile.evolves ? 1 : 0}, ${row.ended ?? Date.now()}, ${row.creationId},
         ${row.ended}, ${row.ended})`;
   }

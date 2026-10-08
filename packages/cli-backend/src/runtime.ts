@@ -420,9 +420,10 @@ function buildCLIRuntime(
   const filesOwner: FilesOwner = 'user';
 
   // Each call is a fresh `sh -c`; a named one keeps its directory and exports in a file under KINU_HOME, per agent.
+  // Every workspace's shells share that directory, and a facet's home is unique only in its own workspace.
   const facetShell = (facet: string | undefined): Shell => {
     const bash = createBashShell(createHostShell(cwd, facet === undefined ? process.env : facetShellEnv(space, facet)), {
-      home: cwd, scope: facet === undefined ? agentName : `${agentName}/${facet}`, stateDirectory: join(kinuHome(), 'shells'),
+      home: cwd, scope: facet === undefined ? agentName : `${actor.workspaceId}/${facet}`, stateDirectory: join(kinuHome(), 'shells'),
     });
 
     // A named shell resumes where an earlier process left it, so its review starts there too.

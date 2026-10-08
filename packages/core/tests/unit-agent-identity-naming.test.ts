@@ -9,7 +9,6 @@ import {
   renderSoulMarkdown,
   summarizeSoul,
   mintAgentName,
-  nameFromBrief,
   workspaceSlug,
   type NameOrigin,
   type WorkspaceTitleState,
@@ -305,19 +304,21 @@ describe('automatic workspace titling — applying it', () => {
 
 describe('a minted agent name', () => {
   const free = () => (): boolean => false;
+  /** Named from `brief` alone, as a hire of the role `role` is when nothing is taken. */
+  const named = (brief: string | null): string => mintAgentName({ brief, role: 'role' }, free);
 
   test('is the first telling words of what the agent was first asked', () => {
-    expect(nameFromBrief('Fix the coupon expiry check in pricing.ts')).toBe('fix-coupon-expiry');
-    expect(nameFromBrief('Hey, can you look into why checkout is slow on mobile?')).toBe('checkout-slow-mobile');
-    expect(nameFromBrief('  Audit   the café RULES!! ')).toBe('audit-cafe-rules');
+    expect(named('Fix the coupon expiry check in pricing.ts')).toBe('fix-coupon-expiry');
+    expect(named('Hey, can you look into why checkout is slow on mobile?')).toBe('checkout-slow-mobile');
+    expect(named('  Audit   the café RULES!! ')).toBe('audit-cafe-rules');
     // Words are kept whole while they fit; one longer than a name is cut.
-    expect(nameFromBrief('Internationalization localization pipeline')).toBe('internationalization');
-    expect(nameFromBrief('Supercalifragilisticexpialidocious')).toBe('supercalifragilisticexpi');
+    expect(named('Internationalization localization pipeline')).toBe('internationalization');
+    expect(named('Supercalifragilisticexpialidocious')).toBe('supercalifragilisticexpi');
   });
 
   test('a brief with no telling words leaves the name to the role', () => {
-    expect(nameFromBrief('Can you do this for me?')).toBeNull();
-    expect(nameFromBrief('日本語のみ')).toBeNull();
+    expect(named('Can you do this for me?')).toBe('role');
+    expect(named('日本語のみ')).toBe('role');
     expect(mintAgentName({ brief: 'Can you do this for me?', role: 'Research Rust Frameworks' }, free)).toBe('research-rust-frameworks');
     expect(mintAgentName({ brief: null, role: 'ask-auditor' }, free)).toBe('ask-auditor');
     expect(mintAgentName({ brief: null, role: '!!!' }, free)).toBe('agent');
