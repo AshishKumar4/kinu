@@ -11,6 +11,25 @@ export interface CredentialSummary {
   kind: 'bearer' | 'oauth' | 'openai-compat';
 }
 
+/** A stored credential sealed for its account rather than its object, so it outlives a reset that recreates the object. */
+export interface CheckpointedCredential {
+  readonly key: string;
+  readonly sealed: string;
+}
+
+function checkpointAad(account: string, key: string): string {
+  return `checkpoint:${account}:${key}`;
+}
+
+/** Through `tolerate`, never a caught parse error: a JSON error message quotes the text it choked on, the decrypted secret. */
+function decodedCredential(key: string, plaintext: string): Credential {
+  const decoded = tolerate(() => parseJsonValue(plaintext), 'malformed-input');
+
+  if (decoded === undefined) throw new KinuError('bad_input', `the stored credential ${key} did not decode as JSON`);
+
+  return validateCredential({ key, value: decoded });
+}
+
 interface HeldLogin {
   readonly cred: OAuthCredential;
   readonly revision: number;
@@ -221,13 +240,48 @@ export class UserCredentials {
       throw toKinuError({ doing: `opening the stored credential ${key}`, cause: err, otherwise: 'bad_input' });
     }
 
-    // Through `tolerate`, never a caught parse error: a JSON error message
-    // quotes the text it choked on, and that text is the decrypted secret.
-    const decoded = tolerate(() => parseJsonValue(plaintext), 'malformed-input');
+    return { cred: decodedCredential(key, plaintext), revision };
+  }
 
-    if (decoded === undefined) throw new KinuError('bad_input', `the stored credential ${key} did not decode as JSON`);
+  /** Every stored credential sealed for `account`: a reset recreates this object under a new id, which its own seal binds. */
+  async checkpointCredentials(caller: UserCaller, account: string): Promise<CheckpointedCredential[]> {
+    await this.host.requireTier(caller, 'credentials.other');
+    const cipher = await this.cipher();
+    const checkpoint: CheckpointedCredential[] = [];
 
-    return { cred: validateCredential({ key, value: decoded }), revision };
+    for (const { key } of this.host.sqlx<{ key: string }>(`SELECT key FROM user_credentials ORDER BY key`)) {
+      const cred = await this.readCredential(key);
+
+      if (cred !== null) checkpoint.push({ key, sealed: await cipher.seal(checkpointAad(account, key), JSON.stringify(cred)) });
+    }
+
+    return checkpoint;
+  }
+
+  /** Each checkpointed credential this store does not hold, sealed again under this object's id; the keys restored. */
+  async restoreCredentials(caller: UserCaller, account: string, checkpoint: readonly CheckpointedCredential[]): Promise<string[]> {
+    await this.host.requireTier(caller, 'credentials.other');
+    const cipher = await this.cipher();
+
+    return settle(Effect.gen({ self: this }, function* () {
+      const restored: string[] = [];
+
+      for (const { key, sealed } of checkpoint) {
+        const revision = this.credentialRevision(key);
+
+        if (this.host.sqlx(`SELECT 1 FROM user_credentials WHERE key = ?`, key).length > 0) continue;
+
+        const plaintext = yield* attempt({ doing: `opening the checkpointed credential ${key}`, otherwise: 'bad_input' },
+          () => cipher.open(checkpointAad(account, key), sealed));
+
+        const cred = decodedCredential(key, plaintext);
+        const resealed = yield* Effect.promise(() => this.sealCredential(key, cred));
+
+        if (this.commitCredential({ key, kind: cred.kind, sealed: resealed, expectRevision: revision })) restored.push(key);
+      }
+
+      return restored;
+    }));
   }
 
   /** Writes nothing, so {@link commitCredential} can be paired with a fence read in one turn. */

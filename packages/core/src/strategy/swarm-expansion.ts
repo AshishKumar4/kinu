@@ -2,22 +2,19 @@
  * One child's expansion: its prompt, inherited seed, shared conversation prefix, and
  * answer reading (*Inherited context*, *Arbitration*). Scheduling is the runner's.
  */
-import { Effect } from 'effect';
 import * as v from 'valibot';
 import type { LanguageModel, ModelMessage } from 'ai';
 import { diversityAngle, siblingAngles } from '../mcts/diversity';
 import { explorePrompt, type ExplorePrompt } from '../mcts/explore-prompt';
-import { extractJsonObject } from '../providers/structured';
-import { renderIssues } from '../utils/json';
-import { renderThrownChain, type Logger } from '../obs/index';
-import { settleSync } from '../obs/effect';
+import { type Logger } from '../obs/index';
+import { PROPOSAL_MARKER, readAnswer } from './branch-answer';
 import { messageTokens } from '../prompting/media-tokens';
 import { sha256Hex } from '../safety/argument-digest';
 import {
-  BRANCH_PROPOSAL_WIDTH, SWARM_CONTEXTS, isTreeAdvance,
+  BRANCH_PROPOSAL_WIDTH, isTreeAdvance,
 } from './swarm';
 import type {
-  BranchContext, BranchProposal, ResolvedSwarm, SwarmPreset,
+  BranchContext, ResolvedSwarm, SwarmPreset,
 } from './swarm';
 import type {
   ExplorationRecord, MeasuredObjective,
@@ -37,58 +34,6 @@ import type { RoutedNodeModel } from './swarm-setup';
 import type { SwarmBudget } from './swarm-budget';
 import type { BranchAssignment } from './swarm-level';
 import { workerSignal, type LiveWorkers } from './live-workers';
-
-/** Ends an answer to request a branch; a line, not a fence, so code fences cannot match it. */
-const PROPOSAL_MARKER = 'PROPOSE-BRANCH';
-
-/** A branch proposal (*Arbitration*). Strict, and carries no depth: a node never states its own (*Node identity*). */
-const BranchProposalSchema = v.strictObject({
-  rationale: v.string(),
-  branches: v.array(v.strictObject({
-    task: v.string(),
-    rationale: v.string(),
-    context: v.picklist(SWARM_CONTEXTS),
-  })),
-});
-
-interface ReadAnswer {
-  /** The answer with any proposal block removed: what gets measured. */
-  readonly text: string;
-  readonly proposal: BranchProposal | null;
-  readonly proposalError: string | null;
-}
-
-/** Split a node's output into its answer and proposed branch; a malformed proposal is named, not dropped. */
-export function readAnswer(text: string): ReadAnswer {
-  const marker = text.indexOf(PROPOSAL_MARKER);
-
-  if (marker < 0) return { text: text.trim(), proposal: null, proposalError: null };
-  const answer = text.slice(0, marker).trim();
-  const requested = text.slice(marker + PROPOSAL_MARKER.length);
-
-  return settleSync(Effect.try({ try: () => extractJsonObject(requested), catch: (error) => error }).pipe(
-    Effect.map((json): ReadAnswer => {
-      const parsed = v.safeParse(BranchProposalSchema, json);
-
-      if (!parsed.success) {
-        return {
-          text: answer,
-          proposal: null,
-          proposalError: `the ${PROPOSAL_MARKER} block did not describe a branch proposal, so it could `
-            + `not be arbitrated: ${renderIssues(parsed.issues)}`,
-        };
-      }
-
-      return { text: answer, proposal: parsed.output, proposalError: null };
-    }),
-    Effect.catch((error) => Effect.succeed<ReadAnswer>({
-      text: answer,
-      proposal: null,
-      proposalError: `the ${PROPOSAL_MARKER} block carried no readable JSON object, so the branch `
-        + `could not be arbitrated: ${renderThrownChain({ cause: error })}`,
-    })),
-  ));
-}
 
 /**
  * The proposal invitation for a thought node, offered only where a branch could be

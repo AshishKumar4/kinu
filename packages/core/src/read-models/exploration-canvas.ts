@@ -26,7 +26,7 @@ export interface ExplorationCanvasRun {
 }
 
 /** Durable Pareto evidence, ordered by stable node id after nondominance filtering. */
-export interface ParetoFrontier {
+interface ParetoFrontier {
   readonly axes: readonly ParetoAxis[];
   readonly candidates: readonly {
     readonly nodeId: string;

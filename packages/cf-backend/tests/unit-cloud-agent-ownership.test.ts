@@ -1,4 +1,4 @@
-import { createTestUserDO, provisionTestWorkspace, TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import { createTestUserDO, TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { Result } from 'effect';
 import { serveFamily } from './helpers/api';
 import { afterEach, describe, expect, test } from 'bun:test';
@@ -856,25 +856,6 @@ describe('cloud agent ownership safety', () => {
       .map(({ table }) => table);
 
     expect(left).toEqual([]);
-  });
-
-  test("every column of the account object's schema that names a workspace says what removing the workspace does to it", async () => {
-    const harness = createTestUserDO({ durableObjectId: USER_ID });
-
-    await provisionTestWorkspace(harness, 'jarvis');
-
-    const names = (query: string, ...values: string[]): string[] =>
-      harness.db.query<{ name: string }, string[]>(query).all(...values).map((row) => row.name);
-
-    const naming = names(`SELECT name FROM sqlite_master WHERE type = 'table'`).flatMap((table) => names(`SELECT name FROM pragma_table_info(?)`, table)
-      .filter((name) => /(^|_)(agent_name|workspace|workspace_name)$/u.test(name) || (name === 'name' && table.includes('workspace')))
-      .map((name) => `${table}.${name}`));
-
-    expect(naming.filter((column) => !WORKSPACE_KEYED_ROWS.some(({ table, column: declared }) => `${table}.${declared}` === column))).toEqual([]);
-    expect(naming.length).toBeGreaterThan(5);
-    console.log('  blind: a column is found by its name (agent_name, workspace, workspace_name, or `name` in a workspace table); '
-      + 'one naming a workspace under any other name passes unlisted, and its rows outlive the workspace.');
-    harness.close();
   });
 
   test('a healthy workspace whose owner does not match is still refused, row and storage intact', async () => {

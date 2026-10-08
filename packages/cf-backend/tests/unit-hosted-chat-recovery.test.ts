@@ -8,7 +8,7 @@ import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import { actorConnectionTag, RECOVERY_BACKOFF_CEILING_MS, WORKSPACE_TITLE_SYSTEM_PROMPT } from '@kinu.run/core';
 import { abandonHarnessFibers, asPane } from './helpers/agents-sdk';
 import {
-  actorOver, driveUntil, gatewayWorkspace, GATEWAY_CATALOG, reactivateOrchestratorHarness, rosterOver, until, wakeForDelegatedTask,
+  actorOver, driveUntil, gatewayWorkspace, GATEWAY_CATALOG, nextTurn, reactivateOrchestratorHarness, rosterOver, until, wakeForDelegatedTask,
   type StartedHarness,
 } from './helpers/actor-harness';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, type RecordedGatewayRun, type StubbedAiBinding } from './helpers/platform-gateway';
@@ -36,16 +36,22 @@ const asksOf = (run: RecordedGatewayRun, ask: string): boolean => openingOf(run)
   && !JSON.stringify(requestOf(run).messages).includes(WORKSPACE_TITLE_SYSTEM_PROMPT);
 
 async function addedAgent(workspace: StartedHarness): Promise<readonly string[]> {
+  return (await agentAdded(workspace)).pane;
+}
+
+/** The added agent's pane, and its id, which names its chat to the owner's reads. */
+async function agentAdded(workspace: StartedHarness): Promise<{ readonly pane: readonly string[]; readonly actorId: string }> {
   await workspace.agent.setSoul('# Purpose\n\nKeep the parser notes.');
   const { subordinate } = await workspace.agent.createSubordinateAgent();
+  const actorId = subordinate.actorId ?? '';
 
-  return [actorConnectionTag(subordinate.actorId ?? '')];
+  return { pane: [actorConnectionTag(actorId)], actorId };
 }
 
 test("an owner's message to an agent survives the workspace resetting mid-turn, and is answered", async () => {
   const ASK = 'Note where the parser buffers tokens.';
+  const ANSWER = 'Tokens buffer in a lookahead ring.';
   let asked = 0;
-  let answered = false;
 
   const gateway = stubAiBinding(async (run) => {
     if (!asksOf(run, ASK)) return chatCompletion(run, 'Noted.');
@@ -53,13 +59,12 @@ test("an owner's message to an agent survives the workspace resetting mid-turn, 
 
     // The first isolate dies with this call open.
     if (asked === 1) return await new Promise<Response>(() => {});
-    answered = true;
 
-    return chatCompletion(run, 'Tokens buffer in a lookahead ring.');
+    return chatCompletion(run, ANSWER);
   });
 
   const first = gatewayWorkspace(gateway);
-  const pane = await addedAgent(first);
+  const { pane, actorId } = await agentAdded(first);
 
   await asPane(pane, () => first.agent.send(ASK, crypto.randomUUID()));
   await driveUntil(first, "the agent's model was never asked", () => asked === 1);
@@ -67,9 +72,20 @@ test("an owner's message to an agent survives the workspace resetting mid-turn, 
   const second = await afterReset(first.db, gateway);
 
   await lapLater(second);
-  await until(() => answered, 'the agent never answered after the reset');
+  await until(() => asked === 2, 'the agent never took its turn up again after the reset');
 
-  expect(asked).toBe(2);
+  // The answer is the one the agent's chat keeps, as the owner reads it: once, after the ask it answers.
+  const read = async (): Promise<string> => JSON.stringify((await second.agent.getChatHistoryPage({ actor: actorId, limit: 20 })).items);
+  let chat = await read();
+
+  // Stored at the turn's end, which follows the answer the model gave.
+  while (!chat.includes(ANSWER)) {
+    await nextTurn();
+    chat = await read();
+  }
+
+  expect(chat.split(ANSWER).length - 1).toBe(1);
+  expect(chat.indexOf(ASK)).toBeLessThan(chat.indexOf(ANSWER));
 });
 
 test("the owner's Stop reaches an agent's turn that a reset workspace never saw begin", async () => {

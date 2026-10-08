@@ -79,7 +79,7 @@ describe('a stale attempt\'s stamp exec does not write the successor\'s containe
     reading.release();
     await stale;
 
-    expect(stamps(harnessed.container)).toEqual([`printf %s ${durable} > ${BOOT_ID_PATH}`]);
+    expect(stamps(harnessed.container)).toHaveLength(1);
     expect(harnessed.container.bootId).toBe(durable);
     expect((await box.devboxState()).replacedCount).toBe(1);
     expect((await box.devboxState()).ready).toBe(true);

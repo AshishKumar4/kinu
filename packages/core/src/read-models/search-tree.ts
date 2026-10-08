@@ -33,7 +33,7 @@ export function readSearchTree(sql: SqlExecutor, actor: ActorHandle, rootId: str
     ORDER BY depth, created_at`;
 }
 
-export interface SearchNodeSummary {
+interface SearchNodeSummary {
   id: string;
   parentId: string | null;
   depth: number;

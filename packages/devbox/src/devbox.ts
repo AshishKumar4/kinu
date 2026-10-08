@@ -478,6 +478,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         if (container().running) await this.#destroyGoldenContainer();
         const options = { instance: instanceOf(this.defaultSize), enableInternet: false, entrypoint: ['sleep', 'infinity'] };
         container().start('image' in from ? { ...options, image: from.image } : { ...options, containerSnapshot: { id: from.snapshot } });
+        keepStartRefusal(container());
         await firstExec(container(), AbortSignal.timeout(120_000));
       },
       exec: async (command) => decoded(await (await container().exec(['/bin/bash', '-c', command])).output()),
@@ -709,6 +710,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     const entrypoint = this.peers === undefined ? undefined : GOLDEN_ENTRYPOINT;
 
     container.start({ ...from, entrypoint, instance: instanceOf(inputs.size), enableInternet: this.enableInternet });
+    keepStartRefusal(container);
   }
 
   /** A snapshot start that fails or misses the cutover falls back to the image and the chain. */
@@ -3143,11 +3145,39 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 }
 
 
-async function firstExec(container: Container, signal: AbortSignal): Promise<void> {
-  const ready = await container.exec(['/bin/true'], { signal });
-  const result = await ready.output();
+/** A start the platform refuses rejects `monitor()` in its own words; an exec after it says only that the container
+ *  has not been started (staging, 2026-10-08: "Account resource limit exceeded"). Kept per container, per start. */
+const startRefusals = new WeakMap<Container, LateStartFailure['cause']>();
 
-  if (result.exitCode !== 0) throw new DevboxError("io", `native container admission exited ${result.exitCode}`);
+/** Called right after each start, so a refusal of that start is what the first exec reports. */
+function keepStartRefusal(container: Container): void {
+  startRefusals.delete(container);
+  unawaited(Promise.allSettled([container.monitor()]).then(([ended]) => {
+    if (ended?.status === 'rejected') startRefusals.set(container, ended.reason);
+  }), 'keeping a start refusal');
+}
+
+/** The platform's refusal of the last start, else what the exec itself failed with. */
+function admissionFailure(container: Container, failed: LateStartFailure): Error {
+  const cause = startRefusals.get(container) ?? failed.cause;
+
+  return cause instanceof Error ? cause : new Error(describe({ cause }));
+}
+
+/** Why the first exec after a start failed, or nothing when it ran clean. */
+async function admissionFailureOf(container: Container, signal: AbortSignal): Promise<Error | undefined> {
+  const [admitted] = await Promise.allSettled([container.exec(['/bin/true'], { signal })]);
+
+  if (admitted?.status !== 'fulfilled') return admissionFailure(container, { cause: admitted?.reason });
+  const { exitCode } = await admitted.value.output();
+
+  return exitCode === 0 ? undefined : new DevboxError('io', `native container admission exited ${String(exitCode)}`);
+}
+
+async function firstExec(container: Container, signal: AbortSignal): Promise<void> {
+  const failed = await admissionFailureOf(container, signal);
+
+  if (failed !== undefined) throw failed;
 }
 
 function launch(container: Container, argv: readonly string[], options: DevboxExecOptions): Promise<ExecProcess> {

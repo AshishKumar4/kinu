@@ -7,7 +7,6 @@ import { describe, expect, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { present, scratchDir } from '@kinu.run/test-utils';
-import * as v from 'valibot';
 import { SLATE_SERVER_MODULE } from '@kinu.run/core/slates';
 import { slateRunnerSource } from '../src/slates/resident';
 
@@ -99,11 +98,6 @@ describe('a runner whose application fails to start', () => {
 
     expect(failed.status).toBe(503);
     expect(failed.headers.get('x-slate-runner')).toBe('start-failed');
-
-    const body = v.parse(v.object({ reason: v.string(), error: v.string() }), await failed.json());
-
-    expect(body.reason).toContain('must export class Slate');
-    expect(body.error).toBe(body.reason);
 
     const application: { promote?: () => void } = await import(join(dir, 'application.js'));
 

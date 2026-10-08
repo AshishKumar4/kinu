@@ -42,7 +42,7 @@ export function DeleteAccountCard({ email }: { email: string }) {
   return (
     <Card title="Delete this account" icon={WarningIcon}>
       <Field inline label="Start over">
-        <Button variant="secondary" size="sm" onClick={() => setOpen(true)} data-delete-account>Delete account…</Button>
+        <Button variant="secondary" size="sm" onClick={() => setOpen(true)}>Delete account…</Button>
       </Field>
       {open && (
         <Modal title="Delete this account" onClose={close} busy={busy}
@@ -50,7 +50,7 @@ export function DeleteAccountCard({ email }: { email: string }) {
           footer={
             <>
               <Button variant="ghost" size="sm" onClick={close} disabled={busy}>Cancel</Button>
-              <FilledButton danger disabled={!confirmed || busy} onClick={(...args: Parameters<typeof run>) => detach(Effect.promise(async () => run(...args)))} data-delete-everything>
+              <FilledButton danger disabled={!confirmed || busy} onClick={(...args: Parameters<typeof run>) => detach(Effect.promise(async () => run(...args)))}>
                 {busy ? <Loader size="sm" /> : null} Delete everything
               </FilledButton>
             </>

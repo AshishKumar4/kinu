@@ -1,7 +1,6 @@
 /**
- * The shared behaviour cases. Each names the backend twins it drives: the same method on the cf actor
- * and on the CLI session, whose policy lives in core. `twins.test.ts` holds the covered names equal to
- * the twins the two classes actually share, less their declared adapter seams.
+ * The shared behaviour cases: each drives the same operation on the cf actor and on the CLI session, whose
+ * policy lives in core.
  */
 import type { BackendOpening, SharedBackend } from './backend';
 import { CHECKPOINT_CASES } from './cases/checkpoints';
@@ -14,8 +13,6 @@ import { WORK_LEDGER_CASES } from './cases/work-ledger';
 
 export interface SharedCase {
   readonly title: string;
-  /** Twin methods whose shared policy this case would catch a backend dropping. */
-  readonly covers: readonly string[];
   /** The machine the backend is opened on, where a case needs one unlike the default. */
   readonly opens?: () => BackendOpening;
   run(backend: SharedBackend): Promise<void>;

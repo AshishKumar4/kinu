@@ -79,10 +79,17 @@ const Build = v.object({ productSha: v.string() });
 
 const comparisonText = readFileSync(values.comparison, 'utf8');
 
-const comparison = v.parse(v.object({
+const compared = v.parse(v.union([v.object({ refused: v.string() }), v.object({
   baseline: v.nullable(Build), candidate: Build, verdict: v.picklist(['improved', 'regressed', 'unchanged', 'inconclusive']),
   rows: v.array(v.object({ taskId: v.string(), model: v.string(), arm: v.string(), reason: v.nullable(v.string()) })),
-}), JSON.parse(comparisonText));
+})]), JSON.parse(comparisonText));
+
+if ('refused' in compared) {
+  process.stdout.write(`The legs were not compared, so there is nothing to review: ${compared.refused}\n`);
+  process.exit(0);
+}
+
+const comparison = compared;
 
 const resultsText = readFileSync(values.results, 'utf8');
 

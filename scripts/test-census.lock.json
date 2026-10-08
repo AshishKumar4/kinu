@@ -1,5 +1,5 @@
 {
-  "measured": "27a89290f: 1344 test files, 1141 runnable suites, 13311 tests, 50 runners, 1682 non-public product members, 10394 product function bodies",
+  "measured": "a46c688d1: 1317 test files, 1108 runnable suites, 12872 tests, 50 runners, 1731 non-public product members, 10542 product function bodies",
   "entries": [
     {
       "key": "tautology_suspect :: packages/core/src/skills/skills.test.ts :: render order is name order, so the same active set is byte-identical however it was activated :: expected side computed by the code under test",
@@ -182,38 +182,6 @@
             [
               "return portable ? `${scope}-n-${trimmed}` : `${scope}-i-${index + 1}`;",
               "return portable ? `n-${trimmed}` : `${scope}-i-${index + 1}`;"
-            ]
-          ]
-        }
-      ]
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-volatile-context.test.ts :: nothing in the block is clock-derived: the same state fingerprints identically :: expected side computed by the code under test",
-      "count": 1,
-      "plants": [
-        {
-          "defect": "a clock read in the dynamic block",
-          "file": "packages/core/src/prompting/volatile-context.ts",
-          "edits": [
-            [
-              "  return dynamicBody([...sections.values()].map((section) => section.text));",
-              "  return dynamicBody([...sections.values()].map((section) => section.text).concat(String(performance.now())));"
-            ]
-          ]
-        }
-      ]
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-volatile-context.test.ts :: two consecutive builds with unchanged state are byte-identical :: expected side computed by the code under test",
-      "count": 1,
-      "plants": [
-        {
-          "defect": "a clock read in the system prefix",
-          "file": "packages/core/src/prompt.ts",
-          "edits": [
-            [
-              "    renderRoleSection(surface, render),\n  ].filter(Boolean).join",
-              "    renderRoleSection(surface, render),\n    String(performance.now()),\n  ].filter(Boolean).join"
             ]
           ]
         }

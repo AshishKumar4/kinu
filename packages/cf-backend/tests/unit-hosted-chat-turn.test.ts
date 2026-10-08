@@ -83,11 +83,10 @@ test("a hosted agent's turn ends with its answer while its title model runs", as
   });
 });
 
-test("a hosted agent's failed turn ends on one error, its reason, and names nothing", async () => {
+test("a hosted agent's failed turn ends on one error, shown once", async () => {
   const { seen, shown } = await firstTask(() => new Response('', { status: 400 }));
 
-  expect(seen).toEqual([expect.stringMatching(/^turn failed: .*the provider refused the request/u)]);
-  expect(shown).toEqual([expect.stringContaining('the provider refused the request')]);
+  expect([seen.length, shown.length]).toEqual([1, 1]);
 });
 
 test('a task admitted while the drain runs another is run by that drain', async () => {

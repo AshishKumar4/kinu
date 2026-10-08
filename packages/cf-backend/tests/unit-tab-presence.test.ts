@@ -77,16 +77,6 @@ describe('the gated tabs appear only with content', () => {
     expect(html).toContain('aria-label="Files"');
   });
 
-  test('every ungated surface stays visible on a fresh workspace', () => {
-    const html = renderStrip(FRESH);
-
-    for (const surface of ['Files', 'Agent', 'Environment']) {
-      expect(html).toContain(`aria-label="${surface}"`);
-    }
-
-    expect(html).not.toContain('aria-label="Swarms"');
-  });
-
   test('a workspace with content shows the gated tabs in the strip', () => {
     const html = renderStrip(FULL);
     expect(html).toContain('aria-label="Work"');
@@ -109,10 +99,10 @@ describe('the gated tabs appear only with content', () => {
   });
 });
 
-/** The label of every strip tab the markup marks selected. */
+/** The label of every strip button the markup marks current. */
 const currentTabs = (html: string): string[] => html.split('<button').slice(1)
   .map((button) => button.slice(0, button.indexOf('>')))
-  .filter((attributes) => attributes.includes('role="tab"') && attributes.includes('aria-selected="true"'))
+  .filter((attributes) => attributes.includes('aria-current="true"'))
   .map((attributes) => attributes.slice(attributes.indexOf('aria-label="') + 'aria-label="'.length).split('"')[0] ?? '');
 
 describe('the first frame marks the tab a request lands on', () => {

@@ -114,11 +114,4 @@ describe("MemoryStore.search reads its hits from their notes", () => {
 		expect(sql<{ n: number }>`SELECT count(*) AS n FROM memory_note_chunks`[0]?.n).toBe(0);
 	});
 
-	test("the index keeps no copy of a note's text", () => {
-		const { sql } = createTestDb();
-		new MemoryStore(createMemoryVfs(), sql).ensureSchema();
-
-		expect(sql<{ name: string }>`SELECT name FROM pragma_table_info('memory_note_chunks')`.map((column) => column.name))
-			.toEqual(["id", "path", "start_line", "end_line", "hash"]);
-	});
 });

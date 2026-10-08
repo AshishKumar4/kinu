@@ -13,7 +13,7 @@ import type { UserDO } from '../user/user-do';
 import type { DriveAnswer } from '../user/drive';
 import { ownerGate, type ApiVariables, type FamilyEnv } from '../api/context';
 
-export type DriveRouteObject = Pick<UserDO,
+type DriveRouteObject = Pick<UserDO,
   | 'ensureProfile'
   | 'drive_list' | 'drive_mkdir' | 'drive_rename' | 'drive_delete' | 'drive_markAsSkill' | 'drive_addSkill'
   | 'drive_writeChunk' | 'drive_abortUpload' | 'drive_startDownload' | 'drive_readChunk' | 'drive_abortDownload'>;

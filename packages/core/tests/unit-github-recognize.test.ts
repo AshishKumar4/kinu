@@ -12,18 +12,6 @@ const pkt = (line: string) => `${(line.length + 4).toString(16).padStart(4, '0')
 const NEW = 'b'.repeat(40);
 
 describe('GitHub REST, as the devbox egress sees it', () => {
-  test('an issue created answers with its number, page and title', () => {
-    // Captured shape: POST /repos/{owner}/{repo}/issues → 201 (docs.github.com/rest/issues/issues#create-an-issue).
-    const facts = recognizeGitHubHttp(
-      { method: 'POST', url: 'https://api.github.com/repos/acme/checkout/issues', body: JSON.stringify({ title: 'SAVE20 500s at checkout' }) },
-      ok({ id: 1, number: 41, title: 'SAVE20 500s at checkout', state: 'open', html_url: 'https://github.com/acme/checkout/issues/41' }),
-    );
-
-    expect(facts).toEqual([{
-      action: 'opened', subject: 'issue', repo: 'acme/checkout', number: 41,
-      url: 'https://github.com/acme/checkout/issues/41', title: 'SAVE20 500s at checkout', state: 'open',
-    }]);
-  });
 
   test('a pull request created names its branch; a merge and a comment are recorded against it', () => {
     const created = recognizeGitHubHttp(

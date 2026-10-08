@@ -200,7 +200,7 @@ function useRosterPages(filter: RosterFilter | null, subscribe: WorkspaceRosterV
   return { pages, reload, edit, pending: reading > 0 };
 }
 
-export interface RosterSocket extends EventTarget {
+interface RosterSocket extends EventTarget {
   close(): void;
 }
 

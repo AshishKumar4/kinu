@@ -226,7 +226,7 @@ function mounted(root: string, key: string): string {
   return `${STORE_MOUNT}/${key.slice(root.length + 1)}`;
 }
 
-export interface DiskChainAttach {
+interface DiskChainAttach {
   readonly kind: 'empty' | 'attached';
   readonly detail: string;
   readonly recoveredTo: number | undefined;

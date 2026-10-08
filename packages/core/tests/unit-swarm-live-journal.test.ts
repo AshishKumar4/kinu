@@ -11,7 +11,7 @@ import { createRecordingLogger } from '../src/obs/index';
 import { runSwarm, type SwarmRunDeps } from '../src/strategy/swarm-run';
 import { resolveSwarm, swarmValidity } from '../src/strategy/swarm';
 import { HeadJournal } from '../src/heads/journal';
-import { headStatusUnsettled } from '../src/heads/types';
+
 import type { AnnounceHeadActivity } from '../src/heads/live-journal';
 import type { ResolvedSwarm } from '../src/strategy/swarm';
 
@@ -150,7 +150,7 @@ describe('a swarm journals out loud', () => {
       // Report: the node settled.
       const last = forNode.at(-1);
       expect(last?.steps).toBeGreaterThan(0);
-      expect(headStatusUnsettled(last?.status ?? 'running')).toBe(false);
+      expect(last?.status).toBe('completed');
     }
   });
 
@@ -162,7 +162,7 @@ describe('a swarm journals out loud', () => {
 
     for (const node of nodes) {
       expect(reader.countSteps(node.id).steps).toBeGreaterThan(0);
-      expect(headStatusUnsettled(node.status)).toBe(false);
+      expect(node.status).toBe('completed');
     }
   });
 });

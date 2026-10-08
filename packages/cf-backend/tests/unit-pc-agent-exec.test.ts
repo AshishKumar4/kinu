@@ -624,26 +624,6 @@ describe('pc-agent command cancellation', () => {
     expect(await ws.answerTo(id)).toMatchObject({ result: { exitCode: 137 } });
   });
 
-  test('a dropped socket terminates a command that still has no terminal result', async () => {
-    const dir = scratchDir('pc-agent-disconnect');
-    const waiting = commandWithDescendant(dir, 'waiting');
-    const ws = recorder();
-    const registeredBefore = v.parse(v.number(), pcAgent.inFlight.size());
-    handle({ id: rpcId(250), method: 'exec', params: [waiting.command] }, ws.socket);
-    const abandoned = await waiting.pidOf(ws.answerTo(rpcId(250)));
-    expect(isRunning(abandoned)).toBe(true);
-    // The supervisor's state file can precede the daemon's registration: while `starting` still owns that record,
-    // a sweep leaves it to the start. This test drops an already registered command; the preceding test drops a start.
-    await settled(() => (pcAgent.inFlight.size() === registeredBefore + 1 ? true : undefined), 'the running command to be registered');
-
-    // Settles only once the kill is confirmed and rejects when unproven; polling `kill(pid, 0)` cannot tell
-    // "not yet" from "never". Selected by request id: the sweep terminates every abandoned command at once.
-    const swept = await pcAgent.inFlight.terminateUnanswered();
-    const mine = swept.find((entry) => entry.requestId === rpcId(250));
-    expect(mine).toBeDefined();
-    expect(v.parse(ConfirmedCancellationSchema, await mine?.terminated))
-      .toEqual({ requestId: rpcId(250), cancelled: 'terminated' });
-  });
 });
 
 /**

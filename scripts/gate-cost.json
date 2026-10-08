@@ -949,7 +949,7 @@
       "loadAtStart": 26.51,
       "exit": 0
     },
-    "bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/reset.test.ts scripts/prod-logs.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts": {
+    "bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/prod-logs.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts": {
       "wallSeconds": 51.24,
       "cpuSeconds": 27.61,
       "peakRssMb": 588.62,

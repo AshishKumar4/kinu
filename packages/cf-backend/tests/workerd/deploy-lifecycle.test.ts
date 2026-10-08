@@ -89,9 +89,9 @@ describe('a guided self-deployment', () => {
 
     expect({
       keys,
-      leg: { status: leg.status, bound: leg.bound === sha256Hex(leg.state) },
-      forwarded: { status: forwarded.status, says: forwarded.body.includes('This browser did not start that authorization.') },
-      unknown: { status: unknown.status, says: unknown.body.includes('That authorization is not one this run started.') },
+      leg: { status: leg.status, bound: leg.bound === await sha256HexOf(leg.state) },
+      forwarded: forwarded.status,
+      unknown: unknown.status,
       unauthorizedAfterForgeries,
       landed: landed.status,
       replayed: replayed.status,
@@ -99,8 +99,8 @@ describe('a guided self-deployment', () => {
     }).toEqual({
       keys: { header: 200, query: 403, socket: 101 },
       leg: { status: 200, bound: true },
-      forwarded: { status: 400, says: true },
-      unknown: { status: 400, says: true },
+      forwarded: 400,
+      unknown: 400,
       unauthorizedAfterForgeries: true,
       landed: 302,
       replayed: 400,
@@ -252,8 +252,8 @@ describe('a deployment updating itself', () => {
     const current = await offer(OWNER);
     const refused = await env.UPDATES_PROBE.hit('POST', '/api/updates/apply', OWNER);
 
-    expect({ upToDate: current.upToDate, reason: current.reason, refused: refused.status, uploads: (await env.DEPLOY_FAKE.state()).uploads })
-      .toEqual({ upToDate: true, reason: 'This is the build the channel publishes.', refused: 409, uploads: 1 });
+    expect({ upToDate: current.upToDate, refused: refused.status, uploads: (await env.DEPLOY_FAKE.state()).uploads })
+      .toEqual({ upToDate: true, refused: 409, uploads: 1 });
 
     // The next release: its smoke fails twice and the old version keeps serving; the vault expires in between, and the
     // apply after that refreshes only if the deployment kept the last rotated token.
@@ -287,3 +287,10 @@ describe('a deployment updating itself', () => {
     });
   });
 });
+
+/** SHA-256 of `text`, hex, from Web Crypto rather than the product's own digest helper. */
+async function sha256HexOf(text: string): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
+
+  return [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}

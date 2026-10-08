@@ -57,26 +57,10 @@ import type { ModelCallSink } from '../events/model-call';
 import type { BuiltinToolName, ToolSurfaceNarrowing } from '../tools/registry';
 import { defaultLoopOrigin } from '../scaffold/loop-origin';
 
-/**
- * A head's builtins plus `report`. Together with {@link NODE_WITHHELD_TOOLS} it must cover the
- * whole builtin surface (asserted by test).
- */
+/** A head's builtins plus `report`. */
 export const NODE_BUILTIN_TOOLS = [...HEAD_BUILTIN_TOOLS, 'report'] as const satisfies readonly BuiltinToolName[];
 
-/** Builtins withheld from a node, each with its reason; absent a reason, a tool goes in. */
-export const NODE_WITHHELD_TOOLS = {
-  // Not a recursion guard: this tool is the search engine itself (an import ring), and a node
-  // funds more actors only through the arbiter's shared budget.
-  agents: 'the delegation tool IS the search engine (an import ring), and a node funds '
-    + 'more actors only through the arbiter, which holds the budget it cannot see',
-  memory: 'durable notes, facts and the past conversation live in per-workspace stores the node '
-    + 'shares with its parent and siblings; search grades reports, not state left behind',
-  tasks: 'one `agent_tasks` list per workspace, shared with the parent and siblings; '
-    + 'its `mode` action selects the parent agent\'s durable role',
-} as const satisfies Readonly<Record<string, string>>;
-
 export const PROPOSE_BRANCH_TOOL = 'propose_branch';
-
 
 /** What the engine hands one node. Identity, depth and seed are engine-authored (*Node identity*, *Inherited context*). */
 export interface NodeAgentInput extends NodeIdentity {
@@ -152,10 +136,6 @@ export interface NodeAgentDeps {
   gradeReport?: (candidate: string) => Promise<string | null>;
   backgroundPolicy?: () => BackgroundPolicy;
 }
-
-
-
-
 
 /** A node's `eval` over the actor it runs as, whose runtime may be rebuilt for its home. */
 export type NodeCodemode = (actor: HostedActor) => (finished: ToolSet, reach: ToolSurfaceNarrowing) => ToolSet[string];

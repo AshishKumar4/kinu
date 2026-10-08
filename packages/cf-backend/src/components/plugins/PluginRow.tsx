@@ -1,7 +1,7 @@
 /** An endpoint URL is never the row's second line; the catalog description is. */
 import type { ComponentType, ReactNode } from "react";
 
-export type PluginTone = 'success' | 'warning' | 'neutral' | 'danger';
+type PluginTone = 'success' | 'warning' | 'neutral' | 'danger';
 
 export interface PluginStatus {
   readonly label: string;

@@ -16,7 +16,6 @@ function pendingScaffold({ sql, actor }: SharedBackend, rationale: string): void
 export const EVOLUTION_CASES: readonly SharedCase[] = [
   {
     title: 'the agent\'s learning setting is the one switch: off, a turn records nothing; back on, the next one is recorded',
-    covers: ['send'],
     async run({ surface, sql, actor }) {
       const recorded = () => sql<{ turn: string }>`SELECT turn FROM completed_turns WHERE actor_id = ${actor.actorId}`
         .map((row) => v.parse(v.object({ userMessage: v.string() }), JSON.parse(row.turn)).userMessage);
@@ -33,7 +32,6 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
   },
   {
     title: 'a live trial\'s turn reads its arm from its cache segment by the one seeded rule, and records it',
-    covers: ['getEvolutionStatus'],
     async run({ surface, sql, actor }) {
       const artifactId = sectionArtifact('guidance/operating');
       const body = `${bundledArtifact(artifactId)?.trimEnd() ?? ''} Be brief.`;
@@ -54,7 +52,6 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
   },
   {
     title: 'a proposed scaffold waits for the owner, who can roll it back',
-    covers: ['getEvolutionStatus', 'applyScaffoldDecision'],
     async run(backend) {
       const { surface } = backend;
       pendingScaffold(backend, 'answer in the owner language');
@@ -74,7 +71,6 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
   },
   {
     title: 'the changelog tells the owner of a change, undoes it on request, and a look clears the badge',
-    covers: ['getEvolutionChangelog', 'revertChangelogEntry', 'markChangelogSeen'],
     async run(backend) {
       const { surface } = backend;
       pendingScaffold(backend, 'answer in the owner language');
@@ -100,7 +96,6 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
   },
   {
     title: 'picking the answer given rates it high; picking the other take rates it low and queues a continuation',
-    covers: ['latestAlternateTakes', 'pickAlternateTake'],
     async run({ surface, sql, actor }) {
       expect(await surface.latestAlternateTakes()).toBeNull();
 
@@ -129,7 +124,6 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
   },
   {
     title: 'a plan under review takes checked annotations, and a verdict hands the next turn off once',
-    covers: ['getActivePlanReview', 'savePlanReviewAnnotations', 'decidePlanReview'],
     async run({ surface, sql, actor }) {
       expect(await surface.getActivePlanReview()).toBeNull();
       const submitted = new PlanReviewStore(sql, actor).submit(CHAT_SESSION_ID, [{ start: 1, content: '# Plan\n\n1. Ship it.\n' }]);
@@ -158,7 +152,6 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
   },
   {
     title: 'a dismissed plan stops awaiting a decision and takes no later verdict',
-    covers: ['dismissPlanReview'],
     async run({ surface, sql, actor }) {
       const submitted = new PlanReviewStore(sql, actor).submit(CHAT_SESSION_ID, [{ start: 1, content: '# Plan\n\n1. Ship it.\n' }]);
 
@@ -171,7 +164,6 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
   },
   {
     title: 'a refinement with no rated turns is refused on the record, and an unknown one decides nothing',
-    covers: ['requestRefinement', 'listRefinements', 'showRefinement', 'decideRefinement'],
     async run({ surface }) {
       expect(await surface.listRefinements(5)).toMatchObject({
         requests: [], debt: { owed: false, summary: 'no unresolved low-rated turns: nothing is owed a refinement' },

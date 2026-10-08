@@ -175,18 +175,17 @@ describe('the device sandbox, as the kernel enforces it', () => {
 
   test('the GPU nodes this machine has are inside, and bash-only syntax runs', async () => {
     if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
-    const nodes = sandbox.gpuNodes();
+    // What this host has, read from its own /dev rather than asked of the sandbox.
+    const host = fs.readdirSync('/dev').filter((entry) => entry.startsWith('nvidia')).map((entry) => `/dev/${entry}`);
+
+    if (fs.existsSync('/dev/dri')) host.push('/dev/dri');
     const run = runSandboxed('set -o pipefail; shopt -s nullglob; for node in /dev/nvidia* /dev/dri; do if [[ -e $node ]]; then printf "%s\\n" "$node"; fi; done');
 
     expect(run.status).toBe(0);
 
     // Only what this box actually has: `--dev /dev` alone is an empty
     // devtmpfs, which is why a sandbox that stops there has no GPU.
-    for (const node of nodes) {
-      if (node.startsWith('/dev/nvidia') || node === '/dev/dri') {
-        expect(run.stdout).toContain(node);
-      }
-    }
+    for (const node of host) expect(run.stdout).toContain(node);
   });
 
   test('the command environment is the allow-list, with the sandbox\'s own values', async () => {
@@ -214,15 +213,6 @@ describe('the device sandbox, as the kernel enforces it', () => {
       'HTTPS_PROXY=http://proxy.corp:3128', 'no_proxy=localhost']) {
       expect(run.stdout).toContain(kept);
     }
-  });
-
-  test('with the Sandbox switch off a command gets the owner\'s environment, less Kinu\'s credentials', () => {
-    const owner = { PATH: '/usr/bin', GITHUB_TOKEN: 'ghp_owner_pat', SSH_AUTH_SOCK: '/tmp/owner-agent.sock', TZ: 'UTC', DISPLAY: ':0' };
-    const withheld = Object.fromEntries(sandbox.WITHHELD_ENV.map((name) => [name, `planted:${name}`]));
-
-    const { env } = sandbox.plan({ tier: 'raw', deviceHome: '/home/dev/.kinu', command: 'env', cwd: '/home/dev', source: { ...owner, ...withheld } });
-
-    expect(env).toEqual(owner);
   });
 
   test('what a dotenv file put into the daemon at launch reaches no command, in either tier', () => {

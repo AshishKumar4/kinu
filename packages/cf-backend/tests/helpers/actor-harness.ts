@@ -414,11 +414,14 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
       },
     };
   }
-  /** The installed overlay merged over the builtins, digest recomputed. */
+  /** The installed overlay merged over the builtins, digest recomputed. With a real account in its world and no
+   *  catalog installed over it, the account's own catalog, read as a deployed workspace reads it. */
   protected override async profileCatalog(): Promise<ProfileCatalogEnvelope> {
     const overlay = this._catalogOverlay;
 
-    if (overlay === null) return HARNESS_PROFILE_ENVELOPE;
+    if (overlay === null || (overlay.roles === undefined && overlay.tiers === undefined && overlay.betaSwarms === undefined)) {
+      return activationWorlds.get(this.ctx)?.userDO === undefined ? HARNESS_PROFILE_ENVELOPE : super.profileCatalog();
+    }
 
     const catalog: ProfileCatalog = {
       roles: { ...BUILTIN_PROFILE_CATALOG.roles, ...overlay.roles },
@@ -1509,7 +1512,7 @@ export interface RecordedUserPlaneCalls {
   /** Set to record the turns the object asks the hub to stop device work for; unset, that ask is unreachable. */
   turnCancels?: string[];
   /** Set to record the roster tiles the object pushes, in order; unset, a push lands nowhere. */
-  overviews?: WorkspaceOverview[];
+  overviews?: { push(overview: WorkspaceOverview): void };
   /** What the owner's object throws at each push, in order, before it takes one. */
   refuseOverviews?: Error[];
   /** Set to hold every push until it settles. */

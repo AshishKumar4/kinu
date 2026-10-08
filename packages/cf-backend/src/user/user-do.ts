@@ -36,7 +36,7 @@ import {
   UserSessions, CLI_AGENT_WEBSOCKET_CAPABILITY, type BrowserSessionIdentity, type CliAgentConnectTicketVerification, type CliTokenVerification, type LiveBrowserSession,
 } from './sessions';
 
-import { UserCredentials, type CredentialEndpoint, type CodexStatus, type ConnectedProvider, type CredentialSummary } from './credentials';
+import { UserCredentials, type CheckpointedCredential, type CredentialEndpoint, type CodexStatus, type ConnectedProvider, type CredentialSummary } from './credentials';
 import { UserWorkspaces, type WorkspaceEntry, type WorkspaceRegistration, type WorkspaceRegistrationSource } from './workspaces';
 import { UserProfileStore, type ProfileCatalogWriteResult, type UserProfile } from './profile';
 import { ShareCardJobs, type ReceivedShare } from './share-cards';
@@ -256,6 +256,14 @@ export class UserDO extends Agent<Env> {
 
   deleteCredential(caller: UserCaller, key: string): Promise<void> {
     return this.credentials.deleteCredential(caller, key);
+  }
+
+  checkpointCredentials(caller: UserCaller, account: string): Promise<CheckpointedCredential[]> {
+    return this.credentials.checkpointCredentials(caller, account);
+  }
+
+  restoreCredentials(caller: UserCaller, account: string, checkpoint: readonly CheckpointedCredential[]): Promise<string[]> {
+    return this.credentials.restoreCredentials(caller, account, checkpoint);
   }
 
   listUnrevokedGrants(caller: UserCaller): Promise<UnrevokedGrant[]> {

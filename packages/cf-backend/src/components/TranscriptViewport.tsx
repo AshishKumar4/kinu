@@ -38,7 +38,7 @@ export function TranscriptViewport({ chat, live, startFirst = false, padClass, p
   );
 
   return (
-    <div ref={ref} data-thread className={`flex-1 overflow-y-auto p-thread-column space-y-5 ${padClass}`}>
+    <div ref={ref} className={`flex-1 overflow-y-auto p-thread-column space-y-5 ${padClass}`}>
       {startFirst && start}
       <HistoryReserve range={reserves.top} rowPx={rowPx} history={history} />
       {hasEntries && <HistoryBoundary loading={history.loading} error={error} exhausted={history.exhausted} onRetry={history.retry} />}

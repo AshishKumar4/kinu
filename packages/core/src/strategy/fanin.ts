@@ -42,7 +42,7 @@ export interface FanInNode {
 }
 
 /** The spawn request for an aggregate vertex, spawned by the same `expandChild` as the wave path. */
-export interface FanInExpandInput<N extends FanInNode> {
+interface FanInExpandInput<N extends FanInNode> {
   readonly parent: N;
   readonly id: string;
   readonly index: number;
@@ -59,7 +59,7 @@ export interface FanInExpandInput<N extends FanInNode> {
   readonly assignment: null;
 }
 
-export interface FanInMeasureInput {
+interface FanInMeasureInput {
   readonly ctx: MeasurementContext;
   readonly verifier: ResolvedVerifier;
   readonly witnessVerifier: ResolvedVerifier | null;
@@ -69,7 +69,7 @@ export interface FanInMeasureInput {
 }
 
 /** Each parent carries its artifact; the fan-in hands it to `measureChild` on revalidation. */
-export type FanInAtLevelInput =
+type FanInAtLevelInput =
   Omit<FanInMeasureInput, 'artifact'> & { readonly atDepth: number };
 
 export interface LevelFanInDeps<N extends FanInNode, V extends { readonly id: string }> {
@@ -92,7 +92,7 @@ export interface LevelFanInDeps<N extends FanInNode, V extends { readonly id: st
   readonly sharedPrefix?: (parent: N) => Promise<readonly ModelMessage[]>;
 }
 
-export interface FanInLedgerReport {
+interface FanInLedgerReport {
   readonly levels: number;
   readonly order: readonly string[];
   readonly merged: number;

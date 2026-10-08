@@ -191,7 +191,7 @@ function isExecutableToolEntry(
 }
 
 /** Build `eval` over a finished surface; `buildActorTools` calls it before the effect-claim wrap. */
-export function installCodemode(
+function installCodemode(
   surface: ToolSet,
   build: CodemodeBuilder,
   deps: BuiltinToolDeps,

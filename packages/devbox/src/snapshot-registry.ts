@@ -4,7 +4,7 @@ import { Effect } from 'effect';
 import * as v from 'valibot';
 import { DevboxError, attempt, settle } from './errors';
 
-export type SnapshotDeletion = { readonly kind: 'deleted' | 'absent' } | { readonly kind: 'refused'; readonly reason: string };
+type SnapshotDeletion = { readonly kind: 'deleted' | 'absent' } | { readonly kind: 'refused'; readonly reason: string };
 
 export interface SnapshotRegistry {
   delete(id: string): Promise<SnapshotDeletion>;

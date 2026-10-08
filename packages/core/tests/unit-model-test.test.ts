@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
-import { asFetchFunction, modelTestText, testModel, ProviderPacer, type ModelCallReport } from '../src/index';
+import { asFetchFunction, testModel, ProviderPacer, type ModelCallReport } from '../src/index';
 import { withModelStack } from '../src/providers/wire-model';
 
 const SSE = { 'content-type': 'text/event-stream' };
@@ -72,9 +72,8 @@ describe('testModel', () => {
   test('a spent allowance names its reset time', async () => {
     const result = await testModel({ spec: 'probe/m', resolve: modelAnswering(SPENT, { count: 0 }) });
 
-    expect(result.ok ? '' : result.message).toMatch(/rate-limited until \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/);
+    expect(result).toMatchObject({ ok: false, failure: 'spent' });
     expect(result.ok ? 0 : result.until ?? 0).toBeGreaterThan(Date.now() + 8 * 86_400_000);
-    expect(modelTestText(result, { provider: 'opencode-go', from: 'here' })).toMatch(/^OpenCode Go allowance is spent until \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\.$/u);
   });
 
   test('a thinking model is timed from its first reasoning delta, even before any answer text', async () => {

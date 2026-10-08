@@ -85,7 +85,7 @@ export function formatApproval(result: ApprovalResult): string {
 const APPROVAL_DENIED = 'Denied';
 
 /** Not imported from config/store.ts: a layergate subject source stays import-free. */
-export type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';
+type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';
 
 /** Read at call time, so a mode or channel change applies to the next command. */
 export interface ShellApprovalPolicy {

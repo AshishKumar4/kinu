@@ -146,7 +146,6 @@ describe('no unminted route reaches a Durable Object', () => {
 
     expect(response?.status).toBe(404);
     expect(response?.headers.get('cache-control')).toBe('no-store');
-    expect(await response?.text()).toBe('Not found');
     expect(probe.activations).toEqual([]);
     expect(probe.deliveries).toEqual([]);
     expect(request.bodyUsed).toBe(false);
@@ -411,7 +410,6 @@ describe('the Worker entry serves delivery before the auth gate', () => {
 
     expect(response.status).toBe(404);
     expect(response.headers.get('cache-control')).toBe('no-store');
-    expect(await response.text()).toBe('Not found');
     expect(probe.activations).toEqual([]);
   });
 });

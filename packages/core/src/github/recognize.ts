@@ -7,9 +7,9 @@ import { isJsonObject, JsonObjectSchema, type JsonObject, type JsonValue } from 
 export const GITHUB_MCP_PRESET = 'github' satisfies McpPresetId;
 
 /** `identified`: a lookup named a node id, for a later write by id alone. */
-export type GitHubAction = 'opened' | 'touched' | 'closed' | 'merged' | 'pushed' | 'fetched' | 'identified';
+type GitHubAction = 'opened' | 'touched' | 'closed' | 'merged' | 'pushed' | 'fetched' | 'identified';
 
-export type GitHubSubject = 'issue' | 'pr' | 'repo';
+type GitHubSubject = 'issue' | 'pr' | 'repo';
 
 export interface GitHubSubjectFact {
   readonly action: GitHubAction;
@@ -27,7 +27,7 @@ export interface GitHubSubjectFact {
 }
 
 /** A write answered with a node id only. */
-export interface GitHubNodeFact {
+interface GitHubNodeFact {
   readonly action: GitHubAction;
   readonly subject: 'issue' | 'pr';
   readonly node: string;

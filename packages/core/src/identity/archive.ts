@@ -111,7 +111,7 @@ export interface ArchiveAgentsCursor {
   rows: number;
 }
 
-export interface ArchiveStoreCursor {
+interface ArchiveStoreCursor {
   phase: 'store';
   pin: string;
   root: number;
@@ -213,7 +213,7 @@ export interface ArchiveExportOptions {
 }
 
 /** Cloud-only: a local workspace keeps its files on disk and every actor's rows in `sql`. */
-export interface CloudArchiveSources {
+interface CloudArchiveSources {
   store?: ArchiveStoreSource | null;
   agents?: ArchiveAgentSource | null;
 }

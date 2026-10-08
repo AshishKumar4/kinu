@@ -505,20 +505,13 @@ if [ "$KINU_ENV" = "staging" ]; then
     || { publish_red "$KINU_SHA's record on staging could not be withdrawn, so this deploy will not replace what it verified"; return 1; }
 fi
 
+# The build runs on armada at this exact commit (scripts/release-build.sh): the
+# client bundle and Worker for this environment, and unless promoting, the worker
+# release artifact and the CLI distribution, which is signed here, where the key is.
+KINU_BUILD_ARGS=("$KINU_ENV" "$KINU_SHA")
+if [ "$KINU_PROMOTE" = "1" ]; then KINU_BUILD_ARGS+=(--promote); fi
+bun "$KINU_ROOT/scripts/release-build.ts" "${KINU_BUILD_ARGS[@]}" || { publish_red "the build on armada failed"; return 1; }
 cd "$KINU_ROOT/packages/cf-backend" || { publish_red "cannot cd to cf-backend"; return 1; }
-
-# Build the client bundle into dist/client (used by wrangler's assets directive),
-# for this deploy's environment. Production is the config's top level, so its
-# build names none.
-KINU_BUILD_ENV=()
-if [ "$KINU_ENV" = "staging" ]; then KINU_BUILD_ENV=(CLOUDFLARE_ENV=staging); fi
-if [ -f ./node_modules/.bin/vite ]; then
-  echo "Running: vite build"
-  env "${KINU_BUILD_ENV[@]}" ./node_modules/.bin/vite build || { publish_red "vite build failed"; return 1; }
-else
-  echo "Running: bunx vite build"
-  env "${KINU_BUILD_ENV[@]}" bunx vite build || { publish_red "vite build failed"; return 1; }
-fi
 
 # The Worker and origin this build is FOR, read from the config the Vite plugin
 # flattened for it, which is the one `wrangler deploy` publishes (see header).
@@ -552,20 +545,6 @@ if [ "$KINU_PROMOTE" = "1" ]; then
   echo "Adopting staging's downloads and worker release artifact"
   bun "$KINU_ROOT/scripts/promote.ts" adopt \
     || { publish_red "this build is not the one staging verified, or its downloads did not check out"; return 1; }
-else
-  # The worker release artifact, BEFORE the CLI distribution: `build-cli-dist.sh`
-  # signs every artifact it finds in the downloads directory, so writing this one
-  # first is what puts its checksum in `kinu-version.json` beside the CLI's. The
-  # self-deploy flow reads `release.json` and verifies the tarball against the
-  # `.sha256` published beside it, which is integrity and not a signature; the
-  # smoke check below is where that sidecar is held against the signed manifest,
-  # so a drift between them fails this deploy (docs/SELF-DEPLOY.md).
-  echo "Building the worker release artifact ($KINU_RELEASE_VERSION)"
-  bun "$KINU_ROOT/scripts/build-worker-release.ts" "$KINU_RELEASE_VERSION" "$KINU_SHA" \
-    || { publish_red "worker release artifact build failed"; return 1; }
-
-  echo "Building the CLI distribution"
-  bash "$KINU_ROOT/scripts/build-cli-dist.sh" || { publish_red "CLI distribution build failed"; return 1; }
 fi
 
 # No deploy may ship without every CLI download asset sitting in the
@@ -634,6 +613,9 @@ if [ "$KINU_RESET" = "1" ]; then
   echo ""
   echo -e "${BOLD}Step 2b: Resetting $KINU_WORKER${NC}"
   KINU_RESET_RECORD="$(mktemp -t kinu-reset.XXXXXX.json)"
+  # Eval-service's credentials, the reviewer's login among them, outlive the reset: restored once the build serves.
+  bun "$KINU_ROOT/scripts/credential-checkpoint.ts" save "$KINU_URL" \
+    || { publish_red "eval-service's credentials were not captured, as the line above says, so nothing was reset or deployed"; return 1; }
   bun "$KINU_ROOT/scripts/reset.ts" wipe "$KINU_ENV" "$KINU_RESET_RECORD" \
     || { publish_red "the reset failed; its lines in the deploy's output say what it deleted before it stopped, and a deploy with --reset finishes it from its record"; return 1; }
   KINU_RECORD_ARGS=("$KINU_RESET_RECORD")
@@ -969,7 +951,11 @@ start_soak() {
 # of the owner here, in the foreground, and only for a login the deployment does not hold, so only after a reset wiped
 # it. The soak's provisioning runs detached and cannot ask. A login not approved is a notice in the report, never a red:
 # the reviewer explains a run, and the build is not what it measures.
-if [ "$KINU_SERVING" = "1" ]; then bun "$KINU_ROOT/evals/scripts/reviewer-sign-in.ts" "$KINU_EVAL_ORIGIN"; fi
+if [ "$KINU_SERVING" = "1" ]; then
+  bun "$KINU_ROOT/scripts/credential-checkpoint.ts" restore "$KINU_EVAL_ORIGIN" \
+    || step_red provision "eval-service's credentials" "the checkpoint was not restored, as the line above says; its file stays for the next deploy to finish"
+  bun "$KINU_ROOT/evals/scripts/reviewer-sign-in.ts" "$KINU_EVAL_ORIGIN"
+fi
 
 if [ "$KINU_PROMOTE" = "1" ]; then
   if [ -z "$KINU_TIERS_WHY" ]; then

@@ -32,7 +32,7 @@ import { publicationOf, recordExploration, type ExplorationWrite } from './recor
 
 /** `stop`, from what the loop observed: budget spent with nothing selectable is settled,
  *  with a frontier open or narrower than configured is truncated. */
-export function deriveStop(input: {
+function deriveStop(input: {
   readonly aborted: boolean;
   readonly missionSpent: boolean;
   readonly lost: number;

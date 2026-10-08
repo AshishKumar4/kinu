@@ -106,7 +106,7 @@ export const QueuedConversationSchema = v.object({
 
 export type QueuedConversation = v.InferOutput<typeof QueuedConversationSchema>;
 
-export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'agent-slate' | 'page-modes' | 'terminal-cut' | 'terminal-stuck' | 'close';
+export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'agent-slate' | 'page-modes' | 'terminal-cut' | 'terminal-stuck' | 'close' | 'kill';
 
 /** A durable `pending_steers` row; `turn_id` is null when reserved before a turn opens. */
 export const PendingSteerSchema = v.object({
@@ -416,6 +416,34 @@ export interface StrandedWork {
 export interface EffectStatus {
   readonly effectName: string;
   readonly status: string;
+}
+
+/** The file the N-kill turn writes, one line a step. */
+export const KILL_FILE = 'kill-steps.txt';
+
+/** Where a planned kill lands on a request for a step: before any byte, after the first delta, or once the step's
+ *  tool call is wholly delivered (the call is the tool's to run, inside its `sleep`). */
+export type KillPoint = 'request' | 'stream' | 'delivered';
+
+/** One planned kill of the N-kill turn: where it landed, and how long the object took to ask for that step again
+ *  with no client connected. */
+export interface KillLanded {
+  readonly step: number;
+  readonly at: KillPoint;
+  readonly revivalMs: number;
+}
+
+/** What an N-kill turn left: its kills, the file its steps wrote, every tool call the model issued in order, what the
+ *  model holds of each step's calls, and how the turn and its claim ended. */
+export interface KillJourney {
+  readonly kills: readonly KillLanded[];
+  readonly file: string;
+  readonly issued: readonly string[];
+  /** Per step, the calls the model's final history answers, and how many of those answers say the step ran. */
+  readonly steps: ReadonlyArray<{ readonly step: number; readonly calls: number; readonly ran: number }>;
+  readonly answers: number;
+  readonly runEnds: ReadonlyArray<{ readonly runId: string; readonly reason: string }>;
+  readonly claimOutcome: string | null;
 }
 
 /** A genesis turn answered and its close held open on the parked logo call, read just before the activation dies. */

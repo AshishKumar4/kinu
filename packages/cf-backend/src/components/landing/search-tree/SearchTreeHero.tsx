@@ -14,7 +14,7 @@ const STATIC_STEP = 1 / 30;
 const SETTLED_AT = 5;
 
 /** `work`: ms one tick spent in simulation plus encode; `interval`: wall time between ticks. */
-export interface SearchTreeHandle {
+interface SearchTreeHandle {
   renderer(): 'webgpu' | 'canvas' | 'static' | 'pending';
   frameTimes(): FrameTimes;
   time(): number;

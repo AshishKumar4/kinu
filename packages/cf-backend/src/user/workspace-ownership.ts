@@ -38,7 +38,7 @@ export interface WorkspaceOwnershipEnv<Id, Agent extends WorkspaceOwnerClaim> ex
   OrchestratorAgent: ObjectNamespace<Id, Agent>;
 }
 
-export interface OwnershipRefusal { readonly status: number; readonly error: string }
+interface OwnershipRefusal { readonly status: number; readonly error: string }
 
 export type OwnedWorkspaceResult<Agent> = Result.Result<Agent, OwnershipRefusal>;
 

@@ -64,7 +64,7 @@ export function cloudflareClientAuth(env: CloudflareOAuthEnv): { fields: Record<
 
   return env.CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD === 'client_secret_post'
     ? { fields: { client_id: clientId, client_secret: clientSecret }, headers: {} }
-    : { fields: { client_id: clientId }, headers: { authorization: `Basic ${base64(`${clientId}:${clientSecret}`)}` } };
+    : { fields: { client_id: clientId }, headers: { authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}` } };
 }
 
 function requestCloudflareOAuthToken(env: CloudflareOAuthEnv, fields: Record<string, string>): Effect.Effect<JsonObject> {
@@ -413,8 +413,4 @@ function jsonObjectOf(response: Response, label: string): Effect.Effect<JsonObje
 
 function isCloudflareAccountId(value: string): boolean {
   return /^[a-fA-F0-9]{16,64}$/.test(value);
-}
-
-function base64(value: string): string {
-  return btoa(value);
 }

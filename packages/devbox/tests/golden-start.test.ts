@@ -144,3 +144,12 @@ test('a box with its own snapshot wakes it, asks no golden, and keeps the pinned
   expect({ starts: container.startOptions.map(startedFrom), asked: golden.asked, installs: container.sequence.filter(step => step === 'exec:tools-install').length })
     .toEqual({ starts: ['golden-1', 'snapshot-1'], asked: [], installs: 0 });
 });
+
+// Staging 2026-10-08: the account's containers were all in use, and the golden said only "The container has not been started".
+test('a golden whose base start the platform refuses says why in the platform\'s own words', async () => {
+  const { box, container } = chainBox();
+  container.containerUnavailable = new Error('Account resource limit exceeded');
+
+  await expect(box.ensureGolden()).rejects.toThrow('Account resource limit exceeded');
+  expect(await box.goldenFor('box-a')).toEqual({ kind: 'pending', reason: 'the base snapshot could not be built: starting the base image: Account resource limit exceeded' });
+});

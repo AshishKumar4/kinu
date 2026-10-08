@@ -2,7 +2,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { FileIcon } from "@phosphor-icons/react";
 import { tileBadge, tileWash } from "@/components/ui/cover";
 
-export type SlateArt = "coupons" | "perf" | "ledger" | "release" | "palette" | "issues" | "inbox" | "game";
+type SlateArt = "coupons" | "perf" | "ledger" | "release" | "palette" | "issues" | "inbox" | "game";
 
 export type Preview =
   | { readonly kind: "slate"; readonly art: SlateArt }

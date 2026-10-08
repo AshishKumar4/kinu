@@ -45,7 +45,7 @@ export interface ChatWire {
   awaitSend(id: string): Promise<SendState>;
 }
 
-export interface ChatRoom {
+interface ChatRoom {
   onConnect(connection: ChatSocket): Promise<void>;
   onClose(connection: Pick<ChatSocket, 'id'>): void;
   onMessage(connection: ChatSocket, raw: string): Promise<boolean>;

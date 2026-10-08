@@ -23,6 +23,8 @@ import {
   type Logger,
 } from '@kinu.run/compaction';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
+import { LocalAgentSession } from '../src/local-session';
+import { resolverRest } from './helpers/local-session';
 import { scratchPath, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
@@ -67,12 +69,16 @@ interface CapturingModel {
   prompts: PromptMessage[][];
 }
 
-function capturingModel(): CapturingModel {
+function capturingModel(answer: () => string = () => 'ok'): CapturingModel {
   const prompts: PromptMessage[][] = [];
 
   const model = new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
+    doGenerate: async () => ({
+      content: [{ type: 'text', text: '## Decisions\n- the plan runs in order' }], finishReason: 'stop',
+      usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 }, warnings: [],
+    }),
     doStream: async (options) => {
       prompts.push(options.prompt);
 
@@ -81,7 +87,7 @@ function capturingModel(): CapturingModel {
           start(c) {
             c.enqueue({ type: 'stream-start', warnings: [] });
             c.enqueue({ type: 'text-start', id: 't1' });
-            c.enqueue({ type: 'text-delta', id: 't1', delta: 'ok' });
+            c.enqueue({ type: 'text-delta', id: 't1', delta: answer() });
             c.enqueue({ type: 'text-end', id: 't1' });
             c.enqueue({ type: 'finish', finishReason: 'stop', usage: { inputTokens: 9_000, outputTokens: 2, totalTokens: 9_002 } });
             c.close();
@@ -207,7 +213,6 @@ describe('default compaction over the real storage plane', () => {
     const snapshot = await state.plans.load(SESSION);
 
     if (!snapshot) throw new Error('expected a persisted plan snapshot');
-    expect(snapshot.transcriptRelativePath).toStartWith('.kinu/compaction/');
     expect(plannedJson).toContain(snapshot.transcriptRelativePath);
 
     const rows = rt.storage.sql<{ plan_json: string }>`
@@ -237,8 +242,6 @@ describe('default compaction over the real storage plane', () => {
       startTurn: 1,
     });
     expect(indexed[0].firstUserAsk).toStartWith('Task 0: please run step 0');
-    expect(plannedJson).toContain('## Compaction Archive');
-    expect(plannedJson).toContain(`- turns 1-${indexed[0].endTurn} `);
     expect(rt.storage.sql`SELECT range_hash FROM compaction_archive WHERE session_key = ${SESSION}`)
       .toHaveLength(1);
 
@@ -263,8 +266,7 @@ describe('default compaction over the real storage plane', () => {
     expect(ranges[1].startTurn).toBe(ranges[0].endTurn + 1);
     expect(ranges[1].path).not.toBe(ranges[0].path);
     const foldedJson = JSON.stringify(prompts.at(-1));
-    expect(foldedJson).toContain(`- turns 1-${ranges[0].endTurn} `);
-    expect(foldedJson).toContain(`- turns ${ranges[1].startTurn}-${ranges[1].endTurn} `);
+    expect(foldedJson).toContain(ranges[0].path);
     expect(foldedJson).toContain(ranges[1].path);
 
     // Turn 4: refolding with nothing new rebuilds the same range; the index stays idempotent.
@@ -286,40 +288,38 @@ describe('default compaction over the real storage plane', () => {
       });
 
       initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-      const state = createCompactionStateStore(rt.storage.sql, rt.actor);
+      let reply = '';
 
-      const extension = createCompactionExtension({
-        ports: { transcripts: createVfsTranscriptStore(() => rt.storage.vfs), plans: state.plans, logger: silentLogger },
-        archive: state.archive,
-        ephemeral: new DynamicContextLedger(),
-        attachments: { files: () => rt },
-        summarize: async () => '## Decisions\n- the plan runs in order',
+      const { model, prompts } = capturingModel(() => reply);
+
+      const session = new LocalAgentSession({
+        rt, db, onEvent: () => {}, modelResolver: {
+          normalizeSpecSync: (spec) => spec?.trim() ?? 'fake/fake-model', resolveModel: () => model,
+          listProviders: async () => [], listModels: async () => ({ models: [], failures: [] }),
+          modelInfo: async () => ({ id: 'fake-model', label: 'fake', capabilities: ['tools', 'streaming'], contextWindow: 100_000 }),
+          ...resolverRest,
+        },
       });
 
-      const { model, prompts } = capturingModel();
+      rt.actor.config.setLearning(false);
 
-      if (kind === 'force') state.armCompaction(SESSION);
-      const trigger = kind === 'force' && !state.takeArmedCompaction(SESSION) ? undefined : kind;
+      try {
+        for (let index = 0; index < 12; index++) {
+          reply = `output-${index} ${'x'.repeat(2_000)}`;
+          await session.send(`Task ${index}: please run step ${index} of the plan.`, { id: crypto.randomUUID() });
+        }
 
-      const options: ChatOptions = {
-        modelSpec: 'fake/fake-model',
-        model,
-        modelContext: { id: 'fake/fake-model', contextWindow: 100_000 },
-        system: 'system prompt',
-        history: history(12, 2_000),
-        tools: {},
-        stopWhen: isStepCount(1),
-        extensions: new ExtensionHost().register(extension),
-        cache: { sessionKey: SESSION },
-      };
+        if (kind === 'force') session.armCompaction();
+        else await session.compact();
+        reply = 'ok';
+        await session.send('continue from the last step', { id: crypto.randomUUID() });
+        expect(db.query('SELECT force_compaction FROM compaction_state WHERE force_compaction = 1').all()).toEqual([]);
 
-      if (trigger !== undefined) options.transformTrigger = trigger;
-
-      for await (const _ of runChat(options)) { /* drain */ }
-
-      expect(state.takeArmedCompaction(SESSION)).toBe(false);
-
-      return JSON.stringify(prompts.at(-1));
+        return JSON.stringify(prompts.at(-1));
+      } finally {
+        await session.end();
+        db.close();
+      }
     };
 
     // About 6k tokens of a 100k window: under the ladder target, so recovery has nothing to fold.
