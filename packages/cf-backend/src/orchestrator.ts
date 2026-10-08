@@ -77,6 +77,7 @@ import { publishSubordinateReport, temporaryRunSettles, type ReportDeps } from "
 import type { ToolSet } from "ai";
 import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
+  seedActorLoop, defaultLoopOrigin,
 } from "@kinu.run/core";
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -939,10 +940,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private withAgentFacets(host: ActorHost): ActorHost {
     return {
       ...host,
-      // Main's turns are prepared here as any agent's (D9); its runtime and session are this object's own.
-      acquire: async (reference) => (reference.actorId === this.actorHandle().actorId
-        ? { ...host.bindStores(reference), runtime: this.rt, session: this.actorSession }
-        : await host.acquire(reference)),
+      // Main's turns are prepared here as any agent's (D9); its runtime and session are this object's own, and its loop
+      // is seeded as every hosted actor's is, so its facet runs on the version it names.
+      acquire: async (reference) => {
+        if (reference.actorId !== this.actorHandle().actorId) return await host.acquire(reference);
+        await seedActorLoop(this.rt, null, defaultLoopOrigin('system'));
+
+        return { ...host.bindStores(reference), runtime: this.rt, session: this.actorSession };
+      },
       retire: async (parent, retirement) => {
         const record = this.actorDirectoryStore().retained(retirement.reference.actorId);
         const own = record !== null && hostedActorPlacement(record).homeName !== null;
