@@ -258,9 +258,9 @@ JSONL records as diagnostics, not conversations to reopen.
 ## Walk-back fork
 
 `fork` names two live features: conversation walk-back and cloud workspace
-fork. The delegation action of that name was deleted. `AGENTS_TOOL_ACTIONS`
-(`packages/core/src/tools/registry.ts`) is `swarm`, `hire`, `msg`, `list`,
-`dismiss`; parallel work is `swarm`. See [EXPLORATION.md](EXPLORATION.md).
+fork. The delegation action of that name was deleted. `AGENTS_OPS`
+(`packages/core/src/operations/agents.ts`) is `swarm`, `hire`, `assign`,
+`hireWorkspace`, `message`, `reply`, `list`, `dismiss`; parallel work is `swarm`. See [EXPLORATION.md](EXPLORATION.md).
 
 `/fork [n]` restarts the conversation just before an earlier user message.
 `forkCandidates` builds the picker from rendered user messages. `findForkPivot`

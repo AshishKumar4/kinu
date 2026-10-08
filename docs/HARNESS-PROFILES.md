@@ -39,7 +39,7 @@ profile so a regression there is visible.
 | Surface | What Kinu holds today (step 0) | What a profile changes |
 |---|---|---|
 | Prompt | 30 sections defined with `definePromptSection` (`packages/core/src/prompting/section-templates.ts`), prose in `packages/core/src/prompts/*.md` with typed slots (`TemplateSlots`, `packages/core/src/prompting/template.ts`), composed in order by `buildSystemPromptSync` (`packages/core/src/prompt.ts`); a per-family delta file beside a section (`operating-guidance.gpt.md`, `lead-brief.gpt.md`) selected by `promptFamilyDelta` | Which text opens the context (a vendor prompt as block 0, Kinu's sections that are environment facts demoted to block 1, the rest dropped or rewritten in the vendor's voice) |
-| Tools | The eight native names in `BUILTIN_TOOLS` with their reach in `TOOL_REACH` (`packages/core/src/tools/registry.ts`), each an AI SDK `tool()` over a `jsonSchema()`; `agents` actions and fields typed and gated (`gate:agents-fields`); crafted tools in their ledger; outcomes typed as `ToolOutcome` (`packages/core/src/types/tool-outcome.ts`) | The wire identity of each tool (name, description, schema) and the set of facade tools the vendor's own agents expect (`Agent`, `SendMessage`, `WebFetch`; `spawn_agent`, `wait_agent`) implemented over the native ones |
+| Tools | The eight native names in `BUILTIN_TOOLS` with their reach in `TOOL_REACH` (`packages/core/src/tools/registry.ts`), each an AI SDK `tool()` over a `jsonSchema()`; `agents` operations, each with its own declared fields (`AGENTS_OPS`, `delegation/agents-operations.ts`); crafted tools in their ledger; outcomes typed as `ToolOutcome` (`packages/core/src/types/tool-outcome.ts`) | The wire identity of each tool (name, description, schema) and the set of facade tools the vendor's own agents expect (`Agent`, `SendMessage`, `WebFetch`; `spawn_agent`, `wait_agent`) implemented over the native ones |
 | Serialization | The canonical store (`packages/core/src/session`) records the AI SDK's own `ModelMessage` through its own schema, whole (`message-codec.ts`: what goes in comes out, tool calls, results, reasoning and attachments included); portable tool-call ids (`packages/core/src/providers/tool-call-id.ts`); one `ModelProvider.createModel` seam to every vendor (`packages/core/src/providers/types.ts`), the AI SDK owning the wire | The request's namespaces and part shapes where a vendor reserves them (Codex's `collaboration` group), and the mapping of a wire tool call back to the native call it stands for |
 | Events and dynamic context | Typed `DynamicContext` sections woven as delta blocks against a frozen tail (`packages/core/src/prompting/volatile-context.ts`); step injections (`step-injections.ts`) | The envelope each block is rendered in (Claude Code's `<system-reminder>`, Codex's developer messages, pi's plain user turns) and where in the step it lands |
 
@@ -72,8 +72,8 @@ that forces or disables it. Three pieces carry over in shape:
 
 Two things do not carry over. The fork's tools map one to one. Kinu's `file`
 is one tool with six actions (`FILE_TOOL_ACTIONS`), three of which Claude Code
-declares as `Read`, `Write` and `Edit`, and `agents` is one tool with five
-actions (`AGENTS_TOOL_ACTIONS`) where both vendors declare several tools. A
+declares as `Read`, `Write` and `Edit`, and `agents` is one tool with eight
+operations (`AGENTS_OPS`) where both vendors declare several tools. A
 Kinu facade is therefore a projection (one native tool to N wire tools, and N
 wire calls back to one native call), not a rename. And the fork records what
 the model said and did under the wire names, while Kinu records the native
@@ -117,7 +117,7 @@ changes from the UI and the CLI, read at every step and never cached.
    the model-visible history, so prior calls in the context render under the
    same names the model can call. The canonical record stays native. Gates:
    the projection round-trips every native call for every profile; `native`
-   is the identity; `gate:agents-fields` extends to the facade fields.
+   is the identity; each facade field maps onto a field its operation declares.
 
 3. Prompt presentation. A prompt source per profile: bundled text for `pi`,
    and a recorded capture for `claude-code` and `codex` under the fork's

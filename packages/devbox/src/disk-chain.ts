@@ -14,7 +14,12 @@ export const DEFAULT_EXCLUDES = ['node_modules', '*.log', '.cache', '.bun', '__p
 
 const DISK_CHAIN_FORMAT = 'disk-chain/2';
 
-const Layer = v.object({ key: v.string(), bytes: v.pipe(v.number(), v.safeInteger(), v.minValue(1)), committedAt: v.number() });
+/** The SHA-256 of each part's SHA-256 in order, `partBytes` apiece, as the publisher reported it. */
+const LayerDigest = v.object({ sha256: v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/u)), partBytes: v.pipe(v.number(), v.safeInteger(), v.minValue(1)) });
+
+const Layer = v.object({
+  key: v.string(), bytes: v.pipe(v.number(), v.safeInteger(), v.minValue(1)), committedAt: v.number(), digest: LayerDigest,
+});
 
 /** `saves`: how many saves the layer covers, from the boundary below it; a delta from before D77 covers one. */
 const Delta = v.object({ ...Layer.entries, saves: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(1)), 1) });
@@ -63,6 +68,16 @@ const WORK = `${RT}/disk-work`;
 const HYDRATE = `${RT}/disk-hydrate`;
 
 const RECOVERED = `${RT}/disk-recovered.json`;
+
+/** What a recovery mounted, newest first, and the digests the layers' publications reported. */
+const RecoveryRecord = v.object({
+  rev: v.number(),
+  layers: v.array(v.string()),
+  digests: v.array(v.object({ key: v.string(), ...LayerDigest.entries })),
+});
+
+/** The words of a copy that refused itself: a layer it read is not the one that was published. */
+const HYDRATE_REFUSED = `${RT}/disk-hydrate.refused`;
 
 const HYDRATED = `${RT}/disk-hydrate.done`;
 
@@ -248,15 +263,16 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
 
   const read = (path: string) => run(`reading ${path}`, `cat ${shellPath(path)} 2>/dev/null || true`);
 
-  const publish = (key: string, source: ArchiveSource): Effect.Effect<number, DevboxError> => Effect.gen(function* () {
+  const publish = (key: string, source: ArchiveSource): Effect.Effect<{ readonly bytes: number; readonly digest: v.InferOutput<typeof LayerDigest> }, DevboxError> => Effect.gen(function* () {
     const command = streamCommand({ ...source, archivePath: PACK, objectUrl: ports.storeObjectUrl(key), profile: DISK_STREAM });
 
     const result = yield* attempt('io', () => ports.exec(command), `publishing ${key}`);
     const out = result.stdout.trim();
-    const [code, size] = out.split(/\s+/);
+    const [code, size, , sha256] = out.split(/\s+/);
     const bytes = Number(size);
+    const digest = v.safeParse(LayerDigest, { sha256, partBytes: DISK_STREAM.partBytes });
 
-    if (result.exitCode !== 0 || code !== '0' || !Number.isSafeInteger(bytes) || bytes <= 0) {
+    if (result.exitCode !== 0 || code !== '0' || !Number.isSafeInteger(bytes) || bytes <= 0 || !digest.success) {
       return yield* Effect.fail(new DevboxError('io', `publishing ${key} failed (${code ?? '?'}): ${result.stderr.trim().slice(-800) || out.slice(-400)}`));
     }
 
@@ -265,7 +281,7 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
     if (landed !== bytes) return yield* Effect.fail(new DevboxError('io', `the store holds ${String(landed)} bytes for ${key} where ${String(bytes)} were sent; nothing is recorded`));
     yield* run(`reading ${key} back as a squashfs`, `/usr/bin/unsquashfs -l ${shellPath(mounted(ports.storeRoot(), key))} >/dev/null`);
 
-    return bytes;
+    return { bytes, digest: digest.output };
   });
 
   /** Held under its rev before the record: a keep lost after the record is redone next save. */
@@ -278,8 +294,8 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
   const commitBase = (prior: DiskChainState | null, at: number) => Effect.gen(function* () {
     const id = crypto.randomUUID();
     const key = `${ports.storeRoot()}/disk/${id}/base.sqsh`;
-    const bytes = yield* publish(key, { sourceDir: DEVBOX_WORKDIR, excludeFile: `${RT}/disk-pack/excludes.txt`, excludes: ports.excludes() });
-    const state: DiskChainState = { format: DISK_CHAIN_FORMAT, rev: (prior?.rev ?? 0) + 1, base: { key, bytes, committedAt: at }, deltas: [], committedAt: at };
+    const { bytes, digest } = yield* publish(key, { sourceDir: DEVBOX_WORKDIR, excludeFile: `${RT}/disk-pack/excludes.txt`, excludes: ports.excludes() });
+    const state: DiskChainState = { format: DISK_CHAIN_FORMAT, rev: (prior?.rev ?? 0) + 1, base: { key, bytes, committedAt: at, digest }, deltas: [], committedAt: at };
     yield* advance(state, prior?.rev ?? null, false);
     yield* run('forgetting the levels', `rm -rf ${shellPath(LEVELS)} ${shellPath(BOUNDS)}`);
     yield* run('caching the base\'s block digests', blockCacheCommand(DEVBOX_WORKDIR, INVENTORY, state.rev, true)).pipe(
@@ -328,7 +344,7 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
     ].join('\n'));
   });
 
-  const startHydration = (rev: number, layers: readonly string[]) => {
+  const startHydration = (rev: number, layers: readonly string[], digests: v.InferOutput<typeof RecoveryRecord>['digests']) => {
     const recovered = `${INVENTORY}.recovered`;
 
     // s3fs keeps each layer byte it reads on this disk.
@@ -341,6 +357,9 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
       + `&& { [ -e ${shellPath(INVENTORY_REV)} ] || { cp ${shellPath(recovered)} ${shellPath(INVENTORY)} && printf %s ${String(rev)} > ${shellPath(INVENTORY_REV)}; }; } `
       + `&& { ${fits}; } && rm -rf ${shellPath(`${HYDRATE}.tmp`)} && mkdir -p ${shellPath(`${HYDRATE}.tmp`)} `
       + `&& cp -a ${shellPath(LOWERS)}/. ${shellPath(`${HYDRATE}.tmp`)}/ && { ${blockCacheCommand(`${HYDRATE}.tmp`, recovered, rev, false)} || true; } `
+      // The copy has read every layer byte through the cache; each is held to the digest its publication reported.
+      + `&& python3 -c ${shellPath(VERIFY_LAYERS)} ${shellPath(HYDRATE_REFUSED)} `
+      + `${digests.map(layer => `${shellPath(mounted(ports.storeRoot(), layer.key))} ${layer.sha256} ${String(layer.partBytes)}`).join(' ')} `
       + `&& mv ${shellPath(`${HYDRATE}.tmp`)} ${shellPath(HYDRATE)} && touch ${shellPath(HYDRATED)}`;
 
     return run('starting the copy to disk', `cd / && { setsid nohup sh -c ${shellPath(script)} >${shellPath(`${RT}/disk-hydrate.log`)} 2>&1 </dev/null & `
@@ -351,7 +370,7 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
     const recorded = yield* read(RECOVERED);
 
     if (recorded === '') return null;
-    const parsed = v.safeParse(v.object({ rev: v.number(), layers: v.array(v.string()) }), yield* attemptSync('io', () => JSON.parse(recorded)));
+    const parsed = v.safeParse(RecoveryRecord, yield* attemptSync('io', () => JSON.parse(recorded)));
 
     return parsed.success ? parsed.output : yield* Effect.fail(new DevboxError('io', `the recovery record at ${RECOVERED} does not parse`));
   });
@@ -370,7 +389,7 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
 
     if (state !== null && recovered !== null && baseline !== String(state.rev)) {
       if ((yield* run('checking the copy', `kill -0 "$(cat ${shellPath(HYDRATING)} 2>/dev/null)" 2>/dev/null && echo alive || true`)) !== 'alive') {
-        yield* startHydration(recovered.rev, recovered.layers);
+        yield* startHydration(recovered.rev, recovered.layers, recovered.digests);
       }
 
       return { kind: 'skipped', reason: 'the recovery is still taking its baseline', bytes: heldBytes(state), movedBytes: 0 } satisfies CheckpointOutcome;
@@ -404,8 +423,8 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
     if (replaced.length !== 0) yield* run('merging the change lists', mergeListsCommand(CHANGES, NEXT_INVENTORY, replaced.map(layer => levelList(layer.key))));
     const below = (yield* run('finding the boundary\'s digests', `[ -d ${shellPath(bound)} ] && echo held || true`)) === 'held' ? bound : null;
     const key = `${state.base.key.slice(0, state.base.key.lastIndexOf('/'))}/delta-${String(keep + 1)}-${crypto.randomUUID()}.sqsh`;
-    const bytes = yield* publish(key, { tar: deltaTarCommand({ dir, changes: CHANGES, below, next: `${BLOCKS}.next`, listing: levelList(key) }) });
-    const next: DiskChainState = { ...state, rev: state.rev + 1, deltas: [...state.deltas.slice(0, keep), { key, bytes, committedAt: at, saves }], committedAt: at };
+    const { bytes, digest } = yield* publish(key, { tar: deltaTarCommand({ dir, changes: CHANGES, below, next: `${BLOCKS}.next`, listing: levelList(key) }) });
+    const next: DiskChainState = { ...state, rev: state.rev + 1, deltas: [...state.deltas.slice(0, keep), { key, bytes, committedAt: at, saves, digest }], committedAt: at };
     yield* advance(next, state.rev, true);
     yield* run('pruning the levels', pruneLevelsCommand(next)).pipe(
       Effect.catchTag('DevboxError', failure => Effect.sync(() => ports.log(`stale levels stay on this disk: ${failure.message}`))),
@@ -424,25 +443,31 @@ export function diskChain(ports: DiskChainPorts): DiskChain {
     const state = yield* attempt('io', () => ports.readState());
 
     if (state === null) return { kind: 'empty', detail: 'no disk chain record', recoveredTo: undefined };
-    const layers = [...state.deltas].reverse().map(layer => layer.key).concat(state.base.key);
-    yield* run('recording the recovery', `mkdir -p ${shellPath(RT)} && printf %s ${shellPath(JSON.stringify({ rev: state.rev, layers }))} > ${shellPath(RECOVERED)} `
-      + `&& rm -f ${shellPath(INVENTORY_REV)} ${shellPath(HYDRATED)}`);
+    const held = [...[...state.deltas].reverse(), state.base];
+    const layers = held.map(layer => layer.key);
+    const digests = held.map(layer => ({ key: layer.key, ...layer.digest }));
+    yield* run('recording the recovery', `mkdir -p ${shellPath(RT)} && printf %s ${shellPath(JSON.stringify({ rev: state.rev, layers, digests }))} > ${shellPath(RECOVERED)} `
+      + `&& rm -f ${shellPath(INVENTORY_REV)} ${shellPath(HYDRATED)} ${shellPath(HYDRATE_REFUSED)}`);
     yield* mountLayers(layers);
-    yield* startHydration(state.rev, layers);
+    yield* startHydration(state.rev, layers, digests);
 
     return { kind: 'attached', detail: `rev ${String(state.rev)}, ${String(layers.length)} layers, lazy`, recoveredTo: state.committedAt };
   });
 
   /** A finished copy becomes the plain workspace with the upper merged in; else the overlay remounts. */
-  const resume = (recovered: { readonly rev: number; readonly layers: readonly string[] }) => Effect.gen(function* () {
+  const resume = (recovered: v.InferOutput<typeof RecoveryRecord>) => Effect.gen(function* () {
     const [workspace, hydrated] = (yield* run('checking the recovery', `mountpoint -q ${shellPath(DEVBOX_WORKDIR)} && echo mounted || echo unmounted; `
       + `[ -e ${shellPath(HYDRATED)} ] && echo done || echo copying`)).split('\n');
 
     if (workspace === 'mounted') return 'resumed';
+    const refused = yield* read(HYDRATE_REFUSED);
+
+    // The workspace is served from layers that are not the ones published; nothing here makes them right.
+    if (refused !== '') return yield* Effect.fail(new DevboxError('refused', `the restored workspace was not committed to disk: ${refused}`));
 
     if (hydrated !== 'done') {
       yield* mountLayers(recovered.layers);
-      yield* startHydration(recovered.rev, recovered.layers);
+      yield* startHydration(recovered.rev, recovered.layers, recovered.digests);
 
       return 'remounted';
     }
@@ -511,6 +536,26 @@ export function recoveryNotice(restoredTo: number, excludes: readonly string[]):
   return `The workspace was restored from its backup to ${new Date(restoredTo).toISOString()}: its snapshot was lost, expired or older than the backup. `
     + `The backup never holds ${excludes.join(', ')}; rebuild those (for example \`bun install\`) before relying on them.`;
 }
+
+/** Holds each layer to its published digest: argv is the refusal file, then path, SHA-256 and part size per layer. */
+const VERIFY_LAYERS = `
+import hashlib, sys
+refused, rest = sys.argv[1], sys.argv[2:]
+for at in range(0, len(rest), 3):
+    path, want, part = rest[at], rest[at + 1], int(rest[at + 2])
+    parts = hashlib.sha256()
+    with open(path, 'rb') as layer:
+        while True:
+            chunk = layer.read(part)
+            if not chunk:
+                break
+            parts.update(hashlib.sha256(chunk).digest())
+    held = parts.hexdigest()
+    if held != want:
+        with open(refused, 'w') as out:
+            out.write('the layer ' + path + ' reads as sha256 ' + held + ' where its publication recorded ' + want)
+        sys.exit(3)
+`;
 
 /** Applies an overlay upper to a plain tree on the same filesystem. */
 const MERGE_UPPER = `

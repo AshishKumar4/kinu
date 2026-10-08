@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-08",
-  "files": 3072,
-  "functions": 80249,
+  "files": 3074,
+  "functions": 80328,
   "ceiling": 87,
   "line": 27,
   "inventory": [
@@ -47,10 +47,6 @@
     },
     {
       "key": "packages/cli/src/commands/run.ts#runCloudRpcCommand",
-      "complexity": 38
-    },
-    {
-      "key": "packages/core/src/delegation/agents-tool.ts#dispatchAgentsAction",
       "complexity": 38
     },
     {
@@ -251,10 +247,6 @@
     },
     {
       "key": "packages/core/src/vfs/diff.ts#diffLines",
-      "complexity": 28
-    },
-    {
-      "key": "scripts/agents-fields.ts#collectReads>walkExcept",
       "complexity": 28
     },
     {

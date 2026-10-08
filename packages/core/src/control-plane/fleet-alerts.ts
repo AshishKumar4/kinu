@@ -22,6 +22,7 @@ const FLEET_SOURCES_PROBE = `${FLEET_PROBE_PREFIX}${SOURCES}`;
 export interface FleetEnv {
   CLOUDFLARE_ACCOUNT_ID?: string;
   ANALYTICS_SQL_API_TOKEN?: string;
+  ANALYTICS_DATASET_SUFFIX?: string;
   KINU_OBS_TOKEN?: string;
   CF_VERSION_METADATA?: { id: string };
 }
@@ -161,7 +162,7 @@ async function analyticsPanels(env: FleetEnv, queries: ReadonlyMap<string, strin
 
 export function sampleFleet(env: FleetEnv, now: number, fetch: Fetch): Promise<{ sample: FleetSample; unavailable: Unavailable[] }> {
   return settle(Effect.gen(function* () {
-    const queries = fleetAlertQueries();
+    const queries = fleetAlertQueries(env.ANALYTICS_DATASET_SUFFIX ?? '');
     const missing = analyticsMissingSettings(env);
 
     const panels = yield* Effect.promise(async () => analyticsPanels(env, new Map(Object.entries(queries))));

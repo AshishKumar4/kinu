@@ -83,7 +83,7 @@ import {
   type ChatTurnInput, type ComposedRequest, type PreparedTurn, type OwedTerminalEffectsInput, type ActorTurnLease,
   type OwedEffect,
   type InlineSteer,
-  type AgentsToolAction,
+  type AgentsOp,
   type AgentsToolDeps,
   type AgentsSwarmDeps,
   BUILTIN_TOOLS,
@@ -401,8 +401,8 @@ function actorActiveTools(deps: ActorToolDeps): BuiltinToolName[] {
   return BUILTIN_TOOLS.filter((name) => gate[name] ?? true);
 }
 
-/** The `agents` actions this actor profile supports, gated by the same rule as the tool's enum. */
-function actorAgentsActions(deps: ActorToolDeps, swarms: boolean): AgentsToolAction[] {
+/** The `agents` operations this actor profile offers, by the same rule the tool offers them. */
+function actorAgentsActions(deps: ActorToolDeps, swarms: boolean): AgentsOp[] {
   return agentsActionsFor({ swarm: {}, swarms, team: deps.team, peers: deps.peers });
 }
 

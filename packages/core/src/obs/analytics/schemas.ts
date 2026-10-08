@@ -103,6 +103,19 @@ export function indexColumn(_schema: AnalyticsSchema): string {
   return 'index1';
 }
 
+/** '' for production, `_staging` and its like elsewhere: bounded and lowercase, since it is interpolated into SQL. */
+export const ANALYTICS_DATASET_SUFFIX = /^(?:|_[a-z][a-z0-9_]{0,23})$/u;
+
+/**
+ * The dataset a reader names for this deployment. The name is declared twice: wrangler binds it per environment for
+ * writes, and the SQL API takes it as text. Staging shares production's account, so a reader that spelled production's
+ * name showed production's numbers under staging's heading (2026-10-08, after 10c15c690 dropped the suffix while
+ * `env.staging` kept its own datasets). `scripts/analytics-datasets.test.ts` holds both sides equal per environment.
+ */
+export function analyticsDataset(schema: AnalyticsSchema, suffix: string): string {
+  return schema.dataset + suffix;
+}
+
 /**
  * Rows discriminated by `kind`; every query must filter on it. Indexed on the workspace digest so
  * a busy workspace is sampled alone.

@@ -3399,6 +3399,13 @@ function processAlive(pid) {
   }
 }
 
+/** The one-letter state `/proc/<pid>/stat` gives; `Z` is a zombie, an exited process not yet reaped. */
+function procState(pid) {
+  const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+
+  return stat.slice(stat.lastIndexOf(')') + 2, stat.lastIndexOf(')') + 3);
+}
+
 /**
  * Whether `pid` runs this daemon file. A pid the operating system recycled for
  * an unrelated program does not own this machine.
@@ -3414,7 +3421,13 @@ async function processRunsThisDaemon(pid) {
 
   try {
     if (process.platform === 'linux') {
-      return named(fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0'));
+      const args = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8');
+
+      // A process just spawned has an empty command line until its exec lands (empty right after spawn in 1,442 of
+      // 1,600 bun spawns, 2026-10-08): one that is no zombie is the claimant its starter recorded, not a stale pid.
+      if (args === '') return procState(pid) !== 'Z';
+
+      return named(args.split('\0'));
     }
 
     if (process.platform === 'darwin') {
@@ -3451,28 +3464,20 @@ function isPredecessor(pid) {
  * predecessor keeps serving until the hub replaces its socket, and exits
  * without touching a pidfile that no longer names it.
  */
-async function claimMachine(pidPath = PID_PATH) {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    let descriptor;
+/**
+ * Publishes this process's pid as the machine's daemon unless a pidfile is already there: written to a file of its own
+ * under `<pidfile>.claims` and linked into place, so the pidfile appears whole or not at all. An exclusive create
+ * written afterwards left an empty pidfile for a moment, which the other claimant (`kinu connect`, which claims the
+ * same way) read as stale and removed, and both claims held (2026-10-08).
+ */
+function publishPidfile(pidPath) {
+  const claims = `${pidPath}.claims`;
+  const claim = path.join(claims, `${process.pid}-${crypto.randomBytes(8).toString('hex')}`);
 
-    try {
-      descriptor = fs.openSync(pidPath, 'wx', 0o600);
-    } catch (err) {
-      if (!err || err.code !== 'EEXIST') {
-        throw new Error(`claim the device daemon pidfile at ${pidPath}`, { cause: err });
-      }
+  fs.mkdirSync(claims, { recursive: true, mode: 0o700 });
 
-      const holder = readPidfile(pidPath);
-
-      if (holder === process.pid) return { held: true, holder: process.pid };
-
-      if (holder !== null && processAlive(holder) && (await processRunsThisDaemon(holder)) && !isPredecessor(holder)) {
-        return { held: false, holder };
-      }
-
-      fs.rmSync(pidPath, { force: true });
-      continue;
-    }
+  try {
+    const descriptor = fs.openSync(claim, 'wx', 0o600);
 
     try {
       fs.writeFileSync(descriptor, `${process.pid}\n`);
@@ -3481,9 +3486,68 @@ async function claimMachine(pidPath = PID_PATH) {
       fs.closeSync(descriptor);
     }
 
-    fs.chmodSync(pidPath, 0o600);
+    try {
+      fs.linkSync(claim, pidPath);
+    } catch (err) {
+      if (err && err.code === 'EEXIST') return false;
+      throw err;
+    }
 
-    return { held: true, holder: process.pid };
+    return true;
+  } finally {
+    fs.rmSync(claim, { force: true });
+  }
+}
+
+/**
+ * Removes the pidfile only while it still names `pid` (null: one naming no pid). It is moved aside whole and read; one
+ * naming another pid is a claim made since `pid` was read, and is linked back. A plain remove after the check removed
+ * such a claim, and two daemons both held the machine (2026-10-08). `kinu connect` removes it the same way.
+ */
+function removePidfileNaming(pidPath, pid) {
+  const claims = `${pidPath}.claims`;
+  const aside = path.join(claims, `aside-${process.pid}-${crypto.randomBytes(8).toString('hex')}`);
+
+  fs.mkdirSync(claims, { recursive: true, mode: 0o700 });
+
+  try {
+    fs.renameSync(pidPath, aside);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return;
+    throw err;
+  }
+
+  if (readPidfile(aside) !== pid) {
+    try {
+      fs.linkSync(aside, pidPath);
+    } catch (err) {
+      if (!err || err.code !== 'EEXIST') throw err;
+    }
+  }
+
+  fs.rmSync(aside, { force: true });
+}
+
+async function claimMachine(pidPath = PID_PATH) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let published;
+
+    try {
+      published = publishPidfile(pidPath);
+    } catch (err) {
+      throw new Error(`claim the device daemon pidfile at ${pidPath}`, { cause: err });
+    }
+
+    if (published) return { held: true, holder: process.pid };
+    const holder = readPidfile(pidPath);
+
+    if (holder === process.pid) return { held: true, holder: process.pid };
+
+    if (holder !== null && processAlive(holder) && (await processRunsThisDaemon(holder)) && !isPredecessor(holder)) {
+      return { held: false, holder };
+    }
+
+    removePidfileNaming(pidPath, holder);
   }
 
   return { held: false, holder: readPidfile(pidPath) };
@@ -3506,7 +3570,7 @@ function releaseMachine(pidPath = PID_PATH) {
   if (holder !== process.pid) return;
 
   try {
-    fs.rmSync(pidPath, { force: true });
+    removePidfileNaming(pidPath, process.pid);
   } catch (err) {
     log('Could not remove the device pidfile while exiting:', errorDetail(err));
   }

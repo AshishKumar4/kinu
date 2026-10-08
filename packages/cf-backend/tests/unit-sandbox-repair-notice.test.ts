@@ -45,7 +45,7 @@ function filesChain(ports: DiskChainPorts): DiskChain {
       const state = await ports.readState();
       const at = ports.now();
       saved = new Map([...disk?.files ?? []].filter(([path]) => path.startsWith('/workspace/')));
-      await ports.writeState({ format: 'disk-chain/2', rev: (state?.rev ?? 0) + 1, base: { key: 'base', bytes: 1, committedAt: at }, deltas: [], committedAt: at }, state?.rev ?? null);
+      await ports.writeState({ format: 'disk-chain/2', rev: (state?.rev ?? 0) + 1, base: { key: 'base', bytes: 1, committedAt: at, digest: { sha256: '0'.repeat(64), partBytes: 1 } }, deltas: [], committedAt: at }, state?.rev ?? null);
 
       return { kind: 'committed', reason: undefined, bytes: 1, movedBytes: 1 };
     }),

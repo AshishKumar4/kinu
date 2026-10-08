@@ -41,7 +41,7 @@ export async function controlPlaneMetrics(
   const workspace = request.workspace?.trim();
 
   // The digest must be absent, not '', when unfiltered: an empty digest matches nothing.
-  const ask: MetricsQueryRequest = { sinceHours: windowHours };
+  const ask: MetricsQueryRequest = { sinceHours: windowHours, datasetSuffix: env.ANALYTICS_DATASET_SUFFIX ?? '' };
 
   if (workspace) ask.workspaceDigest = analyticsDigest(workspace);
   const queries = new Map(Object.entries(controlPlaneMetricsQueries(ask)));
