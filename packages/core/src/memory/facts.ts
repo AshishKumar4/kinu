@@ -7,7 +7,7 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import * as v from 'valibot';
-import { expandedTokenGroups, lexicalGroupRelevance, minimumRelevance } from './lexical-recall';
+import { coversQuery, expandedTokenGroups, lexicalGroupRelevance, minimumRelevance } from './lexical-recall';
 import { safeJsonParse, type JsonValue } from '../utils/json';
 
 
@@ -319,7 +319,7 @@ export function searchFacts(facts: readonly ScopedFact[], query: string, limit: 
 
     if (relevance < floor) return [];
     const scope = fact.scope ?? 'workspace';
-    const keyMatch = lexicalGroupRelevance(groups, fact.key) >= 1;
+    const keyMatch = coversQuery(groups, fact.key);
 
     return [{
       hit: { id: `${scope === 'account' ? 'account-fact' : 'fact'}:${fact.key}`, key: fact.key, snippet: rendered, score: factScore(fact, relevance, now), lastObservedAt: fact.lastObservedAt, scope },

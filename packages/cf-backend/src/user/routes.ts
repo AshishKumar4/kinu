@@ -648,7 +648,7 @@ userRoutes.post('/api/user/memory/proposals/:id', (c) => settle(Effect.gen(funct
 userRoutes.put('/api/user/memory/facts/:key', (c) => settle(Effect.gen(function* () {
   const body = yield* Effect.promise(async () => safeJson(c.req.raw, MemoryFactSchema));
 
-  if (body === null) return err(400, 'Body must be JSON: { "value": …, "workspace"?: string }');
+  if (body === null) return err(400, 'Body must be JSON: { "value": ..., "workspace"?: string }');
 
   return yield* Effect.tryPromise({
     try: async () => json({ body: { key: await c.get('stub').accountMemory_put(c.get('owner'), decodeURIComponent(rawParam(c, 'key')), body.value, body.workspace) } }),

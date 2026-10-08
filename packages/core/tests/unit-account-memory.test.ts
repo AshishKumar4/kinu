@@ -6,7 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import { createMemoryVfs, createTestFactsStore, createTestRuntime } from '@kinu.run/test-utils';
 import {
-  accountProposals, actorNamespaces, callOperation, listOperations, renderFactsBlock, searchFacts, sleepTimeWindow, SURFACE_POLICY, TurnContextBudget,
+  accountProposals, actorNamespaces, callOperation, initFactsTable, listOperations, renderFactsBlock, searchFacts, sleepTimeWindow, SURFACE_POLICY, TurnContextBudget,
   unifiedFacts, WORKSPACE_ROOT,
   type AccountMemory, type AccountProposal, type ConversationProjection, type Fact, type JsonObject, type SurfaceActor,
 } from '../src/index';
@@ -45,8 +45,8 @@ describe("mnemopi's lexical recall", () => {
     expect(relevance('db', 'the database is postgres')).toBeGreaterThan(0.6);
     expect(relevance('deploy', 'deploy_target: staging')).toBeGreaterThan(0.6);
     expect(relevance('backup', 'nightly backups run at 02:00')).toBe(0.35);
-    // Too short to be another form: `pass` never finds `password`.
-    expect(relevance('pass', 'the password rotates monthly')).toBe(0);
+    // A longer word that only begins with it is not another form of it.
+    expect(relevance('test', 'the old testament')).toBe(0);
     expect(relevance('timezone', 'the deploy target is staging')).toBe(0);
   });
 
@@ -113,7 +113,10 @@ function recordingAccount(facts: Fact[]): AccountMemory & { readonly proposed: A
 }
 
 function actorWith(account: AccountMemory | undefined): SurfaceActor {
-  const { rt, stores } = createTestRuntime();
+  const { rt, stores, testSql } = createTestRuntime();
+
+  // The test runtime makes only the tables every suite needs; this one writes facts.
+  initFactsTable(testSql.execRaw);
   const unreached = async (): Promise<never> => { throw new Error('not reached by this suite'); };
 
   return {

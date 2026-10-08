@@ -154,6 +154,13 @@ export function lexicalGroupRelevance(groups: readonly (readonly string[])[], co
   return clamp01(0.7 + Math.min(Math.max(count - 1, 0), 3) * 0.1);
 }
 
+/** Whether `content` holds every query group whole (a synonym or an identifier part counts; another form does not). */
+export function coversQuery(groups: readonly (readonly string[])[], content: string): boolean {
+  const tokens = new Set(tokenize(content).flatMap((token) => [token, ...token.split('_').filter((part) => part.length > 0)]));
+
+  return groups.length > 0 && groups.every((group) => group.some((token) => tokens.has(token)));
+}
+
 /** mnemopi's floor below which a match is noise, by query length (`minimumRelevance`). */
 export function minimumRelevance(groups: number): number {
   if (groups <= 1) return 0.08;

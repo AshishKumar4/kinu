@@ -24,7 +24,11 @@ export interface MemoryDeps {
   readonly actor: ActorHandle;
   /** Bound to this actor, so recall reads only its rows. */
   readonly conversations: ConversationRecall;
-  /** The account's memory: reads join both scopes, and a write may ask for the account. Absent, no call names a scope. */
+  /**
+   * The account's memory: reads join both scopes, and a write may ask for the account. Absent, no call names a scope.
+   * Cloudflare only: the CLI has no account's user object to hold it, so it leaves this unset
+   * (`scripts/capability-parity.lock.json`).
+   */
   readonly account?: AccountMemory;
 }
 

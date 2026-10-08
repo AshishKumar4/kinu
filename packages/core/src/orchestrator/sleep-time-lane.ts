@@ -44,7 +44,10 @@ export interface SleepTimeLaneDeps {
   /** Wakes the actor at `nextWakeAt`. */
   readonly armWake: () => void;
   readonly workspace: string;
-  /** The account's memory, where one is wired: the pass reads its facts and proposes to it, never writes it. */
+  /**
+   * The account's memory, where one is wired: the pass reads its facts and proposes to it, never writes it. Cloudflare
+   * only: the CLI has no account's user object, so it leaves this unset (`scripts/capability-parity.lock.json`).
+   */
   readonly account?: () => AccountMemory | undefined;
 }
 
