@@ -14,7 +14,7 @@ import {
   ingressAdmitted,
   parseSlateProject, slateIdFor, slateTitle, routeSlateStorageCall, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
   SlateCallRequestSchema, SlateOperationSchema, requireSlateWorkMode, requireWorkModePermission, routeSlateCall, issuedSlateInvocation,
-  routeViewerCall, admitNestedViewerCall, slateCallAddress, slateAddressImpact, JsonValueSchema, projectJsonValue, isSlateMethodName, answeredRefusal, reoriginateRequest,
+  routeViewerCall, admitNestedViewerCall, isJsonAnswer, slateCallAddress, slateAddressImpact, JsonValueSchema, projectJsonValue, isSlateMethodName, answeredRefusal, reoriginateRequest,
   escapeHtml, publicPage, UsageSchema, usageTotal,
   SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, shareSpendLabel, VIEWER_EXCHANGE_PATH,
   type BlueprintBundle, type BlueprintFork, type JsonValue, type SlateAnswer, type SlateProject, type SlateShareRecord,
@@ -97,9 +97,9 @@ function heldKey(caller: SlateCaller, id: string): string {
 function viewerAnswer(result: SlateSurfaceResult): SlateCallResult {
   if (!result.ok) return result;
 
-  return result.value instanceof ReadableStream
-    ? { ok: false, ...refusalOf(new KinuError('io', 'A share viewer\'s call answered a stream')) }
-    : { ...result, value: result.value };
+  return isJsonAnswer(result.value)
+    ? { ...result, value: result.value }
+    : { ok: false, ...refusalOf(new KinuError('io', 'A share viewer\'s call answered a stream')) };
 }
 
 /** The one surface every slate is given, as its process sees it. */
@@ -924,7 +924,7 @@ export class SlateHost {
     switch (route.kind) {
       case 'namespace': {
         const value = await this.deps.dispatch(caller, route, context);
-        const refused = value instanceof ReadableStream ? null : answeredRefusal(value);
+        const refused = isJsonAnswer(value) ? answeredRefusal(value) : null;
 
         return refused === null ? { ok: true, value } : { ok: false, ...refused };
       }

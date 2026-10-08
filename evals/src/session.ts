@@ -421,7 +421,10 @@ const WorkEntrySchema = v.object({
   })),
 });
 
-const WorkBoardSchema = v.object({ plans: v.array(WorkEntrySchema), tasks: v.array(WorkEntrySchema) });
+/** A plan's row also carries the review: its status and the plan as written. */
+const PlanEntrySchema = v.object({ ...WorkEntrySchema.entries, plan: v.object({ status: v.string(), content: v.string() }) });
+
+const WorkBoardSchema = v.object({ plans: v.array(PlanEntrySchema), tasks: v.array(WorkEntrySchema) });
 
 export type WorkBoard = v.InferOutput<typeof WorkBoardSchema>;
 

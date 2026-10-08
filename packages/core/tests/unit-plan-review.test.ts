@@ -6,17 +6,21 @@ import {
   MAX_PLAN_ANNOTATIONS_BYTES,
   MAX_PLAN_CONTENT_BYTES,
   PLATFORM_CATALOG,
+  PlanReviewActions,
   PlanReviewStore,
   PlanReviewSchema,
   applyPlanEdits,
   formatPlanWithLineNumbers,
   initPlanReviewTable,
+  planAwaitingReply,
   workModeUnderReview,
   validatePlanEdits,
   buildBuiltinTools,
   type JsonValue,
   type PlanEdit,
+  type ReviewAnnotation,
 } from '../src/index';
+import type { ProgrammaticTurn } from '../src/types/backend-host';
 import { createTestRuntime, makeExecRaw, makeSql, conversationsFor } from './helpers';
 
 describe('plan edit contract', () => {
@@ -139,7 +143,7 @@ describe('durable plan review lifecycle', () => {
     });
     expect(store.saveAnnotations('plan-1', 1, { value: [{ ...base, endOffset: -1 }] })).toMatchObject({
       ok: false,
-      error: expect.stringContaining('offsets'),
+      error: expect.stringContaining('endOffset'),
     });
     expect(store.saveAnnotations('plan-1', 1, { value: [{ ...base, type: 'INSTRUCTION' }] })).toMatchObject({
       ok: false,
@@ -294,6 +298,121 @@ describe('the plan lock holds only its own thread', () => {
   });
 });
 
+describe('comments and their threads', () => {
+  const PLAN = '# Tide pool survey\n\nMap the zones at low tide.\nCount the crabs in each zone.';
+
+  const COMMENTS: readonly ReviewAnnotation[] = [
+    { id: 'c1', type: 'COMMENT', blockId: 'paragraph-1', startOffset: 0, endOffset: 13, originalText: 'Map the zones', text: 'Which chart?', createdA: 1, author: 'Owner' },
+    { id: 'd1', type: 'DELETION', blockId: 'paragraph-2', startOffset: 0, endOffset: 15, originalText: 'Count the crabs', createdA: 2, author: 'Owner' },
+    { id: 'g1', type: 'GLOBAL_COMMENT', text: 'Split it into two mornings.', createdA: 3, author: 'Owner' },
+  ];
+
+  async function sentBack(store: PlanReviewStore, revision: number) {
+    const handoffs: ProgrammaticTurn[] = [];
+
+    const outcome = await new PlanReviewActions(store, { broadcast: () => {} }).decideAndHandOff(
+      { id: 'plan-1', revision, decision: 'request_changes' },
+      (turn) => {
+        handoffs.push(turn);
+
+        return Promise.resolve({ status: 'queued' as const });
+      },
+    );
+
+    return { outcome, text: handoffs[0]?.text ?? '' };
+  }
+
+  test('a comment on the whole plan has no block, offsets or quote, and a request for changes sends it with the others', async () => {
+    const { store } = setup();
+    store.submit('default', [{ start: 1, content: PLAN }]);
+
+    // As the viewer used to build it: a whole-plan comment on an empty block, which the review refused.
+    expect(store.saveAnnotations('plan-1', 1, { value: [{ ...COMMENTS[2], blockId: '', startOffset: 0, endOffset: 0, originalText: '' }] }))
+      .toMatchObject({ ok: false, error: expect.stringContaining('unsupported field') });
+    expect(store.saveAnnotations('plan-1', 1, { value: [{ ...COMMENTS[0], blockId: '' }] })).toMatchObject({ ok: false });
+    expect(store.saveAnnotations('plan-1', 1, { value: COMMENTS }).ok).toBe(true);
+
+    const { outcome, text } = await sentBack(store, 1);
+
+    expect(outcome).toMatchObject({ ok: true, queued: true, plan: { status: 'changes_requested' } });
+
+    // Each comment reaches the agent with its id, which the reply tool names, and what it says or quotes.
+    for (const said of ['c1', 'Which chart?', 'd1', 'Count the crabs', 'g1', 'Split it into two mornings.']) expect(text).toContain(said);
+  });
+
+  test('the agent answers in a thread; the next revision carries it read-only, and the owner\'s reply there is sent back', async () => {
+    const { store } = setup();
+    const actions = new PlanReviewActions(store, { broadcast: () => {} });
+    const owner = { kinuAuthor: 'operator' };
+    store.submit('default', [{ start: 1, content: PLAN }]);
+    store.saveAnnotations('plan-1', 1, { value: COMMENTS });
+    expect(actions.awaitingReply(owner)).toBe(false);
+    await sentBack(store, 1);
+
+    // The owner's turn and the revision's own feedback turn answer; a drain, or the feedback of another revision, does not.
+    const feedback = { kinuEvent: 'plan_feedback', planId: 'plan-1', revision: 1 };
+    expect(actions.awaitingReply(owner)).toBe(true);
+    expect(actions.awaitingReply(feedback)).toBe(true);
+    expect(actions.awaitingReply({ kinuEvent: 'subordinate_report' })).toBe(false);
+    expect(actions.awaitingReply({ ...feedback, revision: 7 })).toBe(false);
+    expect(actions.reply('c1', 'From a drain', { kinuEvent: 'subordinate_report' })).toMatchObject({ ok: false });
+
+    expect(actions.reply('c1', '   ', feedback)).toMatchObject({ ok: false });
+    expect(actions.reply('c1', 'The harbour office tide chart.', feedback)).toMatchObject({ ok: true });
+    expect(store.reply('default', 'nope', 'Hello')).toMatchObject({ ok: false, error: expect.stringContaining('nope') });
+    const answer = store.getActive('default')?.annotations.find((note) => note.type === 'REPLY');
+
+    expect(answer).toMatchObject({ type: 'REPLY', inReplyTo: 'c1', author: 'agent', text: 'The harbour office tide chart.' });
+    expect(store.reply('default', answer?.id ?? '', 'A reply to a reply')).toMatchObject({ ok: false });
+
+    const revised = store.submit('default', [{ start: 3, end: 3, content: 'Map the zones from the harbour tide chart.' }]);
+
+    expect(revised).toMatchObject({ ok: true, plan: { revision: 2, status: 'pending' } });
+    expect(revised.plan?.annotations.map((note) => [note.id, note.revision])).toEqual([['c1', 1], ['d1', 1], ['g1', 1], [answer?.id, 1]]);
+    expect(planAwaitingReply(revised.plan ?? null, owner)).toBe(false);
+    expect(store.reply('default', 'c1', 'Too late')).toMatchObject({ ok: false });
+
+    // The reviewer writes this revision's notes only: a carried note or an agent's reply is the review's own.
+    expect(store.saveAnnotations('plan-1', 2, { value: [{ ...COMMENTS[0], revision: 1 }] })).toMatchObject({ ok: false });
+    expect(store.saveAnnotations('plan-1', 2, { value: [{ id: 'r9', type: 'REPLY', inReplyTo: 'c1', text: 'x', author: 'agent', createdA: 9 }] }))
+      .toMatchObject({ ok: false });
+
+    const followUp = { id: 'o1', type: 'REPLY', inReplyTo: 'c1', text: 'Good; add the moon phase too.', author: 'owner', createdA: 9 } as const;
+
+    expect(store.saveAnnotations('plan-1', 2, { value: [followUp] })).toMatchObject({ ok: true });
+    expect(store.getActive('default')?.annotations).toHaveLength(5);
+
+    const { text } = await sentBack(store, 2);
+
+    // The owner's reply goes back under the comment it answers; threads with nothing new stay out.
+    expect(text.indexOf('Good; add the moon phase too.')).toBeGreaterThan(text.indexOf('Which chart?'));
+    expect(text).not.toContain('Split it into two mornings.');
+  });
+
+  test('a write is refused when the comments, as the next revision would carry them, outgrow the review', async () => {
+    const { store } = setup();
+    store.submit('default', [{ start: 1, content: PLAN }]);
+    const note = (index: number): ReviewAnnotation => ({ id: `g${String(index)}`, type: 'GLOBAL_COMMENT', text: 'x'.repeat(9_000), createdA: index });
+    const full = Array.from({ length: 28 }, (_, index) => note(index));
+
+    expect(store.saveAnnotations('plan-1', 1, { value: full })).toMatchObject({ ok: true });
+    await sentBack(store, 1);
+    const revised = store.submit('default', [{ start: 1, content: PLAN }]);
+
+    // Each write fits alone; with the carried 28 the list would pass the budget, so it is refused and the review still reads.
+    expect(store.saveAnnotations('plan-1', 2, { value: [note(90), note(91)] })).toMatchObject({ ok: false, error: expect.stringContaining('maximum size') });
+    expect(store.getActive('default')).toMatchObject({ id: revised.plan?.id, revision: 2 });
+    expect(v.safeParse(PlanReviewSchema, store.getActive('default')).success).toBe(true);
+  });
+
+  test('a note whose time no date can hold is refused', () => {
+    const { store } = setup();
+    store.submit('default', [{ start: 1, content: PLAN }]);
+
+    expect(store.saveAnnotations('plan-1', 1, { value: [{ ...COMMENTS[2], createdA: 9e15 }] })).toMatchObject({ ok: false });
+  });
+});
+
 describe('submit_plan native tool', () => {
   test('exists only when a plan-mode submit dependency is wired', async () => {
     const { rt } = createTestRuntime();
@@ -336,5 +455,23 @@ describe('submit_plan native tool', () => {
     const malformed = toolExecute<{ edits: string }, JsonValue>(tools.submit_plan);
     await expect(malformed({ edits: '[{"content": "# Tide Pool Study"}]' })).rejects.toThrow('sent as an array and not as text');
     expect(received).toHaveLength(1);
+  });
+
+  test('reply_to_comment exists only while its dependency is wired, and answers with the reply it wrote', async () => {
+    const { rt } = createTestRuntime();
+    const { store } = setup();
+    store.submit('default', [{ start: 1, content: '# Plan\n\nDo it' }]);
+    store.saveAnnotations('plan-1', 1, { value: [{ id: 'g1', type: 'GLOBAL_COMMENT', text: 'Why now?', createdA: 1 }] });
+    store.decide('plan-1', 1, 'request_changes');
+    expect(buildBuiltinTools({ rt, conversations: conversationsFor(rt) }).reply_to_comment).toBeUndefined();
+
+    const tools = buildBuiltinTools({
+      rt, conversations: conversationsFor(rt), replyToComment: { reply: (comment, text) => store.reply('default', comment, text) },
+    });
+
+    const reply = toolExecute<{ comment: string; text: string }, JsonValue>(tools.reply_to_comment);
+
+    expect(await reply({ comment: 'g1', text: 'The migration window opens Monday.' })).toMatchObject({ planId: 'plan-1', revision: 1, comment: 'g1' });
+    await expect(reply({ comment: 'g2', text: 'Hello' })).rejects.toThrow('no comment g2');
   });
 });

@@ -3,7 +3,7 @@ import { detach } from '@kinu.run/core/obs';
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   executorLabel, executorSortKey, isActiveExecutionDevice, keepUnchanged, oneAtATime, pickDefaultExecutor,
-  workspacePath, WORKSPACE_ROOT, type ChangeNotesResult, type ChangeSet, type ExecutorDiffResult, type ExecutorInfo, type ReviewAnnotation, type Rpc,
+  workspacePath, WORKSPACE_ROOT, type ChangeNotesResult, type ChangeSet, type ExecutorDiffResult, type ExecutorInfo, type ChangeNote, type Rpc,
 } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { describeError, lastValue, useAsyncResource } from "@/hooks/use-async-resource";
@@ -25,7 +25,7 @@ function answered(call: () => Promise<ChangeNotesResult>): Effect.Effect<ChangeN
 
 function notesStore(rpc: Rpc, source: string, current: () => ChangeSet | undefined): NotesStore {
   return {
-    load: () => answered(async () => ({ ok: true, notes: await rpc<ReviewAnnotation[]>("getChangeNotes", [source]) })),
+    load: () => answered(async () => ({ ok: true, notes: await rpc<ChangeNote[]>("getChangeNotes", [source]) })),
     save: (notes) => answered(() => rpc<ChangeNotesResult>("saveChangeNotes", [source, notes])),
     send: () => answered(() => {
       const set = current();
