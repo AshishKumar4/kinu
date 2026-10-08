@@ -318,6 +318,15 @@ const MODELS_FAIL = new URLSearchParams(location.search).get("models") === "fail
 /** `&cloudflare=off`: an account that has not connected Cloudflare, so its providers offer the connect. */
 const CLOUDFLARE_OFF = new URLSearchParams(location.search).get("cloudflare") === "off";
 
+/** Workers AI's models, which an account offers only once Cloudflare is connected. */
+const WORKERS_AI_MODELS = CLOUDFLARE_OFF ? [] : [{ spec: "workers-ai/llama-4", label: "Llama 4", provider: "workers-ai", reasoningEfforts: [] }];
+
+/** `&route=` is the app's own address for the wizard (`/welcome?step=providers`), as a sign-in returns to it. */
+const WELCOME_ROUTE = new URLSearchParams(location.search).get("route") ?? "/welcome";
+
+/** Where a sign-in ending on the connected page began (`&next=`). */
+const CONNECTED_NEXT = new URLSearchParams(location.search).get("next") ?? "/";
+
 const WORKSPACE_GONE = new URLSearchParams(location.search).get("gone") === "1";
 
 /** `&snapshot=failed`: the workspace's first read fails, so nothing has loaded. */
@@ -464,7 +473,7 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
     // Different effort lists per model: the tier levels are the model's, never a fixed three.
     return fixtureJson({
       models: [
-        ...CLOUDFLARE_OFF ? [] : [{ spec: "workers-ai/llama-4", label: "Llama 4", provider: "workers-ai", reasoningEfforts: [] }],
+        ...WORKERS_AI_MODELS,
         { spec: "anthropic/claude-opus-4-7", label: "Claude Opus 4.7", provider: "anthropic", reasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
         ...settingsChatGptSignedIn ? [{ spec: "chatgpt/gpt-5.5", label: "GPT-5.5", provider: "chatgpt", reasoningEfforts: [] }] : [],
         ...settingsSavedCredentials.has("groq.bearer")
@@ -911,6 +920,14 @@ const ANONYMOUS_WORKSPACE = frame === 'workspacepage'
 
 if (ANONYMOUS_WORKSPACE) STUB.set('/api/user/profile', null);
 
+// The session's own read in setup, as stub data for the same reason: `&noname=1` signed in with Cloudflare, which
+// shares no name.
+if (frame === "welcome") {
+  STUB.set("/api/auth/me", new URLSearchParams(location.search).get("noname") === "1"
+    ? { user: { id: "new", email: "new@example.com", provider: "cloudflare", signedInWith: "Cloudflare", displayName: null } }
+    : { user: { id: "owner", email: "owner@example.com", provider: "google", signedInWith: "Google", displayName: "Owner" } });
+}
+
 function rosterRead(search: URLSearchParams): Promise<Response> {
   if (SESSION_EXPIRED) return Promise.resolve(fixtureJson({ error: "Sign in again." }, 401));
 
@@ -948,12 +965,6 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
     return userSettingsFixture(path, method, init?.body);
   }
 
-  // The session's own read in setup: `&noname=1` signed in with Cloudflare, which shares no name.
-  if (path === "/api/auth/me" && frame === "welcome") {
-    return Promise.resolve(new URLSearchParams(location.search).get("noname") === "1"
-      ? fixtureJson({ user: { id: "new", email: "new@example.com", provider: "cloudflare", signedInWith: "Cloudflare", displayName: null } })
-      : fixtureJson({ user: { id: "owner", email: "owner@example.com", provider: "google", signedInWith: "Google", displayName: "Owner" } }));
-  }
 
   if (connectFixtureActive && path.startsWith("/api/user/devices")) {
     const answer = deviceConnectFixture(path, method, init?.body);
@@ -6717,13 +6728,9 @@ async function mount() {
     // `&panel=providers|mcp|cli` picks the modal's body.
     ["setupmodal", { node: <SetupModalFrame />, entries: ["/"] }],
     // `&step=0..3` picks the wizard panel.
-    // `&route=` is the app's own address for the wizard (`/welcome?step=providers`), as a sign-in returns to it.
-    ["welcome", { node: <WelcomeFrame />, entries: [new URLSearchParams(location.search).get("route") ?? "/welcome"] }],
-    // Where a sign-in ends in its helper window; `&next=` is where it began.
-    ["connected", {
-      node: <ConnectedPage />,
-      entries: [`${APP_ROUTES.connected}?${new URLSearchParams({ next: new URLSearchParams(location.search).get("next") ?? "/" }).toString()}`],
-    }],
+    ["welcome", { node: <WelcomeFrame />, entries: [WELCOME_ROUTE] }],
+    // Where a sign-in ends in its helper window.
+    ["connected", { node: <ConnectedPage />, entries: [`${APP_ROUTES.connected}?${new URLSearchParams({ next: CONNECTED_NEXT }).toString()}`] }],
     // `&view=list` seeds the workspaces page's stored choice.
     ["workspaces", { node: <WorkspacesFrame />, entries: ["/workspaces"] }],
     ["chatcode", { node: <ChatCodeFrame />, entries: ["/"] }],

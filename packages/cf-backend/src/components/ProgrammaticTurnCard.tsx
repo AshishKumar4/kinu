@@ -142,7 +142,7 @@ const ADVISOR_TONES = {
 interface TurnCardProps {
   turn: ClassifiedProgrammaticTurn; text: string; state: CardState;
   /** The same turn this many times in a row, drawn once. */
-  count?: number;
+  count?: number | undefined;
 }
 
 /** The workspace's own opening turn is provenance and draws nothing; every other says what happened and whether the agent saw it. */

@@ -520,7 +520,7 @@ function SteeredMark({ state }: { state: "queued" | "landed" }) {
 // referential identity and skips re-rendering.
 export const MessageView = memo(function MessageView({
   message, liveTail: tail = null, onFork, onFeedback, feedback, onRevert, takesChip,
-  signalState, steers, onOpenChangeNote, answerSlates, onRetry, repeats = 1,
+  signalState, steers, onOpenChangeNote, answerSlates, onRetry, repeats,
 }: {
   message: UIMessage;
   /** A turn nobody typed that came this many times in a row ({@link eventTurnKey}), drawn once. */
