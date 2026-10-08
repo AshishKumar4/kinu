@@ -10,7 +10,7 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 import { unheld } from './redact';
 import type { HarnessRun } from './results';
 import type { KinuPublicSession } from './session';
-import type { EvalTask } from './task';
+import type { EvidenceCall } from './task';
 import type { TimelineEntry } from './timeline';
 import { renderTrial } from './trajectories';
 import { SlateAnswerSchema } from './verifier';
@@ -73,7 +73,10 @@ async function readSlates(session: EvidenceSession): Promise<JsonValue> {
  * Read what the workspace holds and what its slates serve, the files first and the slates' data last, since only the
  * data reads run the agent's code. Every read is one a person could make.
  */
-export async function gatherEvidence(session: EvidenceSession, reads: EvalTask['evidence']): Promise<WorkspaceEvidence> {
+/** One part's reads of its slates' data (`EvalPart.evidence`). */
+export type EvidenceReads = { readonly part: string; readonly reads: (call: EvidenceCall) => Promise<void> };
+
+export async function gatherEvidence(session: EvidenceSession, reads: readonly EvidenceReads[]): Promise<WorkspaceEvidence> {
   const files = new Map<string, Uint8Array>();
   const data: JsonValue[] = [];
   const unread: string[] = [];
@@ -92,15 +95,16 @@ export async function gatherEvidence(session: EvidenceSession, reads: EvalTask['
     for (const root of [WORKSPACE_ROOT, SLATES_ROOT]) await walk(session, root, files);
   });
   await part('slates', async () => { slates = await readSlates(session); });
-  await part('data', async () => {
-    await reads?.(async (slate, method, input) => {
-      const answer = v.parse(SlateAnswerSchema, await session.slateOp({ op: 'call', id: slate, method, args: input === undefined ? [] : [input] }));
 
-      data.push({ slate, method, input: input ?? null, answer });
+  const call: EvidenceCall = async (slate, method, input) => {
+    const answer = v.parse(SlateAnswerSchema, await session.slateOp({ op: 'call', id: slate, method, args: input === undefined ? [] : [input] }));
 
-      return answer.ok ? answer.value : null;
-    });
-  });
+    data.push({ slate, method, input: input ?? null, answer });
+
+    return answer.ok ? answer.value : null;
+  };
+
+  for (const read of reads) await part(`data of ${read.part}`, () => read.reads(call));
 
   return { files, slates, data, unread };
 }

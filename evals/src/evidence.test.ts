@@ -58,10 +58,10 @@ describe('a trial\'s evidence', () => {
       '/slates/exchange/package.json': '{"main":"server.ts"}',
     });
 
-    const gathered = await gatherEvidence(session, async (call) => {
+    const gathered = await gatherEvidence(session, [{ part: 'exchange', reads: async (call) => {
       await call('exchange', 'book', { symbol: 'ACME' });
       await call('exchange', 'trades', { symbol: 'ACME' });
-    });
+    } }]);
 
     const directory = join(scratchDir('eval-evidence'), 'trial-2');
 
@@ -91,7 +91,7 @@ describe('a trial\'s evidence', () => {
         : served.slateOp(operation),
     };
 
-    const gathered = await gatherEvidence(reset, async (call) => { await call('logs', 'days'); });
+    const gathered = await gatherEvidence(reset, [{ part: 'logs', reads: async (call) => { await call('logs', 'days'); } }]);
     const directory = join(scratchDir('eval-evidence'), 'trial-1');
 
     writeEvidence(directory, {
@@ -103,7 +103,7 @@ describe('a trial\'s evidence', () => {
     expect(readFileSync(join(directory, 'files/home/main/logs/2027-06-01.log'), 'utf8')).toBe('GET /api 200 3ms FRA\n');
     expect(readFileSync(join(directory, 'files/slates/logs/server.ts'), 'utf8')).toBe('export class Slate {}\n');
     expect(existsSync(join(directory, 'slates.json'))).toBe(true);
-    expect(readFileSync(join(directory, 'workspace.txt'), 'utf8')).toContain('data: ');
+    expect(readFileSync(join(directory, 'workspace.txt'), 'utf8')).toContain('data of logs: ');
     expect(readFileSync(join(directory, 'workspace.txt'), 'utf8')).toContain('code 1006');
     expect(JSON.parse(readFileSync(join(directory, 'ledger.jsonl'), 'utf8'))).toMatchObject({ type: 'run_start', runId: 'run-1' });
     expect(existsSync(join(directory, 'transcript.md'))).toBe(true);

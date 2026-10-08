@@ -1,8 +1,7 @@
 import { WORKSPACE_ROOT } from '@kinu.run/core';
 import { shows, type Sight } from '../src/sight';
-import { defineTaskEval } from '../src/eval';
 import { DIFFERENT_DESIGNS } from '../src/judge';
-import { defineEvalTask } from '../src/task';
+import type { EvalPart } from '../src/task';
 import type { EvalCheckOutcome, EvalVerifier } from '../src/verifier';
 import { answersWithSlates, madeNoApp, madeNoPrototype, readAnswer, readingEvidence } from './ephemeral';
 
@@ -11,7 +10,6 @@ import { answersWithSlates, madeNoApp, madeNoPrototype, readAnswer, readingEvide
 // from the seeded discounts; a judge says whether the three are visibly different designs, which nothing here can
 // compute, at the agreement `evals/scripts/calibrate-judge.ts` measured.
 
-const MISSION = "Lumen Notes' product workspace: pricing, packaging and the marketing site.";
 
 const PLANS_PATH = `${WORKSPACE_ROOT}/pricing/plans.csv`;
 
@@ -46,9 +44,12 @@ function everyTreatment(verifier: EvalVerifier): Promise<EvalCheckOutcome> {
   });
 }
 
-const task = defineEvalTask({
-  id: 'pricing-treatments',
-  mission: MISSION,
+export const pricingTreatments: EvalPart = {
+  id: 'pricing',
+  objectives: [
+    `Show at least three visibly different pricing treatments in the chat, each with every plan's monthly and discounted yearly price from pricing/plans.csv.`,
+    'A one-off comparison: no file slate and no prototype.',
+  ],
   turns: [{
     seed: [{ path: PLANS_PATH, content: CSV }],
     prompt: `We're redesigning the pricing table on our site. Show me three different treatments of the plans in
@@ -72,6 +73,4 @@ yearly price with the annual discount taken off.`,
       await verifier.check('a-reload-shows-the-same', () => everyTreatment(verifier));
     },
   }],
-});
-
-defineTaskEval(task);
+};

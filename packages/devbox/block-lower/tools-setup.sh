@@ -42,7 +42,7 @@ tar -xzf shim.tar.gz -C "$out" usr/local/bin/sandbox-shim
 
 # An offline apt repository of the closure of what a box needs, and KasmVNC's own release (D70), which Debian lacks.
 fetch "$repo/kasmvncserver_trixie_1.5.0_amd64.deb" https://github.com/kasmtech/KasmVNC/releases/download/v1.5.0/kasmvncserver_trixie_1.5.0_amd64.deb 80b241de7dfe53bba2b7e1cc5ac8c5246d72271efa16be2d4f76607f30fab1c4
-echo bash ca-certificates curl git python3 tmux tini fuse3 fuse-overlayfs squashfs-tools zstd s3fs libfuse2t64 libzstd1 libstdc++6 procps chromium openbox xdotool scrot > "$repo/wanted"
+echo bash ca-certificates curl git python3 tmux tini fuse3 fuse-overlayfs squashfs-tools zstd s3fs libfuse2t64 libzstd1 libstdc++6 procps chromium openbox tint2 xterm x11-xserver-utils fonts-dejavu-core xdotool scrot > "$repo/wanted"
 : > /opt/src/empty-status
 apt-get -o Dir::State::status=/opt/src/empty-status -o Dir::Cache::archives="$repo" install --download-only -y -qq --no-install-recommends \
   $(cat "$repo/wanted") "$repo/kasmvncserver_trixie_1.5.0_amd64.deb"

@@ -72,7 +72,7 @@ const harness = createHarness({
       if (!(error instanceof WorkspaceHeld)) throw error;
       const outcome = { status: error.outcome, message: error.message, heldBy: [...error.heldBy] };
 
-      return { output: { success: false, turns: [{ outcome, checks: [], turnWallMs: 0, verificationWallMs: 0 }] }, events: [{ type: 'message', role: 'user', content: input.prompt }] };
+      return { output: { success: false, turns: [{ part: 'build', turn: 1, outcome, checks: [], turnWallMs: 0, verificationWallMs: 0 }] }, events: [{ type: 'message', role: 'user', content: input.prompt }] };
     }
 
     throw new Error('the job ended');

@@ -254,7 +254,7 @@ async function changed(verifier: EvalVerifier, replacements: readonly SeedFile[]
 }
 
 /** Independent provenance and recall precede the calculator and live-view dependency chain. */
-export function combinatorsJourney(checkout: string): readonly EvalTurn[] {
+export function combinatorsJourney(checkout: string): readonly [EvalTurn, ...EvalTurn[]] {
   return [{
     prompt: `Before we prepare the release review, look up the current true-myth release on npm and save
 {version, integrity} to ${RELEASE}; integrity is that release's dist.integrity. Add a board task titled exactly

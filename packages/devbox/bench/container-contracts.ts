@@ -30,13 +30,13 @@ async function tools(container: Container, pin: string): Promise<void> {
   equal(await native(container, `. /etc/os-release; printf '%s %s' "$ID" "$VERSION_ID"`), 'debian 13');
   equal(await native(container, `cat ${TOOLS_STAMP}`), pin);
   equal(await native(container, 'for t in bun git tmux tini s3fs fuse-overlayfs mksquashfs unsquashfs zstd curl python3 flock devbox-squashfuse '
-    + 'devbox-block-lower sandbox-shim Xkasmvnc openbox chromium xdotool scrot; do command -v "$t" >/dev/null || exit 1; done'), '');
+    + 'devbox-block-lower sandbox-shim Xkasmvnc openbox tint2 xterm xsetroot chromium xdotool scrot; do command -v "$t" >/dev/null || exit 1; done'), '');
   equal(await native(container, `set -e; d=${SCRATCH}/fuse; mkdir -p $d/src $d/m $d/u $d/w $d/o; echo fuse-ok >$d/src/f; `
     + 'mksquashfs $d/src $d/l.sqsh -noappend -quiet >/dev/null; devbox-squashfuse $d/l.sqsh $d/m; '
     + 'fuse-overlayfs -o lowerdir=$d/m,upperdir=$d/u,workdir=$d/w $d/o; cat $d/o/f; fusermount3 -u $d/o; fusermount3 -u $d/m'), 'fuse-ok');
   await native(container, DESKTOP_START);
   await native(container, DESKTOP_START);
-  equal(await native(container, 'pgrep -cx Xkasmvnc; pgrep -cx openbox'), '1\n1');
+  equal(await native(container, 'pgrep -cx Xkasmvnc; pgrep -cx openbox; pgrep -cx tint2'), '1\n1\n1');
 
   const rfb = await native(container, `exec 3<>/dev/tcp/127.0.0.1/${String(DESKTOP_PORT)}; printf 'GET /websockify HTTP/1.1\\r\\nHost: box\\r\\n`
     + 'Upgrade: websocket\\r\\nConnection: Upgrade\\r\\nOrigin: http://box\\r\\nSec-WebSocket-Version: 13\\r\\n'

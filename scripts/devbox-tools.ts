@@ -20,7 +20,7 @@ import * as v from 'valibot';
 import { AwsClient } from 'aws4fetch';
 import { devboxTools } from '../armada/devbox-tools';
 import { deployedConfig } from './infra-manifest';
-import { r2ObjectSize, wranglerSessionToken } from './cloudflare-rest';
+import { r2ObjectSize, restApiToken } from './cloudflare-rest';
 
 const BLOCK_LOWER = join(import.meta.dir, '..', 'packages/devbox/block-lower');
 
@@ -69,7 +69,9 @@ function partsOf(tools: v.InferOutput<typeof ToolsRecord>): readonly { readonly 
 
 /** The first part the bucket lacks or holds at another size. */
 async function missingPart(bucket: string, tools: v.InferOutput<typeof ToolsRecord>) {
-  const token = wranglerSessionToken();
+  const token = restApiToken();
+
+  if (token === '') throw new Error('reading the store bucket needs the deploy\'s REST token (KINU_CLOUDFLARE_API_TOKEN)');
 
   for (const part of partsOf(tools)) {
     const size = await r2ObjectSize({ accountId: ACCOUNT, bucket, key: part.key, token });

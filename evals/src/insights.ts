@@ -395,12 +395,12 @@ function helperSources(lines: readonly string[], helper: Helper, at: number): Ev
 function recordResultTurns(run: HarnessRun, lines: readonly string[], helpers: HelperObservations, add: RecordFact): void {
   let checkAt = lines.findIndex((line) => line.trim() === '"output": {');
 
-  for (const [index, turn] of run.output.turns.entries()) {
+  for (const turn of run.output.turns) {
     const statusAt = lineOf(lines, 'status', turn.outcome.status, checkAt);
 
     checkAt = statusAt;
 
-    if (turn.outcome.status !== 'completed') add('turn-outcome', { turn: index + 1, status: turn.outcome.status,
+    if (turn.outcome.status !== 'completed') add('turn-outcome', { turn: turn.turn, status: turn.outcome.status,
       message: turn.outcome.message ?? null }, [{ file: 'results.json', line: statusAt }]);
 
     for (const check of turn.checks) {
@@ -497,7 +497,7 @@ function recordStreamDrops(timeline: readonly Located<TimelineEntry>[], add: Rec
 
 function recordFailures(run: HarnessRun, lines: readonly string[], transcript: readonly string[], add: RecordFact): void {
   const outputAt = lines.findIndex((line) => line.trim() === '"output": {');
-  const first = run.output.turns.flatMap((turn, index) => turn.checks.filter((check) => !check.pass).map((check) => ({ turn: index + 1, check }))).at(0);
+  const first = run.output.turns.flatMap((turn) => turn.checks.filter((check) => !check.pass).map((check) => ({ turn: turn.turn, check }))).at(0);
 
   if (first !== undefined) {
     const at = lineOf(lines, 'id', first.check.id, outputAt);
