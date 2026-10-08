@@ -473,7 +473,8 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
         </div>
       </header>
 
-      <div data-plan-body className="relative flex flex-1 min-h-0">
+      {/* Isolated, so the viewer's raised layers stay under the sticky decision bar when it overlaps the document. */}
+      <div data-plan-body className="relative isolate flex flex-1 min-h-0">
         <div data-plan-scroll className="flex-1 min-w-0 overflow-y-auto px-4 py-8 sm:px-8 sm:py-10">
           <div data-plan-document className="plan-review-document mx-auto">
             <Viewer

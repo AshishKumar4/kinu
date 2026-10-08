@@ -63,8 +63,10 @@ interface WorkspacePlan {
   readonly overflow: number;
   readonly scrimDisplay: string;
   readonly railDismissed: boolean;
-  /** Where the decision bar sits as the Work tab opens on the plan, before anything scrolls. */
+  /** Where the decision bar sits as the Work tab opens on the plan, before anything scrolls, and whether its own
+   *  controls are what a press at their centre reaches rather than the document drawn over them. */
   readonly footerInView: boolean;
+  readonly footerOnTop: boolean;
 }
 
 /** What the header promoted, and what the document kept. */
@@ -250,11 +252,18 @@ async function observeWorkspace(newPage: Gallery['newPage'], origin: string): Pr
 
     if (!root || !plan) throw new Error('WorkspacePage did not mount the real plan document');
 
-    const footer = document.querySelector<HTMLElement>('[data-plan-footer]')?.getBoundingClientRect();
+    const bar = document.querySelector<HTMLElement>('[data-plan-footer]');
+    const footer = bar?.getBoundingClientRect();
+    const controls = [...bar?.querySelectorAll<HTMLElement>('button') ?? []];
 
     return {
       title: document.querySelector('[data-plan-title] h1, h1[data-plan-title]')?.textContent ?? '',
       footerInView: footer !== undefined && footer.top >= 0 && footer.bottom <= innerHeight,
+      footerOnTop: controls.length > 0 && controls.every((control) => {
+        const box = control.getBoundingClientRect();
+
+        return control.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
+      }),
       rootWidth: Math.round(root.getBoundingClientRect().width),
       documentWidthBefore: Math.round(plan.getBoundingClientRect().width),
       overflow: document.documentElement.scrollWidth - innerWidth,
@@ -494,6 +503,7 @@ describe('the plan review document, as a browser lays it out', () => {
     expect(observed.workspace.title).toBe('Repair the applyCoupon eligibility guard');
     // The decision is in reach as the plan opens, however long the plan.
     expect(observed.workspace.footerInView).toBe(true);
+    expect(observed.workspace.footerOnTop).toBe(true);
     expect(observed.workspace.rootWidth).toBeLessThan(500);
     expect(observed.workspace.railPosition).toBe('absolute');
     expect(observed.workspace.railWidth).toBeLessThanOrEqual(observed.workspace.rootWidth);
