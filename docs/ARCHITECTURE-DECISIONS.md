@@ -177,20 +177,24 @@ Measured: `unit-sandbox-errors` rejected the host-disconnect regression before
 the fix; the scoped codemode suites and harness-wiring's durable-census case
 pass after it. O2 closed.
 
-M3. A slate declares its bindings in `package.json`. Besides namespace, rpc,
-mcp and app, `{kind:'tool',name}` exposes `env.NAME.call(input)` for a native
-or crafted tool; memory, tasks and web expose their codemode projection
-members. The host uses the same core dispatcher and CF codemode factory and
-re-reads crafted source and caller reach for each call. Tool and projection
-failures use M2's value shape. Role reach, Plan permissions, egress and
-approval gates are the caller's; a slate cannot add authority. RPC read models
-remain root-only. Neither agent nor agents is exposed, including through a
-crafted tool's sandbox: live apps must not hire or steer their caller.
-Decided 2026-09-13, commit `feat(slates): a slate binds what its caller can call`.
-Measured by `unit-slate-composition` (immediate scribe-role revocation, actor
-memory, root-only RPC and the shared approval ladder), `unit-slate-project`,
-and workerd's `plan-code` (a declared crafted binding runs live source with no
-delegation globals). O3 closed.
+M3. A slate calls one surface, `workspace`: its caller's eval namespaces,
+`mcp.<server>.<tool>`, crafted `tools.<name>`, `reads.<model>`, `agent.send`,
+`ai.run` and `slates.<id>.<method>`, each as the caller. `package.json` declares
+nothing. The host routes every call in one place (`routeSlateCall`), refuses
+what only the agent does (`SLATE_EXCLUDED`: delegating, steering itself, making
+tools, changing slates) and any member its impact table does not name, and
+records each member an owner's call reaches; that record is the capability
+graph a share is cut from, by agent-core's impacts, and what a blueprint
+requires. Role reach, Plan permissions, egress and approval gates are the
+caller's; a slate cannot add authority. Read models remain root-only.
+Decided 2026-10-07 (owner). Reversed: the declared `slate.bindings` table of
+2026-09-13 (`feat(slates): a slate binds what its caller can call`), whose
+names, member lists and path prefixes were a second statement of a reach the
+caller's role already states. Measured by `unit-slate-composition` (immediate
+scribe-role revocation, actor memory, root-only reads, the shared approval
+ladder and the agent-only refusals), `unit-slate-surface`, and workerd's
+`slate-share` (a grant cut from recorded calls, across an app hop and its
+cycle). O3 closed.
 
 M4. A slate's durable application is a journalled launch of the workspace's
 one facet manager, and the journal re-drives it on the wake after a reset or
@@ -201,7 +205,7 @@ next request for its URL, `workspace-host.ts` at `9ad8e7a6e`). The launch
 journal recovers on the first pump of an incarnation. The hosted workspace
 runs that pump from `waitUntil` when it composes the manager, because its one
 alarm slot belongs to the SDK scheduler. The recipe carries digests, port and
-cwd, never a launch's inputs. A slate's bindings are minted per caller and its
+cwd, never a launch's inputs. A slate's surface stub is minted per caller and its
 modules compiled from the current tree, so the embedder's
 `resolveWorkerLaunch` answers null and brings the slate back through the
 slate host's own boot, which also replaces a process whose source changed.

@@ -484,9 +484,9 @@ Model agreement is never labelled human ground truth. The recovered approval for
 
 ## 12. Slates and authored applications
 
-![Authored slate source, server, browser and capability bindings](diagrams/product-slate.svg)
+![Authored slate source, server, browser and the workspace surface](diagrams/product-slate.svg)
 
-A slate is an authored project in the workspace file plane. Its configuration lives in `package.json`. Its UI is JS/JSX/TS/TSX that renders HTML, CSS and JavaScript in the browser. Server code serves routes and uses declared admitted bindings.
+A slate is an authored project in the workspace file plane. Its configuration lives in `package.json`. Its UI is JS/JSX/TS/TSX that renders HTML, CSS and JavaScript in the browser. Server code serves routes and calls its caller's own reach through one `workspace` surface; `package.json` declares no capabilities.
 
 The UI is not defined by a custom JSON component vocabulary. A JSON response carries application data or an observation.
 
