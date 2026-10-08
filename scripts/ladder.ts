@@ -2596,9 +2596,9 @@ export function deployPlan(costs: CostTable = readCosts()): PlanRow[] {
 function planRow(gate: Gate, costs: CostTable, tracked: readonly string[], browsers: ReadonlySet<string>): PlanRow {
   const phase = gate.phase ?? 'source';
   const recorded = costs.rows[gate.run];
-  const cost = phase === 'post-publish' || recorded?.exit === 0 ? recorded : undefined;
+  const cost = readsDeployment(gate) || recorded?.exit === 0 ? recorded : undefined;
 
-  if (cost === undefined && phase !== 'post-publish') {
+  if (cost === undefined && !readsDeployment(gate)) {
     throw new Error(
       `${gate.run} is a row of the deploy plan with no measured cost in `
       + `${COST_TABLE}${recorded === undefined ? '' : `: its figure is of a run that exited ${String(recorded.exit)}`}. `
