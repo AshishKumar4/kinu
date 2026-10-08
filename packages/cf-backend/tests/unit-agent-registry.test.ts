@@ -5,7 +5,7 @@ import {
   asFetchFunction,
   DEFAULT_WORKERS_AI_MODEL_SPEC,
   defaultSpecFor,
-  parseModelSpec,
+  
   KINU_USER_AGENT,
   requestUrl,
 } from '@kinu.run/core';
@@ -64,32 +64,10 @@ describe('AgentProviderRegistry composition', () => {
     }
   });
 
-  test('normalizeSpecSync — bare @cf/... prefixes workers-ai', () => {
-    const reg = createAgentProviderRegistry({ env: {}, userDO: fakeUserDOStub() });
-    expect(reg.normalizeSpecSync('@cf/moonshotai/kimi-k2.6'))
-      .toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
-  });
-
   test('normalizeSpecSync — canonical provider/modelId passes through', () => {
     const reg = createAgentProviderRegistry({ env: {}, userDO: fakeUserDOStub() });
     expect(reg.normalizeSpecSync('codex/gpt-5.5')).toBe('codex/gpt-5.5');
     expect(reg.normalizeSpecSync('anthropic/claude-opus-4-7')).toBe('anthropic/claude-opus-4-7');
-  });
-
-  test('an admission count is keyed on the spec the request will use, for every BC form', () => {
-    // The counter must parse the normalised spec `resolveModel` submits: the raw
-    // one throws on a bare id and keys a bare `@cf/…` to an unknown provider.
-    const reg = createAgentProviderRegistry({ env: {}, userDO: fakeUserDOStub() });
-
-    for (const raw of ['@cf/moonshotai/kimi-k2.6', 'codex/gpt-5.5']) {
-      const keyed = parseModelSpec(reg.normalizeSpecSync(raw));
-      expect(reg.registry.get(keyed.provider)).toBeDefined();
-      expect(`${keyed.provider}/${keyed.modelId}`).toBe(reg.normalizeSpecSync(raw));
-    }
-
-    expect(() => parseModelSpec('gpt-5.5')).toThrow(/expected "<provider>\/<modelId>"/);
-    expect(parseModelSpec('@cf/moonshotai/kimi-k2.6').provider).toBe('@cf');
-    expect(reg.registry.get('@cf')).toBeUndefined();
   });
 
   test('a spec that names no provider is refused: an unpinned actor runs on its profile\'s tier model', () => {

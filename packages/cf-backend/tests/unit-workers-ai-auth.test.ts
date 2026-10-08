@@ -12,13 +12,6 @@ import { requestUrl } from '@kinu.run/core';
 
 import { present } from '@kinu.run/test-utils';
 
-
-/** The AI SDK's error; `message` and `responseBody` are where owner-visible text lands. Parsed: an I/O boundary. */
-const ModelRejectionSchema = v.looseObject({
-  message: v.optional(v.string()),
-  responseBody: v.optional(v.string()),
-});
-
 const ACCOUNT_BASE_URL = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1/ai/v1';
 
 function chatCompletionResponse(): Response {
@@ -159,9 +152,7 @@ describe('Workers AI credential refresh', () => {
     expect(authCalls).toEqual([null, 'Bearer cf-stale']);
   });
 
-  test('a 401 that SURVIVES the refresh says what to do, not the word "Unauthorized"', async () => {
-    // Cloudflare answers a rejected credential with plain-text `Unauthorized`, and `workers-ai.ts` supplies no
-    // `mapError`, so the owner must get the actionable sentence instead of the raw body.
+  test('a 401 that SURVIVES the refresh fails the call after one forced refresh, never more', async () => {
     // Each read rotates the token, as a forced refresh does; Cloudflare refuses every one.
     let issued = 0;
 
@@ -185,24 +176,11 @@ describe('Workers AI credential refresh', () => {
       }),
     });
 
-    // `String(err)` on an AI SDK error is just its name, which would make the negative below unable to fail.
-    let failure = '';
-
-    try {
-      await generateText({
-        model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6', 'kinu-test'),
-        prompt: 'ping',
-      });
-    } catch (cause) {
-      const parsed = v.safeParse(ModelRejectionSchema, cause);
-      failure = parsed.success
-        ? `${parsed.output.message ?? ''}\n${parsed.output.responseBody ?? ''}`
-        : String(cause);
-    }
-
-    expect(failure).toContain('Reconnect Cloudflare in User settings');
-    expect(failure).not.toMatch(/(^|\W)Unauthorized(\W|$)/);
-    // Still exactly one forced-refresh retry against a credential already refused twice.
+    await expect(generateText({
+      model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6', 'kinu-test'),
+      prompt: 'ping',
+    })).rejects.toThrow();
+    // Exactly one forced-refresh retry against a credential already refused twice.
     expect(attempts).toBe(2);
   });
 

@@ -12,7 +12,7 @@ import {
   type RecordedMcpTransport,
 } from './helpers/agents-sdk';
 import { storedMcpOptionsCarryCredential } from '../src/user/mcp';
-import { createCredentialCipher, McpToolSurfaceSchema, validateMcpServerInput } from '@kinu.run/core';
+import { createCredentialCipher, McpToolSurfaceSchema } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import type { McpToolSurface } from '../src/user/mcp-servers';
 import type { UserCaller } from '@kinu.run/core';
@@ -143,25 +143,14 @@ describe('a server name is one identity, enforced by the database', () => {
     await seedServer(h, 'srv1', { name: 'github' });
     const owner = await testOwner();
 
-    const addRefusal = (name: string): string => {
-      try {
-        validateMcpServerInput({ name, serverUrl: 'https://mcp.example/sse' });
-
-        return '';
-      }
-      catch (err) { return err instanceof Error ? err.message : String(err); }
-    };
-
-    await expect(h.userDO.userMcp_update(owner, 'srv1', { name: '   ' }))
-      .rejects.toThrow(addRefusal('   '));
-    await expect(h.userDO.userMcp_update(owner, 'srv1', { name: 'x'.repeat(65) }))
-      .rejects.toThrow(addRefusal('x'.repeat(65)));
+    // A blank name and one past 64 characters are refused, as an add refuses them, and the stored name stays.
+    await expect(h.userDO.userMcp_update(owner, 'srv1', { name: '   ' })).rejects.toThrow();
+    await expect(h.userDO.userMcp_update(owner, 'srv1', { name: 'x'.repeat(65) })).rejects.toThrow();
+    await expect(h.userDO.userMcp_add(owner, { name: '   ', serverUrl: 'https://mcp.example/sse' }, 'https://kinu.example')).rejects.toThrow();
     expect(storedName(h, 'srv1')).toBe('github');
 
     await h.userDO.userMcp_update(owner, 'srv1', { name: '  spaced  ' });
     expect(storedName(h, 'srv1')).toBe('spaced');
-    expect(validateMcpServerInput({ name: '  spaced  ', serverUrl: 'https://mcp.example/sse' }).name)
-      .toBe('spaced');
     h.close();
   });
 

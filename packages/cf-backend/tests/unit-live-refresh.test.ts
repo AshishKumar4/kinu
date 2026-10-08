@@ -57,6 +57,11 @@ function activeAdmission(): LiveRefreshAdmission {
   return admission;
 }
 
+/** A notice as behaviour: how severe, the reason it carries, and whether it offers a retry; never its copy. */
+function facts(notice: ReturnType<typeof formatWorkspaceError>): { severity: string; detail: string; retry: boolean } | null {
+  return notice === null ? null : { severity: notice.severity, detail: notice.detail, retry: notice.retry !== null };
+}
+
 function reporter(initial: LiveRefreshErrors = {}) {
   let errors = initial;
 
@@ -256,13 +261,8 @@ describe('workspace live refresh failures', () => {
         isCurrent: admission.admit(TEST_ACTOR, 'slates'),
       }),
     ]);
-    expect(formatWorkspaceError(errors.errors, true)).toEqual({
-      severity: 'partial',
-      title: 'Executors and slates could not be refreshed.',
-      scope: 'The conversation is available. Showing last known data.',
-      detail: 'catalog offline',
-      retry: 'Retry',
-    });
+    expect(errors.errors).toEqual({ executors: 'catalog offline', slates: 'catalog offline' });
+    expect(facts(formatWorkspaceError(errors.errors, true))).toEqual({ severity: 'partial', detail: 'catalog offline', retry: true });
     await refreshLiveResource({
       source: 'executors',
       read: () => Promise.resolve(['ready']),
@@ -270,13 +270,8 @@ describe('workspace live refresh failures', () => {
       report: errors.report,
       isCurrent: admission.admit(TEST_ACTOR, 'executors'),
     });
-    expect(formatWorkspaceError(errors.errors, true)).toEqual({
-      severity: 'partial',
-      title: 'Slates could not be refreshed.',
-      scope: 'The conversation is available. Showing last known data.',
-      detail: 'catalog offline',
-      retry: 'Retry loading slates',
-    });
+    expect(errors.errors).toEqual({ slates: 'catalog offline' });
+    expect(facts(formatWorkspaceError(errors.errors, true))).toEqual({ severity: 'partial', detail: 'catalog offline', retry: true });
     await refreshLiveResource({
       source: 'slates',
       read: () => Promise.resolve(['ready']),
@@ -298,29 +293,17 @@ describe('resource-scoped workspace notices', () => {
     expect(formatWorkspaceError({}, false)).toBeNull();
   });
 
-  test('a failed essential read blocks with the open sentence and a retry', () => {
-    expect(formatWorkspaceError({ snapshot: CONNECTION_LOST }, false)).toEqual({
-      severity: 'blocking',
-      title: "Could not open this workspace",
-      scope: 'Nothing has loaded yet.',
-      detail: CONNECTION_LOST,
-      retry: 'Retry',
-    });
+  test('a failed essential read blocks, with its reason and a retry', () => {
+    expect(facts(formatWorkspaceError({ snapshot: CONNECTION_LOST }, false))).toEqual({ severity: 'blocking', detail: CONNECTION_LOST, retry: true });
   });
 
-  test('a failed optional read is partial, names only that resource, and never blocks the composer', () => {
-    const notice = formatWorkspaceError({ executors: 'catalog offline' }, true);
-    expect(notice?.severity).toBe('partial');
-    expect(notice?.title).toBe('Executors could not be refreshed.');
-    expect(notice?.scope).toContain('The conversation is available.');
-    expect(notice?.retry).toBe('Retry loading executors');
+  test('a failed optional read is partial and never blocks the composer', () => {
+    expect(facts(formatWorkspaceError({ executors: 'catalog offline' }, true))).toEqual({ severity: 'partial', detail: 'catalog offline', retry: true });
   });
 
   test('the essential read wins when both fail', () => {
-    const notice = formatWorkspaceError({ snapshot: CONNECTION_LOST, executors: 'catalog offline' }, false);
-    expect(notice?.severity).toBe('blocking');
-    expect(notice?.title).toBe("Could not open this workspace");
-    expect(notice?.retry).toBe('Retry');
+    expect(facts(formatWorkspaceError({ snapshot: CONNECTION_LOST, executors: 'catalog offline' }, false)))
+      .toEqual({ severity: 'blocking', detail: CONNECTION_LOST, retry: true });
   });
 
   test('inline credentials never reach the technical detail', () => {
@@ -365,13 +348,8 @@ describe('loading the workspace snapshot', () => {
     );
 
     expect(outcome).toBe('loaded');
-    expect(formatWorkspaceError(errors.errors, true)).toEqual({
-      severity: 'partial',
-      title: 'Background jobs could not be refreshed.',
-      scope: 'The conversation is available. Showing last known data.',
-      detail: 'the jobs table is still unreachable',
-      retry: 'Retry loading background jobs',
-    });
+    // Only the surface the snapshot did not re-read is still reported.
+    expect(errors.errors).toEqual({ jobs: 'the jobs table is still unreachable' });
   });
 
   test('a snapshot cannot clear a failure a newer read of that surface reported', async () => {

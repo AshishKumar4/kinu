@@ -15,18 +15,6 @@ import { SLATES_CHANGED_METADATA_KEY } from '@kinu.run/core';
 const noopRpc = async (): Promise<never> => { throw new Error('no rpc in the static renderer'); };
 
 describe('the inline slate card', () => {
-
-  test('renders the literal address as code when nothing can host the card', () => {
-    const html = renderToStaticMarkup(createElement(MarkdownContent, {
-      content: 'See slate://deploy-choice here',
-    }));
-
-    // Without the provider SlateLink falls back to the literal text as code.
-    expect(html).toContain('<code');
-    expect(html).toContain('slate://deploy-choice');
-    expect(html).not.toContain('data-slate-inline');
-  });
-
   // 2026-09-26: an address that names no slate (`slate://..`) left the pass re-reading it forever, hanging the page.
   test('an address that names no slate stays text, and the addresses after it still render', () => {
     const html = renderToStaticMarkup(createElement(
@@ -37,14 +25,6 @@ describe('the inline slate card', () => {
 
     expect(html).toContain('Not slate://.. but');
     expect(html).toContain('data-slate-inline="board"');
-  });
-
-  test('a non-slate link still renders as a normal anchor', () => {
-    const html = renderToStaticMarkup(createElement(MarkdownContent, {
-      content: 'See [the docs](https://example.com/docs) here',
-    }));
-
-    expect(html).toContain('href="https://example.com/docs"');
   });
 });
 

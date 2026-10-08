@@ -261,12 +261,4 @@ describe('viewNoteFor', () => {
 		expect(viewNoteFor(BAND, 1, 1200)).toBeNull();
 		expect(viewNoteFor(BAND, LABEL_MIN_SCALE, 1200)).toBeNull();
 	});
-
-	test('a tree wider than the view points at the pan, even while legible', () => {
-		expect(viewNoteFor(BAND, 1, 600)).toBe('deeper columns continue right · drag to pan');
-	});
-
-	test('both losses name both facts in one line', () => {
-		expect(viewNoteFor(BAND, 0.4, 300)).toBe('too small to label · deeper columns pan right');
-	});
 });

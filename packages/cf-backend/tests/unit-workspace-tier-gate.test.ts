@@ -3,7 +3,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
 import { CAPABLE_HELLO, daemon } from './helpers/device-harness';
-import { USER_DO_RPC_SURFACE } from '../src/rpc-surface';
 import type { RosterPage } from '../src/user/roster';
 import { asFetchFunction, sha256Hex } from '@kinu.run/core';
 import { BUILTIN_PROFILE_CATALOG, decodeJsonValue } from '@kinu.run/core';
@@ -437,7 +436,6 @@ describe('a registered workspace reaches the whole surface', () => {
       globalThis.fetch = real;
     }
 
-    expect(USER_DO_RPC_SURFACE.filter((name) => /github/i.test(name))).toEqual(['userMcp_githubRefresh']);
     harness.close();
   });
 

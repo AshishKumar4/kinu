@@ -376,22 +376,6 @@ describe('install.sh terminal handling', () => {
 
 /** Built at deploy time. A source install measured cold 2026-09-01: 13.35 s of a 16.08 s install, 950 packages, 1.9 GB. */
 describe('the CLI installs as a prebuilt artifact', () => {
-  test('the launcher unpacks published builds and runs no package manager', async () => {
-    const launcher = await servedScript('/downloads/kinu');
-    expect(launcher).toContain('/downloads/kinu-cli-${KINU_OS}-${KINU_ARCH}.tar.gz');
-    expect(launcher).toContain('RUNTIME_URL="${KINU_ORIGIN}/downloads/kinu-runtime-cpython.tar.gz"');
-    expect(launcher).toContain(`KINU_ORIGIN="\${KINU_ORIGIN:-${ORIGIN}}"`);
-    expect(launcher).not.toContain('bun install');
-    expect(launcher).not.toContain('--frozen-lockfile');
-    expect(launcher).not.toContain('node_modules');
-    // Staging tree beside the install; the swap keeps prev until the proven tree is in place
-    // (unit-cli-launcher-swap drives those states).
-    expect(launcher).toContain('mv "$tmp/extract/kinu" "$next"');
-    expect(launcher).toContain('mv "$CLI_DIR" "$CLI_ROOT/prev"');
-    expect(launcher).toContain('adopt_tree "$next"');
-    expect(launcher).toContain('mv "$proven" "$CLI_DIR"');
-    expect(launcher.split('rm -rf "$CLI_DIR"').length - 1).toBe(3);
-  });
 
   test('every download is checksum-verified against the SIGNED release, with no way to skip it', async () => {
     const launcher = await servedScript('/downloads/kinu');

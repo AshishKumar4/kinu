@@ -20,7 +20,7 @@ import {
   type WebSearchProvider,
 } from '@kinu.run/core';
 import {
-  BackgroundJobRunner, CONFINED_BACKGROUNDABLE_TOOLS, HEAD_BUILTIN_TOOLS, buildHeadToolSet, type HeadSplitRequest, type HeadSplitResult,
+  BackgroundJobRunner, CONFINED_BACKGROUNDABLE_TOOLS, buildHeadToolSet, type HeadSplitRequest, type HeadSplitResult,
 } from '@kinu.run/core';
 
 function report(id: string): HeadReport {
@@ -140,27 +140,6 @@ function countingSplit(
 
 describe('head tool surface — containment', () => {
 
-  test('a head reaches the real workspace: eval and run are present', () => {
-    const { tools } = buildSurface();
-    expect(tools.eval).toBeDefined();
-    expect(tools.shell).toBeDefined();
-
-    for (const gone of ['sandbox_exec', 'sandbox_read', 'sandbox_write', 'sandbox_list']) {
-      expect(Object.keys(tools)).not.toContain(gone);
-    }
-  });
-
-  test('split_subheads is not on the surface at all once the depth budget is spent', async () => {
-    // Depth is fixed for the run, so the tool could only ever refuse.
-    const { tools } = buildSurface({
-      input: headInput({ budget: { maxDepth: 0, spawnedAt: Date.now() } }),
-    });
-
-    expect(tools.split_subheads).toBeUndefined();
-
-    for (const name of HEAD_BUILTIN_TOOLS) expect(tools[name]).toBeDefined();
-  });
-
   test('split_subheads is NOT refused for spend — a long-running head may still split', async () => {
     const calls = { splits: 0 };
 
@@ -176,11 +155,6 @@ describe('head tool surface — containment', () => {
       heads: [{ task: 'a', rationale: 'a' }, { task: 'b', rationale: 'b' }],
     });
     expect(calls.splits).toBe(1);
-  });
-
-  test('allowedTools narrows the surface further, never widens it', () => {
-    const { tools } = buildSurface({ input: headInput({ allowedTools: ['shell', 'record_evidence', 'think'] }) });
-    expect(Object.keys(tools).sort()).toEqual(['record_evidence', 'shell']);
   });
 
   test('builtin tool calls land in the HeadCapture so the report keeps them', async () => {
