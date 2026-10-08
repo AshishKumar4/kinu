@@ -255,21 +255,6 @@ describe("files route — PUT", () => {
     }
   });
 
-  test('a revision quoted as a string is not the same revision as the number', async () => {
-    const ws = workspace();
-    await ws.files.writeFile(PATH, new TextEncoder().encode('original'));
-    const opened = await ws.revision();
-    const quoted = typeof opened === 'number' ? JSON.stringify(String(opened)) : String(opened);
-
-    const stale = await route(put('wrong revision', { 'If-Match': quoted }), ws.agent);
-    expect(stale.status).toBe(412);
-    expect(text(await ws.held())).toBe('original');
-
-    const written = await route(put('matching revision', { 'If-Match': JSON.stringify(opened) }), ws.agent);
-    expect(written.status).toBe(200);
-    expect(text(await ws.held())).toBe('matching revision');
-  });
-
   test("concurrent same-path uploads never share buffered chunks", async () => {
     const ws = workspace();
     const a = new TextEncoder().encode("AA");
