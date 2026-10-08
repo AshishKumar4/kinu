@@ -25,6 +25,8 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { ActiveSkillSet } from '../skills/types';
 import { withTaskPlan, type TaskPlanContext } from '../tools/task-plan-scope';
 import { withToolText, type ToolTextOverrides } from '../tools/tool-text';
+import { withFamilyToolNotes } from '../prompting/tool-families';
+import { resolvePromptModelProfile } from '../prompting/model-profile';
 import { BUILTIN_TOOL_NAMES, type AgentsToolAction, type BuiltinToolName } from '../tools/registry';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import type { InstructionTrustResolver } from '../types/instruction-trust';
@@ -184,7 +186,8 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
   const callable = pick(sources.settle === undefined && workMode === drafted.workMode ? builtins : filterToolSetBySkills(sources.toolset(workMode), activeSkills), allowed);
   const artifacts = sources.artifacts();
   const taskPlan = sources.taskPlan();
-  const invocable = toolsForInvocation(workMode, withToolText(callable, artifacts.tools));
+  // Evolved text, written for this agent, wins over its family's.
+  const invocable = toolsForInvocation(workMode, withToolText(withFamilyToolNotes(callable, resolvePromptModelProfile({ id: spec }).family), artifacts.tools));
   const tools = withOperationProfile(taskPlan === null ? invocable : withTaskPlan(invocable, taskPlan), operation);
   const externalTools = allowed.has('eval') ? pick(external, allowed) : {};
   const { pinned, invoked } = splitTurnSkills(activeSkills);

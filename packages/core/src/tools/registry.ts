@@ -259,15 +259,19 @@ export const BUILTIN_TOOL_SPECS = {
     name: 'file',
     summary: 'Read, list, stat, search, edit or write files in your workspace.',
     notes: [
-      'Find before you read: `search` a file for the lines you need, then `read` around them. Read a large file in pages with `offset` and `limit`; a read that stops early names the offset that continues it.',
-      'Read a file in this turn before you `edit` it. An edit matches the text as last read, and fails when its `old_text` is absent or occurs more than once: copy just enough to be unique.',
+      'Find before you read: `search` a file for the lines you need, then `read` around them. Read a large file in pages with `offset` and `limit`.',
+      'Read a file before you `edit` it. An edit matches the text as last read, and fails when its `old_text` is absent or occurs more than once: copy just enough to be unique.',
     ],
     example: "file({op:'edit', path:'src/api.ts', edits:[{old_text:'timeout: 30', new_text:'timeout: 60'}]})",
   },
   agents: {
     name: 'agents',
     summary: 'Delegate work to other agents and message them.',
-    notes: [],
+    notes: [
+      'Do the work yourself by default. A helper costs more than it looks: you write its brief, you see only its report, and trusting that report means reading what it touched.',
+      'Delegate only when the work is large, separable from your next step, and clearly costs more to do than to brief and check: independent pieces that can run at the same time, or a long side task whose raw output would flood your context.',
+      'Do it yourself when it takes a handful of calls, when your next step depends on it, or when you would redo it to trust the result. Never delegate one small piece, and never split one modest job across several helpers.',
+    ],
     // Cheapest complete call: `ideate` is the one preset that takes no `objective`.
     example: "agents({op:'swarm', preset:'ideate', task:'Three ways to stop staging 502ing under load'})",
   },

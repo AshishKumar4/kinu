@@ -1,2 +1,1 @@
 - Prefer the `file` tool for reading, searching and editing files when it fits; use the shell for the rest. Independent tool calls can run in parallel in one response.
-- When you already know which part of a file you need, read only that part. Do not re-read a file you just edited to verify it: the edit would have failed if it had not applied.
