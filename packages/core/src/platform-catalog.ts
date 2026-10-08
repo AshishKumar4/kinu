@@ -1975,6 +1975,28 @@ export const PLATFORM_CATALOG = {
     ],
   },
 
+  'job.context_silence_ms': {
+    subject: 'Longest the context a detached background job runs in may leave its liveness probe unanswered before the job is given up as lost',
+    limit: { value: 600_000, unit: 'ms' },
+    origin: 'self-imposed',
+    bounds: 'silence',
+    evidence: 'observed-in-production',
+    provenance: '~/kinu-logs/research/HUNG-RPC-ArmedBat.md:67-73',
+    date: '2026-10-08',
+    trigger: 'a running job whose context answered no probe for the bound, read at an alarm',
+    onBreach: 'the job is recovered as an evicted one is: re-driven if its kind resumes, else settled failed saying it was lost, and its agent woken',
+    observable: [{ context: 'the job\'s settled error', message: 'nothing came back from its work for' }],
+    firstPartySignal: true,
+    notes: 'Twice the per-invocation CPU limit Kinu configures (limits.cpu_ms 300 s), which staging reached (302.5 s, '
+      + '2026-10-08): a live isolate answers only when its thread is free, and no invocation holds it longer. Silence '
+      + 're-armed by every answer, never a limit on how long the job runs. Staging bgjob-qwywfmf0ej8nhsf4jxlym '
+      + '(2026-10-08 07:44Z) detached and never ended while its workspace served 800+ more invocations.',
+    measurements: [
+      { scenario: 'staging OrchestratorAgent, max CPU in one invocation over 24 h (n=279,216)', value: 302_500, unit: 'ms' },
+      { scenario: 'production OrchestratorAgent, max CPU in one invocation over 7 days, sampled', value: 29_338, unit: 'ms' },
+    ],
+  },
+
   'browser.session.keep_alive_ms': {
     subject: 'Longest a Browser Run Chrome session may sit idle, with no connection, before it closes',
     limit: { value: 1_200_000, unit: 'ms' },

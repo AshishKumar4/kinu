@@ -83,6 +83,11 @@ export class WorkspaceJobAuthorities {
     return recovered;
   }
 
+  /** Every actor's here. */
+  async recoverLost(): Promise<void> {
+    for (const { runner } of [this.deps.root(), ...this.held.values()]) await runner.recoverLost();
+  }
+
   async retire(actorId: string): Promise<JobRetirement> {
     const authority = this.of(actorId);
 

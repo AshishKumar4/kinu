@@ -27,7 +27,7 @@ import {
   CI_EXEMPT, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
   DEPLOY_PHASES, browserModules, deployOrder, deployPlan, gatesFor, liveTierTargets, packageScripts, phaseWave,
   localDeployGates, reportCIVerdicts, runnableArgv, sharedBrowserModules, sharedOf, tierRun, tierSchedule, tierWave, trackedTestFiles, waveCaps, type WaveRow,
-  HAMMER_REPEATS, ciUnits, changedTestGate, splitCIGate, type Gate, armadaPhaseRows, onArmada,
+  HAMMER_REPEATS, ciUnits, changedTestGate, splitCIGate, type Gate, armadaPhaseRows, armadaRowVerdicts, onArmada,
 } from './ladder';
 import {
   ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite,
@@ -707,6 +707,32 @@ describe('a deploy\'s armada rows', () => {
       ],
       reasons: true, atDeploy: true, local: here.length,
     });
+  });
+});
+
+describe('a deploy phase\'s armada report', () => {
+  // The post-publish job of the staging deploy of 04a4dd0ab (2026-10-08, job 20261008081731-1d7c41dd): first-run was cut
+  // off at armada's task limit with no verdict, and product-flows was killed for its silence with one of its own. Both
+  // rows were told first-run's problems.
+  test('gives each row its own verdict, and only the problems armada names for its own task', () => {
+    const rows = armadaPhaseRows(['post-publish']).filter((gate) => ['bun run gate:first-run', 'bash scripts/product-flows-tier.sh'].includes(gate.run));
+
+    const read = armadaRowVerdicts(rows, {
+      job: '20261008081731-1d7c41dd',
+      problems: ['first-run-tier has no verdict for bun run gate:first-run; missing is not green', 'first-run-tier reported first-run-tier, which its plan entry does not name'],
+      verdicts: {
+        rows: [
+          { name: 'first-run-tier', exitCode: 124, seconds: 1805, output: 'the task exited 124 and reported no row' },
+          { run: 'bash scripts/product-flows-tier.sh', exitCode: 124, seconds: 538, output: 'KILLED  Product flows in a browser, on the deployment  after 480s with no output' },
+        ],
+      },
+    }, 2);
+
+    expect(read.map(({ gate, verdict, found }) => [gate.run, verdict?.seconds, found])).toEqual([
+      ['bun run gate:first-run', 1805, 'job 20261008081731-1d7c41dd; first-run-tier has no verdict for bun run gate:first-run; missing is not green; '
+        + 'first-run-tier reported first-run-tier, which its plan entry does not name'],
+      ['bash scripts/product-flows-tier.sh', 538, 'job 20261008081731-1d7c41dd'],
+    ]);
   });
 });
 

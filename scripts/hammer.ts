@@ -109,6 +109,11 @@ export interface HammerRun {
   readonly leftovers: readonly string[];
 }
 
+/** The lines kept of one failing test's block, and the blocks printed per failing run. */
+const FAILING_BLOCK_LINES = 60;
+
+const FAILING_BLOCKS_SHOWN = 3;
+
 function reporterText(output: string): string {
   return stripVTControlCharacters(output).replace(/^::group::/gmu, '');
 }
@@ -205,6 +210,29 @@ export const BURNER = [
  * safe. A burner writes nothing but holds this process's output open, so the
  * ladder's hang detector ends one that outlives the gate.
  */
+/** Each failing test's own block, its error lines through its `(fail)` line, back to the test reported before it. */
+export function failingBlocks(output: string): string[] {
+  const lines = reporterText(output).split('\n');
+  const blocks: string[] = [];
+  let start = 0;
+
+  for (const [index, line] of lines.entries()) {
+    const trimmed = line.trim();
+
+    if (/^\((?:pass|skip|todo)\)/u.test(trimmed) || /^(?:packages|scripts|tests)\/[\w./-]+\.test\.tsx?:$/u.test(trimmed)) {
+      start = index + 1;
+      continue;
+    }
+
+    if (trimmed.startsWith('(fail)')) {
+      blocks.push(lines.slice(Math.max(start, index - FAILING_BLOCK_LINES), index + 1).join('\n'));
+      start = index + 1;
+    }
+  }
+
+  return blocks;
+}
+
 export function spawnContention(workers: number): Burner[] {
   const burners: Burner[] = [];
 
@@ -444,6 +472,13 @@ if (import.meta.main) {
     console.error(`\nhammer: ${String(findings.length)} finding(s) over ${String(runs)} run(s)\n`);
 
     for (const entry of findings) console.error(entry);
+
+    // The failing blocks themselves, not only the artifact's path: a CI vessel's artifact leaves with the vessel
+    // (2026-10-08: a hammer red named its test and nothing of why).
+    for (const run of results.filter((each) => each.exit !== 0 && !each.killed)) {
+      for (const block of failingBlocks(run.output).slice(0, FAILING_BLOCKS_SHOWN)) console.error(`\n── run ${String(run.index)}, a failing block ──\n${block}`);
+    }
+
     console.error(`\nEvidence: ${artifact}`);
     process.exit(1);
   }

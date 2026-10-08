@@ -83,10 +83,19 @@ export class CodemodeLauncher extends WorkerEntrypoint<{ readonly LOADER: Worker
 
     return await (await programWorker({ loader: this.env.LOADER, egress: egress === null ? null : codemodeEgress(egress), kinuNode })).execute(source, providers);
   }
+
+  /** Asked from a detached background job's context (core jobs/runner `alive`), over the path its programs take. */
+  answer(): void {}
 }
 
 export function codemodeLauncher(props: CodemodeLauncherProps): ProgramLaunch {
   return { run: (source, providers) => exports.CodemodeLauncher({ props }).run(source, providers) };
+}
+
+/** A context the platform dropped delivers no answer, this one's included, so a job whose context stops answering
+ *  has lost its work's answers too. */
+export async function jobContextAnswers(): Promise<void> {
+  await exports.CodemodeLauncher({ props: { kinuNode: false, egress: null } }).answer();
 }
 
 /** No work deadline, where codemode's default is 60 s: a node agent's whole scaffold loop is one program, bounded
