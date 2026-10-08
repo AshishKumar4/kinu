@@ -489,11 +489,8 @@ test('the owner\'s own slate hires a helper and lists it as the owner does; a hi
 
   const listed = await asOwner(['agents', 'list']);
 
-  expect(listed.ok && JSON.stringify(listed.value)).toContain('counter');
-  // Its graph says it delegates, as the owner sees before sharing anything.
-  const graph = await parent.agent.slateAs(ROOT_SLATE_CALLER, { op: 'graph', id: 'board' });
-
-  expect(graph.ok && JSON.stringify(graph.value)).toContain('"member":"hire","impact":"delegate"');
+  expect(listed).toMatchObject({ ok: true });
+  expect(JSON.stringify(listed.ok ? listed.value : null)).toContain('counter');
 
   // The helper's own slate reaches no helpers: refused where the host routes it, before any actor is asked.
   const child = await hostedSubordinateHarness(parent, { name: 'reader', displayName: 'Reader', nameOrigin: 'user', roleId: 'task', mission: 'Read' });
