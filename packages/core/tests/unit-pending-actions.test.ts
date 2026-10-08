@@ -5,7 +5,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import {
-  buildPendingActions, needsTheUser, type PendingAction, type PendingActionInputs, type PersonAsks,
+  buildPendingActions, needsTheUser, ownerAsks, type PendingAction, type PendingActionInputs, type PersonAsks,
 } from '../src/read-models/pending-actions';
 import type { PendingConsent } from '../src/protocol';
 import type { PlanReview } from '../src/types/plans';
@@ -222,5 +222,28 @@ describe('what the inspector opens for on its own', () => {
     for (const status of ['changes_requested', 'approved', 'superseded'] as const) {
       expect(needsTheUser({ ...nothing, activePlan: plan(status) })).toBe(false);
     }
+  });
+});
+
+describe('the attention stack the chat shows', () => {
+  const row = (id: string, kind: PendingAction['kind'], at: number): PendingAction => ({ id, kind, title: id, detail: null, at });
+  const consent = (consentId: string, createdAt: number): PendingConsent => ({ consentId, deviceLabel: 'studio', method: 'exec', command: 'ls', createdAt });
+
+  test('is what holds the person and every consent, newest first, from the reads Work shows', () => {
+    const asks = ownerAsks({
+      pendingActions: [row('push', 'deferred_action', 30), row('v8', 'scaffold_version', 90), row('plan', 'plan_review', 10),
+        row('notes', 'unseen_changes', 80), row('pricing', 'workspace_proposal', 50), row('task', 'curriculum_task', 70)],
+      pendingConsents: [consent('c-1', 40)],
+    });
+
+    expect(asks.map((ask) => ask.key)).toEqual(['action:pricing', 'consent:c-1', 'action:push', 'action:plan']);
+  });
+
+  test('holds exactly what holds the inspector open', () => {
+    const quiet = { pendingActions: [row('v8', 'scaffold_version', 1)], pendingConsents: [], activePlan: null };
+    const parkedOne = { ...quiet, pendingActions: [row('push', 'deferred_action', 1)] };
+
+    expect([ownerAsks(quiet).length > 0, needsTheUser(quiet), ownerAsks(parkedOne).length > 0, needsTheUser(parkedOne)])
+      .toEqual([false, false, true, true]);
   });
 });

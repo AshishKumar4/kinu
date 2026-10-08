@@ -160,14 +160,18 @@ function TurnCard({ turn, text, state, count = 1 }: TurnCardProps) {
   }
 
   if (turn.kind === "deferred_approval") {
-    const approved = turn.decision === "approved";
+    // `always` approves too, and stops the asking for those checks; only `denied` refuses.
+    const approved = turn.decision === "approved" || turn.decision === "always";
+    let said = approved ? "approved" : "denied";
+
+    if (turn.decision === "always") said = "always allowed";
 
     // Approved commands have not executed yet (the agent re-issuing them runs them), so never "ran".
     return (
       <EventRow
         icon={approved ? CheckCircleIcon : ProhibitIcon}
         tone={approved ? "p-success" : "p-text-3"}
-        label={`You ${approved ? "approved" : "denied"}`}
+        label={`You ${said}`}
         body={`${String(turn.count)} queued command${turn.count === 1 ? "" : "s"}`}
         state={state}
         count={count}

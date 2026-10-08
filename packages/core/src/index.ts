@@ -1972,7 +1972,7 @@ export type {
   NodeTranscriptView, NodeTranscriptCrumb, NodeTranscriptOrigin,
 } from './read-models/node-transcript';
 
-export { buildPendingActions, needsTheUser } from './read-models/pending-actions';
+export { buildPendingActions, needsTheUser, ownerAsks, type OwnerAsk } from './read-models/pending-actions';
 
 export { reviewParkedWrite, type ParkedWriteReview } from './read-models/write-preview';
 

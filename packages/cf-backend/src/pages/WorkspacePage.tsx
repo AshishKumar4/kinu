@@ -5,12 +5,12 @@ import { Button, Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import {
   ArrowsClockwiseIcon, GitBranchIcon, GearIcon, ListIcon, UsersThreeIcon,
-  WarningCircleIcon, DesktopTowerIcon, PaperclipIcon,
+  WarningCircleIcon, PaperclipIcon,
   ClockCounterClockwiseIcon,
 } from "@phosphor-icons/react";
 import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
-  isPlaceholderMission, summarizeRestorePlan,
+  isPlaceholderMission, ownerAsks, summarizeRestorePlan,
 } from "@kinu.run/core";
 import type { AlternateTakeSet, DiffAnchor, FileRestoreChange, PlanReview, Rpc, TakePickOutcome } from "@kinu.run/core";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
@@ -32,6 +32,7 @@ import { Modal } from "@/components/ui/Modal";
 import { RevertTurnDialog, type DeviceRestorePlan } from "@/components/RevertTurnDialog";
 import { ChatLiveTail, DeviceOfflineRow, HelperChatBase, MessageView, ModelFallbackRows, SteerBubble } from "@/components/MessageView";
 import { ProgrammaticTurnCard } from "@/components/ProgrammaticTurnCard";
+import { AttentionStack } from "@/components/AttentionStack";
 import { foldEventTurns, placeEvents, subordinateEventRow, type PlacedEvent } from "@/components/ChatEvents";
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { cloudPlanes, filesFocusOf, hasComparableTakes, referencePrefixes, WORKSPACE_ROOT, type FilesFocus } from "@kinu.run/core";
@@ -55,7 +56,7 @@ import { WorkspaceOverview } from "@/components/workspaces/WorkspaceOverview";
 import { WorkspaceSettings } from "@/pages/SettingsPage";
 import { useLayoutDrawer } from "@/components/layout";
 import { Composer, useProviderWaitNotice, workspaceLoadNotice, type ComposerNotice } from "@/components/Composer";
-import { revealMisrepresenting, workspaceDisplayTitle, workspaceTitleDraft, type PendingConsent } from "@kinu.run/core";
+import { workspaceDisplayTitle, workspaceTitleDraft } from "@kinu.run/core";
 import { settleLogged, showing, detach, settle } from "@kinu.run/core/obs";
 import { InspectorToggle, WorkbenchPanels, type InspectorControl, type WorkbenchHandle } from "@/components/WorkbenchPanels";
 import { useCarriedAttachments, useOpeningMessage } from "@/components/workspaces/NewChatView";
@@ -112,40 +113,6 @@ export function ConversationSkeleton() {
           </div>
         </div>
       ))}
-    </div>
-  );
-}
-
-/** Accepting creates a per-workspace binding, revocable on the Devices page. No tier:
- *  what a command may reach is the device's own Sandbox setting. */
-export function DeviceConsentCard({ consent, onResolve }: {
-  consent: PendingConsent;
-  onResolve: (consentId: string, decision: "once" | "always" | "deny") => void;
-}) {
-  const forWhom = consent.workspaceName ? `“${consent.workspaceName}”` : "this workspace";
-
-  return (
-    <div className="p-tint-warning rounded-xl border p-3 animate-fade-in" data-device-bind={consent.consentId}>
-      <div className="flex items-start gap-2">
-        <DesktopTowerIcon size={16} className="p-warning shrink-0 mt-0.5" weight="fill" />
-        <div className="min-w-0 flex-1">
-          <div className="text-xs p-text">
-            Use <span className="font-medium">{consent.deviceLabel}</span> for {forWhom}?
-          </div>
-          <code className="block mt-1 p-t-code p-text-2 break-all p-fill rounded-sm px-2 py-1">{revealMisrepresenting(consent.command || "(command)")}</code>
-          <div className="mt-1 p-meta p-text-3">
-            Commands use {consent.deviceLabel}'s Sandbox setting. Revoke access on the Devices page.
-          </div>
-        </div>
-      </div>
-      <div className="flex items-center gap-2 mt-2.5 justify-end">
-        <button onClick={() => onResolve(consent.consentId, "deny")}
-            className="px-2.5 py-1 p-t-control rounded-md p-text-3 hover:p-text">Not now</button>
-        <button onClick={() => onResolve(consent.consentId, "always")}
-            className="px-2.5 py-1 p-t-control rounded-md p-accent-bg p-accent hover:opacity-90">
-          Use {consent.deviceLabel}
-        </button>
-      </div>
     </div>
   );
 }
@@ -1236,14 +1203,6 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
             </TranscriptViewport>
             </ErrorBoundary>
 
-            {state.pendingConsents.length > 0 && (
-              <div className="p-thread-column space-y-2 pb-1">
-                {state.pendingConsents.map((c) => (
-                  <DeviceConsentCard key={c.consentId} consent={c} onResolve={(...args: Parameters<typeof state.resolveConsent>) => detach(Effect.promise(async () => state.resolveConsent(...args)))} />
-                ))}
-              </div>
-            )}
-
             <div className="p-composer-dock">
               <Composer
                 textareaRef={chatInputRef}
@@ -1256,6 +1215,10 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
                 onRecover={state.recoverTurn}
                 onStop={handleStop}
                 onBranch={handleBranch}
+                attention={(
+                  <AttentionStack asks={ownerAsks(state)} rpc={state.rpc} resolveConsent={state.resolveConsent}
+                    onDecided={() => detach(Effect.promise(async () => state.refreshPendingActions()))} onReview={() => show("Work")} />
+                )}
                 mode={{ value: ui.mode, onChange: setChatMode }}
                 attachments={{
                   parts: [...attachments.parts],

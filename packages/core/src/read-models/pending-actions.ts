@@ -60,6 +60,26 @@ export function needsTheUser(asks: PersonAsks): boolean {
     || asks.activePlan?.status === 'pending';
 }
 
+/** One thing waiting on the owner's answer: a queued row that holds them, or a machine's consent. */
+export type OwnerAsk =
+  | { readonly key: string; readonly at: number; readonly kind: 'action'; readonly action: PendingAction }
+  | { readonly key: string; readonly at: number; readonly kind: 'consent'; readonly consent: PendingConsent };
+
+/**
+ * What the chat's attention stack shows, newest first: every row that holds the person (the rule
+ * {@link needsTheUser} reads) and every consent, from the same two reads the Work tab shows. The agent's notes and
+ * proposals that hold nobody stay in Work.
+ */
+export function ownerAsks(asks: Pick<PersonAsks, 'pendingActions' | 'pendingConsents'>): OwnerAsk[] {
+  const held: OwnerAsk[] = asks.pendingActions.filter((action) => HOLDS_THE_PERSON[action.kind])
+    .map((action) => ({ key: `action:${action.id}`, at: action.at, kind: 'action', action }));
+
+  const consents: OwnerAsk[] = asks.pendingConsents
+    .map((consent) => ({ key: `consent:${consent.consentId}`, at: consent.createdAt, kind: 'consent', consent }));
+
+  return [...held, ...consents].sort((a, b) => b.at - a.at || a.key.localeCompare(b.key));
+}
+
 export interface PendingActionInputs {
   readonly scaffoldVersions: ReadonlyArray<{
     version: number; status: string; rationale: string; written_at: number;
