@@ -9,6 +9,7 @@ import { Effect } from 'effect';
 import { isServerCompaction } from './server-compaction';
 import * as v from 'valibot';
 import { nonEmptyString } from '../utils/json';
+import { sha256Hex } from '../safety/argument-digest';
 import {
   KinuError, classifyErrorCode, diagnostics, settle, tolerate, type ErrorCode,
 } from '../obs/index';
@@ -23,6 +24,15 @@ export interface AuthedFetchOptions {
   requireBaseURL?: boolean;
   /** Adjust headers and/or return a replacement URL after auth injection. */
   mutate?: (ctx: { url: string; headers: Headers; auth: AuthResolution }) => string | void;
+}
+
+/** A conversation's id for a provider's session header, shaped as the provider's own client sends it (a version 4 UUID)
+ *  and derived from `seed`, so no Kinu name leaves. */
+export function conversationUuid(seed: string): string {
+  const hex = sha256Hex(seed, 32);
+  const variant = ((Number.parseInt(hex.charAt(16), 16) & 0x3) | 0x8).toString(16);
+
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
 /** The SDK's placeholder credentials, which the login replaces. */

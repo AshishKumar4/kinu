@@ -38,6 +38,8 @@ export interface ClampToolResultOptions {
   producer?: BulkProducer;
   /** Image data URLs in the output reach the model as images, outside the clamp (`image-results.ts`). */
   images?: true;
+  /** Where the cut falls; by default what a model reads of one result. */
+  maxChars?: number;
 }
 
 type Offload = { readonly path: string } | { readonly failure: KinuError };
@@ -78,7 +80,7 @@ export function clampToolResult(
 }
 
 function clampedText(text: string, opts: ClampToolResultOptions): Effect.Effect<string> {
-  if (text.length <= DEFAULT_TOOL_RESULT_MAX_CHARS) {
+  if (text.length <= (opts.maxChars ?? DEFAULT_TOOL_RESULT_MAX_CHARS)) {
     opts.budget?.admit(text.length);
 
     return Effect.succeed(text);
@@ -91,7 +93,7 @@ function clampedText(text: string, opts: ClampToolResultOptions): Effect.Effect<
 
 function clampedAround(text: string, saved: Offload | null, opts: ClampToolResultOptions): string {
   const marker = truncationMarker(saved);
-  const room = DEFAULT_TOOL_RESULT_MAX_CHARS - marker.length - MARKER_FENCE_CHARS;
+  const room = (opts.maxChars ?? DEFAULT_TOOL_RESULT_MAX_CHARS) - marker.length - MARKER_FENCE_CHARS;
   const headLen = Math.floor(room * HEAD_FRACTION);
   const head = text.slice(0, headEnd(text, headLen));
   const tail = text.slice(tailStart(text, room - headLen));
@@ -123,7 +125,7 @@ export function clampSerializedToolResult(
     if (text.success) return clampedText(text.output, opts);
     const serialized = JSON.stringify(output);
 
-    if (serialized.length <= DEFAULT_TOOL_RESULT_MAX_CHARS) {
+    if (serialized.length <= (opts.maxChars ?? DEFAULT_TOOL_RESULT_MAX_CHARS)) {
       opts.budget?.admit(serialized.length);
 
       return Effect.succeed(output);

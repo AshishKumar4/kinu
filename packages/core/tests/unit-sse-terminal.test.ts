@@ -53,6 +53,7 @@ async function streamed(upstream: Scripted): Promise<{ text: string; finishReaso
   const deps: ModelCallDeps = {
     env: {},
     sessionAffinity: 'kinu-test',
+    workspaceAffinity: 'kinu-test',
     fetch: asFetchFunction(async () => new Response(upstream.stream, { headers: { 'content-type': 'text/event-stream' } })),
     getAuth: async () => ({ headers: { Authorization: 'Bearer probe-fixture-key' }, baseURL: 'http://fake.invalid/v1' }),
     hasCredential: async () => true,

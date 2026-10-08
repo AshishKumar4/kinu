@@ -1,7 +1,7 @@
 /** One delegated turn in the agent's isolate: its model loop here, every tool call back in the workspace. */
 import { jsonSchema, tool, type ModelMessage, type ToolSet, type UIMessageChunk } from 'ai';
 import {
-  CHAT_SESSION_ID, agentAffinityKey, HeadCapture, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, withEffectClaims, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan, imageModelOutput,
+  CHAT_SESSION_ID, actorAffinity, HeadCapture, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, withEffectClaims, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan, imageModelOutput,
   type AuthRequest, type AuthResolution, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type JsonValue, type ProviderEnv, type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
   turnSourcesFromBundle, captureOperationProfile, type ModelCallReport, type ModelOperationEvent,
   type AdvisorRecoverySnapshot, type AgentFigures, type HostedActor, type OwedReport, type SerializedMessage, type SessionEvent,
@@ -241,8 +241,8 @@ export function facetTurnSources(turn: {
 }) {
   const { actor, prepared, spend } = turn;
   const registry = facetModels(actor, turn.workspace, turn.providers, prepared);
-  // Its calls are routed under its own conversation, as a CLI hire's are.
-  const affinity = agentAffinityKey(actor.record.name);
+  // Its calls are routed under its own conversation, as a CLI hire's are, in its workspace's cache.
+  const affinity = actorAffinity(actor.record);
 
   const compaction = hostedActorCompaction(actor, {
     logger: compactionDiagnostics,

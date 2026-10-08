@@ -3,10 +3,13 @@
 import * as v from 'valibot';
 import { SlateDirectoryName } from './rpc';
 
-/** Mirrored onto the iframe document so a slate matches the workspace theme and the chat's type. */
+/**
+ * Mirrored onto the iframe document so a slate matches the workspace theme and the chat's type: the palette the page
+ * already inlines (`THEME_CSS`) as the app has it now, the app's own tokens beside it, and its type stacks.
+ */
 export const SLATE_THEME_TOKENS = [
-  '--c-bg', '--c-text', '--c-text-2', '--c-text-3', '--c-accent', '--c-accent-fg',
-  '--c-border', '--c-surface', '--c-fill', '--c-elevated', '--c-recessed',
+  '--c-bg', '--c-text', '--c-text-2', '--c-text-3', '--c-text-4', '--c-accent', '--c-accent-fg', '--c-accent-mark', '--c-accent-subtle',
+  '--c-border', '--c-border-strong', '--c-surface', '--c-fill', '--c-elevated', '--c-recessed', '--c-input-bg', '--c-neutral-tint', '--c-code-bg',
   '--c-danger', '--c-success', '--c-warning', '--c-info',
   '--font-ui', '--font-display', '--font-serif', '--font-mono',
 ] as const;
@@ -30,12 +33,11 @@ export const SlateFrameMessageSchema = v.strictObject({
   height: v.number(),
 });
 
-/** `project.ts`'s `slate.inline` schema reads its bounds from these. */
-export const SLATE_INLINE_HEIGHT = { min: 120, default: 320, max: 720 } as const;
-
-export function slateInlineHeight(height: number): number {
-  return Math.min(SLATE_INLINE_HEIGHT.max, Math.max(SLATE_INLINE_HEIGHT.min, height));
-}
+/**
+ * An in-chat slate is as tall as its document, like the rest of the answer. This bounds only a page sized to its own
+ * frame plus a margin, which would otherwise grow on every round of measuring.
+ */
+export const SLATE_INLINE_HEIGHT_LIMIT = 8000;
 
 /** Accepted only from the slate's own window (identity check on `event.source`) and when it parses as the envelope. */
 export function isSlateFrameMessage(

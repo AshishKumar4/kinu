@@ -60,20 +60,20 @@ describe('resolvePromptCacheStrategy', () => {
   test('closed provider map', () => {
     expect(resolvePromptCacheStrategy('anthropic')).toEqual({ kind: 'anthropic' });
     expect(resolvePromptCacheStrategy('claude', 'claude-opus-4-7')).toEqual({ kind: 'anthropic', ttl: '1h' });
-    expect(resolvePromptCacheStrategy('openai', 'gpt-5.5')).toEqual({ kind: 'openai-cache-key' });
-    expect(resolvePromptCacheStrategy('codex', 'gpt-5.5')).toEqual({ kind: 'openai-cache-key' });
-    expect(resolvePromptCacheStrategy('openai-compat')).toEqual({ kind: 'openai-compat', bodyNamespace: 'openai-compat', markers: false });
-    expect(resolvePromptCacheStrategy('openai-compat:groq', 'llama-4')).toEqual({ kind: 'openai-compat', bodyNamespace: 'openai-compat:groq', markers: false });
-    expect(resolvePromptCacheStrategy('my-gateway', 'openai/gpt-5.5')).toEqual({ kind: 'openai-cache-key' });
-    expect(resolvePromptCacheStrategy('my-gateway', 'google/gemini-2.5-flash')).toEqual({ kind: 'openai-compat', bodyNamespace: 'my-gateway', markers: false });
-    expect(resolvePromptCacheStrategy('ai-gateway', 'workers-ai/@cf/x')).toEqual({ kind: 'openai-compat', bodyNamespace: 'ai-gateway', markers: false });
+    expect(resolvePromptCacheStrategy('openai', 'gpt-5.5')).toEqual({ kind: 'openai-prefix' });
+    expect(resolvePromptCacheStrategy('codex', 'gpt-5.5')).toEqual({ kind: 'openai-prefix' });
+    expect(resolvePromptCacheStrategy('openai-compat')).toEqual({ kind: 'openai-compat', markers: false });
+    expect(resolvePromptCacheStrategy('openai-compat:groq', 'llama-4')).toEqual({ kind: 'openai-compat', markers: false });
+    expect(resolvePromptCacheStrategy('my-gateway', 'openai/gpt-5.5')).toEqual({ kind: 'openai-prefix' });
+    expect(resolvePromptCacheStrategy('my-gateway', 'google/gemini-2.5-flash')).toEqual({ kind: 'openai-compat', markers: false });
+    expect(resolvePromptCacheStrategy('ai-gateway', 'workers-ai/@cf/x')).toEqual({ kind: 'openai-compat', markers: false });
   });
 
   test('openrouter gets cache_control markers only for Anthropic models', () => {
     expect(resolvePromptCacheStrategy('openrouter', 'anthropic/claude-sonnet-4.6'))
-      .toEqual({ kind: 'openai-compat', bodyNamespace: 'openrouter', markers: true });
+      .toEqual({ kind: 'openai-compat', markers: true });
     expect(resolvePromptCacheStrategy('openrouter', 'meta-llama/llama-4-maverick'))
-      .toEqual({ kind: 'openai-compat', bodyNamespace: 'openrouter', markers: false });
+      .toEqual({ kind: 'openai-compat', markers: false });
   });
 
   test('no-cache-concept providers resolve to none', () => {
@@ -86,22 +86,22 @@ describe('resolvePromptCacheStrategy', () => {
     expect(resolvePromptCacheStrategy('anthropic', 'claude-opus-4-7', 'long'))
       .toEqual({ kind: 'anthropic', ttl: '1h' });
     expect(resolvePromptCacheStrategy('openai', 'gpt-5.5', 'long'))
-      .toEqual({ kind: 'openai-cache-key', ttl: '24h' });
+      .toEqual({ kind: 'openai-prefix', ttl: '24h' });
     expect(resolvePromptCacheStrategy('openrouter', 'anthropic/claude-sonnet-4.6', 'long'))
-      .toEqual({ kind: 'openai-compat', bodyNamespace: 'openrouter', markers: true, ttl: '1h' });
+      .toEqual({ kind: 'openai-compat', markers: true, ttl: '1h' });
     expect(resolvePromptCacheStrategy('openrouter', 'meta-llama/llama-4-maverick', 'long'))
-      .toEqual({ kind: 'openai-compat', bodyNamespace: 'openrouter', markers: false });
+      .toEqual({ kind: 'openai-compat', markers: false });
     expect(resolvePromptCacheStrategy('my-gateway', 'openai/gpt-5.5', 'long'))
-      .toEqual({ kind: 'openai-cache-key', ttl: '24h' });
+      .toEqual({ kind: 'openai-prefix', ttl: '24h' });
   });
 
   test("retention 'short' is the default and is byte-identical to no opinion", () => {
     const rows: readonly { provider: string; model: string; expected: PromptCacheStrategy }[] = [
       { provider: 'anthropic', model: 'claude-opus-4-7', expected: { kind: 'anthropic' } },
-      { provider: 'openai', model: 'gpt-5.5', expected: { kind: 'openai-cache-key' } },
-      { provider: 'openrouter', model: 'anthropic/claude-sonnet-4.6', expected: { kind: 'openai-compat', bodyNamespace: 'openrouter', markers: true } },
-      { provider: 'my-gateway', model: 'openai/gpt-5.5', expected: { kind: 'openai-cache-key' } },
-      { provider: 'my-gateway', model: 'google/gemini-2.5-flash', expected: { kind: 'openai-compat', bodyNamespace: 'my-gateway', markers: false } },
+      { provider: 'openai', model: 'gpt-5.5', expected: { kind: 'openai-prefix' } },
+      { provider: 'openrouter', model: 'anthropic/claude-sonnet-4.6', expected: { kind: 'openai-compat', markers: true } },
+      { provider: 'my-gateway', model: 'openai/gpt-5.5', expected: { kind: 'openai-prefix' } },
+      { provider: 'my-gateway', model: 'google/gemini-2.5-flash', expected: { kind: 'openai-compat', markers: false } },
       { provider: 'workers-ai', model: '@cf/moonshotai/kimi-k2.6', expected: { kind: 'none' } },
     ];
 
@@ -119,7 +119,7 @@ describe('resolvePromptCacheStrategy', () => {
 
     const off = resolvePromptCacheStrategy('anthropic', 'claude-opus-4-7', 'none');
     expect(hasCacheMarkers(off)).toBe(false);
-    expect(promptCacheOptions(off, 'agent-1')).toBeUndefined();
+    expect(promptCacheOptions(off)).toBeUndefined();
   });
 });
 
@@ -134,7 +134,7 @@ describe('cacheableSystem', () => {
   });
 
   test('openrouter claude: marker rides the openaiCompatible namespace', () => {
-    const s = cacheableSystem('sys', { kind: 'openai-compat', bodyNamespace: 'openrouter', markers: true });
+    const s = cacheableSystem('sys', { kind: 'openai-compat', markers: true });
     expect(s).toEqual({
       role: 'system', content: 'sys',
       providerOptions: { openaiCompatible: { cache_control: EPHEMERAL } },
@@ -143,8 +143,8 @@ describe('cacheableSystem', () => {
 
   test('no-marker strategies keep the plain string', () => {
     expect(cacheableSystem('sys', { kind: 'none' })).toBe('sys');
-    expect(cacheableSystem('sys', { kind: 'openai-cache-key' })).toBe('sys');
-    expect(cacheableSystem('sys', { kind: 'openai-compat', bodyNamespace: 'openai-compat', markers: false })).toBe('sys');
+    expect(cacheableSystem('sys', { kind: 'openai-prefix' })).toBe('sys');
+    expect(cacheableSystem('sys', { kind: 'openai-compat', markers: false })).toBe('sys');
     expect(cacheableSystem('', { kind: 'anthropic' })).toBe('');
   });
 });
@@ -159,7 +159,7 @@ describe('markCacheTail', () => {
   });
 
   test('total anthropic breakpoints (tool + system + tail) stay within the API limit', () => {
-    const { tools } = applyCacheBreakpoints({ providerId: 'anthropic', system: 'sys', messages: [], tools: { a: cacheTool('a'), b: cacheTool('b') }, sessionKey: '' });
+    const { tools } = applyCacheBreakpoints({ providerId: 'anthropic', system: 'sys', messages: [], tools: { a: cacheTool('a'), b: cacheTool('b') } });
 
     const toolMarkers = Object.values(tools)
       .filter((entry) => providerOptions({ value: entry })?.anthropic).length;
@@ -195,7 +195,7 @@ describe('markCacheTail', () => {
   });
 
   test('openaiCompatible namespace: user/tool markers ride the last content part', () => {
-    const openrouterClaude = { kind: 'openai-compat', bodyNamespace: 'openrouter', markers: true } as const;
+    const openrouterClaude = { kind: 'openai-compat', markers: true } as const;
 
     const input: ModelMessage[] = [
       { role: 'user', content: 'q1' },
@@ -225,38 +225,29 @@ describe('markCacheTail', () => {
 
   test('no-marker strategies return an untouched copy', () => {
     const input = history(3);
-    const out = markCacheTail(input, { kind: 'openai-cache-key' });
+    const out = markCacheTail(input, { kind: 'openai-prefix' });
     expect(out).toEqual(input);
     expect(out).not.toBe(input);
     expect(anthropicMarkerCount(out)).toBe(0);
   });
 });
 
-describe('promptCacheOptions', () => {
-  test('openai/codex: typed promptCacheKey', () => {
-    expect(promptCacheOptions({ kind: 'openai-cache-key' }, 'kinu-a1'))
-      .toEqual({ openai: { promptCacheKey: 'kinu-a1' } });
-  });
+// No request names its conversation: a cache key would split what every workspace's static prompt shares (the owner,
+// 2026-10-08). Only OpenAI's extended retention rides the request.
+test('promptCacheOptions carries no cache key, only OpenAI\'s asked-for retention', () => {
+  const strategies = [
+    { kind: 'openai-prefix' }, { kind: 'openai-prefix', ttl: '24h' }, { kind: 'openai-compat', markers: true }, { kind: 'anthropic' }, { kind: 'none' },
+  ] as const;
 
-  test('openai-compat family: prompt_cache_key under the provider namespace', () => {
-    expect(promptCacheOptions({ kind: 'openai-compat', bodyNamespace: 'openrouter', markers: true }, 'k'))
-      .toEqual({ openrouter: { prompt_cache_key: 'k' } });
-    expect(promptCacheOptions({ kind: 'openai-compat', bodyNamespace: 'openai-compat:groq', markers: false }, 'k'))
-      .toEqual({ 'openaiCompat:groq': { prompt_cache_key: 'k' } });
-  });
-
-  test('anthropic + none: undefined (breakpoints/affinity do the routing)', () => {
-    expect(promptCacheOptions({ kind: 'anthropic' }, 'k')).toBeUndefined();
-    expect(promptCacheOptions({ kind: 'none' }, 'k')).toBeUndefined();
-    expect(promptCacheOptions({ kind: 'openai-cache-key' }, '')).toBeUndefined();
-  });
+  expect(strategies.map((strategy) => promptCacheOptions(strategy)))
+    .toEqual([undefined, { openai: { promptCacheRetention: '24h' } }, undefined, undefined, undefined]);
 });
 
 describe('applyCacheBreakpoints', () => {
   test('anthropic plan: system message + tail markers, no request options', () => {
     const plan = applyCacheBreakpoints({
       providerId: 'anthropic', modelId: 'claude-opus-4-7',
-      system: 'sys', messages: history(4), tools: {}, sessionKey: 'kinu-x',
+      system: 'sys', messages: history(4), tools: {},
     });
 
     expect(plan.strategy).toEqual({ kind: 'anthropic' });
@@ -271,7 +262,7 @@ describe('applyCacheBreakpoints', () => {
 
     const plan = applyCacheBreakpoints({
       providerId: 'workers-ai', modelId: '@cf/moonshotai/kimi-k2.6',
-      system: 'sys', messages, tools: {}, sessionKey: 'kinu-x',
+      system: 'sys', messages, tools: {},
     });
 
     expect(plan.system).toBe('sys');
@@ -283,7 +274,7 @@ describe('applyCacheBreakpoints', () => {
 
 describe('the tool breakpoint', () => {
   const marked = (providerId: string, retention?: CacheRetention, tools: ToolSet = { a: cacheTool('a'), b: cacheTool('b'), c: cacheTool('c') }) =>
-    applyCacheBreakpoints({ providerId, system: 'sys', messages: [], tools, sessionKey: '', ...(retention !== undefined && { retention }) }).tools;
+    applyCacheBreakpoints({ providerId, system: 'sys', messages: [], tools, ...(retention !== undefined && { retention }) }).tools;
 
   test('only the last tool carries it, at the strategy TTL, beside its other options, without touching the input', () => {
     const last = { ...cacheTool('z'), providerOptions: { openai: { x: 1 } } };

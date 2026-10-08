@@ -149,8 +149,10 @@ export interface ChatOptions {
   countInputTokens?: (request: CountableRequest) => Promise<InputTokenCount>;
   signal?: AbortSignal;
   extensions?: ExtensionHost;
-  /** Prompt-cache identity: provider id + stable conversation key. See prompting/cache-breakpoints.ts. */
-  cache?: { providerId?: string; modelId?: string; sessionKey: string; retention?: CacheRetention };
+  /** The conversation extensions keep their state under (compaction's plans and archives). */
+  conversationKey?: string;
+  /** The provider and model the prompt cache is planned for (prompting/cache-breakpoints.ts). */
+  cache?: { providerId?: string; modelId?: string; retention?: CacheRetention };
   /** A second reader of each call's stream as UIMessage chunks (the SDK tees it), once per call. */
   observeStream?: ObserveStream;
   /** Leave to run the next model step, waited for before the step starts; the step calls what it answers once it has
@@ -626,7 +628,6 @@ function attemptCachePlan(opts: ChatOptions, route: PromptCacheRoute, turnMessag
     system: opts.system,
     messages: turnMessages,
     tools,
-    sessionKey: opts.cache?.sessionKey ?? '',
     retention: route.retention,
   });
 }
@@ -678,7 +679,7 @@ async function admitRequest(opts: ChatOptions) {
     // What any model in the chain takes survives assembly; each attempt narrows it to its own model's media.
     attachments: opts.attachments && { ...opts.attachments, accepts: chainMedia(opts.attachments.accepts, opts.fallbacks ?? []) },
     extensions,
-    sessionKey: opts.cache?.sessionKey ?? '',
+    sessionKey: opts.conversationKey ?? '',
     contextWindow,
     model: opts.modelSpec,
     providerReportedTokens: opts.providerReportedTokens,

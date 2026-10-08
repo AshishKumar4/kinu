@@ -28,6 +28,18 @@ export async function madeNoApp(verifier: EvalVerifier): Promise<void> {
   });
 }
 
+/** What a prototype leaves in a turn whose answer is its own page: a page or a server of its own, or a browser on one. */
+const PROTOTYPE = /\.html\b|\$preview\(|openBrowser|connectBrowser|screenshot|http\.server|npx serve|\bvite\b/;
+
+/** A one-off view is written straight into the answer: no prototype page, server or browser check comes before it. */
+export async function madeNoPrototype(verifier: EvalVerifier): Promise<void> {
+  await verifier.check('built-no-prototype', async () => {
+    const steps = (await verifier.turnToolCalls()).filter((call) => PROTOTYPE.test(call.name) || PROTOTYPE.test(call.args));
+
+    return { pass: steps.length === 0, evidence: { steps: steps.map((step) => `${step.name}: ${step.args.slice(0, 240)}`) } };
+  });
+}
+
 /** One of the answer's slates as the chat drew it: the last reading, whether `done` held, and what failed in it. */
 export type Reading = { readonly view: SlateView; readonly sight: Sight; readonly held: boolean; readonly errors: readonly string[] };
 

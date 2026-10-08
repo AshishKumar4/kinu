@@ -1236,8 +1236,8 @@ function readProvenance(page: Page) {
     events: [...row.querySelectorAll('[data-drained-event]')].map((event) => ({
       variant: event.getAttribute('data-drained-event'),
       replyExpected: event.hasAttribute('data-reply-expected'),
-      source: event.firstElementChild?.textContent ?? '',
-      brief: event.lastElementChild?.textContent ?? '',
+      source: event.querySelector('[data-event-source]')?.textContent ?? '',
+      brief: event.querySelector('[data-event-brief]')?.textContent ?? '',
     })),
     text: row.textContent ?? '',
     height: row.getBoundingClientRect().height,
@@ -1248,7 +1248,7 @@ function readProvenance(page: Page) {
 function threadCards(page: Page): Promise<{ state: string | null; briefs: string[] }[]> {
   return page.$$eval('.p-thread-column [data-signal-card]', (cards) => cards.map((card) => ({
     state: card.getAttribute('data-signal-card'),
-    briefs: [...card.querySelectorAll('[data-drained-event]')].map((event) => event.lastElementChild?.textContent ?? ''),
+    briefs: [...card.querySelectorAll('[data-drained-event]')].map((event) => event.querySelector('[data-event-brief]')?.textContent ?? ''),
   })));
 }
 
@@ -1268,6 +1268,102 @@ const webhookCard = (id: string, brief: string, state = 'pending') => ({
  * an MCP client or a steer re-run keep theirs, and a harness, a job, an advisor or a drained batch get a card. The
  * drains are core's own text, so a card reads what the agent was told.
  */
+/** Where, in the thread's reading order, each of `needles` first appears: the index of the element that draws it. */
+function readingOrder(page: Page, needles: readonly string[]): Promise<number[]> {
+  return page.$$eval('.p-thread-column *', (all, wanted) => wanted.map((needle) => all.findIndex((el) => (el.textContent ?? '').includes(needle)
+    && ![...el.children].some((child) => (child.textContent ?? '').includes(needle)))), needles);
+}
+
+const agentReport = (id: string, timestamp: number, content: string) => ({
+  type: 'subordinate_event', id, kind: 'report', subordinate: 'coupon-auditor', status: 'completed', content, timestamp,
+});
+
+/**
+ * What happened besides what was said sits where it happened, as one quiet line that opens on a click, and the same
+ * thing twice in a row is one line. Production, 2026-10-08: every such event collected at the bottom of the chat, as a
+ * heavy card each.
+ */
+describe('a chat\'s events', () => {
+  test('each sits where it happened, and the same one twice in a row is drawn once', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1440, height: 2400 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=revert`, { waitUntil: 'networkidle0' });
+      await page.waitForFunction(() => document.querySelector('.p-thread-column')?.textContent?.includes('pricing-service.ts') === true);
+      // The fixture's two asks were written eight and six minutes ago.
+      const now = await page.evaluate(() => Date.now());
+
+      await pushFrames(page, [
+        agentReport('rep-between', now - 7 * 60e3, 'between the two asks'),
+        agentReport('rep-after', now + 60e3, 'after every answer'),
+        agentReport('rep-twice-1', now + 120e3, 'the same report'),
+        agentReport('rep-twice-2', now + 121e3, 'the same report'),
+        { type: 'signal_card', id: 'sig-lilt', state: 'pending', metadata: { kinuEvent: 'event_drain' },
+          text: '- [webhook] from lilt: New Lilt chat activity\n- [webhook] from lilt: New Lilt chat activity' },
+      ]);
+      await page.waitForFunction(() => document.querySelector('.p-thread-column')?.textContent?.includes('New Lilt chat activity') === true);
+
+      const [first, between, second, after] = await readingOrder(page, [
+        'Add the coupon-kind regression test', 'between the two asks', 'Now rewrite the pricing service', 'after every answer',
+      ]);
+
+      expect({ between: (first ?? 0) < (between ?? 0) && (between ?? 0) < (second ?? 0), after: (second ?? 0) < (after ?? 0) })
+        .toEqual({ between: true, after: true });
+
+      const drawn = await page.evaluate(() => ({
+        reports: [...document.querySelectorAll('[data-subordinate-event]')].filter((row) => row.textContent?.includes('the same report'))
+          .map((row) => row.querySelector('[data-event-repeats]')?.textContent ?? '1'),
+        lilt: [...document.querySelectorAll('[data-drained-event]')].filter((row) => row.textContent?.includes('New Lilt chat activity'))
+          .map((row) => row.querySelector('[data-event-repeats]')?.textContent ?? '1'),
+      }));
+
+      expect(drawn).toEqual({ reports: ['×2'], lilt: ['×2'] });
+
+      // One line until opened: the report reads in full once its row is clicked.
+      const row = '[data-subordinate-event] [data-event-brief]';
+      await page.evaluate(() => { [...document.querySelectorAll('[data-subordinate-event]')].find((el) => el.textContent?.includes('between the two asks'))?.querySelector('button')?.click(); });
+      await page.waitForFunction((brief) => [...document.querySelectorAll(brief)].some((el) => el.classList.contains('whitespace-pre-wrap')), {}, row);
+      await page.close();
+    });
+  });
+
+  test('a machine gone offline and a model taking over are rows too, the same hand-off twice drawn once', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1440, height: 2400 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&devices=none`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('.p-thread-column');
+      const handOff = 'anthropic/claude-sonnet-4 took over from anthropic/claude-opus-4: provider stream reset';
+
+      await pushFrames(page, [
+        { type: 'model_fallback', message: handOff },
+        { type: 'model_fallback', message: handOff },
+        { type: 'model_fallback', message: 'workers-ai/llama-4 took over from anthropic/claude-sonnet-4: rate limited' },
+      ]);
+      await page.waitForSelector('[data-device-offline]');
+      await page.waitForFunction(() => document.querySelectorAll('[data-model-fallback]').length === 2);
+
+      const drawn = await page.evaluate(() => ({
+        handOffs: [...document.querySelectorAll('[data-model-fallback]')]
+          .map((row) => [row.querySelector('[data-event-brief]')?.textContent?.slice(0, 18), row.querySelector('[data-event-repeats]')?.textContent ?? '1']),
+        offline: document.querySelector('[data-device-offline] [data-event-brief]')?.textContent,
+        connect: document.querySelector('[data-device-offline] a')?.getAttribute('href'),
+      }));
+
+      expect(drawn).toEqual({
+        handOffs: [['anthropic/claude-s', '×2'], ['workers-ai/llama-4', '1']],
+        offline: 'No machine connected',
+        connect: '/devices',
+      });
+
+      // One line until opened, as every event row is.
+      await page.click('[data-model-fallback] button');
+      await page.waitForFunction(() => document.querySelector('[data-model-fallback] [data-event-brief]')?.classList.contains('whitespace-pre-wrap') === true);
+      await page.close();
+    });
+  });
+});
+
 describe('whose words a turn is', () => {
   test('only what the person said is a bubble, and a drained batch lists each event it carried', async () => {
     await withGallery(async ({ newPage, origin }) => {
@@ -1308,7 +1404,7 @@ describe('whose words a turn is', () => {
 
       // A report of several lines opens to all of them.
       await page.click('[data-chat-row="drain-delegated"] [data-drained-event="subordinate_report"]');
-      expect(await page.$eval('[data-chat-row="drain-delegated"] [data-drained-event="subordinate_report"]', (event) => (event.lastElementChild instanceof HTMLElement ? event.lastElementChild.innerText : '')))
+      expect(await page.$eval('[data-chat-row="drain-delegated"] [data-drained-event="subordinate_report"] [data-event-brief]', (brief) => (brief instanceof HTMLElement ? brief.innerText : '')))
         .toContain('Report line one.\nReport line two.');
       await page.close();
     });

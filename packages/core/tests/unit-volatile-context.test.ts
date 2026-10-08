@@ -1487,7 +1487,7 @@ describe('the per-step weave (the cache-coherence proof)', () => {
           : { factsBlock: '- k = v', jobs: roster([{ id: 'job-1', kind: 'think_heads', label: 'explore' }]) }),
       },
       tools: PING,
-      cache: { providerId: 'anthropic', sessionKey: 'sess' },
+      cache: { providerId: 'anthropic' },
       stopWhen: isStepCount(5),
     })) { /* drain */ }
 
@@ -1522,7 +1522,7 @@ describe('the per-step weave (the cache-coherence proof)', () => {
       history: [{ role: 'user', content: 'go' }],
       dynamicContext: { ledger, snapshot: () => ({ factsBlock: `- step = ${step++}` }) },
       tools: PING,
-      cache: { providerId: 'anthropic', sessionKey: 'sess' },
+      cache: { providerId: 'anthropic' },
       stopWhen: isStepCount(5),
     })) { /* drain */ }
 

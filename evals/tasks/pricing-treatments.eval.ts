@@ -4,7 +4,7 @@ import { defineTaskEval } from '../src/eval';
 import { DIFFERENT_DESIGNS } from '../src/judge';
 import { defineEvalTask } from '../src/task';
 import type { EvalCheckOutcome, EvalVerifier } from '../src/verifier';
-import { answersWithSlates, madeNoApp, readAnswer, readingEvidence } from './ephemeral';
+import { answersWithSlates, madeNoApp, madeNoPrototype, readAnswer, readingEvidence } from './ephemeral';
 
 // A one-off visual answer: three treatments of a pricing table to compare in the chat. The answer should be
 // ephemeral slates, not an app. Each must show every plan's monthly price and the yearly price the checker computes
@@ -57,6 +57,7 @@ yearly price with the annual discount taken off.`,
     verify: async (verifier) => {
       await answersWithSlates(verifier, 3);
       await madeNoApp(verifier);
+      await madeNoPrototype(verifier);
 
       await verifier.check('each-treatment-shows-every-price', () => everyTreatment(verifier));
 

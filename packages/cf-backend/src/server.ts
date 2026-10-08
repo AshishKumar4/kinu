@@ -34,7 +34,7 @@ import {
   authenticateRequest, AuthError, crossSiteRejection,
   type AuthIdentity,
 } from "./auth/session";
-import { containPreviewResponse, hostOf, isPreviewHostRequest, serveApp } from "@kinu.run/core";
+import { APP_FONTS_PATH, appFontFile, containPreviewResponse, hostOf, isPreviewHostRequest, serveApp, SLATE_FONTS_PATH } from "@kinu.run/core";
 import { parseCliAgentConnectTicketUserId } from "./user/sessions";
 import { ownerCaller } from "@kinu.run/core";
 import { appendIdentityHeaders } from "./cli/rpc-gate";
@@ -285,6 +285,14 @@ function published(response: Response, url: URL, env: Env): Response {
 
 /** Preview hosts serve only previews: no session is minted there. Share labels first, so neither parser sees the other's. */
 const previewHost = new Hono<FamilyEnv<Env, object>>({ getPath: rawPath });
+
+// The app's own faces, on every preview host's own origin, so a slate's page sets its text as the chat does; any other
+// name under the path is the page's own to answer.
+previewHost.get(`${SLATE_FONTS_PATH}:file`, async (c, next) => {
+  const file = appFontFile(c.req.param('file'));
+
+  return file === null ? await next() : await c.env.ASSETS.fetch(new Request(new URL(`${APP_FONTS_PATH}${file}`, c.req.url)));
+});
 
 previewHost.use('*', async (c, next) => {
   const share = await handleSlateShareHostRequest(c.req.raw, c.env);

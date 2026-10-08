@@ -36,8 +36,8 @@ explanatory header. This is a byte measurement, not a provider-token estimate.
 
 C2. The provider cache is addressed per provider, with markers placed last.
 Anthropic gets four breakpoints (one after tools, one at the end of the system
-prompt, two rolling on the tail); OpenAI-family providers route by a
-per-conversation prompt cache key; Workers AI pins a replica through a
+prompt, two rolling on the tail); OpenAI-family providers cache the prefix
+with no key, ChatGPT's backend under its workspace's session id; Workers AI pins a replica through a
 session-affinity header; every other provider gets nothing. Marking is the
 last stage of the shared step pipeline (`prompting/prepare-step.ts`), so
 pruning, weaving and steering cannot bust one backend's prefix. Two mutations

@@ -1,4 +1,5 @@
 import { copyHeaders } from './fetch-shim';
+import type { ModelAffinity } from './types';
 
 export const DEFAULT_WORKERS_AI_MODEL_ID = '@cf/zai-org/glm-5.3';
 
@@ -17,9 +18,10 @@ export function workersAiSpec(modelOrSpec: string): string {
     : `${WORKERS_AI_PROVIDER_ID}/${modelOrSpec}`;
 }
 
-/** Per-agent session-affinity key pinning turns to one replica so the prefix cache hits. */
-export function agentAffinityKey(name: string): string {
-  return `kinu-${name}`;
+/** An actor's conversation, which pins its turns to one replica so the prefix cache hits, and the workspace it shares
+ *  its static prompt prefix with. */
+export function actorAffinity(actor: { readonly name: string; readonly workspaceId: string }): ModelAffinity {
+  return { sessionAffinity: `kinu-${actor.name}`, workspaceAffinity: `kinu-workspace-${actor.workspaceId}` };
 }
 
 export const SESSION_AFFINITY_HEADER = 'x-session-affinity';

@@ -71,7 +71,8 @@ export interface TurnAssemblySources {
   artifacts(): { readonly sections: Readonly<Record<string, string>>; readonly tools: ToolTextOverrides };
   executors(): ReturnType<NonNullable<AgentRuntime['executionRouter']>['listExecutors']>;
   taskPlan(): TaskPlanContext | null;
-  cacheKey(): string;
+  /** The conversation extensions keep their state under (`conversationKey`). */
+  conversationKey(): string;
   /** Guards and charges each model step. */
   readonly budget?: SpendGate;
   readonly operations?: ModelOperationSink;
@@ -122,8 +123,8 @@ export function metadataTier(metadata: JsonObject | undefined): TierId | undefin
   return parsed.success ? parsed.output.profile_tier : undefined;
 }
 
-/** One cache line per conversation. */
-export function promptCacheKey(affinity: string, conversation: string): string {
+/** The key a conversation's extension state (compaction's plans and archives) is kept under. */
+export function conversationKey(affinity: string, conversation: string): string {
   return `${affinity}:${conversation}`;
 }
 
@@ -222,7 +223,8 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
     system: buildSystemPromptSync(sources.rt, prompt),
     attachments: { accepts: models.catalog.acceptedMedia(spec), vfs: sources.rt.storage.vfs, budget: sources.attachmentBudget },
     tools,
-    cache: { providerId: provider, modelId, sessionKey: sources.cacheKey(), retention: sources.config.getCacheRetention() },
+    conversationKey: sources.conversationKey(),
+    cache: { providerId: provider, modelId, retention: sources.config.getCacheRetention() },
     ...(sources.budget !== undefined && { budget: sources.budget }),
     ...(sources.operations !== undefined && { operations: sources.operations }),
     ...(sources.observeStream !== undefined && { observeStream: sources.observeStream }),
@@ -313,7 +315,7 @@ export interface TurnSourcesBundle {
   readonly identity: PromptIdentity;
   readonly agentsMd: AgentsMdSources;
   readonly artifacts: ReturnType<TurnAssemblySources['artifacts']>;
-  readonly cacheKey: string;
+  readonly conversationKey: string;
   readonly models: Readonly<Record<string, { readonly window: ModelWindow; readonly media: readonly MediaModality[] }>>;
 }
 
@@ -345,7 +347,7 @@ export async function materializeTurnSources(sources: TurnAssemblySources, reque
     identity,
     agentsMd,
     artifacts: sources.artifacts(),
-    cacheKey: sources.cacheKey(),
+    conversationKey: sources.conversationKey(),
     models: Object.fromEntries(windows),
   };
 }
@@ -353,7 +355,7 @@ export async function materializeTurnSources(sources: TurnAssemblySources, reque
 /** What the assembling isolate supplies itself. */
 export type LocalTurnSources = Omit<TurnAssemblySources,
   'backend' | 'executors' | 'profileInputs' | 'ancestors' | 'skills' | 'wiredToolNames' | 'codemodeCapabilities' | 'agentsActions' | 'temporaryAsk'
-  | 'soul' | 'identity' | 'agentsMd' | 'artifacts' | 'cacheKey' | 'models' | 'toolset' | 'externalTools'> & {
+  | 'soul' | 'identity' | 'agentsMd' | 'artifacts' | 'conversationKey' | 'models' | 'toolset' | 'externalTools'> & {
   readonly models: Omit<TurnModelSources, 'catalog'>;
 };
 
@@ -405,6 +407,6 @@ export function turnSourcesFromBundle(bundle: TurnSourcesBundle, local: LocalTur
     identity: async () => bundle.identity,
     agentsMd: async () => bundle.agentsMd,
     artifacts: () => bundle.artifacts,
-    cacheKey: () => bundle.cacheKey,
+    conversationKey: () => bundle.conversationKey,
   };
 }

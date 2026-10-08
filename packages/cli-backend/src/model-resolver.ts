@@ -27,6 +27,7 @@ import {
   type AuthResolution,
   type AuthResolver,
   type AgentModelEntry,
+  type ModelAffinity,
   type ModelInfo,
   cloudProxyBaseURL,
   createWireModel,
@@ -110,8 +111,8 @@ const proxyFetches: PerCloudSession<typeof fetch> = new Map();
 
 export interface LocalModelResolver {
   normalizeSpecSync(specOrNull?: string | null): string;
-  /** `conversation`: the affinity key (`agentAffinityKey`) the calls are routed and cached under. */
-  resolveModel(specOrNull: string | null | undefined, conversation: string): LanguageModel;
+  /** `affinity`: the conversation and workspace the calls are routed and cached under (`actorAffinity`). */
+  resolveModel(specOrNull: string | null | undefined, affinity: ModelAffinity): LanguageModel;
   credentialFor(specOrNull?: string | null): Promise<string | null>;
   listProviders(): Promise<ProviderInfo[]>;
   /** One broken credential never empties the menu. */
@@ -152,7 +153,7 @@ export interface LocalModelResolverConfig {
  */
 export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
   route?: Pick<ModelRouteResolution, 'model' | 'reasoningEffort' | 'retries'>;
-  conversation: string;
+  affinity: ModelAffinity;
   /** Sink and producer label together: only the consumer knows which producer
    *  a call belongs to. */
   spend: ModelCallSpend;
@@ -160,7 +161,7 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
   const resolver = createLocalModelResolver(opts);
   // Normalized per call: an unresolvable id fails at the call, not at construction.
   const spec = () => resolver.normalizeSpecSync(opts.route?.model ?? null);
-  const model = (resolved: string) => resolver.resolveModel(resolved, opts.conversation);
+  const model = (resolved: string) => resolver.resolveModel(resolved, opts.affinity);
   const spend = opts.spend;
   const { route } = opts;
   const callOptions = (resolved: string) => (route === undefined ? undefined : routedCallOptions(route, resolved));
@@ -315,8 +316,8 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
 
   const resolverWith = (own: ProviderDeps): LocalModelResolver => ({
     normalizeSpecSync,
-    resolveModel(specOrNull, conversation) {
-      return registry.resolve(normalizeSpecSync(specOrNull), { ...own, sessionAffinity: conversation });
+    resolveModel(specOrNull, affinity) {
+      return registry.resolve(normalizeSpecSync(specOrNull), { ...own, ...affinity });
     },
     credentialFor(specOrNull) {
       return registry.credentialFor(normalizeSpecSync(specOrNull), own);

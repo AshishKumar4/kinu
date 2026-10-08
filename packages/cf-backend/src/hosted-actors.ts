@@ -71,7 +71,7 @@ export interface HostedActorSeams {
   /** The same provisioner the host uses, so the home a node is told about is the one it has. */
   nodeHome(actor: HostedActor): Promise<NodeWorkspace>;
   /** Typed as `Tool`: core widens `HeadToolDeps.codemodeTool` to `unknown`, this seam need not. */
-  codemodeTool(runtime: CFRuntime, webSearch: WebSearchProvider): (finished: ToolSet, reach: ToolSurfaceNarrowing) => Tool;
+  codemodeTool(actor: HostedActor, runtime: CFRuntime, webSearch: WebSearchProvider): (finished: ToolSet, reach: ToolSurfaceNarrowing) => Tool;
   /** The workspace journal, so a depth-2 head's spawn row and step rows join. */
   recordStep(headId: HeadId, seq: number, step: HeadStep): Promise<void>;
   readonly publishDelta: ReportHeadDelta;
@@ -173,13 +173,13 @@ export async function admitHostedTask(
     if (input.messageId !== undefined) admission.messageId = input.messageId;
 
     if (input.idempotencyKey !== undefined) admission.idempotencyKey = input.idempotencyKey;
-    const result = admitSubordinateTask(new EventLog(seams.exec, actor.handle), admission);
+    const log = new EventLog(seams.exec, actor.handle);
+    const brief = log.query({ variant: 'subordinate_task', limit: 1 }).length === 0;
+    const result = admitSubordinateTask(log, admission);
 
-    // No chat session means no `auto_title` effect: the first admitted message lands a stand-in title
-    // here; the naming model runs after the turn (`settleHostedTask`), never inside admission.
-    if (result.admitted && input.kind === 'message' && await titleActorFromMessage(actor.handle, input.body)) {
-      seams.announce(actor);
-    }
+    // The first work an agent is given is its brief: its stand-in title shows at once, before the turn that opens its
+    // chat names it from the same words. A later message ("Continue") never titles it.
+    if (result.admitted && brief && await titleActorFromMessage(actor.handle, input.body)) seams.announce(actor);
 
     if (result.admitted) seams.armWake();
 
@@ -305,6 +305,9 @@ export function prepareHostedTurn(
     const actor = run?.inference.actor ?? (yield* Effect.promise(() => seams.host.acquire(reference)));
     const { turn, model } = yield* hostedTaskTurn(seams, actor, task, run);
 
+    // Only the owner's own words answer: the agent's naming and a restart's re-read prepare a turn of no words.
+    if (!task.parentDriven && run === undefined && task.body !== '') ownerAnswersWait(seams, actor);
+
     const profile = run === undefined
       ? yield* Effect.promise(() => seams.taskProfile(turn))
       : { tools: run.inference.tools, sources: run.inference.sources };
@@ -314,6 +317,16 @@ export function prepareHostedTurn(
       birthContext: run === undefined ? turn.input.inheritedContext.map(inheritedAsModelMessage) : [],
     };
   }));
+}
+
+/** The owner writing to an agent that waits on input answers that wait, as a message from its hirer does. */
+function ownerAnswersWait(seams: HostedActorSeams, actor: BoundActor): void {
+  const hirer = hostedHirer(seams, actor);
+  const roster = seams.roster(hirer);
+
+  if (roster.get(actor.record.name)?.status !== 'awaiting_input') return;
+  roster.resumeAfterMessage(actor.record.name);
+  seams.announce(hirer);
 }
 
 /** The raw tools a turn of the hosted actor's own would hold in `mode`: a retry of its job runs on them, as it. */
@@ -570,7 +583,7 @@ export async function hostHead(seams: HostedActorSeams, input: HeadInput): Promi
       })));
     },
     codemodeTool: (seat) => settleSync(cfRuntimeOf(seat.actor, 'a hosted head').pipe(
-      Effect.map((runtime) => seams.codemodeTool(runtime, seams.webSearch())),
+      Effect.map((runtime) => seams.codemodeTool(seat.actor, runtime, seams.webSearch())),
     )),
     webSearch: seams.webSearch(),
     split: (seat, head) => settleSync(cfRuntimeOf(seat.actor, 'a hosted head').pipe(
@@ -619,7 +632,7 @@ export async function hostNodeSeat(
 
 /** A swarm node's `eval`, over the hosted actor the node runs as. */
 export function nodeCodemodeTool(seams: HostedActorSeams, actor: HostedActor): (finished: ToolSet, reach: ToolSurfaceNarrowing) => Tool {
-  return settleSync(cfRuntimeOf(actor, 'a swarm node').pipe(Effect.map((runtime) => seams.codemodeTool(runtime, seams.webSearch()))));
+  return settleSync(cfRuntimeOf(actor, 'a swarm node').pipe(Effect.map((runtime) => seams.codemodeTool(actor, runtime, seams.webSearch()))));
 }
 
 /**

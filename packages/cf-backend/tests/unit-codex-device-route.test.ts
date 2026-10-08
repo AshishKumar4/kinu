@@ -93,7 +93,7 @@ async function rig(upstream: Upstream, beforeRelay?: (request: v.InferOutput<typ
   });
 
   return {
-    harness, relayed, model: registry.resolveModel('codex/gpt-5.5', 'kinu-test'),
+    harness, relayed, model: registry.resolveModel('codex/gpt-5.5', { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }),
     cancelAsked: cancelAsked.promise, answerCancel: () => { cancelAnswered.resolve(); },
     attachMachine: async (answers, label = 'studio') => {
       const { deviceId } = await harness.userDO.registerDevice(owner, label);

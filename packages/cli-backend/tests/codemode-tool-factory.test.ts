@@ -23,7 +23,7 @@ type ExecuteTool = (args: { code: string }) => Promise<ExecuteToolResult>;
 function makeTool(): ExecuteTool {
   const factory = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) });
 
-  return toolExecute(factory({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [], providers: [] }));
+  return toolExecute(factory({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [] }));
 }
 
 // An MCP or extension tool is no native definition: `eval` reaches it, read per call, its input checked as a native call's is.
@@ -64,7 +64,7 @@ describe('createNodeCodemodeToolFactory — console capture + implicit return', 
   test('saving a crafted tool makes the next call usable', async () => {
     let crafted: CraftedToolSource[] = [];
     const factory = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) });
-    const surface = { native: {}, external: () => ({}), craftedTools: () => crafted, providers: [], cwd: WORKSPACE_ROOT };
+    const surface = { native: {}, external: () => ({}), craftedTools: () => crafted, cwd: WORKSPACE_ROOT };
     const first = factory(surface);
     crafted = [{ name: 'cache_echo', description: 'Return the supplied text', code: 'async (text) => text' }];
     const next = factory(surface);
@@ -77,7 +77,7 @@ describe('createNodeCodemodeToolFactory — console capture + implicit return', 
   });
 
   test('the provider sees the callable declaration in the ledger and a real call returns its output', async () => {
-    const codemode = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) })({ cwd: WORKSPACE_ROOT, native: {}, providers: [], external: () => ({}), craftedTools: () => [
+    const codemode = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [
       { name: 'cache_echo', description: 'Return the supplied text', code: 'async (text) => text' },
     ] });
 
@@ -173,11 +173,11 @@ function makeToolWithFailingProvider(error: Error) {
 
   const factory = createNodeCodemodeToolFactory({
     reach: narrowToolSurface(undefined),
-    extraProviders: [provider],
+    namespaces: [provider],
   });
 
   const execute = toolExecute<{ code: string }, ExecuteToolResult>(
-    factory({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [], providers: [] }),
+    factory({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [] }),
   );
 
   return { execute, calls };
@@ -222,26 +222,20 @@ describe('createNodeCodemodeToolFactory — a failing host call can never kill t
 
   test('every wired namespace is DECLARED to the model, not just bound', async () => {
     // Each provider's `types` must reach the description, or its callables are reachable but undiscoverable.
-    // Capability and executor providers arrive by different routes.
     const factory = createNodeCodemodeToolFactory({
       reach: narrowToolSurface(undefined),
-      extraProviders: [{
+      namespaces: [{
         name: 'memory',
         types: 'export declare const memory: {\n  save(content: string): Promise<unknown>;\n};\n',
         tools: { save: { description: 'save a note', execute: async () => 'ok' } },
-      }],
-    });
-
-    const built = factory({
-      cwd: WORKSPACE_ROOT,
-      native: {},
-      external: () => ({}), craftedTools: () => [],
-      providers: [{
+      }, {
         name: 'workspace',
         types: 'export declare const workspace: {\n  readdir(path: string): Promise<string[]>;\n};\n',
         tools: { readdir: { description: 'list a directory', execute: async () => [] } },
       }],
     });
+
+    const built = factory({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [] });
 
     expect(built.description).toContain('export declare const memory: {');
     expect(built.description).toContain('save(content: string)');
@@ -255,7 +249,6 @@ describe('createNodeCodemodeToolFactory — crafted tools, on the episode clock'
       cwd: WORKSPACE_ROOT,
       native: {},
       external: () => ({}), craftedTools: () => [...store].map(([name, code]) => ({ name, description: name, code })),
-      providers: [],
     });
 
     return toolExecute(built);
@@ -288,11 +281,10 @@ describe('createNodeCodemodeToolFactory — crafted tools, on the episode clock'
         tools: { hijack: { description: 'x', execute: async () => 'provider' } },
     };
 
-    const built = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), extraProviders: [provider] })({
+    const built = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), namespaces: [provider] })({
       cwd: WORKSPACE_ROOT,
       native: {},
       external: () => ({}), craftedTools: () => [{ name: 'real', description: 'r', code: 'async () => "crafted"' }],
-      providers: [],
     });
 
     const execute = toolExecute<{ code: string }, ExecuteToolResult>(built);
@@ -331,7 +323,6 @@ describe('createNodeCodemodeToolFactory — native tools under tools.<name>', ()
         return `ran ${command}`;
       }),
       external: () => ({}), craftedTools: () => [],
-      providers: [],
     });
 
     const out = await toolExecute<{ code: string }, ExecuteToolResult>(built)({
@@ -357,7 +348,6 @@ describe('createNodeCodemodeToolFactory — native tools under tools.<name>', ()
       cwd: WORKSPACE_ROOT,
       native,
       external: () => ({}), craftedTools: () => [],
-      providers: [],
     });
 
     await expect(toolExecute<{ code: string }, ExecuteToolResult>(built)({
@@ -406,7 +396,7 @@ test('a program writes only into the workspace it was given, and Plan refuses be
   const commands: string[] = [];
 
   const execute = toolExecute<{ code: string }, ExecuteToolResult>(
-    createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), extraProviders: [mapWorkspace(files, commands)] })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [], providers: [] }),
+    createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), namespaces: [mapWorkspace(files, commands)] })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [] }),
   );
 
   const code = [
@@ -440,7 +430,7 @@ test('a failed fs call keeps the code and path the workspace names, once', async
   };
 
   const execute = toolExecute<{ code: string }, ExecuteToolResult>(
-    createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), extraProviders: [workspace] })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [], providers: [] }),
+    createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), namespaces: [workspace] })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [] }),
   );
 
   const out = await execute({
@@ -455,7 +445,7 @@ test('a synchronous call fails naming the awaited call that replaces it, and tha
   const commands: string[] = [];
 
   const execute = toolExecute<{ code: string }, ExecuteToolResult>(
-    createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), extraProviders: [mapWorkspace(files, commands)] })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [], providers: [] }),
+    createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), namespaces: [mapWorkspace(files, commands)] })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [] }),
   );
 
   // Issue #23: the model reached for execSync and read its output synchronously.
@@ -492,7 +482,7 @@ test('each workspace.slates member reaches the slate host as one operation, and 
   });
 
   const execute = toolExecute<{ code: string }, ExecuteToolResult>(
-    createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), extraProviders: [workspace] })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [], providers: [] }),
+    createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), namespaces: [workspace] })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [] }),
   );
 
   // Issue #28: a slate is its class, so the class's own `remove` is a call and the lifecycle is `$remove`.

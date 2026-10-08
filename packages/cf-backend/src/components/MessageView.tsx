@@ -33,7 +33,7 @@ import {
 import { drawnText, toolCallRunning, type LiveTail } from "@kinu.run/core";
 import { redactPayload, redactSecrets, segmentBySteers } from "@kinu.run/core";
 import { classifyProgrammaticTurn, endedMidWork, isSteeredMessage, turnFailure } from "@kinu.run/core";
-import { ProgrammaticTurnCard, type CardState } from "@/components/ProgrammaticTurnCard";
+import { EventRow, foldRepeats, ProgrammaticTurnCard, type CardState } from "@/components/ProgrammaticTurnCard";
 import { useToggledSet } from "@/hooks/use-toggled-set";
 import type { UnavailableDevice } from "@/hooks/use-kinu";
 
@@ -47,6 +47,28 @@ function messageCreatedAt(message: UIMessage): string | number | Date | undefine
   const parsed = v.safeParse(MessageCreatedAtSchema, message);
 
   return parsed.success ? parsed.output.createdAt : undefined;
+}
+
+/** When the message was written, in ms since the epoch; undefined when the transport did not stamp it. */
+export function messageTime(message: UIMessage): number | undefined {
+  const at = messageCreatedAt(message);
+
+  if (at === undefined) return undefined;
+
+  if (at instanceof Date) return at.getTime();
+  const ms = typeof at === "number" ? at : Date.parse(at);
+
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
+/** What a turn nobody typed draws as, to fold the same one in a row; null for a turn a person wrote. */
+export function eventTurnKey(message: UIMessage): string | null {
+  const programmatic = classifyProgrammaticTurn({ metadata: message.metadata, id: message.id });
+  const kind = programmatic?.kind ?? (message.role === "system" ? "system" : null);
+
+  if (kind === null || kind === "workspace_created") return null;
+
+  return JSON.stringify([kind, rowText(message)]);
 }
 
 function formatTime(date: Date): string {
@@ -422,38 +444,35 @@ function ToolCallPart({ part, expanded, onToggleExpand }: { part: AnyToolPart; e
   );
 }
 
-/** Shown when the event happens; the agent reads it at its next step. */
-const SYSTEM_PILL = "inline-flex items-center gap-2 px-3 py-1.5 rounded-full p-elevated border p-border p-row-text p-text-2";
-
+/** Shown when it happens, as the chat's other events are; the agent reads it at its next step. */
 export function DeviceOfflineRow({ devices }: { devices: ReadonlyArray<UnavailableDevice> | null }) {
   if (devices === null) return null;
   const [only] = devices;
 
-  let offline: ReactNode = <span>No machine connected <Link to="/devices" className="p-accent hover:underline">Connect</Link></span>;
+  let offline = "No machine connected";
 
   if (only !== undefined && devices.length === 1) {
-    offline = <span>{only.label} is offline</span>;
+    offline = `${only.label} is offline`;
   } else if (devices.length > 1) {
-    offline = <span>Your machines are offline</span>;
+    offline = "Your machines are offline";
   }
 
   return (
-    <div className="flex justify-center animate-fade-in py-1">
-      <div className={SYSTEM_PILL}>
-        <DesktopTowerIcon size={13} className="p-warning" weight="fill" />
-        {offline}
-      </div>
-    </div>
+    <EventRow
+      icon={DesktopTowerIcon}
+      tone="p-warning"
+      label="Machine"
+      body={offline}
+      action={devices.length === 0 ? <Link to="/devices" className="mt-1 mr-2 shrink-0 p-row-text p-accent hover:underline">Connect</Link> : undefined}
+      hooks={{ "data-device-offline": String(devices.length) }}
+    />
   );
 }
 
 export function ModelFallbackRows({ notices }: { notices: readonly string[] }) {
-  return notices.map((notice, index) => (
-    <div key={`${String(index)}:${notice}`} className="flex justify-center animate-fade-in py-1">
-      <div className={SYSTEM_PILL} role="status">
-        <ArrowsLeftRightIcon size={13} className="p-warning" />
-        <span>{notice}</span>
-      </div>
+  return foldRepeats(notices, (notice) => notice).map(({ item: notice, count }, index) => (
+    <div key={`${String(index)}:${notice}`} role="status">
+      <EventRow icon={ArrowsLeftRightIcon} tone="p-warning" label="Model" body={notice} count={count} hooks={{ "data-model-fallback": "" }} />
     </div>
   ));
 }
@@ -498,9 +517,11 @@ function SteeredMark({ state }: { state: "queued" | "landed" }) {
 // referential identity and skips re-rendering.
 export const MessageView = memo(function MessageView({
   message, liveTail: tail = null, onFork, onFeedback, feedback, onRevert, takesChip,
-  signalState, steers, onOpenChangeNote, answerSlates, onRetry,
+  signalState, steers, onOpenChangeNote, answerSlates, onRetry, repeats,
 }: {
   message: UIMessage;
+  /** A turn nobody typed that came this many times in a row ({@link eventTurnKey}), drawn once. */
+  repeats?: number;
   /** Resolved once by the thread owner (`threadLiveTail`), passed to the last row only; null means history. */
   liveTail?: LiveTail | null;
   signalState?: CardState;
@@ -533,13 +554,13 @@ export const MessageView = memo(function MessageView({
   if (programmatic) {
     return (
       <ProgrammaticTurnCard
-        turn={programmatic} text={rowText(message)} state={signalState ?? "shown"} />
+        turn={programmatic} text={rowText(message)} state={signalState ?? "shown"} count={repeats} />
     );
   }
 
   if (message.role === "system") {
     return <ProgrammaticTurnCard turn={{ kind: "system_event", event: "system" }}
-      text={rowText(message)} state={signalState ?? "shown"} />;
+      text={rowText(message)} state={signalState ?? "shown"} count={repeats} />;
   }
 
   const sentNotes = isUser ? changeNotesCard({ metadata: message.metadata }) : null;

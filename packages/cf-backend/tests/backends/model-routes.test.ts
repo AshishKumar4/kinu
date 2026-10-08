@@ -173,7 +173,7 @@ describe('a gateway model on both backends', () => {
     try {
       const answered: string[] = [];
 
-      for (const spec of menu) answered.push(await answer(hosted.resolveModel(spec, 'kinu-test')), await answer(local.resolveModel(spec, 'kinu-test')));
+      for (const spec of menu) answered.push(await answer(hosted.resolveModel(spec, { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' })), await answer(local.resolveModel(spec, { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' })));
 
       expect({ answered, wire, keys }).toEqual({
         answered: ['served', 'served', 'served', 'served', 'served', 'served'],
@@ -222,14 +222,14 @@ describe('a gateway model on both backends', () => {
     try {
       const answers: string[] = [];
 
-      for (const model of [hosted.resolveModel(spec, 'kinu-test'), local.resolveModel(spec, 'kinu-test')]) {
+      for (const model of [hosted.resolveModel(spec, { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }), local.resolveModel(spec, { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' })]) {
         const events: ChatEvent[] = [];
 
         for await (const event of runChat({
           modelSpec: 'test/model',
           model, system: 'You read files.', history: [{ role: 'user', content: 'What does a.txt say?' }],
           tools: { look: tool({ description: 'Read a file.', inputSchema: z.object({ path: z.string() }), execute: async () => 'hello' }) },
-          cache: { providerId: 'my-gateway', modelId: 'anthropic/claude-opus-5.5', sessionKey: 'kinu-test' },
+          cache: { providerId: 'my-gateway', modelId: 'anthropic/claude-opus-5.5' },
         })) events.push(event);
 
         answers.push(events.flatMap((event) => (event.type === 'text-delta' ? [event.delta] : [])).join(''));
@@ -327,7 +327,7 @@ describe('an account\'s model menu', () => {
       const refused = await menu();
       const served = await menu();
       const hosted = createAgentProviderRegistry({ env: {}, fetch: upstream, userDO: { caller: testOwner, stub: account } });
-      const answer = (await generateText({ model: hosted.resolveModel('openai-compat:groq/llama-4-scout', 'kinu-test'), prompt: 'hi' })).text;
+      const answer = (await generateText({ model: hosted.resolveModel('openai-compat:groq/llama-4-scout', { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }), prompt: 'hi' })).text;
 
       expect({ refused, served, catalogReads, answer, sent }).toEqual({
         // The refused read fails the listing that met it; the next ones read again, together.

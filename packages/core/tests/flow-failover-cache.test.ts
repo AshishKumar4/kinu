@@ -81,7 +81,7 @@ test.each([...FAILOVERS])('a turn on $primary served by $fallback is cached for 
   ]);
 
   const deps: ModelCallDeps = {
-    env: {}, sessionAffinity: 'kinu-test', fetch: mock.fetch,
+    env: {}, sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test', fetch: mock.fetch,
     getAuth: async (key) => CREDENTIALS.get(key) ?? null,
     hasCredential: async (key) => CREDENTIALS.has(key),
   };
@@ -134,13 +134,12 @@ test.each([...FAILOVERS])('a turn on $primary served by $fallback is cached for 
     const anthropic = sentTo(mock, 'api.anthropic.com');
     const openai = sentTo(mock, 'api.openai.com');
 
-    // Anthropic is addressed by its markers, OpenAI by its key: each request carries its own provider's, never the other's.
+    // Anthropic is addressed by its markers, OpenAI by its prefix alone: neither request carries the other's addressing.
     expect({
       anthropicMarked: JSON.stringify(anthropic.system).includes('cache_control'),
-      anthropicKeyed: 'prompt_cache_key' in anthropic,
-      openaiKeyed: v.is(v.string(), openai.prompt_cache_key),
       openaiMarked: JSON.stringify(openai).includes('cache_control'),
-    }).toEqual({ anthropicMarked: true, anthropicKeyed: false, openaiKeyed: true, openaiMarked: false });
+      keyed: [anthropic, openai].some((body) => 'prompt_cache_key' in body),
+    }).toEqual({ anthropicMarked: true, openaiMarked: false, keyed: false });
     expect(sent).toEqual([...warmed]);
   } finally { fixture.close(); }
 });
