@@ -1,5 +1,4 @@
 import type { SelectOption, SelectRenderable } from '@opentui/core';
-import { useKeyboard } from '@opentui/react';
 import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { filterModels, formatContextWindow, formatModelSpec, modelTestText, parseModelSpec, specWithoutAccount, takeEvidence, type AgentModelEntry, type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type ModelTestResult, type ProviderFailure, type ShellApprovalRequest } from '@kinu.run/core';
 import { CHANGE_KIND_GLYPH, TUI_COMPOSER_PLACEHOLDER, TUI_MARKS, clipText, literalText, SPINNER_FRAMES, meterText, type TurnMeter } from '@kinu.run/core/tui';
@@ -14,6 +13,7 @@ import {
   type ThemeSelection,
   type TuiThemeDefinition,
 } from './theme';
+import { useKeyboard } from './use-keys';
 
 interface OverlayGeometry {
   width: number;
