@@ -9,7 +9,7 @@ import {
   type HeadInput, type RunInference, type HeadReport, type SqlExecutor, type MissionBudgetPort, type Executor,
 } from '@kinu.run/core';
 import { prepareHostedTurn, type HostedActorSeams, type HostedTurnRequest, type PreparedHostedTurn } from './hosted-actors';
-import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentToolDescriptor, AgentTrace, AgentTurnEnd, JsonObject, PreparedAgentTurn, StoredRow } from '@kinu.run/core';
+import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentToolDescriptor, AgentTrace, AgentTurnEnd, JsonObject, PreparedAgentTurn, StoredRow, TurnOpening } from '@kinu.run/core';
 
 export interface AgentTurnsDeps {
   readonly sql: SqlExecutor;
@@ -33,6 +33,8 @@ export interface ChatTurnRequest {
   readonly driving?: JsonObject | undefined;
   /** The tier the agent's chat runs the turn on, when the turn names one; its sources are read for that tier's models. */
   readonly explicitTier?: TierId;
+  /** Where the agent's chat opened the turn. */
+  readonly opening?: TurnOpening;
 }
 
 interface OpenTurn {
@@ -250,6 +252,7 @@ export class AgentTurns {
       reference: this.deps.reference(actorId),
       request: {
         sequenceId: announcementOf(turnId), body: request.userText, mode: request.mode, parentDriven: request.parentDriven, driving: request.driving,
+        ...(request.opening !== undefined && { opening: request.opening }),
       },
       ...(request.explicitTier !== undefined && { explicitTier: request.explicitTier }),
       prepared: null,
@@ -279,11 +282,11 @@ export class AgentTurns {
 
     const sources = await materializeTurnSources(
       {
+        wiredToolNames: () => Object.keys(prepared.tools).filter((name) => !BUILTIN_TOOL_NAMES.has(name)),
+        codemodeCapabilities: () => [],
         ...prepared.sources,
         toolset: () => prepared.tools,
         externalTools: async () => ({}),
-        wiredToolNames: () => Object.keys(prepared.tools).filter((name) => !BUILTIN_TOOL_NAMES.has(name)),
-        codemodeCapabilities: () => [],
       },
       {
         userText: input.task, workMode: mode,

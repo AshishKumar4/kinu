@@ -626,6 +626,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** A non-root agent with a home, retired or not: its conversation stays readable until destroyed. */
   agentOf(actorId: string): WorkspaceActor & { readonly homeName: string; readonly shellId: string } {
     const record = this.actorHost().describe(actorId);
+
+    // Main is the workspace's own agent: its home is the workspace root and its shell the workspace's own (D9).
+    if (record !== null && record.parentActorId === null) return { ...record, homeName: MAIN_AGENT, shellId: this.shellId() };
     const placement = record === null ? null : hostedActorPlacement(record);
 
     if (record !== null && placement?.homeName != null) return { ...record, homeName: placement.homeName, shellId: placement.shellId };
@@ -648,6 +651,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   async agentCred(record: WorkspaceActor): Promise<VfsCred> {
+    // Main acts as the session user, in its turns as in the owner's own shell.
+    if (record.parentActorId === null) return CRED_SESSION_USER;
     const home = await this.actorHomes.get(record, actorReferenceOf(record));
 
     if (home?.cred !== undefined) return home.cred;
@@ -775,11 +780,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       debit: (turnId, ...args) => this.agentTurns.debit(actorId, turnId, ...args),
       prepareTurn: (turnId) => this.agentTurns.prepare(actorId, turnId),
       prepareChat: (request) => this.agentTurns.prepareChat(actorId, request),
-      bindProfile: async (turnId, profile) => this.agentTurns.bindProfile(actorId, turnId, profile),
+      bindProfile: async (turnId, profile) => {
+        if (actorId === this.actorHandle().actorId) this.bindFacetProfile(turnId, profile);
+
+        return this.agentTurns.bindProfile(actorId, turnId, profile);
+      },
       chatEvent: (event) => this.hostedChatEvent(actorId, event),
       turnEnded: (event, figures) => this.hostedTurnEnded(actorId, event, figures),
-      // The turn's report disposition is the agent's own, kept where the turn ran.
-      owedReport: async (turn, ended) => await hostedOwedReport(this.hostedSeams(), this.agentBound(actorId), turn, ended),
+      // The turn's report disposition is the agent's own, kept where the turn ran. Main has no hirer to owe one.
+      owedReport: async (turn, ended) => (actorId === this.actorHandle().actorId ? null : await hostedOwedReport(this.hostedSeams(), this.agentBound(actorId), turn, ended)),
       parentReport: (report) => hostedParentReport(this.hostedSeams(), this.agentBound(actorId), report),
       autoTitle: (subject, title) => hostedAutoTitle(this.hostedSeams(), this.agentBound(actorId), subject, title),
       hireAdvisor: async (advisor) => {
@@ -929,6 +938,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private withAgentFacets(host: ActorHost): ActorHost {
     return {
       ...host,
+      // Main's turns are prepared here as any agent's (D9); its runtime and session are this object's own.
+      acquire: async (reference) => (reference.actorId === this.actorHandle().actorId
+        ? { ...host.bindStores(reference), runtime: this.rt, session: this.actorSession }
+        : await host.acquire(reference)),
       retire: async (parent, retirement) => {
         const record = this.actorDirectoryStore().retained(retirement.reference.actorId);
         const own = record !== null && hostedActorPlacement(record).homeName !== null;
@@ -1112,6 +1125,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * escape the subtree); codemode built last; all calls wrapped into the run's capture.
    */
   private async hostedTaskProfile(turn: HostedTaskTurn): Promise<HostedTaskProfile> {
+    if (turn.actor.handle.actorId === this.actorHandle().actorId) return await this.mainTaskProfile(turn);
     const webSearch = this.ownedModelServices.getWebSearchProvider();
 
     // `report` belongs only to a parent-driven turn: an owner chat with this actor carries it neither natively nor in eval.
@@ -2210,7 +2224,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected override hostedChatWire(actorId: string): ChatWire | null {
     const reference = this.hostedReference(actorId);
 
-    if (reference === null) return null;
+    return reference === null ? null : this.agentChatWire(actorId, reference, actorId);
+  }
+
+  /** Main's turns run in its own isolate as any agent's do (D9); the workspace's own tabs hear them. */
+  protected override mainChatWire(): ChatWire {
+    return this.agentChatWire(this.actorHandle().actorId, actorReferenceOf(this.actorHandle()), null);
+  }
+
+  /** `room` names the tabs that hear the agent: its own window's, or null for the workspace's. */
+  private agentChatWire(actorId: string, reference: ActorReference, room: string | null): ChatWire {
     const facet = () => this.agentCalls(actorId);
     const snapshot = () => this.agentSnapshot(actorId);
 
@@ -2219,7 +2242,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // A hosted turn opens its room at step 0 in each activation (`drainActorAssignments`): its relay holds every step the room restates.
       steps: () => [],
       getConnection: (id) => this.getConnection(id),
-      broadcast: (message, exclude) => { this.broadcastToActor(actorId, message, exclude); },
+      broadcast: (message, exclude) => { this.broadcastToActor(room, message, exclude); },
       history: (limit) => this.agentStores(actorId).history(limit),
       admitted: (id) => this.agentStores(actorId).admitted(id),
       send: (input) => whenActorTakesInput(this.boundSql, actorId, () => this.handInput(actorId,

@@ -608,7 +608,9 @@ function chatInput(message: UIMessage) {
 export class ActorChatRooms {
   private readonly hosted = new Map<string, ChatWireTransport>();
 
+  /** Main's turns speak into the root's room, which its own tabs hear. */
   constructor(
+    private readonly main: string,
     private readonly root: () => ChatWireTransport,
     private readonly wireFor: (actorId: string) => ChatWire | null,
   ) {}
@@ -620,6 +622,7 @@ export class ActorChatRooms {
   }
 
   hostedRoom(actor: string): ChatWireTransport | null {
+    if (actor === this.main) return this.root();
     const held = this.hosted.get(actor);
 
     if (held !== undefined) return held;

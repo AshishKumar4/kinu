@@ -1747,7 +1747,7 @@ export {
 
 export { judgeAuthoredEdit, runProposer, SCAFFOLD_ARTIFACT, type ProposerOutcome } from './evolution/proposer';
 
-export { advanceTrial, runningTrial, startTrial, turnArtifactBodies } from './evolution/trials';
+export { advanceTrial, runningTrial, startTrial, turnArtifactBodies, type TurnArtifacts } from './evolution/trials';
 
 export { drawArm, type LiveTrial, type TrialArm, type TrialTurn, type TrialVerdict } from './evolution/trial-rules';
 

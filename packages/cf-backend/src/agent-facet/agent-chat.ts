@@ -5,7 +5,7 @@ import {
   planHandoffStillOwed, projectJsonValue,
   metadataTier, subordinateTerminalEffects, withCompactionTrigger,
   bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
-  type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type JsonObject, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
+  type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpening, type JsonObject, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
   type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalTurnFacts, type TerminalTurnParts,
   type ProviderEnv, type SessionEvent, type TurnAssemblyRequest, type WorkMode,
 } from '@kinu.run/core';
@@ -89,7 +89,7 @@ export class FacetChat {
       },
       mintAnswerId: () => crypto.randomUUID(),
       ports: {
-        prepareTurn: (item, lease) => this.prepareTurn(item, lease),
+        prepareTurn: (item, lease, opening) => this.prepareTurn(item, lease, opening),
         composeRequest: () => this.composeRequest(),
         owedTerminalEffects: (input) => this.owedTerminalEffects(input),
         answerMetadata: async (turnId, texts) => await workspace.answerMetadata(turnId, await texts()),
@@ -135,7 +135,7 @@ export class FacetChat {
     }, asked);
   }
 
-  private async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn> {
+  private async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpening): Promise<PreparedTurn> {
     const { actor, database, workspace } = this.deps;
     const mode = actor.session.workMode;
     // The one place a turn's lane is decided; the workspace rebuilds a turn from this, never from its id.
@@ -145,7 +145,7 @@ export class FacetChat {
     const explicitTier = metadataTier(item.metadata);
 
     const prepared = await workspace.prepareChat({
-      turnId: lease.turnId, mode, userText: item.text, parentDriven: this.parentDriven, driving: this.driving, ...(explicitTier !== undefined && { explicitTier }),
+      turnId: lease.turnId, mode, userText: item.text, parentDriven: this.parentDriven, driving: this.driving, opening, ...(explicitTier !== undefined && { explicitTier }),
     });
 
     database.prepare(lease.turnId, prepared);
