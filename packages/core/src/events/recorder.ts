@@ -379,18 +379,21 @@ export class RunEventRecorder {
     return Effect.flatMap(Effect.sync(() => {
       this.actor.assertCurrent();
 
-      return this.sql<{ payload: string }>`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
+      return this.sql<{ event_index: number }>`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
         SELECT ${this.actorId}, ${ev.runId}, COALESCE(MAX(event_index), -1) + 1, ${ev.type},
           json_set(${JSON.stringify(ev)}, '$.eventIndex', COALESCE(MAX(event_index), -1) + 1), ${ev.timestamp}
         FROM run_events WHERE actor_id = ${this.actorId} AND run_id = ${ev.runId}
-        RETURNING payload`[0];
+        RETURNING event_index`[0];
     }), (stored) => {
       if (stored === undefined) return Effect.fail(new KinuError('io', 'a persisted run event returned no row'));
 
       return Effect.sync(() => {
         if (ev.type === 'scaffold_promotion' || ev.type === 'scaffold_rollback') markStoreChanged(this.sql);
 
-        return parseStoredRunEvent(stored.payload);
+        // The event just written is this isolate's typed value; only a read from storage is parsed (parseStoredRunEvent).
+        const event: RunEvent = { ...ev, eventIndex: stored.event_index };
+
+        return event;
       });
     });
   }
