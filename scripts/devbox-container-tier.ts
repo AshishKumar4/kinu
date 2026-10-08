@@ -9,6 +9,7 @@ import * as v from 'valibot';
 import { copyPinnedTools } from './devbox-tools';
 import { requireEqual, tierIdentity } from './fixtures/devbox-e2e/oracle';
 import { completeTeardown } from './fixtures/devbox-e2e/teardown';
+import { r2 } from './infra-cloudflare';
 import { deployedConfig } from './infra-manifest';
 import { r2ResiduePlane, drainBucketResidue } from './bench-devbox-fixture';
 import { deleteR2Prefix, wranglerSessionToken } from './cloudflare-rest';
@@ -211,16 +212,22 @@ async function main(): Promise<void> {
       requireEqual(containerAppIds(REPO, [app], () => undefined), []);
       },
       bucket: async () => {
-      if (!runWrangler(REPO, ['r2', 'bucket', 'list']).includes(worker)) return;
+      // By name: `r2 bucket list` answers its first 20 buckets only, so a bucket past that page read as gone, and
+      // every run on an account of more than 20 left its bucket behind (seven on 2026-10-08).
+      const before = r2(worker);
+
+      if (before.state === 'absent') return;
+
+      if (before.state === 'unknown') throw new Error(before.reason);
       await deleteR2Prefix({ accountId: ACCOUNT, bucket: worker, prefix: '', token });
       const accessKeyId = process.env['R2_ACCESS_KEY_ID'];
       const secretAccessKey = process.env['R2_SECRET_ACCESS_KEY'];
 
       if (accessKeyId !== undefined && secretAccessKey !== undefined) await drainBucketResidue(r2ResiduePlane({ accountId: ACCOUNT, accessKeyId, secretAccessKey }), worker);
       runWrangler(REPO, ['r2', 'bucket', 'delete', worker]);
-      const buckets = runWrangler(REPO, ['r2', 'bucket', 'list']);
+      const after = r2(worker);
 
-      if (buckets.includes(worker)) throw new Error('the bucket is still listed after deletion');
+      if (after.state !== 'absent') throw new Error(`the bucket is ${after.state === 'present' ? 'still there' : after.reason} after deletion`);
       },
     });
 

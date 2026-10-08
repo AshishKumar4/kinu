@@ -192,6 +192,8 @@ const BOOT_ID_PATH = '/tmp/devbox-boot-id';
 
 const NO_START_IMAGE = 'no image to start: name it `devbox` in the container `images` map';
 
+const NO_CONTAINER = 'this server runs no containers, as a local dev server never does: a box runs on a deployment';
+
 /** Scheduled-callback names. Each MUST name a public method on the class:
  *  `Container.schedule` rejects anything it cannot call back. */
 const STARTUP_CALLBACK = 'devboxStartup';
@@ -2973,7 +2975,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   #container(): Container {
     const container = this.ctx.container;
 
-    if (container === undefined) throw new DevboxError("io", 'this devbox has no container binding');
+    // A dev server runs no container (vite.config.ts), so a box there is refused once rather than retried.
+    if (container === undefined) throw new DevboxError('configuration', NO_CONTAINER);
 
     return container;
   }
