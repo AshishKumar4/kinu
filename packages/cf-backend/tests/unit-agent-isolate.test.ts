@@ -1,6 +1,6 @@
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { afterEach, expect, test } from 'bun:test';
-import { accountCredentialKey, agentAffinityKey, asFetchFunction, requestUrl } from '@kinu.run/core';
+import { accountCredentialKey, asFetchFunction, requestUrl } from '@kinu.run/core';
 import { OPENCODE_GO_CATALOG } from '@kinu.run/test-utils';
 import {
   agentSql, catalogTurn, driveUntil, gatewayWorkspace, hostedMainActor, hostedSubordinateHarness, makeEnv, orchestratorHarness, runDelegatedTask,
@@ -137,7 +137,8 @@ test("a hired agent's model call to OpenCode Go names the agent's own conversati
 
   await runDelegatedTask(workspace, hire.actor.handle.actorId, 'Write it.');
 
-  expect(new Set(sessions)).toEqual(new Set([agentAffinityKey(hire.actor.record.name)]));
+  // `kinu-<the agent's own name>`, so each hire is its own conversation to the provider.
+  expect(new Set(sessions)).toEqual(new Set([`kinu-${hire.actor.record.name}`]));
   await user.joinFibers();
   user.close();
 });

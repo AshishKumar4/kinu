@@ -3,9 +3,12 @@
 // each (workerd rereads its options after awaiting), and a refusal keeps the status the stack's retry reads.
 import { describe, test, expect } from 'bun:test';
 import { APICallError, generateText, streamText, tool, jsonSchema, type ModelMessage, type TextStreamPart, type ToolSet } from 'ai';
-import { JsonObjectSchema, isPortableToolCallId, type JsonObject } from '@kinu.run/core';
+import { JsonObjectSchema, type JsonObject } from '@kinu.run/core';
 import * as v from 'valibot';
 import { bindingModel, DONE, eventStream, eventStreamOf, sharedBindingModels, sse, type BindingAnswer, type RecordedRun } from './helpers/workers-ai-model';
+
+/** What every provider family round-trips verbatim in a JSON id field: ASCII letters, digits and `_.:-`. */
+const PORTABLE = /^[A-Za-z0-9_.:-]+$/u;
 
 const MODEL = '@cf/moonshotai/kimi-k2.6';
 
@@ -380,7 +383,7 @@ describe('Workers AI binding — tool-call ids', () => {
 
     expect(calls.map((call) => call.input)).toEqual([{ cmd: 'ls' }, { cmd: 'pwd' }, { cmd: 'id' }]);
     expect(new Set(calls.map((call) => call.toolCallId)).size).toBe(3);
-    expect(calls.every((call) => isPortableToolCallId(call.toolCallId))).toBe(true);
+    expect(calls.every((call) => PORTABLE.test(call.toolCallId))).toBe(true);
     expect(calls[2]?.toolCallId).toContain('-n-call-upstream');
     expect(await result.finishReason).toBe('tool-calls');
   });
@@ -413,7 +416,7 @@ describe('Workers AI binding — tool-call ids', () => {
     const ids = await streamedCallIds(model);
 
     expect(new Set(ids).size).toBe(3);
-    expect(ids.every((id) => isPortableToolCallId(id))).toBe(true);
+    expect(ids.every((id) => PORTABLE.test(id))).toBe(true);
     expect(ids[2]).toMatch(/-i-3$/u);
   });
 
@@ -450,7 +453,7 @@ describe('Workers AI binding — whole completions', () => {
 
     expect(result.text).toBe('done');
     expect(result.toolCalls.map((call) => call.input)).toEqual([{ cmd: 'ls' }]);
-    expect(result.toolCalls.every((call) => isPortableToolCallId(call.toolCallId))).toBe(true);
+    expect(result.toolCalls.every((call) => PORTABLE.test(call.toolCallId))).toBe(true);
     expect(result.usage).toMatchObject({ inputTokens: 11, outputTokens: 3 });
     expect(runs[0]?.inputs.stream).toBeUndefined();
     expect(v.parse(v.array(JsonObjectSchema), runs[0]?.inputs.messages)).toEqual([{ role: 'user', content: PROMPT }]);

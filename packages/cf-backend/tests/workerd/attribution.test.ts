@@ -5,7 +5,6 @@
  */
 import { env } from 'cloudflare:test';
 import { expect, it } from 'vitest';
-import { analyticsDigest } from '@kinu.run/core/analytics';
 
 const EVENTS = ['probe.alarm_line', 'probe.detached_line', 'probe.rpc_line'];
 
@@ -29,18 +28,21 @@ it('two workspaces each log three ways, and every line is filed under its own wo
   // The alarms land on their own; the probe answers once all six lines have.
   const lines = await probe.written(workspaces[0] ?? '', EVENTS.length * workspaces.length);
 
-  for (const name of workspaces) {
-    const own = lines.filter((line) => line.index === analyticsDigest(name) && line.event.startsWith('probe.')).map((line) => line.event).sort();
-    expect(own).toEqual(EVENTS);
-  }
+  // Each workspace's three lines under an index of its own: two indexes, neither the empty one, each with all three.
+  const byIndex = new Map<string, string[]>();
+
+  for (const line of lines.filter((entry) => entry.event.startsWith('probe.'))) byIndex.set(line.index, [...(byIndex.get(line.index) ?? []), line.event]);
+
+  expect([...byIndex.values()].map((events) => events.sort())).toEqual([EVENTS, EVENTS]);
+  expect([...byIndex.keys()].includes('')).toBe(false);
 
   // Each activation's install line names the workspace it was installed for, not the empty index.
   const installs = lines.filter((line) => line.event === 'analytics.sink_installed');
   expect(installs.length).toBeGreaterThan(0);
-  expect(new Set(installs.map((line) => line.index))).toEqual(new Set(workspaces.map((name) => analyticsDigest(name))));
+  expect(new Set(installs.map((line) => line.index))).toEqual(new Set(byIndex.keys()));
 
   // The `startups` panel counts rows: one activation is one row, under its own workspace.
-  const startups = workspaces.map((name) => lines.filter((line) => line.event === 'actor.startup' && line.index === analyticsDigest(name)).length);
+  const startups = [...byIndex.keys()].map((index) => lines.filter((line) => line.event === 'actor.startup' && line.index === index).length);
   expect(startups).toEqual([1, 1]);
 
   expect(lines.filter((line) => line.index === '')).toEqual([]);

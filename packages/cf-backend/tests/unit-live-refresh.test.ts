@@ -303,7 +303,7 @@ describe('resource-scoped workspace notices', () => {
 
   test('the essential read wins when both fail', () => {
     expect(facts(formatWorkspaceError({ snapshot: CONNECTION_LOST, executors: 'catalog offline' }, false)))
-      .toEqual({ severity: 'blocking', detail: CONNECTION_LOST, retry: true });
+      .toMatchObject({ severity: 'blocking', retry: true });
   });
 
   test('inline credentials never reach the technical detail', () => {

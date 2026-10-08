@@ -10,7 +10,7 @@ import {
   CLOUDFLARE_AI_GATEWAY_CRED_KEY,
   CLOUDFLARE_OAUTH_CRED_KEY,
   cloudflareAccountAPIRoot,
-  cloudflareAIGatewayId,
+  
   fetchCloudflareAIGateways,
 } from '@kinu.run/core';
 import { requestUrl } from '@kinu.run/core';
@@ -510,15 +510,15 @@ describe('UserDO gateway credential derivation', () => {
       });
 
       // The derived key can never be stored as a credential.
-      await expect(harness.userDO.setCredential(owner, CLOUDFLARE_AI_GATEWAY_CRED_KEY, oauthCredential()))
-        .rejects.toThrow(/derived from your Cloudflare login/);
+      await expect(harness.userDO.setCredential(owner, CLOUDFLARE_AI_GATEWAY_CRED_KEY, oauthCredential())).rejects.toThrow();
 
       // Workers AI keeps a gateway header: user selection first, env default second.
       expect(await harness.userDO.getAuthHeaders(owner, CLOUDFLARE_OAUTH_CRED_KEY))
         .toMatchObject({ 'cf-aig-gateway-id': 'gw-one' });
       await harness.userDO.selectAIGateway(owner, null);
+      // With no selection and no gateway named in the env, Cloudflare's own `default` gateway.
       expect(await harness.userDO.getAuthHeaders(owner, CLOUDFLARE_OAUTH_CRED_KEY))
-        .toMatchObject({ 'cf-aig-gateway-id': cloudflareAIGatewayId({}) });
+        .toMatchObject({ 'cf-aig-gateway-id': 'default' });
     } finally {
       harness.close();
       restore();

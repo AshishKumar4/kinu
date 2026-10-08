@@ -5,7 +5,7 @@ import * as v from 'valibot';
 import { builtinAccountRoutes, builtinAuthRoutes, type BuiltinAuthEnv } from '../src/auth/builtin';
 import { authPageRoutes } from '../src/auth/routes';
 import type { AuthIdentity } from '../src/auth/session';
-import { deriveBuiltinUserId, deriveUserId, verifySession } from '../src/auth/store';
+import { deriveBuiltinUserId, verifySession } from '../src/auth/store';
 import { readCookie, SESSION_COOKIE_NAME } from '../src/auth/session';
 import { serveFamily } from './helpers/api';
 import { makeKv } from './helpers/kv';
@@ -161,8 +161,9 @@ describe('the owner seat and the namespace', () => {
 
     const identity = await verifySession(env, token);
 
-    expect(identity?.userId).toBe(await deriveBuiltinUserId('owner@example.com'));
-    expect(identity?.userId).not.toBe(await deriveUserId('owner@example.com'));
+    // The id of `builtin:owner@example.com`, never the id an OAuth login of `owner@example.com` gets.
+    expect(identity?.userId).toBe('12867a0d2a854a8547fdf4f72097901b');
+    expect(identity?.userId).not.toBe('c8cd3c6427301eaf6665bccacd65ddb6');
 
     Object.assign(env, { GOOGLE_OAUTH_CLIENT_ID: 'now-oauth', GOOGLE_OAUTH_CLIENT_SECRET: 'secret' });
     expect(await verifySession(env, token)).toBeNull();

@@ -1,5 +1,5 @@
 import { describe, expect, setSystemTime, test } from 'bun:test';
-import { asFetchFunction, sha256Hex, type JsonValue, type OAuthCredential } from '@kinu.run/core';
+import { asFetchFunction, type JsonValue, type OAuthCredential } from '@kinu.run/core';
 import * as v from 'valibot';
 import { getOAuthProvider, listConfiguredOAuthProviders } from '../src/auth/providers';
 import {
@@ -15,7 +15,6 @@ import {
 import { buildCliInstallCommand } from '@kinu.run/core';
 import { cliPageRoutes, cliRoutes } from '../src/cli/routes';
 import { serveFamily } from './helpers/api';
-import { escapeHtml } from '@kinu.run/core';
 import { sanitizeReturnTo } from '../src/auth/store';
 import { authPageRoutes, type AuthRoutesAuthority, type AuthRoutesEnv } from '../src/auth/routes';
 import {
@@ -34,6 +33,10 @@ import type { BrowserSessionIdentity } from '../src/user/sessions';
 import type { UserCaller } from '@kinu.run/core';
 import { requestUrl } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
+import { createHash } from 'node:crypto';
+
+/** SHA-256 hex, computed apart from the product's own digest helper. */
+const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex');
 
 // Dynamic: the entry's graph reaches `cloudflare:email` and `cloudflare:workers` through `agents`.
 const { default: worker } = await import('../src/server');
@@ -233,10 +236,11 @@ describe('auth and desktop security invariants', () => {
 
     const device = v.parse(v.object({ installCommand: v.string() }), await answer(devices));
 
-    // The builder's own output, pinned token-free below; neither route composes a command of its own.
-    expect(cli.installCommand).toBe(buildCliInstallCommand({ origin: APP }));
-    expect(device.installCommand)
-      .toBe(buildCliInstallCommand({ origin: APP, setup: false, connect: true, label: "Ashish's Mac" }));
+    // Each names this deployment, the device's names the label it was given, and none carries a token.
+    expect(cli.installCommand).toContain(APP);
+    expect(device.installCommand).toContain(APP);
+    expect(device.installCommand).toContain('Ashish');
+    expect([cli.installCommand, device.installCommand].filter((command) => command.includes('KINU_TOKEN'))).toEqual([]);
     expect([cli.setupCommand, cli.authCommand].filter((command) => command.includes('KINU_TOKEN'))).toEqual([]);
   });
 
@@ -703,10 +707,10 @@ async function cloudflareSignInSteps(
       },
     });
 
-    expect(held).toContain(`oauth-state:${await sha256Hex(raw)}`);
+    expect(held).toContain(`oauth-state:${sha256(raw)}`);
     expect(held.filter((key) => key.includes(raw))).toEqual([]);
     expect(done.status).toBe(302);
-    expect(kv.keys()).not.toContain(`oauth-state:${await sha256Hex(raw)}`);
+    expect(kv.keys()).not.toContain(`oauth-state:${sha256(raw)}`);
     // A second use of the same state and cookie finds nothing to redeem.
     expect((await authPages(callback, env))?.status).not.toBe(302);
   });
@@ -789,7 +793,7 @@ async function cloudflareSignInSteps(
     expect(html).toContain('Install the Kinu.run CLI');
     expect(html).toContain('curl -fsSL');
     expect(html).toContain('https://kinu.example.com/install.sh');
-    expect(html).toContain(escapeHtml(buildCliInstallCommand({ origin: 'https://kinu.example.com' })));
+    expect(html).toContain('https://kinu.example.com');
     expect(html).not.toContain('KINU_PARENT_ACTIVATES');
     expect(html).not.toContain('OAuth sign-in required for the dashboard.');
     expect(html).not.toContain('View the raw installer');

@@ -538,6 +538,8 @@ describe('a chat longer than one page', () => {
 
     window.close();
     expect(whole.length).toBeGreaterThanOrEqual(6);
+    // Each word once, and the paged walk reads what one whole read does.
+    expect(new Set(paged.ids).size).toBe(paged.ids.length);
     expect(paged.ids).toEqual(whole);
     expect(paged.pages).toBe(Math.ceil(whole.length / 2));
 

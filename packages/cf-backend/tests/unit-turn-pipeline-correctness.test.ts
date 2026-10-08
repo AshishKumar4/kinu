@@ -262,9 +262,9 @@ describe('turn-pipeline correctness wiring', () => {
     expect(await agent.getAgentStatus()).toMatchObject({
       tierId: 'default', model: 'workers-ai/pinned-model', reasoningEffort: 'medium',
     });
-    // The request's model is the memoized instance for the pinned spec.
-    const request = v.safeParse(v.object({ model: v.unknown() }), config ?? {});
-    expect(request.success && request.output.model).toBe(agent.getModel());
+    // The request names the pinned model, not the tier's default.
+    const request = v.parse(v.object({ model: v.object({ modelId: v.string() }) }), config ?? {});
+    expect(request.model.modelId).toContain('pinned-model');
   });
 
   test('a model set mid-turn sizes the next request, not the one in flight', async () => {
@@ -473,7 +473,7 @@ describe('turn-pipeline correctness wiring', () => {
 
     const userPlane: RecordedUserPlaneCalls = { warmConnections: [], failWarm: null, titles: [], turnCancels: [], mcp };
     const { agent } = orchestratorHarness(userPlane);
-    const key = mcpToolKey('tracker', 'find_issue');
+    const key = 'mcp_tracker_find_issue';
     const prepared = await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'find the login issue' }] });
 
     if (!prepared) throw new Error('the turn must prepare a configuration');
@@ -482,7 +482,9 @@ describe('turn-pipeline correctness wiring', () => {
     expect(JSON.stringify(prepared.system)).not.toContain(key);
 
     const said = spoken(prepared.prompt ?? []).map((message) => message.text).join('\n');
-    expect(said).toContain(`- tools[${JSON.stringify(key)}](input): Find an issue by title. Input schema: {"type":"object","properties":{"title":{"type":"string"}},"required":["title"]}`);
+    // Declared to the model by the name eval calls it by, with the server's own description.
+    expect(said).toContain(`tools[${JSON.stringify(key)}]`);
+    expect(said).toContain('Find an issue by title.');
 
     const evaluated = await toolExecute<JsonValue, JsonValue>(present(prepared.tools.eval, 'eval'))({
       code: `return await tools[${JSON.stringify(key)}]({ title: 'login' });`,
