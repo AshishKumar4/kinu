@@ -4,7 +4,7 @@ import { WORKSPACE_ROOT } from '@kinu.run/core';
 import type { AgentContext } from 'agents';
 import { AgentFacet, type AgentFacetCalls, type AgentFacetEnv } from '../../src/agent-facet/agent-facet';
 import { agentCallsThrough } from '../../src/dynamic-worker-slots';
-import { attempt } from '@kinu.run/core/obs';
+import { attemptInItsWords } from '@kinu.run/core/obs';
 import { AgentDatabase } from '../../src/agent-facet/agent-database';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import { agentStateShellId, type AgentFacetPlacement, type AgentWorkspaceHost } from '../../src/agent-facets';
@@ -148,8 +148,9 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
       const facet = new AgentFacet(makeCtx(db, placement.storageKey), env);
       const lost = new AbortController();
 
-      // A reset isolate fails every call it still held, as a dropped RPC does.
-      const calls = agentCallsThrough((call) => attempt({ doing: "calling an agent's isolate", otherwise: 'io' }, () => untilLost(call(facet), lost.signal)));
+      // A reset isolate fails every call it still held, as a dropped RPC does; a refusal crosses in its own words, as an
+      // error thrown across an RPC does.
+      const calls = agentCallsThrough((call) => attemptInItsWords('io', () => untilLost(call(facet), lost.signal)));
 
       return { facet, calls, lost };
   }

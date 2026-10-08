@@ -2238,6 +2238,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.agentChatWire(this.actorHandle().actorId, actorReferenceOf(this.actorHandle()), null);
   }
 
+  protected override async enqueueMainTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> {
+    const main = this.actorHandle().actorId;
+
+    return await this.handInput(main, async () => await (await this.agentCalls(main)).enqueue(this.agentSnapshot(main), input));
+  }
+
+  protected override mainChatTurn(): string | null {
+    return this.agentTurns.chatTurn(this.actorHandle().actorId);
+  }
+
   /** `room` names the tabs that hear the agent: its own window's, or null for the workspace's. */
   private agentChatWire(actorId: string, reference: ActorReference, room: string | null): ChatWire {
     const facet = () => this.agentCalls(actorId);

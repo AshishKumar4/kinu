@@ -19,7 +19,7 @@ import {
   type RunEventInput, type SubordinateInspectionAuthority, ConversationSearchStore, type ConversationRecall,
   isSubordinateOrigin, WORKSPACE_ROOT,
 } from '@kinu.run/core';
-import type { SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
+import type { EnqueueTurnResult, ProgrammaticTurn, SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
 import type { SubordinateRosterEntry as SubordinateView } from '@kinu.run/core/protocol';
 import { MessageType, parseProtocolMessage, sendIfOpen } from "agents/chat";
@@ -1433,7 +1433,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Read at the start of a terminal sequence and carried through: the loop's live turn becomes
    *  the next one as soon as it opens, so a detached re-read could close the wrong claim. */
   protected durableTurnId(): string | null {
-    const live = this._chatLoop?.currentTurnId;
+    const live = this.mainChatTurn();
 
     if (live !== undefined && live !== null) return live;
 
@@ -1844,6 +1844,12 @@ export abstract class ActorAgent extends Agent<Env> {
   /** The workspace's own room: main's chat, in main's own isolate. */
   protected abstract mainChatWire(): ChatWire;
 
+  /** Main's programmatic turns are handed to its chat, in its own isolate (D9). */
+  protected abstract enqueueMainTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult>;
+
+  /** The chat turn main's isolate runs now, as its room heard it open; null between turns. */
+  protected abstract mainChatTurn(): string | null;
+
   /** A hosted agent's plan reviews, in its own isolate; null for a name this workspace holds no agent under. */
   protected abstract hostedPlanReviews(actorId: string): HostedPlanReviews | null;
 
@@ -2148,11 +2154,12 @@ export abstract class ActorAgent extends Agent<Env> {
       const armWake = this.durableWakeOwner();
       this._host = {
         broadcast: (event) => this.broadcast(JSON.stringify(event)),
-        enqueueTurn: (input) => this.chatLoop.enqueueTurn(input),
+        enqueueTurn: (input) => this.enqueueMainTurn(input),
         // Synchronous read plus same-tick buffer push means the observed turn's prepareStep drains
         // the signal; a turn that settles first re-delivers it from settle().
-        turnInFlight: () => this.chatLoop.turnInFlight(),
-        closed: () => this.chatLoop.closed,
+        turnInFlight: () => this.mainChatTurn() !== null,
+        // Its chat is its isolate's, which never ends.
+        closed: () => false,
         // keepAliveWhile holds the DO through the debounce window and drain; if it dies anyway,
         // events stay durable in the EventLog and a later drain picks them up.
         setTimer: (fn, ms) => {
@@ -2222,7 +2229,7 @@ export abstract class ActorAgent extends Agent<Env> {
         effectClaims: {
           actor: this.actorHandle(),
           sql: this.rt.storage.sql,
-          turnId: () => currentOperationProfile(this.actorHandle())?.turnId ?? this._chatLoop?.currentTurnId ?? WORKSPACE_RUN_ID,
+          turnId: () => currentOperationProfile(this.actorHandle())?.turnId ?? this.mainChatTurn() ?? WORKSPACE_RUN_ID,
           durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
         },
         clamp: {
@@ -2785,7 +2792,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** A turn is running, read live from the loop; routes signals into the turn, keeps tool claims,
    * and reports the actor busy (forkAgent rejects with "agent busy"). */
-  protected get _inFlight(): boolean { return this._chatLoop?.pumping === true && this._chatLoop.currentTurnId !== null; }
+  protected get _inFlight(): boolean { return this.mainChatTurn() !== null; }
   /** Whether this turn records evolution state, captured at turn open; `engine.enabled` is a live
    * read that a mid-turn toggle or a recovering host could answer differently. */
   protected _turnEvolutionEnabled = false;
@@ -2807,10 +2814,10 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   getCheckpointMetaForDevice(): { turnId: string; sessionId: string } | null {
-    // The loop's live turn: the id a Stop sweep names and the daemon's checkpoint key.
-    const turnId = this._chatLoop?.currentTurnId;
+    // The live turn: the id a Stop sweep names and the daemon's checkpoint key.
+    const turnId = this.mainChatTurn();
 
-    return turnId === undefined || turnId === null ? null : { turnId, sessionId: 'default' };
+    return turnId === null ? null : { turnId, sessionId: 'default' };
   }
 
   // `this.sql` needs `this` bound; this closure can be passed by reference to helpers safely.
@@ -3753,7 +3760,7 @@ export abstract class ActorAgent extends Agent<Env> {
           actor: this.actorHandle(),
           sql: this.rt.storage.sql,
           turnId: claimScope === undefined
-            ? () => currentOperationProfile(this.actorHandle())?.turnId ?? this._chatLoop?.currentTurnId ?? WORKSPACE_RUN_ID
+            ? () => currentOperationProfile(this.actorHandle())?.turnId ?? this.mainChatTurn() ?? WORKSPACE_RUN_ID
             : () => claimScope,
           durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
         },
