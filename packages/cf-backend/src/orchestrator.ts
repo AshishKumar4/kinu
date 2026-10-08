@@ -924,8 +924,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // Every signal held for it re-delivers, detached: none reached its isolate's steps.
       this.orch.inbox.settle({ completed: event.type === 'turn-end' && !event.turn.hadError });
       this.turnClaimChanged();
-
-      if (event.type === 'turn-end') this.recordMainTurnRow(event.turn);
     }
 
     this.overviewChanged();
@@ -2262,9 +2260,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Armed before the words cross, and again once the agent took them: an answer it sent before taking them may have
    *  cancelled the first arm on its way, and its later answers replace the second. */
   private async handInput<A>(actorId: string, hand: () => Promise<A>): Promise<A> {
-    await this.agentWakes.arm(actorId, Date.now() + RECOVERY_BACKOFF_CEILING_MS);
     // The agent reads working from here: its turn claims are its own isolate's, whose writes this object never sees.
     this.liveReadsMoved(readsOfTables(['actor_turn_claims']));
+    await this.agentWakes.arm(actorId, Date.now() + RECOVERY_BACKOFF_CEILING_MS);
     const taken = await hand();
 
     await this.agentWakes.arm(actorId, Date.now() + RECOVERY_BACKOFF_CEILING_MS);
@@ -2578,6 +2576,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    */
   /** What main's facet turn left here as it ran, kept past its end: its handoff may come after the next turn opened. */
   private readonly mainTurnFacts = new Map<string, MainTurnFacts>();
+  /** The turns whose fleet row this activation recorded: a settlement its isolate retries records none again. */
+  private readonly mainTurnRows = new Set<string>();
 
   /** The live turn's, else none: a workspace that restarted mid-turn holds nothing of it. */
   private liveMainTurnFacts(turnId: string): MainTurnFacts {
@@ -2613,6 +2613,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       completed: settled.completed, userText: settled.userText, assistantText: settled.assistantText,
       scopedTurn: projectJsonValue({ value: scoped }), recordedAt: settled.recordedAt, evolutionEnabled: held.evolutionEnabled,
     };
+
+    // The fleet's turn row, its outcome the run's own: a tool that failed inside a turn that answered is not a failed turn.
+    if (!this.mainTurnRows.has(settled.turnId)) {
+      this.mainTurnRows.add(settled.turnId);
+      this.recordMainTurnRow(scoped, settled.completed);
+    }
 
     await this.terminal.settle({
       transition: { turnId: settled.turnId, messageId: settled.messageId },

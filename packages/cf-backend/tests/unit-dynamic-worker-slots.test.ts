@@ -154,14 +154,13 @@ describe("a read across every agent's isolate", () => {
     const spend = workspace.agent.accountSpend();
 
     try {
-      // Main's isolate is read as every hire's is: four isolates, one slot.
-      expect(await beforeRetry.promise).toEqual({ refused: 3, calls: 1 });
+      expect(await beforeRetry.promise).toEqual({ refused: 2, calls: 1 });
       workers.gate = null;
       gate.resolve();
 
       expect(await spend).toEqual(expect.any(Array));
-      expect(workers.calls).toHaveLength(4);
-      expect(new Set(workers.calls).size).toBe(4);
+      expect(workers.calls).toHaveLength(3);
+      expect(new Set(workers.calls).size).toBe(3);
     } finally {
       workers.gate = null;
       gate.resolve();

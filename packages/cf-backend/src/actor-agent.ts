@@ -2107,14 +2107,14 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /** Main's turn as the fleet dataset reads it, from the completed turn its isolate settled. */
-  protected recordMainTurnRow(turn: CompletedTurn): void {
+  protected recordMainTurnRow(turn: CompletedTurn, completed: boolean): void {
     const usage: Usage = turn.usage ?? {};
 
     recordTurnRow(this.env, {
       workspace: this.workspaceName(),
       agentKind: this.actorKind(),
       ...this.analyticsModel(),
-      outcome: turn.hadError ? 'failed' : 'ok',
+      outcome: completed ? 'ok' : 'failed',
       code: '',
       durationMs: turn.durationMs,
       steps: turn.steps,
