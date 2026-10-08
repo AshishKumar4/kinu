@@ -1,8 +1,8 @@
 import { Effect } from 'effect';
 import { settleSync } from '../obs/effect';
-import type { ModelCapability } from '../providers/types';
+import { specWithoutAccount, type ModelCapability } from '../providers/types';
 
-export type PromptModelFamily = 'kimi' | 'gpt' | 'claude' | 'gemini' | 'generic';
+export type PromptModelFamily = 'kimi' | 'gpt' | 'claude' | 'gemini' | 'muse' | 'generic';
 
 export type PromptModelCapability = ModelCapability;
 
@@ -70,9 +70,11 @@ function normalizeCapability(raw: string): PromptModelCapability | null {
 
 function resolveFamily(model?: PromptModelContext): PromptModelFamily {
   if (model?.family) return model.family;
-  const text = `${model?.provider ?? ''} ${model?.id ?? ''}`.toLowerCase();
+  const text = `${model?.provider ?? ''} ${specWithoutAccount(model?.id ?? '')}`.toLowerCase();
 
   if (text.includes('kimi')) return 'kimi';
+
+  if (text.includes('muse')) return 'muse';
 
   if (text.includes('claude') || text.includes('anthropic')) return 'claude';
 

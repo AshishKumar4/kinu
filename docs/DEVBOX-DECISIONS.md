@@ -4418,6 +4418,34 @@ tree for it. Job `20261007220730-765aa172` returned `a3146b2f…`,
 335,856,114 bytes, and a new environment (`ccdf65f8…`, job
 `20261007220922-089ccf45`) built the same bytes again.
 
+D79. A call that meets a box waiting for its base snapshot is held, not
+refused (2026-10-08). After the reset deploy of `f69a2671a` to staging, the
+golden was being rebuilt, and all 600 execs of the first-run case
+`sandbox-exec-output` were refused `unavailable` with "the base snapshot is
+being rebuilt (about 30 s); the box starts when it is ready": the agent got
+a refusal to retry for a wait D66 already knows the end of. The box starts by
+itself once the build verifies, so the refusal was the wrong contract.
+
+The golden object records the step its build is at (`building` in its
+state: starting the base image, reading the base, fetching, installing and
+checking the tools, snapshotting the base), and its pending answer to a box
+carries `building: { step }` while a build is under way, `step` null before
+it begins; after a failed build it carries the build's words and no
+`building`. The box keeps that answer and returns it as its readiness. The
+box still arms no clock. The caller holds: the cf-backend sandbox lane
+(`readinessPastBase` in `sandbox-exec-lane.ts`) asks again every second while
+the readiness carries `building`, and its bound is the build's progress,
+never a total. Each new step re-arms 180 s, which is past the builder's own
+120 s give-up on its longest step and every fresh install measured in D66
+(31.2 s at most). A build that names no new step for 180 s is refused in the
+box's words with the step it stalled at; a failed build and every other
+pending answer are refused at once, as before; the call's own stop ends the
+hold. A notice the golden object fails to deliver is covered too: each ask
+asks the golden again, which answers `ready` once one is built.
+`cf-backend/tests/unit-sandbox-base-wait.test.ts` is red on the refusal and
+green held; `devbox/tests/golden.test.ts` and `golden-start.test.ts` pin the
+step the golden answers and the box passes on.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

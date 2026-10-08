@@ -74,6 +74,12 @@ test('a box with no golden to start from waits with the reason, arms no clock, a
   });
 });
 
+test('a box waiting for its base passes on the step the build is at, so its caller can tell it is moving', async () => {
+  const { box } = fresh([{ kind: 'pending', reason: 'the base snapshot is being rebuilt', building: { step: 'installing the tools' } }]);
+
+  expect(await box.resolveReadiness()).toEqual({ kind: 'pending', reason: 'the base snapshot is being rebuilt', building: { step: 'installing the tools' } });
+});
+
 test('a box evicted while it waits still starts when the golden object tells it; a destroyed one does not', async () => {
   // Release review: the wait lived in memory, so the golden object's one notice reached a successor that knew nothing.
   const ready: GoldenAnswer = { kind: 'ready', id: 'golden-1', tools: PIN };
