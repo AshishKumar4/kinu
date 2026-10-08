@@ -917,21 +917,28 @@ async function exceptionSamples(t: Telemetry, scope: readonly Filter[], entrypoi
     const entrypoint = event.$workers.entrypoint ?? '';
     const request = event.$metadata.requestId ?? '';
 
-    if (!entrypoints.has(entrypoint) || request === '' || samples.some((sample) => sample.entrypoint === entrypoint)) continue;
+    // A reset ends every call the object was serving, but only the invocation that met it logs its words: a sample
+    // without text gives way to a later one with it.
+    const held = samples.findIndex((sample) => sample.entrypoint === entrypoint);
+
+    if (!entrypoints.has(entrypoint) || request === '' || (held >= 0 && samples[held].message !== '')) continue;
     const logged = await t.sampleEvents([eq('$metadata.requestId', request), eq('$metadata.type', 'cf-worker')], 5);
     const message = logged.map((line) => line.$metadata.error ?? line.source.message ?? '').find((text) => text !== '') ?? '';
 
-    if (message === CODE_UPDATE_RESET) continue;
+    if (message === CODE_UPDATE_RESET || (held >= 0 && message === '')) continue;
     const own = event.$workers.durableObjectId ?? '';
     const trace = event.$metadata.traceId ?? '';
     const traced = own !== '' || trace === '' ? [] : await t.sampleEvents([eq('$metadata.traceId', trace), eq('$metadata.type', 'cf-worker-event')], 20);
 
-    samples.push({
+    const sample = {
       entrypoint,
       message,
       object: own !== '' ? own : traced.map((call) => call.$workers.durableObjectId ?? '').find((id) => id !== '') ?? '',
       request,
-    });
+    };
+
+    if (held >= 0) samples[held] = sample;
+    else samples.push(sample);
   }
 
   return samples;
