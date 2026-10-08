@@ -45,6 +45,12 @@ export interface SleepTimeLaneDeps {
   readonly workspace: string;
 }
 
+function idleReason(window: SleepTimeWindow | null): string {
+  if (window === null) return 'the lane is off';
+
+  return window.inputPending ? 'input pending' : 'no unprocessed turn';
+}
+
 export class SleepTimeLane {
   constructor(private readonly deps: SleepTimeLaneDeps) {}
 
@@ -114,15 +120,18 @@ export class SleepTimeLane {
       const settledAt = this.instant(SETTLED_AT);
 
       if (settledAt === null) return false;
+      const closedAt = this.instant(CLOSED_AT);
+      // Every timer tick reads this lane; only a tick at or past the lane's own wake was armed by it.
+      const woke = now >= (sleepTimeWakeAt({ settledAt, closedAt }) ?? Number.POSITIVE_INFINITY);
       const window = this.deps.config.getSleepTimeComputeEnabled() ? yield* this.window() : null;
 
       if (window === null || window.completedTurns < 2 || window.turns.length === 0 || window.inputPending) {
         this.deps.config.delete(SETTLED_AT);
 
+        if (woke) this.nothingDue(idleReason(window));
+
         return false;
       }
-
-      const closedAt = this.instant(CLOSED_AT);
 
       const due = sleepTimeDue({
         completedTurns: window.completedTurns,
@@ -131,11 +140,21 @@ export class SleepTimeLane {
         ...(closedAt !== null && { lastConnectionClosedMs: now - closedAt }),
       });
 
-      if (!due) return false;
+      if (!due) {
+        if (woke) this.nothingDue('the cadence is not due');
+
+        return false;
+      }
+
       yield* this.compute(window);
 
       return true;
     });
+  }
+
+  /** The lane's own wake found nothing to compress: a wake no model call or fact write accounts for. */
+  private nothingDue(reason: string): void {
+    diagnostics.event('memory.sleep_time_wake_idle', { workspace: this.deps.workspace, reason });
   }
 
   private arm(window: SleepTimeWindow): void {
