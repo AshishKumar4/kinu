@@ -63,9 +63,9 @@ beforeEach(() => {
   rmSync(file, { force: true });
 });
 
-afterAll(() => {
-  deployment.stop(true);
-  other.stop(true);
+afterAll(async () => {
+  await deployment.stop(true);
+  await other.stop(true);
 });
 
 async function run(step: 'capture' | 'owed' | 'restore', origin = ORIGIN) {
