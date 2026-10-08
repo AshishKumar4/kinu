@@ -11,7 +11,9 @@ export const PLAN = {
       'On the first call, write the full plan with one edit starting at line 1. After changes are requested, use the line numbers in the feedback turn to make targeted edits.',
       'Line numbers are one-indexed and inclusive; omit end to replace through the end of the plan. Do not implement after submission: end the turn and await the owner decision.',
     ].join('\n'),
-    input: v.strictObject({ edits: v.pipe(v.array(PlanEditSchema), v.minLength(1)) }),
+    input: v.strictObject({
+      edits: v.pipe(v.array(PlanEditSchema, 'a list of edits, each { start, end?, content }, sent as an array and not as text'), v.minLength(1)),
+    }),
     output: v.strictObject({ planId: v.string(), revision: v.number(), status: v.string(), message: v.string() }),
   }),
 } as const;

@@ -302,6 +302,8 @@ export class BackgroundJobRunner {
 
     const jobId = this.createJob(ownership?.jobId ?? newJobId(), { kind, input, mode, controller });
     this.deps.logActivity?.('bg_job_started', `${kind} -> ${jobId}`);
+    // In the detaching request's trace, so a call cancelled after its job took it over can be joined to the job.
+    diagnostics.event('jobs.detached', { jobId, kind });
     await this.beginDetachedWork(jobId, kind, promise, ownership);
 
     return { detached: true, jobId };
@@ -358,12 +360,12 @@ export class BackgroundJobRunner {
       try {
         await this.deps.fiber(`${BACKGROUND_FIBER_PREFIX}${kind}`, async (ctx) => {
           ctx.stash({ phase: 'running', jobId, kind });
-          let settled: boolean;
+          let status: string;
 
           try {
             await this.settleAndWake(jobId, exec);
             // A fenced write is a no-op (§5.3), so the store decides whether the job settled.
-            settled = this.deps.store.get(jobId)?.status !== 'running';
+            status = this.deps.store.get(jobId)?.status ?? 'missing';
           } catch (err) {
             // Must not reject: both fiber implementations delete their recovery row in `finally`.
             diagnostics.failure(
@@ -371,10 +373,11 @@ export class BackgroundJobRunner {
               toKinuError({ doing: 'settle a background job and wake the agent', cause: err, otherwise: 'io' }),
               { jobId },
             );
-            settled = this.failUnsettled(jobId, { cause: err });
+            status = this.failUnsettled(jobId, { cause: err }) ? 'failed' : 'running';
           }
 
-          ctx.stash({ phase: settled ? 'settled' : 'running', jobId, kind });
+          ctx.stash({ phase: status === 'running' ? 'running' : 'settled', jobId, kind });
+          diagnostics.event('jobs.ended', { jobId, kind, status });
         });
       } catch (cause) {
         diagnostics.failure(
