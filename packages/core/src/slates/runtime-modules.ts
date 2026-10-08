@@ -77,7 +77,6 @@ window.addEventListener("message", (event) => {
   if (fitted) resize(documentHeight());
 });
 
-let fonts = null;
 
 function applyContext() {
   const root = document.documentElement;
@@ -87,11 +86,6 @@ function applyContext() {
   const variables = context && context.styles ? context.styles.variables : undefined;
   if (variables && typeof variables === "object") {
     for (const [name, value] of Object.entries(variables)) root.style.setProperty(name, String(value));
-  }
-  const faces = context && context.styles && typeof context.styles.fonts === "string" ? context.styles.fonts : "";
-  if (faces !== "" && (fonts === null || fonts.textContent !== faces)) {
-    fonts ??= document.head.appendChild(document.createElement("style"));
-    fonts.textContent = faces;
   }
 }
 

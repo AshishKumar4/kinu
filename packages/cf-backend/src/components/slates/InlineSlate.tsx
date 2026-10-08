@@ -53,25 +53,6 @@ function readThemeTokens() {
 const browserOrigin = (): string =>
   'window' in globalThis && window.location !== undefined ? window.location.origin : '';
 
-const FONT_URL = /url\((["']?)([^"')]+)\1\)/g;
-
-/** The app's `@font-face` rules, their sources made absolute, so the frame sets its text in the chat's own faces. Read
- *  inside effects only, and only from this origin's sheets: another origin's rules cannot be read. */
-function readFontFaces(): string {
-  const faces: string[] = [];
-
-  for (const sheet of document.styleSheets) {
-    if (sheet.href !== null && new URL(sheet.href).origin !== window.location.origin) continue;
-    const base = sheet.href ?? window.location.href;
-
-    for (const rule of sheet.cssRules) {
-      if (rule instanceof CSSFontFaceRule) faces.push(rule.cssText.replace(FONT_URL, (_whole, quote: string, path: string) => `url(${quote}${new URL(path, base).href}${quote})`));
-    }
-  }
-
-  return faces.join("\n");
-}
-
 /** In the chat, a preview folds behind a later one of its slate, and while the panel shows it. */
 export function ChatSlates({ shownInPanel, children }: { shownInPanel: string | null; children: ReactNode }) {
   const inline = useContext(SlateInlineContext);
@@ -285,7 +266,6 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
   const context = useMemo(() => buildSlateHostContext({
     theme: theme.mode,
     variables: 'document' in globalThis ? readThemeTokens() : {},
-    fonts: 'document' in globalThis ? readFontFaces() : '',
     width: size.w,
     display,
     origin: browserOrigin(),

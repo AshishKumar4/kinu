@@ -6,7 +6,9 @@
 import { describe, expect, test } from 'bun:test';
 import { Effect } from 'effect';
 import type { Frame, Page } from 'puppeteer';
-import { SLATE_PAGE_PREAMBLE } from '@kinu.run/core';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { appFontFile, SLATE_FONTS_PATH, SLATE_PAGE_PREAMBLE } from '@kinu.run/core';
 import { SLATE_CLIENT_MODULE } from '@kinu.run/core/slates';
 import { detach } from '@kinu.run/core/obs';
 import { contrast, rgba, withGallery, type Rgba } from '../../scripts/gallery-harness';
@@ -42,6 +44,15 @@ async function servePage(page: Page): Promise<void> {
       return;
     }
 
+    // The app's faces, as a preview host serves them on its own origin.
+    const face = url.pathname.startsWith(SLATE_FONTS_PATH) ? appFontFile(url.pathname.slice(SLATE_FONTS_PATH.length)) : null;
+
+    if (face !== null) {
+      await request.respond({ status: 200, contentType: 'font/woff2', body: await readFile(join(FONTS, face)) });
+
+      return;
+    }
+
     const vendor = VENDOR.get(url.pathname);
 
     if (vendor !== undefined) {
@@ -53,6 +64,9 @@ async function servePage(page: Page): Promise<void> {
     await request.respond({ status: 200, contentType: 'text/html', body: PAGE.replace('<html>', `<html>${SLATE_PAGE_PREAMBLE}`) });
   })));
 }
+
+/** The files the app ships, which ASSETS serves on the deployment. */
+const FONTS = join(import.meta.dir, '../../packages/cf-backend/public/assets/fonts');
 
 const CARD = '[data-slate-inline="pg-a1/redemptions"]';
 

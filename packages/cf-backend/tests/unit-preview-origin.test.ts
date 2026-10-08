@@ -16,6 +16,7 @@ import {
   previewHostSuffix,
   previewSuffixMetaName,
   buildWorkspacePreviewHost,
+  APP_FONTS_PATH, appFontFile, SLATE_FONTS_PATH,
 } from '@kinu.run/core';
 import { publicHtmlHeaders, withAppSecurityHeaders } from '@kinu.run/core';
 import { PROVIDER_PROXY_PATH, USER_AI_PROXY_PATH, USER_AI_RUN_PATH } from '@kinu.run/core';
@@ -727,14 +728,15 @@ describe('what the app is willing to frame', () => {
   });
 });
 
-/** One request through the Worker's own entry, with only the bindings a routing decision reads. */
-async function served(url: string, zone: Partial<Env>, headers: Record<string, string> = {}): Promise<Response> {
+/** One request through the Worker's own entry, with only the bindings a routing decision reads; `assets` answers the asset
+ *  binding, the app document unless a test asks what it was asked. */
+async function served(url: string, zone: Partial<Env>, headers: Record<string, string> = {}, assets?: (request: Request) => Response): Promise<Response> {
   const env: Partial<Env> = {};
   Object.assign(env, zone, {
     AUTH_KV: makeKv(),
     CLI_PUBLIC_ORIGIN: APP,
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-    ASSETS: { fetch: async () => new Response('<!doctype html><head></head>', { headers: { 'content-type': 'text/html' } }) },
+    ASSETS: { fetch: async (request: Request) => assets?.(request) ?? new Response('<!doctype html><head></head>', { headers: { 'content-type': 'text/html' } }) },
     KinuDevbox: CONTAINERS.KinuDevbox,
   });
 
@@ -1015,6 +1017,26 @@ describe('worker wiring', () => {
       expect(answer.status).toBe(404);
       expect(answer.headers.get('content-security-policy')).toBe(`sandbox ${PREVIEW_SANDBOX}`);
     }
+  });
+
+  test('a preview host serves the app\'s own faces on its own origin, and none of its other files', async () => {
+    const asked: string[] = [];
+
+    const assets = (request: Request): Response => {
+      asked.push(new URL(request.url).pathname);
+
+      return new Response('face');
+    };
+
+    const face = present(appFontFile('schibsted-latin-var.woff2'), 'a face the app ships');
+    const answer = await served(`https://probe.${SUFFIX}${SLATE_FONTS_PATH}${face}`, ZONE, {}, assets);
+
+    expect([answer.status, await answer.text()]).toEqual([200, 'face']);
+    expect(asked).toEqual([`${APP_FONTS_PATH}${face}`]);
+
+    // Any other name under the path is a preview's own, never an app asset.
+    expect((await served(`https://probe.${SUFFIX}${SLATE_FONTS_PATH}kinu-icon.svg`, ZONE, {}, assets)).status).toBe(404);
+    expect(asked).toHaveLength(1);
   });
 
   test('no route on the app host serves previews', async () => {

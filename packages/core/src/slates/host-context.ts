@@ -16,8 +16,7 @@ export const SLATE_THEME_TOKENS = [
 
 export interface SlateHostContext {
   readonly theme: 'dark' | 'light';
-  /** `fonts` is the app's `@font-face` rules with absolute URLs, so a slate sets its text in the chat's own faces. */
-  readonly styles: { readonly variables: Readonly<Record<string, string>>; readonly fonts?: string };
+  readonly styles: { readonly variables: Readonly<Record<string, string>> };
   readonly containerDimensions: { readonly width: number; readonly height?: number };
   readonly display: 'inline' | 'pane';
   readonly origin: string;
@@ -52,7 +51,6 @@ export function isSlateFrameMessage(
 export function buildSlateHostContext(input: {
   readonly theme: 'dark' | 'light';
   readonly variables: Record<string, string>;
-  readonly fonts?: string;
   readonly width: number;
   readonly height?: number;
   readonly display: 'inline' | 'pane';
@@ -60,7 +58,7 @@ export function buildSlateHostContext(input: {
 }): SlateHostContext {
   const context: SlateHostContext = {
     theme: input.theme,
-    styles: input.fonts === undefined || input.fonts === '' ? { variables: input.variables } : { variables: input.variables, fonts: input.fonts },
+    styles: { variables: input.variables },
     containerDimensions: input.height === undefined
       ? { width: input.width }
       : { width: input.width, height: input.height },

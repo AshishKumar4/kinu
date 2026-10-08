@@ -29,7 +29,6 @@ import type { Page } from 'puppeteer';
 import { build } from 'vite';
 import * as v from 'valibot';
 import { renderThrownChain, tolerate, detach } from '@kinu.run/core/obs';
-import { appAssetCorsHeaders } from '@kinu.run/core';
 import { releaseScratch, scratchDir, SCRATCH_ROOT_PREFIX } from '../packages/test-utils/src/scratch';
 import { declaredSettings } from './browser-declarations';
 import { SILENCE_NOTICE_ENV } from './deadline';
@@ -446,8 +445,7 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, opt
     });
 
     if (bytes === null) return;
-    // The app's faces are read by a slate's page on another origin, as the deployed app serves them.
-    response.writeHead(200, { 'content-type': builtAssetContentType(file), 'content-length': String(bytes.byteLength), ...appAssetCorsHeaders(pathname) });
+    response.writeHead(200, { 'content-type': builtAssetContentType(file), 'content-length': String(bytes.byteLength) });
     response.end(request.method === 'HEAD' ? undefined : bytes);
   })));
 

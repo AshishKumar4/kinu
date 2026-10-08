@@ -2159,7 +2159,7 @@ export { PRIVATE_NO_STORE, publicHtmlHeaders, withAppSecurityHeaders } from './h
 
 export { desktopClientUrl } from './http/desktop-client';
 
-export { appAssetCorsHeaders, serveApp } from './http/app-shell';
+export { serveApp } from './http/app-shell';
 
 export { ingressAdmission, ingressAdmitted, ingressDenied, peerIp, type IngressAdmission } from './http/ingress-budget';
 
@@ -2191,6 +2191,8 @@ export {
 export { THEME_CSS, THEME_TOKENS, type Mode, type PublicToken, type RadiusRole, type TokenSet } from './web/theme';
 
 export { SLATE_IMPORT_MAP, SLATE_PAGE_HEAD, SLATE_PAGE_PREAMBLE } from './web/slate-page';
+
+export { APP_FONTS_PATH, appFontFile, SLATE_FONTS_PATH } from './web/fonts';
 
 export {
   approvalDocument, authDocument, installDocument, loginDocument, type BuiltinSignIn, type LoginProvider,

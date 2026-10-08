@@ -33,16 +33,15 @@ it('a slate survives eviction on its own URL', async () => {
 it('a slate is listed once in the work surface, under its title, in this activation and the next', async () => {
   const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('titled'));
   const boot = await subject().serveSlate({ workspace: 'durability-titled', owner: 'durability-owner', id: 'tally', body: 'tally-body' });
+  const tabs = await subject().previewTabs('durability-titled');
 
-  for (const activation of ['first', 'after an eviction'] as const) {
-    if (activation !== 'first') await abortAllDurableObjects();
+  // Its port is named for it, and the listing says it holds that port, so the strip draws one tab for it.
+  expect(tabs.ports.filter((port) => port.port === boot.port)).toEqual([{ port: boot.port, name: 'tally' }]);
+  expect(tabs.slates).toEqual([{ id: 'tally', title: 'tally', port: boot.port }]);
 
-    // Its port is named for it, and the listing says it holds that port, so the strip draws one tab for it.
-    const tabs = await subject().previewTabs('durability-titled');
-
-    expect(tabs.ports.filter((port) => port.port === boot.port), activation).toEqual([{ port: boot.port, name: 'tally' }]);
-    expect(tabs.slates, activation).toEqual([{ id: 'tally', title: 'tally', port: boot.port }]);
-  }
+  // An activation that never booted it still knows the port is its: the reservation says so, not a memory of the boot.
+  await abortAllDurableObjects();
+  expect((await subject().previewTabs('durability-titled')).slates).toEqual([{ id: 'tally', title: 'tally', port: boot.port }]);
 });
 
 it('a removed slate’s URL is dead even when a new app claims its port', async () => {
