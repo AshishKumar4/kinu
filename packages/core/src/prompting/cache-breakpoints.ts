@@ -1,6 +1,6 @@
 /**
  * Prompt-cache breakpoints: a closed provider-id → strategy map and pure marker placement, applied by both backends
- * at assembly (Workers AI affinity is set at model construction, `agentAffinityKey`). Anthropic layout (hermes
+ * at assembly (Workers AI affinity is set at model construction, `actorAffinity`). Anthropic layout (hermes
  * `system_and_3`, in the 4-breakpoint cap): last tool, end of system, and two rolled onto the tail every step, so
  * each request reads the previous one's prefix. The strategy's one TTL marks all of them: Anthropic refuses a TTL
  * that rises along tools → system → messages.
@@ -9,7 +9,6 @@ import type { ModelMessage, SystemModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
 import { DEFAULT_CACHE_RETENTION, type CacheRetention } from '../providers/types';
 import { ANTHROPIC_MAX_BREAKPOINTS } from '../providers/anthropic';
-import { compatOptionsKey } from '../providers/effort';
 import { gatewayWire } from '../providers/wire-model';
 
 /** The AI SDK's provider-options bag (not re-exported by `ai` itself). */
@@ -21,11 +20,13 @@ export type PromptCacheStrategy =
   /** workers-ai uses affinity headers; unknown providers. */
   | { kind: 'none' }
   | { kind: 'anthropic'; ttl?: '1h' }
-  /** Typed `promptCacheKey`, serialized as `prompt_cache_key`. */
-  | { kind: 'openai-cache-key'; ttl?: '24h' }
-  /** `prompt_cache_key` via the provider's options namespace. `markers` adds `cache_control`
-     *  breakpoints through `openaiCompatible` metadata for Claude models (OpenRouter passes them through). */
-  | { kind: 'openai-compat'; bodyNamespace: string; markers: boolean; ttl?: '1h' };
+  /** OpenAI caches a request's prefix by itself, routed by its first tokens: no key, so every conversation and workspace
+   *  sharing the static prompt shares its cache (the owner, 2026-10-08); ChatGPT's backend routes on the conversation's
+   *  session header instead (codex.ts `chatgptSessionHeaders`). `ttl` asks for the extended retention. */
+  | { kind: 'openai-prefix'; ttl?: '24h' }
+  /** OpenAI-compatible: prefix caching, plus `cache_control` breakpoints through `openaiCompatible` metadata when
+   *  `markers` (Claude models, which OpenRouter passes them through to). */
+  | { kind: 'openai-compat'; markers: boolean; ttl?: '1h' };
 
 const TAIL_BREAKPOINTS = ANTHROPIC_MAX_BREAKPOINTS - 2;
 
@@ -77,11 +78,11 @@ export function resolvePromptCacheStrategy(
       return { kind: 'anthropic', ttl: '1h' };
 
     case 'chatgpt':
-      return { kind: 'openai-cache-key' };
+      return { kind: 'openai-prefix' };
 
     case 'openai':
     case 'codex': {
-      const strategy: Extract<PromptCacheStrategy, { kind: 'openai-cache-key' }> = { kind: 'openai-cache-key' };
+      const strategy: Extract<PromptCacheStrategy, { kind: 'openai-prefix' }> = { kind: 'openai-prefix' };
 
       if (long) strategy.ttl = '24h';
 
@@ -91,9 +92,7 @@ export function resolvePromptCacheStrategy(
     case 'openrouter': {
       const markers = ANTHROPIC_MODEL_ID.test(modelId ?? '');
 
-      const strategy: Extract<PromptCacheStrategy, { kind: 'openai-compat' }> = {
-        kind: 'openai-compat', bodyNamespace: 'openrouter', markers,
-      };
+      const strategy: Extract<PromptCacheStrategy, { kind: 'openai-compat' }> = { kind: 'openai-compat', markers };
 
       if (long && markers) strategy.ttl = '1h';
 
@@ -104,18 +103,18 @@ export function resolvePromptCacheStrategy(
     case 'my-gateway': {
       const wire = gatewayWire(modelId ?? '');
 
-      if (wire.protocol === 'chat-completions') return { kind: 'openai-compat', bodyNamespace: providerId, markers: false };
+      if (wire.protocol === 'chat-completions') return { kind: 'openai-compat', markers: false };
 
       return resolvePromptCacheStrategy(wire.protocol === 'messages' ? 'anthropic' : 'openai', wire.modelId, retention);
     }
 
     case 'ai-gateway':
-      return { kind: 'openai-compat', bodyNamespace: providerId, markers: false };
+      return { kind: 'openai-compat', markers: false };
 
     case undefined:
     default:
       if (providerId === 'openai-compat' || providerId?.startsWith('openai-compat:')) {
-        return { kind: 'openai-compat', bodyNamespace: providerId, markers: false };
+        return { kind: 'openai-compat', markers: false };
       }
 
       return { kind: 'none' };
@@ -132,7 +131,7 @@ function promptCacheLifetimeMs(providerId?: string, modelId?: string, retention:
 
   if (strategy.kind === 'anthropic') return strategy.ttl === '1h' ? 60 * MINUTE_MS : 5 * MINUTE_MS;
 
-  if (strategy.kind === 'openai-cache-key') return strategy.ttl === '24h' ? 24 * 60 * MINUTE_MS : 60 * MINUTE_MS;
+  if (strategy.kind === 'openai-prefix') return strategy.ttl === '24h' ? 24 * 60 * MINUTE_MS : 60 * MINUTE_MS;
 
   if (strategy.kind === 'openai-compat' && strategy.markers) return strategy.ttl === '1h' ? 60 * MINUTE_MS : 5 * MINUTE_MS;
 
@@ -323,33 +322,15 @@ export function markCacheTail(messages: ReadonlyArray<ModelMessage>, strategy: P
   return next;
 }
 
-/** Request-level options routing the cache by a stable per-conversation key. */
-export function promptCacheOptions(strategy: PromptCacheStrategy, sessionKey: string): ProviderOptions | undefined {
-  if (!sessionKey) return undefined;
-
-  switch (strategy.kind) {
-    case 'openai-cache-key':
-      {
-        const openai: NonNullable<ProviderOptions['openai']> = { promptCacheKey: sessionKey };
-
-        if (strategy.ttl !== undefined) openai.promptCacheRetention = strategy.ttl;
-
-        return { openai };
-      }
-
-    case 'openai-compat':
-      return { [compatOptionsKey(strategy.bodyNamespace)]: { prompt_cache_key: sessionKey } };
-    case 'anthropic':
-    case 'none':
-      return undefined;
-  }
+/** Request-level cache options: OpenAI's extended retention when asked for, and nothing else. */
+export function promptCacheOptions(strategy: PromptCacheStrategy): ProviderOptions | undefined {
+  return strategy.kind === 'openai-prefix' && strategy.ttl !== undefined ? { openai: { promptCacheRetention: strategy.ttl } } : undefined;
 }
 
 export interface PromptCachePlanInput {
   providerId?: string;
   modelId?: string;
   system: string;
-  sessionKey: string;
   /** Default `short`. */
   retention?: CacheRetention;
 }
@@ -381,7 +362,7 @@ export function applyCacheBreakpoints(input: CacheBreakpointInput): CacheBreakpo
     tools: withLastToolMarked(input.tools, strategy),
   };
 
-  const providerOptions = promptCacheOptions(strategy, input.sessionKey);
+  const providerOptions = promptCacheOptions(strategy);
 
   if (providerOptions !== undefined) plan.providerOptions = providerOptions;
 

@@ -154,6 +154,7 @@ function planSpent() {
   const model = provider.createModel('gpt-6.1-sol', {
     env: {},
     sessionAffinity: 'kinu-test',
+    workspaceAffinity: 'kinu-test',
     fetch: asFetchFunction(async () => Response.json(
       { error: { code: 'subscription_sharing_usage_limit_exceeded', message: 'usage limit reached', param: null, type: 'rate_limit_error' } },
       { status: 429 },

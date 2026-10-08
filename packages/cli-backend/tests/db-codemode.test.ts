@@ -54,9 +54,9 @@ function sandbox(): Sandbox {
         runId: () => WORKSPACE_RUN_ID,
       });
 
-      // `extraProviders` is the production seam for codemode namespaces; `surface.providers` takes executors.
-      const factory = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), extraProviders: [createDbCodemodeProvider(store)] });
-      const tool = factory({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [], providers: [] });
+      // `namespaces` is the production seam: the one list `actorNamespaces` builds, executors included.
+      const factory = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), namespaces: [createDbCodemodeProvider(store)] });
+      const tool = factory({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [] });
 
       return toolExecute(tool)({ code });
     },

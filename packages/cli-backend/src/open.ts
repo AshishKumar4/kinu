@@ -1,8 +1,7 @@
 import { Effect } from 'effect';
 import type { LLMProviderConfig } from '@kinu.run/core';
 import {
-  initWorkspaceSchema, initActorStateSchema, summarizeSoul,
-  getCurrentScaffoldVersion, memoryBytes,
+  agentStatusFacts, initWorkspaceSchema, initActorStateSchema, memoryBytes,
 } from '@kinu.run/core';
 import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql, soulIn, waitOnSharedWrites, type CLIRuntime } from './runtime';
 import type { LocalCloudSession, LocalProviderCredentials } from './model-resolver';
@@ -64,15 +63,9 @@ export function openWorkspaceCLI(
 
     const rt = createCLIRuntime(db, { ...config, agentName: identity.name });
 
-    // The workspace's SOUL.md, in its own space: its agents edit it, and may have emptied it.
-    const soul = soulIn(rt.space) ?? '';
-
-    // The live version, scoped to `rt.actor`: a facet opens as its own actor, and
-    // the scaffold pointer is per-actor.
-    const scaffoldVersion = getCurrentScaffoldVersion(sql, rt.actor) ?? 0;
-
-    const searchNodeCount = sql<{ c: number }>`
-      SELECT COUNT(*) as c FROM search_nodes WHERE actor_id = ${rt.actor.actorId}`[0]?.c ?? 0;
+    // The status fold every backend shares, scoped to `rt.actor` (a facet opens as its own actor), over the workspace's
+    // SOUL.md in its own space: its agents edit it, and may have emptied it.
+    const { purpose, soul, scaffoldVersion, searchNodeCount } = agentStatusFacts(sql, rt.actor, soulIn(rt.space), identity.name);
 
     const memorySize = yield* Effect.promise(async () => memoryBytes(rt.agentStateVfs ?? rt.storage.vfs));
 
@@ -81,7 +74,7 @@ export function openWorkspaceCLI(
       info: {
         id: identity.id,
         name: identity.name,
-        purpose: summarizeSoul(soul),
+        purpose,
         soul,
         scaffoldVersion,
         searchNodeCount,

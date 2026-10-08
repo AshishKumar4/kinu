@@ -135,7 +135,7 @@ const ROUTES = [
 /** A signed-in session whose model is the plan route, its window 100k tokens as the catalog says. */
 function planSession(route: (typeof ROUTES)[number], backend: ReturnType<typeof planBackend>) {
   const deps: ModelCallDeps = {
-    env: {}, sessionAffinity: SESSION, fetch: backend.fetch,
+    env: {}, sessionAffinity: SESSION, workspaceAffinity: SESSION, fetch: backend.fetch,
     getAuth: async (key) => (key === route.key ? { headers: { Authorization: 'Bearer plan' } } : null),
     hasCredential: async (key) => key === route.key,
   };

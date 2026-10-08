@@ -41,7 +41,7 @@ async function sentPrompt(provider: string, accepts?: ReadonlySet<ModelInputModa
 
   const registry = createProviderRegistry();
   registry.register({ id: 'probe', isAvailable: () => true, listModels: () => [], createModel: (): LanguageModel => model });
-  const deps: ModelCallDeps = { env: {}, sessionAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false };
+  const deps: ModelCallDeps = { env: {}, sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false };
   const resolved = registry.resolve('probe/m', deps);
 
   await generateText({ model: accepts === undefined ? resolved : withToolResultImages(resolved, accepts), messages: HISTORY });

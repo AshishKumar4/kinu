@@ -1,7 +1,8 @@
-/** A turn the person did not type, drawn as its card. */
-import { useState } from "react";
+/** A turn the person did not type, drawn as quiet event rows: one line each, open on a click, repeats folded. */
+import { useState, type ReactNode } from "react";
 import {
-  CaretDownIcon, CaretRightIcon, CheckCircleIcon, ClockIcon, EyeIcon, GearSixIcon, LightningIcon, ProhibitIcon, WarningCircleIcon,
+  CaretRightIcon, CheckCircleIcon, ClockIcon, EyeIcon, GearSixIcon, LightningIcon, ProhibitIcon, WarningCircleIcon,
+  type Icon,
 } from "@phosphor-icons/react";
 import {
   ADVISOR_SEVERITY_LABEL, eventSourceLabel, eventVariantLabel, MAIN_AGENT, parseDrainedEvents,
@@ -10,203 +11,205 @@ import {
 
 export type CardState = SignalCard["state"];
 
-function ShownCaption({ state }: { state: CardState }) {
+/** Whether the agent has been shown the event yet, as a mark: the words sit in its title. */
+function DeliveryMark({ state }: { state: CardState }) {
+  const said = state === "pending" ? "Waiting to be shown to the agent" : "Shown to the agent";
+  const Mark = state === "pending" ? ClockIcon : EyeIcon;
+
   return (
-    <>
-      <span aria-hidden>·</span>
-      <span>{state === "pending" ? "to be shown to the agent" : "shown to the agent"}</span>
-    </>
+    <span className="inline-flex items-center" title={said} data-delivery={state}>
+      <Mark size={11} aria-hidden />
+      <span className="sr-only">{said}</span>
+    </span>
   );
+}
+
+interface EventRowProps {
+  readonly icon: Icon;
+  readonly tone: string;
+  /** What happened, short: "Agent report", "Background job". */
+  readonly label: ReactNode;
+  /** Who or what it came from. */
+  readonly source?: ReactNode;
+  /** The event's words: one line until opened. */
+  readonly body: string;
+  readonly state?: CardState;
+  /** The same event this many times in a row, drawn once. */
+  readonly count?: number;
+  readonly badge?: ReactNode;
+  /** Open from the start: what blocks the agent is not folded away. */
+  readonly open?: boolean;
+  /** One control beside the row, outside its toggle: a link to the agent the event is about. */
+  readonly action?: ReactNode;
+  readonly hooks?: Readonly<Record<`data-${string}`, string | undefined>>;
+}
+
+/** One event in a chat, in the chat's own row language: an icon, what happened, from whom, its words, a caret. */
+export function EventRow({ icon: Mark, tone, label, source, body, state, count = 1, badge, open: opened = false, action, hooks }: EventRowProps) {
+  const [open, setOpen] = useState(opened);
+
+  return (
+    <div className="flex items-start animate-fade-in" {...hooks}>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className="grid min-w-0 flex-1 cursor-pointer grid-cols-[20px_minmax(0,1fr)_auto_auto] items-baseline gap-2 rounded-md px-3 py-1 text-left transition-colors hover:bg-[var(--c-elevated)]"
+      >
+        <span className="flex size-5 items-center justify-center self-center">
+          <Mark size={11} weight="fill" className={tone} aria-hidden />
+        </span>
+        <span className="flex min-w-0 items-baseline gap-2">
+          {/* Gives way before the words do: on a phone a long sender left the event's words no room. */}
+          <span data-event-source className="min-w-0 max-w-[55%] shrink overflow-hidden text-ellipsis whitespace-nowrap p-row-text font-medium p-text-2">
+            {label}
+            {source !== undefined && <span className="ml-1.5 font-normal p-text-3">{source}</span>}
+          </span>
+          {badge}
+          <span data-event-brief className={`min-w-0 flex-1 p-row-text p-text-3 ${open ? "whitespace-pre-wrap break-words" : "truncate"}`}>
+            {body}
+          </span>
+        </span>
+        <span className="flex shrink-0 items-center gap-1.5 self-center p-meta p-text-4">
+          {count > 1 && <span className="tabular-nums" data-event-repeats={count}>×{count}</span>}
+          {state !== undefined && <DeliveryMark state={state} />}
+        </span>
+        <CaretRightIcon size={10} aria-hidden className={`shrink-0 self-center p-text-4 transition-transform duration-150 ${open ? "rotate-90" : ""}`} />
+      </button>
+      {action}
+    </div>
+  );
+}
+
+/** Runs of the same thing in a row, each drawn once with how many times it came. */
+export function foldRepeats<T>(items: readonly T[], keyOf: (item: T) => string): { item: T; count: number }[] {
+  const folded: { item: T; key: string; count: number }[] = [];
+
+  for (const item of items) {
+    const key = keyOf(item);
+    const last = folded.at(-1);
+
+    if (last?.key === key) last.count += 1;
+    else folded.push({ item, key, count: 1 });
+  }
+
+  return folded.map(({ item, count }) => ({ item, count }));
 }
 
 function backgroundEventMeta(status: string) {
-  if (status === "completed") return { Icon: CheckCircleIcon, tone: "p-success", verb: "completed" };
+  if (status === "completed") return { icon: CheckCircleIcon, tone: "p-success", verb: "completed" };
 
-  if (status === "cancelled") return { Icon: ProhibitIcon, tone: "p-text-3", verb: "was cancelled" };
+  if (status === "cancelled") return { icon: ProhibitIcon, tone: "p-text-3", verb: "was cancelled" };
 
-  return { Icon: WarningCircleIcon, tone: "p-danger", verb: "failed" };
+  return { icon: WarningCircleIcon, tone: "p-danger", verb: "failed" };
 }
 
-function BackgroundEventCard({ kind, status, state }: { kind: string; status: string; state: CardState }) {
-  const meta = backgroundEventMeta(status);
+const drainedKey = (event: DrainedEvent): string => JSON.stringify([event.variant, event.source, event.brief, event.replyExpected]);
 
-  return (
-    <div className="animate-fade-in">
-      <div className="flex w-full items-baseline gap-2.5 rounded-lg border border-[rgba(224,164,88,.25)] bg-[rgba(224,164,88,.05)] px-4 py-2.5">
-        <span className="shrink-0 p-t-status p-accent">System</span>
-        <div className="min-w-0 flex-1 p-row-text p-text-2 opacity-80">
-          Background <span className="p-annotation">{kind}</span> task {meta.verb}
-          <span className="ml-1 inline-flex items-center gap-1 p-text-3"><ShownCaption state={state} /></span>
-        </div>
-        <meta.Icon size={12} className={`shrink-0 ${meta.tone}`} weight="fill" />
-      </div>
-    </div>
-  );
-}
-
-function DrainedEventRow({ event }: { event: DrainedEvent }) {
-  const [expanded, setExpanded] = useState(false);
-
-  return (
-    <button
-      type="button"
-      onClick={() => setExpanded(!expanded)}
-      className="w-full rounded-md px-2 py-2 text-left transition-colors hover:p-elevated"
-      data-drained-event={event.variant}
-      data-reply-expected={event.replyExpected || undefined}
-    >
-      <div className="flex items-center gap-1.5 p-row-text">
-        <span className="shrink-0 font-medium p-text-2">{eventVariantLabel(event.variant)}</span>
-        <span className="min-w-0 truncate p-text-3">{eventSourceLabel(event.source)}</span>
-        {event.replyExpected && (
-          <span className="shrink-0 rounded-sm px-1 py-0.5 p-badge-warning" title="The sender is waiting on the agent's reply">
-            reply expected
-          </span>
-        )}
-        <span className="ml-auto shrink-0 p-text-3">
-          {expanded ? <CaretDownIcon size={10} /> : <CaretRightIcon size={10} />}
-        </span>
-      </div>
-      <div className={`mt-0.5 p-row-text p-text-2 opacity-80 ${expanded ? "whitespace-pre-wrap break-words" : "truncate"}`}>
-        {event.brief}
-      </div>
-    </button>
-  );
-}
-
-/** The operator did not type drained events, so they never wear the user bubble. */
-function DrainedEventsCard({ text, state }: { text: string; state: CardState }) {
+/** The events the agent was handed in one batch, one row each; the same event twice in a row is one row. */
+function DrainedEvents({ text, state, count }: { text: string; state: CardState; count: number }) {
   const events = parseDrainedEvents(text);
 
-  return (
-    <div className="animate-fade-in">
-      <div className="w-full rounded-lg border border-[rgba(224,164,88,.25)] bg-[rgba(224,164,88,.05)] px-4 py-2.5">
-        <div className="flex items-baseline gap-2.5 p-row-text">
-          <LightningIcon size={11} className={`shrink-0 ${state === "pending" ? "p-text-4" : "p-accent"}`} weight="fill" />
-          <span className="shrink-0 font-semibold p-accent">System</span>
-          <span className="p-text-3"><ShownCaption state={state} /></span>
-          {events.length > 1 && <span className="ml-auto shrink-0 p-text-3 tabular-nums">{events.length} events</span>}
-        </div>
-        <div className="mt-1.5 divide-y divide-dashed divide-[var(--c-dash)]">
-          {events.length > 0
-            ? events.map((event, i) => <DrainedEventRow key={i} event={event} />)
-            /* Format drift: show what the agent was given rather than nothing. */
-            : <div className="p-row-text p-text-2 opacity-80 whitespace-pre-wrap break-words">{text}</div>}
-        </div>
-      </div>
-    </div>
-  );
-}
+  // Format drift: show what the agent was given rather than nothing.
+  if (events.length === 0) {
+    return <EventRow icon={LightningIcon} tone="p-accent" label="System" body={text} state={state} count={count} />;
+  }
 
-/** Approved commands have not executed yet (the agent re-issuing them runs them), so never "ran". */
-function DeferredApprovalCard({ decision, count, state }: {
-  decision: string; count: number; state: CardState;
-}) {
-  const approved = decision === "approved";
-  const Icon = approved ? CheckCircleIcon : ProhibitIcon;
-
-  return (
-    <div className="flex justify-center animate-fade-in py-1">
-      <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full p-elevated border p-border p-row-text p-text-2">
-        <Icon size={13} className={approved ? "p-success" : "p-text-3"} weight="fill" />
-        <span>
-          You <span className="font-medium p-text">{approved ? "approved" : "denied"}</span>{" "}
-          {count} queued command{count === 1 ? "" : "s"}
-        </span>
-        <span className="flex items-center gap-1 p-text-3"><ShownCaption state={state} /></span>
-        <ClockIcon size={11} className="p-text-3" />
-      </div>
-    </div>
-  );
-}
-
-function SystemEventCard({ label = "System", event, text, state }: {
-  label?: string; event: string; text: string; state: CardState;
-}) {
-  const [expanded, setExpanded] = useState(false);
-
-  return (
-    <div className="animate-fade-in" data-system-event={event}>
-      <div className="w-full rounded-lg border border-[rgba(224,164,88,.25)] bg-[rgba(224,164,88,.05)] px-4 py-2.5">
-        <button
-          type="button"
-          onClick={() => setExpanded(!expanded)}
-          className="w-full flex items-baseline gap-2.5 text-left p-row-text"
-          aria-expanded={expanded}
-        >
-          <GearSixIcon size={11} className="shrink-0 p-accent" weight="fill" />
-          <span className="shrink-0 font-semibold p-accent">{label}</span>
-          <span className="p-text-4">{event.replace(/_/g, " ")}</span>
-          <span className="p-text-3"><ShownCaption state={state} /></span>
-          <span className="ml-auto shrink-0 p-text-3">
-            {expanded ? <CaretDownIcon size={10} /> : <CaretRightIcon size={10} />}
-          </span>
-        </button>
-        <div className={`mt-1 p-row-text p-text-2 opacity-80 ${expanded ? "whitespace-pre-wrap break-words" : "truncate"}`}>
-          {text}
-        </div>
-      </div>
-    </div>
-  );
+  return foldRepeats(events, drainedKey).map(({ item: event, count: repeats }, index) => (
+    <EventRow
+      key={index}
+      icon={LightningIcon}
+      tone={state === "pending" ? "p-text-4" : "p-accent"}
+      label={eventVariantLabel(event.variant)}
+      source={eventSourceLabel(event.source)}
+      body={event.brief}
+      state={state}
+      count={repeats * count}
+      badge={event.replyExpected && (
+        <span className="shrink-0 rounded-sm px-1 p-meta p-badge-warning" title="The sender is waiting on the agent's reply">reply expected</span>
+      )}
+      hooks={{ "data-drained-event": event.variant, "data-reply-expected": event.replyExpected ? "" : undefined }}
+    />
+  ));
 }
 
 const ADVISOR_TONES = {
-  nit: { panel: "border p-border p-elevated", icon: "p-text-3", badge: "p-badge-neutral" },
-  concern: { panel: "p-notice-warning", icon: "p-warning", badge: "p-badge-warning" },
-  blocker: { panel: "p-notice-danger", icon: "p-danger", badge: "p-badge-danger" },
-} satisfies Record<AdvisorSeverity, { panel: string; icon: string; badge: string }>;
-
-function AdvisorCard({ severity, text, state }: {
-  severity: AdvisorSeverity; text: string; state: CardState;
-}) {
-  const tone = ADVISOR_TONES[severity];
-
-  return (
-    <div className="flex justify-center animate-fade-in py-1" data-advisor-severity={severity}>
-      <div className={`w-full max-w-[85%] rounded-xl px-3 py-2 ${tone.panel}`}>
-        <div className="flex items-center gap-1.5 p-meta p-text-3">
-          <EyeIcon size={11} className={`shrink-0 ${tone.icon}`} weight="fill" />
-          <span className="font-medium p-text-2">Advisor</span>
-          <span className={`px-1.5 ${tone.badge}`}>{ADVISOR_SEVERITY_LABEL[severity]}</span>
-          <ShownCaption state={state} />
-        </div>
-        <div className="mt-1 p-row-text p-text-2 whitespace-pre-wrap break-words">{text}</div>
-      </div>
-    </div>
-  );
-}
+  nit: { icon: "p-text-3", badge: "p-badge-neutral" },
+  concern: { icon: "p-warning", badge: "p-badge-warning" },
+  blocker: { icon: "p-danger", badge: "p-badge-danger" },
+} satisfies Record<AdvisorSeverity, { icon: string; badge: string }>;
 
 interface TurnCardProps {
   turn: ClassifiedProgrammaticTurn; text: string; state: CardState;
+  /** The same turn this many times in a row, drawn once. */
+  count?: number | undefined;
 }
 
-/** The workspace's own opening turn is provenance and draws nothing; every other card says where its signal is. */
+/** The workspace's own opening turn is provenance and draws nothing; every other says what happened and whether the agent saw it. */
 export function ProgrammaticTurnCard(props: TurnCardProps) {
   if (props.turn.kind === "workspace_created") return null;
 
   return <div data-signal-card={props.state}><TurnCard {...props} /></div>;
 }
 
-function TurnCard({ turn, text, state }: TurnCardProps) {
+function TurnCard({ turn, text, state, count = 1 }: TurnCardProps) {
   if (turn.kind === "background_job") {
-    return <BackgroundEventCard kind={turn.jobKind} status={turn.status} state={state} />;
+    const meta = backgroundEventMeta(turn.status);
+
+    return <EventRow icon={meta.icon} tone={meta.tone} label="Background job" body={`${turn.jobKind} task ${meta.verb}`} state={state} count={count} />;
   }
 
   if (turn.kind === "deferred_approval") {
-    return <DeferredApprovalCard decision={turn.decision} count={turn.count} state={state} />;
+    const approved = turn.decision === "approved";
+
+    // Approved commands have not executed yet (the agent re-issuing them runs them), so never "ran".
+    return (
+      <EventRow
+        icon={approved ? CheckCircleIcon : ProhibitIcon}
+        tone={approved ? "p-success" : "p-text-3"}
+        label={`You ${approved ? "approved" : "denied"}`}
+        body={`${String(turn.count)} queued command${turn.count === 1 ? "" : "s"}`}
+        state={state}
+        count={count}
+      />
+    );
   }
 
   if (turn.kind === "advisor") {
-    return <AdvisorCard severity={turn.severity} text={text} state={state} />;
+    const tone = ADVISOR_TONES[turn.severity];
+
+    return (
+      <EventRow
+        icon={EyeIcon}
+        tone={tone.icon}
+        label="Advisor"
+        badge={<span className={`shrink-0 px-1.5 p-meta ${tone.badge}`}>{ADVISOR_SEVERITY_LABEL[turn.severity]}</span>}
+        body={text}
+        state={state}
+        count={count}
+        open={turn.severity !== "nit"}
+        hooks={{ "data-advisor-severity": turn.severity }}
+      />
+    );
   }
 
-  if (turn.kind === "system_event") {
-    return <SystemEventCard event={turn.event} text={text} state={state} />;
+  if (turn.kind === "system_event" || turn.kind === "delegated_task") {
+    const task = turn.kind === "delegated_task";
+    const event = task ? `from ${turn.from === MAIN_AGENT ? "Main" : turn.from}` : turn.event;
+
+    return (
+      <EventRow
+        icon={GearSixIcon}
+        tone="p-accent"
+        label={task ? "Task" : "System"}
+        source={event.replace(/_/g, " ")}
+        body={text}
+        state={state}
+        count={count}
+        hooks={{ "data-system-event": event }}
+      />
+    );
   }
 
-  if (turn.kind === "delegated_task") {
-    return <SystemEventCard label="Task" event={`from ${turn.from === MAIN_AGENT ? "Main" : turn.from}`} text={text} state={state} />;
-  }
-
-  return <DrainedEventsCard text={text} state={state} />;
+  return <DrainedEvents text={text} state={state} count={count} />;
 }

@@ -72,6 +72,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   enqueueTurn(input: ProgrammaticTurn) { return this.open(this.answers.enqueueTurn(input)); }
   executeTool(call: AgentToolCall) { return this.open(this.answers.executeTool(call)); }
   observe(lines: ReadableStream<Uint8Array>) { return this.open(this.answers.observe(lines)); }
+  paceStep(turnId: string) { return this.open(this.answers.paceStep(turnId)); }
   answerMetadata(turnId: string, narration: readonly string[]) { return this.open(this.answers.answerMetadata(turnId, narration)); }
   reportModelCall(report: ModelCallReport) { return this.open(this.answers.reportModelCall(report)); }
   reportModelOperation(event: ModelOperationEvent) { return this.open(this.answers.reportModelOperation(event)); }
@@ -144,6 +145,7 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   enqueueTurn(input: ProgrammaticTurn) { return relayedAnswer(this.host().enqueueTurn(input)); }
   executeTool(call: AgentToolCall) { return relayedAnswer(this.host().executeTool(call)); }
   observe(lines: ReadableStream<Uint8Array>) { return relayedAnswer(this.host().observe(lines)); }
+  paceStep(turnId: string) { return relayedAnswer(this.host().paceStep(turnId)); }
   answerMetadata(turnId: string, narration: readonly string[]) { return relayedAnswer(this.host().answerMetadata(turnId, narration)); }
   reportModelCall(report: ModelCallReport) { return relayedAnswer(this.host().reportModelCall(report)); }
   reportModelOperation(event: ModelOperationEvent) { return relayedAnswer(this.host().reportModelOperation(event)); }

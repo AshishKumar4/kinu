@@ -9,6 +9,7 @@ import { stepContextLimit } from '../context-window';
 import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { KinuError, settle } from '../obs/index';
 import { permitInPlan } from '../execution/work-mode';
+import { PLATFORM_CATALOG } from '../platform-catalog';
 import { withClampedToolResults, type ClampToolResultOptions } from './clamp';
 import { withEffectClaims, type EffectClaimDeps } from './effect-claim';
 import { mcpToolKey, suffixedMcpToolKey } from './mcp-naming';
@@ -370,8 +371,15 @@ function clampProse(text: string | undefined, tokens: number): string | undefine
   return `${text.slice(0, Math.floor(text.length * (tokens / cost)))}...`;
 }
 
+/**
+ * What a program reads of one MCP result before it is cut: what the call's effect claim keeps for a replay in one row
+ * (`do.sqlite.row_bytes`), at 8 bytes a character, past JSON's widest escape of 6, with room for the row's other
+ * columns. The cut a model reads at once gave a program a cut, re-quoted text in place of the result it named.
+ */
+const PROGRAM_RESULT_MAX_CHARS = PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value / 8;
+
 /** Admitted MCP catalog as a callable surface; `call` is backend-owned. Only `readOnly: true` exempts a tool
- *  from the effect claim, and the clamp runs inside the claim so a replay returns the published value. */
+ *  from the effect claim. */
 export interface McpToolBuild {
   readonly call: (
     descriptor: SerializableToolDescriptor,
@@ -379,7 +387,8 @@ export interface McpToolBuild {
     options: ToolExecutionOptions<unknown>,
   ) => Promise<JsonValue>;
   readonly effectClaims: EffectClaimDeps;
-  readonly clamp: ClampToolResultOptions;
+  /** Where a result past its cut is saved whole. */
+  readonly spill: NonNullable<ClampToolResultOptions['files']>;
 }
 
 export function buildMcpToolSet(
@@ -400,9 +409,10 @@ export function buildMcpToolSet(
     tools[d.toolKey] = d.readOnly === true ? permitInPlan(entry) : entry;
   }
 
-  // Same clamp and spill as built-in tools, claim outermost (as in `buildActorTools`).
+  // Claim outermost (as in `buildActorTools`). No turn budget: only a program reads these, and what it hands the model
+  // is charged as `eval`'s own.
   return withEffectClaims(
-    withClampedToolResults(tools, build.clamp),
+    withClampedToolResults(tools, { files: build.spill, producer: 'external_tool', maxChars: PROGRAM_RESULT_MAX_CHARS }),
     build.effectClaims,
     { safe: readOnly },
   );

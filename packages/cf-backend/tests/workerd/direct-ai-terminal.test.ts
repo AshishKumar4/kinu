@@ -30,7 +30,7 @@ describe('Workers AI binding terminal on a native body', () => {
     const text = writer.write(encoder.encode(`data: ${JSON.stringify({ response: 'CHARLIE' })}\n\n`));
 
     const model = createWorkersAIProvider(binding).createModel('@cf/probe/model', {
-      env: {}, sessionAffinity: 'kinu-probe', getAuth: async () => null, hasCredential: async () => false,
+      env: {}, sessionAffinity: 'kinu-probe', workspaceAffinity: 'kinu-probe', getAuth: async () => null, hasCredential: async () => false,
     });
 
     const result = streamText({ model, prompt: 'hi', maxRetries: 0 });

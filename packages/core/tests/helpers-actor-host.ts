@@ -23,7 +23,7 @@ import {
 import type { HostedNodeSeat } from '../src/strategy/node-agent';
 import { runHeadInference, type HeadInferenceDeps } from '../src/heads/head-inference';
 import { modelWindow } from '../src/context-window';
-import { promptCacheKey, vfsTurnSkills, type RunTurnSources } from '../src/orchestrator/turn-assembly';
+import { conversationKey, vfsTurnSkills, type RunTurnSources } from '../src/orchestrator/turn-assembly';
 import { captureOperationProfile } from '../src/profiles/operation';
 import type { HostedActor } from '../src/state/actor-host';
 import type { LanguageModel } from 'ai';
@@ -112,7 +112,7 @@ export function fixtureRunSources(actor: HostedActor, model: (spec: string) => L
     identity: async () => ({ agent: actor.record.name }),
     artifacts: () => ({ sections: {}, tools: { descriptions: {}, fields: {} } }),
     taskPlan: () => null,
-    cacheKey: () => promptCacheKey('fixture', actor.record.actorId),
+    conversationKey: () => conversationKey('fixture', actor.record.actorId),
     scaffoldSpend: { source: 'scaffold', report: () => {} },
     attachmentBudget: actor.session.orchestrator.acc.context,
     extensions: () => [],

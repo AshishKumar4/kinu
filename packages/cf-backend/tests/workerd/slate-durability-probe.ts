@@ -19,6 +19,8 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 import { ownerCaller } from '@kinu.run/core';
 import { workspaceOwner } from '../../src/workspace-owner-rpc';
 import { createCodemodeToolFactory } from '../../src/codemode-tool';
+import { BROWSER_PRELUDE } from '../../src/browser-prelude';
+import { actorNamespaces, SURFACE_POLICY } from '@kinu.run/core';
 import { codemodeLauncher } from '../../src/codemode-sandbox';
 import type { JsonValue } from '@kinu.run/core';
 import type {
@@ -53,7 +55,22 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'pendingNimbusTasks');
     Reflect.deleteProperty(this, 'executorRows');
     Reflect.deleteProperty(this, 'runShell');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'portReservations', 'runProgram', 'forgetActivation', 'pendingNimbusTasks', 'executorRows', 'runShell']);
+    Reflect.deleteProperty(this, 'previewTabs');
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'portReservations', 'runProgram', 'forgetActivation', 'pendingNimbusTasks', 'executorRows', 'runShell', 'previewTabs']);
+  }
+
+  /** What the work surface's strip is drawn from: the workspace's listed preview ports, and the slates with their ports. */
+  async previewTabs(): Promise<{ ports: { port: number; name: string | null }[]; slates: { id: string; title: string; port: number | null }[] }> {
+    const listed = await this.getExposedPorts('workspace');
+    const slates = await this.slate({ op: 'list' });
+
+    if (!slates.ok) throw new Error(`slate list refused: ${slates.reason}: ${slates.error}`);
+
+    return {
+      ports: listed.ports.map((port) => ({ port: port.port, name: port.name ?? null })),
+      slates: v.parse(v.object({ slates: v.array(v.object({ id: v.string(), title: v.string(), port: v.optional(v.number()) })) }), slates.value)
+        .slates.map((slate) => ({ id: slate.id, title: slate.title, port: slate.port ?? null })),
+    };
   }
 
   async portReservations(): Promise<DurabilityReservation[]> {
@@ -83,13 +100,26 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   /** One program through this workspace's production `eval` tool, in Build mode; its answer as JSON. */
   async runProgram(code: string): Promise<string> {
     const factory = createCodemodeToolFactory({
-      reach: narrowToolSurface(undefined),
-      launch: (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: null, actor: null } : null }), rt: this.rt,
-      workspace: this.name, webSearch: createDefaultWebSearchProvider({ fetch, browser: { missing: 'this probe reaches no Browser Run' } }),
-      browserSessions: { open: async () => { throw new Error('this probe opens no browser'); }, list: async () => [], close: async () => {} },
+      launch: (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: null, actor: null } : null }), workspace: this.name,
     });
 
-    const execute = toolsInWorkMode('build', { eval: factory.toolFor(codemodeSurface(this.rt, {})) }).eval?.execute;
+    const unreached = (): never => { throw new Error('this probe reaches no memory, files or tasks'); };
+
+    const eval_ = factory.toolFor(codemodeSurface(this.rt, {}), {
+      reach: narrowToolSurface(undefined),
+      // As a confined copy's programs run: state, tables, web and executors, with no memory, files or tasks to reach.
+      namespaces: (executor) => actorNamespaces({
+        executors: () => this.rt.executionRouter?.getProviders() ?? [],
+        web: {
+          search: createDefaultWebSearchProvider({ fetch, browser: { missing: 'this probe reaches no Browser Run' } }), files: this.rt.storage,
+          browser: { sessions: { open: async () => { throw new Error('this probe opens no browser'); }, list: async () => [], close: async () => {} }, prelude: BROWSER_PRELUDE },
+        },
+        memory: unreached, files: unreached, tasks: unreached,
+        db: this.stores.appData, programState: this.rt.actor.programState, agents: null, self: null,
+      }, SURFACE_POLICY.confined, { executor }),
+    });
+
+    const execute = toolsInWorkMode('build', { eval: eval_ }).eval?.execute;
 
     if (execute === undefined) throw new Error('No callable eval tool');
 
@@ -145,7 +175,7 @@ export { ObservedOrchestrator as OrchestratorAgent };
  *  reaches it through `workspaceOwner()`, as production's actor does. */
 type SlateTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'writeExecutorFileChunk' | 'executeInExecutor' | 'routeSlateShare'> & Pick<ObservedOrchestrator,
-  'portReservations' | 'runProgram' | 'forgetActivation' | 'pendingNimbusTasks' | 'executorRows' | 'runShell'>;
+  'portReservations' | 'runProgram' | 'forgetActivation' | 'pendingNimbusTasks' | 'executorRows' | 'runShell' | 'previewTabs'>;
 
 /** `ObservedOrchestrator` is installed under the `OrchestratorAgent` name, so every stub carries
  *  the fixture read. */
@@ -330,6 +360,10 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     const page = await target.routeSlateShare(handle, { userId: null, source: 'probe-viewer', consented: true }, new Request('https://share.invalid/'), '/');
 
     return { owner, reached, viewer: await page.text() };
+  }
+
+  async previewTabs(workspace: string): Promise<{ ports: { port: number; name: string | null }[]; slates: { id: string; title: string; port: number | null }[] }> {
+    return (await this.workspaceTarget(workspace)).previewTabs();
   }
 
   async portReservations(workspace: string): Promise<DurabilityReservation[]> {

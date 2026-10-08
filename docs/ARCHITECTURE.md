@@ -287,8 +287,8 @@ appends a fresh `<dynamic_context>` block only when its render changes and
 freezes earlier blocks to preserve cache breakpoints; `dropSuperseded`, the
 compaction first rung, is the only unfreezer. Step pruning (`step-prune.ts`)
 shrinks old tool outputs near `stepContextLimit`, the resolved model window less
-`outputReserveTokens`. `cache-breakpoints.ts` places Anthropic `cache_control`
-and OpenAI `prompt_cache_key`. The usage-repair middleware
+`outputReserveTokens`. `cache-breakpoints.ts` places Anthropic `cache_control`;
+no request carries a `prompt_cache_key`. The usage-repair middleware
 (`packages/core/src/providers/middleware/usage-repair.ts`) restores the
 `cached_tokens` Cloudflare AI zeroes or drops in its duplicate final usage report.
 [EXTENSIONS.md](./EXTENSIONS.md) has the per-turn hook contract.

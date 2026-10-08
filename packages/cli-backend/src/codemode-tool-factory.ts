@@ -22,7 +22,8 @@ import { programBody } from './executor';
 import * as v from 'valibot';
 
 interface NodeExecuteToolFactoryDeps {
-  extraProviders?: CodemodeProvider[];
+  /** The program's namespaces, as `actorNamespaces` builds them. */
+  namespaces?: readonly CodemodeProvider[];
   /** The role's reach, over every namespace bound, as cf's factory takes it. */
   reach: ToolSurfaceNarrowing;
 }
@@ -63,12 +64,7 @@ interface ExecuteSuccess {
 /** Pass as `codemode` to `buildActorTools`, or call with a finished confined surface (heads). */
 export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps): CodemodeBuilder {
   return (surface) => {
-    const bound: CodemodeProvider[] = [
-      ...surface.providers,
-      ...(deps.extraProviders ?? []),
-    ];
-
-    const providers = deps.reach.narrowProviders(bound);
+    const providers = deps.reach.narrowProviders(deps.namespaces ?? []);
 
     return withCraftedToolDeclarations(tool({
       // Every provider's `types` must be read into the description, or the model
@@ -112,6 +108,13 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
               const call = (toolArgs: unknown[]) => (p.declarations === undefined ? [...toolArgs, context] : toolArgs);
 
               nsp[toolName] = codemodeFunction(p.name, toolName, (...toolArgs) => t.execute(...call(toolArgs)));
+            }
+
+            // `workspace.createTool` takes the function itself, sent as its source, as in the CF sandbox.
+            const create = nsp['createTool'];
+
+            if (p.name === 'workspace' && create !== undefined) {
+              nsp['createTool'] = (...toolArgs) => create(...toolArgs.map((arg) => (typeof arg === 'function' ? String(arg) : arg)));
             }
 
             providerBindings[p.name] = nsp;

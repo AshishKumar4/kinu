@@ -9,6 +9,7 @@ import { Agent, callable, type AgentContext, type Connection, type ConnectionCon
 import { ORCHESTRATOR_RPC_SURFACE, ORCHESTRATOR_STARTED_RPC, sealRpcSurface } from "./rpc-surface";
 import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from "./activation-gate";
 import { supervisorEsbuildService } from "@nimbus-sh/worker/facet-host";
+import { listPortReservations } from "@nimbus-sh/worker/port-capability";
 import { KINU_TIMER_JOB } from "./wake-jobs";
 import { NimbusTasks } from "./nimbus-tasks";
 import {
@@ -16,11 +17,11 @@ import {
   ArchiveCursorSchema,
   createWorkspaceForkSink, createWorkspaceForkSource, workspaceSoul, workspaceArchiveStore, writeWorkspaceSoul,
   explorationActorKey, collectDynamicContext, subordinateDelegatesOf,
-  createReportCodemodeProvider, HeadController, REAL_CLOCK, runHeadSplit, SubordinateRosterStore,
+  HeadController, REAL_CLOCK, runHeadSplit, SubordinateRosterStore,
   recoverActorTurns, EventLog, dismissOrphanedAssignments, actorReferenceOf, subordinateDescendants, TEMPORARY_LIFETIME,
   artifactOverrides, currentArtifacts,
   agentsActionsFor, agentsProfileContext, betaSwarms, buildActorTools, BACKGROUNDABLE_TOOLS,
-  vfsTurnSkills, promptCacheKey, captureOperationProfile, type AgentRuntime, type RunTurnSources,
+  vfsTurnSkills, conversationKey, captureOperationProfile, type AgentRuntime, type RunTurnSources,
   invocationBackgroundPolicy, endedStepLoopJobs, inlineResultInbox, type ActorJobs, type JobAuthority,
   createTeamToolDeps, currentDateForPrompt, delegationExhausted,
   mintSubordinateName, withHeadCaptureRecording, DelegatedTurnRunners,
@@ -40,7 +41,8 @@ import { providerBindingsOf, routedModelReads } from "./providers/agent-registry
 import { AgentTurns } from "./agent-turns";
 import { AgentWakes } from "./agent-wakes";
 import type { AgentTurnActivity, AgentSnapshot, StoredRow } from '@kinu.run/core';
-import type { SerializedMessage } from '@kinu.run/core';
+import type { SerializedMessage, WebSearchProvider } from '@kinu.run/core';
+import type { CFRuntime } from './runtime';
 import { callOperation, listOperations, type OperationCaller, type OperationListing, type OperationResult } from '@kinu.run/core';
 import type { AgentFacet, AgentFacetCalls } from "./agent-facet/agent-facet";
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -71,7 +73,8 @@ import {
   hostedOwedReport, hostedParentReport, hostedAutoTitle, reclaimSettledExplorationActors,
   type HostedActorSeams, type HostedTaskProfile, type HostedTaskTurn,
 } from "./hosted-actors";
-import { createCodemodeToolFactory } from "./codemode-tool";
+import { createCodemodeToolFactory, type CodemodeScope } from "./codemode-tool";
+import { BROWSER_PRELUDE } from './browser-prelude';
 import { compactionDiagnostics, hostedActorCompaction } from "@kinu.run/compaction";
 import { publishSubordinateReport, temporaryRunSettles, type ReportDeps } from "@kinu.run/core";
 import type { ToolSet } from "ai";
@@ -88,7 +91,7 @@ import { nextAlarmTime } from '@kinu.run/core';
 import { accountDeps, CacheWarmingLane, CacheWarmStore } from '@kinu.run/core';
 import {
   EvolutionEngine, initWorkspaceActorTable, WorkspaceActorDirectory, ChildActorOperationSchema, type ActorHandle, type ActorReference, type ChildActorOperation, type ActorDirectoryResult,
-  readActivityLog,
+  readActivityLog, initActivationTable, listActivations, recordActivation, type Activation,
   summarizeSteps,
   // Whole-workspace spend by producer; `summarizeSteps` covers only this agent's turns.
   workspaceSpend, headStepSources, mergeAccountSpend, type SpendLedger,
@@ -224,7 +227,7 @@ import {
   recordJobSettled, recordSandboxRecovery, type AgentKind,
 } from "@kinu.run/core/analytics";
 import {
-  agentSelfHost, createAgentSelfProvider,
+  agentSelfHost, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost,
   WorkspaceProposals, WorkspaceProposalStore, type WorkspaceProposalAnswer,
   DeviceConsentRegistry, DeviceConsentStore,
   type DeviceConsentAnswer, type DeviceConsentDecision,
@@ -236,7 +239,7 @@ import {
   TURN_AUTHOR_METADATA_KEY,
   WorkspacePlanReferenceSchema,
 } from "@kinu.run/core";
-import type { CodemodeProvider, MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
+import type { MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
 import { Cause, Effect, Exit } from 'effect';
 import { attempt, authoredRefusal, classify, diagnostics, hold, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
@@ -787,6 +790,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       program: (turnId, ...args) => this.agentTurns.program(actorId, turnId, ...args),
       traceTurn: (turnId, event) => this.agentTurns.trace(actorId, turnId, event),
       traceStream: (turnId, lines) => this.agentTurns.traceStream(actorId, turnId, headDeltas(lines)),
+      paceStep: async (turnId) => { await (await this.agentCalls(actorId)).step(turnId); },
       resume: (turnId) => this.agentTurns.resume(actorId, turnId),
       guard: (turnId, ...args) => this.agentTurns.guard(actorId, turnId, ...args),
       debit: (turnId, ...args) => this.agentTurns.debit(actorId, turnId, ...args),
@@ -826,7 +830,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       executeTool: (call) => {
         this.agentActivity(actorId, call.activity);
 
-        return this.agentTurns.execute(actorId, call);
+        // Open while the tool runs, under the RPC that relayed it: a kill keeps the cut span's name.
+        return this.tracing.invocation('rpc', `tool.${call.name}`, () => this.agentTurns.execute(actorId, call));
       },
       observe: async (lines) => { await this.chatRooms.hostedRoom(actorId)?.observe(uiChunks(lines)); },
       answerMetadata: (turnId, narration) => this.takeTurnSlates(actorId, turnId, async () => narration),
@@ -1103,10 +1108,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // The host's own provisioner, the one every hosted runtime is built over, so the node's
       // disclosed boundary and its real credential are the same fact.
       nodeHome: (actor) => this.actorHomes.require(actor.record, actor.reference),
-      codemodeTool: (runtime, webSearch) => (finished: ToolSet, reach: ToolSurfaceNarrowing) => createCodemodeToolFactory({
-        launch: this.codemodeLaunch(runtime.actor.actorId), rt: runtime, reach,
-        workspace: this.workspaceName(), webSearch, browserSessions: this.browserSessionsFor(runtime.actor.actorId),
-      }).toolFor(codemodeSurface(runtime, finished)),
+      codemodeTool: (actor, runtime, webSearch) => (finished: ToolSet, reach: ToolSurfaceNarrowing) => createCodemodeToolFactory({
+        launch: this.codemodeLaunch(runtime.actor.actorId), workspace: this.workspaceName(),
+      }).toolFor(codemodeSurface(runtime, finished), {
+        reach, namespaces: (executor) => actorNamespaces(this.confinedActor(actor, runtime, webSearch), SURFACE_POLICY.confined, { executor }),
+      }),
       recordStep: async (headId, seq, step) => { await this.recordHeadStep(headId, seq, step); },
       publishDelta: (kind, delta) => { this.publishHeadStreamFrame({ headId: '', kind, delta }); },
       mission: (input) => {
@@ -1126,6 +1132,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // step rows joinable in one database (C2).
       split: (_actor, _runtime, input) => (request) => this.runHostedSplit(input, request),
     };
+  }
+
+  /** A head, a swarm node or a hosted task turn, as its programs reach it (`SURFACE_POLICY.confined`). */
+  private confinedActor(actor: HostedActor, runtime: CFRuntime, search: WebSearchProvider): SurfaceActor {
+    return hostedSurfaceActor(actor, {
+      web: { search, files: runtime.storage, browser: { sessions: this.browserSessionsFor(runtime.actor.actorId), prelude: BROWSER_PRELUDE } },
+      conversations: this.agentStores(actor.handle.actorId).conversations(), vectorStore: runtime.vectorStore,
+    });
   }
 
   /**
@@ -1150,13 +1164,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
     };
 
-    const factory = createCodemodeToolFactory({
-      launch: this.codemodeLaunch(turn.runtime.actor.actorId), rt: turn.runtime,
+    const factory = createCodemodeToolFactory({ launch: this.codemodeLaunch(turn.runtime.actor.actorId), workspace: this.workspaceName() });
+    const confined = this.confinedActor(turn.actor, turn.runtime, webSearch);
+
+    const scope: CodemodeScope = {
       // The role's own list: this profile was resolved before the tools it would intersect existed.
       reach: narrowToolSurface(effectiveRoleCatalog(turn.profile.inputs.envelope.catalog)[turn.profile.profile.role.id]?.allowedTools),
-      workspace: this.workspaceName(), webSearch, browserSessions: this.browserSessionsFor(turn.runtime.actor.actorId),
-      extraProviders: () => (report === undefined ? [] : [createReportCodemodeProvider(() => report)]),
-    });
+      namespaces: (executor) => actorNamespaces(confined, SURFACE_POLICY.confined, { executor, ...(report !== undefined && { report: () => report }) }),
+    };
 
     // Named: both the tool surface and the framing read these deps.
     const agents = this.hostedAgentsToolDeps(turn);
@@ -1172,7 +1187,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         turnId: () => turn.turnId,
         durable: (callId, signal) => turn.actor.session.durableCall(callId, signal),
       },
-      codemode: (surface) => factory.toolFor(surface),
+      codemode: (surface) => factory.toolFor(surface, scope),
       agents,
       // Rows are `actor_id`-scoped, so a hire's `remember` cannot overwrite what the workspace
       // observed under the same words.
@@ -1283,7 +1298,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       identity: async () => ({ ...(await this.promptIdentity()), agent: actor.stores.config.getDisplayName() ?? actor.record.name }),
       artifacts: () => artifactOverrides(currentArtifacts(this.boundSql, actor.handle)),
       taskPlan: () => null,
-      cacheKey: () => promptCacheKey(this.ownedModelServices.affinityKey, actor.record.actorId),
+      conversationKey: () => conversationKey(this.ownedModelServices.affinityKey, actor.record.actorId),
       scaffoldSpend: { source: 'scaffold', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
       attachmentBudget: actor.session.orchestrator.acc.context,
       extensions: () => [],
@@ -2359,21 +2374,19 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return ROOT_DELEGATION_BUDGET;
   }
 
-  /** Both providers read deps lazily so a mid-lifetime claimOwner lands without rebuilding eval. */
-  protected extraCodemodeProviders(): CodemodeProvider[] {
-    return [
-      createAgentSelfProvider(agentSelfHost({
-        rt: this.rt,
-        scaffoldControl: () => this.scaffoldControl,
-        triggers: () => this.triggerRegistry,
-        jobs: () => this.jobs,
-        budget: () => this.budget,
-        // Owner's revoke path; drops the webhook secret with the row.
-        cancelTrigger: (id, caller) => this.cancelTrigger(id, caller),
-        armCompactNow: () => { this.compactionState.armCompaction(this.name); },
-        proposeWorkspace: (proposal) => this.proposals.propose(proposal),
-      })),
-    ];
+  /** Reads its deps lazily so a mid-lifetime claimOwner lands without rebuilding eval. */
+  protected agentSelf(): AgentSelfHost {
+    return agentSelfHost({
+      rt: this.rt,
+      scaffoldControl: () => this.scaffoldControl,
+      triggers: () => this.triggerRegistry,
+      jobs: () => this.jobs,
+      budget: () => this.budget,
+      // Owner's revoke path; drops the webhook secret with the row.
+      cancelTrigger: (id, caller) => this.cancelTrigger(id, caller),
+      armCompactNow: () => { this.compactionState.armCompaction(this.name); },
+      proposeWorkspace: (proposal) => this.proposals.propose(proposal),
+    });
   }
 
   protected notifyOwner(subject: string, body: string): void {
@@ -2734,6 +2747,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * `rpc-surface.ts`, eval-service identity only (`eval/abort-route.ts`). ARCHITECTURE-DECISIONS
    * C3.
    */
+  /** The kept activations, oldest first: how often this workspace started, and on which build. */
+  activations(): Activation[] {
+    return this.storageRefusal === undefined ? listActivations(this.boundSql) : [];
+  }
+
   evalAbortActivation(): void {
     this.ctx.abort('eval-service: the activation was aborted on request');
   }
@@ -3188,6 +3206,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     )`);
     // Owned by this root: the container is the workspace's; subordinates ride their parent's.
     initSandboxLifecycleTable(execRaw);
+    initActivationTable(execRaw);
   }
 
   /** Written by the first claim or a fork, never by a start. */
@@ -3210,7 +3229,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async onStart(): Promise<void> {
     // A sibling's first RPC starts it too (agents 0.25); it is no workspace, so it records no startup.
     if (this.nimbusSibling) return;
-    diagnostics.event('actor.startup', { workspace: this.name });
+
+    // The ordinal is the count readers use; a pre-reset store, which takes no writes, numbers nothing.
+    if (this.storageRefusal === undefined) {
+      diagnostics.event('actor.startup', { workspace: this.name, activation: recordActivation(this.boundSql, Date.now(), this.env.CF_VERSION_METADATA?.id ?? null) });
+    }
 
     // An unborn workspace owes nothing: its first claim writes it.
     if (this.storageRefusal !== undefined || !this.workspaceBorn()) return;
@@ -4568,6 +4591,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         ensure: (input) => this.hostedWorkspace().apps.ensure(input),
         remove: (owner) => this.hostedWorkspace().apps.remove(owner),
         url: (port, capability) => nimbusPreviewUrl(this.env, this.name, port, capability),
+        owners: async () => new Map([...await listPortReservations(this.ctx)].flatMap(([port, held]) => (held.owner === null ? [] : [[port, held.owner] as const]))),
       },
       catalog: () => this.slateSurfaceCatalog(),
       shareUrl: (handle) => slateShareUrl(this.env, this.name, handle),
@@ -5435,9 +5459,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     const listing = provider.listExposedPorts;
+    // A port a slate's application holds is called by the slate's title, never by its number.
+    const titles = executorId === 'workspace' ? this.slates.portTitles() : Promise.resolve(new Map<number, string>());
 
-    return settle(Effect.matchCause(Effect.promise(() => listing.call(provider)), {
-      onSuccess: (ports) => ({ ports: ports.map(({ port, name, url }) => ({ port, url, name })) }),
+    return settle(Effect.matchCause(Effect.promise(async () => Promise.all([listing.call(provider), titles])), {
+      onSuccess: ([ports, titled]) => ({ ports: ports.map(({ port, name, url }) => ({ port, url, name: name ?? titled.get(port) })) }),
       onFailure: (failed) => {
         const error = Cause.squash(failed);
 

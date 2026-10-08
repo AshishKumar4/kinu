@@ -34,12 +34,12 @@
  *    devbox's minute heartbeat for its container, a timer whose work makes no model call. Exits 1 on a finding, and
  *    writes each into the deploy's report when KINU_DEPLOY_REPORT names one.
  *
- * A startup is counted by `actor.startup` (one per workspace object
- * activation). Hours before that event shipped fall back to
- * `vector.store_registered`, logged once per runtime build: on 2026-09-26
- * 03:00-03:40Z warm-forge-4d6acc02 logged 78 of them against 74 of the SDK's
- * "during startup" warnings, so the fallback overcounts by a hosted actor's
- * build now and then.
+ * Activations are counted from the ordinal every `actor.startup` row carries
+ * (`core/src/identity/activations.ts`), as its deltas, never as rows: rows were
+ * dropped (staging 2026-10-08: 17 of 257 objects one version served logged no
+ * startup), and a later ordinal counts what a lost row would have. A row without
+ * an ordinal (logged before ordinals shipped, or by a pre-reset store) counts
+ * nothing.
  *
  * `--worker` is the SERVICE name the account files events under, not the
  * project's name. It defaults to the top-level `name` in
@@ -69,6 +69,7 @@
  *   bun scripts/prod-logs.ts errors [--since 24h] [--until ISO] [--json]
  *   bun scripts/prod-logs.ts wakes [--since 24h] [--until ISO] [--json]
  *   bun scripts/prod-logs.ts version <version-id> [--since ISO] [--json]
+ *   bun scripts/prod-logs.ts kills [--since 24h] [--until ISO] [--json]
  * `--since` takes 30m / 6h / 7d or an ISO instant; `--worker` works everywhere.
  */
 import { readFileSync } from 'node:fs';
@@ -100,7 +101,7 @@ export const IDLE_WAKE_DISTANCE_MS = 5 * MINUTE_MS;
 /** Objects a per-minute read keeps; a read that reaches it is capped, and an object it drops would read as idle. */
 const MINUTE_GROUPS_CAP = 2000;
 
-const MODES = ['live', 'query', 'timeline', 'errors', 'wakes', 'version'] as const;
+const MODES = ['live', 'query', 'timeline', 'errors', 'wakes', 'version', 'kills'] as const;
 
 type Mode = (typeof MODES)[number];
 
@@ -228,22 +229,19 @@ async function live(args: Args): Promise<void> {
 
 // ---- telemetry client ------------------------------------------------------
 
-export interface Filter {
-  readonly key: string;
-  readonly operation: 'eq' | 'neq' | 'includes' | 'exists';
-  readonly value?: string;
-  readonly type: 'string';
-}
+export type Filter =
+  | { readonly key: string; readonly operation: 'eq' | 'neq' | 'includes' | 'exists'; readonly value?: string; readonly type: 'string' }
+  | { readonly key: string; readonly operation: 'gt'; readonly value: number; readonly type: 'number' };
 
 const eq = (key: string, value: string): Filter => ({ key, operation: 'eq', value, type: 'string' });
 
 const HAS_CODE: Filter = { key: 'code', operation: 'exists', type: 'string' };
 
 interface Calculation {
-  readonly operator: 'count' | 'uniq';
+  readonly operator: 'count' | 'uniq' | 'min' | 'max';
   readonly alias: string;
   readonly key?: string;
-  readonly keyType?: 'string';
+  readonly keyType?: 'string' | 'number';
 }
 
 interface QueryBody {
@@ -281,7 +279,7 @@ const TelemetryFields = v.looseObject({
   workspace: v.optional(v.string()), actor: v.optional(v.string()),
   sameBuild: v.optional(v.string()), midStep: v.optional(v.boolean()),
   stepsKept: v.optional(v.number()), fiber: v.optional(v.string()), fiberId: v.optional(v.string()),
-  cause: v.optional(v.string()),
+  cause: v.optional(v.string()), activation: v.optional(v.number()),
 });
 
 const TelemetryEvent = v.looseObject({
@@ -299,7 +297,7 @@ const TelemetryEvent = v.looseObject({
     eventType: v.optional(v.string()),
     outcome: v.optional(v.string()),
     scriptVersion: v.optional(v.looseObject({ id: v.optional(v.string()) })),
-    wallTimeMs: v.optional(v.number()),
+    wallTimeMs: v.optional(v.number()), cpuTimeMs: v.optional(v.number()), entrypoint: v.optional(v.string()),
     event: v.optional(v.looseObject({ rpcMethod: v.optional(v.string()), rpcMethods: v.optional(v.array(v.string())) })),
   }), {}),
   $metadata: v.optional(v.looseObject({
@@ -444,6 +442,37 @@ export class Telemetry {
     return (await this.buckets(opts, HOUR_MS)).map(({ groups, at, count }) => ({ groups, hour: at, count }));
   }
 
+  /** The lowest and highest value of `key` per group and hour. */
+  async hourlyExtent(opts: { filters: readonly Filter[]; groupBy: readonly string[]; key: string; limit?: number }): Promise<{ groups: string[]; hour: number; min: number; max: number }[]> {
+    const result = await this.result({
+      view: 'calculations',
+      granularity: HOUR_MS,
+      parameters: {
+        datasets: ['cloudflare-workers'],
+        filters: this.filters(opts.filters),
+        calculations: [{ operator: 'min', key: opts.key, keyType: 'number', alias: 'min' }, { operator: 'max', key: opts.key, keyType: 'number', alias: 'max' }],
+        groupBys: opts.groupBy.map((value) => ({ type: 'string', value })),
+        limit: opts.limit ?? 200,
+      },
+    });
+
+    const extent = new Map<string, { groups: string[]; hour: number; min: number; max: number }>();
+
+    for (const [index, calculation] of result.calculations.entries()) {
+      for (const bucket of calculation.series ?? []) {
+        for (const a of bucket.data) {
+          const hour = Math.floor(Date.parse(`${bucket.time.replace(' ', 'T')}Z`) / HOUR_MS) * HOUR_MS;
+          const key = `${a.groups.map((g) => g.value).join('\u0000')}@${String(hour)}`;
+          const held = extent.get(key) ?? { groups: a.groups.map((g) => g.value), hour, min: a.value, max: a.value };
+
+          extent.set(key, index === 0 ? { ...held, min: a.value } : { ...held, max: a.value });
+        }
+      }
+    }
+
+    return [...extent.values()];
+  }
+
   /** Counts per `bucketMs` bucket; `at` is the bucket's start. */
   async buckets(opts: { filters: readonly Filter[]; groupBy: readonly string[]; limit?: number }, bucketMs: number): Promise<{ groups: string[]; at: number; count: number }[]> {
     const result = await this.result({
@@ -493,8 +522,9 @@ function keyOf(a: Aggregate): string {
 
 // ---- shared readings -------------------------------------------------------
 
-/** Newest first: `actor.startup` counts an activation exactly; the fallback covers older hours. */
-const STARTUP_MARKERS = [
+/** Rows that name the workspace an object holds; `vector.store_registered` names objects started before
+ *  `actor.startup` logged a name. For names only: activations are counted by {@link startupHours}. */
+const NAME_MARKERS = [
   { event: 'actor.startup', nameField: 'fields.workspace' },
   { event: 'vector.store_registered', nameField: 'fields.namespace' },
 ] as const;
@@ -505,29 +535,36 @@ const HEX_ID = /^[0-9a-f]{64}$/;
 
 interface ObjectHour extends StartupHour {
   readonly name: string;
-  readonly marker: string;
 }
 
-/** Per object and hour, the first marker that counted anything there. */
+export interface OrdinalHour {
+  readonly object: string;
+  readonly name: string;
+  readonly hour: number;
+  readonly first: number;
+  readonly last: number;
+}
+
+/**
+ * Activations per object and hour from the lowest and highest ordinal seen in each: an hour after an earlier one of the
+ * same object counts from that hour's last ordinal, so only the window's first hour can miss one dropped at its start.
+ */
+export function ordinalHours(hours: readonly OrdinalHour[]): ObjectHour[] {
+  const sorted = [...hours].sort((a, b) => a.object.localeCompare(b.object) || a.hour - b.hour);
+
+  return sorted.map((hour, index) => {
+    const before = sorted[index - 1];
+    const from = before?.object === hour.object ? before.last : hour.first - 1;
+
+    return { object: hour.object, name: hour.name, hour: hour.hour, startups: Math.max(0, hour.last - from) };
+  });
+}
+
 async function startupHours(t: Telemetry, extra: readonly Filter[]): Promise<ObjectHour[]> {
-  const chosen = new Map<string, ObjectHour>();
-  const names = new Map<string, string>();
+  const numbered: Filter = { key: 'fields.activation', operation: 'gt', value: 0, type: 'number' };
+  const rows = await t.hourlyExtent({ filters: [eq('event', 'actor.startup'), numbered, ...extra], groupBy: [DO_ID, 'fields.workspace'], key: 'fields.activation', limit: 500 });
 
-  for (const marker of STARTUP_MARKERS) {
-    const rows = await t.hourly({ filters: [eq('event', marker.event), ...extra], groupBy: [DO_ID, marker.nameField], limit: 500 });
-
-    for (const row of rows) {
-      const [object = '', name = ''] = row.groups;
-
-      if (name !== '') names.set(object, name);
-      const key = `${object}@${row.hour}`;
-
-      if (chosen.has(key) || row.count === 0) continue;
-      chosen.set(key, { object, hour: row.hour, startups: row.count, name: '', marker: marker.event });
-    }
-  }
-
-  return [...chosen.values()].map((row) => ({ ...row, name: names.get(row.object) ?? '' }));
+  return ordinalHours(rows.map((row) => ({ object: row.groups[0] ?? '', name: row.groups[1] ?? '', hour: row.hour, first: row.min, last: row.max })));
 }
 
 function iso(ms: number): string {
@@ -590,7 +627,7 @@ async function query(t: Telemetry, args: Args): Promise<void> {
 async function resolveObject(t: Telemetry, target: string): Promise<{ id: string; name: string; others: string[] }> {
   if (HEX_ID.test(target)) return { id: target, name: '', others: [] };
 
-  for (const marker of STARTUP_MARKERS) {
+  for (const marker of NAME_MARKERS) {
     const rows = await t.count({ filters: [eq('event', marker.event), eq(marker.nameField, target)], groupBy: [DO_ID], limit: 10 });
 
     if (rows.length > 0) {
@@ -623,16 +660,8 @@ async function timeline(t: Telemetry, args: Args): Promise<void> {
   });
 
   const cadenceFrom = Math.max(args.from, args.to - CADENCE_WINDOW_MS);
-  const startupEvents: number[] = [];
-
-  for (const marker of STARTUP_MARKERS) {
-    const { events: seen } = await t.events([...scope, eq('event', marker.event)], EVENT_CAP, cadenceFrom);
-
-    if (seen.length > 0) {
-      startupEvents.push(...seen.map((e) => e.timestamp));
-      break;
-    }
-  }
+  const { events: seen } = await t.events([...scope, eq('event', 'actor.startup')], EVENT_CAP, cadenceFrom);
+  const startupEvents = seen.map((e) => e.timestamp);
 
   const { events: alarms } = await t.events([...scope, eq('$workers.eventType', 'alarm'), eq('$metadata.type', 'cf-worker-event')], EVENT_CAP, cadenceFrom);
   const { events: arms } = await t.events([...scope, eq('event', 'wake.unfinished_arms')], 50);
@@ -642,7 +671,7 @@ async function timeline(t: Telemetry, args: Args): Promise<void> {
     name,
     otherObjectsWithThisName: target.others,
     window: { from: iso(args.from), to: iso(args.to) },
-    startupsByHour: hours.sort((a, b) => a.hour - b.hour).map((h) => ({ hour: iso(h.hour), startups: h.startups, marker: h.marker })),
+    startupsByHour: hours.sort((a, b) => a.hour - b.hour).map((h) => ({ hour: iso(h.hour), startups: h.startups })),
     outcomes: outcomes.map((o) => ({ eventType: o.groups[0], outcome: o.groups[1], count: o.count })),
     topEvents: events.map((e) => ({ event: e.groups[0], count: e.count })),
     failures: causes,
@@ -671,7 +700,7 @@ async function timeline(t: Telemetry, args: Args): Promise<void> {
     ...(target.others.length > 0 ? [`other objects logging this name: ${target.others.join(', ')}`] : []),
     '',
     'startups by hour:',
-    ...(report.startupsByHour.length === 0 ? ['  none'] : report.startupsByHour.map((h) => `  ${hourLabel(Date.parse(h.hour))}  ${String(h.startups).padStart(5)}${h.marker === 'actor.startup' ? '' : '  (by vector.store_registered)'}`)),
+    ...(report.startupsByHour.length === 0 ? ['  none'] : report.startupsByHour.map((h) => `  ${hourLabel(Date.parse(h.hour))}  ${String(h.startups).padStart(5)}`)),
     '',
     'invocation outcomes:',
     ...report.outcomes.map((o) => `  ${o.eventType.padEnd(12)} ${o.outcome.padEnd(18)} ${o.count}`),
@@ -1107,9 +1136,8 @@ async function versionRead(t: Telemetry, versionId: string): Promise<VersionRead
     destroyedAt.set(object, Math.min(destroyedAt.get(object) ?? row.timestamp, row.timestamp));
   }
 
-  const alarm = eq('$workers.eventType', 'alarm');
-  const alarms = await perMinute(t, [...invocations, alarm]);
-  const called = await perMinute(t, [...invocations, { ...alarm, operation: 'neq' }]);
+  const alarms = await perMinute(t, [...invocations, eq('$workers.eventType', 'alarm')]);
+  const called = await perMinute(t, [...invocations, { key: '$workers.eventType', operation: 'neq', value: 'alarm', type: 'string' }]);
   const modelCalls = await perMinute(t, [...scope, eq('$metadata.type', 'cf-worker'), eq('event', 'provider.stream_opened')]);
   const total = (rows: readonly { readonly count: number }[]): number => rows.reduce((sum, row) => sum + row.count, 0);
 
@@ -1134,6 +1162,13 @@ async function versionRead(t: Telemetry, versionId: string): Promise<VersionRead
   };
 }
 
+/** Every row the version's window holds, of every type: what a later read adds is what landed late. */
+async function windowRows(t: Telemetry, versionId: string): Promise<number> {
+  const rows = await t.hourly({ filters: [eq('$workers.scriptVersion.id', versionId)], groupBy: ['$metadata.type'], limit: 20 });
+
+  return rows.reduce((sum, row) => sum + row.count, 0);
+}
+
 /** Per object and minute. */
 async function perMinute(t: Telemetry, filters: readonly Filter[]): Promise<ObjectMinuteCount[]> {
   const rows = await t.buckets({ filters, groupBy: [DO_ID], limit: MINUTE_GROUPS_CAP }, MINUTE_MS);
@@ -1145,22 +1180,79 @@ async function perMinute(t: Telemetry, filters: readonly Filter[]): Promise<Obje
   return rows.map((row) => ({ object: row.groups[0] ?? '', minute: row.at, count: row.count }));
 }
 
-/** `version`: its findings printed and, under a deploy, written into its report. A window that cannot be read is a
- *  finding of its own: a deploy cannot say what its version did. */
+/** A read is settled when two reads this far apart agree. */
+export const SETTLE_GAP_MS = 10 * MINUTE_MS;
+
+/**
+ * How long a reader re-reads before it gives up and answers "unsettled": a bound on the measurement, not on what it
+ * may find. Rows land late, and how late is measured, not promised: on staging 2026-10-08 five 09:35-10:03Z rows
+ * landed 22-75 min after their events, which an hour of reads covers, and a 1.3 s invocation's `actor.startup`
+ * (08:19:16Z) was absent from a read at 10:25Z and present at 10:50Z, 126-151 min late, which it does not. A deploy
+ * waits an hour, not two and a half, so "settled" means the counts held still across one gap inside this hour, never
+ * that every row has landed; a row later than that is the next report's.
+ */
+export const SETTLE_CAP_MS = 60 * MINUTE_MS;
+
+export type SettledRead<T> =
+  | { readonly settled: true; readonly value: T; readonly reads: number; readonly lateRows: number }
+  | { readonly settled: false; readonly last: T; readonly reads: number; readonly lateRows: number };
+
+/**
+ * Reads until two reads `gapMs` apart give the same `fingerprint`, or until `capMs` has passed since the first. `rows`
+ * counts what the window held at each read, so the answer names how many rows landed after the first read.
+ */
+export async function settledRead<T>(at: {
+  readonly read: () => Promise<T>; readonly fingerprint: (value: T) => string; readonly rows: (value: T) => number;
+  readonly now: () => number; readonly sleep: (ms: number) => Promise<void>; readonly gapMs: number; readonly capMs: number;
+}): Promise<SettledRead<T>> {
+  const started = at.now();
+  let last = await at.read();
+  const firstRows = at.rows(last);
+  let reads = 1;
+
+  for (;;) {
+    if (at.now() - started + at.gapMs > at.capMs) return { settled: false, last, reads, lateRows: at.rows(last) - firstRows };
+    await at.sleep(at.gapMs);
+    const next = await at.read();
+    reads += 1;
+    const held = at.fingerprint(next) === at.fingerprint(last);
+    last = next;
+
+    if (held) return { settled: true, value: next, reads, lateRows: at.rows(next) - firstRows };
+  }
+}
+
+/** `version`: its findings printed and, under a deploy, written into its report, once the window's counts hold still.
+ *  A window that cannot be read is a finding of its own: a deploy cannot say what its version did; and neither can a
+ *  window whose counts still moved when the reader stopped, which answers "unsettled" and names nothing in it. */
 async function versionCommand(args: Args): Promise<number> {
   const subject = args.target ?? '';
   let findings: VersionFinding[];
   let sampling = 1;
   let terminal: TerminalEffectStates | undefined;
+  let settledNote = '';
 
   try {
     const t = new Telemetry(await readToken(), args);
 
-    const read = await versionRead(t, subject);
+    const read = await settledRead({
+      read: async () => ({ read: await versionRead(t, subject), rows: await windowRows(t, subject) }),
+      fingerprint: ({ read: value }) => JSON.stringify([versionFindings(value), value.effects.terminal]),
+      rows: ({ rows }) => rows,
+      now: () => Date.now(), sleep: (ms) => Bun.sleep(ms), gapMs: SETTLE_GAP_MS, capMs: SETTLE_CAP_MS,
+    });
 
-    terminal = read.effects.terminal;
-    findings = versionFindings(read);
     sampling = t.sampling;
+    const late = `${String(read.lateRows)} row(s) landed after the first of ${String(read.reads)} reads`;
+
+    if (read.settled) {
+      terminal = read.value.read.effects.terminal;
+      findings = versionFindings(read.value.read);
+      settledNote = `settled: ${late}`;
+    } else {
+      findings = [{ what: 'the telemetry', finding: `${args.worker}'s telemetry for version ${subject} is unsettled: its counts still moved after `
+        + `${String(SETTLE_CAP_MS / MINUTE_MS)} min of reads ${String(SETTLE_GAP_MS / MINUTE_MS)} min apart (${late}), so it gives no verdict` }];
+    }
   } catch (cause) {
     findings = [{ what: 'the telemetry', finding: `${args.worker}'s telemetry for version ${subject} could not be read: ${cause instanceof Error ? cause.message : String(cause)}` }];
   }
@@ -1172,8 +1264,9 @@ async function versionCommand(args: Args): Promise<number> {
   const window = { from: iso(args.from), to: iso(args.to) };
 
   console.log(args.json
-    ? JSON.stringify({ window, version: subject, worker: args.worker, findings, terminalEffects: terminal, sampling }, null, 1)
+    ? JSON.stringify({ window, version: subject, worker: args.worker, findings, terminalEffects: terminal, sampling, settled: settledNote }, null, 1)
     : [`${args.worker} version ${subject}, ${window.from} .. ${window.to}:`, ...findings.length === 0 ? ['  nothing to report'] : findings.map((found) => `  ${found.finding}`),
+      ...settledNote === '' ? [] : [settledNote],
       ...terminal === undefined ? [] : [`terminal effects: ${String(terminal.observations)} owed observation(s), `
         + `${String(terminal.settled.length + terminal.owed.length + terminal.parked.length + terminal.deleted.length)} sequence(s): `
         + `${String(terminal.settled.length)} settled after owing, ${String(terminal.parked.length)} parked on the owner, `
@@ -1181,6 +1274,88 @@ async function versionCommand(args: Args): Promise<number> {
       ...sampling > 1 ? [`note: the API sampled this window (level ${String(sampling)}); counts are estimates.`] : []].join('\n'));
 
   return findings.length === 0 ? 0 : 1;
+}
+
+/** The outcomes of an invocation the platform ended for what it spent. */
+const KILLED_OUTCOMES = ['exceededCpu', 'exceededMemory', 'exceededWallTime'] as const;
+
+const OtelSpan = v.looseObject({
+  timestamp: v.number(),
+  source: v.looseObject({
+    name: v.optional(v.string(), ''),
+    jsrpc: v.optional(v.looseObject({ method: v.optional(v.string()) })),
+    db: v.optional(v.looseObject({ query: v.optional(v.looseObject({ text: v.optional(v.string()) })) })),
+    cloudflare: v.optional(v.looseObject({ warning: v.optional(v.looseObject({ type: v.optional(v.string()) })) })),
+  }),
+  $metadata: v.looseObject({ type: v.optional(v.string()), spanName: v.optional(v.string()) }),
+});
+
+const OtelResult = v.looseObject({
+  result: v.looseObject({ events: v.optional(v.looseObject({ events: v.optional(v.array(OtelSpan), []) }), { events: [] }) }),
+});
+
+/** What a span did, by name: a platform span's RPC method or SQL statement, a Kinu span's own name. */
+function spanLabel(span: v.InferOutput<typeof OtelSpan>): string {
+  const sql = span.source.db?.query?.text?.replace(/\s+/g, ' ').slice(0, 80);
+
+  return [span.source.name, span.source.jsrpc?.method, sql].filter((part) => part !== undefined && part !== '').join(' ');
+}
+
+/**
+ * `kills`: every invocation the platform ended for its CPU, memory or wall time, read through its trace. Its logs die
+ * with it (staging 2026-10-08: a 302 s CPU kill left none), but the `otel` dataset keeps its trace: every span by name,
+ * a cut one marked `span_not_ended`. The Kinu spans cut by the kill (`rpc.tool.<name>`, `alarm.<phase>`) name the
+ * work that was running; the clock does not advance through pure JS, so durations there read zero.
+ */
+async function kills(t: Telemetry, args: Args): Promise<void> {
+  const ended = (await Promise.all(KILLED_OUTCOMES.map(async (outcome) => (await t.events([eq('$metadata.type', 'cf-worker-event'), eq('$workers.outcome', outcome)], EVENT_CAP)).events))).flat();
+  // One reset ends every invocation the object was serving at once; the one that spent most is its cause.
+  const resets = new Map<string, TelemetryEvent>();
+
+  for (const row of ended) {
+    const key = `${row.$workers.durableObjectId ?? row.$metadata.requestId ?? ''}@${String(row.timestamp)}`;
+    const held = resets.get(key);
+
+    if (held === undefined || (row.$workers.cpuTimeMs ?? 0) > (held.$workers.cpuTimeMs ?? 0)) resets.set(key, row);
+  }
+
+  const read = await Promise.all([...resets.values()].map(async (row) => {
+    const trace = row.$metadata.traceId ?? '';
+
+    const text = trace === '' ? '' : await t.raw({
+      view: 'events', limit: EVENT_CAP, timeframe: { from: row.timestamp - 6 * HOUR_MS, to: row.timestamp + MINUTE_MS },
+      parameters: { datasets: ['otel'], filters: [{ key: '$metadata.traceId', operation: 'eq', value: trace, type: 'string' }] },
+    });
+
+    const spans = text === '' ? [] : v.parse(OtelResult, JSON.parse(text)).result.events.events.filter((span) => span.$metadata.type === 'span');
+    const cut = spans.filter((span) => span.source.cloudflare?.warning?.type === 'span_not_ended').map(spanLabel);
+    const counts = new Map<string, number>();
+
+    for (const span of spans) counts.set(spanLabel(span), (counts.get(spanLabel(span)) ?? 0) + 1);
+
+    return {
+      at: iso(row.timestamp), object: row.$workers.durableObjectId ?? null, entrypoint: row.$workers.entrypoint ?? null,
+      eventType: row.$workers.eventType ?? null, outcome: row.$workers.outcome ?? null, cpuMs: row.$workers.cpuTimeMs ?? null,
+      wallMs: row.$workers.wallTimeMs ?? null, rpcMethods: row.$workers.event?.rpcMethods ?? [], request: row.$metadata.requestId ?? null,
+      trace, spans: spans.length, spansCapped: spans.length >= EVENT_CAP, cut,
+      busiest: [...counts].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([span, count]) => ({ span, count })),
+    };
+  }));
+
+  if (args.json) {
+    console.log(JSON.stringify({ window: { from: iso(args.from), to: iso(args.to) }, kills: read, sampling: t.sampling }, null, 1));
+
+    return;
+  }
+
+  console.log([`invocations the platform ended for what they spent, ${iso(args.from)} .. ${iso(args.to)}:`,
+    ...read.length === 0 ? ['  none'] : read.flatMap((kill) => [
+      `  ${kill.at} ${kill.entrypoint ?? '?'} ${kill.object?.slice(0, 16) ?? '?'} ${kill.eventType ?? '?'} ${kill.outcome ?? '?'}: cpu ${String(kill.cpuMs ?? '?')} ms, `
+        + `wall ${String(kill.wallMs ?? '?')} ms, rpc ${kill.rpcMethods.join(',') || 'none'}`,
+      `    trace ${kill.trace || 'none'}: ${String(kill.spans)} span(s)${kill.spansCapped ? ' (capped)' : ''}; cut by the kill: ${kill.cut.join('; ') || 'none'}`,
+      ...kill.busiest.map((busy) => `      ${String(busy.count).padStart(5)}  ${busy.span}`),
+    ]),
+    ...samplingNote(t)].join('\n'));
 }
 
 if (import.meta.main) {
@@ -1192,7 +1367,7 @@ if (import.meta.main) {
     process.exitCode = await versionCommand(args);
   } else {
     const t = new Telemetry(await readToken(), args);
-    const run = { query, timeline, errors, wakes }[args.mode];
+    const run = { query, timeline, errors, wakes, kills }[args.mode];
 
     await run(t, args);
   }

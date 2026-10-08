@@ -81,6 +81,7 @@ function agentRow(input: AgentRowInput): AgentRow {
     neurons: usage.neurons ?? 0,
     usd: input.usd ?? 0,
     priced: input.usd === undefined ? 0 : 1,
+    activation: 0,
   };
 }
 

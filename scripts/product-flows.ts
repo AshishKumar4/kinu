@@ -1215,7 +1215,7 @@ export async function eachPaneKeepsItsTranscript(target: FlowTarget): Promise<St
     // list, never the composer's echo. One predicate for both, so no wait is left
     // dangling on a page that then closes.
     await until(page, "the agent turn's answer, or its words in a card",
-      `[...document.querySelectorAll('#chat [data-system-event] *, #chat .divide-dashed *')]`
+      `[...document.querySelectorAll('#chat [data-system-event] *, #chat [data-drained-event] *')]`
       + `.some(el => (el.textContent ?? '').includes(${JSON.stringify(actorMarker)}))`
       + ` || (document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(FALLBACK_ANSWER)})`);
 

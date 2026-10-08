@@ -12,6 +12,8 @@ type Trial = {
   taskVersion?: string; failed?: string; trial?: number;
   inputTokens?: number; cacheReadTokens?: number; costUsd?: number; model?: string; durationMs?: number; harnessInfra?: boolean;
   badInputCalls?: number;
+  /** Provider-reported requests, oldest first. */
+  steps?: { actor: string; inputTokens: number; cacheReadTokens: number }[];
 };
 
 function outcomeOf(trial: Trial) {
@@ -44,7 +46,12 @@ function fileResult(taskId: string, trials: readonly Trial[], side: { productSha
           },
           usage: {
             model: trial.model ?? 'workers-ai/@cf/zai-org/glm-5.3', inputTokens: trial.inputTokens,
-            metadata: { cacheReadTokens: trial.cacheReadTokens, costUsd: trial.costUsd },
+            metadata: {
+              cacheReadTokens: trial.cacheReadTokens, costUsd: trial.costUsd,
+              steps: (trial.steps ?? []).map((step, stepIndex) => ({
+                ...step, timestamp: '2026-10-08T00:00:00.000Z', runId: 'run', stepIndex, outputTokens: 10, cacheWriteTokens: 0,
+              })),
+            },
           },
           output: {
             metrics: {
@@ -135,6 +142,24 @@ describe('compareEvalResults', () => {
     expect(row?.reason === null ? row.checks : null).toEqual([
       { check: 't1 builds', baseline: { attempted: 10, passed: 10 }, candidate: { attempted: 10, passed: 3 }, pValue: fisherExact({ passed: 10, trials: 10 }, { passed: 3, trials: 10 }) },
     ]);
+  });
+
+  // oh-my-pi holds 95–100% after a conversation's first request (the owner). ChatGPT spends the owner's plan and never gates.
+  test.each([
+    { model: 'workers-ai/@cf/zai-org/glm-5.3', warm: 900, verdict: 'regressed' },
+    { model: 'workers-ai/@cf/zai-org/glm-5.3', warm: 980, verdict: 'unchanged' },
+    { model: 'chatgpt/gpt-6.1-sol', warm: 900, verdict: 'unchanged' },
+  ])('$model reading $warm of 1000 prompt tokens from cache after each first request is $verdict', ({ model, warm, verdict }) => {
+    const steps = [
+      { actor: 'main', inputTokens: 1_000, cacheReadTokens: 0 },
+      { actor: 'hire-1', inputTokens: 1_000, cacheReadTokens: 0 },
+      { actor: 'main', inputTokens: 1_000, cacheReadTokens: warm },
+    ];
+
+    const comparison = compareEvalResults(report('t', trialsOf(9, 10, { model }), BASE), report('t', trialsOf(9, 10, { model, steps }), NEXT));
+
+    expect(comparison.profiles[0]?.candidate.steadyCacheHitRate).toBe(warm / 1_000);
+    expect(comparison.verdict).toBe(verdict);
   });
 
   test('a significant fall on any task is a regression, whatever else rose', () => {

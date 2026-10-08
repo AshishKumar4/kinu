@@ -181,6 +181,7 @@ describe('the tier model behind background memory compression', () => {
       const model = createOpenAICompatProvider().createModel('fake-live', {
         env: {},
         sessionAffinity: 'sleep-time-tier-test',
+        workspaceAffinity: 'sleep-time-tier-test',
         getAuth: async (key) => key === SCRIPTED_CREDENTIAL ? { baseURL: server.baseURL, headers: {} } : null,
         hasCredential: async (key) => key === SCRIPTED_CREDENTIAL,
       });

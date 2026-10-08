@@ -367,7 +367,6 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     // ride beside it for the model stack, which this bare test model is not inside.
     expect(providerOptions).toEqual({
       openai: {
-        promptCacheKey: expect.any(String),
         reasoningEffort: 'high',
         contextManagement: [{ type: 'compaction', compactThreshold: expect.any(Number) }],
       },
@@ -427,7 +426,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const spec = 'opencode-go/muse-spark-1.3-contributor';
 
     const model = registry.resolve(spec, {
-      env: {}, sessionAffinity: 'kinu-test', fetch: mock.fetch,
+      env: {}, sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test', fetch: mock.fetch,
       getAuth: async () => ({ headers: { Authorization: 'Bearer key' } }),
       hasCredential: async () => true,
       listCredentialKeys: async () => ['opencode-go.bearer'],
@@ -501,13 +500,13 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
   test('a fallback is sent the level the tier wants as the fallback declares it, and a model declaring none is sent none', async () => {
     const sent = new Map<string, string | null>();
-    const OpenAIOptions = v.object({ openai: v.object({ reasoningEffort: v.optional(v.string()) }) });
+    const OpenAIOptions = v.object({ openai: v.optional(v.object({ reasoningEffort: v.optional(v.string()) })) });
 
     const listening = (modelId: string, refuse: boolean) => new TestLanguageModelV2({
       provider: 'fake',
       modelId,
       doStream: async (options) => {
-        sent.set(modelId, v.parse(OpenAIOptions, options.providerOptions).openai.reasoningEffort ?? null);
+        sent.set(modelId, v.parse(OpenAIOptions, options.providerOptions).openai?.reasoningEffort ?? null);
 
         if (!refuse) return fakeModel('ok').doStream(options);
 
@@ -830,7 +829,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
     const codemodeTool = createNodeCodemodeToolFactory({
       reach: narrowToolSurface(undefined),
-      extraProviders: [createAgentSelfProvider({
+      namespaces: [createAgentSelfProvider({
         proposeCurriculumTasks: async () => [],
         listCurriculumTasks: async () => [],
         setCurriculumTaskStatus: async () => ({ ok: true }),
@@ -844,7 +843,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         listBackgroundJobs: async () => [],
         ...agentSelfRest,
       })],
-    })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [], providers: [] });
+    })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [] });
 
     const result = await toolExecute<{ code: string }, unknown>(codemodeTool)({
       code: "return await agent.schedule({ atMs: Date.now() + 60000, label: 'local wake' });",
@@ -860,7 +859,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
     const codemodeTool = createNodeCodemodeToolFactory({
       reach: narrowToolSurface(undefined),
-      extraProviders: [createAgentSelfProvider({
+      namespaces: [createAgentSelfProvider({
         proposeCurriculumTasks: async () => [],
         listCurriculumTasks: async () => [],
         setCurriculumTaskStatus: async () => ({ ok: true }),
@@ -871,7 +870,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         ...agentSelfRest,
         armCompactNow: () => { arms++; },
       })],
-    })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [], providers: [] });
+    })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [] });
 
     const result = await toolExecute<{ code: string }, unknown>(codemodeTool)({
       code: 'return await agent.compactNow();',
