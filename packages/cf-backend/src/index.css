@@ -1650,12 +1650,13 @@ body > .annotation-toolbar {
 .p-bar-inspector { --bar-ground: var(--c-sidebar); }
 /* The column opens at 340px, so a page's tab gives way sooner than a chat's: the tools keep their room. */
 .p-bar-inspector .p-bar-tab { min-width: 96px; }
-.p-bar-trailing:empty { padding: 0; }
 .p-bar-tools { flex: none; }
 .p-bar-tools .p-bar-tabs { flex: none; padding: 0 6px 0 0; }
 .p-bar-tools .p-bar-tab { flex: none; min-width: 0; }
 .p-bar-tools .p-bar-tab::before { content: none; }
-.p-bar-tools :is(.p-bar-sizer, .p-bar-link) { gap: 3px; padding: 0 calc(var(--flare) + 2px) 2px; }
+.p-bar-tools :is(.p-bar-sizer, .p-bar-link) { gap: 3px; padding: 0 calc(var(--flare) + 1px) 2px; }
+.p-bar-inspector .p-bar-trailing { padding: 0 4px; }
+.p-bar-inspector .p-bar-trailing:empty { padding: 0; }
 .p-bar-tools .p-bar-link:focus-visible { text-decoration: none; }
 .p-bar-tools .p-bar-link:focus-visible > svg { border-radius: 4px; outline: 1.5px solid var(--c-accent); outline-offset: 3px; }
 

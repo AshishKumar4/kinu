@@ -125,7 +125,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
           </div>
           {/* A track of minmax(0, 1fr) at every width: an implicit one sized to the widest card's content, its size choice
               the widest, and pushed every card past the panel (staging, 2026-10-08). */}
-          <div className="grid grid-cols-1 gap-2 @[38rem]:grid-cols-2 @[64rem]:grid-cols-3">
+          <div className="grid grid-cols-1 items-start gap-2 @[38rem]:grid-cols-2 @[64rem]:grid-cols-3">
             {environments.map((m) => (
               <EnvironmentCard
                 key={m.name}

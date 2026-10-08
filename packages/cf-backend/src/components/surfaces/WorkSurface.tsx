@@ -228,10 +228,11 @@ export function WorkSurface(props: WorkSurfaceProps) {
             data-preview-ready
             title={chip.title}
             aria-label={`Preview ready: ${chip.title}`}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-full border p-border p-accent-subtle px-2.5 py-1 text-[11px] font-medium p-accent transition-colors hover:p-elevated"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-full border p-border p-accent-subtle px-2 py-1 text-[11px] font-medium p-accent transition-colors hover:p-elevated @[28rem]:px-2.5"
           >
             <span className="size-1.5 rounded-full p-dot-accent p-dot-pulse" aria-hidden="true" />
-            Preview ready
+            {/* A narrow column keeps the pulse and gives its words to the pages; the name is the control's either way. */}
+            <span className="hidden @[28rem]:inline">Preview ready</span>
           </button>
         )}
       </>} />

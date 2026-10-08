@@ -1511,6 +1511,9 @@ const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
   // Read as `result.plans` / `result.tasks`.
   if (method === "listWorkspaceWork") return rpcResult({ plans: [], tasks: [] }).json<T>();
 
+  // A `SandboxSizeState`: the blanket `[]` below reads as a start refused for `undefined`.
+  if (method === "getSandboxSize") return rpcResult(v.parse(JsonValueSchema, AGENT_RPC.get(method))).json<T>();
+
   // Read as `result.builtIn.map(...)`; three halves, as the orchestrator answers it.
   if (method === "getToolDescriptions") return rpcResult({ builtIn: [], executors: [], crafted: [] }).json<T>();
 
