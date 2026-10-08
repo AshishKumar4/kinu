@@ -179,6 +179,11 @@ export class EvalVerifier {
     return invokedInTurn(await this.#session.runEvents(), name, this.#startedAt);
   }
 
+  /** The lead's own run events since this turn's prompt, oldest first: what it did, read from the record, not its words. */
+  async leadEvents(): Promise<readonly RunEvent[]> {
+    return (await this.#session.runEvents()).filter((event) => Date.parse(event.timestamp) >= this.#startedAt);
+  }
+
   /**
    * The agent's answer to a question turn: its last reply that `answerPattern` matches whole
    * (anchored, the answer in its first group) once Markdown emphasis, quotes and a closing period
