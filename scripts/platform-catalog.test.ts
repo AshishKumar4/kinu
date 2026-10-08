@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import {
-  PLATFORM_FACT_IDS,
+  platformFactIds,
   injectableFaults,
   platformFact,
   platformFactEntries,
@@ -145,7 +145,7 @@ describe('the fault set a simulator may inject', () => {
         .toContain(platformFact(id).evidence);
     }
 
-    for (const id of PLATFORM_FACT_IDS) {
+    for (const id of platformFactIds()) {
       if (injectable.includes(id)) continue;
       expect(['documented', 'inferred', 'speculative']).toContain(platformFact(id).evidence);
     }
