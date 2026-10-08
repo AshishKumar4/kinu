@@ -1870,7 +1870,7 @@ export type {
 } from './read-models/workspace-diff';
 
 export {
-  LIVE_READS, LiveReadsNotice, PAGE_KEEPALIVE, READS_CHANGED_EVENT, ROSTER_READS, readsMovedByFiles, readsWrittenBy,
+  LIVE_READS, LiveReadsNotice, PAGE_KEEPALIVE, READS_CHANGED_EVENT, ROSTER_READS, readsMovedByFiles, readsWrittenBy, readsOfTables,
   type LiveRead, type ReadsChangedFrame,
 } from './read-models/live-reads';
 

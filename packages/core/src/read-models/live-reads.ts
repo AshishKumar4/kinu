@@ -73,6 +73,11 @@ const WRITE = /\b(INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE(?:\s+OR\s+
 
 const NONE: readonly LiveRead[] = [];
 
+/** The reads that select from tables an agent's own isolate wrote, which this object's statements never touched (D9). */
+export function readsOfTables(tables: readonly string[]): readonly LiveRead[] {
+  return [...new Set(tables.flatMap((table) => READS_BY_TABLE.get(table) ?? NONE))];
+}
+
 export function readsWrittenBy(query: string): readonly LiveRead[] {
   const write = WRITE.exec(query);
   const table = write?.[2]?.toLowerCase();

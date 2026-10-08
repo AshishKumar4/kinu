@@ -177,7 +177,7 @@ import {
   getRunTimeline, RUN_TIMELINE_MAX, boundedInt, type TimelineSpan,
   getRunEvents, getRunEventText, type RunListEntry, type RunSummary,
   turnRequestIndex, turnRequestPage, type TurnRequestIndex, type TurnRequestPage, type AgentStores,
-  LiveReadsNotice, readsMovedByFiles, readsWrittenBy, ROSTER_READS, sameDeviceStatus, type LiveRead,
+  LiveReadsNotice, readsMovedByFiles, readsOfTables, readsWrittenBy, ROSTER_READS, sameDeviceStatus, type LiveRead,
   CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline, restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult, type WorkspaceReviewResult,
   initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes,
@@ -890,6 +890,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (event.type === 'turn-start') {
       this.agentTurns.chatOpened(actorId, event.turnId);
       this.overviewChanged();
+      this.liveReadsMoved(readsOfTables(['actor_turn_claims']));
 
       if (actorId === this.actorHandle().actorId) {
         this.mainChatOpenedAt = Date.now();
@@ -915,6 +916,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private async hostedTurnEnded(actorId: string, event: SessionEvent, figures: AgentFigures): Promise<void> {
     await this.hostedChatEvent(actorId, event);
     this.agentTurns.chatClosed(actorId);
+    // Its claim closed and its sequence opened in its own isolate.
+    this.liveReadsMoved(readsOfTables(['actor_turn_claims', 'terminal_effects']));
 
     if (actorId === this.actorHandle().actorId) {
       this.mainFacetTurnEnded();
@@ -2260,6 +2263,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    *  cancelled the first arm on its way, and its later answers replace the second. */
   private async handInput<A>(actorId: string, hand: () => Promise<A>): Promise<A> {
     await this.agentWakes.arm(actorId, Date.now() + RECOVERY_BACKOFF_CEILING_MS);
+    // The agent reads working from here: its turn claims are its own isolate's, whose writes this object never sees.
+    this.liveReadsMoved(readsOfTables(['actor_turn_claims']));
     const taken = await hand();
 
     await this.agentWakes.arm(actorId, Date.now() + RECOVERY_BACKOFF_CEILING_MS);
@@ -2348,11 +2353,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const facet = () => this.agentCalls(actorId);
     const snapshot = () => this.agentSnapshot(actorId);
 
+    // Its plans are its own isolate's rows: the reads over them move as each change answers.
+    const moved = <A>(answer: A): A => {
+      this.liveReadsMoved(readsOfTables(['plan_reviews']));
+
+      return answer;
+    };
+
     return {
       active: async () => await (await facet()).activePlanReview(snapshot()),
-      saveAnnotations: async (id, revision, annotations) => await (await facet()).savePlanReviewAnnotations(snapshot(), id, revision, annotations),
-      dismiss: async (id, revision) => await (await facet()).dismissPlanReview(snapshot(), id, revision),
-      decide: async (id, revision, decision, feedback) => await (await facet()).decidePlanReview(snapshot(), { id, revision, decision, ...(feedback !== undefined && { feedback }) }),
+      saveAnnotations: async (id, revision, annotations) => moved(await (await facet()).savePlanReviewAnnotations(snapshot(), id, revision, annotations)),
+      dismiss: async (id, revision) => moved(await (await facet()).dismissPlanReview(snapshot(), id, revision)),
+      decide: async (id, revision, decision, feedback) => moved(await (await facet()).decidePlanReview(snapshot(), { id, revision, decision, ...(feedback !== undefined && { feedback }) })),
     };
   }
 
@@ -2363,6 +2375,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const record = this.actorDirectoryStore().retained(actorId);
 
     if (result.ok && record !== null) actorReadHandle(this.boundSql, record).config.setHoldsPlans();
+
+    if (result.ok) this.liveReadsMoved(readsOfTables(['plan_reviews']));
 
     return result;
   }
