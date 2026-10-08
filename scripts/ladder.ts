@@ -42,7 +42,7 @@ import {
   CACHE_BLIND_SPOTS, cacheEnabled, defaultStoreDirectory, gateEnvironment, gateEnvNames, keyFor, planGate, recordGreen, pathNodeVersion, storeAt, toolVersions,
 } from './ladder-cache';
 import type { GateCacheRequest, Plan, Store, ToolVersions } from './ladder-cache';
-import { fromEnvironment } from './ladder-proofs';
+import { fromEnvironment, type RemoteProofs } from './ladder-proofs';
 import { auditClosure } from './ladder-audit';
 import { driftFinding, installDrift } from './install-parity';
 import { deriveClosure, repoAt } from './ladder-closure';
@@ -3577,6 +3577,13 @@ function recordTestFiles(
   return recorded.every(Boolean);
 }
 
+/** A recorded proof, uploaded so a later commit's container can carry it; a lost upload is a note, never a red. */
+async function carryProof(remote: RemoteProofs | undefined, proof: { readonly run: string; readonly key: string; readonly store: Store; readonly notes: Set<string> }): Promise<void> {
+  if (remote === undefined) return;
+
+  for (const lost of await remote.push([proof.key], proof.store)) proof.notes.add(`${proof.run}: its proof did not reach the bucket (${lost})`);
+}
+
 function cacheRunEnvironment(closure: Closure, argv: readonly string[]): ReturnType<typeof gateEnvironment> | undefined {
   if (closure.kind !== 'derived') return undefined;
   const env = gateEnvironment(closure);
@@ -3835,6 +3842,9 @@ async function ciCommand(): Promise<number | undefined> {
 if (import.meta.main) {
   // Before any gate spawns: TMPDIR is a base name of every gate's environment (ladder-cache.ts), so each inherits it.
   if (process.env.TMPDIR === undefined && existsSync(SCRATCH_TMPDIR)) process.env.TMPDIR = SCRATCH_TMPDIR;
+
+  // Read, and deleted from the environment, before this process spawns anything: no row sees the bucket's credentials.
+  const remoteStore = fromEnvironment(process.env);
 
   const ciStatus = await ciCommand();
 
@@ -4156,8 +4166,6 @@ if (import.meta.main) {
   // hashes, cache or `--no-cache`, so a recorded verdict and a fresh one are
   // taken in one environment.
   const caching = cacheEnabled({ hammer: rowGate?.phase === 'hammer', noCache: process.argv.includes('--no-cache') });
-  // Read, and deleted from the environment, before any gate spawns: no row sees the bucket's credentials.
-  const remoteStore = fromEnvironment(process.env);
   const remote = caching ? remoteStore : undefined;
   const tools = toolVersions(root, await pathNodeVersion());
   const store = storeAt(defaultStoreDirectory());
@@ -4356,10 +4364,9 @@ if (import.meta.main) {
         { seconds, revision, timings: ciTimings(timingPath) },
       );
 
-      if (proofRecorded) recorded.push(gate.run);
-
-      if (proofRecorded && remote !== undefined) {
-        for (const lost of await remote.push([plan.key], store)) notes.add(`${gate.run}: its proof did not reach the bucket (${lost})`);
+      if (proofRecorded) {
+        recorded.push(gate.run);
+        await carryProof(remote, { run: gate.run, key: plan.key, store, notes });
       }
 
       return;

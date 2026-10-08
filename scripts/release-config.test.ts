@@ -412,7 +412,9 @@ describe('the workflow readers see what GitHub and the shell run', () => {
 
 describe('the workflows that publish and measure this product', () => {
   test('every workflow is read, and the credential-bearing jobs are named', () => {
-    expect(WORKFLOW_FILES.length, 'the workflow corpus collapsed').toBeGreaterThan(3);
+    // GitHub keeps two: the secret scan and the dispatched evals (CI, Lean and the nightly sweeps run on armada).
+    expect(WORKFLOW_FILES.map((workflow) => workflow.file).sort((a, b) => a.localeCompare(b)), 'the workflow corpus changed')
+      .toEqual(['.github/workflows/evals.yml', '.github/workflows/security-scan.yml']);
     // Named, not counted. These hold every credential in the repository, and
     // the assertions below are only worth anything if they are still these.
     expect(SECRET_JOBS.map((entry) => entry.label).sort()).toEqual([
