@@ -25,7 +25,8 @@ export const WORKSPACE_KEYED_ROWS = [
   { table: 'device_inflight_requests', column: 'workspace', removal: { kept: 'the device protocol removes a row once the daemon acknowledges its end' } },
   { table: 'experience_library', column: 'source_workspace', removal: { kept: "provenance: the owner's library outlives the workspace it came from" } },
   { table: 'user_peer_grants', column: 'sender_agent_name', removal: { kept: "another user's workspace" } },
-  { table: 'user_shares_received', column: 'workspace', removal: { kept: "another owner's workspace" } },
+  { table: 'user_share_cards', column: 'workspace', removal: { kept: "another owner's workspace" } },
+  { table: 'share_cards_sent', column: 'workspace', removal: { kept: "the teardown's share-card reconcile removes each row once its recipient's removal is queued" } },
 ] as const satisfies readonly WorkspaceKeyedRows[];
 
 export interface WorkspaceKeyedRows {
@@ -433,15 +434,25 @@ export function initUserTables(sql: SqlExec): void {
     )
   `);
 
-  // A projection: every read re-asks the owner's workspace, so a stale row can only list something that refuses.
+  // The cards this account holds of shares given to it, written only by each owner's account.
   sql.exec(`
-    CREATE TABLE IF NOT EXISTS user_shares_received (
+    CREATE TABLE IF NOT EXISTS user_share_cards (
       owner_user_id TEXT NOT NULL,
-      owner_email   TEXT NOT NULL,
       workspace     TEXT NOT NULL,
       share_id      TEXT NOT NULL,
-      created_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      card          TEXT NOT NULL,
       PRIMARY KEY (owner_user_id, workspace, share_id)
+    )
+  `);
+
+  // What this account last sent each recipient of a share: the share-card reconcile's other side.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS share_cards_sent (
+      workspace         TEXT NOT NULL,
+      share_id          TEXT NOT NULL,
+      recipient_user_id TEXT NOT NULL,
+      card              TEXT NOT NULL,
+      PRIMARY KEY (workspace, share_id, recipient_user_id)
     )
   `);
 }

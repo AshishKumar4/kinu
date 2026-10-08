@@ -9,7 +9,7 @@ import { USER_DO_RPC_SURFACE, USER_DO_STARTED_RPC, sealRpcSurface } from '../rpc
 import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from '../activation-gate';
 
 import {
-  type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, ORCHESTRATOR_AGENT_SLUG, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type DeviceCodeStart, type JsonValue, type EgressRequestFacts, type EgressSecretBinding, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type EgressSecretSummary, type PutEgressSecretInput, type UnrevokedGrant, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, DEVICE_KEEPALIVE_PING, DEVICE_KEEPALIVE_PONG, DEVICE_TOKEN_ROTATION_ACK, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, } from '@kinu.run/core';
+  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, ORCHESTRATOR_AGENT_SLUG, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type DeviceCodeStart, type JsonValue, type EgressRequestFacts, type EgressSecretBinding, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type EgressSecretSummary, type PutEgressSecretInput, type UnrevokedGrant, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, DEVICE_KEEPALIVE_PING, DEVICE_KEEPALIVE_PONG, DEVICE_TOKEN_ROTATION_ACK, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, } from '@kinu.run/core';
 
 import { DurableObjectOAuthClientProvider, type AgentMcpOAuthProvider } from 'agents/mcp/do-oauth-client-provider';
 
@@ -38,7 +38,8 @@ import {
 
 import { UserCredentials, type CredentialEndpoint, type CodexStatus, type ConnectedProvider, type CredentialSummary } from './credentials';
 import { UserWorkspaces, type WorkspaceEntry, type WorkspaceRegistration, type WorkspaceRegistrationSource } from './workspaces';
-import { UserProfileStore, type ProfileCatalogWriteResult, type SharedBlueprintReceipt, type UserProfile } from './profile';
+import { UserProfileStore, type ProfileCatalogWriteResult, type UserProfile } from './profile';
+import { ShareCardJobs, type ReceivedShare } from './share-cards';
 import type { SqlRow, UserObjectHost } from './user-host';
 
 import {
@@ -61,6 +62,7 @@ export class UserDO extends Agent<Env> {
     sealRpcSurface(this, USER_DO_RPC_SURFACE);
     const gate = new ActivationGate();
     this.lifecycle.use(gate);
+    this.lifecycle.use(this.shareCards);
     startBeforeRpc(this, USER_DO_STARTED_RPC, () => gate.ready());
     // A DO is its own isolate, so the Worker's diagnostics sink must be installed here too.
     installAnalyticsDiagnostics(this.env);
@@ -80,7 +82,16 @@ export class UserDO extends Agent<Env> {
 
   private readonly mcpServers = new UserMcpServers({ ...this.host, mcp: this.mcp, vault: this.credentials });
 
-  private readonly workspaces = new UserWorkspaces({ ...this.host, mcpServers: this.mcpServers, nudgeUnreported: () => { this.nudgeUnreported(); } });
+  private readonly shareCards = new ShareCardJobs({
+    sql: this.ctx.storage.sql,
+    owner: () => ({ userId: this.name, email: this.sqlx<{ email: string }>(`SELECT email FROM user_profile WHERE id = 1`)[0]?.email ?? '' }),
+    recipient: (userId) => this.env.UserDO.get(this.env.UserDO.idFromName(userId)),
+    caller: () => ownerCaller(this.env),
+  });
+
+  private readonly workspaces = new UserWorkspaces({
+    ...this.host, mcpServers: this.mcpServers, shareCards: this.shareCards, nudgeUnreported: () => { this.nudgeUnreported(); },
+  });
 
   private readonly profile = new UserProfileStore({ ...this.host, workspaces: this.workspaces });
 
@@ -144,20 +155,31 @@ export class UserDO extends Agent<Env> {
     return this.profile.putProfileCatalog(caller, catalog, expectedVersion);
   }
 
-  sharesReceived_add(caller: UserCaller, row: SharedBlueprintReceipt): Promise<void> {
-    return this.profile.sharesReceived_add(caller, row);
+  shareCards_put(caller: UserCaller, row: ReceivedShare): Promise<void> {
+    return this.profile.shareCards_put(caller, row);
+  }
+
+  shareCards_remove(caller: UserCaller, ownerUserId: string, workspace: string, shareId: string): Promise<void> {
+    return this.profile.shareCards_remove(caller, ownerUserId, workspace, shareId);
   }
 
   libraryTiles(caller: UserCaller): ReturnType<UserProfileStore['libraryTiles']> {
     return this.profile.libraryTiles(caller);
   }
 
-  sharesReceived_list(caller: UserCaller): Promise<SharedBlueprintReceipt[]> {
+  sharesReceived_list(caller: UserCaller): Promise<ReceivedShare[]> {
     return this.profile.sharesReceived_list(caller);
   }
 
   sharesReceived_forget(caller: UserCaller, ownerUserId: string): Promise<void> {
     return this.profile.sharesReceived_forget(caller, ownerUserId);
+  }
+
+  /** For the account-delete sweep: cancels every card not yet delivered and names every account sent one. */
+  async shareCards_withdraw(caller: UserCaller): Promise<string[]> {
+    await this.requireTier(caller, 'shares');
+
+    return await this.shareCards.withdraw();
   }
 
   ensureWorkspaceCapability(workspaceName: string, presentedHash: string | null): Promise<void> {

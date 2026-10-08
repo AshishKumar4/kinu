@@ -5,7 +5,7 @@
  *
  * systemd runs it, from units {@link install} writes: `kinu-staging@<branch>.path` watches the branch's
  * remote-tracking ref, which moves when the release is pushed, and starts `kinu-staging@<branch>.service`, a oneshot
- * that runs `run` from the dedicated worktree {@link WORKTREE}, with the deploy's credentials from {@link ENV_FILE}.
+ * that runs `run` from the dedicated worktree {@link WORKTREE}, with the deploy's credentials from {@link SECRETS_FILE}.
  * Each round reads the tip and stops once it is the last tip deployed; otherwise it moves the worktree to the tip,
  * cleans it, and deploys it (scripts/deploy.sh, which takes the environment's deploy lock). A deploy refused because
  * another staging deploy holds that lock is no deploy: the round waits for the lock, then reads the tip again. systemd
@@ -14,7 +14,7 @@
  *
  * AUTO-PROMOTION. Production takes whichever build staging verified, through `deploy.sh --promote`, the one path:
  * `kinu-promote@<branch>.timer` starts `promote` every 15 minutes from {@link PROMOTE_WORKTREE}, with production's
- * credentials from {@link PROMOTE_ENV_FILE}. A round takes the last tip continuous staging deployed and leaves it
+ * credentials from {@link SECRETS_FILE}. A round takes the last tip continuous staging deployed and leaves it
  * when production serves it already or it was tried before; otherwise it runs `promote.ts check` at that tip, which
  * refuses until staging's record and the evals' green Verdict are both there, and only then promotes. A promotion
  * that goes red is never tried again: no rollback is automatic, the report and its rollback hint stand, and the next
@@ -35,11 +35,8 @@ export const WORKTREE = '/mnt/local/kinu/wt/staging-loop';
 /** The dedicated checkout auto-promotion promotes from, and no one edits. */
 export const PROMOTE_WORKTREE = '/mnt/local/kinu/wt/promote-loop';
 
-/** A staging deploy's credentials, as `KEY=value` lines, written by whoever owns them; mode 600. */
-export const ENV_FILE = join(homedir(), '.config', 'kinu', 'staging-deploy.env');
-
-/** A promotion's credentials, likewise. */
-export const PROMOTE_ENV_FILE = join(homedir(), '.config', 'kinu', 'promote-deploy.env');
+/** The operator's secrets, staging's and production's deploy credentials among them, as `KEY=value` lines; mode 600. */
+export const SECRETS_FILE = join(homedir(), '.config', 'kinu', 'secrets.env');
 
 /** What scripts/deploy.sh exits with when another deploy of the environment holds its lock: nothing ran. */
 export const DEPLOY_BUSY = 75;
@@ -236,7 +233,7 @@ export function loopUnits(common: string, productionOrigin: string) {
     ].join('\n'),
     'kinu-staging@.service': serviceUnit({
       description: 'Continuous staging of origin\'s %I, the newest tip each round (scripts/staging-loop.ts)',
-      worktree: WORKTREE, envFile: ENV_FILE, command: 'run', extra: [],
+      worktree: WORKTREE, envFile: SECRETS_FILE, command: 'run', extra: [],
     }),
     'kinu-promote@.timer': [
       '[Unit]',
@@ -252,7 +249,7 @@ export function loopUnits(common: string, productionOrigin: string) {
     ].join('\n'),
     'kinu-promote@.service': serviceUnit({
       description: 'Auto-promotion round for origin\'s %I (scripts/staging-loop.ts)',
-      worktree: PROMOTE_WORKTREE, envFile: PROMOTE_ENV_FILE, command: 'promote', extra: [`Environment=KINU_PRODUCTION_ORIGIN=${productionOrigin}`],
+      worktree: PROMOTE_WORKTREE, envFile: SECRETS_FILE, command: 'promote', extra: [`Environment=KINU_PRODUCTION_ORIGIN=${productionOrigin}`],
     }),
   };
 }
@@ -260,9 +257,7 @@ export function loopUnits(common: string, productionOrigin: string) {
 /** Both worktrees and the four units, the path unit and the timer enabled: from then on each push of `branch` deploys
  *  its tip to staging, and each verified one is promoted. */
 async function install(branch: string): Promise<void> {
-  for (const file of [ENV_FILE, PROMOTE_ENV_FILE]) {
-    if (!existsSync(file)) throw new Error(`${file} does not exist: write the deploy's credentials there (mode 600), then install`);
-  }
+  if (!existsSync(SECRETS_FILE)) throw new Error(`${SECRETS_FILE} does not exist: write the deploy's credentials there (mode 600), then install`);
 
   const root = new URL('..', import.meta.url).pathname;
   const common = git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']);

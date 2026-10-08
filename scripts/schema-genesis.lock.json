@@ -1064,6 +1064,13 @@
     "CHECK((request_id IS NULL) = (output_slot IS NULL))",
     "CHECK((sealed_at IS NULL AND content_json IS NULL AND content_path IS NULL AND content_digest IS NULL) OR (sealed_at IS NOT NULL AND ((content_json IS NOT NULL AND content_path IS NULL AND content_digest IS NULL) OR (content_json IS NULL AND content_path IS NOT NULL AND content_digest IS NOT NULL))))"
   ],
+  "share_cards_sent@packages/core/src/state/user-schema.ts": [
+    "workspace TEXT NOT NULL",
+    "share_id TEXT NOT NULL",
+    "recipient_user_id TEXT NOT NULL",
+    "card TEXT NOT NULL",
+    "PRIMARY KEY (workspace, share_id, recipient_user_id)"
+  ],
   "slate_file_manifest@packages/core/src/state/workspace-schema.ts": [
     "slate_id TEXT NOT NULL",
     "path TEXT NOT NULL",
@@ -1415,6 +1422,13 @@
   "user_schema_meta@packages/core/src/state/user-schema.ts": [
     "key TEXT PRIMARY KEY",
     "value TEXT NOT NULL"
+  ],
+  "user_share_cards@packages/core/src/state/user-schema.ts": [
+    "owner_user_id TEXT NOT NULL",
+    "workspace TEXT NOT NULL",
+    "share_id TEXT NOT NULL",
+    "card TEXT NOT NULL",
+    "PRIMARY KEY (owner_user_id, workspace, share_id)"
   ],
   "user_shares_received@packages/core/src/state/user-schema.ts": [
     "owner_user_id TEXT NOT NULL",
