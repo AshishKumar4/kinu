@@ -89,6 +89,8 @@ const TERMINAL_EFFECT_NAMES = [
   // Detached; a refused drawing completes and the monogram stays.
   'workspace_logo',
   'parent_report',
+  // Detached: a turn whose lanes are another object's hands it the settled turn, which that object owes on its own.
+  'workspace_settle',
   // Retired (docs/EVOLUTION-REDESIGN.md §6): no turn owes them, and a row an older build wrote completes unrun.
   'shadow_trial', 'auto_gepa',
 ] as const;
@@ -195,6 +197,18 @@ function taskReminderTerminalEffect(queue: () => OwedTurnQueue): TerminalEffect 
   });
 }
 
+/** The recording, the lessons and the drain: owed where the actor's evolution tables and event log are. */
+export function turnRecordingEffects(deps: {
+  readonly orchestrator: Pick<AgentOrchestrator, 'recordTurn' | 'recordedTurn' | 'drainPendingEvents'>;
+  readonly engine: Pick<EvolutionEngine, 'learnFromTurn'>;
+}): TerminalEffectTable {
+  return {
+    turn_record: turnRecordTerminalEffect(deps.orchestrator),
+    turn_lessons: turnLessonsTerminalEffect(deps.engine),
+    event_drain: eventDrainTerminalEffect(deps.orchestrator),
+  };
+}
+
 /** The bodies every chat backend owes alike: the loop's follow-up turns, the recording, the lessons and the drain. */
 export function chatTerminalEffects(deps: {
   readonly chat: () => OwedTurnQueue;
@@ -205,9 +219,7 @@ export function chatTerminalEffects(deps: {
     overflow_retry: overflowRetryTerminalEffect(deps.chat),
     output_continuation: outputLimitContinuationTerminalEffect(deps.chat),
     task_reminder: taskReminderTerminalEffect(deps.chat),
-    turn_record: turnRecordTerminalEffect(deps.orchestrator),
-    turn_lessons: turnLessonsTerminalEffect(deps.engine),
-    event_drain: eventDrainTerminalEffect(deps.orchestrator),
+    ...turnRecordingEffects(deps),
   };
 }
 

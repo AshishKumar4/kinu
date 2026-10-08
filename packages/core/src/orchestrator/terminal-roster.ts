@@ -2,8 +2,8 @@
  * What a settled response owes, in order: the one roster for every backend, so the same questions get
  * the same answers. Callers supply values, never decisions; an effect a backend lacks is an absent part.
  */
-import type { JsonValue } from '../utils/json';
-import type { WorkMode } from '../types/turn';
+import { JsonValueSchema, type JsonValue } from '../utils/json';
+import { WorkModeSchema, type WorkMode } from '../types/turn';
 import type { RunEndReason } from './turn-lifecycle';
 import type { TurnContinuity } from './agent-orchestrator';
 import type { OwedEffect } from './terminal-effects';
@@ -12,6 +12,7 @@ import type { SubordinateReportStatus } from '../events/hub/types';
 import { isPlaceholderMission } from '../identity/soul';
 import * as v from 'valibot';
 import { CompletedTurnSchema } from '../evolution/session-window';
+import { RunEndReasonSchema } from './terminal-effects';
 import { owesTurnLessons } from '../evolution/struggles';
 
 /** `completed` is the driver's verdict; rows keyed to the answer gate on the narrower `durablyAnswered`. */
@@ -141,26 +142,7 @@ export function declareTerminalRoster(
     });
   }
 
-  if (parts.overflowRetry) {
-    owed.push({
-      name: 'overflow_retry', scope: messageId, lane: 'inline', input: {},
-    });
-  }
-
-  // Mutually exclusive with the retry; `completed` decides which.
-  if (parts.outputContinuation) {
-    owed.push({
-      name: 'output_continuation', scope: messageId, lane: 'inline', input: {},
-    });
-  }
-
-  // Claimed inside the commit so a killed process re-drives delivery. No open tasks, no row.
-  if (parts.taskReminder) {
-    owed.push({
-      name: 'task_reminder', scope: messageId, lane: 'inline',
-      input: { text: parts.taskReminder.text },
-    });
-  }
+  owed.push(...followUpTurns(messageId, parts));
 
   owed.push({
     name: 'turn_record', scope: messageId, lane: 'inline',
@@ -221,6 +203,53 @@ export function declareTerminalRoster(
   owed.push(...completedBuildEffects(facts, parts, naming?.effect ?? null));
 
   return owed;
+}
+
+/** The chat's own follow-up turns, each claimed inside the commit so a killed process re-drives its delivery. */
+function followUpTurns(messageId: string, parts: Pick<TerminalTurnParts, 'overflowRetry' | 'outputContinuation' | 'taskReminder'>): OwedEffect[] {
+  const owed: OwedEffect[] = [];
+
+  if (parts.overflowRetry) owed.push({ name: 'overflow_retry', scope: messageId, lane: 'inline', input: {} });
+
+  // Mutually exclusive with the retry; `completed` decides which.
+  if (parts.outputContinuation) owed.push({ name: 'output_continuation', scope: messageId, lane: 'inline', input: {} });
+
+  // No open tasks, no row.
+  if (parts.taskReminder) owed.push({ name: 'task_reminder', scope: messageId, lane: 'inline', input: { text: parts.taskReminder.text } });
+
+  return owed;
+}
+
+/** A settled turn as its chat hands it to the object that owes its lanes; that object scopes and declares the rest. */
+export const HandedOffTurnSchema = v.object({
+  turnId: v.string(),
+  messageId: v.string(),
+  status: RunEndReasonSchema,
+  completed: v.boolean(),
+  workMode: WorkModeSchema,
+  userText: v.string(),
+  assistantText: v.string(),
+  /** The event the turn answered; null for a person's message. */
+  event: v.nullable(v.string()),
+  /** Unscoped: the receiving object's governor scopes it. */
+  turn: JsonValueSchema,
+  credited: v.nullable(v.string()),
+  answeredDeliveries: v.array(v.string()),
+  reachableTools: v.array(v.string()),
+  recordedAt: v.number(),
+});
+
+export type HandedOffTurn = v.InferOutput<typeof HandedOffTurnSchema>;
+
+/**
+ * A turn whose lanes are another object's (the workspace's own agent, whose evolution, event log and titles are the
+ * workspace's): its chat's follow-up turns, then the settled turn handed to that object, which declares and owes the
+ * rest of the roster itself.
+ */
+export function declareHandoffRoster(
+  parts: Pick<TerminalTurnParts, 'overflowRetry' | 'outputContinuation' | 'taskReminder'>, settled: HandedOffTurn,
+): OwedEffect[] {
+  return [...followUpTurns(settled.messageId, parts), { name: 'workspace_settle', scope: settled.messageId, lane: 'detached', input: { ...settled } }];
 }
 
 /** Owed whether or not a reply ever rates the turn, only by a turn with something to learn from (`owesTurnLessons`);

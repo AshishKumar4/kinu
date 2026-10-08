@@ -6,7 +6,7 @@ import { decodeModelMessageValues, relayedAnswer, remoteContextTree } from '@kin
 import type { AgentOwnInspection, ArchiveSqlCursor, ContextEditor, ContextTree, StepSpendSource, ConversationRecall, PositionPageRequest, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ProviderEnv, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import type { AgentWorkspace } from './agent-facet/agent-turn';
-import type { AdvisorRecoverySnapshot, AgentFigures, ResolvedTurnProfile, AgentHeadDelta, AgentReview, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TurnRequestAt, ModelCallReport, ModelOperationEvent } from '@kinu.run/core';
+import type { AdvisorRecoverySnapshot, AgentFigures, HandedOffTurn, ResolvedTurnProfile, AgentHeadDelta, AgentReview, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TurnRequestAt, ModelCallReport, ModelOperationEvent } from '@kinu.run/core';
 import type { ChatTurnRequest } from './agent-turns';
 import { attempt, KinuError, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
@@ -71,6 +71,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   owedReport(...args: Parameters<AgentWorkspace['owedReport']>) { return this.answers.owedReport(...args); }
   parentReport(report: Parameters<AgentWorkspace['parentReport']>[0]) { return this.answers.parentReport(report); }
   autoTitle(subject: string, title: string | null) { return this.answers.autoTitle(subject, title); }
+  turnSettled(settled: HandedOffTurn) { return this.answers.turnSettled(settled); }
   hireAdvisor(advisor: AdvisorRecoverySnapshot) { return this.answers.hireAdvisor(advisor); }
   owes(next: number | null, holds: boolean) { return this.answers.owes(next, holds); }
   birthContext(drainTurnId: string) { return this.answers.birthContext(drainTurnId); }
@@ -143,6 +144,7 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   owedReport(...args: Parameters<AgentWorkspace['owedReport']>) { return relayedAnswer(this.host().owedReport(...args)); }
   parentReport(report: Parameters<AgentWorkspace['parentReport']>[0]) { return relayedAnswer(this.host().parentReport(report)); }
   autoTitle(subject: string, title: string | null) { return relayedAnswer(this.host().autoTitle(subject, title)); }
+  turnSettled(settled: HandedOffTurn) { return relayedAnswer(this.host().turnSettled(settled)); }
   hireAdvisor(advisor: AdvisorRecoverySnapshot) { return relayedAnswer(this.host().hireAdvisor(advisor)); }
   owes(next: number | null, holds: boolean) { return relayedAnswer(this.host().owes(next, holds)); }
   birthContext(drainTurnId: string) { return relayedAnswer(this.host().birthContext(drainTurnId)); }

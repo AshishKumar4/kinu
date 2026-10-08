@@ -16,7 +16,7 @@ import {
   type BackgroundJob, type BackgroundJobRunnerDeps, type Clock, type WorkspaceJobPorts, WorkspaceJobAuthorities, type JobAuthority,
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
   resetGuardedExec, StoragePredatesResetError, ERROR_STATUS, LiveWorkers,
-  type RunEventInput, type SubordinateInspectionAuthority, ConversationSearchStore, type ConversationRecall,
+  type RunEventInput, type SubordinateInspectionAuthority, type ConversationRecall,
   isSubordinateOrigin, WORKSPACE_ROOT,
 } from '@kinu.run/core';
 import type { EnqueueTurnResult, ProgrammaticTurn, SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
@@ -57,7 +57,7 @@ import {
   type ActorHandle, type ActorHost, type ActorReference, type ChildActorOperation,
   type ActorDirectoryResult, type HostedActor, type WorkspaceActorDirectory,
   type ScaffoldRunOptions,
-  initActorClaimTables, ActorClaimStore, initPendingSendTables, PendingSendStore,
+  initActorClaimTables, ActorClaimStore, initPendingSendTables,
   createScaffoldCandidateSurface, createScaffoldCallTool, createScaffoldHistory, type ScaffoldCandidateBinding,
   createJsonJudge, type ScaffoldControl,
   refinementPass, type RefinementDeps,
@@ -73,7 +73,6 @@ import {
   currentDateForPrompt,
   turnReasonForMetadata,
   workModeForTurnMetadata, authoredTurnMetadata,
-  observeSystemPromptHash,
   type DynamicContext, type DynamicApproval, type DynamicContextInput, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost,
@@ -81,9 +80,7 @@ import {
   // Shared turn lifecycle and run_end classifier, so neither backend chooses the string
   // (see turn-failure.ts).
   TurnAccumulator, AgentOrchestrator, ActorSession, type AgentOrchestratorDeps, type BackendHost,
-  type ChatTurnInput, type ComposedRequest, type PreparedTurn, type OwedTerminalEffectsInput, type ActorTurnLease,
-  type OwedEffect,
-  type InlineSteer,
+  type ChatTurnInput, type ComposedRequest,
   type AgentsToolAction,
   type AgentsToolDeps,
   type AgentsSwarmDeps,
@@ -107,7 +104,7 @@ import {
   // Prices a model_call row only when the rate belongs to that call's own model.
   buildModelCallEvent,
   type FactsStore,
-  createAgentStores, type AgentConfigStore, type SetModelDeps, type ContextSelection, collectDynamicContext, subordinateDelegatesOf,
+  createAgentStores, type AgentConfigStore, type SetModelDeps, collectDynamicContext, subordinateDelegatesOf,
   nimbusSessionFiles, agentArtifactDirectory, agentHome, MAIN_AGENT,
   CHAT_SESSION_ID, type SessionTranscript,
   type SqlExecutor,
@@ -117,7 +114,7 @@ import {
   invocationBackgroundPolicy,
   type BackgroundJobStore, type TaskListStore,
   BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob, type ActorToolsets,
-  cancelCurrentWork, getStoredModelSpec, setModel, getChatHistoryPage,
+  cancelCurrentWork, getStoredModelSpec, setModel,
   type CancelWorkOutcome, type ChatHistoryPage, type Page, type PageRequest, PositionPageRequestSchema, type PositionPageRequest,
   type MctsSearchStore, readSearchTree, isSteerBranchRunId,
   EventLog,
@@ -141,7 +138,7 @@ import {
   delegationExhausted, deriveChildDelegationBudget, type DelegationBudget,
   readSoul, bootstrapScaffold,
   applyWorkspaceTitle, suggestWorkspaceTitle, type NameOrigin,
-  parseModelSpec, specModelInfo, assembleActorTurn, withCompactionTrigger, promptCacheKey, vfsTurnSkills, type AssembledTurn, type TurnAssemblyRequest, type TurnAssemblySources,
+  parseModelSpec, specModelInfo, assembleActorTurn, promptCacheKey, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources,
   type ModelWindow, type AgentsMdSources,
   ModelCatalogSession, resolveEffectiveModelSpec, type ModelCatalogRead, type ModelInfo,
   // Shared turn-context assembly: the same ordering runChat runs on the CLI
@@ -165,7 +162,7 @@ import {
   toolsInWorkMode, type TaskPlan, withTaskPlan, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
   type AgentInbox,
-  type NimbusSandboxHandle, childContextResolver, localContextTree,
+  type NimbusSandboxHandle, childContextResolver,
 } from "@kinu.run/core";
 import {
   bindAgentSql, createCFRuntime, isCFRuntime, MODEL_SETTINGS,
@@ -188,7 +185,7 @@ import {
   recoveryBackoffMs,
   // Once-only lifecycle for one settled response; both backends drive this state machine.
   TerminalTransitions, initTerminalEffectTable,
-  terminalEffect,
+  terminalEffect, turnRecordingEffects, type AgentAnswer,
   RunEndReasonSchema, WorkModeSchema,
   AdvisorRecoverySnapshotSchema,
   type TerminalEffectFault, type TerminalEffectTable,
@@ -252,13 +249,6 @@ interface TurnReads {
 }
 
 type TierChoices = ReturnType<typeof ownProfileChoices>;
-
-interface TurnAssemblyInput {
-  readonly history: readonly ModelMessage[];
-  /** The actor's raw tool surface for the requested work mode. */
-  readonly tools: ToolSet;
-  readonly reads: TurnReads;
-}
 
 interface AsyncTaskOwner {
   promise: Promise<Exit.Exit<void>> | null;
@@ -325,35 +315,6 @@ function readTurnTier(body?: JsonObject): TierId | undefined {
   const parsed = v.safeParse(TierIdSchema, body?.tier);
 
   return parsed.success ? parsed.output : undefined;
-}
-
-type UserModelMessage = Extract<ModelMessage, { role: 'user' }>;
-
-function withCliCwdContext(messages: ReadonlyArray<ModelMessage>, cwd: string): ModelMessage[] {
-  const prefix = `Current terminal working directory: ${cwd}\n\n`;
-
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i];
-
-    if (message.role !== 'user') continue;
-    const next = [...messages];
-    next[i] = {
-      ...message,
-      content: prefixCliCwdContent(message.content, prefix),
-    };
-
-    return next;
-  }
-
-  return [...messages];
-}
-
-function prefixCliCwdContent(content: UserModelMessage['content'], prefix: string): UserModelMessage['content'] {
-  if (v.is(v.string(), content)) return `${prefix}${content}`;
-
-  if (Array.isArray(content)) return [{ type: 'text', text: prefix }, ...content];
-
-  return prefix;
 }
 
 const CompactionDetailSchema = v.optional(JsonValueSchema);
@@ -846,7 +807,7 @@ export abstract class ActorAgent extends Agent<Env> {
       temporary: this.temporaryAgentPort(),
       now: () => Date.now(),
       inheritedContext: () => this.readInheritedContext(),
-      originContext: () => this.turnOriginContext(),
+      originContext: () => this.mainWorkingContext(),
       ownMission: () => this.ownMission(),
       createName: mintSubordinateName,
       rosterMoved: () => { this.liveReadsMoved(ROSTER_READS); },
@@ -1131,7 +1092,7 @@ export abstract class ActorAgent extends Agent<Env> {
     // The seed is fetched on the same path the pane's socket opens, so each pane gets its own actor's rows.
     const seed = async (c: Context): Promise<Response> => {
       const hosted = hostedActorRoute(c.req.path) === null ? null : c.req.header(HOSTED_ACTOR_ID_HEADER) ?? '';
-      const history = await (hosted === null ? this.chatTranscript.history() : this.hostedChatWire(hosted)?.history());
+      const history = await (hosted === null ? this.chatTransport.wire.history() : this.hostedChatWire(hosted)?.history());
 
       if (history === undefined) return Response.json({ reason: 'missing', error: 'The actor is not hosted here.' }, { status: 404 });
 
@@ -1146,38 +1107,26 @@ export abstract class ActorAgent extends Agent<Env> {
     this.onRequest = async (request) => requests.fetch(request);
   }
   /** Lazy: `actorHandle()` resolves the directory row the constructor creates, after field init. */
-  private _pendingSends: PendingSendStore | null = null;
-  private get pendingSends(): PendingSendStore {
-    return this._pendingSends ??= new PendingSendStore(this.boundSql, this.actorHandle().actorId);
-  }
 
-  /** Reads SQL, not the RAM drain, which an eviction loses. Only turn-bound rows are steers;
-   *  unbound rows are the loop's own sends, already shown as messages, never as chips. */
-  protected pendingSteerRuns(): InlineSteer[] {
-    return this.pendingSends.restore()
-      .filter((row) => row.turnId !== null)
-      .map((row) => ({ id: row.id, text: row.text, state: 'queued' as const, atStep: null }));
-  }
 
   // A durable turn ends once; its effects are claimed in `tool_effect_claims` keyed on the
   // durable turn id, written before the first effect and settled after the last.
   // Not exactly-once externally: each external effect relies on its own idempotency key.
 
-  /** Effect bodies shared by every actor; per-actor effects live in each actor's own table. */
+  /** Effect bodies shared by every actor; per-actor effects live in each actor's own table. Main's turn is recorded and
+   *  its events drained here, where its evolution tables and event log are; its answer is read from its own isolate. */
   protected sharedTerminalEffects(): TerminalEffectTable {
     return {
+      ...turnRecordingEffects({ orchestrator: this.orch, engine: this.engine }),
       turn_end_extensions: terminalEffect({
         input: v.object({ messageId: v.string() }),
         // Replayed from the recorded message, not a live tree; the row stops a second announcement.
         // Convert inside the durable effect so an eviction leaves an owed announcement.
         run: async ({ messageId }) => {
-          const message = await this.chatTranscript.message(messageId);
+          const answer = await this.mainAnswer(messageId);
 
-          if (message === null) throw new KinuError('missing', 'terminal effect has no canonical answer');
-          const projected = await this.chatTranscript.project(messageId);
-
-          if (projected === null) throw new KinuError('missing', 'terminal effect has no canonical answer');
-          const text = projected.content;
+          if (answer === null) throw new KinuError('missing', 'terminal effect has no canonical answer');
+          const { message, content: text } = answer;
           // A refusal, not a retry: the stored message is fixed, so a part tree the converter rejects
           // never parses later and an owed row would retry forever. The announcement still fires.
           let responseMessages: ModelMessage[] = [];
@@ -1364,12 +1313,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Read at the start of a terminal sequence and carried through: the loop's live turn becomes
    *  the next one as soon as it opens, so a detached re-read could close the wrong claim. */
   protected durableTurnId(): string | null {
-    const live = this.mainChatTurn();
-
-    if (live !== undefined && live !== null) return live;
-
-    // Cold activation has no live turn: the newest unsettled claim this actor admitted is the turn.
-    return this.stores.claims.unsettled(1)[0]?.turnId ?? null;
+    return this.mainChatTurn();
   }
 
   /**
@@ -1724,6 +1668,12 @@ export abstract class ActorAgent extends Agent<Env> {
   /** The owner's Clear of main's chat; answers why the emptied request went unmeasured, if it did. */
   protected abstract clearMainConversation(): Promise<string | null>;
 
+  /** One of main's answers whole, from its own isolate; null for an id that names none. */
+  protected abstract mainAnswer(messageId: string): Promise<AgentAnswer | null>;
+
+  /** The metadata of main's newest message from a person, from its own isolate; undefined before any. */
+  protected abstract mainLastUserMetadata(): Promise<JsonObject | undefined>;
+
   /** The chat turn main's isolate runs now, as its room heard it open; null between turns. */
   protected abstract mainChatTurn(): string | null;
 
@@ -1752,12 +1702,6 @@ export abstract class ActorAgent extends Agent<Env> {
   protected abstract liveReadsMoved(reads: readonly LiveRead[]): void;
 
   protected get orch(): AgentOrchestrator { return this.actorSession.orchestrator; }
-
-  protected abstract owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[];
-
-  protected answerMetadata(_turnId: string, _texts: () => Promise<readonly string[]>): Promise<JsonObject | null> {
-    return Promise.resolve(null);
-  }
 
   private orchestrationDeps(): AgentOrchestratorDeps {
     {
@@ -2020,7 +1964,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Read per call: a scaffold spanning a turn sees the prepared messages as they stand now. */
   protected makeScaffoldHistory(): NonNullable<ScaffoldRunOptions['history']> {
-    return createScaffoldHistory(async () => (await this.stores.history.materialize()).messages);
+    return createScaffoldHistory(async () => [...await this.mainWorkingContext()]);
   }
 
   // Platform fan-out and wake ownership around core's serialized chat loop.
@@ -2512,7 +2456,7 @@ export abstract class ActorAgent extends Agent<Env> {
   private getAgentsToolDeps(workMode: WorkMode): AgentsToolDeps {
     const actorDeps = this.actorToolDeps();
 
-    const swarm = this.swarmDeps(this.rt, () => this.getModel(), () => this.turnOriginContext(), this.compaction().compactShared);
+    const swarm = this.swarmDeps(this.rt, () => this.getModel(), () => this.mainWorkingContext(), this.compaction().compactShared);
 
     const deps: AgentsToolDeps = {
       mode: workMode,
@@ -2565,7 +2509,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.operationProfile()?.profile ?? this._settledProfile;
   }
   /** Built in beforeTurn; read by the per-step dynamic context. */
-  private _turnActiveSkills: ActiveSkillSet | null = null;
   private _turnExternalTools: ToolSet = {};
   /** Instruction trust (KINU-N028): one store over actor SQL, scoped to this workspace so a forked
    *  or copied root starts unapproved. */
@@ -2693,10 +2636,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return this._boundSql;
   }
 
-  private _chatTranscript: SessionTranscript | null = null;
-  protected get chatTranscript(): SessionTranscript {
-    return this._chatTranscript ??= this.stores.history.transcript(CHAT_SESSION_ID);
-  }
 
   /** Persisted once per activation; tracing and swarm-progress frames share it so neither advances the other. */
   private _isolateGeneration: number | null = null;
@@ -2743,7 +2682,8 @@ export abstract class ActorAgent extends Agent<Env> {
         refusals: this.tierRefusals,
         contextPlane: {
           actorId: this.actorHandle().actorId,
-          own: () => localContextTree(() => ({ claims: this.claims, events: this.stores.eventRecorder }), { author: this.actorHandle().actorId, child: false }),
+          // Main's context is its own isolate's, as every agent's is.
+          own: () => this.agentStores(this.actorHandle().actorId).contextTree({ author: this.actorHandle().actorId, child: false }),
           children: childContextResolver({
             directory: this.actorDirectoryStore(),
             parent: this.actorHandle(),
@@ -3298,8 +3238,9 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Every read or write of an agent's own stores goes here (D9). */
   protected abstract agentStores(actorId: string): AgentStoreBroker;
 
+  /** Main's conversations are its own isolate's. */
   protected ownConversations(): ConversationRecall {
-    return new ConversationSearchStore(this.rt.storage.sql, this.actorHandle(), (sessionId) => this.stores.history.transcript(sessionId));
+    return this.agentStores(this.actorHandle().actorId).conversations();
   }
 
   /**
@@ -3312,7 +3253,7 @@ export abstract class ActorAgent extends Agent<Env> {
       // Strict: a dropped id cursor from an old client re-reads the newest page forever.
       const { actor, ...page } = v.parse(v.strictObject({ ...PositionPageRequestSchema.entries, actor: v.optional(v.string()) }), request);
 
-      if (actor === undefined) return yield* Effect.promise(async () => getChatHistoryPage(this.chatTranscript, page));
+      if (actor === undefined) return yield* Effect.promise(async () => this.agentStores(this.actorHandle().actorId).historyPage(page));
       yield* this.requireSubordinateChat(actor);
 
       return yield* Effect.promise(async () => this.agentStores(actor).historyPage(page));
@@ -3865,26 +3806,6 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Source for `turnWorkMode`, `turnProvenance`, and `turnUserMetadata`. */
   private _turnItem: ChatTurnInput | null = null;
 
-  /** The ChatSession's `prepareTurn` port; the loop has already opened the run row and lease. */
-  protected async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpening): Promise<PreparedTurn> {
-    const { tools, reads, trial } = await this.openTurnSurface(item, opening);
-
-    // The loop already placed the turn's input on the working history before handing it here.
-    const history = this.actorSession.history;
-    // The revision, not a copy: a context:'inherit' hire reads back the conversation the caller had.
-    this._turnOrigin = this.actorSession.turnContext;
-    const assembled = await this.assembleTurn({ history, tools, reads });
-    this._turnDurableLength = assembled.historyLength;
-    // Bound exactly once before execution; the CLI adapter binds it at the same point.
-    this.actorSession.bindProfile(lease, assembled.profile, assembled.profileInputs);
-    const execution = withCompactionTrigger(assembled.execution, this.compactionState, this.name, assembled.historyLength);
-
-    // Forced rebuild is armed by overflow recovery (onChatResponse).
-    if (execution.chat.transformTrigger === 'force') this.logActivity('compaction_forced', 'forced context rebuild');
-
-    return { execution, sessionKey: this.name, contextWindow: assembled.window.contextWindow, historyLength: assembled.historyLength, trial };
-  }
-
   /**
    * The workspace's half of opening one of main's turns: the turn's tools and reads, and the per-turn state its tools
    * and terminal effects read. The history and the assembly over it are the chat's half. A turn read again after a
@@ -3934,6 +3855,11 @@ export abstract class ActorAgent extends Agent<Env> {
     return this._facetTurnId !== null;
   }
 
+  /** The facet turn whose item this workspace holds; null between them. */
+  protected facetTurnId(): string | null {
+    return this._facetTurnId;
+  }
+
   /** Main's facet turn settled: its item, profile and reach are no longer the live turn's. */
   protected mainFacetTurnEnded(): void {
     this._facetTurnId = null;
@@ -3950,7 +3876,10 @@ export abstract class ActorAgent extends Agent<Env> {
     const item: ChatTurnInput = { kind: turnAuthor({ metadata: driving }) === 'operator' ? 'user' : 'programmatic', text: turn.input.task, metadata: driving };
 
     this._facetTurnId = turn.turnId;
-    const { tools, reads } = await this.openTurnSurface(item, turn.opening ?? null);
+
+    // A fresh turn opens main's accounting here, where its tools run; a turn read again after a restart keeps it.
+    if (turn.opening !== undefined) this.orch.beginTurn(Date.now(), driving);
+    const { tools, reads, trial } = await this.openTurnSurface(item, turn.opening ?? null);
     const sources = this.turnSources({ tools, reads, requestedWorkMode: turn.input.mode, item });
     const external = await sources.externalTools(this.modelCatalog.window());
 
@@ -3962,6 +3891,7 @@ export abstract class ActorAgent extends Agent<Env> {
       tools: this.inFacetTurn(tools, turn.taskPlan),
       raw: this.inFacetTurn(this.actorToolsets(turn.input.mode).raw, turn.taskPlan),
       sources: { ...sources, wiredToolNames: (mode) => [...sources.wiredToolNames(mode), ...Object.keys(external)] },
+      ...(trial !== null && { trial }),
     };
   }
 
@@ -3995,9 +3925,10 @@ export abstract class ActorAgent extends Agent<Env> {
     return this._turnArtifacts ?? artifactOverrides(currentArtifacts(this.rt.storage.sql, this.actorHandle()));
   }
 
+  /** Main's next request as a candidate scaffold is compared against: its working context is its own isolate's. */
   private async composeNextRequest(): Promise<ComposedRequest> {
     const { tools, reads } = await this.turnToolsAndReads({});
-    const { messages: history } = await this.stores.history.materialize();
+    const history = await this.mainWorkingContext();
     const requestedWorkMode = await this.preparedWorkMode();
     const assembled = await assembleActorTurn(this.turnSources({ tools, reads, requestedWorkMode, item: null }), this.turnRequest(history, requestedWorkMode, {}));
     this._settledProfile = assembled.profile;
@@ -4133,33 +4064,9 @@ export abstract class ActorAgent extends Agent<Env> {
     };
   }
 
-  private async assembleTurn(input: TurnAssemblyInput): Promise<AssembledTurn & { readonly historyLength: number }> {
-    this._workspaceInstructionApprovals = null;
-    this._turnActiveSkills = null;
-    const requestedWorkMode = this.turnWorkMode();
-    const body = this._turnItem?.metadata ?? {};
-    const assembled = await assembleActorTurn(this.turnSources({ ...input, requestedWorkMode, item: this._turnItem }), this.turnRequest(input.history, requestedWorkMode, body));
-    this._settledProfile = assembled.profile;
-
-    if (assembled.activeSkills !== null) {
-      this._turnActiveSkills = assembled.activeSkills;
-      this.logActivity('skills_active', assembled.activeSkills.active.map((skill) => skill.name).join(',') || '(none)');
-    }
-
-    this._turnOperation = assembled.operation;
-    this._turnExternalTools = assembled.externalTools;
-    this.orch.restrictTurnWorkMode(assembled.profile.workMode);
-    this.recordSystemPromptHash(assembled.execution.chat.system);
-    // The durable history with the CLI's cwd context laid over it: what the trigger measures against.
-    const raw = this._cliCwd ? withCliCwdContext(input.history, this._cliCwd) : input.history;
-
-    return { ...assembled, historyLength: raw.length };
-  }
-
-  private _turnOrigin: ContextSelection | null = null;
-
-  private async turnOriginContext(): Promise<readonly ModelMessage[]> {
-    return this._turnOrigin === null ? [] : (await this.actorSession.canonical.materializeAt(this._turnOrigin)).messages;
+  /** Main's working context, in its own isolate: what a context:'inherit' hire reads back of the conversation it had. */
+  private async mainWorkingContext(): Promise<readonly ModelMessage[]> {
+    return await this.agentStores(this.actorHandle().actorId).workingContext();
   }
 
   /** Subclass-only planes, read per step by the shared assembler; empty here. */
@@ -4173,7 +4080,7 @@ export abstract class ActorAgent extends Agent<Env> {
    */
   protected dynamicContextSnapshot(
     profile: Pick<ResolvedTurnProfile, 'workMode' | 'allowedTools' | 'tier'>, tools: ToolSet, memoryTail: string | undefined,
-    activeSkills: ActiveSkillSet | null = this._turnActiveSkills,
+    activeSkills: ActiveSkillSet | null = null,
   ): DynamicContext {
     const extras = this.extraDynamicContext();
 
@@ -4192,15 +4099,6 @@ export abstract class ActorAgent extends Agent<Env> {
       subordinateDelegates: () => this.subordinateDelegates(),
       approvals: extras.approvals,
     });
-  }
-
-  /** The system prompt hash should change only on real agent events (soul/skill/craft/device/model),
-   *  never between two vanilla consecutive turns; an unexplained change is a cache-prefix regression. */
-  private _lastSystemPromptHash: string | null = null;
-  private recordSystemPromptHash(system: string): void {
-    const { hash, status } = observeSystemPromptHash(this._lastSystemPromptHash, system);
-    this._lastSystemPromptHash = hash;
-    this.logActivity('system_prompt_hash', status === 'first' ? hash : `${hash} (${status})`);
   }
 
   /** A queued signal stamps kinuEvent metadata on the saved user message; real chat carries none. */
@@ -4239,7 +4137,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected async preparedWorkMode(): Promise<WorkMode> {
     if (this.turnItemLive()) return this.turnWorkMode();
 
-    return this.workModeForMetadata(await this.chatTranscript.lastUserMetadata());
+    return this.workModeForMetadata(await this.mainLastUserMetadata());
   }
 
   /** Read from the event alone, never from the work mode stamped beside it. */

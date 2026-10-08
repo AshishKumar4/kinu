@@ -2,7 +2,7 @@
 import { jsonSchema, tool, type ModelMessage, type ToolSet, type UIMessageChunk } from 'ai';
 import {
   CHAT_SESSION_ID, agentAffinityKey, HeadCapture, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, withEffectClaims, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan, imageModelOutput,
-  type AuthRequest, type AuthResolution, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type JsonValue, type ProviderEnv, type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
+  type AuthRequest, type AuthResolution, type HandedOffTurn, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type JsonValue, type ProviderEnv, type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
   turnSourcesFromBundle, captureOperationProfile, type ModelCallReport, type ModelOperationEvent,
   type AdvisorRecoverySnapshot, type AgentFigures, type HostedActor, type OwedReport, type SerializedMessage, type SessionEvent,
   type SubordinateReportLedger, type SubordinateReportStatus, type TaskTurnEnding, type WorkMode, type ResolvedTurnProfile, type DynamicContext,
@@ -45,6 +45,9 @@ export interface AgentWorkspace {
   }): Promise<string>;
   /** Persists the title the agent suggested itself; null lands the stand-in alone. */
   autoTitle(subject: string, title: string | null): Promise<void>;
+  /** The workspace's own agent hands its settled turn to the workspace, which owes that turn's lanes. Repeatable: the
+   *  workspace keys what it owes on the turn. */
+  turnSettled(settled: HandedOffTurn): Promise<void>;
   hireAdvisor(advisor: AdvisorRecoverySnapshot): Promise<void>;
   /** A facet sets no alarm: the instant it next needs waking, or none, and whether it holds owed work at all (a parked
    *  effect needs no wake but is still owed), replacing what it said before. */

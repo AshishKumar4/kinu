@@ -315,6 +315,7 @@ export class AgentTurns {
       tools: await describe(prepared.tools),
       dynamic: this.dynamic(turn, prepared),
       reviewsTurns: actor.session.reviewsTurns,
+      ...(prepared.trial !== undefined && { trial: prepared.trial }),
       ...(run?.mission !== undefined && { missionLabels: run.mission.labels }),
       trace: run?.reportStep !== undefined || run?.reportDelta !== undefined,
       resume: run?.resume !== undefined,

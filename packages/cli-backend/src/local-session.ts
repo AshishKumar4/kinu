@@ -5,7 +5,7 @@
 
 import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
-import { ConversationSearchStore, sameActorReference, testModel, toolDescription, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
+import { ConversationSearchStore, historyTurnPairs, sameActorReference, testModel, toolDescription, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
 import type { ActorHandle, JsonObject } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { resolve } from 'node:path';
@@ -196,7 +196,7 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
     onExhausted: ({ error: _error, ...refusal }) => { input.session().reportBudgetRefusal(refusal); },
   });
 
-  const engine = new EvolutionEngine(input.runtime, input.history, {
+  const engine = new EvolutionEngine(input.runtime, historyTurnPairs(input.history), {
     // Review calls debit the reviewed turn's mission.
     governor: budget,
   });
@@ -975,7 +975,7 @@ export class LocalAgentSession {
   /** Record the pick; a pick differing from the answered take queues a continuation turn. */
   async pickAlternateTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
     return pickAlternateTake(
-      { sql: this.rt.storage.sql, actor: this.rt.actor, history: this.stores.history, engine: this.engine, inbox: this.actorSession.orchestrator.inbox },
+      { sql: this.rt.storage.sql, actor: this.rt.actor, turnPair: historyTurnPairs(this.stores.history), engine: this.engine, inbox: this.actorSession.orchestrator.inbox },
       takeId, nodeId);
   }
 

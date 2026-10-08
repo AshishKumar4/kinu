@@ -2,7 +2,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** An agent's own SQLite, under the core stores; its roster rows are copies the workspace sends on each call. */
 import type { ModelMessage, UIMessage } from 'ai';
 import {
-  CHAT_SESSION_ID, EventLog, EvolutionEngine, WorkspaceActorDirectory, runEventSinks,
+  CHAT_SESSION_ID, EventLog, EvolutionEngine, WorkspaceActorDirectory, runEventSinks, historyTurnPairs, conversationTurnPair, type ConversationTurnPair,
   actorReferenceOf, actorScaffoldPath, createActorHost, createScaffoldSurface, defaultLoopOrigin,
   initWorkspaceSchema, nimbusSessionFiles, recoverActorTurns, MissionGovernor, actorReadHandle, readSessionTranscript, readSubordinateInspection,
   getChatHistoryPage, inheritedContextFromTranscript, turnRequestIndex, turnRequestPage,
@@ -12,15 +12,15 @@ import {
   type ActorHandle, type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
   type SessionTranscriptReader, type SubordinateInspectionResult, type SubordinateReportLedger, type ModelPricing, type SqlExecutor,
   type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
-  type Executor, type JsonObject, type NimbusSandboxHandle, type SqlValue, WORKSPACE_ROOT, cloudPlanes,
-  initPendingSendTables, initTerminalEffectTable, PendingSendStore, announcementOf, classifyRunEnd, closeTurnRun, TurnReports,
+  type Executor, type JsonObject, type NimbusSandboxHandle, type SqlValue, WORKSPACE_ROOT, cloudPlanes, answersForDrainTurns,
+  initPendingSendTables, initTerminalEffectTable, PendingSendStore, contextFill, announcementOf, classifyRunEnd, closeTurnRun, TurnReports,
   PlanReviewStore, type PlanReview,
 } from '@kinu.run/core';
 import { attempt, detach, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { isDeepStrictEqual } from 'node:util';
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import type { AgentAnswerTexts, AgentTurnActivity, AgentRecovery, AgentSnapshot, PreparedAgentTurn, StoredRow, TurnRequestAt } from '@kinu.run/core';
+import type { AgentAnswer, AgentAnswerTexts, AgentStanding, AgentSteps, AgentTurnActivity, ConversationProjection, AgentRecovery, AgentSnapshot, PreparedAgentTurn, StoredRow, TurnRequestAt } from '@kinu.run/core';
 import type { AgentWorkspace } from './agent-turn';
 
 const refused = (what: string) => Effect.fail(new KinuError('unsupported', `${what} runs in the workspace object, not in an agent's own isolate.`));
@@ -218,7 +218,7 @@ export class AgentDatabase {
           pricing: (spec) => (this.priced !== null && (spec === undefined || spec === this.priced.model) ? this.priced.pricing : null),
         }),
         sinks: runEventSinks(bound, (event, detail) => { this.lines.push(detail === undefined ? { event } : { event, detail }); }),
-        engine: new EvolutionEngine(bound.runtime, bound.stores.history, {
+        engine: new EvolutionEngine(bound.runtime, historyTurnPairs(bound.stores.history), {
           enabled: false,
           transaction: (body) => { storage.transactionSync(body); },
         }),
@@ -336,6 +336,61 @@ export class AgentDatabase {
       texts: answer.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])),
       workMode: bound.stores.claims.latestTurn()?.workMode ?? 'plan',
     };
+  }
+
+  /** One of its answers as its transcript holds it and as it reads; null when the id names none. */
+  async answerOf(messageId: string): Promise<AgentAnswer | null> {
+    const { transcript } = this.readable();
+    const message = await transcript.message(messageId);
+    const projected = message === null ? null : await transcript.project(messageId);
+
+    return message === null || projected === null ? null : { message, content: projected.content };
+  }
+
+  /** A turn's request and response by its answer's id; null for an id that names none. */
+  async turnPair(messageId: string): Promise<ConversationTurnPair | null> {
+    return await conversationTurnPair(this.readable().transcript, messageId) ?? null;
+  }
+
+  /** Where its chat stands between turns; `contextWindow` is the catalog's for its model. */
+  standing(contextWindow: number | null): AgentStanding {
+    const { actor, transcript } = this.readable();
+    const { eventRecorder } = this.actorHost().bindStores(this.reference()).stores;
+
+    return {
+      messageCount: transcript.count(),
+      context: contextFill(eventRecorder.readContextMeasures(), contextWindow),
+      latestRun: eventRecorder.latestRunHeader(),
+      // A steer is a row bound to a turn; an unbound row is the chat's own send, already shown as a message.
+      pendingSteers: new PendingSendStore(this.sql, actor.actorId).restore()
+        .filter((row) => row.turnId !== null)
+        .map((row) => ({ id: row.id, text: row.text, state: 'queued' as const, atStep: null })),
+    };
+  }
+
+  /** Its newest `limit` model steps, newest first, and the newest the provider measured. */
+  steps(limit: number): AgentSteps {
+    const { eventRecorder } = this.actorHost().bindStores(this.reference()).stores;
+
+    return {
+      steps: eventRecorder.readRecentByType('step_finish', limit).flatMap((event) => (event.type === 'step_finish' ? [event] : [])),
+      newestMeasured: eventRecorder.newestMeasuredStep(),
+    };
+  }
+
+  /** The metadata of its newest message from a person; null before any. */
+  async lastUserMetadata(): Promise<JsonObject | null> {
+    return await this.readable().transcript.lastUserMetadata() ?? null;
+  }
+
+  /** The answer each drain turn gave, for the replies its workspace owes on them. */
+  async drainAnswers(drainTurnIds: readonly string[]): Promise<Readonly<Record<string, string>>> {
+    return Object.fromEntries(await answersForDrainTurns(this.readable().transcript, drainTurnIds));
+  }
+
+  /** Its conversation's newest rows first, projected as a lane reads them. */
+  async newestFirst(limit: number): Promise<readonly ConversationProjection[]> {
+    return await this.readable().transcript.newestFirst(limit);
   }
 
   /** Its plans, newest first, read as its history is: a retained retired agent's too, and no chat is started. */

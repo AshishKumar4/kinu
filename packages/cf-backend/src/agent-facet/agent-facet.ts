@@ -17,7 +17,7 @@ import { AgentDatabase } from './agent-database';
 import { runAgentTask, type AgentWorkspace } from './agent-turn';
 import { FacetChat } from './agent-chat';
 import type {
-  AgentAnswerTexts, AgentRecovery, AgentSnapshot, AgentTurnEnd, AgentTurnTask, EnqueueTurnResult, ProgrammaticTurn, PromptFile, SendLanding, SendOptions, TurnRequestAt,
+  AgentAnswer, AgentAnswerTexts, AgentStanding, AgentSteps, AgentRecovery, AgentSnapshot, ConversationProjection, ConversationTurnPair, AgentTurnEnd, AgentTurnTask, EnqueueTurnResult, ProgrammaticTurn, PromptFile, SendLanding, SendOptions, TurnRequestAt,
   JsonObject, PlanDecisionOutcome, PlanEdit, PlanReview, PlanReviewDecision, PlanReviewResult, ReviewAnnotation,
 } from '@kinu.run/core';
 
@@ -108,6 +108,20 @@ export interface AgentFacetCalls {
   owedWork(snapshot: AgentSnapshot): Promise<readonly InspectedWork[]>;
   /** One of its answers, as its `<slate-ui>` blocks are read from it; null for an id that names no answer of its own. */
   answerTexts(snapshot: AgentSnapshot, messageId: string): Promise<AgentAnswerTexts | null>;
+  /** One of its answers whole, for a lane its workspace runs on it; null for an id that names none. */
+  answer(snapshot: AgentSnapshot, messageId: string): Promise<AgentAnswer | null>;
+  /** Its conversation's newest rows first, for a lane its workspace runs on it. */
+  newestFirst(snapshot: AgentSnapshot, limit: number): Promise<readonly ConversationProjection[]>;
+  /** Where its chat stands between turns, for its window and its workspace's tile; `contextWindow` is its model's. */
+  standing(snapshot: AgentSnapshot, contextWindow: number | null): Promise<AgentStanding>;
+  /** Its newest model steps, for the activity its workspace's window reads. */
+  steps(snapshot: AgentSnapshot, limit: number): Promise<AgentSteps>;
+  /** A turn's request and response by its answer's id, for a rating its workspace records; null for none. */
+  turnPair(snapshot: AgentSnapshot, messageId: string): Promise<ConversationTurnPair | null>;
+  /** The metadata of its newest message from a person, which its idle work mode reads; null before any. */
+  lastUserMetadata(snapshot: AgentSnapshot): Promise<JsonObject | null>;
+  /** The answer each drain turn gave, by drain turn id, for the replies its workspace owes. */
+  drainAnswers(snapshot: AgentSnapshot, drainTurnIds: readonly string[]): Promise<Readonly<Record<string, string>>>;
   /** A retirement waits on it. */
   idle(): Promise<void>;
   history(snapshot: AgentSnapshot, limit?: number): Promise<UIMessage[]>;
@@ -258,11 +272,11 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   }
 
   async stopChat(snapshot: AgentSnapshot): Promise<void> {
-    await settle(this.withChat(snapshot, (chat) => { chat.session.stop(); }));
+    return await settle(this.withChat(snapshot, (chat) => { chat.session.stop(); }));
   }
 
   async revertTo(snapshot: AgentSnapshot, entryId: string): Promise<void> {
-    await settle(this.withChat(snapshot, (chat) => chat.session.revertTo(entryId)));
+    return await settle(this.withChat(snapshot, (chat) => chat.session.revertTo(entryId)));
   }
 
   async clearConversation(snapshot: AgentSnapshot): Promise<string | null> {
@@ -299,6 +313,34 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async answerTexts(snapshot: AgentSnapshot, messageId: string): Promise<AgentAnswerTexts | null> {
     return await this.open(snapshot).answerTexts(messageId);
+  }
+
+  async answer(snapshot: AgentSnapshot, messageId: string): Promise<AgentAnswer | null> {
+    return await this.open(snapshot).answerOf(messageId);
+  }
+
+  async newestFirst(snapshot: AgentSnapshot, limit: number): Promise<readonly ConversationProjection[]> {
+    return await this.open(snapshot).newestFirst(limit);
+  }
+
+  async standing(snapshot: AgentSnapshot, contextWindow: number | null): Promise<AgentStanding> {
+    return this.open(snapshot).standing(contextWindow);
+  }
+
+  async steps(snapshot: AgentSnapshot, limit: number): Promise<AgentSteps> {
+    return this.open(snapshot).steps(limit);
+  }
+
+  async turnPair(snapshot: AgentSnapshot, messageId: string): Promise<ConversationTurnPair | null> {
+    return await this.open(snapshot).turnPair(messageId);
+  }
+
+  async lastUserMetadata(snapshot: AgentSnapshot): Promise<JsonObject | null> {
+    return await this.open(snapshot).lastUserMetadata();
+  }
+
+  async drainAnswers(snapshot: AgentSnapshot, drainTurnIds: readonly string[]): Promise<Readonly<Record<string, string>>> {
+    return await this.open(snapshot).drainAnswers(drainTurnIds);
   }
 
   async owedWork(snapshot: AgentSnapshot): Promise<readonly InspectedWork[]> {

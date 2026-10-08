@@ -11,8 +11,7 @@ import { proposeNextTasks, type ProposedTask } from '../curriculum/proposer';
 import {
   buildTakeContinuationPrompt, recordTakePick, type TakePickOutcome,
 } from '../mcts/takes';
-import { CHAT_SESSION_ID } from '../session/transcript-schema';
-import type { SessionHistory } from '../session/history';
+import type { TurnPairReader } from '../identity/conversation-store';
 import { getCurrentScaffoldVersion } from '../scaffold/versions';
 import type { AgentInbox } from '../types/signals';
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -66,7 +65,7 @@ export interface TakePickDeps {
   readonly sql: SqlExecutor;
   readonly actor: ActorHandle;
   /** Where the ledger row's request and response text is read from. */
-  readonly history: SessionHistory;
+  readonly turnPair: TurnPairReader;
   readonly engine: EvolutionEngine;
   readonly inbox: AgentInbox;
 }
@@ -83,7 +82,7 @@ export function pickAlternateTake(
       return yield* Effect.die(new Error('pickAlternateTake requires takeId and nodeId'));
     }
 
-    const record = yield* Effect.promise(() => recordTakePick(deps.sql, deps.actor, deps.history.transcript(CHAT_SESSION_ID), {
+    const record = yield* Effect.promise(() => recordTakePick(deps.sql, deps.actor, deps.turnPair, {
       takeId, nodeId,
       scaffoldVersion: getCurrentScaffoldVersion(deps.sql, deps.actor),
     }));

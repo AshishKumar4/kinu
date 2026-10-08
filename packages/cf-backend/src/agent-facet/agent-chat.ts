@@ -2,7 +2,7 @@
 import {
   CHAT_SESSION_ID, ChatSession, EventLog, HeadCapture, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TerminalTransitions,
   PlanReviewActions, announcementOf, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork,
-  planHandoffStillOwed, approvedTaskPlan, workModeUnderReview, projectJsonValue,
+  planHandoffStillOwed, approvedTaskPlan, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, terminalEffect,
   metadataTier, subordinateTerminalEffects, withCompactionTrigger,
   bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpening, type JsonObject, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
@@ -165,7 +165,7 @@ export class FacetChat {
 
     return {
       execution: withCompactionTrigger(assembled.execution, state, key, historyLength),
-      sessionKey: key, contextWindow: assembled.window.contextWindow, historyLength,
+      sessionKey: key, contextWindow: assembled.window.contextWindow, historyLength, trial: prepared.trial ?? null,
     };
   }
 
@@ -189,9 +189,20 @@ export class FacetChat {
     return { execution: assembled.execution, profile: assembled.profile, sessionKey: this.trigger.key };
   }
 
-  /** As a CLI hire's: never sleep-time. */
+  /** As a CLI hire's: never sleep-time. The workspace's own agent owes its chat's follow-ups here and hands the rest of
+   *  its settled turn to the workspace, whose evolution, event log and titles its lanes are. */
   private owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[] {
     const { session } = this.deps.actor;
+
+    if (this.deps.actor.record.parentActorId === null) {
+      return declareHandoffRoster(chatTurnParts(input), {
+        turnId: this.session.currentTurnId ?? '', messageId: input.messageId, status: input.status, completed: input.completed,
+        workMode: session.workMode, userText: input.userText, assistantText: input.assistantText, event: input.event ?? null,
+        turn: projectJsonValue({ value: input.turn }), credited: input.credited, answeredDeliveries: [...input.answeredDeliveries],
+        reachableTools: [...input.reachableTools], recordedAt: Date.now(),
+      });
+    }
+
     const scoped = session.orchestrator.scopedTurn(input.turn);
 
     const facts: TerminalTurnFacts = {
@@ -242,6 +253,14 @@ export class FacetChat {
           hireAdvisor: (advisor) => workspace.hireAdvisor(advisor),
           applyTitle: (subject) => this.applyTitle(subject),
           sendReport: (report) => workspace.parentReport(report),
+        }),
+        workspace_settle: terminalEffect({
+          input: HandedOffTurnSchema,
+          run: async (settled) => {
+            await workspace.turnSettled(settled);
+
+            return { status: 'completed' };
+          },
         }),
       },
       now: () => Date.now(),

@@ -149,6 +149,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           owedReport: (...args) => host.owedReport(...args),
           parentReport: (report) => host.parentReport(report),
           autoTitle: (subject, title) => host.autoTitle(subject, title),
+          turnSettled: (settled) => host.turnSettled(settled),
           hireAdvisor: (advisor) => host.hireAdvisor(advisor),
           owes: (next, holds) => host.owes(next, holds),
           birthContext: (drainTurnId) => host.birthContext(drainTurnId),

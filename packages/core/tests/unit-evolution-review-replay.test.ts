@@ -7,6 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import { EvolutionEngine } from '../src/evolution/engine';
 import type { CompletedTurn } from '../src/evolution/types';
 import { createTestRuntime } from './helpers';
+import { historyTurnPairs } from '../src/identity/conversation-store';
 
 const FOLLOWUP = 'no, that is the batch API again';
 
@@ -38,11 +39,11 @@ describe('a replayed turn review', () => {
       asked,
     });
 
-    await new EvolutionEngine(rt, stores.history).reviewTurn(reviewedTurn(), FOLLOWUP);
+    await new EvolutionEngine(rt, historyTurnPairs(stores.history)).reviewTurn(reviewedTurn(), FOLLOWUP);
     expect(counts()).toEqual({ ratings: 1, lessons: 1, asked: 1 });
 
     // A second engine over the same rows: what the next activation replaying the lane is.
-    await new EvolutionEngine(rt, stores.history).reviewTurn(reviewedTurn(), FOLLOWUP);
+    await new EvolutionEngine(rt, historyTurnPairs(stores.history)).reviewTurn(reviewedTurn(), FOLLOWUP);
     expect(counts()).toEqual({ ratings: 1, lessons: 1, asked: 1 });
   });
 });

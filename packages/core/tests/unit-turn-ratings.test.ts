@@ -22,6 +22,7 @@ import { asFetchFunction } from '../src/providers/fetch-shim';
 import { requestUrl } from '../src/http/http';
 import type { ModelCallReport } from '../src/events/model-call';
 import { createTestRuntime } from './helpers';
+import { historyTurnPairs } from '../src/identity/conversation-store';
 
 /** Clef's REST answer (2026-10-02) to a turn whose reply was a written correction. */
 const CLEF_REST_ANSWER = {
@@ -75,7 +76,7 @@ describe('the rating ledger', () => {
   test('a thumb wins over the decision model, and a cleared thumb falls back to it', async () => {
     const { rt, stores } = createTestRuntime();
     Object.assign(rt, { decide: decide(LOW) });
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
 
     await engine.reviewTurn(turn(), 'No, CSV. I said CSV.');
     expect(ratingOf(rt.storage.sql, rt.actor, 'u-1')).toMatchObject({ source: 'model', score: 1.3, wrong: 'misunderstood' });
@@ -99,7 +100,7 @@ describe('the rating ledger', () => {
       return { answers: LOW, usage: { input: 0, output: 0 } };
     };
 
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
 
     await engine.applyExplicitFeedback('u-1', 'negative');
     await engine.reviewTurn(turn(), 'No, CSV. I said CSV.');
@@ -114,7 +115,7 @@ describe('the rating ledger', () => {
   test('without a decision model, an answered turn stays unrated', async () => {
     const { rt, stores } = createTestRuntime();
 
-    await new EvolutionEngine(rt, stores.history).reviewTurn(turn(), 'No, CSV.');
+    await new EvolutionEngine(rt, historyTurnPairs(stores.history)).reviewTurn(turn(), 'No, CSV.');
 
     expect(listTurnRatings(rt.storage.sql, rt.actor)).toEqual([]);
   });
@@ -210,7 +211,7 @@ describe('the decision model', () => {
       refusals,
     });
 
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
     await engine.reviewTurn(turn(), 'No, CSV.');
     await engine.reviewTurn({ ...turn(), turnId: 'u-2' }, 'Still JSON.');
 
@@ -239,7 +240,7 @@ describe('the decision model', () => {
       refusals,
     });
 
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
     await engine.reviewTurn(turn(), 'No, CSV.');
     await engine.reviewTurn({ ...turn(), turnId: 'u-2' }, 'Still JSON.');
 
@@ -268,7 +269,7 @@ describe('the decision model', () => {
       refusals: noticesOf(rt).refusals,
     });
 
-    await expect(new EvolutionEngine(rt, stores.history).reviewTurn(turn(), 'No, CSV.'))
+    await expect(new EvolutionEngine(rt, historyTurnPairs(stores.history)).reviewTurn(turn(), 'No, CSV.'))
       .rejects.toMatchObject({ code: 'unavailable', cause: { message: '@cf/cloudflare/clef answered 503' } });
   });
 

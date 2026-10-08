@@ -19,6 +19,7 @@ import { makeSqlExec } from './helpers';
 import { createFileTool } from '../src/tools/file-operations';
 import { cloudPlanes } from '../src/vfs/resolve';
 import { TurnContextBudget } from '../src/context-budget';
+import { historyTurnPairs } from '../src/identity/conversation-store';
 
 async function fileProgressTurn(opts: { readonly readAt: number; readonly editAt?: number; readonly missed?: boolean; readonly calls: number }) {
   const orch = newTurn();
@@ -104,7 +105,7 @@ function newTurn(): AgentOrchestrator {
   initEventsHubTables(sql);
 
   return new AgentOrchestrator({
-    host, engine: new EvolutionEngine(rt, stores.history, { enabled: false }),
+    host, engine: new EvolutionEngine(rt, historyTurnPairs(stores.history), { enabled: false }),
     eventLog: new EventLog(sql, rt.actor),
   });
 }

@@ -29,6 +29,7 @@ import { agentArtifactDirectory } from '../src/vfs/agent-home';
 import { sha256Hex } from '../src/safety/argument-digest';
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
+import { historyTurnPairs } from '../src/identity/conversation-store';
 
 const BUILTIN: ActorProgramIdentity = { kind: 'builtin', version: 0, digest: null, build: 'test-build' };
 
@@ -97,7 +98,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, in
       // Nothing here arms a drain, so an armed timer is a fault to surface.
       setTimer: () => { throw new Error(`${bound.record.name} armed a drain timer outside a turn`); },
     },
-    engine: new EvolutionEngine(bound.runtime, bound.stores.history, { enabled: automatic }),
+    engine: new EvolutionEngine(bound.runtime, historyTurnPairs(bound.stores.history), { enabled: automatic }),
     eventLog: new EventLog(exec, bound.handle),
   });
 

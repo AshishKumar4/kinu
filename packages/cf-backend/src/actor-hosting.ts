@@ -9,7 +9,7 @@
 
 import type { Agent, AgentContext } from 'agents';
 import {
-  childContextResolver, localContextTree, type ContextEditor, type ContextTree, createActorHost, defaultLoopOrigin, runEventSinks, EvolutionEngine, EventLog, MissionGovernor,
+  childContextResolver, localContextTree, type ContextEditor, type ContextTree, createActorHost, defaultLoopOrigin, runEventSinks, EvolutionEngine, historyTurnPairs, EventLog, MissionGovernor,
   facetHomeProvisioner, facetHomeReleaser, actorHomeName, actorStateRoot,
   actorScaffoldPath, nimbusSessionFiles, agentArtifactDirectory, agentHome, MAIN_AGENT, type ActorHost,
   type ActorHostDeps, type ActorRetirement, type BoundActor, type ActorHandle, type ActorReference,
@@ -289,7 +289,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         pricing: (spec) => seams.pricing(spec ?? seams.hostedModel(handle)),
       });
 
-      const engine = new EvolutionEngine(runtime, stores.history, {
+      const engine = new EvolutionEngine(runtime, historyTurnPairs(stores.history), {
         transaction: (body) => { seams.ctx.storage.transactionSync(body); },
         // Review model calls debit the mission the reviewed turn ran under.
         governor: budget,

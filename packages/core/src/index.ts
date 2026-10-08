@@ -12,8 +12,8 @@ export { inspectDescendant, inspectSubordinateStorage, type AgentOwnInspection, 
 
 // Backend-neutral terminal-turn state machine: the DO and the CLI supply only effect bodies and a wake.
 export {
-  chatTurnParts, declareTerminalRoster,
-  type TerminalTurnFacts, type TerminalTurnParts,
+  chatTurnParts, declareTerminalRoster, declareHandoffRoster, HandedOffTurnSchema,
+  type HandedOffTurn, type TerminalTurnFacts, type TerminalTurnParts,
 } from './orchestrator/terminal-roster';
 
 export { SleepTimeLane, initSleepTimeUpdatesTable, type SleepTimeLaneDeps } from './orchestrator/sleep-time-lane';
@@ -29,7 +29,7 @@ export {
 } from './orchestrator/terminal-transition';
 
 export {
-  TerminalEffectLedger, initTerminalEffectTable, terminalEffect, chatTerminalEffects, subordinateTerminalEffects, branchesTerminalEffect,
+  TerminalEffectLedger, initTerminalEffectTable, terminalEffect, chatTerminalEffects, turnRecordingEffects, subordinateTerminalEffects, branchesTerminalEffect,
   terminalEffectKey, TerminalEffectInterrupt, isDefinitiveTerminalFailure,
   TERMINAL_EFFECT_RETRY_BASE_MS, TERMINAL_EFFECT_RETRY_CEILING_MS,
   RunEndReasonSchema,
@@ -106,8 +106,8 @@ export {
 export type { ForkFileSink } from './identity/fork-sink';
 
 export {
-  forkPointExists, answersForDrainTurns, conversationTurnPair,
-  type ConversationTurnPair,
+  forkPointExists, answersForDrainTurns, conversationTurnPair, historyTurnPairs,
+  type ConversationTurnPair, type TurnPairReader,
 } from './identity/conversation-store';
 
 export { CHAT_SESSION_ID } from './session/transcript-schema';
@@ -1305,7 +1305,6 @@ export {
   applyPlanEdits,
   formatPlanWithLineNumbers,
   initPlanReviewTable,
-  listPendingPlanReviews,
   workModeUnderReview,
   planHandoffStillOwed,
   approvedTaskPlan,
@@ -2521,6 +2520,6 @@ export {
 } from './mcp/servers';
 
 export type {
-  AgentTurnActivity, AgentCaptureDelta, AgentTurnOpening, AgentRecovery, AgentAnswerTexts, AgentReview, AgentSnapshot, AgentTurnTask, AgentToolAnswer,
+  AgentTurnActivity, AgentCaptureDelta, AgentTurnOpening, AgentRecovery, AgentAnswer, AgentAnswerTexts, AgentReview, AgentStanding, AgentSteps, AgentSnapshot, AgentTurnTask, AgentToolAnswer,
   AgentToolCall, AgentToolDescriptor, AgentHeadDelta, AgentTrace, AgentTurnEnd, PreparedAgentTurn, StoredRow, TurnRequestAt,
 } from './subordinates/agent-isolate';
