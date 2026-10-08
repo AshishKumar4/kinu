@@ -23,7 +23,6 @@ const WorkspaceOverviewSlateSchema = v.object({
   id: v.string(),
   title: v.string(),
   picture: v.nullable(v.string()),
-  bindings: v.optional(v.number(), 0),
   visibility: v.optional(v.nullable(LiveShareVisibilitySchema), null),
 });
 
@@ -34,7 +33,6 @@ const WorkspaceOverviewShareSchema = v.object({
   title: v.string(),
   description: v.string(),
   createdAt: v.number(),
-  bindings: v.number(),
   users: v.array(v.string()),
   visibility: v.optional(LiveShareVisibilitySchema),
   fork: v.optional(v.boolean()),

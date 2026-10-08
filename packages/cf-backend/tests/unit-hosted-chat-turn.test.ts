@@ -61,7 +61,7 @@ async function firstTask(answer: (run: RecordedGatewayRun) => Response): Promise
       const frame = v.safeParse(ChatResponseSchema, JSON.parse(payload));
 
       if (!frame.success) return;
-      const card = terminalChatError(frame.output, new Set());
+      const card = terminalChatError(frame.output);
       const entry = entryOf(frame.output);
 
       if (card !== null) shown.push(card.body);

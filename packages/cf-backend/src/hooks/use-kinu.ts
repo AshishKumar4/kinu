@@ -20,7 +20,9 @@ import type {
   SubordinateActivityEvent,
   TabPresence,
   SendLanding,
+  SendState,
 } from "@kinu.run/core";
+import { sendLanding } from "@kinu.run/core";
 import type { BackgroundJob, SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import type { ExecutorInfo, PanelAgent } from "@kinu.run/core";
 import { applySignalCard, parseSignalCardEvent, type SignalCard } from "@kinu.run/core";
@@ -28,7 +30,7 @@ import {
   appendHeadDelta, retireHeadDelta, type HeadDelta, type HeadDeltas,
 } from "@kinu.run/core";
 import { looksLikeSecretField, parseMemoryNotes, type InlineSteer } from "@kinu.run/core";
-import { detach, diagnostics, KinuError, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
+import { detach, diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import {
   reconcilePreviewPorts,
   type ExecutorPortRefresh,
@@ -86,51 +88,14 @@ export interface BranchRun {
   message?: string;
 }
 
-/** `settled` is the server's steer_status for the message and can arrive long after the call;
- *  it rejects when the message did not land. Null: nothing was sent. */
+/** `settled` is where the message ended, read from the workspace's record once its turn has; it rejects when no turn
+ *  took it. Null: nothing was sent. */
 export type SendAdmission =
   | { readonly landed: "turn" }
   | { readonly landed: "mid-turn"; readonly settled: Promise<SendLanding> }
   | null;
 
-type SendLandingResolvers = ReturnType<typeof Promise.withResolvers<SendLanding>>;
-
 export type ReadMoves = Readonly<Partial<Record<LiveRead, number>>>;
-
-/** A call the actor refused takes the waiter with it; the refusal is the answer. */
-async function landingAfter(
-  admission: Promise<void>,
-  landings: Map<string, SendLandingResolvers>,
-  id: string,
-  landing: Promise<SendLanding>,
-): Promise<SendLanding> {
-  try {
-    await admission;
-  } catch (cause) {
-    landings.delete(id);
-    throw toKinuError({ doing: "sending to the running turn", cause, otherwise: "unavailable" });
-  }
-
-  return landing;
-}
-
-/** `queued` decides nothing. */
-function settleSendLanding(
-  landings: Map<string, SendLandingResolvers>,
-  status: { readonly steerId: string; readonly status: "queued" | "landed" | "returned" | "turn" },
-): void {
-  if (status.status === "queued") return;
-  const landing = landings.get(status.steerId);
-
-  if (landing === undefined) return;
-  landings.delete(status.steerId);
-
-  if (status.status === "returned") {
-    landing.reject(new KinuError("cancelled", "The turn was stopped before the agent read this message; it is back in the composer."));
-  } else {
-    landing.resolve(status.status === "landed" ? "mid-turn" : "turn");
-  }
-}
 
 /** Driven by steer_status broadcasts. `queued` (taken) and `landed` (model reading it) stay
  *  distinct; a `returned` steer is removed and goes back to the composer. */
@@ -623,7 +588,6 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
   /** Read by the socket's reader at each frame; null on the workspace pane, and until the load resolves it. */
   const ownActorIdRef = useRef<string | null>(null);
   const [paneActorId, setPaneActorId] = useState<string | null>(null);
-  const sendLandings = useRef(new Map<string, SendLandingResolvers>());
   const [planFocus, setPlanFocus] = useState<string | null>(null);
   const knownPlans = useRef(new Set<string>());
   const [modelFallbacks, setModelFallbacks] = useState<string[]>([]);
@@ -632,11 +596,8 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
 
   // Shown from the moment the server takes a steer until its durable user row arrives.
   const [steerRuns, setSteerRuns] = useState<InlineSteer[]>([]);
-  // Fed by useChat's live stream error and the on-connect replay frame (the ws transport drops
-  // its stale request id). The server retains its last terminal record until a later turn
-  // supersedes it (agents SDK `_replayTerminalOnAck`); an id announced in `cf_agent_stream_resuming`
-  // marks a replay, anything else a live failure.
-  const resumedRequestIds = useRef(new Set<string>());
+  // Fed by useChat's live stream error and by every frame ending a chat response in failure (`terminalChatError`),
+  // the runtime's refusal of this tab among them, whose request id the ws transport may not hold.
   const [chatError, setChatError] = useState<ChatTurnError | null>(null);
 
   /** Cleared on the next stream frame, socket close, or a timer keyed to the declared wait: the
@@ -711,20 +672,12 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
       window.dispatchEvent(new CustomEvent("kinu:workspace-renamed", {
         detail: { name: actorAddress.workspace, displayName },
       }));
-    } else if (data.type === "cf_agent_stream_resuming") {
-      resumedRequestIds.current.add(data.id);
     } else if (data.type === "provider_wait") {
       showProviderWait(data);
     } else if (data.type === "cf_agent_use_chat_response") {
       // A stream frame ends the wait; the on-connect replay must not paint "waiting" either.
       clearProviderWait();
-      const failed = terminalChatError(data, resumedRequestIds.current);
-
-      if (failed !== null) setChatError(failed);
-    } else {
-      // On connect the server replays the last terminal error with a stale request id the transport
-      // drops; this handler is the only place that frame is seen. The rule lives in `chat-turn-error.ts`.
-      const failed = terminalChatError(data, resumedRequestIds.current);
+      const failed = terminalChatError(data);
 
       if (failed !== null) setChatError(failed);
     }
@@ -776,7 +729,7 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
   // Always live: the transport only surfaces this for a request id still in flight.
   useEffect(() => {
     if (!streamError) return;
-    setChatError({ body: streamError.message || String(streamError), replayed: false });
+    setChatError({ body: streamError.message || String(streamError), refused: false });
     const reports = chatStreamReports.current;
 
     let report: Promise<void> | null = null;
@@ -981,7 +934,6 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
     } else if (msg.type === "model_fallback") {
       setModelFallbacks((prev) => [...prev, msg.message]);
     } else if (msg.type === "steer_status") {
-      settleSendLanding(sendLandings.current, msg);
       // `returned` (handed back to the composer) and `turn` (now its own user turn) both remove the bubble.
       setSteerRuns((prev) => msg.status === "returned" || msg.status === "turn"
         ? prev.filter((s) => s.id !== msg.steerId)
@@ -1141,14 +1093,16 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
     // A Plan-locked message that misses its turn must still run as a Plan turn.
     const attachments = files.map((file) => ({ filename: file.filename ?? "attachment", mediaType: file.mediaType, url: file.url }));
 
-    // Id minted here so the landing listener exists before any broadcast. The call has a
-    // deadline; the landing has none.
+    // Id minted here, so a send whose socket closes before its answer is still asked about by name.
     const id = crypto.randomUUID();
-    const landing = Promise.withResolvers<SendLanding>();
-    sendLandings.current.set(id, landing);
 
-    return { landed: "mid-turn", settled: landingAfter(rpc<void>("send", [content, id, attachments, mode]), sendLandings.current, id, landing.promise) };
-  }, [startTurn, sendMessage, isStreaming, rpc]);
+    const record = {
+      open: () => agent.readyState === WebSocket.OPEN,
+      awaitSend: (sent: string) => agent.call<SendState>("awaitSend", [sent], { timeout: 0 }),
+    };
+
+    return { landed: "mid-turn", settled: sendLanding(record, rpc<void>("send", [content, id, attachments, mode]), id) };
+  }, [startTurn, sendMessage, isStreaming, rpc, agent]);
 
   /** `regenerate`, not `sendMessage`, which appended a duplicate user message per press. Under the
    *  same latch as `sendChat`: a retry starts a turn. */

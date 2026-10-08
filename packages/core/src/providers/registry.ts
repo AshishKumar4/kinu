@@ -276,17 +276,13 @@ export function createProviderRegistry(): ProviderRegistry {
           const own = accountDeps(deps, parsed.provider, parsed.account);
           const route = provider.laneOf?.(parsed.modelId) ?? parsed.provider;
           const key = provider.credentialKey;
-          let billed: Promise<string> | undefined;
 
-          // A wait is the credential's: aliases of one stored login share it, as `credentialFor` resolves them.
+          // A wait is the credential's: aliases of one stored login share it, as `credentialFor` resolves them. Asked
+          // per call, as authentication asks, so a default changed since this model resolved names the new account. A
+          // lookup that fails fails the call in its own words: a wait on a guessed account parks another's calls.
           const lane: LaneLookup | string = key === undefined ? `${route}|` : {
             route,
-            billed: () => {
-              billed ??= Promise.allSettled([chosenCredentialKey(deps, parsed.provider, key, parsed.account)])
-                .then(([chosen]) => `${route}|${(chosen.status === 'fulfilled' ? chosen.value : null) ?? key}`);
-
-              return billed;
-            },
+            billed: async () => `${route}|${await chosenCredentialKey(deps, parsed.provider, key, parsed.account) ?? key}`,
           };
 
           return withModelStack(provider.createModel(parsed.modelId, own), {

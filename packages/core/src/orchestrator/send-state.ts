@@ -1,4 +1,7 @@
 import * as v from 'valibot';
+import { Effect } from 'effect';
+import { KinuError, settle, toKinuError } from '../obs/index';
+import type { SendLanding } from '../types/signals';
 import { CLAIM_OUTCOMES, type ActorClaimStore, type ClaimOutcome } from './actor-claims';
 import { STEER_METADATA_KEY, type PendingSendStore } from './inbox';
 import { RUN_END_REASONS } from './turn-lifecycle';
@@ -46,4 +49,42 @@ export async function sendStateOf(facts: SendFacts, id: string): Promise<SendSta
   const outcome = claim === null ? runEnd(facts.runs, runId) : claim.outcome;
 
   return outcome === null ? { status: 'running', turnId, landed } : { status: 'settled', turnId, landed, outcome };
+}
+
+/** What a tab asks about a message it sent to the running turn. */
+export interface SendRecord {
+  /** Whether the socket still holds: on one that held, a rejection is the workspace's refusal. */
+  readonly open: () => boolean;
+  /** `awaitSend` for the message, with no deadline: its turn has none. */
+  readonly awaitSend: (id: string) => Promise<SendState>;
+}
+
+/**
+ * Where a message sent to the running turn ended. A refusal of the send on a socket that held is the answer; otherwise
+ * the workspace's record says, even of a send whose socket closed before it was acknowledged.
+ */
+export function sendLanding(record: SendRecord, admission: Promise<void>, id: string): Promise<SendLanding> {
+  return settle(Effect.gen(function* () {
+    const [sent] = yield* Effect.promise(() => Promise.allSettled([admission]));
+
+    if (sent.status === 'rejected' && record.open()) {
+      return yield* Effect.fail(toKinuError({ doing: 'sending to the running turn', cause: sent.reason, otherwise: 'unavailable' }));
+    }
+
+    const state = yield* Effect.promise(() => settledState(record, id));
+
+    if (state.status !== 'settled') return yield* Effect.fail(new KinuError('cancelled', 'No turn read this message; it is back in the composer.'));
+
+    return state.landed;
+  }));
+}
+
+/** Asked again on the next socket while sockets close under it: the turn ends whether a tab watched it or not. */
+async function settledState(record: SendRecord, id: string): Promise<SendState> {
+  for (;;) {
+    const asking = record.awaitSend(id);
+    const [asked] = await Promise.allSettled([asking]);
+
+    if (asked.status === 'fulfilled' || record.open()) return asking;
+  }
 }

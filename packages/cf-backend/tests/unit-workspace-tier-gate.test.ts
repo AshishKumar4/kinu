@@ -465,7 +465,7 @@ describe('a registered workspace reaches the whole surface', () => {
     const harness = await setupWorkspaces();
 
     const shared = {
-      kind: 'live' as const, share: 'share-1', slate: 'board', title: 'Board', description: '', createdAt: 1, bindings: 0,
+      kind: 'live' as const, share: 'share-1', slate: 'board', title: 'Board', description: '', createdAt: 1,
       users: ['pat@example.test'], visibility: 'users' as const, fork: true,
     };
 

@@ -1,10 +1,10 @@
-// Codex routing (docs/DEPLOYMENT.md § Codex egress) through the real registry, UserDO and device hub; the machine
-// answers relay frames with a recorded chatgpt.com stream, and the container is a recording namespace.
+// Codex routing (docs/DEPLOYMENT.md § Codex from the cloud) through the real registry, UserDO and device hub; the
+// machine answers relay frames with a recorded chatgpt.com stream.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import type { LanguageModel } from 'ai';
 import {
-  CODEX_CRED_KEY, DEVICE_CANCEL_METHOD, DEVICE_RELAY, EgressCalls, NO_DEVICE_CONNECTED,
+  CODEX_CRED_KEY, DEVICE_CANCEL_METHOD, DEVICE_RELAY, NO_DEVICE_CONNECTED,
   asFetchFunction, captureOperationProfile, operationProfileStream, requestUrl, runChat,
   type ChatEvent, type JsonValue, type OperationProfile,
 } from '@kinu.run/core';
@@ -12,7 +12,6 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 import { mergePolicyProfile } from '@kinu.run/test-utils';
 import { createTestUserDO, testOwner, type DeviceFrame, type TestUserDO } from './helpers/user-do';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
-import type { CodexEgressNamespace } from '../src/egress/codex-egress-route';
 
 /** A relay call's one parameter, as the daemon reads it. */
 const RelayRequestSchema = v.object({
@@ -46,7 +45,6 @@ const recordedUpstream = (live: string, text: string): Upstream => (authorizatio
 
 interface Rig {
   readonly harness: TestUserDO;
-  readonly forwarded: Request[];
   readonly relayed: v.InferOutput<typeof RelayRequestSchema>[];
   readonly model: LanguageModel;
   /** Settles when a revocation sweep asks the machine to cancel a command; the answer waits for `answerCancel`. */
@@ -58,7 +56,6 @@ interface Rig {
 
 /** `beforeRelay` runs on the machine before it answers a relayed call. */
 async function rig(upstream: Upstream, beforeRelay?: (request: v.InferOutput<typeof RelayRequestSchema>) => Promise<void>): Promise<Rig> {
-  const forwarded: Request[] = [];
   const relayed: Rig['relayed'] = [];
   const machines = new Map<string, 'relay' | 'too-old'>();
   const owner = await testOwner();
@@ -89,31 +86,14 @@ async function rig(upstream: Upstream, beforeRelay?: (request: v.InferOutput<typ
   });
 
   await harness.userDO.setCredential(owner, CODEX_CRED_KEY, { kind: 'oauth', accessToken: ACCESS_1, refreshToken: 'refresh-1' });
-  const calls = new EgressCalls();
-
-  const container: CodexEgressNamespace = {
-    idFromName: (name) => ({ name, toString: () => name, equals: (other: DurableObjectId) => other.toString() === name }),
-    get: () => ({
-      forward: async (_owner, callId, request) => {
-        forwarded.push(request);
-        const answer = upstream(request.headers.get('authorization'));
-
-        return calls.run(callId, {
-          start: async () => {},
-          fetch: async () => new Response(answer.body, { status: answer.status, headers: { 'content-type': 'text/event-stream' } }),
-        });
-      },
-      cancel: async (callId) => { calls.cancel(callId); },
-    }),
-  };
 
   const registry = createAgentProviderRegistry({
-    env: { CodexEgress: container }, ownerUserId: 'user-1', userDO: { stub: harness.userDO, caller: owner },
+    env: {}, userDO: { stub: harness.userDO, caller: owner },
     currentTurn: (actor) => (actor.actorId === 'main' ? liveTurn : null),
   });
 
   return {
-    harness, forwarded, relayed, model: registry.resolveModel('codex/gpt-5.5', 'kinu-test'),
+    harness, relayed, model: registry.resolveModel('codex/gpt-5.5', 'kinu-test'),
     cancelAsked: cancelAsked.promise, answerCancel: () => { cancelAnswered.resolve(); },
     attachMachine: async (answers, label = 'studio') => {
       const { deviceId } = await harness.userDO.registerDevice(owner, label);
@@ -150,6 +130,19 @@ async function step(model: Rig['model'], turn: OperationProfile): Promise<ChatEv
   return events;
 }
 
+/** What a step that could not go out was told. */
+async function refused(model: Rig['model'], turn: OperationProfile): Promise<string> {
+  try {
+    const events = await step(model, turn);
+
+    return `the step answered ${JSON.stringify(events.filter((event) => event.type === 'error' || event.type === 'step-finish'))}`;
+  } catch (cause) {
+    return renderThrownChain({ cause });
+  }
+}
+
+const NO_MACHINE = 'Codex calls from kinu.run go through your connected machine; connect one, or pick ChatGPT (Sign in with ChatGPT)';
+
 function finished(events: readonly ChatEvent[]) {
   const done = events.find((event) => event.type === 'step-finish');
 
@@ -158,7 +151,7 @@ function finished(events: readonly ChatEvent[]) {
   return done;
 }
 
-describe('Codex egress: the owner\'s machine first, the container when none is online', () => {
+describe('Codex from the cloud: the owner\'s machine carries every call, or the call is refused', () => {
   const originalFetch = globalThis.fetch;
   let refreshes: string[] = [];
 
@@ -174,8 +167,8 @@ describe('Codex egress: the owner\'s machine first, the container when none is o
 
   afterEach(() => { globalThis.fetch = originalFetch; });
 
-  test('a turn goes out from the online machine with the login\'s access token, and the container is not asked', async () => {
-    const { harness, forwarded, relayed, model, attachMachine } = await rig(recordedUpstream(ACCESS_1, 'from the machine'));
+  test('a turn goes out from the online machine with the login\'s access token', async () => {
+    const { harness, relayed, model, attachMachine } = await rig(recordedUpstream(ACCESS_1, 'from the machine'));
     const machine = await attachMachine('relay');
 
     const done = finished(await step(model, newTurn()));
@@ -184,29 +177,22 @@ describe('Codex egress: the owner\'s machine first, the container when none is o
     expect(done.egress).toBe(`device ${machine.deviceId}`);
     expect(relayed.map((request) => [request.method, request.url])).toEqual([['POST', 'https://chatgpt.com/backend-api/codex/responses']]);
     expect(new Headers(relayed[0]?.headers).get('authorization')).toBe(`Bearer ${ACCESS_1}`);
-    expect(forwarded).toHaveLength(0);
     // The machine is handed the access token for the one call, never the refresh token.
     expect(JSON.stringify(harness.deviceFrames)).not.toContain('refresh-1');
     await harness.joinFibers();
     harness.close();
   });
 
-  test('with no machine online the turn goes through the container, and says so', async () => {
-    const { harness, forwarded, relayed, model } = await rig(recordedUpstream(ACCESS_1, 'from the relay'));
+  test('with no machine online the turn is refused in so many words, and nothing goes out', async () => {
+    const { harness, relayed, model } = await rig(recordedUpstream(ACCESS_1, 'never sent'));
 
-    const done = finished(await step(model, newTurn()));
-
-    expect(done.text).toBe('from the relay');
-    expect(done.egress).toBe('relay');
-    expect(forwarded).toHaveLength(1);
+    expect(await refused(model, newTurn())).toContain(NO_MACHINE);
     expect(relayed).toHaveLength(0);
     harness.close();
   });
 
-
-
-  test('a machine lost mid-turn fails that step by name and never switches the turn to the container', async () => {
-    const { harness, forwarded, model, attachMachine } = await rig(recordedUpstream(ACCESS_1, 'ok'));
+  test('a machine lost mid-turn fails that step by name, and the next turn with none online is refused', async () => {
+    const { harness, model, attachMachine } = await rig(recordedUpstream(ACCESS_1, 'ok'));
     const machine = await attachMachine('relay');
     const turn = newTurn();
 
@@ -214,28 +200,18 @@ describe('Codex egress: the owner\'s machine first, the container when none is o
     await harness.joinFibers();
     await machine.close();
 
-    let told = 'the step finished';
-
-    try {
-      await step(model, turn);
-    } catch (cause) {
-      told = renderThrownChain({ cause });
-    }
-
-    expect(told).toContain('studio went offline during this turn, and Codex keeps one route per turn');
-    expect(forwarded).toHaveLength(0);
-    // The next turn picks again.
-    expect(finished(await step(model, newTurn())).egress).toBe('relay');
+    expect(await refused(model, turn)).toContain('studio went offline during this turn, and Codex keeps one route per turn');
+    expect(await refused(model, newTurn())).toContain(NO_MACHINE);
     harness.close();
   });
 
-  test('a turn that started on the container stays there when a machine comes online', async () => {
+  test('a turn refused for want of a machine stays refused when one comes online, and the next turn takes it', async () => {
     const { harness, relayed, model, attachMachine } = await rig(recordedUpstream(ACCESS_1, 'ok'));
     const turn = newTurn();
 
-    expect(finished(await step(model, turn)).egress).toBe('relay');
+    expect(await refused(model, turn)).toContain(NO_MACHINE);
     const machine = await attachMachine('relay');
-    expect(finished(await step(model, turn)).egress).toBe('relay');
+    expect(await refused(model, turn)).toContain(NO_MACHINE);
     expect(relayed).toHaveLength(0);
     expect(finished(await step(model, newTurn())).egress).toBe(`device ${machine.deviceId}`);
     await harness.joinFibers();
@@ -290,11 +266,11 @@ describe('Codex egress: the owner\'s machine first, the container when none is o
     const { harness, relayed, model, attachMachine } = await rig(recordedUpstream(ACCESS_1, 'ok'));
     const turn = newTurn();
 
-    expect(finished(await step(model, turn)).egress).toBe('relay');
+    expect(await refused(model, turn)).toContain(NO_MACHINE);
     await attachMachine('relay');
     const sameTurn = captureOperationProfile({ actor: turn.actor, profile: turn.profile, inputs: null, runId: turn.runId, turnId: turn.turnId });
 
-    expect(finished(await step(model, sameTurn)).egress).toBe('relay');
+    expect(await refused(model, sameTurn)).toContain(NO_MACHINE);
     expect(relayed).toHaveLength(0);
     await harness.joinFibers();
     harness.close();
@@ -352,13 +328,13 @@ describe('Codex egress: the owner\'s machine first, the container when none is o
     const earlier = newTurn();
     const live = newTurn();
 
-    expect(finished(await step(model, earlier)).egress).toBe('relay');
-    expect(finished(await step(model, live)).egress).toBe('relay');
+    expect(await refused(model, earlier)).toContain(NO_MACHINE);
+    expect(await refused(model, live)).toContain(NO_MACHINE);
     const machine = await attachMachine('relay');
 
     // The earlier turn's job is no longer inside a turn, so it may pick afresh.
     expect(finished(await step(model, earlier)).egress).toBe(`device ${machine.deviceId}`);
-    expect(finished(await step(model, live)).egress).toBe('relay');
+    expect(await refused(model, live)).toContain(NO_MACHINE);
     await harness.joinFibers();
     harness.close();
   });
@@ -369,15 +345,15 @@ describe('Codex egress: the owner\'s machine first, the container when none is o
     const second = newTurn();
     const live = newTurn();
 
-    expect(finished(await step(model, first)).egress).toBe('relay');
-    expect(finished(await step(model, live)).egress).toBe('relay');
-    expect(finished(await step(model, second)).egress).toBe('relay');
+    expect(await refused(model, first)).toContain(NO_MACHINE);
+    expect(await refused(model, live)).toContain(NO_MACHINE);
+    expect(await refused(model, second)).toContain(NO_MACHINE);
     const machine = await attachMachine('relay');
 
     expect(finished(await step(model, second)).egress).toBe(`device ${machine.deviceId}`);
-    expect(finished(await step(model, live)).egress).toBe('relay');
+    expect(await refused(model, live)).toContain(NO_MACHINE);
     expect(finished(await step(model, first)).egress).toBe(`device ${machine.deviceId}`);
-    expect(finished(await step(model, live)).egress).toBe('relay');
+    expect(await refused(model, live)).toContain(NO_MACHINE);
     // The next turn picks afresh.
     expect(finished(await step(model, newTurn())).egress).toBe(`device ${machine.deviceId}`);
     await harness.joinFibers();

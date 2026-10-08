@@ -20,6 +20,9 @@ export async function hireSocket(app: Fetcher, path: string, reply: string) {
   const replyStreams = new Set<string>();
   const finished = new Set<string>();
   let roster: v.InferOutput<typeof HireRosterSchema> = [];
+  const awaitingAnswer: (() => void)[] = [];
+  // A window that never asked for completion, as an agent's pane, has no reader its close could fail.
+  let completionAsked = false;
   let nextId = 0;
 
   const rpc = async <T>(method: string, args: JsonValue[], schema: v.GenericSchema<T>): Promise<T> => {
@@ -63,12 +66,14 @@ export async function hireSocket(app: Fetcher, path: string, reply: string) {
       if (frame.body?.includes(reply)) replyStreams.add(frame.id);
 
       if (frame.done === true) finished.add(frame.id);
+
+      if (frame.done === true && replyStreams.has(frame.id)) for (const answered of awaitingAnswer.splice(0)) answered();
     }
 
     settled();
   });
   socket.addEventListener('close', () => {
-    completion.reject(new Error('Workspace socket closed before its reply and roster completion'));
+    if (completionAsked) completion.reject(new Error('Workspace socket closed before its reply and roster completion'));
 
     for (const request of requests.values()) request.reject(new Error('Workspace socket closed before its RPC reply'));
   });
@@ -81,7 +86,13 @@ export async function hireSocket(app: Fetcher, path: string, reply: string) {
         method: 'POST', body: JSON.stringify({ messages: [{ id: 'hire-msg-input', role: 'user', parts: [{ type: 'text', text: prompt }] }], trigger: 'submit-message' }),
       } }));
     },
-    completed: () => completion.promise,
+    completed: () => {
+      completionAsked = true;
+
+      return completion.promise;
+    },
+    /** The next streamed answer carrying the reply, from a turn that ends after this is asked. */
+    nextAnswer: () => new Promise<void>((answered) => { awaitingAnswer.push(answered); }),
     close: () => { socket.close(); },
   };
 }

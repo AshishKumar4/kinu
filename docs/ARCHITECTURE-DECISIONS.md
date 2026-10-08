@@ -177,20 +177,24 @@ Measured: `unit-sandbox-errors` rejected the host-disconnect regression before
 the fix; the scoped codemode suites and harness-wiring's durable-census case
 pass after it. O2 closed.
 
-M3. A slate declares its bindings in `package.json`. Besides namespace, rpc,
-mcp and app, `{kind:'tool',name}` exposes `env.NAME.call(input)` for a native
-or crafted tool; memory, tasks and web expose their codemode projection
-members. The host uses the same core dispatcher and CF codemode factory and
-re-reads crafted source and caller reach for each call. Tool and projection
-failures use M2's value shape. Role reach, Plan permissions, egress and
-approval gates are the caller's; a slate cannot add authority. RPC read models
-remain root-only. Neither agent nor agents is exposed, including through a
-crafted tool's sandbox: live apps must not hire or steer their caller.
-Decided 2026-09-13, commit `feat(slates): a slate binds what its caller can call`.
-Measured by `unit-slate-composition` (immediate scribe-role revocation, actor
-memory, root-only RPC and the shared approval ladder), `unit-slate-project`,
-and workerd's `plan-code` (a declared crafted binding runs live source with no
-delegation globals). O3 closed.
+M3. A slate calls one surface, `workspace`: its caller's eval namespaces,
+`mcp.<server>.<tool>`, crafted `tools.<name>`, `reads.<model>`, `agent.send`,
+`ai.run` and `slates.<id>.<method>`, each as the caller. `package.json` declares
+nothing. The host routes every call in one place (`routeSlateCall`), refuses
+what only the agent does (`SLATE_EXCLUDED`: delegating, steering itself, making
+tools, changing slates) and any member its impact table does not name, and
+records each member an owner's call reaches; that record is the capability
+graph a share is cut from, by agent-core's impacts, and what a blueprint
+requires. Role reach, Plan permissions, egress and approval gates are the
+caller's; a slate cannot add authority. Read models remain root-only.
+Decided 2026-10-07 (owner). Reversed: the declared `slate.bindings` table of
+2026-09-13 (`feat(slates): a slate binds what its caller can call`), whose
+names, member lists and path prefixes were a second statement of a reach the
+caller's role already states. Measured by `unit-slate-composition` (immediate
+scribe-role revocation, actor memory, root-only reads, the shared approval
+ladder and the agent-only refusals), `unit-slate-surface`, and workerd's
+`slate-share` (a grant cut from recorded calls, across an app hop and its
+cycle). O3 closed.
 
 M4. A slate's durable application is a journalled launch of the workspace's
 one facet manager, and the journal re-drives it on the wake after a reset or
@@ -201,7 +205,7 @@ next request for its URL, `workspace-host.ts` at `9ad8e7a6e`). The launch
 journal recovers on the first pump of an incarnation. The hosted workspace
 runs that pump from `waitUntil` when it composes the manager, because its one
 alarm slot belongs to the SDK scheduler. The recipe carries digests, port and
-cwd, never a launch's inputs. A slate's bindings are minted per caller and its
+cwd, never a launch's inputs. A slate's surface stub is minted per caller and its
 modules compiled from the current tree, so the embedder's
 `resolveWorkerLaunch` answers null and brings the slate back through the
 slate host's own boot, which also replaces a process whose source changed.
@@ -742,8 +746,19 @@ back. `agent_open_turns` is the workspace's only record of a turn handed out
 and not heard end; an activation after a reset asks each agent it names to
 recover its own claims (stalled turns retire; the rest re-pend because their
 rows stay leased until the turn ends). The browser's socket stays in the workspace object; an
-agent's stream reaches it as short `observe` calls. Main's turns stay in the
-workspace object.
+agent's stream reaches it as short `observe` calls.
+Extended to main on 2026-10-07 (owner: "every actor's turn then runs one
+way"): main's turn and main's own stores move into main's facet (being
+built), and its tools reach the workspace through one `callOperation`. The build ships as a
+reset deployment, so main's facet starts empty, as a fresh workspace's does.
+Its socket, roster and shared stores stay in the workspace object, and a root
+tab's socket opening pre-warms main's isolate. Measured 2026-10-07 on the same
+150-step turn and provider path, 3 runs each (armada 20261007185121-975afb24):
+main's turn in the workspace object peaked at 88.6-90.7 MB and allocated
+379-385 MB; a facet's turn peaked at 58.9-69.5 MB and allocated 337-346 MB,
+while the workspace object peaked at 48-52 MB serving it with 69-73 MB. The
+first model call came 23-28 ms after the turn started in the object, and
+511-1279 ms after a cold facet's hire, which is why the pre-warm exists.
 Measured 2026-09-28 on a throwaway Worker loading the shipped agent bundle
 (2.16 MB minified, 0.62 MB gzip; core, `ai` and the Nimbus SDK), deleted
 after the run: first call into a new agent 305 ms p50 (n=9, 329-416 ms at

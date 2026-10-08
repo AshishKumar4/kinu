@@ -26,7 +26,7 @@ import { FilesSurface } from "./FilesSurface";
 import { ActivitySurface } from "./ActivitySurface";
 import { SlateFrame } from "@/components/slates/SlateFrame";
 import { ShareSlateControl } from "@/components/slates/ShareSlateControl";
-import { UnmappedBindingsPanel } from "@/components/slates/UnmappedBindingsPanel";
+import { ForkReachPanel } from "@/components/slates/ForkReachPanel";
 import {
   ACTIVITY_SURFACE, SLATE_PREFIX, SURFACES, landedSurface, openPortOf, parentDir, surfaceHasContent,
   type PanelAgent, type SlateSurfaceKind, type SurfaceKind,
@@ -99,9 +99,9 @@ export interface WorkSurfaceProps {
   rpc: Rpc;
   slateBody?: (slate: SlateSummary) => ReactNode;
   workspace?: string;
-  /** A blueprint fork with unmapped bindings opens on the panel, not the preview. */
-  unmappedSlate?: string | null;
-  onUnmappedOpened?: () => void;
+  /** A fork's landing opens on what it reaches, not the preview. */
+  forkLanding?: { readonly slate: string; readonly reaches: readonly string[] } | null;
+  onForkLandingOpened?: () => void;
 }
 
 /** A surface can be selected without a click (deep link, restored tab); keep its tab in view. */
@@ -135,12 +135,12 @@ function useSelectedTabInView(strip: RefObject<HTMLDivElement | null>, surface: 
   }, [strip, surface]);
 }
 
-/** The open Slate's pane: its bindings panel while a blueprint fork has unmapped ones, else its frame. */
+/** The open Slate's pane: a fork's reach on landing, else its frame. */
 function OpenSlatePanel(props: WorkSurfaceProps & { readonly slate: string; readonly summary: SlateSummary | undefined }) {
   const reloadKey = props.slateReloads?.get(props.slate) ?? 0;
 
-  if (props.slate === props.unmappedSlate) {
-    return <UnmappedBindingsPanel slate={props.slate} title={props.summary?.title ?? props.slate} rpc={props.rpc} onOpen={() => props.onUnmappedOpened?.()} />;
+  if (props.slate === props.forkLanding?.slate) {
+    return <ForkReachPanel title={props.summary?.title ?? props.slate} reaches={props.forkLanding.reaches} onOpen={() => props.onForkLandingOpened?.()} />;
   }
 
   if (props.summary === undefined) return <SlateFrame id={props.slate} rpc={props.rpc} reloadKey={reloadKey} />;

@@ -10,6 +10,7 @@ import { hasPlanPermission, workModeRefusal } from '../execution/work-mode';
 import type { WorkMode } from '../types/turn';
 import { branchableToolCall, bindProgramCall } from './outcome';
 import { TOOL_REACH, CODEMODE_CODE_DESCRIPTION, type ToolSurfaceNarrowing } from './registry';
+import { slateReaches } from '../slates/surface';
 import { KinuError, settle, settleSync } from '../obs';
 import { CRAFTED_TOOL_NAMESPACE, type CodemodeProvider } from '../types/codemode';
 import { parsesAsExpression } from '../craft/source';
@@ -218,18 +219,29 @@ export function craftedFailureFunctions(crafted: readonly CraftedDeclaration[]):
   return functions;
 }
 
-/** Slates inherit caller reach but may neither delegate nor steer the actor. */
+/**
+ * The caller's reach as a slate holds it: every namespace narrowed to the members a slate reaches. A crafted tool's
+ * body runs on these providers too, so what a slate cannot call directly it cannot call through a tool either.
+ */
 export function slateToolReach(caller: ToolSurfaceNarrowing): ToolSurfaceNarrowing {
   const allowsNamespace = (name: string) => name !== 'agent' && name !== 'agents' && caller.allowsNamespace(name);
 
   return {
     allowsTool: (name) => name !== 'agents' && name !== 'agent' && name !== 'eval' && caller.allowsTool(name),
     allowsNamespace,
-    narrowProviders: (providers) => providers.filter((provider) => allowsNamespace(provider.name)),
+    narrowProviders: (providers) => providers.filter((provider) => allowsNamespace(provider.name)).map(slateMembersOf),
   };
 }
 
-/** A held slate binding is not a grant: reach is re-resolved per call. */
+/** A namespace with only the members a slate reaches. */
+function slateMembersOf<P extends { readonly name: string }>(provider: P): P {
+  if (!('tools' in provider) || typeof provider.tools !== 'object' || provider.tools === null) return provider;
+  const tools = Object.fromEntries(Object.entries(provider.tools).filter(([member]) => slateReaches({ namespace: provider.name, member })));
+
+  return { ...provider, tools };
+}
+
+/** A held slate stub is not a grant: reach is re-resolved per call. */
 export async function callCodemodeMember(providers: readonly CodemodeProvider[], namespace: string, member: string, args: readonly JsonValue[]): Promise<JsonValue | undefined> {
   const call = codemodeFunction(namespace, member, () => settle(Effect.gen(function* () {
     const provider = providers.find((candidate) => candidate.name === namespace);

@@ -13,7 +13,6 @@ import { Effect } from 'effect';
 import type { NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
 import { createAgentProviderRegistry, routedModelReads, type AgentProviderRegistry, type UserCredentialClient } from '../providers/agent-registry';
 import { compactionDiagnostics, hostedActorCompaction } from '@kinu.run/compaction';
-import { codexContainerFetch } from '../egress/codex-egress-route';
 import type { AgentDatabase } from './agent-database';
 import type { ChatTurnRequest } from '../agent-turns';
 import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, PreparedAgentTurn } from '@kinu.run/core';
@@ -62,9 +61,7 @@ export interface AgentWorkspace {
   relayDevice(provider: RelayedProvider): ReturnType<UserCredentialClient['relayDevice']>;
   relayModelCall(deviceId: string, callId: string, request: Request): Promise<Response>;
   cancelModelRelay(callId: string): Promise<void>;
-  forwardCodex(callId: string, request: Request): Promise<Response>;
   sayToParent(signal: AgentSignal): Promise<SendOutcome>;
-  cancelCodex(callId: string): Promise<void>;
   /** The agent's non-turn model calls (its compaction's folds), filed with the workspace's spend. */
   reportModelCall(report: ModelCallReport): Promise<void>;
   reportModelOperation(event: ModelOperationEvent): Promise<void>;
@@ -221,7 +218,6 @@ function facetModels(actor: HostedActor, workspace: AgentWorkspace, providers: P
     userDO: { stub: brokeredCredentials(workspace), caller: AGENT_CALLER },
     accountFor: (provider) => actor.stores.config.getProviderAccounts()[provider] ?? prepared.accounts[provider]
       ?? prepared.sources.profileInputs.envelope.catalog.accounts?.[provider],
-    codexContainer: codexContainerFetch({ forward: (callId, request) => workspace.forwardCodex(callId, request), cancel: (callId) => workspace.cancelCodex(callId) }),
     appTitle: 'Kinu',
   });
 }

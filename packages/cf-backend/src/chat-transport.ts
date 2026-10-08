@@ -3,9 +3,9 @@
  * row; the loop does. A tab that joins a turn in progress is replayed it over the SDK's documented resume
  * handshake (RESUME_REQUEST, RESUMING, ACK, replay frames, replayComplete): the steps the ledger records,
  * restated, then this relay's chunks after them. A turn an ended activation left open is re-driven by a later
- * one under a request id that activation mints, so RESUMING names the turn too: the client whose message opened
- * it follows the turn there. A tab that reconnects before the re-drive opens is told the turn is pending
- * (STREAM_PENDING, the SDK's #1784 frame) and told it is resuming once it opens.
+ * one under a request id that activation mints. A tab that reconnects before the re-drive opens is told the turn
+ * is pending (STREAM_PENDING, the SDK's #1784 frame) and told it is resuming once it opens. Where a send ended is
+ * asked of the workspace (`awaitSend`), never read off this stream.
  */
 import type { Connection } from 'agents';
 import {
@@ -66,8 +66,6 @@ const ChatInputSchema = v.object({
 
 interface LiveStream {
   readonly requestId: string;
-  /** The id of the message that opened the turn: durable, where `requestId` is this activation's alone. */
-  readonly turnId: string;
   /** Requests of the other messages a rerun carried, answered when it closes. */
   readonly carried: readonly string[];
   /** The answer's row id, on every provider call's `start`, so the answer stays one message. */
@@ -221,7 +219,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   }
 
   private notifyResuming(connection: ChatSocket, live: LiveStream, probeId: string | undefined): void {
-    const frame = { type: MessageType.CF_AGENT_STREAM_RESUMING, id: live.requestId, turnId: live.turnId, ...(probeId !== undefined && { probeId }) };
+    const frame = { type: MessageType.CF_AGENT_STREAM_RESUMING, id: live.requestId, ...(probeId !== undefined && { probeId }) };
 
     if (sendIfOpen(connection, JSON.stringify(frame)) && !live.joined.has(connection.id)) this.pendingResume.add(connection.id);
   }
@@ -239,7 +237,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     this.pendingResume.delete(connection.id);
     const { wire, live } = this;
 
-    const frame = (fields: { body: string; replayComplete?: true; done: boolean; restated?: true }): string =>
+    const frame = (fields: { body: string; replayComplete?: true; done: boolean }): string =>
       JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: requestId, replay: true, ...fields });
 
     // A request that is no longer live settles; its answer is in the transcript frame.
@@ -269,7 +267,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     for (const [step, parts] of recorded.slice(0, restated).entries()) {
       frames.push(...(cuts.get(step) ?? []));
 
-      for (const chunk of restatedChunks(parts, step)) frames.push(frame({ body: JSON.stringify(chunk), done: false, restated: true }));
+      for (const chunk of restatedChunks(parts, step)) frames.push(frame({ body: JSON.stringify(chunk), done: false }));
     }
 
     for (const { step, type, body } of live.relayed) {
@@ -407,7 +405,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   }
 
   /** The stream answers under the admitting request (`turnId` is the opening row id), else under an id minted here:
-   *  a turn this activation re-drives or opened itself, which a client follows by `turnId`. */
+   *  a turn this activation re-drives or opened itself, which a tab follows by the resume it is told of. */
   async openTurn(turn: {
     readonly turnId: string; readonly messageId: string; readonly userTurn: boolean; readonly carried: readonly string[]; readonly finishedSteps: number;
   }): Promise<void> {
@@ -426,7 +424,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     this.releaseWaiters();
 
     const live: LiveStream = {
-      requestId, turnId: turn.turnId, carried, messageId: turn.messageId, open: new OpenParts(), relayed: [],
+      requestId, carried, messageId: turn.messageId, open: new OpenParts(), relayed: [],
       finished: turn.finishedSteps, joined: new Set(), broken: false, failure: null,
     };
 

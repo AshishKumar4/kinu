@@ -1,7 +1,7 @@
 /**
- * A public live share under a cut that admits one read member and no mutating
- * member. The owner shares a slate whose one namespace binding offers a read
- * and a mutation, approves nothing, and a signed-out visitor drives the share
+ * A public live share under a cut that admits one observing member and nothing
+ * that acts. The owner runs a slate that reads and writes its workspace, shares
+ * it approving nothing, and a signed-out visitor drives the share
  * origin: the read answers, the mutation is refused with the grant's own
  * classified code, and the owner's tree shows no effect. An agent-namespace
  * call from the slate is refused outright.
@@ -50,29 +50,34 @@ describe(SUITE, () => {
 
         const setup = v.parse(Exec, await session.execute('workspace', `mkdir -p /slates/${SLATE} /slates/${CONTROL_SLATE}
 cat > /slates/${SLATE}/package.json <<'END'
-{"main":"server.ts","slate":{"title":"Capability cut probe","bindings":{"FILES":{"kind":"namespace","namespace":"workspace","members":["exists","writeFile"]}}}}
+{"main":"server.ts","slate":{"title":"Capability cut probe"}}
 END
 cat > /slates/${SLATE}/server.ts <<'END'
 import { SlateObject } from "kinu:slate";
 export class Slate extends SlateObject {
-  async probe() { return { exists: await this.env.FILES.exists("/slates") }; }
-  async mutate() { return await this.env.FILES.writeFile("/slates/${SLATE}/mark", "x"); }
+  async probe() { return { exists: await this.env.workspace.exists("/slates") }; }
+  async mutate() { return await this.env.workspace.writeFile("/slates/${SLATE}/mark", "x"); }
   async fetch() { return new Response("cut-share-probe-ok"); }
 }
 END
 cat > /slates/${CONTROL_SLATE}/package.json <<'END'
-{"main":"server.ts","slate":{"title":"Agent control probe","bindings":{"FILES":{"kind":"namespace","namespace":"workspace","members":["exists"]},"CONTROL":{"kind":"namespace","namespace":"agents"}}}}
+{"main":"server.ts","slate":{"title":"Agent control probe"}}
 END
 cat > /slates/${CONTROL_SLATE}/server.ts <<'END'
 import { SlateObject } from "kinu:slate";
 export class Slate extends SlateObject {
-  async probe() { return { exists: await this.env.FILES.exists("/slates") }; }
-  async ctrl() { return await this.env.CONTROL.msg("x"); }
+  async probe() { return { exists: await this.env.workspace.exists("/slates") }; }
+  async ctrl() { return await this.env.workspace.agents.message("x"); }
   async fetch() { return new Response("cut-agent-probe-ok"); }
 }
 END`));
 
         if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the probe slates: ' + (setup.error ?? setup.stdout ?? ''));
+
+        // A share is cut from what the owner's own calls reached: run each method once, then take the owner's mark back.
+        const exercised = [[SLATE, 'probe'], [SLATE, 'mutate'], [CONTROL_SLATE, 'probe'], [CONTROL_SLATE, 'ctrl']] as const;
+        await Promise.all(exercised.map(([id, method]) => session.slateOp({ op: 'call', id, method, args: [] })));
+        await session.execute('workspace', `rm -f ${MARK}`);
         const shared = await session.slateOp({ op: 'share', id: SLATE, visibility: 'public', approved: [] });
         const answered = v.safeParse(Answered, shared);
         const created = answered.success ? v.safeParse(LiveShareCreatedSchema, answered.output.value) : null;
@@ -139,7 +144,7 @@ END`));
         });
         goals.push({
           what: 'audit-records-admission',
-          reached: audit.some((row) => row.calls.some((call) => call.member === 'exists' && call.effect === 'read' && call.ok === true))
+          reached: audit.some((row) => row.calls.some((call) => call.member === 'exists' && call.impact === 'observe' && call.ok === true))
             && audit.some((row) => row.calls.some((call) => call.member === 'writeFile' && call.ok === false)),
           detail: JSON.stringify(audit.map((row) => row.calls)),
         });

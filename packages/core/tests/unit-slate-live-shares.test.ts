@@ -2,16 +2,15 @@ import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { initSlateLiveShareTables, SlateLiveShareStore } from '../src/slates/live-shares';
 import { shareLiveSlate } from '../src/slates/live-sharing';
-import { grantAdmits, slateCapabilityGraph, type SlateBindingCatalog } from '../src/slates/capability-graph';
-import { parseSlateProject } from '../src/slates/project';
+import { grantAdmits, slateCapabilityGraph } from '../src/slates/capability-graph';
 import { makeExecRaw, makeSqlExec } from './helpers';
 import type { ShareGrant } from '../src/slates/sharing';
 
 const grant: ShareGrant = {
   slates: ['issues'],
   members: [
-    { slate: 'issues', binding: 'FILES', member: 'readFile', effect: 'read' },
-    { slate: 'issues', binding: 'FILES', member: 'writeFile', effect: 'mutate' },
+    { slate: 'issues', namespace: 'workspace', member: 'readFile', impact: 'observe' },
+    { slate: 'issues', namespace: 'workspace', member: 'writeFile', impact: 'mutate' },
   ],
 };
 
@@ -96,8 +95,8 @@ test('a viewer request records its calls and settles', () => {
     const other = shares.openRequest({ share: share.id, viewer: 'source:deadbeef', path: '/' });
 
     expect(request).not.toBe(other);
-    shares.recordCall(request, { slate: 'issues', binding: 'FILES', member: 'readFile', effect: 'read', ok: true });
-    shares.recordCall(request, { slate: 'issues', binding: 'FILES', member: 'writeFile', effect: 'mutate', ok: false });
+    shares.recordCall(request, { slate: 'issues', namespace: 'workspace', member: 'readFile', impact: 'observe', ok: true });
+    shares.recordCall(request, { slate: 'issues', namespace: 'workspace', member: 'writeFile', impact: 'mutate', ok: false });
     shares.settleRequest(request, 'closed');
 
     const requests = shares.requests(share.id);
@@ -105,15 +104,15 @@ test('a viewer request records its calls and settles', () => {
     expect(requests[1]).toEqual({
       id: request, share: 's1', viewer: 'user:u1', slate: 'issues', path: '/',
       calls: [
-        { slate: 'issues', binding: 'FILES', member: 'readFile', effect: 'read', ok: true },
-        { slate: 'issues', binding: 'FILES', member: 'writeFile', effect: 'mutate', ok: false },
+        { slate: 'issues', namespace: 'workspace', member: 'readFile', impact: 'observe', ok: true },
+        { slate: 'issues', namespace: 'workspace', member: 'writeFile', impact: 'mutate', ok: false },
       ],
       outcome: 'closed', createdAt: expect.any(Number), settledAt: expect.any(Number),
     });
     expect(requests[0]?.outcome).toBe('open');
     expect(requests[0]?.settledAt).toBeNull();
 
-    expect(() => shares.recordCall(99_999, { slate: 'issues', binding: 'FILES', member: 'readFile', effect: 'read', ok: true }))
+    expect(() => shares.recordCall(99_999, { slate: 'issues', namespace: 'workspace', member: 'readFile', impact: 'observe', ok: true }))
       .toThrow();
   } finally {
     db.close();
@@ -129,7 +128,7 @@ test('a socket-held request still records its calls after a thousand newer reque
 
     for (let n = 0; n < 1_000; n += 1) shares.settleRequest(shares.openRequest({ share: share.id, viewer: 'user:u2', path: '/' }), 'ok');
 
-    shares.recordCall(held, { slate: 'issues', binding: 'FILES', member: 'readFile', effect: 'read', ok: true });
+    shares.recordCall(held, { slate: 'issues', namespace: 'workspace', member: 'readFile', impact: 'observe', ok: true });
     expect(shares.requests(share.id).find((row) => row.id === held)?.calls).toHaveLength(1);
   } finally {
     db.close();
@@ -140,26 +139,21 @@ test('sharing a live slate cuts the grant the dialog approved and opens at the h
   const { db, shares } = shareDb();
 
   try {
-    const project = parseSlateProject({
-      main: 'server.js',
-      slate: { bindings: { FILES: { kind: 'namespace', namespace: 'workspace', members: ['readFile', 'writeFile'] } } },
+    const graph = slateCapabilityGraph({
+      slate: 'issues', workspace: 'my-workspace', catalog: { mcp: [], slates: ['issues'] },
+      usage: () => [{ namespace: 'workspace', member: 'readFile' }, { namespace: 'workspace', member: 'writeFile' }],
     });
 
-    const catalog = {
-      executors: [{ namespace: 'workspace', members: ['readFile', 'writeFile', 'exec'] }],
-      mcp: [], tools: [], tiers: [], slates: { issues: project },
-    } satisfies SlateBindingCatalog;
-
     const created = await shareLiveSlate({
-      shares, graph: slateCapabilityGraph({ slate: 'issues', workspace: 'my-workspace', catalog }), visibility: 'users',
-      approved: [{ slate: 'issues', binding: 'FILES', member: 'writeFile' }], fork: true,
+      shares, graph, visibility: 'users',
+      approved: [{ slate: 'issues', namespace: 'workspace', member: 'writeFile' }], fork: true,
       url: async (handle) => `https://${handle}-token0-ws.kinu.run`,
     });
 
     expect(created.share.handle).toMatch(/^[a-f0-9]{10}$/);
-    expect(grantAdmits(created.share.grant, 'issues', 'FILES', 'writeFile')?.effect).toBe('mutate');
-    expect(grantAdmits(created.share.grant, 'issues', 'FILES', 'readFile')?.effect).toBe('read');
-    expect(grantAdmits(created.share.grant, 'issues', 'FILES', 'exec')).toBeNull();
+    expect(grantAdmits(created.share.grant, 'issues', 'workspace', 'writeFile')?.impact).toBe('mutate');
+    expect(grantAdmits(created.share.grant, 'issues', 'workspace', 'readFile')?.impact).toBe('observe');
+    expect(grantAdmits(created.share.grant, 'issues', 'workspace', 'exec')).toBeNull();
     expect(created.share.grant.fork).toBe(true);
     expect(created.url).toBe(`https://${created.share.handle}-token0-ws.kinu.run`);
 

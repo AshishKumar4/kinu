@@ -96,14 +96,11 @@ const SocketMessageSchema = v.variant("type", [
   v.object({ type: v.literal("workspace_renamed"), displayName: v.optional(v.string()) }),
   // Arrival is what the chat pane waits on; the payload is the SDK's business.
   v.looseObject({ type: v.literal("cf_agent_chat_messages") }),
+  // `reason` only on the runtime's refusal of this tab (`terminalChatError`).
   v.object({
     type: v.literal("cf_agent_use_chat_response"),
-    error: v.optional(v.boolean()), done: v.optional(v.boolean()), body: v.optional(v.string()),
-    id: v.optional(v.string()),
+    error: v.optional(v.boolean()), done: v.optional(v.boolean()), body: v.optional(v.string()), reason: v.optional(v.string()),
   }),
-  // For a retained terminal record the id is the failed turn's, matching the error frame that
-  // follows: that tells a replay from a live failure.
-  v.object({ type: v.literal("cf_agent_stream_resuming"), id: v.string() }),
   MctsProgressMessageSchema,
   v.object({
     type: v.literal("device_consent"), consentId: v.string(), deviceLabel: v.string(),

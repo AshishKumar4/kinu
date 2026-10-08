@@ -104,20 +104,20 @@ export const slate = new Proxy(Object.create(null), {
   },
 });
 
-/** What a slate with no class of its own is served: every binding under its name, the workspace's own members at the
- *  top, so workspace.readFile(path) and workspace.agent.send({ text }) both read as they would in a program. */
-export const workspace = new Proxy(Object.create(null), {
-  get(_target, name) {
-    if (typeof name !== "string" || name === "then") return undefined;
-    return new Proxy(function () {}, {
-      apply(_fn, _self, args) { return session().workspace[name](...args); },
-      get(_fn, member) {
-        if (typeof member !== "string" || member === "then") return undefined;
-        return (...args) => session()[name][member](...args);
-      },
-    });
-  },
-});
+/** A slate's one surface, as a program reaches its namespaces: workspace.memory.search(query),
+ *  workspace.mcp.github.list_issues({ state: "open" }), workspace.agent.send({ text }). The workspace executor's own
+ *  members sit at the top too, so workspace.readFile(path) reads as it does in a program. */
+function surface(path) {
+  return new Proxy(function () {}, {
+    apply(_fn, _self, args) { return session().$workspace(path, args); },
+    get(_fn, name) {
+      if (typeof name !== "string" || name === "then") return undefined;
+      return surface([...path, name]);
+    },
+  });
+}
+
+export const workspace = surface([]);
 
 export function useSlate() {
   return useMemo(() => slate, []);

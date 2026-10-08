@@ -8,7 +8,6 @@ import type { EvictionProbeDO, WitnessDO } from './eviction-probe';
 import type { HireObservation } from './hire-shapes';
 import type { SpendProbeDO } from './spend-probe';
 import type { OperationCost } from './sql-meter';
-import type { HostileCalls, ProbeRecords } from './codex-egress-records';
 import type { TerminalEffectProbeDO } from './terminal-effect-probe';
 import type { DeviceOutputHubProbeDO, DeviceOutputWorkspaceProbeDO } from './device-output-probe';
 import type { DbCapabilityProbeDO } from './db-capability-probe';
@@ -171,15 +170,6 @@ interface SealedOrchestratorRpc extends Rpc.DurableObjectBranded, DeniedRpc {
   openDeviceTerminal(): Promise<void>;
 }
 
-interface CodexEgressProbeRpc extends Rpc.DurableObjectBranded, HostileCalls {
-  forward(ownerUserId: string, callId: string, request: Request): Promise<Response>;
-  cancel(callId: string): void;
-}
-
-interface CodexEgressRecordsRpc extends Rpc.WorkerEntrypointBranded {
-  read(id: string): ProbeRecords;
-}
-
 /** The production UserDO's device chokepoint, with the identities a test cannot mint from outside. */
 interface DeviceUserProbeRpc extends Rpc.DurableObjectBranded {
   fetch(input: string, init?: RequestInit): Promise<Response>;
@@ -205,6 +195,8 @@ interface DeviceUserProbeRpc extends Rpc.DurableObjectBranded {
 
 interface HireProbeRpc extends Rpc.DurableObjectBranded {
   setup(workspace: string, model: string, script: import('./hire-shapes').ChildScript): Promise<void>;
+  submitChildPlan(workspace: string, name: string, edits: import('@kinu.run/core').PlanEdit[]): Promise<import('@kinu.run/core').PlanReviewResult>;
+  childLines(workspace: string, name: string): Promise<string[]>;
   releaseChild(): Promise<void>;
   childSpoke(): Promise<void>;
   modelSaw(workspace: string, texts: readonly string[]): Promise<void>;
@@ -239,7 +231,7 @@ interface SlateProcessProbeRpc extends Rpc.DurableObjectBranded {
   esbuildInThisIsolate(): Promise<boolean>;
   facetImages(): Promise<string[]>;
   call(method: string, args?: JsonValue[], chain?: string[]): Promise<{ ok: true; value: string } | { ok: false; error: string }>;
-  socket(method: string, args?: JsonValue[], binding?: string): Promise<{ ok?: boolean; value?: string; error?: string }>;
+  socket(method: string, args?: JsonValue[], surface?: string[]): Promise<{ ok?: boolean; value?: string; error?: string }>;
   route(path?: string, chain?: string[]): Promise<{ status: number; body: string; contentType: string | null }>;
   artifacts(): Promise<{ application: string; client?: string; shell?: string }>;
   paths(): Promise<{ kinuInSlateRoot: boolean; entries: string[] }>;
@@ -337,7 +329,7 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   operationAs(as: 'root' | 'plan' | 'hire', input: import('@kinu.run/core').JsonValue): Promise<ProbeAnswer>;
   unnamedShareCall(share: string): Promise<ProbeAnswer>;
   previewAsHire(): Promise<{ preview: ProbeAnswer; removed: ProbeAnswer; left: boolean }>;
-  share(approved?: readonly { binding: string; member: string }[]): Promise<ProbeAnswer>;
+  share(approved?: readonly { namespace: string; member: string }[]): Promise<ProbeAnswer>;
   liveShares(): Promise<ProbeAnswer>;
   importBlueprint(): Promise<{ fork: string; running: number }>;
   viewerHop(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<string>;
@@ -351,6 +343,7 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   requests(share: string): Promise<ProbeAnswer>;
   revoke(share: string): Promise<ProbeAnswer>;
   stopped(): Promise<boolean>;
+  drive(session: string): Promise<string>;
 }
 
 
@@ -448,8 +441,6 @@ declare global {
       TWO_TURN_PROBE: DurableObjectNamespace<TwoTurnProbeRpc>;
       HIRE_PROBE: DurableObjectNamespace<HireProbeRpc>;
       HIRE_WORKSPACE: DurableObjectNamespace<import('agents').Agent<Cloudflare.Env>>;
-      CODEX_EGRESS_PROBE: DurableObjectNamespace<CodexEgressProbeRpc>;
-      CODEX_EGRESS_RECORDS: Service<CodexEgressRecordsRpc>;
       USER_SOCKET_PROBE: DurableObjectNamespace<UserSocketProbeRpc>;
       SLATE_DURABILITY_PROBE: DurableObjectNamespace<SlateDurabilityProbeRpc>;
       DELETE_ALL_PROBE: DurableObjectNamespace<import('./delete-all-probe').DeleteAllProbeDO>;

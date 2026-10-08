@@ -31,6 +31,7 @@ import {
   type SqlExec, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
   isSubordinateOrigin,
   whenActorTakesInput,
+  type PlanEdit, type PlanReviewResult,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { agentFacet, agentStateShellId, AgentMemory, AgentStoreBroker, AgentWorkspaceHost, headDeltas, uiChunks, type AgentFacetPlacement } from "./agent-facets";
@@ -43,7 +44,7 @@ import type { SerializedMessage } from '@kinu.run/core';
 import type { AgentFacet, AgentFacetCalls } from "./agent-facet/agent-facet";
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
-import { McpToolSurfaceSchema, ShareViewerClaimSchema, tierIdsOf, type ShareViewerClaim } from '@kinu.run/core';
+import { McpToolSurfaceSchema, ShareViewerClaimSchema, type ShareViewerClaim } from '@kinu.run/core';
 import {
   AgentOpenTurns, AgentOwedWork, PROGRAMMATIC_MESSAGE_ID_PREFIX, RECOVERY_BACKOFF_CEILING_MS, type PromptFile, type AgentOpenTurn, CHAT_SESSION_ID, steerSkillsBlock, subordinateTurnContext, type SessionEvent, type SessionTranscript,
 } from '@kinu.run/core';
@@ -106,8 +107,8 @@ import {
   drainAssignments, delegatedTaskMetadata,
   appendMemoryNote,
   parseMemoryNotes,
-  type SlateBindingRequest, type SlateCallResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
-  type SlateBindingCatalog, type LiveShareRecord,
+  type SlateCallRequest, type SlateCallResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
+  type SlateSurfaceCatalog, type LiveShareRecord,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   type ScaffoldRunResult,
   applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
@@ -215,6 +216,7 @@ import {
   ActorAgent,
   type ActorDynamicContextExtras,
   type ActorToolDeps,
+  type HostedPlanReviews,
   type UntimedArms,
 } from "./actor-agent";
 import {
@@ -235,7 +237,6 @@ import {
 import type { CodemodeProvider, MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
 import { Cause, Effect, Exit } from 'effect';
 import { attempt, authoredRefusal, classify, diagnostics, hold, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
-import { ownerContainer, type CodexContainer } from "./egress/codex-egress-route";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
 import { deliverCloudFork, type ForkFrameAck } from "./user/workspace-fork";
@@ -833,8 +834,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         await stub.cancelModelRelay(caller, callId);
       },
-      forwardCodex: async (callId, request) => await (await this.codexContainer()).forward(callId, request),
-      cancelCodex: async (callId) => { await (await this.codexContainer()).cancel(callId); },
       sayToParent: async (signal) => {
         const { parentActorId } = this.liveAgentOf(actorId);
 
@@ -871,15 +870,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (!this.liveActor(actorId)) return;
     recordAgentFigures(this.boundSql, actorId, figures);
     this.delegatedTurns.start([this.liveAgentOf(actorId)]);
-  }
-
-  async codexContainer(): Promise<CodexContainer> {
-    const owner = await this.getOwnerUserId();
-    const namespace = this.env.CodexEgress;
-
-    if (namespace === undefined || !owner) return settleSync(Effect.fail(new KinuError('unavailable', "This workspace has no Codex egress container for its owner.")));
-
-    return ownerContainer(namespace, owner);
   }
 
   /** A promise so the workspace boots on the first provision, never at activation. */
@@ -2234,6 +2224,24 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       sendState: async (id) => await (await facet()).sendState(snapshot(), id),
       awaitSend: async (id) => await (await facet()).awaitSend(snapshot(), id),
     };
+  }
+
+  protected override hostedPlanReviews(actorId: string): HostedPlanReviews | null {
+    if (this.hostedReference(actorId) === null) return null;
+    const facet = () => this.agentCalls(actorId);
+    const snapshot = () => this.agentSnapshot(actorId);
+
+    return {
+      active: async () => await (await facet()).activePlanReview(snapshot()),
+      saveAnnotations: async (id, revision, annotations) => await (await facet()).savePlanReviewAnnotations(snapshot(), id, revision, annotations),
+      dismiss: async (id, revision) => await (await facet()).dismissPlanReview(snapshot(), id, revision),
+      decide: async (id, revision, decision, feedback) => await (await facet()).decidePlanReview(snapshot(), { id, revision, decision, ...(feedback !== undefined && { feedback }) }),
+    };
+  }
+
+  /** A hosted agent's Plan turn submits through this, into its own store (`submitPlan` on its turn's tool surface). */
+  protected async hostedPlanSubmit(actorId: string, edits: readonly PlanEdit[]): Promise<PlanReviewResult> {
+    return await (await this.agentCalls(actorId)).submitPlan(this.agentSnapshot(actorId), edits);
   }
 
   private hirerName(record: WorkspaceActor): string {
@@ -4221,7 +4229,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         mission: entry.birth?.seed.mission ?? '',
         model: { model: profile.tier.model, source: profile.tier.source },
         reasoningEffort: profile.tier.reasoningEffort,
-        activePlan: child.stores.planReviews.getActive(CHAT_SESSION_ID),
+        // Its plans live in its own isolate (D9).
+        activePlan: yield* Effect.promise(async () => await (await this.agentCalls(child.handle.actorId)).activePlanReview(this.agentSnapshot(child.handle.actorId))),
         // Counted in the store: the pane holds only a window.
         messageCount: yield* Effect.promise(async () => this.agentStores(child.handle.actorId).messageCount()),
         // Read with the child's actor id; same rule as `pendingSteerRuns()`: a steer is a row bound to a turn.
@@ -4260,9 +4269,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** The machine's name is read from the account, so it is current. */
-  private async codexRoute(egress: string | undefined, deviceId: string | null): Promise<NonNullable<ActivitySnapshot['latest']>['route']> {
-    if (egress === 'relay') return { kind: 'container' };
-
+  private async codexRoute(deviceId: string | null): Promise<NonNullable<ActivitySnapshot['latest']>['route']> {
     if (deviceId === null) return null;
     const { stub, caller } = await this.userHub();
 
@@ -4299,7 +4306,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           usage: newest.usage ?? {},
           context: newest.context ?? null,
           modelId: newest.modelId ?? null,
-          route: await this.codexRoute(newest.egress, deviceId),
+          route: await this.codexRoute(deviceId),
         },
       // Null rather than a default: a share-of-window shown against a guessed
       // window would be a made-up percentage.
@@ -4417,33 +4424,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.slates.operation(caller, operation);
   }
 
-  /**
-   * Names only, never surfaces: the graph shows what a binding could reach;
-   * dispatch still decides per call what it does reach.
-   */
-  protected async slateBindingCatalog(): Promise<SlateBindingCatalog> {
-    const [profile, descriptors] = await Promise.all([
-      this.profileInputs(),
-      this.requireOwnerUserDO().userMcp_toolDescriptors(await this.userCaller()),
-    ]);
-
+  /** Names only, never surfaces: the graph shows what a slate has reached; each call is still decided as it comes. */
+  protected async slateSurfaceCatalog(): Promise<SlateSurfaceCatalog> {
+    const descriptors = await this.requireOwnerUserDO().userMcp_toolDescriptors(await this.userCaller());
     const mcp = v.parse(McpToolSurfaceSchema, JSON.parse(descriptors));
-
     const mcpServers = new Map<string, { title: string; tools: { name: string; readOnly: boolean }[] }>();
 
     for (const descriptor of mcp.descriptors) {
-      const group = mcpServers.get(descriptor.serverId) ?? { title: descriptor.serverName, tools: [] };
+      const group = mcpServers.get(descriptor.serverName) ?? { title: descriptor.serverName, tools: [] };
       group.tools.push({ name: descriptor.name, readOnly: descriptor.readOnly === true });
-      mcpServers.set(descriptor.serverId, group);
+      mcpServers.set(descriptor.serverName, group);
     }
 
     return {
-      executors: this.slateNamespaces()
-        .map((provider) => ({ namespace: provider.name, members: Object.keys(provider.tools) })),
       mcp: [...mcpServers.entries()].map(([server, group]) => ({ server, title: group.title, tools: group.tools })),
-      tools: this.rt.craftStore.list().map((tool) => tool.name),
-      tiers: tierIdsOf(profile.envelope.catalog),
-      slates: await this.slates.projects(ROOT_SLATE_CALLER),
+      slates: Object.keys(await this.slates.projects(ROOT_SLATE_CALLER)),
     };
   }
 
@@ -4455,13 +4450,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       session: () => this.hostedWorkspace().bundle.session(),
       facetManager: () => this.hostedWorkspace().facetManager(),
       bundler: (vfs) => supervisorEsbuildService(this.ctx, this.env, vfs),
-      dispatch: (caller, route) => this.slateBindingDispatch(caller.path, route, caller.workMode),
+      dispatch: (caller, route) => this.slateCallDispatch(caller.path, route, caller.workMode),
+      browserActor: async (caller) => (caller.share === undefined ? this.slateCallerActorId(caller.path) : null),
       apps: {
         ensure: (input) => this.hostedWorkspace().apps.ensure(input),
         remove: (owner) => this.hostedWorkspace().apps.remove(owner),
         url: (port, capability) => nimbusPreviewUrl(this.env, this.name, port, capability),
       },
-      catalog: () => this.slateBindingCatalog(),
+      catalog: () => this.slateSurfaceCatalog(),
       shareUrl: (handle) => slateShareUrl(this.env, this.name, handle),
       kv: this.env.AUTH_KV,
       budget: () => this.budget,
@@ -4486,7 +4482,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /**
    * The block an answer's page is read from, every text part as the chat draws it. The workspace's own answer runs
    * with its authority in the mode its next turn runs in. A hired agent's is read from its own isolate and drawn with
-   * nothing bound: a binding run from here would not run where that agent's stores are.
+   * no authority lent to it: a call run from here would not run where that agent's stores are.
    */
   private async answerBlock(address: EphemeralSlateAddress): Promise<MessageBlock> {
     if (address.actorId !== null) {
@@ -4503,8 +4499,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return { html: addressedBlock(texts, address).html, author: { ...ROOT_SLATE_CALLER, workMode: await this.preparedWorkMode() } };
   }
 
-  async slateBindingCallAs(caller: SlateCaller, id: string, name: string, request: SlateBindingRequest): Promise<SlateCallResult> {
-    return this.slates.bindingCall(caller, id, name, request);
+  async slateCallAs(caller: SlateCaller, id: string, name: string, request: SlateCallRequest): Promise<SlateCallResult> {
+    return this.slates.surfaceCall(caller, id, name, request);
   }
 
   /** The share route has already verified the request; admission and routing live on the slate host,
@@ -4578,7 +4574,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.slates.shareBlueprintWith(share, users);
   }
 
-  /** Admits into this workspace as a new slate with every binding unmapped. */
+  /** Admits into this workspace as a new slate that calls this workspace's own surface; nothing runs. */
   async admitBlueprint(bundle: BlueprintBundle): Promise<SlateAnswer<BlueprintFork>> {
     return this.slates.admitBlueprint(bundle);
   }
@@ -4955,7 +4951,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       pendingConsents,
       activePlan,
       slates: listing.slates.map((slate) => ({
-        id: slate.id, title: slate.title, picture: pictures.get(slate.id) ?? null, bindings: slate.bindings.length,
+        id: slate.id, title: slate.title, picture: pictures.get(slate.id) ?? null,
       })),
       shares,
     };

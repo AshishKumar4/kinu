@@ -22,19 +22,19 @@ const issues: Preview = { kind: "slate", art: "issues" };
 
 const COUPON_REACH: readonly ReachGroup[] = [
   {
-    binding: "GitHub", kind: "MCP server", members: [
+    namespace: "mcp.github", kind: "MCP server", members: [
       { name: "read_issue", what: "Reads issues", change: false, allowed: true },
       { name: "create_issue", what: "Opens issues in your repositories", change: true, allowed: false },
     ],
   },
   {
-    binding: "Notes", kind: "workspace memory", members: [
+    namespace: "memory", kind: "workspace memory", members: [
       { name: "recall", what: "Reads your notes", change: false, allowed: true },
       { name: "remember", what: "Writes to your notes", change: true, allowed: false },
     ],
   },
   {
-    binding: "Files", kind: "Storefront", members: [
+    namespace: "workspace", kind: "Storefront", members: [
       { name: "readFile", what: "Reads files in the workspace", change: false, allowed: true },
       { name: "writeFile", what: "Changes files in the workspace", change: true, allowed: true },
     ],
@@ -73,7 +73,7 @@ const SLATES: readonly SlateItem[] = [
   },
   {
     id: "issue-board", title: "Issue board", workspace: "checkout-fixes", workspaceTitle: "Storefront",
-    updated: "1w", preview: issues, access: { kind: "link" }, reach: COUPON_REACH.filter((group) => group.binding === "GitHub"),
+    updated: "1w", preview: issues, access: { kind: "link" }, reach: COUPON_REACH.filter((group) => group.namespace === "mcp.github"),
   },
 ];
 

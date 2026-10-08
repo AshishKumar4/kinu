@@ -13,6 +13,7 @@ import {
 import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner, TEST_USER_ENV, type TestUserDO } from './helpers/user-do';
 import { resetRecordedMcp, seedMcpTools } from './helpers/agents-sdk';
+import { ROOT_SLATE_CALLER } from '../src/slates/bindings';
 import { makeKv } from './helpers/kv';
 import { sharedPublicRoutes, sharedRoutes } from '../src/shared/routes';
 import { serveFamily } from './helpers/api';
@@ -35,12 +36,20 @@ async function authorIssuesSlate(files: AgentRuntime['storage']['vfs']) {
   await files.mkdir('/slates/issues', { recursive: true });
   await writeText(files, '/slates/issues/package.json', JSON.stringify({
     name: 'issues', description: 'Triage the open issues', main: 'src/server.ts',
-    slate: { title: 'Issue triage', bindings: {
-      GITHUB: { kind: 'mcp', server: 'connection-id', tools: ['read_issue', 'create_issue'] },
-      FILES: { kind: 'namespace', namespace: 'workspace', members: ['readFile', 'writeFile'] },
-    } },
+    slate: { title: 'Issue triage' },
   }));
   await writeText(files, '/slates/issues/src/server.ts', 'export default {};');
+}
+
+/** What the slate reaches, as its owner runs it: the graph a share is cut from is what the host recorded. */
+async function exerciseIssuesSlate(owner: HarnessOrchestratorAgent): Promise<void> {
+  const source = '/slates/issues/src/server.ts';
+
+  for (const [path, args] of [
+    [['mcp', 'github', 'read_issue'], [{}]], [['mcp', 'github', 'create_issue'], [{}]], [['readFile'], [source]], [['writeFile'], [source, 'export default {};']],
+  ] as const) {
+    await owner.slateCallAs(ROOT_SLATE_CALLER, 'issues', 'workspace', { path: [...path], args: [...args], invocation: null });
+  }
 }
 
 const post = (path: string, body: Record<string, string | boolean | readonly string[] | undefined>) => new Request(`https://app.test${path}`, {
@@ -84,6 +93,12 @@ async function twoUserWorld(): Promise<World> {
   // One KV behind the edge route and every workspace object, as AUTH_KV in production.
   const kv = makeKv();
   const ownerSide = await userWorld(OWNER_ID, 'issues-owner', kv);
+
+  // Seeded on the newest MCP manager, so before the viewer's account builds its own: these are the owner's tools.
+  seedMcpTools('connection-id', [
+    { name: 'read_issue', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } },
+    { name: 'create_issue', inputSchema: { type: 'object' } },
+  ]);
   const viewerSide = await userWorld(VIEWER_ID, 'viewer-home', kv);
 
   const agents = new Map<string, HarnessOrchestratorAgent>([
@@ -119,11 +134,8 @@ async function twoUserWorld(): Promise<World> {
   // reachable from the dispatch the suite drives.
   const env = partialEnv as Env;
 
-  seedMcpTools('connection-id', [
-    { name: 'read_issue', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } },
-    { name: 'create_issue', inputSchema: { type: 'object' } },
-  ]);
   await authorIssuesSlate(workspaceFiles(ownerSide.agent.agent));
+  await exerciseIssuesSlate(ownerSide.agent.agent);
 
   return {
     env, owner: ownerSide.agent, viewer: viewerSide.agent, ownerUser: ownerSide.user, acquired,
@@ -202,8 +214,9 @@ test('D3: a credentialed share answers its consent page until the consent cookie
   expect(before?.status).toBe(200);
   const html = await before?.text() ?? '';
 
-  expect(html).toContain('GITHUB');
-  expect(html).toContain('connection-id');
+  // What the grant reaches: the read-only MCP tool and the file read, by namespace.
+  expect(html).toContain('<li>mcp.github</li>');
+  expect(html).toContain('<li>workspace</li>');
   expect(html).toContain('issues-owner');
   expect(html).toContain(`/${CONSENT_PATH}`);
 
@@ -259,7 +272,7 @@ test('D1: a live share forks for who it names, refuses who it does not, honors f
   const result = await jsonBody(admitted, BlueprintForkSchema);
 
   expect(result.workspace).toBe('viewer-home');
-  expect(result.bindings.map((binding) => binding.name)).toContain('GITHUB');
+  expect(result.requirements.map((requirement) => requirement.name)).toEqual(['mcp.github', 'workspace']);
 
   // S8 under a live fork: only the slate's own source lands in the forker's tree.
   const mcpHeader = 'Bearer owner-mcp-header-' + 'a1b2c3d4e5f6';
@@ -353,7 +366,7 @@ test("the owner's Drive lists its slates and shares from the tiles its workspace
   const blueprint = await jsonBody(published, v.object({ id: v.string(), share: v.string() }));
   const shared = await library();
 
-  expect(shared.slates).toEqual([{ id: 'issues', title: 'Issue triage', workspace: 'issues-owner', bindings: 2, visibility: 'public' }]);
+  expect(shared.slates).toEqual([{ id: 'issues', title: 'Issue triage', workspace: 'issues-owner', visibility: 'public' }]);
   expect(new Set(shared.mine.map((row) => `${row.kind} ${row.id} ${row.title}`))).toEqual(new Set([
     `blueprint ${blueprint.id} Issue triage`,
     `live ${live.share.id} Issue triage`,

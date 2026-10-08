@@ -2,8 +2,8 @@ diff --git a/packages/core/src/prompting/prepare-step.ts b/packages/core/src/pro
 index efdadb34c..40f4d4143 100644
 --- a/packages/core/src/prompting/prepare-step.ts
 +++ b/packages/core/src/prompting/prepare-step.ts
-@@ -128,7 +128,7 @@ function finishPrepareStep(
-   const replayed = normalizeReplayForDestination(working, pipeline.destination);
+@@ -140,7 +140,7 @@ function finishPrepareStep(
+   const replayed = normalizeReplayForDestination(working, pipeline.destination, pipeline.replay);
    const destinationReady = replayed ?? working;
    const plan = pipeline.cache;
 -  const messages = plan ? markCacheTail(destinationReady, plan.strategy) : destinationReady;

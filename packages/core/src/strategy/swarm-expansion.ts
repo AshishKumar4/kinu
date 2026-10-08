@@ -8,7 +8,7 @@ import { diversityAngle, siblingAngles } from '../mcts/diversity';
 import { explorePrompt, type ExplorePrompt } from '../mcts/explore-prompt';
 import { type Logger } from '../obs/index';
 import { PROPOSAL_MARKER, readAnswer } from './branch-answer';
-import { estimateTokens } from '../token-estimate';
+import { messageTokens } from '../prompting/media-tokens';
 import { sha256Hex } from '../safety/argument-digest';
 import {
   BRANCH_PROPOSAL_WIDTH, isTreeAdvance,
@@ -220,21 +220,19 @@ export async function sharedPrefix(input: {
 
   if (parent.transcript.length === 0) return parent.transcript;
 
-  const chars = parent.transcript.reduce(
-    (total, message) => total + JSON.stringify(message.content).length, 0,
-  );
-
   const { model, window } = input.target;
 
   if (window === null) return parent.transcript;
   const room = window * CONTEXT_COMPACTION_THRESHOLD;
+  // Priced for the nodes' model, as their requests are admitted: an image by its size, not its base64.
+  const estimated = messageTokens(model, parent.transcript);
 
-  if (estimateTokens(chars) < room) return parent.transcript;
+  if (estimated < room) return parent.transcript;
 
   if (!input.compactShared) {
     input.log.event('swarm.compaction_absent', {
       preset: input.preset, node: parent.id, depth: parent.depth,
-      estimated_tokens: estimateTokens(chars), threshold: Math.round(room),
+      estimated_tokens: estimated, threshold: Math.round(room),
     });
 
     return parent.transcript;

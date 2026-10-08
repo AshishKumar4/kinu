@@ -52,7 +52,7 @@ import * as v from 'valibot';
 
 import { isPreviewHostRequest, previewHostSuffix } from '../packages/core/src/preview/preview-origin';
 import { parseJsonc } from './jsonc';
-import { CONTAINER_IMAGES, imageReference, readSource, sourceHash, type ContainerImage } from './container-images';
+import { CONTAINER_IMAGES } from './container-images';
 import { allCommands, invocation, parseShell, type ShellScript } from './shell-words';
 import { isWorkerConfig, readRepositoryFile, trackedFiles } from './sources';
 import { type ContextPath, contextPaths } from './workflow-expressions';
@@ -91,11 +91,6 @@ const BlockLowerArtifactSchema = v.object({
 
 const ARTIFACT = v.parse(BlockLowerArtifactSchema, JSON.parse(readRepositoryFile(REPO_ROOT, `${BLOCK_LOWER}/upstream.json`)));
 
-const CUSTOM_IMAGE = CONTAINER_IMAGES.CodexEgress;
-
-/** Each container class and the one image the release record declares for it. */
-const PINNED_IMAGES = new Map(Object.entries(CONTAINER_IMAGES).map(([className, image]) => [className, imageReference(image)]));
-
 /** A vite plugin that decides something per environment — the one shape this
  *  file calls. `PluginOption` also admits arrays, promises and `false`, so the
  *  list is narrowed by PARSING each entry rather than by asking what it looks
@@ -105,27 +100,6 @@ const EnvironmentScopedPluginSchema = v.looseObject({
   name: v.string(),
   configEnvironment: v.function(),
 });
-
-/**
- * An image reference nothing can re-point: a digest, and no tag beside it.
- *
- * `repo:tag@sha256:…` is deliberately refused even though the digest decides the
- * pull. The tag is then still in the deployed config, where a reader believes it
- * and an operator bumps it, and the two can disagree with nobody the wiser.
- */
-function isImmutableImageReference(reference: string): boolean {
-  const parts = reference.split('@');
-
-  if (parts.length !== 2) return false;
-  const [name, digest] = parts;
-
-  if (name === undefined || digest === undefined) return false;
-
-  if (!/^sha256:[0-9a-f]{64}$/u.test(digest)) return false;
-
-  // Only the last segment can carry a tag; an earlier colon is a registry port.
-  return !name.slice(name.lastIndexOf('/') + 1).includes(':');
-}
 
 /** One container: an application-wide image (the `default` scheduling policy), or the named images an
  *  object starts by name (`durable_object`). */
@@ -176,37 +150,14 @@ test('every Worker manifest uses the canonical deployment compatibility date', (
   }
 });
 
-describe('the managed base and custom container images', () => {
-  test('the native devbox prepares no image, and each custom image is digest-pinned', () => {
+describe('the managed base', () => {
+  test('the Worker runs only the native devbox, which prepares no image', () => {
     const containers = CONFIG.containers ?? [];
 
     expect(containers.map((container) => container.class_name).sort(), 'the Worker declares other containers than the record')
-      .toEqual([...PINNED_IMAGES.keys()].sort());
+      .toEqual(Object.keys(CONTAINER_IMAGES).sort());
 
-    for (const container of containers) {
-      if (container.class_name === 'KinuDevbox') {
-        expect(imagesOf(container)).toEqual([]);
-        continue;
-      }
-
-      for (const image of imagesOf(container)) {
-        expect(isImmutableImageReference(image), 'the Worker runs a re-pointable image').toBe(true);
-        expect(image, 'the Worker runs an image the release record does not declare')
-          .toBe(PINNED_IMAGES.get(container.class_name) ?? `no pin for ${container.class_name}`);
-      }
-    }
-  });
-
-  test('each image\'s source is the source its digest was built from', () => {
-    // The sandbox's sources are held by its own artifact record (A8).
-    for (const [className, image] of Object.entries<ContainerImage>(CONTAINER_IMAGES)) {
-      if (image.sourceHash === undefined) continue;
-      const files = readSource(REPO_ROOT, image.source);
-
-      expect({ className, files: files.size > 0 }).toEqual({ className, files: true });
-      expect({ className, sourceHash: sourceHash(files) }, `${image.source} changed with no new digest: see container-images.ts`)
-        .toEqual({ className, sourceHash: image.sourceHash });
-    }
+    for (const container of containers) expect(imagesOf(container), container.class_name).toEqual([]);
   });
 
   test('the pin names the @cloudflare/sandbox version that ships', () => {
@@ -219,20 +170,6 @@ describe('the managed base and custom container images', () => {
     // compares it to the installed one, so `^0.12.8` would let an install decide
     // which container is correct.
     expect(manifest.dependencies['@cloudflare/sandbox']).toBe(ARTIFACT.sandboxVersion);
-  });
-
-  test('a re-pointable reference is refused, in both directions', () => {
-    expect(isImmutableImageReference(imageReference(CUSTOM_IMAGE))).toBe(true);
-    expect(isImmutableImageReference(`localhost:5000/sandbox@${CUSTOM_IMAGE.digest}`)).toBe(true);
-
-    expect(isImmutableImageReference(`${CUSTOM_IMAGE.repository}:0.12.8`)).toBe(false);
-    expect(isImmutableImageReference(`${CUSTOM_IMAGE.repository}:latest`)).toBe(false);
-    // The digest pulls, and the tag is still there to be believed and bumped.
-    expect(isImmutableImageReference(`${CUSTOM_IMAGE.repository}:0.12.8@${CUSTOM_IMAGE.digest}`))
-      .toBe(false);
-    expect(isImmutableImageReference(CUSTOM_IMAGE.repository)).toBe(false);
-    expect(isImmutableImageReference(`${CUSTOM_IMAGE.repository}@sha256:822501de`)).toBe(false);
-    expect(isImmutableImageReference(`${CUSTOM_IMAGE.repository}@md5:${'0'.repeat(64)}`)).toBe(false);
   });
 });
 
@@ -690,8 +627,7 @@ describe('the tools tarball is built from this tree', () => {
   test('every devbox host uses the native scheduling policy with no image preparation', () => {
     for (const host of CONTAINER_HOSTS) {
       const config = parseJsonc(readRepositoryFile(REPO_ROOT, host), ContainerHostSchema, host);
-      // The Codex forwarder beside it is held by the pin test above.
-      const sandboxes = config.containers.filter((container) => container.class_name !== 'CodexEgress');
+      const sandboxes = config.containers;
 
       expect(sandboxes.map(row => 'scheduling_policy' in row ? row.scheduling_policy : 'default'), host).toEqual(sandboxes.map(() => 'durable_object'));
       expect(sandboxes.flatMap(imagesOf), host).toEqual([]);

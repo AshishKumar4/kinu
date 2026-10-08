@@ -88,7 +88,7 @@ describe('the context number a page reads back', () => {
     const snapshot = await harness.agent.getActivitySnapshot({ steps: 1 });
     expect(snapshot.fill).toMatchObject({ tokens: 100, window: 1_000, source: 'provider' });
     expect(snapshot.latest).toMatchObject({
-      runId: 'measured-turn', stepIndex: 1, usage: { input: 100 }, context, modelId: 'first-model', route: { kind: 'container' },
+      runId: 'measured-turn', stepIndex: 1, usage: { input: 100 }, context, modelId: 'first-model', route: null,
     });
     expect(snapshot.latest?.usage.cacheRead).toBeUndefined();
     expect(snapshot.telemetry.tokens).toMatchObject({ output: 5, cacheRead: 200 });

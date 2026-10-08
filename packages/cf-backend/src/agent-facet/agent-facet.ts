@@ -18,6 +18,7 @@ import { runAgentTask, type AgentWorkspace } from './agent-turn';
 import { FacetChat } from './agent-chat';
 import type {
   AgentAnswerTexts, AgentRecovery, AgentSnapshot, AgentTurnEnd, AgentTurnTask, EnqueueTurnResult, ProgrammaticTurn, PromptFile, SendLanding, SendOptions, TurnRequestAt,
+  PlanDecisionOutcome, PlanEdit, PlanReview, PlanReviewDecision, PlanReviewResult, ReviewAnnotation,
 } from '@kinu.run/core';
 
 export type { AgentWorkspace } from './agent-turn';
@@ -66,6 +67,14 @@ class AgentContextTree extends RpcTarget implements ContextTreeRemote {
   writeFileIfRevision(path: string, data: Uint8Array, expected: VfsRevision) { return this.served.writeFileIfRevision(path, data, expected); }
 }
 
+/** The owner's decision on one revision of an agent's plan. */
+export interface PlanVerdict {
+  readonly id: string;
+  readonly revision: number;
+  readonly decision: PlanReviewDecision;
+  readonly feedback?: string;
+}
+
 export interface AgentSend {
   readonly text: string;
   readonly files?: readonly PromptFile[];
@@ -112,6 +121,13 @@ export interface AgentFacetCalls {
   recover(snapshot: AgentSnapshot): Promise<AgentRecovery>;
   archivePage(snapshot: AgentSnapshot, cursor: ArchiveSqlCursor | null, maxBytes: number): Promise<ArchiveAgentPage>;
   deliverAdvice(snapshot: AgentSnapshot, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean>;
+  /** Its plan reviews, in its own store: submitted by its turn, reviewed by the owner through its window. */
+  submitPlan(snapshot: AgentSnapshot, edits: readonly PlanEdit[]): Promise<PlanReviewResult>;
+  activePlanReview(snapshot: AgentSnapshot): Promise<PlanReview | null>;
+  savePlanReviewAnnotations(snapshot: AgentSnapshot, id: string, revision: number, annotations: ReviewAnnotation[]): Promise<PlanReviewResult>;
+  dismissPlanReview(snapshot: AgentSnapshot, id: string, revision: number): Promise<PlanReviewResult>;
+  /** The feedback or approval turn is queued in its own chat. */
+  decidePlanReview(snapshot: AgentSnapshot, verdict: PlanVerdict): Promise<PlanDecisionOutcome>;
 }
 
 export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFacetCalls {
@@ -225,6 +241,26 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async modelSettingsChanged(snapshot: AgentSnapshot): Promise<void> {
     return await settle(this.withChat(snapshot, (chat) => chat.modelSettingsChanged()));
+  }
+
+  async submitPlan(snapshot: AgentSnapshot, edits: readonly PlanEdit[]): Promise<PlanReviewResult> {
+    return await settle(this.withChat(snapshot, (chat) => chat.planned((plans) => plans.submit(edits, chat.drivingMetadata()))));
+  }
+
+  async activePlanReview(snapshot: AgentSnapshot): Promise<PlanReview | null> {
+    return await settle(this.withChat(snapshot, (chat) => chat.plans.active()));
+  }
+
+  async savePlanReviewAnnotations(snapshot: AgentSnapshot, id: string, revision: number, annotations: ReviewAnnotation[]): Promise<PlanReviewResult> {
+    return await settle(this.withChat(snapshot, (chat) => chat.planned((plans) => plans.saveAnnotations(id, revision, { value: annotations }))));
+  }
+
+  async dismissPlanReview(snapshot: AgentSnapshot, id: string, revision: number): Promise<PlanReviewResult> {
+    return await settle(this.withChat(snapshot, (chat) => chat.planned((plans) => plans.dismiss(id, revision, (prefix) => { chat.session.stopIfRunning(prefix); }))));
+  }
+
+  async decidePlanReview(snapshot: AgentSnapshot, verdict: PlanVerdict): Promise<PlanDecisionOutcome> {
+    return await settle(this.withChat(snapshot, (chat) => chat.planned((plans) => plans.decideAndHandOff(verdict, (turn) => chat.session.enqueueTurn(turn)))));
   }
 
   async owed(snapshot: AgentSnapshot): Promise<boolean> {

@@ -1822,7 +1822,7 @@ export async function driveOpens(target: FlowTarget): Promise<DriveOpensVerdict>
 }
 
 /** The slate the Drive's slate rows write into a workspace of their own: one
- *  page and no bindings, so opening and sharing it spend no model turn. */
+ *  page that calls nothing of its owner's, so opening and sharing it spend no model turn. */
 export const DRIVE_SLATE = { id: 'drive-flow', title: 'Drive flow probe' } as const;
 
 /** Write one file into a workspace through the route the Files tab uploads with. */
@@ -1843,7 +1843,7 @@ async function workspaceWithSlate(target: FlowTarget, subject: string): Promise<
   const root = `${SLATES_ROOT}/${DRIVE_SLATE.id}`;
 
   await writeWorkspaceFile(target, workspace, `${root}/package.json`, JSON.stringify({
-    name: DRIVE_SLATE.id, main: 'server.ts', slate: { title: DRIVE_SLATE.title, bindings: {} },
+    name: DRIVE_SLATE.id, main: 'server.ts', slate: { title: DRIVE_SLATE.title },
   }));
   await writeWorkspaceFile(target, workspace, `${root}/server.ts`, 'export default { fetch: () => new Response("drive flow") };\n');
 
@@ -1929,14 +1929,14 @@ export interface SlateShareVerdict {
 }
 
 /**
- * Row: a slate with no bindings shares from its tile, and stops.
+ * Row: a slate that calls nothing of its owner's shares from its tile, and stops.
  *
  * Share… on the slate's tile opens the dialog #25 asked to be short: with
  * nothing to reach there is no Reach row and no spend limit. The row shares it
  * with anyone who has the link, finds it under Shared by you, and stops it
  * there. A share the row did not stop is revoked through the route.
  */
-export async function slateSharesWithNoBindings(target: FlowTarget): Promise<SlateShareVerdict> {
+export async function slateSharesReachingNothing(target: FlowTarget): Promise<SlateShareVerdict> {
   const workspace = await workspaceWithSlate(target, 'drive-share');
   let share: string | null = null;
   let stopped = false;

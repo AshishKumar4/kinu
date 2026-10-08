@@ -35,7 +35,7 @@ const HISTORY: ModelMessage[] = [
   { role: 'assistant', content: 'the long answer' },
 ];
 
-const COMPACTED: ModelMessage[] = [{ role: 'user', content: 'summary of the long conversation' }];
+const COMPACTED: ModelMessage[] = [{ role: 'user', content: 'summary' }];
 
 /** Measured window: an unmeasured one is admitted over rather than refused against. */
 const LIMITS = { contextWindow: 200_000, modelOutputLimit: 40_000 };
@@ -298,10 +298,26 @@ describe('exact turn admission', () => {
     expect(triggers).toEqual(['auto']);
   });
 
+  test('with no count endpoint, a small screenshot of heavy bytes is priced by its size and admitted, not compacted', async () => {
+    const { extensions, triggers } = compactionProbe();
+    // A 64x64 PNG header over 540 kB: 180k tokens by its base64's length, past this allocation, nine by its size.
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 64, 0, 0, 0, 64]), Buffer.alloc(540_000, 1)]);
+    const history: ModelMessage[] = [{ role: 'user', content: [{ type: 'image', image: png.toString('base64'), mediaType: 'image/png' }] }];
+
+    const { messages: out } = await submittedTurn({
+      model: 'test/model', ...base(), history, extensions, trigger: 'auto', admission: { limits: LIMITS },
+    });
+
+    // Submitted whole: the one image message, still an image, and no forced compaction.
+    expect(triggers).toEqual(['auto']);
+    expect(out).toEqual([expect.objectContaining({ role: 'user' })]);
+    expect(JSON.stringify(out)).toContain('image/png');
+  });
+
   test('with no count endpoint, an estimate over the window triggers the one forced compaction instead of submitting', async () => {
     const { extensions, triggers } = compactionProbe();
-    // The allocation sits between the assembled and compacted estimates, so the estimate forces the compaction.
-    const tight = { contextWindow: 48, modelOutputLimit: 20 };
+    // The allocation sits between the assembled and compacted estimates (13 and 6), so the estimate forces the compaction.
+    const tight = { contextWindow: 24, modelOutputLimit: 20 };
 
     const { messages: out } = await submittedTurn({
       model: 'test/model',

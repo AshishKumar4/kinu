@@ -87,7 +87,7 @@ export interface HostedWorkspaceDeps<Id> {
   /** Asked before a preview request is routed and by the launch journal after a reset. A refusal says why
      *  the slate cannot serve. */
   ensureSlate?(owner: string): Promise<Refusal | null>;
-  /** Keeps a slate from replaying retained bindings as an unnamed root lineage. `socket`: the invocation
+  /** Keeps a slate from replaying a retained stub as an unnamed root lineage. `socket`: the invocation
      *  must outlive the routed 101 response. */
   slateInvocation?(port: number, socket: boolean): { readonly value: string; release: () => void } | null;
   pictures?: {

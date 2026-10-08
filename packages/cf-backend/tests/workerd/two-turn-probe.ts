@@ -289,8 +289,8 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
    *  and as a page's `workspace` call: `ok`, or the refusal's reason. */
   async answerSlates(agent: string): Promise<AgentSlateUi> {
     const reason = (result: SlateCallResult) => (result.ok ? 'ok' : result.reason);
-    // A page's own binding call resolves its source first, so a block that resolves is refused only for what is bound.
-    const call = async (id: string) => reason(await this.slateBindingCallAs(ROOT_SLATE_CALLER, id, 'workspace', { member: 'exists', args: ['/home'], invocation: null }));
+    // A page's own call resolves its source first, so a block that resolves is refused only for the authority lent to it.
+    const call = async (id: string) => reason(await this.slateCallAs(ROOT_SLATE_CALLER, id, 'workspace', { path: ['exists'], args: ['/home'], invocation: null }));
     const { items } = await this.agentStores(agent).historyPage({});
     const answer = items.filter((item) => item.role === 'assistant').at(-1)?.id ?? 'none';
     const ask = items.filter((item) => item.role === 'user').at(-1)?.id ?? 'none';
@@ -346,8 +346,8 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
    */
   async answerPageModes(): Promise<AnswerPageModes> {
     const write = async () => {
-      const result = await this.slateBindingCallAs(ROOT_SLATE_CALLER, 'a-page/card', 'workspace', {
-        member: 'writeFile', args: ['/home/main/page-mode.txt', 'written by the page'], invocation: null,
+      const result = await this.slateCallAs(ROOT_SLATE_CALLER, 'a-page/card', 'workspace', {
+        path: ['writeFile'], args: ['/home/main/page-mode.txt', 'written by the page'], invocation: null,
       });
 
       return result.ok ? 'ok' : result.reason;

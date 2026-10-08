@@ -1,4 +1,4 @@
-/** The blueprint half of the share dialog; every binding ships unmapped. The live half is `LiveShareForm`. */
+/** The blueprint half of the share dialog; a fork calls its forker's own surface. The live half is `LiveShareForm`. */
 import { Effect } from 'effect';
 import { useCallback, useEffect, useState } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
@@ -181,10 +181,10 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
                 </span>
               </Field>
             )}
-            {inspection !== null && inspection.credentialed.length > 0 && (
+            {inspection !== null && inspection.reaches.length > 0 && (
               <Field label="They connect">
                 <span className="block pt-1.5 p-meta p-text-2" data-blueprint-connect>
-                  Their own {inspection.credentialed.map((binding) => binding.name).join(", ")}, when they fork it.
+                  Their own {inspection.reaches.join(", ")}, when they fork it.
                 </span>
               </Field>
             )}

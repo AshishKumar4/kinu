@@ -98,7 +98,7 @@ interface Observed {
   readonly reducedMotionTails: Record<string, TailFrame>;
   readonly chat: Record<string, ChatRow>;
   readonly forkInterruptedAfterClick: ChatRow;
-  /** Each failure card by its state (`live`, `replayed`): its headline, its border's paint, and whether it offers the turn again. */
+  /** Each failure card by its state (`live`, `refused`): its headline, its border's paint, and whether it offers the turn again. */
   readonly chatErrors: Record<string, { readonly heading: string; readonly border: string; readonly retry: boolean }>;
   /** The drive at its root: crumb text, row names, and the origin badges the
    *  mounted folders wear. */
@@ -778,17 +778,16 @@ describe('a turn the harness wrote, as the browser attributes it', () => {
     expect(drain.userBubbles).toBe(0);
   });
 
-  test('a replayed failure does not claim to be a live one', () => {
-    // `sunlit-stone-4a20` still answers a resume ACK with
-    // {"body":"Unauthorized","done":true,"error":true} from a turn that ended
-    // 2026-08-17. Both states are on the page, and they must not read alike: the replayed one neither says what the
-    // live one says nor raises its alarm, and each still offers its turn again.
-    const { live, replayed } = observed.chatErrors;
+  test('a refused tab says so in the runtime\'s words, never as a failed turn', () => {
+    // `sunlit-stone-4a20` answers a resume ACK with {"reason":…,"body":"Unauthorized","done":true,"error":true}: the
+    // runtime refusing the tab, which was read as a turn that ended 2026-08-17. It names no turn and offers none again,
+    // nor raises a failed turn's alarm.
+    const { live, refused } = observed.chatErrors;
 
-    expect(replayed?.heading).not.toBe(live?.heading);
-    expect(replayed?.border).not.toBe(live?.border);
+    expect(refused?.heading).toBe("This tab couldn't reconnect: Unauthorized");
+    expect(refused?.border).not.toBe(live?.border);
     expect(live?.retry).toBe(true);
-    expect(replayed?.retry).toBe(true);
+    expect(refused?.retry).toBe(false);
   });
 });
 

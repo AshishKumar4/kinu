@@ -239,7 +239,7 @@ describe('provider model catalogs', () => {
 
   });
 
-  test('the Codex egress route carries the Codex API and the plan usage /stats reads, nothing else', () => {
+  test('the machine relay carries the Codex API and the plan usage /stats reads, nothing else', () => {
     const carried = [
       ['GET', 'https://chatgpt.com/backend-api/codex/models?client_version=1.0.0'],
       ['POST', 'https://chatgpt.com/backend-api/codex/responses'],

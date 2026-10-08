@@ -1,95 +1,84 @@
 /**
- * Read-only versus mutating per (binding, member); unnamed members are mutating (fail closed).
- * `toolCallEffect` reads `NATIVE_ACTION_EFFECTS` from here.
+ * What each namespace member a slate calls does, as agent-core's impact; a member no table names is `administer`
+ * (fail closed). `toolCallEffect` reads `NATIVE_ACTION_EFFECTS` from here.
  */
-import * as v from 'valibot';
-import type { JsonObject } from '../utils/json';
+import type { Impact } from '@agent-core/core/facets';
 
-export type SlateMemberEffect = 'read' | 'mutate';
+/** `workspace.ai.run({ prompt, system?, tier? })`: a model call, never the `shell` tool, whose run was renamed. */
+export const AI_RUN_MEMBER = 'run';
 
-const EXECUTOR_MEMBER_EFFECTS = {
-  readFile: 'read', readdir: 'read', exists: 'read', stat: 'read', searchMemory: 'read', listTools: 'read',
-  writeFile: 'mutate', editFile: 'mutate', mkdir: 'mutate', remove: 'mutate', exec: 'mutate',
-  saveNote: 'mutate', createTool: 'mutate', slate: 'mutate', git: 'mutate',
-} as const satisfies Readonly<Record<string, SlateMemberEffect>>;
+/** A tool call's chip: whether it only looked. */
+export type ActionEffect = 'read' | 'mutate';
 
-export const MEMORY_MEMBER_EFFECTS = {
-  search: 'read', recall: 'read', conversations: 'read',
-  save: 'mutate', remember: 'mutate', forget: 'mutate',
-} as const satisfies Readonly<Record<string, SlateMemberEffect>>;
+/**
+ * The eval namespaces' members a slate reaches, each with its impact; a member absent here is the agent's alone. One
+ * table until the operation catalog states each operation's impact and slate reach for itself.
+ */
+const SLATE_MEMBER_IMPACTS = {
+  memory: { search: 'observe', recall: 'observe', conversations: 'observe', save: 'mutate', remember: 'mutate', forget: 'mutate' },
+  // `tasks.mode` switches the agent's own role: steering itself, which a slate never does.
+  tasks: { list: 'observe', add: 'mutate', update: 'mutate' },
+  web: {
+    search: 'observe', fetch: 'observe', screenshot: 'observe', browsers: 'observe',
+    openBrowser: 'execute', closeBrowser: 'mutate', connectBrowser: 'execute', pageTools: 'observe', callPageTool: 'execute',
+  },
+  db: {
+    listTables: 'observe', schema: 'observe', select: 'observe', count: 'observe',
+    createTable: 'mutate', insert: 'mutate', update: 'mutate', deleteRows: 'mutate', batch: 'mutate', dropTable: 'mutate',
+  },
+} as const satisfies Readonly<Record<string, Readonly<Record<string, Impact>>>>;
 
-export const TASKS_MEMBER_EFFECTS = {
-  list: 'read', add: 'mutate', update: 'mutate', mode: 'mutate',
-} as const satisfies Readonly<Record<string, SlateMemberEffect>>;
+/** An executor's own members (`workspace`, `sandbox`, `device`); its process and port members fall to `administer`. */
+const EXECUTOR_MEMBER_IMPACTS = {
+  readFile: 'observe', readdir: 'observe', exists: 'observe', stat: 'observe', searchMemory: 'observe', listTools: 'observe',
+  writeFile: 'mutate', editFile: 'mutate', mkdir: 'mutate', remove: 'mutate', saveNote: 'mutate', exec: 'execute', git: 'execute',
+} as const satisfies Readonly<Record<string, Impact>>;
 
-/** The `web` namespace's members write nothing. */
-export const WEB_MEMBER_EFFECTS = {
-  search: 'read', fetch: 'read', screenshot: 'read',
-} as const satisfies Readonly<Record<string, SlateMemberEffect>>;
+const effectOfImpact = (impact: Impact): ActionEffect => (impact === 'observe' ? 'read' : 'mutate');
+
+function effects(impacts: Readonly<Record<string, Impact>>): Readonly<Record<string, ActionEffect>> {
+  return Object.fromEntries(Object.entries(impacts).map(([name, impact]) => [name, effectOfImpact(impact)]));
+}
 
 /** Per native action; the native web tool writes (a spilled page, a screenshot). */
 export const NATIVE_ACTION_EFFECTS = {
   file: { read: 'read', list: 'read', stat: 'read', search: 'read', write: 'mutate', edit: 'mutate' },
-  memory: MEMORY_MEMBER_EFFECTS,
-  tasks: TASKS_MEMBER_EFFECTS,
+  memory: effects(SLATE_MEMBER_IMPACTS.memory),
+  tasks: { ...effects(SLATE_MEMBER_IMPACTS.tasks), mode: 'mutate' },
   web: { search: 'read', fetch: 'mutate', screenshot: 'mutate' },
   agents: { list: 'read', swarm: 'mutate', hire: 'mutate', msg: 'mutate', dismiss: 'mutate' },
-} as const satisfies Readonly<Record<string, Readonly<Record<string, SlateMemberEffect>>>>;
+} as const satisfies Readonly<Record<string, Readonly<Record<string, ActionEffect>>>>;
 
-/** Tools with one undifferentiated `call` member have no read shape, so `call` is mutating. */
-export const TOOL_ACTION_EFFECTS = {
-  file: NATIVE_ACTION_EFFECTS.file,
-  memory: NATIVE_ACTION_EFFECTS.memory,
-  tasks: NATIVE_ACTION_EFFECTS.tasks,
-  web: NATIVE_ACTION_EFFECTS.web,
-  run: { call: 'mutate' },
-  eval: { call: 'mutate' },
-  report: { call: 'mutate' },
-  agents: { call: 'mutate' },
-} as const satisfies Readonly<Record<string, Readonly<Record<string, SlateMemberEffect>>>>;
+const lookup = <T>(table: Readonly<Record<string, T>>, name: string): T | undefined => Object.entries(table).find(([key]) => key === name)?.[1];
 
-/** A member the table does not name is mutating: fail closed. */
-function effectOf(table: Readonly<Record<string, SlateMemberEffect>>, member: string): SlateMemberEffect {
-  return Object.hasOwn(table, member) ? table[member] : 'mutate';
+/** A namespace's member, or an executor's; `null` for one the agent keeps from slates. */
+function namespaceMemberImpact(namespace: string, member: string): Impact | null {
+  const table = lookup<Readonly<Record<string, Impact>>>(SLATE_MEMBER_IMPACTS, namespace);
+
+  if (table !== undefined) return lookup(table, member) ?? null;
+
+  return lookup<Impact>(EXECUTOR_MEMBER_IMPACTS, member) ?? 'administer';
 }
 
-function actionTable(tool: string): Readonly<Record<string, SlateMemberEffect>> | undefined {
-  return Object.entries(TOOL_ACTION_EFFECTS).find(([name]) => name === tool)?.[1];
-}
+/**
+ * What a call on a slate's surface does; `null` for a member kept from slates. An MCP tool sends with your
+ * credentials unless its server marks it read-only, which only the server's own listing says.
+ */
+export function slateAddressImpact(address: { readonly namespace: string; readonly member: string }): Impact | null {
+  const [head] = address.namespace.split('.');
 
-/** `rpc` members are read models; `agent` and `ai` members are always acts. */
-export function memberEffect(
-  kind: 'namespace' | 'memory' | 'tasks' | 'web' | 'rpc' | 'agent' | 'ai',
-  member: string,
-): SlateMemberEffect {
-  switch (kind) {
-    case 'namespace': return effectOf(EXECUTOR_MEMBER_EFFECTS, member);
-    case 'memory': return effectOf(MEMORY_MEMBER_EFFECTS, member);
-    case 'tasks': return effectOf(TASKS_MEMBER_EFFECTS, member);
-    case 'web': return effectOf(WEB_MEMBER_EFFECTS, member);
-    case 'rpc': return 'read';
-    case 'agent':
-    case 'ai': return 'mutate';
+  switch (head) {
+    case 'slates':
+    case 'reads': return 'observe';
+    case 'mcp': return 'externalSend';
+    case 'tools': return 'execute';
+    default: break;
   }
-}
 
-/** The action for a discriminating tool; `call` otherwise, or when the input carries no string action. */
-export function toolActionMember(tool: string, input: JsonObject): string {
-  const actions = actionTable(tool);
+  if (address.namespace === 'agent' && address.member === 'send') return 'externalSend';
 
-  if (actions === undefined || (Object.keys(actions).length === 1 && 'call' in actions)) return 'call';
+  // `ai` has one member; any other is no model call, and no namespace of the actor's either.
+  if (address.namespace === 'ai') return address.member === AI_RUN_MEMBER ? 'execute' : null;
 
-  return v.is(v.string(), input.action) ? input.action : 'call';
-}
-
-export function toolActionEffect(tool: string, member: string): SlateMemberEffect {
-  const actions = actionTable(tool);
-
-  return actions === undefined ? 'mutate' : effectOf(actions, member);
-}
-
-export function toolMembers(tool: string): readonly string[] {
-  const actions = actionTable(tool);
-
-  return actions === undefined ? ['call'] : Object.keys(actions);
+  return namespaceMemberImpact(address.namespace, address.member);
 }

@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-07",
-  "files": 2989,
-  "functions": 78883,
+  "measuredAt": "2026-10-08",
+  "files": 3021,
+  "functions": 79608,
   "ceiling": 87,
   "line": 27,
   "inventory": [
@@ -210,10 +210,6 @@
       "complexity": 29
     },
     {
-      "key": "packages/core/src/slates/capability-graph.ts#riskOf",
-      "complexity": 29
-    },
-    {
       "key": "packages/core/src/tools/file-tool.ts#createFileDispatcher>fn",
       "complexity": 29
     },
@@ -279,10 +275,6 @@
     },
     {
       "key": "scripts/bench-devbox-fixture.test.ts#driverC3Proof>answer",
-      "complexity": 28
-    },
-    {
-      "key": "scripts/egress-interception.ts#containerUseReasons>walk",
       "complexity": 28
     },
     {

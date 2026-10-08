@@ -4,11 +4,29 @@ import { present, toolExecute } from '@kinu.run/test-utils';
 import { tool, jsonSchema } from 'ai';
 import * as v from 'valibot';
 import { createTestRuntime, conversationsFor, actorJobsFor } from './helpers';
-import { buildActorTools, buildBuiltinTools, createDefaultWebSearchProvider, createWebCodemodeProvider, createSlateWebCodemodeProvider, successfulToolOutcome, withClampedToolResult, assertSafeUrl, isSafeUrl, UnsafeUrlError, stripBase64Images, TOOL_OUTPUT_DIR, decodeJsonValue, projectJsonValue, type CodemodeProvider, type CodemodeBuilder, type JsonValue, type WebSearchProvider, type QuickActionTransport } from '../src/index';
+import {
+  buildActorTools,
+  buildBuiltinTools,
+  createDefaultWebSearchProvider,
+  createWebCodemodeProvider,
+  successfulToolOutcome,
+  withClampedToolResult,
+  assertSafeUrl,
+  isSafeUrl,
+  UnsafeUrlError,
+  stripBase64Images,
+  TOOL_OUTPUT_DIR,
+  decodeJsonValue,
+  projectJsonValue,
+  type CodemodeProvider,
+  type CodemodeBuilder,
+  type JsonValue,
+  type WebSearchProvider,
+  type QuickActionTransport,
+} from '../src/index';
 import { imageCarrier } from '../src/tools/image-results';
 import { callCodemodeMember } from '../src/tools/sandbox-contract';
 import { cutShareGrant, grantAdmits, slateCapabilityGraph } from '../src/slates/capability-graph';
-import { parseSlateProject } from '../src/slates/project';
 
 const NO_BROWSER_RUN = { missing: 'this suite reaches no Browser Run' };
 
@@ -803,14 +821,15 @@ describe('web on a shared slate', () => {
     const pageBytes = new TextEncoder().encode(page).length;
     const run = stubBrowserRun((action) => (action === 'screenshot' ? new Response(PNG) : rendered(page)));
     const provider = createDefaultWebSearchProvider({ fetch: stubFetch(() => ({ body: SHELL })).fetch, browser: run.browser });
-    const project = parseSlateProject({ main: 'server.js', slate: { bindings: { NET: { kind: 'web' } } } });
-    const catalog = { executors: [], mcp: [], tools: [], tiers: [], slates: { news: project } };
-    const grant = cutShareGrant(slateCapabilityGraph({ slate: 'news', workspace: 'w', catalog }), []);
-    const slateWeb = createSlateWebCodemodeProvider(provider);
+    const usage = [{ namespace: 'web', member: 'screenshot' }, { namespace: 'web', member: 'fetch' }, { namespace: 'web', member: 'openBrowser' }];
+    const grant = cutShareGrant(slateCapabilityGraph({ slate: 'news', workspace: 'w', catalog: { mcp: [], slates: ['news'] }, usage: () => usage }), []);
+    // A slate's web writes nothing into the workspace: a share visitor may call it.
+    const slateWeb = createWebCodemodeProvider({ provider, files: null, sessions: NO_BROWSER_RUN });
     const before = await tree(rt.storage.vfs);
 
-    expect(grantAdmits(grant, 'news', 'NET', 'screenshot')).toMatchObject({ effect: 'read' });
-    expect(grantAdmits(grant, 'news', 'NET', 'openBrowser')).toBeNull();
+    expect(grantAdmits(grant, 'news', 'web', 'screenshot')).toMatchObject({ impact: 'observe' });
+    // Opening a browser acts: a share admits it only when its owner approves it.
+    expect(grantAdmits(grant, 'news', 'web', 'openBrowser')).toBeNull();
 
     const shot = await callCodemodeMember([slateWeb], 'web', 'screenshot', ['https://example.com/']);
     const fetched = await callCodemodeMember([slateWeb], 'web', 'fetch', ['https://example.com/', { render: true }]);
