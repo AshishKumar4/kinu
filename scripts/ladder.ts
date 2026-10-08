@@ -29,9 +29,9 @@
  * hooks installed at all.
  */
 
-import { existsSync, readFileSync, rmSync } from 'node:fs';
-import { basename, dirname, resolve } from 'node:path';
-import { cpus } from 'node:os';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
+import { cpus, tmpdir } from 'node:os';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
 import { plantedInputs, readCensusLock } from './census-plants';
@@ -55,7 +55,7 @@ import { CLI_TEST_ROOT } from './test-cli';
 import { modulesReaching } from './import-closure';
 import type { ModuleEdges } from './module-edges';
 import { identifierCalleeName, literalString, walk, type Parsed } from './syntax';
-import { AMBIENT_CREDENTIAL_ENV, AMBIENT_DECORATION_ENV, EVAL_IDENTITY_ENV, LIVE_MODEL_ENV } from '../packages/test-utils/src/index';
+import { AMBIENT_CREDENTIAL_ENV, AMBIENT_DECORATION_ENV, EVAL_IDENTITY_ENV, evalWebIdentityEnv, LIVE_MODEL_ENV, SCRIPTED_MODEL_KEY_ENV } from '../packages/test-utils/src/index';
 import { COST_TABLE, type CostTable, costRssMb, costThreads, readCosts } from './gate-cost';
 import { resourceCostFile, withResourceCosts } from './gate-cost';
 import {
@@ -155,11 +155,6 @@ export const SHARED_RESOURCES = ['browser'] as const;
 
 export type SharedResource = (typeof SHARED_RESOURCES)[number];
 
-/** Why the rows that drive the deployment still run here: each needs the deployment's origin and its eval identity,
- *  which an armada run does not pass yet. */
-const POST_PUBLISH_HERE = 'until it moves: it drives the deployment that just went up, with that deployment\'s origin and '
-  + 'eval identity, which an armada run does not pass yet.';
-
 export interface Gate {
   /** The exact command as invoked. */
   readonly run: string;
@@ -206,6 +201,9 @@ export interface Gate {
    *  armada, in its phase's one job at the deploy's exact SHA ({@link armadaPhaseRows}), so nothing heavy runs here
    *  unless a row says why it must. */
   readonly here?: string;
+  /** Where its evidence lands under the deploy's report, for a row armada runs: the row writes it under
+   *  BENCH_ARTIFACTS in its container, its verdict carries it back, and the deploy unpacks it there. */
+  readonly evidence?: string;
 }
 
 /** The environment names the by-name projections in `packages/test-utils`
@@ -2397,7 +2395,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:first-run',
     label: 'First-run tier',
-    here: POST_PUBLISH_HERE,
+    evidence: 'first-run',
     phase: 'post-publish',
     deadline: {
       seconds: 1_800,
@@ -2453,7 +2451,8 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:devbox-e2e',
     label: 'Devbox contracts on real golden containers',
-    here: POST_PUBLISH_HERE,
+    here: 'until it moves: it deploys its own Worker, bucket and containers through this machine\'s wrangler session '
+      + 'and R2 keys, which no armada run carries yet.',
     shared: 'browser',
     phase: 'post-publish',
     alone: 'uses the staging eval identity on its own throwaway Worker, application, bucket and boxes; the browser lane owns its desktop client.',
@@ -2468,7 +2467,6 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bash scripts/product-flows-tier.sh',
     label: 'Product flows in a browser, on the deployment',
-    here: POST_PUBLISH_HERE,
     phase: 'post-publish',
     alone: 'runs after the upload and the smoke gate, in the wave of the tiers whose subject is the '
       + 'build that just shipped and the local source gates (L18), its Chrome in the browser lane '
@@ -2501,7 +2499,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bash scripts/eval-pass-tier.sh',
     label: 'One trial of every eval task, on the deployment',
-    here: POST_PUBLISH_HERE,
+    evidence: 'evals',
     phase: 'soak',
     alone: 'is the deploy\'s soak (L24): started once the deployment serves, never awaited, so a real model\'s minutes '
       + 'are outside the deploy\'s 20-minute wall and its red outside the deploy\'s verdict. Its subject is the DEPLOYED '
@@ -3034,8 +3032,17 @@ export function ciUnits(costs: HostedCosts = readHostedCosts()): { readonly gate
 /** A row a task must report, with the files a split suite must time, which armada holds each task to. */
 type PlannedRow = string | { readonly name: string; readonly files: string[] };
 
+/** One task of a CI or deploy-phase matrix; `origin` is the deployment a deploy row drives (`adoptDeployEntry`). */
+interface CIMatrixEntry {
+  readonly name: string;
+  readonly row: string;
+  readonly weight: number;
+  readonly rows: PlannedRow[];
+  origin?: string;
+}
+
 interface CIMatrix {
-  readonly include: { readonly name: string; readonly row: string; readonly weight: number; readonly rows: PlannedRow[] }[];
+  readonly include: CIMatrixEntry[];
 }
 
 /** CI's matrix on armada (`.armada.json`): one task per CI unit, each weighed by its measured seconds so the longest
@@ -3055,12 +3062,62 @@ function ciPlan(costs: HostedCosts): CIMatrix {
 
 /** The matrix of a deploy phase's armada rows (`armada run <sha> -- --deploy-phase=<phase>`), weighed by their
  *  declared seconds so the longest start first. */
-function armadaPlan(phases: readonly DeployPhase[]): CIMatrix {
+function armadaPlan(phases: readonly DeployPhase[], origin: string | undefined): CIMatrix {
   return {
-    include: armadaPhaseRows(phases).map((gate) => ({
-      name: gate.label.toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-|-$/gu, '').slice(0, 80), row: gate.run, weight: Math.round(gate.seconds), rows: [gate.run],
-    })),
+    include: armadaPhaseRows(phases).map((gate) => {
+      const entry: CIMatrixEntry = {
+        name: gate.label.toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-|-$/gu, '').slice(0, 80), row: gate.run, weight: Math.round(gate.seconds), rows: [gate.run],
+      };
+
+      if (readsDeployment(gate) && origin !== undefined) entry.origin = origin;
+
+      return entry;
+    }),
   };
+}
+
+/** In a deploy row's container: the deployment it drives, from its matrix entry (armada gives each task its entry as
+ *  ARMADA_ITEM), as the variables the rows read; and where its declared evidence goes. */
+function adoptDeployEntry(gate: Gate): string | undefined {
+  const entry = v.safeParse(v.looseObject({ origin: v.optional(v.string()) }), JSON.parse(process.env['ARMADA_ITEM'] ?? '{}'));
+
+  if (entry.success && entry.output.origin !== undefined) {
+    process.env['KINU_EVAL_ORIGIN'] = entry.output.origin;
+    process.env['KINU_ORIGIN'] = entry.output.origin;
+  }
+
+  if (gate.evidence === undefined) return undefined;
+  const dir = join(tmpdir(), 'kinu-evidence', gate.evidence);
+
+  mkdirSync(dir, { recursive: true });
+  process.env['BENCH_ARTIFACTS'] = dir;
+
+  return dir;
+}
+
+/** The longest string JavaScriptCore holds, `JSString::MaxLength` (JSString.h): `int32_t`'s maximum, in UTF-16 units. A
+ *  row's verdict is one JSON text, read and written as one string on both sides. */
+const JSC_MAX_STRING = 2 ** 31 - 1;
+
+/** The most evidence, compressed, a row's verdict carries back: base64 writes 4 characters per 3 bytes, and 1 MiB is
+ *  left for the rest of the verdict. Past it the verdict says so and the evidence stays in the job's log. */
+const EVIDENCE_BYTES = Math.floor((JSC_MAX_STRING - 1024 * 1024) / 4) * 3;
+
+/** A row's evidence for its verdict, or a note why its verdict does not carry it. */
+interface PackedEvidence {
+  readonly evidence?: NonNullable<CIVerdict['evidence']>;
+  readonly note?: string;
+}
+
+/** `dir` as a base64 tar.gz for a row's verdict, or a note why it is not there. */
+function packEvidence(gate: Gate, dir: string): PackedEvidence {
+  const packed = Bun.spawnSync(['tar', '-czf', '-', '-C', dir, '.'], { stdout: 'pipe', stderr: 'pipe' });
+
+  if (packed.exitCode !== 0) return { note: `its evidence was not packed: ${packed.stderr.toString().trim()}` };
+
+  if (packed.stdout.byteLength > EVIDENCE_BYTES) return { note: `its evidence is ${String(packed.stdout.byteLength)} bytes compressed, past ${String(EVIDENCE_BYTES)}, so only its log holds it` };
+
+  return { evidence: { dir: gate.evidence ?? '', tgz: Buffer.from(packed.stdout).toString('base64') } };
 }
 
 /** `--deploy-phase=<phase>[,<phase>…]` as phases, or undefined when it names none or one that is not a phase. */
@@ -3548,8 +3605,20 @@ function rowArgv(gate: Gate, tracked: readonly string[], deploying: boolean, tim
 
 const ArmadaReportSchema = v.object({
   job: v.string(),
-  verdicts: v.optional(v.object({ rows: v.array(v.object({ run: v.string(), exitCode: v.number(), seconds: v.number(), output: v.optional(v.string(), '') })) })),
+  verdicts: v.optional(v.object({
+    rows: v.array(v.object({ run: v.string(), exitCode: v.number(), seconds: v.number(), output: v.optional(v.string(), ''), evidence: v.optional(v.object({ dir: v.string(), tgz: v.string() })) })),
+  })),
 });
+
+/** A row's evidence from its container, unpacked where the deploy's report keeps it. */
+function unpackEvidence(report: string, evidence: { readonly dir: string; readonly tgz: string }): void {
+  const into = join(report, evidence.dir);
+
+  mkdirSync(into, { recursive: true });
+  const unpacked = Bun.spawnSync(['tar', '-xzf', '-', '-C', into], { stdin: Buffer.from(evidence.tgz, 'base64'), stdout: 'pipe', stderr: 'pipe' });
+
+  if (unpacked.exitCode !== 0) throw new Error(`unpacking evidence into ${into}: ${unpacked.stderr.toString().trim()}`);
+}
 
 /**
  * A deploy phase's armada rows, as one armada job at this exact SHA (`armadaPlan`), each row's
@@ -3559,7 +3628,14 @@ const ArmadaReportSchema = v.object({
 async function armadaPhase(phases: readonly DeployPhase[], rows: readonly Gate[], report: string): Promise<string[]> {
   const sha = fullRevision();
   const phase = phases.join(',');
-  const argv = [resolve(root, 'node_modules/.bin/armada'), 'run', sha, `--label=deploy ${phase}`, '--', `--deploy-phase=${phase}`];
+  // A row that drives the deployment gets its origin through its matrix entry, and the stable secrets it needs by
+  // name: the scripted model's bearer and that deployment's own identity (evalWebIdentityEnv).
+  const origin = rows.some(readsDeployment) ? process.env['KINU_EVAL_ORIGIN'] : undefined;
+
+  if (rows.some(readsDeployment) && origin === undefined) throw new Error(`the ${phase} rows drive the deployment, and KINU_EVAL_ORIGIN names none`);
+  const secrets = origin === undefined ? [] : [`--secrets=${SCRIPTED_MODEL_KEY_ENV},${evalWebIdentityEnv(origin)}`];
+  const planArgs = [`--deploy-phase=${phase}`, ...origin === undefined ? [] : [`--deploy-origin=${origin}`]];
+  const argv = [resolve(root, 'node_modules/.bin/armada'), 'run', sha, `--label=deploy ${phase}`, ...secrets, '--', ...planArgs];
 
   console.log(`\n── armada: ${String(rows.length)} row(s) of ${phase} at ${sha.slice(0, 12)}, as one job: ${argv.slice(1).join(' ')}`);
   const run = Bun.spawn(argv, { cwd: root, stdout: 'pipe', stderr: 'inherit' });
@@ -3578,8 +3654,12 @@ async function armadaPhase(phases: readonly DeployPhase[], rows: readonly Gate[]
   const verdicts = new Map((graded?.verdicts?.rows ?? []).map((row) => [row.run, row]));
   const notGreen: string[] = [];
 
+  if (report !== '' && graded !== undefined) recordNotice(report, { phase: phases[0] ?? 'source', what: `armada job ${graded.job}`, notice: `the ${phase} rows armada ran, at ${sha}: their logs and outputs are in that job` });
+
   for (const gate of rows) {
     const verdict = verdicts.get(gate.run);
+
+    if (report !== '' && verdict?.evidence !== undefined) unpackEvidence(report, verdict.evidence);
 
     if (report !== '' && verdict !== undefined) recordTiming(report, { phase: gate.phase ?? 'source', what: gate.label, command: gate.run, seconds: verdict.seconds });
 
@@ -3674,7 +3754,7 @@ async function ciCommand(): Promise<number | undefined> {
   if (process.argv.includes('--ci-plan')) {
     const phases = phasesNamed(option('deploy-phase'));
 
-    console.log(JSON.stringify(phases === undefined ? ciPlan(ciPlanCosts()) : armadaPlan(phases)));
+    console.log(JSON.stringify(phases === undefined ? ciPlan(ciPlanCosts()) : armadaPlan(phases, option('deploy-origin'))));
 
     return 0;
   }
@@ -3921,6 +4001,8 @@ if (import.meta.main) {
     : ciUnits(costs).find((unit) => unit.gate.run === ciRow)?.gate ?? LADDER.find((gate) => gate.run === ciRow && onArmada(gate));
 
   if (ciRow !== undefined && (tier !== 'ci' || rowGate === undefined)) throw new Error('unknown CI row or a non-CI tier: ' + ciRow);
+
+  const evidenceDir = rowGate !== undefined && onArmada(rowGate) ? adoptDeployEntry(rowGate) : undefined;
 
   const chosen = rowGate === undefined ? declared : [rowGate];
   const tracked = trackedTestFiles();
@@ -4186,7 +4268,12 @@ if (import.meta.main) {
     const { seconds } = outcome;
 
     if (verdictPath !== undefined) {
-      ciRows.push({ run: gate.run, exitCode: outcome.exitCode, seconds, output: outcome.exitCode === 0 ? '' : outcome.stdout + outcome.stderr, timings: readFileTimings(timingPath) });
+      const packed: PackedEvidence = evidenceDir === undefined ? {} : packEvidence(gate, evidenceDir);
+      const output = outcome.exitCode === 0 ? '' : outcome.stdout + outcome.stderr;
+      const row: CIVerdict = { run: gate.run, exitCode: outcome.exitCode, seconds, output: packed.note === undefined ? output : `${packed.note}\n${output}`, timings: readFileTimings(timingPath) };
+
+      if (packed.evidence !== undefined) row.evidence = packed.evidence;
+      ciRows.push(row);
       writeVerdicts(verdictPath, { sha: revision, part: 'all', rows: ciRows });
     }
 
