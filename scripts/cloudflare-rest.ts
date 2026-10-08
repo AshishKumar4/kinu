@@ -134,6 +134,20 @@ export async function deleteR2Prefix(deletion: PrefixDeletion): Promise<number> 
   }
 }
 
+/** Whether the account holds `bucket`: asked by name, since wrangler's list shows only its first page. */
+export async function r2BucketExists(lookup: Omit<PrefixDeletion, 'prefix'>): Promise<boolean> {
+  const answer = await fetch(`${lookup.api ?? API}/accounts/${lookup.accountId}/r2/buckets/${lookup.bucket}`, {
+    headers: { authorization: `Bearer ${lookup.token ?? restApiToken()}` },
+    signal: AbortSignal.timeout(60_000),
+  });
+
+  if (answer.status === 404) return false;
+
+  if (!answer.ok) throw new Error(`GET r2 bucket ${lookup.bucket} answered ${String(answer.status)}: ${(await answer.text()).slice(0, 240)}`);
+
+  return true;
+}
+
 /** The size of `key` in a bucket, or undefined when the bucket does not hold it. */
 export async function r2ObjectSize(lookup: Omit<PrefixDeletion, 'prefix'> & { readonly key: string }): Promise<number | undefined> {
   const token = lookup.token ?? restApiToken();
