@@ -62,7 +62,7 @@ export interface TurnAssemblySources {
   toolset(workMode: WorkMode): ToolSet;
   /** MCP and extension tools, reachable only through `eval`. */
   externalTools(window: ModelWindow): Promise<ToolSet>;
-  /** Non-builtin tools of `toolset` (`report`, `submit_plan`). */
+  /** Non-builtin tools of `toolset` (`report`, `submit_plan`, `reply_to_comment`). */
   wiredToolNames(workMode: WorkMode): readonly string[];
   /** Namespaces reachable only inside `eval`. */
   codemodeCapabilities(workMode: WorkMode): readonly string[];

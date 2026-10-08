@@ -126,8 +126,9 @@ describe('Plan mode tool lifecycle', () => {
       'eval', 'shell', 'file', 'agents', 'memory', 'tasks', 'web', 'submit_plan',
     ]));
 
+    // The owner's own Auto turn may submit a plan too, when they ask for one.
     const buildTools = await toolsIn(agent, 'build', 'a-build');
-    expect(buildTools.submit_plan).toBeUndefined();
+    expect(buildTools.submit_plan).toBeDefined();
     expect(buildTools.eval).not.toBe(planTools.eval);
 
     // A programmatic turn with no mode of its own runs in build.
@@ -212,7 +213,7 @@ describe('Plan mode tool lifecycle', () => {
     expect(drained.tools.submit_plan).toBeUndefined();
     await turns.settle({ messageId: 'a-drain', text: 'noted' });
 
-    expect((await toolsIn(agent, 'build', 'a-auto')).submit_plan).toBeUndefined();
+    expect((await toolsIn(agent, 'build', 'a-auto')).submit_plan).toBeDefined();
     expect(await agent.getActivePlanReview()).toMatchObject({ id: plan.id, status: 'pending' });
 
     expect(await agent.dismissPlanReview(plan.id, plan.revision)).toMatchObject({ ok: true, plan: { status: 'dismissed' } });

@@ -15,7 +15,6 @@ export interface PlanDecisionInput {
   readonly rpc: Rpc;
   /** False prevents the decision. */
   readonly save: () => Promise<boolean>;
-  readonly feedback: () => string;
   readonly onError: (message: string | null) => void;
 }
 
@@ -26,8 +25,8 @@ export interface PlanDecision {
   readonly decide: (decision: PlanDecisionKind) => Promise<void>;
 }
 
-/** Save annotations before the single decision wake. */
-export function usePlanDecision({ plan, editable, handoffPending, rpc, save, feedback, onError }: PlanDecisionInput): PlanDecision {
+/** Save the comments before the single decision wake; the review renders what they send. */
+export function usePlanDecision({ plan, editable, handoffPending, rpc, save, onError }: PlanDecisionInput): PlanDecision {
   const [busy, setBusy] = useState<DecisionBusy>(null);
   const inFlight = useRef(false);
 
@@ -45,12 +44,8 @@ export function usePlanDecision({ plan, editable, handoffPending, rpc, save, fee
     return settle(Effect.gen(function* () {
       if (editable && !(yield* attempt({ doing: "saving plan annotations", otherwise: "io" }, save))) return;
 
-      const annotations = editable && decision === "request_changes" ? yield* Effect.sync(feedback) : undefined;
-
       const result = yield* attempt({ doing: "deciding a plan review", otherwise: "io" }, () =>
-        rpc<PlanDecisionOutcome>(
-          "decidePlanReview", [plan.id, plan.revision, decision, annotations],
-        ));
+        rpc<PlanDecisionOutcome>("decidePlanReview", [plan.id, plan.revision, decision]));
 
       if (!result.ok) return yield* Effect.fail(new KinuError("bad_input", result.error));
 
@@ -69,7 +64,7 @@ export function usePlanDecision({ plan, editable, handoffPending, rpc, save, fee
         setBusy(null);
       })),
     ));
-  }, [editable, feedback, handoffPending, onError, plan, rpc, save]);
+  }, [editable, handoffPending, onError, plan, rpc, save]);
 
   const isInFlight = useCallback(() => inFlight.current, []);
 

@@ -72,7 +72,6 @@ function recorder(saves: boolean, decided: () => Promise<PlanDecisionOutcome> = 
 
       return saves;
     },
-    feedback: () => 'Plan Feedback: tighten step 2',
     onError: (message) => { if (message !== null) done.push(`error ${message}`); },
   };
 

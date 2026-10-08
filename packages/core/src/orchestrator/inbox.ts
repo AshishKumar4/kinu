@@ -262,6 +262,11 @@ const toUserSteer = (signal: DeliveredUserSignal): UserSteer => ({
   ...(signal.user.files !== undefined && { files: signal.user.files }),
 });
 
+/** The card of a signal sent with `idempotencyKey`: a collapsed re-delivery opens no second card. */
+export function signalCardId(idempotencyKey: string): string {
+  return `sig:${idempotencyKey}`;
+}
+
 export class Inbox implements AgentInbox {
   private pending: DeliveredSignal[] = [];
   private absorbed: DeliveredSignal[] = [];
@@ -305,7 +310,7 @@ export class Inbox implements AgentInbox {
    * so a collapsed re-delivery never opens a second, forever-pending card.
    */
   send(signal: AgentSignal): Promise<SendOutcome> {
-    const cardId = signal.idempotencyKey ? `sig:${signal.idempotencyKey}` : `sig-${nanoid()}`;
+    const cardId = signal.idempotencyKey ? signalCardId(signal.idempotencyKey) : `sig-${nanoid()}`;
     const delivered: DeliveredSignal = { ...signal, cardId };
     // Read once, before any await.
     const { busy } = this;

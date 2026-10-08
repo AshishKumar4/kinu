@@ -4,7 +4,7 @@
  * against the real composition output in both directions. Test-plane only.
  */
 
-import { BUILTIN_TOOLS } from '../tools/registry';
+import { BUILTIN_TOOLS, SUBMIT_PLAN_TOOL } from '../tools/registry';
 import type { BuiltinToolName } from '../tools/registry';
 import { AGENTS_OPS, type AgentsOp } from '../operations/agents';
 import { MEMORY } from '../operations/memory';
@@ -39,8 +39,9 @@ export const CONFORMANCE_PLANES = ['tool', 'agents-op', 'memory-op', 'producer']
 export type ConformancePlane = (typeof CONFORMANCE_PLANES)[number];
 
 export interface ConformanceManifest {
-  /** Keyed by the registry union, so a new tool cannot compile without a per-root decision. */
-  readonly tool: Readonly<Record<BuiltinToolName, RootStatuses>>;
+  /** Keyed by the registry union and the plan review's submission, so a new tool cannot compile without a per-root
+   *  decision. `reply_to_comment` exists only on a sent-back review's turn, which no root's surface is observed on. */
+  readonly tool: Readonly<Record<BuiltinToolName | typeof SUBMIT_PLAN_TOOL, RootStatuses>>;
   readonly 'agents-op': Readonly<Record<AgentsOp, RootStatuses>>;
   readonly 'memory-op': Readonly<Record<keyof typeof MEMORY, RootStatuses>>;
   /** Model producers whose client the root actually built. */
@@ -77,6 +78,12 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-orchestrator': { absent: ORCHESTRATOR_IS_SINK },
       'cf-subordinate': WIRED,
       cli: { absent: ORCHESTRATOR_IS_SINK },
+    },
+    // The owner's own turns, in either mode; a delegated turn reports to its parent instead.
+    submit_plan: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': { absent: 'a delegated turn answers its parent through report; only the owner\'s own turns submit a plan for review' },
+      cli: WIRED,
     },
   },
 
@@ -121,7 +128,7 @@ export interface ObservedSurface {
 
 /** Registry-closed planes, to tell "undeclared" from impossible states. */
 export const PLANE_UNIVERSE = {
-  tool: BUILTIN_TOOLS,
+  tool: [...BUILTIN_TOOLS, SUBMIT_PLAN_TOOL],
   'agents-op': AGENTS_OPS,
   'memory-op': Object.keys(MEMORY),
   producer: CONFORMANCE_PRODUCERS,

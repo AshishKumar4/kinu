@@ -75,6 +75,14 @@ test('agent.send routes one inbox message carrying its slate id', () => {
   }
 });
 
+test('agent.ask routes the same message, asking for the agent\'s own reply; a share\'s viewer is never handed it', () => {
+  expect(call(['agent', 'ask'], [{ text: 'hi', data: { n: 1 } }])).toMatchObject({
+    route: { kind: 'agent', slate: 'notes', text: 'hi', data: { n: 1 }, ask: true }, address: { namespace: 'agent', member: 'ask' }, impact: 'externalSend',
+  });
+  expect(() => call(['agent', 'ask'], [{ text: '' }])).toThrow('agent.ask takes one { text, data? } object');
+  expect(() => viewerCall(['agent', 'ask'], [{ text: 'hi' }])).toThrow("agent.ask runs only in its owner's own slate, never for a share's viewer");
+});
+
 test('ai.run routes one model call, the tier the call names', () => {
   expect(call(['ai', 'run'], [{ prompt: 'sum this' }]).route).toEqual({ kind: 'ai', prompt: 'sum this' });
   expect(call(['ai', 'run'], [{ prompt: 'p', system: 's', tier: 'deep' }]).route).toEqual({ kind: 'ai', prompt: 'p', system: 's', tier: 'deep' });

@@ -33,9 +33,12 @@ const QUIET = {
  */
 function scriptedSteps(steps: readonly Step[]) {
   const taken: Step[] = [];
+  /** Each turn request as the model received it: the tools it was offered and its messages. */
+  const requests: { readonly tools: readonly string[]; readonly prompt: string }[] = [];
 
   const model = scriptedTurnModel({ doGenerate: async (options) => {
     if ((options.tools ?? []).length === 0) return QUIET;
+    requests.push({ tools: (options.tools ?? []).map((tool) => tool.name), prompt: JSON.stringify(options.prompt) });
     const step = steps[taken.length] ?? { answer: 'nothing left to do' };
     taken.push(step);
 
@@ -65,7 +68,7 @@ function scriptedSteps(steps: readonly Step[]) {
     };
   } });
 
-  return { model, taken };
+  return { model, taken, requests };
 }
 
 function session(steps: readonly Step[]) {
@@ -73,7 +76,7 @@ function session(steps: readonly Step[]) {
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
   const events: SessionEvent[] = [];
-  const { model, taken } = scriptedSteps(steps);
+  const { model, taken, requests } = scriptedSteps(steps);
 
   rt.actor.config.setLearning(false);
 
@@ -81,7 +84,7 @@ function session(steps: readonly Step[]) {
     rt, db, model, onEvent: (event) => events.push(event),
   });
 
-  return { db, rt, agent, events, taken };
+  return { db, rt, agent, events, taken, requests };
 }
 
 function planBroadcasts(events: readonly SessionEvent[]) {
@@ -180,6 +183,55 @@ describe('LocalAgentSession — plan review', () => {
     }
   });
 
+
+  /**
+   * Asked for a plan in Auto, the agent submits one. The owner comments on a passage, marks one for removal and writes a
+   * note on the whole plan, then sends it back: the agent's next turn reads all three, answers one in its thread, and
+   * revises. The reply tool is offered only on that turn, and the thread carries into the revision.
+   */
+  test('in Auto a plan goes to review; its three kinds of comment reach the agent, which answers in a thread', async () => {
+    const { db, agent, requests } = session([
+      { call: 'submit_plan', input: { edits: [{ start: 1, content: '# Ledger migration\n\nMove the ledger to integer cents.\nDrop the float column.' }] } },
+      { answer: 'Plan submitted for review.' },
+      { call: 'reply_to_comment', input: { comment: 'all', text: 'Monday, before the batch jobs run.' } },
+      { call: 'submit_plan', input: { edits: [{ start: 4, end: 4, content: 'Keep the float column until Monday.' }] } },
+      { answer: 'Revised.' },
+    ]);
+
+    try {
+      await agent.send('Make a plan for the ledger migration.', { id: crypto.randomUUID(), mode: 'build' });
+      const plan = await agent.getActivePlanReview();
+
+      if (!plan) throw new Error('the Auto turn did not submit its plan');
+      expect(requests[0]?.tools).toContain('submit_plan');
+      expect(requests[0]?.tools).not.toContain('reply_to_comment');
+
+      expect(await agent.savePlanReviewAnnotations(plan.id, 1, [
+        { id: 'cents', type: 'COMMENT', blockId: 'block-1', startOffset: 0, endOffset: 13, originalText: 'Move the ledger', text: 'Round half to even.', createdA: 1 },
+        { id: 'drop', type: 'DELETION', blockId: 'block-2', startOffset: 0, endOffset: 21, originalText: 'Drop the float column', createdA: 2 },
+        { id: 'all', type: 'GLOBAL_COMMENT', text: 'When does this run?', createdA: 3 },
+      ])).toMatchObject({ ok: true });
+      expect(await agent.decidePlanReview(plan.id, 1, 'request_changes')).toMatchObject({ ok: true, queued: true });
+      await agent.settleBackgroundWork();
+
+      const handoff = requests[2];
+
+      expect(handoff?.tools).toContain('reply_to_comment');
+
+      // Each comment reaches the model with the id its reply names, and what it says or quotes.
+      for (const said of ['cents', 'Round half to even.', 'drop', 'Drop the float column', 'all', 'When does this run?']) expect(handoff?.prompt).toContain(said);
+
+      const revised = await agent.getActivePlanReview();
+
+      expect(revised).toMatchObject({ id: plan.id, revision: 2, status: 'pending' });
+      expect(revised?.annotations.find((note) => note.type === 'REPLY')).toMatchObject({
+        inReplyTo: 'all', author: 'agent', text: 'Monday, before the batch jobs run.', revision: 1,
+      });
+    } finally {
+      await agent.end();
+      db.close();
+    }
+  });
 
   test('a plan-mode harness turn carrying a refiner\'s proposal cannot submit it as a plan', async () => {
     const proposal = '{"scope":"workspace","edits":[{"kind":"prompt_section","sectionId":"state/output-format","source":"Stop after one line."}]}';

@@ -21,6 +21,9 @@ export const AI_RUN_MEMBER = 'run';
 /** `workspace.ai.stream({ prompt, system?, tier? })`: the same call, its text handed over as it is written. */
 export const AI_STREAM_MEMBER = 'stream';
 
+/** `workspace.agent.ask({ text, data? })`: `agent.send` answered with the agent's own reply as it writes it. */
+export const AGENT_ASK_MEMBER = 'ask';
+
 /** A tool call's chip: whether it only looked. */
 export type ActionEffect = 'read' | 'mutate';
 
@@ -73,6 +76,9 @@ function namespaceMemberImpact(namespace: string, member: string): Impact | null
 
 /** A member only the owner's own slate reaches, as the owner: a share never grants it, a hosted actor's slate never holds it. */
 export function slateOwnerOnly(address: { readonly namespace: string; readonly member: string }): boolean {
+  // A reply is the owner's agent speaking to the owner: no share's viewer is handed it.
+  if (address.namespace === 'agent' && address.member === AGENT_ASK_MEMBER) return true;
+
   const wired = WIRED.get(address.namespace);
 
   if (wired !== undefined) return wired.slate === 'owner' && wired.impacts.has(address.member);
@@ -95,7 +101,7 @@ export function slateAddressImpact(address: { readonly namespace: string; readon
     default: break;
   }
 
-  if (address.namespace === 'agent' && address.member === 'send') return 'externalSend';
+  if (address.namespace === 'agent' && (address.member === 'send' || address.member === AGENT_ASK_MEMBER)) return 'externalSend';
 
   // `ai` has two members, one call answered whole or as it is written; any other is no model call, and no namespace of the actor's either.
   if (address.namespace === 'ai') return address.member === AI_RUN_MEMBER || address.member === AI_STREAM_MEMBER ? 'execute' : null;
