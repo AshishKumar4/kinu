@@ -47,7 +47,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
     // `ActorAgent`'s constructor already sealed the surface with non-enumerable shadows over these reads;
     // deleting the shadow lets the wider seal below expose the prototype method.
-    const reads = ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'wakeReturned', 'wakeWhileRunning', 'stopHosted', 'settled', 'archiveSections', 'jobWindowArmed', 'outrunJobWindow', 'openJobGate', 'redeliverJobWake', 'ageJobFiber', 'jobWatchState', 'jobRows'];
+    const reads = ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'wakeReturned', 'wakeWhileRunning', 'stopHosted', 'settled', 'archiveSections', 'jobWindowArmed', 'outrunJobWindow', 'openJobGate', 'redeliverJobWake', 'ageJobFiber', 'jobWatchState', 'jobRows', 'pendingAlarm'];
 
     for (const name of reads) Reflect.deleteProperty(this, name);
 
@@ -286,6 +286,11 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
   /** Every delegated turn ended and every task agent its answer retired: a hirer no longer waits on either. Each agent's
    *  isolate answers idle once its effects closed and it told this workspace what it still owes. */
+  /** The alarm this object holds, as a deleted workspace must hold none. */
+  async pendingAlarm(): Promise<number | null> {
+    return await this.ctx.storage.getAlarm();
+  }
+
   async settled(): Promise<void> {
     await this.agentTurns.idle();
     await this.delegatedTurns.idle();
@@ -326,7 +331,7 @@ const WireLogSchema = v.looseObject({
 type HireTarget = Pick<ProductionOrchestrator, 'claimOwner' | 'setModel' | 'setSoul' | 'runTaskFromMcp' | 'dismissSubordinate'>
   & Pick<HireOrchestrator,
     'rosterRows' | 'actorRows' | 'logRows' | 'turnCounts' | 'driveOwedWork' | 'rootActorId' | 'childTranscript' | 'wakeReturned' | 'wakeWhileRunning' | 'stopHosted' | 'settled' | 'archiveSections'
-    | 'jobWindowArmed' | 'outrunJobWindow' | 'openJobGate' | 'redeliverJobWake' | 'ageJobFiber' | 'jobWatchState' | 'jobRows'>;
+    | 'jobWindowArmed' | 'outrunJobWindow' | 'openJobGate' | 'redeliverJobWake' | 'ageJobFiber' | 'jobWatchState' | 'jobRows' | 'pendingAlarm'>;
 
 /** `durableObjects` installs `HireOrchestrator` under the `OrchestratorAgent` name, so every stub carries the fixture reads. */
 interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
@@ -334,7 +339,7 @@ interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
 }
 
 type OwnerTarget = Pick<UserDO,
-  'registerWorkspace' | 'ensureWorkspaceCapability' | 'setCredential' | 'getProfileCatalog' | 'putProfileCatalog'>;
+  'registerWorkspace' | 'ensureWorkspaceCapability' | 'setCredential' | 'getProfileCatalog' | 'putProfileCatalog' | 'removeWorkspace'>;
 
 export class HireProbeRoot extends Agent<ProbeRootEnv> {
 
@@ -346,18 +351,18 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
     return this.env.UserDO.get(this.env.UserDO.idFromName(name));
   }
 
-  async setup(workspace: string, model: string, script: ChildScript): Promise<void> {
+  async setup(workspace: string, model: string, script: ChildScript, ownerUserId = `${workspace}-owner`): Promise<void> {
     await fetch(hireControlUrl(workspace, 'reset'), {
       method: 'POST', body: JSON.stringify({ script }),
     });
 
     const target = await this.target(workspace);
     const caller = await ownerCaller(this.env);
-    const userDO = this.owner(`${workspace}-owner`);
+    const userDO = this.owner(ownerUserId);
 
     await userDO.registerWorkspace(caller, workspace, 'Hire Probe');
 
-    const claim = await target.claimOwner(`${workspace}-owner`);
+    const claim = await target.claimOwner(ownerUserId);
 
     await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
     await userDO.setCredential(caller, 'openai-compat.default', {
@@ -374,6 +379,14 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
     );
     await target.setModel(`openai-compat/${model}`);
     await target.setSoul('# Hire Probe\n\n## Mission\n\nDelegate exactly what the owner asks for.');
+  }
+
+  /** The owner deletes the workspace while its hire works, as an eval's teardown does; answers the alarm the deleted
+   *  object holds once the deletion answered. */
+  async deleteWhileChildWorks(workspace: string, ownerUserId: string): Promise<{ readonly alarm: number | null }> {
+    await this.owner(ownerUserId).removeWorkspace(await ownerCaller(this.env), workspace, ownerUserId);
+
+    return { alarm: await (await this.target(workspace)).pendingAlarm() };
   }
 
   /** Let a parked child finish its turn. */

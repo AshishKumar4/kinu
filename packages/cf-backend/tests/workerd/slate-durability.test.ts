@@ -222,7 +222,7 @@ it('the workspace terminal is the runtime shell: a typed line runs and its outpu
 });
 
 // Staging 2026-10-08: a 20 MB print failed its row's write (SQLITE_TOOBIG) as an uncaught rejection.
-it('a print past the row limit runs, and its row keeps the head a reader shows with its true length', async () => {
+it('a print past the row limit runs, and its row keeps the head a reader shows with the length printed', async () => {
   const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('clip'));
   const workspace = 'durability-clip';
   const printed = 3_000_000;
@@ -233,6 +233,13 @@ it('a print past the row limit runs, and its row keeps the head a reader shows w
 
   expect(row?.stdout_len).toBe(printed);
   expect(row?.stdout).toBe('x'.repeat(16 * 1024));
+
+  // A print that reads like a clip note is output, not metadata: its length is its own.
+  const lookalike = 'ok\n[kinu: clipped from 9999999 chars]';
+  expect((await subject().runInWorkspace(workspace, `node -e "process.stdout.write('ok\\n[kinu: clipped from 9999999 chars]')"`)).exitCode).toBe(0);
+  const [plain] = await subject().executorOutputs(workspace);
+
+  expect(plain).toEqual({ stdout: lookalike, stdout_len: lookalike.length });
 });
 
 it('a node run leaves its log janitor as an alarm the object sleeps on, not a timer it stays awake for', async () => {

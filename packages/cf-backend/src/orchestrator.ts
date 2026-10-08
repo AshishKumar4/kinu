@@ -335,24 +335,11 @@ const EXECUTOR_OUTPUT_CLIP = 16 * 1024;
 const EXECUTOR_HISTORY_ROWS = 50;
 
 /** Chars one stored field keeps. A row over do.sqlite.row_bytes fails its write (a 20 MB print did, SQLITE_TOOBIG), and
- *  three fields of at most three UTF-8 bytes a char fit it with room for the rest of the row. */
+ *  three fields of at most three UTF-8 bytes a char fit it with room for the rest of the row. A stream's true length
+ *  is its own column, so the head is stored as printed. */
 const EXECUTOR_FIELD_CHARS = Math.floor(PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value / 10);
 
-/** Ends a field clipped on store and names its true length; every reader sees the head, so the tail is free for it. */
-const CLIPPED_MARKER = /\n\[kinu: clipped from (\d+) chars\]$/u;
-
-function storedField(text: string): string {
-  return text.length <= EXECUTOR_FIELD_CHARS ? text : `${text.slice(0, EXECUTOR_FIELD_CHARS)}\n[kinu: clipped from ${String(text.length)} chars]`;
-}
-
-/** A stored field's true length: its own, or the one its clip marker names. */
-function fieldLength(stored: number, tail: string): number {
-  const clipped = CLIPPED_MARKER.exec(tail);
-
-  return clipped === null ? stored : Number(clipped[1]);
-}
-
-/** `stdout_len`/`stderr_len` are the stored lengths, so a reader can tell a short command
+/** `stdout_len`/`stderr_len` are the streams' printed lengths, so a reader can tell a short command
  *  from a clipped one. */
 interface ExecutorOutputRow {
   id: string; executor: string; command: string;
@@ -695,6 +682,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected async agentCalls(actorId: string): Promise<AgentFacetCalls> {
     const key = `kinu-agent:${this.agentOf(actorId).storageKey}`;
 
+    this.openedIsolates.add(actorId);
+
     return agentCallsThrough((call) => this.agentIsolateSlots.held(key, () => this.agentIsolate(actorId), call));
   }
 
@@ -704,6 +693,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   protected dropAgentFacet(storageKey: string): void {
     this.ctx.facets.delete(storageKey);
+  }
+
+  /** The agents whose isolate this activation opened: only these can hold calls open on it. */
+  private readonly openedIsolates = new Set<string>();
+
+  /** An agent's isolate has nothing open on this object: its turns' ends, reports and lanes have all been answered. */
+  private async agentQuiet(actorId: string): Promise<void> {
+    await (await this.agentCalls(actorId)).idle();
   }
 
   agentSnapshot(actorId: string): AgentSnapshot {
@@ -773,6 +770,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   agentWorkspace(actorId: string): AgentWorkspaceHost {
+    if (this.deleting.signal.aborted) return settleSync(Effect.fail(new KinuError('missing', 'This workspace was deleted.')));
     this.agentOf(actorId);
     const credentials = async () => await this.userHub();
 
@@ -869,7 +867,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         return await parent.orchestrator.inbox.send(signal);
       },
-    });
+    }, this.deleting.signal);
   }
 
   private agentBound(actorId: string): BoundActor {
@@ -952,6 +950,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         const own = record !== null && hostedActorPlacement(record).homeName !== null;
 
         if (own) await this.agentTurns.beforeRetirement(record.actorId, retirement.destroy || retirement.interrupt);
+
+        // Its isolate goes with it: the calls it still has open on this object are answered first, so none is left
+        // to a relay whose caller is gone.
+        if (own && retirement.destroy && this.openedIsolates.has(record.actorId)) await this.agentQuiet(record.actorId);
         await host.retire(parent, retirement);
 
         if (own) {
@@ -4118,7 +4120,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       if (ownerUserId !== null && ownerUserId !== expectedOwnerUserId) return yield* new KinuError('denied', 'Agent owner mismatch; refusing to destroy.');
 
-      if (this.wipe === undefined) yield* Effect.promise(async () => this.releaseOutsideState());
+      if (this.wipe === undefined) {
+        // Quieted already when its owner's teardown asked first; a deletion resumed after a restart quiets here.
+        yield* Effect.promise(async () => this.quietAgents());
+        yield* Effect.promise(async () => this.releaseOutsideState());
+      }
 
       const wipe = this.wipe ??= { ownerUserId, done: this.wipeStorage() };
       yield* Effect.promise(() => wipe.done);
@@ -4147,6 +4153,36 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private wipe: { readonly ownerUserId: string | null; readonly done: Promise<void> } | undefined;
+
+  /**
+   * The owner's teardown asks this first, while the workspace still holds its authority: its agents stop and every
+   * call they still have open here is answered. A call cut by the revoke or the wipe that follow hangs its relay, and
+   * one that finishes after the wipe re-arms a wake on the emptied object. Not @callable: as `destroyAgent`.
+   */
+  quietForDeletion(expectedOwnerUserId: string): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (this.wipe !== undefined) return;
+      // Never claimed, or storage from before a reset: nothing it holds can be checked, and no agent of it runs here.
+      const ownerUserId = this.storageRefusal === undefined ? this.getOwnerUserId() : null;
+
+      if (ownerUserId !== null && ownerUserId !== expectedOwnerUserId) return yield* new KinuError('denied', 'Agent owner mismatch; refusing to quiet for deletion.');
+      yield* Effect.promise(async () => this.quietAgents());
+    }));
+  }
+
+  /** Aborted once a deletion began: no agent's call reaches this object's stores after it, and each still open is
+   *  refused then. */
+  private readonly deleting = new AbortController();
+
+  private async quietAgents(): Promise<void> {
+    if (!this.deleting.signal.aborted) this.deleting.abort(new KinuError('missing', 'This workspace was deleted.'));
+
+    for (const actorId of this.openedIsolates) {
+      if (!this.liveActor(actorId)) continue;
+      await this.agentTurns.beforeRetirement(actorId, true);
+      await this.agentQuiet(actorId);
+    }
+  }
 
   private async wipeStorage(): Promise<void> {
     // Drops SDK tables, alarms and storage, every agent facet's included (measured in tests/workerd/delete-all.test.ts,
@@ -4851,17 +4887,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Must filter by actor: executor ids are shared across actors in the workspace box.
    */
   async getExecutorOutput(executorId: string): Promise<ExecutorOutputRow[]> {
-    const rows = this.sql<ExecutorOutputRow & { stdout_tail: string; stderr_tail: string }>`SELECT id, executor, command,
-        substr(stdout, 1, ${EXECUTOR_OUTPUT_CLIP}) AS stdout, length(stdout) AS stdout_len, substr(stdout, -64) AS stdout_tail,
-        substr(stderr, 1, ${EXECUTOR_OUTPUT_CLIP}) AS stderr, length(stderr) AS stderr_len, substr(stderr, -64) AS stderr_tail,
+    return this.sql<ExecutorOutputRow>`SELECT id, executor, command,
+        substr(stdout, 1, ${EXECUTOR_OUTPUT_CLIP}) AS stdout, stdout_len,
+        substr(stderr, 1, ${EXECUTOR_OUTPUT_CLIP}) AS stderr, stderr_len,
         exit_code, created_at
       FROM executor_output
       WHERE actor_id = ${this.actorHandle().actorId} AND executor = ${executorId}
       ORDER BY created_at DESC, rowid DESC LIMIT ${EXECUTOR_HISTORY_ROWS}`;
-
-    return rows.map(({ stdout_tail, stderr_tail, ...row }) => ({
-      ...row, stdout_len: fieldLength(row.stdout_len, stdout_tail ?? ''), stderr_len: fieldLength(row.stderr_len, stderr_tail ?? ''),
-    }));
   }
 
   private recordExecutorOutput(
@@ -4869,9 +4901,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   ): void {
     const actorId = this.actorHandle().actorId;
 
-    const stdout = output.stdout === null ? null : storedField(output.stdout);
-    void this.sql`INSERT INTO executor_output (actor_id, executor, command, stdout, stderr, exit_code)
-      VALUES (${actorId}, ${executorId}, ${storedField(command)}, ${stdout}, ${storedField(output.stderr)}, ${output.exitCode})`;
+    const { stdout, stderr } = output;
+    void this.sql`INSERT INTO executor_output (actor_id, executor, command, stdout, stdout_len, stderr, stderr_len, exit_code)
+      VALUES (${actorId}, ${executorId}, ${command.slice(0, EXECUTOR_FIELD_CHARS)}, ${stdout?.slice(0, EXECUTOR_FIELD_CHARS) ?? null},
+        ${stdout?.length ?? null}, ${stderr.slice(0, EXECUTOR_FIELD_CHARS)}, ${stderr.length}, ${output.exitCode})`;
     void this.sql`DELETE FROM executor_output WHERE actor_id = ${actorId} AND executor = ${executorId}
       AND rowid NOT IN (SELECT rowid FROM executor_output WHERE actor_id = ${actorId} AND executor = ${executorId}
         ORDER BY created_at DESC, rowid DESC LIMIT ${EXECUTOR_HISTORY_ROWS})`;
@@ -5774,6 +5807,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * happens in this invocation; the incident id makes caller retries safe.
    */
   async acceptSandboxLifecycleIncident(body: JsonValue): Promise<SandboxLifecycleIncidentResult> {
+    // A deleted workspace's box can outlive it holding an incident: nobody is left to tell, and a throw here was
+    // `undelivered`, so the box re-offered it every five minutes for hours (staging beaf28a46, six boxes).
+    if (this.storageRefusal !== undefined || !this.workspaceBorn()) return { status: 'rejected', reason: 'the workspace no longer exists' };
 
     return acceptSandboxLifecycleIncident({
       sql: this.boundSql,

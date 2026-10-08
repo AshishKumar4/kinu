@@ -165,6 +165,7 @@ export const AGENT_RPC_ACCESS = {
   send: 'interactive',
 
   destroyAgent: 'never',
+  quietForDeletion: 'never',
 } as const satisfies Record<string, AgentRpcAccess>;
 
 export type AgentRpcMethod = keyof typeof AGENT_RPC_ACCESS;
