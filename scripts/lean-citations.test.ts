@@ -230,8 +230,7 @@ describe('the corpus this gate governs', () => {
 
 describe('the workflow that runs this gate fires on what this gate reads', () => {
   /**
-   * `lean-verify.yml` is the ONLY Lean gate a pull request runs — `ci.yml`'s
-   * `verify-lean` job is `push` to `main` only — so a `paths:` filter naming
+   * `lean-verify.yml` is the ONLY Lean gate GitHub runs, so a `paths:` filter naming
    * `lean/**` and `packages/**\/src/**\/*.ts` does not cover it. This gate's corpus
    * is every tracked TEXT source, and citations really do live outside that
    * filter: `docs/`, `scripts/`, `packages/core/tests/` and `bench/corpus/patches/`.

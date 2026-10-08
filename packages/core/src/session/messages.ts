@@ -4,7 +4,7 @@ import type { ActorHandle } from '../identity/actor-handle';
 import type { SqlExecutor } from '../types/primitives';
 import { KinuError } from '../obs/error';
 import { sha256Hex } from '../safety/argument-digest';
-import { encodeModelMessage, decodeModelMessageValues } from './message-codec';
+import { encodeModelMessage, decodeModelMessageValues, decodeOwnModelMessage } from './message-codec';
 import { JsonObjectSchema, isParsedJsonObject, jsonObjectElements, type JsonObject, type JsonValue } from '../utils/json';
 import { freezeTree } from '../utils/freeze';
 import type { SessionPayloads, SessionPayloadReader, SessionPayload } from './payload';
@@ -259,18 +259,25 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
   /** Asserts the actor once, after the last await; keeps only the messages this context names. */
   async materializeAll(references: readonly MessageReference[]): Promise<ModelMessage[]> {
     const messages: ModelMessage[] = [];
-    const named = new Map<string, SealedMessage>();
+    let named = 0;
 
     for (const reference of references) {
       const message = this.sealed.get(reference.messageId)?.message ?? await this.materialize(reference);
-      const sealed = this.sealed.get(reference.messageId);
       messages.push(message);
 
-      if (sealed?.message === message) named.set(reference.messageId, sealed);
+      if (this.sealed.get(reference.messageId)?.message === message) named += 1;
     }
 
     this.actor.assertCurrent();
-    this.sealed = named;
+
+    // A step that only appended names everything the cache holds: it is kept, not rebuilt over the whole context.
+    if (named !== this.sealed.size || named !== references.length) {
+      this.sealed = new Map(references.flatMap((reference, index) => {
+        const sealed = this.sealed.get(reference.messageId);
+
+        return sealed?.message === messages[index] ? [[reference.messageId, sealed] as const] : [];
+      }));
+    }
 
     return messages;
   }
@@ -288,9 +295,9 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
   /** The stream has committed these native parts; they may include parts its final message omitted. */
   bindSource(message: ModelMessage, reference: MessageReference, native: JsonObject): void {
     this.actor.assertCurrent();
-    const recorded = decodeModelMessageValues([native])[0];
+    const recorded = decodeOwnModelMessage(native);
 
-    if (recorded === undefined || !carries(recorded, message)) throw new KinuError('io', 'native output differs from its recorded content');
+    if (!carries(recorded, message)) throw new KinuError('io', 'native output differs from its recorded content');
     this.cache(reference, recorded, 'output');
     this.sources.set(message, reference);
     this.sources.set(recorded, reference);

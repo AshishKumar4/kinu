@@ -4409,6 +4409,15 @@ key covers them.
 - Not done here: the Codex egress container still has its image, built
   with `wrangler containers build -p` on the local engine.
 
+Amended the same day: the build is armada's `devbox-tools` task
+(`armada/devbox-tools.ts`, project `kinu` in `armada.config.ts`), which
+hands the whole tarball back as one output, since armada now streams an
+output of any size up to 4.995 GiB into R2; the 32 MiB parts are gone. Its
+recipe is the same text, and only the machine starting the build reads the
+tree for it. Job `20261007220730-765aa172` returned `a3146b2f…`,
+335,856,114 bytes, and a new environment (`ccdf65f8…`, job
+`20261007220922-089ccf45`) built the same bytes again.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

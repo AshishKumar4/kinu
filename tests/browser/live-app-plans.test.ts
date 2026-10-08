@@ -112,9 +112,10 @@ describe("an answer's slate-ui blocks are drawn in place", () => {
 
   // The page runs with its author's reach: it reads the file the agent wrote, and its click reaches the agent.
   test("a page reads through `workspace` as its author, and a click reaches the agent", () => {
-    const { read, heard } = verdictOf(observed.slateUi, 'slate-ui');
+    const { read, heard, kept } = verdictOf(observed.slateUi, 'slate-ui');
 
-    expect({ read, heard }).toEqual({ read: SLATE_UI_FILE.content, heard: true });
+    // The turn the click started leaves the page it came from as it was, not drawn again.
+    expect({ read, heard, kept }).toEqual({ read: SLATE_UI_FILE.content, heard: true, kept: true });
   });
 
   test("a page's open control shows it in the work surface", () => {

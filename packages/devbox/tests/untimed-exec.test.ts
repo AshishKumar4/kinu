@@ -12,6 +12,7 @@ import { collectExecRecords } from '../src/exec-stream';
 import { gate, harness } from './support/devbox-harness';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
 import { pipeExec as localExec } from './support/native-process';
+import { isRunning } from '../../test-utils/src/spawn';
 
 const root = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}untimed-exec-`));
 
@@ -24,13 +25,6 @@ class TestBox extends TestDevbox<unknown> {
   }
 }
 
-
-/** Alive: present and not a zombie, as the kill reads it. */
-function alive(pid: number): boolean {
-  const status = join('/proc', String(pid), 'status');
-
-  return existsSync(status) && !/^State:\s*Z/mu.test(readFileSync(status, 'utf8'));
-}
 
 async function readyBox(exec: Container['exec'] = localExec) {
   const { box } = harness(TestBox, undefined, exec);
@@ -69,7 +63,7 @@ describe('an untimed command on the runtime\'s exec', () => {
 
     expect(await box.killUntimed('held')).toBe(true);
     expect((await ran).exitCode).not.toBe(0);
-    expect(alive(child)).toBe(false);
+    expect(isRunning(child)).toBe(false);
     expect(await box.killUntimed('held')).toBe(false);
   });
 
@@ -192,7 +186,7 @@ describe('a streamed untimed command', () => {
 
     await stream.cancel('the reader is gone');
 
-    expect(alive(child)).toBe(false);
+    expect(isRunning(child)).toBe(false);
   });
 
   // The box counts a shell command only as a caller; a streamed one is counted until it exits, then the box can rest.

@@ -19,6 +19,8 @@
   },
   "include": [
     "**/*.ts",
+    "../armada.config.ts",
+    "../armada/**/*.ts",
     "../packages/agent-core/drift.test.ts",
     "../packages/cf-backend/src/slate-vendor.d.ts"
   ],

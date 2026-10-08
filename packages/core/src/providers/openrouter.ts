@@ -1,11 +1,11 @@
 // OpenRouter gateway: bearer plus HTTP-Referer/X-Title attribution headers; dynamic catalog.
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
 import * as v from 'valibot';
 import type { ModelProvider, ModelInfo } from './types';
 import { authCacheKey, createAuthedFetch } from './util';
 import { knownReasoningEfforts } from './reasoning-effort';
 import { heardFetch } from './middleware/attempt';
+import { lazyModel } from './wire-model';
 
 export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -92,11 +92,11 @@ export function createOpenRouterProvider(opts: OpenRouterOptions = {}): ModelPro
         },
       });
 
-      return createOpenAICompatible({
+      return lazyModel('openrouter.chat', modelId, async () => (await import('@ai-sdk/openai-compatible')).createOpenAICompatible({
         name: 'openrouter',
         baseURL: OPENROUTER_BASE_URL,
         fetch: heardFetch(customFetch),
-      }).chatModel(modelId);
+      }).chatModel(modelId));
     },
   };
 }

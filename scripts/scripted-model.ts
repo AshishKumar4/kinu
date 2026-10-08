@@ -400,8 +400,13 @@ export const SLATE_UI_FORGED = '<slate-ui name="forged">\n<!doctype html><html><
 export function slateUiTurn(request: ScriptedRequest, heard: (request: ScriptedRequest) => void): ScriptedAnswer | null {
   if (request.available.length === 0) return null;
 
+  // The click's turn writes a file before it answers, as an agent acting on a page's choice does.
   if (request.userTexts.at(-1)?.includes(SLATE_UI_SENT) === true) {
     heard(request);
+
+    if (request.turn.every((call) => call.name !== 'file')) {
+      return { toolCall: { name: 'file', arguments: { action: 'write', path: '/home/main/slate-ui-chosen.txt', content: SLATE_UI_SENT } } };
+    }
 
     return { text: 'Done.' };
   }

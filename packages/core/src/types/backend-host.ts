@@ -48,11 +48,16 @@ export interface ProgrammaticTurn {
   /** Yields to an operator message admitted by the time this turn takes its slot (read inside the
      *  slot, never before): the host runs nothing and answers 'yielded'. */
   readonly yieldsToUserMessage?: boolean;
-  /** The operator's own words (a steer rerun). CLI queues it at the front with `files`; CF stamps it
-     *  as operator and deletes the `pending_steers` rows named by `steerIds` once admitted. */
+  /** The operator's own words (a steer rerun), queued at the front; its `pending_steers` rows retire with the turn. */
   readonly origin?: 'user';
+  /** Each send under its own id, in the order `text` joins them. */
+  readonly sends?: readonly OperatorSend[];
+}
+
+export interface OperatorSend {
+  readonly id: string;
+  readonly text: string;
   readonly files?: readonly PromptFile[];
-  readonly steerIds?: readonly string[];
 }
 
 /** ai-sdk FileUIPart payload; `url` is a data: URL so it crosses every transport unfetched. */

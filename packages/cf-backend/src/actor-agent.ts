@@ -19,7 +19,7 @@ import {
   type RunEventInput, type SubordinateInspectionAuthority, ConversationSearchStore, type ConversationRecall,
   isSubordinateOrigin, drawnStep, WORKSPACE_ROOT,
 } from '@kinu.run/core';
-import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
+import type { SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
 import type { SubordinateRosterEntry as SubordinateView } from '@kinu.run/core/protocol';
 import { MessageType, parseProtocolMessage, sendIfOpen } from "agents/chat";
@@ -473,6 +473,12 @@ function hostedActorSurface(actor: HostedActor, webSearch: WebSearchProvider, co
   });
 
   return { providers, native };
+}
+
+/** What a slate binding call runs with: the mode its actor's role leaves it, and that role's tool reach. */
+interface SlateAuthority {
+  readonly mode: WorkMode;
+  readonly reach: ToolSurfaceNarrowing;
 }
 
 export abstract class ActorAgent extends Agent<Env> {
@@ -1737,6 +1743,8 @@ export abstract class ActorAgent extends Agent<Env> {
         this.chatLoop.interrupt();
         this.stopSubtree(this.actorHandle().actorId);
       },
+      sendState: async (id) => this.chatLoop.sendState(id),
+      awaitSend: (id) => this.chatLoop.awaitSend(id),
     });
 
     return this._chatTransport;
@@ -2919,14 +2927,15 @@ export abstract class ActorAgent extends Agent<Env> {
         }
 
         const surface = hostedActorSurface(actor, this.ownedModelServices.getWebSearchProvider(), this.agentStores(actor.handle.actorId).conversations());
-        // Narrow by the child's own durable, per-actor role.
-        const reach = slateToolReach(await this.hostedSlateReach(actor, surface.providers, Object.keys(surface.native)));
+        // Narrow by the child's own durable, per-actor role, in the mode that role leaves the caller.
+        const authority = await this.hostedSlateAuthority(actor, mode, surface.providers, Object.keys(surface.native));
+        const reach = slateToolReach(authority.reach);
 
         if (route.kind === 'tool') {
-          return this.callSlateTool({ rt: actor.runtime, native: toolsInWorkMode(mode, surface.native), providers: surface.providers, reach, route, mode });
+          return this.callSlateTool({ rt: actor.runtime, native: toolsInWorkMode(authority.mode, surface.native), providers: surface.providers, reach, route, mode: authority.mode });
         }
 
-        return await callCodemodeMember(reach.narrowProviders(providersInWorkMode(mode, surface.providers)), route.namespace, route.member, route.args) ?? null;
+        return await callCodemodeMember(reach.narrowProviders(providersInWorkMode(authority.mode, surface.providers)), route.namespace, route.member, route.args) ?? null;
       }));
     });
   }
@@ -2948,17 +2957,19 @@ export abstract class ActorAgent extends Agent<Env> {
       switch (route.kind) {
         case 'namespace':
         case 'codemode': {
-          const providers = providersInWorkMode(mode, this.slateNamespaces());
-          const reach = slateToolReach(yield* Effect.promise(async () => this.slateReach(providers)));
+          const authority = yield* Effect.promise(async () => this.slateAuthority(mode, this.slateNamespaces()));
+          const providers = providersInWorkMode(authority.mode, this.slateNamespaces());
 
-          return (yield* Effect.promise(async () => callCodemodeMember(reach.narrowProviders(providers), route.namespace, route.member, route.args))) ?? null;
+          return (yield* Effect.promise(async () => callCodemodeMember(slateToolReach(authority.reach).narrowProviders(providers), route.namespace, route.member, route.args))) ?? null;
         }
 
         case 'tool': {
           const providers = this.slateNamespaces();
-          const reach = slateToolReach(yield* Effect.promise(async () => this.slateReach(providers)));
+          const authority = yield* Effect.promise(async () => this.slateAuthority(mode, providers));
 
-          return yield* Effect.promise(async () => this.callSlateTool({ rt: this.rt, native: this.getRawToolsForWorkMode(mode), providers, reach, route, mode }));
+          return yield* Effect.promise(async () => this.callSlateTool({
+            rt: this.rt, native: this.getRawToolsForWorkMode(authority.mode), providers, reach: slateToolReach(authority.reach), route, mode: authority.mode,
+          }));
         }
 
         case 'mcp': {
@@ -2974,10 +2985,11 @@ export abstract class ActorAgent extends Agent<Env> {
             return yield* new KinuError('denied', `${descriptor.toolKey} is read-granted to viewers but ${route.server} does not mark it read-only`);
           }
 
-          requireWorkModePermission(mode, descriptor.readOnly === true, descriptor.toolKey);
-          const reach = yield* Effect.promise(async () => this.slateReach(this.slateNamespaces(), [descriptor.toolKey]));
+          const authority = yield* Effect.promise(async () => this.slateAuthority(mode, this.slateNamespaces(), [descriptor.toolKey]));
 
-          if (!reach.allowsTool(descriptor.toolKey)) return yield* new KinuError('denied', `${descriptor.toolKey} is not within this actor's reach right now`);
+          requireWorkModePermission(authority.mode, descriptor.readOnly === true, descriptor.toolKey);
+
+          if (!authority.reach.allowsTool(descriptor.toolKey)) return yield* new KinuError('denied', `${descriptor.toolKey} is not within this actor's reach right now`);
 
           const answered = yield* Effect.promise(async () => callUserMcpTool({ stub, caller }, descriptor, route.args, undefined));
 
@@ -3086,37 +3098,37 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /**
-   * Current tool reach for a binding call: the in-flight turn's profile (not the cached one, which
-   * outlives its turn), else the role resolved now over native, codemode, and given MCP tools.
+   * A binding call's authority. Its mode is the caller's as the actor's role leaves it, resolved now from `requested`:
+   * a role that imposes Plan (a planner) holds every call to Plan, while a Build app keeps its own mode through another
+   * turn's Plan. Its reach is the in-flight turn's profile while one runs (not the cached one, which outlives its turn),
+   * else that same resolution over native, codemode and the given MCP tools.
    */
-  private async slateReach(providers: readonly CodemodeProvider[], mcpToolKeys: readonly string[] = []): Promise<ToolSurfaceNarrowing> {
-    const operation = this.operationProfile();
-
-    if (operation) return narrowToolSurface(operation.profile.allowedTools);
-
+  private async slateAuthority(
+    requested: WorkMode, providers: readonly CodemodeProvider[], mcpToolKeys: readonly string[] = [],
+  ): Promise<SlateAuthority> {
     const { profile } = await this.actorProfile({
       actor: this.actorHandle(),
-      workMode: 'build',
+      workMode: requested,
       availableTools: [...actorActiveTools(this.actorToolDeps()), ...mcpToolKeys, ...codemodeCapabilitiesFor(providers)],
     });
 
-    return narrowToolSurface(profile.allowedTools);
+    return { mode: profile.workMode, reach: narrowToolSurface((this.operationProfile()?.profile ?? profile).allowedTools) };
   }
 
   /**
-   * Hosted actor's reach: not `slateReach`, which reads the root's turn and surface.
+   * Hosted actor's authority: not `slateAuthority`, which reads the root's turn and surface.
    * Resolves the role now over the child's own surface, so a role change is seen on the next call.
    */
-  private async hostedSlateReach(
-    actor: HostedActor, providers: readonly CodemodeProvider[], native: readonly string[],
-  ): Promise<ToolSurfaceNarrowing> {
+  private async hostedSlateAuthority(
+    actor: HostedActor, requested: WorkMode, providers: readonly CodemodeProvider[], native: readonly string[],
+  ): Promise<SlateAuthority> {
     const { profile } = await this.actorProfile({
       actor: actor.handle,
       availableTools: [...native, ...codemodeCapabilitiesFor(providers)],
-      workMode: 'build',
+      workMode: requested,
     });
 
-    return narrowToolSurface(profile.allowedTools);
+    return { mode: profile.workMode, reach: narrowToolSurface(profile.allowedTools) };
   }
 
   /** Unconditional on every ActorAgent; tasks reuses `this.taskList`, the store the snapshot reads. */
@@ -3406,6 +3418,28 @@ export abstract class ActorAgent extends Agent<Env> {
 
       yield* Effect.promise(async () => this.chatLoop.admit({ text, files: attachments }, { id, mode: workMode }));
     }));
+  }
+
+  /** Where a send stands in the chat this connection addresses, read from its durable facts: what a client asks after
+   *  any break, instead of inferring its fate from what the stream showed. */
+  @callable()
+  sendState(id: string): Promise<SendState> {
+    return settle(Effect.flatMap(this.addressedChat(), (chat) => Effect.promise(() => chat.sendState(id))));
+  }
+
+  /** Its state once settled or none; a client that lost its connection asks again. */
+  @callable()
+  awaitSend(id: string): Promise<SendState> {
+    return settle(Effect.flatMap(this.addressedChat(), (chat) => Effect.promise(() => chat.awaitSend(id))));
+  }
+
+  private addressedChat(): Effect.Effect<ChatWire, KinuError> {
+    const window = this.addressedActor();
+
+    if (window === null) return Effect.succeed(this.chatTransport.wire);
+    const wire = this.hostedChatWire(window);
+
+    return wire === null ? Effect.fail(new KinuError('missing', `${window} is not an agent of this workspace`)) : Effect.succeed(wire);
   }
 
   /** Aborts the in-flight LLM request first so stop works even if the cancel frame is lost.

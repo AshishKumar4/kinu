@@ -1,12 +1,13 @@
 /**
- * FIRST RUN: the Changes pane and the run list read a workspace that
- * just did one piece of work.
+ * FIRST RUN: the Changes pane, the gated tabs and the run list read a
+ * workspace that just did one piece of work.
  *
- * THE ASK. Every user-facing surface has a deployed row. After one turn that
- * writes one file, the Changes pane shows the file against the review baseline
- * and forgets it once the baseline is reset; the run list lists the turn
- * among the workspace's runs and reads its triggers. Each through the RPC its
- * pane calls.
+ * THE ASK. Every user-facing surface has a deployed row. A fresh workspace
+ * offers neither Work nor Swarms. After one turn that writes one file and adds
+ * one task, Work appears (the task is its content) and Swarms does not; the
+ * Changes pane shows the file against the review baseline and forgets it once
+ * the baseline is reset; the run list lists the turn among the workspace's
+ * runs and reads its triggers. Each through the RPC its pane calls.
  *
  * WHY NO OTHER ROW GUARDS THIS. The rows that write files read them back
  * through the Files pane and the ledger; none asked the review baseline what
@@ -90,7 +91,8 @@ describe(SUITE, () => {
           const changed = await read(socket, DiffSchema, 'getExecutorDiff', [WORKSPACE_EXECUTOR]);
           const worked = await read(socket, PresenceSchema, 'getWorkspaceTabPresence', []);
 
-          // A fresh workspace offers neither Work nor Swarms; the turn's write is work, and no search ran.
+          // A fresh workspace offers neither Work nor Swarms; the turn's task is Work's content, and no search ran. A file
+          // write alone is not: it is the Changes pane's, read below.
           subgoals.push({
             what: 'tabs-follow-content',
             reached: fresh.value?.work === false && fresh.value.explorations === false

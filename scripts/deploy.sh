@@ -15,10 +15,11 @@
 #
 # Deploys the cf-backend Worker (`kinu-staging`, or `kinu` under `--promote`)
 # with the KinuDevbox Durable Object and its container, and the
-# local-device executor routes. Pipeline: preflight → the upload gates (the
-# account and the secret scan) → vite build → CLI source archive → wrangler
-# deploy → smoke test → staging tiers beside the rows CI cannot host → CI's
-# exact-SHA verdicts (including its isolated hammer) → the record. Promotion: the record → the upload gates →
+# local-device executor routes. Pipeline: preflight → armada's exact-SHA CI
+# verdict, its six hammer runs included (L25) → the upload gates (the account
+# and the secret scan) → vite build → CLI source archive → wrangler deploy →
+# smoke test → staging tiers beside the rows CI cannot host → the record.
+# Promotion: the record → the upload gates →
 # vite build → staging's downloads → wrangler deploy → smoke test → post-deploy
 # tiers.
 #
@@ -26,8 +27,8 @@
 # red, so one deploy captures every failure, and the deploy ends with one report
 # file, every red row with its finding, grouped by phase, whose path it prints
 # (scripts/deploy-report.ts). Only the preflight, the precondition for any
-# verdict, and the two upload gates, whose damage the next deploy cannot undo,
-# stop a deploy early. A red build on staging is fine: staging is the test
+# verdict, CI's verdict, and the two upload gates, whose damage the next deploy
+# cannot undo, stop a deploy early. A red build on staging is fine: staging is the test
 # environment and the next deploy replaces it. The record production promotes
 # from is written only when every phase is green.
 #
@@ -284,7 +285,7 @@ json_field() {
 # Phases, in the ladder's DEPLOY_PHASES order: `preflight` alone before
 # anything; `upload`, the account gate and the secret scan, before any upload;
 # 'post-publish', the tiers against the deployment, in one wave with 'source',
-# only what CI cannot host. The isolated hammer runs on GitHub, not after this wave (L23).
+# only what CI cannot host. The hammer runs in CI on armada, not after this wave (L25).
 # 'soak', the real-model eval pass, starts once the deployment serves and is never awaited (L24).
 # A gate's row in scripts/ladder.ts declares which, and why.
 #
@@ -392,10 +393,13 @@ echo ""
 stop_phase preflight
 mark preflight
 
-KINU_CI_RUN="$KINU_DEPLOY_REPORT/ci-run.json"
+# CI's verdict for this exact revision, which armada stored when its push to integration/** or main was proved
+# (L25): every row of it goes into the report, and a red or missing one ends the deploy before anything is built.
+# A promotion takes staging's record instead, which only a deploy past this gate wrote.
 if [ "$KINU_PROMOTE" != "1" ]; then
   KINU_CI_SHA="$(git -C "$KINU_ROOT" rev-parse HEAD)"
-  bun "$KINU_ROOT/scripts/ladder.ts" --ci-find="$KINU_CI_SHA" --ci-run="$KINU_CI_RUN" || { step_red ci "push-CI" "No push-CI proof for $KINU_CI_SHA. Push the branch holding this clean revision; nothing was built or uploaded."; finish; }
+  bun "$KINU_ROOT/scripts/ladder.ts" --ci-verdict="$KINU_CI_SHA" || { step_red ci "armada CI" "armada has no green verdict for $KINU_CI_SHA, so nothing was built or uploaded."; finish; }
+  mark ci
 fi
 
 # ── Pre-flight: verify npx + wrangler auth ───────────────────────
@@ -455,12 +459,7 @@ fi
 # withdrawn. Every other gate's red is recoverable on staging, so it runs after
 # the upload and gates the promotion instead.
 if [ "$KINU_PROMOTE" != "1" ]; then
-  # CI's upload proof and the local account check are independent; both still hold every upload.
-  run_phase upload &
-  KINU_UPLOAD_PID=$!
-  bun "$KINU_ROOT/scripts/ladder.ts" --ci-upload --ci-run="$KINU_CI_RUN" || KINU_REDS=1
-  wait "$KINU_UPLOAD_PID" || KINU_REDS=1
-  if [ "$KINU_REDS" != "0" ]; then
+  if ! run_phase upload; then
     echo -e "${RED}The upload checks are red, so nothing was built or uploaded.${NC}"
     finish
   fi
@@ -472,8 +471,6 @@ mark upload
 if [ "$KINU_GATES_ONLY" = "1" ]; then
   run_phase source
   mark source
-  bun "$KINU_ROOT/scripts/ladder.ts" --ci-await --ci-run="$KINU_CI_RUN" || KINU_REDS=1
-  mark ci
   echo "Gates only: stopping before the build, as asked."
   finish
 fi
@@ -484,7 +481,7 @@ fi
 # KINU_PUBLISH_FINDING saying which and why. After that nothing that reads the
 # deployment can test this build, while every local gate still can: the deploy
 # records the step, skips only the rows that read the deployment, and runs the
-# remaining local wave to the end, then imports CI's verdict, including the isolated hammer (L23).
+# remaining local wave to the end.
 KINU_PUBLISH_FINDING=""
 publish_red() {
   KINU_PUBLISH_FINDING="$1"
@@ -925,6 +922,8 @@ fi
 # (packages/test-utils/src/eval-identity.ts): each deployment has its own.
 export KINU_EVAL_ORIGIN="${KINU_URL%/}"
 export KINU_ORIGIN="${KINU_URL%/}"
+# Production, the baseline .github/workflows/evals.yml runs every task on beside a staging build.
+EVAL_BASELINE_ORIGIN="https://kinu.run"
 
 # THE STATISTICS, on GitHub (L19). scripts/evals-dispatch.ts starts
 # .github/workflows/evals.yml for this build from the branch on GitHub that
@@ -945,11 +944,23 @@ dispatch_evals() {
   report dispatched "the evals of $KINU_SHA from $branch, every task ten times on staging against production" "$KINU_EVALS_URL"
 }
 
+# THE EVAL ACCOUNTS' PROVIDER KEYS (scripts/eval-provider-keys.ts), stored before any eval starts, on each deployment
+# one drives: this one and, for a staging build, production, the baseline evals.yml compares it with. The evals and the
+# soak run detached, on GitHub and after this deploy, and a key missing there is every trial's HTTP 401; this is their
+# one owner, awaited here. A key not stored is a red, its finding the provisioner's own, and no eval starts.
+provision_eval_keys() {
+  local origin
+  for origin in "$@"; do
+    env -u KINU_EVAL_MODELS bun "$KINU_ROOT/scripts/eval-provider-keys.ts" "$origin" \
+      || { step_red evals "the eval accounts' provider keys" "not all stored at $origin, so no eval was started: each of its trials would be refused HTTP 401"; return 1; }
+  done
+}
+
 # THE SOAK (L24): one trial of every eval task on the deployment, on the models the evals measure. Started once the
 # deployment serves and never awaited, so a real model's minutes are outside this deploy's 20-minute wall and its red
 # outside this deploy's verdict: the soak writes into this report's soak section and renders it again when it ends.
 start_soak() {
-  setsid nohup bash -c 'bun scripts/ladder.ts --deploy-phase=soak; bun scripts/deploy-report.ts render "$KINU_DEPLOY_REPORT" after-soak' \
+  setsid nohup bash -c 'bun scripts/ladder.ts --deploy-phase=soak; bun scripts/deploy-report.ts runner "$KINU_DEPLOY_REPORT" soak $?; bun scripts/deploy-report.ts render "$KINU_DEPLOY_REPORT" after-soak' \
     >"$KINU_DEPLOY_REPORT/soak.log" 2>&1 </dev/null &
   report dispatched "the eval soak, one trial of every task on $KINU_EVAL_ORIGIN; its reds re-render this report" "$KINU_DEPLOY_REPORT/soak.log"
 }
@@ -961,28 +972,32 @@ start_soak() {
 if [ "$KINU_SERVING" = "1" ]; then bun "$KINU_ROOT/evals/scripts/reviewer-sign-in.ts" "$KINU_EVAL_ORIGIN"; fi
 
 if [ "$KINU_PROMOTE" = "1" ]; then
-  if [ -z "$KINU_TIERS_WHY" ]; then start_soak; run_phase post-publish; else skip_phase post-publish "$KINU_TIERS_WHY"; fi
+  if [ -z "$KINU_TIERS_WHY" ]; then
+    if provision_eval_keys "$KINU_EVAL_ORIGIN"; then start_soak; fi
+    run_phase post-publish
+  else
+    skip_phase post-publish "$KINU_TIERS_WHY"
+  fi
   mark tiers
 else
   # Started first, so its hours run while the wave runs here. Without its run
   # this build has no verdict to be promoted on, so a failed dispatch is a red.
+  KINU_EVAL_KEYS=0
   if [ "$KINU_SERVING" = "1" ]; then
-    dispatch_evals \
-      || step_red evals "the evals" "evals.yml was not dispatched for $KINU_SHA: $KINU_EVALS_WHY; this build has no eval verdict to be promoted on"
+    if provision_eval_keys "$KINU_EVAL_ORIGIN" "$EVAL_BASELINE_ORIGIN"; then
+      KINU_EVAL_KEYS=1
+      dispatch_evals \
+        || step_red evals "the evals" "evals.yml was not dispatched for $KINU_SHA: $KINU_EVALS_WHY; this build has no eval verdict to be promoted on"
+    fi
   fi
   if [ -z "$KINU_TIERS_WHY" ]; then
-    start_soak
+    if [ "$KINU_EVAL_KEYS" = "1" ]; then start_soak; fi
     run_phase post-publish,source
   else
     skip_phase post-publish "$KINU_TIERS_WHY"
     run_phase source
   fi
   mark wave
-
-  # CI's source shards and isolated hammer ran concurrently with this build and the live tiers. Their exact-SHA
-  # verdicts are part of this deploy: no local repeat, no retry of a red, no record without the complete proof.
-  bun "$KINU_ROOT/scripts/ladder.ts" --ci-await --ci-run="$KINU_CI_RUN" || KINU_REDS=1
-  mark ci
 fi
 
 # ── Step 5: Post-deploy infrastructure verification ──────────────

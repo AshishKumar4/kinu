@@ -48,6 +48,17 @@ export const CONVERSATION_CASES: readonly SharedCase[] = [
     },
   },
   {
+    title: 'a send reads settled under the turn that took it once answered; an id never sent reads none',
+    async run({ surface }) {
+      await surface.send('Name the release.', 'q-1');
+      const settled = { status: 'settled', turnId: 'q-1', landed: 'turn', outcome: 'completed' } as const;
+
+      expect(await surface.awaitSend('q-1')).toEqual(settled);
+      expect(await surface.sendState('q-1')).toEqual(settled);
+      expect(await surface.sendState('never-sent')).toEqual({ status: 'none' });
+    },
+  },
+  {
     title: 'reverting to a message drops it and everything after; an unknown entry is refused',
     async run({ surface, history }) {
       await exchange(history, 'q-1', 'Name the release.', 'Aurora.');

@@ -24,6 +24,8 @@ const QUEUE: readonly LiveRead[] = ['listPendingActions', 'getWorkspaceTabPresen
 
 const WORK: readonly LiveRead[] = ['listWorkspaceWork', 'getWorkspaceTabPresence'];
 
+const OWED: readonly LiveRead[] = ['inspectWork', 'getWorkspaceTabPresence'];
+
 const AGENTS: readonly LiveRead[] = ['listWorkspaceAgents'];
 
 export const ROSTER_READS: readonly LiveRead[] = [...AGENTS, 'listSubordinates'];
@@ -51,9 +53,11 @@ const READS_BY_TABLE: ReadonlyMap<string, readonly LiveRead[]> = new Map<string,
   ['agent_tasks', WORK],
   ['actor_subordinates', ROSTER_READS],
   ['actor_config', ROSTER_READS],
-  ['actor_turn_claims', [...AGENTS, 'inspectWork']],
-  ['terminal_effects', ['inspectWork']],
-  ['agent_open_turns', ['inspectWork']],
+  // What Work → Now lists, and whether Work has it at all.
+  ['actor_turn_claims', [...AGENTS, ...OWED]],
+  ['terminal_effects', OWED],
+  ['agent_open_turns', OWED],
+  ['agent_owed_work', OWED],
   ['agent_log', AGENTS],
   ['head_journal', AGENTS],
   ['head_runs', AGENTS],

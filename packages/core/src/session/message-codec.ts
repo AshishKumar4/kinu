@@ -149,3 +149,10 @@ export function encodeModelMessage(message: ModelMessage): JsonObject {
 export function decodeModelMessageValues(values: readonly JsonValue[]): ModelMessage[] {
   return settleSync(Effect.forEach(values, decoded));
 }
+
+const OwnModelMessageSchema = v.custom<ModelMessage>((input) => v.is(v.object({ role: v.picklist(['system', 'user', 'assistant', 'tool']) }), input));
+
+/** A message this isolate assembled from parts the SDK already typed: decoded, and not walked by its schema again. */
+export function decodeOwnModelMessage(value: JsonObject): ModelMessage {
+  return v.parse(OwnModelMessageSchema, decodeValue(value, []));
+}

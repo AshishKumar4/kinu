@@ -1,5 +1,4 @@
 // Codex via ChatGPT subscription (chatgpt.com/backend-api/codex/responses).
-import { createOpenAI } from '@ai-sdk/openai';
 import { APICallError, wrapLanguageModel, type LanguageModel } from 'ai';
 import type { AuthResolution, ModelProvider, ModelInfo, ModelInputModality } from './types';
 import { MODEL_INPUT_MODALITIES } from './types';
@@ -15,6 +14,7 @@ import { Effect } from 'effect';
 import { classify, diagnostics, KinuError, renderThrownChain, settle, settleSync } from '../obs/index';
 import { knownReasoningEfforts } from './reasoning-effort';
 import { heardFetch } from './middleware/attempt';
+import { lazyModel } from './wire-model';
 
 const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex';
 
@@ -178,9 +178,10 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
         return withCallAccount(res, 'codex', answer.auth.credentialKey ?? CODEX_CRED_KEY);
       })));
 
-      const provider = createOpenAI({ baseURL, apiKey: 'oauth-placeholder', fetch: heardFetch(customFetch) });
+      const model = lazyModel('openai.responses', modelId, async () => (await import('@ai-sdk/openai'))
+        .createOpenAI({ baseURL, apiKey: 'oauth-placeholder', fetch: heardFetch(customFetch) }).responses(modelId));
 
-      return wrapLanguageModel({ model: provider.responses(modelId), middleware: statelessResponses(true) });
+      return wrapLanguageModel({ model, middleware: statelessResponses(true) });
     },
   };
 }

@@ -118,12 +118,14 @@ export class FacetChat {
     const { actor, database, workspace } = this.deps;
     const mode = actor.session.workMode;
     this.parentDriven = item.kind === 'programmatic';
-    const prepared = await workspace.prepareChat({ turnId: lease.turnId, mode, userText: item.text, parentDriven: this.parentDriven });
+    // The workspace reads the turn's sources for the tier it runs on, and the turn is assembled on that same tier.
+    const explicitTier = metadataTier(item.metadata);
+    const prepared = await workspace.prepareChat({ turnId: lease.turnId, mode, userText: item.text, parentDriven: this.parentDriven, ...(explicitTier !== undefined && { explicitTier }) });
 
     database.prepare(lease.turnId, prepared);
     this.reviewsTurns = prepared.reviewsTurns;
 
-    const assembled = await this.assemble(prepared, { id: lease.turnId, mode, runId: lease.runId }, { userText: item.text, workMode: mode, explicitTier: metadataTier(item.metadata) }, (profile, inputs) => {
+    const assembled = await this.assemble(prepared, { id: lease.turnId, mode, runId: lease.runId }, { userText: item.text, workMode: mode, ...(explicitTier !== undefined && { explicitTier }) }, (profile, inputs) => {
       actor.session.bindProfile(lease, profile, inputs);
     });
 
@@ -255,7 +257,7 @@ export class FacetChat {
     const told = this.telling.then(() => {
       const owed = this.owed();
 
-      return this.deps.workspace.owes(at === undefined ? owed : Math.min(at, owed ?? Infinity));
+      return this.deps.workspace.owes(at === undefined ? owed : Math.min(at, owed ?? Infinity), owed !== null || this.owedWork().length > 0);
     });
 
     this.telling = hold(attempt({ doing: 'telling the workspace what an agent still owes', otherwise: 'unavailable' }, () => told));

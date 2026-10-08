@@ -104,6 +104,8 @@
       ".": {
         "entry": [
           "scripts/*.ts!",
+          "armada.config.ts!",
+          "armada/*.ts!",
           "scripts/fixtures/*/worker.ts!",
           "scripts/fixtures/effect-diagnostics/planted.ts!",
           "tools/oxlint/anti-slop/index.ts!",
@@ -112,6 +114,7 @@
         ],
         "project": [
           "scripts/**/*.ts!",
+          "armada/**/*.ts!",
           "tools/**/*.ts!",
           "tests/**/*.ts",
           "evals/**/*.ts"
@@ -165,7 +168,7 @@
     "@types/node": "^25.9.1",
     "@vitest/coverage-istanbul": "^4.1.11",
     "agents": "^0.26.0",
-    "armada": "github:AshishKumar4/armada#1d6e30c5cfb228f432fce450899888836df2a90a",
+    "armada": "github:AshishKumar4/armada#34e095261777a128a9b31d43e0eece6a7ee6dd71",
     "aws4fetch": "^1.0.20",
     "bun": "canary",
     "chess.js": "^1.4.0",

@@ -342,7 +342,7 @@ describe('agent status', () => {
     if (recorded === null) throw new Error('the seeded user entry must be in the transcript');
     expect(await getChatHistoryPage(transcript)).toEqual({
       status: 'end',
-      items: [{ id: 'a', position: 0, role: 'user', content: 'hello', createdAt: recorded.recordedAt }],
+      items: [{ id: 'a', position: 0, role: 'user', turnId: recorded.turnId, content: 'hello', createdAt: recorded.recordedAt }],
     });
     w.db.close();
   });
@@ -366,7 +366,7 @@ describe('agent status', () => {
 
     if (recorded === null) throw new Error('the harness notice must be in the transcript');
     expect((await getChatHistoryPage(transcript)).items).toEqual([{
-      id, position: 0, role: 'system',
+      id, position: 0, role: 'system', turnId: id,
       content: '9 head(s) across 1 fork run(s)…', createdAt: recorded.recordedAt,
       metadata: { kinuEvent: 'fork_interrupted', heads: 9 },
     }]);

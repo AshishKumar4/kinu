@@ -2,7 +2,7 @@ export { initFiberTable, tableExists } from './identity/schema';
 
 export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult, type SubordinateChild } from './subordinates/inspection';
 
-export { AgentOpenTurns, type AgentOpenTurn } from './subordinates/open-turns';
+export { AgentOpenTurns, AgentOwedWork, type AgentOpenTurn } from './subordinates/open-turns';
 
 export { TurnReports, type ReportedTurn } from './subordinates/turn-reports';
 
@@ -890,6 +890,8 @@ export {
   type UserSteer, type SteerStatusEvent, type SteerStatusDetail,
   type LandedSteerRow, type PendingSendRow,
 } from './orchestrator/inbox';
+
+export { SendStateSchema, type SendState } from './orchestrator/send-state';
 
 export {
   buildTranscript, extendTranscript, sealTranscript, segmentBySteers,

@@ -1,7 +1,6 @@
 // The platform's AI Gateway: the deploy-time provider when no user credential is reachable.
 // Rides the Workers AI binding (pre-authenticated, same account). User-billed providers must not:
 // a binding call would move their spend onto this account.
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { Effect } from 'effect';
 import { settleSync } from '../obs/effect';
 import type { LanguageModel } from 'ai';
@@ -14,6 +13,7 @@ import {
   WORKERS_AI_PREFERRED_MODEL_IDS,
 } from './workers-ai-catalog';
 import { heardFetch } from './middleware/attempt';
+import { lazyModel } from './wire-model';
 
 const AI_GATEWAY_PROVIDER_ID = 'ai-gateway';
 
@@ -62,12 +62,12 @@ export function createAIGatewayProvider(): ModelProvider {
 
       return settleSync('reason' in resolved
         ? Effect.die(new Error(`ai-gateway unavailable: ${resolved.reason}`))
-        : Effect.sync(() => createOpenAICompatible({
+        : Effect.sync(() => lazyModel(`${AI_GATEWAY_PROVIDER_ID}.chat`, modelId, async () => (await import('@ai-sdk/openai-compatible')).createOpenAICompatible({
           name: AI_GATEWAY_PROVIDER_ID,
           // Never fetched: the transport parses the URL into the binding's {gateway, provider, endpoint}.
           baseURL: String(deps.env.AI_GATEWAY_URL),
           fetch: heardFetch(createGatewayBindingFetch(resolved)),
-        }).chatModel(modelId)));
+        }).chatModel(modelId))));
     },
   };
 }

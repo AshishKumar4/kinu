@@ -4,7 +4,7 @@
  */
 
 import { present } from '../../test-utils/src/present';
-import { handClock } from '@kinu.run/test-utils';
+import { handClock, isRunning } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
@@ -199,7 +199,7 @@ describe('pc-agent exec RPC', () => {
     const reply = await exec(`sleep 20 & echo $! > ${pidFile}; echo started`);
     const server = Number(readFileSync(pidFile, 'utf8').trim());
     // Still running: an answer that waited for the server would have come after it ended.
-    const running = alive(server);
+    const running = isRunning(server);
 
     if (running) process.kill(server, 'SIGKILL');
 
@@ -387,21 +387,6 @@ function recorder() {
 }
 
 /** ESRCH = gone, EPERM = exists but not ours; anything else is test breakage. */
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-
-    return true;
-  } catch (err) {
-    const code = err instanceof Error && 'code' in err ? String(err.code) : '';
-
-    if (code === 'ESRCH') return false;
-
-    if (code === 'EPERM') return true;
-    throw err;
-  }
-}
-
 /** Real time on purpose: only the kernel can say whether a SIGKILL landed. Ends on the condition, never an interval. */
 async function settled<T>(read: () => T | undefined, what: string): Promise<T> {
   const deadline = Date.now() + 10_000;
@@ -418,7 +403,7 @@ async function settled<T>(read: () => T | undefined, what: string): Promise<T> {
 
 /** The corpse stays visible to `kill(pid, 0)` until init reaps it. */
 function gone(pid: number): Promise<true> {
-  return settled(() => (alive(pid) ? undefined : true), `process ${pid} to leave the process table`);
+  return settled(() => (isRunning(pid) ? undefined : true), `process ${pid} to leave the process table`);
 }
 
 const PidSchema = v.pipe(v.number(), v.integer(), v.minValue(1));
@@ -509,7 +494,7 @@ describe('pc-agent command cancellation', () => {
 
     handle({ id: runId, method: 'exec', params: [command] }, ws.socket);
     const descendant = await pidOf(ws.answerTo(runId));
-    expect(alive(descendant)).toBe(true);
+    expect(isRunning(descendant)).toBe(true);
     cancel(cancelId, runId, ws.socket);
 
     const answer = await settled(() => ws.of(cancelId)[0], 'the cancellation answer');
@@ -550,7 +535,7 @@ describe('pc-agent command cancellation', () => {
 
     const server = Number(readFileSync(pidFile, 'utf8').trim());
 
-    if (alive(server)) process.kill(server, 'SIGKILL');
+    if (isRunning(server)) process.kill(server, 'SIGKILL');
   });
 
   test('completed, duplicate and unknown cancellation targets answer honestly', async () => {
@@ -595,7 +580,7 @@ describe('pc-agent command cancellation', () => {
     const ws = recorder();
     handle({ id: rpcId(260), method: 'exec', params: [waiting.command] }, ws.socket);
     const abandoned = await waiting.pidOf(ws.answerTo(rpcId(260)));
-    expect(alive(abandoned)).toBe(true);
+    expect(isRunning(abandoned)).toBe(true);
     await supervisorState(rpcId(260));
 
     const swept = await detached.terminateUnanswered();
@@ -646,7 +631,7 @@ describe('pc-agent command cancellation', () => {
     const registeredBefore = v.parse(v.number(), pcAgent.inFlight.size());
     handle({ id: rpcId(250), method: 'exec', params: [waiting.command] }, ws.socket);
     const abandoned = await waiting.pidOf(ws.answerTo(rpcId(250)));
-    expect(alive(abandoned)).toBe(true);
+    expect(isRunning(abandoned)).toBe(true);
     // The supervisor's state file can precede the daemon's registration: while `starting` still owns that record,
     // a sweep leaves it to the start. This test drops an already registered command; the preceding test drops a start.
     await settled(() => (pcAgent.inFlight.size() === registeredBefore + 1 ? true : undefined), 'the running command to be registered');
@@ -771,7 +756,7 @@ describe('pc-agent durable supervisor', () => {
 
     await expect(registry.cancel(id)).rejects.toThrow(`the supervisor of ${id} (pid ${String(supervisor.pid)}) exited without recording the command's result`);
     // Not a stop: the command did outlive its supervisor.
-    expect(alive(v.parse(PidSchema, command.pid))).toBe(true);
+    expect(isRunning(v.parse(PidSchema, command.pid))).toBe(true);
     process.kill(-v.parse(PidSchema, command.pid), 'SIGKILL');
     await commandEnded;
   });
@@ -962,7 +947,7 @@ describe('pc-agent durable supervisor', () => {
     );
 
     await expect(registry.cancel(id)).rejects.toThrow('identity no longer matches');
-    expect(alive(process.pid)).toBe(true);
+    expect(isRunning(process.pid)).toBe(true);
   });
 });
 
@@ -1078,10 +1063,10 @@ describe('the daemon answers in the words the hub reads', () => {
     const requestId = rpcId(620);
     const running = tunnel.rpc('exec', [command.command], { requestId, timeoutMs: 0 });
     const descendant = await command.pidOf(running);
-    expect(alive(descendant)).toBe(true);
+    expect(isRunning(descendant)).toBe(true);
     clock.advance(60_000);
     await expect(running).rejects.toThrow('the device confirmed its work stopped');
-    expect(alive(descendant)).toBe(false);
+    expect(isRunning(descendant)).toBe(false);
     await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [requestId]);
     tunnel.dispose();
   });
@@ -1120,7 +1105,7 @@ describe('stopping a turn reaches the process on the user\'s machine', () => {
 
     const pending = provider.tools.exec.execute(command, { signal: controller.signal });
     const descendant = await pidOf(pending);
-    expect(alive(descendant)).toBe(true);
+    expect(isRunning(descendant)).toBe(true);
 
     controller.abort();
 
@@ -1153,7 +1138,7 @@ describe('stopping a turn reaches the process on the user\'s machine', () => {
       error: expect.stringContaining(`may still be running in process group ${String(supervisor.group)}`),
     });
     // Not a guess: the command did outlive its supervisor.
-    expect(alive(descendant)).toBe(true);
+    expect(isRunning(descendant)).toBe(true);
 
     tunnel.dispose();
     process.kill(-supervisor.group, 'SIGKILL');
