@@ -3047,7 +3047,7 @@ export abstract class ActorAgent extends Agent<Env> {
           const authority = yield* Effect.promise(async () => this.slateAuthority(mode, this.slateNamespaces(mode, owner)));
           const providers = providersInWorkMode(authority.mode, this.slateNamespaces(mode, owner));
 
-          return yield* Effect.promise(async () => slateMember(slateToolReach(authority.reach).narrowProviders(providers), route, context));
+          return yield* Effect.promise(async () => slateMember(slateToolReach(authority.reach, owner).narrowProviders(providers), route, context));
         }
 
         case 'tool': {
