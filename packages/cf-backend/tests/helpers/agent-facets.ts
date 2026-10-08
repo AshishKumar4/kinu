@@ -2,7 +2,7 @@
 import { mock } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
-import { WORKSPACE_ROOT } from '@kinu.run/core';
+import { MAIN_AGENT, WORKSPACE_ROOT } from '@kinu.run/core';
 import * as shippedRegistry from '../../src/providers/agent-registry';
 import type { AgentContext } from 'agents';
 import { AgentFacet, type AgentFacetCalls, type AgentFacetEnv } from '../../src/agent-facet/agent-facet';
@@ -11,6 +11,7 @@ import { attemptInItsWords } from '@kinu.run/core/obs';
 import { AgentDatabase } from '../../src/agent-facet/agent-database';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import { agentStateShellId, type AgentFacetPlacement, type AgentWorkspaceHost } from '../../src/agent-facets';
+import { joinedOnlyByItself } from './agents-sdk';
 
 const databases = new Map<string, Database>();
 
@@ -200,6 +201,8 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
       };
 
       const facet = new AgentFacet(withUndurableAnswers(makeCtx(db, placement.storageKey), placement.storageKey), env);
+
+      if (placement.home === MAIN_AGENT) joinedOnlyByItself(facet);
       const lost = new AbortController();
 
       // A reset isolate fails every call it still held, as a dropped RPC does; a refusal crosses in its own words, as an

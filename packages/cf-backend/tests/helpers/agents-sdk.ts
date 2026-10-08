@@ -131,6 +131,24 @@ export async function joinHarnessFibers(): Promise<void> {
   while (harnessFiberBodies.size > 0) await Promise.all(harnessFiberBodies);
 }
 
+/** Objects whose fibers no suite-wide join waits on: the workspace's own agent's isolate, whose chat turn runs in a fiber a
+ *  suite parks at its model call, as the in-object turn it replaced was no fiber. */
+const unjoined = new WeakSet<object>();
+
+export function joinedOnlyByItself(agent: workersModule.DurableObject): void {
+  unjoined.add(agent);
+}
+
+/** Each object's own `runFiber` bodies: an agent's isolate is an object of its own, its turn's fiber among them. */
+const harnessFiberBodiesOf = new WeakMap<object, Set<Promise<unknown>>>();
+
+/** Resolves when every `runFiber` body `agent` itself started so far has settled. */
+export async function joinHarnessFibersOf(agent: workersModule.DurableObject): Promise<void> {
+  const bodies = harnessFiberBodiesOf.get(agent);
+
+  while (bodies !== undefined && bodies.size > 0) await Promise.all(bodies);
+}
+
 /**
  * The isolate a reset kills, for the fibers it was running: their bodies never settle and their rows stay, so the next
  * activation's scan finds them interrupted and no join waits on them. A suite whose reset ends an activation with a
@@ -341,13 +359,17 @@ export function mockAgentsSdk(): void {
           snapshot: null,
         });
 
-        harnessFiberBodies.add(body);
+        if (!unjoined.has(this)) harnessFiberBodies.add(body);
+        const own = harnessFiberBodiesOf.get(this) ?? new Set<Promise<unknown>>();
+
+        harnessFiberBodiesOf.set(this, own.add(body));
 
         try {
           return await body;
         } finally {
           harnessActiveFibers.delete(id);
           harnessFiberBodies.delete(body);
+          own.delete(body);
           sql.exec(`DELETE FROM cf_agents_runs WHERE id = ?`, id);
         }
       }

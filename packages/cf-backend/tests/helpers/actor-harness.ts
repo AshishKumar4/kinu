@@ -47,7 +47,7 @@ import {
   type SleepTimeUpdate,
   type EgressSecretSummary,
 } from '@kinu.run/core';
-import { HARNESS_AGENT, harnessFibersRunning, harnessHolds, joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
+import { HARNESS_AGENT, harnessFibersRunning, harnessHolds, joinHarnessFibers, joinHarnessFibersOf, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
 import { fleetPlaneForTest, fleetPointWritten, openAnalyticsWindowForTest, type FleetPoint } from './analytics-plane';
 import { inProcessWorkerLoader } from './worker-loader';
 import { agentDatabase, failNextAnswerWrite, inProcessAgentFacets, scriptConversationModel } from './agent-facets';
@@ -706,7 +706,8 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     void this.sql`DELETE FROM workspace_capability`;
   }
 
-  harnessJoinDetachedFibers(): Promise<void> { return joinHarnessFibers(); }
+  /** This object's own detached fibers; its agents' isolates run theirs, a parked turn's among them. */
+  harnessJoinDetachedFibers(): Promise<void> { return joinHarnessFibersOf(this); }
 
   harnessOpenFiberRows(): { id: string; name: string }[] {
     return this.sql<{ id: string; name: string }>`SELECT id, name FROM cf_agents_runs ORDER BY created_at`;

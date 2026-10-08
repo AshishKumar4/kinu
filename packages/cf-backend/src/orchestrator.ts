@@ -894,6 +894,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       if (actorId === this.actorHandle().actorId) {
         this.mainChatOpenedAt = Date.now();
         this.mainFirstTokenHeard = false;
+        this.config.setHoldsTurns();
         this.turnClaimChanged();
       }
     }
@@ -3642,8 +3643,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }));
   }
 
+  /** Read from main's isolate once it ran a turn; before, there is nothing there, and no isolate is opened to say so. */
   private async mainStanding(): Promise<AgentStanding> {
     const main = this.actorHandle().actorId;
+
+    if (!this.config.getHoldsTurns()) return { messageCount: 0, context: null, latestRun: null, pendingSteers: [] };
 
     return await (await this.agentCalls(main)).standing(this.agentSnapshot(main), this.modelCatalog.contextWindow());
   }
@@ -4221,10 +4225,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }));
   }
 
-  /** Retired ones hold their stores until destroyed. */
+  /** Retired ones hold their stores until destroyed; main's isolate, once it ran a turn, and not opened for none. */
   private agentsWithStores(): string[] {
     return this.actorDirectoryStore().list({ retired: true })
-      .filter((record) => record.parentActorId === null || hostedActorPlacement(record).homeName !== null)
+      .filter((record) => (record.parentActorId === null ? this.config.getHoldsTurns() : hostedActorPlacement(record).homeName !== null))
       .map((record) => record.actorId);
   }
 
@@ -4380,6 +4384,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async listRuns(request?: PageRequest): Promise<Page<RunListEntry>> {
     const main = this.actorHandle().actorId;
 
+    if (!this.config.getHoldsTurns()) return { status: 'end', items: [] };
+
     return await (await this.agentCalls(main)).listRuns(this.agentSnapshot(main), request ?? null);
   }
 
@@ -4460,6 +4466,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async getRunSummaries(request?: PageRequest): Promise<Page<RunSummary>> {
     const main = this.actorHandle().actorId;
+
+    if (!this.config.getHoldsTurns()) return { status: 'end', items: [] };
 
     return await (await this.agentCalls(main)).runSummaries(this.agentSnapshot(main), request ?? null);
   }
