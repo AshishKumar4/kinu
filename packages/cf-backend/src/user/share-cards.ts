@@ -6,7 +6,7 @@
  */
 import * as v from 'valibot';
 import { LifecycleCapability, type LifecycleJobContext, type LifecycleJobOutcome } from 'agents/lifecycle';
-import { ShareCardSchema, shareCardOf, type ShareCard, type SqlExec, type UserCaller, type WorkspaceOverviewShare } from '@kinu.run/core';
+import { ShareCardSchema, type ShareCard, type SqlExec, type UserCaller, type WorkspaceOverviewShare } from '@kinu.run/core';
 import { deriveUserId } from '../auth/store';
 import { retriedLater } from '../advice-jobs';
 
@@ -27,6 +27,15 @@ export const ReceivedShareSchema = v.object({ ownerUserId: v.string(), workspace
 export type ReceivedShare = v.InferOutput<typeof ReceivedShareSchema>;
 
 const SentRowSchema = v.object({ share_id: v.string(), recipient_user_id: v.string(), card: v.string() });
+
+/** A share as its people's Drive shows it; `owner` is the sharing account's email. */
+function shareCardOf(share: WorkspaceOverviewShare, owner: string): ShareCard {
+  return {
+    kind: share.kind, title: share.title, description: share.description, createdAt: share.createdAt, owner,
+    ...(share.visibility !== undefined && { visibility: share.visibility }),
+    ...(share.fork !== undefined && { fork: share.fork }),
+  };
+}
 
 /** What a delivery asks of the recipient's account. */
 export interface ShareCardRecipient {

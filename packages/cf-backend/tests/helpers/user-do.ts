@@ -64,7 +64,7 @@ export function sqlExec(db: Database): SqlExec {
       if (statement.columnNames.length === 0) {
         statement.run(...bound);
 
-        return { toArray: () => [] };
+        return cursorOf([]);
       }
 
       const rows: SqlExecRow[] = statement.all(...bound).map((row) => Object.fromEntries(
@@ -77,9 +77,16 @@ export function sqlExec(db: Database): SqlExec {
         }),
       ));
 
-      return { toArray: () => rows };
+      return cursorOf(rows);
     },
   };
+}
+
+/** A cursor as the platform's is: its rows by `toArray()` and by iteration, which the SDK's job queue spreads. */
+function cursorOf(rows: SqlExecRow[]) {
+  const cursor = { toArray: () => rows, [Symbol.iterator]: () => rows[Symbol.iterator]() };
+
+  return cursor;
 }
 
 export interface TestUserDO {

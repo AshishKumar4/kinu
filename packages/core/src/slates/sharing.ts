@@ -5,7 +5,6 @@
 import * as v from 'valibot';
 import type { Impact } from '@agent-core/core/facets';
 import { LiveShareVisibilitySchema } from './live-share-visibility';
-import type { WorkspaceOverviewShare } from '../read-models/workspace-overview';
 
 
 export const SHARE_KINDS = ['blueprint', 'live'] as const;
@@ -247,14 +246,6 @@ export const ShareCardSchema = v.object({
 });
 
 export type ShareCard = v.InferOutput<typeof ShareCardSchema>;
-
-export function shareCardOf(share: WorkspaceOverviewShare, owner: string): ShareCard {
-  return {
-    kind: share.kind, title: share.title, description: share.description, createdAt: share.createdAt, owner,
-    ...(share.visibility !== undefined && { visibility: share.visibility }),
-    ...(share.fork !== undefined && { fork: share.fork }),
-  };
-}
 
 const OwnedSlateSchema = v.object({
   id: v.string(),
