@@ -2,7 +2,7 @@
 // parts stream before the completion exists, concurrent turns on one binding stay apart whatever shape `Ai.run` hands
 // each (workerd rereads its options after awaiting), and a refusal keeps the status the stack's retry reads.
 import { describe, test, expect } from 'bun:test';
-import { APICallError, generateText, streamText, tool, jsonSchema, type ModelMessage, type TextStreamPart, type ToolSet } from 'ai';
+import { APICallError, generateText, stepCountIs, streamText, tool, jsonSchema, type ModelMessage, type TextStreamPart, type ToolSet } from 'ai';
 import { JsonObjectSchema, type JsonObject } from '@kinu.run/core';
 import * as v from 'valibot';
 import { bindingModel, DONE, eventStream, eventStreamOf, sharedBindingModels, sse, type BindingAnswer, type RecordedRun } from './helpers/workers-ai-model';
@@ -420,24 +420,40 @@ describe('Workers AI binding — tool-call ids', () => {
     expect(ids[2]).toMatch(/-i-3$/u);
   });
 
+  // KINU-N002 inside one turn: both responses name their call "0", and the third request replays both results.
   test('a tool result pairs back to its own call across two responses in one turn', async () => {
     const commands = [{ cmd: 'ls' }, { cmd: 'pwd' }];
     let step = 0;
 
-    const { model } = bindingModel(() => eventStreamOf([
-      sse({ tool_calls: [{ name: 'shell', arguments: commands[step++] ?? {} }] }),
-      DONE,
-    ].join('')));
+    const { model, runs } = bindingModel(() => {
+      const command = commands[step++];
 
-    const answered = new Map<string, unknown>();
+      return eventStreamOf([sse(command === undefined ? { response: 'done' } : { tool_calls: [{ id: '0', name: 'shell', arguments: command }] }), DONE].join(''));
+    });
 
-    for (const _step of commands) {
-      for (const call of await streamText({ model, tools: shellTool, prompt: PROMPT, maxRetries: 0 }).toolCalls) {
-        answered.set(call.toolCallId, call.input);
-      }
-    }
+    const tools = {
+      shell: tool({
+        description: 'Run a shell command in the workspace.',
+        inputSchema: jsonSchema<{ cmd: string }>({ type: 'object', required: ['cmd'], properties: { cmd: { type: 'string' } } }),
+        execute: async ({ cmd }) => ({ ran: cmd }),
+      }),
+    };
 
-    expect([...answered.values()]).toEqual(commands);
+    expect(await streamText({ model, tools, prompt: PROMPT, maxRetries: 0, stopWhen: stepCountIs(3) }).text).toBe('done');
+
+    const sent = v.parse(v.array(JsonObjectSchema), runs[2]?.inputs.messages);
+    const CallSchema = v.object({ id: v.string(), function: v.object({ arguments: v.string() }) });
+
+    const asked = new Map(sent.flatMap((message) => v.parse(v.optional(v.array(CallSchema), []), message.tool_calls))
+      .map((call) => [call.id, v.parse(v.object({ cmd: v.string() }), JSON.parse(call.function.arguments)).cmd]));
+
+    const answered = sent.filter((message) => message.role === 'tool').map((message) => [
+      asked.get(v.parse(v.string(), message.tool_call_id)),
+      v.parse(v.object({ ran: v.string() }), JSON.parse(v.parse(v.string(), message.content))).ran,
+    ]);
+
+    expect(asked.size).toBe(2);
+    expect(answered).toEqual([['ls', 'ls'], ['pwd', 'pwd']]);
   });
 });
 
