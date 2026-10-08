@@ -31,6 +31,7 @@ import {
   type SqlExec, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
   isSubordinateOrigin,
   whenActorTakesInput,
+  type PlanEdit, type PlanReviewResult,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { agentFacet, agentStateShellId, AgentMemory, AgentStoreBroker, AgentWorkspaceHost, headDeltas, uiChunks, type AgentFacetPlacement } from "./agent-facets";
@@ -215,6 +216,7 @@ import {
   ActorAgent,
   type ActorDynamicContextExtras,
   type ActorToolDeps,
+  type HostedPlanReviews,
   type UntimedArms,
 } from "./actor-agent";
 import {
@@ -2223,6 +2225,24 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
+  protected override hostedPlanReviews(actorId: string): HostedPlanReviews | null {
+    if (this.hostedReference(actorId) === null) return null;
+    const facet = () => this.agentCalls(actorId);
+    const snapshot = () => this.agentSnapshot(actorId);
+
+    return {
+      active: async () => await (await facet()).activePlanReview(snapshot()),
+      saveAnnotations: async (id, revision, annotations) => await (await facet()).savePlanReviewAnnotations(snapshot(), id, revision, annotations),
+      dismiss: async (id, revision) => await (await facet()).dismissPlanReview(snapshot(), id, revision),
+      decide: async (id, revision, decision, feedback) => await (await facet()).decidePlanReview(snapshot(), { id, revision, decision, ...(feedback !== undefined && { feedback }) }),
+    };
+  }
+
+  /** A hosted agent's Plan turn submits through this, into its own store (`submitPlan` on its turn's tool surface). */
+  protected async hostedPlanSubmit(actorId: string, edits: readonly PlanEdit[]): Promise<PlanReviewResult> {
+    return await (await this.agentCalls(actorId)).submitPlan(this.agentSnapshot(actorId), edits);
+  }
+
   private hirerName(record: WorkspaceActor): string {
     const hirer = record.parentActorId === null ? null : this.workspaceActors().list().find((actor) => actor.actorId === record.parentActorId);
 
@@ -4208,7 +4228,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         mission: entry.birth?.seed.mission ?? '',
         model: { model: profile.tier.model, source: profile.tier.source },
         reasoningEffort: profile.tier.reasoningEffort,
-        activePlan: child.stores.planReviews.getActive(CHAT_SESSION_ID),
+        // Its plans live in its own isolate (D9).
+        activePlan: yield* Effect.promise(async () => await (await this.agentCalls(child.handle.actorId)).activePlanReview(this.agentSnapshot(child.handle.actorId))),
         // Counted in the store: the pane holds only a window.
         messageCount: yield* Effect.promise(async () => this.agentStores(child.handle.actorId).messageCount()),
         // Read with the child's actor id; same rule as `pendingSteerRuns()`: a steer is a row bound to a turn.
