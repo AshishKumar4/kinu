@@ -8,6 +8,7 @@ export { Devbox };
 import { createHash } from 'node:crypto';
 
 import type { StoredValue } from '../../src/storage';
+import { describeThrown, type LateStartFailure } from '../../src/lifecycle';
 import { TOOLS_STAMP } from '../../src/tools';
 import { shellSyntaxError } from "./container-shell";
 import { DEVBOX_SCRATCH_PREFIX } from './scratch';
@@ -811,8 +812,11 @@ export class FakeSandbox {
   readonly shimCalls: string[] = [];
   owner: { alarm(): Promise<void>; onStop(): Promise<void> } | undefined;
   nativeExec: Container['exec'] | undefined;
-  /** The model's start behind the platform's synchronous `start`; a failure surfaces at the next exec. */
+  /** The model's start behind the platform's synchronous `start`. As on the platform, a refused start rejects
+   *  `monitor()` with its words, and the next exec says only that the container has not been started. */
   #opening: Promise<PromiseSettledResult<void>[]> | undefined;
+  /** Each refused start's words, as `monitor()` gave them. */
+  readonly refusedStarts: string[] = [];
   #pid = 10;
   #ended = Promise.withResolvers<void>();
 
@@ -842,8 +846,16 @@ export class FakeSandbox {
 
         // As the platform does without an image.
         if (options?.image === '') throw new TypeError('ctx.container.start(): image must not be empty');
-        this.#ended = Promise.withResolvers<void>();
-        this.#opening = Promise.allSettled([this.#open(options)]);
+        const ended = Promise.withResolvers<void>();
+        // Recorded here as well, so a refusal no caller monitors is no unhandled rejection.
+        ended.promise.catch((refusal: LateStartFailure['cause']) => { this.refusedStarts.push(describeThrown({ cause: refusal })); });
+        this.#ended = ended;
+
+        this.#opening = Promise.allSettled([this.#open(options)]).then((settled) => {
+          if (settled[0]?.status === 'rejected') ended.reject(settled[0].reason);
+
+          return settled;
+        });
       },
       monitor: () => this.#ended.promise,
       destroy: async () => { await this.destroy(); this.#ended.resolve(); },
@@ -903,7 +915,7 @@ export class FakeSandbox {
 
     this.#opening = undefined;
 
-    if (opened?.status === 'rejected') throw opened.reason;
+    if (opened?.status === 'rejected') throw new Error('The container has not been started');
     const held = this.stateReadGate;
 
     if (held !== undefined) { this.stateReadGate = undefined; held.enter(); await held.promise; }
