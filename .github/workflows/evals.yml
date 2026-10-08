@@ -90,6 +90,7 @@ jobs:
     # (AGENTS.md).
     environment: eval
     permissions:
+      actions: read
       contents: read
     strategy:
       fail-fast: false
@@ -116,9 +117,32 @@ jobs:
           source scripts/repo-runtime.sh
           echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
 
+      # Production changes rarely, so its leg is measured once per build and eval definitions, then
+      # reused: the key names the build, the evals tree that measured it and the trial count.
+      - name: Find a stored baseline
+        id: stored
+        if: matrix.leg == 'baseline'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BASELINE: ${{ needs.plan.outputs.baseline }}
+        run: |
+          name="kinu-evals-baseline-${BASELINE}-$(git rev-parse HEAD:evals)-${EVAL_TRIALS}"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          id=$(gh api "repos/$GH_REPO/actions/artifacts?name=$name&per_page=100" \
+            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last | .id // ""')
+          if [[ -n "$id" ]]; then
+            mkdir -p bench-artifacts/evals
+            gh api "repos/$GH_REPO/actions/artifacts/$id/zip" > /tmp/baseline.zip
+            unzip -q /tmp/baseline.zip -d bench-artifacts/evals
+            echo "Baseline: reusing $name" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
       # A failed trial is data, so the step goes on to upload; compare.ts names a leg that is not a
       # complete report, and the verdict fails on it.
       - name: Run every task against ${{ matrix.origin }}
+        if: matrix.leg == 'candidate' || steps.stored.outputs.id == ''
         continue-on-error: true
         env:
           KINU_EVAL_ORIGIN: ${{ matrix.origin }}
@@ -133,8 +157,20 @@ jobs:
         run: bun run evals
 
       - name: Summarize the report
+        id: complete
         continue-on-error: true
+        shell: bash
         run: bun evals/scripts/validate.ts bench-artifacts/evals/results.json --trials "$EVAL_TRIALS" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # Only a complete baseline is stored; an incomplete one is still compared here, and measured again next run.
+      - name: Store the baseline for later runs
+        if: matrix.leg == 'baseline' && steps.stored.outputs.id == '' && steps.complete.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.stored.outputs.name }}
+          path: bench-artifacts/evals/results.json
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Upload the report
         uses: actions/upload-artifact@v4
@@ -147,11 +183,11 @@ jobs:
       # Each trial's evidence, a failed one's above all: its transcript and ledger, the files and
       # slates its workspace held, and the data they served, scrubbed like the report (redact.ts).
       - name: Scrub every trial's evidence
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && (matrix.leg == 'candidate' || steps.stored.outputs.id == '') }}
         run: bun evals/scripts/scrub-evidence.ts bench-artifacts
 
       - name: Upload every trial's evidence
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && (matrix.leg == 'candidate' || steps.stored.outputs.id == '') }}
         uses: actions/upload-artifact@v4
         with:
           name: kinu-evals-evidence-${{ matrix.leg }}

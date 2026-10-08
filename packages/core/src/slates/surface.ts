@@ -10,7 +10,7 @@ import { settleSync } from '../obs/effect';
 import { isSlateMethodName } from './rpc';
 import { SLATE_READ_MODELS, type SlateReadModel } from './read-models';
 import { grantAdmits } from './capability-graph';
-import { AI_RUN_MEMBER, AI_STREAM_MEMBER, slateAddressImpact } from './members';
+import { AI_RUN_MEMBER, AI_STREAM_MEMBER, slateAddressImpact, slateOwnerOnly } from './members';
 import type { Impact } from '@agent-core/core/facets';
 import type { ShareGrant } from './sharing';
 import { WEB_SANDBOX_IMPACTS } from '../operations/web';
@@ -22,7 +22,8 @@ const WORKSPACE_EXECUTOR = 'workspace';
  * What only the agent does, never a page it shows: delegating, steering itself, reporting, making tools and changing
  * slates. Matched on `namespace.member`, `*` for either half; a member the impact table keeps from slates is refused too.
  */
-const SLATE_EXCLUDED = ['agents.*', 'agent.*', 'report.*', '*.createTool', '*.slate', '*.slates'] as const;
+/** `agents.*` is not here: the catalog keeps it to the owner's own slate (`slateOwnerOnly`). */
+const SLATE_EXCLUDED = ['agent.*', 'report.*', '*.createTool', '*.slate', '*.slates'] as const;
 
 export const SlateCallRequestSchema = v.strictObject({
   /** `[member]` of the workspace executor, `[namespace, member]`, or `[namespace, name, member]` under `mcp` and `slates`. */
@@ -247,8 +248,11 @@ interface SlateCallInput {
   readonly chain: readonly string[];
 }
 
-export function routeSlateCall(input: SlateCallInput): SlateCall {
-  return settleSync(routed(input.id, input.request, input.chain));
+/** `hosted`: the slate calls as a hosted actor, which reaches none of what only the owner's own slate does. */
+export function routeSlateCall(input: SlateCallInput & { readonly hosted?: boolean }): SlateCall {
+  return settleSync(Effect.flatMap(routed(input.id, input.request, input.chain), (call) => (input.hosted === true && slateOwnerOnly(call.address)
+    ? Effect.fail(new KinuError('denied', `${call.address.namespace}.${call.address.member} runs only in the workspace owner's own slate`))
+    : Effect.succeed(call))));
 }
 
 interface ViewerCallInput extends SlateCallInput {
@@ -265,6 +269,8 @@ function admitViewer(call: SlateCall, input: ViewerCallInput): Effect.Effect<Sla
   const { id, grant } = input;
   const { route: found, address } = call;
   const refused = new KinuError('denied', `Slate ${id} does not grant ${address.namespace}.${address.member} to viewers`);
+
+  if (slateOwnerOnly(address)) return Effect.fail(new KinuError('denied', `${address.namespace}.${address.member} runs only in its owner's own slate, never for a share's viewer`));
 
   if (found.kind === 'app') return grant.slates.includes(found.id) ? Effect.succeed(call) : Effect.fail(refused);
   const entry = grantAdmits(grant, id, address.namespace, address.member);

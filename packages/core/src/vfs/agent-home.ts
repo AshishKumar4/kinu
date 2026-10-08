@@ -74,10 +74,13 @@ function headAgentName(headId: string): Effect.Effect<string> {
 
 /**
  * An actor's home, from its storage key and kind; the workspace's own agent's is {@link MAIN_AGENT}. The one
- * derivation creation, the file plane and retirement share: a roster name is unique only under one parent.
+ * derivation creation, the file plane and retirement share. A hire keyed by its own name, one no other actor of the
+ * workspace has had, lives under it (`/home/fix-coupon-expiry`); any other's key is its id, behind a prefix.
  */
-export function actorHomeName(record: Pick<WorkspaceActor, 'origin' | 'storageKey'>): string {
+export function actorHomeName(record: Pick<WorkspaceActor, 'origin' | 'name' | 'storageKey'>): string {
   if (record.origin === 'system') return MAIN_AGENT;
+
+  if (isSubordinateOrigin(record.origin) && record.storageKey === record.name) return settleSync(validAgentName(record.name));
   const { id } = parseActorKey(record.storageKey);
 
   return settleSync(isSubordinateOrigin(record.origin) ? subordinateAgentName(id) : headAgentName(id));

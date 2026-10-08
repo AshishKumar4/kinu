@@ -150,7 +150,7 @@ describe("a delegated run settles its hirer's roster", () => {
     roster.assign('researcher', brief);
     await runDelegatedTask(workspace, child.actor.handle.actorId, brief);
 
-    const endings = agentSql(child.actor.handle.actorId)<{ reason: string }>`
+    const endings = agentSql(workspace, child.actor.handle.actorId)<{ reason: string }>`
       SELECT json_extract(payload, '$.reason') AS reason FROM run_events WHERE type = 'run_end'`;
 
     expect(endings).toEqual([{ reason: 'completed' }]);

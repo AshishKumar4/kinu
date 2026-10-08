@@ -29,7 +29,7 @@ const JOB_SILENCE_MS = silenceBoundMs('job.context_silence_ms');
 /** Four probes a bound, so one lost answer never decides. */
 const JOB_PROBE_MS = JOB_SILENCE_MS / 4;
 
-/** Shared with each backend's fiber-recovery hook, which matches on it. */
+/** Shared with each backend's start-of-life recovery, which matches on it. */
 export const BACKGROUND_FIBER_PREFIX = 'bg:';
 
 /**

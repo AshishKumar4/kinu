@@ -34,7 +34,8 @@ type Opening = v.InferInput<typeof OpeningSchema>;
 export function NewChatView({ workspace, title, createChat }: {
   workspace: string;
   title: string;
-  createChat: () => Promise<{ name: string }>;
+  /** `opening` names the chat; it is sent once the chat exists. */
+  createChat: (opening: string) => Promise<{ name: string }>;
 }) {
   const navigate = useNavigate();
   const files = usePendingAttachments(CLOUD_MAX_INLINE_ATTACHMENT_BYTES);
@@ -50,7 +51,7 @@ export function NewChatView({ workspace, title, createChat }: {
     setError(null);
 
     return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      const created = yield* Effect.promise(createChat);
+      const created = yield* Effect.promise(async () => createChat(opening));
       const state: Opening = { opening, attachments: [...files.parts] };
       yield* Effect.promise(async () => navigate(`/workspace/${workspace}/agents/${encodeURIComponent(created.name)}`, { state }));
     }), showing(setError)), Effect.sync(() => setBusy(false)));

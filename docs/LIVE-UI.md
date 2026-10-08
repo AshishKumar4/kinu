@@ -162,9 +162,12 @@ the same prelude (`packages/cf-backend/src/browser-prelude.ts`), and its socket 
 browser. A share's viewer runs with no actor and reaches no owner's session. A page asks its class: a CDP socket
 cannot cross the page's RPC.
 
-What only the agent does refuses wherever it is asked: `agents.*`, the agent's
-own `agent.*` controls, `createTool` and the `slates` lifecycle member of any
-executor (`SLATE_EXCLUDED`). The host records each member a slate calls as its
+What only the agent does refuses wherever it is asked: the agent's own
+`agent.*` controls, `createTool` and the `slates` lifecycle member of any
+executor (`SLATE_EXCLUDED`). `agents.*` is the owner's own slate's alone
+(`slate: 'owner'` in the catalog): routed for the workspace root calling with
+no share, through the `ownerSlate` surface policy; refused to a hosted actor's
+slate where the host routes it, to a share's viewer, and to any share grant. The host records each member a slate calls as its
 owner runs it (`slate_usage`): that record is the slate's graph, what a share
 can grant and what a blueprint requires.
 
