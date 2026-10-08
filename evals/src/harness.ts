@@ -261,9 +261,10 @@ async function closeWorkspace(session: KinuPublicSession, evidence: readonly Evi
 
 /**
  * One trial of one task on the deployment: a fresh workspace, then per turn the seeded files, the
- * prompt, the wait until the workspace settles, and the checks. It stops at the first turn that
- * fails, because every later turn builds on it, keeps the trial's evidence under `evidenceRoot`, and
- * deletes the workspace whatever happened.
+ * prompt, the wait until the workspace settles, and the checks. A failed check ends its part, because
+ * the part's later turns build on it, and the next part runs; a turn the deployment did not complete
+ * ends the trial. It keeps the trial's evidence under `evidenceRoot`, and deletes the workspace
+ * whatever happened.
  */
 export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: TrialIdentity, evidenceRoot: string) {
   return createHarness<EvalRunInput, EvalRunOutput>({
