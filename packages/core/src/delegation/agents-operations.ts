@@ -31,7 +31,7 @@ const optional = <S extends v.GenericSchema>(schema: S) => v.optional(schema);
 
 /** Fields join by wiring, so an operation's entries are assembled, not declared whole. */
 const agentsOp = (name: AgentsOp, help: string, plan: boolean, entries: v.ObjectEntries) =>
-  defineOperation({ ns: 'agents', name, help, impact: AGENTS_IMPACTS[name], plan, slate: false, input: v.strictObject(entries), output: JsonValueSchema });
+  defineOperation({ ns: 'agents', name, help, impact: AGENTS_IMPACTS[name], plan, slate: 'owner', input: v.strictObject(entries), output: JsonValueSchema });
 
 /** A search's fields; `role` and `tier` are described as the wiring has them. */
 function swarmEntries(role: v.GenericSchema, tier: v.GenericSchema): v.ObjectEntries {

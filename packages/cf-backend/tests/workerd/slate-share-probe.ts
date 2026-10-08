@@ -42,7 +42,7 @@ const TRIAGE = {
     ['memory', 'recall'], ['memory', 'remember'], ['agent', 'send'], ['slates', 'triage-digest', 'summary'],
   ],
   'triage-digest': [['readFile'], ['slates', 'issues', 'refresh']],
-  // What a slate never reaches: control of its calling agent, delegation, or making tools.
+  // What a slate never reaches: control of its calling agent, or making tools; and helpers, the owner's own slate's alone.
   overreach: [['agents', 'hire'], ['agent', 'hire'], ['workspace', 'createTool']],
 } as const;
 

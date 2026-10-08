@@ -265,7 +265,7 @@ export {
   type LiveShareRecord, type LiveShareCreated, type ViewerCall, type ViewerRequestRecord, type ShareViewerClaim,
 } from './slates/sharing';
 
-export { slateAddressImpact } from './slates/members';
+export { slateAddressImpact, slateOwnerOnly } from './slates/members';
 
 export {
   slateCapabilityGraph, cutShareGrant, grantAdmits, type SlateSurfaceCatalog, type SlateUsage,

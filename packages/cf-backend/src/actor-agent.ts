@@ -3042,8 +3042,10 @@ export abstract class ActorAgent extends Agent<Env> {
 
       switch (route.kind) {
         case 'namespace': {
-          const authority = yield* Effect.promise(async () => this.slateAuthority(mode, this.slateNamespaces(mode)));
-          const providers = providersInWorkMode(authority.mode, this.slateNamespaces(mode));
+          // The root's own path: a share's viewer comes here too, and never holds `agents`.
+          const owner = context.viewer !== true;
+          const authority = yield* Effect.promise(async () => this.slateAuthority(mode, this.slateNamespaces(mode, owner)));
+          const providers = providersInWorkMode(authority.mode, this.slateNamespaces(mode, owner));
 
           return yield* Effect.promise(async () => slateMember(slateToolReach(authority.reach).narrowProviders(providers), route, context));
         }
@@ -3287,12 +3289,12 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /**
-   * The eval namespaces a slate's surface reaches, as this actor's programs reach them, less `agents`, `tools` and
-   * `state`; the host refuses what else only the agent does. Read per call: executors attach and detach while this
-   * object lives.
+   * The eval namespaces a slate's surface reaches, as this actor's programs reach them, less `tools` and `state`, and
+   * less `agents` unless `owner`: the owner's own slate, as the owner, with no share in it. The host refuses what else
+   * only the agent does. Read per call: executors attach and detach while this object lives.
    */
-  protected slateNamespaces(mode: WorkMode): CodemodeProvider[] {
-    return actorNamespaces(this.surfaceActor(mode), SURFACE_POLICY.slate);
+  protected slateNamespaces(mode: WorkMode, owner = false): CodemodeProvider[] {
+    return actorNamespaces(this.surfaceActor(mode), owner ? SURFACE_POLICY.ownerSlate : SURFACE_POLICY.slate);
   }
 
   /** This actor as every caller's namespaces are built over it (`actorNamespaces`); it delegates in `mode`. */

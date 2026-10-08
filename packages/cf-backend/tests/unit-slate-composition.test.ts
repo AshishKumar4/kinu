@@ -463,7 +463,7 @@ test('a slate never reaches what only the agent does', async () => {
   await writeText(files, '/slates/limited/package.json', JSON.stringify({ main: 'server.ts' }));
   const call = (path: string[], args: JsonValue[] = []) => surface(actor.agent, ROOT_SLATE_CALLER, 'limited')(path, args);
 
-  for (const path of [['agents', 'hire'], ['agent', 'hire'], ['workspace', 'createTool'], ['workspace', 'slate'], ['report', 'send'], ['tasks', 'switchRole']]) {
+  for (const path of [['agent', 'hire'], ['workspace', 'createTool'], ['workspace', 'slate'], ['report', 'send'], ['tasks', 'switchRole']]) {
     expect(await call(path, [{ mission: 'should not run' }]), path.join('.')).toMatchObject({ ok: false, reason: 'denied' });
   }
 
@@ -474,6 +474,38 @@ test('a slate never reaches what only the agent does', async () => {
   expect(await call(['tasks', 'list'])).toMatchObject({ ok: true });
   expect(await call(['tasks', 'add'], [false])).toMatchObject({ ok: false, reason: 'bad_input' });
   expect(await call(['memory', 'remember'], ['key', 'value', false])).toMatchObject({ ok: false, reason: 'bad_input' });
+});
+
+test('the owner\'s own slate hires a helper and lists it as the owner does; a hired agent\'s slate does neither', async () => {
+  const gateway = stubAiBinding((run) => chatCompletion(run, 'Counted 3 files.'));
+  const parent = orchestratorHarness(undefined, { aiGateway: gateway });
+  parent.agent.harnessInstallCatalog({ tiers: { default: { model: GATEWAY_MODEL } }, availableModels: [GATEWAY_MODEL] });
+  const files = workspaceFiles(parent.agent);
+  await files.mkdir('/slates/board', { recursive: true });
+  await writeText(files, '/slates/board/package.json', JSON.stringify({ main: 'server.ts' }));
+  const asOwner = surface(parent.agent, ROOT_SLATE_CALLER, 'board');
+
+  expect(await asOwner(['agents', 'hire'], [{ role: 'task', name: 'counter', mission: 'Count the files in /home' }])).toMatchObject({ ok: true });
+  expect((await parent.agent.listSubordinates()).map((entry) => entry.name)).toContain('counter');
+
+  const listed = await asOwner(['agents', 'list']);
+
+  expect(listed.ok && JSON.stringify(listed.value)).toContain('counter');
+  // Its graph says it delegates, as the owner sees before sharing anything.
+  const graph = await parent.agent.slateAs(ROOT_SLATE_CALLER, { op: 'graph', id: 'board' });
+
+  expect(graph.ok && JSON.stringify(graph.value)).toContain('"member":"hire","impact":"delegate"');
+
+  // The helper's own slate reaches no helpers: refused where the host routes it, before any actor is asked.
+  const child = await hostedSubordinateHarness(parent, { name: 'reader', displayName: 'Reader', nameOrigin: 'user', roleId: 'task', mission: 'Read' });
+  const asChild = await childCaller(parent.db, actorHomeName({ origin: 'agent', storageKey: child.actor.handle.storageKey }), 'reader');
+  const own = child.actor.runtime.storage.vfs;
+  await own.mkdir('/slates/own', { recursive: true });
+  await writeText(own, '/slates/own/package.json', JSON.stringify({ main: 'server.ts' }));
+
+  for (const path of [['agents', 'list'], ['agents', 'hire']]) {
+    expect(await surface(parent.agent, asChild, 'own')(path, [{ role: 'task', mission: 'should not run' }]), path.join('.')).toMatchObject({ ok: false, reason: 'denied' });
+  }
 });
 
 test('a slate\'s file write in Plan is refused before it lands', async () => {

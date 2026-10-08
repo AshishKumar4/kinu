@@ -59,7 +59,12 @@ function namespaceMemberImpact(namespace: string, member: string): Impact | null
   if (sandboxWeb !== undefined) return sandboxWeb;
   const op = DECLARED.get(namespace)?.get(member);
 
-  return op?.slate === true ? op.impact : null;
+  return op?.slate === true || op?.slate === 'owner' ? op.impact : null;
+}
+
+/** A member only the owner's own slate reaches, as the owner: a share never grants it, a hosted actor's slate never holds it. */
+export function slateOwnerOnly(address: { readonly namespace: string; readonly member: string }): boolean {
+  return DECLARED.get(address.namespace)?.get(address.member)?.slate === 'owner';
 }
 
 /**
