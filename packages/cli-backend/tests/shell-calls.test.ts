@@ -69,7 +69,9 @@ test("an eval's exec carries the call's job and cancel: the job's name answers b
 
   // Started first, so it holds the name when the later call reaches it.
   const held = run("return await workspace.exec('sleep 600', { name: 'server' });", { abortSignal: stop.signal, [DEVICE_REQUEST_OPTION]: job });
-  await expect(run("return await workspace.exec('echo hi', { name: 'server' });")).rejects.toThrow('shell server is busy with job job-1');
+  await expect(run("return await workspace.exec('echo hi', { name: 'server' });")).rejects.toMatchObject({
+    outcome: { success: false, reason: 'unavailable' },
+  });
   stop.abort();
-  await expect(held).rejects.toThrow('Command aborted');
+  await expect(held).rejects.toMatchObject({ outcome: { success: false, reason: 'io' } });
 });

@@ -27,9 +27,10 @@
  * Both halves of the claim therefore hold, and they hold for different reasons:
  *   - a barrel re-export counts as a reference, because the chain ends at an
  *     entry and an entry's exports are the package's published surface;
- *   - `ignoreExportsUsedInFile: true` (this repository's setting) drops any
- *     export referenced anywhere inside its own file, which is `FORK_STRATEGY_ID`
- *     exactly: declared at `strategy/heads.ts:36` and read at `:40`.
+ *   - `ignoreExportsUsedInFile: true` (this repository's setting until
+ *     2026-10-07) dropped any export referenced anywhere inside its own file,
+ *     which was `FORK_STRATEGY_ID` exactly: declared at `strategy/heads.ts:36` and
+ *     read at `:40`. It is false now, so `gate:dead-code` names such an export.
  *
  * On this tree `packages/core/src/index.ts` is core's `main` and does
  * `export * from './strategy/index'`, which does `export * from './node-workspace'`.

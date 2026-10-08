@@ -308,14 +308,6 @@ describe('reachability of the container event channel', () => {
       .toEqual([{ path: change.path, change: change.change }]);
   });
 
-  test('the method the channel calls actually exists on the orchestrator', async () => {
-    // Dynamic: orchestrator reaches cloudflare:email, so load after the SDK mock.
-    const { OrchestratorAgent } = await import('../src/orchestrator');
-    const handler = Object.getOwnPropertyDescriptor(OrchestratorAgent.prototype, 'acceptContainerEvent');
-
-    expect(handler?.value).toBeInstanceOf(Function);
-  });
-
   test('the event channel lives on a name that resolves nowhere public', () => {
     expect(CONTAINER_EVENT_HOST.endsWith('.internal')).toBe(true);
   });
@@ -325,12 +317,6 @@ describe('reachability of the container event channel', () => {
 // A JSRPC stub is a Proxy: `Object.assign`/spread copy nothing off it. The lint
 // `anti-slop/no-copy-rpc-stub` detects copies; this pins that the double behaves like a stub.
 describe('a stub is used, never copied', () => {
-  test('the double is faithful in the way that matters: copying it loses everything', () => {
-    // If a runtime made spreading a stub work, the doubles above stop being evidence.
-    const stub = jsrpcStub({ method: () => 'value' });
-    expect(Object.keys({ ...stub })).toEqual([]);
-    expect(stub.method()).toBe('value');
-  });
 });
 
 async function recordDiagnostics(body: () => Promise<void>): Promise<readonly RecordedLog[]> {

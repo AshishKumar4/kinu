@@ -229,8 +229,12 @@ describe('migration and rotation', () => {
       .toEqual({ Authorization: 'Bearer sk-rotate' });
     const resealed = present(storedValue(rotated, 'openai.bearer'), 'the re-sealed openai.bearer row');
     expect(resealed).not.toBe(sealedUnderOldKey);
-    const nextKeyId = (await createCredentialCipher({ CREDENTIAL_ENCRYPTION_KEY: NEXT_KEY })).keyId;
-    expect(resealed.startsWith(`pce1.${nextKeyId}.`)).toBe(true);
+
+    // Re-sealed under the new key: a deployment that holds only that key reads it.
+    const nextOnly = createTestUserDO({ credentialEncryptionKey: NEXT_KEY, storage: rotated.db });
+    expect(await nextOnly.userDO.getAuthHeaders(await rotatedOwner(), 'openai.bearer'))
+      .toEqual({ Authorization: 'Bearer sk-rotate' });
+    nextOnly.close();
     rotated.close();
   });
 

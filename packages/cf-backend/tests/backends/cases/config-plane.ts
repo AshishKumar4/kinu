@@ -5,7 +5,6 @@ import type { SharedCase } from '../cases';
 export const CONFIG_PLANE_CASES: readonly SharedCase[] = [
   {
     title: 'a reasoning effort set is the effort read back; null clears it; an unknown level is refused',
-    covers: ['setReasoningEffort', 'getReasoningEffort'],
     async run({ surface }) {
       expect(await surface.getReasoningEffort()).toEqual({ effort: null });
       expect(await surface.setReasoningEffort('high')).toEqual({ ok: true, effort: 'high' });
@@ -20,7 +19,6 @@ export const CONFIG_PLANE_CASES: readonly SharedCase[] = [
   },
   {
     title: 'a pinned model is stored in its canonical spelling and read back',
-    covers: ['setModel', 'getStoredModelSpec'],
     async run({ surface }) {
       expect(await surface.getStoredModelSpec()).toEqual({ spec: null });
       // A bare `@cf/` id names no provider; both backends store the provider it runs on.
@@ -30,7 +28,6 @@ export const CONFIG_PLANE_CASES: readonly SharedCase[] = [
   },
   {
     title: 'the account a workspace pays a provider with is read back; null clears it; a bad name is refused',
-    covers: ['getProviderAccounts', 'setProviderAccount'],
     async run({ surface }) {
       expect(await surface.getProviderAccounts()).toEqual({ accounts: {} });
       expect(await surface.setProviderAccount('openai', 'work')).toEqual({ ok: true, accounts: { openai: 'work' } });
@@ -42,7 +39,6 @@ export const CONFIG_PLANE_CASES: readonly SharedCase[] = [
   },
   {
     title: 'a role the catalog holds becomes the selection; one it does not is refused',
-    covers: ['setRole'],
     async run({ surface }) {
       expect(await surface.setRole('auditor')).toEqual({ role: 'auditor' });
       await expect(surface.setRole('no-such-role')).rejects.toThrow('no-such-role');
@@ -50,7 +46,6 @@ export const CONFIG_PLANE_CASES: readonly SharedCase[] = [
   },
   {
     title: 'the shell approval mode is strict until set; a mode outside the three is refused',
-    covers: ['getShellApprovalMode', 'setShellApprovalMode'],
     async run({ surface }) {
       expect(await surface.getShellApprovalMode()).toEqual({ mode: 'strict' });
       expect(await surface.setShellApprovalMode('deny_all')).toMatchObject({ ok: true, mode: 'deny_all' });
@@ -62,7 +57,6 @@ export const CONFIG_PLANE_CASES: readonly SharedCase[] = [
   },
   {
     title: 'revoking a standing shell grant removes exactly that grant',
-    covers: ['getShellApprovalGrants', 'revokeShellApprovalGrants'],
     async run({ surface, actor }) {
       expect(await surface.getShellApprovalGrants()).toEqual({ grants: [] });
       // Two grants as the gate stores them when the owner answers "always".
@@ -77,7 +71,6 @@ export const CONFIG_PLANE_CASES: readonly SharedCase[] = [
   },
   {
     title: 'always-active skills are the names set; an empty list clears the pin',
-    covers: ['setAlwaysActiveSkills', 'getAlwaysActiveSkills'],
     async run({ surface }) {
       expect(await surface.getAlwaysActiveSkills()).toEqual({ names: [] });
       await surface.setAlwaysActiveSkills(['deploy-checklist', 'release-notes']);

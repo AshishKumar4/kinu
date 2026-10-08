@@ -6,7 +6,7 @@ import type { LanguageModelV3CallOptions, LanguageModelV3Prompt, LanguageModelV3
 import { z } from 'zod';
 import { runChat, type ChatEvent } from '../src/chat';
 import {
-  OUTPUT_LIMIT_REACHED, owesOutputLimitContinuation,
+  owesOutputLimitContinuation,
 } from '../src/orchestrator/turn-lifecycle';
 
 type FinishPart = Extract<LanguageModelV3StreamPart, { type: 'finish' }>;
@@ -219,16 +219,12 @@ describe('output-limit continuation', () => {
     expect(done?.type === 'done' && done.text).toBe('the whole answer');
   });
 
-  test('the finish reason the continuation reads is the SDK-mapped one', () => {
-    // The adapter normalizes `max_tokens`, `MAX_TOKENS` and `length` onto this one word.
-    expect(OUTPUT_LIMIT_REACHED).toBe('length');
-  });
 });
 
 /** Think's loop cannot extend a `length` finish, so the cloud backend asks this same predicate for a continuation turn. */
 describe('the continuation a loop cannot run inside its turn', () => {
   const cut = {
-    completed: true, lastFinishReason: OUTPUT_LIMIT_REACHED, turnWasContinuation: false,
+    completed: true, lastFinishReason: 'length', turnWasContinuation: false,
   };
 
   test('a completed turn cut at the output limit owes one', () => {

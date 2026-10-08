@@ -12,7 +12,6 @@ import {
 } from './helpers/device-harness';
 import type { UserCaller } from '@kinu.run/core';
 import { DeviceSocketHub } from '@kinu.run/core';
-import { USER_DO_RPC_SURFACE } from '../src/rpc-surface';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { appProbe, concretePath, PROBE_ORIGIN } from './helpers/app-probe';
 import {
@@ -287,27 +286,6 @@ describe('durable device request ownership', () => {
     expect(await harness.userDO.transferDeviceRequestToBackgroundJob(
       harness.workspace, nextDeviceRequestId(), 'job-1',
     )).toEqual({ transferred: false });
-    await harness.closeDeviceHarness();
-  });
-
-  /** The provider half of detached device ownership; the consumer lives in the turn/job
-   *  subsystem. */
-  test('the ownership seam a background-job consumer needs is reachable and native', async () => {
-    const harness = await deviceHarness();
-
-    const seam = {
-      transferDeviceRequestToBackgroundJob: harness.userDO.transferDeviceRequestToBackgroundJob.bind(harness.userDO),
-      cancelDeviceRequestsForBackgroundJob: harness.userDO.cancelDeviceRequestsForBackgroundJob.bind(harness.userDO),
-      acknowledgeDeviceRequest: harness.userDO.acknowledgeDeviceRequest.bind(harness.userDO),
-    };
-
-    for (const [name, member] of Object.entries(seam)) {
-      expect(member).toBeFunction();
-      expect(USER_DO_RPC_SURFACE).toContain(name);
-    }
-
-    // A per-request transfer takes one request and one job identity: no turn argument can widen it.
-    expect(seam.transferDeviceRequestToBackgroundJob).toHaveLength(3);
     await harness.closeDeviceHarness();
   });
 

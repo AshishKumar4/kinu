@@ -6,7 +6,7 @@ export type CheckpointKind = 'tick' | 'quiesce';
 
 /** `empty` is the normal first start, not a failure; `already-attached` makes attach re-callable.
  *  A runtime array so a suite asserts every kind is exercised; a new kind turns it red. */
-export const ATTACH_OUTCOME_KINDS = ['empty', 'attached', 'already-attached'] as const;
+const ATTACH_OUTCOME_KINDS = ['empty', 'attached', 'already-attached'] as const;
 
 export interface AttachOutcome {
   readonly kind: (typeof ATTACH_OUTCOME_KINDS)[number];

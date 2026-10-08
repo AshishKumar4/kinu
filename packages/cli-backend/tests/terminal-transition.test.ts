@@ -277,7 +277,7 @@ test('a managed context edit reaches the local request', async () => {
     await session.settleBackgroundWork();
     const document = v.parse(v.string(), await readText(rt.toolFiles, 'vfs://context/working.jsonl'));
     await writeText(rt.toolFiles, 'vfs://context/working.jsonl', document.replace('OLD premise', 'NEW premise'));
-    await expect(writeText(rt.toolFiles, 'vfs://context/working.jsonl', document)).rejects.toThrow(/revision|stale|changed/i);
+    await expect(writeText(rt.toolFiles, 'vfs://context/working.jsonl', document)).rejects.toMatchObject({ verdict: 'stale' });
     await session.send('follow-up input', { id: crypto.randomUUID() });
     await session.settleBackgroundWork();
     const claim = rt.stores.claims.latestTurn();

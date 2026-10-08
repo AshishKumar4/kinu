@@ -70,7 +70,11 @@ export type HubPush =
   | { type: typeof DEVICE_TOKEN_ROTATION; token: string }
   | { type: 'UPDATE'; version: string; urls: { tarball: string; checksum: string }; sha256: string; checksums?: Record<string, string>; signature?: string }
   /** A call, with the owner's Sandbox switch composed the way the hub composes it. */
-  | { id: string; method: string; params: unknown[]; sandbox?: { tier: 'raw' | 'sandboxed'; agentHome: string; roots: string[] } };
+  | {
+    id: string; method: string; params: unknown[]; sandbox?: { tier: 'raw' | 'sandboxed'; agentHome: string; roots: string[] };
+    /** The hub watches the command's output as it is printed. */
+    output?: boolean;
+  };
 
 export interface HubSocket {
   hello: HubHello;

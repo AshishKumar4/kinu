@@ -7,7 +7,7 @@ import { settleSync, tolerate } from '../obs/index';
 
 const CLOUDFLARE_API_ROOT = 'https://api.cloudflare.com/client/v4';
 
-export type HttpMethod = 'GET' | 'HEAD' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+type HttpMethod = 'GET' | 'HEAD' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 export interface CloudflareCall {
   readonly method: HttpMethod;

@@ -116,7 +116,7 @@ export default function WorkspacesPage() {
               <Button variant="ghost" size="sm" aria-label="Tiled view" aria-pressed={view === "tiled"}
                 icon={<SquaresFourIcon size={14} />} onClick={() => setView("tiled")} />
             </div>
-            <FilledButton className="h-8 px-3 text-sm" onClick={() => void navigate(APP_ROUTES.home)} data-new-workspace>
+            <FilledButton className="h-8 px-3 text-sm" onClick={() => void navigate(APP_ROUTES.home)}>
               <PlusIcon size={13} weight="bold" /> New workspace
             </FilledButton>
           </div>

@@ -112,7 +112,7 @@ describe('a commit on a replaced container is refused, and the restore is armed'
       container.clearSchedules();
       container.bootId = undefined;
 
-      await expect(run(box)).rejects.toThrow('the restored container was replaced');
+      await expect(run(box)).rejects.toMatchObject({ code: 'io' });
       expect(callbacks(container)).toContain('devboxStartup');
     });
   }

@@ -126,7 +126,7 @@ export type UnsealedForkFrame = ForkFrame extends infer F
   ? F extends { kind: string } ? Omit<F, 'digest'> : never
   : never;
 
-export type ForkRowValue = ForkRowFrame['rows'][number];
+type ForkRowValue = ForkRowFrame['rows'][number];
 
 /** One frame before schema validation; the version is the sender's claim so a refused frame can be held. */
 export type ForkFrameWire = ForkFrame extends infer F

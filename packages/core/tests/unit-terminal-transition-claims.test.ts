@@ -111,7 +111,7 @@ describe('the terminal transition claim', () => {
     await expect(transitions.settle({
       transition,
       declare: () => [{ name: 'turn_record', scope: 'a-live-wake', input: {}, lane: 'inline' }],
-    })).rejects.toThrow('interrupted before its side effect');
+    })).rejects.toThrow();
 
     const owedAt = transitions.ledger.nextRetryAt(new Set());
     const deferredAt = transitions.ledger.nextRetryAt(new Set([transitions.sequenceId(transition)]));

@@ -69,7 +69,7 @@ export interface HeadJournalPort {
  * The root's journal. Run reclamation is a whole-store read, so a facet's RPC port cannot serve it;
  * a recursive split always carries `parentHeadId` and never needs it. `abandonRunning` is deliberately absent.
  */
-export interface HeadRootJournal extends HeadJournalPort {
+interface HeadRootJournal extends HeadJournalPort {
   findResumableRun(task: string): HeadId | null;
 }
 

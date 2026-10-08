@@ -49,7 +49,7 @@ interface DeviceHolderNamespace {
 
 export type TerminalWorkspace = Pick<OrchestratorAgent, 'prepareTerminal' | 'openDeviceTerminal' | 'fetch'>;
 
-export interface TerminalSandbox {
+interface TerminalSandbox {
   fetch(request: Request): Promise<Response>;
   noteTerminalActivity(): Promise<void>;
   resetShell(): Promise<void>;

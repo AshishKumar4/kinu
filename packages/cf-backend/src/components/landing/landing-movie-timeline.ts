@@ -11,7 +11,7 @@ import { MOVIE_CUES, MOVIE_END } from '@kinu.run/core';
 import { PLAN_FIXTURE, SLATE_PREVIEW_URL, SLATE_SUMMARY } from './landing-fixtures';
 import { SLATE_PREFIX, type SlateSurfaceKind } from '@kinu.run/core';
 
-export type MovieSurface = 'Work' | SlateSurfaceKind;
+type MovieSurface = 'Work' | SlateSurfaceKind;
 
 export type MovieTarget = 'cursor-origin' | 'composer' | 'approve' | 'slate-tab';
 
@@ -119,7 +119,7 @@ export function composerTextAt(t: number): string {
   return MOVIE_ASK.slice(0, Math.floor(done * MOVIE_ASK.length));
 }
 
-export type MoviePhase = 'asking' | 'investigating' | 'plan-review' | 'implementing' | 'done';
+type MoviePhase = 'asking' | 'investigating' | 'plan-review' | 'implementing' | 'done';
 
 export interface MovieDiscrete {
   readonly phase: MoviePhase;

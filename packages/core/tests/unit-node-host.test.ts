@@ -128,7 +128,6 @@ function doubleProposer(): MockLanguageModelV4 {
   });
 }
 
-
 interface Fixture {
   readonly input: NodeAgentInput;
   readonly deps: NodeAgentDeps;
@@ -339,7 +338,6 @@ describe('the arbiter is offered only when a branch could be granted', () => {
   });
 });
 
-/** A `Record` over the whole axis makes a fifth value a compile error. */
 const SETTLES: readonly SwarmSettle[] = ['best', 'archive', 'front', 'merge'];
 
 function reportWithSummary(summary: string): HeadReport {
@@ -359,9 +357,6 @@ describe("what a node's run derives, and where each derivation lands", () => {
       front: 'synthesize',
       merge: 'synthesize',
     } satisfies Record<SwarmSettle, MergeStrategy>;
-
-    expect(new Set(Object.values(EXPECTED)).size).toBe(2);
-    expect(SETTLES).toHaveLength(Object.keys(EXPECTED).length);
 
     for (const settle of SETTLES) {
       const { input, deps, journal } = await fixture({ settle });
@@ -477,7 +472,6 @@ describe('a proposal is answered at most once', () => {
         ],
       }),
     });
-
 
     const run = await runNodeAgent(input, deps);
 

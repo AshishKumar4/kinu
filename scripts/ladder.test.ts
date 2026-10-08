@@ -223,6 +223,20 @@ describe('the ladder measures something', () => {
       .toThrow(`${planted.run} is a row of the deploy plan with no measured cost in ${COST_TABLE}. `);
   });
 
+  // The soak's eval pass exits 1 whenever a trial fails, so its figure is a red run's: refused as a source row's would be,
+  // every soak died planning before it ran a trial (staging deploy 2026-10-08T04-35-00-344Z).
+  test('a soak row is planned on its live figure, red or missing, as a row that reads the deployment', () => {
+    const real = planCosts();
+    const [soak] = deployOrder().filter((gate) => gate.phase === 'soak');
+
+    if (soak === undefined) throw new Error('the deploy plan has no soak row');
+    const red = { ...real, rows: { ...real.rows, [soak.run]: { ...real.rows[soak.run], wallSeconds: 900, exit: 1 } } };
+    const missing = { ...real, rows: Object.fromEntries(Object.entries(real.rows).filter(([run]) => run !== soak.run)) };
+
+    expect(deployPlan(red).find((row) => row.run === soak.run)?.wall).toBe(900);
+    expect(deployPlan(missing).find((row) => row.run === soak.run)?.threads).toBe(Number.POSITIVE_INFINITY);
+  });
+
   // THE BOOTSTRAP. A row that reads the deployment can be measured only against a deployment of the build it was
   // written for, so the plan cannot refuse it unmeasured: the deploy that first ships it could never run. It takes
   // the whole box instead, so the wave starts it only once nothing else runs and admits nothing beside it.
@@ -688,8 +702,8 @@ describe('a deploy\'s armada rows', () => {
       atDeploy: here.every((gate) => atDeploy.has(gate.run)), local: localDeployGates(deployOrder()).filter((gate) => !onArmada(gate)).length,
     }).toEqual({
       rows: [
-        'preflight bun scripts/preflight.ts', 'source bun test --timeout=0 scripts/deadline-capability.test.ts', 'upload bun run gate:infra', 'post-publish bun run gate:first-run',
-        'post-publish bun run gate:devbox-e2e', 'post-publish bash scripts/product-flows-tier.sh', 'soak bash scripts/eval-pass-tier.sh',
+        'preflight bun scripts/preflight.ts', 'source bun test --timeout=0 scripts/deadline-capability.test.ts', 'upload bun run gate:infra',
+        'post-publish bun run gate:devbox-e2e',
       ],
       reasons: true, atDeploy: true, local: here.length,
     });

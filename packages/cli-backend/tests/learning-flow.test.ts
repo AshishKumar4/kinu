@@ -6,7 +6,7 @@
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { initWorkspaceSchema } from '@kinu.run/core';
-import { scratchDir, scratchPath, workspaceDatabase } from '@kinu.run/test-utils';
+import { present, scratchDir, scratchPath, workspaceDatabase } from '@kinu.run/test-utils';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession } from '../src/local-session';
 import { staticModelPlane } from '../src/profile-authority';
@@ -67,6 +67,8 @@ test('a schema-refused call is learned before any reply rates it, and the next p
   const shown = next.db.query<{ turn: string }, []>('SELECT turn FROM completed_turns ORDER BY created_at').all()
     .map((row) => v.parse(v.object({ shownLessons: v.optional(v.array(v.object({ id: v.string(), revision: v.number() }))) }), JSON.parse(row.turn)).shownLessons);
 
-  expect(shown.at(-1)).toEqual([{ id: expect.stringMatching(/^tl-/), revision: 1 }]);
+  const lesson = present(next.db.query<{ id: string }, []>('SELECT id FROM tool_lessons').get(), 'the persisted lesson');
+
+  expect(shown.at(-1)).toEqual([{ id: lesson.id, revision: 1 }]);
   next.db.close();
 });

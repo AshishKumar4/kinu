@@ -6,7 +6,6 @@ import type { SharedCase } from '../cases';
 export const WORK_LEDGER_CASES: readonly SharedCase[] = [
   {
     title: 'a running job an earlier activation left can be cancelled once, by the operator',
-    covers: ['listBackgroundJobs', 'jobResult', 'cancelBackgroundJob'],
     async run({ surface, sql, actor }) {
       // No live fiber holds it: the row is all this activation knows, as after an eviction.
       new BackgroundJobStore(sql, actor).create({ id: 'job-1', kind: 'shell', workMode: 'build', label: 'build it', now: 1 });
@@ -24,7 +23,6 @@ export const WORK_LEDGER_CASES: readonly SharedCase[] = [
   },
   {
     title: 'a timer the owner set is revoked by the owner alone, and only once',
-    covers: ['createTimerTrigger', 'cancelTrigger'],
     async run({ surface }) {
       const newYear = Date.UTC(2100, 0, 1);
       const timer = await surface.createTimerTrigger({ atMs: newYear, label: 'new year', trust: 'owner' });
@@ -41,7 +39,6 @@ export const WORK_LEDGER_CASES: readonly SharedCase[] = [
   },
   {
     title: 'the run log pages newest first and a run reads back its own events',
-    covers: ['listRuns', 'getRunEvents'],
     async run({ surface, sql, actor }) {
       const recorder = new RunEventRecorder(sql, actor);
 

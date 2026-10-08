@@ -86,7 +86,7 @@ export const ControlActionSchema = v.variant('action', [
 export type ControlAction = v.InferOutput<typeof ControlActionSchema>;
 
 /** Closed reason vocabulary for the ops dataset; free-text `detail` stays in the durable row. */
-export type ActionReason =
+type ActionReason =
   | 'ok'
   | 'not_owned'
   | 'not_running'
@@ -111,7 +111,7 @@ export interface ActionOutcome {
 }
 
 /** `request` names no domain object: a body the schema refused, still audited. */
-export type AuditTargetKind = 'job' | 'approval' | 'workspace' | 'request';
+type AuditTargetKind = 'job' | 'approval' | 'workspace' | 'request';
 
 export interface ActionIdentity {
   /** snake_case: the analytics sink groups on the tail after the first dot. */

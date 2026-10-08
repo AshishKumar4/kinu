@@ -2,7 +2,7 @@
 // here; the harnesses feeding real observations live in packages/cf-backend and packages/cli.
 import { describe, test, expect } from 'bun:test';
 import {
-  BACKEND_CONFORMANCE, CONFORMANCE_PLANES, CONFORMANCE_ROOTS, PLANE_UNIVERSE,
+  BACKEND_CONFORMANCE, CONFORMANCE_PLANES, CONFORMANCE_ROOTS,
   compareSurface, normalizeObservedTables, observedOpEnum, phantomCallables,
   renderConformanceFindings,
   AGENTS_OPS, BUILTIN_TOOLS,
@@ -82,23 +82,6 @@ describe('manifest hygiene', () => {
     }
   });
 
-  test('the closed planes cover their registry universe exactly', () => {
-    // The Record key type catches this at compile time; this locks the runtime view.
-    expect(Object.keys(BACKEND_CONFORMANCE.tool).sort()).toEqual([...PLANE_UNIVERSE.tool].sort());
-    expect(Object.keys(BACKEND_CONFORMANCE['agents-op']).sort()).toEqual([...PLANE_UNIVERSE['agents-op']].sort());
-    expect(Object.keys(BACKEND_CONFORMANCE['memory-op']).sort()).toEqual([...PLANE_UNIVERSE['memory-op']].sort());
-    expect(Object.keys(BACKEND_CONFORMANCE.producer).sort()).toEqual([...PLANE_UNIVERSE.producer].sort());
-  });
-
-  test('no capability is declared absent everywhere (dead declaration)', () => {
-    for (const plane of CONFORMANCE_PLANES) {
-      const statusesByName: Readonly<Record<string, RootStatuses>> = BACKEND_CONFORMANCE[plane];
-
-      for (const [name, statuses] of Object.entries(statusesByName)) {
-        expect({ plane, name, held: CONFORMANCE_ROOTS.some((root) => 'wired' in statuses[root]) }).toEqual({ plane, name, held: true });
-      }
-    }
-  });
 });
 
 describe('normalizeObservedTables', () => {

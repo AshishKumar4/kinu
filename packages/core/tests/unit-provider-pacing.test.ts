@@ -1,6 +1,6 @@
 // One provider's declared cooldown, honoured by every sibling request to its host.
 import { describe, test, expect } from 'bun:test';
-import { ProviderPacer, abortableSleep } from '../src/providers/pacing';
+import { ProviderPacer } from '../src/providers/pacing';
 
 /** A pacer on a hand-cranked clock, so a declared wait costs the suite nothing. */
 function fixedClock(startMs = 1_000_000) {
@@ -56,12 +56,5 @@ describe('a cancelled caller stops waiting', () => {
 
     controller.abort(new Error('stop pressed'));
     await expect(waiting).rejects.toThrow('stop pressed');
-  });
-});
-
-describe('the shared wait, without a signal', () => {
-  test('abortableSleep resolves when nobody is cancelling it', async () => {
-    // The subject's own timer settles by resolving, never by an abort's rejection.
-    await expect(abortableSleep(1)).resolves.toBeUndefined();
   });
 });

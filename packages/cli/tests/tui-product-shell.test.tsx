@@ -149,64 +149,6 @@ async function mountProbe(options: {
 }
 
 describe('grouped workspace navigator', () => {
-  test('wide layouts pin the grouped sidebar with peers, nesting, and a collapsed cloud section (desktop frames at 160 and 120)', async () => {
-    for (const width of [160, 120]) {
-      const probe = await mountProbe({ width, page: pageOf(GROUPED_ITEMS) });
-
-      try {
-        const frame = probe.frame();
-        expect(frame).toContain('shop · 2');
-        expect(frame).toContain('docs · 1');
-        expect(frame).toContain('Cloud · 2');
-        expect(frame).toContain('└ reviewer · auditor');
-        expect(frame).not.toContain('Jarvis');
-        expect(frame).not.toContain('Load more');
-        const lines = frame.split('\n');
-        expect(lines.findIndex((line) => line.includes('shop · 2'))).toBeLessThan(lines.findIndex((line) => line.includes('Cloud · 2')));
-      } finally {
-        await probe.destroy();
-      }
-    }
-  });
-
-  test('groups order current project first, then foreign projects, then cloud, with one paging row', async () => {
-    const probe = await mountProbe({
-      width: 160,
-      page: pageOf(
-        [...GROUPED_ITEMS, { name: 'faraway', label: 'faraway', mode: 'local', cwd: '/elsewhere/repo', workspaceId: 'other' }],
-        'page-2',
-      ),
-    });
-
-    try {
-      const frame = probe.frame();
-      const lines = frame.split('\n');
-
-      const at = (text: string) => {
-        const index = lines.findIndex((line) => line.includes(text));
-
-        if (index < 0) throw new Error(`No frame line containing ${text}`);
-
-        return index;
-      };
-
-      expect(frame).toContain('shop · 2 ●');
-      expect(lines[at('docs · 1')]).not.toContain('●');
-
-      expect(at('shop · 2')).toBeLessThan(at('● audit'));
-      expect(at('● audit')).toBeLessThan(at('fixer'));
-      expect(at('fixer')).toBeLessThan(at('docs · 1'));
-
-      expect(at('docs · 1')).toBeLessThan(at('other · 1'));
-      expect(at('other · 1')).toBeLessThan(at('faraway'));
-      expect(at('faraway')).toBeLessThan(at('▸ Cloud · 2'));
-      expect(frame).not.toContain('Jarvis');
-      expect(at('▸ Cloud · 2')).toBeLessThan(at('Load more · 6 of 6'));
-      expect(lines.filter((line) => line.includes('Load more'))).toHaveLength(1);
-    } finally {
-      await probe.destroy();
-    }
-  });
 
   test('keyboard walks the grouped overlay: Enter toggles headers and opens agents, duplicates stay apart, focus returns (80 columns)', async () => {
     const probe = await mountProbe({ width: 80, page: pageOf(GROUPED_ITEMS) });

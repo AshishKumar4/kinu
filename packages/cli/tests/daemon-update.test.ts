@@ -1,6 +1,8 @@
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Device daemon self-update, and the frames it shares with the hub, with the hub faked at its two seams (helpers/update-hub.ts). */
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { Subprocess } from 'bun';
 import { afterAll, afterEach, describe, expect, test } from 'bun:test';
@@ -8,7 +10,7 @@ import { present, killAndAwaitExit, recordedIn, scratchDir } from '@kinu.run/tes
 import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
-  bunResolutionShell, deviceFiles, DEVICE_EXEC_ACK_METHOD, DEVICE_TOKEN_ROTATION_ACK, JsonValueSchema,
+  bunResolutionShell, deviceFiles, DEVICE_EXEC_ACK_METHOD, DEVICE_FRAMES, DEVICE_TOKEN_ROTATION_ACK, JsonValueSchema,
   parseJsonObject, type DeviceStatus, type DeviceTransport, type JsonObject,
 } from '@kinu.run/core';
 import {
@@ -440,6 +442,38 @@ describe('the daemon answers the hub in core\'s frames', () => {
     expect(ran.stdout).toContain(`the full stdout is at ${shown}]`);
     expect(await readText(files, shown)).toBe(`${'x'.repeat(600_000)}END`);
     await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [requestId]);
+  });
+});
+
+// What a dropped socket left running could answer no one, and nothing could name, stop or observe it again.
+describe('a socket the hub drops', () => {
+  test('ends the command it left unanswered, the process group the command started included', async () => {
+    const served = hub({ served: OLD, archive: await daemonArchive(NEW_FILES, NEW) });
+    const home = installedMachine(served.origin, OLD);
+    startDaemon(home, await releaseSigningEnv());
+    await served.sockets.until((hellos) => hellos[0] !== undefined);
+    const socket = present(served.sockets.items[0], 'the HELLO');
+
+    // Open for reading before the command runs, `life` ends only once no process holds it: a group left running is a
+    // read that never ends. A descendant of the command holds it, then prints.
+    const life = join(scratchDir('daemon-dropped-socket'), 'life');
+    execFileSync('mkfifo', [life]);
+    const ended = readFile(life, 'utf8');
+    const id = 'rpc-dropsocket-1';
+
+    socket.send({
+      id,
+      method: 'exec',
+      params: [`(exec 3>'${life}'; echo up; exec sleep 600) & sleep 600`],
+      sandbox: { tier: 'raw', agentHome: '', roots: [] },
+      output: true,
+    });
+
+    // The command's output reaches the hub one flush after it was printed, so the daemon holds the command as running
+    // by then, and the drop meets a command already started.
+    await socket.frames.until((frames) => frames.some((frame) => frame.type === DEVICE_FRAMES.execOutput && frame.request === id));
+    socket.drop();
+    expect(await ended).toBe('');
   });
 });
 

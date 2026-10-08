@@ -43,7 +43,7 @@ export function FeedbackCard({ card, sentAt, now, onOpen }: {
 
   return (
     <div className="flex justify-end" data-feedback-card>
-      <div data-user-bubble className="w-full max-w-[min(85%,34rem)] rounded-t-2xl rounded-bl-2xl rounded-br-[4px] p-user-bubble px-4 pb-2 pt-3">
+      <div className="w-full max-w-[min(85%,34rem)] rounded-t-2xl rounded-bl-2xl rounded-br-[4px] p-user-bubble px-4 pb-2 pt-3">
         <p className="flex items-baseline gap-2 p-row-text">
           <span className="font-medium p-text">{card.notes.length} {card.notes.length === 1 ? "note" : "notes"} on the changes</span>
           <span className="p-meta p-text-3">{files} {files === 1 ? "file" : "files"} · {sinceLabel(sentAt, now)}</span>

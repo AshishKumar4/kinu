@@ -6,7 +6,7 @@ export const BUILTIN_ACCOUNTS_OBJECT = 'kinu:builtin-accounts';
 
 export type BuiltinSql = <T = unknown>(query: TemplateStringsArray, ...values: (string | number | null)[]) => T[];
 
-export type BuiltinRole = 'owner' | 'member';
+type BuiltinRole = 'owner' | 'member';
 
 export interface PasswordHash {
   readonly hash: string;
@@ -14,7 +14,7 @@ export interface PasswordHash {
   readonly iterations: number;
 }
 
-export interface StoredPasskey {
+interface StoredPasskey {
   readonly credentialId: string;
   readonly publicKey: string;
   readonly counter: number;

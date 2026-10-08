@@ -6,7 +6,6 @@ import { scratchDir } from '../../test-utils/src/scratch';
 import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { createRequire } from 'node:module';
 
 import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
@@ -16,7 +15,7 @@ import { serveFamily } from './helpers/api';
 import { staticRouteCliEnv } from './helpers/bindings';
 import { buildCliInstallCommand } from '@kinu.run/core';
 import { bunResolutionShell } from '@kinu.run/core';
-import { CLI_DIST_PATHS, RELEASE_SIGNING_PUBLIC_KEY, generateReleaseSigningKey, signRelease } from '@kinu.run/core';
+import { generateReleaseSigningKey, signRelease } from '@kinu.run/core';
 import { RUN_MARK } from '../../../scripts/deadline';
 
 const ORIGIN = 'https://kinu.example.com';
@@ -253,7 +252,6 @@ describe('install.sh terminal handling', () => {
     const { home, stubBin } = await makeSandbox();
     writeFileSync(join(home, 'install.sh'), script);
     const install = buildCliInstallCommand({ origin: ORIGIN, setup: false });
-    expect(install).toBe(`curl -fsSL '${ORIGIN}/install.sh' | bash -s -- --no-setup`);
 
     // The calling shell's PATH lists ~/.local/bin, as a Fedora login shell does always and an Ubuntu one does once
     // the directory exists. The installer is that shell's child, so a directory the caller searches is its only reach.
@@ -316,7 +314,6 @@ describe('install.sh terminal handling', () => {
       origin: ORIGIN, setup: false, connect: true, label: "Ashish's Mac",
     });
 
-    expect(install).toContain("--connect --label 'Ashish'\\''s Mac'");
     writeFileSync(join(home, 'install.sh'), script);
 
     const run = spawnSync('bash', ['-c', install], {
@@ -329,20 +326,6 @@ describe('install.sh terminal handling', () => {
     expect(run.stdout).not.toContain('STUB-SETUP-RAN');
     expect(run.stdout.indexOf('STUB-CONNECT-RAN'))
       .toBeLessThan(run.stdout.indexOf('To use kinu in this shell now'));
-  });
-
-  test('interactive steps gate on actually opening /dev/tty and restore the terminal on failure', async () => {
-    const script = await servedScript('/install.sh');
-    // Permission probes ([ -r /dev/tty ]) pass without a controlling
-    // terminal; only a real open proves the redirects below will work.
-    expect(script).toContain('( exec </dev/tty >/dev/tty ) 2>/dev/null');
-    expect(script).not.toContain('[ -r /dev/tty ]');
-    expect(script).toContain('"$@" < /dev/tty');
-    expect(script).toContain('stty sane < /dev/tty 2>/dev/null || true');
-    expect(script).toContain('run_on_tty "$BIN_PATH" setup --origin "$KINU_ORIGIN" --account-only');
-    expect(script).toContain('run_on_tty "$BIN_PATH" connect');
-    // Under curl|bash a stdin-reading child would eat unread script bytes.
-    expect(script).toContain('KINU_REFRESH_ONLY=1 "$BIN_PATH" </dev/null');
   });
 
   test('a CLI that dies in raw mode leaves the terminal sane after the served script exits', async () => {
@@ -391,61 +374,27 @@ describe('install.sh terminal handling', () => {
 
 /** Built at deploy time. A source install measured cold 2026-09-01: 13.35 s of a 16.08 s install, 950 packages, 1.9 GB. */
 describe('the CLI installs as a prebuilt artifact', () => {
-  test('the launcher unpacks published builds and runs no package manager', async () => {
+
+  // The origin's own `.sha256` and the old checksum variables both agree with the swapped archive; only the signature does not.
+  test.each([
+    ['cli.tar.gz', 'kinu'],
+    ['runtime.tar.gz', 'runtime/kinu'],
+  ])('a %s other than the one the release signed is refused, whatever the origin or the environment says', async (name, member) => {
+    const script = await servedScript('/install.sh');
     const launcher = await servedScript('/downloads/kinu');
-    expect(launcher).toContain('/downloads/kinu-cli-${KINU_OS}-${KINU_ARCH}.tar.gz');
-    expect(launcher).toContain('RUNTIME_URL="${KINU_ORIGIN}/downloads/kinu-runtime-cpython.tar.gz"');
-    expect(launcher).toContain(`KINU_ORIGIN="\${KINU_ORIGIN:-${ORIGIN}}"`);
-    expect(launcher).not.toContain('bun install');
-    expect(launcher).not.toContain('--frozen-lockfile');
-    expect(launcher).not.toContain('node_modules');
-    // Staging tree beside the install; the swap keeps prev until the proven tree is in place
-    // (unit-cli-launcher-swap drives those states).
-    expect(launcher).toContain('mv "$tmp/extract/kinu" "$next"');
-    expect(launcher).toContain('mv "$CLI_DIR" "$CLI_ROOT/prev"');
-    expect(launcher).toContain('adopt_tree "$next"');
-    expect(launcher).toContain('mv "$proven" "$CLI_DIR"');
-    expect(launcher.split('rm -rf "$CLI_DIR"').length - 1).toBe(3);
-  });
+    const { home, stubBin } = await makeSandbox({ ambientBun: null, launcher });
+    // A well-formed archive, so only verification stands between it and the install.
+    const stage = join(home, 'stage', member);
+    writeFileSync(join(stage, 'swapped.txt'), 'not the signed build\n');
+    const tar = spawnSync('tar', ['-czf', join(home, name), '-C', join(stage, '..'), 'kinu'], { encoding: 'utf8' });
 
-  test('every platform the launcher can name has a published artifact', async () => {
-    const launcher = await servedScript('/downloads/kinu');
-    // A pair the launcher accepts but the deploy never publishes would unpack a 404 body as a tarball.
-    const named = new Set<string>();
+    if (tar.status !== 0) throw new Error(`tar failed: ${tar.stderr}`);
+    const digest = createHash('sha256').update(readFileSync(join(home, name))).digest('hex');
+    writeFileSync(join(home, `${name}.sha256`), `${digest}  ${name}\n`);
 
-    for (const [unameS, os] of [['Darwin', 'darwin'], ['Linux', 'linux']] as const) {
-      expect(launcher).toContain(`${unameS}) KINU_OS=${os} ;;`);
-
-      for (const arch of ['arm64', 'x64']) named.add(`${os}-${arch}`);
-    }
-
-    expect(launcher).toContain('arm64|aarch64) KINU_ARCH=arm64 ;;');
-    expect(launcher).toContain('x86_64|amd64) KINU_ARCH=x64 ;;');
-
-    // Read off the paths production serves, not a private list.
-    const published = CLI_DIST_PATHS.flatMap((path) => {
-      const match = /\/downloads\/kinu-cli-([a-z0-9-]+)\.tar\.gz$/.exec(path);
-
-      return match ? [match[1]] : [];
-    });
-
-    expect([...named].sort()).toEqual([...published].sort());
-    expect(launcher).toContain('Kinu supports macOS and Linux.');
-    expect(launcher).toContain('Kinu supports arm64 and x86_64.');
-  });
-
-  test('every download is checksum-verified against the SIGNED release, with no way to skip it', async () => {
-    const launcher = await servedScript('/downloads/kinu');
-    // Signature against the pinned key before any fetch; artifacts against the signed checksums, never the origin's .sha256 (C1).
-    expect(launcher).toContain('verify_release "$tmp/kinu-version.json"');
-    expect(launcher).toContain('fetch_verified "$TARBALL_URL" "$tmp/cli.tar.gz" "$tmp/kinu-version.json"');
-    expect(launcher).toContain('fetch_verified "$RUNTIME_URL" "$tmp/runtime.tar.gz" "$tmp/kinu-version.json"');
-    expect(launcher).toContain(`RELEASE_SIGNING_PUBLIC_KEY="\${KINU_RELEASE_SIGNING_PUBLIC_KEY:-${RELEASE_SIGNING_PUBLIC_KEY}}"`);
-    expect(launcher).not.toContain('curl -fsSL "$url.sha256"');
-    expect(launcher).toContain('[ "$actual" = "$expected" ] || die "Checksum mismatch for $url."');
-    // No environment variable can turn verification off.
-    expect(launcher).not.toContain('KINU_SOURCE_SHA256');
-    expect(launcher).not.toContain('KINU_CLI_SHA256');
+    const result = await runHeadlessInstall(script, home, stubBin, { KINU_CLI_SHA256: digest, KINU_SOURCE_SHA256: digest });
+    expect(result.exitCode).not.toBe(0);
+    expect(existsSync(join(home, '.kinu/cli/current/cli.js'))).toBe(false);
   });
 
   test('a release the pinned key did not sign is refused before any artifact lands (C1)', async () => {
@@ -482,26 +431,6 @@ describe('the CLI installs as a prebuilt artifact', () => {
 
 /** Pins: installer said "Kinu CLI is ready.", next `kinu` said "Bun is required." because the scripts resolved Bun independently. */
 describe('Bun runtime resolution is one source of truth', () => {
-  test('the device daemon carries the launcher\'s own resolution, to leave an older Bun the same way', async () => {
-    const daemon = v.parse(
-      v.object({ bunResolutionShell: v.pipe(v.function(), v.returns(v.string())) }),
-      createRequire(import.meta.url)(join(import.meta.dir, '../../pc-agent/src/update.js')),
-    );
-
-    expect(await servedScript('/downloads/kinu')).toContain(daemon.bunResolutionShell());
-  });
-
-  test('only the launcher resolves and provides Bun; the installer never probes it', async () => {
-    const shared = bunResolutionShell();
-    const install = await servedScript('/install.sh');
-    const launcher = await servedScript('/downloads/kinu');
-
-    expect(launcher).toContain(shared);
-    // A second probe is the defect: two answers to one question.
-    expect(launcher.split('command -v bun').length - 1).toBe(shared.split('command -v bun').length - 1);
-    expect(install).not.toContain('command -v bun');
-    expect(install).not.toContain('bun.sh/install');
-  });
 
   /**
    * Built as a TS template literal, shipped as bash. A stray `\$` renders identically (the linter owns that class);

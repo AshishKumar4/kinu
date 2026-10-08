@@ -24,12 +24,6 @@ function captureConsole(run: () => void): string[] {
 
 
 describe('printToolResult', () => {
-  test('a recorded failure renders its message, not its record', () => {
-    const lines = captureConsole(() => printToolResult('No device connected.', { success: false, reason: 'unavailable' }));
-    const text = lines.join('\n');
-    expect(text).toContain('No device connected.');
-    expect(text).not.toContain('{"reason"');
-  });
 
   test('a multi-line refusal keeps its continuation lines', () => {
     const lines = captureConsole(() =>

@@ -92,16 +92,15 @@ const ArchiveRecordSchema = v.variant('t', [
     t: v.literal('page'),
     page: v.object({ root: v.string(), rows: v.array(v.object({ path: v.string(), kind: v.string(), pieces: v.array(v.tuple([v.string(), v.number()])) })) }),
   }),
-  v.object({ t: v.literal('chunks'), chunks: v.array(v.object({ hash: v.string() })) }),
+  v.object({ t: v.literal('chunks'), chunks: v.array(v.object({ hash: v.string(), data: v.string() })) }),
 ]);
 
-/** What the archive lines carry: the table of each row holding `text`, every file's path, and the chunks its files name
- *  that no `chunks` record brought. */
-function archived(lines: readonly string[], text: string) {
-  const carriers: string[] = [];
-  const files: string[] = [];
+/** What the archive lines carry: every file's path and its bytes as its chunks spell them, and the chunks its files
+ *  name that no `chunks` record brought. */
+function archived(lines: readonly string[]) {
+  const pieces = new Map<string, readonly string[]>();
   const named = new Set<string>();
-  const brought = new Set<string>();
+  const brought = new Map<string, Uint8Array>();
 
   for (const line of lines) {
     const record = v.safeParse(ArchiveRecordSchema, JSON.parse(line));
@@ -109,29 +108,38 @@ function archived(lines: readonly string[], text: string) {
     if (!record.success) continue;
     const { output } = record;
 
-    if (output.t === 'row') {
-      if (Object.values(output.values).some((value) => value === text || value === text.trim())) carriers.push(output.table);
-    } else if (output.t === 'page') {
+    if (output.t === 'page') {
       for (const row of output.page.rows) {
-        if (row.kind === 'file') files.push(`${output.page.root}/${row.path}`);
+        // A page rooted at a file names it by an empty path.
+        if (row.kind === 'file') pieces.set([output.page.root, row.path].filter((part) => part !== '').join('/'), row.pieces.map(([hash]) => hash));
 
         for (const [hash] of row.pieces) named.add(hash);
       }
-    } else {
-      for (const chunk of output.chunks) brought.add(chunk.hash);
+    } else if (output.t === 'chunks') {
+      for (const chunk of output.chunks) brought.set(chunk.hash, Uint8Array.from(atob(chunk.data), (char) => char.charCodeAt(0)));
     }
   }
 
-  return { carriers, files, owed: [...named].filter((hash) => !brought.has(hash)) };
+  /** A file's text as the archive carries it, or null when a chunk it names never came. */
+  const text = (path: string): string | null => {
+    const parts = (pieces.get(path) ?? []).map((hash) => brought.get(hash));
+
+    return parts.every((part) => part !== undefined) ? new TextDecoder().decode(Buffer.concat(parts)) : null;
+  };
+
+  return { files: [...pieces.keys()], text, owed: [...named].filter((hash) => !brought.has(hash)) };
 }
 
 function archiveSubgoal(lines: readonly string[], soul: string, lastPage: string): EvalSubgoal {
-  const { carriers, files, owed } = archived(lines, soul);
+  const { files, text, owed } = archived(lines);
+  // The soul lives in the file plane: the archive carries it as the workspace's SOUL.md, byte for byte.
+  const soulFile = files.find((path) => path === 'SOUL.md' || path.endsWith('/SOUL.md')) ?? null;
+  const carried = soulFile === null ? null : text(soulFile);
 
   return {
     what: 'archive-exports-the-workspace',
-    reached: carriers.length > 0 && files.length > 0 && owed.length === 0,
-    detail: `${String(lines.length)} archive line(s); the soul written above in ${carriers.length === 0 ? 'no row' : `row(s) of ${carriers.join(', ')}`}; `
+    reached: carried?.trim() === soul.trim() && owed.length === 0,
+    detail: `${String(lines.length)} archive line(s); SOUL.md ${soulFile === null ? 'not among the files' : `at ${soulFile} reads ${JSON.stringify(carried?.slice(0, 80) ?? null)}`}; `
       + `${String(files.length)} file(s) (${files.slice(0, 8).join(', ')}), ${String(owed.length)} chunk(s) they name never carried; last page: ${lastPage}`,
   };
 }
@@ -246,7 +254,7 @@ describe(SUITE, () => {
             detail: `${advisor.detail}; then ${reread.detail}`,
           });
 
-          // The archive is paged: the soul just written travels as its row, the files as the store's pages and chunks.
+          // The archive is paged: the soul just written travels as SOUL.md among the store's pages and chunks.
           const lines: string[] = [];
           let cursor: JsonValue | null = null;
           let detail = '';

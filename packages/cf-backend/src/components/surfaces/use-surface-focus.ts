@@ -50,7 +50,7 @@ function dismissalAfter(
   return target === focusSurfaceOf(previewFocus) ? (previewFocus ?? null) : dismissed;
 }
 
-export interface ReadyChip {
+interface ReadyChip {
   readonly surface: SurfaceKind;
   readonly title: string;
 }

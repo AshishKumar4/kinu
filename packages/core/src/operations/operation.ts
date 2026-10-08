@@ -34,9 +34,9 @@ export interface Operation<I extends OperationInput = OperationInput, O extends 
   text?(output: v.InferOutput<O>): string;
 }
 
-export type OperationIn<Op extends Operation> = v.InferOutput<Op['input']>;
+type OperationIn<Op extends Operation> = v.InferOutput<Op['input']>;
 
-export type OperationOut<Op extends Operation> = v.InferOutput<Op['output']>;
+type OperationOut<Op extends Operation> = v.InferOutput<Op['output']>;
 
 /** What an operation's implementation is told about the call it serves; the work mode is the invocation's own. */
 export interface OperationCall {

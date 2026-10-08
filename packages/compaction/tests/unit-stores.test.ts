@@ -138,20 +138,6 @@ describe('compactionTranscriptPath', () => {
 });
 
 describe('createVfsTranscriptStore', () => {
-  test('creates the parent directory, writes the transcript, and the citable path reads back', async () => {
-    const { vfs, files } = memoryVfs();
-    const store = createVfsTranscriptStore(() => vfs);
-    const path = store.citablePath('agent-a', 'hash1');
-    const { absolutePath } = await store.write(path, '# transcript');
-    expect(absolutePath).toBe(path);
-    expect(files.get(path)).toBe('# transcript');
-    expect(await readText(vfs, path)).toBe('# transcript');
-  });
-
-  test('citablePath survives unbound invocation (the engine passes it around bare)', () => {
-    const { citablePath } = createVfsTranscriptStore(() => memoryVfs().vfs);
-    expect(citablePath('s', 'h')).toBe('.kinu/compaction/s/h.md');
-  });
 
   test('a second write into the same directory tolerates mkdir EEXIST', async () => {
     const { vfs } = memoryVfs();

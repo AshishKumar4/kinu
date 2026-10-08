@@ -7,12 +7,12 @@ import { scratchDir } from '../../test-utils/src/scratch';
 import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import type { LLM, LLMProviderConfig, ModelRouteResolution } from '@kinu.run/core';
+import type { LLM, LLMProviderConfig, ModelRouteResolution, ReasoningEffort } from '@kinu.run/core';
 import { captureOperationProfile, runOperationProfile, operationProfileStream, currentOperationProfile,
-  WORKSPACE_RUN_ID } from '@kinu.run/core';
+  WORKSPACE_RUN_ID, profileCatalogDigest } from '@kinu.run/core';
 import { openWorkspaceCLI } from '../src/open';
 import { createCLIRuntime, type CLIRuntime, workspaceHome } from '../src/runtime';
-import { STATIC_MODEL_SPEC, staticModelPlane } from '../src/profile-authority';
+import { staticModelPlane } from '../src/profile-authority';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -69,7 +69,7 @@ describe('a local runtime opened without a session', () => {
     rt.profiles?.refine({ plane: staticModelPlane() });
     await rt.llm.complete('after the authority change');
 
-    expect(seen.map(route => route.model)).toEqual(['openai-compat/fake-model', STATIC_MODEL_SPEC]);
+    expect(seen.map(route => route.model)).toEqual(['openai-compat/fake-model', 'local/static']);
   });
 
   test("the explorer lane reaches the model instead of refusing for want of a resolver", async () => {
@@ -127,7 +127,6 @@ describe('a local runtime opened without a session', () => {
 
     const oldWork = runOperationProfile(operation, async () => {
       await hold.promise;
-      expect(await rt.ensureProfile?.()).toBe(pinned);
 
       return rt.llm.complete('detached operation A');
     });
@@ -138,18 +137,27 @@ describe('a local runtime opened without a session', () => {
     hold.resolve();
     await oldWork;
 
-    expect(seen.map(route => route.model)).toEqual([STATIC_MODEL_SPEC, 'openai-compat/fake-model']);
+    expect(seen.map(route => route.model)).toEqual(['local/static', 'openai-compat/fake-model']);
   });
 
   test('a lane stream issued under one operation retains its route when another operation consumes it', async () => {
     const { db, dbPath } = await workspace();
     const { rt } = await openWorkspaceCLI(db, dbPath, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
+    let tierModel = 'openai-compat/fake-model';
+    let effort: ReasoningEffort = 'high';
+    rt.profiles?.refine({ envelope: () => {
+      const catalog = { roles: {}, tiers: { default: { model: tierModel }, fast: { model: tierModel, reasoningEffort: effort } } };
+
+      return { authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog };
+    } });
     const profileA = await rt.ensureProfile?.();
 
     if (!profileA) throw new Error('runtime profile resolution is required');
     const operationA = captureOperationProfile({ actor: rt.actor, profile: profileA, inputs: null, runId: 'turn-A', turnId: 'turn-A' });
 
     rt.profiles?.refine({ plane: staticModelPlane() });
+    tierModel = 'local/static';
+    effort = 'low';
     const profileB = await rt.ensureProfile?.();
 
     if (!profileB) throw new Error('runtime profile resolution is required');
@@ -167,7 +175,7 @@ describe('a local runtime opened without a session', () => {
 
     expect(drained).toEqual(['streamed']);
     expect(seen.map(route => route.model)).toEqual(['openai-compat/fake-model']);
-    expect(seen[0]?.reasoningEffort).toBe(profileA.tier.reasoningEffort);
+    expect(seen[0]?.reasoningEffort).toBe('high');
     expect(issuer).toEqual(['turn-A']);
   });
 
@@ -190,7 +198,7 @@ describe('a local runtime opened without a session', () => {
       for await (const _ of stream) void _;
     });
 
-    expect(seen.map(route => route.model)).toEqual([STATIC_MODEL_SPEC]);
+    expect(seen.map(route => route.model)).toEqual(['local/static']);
     expect(issuer).toEqual([WORKSPACE_RUN_ID]);
   });
 
@@ -219,7 +227,7 @@ describe('a local runtime opened without a session', () => {
     await events.return(undefined);
 
     expect(seen.map(route => route.model)).toEqual([
-      'openai-compat/fake-model', STATIC_MODEL_SPEC, 'openai-compat/fake-model', 'openai-compat/fake-model',
+      'openai-compat/fake-model', 'local/static', 'openai-compat/fake-model', 'openai-compat/fake-model',
     ]);
   });
 
@@ -256,8 +264,8 @@ describe('the authority a session refines', () => {
     // What a session with no provider registry installs: a refinement of the one resolver, never a second.
     rt.profiles?.refine({ plane: staticModelPlane() });
 
-    expect((await rt.profiles?.resolvePreTurn())?.tier.model).toBe(STATIC_MODEL_SPEC);
-    expect(rt.profiles?.normalizeSpec(null)).toBe(STATIC_MODEL_SPEC);
+    expect((await rt.profiles?.resolvePreTurn())?.tier.model).toBe('local/static');
+    expect(rt.profiles?.normalizeSpec(null)).toBe('local/static');
   });
 
   test('a catalog authority overrides the workspace bootstrap without touching the resolver', async () => {

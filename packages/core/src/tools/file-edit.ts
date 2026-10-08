@@ -15,7 +15,7 @@ export interface FileEdit {
   newText: string;
 }
 
-export interface AppliedEdit {
+interface AppliedEdit {
   /** 1-indexed line in the file as read. */
   line: number;
   removedLines: number;

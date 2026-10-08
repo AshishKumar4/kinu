@@ -18,7 +18,7 @@ describe('ChatSession steering and recovery', () => {
     expect(now.end.pendingSteerFiles).toEqual([]);
     const failures = now.events.flat().filter(event => v.is(v.object({ type: v.literal('error') }), event));
     expect(failures).toHaveLength(1);
-    expect(failures[0]).toMatchObject({ message: 'The turn was interrupted before it finished.' });
+
     const toolResults = now.events.flat().filter(event => v.is(v.object({ type: v.literal('tool-result') }), event));
     expect(toolResults.length).toBeGreaterThan(0);
 

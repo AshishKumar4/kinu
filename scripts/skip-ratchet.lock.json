@@ -40,10 +40,6 @@
     "reason": "needs a live model: the ONLY memory-across-a-reopen evidence in the repo. Depends on the three turns above having really run. Runs in the live tier."
   },
   {
-    "key": "tests/live-model/e2e-full-lifecycle.test.ts › E2E Full Lifecycle › 7. full database state summary",
-    "reason": "needs a live model: reports the end state of the lifecycle above. Runs in the live tier."
-  },
-  {
     "key": "tests/live-model/e2e-lifecycle.test.ts › E2E Lifecycle › 5-turn conversation with native tool calling",
     "reason": "needs a live model: the multi-turn tool-calling evidence. Runs in the live tier."
   },

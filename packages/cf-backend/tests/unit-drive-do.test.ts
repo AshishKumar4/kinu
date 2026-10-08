@@ -9,10 +9,14 @@ import {
 } from '@kinu.run/core';
 import type { DriveAnswer } from '../src/user/drive';
 import { fakeMossaic, type FakeMossaic } from '@kinu.run/test-utils';
-import { deriveUserId } from '../src/auth/store';
 import { USER_DO_RPC_SURFACE } from '../src/rpc-surface';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
 import { driveBound, tenantDrive, type MossaicObject } from '../src/drive/tenant';
+
+/** The account ids the edge derives from these addresses (SHA-256 of the lowercased address, first 32 hex), stated. */
+const ALICE_ID = 'ff8d9819fc0e12bf0d24892e45987e24';
+
+const BOB_ID = '5ff860bf1190596c7188ab851db691f0';
 
 const SKILL = (name: string): string => `---\nname: ${name}\ndescription: ${name} does things\n---\nSteps.`;
 
@@ -80,12 +84,12 @@ describe('the Drive on the UserDO', () => {
     expect(written(await alice.userDO.drive_list(owner, '/'))).toEqual(mine);
 
     // Keyed by the id the edge derives from the email, so the workspace mount reads the same store.
-    expect([...mossaic.stores.keys()]).toEqual([await deriveUserId('alice@example.com')]);
-    expect(mossaic.stores.get(await deriveUserId('alice@example.com'))?.size).toBe(1);
+    expect([...mossaic.stores.keys()]).toEqual([ALICE_ID]);
+    expect(mossaic.stores.get(ALICE_ID)?.size).toBe(1);
 
     const bobs = await bob.userDO.drive_list(owner, '/');
 
-    expect([...mossaic.stores.keys()]).toEqual([await deriveUserId('alice@example.com'), await deriveUserId('bob@example.com')]);
+    expect([...mossaic.stores.keys()]).toEqual([ALICE_ID, BOB_ID]);
 
     expect(written(bobs)).toEqual([]);
     expect(await bob.userDO.drive_startDownload(owner, '/notes.txt', 't1')).toMatchObject({ ok: false, code: 'missing' });

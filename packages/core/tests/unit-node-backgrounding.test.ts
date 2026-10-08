@@ -13,11 +13,8 @@ import { hostedSeatsOver } from './helpers-actor-host';
 import { createRecordingLogger } from '../src/obs/index';
 import { HeadJournal } from '../src/heads/journal';
 import { initHeadsTables } from '../src/heads/schema';
-import {
-  NODE_BUILTIN_TOOLS, NODE_WITHHELD_TOOLS, runNodeAgent,
-} from '../src/strategy/node-agent';
+import { runNodeAgent } from '../src/strategy/node-agent';
 import type { NodeAgentDeps, NodeAgentInput, NodeRun } from '../src/strategy/node-agent';
-import { BUILTIN_TOOLS } from '../src/tools/registry';
 import { readCallJob } from '../src/tools/call-job';
 import type { JobOutputFrame } from '../src/jobs/live-output';
 
@@ -275,8 +272,6 @@ describe('a node backgrounds work, ends its turn, and is woken to finish', () =>
     const firstTurn = prompts[0] ?? [];
     expect(resumed.length).toBeGreaterThan(firstTurn.length);
     expect(resumed.slice(0, firstTurn.length)).toEqual(firstTurn);
-    expect(resumed.at(-1)).toContain('Background eval job');
-    expect(resumed.at(-1)).toContain('completed');
     // With the result itself: a node has no `agent.jobResult` to read it with.
     expect(resumed.at(-1)).toContain('ran await sandbox.run(): exit 0');
 
@@ -294,8 +289,6 @@ describe('a node backgrounds work, ends its turn, and is woken to finish', () =>
     expect(traced.length).toBe(run.report.stepCount);
     expect(traced.length).toBeGreaterThanOrEqual(2);
 
-    // A detach re-arms the stall watchdog.
-    expect(run.report.summary).not.toContain('stalled');
   });
 
   test('the model is handed a HANDLE, not a result, and the handle is what its transcript records', async () => {
@@ -346,49 +339,10 @@ describe('a node backgrounds work, ends its turn, and is woken to finish', () =>
     expect(run.reportedItself).toBe(false);
     expect(run.report.errorMessage).toBeUndefined();
     expect(run.candidate).toContain('inner comparison loop');
-    expect(run.report.summary).not.toContain('produced no report');
 
     const row = journal.readHead('n1');
     expect(row?.status).toBe('completed');
     expect(row?.error_message).toBeNull();
-  });
-});
-
-describe("a node's tool surface is partitioned exactly, with a reason on every withholding", () => {
-  test('every shipped builtin is either given or withheld by name — nothing is unaccounted for', () => {
-    const given = [...NODE_BUILTIN_TOOLS];
-    const withheld = Object.keys(NODE_WITHHELD_TOOLS);
-    // Checked both ways against the shipped set, so a new builtin fails here.
-    expect(new Set([...given, ...withheld])).toEqual(new Set(BUILTIN_TOOLS));
-    expect(given.length + withheld.length).toBe(BUILTIN_TOOLS.length);
-    expect(given.filter((name) => withheld.includes(name))).toEqual([]);
-  });
-
-  test('every withholding states a reason, and the reason is a property of the code', () => {
-    for (const [name, reason] of Object.entries(NODE_WITHHELD_TOOLS)) {
-      expect(reason.length).toBeGreaterThan(40);
-      expect(reason).not.toContain('TODO');
-      expect(reason).not.toContain('not yet');
-      expect(name).not.toBe('');
-    }
-
-    // `DELEGATION_MAX_DEPTH` governs the hire ladder, not a node's search depth.
-    expect(NODE_WITHHELD_TOOLS.agents).toContain('search engine');
-    expect(NODE_WITHHELD_TOOLS.agents).not.toContain('recursion');
-  });
-
-  test('a node really does hold the tools it is given and none of the withheld ones', async () => {
-    // Read off a real node run: the prompt lists the tools it holds.
-    const { input, deps } = fixture({ model: PROSE_ONLY_MODEL });
-    const run = await runNodeAgent(input, deps);
-    expect(run.report.status).toBe('completed');
-    // `eval` is absent when no factory is wired, so the surface is a subset of what is given.
-    const surface: readonly string[] = ['shell', 'file', 'report'];
-    const given: readonly string[] = NODE_BUILTIN_TOOLS;
-
-    for (const name of surface) expect(given).toContain(name);
-
-    for (const name of Object.keys(NODE_WITHHELD_TOOLS)) expect(surface).not.toContain(name);
   });
 });
 

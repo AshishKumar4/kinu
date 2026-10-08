@@ -30,7 +30,7 @@ export interface DeployRunAddress {
   readonly runKey: string;
 }
 
-export interface DeployProviderKey {
+interface DeployProviderKey {
   readonly name: string;
   readonly value: string;
 }

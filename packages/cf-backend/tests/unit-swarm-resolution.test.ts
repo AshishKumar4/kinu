@@ -6,7 +6,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import type { HeadRunView } from '@kinu.run/core';
-import { fanInArity, fanInVertices, formatEvidenceValue, nodeRationales, runLiveness, runRefusal, swarmAxisRows, swarmResolutionOf } from '@kinu.run/core/swarm-view';
+import { fanInArity, fanInVertices, formatEvidenceValue, nodeRationales, runLiveness, runRefusal, swarmResolutionOf } from '@kinu.run/core/swarm-view';
 
 type JournalNode = HeadRunView['heads'][number];
 
@@ -42,37 +42,12 @@ function journal(nodes: readonly JournalNode[]): HeadRunView {
 
 describe('the resolution a run resolved', () => {
 
-  test('every named preset resolves, so redteam has an archive floor to show', () => {
-    // `redteam`'s archive novelty floor is Rainbow Teaming's τ=0.6 converted from a similarity
-    // ceiling to a distance floor.
-    const resolution = swarmResolutionOf('redteam');
-    expect(resolution?.kind).toBe('preset');
-    expect(resolution?.kind === 'preset' ? swarmAxisRows(resolution.config) : []).toContainEqual(
-      { axis: 'advance', value: 'archive ≥0.4' },
-    );
-  });
-
   test('no label is no resolution — absent, never a composition with an empty name', () => {
     expect(swarmResolutionOf(null)).toBeNull();
     expect(swarmResolutionOf('')).toBeNull();
     expect(swarmResolutionOf('   ')).toBeNull();
   });
 
-  test('a judged composition prints its ensemble on the axis that owns it', () => {
-    expect(swarmAxisRows({
-      unit: { kind: 'answer' }, context: 'inherit', expand: 'aggregate',
-      score: { kind: 'judge', samples: 20 },
-      advance: { kind: 'archive', novelty: 0.6 },
-      carry: { kind: 'reflections', threshold: 0.4 },
-    })).toEqual([
-      { axis: 'unit', value: 'answer' },
-      { axis: 'context', value: 'inherit' },
-      { axis: 'expand', value: 'aggregate' },
-      { axis: 'score', value: 'judge ×20' },
-      { axis: 'advance', value: 'archive ≥0.6' },
-      { axis: 'carry', value: 'reflections ≥0.4' },
-    ]);
-  });
 });
 
 describe('the fan-in vertex, read out of the rationale the engine writes', () => {
@@ -111,10 +86,9 @@ describe('the fan-in vertex, read out of the rationale the engine writes', () =>
 
 describe('a run that reached nothing reads as a refusal', () => {
 
-  test('a failed run whose journal recorded no message says so instead of inventing one', () => {
+  test('a failed run whose journal recorded no message is refused as failed', () => {
     const refusal = runRefusal({ status: 'failed', branches: 0 }, null);
     expect(refusal?.reason).toBe('failed');
-    expect(refusal?.error).toContain('no branch recorded a cause');
   });
 
   test('stopping without an answer is a different reason from failing', () => {

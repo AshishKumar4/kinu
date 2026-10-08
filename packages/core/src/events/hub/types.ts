@@ -410,14 +410,6 @@ export interface TriggerRow {
   fire_count: number;
 }
 
-export type Role = 'worker' | 'reactor';
-
-export interface ToolSurfaceContext {
-  head_trust: TrustLevel;
-  phase: Phase;
-  role: Role;
-}
-
 export class IngressRejectedError extends Data.TaggedError('IngressRejectedError')<{ readonly message: string }> {
   constructor(public readonly ingress: IngressKind | 'invalid_combination', public readonly reason: string) {
     super({ message: `Ingress ${ingress} rejected: ${reason}` });

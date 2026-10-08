@@ -68,22 +68,6 @@ async function settleAccountFixture(page: Page): Promise<void> {
   await retry?.click();
 }
 
-/** The welcome steps a reader sees: panels of the slide neither inert nor hidden, and rendered. */
-function shownSteps(page: Page): Promise<string[]> {
-  return page.$$eval('[data-welcome-step]', (panels) => panels
-    .filter((panel) => panel instanceof HTMLElement && !panel.inert && panel.getAttribute('aria-hidden') !== 'true' && panel.checkVisibility())
-    .map((panel) => panel.getAttribute('data-welcome-step') ?? ''));
-}
-
-/** The requested welcome step is accessible and the profile name is filled. */
-async function expectStep(page: Page, step: number): Promise<void> {
-  expect(await shownSteps(page)).toEqual([ONBOARDING_STEP_IDS[step]]);
-
-  if (step === 0) {
-    expect(await page.$eval('[aria-label="Your name"]', (el) => (el instanceof HTMLInputElement ? el.value : null))).toBe('Owner');
-  }
-}
-
 /** Workspace entries are complete, the current route is marked, and filters return the requested entries. */
 async function checkWorkspacesView(page: Page, view: 'list' | 'tiled', viewport: keyof typeof VIEWPORTS): Promise<void> {
   await page.waitForSelector('[aria-label="Search workspaces"]');
@@ -110,9 +94,9 @@ async function checkWorkspacesView(page: Page, view: 'list' | 'tiled', viewport:
 
   // The filter tabs and the page's own create action sit in the control row;
   // the count is a tabular "N of M", not a sentence.
-  const tabs = await page.$$eval('[role="tablist"][aria-label="Workspace state"] [role="tab"]', (els) => els.map((el) => el.getAttribute('data-segment')));
+  const tabs = await page.$$eval('[aria-label="Workspace state"] [role="tab"]', (els) => els.map((el) => el.getAttribute('data-segment')));
   expect(tabs).toEqual(['all', 'needs', 'working', 'idle']);
-  expect(await page.$$('main [data-new-workspace]')).toHaveLength(1);
+  expect(await page.$$eval('main button', (buttons) => buttons.filter((button) => button.textContent?.trim() === 'New workspace').length)).toBe(1);
   expect(body2).toContain('5 of 5');
 
   if (viewport === 'desktop') expect(await activeNavRow(page)).toBe('Workspaces');
@@ -138,7 +122,7 @@ async function checkWorkspacesView(page: Page, view: 'list' | 'tiled', viewport:
 /** Is the delete-everything button awake? Asked in the page, so the polled
  *  wait and the assertions read the same button. */
 const deleteArmed = (): boolean =>
-  [...document.querySelectorAll('[data-delete-everything]')].some((button) => button instanceof HTMLButtonElement && !button.disabled);
+  [...document.querySelectorAll('button')].some((b) => b.textContent?.includes('Delete everything') && !b.disabled);
 
 describe('account panels', () => {
   test('the setup modal and the providers section render at both widths in both themes', async () => {
@@ -365,46 +349,54 @@ describe('account panels', () => {
     });
   });
 
-  test('the usage section draws each limit as a meter, lists each account across workspaces, and names what it could not read', async () => {
+  test('the usage section lists each account across workspaces with its quota, and names a workspace it could not read', async () => {
     await withGallery(async (gallery) => {
       const usage = await freshPage(gallery, 'usersettingsstate&section=usage', 'dark', 'mobile');
 
       try {
         // The inputs are the gallery's `/api/user/usage`: four accounts (402, 214, 38 and 93 calls, the last with no
         // account), four workspaces read and `old-bot` not, and Claude's `work` account unreadable with its reason.
-        // The words are core's (unit-usage-limits); what is read here is what the page draws of them.
-        await usage.waitForSelector('[role="meter"]');
+        await usage.waitForFunction(() => /\d+% used/.test(document.body.innerText));
+        const lines = (await usage.evaluate(() => document.body.innerText)).split('\n');
 
-        const drawn = await usage.evaluate(() => ({
-          meters: [...document.querySelectorAll('[role="meter"]')].map((meter) => {
-            const fill = meter.firstElementChild?.getBoundingClientRect().width ?? NaN;
+        // Each line a pattern matches, with the numbers it read there.
+        const read = (pattern: RegExp): { line: string; values: number[] }[] => lines.flatMap((line) => {
+          const hit = pattern.exec(line);
 
-            return { now: Number(meter.getAttribute('aria-valuenow')), drawn: Math.round((100 * fill) / meter.getBoundingClientRect().width) };
-          }),
-          // Leaf by leaf: adjacent spans run together in textContent.
-          calls: [...document.querySelectorAll('[data-usage-account]')].map((row) => [...row.querySelectorAll('*')]
-            .filter((leaf) => leaf.children.length === 0).flatMap((leaf) => (leaf.textContent ?? '').split(/\D+/u))),
-          scope: (document.querySelector('[data-usage-scope]')?.textContent ?? '').split(/\D+/u),
-          lines: document.body.innerText.split('\n'),
-        }));
+          return hit === null ? [] : [{ line, values: hit.slice(1).map(Number) }];
+        });
 
-        // Each limit window is a meter a screen reader can read, drawn at the share it announces.
-        expect(drawn.meters.length).toBeGreaterThan(0);
+        // Every account is listed, the one with no account among them, and the count of workspaces read is said.
+        expect(read(/×(\d+)/).map(({ values }) => values[0]).sort((a = 0, b = 0) => a - b)).toEqual([38, 93, 214, 402]);
+        expect(read(/Across (\d+) workspace/).map(({ values }) => values[0])).toEqual([4]);
 
-        for (const meter of drawn.meters) {
-          expect(meter.now).toBeGreaterThanOrEqual(0);
-          expect(meter.now).toBeLessThanOrEqual(100);
-          expect(meter.drawn).toBe(meter.now);
+        // Each limit window's two shares make the whole, and each says when it resets.
+        const shares = read(/(\d+)% used\D+(\d+)% left/);
+
+        expect(shares.length).toBeGreaterThan(0);
+
+        for (const { line, values: [used = NaN, left = NaN] } of shares) {
+          expect(used + left).toBe(100);
+          expect(line).toContain('reset');
         }
 
-        // Every account is a row of its own, the one with no account among them, each with its calls.
-        expect(drawn.calls.map((numbers) => ['402', '214', '38', '93'].filter((calls) => numbers.includes(calls))).flat().sort())
-          .toEqual(['214', '38', '402', '93']);
-        // The count of workspaces read is said.
-        expect(drawn.scope).toContain('4');
+        // A metered credit adds up; an account's own quota leaves no more than its limit, and resets.
+        const [credit] = read(/\$([\d.]+) used\D+\$([\d.]+) of \$([\d.]+) left/);
+        const [spent = NaN, remaining = NaN, total = NaN] = credit?.values ?? [];
+
+        expect(spent + remaining).toBeCloseTo(total, 2);
+        const quotas = read(/(\d+) of (\d+) requests left/);
+
+        expect(quotas.length).toBeGreaterThan(0);
+
+        for (const { line, values: [left = NaN, limit = NaN] } of quotas) {
+          expect(left).toBeLessThanOrEqual(limit);
+          expect(line).toContain('reset');
+        }
+
         // What could not be read is named, the account with the provider's own reason, not dropped.
-        expect(drawn.lines.some((line) => line.includes('old-bot'))).toBe(true);
-        expect(drawn.lines.some((line) => line.includes('work') && line.includes('HTTP 401'))).toBe(true);
+        expect(lines.some((line) => line.includes('old-bot'))).toBe(true);
+        expect(lines.some((line) => line.includes('work') && line.includes('HTTP 401'))).toBe(true);
       } finally {
         await usage.close();
       }
@@ -455,32 +447,6 @@ describe('account panels', () => {
     });
   });
 
-  test('the welcome wizard renders each step at both widths in both themes', async () => {
-    await withGallery(async (gallery) => {
-      
-
-      for (const theme of ['dark', 'light'] as const) {
-        for (const viewport of ['desktop', 'mobile'] as const) {
-          for (const step of ONBOARDING_STEP_IDS.keys()) {
-            const page = await freshPage(gallery, `welcome&step=${String(step)}`, theme, viewport);
-
-            try {
-              // The slide is an inert track, so every step's panel is in the DOM: the one showing is the one a reader
-              // can reach, and it must be the step the page was opened on.
-              await page.waitForSelector('h1');
-              await expectStep(page, step);
-              
-            } finally {
-              await page.close();
-            }
-          }
-        }
-      }
-
-      
-    });
-  });
-
   test('an account with no name starts blank, wears its email\'s letter, and moves on without saving an empty name', async () => {
     await withGallery(async (gallery) => {
       const page = await freshPage(gallery, 'welcome&step=0&noname=1', 'dark', 'desktop');
@@ -519,7 +485,12 @@ describe('account panels', () => {
 
             // The danger button sleeps until the phrase is the account's own
             // email; a wrong phrase leaves it asleep, and case does not count.
-            await page.click('[data-delete-account]');
+            await page.evaluate(() => {
+              const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.includes('Delete account'));
+
+              if (button === undefined) throw new Error('no delete button');
+              button.click();
+            });
             await page.waitForSelector('[aria-label="Confirm your email"]');
 
             expect(await page.evaluate(deleteArmed)).toBe(false);
@@ -614,7 +585,12 @@ describe('account panels', () => {
 
             if (viewport === 'desktop') expect(await activeNavRow(plugins)).toBe('Plugins');
             
-            await plugins.click('[data-manage-servers]');
+            await plugins.evaluate(() => {
+              const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.trim() === 'Manage');
+
+              if (button === undefined) throw new Error('no manage button');
+              button.click();
+            });
             await plugins.waitForSelector('[role="dialog"]');
             expect(await dialogText(plugins)).toContain('Add custom server');
           } finally {

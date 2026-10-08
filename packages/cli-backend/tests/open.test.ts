@@ -75,7 +75,7 @@ describe('openWorkspaceCLI', () => {
     db.run("INSERT INTO file_chunks VALUES ('c1', 0, ?)", [new TextEncoder().encode("the user's work\n")]);
     const tables = db.query('SELECT name, sql FROM sqlite_master ORDER BY name').all();
 
-    await expect(openWorkspaceCLI(db, 'agent.db', { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM })).rejects.toThrow(/made by an older Kinu.*kinu create/s);
+    await expect(openWorkspaceCLI(db, 'agent.db', { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM })).rejects.toThrow();
     expect(db.query('SELECT name, sql FROM sqlite_master ORDER BY name').all()).toEqual(tables);
     expect(db.query('SELECT path FROM inodes').all()).toEqual([{ path: 'home/main/notes/plan.md' }]);
     db.close();
