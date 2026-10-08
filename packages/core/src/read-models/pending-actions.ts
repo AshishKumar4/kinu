@@ -4,6 +4,7 @@
  */
 
 import type { DeferredApproval } from '../safety/deferred-approval';
+import { proposedSoul, type WorkspaceProposal } from '../safety/workspace-proposals';
 import { boundWriteOf } from '../safety/bound-write';
 import type { PendingConsent } from '../protocol';
 import type { PlanReview } from '../types/plans';
@@ -15,6 +16,8 @@ export type PendingActionKind =
   | 'scaffold_version'
   | 'unseen_changes'
   | 'curriculum_task'
+  /** Decided here: the agent's proposed workspace, approved or declined once. */
+  | 'workspace_proposal'
   /** Deep-links to the full-tab review. */
   | 'plan_review';
 
@@ -29,6 +32,8 @@ export interface PendingAction {
   readonly planRef?: { readonly owner: string; readonly id: string; readonly revision: number };
   /** A parked write over the user's file: its review is `reviewParkedWrite` of this id. */
   readonly write?: { readonly path: string };
+  /** A proposed workspace: the SOUL.md it would start with, exactly as approving writes it. */
+  readonly proposal?: { readonly name: string; readonly brief: string; readonly soul: string };
 }
 
 /** What a workspace asks of the person now. */
@@ -41,6 +46,7 @@ export interface PersonAsks {
 /** Rows holding the person's work until they decide; the agent's own proposals and notes do not (#21). */
 const HOLDS_THE_PERSON = {
   deferred_action: true,
+  workspace_proposal: true,
   plan_review: true,
   scaffold_version: false,
   curriculum_task: false,
@@ -65,6 +71,8 @@ export interface PendingActionInputs {
   readonly curriculum: ReadonlyArray<{
     id: string; task: string; status: string; proposedAt: number;
   }>;
+  /** Still-open only (safety/workspace-proposals.ts). */
+  readonly workspaceProposals: readonly WorkspaceProposal[];
   /** Workspace-wide and retired-inclusive: a subordinate's plan asks the same owner. */
   readonly pendingPlans: ReadonlyArray<{
     owner: string; id: string; revision: number; content: string; updatedAt: number;
@@ -92,6 +100,17 @@ export function buildPendingActions(input: PendingActionInputs): PendingAction[]
       detail: null,
       at: action.requestedAt,
       write: { path: write.path },
+    });
+  }
+
+  for (const proposal of input.workspaceProposals) {
+    actions.push({
+      id: proposal.id,
+      kind: 'workspace_proposal',
+      title: `Create a workspace: ${proposal.name}`,
+      detail: proposal.brief,
+      at: proposal.requestedAt,
+      proposal: { name: proposal.name, brief: proposal.brief, soul: proposedSoul(proposal) },
     });
   }
 

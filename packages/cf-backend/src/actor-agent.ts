@@ -207,6 +207,7 @@ import type { SlateCaller, SlateCallerHop } from "./slates/bindings";
 import type { SlateDispatchContext } from "./slates/host";
 import { diagnostics, KinuError, refusalOf, refusing, toKinuError, tolerate, type ErrorCode, type Refusal } from "@kinu.run/core/obs";
 import type { UserDO } from "./user/user-do";
+import type { McpToolSurface } from "./user/mcp-servers";
 import type { UserDoRpcMethod } from "./rpc-surface";
 import { isWorkspaceTerminal, WorkspaceTerminalInputSchema } from "@kinu.run/core";
 import type { WorkspaceTerminal } from "./workspace-host";
@@ -3058,9 +3059,17 @@ export abstract class ActorAgent extends Agent<Env> {
         case 'mcp': {
           // The role admits MCP tools by descriptor key, same as `toolAllowed(d.toolKey)` in native turns.
           const { stub, caller } = yield* Effect.promise(async () => this.userHub());
-          const surface = v.parse(McpToolSurfaceSchema, JSON.parse(yield* Effect.promise(async () => stub.userMcp_toolDescriptors(caller))));
+          const surface = async (): Promise<McpToolSurface> => v.parse(McpToolSurfaceSchema, JSON.parse(await stub.userMcp_toolDescriptors(caller)));
+          let offered = yield* Effect.promise(surface);
+
+          // A slate call is not a turn opening: a server the user object is still dialling is waited for, once.
+          if (offered.unavailable.some((row) => row.server === route.server)) {
+            yield* Effect.promise(async () => stub.userMcp_warmConnections(caller));
+            offered = yield* Effect.promise(surface);
+          }
+
           // A server is named as the actor's programs name it, so a fork reaches its forker's server of that name.
-          const descriptor = surface.descriptors.find((d) => d.serverName === route.server && d.name === route.tool);
+          const descriptor = offered.descriptors.find((d) => d.serverName === route.server && d.name === route.tool);
 
           if (descriptor === undefined) return yield* new KinuError('missing', `${route.server} offers no tool ${route.tool} to this actor`);
           // Enforce `readOnly` grants here so a read grant cannot write through a non-read-only tool.

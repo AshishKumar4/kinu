@@ -63,13 +63,16 @@ export interface CreateCloudWorkspaceRequest<Id> {
   userDO: CloudWorkspaceRegistry;
   caller: UserCaller;
   input: CreateCloudWorkspaceInput;
+  /** The whole SOUL.md, for a workspace the owner approved as an agent proposed it; absent, it is rendered from the
+   *  purpose. Not an HTTP field: only the owner's approval of a proposal sets it. */
+  soul?: string;
 }
 
 export function createCloudWorkspaceForUser<Id>(
   request: CreateCloudWorkspaceRequest<Id>,
 ): Promise<WorkspaceEntry> {
   return settle(Effect.gen(function* () {
-    const { env, userId, userDO, caller, input } = request;
+    const { env, userId, userDO, caller, input, soul } = request;
     const trimmedPurpose = input.purpose?.trim() ?? '';
     const purpose = trimmedPurpose === '' ? undefined : trimmedPurpose;
 
@@ -112,6 +115,8 @@ export function createCloudWorkspaceForUser<Id>(
       };
 
       if (purpose) initialization.mission = purpose;
+
+      if (soul !== undefined) initialization.soul = soul;
 
       if (input.reasoningEffort) initialization.reasoningEffort = input.reasoningEffort;
 
@@ -247,6 +252,7 @@ interface InitializeOrchestratorInput<Id> {
   displayName: string;
   nameOrigin: NameOrigin;
   mission?: string;
+  soul?: string;
   model?: string;
   reasoningEffort?: ReasoningEffort;
   role?: string;
@@ -255,7 +261,7 @@ interface InitializeOrchestratorInput<Id> {
 async function initializeOrchestrator<Id>(input: InitializeOrchestratorInput<Id>): Promise<void> {
   const {
     env, userId, userDO, agentName, displayName, nameOrigin,
-    mission, model, reasoningEffort, role,
+    mission, soul, model, reasoningEffort, role,
   } = input;
 
   const orchestrator = env.OrchestratorAgent.get(
@@ -267,7 +273,7 @@ async function initializeOrchestrator<Id>(input: InitializeOrchestratorInput<Id>
   // to reach the owner's UserDO.
   await userDO.ensureWorkspaceCapability(agentName, claim.capabilityHash);
   await orchestrator.setInitialDisplayName(displayName, nameOrigin);
-  await orchestrator.setSoul(renderSoulMarkdown({ name: displayName, mission }));
+  await orchestrator.setSoul(soul ?? renderSoulMarkdown({ name: displayName, mission }));
   // The Output diff is relative to birth: capture after identity seeding, before any turn.
   await orchestrator.resetWorkspaceBaseline();
 

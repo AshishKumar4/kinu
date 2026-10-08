@@ -32,8 +32,9 @@
  *   piped `master` of the elan installer into a shell, and in the staging deploy
  *   the toolchain it installed then ran inside the step holding
  *   `CLOUDFLARE_API_TOKEN`, because `verify:lean` is a required gate. Every
- *   workflow's tools now come from a named release whose checksum is verified
- *   before anything executes, and no `uses:` may name a branch.
+ *   workflow's tools, and the Lean toolchain armada's environment installs
+ *   (scripts/armada/install.sh), come from a named release whose checksum is
+ *   verified before anything executes, and no `uses:` may name a branch.
  *
  * WHAT THIS FILE IS NOT. It reads configuration; it cannot pull an image, read a
  * running container, or narrow an account-scoped API token. That the digest is
@@ -71,9 +72,8 @@ const VITE_CONFIG = 'packages/cf-backend/vite.config.ts';
 
 const WORKFLOWS = '.github/workflows';
 
-const SETUP_LEAN = '.github/actions/setup-lean/action.yml';
-
-const LEAN_VERIFY = '.github/workflows/lean-verify.yml';
+/** Where the Lean toolchain is installed now that no workflow runs the proofs: armada's environment. */
+const ARMADA_INSTALL = 'scripts/armada/install.sh';
 
 const BLOCK_LOWER = 'packages/devbox/block-lower';
 
@@ -412,7 +412,9 @@ describe('the workflow readers see what GitHub and the shell run', () => {
 
 describe('the workflows that publish and measure this product', () => {
   test('every workflow is read, and the credential-bearing jobs are named', () => {
-    expect(WORKFLOW_FILES.length, 'the workflow corpus collapsed').toBeGreaterThan(3);
+    // GitHub keeps two: the secret scan and the dispatched evals (CI, Lean and the nightly sweeps run on armada).
+    expect(WORKFLOW_FILES.map((workflow) => workflow.file).sort((a, b) => a.localeCompare(b)), 'the workflow corpus changed')
+      .toEqual(['.github/workflows/evals.yml', '.github/workflows/security-scan.yml']);
     // Named, not counted. These hold every credential in the repository, and
     // the assertions below are only worth anything if they are still these.
     expect(SECRET_JOBS.map((entry) => entry.label).sort()).toEqual([
@@ -486,50 +488,15 @@ describe('the workflows that publish and measure this product', () => {
   });
 
   test('the Lean toolchain is checksum-verified before it executes', () => {
-    const action = v.parse(
-      v.object({ runs: v.object({ steps: v.array(StepSchema) }) }),
-      Bun.YAML.parse(readRepositoryFile(REPO_ROOT, SETUP_LEAN)),
-    );
-
-    const install = action.runs.steps.map((step) => step.run).find((run) => run !== undefined);
-    expect(install, `${SETUP_LEAN} runs no install body`).toBeDefined();
-    const body = install ?? '';
+    const body = readRepositoryFile(REPO_ROOT, ARMADA_INSTALL);
 
     // A named release, not a branch of somebody's repository.
     expect(body).toContain('releases/download/');
     expect(body).not.toContain('raw.githubusercontent.com');
     // And verified BEFORE the binary is allowed to run, which is the only
     // ordering that makes the checksum worth anything.
-    expect(body.indexOf('sha256sum --check --strict'))
-      .toBeLessThan(body.indexOf('elan-init'));
-  });
-
-
-  test('the Lean workflow triggers unfiltered and runs the local setup action', () => {
-    const workflow = v.parse(
-      v.object({
-        on: v.object({
-          push: v.nullable(v.object({ paths: v.optional(v.array(v.string())) })),
-          pull_request: v.nullable(v.object({ paths: v.optional(v.array(v.string())) })),
-        }),
-        jobs: v.object({ verify: v.object({ steps: v.array(StepSchema) }) }),
-      }),
-      Bun.YAML.parse(readRepositoryFile(REPO_ROOT, LEAN_VERIFY)),
-    );
-
-    // NO paths filter, and its absence is the contract: the citation gate's
-    // corpus is every tracked text file, so any filter is narrower than what
-    // the gates read — the workflow's own header records the measured gap the
-    // old filter opened. A reintroduced filter fails here by name.
-    expect(workflow.on.push?.paths, `${LEAN_VERIFY} push regained a paths filter`).toBeUndefined();
-    expect(
-      workflow.on.pull_request?.paths,
-      `${LEAN_VERIFY} pull_request regained a paths filter`,
-    ).toBeUndefined();
-    expect(
-      workflow.jobs.verify.steps.map((step) => step.uses),
-      `${LEAN_VERIFY} no longer runs the local setup action`,
-    ).toContain('./.github/actions/setup-lean');
+    expect(body.indexOf('sha256sum --check --strict')).toBeGreaterThan(0);
+    expect(body.indexOf('sha256sum --check --strict')).toBeLessThan(body.indexOf('elan-init'));
   });
 
   test('no action is used from a moving ref', () => {

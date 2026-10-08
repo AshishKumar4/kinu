@@ -1509,5 +1509,16 @@
     "activity TEXT NOT NULL CHECK (activity IN ('working', 'unfinished', 'idle'))",
     "decisions INTEGER NOT NULL",
     "overview TEXT NOT NULL"
+  ],
+  "workspace_proposals@packages/core/src/safety/workspace-proposals.ts": [
+    "id TEXT PRIMARY KEY",
+    "name TEXT NOT NULL",
+    "soul TEXT NOT NULL",
+    "brief TEXT NOT NULL",
+    "status TEXT NOT NULL DEFAULT 'pending'",
+    "requested_at INTEGER NOT NULL",
+    "decided_at INTEGER",
+    "workspace TEXT",
+    "error TEXT"
   ]
 }
