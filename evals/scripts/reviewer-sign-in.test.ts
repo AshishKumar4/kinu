@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, expect, test } from 'bun:test';
 import { join } from 'node:path';
-import { accountCredentialKey, CODEX_CRED_KEY } from '@kinu.run/core';
+import * as v from 'valibot';
+import { accountCredentialKey, CODEX_CRED_KEY, type ModelTestResult } from '@kinu.run/core';
 import { childEnv } from '@kinu.run/test-utils';
 import { codexReviewModel, REVIEW_ACCOUNTS } from '../src/config';
 
@@ -25,9 +26,20 @@ const deployment = Bun.serve({
         return Response.json({ userCode: 'AAAA-BBBB', portalURL: 'https://auth.openai.com/codex/device', pollIntervalSec: 1, deviceAuthId: 'device' });
       },
     },
-    '/api/user/models': () => Response.json({
-      models: REVIEW_ACCOUNTS.filter((account) => held.has(accountCredentialKey(CODEX_CRED_KEY, account))).map((account) => ({ spec: codexReviewModel(account) })),
-    }),
+    // As the product answers: a real call through the spec's own account, which only a held login can make.
+    '/api/user/models/test': {
+      POST: async (request) => {
+        const { spec } = v.parse(v.object({ spec: v.string() }), await request.json());
+        const account = REVIEW_ACCOUNTS.find((name) => codexReviewModel(name) === spec);
+        const answers = account !== undefined && held.has(accountCredentialKey(CODEX_CRED_KEY, account));
+
+        const result: ModelTestResult = answers
+          ? { ok: true, firstTokenMs: 400, totalMs: 900 }
+          : { ok: false, failure: 'signed-out', message: `No usable codex credential for the account "${account ?? spec}"` };
+
+        return Response.json(result);
+      },
+    },
   },
 });
 
@@ -52,14 +64,14 @@ async function run() {
   return { status, output: `${stdout}${stderr}` };
 }
 
-test('a deployment holding both logins is asked nothing, and its listing of the reviewer is read', async () => {
+test('a deployment holding both logins is asked nothing, and the reviewer answers on each', async () => {
   for (const account of REVIEW_ACCOUNTS) held.add(accountCredentialKey(CODEX_CRED_KEY, account));
 
   const { status, output } = await run();
 
   expect({ status, starts }).toEqual({ status: 0, starts: [] });
 
-  for (const account of REVIEW_ACCOUNTS) expect(output).toContain(`lists ${codexReviewModel(account)}`);
+  for (const account of REVIEW_ACCOUNTS) expect(output).toContain(`${codexReviewModel(account)} answers at ${ORIGIN}`);
 });
 
 test('a login a reset wiped is named, with the command that asks for it, and no sign-in starts without a terminal', async () => {
