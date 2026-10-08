@@ -11,7 +11,7 @@ import {
 } from '@kinu.run/core';
 import {
   hostedExplorationHarness, hostedMainActor, improvementLanesRan,
-  orchestratorHarness, reactivateOrchestratorHarness, catalogTurn, gatewayWorkspace, GATEWAY_CATALOG,
+  mainDatabase, orchestratorHarness, reactivateOrchestratorHarness, catalogTurn, gatewayWorkspace, GATEWAY_CATALOG,
   chatSessionTurns, driveUntil, tapDiagnostics, until, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles,
   workspaceMainActor, type RecordedUserPlaneCalls,
 } from './helpers/actor-harness';
@@ -278,7 +278,7 @@ describe('turn-pipeline correctness wiring', () => {
     await catalogTurn(harness.agent, 'And the word egret.');
 
     // The pin's own measure, then the two turns.
-    const windows = harness.db.query<{ window: number }, []>(
+    const windows = mainDatabase(harness).query<{ window: number }, []>(
       "SELECT json_extract(payload, '$.contextWindow') AS window FROM run_events WHERE type = 'context_admitted' ORDER BY rowid",
     ).all();
 
@@ -305,7 +305,7 @@ describe('turn-pipeline correctness wiring', () => {
     workspaceMainActor(harness.db).config.setAssignedTier('deep');
     await catalogTurn(harness.agent, 'Remember the word heron.');
 
-    const windows = harness.db.query<{ window: number }, []>(
+    const windows = mainDatabase(harness).query<{ window: number }, []>(
       "SELECT json_extract(payload, '$.contextWindow') AS window FROM run_events WHERE type = 'context_admitted' ORDER BY rowid",
     ).all();
 
@@ -547,15 +547,16 @@ describe('turn-pipeline correctness wiring', () => {
     const harness = orchestratorHarness();
     const { agent, db } = harness;
 
-    const plan = (): string | null => db.query<{ plan_json: string | null }, []>(
+    // Main's compaction plan is its own isolate's, kept under its own key.
+    const plan = (): string | null => mainDatabase(harness).query<{ plan_json: string | null }, []>(
       'SELECT plan_json FROM compaction_state',
     ).get()?.plan_json ?? null;
 
     const clear = () => agent.clearConversation();
 
     await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'deploy the api' }] });
-    db.prepare('INSERT INTO compaction_state (actor_id, session_key, plan_json) VALUES (?, ?, ?)')
-      .run(workspaceMainActor(db).actorId, agent.name, '{"stored":"plan"}');
+    mainDatabase(harness).prepare('INSERT OR REPLACE INTO compaction_state (actor_id, session_key, plan_json) VALUES (?, ?, ?)')
+      .run(workspaceMainActor(db).actorId, workspaceMainActor(db).actorId, '{"stored":"plan"}');
 
     await expect(clear()).rejects.toMatchObject({ code: 'denied' });
     expect(plan()).toBe('{"stored":"plan"}');
@@ -675,7 +676,7 @@ describe('turn-pipeline correctness wiring', () => {
     await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'deploy the api' }] });
     await chatSessionTurns(harness.agent).settle({ messageId: 'a-stop', text: 'partial', status: 'aborted' });
 
-    const ends = harness.db.query<{ payload: string }, []>("SELECT payload FROM run_events WHERE type = 'run_end'").all()
+    const ends = mainDatabase(harness).query<{ payload: string }, []>("SELECT payload FROM run_events WHERE type = 'run_end'").all()
       .map((row) => v.parse(v.object({ reason: v.string() }), JSON.parse(row.payload)).reason);
 
     expect(ends).toEqual(['aborted']);

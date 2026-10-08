@@ -9,7 +9,7 @@ import { join, resolve } from 'node:path';
 import * as v from 'valibot';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { runToExit, scratchDir, scriptedTurnModel, workspaceDatabase, type ScriptedTurnOptions, type ScriptedTurnResult } from '@kinu.run/test-utils';
-import { driveUntil, eventsOver, gatewayWorkspace, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { driveUntil, eventsOver, gatewayWorkspace, type HarnessOrchestratorAgent, mainDatabase } from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 import { LocalAgentSession } from '../../cli-backend/src/local-session';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../../cli-backend/src/runtime';
@@ -91,7 +91,8 @@ const LOCAL_FOLDER = scratchDir('inspect-cli-local-folder');
 beforeAll(async () => {
   const workspace = gatewayWorkspace(gateway);
   const { agent, db } = workspace;
-  const ended = (): number => db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM run_events WHERE type = 'run_end'").get()?.n ?? 0;
+  // Main's runs are its own isolate's.
+  const ended = (): number => mainDatabase(workspace).query<{ n: number }, []>("SELECT COUNT(*) AS n FROM run_events WHERE type = 'run_end'").get()?.n ?? 0;
 
   await workspace.started;
   await agent.runTaskFromMcp(TASK);

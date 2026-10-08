@@ -4,15 +4,14 @@
  */
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import {
-  ActorSession, ADVISOR_HEADER, BACKGROUND_FIBER_PREFIX, CHAT_SESSION_ID, PROGRAMMATIC_MESSAGE_ID_PREFIX,
+  ActorSession, ADVISOR_HEADER, BACKGROUND_FIBER_PREFIX, PROGRAMMATIC_MESSAGE_ID_PREFIX,
   TERMINAL_EFFECT_RETRY_CEILING_MS, type JsonValue,
 } from '@kinu.run/core';
 import type { FiberRecoveryContext, FiberRecoveryResult } from 'agents';
 import {
-  catalogTurn, chatSessionTurns, GATEWAY_CATALOG, gatewayWorkspace, historyOver, jobsOver, orchestratorHarness,
+  catalogTurn, chatSessionTurns, GATEWAY_CATALOG, gatewayWorkspace, jobsOver, orchestratorHarness,
   alarmDue, driveUntil, reactivateOrchestratorHarness, until, workspaceMainActor,
-  type ActorHarness, type HarnessOrchestratorAgent,
-} from './helpers/actor-harness';
+  type ActorHarness, type HarnessOrchestratorAgent, storedChat } from './helpers/actor-harness';
 import { answeringGateway, chatCompletion, stubAiBinding } from './helpers/platform-gateway';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import { lifecycleIncident } from '../src/sandbox-lifecycle';
@@ -52,7 +51,7 @@ async function recover(
 /** The programmatic turns the workspace ran, as its conversation stores them, once the queue drains. */
 async function programmaticTurns(harness: Harness): Promise<{ id: string; text: string }[]> {
   await chatSessionTurns(harness.agent).drainEnqueued();
-  const stored = await historyOver(harness).transcript(CHAT_SESSION_ID).history();
+  const stored = await storedChat(harness);
 
   return stored
     .filter((message) => message.role === 'user' && message.id.startsWith(PROGRAMMATIC_MESSAGE_ID_PREFIX))

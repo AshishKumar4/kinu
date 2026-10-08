@@ -5,8 +5,7 @@ import * as v from 'valibot';
 import { CODEX_CRED_KEY, DEVICE_RELAY, asFetchFunction, requestUrl, type JsonValue } from '@kinu.run/core';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type DeviceFrame, type TestUserDO } from './helpers/user-do';
 import {
-  agentSql, catalogTurn, driveUntil, hostedSubordinateHarness, makeEnv, orchestratorHarness, wakeForDelegatedTask,
-} from './helpers/actor-harness';
+  agentSql, catalogTurn, driveUntil, hostedSubordinateHarness, makeEnv, orchestratorHarness, wakeForDelegatedTask, mainDatabase } from './helpers/actor-harness';
 
 const OWNER_USER_ID = 'fedcba9876543210fedcba9876543210';
 
@@ -95,7 +94,7 @@ async function codexWorkspace(): Promise<CodexWorkspace> {
 
 /** Why each of the root's turns ended, oldest first. */
 function turnErrors(actor: CodexWorkspace['actor']): string[] {
-  return actor.db.query<{ payload: string }, []>("SELECT payload FROM run_events WHERE type = 'run_end' ORDER BY rowid").all()
+  return mainDatabase(actor).query<{ payload: string }, []>("SELECT payload FROM run_events WHERE type = 'run_end' ORDER BY rowid").all()
     .map((row) => v.parse(v.object({ error: v.optional(v.string()) }), JSON.parse(row.payload)).error ?? '');
 }
 

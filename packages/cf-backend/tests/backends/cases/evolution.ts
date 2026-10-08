@@ -124,9 +124,9 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
   },
   {
     title: 'a plan under review takes checked annotations, and a verdict hands the next turn off once',
-    async run({ surface, sql, actor }) {
+    async run({ surface, chat }) {
       expect(await surface.getActivePlanReview()).toBeNull();
-      const submitted = new PlanReviewStore(sql, actor).submit(CHAT_SESSION_ID, [{ start: 1, content: '# Plan\n\n1. Ship it.\n' }]);
+      const submitted = new PlanReviewStore(chat.sql, chat.actor).submit(CHAT_SESSION_ID, [{ start: 1, content: '# Plan\n\n1. Ship it.\n' }]);
 
       if (!submitted.ok) throw new Error(submitted.error);
       const { id, revision } = submitted.plan;
@@ -152,8 +152,8 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
   },
   {
     title: 'a dismissed plan stops awaiting a decision and takes no later verdict',
-    async run({ surface, sql, actor }) {
-      const submitted = new PlanReviewStore(sql, actor).submit(CHAT_SESSION_ID, [{ start: 1, content: '# Plan\n\n1. Ship it.\n' }]);
+    async run({ surface, chat }) {
+      const submitted = new PlanReviewStore(chat.sql, chat.actor).submit(CHAT_SESSION_ID, [{ start: 1, content: '# Plan\n\n1. Ship it.\n' }]);
 
       if (!submitted.ok) throw new Error(submitted.error);
       const { id, revision } = submitted.plan;

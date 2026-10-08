@@ -938,10 +938,29 @@ export function agentHistory(harness: Pick<ActorHarness<HarnessOrchestratorAgent
   return { actor, history: historyOver({ agent: harness.agent, db }, actor) };
 }
 
-export function storedChat(
+/** Main's own isolate's database, where its conversation, turns, runs, steers and plans are kept (D9); opened by any
+ *  read through its window. */
+export function mainDatabase(harness: Pick<ActorHarness<HarnessOrchestratorAgent>, 'db'>): Database {
+  return agentDatabase(workspaceMainActor(harness.db).actorId);
+}
+
+/** Main as its own isolate's database holds it, to address its rows as core's stores do; opened through its window. */
+export async function mainRows(harness: Pick<ActorHarness<HarnessOrchestratorAgent>, 'agent' | 'db'>): Promise<{ readonly db: Database; readonly sql: SqlExecutor; readonly actor: ActorHandle }> {
+  await harness.agent.harnessMainHistory();
+  const db = mainDatabase(harness);
+
+  return { db, sql: sqlOver(db), actor: actorOver(db, workspaceMainActor(harness.db).actorId) };
+}
+
+/** An actor's conversation as its store holds it: main's, in its own isolate, unless another actor is named. */
+export async function storedChat(
   harness: Pick<ActorHarness<HarnessOrchestratorAgent>, 'agent' | 'db'>, actor?: ActorHandle,
 ): Promise<UIMessage[]> {
-  return historyOver(harness, actor).transcript(CHAT_SESSION_ID).history();
+  if (actor !== undefined) return await historyOver(harness, actor).transcript(CHAT_SESSION_ID).history();
+
+  await harness.agent.harnessMainHistory();
+
+  return await agentHistory(harness, workspaceMainActor(harness.db).actorId).history.transcript(CHAT_SESSION_ID).history();
 }
 
 /** A settled response's improvement lanes and advisor review ran: their rows completed, or the whole

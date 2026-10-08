@@ -14,7 +14,7 @@ import { SlateInlineContext } from '../src/components/slates/context';
 import { MessageView } from '../src/components/MessageView';
 import {
   agentHistory, chatSessionTurns, gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, runDelegatedTask, storedChat, workspaceFiles,
-  workspaceMainActor,
+  workspaceMainActor, mainDatabase,
 } from './helpers/actor-harness';
 import { scriptedGateway } from './helpers/platform-gateway';
 
@@ -104,7 +104,7 @@ test("a write under an answered turn is previewed on the actor's next answer", a
   await turns.settle({ messageId: 'a-first', text: 'Started it.' });
 
   // A job the first turn detached keeps that turn's operation after its answer went out.
-  const answered = harness.db.query<{ turn_id: string }, []>("SELECT turn_id FROM conversation_entries WHERE role = 'assistant'").get();
+  const answered = mainDatabase(harness).query<{ turn_id: string }, []>("SELECT turn_id FROM conversation_entries WHERE role = 'assistant'").get();
 
   if (answered === null) throw new Error('the first answer was not recorded');
 
