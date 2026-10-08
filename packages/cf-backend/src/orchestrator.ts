@@ -918,6 +918,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (actorId === this.actorHandle().actorId) {
       this.mainFacetTurnEnded();
+      // Every signal held for it re-delivers, detached: none reached its isolate's steps.
+      this.orch.inbox.settle({ completed: event.type === 'turn-end' && !event.turn.hadError });
       this.turnClaimChanged();
 
       if (event.type === 'turn-end') this.recordMainTurnRow(event.turn);

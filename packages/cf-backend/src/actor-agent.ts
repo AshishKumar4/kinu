@@ -1976,8 +1976,9 @@ export abstract class ActorAgent extends Agent<Env> {
       this._host = {
         broadcast: (event) => this.broadcast(JSON.stringify(event)),
         enqueueTurn: (input) => this.enqueueMainTurn(input),
-        // Main's turns run in its own isolate, whose steps never read this object's buffer: a signal is its next turn.
-        turnInFlight: () => false,
+        // A signal while main's turn runs is held here and re-delivered as its next turn when that turn ends: its isolate's
+        // steps never read this object's buffer, and an enqueue now would wait out the running turn.
+        turnInFlight: () => this.mainChatTurn() !== null,
         // Its chat is its isolate's, which never ends.
         closed: () => false,
         // keepAliveWhile holds the DO through the debounce window and drain; if it dies anyway,
