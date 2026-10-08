@@ -12,7 +12,7 @@ import { KinuError, settle, settleSync } from '../obs/index';
 import { permitInPlan } from '../execution/work-mode';
 import type { CodemodeProvider, MemberDeclaration } from '../types/codemode';
 import type { WorkMode } from '../types/turn';
-import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
+import { JsonObjectSchema, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
 import { branchableToolCall, programSignal } from './outcome';
 import { readCallJob } from './call-job';
 import { imageModelOutput } from './image-results';
@@ -96,6 +96,17 @@ function nativeCall(resolve: (input: JsonObject) => NativeCall | KinuError, said
   });
 
   return Object.assign(members.some(({ op }) => allowedInPlan(op)) ? permitInPlan(built) : built, { operations: members.map(({ op }) => operationId(op)) });
+}
+
+/** An operation's input as the AI SDK takes a tool's: its JSON Schema, held to the operation's own check. */
+export function operationInputSchema<Op extends Operation>(op: Op) {
+  return jsonSchema<v.InferOutput<Op['input']>>(inputJsonSchema(op), {
+    validate: (value) => {
+      const problem = inputProblem(op, projectJsonValue({ value }));
+
+      return problem === null ? { success: true, value: v.parse(op.input, value) } : { success: false, error: problem };
+    },
+  });
 }
 
 /**

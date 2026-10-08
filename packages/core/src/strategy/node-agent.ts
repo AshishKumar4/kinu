@@ -7,9 +7,10 @@
 
 import type { ConversationRecall } from '../memory/conversation-search';
 import { REAL_CLOCK, type Clock } from '../types/clock';
-import { tool, type ModelMessage, type ToolSet } from 'ai';
-import { z } from 'zod';
-import { oneOf } from '../tools/tool-schema';
+import type { ModelMessage, ToolSet } from 'ai';
+import * as v from 'valibot';
+import { defineOperation, serve } from '../operations/operation';
+import { operationTool } from '../tools/operation-surfaces';
 import { HEAD_BUILTIN_TOOLS, OWNER_STOPPED } from '../heads/types';
 import { stoppedByOwner } from './live-workers';
 import { HeadCapture, withHeadCaptureRecording } from '../heads/head-inference';
@@ -19,7 +20,6 @@ import type { HostedActor } from '../state/actor-host';
 import type { RunTurnSources } from '../orchestrator/turn-assembly';
 import { buildToolSurface } from '../tools/builtins';
 import type { ReportDeps } from '../tools/report-operations';
-import { permitInPlan } from '../execution/work-mode';
 import type { BackgroundJobRunner } from '../jobs/runner';
 import { stepLoopJobs, type StepLoopJobSeat } from '../jobs/step-loop';
 import { CONFINED_BACKGROUNDABLE_TOOLS, wrapToolsForBackground } from '../jobs/background-wrap';
@@ -210,16 +210,28 @@ interface NodeScratch {
   produced: readonly ModelMessage[];
 }
 
-/** *Arbitration* as a tool: the verdict is the return value, and a refusal's text is written for the node. */
-/** The width band is shown, not checked: the arbiter enforces it, so an out-of-range request gets a reason-coded
- *  refusal rather than a schema error. */
-const ProposeBranchInputSchema = z.object({
-  rationale: z.string(),
-  branches: z.array(z.object({
-    task: z.string(),
-    rationale: z.string(),
-    context: oneOf(SWARM_CONTEXTS).default('fresh'),
-  })).meta({ minItems: BRANCH_PROPOSAL_WIDTH.min, maxItems: BRANCH_PROPOSAL_WIDTH.max }),
+/**
+ * *Arbitration* as an operation: the verdict is the return value, and a refusal's text is written for the node. The
+ * width band is shown, not checked: the arbiter enforces it, so an out-of-range request gets a reason-coded refusal
+ * rather than a schema error.
+ */
+const PROPOSE_BRANCH = defineOperation({
+  ns: 'head', name: 'proposeBranch', availability: 'native', slate: false, impact: 'delegate', plan: true,
+  help: `Ask the search to spend part of its budget exploring ${String(BRANCH_PROPOSAL_WIDTH.min)}-`
+    + `${String(BRANCH_PROPOSAL_WIDTH.max)} narrower threads of your task. You are PROPOSING, `
+    + 'not spawning: the search decides against a depth cap and a shared budget you cannot see, '
+    + 'and this call returns either the children it reserved or the reason it refused. Each '
+    + 'branch names what it starts from: "inherit" gives it your whole conversation, "fresh" gives '
+    + 'it your report and its own focus. Call it at most once, when one thread genuinely '
+    + 'deserves its own budget.',
+  input: v.strictObject({
+    rationale: v.string(),
+    branches: v.pipe(
+      v.array(v.strictObject({ task: v.string(), rationale: v.string(), context: v.optional(v.picklist(SWARM_CONTEXTS), 'fresh') })),
+      v.metadata({ minItems: BRANCH_PROPOSAL_WIDTH.min, maxItems: BRANCH_PROPOSAL_WIDTH.max }),
+    ),
+  }),
+  output: v.string(),
 });
 
 function buildProposeTool(
@@ -227,50 +239,39 @@ function buildProposeTool(
   scratch: NodeScratch,
 ): ToolSet {
   return {
-    [PROPOSE_BRANCH_TOOL]: permitInPlan(tool({
-      description:
-        `Ask the search to spend part of its budget exploring ${String(BRANCH_PROPOSAL_WIDTH.min)}-`
-        + `${String(BRANCH_PROPOSAL_WIDTH.max)} narrower threads of your task. You are PROPOSING, `
-        + 'not spawning: the search decides against a depth cap and a shared budget you cannot see, '
-        + 'and this call returns either the children it reserved or the reason it refused. Each '
-        + 'branch names what it starts from: "inherit" gives it your whole conversation, "fresh" gives '
-        + 'it your report and its own focus. Call it at most once, when one thread genuinely '
-        + 'deserves its own budget.',
-      inputSchema: ProposeBranchInputSchema,
-      execute: async ({ rationale, branches }): Promise<string> => {
-        // Once per node: the engine reads only the last grant, so a second arbitrate would debit the
-        // budget again and strand the first grant.
-        const priorAttempt = scratch.proposal;
+    [PROPOSE_BRANCH_TOOL]: operationTool(PROPOSE_BRANCH.help, serve(PROPOSE_BRANCH, async ({ rationale, branches }) => {
+      // Once per node: the engine reads only the last grant, so a second arbitrate would debit the
+      // budget again and strand the first grant.
+      const priorAttempt = scratch.proposal;
 
-        if (priorAttempt !== null) {
-          const prior = await priorAttempt;
+      if (priorAttempt !== null) {
+        const prior = await priorAttempt;
 
-          if (prior.kind === 'granted') {
-            return `Refused (already granted): ${String(prior.width)} children were reserved `
-              + `(${prior.nodeIds.join(', ')}) when you proposed earlier. Finish and report: `
-              + 'they are created from your report, so put in it what they will need.';
-          }
-
-          return `Refused (already proposed; ${prior.policy}): ${prior.error}`;
+        if (prior.kind === 'granted') {
+          return `Refused (already granted): ${String(prior.width)} children were reserved `
+            + `(${prior.nodeIds.join(', ')}) when you proposed earlier. Finish and report: `
+            + 'they are created from your report, so put in it what they will need.';
         }
 
-        const attempt = Promise.resolve(arbitrate({ rationale, branches }));
+        return `Refused (already proposed; ${prior.policy}): ${prior.error}`;
+      }
 
-        // Reserved before the first await: AI SDK executes same-step tool calls
-        // concurrently, so both calls must observe one shared arbitration.
-        scratch.proposal = attempt;
-        const decision = await attempt;
+      const attempt = Promise.resolve(arbitrate({ rationale, branches }));
 
-        if (decision.kind === 'refused') {
-          return `Refused (${decision.policy}): ${decision.error}`;
-        }
+      // Reserved before the first await: AI SDK executes same-step tool calls
+      // concurrently, so both calls must observe one shared arbitration.
+      scratch.proposal = attempt;
+      const decision = await attempt;
 
-        scratch.granted = decision;
+      if (decision.kind === 'refused') {
+        return `Refused (${decision.policy}): ${decision.error}`;
+      }
 
-        return `Granted: ${String(decision.width)} children reserved (${decision.nodeIds.join(', ')}). `
-          + 'They are created when you finish and report, and they receive your report as their seed, '
-          + 'so put in it what they will need.';
-      },
+      scratch.granted = decision;
+
+      return `Granted: ${String(decision.width)} children reserved (${decision.nodeIds.join(', ')}). `
+        + 'They are created when you finish and report, and they receive your report as their seed, '
+        + 'so put in it what they will need.';
     })),
   };
 }

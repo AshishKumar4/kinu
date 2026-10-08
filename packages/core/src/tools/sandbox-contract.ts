@@ -3,7 +3,6 @@
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import { asSchema, type ToolSet } from 'ai';
-import { z } from 'zod';
 import { JsonObjectSchema, decodeJsonValue, type JsonValue } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
 import { hasPlanPermission, workModeRefusal } from '../execution/work-mode';
@@ -16,6 +15,7 @@ import { parsesAsExpression } from '../craft/source';
 import type { CraftedToolSource } from './crafted-executor';
 import { toolDescription } from '../utils/tool-description';
 import { allowedInPlan, defineOperation, serve, statedInput, type Served } from '../operations/operation';
+import { operationInputSchema } from './operation-surfaces';
 
 export {
   CRAFTED_TOOL_NAMESPACE, type CodemodeProvider, type CodemodeResult,
@@ -29,11 +29,19 @@ export function craftedToolDescription(name: string, description?: string): stri
 }
 
 
-const CodemodeInputSchema = z.object({ code: z.string().describe(CODEMODE_CODE_DESCRIPTION) });
+/** `eval`'s one input: the program it runs. */
+const PROGRAM = defineOperation({
+  ns: 'eval', name: 'run', availability: 'native', slate: false, impact: 'execute', plan: true,
+  help: 'Run a JavaScript program over the namespaces this turn reaches.',
+  input: v.strictObject({ code: v.pipe(v.string(), v.description(CODEMODE_CODE_DESCRIPTION)) }),
+  output: v.unknown(),
+});
+
+const CODEMODE_INPUT = operationInputSchema(PROGRAM);
 
 /** Shared by both backends; CF reassigns it over `createCodeTool`'s own schema. */
-export function codemodeInputSchema(): typeof CodemodeInputSchema {
-  return CodemodeInputSchema;
+export function codemodeInputSchema(): typeof CODEMODE_INPUT {
+  return CODEMODE_INPUT;
 }
 
 export interface CraftedDeclaration {

@@ -199,7 +199,7 @@ export const DECLARED = byFile([
   }],
   ['packages/core/src/tools/operation-surfaces.ts', {
     mechanisms: ['result-literal'],
-    within: ['nativeCall'],
+    within: ['nativeCall', 'operationInputSchema'],
     reason: 'a native tool\'s input check answers the AI SDK\'s `ValidationResult`; `success` is its field',
   }],
   ['packages/core/src/tools/inline-executor.ts', {

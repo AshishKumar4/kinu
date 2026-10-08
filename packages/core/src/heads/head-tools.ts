@@ -4,9 +4,10 @@
  * over the head's real vocabulary. Nodes: docs/EXPLORATION.md "A node is an agent".
  */
 
-import { tool, type ToolSet } from 'ai';
-import { z } from 'zod';
-import { oneOf } from '../tools/tool-schema';
+import type { ToolSet } from 'ai';
+import * as v from 'valibot';
+import { defineOperation, serve } from '../operations/operation';
+import { operationTool } from '../tools/operation-surfaces';
 import { buildToolSurface } from '../tools/builtins';
 import { buildHeadAccumulatorTools, HeadCapture, withHeadCaptureRecording } from './head-inference';
 import { HEAD_BUILTIN_TOOLS, MERGE_STRATEGIES } from './types';
@@ -14,7 +15,6 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { ConversationRecall } from '../memory/conversation-search';
 import type { Decision, HeadId, HeadInput, MergeStrategy } from './types';
 import type { WebSearchProvider } from '../web/index';
-import { permitInPlan } from '../execution/work-mode';
 import { wrapToolsForBackground, type ActorJobs } from '../jobs/background-wrap';
 
 export interface HeadSplitRequest {
@@ -48,10 +48,16 @@ export interface HeadToolDeps {
   jobs: ActorJobs;
 }
 
-const SplitSubheadsInputSchema = z.object({
-  rationale: z.string(),
-  heads: z.array(z.object({ task: z.string(), rationale: z.string() })).meta({ minItems: 2, maxItems: 4 }),
-  merge_strategy: oneOf(MERGE_STRATEGIES).optional(),
+/** A head's split into child heads; the width is shown, and the backend's split enforces it. */
+const SPLIT = defineOperation({
+  ns: 'head', name: 'split', availability: 'native', slate: false, impact: 'delegate', plan: true,
+  help: "Spawn 2-4 child heads recursively to explore narrower sub-questions. Children's findings merge into a single narrative.",
+  input: v.strictObject({
+    rationale: v.string(),
+    heads: v.pipe(v.array(v.strictObject({ task: v.string(), rationale: v.string() })), v.metadata({ minItems: 2, maxItems: 4 })),
+    merge_strategy: v.optional(v.picklist(MERGE_STRATEGIES)),
+  }),
+  output: v.string(),
 });
 
 export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
@@ -63,40 +69,33 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
   // Depth is fixed for the whole run, so a head with none left is not offered the tool, and the prompt
   // (built from these keys) follows.
   if (input.budget.maxDepth > 0) {
-    extra.split_subheads = permitInPlan(tool({
-      description:
-        `Spawn 2-4 child heads recursively to explore narrower sub-questions. ` +
-        `Children's findings merge into a single narrative. ` +
-        `You may nest ${input.budget.maxDepth} more level(s).`,
-      inputSchema: SplitSubheadsInputSchema,
-      execute: async ({ rationale, heads, merge_strategy }): Promise<string> => {
-        const result = await deps.split({
-          rationale, heads, mergeStrategy: merge_strategy ?? input.mergeStrategy,
-        });
+    extra.split_subheads = operationTool(`${SPLIT.help} You may nest ${String(input.budget.maxDepth)} more level(s).`, serve(SPLIT, async ({ rationale, heads, merge_strategy }) => {
+      const result = await deps.split({
+        rationale, heads, mergeStrategy: merge_strategy ?? input.mergeStrategy,
+      });
 
-        for (const id of result.childHeadIds) capture.childHeadIds.push(id);
-        const lines: string[] = [result.narrative];
+      for (const id of result.childHeadIds) capture.childHeadIds.push(id);
+      const lines: string[] = [result.narrative];
 
-        if (result.decisions.length) {
-          lines.push('', "Children's selected decisions:");
+      if (result.decisions.length) {
+        lines.push('', "Children's selected decisions:");
 
-          for (const d of result.decisions) lines.push(`- ${d.question}: ${d.choice}`);
-        }
+        for (const d of result.decisions) lines.push(`- ${d.question}: ${d.choice}`);
+      }
 
-        if (result.unresolvedQuestions.length) {
-          lines.push('', 'Open questions:');
+      if (result.unresolvedQuestions.length) {
+        lines.push('', 'Open questions:');
 
-          for (const q of result.unresolvedQuestions) lines.push(`- ${q}`);
-        }
+        for (const q of result.unresolvedQuestions) lines.push(`- ${q}`);
+      }
 
-        if (result.blindSpots.length) {
-          lines.push('', 'Not covered by any child:');
+      if (result.blindSpots.length) {
+        lines.push('', 'Not covered by any child:');
 
-          for (const b of result.blindSpots) lines.push(`- ${b}`);
-        }
+        for (const b of result.blindSpots) lines.push(`- ${b}`);
+      }
 
-        return lines.join('\n');
-      },
+      return lines.join('\n');
     }));
   }
 
