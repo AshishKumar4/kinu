@@ -24,7 +24,7 @@ import { SlateHost } from '../../src/slates/host';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '../../src/slates/bindings';
 import { slateBatchStub } from '../../src/slates/rpc-transport';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { asFetchFunction, callCodemodeMember, createDefaultWebSearchProvider, createWebCodemodeProvider } from '@kinu.run/core';
+import { asFetchFunction, callCodemodeMember, createDefaultWebSearchProvider, createWebCodemodeProvider, requireCodemodeMember } from '@kinu.run/core';
 
 // `env.FILES` and `codemodeEgress()` resolve exports of this worker; without them a `build` boot throws before the route.
 
@@ -74,13 +74,20 @@ const DRIVER = [
   '}',
 ].join('\n');
 
+/** Each time this isolate's Browser Run was dialed: a browser the class reached, whatever the dial then answered. */
+let browserRunDials = 0;
+
 /** Browser Run, as the egress gate reaches it: a session answers where a CDP socket would, naming the session. */
 export class FakeBrowserRun extends WorkerEntrypoint {
   override async fetch(): Promise<Response> {
+    browserRunDials += 1;
+
     return new Response('Browser Run started a Kitesurf browser');
   }
 
   async connectSession(sessionId: string) {
+    browserRunDials += 1;
+
     return { webSocket: { fetch: async () => new Response(`Browser Run reached session ${sessionId}`) } };
   }
 }
@@ -141,8 +148,15 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       session: async () => ({ vfs: this.vfs, processes: this.processes, filesystem: this.filesystem }),
       facetManager: async () => facets,
       bundler: (vfs) => supervisorEsbuildService(ctx, env, vfs),
-      dispatch: async (_caller, route) => {
+      dispatch: async (_caller, route, context) => {
         if (route.kind !== 'namespace') throw new Error(`probe dispatch answers namespace only, got ${route.kind}`);
+
+        // The actor's half of authorizing a browser member: it is within reach, so the class may run it.
+        if (route.namespace === 'web' && context.authorizeOnly) {
+          requireCodemodeMember([PROBE_WEB], 'web', route.member);
+
+          return null;
+        }
 
         if (route.namespace === 'web') return await callCodemodeMember([PROBE_WEB], 'web', route.member, route.args) ?? null;
 
@@ -257,6 +271,24 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     const process = await this.host.ensure(ROOT_SLATE_CALLER, 'driver');
 
     return await (await process.request(new Request(`https://slate.invalid/?session=${encodeURIComponent(session)}`))).text();
+  }
+
+  /**
+   * What the driver answers a viewer of its public share when its class connects `session`, the owner having run it
+   * once and shared it granting `approved` beyond what observes.
+   */
+  async driveShared(session: string, approved: readonly string[], claim: ShareViewerClaim): Promise<{ answer: string; dialed: number }> {
+    await this.drive('kitesurf');
+    const before = browserRunDials;
+
+    const created = v.parse(v.object({ ok: v.literal(true), value: v.object({ share: v.object({ handle: v.string() }) }) }), await this.host.operation(ROOT_SLATE_CALLER, {
+      op: 'share', id: 'driver', visibility: 'public', approved: approved.map((member) => ({ slate: 'driver', namespace: 'web', member })),
+    }));
+
+    const request = new Request(`https://share.invalid/?session=${encodeURIComponent(session)}`);
+    const answer = await (await this.host.routeShare(created.value.share.handle, claim, request, '/')).text();
+
+    return { answer, dialed: browserRunDials - before };
   }
 
   /** The triage slates (`TRIAGE`), as an owner authors them where slates live and runs each through what it calls. */

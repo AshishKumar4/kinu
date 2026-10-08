@@ -10,7 +10,7 @@ import type { WorkMode } from '../types/turn';
 import { branchableToolCall, bindProgramCall } from './outcome';
 import { TOOL_REACH, CODEMODE_CODE_DESCRIPTION, type ToolSurfaceNarrowing } from './registry';
 import { slateReaches } from '../slates/surface';
-import { KinuError, settle } from '../obs';
+import { KinuError, settle, settleSync } from '../obs';
 import { CRAFTED_TOOL_NAMESPACE, type CodemodeProvider } from '../types/codemode';
 import { parsesAsExpression } from '../craft/source';
 import type { CraftedToolSource } from './crafted-executor';
@@ -293,14 +293,26 @@ function slateMembersOf<P extends { readonly name: string }>(provider: P): P {
 }
 
 /** A held slate stub is not a grant: reach is re-resolved per call. */
+/** `namespace.member` among `providers`, or why it is not: out of reach (denied), or no such member (missing). */
+function codemodeMember(providers: readonly CodemodeProvider[], namespace: string, member: string) {
+  const provider = providers.find((candidate) => candidate.name === namespace);
+
+  if (provider === undefined) return Effect.fail(new KinuError('denied', `${namespace} is not within this actor's reach right now`));
+  const entry = Object.hasOwn(provider.tools, member) ? provider.tools[member] : undefined;
+
+  if (entry === undefined) return Effect.fail(new KinuError('missing', `${namespace} has no member ${member}; it offers ${Object.keys(provider.tools).join(', ')}`));
+
+  return Effect.succeed(entry);
+}
+
+/** Refuses exactly as {@link callCodemodeMember} would, without calling: for a member run elsewhere once allowed. */
+export function requireCodemodeMember(providers: readonly CodemodeProvider[], namespace: string, member: string): void {
+  settleSync(Effect.asVoid(codemodeMember(providers, namespace, member)));
+}
+
 export async function callCodemodeMember(providers: readonly CodemodeProvider[], namespace: string, member: string, args: readonly JsonValue[]): Promise<JsonValue | undefined> {
   const call = codemodeFunction(namespace, member, () => settle(Effect.gen(function* () {
-    const provider = providers.find((candidate) => candidate.name === namespace);
-
-    if (provider === undefined) return yield* new KinuError('denied', `${namespace} is not within this actor's reach right now`);
-    const entry = Object.hasOwn(provider.tools, member) ? provider.tools[member] : undefined;
-
-    if (entry === undefined) return yield* new KinuError('missing', `${namespace} has no member ${member}; it offers ${Object.keys(provider.tools).join(', ')}`);
+    const entry = yield* codemodeMember(providers, namespace, member);
 
     return yield* Effect.promise(() => Promise.resolve(entry.execute(...args)));
   })));

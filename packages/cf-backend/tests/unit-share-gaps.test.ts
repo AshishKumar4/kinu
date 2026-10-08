@@ -4,13 +4,15 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
  * The per-share daily spend bound pauses a running slate's calls, so it is driven in workerd
  * (`tests/workerd/slate-share.test.ts`).
  */
-import { afterEach, expect, setSystemTime, test } from 'bun:test';
+import { afterEach, expect, setSystemTime, spyOn, test } from 'bun:test';
 import * as v from 'valibot';
 import {
   LiveShareRecordSchema, LiveShareCreatedSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE, SharedLibrarySchema,
-  type AgentRuntime, type SlateAnswer,
+  SlateCapabilityGraphSchema, type AgentRuntime, type JsonObject, type SlateAnswer,
 } from '@kinu.run/core';
-import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles } from './helpers/actor-harness';
+import { chatSessionTurns, orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles } from './helpers/actor-harness';
+import { SlateHost } from '../src/slates/host';
+import type { ResidentSlateProcess } from '../src/slates/resident';
 import { createTestUserDO, provisionTestWorkspace, testOwner, TEST_USER_ENV, type TestUserDO } from './helpers/user-do';
 import { resetRecordedMcp, seedMcpTools } from './helpers/agents-sdk';
 import { ROOT_SLATE_CALLER } from '../src/slates/bindings';
@@ -509,4 +511,69 @@ test("a share whose recipients' tile cannot be pushed says the list is behind, w
 
   expect(answer.status).toBe(201);
   expect(await jsonBody(answer, v.object({ listing: v.optional(v.literal('pending')) }))).toEqual({ listing: 'pending' });
+});
+
+/** Runs `code` as the agent's own program does, through its eval tool, inside one turn. */
+async function program(agent: HarnessOrchestratorAgent, code: string): Promise<void> {
+  agent.harnessDrivingUserMessage('run a program', {});
+  const turns = chatSessionTurns(agent);
+  const { tools } = await turns.prepare({ messages: [{ role: 'user', content: 'run a program' }] });
+  await tools.eval?.execute?.({ code }, { toolCallId: 'walk', messages: [], context: undefined });
+  await turns.settle({ messageId: 'a-program', text: 'ran' });
+}
+
+/**
+ * A viewer's visit as the slate's class would answer it, calling `tools.helper` under the invocation the host issued
+ * for that visit: no slate process boots in this harness, so the host's `ensure` hands back one that does only that.
+ */
+async function viewerCallsHelper(world: World, url: string, input: JsonObject): Promise<string> {
+  const ensure = spyOn(SlateHost.prototype, 'ensure').mockImplementation(async function viewerProcess(this: SlateHost, caller, id) {
+    const answer = (request: Request) => this.surfaceCall(caller, id, 'workspace', {
+      path: ['tools', 'helper'], args: [input], invocation: request.headers.get('x-slate-call'),
+    }).then((result) => Response.json(result));
+
+    const process: ResidentSlateProcess = {
+      id, port: null, methods: [], artifacts: { application: '' },
+      request: answer, connect: answer, isRunning: async () => true, stop: async () => {},
+    };
+
+    return process;
+  });
+
+  try {
+    const minted = await visit(world, url, '203.0.113.9', { path: CONSENT_PATH });
+    const cookie = present(minted?.headers.get('set-cookie')?.split(';')[0], 'the consent cookie');
+
+    return await present(await visit(world, url, '203.0.113.9', { cookie }), 'the visit').text();
+  } finally {
+    ensure.mockRestore();
+  }
+}
+
+test("a viewer's approved crafted tool reaches only what the share grants, and none of the owner's browsers", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const owner = world.owner.agent;
+
+  await program(owner, `await workspace.createTool('helper', 'Notes who ran it, and what browsers it could reach', `
+    + `'async (input) => ({ wrote: await memory.remember("ran-by", input.who), browsers: typeof web.openBrowser })')`);
+  // The owner's own run, through the slate.
+  expect(await owner.slateCallAs(ROOT_SLATE_CALLER, 'issues', 'workspace', { path: ['tools', 'helper'], args: [{ who: 'owner' }], invocation: null }))
+    .toMatchObject({ ok: true, value: { browsers: 'function' } });
+
+  // Shared approving the tool alone: its write to memory is not granted, and it holds none of the owner's sessions.
+  const created = answered(await owner.slate({
+    op: 'share', id: 'issues', visibility: 'public', approved: [{ slate: 'issues', namespace: 'tools', member: 'helper' }],
+  }), v.object({ share: LiveShareRecordSchema, url: v.nullable(v.string()) }));
+
+  const answeredToViewer = await viewerCallsHelper(world, present(created.url, 'the share URL'), { who: 'viewer' });
+
+  expect(answeredToViewer).toContain('does not grant memory.remember to viewers');
+  expect(await owner.slateCallAs(ROOT_SLATE_CALLER, 'issues', 'workspace', { path: ['memory', 'recall'], args: ['ran-by'], invocation: null }))
+    .toMatchObject({ ok: true, value: { key: 'ran-by', value: 'owner' } });
+
+  // What the tool reaches inside itself is the slate's reach too, so the next share shows the write to approve.
+  const graph = answered(await owner.slate({ op: 'graph', id: 'issues' }), SlateCapabilityGraphSchema);
+
+  expect(graph.namespaces.find((row) => row.namespace === 'memory')?.members.map((member) => [member.member, member.impact])).toContainEqual(['remember', 'mutate']);
 });

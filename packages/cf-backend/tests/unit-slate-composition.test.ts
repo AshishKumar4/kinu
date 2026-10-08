@@ -429,6 +429,33 @@ test('a slate\'s file and memory calls use the caller\'s own plane and lose reac
   expect(await read()).toContain('root note');
 });
 
+test("a class's browser member is authorized at the host by its caller's role as it is now, and only a browser member is", async () => {
+  const parent = orchestratorHarness();
+  const files = workspaceFiles(parent.agent);
+  await files.mkdir('/slates/driver', { recursive: true });
+  await writeText(files, '/slates/driver/package.json', JSON.stringify({ main: 'server.ts' }));
+
+  const child = await hostedSubordinateHarness(parent, {
+    name: 'driver', displayName: 'Driver', nameOrigin: 'user', roleId: 'task', mission: 'Drive',
+  });
+
+  const caller = await childCaller(parent.db, actorHomeName({ origin: 'agent', storageKey: child.actor.handle.storageKey }), 'driver');
+
+  const authorize = (asCaller: SlateCaller, path: string[]) =>
+    parent.agent.slateCallAs(asCaller, 'driver', 'workspace', { path, args: [], invocation: null, authorize: true });
+
+  expect(await authorize(caller, ['web', 'connectBrowser'])).toEqual({ ok: true, value: null });
+  parent.agent.harnessInstallCatalog({
+    roles: { scribe: { description: 'Only memory.', instructions: 'Write.', tier: 'default', preset: 'ideate', allowedTools: ['memory'] } },
+    tiers: { default: { model: DEFAULT_WORKERS_AI_MODEL_SPEC } },
+  });
+  // A role that has since lost the web has the class's next connect refused before it dials.
+  child.actor.stores.config.setRoleSelection('scribe');
+  expect(await authorize(caller, ['web', 'connectBrowser'])).toMatchObject({ ok: false, reason: 'denied' });
+  // What runs at the host is never only authorized: its answer would be the class's to make up.
+  expect(await authorize(ROOT_SLATE_CALLER, ['readFile'])).toMatchObject({ ok: false, reason: 'bad_input' });
+});
+
 test('a slate never reaches what only the agent does', async () => {
   const actor = orchestratorHarness();
   const files = workspaceFiles(actor.agent);

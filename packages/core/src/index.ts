@@ -270,8 +270,8 @@ export {
 } from './slates/capability-graph';
 
 export {
-  SlateCallRequestSchema, routeSlateCall, issuedSlateInvocation, routeViewerCall, slateCallAddress,
-  type SlateCallRequest, type SlateRoute, type SlateInvocation, type SlateViewer,
+  SlateCallRequestSchema, SLATE_DRIVEN_MEMBERS, routeSlateCall, issuedSlateInvocation, routeViewerCall, admitNestedViewerCall, slateCallAddress,
+  type SlateCallRequest, type SlateRoute, type SlateCall, type SlateInvocation, type SlateViewer,
 } from './slates/surface';
 
 export { SLATE_READ_MODELS, type SlateReadModel } from './slates/read-models';
@@ -490,7 +490,7 @@ export {
   CRAFTED_TOOL_NAMESPACE,
   craftedToolDescription, codemodeInputSchema,
   renderCraftedToolsDeclaration, nativeToolFunctions, toolsNamespace, codemodeFunction, craftedFailureFunctions, renderCraftedDefinitions,
-  slateToolReach, callCodemodeMember,
+  slateToolReach, callCodemodeMember, requireCodemodeMember,
   withCraftedToolDeclarations, craftedToolDeclarations,
   type CraftedDeclaration,
   type CodemodeProvider, type CodemodeResult,

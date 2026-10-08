@@ -49,9 +49,10 @@ interface SlateBindingEnv {
 
 /** Every call a slate makes returns through the owner's one route decision, as the caller. */
 export class SlateBinding extends WorkerEntrypoint<SlateBindingEnv, SlateBindingProps> {
-  call(path: string[], args: JsonValue[], invocation: string | null): Promise<SlateCallResult> {
+  /** `authorize` asks only whether the call may run: the class runs a browser member itself once it may. */
+  call(path: string[], args: JsonValue[], invocation: string | null, authorize?: boolean): Promise<SlateCallResult> {
     const { workspace, id, name, caller } = this.ctx.props;
 
-    return relayedAnswer(workspaceOwner(this.env, workspace).slateCallAs(caller, id, name, { path, args, invocation }));
+    return relayedAnswer(workspaceOwner(this.env, workspace).slateCallAs(caller, id, name, { path, args, invocation, ...(authorize === true && { authorize: true }) }));
   }
 }
