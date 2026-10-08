@@ -707,8 +707,8 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   harnessRefuseDriving(refusal: Refusal | null): void { this._driverRefusal = refusal; }
   protected override driverGate(): Refusal | null { return this._driverRefusal; }
 
-  /** The wake arm that resumes the loop after a restart. */
-  harnessResumeChatLoop(): void { this.resumeChatLoop(); }
+  /** Constructing the loop re-opens the last open turn and reruns acknowledged sends. */
+  harnessResumeChatLoop(): void { void this.chatLoop; }
 
   /** The recovery hook's decision, which the scan hides. */
   harnessRecoverFiber(ctx: FiberRecoveryContext): Promise<void | FiberRecoveryResult> {

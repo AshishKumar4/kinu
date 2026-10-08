@@ -1208,17 +1208,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return this._pendingSends ??= new PendingSendStore(this.boundSql, this.actorHandle().actorId);
   }
 
-  /** True when an open turn or undrained acknowledged send exists; the loop is then built under
-   *  a wake, never inside the init gate, because a turn is external work. */
-  protected chatLoopOwesWork(): boolean {
-    return this.eventRecorder.openRun() !== null || this.pendingSends.restore().length > 0;
-  }
-
-  /** Constructing the loop re-opens the last open turn and reruns acknowledged sends. */
-  protected resumeChatLoop(): ChatSession {
-    return this.chatLoop;
-  }
-
   /** Reads SQL, not the RAM drain, which an eviction loses. Only turn-bound rows are steers;
    *  unbound rows are the loop's own sends, already shown as messages, never as chips. */
   protected pendingSteerRuns(): InlineSteer[] {

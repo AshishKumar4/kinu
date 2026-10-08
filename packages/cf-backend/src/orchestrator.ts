@@ -1438,8 +1438,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // Admitted but unstarted delegations hold no claim, so `resumable` does not cover them.
       admittedDelegations: this.hasAdmittedDelegations(),
       agentTurns: this.agentTurns.inFlightAny(),
-      // The root's loop: a turn a dead process was inside, or an acknowledged send never drained.
-      chatLoop: this.chatLoopOwesWork(),
+      // Main's chat, in its own isolate: work handed to it that it has not yet said it rests from.
+      chatLoop: this.agentWakes.armed(this.actorHandle().actorId),
     };
   }
 
@@ -2245,7 +2245,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   protected override mainChatTurn(): string | null {
-    return this.agentTurns.chatTurn(this.actorHandle().actorId);
+    return this.agentTurns.currentTurn(this.actorHandle().actorId);
   }
 
   /** `room` names the tabs that hear the agent: its own window's, or null for the workspace's. */
@@ -3258,8 +3258,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    *  Runs once per activation by the guard below. */
 
   protected override async maintenanceWork(): Promise<boolean> {
-    // Resume the root's own loop before anything else the wake finishes on its behalf.
-    this.resumeChatLoop();
+    // Main's chat resumes in its own isolate before anything else the wake finishes on its behalf; detached, as its wake is.
+    const main = this.actorHandle().actorId;
+
+    if (this.agentWakes.armed(main)) {
+      this.detachOwned(logged('subordinate.agent_wake_failed', { doing: "waking main's own isolate for what it owes", otherwise: 'io' },
+        () => this.wakeAgent(main), { workspace: this.name, actor: main }));
+    }
 
     for (const pending of this.workspaceActors().retirements()) {
       await this.runActorDirectory(pending.caller, pending.parentPath, { action: 'retire', name: pending.name, reference: pending.reference });

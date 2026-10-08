@@ -104,11 +104,6 @@ export class AgentTurns {
     await hold(logged('agent.run_interrupt_failed', { doing: 'interrupting a run in its own isolate', otherwise: 'io' }, () => this.deps.interrupt(reference, turnId)));
   }
 
-  /** The agent's chat turn its room heard open and not yet close. */
-  chatTurn(actorId: string): string | null {
-    return this.chats.get(actorId) ?? null;
-  }
-
   chatOpened(actorId: string, turnId: string): void {
     this.chats.set(actorId, turnId);
   }
