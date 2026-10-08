@@ -165,8 +165,8 @@ export function opaque<S extends v.GenericSchema>(schema: S, stated: JsonSchema)
 function jsonSchemaOf(schema: v.GenericSchema, forTypes: boolean): JsonSchema {
   const { $schema: _dialect, ...document } = toJsonSchema(schema, {
     errorMode: 'throw',
-    // Checked on every call; a schema has no words for them.
-    ignoreActions: ['trim', 'check', 'guard', 'finite', 'raw_transform', 'transform'],
+    // Checked on every call, or (readonly) a type alone; a schema has no words for them.
+    ignoreActions: ['trim', 'check', 'guard', 'finite', 'raw_transform', 'transform', 'readonly'],
     overrideSchema: ({ valibotSchema }) => {
       if (valibotSchema === JsonValueSchema) return forTypes ? { enum: [JSON_VALUE_MARK] } : { description: 'Any JSON value.' };
 

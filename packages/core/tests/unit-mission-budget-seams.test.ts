@@ -3,7 +3,7 @@
 
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { scriptedTurnModel, createTestActorsOver, unobservedSearchSeams } from '@kinu.run/test-utils';
+import { scriptedTurnModel, createTestActorsOver, present, unobservedSearchSeams } from '@kinu.run/test-utils';
 import { swarmSeats } from './helpers-actor-host';
 import * as v from 'valibot';
 import type { ModelMessage } from 'ai';
@@ -206,15 +206,15 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
     const spawns: string[] = [];
     const ns = sandbox(searchableDeps({ budget: governor, spawns }));
 
-    for (const [member, input] of [
-      ['swarm', { task: 'x', ...TWO_BRANCHES }],
-      ['hire', { role: 'r', mission: 'm' }],
-      ['hire', { agent: 'helper', message: 'm' }],
+    for (const [member, args] of [
+      ['swarm', ['x', TWO_BRANCHES]],
+      ['hire', ['r', 'm']],
+      ['assign', ['helper', 'm']],
       // An exhausted label must not mint a task-lifetime agent either.
-      ['hire', { lifetime: 'task', role: 'auditor', mission: 'm' }],
-      ['msg', { agent: 'helper', message: 'm' }],
+      ['hire', ['auditor', 'm', { lifetime: 'task' }]],
+      ['message', ['helper', 'm']],
     ] as const) {
-      const refusal = v.parse(BudgetRefusalSchema, await ns[member](input));
+      const refusal = v.parse(BudgetRefusalSchema, await present(ns[member], `agents.${member}`)(...args));
       expect(refusal.error).toBe('budget_exhausted');
       expect(refusal.seam).toBe('spawn');
       expect(refusal.label).toBe('nightly');
