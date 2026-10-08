@@ -130,7 +130,7 @@ export default function App() {
 }
 \`\`\`
 
-\`this.storage\` is a key-value store (\`get\`, \`put\`, \`delete\`, \`list({ prefix?, limit? })\`) and \`this.sql\` the slate's own SQLite (\`this.sql.exec(query, ...params).toArray()\`); both keep their data across edits, restarts and eviction. Memory on the class is a cache. Methods named \`_x\`, the constructor and \`fetch\` are not callable; define \`fetch(request)\` only to serve a download of your own. To push updates, take a callback: \`subscribe(callback)\` keeps \`callback.dup()\` and calls it, and \`held.onRpcBroken(...)\` forgets it; the client subscribes again when its socket drops. \`useHostContext()\` answers \`{ theme, display }\`.
+\`this.storage\` is a key-value store (\`get\`, \`put\`, \`delete\`, \`list({ prefix?, limit? })\`) and \`this.sql\` the slate's own SQLite (\`this.sql.exec(query, ...params).toArray()\`); what either holds persists across code edits, restarts and eviction. Memory on the class is a cache. Methods named \`_x\`, the constructor and \`fetch\` are not callable; define \`fetch(request)\` only to serve a download of your own. To push updates, take a callback: \`subscribe(callback)\` keeps \`callback.dup()\` and calls it, and \`held.onRpcBroken(...)\` forgets it; the client subscribes again when its socket drops. \`useHostContext()\` answers \`{ theme, display }\`.
 
 ## workspace: your reach, as you
 
