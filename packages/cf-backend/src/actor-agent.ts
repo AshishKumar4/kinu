@@ -412,6 +412,14 @@ function actorAgentsActions(deps: ActorToolDeps, swarms: boolean): AgentsToolAct
   return agentsActionsFor({ swarm: {}, swarms, team: deps.team, peers: deps.peers });
 }
 
+/** The owner's review calls on one hosted agent's plans, answered by its isolate. */
+export interface HostedPlanReviews {
+  active(): Promise<PlanReview | null>;
+  saveAnnotations(id: string, revision: number, annotations: ReviewAnnotation[]): Promise<PlanReviewResult>;
+  dismiss(id: string, revision: number): Promise<PlanReviewResult>;
+  decide(id: string, revision: number, decision: PlanReviewDecision, feedback?: string): Promise<PlanDecisionOutcome>;
+}
+
 /**
  * Ledgers that can owe work with no instant and nothing else to watch it. A live background job has its `bg:` fiber;
  * activation arms one ledger recovery pass even if that row expired, and a deferred job is timed (`nextOwedAt`).
@@ -479,14 +487,6 @@ function hostedActorSurface(actor: HostedActor, webSearch: WebSearchProvider, co
 interface SlateAuthority {
   readonly mode: WorkMode;
   readonly reach: ToolSurfaceNarrowing;
-}
-
-/** The owner's review calls on one hosted agent's plans, answered by its isolate. */
-export interface HostedPlanReviews {
-  active(): Promise<PlanReview | null>;
-  saveAnnotations(id: string, revision: number, annotations: ReviewAnnotation[]): Promise<PlanReviewResult>;
-  dismiss(id: string, revision: number): Promise<PlanReviewResult>;
-  decide(id: string, revision: number, decision: PlanReviewDecision, feedback?: string): Promise<PlanDecisionOutcome>;
 }
 
 export abstract class ActorAgent extends Agent<Env> {
