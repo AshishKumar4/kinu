@@ -1118,6 +1118,12 @@ export {
   checkpointReason, stagingOutcome,
 } from './checkpoints/format';
 
+export {
+  createCheckpointEngine, PROJECT_MARKERS,
+  type CheckpointEngine, type CheckpointEngineOptions, type CheckpointGitRun, type CheckpointHost,
+  type CheckpointOutcome, type CheckpointRequest,
+} from './checkpoints/engine';
+
 // Semantic memory
 export {
   reciprocalRankFusion,
@@ -1473,7 +1479,6 @@ export {
   WorkspaceProposalStore,
   initWorkspaceProposalsTable,
   proposedSoul,
-  WORKSPACE_PROPOSAL_SIGNAL,
   type WorkspaceProposal,
   type WorkspaceProposalAnswer,
   type WorkspaceProposalInput,

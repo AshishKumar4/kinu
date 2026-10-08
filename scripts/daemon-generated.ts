@@ -1,6 +1,6 @@
 /**
- * The device daemon speaks two protocols with core: the checkpoint store format the CLI's engine reads, and
- * Sign in with ChatGPT's token protocol a deployment's sign-in speaks. Each is one dependency-free core module.
+ * The device daemon shares three modules with core: the checkpoint store format and the checkpoint engine the CLI
+ * runs too, and Sign in with ChatGPT's token protocol a deployment's sign-in speaks. Each is dependency-free.
  * The daemon is dependency-free JavaScript, and its updater lands only the files the RUNNING daemon names
  * (`landDaemonFiles` in `pc-agent/src/update.js`), so a new sibling file would leave every updated daemon
  * unable to start. Each module is therefore copied into a daemon file, between two markers, with its type-only
@@ -11,7 +11,7 @@
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { parseSync, Visitor } from 'oxc-parser';
 
 const REPO_ROOT = join(import.meta.dir, '..');
@@ -19,6 +19,7 @@ const REPO_ROOT = join(import.meta.dir, '..');
 /** Each core module and the daemon file that carries it. */
 export const GENERATED = {
   checkpointFormat: { source: 'packages/core/src/checkpoints/format.ts', daemon: 'packages/pc-agent/src/index.js' },
+  checkpointEngine: { source: 'packages/core/src/checkpoints/engine.ts', daemon: 'packages/pc-agent/src/index.js' },
   chatgptProtocol: { source: 'packages/core/src/providers/chatgpt-protocol.ts', daemon: 'packages/pc-agent/src/chatgpt.js' },
 } as const;
 
@@ -42,7 +43,8 @@ function withoutTypes(name: string, source: string): string {
     TSTypeParameterDeclaration: whole,
     TSInterfaceDeclaration: whole,
     TSTypeAliasDeclaration: whole,
-    ImportDeclaration: (node) => { if (node.importKind === 'type') whole(node); },
+    // A relative value import names a module generated into the same daemon file, which already declares it.
+    ImportDeclaration: (node) => { if (node.importKind === 'type' || node.source.value.startsWith('./')) whole(node); },
     TSAsExpression: (node) => { cuts.push([node.expression.end, node.end]); },
     TSSatisfiesExpression: (node) => { cuts.push([node.expression.end, node.end]); },
   }).visit(parsed.program);
@@ -55,8 +57,20 @@ function withoutTypes(name: string, source: string): string {
   return source.split('').filter((char, at) => cut[at] === 0 || char === '\n').join('');
 }
 
+/** The relative modules `source` imports values from: each must be generated into the same daemon file. */
+function siblingsOf(generated: Generated, module: string): void {
+  for (const [, specifier] of module.matchAll(/^import \{[^}]*\} from '(\.\/[^']+)';$/gmu)) {
+    const sibling = join(dirname(generated.source), `${specifier ?? ''}.ts`);
+
+    if (!Object.values(GENERATED).some((other) => other.source === sibling && other.daemon === generated.daemon)) {
+      throw new Error(`${generated.source} imports ${specifier ?? ''}, which is not generated into ${generated.daemon}`);
+    }
+  }
+}
+
 /** `daemon` with its generated block holding a fresh copy of `module`, which `generated` names. */
 function withGenerated(generated: Generated, daemon: string, module: string): string {
+  siblingsOf(generated, module);
   const marker = begin(generated.source);
   const from = daemon.indexOf(marker);
   const to = daemon.indexOf(END, from);
