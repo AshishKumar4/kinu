@@ -1842,8 +1842,8 @@ describe('agents.* codemode namespace — node sandbox', () => {
 
     const result = await run(`
       const angles = ['auth', 'billing'];
-      const searched = await Promise.all(angles.map((a) => agents.swarm({
-        task: 'review ' + a, preset: 'ideate', branches: 2, depth: 1,
+      const searched = await Promise.all(angles.map((a) => agents.swarm('review ' + a, {
+        preset: 'ideate', branches: 2, depth: 1,
       })));
       const ran = searched.filter((s) => !s.reason && s.report.expansions === 2);
       return { count: ran.length, branches: ran.map((s) => s.caps.branches.value) };
@@ -1861,7 +1861,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
 
     const dispatched = v.parse(
       v.object({ result: v.object({ preset: v.string(), report: v.object({ expansions: v.number() }) }) }),
-      await run(`return await agents.swarm({ task: 'pick an approach', preset: 'ideate', branches: 2, depth: 1 });`),
+      await run(`return await agents.swarm('pick an approach', { preset: 'ideate', branches: 2, depth: 1 });`),
     );
 
     expect(dispatched.result.preset).toBe('ideate');
@@ -1876,7 +1876,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
         + SWARM_PRESET_DOCTRINE.join(' '),
     };
 
-    await expect(run(`return await agents.swarm({ task: 'pick an approach' });`)).rejects.toEqual(expect.objectContaining({
+    await expect(run(`return await agents.swarm('pick an approach');`)).rejects.toEqual(expect.objectContaining({
       outcome: { ...refusal, failures: [{ ...refusal, tool: 'agents', op: 'swarm' }] },
     }));
     expect(calls).toHaveLength(expanded);
@@ -1887,8 +1887,8 @@ describe('agents.* codemode namespace — node sandbox', () => {
 
     // `ideate` is flat, so an objective on it is refused; the script reads the refusal as a return value.
     const result = await sandboxWith(deps)(`
-      const searched = await agents.swarm({
-        task: 't', preset: 'ideate',
+      const searched = await agents.swarm('t', {
+        preset: 'ideate',
         objective: {
           kind: 'scalar', metric: 'ms', unit: 'ms', direction: 'minimise',
           scale: 'linear', target: 1, verify: { kind: 'exec-ratio', spec: {} },
@@ -1916,7 +1916,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     const result = v.parse(
       v.object({ result: v.object({ report: v.object({ stop: v.string(), expansions: v.number() }) }) }),
       await sandboxWith(deps)(
-        `return await agents.swarm({ task: 't', preset: 'ideate', branches: 2, depth: 1 });`,
+        `return await agents.swarm('t', { preset: 'ideate', branches: 2, depth: 1 });`,
         { abortSignal: controller.signal, toolCallId: 'swarm-abort-test', messages: [], context: undefined },
       ),
     );
