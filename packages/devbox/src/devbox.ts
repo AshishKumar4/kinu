@@ -29,6 +29,7 @@ import {
   incidentRetryDelayMs,
   admissionStep,
   classifyRecovery,
+  isCapacityRefusal,
   isTerminalRecovery,
   parseRecoveryRow,
   quiesceStep,
@@ -723,28 +724,38 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       clearTimeout(timer);
 
       if (woke.status === 'fulfilled') return true;
-      this.#trace('startup.snapshot.cutover', { from: this.#started.kind, reason: describe({ cause: woke.reason }) });
-      const golden = this.#started.kind === 'golden' ? this.#started.id : undefined;
-      await container.destroy();
-      await this.#awaitContainerStopped();
 
-      if (golden === undefined) {
-        this.#snapshots.supersede();
-        unawaited(this.#snapshots.sweep(), 'sweeping dead snapshots');
-      }
-
-      const next = await this.#startSource(golden);
-
-      if (next.kind === 'pending') {
-        this.#awaitingGolden = next.reason;
-
-        return false;
-      }
-
-      this.#startFrom(container, inputs, next);
+      // No room is no verdict on the snapshot: it stays the source, and the exec below fails in the platform's words, so
+      // the admission retries (staging, 2026-10-08).
+      if (!isCapacityRefusal({ cause: woke.reason }) && !await this.#cutOver(container, inputs, woke.reason)) return false;
     }
 
     await firstExec(container, signal);
+
+    return true;
+  }
+
+  /** Leaves a snapshot that failed to wake for the next source; false while the golden that replaces it is pending. */
+  async #cutOver(container: Container, inputs: StartInputs, failed: LateStartFailure['cause']): Promise<boolean> {
+    this.#trace('startup.snapshot.cutover', { from: this.#started.kind, reason: describe({ cause: failed }) });
+    const golden = this.#started.kind === 'golden' ? this.#started.id : undefined;
+    await container.destroy();
+    await this.#awaitContainerStopped();
+
+    if (golden === undefined) {
+      this.#snapshots.supersede();
+      unawaited(this.#snapshots.sweep(), 'sweeping dead snapshots');
+    }
+
+    const next = await this.#startSource(golden);
+
+    if (next.kind === 'pending') {
+      this.#awaitingGolden = next.reason;
+
+      return false;
+    }
+
+    this.#startFrom(container, inputs, next);
 
     return true;
   }
@@ -2909,7 +2920,16 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         if (!sameToken(this.ctx.storage.kv.get<string>(EXPOSED_PREFIX + port), token)) return new Response('Preview not ready', { status: 503 });
         const target = new URL(request.url);
         target.protocol = 'http:';
-        const answer = await this.#container().getTcpPort(port).fetch(new Request(target.toString(), request));
+        const [answered] = await Promise.allSettled([this.#container().getTcpPort(port).fetch(new Request(target.toString(), request))]);
+
+        // A server that is not up is the preview's to show, not the box's to throw (staging, 2026-10-08).
+        if (answered?.status !== 'fulfilled') {
+          return new Response(`Nothing in this box answered on port ${String(port)}: ${describe({ cause: answered?.reason })}`, {
+            status: 502, headers: { 'cache-control': 'no-store' },
+          });
+        }
+
+        const answer = answered.value;
 
         return answer.webSocket ? this.#bridge(answer.webSocket, answer.headers) : answer;
       }));

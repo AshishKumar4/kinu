@@ -134,6 +134,22 @@ test('a golden the platform refuses is reported lost, and the box starts from th
   });
 });
 
+// Staging, 2026-10-08: a box refused a container for want of room reported its golden lost, and every box then waited on
+// a rebuild that needed room too.
+test('a golden start the platform refuses for want of room loses no golden, and the next start uses it', async () => {
+  const { box, container } = fresh([{ kind: 'ready', id: 'golden-1', tools: PIN }, { kind: 'ready', id: 'golden-1', tools: PIN }]);
+  container.containerUnavailable = new Error('Account resource limit exceeded');
+  await Promise.allSettled([box.devboxStartup()]);
+  const refused = (await box.devboxState()).unready;
+
+  container.containerUnavailable = undefined;
+  await box.devboxStartup();
+
+  expect({ refused, starts: container.startOptions.map(startedFrom), asked: golden.asked }).toEqual({
+    refused: expect.stringContaining('Account resource limit exceeded'), starts: ['golden-1', 'golden-1'], asked: ['golden?', 'golden?'],
+  });
+});
+
 test('a box with its own snapshot wakes it, asks no golden, and keeps the pinned tools it holds', async () => {
   const { box, container } = fresh([{ kind: 'ready', id: 'golden-1', tools: PIN }]);
   await box.devboxStartup();

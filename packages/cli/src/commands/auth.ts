@@ -64,14 +64,11 @@ export async function authCommand(opts: { origin?: string }): Promise<void> {
   });
 }
 
+/** The session every other command uses: `KINU_TOKEN` first, else the stored, unexpired one. */
 export function whoamiCommand(opts: { origin?: string }): Promise<void> {
   return settle(Effect.gen(function* () {
-    const config = loadConfigFile();
-    const origin = defaultOrigin(opts);
-    const token = config.accessToken;
-
-    if (!token) return yield* Effect.die(new Error('Not authenticated. Run: kinu auth'));
-    const result = yield* Effect.promise(async () => whoami(origin, token));
+    const { token } = requireAuthConfig();
+    const result = yield* Effect.promise(async () => whoami(defaultOrigin(opts), token));
     console.log(`${ACCENT(result.user.email)} ${DIM(result.user.id)}`);
   }));
 }
