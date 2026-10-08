@@ -36,6 +36,9 @@ export interface FailingSlateBuild {
 }
 
 export class SlateBuilds {
+  /** Read once per activation, as every model step asks; each write below keeps it current. */
+  #failing: FailingSlateBuild[] | null = null;
+
   constructor(private readonly db: SqlExec) {}
 
   private row(slate: string): v.InferOutput<typeof RowSchema> | null {
@@ -51,6 +54,7 @@ export class SlateBuilds {
        ON CONFLICT (slate) DO UPDATE SET good_key = excluded.good_key, good_image = excluded.good_image, failed_key = NULL, failure = NULL`,
       slate, key, JSON.stringify(image),
     );
+    this.#failing = null;
   }
 
   /** The source `key` did not compile. */
@@ -60,6 +64,7 @@ export class SlateBuilds {
        ON CONFLICT (slate) DO UPDATE SET failed_key = excluded.failed_key, failure = excluded.failure`,
       slate, key, failure,
     );
+    this.#failing = null;
   }
 
   /** The last source that built, and its image; null before any did. */
@@ -78,17 +83,22 @@ export class SlateBuilds {
 
   /** Every slate whose latest attempted build failed. */
   failing(): FailingSlateBuild[] {
-    return this.db.exec(`SELECT slate, failure FROM slate_builds WHERE failure IS NOT NULL ORDER BY slate`).toArray()
+    this.#failing ??= this.db.exec(`SELECT slate, failure FROM slate_builds WHERE failure IS NOT NULL ORDER BY slate`).toArray()
       .map((row) => v.parse(v.object({ slate: v.string(), failure: v.string() }), row));
+
+    return this.#failing;
   }
 
   /** Its files changed since: whether it builds is not yet known. */
   changed(slates: readonly string[]): void {
     for (const slate of slates) this.db.exec(`UPDATE slate_builds SET failed_key = NULL, failure = NULL WHERE slate = ?`, slate);
+
+    if (slates.length > 0) this.#failing = null;
   }
 
   forget(slate: string): void {
     this.db.exec(`DELETE FROM slate_builds WHERE slate = ?`, slate);
+    this.#failing = null;
   }
 
   /** Every image a slate's last working build reads, kept past any process that ran it. */

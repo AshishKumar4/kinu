@@ -21,6 +21,7 @@ import {
 import { SlateId } from '@agent-core/core/slates';
 import { initSlateLiveShareTables, slateDirectory } from '@kinu.run/core/slates';
 import { SlateHost } from '../../src/slates/host';
+import { initSlateBuildTable } from '../../src/slates/builds';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '../../src/slates/bindings';
 import { slateBatchStub } from '../../src/slates/rpc-transport';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -129,6 +130,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       execRaw: (ddl: string) => ctx.storage.sql.exec(ddl), sql, exec, transactionSync: (write) => ctx.storage.transactionSync(write),
     });
     initSlateLiveShareTables((ddl: string) => ctx.storage.sql.exec(ddl));
+    initSlateBuildTable((ddl: string) => ctx.storage.sql.exec(ddl));
     seedBaseFilesystem(this.vfs);
     // As the Kinu boot leaves every workspace: slates are the workspace's, not its main agent's.
     settleWorkspaceSlates(this.vfs.as(CRED_KERNEL), (path) => { this.vfs.registerSharedDirectory(path); });

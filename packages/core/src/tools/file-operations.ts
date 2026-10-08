@@ -130,7 +130,10 @@ export interface FileDeps {
   readonly memory?: Memory;
   /** Where paths land (`vfs/resolve.ts`), so results name files as `root://path`. */
   readonly planes: PathPlanes;
-  /** The workspace's slates, so a write into one answers whether it still builds, by the build its preview serves. */
+  /**
+   * The workspace's slates, so a write into one answers whether it still builds, by the build its preview serves.
+   * Cloudflare only: the CLI hosts no slates, so it leaves this unset (`scripts/capability-parity.lock.json`).
+   */
   readonly slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
 }
 

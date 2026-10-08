@@ -17,6 +17,7 @@ import { bindActorHandle, createDefaultWebSearchProvider, initCodemodeStateTable
 import { CodemodeEgress as ProductionEgress } from '../../src/codemode-egress';
 import { codemodeLauncher } from '../../src/codemode-sandbox';
 import { SlateHost } from '../../src/slates/host';
+import { initSlateBuildTable } from '../../src/slates/builds';
 import { createMemoryVfs } from '@kinu.run/test-utils/vfs';
 import type { BrowserSessions } from '@kinu.run/core';
 import { ROOT_SLATE_CALLER } from '../../src/slates/bindings';
@@ -47,6 +48,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     const sql = bindAgentSql(this);
     this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS crafted_tools(name TEXT, score REAL, last_used_at INTEGER)');
     initCodemodeStateTable((statement) => { this.ctx.storage.sql.exec(statement); });
+    initSlateBuildTable((statement) => { this.ctx.storage.sql.exec(statement); });
 
     const crafted: CraftedTool = {
       name: 'calculate', code: 'async ({n}) => ({answer: n*2, agent:typeof agent, agents:typeof agents})', description: 'Double',
