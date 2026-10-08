@@ -1,4 +1,4 @@
-export { MAX_PLAN_ANNOTATIONS_BYTES, admitReviewAnnotations, DiffAnchorSchema, ReviewAnnotationSchema } from './annotation-admission';
+export { MAX_PLAN_ANNOTATIONS_BYTES, admitReviewAnnotations, DiffAnchorSchema } from './annotation-admission';
 
 export {
   MAX_PLAN_CONTENT_BYTES,

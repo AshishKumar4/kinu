@@ -83,7 +83,7 @@ const NoteReplySchema = v.strictObject({
 });
 
 /** One annotation. A passage note has its block, offsets and quote; a general note and a reply have none. */
-export const ReviewAnnotationSchema: v.GenericSchema<unknown, ReviewAnnotation> = v.variant(
+const ReviewAnnotationSchema: v.GenericSchema<unknown, ReviewAnnotation> = v.variant(
   'type', [PassageNoteSchema, GeneralNoteSchema, NoteReplySchema], 'invalid type: a note is a COMMENT, DELETION, GLOBAL_COMMENT or REPLY',
 );
 

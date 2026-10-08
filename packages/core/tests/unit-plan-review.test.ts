@@ -143,7 +143,7 @@ describe('durable plan review lifecycle', () => {
     });
     expect(store.saveAnnotations('plan-1', 1, { value: [{ ...base, endOffset: -1 }] })).toMatchObject({
       ok: false,
-      error: expect.stringContaining('offsets'),
+      error: expect.stringContaining('endOffset'),
     });
     expect(store.saveAnnotations('plan-1', 1, { value: [{ ...base, type: 'INSTRUCTION' }] })).toMatchObject({
       ok: false,

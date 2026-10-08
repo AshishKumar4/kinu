@@ -231,7 +231,7 @@ export function freshNotes(notes: readonly ReviewAnnotation[]): ReviewAnnotation
 function quoted(text: string): string {
   const flat = text.replace(/\s+/gu, ' ').trim();
 
-  return `"${flat.length > 160 ? `${flat.slice(0, 159)}…` : flat}"`;
+  return `"${flat.length > 160 ? `${flat.slice(0, 157)}...` : flat}"`;
 }
 
 function noteLine(note: Exclude<ReviewAnnotation, NoteReply>): string {

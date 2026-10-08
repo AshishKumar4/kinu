@@ -1312,7 +1312,6 @@ export {
   PlanReviewStore,
   PlanReviewSchema,
   admitReviewAnnotations,
-  ReviewAnnotationSchema,
   freshNotes,
   planAwaitingReply,
   reviewFeedbackText,

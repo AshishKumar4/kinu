@@ -187,6 +187,62 @@ function DismissPlan({ plan, rpc, readOnly, deciding, saving, onError }: {
   );
 }
 
+/** The header's controls: the comments, with their count and a mark for unread replies, and the marking mode. */
+function PlanHeaderActions({ comments, unread, panelOpen, onToggle, mode, onMode, busy }: {
+  comments: number;
+  unread: boolean;
+  panelOpen: boolean;
+  onToggle: () => void;
+  /** Null while the revision is not open for review. */
+  mode: EditorMode | null;
+  onMode: (mode: EditorMode) => void;
+  busy: boolean;
+}) {
+  return (
+    <div data-plan-actions className="flex max-w-full flex-wrap items-center justify-end gap-1.5">
+      <Button
+        type="button"
+        size="sm"
+        variant={panelOpen ? "secondary" : "ghost"}
+        onClick={onToggle}
+        icon={<ChatCircleDotsIcon size={13} />}
+        aria-expanded={panelOpen}
+        aria-label={`Comments, ${String(comments)}${unread ? ", new replies" : ""}`}
+        data-plan-comments-toggle
+      >
+        Comments <span className="p-num">{comments}</span>
+        {unread && <span data-plan-comments-unread className="size-1.5 rounded-full p-dot-accent" aria-hidden="true" />}
+      </Button>
+      {mode !== null && (
+        <div className="flex items-center rounded-md border p-border p-recessed p-0.5" aria-label="Annotation mode">
+          <Button
+            type="button"
+            size="sm"
+            variant={mode === "comment" ? "secondary" : "ghost"}
+            onClick={() => onMode("comment")}
+            aria-pressed={mode === "comment"}
+            disabled={busy}
+            icon={<ChatCircleDotsIcon size={12} />}
+          >
+            Comment
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={mode === "redline" ? "secondary" : "ghost"}
+            onClick={() => onMode("redline")}
+            aria-pressed={mode === "redline"}
+            disabled={busy}
+            icon={<TrashIcon size={12} />}
+          >
+            Remove
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function PlanReviewView({ plan, rpc, readOnly = false, agentName = "Kinu" }: PlanReviewViewProps) {
   const [notes, setNotes] = useState<ReviewAnnotation[]>(() => storedNotes(plan));
   const [selected, setSelected] = useState<string | null>(null);
@@ -202,7 +258,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
   const seen = usePlanRepliesSeen(planId);
 
   // The reviewer writes only this revision's own notes; the review keeps the threads carried from earlier ones.
-  const noteSaves = useMemo(() => createPlanAnnotationSaveQueue<ReviewAnnotation>(async (next) => {
+  const annotationSaves = useMemo(() => createPlanAnnotationSaveQueue<ReviewAnnotation>(async (next) => {
     if (planId === null || planRevision === null) return false;
 
     if (activePlanKey.current === planKey) setError(null);
@@ -280,14 +336,14 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
     if (readOnly || planKey === null) return false;
     setNotes(next);
     setSaving(true);
-    const saved = await noteSaves.enqueue(next);
+    const saved = await annotationSaves.enqueue(next);
 
-    if (noteSaves.pending() === 0 && activePlanKey.current === planKey) {
+    if (annotationSaves.pending() === 0 && activePlanKey.current === planKey) {
       setSaving(false);
     }
 
     return saved;
-  }, [noteSaves, planKey, readOnly]);
+  }, [annotationSaves, planKey, readOnly]);
 
   const { busy: decisionBusy, inFlight: decisionInFlight, decide } = usePlanDecision({
     plan,
@@ -313,9 +369,9 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
     if (thrown !== undefined && activePlanKey.current === planKey) {
       setError(renderThrownChain({ cause: thrown.cause }));
 
-      if (noteSaves.pending() === 0) setSaving(false);
+      if (annotationSaves.pending() === 0) setSaving(false);
     }
-  })), [noteSaves, decisionInFlight, planKey, save]);
+  })), [annotationSaves, decisionInFlight, planKey, save]);
 
   const openPanel = useCallback(() => {
     seen.markSeen();
@@ -405,47 +461,15 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
             )}
           </div>
 
-          <div data-plan-actions className="flex max-w-full flex-wrap items-center justify-end gap-1.5">
-            <Button
-              type="button"
-              size="sm"
-              variant={panelOpen ? "secondary" : "ghost"}
-              onClick={() => panelOpen ? closePanel() : openPanel()}
-              icon={<ChatCircleDotsIcon size={13} />}
-              aria-expanded={panelOpen}
-              aria-label={`Comments, ${String(roots.length)}${unread ? ", new replies" : ""}`}
-              data-plan-comments-toggle
-            >
-              Comments <span className="p-num">{roots.length}</span>
-              {unread && <span data-plan-comments-unread className="size-1.5 rounded-full p-dot-accent" aria-hidden="true" />}
-            </Button>
-            {editable && (
-              <div className="flex items-center rounded-md border p-border p-recessed p-0.5" aria-label="Annotation mode">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={mode === "comment" ? "secondary" : "ghost"}
-                  onClick={() => setMode("comment")}
-                  aria-pressed={mode === "comment"}
-                  disabled={decisionBusy !== null}
-                  icon={<ChatCircleDotsIcon size={12} />}
-                >
-                  Comment
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={mode === "redline" ? "secondary" : "ghost"}
-                  onClick={() => setMode("redline")}
-                  aria-pressed={mode === "redline"}
-                  disabled={decisionBusy !== null}
-                  icon={<TrashIcon size={12} />}
-                >
-                  Remove
-                </Button>
-              </div>
-            )}
-          </div>
+          <PlanHeaderActions
+            comments={roots.length}
+            unread={unread}
+            panelOpen={panelOpen}
+            onToggle={() => panelOpen ? closePanel() : openPanel()}
+            mode={editable ? mode : null}
+            onMode={setMode}
+            busy={decisionBusy !== null}
+          />
         </div>
       </header>
 
