@@ -528,9 +528,9 @@ const PLAN_DECISION_LIVE = `[...document.querySelectorAll('#inspector [data-plan
  *  decided through that agent's window (D9), as the walkthrough row's plan is through the workspace's. */
 async function measureAgentPlan(newPage: LiveApp['newPage'], origin: string): Promise<AgentPlanVerdict> {
   const workspace = await createWorkspace(origin, { name: `live-row-agent-plan-${RUN_ID}`, purpose: 'agent plan review', model: SCRIPTED_MODEL_SPEC });
-  const page = await newPage();
+  const page = await openWorkspace(newPage, origin, workspace);
 
-  await page.goto(`${origin}/workspace/${workspace}`, { waitUntil: 'load' });
+  await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
   await startNewChat(page);
   const pane = v.parse(v.string(), await page.evaluate('location.pathname'));
 
