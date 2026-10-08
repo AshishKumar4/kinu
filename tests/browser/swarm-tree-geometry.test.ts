@@ -992,8 +992,8 @@ test('a running head paints its arriving step, only its own, until the step land
     const page = await newPage();
     await page.setViewport({ width: 1920, height: 1100 });
     await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
-    await page.waitForSelector('button[title="Swarms"]');
-    await page.click('button[title="Swarms"]');
+    await page.waitForSelector('button[aria-label="Swarms"]');
+    await page.click('button[aria-label="Swarms"]');
     await page.waitForSelector('[data-run-node="lv003"]');
     // The node list may sit in a panel this layout keeps folded; the row is what opens the head, not its geometry.
     await page.$eval('[data-run-node="lv003"]', (row) => { if (row instanceof HTMLElement) row.click(); });

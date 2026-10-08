@@ -491,11 +491,10 @@ beforeAll(async () => {
       const readShell = () => page.evaluate(() => {
         const frame = document.querySelector('[data-landing-frame="plan"]');
         const column = frame?.querySelector('[data-panel][id^="inspector"]');
-        const strip = column?.querySelector('.p-tabstrip');
 
         return {
-          labels: [...(strip?.querySelectorAll('button') ?? [])]
-            .map((button) => (button.textContent ?? '').trim())
+          labels: [...(column?.querySelectorAll(':is(nav[aria-label="Pages"], nav[aria-label="Workspace"]) li > button') ?? [])]
+            .map((button) => button.getAttribute('aria-label') ?? '')
             .filter((label) => label.length > 0),
           width: Math.round(column?.getBoundingClientRect().width ?? -1),
           expand: frame?.querySelector('[data-inspector-expand]') !== null,

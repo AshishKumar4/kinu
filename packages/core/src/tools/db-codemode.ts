@@ -917,7 +917,7 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
 
 /** `db.*` for programs: the catalog's db operations over one actor's store. A refused batch names its operation. */
 export function createDbCodemodeProvider(store: AppDataStore): CodemodeProvider {
-  return codemodeNamespace('db', [
+  return codemodeNamespace('db', 'Tables of your own, in SQL.', [
     serve(DB.createTable, ({ spec }) => classified(() => store.createTable(spec))),
     serve(DB.listTables, () => classified(() => [...store.listTables()])),
     serve(DB.schema, ({ table }) => classified(() => store.schema(table))),
