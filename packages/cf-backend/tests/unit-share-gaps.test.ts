@@ -71,8 +71,9 @@ interface World {
 
 /** Each account by id, as every account's own `env.UserDO` resolves it: a share's card goes to the account its email names. */
 async function userWorld(
-  userId: string, workspace: string, kv: ReturnType<typeof makeKv>, accounts: ReadonlyMap<string, TestUserDO>,
+  account: { readonly userId: string; readonly email: string }, workspace: string, kv: ReturnType<typeof makeKv>, accounts: ReadonlyMap<string, TestUserDO>,
 ): Promise<{ user: TestUserDO; agent: ActorHarness<HarnessOrchestratorAgent> }> {
+  const { userId } = account;
   const user = createTestUserDO({ durableObjectId: userId, accounts: (id) => present(accounts.get(id), `the account ${id}`).userDO });
   const capability = await provisionTestWorkspace(user, workspace);
   const agent = orchestratorHarness(undefined, { userDO: user.userDO, workspace, ownerUserId: userId });
@@ -84,6 +85,7 @@ async function userWorld(
   await agent.agent.installWorkspaceCapability(capability);
   const caller = await testOwner();
 
+  await user.userDO.ensureProfile(caller, account.email);
   await user.userDO.userMcp_list(caller);
   user.sql.exec(`INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools)
     VALUES ('connection-id', 'github', 'https://github.example/sse', 'auto', NULL, NULL)`);
@@ -97,14 +99,14 @@ async function twoUserWorld(): Promise<World> {
   // One KV behind the edge route and every workspace object, as AUTH_KV in production.
   const kv = makeKv();
   const users = new Map<string, TestUserDO>();
-  const ownerSide = await userWorld(OWNER_ID, 'issues-owner', kv, users);
+  const ownerSide = await userWorld({ userId: OWNER_ID, email: 'owner@example.test' }, 'issues-owner', kv, users);
 
   // Seeded on the newest MCP manager, so before the viewer's account builds its own: these are the owner's tools.
   seedMcpTools('connection-id', [
     { name: 'read_issue', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } },
     { name: 'create_issue', inputSchema: { type: 'object' } },
   ]);
-  const viewerSide = await userWorld(VIEWER_ID, 'viewer-home', kv, users);
+  const viewerSide = await userWorld({ userId: VIEWER_ID, email: 'pat@example.test' }, 'viewer-home', kv, users);
 
   const agents = new Map<string, HarnessOrchestratorAgent>([
     ['issues-owner', ownerSide.agent.agent],
