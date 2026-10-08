@@ -1120,8 +1120,10 @@ export const LADDER: readonly Gate[] = [
     // the evals dispatch suite at 0.2 s (3 tests); the reset suite joined
     // 2026-10-01 at 0.1 s (4 tests), the version telemetry suite at 0.1 s
     // (2 tests), the continuous staging and promotion suite at 2 s (7 tests), and
-    // the deploy's live status suite at 0.5 s (4 tests).
-    seconds: 90,
+    // the deploy's live status suite at 0.5 s (4 tests). deploy.test.ts gained the
+    // smoke's version reads 2026-10-08: three routes against a local server, the
+    // slowest held to its 6 s bound (3 tests).
+    seconds: 100,
     catches: 'a deploy gate deleted, reordered, or made skippable, and a deploy from a '
       + 'dirty checkout. Cut-the-wire proven: remove one gate line and it fails. And a promotion '
       + 'that ships bytes staging never verified or that production cannot return from: each '

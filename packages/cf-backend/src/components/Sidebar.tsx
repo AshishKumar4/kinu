@@ -2,7 +2,7 @@ import { Cause, Effect } from 'effect';
 import { useState, useCallback, useRef, type FormEvent, type RefObject } from "react";
 import { Link, NavLink, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { GearIcon, TrashIcon, SignOutIcon, PencilSimpleIcon, CheckIcon, XIcon, PlusIcon, ShieldCheckIcon, SidebarSimpleIcon,
-  UsersThreeIcon, CaretRightIcon,
+  UsersThreeIcon, CaretRightIcon, EraserIcon,
 } from "@phosphor-icons/react";
 import { KinuLogo } from "./ui/KinuLogo";
 import type { RosterEntry, WorkspaceEntry } from "../lib/user-api";
@@ -50,29 +50,32 @@ function connectionWait(status: ConnectionStatus): string {
   return "Could not connect";
 }
 
-function SidebarRenameEditor({ workspace, onSaved, onCancel }: {
-  workspace: WorkspaceEntry;
-  onSaved: (displayName: string) => void;
-  onCancel: () => void;
+/** A row's name edited in place: Enter or ✓ saves, Escape or × leaves it as it was, and a refusal stays under it. */
+function RowRenameEditor({ value, label, saveLabel, save, waiting, onDone }: {
+  value: string;
+  /** The field's name for a reader. */
+  label: string;
+  saveLabel: string;
+  save: (name: string) => Promise<void>;
+  /** Why it cannot save yet, said under the field; null when it can. */
+  waiting: { readonly text: string; readonly failed: boolean } | null;
+  onDone: () => void;
 }) {
-  const { rpc, connectionStatus } = useWorkspaceRpc(workspace.name);
-  const [value, setValue] = useState(workspace.displayName);
+  const [draft, setDraft] = useState(value);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const reported = error !== null && error !== "";
-
-  const save = (event: FormEvent) => Effect.gen(function* () {
+  const submit = (event: FormEvent) => Effect.gen(function* () {
     event.preventDefault();
-    const displayName = value.trim();
+    const name = draft.trim();
 
-    if (!displayName || saving || connectionStatus !== "connected") return;
+    if (!name || saving || waiting !== null) return;
     setSaving(true);
     setError(null);
 
     return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      const result = yield* Effect.promise(async () => rpc<{ displayName: string }>("setDisplayName", [displayName]));
-      onSaved(result.displayName);
+      yield* Effect.promise(async () => save(name));
+      onDone();
     }), (failed) => Effect.sync(() => {
       const err = Cause.squash(failed);
       setError(err instanceof Error ? renderCauseChain(err) : "Rename failed");
@@ -81,43 +84,62 @@ function SidebarRenameEditor({ workspace, onSaved, onCancel }: {
     }));
   });
 
+  const said = error ?? waiting?.text ?? null;
+
   return (
-    <form onSubmit={(event) => detach(save(event))} className="p-card px-1.5 py-1">
+    <form onSubmit={(event) => detach(submit(event))} className="p-card px-1.5 py-1">
       <div className="flex items-center gap-1">
         <input
           autoFocus
-          value={value}
+          value={draft}
           maxLength={60}
           onFocus={(event) => event.currentTarget.select()}
-          onChange={(event) => setValue(event.target.value)}
+          onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
             if (event.key !== "Escape" || composing(event.nativeEvent) || saving) return;
             event.preventDefault();
-            onCancel();
+            onDone();
           }}
           className="min-w-0 flex-1 rounded-sm px-1.5 py-1 text-xs p-elevated p-text border p-border focus:outline-none focus:border-[var(--c-accent)] focus:ring-1 focus:ring-[var(--c-accent-subtle)]"
-          aria-label={`Rename ${workspaceDisplayTitle(workspace)}`}
+          aria-label={label}
         />
         <button
           type="submit"
-          disabled={!value.trim() || saving || connectionStatus !== "connected"}
+          disabled={!draft.trim() || saving || waiting !== null}
           className="rounded-sm p-1 p-text-3 hover:p-text p-card-hover disabled:opacity-40"
-          aria-label="Save workspace name"
+          aria-label={saveLabel}
         ><CheckIcon size={12} /></button>
         <button
           type="button"
-          onClick={onCancel}
+          onClick={onDone}
           disabled={saving}
           className="rounded-sm p-1 p-text-3 hover:p-text p-card-hover"
           aria-label="Cancel rename"
         ><XIcon size={12} /></button>
       </div>
-      {(reported || connectionStatus !== "connected") && (
-        <div role={error || connectionStatus === "error" ? "alert" : "status"} className={`px-1 pt-1 p-meta truncate ${error || connectionStatus === "error" ? "p-danger" : "p-text-3"}`} title={error ?? undefined}>
-          {error ?? connectionWait(connectionStatus)}
+      {said !== null && (
+        <div role={error !== null || waiting?.failed === true ? "alert" : "status"} title={error ?? undefined}
+          className={`px-1 pt-1 p-meta truncate ${error !== null || waiting?.failed === true ? "p-danger" : "p-text-3"}`}>
+          {said}
         </div>
       )}
     </form>
+  );
+}
+
+/** The workspace's name, saved through its own socket: it waits, and says so, until that socket connects. */
+function WorkspaceRenameEditor({ workspace, onSaved, onDone }: {
+  workspace: WorkspaceEntry;
+  onSaved: (displayName: string) => void;
+  onDone: () => void;
+}) {
+  const { rpc, connectionStatus } = useWorkspaceRpc(workspace.name);
+
+  return (
+    <RowRenameEditor value={workspace.displayName} label={`Rename ${workspaceDisplayTitle(workspace)}`} saveLabel="Save workspace name"
+      waiting={connectionStatus === "connected" ? null : { text: connectionWait(connectionStatus), failed: connectionStatus === "error" }}
+      save={async (name) => { onSaved((await rpc<{ displayName: string }>("setDisplayName", [name])).displayName); }}
+      onDone={onDone} />
   );
 }
 
@@ -230,14 +252,8 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
               <li key={a.name}>
                 <div className="group relative mx-2">
                   {editing ? (
-                    <SidebarRenameEditor
-                      workspace={a}
-                      onCancel={() => setEditingWorkspace(null)}
-                      onSaved={(displayName) => {
-                        renameWorkspace(a.name, displayName);
-                        setEditingWorkspace(null);
-                      }}
-                    />
+                    <WorkspaceRenameEditor workspace={a} onSaved={(displayName) => { renameWorkspace(a.name, displayName); }}
+                      onDone={() => setEditingWorkspace(null)} />
                   ) : (
                     <>
                       <NavLink
@@ -333,17 +349,16 @@ function WorkspaceChats({ panel, trigger, onAgents }: { panel: WorkspaceAgentsPa
   const others = panel.list.length - chats.length;
   // The agents with no tab of their own work out of sight: their row says so while any of them does.
   const working = panel.list.some((agent) => !agent.tab && agent.activity === "working");
+  const [renaming, setRenaming] = useState<string | null>(null);
 
   return (
     <ul className="p-nest mb-1 ml-[26px] mr-2 mt-0.5 space-y-px" aria-label="Chats">
       {chats.map((chat: PanelAgent) => (
         <li key={chat.key}>
-          <button type="button" onClick={() => panel.open(chat)} data-workspace-chat={chat.key} data-status={chat.activity}
-            aria-current={panel.shown === chat.key ? "page" : undefined}
-            className={`p-halo relative flex w-full min-w-0 items-center gap-2 rounded-lg py-[6px] pl-2 pr-3 text-left transition-colors ${navRowCls(panel.shown === chat.key)}`}>
-            <ChatMascot seed={mascotSeed(panel.workspace, chat.key)} colour={mascotColour(panel.workspace, chat.colour)} activity={chat.activity} />
-            <span className="p-status-label min-w-0 flex-1 truncate p-row-text">{chat.label}</span>
-          </button>
+          {renaming === chat.key
+            ? <RowRenameEditor value={chat.label} label={`Rename ${chat.label}`} saveLabel="Save chat name" save={panel.actions(chat).rename}
+                waiting={null} onDone={() => setRenaming(null)} />
+            : <ChatRow chat={chat} panel={panel} onRename={() => setRenaming(chat.key)} />}
         </li>
       ))}
       <li>
@@ -362,5 +377,32 @@ function WorkspaceChats({ panel, trigger, onAgents }: { panel: WorkspaceAgentsPa
         </button>
       </li>
     </ul>
+  );
+}
+
+/** A chat's row, with the tab's own rename and delete beside its name: on hover with a pointer, always at a touch. */
+function ChatRow({ chat, panel, onRename }: { chat: PanelAgent; panel: WorkspaceAgentsPanel; onRename: () => void }) {
+  const { remove, clears = false } = panel.actions(chat);
+  const reveal = "opacity-60 transition-opacity focus-visible:opacity-100 lg:opacity-0 lg:group-hover/chat:opacity-70 lg:group-focus-within/chat:opacity-70";
+
+  return (
+    <div className="group/chat relative">
+      <button type="button" onClick={() => panel.open(chat)} data-workspace-chat={chat.key} data-status={chat.activity}
+        aria-current={panel.shown === chat.key ? "page" : undefined}
+        className={`p-halo relative flex w-full min-w-0 items-center gap-2 rounded-lg py-[6px] pl-2 text-left transition-colors ${remove ? "pr-12 lg:pr-3 lg:group-hover/chat:pr-12 lg:group-focus-within/chat:pr-12" : "pr-7 lg:pr-3 lg:group-hover/chat:pr-7 lg:group-focus-within/chat:pr-7"} ${navRowCls(panel.shown === chat.key)}`}>
+        <ChatMascot seed={mascotSeed(panel.workspace, chat.key)} colour={mascotColour(panel.workspace, chat.colour)} activity={chat.activity} />
+        <span className="p-status-label min-w-0 flex-1 truncate p-row-text">{chat.label}</span>
+      </button>
+      <button type="button" onClick={onRename} title="Rename" aria-label={`Rename chat ${chat.label}`}
+        className={`absolute top-1/2 -translate-y-1/2 p-1 p-text-3 hover:p-text ${remove ? "right-6" : "right-1"} ${reveal}`}>
+        <PencilSimpleIcon size={11} />
+      </button>
+      {remove && (
+        <button type="button" onClick={remove} title={clears ? "Clear" : "Delete"} aria-label={`${clears ? "Clear" : "Delete"} chat ${chat.label}`}
+          className={`absolute right-1 top-1/2 -translate-y-1/2 p-1 p-text-3 hover:p-danger ${reveal}`}>
+          {clears ? <EraserIcon size={11} /> : <TrashIcon size={11} />}
+        </button>
+      )}
+    </div>
   );
 }

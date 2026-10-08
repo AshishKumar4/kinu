@@ -402,6 +402,7 @@ Mock boundaries, never the pure function under test.
 | Credentials | `createTestAuth({ key: { headers: { Authorization: 'Bearer tok' } } })`: resolved auth headers, not raw secrets |
 | AgentRuntime | `createTestRuntime()`: full minimal AgentRuntime |
 | Crafted-tool sandbox | `createNodeCodemodeToolFactory` from `@kinu.run/cli-backend` runs a program with its crafted tools in-process |
+| A box's container | `FakeSandbox` (`packages/devbox/tests/support/devbox-harness.ts`), the one container double: it induces what a real container cannot be made to do on demand (a start refused, a snapshot lost, a container gone mid-command), so the box's decisions under each are proved. What a real container does is proved on real ones: `gate:devbox-e2e` drives every `CONTAINER_CONTRACTS` and `DISK_CONTRACTS` case on golden containers at each deploy. No test runs a local container, and none can: that needs the Docker CLI, which Kinu does not use. |
 
 Call `parseModelSpec` or `effortFor` directly when either is the subject.
 

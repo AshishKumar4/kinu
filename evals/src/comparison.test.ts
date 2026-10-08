@@ -97,16 +97,35 @@ describe('mannWhitney', () => {
 });
 
 describe('compareEvalResults', () => {
-  test('a measure that moved beyond noise is named for its task, and moves no verdict', () => {
-    const before = trialsOf(9, 10);
-    const after = trialsOf(9, 10).map((trial, index) => ({ ...trial, badInputCalls: [2, 3, 2, 4, 3, 2, 5, 3, 2, 4][index] }));
-    const comparison = compareEvalResults(report('budget-board', before, BASE), report('budget-board', after, NEXT));
+  const SPREAD = [2, 3, 2, 4, 3, 2, 5, 3, 2, 4];
+
+  // "Evals should show no degradations" (the owner): more malformed calls or tokens is one, as a fall in passes is.
+  test.each([
+    { moved: 'badInputCalls', before: {}, after: (index: number) => ({ badInputCalls: SPREAD[index] }), verdict: 'regressed' },
+    { moved: 'inputTokens', before: { inputTokens: 1_000 }, after: (index: number) => ({ inputTokens: 1_000 * (SPREAD[index] ?? 1) }), verdict: 'regressed' },
+    { moved: 'inputTokens', before: { inputTokens: 5_000 }, after: (index: number) => ({ inputTokens: 1_000 * (SPREAD[index] ?? 1) }), verdict: 'unchanged' },
+    // How long a trial took is the task's and the machine's, not a regression of the build.
+    { moved: 'wallTimeMs', before: { durationMs: 60_000 }, after: (index: number) => ({ durationMs: 60_000 * (SPREAD[index] ?? 1) }), verdict: 'unchanged' },
+  ])('$moved moving beyond noise is named for its task, and the verdict is $verdict', ({ moved, before, after, verdict }) => {
+    const comparison = compareEvalResults(
+      report('budget-board', trialsOf(9, 10, before), BASE),
+      report('budget-board', trialsOf(9, 10).map((trial, index) => ({ ...trial, ...after(index) })), NEXT),
+    );
+
     const row = comparison.rows[0];
 
-    expect(comparison.verdict).toBe('unchanged');
-    expect(row?.reason === null ? row.shifts.find((shift) => shift.measure === 'badInputCalls')?.pValue : null).toBeLessThan(0.05);
+    expect(comparison.verdict).toBe(verdict);
+    expect(row?.reason === null ? row.shifts.find((shift) => shift.measure === moved)?.pValue : null).toBeLessThan(0.05);
     expect(row?.reason === null ? row.shifts.find((shift) => shift.measure === 'modelSteps')?.pValue : null).toBe(1);
-    expect(renderEvalComparison(comparison)).toContain('calls refused as bad input 0.0 [0.0\u20130.0] \u2192 3.0 [2.0\u20133.8]');
+  });
+
+  test('a regression in a measure is said in the promote verdict, by task, measure and spread', () => {
+    const after = trialsOf(9, 10).map((trial, index) => ({ ...trial, badInputCalls: SPREAD[index] }));
+    const comparison = compareEvalResults(report('budget-board', trialsOf(9, 10), BASE), report('budget-board', after, NEXT));
+    const complete = { baseline: null, candidate: null };
+
+    expect(evalGateVerdict(comparison, complete)).toMatchObject({ pass: false });
+    expect(evalGateVerdict(comparison, complete).reason).toContain('calls refused as bad input 0.0 [0.0\u20130.0] \u2192 3.0 [2.0\u20133.8]');
   });
 
   test('every check attempted is compared by its own pass rate', () => {

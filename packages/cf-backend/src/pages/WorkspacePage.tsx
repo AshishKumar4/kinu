@@ -426,6 +426,27 @@ function SwarmNodePane({ main, node, ownerPath, agent, rosterLoaded }: {
   return <SwarmNodeColumn main={main} ownerPath={ownerPath} runId={runId} nodeId={nodeId} agent={agent} />;
 }
 
+/** A chat's delete, asked from its tab or its sidebar row: deleting the chat on screen returns to Main. */
+function DeleteChat({ chat, workspace, shown, dismiss, onClose }: {
+  chat: { readonly title: string; readonly path: string } | null;
+  workspace: string;
+  shown: string | undefined;
+  dismiss: WorkspaceState["dismissSubordinate"];
+  onClose: () => void;
+}) {
+  const navigate = useNavigate();
+
+  if (chat === null) return null;
+
+  return (
+    <DeleteChatDialog title={chat.title} onClose={onClose} onConfirm={async () => {
+      await dismiss(chat.path, false);
+
+      if (shown === chat.path) await navigate(`/workspace/${workspace}`);
+    }} />
+  );
+}
+
 function MainClearDialog({ open, agents, onClear, onClose }: {
   open: boolean;
   agents: readonly PanelAgent[];
@@ -683,7 +704,7 @@ function loadNotices(error: WorkspaceNotice | null, onRetry: () => void): Compos
 type WorkspaceState = ReturnType<typeof useKinu>;
 
 /** The workspace's bar, with the dialogs its delete controls open. */
-function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view, subName, inspector, clearMain }: {
+function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view, inspector, actions }: {
   workspace: string;
   title: string;
   editValue: string;
@@ -691,25 +712,15 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
   agents: readonly PanelAgent[];
   shown: PanelAgent | undefined;
   view: string | undefined;
-  subName: string | undefined;
   inspector: InspectorControl | null;
-  clearMain: () => void;
+  actions: (agent: PanelAgent) => ChatTab;
 }) {
-  const navigate = useNavigate();
   const drawer = useLayoutDrawer();
   const agentsNav = useAgentsNav();
   const logo = useWorkspaceRoster().entries.find((entry) => entry.name === workspace)?.logo;
   const [removing, setRemoving] = useState(false);
-  const [deleting, setDeleting] = useState<{ title: string; path: string } | null>(null);
-
   const working = agents.filter((agent) => !agent.tab && agent.activity === "working").length;
-
-  const chats = agents.filter((agent) => agent.tab).map((agent) => chatTab(workspace, agent, {
-    renameMain: async (name) => { await state.rpc("renameMainChat", [name]); },
-    renameChat: async (path, name) => { await state.renameSubordinate(path, name); },
-    clearMain,
-    remove: (path) => setDeleting({ title: agent.label, path }),
-  }));
+  const chats = agents.filter((agent) => agent.tab).map(actions);
 
   return (
     <>
@@ -739,14 +750,6 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
         </>}
       />
       {removing && <RemoveWorkspaceDialog workspace={{ name: workspace, displayName: editValue }} onClose={() => setRemoving(false)} />}
-      {deleting && (
-        <DeleteChatDialog title={deleting.title} onClose={() => setDeleting(null)}
-          onConfirm={async () => {
-            await state.dismissSubordinate(deleting.path, false);
-
-            if (subName === deleting.path) await navigate(`/workspace/${workspace}`);
-          }} />
-      )}
     </>
   );
 }
@@ -845,10 +848,24 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
   const { shownAgent, rosterLoaded, panel: agentsPanel } = useAgentsPanel({ listed: state.workspaceAgents, live, workspace: agentId, node: shownNode, subName, workbench });
   const agentsNav = useAgentsNav();
   const { publish } = agentsNav;
+  const [clearingMain, setClearingMain] = useState(false);
+  const [deletingChat, setDeletingChat] = useState<{ title: string; path: string } | null>(null);
+  // `useKinu` answers new functions on every render: the actions read them when called, so publishing them once per
+  // workspace does not publish again on every render, which re-rendered this page without end.
+  const latestState = useRef(state);
+  latestState.current = state;
+
+  // A chat renames and deletes alike from its tab and its sidebar row, through the same dialogs.
+  const chatActions = useCallback((agent: PanelAgent): ChatTab => chatTab(agentId ?? "", agent, {
+    renameMain: async (name) => { await latestState.current.rpc("renameMainChat", [name]); },
+    renameChat: async (path, name) => { await latestState.current.renameSubordinate(path, name); },
+    clearMain: () => { setClearingMain(true); },
+    remove: (path) => { setDeletingChat({ title: agent.label, path }); },
+  }), [agentId]);
 
   useEffect(() => {
-    if (agentId !== undefined) publish({ workspace: agentId, ...agentsPanel });
-  }, [agentId, agentsPanel, publish]);
+    if (agentId !== undefined) publish({ workspace: agentId, ...agentsPanel, actions: chatActions });
+  }, [agentId, agentsPanel, chatActions, publish]);
 
   // A surface opened from the chat, a note or a landing is brought into view; a collapsed inspector or a phone
   // showing the chat would hide it.
@@ -1030,7 +1047,6 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
   // Device file restore exists only while a device is connected; overwriting real files gets
   // its own confirm, preceded by a safety snapshot.
   const [revertFor, setRevertFor] = useState<string | null>(null);
-  const [clearingMain, setClearingMain] = useState(false);
   const [restoreNotice, setRestoreNotice] = useState<string | null>(null);
   const [restorePlan, setRestorePlan] = useState<DeviceRestorePlan | null>(null);
   const [restoring, setRestoring] = useState(false);
@@ -1083,10 +1099,13 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
   const storedTitle = statusTitle === undefined || statusTitle === "" ? rosterTitle : statusTitle;
   const shownTitle = workspaceDisplayTitle({ name: agentId, displayName: storedTitle });
 
+  // The delete dialog goes with the bar, so a chat deleted from its sidebar row while the page connects asks too.
   const bar = (
-    <WorkspaceBar workspace={agentId} title={shownTitle} editValue={workspaceTitleDraft({ name: agentId, displayName: storedTitle })}
-      state={state} agents={agentsPanel.list} shown={shownAgent} view={view} subName={subName} inspector={inspectorControl}
-      clearMain={() => setClearingMain(true)} />
+    <>
+      <WorkspaceBar workspace={agentId} title={shownTitle} editValue={workspaceTitleDraft({ name: agentId, displayName: storedTitle })}
+        state={state} agents={agentsPanel.list} shown={shownAgent} view={view} inspector={inspectorControl} actions={chatActions} />
+      <DeleteChat chat={deletingChat} workspace={agentId} shown={subName} dismiss={state.dismissSubordinate} onClose={() => setDeletingChat(null)} />
+    </>
   );
 
   // Never unmount on transient WS errors.

@@ -8,6 +8,7 @@ import type { PanelAgent } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
 import { composing } from "@/components/ui/form";
 import { ChatMascot, WorkspaceLogo, mascotColour, mascotSeed } from "./Marks";
+import type { ChatActions } from "@/hooks/use-agents-nav";
 
 type Rename = (name: string) => Promise<void>;
 
@@ -28,12 +29,9 @@ interface BarItem {
   readonly tab?: string;
 }
 
-export interface ChatTab {
+export interface ChatTab extends ChatActions {
   readonly agent: PanelAgent;
   readonly to: string;
-  readonly rename: Rename;
-  readonly remove?: () => void;
-  readonly clears?: boolean;
 }
 
 export interface WorkspaceHeaderProps {

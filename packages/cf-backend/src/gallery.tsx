@@ -55,7 +55,7 @@ import { FEEDBACK_ENDPOINT } from "@kinu.run/core";
 import { CLIENT_ERROR_ENDPOINT } from "@kinu.run/core";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AgentsNavProvider } from "@/hooks/use-agents-nav";
-import { APP_ROUTES, rosterBucket, rosterMatches, WorkspaceOverviewSchema, type WorkspaceOverview } from "@kinu.run/core";
+import { APP_ROUTES, rosterBucket, rosterMatches, WorkspaceOverviewSchema, type AgentTaskTree, type WorkspaceOverview } from "@kinu.run/core";
 import { CHUNK_FIXED_KEY, lazyRoute } from "@/lazy-route";
 import { useKinu, type SubordinateSnapshot } from "@/hooks/use-kinu";
 import { primePageDeployedBuildSha } from "@kinu.run/core";
@@ -1544,6 +1544,16 @@ let gallerySubSeq = 0;
 
 const AGENTS_PANEL = new URLSearchParams(location.search).get("agents") === "panel";
 
+/** `board=full`: Main's own tasks too, so the overview's board has a card in every lane, some with steps. */
+const BOARD_FULL = new URLSearchParams(location.search).get("board") === "full";
+
+function galleryTask(id: string, title: string, status: AgentTaskTree["status"], steps: readonly AgentTaskTree["status"][] = []): AgentTaskTree {
+  return {
+    id, parentId: null, title, status, updatedAt: 1, note: null,
+    subtasks: steps.map((step, at) => ({ id: `${id}-${String(at)}`, parentId: id, title: `Step ${String(at + 1)}`, status: step, updatedAt: 1, note: null })),
+  };
+}
+
 if (AGENTS_PANEL) {
   seedGalleryChat([
     // Hired by Main: its task arrives as an event naming the hirer, never as the person speaking.
@@ -1883,6 +1893,15 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
       ...document.documentElement.dataset.workMoved === "1" ? [{
         owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, title: WORKSPACE_PAGE_NAME, retired: false }, plan: null,
         tasks: [{ id: "t-moved", parentId: null, title: "Written during the outage", status: "active", updatedAt: 1, note: null, subtasks: [] }],
+      }] : [],
+      ...BOARD_FULL ? [{
+        owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, title: WORKSPACE_PAGE_NAME, retired: false, path: [] }, plan: null,
+        tasks: [
+          galleryTask("t-guard", "Move the eligibility guard ahead of the discount", "active", ["done", "done", "active", "open"]),
+          galleryTask("t-notes", "Write the release note for SAVE20", "open", ["open", "open"]),
+          galleryTask("t-alert", "Alert when coupon 5xx passes 1%", "open"),
+          galleryTask("t-repro", "Reproduce the archived-coupon 500", "done", ["done", "done", "done"]),
+        ],
       }] : [],
       ...AGENTS_PANEL ? [{
         owner: { actorId: galleryActorId("coupon-auditor"), name: "coupon-auditor", title: "Coupon auditor", retired: false, path: ["coupon-auditor"] }, plan: null,
