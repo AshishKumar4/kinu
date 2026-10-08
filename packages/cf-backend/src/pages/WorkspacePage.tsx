@@ -61,6 +61,16 @@ import { useCarriedAttachments, useOpeningMessage } from "@/components/workspace
 
 /** The mission is shown as the standing brief, not sent as an opening message
  *  the agent would then try to carry out. */
+/** A fork's landing: the slate it opens on, and the namespaces it reaches, from `?slate=&reaches=`. */
+function forkLandingOf(search: URLSearchParams): { readonly slate: string; readonly reaches: readonly string[] } | null {
+  const slate = search.get("slate");
+  const reaches = search.get("reaches");
+
+  if (slate === null || reaches === null) return null;
+
+  return { slate, reaches: reaches.split(",").filter((namespace) => namespace !== "") };
+}
+
 export function EmptyConversation({ mission }: { mission: string }) {
   const brief = isPlaceholderMission(mission) ? null : mission.trim();
 
@@ -877,9 +887,9 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
     setChangesFocus((prior) => ({ source, path: anchor?.path ?? null, nonce: (prior?.nonce ?? 0) + 1 }));
   }, [show]);
 
-  // `?slate=<id>&unmapped=1` is a blueprint fork's landing; the jump waits until the listing names the slate.
+  // `?slate=<id>&reaches=<namespaces>` is a fork's landing; the jump waits until the listing names the slate.
   const [landingSlate, setLandingSlate] = useState<string | null>(() => new URLSearchParams(location.search).get("slate"));
-  const [unmappedSlate, setUnmappedSlate] = useState<string | null>(() => new URLSearchParams(location.search).get("unmapped") === "1" ? new URLSearchParams(location.search).get("slate") : null);
+  const [forkLanding, setForkLanding] = useState(() => forkLandingOf(new URLSearchParams(location.search)));
   useEffect(() => {
     if (landingSlate === null || !state.slates.some((slate) => slate.id === landingSlate)) return;
     show(`${SLATE_PREFIX}${landingSlate}`);
@@ -1302,8 +1312,8 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
             presencePending={state.tabPresence === undefined}
             rpc={state.rpc}
             workspace={agentId}
-            unmappedSlate={unmappedSlate}
-            onUnmappedOpened={() => setUnmappedSlate(null)}
+            forkLanding={forkLanding}
+            onForkLandingOpened={() => setForkLanding(null)}
           />
         )}
       />

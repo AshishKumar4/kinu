@@ -13,7 +13,7 @@ import { LIST, type Access, type Person } from "./tiles";
 export type SharePane = "live" | "blueprint" | "reach" | "limits" | "activity" | "workspace";
 
 export interface ReachGroup {
-  readonly binding: string;
+  readonly namespace: string;
   readonly kind: string;
   readonly members: readonly { readonly name: string; readonly what: string; readonly change: boolean; readonly allowed: boolean }[];
 }
@@ -195,7 +195,7 @@ function LivePane({ subject, go, onClose, onStop, accessOpen }: {
       <AccessPicker options={LIVE_ACCESS} initial={subject.access.kind} initiallyOpen={accessOpen} />
       <ForkToggle detail={reaches ? "A fork is their own copy, on their own connections." : "A fork is their own copy, in a workspace of theirs."} />
       <div className="p-group">
-        {reaches && <SummaryRow label="Reach" value={`${subject.reach.map((group) => group.binding).join(", ")} · ${allowed}`} onOpen={() => go("reach")} />}
+        {reaches && <SummaryRow label="Reach" value={`${subject.reach.map((group) => group.namespace).join(", ")} · ${allowed}`} onOpen={() => go("reach")} />}
         <SummaryRow label="Limits" value={reaches ? "120 a minute each · $2 a day" : "120 requests a minute each"} onOpen={() => go("limits")} />
         {shared && <SummaryRow label="Activity" value="14 opens by 2 people this week" onOpen={() => go("activity")} />}
       </div>
@@ -242,7 +242,7 @@ function BlueprintPane({ subject, onClose }: { subject: SlateSubject; onClose: (
         {subject.reach.length > 0 && (
           <div className="flex items-start gap-3">
             <dt className="w-20 shrink-0 p-meta p-text-3">They connect</dt>
-            <dd className="min-w-0 flex-1 p-meta p-text-2">Their own {LIST.format(subject.reach.map((group) => group.binding))}, when they fork it.</dd>
+            <dd className="min-w-0 flex-1 p-meta p-text-2">Their own {LIST.format(subject.reach.map((group) => group.namespace))}, when they fork it.</dd>
           </div>
         )}
       </dl>
@@ -267,9 +267,9 @@ function ReachPane({ reach, go }: { reach: readonly ReachGroup[]; go: (pane: Sha
       <p className="p-row-text p-text-2">Everything here uses your connections. Reading is on. Each change stays off until you allow it.</p>
       <div className="space-y-3">
         {reach.map((group) => (
-          <section key={group.binding} className="p-group">
+          <section key={group.namespace} className="p-group">
             <header className="flex items-baseline gap-2 px-3.5 py-2">
-              <span className="p-row-text font-medium p-text">{group.binding}</span>
+              <span className="p-row-text font-medium p-text">{group.namespace}</span>
               <span className="p-meta p-text-4">{group.kind}</span>
             </header>
             {group.members.map((member) => (

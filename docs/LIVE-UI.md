@@ -59,14 +59,7 @@ false`, `reason` and `error`, and no URL.
   "browser": "client.ts",
   "slate": {
     "runtime": "worker",
-    "title": "Notes",
-    "bindings": {
-      "FILES": {
-        "kind": "namespace",
-        "namespace": "workspace",
-        "members": ["readFile"]
-      }
-    }
+    "title": "Notes"
   }
 }
 ```
@@ -75,9 +68,9 @@ false`, `reason` and `error`, and no URL.
 bundle served at `/__kinu/client.js`, and the host serves the page that loads
 it. Server and browser entry paths must stay inside the project.
 
-The `slate` field is strict. Only `runtime`, `title`, `port`, `bindings` and
-`inline` pass validation (`inline.height` sets the chat card height: 120 to 720
-pixels, default 320), and each binding kind rejects undeclared fields.
+The `slate` field is strict. Only `runtime`, `title`, `port` and `inline` pass
+validation (`inline.height` sets the chat card height: 120 to 720 pixels,
+default 320). It names no capabilities: every slate calls the same surface.
 `runtime` defaults to `worker`, which requires `main`. `node` requires a port
 from 1 through 65535 and `scripts.dev` or `scripts.start`. Node projects run on
 the sandbox executor; the resident preview path refuses them. A Worker declares
@@ -126,14 +119,17 @@ maps each member to one operation of the host contract,
 Contract: `packages/core/src/slates/rpc.ts`. Hosted dispatch lives in
 `packages/cf-backend/src/slates/host.ts`.
 
-## Bindings and gates
+## The surface and its gates
 
-The server calls a binding as `this.env.NAME.member(...args)`, from inside a
-method. Each binding passes one of the calling actor's own capabilities, under
+Every slate gets one surface, `workspace`: the server calls it as
+`this.env.workspace.<namespace>.<member>(...args)` from inside a method, and a
+page imports it from `kinu:slate`. A path of one name is the workspace
+executor's own member, so `workspace.readFile(path)` reads as it does in a
+program. Each call passes one of the calling actor's own capabilities, under
 that actor's existing gates. The workspace root acts as the session user with
 the root providers. A hosted actor (a subordinate, a head, a swarm node) acts as
 its own provisioned uid with its own role-narrowed providers, and has no `mcp`,
-`rpc` or `agent` surface: those bindings refuse for it. The open turn profile
+`reads` or `agent` surface: those calls refuse for it. The open turn profile
 sets reach while that turn is in flight. Between turns the role resolves again
 on every call, so a role revoked after a turn applies at once. Source capture
 and compilation use that actor's credentialed reads; fork and restore use its
@@ -141,22 +137,32 @@ credentialed writes, so a non-root actor cannot restore a tree it cannot write
 directly. Source, compiler and process caches key on the full credential: uid,
 gid, supplementary groups and umask.
 
-Each caller gets its own process, and an app hop keeps the caller's authority
-rather than taking on the callee's author. A declaration is not a permission
-grant, and there is no binding-specific approval ladder. The host re-reads
-`package.json` on every binding call, so a stub held from earlier cannot keep
-reach that was removed.
+Each caller gets its own process, and a call into another slate keeps the
+caller's authority rather than taking on the callee's author. There is no
+slate-specific approval ladder, and nothing to declare.
 
-| Kind and fields | Reach and gate |
+| Path | Reach and gate |
 |---|---|
-| `namespace`: `namespace`, `members?`, `paths?` | A member of an available codemode provider. Optional `members` narrows reach. `paths` (only for the `workspace` namespace) limits it to `readFile`, `writeFile`, `editFile`, `readdir` and `exists` under those prefixes. Executor approvals and device consent stay the provider's own gates. An absent namespace refuses as unavailable; `agent` and `agents` always refuse. |
-| `rpc`: `methods` | Zero-argument workspace read models from the closed `SLATE_READ_MODELS` list, not arbitrary host RPC. These are the workspace root's own reads, so a non-root actor's `rpc` binding is `denied`. |
-| `mcp`: `server`, `tools?` | One owner-configured MCP connection, named by connection id rather than display name. Optional `tools` narrows reach. The owner's allowed-tool policy shapes what the actor sees, and the caller's role must admit the tool key (`mcp_<server>_<tool>`) exactly as a native turn does. Calls take one JSON object, or no arguments for `{}`. |
-| `app`: `id` | A method on another slate's `Slate` class. The callee runs for the caller: its own bindings resolve with the originating actor's authority. Each call carries the id of the invocation the host issued for that request, and the host looks up the chain of slates already running. A hop into a slate already on the chain refuses as a cycle and names it. A preview visit gets an invocation the same way, released when it settles. A retired or foreign invocation id is refused, so retained bindings cannot replay an older lineage. No hop count bounds the chain: each hop must name a slate not on it, and a workspace holds finitely many slates. |
-| `tool`: `name` | `call(input)` on one native or crafted tool, with one JSON object. |
-| `memory`, `tasks`, `web`: `members?` | That codemode namespace's members. Optional `members` narrows reach. |
-| `agent` | `send({text, data?})` puts a `slate` event in the workspace actor's inbox. |
-| `ai`: `tier?` | One model call with `{prompt, system?, tier?}` through the caller's own profile. A declared tier pins it; a call that names a different tier is refused. |
+| `<executor>.<member>`, `memory.*`, `tasks.*`, `web.*`, `db.*` | A member of the caller's eval namespaces, as a program calls it, the caller's own browser sessions included. A member reaches a slate only when the impact table names it (`packages/core/src/slates/members.ts`), so `tasks.mode`, which switches the agent's role, refuses. Executor approvals and device consent stay the provider's own gates. An absent namespace refuses as unavailable. |
+| `reads.<model>` | Zero-argument workspace read models from the closed `SLATE_READ_MODELS` list, not arbitrary host RPC. These are the workspace root's own reads, so a non-root actor's call is `denied`. |
+| `mcp.<server>.<tool>` | One owner-configured MCP connection, named by its name as the actor's programs name it, so a fork reaches its forker's server of that name. The owner's allowed-tool policy shapes what the actor sees, and the caller's role must admit the tool key (`mcp_<server>_<tool>`) exactly as a native turn does. Calls take one JSON object, or no arguments for `{}`. |
+| `slates.<id>.<method>` | A method on another slate's `Slate` class. The callee runs for the caller: its own calls resolve with the originating actor's authority. Each call carries the id of the invocation the host issued for that request, and the host looks up the chain of slates already running. A hop into a slate already on the chain refuses as a cycle and names it. A preview visit gets an invocation the same way, released when it settles. A retired or foreign invocation id is refused, so a retained stub cannot replay an older lineage. No hop count bounds the chain: each hop must name a slate not on it, and a workspace holds finitely many slates. `$` members are the agent's lifecycle and refuse. |
+| `tools.<name>` | One crafted tool, with one JSON object. A native tool is its own namespace on the surface. |
+| `agent.send` | `send({text, data?})` puts a `slate` event in the workspace actor's inbox. |
+| `ai.run` | One model call with `{prompt, system?, tier?}` through the caller's own profile. |
+
+A slate's class drives a browser as an eval program does: `this.env.workspace.web.openBrowser()`, then
+`connectBrowser(id)`, `pageTools(page)` and `callPageTool(page, name, input)` run in the class's own isolate from
+the same prelude (`packages/cf-backend/src/browser-prelude.ts`), and its socket dials the same gate
+(`codemode-egress.ts`) with the caller's actor, so it reaches only a session that actor opened, or a new Kitesurf
+browser. A share's viewer runs with no actor and reaches no owner's session. A page asks its class: a CDP socket
+cannot cross the page's RPC.
+
+What only the agent does refuses wherever it is asked: `agents.*`, the agent's
+own `agent.*` controls, `createTool` and the `slates` lifecycle member of any
+executor (`SLATE_EXCLUDED`). The host records each member a slate calls as its
+owner runs it (`slate_usage`): that record is the slate's graph, what a share
+can grant and what a blueprint requires.
 
 A queued approval is not reported as success. Namespace refusals keep their
 failure class. MCP results keep their own `isError`, and read models return
@@ -166,7 +172,7 @@ not read as refusals. Credentials never reach the slate. Keep lasting state in
 slate's own SQLite, kept until `remove`); fields on the instance are only a
 cache.
 
-Routing: `packages/core/src/slates/bindings.ts`. Loopback transport:
+Routing: `packages/core/src/slates/surface.ts`. Loopback transport:
 `packages/cf-backend/src/slates/bindings.ts`.
 
 ## Resident preview lifecycle

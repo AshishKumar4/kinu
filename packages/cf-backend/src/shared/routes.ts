@@ -108,7 +108,7 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
   for (const { workspace, overview } of await userDO.libraryTiles(owner)) {
     for (const slate of overview.slates) {
       slates.push({
-        id: slate.id, title: slate.title, workspace, bindings: slate.bindings, ...(slate.visibility !== null && { visibility: slate.visibility }),
+        id: slate.id, title: slate.title, workspace, ...(slate.visibility !== null && { visibility: slate.visibility }),
         ...(slate.picture !== null && { picture: slate.picture }),
       });
     }
@@ -116,7 +116,7 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
     for (const share of overview.shares) {
       const row = {
         share: share.share, title: share.title, description: share.description, createdAt: share.createdAt,
-        bindings: share.bindings, workspace, users: share.users,
+        workspace, users: share.users,
       };
 
       if (share.kind === 'live') {
@@ -146,7 +146,7 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
       received.push({
         id: receipt.shareId, kind: 'live', share: receipt.shareId,
         title: live.value.title, description: live.value.description, createdAt: live.value.record.createdAt,
-        bindings: live.value.record.grant.members.length, visibility: live.value.record.visibility,
+        visibility: live.value.record.visibility,
         workspace: receipt.workspace, owner: receipt.ownerEmail, fork: live.value.record.grant.fork !== false,
       });
       continue;
@@ -162,7 +162,7 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
     received.push({
       id, kind: 'blueprint', share: receipt.shareId, title: reading.value.view.title,
       description: reading.value.view.description, createdAt: reading.value.view.createdAt,
-      bindings: reading.value.view.bindings.length, workspace: receipt.workspace, owner: receipt.ownerEmail,
+      workspace: receipt.workspace, owner: receipt.ownerEmail,
     });
   }
 
@@ -257,7 +257,7 @@ const LiveShareBody = v.object({
   slate: v.string(),
   visibility: v.picklist(['users', 'public']),
   emails: v.optional(v.array(v.pipe(v.string(), v.trim(), v.email()))),
-  approved: v.optional(v.array(v.strictObject({ slate: v.string(), binding: v.string(), member: v.string() }))),
+  approved: v.optional(v.array(v.strictObject({ slate: v.string(), namespace: v.string(), member: v.string() }))),
   fork: v.optional(v.boolean()),
 });
 

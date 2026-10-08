@@ -115,16 +115,14 @@ describe("a workspace's tile on its owner's home", () => {
       await agent.requestOverviewPush();
       await until(() => last()?.decisionsWaiting === 0, 'the retired child takes its plan from the tile');
 
-      // ── An app the workspace authors shows by its own title and bindings, following its files. ──
+      // ── An app the workspace authors shows by its own title, following its files. ──
       const files = workspaceFiles(agent);
 
       await files.mkdir('/slates/board', { recursive: true });
       await writeText(files, '/slates/board/package.json', JSON.stringify({ name: 'board', main: 'server.ts', slate: { title: 'First' } }));
-      expect((await agent.foldOverview()).slates).toEqual([{ id: 'board', title: 'First', picture: null, bindings: 0, visibility: null }]);
-      await writeText(files, '/slates/board/package.json', JSON.stringify({
-        name: 'board', main: 'server.ts', slate: { title: 'Renamed', bindings: { NOTES: { kind: 'memory' } } },
-      }));
-      expect((await agent.foldOverview()).slates).toEqual([{ id: 'board', title: 'Renamed', picture: null, bindings: 1, visibility: null }]);
+      expect((await agent.foldOverview()).slates).toEqual([{ id: 'board', title: 'First', picture: null, visibility: null }]);
+      await writeText(files, '/slates/board/package.json', JSON.stringify({ name: 'board', main: 'server.ts', slate: { title: 'Renamed' } }));
+      expect((await agent.foldOverview()).slates).toEqual([{ id: 'board', title: 'Renamed', picture: null, visibility: null }]);
 
       // Every push so far carried a change: a fold that moved nothing was never sent again.
       expect(overviews.filter((each, at) => at > 0 && JSON.stringify(each) === JSON.stringify(overviews[at - 1]))).toEqual([]);

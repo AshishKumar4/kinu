@@ -338,7 +338,8 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           // `SlateBinding` resolves `env.OrchestratorAgent`, so the probe class is bound under that name too.
            ...workerCompatibility, workerLoaders: { LOADER: {} },
           modules: probeModules('slate-share-probe.ts', probeRuntime),
-          serviceBindings: { ASSETS: nimbusAssets },
+          // The egress gate's Browser Run: a session answers where its CDP socket would.
+          serviceBindings: { ASSETS: nimbusAssets, BROWSER: { name: 'slate-share-probe', entrypoint: 'FakeBrowserRun' } },
           durableObjects: {
             SLATE_SHARE_PROBE: { className: 'SlateShareProbeDO', useSQLite: true },
             OrchestratorAgent: { className: 'SlateShareProbeDO', useSQLite: true },

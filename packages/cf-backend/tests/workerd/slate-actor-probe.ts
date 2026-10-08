@@ -43,9 +43,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     settleWorkspaceSlates(vfs.as(CRED_KERNEL), (path) => { vfs.registerSharedDirectory(path); });
     const files = vfs.as(CRED_SESSION_USER);
     files.mkdir('/slates/crafted', { recursive: true });
-    files.writeFile('/slates/crafted/package.json', JSON.stringify({
-      main: 'server.ts', slate: { bindings: { CALCULATE: { kind: 'tool', name: 'calculate' } } },
-    }));
+    files.writeFile('/slates/crafted/package.json', JSON.stringify({ main: 'server.ts' }));
     const sql = bindAgentSql(this);
     this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS crafted_tools(name TEXT, score REAL, last_used_at INTEGER)');
     initCodemodeStateTable((statement) => { this.ctx.storage.sql.exec(statement); });
@@ -79,15 +77,16 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
         url: async () => { throw new Error('binding probe does not expose a preview'); },
       },
       dispatch: async (caller, route) => {
-        if (route.kind !== 'tool') throw new Error('Expected a tool binding');
+        if (route.kind !== 'tool') throw new Error('Expected a crafted tool call');
 
         return await inWorkMode(caller.workMode, () => factory.callTool(surface, route.name, route.input)) ?? null;
       },
-      catalog: async () => ({ executors: [], mcp: [], tools: [], tiers: [], slates: {} }),
+      browserActor: async () => null,
+      catalog: async () => ({ mcp: [], slates: [] }),
       shareUrl: async () => null,
     });
 
-    const call = (mode: WorkMode) => host.bindingCall({ ...ROOT_SLATE_CALLER, workMode: mode }, 'crafted', 'CALCULATE', { member: 'call', args: [{ n: 21 }], invocation: null });
+    const call = (mode: WorkMode) => host.surfaceCall({ ...ROOT_SLATE_CALLER, workMode: mode }, 'crafted', 'workspace', { path: ['tools', 'calculate'], args: [{ n: 21 }], invocation: null });
     const tool = factory.toolFor(surface);
     const declarations = () => craftedToolDeclarations({ eval: tool }, { workMode: 'build', allowedTools: ['eval'] });
     const before = declarations();

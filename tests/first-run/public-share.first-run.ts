@@ -43,18 +43,22 @@ describe(SUITE, () => {
       async run({ session }) {
         const setup = v.parse(Exec, await session.rpcAt(session.workspace, 'executeInExecutor', ['workspace', `mkdir -p /slates/${SLATE}
 cat > /slates/${SLATE}/package.json <<'END'
-{"main":"server.ts","slate":{"title":"Public share probe","bindings":{"FILES":{"kind":"namespace","namespace":"workspace","members":["exists","writeFile"]}}}}
+{"main":"server.ts","slate":{"title":"Public share probe"}}
 END
 cat > /slates/${SLATE}/server.ts <<'END'
 import { SlateObject } from "kinu:slate";
 export class Slate extends SlateObject {
-  async probe() { return { exists: await this.env.FILES.exists("/slates") }; }
-  async mutate() { return await this.env.FILES.writeFile("/slates/${SLATE}/mark", "x"); }
+  async probe() { return { exists: await this.env.workspace.exists("/slates") }; }
+  async mutate() { return await this.env.workspace.writeFile("/slates/${SLATE}/mark", "x"); }
   async fetch() { return new Response("public-share-probe-ok"); }
 }
 END`]));
 
         if (setup.exitCode !== 0) throw new Error('Could not author the probe slate: ' + setup.stdout);
+
+        // A share is cut from what the owner's own calls reached: run each method once, then take the owner's mark back.
+        for (const method of ['probe', 'mutate']) await session.rpcAt(session.workspace, 'slate', [{ op: 'call', id: SLATE, method, args: [] }]);
+        await session.rpcAt(session.workspace, 'executeInExecutor', ['workspace', `rm -f /slates/${SLATE}/mark`]);
         // The RED direction on a build with no share route: the op is refused
         // as unknown and nothing below has a URL to open.
         const shared = await session.rpcAt(session.workspace, 'slate', [{ op: 'share', id: SLATE, visibility: 'public', approved: [] }]);

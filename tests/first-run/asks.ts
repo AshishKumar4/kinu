@@ -227,7 +227,7 @@ export const TOOLS_USE_ASK = 'Use each of these tools exactly once, in this orde
 export const HELLO_SLATE_ID = 'hello';
 
 export const HELLO_SLATE_ASK = `Use the file tool to create a slate at /slates/${HELLO_SLATE_ID}/. `
-  + 'Write package.json with main "server.ts" and slate {"title":"Hello","port":8787,"bindings":{}}. '
+  + 'Write package.json with main "server.ts" and slate {"title":"Hello","port":8787}. '
   + 'Write server.ts so the slate answers GET /ping with JSON '
   + '{"message":"pong","method":request.method,"path":new URL(request.url).pathname} '
   + 'and HTTP 404 for other paths. Start its preview yourself and verify GET /ping. '
