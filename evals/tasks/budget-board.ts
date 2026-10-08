@@ -1,8 +1,7 @@
 import * as v from 'valibot';
 import { WORKSPACE_ROOT, type JsonValue } from '@kinu.run/core';
-import { defineTaskEval } from '../src/eval';
 import { shows, sightEvidence, type Sight } from '../src/sight';
-import { defineEvalTask, type EvidenceCall } from '../src/task';
+import type { EvalPart, EvidenceCall } from '../src/task';
 import { matchesReference, SlateRefusal, type EvalCheckOutcome, type EvalVerifier, type Normalize, type Script, type SlateClient } from '../src/verifier';
 
 // Two slates that depend on each other: a ledger of team expenses, and a budget board that reads
@@ -12,7 +11,6 @@ import { matchesReference, SlateRefusal, type EvalCheckOutcome, type EvalVerifie
 // by pages, then the board is asked a question. The checker records every expense itself and
 // answers each request, and computes each figure the page must show, with its own books below.
 
-const MISSION = "Northwind Studio's operations workspace. We track what each team spends against its monthly budget.";
 
 const TEAMS = ['design', 'growth', 'platform', 'support'];
 
@@ -375,9 +373,14 @@ for (const expense of EURO_EXPENSES) {
 
 // ── The task ─────────────────────────────────────────────────────────
 
-const task = defineEvalTask({
-  id: 'budget-board',
-  mission: MISSION,
+export const budgetBoard: EvalPart = {
+  id: 'budget',
+  objectives: [
+    'Build an expense ledger slate and a budget board slate that reads it, each to its contract, refusing bad input without changing anything.',
+    'Give the board a month page whose Cover and Ask Kinu buttons act, and preview it in the chat.',
+    'Convert euro expenses at the live rate file and page through expenses by cursor, keeping everything across evictions.',
+    'Name the teams over budget without changing the board.',
+  ],
   turns: [{
     prompt: `Build two slates for our team budgets. Our teams are design, growth, platform and support. Amounts
 are whole US cents; dates are YYYY-MM-DD and months YYYY-MM.
@@ -572,6 +575,4 @@ return the following ones, or null on the last page. limit is 1 to 50; answer an
     await listEverything(bothSlates(call));
     await readTheMonth(bothSlates(call));
   },
-});
-
-defineTaskEval(task);
+};

@@ -523,6 +523,30 @@ export async function downloadsServed(origin: string, fetcher: typeof fetch = fe
   return { sha: stamp.sha, downloads: Object.fromEntries([[STAMP, sha256(stampBytes)], ...hashed]) };
 }
 
+/** What staging's deploy records of HEAD, from `record <staging version> <evals run or ''> [reset record]`. */
+function verifiedRecord(sha: string, [version = '', run = '', reset]: readonly string[]): Verified {
+  const record: Verified = {
+    sha, digest: artifactDigest(DIST), stagingVersion: version, recordedAt: new Date().toISOString(), downloads: downloadsIn(DOWNLOADS), ...resetIn(reset),
+  };
+
+  // Empty when the deploy ran without `--evals`: `evals` names the run once one is dispatched.
+  if (run !== '') record.evalsRun = evalsRunOf(run);
+
+  return record;
+}
+
+/** `record` naming the evals run `[run]`, which started after it was written. */
+function withEvalsRun(record: Verified, [run = '']: readonly string[]): Verified {
+  const id = evalsRunOf(run);
+  const started = evalsRunStart(id);
+
+  if (started < Date.parse(record.recordedAt)) {
+    throw new Error(`evals run ${run} started ${new Date(started).toISOString()}, before ${record.sha} was verified on staging at ${record.recordedAt}`);
+  }
+
+  return { ...record, evalsRun: id };
+}
+
 async function main(argv: readonly string[], scratch: string): Promise<number> {
   const [command, ...rest] = argv;
   const sha = head();
@@ -545,13 +569,7 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
   }
 
   if (command === 'record' && (rest.length === 2 || rest.length === 3)) {
-    const record: Verified = {
-      sha, digest: artifactDigest(DIST), stagingVersion: rest[0] ?? '', recordedAt: new Date().toISOString(), downloads: downloadsIn(DOWNLOADS),
-      ...resetIn(rest[2]),
-    };
-
-    // Empty when the deploy ran without `--evals`: `evals` names the run once one is dispatched.
-    if (rest[1] !== '') record.evalsRun = evalsRunOf(rest[1] ?? '');
+    const record = verifiedRecord(sha, rest);
 
     await servedAs(origins.staging, sha, record.downloads);
     staging.put(verifiedKey(sha), JSON.stringify(record), 'application/json');
@@ -561,16 +579,10 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
   }
 
   if (command === 'evals' && rest.length === 1) {
-    const record = verified(buckets.staging, sha);
-    const run = evalsRunOf(rest[0] ?? '');
-    const started = evalsRunStart(run);
+    const record = withEvalsRun(verified(buckets.staging, sha), rest);
 
-    if (started < Date.parse(record.recordedAt)) {
-      throw new Error(`evals run ${String(run)} started ${new Date(started).toISOString()}, before ${sha} was verified on staging at ${record.recordedAt}`);
-    }
-
-    staging.put(verifiedKey(sha), JSON.stringify({ ...record, evalsRun: run }), 'application/json');
-    console.log(`promote: ${sha}'s record names evals run ${String(run)}; a promotion waits for its Verdict`);
+    staging.put(verifiedKey(sha), JSON.stringify(record), 'application/json');
+    console.log(`promote: ${sha}'s record names evals run ${String(record.evalsRun)}; a promotion waits for its Verdict`);
 
     return 0;
   }

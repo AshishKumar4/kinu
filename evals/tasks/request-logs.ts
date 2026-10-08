@@ -1,7 +1,6 @@
 import * as v from 'valibot';
 import { WORKSPACE_ROOT, type JsonValue } from '@kinu.run/core';
-import { defineTaskEval } from '../src/eval';
-import { defineEvalTask, type SeedFile } from '../src/task';
+import type { EvalPart, SeedFile } from '../src/task';
 import { matchesReference, type EvalVerifier, type Script, type SlateClient } from '../src/verifier';
 import { Seeded } from './seeded';
 
@@ -9,7 +8,6 @@ import { Seeded } from './seeded';
 // would. The agent builds an analyser that reads the files, a new day and a rule change arrive,
 // then it is asked what the data says. Every answer is computed here from the same generated lines.
 
-const MISSION = "The Tidewater Payments platform team's workspace. We keep the API gateway's request logs here and dig through them when something is slow.";
 
 const LOG_DIR = `${WORKSPACE_ROOT}/logs`;
 
@@ -257,9 +255,13 @@ const SLOWEST_ON_THE_SLOW_DAY = (() => {
 
 // ── The task ─────────────────────────────────────────────────────────
 
-const task = defineEvalTask({
-  id: 'request-logs',
-  mission: MISSION,
+export const requestLogs: EvalPart = {
+  id: 'logs',
+  objectives: [
+    'Build a logs slate whose methods report routes per day, day counts and the slowest routes from the live log files, parsed exactly, with nearest-rank percentiles.',
+    'Apply new rules to every day, read a new file when asked, and keep both across an eviction.',
+    'Name the slowest route on 2 June from the logs.',
+  ],
   turns: [{
     seed: FIRST_DAYS.map(fileOf),
     prompt: `Our API gateway's request logs are in ${LOG_DIR}, one file per UTC day named YYYY-MM-DD.log, one
@@ -352,6 +354,4 @@ count anywhere, not as requests and not as skipped lines, and a 429 now counts a
     },
   }],
   evidence: (call) => readEveryDay((method, input) => call('logs', method, input)),
-});
-
-defineTaskEval(task);
+};

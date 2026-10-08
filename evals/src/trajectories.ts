@@ -81,8 +81,8 @@ export function renderTrial(run: HarnessRun, verdict: { status: 'passed' | 'fail
       + `· cache write ${count(run.usage.metadata.cacheWriteTokens)} · output ${count(run.usage.outputTokens)}`,
   ];
 
-  for (const [index, { outcome, checks }] of run.output.turns.entries()) {
-    lines.push('', `Turn ${String(index + 1)}: ${outcome.status}${outcome.message === undefined ? '' : ` \u2014 ${value(outcome.message)}`}`);
+  for (const { part, turn, outcome, checks } of run.output.turns) {
+    lines.push('', `Turn ${String(turn)} (${part}): ${outcome.status}${outcome.message === undefined ? '' : ` \u2014 ${value(outcome.message)}`}`);
 
     for (const check of checks) {
       lines.push(`- ${check.pass ? 'pass' : 'FAIL'} \`${check.id}\`${check.pass || check.evidence === undefined ? '' : `: ${value(check.evidence)}`}`);

@@ -59,6 +59,7 @@ function fileResult(taskId: string, trials: readonly Trial[], side: { productSha
               providerWaits: 2, providerWaitMs: 30_000,
             },
             turns: [{
+              part: 'build', turn: 1,
               outcome: outcomeOf(trial),
               checks: trial.refused === undefined && trial.reset === undefined && trial.hung === undefined && trial.cancelled === undefined
                 ? [{ id: trial.failed ?? 'builds', pass: trial.pass, evidence: trial.pass ? { calls: 3 } : { answered: 1 } }]

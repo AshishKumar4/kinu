@@ -1,7 +1,6 @@
 
 import { WORKSPACE_ROOT } from '@kinu.run/core';
-import { defineTaskEval } from '../src/eval';
-import { defineEvalTask } from '../src/task';
+import type { EvalPart } from '../src/task';
 import type { EvalVerifier } from '../src/verifier';
 import { Seeded } from './seeded';
 import { published } from './npm';
@@ -11,7 +10,6 @@ import { published } from './npm';
 // unpacks without the copy and runs the same tool over; then a question only the live web answers. Graded on what the Tools pane and the Files tab show, and on the answers: the totals
 // computed here from the same manifests, the versions asked of the npm registry when the check runs.
 
-const MISSION = "Harbor Freight Co-op's workspace. We check every shipping manifest that comes in, with tools we keep for it.";
 
 const DIR = `${WORKSPACE_ROOT}/manifests`;
 
@@ -148,9 +146,13 @@ function answered(replies: readonly string[], name: string): string | null {
 
 // ── The task ─────────────────────────────────────────────────────────
 
-const task = defineEvalTask({
-  id: 'freight-desk',
-  mission: MISSION,
+export const freightDesk: EvalPart = {
+  id: 'manifests',
+  objectives: [
+    'Craft a manifest_totals tool, list it, and answer the September totals with it.',
+    'Unpack the October ZIP without the re-sent September copy, and answer the October totals by reusing the same tool.',
+    'Answer the latest valibot, hono and zod versions as the npm registry has them.',
+  ],
   turns: [{
     seed: [{ path: `${DIR}/2027-09-01.csv`, content: csv(SEPTEMBER) }],
     prompt: `Build yourself a reusable tool named ${TOOL}: given the path of a shipping manifest CSV with the
@@ -212,6 +214,4 @@ now rather than recalling them. Reply with one line per package: the package nam
       }
     },
   }],
-});
-
-defineTaskEval(task);
+};

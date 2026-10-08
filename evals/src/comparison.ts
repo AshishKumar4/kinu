@@ -269,14 +269,14 @@ function stats({ assertions }: Cohort): EvalStats {
 
   // A turn the deployment refused, reset or hung failed on the build, so it is listed with the checks, its answer as the
   // evidence; a hang under what held it, so a job left running is not read as a model gone silent.
-  const failedChecks = countBy(runs.flatMap((run) => run.output.turns.flatMap((turn, index) => [
+  const failedChecks = countBy(runs.flatMap((run) => run.output.turns.flatMap((turn) => [
     ...turn.outcome.status === 'refused' || turn.outcome.status === 'reset' || turn.outcome.status === 'hung'
       ? [{ id: `deployment.${turn.outcome.status}${turn.outcome.heldBy === undefined ? '' : ` (held by ${turn.outcome.heldBy.join(', ')})`}`,
         evidence: turn.outcome.message }]
       : [],
     ...turn.checks.filter((check) => !check.pass),
   ].map((check) => ({
-    check: `t${String(index + 1)} ${check.id}`,
+    check: `t${String(turn.turn)} ${check.id}`,
     evidence: check.evidence === undefined ? null : JSON.stringify(check.evidence),
   })))), (failure) => failure.check);
 
@@ -412,9 +412,9 @@ function checkRates(assertions: readonly Assertion[]): Map<string, CheckRate> {
   const rates = new Map<string, CheckRate>();
 
   for (const assertion of assertions) {
-    for (const [index, turn] of assertion.meta.harness.run.output.turns.entries()) {
+    for (const turn of assertion.meta.harness.run.output.turns) {
       for (const check of turn.checks) {
-        const key = `t${String(index + 1)} ${check.id}`;
+        const key = `t${String(turn.turn)} ${check.id}`;
         const sofar = rates.get(key) ?? { attempted: 0, passed: 0 };
 
         rates.set(key, { attempted: sofar.attempted + 1, passed: sofar.passed + (check.pass ? 1 : 0) });

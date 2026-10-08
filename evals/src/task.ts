@@ -16,6 +16,19 @@ export type EvalTurn = {
   readonly verifyAfterEviction?: (verifier: EvalVerifier) => Promise<void>;
 };
 
+/**
+ * Turns that build on each other toward one set of objectives. A turn that completes with a failed check skips the rest
+ * of its part and not the next part, so a task of several parts measures each of them.
+ */
+export type EvalPart = {
+  readonly id: string;
+  /** What the part asks of the agent, each a goal the reviewer judges a trial against. */
+  readonly objectives: readonly [string, ...string[]];
+  readonly turns: readonly [EvalTurn, ...EvalTurn[]];
+  /** Reads that show the data the part's slates hold, made at the end of every trial and kept with its evidence. */
+  readonly evidence?: (call: EvidenceCall) => Promise<void>;
+};
+
 /** A slate call as a trial's evidence makes it: `slate.method(input)`, answered with what the slate returned. */
 export type EvidenceCall = (slate: string, method: string, input?: JsonValue) => Promise<JsonValue>;
 
@@ -23,24 +36,41 @@ export type EvalTask = {
   readonly id: string;
   /** The workspace's mission, written to SOUL.md before the first prompt; no genesis turn runs. */
   readonly mission: string;
-  readonly turns: readonly [EvalTurn, ...EvalTurn[]];
-  /** Reads that show the data the task's slates hold, made at the end of every trial and kept with its evidence. */
-  readonly evidence?: (call: EvidenceCall) => Promise<void>;
+  readonly parts: readonly [EvalPart, ...EvalPart[]];
 };
 
 export type EvalCheck = { id: string; pass: boolean; evidence?: JsonValue };
 
 const ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
-/** Validate one task before it can spend inference. */
+/** One turn of a task, with its part and its number among all the task's turns, from 1. */
+export type PlacedTurn = { readonly part: string; readonly turn: number; readonly spec: EvalTurn };
+
+/** Every turn of a task in the order it is asked. */
+export function taskTurns(task: EvalTask): PlacedTurn[] {
+  return task.parts.flatMap((part) => part.turns.map((spec) => ({ part: part.id, spec }))).map((placed, index) => ({ ...placed, turn: index + 1 }));
+}
+
+/** Validate one task before it can spend inference. A prompt is how the harness finds its turn, so no two are alike. */
 export function defineEvalTask(task: EvalTask): EvalTask {
   if (!ID.test(task.id)) throw new Error(`Invalid eval task id ${JSON.stringify(task.id)}`);
 
   if (task.mission.trim() === '') throw new Error(`Eval task ${task.id} has no mission`);
 
-  for (const [index, turn] of task.turns.entries()) {
-    if (turn.prompt.trim() === '') throw new Error(`Eval task ${task.id} turn ${String(index + 1)} is empty`);
+  for (const part of task.parts) {
+    if (!ID.test(part.id)) throw new Error(`Eval task ${task.id} has a part named ${JSON.stringify(part.id)}`);
+
+    if (part.objectives.some((objective) => objective.trim() === '')) throw new Error(`Eval task ${task.id} part ${part.id} has an empty objective`);
   }
+
+  if (new Set(task.parts.map((part) => part.id)).size !== task.parts.length) throw new Error(`Eval task ${task.id} names a part twice`);
+  const turns = taskTurns(task);
+
+  for (const { turn, spec } of turns) {
+    if (spec.prompt.trim() === '') throw new Error(`Eval task ${task.id} turn ${String(turn)} is empty`);
+  }
+
+  if (new Set(turns.map(({ spec }) => spec.prompt)).size !== turns.length) throw new Error(`Eval task ${task.id} asks one prompt twice`);
 
   return task;
 }
@@ -49,7 +79,7 @@ export function defineEvalTask(task: EvalTask): EvalTask {
 export function taskVersion(task: EvalTask): string {
   const given = {
     mission: task.mission,
-    turns: task.turns.map((turn) => ({
+    turns: taskTurns(task).map(({ spec: turn }) => ({
       ...(turn.fresh && { fresh: true }),
       seed: (turn.seed ?? []).map((file) => (file.content instanceof Uint8Array ? { ...file, content: { base64: Buffer.from(file.content).toString('base64') } } : file)),
       prompt: turn.prompt,
@@ -79,12 +109,18 @@ export const TURN_OUTCOMES = ['completed', 'error', 'refused', 'reset', 'hung', 
 /** `heldBy`: for a turn that hung or was cancelled, the kinds of what held it (`WorkspaceHeld`). */
 export type EvalTurnOutcome = { status: (typeof TURN_OUTCOMES)[number]; message?: string; heldBy?: string[] };
 
+/** `part` and `turn` place it in the task (`taskTurns`): a part a failed turn ended has no results for the rest. */
 export type EvalTurnResult = {
+  part: string;
+  turn: number;
   outcome: EvalTurnOutcome;
   checks: EvalCheck[];
   turnWallMs: number;
   verificationWallMs: number;
 };
+
+/** A turn's result before the trial places it. */
+export type TurnRun = Omit<EvalTurnResult, 'part' | 'turn'>;
 
 /**
  * What a trial cost the agent, off the run ledger. `providerWaits` and `providerWaitMs` are the
@@ -101,11 +137,10 @@ export type EvalRunOutput = { success: boolean; turns: EvalTurnResult[]; metrics
 
 /**
  * Why a run failed, in the one line its reporter prints: the turn the deployment did not end as completed, with what held
- * it and the deployment's own account, else the checks that failed. A trial stops at its first failed turn.
+ * it and the deployment's own account, else the checks that failed. A trial stops at the first turn not completed.
  */
 export function failureRationale(output: EvalRunOutput): string {
-  const stopped = output.turns.findIndex((turn) => turn.outcome.status !== 'completed');
-  const turn = output.turns[stopped];
+  const turn = output.turns.find((each) => each.outcome.status !== 'completed');
 
   if (turn === undefined) {
     return `failed: ${output.turns.flatMap((each) => each.checks).filter((check) => !check.pass).map((check) => check.id).join(', ') || 'a turn did not complete'}`;
@@ -113,7 +148,7 @@ export function failureRationale(output: EvalRunOutput): string {
 
   const { status, message, heldBy } = turn.outcome;
 
-  return `failed: turn ${String(stopped + 1)} ${status}${heldBy === undefined ? '' : ` (held by ${heldBy.join(', ')})`}${message === undefined ? '' : `: ${message}`}`;
+  return `failed: turn ${String(turn.turn)} ${status}${heldBy === undefined ? '' : ` (held by ${heldBy.join(', ')})`}${message === undefined ? '' : `: ${message}`}`;
 }
 
 /**

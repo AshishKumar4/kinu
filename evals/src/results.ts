@@ -77,6 +77,8 @@ export const HarnessRunSchema = v.looseObject({
       providerWaitMs: v.pipe(v.number(), v.minValue(0)),
     }),
     turns: v.array(v.looseObject({
+      part: v.pipe(v.string(), v.minLength(1)),
+      turn: v.pipe(v.number(), v.integer(), v.minValue(1)),
       outcome: v.looseObject({ status: v.picklist(TURN_OUTCOMES), message: v.optional(v.string()), heldBy: v.optional(v.array(v.string())) }),
       checks: v.optional(v.array(CheckSchema), []),
     })),

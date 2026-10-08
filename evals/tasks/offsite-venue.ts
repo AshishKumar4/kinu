@@ -1,7 +1,6 @@
 import { WORKSPACE_ROOT } from '@kinu.run/core';
 import { shows, sightEvidence, type Sight } from '../src/sight';
-import { defineTaskEval } from '../src/eval';
-import { defineEvalTask } from '../src/task';
+import type { EvalPart } from '../src/task';
 import type { EvalCheckOutcome, EvalVerifier } from '../src/verifier';
 import { answerShows, answersWithSlates, madeNoApp, madeNoPrototype, readAnswer } from './ephemeral';
 
@@ -10,7 +9,6 @@ import { answerShows, answersWithSlates, madeNoApp, madeNoPrototype, readAnswer 
 // a one-off view, an ephemeral slate, and no app. Then a place to keep every quarter's offsite: a lasting app with
 // state, a file slate, which must still show the booking after the workspace restarts.
 
-const MISSION = "Brightline's people-ops workspace: offsites, travel and team events.";
 
 const VENUES_PATH = `${WORKSPACE_ROOT}/offsite/venues.json`;
 
@@ -66,9 +64,13 @@ async function anAppShowsTheBooking(verifier: EvalVerifier): Promise<EvalCheckOu
   return { pass: readings.some((reading) => reading.held), evidence: { slates: listing.slates.map((slate) => slate.id), readings } };
 }
 
-const task = defineEvalTask({
-  id: 'offsite-venue',
-  mission: MISSION,
+export const offsiteVenue: EvalPart = {
+  id: 'venue',
+  objectives: [
+    'Show in the chat the venues that fit a team of 14, each with its total, and let a click pick one.',
+    'A pick made in the chat reaches the agent, which writes offsite/booking.md for the chosen venue.',
+    'Then keep the bookings in a persistent app that shows the chosen booking and keeps it across an eviction.',
+  ],
   turns: [{
     seed: [{ path: VENUES_PATH, content: `${JSON.stringify(VENUES, null, 2)}\n` }],
     prompt: `We're booking the team offsite for ${String(HEADCOUNT)} people. Show me the venues in ${VENUES_PATH} that
@@ -125,10 +127,8 @@ with the booking we just made.`,
       await verifier.check('the-app-keeps-the-booking', () => anAppShowsTheBooking(verifier));
     },
   }],
-});
+};
 
 if (!FITTING.includes(PICK) || FITTING[0] === PICK || totalUsd(PICK) === Math.min(...FITTING.map(totalUsd))) {
   throw new Error(`${PICK.name} must fit the team and be neither the first venue offered nor the cheapest`);
 }
-
-defineTaskEval(task);

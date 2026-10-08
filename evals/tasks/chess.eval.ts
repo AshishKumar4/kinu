@@ -2,7 +2,7 @@ import { Chess, DEFAULT_POSITION, type Move as OracleMove, validateFen } from 'c
 import * as v from 'valibot';
 import { Seeded } from './seeded';
 import { defineTaskEval } from '../src/eval';
-import { defineEvalTask } from '../src/task';
+import { defineEvalTask, type EvalPart } from '../src/task';
 import type { Evidence, EvalVerifier, SlateClient } from '../src/verifier';
 
 // The workshop-evals chess task: a complete engine authored without a chess package, extended
@@ -472,9 +472,13 @@ const INVALID_PGNS = [
   "this is not a game",
 ];
 
-const task = defineEvalTask({
-  id: SLATE_ID,
-  mission: MISSION,
+const game: EvalPart = {
+  id: 'game',
+  objectives: [
+    'Build a shared chess slate that follows every rule, answers its FEN, legal-move and status methods as the oracle does, and keeps the game across connections.',
+    'Add PGN import and export that refuse an invalid game without changing the board.',
+    'Detect threefold repetition, the fifty-move rule and insufficient material.',
+  ],
   turns: [{
     prompt: `Build a slate with id "${SLATE_ID}" named exactly "${TITLE}": a two-player chess game a friend
 and I can both open on our phones and play in real time. Full rules of play: castling (including that
@@ -828,7 +832,9 @@ Everything that already worked keeps working.`,
     await call(SLATE_ID, 'status');
     await call(SLATE_ID, 'pgn');
   },
-});
+};
+
+const task = defineEvalTask({ id: SLATE_ID, mission: MISSION, parts: [game] });
 
 // The oracle must accept every PGN the task calls valid and refuse every one it calls invalid.
 for (const [name, pgn] of Object.entries(PGN_GAMES)) {
