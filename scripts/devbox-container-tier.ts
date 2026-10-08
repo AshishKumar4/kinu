@@ -108,13 +108,16 @@ function recoveryReport(argument: number) {
   }), JSON.parse(readFileSync(process.argv[argument + 1] ?? '', 'utf8')));
 }
 
-/** The registry token production's devbox holds and the deploy's REST token (secrets.env), not wrangler's OAuth token,
- *  which expired mid-run (2026-10-08: the fixture's snapshot cleanup answered 401 minutes after it started). */
+/** The registry token production's devbox holds and the deploy's REST token, armada secrets both (the row's `secrets`),
+ *  never wrangler's OAuth token, which expired mid-run (2026-10-08: the fixture's snapshot cleanup answered 401 minutes
+ *  after it started) and which no armada container holds. Every wrangler this tier starts reads the REST token as its
+ *  CLOUDFLARE_API_TOKEN, so none falls back to a login. */
 function fixtureTokens() {
   const token = process.env['DEVBOX_REGISTRY_TOKEN']?.trim() ?? '';
   const rest = restApiToken();
 
-  if (token === '' || rest === '') throw new Error('the real-container tier needs DEVBOX_REGISTRY_TOKEN and KINU_CLOUDFLARE_API_TOKEN (secrets.env)');
+  if (token === '' || rest === '') throw new Error('the real-container tier needs DEVBOX_REGISTRY_TOKEN and KINU_CLOUDFLARE_API_TOKEN (armada secrets)');
+  process.env['CLOUDFLARE_API_TOKEN'] = rest;
 
   return { token, rest };
 }
