@@ -15,6 +15,10 @@
  * teardown manifest, so an interrupted run is swept by the next. The supplied credentials outlive
  * it: nothing here writes, rotates or deletes them.
  *
+ * It runs from a machine, not on armada: it deploys its own Worker, bucket and container
+ * application through the deploying account's wrangler session and R2 keys, which no armada run
+ * carries (as `gate:devbox-e2e`'s `here` says).
+ *
  *   set -a; . ./.dev.vars; set +a; bun scripts/bench-devbox-standalone.ts
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';

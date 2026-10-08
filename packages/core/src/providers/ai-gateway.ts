@@ -13,7 +13,7 @@ import {
   WORKERS_AI_PREFERRED_MODEL_IDS,
 } from './workers-ai-catalog';
 import { heardFetch } from './middleware/attempt';
-import { lazyModel } from './wire-model';
+import { lazyModel, workersAiModelId } from './wire-model';
 
 const AI_GATEWAY_PROVIDER_ID = 'ai-gateway';
 
@@ -67,7 +67,7 @@ export function createAIGatewayProvider(): ModelProvider {
           // Never fetched: the transport parses the URL into the binding's {gateway, provider, endpoint}.
           baseURL: String(deps.env.AI_GATEWAY_URL),
           fetch: heardFetch(createGatewayBindingFetch(resolved)),
-        }).chatModel(modelId))));
+        }).chatModel(workersAiModelId(modelId)))));
     },
   };
 }

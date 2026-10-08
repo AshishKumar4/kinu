@@ -2011,19 +2011,24 @@ export const PLATFORM_CATALOG = {
     origin: 'self-imposed',
     bounds: 'silence',
     evidence: 'observed-in-production',
-    provenance: '~/kinu-logs/research/HUNG-RPC-ArmedBat.md:67-73',
+    provenance: '~/kinu-logs/research/HUNG-RPC-ArmedBat.md:67-87',
     date: '2026-10-08',
     trigger: 'a running job whose context answered no probe for the bound, read at an alarm',
     onBreach: 'the job is recovered as an evicted one is: re-driven if its kind resumes, else settled failed saying it was lost, and its agent woken',
     observable: [{ context: 'the job\'s settled error', message: 'nothing came back from its work for' }],
     firstPartySignal: true,
     notes: 'Twice the per-invocation CPU limit Kinu configures (limits.cpu_ms 300 s), which staging reached (302.5 s, '
-      + '2026-10-08): a live isolate answers only when its thread is free, and no invocation holds it longer. Silence '
-      + 're-armed by every answer, never a limit on how long the job runs. Staging bgjob-qwywfmf0ej8nhsf4jxlym '
-      + '(2026-10-08 07:44Z) detached and never ended while its workspace served 800+ more invocations.',
+      + '2026-10-08). A probe waits for the CPU queued ahead of it on its object\'s thread and nothing else, so the '
+      + 'bound holds while no object queues more than it: the most any production workspace object spent in any 600 s '
+      + 'window was 577.8 s, a 4 % margin over that coarse upper bound. A job misjudged past it is safe: its re-drive '
+      + 'claims a new epoch first, and the first attempt is refused every write. Silence re-armed by every answer, '
+      + 'never a limit on how long the job runs. Staging bgjob-qwywfmf0ej8nhsf4jxlym (2026-10-08 07:44Z) detached and '
+      + 'never ended while its workspace served 800+ more invocations.',
     measurements: [
       { scenario: 'staging OrchestratorAgent, max CPU in one invocation over 24 h (n=279,216)', value: 302_500, unit: 'ms' },
       { scenario: 'production OrchestratorAgent, max CPU in one invocation over 7 days, sampled', value: 29_338, unit: 'ms' },
+      { scenario: 'production, most CPU one workspace object spent in any 600 s window over 72 h: the most a probe can queue behind', value: 577_805, unit: 'ms' },
+      { scenario: 'workerd, a probe sent into 40 queued invocations of 28 ms CPU each: it waits for the work ahead of it, then answers', value: 953, unit: 'ms' },
     ],
   },
 

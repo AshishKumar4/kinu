@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/jobs/store.ts b/packages/core/src/jobs/store.ts
-index 07dffc4f6..bd68c2093 100644
 --- a/packages/core/src/jobs/store.ts
 +++ b/packages/core/src/jobs/store.ts
-@@ -132,7 +132,7 @@ export class BackgroundJobStore {
-   settle(id: string, epoch: number, result: string, now: number): void {
+@@ -144,8 +144,8 @@ export class BackgroundJobStore {
+   settle(id: string, epoch: number, result: string, now: number): boolean {
      this.actor.assertCurrent();
-     void this.sql`UPDATE background_jobs SET status='completed', result=${result}, settled_at=${now}
--      WHERE actor_id=${this.actorId} AND id=${id} AND status='running' AND epoch=${epoch}`;
-+      WHERE actor_id=${this.actorId} AND id=${id} AND status='running'`;
+ 
+     return this.sql`UPDATE background_jobs SET status='completed', result=${result}, settled_at=${now}
+-      WHERE actor_id=${this.actorId} AND id=${id} AND status='running' AND epoch=${epoch} RETURNING id`.length === 1;
++      WHERE actor_id=${this.actorId} AND id=${id} AND status='running' RETURNING id`.length === 1;
    }
  
-   fail(id: string, epoch: number, error: string, now: number): void {
+   fail(id: string, epoch: number, error: string, now: number): boolean {

@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { statSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { basename, join, resolve } from "node:path";
@@ -1608,5 +1608,86 @@ describe("worker release artifact", () => {
 
     expect(lastAsset).toBeGreaterThan(-1);
     expect(firstModule).toBeGreaterThan(lastAsset);
+  });
+});
+
+// ── The smoke test's reads of the version it deployed (deploy-smoke.sh) ──
+
+const SMOKE = join(import.meta.dir, 'deploy-smoke.sh');
+
+/** A route the way an edge answers it while a new version propagates: the nth answer comes from the nth version
+ *  named (the last one thereafter), as the placeholder 503s or as a version answers 200; `null` names none. */
+function edge(answers: readonly (string | null)[]) {
+  let asked = 0;
+
+  const server = Bun.serve({
+    port: 0,
+    fetch: () => {
+      const version = answers[Math.min(asked, answers.length - 1)];
+
+      asked += 1;
+
+      return new Response(version === 'placeholder' ? '{"resetting":true}' : 'ok', {
+        status: version === 'placeholder' ? 503 : 200,
+        headers: version === null ? {} : { 'x-kinu-version': version },
+      });
+    },
+  });
+
+  return { url: `http://127.0.0.1:${String(server.port)}/downloads/kinu-worker.tar.gz`, asked: () => asked, stop: () => server.stop(true) };
+}
+
+const servers: { stop: () => void }[] = [];
+
+afterAll(() => {
+  for (const server of servers) server.stop();
+});
+
+/** `ours` and `not_ours` from deploy-smoke.sh, as deploy.sh calls them, against `url`, within a 6 s bound. */
+async function smoke(url: string): Promise<{ readonly status: string; readonly by: string; readonly finding: string }> {
+  const script = `source ${JSON.stringify(SMOKE)}
+KINU_PROPAGATION_SECONDS=6
+KINU_VERSION=cfcb250f
+ours /dev/null -I --max-time 5 ${JSON.stringify(url)}
+printf '%s\\n%s\\n%s' "$KINU_STATUS" "$KINU_ANSWERED_BY" "$(not_ours "the worker artifact route")"`;
+
+  // Not spawnSync: the route answers from this process.
+  const ran = Bun.spawn(['bash', '-c', script], { stdout: 'pipe', stderr: 'pipe' });
+  const [status = '', by = '', finding = ''] = (await new Response(ran.stdout).text()).split('\n');
+
+  await ran.exited;
+
+  return { status, by, finding };
+}
+
+describe('the smoke test reads the version it deployed', () => {
+  // 2026-10-08: the reset placeholder before b8340eebf answered the artifact route 503, 23 s after the deploy, between
+  // answers the new version gave; the smoke read that 503 as the build's.
+  test('asks again while a version it replaced answers, and judges its own version\'s answer', async () => {
+    const route = edge(['placeholder', 'placeholder', 'cfcb250f']);
+
+    servers.push(route);
+
+    expect({ ...await smoke(route.url), asked: route.asked() }).toEqual({ status: '200', by: 'cfcb250f', finding: '', asked: 3 });
+  });
+
+  test('names the version still answering at its bound, rather than judging that version\'s answer as the build\'s', async () => {
+    const route = edge(['placeholder']);
+
+    servers.push(route);
+
+    expect(await smoke(route.url)).toEqual({
+      status: '503', by: 'placeholder', finding: 'the worker artifact route was still answered by version placeholder, not this deploy\'s cfcb250f, after 6s',
+    });
+  });
+
+  test('judges at once an answer that names no version, as a failed connection or an edge error page is', async () => {
+    const route = edge([null, 'cfcb250f']);
+
+    servers.push(route);
+
+    expect({ ...await smoke(route.url), asked: route.asked() }).toEqual({
+      status: '200', by: '', finding: 'the worker artifact route answered 200 naming no version, so not as this deploy\'s version cfcb250f', asked: 1,
+    });
   });
 });

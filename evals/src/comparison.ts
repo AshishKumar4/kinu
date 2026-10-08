@@ -46,8 +46,8 @@ export type CheckShift = { check: string; baseline: CheckRate; candidate: CheckR
 /**
  * One task/model/arm cohort. `reason` is null exactly when both sides compare, and then `pValue` is the two-sided
  * Fisher exact test on the pass counts and `resetPValue` the same test on the reset counts; `shifts` compares every
- * other measure of a trial, and `checks` every check's pass rate. Only the pass and reset counts decide the verdict: the
- * rest says where a change moved the work, for whoever fixes it.
+ * other measure of a trial, and `checks` every check's pass rate. The pass and reset counts and the rises in
+ * `WORSE_HIGHER` decide the verdict: the rest says where a change moved the work, for whoever fixes it.
  */
 export type EvalComparisonRow = Identity & (
   | { reason: null; baseline: EvalStats; candidate: EvalStats; pValue: number; resetPValue: number; shifts: Shift[]; checks: CheckShift[] }
@@ -55,9 +55,10 @@ export type EvalComparisonRow = Identity & (
 );
 
 /**
- * `regressed` when any comparable task's pass rate fell significantly (p < 0.05), or its workspaces
- * reset for memory significantly more often, `improved` when some rose and none of that happened,
- * `unchanged` when none moved beyond noise, `inconclusive` when nothing could be compared.
+ * `regressed` when any comparable task's pass rate fell significantly (p < 0.05), its workspaces reset for memory
+ * significantly more often, or it took significantly more model steps, tokens or malformed calls; `improved` when some
+ * pass rate rose and none of that happened, `unchanged` when none moved beyond noise, `inconclusive` when nothing could
+ * be compared.
  */
 export type EvalVerdict = 'improved' | 'regressed' | 'unchanged' | 'inconclusive';
 
@@ -436,6 +437,14 @@ function passRate(side: EvalStats): number {
   return side.passed / side.trials;
 }
 
+/** Measures in which more is worse ("evals show no degradations", the owner): a rise beyond noise in any is a regression,
+ *  as a fall in the pass rate is. Wall time and tool counts are the task's, not the build's. */
+const WORSE_HIGHER: ReadonlySet<Measure> = new Set(['modelSteps', 'inputTokens', 'outputTokens', 'badInputCalls', 'unknownToolCalls']);
+
+function worsened(row: ComparedRow): Shift[] {
+  return row.shifts.filter((shift) => WORSE_HIGHER.has(shift.measure) && shift.rose && shift.pValue < SIGNIFICANCE);
+}
+
 /** Whether a compared cohort's workspaces reset for memory significantly more often than the baseline's. */
 function resetMore(row: ComparedRow): boolean {
   return row.resetPValue < SIGNIFICANCE && row.candidate.resets > row.baseline.resets;
@@ -448,6 +457,8 @@ function verdictOf(rows: readonly EvalComparisonRow[]): EvalVerdict {
   const moved = compared.filter((row) => row.pValue < SIGNIFICANCE);
 
   if (moved.some((row) => passRate(row.candidate) < passRate(row.baseline)) || compared.some(resetMore)) return 'regressed';
+
+  if (compared.some((row) => worsened(row).length > 0)) return 'regressed';
 
   return moved.length > 0 ? 'improved' : 'unchanged';
 }
@@ -633,6 +644,10 @@ function verdictReason(comparison: EvalComparison, shared: Shared): string {
       + `${String(row.candidate.resets)}/${String(row.candidate.trials)} (p = ${row.resetPValue.toFixed(2)})`]
     : []);
 
+  const worse = comparison.rows.flatMap((row) => row.reason === null ? worsened(row).map((shift) => `${rowName(row, shared)} `
+    + `${MEASURE_LABEL[shift.measure].name} ${spreadOf(shift.measure, shift.baseline)} \u2192 ${spreadOf(shift.measure, shift.candidate)} `
+    + `(p = ${shift.pValue.toFixed(2)})`) : []);
+
   switch (comparison.verdict) {
     case 'inconclusive': return `No task can be compared: ${[...new Set(comparison.rows.flatMap((row) => row.reason ?? []))].join(', ')}.`;
     case 'unchanged': return `No task moved beyond what ${shared.trials === null ? 'these' : String(shared.trials)} runs can tell apart from noise.`;
@@ -640,6 +655,7 @@ function verdictReason(comparison: EvalComparison, shared: Shared): string {
     case 'regressed': return [
       ...falls.length > 0 ? [`Fell: ${falls.join(', ')}.`] : [],
       ...resets.length > 0 ? [`Reset for memory more often: ${resets.join(', ')}.`] : [],
+      ...worse.length > 0 ? [`Worse: ${worse.join(', ')}.`] : [],
       ...rises.length > 0 ? [`Rose: ${rises.join(', ')}.`] : [],
     ].join(' ');
   }
@@ -770,7 +786,7 @@ function movedSection(rows: readonly EvalComparisonRow[], shared: Shared): strin
       + 'nor any check\u2019s pass rate.'],
     ...unrecorded.length > 0 ? ['', `Not compared, as not recorded for every trial on both sides: ${unrecorded.join('; ')}.`] : [],
     '', '_Medians, the middle half in brackets; a two-sided Mann\u2013Whitney test for the measures and Fisher\u2019s exact test for '
-      + 'the checks. Only the pass and reset rates decide the verdict._', ''];
+      + 'the checks. The pass and reset rates decide the verdict, and so does a rise in model steps, tokens or malformed calls._', ''];
 }
 
 /** How the agent worked per model, the baseline in parentheses: information for a prompt or tool change. */
