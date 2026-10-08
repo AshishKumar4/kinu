@@ -13,7 +13,7 @@ import { SLATE_READ_MODELS } from '../src/slates/read-models';
 import type { DeferredApproval } from '../src/safety/deferred-approval';
 
 const EMPTY: PendingActionInputs = {
-  scaffoldVersions: [], deferredActions: [],
+  scaffoldVersions: [], deferredActions: [], workspaceProposals: [],
   unseenChanges: { count: 0, revertable: 0, latestAt: 0 }, curriculum: [], pendingPlans: [],
 };
 
@@ -132,6 +132,7 @@ describe('buildPendingActions', () => {
       unseenChanges: { count: 2, revertable: 2, latestAt: 4000 },
       curriculum: [{ id: 'cur', task: 't', status: 'pending', proposedAt: 2000 }],
       pendingPlans: [],
+      workspaceProposals: [],
     });
 
     expect(actions.map((a) => a.kind)).toEqual([

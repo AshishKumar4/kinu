@@ -45,6 +45,7 @@ import { dirname, join, resolve } from 'node:path';
 
 import type { CallExpression, Node } from 'oxc-parser';
 import { tolerate } from '@kinu.run/core/obs';
+import { PROJECT_MARKERS } from '../packages/core/src/checkpoints/engine';
 import { assertMeasured, finding } from './gate-ratchet';
 import { declaredName, parse, walk } from './syntax';
 import { BROWSER_PROFILE_PARENT, SCRATCH_PREFIXES, SCRATCH_ROOT_PREFIX } from '@kinu.run/test-utils';
@@ -149,15 +150,8 @@ function probeWrite(temp: string): WriteProbe {
   }
 }
 
-/**
- * The markers `FileCheckpoints.workdirForPath` treats as a project root. Kept
- * in sync with packages/cli-backend/src/checkpoints.ts by
- * `scripts/preflight.test.ts`, which reads that file — a hardcoded copy that
- * drifts would make this check pass over the very directory it is guarding.
- */
-export const PROJECT_MARKERS = [
-  '.git', 'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'Makefile', '.hg',
-] as const;
+/** The markers the checkpoint engine treats as a project root: its own list, so this check probes what it climbs to. */
+export { PROJECT_MARKERS };
 
 /* Scratch prefixes come from `@kinu.run/test-utils` (src/scratch.ts), which is
  * also what MINTS them — `judge` counts orphans and `reclaim` removes them from
@@ -179,10 +173,10 @@ export const PROJECT_MARKERS = [
  * is reported inside that finding and on the success line, and it is never a
  * verdict of its own. */
 
-/** The engine whose walk this check is about. Read rather than imported: the
- *  question is what the SHIPPED source does, and a gate that imports the
- *  function it is judging cannot tell a present bound from a removed one. */
-const ENGINE = 'packages/cli-backend/src/checkpoints.ts';
+/** The engine whose walk this check is about: core's, which the CLI runs and the daemon carries generated. Read rather
+ *  than imported: the question is what the SHIPPED source does, and a gate that imports the function it is judging
+ *  cannot tell a present bound from a removed one. */
+const ENGINE = 'packages/core/src/checkpoints/engine.ts';
 
 /**
  * Whether `workdirForPath` stops its ancestor walk at the temp directory.
@@ -194,12 +188,15 @@ const ENGINE = 'packages/cli-backend/src/checkpoints.ts';
  * 24,483 ms for one `device.writeFile`, which surfaces as a 5,000 ms timeout
  * in whichever suite wrote first. So the marker is a FINDING only while the
  * bound is missing, and this is the half that decides which. Read as syntax:
- * `temp` bound to `resolve(tmpdir())`, and an `if` comparing `probe === temp`
+ * `temp` bound to `path.resolve(host.tmpdir)`, and an `if` comparing `probe === temp`
  * and `real === realTemp` (either order) whose whole branch is `break`.
  */
 export function engineBoundsTempWalk(source: string): boolean {
   const calls = (raw: Node | null | undefined, name: string): raw is CallExpression =>
-    raw?.type === 'CallExpression' && raw.callee.type === 'Identifier' && raw.callee.name === name;
+    raw?.type === 'CallExpression' && raw.callee.type === 'MemberExpression' && raw.callee.property.type === 'Identifier' && raw.callee.property.name === name;
+
+  const reads = (raw: Node | null | undefined, name: string): boolean =>
+    raw?.type === 'MemberExpression' && raw.property.type === 'Identifier' && raw.property.name === name;
 
   const compares = (raw: Node, pair: readonly [string, string]): boolean => raw.type === 'BinaryExpression' && raw.operator === '==='
     && raw.left.type === 'Identifier' && raw.right.type === 'Identifier' && [raw.left.name, raw.right.name].sort().join() === [...pair].sort().join();
@@ -211,7 +208,7 @@ export function engineBoundsTempWalk(source: string): boolean {
     if (declaredName(method) !== 'workdirForPath') return;
     walk(method, ({ raw }) => {
       if (raw.type === 'VariableDeclarator' && raw.id.type === 'Identifier' && raw.id.name === 'temp'
-        && calls(raw.init, 'resolve') && calls(raw.init.arguments[0], 'tmpdir')) tempIsTmpdir = true;
+        && calls(raw.init, 'resolve') && reads(raw.init.arguments[0], 'tmpdir')) tempIsTmpdir = true;
 
       if (raw.type !== 'IfStatement' || raw.test.type !== 'LogicalExpression' || raw.test.operator !== '||') return;
       const branch = raw.consequent.type === 'BlockStatement' && raw.consequent.body.length === 1 ? raw.consequent.body[0] : raw.consequent;

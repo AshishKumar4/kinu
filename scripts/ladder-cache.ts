@@ -9,7 +9,10 @@
  * A recorded entry lives outside the tree at `~/.cache/kinu-ladder/<sha256>`
  * and names the gate, the revision it was proved on, its wall seconds, the
  * closure size and the tool versions. Nothing expires by time: an entry is
- * either the hash of the tree you have or it is not consulted.
+ * either the hash of the tree you have or it is not consulted. On armada,
+ * where each container's store dies with it, `ladder-proofs.ts` mirrors the
+ * entries to a bucket under the same keys, so a later commit's container
+ * reads the proofs an earlier one recorded.
  *
  * The environment is an input the runner CONTROLS rather than one it
  * trusts: a derived gate runs with exactly the names its key hashes
@@ -95,7 +98,7 @@ export function toolVersions(root: string, node: string): ToolVersions {
 }
 
 /** One recorded green run. */
-const EntrySchema = v.object({
+export const EntrySchema = v.object({
   run: v.string(),
   execution: v.optional(v.string()),
   revision: v.string(),

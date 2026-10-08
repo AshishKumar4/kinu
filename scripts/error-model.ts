@@ -120,6 +120,12 @@ export const DECLARED = byFile([
     reason: 'agent-utils sits below core and holds no runner: a leaf utility throws and catches as plain async code, '
       + 'and core brings each failure in with `attempt`',
   }] as const),
+  ['packages/core/src/checkpoints/engine.ts', {
+    mechanisms: ['throw', 'catch'],
+    reason: 'the checkpoint engine the device daemon runs as a generated copy holds no runner, so the daemon\'s '
+      + 'dependency-free JavaScript runs it unchanged: it throws and catches as plain async code, and each host brings '
+      + 'a failure in at its own edge',
+  }],
   ['packages/compaction/src/codec.ts', {
     mechanisms: ['throw', 'catch'],
     reason: 'the `Codec` @better-compact/core calls: an invalid handle is thrown, the library\'s codec contract, and a value '

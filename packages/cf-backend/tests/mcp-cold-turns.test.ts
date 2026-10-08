@@ -6,9 +6,11 @@ import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import { mcpToolKey } from '@kinu.run/core';
 import { createRecordingLogger } from '@kinu.run/core/obs';
 import { scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import {
-  chatSessionTurns, fireSoonestWake, improvementLanesRan, nextTurn, orchestratorHarness, tapDiagnostics, until, type RecordedUserPlaneCalls,
+  chatSessionTurns, fireSoonestWake, improvementLanesRan, nextTurn, orchestratorHarness, tapDiagnostics, until, workspaceFiles, type RecordedUserPlaneCalls,
 } from './helpers/actor-harness';
+import { ROOT_SLATE_CALLER } from '../src/slates/bindings';
 
 const KEY = mcpToolKey('tracker', 'find_issue');
 
@@ -148,4 +150,30 @@ test('every settled turn warms the next one\'s connections, whatever its outcome
   restore();
   failures.push(...logger.emitted.filter((line) => line.event === 'mcp.settle_warmup_failed').map((line) => line.event));
   expect({ warmed, failures }).toEqual({ warmed: { completed: 1, aborted: 1, plan: 1, unprovisioned: 0 }, failures: [] });
+});
+
+// A slate call opens no turn, so it can wait: a server the user object is still dialling is warmed, once, and called.
+test("a slate's call to a server its cold user object is still dialling waits for it and is answered", async () => {
+  const mcp: NonNullable<RecordedUserPlaneCalls['mcp']> = {
+    descriptors: [{ serverId: 'srv-1', serverName: 'tracker', name: 'find_issue', toolKey: KEY, readOnly: true, inputSchema: { type: 'object' } }],
+    calls: [],
+    answer: { id: 'ISSUE-7' },
+    cold: true,
+  };
+
+  const userPlane: RecordedUserPlaneCalls = { warmConnections: [], failWarm: null, titles: [], mcp };
+  const workspace = orchestratorHarness(userPlane);
+
+  workspace.agent.harnessHoldsCapability('harness-token');
+  const files = workspaceFiles(workspace.agent);
+
+  await files.mkdir('/slates/board', { recursive: true });
+  await writeText(files, '/slates/board/package.json', JSON.stringify({ main: 'server.ts' }));
+
+  const answer = await workspace.agent.slateCallAs(ROOT_SLATE_CALLER, 'board', 'workspace', {
+    path: ['mcp', 'tracker', 'find_issue'], args: [{ title: 'login' }], invocation: null,
+  });
+
+  expect({ answered: JSON.stringify(answer).includes('ISSUE-7'), warms: userPlane.warmConnections.length, calls: mcp.calls })
+    .toEqual({ answered: true, warms: 1, calls: [{ tool: 'find_issue', args: { title: 'login' } }] });
 });
