@@ -66,6 +66,25 @@ function liveHead(db: Database, id: string): void {
 }
 
 /** An assignment row's dispatch state and, once settled, the reason it was dismissed. */
+/** The rows one sweep pass re-pends (`ORPHAN_SEAL_MAX_ROWS`), and a backlog past it. */
+const LEASE_SWEEP_ROWS = 256;
+
+const DEAD_LEASES = LEASE_SWEEP_ROWS + 40;
+
+const LEASED = "SELECT COUNT(*) AS held FROM agent_log WHERE turn_id LIKE 'evt-dead-%' AND consumed_at IS NOT NULL";
+
+/** Assignments a dead activation had leased: each holds its drain turn's id, consumed a minute before this one began. */
+function seedDeadLeases(db: Database, count: number): void {
+  const insert = db.prepare(
+    `INSERT INTO agent_log (actor_id, id, kind, turn_id, step_idx, variant, trace_id, payload, received_at, consumed_at)
+     VALUES ('gone-actor', ?, 'event', ?, 0, 'subordinate_task', ?, '{"body":"brief"}', ?, ?)`,
+  );
+
+  const at = Date.now() - 60_000;
+
+  for (let n = 0; n < count; n++) insert.run(`dead-task-${String(n)}`, `evt-dead-${String(n)}`, `trace-dead-${String(n)}`, at, at);
+}
+
 function orphanRow(db: Database, id: string): { step_idx: number | null; dismissed: string | null } {
   return present(db
     .query<{ step_idx: number | null; dismissed: string | null }, [string]>(
@@ -155,6 +174,20 @@ describe('the workspace keeps exactly one wake per job', () => {
 
     await agent.terminalRetryPass();
     expect(held(db, seededFibers)).toBe(0);
+  });
+
+  test('a beyond-budget backlog of dead leases arms the wake, and the wake drains it', async () => {
+    const { agent, db, started } = orchestratorHarness();
+    await started;
+    seedDeadLeases(db, DEAD_LEASES);
+
+    await agent.activateActor();
+    await until(() => wakeArmed(db), 'the truncated lease sweep armed the maintenance wake');
+
+    expect(held(db, LEASED)).toBe(DEAD_LEASES - LEASE_SWEEP_ROWS);
+
+    await agent.terminalRetryPass();
+    expect(held(db, LEASED)).toBe(0);
   });
 
   test('an activation whose fiber sweep finished does not sweep again on its ticks', async () => {
