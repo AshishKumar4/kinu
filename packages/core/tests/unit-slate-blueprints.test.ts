@@ -131,20 +131,21 @@ test('a whole-tree publication exports the vendored skeleton and a secret shape 
   }
 });
 
-test('a requirement is named by its namespace verbatim, as the slate\'s code calls it', async () => {
+test('a requirement reads back as its namespace verbatim, as the slate\'s code calls it', async () => {
   const owner = await slatePlane('owner');
   const root = slateDirectory(new SlateId('mixed'));
+  const reaches = ['mcp.My_Files', 'slates.budget.board', 'mcp.my files', 'mcp.files-2'];
   owner.vfs.mkdir(root, { recursive: true });
   owner.vfs.writeFile(root + '/package.json', JSON.stringify({ main: 'a.js' }));
   owner.vfs.writeFile(root + '/a.js', '');
-  owner.usage.set('mixed', [{ namespace: 'mcp.My_Files', member: 'read' }, { namespace: 'slates.budget.board', member: 'count' }, { namespace: 'mcp.my files', member: 'read' }]);
+  owner.usage.set('mixed', reaches.map((namespace) => ({ namespace, member: 'read' })));
 
   try {
     const published = await owner.blueprints.publish('mixed', (await owner.slates.commit(new SlateId('mixed'))).id.value);
 
-    expect(owner.blueprints.bundle(published.share.id).skeleton.bindings.map((requirement) => [requirement.name, requirement.facet])).toEqual([
-      ['mcp.My_Files', 'kinu.slate.mcp'], ['slates.budget.board', 'kinu.slate.slates'], ['mcp.my files', 'kinu.slate.mcp'],
-    ]);
+    expect(owner.blueprints.read(published.share.id).view.reaches).toEqual(reaches);
+    expect(owner.blueprints.bundle(published.share.id).skeleton.bindings.map((requirement) => requirement.facet))
+      .toEqual(['kinu.slate.mcp', 'kinu.slate.slates', 'kinu.slate.mcp', 'kinu.slate.mcp']);
   } finally {
     owner.ws.db.close();
   }

@@ -46,14 +46,33 @@ function reachOf(usage: readonly SlateUsage[]): string[] {
   return [...new Set(usage.map((entry) => entry.namespace))];
 }
 
+const LITERAL = /^[a-z0-9]$/u;
+
 /**
- * A declaration, never a grant: the forked slate calls its forker's own surface, as its forker. Each is named by its
- * namespace verbatim, the name the slate's code calls, so a forker connects exactly what it will call.
+ * A namespace as agent-core's canonical binding name, reversibly: every character but a lowercase letter or digit is
+ * `-` and its code point in six hex digits, and a `.` between two literals stays itself: `mcp.files` is itself, and
+ * `mcp.My_Files` is `mcp-00002e-00004dy-00005f-000046iles`.
  */
-function blueprintRequirements(reaches: readonly string[]): BindingRequirement[] {
-  return reaches.map((namespace) => new BindingRequirement(
-    new BindingName(namespace), new FacetPackageId(BLUEPRINT_FACET_PREFIX + namespaceHead(namespace)), CompatRange.any(),
-  ));
+function requirementName(namespace: string): string {
+  const literal = (at: number) => LITERAL.test(namespace.charAt(at));
+
+  return namespace.replace(/[^a-z0-9]/gu, (char: string, at: number) => (char === '.' && at > 0 && literal(at - 1) && literal(at + 1)
+    ? char
+    : `-${(char.codePointAt(0) ?? 0).toString(16).padStart(6, '0')}`));
+}
+
+/** The namespace a requirement names, as the slate's code calls it. */
+function requirementNamespace(name: string): string {
+  return name.replace(/-([0-9a-f]{6})/gu, (_code, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)));
+}
+
+/** A declaration, never a grant: the forked slate calls its forker's own surface, as its forker, by the same names. */
+function blueprintRequirements(reaches: readonly string[]): Effect.Effect<BindingRequirement[], KinuError> {
+  return Effect.forEach(reaches, (namespace) => (/^[a-z]/u.test(namespace)
+    ? Effect.succeed(new BindingRequirement(
+      new BindingName(requirementName(namespace)), new FacetPackageId(BLUEPRINT_FACET_PREFIX + namespaceHead(namespace)), CompatRange.any(),
+    ))
+    : Effect.fail(new KinuError('bad_input', `"${namespace}" cannot be published: a namespace a blueprint requires starts with a lowercase letter`))));
 }
 
 /** `package.json` always, plus every entry under an included top-level name. */
@@ -135,7 +154,7 @@ export class WorkspaceBlueprints {
       const tree = includeTree(this.tree(record.source), included);
       // A subset is retained as its own bundle, so the skeleton names what ships.
       const bundle = included === undefined ? record.source : this.retainTree(tree);
-      const requirements = blueprintRequirements(inspection.reaches);
+      const requirements = yield* blueprintRequirements(inspection.reaches);
       const publication = yield* Effect.promise(() => this.deps.slates.publish(record.id, requirements, bundle));
 
       const row: NewSlateShare = {
@@ -183,7 +202,7 @@ export class WorkspaceBlueprints {
       const record = this.deps.shares.live(share);
       const publication = this.deps.slates.publication(new SlatePublicationId(record.publication));
       const tree = this.tree(publication.materialization);
-      const reaches = this.deps.slates.skeleton(publication.id).bindings.map((requirement) => requirement.name.value);
+      const reaches = this.deps.slates.skeleton(publication.id).bindings.map((requirement) => requirementNamespace(requirement.name.value));
 
       return { record, tree, project: yield* this.project(tree), reaches };
     });
@@ -214,7 +233,7 @@ export class WorkspaceBlueprints {
     return settle(Effect.gen({ self: this }, function* () {
       const slate = yield* Effect.promise(() => this.deps.slates.synchronize(new SlateId(slateId)));
       const tree = this.tree(slate.source);
-      const skeleton = new SlateSkeleton(slate.source.digest, blueprintRequirements(reachOf(this.deps.usage(slateId))));
+      const skeleton = new SlateSkeleton(slate.source.digest, yield* blueprintRequirements(reachOf(this.deps.usage(slateId))));
       const blobs: Record<string, string> = {};
 
       for (const entry of tree.entries) {
@@ -258,7 +277,7 @@ export class WorkspaceBlueprints {
         workspace,
         slate: admitted.slate.id.value,
         title: project.slate.title ?? project.name ?? admitted.slate.id.value,
-        requirements: admitted.unsatisfied.map((requirement) => ({ name: requirement.name.value, facet: requirement.facet.value })),
+        requirements: admitted.unsatisfied.map((requirement) => ({ name: requirementNamespace(requirement.name.value), facet: requirement.facet.value })),
       };
     }));
   }
