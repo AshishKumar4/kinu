@@ -6,14 +6,15 @@ import {
   type TestUserDO, type TestUserDOOptions,
 } from './helpers/user-do';
 import {
-  dropLiveMcpFetch, failNextMcpRemove, failNextMcpToolCall, failNextMcpDiscovery, hangMcpEstablish, holdNextMcpToolCall, inheritedMcpManager,
+  closeMcpTransport, dropLiveMcpFetch, failNextMcpRemove, holdMcpRestore, seedMcpAnswer, failNextMcpToolCall, failNextMcpDiscovery, hangMcpEstablish, holdNextMcpToolCall, inheritedMcpManager,
   liveMcpFetch, liveMcpTransport, recordedMcpFetch, recordedMcpLifecycle, recordedMcpServers, recordedMcpToolAborts,
   recordedMcpToolCalls, resetRecordedMcp, seedMcpSession, seedMcpTools, seedMcpAuthContinuation, seedSdkMcpServer, seedUndiscoveredMcpTools,
   type RecordedMcpTransport,
 } from './helpers/agents-sdk';
-import { storedMcpOptionsCarryCredential } from '../src/user/mcp';
+import { classifyMcpFailure, McpServerUnreachable, storedMcpOptionsCarryCredential } from '../src/user/mcp';
 import { createCredentialCipher, McpToolSurfaceSchema } from '@kinu.run/core';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { KinuError, renderThrownChain, setDiagnosticsSink, type LogFields } from '@kinu.run/core/obs';
+import { ProtocolError, SdkError, SdkErrorCode } from '@modelcontextprotocol/client';
 import type { McpToolSurface } from '../src/user/mcp-servers';
 import type { UserCaller } from '@kinu.run/core';
 import { refusedSseConnect, refusedToolCall } from './helpers/mcp-transport';
@@ -283,7 +284,7 @@ describe('the descriptor read is off the connection critical path', () => {
 
     const surface = await readSurface(h, owner);
 
-    // `hydrateUserMcp` awaits `_connectWithRetry` with no bound, so nothing hydrated.
+    // A dial's `_connectWithRetry` has no bound, so the read starts none and waits for none.
     const after = recordedMcpLifecycle();
     expect(after.established.length).toBe(establishedBefore);
     expect(after.restored).toBe(restoredBefore);
@@ -297,20 +298,22 @@ describe('the descriptor read is off the connection critical path', () => {
   });
 
   test('it returns promptly while a server is still connecting, and never blocks on it', async () => {
-    const h = harness();
+    const first = harness();
     const owner = await testOwner();
-    await seedServer(h, 'srv1', { name: 'fast' });
-    seedMcpTools('srv1', [{ name: 'ready_tool', inputSchema: { type: 'object' } }]);
-    sqlExec(h.db).exec(
+    await seedServer(first, 'srv1', { name: 'fast' });
+    sqlExec(first.db).exec(
       `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools)
        VALUES ('srv2', 'stuck', 'https://srv2.example/sse', 'auto', 'sealed', NULL)`,
     );
     const gate = hangMcpEstablish();
+    // The activation registers the credentialed server and starts its dial; the warmup waits on it.
+    const h = createTestUserDO({ storage: first.db });
     const warming = h.userDO.userMcp_warmConnections(owner);
 
     // The gate must be engaged, or this cannot tell "the read does not wait" from "nothing to wait for".
     await gate.entered;
     expect(recordedMcpLifecycle().established).toContain('srv2');
+    seedMcpTools('srv1', [{ name: 'ready_tool', inputSchema: { type: 'object' } }]);
 
     const surface = await readSurface(h, owner);
 
@@ -319,6 +322,7 @@ describe('the descriptor read is off the connection critical path', () => {
     gate.release();
     await warming;
     h.close();
+    first.close();
   });
 
   test('a later read sees what the warmup established', async () => {
@@ -368,15 +372,17 @@ describe('the descriptor read is off the connection critical path', () => {
 });
 
 describe('the SDK server rows are derived from the config table', () => {
-  test('an SDK row no config row owns is removed on hydration', async () => {
+  test('an SDK row no config row owns is removed at activation', async () => {
     const h = harness();
     await seedServer(h, 'srv1');
     seedSdkMcpServer('ghost');
     expect(recordedMcpServers().map((s) => s.id)).toContain('ghost');
 
-    await h.userDO.userMcp_list(await testOwner());
+    const woken = createTestUserDO({ storage: h.db });
+    await woken.userDO.userMcp_list(await testOwner());
 
     expect(recordedMcpServers().map((s) => s.id)).not.toContain('ghost');
+    woken.close();
     h.close();
   });
 
@@ -392,16 +398,19 @@ describe('the SDK server rows are derived from the config table', () => {
     const h = harness();
     await h.userDO.userMcp_list(await testOwner());
     seedSdkMcpServer('ghost');
-    await h.userDO.userMcp_warmConnections(await testOwner());
+    const woken = createTestUserDO({ storage: h.db });
+    await woken.userDO.userMcp_warmConnections(await testOwner());
     expect(recordedMcpServers()).toEqual([]);
+    woken.close();
     h.close();
   });
 
   test('an activation dials nothing through the SDK’s own start path', async () => {
     // The SDK calls `restoreConnectionsFromStorage` at every activation, before any credential closure is
     // registered; the start-path call is retired so waking a UserDO opens no anonymous connections.
-    const h = harness();
-    seedSdkMcpServer('srv1');
+    const first = harness();
+    await seedServer(first, 'srv1', { headers: { Authorization: 'Bearer mcp-secret' } });
+    const h = createTestUserDO({ storage: first.db });
     const before = recordedMcpLifecycle().restored;
 
     await inheritedMcpManager(h.userDO).restoreConnectionsFromStorage('UserDO');
@@ -409,11 +418,13 @@ describe('the SDK server rows are derived from the config table', () => {
     expect(recordedMcpLifecycle().restored).toBe(before);
     expect(Object.keys(inheritedMcpManager(h.userDO).mcpConnections)).toEqual([]);
 
-    // Restore still runs at hydration, after the credentialed transport is registered.
-    await seedServer(h, 'srv1', { headers: { Authorization: 'Bearer mcp-secret' } });
+    // Restore runs at this object's own start, after the credentialed transport is registered.
+    await h.userDO.userMcp_list(await testOwner());
     expect(recordedMcpLifecycle().restored).toBe(before + 1);
     expect(Object.keys(inheritedMcpManager(h.userDO).mcpConnections)).toEqual(['srv1']);
+    expect(liveMcpFetch('srv1')).not.toBeNull();
     h.close();
+    first.close();
   });
 });
 
@@ -526,10 +537,16 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
 
     expect(persistedServerOptions('srv1')).toBe(JSON.stringify({ transport: { type: 'auto' } }));
     expect(liveMcpTransport('srv1')?.requestInit).toBeUndefined();
-    expect(liveMcpFetch('srv1')).toBeNull();
     expect(sqlExec(first.db).exec(
       'SELECT headers FROM user_mcp_servers WHERE id = ?', 'srv1',
     ).toArray()[0]?.headers).toBeNull();
+
+    // The seam the activation installed reads the cleared column: the next request goes out bare.
+    const seen = await authorizationsSeenDuring(async () => {
+      await liveMcpFetch('srv1')?.('https://srv1.example/sse');
+    });
+
+    expect(seen).toEqual(['none']);
     woken.close();
     first.close();
   });
@@ -537,16 +554,18 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
   test('a row that never held a credential keeps the SDK session state it had', async () => {
     // Keyed on credential fields, not "the SDK persisted something": rewriting for `sessionId` would drop a
     // resumable session on every activation.
-    const h = harness();
-    await seedServer(h, 'plain');
+    const first = harness();
+    await seedServer(first, 'plain');
     seedSdkMcpServer('plain', { type: 'auto', sessionId: 'sess-1', protocolVersion: '2026-07-28' });
     const untouched = persistedServerOptions('plain');
 
+    const h = createTestUserDO({ storage: first.db });
     await h.userDO.userMcp_warmConnections(await testOwner());
 
     expect(persistedServerOptions('plain')).toBe(untouched);
     expect(recordedMcpLifecycle().established).toEqual([]);
     h.close();
+    first.close();
   });
 
   test('a rotation is spent by the next request, with no reconnect', async () => {
@@ -592,39 +611,42 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
   });
 
 
-  test('a failed credential-seam teardown cannot claim hydration installed it', async () => {
+  test('a failed credential-seam teardown cannot claim it installed the seam; the next activation does', async () => {
     const h = harness();
     const owner = await testOwner();
     await seedServer(h, 'srv1', { headers: { Authorization: 'Bearer first' } });
     dropLiveMcpFetch('srv1');
     failNextMcpRemove(new Error('close refused'));
-    // Best-effort hydration must stop at the failed teardown rather than register over the stale wire.
+    // The re-registration must stop at the failed teardown rather than register over the stale wire.
     await h.userDO.userMcp_update(owner, 'srv1', { headers: { Authorization: 'Bearer rotated' } });
     expect(liveMcpFetch('srv1')).toBeNull();
 
-    await h.userDO.userMcp_warmConnections(owner);
+    const woken = createTestUserDO({ storage: h.db });
+    await woken.userDO.userMcp_warmConnections(owner);
     expect(liveMcpFetch('srv1')).not.toBeNull();
+    woken.close();
     h.close();
   });
 
-  test('concurrent warm callers join one credential-plane reconciliation', async () => {
-    const h = harness();
+  test('requests during an activation join its one reconciliation', async () => {
+    const first = harness();
     const owner = await testOwner();
-    await seedServer(h, 'srv1', { headers: { Authorization: 'Bearer first' } });
-    dropLiveMcpFetch('srv1');
+    await seedServer(first, 'srv1', { headers: { Authorization: 'Bearer first' } });
     const before = recordedMcpLifecycle().established.length;
     const gate = hangMcpEstablish();
+    const h = createTestUserDO({ storage: first.db });
 
-    const first = h.userDO.userMcp_warmConnections(owner);
-    const second = h.userDO.userMcp_warmConnections(owner);
+    const warming = h.userDO.userMcp_warmConnections(owner);
+    const listing = h.userDO.userMcp_list(owner);
     await gate.entered;
     expect(recordedMcpLifecycle().established).toHaveLength(before + 1);
 
     gate.release();
-    await Promise.all([first, second]);
+    await Promise.all([warming, listing]);
     expect(recordedMcpLifecycle().established).toHaveLength(before + 1);
     expect(liveMcpFetch('srv1')).not.toBeNull();
     h.close();
+    first.close();
   });
   test('a server with no credential is left to the SDK restore', async () => {
     const h = harness();
@@ -942,5 +964,157 @@ describe('the descriptor surface', () => {
     expect(listed[0]?.status).toBe('ready');
     expect(listed[0]?.toolsCount).toBe(0);
     h.close();
+  });
+});
+
+/** The live connection a test drives into a state the fake reaches no other way. */
+function liveConnection(h: TestUserDO, id: string): { connectionState: string } {
+  const connection = inheritedMcpManager(h.userDO).mcpConnections[id];
+
+  if (!connection) throw new Error(`No live MCP connection for ${id}.`);
+
+  return connection;
+}
+
+interface LoggedLine {
+  readonly name: string;
+  readonly fields: LogFields;
+}
+
+/** Every diagnostics line `body` logs. Set up after construction: each UserDO installs its own sink. */
+async function diagnosticsDuring(body: () => Promise<void>): Promise<LoggedLine[]> {
+  const lines: LoggedLine[] = [];
+
+  const record = (name: string, fields: LogFields | undefined): void => {
+    lines.push({ name, fields: fields ?? {} });
+  };
+
+  const restore = setDiagnosticsSink({ event: record, failure: (name, _error, fields) => { record(name, fields); } });
+
+  try {
+    await body();
+  } finally { restore(); }
+
+  return lines;
+}
+
+describe('a call finds its server usable, or says why not before sending', () => {
+  test('a call that wakes the object waits for the dial its activation started, never failing "Not connected"', async () => {
+    // Production, steady-valley-7d95009f at 14:44:54: the user object woke for the call, the restore dial was
+    // still out, and the call reached a client with no transport 128 ms later.
+    const first = harness();
+    const owner = await testOwner();
+    await seedServer(first, 'srv1', { name: 'Cloudflare' });
+    seedSdkMcpServer('srv1');
+    const dial = holdMcpRestore();
+    const h = createTestUserDO({ storage: first.db });
+
+    const call = h.userDO.userMcp_callTool(owner, { serverId: 'srv1', name: 'execute', args: {}, id: 'woke-for-it' });
+    await dial.entered;
+    expect(liveConnection(h, 'srv1').connectionState).toBe('connecting');
+    expect(recordedMcpToolCalls()).toEqual([]);
+
+    dial.release();
+    expect(await call).toBe(JSON.stringify({ content: [] }));
+    expect(recordedMcpToolCalls()).toEqual([{ serverId: 'srv1', name: 'execute', arguments: {} }]);
+    h.close();
+    first.close();
+  });
+
+  test('a ready connection whose transport closed is dialled again, and the call goes out once', async () => {
+    const h = harness();
+    const owner = await testOwner();
+    await seedServer(h, 'srv1');
+    seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
+    closeMcpTransport('srv1');
+
+    const answer = await h.userDO.userMcp_callTool(owner, { serverId: 'srv1', name: 'do_thing', args: {}, id: crypto.randomUUID() });
+
+    expect(answer).toBe(JSON.stringify({ content: [] }));
+    expect(recordedMcpToolCalls()).toHaveLength(1);
+    expect(recordedMcpLifecycle().discovered).toContain('srv1');
+    h.close();
+  });
+
+  test('a server waiting for sign-in refuses the call before sending it, and says so', async () => {
+    const h = harness();
+    await seedServer(h, 'srv1', { name: 'linear' });
+    seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
+    liveConnection(h, 'srv1').connectionState = 'authenticating';
+
+    const refused = await failureOf(h.userDO.userMcp_callTool(await testOwner(), { serverId: 'srv1', name: 'do_thing', args: {}, id: crypto.randomUUID() }));
+
+    expect(refused).toBe('MCP server linear is authenticating, so the call was not sent. Sign in to it again in Settings.');
+    expect(recordedMcpToolCalls()).toEqual([]);
+    h.close();
+  });
+});
+
+describe('MCP connections and calls are logged, classified', () => {
+  test('each failed call is logged once as mcp.call_failed, with its kind', async () => {
+    const h = harness();
+    const owner = await testOwner();
+    await seedServer(h, 'srv1');
+    seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
+    const call = (serverId: string): Promise<string> => h.userDO.userMcp_callTool(owner, { serverId, name: 'do_thing', args: {}, id: crypto.randomUUID() });
+    const serverError = await refusedToolCall({ status: 500, body: 'boom' });
+
+    const lines = await diagnosticsDuring(async () => {
+      failNextMcpToolCall(serverError);
+      await failureOf(call('srv1'));
+      seedMcpAnswer({ content: [{ type: 'text', text: 'Invalid list options provided.' }], isError: true });
+      await call('srv1');
+      await failureOf(call('gone'));
+      await call('srv1');
+    });
+
+    expect(lines.filter((line) => line.name === 'mcp.call_failed').map((line) => [line.fields.serverId, line.fields.kind, line.fields.state]))
+      .toEqual([['srv1', 'http', 'ready'], ['srv1', 'tool_error', 'ready'], ['gone', 'refused', 'absent']]);
+    h.close();
+  });
+
+  test('each connection change is logged once, with the state it left', async () => {
+    const first = harness();
+    const owner = await testOwner();
+    await seedServer(first, 'srv1');
+    seedSdkMcpServer('srv1');
+    const dial = holdMcpRestore();
+    const h = createTestUserDO({ storage: first.db });
+
+    const lines = await diagnosticsDuring(async () => {
+      const listing = h.userDO.userMcp_list(owner);
+      await dial.entered;
+      dial.release();
+      await listing;
+      await h.userDO.userMcp_warmConnections(owner);
+    });
+
+    expect(lines.filter((line) => line.name === 'mcp.connection_changed').map((line) => [line.fields.serverId, line.fields.from, line.fields.to]))
+      .toEqual([['srv1', 'absent', 'connecting'], ['srv1', 'connecting', 'ready']]);
+    h.close();
+    first.close();
+  });
+
+  test('a failure is classified by its class and code, never its text', async () => {
+    const wrapped = new KinuError('unavailable', 'calling a tool', { cause: new SdkError(SdkErrorCode.NotConnected, 'Not connected') });
+
+    expect([
+      new SdkError(SdkErrorCode.NotConnected, 'Not connected'),
+      new SdkError(SdkErrorCode.ConnectionClosed, 'Connection closed'),
+      new SdkError(SdkErrorCode.RequestTimeout, 'Request timed out'),
+      new SdkError(SdkErrorCode.SendFailed, 'send failed'),
+      new SdkError(SdkErrorCode.InvalidResult, 'bad result'),
+      new ProtocolError(-32602, 'bad params'),
+      await refusedToolCall({ status: 401, body: 'no' }),
+      await refusedToolCall({ status: 500, body: 'boom' }),
+      wrapped,
+      new KinuError('cancelled', 'stopped'),
+      new KinuError('denied', 'not allowed'),
+      new McpServerUnreachable('auth', 'signing in'),
+      new Error('401 Unauthorized: Not connected, timed out'),
+    ].map((cause) => classifyMcpFailure({ cause }))).toEqual([
+      'not_connected', 'connection_closed', 'timeout', 'send_failed', 'protocol', 'server_error',
+      'auth', 'http', 'not_connected', 'cancelled', 'refused', 'auth', 'unknown',
+    ]);
   });
 });
