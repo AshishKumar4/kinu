@@ -155,7 +155,8 @@ Neither side reaches the network. Both reach the world only through \`workspace\
 
 Every slate gets one \`workspace\`: the namespaces your \`eval\` programs reach, called as you, as of each call and gated as your own call would be. The server has it as \`this.env.workspace\`; a page imports it from \`kinu:slate\`. Call it from inside methods: a call from the constructor or from module top level is refused, because there is no request to run it under. \`this.storage\` has no such rule. There is nothing to declare: \`package.json\` names no capabilities.
 
-- \`workspace.memory.*\`, \`workspace.tasks.*\`, \`workspace.web.*\` (your browser sessions included), \`workspace.db.*\`, and each executor's members (\`workspace.workspace.readFile(path)\`, or \`workspace.readFile(path)\` for short), as a program calls them.
+- \`workspace.memory.*\`, \`workspace.tasks.*\`, \`workspace.web.*\`, \`workspace.db.*\`, and each executor's members (\`workspace.workspace.readFile(path)\`, or \`workspace.readFile(path)\` for short), as a program calls them.
+- \`workspace.web.openBrowser()\` then \`workspace.web.connectBrowser(id)\` drive a browser from the class, as in a program: a session you opened, or a new Kitesurf one. A page asks its class.
 - \`workspace.agent.send({ text, data? })\` puts a message in your inbox as an event of kind \`slate\`. This is the one way a slate reaches you; use it when a user acts and you should react.
 - \`workspace.ai.run({ prompt, system?, tier? })\` runs one model call through your catalog and tiers and answers \`{ text, model, tier, usage }\`.
 - \`workspace.mcp.<server>.<tool>(args)\` calls a tool of a connected MCP server, \`workspace.tools.<name>(input)\` a crafted tool, \`workspace.reads.<model>()\` a read model, and \`workspace.slates.<id>.<method>(...args)\` another slate's method.

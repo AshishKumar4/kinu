@@ -340,6 +340,7 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   requests(share: string): Promise<ProbeAnswer>;
   revoke(share: string): Promise<ProbeAnswer>;
   stopped(): Promise<boolean>;
+  drive(session: string): Promise<string>;
 }
 
 

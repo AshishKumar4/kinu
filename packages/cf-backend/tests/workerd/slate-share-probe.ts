@@ -24,6 +24,7 @@ import { SlateHost } from '../../src/slates/host';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '../../src/slates/bindings';
 import { slateBatchStub } from '../../src/slates/rpc-transport';
 import { renderThrownChain } from '@kinu.run/core/obs';
+import { asFetchFunction, callCodemodeMember, createDefaultWebSearchProvider, createWebCodemodeProvider } from '@kinu.run/core';
 
 // `env.FILES` and `codemodeEgress()` resolve exports of this worker; without them a `build` boot throws before the route.
 
@@ -55,6 +56,40 @@ const refusedText = async (call: Promise<JsonValue>): Promise<string> => {
 };
 
 const SLATE_ID = 'board';
+
+/** The actor whose browser sessions the owner's slate drives, and the one session it opened. */
+const PROBE_ACTOR = 'probe-actor';
+
+const OWNED_SESSION = 'owned-session';
+
+/** A slate whose class connects the browser session its request names, as an eval program would. */
+const DRIVER = [
+  'import { SlateObject } from "kinu:slate";',
+  'export class Slate extends SlateObject {',
+  '  async fetch(request) {',
+  '    const session = new URL(request.url).searchParams.get("session");',
+  '    try { await this.env.workspace.web.connectBrowser(session); return new Response("connected"); }',
+  '    catch (cause) { return new Response(String(cause?.message ?? cause)); }',
+  '  }',
+  '}',
+].join('\n');
+
+/** Browser Run, as the egress gate reaches it: a session answers where a CDP socket would, naming the session. */
+export class FakeBrowserRun extends WorkerEntrypoint {
+  override async fetch(): Promise<Response> {
+    return new Response('Browser Run started a Kitesurf browser');
+  }
+
+  async connectSession(sessionId: string) {
+    return { webSocket: { fetch: async () => new Response(`Browser Run reached session ${sessionId}`) } };
+  }
+}
+
+/** The web members a slate's host answers; with no Browser Run of its own, only the browser members' refusals. */
+const PROBE_WEB = createWebCodemodeProvider({
+  provider: createDefaultWebSearchProvider({ fetch: asFetchFunction(async () => new Response('', { status: 404 })), browser: { missing: 'the probe renders nothing' } }),
+  files: null, sessions: { missing: 'the probe opens no browser' }, prelude: { missing: 'a slate drives a browser from its class' },
+});
 
 export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   private readonly vfs = new SqliteVFS(this.ctx.storage.sql, this.ctx);
@@ -109,6 +144,8 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       dispatch: async (_caller, route) => {
         if (route.kind !== 'namespace') throw new Error(`probe dispatch answers namespace only, got ${route.kind}`);
 
+        if (route.namespace === 'web') return await callCodemodeMember([PROBE_WEB], 'web', route.member, route.args) ?? null;
+
         if (route.member === 'readFile') {
           const path = v.is(v.string(), route.args[0]) ? route.args[0] : '/x';
 
@@ -121,6 +158,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
         ...probeDurableApps(facets),
         url: async (port) => ({ url: `https://${String(port)}.preview.test/` }),
       },
+      browserActor: async (caller) => (caller.share === undefined ? PROBE_ACTOR : null),
       catalog: async () => ({ mcp: MCP, slates: Object.keys(await this.host.projects(ROOT_SLATE_CALLER)) }),
       shareUrl: async (handle) => `https://${handle}.share.test/`,
       // No AUTH_KV binding, as on a deployment without it; the spend bound is real.
@@ -203,6 +241,22 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     const removed = await this.host.operation(hire, { op: 'remove', id: 'widgets' });
 
     return { preview, removed, left: this.vfs.as(CRED_KERNEL).exists(dir) };
+  }
+
+  /** The egress gate's question of the workspace object: whether this actor opened this session. */
+  async ownsBrowserSession(actorId: string, sessionId: string): Promise<boolean> {
+    return actorId === PROBE_ACTOR && sessionId === OWNED_SESSION;
+  }
+
+  /** What the owner's driver slate answers when its class connects `session`. */
+  async drive(session: string): Promise<string> {
+    const files = this.vfs.as(CRED_KERNEL);
+    files.mkdir('/slates/driver', { recursive: true });
+    files.writeFile('/slates/driver/package.json', JSON.stringify({ name: 'driver', main: 'server.js' }));
+    files.writeFile('/slates/driver/server.js', DRIVER);
+    const process = await this.host.ensure(ROOT_SLATE_CALLER, 'driver');
+
+    return await (await process.request(new Request(`https://slate.invalid/?session=${encodeURIComponent(session)}`))).text();
   }
 
   /** The triage slates (`TRIAGE`), as an owner authors them where slates live and runs each through what it calls. */

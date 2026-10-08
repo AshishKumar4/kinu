@@ -92,6 +92,7 @@ export const FIRST_RUN_CASES = [
   'public-share',
   'share-capability-cut',
   'blueprint-fork',
+  'slate-browser',
   'drive',
   'device-link',
   'background-settle',
@@ -244,6 +245,14 @@ export const FIRST_RUN_DEFECTS = {
       + 'No deployed build carried a hole, and one carrying it fails the deploy\'s own source gates before it reaches staging, '
       + 'so the red direction is proved at the grant itself: '
       + '`grantAdmits` admitting every member lets the viewer\'s mutate() run in packages/cf-backend/tests/workerd/slate-share.test.ts.',
+  },
+  'slate-browser': {
+    id: 'slate-browser',
+    found: 'A slate\'s class opened a Chrome session as its caller, connected it through the eval program\'s browser gate, loaded a page and read its title, and did the same with a Kitesurf browser.',
+    missedBecause: 'The slate surface exposed openBrowser but refused connectBrowser: the sandbox half of driving a browser was installed only in eval programs, and a slate\'s egress carried no actor, so the gate refused every Chrome session.',
+    provedRedAt: null,
+    redDirection: 'Green requires title(engine, url) to answer \'Example Domain\' for both chrome and kitesurf. Before this, connectBrowser from a slate answered "runs only inside an eval program"; '
+      + 'packages/cf-backend/tests/workerd/slate-share.test.ts proves the gate admits the caller\'s own session and refuses another\'s.',
   },
   'blueprint-fork': {
     id: 'blueprint-fork',
@@ -745,6 +754,7 @@ const SHORT_SUBJECT = {
   'public-share': 'public',
   'share-capability-cut': 'cut',
   'blueprint-fork': 'fork',
+  'slate-browser': 'browse',
   'drive': 'drive',
   'device-link': 'link',
   'background-settle': 'wake',

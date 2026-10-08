@@ -216,3 +216,14 @@ it('a blueprint import brings the code and runs none of it', async () => {
 
   expect(await probe.importBlueprint()).toEqual({ fork: expect.not.stringMatching(/^board$/u), running: 0 });
 });
+
+it("a slate's class connects the browser its caller opened, through the eval program's gate, and no other", async () => {
+  const probe = subject('driver');
+  await probe.start();
+
+  // The gate admitted the caller's own session and reached Browser Run for it, where the CDP socket would answer.
+  expect(await probe.drive('owned-session')).toContain('Browser Run reached session owned-session');
+  expect(await probe.drive('not-mine')).toContain('browser not-mine is not one this agent opened');
+  // A Kitesurf browser is opened for the call itself.
+  expect(await probe.drive('kitesurf')).toContain('Browser Run started a Kitesurf browser');
+});

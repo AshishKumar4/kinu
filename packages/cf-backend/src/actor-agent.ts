@@ -444,6 +444,9 @@ interface WorkspaceTitleInputs {
  * unreachable; every other class is the turn's own fault. */
 const MCP_CATALOG_READ_FAILURES: ReadonlySet<ErrorCode> = new Set(['unavailable', 'timeout', 'io']);
 
+/** Where a slate's `connectBrowser`, `pageTools` and `callPageTool` run: in its class's isolate, which holds the socket. */
+const SLATE_BROWSER_DRIVER = "a slate drives a browser from its class (this.env.workspace.web.connectBrowser); its page asks the class";
+
 /**
  * A slate calling as a hosted actor reaches only that actor's own files, tables, tasks and facts, never the
  * workspace actor's (pinned by `tests/unit-slate-composition.test.ts`).
@@ -460,7 +463,7 @@ function hostedActorSurface(actor: HostedActor, web: { readonly search: WebSearc
   const providers: CodemodeProvider[] = [
     ...(runtime.executionRouter?.getProviders() ?? []),
     // A slate's web writes nothing into the workspace, since a share visitor may call it; its browser is the actor's own.
-    createWebCodemodeProvider({ provider: webSearch, files: null, sessions: { sessions: web.sessions } }),
+    createWebCodemodeProvider({ provider: webSearch, files: null, sessions: { sessions: web.sessions }, prelude: { missing: SLATE_BROWSER_DRIVER } }),
     createDbCodemodeProvider(actor.stores.appData),
     createTasksCodemodeProvider(actor.stores.taskList, actor.stores.config),
     createMemoryCodemodeProvider(() => ({
@@ -2909,11 +2912,7 @@ export abstract class ActorAgent extends Agent<Env> {
         return yield* new KinuError('denied', 'A caller path names one hosted actor; a nested path names an actor no directory holds.');
       }
 
-      const entry = this.actorDirectoryStore().apply(
-        actorReferenceOf(this.actorHandle()), [], { action: 'resolve', name },
-      );
-
-      return yield* Effect.promise(async () => this.actorHost().run(entry.reference, async (actor) => {
+      return yield* Effect.promise(async () => this.actorHost().run(this.hostedSlateCaller(name), async (actor) => {
         if (route.kind === 'ai') {
           // A hosted actor runs the model call through its own profile, resolved now.
           return await this.slateAiRun(route, actor.handle);
@@ -2943,6 +2942,22 @@ export abstract class ActorAgent extends Agent<Env> {
         return await callCodemodeMember(reach.narrowProviders(providersInWorkMode(authority.mode, surface.providers)), route.namespace, route.member, route.args) ?? null;
       }));
     });
+  }
+
+  /** The actor a slate's caller path names: this one, or the hosted actor its one hop names. */
+  protected slateCallerActorId(path: readonly SlateCallerHop[]): string {
+    const [next, ...rest] = path;
+
+    if (next === undefined) return this.actorHandle().actorId;
+
+    if (rest.length > 0) throw new KinuError('denied', 'A caller path names one hosted actor; a nested path names an actor no directory holds.');
+
+    return this.hostedSlateCaller(next.name).actorId;
+  }
+
+  /** The hosted actor a caller path's one hop names, from this actor's directory. */
+  private hostedSlateCaller(name: string) {
+    return this.actorDirectoryStore().apply(actorReferenceOf(this.actorHandle()), [], { action: 'resolve', name }).reference;
   }
 
   /**
@@ -3172,6 +3187,7 @@ export abstract class ActorAgent extends Agent<Env> {
       ...(this.rt.executionRouter?.getProviders() ?? []),
       createWebCodemodeProvider({
         provider: this.ownedModelServices.getWebSearchProvider(), files: null, sessions: { sessions: this.browserSessionsFor(this.rt.actor.actorId) },
+        prelude: { missing: SLATE_BROWSER_DRIVER },
       }),
       ...this.turnCodemodeProviders(),
     ];

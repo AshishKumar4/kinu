@@ -4417,6 +4417,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       facetManager: () => this.hostedWorkspace().facetManager(),
       bundler: (vfs) => supervisorEsbuildService(this.ctx, this.env, vfs),
       dispatch: (caller, route) => this.slateCallDispatch(caller.path, route, caller.workMode),
+      browserActor: async (caller) => (caller.share === undefined ? this.slateCallerActorId(caller.path) : null),
       apps: {
         ensure: (input) => this.hostedWorkspace().apps.ensure(input),
         remove: (owner) => this.hostedWorkspace().apps.remove(owner),

@@ -81,6 +81,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
 
         return await inWorkMode(caller.workMode, () => factory.callTool(surface, route.name, route.input)) ?? null;
       },
+      browserActor: async () => null,
       catalog: async () => ({ mcp: [], slates: [] }),
       shareUrl: async () => null,
     });

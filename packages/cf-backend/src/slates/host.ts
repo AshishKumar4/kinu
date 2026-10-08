@@ -43,6 +43,9 @@ export interface SlateHostDeps extends ResidentSlateDeps {
   readonly workspace: string;
   /** Runs as the caller: its own providers, role reach, read models and gates. */
   dispatch(caller: SlateCaller, route: SlateCapabilityRoute): Promise<JsonValue>;
+  /** The actor whose browser sessions the caller's slate drives, as that actor's eval programs do; null for a share's
+   *  viewer, whose grant no CDP socket passes through. */
+  browserActor(caller: SlateCaller): Promise<string | null>;
   readonly apps: SlateApps;
   catalog(): Promise<SlateSurfaceCatalog>;
   shareUrl(handle: string): Promise<string | null>;
@@ -932,7 +935,7 @@ export class SlateHost {
     for (let source = resolved; ; source = await this.slateSources.resolve(caller.cred, id)) {
       const revision = this.revisions.get(id) ?? 0;
       const { project, root } = source;
-      const globalOutbound = caller.workMode === 'plan' ? null : codemodeEgress({ workspace: this.deps.workspace, actor: null });
+      const globalOutbound = caller.workMode === 'plan' ? null : codemodeEgress({ workspace: this.deps.workspace, actor: await this.deps.browserActor(caller) });
 
       if (caller.workMode === 'build' && globalOutbound === null) {
         throw new KinuError('unsupported', 'Resident slate egress requires the shared outbound policy binding');

@@ -10,6 +10,7 @@ import { SLATE_METHOD_NAME_SOURCE, type SlateProcess, type SlateProject } from '
 import { attempt, diagnostics, KinuError, settle } from '@kinu.run/core/obs';
 import { slateCredentialKey } from './bindings';
 import { SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE } from '@kinu.run/core/slates';
+import { BROWSER_CLIENT_MODULE, BROWSER_PRELUDE, browserClientSource } from '../browser-prelude';
 
 export interface SlateBootArtifacts {
   application: string;
@@ -93,7 +94,7 @@ const CLASS_BOOT: readonly string[] = [
   '      storage: this.ctx.storage,',
   '      kv: storageProxy(this.env.__storage),',
   '      waitUntil: (work) => this.ctx.waitUntil(work),',
-  '    }, Object.freeze({ workspace: surface(this.env.workspace, []) }));',
+  '    }, Object.freeze({ workspace: workspaceSurface(this.env.workspace) }));',
   '    // The callable surface: prototype methods between the instance and',
   '    // SlateObject (exclusive) whose name passes the host\'s own method rule.',
   '    // Own properties never appear: a closure assigned in the constructor',
@@ -205,6 +206,22 @@ export function slateRunnerSource(
     '      return surface(stub, [...path, name]);',
     '    },',
     '  });',
+    '}',
+    // The class's `workspace`: `web` carries the browser members an eval program's does, from the same prelude, since a
+    // CDP socket lives in this isolate and no JSON call to the host can hold one. A page drives a browser through its class.
+    'function browserWeb(stub) {',
+    '  const web = new Proxy({}, {',
+    '    get(own, name) {',
+    '      if (typeof name !== "string" || name === "then" || name === "toJSON") return undefined;',
+    '      return Object.hasOwn(own, name) ? own[name] : surface(stub, ["web", name]);',
+    '    },',
+    '  });',
+    BROWSER_PRELUDE,
+    '  return web;',
+    '}',
+    'function workspaceSurface(stub) {',
+    '  const web = browserWeb(stub);',
+    '  return new Proxy(surface(stub, []), { get: (root, name) => (name === "web" ? web : Reflect.get(root, name)) });',
     '}',
     // The page's socket: each call runs under the socket's invocation.
     'class SurfaceTarget extends RpcTarget {',
@@ -553,6 +570,8 @@ export class ResidentSlateProcesses {
         'server.js': SLATE_SERVER_MODULE,
         'react-stub.js': slateVendor.reactStub,
         'vendor.js': `export const react = ${JSON.stringify(slateVendor.react)};\nexport const capnweb = ${JSON.stringify(slateVendor.capnweb)};\nexport const slateClient = ${JSON.stringify(SLATE_CLIENT_MODULE)};\n`,
+        // Evaluated only when the slate first connects a browser, as in an eval program.
+        [BROWSER_CLIENT_MODULE]: yield* Effect.promise(browserClientSource),
       };
 
       // Non-main modules travel by content-addressed VFS path; the loader verifies bytes against the digest.

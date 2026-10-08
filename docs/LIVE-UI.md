@@ -151,6 +151,13 @@ slate-specific approval ladder, and nothing to declare.
 | `agent.send` | `send({text, data?})` puts a `slate` event in the workspace actor's inbox. |
 | `ai.run` | One model call with `{prompt, system?, tier?}` through the caller's own profile. |
 
+A slate's class drives a browser as an eval program does: `this.env.workspace.web.openBrowser()`, then
+`connectBrowser(id)`, `pageTools(page)` and `callPageTool(page, name, input)` run in the class's own isolate from
+the same prelude (`packages/cf-backend/src/browser-prelude.ts`), and its socket dials the same gate
+(`codemode-egress.ts`) with the caller's actor, so it reaches only a session that actor opened, or a new Kitesurf
+browser. A share's viewer runs with no actor and reaches no owner's session. A page asks its class: a CDP socket
+cannot cross the page's RPC.
+
 What only the agent does refuses wherever it is asked: `agents.*`, the agent's
 own `agent.*` controls, `createTool` and the `slates` lifecycle member of any
 executor (`SLATE_EXCLUDED`). The host records each member a slate calls as its
