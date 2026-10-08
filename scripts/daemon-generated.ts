@@ -59,11 +59,17 @@ function withoutTypes(name: string, source: string): string {
 
 /** The relative modules `source` imports values from: each must be generated into the same daemon file. */
 function siblingsOf(generated: Generated, module: string): void {
-  for (const [, specifier] of module.matchAll(/^import \{[^}]*\} from '(\.\/[^']+)';$/gmu)) {
-    const sibling = join(dirname(generated.source), `${specifier ?? ''}.ts`);
+  const specifiers: string[] = [];
+
+  new Visitor({
+    ImportDeclaration: (node) => { if (node.importKind !== 'type' && node.source.value.startsWith('./')) specifiers.push(node.source.value); },
+  }).visit(parseSync(generated.source, module).program);
+
+  for (const specifier of specifiers) {
+    const sibling = join(dirname(generated.source), `${specifier}.ts`);
 
     if (!Object.values(GENERATED).some((other) => other.source === sibling && other.daemon === generated.daemon)) {
-      throw new Error(`${generated.source} imports ${specifier ?? ''}, which is not generated into ${generated.daemon}`);
+      throw new Error(`${generated.source} imports ${specifier}, which is not generated into ${generated.daemon}`);
     }
   }
 }

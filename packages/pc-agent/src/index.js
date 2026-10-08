@@ -453,6 +453,15 @@ function failed(message) {
 
 /** The environment a git child runs under. */
 
+/** A failure and each cause under it, outermost first: the frame naming the real fault is often a cause deeper. */
+function causeText(failure) {
+  const links = [failure.message];
+
+  for (let at = failure.cause; at instanceof Error; at = at.cause) links.push(at.message);
+
+  return links.join(': ');
+}
+
 /** A `diff-tree --name-status` letter in restore direction (current to checkpoint). */
 function restoreKindOf(status) {
   if (status === 'A') return 'create';
@@ -711,7 +720,7 @@ function createCheckpointEngine(host, options) {
 
       return { id };
     } catch (error) {
-      const skipped = `the snapshot failed: ${error instanceof Error ? error.message : String(error)}`;
+      const skipped = `the snapshot failed: ${error instanceof Error ? causeText(error) : 'it threw something that is not an Error'}`;
 
       host.log(`checkpoint ${skipped} (the mutation it preceded runs)`);
 
