@@ -36,11 +36,12 @@ export const GATE = 'worker-heap';
  *  runs on lane/memory-gap 9875bab49 with one; 26.4-26.5 MB on 871e789f1, where a module compiles when first imported
  *  (`new_module_registry`) and the slate vendor waits for a slate; 25.5-25.6 MB on a21347229, where a provider SDK
  *  loads with its first model; 24.4 MB on a9680b282, where core declares no import-time effects and passkeys and mail
- *  load their libraries per route. Plus 4 MB of room for the product to grow. Plus 4.1 MB measured 2026-10-09 when the
- *  workspace agent's turns moved into its own isolate: setup's first turn loads it, and the workspace hands the Worker
- *  Loader the agent bundle's module text, 6.2 MB allocated through the V8 API and garbage once loaded (31.2-31.3 MB
- *  used on 16d5deff6 and 15b4d9079, 27.1 MB on d05ff368d; live after setup 28.2 MB against 28.8 MB). */
-export const HEAP_AFTER_SETUP_BOUND_BYTES = 32_600_000;
+ *  load their libraries per route. Plus 4 MB of room for the product to grow. Plus 6.2 MB since the workspace agent's
+ *  turns moved into its own isolate (2026-10-09): setup's first turn loads it, and the workspace hands the Worker Loader
+ *  the agent bundle's module text, 6.2 MB allocated through the V8 API and garbage once loaded, so how much of it this
+ *  reads depends on when V8 last swept: 31.5-32.7 MB used over five runs against 27.1-27.3 MB without the isolate,
+ *  while live heap after setup fell from 28.9 MB to 28.3 MB. */
+export const HEAP_AFTER_SETUP_BOUND_BYTES = 34_700_000;
 
 /** Measured 2026-09-26 at {@link STEP} (2.4 MB of answers): 9.8 MB live in the parked step; 7.3 MB once the Workers
  *  AI fetch stopped copying the request; 4.8 MB once our own prompt text left no character above U+00FF, so V8
