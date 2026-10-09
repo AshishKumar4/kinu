@@ -4,7 +4,7 @@ import type { ModelAffinity, ModelProvider, ModelInfo, ModelInputModality } from
 import { MODEL_INPUT_MODALITIES } from './types';
 import { authenticatedSend, signedSend } from './authenticated-send';
 import { authCacheKey, cloneModelInfos, conversationUuid, positiveInteger, StaleModelList, statelessResponses } from './util';
-import { asFetchFunction } from './fetch-shim';
+import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { withCallAccount } from './quota';
 import { nonEmptyString } from '../utils/json';
 import * as v from 'valibot';
@@ -15,6 +15,7 @@ import { diagnostics, KinuError, renderThrownChain, settle } from '../obs/index'
 import { knownReasoningEfforts } from './reasoning-effort';
 import { heardFetch } from './middleware/attempt';
 import { lazyModel } from './wire-model';
+import { decodeCodexAccountId } from './codex-oauth';
 
 const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex';
 
@@ -26,14 +27,23 @@ const CODEX_DEFAULT_MODEL = 'gpt-5.5';
 const CODEX_FAST_MODEL = 'gpt-6-luna';
 
 /**
- * ChatGPT's backend caches under a session id, as Codex CLI and oh-my-pi send one: the workspace's, so its conversations
- * share their static prompt, each named by its own conversation id, as oh-my-pi names a fork under its root's session.
+ * ChatGPT's backend caches under a session id, as Codex CLI and oh-my-pi send one: the account's (`accountSession`), so
+ * every workspace on one login shares the static prompt they have in common, each conversation named by its own id, as
+ * oh-my-pi names a fork under its root's session. A call whose login names no account keeps its workspace's.
  * Measured on chatgpt.com/backend-api/codex (2026-10-08), conversations of six appended steps on a ~7,300-token prefix:
  * - without these headers nothing was read until the sixth step, and with a `prompt_cache_key` alone nothing in six;
  * - one session per conversation: 7,168 tokens read on 123 of 135 later steps and none on the rest (52 of 60 with a key
  *   as well); a second conversation's first step on the same prefix read nothing, 13 of 13;
  * - one session shared by two conversations, each with its own `conversation_id` and `x-client-request-id`: 73 of 80
  *   later steps, and the second conversation's first step read 7,040–7,168 in 6 of 8.
+ * Per workspace against per account (2026-10-09, evals/scripts/chatgpt-session-probe.ts, two runs, gpt-5.5): workspaces
+ * sharing ~5,600 tokens of guidance and tools, each with its own name and purpose after it.
+ * - a new workspace's first step on a warm account read the shared prefix in 7 of 10 per workspace, 10 of 10 per account;
+ * - later steps, one workspace at a time: 19 of 20 per workspace, 20 of 20 per account;
+ * - 8 and then 10 workspaces at once: first steps 14 of 18 per workspace, 18 of 18 per account; later steps 51 of 54
+ *   per workspace, 54 of 54 per account. A hit read the same 5,632 tokens under either.
+ * - the product as shipped (`accountSession`), 10 at once: 5 of 5 fresh first steps, 10 of 10 later steps one at a time,
+ *   10 of 10 first steps and 29 of 30 later steps at once.
  */
 export function chatgptSessionHeaders(affinity: ModelAffinity) {
   const conversation = conversationUuid(`kinu-chatgpt-conversation:${affinity.sessionAffinity}`);
@@ -41,6 +51,25 @@ export function chatgptSessionHeaders(affinity: ModelAffinity) {
   return {
     session_id: conversationUuid(`kinu-chatgpt-session:${affinity.workspaceAffinity}`), conversation_id: conversation, 'x-client-request-id': conversation,
   };
+}
+
+/** The account a signed request's login names: its header, else its access token's own claim. */
+function signedAccount(headers: Headers): string | null {
+  const bearer = /^Bearer (.+)$/u.exec(headers.get('authorization') ?? '')?.[1];
+
+  return headers.get('chatgpt-account-id') ?? (bearer === undefined ? null : decodeCodexAccountId(bearer));
+}
+
+/** `transport`, with the session the request's own login names: the account's, measured above. */
+export function accountSession(transport: typeof fetch): typeof fetch {
+  return asFetchFunction((input, init) => {
+    const headers = copyHeaders(init?.headers);
+    const account = signedAccount(headers);
+
+    if (account !== null) headers.set('session_id', conversationUuid(`kinu-chatgpt-account-session:${account}`));
+
+    return transport(input, { ...init, headers });
+  });
 }
 
 /** A dead ChatGPT login's remedy. */
@@ -148,7 +177,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
           });
         };
 
-        const answer = yield* Effect.promise(() => authenticatedSend({ key: CODEX_CRED_KEY, getAuth: deps.getAuth, send: signedSend(transport, input, init) }));
+        const answer = yield* Effect.promise(() => authenticatedSend({ key: CODEX_CRED_KEY, getAuth: deps.getAuth, send: signedSend(accountSession(transport), input, init) }));
 
         if (answer.kind === 'refused') return refusedLoginResponse();
 

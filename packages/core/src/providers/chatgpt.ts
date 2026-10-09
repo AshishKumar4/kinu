@@ -5,7 +5,7 @@ import { APICallError, wrapLanguageModel, type LanguageModel, type LanguageModel
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import { attempt, diagnostics, KinuError, settle, tolerate, type ErrorCode } from '../obs/index';
-import { chatgptCatalogRows, chatgptSessionHeaders, shownCatalogRows } from './codex';
+import { accountSession, chatgptCatalogRows, chatgptSessionHeaders, shownCatalogRows } from './codex';
 import { asFetchFunction } from './fetch-shim';
 import { withCallAccount } from './quota';
 import type { AuthRequest, AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './types';
@@ -341,7 +341,7 @@ export function createChatGptProvider(opts: ChatGptProviderOptions = {}): ModelP
         return settle(Effect.gen(function* () {
           // A refusal the transport raised is the owner's answer and passes through unchanged.
           const answer = yield* Effect.promise(() => authenticatedSend({
-            key: CHATGPT_CRED_KEY, getAuth: route === null ? deps.getAuth : deviceLogin, send: signedSend(send, input, init),
+            key: CHATGPT_CRED_KEY, getAuth: route === null ? deps.getAuth : deviceLogin, send: signedSend(accountSession(send), input, init),
           }));
 
           if (answer.kind === 'absent') return yield* Effect.fail(new KinuError('missing', 'No ChatGPT sign-in with plan usage on this machine'));
