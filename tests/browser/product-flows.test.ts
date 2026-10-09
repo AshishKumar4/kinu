@@ -3,8 +3,10 @@
  * origin, `KINU_ORIGIN`: the deployment a deploy has just published
  * (`scripts/product-flows-tier.sh`, in its post-publish wave).
  *
- * Every row runs in `beforeAll` and leaves a verdict or the reason it has none;
- * the tests below read only what the page showed.
+ * Every row runs in `beforeAll`, each in a browser of its own, and leaves a verdict or the reason it has none; the
+ * tests below read only what the page showed. A row that hangs is ended when the tier's runner says its silence nears
+ * the bound (`endedNearSilence`), and fails alone: on staging d930f2537 one row's hang ended the run, and no test of
+ * any row ran.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { resolveWebIdentity } from '../../evals/src/session';
@@ -12,14 +14,14 @@ import { withBrowser } from '../../scripts/live-app-harness';
 import {
   DRIVE_SLATE, INSPECTOR_SHUT_PX,
   agentIsThereOnReturn, agentPlanIsReviewedInItsPane, agentProposesAWorkspace, accountMemoryCrossesWorkspaces, approvalsStackAtTheComposer, hireParksAndRunsOnApproval, driveKeepsWhatIsDone, driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState,
-  slateOpensFromMyStuff, slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer,
+  openWaitsNamed, slateOpensFromMyStuff, slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer,
   writtenFileShowsInFilesAndChanges, changesStormStaysBounded, openMemoryFollowsItsWriter,
   type AgentPlanVerdict, type AgentReturnVerdict, type ApprovalStackVerdict, type HireApprovalVerdict, type WorkspaceProposalVerdict, type AccountMemoryVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
   type FlowTarget, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
   type StampedCardVerdict, type WrittenFileVerdict,
 } from '../../scripts/product-flows';
 import { ACCOUNT_FACT, ACCOUNT_RECALL_REPLY, FLOW_MEMORY_NOTE, FLOW_PROBE, FLOW_SHELL_PROBE, FLOW_SLATE, HIRE_PARKED_COMMAND, PARKED_COMMANDS, PROPOSED_WORKSPACE, STORM_FILES } from '../../scripts/flows-script';
-import { rowVerdicts } from '../../scripts/row-verdicts';
+import { endedNearSilence, rowVerdicts } from '../../scripts/row-verdicts';
 
 interface FlowVerdicts {
   welcome: WelcomeVerdict | null;
@@ -52,6 +54,11 @@ let setup: string | null = null;
 
 const { attempt, verdictOf, broken } = rowVerdicts('product-flows', () => setup);
 
+/** `flow` as the row `row`, in a browser of its own that its runner's silence notice closes. */
+function flowRow<Value>(row: string, at: Omit<FlowTarget, 'browser'>, flow: (target: FlowTarget) => Promise<Value>): Promise<Value | null> {
+  return attempt(row, () => withBrowser((browser) => endedNearSilence(flow({ ...at, browser }), () => browser.disconnect(), openWaitsNamed)));
+}
+
 beforeAll(async () => {
   const origin = process.env.KINU_ORIGIN;
 
@@ -70,29 +77,27 @@ beforeAll(async () => {
     return;
   }
 
-  await withBrowser(async (browser) => {
-    const target: FlowTarget = { browser, origin, identity: resolution.identity };
+  const at = { origin, identity: resolution.identity };
 
-    // Setup stands in front of every route until it is finished, so it goes first.
-    observed.welcome = await attempt('welcome', () => reachesHome(target));
-    observed.firstAnswer = await attempt('first-answer', () => workspaceGetsFirstAnswer(target));
-    observed.agentReturn = await attempt('agent-return', () => agentIsThereOnReturn(target));
-    observed.agentPlan = await attempt('agent-plan', () => agentPlanIsReviewedInItsPane(target));
-    observed.proposal = await attempt('workspace-proposal', () => agentProposesAWorkspace(target));
-    observed.accountMemory = await attempt('account-memory', () => accountMemoryCrossesWorkspaces(target));
-    observed.approvals = await attempt('approval-stack', () => approvalsStackAtTheComposer(target));
-    observed.hireApproval = await attempt('hire-approval', () => hireParksAndRunsOnApproval(target));
-    observed.panel = await attempt('panel', () => rightPanelKeepsItsState(target));
-    observed.stamped = await attempt('stamped', () => eachPaneKeepsItsTranscript(target));
-    observed.writtenFile = await attempt('written-file', () => writtenFileShowsInFilesAndChanges(target));
-    observed.storm = await attempt('changes-storm', () => changesStormStaysBounded(target));
-    observed.liveMemory = await attempt('live-memory', () => openMemoryFollowsItsWriter(target));
-    observed.slate = await attempt('slate-preview', () => slateShowsItsPreview(target));
-    observed.drive = await attempt('drive', () => driveKeepsWhatIsDone(target));
-    observed.driveOpens = await attempt('drive-opens', () => driveOpens(target));
-    observed.slateOpens = await attempt('slate-opens', () => slateOpensFromMyStuff(target));
-    observed.slateShare = await attempt('slate-share', () => slateSharesReachingNothing(target));
-  });
+  // Setup stands in front of every route until it is finished, so it goes first.
+  observed.welcome = await flowRow('welcome', at, reachesHome);
+  observed.firstAnswer = await flowRow('first-answer', at, workspaceGetsFirstAnswer);
+  observed.agentReturn = await flowRow('agent-return', at, agentIsThereOnReturn);
+  observed.agentPlan = await flowRow('agent-plan', at, agentPlanIsReviewedInItsPane);
+  observed.proposal = await flowRow('workspace-proposal', at, agentProposesAWorkspace);
+  observed.accountMemory = await flowRow('account-memory', at, accountMemoryCrossesWorkspaces);
+  observed.approvals = await flowRow('approval-stack', at, approvalsStackAtTheComposer);
+  observed.hireApproval = await flowRow('hire-approval', at, hireParksAndRunsOnApproval);
+  observed.panel = await flowRow('panel', at, rightPanelKeepsItsState);
+  observed.stamped = await flowRow('stamped', at, eachPaneKeepsItsTranscript);
+  observed.writtenFile = await flowRow('written-file', at, writtenFileShowsInFilesAndChanges);
+  observed.storm = await flowRow('changes-storm', at, changesStormStaysBounded);
+  observed.liveMemory = await flowRow('live-memory', at, openMemoryFollowsItsWriter);
+  observed.slate = await flowRow('slate-preview', at, slateShowsItsPreview);
+  observed.drive = await flowRow('drive', at, driveKeepsWhatIsDone);
+  observed.driveOpens = await flowRow('drive-opens', at, driveOpens);
+  observed.slateOpens = await flowRow('slate-opens', at, slateOpensFromMyStuff);
+  observed.slateShare = await flowRow('slate-share', at, slateSharesReachingNothing);
 
   process.stderr.write(`product-flows at ${origin}: ${JSON.stringify({ observed, broke: broken() }, null, 2)}\n`);
 });

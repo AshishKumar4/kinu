@@ -222,6 +222,11 @@ const liveLedgers = new Set<() => string>();
 
 let dropWaitsHold: (() => void) | null = null;
 
+/** The waits open now, `; `-joined: what a row stopped for being silent was waiting on (`endedNearSilence`). */
+export function openWaitsNamed(): string {
+  return [...openWaits].map((pending) => pending.what).join('; ');
+}
+
 /** `wait`, logged by what it waits for when it opens and when it is reached, and named while it is open. A step
  *  that is not a wait on a page (a create through the API, a navigation) is named through it too, so a slow run's
  *  log accounts for every second, not only the page waits. */
