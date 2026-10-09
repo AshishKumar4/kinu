@@ -146,19 +146,23 @@ test('a snapshot of another image is not woken: the new image starts and recover
   });
 });
 
+// The platform's words when the account's snapshot limit was reached (2026-10-09): the rest committed the chain first,
+// so the box's work is in its backup, and only the next wake's speed is lost.
+const SNAPSHOT_LIMIT = 'The snapshot could not be completed because snapshot resource limits were exceeded.';
+
 test('a rest whose snapshot is refused still rests, says why, and the next wake recovers from the chain', async () => {
   asked.length = 0;
   const { box, container } = chainBox(HybridBox);
   await box.devboxStartup();
-  container.snapshotFault = new Error('snapshot quota exceeded');
+  container.snapshotFault = new Error(SNAPSHOT_LIMIT);
   const rest = await box.quiesce();
   await box.devboxStartup();
   const reasons = (await box.devboxIncidentReasons()).map(row => row.reason);
 
   expect({
     rest: rest.kind, running: container.running.running, starts: container.startOptions.map(startedFrom),
-    said: reasons.some(reason => reason.includes('snapshot quota exceeded')),
-  }).toEqual({ rest: 'committed', running: true, starts: ['image', 'image'], said: true });
+    said: reasons.some(reason => reason.includes(SNAPSHOT_LIMIT)), asked,
+  }).toEqual({ rest: 'committed', running: true, starts: ['image', 'image'], said: true, asked: ['attach from image', 'commit quiesce', 'attach from image'] });
 });
 
 test('a discard empties the box\'s store whether it holds no object or more than one listing of them', async () => {
