@@ -34,7 +34,7 @@ const liveTest = test.skipIf(PLAN === null);
 
 const observations: EvalObservation[] = [];
 
-afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
+afterAll(async () => { await publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
 
 const ProfileSchema = v.looseObject({
   email: v.string(), displayName: v.nullable(v.string()), onboardedAt: v.nullable(v.number()),

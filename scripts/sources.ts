@@ -51,7 +51,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FileSink, Subprocess } from 'bun';
-import { gitEnv } from '../packages/test-utils/src/git.ts';
+import { gitEnv } from '../packages/test-utils/src/git-env.ts';
 import {
   TEST_FILE, TEST_SUFFIX,
 } from '../tools/oxlint/anti-slop/rules/no-ambient-git-in-tests.ts';
@@ -243,7 +243,7 @@ export const isProductSource = (file: string): boolean =>
   PRODUCT_SOURCE.test(file) && !TEST_FILE.test(file) && !file.endsWith('.d.ts');
 
 /** What runs on a user's machine or in the Worker: every package's `src` in either language (the device daemon is
- *  plain JavaScript), but the suites' own helpers, tests and declarations. `no-sync-spawn` governs this set. */
+ *  plain JavaScript), but the suites' own helpers, tests and declarations. */
 export const isShippedSource = (file: string): boolean =>
   SHIPPED_SOURCE.test(file) && !TEST_FILE.test(file) && !isTestScaffold(file) && !file.endsWith('.d.ts');
 
@@ -259,6 +259,10 @@ export const isTestFile = (file: string): boolean => TEST_FILE.test(file);
  *  findings. Exported so that narrowing is a named import rather than a second
  *  path prefix living inside a gate. */
 export const isTestScaffold = (file: string): boolean => file.startsWith('packages/test-utils/');
+
+/** What `no-sync-spawn` governs: shipped source, every test and the suites' own helpers. A synchronous spawn in a
+ *  suite wedges the run as surely as one in the daemon wedges the machine. */
+export const isSpawnGoverned = (file: string): boolean => isShippedSource(file) || isTestFile(file) || isTestScaffold(file);
 
 /** The strictly narrower set a test RUNNER selects: the basename arm alone. The
  *  ladder's denominator, because `bun test` executes suffixed files and never

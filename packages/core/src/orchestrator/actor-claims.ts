@@ -54,6 +54,12 @@ export function initActorClaimTables(exec: RawSqlExec): void {
     claimed_at INTEGER NOT NULL,
     PRIMARY KEY(actor_id,turn_id))`);
   exec(`CREATE INDEX IF NOT EXISTS idx_actor_claims_outcome ON actor_turn_claims(actor_id,outcome,claimed_at DESC)`);
+  // Where each execution of a turn stands, so the next knows where a dead one was cut ({@link TurnCut}).
+  exec(`CREATE TABLE IF NOT EXISTS actor_turn_cuts (
+    actor_id TEXT NOT NULL, turn_id TEXT NOT NULL, epoch INTEGER NOT NULL, build TEXT,
+    phase TEXT NOT NULL CHECK(phase IN ('provider','work')), phase_at INTEGER NOT NULL,
+    work_cuts INTEGER NOT NULL, provider_cuts INTEGER NOT NULL,
+    PRIMARY KEY(actor_id,turn_id))`);
   initSessionContextTables(exec);
   initSessionTranscriptTables(exec);
 }
@@ -62,6 +68,26 @@ export function programIdentityOf(program: ActorTurnProgram, installedBuild: str
   return Object.freeze(program.kind === 'scaffold'
     ? { kind: 'scaffold' as const, version: program.version, digest: program.digest, build: null }
     : { kind: 'builtin' as const, version: 0, digest: null, build: installedBuild });
+}
+
+/**
+ * Where an execution of a turn stood when it was last seen: waiting on the provider's answer to a step (`provider`), or
+ * doing the step's own work, a tool or the processing around a call (`work`). The counts are of the executions before
+ * this one, on this build since the turn last finished a step, that ended in each: an outside reset (a deploy, a storage
+ * reset, an eviction) can land anywhere, and only a cut in the step's own work can be the step's fault.
+ */
+export interface TurnCut {
+  readonly epoch: number;
+  readonly build: string | null;
+  readonly phase: 'provider' | 'work';
+  readonly phaseAt: number;
+  readonly workCuts: number;
+  readonly providerCuts: number;
+}
+
+/** A cut's counts with the execution it describes counted too: what the next execution inherits. */
+export function cutsThrough(cut: TurnCut) {
+  return { work: cut.workCuts + (cut.phase === 'work' ? 1 : 0), provider: cut.providerCuts + (cut.phase === 'provider' ? 1 : 0) };
 }
 
 interface ClaimRow { turn_id: string; run_id: string; epoch: number; work_mode: WorkMode; program_kind: ActorProgramIdentity['kind']; program_version: number; program_digest: string | null; program_build: string | null; outcome: ClaimOutcome | null; claimed_at: number }
@@ -115,6 +141,7 @@ export class ActorClaimStore {
       const admitted: ActorTurnClaim = Object.freeze({ actorId: this.actorId, runId: input.runId, turnId: input.turnId, epoch,
         workMode: input.workMode, program: Object.freeze({ ...input.program }), workingRevision: input.context.revision, workingContextId: input.context.contextId });
 
+      this.carryCuts(input.turnId, epoch, previous?.epoch ?? 0, input.installedBuild ?? null);
       void this.sql`INSERT INTO actor_turn_claims(actor_id,turn_id,run_id,epoch,work_mode,program_kind,program_version,program_digest,program_build,outcome,claimed_at)
         VALUES(${this.actorId},${input.turnId},${input.runId},${epoch},${input.workMode},${input.program.kind},${input.program.version},${input.program.digest},${input.program.build},NULL,${nowMs()})
         ON CONFLICT(actor_id,turn_id) DO UPDATE SET run_id=excluded.run_id,epoch=excluded.epoch,work_mode=excluded.work_mode,program_kind=excluded.program_kind,
@@ -150,6 +177,7 @@ export class ActorClaimStore {
 
       if (selected?.contextId !== source.contextId || selected.revision !== source.revision) throw new KinuError('denied', 'working selection changed during request preparation');
       this.history.requests.recordPrepared(prepared);
+      this.markCut(claim, 'provider');
 
       return { requestId: prepared.request.id, revision: prepared.request.revision };
     });
@@ -176,6 +204,43 @@ export class ActorClaimStore {
     const request = this.history.requests.forTurn(turnId).find(item => item.epoch === claim.epoch && item.step === null);
 
     return request === undefined ? null : this.materialize(request.id);
+  }
+
+  /** The step's own work began: its answer is in and a tool runs. */
+  working(claim: ActorTurnClaim): void {
+    this.markCut(claim, 'work');
+  }
+
+  /** A step finished: the turn moved, so no cut before it says anything about the next. */
+  progressed(claim: ActorTurnClaim): void {
+    void this.sql`UPDATE actor_turn_cuts SET phase='work',phase_at=${nowMs()},work_cuts=0,provider_cuts=0
+      WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`;
+  }
+
+  cutOf(turnId: string): TurnCut | null {
+    const row = this.sql<{ epoch: number; build: string | null; phase: 'provider' | 'work'; phase_at: number; work_cuts: number; provider_cuts: number }>`
+      SELECT epoch,build,phase,phase_at,work_cuts,provider_cuts FROM actor_turn_cuts WHERE actor_id=${this.actorId} AND turn_id=${turnId}`[0];
+
+    return row === undefined ? null : {
+      epoch: row.epoch, build: row.build, phase: row.phase, phaseAt: row.phase_at, workCuts: row.work_cuts, providerCuts: row.provider_cuts,
+    };
+  }
+
+  /** Inside the admission: the cuts of the execution `admitted` follows, as {@link TurnCut} charges them; a new build
+   *  may have fixed what cut them, so they start over. */
+  private carryCuts(turnId: string, epoch: number, previousEpoch: number, build: string | null): void {
+    const cut = this.cutOf(turnId);
+    const carried = cut === null || cut.epoch !== previousEpoch || cut.build !== build ? { work: 0, provider: 0 } : cutsThrough(cut);
+
+    void this.sql`INSERT INTO actor_turn_cuts(actor_id,turn_id,epoch,build,phase,phase_at,work_cuts,provider_cuts)
+      VALUES(${this.actorId},${turnId},${epoch},${build},'work',${nowMs()},${carried.work},${carried.provider})
+      ON CONFLICT(actor_id,turn_id) DO UPDATE SET epoch=excluded.epoch,build=excluded.build,phase=excluded.phase,
+        phase_at=excluded.phase_at,work_cuts=excluded.work_cuts,provider_cuts=excluded.provider_cuts`;
+  }
+
+  private markCut(claim: ActorTurnClaim, phase: TurnCut['phase']): void {
+    void this.sql`UPDATE actor_turn_cuts SET phase=${phase},phase_at=${nowMs()}
+      WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`;
   }
 
   settle(claim: ActorTurnClaim, outcome: ClaimOutcome): void {

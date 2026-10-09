@@ -7,9 +7,10 @@ import type { ActorHandle } from '../identity/actor-handle';
 import { effectAlreadyDone, recordEffectDone } from '../identity/effect-tombstones';
 import type { FactsStore } from '../memory/facts';
 import {
-  applySleepTimeUpdate, runSleepTimeCompute, SleepTimeUpdateSchema, SLEEP_TIME_CADENCE, sleepTimeDue, sleepTimeWakeAt, sleepTimeWindow,
+  accountProposals, applySleepTimeUpdate, runSleepTimeCompute, SleepTimeUpdateSchema, SLEEP_TIME_CADENCE, sleepTimeDue, sleepTimeWakeAt, sleepTimeWindow,
   type SleepTimeUpdate, type SleepTimeWindow,
 } from '../memory/sleep-time-compute';
+import { AccountProposalSchema, type AccountMemory } from '../memory/account';
 import { attempt, diagnostics, settle, type KinuError } from '../obs/index';
 import type { SessionTranscript } from '../session/transcript';
 import type { LLM, RawSqlExec, SqlExecutor } from '../types/primitives';
@@ -30,6 +31,12 @@ export function initSleepTimeUpdatesTable(execRaw: RawSqlExec): void {
       effect_key  TEXT PRIMARY KEY,
       update_json TEXT NOT NULL
     )`);
+  // Account proposals a commit owes the user object, kept until it takes each: `delivery` is the proposal's identity
+  // there, so a delivery repeated after a crash or a refusal files nothing new.
+  execRaw(`CREATE TABLE IF NOT EXISTS account_proposal_outbox (
+      delivery      TEXT PRIMARY KEY,
+      proposal_json TEXT NOT NULL
+    )`);
 }
 
 export interface SleepTimeLaneDeps {
@@ -43,6 +50,11 @@ export interface SleepTimeLaneDeps {
   /** Wakes the actor at `nextWakeAt`. */
   readonly armWake: () => void;
   readonly workspace: string;
+  /**
+   * The account's memory, where one is wired: the pass reads its facts and proposes to it, never writes it. Cloudflare
+   * only: the CLI has no account's user object, so it leaves this unset (`scripts/capability-parity.lock.json`).
+   */
+  readonly account?: () => AccountMemory | undefined;
 }
 
 function idleReason(window: SleepTimeWindow | null): string {
@@ -54,6 +66,16 @@ function idleReason(window: SleepTimeWindow | null): string {
 export class SleepTimeLane {
   constructor(private readonly deps: SleepTimeLaneDeps) {}
 
+  /**
+   * Whether the outbox may hold a proposal: unknown until this activation reads it once, then true only while a commit
+   * here filed one or a delivery left one. Every turn's pass asked first, and two reads a turn cost the workerd turn
+   * budget two statements (2026-10-09, batch 64).
+   */
+  private mayOwe = true;
+
+  /** Proposals this activation filed, so a delivery that read the outbox before a filing does not clear it. */
+  private filed = 0;
+
   effect(): TerminalEffect {
     return terminalEffect({ input: v.object({}), run: () => this.runTerminal() });
   }
@@ -61,6 +83,10 @@ export class SleepTimeLane {
   runTerminal(): Promise<TerminalEffectOutcome> {
     return settle(Effect.gen({ self: this }, function* () {
       if (!this.deps.config.getSleepTimeComputeEnabled()) return { status: 'completed', detail: 'the lane is off' } as const;
+      // What an earlier pass owes the account goes first, whether or not this one is due.
+      const account = this.deps.account?.();
+
+      if (account !== undefined) yield* this.deliver(account);
       const window = yield* this.window();
 
       if (!sleepTimeDue(window)) {
@@ -182,12 +208,25 @@ export class SleepTimeLane {
 
     return Effect.gen({ self: this }, function* () {
       const stored = this.recordedUpdate(key);
+      const account = this.deps.account?.();
+
+      // A user object that does not answer costs this run its account section, never the workspace's facts.
+      const accountFacts = stored !== undefined || account === undefined
+        ? undefined
+        : yield* attempt({ doing: "reading the account's facts the pass proposes against", otherwise: 'unavailable' }, async () => await account.facts()).pipe(
+          Effect.catch((failure) => Effect.sync(() => {
+            diagnostics.failure('memory.account_read_failed', failure, { workspace: this.deps.workspace });
+
+            return undefined;
+          })),
+        );
 
       const update = stored ?? (yield* attempt({ doing: 'compressing the recent turns into agent facts', otherwise: 'unavailable' }, () => runSleepTimeCompute(this.deps.llm(), {
         turns: window.turns,
         currentFacts: this.deps.facts.all()
           .sort((a, b) => b.lastObservedAt - a.lastObservedAt)
           .map((fact) => ({ key: fact.key, value: fact.value, confidence: fact.confidence })),
+        ...(accountFacts !== undefined && { accountFacts: accountFacts.map((fact) => ({ key: fact.key, value: fact.value })) }),
       })));
 
       if (stored === undefined) {
@@ -196,9 +235,19 @@ export class SleepTimeLane {
           ON CONFLICT(effect_key) DO NOTHING`;
       }
 
-      // One commit, so a replay never repeats a prefix.
+      const proposals = account === undefined ? [] : accountProposals(update, window.turns);
+
+      // One commit, so a replay never repeats a prefix: the workspace's facts, and the account proposals it owes.
       const summary = this.deps.transactionSync(() => {
         const applied = applySleepTimeUpdate(this.deps.facts, update);
+
+        for (const [index, proposal] of proposals.entries()) {
+          void this.deps.sql`INSERT INTO account_proposal_outbox (delivery, proposal_json)
+            VALUES (${`${key}#${String(index)}`}, ${JSON.stringify(proposal)}) ON CONFLICT(delivery) DO NOTHING`;
+          this.filed += 1;
+          this.mayOwe = true;
+        }
+
         this.finish(key);
 
         return applied;
@@ -207,9 +256,37 @@ export class SleepTimeLane {
       diagnostics.event('memory.facts_compressed', {
         workspace: this.deps.workspace, upserted: summary.upserted, decayed: summary.decayed, skipped: summary.skipped,
       });
+
+      if (account !== undefined) yield* this.deliver(account);
     }).pipe(Effect.tapError((failure) => Effect.sync(() => {
       if (isDefinitiveTerminalFailure(failure.code)) this.deps.transactionSync(() => { this.finish(key); });
       diagnostics.failure('memory.fact_compression_failed', failure);
+    })));
+  }
+
+  /**
+   * Hands the user object every proposal the outbox holds, each removed once it is taken. One it refuses or never
+   * answers stays, and every later pass delivers it again; the delivery id makes that file nothing new.
+   */
+  private deliver(account: AccountMemory): Effect.Effect<void> {
+    if (!this.mayOwe) return Effect.void;
+    const filed = this.filed;
+    const owed = this.deps.sql<{ delivery: string; proposal_json: string }>`SELECT delivery, proposal_json FROM account_proposal_outbox ORDER BY delivery`;
+    let left = 0;
+
+    return Effect.forEach(owed, (row) => attempt(
+      { doing: 'proposing an account fact for the owner to approve', otherwise: 'unavailable' },
+      async () => await account.propose(v.parse(AccountProposalSchema, JSON.parse(row.proposal_json)), row.delivery),
+    ).pipe(Effect.match({
+      onSuccess: () => { void this.deps.sql`DELETE FROM account_proposal_outbox WHERE delivery = ${row.delivery}`; },
+      onFailure: (failure) => {
+        left += 1;
+        diagnostics.failure('memory.account_proposal_failed', failure, { workspace: this.deps.workspace, delivery: row.delivery });
+      },
+    })), { discard: true }).pipe(Effect.tap(() => Effect.sync(() => {
+      this.mayOwe = left > 0 || this.filed !== filed;
+
+      if (owed.length > 0) diagnostics.event('memory.account_proposed', { workspace: this.deps.workspace, owed: owed.length });
     })));
   }
 

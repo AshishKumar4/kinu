@@ -5,6 +5,7 @@ import { Effect } from 'effect';
 import type { ModelWindow } from '../context-window';
 import type { KinuExtension } from '../extension';
 import { readMemoryTail } from '../memory/note';
+import type { Fact } from '../memory/facts';
 import type { SpendGate } from '../mission-budget';
 import { buildSystemPromptSync, renderUnverifiedInstructions, type SystemPromptOptions } from '../prompt';
 import type { AgentsMdSources } from '../prompting/agents-md';
@@ -84,7 +85,10 @@ export interface TurnAssemblySources {
   readonly observeStream?: ActorExecutionInput['chat']['observeStream'];
   readonly paceStep?: ActorExecutionInput['chat']['paceStep'];
   extensions(): readonly KinuExtension[];
-  dynamic(turn: { readonly memoryTail: string | undefined; readonly activeSkills: ActiveSkillSet | null }): ActorExecutionInput['dynamic'];
+  dynamic(turn: { readonly memoryTail: string | undefined; readonly activeSkills: ActiveSkillSet | null; readonly accountFacts?: readonly Fact[] }): ActorExecutionInput['dynamic'];
+  /** The account's facts, read once per turn so every step renders the same block; absent where no account is wired.
+   *  A read that fails answers none, and the turn goes on. */
+  accountFacts?(): Promise<readonly Fact[]>;
   operation(profile: ResolvedTurnProfile, inputs: ProfileAuthorityInputs): OperationProfile;
   /** Binds the resolved profile; `toolset` is read again after it. */
   settle?(profile: ResolvedTurnProfile, inputs: ProfileAuthorityInputs): void | Promise<void>;
@@ -195,8 +199,9 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
   const externalTools = allowed.has('eval') ? pick(external, allowed) : {};
   const { pinned, invoked } = splitTurnSkills(activeSkills);
 
-  const [window, agentsMd, soul, identity, memoryTail] = await Promise.all([
+  const [window, agentsMd, soul, identity, memoryTail, accountFacts] = await Promise.all([
     models.catalog.windowFor(spec), sources.agentsMd(limits), sources.soul(), sources.identity(), readMemoryTail(sources.rt.memory),
+    sources.accountFacts?.(),
     models.catalog.warm(profile.tier.fallbacks.map((fallback) => fallback.model)),
   ]);
 
@@ -242,7 +247,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
       loopVersion: await sources.rt.identity.scaffold.version(),
       chat,
       extensions: sources.extensions(),
-      dynamic: sources.dynamic({ memoryTail, activeSkills: activeSkills ?? null }),
+      dynamic: sources.dynamic({ memoryTail, activeSkills: activeSkills ?? null, ...(accountFacts !== undefined && { accountFacts }) }),
       // Out of the cached prefix.
       instructions: renderUnverifiedInstructions({ agentsMd, activeSkills: pinned }),
       activated: invoked ? activatedSkillsBlock(invoked) : null,

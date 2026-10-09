@@ -20,6 +20,7 @@ import {
 } from '@kinu.run/core';
 import type { EnqueueTurnResult, ProgrammaticTurn, SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
+import type { AccountMemory, AccountProposer, Fact } from '@kinu.run/core';
 import type { SubordinateRosterEntry as SubordinateView } from '@kinu.run/core/protocol';
 import { MessageType, parseProtocolMessage, sendIfOpen } from "agents/chat";
 import {
@@ -42,7 +43,7 @@ import {
 import { codemodeSurface, hostedWindowMay, PAGE_KEEPALIVE, readsWrittenBy, requiredRpcAccess, ROSTER_READS, rpcMovesOverview, type LiveRead, type SqlExec } from "@kinu.run/core";
 import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
-import { createAgentTracing, hold, recording, renderThrownChain, type AgentTracing, settle, settleSync, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
+import { attempt, createAgentTracing, hold, recording, renderThrownChain, type AgentTracing, settle, settleSync, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
 import {
   createActorCompaction, type CompactionExtension,
   createCompactionStateStore,
@@ -422,12 +423,23 @@ async function slateMember(
   return null;
 }
 
+/** What one turn read once for every step's dynamic context: MEMORY.md's tail, its skills, and the account's facts. */
+interface TurnMemoryReads {
+  readonly memoryTail: string | undefined;
+  /** Absent: the actor's own active skills for the turn. */
+  readonly activeSkills?: ActiveSkillSet | null;
+  readonly accountFacts?: readonly Fact[];
+}
+
 /** Where a slate's `connectBrowser`, `pageTools` and `callPageTool` run: in its class's isolate, which holds the socket. */
 /**
  * A slate calling as a hosted actor reaches only that actor's own files, tables, tasks and facts, never the
  * workspace actor's (pinned by `tests/unit-slate-composition.test.ts`).
  */
-function hostedActorSurface(actor: HostedActor, web: { readonly search: WebSearchProvider; readonly sessions: BrowserSessions }, conversations: ConversationRecall) {
+function hostedActorSurface(
+  actor: HostedActor, web: { readonly search: WebSearchProvider; readonly sessions: BrowserSessions }, conversations: ConversationRecall,
+  account?: AccountMemory,
+) {
   const webSearch = web.search;
   // `ActorHostDeps.runtimeFor` is `createCFRuntime` on this backend; core only narrows the type.
   const runtime = actor.runtime;
@@ -438,12 +450,12 @@ function hostedActorSurface(actor: HostedActor, web: { readonly search: WebSearc
 
   const surface = hostedSurfaceActor(actor, {
     web: { search: webSearch, files: runtime.storage, browser: { sessions: web.sessions, prelude: BROWSER_PRELUDE } },
-    conversations, vectorStore: runtime.vectorStore,
+    conversations, vectorStore: runtime.vectorStore, ...(account !== undefined && { account }),
   });
 
   const native = buildBuiltinTools({
     rt: runtime, vectorStore: runtime.vectorStore, facts: actor.stores.facts, webSearch,
-    conversations,
+    conversations, ...(account !== undefined && { account }),
     fileLedger: actor.session.orchestrator.acc.files, contextBudget: actor.session.orchestrator.acc.context,
   });
 
@@ -3134,9 +3146,10 @@ export abstract class ActorAgent extends Agent<Env> {
   ): Promise<A> {
     if (actor !== null) {
       return await this.actorHost().run(actor, async (hosted) => {
+        // An operation call is the agent's own, so it reaches the account as the agent's programs do; a slate's never does.
         const surface = hostedActorSurface(hosted, {
           search: this.ownedModelServices.getWebSearchProvider(), sessions: this.browserSessionsFor(hosted.handle.actorId),
-        }, this.agentStores(hosted.handle.actorId).conversations());
+        }, this.agentStores(hosted.handle.actorId).conversations(), this.accountMemoryFor(hosted.record.name));
 
         const providers = actorNamespaces(surface.actor, SURFACE_POLICY.operations);
         const authority = await this.hostedSlateAuthority(hosted, requested, providers, Object.keys(surface.native));
@@ -3182,6 +3195,7 @@ export abstract class ActorAgent extends Agent<Env> {
       },
       memory: () => ({
         memory: this.rt.memory, vectorStore: this.rt.vectorStore, facts: this.facts, actor: this.actorHandle(), conversations: this.ownConversations(),
+        account: this.accountMemory({ by: 'agent', agent: this.actorHandle().name }),
       }),
       files: () => ({
         vfs: this.rt.toolFiles, home: this.rt.storage.home, planes: this.rt.planes, memory: this.rt.memory, ledger: this.acc.files, budget: this.acc.context,
@@ -3263,6 +3277,46 @@ export abstract class ActorAgent extends Agent<Env> {
 
   protected async userHub(): Promise<{ stub: UserHubClient; caller: UserCaller }> {
     return { stub: this.requireOwnerUserDO(), caller: await this.userCaller() };
+  }
+
+  /**
+   * The account's memory as `proposer` reaches it, through the owner's user object; each call finds the hub then, so a
+   * toolset built before the workspace was claimed reaches it once it is. `proposer` is who a proposal names.
+   */
+  protected accountMemory(proposer: AccountProposer): AccountMemory {
+    return {
+      facts: async () => {
+        const { stub, caller } = await this.userHub();
+
+        return await stub.accountMemory_facts(caller);
+      },
+      searchNotes: async (query, limit) => {
+        const { stub, caller } = await this.userHub();
+
+        return await stub.accountMemory_searchNotes(caller, query, limit);
+      },
+      propose: async (proposal, delivery) => {
+        const { stub, caller } = await this.userHub();
+
+        return await stub.accountMemory_propose(caller, proposal, proposer, delivery);
+      },
+    };
+  }
+
+  /** The account's memory for the agent named `agent`, or none where this workspace has no owner to hold it. */
+  protected accountMemoryFor(agent: string): AccountMemory | undefined {
+    return this.getOwnerUserId() === null ? undefined : this.accountMemory({ by: 'agent', agent });
+  }
+
+  /** The account's facts for one turn's memory block; a user object that does not answer costs the turn that block's
+   *  account lines, never the turn. */
+  accountFactsForTurn(): Promise<readonly Fact[]> {
+    return settle(Effect.catch(attempt({ doing: "reading the account's facts for the turn", otherwise: 'unavailable' }, async () => await this.accountMemory({ by: 'agent', agent: this.actorHandle().name }).facts()),
+      (failure) => Effect.sync(() => {
+        diagnostics.failure('memory.account_read_failed', failure, { workspace: this.name });
+
+        return [];
+      })));
   }
 
   /** `record` lets core emit the `profile_resolution` run event; this backend only picks where it goes. */
@@ -3696,6 +3750,7 @@ export abstract class ActorAgent extends Agent<Env> {
         // memory.search uses hybrid retrieval when available; otherwise FTS5-only.
         vectorStore: this.rt.vectorStore,
         facts: this.facts,
+        account: this.accountMemory({ by: 'agent', agent: this.actorHandle().name }),
         webSearch: this.ownedModelServices.getWebSearchProvider(),
         jobs: { jobRunner: this.jobRunner, backgroundable: BACKGROUNDABLE_TOOLS, mode: () => this.turnWorkMode() },
         slate: (operation) => this.slate(operation),
@@ -4185,7 +4240,8 @@ export abstract class ActorAgent extends Agent<Env> {
       attachmentBudget: this.acc.context,
       observeStream: (chunks) => this.chatTransport.observe(chunks),
       extensions: () => this.extensions.list(),
-      dynamic: ({ memoryTail, activeSkills }) => (profile, tools) => this.dynamicContextSnapshot(profile, tools, memoryTail, activeSkills),
+      accountFacts: () => this.accountFactsForTurn(),
+      dynamic: (turn) => (profile, tools) => this.dynamicContextSnapshot(profile, tools, turn),
       operation: (profile, inputs) => captureOperationProfile({
         actor: this.actorHandle(), profile, inputs, runId: this._currentRunId || WORKSPACE_RUN_ID, turnId: this.durableTurnId() ?? this._currentRunId,
       }),
@@ -4207,10 +4263,12 @@ export abstract class ActorAgent extends Agent<Env> {
    * Nothing clock-derived: a wall-clock field would re-fingerprint the block every request.
    */
   protected dynamicContextSnapshot(
-    profile: Pick<ResolvedTurnProfile, 'workMode' | 'allowedTools' | 'tier'>, tools: ToolSet, memoryTail: string | undefined,
-    activeSkills: ActiveSkillSet | null = null,
+    profile: Pick<ResolvedTurnProfile, 'workMode' | 'allowedTools' | 'tier'>, tools: ToolSet, turn: TurnMemoryReads,
   ): DynamicContext {
     const extras = this.extraDynamicContext();
+    const { memoryTail, accountFacts } = turn;
+    // Main's skills are its isolate's: a snapshot here reads only what the turn hands it.
+    const activeSkills = turn.activeSkills ?? null;
 
     return collectDynamicContext({
       rt: this.rt,
@@ -4222,6 +4280,7 @@ export abstract class ActorAgent extends Agent<Env> {
       turn: this.turnReason(),
       ...(activeSkills !== null && { activeSkills }),
       memoryTail,
+      ...(accountFacts !== undefined && { accountFacts }),
       unavailableMcp: this._mcpUnavailable,
       missingCapabilities: extras.extraMissingCapabilities?.() ?? [],
       subordinateDelegates: () => this.subordinateDelegates(),

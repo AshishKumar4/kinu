@@ -8,7 +8,10 @@ import {
   FingerprintIcon, MagnifyingGlassIcon, DatabaseIcon, FolderOpenIcon, BrainIcon, GitBranchIcon,
 } from "@phosphor-icons/react";
 import type { AgentStatus, ReadMoves } from "@/hooks/use-kinu";
-import type { MemoryEntry, Rpc } from "@kinu.run/core";
+import type { JsonValue, MemoryEntry, Rpc } from "@kinu.run/core";
+import { Effect } from "effect";
+import { attempt, detach, renderThrownChain } from "@kinu.run/core/obs";
+import { putAccountFact } from "../../lib/user-api";
 import { MarkdownContent, EmptyState, Section } from "./shared";
 import { timeAgo, workspaceDisplayTitle } from "@kinu.run/core";
 import { ScaffoldLineage } from "./ScaffoldLineage";
@@ -17,7 +20,36 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource, type AsyncResource } from "@/hooks/use-async-resource";
 import * as v from "valibot";
 
-interface Fact { key: string; value: unknown; confidence: number; source: string; lastObservedAt: number }
+interface Fact { key: string; value: JsonValue; confidence: number; source: string; lastObservedAt: number }
+
+type PromoteState = "idle" | "saving" | "kept" | { readonly failed: string };
+
+/**
+ * This workspace's fact, kept for every workspace and agent of the account: the owner's own promotion, so it is kept at
+ * once, with this workspace named as where it came from (Settings → Memory shows it).
+ */
+function PromoteFact({ fact, workspace }: { fact: Fact; workspace: string }) {
+  const [state, setState] = useState<PromoteState>("idle");
+
+  if (state === "kept") return <span className="p-meta p-success shrink-0" data-world-model-promoted>Kept for every workspace</span>;
+
+  const promote = () => Effect.sync(() => { setState("saving"); }).pipe(
+    Effect.andThen(attempt({ doing: "keeping this fact for every workspace", otherwise: "io" }, () => putAccountFact(fact.key, fact.value, workspace))),
+    Effect.match({ onSuccess: () => { setState("kept"); }, onFailure: (failed) => { setState({ failed: renderThrownChain({ cause: failed }) }); } }),
+  );
+
+  const failed = typeof state === "object" ? state.failed : null;
+  let label = failed === null ? "Keep for every workspace" : "Retry: keep for every workspace";
+
+  if (state === "saving") label = "Keeping…";
+
+  return (
+    <button type="button" className="p-meta p-accent-fg hover:underline shrink-0" disabled={state === "saving"} onClick={() => detach(promote())}
+      title={failed ?? "Every workspace and agent of yours will read it alongside its own memory."}>
+      {label}
+    </button>
+  );
+}
 
 export interface AgentSurfaceProps {
   /** Tri-state: "still coming" and "came back broken" differ, and neither is "none". */
@@ -123,12 +155,13 @@ export function AgentSurface(
           badge={<Badge variant="secondary">{facts.length}</Badge>}>
           <div className="rounded-md border p-border overflow-hidden text-xs">
             {facts.map((f) => (
-              <div key={f.key} className="flex items-start gap-2 px-3 py-1.5 border-b p-border last:border-0">
+              <div key={f.key} className="flex items-start gap-2 px-3 py-1.5 border-b p-border last:border-0" data-world-model-fact={f.key}>
                 <span className="font-mono p-accent shrink-0">{f.key}</span>
                 <span className="p-text-2 truncate flex-1 text-right">{v.is(v.string(), f.value) ? f.value : JSON.stringify(f.value)}</span>
                 {f.confidence < 1 && <span className="p-meta p-text-3 shrink-0">{(f.confidence * 100).toFixed(0)}%</span>}
                 {f.source !== '' && <span className="p-meta p-text-3 shrink-0">via {f.source}</span>}
                 <span className="p-meta p-text-3 shrink-0">{timeAgo(f.lastObservedAt)}</span>
+                {as !== null && <PromoteFact fact={f} workspace={as.name} />}
               </div>
             ))}
           </div>

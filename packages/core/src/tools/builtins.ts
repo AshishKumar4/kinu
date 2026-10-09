@@ -84,6 +84,8 @@ export interface BuiltinToolDeps {
   vectorStore?: import('../memory/vector-store').VectorStore | null;
   /** Enables remember/recall/forget and joins facts into the search RRF merge. */
   facts?: import('../memory/facts').FactsStore;
+  /** The account's memory: reads join it and a write may ask for it (`MEMORY_WITH_ACCOUNT`). Absent, no call names a scope. */
+  account?: import('../memory/account').AccountMemory;
   conversations: ConversationRecall;
   /** Wired only on subordinate actors. */
   report?: ReportDeps;
@@ -150,8 +152,10 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // The same operations as `memory.*` in a program.
   const facts = deps.facts;
 
-  tools.memory = nativeTool(renderToolSchemaDescription(memoryToolSpec(facts !== undefined)), serveMemory(() => ({
-    memory, vectorStore: deps.vectorStore, ...(facts !== undefined && { facts }), actor: rt.actor, conversations: deps.conversations,
+  const account = facts === undefined ? undefined : deps.account;
+
+  tools.memory = nativeTool(renderToolSchemaDescription(memoryToolSpec(facts !== undefined, account !== undefined)), serveMemory(() => ({
+    memory, vectorStore: deps.vectorStore, ...(facts !== undefined && { facts }), ...(account !== undefined && { account }), actor: rt.actor, conversations: deps.conversations,
   })));
 
   const taskList = new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync);

@@ -14,7 +14,7 @@
 
 import {
   BOUNDS_KINDS,
-  PLATFORM_FACT_IDS,
+  platformFactIds,
   injectableFaults,
   platformFact,
   platformFactEntries,
@@ -249,7 +249,7 @@ function report(): string {
     + 'and a committed copy would drift from it, which is the exact failure this catalog '
     + 'replaces.',
     '',
-    `${String(PLATFORM_FACT_IDS.length)} entries. `
+    `${String(platformFactIds().length)} entries. `
     + `${String(injectableFaults().length)} carry first-hand evidence and may be injected as real faults.`,
     '',
   ];
@@ -270,7 +270,7 @@ function report(): string {
   }
 
   const sources = [...readSources().values()];
-  const uncited = PLATFORM_FACT_IDS.filter((id) => !sources.some((text) => text.includes(id)));
+  const uncited = platformFactIds().filter((id) => !sources.some((text) => text.includes(id)));
 
   if (uncited.length > 0) {
     out.push(
@@ -286,7 +286,7 @@ function report(): string {
     out.push('');
   }
 
-  for (const id of PLATFORM_FACT_IDS) {
+  for (const id of platformFactIds()) {
     const fact = platformFact(id);
     out.push(`## \`${id}\``, '');
     out.push(`${fact.subject}.`, '');

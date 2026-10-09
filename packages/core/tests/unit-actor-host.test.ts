@@ -537,7 +537,7 @@ describe('one workspace database, many logical actors', () => {
 
   /** A turn whose program verifies, and one run of it: admitted again on `installedBuild`, its model called at each
    *  of `steps`, and left open there, as a run a memory or wall reset of its activation ended. */
-  async function interruptedRuns(hostBuild?: string | null): Promise<{ actor: BoundActor; run: (steps: readonly number[], installedBuild?: string | null) => Promise<void>; fx: Fixture }> {
+  async function interruptedRuns(hostBuild?: string | null): Promise<{ actor: BoundActor; run: (steps: readonly number[], installedBuild?: string | null, cut?: 'provider' | 'work') => Promise<void>; fx: Fixture }> {
     const fx = build(undefined, undefined, false, hostBuild);
     const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'));
     const source = 'export default async function main() { return "retained"; }';
@@ -546,17 +546,25 @@ describe('one workspace database, many logical actors', () => {
 
     return {
       actor, fx,
-      run: async (steps, installedBuild = fx.host.installedBuild) => {
+      // Each run ends where `cut` says: waiting on the provider for its last step, or running that step's own work.
+      run: async (steps, installedBuild = fx.host.installedBuild, cut = 'provider') => {
         const claim = await actor.stores.claims.admit({
           runId: crypto.randomUUID(), turnId: 'turn-a', workMode: 'build', context: contextOf(actor), program, installedBuild,
         });
 
         for (const index of steps) await actor.stores.claims.consume(claim, { index, messages: [{ role: 'user', content: 'the brief' }] });
+
+        if (cut === 'work') actor.stores.claims.working(claim);
       },
     };
   }
 
-  test('a run our own deploy ended is no stall: both runs judged ran on this host\'s build', async () => {
+  /** Cuts in a provider wait, and in a step's own work, on one build with no step finishing, that settle a turn (D12). */
+  const STALLED_PROVIDER_CUTS = 20;
+
+  const POISON_WORK_CUTS = 6;
+
+  test('a run our own deploy ended is no stall: only cuts on this host\'s build count, and a provider wait counts to twenty', async () => {
     const { actor, run, fx } = await interruptedRuns();
     const owed = { verified: ['turn-a'], stalled: [] };
 
@@ -565,26 +573,66 @@ describe('one workspace database, many logical actors', () => {
     // A deploy ended this run: this host runs another build.
     await run([0, 1], 'build-before');
     expect(await recoverActorTurns(fx.host)).toMatchObject(owed);
-    // This run is this host's own, but the deploy ended the one it follows.
-    await run([0, 1]);
-    expect(await recoverActorTurns(fx.host)).toMatchObject(owed);
+
+    // Each cut on this host's build waits on the provider: none is the step's fault, so five outside resets and more
+    // stay owed, up to the bound.
+    for (let cut = 1; cut < STALLED_PROVIDER_CUTS; cut += 1) {
+      await run([0, 1]);
+      expect(await recoverActorTurns(fx.host)).toMatchObject(owed);
+    }
+
     await run([0, 1]);
     const recovered = await recoverActorTurns(fx.host);
     expect(recovered.stalled.map((turn) => turn.claim.turnId)).toEqual(['turn-a']);
-    expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'settled', outcome: 'error', epoch: 4 });
+    expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'settled', outcome: 'error', epoch: 2 + STALLED_PROVIDER_CUTS });
     fx.host.releaseAll();
     fx.db.close();
   });
 
-  test('a host with no build of its own judges no pair: two relaunches of the CLI at one step are not a stall', async () => {
+  test('a step cut in its own work, run after run, is settled at the sixth; a finished step starts the count over', async () => {
+    const { actor, run, fx } = await interruptedRuns();
+    const owed = { verified: ['turn-a'], stalled: [] };
+
+    for (let cut = 1; cut < POISON_WORK_CUTS; cut += 1) {
+      await run([0], undefined, 'work');
+      expect(await recoverActorTurns(fx.host)).toMatchObject(owed);
+    }
+
+    // The next run finishes its step: the cuts before it say nothing about the next one.
+    const claim = await actor.stores.claims.admit({
+      runId: crypto.randomUUID(), turnId: 'turn-a', workMode: 'build', context: contextOf(actor),
+      program: actor.stores.claims.read('turn-a')?.program ?? { kind: 'builtin', version: 0, digest: null, build: null },
+      installedBuild: fx.host.installedBuild,
+    });
+
+    await actor.stores.claims.consume(claim, { index: 0, messages: [{ role: 'user', content: 'the brief' }] });
+    actor.stores.claims.progressed(claim);
+    actor.stores.claims.working(claim);
+    expect(await recoverActorTurns(fx.host)).toMatchObject(owed);
+
+    for (let cut = 1; cut < POISON_WORK_CUTS - 1; cut += 1) {
+      await run([1], undefined, 'work');
+      expect(await recoverActorTurns(fx.host)).toMatchObject(owed);
+    }
+
+    await run([1], undefined, 'work');
+    expect((await recoverActorTurns(fx.host)).stalled.map((turn) => turn.claim.turnId)).toEqual(['turn-a']);
+    // The run that finished a step and was then cut in its work is the first of the six.
+    expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'settled', outcome: 'error', epoch: (POISON_WORK_CUTS - 1) + POISON_WORK_CUTS });
+    fx.host.releaseAll();
+    fx.db.close();
+  });
+
+  test('a host with no build of its own judges no pair: relaunches of the CLI cut in a step\'s own work are not a stall', async () => {
     const { actor, run, fx } = await interruptedRuns(null);
     const owed = { verified: ['turn-a'], stalled: [] };
 
-    await run([0, 1]);
-    expect(await recoverActorTurns(fx.host)).toMatchObject(owed);
-    await run([0, 1]);
-    expect(await recoverActorTurns(fx.host)).toMatchObject(owed);
-    expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'admitted', epoch: 2 });
+    for (let cut = 0; cut < POISON_WORK_CUTS; cut += 1) {
+      await run([0, 1], undefined, 'work');
+      expect(await recoverActorTurns(fx.host)).toMatchObject(owed);
+    }
+
+    expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'admitted', epoch: POISON_WORK_CUTS });
     fx.host.releaseAll();
     fx.db.close();
   });

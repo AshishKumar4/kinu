@@ -29,7 +29,10 @@ export type {
 // Content plus annotations_json share one row capped at do.sqlite.row_bytes; this cap and MAX_PLAN_ANNOTATIONS_BYTES fit inside it together.
 export const MAX_PLAN_CONTENT_BYTES = 1536 * 1024;
 
-const MAX_PLAN_REVIEW_ROW_BYTES = PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value;
+/** Read on call: the browser imports this module's schemas, and a module-scope read ships the whole catalog to it. */
+function planReviewRowBytes(): number {
+  return PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value;
+}
 
 const PlanReviewStatusSchema = v.picklist([
   'pending', 'changes_requested', 'approved', 'superseded', 'dismissed',
@@ -254,8 +257,10 @@ function carryRefusal(content: string, notes: readonly ReviewAnnotation[], revis
 
   if (carried > MAX_PLAN_ANNOTATIONS_BYTES) return `the review's comments would exceed the maximum size of ${String(MAX_PLAN_ANNOTATIONS_BYTES / 1024)} KiB`;
 
-  return byteLength(content) + carried > MAX_PLAN_REVIEW_ROW_BYTES
-    ? `plan content and annotations exceed the stored row size of ${String(MAX_PLAN_REVIEW_ROW_BYTES)} bytes` : null;
+  const rowBytes = planReviewRowBytes();
+
+  return byteLength(content) + carried > rowBytes
+    ? `plan content and annotations exceed the stored row size of ${String(rowBytes)} bytes` : null;
 }
 
 /**
@@ -482,8 +487,10 @@ export class PlanReviewStore {
       // The threads of a revision sent back carry into the next one, read-only, so its replies stay in view.
       const carried = JSON.stringify((revising?.annotations ?? []).map((note) => note.revision === undefined ? { ...note, revision: revising?.revision } : note));
 
-      if (byteLength(content) + byteLength(carried) > MAX_PLAN_REVIEW_ROW_BYTES) {
-        return { ok: false, error: `plan content exceeds the stored row size of ${MAX_PLAN_REVIEW_ROW_BYTES} bytes`, plan: current };
+      const rowBytes = planReviewRowBytes();
+
+      if (byteLength(content) + byteLength(carried) > rowBytes) {
+        return { ok: false, error: `plan content exceeds the stored row size of ${rowBytes} bytes`, plan: current };
       }
 
       const id = revising?.id ?? this.newId();

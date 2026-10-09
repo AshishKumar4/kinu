@@ -45,7 +45,7 @@ const liveTest = test.skipIf(PLAN === null);
 
 const observations: EvalObservation[] = [];
 
-afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
+afterAll(async () => { await publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
 
 /** How much of a message a run's start keeps (`turn-lifecycle.ts`, `slice(0, 500)`). */
 const RUN_START_MESSAGE_CHARS = 500;

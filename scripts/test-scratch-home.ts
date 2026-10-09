@@ -30,7 +30,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { releaseOnSignals, releaseScratch, scratchDir } from '../packages/test-utils/src/scratch';
 import { stripAmbientCredentials } from '../packages/test-utils/src/ambient-env';
-import { stripGitContext } from '../packages/test-utils/src/git';
+import { stripGitContext } from '../packages/test-utils/src/git-env';
 import { reapAbandonedRoots, recordOwner } from './process-owner';
 
 // A pre-commit suite's `git config` must target its scratch repo, never the hook's repository (2026-09-27).

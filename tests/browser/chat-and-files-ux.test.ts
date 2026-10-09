@@ -598,11 +598,10 @@ async function run(): Promise<Observed> {
 
     const terminalInput = await env.evaluate(() => window.__kinuTerminalInput ?? []);
 
-    // The jump is a synchronous surface switch (`openFiles` navigates focus
-    // and the Files surface is a static import), committed before the click
-    // resolves, so the drive's presence is the boolean under test, read once.
+    // The jump switches the surface at once (`openFiles` navigates focus); the
+    // Files surface's chunk loads with its first view, so the drive is awaited.
     await env.click('[data-env-card="workspace"] [data-env-files]');
-    const envFilesJumpLandsOnDrive = await env.$('[data-files-surface]') !== null;
+    const envFilesJumpLandsOnDrive = await env.waitForSelector('[data-files-surface]') !== null;
 
     await env.close();
 

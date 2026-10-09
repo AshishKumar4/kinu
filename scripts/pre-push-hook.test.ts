@@ -14,10 +14,9 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { spawnSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { git, gitEnv, initRepo, scratchDir } from '@kinu.run/test-utils';
+import { git, gitEnv, initRepo, runToExit, scratchDir } from '@kinu.run/test-utils';
 
 const HOOK = resolve(import.meta.dir, '..', '.githooks', 'pre-push');
 
@@ -25,15 +24,15 @@ const ZERO = '0000000000000000000000000000000000000000';
 
 const TIER_RAN = 'stand-in push tier ran';
 
-function repoWithTwoCommits() {
+async function repoWithTwoCommits() {
   const repo = scratchDir('pre-push');
 
-  initRepo(repo);
+  await initRepo(repo);
   writeFileSync(join(repo, 'a.txt'), 'one\n');
-  git(repo, 'add', 'a.txt');
-  git(repo, 'commit', '-q', '-m', 'one');
+  await git(repo, 'add', 'a.txt');
+  await git(repo, 'commit', '-q', '-m', 'one');
   writeFileSync(join(repo, 'a.txt'), 'two\n');
-  git(repo, 'commit', '-q', '-am', 'two');
+  await git(repo, 'commit', '-q', '-am', 'two');
   mkdirSync(join(repo, '.githooks'));
   copyFileSync(HOOK, join(repo, '.githooks', 'pre-push'));
   mkdirSync(join(repo, 'scripts'));
@@ -42,18 +41,20 @@ function repoWithTwoCommits() {
   symlinkSync(process.execPath, join(repo, 'node_modules', '.bin', 'bun'));
   writeFileSync(join(repo, '.gitignore'), 'node_modules/\n');
   writeFileSync(join(repo, 'scripts', 'ladder.ts'), `console.log(${JSON.stringify(TIER_RAN)});\n`);
-  git(repo, 'add', '.githooks', '.gitignore', 'scripts');
-  git(repo, 'commit', '-q', '-m', 'hook');
+  await git(repo, 'add', '.githooks', '.gitignore', 'scripts');
+  await git(repo, 'commit', '-q', '-m', 'hook');
 
-  return { repo, head: git(repo, 'rev-parse', 'HEAD').trim(), parent: git(repo, 'rev-parse', 'HEAD~1').trim() };
+  return { repo, head: (await git(repo, 'rev-parse', 'HEAD')).trim(), parent: (await git(repo, 'rev-parse', 'HEAD~1')).trim() };
 }
 
-function runHook(repo: string, pushed: string, ref = 'refs/heads/b', armada: Record<string, string> = {}) {
-  const result = spawnSync('bash', [join(repo, '.githooks', 'pre-push'), 'origin', 'git@example.invalid:r.git'], {
-    cwd: repo, env: { ...gitEnv(), ...armada }, input: `refs/heads/b ${pushed} ${ref} ${ZERO}\n`, encoding: 'utf8',
+async function runHook(repo: string, pushed: string, ref = 'refs/heads/b', armada: Record<string, string> = {}) {
+  const result = await runToExit(['bash', join(repo, '.githooks', 'pre-push'), 'origin', 'git@example.invalid:r.git'], {
+    cwd: repo,
+    env: { ...gitEnv(), ...armada },
+    stdin: `refs/heads/b ${pushed} ${ref} ${ZERO}\n`,
   });
 
-  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+  return { status: result.exitCode, stdout: result.stdout, stderr: result.stderr };
 }
 
 /** A stand-in for Kinu's pinned armada: `verdict --json` prints STORED and exits VERDICT_EXIT, `verdict` says the
@@ -74,26 +75,26 @@ esac
 }
 
 describe('the pre-push hook proves only the commit it pushes', () => {
-  test('a push of a commit other than the checked-out one is refused, naming both', () => {
-    const { repo, head, parent } = repoWithTwoCommits();
-    const { status, stderr } = runHook(repo, parent);
+  test('a push of a commit other than the checked-out one is refused, naming both', async () => {
+    const { repo, head, parent } = await repoWithTwoCommits();
+    const { status, stderr } = await runHook(repo, parent);
 
     expect(status).toBe(1);
     expect(stderr).toContain(parent);
     expect(stderr).toContain(head);
   });
 
-  test('a push of the checked-out commit from a clean tree runs the tier and passes', () => {
-    const { repo, head } = repoWithTwoCommits();
-    const { status, stdout } = runHook(repo, head);
+  test('a push of the checked-out commit from a clean tree runs the tier and passes', async () => {
+    const { repo, head } = await repoWithTwoCommits();
+    const { status, stdout } = await runHook(repo, head);
 
     expect(status).toBe(0);
     expect(stdout).toContain(TIER_RAN);
   });
 
-  test('a branch deletion is not a pushed commit', () => {
-    const { repo } = repoWithTwoCommits();
-    const { status, stdout } = runHook(repo, ZERO);
+  test('a branch deletion is not a pushed commit', async () => {
+    const { repo } = await repoWithTwoCommits();
+    const { status, stdout } = await runHook(repo, ZERO);
 
     expect(status).toBe(0);
     expect(stdout).toContain(TIER_RAN);
@@ -102,12 +103,12 @@ describe('the pre-push hook proves only the commit it pushes', () => {
   test.each([
     ['a modified tracked file', 'a.txt', 'three\n'],
     ['an untracked file, which the gates read', 'new.ts', 'export const x = 1;\n'],
-  ])('%s is refused', (_, path, text) => {
-    const { repo, head } = repoWithTwoCommits();
+  ])('%s is refused', async (_, path, text) => {
+    const { repo, head } = await repoWithTwoCommits();
 
     writeFileSync(join(repo, path), text);
 
-    const { status, stderr } = runHook(repo, head);
+    const { status, stderr } = await runHook(repo, head);
 
     expect(status).toBe(1);
     expect(stderr).toContain('uncommitted or untracked changes');
@@ -117,47 +118,47 @@ describe('the pre-push hook proves only the commit it pushes', () => {
 describe('a push to main or integration/** is proved on armada', () => {
   const answering = (log: string, stored: string, verdictExit: number, runExit = 0) => ({ ARMADA_LOG: log, STORED: stored, VERDICT_EXIT: String(verdictExit), RUN_EXIT: String(runExit) });
 
-  test('a commit armada stored green goes through without a run, and the local tier is not run for it', () => {
-    const { repo, head } = repoWithTwoCommits();
+  test('a commit armada stored green goes through without a run, and the local tier is not run for it', async () => {
+    const { repo, head } = await repoWithTwoCommits();
     const log = withArmada(repo);
-    const { status, stdout } = runHook(repo, head, 'refs/heads/integration/0965', answering(log, '{"rows": []}', 0));
+    const { status, stdout } = await runHook(repo, head, 'refs/heads/integration/0965', answering(log, '{"rows": []}', 0));
 
     expect({ status, proved: stdout.includes(`armada already proved ${head} green`), tier: stdout.includes(TIER_RAN), asked: readFileSync(log, 'utf8') })
       .toEqual({ status: 0, proved: true, tier: false, asked: `verdict ${head} --json\n` });
   });
 
-  test('a commit armada stored red is refused and not run again', () => {
-    const { repo, head } = repoWithTwoCommits();
+  test('a commit armada stored red is refused and not run again', async () => {
+    const { repo, head } = await repoWithTwoCommits();
     const log = withArmada(repo);
-    const { status, stderr } = runHook(repo, head, 'refs/heads/main', answering(log, '{"rows": []}', 1));
+    const { status, stderr } = await runHook(repo, head, 'refs/heads/main', answering(log, '{"rows": []}', 1));
 
     expect({ status, said: stderr.includes(`armada proved ${head} red`), asked: readFileSync(log, 'utf8').split('\n').filter(Boolean) })
       .toEqual({ status: 1, said: true, asked: [`verdict ${head} --json`, `verdict ${head}`] });
   });
 
-  test.each([[0, 0], [1, 1], [2, 1]])('a commit with no verdict is run on armada, and a run that exits %i lets the push exit %i', (runExit, pushExit) => {
-    const { repo, head } = repoWithTwoCommits();
+  test.each([[0, 0], [1, 1], [2, 1]])('a commit with no verdict is run on armada, and a run that exits %i lets the push exit %i', async (runExit, pushExit) => {
+    const { repo, head } = await repoWithTwoCommits();
     const log = withArmada(repo);
-    const { status } = runHook(repo, head, 'refs/heads/integration/0965', answering(log, 'null', 2, runExit));
+    const { status } = await runHook(repo, head, 'refs/heads/integration/0965', answering(log, 'null', 2, runExit));
 
     expect({ status, asked: readFileSync(log, 'utf8').split('\n').filter(Boolean) }).toEqual({ status: pushExit, asked: [`verdict ${head} --json`, `run ${head}`] });
   });
 
-  test('an armada that cannot say is a refusal, never a run', () => {
-    const { repo, head } = repoWithTwoCommits();
+  test('an armada that cannot say is a refusal, never a run', async () => {
+    const { repo, head } = await repoWithTwoCommits();
     const log = withArmada(repo);
-    const { status, stderr } = runHook(repo, head, 'refs/heads/main', answering(log, '', 2));
+    const { status, stderr } = await runHook(repo, head, 'refs/heads/main', answering(log, '', 2));
 
     expect({ status, said: stderr.includes(`armada could not say whether ${head} is proved`), ran: readFileSync(log, 'utf8').includes('run ') }).toEqual({ status: 1, said: true, ran: false });
   });
 
   // armada proves the commit it is given, not the working tree, so a push of another commit from a dirty one is fine.
-  test('neither the checked-out commit nor a clean tree is required', () => {
-    const { repo, parent } = repoWithTwoCommits();
+  test('neither the checked-out commit nor a clean tree is required', async () => {
+    const { repo, parent } = await repoWithTwoCommits();
     const log = withArmada(repo);
 
     writeFileSync(join(repo, 'new.ts'), 'export const x = 1;\n');
 
-    expect(runHook(repo, parent, 'refs/heads/integration/0965', answering(log, '{"rows": []}', 0)).status).toBe(0);
+    expect((await runHook(repo, parent, 'refs/heads/integration/0965', answering(log, '{"rows": []}', 0))).status).toBe(0);
   });
 });

@@ -38,10 +38,10 @@ function memoryBucket(): ProofBucket & { readonly objects: Map<string, string>; 
 }
 
 /** A committed repository whose one gate reads `scripts/green.ts`. */
-function repository(): string {
+async function repository(): Promise<string> {
   const root = scratchDir('ladder-proofs');
 
-  initRepo(root);
+  await initRepo(root);
 
   for (const [file, text] of Object.entries({
     'package.json': JSON.stringify({ name: 'fixture' }),
@@ -53,8 +53,8 @@ function repository(): string {
     writeFileSync(join(root, file), text);
   }
 
-  git(root, 'add', '-A');
-  git(root, 'commit', '-qm', 'fixture');
+  await git(root, 'add', '-A');
+  await git(root, 'commit', '-qm', 'fixture');
 
   return root;
 }
@@ -89,7 +89,7 @@ async function provedIn(root: string, box: Container, bucket: ProofBucket, revis
 
 describe('a proof carried to a fresh container', () => {
   test('an unchanged closure carries the proof, and a changed one runs', async () => {
-    const root = repository();
+    const root = await repository();
     const bucket = memoryBucket();
     const key = await provedIn(root, container(root), bucket, 'rev-a');
 
@@ -104,7 +104,7 @@ describe('a proof carried to a fresh container', () => {
 
     // One byte of the gate's closure changes: a new key, which the bucket holds no proof for.
     writeFileSync(join(root, 'scripts/green.ts'), 'export const green = 2;\n');
-    git(root, 'commit', '-qam', 'change the gate');
+    await git(root, 'commit', '-qam', 'change the gate');
     const third = container(root);
     const changed = third.plan();
 
@@ -115,7 +115,7 @@ describe('a proof carried to a fresh container', () => {
   });
 
   test('an entry edited in the bucket, or moved to another key, or signed with another secret, is not a proof', async () => {
-    const root = repository();
+    const root = await repository();
     const bucket = memoryBucket();
     const key = await provedIn(root, container(root), bucket, 'rev-a');
     const stored = bucket.objects.get(key) ?? '';
@@ -136,7 +136,7 @@ describe('a proof carried to a fresh container', () => {
   });
 
   test('a bucket that does not answer is a run, never a pass', async () => {
-    const root = repository();
+    const root = await repository();
     const bucket = memoryBucket();
     const key = await provedIn(root, container(root), bucket, 'rev-a');
     const box = container(root);
@@ -147,7 +147,7 @@ describe('a proof carried to a fresh container', () => {
   });
 
   test('a red run records nothing, so nothing is uploaded', async () => {
-    const root = repository();
+    const root = await repository();
     const bucket = memoryBucket();
     const box = container(root);
     const plan = box.plan();

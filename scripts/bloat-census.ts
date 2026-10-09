@@ -15,7 +15,7 @@ import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { type Expression, parseSync } from 'oxc-parser';
 
-import { gitEnv } from '../packages/test-utils/src/git';
+import { gitEnv } from '../packages/test-utils/src/git-env';
 import { type DuplicateGroup, findDuplicateGroups } from './ast-duplication';
 import { canonical, commentCharacters } from './comment-only';
 import { measureFile } from './complexity';

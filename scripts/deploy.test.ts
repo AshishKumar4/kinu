@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { statSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { basename, join, resolve } from "node:path";
-import { childEnv, runToExit, scratchDir } from "@kinu.run/test-utils";
+import { childEnv, runToExit, scratchDir, type Exited } from "@kinu.run/test-utils";
 import { parseReleaseManifest } from "@kinu.run/core/deploy";
 import { generateReleaseSigningKey } from "../packages/core/src/http/release-signing";
 import {
@@ -74,13 +74,11 @@ function freshHome(directory: string) {
  *  signal kill behind an empty stderr, and this suite installs two ~2 GB trees
  *  into tmpfs: a red that says nothing cannot be told from a red that means
  *  the distribution no longer resolves. */
-function launchFailure(result: Bun.SyncSubprocess): string {
-  const decoder = new TextDecoder();
-
+function launchFailure(result: Exited): string {
   return [
     `exit=${String(result.exitCode)} signal=${String(result.signalCode)}`,
-    decoder.decode(result.stderr).trim(),
-    decoder.decode(result.stdout).trim(),
+    result.stderr.trim(),
+    result.stdout.trim(),
   ].filter((part) => part.length > 0).join("\n");
 }
 
@@ -157,7 +155,7 @@ interface DeployRun {
   readonly pendingReset?: string;
 }
 
-function runDeploy({
+async function runDeploy({
   failingGate = "",
   killGate = "",
   dirty = false,
@@ -216,7 +214,7 @@ exit 87
   if (option !== undefined) argv.push(option);
   argv.push(...options);
 
-  const run = Bun.spawnSync(argv, {
+  const run = await runToExit(argv, {
     cwd: fixture,
     env: childEnv({
       PATH: `${fixture}:/usr/bin:/bin`,
@@ -239,8 +237,6 @@ exit 87
       KINU_CI_RED: ciRed ? '1' : '0',
       XDG_RUNTIME_DIR: fixture,
     }),
-    stdout: "pipe",
-    stderr: "pipe",
   });
 
 
@@ -278,15 +274,15 @@ describe("deploy gate", () => {
   test.each([
     ['no armada verdict', { ciAbsent: true }, 'armada has no verdict'],
     ['a red armada verdict', { ciRed: true }, 'CI RED bun run test:core'],
-  ])('%s for the clean SHA refuses before any upload gate, build or record', (_, options, said) => {
-    const run = runDeploy(options);
+  ])('%s for the clean SHA refuses before any upload gate, build or record', async (_, options, said) => {
+    const run = await runDeploy(options);
 
     expect({ status: run.status, events: run.events, ci: run.ci, said: run.stdout.includes(said), refused: run.stdout.includes('armada has no green verdict for testsha') })
       .toEqual({ status: 1, events: [phaseRun('preflight')], ci: ['bun scripts/ladder.ts --ci-verdict=testsha'], said: true, refused: true });
   });
 
-  test('a green armada verdict is read once, before the upload gates', () => {
-    const run = runDeploy({ option: '--gates-only' });
+  test('a green armada verdict is read once, before the upload gates', async () => {
+    const run = await runDeploy({ option: '--gates-only' });
 
     expect({ events: run.events, ci: run.ci, marks: run.report.filter((entry) => entry.startsWith('mark ')).slice(0, 3) })
       .toEqual({ events: [...STOPS, phaseRun('source')], ci: ['bun scripts/ladder.ts --ci-verdict=testsha'], marks: ['mark preflight', 'mark ci', 'mark upload'] });
@@ -300,16 +296,16 @@ describe("deploy gate", () => {
   //
   // Review job 150, P1: a staging re-deploy of a verified commit replaces what staging serves for it, so it withdraws
   // that commit's record first, after its gates and before anything it builds can be published.
-  test("runs the upload gates, withdraws HEAD's record, builds for staging, and runs every local gate after a failed build", () => {
-    const run = runDeploy();
+  test("runs the upload gates, withdraws HEAD's record, builds for staging, and runs every local gate after a failed build", async () => {
+    const run = await runDeploy();
 
     expect(run.status).toBe(1);
     expect(run.events).toEqual([...STOPS, WITHDRAW, armadaBuild("staging"), ...AFTER_A_FAILED_BUILD]);
     expect(run.infraEnvironment).toBe("staging");
   });
 
-  test("a record that cannot be withdrawn builds nothing, and every local gate still runs", () => {
-    const run = runDeploy({ failingGate: WITHDRAW });
+  test("a record that cannot be withdrawn builds nothing, and every local gate still runs", async () => {
+    const run = await runDeploy({ failingGate: WITHDRAW });
 
     expect(run.status).toBe(1);
     expect(run.events.some((event) => event.startsWith("MUTATE ") || event.startsWith("bun scripts/release-build.ts"))).toBe(false);
@@ -327,8 +323,8 @@ describe("deploy gate", () => {
   // of them, and a HEAD staging never verified builds nothing at all.
   const PROMOTION_CHECK = "bun scripts/promote.ts check";
 
-  test("a promotion runs no source gate: staging's record, the upload gates on production, a production build", () => {
-    const run = runDeploy({ option: "--promote" });
+  test("a promotion runs no source gate: staging's record, the upload gates on production, a production build", async () => {
+    const run = await runDeploy({ option: "--promote" });
 
     expect(run.status).toBe(1);
     expect(run.events).toEqual([
@@ -338,8 +334,8 @@ describe("deploy gate", () => {
     expect(run.infraEnvironment).toBe("production");
   });
 
-  test("a promotion of a build staging never verified builds nothing", () => {
-    const run = runDeploy({ option: "--promote", failingGate: PROMOTION_CHECK });
+  test("a promotion of a build staging never verified builds nothing", async () => {
+    const run = await runDeploy({ option: "--promote", failingGate: PROMOTION_CHECK });
 
     expect(run.status).toBe(1);
     expect(run.events).toEqual([phaseRun("preflight"), PROMOTION_CHECK]);
@@ -350,50 +346,48 @@ describe("deploy gate", () => {
   });
 
   // Review job 150, P2: a red promotion leaves production serving it, and one command must undo it.
-  test("--rollback runs production's rollback and nothing else, and takes no other option", () => {
-    const rollback = runDeploy({ option: "--rollback" });
+  test("--rollback runs production's rollback and nothing else, and takes no other option", async () => {
+    const rollback = await runDeploy({ option: "--rollback" });
 
     expect([rollback.status, rollback.events]).toEqual([0, ["bun scripts/promote.ts rollback"]]);
 
-    const combined = runDeploy({ option: "--rollback", options: ["--promote"] });
+    const combined = await runDeploy({ option: "--rollback", options: ["--promote"] });
 
     expect([combined.status, combined.events]).toEqual([2, []]);
   });
 
   // A production reset is confirmed inside `reset.ts wipe`, at a terminal; a run with none stops before anything.
-  test("a production reset with no terminal to confirm at runs nothing", () => {
-    const run = runDeploy({ option: "--promote", options: ["--reset"] });
+  test("a production reset with no terminal to confirm at runs nothing", async () => {
+    const run = await runDeploy({ option: "--promote", options: ["--reset"] });
 
     expect([run.status, run.events]).toEqual([1, []]);
   });
 
   // The advertised `wipe production` deletes nothing unless a person types the words at a terminal: piped input is
   // refused before any Cloudflare call, and this child has no wrangler on its PATH to make one with.
-  test("a production wipe with its words piped in deletes nothing", () => {
+  test("a production wipe with its words piped in deletes nothing", async () => {
     const record = join(scratchDir("reset-refused"), "record.json");
 
-    const run = Bun.spawnSync([process.execPath, join(REPO_ROOT, "scripts", "reset.ts"), "wipe", "production", record], {
+    const run = await runToExit([process.execPath, join(REPO_ROOT, "scripts", "reset.ts"), "wipe", "production", record], {
       env: childEnv({ PATH: "" }),
-      stdin: Buffer.from("reset production\n"),
-      stdout: "pipe",
-      stderr: "pipe",
+      stdin: "reset production\n",
     });
 
-    expect([run.exitCode, run.stderr.toString()]).toEqual([1, expect.stringContaining("not confirmed at a terminal")]);
+    expect([run.exitCode, run.stderr]).toEqual([1, expect.stringContaining("not confirmed at a terminal")]);
     expect(existsSync(record)).toBe(false);
   });
 
   // The wipe sits after the build: a red gate or a failed build must leave the storage as it was.
-  test("a reset deletes nothing when a gate is red or the build fails", () => {
+  test("a reset deletes nothing when a gate is red or the build fails", async () => {
     const wiped = (events: readonly string[]) => events.filter((event) => event.startsWith("bun scripts/reset.ts wipe"));
 
-    const failedBuild = runDeploy({ option: "--reset" });
+    const failedBuild = await runDeploy({ option: "--reset" });
 
     expect(failedBuild.events).toContain("bun scripts/reset.ts plan staging");
     expect(failedBuild.events).toContain(armadaBuild("staging"));
     expect(wiped(failedBuild.events)).toEqual([]);
 
-    const redGate = runDeploy({ option: "--reset", failingGate: phaseRun("upload") });
+    const redGate = await runDeploy({ option: "--reset", failingGate: phaseRun("upload") });
 
     expect(redGate.status).not.toBe(0);
     expect(redGate.events.some((event) => event.startsWith("MUTATE "))).toBe(false);
@@ -402,9 +396,9 @@ describe("deploy gate", () => {
 
   // 2026-10-08: a staging reset stopped at its upload after the wipe. Its rerun with --reset failed the account gate on
   // every class the wipe had deleted, and went through only with --bootstrap, which nothing said to pass.
-  test("a reset whose build never uploaded is finished by the next reset deploy, its pre-deploy phase the bootstrap one", () => {
-    const resumed = runDeploy({ option: "--reset", pendingReset: "reset-20261008T050500Z" });
-    const fresh = runDeploy({ option: "--reset" });
+  test("a reset whose build never uploaded is finished by the next reset deploy, its pre-deploy phase the bootstrap one", async () => {
+    const resumed = await runDeploy({ option: "--reset", pendingReset: "reset-20261008T050500Z" });
+    const fresh = await runDeploy({ option: "--reset" });
 
     expect({
       phase: resumed.infraPhase, asked: resumed.events.includes("bun scripts/reset.ts pending staging"),
@@ -413,11 +407,11 @@ describe("deploy gate", () => {
     expect({ phase: fresh.infraPhase, planned: fresh.events.includes("bun scripts/reset.ts plan staging") }).toEqual({ phase: "full", planned: true });
   });
 
-  test("an ambient environment variable cannot point the account gate at the other deployment", () => {
+  test("an ambient environment variable cannot point the account gate at the other deployment", async () => {
     // Assigned in both arms, like the phase: `export KINU_INFRA_ENVIRONMENT=production`
     // in a shell must not make a staging deploy certify production's resources.
-    expect(runDeploy({ ambientEnvironment: "production" }).infraEnvironment).toBe("staging");
-    expect(runDeploy({ option: "--promote", ambientEnvironment: "staging" }).infraEnvironment).toBe("production");
+    expect((await runDeploy({ ambientEnvironment: "production" })).infraEnvironment).toBe("staging");
+    expect((await runDeploy({ option: "--promote", ambientEnvironment: "staging" })).infraEnvironment).toBe("production");
   });
 
   // STRUCTURAL, over the plan each phase runs, in DEPLOY_PHASES order; deploy.sh
@@ -465,8 +459,8 @@ describe("deploy gate", () => {
   // deploy.sh settles that from the child's exit status, which the kernel
   // supplies whether the runner cooperates or not, and the report names the
   // phase, since the runner could not name its rows.
-  test("a phase killed without a verdict of its own fails the deploy, and the report says so", () => {
-    const run = runDeploy({ killGate: phaseRun("source") });
+  test("a phase killed without a verdict of its own fails the deploy, and the report says so", async () => {
+    const run = await runDeploy({ killGate: phaseRun("source") });
 
     expect(run.status).toBe(1);
     // 128 + SIGKILL. The status is the child's fate, not a claim the runner made.
@@ -481,9 +475,9 @@ describe("deploy gate", () => {
   // later starts, nothing is built and nothing is published, with the former
   // skip variable (SKIP_E2E, on every run here) set. The preflight is the
   // precondition for any verdict; the upload gates hold what cannot be undone.
-  test("a red preflight or upload phase stops the deploy before anything later, the build or a publish", () => {
+  test("a red preflight or upload phase stops the deploy before anything later, the build or a publish", async () => {
     for (const [index, phase] of STOPS.entries()) {
-      const run = runDeploy({ failingGate: phase });
+      const run = await runDeploy({ failingGate: phase });
 
       expect(run.status, `${phase} did not fail the deploy`).toBe(1);
       expect(run.events, `${phase} failed and a later step ran\n${run.stdout}`).toEqual(STOPS.slice(0, index + 1));
@@ -493,21 +487,21 @@ describe("deploy gate", () => {
 
   // ONE AT A TIME (L21). Continuous staging deploys only when no staging deploy runs, and two deploys of one
   // environment would race on its Worker, record and report index.
-  test("a deploy while another of its environment runs does nothing and exits 75, and the other environment's runs", () => {
-    const blocked = runDeploy({ lockHeld: true });
+  test("a deploy while another of its environment runs does nothing and exits 75, and the other environment's runs", async () => {
+    const blocked = await runDeploy({ lockHeld: true });
 
     expect([blocked.status, blocked.events, blocked.report]).toEqual([75, [], []]);
     expect(blocked.stdout).toContain("Another staging deploy is running on this machine");
 
-    expect(runDeploy({ lockHeld: true, option: "--promote" }).status).toBe(75);
-    expect(runDeploy().events).toEqual([...STOPS, WITHDRAW, armadaBuild("staging"), ...AFTER_A_FAILED_BUILD]);
+    expect((await runDeploy({ lockHeld: true, option: "--promote" })).status).toBe(75);
+    expect((await runDeploy()).events).toEqual([...STOPS, WITHDRAW, armadaBuild("staging"), ...AFTER_A_FAILED_BUILD]);
   });
 
   // REPORT-ALL. After the upload gates nothing stops a deploy: every phase runs
   // to its end, the hammer included, so one deploy reports every red (L18).
-  test("a red after the upload gates stops nothing: every later phase runs, and the deploy is red", () => {
+  test("a red after the upload gates stops nothing: every later phase runs, and the deploy is red", async () => {
     for (const option of [undefined, "--gates-only"]) {
-      const run = runDeploy({ failingGate: phaseRun("source"), option });
+      const run = await runDeploy({ failingGate: phaseRun("source"), option });
 
       const expected = option === undefined
         ? [...STOPS, WITHDRAW, armadaBuild("staging"), ...AFTER_A_FAILED_BUILD]
@@ -520,23 +514,23 @@ describe("deploy gate", () => {
   });
 
 
-  test("a dirty checkout is rejected before verification or mutation", () => {
-    const run = runDeploy({ dirty: true });
+  test("a dirty checkout is rejected before verification or mutation", async () => {
+    const run = await runDeploy({ dirty: true });
 
     expect(run.status).not.toBe(0);
     expect(run.events).toEqual([]);
   });
 
   // Every post-publish tier reaches the scripted model through its bearer, so a deploy without it would fail after the upload.
-  test("a deploy with no scripted model key runs nothing, and --gates-only needs none", () => {
+  test("a deploy with no scripted model key runs nothing, and --gates-only needs none", async () => {
     // A key file of whitespace is no key: trimmed once, before the check and the upload alike.
     for (const scriptedKey of ["", " \n"]) {
-      const refused = runDeploy({ scriptedKey });
+      const refused = await runDeploy({ scriptedKey });
 
       expect([refused.status, refused.events]).toEqual([1, []]);
     }
 
-    expect(runDeploy({ scriptedKey: "", option: "--gates-only" }).status).toBe(0);
+    expect((await runDeploy({ scriptedKey: "", option: "--gates-only" })).status).toBe(0);
   });
 
 
@@ -554,8 +548,8 @@ describe("deploy gate", () => {
   // keep it from being a bypass: it changes the PRE-DEPLOY PHASE and nothing else
   // (no gate is added, dropped or softened), and it cannot be reached by
   // accident, ambient environment, or a typo.
-  test("bootstrap changes the phase and not one gate", () => {
-    const bootstrap = runDeploy({ option: "--bootstrap" });
+  test("bootstrap changes the phase and not one gate", async () => {
+    const bootstrap = await runDeploy({ option: "--bootstrap" });
 
     // Same phases, same order, same failure semantics as any other deploy. This
     // is the assertion that would catch a future `--bootstrap` that skipped a
@@ -566,36 +560,36 @@ describe("deploy gate", () => {
     expect(bootstrap.stdout).toContain("BOOTSTRAP");
     expect(bootstrap.stdout).toContain("Still refused before the upload");
 
-    const normal = runDeploy();
+    const normal = await runDeploy();
     expect(normal.infraPhase).toBe("full");
     expect(normal.events).toEqual(bootstrap.events);
     expect(normal.stdout).not.toContain("BOOTSTRAP");
   });
 
-  test("an ambient phase variable cannot relax a deploy nobody bootstrapped", () => {
+  test("an ambient phase variable cannot relax a deploy nobody bootstrapped", async () => {
     // The bypass this design refuses. The phase travels in the environment
     // because the gate line has to stay one string for ladder.ts to parse, so the
     // script assigns it in BOTH arms rather than reading whatever was exported —
     // otherwise `export KINU_INFRA_PHASE=bootstrap` in a shell would quietly
     // weaken every deploy launched from it.
-    const inherited = runDeploy({ ambientPhase: "bootstrap" });
+    const inherited = await runDeploy({ ambientPhase: "bootstrap" });
 
     expect(inherited.infraPhase).toBe("full");
     expect(inherited.stdout).not.toContain("BOOTSTRAP");
 
     // And the flag still wins when it is actually passed, ambient value or not.
-    const asked = runDeploy({
+    const asked = await runDeploy({
       option: "--bootstrap", ambientPhase: "post-deploy",
     });
 
     expect(asked.infraPhase).toBe("bootstrap");
   });
 
-  test("an unknown option deploys nothing", () => {
+  test("an unknown option deploys nothing", async () => {
     // Refused rather than ignored. A silently-dropped `--bootstrp` would fail the
     // deploy at the infrastructure gate with a diagnostic about a Durable Object
     // namespace, which is the wrong thing to debug.
-    const run = runDeploy({ option: "--bootstrp" });
+    const run = await runDeploy({ option: "--bootstrp" });
 
     expect(run.status).toBe(2);
     expect(run.events).toEqual([]);
@@ -603,8 +597,8 @@ describe("deploy gate", () => {
   });
 
   // A plain deploy runs no real-model eval (the owner, 2026-10-08): evals run on a quiet staging, dispatched by hand.
-  test("--evals is an option, and only a deploy given it dispatches evals.yml or starts the soak", () => {
-    expect(runDeploy({ option: "--gates-only", options: ["--evals"] }).status).toBe(0);
+  test("--evals is an option, and only a deploy given it dispatches evals.yml or starts the soak", async () => {
+    expect((await runDeploy({ option: "--gates-only", options: ["--evals"] })).status).toBe(0);
 
     // As TEXT, as the post-deploy phase below is: the fixture's build fails on purpose, so no run reaches a serving build.
     const lines = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8").split("\n").filter((line) => !line.trimStart().startsWith("#"));
@@ -628,8 +622,8 @@ describe("deploy gate", () => {
   });
 
   // The rehearsal path: every local phase, no build, no upload, no record.
-  test("gates-only runs every local phase and mutates nothing", () => {
-    const run = runDeploy({ option: "--gates-only" });
+  test("gates-only runs every local phase and mutates nothing", async () => {
+    const run = await runDeploy({ option: "--gates-only" });
 
     expect(run.status).toBe(0);
     expect(run.events).toEqual([...STOPS, phaseRun("source")]);
@@ -1104,12 +1098,11 @@ describe("CLI distribution artifacts", () => {
 
   beforeAll(async () => { distribution = await buildDist(); });
 
-  function members(archive: string): Set<string> {
-    const decoder = new TextDecoder();
-    const listing = Bun.spawnSync(["tar", "-tzf", archive], { stdout: "pipe", stderr: "pipe" });
-    expect(listing.exitCode, decoder.decode(listing.stderr)).toBe(0);
+  async function members(archive: string): Promise<Set<string>> {
+    const listing = await runToExit(["tar", "-tzf", archive]);
+    expect(listing.exitCode, listing.stderr).toBe(0);
 
-    return new Set(decoder.decode(listing.stdout).trim().split("\n"));
+    return new Set(listing.stdout.trim().split("\n"));
   }
 
   test("the build reads the CLI manifest and never writes it", () => {
@@ -1129,13 +1122,13 @@ describe("CLI distribution artifacts", () => {
     expect(stamp.version).toBe(`${base}+${stamp.sha}`);
   });
 
-  test("publishes one artifact per platform, plus the runtime they share", () => {
+  test("publishes one artifact per platform, plus the runtime they share", async () => {
     const { directory } = distribution;
 
     for (const platform of PLATFORMS) {
       const artifact = join(directory, `kinu-cli-${platform}.tar.gz`);
       expect(existsSync(artifact), `no artifact for ${platform}`).toBe(true);
-      const entries = members(artifact);
+      const entries = await members(artifact);
       expect(entries.has("kinu/cli.js"), `${platform} artifact carries no cli.js`).toBe(true);
 
       // The daemon and its stamp, for a daemon updating itself from this archive.
@@ -1196,7 +1189,7 @@ describe("CLI distribution artifacts", () => {
 
     const runtime = join(directory, CPYTHON);
     expect(existsSync(runtime)).toBe(true);
-    expect(members(runtime).has("kinu/node_modules/@nimbus-sh/runtime-cpython/manifest.json")).toBe(true);
+    expect((await members(runtime)).has("kinu/node_modules/@nimbus-sh/runtime-cpython/manifest.json")).toBe(true);
   });
 
   test("every artifact carries a matching checksum and fits the asset limit", () => {
@@ -1217,19 +1210,16 @@ describe("CLI distribution artifacts", () => {
   // over one directory and launch. Nothing resolves a dependency here, so the
   // failure the old source archive kept having — a fresh machine installing
   // cleanly and then dying on `Cannot find module` — has no path left.
-  test("the unpacked artifacts launch and report the build's stamped version", () => {
+  test("the unpacked artifacts launch and report the build's stamped version", async () => {
     const { directory } = distribution;
-    const decoder = new TextDecoder();
     const host = `${process.platform}-${process.arch}`;
     const installed = join(directory, "installed");
     mkdirSync(installed);
 
     for (const name of [`kinu-cli-${host}.tar.gz`, CPYTHON]) {
-      const unpack = Bun.spawnSync(["tar", "-xzf", join(directory, name), "-C", installed], {
-        stdout: "pipe", stderr: "pipe",
-      });
+      const unpack = await runToExit(["tar", "-xzf", join(directory, name), "-C", installed]);
 
-      expect(unpack.exitCode, decoder.decode(unpack.stderr)).toBe(0);
+      expect(unpack.exitCode, unpack.stderr).toBe(0);
     }
 
     const root = join(installed, "kinu");
@@ -1249,31 +1239,34 @@ describe("CLI distribution artifacts", () => {
 
     expect(stamp.version).toBe(`${manifest.version}+${stamp.sha}`);
 
-    const version = Bun.spawnSync([process.execPath, "run", join(root, "cli.js"), "--version"], {
-      cwd: root, env: freshHome(directory), stdout: "pipe", stderr: "pipe",
+    const version = await runToExit([process.execPath, "run", join(root, "cli.js"), "--version"], {
+      cwd: root,
+      env: freshHome(directory),
     });
 
     expect(version.exitCode, launchFailure(version)).toBe(0);
     // The stamp the assets advertise is the stamp the program reports. Two
     // stamping sites is how `kinu update` learns to chase a version nothing has.
-    expect(decoder.decode(version.stdout).trim()).toBe(stamp.version);
+    expect(version.stdout.trim()).toBe(stamp.version);
 
     // The shipped daemon, run the way a daemon updating itself runs it: it
     // loads its siblings from the archive and reports the same stamp.
-    const daemon = Bun.spawnSync([process.execPath, join(root, "pc-agent", "pc-agent.js"), "--selftest"], {
-      cwd: root, env: { ...freshHome(directory), KINU_HOME: join(root, "pc-agent") }, stdout: "pipe", stderr: "pipe",
+    const daemon = await runToExit([process.execPath, join(root, "pc-agent", "pc-agent.js"), "--selftest"], {
+      cwd: root,
+      env: { ...freshHome(directory), KINU_HOME: join(root, "pc-agent") },
     });
 
     expect(daemon.exitCode, launchFailure(daemon)).toBe(0);
-    expect(decoder.decode(daemon.stdout).trim()).toBe(stamp.version);
+    expect(daemon.stdout.trim()).toBe(stamp.version);
 
     // What install.sh itself greps for before calling the install good.
-    const help = Bun.spawnSync([process.execPath, "run", join(root, "cli.js"), "--help"], {
-      cwd: root, env: freshHome(directory), stdin: "ignore", stdout: "pipe", stderr: "pipe",
+    const help = await runToExit([process.execPath, "run", join(root, "cli.js"), "--help"], {
+      cwd: root,
+      env: freshHome(directory),
     });
 
     expect(help.exitCode, launchFailure(help)).toBe(0);
-    expect(decoder.decode(help.stdout)).toMatch(/^[ \t]+setup[ \t]/m);
+    expect(help.stdout).toMatch(/^[ \t]+setup[ \t]/m);
   });
   // The markdown pipeline the archive is for: the parser worker beside
   // cli.js, its web-tree-sitter wasm and grammar assets resolving from the
@@ -1300,16 +1293,13 @@ describe("CLI distribution artifacts", () => {
     "```",
   ].join("\n");
 
-  function unpackHostCli(into: string): string {
+  async function unpackHostCli(into: string): Promise<string> {
     const host = `${process.platform}-${process.arch}`;
-    const decoder = new TextDecoder();
 
     for (const name of [`kinu-cli-${host}.tar.gz`, CPYTHON]) {
-      const unpack = Bun.spawnSync(["tar", "-xzf", join(distribution.directory, name), "-C", into], {
-        stdout: "pipe", stderr: "pipe",
-      });
+      const unpack = await runToExit(["tar", "-xzf", join(distribution.directory, name), "-C", into]);
 
-      expect(unpack.exitCode, decoder.decode(unpack.stderr)).toBe(0);
+      expect(unpack.exitCode, unpack.stderr).toBe(0);
     }
 
     return join(into, "kinu");
@@ -1369,10 +1359,7 @@ describe("CLI distribution artifacts", () => {
   // rejecting proxy answers with a status, which fetch resolves — the child
   // turns anything but a real 200 into a nonzero exit.
   async function proveNetworkGuard(env: Record<string, string>, modelPort: number): Promise<void> {
-    const probe = Bun.spawnSync(
-      [process.execPath, "-e", "const r = await fetch('https://example.com'); if (r.status !== 200) process.exit(1)"],
-      { cwd: REPO_ROOT, env, stdout: "pipe", stderr: "pipe" },
-    );
+    const probe = await runToExit([process.execPath, "-e", "const r = await fetch('https://example.com'); if (r.status !== 200) process.exit(1)"], { cwd: REPO_ROOT, env });
 
     expect(probe.exitCode, "guard probe got a real 200 from example.com: isolation is not intercepting").not.toBe(0);
     expect(await networkAttempted(modelPort), "guard probe failed without touching the proxy").toBe(true);
@@ -1381,7 +1368,7 @@ describe("CLI distribution artifacts", () => {
     expect(reset.status).toBe(200);
   }
 
-  function provisionWorkspace(root: string, env: Record<string, string>, baseURL: string): void {
+  async function provisionWorkspace(root: string, env: Record<string, string>, baseURL: string): Promise<void> {
     const kinuHome = join(env.HOME ?? "", ".kinu");
 
     // The session override only reaches the resolver when the provider has a
@@ -1392,19 +1379,20 @@ describe("CLI distribution artifacts", () => {
       providers: { openaiCompat: { default: { baseURL, apiKey: "mock" } } },
     })}\n`);
 
-    const run = (args: string[]) => {
-      const proc = Bun.spawnSync([process.execPath, "run", join(root, "cli.js"), ...args], {
-        cwd: root, env, stdout: "pipe", stderr: "pipe",
+    const run = async (args: string[]) => {
+      const proc = await runToExit([process.execPath, "run", join(root, "cli.js"), ...args], {
+        cwd: root,
+        env,
       });
 
       expect(proc.exitCode, launchFailure(proc)).toBe(0);
     };
 
-    run(["create", "w1", "--mode", "local", "--model", "openai-compat/mock-model"]);
+    await run(["create", "w1", "--mode", "local", "--model", "openai-compat/mock-model"]);
     // Turns read the profile tier, not the actor's stored hint: `create
     // --model` writes the hint, and only `kinu model` updates the tier the
     // resolver actually consults.
-    run(["model", "w1", "openai-compat/mock-model"]);
+    await run(["model", "w1", "openai-compat/mock-model"]);
   }
 
   /** Without the worker the markers never leave, so that case reads its misses rather than failing on them. */
@@ -1436,7 +1424,7 @@ describe("CLI distribution artifacts", () => {
 
     try {
       const install = scratchDir("cli-dist-installed");
-      const root = unpackHostCli(install);
+      const root = await unpackHostCli(install);
       const env = offlineChildEnv(join(install, "home"), server.proxyPort);
 
       // The control: this environment cannot reach the outside, and reaching
@@ -1444,7 +1432,7 @@ describe("CLI distribution artifacts", () => {
       // false` verdict at the end means nothing.
       await proveNetworkGuard(env, server.modelPort);
 
-      provisionWorkspace(root, env, `http://127.0.0.1:${String(server.modelPort)}/v1`);
+      await provisionWorkspace(root, env, `http://127.0.0.1:${String(server.modelPort)}/v1`);
 
       const run = await chatSurface(root, env);
 
@@ -1487,7 +1475,7 @@ describe("CLI distribution artifacts", () => {
 
     try {
       const install = scratchDir("cli-dist-noworker");
-      const root = unpackHostCli(install);
+      const root = await unpackHostCli(install);
       const env = offlineChildEnv(join(install, "home"), server.proxyPort);
 
       // Only files the runtime can resolve: what the bundled cli.js imported
@@ -1501,7 +1489,7 @@ describe("CLI distribution artifacts", () => {
       for (const worker of workers) renameSync(worker, `${worker}.off`);
 
       try {
-        provisionWorkspace(root, env, `http://127.0.0.1:${String(server.modelPort)}/v1`);
+        await provisionWorkspace(root, env, `http://127.0.0.1:${String(server.modelPort)}/v1`);
 
         const run = await chatSurface(root, env, "report");
 
@@ -1534,7 +1522,7 @@ describe("worker release artifact", () => {
 
   let dist: string;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dist = scratchDir("worker-release-test");
     mkdirSync(join(dist, "kinu", "assets"), { recursive: true });
     mkdirSync(join(dist, "client", "assets"), { recursive: true });
@@ -1555,12 +1543,9 @@ describe("worker release artifact", () => {
     writeFileSync(join(dist, "client", "assets", "app.js"), "console.log('app');\n");
     writeFileSync(join(dist, "client", "downloads", "kinu-cli-linux-x64.tar.gz"), "not really a tarball\n");
 
-    const build = Bun.spawnSync(
-      ["bun", join(REPO_ROOT, "scripts", "build-worker-release.ts"), VERSION, "deploytest", dist],
-      { cwd: REPO_ROOT, stdout: "pipe", stderr: "pipe", env: childEnv() },
-    );
+    const build = await runToExit(["bun", join(REPO_ROOT, "scripts", "build-worker-release.ts"), VERSION, "deploytest", dist], { cwd: REPO_ROOT, env: childEnv() });
 
-    expect(build.exitCode, new TextDecoder().decode(build.stderr)).toBe(0);
+    expect(build.exitCode, build.stderr).toBe(0);
   });
 
   test("the tarball is not under the assets directory at all", () => {
@@ -1584,9 +1569,9 @@ describe("worker release artifact", () => {
     expect(stated).toBe(measured);
   });
 
-  test("the artifact carries the worker's modules and the client's assets, and neither the maps nor the downloads", () => {
-    const listed = Bun.spawnSync(["tar", "-tzf", join(dist, "worker-release", ARTIFACT)], { stdout: "pipe" });
-    const entries = new TextDecoder().decode(listed.stdout).split("\n").filter((line) => line.trim() !== "");
+  test("the artifact carries the worker's modules and the client's assets, and neither the maps nor the downloads", async () => {
+    const listed = await runToExit(["tar", "-tzf", join(dist, "worker-release", ARTIFACT)]);
+    const entries = listed.stdout.split("\n").filter((line) => line.trim() !== "");
 
     expect(entries).toContain("worker/index.js");
     expect(entries).toContain("worker/assets/esbuild-abc.wasm");
@@ -1602,9 +1587,9 @@ describe("worker release artifact", () => {
   // Measured 2026-09-21: release 0.2.0+7cb7078c8 carried both, and the
   // `.dev.vars` was this checkout's local-dev root key, published to anyone
   // who installs. A member is what the runtime loads; scaffolding is not.
-  test("the artifact carries no local-dev secrets and no build index, and the manifest names only modules", () => {
-    const listed = Bun.spawnSync(["tar", "-tzf", join(dist, "worker-release", ARTIFACT)], { stdout: "pipe" });
-    const entries = new TextDecoder().decode(listed.stdout).split("\n").filter((line) => line.trim() !== "");
+  test("the artifact carries no local-dev secrets and no build index, and the manifest names only modules", async () => {
+    const listed = await runToExit(["tar", "-tzf", join(dist, "worker-release", ARTIFACT)]);
+    const entries = listed.stdout.split("\n").filter((line) => line.trim() !== "");
 
     expect(entries.some((entry) => entry.endsWith(".dev.vars"))).toBe(false);
     expect(entries.some((entry) => entry.includes("/.vite/"))).toBe(false);
@@ -1625,9 +1610,9 @@ describe("worker release artifact", () => {
    * them through every asset, which is the difference between a peak set by
    * the largest member and one set by the release.
    */
-  test("every asset comes before every module", () => {
-    const listed = Bun.spawnSync(["tar", "-tzf", join(dist, "worker-release", ARTIFACT)], { stdout: "pipe" });
-    const entries = new TextDecoder().decode(listed.stdout).split("\n").filter((line) => line.trim() !== "");
+  test("every asset comes before every module", async () => {
+    const listed = await runToExit(["tar", "-tzf", join(dist, "worker-release", ARTIFACT)]);
+    const entries = listed.stdout.split("\n").filter((line) => line.trim() !== "");
     const lastAsset = entries.reduce((last, entry, at) => (entry.startsWith("client/") ? at : last), -1);
     const firstModule = entries.findIndex((entry) => entry.startsWith("worker/"));
 

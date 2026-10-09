@@ -415,7 +415,11 @@ export class FacetChat {
    *  later. */
   private owed(): number | null {
     const busy = this.session.turnOwed || this.terminal.closing || this.terminal.hasIncomplete();
-    const next = Math.min(this.terminal.nextRetryAt() ?? Infinity, busy ? Date.now() + RECOVERY_BACKOFF_CEILING_MS : Infinity);
+
+    // The workspace keeps one wake per agent, the latest it was told: a turn waiting out its backoff names its end.
+    const next = Math.min(
+      this.terminal.nextRetryAt() ?? Infinity, this.session.reaskDeferredTo() ?? Infinity, busy ? Date.now() + RECOVERY_BACKOFF_CEILING_MS : Infinity,
+    );
 
     return Number.isFinite(next) ? next : null;
   }

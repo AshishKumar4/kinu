@@ -98,7 +98,7 @@ export async function sessionFixture(input: {
         return { execution: assembled.execution, profile: assembled.profile, sessionKey };
       },
       owedTerminalEffects: () => [], terminal: () => terminal,
-      driverGate: () => null, armTurnWake: async () => {},
+      driverGate: () => null,
       taskList: () => actor.stores.taskList, hasPendingAsyncWake: () => false,
       steerSkills: async () => null, stillOwed: () => true,
       ...(input.cacheWarming !== undefined && { cacheWarming: input.cacheWarming(actor) }),

@@ -218,7 +218,7 @@ describe('hybridSearch', () => {
     const { facts } = createTestFactsStore();
     facts.upsert('deploy.target', 'staging');
 
-    const out = await hybridSearch('deploy target', lexicalFn, vectorStore(semanticCorpus), { facts });
+    const out = await hybridSearch('deploy target', lexicalFn, vectorStore(semanticCorpus), { facts: () => facts.all() });
 
     const hit = present(out.find((h) => h.id === 'fact:deploy.target'), 'the deploy.target fact hit');
 
@@ -239,7 +239,7 @@ describe('hybridSearch', () => {
       return 'should not run';
     };
 
-    const out = await hybridSearch('user tz', async () => [], createNoopVectorStore(), { facts, rehydrate });
+    const out = await hybridSearch('user tz', async () => [], createNoopVectorStore(), { facts: () => facts.all(), rehydrate });
 
     expect(out).toHaveLength(1);
     expect(out[0].id).toBe('fact:user.tz');
@@ -252,13 +252,7 @@ describe('hybridSearch', () => {
     const restore = setDiagnosticsSink(log);
 
     try {
-      const brokenFacts = {
-        upsert: () => 'created' as const,
-        recall: () => null,
-        forget: () => {},
-        recentTopK: () => [],
-        all: () => { throw new Error('facts table gone'); },
-      };
+      const brokenFacts = (): never => { throw new Error('facts table gone'); };
 
       const out = await hybridSearch('q', lexicalFn, createNoopVectorStore(), { facts: brokenFacts });
 

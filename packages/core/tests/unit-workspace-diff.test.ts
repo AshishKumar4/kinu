@@ -1,7 +1,7 @@
 import { exists, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { afterEach, describe, expect, setSystemTime, spyOn, test } from 'bun:test';
 import * as v from 'valibot';
-import { fakeMossaic, git, gitEnv, initRepo, scratchDir } from '@kinu.run/test-utils';
+import { fakeMossaic, git, gitEnv, initRepo, runToExit, scratchDir } from '@kinu.run/test-utils';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
@@ -63,9 +63,9 @@ function shellIn(cwd: string): ExecutionRouter {
         description: 'test shell',
         execute: async (...args) => {
           const [command] = v.parse(v.tuple([v.string()]), args);
-          const result = Bun.spawnSync(['/bin/sh', '-lc', command], { cwd, env: gitEnv(), stdout: 'pipe', stderr: 'pipe' });
+          const result = await runToExit(['/bin/sh', '-lc', command], { cwd, env: gitEnv() });
 
-          return commandResult({ stdout: result.stdout.toString(), stderr: result.stderr.toString(), exitCode: result.exitCode });
+          return commandResult({ stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode ?? undefined });
         },
       },
     },
@@ -437,6 +437,15 @@ describe('workspace diff lifecycle', () => {
     expect(told).toBe(4);
   });
 
+  test('the widest table the line bound allows fits an eighth of the silent-reset wall', () => {
+    // An eighth: the rest is the change-set's, the workspace state's and the runtime's. Raising the bound past this
+    // would let one alignment reset the object with no error. Six bytes a table element, rounded up from measurement
+    // so the bound errs small.
+    const table = (MAX_LINES_PER_FILE + 1) ** 2 * 6;
+
+    expect(table).toBeLessThanOrEqual(PLATFORM_CATALOG['do.isolate.reset_silent'].limit.value / 8);
+  });
+
   test('an appended log is diffed exactly, however long the file is', async () => {
     const { rt, workspace } = createTestRuntime();
     const baselines = await baselinesOf(rt, workspace);
@@ -621,10 +630,10 @@ describe('workspace diff lifecycle', () => {
 
   test('repeated git diff reads include untracked work without changing the real index, measured from HEAD', async () => {
     const repo = scratchDir('workspace-diff');
-    initRepo(repo);
+    await initRepo(repo);
     writeFileSync(join(repo, 'tracked.txt'), 'before\n');
-    git(repo, 'add', 'tracked.txt');
-    git(repo, 'commit', '-qm', 'seed');
+    await git(repo, 'add', 'tracked.txt');
+    await git(repo, 'commit', '-qm', 'seed');
     writeFileSync(join(repo, 'tracked.txt'), 'after\n');
     writeFileSync(join(repo, 'untracked file.txt'), 'new\n');
 
@@ -639,7 +648,7 @@ describe('workspace diff lifecycle', () => {
 
     expect(first.files.map((file) => file.path)).toEqual([`${folder}/tracked.txt`, `${folder}/untracked file.txt`]);
     expect(first.repositories).toEqual([folder]);
-    expect(first.baseline).toBe(`${folder}@${git(repo, 'rev-parse', 'HEAD').trim()}`);
+    expect(first.baseline).toBe(`${folder}@${(await git(repo, 'rev-parse', 'HEAD')).trim()}`);
     expect(second.files).toEqual(first.files);
     expect(after.equals(before)).toBe(true);
   });
@@ -647,10 +656,10 @@ describe('workspace diff lifecycle', () => {
   test('the git view lists every repository within reach of the working directory, each under its folder', async () => {
     const cwd = scratchDir('git-view');
 
-    const repository = (at: string, files: Readonly<Record<string, string>>, commit = true): string => {
+    const repository = async (at: string, files: Readonly<Record<string, string>>, commit = true): Promise<string> => {
       const root = join(cwd, at);
       mkdirSync(root, { recursive: true });
-      initRepo(root);
+      await initRepo(root);
 
       for (const [path, text] of Object.entries(files)) {
         mkdirSync(dirname(join(root, path)), { recursive: true });
@@ -658,19 +667,19 @@ describe('workspace diff lifecycle', () => {
       }
 
       if (commit) {
-        git(root, 'add', '-A');
-        git(root, 'commit', '-qm', 'seed');
+        await git(root, 'add', '-A');
+        await git(root, 'commit', '-qm', 'seed');
       }
 
       return root;
     };
 
-    const api = repository('api', { 'app.ts': 'one\n', '.gitignore': 'dist/\n' });
-    const lib = repository('api/vendor/lib', { 'lib.ts': 'one\n' });
-    repository('web', { 'index.html': '<p>web</p>\n' }, false);
-    const deep = repository('a/b/c/deep', { 'far.ts': 'one\n' });
-    const hidden = repository('.config/tool', { 'settings.json': '{}\n' });
-    const installed = repository('node_modules/pkg', { 'index.js': 'one\n' });
+    const api = await repository('api', { 'app.ts': 'one\n', '.gitignore': 'dist/\n' });
+    const lib = await repository('api/vendor/lib', { 'lib.ts': 'one\n' });
+    await repository('web', { 'index.html': '<p>web</p>\n' }, false);
+    const deep = await repository('a/b/c/deep', { 'far.ts': 'one\n' });
+    const hidden = await repository('.config/tool', { 'settings.json': '{}\n' });
+    const installed = await repository('node_modules/pkg', { 'index.js': 'one\n' });
     writeFileSync(join(api, 'app.ts'), 'two\n');
     writeFileSync(join(api, 'new.ts'), 'new\n');
     mkdirSync(join(api, 'dist'));
@@ -698,12 +707,12 @@ describe('workspace diff lifecycle', () => {
   test('a working directory inside a repository shows that repository, and the ones below it', async () => {
     const mono = join(scratchDir('git-enclosing'), 'mono');
     mkdirSync(join(mono, 'sub/inner'), { recursive: true });
-    initRepo(mono);
+    await initRepo(mono);
     writeFileSync(join(mono, 'root.txt'), 'one\n');
     writeFileSync(join(mono, 'sub/f.txt'), 'one\n');
-    git(mono, 'add', '-A');
-    git(mono, 'commit', '-qm', 'seed');
-    initRepo(join(mono, 'sub/inner'));
+    await git(mono, 'add', '-A');
+    await git(mono, 'commit', '-qm', 'seed');
+    await initRepo(join(mono, 'sub/inner'));
     writeFileSync(join(mono, 'root.txt'), 'two\n');
     writeFileSync(join(mono, 'sub/f.txt'), 'two\n');
     writeFileSync(join(mono, 'sub/inner/in.txt'), 'new\n');
@@ -724,11 +733,11 @@ describe('workspace diff lifecycle', () => {
     const odd = ['a b.txt', 'naïve.txt', 'qu"o\'te.txt', 'back\\slash.txt', 'tab\there.txt', 'line\nbreak.txt'];
     const repo = join(cwd, 'r');
     mkdirSync(repo, { recursive: true });
-    initRepo(repo);
+    await initRepo(repo);
 
     for (const name of odd) writeFileSync(join(repo, name), 'one\n');
-    git(repo, 'add', '-A');
-    git(repo, 'commit', '-qm', 'seed');
+    await git(repo, 'add', '-A');
+    await git(repo, 'commit', '-qm', 'seed');
 
     for (const name of odd) {
       writeFileSync(join(repo, name), 'two\n');
@@ -750,7 +759,7 @@ describe('workspace diff lifecycle', () => {
     const cwd = scratchDir('git-newline');
     const repo = join(cwd, 'nl\nname', 'r2');
     mkdirSync(repo, { recursive: true });
-    initRepo(repo);
+    await initRepo(repo);
     writeFileSync(join(repo, 'x.txt'), 'new\n');
 
     const { rt } = createTestRuntime();

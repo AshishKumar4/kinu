@@ -729,7 +729,7 @@
       "decision": "lexical"
     },
     {
-      "file": "packages/test-utils/src/git.ts",
+      "file": "packages/test-utils/src/git-env.ts",
       "kind": "hand-parser",
       "owner": "stripGitContext",
       "sourceSha256": "d6851f7dfc16565fc73f328d7e663184ba9ccb5804d19b862cdc5db6b86c6376",
@@ -901,6 +901,13 @@
       "kind": "regex-literal",
       "owner": "<module>",
       "sourceSha256": "884c96a030fdbb6ef3cdd5fc57517142244473c15a9fcfb3751b1d51298023d7",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/core/src/memory/lexical-recall.ts",
+      "kind": "hand-parser",
+      "owner": "lexicalGroupRelevance",
+      "sourceSha256": "daadabc0c807290cc1940c8a268472651f40343dd4da6cef11a98f44dbeb1ab9",
       "decision": "lexical"
     }
   ]

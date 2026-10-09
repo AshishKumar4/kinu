@@ -164,7 +164,7 @@ describe('a call base ran is still run', () => {
 
         return 'created';
       },
-      recall: () => null, forget: () => {}, recentTopK: () => [], all: () => [],
+      recall: () => null, forget: () => {}, recentTopK: () => [], all: () => [], history: () => [],
     };
 
     const memory = toolExecute<{ op: string; key: string; value: string; confidence: number }, JsonValue>(

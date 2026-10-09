@@ -1,12 +1,10 @@
 /** Credential-free checks for the first-run corpus, gating, and record admission. */
 import { describe, expect, test } from 'bun:test';
-import { execFileSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 
-import { assessAdmissibility, outcomeRow, projectRunEventProvenance, runToExit, scratchDir, spawnTest, subgoalOutcome, TASK_OUTCOME,
-  type EvalObservation } from '@kinu.run/test-utils';
+import { assessAdmissibility, outcomeRow, projectRunEventProvenance, runOk, runToExit, scratchDir, spawnTest, subgoalOutcome, TASK_OUTCOME, type EvalObservation } from '@kinu.run/test-utils';
 import { FLEET_MODULE, fleetCases, TUI_HARNESS } from '../../vitest.first-run.config';
 import { FIRST_RUN_CASES } from './first-run';
 import { resolvePublicSessionPlan } from '../../evals/src/session';
@@ -80,7 +78,7 @@ test('a tier stopped by its deadline names the case files that never reported', 
     exit 0`, ['done', 'stuck']);
 
   mkdirSync(tier.reports, { recursive: true });
-  execFileSync('mkfifo', [join(tier.reports, 'started'), join(tier.reports, 'hold')]);
+  await runOk(['mkfifo', join(tier.reports, 'started'), join(tier.reports, 'hold')]);
   const started = readFile(join(tier.reports, 'started'), 'utf8');
   const run = spawnTest(['setsid', 'bash', tier.script], { env: tier.env, stdout: 'pipe', stderr: 'pipe' });
 

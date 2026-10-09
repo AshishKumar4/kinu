@@ -61,7 +61,7 @@ import type { ESTree } from "@oxlint/plugins";
  * entrypoints reach. Repo-relative paths. Proven exact by `import-extension.gate.test.ts`.
  */
 export const RAW_NODE_MODULE =
-	/^(?:tools\/oxlint\/anti-slop\/.+\.ts|scripts\/(?:sources|syntax)\.ts|packages\/test-utils\/src\/git\.ts)$/u;
+	/^(?:tools\/oxlint\/anti-slop\/.+\.ts|scripts\/(?:sources|syntax)\.ts|packages\/test-utils\/src\/git-env\.ts)$/u;
 
 /** Extensions TypeScript would have emitted from. A specifier ending in one of these names a build
  *  output, and there are no build outputs. Set membership over `extname`, not a pattern: the
