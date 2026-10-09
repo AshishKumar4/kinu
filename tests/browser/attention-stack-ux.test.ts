@@ -36,7 +36,7 @@ async function decisions(page: Page): Promise<string[][]> {
 
 /** Opens the inspector's Work tab on its list: the frame's plan, awaiting review, opens the tab on its review. */
 async function openWork(page: Page): Promise<void> {
-  await page.click('.p-tabstrip button[aria-label="Work"]');
+  await page.click('nav[aria-label="Workspace"] [aria-label="Work"]');
 
   if (await page.$('[data-back-to-work]') !== null) await page.click('[data-back-to-work]');
 }
