@@ -369,15 +369,19 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     if (!this._observedTransport) {
       this._observedTransport = true;
       const deliver = transport.deliver.bind(transport);
+      const feed = this.replies.feed.bind(this.replies);
+
+      // Main's words reach this room as its isolate streams them, each fed to the replies it answers.
+      this.replies.feed = (turnId, delta) => {
+        this._deliveredText.push(delta);
+
+        for (const watcher of this._deliveryWatchers) watcher();
+
+        feed(turnId, delta);
+      };
 
       transport.deliver = (event) => {
         if (event.type === 'turn-start') this._lastTurnStart = { turnId: event.turnId, messageId: event.messageId };
-
-        if (event.type === 'text-delta') {
-          this._deliveredText.push(event.delta);
-
-          for (const watcher of this._deliveryWatchers) watcher();
-        }
 
         return deliver(event);
       };
