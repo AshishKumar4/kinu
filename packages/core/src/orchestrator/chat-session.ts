@@ -720,6 +720,19 @@ export class ChatSession {
     return closed;
   }
 
+  /**
+   * Whether a queued item's obligation still stands at dequeue: its host's (a plan's handoff), and for an answer's
+   * turn, its asking turn's resume, which a Stop, a clear or the owner's message may have retired since it queued.
+   */
+  private stillOwed(item: QueueItem): boolean {
+    if (!this.ports.stillOwed(item.metadata)) return false;
+
+    if (item.metadata?.kinuEvent !== OWNER_ANSWER_SIGNAL) return true;
+    const asked = item.metadata.askTurn;
+
+    return this.actorSession.questions.owedResumes().some((owed) => owed.turnId === asked);
+  }
+
   /** A Stop, a clear or a walk-back: nothing the agent asked is waited on or resumed; what waited behind it may run. */
   private abandonQuestions(): void {
     if (this.actorSession.questions.abandon() > 0) this.pump();
@@ -985,7 +998,7 @@ export class ChatSession {
           continue;
         }
 
-        if (!this.ports.stillOwed(item.metadata)) {
+        if (!this.stillOwed(item)) {
           diagnostics.event('turn.no_longer_owed', {
             signal: v.is(v.string(), item.metadata?.kinuEvent) ? item.metadata.kinuEvent : 'unknown',
           });

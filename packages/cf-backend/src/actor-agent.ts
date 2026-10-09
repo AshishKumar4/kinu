@@ -864,7 +864,7 @@ export abstract class ActorAgent extends Agent<Env> {
       const [answered, asker] = parsed.output;
 
       return asker === null ? this.chatLoop.answerQuestions(id, answered) : attemptInItsWords('unavailable', () => this.hostedQuestions().answer(asker, id, answered));
-    }));
+    }).pipe(Effect.andThen(Effect.sync(() => { this.overviewChanged(); }))));
   }
 
   /** Closed unanswered; the agent reads that at its next turn, and what waited behind the questions runs. */
@@ -874,7 +874,12 @@ export abstract class ActorAgent extends Agent<Env> {
 
     if (!asker.success) return settle(Effect.fail(new KinuError('bad_input', 'actor: an agent id, or null for the workspace agent')));
 
-    return { closed: asker.output === null ? this.chatLoop.dismissQuestions(id) : await this.hostedQuestions().dismiss(asker.output, id) };
+    const closed = asker.output === null ? this.chatLoop.dismissQuestions(id) : await this.hostedQuestions().dismiss(asker.output, id);
+
+    // A tile counts the open questions as decisions waiting.
+    this.overviewChanged();
+
+    return { closed };
   }
 
   /** The orchestrator answers with the root budget; a facet actor answers from durable storage,
@@ -3786,7 +3791,11 @@ export abstract class ActorAgent extends Agent<Env> {
     const turnId = this.durableTurnId();
 
     return await cancelCurrentWork({
-      cancelChats: () => { this.chatLoop.stop(); },
+      // A Stop dismisses the open questions, which a tile counts as decisions waiting.
+      cancelChats: () => {
+        this.chatLoop.stop();
+        this.overviewChanged();
+      },
       activeToolControllers: this.jobRunner.foreground,
       broadcast: (payload) => { this.broadcastToActor(null, payload); },
       stopDeviceCommands: turnId === null ? undefined : () => settle(Effect.catchCause(Effect.promise(async () => {
