@@ -397,7 +397,7 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
 
       STUB.set(path, { key: "sandbox_size", value });
 
-      return fixtureJson({ ok: true });
+      return fixtureJson({ ok: STUB.has(path) });
     }
   }
 
