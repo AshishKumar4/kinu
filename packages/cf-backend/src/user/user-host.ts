@@ -5,11 +5,16 @@ import type { ResolvedCaller, UserCaller, WorkspaceCapability } from '@kinu.run/
 
 export interface SqlRow extends Record<string, SqlStorageValue> {}
 
+/** Whether the browser session a token hash names still stands. */
+export type SessionStands = (tokenHash: string) => boolean;
+
 export interface UserObjectHost {
   readonly ctx: AgentContext;
   readonly env: Env;
   sqlx<T extends SqlRow = SqlRow>(query: string, ...bindings: SqlStorageValue[]): T[];
   requireTier(caller: UserCaller, capability: WorkspaceCapability): Promise<ResolvedCaller>;
+  /** A socket runs on the browser session its upgrade named, and is sent to only while that session stands. */
+  readonly sessionStands: SessionStands;
 }
 
 /** What a single-row table's one row holds in the column `query` selects as `value`; undefined before it is written. */

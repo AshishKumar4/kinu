@@ -2,7 +2,7 @@
 import { useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import {
-  BrainIcon, ChartBarIcon, CloudIcon, DesktopTowerIcon, FlaskIcon, NotebookIcon, PlugIcon, TerminalIcon, UserCircleIcon,
+  BrainIcon, ChartBarIcon, DesktopIcon, DesktopTowerIcon, FlaskIcon, NotebookIcon, PlugIcon, TerminalIcon, UserCircleIcon,
 } from "@phosphor-icons/react";
 import { tabCls } from "@/components/ui/form";
 
@@ -12,7 +12,7 @@ const SETTINGS_SECTIONS = {
   providers: { label: "Providers", Icon: PlugIcon, about: "Model access for every workspace you own." },
   models: { label: "Models", Icon: BrainIcon, about: "Which model each tier and role uses, in every workspace you own." },
   memory: { label: "Memory", Icon: NotebookIcon, about: "What every workspace and agent of yours remembers about you, once you accept it." },
-  sandbox: { label: "Cloud computer", Icon: CloudIcon, about: "The size of every workspace's cloud computer, unless the workspace chooses its own." },
+  sandbox: { label: "Computer", Icon: DesktopIcon, about: "The size of every workspace's computer, unless the workspace chooses its own." },
   beta: { label: "Beta", Icon: FlaskIcon, about: "What is still being shaped, off until you turn it on, in every workspace you own." },
   usage: { label: "Usage", Icon: ChartBarIcon, about: "What each provider account spent across every workspace you own, and the quota it has left." },
   cli: { label: "CLI", Icon: TerminalIcon, about: "The command line, on a machine of yours." },

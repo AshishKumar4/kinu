@@ -1030,6 +1030,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       slate: (actor, operation) => this.slateAs(
         { path: [{ name: actor.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, operation,
       ),
+      slateBuild: (actor, slate) => this.slateBuildAs({ path: [{ name: actor.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, slate),
       deferrals: (actorId) => this.deferralChannel(actorId),
       refinementLane: () => async () => { await refinementPass(this.refinementDeps); },
       advisorPort: (reference) => this.temporaryAgentPort(reference),
@@ -1199,7 +1200,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ...(account !== undefined && { account }),
       webSearch,
       jobs: this.hireJobs(turn.actor, turn.input.mode),
-      slate: (operation) => this.slateAs({ path: [{ name: turn.actor.record.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, operation),
+      slateBuild: (slate) => this.slateBuildAs({ path: [{ name: turn.actor.record.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, slate),
       ...(report !== undefined && { report }),
       // The owner's own turns, and its plan's feedback turn; a hirer's turn is never asked for the owner's review.
       ...(!turn.parentDriven && planSubmissionReach(turn.input.mode, turn.driving) && { submitPlan: { submit: async (edits) => await this.hostedPlanSubmit(turn, edits) } }),
@@ -4653,6 +4654,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.slates.operation(caller, operation);
   }
 
+  override async slateBuild(slate: string): Promise<SlateCallResult> {
+    return this.slates.build(this.slateCaller(), slate);
+  }
+
+  /** Whether a slate still builds, for an actor of this workspace acting as itself; DO-only, like `slateAs`. */
+  async slateBuildAs(caller: SlateCaller, slate: string): Promise<SlateCallResult> {
+    return this.slates.build(caller, slate);
+  }
+
   /** Names only, never surfaces: the graph shows what a slate has reached; each call is still decided as it comes. */
   protected async slateSurfaceCatalog(): Promise<SlateSurfaceCatalog> {
     const descriptors = await this.requireOwnerUserDO().userMcp_toolDescriptors(await this.userCaller());
@@ -5544,9 +5554,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       if (executorId !== 'sandbox') return { error: `${executorId} has no terminal` };
       const handle = this.rt.sandboxHandle;
 
-      if (!handle) return { error: 'the sandbox container is not configured for this workspace' };
+      if (!handle) return { error: 'this workspace has no computer configured' };
 
-      return (yield* terminalStep(Effect.promise(() => handle.ensureReady()), 'preparing the sandbox container for a terminal')) ?? { ok: true };
+      return (yield* terminalStep(Effect.promise(() => handle.ensureReady()), 'preparing the computer for a terminal')) ?? { ok: true };
     }));
   }
 

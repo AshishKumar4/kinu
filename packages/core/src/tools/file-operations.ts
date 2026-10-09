@@ -11,7 +11,7 @@ import type { CheckpointFiles, Memory, VfsWriteReport } from '../types/primitive
 import type { TurnContextBudget } from '../context-budget';
 import { ensureDir, vfsDirname } from '../utils/vfs-helpers';
 import { memoryIndexPath } from '../memory/note';
-import { applyFileEdits, formatFileSlice, FILE_READ_LINES, FILE_READ_MAX_CHARS, FILE_REFUSAL_REASONS, type FileEdit } from './file-edit';
+import { applyFileEdits, formatFileSlice, FILE_READ_LINE_CHARS, FILE_READ_LINES, FILE_READ_MAX_CHARS, FILE_REFUSAL_REASONS, type FileEdit } from './file-edit';
 import { FileRefusalError } from '../types/file-edits';
 import { readFileHead, readFileText, scanFileWindow, type ScannedFile } from './file-scan';
 import type { TurnFileLedger, FileEditOutcomeReason, FileSeenNeed } from '../vfs/file-ledger';
@@ -30,7 +30,7 @@ import { BUILTIN_TOOL_DESCRIPTIONS } from './registry';
 import type { Tool } from 'ai';
 import { FILE, type SlateBuildNoteSchema } from '../operations/file';
 import { SLATES_ROOT } from '../vfs/workspace-path';
-import type { SlateCallResult, SlateOperation } from '../slates/rpc';
+import type { SlateCallResult } from '../slates/rpc';
 
 /** Most names one `list` returns; matches `tools/db-codemode.ts` SELECT_LIMIT_MAX. */
 const FILE_LIST_MAX_ENTRIES = 1_000;
@@ -130,10 +130,11 @@ export interface FileDeps {
   /** Where paths land (`vfs/resolve.ts`), so results name files as `root://path`. */
   readonly planes: PathPlanes;
   /**
-   * The workspace's slates, so a write into one answers whether it still builds, by the build its preview serves.
-   * Cloudflare only: the CLI hosts no slates, so it leaves this unset (`scripts/capability-parity.lock.json`).
+   * Whether a slate still builds, by the build its preview serves, so a write into one answers it. A check, not a
+   * preview: the turn's answer still draws the slate. Cloudflare only: the CLI hosts no slates, so it leaves this
+   * unset (`scripts/capability-parity.lock.json`).
    */
-  readonly slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
+  readonly slateBuild?: (slate: string) => Promise<SlateCallResult>;
 }
 
 const SLATE_FILE = new RegExp(`^${SLATES_ROOT}/([^/]+)/`);
@@ -144,12 +145,12 @@ const BrokenSchema = v.object({ broken: v.string() });
 async function slateBuild(deps: FileDeps, path: string): Promise<{ readonly build?: v.InferOutput<typeof SlateBuildNoteSchema> }> {
   const slate = SLATE_FILE.exec(resolvePath(path, deps.planes).absolute)?.[1];
 
-  if (slate === undefined || deps.slate === undefined) return {};
-  const previewed = await deps.slate({ op: 'preview', id: slate });
+  if (slate === undefined || deps.slateBuild === undefined) return {};
+  const built = await deps.slateBuild(slate);
 
   // Only its own files can be at fault; a preview this deployment cannot serve says nothing about them.
-  if (!previewed.ok) return previewed.reason === 'bad_input' ? { build: { slate, builds: false, error: previewed.error } } : {};
-  const broken = v.safeParse(BrokenSchema, previewed.value);
+  if (!built.ok) return built.reason === 'bad_input' ? { build: { slate, builds: false, error: built.error } } : {};
+  const broken = v.safeParse(BrokenSchema, built.value);
 
   return { build: broken.success ? { slate, builds: false, error: broken.output.broken } : { slate, builds: true } };
 }
@@ -252,7 +253,9 @@ function fileOps(deps: FileDeps) {
         return { reason: 'unread', refusal:
           `You have read only lines 1-${verdict.coveredTo} of ${verdict.total} in ${path}, so replacing it ` +
           `would discard ${verdict.total - verdict.coveredTo} lines you have not seen. ` +
-          `Change part of it with op=edit, or read the rest first (op=read path=${path} offset=${verdict.coveredTo + 1}).` };
+          `Change part of it with op=edit, or read the rest first (op=read path=${path} offset=${verdict.coveredTo + 1}). ` +
+          `If line ${verdict.coveredTo + 1} runs past ${String(FILE_READ_LINE_CHARS)} characters, a read cuts it and never counts it as seen: ` +
+          'read the whole file with workspace.readFile inside eval to cover it.' };
       case 'stale':
         return { reason: 'stale', refusal:
           `${path} changed since you read it. Read it again (op=read path=${path}) before you ` +
@@ -304,7 +307,7 @@ function fileOps(deps: FileDeps) {
     const slice = formatFileSlice(scanned.window, { path, limit: args.limit, maxChars });
 
     ledger.observeRange(path, {
-      fingerprint: scanned.fingerprint, first: slice.first, last: slice.last, total: slice.total, revision: scanned.revision,
+      fingerprint: scanned.fingerprint, first: slice.first, last: slice.uncutTo, total: slice.total, revision: scanned.revision,
     });
 
     if (slice.omitted > 0) {
@@ -405,8 +408,7 @@ function fileOps(deps: FileDeps) {
       let report: VfsWriteReport | null;
 
       try {
-        // Coverage carries across the edit: only the named span changed.
-        report = await persist(path, outcome.content, (writtenRevision) => ledger.observeEdited(path, current, outcome.content, writtenRevision), revision);
+        report = await persist(path, outcome.content, (writtenRevision) => ledger.observeEdited(path, current, outcome, writtenRevision), revision);
       } catch (err) {
         const vfsFail = await vfsFailure(vfs, { error: err }, 'edit', path);
         ledger.recordEdit(path, vfsFail.reason);

@@ -8,10 +8,10 @@ import type { UIMessage } from 'ai';
 
 import type { PlanReview, SlateSummary, JsonObject, JsonValue } from '@kinu.run/core';
 import { MOVIE_CUES, MOVIE_END } from '@kinu.run/core';
-import { PLAN_FIXTURE, SLATE_PREVIEW_URL, SLATE_SUMMARY } from './landing-fixtures';
-import { SLATE_PREFIX, type SlateSurfaceKind } from '@kinu.run/core';
+import { LANDING_OWNER, PLAN_FIXTURE, SLATE_PREVIEW_URL, SLATE_SUMMARY } from './landing-fixtures';
+import { SLATE_PREFIX, planSurface, type PlanSurfaceKind, type SlateSurfaceKind } from '@kinu.run/core';
 
-type MovieSurface = 'Work' | SlateSurfaceKind;
+type MovieSurface = 'Work' | PlanSurfaceKind | SlateSurfaceKind;
 
 export type MovieTarget = 'cursor-origin' | 'composer' | 'approve' | 'slate-tab';
 
@@ -263,6 +263,13 @@ function phaseAt(t: number): MoviePhaseLabel {
   return { phase: 'asking', label: 'New task' };
 }
 
+/** Work until the plan is ready, then the plan's own page until the slate opens in its tab. */
+function surfaceAt(t: number): MovieSurface {
+  if (t >= MOVIE_CUES.slateOpen) return `${SLATE_PREFIX}${SLATE_SUMMARY.id}`;
+
+  return t >= MOVIE_CUES.planReady ? planSurface({ owner: LANDING_OWNER.name, id: MOVIE_PLAN.id, revision: MOVIE_PLAN.revision }) : 'Work';
+}
+
 export function discreteAt(t: number): MovieDiscrete {
   const { phase, label } = phaseAt(t);
 
@@ -272,7 +279,7 @@ export function discreteAt(t: number): MovieDiscrete {
     composerText: composerTextAt(t),
     messages: messagesAt(t),
     plan: t >= MOVIE_CUES.planReady ? MOVIE_PLAN : null,
-    surface: t >= MOVIE_CUES.slateOpen ? `${SLATE_PREFIX}${SLATE_SUMMARY.id}` : 'Work',
+    surface: surfaceAt(t),
     slates: t >= MOVIE_CUES.previewDone ? [SLATE_SUMMARY] : [],
     streaming: (t >= MOVIE_CUES.reasoning && t < MOVIE_CUES.submitted)
       || (t >= MOVIE_CUES.approvedText && t < MOVIE_CUES.finalText),

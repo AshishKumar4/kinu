@@ -12,10 +12,10 @@ import {
   type ReactNode,
 } from "react";
 
-import { rosterBucket, rosterMatches } from "@kinu.run/core";
+import { rosterBucket, rosterMatches, type AccountMemoryProposal } from "@kinu.run/core";
 import {
   AccountMemoryFrameSchema, listWorkspaces, RosterFrameSchema, ROSTER_SOCKET_ROUTE, UserApiError,
-  type PendingAccountProposal, type RosterCounts, type RosterEntry, type RosterFilterBucket, type RosterFrame, type RosterPage, type WorkspaceEntry,
+  type RosterCounts, type RosterEntry, type RosterFilterBucket, type RosterFrame, type RosterPage, type WorkspaceEntry,
 } from "@/lib/user-api";
 import { detach, renderThrownChain, tolerate, settleSync } from "@kinu.run/core/obs";
 
@@ -52,7 +52,7 @@ interface WorkspaceRosterValue extends RosterPages {
   /** Moves on each socket open, since frames missed while it was down are not replayed. */
   readonly epoch: number;
   /** The account-memory proposals waiting on the owner, as the user object last sent them; null before it has. */
-  readonly accountProposals: readonly PendingAccountProposal[] | null;
+  readonly accountProposals: readonly AccountMemoryProposal[] | null;
 }
 
 const WorkspaceRosterContext = createContext<WorkspaceRosterValue | null>(null);
@@ -230,7 +230,7 @@ const ALL: RosterFilter = {};
 export function WorkspaceRosterProvider({ children, live = openRosterSocket }: { readonly children: ReactNode; readonly live?: RosterLive }) {
   const listeners = useRef(new Set<FrameListener>());
   const [epoch, setEpoch] = useState(0);
-  const [accountProposals, setAccountProposals] = useState<readonly PendingAccountProposal[] | null>(null);
+  const [accountProposals, setAccountProposals] = useState<readonly AccountMemoryProposal[] | null>(null);
 
   const subscribe = useCallback((listener: FrameListener): () => void => {
     listeners.current.add(listener);

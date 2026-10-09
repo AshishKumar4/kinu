@@ -141,7 +141,7 @@ straight to disk.
    a Durable Object. A first deployment has no previous version, so its upload
    serves at once.
 7. **Done.** The page shows the address, the sign-in email, and the connect
-   command for the user's computer, with the curl already pointing at their
+   command for the user's PC, with the curl already pointing at their
    instance.
 
 ## Updates

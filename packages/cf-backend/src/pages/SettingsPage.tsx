@@ -437,7 +437,7 @@ export function StandingApprovalsCard({ rpc }: { rpc: Rpc }) {
                 onClick={() => detach(revoke(grant))}
                 disabled={busy !== null}
                 className="ml-auto px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text disabled:opacity-50"
-                title={`Ask again next time a command trips ${grant.rule} on ${grant.executor}`}
+                title={`Ask again next time a command trips ${grant.rule} on ${executorLabel(grant.executor)}`}
               >{busy === `${grant.rule}@${grant.executor}` ? "…" : "Revoke"}</button>
             </div>
           ))}

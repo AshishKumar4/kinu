@@ -1,5 +1,9 @@
 /** D72: these contracts run on a throwaway Cloudflare container, never a local image. */
-import { Files } from '@cloudflare/sandbox';
+import { Files, SandboxFileError } from '@cloudflare/sandbox';
+import * as v from 'valibot';
+import { settle } from '../src/errors';
+import { describeThrown } from '../src/lifecycle';
+import { listFiles } from '../src/file-listing';
 import { Processes, CONTAINER_TRUST_ENV, TRUST } from '../src/processes';
 import { collectExecRecords } from '../src/exec-stream';
 import { TOOLS_STAMP, toolsInstallCommand } from '../src/tools';
@@ -197,6 +201,35 @@ async function trust(container: Container): Promise<void> {
       + `echo $(( $(grep -c 'BEGIN CERTIFICATE' ${bundle}) - $(grep -c 'BEGIN CERTIFICATE' ${system}) ))`), '1');
   } finally {
     await native(container, `if [ '${save}' = yes ]; then cp ${SCRATCH}/tls/original ${ca}; else rm -f ${ca}; fi; cat ${system} >${bundle}`);
+  }
+}
+
+/** Compare native POSIX failures with the SDK used before the batched listing. */
+export async function fileErrorContract(container: Container, path: string): Promise<void> {
+  // 2026-10-09, job 20261009181805-03542862: native user=65534:65534 still read mode-0700 root directories.
+  const restricted = { exec: (argv: string[], options?: ContainerExecOptions) => container.exec([
+    'setpriv', '--reuid=65534', '--regid=65534', '--clear-groups', '--bounding-set=-all', '--inh-caps=-all', '--ambient-caps=-all', ...argv,
+  ], options) };
+
+  const failures: [string, string][] = [[`${path}/missing`, 'ENOENT'], [`${path}/file`, 'ENOTDIR'], [`${path}/loop`, 'ELOOP'], [`${path}/private`, 'EACCES']];
+
+  for (const [operand, code] of failures) {
+    const [batch, sdk] = await Promise.allSettled([
+      settle(listFiles(restricted, operand)), new Files(restricted).readDirectory(operand),
+    ]);
+
+    if (batch?.status !== 'rejected' || sdk?.status !== 'rejected' || !SandboxFileError.is(sdk.reason)) {
+      const batchDetail = batch?.status === 'rejected' ? describeThrown({ cause: batch.reason }) : batch?.status;
+      const sdkDetail = sdk?.status === 'rejected' ? describeThrown({ cause: sdk.reason }) : sdk?.status;
+
+      throw new Error(`the ${code} listing contract was not observed: batch=${batchDetail}, SDK=${sdkDetail}`);
+    }
+
+    const failure = v.parse(v.object({ cause: v.object({ code: v.string(), path: v.string(), operation: v.string() }) }), batch.reason);
+
+    if (failure.cause.code !== code || sdk.reason.code !== code || failure.cause.path !== sdk.reason.path || failure.cause.operation !== sdk.reason.operation) {
+      throw new Error('the batched listing changed the SDK POSIX failure contract');
+    }
   }
 }
 

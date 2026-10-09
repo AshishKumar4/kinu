@@ -63,7 +63,7 @@ const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: '/takes', description: 'Compare the latest alternate takes; pick one by number', usage: '/takes [n]', run: takesCommand },
   { name: '/tree', description: 'Show the swarm search tree', aliases: ['/swarm'], run: treeCommand },
   { name: '/jobs', description: 'List background jobs', run: jobsCommand },
-  { name: '/connect', description: 'Connect this computer so the agent can run commands on it', requires: 'consents', run: connectCommand },
+  { name: '/connect', description: 'Connect this PC so the agent can run commands on it', requires: 'consents', run: connectCommand },
   { name: '/stop', description: 'Stop the running turn', run: stopCommand },
   { name: '/copy', description: 'Copy the last answer to the clipboard', run: copyCommand },
   { name: '/export', description: 'Write this conversation to a Markdown file', usage: '/export [path]', run: exportCommand },

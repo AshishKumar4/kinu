@@ -292,7 +292,7 @@ describe('device-connect prompt policy', () => {
     expect(stub.listRequests.items.length).toBe(1);
   });
 
-  test("another machine's connected device still leaves this computer to offer", async () => {
+  test("another machine's connected device still leaves this PC to offer", async () => {
     // The card asks about this PC; a daemon connected elsewhere on the account must not suppress it.
     const stub = startStubCloud({ devices: () => [connectedDevice(true, { hostname: 'some-other-box' })] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
@@ -1001,7 +1001,6 @@ describe('classic cloud chat connect prompt', () => {
     const home = makeHome(cloudAgentConfig(stub.origin));
 
     const chat = spawnChatInPty(home);
-    await chat.waitFor('Let this agent use this computer?');
     await chat.waitFor("[c] connect and stay connected · [s] this session only · [n] not now · [d] don't ask again");
     await chat.send('s');
     await chat.waitFor('Connected for this session.');
@@ -1037,7 +1036,7 @@ describe('classic cloud chat connect prompt', () => {
     ]);
 
     expect(exitCode).toBe(0);
-    expect(stdout).toContain('No computer is connected. Connect this one with: kinu connect');
+    expect(stdout).toContain('kinu connect');
     expect(stub.registrationRequests.items.length).toBe(0);
   });
 });

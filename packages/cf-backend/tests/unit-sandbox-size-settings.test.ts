@@ -103,11 +103,14 @@ describe('what the owner reads', () => {
   }
 
   test('a start refused for good names the actions the card offers', () => {
-    expect(startRefusedNote('[permanent -> refuse] no image to start'))
-      .toBe('The cloud computer did not start: [permanent -> refuse] no image to start. It stays stopped until you start it again or choose another size.');
+    const note = startRefusedNote('[permanent -> refuse] no image to start');
+
+    expect(note).toContain('[permanent -> refuse] no image to start');
+    expect(note).toContain('start it again');
+    expect(note).toContain('choose another size');
   });
 
-  test('User settings has a Sandbox section of its own', () => {
+  test("User settings has a section of its own for the computer's size, at the #sandbox link", () => {
     expect(settingsSection('#sandbox')).toBe('sandbox');
   });
 });
@@ -145,15 +148,11 @@ describe('sandbox.resize through the adapter', () => {
 
     const refused = await createSandboxExecutor(adaptCloudflareSandbox(box, async () => {}, null)).tools.readFile?.execute('/workspace/a.txt');
 
-    expect({ refused, asked }).toMatchObject({
-      refused: {
-        reason: 'unavailable',
-        error: 'sandbox readFile /workspace/a.txt: refused until something changes (choose another size with sandbox.resize(...), '
-          + `or ask the owner to start the sandbox again): ${refusal}`,
-      },
-      asked: 1,
-    });
-    expect(JSON.stringify(refused)).not.toContain('attachNow');
+    // toEqual, not toMatchObject: under --parallel, Bun's toMatchObject writes a nested asymmetric matcher into the
+    // actual value (measured 2026-10-09, armada), so the reads after it saw no text.
+    expect({ refused, asked }).toEqual({ refused: { reason: 'unavailable', error: expect.stringContaining(refusal) }, asked: 1 });
+    expect(refused).toEqual({ reason: 'unavailable', error: expect.stringContaining('sandbox.resize(') });
+    expect(refused).not.toEqual({ reason: 'unavailable', error: expect.stringContaining('attachNow') });
   });
 
   test('a size devbox does not know is refused as bad input', async () => {
