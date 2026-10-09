@@ -5,7 +5,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import {
-  CircleIcon, DesktopIcon, FolderOpenIcon, LockSimpleIcon, PlugIcon, TerminalIcon,
+  ArrowSquareOutIcon, CircleIcon, CloudIcon, DesktopTowerIcon, FolderOpenIcon, GitForkIcon, LockSimpleIcon, PlugIcon, SquaresFourIcon,
+  type Icon,
 } from "@phosphor-icons/react";
 import { EXECUTOR_MOUNTS, desktopClientUrl, type MountInfo } from "@kinu.run/core";
 import type { ExecutorCommandResult, Rpc } from "@kinu.run/core";
@@ -19,6 +20,7 @@ import { TerminalPane } from "@/components/TerminalPane";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { SandboxSizeRow } from "@/components/SandboxSize";
+import { Segmented } from "@/components/ui/Segmented";
 
 export interface EnvironmentSurfaceProps {
   rpc: Rpc;
@@ -38,6 +40,21 @@ function filesRootFor(name: string): string | null {
 
   return prefixes[name] ?? null;
 }
+
+/** Each environment's mark, the one the Files drive and the device pages use for the same thing. */
+const ENVIRONMENT_ICONS = {
+  workspace: SquaresFourIcon,
+  device: DesktopTowerIcon,
+  sandbox: CloudIcon,
+  parent: GitForkIcon,
+} satisfies Record<string, Icon>;
+
+function environmentIcon(name: string): Icon {
+  return Object.entries(ENVIRONMENT_ICONS).find(([key]) => key === name)?.[1] ?? PlugIcon;
+}
+
+/** A PC that is not connected is an offer to connect one, not an environment. */
+const isOfferedPc = (mount: MountInfo): boolean => mount.name === "device" && !mount.live;
 
 type StatusReading = { word: string; dotClass: string };
 
@@ -81,17 +98,18 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
   }, [availabilitySignature, reload]);
 
   const execByName = useMemo(() => new Map(executors.map((e) => [e.name, e])), [executors]);
+  const environments = useMemo(() => mounts.filter((m) => !isOfferedPc(m)), [mounts]);
+  const pcOffered = mounts.some(isOfferedPc);
 
   // Default selection: the environment the agent last worked in.
   const defaultMount = useMemo(() => {
     const preferred = pickDefaultExecutor(executors, lastActiveExecutor);
-    const match = mounts.find((m) => m.name === preferred);
+    const match = environments.find((m) => m.name === preferred);
 
-    return match?.name ?? mounts.find((m) => m.live)?.name ?? mounts[0]?.name ?? null;
-  }, [executors, lastActiveExecutor, mounts]);
+    return match ?? environments.find((m) => m.live) ?? environments[0] ?? null;
+  }, [executors, lastActiveExecutor, environments]);
 
-  const selectedName = selected ?? defaultMount;
-  const selectedMount = mounts.find((m) => m.name === selectedName) ?? null;
+  const selectedMount = environments.find((m) => m.name === selected) ?? defaultMount;
   const selectedExec = selectedMount ? execByName.get(selectedMount.name) : undefined;
 
   return (
@@ -101,28 +119,28 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
           <LoadFailure what="the environments" message={resource.message} onRetry={reload} className="p-card px-3 py-2" />
         )}
 
-        <section>
+        <section aria-label="Environments">
           <div className="flex items-center gap-2 mb-2">
             <span className="p-label">Environments</span>
           </div>
           {/* A track of minmax(0, 1fr) at every width: an implicit one sized to the widest card's content, its size choice
               the widest, and pushed every card past the panel (staging, 2026-10-08). */}
-          <div className="grid grid-cols-1 gap-2 @[38rem]:grid-cols-2 @[64rem]:grid-cols-3">
-            {mounts.map((m) => (
+          <div className="grid grid-cols-1 items-start gap-2 @[38rem]:grid-cols-2 @[64rem]:grid-cols-3">
+            {environments.map((m) => (
               <EnvironmentCard
                 key={m.name}
                 rpc={rpc}
                 mount={m}
                 exec={execByName.get(m.name)}
-                active={selectedName === m.name}
+                active={selectedMount?.name === m.name}
                 onSelect={() => setSelected(m.name)}
                 onOpenFiles={onOpenFiles}
-                onConnectDevice={onConnectDevice}
               />
             ))}
             {mounts.length === 0 && loaded !== null && <span className="text-xs p-text-3">No environments available.</span>}
             {mounts.length === 0 && resource.status === "loading" && <span className="text-xs p-text-3">loading…</span>}
           </div>
+          {pcOffered && <ConnectPcOffer onConnectDevice={onConnectDevice} />}
         </section>
       </div>
 
@@ -132,21 +150,23 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
         workspace={workspaceName}
         executorOutputs={executorOutputs}
         onExecute={onExecute}
-        onConnectDevice={onConnectDevice}
       />
     </div>
   );
 }
 
-function SelectedEnvironmentPane({ mount, exec, workspace, executorOutputs, onExecute, onConnectDevice }: {
+type PaneView = "terminal" | "desktop";
+
+const PANE_VIEWS = [{ id: "terminal", label: "Terminal" }, { id: "desktop", label: "Desktop" }] as const;
+
+function SelectedEnvironmentPane({ mount, exec, workspace, executorOutputs, onExecute }: {
   mount: MountInfo | null;
   exec: ExecutorInfo | undefined;
   workspace: string;
   executorOutputs: Map<string, ExecutorOutput[]>;
   onExecute: (id: string, cmd: string) => Promise<ExecutorCommandResult>;
-  onConnectDevice: () => void;
 }) {
-  const [desktop, setDesktop] = useState(false);
+  const [view, setView] = useState<PaneView>("terminal");
 
   if (mount === null) return <div className="flex-1 min-h-0" />;
 
@@ -161,30 +181,43 @@ function SelectedEnvironmentPane({ mount, exec, workspace, executorOutputs, onEx
   if (!mount.live) {
     return (
       <div className="flex-1 min-h-0">
-        <UnavailableMount mount={mount} exec={exec} onConnectDevice={onConnectDevice} />
+        <UnavailableMount mount={mount} exec={exec} />
       </div>
     );
   }
 
-  const showDesktop = exec?.name === "sandbox" && desktop;
+  const name = exec?.label ?? executorLabel(mount.name);
+  const KindIcon = environmentIcon(mount.name);
+  // Only the cloud computer has a screen.
+  const desktop = exec?.name === "sandbox" ? desktopClientUrl(location, workspace) : null;
+  const shown = desktop === null ? "terminal" : view;
 
   return (
-    <>
-      <div className="flex items-center gap-1.5 px-3 py-1.5 border-b p-border shrink-0">
-        {showDesktop ? <DesktopIcon size={12} className="p-text-3" /> : <TerminalIcon size={12} className="p-text-3" />}
-        <span className="p-meta p-text-3">{showDesktop ? "Desktop ·" : "Terminal ·"}</span>
-        <span className="p-annotation p-text-3">{executorLabel(mount.name)}</span>
-        {exec?.name === "sandbox" && (
-          <button
-            data-env-desktop
-            onClick={() => setDesktop(!desktop)}
-            className="ml-auto flex items-center gap-1 px-2 py-0.5 rounded-md p-t-control p-text-2 p-fill hover:p-text"
-          >{showDesktop ? <><TerminalIcon size={12} />Terminal</> : <><DesktopIcon size={12} />Desktop</>}</button>
+    <div className="flex flex-col flex-1 min-h-0 gap-1.5 px-3 pt-2.5 pb-3">
+      <div className="flex items-center gap-2 min-w-0 shrink-0 min-h-8">
+        <KindIcon size={14} className="shrink-0 p-text-3" aria-hidden />
+        <span className="p-row-text font-medium p-text truncate">{name}</span>
+        {desktop !== null && (
+          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+            {shown === "desktop" && (
+              <a href={desktop} target="_blank" rel="noreferrer" data-desktop-open aria-label={`Open ${name}'s desktop in a new tab`}
+                title="Open in a new tab"
+                className="inline-flex size-7 items-center justify-center rounded-md p-text-3 hover:p-text hover:p-fill">
+                <ArrowSquareOutIcon size={14} />
+              </a>
+            )}
+            <Segmented label={`${name}: terminal or desktop`} segments={PANE_VIEWS} value={shown} onChange={setView} />
+          </div>
         )}
       </div>
       <div className="flex-1 min-h-0">
-        {showDesktop && <iframe data-desktop title="Desktop" src={desktopClientUrl(location, workspace)} className="w-full h-full border-0" />}
-        {!showDesktop && (exec ? (
+        {shown === "desktop" && desktop !== null && (
+          // Framed as the terminal is: the remote screen scales into a bordered well, never bleeding to the panel's edge.
+          <div data-desktop-frame className="h-full rounded-lg border p-border overflow-hidden bg-black">
+            <iframe data-desktop title={`${name}'s desktop`} src={desktop} className="block w-full h-full border-0" />
+          </div>
+        )}
+        {shown === "terminal" && (exec ? (
           <TerminalPane
             workspace={workspace}
             executor={exec.name}
@@ -197,18 +230,17 @@ function SelectedEnvironmentPane({ mount, exec, workspace, executorOutputs, onEx
           </div>
         ))}
       </div>
-    </>
+    </div>
   );
 }
 
-function EnvironmentCard({ rpc, mount, exec, active, onSelect, onOpenFiles, onConnectDevice }: {
+function EnvironmentCard({ rpc, mount, exec, active, onSelect, onOpenFiles }: {
   rpc: Rpc;
   mount: MountInfo;
   exec: ExecutorInfo | undefined;
   active: boolean;
   onSelect: () => void;
   onOpenFiles: (root: string) => void;
-  onConnectDevice: () => void;
 }) {
   const executor = mount.name;
   const status = statusOf(mount, exec);
@@ -216,70 +248,57 @@ function EnvironmentCard({ rpc, mount, exec, active, onSelect, onOpenFiles, onCo
   // Named by the device's label where bound, else the executor kind.
   const title = exec?.label ?? executorLabel(executor);
   const kindTag = exec?.label ? executorLabel(executor) : null;
+  const KindIcon = environmentIcon(executor);
 
   return (
     <div
       data-env-card={mount.name}
-      onClick={onSelect}
-      className={`p-card min-w-0 rounded-lg px-3 py-2.5 space-y-1.5 cursor-pointer transition-colors border ${
+      className={`relative p-card min-w-0 rounded-lg px-3 py-2.5 space-y-1 transition-colors border ${
         active ? "border-[rgba(224,164,88,.4)] bg-[rgba(224,164,88,.05)]" : "p-border hover:border-[var(--c-border-strong)]"
       } ${mount.live ? "" : "border-dashed"}`}
     >
-      <div className="flex items-center gap-1.5 min-w-0">
-        <CircleIcon size={7} weight="fill" className={`shrink-0 ${status.dotClass}`} />
-        <span className={`p-row-text font-medium truncate ${mount.live ? "p-text" : "p-text-3"}`}>{title}</span>
+      <div className="flex items-center gap-2 min-w-0">
+        <KindIcon size={15} className={`shrink-0 ${active ? "p-accent" : "p-text-3"}`} aria-hidden />
+        {/* The whole card selects: the name's button stretches over it, and the card's own controls sit above it. */}
+        <button
+          type="button"
+          data-env-select
+          onClick={onSelect}
+          aria-pressed={active}
+          className={`min-w-0 truncate text-left p-row-text font-medium after:absolute after:inset-0 after:rounded-lg focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-[var(--c-accent)] ${
+            mount.live ? "p-text" : "p-text-3"
+          }`}
+        >{title}</button>
         {kindTag !== null && (
           <span className="p-meta p-text-4 shrink-0">{kindTag}</span>
         )}
         {mount.policy.readOnly && (
           <span title="read-only" className="shrink-0 flex"><LockSimpleIcon size={11} className="p-text-3" /></span>
         )}
-        <span data-env-status className="ml-auto p-t-status p-text-3 shrink-0">{status.word}</span>
+        <span data-env-status className="ml-auto flex shrink-0 items-center gap-1 p-t-status p-text-3">
+          <CircleIcon size={7} weight="fill" className={status.dotClass} aria-hidden />{status.word}
+        </span>
       </div>
-      <div data-env-mount className="p-meta p-text-3">
-        {filesRoot ?? "no files here"}
-      </div>
-      {executor === "sandbox" && <SandboxSizeRow rpc={rpc} />}
-      <div className="flex items-center gap-1 pt-0.5" onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center gap-2 min-w-0 min-h-6">
+        <span data-env-mount className="p-annotation p-text-3 truncate">{filesRoot ?? "no files here"}</span>
         {mount.live && filesRoot !== null && (
           <button
+            type="button"
             data-env-files
             onClick={() => onOpenFiles(filesRoot)}
-            className="flex items-center gap-1 px-2 py-1 rounded-md p-t-control p-text-2 p-fill hover:p-text"
+            className="relative ml-auto flex shrink-0 items-center gap-1 px-2 py-0.5 rounded-md p-t-control p-text-2 hover:p-text hover:p-fill"
             title={`Browse ${title}'s files at ${filesRoot}`}
           ><FolderOpenIcon size={12} />Files</button>
         )}
-        {mount.live && (
-          <button
-            data-env-terminal
-            onClick={onSelect}
-            className="flex items-center gap-1 px-2 py-1 rounded-md p-t-control p-text-2 p-fill hover:p-text"
-            title={`Open ${title}'s terminal`}
-          ><TerminalIcon size={12} />Terminal</button>
-        )}
-        {!mount.live && executor === "device" && (
-          <button
-            data-env-connect
-            onClick={onConnectDevice}
-            className="flex items-center gap-1 px-2 py-1 rounded-md p-t-control p-accent p-fill hover:opacity-90"
-            title="Link a machine to your account"
-          ><PlugIcon size={12} />Connect</button>
-        )}
       </div>
+      {executor === "sandbox" && <div className="relative pt-1"><SandboxSizeRow rpc={rpc} /></div>}
     </div>
   );
 }
 
-function UnavailableMount({ mount, exec, onConnectDevice }: {
-  mount: MountInfo;
-  exec: ExecutorInfo | undefined;
-  onConnectDevice: () => void;
-}) {
-  // Rows are named by executor (`device`), not the mount name (`pc`).
-  if (mount.name === "device") return <PcConnectCta onConnectDevice={onConnectDevice} />;
-
+function UnavailableMount({ mount, exec }: { mount: MountInfo; exec: ExecutorInfo | undefined }) {
   const docs = mount.name === "sandbox"
-      ? { text: "This deployment has no Linux sandbox. Use the Workspace shell instead.", href: "https://github.com/AshishKumar4/kinu/blob/main/docs/EXECUTION-LAYER-SPEC.md" }
+      ? { text: "This deployment has no cloud computer. Use the Workspace shell instead.", href: "https://github.com/AshishKumar4/kinu/blob/main/docs/EXECUTION-LAYER-SPEC.md" }
       : { text: mount.reason ?? exec?.reason ?? "This environment is not enabled here.", href: "https://github.com/AshishKumar4/kinu/blob/main/docs/EXECUTION-LAYER-SPEC.md" };
 
   return (
@@ -314,16 +333,15 @@ function NeedsApprovalMount({ exec }: { exec: ExecutorInfo }) {
   );
 }
 
-function PcConnectCta({ onConnectDevice }: { onConnectDevice: () => void }) {
+/** A PC that is not connected: one quiet line under the environments that offers to connect it. */
+function ConnectPcOffer({ onConnectDevice }: { onConnectDevice: () => void }) {
   return (
-    <div className="h-full flex items-center justify-center overflow-y-auto p-6">
-      <button
-        data-env-connect-cta
-        onClick={onConnectDevice}
-        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md p-accent-bg p-accent text-xs font-medium hover:opacity-90">
-        <PlugIcon size={13} />
-        Connect a machine
-      </button>
-    </div>
+    <p className="mt-2 flex items-center gap-1.5 p-meta p-text-3">
+      <DesktopTowerIcon size={13} className="shrink-0" aria-hidden />
+      <span>
+        <button type="button" data-env-connect onClick={onConnectDevice} className="p-accent font-medium hover:underline">Connect your PC</button>
+        {" "}to run commands and open its files here.
+      </span>
+    </p>
   );
 }

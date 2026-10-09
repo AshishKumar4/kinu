@@ -3,7 +3,7 @@
 // meet errors that name it, and the declaration the model reads states the contract they broke.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { createInlineExecutor, executorNamespace, explainSandboxError, renderCodemodeDescription } from '../src/index';
+import { createInlineExecutor, executorNamespace, explainSandboxError, programDeclarations, renderCodemodeDescription } from '../src/index';
 import { createTestRuntime } from './helpers';
 import { RECORDED_ATTEMPTS } from './fixtures/crafted-file-attempts';
 
@@ -81,7 +81,7 @@ describe('saving a tool that reads a file', () => {
 
     try {
       const { ok, error } = await replay(program, provider);
-      const declared = renderCodemodeDescription([executorNamespace(provider)], {});
+      const declared = programDeclarations([executorNamespace(provider)])['workspace.createTool'] ?? '';
 
       expect({
         ok, shown: error.includes("somebody else's invitation"), remedy: error.includes('send the function itself'),
@@ -92,14 +92,16 @@ describe('saving a tool that reads a file', () => {
     }
   });
 
-  test('the declaration the model reads says what a tool body is and how it reads a file', () => {
+  test('the declaration a program reads says what a tool body is and how it reads a file, and eval lists createTool', () => {
     const { db, provider } = workspaceOf();
 
     try {
-      const declared = renderCodemodeDescription([executorNamespace(provider)], {});
+      const namespace = executorNamespace(provider);
+      const declared = programDeclarations([namespace])['workspace.createTool'] ?? '';
 
       expect(declared).toContain('async (args) => JSON.parse(await workspace.readFile(args.path))');
       expect(declared).toContain('not an eval script');
+      expect(renderCodemodeDescription([namespace])).toMatch(/^- workspace: .*\bcreateTool\(name, description, code\)/mu);
       expect(provider.tools.createTool.description).not.toContain('`require(');
     } finally {
       db.close();

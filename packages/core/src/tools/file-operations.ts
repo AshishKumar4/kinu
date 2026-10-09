@@ -177,7 +177,7 @@ export function createFileTool(files: FileDeps): Tool {
 
 /** `file.*` for programs and slates, on the native tool's ledger. */
 export function createFileCodemodeProvider(current: () => FileDeps): CodemodeProvider {
-  return codemodeNamespace('file', Object.values(serveFile(current)));
+  return codemodeNamespace('file', 'Your workspace files, read and edited as the file tool does: an edit needs a read first.', Object.values(serveFile(current)));
 }
 
 function fileOps(deps: FileDeps) {

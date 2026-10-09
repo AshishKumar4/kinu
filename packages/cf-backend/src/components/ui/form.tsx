@@ -7,9 +7,6 @@ export const inputCls = "w-full rounded-md px-3 py-2 text-sm p-text focus:outlin
   + " focus:border-[var(--c-accent)] focus:ring-1 focus:ring-[var(--c-accent-subtle)]"
   + " placeholder:p-text-3";
 
-/** Shared by both headers so the active underline lands on the strip's rule. */
-export const tabStripH = "h-[45px]";
-
 /** An IME's own keystroke: the Enter that picks a candidate, the Escape that drops one. WebKit ends the composition
  *  first, so there only keyCode 229 marks it. */
 export function composing(event: KeyboardEvent): boolean {

@@ -266,9 +266,7 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
 
   return (
     <div className="w-full h-full flex flex-col">
-      <div className="flex items-center gap-2 px-3 py-1 shrink-0 p-meta p-text-3">
-        <span className="font-mono">{executor}</span>
-        <span>·</span>
+      <div className="flex items-center gap-2 px-1 py-1 shrink-0 p-meta p-text-3">
         <span>{state === "connected" ? "interactive shell" : state}</span>
         {failure !== null && <span className="p-danger truncate" title={failure}>{failure}</span>}
         {device ? (
@@ -415,9 +413,7 @@ function WorkspaceTerminal({ workspace, executor }: { workspace: string; executo
 
   return (
     <div className="w-full h-full flex flex-col">
-      <div className="flex items-center gap-2 px-3 py-1 shrink-0 p-meta p-text-3">
-        <span className="font-mono">{executor}</span>
-        <span>·</span>
+      <div className="flex items-center gap-2 px-1 py-1 shrink-0 p-meta p-text-3">
         <span>{state === "connected" ? "workspace shell" : state}</span>
         {failure !== null && <span className="p-danger truncate" title={failure}>{failure}</span>}
         <span className="ml-auto shrink-0" title="⌃C interrupts the running command.">
@@ -539,9 +535,7 @@ function LineTerminal(
 
   return (
     <div className="w-full h-full flex flex-col">
-      <div className="flex items-center gap-2 px-3 py-1 shrink-0 p-meta p-text-3">
-        <span className="font-mono">{executor}</span>
-        <span>·</span>
+      <div className="flex items-center gap-2 px-1 py-1 shrink-0 p-meta p-text-3">
         <span>{LINE_MODE_LABEL}</span>
         {failure !== null && <span className="ml-auto p-danger truncate" title={failure}>{failure}</span>}
       </div>

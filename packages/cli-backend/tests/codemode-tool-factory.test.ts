@@ -220,8 +220,8 @@ describe('createNodeCodemodeToolFactory — a failing host call can never kill t
     ] });
   });
 
-  test('every wired namespace is DECLARED to the model, not just bound', async () => {
-    // Each provider's `types` must reach the description, or its callables are reachable but undiscoverable.
+  test('every wired namespace is listed to the model, and a program reads its declaration with describe', async () => {
+    // Each provider must reach the description, and its `types` the program, or its callables are reachable but undiscoverable.
     const factory = createNodeCodemodeToolFactory({
       reach: narrowToolSurface(undefined),
       namespaces: [{
@@ -237,9 +237,15 @@ describe('createNodeCodemodeToolFactory — a failing host call can never kill t
 
     const built = factory({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [] });
 
-    expect(built.description).toContain('export declare const memory: {');
-    expect(built.description).toContain('save(content: string)');
-    expect(built.description).toContain('export declare const workspace: {');
+    const described = await toolExecute<{ code: string }, { result: JsonValue }>(built)({ code: "return [describe('memory'), describe('workspace')]" });
+
+    expect({
+      listed: ['memory', 'workspace'].map((name) => typeof built.description === 'string' && built.description.includes(`\n- ${name}:`)),
+      described: described.result,
+    }).toEqual({
+      listed: [true, true],
+      described: ['export declare const memory: {\n  save(content: string): Promise<unknown>;\n};', 'export declare const workspace: {\n  readdir(path: string): Promise<string[]>;\n};'],
+    });
   });
 });
 

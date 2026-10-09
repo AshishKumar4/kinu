@@ -766,7 +766,7 @@ describe('role and Plan authority', () => {
     try {
       const provider = createDbCodemodeProvider(w.store(w.a));
       expect(provider.name).toBe('db');
-      const types = namespaceDeclaration(provider.name, provider.declarations ?? {}, new Set());
+      const types = namespaceDeclaration(provider.name, provider.declarations ?? {});
       expect(types.match(/declare const db:/gu)).toHaveLength(1);
       expect(types).toContain("scope: 'actor'");
       expect(types).toContain('No operation takes SQL');

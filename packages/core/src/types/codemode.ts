@@ -15,6 +15,8 @@ export interface MemberDeclaration {
 
 export interface CodemodeProvider {
   readonly name: string;
+  /** What the namespace is for, in one line: eval's description lists it with the members' call forms. */
+  readonly summary?: string;
   readonly tools: Record<string, {
     readonly description: string;
     readonly planAllowed?: boolean;

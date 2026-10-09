@@ -13,7 +13,7 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 import {
   CRAFTED_TOOL_NAMESPACE,
   decodeJsonValue, explainSandboxError, toolsNamespace,
-  renderCodemodeDescription, codemodeInputSchema,
+  renderCodemodeDescription, programDeclarations, describeProgramSource, codemodeInputSchema,
   withCraftedToolDeclarations, craftedFailureFunctions, renderCraftedDefinitions,
   codemodeFunction, withCodemodeProgram, execContext, readDeviceRequestChannel,
 } from '@kinu.run/core';
@@ -65,11 +65,11 @@ interface ExecuteSuccess {
 export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps): CodemodeBuilder {
   return (surface) => {
     const providers = deps.reach.narrowProviders(deps.namespaces ?? []);
+    const describe = describeProgramSource(programDeclarations(providers));
 
     return withCraftedToolDeclarations(tool({
-      // Every provider's `types` must be read into the description, or the model
-      // gets callables it was never told about.
-      description: renderCodemodeDescription(providers, surface.native, 'local'),
+      // Every namespace is listed, and `describe` answers its declarations, or the model gets callables it was never told about.
+      description: renderCodemodeDescription(providers, 'local'),
       inputSchema: codemodeInputSchema(),
       execute: (args, options) => withCodemodeProgram(async () => {
         requireBuild('Native JavaScript execution without a constrained runtime');
@@ -135,7 +135,7 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
             ...extraNamespaces.map(n => providerBindings[n]),
           ];
 
-          const fn = new Function(...argNames, programBody(args.code, renderCraftedDefinitions(crafted)));
+          const fn = new Function(...argNames, programBody(args.code, `${describe}\n${renderCraftedDefinitions(crafted)}`));
 
           const rawResult = await fn(...argValues);
 
