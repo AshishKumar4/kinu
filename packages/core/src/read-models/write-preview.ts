@@ -1,6 +1,6 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { diffLines, fileDiff, type FileDiff, type FileStatus, type Omitted } from '../vfs/diff';
-import { BODY_MAX_BYTES } from './workspace-diff';
+import { bodyMaxBytes } from './workspace-diff';
 import { sha256Hex } from '../safety/argument-digest';
 import { currentBytes, type WriteSubject } from '../safety/bound-write';
 import type { DeferredApprovalQueue } from '../safety/deferred-approval';
@@ -22,7 +22,7 @@ function writePreview(write: WriteSubject): WritePreview {
   let omitted: Omitted | null = null;
 
   if (sides.some((side) => side.includes(0))) omitted = 'binary';
-  else if (sides.some((side) => side.byteLength > BODY_MAX_BYTES)) omitted = 'large';
+  else if (sides.some((side) => side.byteLength > bodyMaxBytes())) omitted = 'large';
   const decoder = new TextDecoder();
 
   const diff = omitted === null

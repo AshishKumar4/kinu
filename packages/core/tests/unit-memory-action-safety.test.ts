@@ -38,6 +38,9 @@ function recordingFacts(): RecordingFacts {
         confidence: opts?.confidence ?? 1,
         source: opts?.source ?? 'tool',
         lastObservedAt: 0,
+        importance: 0.5,
+        veracity: 'stated',
+        origin: null,
       });
 
       return existing ? 'changed' : 'created';
@@ -54,6 +57,9 @@ function recordingFacts(): RecordingFacts {
     },
     all() {
       return [...rows.values()];
+    },
+    history() {
+      return [];
     },
   };
 }

@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-08",
-  "files": 3087,
-  "functions": 80699,
+  "files": 3095,
+  "functions": 80987,
   "ceiling": 87,
   "line": 27,
   "inventory": [
@@ -227,10 +227,6 @@
     },
     {
       "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply",
-      "complexity": 28
-    },
-    {
-      "key": "packages/core/src/memory/hybrid-search.ts#fused>forEach>gen",
       "complexity": 28
     },
     {

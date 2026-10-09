@@ -303,11 +303,16 @@ export interface InheritedApprovalSource {
   fetchRoot(): Promise<{ mode: ShellApprovalMode; grants: readonly ApprovalGrant[] }>;
   /** This facet's own narrowing; `null` inherits the root's set. */
   ownGrants(): readonly ApprovalGrant[] | null;
+  /**
+   * The workspace's queue, as this facet parks on it (`DeferredApprovalQueue.channelFor`): its gated commands wait on
+   * the owner as the root's do. Absent, nobody listens and a gate is refused.
+   */
+  deferrals?(): DeferredApprovalChannel | undefined;
 }
 
 /**
  * A facet's policy: no `remember` or `requestApproval`, so it cannot widen its reach; `strict` with nothing
- * granted until the first resolve.
+ * granted until the first resolve. A gated command parks on the owner through the workspace's one queue.
  */
 export function createInheritedApprovalPolicy(
   source: InheritedApprovalSource,
@@ -323,5 +328,6 @@ export function createInheritedApprovalPolicy(
     },
     mode: () => mode,
     granted: (grant) => holdsGrant(grants, grant),
+    get deferrals() { return source.deferrals?.(); },
   };
 }

@@ -1,6 +1,6 @@
 import { Cause, Effect, type Exit } from 'effect';
 import { createCliRenderer, type TextareaRenderable } from '@opentui/core';
-import { createRoot, flushSync, useKeyboard, useTerminalDimensions } from '@opentui/react';
+import { createRoot, flushSync, useTerminalDimensions } from '@opentui/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BUILTIN_ROLE_DEFINITIONS, deriveRoleLabel, offeredReasoningEfforts, type ReasoningEffort,
@@ -48,6 +48,7 @@ import {
   type TuiAgentSummary,
 } from './tui-shell';
 import { hold, renderThrownChain, showing, detach } from '@kinu.run/core/obs';
+import { useKeyboard } from './use-keys';
 
 type HomeTuiAction =
   | { type: 'open-agent'; name: string }

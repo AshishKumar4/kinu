@@ -23,14 +23,14 @@ const os = require('node:os');
 
 const path = require('node:path');
 
-const { spawnSync } = require('node:child_process');
+const { runToExit } = require('@kinu.run/test-utils');
 
 const sandbox = require('../src/sandbox.js');
 
 const LINUX = process.platform === 'linux';
 
 /** One sandboxed command, run the way the supervisor runs it. */
-function runSandboxed(command, options = {}) {
+async function runSandboxed(command, options = {}) {
   const base = scratchDir('sandbox-case');
   const agentHome = path.join(base, 'home');
   const agentTmp = path.join(base, 'tmp');
@@ -52,11 +52,9 @@ function runSandboxed(command, options = {}) {
     source: options.source ?? {},
   });
 
-  const run = spawnSync(plan.argv[0], plan.argv.slice(1), {
-    env: plan.env, encoding: 'utf8',
-  });
+  const run = await runToExit(plan.argv, { env: plan.env });
 
-  return { base, agentHome, agentTmp, consented, plan, status: run.status, stdout: String(run.stdout ?? ''), stderr: String(run.stderr ?? '') };
+  return { base, agentHome, agentTmp, consented, plan, status: run.exitCode, stdout: run.stdout, stderr: run.stderr };
 }
 
 describe('the device sandbox, as the kernel enforces it', () => {
@@ -85,7 +83,7 @@ describe('the device sandbox, as the kernel enforces it', () => {
     const ownerHome = scratchDir('sandbox-owner');
     const planted = path.join(ownerHome, '.kinu-sandbox-planted-secret');
     fs.writeFileSync(planted, 'owner-private-material', { mode: 0o600 });
-    const run = runSandboxed(`cat ${JSON.stringify(planted)} 2>&1; echo ---; ls -a "$HOME" | tr '\n' ' '`, { home: ownerHome });
+    const run = await runSandboxed(`cat ${JSON.stringify(planted)} 2>&1; echo ---; ls -a "$HOME" | tr '\n' ' '`, { home: ownerHome });
 
     try {
       expect(run.stdout).not.toContain('owner-private-material');
@@ -109,7 +107,7 @@ describe('the device sandbox, as the kernel enforces it', () => {
     const ownerHome = scratchDir('sandbox-owner');
     const planted = path.join(ownerHome, '.kinu-sandbox-planted-secret');
     fs.writeFileSync(planted, 'owner-private-material', { mode: 0o600 });
-    const run = runSandboxed(`cat ${JSON.stringify(planted)} 2>&1`, { tier: 'raw', home: ownerHome });
+    const run = await runSandboxed(`cat ${JSON.stringify(planted)} 2>&1`, { tier: 'raw', home: ownerHome });
 
     try {
       expect(run.stdout).toContain('owner-private-material');
@@ -122,7 +120,7 @@ describe('the device sandbox, as the kernel enforces it', () => {
   test('Kinu\'s own directory is not in the sandbox at all', async () => {
     if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
     const deviceHome = path.join(os.homedir(), '.kinu');
-    const run = runSandboxed(`cat ${JSON.stringify(path.join(deviceHome, 'device.json'))} 2>&1 | head -1`);
+    const run = await runSandboxed(`cat ${JSON.stringify(path.join(deviceHome, 'device.json'))} 2>&1 | head -1`);
 
     // The kernel says the same thing the file methods say, because neither is
     // asked to make an exception: ~/.kinu is never bound in.
@@ -133,7 +131,7 @@ describe('the device sandbox, as the kernel enforces it', () => {
   test('writes land in the agent home and the consented directory, and nowhere else', async () => {
     if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
 
-    const run = runSandboxed([
+    const run = await runSandboxed([
       'touch "$HOME/in-agent-home" && echo home-ok',
       'touch /usr/local/should-not-exist 2>&1 | head -1',
       'touch /etc/should-not-exist 2>&1 | head -1',
@@ -145,7 +143,7 @@ describe('the device sandbox, as the kernel enforces it', () => {
     expect(fs.existsSync('/usr/local/should-not-exist')).toBe(false);
     // The consented root is writable, and the write is visible OUTSIDE:
     // a root that only looked writable would be a tmpfs the owner never sees.
-    runSandboxed(`touch ${JSON.stringify('/tmp/ignored')}; echo done`);
+    await runSandboxed(`touch ${JSON.stringify('/tmp/ignored')}; echo done`);
 
   });
 
@@ -164,9 +162,9 @@ describe('the device sandbox, as the kernel enforces it', () => {
       cwd: consented, command: 'printf agent-wrote-this > report.txt; pwd', source: {},
     });
 
-    const run = spawnSync(plan.argv[0], plan.argv.slice(1), { env: plan.env, encoding: 'utf8' });
+    const run = await runToExit(plan.argv, { env: plan.env });
 
-    expect(run.status).toBe(0);
+    expect(run.exitCode).toBe(0);
     // `--chdir` names the directory as the COMMAND sees it, which for a
     // consented root is its own path.
     expect(String(run.stdout).trim()).toBe(consented);
@@ -179,7 +177,7 @@ describe('the device sandbox, as the kernel enforces it', () => {
     const host = fs.readdirSync('/dev').filter((entry) => entry.startsWith('nvidia')).map((entry) => `/dev/${entry}`);
 
     if (fs.existsSync('/dev/dri')) host.push('/dev/dri');
-    const run = runSandboxed('set -o pipefail; shopt -s nullglob; for node in /dev/nvidia* /dev/dri; do if [[ -e $node ]]; then printf "%s\\n" "$node"; fi; done');
+    const run = await runSandboxed('set -o pipefail; shopt -s nullglob; for node in /dev/nvidia* /dev/dri; do if [[ -e $node ]]; then printf "%s\\n" "$node"; fi; done');
 
     expect(run.status).toBe(0);
 
@@ -191,7 +189,7 @@ describe('the device sandbox, as the kernel enforces it', () => {
   test('the command environment is the allow-list, with the sandbox\'s own values', async () => {
     if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
 
-    const run = runSandboxed('env | sort | tr "\\n" " "', {
+    const run = await runSandboxed('env | sort | tr "\\n" " "', {
       source: {
         PATH: '/usr/bin:/bin', LANG: 'C.UTF-8', LC_TIME: 'en_GB.UTF-8', TZ: 'Asia/Kolkata', COLORTERM: 'truecolor',
         HTTPS_PROXY: 'http://proxy.corp:3128', no_proxy: 'localhost',
@@ -255,7 +253,7 @@ describe('the device sandbox, as the kernel enforces it', () => {
     // such file or directory` (measured 2026-09-04): the agent-tmp bind over
     // `/tmp` shadowed the agent home. Order is the policy.
     const home = scratchDir('sandbox-tmp-home');
-    const run = runSandboxed('pwd; touch "$HOME/marker"; echo reached', { home });
+    const run = await runSandboxed('pwd; touch "$HOME/marker"; echo reached', { home });
 
     expect(run.stderr).toBe('');
     expect(run.status).toBe(0);
@@ -291,7 +289,7 @@ describe('the device sandbox, as the kernel enforces it', () => {
       ].join('; '),
     });
 
-    const run = spawnSync(plan.argv[0], plan.argv.slice(1), { env: plan.env, encoding: 'utf8' });
+    const run = await runToExit(plan.argv, { env: plan.env });
 
     // The write lands in the agent's own home, which HOME names at its own path.
     expect(fs.existsSync(path.join(home, 'x'))).toBe(false);
@@ -344,8 +342,8 @@ describe('the device sandbox, as the kernel enforces it', () => {
       path.join(home, '.local', 'bin'),
     ]);
     expect(entries).not.toContain(path.join(home, 'bin'));
-    const run = spawnSync(plan.argv[0], plan.argv.slice(1), { env: plan.env, encoding: 'utf8' });
-    expect(run.status).toBe(0);
+    const run = await runToExit(plan.argv, { env: plan.env });
+    expect(run.exitCode).toBe(0);
     expect(String(run.stdout).trim()).toBe('kinu-first-run-alpha');
   });
 
@@ -360,8 +358,8 @@ describe('the device sandbox, as the kernel enforces it', () => {
     const script = 'const s = require(process.argv[1]); '
       + 's.probe({ deviceHome: process.env.KINU_HOME }).then((r) => process.stdout.write(JSON.stringify(r)))';
 
-    const run = spawnSync(process.execPath, ['-e', script, require.resolve('../src/sandbox.js')], {
-      env: { ...process.env, HOME: home, KINU_HOME: home }, encoding: 'utf8',
+    const run = await runToExit([process.execPath, '-e', script, require.resolve('../src/sandbox.js')], {
+      env: { ...process.env, HOME: home, KINU_HOME: home },
     });
 
     expect(run.stderr).toBe('');
@@ -393,7 +391,7 @@ describe('a sandboxed command reads only the system and what the owner shared', 
     fs.symlinkSync(planted, path.join(consented, 'escape'));
 
     try {
-      const run = runSandboxed(
+      const run = await runSandboxed(
         `cat ${JSON.stringify(planted)} 2>&1; cat ${JSON.stringify(path.join(consented, 'escape'))} 2>&1; echo done`,
         { roots: [consented] },
       );
@@ -423,7 +421,7 @@ describe('a sandboxed command reads only the system and what the owner shared', 
       cwd: home, command: `cat ${JSON.stringify(path.join(deviceHome, 'device.json'))} ${JSON.stringify(path.join(home, 'shared.txt'))} 2>&1`, source: {},
     });
 
-    const run = spawnSync(plan.argv[0], plan.argv.slice(1), { env: plan.env, encoding: 'utf8' });
+    const run = await runToExit(plan.argv, { env: plan.env });
 
     expect(run.stdout).not.toContain('pdt_machine_secret');
     expect(run.stdout).toContain('shared-with-the-agent');
@@ -431,7 +429,7 @@ describe('a sandboxed command reads only the system and what the owner shared', 
 
   test('/var/tmp is the agent\'s own temp, as /tmp is', async () => {
     if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
-    const run = runSandboxed('printf agent-temp > /var/tmp/kinu-agent-temp && cat /tmp/kinu-agent-temp');
+    const run = await runSandboxed('printf agent-temp > /var/tmp/kinu-agent-temp && cat /tmp/kinu-agent-temp');
 
     expect(run.stdout).toBe('agent-temp');
     expect(fs.readFileSync(path.join(run.agentTmp, 'kinu-agent-temp'), 'utf8')).toBe('agent-temp');
@@ -439,14 +437,17 @@ describe('a sandboxed command reads only the system and what the owner shared', 
 
   test('a GPU job sees the same GPUs inside the sandbox as outside', async () => {
     if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
-    const outside = spawnSync('nvidia-smi', ['-L'], { encoding: 'utf8' });
 
     // A machine with no NVIDIA driver has no GPU job to keep.
-    if (outside.error || outside.status !== 0) return;
+    if (Bun.which('nvidia-smi') === null) return;
+
+    const outside = await runToExit(['nvidia-smi', '-L']);
+
+    if (outside.exitCode !== 0) return;
     // NVML reads /sys to find the devices; a sandbox without it answers
     // "GPU access blocked by the operating system" (measured 2026-09-22,
     // driver 595.84, RTX 4080).
-    const inside = runSandboxed('nvidia-smi -L');
+    const inside = await runSandboxed('nvidia-smi -L');
 
     expect(inside.stderr).toBe('');
     expect(inside.stdout).toBe(outside.stdout);
@@ -455,14 +456,14 @@ describe('a sandboxed command reads only the system and what the owner shared', 
   test('a toolchain under /opt is there inside the sandbox, byte for byte and executable', async () => {
     if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
     // ROCm, Arch's CUDA and conda install a GPU job's runtime under /opt.
-    const found = spawnSync('find', ['/opt', '-maxdepth', '4', '-type', 'f', '-perm', '-u+x', '-print', '-quit'], { encoding: 'utf8' });
+    const found = await runToExit(['find', '/opt', '-maxdepth', '4', '-type', 'f', '-perm', '-u+x', '-print', '-quit']);
     const tool = found.stdout.trim();
 
     // A machine with nothing installed under /opt has no such job to keep.
     if (tool === '') return;
     const probe = `test -x ${JSON.stringify(tool)} && sha256sum ${JSON.stringify(tool)}`;
-    const outside = spawnSync('bash', ['-c', probe], { encoding: 'utf8' });
-    const inside = runSandboxed(probe);
+    const outside = await runToExit(['bash', '-c', probe]);
+    const inside = await runSandboxed(probe);
 
     expect(inside.stderr).toBe('');
     expect(inside.stdout).toBe(outside.stdout);

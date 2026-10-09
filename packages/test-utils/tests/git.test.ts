@@ -6,10 +6,11 @@ import { join } from 'node:path';
 
 import { git, gitEnv, initRepo } from '../src/git';
 import { childEnv } from '../src/ambient-env';
+import { runToExit } from '../src/spawn';
 
-const repo = (): string => {
+const repo = async (): Promise<string> => {
   const directory = scratchDir('git-fixture');
-  initRepo(directory);
+  await initRepo(directory);
 
   return directory;
 };
@@ -18,21 +19,21 @@ const root = join(import.meta.dir, '..', '..', '..');
 
 describe('git spawned by a test under a committing hook', () => {
   test.each(['preload', 'repeat', 'sweep'] as const)('%s leaves the hook repository and its index untouched', async (runner) => {
-    const donor = repo();
-    const target = repo();
+    const donor = await repo();
+    const target = await repo();
     const directory = scratchDir('hook-git');
     const file = join(directory, 'probe.test.ts');
     writeFileSync(join(donor, 'seed.txt'), 'kept in the hook repository\n');
-    git(donor, 'add', 'seed.txt');
-    git(donor, 'commit', '-qm', 'seed');
-    git(donor, 'config', 'core.hooksPath', 'protected-hooks');
+    await git(donor, 'add', 'seed.txt');
+    await git(donor, 'commit', '-qm', 'seed');
+    await git(donor, 'config', 'core.hooksPath', 'protected-hooks');
     const hookIndex = join(directory, 'hook-index');
     copyFileSync(join(donor, '.git', 'index'), hookIndex);
     const hookEnv = childEnv({ GIT_DIR: join(donor, '.git'), GIT_WORK_TREE: donor, GIT_INDEX_FILE: hookIndex });
     writeFileSync(join(donor, 'queued.test.ts'), '// staged only in the committing hook\n');
-    const staged = Bun.spawnSync(['git', 'add', 'queued.test.ts'], { cwd: donor, env: hookEnv, stderr: 'pipe' });
+    const staged = await runToExit(['git', 'add', 'queued.test.ts'], { cwd: donor, env: hookEnv });
 
-    if (staged.exitCode !== 0) throw new Error(staged.stderr.toString());
+    if (staged.exitCode !== 0) throw new Error(staged.stderr);
     writeFileSync(join(donor, 'probe.txt'), 'from the hook repository\n');
     writeFileSync(join(target, 'probe.txt'), 'from the scratch repository\n');
     const config = readFileSync(join(donor, '.git', 'config'), 'utf8');
@@ -76,20 +77,20 @@ if (JSON.stringify(stagedTestFiles()) !== '["queued.test.ts"]') throw new Error(
     expect({ exitCode, stderr: exitCode === 0 ? '' : stderr }).toEqual({ exitCode: 0, stderr: '' });
     expect(readFileSync(join(donor, '.git', 'config'), 'utf8')).toBe(config);
     expect(readFileSync(hookIndex)).toEqual(index);
-    expect(git(target, 'show', ':probe.txt')).toBe('from the scratch repository\n');
-    expect(git(target, 'config', 'core.bare').trim()).toBe('true');
-    expect(git(target, 'config', 'core.hooksPath').trim()).toBe('frontend/.husky');
+    expect(await git(target, 'show', ':probe.txt')).toBe('from the scratch repository\n');
+    expect((await git(target, 'config', 'core.bare')).trim()).toBe('true');
+    expect((await git(target, 'config', 'core.hooksPath')).trim()).toBe('frontend/.husky');
   });
 });
 
 describe('the git test fixture', () => {
   /* A git hook exports GIT_DIR, which git obeys over `cwd`; these tests run with it set. */
-  const underHook = <T>(elsewhere: string, run: () => T): T => {
+  const underHook = async <T>(elsewhere: string, run: () => Promise<T>): Promise<T> => {
     const saved = { dir: process.env.GIT_DIR, work: process.env.GIT_WORK_TREE };
     process.env.GIT_DIR = join(elsewhere, '.git');
     process.env.GIT_WORK_TREE = elsewhere;
 
-    try { return run(); } finally {
+    try { return await run(); } finally {
       if (saved.dir === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = saved.dir;
 
       if (saved.work === undefined) delete process.env.GIT_WORK_TREE;
@@ -97,23 +98,23 @@ describe('the git test fixture', () => {
     }
   };
 
-  test('a commit lands in the named repository, not the ambient one', () => {
-    const bystander = repo();
-    const target = repo();
+  test('a commit lands in the named repository, not the ambient one', async () => {
+    const bystander = await repo();
+    const target = await repo();
     writeFileSync(join(bystander, 'seed.txt'), 'x\n');
-    git(bystander, 'add', '-A');
-    git(bystander, 'commit', '-qm', 'bystander');
-    const before = git(bystander, 'rev-parse', 'HEAD').trim();
+    await git(bystander, 'add', '-A');
+    await git(bystander, 'commit', '-qm', 'bystander');
+    const before = (await git(bystander, 'rev-parse', 'HEAD')).trim();
 
-    underHook(bystander, () => {
+    await underHook(bystander, async () => {
       writeFileSync(join(target, 'file.txt'), 'y\n');
-      git(target, 'add', '-A');
-      git(target, 'commit', '-qm', 'target');
+      await git(target, 'add', '-A');
+      await git(target, 'commit', '-qm', 'target');
     });
 
-    expect(git(bystander, 'rev-parse', 'HEAD').trim()).toBe(before);
-    expect(git(bystander, 'log', '--oneline').trim()).not.toContain('target');
-    expect(git(target, 'log', '--oneline').trim()).toContain('target');
+    expect((await git(bystander, 'rev-parse', 'HEAD')).trim()).toBe(before);
+    expect((await git(bystander, 'log', '--oneline')).trim()).not.toContain('target');
+    expect((await git(target, 'log', '--oneline')).trim()).toContain('target');
   });
 
   test('gitEnv drops every GIT_ variable, not a list of known ones', () => {
@@ -131,8 +132,8 @@ describe('the git test fixture', () => {
     }
   });
 
-  test('the fixture repo carries its own identity, not the developer\'s', () => {
-    const target = repo();
-    expect(git(target, 'config', 'user.email').trim()).toBe('kinu@example.invalid');
+  test('the fixture repo carries its own identity, not the developer\'s', async () => {
+    const target = await repo();
+    expect((await git(target, 'config', 'user.email')).trim()).toBe('kinu@example.invalid');
   });
 });

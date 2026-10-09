@@ -16,6 +16,7 @@ import { SUBMIT_PLAN_TOOL } from '../tools/registry';
 import type { ActiveSkillSet } from '../skills/types';
 import type { TurnReason } from '../types/turn';
 import type { ToolSet } from 'ai';
+import type { Fact } from '../memory/facts';
 
 export interface DynamicContextInput {
   readonly rt: AgentRuntime;
@@ -29,6 +30,8 @@ export interface DynamicContextInput {
   readonly activeSkills?: ActiveSkillSet;
   /** Read once per turn by the caller. */
   readonly memoryTail: string | undefined;
+  /** The account's facts, read once per turn by the caller; absent where no account is wired. */
+  readonly accountFacts?: readonly Fact[];
   readonly missingCapabilities: readonly MissingCapability[];
   /** Down MCP servers (`server` null: the catalog), noted only where `eval` reaches MCP tools. */
   readonly unavailableMcp?: readonly { readonly server: string | null; readonly reason: string }[];
@@ -69,7 +72,7 @@ export function collectDynamicContext(input: DynamicContextInput): DynamicContex
     },
     craftedTools: craftedToolDeclarations(input.tools, profile),
     externalTools: externalToolDeclarations(input.tools, input.externalTools ?? {}, profile),
-    factsBlock: renderFactsForTurn(stores.facts),
+    factsBlock: renderFactsForTurn(stores.facts, input.accountFacts),
     memoryTail: input.memoryTail,
     recoveryFindings: listRecoveryFindings(rt.storage.sql, rt.actor),
     toolLessons: listToolLessons(rt.storage.sql, rt.actor, Object.keys(input.tools), MAX_TOOL_LESSONS).map(shownLesson),

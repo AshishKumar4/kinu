@@ -4,7 +4,7 @@
  * claimed call is an `eval` that adds a task and then never returns, so its effect lands and the call stays open when
  * the activation dies.
  */
-import { expect, test } from 'bun:test';
+import { expect, setSystemTime, test } from 'bun:test';
 import { AwaitedList } from '@kinu.run/test-utils';
 import {
   GATEWAY_CATALOG, driveUntil, gatewayWorkspace, reactivateOrchestratorHarness, rosterOver, wakeForDelegatedTask,
@@ -13,6 +13,9 @@ import { abandonHarnessFibers, joinHarnessFibers } from './helpers/agents-sdk';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
 const BRIEF = 'Find someone to check the release notes.';
+
+/** Longer than any backoff a cut earns, which the shared one caps at a minute. */
+const RESTART_AFTER_MS = 120_000;
 
 /** The effect, then a wait the dying activation never sees end: a hold the harness can name. */
 const CODE = "await tools.tasks({ op: 'add', titles: ['check the release notes'] }); "
@@ -58,16 +61,22 @@ test('a hosted turn cut off inside a claimed call makes it once and is told it m
 
   abandonHarnessFibers();
   cut = false;
+  // Past the backoff a cut in the step's own work earns (D12), so the next activation asks again at once.
+  setSystemTime(new Date(Date.now() + RESTART_AFTER_MS));
 
-  const next = await reactivateOrchestratorHarness(first.db, undefined, {
-    world: { aiGateway: gateway },
-    beforeStart: (agent) => { agent.harnessInstallCatalog(GATEWAY_CATALOG); },
-  });
+  try {
+    const next = await reactivateOrchestratorHarness(first.db, undefined, {
+      world: { aiGateway: gateway },
+      beforeStart: (agent) => { agent.harnessInstallCatalog(GATEWAY_CATALOG); },
+    });
 
-  await next.agent.accountSpend();
-  await next.agent.terminalRetryPass();
-  await joinHarnessFibers();
-  await driveUntil(next, 'the resumed turn never asked the model again', () => resumed.length > 0);
+    await next.agent.accountSpend();
+    await next.agent.terminalRetryPass();
+    await joinHarnessFibers();
+    await driveUntil(next, 'the resumed turn never asked the model again', () => resumed.length > 0);
+  } finally {
+    setSystemTime();
+  }
 
   expect(tasks()).toBe(1);
   expect(resumed.join('\n')).toMatch(/may or may not have taken effect\..*the call is eval_0/su);

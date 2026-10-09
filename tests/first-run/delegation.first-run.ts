@@ -77,7 +77,7 @@ function announce(subgoals: readonly EvalSubgoal[]): readonly EvalSubgoal[] {
   return subgoals;
 }
 
-afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
+afterAll(async () => { await publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
 
 function excerpt(value: string, length = 160): string {
   return JSON.stringify(value.slice(0, length));

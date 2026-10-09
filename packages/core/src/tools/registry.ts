@@ -206,12 +206,12 @@ export interface BuiltinToolSpec {
 
 
 
-/** Memory spec gated on facts; `BUILTIN_TOOL_SPECS.memory` is the full surface. */
-export function memoryToolSpec(hasFacts: boolean): BuiltinToolSpec {
+/** Memory spec gated on facts and the account; `BUILTIN_TOOL_SPECS.memory` is the full surface. */
+export function memoryToolSpec(hasFacts: boolean, hasAccount = false): BuiltinToolSpec {
   return {
     name: 'memory',
     summary: hasFacts
-      ? 'Durable memory across turns: keyed facts, notes, and your past conversations.'
+      ? `Durable memory across turns: keyed facts, notes, and your past conversations${hasAccount ? ', with your owner\'s account memory read alongside' : ''}.`
       : 'Durable memory across turns: notes and your past conversations.',
     notes: [],
     example: hasFacts

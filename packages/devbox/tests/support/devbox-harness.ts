@@ -401,6 +401,8 @@ export class FakeSandbox {
   readonly execSignals: AbortSignal[] = [];
   /** Ids never repeat, as the platform's do not: a deleted snapshot's id is not handed out again. */
   #snapshotsTaken = 0;
+  /** Syntax checks settle in call order, so concurrent execs are recorded in the order they were issued. */
+  #syntaxChecks: Promise<Error | undefined> = Promise.resolve(undefined);
   /** What each snapshot holds: the container's disk as it was when it was taken. */
   readonly #snapshotDisks = new Map<string, { readonly files: Map<string, string>; readonly binaryFiles: Map<string, Uint8Array>; readonly directories: Set<string> }>();
   /** A snapshot taken elsewhere (the golden), holding `files`. */
@@ -481,7 +483,9 @@ export class FakeSandbox {
     command: string,
     options?: { readonly cwd?: string },
   ): Promise<ExecResult> {
-    const refused = shellSyntaxError(command);
+    const checked = this.#syntaxChecks.then(async () => shellSyntaxError(command));
+    this.#syntaxChecks = checked;
+    const refused = await checked;
 
     if (refused !== undefined) {
       this.sequence.push(`sessionKilled:${command.split(' ')[0]}`);

@@ -1,18 +1,8 @@
 import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation, useParams } from "react-router-dom";
-import { Suspense } from "react";
+import { Suspense, type ReactNode } from "react";
 import Layout from "./components/layout";
 import HomePage from "./pages/HomePage";
 import WorkspacePage from "./pages/WorkspacePage";
-import UserSettingsPage from "./pages/UserSettingsPage";
-import UserMcpPage from "./pages/UserMcpPage";
-import WelcomePage from "./pages/WelcomePage";
-import DrivePage from "./pages/DrivePage";
-import WorkspacesPage from "./pages/WorkspacesPage";
-import PluginsPage from "./pages/PluginsPage";
-import DevicesPage from "./pages/DevicesPage";
-import BlueprintPage from "./pages/BlueprintPage";
-import LiveSharePage from "./pages/LiveSharePage";
-import ConnectedPage from "./pages/ConnectedPage";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { APP_ROUTES, needsOnboarding } from "@kinu.run/core";
 import { AccountProvider, useAccount } from "@/hooks/use-account";
@@ -24,6 +14,37 @@ import { Loader } from "@cloudflare/kumo";
 
 // The swarm explorer pulls d3.
 const SwarmExplorer = lazyRoute(() => import("./pages/SwarmExplorer"));
+
+// Home and the workspace are the first chunk; every other page loads when it is opened.
+const UserSettingsPage = lazyRoute(() => import("./pages/UserSettingsPage"));
+
+// An awaited import, which `gate:wired` reads as the page's one reference.
+const UserMcpPage = lazyRoute(async () => {
+  const { default: page } = await import("./pages/UserMcpPage");
+
+  return { default: page };
+});
+
+const WelcomePage = lazyRoute(() => import("./pages/WelcomePage"));
+
+const DrivePage = lazyRoute(() => import("./pages/DrivePage"));
+
+const WorkspacesPage = lazyRoute(() => import("./pages/WorkspacesPage"));
+
+const PluginsPage = lazyRoute(() => import("./pages/PluginsPage"));
+
+const DevicesPage = lazyRoute(() => import("./pages/DevicesPage"));
+
+const BlueprintPage = lazyRoute(() => import("./pages/BlueprintPage"));
+
+// An awaited import, which `gate:wired` reads as the page's one reference.
+const LiveSharePage = lazyRoute(async () => {
+  const { default: page } = await import("./pages/LiveSharePage");
+
+  return { default: page };
+});
+
+const ConnectedPage = lazyRoute(() => import("./pages/ConnectedPage"));
 
 // Operator-only.
 const ControlPage = lazyRoute(() => import("./pages/ControlPage"));
@@ -37,6 +58,15 @@ function LazyFallback() {
     <div className="flex items-center justify-center h-full">
       <Loader size="base" />
     </div>
+  );
+}
+
+/** A route's page: its own error boundary, and a loader while a split page's chunk arrives. */
+function Page({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <ErrorBoundary label={label}>
+      <Suspense fallback={<LazyFallback />}>{children}</Suspense>
+    </ErrorBoundary>
   );
 }
 
@@ -67,57 +97,33 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         {/* Outside the onboarding gate: a sign-in that ends here mid-setup must not land on the setup's first step. */}
-        <Route path={APP_ROUTES.connected} element={<ErrorBoundary label="connected"><ConnectedPage /></ErrorBoundary>} />
+        <Route path={APP_ROUTES.connected} element={<Page label="connected"><ConnectedPage /></Page>} />
         <Route element={<AccountProvider><OnboardingGate /></AccountProvider>}>
-          <Route path={APP_ROUTES.welcome} element={<ErrorBoundary label="welcome"><WelcomePage /></ErrorBoundary>} />
+          <Route path={APP_ROUTES.welcome} element={<Page label="welcome"><WelcomePage /></Page>} />
           <Route element={<Layout />}>
-            <Route index element={<ErrorBoundary label="home"><HomePage /></ErrorBoundary>} />
-            <Route path={APP_ROUTES.userSettings} element={<ErrorBoundary label="user-settings"><UserSettingsPage /></ErrorBoundary>} />
-            <Route path={APP_ROUTES.userMcp} element={<ErrorBoundary label="user-mcp"><UserMcpPage /></ErrorBoundary>} />
-            <Route path={APP_ROUTES.drive} element={<ErrorBoundary label="drive"><DrivePage tab="mine" /></ErrorBoundary>} />
-            <Route path={APP_ROUTES.driveFolder} element={<ErrorBoundary label="drive-folder"><DrivePage tab="mine" /></ErrorBoundary>} />
-            <Route path={APP_ROUTES.shared} element={<ErrorBoundary label="shared"><DrivePage tab="shared" /></ErrorBoundary>} />
-            <Route path={APP_ROUTES.workspaces} element={<ErrorBoundary label="workspaces"><WorkspacesPage /></ErrorBoundary>} />
-            <Route path={APP_ROUTES.plugins} element={<ErrorBoundary label="plugins"><PluginsPage /></ErrorBoundary>} />
-            <Route path={APP_ROUTES.devices} element={<ErrorBoundary label="devices"><DevicesPage /></ErrorBoundary>} />
-            <Route path={APP_ROUTES.workspace} element={<ErrorBoundary label="workspace"><KeyedWorkspace /></ErrorBoundary>} />
-            <Route path={APP_ROUTES.workspaceAgent} element={<ErrorBoundary label="workspace-agent"><KeyedWorkspace /></ErrorBoundary>} />
-            <Route path={APP_ROUTES.workspaceAgentPath} element={<ErrorBoundary label="workspace-agent"><KeyedWorkspace /></ErrorBoundary>} />
-            <Route path={APP_ROUTES.workspaceView} element={<ErrorBoundary label="workspace-view"><KeyedWorkspace /></ErrorBoundary>} />
-            <Route path={APP_ROUTES.explore} element={
-              <ErrorBoundary label="swarm-explorer">
-                <Suspense fallback={<LazyFallback />}>
-                  <SwarmExplorer />
-                </Suspense>
-              </ErrorBoundary>
-            } />
-            <Route path={APP_ROUTES.control} element={
-              <ErrorBoundary label="control-plane">
-                <Suspense fallback={<LazyFallback />}>
-                  <ControlPage />
-                </Suspense>
-              </ErrorBoundary>
-            } />
-            <Route path={APP_ROUTES.updates} element={
-              <ErrorBoundary label="updates">
-                <Suspense fallback={<LazyFallback />}>
-                  <UpdatesPage />
-                </Suspense>
-              </ErrorBoundary>
-            } />
+            <Route index element={<Page label="home"><HomePage /></Page>} />
+            <Route path={APP_ROUTES.userSettings} element={<Page label="user-settings"><UserSettingsPage /></Page>} />
+            <Route path={APP_ROUTES.userMcp} element={<Page label="user-mcp"><UserMcpPage /></Page>} />
+            <Route path={APP_ROUTES.drive} element={<Page label="drive"><DrivePage tab="mine" /></Page>} />
+            <Route path={APP_ROUTES.driveFolder} element={<Page label="drive-folder"><DrivePage tab="mine" /></Page>} />
+            <Route path={APP_ROUTES.shared} element={<Page label="shared"><DrivePage tab="shared" /></Page>} />
+            <Route path={APP_ROUTES.workspaces} element={<Page label="workspaces"><WorkspacesPage /></Page>} />
+            <Route path={APP_ROUTES.plugins} element={<Page label="plugins"><PluginsPage /></Page>} />
+            <Route path={APP_ROUTES.devices} element={<Page label="devices"><DevicesPage /></Page>} />
+            <Route path={APP_ROUTES.workspace} element={<Page label="workspace"><KeyedWorkspace /></Page>} />
+            <Route path={APP_ROUTES.workspaceAgent} element={<Page label="workspace-agent"><KeyedWorkspace /></Page>} />
+            <Route path={APP_ROUTES.workspaceAgentPath} element={<Page label="workspace-agent"><KeyedWorkspace /></Page>} />
+            <Route path={APP_ROUTES.workspaceView} element={<Page label="workspace-view"><KeyedWorkspace /></Page>} />
+            <Route path={APP_ROUTES.explore} element={<Page label="swarm-explorer"><SwarmExplorer /></Page>} />
+            <Route path={APP_ROUTES.control} element={<Page label="control-plane"><ControlPage /></Page>} />
+            <Route path={APP_ROUTES.updates} element={<Page label="updates"><UpdatesPage /></Page>} />
           </Route>
         </Route>
         {/* Outside the shell: a viewer without a session sees this page and nothing else. */}
-        <Route path={APP_ROUTES.sharedBlueprint} element={<ErrorBoundary label="blueprint"><BlueprintPage /></ErrorBoundary>} />
+        <Route path={APP_ROUTES.sharedBlueprint} element={<Page label="blueprint"><BlueprintPage /></Page>} />
         {/* Outside onboarding too: a person a share names enters it before setting anything up. */}
-        <Route path={APP_ROUTES.sharedLive} element={<ErrorBoundary label="shared-live"><LiveSharePage /></ErrorBoundary>} />
-        <Route path={APP_ROUTES.deploy} element={
-          <ErrorBoundary label="deploy">
-            <Suspense fallback={<LazyFallback />}>
-              <DeployPage />
-            </Suspense>
-          </ErrorBoundary>
-        } />
+        <Route path={APP_ROUTES.sharedLive} element={<Page label="shared-live"><LiveSharePage /></Page>} />
+        <Route path={APP_ROUTES.deploy} element={<Page label="deploy"><DeployPage /></Page>} />
       </Routes>
     </BrowserRouter>
   );

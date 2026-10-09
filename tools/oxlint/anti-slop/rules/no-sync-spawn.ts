@@ -1,22 +1,24 @@
 import { defineRule } from "@oxlint/plugins";
+import { isAbsolute, relative } from "node:path";
 
 import type { ESTree } from "@oxlint/plugins";
 
-import { isShippedSource } from "../../../../scripts/sources.ts";
+import { isSpawnGoverned } from "../../../../scripts/sources.ts";
 
 /**
- * A synchronous spawn in shipped source.
+ * A synchronous spawn in shipped source, a test or a suite's helper.
  *
  * While Bun's `spawnSync` waits, it runs the child in an event loop of its own. A collection that lands inside that
  * wait can finalize something the main loop polls (on 2026-09-24, an earlier stderr FileSink) and release it against
  * the private loop instead, and from then on a later synchronous spawn spins at 100% CPU over a zombie child, for
- * good (oven-sh/bun#34069; reproduced on 1.4.0 and 1.4.2). The CLI suite wedged that way, and the device daemon
- * and the CLI run the same calls on users' machines, where a wedge is a machine that goes dark with no error. So
- * shipped code spawns asynchronously and awaits the child's exit, or reads what the kernel already answers (`/proc`
- * on Linux).
+ * good (oven-sh/bun#34069; reproduced on 1.4.0 and 1.4.2). The CLI suite wedged that way, and the device daemon and
+ * the CLI run the same calls on users' machines, where a wedge is a machine that goes dark with no error. The victim
+ * is whichever synchronous spawn runs next, however short its child, so a suite wedges on a `git` or a `tar` as
+ * readily as on a long one; the evals rows died of it on 2026-10-08. So shipped code and tests spawn asynchronously
+ * and await the child's exit, or read what the kernel already answers (`/proc` on Linux).
  *
- * Shipped source is `isShippedSource` in scripts/sources.ts: every package's `src` but `test-utils`, the suites'
- * own helpers. Tests are outside it.
+ * The governed set is `isSpawnGoverned` in scripts/sources.ts: shipped source, every test and `test-utils`. Scripts
+ * are outside it.
  *
  * KNOWN MISSED: a spawner reached through a binding this rule does not follow (`const run = cp.execFileSync`, a
  * second name for a local module, `const c = cp`, a module that re-exports one), `await import('bun')` and
@@ -31,12 +33,10 @@ const SPAWNER_MODULES: ReadonlySet<string> = new Set(["child_process", "node:chi
 /** The names the global object goes by, so `globalThis.Bun` is Bun. */
 const GLOBAL_OBJECT: ReadonlySet<string> = new Set(["globalThis", "global"]);
 
-/** Shipped source by the enumeration's own predicate, asked of the path from its `packages/` root. */
-function inScope(filename: string): boolean {
-	const normalized = `/${filename.replaceAll("\\", "/")}`;
-	const root = normalized.lastIndexOf("/packages/");
-
-	return root !== -1 && isShippedSource(normalized.slice(root + 1));
+/** The governed set by the enumeration's own predicate, asked of the repo-relative path: `filename` is absolute
+ *  against `cwd` under the binary and relative under `RuleTester`. */
+function inScope(filename: string, cwd: string): boolean {
+	return isSpawnGoverned((isAbsolute(filename) ? relative(cwd, filename) : filename).replaceAll("\\", "/"));
 }
 
 /** An expression that is a spawner module itself: the `Bun` global, `globalThis.Bun`, or `require` of one. */
@@ -74,11 +74,11 @@ export const noSyncSpawnRule = defineRule({
 		type: "problem",
 		docs: {
 			description:
-				"Disallow synchronous spawns in shipped source: under Bun a collection inside one can wedge the process at 100% CPU for good.",
+				"Disallow synchronous spawns in shipped source and tests: under Bun a collection inside one can wedge the process at 100% CPU for good.",
 		},
 		messages: {
 			syncSpawn:
-				"`{{name}}` spawns synchronously. While Bun waits on it, a collection can finalize a poll the main loop owns (a stderr FileSink on 2026-09-24) against the wait's own loop, and a later synchronous spawn then spins at 100% CPU over a zombie child for good (oven-sh/bun#34069). Spawn asynchronously and await the child's exit (`Bun.spawn` and `await child.exited`, or `execFile` with a callback), or read what the kernel answers (`/proc` on Linux).",
+				"`{{name}}` spawns synchronously. While Bun waits on it, a collection can finalize a poll the main loop owns (a stderr FileSink on 2026-09-24) against the wait's own loop, and a later synchronous spawn then spins at 100% CPU over a zombie child for good (oven-sh/bun#34069). Spawn asynchronously and await the child's exit (`Bun.spawn` and `await child.exited`, or `execFile` with a callback; in a test, `runToExit` or `runOk` from `@kinu.run/test-utils`), or read what the kernel answers (`/proc` on Linux).",
 		},
 	},
 	createOnce(context) {
@@ -94,7 +94,7 @@ export const noSyncSpawnRule = defineRule({
 
 		return {
 			Program() {
-				governed = inScope(context.filename);
+				governed = inScope(context.filename, context.cwd);
 				modules = new Set();
 				reads = [];
 			},

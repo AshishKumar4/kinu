@@ -7,7 +7,7 @@ import { cleanupChats, fakeClient, mountChat } from './helpers/chat-app-fixture'
 afterEach(cleanupChats);
 
 function parked(id: string, command: string): DeferredApproval {
-  return { id, command, executor: 'sandbox', reason: 'force push', status: 'queued', requestedAt: 1, decidedAt: null };
+  return { id, actor: 'actor-main', command, executor: 'sandbox', reason: 'force push', status: 'queued', requestedAt: 1, decidedAt: null };
 }
 
 type QueueControls = Pick<LocalSessionControls, 'listDeferredApprovals' | 'decideDeferredApprovals'>;

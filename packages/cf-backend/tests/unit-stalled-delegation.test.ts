@@ -2,8 +2,9 @@
  * A delegated turn that a reset ends again and again at the same step is not run forever. On kinu.run on
  * 2026-09-25, task-j7gjjr's run held its model wait past the workspace's memory and time limits, was reset, was
  * re-pended by the next recovery, and ran into the same reset: 15 memory resets in a day, every tab's socket
- * dropped with each. Recovery settles a run that got no further than the last as failed, dismisses its lease, and
- * tells a task child's hirer why. A run our own deploy ended is no such evidence, and runs again. Runs here are
+ * dropped with each. A cut in a model wait is not the step's fault, so it takes many (`STALLED_PROVIDER_CUTS`) on one
+ * build with no step finishing; then recovery settles the run as failed, dismisses its lease, and tells a task child's
+ * hirer why. A run our own deploy ended is no such evidence, and runs again. Runs here are
  * production's: the delegation drain runs the task on its fiber, and the next activation over the same rows is the
  * one a reset or a deploy leaves.
  */
@@ -18,6 +19,9 @@ import {
 import { chatCompletion, openingOf, stubAiBinding, type StubbedAiBinding } from './helpers/platform-gateway';
 
 const TASK = 'Probe what the stalled run reaches.';
+
+/** Cuts in a provider wait, on one build with no step finishing, that settle a turn (D12). */
+const STALLED_PROVIDER_CUTS = 20;
 
 /** The build every activation runs unless a deploy ships another; recovery verifies a claim's program by it. */
 const BUILD = 'build-stalled';
@@ -41,10 +45,10 @@ async function afterReset(db: Workspace['db'], gateway: StubbedAiBinding, build 
 
 /**
  * One maintenance pass of `workspace` and the delegation drain it starts, then what comes first: that drain ending, or
- * the task's third run, which waits forever as each run does. Each activation drains on its own lane, so a drain a reset
- * left behind is not this one.
+ * the task's run after the `ran`th, which waits forever as each run does. Each activation drains on its own lane, so a
+ * drain a reset left behind is not this one.
  */
-async function drainEndsOrThirdRun(workspace: Workspace, runs: AwaitedList<number>): Promise<'ended' | 'ran again'> {
+async function drainEndsOrRunsAgain(workspace: Workspace, runs: AwaitedList<number>, ran: number): Promise<'ended' | 'ran again'> {
   const ended = (async () => {
     await workspace.agent.terminalRetryPass();
     // The drain runs as a lane, which the fibers join holds.
@@ -53,7 +57,7 @@ async function drainEndsOrThirdRun(workspace: Workspace, runs: AwaitedList<numbe
     return 'ended' as const;
   })();
 
-  return await Promise.race([ended, runs.until((seen) => seen.length > 2).then(() => 'ran again' as const)]);
+  return await Promise.race([ended, runs.until((seen) => seen.length > ran).then(() => 'ran again' as const)]);
 }
 
 /** A task child, hired as the `agents` tool hires, whose task's every model call waits forever; others answer. */
@@ -81,28 +85,35 @@ async function stalledChild(): Promise<{ first: Workspace; gateway: StubbedAiBin
   return { first, gateway, runs, actorId: child.reference.actorId };
 }
 
-test('a delegated turn whose runs stall at the same step is not run a third time, and its hirer hears why', async () => {
+test('a delegated turn whose model wait a reset ends at one step is settled at the bound, and its hirer hears why', async () => {
   const { first, gateway, runs, actorId } = await stalledChild();
+  let at = Date.now();
 
   // The runs a reset ends: each waits on its model for good, so none is joined.
   await wakeForDelegatedTask(first, actorId, TASK);
   await runs.until((seen) => seen.length === 1);
 
-  const second = await afterReset(first.db, gateway);
-  await second.agent.terminalRetryPass();
-  await runs.until((seen) => seen.length === 2);
-
-  const third = await afterReset(first.db, gateway);
-
-  expect(await drainEndsOrThirdRun(third, runs)).toBe('ended');
-  const reports = eventsOver(first.db).query({ variant: 'subordinate_report' }).map((event) => v.parse(ReportSchema, event.payload));
-  expect(reports).toEqual([expect.objectContaining({ from_subordinate: 'stalled-child', status: 'blocked' })]);
-
-  // The drain re-pends a lease held past its stale age (10 minutes); a retired one stays retired.
-  setSystemTime(new Date(Date.now() + 11 * 60_000));
-
   try {
-    expect(await drainEndsOrThirdRun(third, runs)).toBe('ended');
+    // Each next activation comes past the backoff a repeated cut earns, so it asks again at once.
+    for (let run = 2; run <= STALLED_PROVIDER_CUTS; run += 1) {
+      at += 120_000;
+      setSystemTime(new Date(at));
+      const next = await afterReset(first.db, gateway);
+      await next.agent.terminalRetryPass();
+      await runs.until((seen) => seen.length === run);
+    }
+
+    at += 120_000;
+    setSystemTime(new Date(at));
+    const last = await afterReset(first.db, gateway);
+
+    expect(await drainEndsOrRunsAgain(last, runs, STALLED_PROVIDER_CUTS)).toBe('ended');
+    const reports = eventsOver(first.db).query({ variant: 'subordinate_report' }).map((event) => v.parse(ReportSchema, event.payload));
+    expect(reports).toEqual([expect.objectContaining({ from_subordinate: 'stalled-child', status: 'blocked' })]);
+
+    // The drain re-pends a lease held past its stale age (10 minutes); a retired one stays retired.
+    setSystemTime(new Date(at + 11 * 60_000));
+    expect(await drainEndsOrRunsAgain(last, runs, STALLED_PROVIDER_CUTS)).toBe('ended');
   } finally {
     setSystemTime();
   }

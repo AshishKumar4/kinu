@@ -10,11 +10,10 @@
 //
 // The credential fixture is concatenated, never literal: this file is tracked,
 // so the scan it exercises reads it.
-import { execFileSync } from 'node:child_process';
 import { describe, expect, spyOn, test } from 'bun:test';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { childEnv, git, initRepo, scratchDir } from '@kinu.run/test-utils';
+import { childEnv, git, initRepo, runOk, scratchDir } from '@kinu.run/test-utils';
 import { enumerateRepository, isTextSource, readRepositoryFile } from './sources';
 import { scanText } from './secret-scan';
 
@@ -32,22 +31,22 @@ const TRANSCRIPT = 'docs/requirements/OWNER-MESSAGES-VERBATIM.md';
 
 /** A repository holding the incident's exact shape: one clean tracked file, one
  *  ignore rule, and `TRANSCRIPT` carrying a fake credential. */
-function incidentRepo(): string {
+async function incidentRepo(): Promise<string> {
   const repo = scratchDir('sources-enumeration');
-  initRepo(repo);
+  await initRepo(repo);
   mkdirSync(join(repo, 'docs/requirements'), { recursive: true });
   writeFileSync(join(repo, 'README.md'), 'clean\n');
   writeFileSync(join(repo, '.gitignore'), `/${TRANSCRIPT}\n`);
   writeFileSync(join(repo, TRANSCRIPT), `the owner pasted ${FAKE_TOKEN} here\n`);
-  git(repo, 'add', 'README.md', '.gitignore');
+  await git(repo, 'add', 'README.md', '.gitignore');
 
   return repo;
 }
 
 describe('tracked-ness is authoritative', () => {
-  test('a tracked file matching an ignore rule stays enumerated, and is named as the anomaly', () => {
-    const repo = incidentRepo();
-    git(repo, 'add', '-f', TRANSCRIPT);
+  test('a tracked file matching an ignore rule stays enumerated, and is named as the anomaly', async () => {
+    const repo = await incidentRepo();
+    await git(repo, 'add', '-f', TRANSCRIPT);
     const warn = spyOn(console, 'error').mockImplementation(() => {});
 
     try {
@@ -60,8 +59,8 @@ describe('tracked-ness is authoritative', () => {
     }
   });
 
-  test('the same file untracked is excluded by the ignore rule, and is no anomaly', () => {
-    const repo = incidentRepo();
+  test('the same file untracked is excluded by the ignore rule, and is no anomaly', async () => {
+    const repo = await incidentRepo();
     const { files, trackedIgnored } = enumerateRepository(repo);
     expect(files).not.toContain(TRANSCRIPT);
     expect(trackedIgnored).toEqual([]);
@@ -71,9 +70,9 @@ describe('tracked-ness is authoritative', () => {
     expect(enumerateRepository(repo).files).toContain('notes.md');
   });
 
-  test('a tracked file deleted from the working tree stays enumerated; its index blob is still readable', () => {
-    const repo = incidentRepo();
-    git(repo, 'add', '-f', TRANSCRIPT);
+  test('a tracked file deleted from the working tree stays enumerated; its index blob is still readable', async () => {
+    const repo = await incidentRepo();
+    await git(repo, 'add', '-f', TRANSCRIPT);
     rmSync(join(repo, TRANSCRIPT));
     const warn = spyOn(console, 'error').mockImplementation(() => {});
 
@@ -89,29 +88,29 @@ describe('tracked-ness is authoritative', () => {
     }
   });
 
-  test('the working tree wins over the index when both exist', () => {
-    const repo = incidentRepo();
-    git(repo, 'add', '-f', TRANSCRIPT);
+  test('the working tree wins over the index when both exist', async () => {
+    const repo = await incidentRepo();
+    await git(repo, 'add', '-f', TRANSCRIPT);
     writeFileSync(join(repo, TRANSCRIPT), 'redacted\n');
     expect(readRepositoryFile(repo, TRANSCRIPT)).toBe('redacted\n');
   });
 
-  test('an empty enumeration throws rather than handing every gate a clean tree', () => {
+  test('an empty enumeration throws rather than handing every gate a clean tree', async () => {
     const repo = scratchDir('sources-empty');
-    initRepo(repo);
+    await initRepo(repo);
     expect(() => enumerateRepository(repo)).toThrow(/enumerated no file/);
   });
 
-  test('a poisoned GIT_DIR/GIT_WORK_TREE cannot redirect enumeration away from the repo `-C` names — the pre-push hook shape', () => {
+  test('a poisoned GIT_DIR/GIT_WORK_TREE cannot redirect enumeration away from the repo `-C` names — the pre-push hook shape', async () => {
     const target = scratchDir('sources-enumeration-target');
-    initRepo(target);
+    await initRepo(target);
     writeFileSync(join(target, 'TARGET-MARKER.txt'), 'target\n');
-    git(target, 'add', 'TARGET-MARKER.txt');
+    await git(target, 'add', 'TARGET-MARKER.txt');
 
     const decoy = scratchDir('sources-enumeration-decoy');
-    initRepo(decoy);
+    await initRepo(decoy);
     writeFileSync(join(decoy, 'DECOY-MARKER.txt'), 'decoy\n');
-    git(decoy, 'add', 'DECOY-MARKER.txt');
+    await git(decoy, 'add', 'DECOY-MARKER.txt');
 
     // A git hook exports GIT_DIR/GIT_WORK_TREE into ITS OWN process
     // environment, and every child it spawns inherits that by default —
@@ -125,12 +124,11 @@ describe('tracked-ness is authoritative', () => {
     // `enumerateRepository` runs inside THAT process rather than this one.
     const probeSources = join(import.meta.dir, 'sources.ts');
 
-    const probe = execFileSync('bun', ['-e', `
+    const probe = await runOk(['bun', '-e', `
       import { enumerateRepository } from ${JSON.stringify(probeSources)};
       process.stdout.write(JSON.stringify(enumerateRepository(${JSON.stringify(target)}).files));
     `], {
       env: childEnv({ GIT_DIR: join(decoy, '.git'), GIT_WORK_TREE: decoy }),
-      encoding: 'utf8',
     });
 
     const files: string[] = JSON.parse(probe);
@@ -143,9 +141,9 @@ describe('tracked-ness is authoritative', () => {
 // scan reads is the enumeration narrowed by `isTextSource` and materialised by
 // `readRepositoryFile` — so the tracked+ignored transcript, with NO working-tree
 // copy, still fails the scan on its index blob.
-test('a tracked+ignored credential with no disk copy is a secret-scan finding; untracked it is out of corpus', () => {
-  const repo = incidentRepo();
-  git(repo, 'add', '-f', TRANSCRIPT);
+test('a tracked+ignored credential with no disk copy is a secret-scan finding; untracked it is out of corpus', async () => {
+  const repo = await incidentRepo();
+  await git(repo, 'add', '-f', TRANSCRIPT);
   rmSync(join(repo, TRANSCRIPT));
   const warn = spyOn(console, 'error').mockImplementation(() => {});
 
@@ -155,7 +153,7 @@ test('a tracked+ignored credential with no disk copy is a secret-scan finding; u
     const findings = corpus.flatMap((f) => scanText(f, readRepositoryFile(repo, f)));
     expect(findings.map((f) => `${f.pattern}:${f.file}`)).toContain(`kinu-token:${TRANSCRIPT}`);
 
-    git(repo, 'rm', '-q', '--cached', TRANSCRIPT);
+    await git(repo, 'rm', '-q', '--cached', TRANSCRIPT);
     writeFileSync(join(repo, TRANSCRIPT), `the owner pasted ${FAKE_TOKEN} here\n`);
     expect(enumerateRepository(repo).files.filter(isTextSource)).not.toContain(TRANSCRIPT);
   } finally {

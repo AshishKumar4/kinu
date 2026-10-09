@@ -14,8 +14,16 @@ import { describe, test, expect } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { auditScratchOwnership, readScannableSources } from './scratch-ownership';
-import { SCRATCH_PREFIXES, SCRATCH_ROOT_PREFIX, scratchDir } from '@kinu.run/test-utils';
+import { SCRATCH_PREFIXES, SCRATCH_ROOT_PREFIX, scratchDir, spawnTest } from '@kinu.run/test-utils';
 import { currentOwner, reapAbandonedRoots, type ProcessOwner } from './process-owner';
+
+/** A pid that was a process and is not one now: a child that has exited. */
+async function endedPid(): Promise<number> {
+  const child = spawnTest(['true']);
+  await child.exited;
+
+  return child.pid;
+}
 
 /** One file, as the gate reads its corpus. */
 function audit(path: string, source: string) {
@@ -226,8 +234,8 @@ describe('the scratch reaper judges a root by its owner, never by its age', () =
     expect(existsSync(live)).toBe(true);
   });
 
-  test("a crashed owner's root is reaped, whether its pid ended, was reused, or the machine rebooted", () => {
-    const ended = Bun.spawnSync(['true']).pid;
+  test("a crashed owner's root is reaped, whether its pid ended, was reused, or the machine rebooted", async () => {
+    const ended = await endedPid();
     const gone = root('gone', { ...self, pid: ended, startTicks: 1 });
     const reused = root('reused', { ...self, startTicks: self.startTicks + 1 });
     const rebooted = root('rebooted', { ...self, bootId: 'an-earlier-boot' });
@@ -238,10 +246,10 @@ describe('the scratch reaper judges a root by its owner, never by its age', () =
     expect(existsSync(unrecorded)).toBe(true);
   });
 
-  test('a root holding files this user cannot remove is reported and left, and the sweep goes on', () => {
+  test('a root holding files this user cannot remove is reported and left, and the sweep goes on', async () => {
     // On 2026-09-25 a killed block-conformance probe left its container's root-owned output in a scratch root, the
     // next suite's sweep threw EACCES on it, and every later suite failed before collecting a test.
-    const ended = { ...self, pid: Bun.spawnSync(['true']).pid, startTicks: 1 };
+    const ended = { ...self, pid: await endedPid(), startTicks: 1 };
     const locked = root('locked', ended);
     const sealed = join(locked, 'written-as-root');
     mkdirSync(sealed);

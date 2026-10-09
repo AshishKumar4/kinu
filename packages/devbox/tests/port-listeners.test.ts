@@ -12,6 +12,7 @@ import type { PortListener } from '../src/devbox';
 import { harness } from './support/devbox-harness';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
 import { pipeExec as localExec } from './support/native-process';
+import { runToExit } from '../../test-utils/src/spawn';
 
 const root = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}port-listeners-`));
 
@@ -47,7 +48,7 @@ describe("a port's listener", () => {
     const cwd = mkdtempSync(join(root, 'serve-'));
     const fifos = ['direct', 'parent', 'none'].map((name) => join(cwd, name));
 
-    for (const fifo of fifos) Bun.spawnSync(['mkfifo', fifo]);
+    for (const fifo of fifos) await runToExit(['mkfifo', fifo]);
     const [direct = '', parent = '', none = ''] = fifos;
 
     const served = [

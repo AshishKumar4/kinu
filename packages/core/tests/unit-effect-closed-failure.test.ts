@@ -7,10 +7,10 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runToExit } from '@kinu.run/test-utils';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -24,11 +24,9 @@ interface Diagnostic {
   readonly text: string;
 }
 
-function compileFixtures() {
+async function compileFixtures() {
   const tsc = join(repoRoot, 'node_modules', '.bin', 'tsc');
-  const run = spawnSync(tsc, ['--noEmit', '--pretty', 'false', '-p', fixtureProject], { cwd: repoRoot, encoding: 'utf8' });
-
-  if (run.error) throw new Error(`could not run ${tsc}`, { cause: run.error });
+  const run = await runToExit([tsc, '--noEmit', '--pretty', 'false', '-p', fixtureProject], { cwd: repoRoot });
 
   const diagnostics: Diagnostic[] = [];
   let current: Diagnostic | undefined;
@@ -46,7 +44,7 @@ function compileFixtures() {
     }
   }
 
-  return { status: run.status ?? -1, diagnostics };
+  return { status: run.exitCode ?? -1, diagnostics };
 }
 
 /** The line of the first statement after each `// [n]` marker. */
@@ -63,7 +61,7 @@ function markedLines(): ReadonlyMap<number, number> {
   return byCase;
 }
 
-const compiled = compileFixtures();
+const compiled = await compileFixtures();
 
 const violations = compiled.diagnostics.filter((d) => d.file.endsWith('violations.ts'));
 

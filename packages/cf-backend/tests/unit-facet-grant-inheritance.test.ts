@@ -66,9 +66,9 @@ describe('reachability of the root policy read', () => {
   });
 
   /** The control that makes the pass above mean "inherited", not "ungated": with nothing granted on the root
-   *  the command is refused as `unavailable` off the named rule (a facet has no approval channel,
-   *  `createInheritedApprovalPolicy`). */
-  test('a hosted actor whose root granted nothing is still gated', async () => {
+   *  the command is not run but parked on the owner off the named rule, as the hire's own ask in the workspace's one
+   *  queue; approved, the hire is woken on its own queue and its re-issue runs. */
+  test('a hosted actor whose root granted nothing parks its gated command as its own; approved, it is woken and its re-issue runs', async () => {
     const workspace = orchestratorHarness();
     // Read, not assumed: a harness seeding a grant here would duplicate the case above.
     expect(workspaceMainActor(workspace.db).config.getShellApprovalGrants()).toEqual([]);
@@ -87,9 +87,23 @@ describe('reachability of the root policy read', () => {
     expect(refused.refusal?.reason).toBe('unavailable');
     // Attributable to the ungranted force-push, not a missing or broken shell.
     expect(refused.refusal?.error).toContain(GATED_RULE);
-    expect(refused.refusal?.error).toContain('needs owner approval');
+    expect(refused.refusal?.error).toContain('queued for owner approval');
     expect(refused.exitCode).toBe(1);
     expect(refused.stdout).toBe('');
+
+    const hire = child.actor.handle.actorId;
+    const parked = await workspace.agent.listDeferredApprovals();
+
+    expect(parked.map((action) => [action.command, action.actor])).toEqual([[GATED, hire]]);
+    await workspace.agent.decideDeferredApprovals(parked.map((action) => action.id), 'approved');
+
+    // Woken on its own durable queue, told to re-issue; the root is not.
+    const woken = workspace.db.query<{ actor_id: string }, [string]>(
+      "SELECT actor_id FROM agent_log WHERE variant = 'subordinate_task' AND payload LIKE ?",
+    ).all('%APPROVED, still not run%');
+
+    expect(woken.map((row) => row.actor_id)).toEqual([hire]);
+    expect((await shell.exec(GATED)).refusal).toBeUndefined();
   });
 });
 

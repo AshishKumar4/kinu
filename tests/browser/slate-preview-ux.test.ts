@@ -414,6 +414,8 @@ async function openChanges(newPage: () => Promise<Page>, origin: string, machine
   if (narrow) await page.click('[data-narrow-pane]');
   await page.waitForSelector('[aria-label="Changes"]');
   await page.click('[aria-label="Changes"]');
+  // The panel's chunk loads the first time Changes is shown.
+  await page.waitForSelector('[data-changes]');
 
   return page;
 }

@@ -35,7 +35,7 @@ const liveTest = test.skipIf(PLAN === null);
 
 const observations: EvalObservation[] = [];
 
-afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
+afterAll(async () => { await publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
 
 /** base64url of a SHA-256 digest: 32 bytes, unpadded. */
 const CHALLENGE = /^[A-Za-z0-9_-]{43}$/u;

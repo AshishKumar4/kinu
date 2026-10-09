@@ -1,4 +1,6 @@
 /** Real-browser account panels, viewport boundaries, deletion confirmation and workspace navigation. */
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import * as v from 'valibot';
 import { describe, expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
@@ -757,6 +759,41 @@ describe('what the Devices page says about a machine\'s history', () => {
         expect(await page.$eval('button[role="switch"][aria-label="Sandbox on Old box"]', (button) => button.getAttribute('aria-checked'))).toBe('true');
       } finally {
         await page.close();
+      }
+    });
+  });
+});
+
+const MEMORY_SHOTS = join(import.meta.dir, '..', '..', '..', 'kinu-logs', 'account-memory');
+
+describe('Settings → Memory', () => {
+  test('lists what waits on the owner, each kept fact with who said it, its revisions, and the notes, at both widths', async () => {
+    await withGallery(async (gallery) => {
+      mkdirSync(MEMORY_SHOTS, { recursive: true });
+
+      for (const viewport of ['desktop', 'mobile'] as const) {
+        const page = await freshPage(gallery, 'usersettingsstate&section=memory', 'light', viewport);
+
+        try {
+          await page.waitForSelector('[data-account-memory]');
+          await page.click('[data-account-memory-fact="reply_language"] button[aria-expanded]');
+          await page.waitForSelector('[data-account-memory-history="reply_language"]');
+          const text = await page.$eval('[data-account-memory]', (node) => node.textContent ?? '');
+
+          expect(text).toContain('Waiting for you');
+          expect(text).toContain('Keep for every workspace');
+          expect(text).toContain('Noticed in Storefront in your own words');
+          expect(text).toContain('Said in Support inbox, kept by main');
+          expect(text).toContain('You promoted it from Storefront');
+          expect(text).toContain('Invoices go to accounts@example.com');
+
+          const overflow = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
+
+          expect(overflow.scroll).toBeLessThanOrEqual(overflow.client + 1);
+          await page.screenshot({ path: join(MEMORY_SHOTS, `settings-memory-${viewport}.png`), fullPage: true });
+        } finally {
+          await page.close();
+        }
       }
     });
   });

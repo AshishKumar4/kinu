@@ -1024,6 +1024,80 @@ describe('LocalAgentHost', () => {
     }
   });
 
+  test("a hire's gated command parks on its root's queue as its own; approved, the hire is woken and its re-issue runs", async () => {
+    const brief = 'Push the release.';
+    // Gated (git-force-push) and harmless by construction: /dev/null is no repository, so git pushes nothing.
+    const gated = 'git --git-dir=/dev/null push --force origin release';
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+    const results: string[] = [];
+
+    const shellCall = (id: string) => ({
+      stream: new ReadableStream<LanguageModelV2StreamPart>({
+        start(controller) {
+          controller.enqueue({ type: 'stream-start', warnings: [] });
+          controller.enqueue({ type: 'tool-call', toolCallId: id, toolName: 'shell', input: JSON.stringify({ command: gated }) });
+          controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+          controller.close();
+        },
+      }),
+    });
+
+    const model = new TestLanguageModelV2({
+      provider: 'fake',
+      modelId: 'fake-model',
+      doGenerate: async () => textAnswer('acknowledged', usage),
+      doStream: async (options) => {
+        const prompt = JSON.stringify(options.prompt);
+        const shells = (options.tools ?? []).some((tool) => tool.name === 'shell');
+
+        // A result this run has not seen yet: the step after a call.
+        if (prompt.split('"tool-result"').length - 1 > results.length) {
+          results.push(prompt.slice(prompt.lastIndexOf('"tool-result"')));
+
+          return { stream: textStream('done', usage) };
+        }
+
+        // Its brief asks; the owner's decision, woken on its own queue, asks again once.
+        if (shells && prompt.includes(brief) && results.length === 0) return shellCall('call_ask');
+
+        if (shells && prompt.includes('APPROVED, still not run') && results.length === 1) return shellCall('call_reissue');
+
+        return { stream: textStream('ok', usage) };
+      },
+    });
+
+    const { state, project } = makeRoots();
+    await seedAgent(state, 'root');
+    const { host, runtimes } = makeHost(state, model, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
+
+    try {
+      const team = await host.team('root');
+      await team.create({ name: 'courier', role: 'researcher', mission: 'Ship releases.' });
+      const asked = awaitTurns(host, 'root/courier', 1);
+      await team.assign({ name: 'courier', task: brief, mode: 'build' });
+      await asked;
+
+      expect(results).toEqual([expect.stringContaining('queued for owner approval')]);
+      const root = await host.acquire('root');
+      const parked = await root.listDeferredApprovals();
+      const rootId = present(runtimes.get('root'), 'the root runtime').actor.actorId;
+
+      expect(parked.map((action) => [action.command, action.actor === rootId])).toEqual([[gated, false]]);
+
+      const woken = awaitTurns(host, 'root/courier', 1);
+      await root.decideDeferredApprovals(parked.map((action) => action.id), 'approved');
+      await woken;
+
+      // Re-issued under its own approval, the command ran: git's own refusal, not the gate's.
+      expect(results).toHaveLength(2);
+      expect(results[1]).not.toContain('NOT RUN');
+      expect(results[1]).toContain('not a git repository');
+      expect(await root.listDeferredApprovals()).toEqual([]);
+    } finally {
+      await host.close();
+    }
+  });
+
   test('a hire runs at the effort its parent runs at', async () => {
     // Before, a local hire resolved only its own setting and ran at the default whatever `/effort` the owner set.
     const { state, project } = makeRoots();

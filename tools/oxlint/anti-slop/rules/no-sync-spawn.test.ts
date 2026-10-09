@@ -1,8 +1,8 @@
 // Kinu-local rule; see upstream.json's `kinuRules`. The planted red->green through the real `oxlint` binary and
 // the live tree's zero findings are in ../no-sync-spawn.gate.test.ts.
 //
-// Why a synchronous spawn is banned from shipped source: under Bun 1.4, a collection that finalizes a stderr
-// FileSink while `spawnSync` waits wedges the process. A later synchronous spawn then spins at 100% CPU over a
+// Why a synchronous spawn is banned from shipped source and tests: under Bun 1.4, a collection that finalizes a
+// stderr FileSink while `spawnSync` waits wedges the process. A later synchronous spawn then spins at 100% CPU over a
 // zombie child, for good (oven-sh/bun#34069, reproduced on 1.4.0 and 1.4.2 on 2026-09-24).
 import { RuleTester } from "oxlint/plugins-dev";
 
@@ -31,12 +31,36 @@ tester.run("anti-slop/no-sync-spawn", noSyncSpawnRule, {
     { code: "import { spawn } from 'bun'; await spawn(['ls']).exited;", filename: lock },
     { code: "const { spawn } = Bun; await spawn(['ls']).exited;", filename: lock },
     { code: "await globalThis.Bun.spawn(['ls']).exited;", filename: lock },
-    // Outside shipped source: suites, their helpers and scripts are not on a user's machine.
-    { code: "import { spawnSync } from 'node:child_process'; spawnSync('tar', ['-czf', 'x']);", filename: "packages/cf-backend/tests/unit-install-script.test.ts" },
-    { code: "import { execFileSync } from 'node:child_process'; execFileSync('git', ['status']);", filename: "packages/test-utils/src/git.ts" },
+    // Outside the governed set: a script is neither shipped nor a suite.
     { code: "Bun.spawnSync(['bash', '-n']);", filename: "scripts/deploy-preflight.ts" },
+    // A test's own async spawn, the remedy the message names.
+    { code: "import { runToExit } from '@kinu.run/test-utils'; await runToExit(['tar', '-czf', 'x']);", filename: "packages/cf-backend/tests/unit-install-script.test.ts" },
   ],
   invalid: [
+    {
+      name: "a suite's spawn, however short its child: the wedge takes whichever synchronous spawn runs next",
+      code: "import { spawnSync } from 'node:child_process'; spawnSync('tar', ['-czf', 'x']);",
+      filename: "packages/cf-backend/tests/unit-install-script.test.ts",
+      errors: [error],
+    },
+    {
+      name: "a suite's helper with no test suffix, under a tests directory",
+      code: "Bun.spawnSync(['bash', '-n', '-c', command]);",
+      filename: "packages/devbox/tests/support/container-shell.ts",
+      errors: [error],
+    },
+    {
+      name: "the suites' shared helpers",
+      code: "import { execFileSync } from 'node:child_process'; execFileSync('git', ['status']);",
+      filename: "packages/test-utils/src/git.ts",
+      errors: [error],
+    },
+    {
+      name: "a suite outside packages",
+      code: "import { execFileSync } from 'node:child_process'; execFileSync('git', ['status']);",
+      filename: "scripts/ladder.test.ts",
+      errors: [error],
+    },
     {
       name: "the config lock's Darwin identity read as it stood at 8dcca981a",
       code: "const result = Bun.spawnSync({ cmd: ['/bin/ps', '-p', String(pid), '-o', 'lstart='], env: { LC_ALL: 'C' }, stdout: 'pipe', stderr: 'pipe' });",

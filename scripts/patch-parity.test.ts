@@ -80,7 +80,7 @@ function rootWithPatch(label: string, entry: PatchedDependency, patch: string): 
  * than by editing diff text, so it is a patch git itself would have written —
  * hand-spliced hunks would prove the parser tolerates hand-spliced hunks.
  */
-function buildFixture(): Fixture {
+async function buildFixture(): Promise<Fixture> {
   const entry = patchedDependencies(REPO_ROOT)[0];
 
   if (entry === undefined) throw new Error('package.json declares no patchedDependencies');
@@ -107,18 +107,18 @@ function buildFixture(): Fixture {
   const pristineModules = scratchDir('patch-parity-pristine');
   cpSync(repo, join(pristineModules, entry.pkg), { recursive: true });
 
-  initRepo(repo);
-  git(repo, 'add', '-A');
-  git(repo, 'commit', '-qm', 'pristine');
+  await initRepo(repo);
+  await git(repo, 'add', '-A');
+  await git(repo, 'commit', '-qm', 'pristine');
 
-  git(repo, 'apply', join(REPO_ROOT, entry.patch));
-  const faithfulPatch = git(repo, 'diff');
+  await git(repo, 'apply', join(REPO_ROOT, entry.patch));
+  const faithfulPatch = await git(repo, 'diff');
   const faithful = scratchDir('patch-parity-faithful');
   cpSync(repo, join(faithful, entry.pkg), { recursive: true, filter: (s) => !s.includes('/.git') });
 
   // One hunk beyond the faithful tree, captured as a patch git wrote.
   appendFileSync(join(repo, modified.to), `\n${MARKER}\n`);
-  const widerPatch = git(repo, 'diff');
+  const widerPatch = await git(repo, 'diff');
 
   const drifted = scratchDir('patch-parity-drifted');
   cpSync(faithful, drifted, { recursive: true });
@@ -135,7 +135,7 @@ function buildFixture(): Fixture {
   };
 }
 
-const fixture = buildFixture();
+const fixture = await buildFixture();
 
 const cache = bunCacheDir(REPO_ROOT);
 

@@ -40,7 +40,9 @@ own workspace, a file it wants to replace, a machine it wants to use, a
 proposed workspace, a plan to review) waits as a stack of cards on top of the
 chat's message box: the newest open with its answers, the rest behind it, each
 opening as you answer the one before. Click a card behind to answer it first.
-Work → Needs you lists the same things.
+Work → Needs you lists the same things. An agent you hired asks the same way:
+its commands wait on you in its own chat (and in the workspace's list), and
+once you approve one, it is told and runs it under its own permissions.
 
 ## 2. Day one
 
@@ -202,6 +204,18 @@ any line goes back to the agent), Files, Swarms, Agent (identity, memory,
 tools and what it changed about itself) and Env (executors, files and
 terminals). Each slate the agent writes gets a tab of its own. The gauge beside the tab strip shows context, cost and cache use.
 Work counts the items waiting on you and opens each one where you decide it.
+
+Memory has two scopes. What a workspace's agents learn stays in that
+workspace. What is about you, such as your name, how you like answers, or a standing
+instruction, can be kept for your account, which every workspace and agent of
+yours reads alongside its own. An agent asked to remember something for
+every workspace only proposes it, and the background pass that reads your
+own words proposes too. Nothing is kept for the account until you accept it
+under Settings → Memory, which also shows each kept fact's origin and every value it
+held, with Edit and Forget. A fact in a workspace's own world model (Agent →
+World model) is kept for the account at once when you choose "Keep for every
+workspace". Inside a workspace its own fact wins over the account's on the
+same subject. A shared slate's viewer never reaches your account's memory.
 
 I open Swarms when the agent tried more than one thing. The `agents` tool's
 `swarm` action grows a tree of candidates. Nodes that use tools run the full

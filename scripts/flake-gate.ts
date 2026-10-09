@@ -24,7 +24,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { availableParallelism, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { tolerate } from '@kinu.run/core/obs';
-import { stripGitContext } from '../packages/test-utils/src/git';
+import { stripGitContext } from '../packages/test-utils/src/git-env';
 import { runUnderDeadline } from './deadline';
 import { finding } from './gate-ratchet';
 import { GATE_DEADLINE_SECONDS, LADDER, TIERS, claims, narrowedTo, sharedBrowserModules, tierRun, type Gate } from './ladder';
