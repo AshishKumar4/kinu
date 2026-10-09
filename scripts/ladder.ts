@@ -2430,6 +2430,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:devbox-e2e',
     label: 'Devbox contracts on real golden containers',
+    evidence: 'devbox',
     // Its Worker, bucket and containers through the deploy's REST token, never a wrangler login; its desktop client in
     // the container's own Chrome. The staging identity whatever the deployment: production is never its authority.
     secrets: ['DEVBOX_REGISTRY_TOKEN', 'KINU_CLOUDFLARE_API_TOKEN', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'KINU_EVAL_STAGING_WEB_IDENTITY'],
@@ -2439,7 +2440,7 @@ export const LADDER: readonly Gate[] = [
     tier: 'deploy',
     // 2026-10-06, dc20261006045352da6d8: 17 contracts and verified cleanup, 370 s whole run (D72).
     seconds: 370,
-    catches: 'tools and FUSE missing from the real golden; lost exec bytes, unsafe process kills or trust; a desktop that opens empty or cannot launch; '
+    catches: 'tools and FUSE missing from the real golden; per-entry remote metadata calls, incorrect file metadata; lost exec bytes, unsafe process kills or trust; a desktop that opens empty or cannot launch; '
       + 'snapshot and R2 recovery data loss, whole-file deltas, failed compaction, serial mounts and disk-pressure failures.',
     blind: 'long snapshot lifetime, account saturation, the model path, and a product adapter no contract drives. No Docker image is built or started.',
     inputs: { kind: 'live', why: 'deploys eval-owned Cloudflare fixtures from this tree, copies staging tools, runs real containers and R2, and verifies complete cleanup.' },

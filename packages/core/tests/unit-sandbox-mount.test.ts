@@ -109,8 +109,8 @@ function container(fs: ContainerFs): SandboxHandle {
 					const bytes = fs.files.get(full);
 
 					return bytes !== undefined
-						? { name, type: 'file', size: bytes.length }
-						: { name, type: 'directory', size: 0 };
+						? { name, type: 'file', size: bytes.length, mode: 0o100644, mtimeMs: 1 }
+						: { name, type: 'directory', size: 0, mode: 0o40755, mtimeMs: 1 };
 				}),
 			};
 		},
@@ -154,6 +154,16 @@ function container(fs: ContainerFs): SandboxHandle {
 		async unexposePort() {},
 		async getExposedPorts() { return []; },
 		...sandboxHandleLifecycle,
+		async statFile(path) {
+			const resolved = fs.resolve(path);
+			const bytes = fs.files.get(resolved);
+
+			if (bytes !== undefined) return { type: 'file', size: bytes.length, mode: 0o100644, mtimeMs: 1 };
+
+			if (fs.dirs.has(resolved)) return { type: 'directory', size: 0, mode: 0o40755, mtimeMs: 1 };
+
+			throw notFound(resolved);
+		},
 	};
 
 	return handle;

@@ -2,7 +2,7 @@
 /** Real-container contracts at the staging deploy tier (m282, D72). Each run owns its Worker, bucket and snapshots. */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
@@ -148,9 +148,20 @@ async function main(): Promise<void> {
   const cleanupErrors: string[] = [];
   const { config, declared } = writeFixtureConfig(worker, scratch, recovering?.declared);
   let origin: string | undefined = recovering?.origin;
+
   const revision = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: REPO, encoding: 'utf8' }).stdout.trim();
   const dirtyDigest = createHash('sha256').update(spawnSync('git', ['diff', 'HEAD'], { cwd: REPO }).stdout).digest('hex');
-  const writeReport = () => { writeFileSync(report, JSON.stringify({ run, worker, app, bucket: worker, box, declared, origin, revision, dirtyDigest, steps, snapshots: [...snapshots], cleanupErrors }, null, 2)); };
+
+  const writeReport = () => {
+    const contents = JSON.stringify({ run, worker, app, bucket: worker, box, declared, origin, revision, dirtyDigest, steps, snapshots: [...snapshots], cleanupErrors }, null, 2);
+    writeFileSync(report, contents);
+    const evidence = process.env['BENCH_ARTIFACTS'];
+
+    if (evidence !== undefined) {
+      mkdirSync(evidence, { recursive: true });
+      writeFileSync(join(evidence, `${run}.json`), contents);
+    }
+  };
 
   const call = async <Schema extends v.GenericSchema>(path: string, schema: Schema, body?: Record<string, string>, name = box): Promise<v.InferOutput<Schema>> => {
     if (origin === undefined) throw new Error('the fixture has not deployed');
@@ -361,7 +372,12 @@ async function main(): Promise<void> {
 
   /** The container's contracts, the desktop through the product routes, and the product's own chain. */
   const productContracts = async () => {
-    await step('file-metadata', () => call('/file-contract', Json, {}, names[1]));
+    await step('file-metadata', async () => {
+      const measured = await call('/file-contract', Json, {}, names[1]);
+      process.stdout.write(`[${run}] file metadata ${JSON.stringify(measured)}\n`);
+
+      return measured;
+    });
 
     for (const kind of CONTAINER_CONTRACTS) await step(kind, () => call(`/contract?kind=${kind}`, Json, {}, names[1]));
 

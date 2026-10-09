@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { listFiles } from '../src/file-listing';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
 import { pipeExec } from './support/native-process';
+import { settle } from '../src/errors';
 import { Devbox, harness } from './support/devbox-harness';
 
 const root = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}listing-`));
@@ -30,7 +31,7 @@ test('listing metadata costs one native exec for an empty, small or wide directo
       },
     };
 
-    const listed = await listFiles(container, path);
+    const listed = await settle(listFiles(container, path));
     expect({ count: listed.files.length, calls }).toEqual({ count: width, calls: 1 });
 
     for (const entry of listed.files) {
@@ -52,7 +53,7 @@ test('types, private modes, mtimes and unusual names survive a recursive listing
   symlinkSync('private', join(path, 'directory-link'));
   symlinkSync('missing', join(path, 'dangling'));
 
-  const listed = await listFiles({ exec: pipeExec }, path, { recursive: true });
+  const listed = await settle(listFiles({ exec: pipeExec }, path, { recursive: true }));
   const entries = new Map(listed.files.map(entry => [entry.name, entry]));
   expect(listed.files.length).toBe(5);
   expect(entries.get(name)).toMatchObject({ size: 5, type: 'file', mode: 0o100600, mtimeMs: 1_700_000_000_000 });
@@ -68,7 +69,7 @@ test('directory failures retain their POSIX errno rather than becoming an empty 
   symlinkSync('loop', loop);
 
   for (const [path, code] of [[join(root, 'absent'), 'ENOENT'], [file, 'ENOTDIR'], [loop, 'ELOOP']]) {
-    await expect(listFiles({ exec: pipeExec }, path)).rejects.toMatchObject({ code: 'file', cause: { kind: 'devbox.file', code, path, operation: 'readDirectory' } });
+    await expect(settle(listFiles({ exec: pipeExec }, path))).rejects.toMatchObject({ code: 'file', cause: { kind: 'devbox.file', code, path, operation: 'readDirectory' } });
   }
 });
 
@@ -80,7 +81,7 @@ test('a native stat reads one entry without listing any of its siblings, includi
   if (native === undefined) throw new Error('the test box has no native container');
   const exec = native.exec.bind(native);
   let calls = 0;
-  native.exec = (argv, options) => {
+  native.exec = (argv: string[], options?: ContainerExecOptions) => {
     calls += 1;
 
     return exec(argv, options);

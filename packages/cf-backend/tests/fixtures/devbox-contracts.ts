@@ -1,6 +1,7 @@
 /** The deploy tier's eval-owned throwaway Worker. No route is added to Kinu. */
 import * as v from 'valibot';
-import { Devbox, GOLDEN_NAME, type BoxPeers, type DevboxStore, type DevboxState } from '../../../devbox/src/index';
+import { Devbox, GOLDEN_NAME, type BoxPeers, type DevboxStore } from '../../../devbox/src/index';
+import type { FileMetadata, ListedFile, ListFilesOptions } from '../../../devbox/src/contracts';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace/nimbus-workspace.js';
 import { GOLDEN_BASE, GoldenStateSchema, pipeParts } from '../../../devbox/src/golden';
 import { settle } from '../../../devbox/src/errors';
@@ -31,20 +32,19 @@ interface Env {
 const Snapshot = v.looseObject({ id: v.string(), lineage: v.optional(v.array(v.string()), []) });
 
 export class ContractBox extends Devbox<Env> {
-  #guestCalls = 0;
+  /** Counts the calls the adapter makes; under the defect each one is not one remote process. D81 records the control. */
+  #remoteCalls = 0;
 
-  constructor(ctx: DevboxState, env: Env) {
-    super(ctx, env);
-    const container = ctx.container;
+  override async listFiles(path: string, options?: ListFilesOptions): Promise<{ files: ListedFile[] }> {
+    this.#remoteCalls += 1;
 
-    if (container !== undefined) {
-      const exec = container.exec.bind(container);
-      container.exec = (argv, options) => {
-        this.#guestCalls += 1;
+    return super.listFiles(path, options);
+  }
 
-        return exec(argv, options);
-      };
-    }
+  override statFile(path: string, options?: { readonly follow?: boolean }): Promise<FileMetadata> {
+    this.#remoteCalls += 1;
+
+    return super.statFile(path, options);
   }
 
   enableInternet = this.env.PROBE_HTTP === '1';
@@ -62,7 +62,12 @@ export class ContractBox extends Devbox<Env> {
   /** Counts the actual native exec boundary, not Files or listFiles mocks. D81 records the cloud control. */
   async fileContract() {
     await this.ensureReady();
-    const workspace = await NimbusWorkspace.create({ sql: this.ctx.storage.sql, transactions: this.ctx });
+
+    const workspace = await NimbusWorkspace.create({
+      sql: this.ctx.storage.sql,
+      transactions: { storage: { transactionSync: work => this.ctx.storage.transactionSync(work) } },
+    });
+
     workspace.filesystem.vfs.mount('/sandbox', sandboxFiles(adaptCloudflareSandbox(this, async () => {}, null)), { resolvesPaths: true });
     const listing: { width: number; calls: number; ms: number }[] = [];
     const find: { command: string; calls: number; ms: number; entries: number }[] = [];
@@ -70,27 +75,53 @@ export class ContractBox extends Devbox<Env> {
     for (const width of [1, 72]) {
       const path = `/var/tmp/devbox-contracts/list-${String(width)}`;
       await this.exec(`mkdir -p ${path}; for i in $(seq 1 ${String(width)}); do mkdir -p ${path}/entry-$i; done`);
-      const calls = this.#guestCalls;
+      const calls = this.#remoteCalls;
       const at = Date.now();
       const listed = await this.listFiles(path);
 
       if (listed.files.length !== width) throw new Error('the listing lost a directory');
-      listing.push({ width, calls: this.#guestCalls - calls, ms: Date.now() - at });
+      listing.push({ width, calls: this.#remoteCalls - calls, ms: Date.now() - at });
     }
 
     for (let repeat = 0; repeat < 3; repeat += 1) {
       const command = 'find /sandbox/usr/share -maxdepth 1';
-      const calls = this.#guestCalls;
+      const calls = this.#remoteCalls;
       const at = Date.now();
       const ran = await workspace.exec(command);
 
       if (ran.exitCode !== 0) throw new Error(`the find failed: ${ran.stderr}`);
-      find.push({ command, calls: this.#guestCalls - calls, ms: Date.now() - at, entries: ran.stdout.trim().split('\n').length });
+      find.push({ command, calls: this.#remoteCalls - calls, ms: Date.now() - at, entries: ran.stdout.trim().split('\n').length });
     }
 
     const measured = { listing, find };
 
     if (listing.some(row => row.calls !== 1)) throw new Error(`a directory listing must cost one guest call: ${JSON.stringify(measured)}`);
+
+    const path = '/var/tmp/devbox-contracts/metadata';
+    await this.exec(`mkdir -p ${path}/private; printf bytes >${path}/file; chmod 600 ${path}/file; chmod 700 ${path}/private; `
+      + `touch -d @1700000000 ${path}/file; ln -s private ${path}/link; ln -s missing ${path}/dangling; mkfifo ${path}/fifo`);
+    const files = sandboxFiles(adaptCloudflareSandbox(this, async () => {}, null));
+    const entries = await files.readdir(path);
+    const file = entries.find(entry => entry.name === 'file');
+    const link = entries.find(entry => entry.name === 'link');
+    const fifo = entries.find(entry => entry.name === 'fifo');
+
+    if (file?.stat?.size !== 5 || file.stat.mode !== 0o100600 || file.stat.mtimeMs !== 1_700_000_000_000
+      || link?.type !== 'symlink' || link.stat?.type !== 'symlink' || fifo?.type !== 'fifo') {
+      throw new Error(`the batched metadata differs from Linux: ${JSON.stringify(entries)}`);
+    }
+
+    const probes: [string, boolean, 'directory' | 'file' | 'symlink' | null][] = [
+      ['/', true, 'directory'], [`${path}/file`, true, 'file'], [`${path}/link`, false, 'symlink'],
+      [`${path}/link`, true, 'directory'], [`${path}/dangling`, true, null],
+    ];
+
+    for (const [operand, follow, type] of probes) {
+      const before = this.#remoteCalls;
+      const stat = await files.stat(operand, { follow });
+
+      if ((stat?.type ?? null) !== type || this.#remoteCalls - before !== 1) throw new Error('stat/lstat did not read the single operand directly');
+    }
 
     return measured;
   }

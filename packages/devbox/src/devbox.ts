@@ -2418,7 +2418,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   async listFiles(path: string, options?: ListFilesOptions) {
-    return await settle(this.#claimed(pathScopes({ path, recursive: options?.recursive === true }), attempt("file", () => readDirectory(this.#container(), path, options))).pipe(Effect.mapError(fileFault)));
+    return await settle(this.#claimed(pathScopes({ path, recursive: options?.recursive === true }),
+      readDirectory(this.#container(), path, options)).pipe(Effect.mapError(fileFault)));
   }
 
   statFile(path: string, options?: { readonly follow?: boolean }): Promise<FileMetadata> {

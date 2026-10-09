@@ -594,7 +594,7 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 describe('a live mount point is a directory of this plane', () => {
 	test('stat answers structurally even where the mounted tree cannot stat its own root', async () => {
 		const container = fakeTree({ '/workspace/build.log': 'ok' });
-		// The real sandbox view derives stat from the parent listing, so stat('/') is null.
+		// A structural mount point is a directory even if its backend cannot report root metadata.
 		const blindRoot = { ...container, stat: async (path: string) => path === '/' ? null : container.stat(path) };
 		const mounted = withMountTable(fakeTree({}), [mountOf('sandbox', blindRoot)]);
 

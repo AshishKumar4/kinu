@@ -1,6 +1,7 @@
 import * as v from 'valibot';
+import { Effect } from 'effect';
 import type { ListFilesOptions, ListedFile } from './contracts';
-import { DevboxError } from './errors';
+import { attempt, attemptSync, DevboxError } from './errors';
 
 const Entry = v.object({
   name: v.string(), path: v.string(), absolutePath: v.string(),
@@ -15,26 +16,37 @@ const Reply = v.union([
 ]);
 
 /** One guest process enumerates and lstats the entries; no child metadata crosses the exec boundary alone. */
-export async function listFiles(container: Pick<Container, 'exec'>, path: string, options: ListFilesOptions = {}): Promise<{ files: ListedFile[] }> {
-  if (path.length === 0) throw new TypeError('path must not be empty');
+export function listFiles(container: Pick<Container, 'exec'>, path: string, options: ListFilesOptions = {}): Effect.Effect<{ files: ListedFile[] }, DevboxError> {
+  return Effect.gen(function* () {
+    if (typeof path !== 'string') return yield* Effect.fail(new DevboxError('invalid-input', 'path must be a string'));
 
-  if (path.includes('\0')) throw new TypeError('path cannot contain NUL characters');
+    if (path.length === 0) return yield* Effect.fail(new DevboxError('invalid-input', 'path must not be empty'));
 
-  if (!path.startsWith('/')) throw new TypeError('cwd is required when path is relative');
-  const output = await (await container.exec(['python3', '-c', LIST_FILES, path, options.recursive === true ? '1' : '0'])).output();
-  const decoder = new TextDecoder();
+    if (path.includes('\0')) return yield* Effect.fail(new DevboxError('invalid-input', 'path cannot contain NUL characters'));
 
-  if (output.exitCode !== 0) throw new DevboxError('io', `directory metadata read exited ${String(output.exitCode)}: ${decoder.decode(output.stderr)}`);
-  const reply = v.parse(v.pipe(v.string(), v.parseJson(), Reply), decoder.decode(output.stdout));
+    if (!path.startsWith('/')) return yield* Effect.fail(new DevboxError('invalid-input', 'cwd is required when path is relative'));
 
-  if ('error' in reply) {
-    const error = reply.error;
-    throw new DevboxError('file', `${error.operation} '${error.path}': ${error.detail}`, {
-      cause: { kind: 'devbox.file', code: error.code, path: error.path, operation: error.operation },
-    });
-  }
+    const output = yield* attempt('io', async () => await (await container.exec(['python3', '-c', LIST_FILES, path, options.recursive === true ? '1' : '0'])).output());
 
-  return reply;
+    const decoder = new TextDecoder();
+
+    if (output.exitCode !== 0) {
+      return yield* Effect.fail(new DevboxError('io', `directory metadata read exited ${String(output.exitCode)}: ${decoder.decode(output.stderr)}`));
+    }
+
+    const reply = yield* attemptSync('io', () => v.parse(v.pipe(v.string(), v.parseJson(), Reply), decoder.decode(output.stdout)),
+      'the directory metadata read answered outside its contract');
+
+    if ('error' in reply) {
+      const error = reply.error;
+
+      return yield* Effect.fail(new DevboxError('file', `${error.operation} '${error.path}': ${error.detail}`, {
+        cause: { kind: 'devbox.file', code: error.code, path: error.path, operation: error.operation },
+      }));
+    }
+
+    return reply;
+  });
 }
 
 const LIST_FILES = `
