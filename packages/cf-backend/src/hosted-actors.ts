@@ -331,8 +331,10 @@ export function prepareHostedTurn(
   }));
 }
 
-/** The owner writing to an agent that waits on input answers that wait, as a message from its hirer does. */
+/** The owner writing to an agent that waits on input answers that wait, as a message from its hirer does. The root
+ *  agent has no hirer to wait on. */
 function ownerAnswersWait(seams: HostedActorSeams, actor: BoundActor): void {
+  if (actor.record.parentActorId === null) return;
   const hirer = hostedHirer(seams, actor);
   const roster = seams.roster(hirer);
 
