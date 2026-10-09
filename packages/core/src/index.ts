@@ -1624,7 +1624,7 @@ export {
   type StepLike, type ToolResultLike, type TurnSinks,
 } from './orchestrator/turn-accumulator';
 
-export { readWorkspaceWork, hasWorkspaceWork, actorReadHandle, WorkspaceWorkSchema } from './read-models/workspace-work';
+export { readWorkspaceWork, hasWorkspaceWork, actorReadHandle, WorkspaceWorkSchema, WORK_TAB_JOBS } from './read-models/workspace-work';
 
 export { agentTitle, nestedAgent, type AgentLinkIds } from './subordinates/nested-agent';
 
@@ -1652,6 +1652,8 @@ export {
 export { readAgentFigures, recordAgentFigures, reportedAgentFigures, NO_FIGURES, type AgentFigures } from './read-models/agent-figures';
 
 export type { WorkspaceWork, OwnedPlan, OwnedTask, WorkspaceWorkOwner } from './read-models/workspace-work';
+
+export { openingList, openingListOf, listedOn, type OpeningList } from './read-models/opening';
 
 export {
   AgentOrchestrator, type AgentOrchestratorDeps,

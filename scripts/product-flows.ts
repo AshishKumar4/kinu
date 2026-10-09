@@ -1121,7 +1121,8 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
 
     // Back to the workspace, the way a person returns: its own page, not the agent's.
     await back.goto(`${target.origin}/workspace/${encodeURIComponent(workspace)}`, { waitUntil: 'load' });
-    await settledAfter(back, ledger, 'getWorkspaceSnapshot', 'getChatHistoryPage', 'listWorkspaceAgents');
+    // The agents list arrives on the opening read (`getWorkspaceOpening`), not on its own.
+    await settledAfter(back, ledger, 'getWorkspaceOpening', 'getChatHistoryPage');
     // The sidebar's workspaces arrive over HTTP once the roster socket opens, which the ledger does not see.
     await until(back, "the sidebar's workspace list", SIDEBAR_LISTED);
     await back.click('[data-agents-counter]');
@@ -1281,7 +1282,7 @@ export async function countRpc(page: Page): Promise<RpcCounter> {
  *  `rpc-gate` classifies it `interactive` rather than `workspace.read` — that
  *  axis is authorization, and the Journal it feeds is the workspace's. */
 const WORKSPACE_READS = [
-  'getWorkspaceSnapshot', 'getExposedPorts', 'listPendingActions', 'getMemoryContent',
+  'getWorkspaceOpening', 'getWorkspaceSnapshot', 'getExposedPorts', 'listPendingActions', 'getMemoryContent',
   'getToolDescriptions', 'getExecutors', 'listBackgroundJobs', 'listSlates',
   'listPendingConsents', 'getActivePlanReview', 'getEvolutionChangelog',
 ] as const;
@@ -1666,7 +1667,7 @@ export async function workspaceGetsFirstAnswer(target: FlowTarget): Promise<Firs
     // #21: a hello turn must not open an inspector. The initial snapshot and turn-triggered refreshes
     // supply its state; an idle page no longer polls listPendingActions.
     do {
-      await waitOn(page, 'the workspace snapshot and its outstanding reads', settledAfter(page, ledger, 'getWorkspaceSnapshot'));
+      await waitOn(page, 'the workspace opening and its outstanding reads', settledAfter(page, ledger, 'getWorkspaceOpening'));
       await rendered(page);
     } while (!ledger.quiet());
 
