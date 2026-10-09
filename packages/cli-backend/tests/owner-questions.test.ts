@@ -121,7 +121,8 @@ describe('LocalAgentSession: asking the owner', () => {
       const pair = askPair(resumed);
 
       expect(pair.result).toContain('Integer cents');
-      expect(pair.after).toEqual([]);
+      // A new process states the runtime afresh after the answer, as after any restart; nothing else follows it.
+      expect(pair.after.every((message) => JSON.stringify(message.content).includes('<dynamic_context'))).toBe(true);
       expect(second.requests).toHaveLength(1);
     } finally {
       await second.agent.end();
@@ -181,21 +182,27 @@ describe('LocalAgentSession: asking the owner', () => {
     }
   });
 
-  test('a message sent while a question is open answers it in the chat', async () => {
+  test('a message sent while a question is open answers it in the chat, ahead of the work the question holds', async () => {
     const { db, agent, requests } = session([
       { call: 'ask_owner', input: ASK },
       { answer: 'Cents, then.' },
+      { answer: 'The job finished.' },
     ]);
 
     try {
       await agent.send('Migrate the ledger.', { id: crypto.randomUUID(), mode: 'build' });
+      const held = agent.enqueueTurn({ text: 'A background job finished.', metadata: { kinuEvent: 'background_job' } });
+
       await agent.send('Use cents, and keep the old column a week.', { id: crypto.randomUUID(), mode: 'build' });
+      await held;
+      await agent.settleBackgroundWork();
 
       expect((await agent.listOwnerQuestions()).map((asking) => asking.asked.status)).toEqual(['in_chat']);
       const pair = askPair(requests[1] ?? []);
 
       expect(pair.result).not.toBeNull();
       expect(JSON.stringify(pair.after)).toContain('keep the old column a week');
+      expect(JSON.stringify(requests[2]?.at(-1))).toContain('A background job finished.');
     } finally {
       await agent.end();
       db.close();

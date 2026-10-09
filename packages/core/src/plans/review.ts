@@ -18,7 +18,7 @@ import type {
 } from '../types/plans';
 import type { BackendHost, EnqueueTurnResult, ProgrammaticTurn } from '../types/backend-host';
 import { admitReviewAnnotations, byteLength, MAX_PLAN_ANNOTATIONS_BYTES } from './annotation-admission';
-import { OWNER_ANSWER_SIGNAL } from './owner-questions';
+import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
 
 export type {
   PlanAnnotationMathTarget, PlanAnnotationTextPosition, PlanDecisionOutcome, PlanEdit,

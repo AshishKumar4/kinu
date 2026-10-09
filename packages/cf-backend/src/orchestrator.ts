@@ -2350,8 +2350,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         await this.handInput(actorId, async () => { await calls.answerOwnerQuestions(this.agentSnapshot(actorId), id, answers); });
         this.liveReadsMoved(['listOwnerQuestions']);
       },
+      // A dismissal may leave a sibling's answer owed a turn, so it is handed in as an answer is.
       dismiss: async (actorId, id) => {
-        const closed = await (await this.agentCalls(actorId)).dismissOwnerQuestions(this.agentSnapshot(actorId), id);
+        const calls = await this.agentCalls(actorId);
+        const closed = await this.handInput(actorId, async () => await calls.dismissOwnerQuestions(this.agentSnapshot(actorId), id));
 
         this.liveReadsMoved(['listOwnerQuestions']);
 

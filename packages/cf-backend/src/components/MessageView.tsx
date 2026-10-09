@@ -422,7 +422,8 @@ function ToolCallPart({ part, expanded, onToggleExpand }: { part: AnyToolPart; e
   const output = partOutput(part);
   const input = partInput(part);
 
-  if (getToolName(part) === ASK_OWNER_TOOL) return <AskRecord callId={part.toolCallId} input={input} />;
+  // A call the SDK refused asked nothing: it reads as any refused call does.
+  if (getToolName(part) === ASK_OWNER_TOOL && part.state !== "output-error") return <AskRecord callId={part.toolCallId} input={input} />;
 
   const previewUrl = extractPreviewUrl(output);
 

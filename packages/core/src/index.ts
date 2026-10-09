@@ -1,9 +1,9 @@
 export {
-  AskingAgentSchema, OwnerAnswersSchema, OWNER_ANSWER_SIGNAL, OwnerQuestionStore, answeredSummary,
+  AskingAgentSchema, OwnerAnswersSchema, OwnerQuestionStore,
   type AskedQuestions, type AskingAgent, type OwnerAnswer, type QuestionStatus,
 } from './plans/owner-questions';
 
-export { AskOwnerInputSchema, OTHER_OPTION, type OwnerQuestion } from './types/owner-questions';
+export { AskOwnerInputSchema, OTHER_OPTION, OWNER_ANSWER_SIGNAL, type OwnerQuestion } from './types/owner-questions';
 
 export { initFiberTable, tableExists } from './identity/schema';
 

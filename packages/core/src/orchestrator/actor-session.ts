@@ -50,7 +50,10 @@ import { recordTurnResumed, sameBuildOf } from './turn-recovery-events';
 import { decideInterruptedTurn, type InterruptedTurnVerdict } from './turn-recovery';
 import type { ReportedTurn } from '../subordinates/turn-reports';
 import { lostToolCall } from '../tools/effect-claim';
-import { OWNER_ANSWER_SIGNAL, OwnerQuestionStore } from '../plans/owner-questions';
+import { OwnerQuestionStore } from '../plans/owner-questions';
+import { turnReasonForMetadata } from '../prompting/surface';
+import { metadataTier } from './turn-assembly';
+import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
 import { ASK_OWNER_TOOL } from '../tools/registry';
 import type { MessageReference, MessagePartReference, PreparedMessage } from '../session/messages';
 
@@ -212,6 +215,9 @@ export class ActorSession {
   private readonly landed: LandedSteerRow[] = [];
   private active: ActiveTurn | null = null;
   private mode: WorkMode = 'build';
+
+  /** The running turn's metadata: a question it asks keeps the tier and reason its answer's turn runs under. */
+  private turnMetadata: JsonObject | undefined;
   private restoration: Promise<void> = Promise.resolve();
 
   get currentTurnId(): string | null {
@@ -587,6 +593,7 @@ export class ActorSession {
       claim: null, claimSettled: false, trace: null, startedAt: 0, ended: null,
     };
     this.mode = mode;
+    this.turnMetadata = metadata;
     this.landed.length = 0;
     this.orchestrator.beginTurn(startedAt, metadata);
     this.orchestrator.restrictTurnWorkMode(mode);
@@ -899,9 +906,12 @@ export class ActorSession {
           return answered === null ? lostToolCall(this.runtime.storage.sql, this.runtime.actor, lease.turnId, call) : { state: 'settled', result: answered };
         },
         onAsk: (calls) => {
-          this.questions.ask(calls, { turnId: lease.turnId, mode: this.mode });
+          const metadata = this.turnMetadata;
+
+          this.questions.ask(calls, { turnId: lease.turnId, mode: this.mode, tier: metadataTier(metadata) ?? null, reason: turnReasonForMetadata(metadata) });
           this.orchestrator.acc.askedOwner = true;
         },
+        waitsOn: (call) => this.questions.waitsOn(call),
         measureContext: true, ...(active.trace !== null && { trace: active.trace }),
         persistStreamPart: part => stream.nativePart(part),
         persistStep: (record) => stream.nativeStep(record, () => this.recordStep(record)),

@@ -4,7 +4,8 @@
  * one turn; restart replays pending sends and owed effects; an interrupted turn continues once, in its run.
  */
 
-import { answeredSummary, OWNER_ANSWER_SIGNAL, type OwnerAnswer } from '../plans/owner-questions';
+import { answeredSummary, resumeMetadata, type OwnerAnswer } from '../plans/owner-questions';
+import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
 import type { TrialTurn } from '../evolution/trial-rules';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
@@ -329,6 +330,9 @@ export class ChatSession {
   private turnId: string | null = null;
   /** Null for a user turn, whose row is durable from admission. */
   private openingRow: PreparedConversationEntry | null = null;
+
+  /** The asking turn the running turn continues from, while it is an answer's turn. */
+  private resumingAsk: string | null = null;
   private messageId = '';
   private turnTrial: TrialTurn | null = null;
   /** Armed only by a one-shot task turn (completion-gate.ts). */
@@ -499,15 +503,13 @@ export class ChatSession {
   resumeAnswered(): void {
     const { questions } = this.actorSession;
 
-    for (const row of questions.owedResumes()) {
-      const identity = `owner-answer:${row.id}`;
+    for (const owed of questions.owedResumes()) {
+      const identity = `owner-answer:${owed.turnId}`;
 
-      if (this.announcementOnDisk(identity)) questions.markResumed(row.id);
+      if (this.announcementOnDisk(identity)) questions.markResumed(owed.turnId);
       else if (!this.ended && !this.announcementInFlight(identity)) {
         this.queue.unshift({
-          text: answeredSummary(row), kind: 'programmatic', idempotencyKey: identity,
-          metadata: { kinuEvent: OWNER_ANSWER_SIGNAL, kinuMode: row.mode, askId: row.id },
-          settle: () => {},
+          text: answeredSummary(owed.asked), kind: 'programmatic', idempotencyKey: identity, metadata: resumeMetadata(owed), settle: () => {},
         });
       }
     }
@@ -677,7 +679,7 @@ export class ChatSession {
 
   /** Pending steers are dropped and returned so the surface can restore them. */
   interrupt(): string[] {
-    this.dismissQuestions();
+    this.abandonQuestions();
     const returned = this.actorSession.interrupt();
     // The returned words' reservation is spent, or a restart would re-deliver them.
     const ids = returned.flatMap((steer) => steer.id === undefined ? [] : [steer.id]);
@@ -690,22 +692,28 @@ export class ChatSession {
 
   /** Unseen steers stay queued and rerun; {@link interrupt} hands them back instead. */
   stop(): void {
-    this.dismissQuestions();
+    this.abandonQuestions();
     this.actorSession.stop();
   }
 
-  /** The owner's answer: the asking call's result, and the turn that continues from it, owed at once. */
+  /** The owner's answer: the asking call's result, and the turn that continues from it, owed once its step's every
+   *  question has closed. */
   answerQuestions(id: string, answers: readonly OwnerAnswer[]): Effect.Effect<void, KinuError> {
     return Effect.andThen(this.actorSession.questions.answer(id, answers), Effect.sync(() => { this.resumeAnswered(); }));
   }
 
-  /** Closes questions unanswered, `id`'s or (a Stop) every open one; what waited behind them may then run. */
-  dismissQuestions(id?: string): number {
+  /** `id`'s questions closed unanswered: the agent reads that, and a sibling's answer may now be resumed. */
+  dismissQuestions(id: string): number {
     const closed = this.actorSession.questions.close('dismissed', id).length;
 
-    if (closed > 0) this.pump();
+    this.resumeAnswered();
 
     return closed;
+  }
+
+  /** A Stop, a clear or a walk-back: nothing the agent asked is waited on or resumed; what waited behind it may run. */
+  private abandonQuestions(): void {
+    if (this.actorSession.questions.abandon() > 0) this.pump();
   }
 
   /** Only a running turn keyed under `prefix`. */
@@ -751,6 +759,8 @@ export class ChatSession {
   /** Queue and running turn define "in flight"; delivery is awaited so the redraw precedes the answer. */
   async revertTo(entryId: string): Promise<void> {
     await this.actorSession.revertConversation(this.sessionId, entryId, () => this.turnInFlight() ? Effect.fail(new KinuError('denied', REVERT_NEEDS_IDLE)) : Effect.void);
+    // An open question's call, or an answered one not yet resumed, ends the conversation: a walk-back removes it.
+    this.abandonQuestions();
     this.emit({ type: 'history-reverted', entryId });
     await this.flushEvents();
   }
@@ -758,6 +768,7 @@ export class ChatSession {
   /** Resolves once the emptied request is measured, with why not if the measure failed; the clear itself stands. */
   async clear(): Promise<KinuError | null> {
     await this.actorSession.clearConversation(this.sessionId, () => this.turnInFlight() ? Effect.fail(new KinuError('denied', CLEAR_NEEDS_IDLE)) : Effect.void);
+    this.abandonQuestions();
 
     return this.measureCleared();
   }
@@ -952,8 +963,7 @@ export class ChatSession {
           break;
         }
 
-        if (this.heldByQuestions()) break;
-        const item = this.queue.shift();
+        const item = this.nextRunnable();
 
         if (item === undefined) break;
         // Checked per item, immediately before the turn runs. A refusal settles the item, so its producer
@@ -1019,11 +1029,15 @@ export class ChatSession {
     }
   }
 
-  /** A question to the owner holds the agent as a call to them would: only their message or answer runs. */
-  private heldByQuestions(): boolean {
-    const head = this.queue[0];
+  /**
+   * The next item to run. A question to the owner holds the agent as a call to them would: while one is open, only the
+   * owner's message, an answer's turn or the asking turn re-opened runs, ahead of the work it holds, which keeps its order.
+   */
+  private nextRunnable(): QueueItem | undefined {
+    if (!this.actorSession.questions.hasOpen()) return this.queue.shift();
+    const at = this.queue.findIndex((item) => item.kind === 'user' || item.continuation !== undefined || item.metadata?.kinuEvent === OWNER_ANSWER_SIGNAL);
 
-    return head?.kind === 'programmatic' && head.metadata?.kinuEvent !== OWNER_ANSWER_SIGNAL && this.actorSession.questions.hasOpen();
+    return at < 0 ? undefined : this.queue.splice(at, 1)[0];
   }
 
   /** When the queue's head is a re-opened turn still inside its backoff, on a host whose wake can end it: that end. */
@@ -1094,9 +1108,13 @@ export class ChatSession {
     const inputReference = await this.actorSession.canonical.admitInput({ id: this.turnId, turnId: this.turnId, message: turnInputMessage(item), assertOwner: () => this.actorSession.runtime.actor.assertCurrent() });
     const { questions } = this.actorSession;
 
-    // The owner wrote instead of choosing: their message answers the open questions. An answer's own turn is under way.
-    if (item.kind === 'user') questions.close('in_chat');
-    else if (event === OWNER_ANSWER_SIGNAL && v.is(v.string(), item.metadata?.askId)) questions.markResumed(item.metadata.askId);
+    // The owner wrote instead of choosing: their message answers the open questions, and the answers given ride it.
+    if (item.kind === 'user') {
+      questions.close('in_chat');
+      questions.retireResumes();
+    }
+
+    this.resumingAsk = event === OWNER_ANSWER_SIGNAL && v.is(v.string(), item.metadata?.askTurn) ? item.metadata.askTurn : null;
 
     const metadata = authoredTurnMetadata(item);
 
@@ -1523,6 +1541,9 @@ export class ChatSession {
   /** Public rows contain references only; output bytes committed before this terminal transaction. */
   private persist(assistant: PreparedConversationEntry | null): void {
     if (this.openingRow !== null) this.transcript.appendUser(this.openingRow);
+
+    // Recorded with the turn it owed: a death before leaves the answer owed, and its turn is resumed again.
+    if (this.resumingAsk !== null) this.actorSession.questions.markResumed(this.resumingAsk);
 
     if (assistant !== null) this.transcript.appendAssistant(assistant);
   }

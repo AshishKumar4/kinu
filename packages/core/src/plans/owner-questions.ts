@@ -12,13 +12,10 @@ import type { ActorHandle } from '../identity/actor-handle';
 import { KinuError } from '../obs/error';
 import { argumentDigest } from '../safety/argument-digest';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
-import type { WorkMode } from '../types/turn';
-import { AskOwnerInputSchema, OwnerQuestionSchema, type OwnerQuestion } from '../types/owner-questions';
-import type { JsonValue } from '../utils/json';
+import { TurnReasonSchema, type TurnReason, type WorkMode } from '../types/turn';
+import { AskOwnerInputSchema, OWNER_ANSWER_SIGNAL, OwnerQuestionSchema, type OwnerQuestion } from '../types/owner-questions';
+import type { JsonObject, JsonValue } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
-
-/** The `kinuEvent` of the turn an answer starts: it continues from the answered call, with no input of its own. */
-export const OWNER_ANSWER_SIGNAL = 'owner_answer';
 
 /** One question's answer: the options chosen, by label, and what the owner typed for "Other" or as a note. */
 const OwnerAnswerSchema = v.strictObject({
@@ -65,9 +62,22 @@ export interface AskCall {
   readonly input: JsonValue;
 }
 
+/** The turn that asked, as the turn its answers start continues it: same mode, tier and reason. */
+export interface AskingTurn {
+  readonly turnId: string;
+  readonly mode: WorkMode;
+  readonly tier: string | null;
+  readonly reason: TurnReason;
+}
+
+/** An asking turn whose questions are all closed, some answered: it owes the one turn that continues from its calls. */
+export interface OwedResume extends AskingTurn {
+  readonly asked: readonly AskedQuestions[];
+}
+
 interface Row {
-  actor_id: string; id: string; call_id: string; turn_id: string; mode: string; questions_json: string; status: string;
-  answers_json: string | null; asked_at: number; closed_at: number | null;
+  actor_id: string; id: string; call_id: string; turn_id: string; mode: string; tier: string | null; reason_json: string;
+  questions_json: string; status: string; answers_json: string | null; asked_at: number; closed_at: number | null;
 }
 
 function asked(row: Row): AskedQuestions {
@@ -87,6 +97,8 @@ export function initOwnerQuestionsTable(execRaw: RawSqlExec): void {
     call_id        TEXT NOT NULL,
     turn_id        TEXT NOT NULL,
     mode           TEXT NOT NULL,
+    tier           TEXT,
+    reason_json    TEXT NOT NULL,
     digest         TEXT NOT NULL,
     questions_json TEXT NOT NULL,
     status         TEXT NOT NULL,
@@ -97,10 +109,11 @@ export function initOwnerQuestionsTable(execRaw: RawSqlExec): void {
     PRIMARY KEY (actor_id, id)
   )`);
   execRaw('CREATE INDEX IF NOT EXISTS idx_owner_questions_call ON owner_questions(actor_id, call_id, digest)');
+  execRaw('CREATE INDEX IF NOT EXISTS idx_owner_questions_turn ON owner_questions(actor_id, turn_id)');
   execRaw('CREATE INDEX IF NOT EXISTS idx_owner_questions_open ON owner_questions(actor_id, status, asked_at)');
 }
 
-/** The call's own digest: a repair finds its row by call id and input, as providers reuse call ids across turns. */
+/** The call's own digest: providers reuse call ids across turns, so a call is found by its id and its input. */
 const callDigest = (input: JsonValue): string => argumentDigest({ tool: 'ask_owner', args: input });
 
 /** A question's answer in words, the options by label, then what the owner typed. */
@@ -155,8 +168,8 @@ export class OwnerQuestionStore {
     return this.actor.actorId;
   }
 
-  /** Keeps each valid call's questions, once: a replayed step's call is the row it already made. */
-  ask(calls: readonly AskCall[], turn: { readonly turnId: string; readonly mode: WorkMode }): AskedQuestions[] {
+  /** Keeps each valid call's questions, once: a replayed step's call is the row its turn already made. */
+  ask(calls: readonly AskCall[], turn: AskingTurn): AskedQuestions[] {
     this.actor.assertCurrent();
     const made: AskedQuestions[] = [];
 
@@ -165,16 +178,19 @@ export class OwnerQuestionStore {
 
       if (!input.success) continue;
       const digest = callDigest(call.input);
-      const existing = this.byCall(call.toolCallId, digest);
 
-      if (existing !== null) {
-        made.push(existing);
+      const existing = this.sql<Row>`SELECT * FROM owner_questions
+        WHERE actor_id=${this.actorId} AND turn_id=${turn.turnId} AND call_id=${call.toolCallId} AND digest=${digest}`[0];
+
+      if (existing !== undefined) {
+        made.push(asked(existing));
         continue;
       }
 
       const id = `ask-${nanoid(10)}`;
-      void this.sql`INSERT INTO owner_questions(actor_id,id,call_id,turn_id,mode,digest,questions_json,status,asked_at)
-        VALUES(${this.actorId},${id},${call.toolCallId},${turn.turnId},${turn.mode},${digest},${JSON.stringify(input.output.questions)},'open',${this.now()})`;
+      void this.sql`INSERT INTO owner_questions(actor_id,id,call_id,turn_id,mode,tier,reason_json,digest,questions_json,status,asked_at)
+        VALUES(${this.actorId},${id},${call.toolCallId},${turn.turnId},${turn.mode},${turn.tier},${JSON.stringify(turn.reason)},${digest},
+          ${JSON.stringify(input.output.questions)},'open',${this.now()})`;
       markStoreChanged(this.sql);
       const row = this.get(id);
 
@@ -191,8 +207,14 @@ export class OwnerQuestionStore {
     return row === undefined ? null : asked(row);
   }
 
-  private byCall(callId: string, digest: string): AskedQuestions | null {
-    const row = this.sql<Row>`SELECT * FROM owner_questions WHERE actor_id=${this.actorId} AND call_id=${callId} AND digest=${digest}
+  /**
+   * A call's questions. A provider that reuses a call id may make the same call again in a later turn: the newer row
+   * answers for both, and no request goes out while it is open (`waitsOn`).
+   */
+  private byCall(call: AskCall): AskedQuestions | null {
+    this.actor.assertCurrent();
+
+    const row = this.sql<Row>`SELECT * FROM owner_questions WHERE actor_id=${this.actorId} AND call_id=${call.toolCallId} AND digest=${callDigest(call.input)}
       ORDER BY asked_at DESC LIMIT 1`[0];
 
     return row === undefined ? null : asked(row);
@@ -200,21 +222,20 @@ export class OwnerQuestionStore {
 
   /** The repair's lookup: the result of an `ask_owner` call left unpaired, once its questions closed. */
   outcome(call: AskCall): string | null {
-    this.actor.assertCurrent();
-    const row = this.byCall(call.toolCallId, callDigest(call.input));
+    const row = this.byCall(call);
 
     return row === null ? null : questionsOutcome(row);
   }
 
-  /** Questions waiting on the owner (`open`), or answers whose turn has not opened (`answered`). */
-  private waiting(status: 'open' | 'answered'): AskedQuestions[] {
-    this.actor.assertCurrent();
-
-    return this.sql<Row>`SELECT * FROM owner_questions WHERE actor_id=${this.actorId} AND status=${status} AND resumed_at IS NULL ORDER BY asked_at`.map(asked);
+  /** Whether the call's questions still wait on the owner: a turn ending on it sends nothing until they close. */
+  waitsOn(call: AskCall): boolean {
+    return this.byCall(call)?.status === 'open';
   }
 
   open(): AskedQuestions[] {
-    return this.waiting('open');
+    this.actor.assertCurrent();
+
+    return this.sql<Row>`SELECT * FROM owner_questions WHERE actor_id=${this.actorId} AND status='open' ORDER BY asked_at`.map(asked);
   }
 
   hasOpen(): boolean {
@@ -264,23 +285,65 @@ export class OwnerQuestionStore {
     return open.map((row) => ({ ...row, status, closedAt: at }));
   }
 
-  /** Answered questions whose resume turn never opened: a process died between the answer and the wake. */
-  owedResumes(): AskedQuestions[] {
-    return this.waiting('answered');
+  /**
+   * Each asking turn whose questions have all closed, at least one answered, and whose continuing turn has not been
+   * recorded: one turn continues from all its calls at once, so a step that asked twice is resumed once.
+   */
+  owedResumes(): OwedResume[] {
+    this.actor.assertCurrent();
+
+    const turns = this.sql<{ turn_id: string }>`SELECT DISTINCT turn_id FROM owner_questions
+      WHERE actor_id=${this.actorId} AND status='answered' AND resumed_at IS NULL ORDER BY asked_at`;
+
+    return turns.flatMap(({ turn_id: turnId }) => {
+      const rows = this.sql<Row>`SELECT * FROM owner_questions WHERE actor_id=${this.actorId} AND turn_id=${turnId} ORDER BY asked_at`;
+      const [first] = rows;
+
+      if (first === undefined || rows.some((row) => row.status === 'open')) return [];
+
+      return [{
+        turnId, mode: first.mode === 'plan' ? 'plan' : 'build', tier: first.tier,
+        reason: v.parse(TurnReasonSchema, JSON.parse(first.reason_json)), asked: rows.map(asked),
+      }];
+    });
   }
 
-  markResumed(id: string): void {
+  /** The continuing turn is recorded: written in the transaction that records it, so a death before leaves it owed. */
+  markResumed(turnId: string): void {
     this.actor.assertCurrent();
-    void this.sql`UPDATE owner_questions SET resumed_at=${this.now()} WHERE actor_id=${this.actorId} AND id=${id} AND resumed_at IS NULL`;
+    void this.sql`UPDATE owner_questions SET resumed_at=${this.now()} WHERE actor_id=${this.actorId} AND turn_id=${turnId} AND resumed_at IS NULL`;
+  }
+
+  /** The conversation moved on without the continuing turns: a message carries the answers, or a Stop drops them. */
+  retireResumes(): void {
+    this.actor.assertCurrent();
+    void this.sql`UPDATE owner_questions SET resumed_at=${this.now()} WHERE actor_id=${this.actorId} AND status='answered' AND resumed_at IS NULL`;
+  }
+
+  /** A Stop, a clear or a walk-back: the open questions close unanswered and no answer is resumed. */
+  abandon(): number {
+    const closed = this.close('dismissed').length;
+
+    this.retireResumes();
+
+    return closed;
   }
 }
 
-/** One line for the transcript's record of an answer, which the model never reads. */
-export function answeredSummary(row: AskedQuestions): string {
-  return row.questions.map((question) => {
+/** The metadata of the turn that continues from `owed`'s calls: the asking turn's mode, tier and reason. */
+export function resumeMetadata(owed: AskingTurn): JsonObject {
+  return {
+    kinuEvent: OWNER_ANSWER_SIGNAL, kinuMode: owed.mode, askTurn: owed.turnId, askedReason: owed.reason,
+    ...(owed.tier !== null && { profile_tier: owed.tier }),
+  };
+}
+
+/** One line for the transcript's record of the answers, which the model never reads. */
+export function answeredSummary(closed: readonly AskedQuestions[]): string {
+  return closed.flatMap((row) => row.questions.map((question) => {
     const answer = row.answers?.find((each) => each.id === question.id);
-    const said = [...answer?.selected ?? [], ...(answer?.other === undefined ? [] : [answer.other])].join(', ');
+    const said = row.status === 'answered' ? [...answer?.selected ?? [], ...(answer?.other === undefined ? [] : [answer.other])].join(', ') : 'not answered';
 
     return `${question.header ?? question.question}: ${said}`;
-  }).join(' · ');
+  })).join(' · ');
 }

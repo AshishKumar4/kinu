@@ -98,24 +98,37 @@ function QuestionField({ question, draft, onDraft, busy }: {
   );
 }
 
+interface Unsent {
+  readonly drafts: ReadonlyMap<string, AnswerDraft>;
+  /** The note being written; null until "Add a note". */
+  readonly note: string | null;
+}
+
+/** What the owner chose and has not sent, by questions: the stack shows one card at a time, and one set aside keeps it. */
+const UNSENT = new Map<string, Unsent>();
+
 export function QuestionCard({ asking, busy, onAnswer, onDismiss }: {
   asking: AskingAgent;
   busy: boolean;
   onAnswer: (answers: readonly OwnerAnswer[]) => void;
   onDismiss: () => void;
 }): ReactNode {
-  const { questions } = asking.asked;
-  const [drafts, setDrafts] = useState<ReadonlyMap<string, AnswerDraft>>(new Map());
-  const [noting, setNoting] = useState(false);
-  const [note, setNote] = useState("");
-  const draftOf = (id: string): AnswerDraft => drafts.get(id) ?? EMPTY;
+  const { id, questions } = asking.asked;
+  const [unsent, setUnsent] = useState<Unsent>(() => UNSENT.get(id) ?? { drafts: new Map(), note: null });
+  const draftOf = (question: string): AnswerDraft => unsent.drafts.get(question) ?? EMPTY;
   const answers = questions.map((question) => answerOf(question, draftOf(question.id)));
   const ready = answers.every((answer) => answer !== null);
 
+  const keep = (next: Unsent): void => {
+    UNSENT.set(id, next);
+    setUnsent(next);
+  };
+
   const send = (): void => {
     const [first] = questions;
-    const noted = note.trim();
+    const noted = unsent.note?.trim() ?? "";
 
+    UNSENT.delete(id);
     onAnswer(answers.flatMap((answer) => {
       if (answer === null) return [];
 
@@ -123,23 +136,29 @@ export function QuestionCard({ asking, busy, onAnswer, onDismiss }: {
     }));
   };
 
+  const dismiss = (): void => {
+    UNSENT.delete(id);
+    onDismiss();
+  };
+
   return (
-    <div data-question-card={asking.asked.id}>
+    <div data-question-card={id}>
       <div className="-mx-1 flex max-h-[min(55vh,32rem)] flex-col gap-3 overflow-y-auto px-1">
         {questions.map((question) => (
           <QuestionField key={question.id} question={question} draft={draftOf(question.id)} busy={busy}
-            onDraft={(draft) => setDrafts((was) => new Map([...was, [question.id, draft]]))} />
+            onDraft={(draft) => keep({ ...unsent, drafts: new Map([...unsent.drafts, [question.id, draft]]) })} />
         ))}
       </div>
-      {noting ? (
-        <textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} placeholder="A note for the agent" aria-label="A note for the agent"
-          className="mt-2 block w-full resize-y rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-ring" />
+      {unsent.note === null ? (
+        <button type="button" className="mt-1.5 p-meta p-accent hover:underline" onClick={() => keep({ ...unsent, note: "" })}>Add a note</button>
       ) : (
-        <button type="button" className="mt-1.5 p-meta p-accent hover:underline" onClick={() => setNoting(true)}>Add a note</button>
+        <textarea value={unsent.note} onChange={(event) => keep({ ...unsent, note: event.target.value })} rows={2} placeholder="A note for the agent"
+          aria-label="A note for the agent"
+          className="mt-2 block w-full resize-y rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-ring" />
       )}
       <div className="mt-1 p-meta p-text-3">{asking.actor === null ? "Asked" : `${asking.agent} asked`} {timeAgo(asking.asked.askedAt)}. The agent waits for your answer.</div>
       <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
-        <Button size="sm" variant="ghost" disabled={busy} onClick={onDismiss} data-question-dismiss>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={dismiss} data-question-dismiss>
           <XIcon size={12} weight="bold" aria-hidden />Dismiss
         </Button>
         <FilledButton disabled={busy || !ready} onClick={send} data-question-answer>

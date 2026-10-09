@@ -1,6 +1,12 @@
 /** What `ask_owner` takes: one to four questions, each with two to four choices. The store is `plans/owner-questions.ts`. */
 import * as v from 'valibot';
 
+/**
+ * The `kinuEvent` of the turn an answer starts: it continues from the answered call, with no input of its own, for the
+ * reason the asking turn ran (`askedReason`), so its runtime context changes nothing the asking request said.
+ */
+export const OWNER_ANSWER_SIGNAL = 'owner_answer';
+
 /** What the owner types in place of a choice; a question never offers it itself. */
 export const OTHER_OPTION = 'Other';
 

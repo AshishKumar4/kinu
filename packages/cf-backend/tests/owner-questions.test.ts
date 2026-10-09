@@ -53,7 +53,8 @@ function asksOnce(): AskingModel {
 
     sent.push({ messages: query.messages, tools: JSON.stringify(query.tools) });
 
-    return messages.some((message) => message.role === 'tool' && JSON.stringify(message).includes(CALL))
+    // The wire renames call ids: any result after the ask is its.
+    return messages.some((message) => message.role === 'tool')
       ? chatCompletion(run, 'Storing integer cents.')
       : toolCallCompletion(run, { tool: 'ask_owner', args: ASK }, CALL);
   });
@@ -61,22 +62,45 @@ function asksOnce(): AskingModel {
   return { gateway, sent };
 }
 
-/** The request after the ask, read against the one that asked. */
+const WireCallSchema = v.looseObject({ role: v.literal('assistant'), tool_calls: v.array(v.looseObject({ id: v.string(), function: v.looseObject({ name: v.string() }) })) });
+
+/** Runtime state the request carries after the conversation (prompting/volatile-context.ts): not a message of anyone's. */
+const isRuntimeState = (message: JsonValue): boolean => JSON.stringify(message).startsWith('{"content":"<dynamic_context');
+
+/**
+ * The request after the ask, read against the one that asked: the ask call by its id on the wire, every result paired
+ * with it, what follows them, and the first message before the call that changed.
+ */
 function resumedFrom(sent: readonly Sent[]) {
   const [asking, resumed] = sent;
 
   if (asking === undefined || resumed === undefined) throw new Error(`the model was asked ${String(sent.length)} time(s), not twice`);
-  const calls = resumed.messages.filter((message) => JSON.stringify(message).includes('"tool_calls"') && JSON.stringify(message).includes('ask_owner'));
-  const results = resumed.messages.filter((message) => JSON.stringify(message).includes(`"tool_call_id":"${CALL}"`));
-  const at = resumed.messages.findIndex((message) => results.includes(message));
+
+  const calls = resumed.messages.flatMap((message, at) => {
+    const call = v.safeParse(WireCallSchema, message);
+
+    return call.success ? call.output.tool_calls.filter((each) => each.function.name === 'ask_owner').map((each) => ({ at, id: each.id })) : [];
+  });
+
+  const [call] = calls;
+  const results = resumed.messages.flatMap((message, at) => JSON.stringify(message).includes(`"tool_call_id":"${call?.id ?? ''}"`) ? [{ at, text: JSON.stringify(message) }] : []);
+  const changed = asking.messages.findIndex((message, at) => JSON.stringify(message) !== JSON.stringify(resumed.messages[at]));
 
   return {
-    calls: calls.length, results: results.map((result) => JSON.stringify(result)), after: resumed.messages.slice(at + 1),
-    // The asking request, then the model's own call: what the model had read, and what it said, up to the result.
-    prefixKept: JSON.stringify(resumed.messages.slice(0, asking.messages.length)) === JSON.stringify(asking.messages),
-    callAt: resumed.messages.indexOf(calls[0] ?? null), askedLength: asking.messages.length,
+    calls: calls.length, callAt: call?.at ?? -1, askedLength: asking.messages.length,
+    results: results.map((result) => result.text), resultAt: results[0]?.at ?? -1,
+    after: resumed.messages.slice((results.at(-1)?.at ?? resumed.messages.length) + 1),
+    firstChange: changed < 0 ? null : { at: changed, asked: JSON.stringify(asking.messages[changed]).slice(0, 400), resumed: JSON.stringify(resumed.messages[changed]).slice(0, 400) },
     toolsKept: resumed.tools === asking.tools,
   };
+}
+
+/** One call and one result right after it, and the request up to the call as the asking one sent it. */
+function expectOneCallOneResult(resumed: ReturnType<typeof resumedFrom>, answer: string): void {
+  expect({ calls: resumed.calls, results: resumed.results.length, firstChange: resumed.firstChange, toolsKept: resumed.toolsKept })
+    .toEqual({ calls: 1, results: 1, firstChange: null, toolsKept: true });
+  expect([resumed.callAt, resumed.resultAt]).toEqual([resumed.askedLength, resumed.askedLength + 1]);
+  expect(resumed.results[0]).toContain(answer);
 }
 
 async function openQuestion(workspace: StartedHarness, actor: string | null = null) {
@@ -101,11 +125,10 @@ describe('the workspace agent asks its owner', () => {
 
     const resumed = resumedFrom(sent);
 
-    expect(resumed).toMatchObject({ calls: 1, after: [], prefixKept: true, toolsKept: true });
-    expect(resumed.callAt).toBe(resumed.askedLength);
-    expect(resumed.results).toHaveLength(1);
-    expect(resumed.results[0]).toContain('Integer cents');
+    expectOneCallOneResult(resumed, 'Integer cents');
     expect(resumed.results[0]).toContain('Round half to even.');
+    // Nothing follows the answer: the model goes on from its own call.
+    expect(resumed.after).toEqual([]);
     expect((await workspace.agent.listOwnerQuestions())[0]?.asked.status).toBe('answered');
   });
 
@@ -129,8 +152,9 @@ describe('the workspace agent asks its owner', () => {
 
     const resumed = resumedFrom(sent);
 
-    expect(resumed).toMatchObject({ calls: 1, after: [], prefixKept: true, toolsKept: true });
-    expect(resumed.results[0]).toContain('Integer cents');
+    expectOneCallOneResult(resumed, 'Integer cents');
+    // A new activation states the runtime afresh after the answer, as it does after any restart; nothing else follows.
+    expect(resumed.after.every(isRuntimeState)).toBe(true);
     expect(sent).toHaveLength(2);
   });
 
@@ -145,9 +169,8 @@ describe('the workspace agent asks its owner', () => {
     await catalogTurn(workspace.agent, 'Use cents.');
     const resumed = resumedFrom(sent);
 
-    expect(resumed).toMatchObject({ calls: 1, prefixKept: true, toolsKept: true });
-    expect(resumed.results[0]).toContain('dismissed');
-    expect(JSON.stringify(resumed.after)).toContain('Use cents.');
+    expectOneCallOneResult(resumed, 'dismissed');
+    expect(resumed.after.filter((message) => !isRuntimeState(message)).map((message) => JSON.stringify(message))).toEqual([expect.stringContaining('Use cents.')]);
   });
 });
 
@@ -171,8 +194,8 @@ describe("an agent the owner added asks them on the owner's turns", () => {
 
     const resumed = resumedFrom(sent);
 
-    expect(resumed).toMatchObject({ calls: 1, after: [], prefixKept: true, toolsKept: true });
-    expect(resumed.results[0]).toContain('Integer cents');
+    expectOneCallOneResult(resumed, 'Integer cents');
+    expect(resumed.after).toEqual([]);
     expect((await workspace.agent.listOwnerQuestions()).find((asking) => asking.actor === actorId)?.asked.status).toBe('answered');
   });
 });

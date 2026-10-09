@@ -121,6 +121,25 @@ export interface ChatFallback {
 }
 
 /** A step's valid `ask_owner` calls: an invalid one is refused with a result, so the loop goes on. */
+/**
+ * The open questions the history ends on: the last assistant message's `ask_owner` calls that nothing after it
+ * answers. A turn re-opened after its step asked (its process died before the turn closed) finds them.
+ */
+function waitingAsks(history: readonly ModelMessage[], waitsOn: ((call: AskCall) => boolean) | undefined): AskCall[] {
+  if (waitsOn === undefined) return [];
+  let at = history.length - 1;
+
+  while (history[at]?.role === 'tool') at--;
+  const asking = history[at];
+
+  if (asking?.role !== 'assistant' || !Array.isArray(asking.content)) return [];
+  const answered = new Set(history.slice(at + 1).flatMap((message) => message.role === 'tool' ? message.content.map((part) => part.type === 'tool-result' ? part.toolCallId : '') : []));
+
+  return asking.content.flatMap((part) => part.type === 'tool-call' && part.toolName === ASK_OWNER_TOOL && !answered.has(part.toolCallId)
+    ? [{ toolCallId: part.toolCallId, input: projectJsonValue({ value: part.input }) }] : [])
+    .filter(waitsOn);
+}
+
 function askedIn(step: StepResult<ToolSet> | undefined): AskCall[] {
   return (step?.toolCalls ?? []).filter((toolCall) => toolCall.toolName === ASK_OWNER_TOOL && toolCall.invalid !== true)
     .map((toolCall) => ({ toolCallId: toolCall.toolCallId, input: projectJsonValue({ value: toolCall.input }) }));
@@ -182,6 +201,8 @@ export interface ChatOptions {
   onStep?: (step: StepResult<ToolSet>, messages: readonly ModelMessage[]) => Promise<void> | void;
   /** A step's valid `ask_owner` calls, kept before the turn stops on that step; a throw fails the step. */
   onAsk?: (calls: readonly AskCall[]) => void;
+  /** Whether an `ask_owner` call's questions are still open: a turn whose history ends on one sends nothing. */
+  waitsOn?: (call: AskCall) => boolean;
   /** Raw SDK output for a host UI bridge; not part of the serializable ChatEvent projection. */
   onToolOutput?: (output: ChatToolOutput) => Promise<void> | void;
   /** Where each call opens and closes its `model_operation` rows, so one in flight at process death shows in
@@ -756,6 +777,16 @@ export async function measureTurnRequest(opts: ChatOptions): Promise<{ readonly 
 }
 
 export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
+  // Its step asked the owner, and the questions are open: the turn ended there, and their answer is a later request's.
+  const waiting = waitingAsks(opts.history, opts.waitsOn);
+
+  if (waiting.length > 0) {
+    opts.onAsk?.(waiting);
+    yield { type: 'done', text: '', responseMessages: [], source: 'native' };
+
+    return;
+  }
+
   let stepCount = 0;
   const { extensions, tools, window, assembly, primary, stepContext, initialContext, admitted } = await admitRequest(opts);
   const { contextWindow, modelOutputLimit } = window;

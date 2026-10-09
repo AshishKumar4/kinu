@@ -12,7 +12,7 @@ import { TURN_AUTHOR_METADATA_KEY, turnAuthor } from '../utils/ui-message';
 import { JsonObjectSchema, type JsonObject } from '../utils/json';
 import * as v from 'valibot';
 import { slateLinkId } from '../slates/host-context';
-import { OWNER_ANSWER_SIGNAL } from '../plans/owner-questions';
+import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
 
 /** A turn the backend enqueued; `system_event` is any harness event without its own card. */
 export type ClassifiedProgrammaticTurn =
