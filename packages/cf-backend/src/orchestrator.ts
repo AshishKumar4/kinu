@@ -2325,17 +2325,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return await whenActorTakesInput(this.boundSql, actorId, () => this.handInput(actorId, hand));
   }
 
-  /** Armed before the words cross, and again once the agent took them: an answer it sent before taking them may have
-   *  cancelled the first arm on its way, and its later answers replace the second. */
+  /** Armed before the words cross; the agent answers what it owes once it took them (`FacetChat.taken`), behind any
+   *  answer it sent before, so that answer, not this arm, is the agent's last word. */
   private async handInput<A>(actorId: string, hand: () => Promise<A>): Promise<A> {
     // The agent reads working from here: its turn claims are its own isolate's, whose writes this object never sees.
     this.liveReadsMoved(readsOfTables(['actor_turn_claims']));
     await this.agentWakes.arm(actorId, Date.now() + RECOVERY_BACKOFF_CEILING_MS);
-    const taken = await hand();
 
-    await this.agentWakes.arm(actorId, Date.now() + RECOVERY_BACKOFF_CEILING_MS);
-
-    return taken;
+    return await hand();
   }
 
   protected override hostedChatWire(actorId: string): ChatWire | null {

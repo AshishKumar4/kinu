@@ -331,10 +331,10 @@ export class FacetChat {
     this.resting = hold(logged('agent.owed_report_failed', { doing: 'telling the workspace what an agent still owes', otherwise: 'unavailable' }, () => this.tell()));
   }
 
-  /** Once every answer of what it owes sent so far has landed: input acknowledged after it has no older answer behind it
-   *  that could cancel the workspace's arm for it. */
-  async told(): Promise<void> {
-    await this.telling;
+  /** Its input taken: what it owes now is told behind every answer it sent before, and has landed. An older rest cannot
+   *  cancel the workspace's arm for the input, and a turn the input ran and ended already leaves no arm behind. */
+  async taken(): Promise<void> {
+    await hold(logged('agent.owed_report_failed', { doing: 'telling the workspace what an agent owes for its input', otherwise: 'unavailable' }, () => this.tell()));
   }
 
   /** `at` asks for a wake no later than it. */

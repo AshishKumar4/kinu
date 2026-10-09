@@ -254,14 +254,20 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   }
 
   async queue(snapshot: AgentSnapshot, turn: ProgrammaticTurn): Promise<EnqueueTurnResult> {
-    return await settle(this.withChat(snapshot, (chat) => chat.session.queueTurn(turn)));
+    return await settle(this.withChat(snapshot, async (chat) => {
+      const queued = await chat.session.queueTurn(turn);
+
+      await chat.taken();
+
+      return queued;
+    }));
   }
 
   async send(snapshot: AgentSnapshot, input: AgentSend, opts: SendOptions): Promise<SendLanding> {
     return await settle(this.withChat(snapshot, async (chat) => {
       const landing = await chat.session.send(input.files === undefined ? input.text : { text: input.text, files: input.files }, opts);
 
-      await chat.told();
+      await chat.taken();
 
       return landing;
     }));
@@ -273,7 +279,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
       // A card's reservation has nothing of the workspace's to take in its transaction: the workspace takes its own after.
       await chat.session.admit(words, input.card === undefined ? opts : { ...opts, metadata: input.card, consume: () => {} });
-      await chat.told();
+      await chat.taken();
     }));
   }
 
