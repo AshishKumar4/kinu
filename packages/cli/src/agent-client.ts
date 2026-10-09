@@ -295,7 +295,6 @@ export interface OwnerQuestionSurface {
   list(): Promise<AskingAgent[]>;
   /** Rejects with the reason the answer was refused. */
   answer(id: string, answers: readonly OwnerAnswer[]): Promise<void>;
-  dismiss(id: string): Promise<{ readonly closed: number }>;
 }
 
 /** The owner's half of Plan mode; both backends serve core's `PlanReviewStore`. */
