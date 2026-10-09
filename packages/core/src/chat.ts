@@ -138,6 +138,9 @@ export interface ChatOptions {
   model: LanguageModel;
   fallbacks?: readonly ChatFallback[];
   system: string;
+  /** How much of `system` every workspace's agent of its kind shares, by characters (`buildSystemPromptParts`): a marker
+   *  strategy caches it as a block of its own, so a new workspace's first request reads it. */
+  systemShared?: number;
   history: ModelMessage[];
   lostToolCall?: (call: LostCallQuery) => LostToolCall | null;
   /** Re-read and re-woven at every step, never at turn assembly, so a compaction plugin never sees or persists it. */
@@ -649,6 +652,7 @@ function attemptCachePlan(opts: ChatOptions, route: PromptCacheRoute, turnMessag
     providerId: route.providerId,
     modelId: route.modelId ?? opts.modelContext?.id,
     system: opts.system,
+    ...(opts.systemShared !== undefined && { systemShared: opts.systemShared }),
     messages: turnMessages,
     tools,
     retention: route.retention,

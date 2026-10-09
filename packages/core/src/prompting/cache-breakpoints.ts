@@ -1,8 +1,9 @@
 /**
  * Prompt-cache breakpoints: a closed provider-id → strategy map and pure marker placement, applied by both backends
  * at assembly (Workers AI affinity is set at model construction, `actorAffinity`). Anthropic layout (hermes
- * `system_and_3`, in the 4-breakpoint cap): last tool, end of system, and two rolled onto the tail every step, so
- * each request reads the previous one's prefix. The strategy's one TTL marks all of them: Anthropic refuses a TTL
+ * `system_and_3`, in the 4-breakpoint cap): last tool, or the end of the system part every workspace shares when the
+ * turn names it, then end of system, and two rolled onto the tail every step, so each request reads the previous
+ * one's prefix and a new workspace's first reads the shared part. The strategy's one TTL marks all of them: Anthropic refuses a TTL
  * that rises along tools → system → messages.
  */
 import type { ModelMessage, SystemModelMessage, ToolSet } from 'ai';
@@ -170,14 +171,32 @@ function markerOptions(ns: 'anthropic' | 'openaiCompatible', ttl?: '1h'): Provid
     : { openaiCompatible: { cache_control: ephemeral(ttl) } };
 }
 
-/** System prompt carrying the end-of-system breakpoint. On CF it rides the per-step
- * `PrepareStepResult.system` override (Think's TurnConfig.system is string-typed). */
-export function cacheableSystem(system: string, strategy: PromptCacheStrategy): string | SystemModelMessage {
+/** The system as the request carries it: one block, or two once a marker strategy splits off the shared part. */
+export type CacheableSystem = string | SystemModelMessage | SystemModelMessage[];
+
+/** Where `system` splits into the part every workspace's agent shares and its own (`buildSystemPromptParts`, which
+ *  joins them with a blank line); null when it does not. */
+function sharedSplit(system: string, shared: number | undefined): readonly [string, string] | null {
+  if (shared === undefined || shared <= 0 || shared >= system.length) return null;
+
+  return [system.slice(0, shared), system.slice(shared).replace(/^\n\n/u, '')];
+}
+
+/**
+ * System prompt carrying the end-of-system breakpoint, and, given the length of its shared part, a breakpoint at that
+ * part's end too: Anthropic caches tools, then system, so the shared block covers the tool schemas and the guidance
+ * every workspace shares, and a new workspace's first request reads them.
+ */
+export function cacheableSystem(system: string, strategy: PromptCacheStrategy, shared?: number): CacheableSystem {
   const ns = markerNamespace(strategy);
 
   if (!ns || system.length === 0) return system;
+  const marker = markerOptions(ns, markerTtl(strategy));
+  const split = sharedSplit(system, shared);
 
-  return { role: 'system', content: system, providerOptions: markerOptions(ns, markerTtl(strategy)) };
+  if (split === null) return { role: 'system', content: system, providerOptions: marker };
+
+  return split.map((content) => ({ role: 'system' as const, content, providerOptions: marker }));
 }
 
 function withProviderOptions(message: ModelMessage, providerOptions: ProviderOptions | undefined): ModelMessage {
@@ -331,13 +350,15 @@ export interface PromptCachePlanInput {
   providerId?: string;
   modelId?: string;
   system: string;
+  /** The length of `system`'s shared part (`ChatOptions.systemShared`). */
+  systemShared?: number;
   /** Default `short`. */
   retention?: CacheRetention;
 }
 
 export interface PromptCachePlan {
   strategy: PromptCacheStrategy;
-  system: string | SystemModelMessage;
+  system: CacheableSystem;
   providerOptions?: ProviderOptions;
 }
 
@@ -355,11 +376,15 @@ export interface CacheBreakpointPlan extends PromptCachePlan {
 export function applyCacheBreakpoints(input: CacheBreakpointInput): CacheBreakpointPlan {
   const strategy = resolvePromptCacheStrategy(input.providerId, input.modelId, input.retention);
 
+  const system = cacheableSystem(input.system, strategy, input.systemShared);
+
   const plan: CacheBreakpointPlan = {
     strategy,
-    system: cacheableSystem(input.system, strategy),
+    system,
     messages: markCacheTail(input.messages, strategy),
-    tools: withLastToolMarked(input.tools, strategy),
+    // A shared system block already ends after the tools, which Anthropic caches first: its breakpoint takes the
+    // tools' place, so the four still hold (last tool or shared system, end of system, two on the tail).
+    tools: Array.isArray(system) ? input.tools : withLastToolMarked(input.tools, strategy),
   };
 
   const providerOptions = promptCacheOptions(strategy);

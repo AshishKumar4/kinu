@@ -291,6 +291,30 @@ describe('the Claude subscription wire', () => {
     expect(system.map((block) => block.cache_control !== undefined)).toEqual([false, true, false]);
   });
 
+  test('with the shared system part split off, the identity takes the end of system\'s breakpoint and the shared part keeps its own', async () => {
+    const { sent, fetchFn } = wire([sse]);
+    const marked = { anthropic: { cacheControl: { type: 'ephemeral', ttl: '1h' } } } as const;
+    const shared = 'You are Kinu. The guidance every workspace shares.';
+
+    const result = streamText({
+      model: createClaudeProvider().createModel('claude-opus-4-7', deps(fetchFn, [login('t')])),
+      instructions: cacheableSystem(`${shared}\n\nYou work in the workspace "Ledger".`, resolvePromptCacheStrategy('claude'), shared.length),
+      messages: [
+        { role: 'user', content: 'Please refactor the parser module into two files.', providerOptions: marked },
+        { role: 'assistant', content: 'Reading it first.' },
+        { role: 'user', content: 'Go on.', providerOptions: marked },
+      ],
+      tools: { read: tool(READ) },
+    });
+
+    await result.consumeStream();
+    const request = only(sent);
+    const system = v.parse(SystemBlocksSchema, request.body.system);
+
+    expect(request.text.match(/"cache_control"/g)?.length).toBe(4);
+    expect(system.map((block) => [block.text === shared, block.cache_control !== undefined])).toEqual([[false, false], [false, true], [true, true], [false, false]]);
+  });
+
   test('a refusal naming a newer Claude Code release is retried once at that release, which the provider then keeps', async () => {
     const recorded = createRecordingLogger();
     const restore = setDiagnosticsSink(recorded);

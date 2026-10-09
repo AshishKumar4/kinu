@@ -92,13 +92,15 @@ for (let index = 0; index < Number(workspacesArg); index += 1) {
     workspaceAffinity: `probe-workspace-${run}-${String(index)}`, sessionAffinity: `probe-conversation-${run}-${String(index)}`,
   });
 
-  const system = `probe ${run}\n\n${GUIDANCE}\n\nYou work in the workspace "Offsite ${String(index)}"; answer in one line.`;
+  // The part every workspace shares, then this workspace's own, as `buildSystemPromptParts` splits them.
+  const shared = `probe ${run}\n\n${GUIDANCE}`;
+  const system = `${shared}\n\nYou work in the workspace "Offsite ${String(index)}"; answer in one line.`;
   const history: ModelMessage[] = [];
 
   for (; step < STEPS.length; step += 1) {
     history.push({ role: 'user', content: STEPS[step] ?? 'Again.' });
 
-    for await (const event of runChat({ modelSpec: `claude/${modelId}`, model, system, history: [...history], tools: {}, cache: { providerId: 'claude', modelId } })) {
+    for await (const event of runChat({ modelSpec: `claude/${modelId}`, model, system, history: [...history], tools: {}, systemShared: shared.length, cache: { providerId: 'claude', modelId } })) {
       if (event.type === 'done') history.push(...event.responseMessages);
     }
   }
