@@ -227,6 +227,7 @@ export interface ChatSessionPorts {
   /** Never consumes an armed compaction. */
   composeRequest(): Promise<ComposedRequest>;
   owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[];
+  /** The turn's slates, stamped on its answer; absent where there are no slates (the CLI, `FileDeps.slate`). */
   answerMetadata?(turnId: string, texts: () => Promise<readonly string[]>): Promise<JsonObject | null>;
   /** The report this ending owes its caller; narration is read only if the report carries it. */
   owedReport?(ending: TaskTurnEnding, assistantText: string, narration: () => Promise<readonly string[]>): Promise<OwedReport | null>;
@@ -241,7 +242,7 @@ export interface ChatSessionPorts {
   armTurnWake?(atMs: number): Promise<void>;
   /** Owed until {@link quiet}. */
   owed?(): void;
-  /** The queue drained and no turn runs. */
+  /** The queue drained and no turn runs; absent where the process is the wake, as for {@link armTurnWake}. */
   quiet?(): void;
   /** Read at commit, never captured earlier. */
   taskList(): TaskListStore;

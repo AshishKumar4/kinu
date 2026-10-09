@@ -88,7 +88,7 @@ export interface ActorSessionOptions {
   readonly advisorPort?: () => TemporaryAgentPort | null;
   /** The profile's `input`: an actor that takes no input (a swarm node, an evolution agent) is not reviewed. */
   readonly reviewed?: boolean;
-  /** The completion gate has asked and not heard back, when the host keeps one. */
+  /** The completion gate has asked and not heard back, when the host keeps one: only the CLI's one-shot surface arms it. */
   readonly gateOpen?: () => boolean;
   readonly turns?: () => TurnTracing;
 }
