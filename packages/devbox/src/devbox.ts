@@ -499,7 +499,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       destroy: () => this.#destroyGoldenContainer(),
       build: () => this.armAlarm(GOLDEN_BUILD_CALLBACK, 0),
       tell: async (box, answer) => { await this.peers?.box(box).goldenReady(answer); },
-      delete: (ref) => this.snapshotRegistry?.delete(ref),
+      delete: (ref, owe) => this.snapshotRegistry?.delete(ref, owe),
       now: () => Date.now(),
     };
   }

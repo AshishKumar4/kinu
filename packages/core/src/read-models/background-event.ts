@@ -46,7 +46,8 @@ function cardField(value: string | undefined, fallback: string): string {
 }
 
 const SignalCardEventSchema = v.variant('state', [
-  v.object({ type: v.literal('signal_card'), id: v.string(), state: v.picklist(['shown', 'undelivered']) }),
+  v.object({ type: v.literal('signal_card'), id: v.string(), state: v.literal('shown'), atStep: v.optional(v.number()) }),
+  v.object({ type: v.literal('signal_card'), id: v.string(), state: v.picklist(['seen', 'undelivered']) }),
   v.object({
     type: v.literal('signal_card'), id: v.string(), state: v.literal('pending'),
     metadata: JsonObjectSchema, text: v.string(),
@@ -167,9 +168,30 @@ export interface SignalCard {
   readonly state: Exclude<SignalCardState, "undelivered">;
   /** When it was last delivered, so a chat places it where it happened, not after everything since. */
   readonly at: number;
+  /** Spliced into a running answer: the turn's step that took it in, where the chat draws it inside that answer. */
+  readonly atStep?: number;
 }
 
-/** Mid-turn splices are never persisted, so live cards age out by count, not turn boundary. */
+/** A splice the agent saw mid-answer, as its answer keeps it (`SIGNALS_SEEN_METADATA_KEY`). */
+export interface SeenSplice {
+  readonly id: string;
+  readonly atStep: number;
+  /** As the agent read it. */
+  readonly text: string;
+  readonly metadata: JsonObject;
+}
+
+/** On an answer: the splices its agent saw mid-answer, once, so a reload draws each where it was read. */
+export const SIGNALS_SEEN_METADATA_KEY = 'kinuSplicesSeen';
+
+const SeenSpliceSchema = v.object({ id: v.string(), atStep: v.number(), text: v.string(), metadata: JsonObjectSchema });
+
+/** The splices an answer's agent saw, in step order; none on an answer that kept none. */
+export function splicesSeenOn(row: { metadata: unknown }): readonly SeenSplice[] {
+  return metadataField(row, SIGNALS_SEEN_METADATA_KEY, v.array(SeenSpliceSchema)) ?? [];
+}
+
+/** Live cards age out by count: a splice the agent saw is kept on its answer, which a reload reads instead. */
 const MAX_LIVE_CARDS = 50;
 
 /**
@@ -191,9 +213,15 @@ export function applySignalCard(
     return [...cards.slice(-(MAX_LIVE_CARDS - 1)), card];
   }
 
-  if (event.state === "undelivered") return cards.filter((c) => c.id !== event.id);
+  if (event.state === "shown") {
+    const { atStep } = event;
 
-  return cards.map((c) => c.id === event.id ? { ...c, state: "shown" } : c);
+    return cards.map((c) => c.id === event.id ? { ...c, state: "shown", ...(atStep !== undefined && { atStep }) } : c);
+  }
+
+  if (event.state === "seen") return cards.map((c) => c.id === event.id ? { ...c, state: "seen" } : c);
+
+  return cards.filter((c) => c.id !== event.id);
 }
 
 export function parseSignalCardEvent(frame: { value: unknown }): SignalCardEvent | null {

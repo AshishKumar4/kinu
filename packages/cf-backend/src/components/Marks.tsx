@@ -1,13 +1,6 @@
 import { useId, type CSSProperties } from "react";
 import { Tooltip } from "@cloudflare/kumo";
-import type { AgentActivity } from "@kinu.run/core";
-
-const HUES = [
-  ["#FFC48A", "#F08A4B", "#C2602A"], ["#FFB3C4", "#F07A98", "#C2506E"], ["#D3C2FF", "#9E86F0", "#7058C8"],
-  ["#BFE6A6", "#7FC468", "#4F9640"], ["#B4DCFF", "#6EAEEB", "#3F7FC0"], ["#FFE08A", "#F2BC3C", "#C08A12"],
-  ["#A8EBD8", "#4FC7A6", "#27957A"], ["#F7C1F0", "#D97BD0", "#A84E9F"], ["#FFBBA8", "#F27F66", "#C2523A"],
-  ["#ADE3F2", "#55B6D3", "#2A85A3"], ["#C9D1FF", "#8797F0", "#5566C4"], ["#E4EDA6", "#B8CE58", "#87A02A"],
-] as const;
+import { hueStops, rankHue, type AgentActivity } from "@kinu.run/core";
 
 function hashOf(seed: string): number {
   let hash = 0x811c9dc5;
@@ -22,15 +15,12 @@ function hashOf(seed: string): number {
 
 export const mascotSeed = (workspace: string, chat: string): string => `${workspace}/${chat}`;
 
-export const MASCOT_COLOURS = HUES.length;
-
 /**
- * Which of the {@link MASCOT_COLOURS} an agent's tile is drawn in: a workspace's agents take the palette in birth order
- * (`PanelAgent.colour`) from a point its name picks, so {@link MASCOT_COLOURS} agents in a row never share one and an
- * agent's never changes. A hash of each agent alone gave two of a workspace's few agents one colour.
+ * The hue an agent's tile is drawn in: a workspace's agents step round the wheel in birth order (`PanelAgent.colour`)
+ * from a point its name picks (`rankHue`), so no two of them ever share one and an agent's never changes.
  */
 export function mascotColour(workspace: string, rank: number): number {
-  return (hashOf(workspace) + rank) % HUES.length;
+  return rankHue(hashOf(workspace), rank);
 }
 
 type Face = "idle" | "working" | "waiting" | "failed" | "done";
@@ -54,10 +44,10 @@ function Eyes({ face }: { face: Face }) {
   );
 }
 
-/** A chat's tile; its eyes carry its state. */
+/** A chat's tile, in `colour`, a hue ({@link mascotColour}); its eyes carry its state. */
 export function ChatMascot({ seed, colour, activity, size = 16 }: { seed: string; colour: number; activity: AgentActivity | undefined; size?: number }) {
   const hash = hashOf(seed);
-  const hue = HUES[colour % HUES.length] ?? HUES[0];
+  const hue = hueStops(colour);
   const id = `mascot${useId().replace(/[^\w-]/g, "")}`;
   const face = FACE[activity ?? "idle"];
   const status = STATUS[face];

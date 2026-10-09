@@ -1,12 +1,14 @@
 /**
- * A runner whose start fails answers so and retries on the next request; measured on production 253b86c01
- * (~/kinu-logs/slate-cold/REPORT.md) as `404 x-slate-runner: unstarted`. Runs `slateRunnerSource` verbatim. A cold start
- * over HTTP and RPC, once for requests that arrive together, is the workerd slate-durability journey's.
+ * The runner as the preview host meets it, `slateRunnerSource` run verbatim. A runner whose start fails answers so and
+ * retries on the next request; measured on production 253b86c01 (~/kinu-logs/slate-cold/REPORT.md) as
+ * `404 x-slate-runner: unstarted`. A page its class's own `fetch` answers is opened as the runner's own pages are. A
+ * cold start over HTTP and RPC, once for requests that arrive together, is the workerd slate-durability journey's.
  */
 import { describe, expect, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { present, scratchDir } from '@kinu.run/test-utils';
+import { SLATE_PAGE_PREAMBLE } from '@kinu.run/core';
 import { SLATE_SERVER_MODULE } from '@kinu.run/core/slates';
 import { slateRunnerSource } from '../src/slates/resident';
 
@@ -107,5 +109,39 @@ describe('a runner whose application fails to start', () => {
 
     expect(retried.status).toBe(200);
     expect(await retried.text()).toBe('recovered');
+  });
+});
+
+// Staging and the eval trials (1008-b, 1008-h): a slate serving its own page drew in a fixed box, in the browser's own
+// light scheme, while every page the runner served sized to its content and took the chat's theme.
+describe('a page the slate serves from its own fetch', () => {
+  test('is opened as the runner opens its own: the same head, the page as written after it; other answers pass as sent', async () => {
+    const dir = scratchDir('kinu-runner-own-page');
+    const page = '<!doctype html><html><head><title>Queue</title></head><body><table><tr><td>4471</td></tr></table></body></html>';
+
+    const Runner = await loadRunner(dir, [
+      'import { SlateObject } from "./server.js";',
+      'export class Slate extends SlateObject {',
+      '  async fetch(request) {',
+      '    if (new URL(request.url).pathname === "/api") return Response.json({ open: 3 });',
+      `    return new Response(${JSON.stringify(page)}, { headers: { "content-type": "text/html; charset=utf-8", "content-length": "${String(page.length)}" } });`,
+      '  }',
+      '}',
+    ].join('\n'));
+
+    const runner = instanceOf(Runner);
+    const opened = await runner.fetch(get('/'));
+    const body = await opened.text();
+
+    expect(body.indexOf(SLATE_PAGE_PREAMBLE)).toBeGreaterThan(-1);
+    // The head comes first, inside the page's own <html>, and the page follows as it was written.
+    expect(body.indexOf(SLATE_PAGE_PREAMBLE)).toBeLessThan(body.indexOf('<title>Queue</title>'));
+    expect(body).toContain('<table><tr><td>4471</td></tr></table>');
+    // A length the page no longer has would cut it short.
+    expect(opened.headers.get('content-length')).toBeNull();
+
+    const api = await runner.fetch(get('/api'));
+
+    expect(await api.text()).toBe(JSON.stringify({ open: 3 }));
   });
 });

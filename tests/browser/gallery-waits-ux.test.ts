@@ -233,6 +233,20 @@ test('a wait on a page whose render threw with nothing drawn ends at once by the
         },
       });
     });
+    // The build prerenders the landing; this page is served as a dev server serves it, with an empty root, so React
+    // builds the h1 itself.
+    await page.setRequestInterception(true);
+    page.on('request', (request) => detach(Effect.promise(async () => {
+      if (new URL(request.url()).pathname !== '/landing.html') {
+        await request.continue();
+
+        return;
+      }
+
+      const emptied = new HTMLRewriter().on('#landing-root', { element: (root) => { root.setInnerContent(''); } });
+
+      await request.respond({ status: 200, contentType: 'text/html', body: await emptied.transform(await fetch(request.url())).text() });
+    })));
     await page.goto(`${origin}/landing.html`, { waitUntil: 'load' });
 
     await expect(page.waitForSelector('h1')).rejects.toThrow(`waiting for h1 on ${origin}/landing.html, the page showed `

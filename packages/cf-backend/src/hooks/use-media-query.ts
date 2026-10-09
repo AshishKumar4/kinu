@@ -1,19 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useSyncExternalStore } from 'react';
 
-/** Starts true with no window so a server render leans wide. */
+/** Follows `query`. A server render, and the hydration of one, read true so they lean wide as the markup was drawn. */
 export function useMediaQuery(query: string): boolean {
-  const [matches, setMatches] = useState(
-    () => globalThis.window === undefined || globalThis.window.matchMedia(query).matches,
-  );
-
-  useEffect(() => {
+  const subscribe = useCallback((changed: () => void) => {
     const media = window.matchMedia(query);
-    const onChange = () => setMatches(media.matches);
-    onChange();
-    media.addEventListener('change', onChange);
+    media.addEventListener('change', changed);
 
-    return () => media.removeEventListener('change', onChange);
+    return () => media.removeEventListener('change', changed);
   }, [query]);
 
-  return matches;
+  return useSyncExternalStore(subscribe, () => window.matchMedia(query).matches, () => true);
 }

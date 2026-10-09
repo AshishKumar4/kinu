@@ -1,6 +1,7 @@
 import { Button } from '@cloudflare/kumo';
 import { ArrowUpRightIcon, MoonIcon, SunIcon } from '@phosphor-icons/react';
-import { useState, type ReactElement, type ReactNode } from 'react';
+import { useMemo, useState, useSyncExternalStore, type ReactElement, type ReactNode } from 'react';
+import { buildCliInstallCommand } from '@kinu.run/core';
 
 import { KinuLogo } from '@/components/ui/KinuLogo';
 import { toggleMode, useTheme } from '@/hooks/use-theme';
@@ -22,6 +23,18 @@ const CARD = 'min-w-0 rounded-[14px] border p-border p-surface';
 const NOTE = 'px-1 pt-3 text-[11px] leading-relaxed p-text-4';
 
 const TRAILING_LINK = 'mt-6 inline-block text-sm font-semibold p-accent';
+
+/** The origin the build's prerender writes the install line for: production's, the one most visitors load. */
+const PRERENDERED_ORIGIN = 'https://kinu.run';
+
+const unchanging = (): (() => void) => () => {};
+
+/** The install line for this page's origin; the prerendered one while the markup hydrates, so the two match. */
+function useInstallCommand(): string {
+  const origin = useSyncExternalStore(unchanging, () => window.location.origin, () => PRERENDERED_ORIGIN);
+
+  return useMemo(() => buildCliInstallCommand({ origin }), [origin]);
+}
 
 function Accent({ children }: { children: ReactNode }): ReactElement {
   return <span className="p-accent">{children}</span>;
@@ -257,7 +270,9 @@ function Footer(): ReactElement {
   );
 }
 
-export function LandingPage({ install }: { install: string }): ReactElement {
+export function LandingPage(): ReactElement {
+  const install = useInstallCommand();
+
   return (
     <div className="min-h-screen overflow-x-clip p-bg font-sans p-text">
       <Header />

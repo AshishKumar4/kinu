@@ -1277,6 +1277,70 @@ const agentReport = (id: string, timestamp: number, content: string) => ({
   type: 'subordinate_event', id, kind: 'report', subordinate: 'coupon-auditor', status: 'completed', content, timestamp,
 });
 
+/** The gallery's spliced webhook, and the words of the answer's two steps around it. */
+const SPLICE = { brief: 'Translation job 4471 finished (de-DE)', before: 'Waiting on the German strings', after: 'The translation landed' } as const;
+
+/** How far the agent has got with the spliced card, as its mark says it and as its colour does. */
+function spliceDelivery(page: Page): Promise<{ state: string | null; tone: string | null } | null> {
+  return page.evaluate(() => {
+    const mark = document.querySelector('[data-spliced-signal="sig-lilt"] [data-delivery], .p-thread-column [data-signal-card] [data-delivery]');
+
+    if (mark === null) return null;
+    const tone = ['p-warning', 'p-success'].find((name) => mark.classList.contains(name)) ?? null;
+
+    return { state: mark.getAttribute('data-delivery'), tone };
+  });
+}
+
+/**
+ * An event that reaches the agent while it is answering sits between the parts of the answer it arrived between, live
+ * and after a reload; it is amber while it waits or is being shown, and green once the step that read it has ended.
+ * Production, 2026-10-08: such events collected after the live answer, grey then gold, and a reload lost them.
+ */
+describe('an event spliced into a running answer', () => {
+  test('it waits amber, is drawn between the parts it arrived between once a step takes it in, and turns green once seen', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 1600 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=splice-live`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('.p-thread-column');
+      const text = `Events arrived while you were working:\n- [webhook] from lilt: ${SPLICE.brief}`;
+
+      await pushFrames(page, [{ type: 'signal_card', id: 'sig-lilt', state: 'pending', metadata: { kinuEvent: 'event_drain', kinuAuthor: 'harness' }, text }]);
+      await page.waitForFunction(() => document.querySelector('.p-thread-column [data-signal-card] [data-delivery="pending"]') !== null);
+      expect(await spliceDelivery(page)).toEqual({ state: 'pending', tone: 'p-warning' });
+
+      await pushFrames(page, [{ type: 'signal_card', id: 'sig-lilt', state: 'shown', atStep: 1 }]);
+      await page.waitForSelector('[data-spliced-signal="sig-lilt"]');
+      const [before, splice, after] = await readingOrder(page, [SPLICE.before, SPLICE.brief, SPLICE.after]);
+
+      expect([before !== undefined && splice !== undefined && before < splice, splice !== undefined && after !== undefined && splice < after]).toEqual([true, true]);
+      expect(await spliceDelivery(page)).toEqual({ state: 'shown', tone: 'p-warning' });
+
+      await pushFrames(page, [{ type: 'signal_card', id: 'sig-lilt', state: 'seen' }]);
+      await page.waitForFunction(() => document.querySelector('[data-spliced-signal="sig-lilt"] [data-delivery="seen"]') !== null);
+      expect(await spliceDelivery(page)).toEqual({ state: 'seen', tone: 'p-success' });
+      // Once, in the answer: not a second loose card below it.
+      expect(await page.$$eval('.p-thread-column [data-signal-card]', (cards) => cards.length)).toBe(1);
+      await page.close();
+    });
+  });
+
+  test('after a reload the answer that read it still draws it, in place and seen', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 1600 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=splice-kept`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-spliced-signal="sig-lilt"]');
+      const [before, splice, after] = await readingOrder(page, [SPLICE.before, SPLICE.brief, SPLICE.after]);
+
+      expect([before !== undefined && splice !== undefined && before < splice, splice !== undefined && after !== undefined && splice < after]).toEqual([true, true]);
+      expect(await spliceDelivery(page)).toEqual({ state: 'seen', tone: 'p-success' });
+      await page.close();
+    });
+  });
+});
+
 /**
  * What happened besides what was said sits where it happened, as one quiet line that opens on a click, and the same
  * thing twice in a row is one line. Production, 2026-10-08: every such event collected at the bottom of the chat, as a

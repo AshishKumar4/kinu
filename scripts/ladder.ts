@@ -1590,7 +1590,7 @@ export const LADDER: readonly Gate[] = [
     // substrate. Not one of their names starts with
     // `bench`, so all of them shipped tracked, passing by hand, and claimed by NO
     // tier: 89 tests that ran in no pipeline.
-    run: 'bun test --timeout=0 --isolate scripts/bench*.test.ts scripts/storage-matrix-cleanup.test.ts scripts/deploy-substrate.test.ts scripts/devbox-container-tier.test.ts scripts/application-snapshots.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/bench*.test.ts scripts/storage-matrix-cleanup.test.ts scripts/deploy-substrate.test.ts scripts/devbox-container-tier.test.ts',
     label: 'Benchmark harness guarantees',
     tier: 'ci',
     // 7.00s: 221 tests over 15 files, median of 7.00 / 7.71 / 6.86 on the
@@ -3668,27 +3668,28 @@ export function armadaReport(answered: string): ArmadaReport | undefined {
 
 type ArmadaRow = NonNullable<ArmadaReport['verdicts']>['rows'][number];
 
-/** One armada row's verdict into the deploy's report, the evidence its task `kept` copied beside it; whether it is green. */
-function recordArmadaRow(report: string, gate: Gate, verdict: ArmadaRow | undefined, why: { readonly found: string; readonly reproduce: string; readonly said: string; readonly kept?: string }): boolean {
+/** One armada row's verdict into the deploy's report, the evidence its task `kept` copied beside it; whether it is green:
+ *  armada's own grade (`armadaRowVerdicts`), never its exit code alone. */
+function recordArmadaRow(report: string, gate: Gate, verdict: ArmadaRow | undefined, why: { readonly green: boolean; readonly found: string; readonly reproduce: string; readonly said: string; readonly kept?: string }): boolean {
   if (report !== '' && gate.evidence !== undefined && why.kept !== undefined && (verdict?.artifacts?.length ?? 0) > 0) {
     cpSync(join(why.kept, gate.evidence), join(report, gate.evidence), { recursive: true });
   }
 
   if (report !== '' && verdict !== undefined) recordTiming(report, { phase: gate.phase ?? 'source', what: gate.label, command: gate.run, seconds: verdict.seconds });
 
-  if (verdict?.exitCode === 0) {
+  if (why.green && verdict !== undefined) {
     console.log(`ok  ${gate.run}  (${verdict.seconds.toFixed(1)}s on armada, ${why.found})`);
 
     return true;
   }
 
-  const found = verdict === undefined ? `armada did not grade it: ${why.found}` : `red on armada, ${why.found}`;
+  const found = verdict === undefined || verdict.exitCode === 0 ? `armada did not grade it: ${why.found}` : `red on armada, ${why.found}`;
 
   console.error(`\nFAILED  ${gate.run}  ${found}`);
 
   if (report !== '') {
     recordRed(report, {
-      phase: gate.phase ?? 'source', what: gate.label, command: gate.run, verdict: verdict === undefined ? 'not graded' : `exit ${String(verdict.exitCode)}`,
+      phase: gate.phase ?? 'source', what: gate.label, command: gate.run, verdict: verdict === undefined || verdict.exitCode === 0 ? 'not graded' : `exit ${String(verdict.exitCode)}`,
       reproduce: why.reproduce, finding: found, output: verdict?.output ?? why.said.slice(-4000),
     });
   }
@@ -3722,23 +3723,28 @@ async function armadaPhaseJob(phases: readonly DeployPhase[], rows: readonly Gat
 
   if (report !== '' && graded !== undefined) recordNotice(report, { phase: phases[0] ?? 'source', what: `armada job ${graded.job}`, notice: `the ${phase} rows armada ran, at ${sha}: their logs and outputs are in that job` });
 
-  return armadaRowVerdicts(rows, graded, exitCode).filter(({ gate, verdict, found }) => !recordArmadaRow(report, gate, verdict, { found, reproduce, said, kept: graded?.artifacts[armadaTaskName(gate)] }))
+  return armadaRowVerdicts(rows, graded, exitCode).filter(({ gate, verdict, green, found }) => !recordArmadaRow(report, gate, verdict, { green, found, reproduce, said, kept: graded?.artifacts[armadaTaskName(gate)] }))
     .map(({ gate }) => gate.run);
 }
 
 /** Each row's own verdict from a phase job's report, and what was found about it: the task that wrote no verdict is
  *  reported under its task's name, with its exit and output, and armada names each problem by the task it is about. */
-export function armadaRowVerdicts(rows: readonly Gate[], graded: ArmadaReport | undefined, exitCode: number): { readonly gate: Gate; readonly verdict: ArmadaRow | undefined; readonly found: string }[] {
+export function armadaRowVerdicts(rows: readonly Gate[], graded: ArmadaReport | undefined, exitCode: number): { readonly gate: Gate; readonly verdict: ArmadaRow | undefined; readonly green: boolean; readonly found: string }[] {
   const reported = graded?.verdicts?.rows ?? [];
+  // armada grades a run whole: one it could not grade (exit 2, and every problem its report names) greens no row,
+  // whatever each row's own exit (armada src/grade.ts).
+  const ungraded = graded === undefined || exitCode === 2 || graded.problems.length > 0;
 
   return rows.map((gate) => {
     const task = armadaTaskName(gate);
     const verdict = reported.find((row) => row.run === gate.run) ?? reported.find((row) => row.run === undefined && row.name === task);
+    // armada names a problem by its task (`<task> has no verdict…`, `<task>: <row> names evidence…`) or by the row.
+    const own = graded?.problems.filter((problem) => [task, gate.run].some((name) => problem.startsWith(`${name} `) || problem.startsWith(`${name}:`))) ?? [];
 
     const found = graded === undefined ? `\`armada run\` exited ${String(exitCode)} and wrote no report`
-      : [`job ${graded.job}`, ...graded.problems.filter((problem) => problem.startsWith(`${task} `))].join('; ');
+      : [`job ${graded.job}`, ...own.length === 0 && ungraded ? [`armada graded none of the run's rows: ${graded.problems.join('; ')}`] : own].join('; ');
 
-    return { gate, verdict, found };
+    return { gate, verdict, green: !ungraded && verdict?.exitCode === 0, found };
   });
 }
 

@@ -8,7 +8,7 @@ import { createRoot } from "react-dom/client";
 import { Link, MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
 import { restoredRows, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl } from "@kinu.run/core";
-import { delegatedTaskMetadata, followJobOutput, summarizeSteps, TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
+import { delegatedTaskMetadata, followJobOutput, summarizeSteps, SIGNALS_SEEN_METADATA_KEY, TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
 
 /** The two liveness values a static frame photographs. */
 const IDLE_TURN: TurnLiveness = { kind: "idle" };
@@ -1821,6 +1821,27 @@ const REVERT_THREAD: UIMessage[] = [
   }),
 ];
 
+/** A webhook delivery spliced into a running answer, as the inbox describes it to the agent. */
+const SPLICE_TEXT = "Events arrived while you were working:\n- [webhook] from lilt: Translation job 4471 finished (de-DE)";
+
+const SPLICE_METADATA = { kinuEvent: "event_drain", kinuAuthor: "harness" };
+
+/** One answer of two steps, the second written after a webhook was spliced in: `&transcript=splice-live` (the turn
+ *  still running, its cards pushed as frames) and `&transcript=splice-kept` (its answer kept, as a reload reads it). */
+function spliceThread(kept: boolean): UIMessage[] {
+  return [
+    msg({ id: "sp-u1", role: "user", createdAt: NOW - 4 * 60e3, parts: [{ type: "text", text: "Ship the German pricing page." }] }),
+    msg({
+      id: "sp-a1", role: "assistant", createdAt: NOW - 3 * 60e3,
+      ...(kept && { metadata: { [SIGNALS_SEEN_METADATA_KEY]: [{ id: "sig-lilt", atStep: 1, text: SPLICE_TEXT, metadata: SPLICE_METADATA }] } }),
+      parts: [
+        { type: "step-start" }, { type: "text", text: "Waiting on the German strings before I build the page." },
+        { type: "step-start" }, { type: "text", text: "The translation landed, so the German page is built from job 4471." },
+      ],
+    }),
+  ];
+}
+
 const REVERT_CHECKPOINTS = new URLSearchParams(location.search).get("checkpoints");
 
 const REVERT_CHECKPOINT: FileCheckpointEntry = {
@@ -1877,6 +1898,8 @@ function seedFrameTranscript(transcript: string | null): void {
   if (transcript === "slates") seedGalleryChat(SLATES_THREAD);
 
   if (transcript === "page") seedGalleryChat(PAGE_THREAD);
+
+  if (transcript === "splice-live" || transcript === "splice-kept") seedGalleryChat(spliceThread(transcript === "splice-kept"));
 }
 
 /** As the Durable Object broadcasts it after the walk-back. */
