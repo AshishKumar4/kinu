@@ -93,6 +93,7 @@ const ForkFrameSchema = v.variant('kind', [
   rowFrameSchema('lessons'),
   rowFrameSchema('toolLessons'),
   rowFrameSchema('facts'),
+  rowFrameSchema('ownerQuestions'),
   rowFrameSchema('appTables'),
   rowFrameSchema('appRows'),
   /** Chunks a page names that the target lacked, stored ahead of that page. */

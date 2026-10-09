@@ -25,8 +25,8 @@ import "virtual:kinu-theme.css";
 import "./index.css";
 import { KINU_MARK, MARK_IDS, mark, codenameFor, mintAgentName, WorkspaceTerminalInputSchema } from "@kinu.run/core";
 import { ephemeralSlateAddress, hostedActorSocketPath, mcpPresetById, READS_CHANGED_EVENT, readsWrittenBy, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
-import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT, PositionCursorSchema, sanitizeWorkspaceLogoSvg } from "@kinu.run/core";
-import type { AlternateTakeSet, ParkedWriteReview, ReasoningEffort, TakePickOutcome } from "@kinu.run/core";
+import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT, OwnerAnswersSchema, PositionCursorSchema, sanitizeWorkspaceLogoSvg } from "@kinu.run/core";
+import type { AlternateTakeSet, AskingAgent, OwnerAnswer, ParkedWriteReview, ReasoningEffort, TakePickOutcome } from "@kinu.run/core";
 import {
   approvalDocument, authDocument, installDocument, loginDocument,
 } from "@kinu.run/core";
@@ -1890,8 +1890,69 @@ const REFUSED_THREAD: UIMessage[] = [
   }),
 ];
 
+/** What the workspace's agent asked its owner: a single choice with previews, and a multiple choice. */
+const GALLERY_ASK = {
+  questions: [
+    {
+      id: "storage", header: "Money", question: "How should prices be stored once the coupon fix lands?", recommended: 0,
+      options: [
+        { label: "Integer cents", description: "Exact sums; every display divides by 100.", preview: "price_cents  INTEGER NOT NULL\n-- 1999 → $19.99\nSELECT price_cents / 100.0" },
+        { label: "Decimal(10,2)", description: "Reads as written; the ORM maps it to a string.", preview: "price  DECIMAL(10,2) NOT NULL\n-- 19.99\nSELECT price" },
+        { label: "Keep floats", description: "No migration now; rounding stays a risk.", preview: "price  REAL NOT NULL\n-- 19.990000000000002" },
+      ],
+    },
+    {
+      id: "checks", header: "Checks", question: "Which checks should run before the staging deploy?", multi: true,
+      options: [
+        { label: "Cart totals", description: "Every fixture cart sums to its receipt." },
+        { label: "Coupon stacking", description: "Two coupons on one cart, both orders." },
+        { label: "Old orders", description: "Orders placed before the migration still read." },
+      ],
+    },
+  ],
+};
+
+/** `&questions=open`: the questions wait in the stack; answering or dismissing them closes them, as the store would. */
+function galleryQuestions(): AskingAgent[] {
+  if (new URLSearchParams(location.search).get("questions") !== "open") return [];
+  const closed = document.documentElement.dataset.galleryQuestions;
+  const answers = v.parse(v.nullable(OwnerAnswersSchema), JSON.parse(document.documentElement.dataset.galleryAnswers ?? "null"));
+
+  return [{
+    agent: WORKSPACE_PAGE_NAME, actor: null,
+    asked: {
+      id: "q-1", actor: galleryActorId(WORKSPACE_PAGE_NAME), callId: "ask-1", turnId: "turn-ask", mode: "build", questions: GALLERY_ASK.questions,
+      status: closed === "answered" || closed === "dismissed" ? closed : "open", answers, askedAt: NOW - 2 * 60e3, closedAt: closed === undefined ? null : NOW,
+    },
+  }];
+}
+
+function galleryCloseQuestions(status: "answered" | "dismissed", answers: readonly OwnerAnswer[] | null): JsonValue {
+  const root = document.documentElement.dataset;
+
+  root.galleryQuestions = status;
+  root.galleryAnswers = JSON.stringify(answers);
+  queueMicrotask(() => { galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listOwnerQuestions"] })); });
+
+  return null;
+}
+
+/** `?transcript=asked`: the turn that asked, ending on its call. */
+const ASKED_THREAD: UIMessage[] = [
+  msg({ id: "ask-u1", role: "user", createdAt: NOW - 3 * 60e3, parts: [{ type: "text", text: "Fix the SAVE20 coupon and get it to staging." }] }),
+  msg({
+    id: "ask-a1", role: "assistant", createdAt: NOW - 2 * 60e3,
+    parts: [
+      { type: "text", text: "The 500 comes from coupons stored without a kind; the fix is ready. Two choices are yours before I deploy." },
+      { type: "tool-ask_owner", toolCallId: "ask-1", state: "input-available", input: GALLERY_ASK },
+    ],
+  }),
+];
+
 function seedFrameTranscript(transcript: string | null): void {
   if (transcript === "revert") seedGalleryChat(REVERT_THREAD);
+
+  if (transcript === "asked") seedGalleryChat(ASKED_THREAD);
 
   if (transcript === "refused") seedGalleryChat(REFUSED_THREAD);
 
@@ -2677,6 +2738,9 @@ const ASYNC_PAGE_RPC = new Map<string, (args?: unknown[]) => Promise<JsonValue>>
   ["resolveDeviceConsent", galleryResolveConsent],
   ["listBackgroundJobs", galleryJobsRead],
   ["listPendingActions", galleryPendingActions],
+  ["listOwnerQuestions", async () => v.parse(JsonValueSchema, galleryQuestions())],
+  ["answerOwnerQuestions", async (args) => galleryCloseQuestions("answered", v.parse(v.tuple([v.string(), OwnerAnswersSchema]), args)[1])],
+  ["dismissOwnerQuestions", async () => galleryCloseQuestions("dismissed", null)],
   ["decidePlanReview", galleryDecidePlan],
   ["recoverStrandedTurn", galleryRecoverTurn],
 ]);

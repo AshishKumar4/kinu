@@ -10,6 +10,7 @@ import { boundWriteOf } from '../safety/bound-write';
 import type { PendingConsent } from '../protocol';
 import type { PlanReview } from '../types/plans';
 import { planTitle } from '../plans/review';
+import type { AskingAgent } from '../plans/owner-questions';
 
 export type PendingActionKind =
   /** Decided here: the queue is this action's only home. */
@@ -64,14 +65,15 @@ export function needsTheUser(asks: PersonAsks): boolean {
 }
 
 /**
- * One thing waiting on the owner's answer: a queued row that holds them, a machine's consent, or an account-memory
- * proposal (the account's own record of it, held by the owner's user object). `raisedBy`: the actor whose ask it is, by
- * id; null for the workspace's own.
+ * One thing waiting on the owner's answer: a queued row that holds them, a machine's consent, an account-memory
+ * proposal (the account's own record of it, held by the owner's user object), or an agent's questions. `raisedBy`: the
+ * actor whose ask it is, by id; null for the workspace's own.
  */
 export type OwnerAsk =
   | { readonly key: string; readonly at: number; readonly raisedBy: string | null; readonly kind: 'action'; readonly action: PendingAction }
   | { readonly key: string; readonly at: number; readonly raisedBy: null; readonly kind: 'consent'; readonly consent: PendingConsent }
-  | { readonly key: string; readonly at: number; readonly raisedBy: null; readonly kind: 'memory'; readonly memory: AccountMemoryProposal };
+  | { readonly key: string; readonly at: number; readonly raisedBy: null; readonly kind: 'memory'; readonly memory: AccountMemoryProposal }
+  | { readonly key: string; readonly at: number; readonly raisedBy: string | null; readonly kind: 'question'; readonly question: AskingAgent };
 
 /**
  * What the chat's attention stack shows, newest first: every row that holds the person (the rule
@@ -79,7 +81,10 @@ export type OwnerAsk =
  * proposals that hold nobody stay in Work. `raisedBy`: only that actor's asks, for its own pane.
  */
 export function ownerAsks(
-  asks: Pick<PersonAsks, 'pendingActions' | 'pendingConsents'> & { readonly accountProposals?: readonly AccountMemoryProposal[] | null },
+  asks: Pick<PersonAsks, 'pendingActions' | 'pendingConsents'> & {
+    readonly accountProposals?: readonly AccountMemoryProposal[] | null;
+    readonly questions?: readonly AskingAgent[] | null;
+  },
   { raisedBy }: { readonly raisedBy?: string } = {},
 ): OwnerAsk[] {
   const held: OwnerAsk[] = asks.pendingActions.filter((action) => HOLDS_THE_PERSON[action.kind])
@@ -92,7 +97,10 @@ export function ownerAsks(
   const memory: OwnerAsk[] = (asks.accountProposals ?? [])
     .map((proposal) => ({ key: `memory:${proposal.id}`, at: proposal.createdAt, raisedBy: null, kind: 'memory', memory: proposal }));
 
-  return [...held, ...consents, ...memory]
+  const questions: OwnerAsk[] = (asks.questions ?? []).filter((asking) => asking.asked.status === 'open')
+    .map((asking) => ({ key: `question:${asking.asked.id}`, at: asking.asked.askedAt, raisedBy: asking.actor, kind: 'question', question: asking }));
+
+  return [...held, ...consents, ...memory, ...questions]
     .filter((ask) => raisedBy === undefined || ask.raisedBy === raisedBy)
     .sort((a, b) => b.at - a.at || a.key.localeCompare(b.key));
 }

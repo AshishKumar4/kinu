@@ -57,6 +57,7 @@ async function liveRead(agent: HarnessOrchestratorAgent, read: LiveRead): Promis
     getQuality: () => agent.getQuality(30),
     getWorkspaceGitHub: () => agent.getWorkspaceGitHub(),
     inspectWork: () => agent.inspectWork(),
+    listOwnerQuestions: () => agent.listOwnerQuestions(),
   };
 
   await reads[read]();

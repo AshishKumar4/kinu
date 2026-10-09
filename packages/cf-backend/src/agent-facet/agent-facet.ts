@@ -19,7 +19,7 @@ import { runAgentTask, type AgentWorkspace } from './agent-turn';
 import { FacetChat } from './agent-chat';
 import type {
   AgentAnswerTexts, AgentRecovery, AgentSnapshot, AgentTurnEnd, AgentTurnTask, EnqueueTurnResult, ProgrammaticTurn, PromptFile, SendLanding, SendOptions, TurnRequestAt,
-  JsonObject, PlanDecisionOutcome, PlanEdit, PlanReview, PlanReviewDecision, PlanReviewResult, ReviewAnnotation,
+  JsonObject, PlanDecisionOutcome, PlanEdit, PlanReview, PlanReviewDecision, PlanReviewResult, ReviewAnnotation, AskedQuestions, OwnerAnswer,
 } from '@kinu.run/core';
 
 export type { AgentWorkspace } from './agent-turn';
@@ -136,6 +136,11 @@ export interface AgentFacetCalls {
   dismissPlanReview(snapshot: AgentSnapshot, id: string, revision: number): Promise<PlanReviewResult>;
   /** The feedback or approval turn is queued in its own chat. */
   decidePlanReview(snapshot: AgentSnapshot, verdict: PlanVerdict): Promise<PlanDecisionOutcome>;
+  /** Its questions to its owner, in its own store: asked on the owner's turns, answered from the workspace's stack. */
+  ownerQuestions(snapshot: AgentSnapshot): Promise<readonly AskedQuestions[]>;
+  /** The answer becomes the asking call's result, and the turn that continues from it is queued in its own chat. */
+  answerOwnerQuestions(snapshot: AgentSnapshot, id: string, answers: readonly OwnerAnswer[]): Promise<void>;
+  dismissOwnerQuestions(snapshot: AgentSnapshot, id: string): Promise<number>;
 }
 
 export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFacetCalls {
@@ -279,6 +284,18 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async decidePlanReview(snapshot: AgentSnapshot, verdict: PlanVerdict): Promise<PlanDecisionOutcome> {
     return await settle(this.withChat(snapshot, (chat) => chat.planned((plans) => plans.decideAndHandOff(verdict, (turn) => chat.session.enqueueTurn(turn)))));
+  }
+
+  async ownerQuestions(snapshot: AgentSnapshot): Promise<readonly AskedQuestions[]> {
+    return await settle(this.withChat(snapshot, (chat) => chat.questions.recent()));
+  }
+
+  async answerOwnerQuestions(snapshot: AgentSnapshot, id: string, answers: readonly OwnerAnswer[]): Promise<void> {
+    return await settle(Effect.flatMap(this.withChat(snapshot, (chat) => chat), (chat) => chat.session.answerQuestions(id, answers)));
+  }
+
+  async dismissOwnerQuestions(snapshot: AgentSnapshot, id: string): Promise<number> {
+    return await settle(this.withChat(snapshot, (chat) => chat.session.dismissQuestions(id)));
   }
 
   async owed(snapshot: AgentSnapshot): Promise<boolean> {

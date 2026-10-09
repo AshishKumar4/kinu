@@ -12,10 +12,13 @@ import { TURN_AUTHOR_METADATA_KEY, turnAuthor } from '../utils/ui-message';
 import { JsonObjectSchema, type JsonObject } from '../utils/json';
 import * as v from 'valibot';
 import { slateLinkId } from '../slates/host-context';
+import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
 
 /** A turn the backend enqueued; `system_event` is any harness event without its own card. */
 export type ClassifiedProgrammaticTurn =
   | { kind: "workspace_created" }
+  /** Continues from the call the owner answered; the answer is drawn where the question was asked. */
+  | { kind: "owner_answer" }
   | { kind: "event_drain" }
   | { kind: "background_job"; jobKind: string; status: string }
   | { kind: "deferred_approval"; decision: string; count: number }
@@ -70,6 +73,8 @@ export function classifyProgrammaticTurn(
   switch (turn.kinuEvent) {
     case "workspace_created":
       return { kind: "workspace_created" };
+    case OWNER_ANSWER_SIGNAL:
+      return { kind: "owner_answer" };
     case "event_drain":
       return { kind: "event_drain" };
     case "background_job":

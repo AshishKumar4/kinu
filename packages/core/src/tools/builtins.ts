@@ -10,7 +10,7 @@ import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ConversationRecall } from '../memory/conversation-search';
 import {
-  BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription, keepBuiltins, narrowToolSurface,
+  ASK_OWNER_DESCRIPTION, ASK_OWNER_TOOL, BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription, keepBuiltins, narrowToolSurface,
 } from './registry';
 import { TaskListStore } from './task-store';
 import { withClampedToolResult } from './clamp';
@@ -26,18 +26,20 @@ import { isMcpToolKey } from './mcp-naming';
 import { selectInjectableCraftedTools, type CraftedToolSource } from './crafted-executor';
 import { TurnEscalationLedger } from '../execution/escalation';
 import { serveMemory } from './memory-operations';
-import { nativeTool, operationTool } from './operation-surfaces';
+import { nativeTool, operationInputSchema, operationTool } from './operation-surfaces';
 import { serveTasks, type RoleSwitch } from './tasks-operations';
 import type { WebSearchProvider } from '../web/index';
 import { serveWeb } from './web-operations';
 import type { ReplyToCommentToolDeps, SubmitPlanToolDeps } from '../types/plans';
 import { PLAN } from '../operations/plan';
+import { defineOperation } from '../operations/operation';
 import { servePlan, servePlanReply } from './plan-operations';
+import { AskOwnerInputSchema } from '../types/owner-questions';
 import type { JsonValue } from '../utils/json';
 import { Effect } from 'effect';
 import { diagnostics, KinuError, settle, settleSync, type Logger } from '../obs/index';
 // heads/types.ts holds no runtime import, so this edge cannot close a ring.
-import { toolsInWorkMode } from '../execution/work-mode';
+import { permitInPlan, toolsInWorkMode } from '../execution/work-mode';
 import type { WorkMode } from '../types/turn';
 
 type ExecutableToolEntry = NonNullable<ToolSet[string]>;
@@ -58,6 +60,20 @@ export interface CodemodeSurface {
 
 /** Core has no codegen; the CLI supplies `createNodeCodemodeToolFactory`. */
 export type CodemodeBuilder = (surface: CodemodeSurface) => ToolSet[string];
+
+/** `ask_owner`'s input as an operation's, so a malformed call is refused by field before it can park; nothing serves it. */
+const ASK_OWNER = defineOperation({
+  ns: ASK_OWNER_TOOL, name: 'ask', impact: 'externalSend', plan: true, slate: false,
+  help: ASK_OWNER_DESCRIPTION, input: AskOwnerInputSchema, output: v.unknown(),
+});
+
+/**
+ * `ask_owner`, with no executor: its call stays unpaired, so the loop stops on its step and the owner's answer reaches
+ * the model through the repair that pairs interrupted calls (`plans/owner-questions.ts`).
+ */
+export function askOwnerTool() {
+  return permitInPlan(tool({ description: ASK_OWNER_DESCRIPTION, inputSchema: operationInputSchema(ASK_OWNER) }));
+}
 
 /** The one reader of a runtime's crafted tools, for every `eval` built over its surface. */
 export function codemodeSurface(
@@ -94,6 +110,8 @@ export interface BuiltinToolDeps {
   submitPlan?: SubmitPlanToolDeps;
   /** Only while a review the owner sent back holds comments the agent may answer; its absence is the gate. */
   replyToComment?: ReplyToCommentToolDeps;
+  /** Where a person is the conversation partner: the workspace's own agent, and a hire on its owner's turns. */
+  askOwner?: true;
   /** Per-turn ledger: lets `file` refuse blind edits. Omitted → fresh one, so the policy is per-root. */
   fileLedger?: TurnFileLedger;
   /** Per-turn context budget; omitted → fresh one, so the policy is per-root. */
@@ -178,6 +196,8 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   if (submitPlan) tools.submit_plan = operationTool(PLAN.submit.help, servePlan(submitPlan));
 
   if (replyToComment) tools.reply_to_comment = operationTool(PLAN.reply.help, servePlanReply(replyToComment));
+
+  if (deps.askOwner) tools[ASK_OWNER_TOOL] = askOwnerTool();
 
   // `mcp_` is reserved for MCP (isMcpToolKey).
   for (const name of Object.keys(tools)) {

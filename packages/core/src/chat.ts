@@ -35,8 +35,11 @@ import type { SpendGate } from './mission-budget';
 import { sanitizeAttachmentsForModel, type AttachmentPolicy, type MediaModality } from './prompting/attachment-sanitizer';
 import { messageTokens } from './prompting/media-tokens';
 import { assembleTurnMessages } from './orchestrator/turn-context';
-import { settleUnpairedToolCalls } from './prompting/interrupted-tool-calls';
+import { settleUnpairedToolCalls, trailingUnpairedCalls } from './prompting/interrupted-tool-calls';
 import type { LostToolCall } from './tools/effect-claim';
+import type { LostCallQuery } from './prompting/interrupted-tool-calls';
+import type { AskCall } from './plans/owner-questions';
+import { ASK_OWNER_TOOL } from './tools/registry';
 import { modelWindow, type ModelWindow } from './context-window';
 import type { CountableRequest, InputTokenCount } from './providers/input-tokens';
 import { OUTPUT_LIMIT_REACHED } from './orchestrator/turn-lifecycle';
@@ -117,12 +120,26 @@ export interface ChatFallback {
   };
 }
 
+/** A step's valid `ask_owner` calls: an invalid one is refused with a result, so the loop goes on. */
+/** The open questions the history ends on: a turn re-opened after its step asked (its process died before the turn
+ *  closed) finds them, and sends nothing until they close. */
+function waitingAsks(history: readonly ModelMessage[], waitsOn: ((call: AskCall) => boolean) | undefined): AskCall[] {
+  if (waitsOn === undefined) return [];
+
+  return trailingUnpairedCalls(history, ASK_OWNER_TOOL).map((call) => ({ toolCallId: call.toolCallId, input: projectJsonValue({ value: call.input }) })).filter(waitsOn);
+}
+
+function askedIn(step: StepResult<ToolSet> | undefined): AskCall[] {
+  return (step?.toolCalls ?? []).filter((toolCall) => toolCall.toolName === ASK_OWNER_TOOL && toolCall.invalid !== true)
+    .map((toolCall) => ({ toolCallId: toolCall.toolCallId, input: projectJsonValue({ value: toolCall.input }) }));
+}
+
 export interface ChatOptions {
   model: LanguageModel;
   fallbacks?: readonly ChatFallback[];
   system: string;
   history: ModelMessage[];
-  lostToolCall?: (call: { readonly toolCallId: string; readonly toolName: string }) => LostToolCall | null;
+  lostToolCall?: (call: LostCallQuery) => LostToolCall | null;
   /** Re-read and re-woven at every step, never at turn assembly, so a compaction plugin never sees or persists it. */
   dynamicContext?: StepDynamicContext;
   /** Measure each request, delivered as its `step-finish` event's `context`. */
@@ -171,6 +188,10 @@ export interface ChatOptions {
   /** Each finished step, raw and as its own recorded messages, awaited, since the sink may be another DO the next request
    *  waits for; a throw rejects the turn. */
   onStep?: (step: StepResult<ToolSet>, messages: readonly ModelMessage[]) => Promise<void> | void;
+  /** A step's valid `ask_owner` calls, kept before the turn stops on that step; a throw fails the step. */
+  onAsk?: (calls: readonly AskCall[]) => void;
+  /** Whether an `ask_owner` call's questions are still open: a turn whose history ends on one sends nothing. */
+  waitsOn?: (call: AskCall) => boolean;
   /** Raw SDK output for a host UI bridge; not part of the serializable ChatEvent projection. */
   onToolOutput?: (output: ChatToolOutput) => Promise<void> | void;
   /** Where each call opens and closes its `model_operation` rows, so one in flight at process death shows in
@@ -745,6 +766,16 @@ export async function measureTurnRequest(opts: ChatOptions): Promise<{ readonly 
 }
 
 export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
+  // Its step asked the owner, and the questions are open: the turn ended there, and their answer is a later request's.
+  const waiting = waitingAsks(opts.history, opts.waitsOn);
+
+  if (waiting.length > 0) {
+    opts.onAsk?.(waiting);
+    yield { type: 'done', text: '', responseMessages: [], source: 'native' };
+
+    return;
+  }
+
   let stepCount = 0;
   const { extensions, tools, window, assembly, primary, stepContext, initialContext, admitted } = await admitRequest(opts);
   const { contextWindow, modelOutputLimit } = window;
@@ -933,7 +964,8 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       messages: await narrowedFor(request),
       tools: attempt.tools,
       ...offeredTools,
-      stopWhen: [opts.stopWhen ?? isLoopFinished(), () => call.stepFailure !== null],
+      // A step that asked the owner is the turn's last: the answer arrives with a later request.
+      stopWhen: [opts.stopWhen ?? isLoopFinished(), () => call.stepFailure !== null, ({ steps }) => askedIn(steps.at(-1)).length > 0],
       // Settled rewrites only (name case, fenced or double-encoded args); otherwise the model retries.
       experimental_repairToolCall: repairToolCall(),
       abortSignal: signal,
@@ -962,6 +994,9 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
         try {
           stepCount++;
+          const asked = askedIn(step);
+
+          if (asked.length > 0) opts.onAsk?.(asked);
           const record = call.stepRecord(step, stepCount, meter?.take(), responsePrefix);
           await opts.persistStep?.(record);
           opts.stepPhase?.('finished');

@@ -6,13 +6,14 @@
 import { Cause, Effect } from "effect";
 import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@cloudflare/kumo";
-import { BrainIcon, CheckIcon, DesktopTowerIcon, NotePencilIcon, ShieldWarningIcon, SparkleIcon, XIcon, type Icon } from "@phosphor-icons/react";
+import { BrainIcon, ChatCircleTextIcon, CheckIcon, DesktopTowerIcon, NotePencilIcon, ShieldWarningIcon, SparkleIcon, XIcon, type Icon } from "@phosphor-icons/react";
 import {
   revealMisrepresenting, timeAgo, type AccountMemoryProposal, type OwnerAsk, type PendingAction, type PendingActionKind, type PendingConsent, type PlanPageRef, type Rpc,
 } from "@kinu.run/core";
 import { detach, renderThrownChain } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { ParkedWriteChange } from "@/components/surfaces/WorkTab";
+import { QuestionCard } from "@/components/QuestionCard";
 
 type ConsentChoice = "once" | "always" | "deny";
 
@@ -32,11 +33,12 @@ export interface AttentionStackProps {
 /** Collapsed cards drawn behind the open one; the rest are counted on the last. */
 const SHOWN_BEHIND = 2;
 
-type AskKind = PendingActionKind | "consent" | "memory";
+type AskKind = PendingActionKind | "consent" | "memory" | "question";
 
 /** Only the kinds that hold the owner are stacked; the others are named so the map is whole. */
 const KIND_ICON = {
   deferred_action: ShieldWarningIcon, workspace_proposal: SparkleIcon, plan_review: NotePencilIcon, consent: DesktopTowerIcon, memory: BrainIcon,
+  question: ChatCircleTextIcon,
   scaffold_version: ShieldWarningIcon, unseen_changes: ShieldWarningIcon, curriculum_task: ShieldWarningIcon,
 } satisfies Record<AskKind, Icon>;
 
@@ -56,6 +58,12 @@ function headline(ask: OwnerAsk): string {
   if (ask.kind === "consent") return `Use ${ask.consent.deviceLabel}: ${ask.consent.command || "(command)"}`;
 
   if (ask.kind === "memory") return `Remember for every workspace: ${remembered(ask.memory)}`;
+
+  if (ask.kind === "question") {
+    const first = ask.question.asked.questions[0]?.question ?? "";
+
+    return ask.question.actor === null ? first : `${ask.question.agent} asks: ${first}`;
+  }
 
   const { action } = ask;
 
@@ -162,6 +170,9 @@ function answersOf(ask: OwnerAsk, props: AttentionStackProps): readonly Answer[]
     ];
   }
 
+  // A question card carries its own answer and dismissal.
+  if (ask.kind === "question") return [];
+
   if (ask.kind === "consent") {
     const { consentId, deviceLabel } = ask.consent;
 
@@ -229,7 +240,7 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
     setError(null);
     yield* Effect.promise(() => choice.run());
 
-    if (front.kind === "memory") {
+    if (front.kind === "memory" || front.kind === "question") {
       mark(front.key);
       setChosen(null);
     }
@@ -272,6 +283,11 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
         {front.kind === "consent" && <ConsentBody consent={front.consent} />}
         {front.kind === "memory" && <MemoryBody memory={front.memory} />}
         {front.kind === "action" && <ActionBody action={front.action} rpc={rpc} />}
+        {front.kind === "question" && (
+          <QuestionCard asking={front.question} busy={busy === front.key}
+            onAnswer={(answers) => detach(answer({ label: "Answer", weight: "primary", run: async () => { await rpc("answerOwnerQuestions", [front.question.asked.id, answers, front.question.actor]); } }))}
+            onDismiss={() => detach(answer({ label: "Dismiss", weight: "quiet", run: async () => { await rpc("dismissOwnerQuestions", [front.question.asked.id, front.question.actor]); } }))} />
+        )}
         {error?.key === front.key && <div className="mt-1.5 p-t-status p-danger" role="alert">{error.message}</div>}
         <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
           {[...answersOf(front, props)].reverse().map((choice) => <AnswerButton key={choice.label} answer={choice} busy={busy === front.key} onAnswer={answer} />)}

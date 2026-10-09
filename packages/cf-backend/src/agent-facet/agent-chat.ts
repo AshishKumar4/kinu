@@ -2,12 +2,12 @@
 import {
   CHAT_SESSION_ID, ChatSession, EventLog, HeadCapture, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TerminalTransitions,
   PlanReviewActions, announcementOf, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork,
-  planHandoffStillOwed, projectJsonValue,
+  planHandoffStillOwed, projectJsonValue, OWNER_ANSWER_SIGNAL,
   metadataTier, subordinateTerminalEffects, withCompactionTrigger,
   bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type JsonObject, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
   type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalTurnFacts, type TerminalTurnParts,
-  type ProviderEnv, type SessionEvent, type TurnAssemblyRequest, type WorkMode,
+  type ProviderEnv, type SessionEvent, type TurnAssemblyRequest, type WorkMode, type OwnerQuestionStore,
 } from '@kinu.run/core';
 import { createCompactionStateStore, type CompactionStateStore } from '@kinu.run/compaction';
 import { attempt, diagnostics, hold, logged, settle } from '@kinu.run/core/obs';
@@ -28,10 +28,12 @@ export interface FacetChatDeps {
   readonly pacer: StepPacer;
 }
 
-/** A hirer's or the harness's turn runs in the hirer's lane, with `report`; the owner's, and a plan's feedback or approval
- *  (the owner's decision), in the owner's. */
+/** A hirer's or the harness's turn runs in the hirer's lane, with `report`; the owner's, a plan's feedback or approval and
+ *  the turn an answer resumes (the owner's decisions), in the owner's. */
+const OWNER_EVENTS: ReadonlySet<unknown> = new Set(['plan_feedback', 'plan_approved', OWNER_ANSWER_SIGNAL]);
+
 function parentDrivenTurn(item: ChatTurnInput): boolean {
-  return item.kind === 'programmatic' && item.metadata?.kinuEvent !== 'plan_feedback' && item.metadata?.kinuEvent !== 'plan_approved';
+  return item.kind === 'programmatic' && !OWNER_EVENTS.has(item.metadata?.kinuEvent);
 }
 
 export class FacetChat {
@@ -55,6 +57,11 @@ export class FacetChat {
 
   /** Its own plan reviews, in its own store: the owner reviews them through its window (D9). */
   readonly plans: PlanReviewActions;
+
+  /** Its own questions to its owner, in its own store: the workspace's stack lists and answers them (D9). */
+  get questions(): OwnerQuestionStore {
+    return this.deps.actor.session.questions;
+  }
 
   private activeSkills: readonly string[] = [];
 
@@ -276,6 +283,8 @@ export class FacetChat {
       this.session.reclaimStrandedEventDeliveries();
       await this.terminal.replayOwedAndRearm();
       await this.session.flushPendingDrains();
+      // An answer the isolate took and died before running: its turn is re-derived from the store.
+      this.session.resumeAnswered();
     }).pipe(
       Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('agent.wake_failed', failure); })),
       Effect.ensuring(Effect.sync(() => { this.session.pump(); })),
@@ -360,7 +369,7 @@ export class FacetChat {
   /** The next instant to wake it, or none: a turn running or queued, or effects still closing, is looked at again a lap
    *  later. */
   private owed(): number | null {
-    const busy = this.session.turnOwed || this.terminal.closing || this.terminal.hasIncomplete();
+    const busy = this.session.turnOwed || this.terminal.closing || this.terminal.hasIncomplete() || this.questions.owedResumes().length > 0;
 
     // The workspace keeps one wake per agent, the latest it was told: a turn waiting out its backoff names its end.
     const next = Math.min(

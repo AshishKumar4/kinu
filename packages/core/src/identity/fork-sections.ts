@@ -13,9 +13,9 @@ import { parseJsonValue, type JsonValue } from '../utils/json';
 import { forkConversationEntryPartRows, forkConversationEntryRow, forkSessionMessageRow, type ForkConversationPlan } from './fork-plan';
 import {
   ForkAppRowSchema, ForkAppTableRowSchema, ForkConfigRowSchema, ForkContextMemberRowSchema, ForkConversationEntryPartRowSchema, ForkConversationEntryRowSchema,
-  ForkCraftedToolRowSchema, ForkFactRowSchema, ForkLessonRowSchema, ForkSessionMessageRowSchema, ForkToolLessonRowSchema,
+  ForkCraftedToolRowSchema, ForkFactRowSchema, ForkLessonRowSchema, ForkOwnerQuestionRowSchema, ForkSessionMessageRowSchema, ForkToolLessonRowSchema,
   type ForkAppRow, type ForkAppTableRow, type ForkConfigRow, type ForkContextMemberRow, type ForkConversationEntryPartRow, type ForkConversationEntryRow,
-  type ForkCraftedToolRow, type ForkFactRow, type ForkLessonRow, type ForkSessionMessageRow, type ForkToolLessonRow,
+  type ForkCraftedToolRow, type ForkFactRow, type ForkLessonRow, type ForkOwnerQuestionRow, type ForkSessionMessageRow, type ForkToolLessonRow,
 } from './fork-rows';
 import { openWorkspaceMainActor } from './workspace-actors';
 
@@ -33,6 +33,7 @@ export interface ForkRows {
   lessons: ForkLessonRow;
   toolLessons: ForkToolLessonRow;
   facts: ForkFactRow;
+  ownerQuestions: ForkOwnerQuestionRow;
   appTables: ForkAppTableRow;
   appRows: ForkAppRow;
 }
@@ -50,6 +51,7 @@ export const FORK_ROW_SECTIONS = [
   'lessons',
   'toolLessons',
   'facts',
+  'ownerQuestions',
   'appTables',
   'appRows',
 ] as const satisfies readonly ForkRowSection[];
@@ -66,6 +68,7 @@ export function perSection<T>(make: (section: ForkRowSection) => T): Record<Fork
     lessons: make('lessons'),
     toolLessons: make('toolLessons'),
     facts: make('facts'),
+    ownerQuestions: make('ownerQuestions'),
     appTables: make('appTables'),
     appRows: make('appRows'),
   };
@@ -351,6 +354,32 @@ export const FORK_SECTIONS: ForkSections = {
           INSERT INTO agent_facts (actor_id, key, value_json, confidence, source, last_observed_at, importance, veracity, origin_json)
           VALUES (${actorId}, ${row.key}, ${row.value_json}, ${row.confidence}, ${row.source}, ${row.last_observed_at},
                   ${row.importance}, ${row.veracity}, ${row.origin_json})
+        `;
+      }
+
+      markStoreChanged(sql);
+    },
+  },
+  // The answers the carried calls read: the conversation keeps each call, and the repair reads its result from here.
+  ownerQuestions: {
+    rows: ForkOwnerQuestionRowSchema,
+    select: ({ sql }) => actorRows(sql, (actorId, after) => {
+      const found = sql<ForkOwnerQuestionRow & { rowid: number }>`
+        SELECT rowid, id, call_id, turn_id, mode, tier, reason_json, digest, questions_json, status, answers_json, asked_at, closed_at
+        FROM owner_questions WHERE actor_id = ${actorId} AND status != 'open' AND rowid > ${after} ORDER BY rowid LIMIT 1
+      `[0];
+
+      return found === undefined ? undefined : { rowid: found.rowid, row: v.parse(ForkOwnerQuestionRowSchema, found) };
+    }),
+    bytes: (row) => utf8Bytes(row.questions_json) + utf8Bytes(row.answers_json) + utf8Bytes(row.reason_json) + utf8Bytes(row.call_id) + utf8Bytes(row.turn_id),
+    // Resumed as they land: the fork's conversation goes on from where the source's was, and owes no turn of its own.
+    stage: ({ sql, actorId }, rows) => {
+      for (const row of rows) {
+        void sql`
+          INSERT INTO owner_questions (actor_id, id, call_id, turn_id, mode, tier, reason_json, digest, questions_json, status, answers_json,
+            asked_at, closed_at, resumed_at)
+          VALUES (${actorId}, ${row.id}, ${row.call_id}, ${row.turn_id}, ${row.mode}, ${row.tier}, ${row.reason_json}, ${row.digest},
+            ${row.questions_json}, ${row.status}, ${row.answers_json}, ${row.asked_at}, ${row.closed_at}, ${row.closed_at ?? row.asked_at})
         `;
       }
 

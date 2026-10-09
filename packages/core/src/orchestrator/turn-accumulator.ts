@@ -76,6 +76,8 @@ export class TurnAccumulator {
   lastPromptTokens: number | undefined = undefined;
   /** Last step's `finishReason`; `classifyRunEnd` reads `'tool-calls'` as stopped mid-work. */
   lastFinishReason: string | undefined = undefined;
+  /** The turn stopped on its question to the owner: its pending call is the end it meant, not a defect. */
+  askedOwner = false;
   /** The turn's last request, for providers/cache-warming.ts. Held by reference, never copied. */
   /** `fallback`: the spec that served it, where a fallback did. */
   lastRequest: { readonly body: unknown; readonly sentAt: number; readonly usage: Usage; readonly fallback: string | undefined } | undefined = undefined;
@@ -116,6 +118,7 @@ export class TurnAccumulator {
     this.lastPromptTokens = undefined;
     this.lastRequest = undefined;
     this.lastFinishReason = undefined;
+    this.askedOwner = false;
     this.hadError = false;
     this.firstChunkSeen = false;
     this.startedAt = now;

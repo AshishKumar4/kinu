@@ -227,7 +227,7 @@ describe('CLI TUI layout', () => {
       root.render(
         <box style={{ width: '100%', height: '100%' }}>
           <CommandPaletteOverlay
-            commands={commandsForClient({ localControls: null, consents: null, checkpoints: null, plans: null })}
+            commands={commandsForClient({ localControls: null, consents: null, checkpoints: null, plans: null, questions: null })}
             terminal={{ width: 72, height: 24 }}
             onSelect={(command) => { selected.push(command.name); }}
           />
