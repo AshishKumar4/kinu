@@ -525,6 +525,26 @@ interface WorkspaceExtension {
 }
 
 /** One chat's connection and conversation. */
+/**
+ * Chats revisited in this page: switching to one paints the transcript it showed last while its socket reconnects
+ * (2026-10-09 on production: 113-130 ms desktop, 330-404 ms mobile before a chat's transcript arrived). The socket's
+ * own transcript replaces it as it lands. Bounded to the chats a person moves between; each holds only the window its
+ * pane already held.
+ */
+const REVISITED_CHATS = 8;
+
+const revisited = new Map<string, UIMessage[]>();
+
+function keepRevisited(actorKey: string, messages: UIMessage[]): void {
+  revisited.delete(actorKey);
+  revisited.set(actorKey, messages);
+
+  for (const oldest of revisited.keys()) {
+    if (revisited.size <= REVISITED_CHATS) break;
+    revisited.delete(oldest);
+  }
+}
+
 function useChatOwner(target: string | KinuActorAddress | undefined, extension: RefObject<WorkspaceExtension | null> | null) {
   const targetString = v.safeParse(v.string(), target);
   const targetAddress = v.safeParse(KinuActorAddressSchema, target);
@@ -626,9 +646,11 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
 
   const providerWaitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [activePlan, setActivePlan] = useState<PlanReview | null>(null);
-  // Set by the connect frame; the only thing that entitles the pane to draw an empty conversation.
-  // False is "not yet", never "nothing".
-  const [transcriptSeeded, setTranscriptSeeded] = useState(false);
+  // What this chat showed when it was last open in this page, drawn until its connect frame lands.
+  const [lastShown] = useState(() => revisited.get(actorKey));
+  // Set by the connect frame, or by a revisited chat's last transcript, which is never empty; the only things that
+  // entitle the pane to draw a conversation. False is "not yet", never "nothing".
+  const [transcriptSeeded, setTranscriptSeeded] = useState(lastShown !== undefined);
 
   const clearProviderWait = useCallback(() => {
     if (providerWaitTimer.current !== null) {
@@ -709,11 +731,16 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
     connectionError,
   } = useAgentChat({
     agent,
-    // The connect frame seeds the transcript; `transcriptSeeded` holds the skeleton until it.
+    // The connect frame seeds the transcript; `transcriptSeeded` holds the skeleton until it, or a revisit's last one.
     getInitialMessages: null,
+    ...(lastShown !== undefined && { messages: lastShown }),
     // Matches the SDK default (cloudflare/agents#2058), pinned so an upstream change cannot move it.
     throttle: 50,
   });
+
+  useEffect(() => {
+    if (transcriptSeeded && messages.length > 0) keepRevisited(actorKey, messages);
+  }, [actorKey, messages, transcriptSeeded]);
 
   /** The SDK's flag is false during `submitted` (message sent, no token yet); including it keeps
    *  the composer from admitting a second press in that window. */
