@@ -30,6 +30,8 @@ import {
   CLI_BEARER_HEADER,
   CLI_SCOPES_HEADER,
   SESSION_BEARER_HEADER,
+  SESSION_AUTHORITY_REVOKED,
+  WEBSOCKET_POLICY_CLOSE,
   cliBearerConnectionTag,
   cliBearerFromTags,
   cliScopesConnectionTag,
@@ -268,10 +270,6 @@ type ActorJobSeams = Pick<BackgroundJobRunnerDeps,
   readonly notifySettled?: (job: BackgroundJob) => void;
 };
 
-/** The agents SDK treats this close code as terminal (`isTerminalCloseEvent`), so a
- * client whose authority is gone stops reconnecting. */
-const WEBSOCKET_POLICY_CLOSE = 1008;
-
 /**
  * How long an alarm waits for the programs in flight, from its start: nine tenths of the wall an alarm handler is
  * given (do.alarm.wall_ms), so the platform never ends the handler mid-wait. A handler ended at its wall resets the
@@ -280,8 +278,6 @@ const WEBSOCKET_POLICY_CLOSE = 1008;
 const ALARM_PROGRAM_WAIT_MS = Math.floor(PLATFORM_CATALOG['do.alarm.wall_ms'].limit.value * 9 / 10);
 
 const CLI_AUTHORITY_REVOKED = 'This CLI authorization is invalid. Sign in again with: kinu auth';
-
-const SESSION_AUTHORITY_REVOKED = 'This session has been signed out. Sign in again.';
 
 const PlanApprovalMetadataSchema = v.looseObject({
   kinuEvent: v.literal('plan_approved'), planId: v.string(),

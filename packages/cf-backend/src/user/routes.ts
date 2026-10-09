@@ -3,6 +3,7 @@ import { Cause, Effect } from 'effect';
 import { Hono, type Context } from 'hono';
 import type { UserDO } from './user-do';
 import { ROSTER_SOCKET_PATH } from './roster';
+import { appendIdentityHeaders } from '../cli/rpc-gate';
 import { pictureKey, type PictureBucket } from '../slates/pictures';
 import { SlateDirectoryName } from '@kinu.run/core/slates';
 import { PROFILE_CATALOG_CONFIG_KEY } from '@kinu.run/core';
@@ -196,8 +197,11 @@ userRoutes.get('/api/user/cli', async (c) => {
 
 userRoutes.get('/api/user/workspaces', (c) => settle(listWorkspaceRoster(c)));
 
-// A socket cannot cross RPC; its upgrade request can.
-userRoutes.get('/api/user/workspaces/live', async (c) => c.get('stub').fetch(new Request(new URL(ROSTER_SOCKET_PATH, c.req.url), c.req.raw)));
+// A socket cannot cross RPC; its upgrade request can. The object learns the browser session from the headers the edge
+// rewrites from the verified identity, never from the page's own, and keeps it on the socket so logout can close it.
+userRoutes.get('/api/user/workspaces/live', async (c) => c.get('stub').fetch(new Request(new URL(ROSTER_SOCKET_PATH, c.req.url), new Request(c.req.raw, {
+  headers: appendIdentityHeaders(c.req.raw.headers, c.get('identity')),
+}))));
 
 const PictureSchema = v.object({
   workspace: v.pipe(v.string(), v.check(isWorkspaceName)),

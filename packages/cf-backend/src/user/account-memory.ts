@@ -50,7 +50,7 @@ export class UserAccountMemory {
   /** The owner's open pages: what waits on them, sent on the roster's socket, so their chats' stacks show it. */
   pendingMoved(sockets: readonly WebSocket[] = rosterSockets(this.host.ctx)): void {
     if (sockets.length === 0) return;
-    sendRosterFrame(sockets, { type: 'account_memory', pending: this.store.pending() });
+    sendRosterFrame(sockets, { type: 'account_memory', pending: this.store.pending() }, this.host.sessionStands);
   }
 
   async accountMemory_view(caller: UserCaller): Promise<AccountMemoryView> {

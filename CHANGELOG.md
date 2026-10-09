@@ -25,6 +25,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **A signed-out page stops hearing your account.** Logout and a credential reset closed the sockets a workspace holds, but not the roster's socket in your account object, so a page that kept it went on receiving the memory proposals waiting on you and every roster change. That socket now runs on the browser session it was opened under: ending the session closes it, and no frame goes to a socket whose session has ended or lapsed.
 - **Launcher-swap checks use the repo's runtime, not the test driver's.** Their managed Bun is the pinned local binary and installation is disabled, so a check run by the machine's older Bun cannot contact bun.sh or add install progress to its verdict.
 - **First-run collection uses the pinned runtime for the process and its workers.** Its credential-free probes no longer resolve the machine's Bun through PATH; an execution trace showed those workers using 1.4.0 while the suite ran on 1.4.2.
 - **Staging counts terminal sequences still owed, not repeated observations.** Each settlement emits one completion event. The version report follows each sequence's last event, separates those that settled after owing, and reports only those still owed at the window's end.
