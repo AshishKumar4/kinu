@@ -66,6 +66,16 @@ function idleReason(window: SleepTimeWindow | null): string {
 export class SleepTimeLane {
   constructor(private readonly deps: SleepTimeLaneDeps) {}
 
+  /**
+   * Whether the outbox may hold a proposal: unknown until this activation reads it once, then true only while a commit
+   * here filed one or a delivery left one. Every turn's pass asked first, and two reads a turn cost the workerd turn
+   * budget two statements (2026-10-09, batch 64).
+   */
+  private mayOwe = true;
+
+  /** Proposals this activation filed, so a delivery that read the outbox before a filing does not clear it. */
+  private filed = 0;
+
   effect(): TerminalEffect {
     return terminalEffect({ input: v.object({}), run: () => this.runTerminal() });
   }
@@ -234,6 +244,8 @@ export class SleepTimeLane {
         for (const [index, proposal] of proposals.entries()) {
           void this.deps.sql`INSERT INTO account_proposal_outbox (delivery, proposal_json)
             VALUES (${`${key}#${String(index)}`}, ${JSON.stringify(proposal)}) ON CONFLICT(delivery) DO NOTHING`;
+          this.filed += 1;
+          this.mayOwe = true;
         }
 
         this.finish(key);
@@ -257,15 +269,23 @@ export class SleepTimeLane {
    * answers stays, and every later pass delivers it again; the delivery id makes that file nothing new.
    */
   private deliver(account: AccountMemory): Effect.Effect<void> {
+    if (!this.mayOwe) return Effect.void;
+    const filed = this.filed;
     const owed = this.deps.sql<{ delivery: string; proposal_json: string }>`SELECT delivery, proposal_json FROM account_proposal_outbox ORDER BY delivery`;
+    let left = 0;
 
     return Effect.forEach(owed, (row) => attempt(
       { doing: 'proposing an account fact for the owner to approve', otherwise: 'unavailable' },
       async () => await account.propose(v.parse(AccountProposalSchema, JSON.parse(row.proposal_json)), row.delivery),
     ).pipe(Effect.match({
       onSuccess: () => { void this.deps.sql`DELETE FROM account_proposal_outbox WHERE delivery = ${row.delivery}`; },
-      onFailure: (failure) => { diagnostics.failure('memory.account_proposal_failed', failure, { workspace: this.deps.workspace, delivery: row.delivery }); },
+      onFailure: (failure) => {
+        left += 1;
+        diagnostics.failure('memory.account_proposal_failed', failure, { workspace: this.deps.workspace, delivery: row.delivery });
+      },
     })), { discard: true }).pipe(Effect.tap(() => Effect.sync(() => {
+      this.mayOwe = left > 0 || this.filed !== filed;
+
       if (owed.length > 0) diagnostics.event('memory.account_proposed', { workspace: this.deps.workspace, owed: owed.length });
     })));
   }
