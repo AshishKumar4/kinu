@@ -1251,6 +1251,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       this.mainPlanReply = awaitsReply
         ? { reply: async (comment, text) => await this.hostedPlanReply(turn, comment, text) }
         : undefined;
+      // Its questions park in its own isolate, as every agent's do: the stack asks it once its turn was offered the tool.
+      this.offerAskOwner(turn.actor.stores.config);
 
       return await this.mainTaskProfile(turn);
     }
@@ -2611,8 +2613,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // Main's plans live in its own isolate, judged by the metadata its turn was admitted under.
       submitPlan: { submit: async (edits) => await this.agentPlanSubmit(this.actorHandle().actorId, edits, this.turnDrivingMetadata()) },
       ...(replyToComment !== undefined && { replyToComment }),
-      // Main's questions park in its own isolate, as every agent's do.
-      askOwner: this.offerAskOwner(this.config),
+      askOwner: true,
     };
   }
 

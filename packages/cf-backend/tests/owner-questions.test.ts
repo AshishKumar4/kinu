@@ -5,9 +5,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { actorConnectionTag, JsonValueSchema, OwnerQuestionStore, WORKSPACE_TITLE_SYSTEM_PROMPT, type JsonValue, type OwnerAnswer } from '@kinu.run/core';
-import { settleSync } from '@kinu.run/core/obs';
-import { sqlOver } from '@kinu.run/test-utils';
+import { actorConnectionTag, JsonValueSchema, WORKSPACE_TITLE_SYSTEM_PROMPT, type JsonValue, type OwnerAnswer } from '@kinu.run/core';
 import { asPane } from './helpers/agents-sdk';
 import { createTestUserDO, provisionTestWorkspace } from './helpers/user-do';
 import {
@@ -44,24 +42,32 @@ const TASK = 'Migrate the ledger.';
 /**
  * A model that asks once about {@link TASK} and then goes on: each request of the conversation (one offering
  * `ask_owner`, not a side lane's) from the task on is kept, and is answered with the call until one carries a result.
+ * `dies` is called at the first request that carries one, which then never answers and is not kept: its isolate is gone.
  */
-function asksOnce(): AskingModel {
+function asksOnce(dies?: () => void): AskingModel {
   const sent: Sent[] = [];
+  let died = dies === undefined;
 
-  const gateway = stubAiBinding((run: RecordedGatewayRun) => {
+  const gateway = stubAiBinding(async (run: RecordedGatewayRun) => {
     const { messages, tools } = requestOf(run);
 
     if (!tools.includes('ask_owner') || JSON.stringify(messages).includes(WORKSPACE_TITLE_SYSTEM_PROMPT)) return chatCompletion(run, 'Noted.');
 
     if (!JSON.stringify(messages).includes(TASK)) return chatCompletion(run, 'Hello.');
     const query = v.parse(SentQuerySchema, run.query);
+    // The wire renames call ids: any result after the task is the ask's.
+    const resumed = messages.some((message) => message.role === 'tool');
+
+    if (resumed && !died) {
+      died = true;
+      dies?.();
+
+      return await new Promise<never>(() => {});
+    }
 
     sent.push({ messages: query.messages, tools: JSON.stringify(query.tools) });
 
-    // The wire renames call ids: any result after the task is the ask's.
-    return messages.some((message) => message.role === 'tool')
-      ? chatCompletion(run, 'Storing integer cents.')
-      : toolCallCompletion(run, { tool: 'ask_owner', args: ASK }, CALL);
+    return resumed ? chatCompletion(run, 'Storing integer cents.') : toolCallCompletion(run, { tool: 'ask_owner', args: ASK }, CALL);
   });
 
   return { gateway, sent };
@@ -158,16 +164,21 @@ describe('the workspace agent asks its owner', () => {
     expect((await workspace.agent.listOwnerQuestions())[0]?.asked.status).toBe('answered');
   });
 
-  test('an answer the isolate took before it died is resumed by the next activation, from the same call', async () => {
-    const { gateway, sent } = asksOnce();
+  test('an answer whose turn the isolate died in is resumed by the next activation, from the same call', async () => {
+    let die = (): void => {};
+
+    const { gateway, sent } = asksOnce(() => { die(); });
     // Not named first: the harness's registry keeps no title, so the next activation would name it nothing either.
     const workspace = gatewayWorkspace(gateway);
+    const main = workspace.agent.agentOf(workspaceMainActor(workspace.db).actorId);
+
+    die = () => { workspace.agent.harnessResetAgentIsolate(main.storageKey); };
 
     await catalogTurn(workspace.agent, TASK);
     const asked = await openQuestion(workspace);
 
-    // Recorded, and the isolate gone before the turn it owes opened.
-    settleSync(new OwnerQuestionStore(sqlOver(workspace.db), workspaceMainActor(workspace.db)).answer(asked.id, ANSWER));
+    // Taken in main's own isolate, under the wake the workspace armed for it, and the isolate gone in the turn it owes.
+    await workspace.agent.answerOwnerQuestions(asked.id, ANSWER);
 
     const reopened = await reactivateOrchestratorHarness(workspace.db, undefined, {
       world: { aiGateway: gateway },
