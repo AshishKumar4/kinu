@@ -155,7 +155,7 @@ import {
   type OperationProfile,
   agentRoleSwitch, toolsNamespace, runWorkModeInvocation, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost, type CodemodeSurface,
   resolveModelRoute, completeOnRoute, routedLlm, tierRefusals, type TierRefusals, type ModelRouteResolution,
-  narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, requireCodemodeMember, inWorkMode,
+  narrowToolSurface, effectiveRoleCatalog, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, requireCodemodeMember, inWorkMode,
   toolSurfaceTokens, McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
   SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, REPORT_TOOL, planSubmissionReach,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ProfileCatalogEnvelope,
@@ -4053,7 +4053,9 @@ export abstract class ActorAgent extends Agent<Env> {
     this._facetTurn = { turnId: turn.turnId, inputs: reads.profileInputs, external };
     // Eval declares the turn's external tools in the description it is built with, and the surface was built before
     // this turn read its MCP tools: one built on another turn's set is built again on this one's.
-    const declared = this.declaredExternal(turn.profile.profile.allowedTools, external);
+    // The profile the workspace resolved predates this read, so its role's own list says which external tools it may reach.
+    const reach = narrowToolSurface(effectiveRoleCatalog(turn.profile.inputs.envelope.catalog)[turn.profile.profile.role.id]?.allowedTools);
+    const declared = reach.allowsTool('eval') ? Object.fromEntries(Object.entries(external).filter(([name]) => reach.allowsTool(name))) : {};
     const stale = Object.keys(declared).join('\0') !== Object.keys(this._turnExternalTools).join('\0');
 
     this._turnExternalTools = declared;
