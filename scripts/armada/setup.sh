@@ -7,7 +7,10 @@
 set -eu
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq --no-install-recommends bubblewrap ffmpeg squashfs-tools fonts-liberation fonts-dejavu-core fonts-noto-color-emoji
+apt-get install -y -qq --no-install-recommends bubblewrap ffmpeg squashfs-tools libcap2-bin fonts-liberation fonts-dejavu-core fonts-noto-color-emoji
+subject_capability=cap_net_raw
+install -m 755 /usr/bin/sleep /usr/local/bin/kinu-cap-subject
+setcap "$subject_capability+ep" /usr/local/bin/kinu-cap-subject
 curl -fsSL -o /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
 apt-get install -y -qq --no-install-recommends /tmp/chrome.deb
 rm -f /tmp/chrome.deb

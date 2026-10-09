@@ -2171,22 +2171,19 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun test --timeout=0 scripts/deadline-capability.test.ts',
     label: 'The runner beside a process holding a capability',
-    here: 'measures this machine: the runner it proves is the one this box\'s deploy runs, beside a process its user '
-      + 'manager granted a capability, which no container has.',
-    tier: 'deploy',
+    tier: 'ci',
     seconds: 0.4,
     catches: 'a runner that crashes on a process it may not read. The leftover scan reads the environment of every '
       + 'process this user started after the run began, and the kernel refuses that read (EACCES) for one that '
-      + 'holds a capability its reader lacks, as a unit the user manager grants one does; a commit tier crashed on '
-      + 'one. The suite starts such a unit, asserts it runs and its process holds CAP_WAKE_ALARM before claiming '
-      + 'anything, and requires a run beside it to end 0 with the unit left running.',
-    blind: 'a machine whose user manager cannot grant a unit an ambient capability, which fails this suite rather '
-      + 'than passing it on nothing; CI is one, so CI never schedules it (CI_EXEMPT). Other unreadable processes, '
-      + 'another user\'s, are the uid check\'s.',
+      + 'holds any capability its reader lacks; a commit tier crashed on one. Prepare gives a sleep binary a file '
+      + 'capability, and the suite asserts its process holds it before anything else, then requires a run beside it '
+      + 'to end 0 with the subject left running.',
+    blind: 'any capability tests the kernel\'s permission check, not every capability or another user\'s process, '
+      + 'which the uid check excludes. A missing subject capability fails this suite rather than proving nothing.',
     inputs: {
       kind: 'live',
-      why: 'needs a user systemd manager that grants a unit an ambient capability (CAP_WAKE_ALARM): its subject is '
-        + 'a process of this machine\'s user manager, which no hash over the tree stands for.',
+      why: 'the kernel\'s permission check for a same-uid process holding any capability its reader lacks; '
+        + 'prepare grants the file capability, whose effective bit and refused environ read the suite asserts.',
     },
   },
   {
@@ -2944,10 +2941,6 @@ export const CI_EXEMPT = {
   'bun test --timeout=0 tests/browser/live-app-sleep.test.ts': LIVE_APP_AT_CI,
   'bun test --timeout=0 tests/browser/live-app-plans.test.ts': LIVE_APP_AT_CI,
   'bun test --timeout=0 tests/browser/live-app-layout.test.ts': LIVE_APP_AT_CI,
-  'bun test --timeout=0 scripts/deadline-capability.test.ts':
-    'needs a user systemd manager that grants a unit an ambient capability. The GitHub runner\'s starts the unit '
-    + 'and loses it at once (run 36216870343, 2026-09-26: ActiveState inactive), so there the suite fails for '
-    + 'the machine, never the code. It runs at deploy, on the box whose user manager holds CAP_WAKE_ALARM.',
 } satisfies Record<string, string>;
 
 /** Every gate at or below `tier`. */

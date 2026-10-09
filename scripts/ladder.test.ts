@@ -95,9 +95,7 @@ const NON_BUN_RUNNERS: readonly {
  * The live-app suite is here because its own deploy rows are its only
  * runners: CI_EXEMPT carries why a pull request cannot boot the product's dev
  * server. The product flows run only against the deployment a deploy publishes,
- * in its post-publish wave, which a pull request has none of. The capability suite needs a user
- * systemd manager that grants a unit an ambient capability, which a CI runner's
- * does not; CI_EXEMPT carries that too.
+ * in its post-publish wave, which a pull request has none of.
  */
 const AFTER_CI_SUITES = {
   'evals/tasks/chat-app.eval.ts': 'bun run evals',
@@ -107,7 +105,6 @@ const AFTER_CI_SUITES = {
   'evals/tasks/delegation.eval.ts': 'bun run evals',
   'evals/tasks/office.eval.ts': 'bun run evals',
   'evals/tasks/swarm.eval.ts': 'bun run evals',
-  'scripts/deadline-capability.test.ts': 'bun test --timeout=0 scripts/deadline-capability.test.ts',
   'tests/browser/live-app-layout.test.ts': 'bun test --timeout=0 tests/browser/live-app-layout.test.ts',
   'tests/browser/live-app-plans.test.ts': 'bun test --timeout=0 tests/browser/live-app-plans.test.ts',
   'tests/browser/live-app-sleep.test.ts': 'bun test --timeout=0 tests/browser/live-app-sleep.test.ts',
@@ -692,7 +689,7 @@ describe('a deploy\'s armada rows', () => {
       atDeploy: here.every((gate) => atDeploy.has(gate.run)), local: localDeployGates(deployOrder()).filter((gate) => !onArmada(gate)).length,
     }).toEqual({
       rows: [
-        'preflight bun scripts/preflight.ts', 'source bun test --timeout=0 scripts/deadline-capability.test.ts', 'upload bun run gate:infra',
+        'preflight bun scripts/preflight.ts', 'upload bun run gate:infra',
       ],
       reasons: true, atDeploy: true, local: here.length,
     });
