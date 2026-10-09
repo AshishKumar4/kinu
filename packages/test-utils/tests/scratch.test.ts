@@ -3,17 +3,18 @@ import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import * as v from 'valibot';
 import { scratchDir, SCRATCH_ROOT_PREFIX } from '../src/scratch';
+import { runToExit } from '../src/spawn';
 
 const repoRoot = resolve(import.meta.dir, '../../..');
 
 const helper = new URL('../src/scratch.ts', import.meta.url).pathname;
 
 describe('the shared scratch owner', () => {
-  test('an explicit parent, nested roots, and file sidecars remain one owned lifetime', () => {
+  test('an explicit parent, nested roots, and file sidecars remain one owned lifetime', async () => {
     const parent = scratchDir('scratch-owner');
     writeFileSync(join(parent, 'unowned-sentinel'), 'keep');
 
-    const child = Bun.spawnSync([process.execPath, '-e', `
+    const child = await runToExit([process.execPath, '-e', `
       import { writeFileSync, existsSync } from 'node:fs';
       import { join } from 'node:path';
       import { scratchDir, releaseScratch } from ${JSON.stringify(helper)};
@@ -23,13 +24,13 @@ describe('the shared scratch owner', () => {
       writeFileSync(join(root, 'agent.db-wal'), 'wal');
       const removed = releaseScratch();
       console.log(JSON.stringify({ root, nested, removed, exists: [existsSync(root), existsSync(nested)] }));
-    `], { env: process.env, cwd: repoRoot, stdout: 'pipe', stderr: 'pipe' });
+    `], { env: process.env, cwd: repoRoot });
 
-    expect(child.exitCode, child.stderr.toString()).toBe(0);
+    expect(child.exitCode, child.stderr).toBe(0);
 
     const receipt = v.parse(v.object({
       root: v.string(), nested: v.string(), removed: v.number(), exists: v.array(v.boolean()),
-    }), JSON.parse(child.stdout.toString()));
+    }), JSON.parse(child.stdout));
 
     expect(dirname(receipt.root)).toBe(parent);
     expect(dirname(receipt.nested)).toBe(receipt.root);
@@ -39,7 +40,7 @@ describe('the shared scratch owner', () => {
     expect(readdirSync(parent)).toEqual(['unowned-sentinel']);
   });
 
-  test('the Bun preload releases owned roots and child temp files when a fixture throws', () => {
+  test('the Bun preload releases owned roots and child temp files when a fixture throws', async () => {
     const parent = scratchDir('scratch-preload');
     const childTmp = scratchDir('scratch-child-tmp');
     const fixture = join(parent, 'failure.test.ts');
@@ -57,8 +58,7 @@ describe('the shared scratch owner', () => {
       test('the seeded fixture failure', () => { throw new Error('expected scratch fixture failure'); });
     `);
 
-    const child = Bun.spawnSync([process.execPath, 'test', fixture], { cwd: repoRoot, stdout: 'pipe', stderr: 'pipe',
-    env: { ...process.env, TMPDIR: childTmp }, });
+    const child = await runToExit([process.execPath, 'test', fixture], { cwd: repoRoot, env: { ...process.env, TMPDIR: childTmp } });
 
     expect(child.exitCode).not.toBe(0);
     expect(child.stderr.toString()).toContain('expected scratch fixture failure');
@@ -67,13 +67,13 @@ describe('the shared scratch owner', () => {
     expect(roots.map(root => existsSync(root))).toEqual([false, false, false]);
   });
 
-  test('a refused removal neither stops the other owned roots nor loses the failed one', () => {
+  test('a refused removal neither stops the other owned roots nor loses the failed one', async () => {
     const preload = resolve(repoRoot, 'scripts/test-scratch-home.ts');
     const outside = scratchDir('scratch-release-outside');
 
     // Only the removal call is mocked, refusing one root once. Its parent is owned here, outside
     // the child's runner root, so the parent's recursive delete cannot sweep it.
-    const child = Bun.spawnSync([process.execPath, '-e', `
+    const child = await runToExit([process.execPath, '-e', `
       import { mock } from 'bun:test';
       import * as realFs from 'node:fs';
       import { join } from 'node:path';
@@ -119,15 +119,15 @@ describe('the shared scratch owner', () => {
         secondRemoved,
         blockedAfter: realFs.existsSync(blocked),
       }));
-    `], { env: process.env, cwd: repoRoot, stdout: 'pipe', stderr: 'pipe' });
+    `], { env: process.env, cwd: repoRoot });
 
-    expect(child.exitCode, child.stderr.toString()).toBe(0);
+    expect(child.exitCode, child.stderr).toBe(0);
 
     const report = v.parse(v.object({
       isAggregate: v.boolean(), message: v.string(), innerCount: v.number(),
       innerCauseCode: v.string(), existsAfter: v.array(v.boolean()),
       secondRemoved: v.number(), blockedAfter: v.boolean(),
-    }), JSON.parse(child.stdout.toString()));
+    }), JSON.parse(child.stdout));
 
     // Reported as one aggregate naming the cause, after the other roots were released.
     expect(report.isAggregate).toBe(true);

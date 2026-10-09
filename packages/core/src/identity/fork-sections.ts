@@ -338,18 +338,19 @@ export const FORK_SECTIONS: ForkSections = {
     rows: ForkFactRowSchema,
     select: ({ sql }) => actorRows(sql, (actorId, after) => {
       const found = sql<ForkFactRow & { rowid: number }>`
-        SELECT rowid, key, value_json, confidence, source, last_observed_at FROM agent_facts
+        SELECT rowid, key, value_json, confidence, source, last_observed_at, importance, veracity, origin_json FROM agent_facts
         WHERE actor_id = ${actorId} AND rowid > ${after} ORDER BY rowid LIMIT 1
       `[0];
 
       return found === undefined ? undefined : { rowid: found.rowid, row: v.parse(ForkFactRowSchema, found) };
     }),
-    bytes: (row) => utf8Bytes(row.key) + utf8Bytes(row.value_json) + utf8Bytes(row.source),
+    bytes: (row) => utf8Bytes(row.key) + utf8Bytes(row.value_json) + utf8Bytes(row.source) + utf8Bytes(row.origin_json),
     stage: ({ sql, actorId }, rows) => {
       for (const row of rows) {
         void sql`
-          INSERT INTO agent_facts (actor_id, key, value_json, confidence, source, last_observed_at)
-          VALUES (${actorId}, ${row.key}, ${row.value_json}, ${row.confidence}, ${row.source}, ${row.last_observed_at})
+          INSERT INTO agent_facts (actor_id, key, value_json, confidence, source, last_observed_at, importance, veracity, origin_json)
+          VALUES (${actorId}, ${row.key}, ${row.value_json}, ${row.confidence}, ${row.source}, ${row.last_observed_at},
+                  ${row.importance}, ${row.veracity}, ${row.origin_json})
         `;
       }
 

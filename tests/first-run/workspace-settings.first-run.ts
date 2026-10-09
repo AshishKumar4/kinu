@@ -39,7 +39,7 @@ const liveTest = test.skipIf(PLAN === null);
 
 const observations: EvalObservation[] = [];
 
-afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
+afterAll(async () => { await publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
 
 const SnapshotSchema = v.looseObject({
   status: v.looseObject({ displayName: v.string(), soul: v.optional(v.nullable(v.string())) }),

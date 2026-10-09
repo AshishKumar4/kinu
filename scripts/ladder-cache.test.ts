@@ -10,7 +10,7 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
-import { childEnv, git, initRepo, scratchDir } from '@kinu.run/test-utils';
+import { childEnv, git, initRepo, runToExit, scratchDir } from '@kinu.run/test-utils';
 import { claims, LADDER, gatesFor, testFileProofs } from './ladder';
 import type { Gate, TestProof } from './ladder';
 import { auditClosure } from './ladder-audit';
@@ -32,9 +32,9 @@ interface Fixture {
 
 /** A committed repository with an installed `typescript` manifest (so the
  *  toolchain reads a version), a scratch store beside it, and `files`. */
-function fixture(files: Record<string, string>, scripts: Record<string, string> = {}): Fixture {
+async function fixture(files: Record<string, string>, scripts: Record<string, string> = {}): Promise<Fixture> {
   const root = scratchDir('ladder-cache');
-  initRepo(root);
+  await initRepo(root);
 
   const all = {
     'package.json': JSON.stringify({ name: 'fixture', workspaces: ['packages/*'], scripts }),
@@ -52,8 +52,8 @@ function fixture(files: Record<string, string>, scripts: Record<string, string> 
 
   mkdirSync(join(root, 'node_modules', 'typescript'), { recursive: true });
   writeFileSync(join(root, 'node_modules', 'typescript', 'package.json'), JSON.stringify({ version: '7.0.2' }));
-  git(root, 'add', '-A');
-  git(root, 'commit', '-qm', 'fixture');
+  await git(root, 'add', '-A');
+  await git(root, 'commit', '-qm', 'fixture');
 
   return {
     root,
@@ -68,16 +68,16 @@ function fixture(files: Record<string, string>, scripts: Record<string, string> 
 interface GateRun {
   readonly plan: Plan;
   readonly refused: string | undefined;
-  readonly exitCode: number;
+  readonly exitCode: number | null;
 }
 
-function runGate(fx: Fixture, run: string, inputs: Inputs = DERIVED, tools = fx.tools): GateRun {
+async function runGate(fx: Fixture, run: string, inputs: Inputs = DERIVED, tools = fx.tools): Promise<GateRun> {
   const repo = fx.repo();
   const plan = planGate({ run, inputs, repo, tools, store: fx.store });
 
   if (plan.kind === 'hit') return { plan, refused: undefined, exitCode: 0 };
   const env = plan.kind === 'miss' ? gateEnvironment(plan.closure) : undefined;
-  const proc = Bun.spawnSync(run.split(' '), { cwd: fx.root, env, stdout: 'pipe', stderr: 'pipe' });
+  const proc = await runToExit(run.split(' '), { cwd: fx.root, env });
 
   if (plan.kind === 'uncacheable' || proc.exitCode !== 0) return { plan, refused: undefined, exitCode: proc.exitCode };
   const refused = recordGreen(plan, { run, inputs, repo: fx.repo(), tools, store: fx.store }, { seconds: 0.1, revision: 'fixture' });
@@ -95,38 +95,53 @@ const entries = (store: Store): string[] => (existsSync(store.directory) ? readd
  *  unsets a name), restored afterwards: the key reads the process's own
  *  environment, as the ladder does. */
 function withEnv<T>(values: Record<string, string | undefined>, body: () => T): T {
-  const saved = Object.keys(values).map((name) => [name, process.env[name]] as const);
-
-  const apply = (pairs: Iterable<readonly [string, string | undefined]>): void => {
-    for (const [name, value] of pairs) {
-      if (value === undefined) Reflect.deleteProperty(process.env, name);
-      else process.env[name] = value;
-    }
-  };
-
-  apply(Object.entries(values));
+  const saved = savedEnv(values);
+  applyEnv(values);
 
   try {
     return body();
   } finally {
-    apply(saved);
+    applyEnv(saved);
+  }
+}
+
+/** `withEnv` for a body that spawns: the values hold until the body settles. */
+async function withEnvWhile<T>(values: Record<string, string | undefined>, body: () => Promise<T>): Promise<T> {
+  const saved = savedEnv(values);
+  applyEnv(values);
+
+  try {
+    return await body();
+  } finally {
+    applyEnv(saved);
+  }
+}
+
+function savedEnv(values: Record<string, string | undefined>): Record<string, string | undefined> {
+  return Object.fromEntries(Object.keys(values).map((name) => [name, process.env[name]]));
+}
+
+function applyEnv(values: Record<string, string | undefined>): void {
+  for (const [name, value] of Object.entries(values)) {
+    if (value === undefined) Reflect.deleteProperty(process.env, name);
+    else process.env[name] = value;
   }
 }
 
 describe('ladder-cache — the green path', () => {
-  test('an identical changed-hook retry uses the first green proof, not another run', () => {
-    const fx = fixture({ 'scripts/a.ts': 'console.log("executed");' });
+  test('an identical changed-hook retry uses the first green proof, not another run', async () => {
+    const fx = await fixture({ 'scripts/a.ts': 'console.log("executed");' });
     const ran: string[] = [];
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const enabled = cacheEnabled({ noCache: false });
 
       if (!enabled) {
-        const run = Bun.spawnSync(['bun', 'scripts/a.ts'], { cwd: fx.root, env: childEnv(), stdout: 'pipe', stderr: 'pipe' });
+        const run = await runToExit(['bun', 'scripts/a.ts'], { cwd: fx.root, env: childEnv() });
 
         expect(run.exitCode).toBe(0);
-        ran.push(run.stdout.toString().trim());
-      } else if (runGate(fx, 'bun scripts/a.ts').plan.kind !== 'hit') ran.push('executed');
+        ran.push(run.stdout.trim());
+      } else if ((await runGate(fx, 'bun scripts/a.ts')).plan.kind !== 'hit') ran.push('executed');
     }
 
     expect(ran).toEqual(['executed']);
@@ -135,8 +150,8 @@ describe('ladder-cache — the green path', () => {
   });
 
   // m2081, m1912: every CI part reran its whole assigned suites, so an unchanged suite was proved again on each push.
-  test('a CI row reuses an unchanged row\'s green proof with the file walls it measured; a hammer run never does', () => {
-    const fx = fixture({ 'scripts/a.test.ts': GREEN });
+  test('a CI row reuses an unchanged row\'s green proof with the file walls it measured; a hammer run never does', async () => {
+    const fx = await fixture({ 'scripts/a.test.ts': GREEN });
     const repo = fx.repo();
     const run = 'bun scripts/a.test.ts';
     const first = planGate({ run, inputs: DERIVED, repo, tools: fx.tools, store: fx.store });
@@ -152,18 +167,18 @@ describe('ladder-cache — the green path', () => {
     }).toEqual({ row: true, hammer: false, reused: { revision: 'a'.repeat(40), timings: { 'scripts/a.test.ts': 3.5 } } });
   });
 
-  test('after a green run, a rerun hits every cacheable gate and names the hash, the revision and the closure size', () => {
-    const fx = fixture({
+  test('after a green run, a rerun hits every cacheable gate and names the hash, the revision and the closure size', async () => {
+    const fx = await fixture({
       'scripts/a.ts': `import { shared } from './shared';\nexport const a = shared;\n${GREEN}`,
       'scripts/b.ts': `import { shared } from './shared';\nexport const b = shared;\n${GREEN}`,
       'scripts/shared.ts': 'export const shared = 1;',
     });
 
-    const first = [runGate(fx, 'bun scripts/a.ts'), runGate(fx, 'bun scripts/b.ts')];
+    const first = [await runGate(fx, 'bun scripts/a.ts'), await runGate(fx, 'bun scripts/b.ts')];
     expect(first.map((r) => r.plan.kind)).toEqual(['miss', 'miss']);
     expect(first.map((r) => r.refused)).toEqual([undefined, undefined]);
 
-    const second = [runGate(fx, 'bun scripts/a.ts'), runGate(fx, 'bun scripts/b.ts')];
+    const second = [await runGate(fx, 'bun scripts/a.ts'), await runGate(fx, 'bun scripts/b.ts')];
     expect(second.map((r) => r.plan.kind)).toEqual(['hit', 'hit']);
     const [hit] = second;
 
@@ -183,8 +198,8 @@ describe('ladder-cache — the green path', () => {
 });
 
 describe('ladder-cache — red in every direction it claims', () => {
-  test('touching ONE file misses exactly the gates whose closure holds it and hits the rest', () => {
-    const fx = fixture({
+  test('touching ONE file misses exactly the gates whose closure holds it and hits the rest', async () => {
+    const fx = await fixture({
       'scripts/a.ts': `import { shared } from './shared';\nexport const a = shared;\n${GREEN}`,
       'scripts/b.ts': `import { shared } from './shared';\nexport const b = shared;\n${GREEN}`,
       'scripts/c.ts': `export const c = 1;\n${GREEN}`,
@@ -195,31 +210,37 @@ describe('ladder-cache — red in every direction it claims', () => {
 
     const gates = ['bun scripts/a.ts', 'bun scripts/b.ts', 'bun scripts/c.ts', 'bun test scripts/c.test.ts'];
 
-    for (const run of gates) expect(runGate(fx, run).refused).toBeUndefined();
+    for (const run of gates) expect((await runGate(fx, run)).refused).toBeUndefined();
 
-    const touch = (file: string, text: string): string[] => {
+    const touch = async (file: string, text: string): Promise<string[]> => {
       writeFileSync(join(fx.root, file), text);
 
-      return gates.filter((run) => runGate(fx, run).plan.kind === 'miss');
+      const missed: string[] = [];
+
+      for (const run of gates) {
+        if ((await runGate(fx, run)).plan.kind === 'miss') missed.push(run);
+      }
+
+      return missed;
     };
 
     // A product file: only the gates whose graph reaches it.
-    expect(touch('scripts/shared.ts', 'export const shared = 2;')).toEqual(['bun scripts/a.ts', 'bun scripts/b.ts']);
+    expect(await touch('scripts/shared.ts', 'export const shared = 2;')).toEqual(['bun scripts/a.ts', 'bun scripts/b.ts']);
     // A test file: only the gate that runs it.
-    expect(touch('scripts/c.test.ts', "import { test } from 'bun:test';\nimport { c } from './c';\ntest('c again', () => { if (c !== 1) throw new Error('c'); });"))
+    expect(await touch('scripts/c.test.ts', "import { test } from 'bun:test';\nimport { c } from './c';\ntest('c again', () => { if (c !== 1) throw new Error('c'); });"))
       .toEqual(['bun test scripts/c.test.ts']);
     // A gate's own script: only that gate.
-    expect(touch('scripts/c.ts', `export const c = 1;\n// touched\n${GREEN}`)).toEqual(['bun scripts/c.ts', 'bun test scripts/c.test.ts']);
+    expect(await touch('scripts/c.ts', `export const c = 1;\n// touched\n${GREEN}`)).toEqual(['bun scripts/c.ts', 'bun test scripts/c.test.ts']);
     // A tsconfig on the path: every gate under it.
-    expect(touch('tsconfig.json', '{ "compilerOptions": {} }')).toEqual(gates);
+    expect(await touch('tsconfig.json', '{ "compilerOptions": {} }')).toEqual(gates);
     // The lock: every gate.
-    expect(touch('bun.lock', '{ "touched": 1 }')).toEqual(gates);
+    expect(await touch('bun.lock', '{ "touched": 1 }')).toEqual(gates);
     // The preload: every bun test gate and nothing else.
-    expect(touch('scripts/preload.ts', 'export const preloaded = 2;')).toEqual(['bun test scripts/c.test.ts']);
+    expect(await touch('scripts/preload.ts', 'export const preloaded = 2;')).toEqual(['bun test scripts/c.test.ts']);
   });
 
-  test('a gate with no computable closure never hits', () => {
-    const fx = fixture({
+  test('a gate with no computable closure never hits', async () => {
+    const fx = await fixture({
       'scripts/shell.sh': 'exit 0',
       'scripts/dyn.ts': `const name = 'shared';\nexport const dyn = () => import(\`./\${name}\`);\n${GREEN}`,
       'scripts/reads.ts': `import { readFileSync } from 'node:fs';\nexport const r = readFileSync('package.json');\n${GREEN}`,
@@ -231,7 +252,7 @@ describe('ladder-cache — red in every direction it claims', () => {
       ['bun scripts/reads.ts', { kind: 'derived' }, 'declares no `reads`'],
     ] as const) {
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const { plan } = runGate(fx, run, inputs);
+        const { plan } = await runGate(fx, run, inputs);
 
         if (plan.kind !== 'uncacheable') throw new Error(`${run} planned as ${plan.kind}`);
         expect(plan.closure.kind).toBe('uncomputable');
@@ -242,13 +263,13 @@ describe('ladder-cache — red in every direction it claims', () => {
     expect(entries(fx.store)).toEqual([]);
   });
 
-  test('another worktree reuses a green only on identical closure bytes', () => {
+  test('another worktree reuses a green only on identical closure bytes', async () => {
     const files = { 'scripts/a.ts': 'import { value } from "../src/a"; console.log(value);', 'src/a.ts': 'export const value = 1;' };
-    const recorded = fixture(files);
+    const recorded = await fixture(files);
 
-    expect(runGate(recorded, 'bun scripts/a.ts').refused).toBeUndefined();
-    expect(runGate(recorded, 'bun scripts/a.ts').plan.kind).toBe('hit');
-    const other = fixture(files);
+    expect((await runGate(recorded, 'bun scripts/a.ts')).refused).toBeUndefined();
+    expect((await runGate(recorded, 'bun scripts/a.ts')).plan.kind).toBe('hit');
+    const other = await fixture(files);
     const plan = planGate({ run: 'bun scripts/a.ts', inputs: DERIVED, repo: other.repo(), tools: other.tools, store: recorded.store });
 
     expect(plan.kind).toBe('hit');
@@ -259,19 +280,19 @@ describe('ladder-cache — red in every direction it claims', () => {
     expect(planGate({ run: 'bun scripts/a.ts', inputs: DERIVED, repo: other.repo(), tools: other.tools, store: recorded.store }).kind).toBe('hit');
   });
 
-  test('a location-sensitive verdict never crosses worktrees even on identical closure bytes', () => {
-    const recorded = fixture({ 'scripts/a.ts': 'console.log(process.cwd());' });
+  test('a location-sensitive verdict never crosses worktrees even on identical closure bytes', async () => {
+    const recorded = await fixture({ 'scripts/a.ts': 'console.log(process.cwd());' });
     const inputs = { kind: 'derived', location: 'checkout' } as const;
 
-    expect(runGate(recorded, 'bun scripts/a.ts', inputs).plan.kind).toBe('miss');
-    const other = fixture({ 'scripts/a.ts': 'console.log(process.cwd());' });
+    expect((await runGate(recorded, 'bun scripts/a.ts', inputs)).plan.kind).toBe('miss');
+    const other = await fixture({ 'scripts/a.ts': 'console.log(process.cwd());' });
 
     expect(planGate({ run: 'bun scripts/a.ts', inputs, repo: other.repo(), tools: other.tools, store: recorded.store }).kind).toBe('miss');
   });
 
-  test.each(['', '/'])('root normalization changes only declared path values, never scalar environment or outside paths: root suffix %j', (suffix) => {
-    const a = fixture({ 'scripts/a.ts': GREEN });
-    const b = fixture({ 'scripts/a.ts': GREEN });
+  test.each(['', '/'])('root normalization changes only declared path values, never scalar environment or outside paths: root suffix %j', async (suffix) => {
+    const a = await fixture({ 'scripts/a.ts': GREEN });
+    const b = await fixture({ 'scripts/a.ts': GREEN });
     const inputs: Inputs = { kind: 'derived', env: ['KINU_ROOT', 'ALPHA'] };
 
     const key = (fx: Fixture, alpha: string, outside = '/usr/bin'): string => {
@@ -294,18 +315,18 @@ describe('ladder-cache — red in every direction it claims', () => {
     expect(key(a, 'same', `${a.root}-other/bin`)).not.toBe(key(b, 'same', `${b.root}-other/bin`));
   });
 
-  test('a red result leaves no cache entry, and the next run is still a miss', () => {
-    const fx = fixture({ 'scripts/red.ts': 'process.exit(3);' });
+  test('a red result leaves no cache entry, and the next run is still a miss', async () => {
+    const fx = await fixture({ 'scripts/red.ts': 'process.exit(3);' });
 
-    const first = runGate(fx, 'bun scripts/red.ts');
+    const first = await runGate(fx, 'bun scripts/red.ts');
     expect(first.exitCode).toBe(3);
     expect(first.plan.kind).toBe('miss');
     expect(entries(fx.store)).toEqual([]);
-    expect(runGate(fx, 'bun scripts/red.ts').plan.kind).toBe('miss');
+    expect((await runGate(fx, 'bun scripts/red.ts')).plan.kind).toBe('miss');
   });
 
-  test('reusing parsed module summaries still rereads bytes and reaches a changed import', () => {
-    const fx = fixture({ 'scripts/a.ts': 'import "../src/a";', 'src/a.ts': GREEN, 'src/b.ts': GREEN });
+  test('reusing parsed module summaries still rereads bytes and reaches a changed import', async () => {
+    const fx = await fixture({ 'scripts/a.ts': 'import "../src/a";', 'src/a.ts': GREEN, 'src/b.ts': GREEN });
     const repo = fx.repo();
     const request = { run: 'bun scripts/a.ts', inputs: DERIVED, repo, tools: fx.tools, store: fx.store };
     const first = planGate(request);
@@ -321,59 +342,59 @@ describe('ladder-cache — red in every direction it claims', () => {
     expect(changed.closure.kind === 'derived' ? changed.closure.files : []).not.toContain('src/a.ts');
   });
 
-  test('an entry a crash left unreadable is a miss, and the next green run replaces it', () => {
+  test('an entry a crash left unreadable is a miss, and the next green run replaces it', async () => {
     // The shape a crash left on 2026-09-22: the entry's name and size, and
     // nothing but NUL bytes where its JSON should be.
-    const fx = fixture({ 'scripts/a.ts': `export const a = 1;\n${GREEN}` });
-    expect(runGate(fx, 'bun scripts/a.ts').refused).toBeUndefined();
+    const fx = await fixture({ 'scripts/a.ts': `export const a = 1;\n${GREEN}` });
+    expect((await runGate(fx, 'bun scripts/a.ts')).refused).toBeUndefined();
     const [key] = entries(fx.store);
 
     if (key === undefined) throw new Error('the green run recorded nothing');
     const path = join(fx.store.directory, key);
     writeFileSync(path, Buffer.alloc(statSync(path).size));
 
-    const { plan } = runGate(fx, 'bun scripts/a.ts');
+    const { plan } = await runGate(fx, 'bun scripts/a.ts');
 
     if (plan.kind !== 'miss') throw new Error(`planned as ${plan.kind}`);
     expect(plan.unreadable).toContain('not JSON');
-    expect(runGate(fx, 'bun scripts/a.ts').plan.kind).toBe('hit');
+    expect((await runGate(fx, 'bun scripts/a.ts')).plan.kind).toBe('hit');
   });
 
-  test('a tool version change misses everything', () => {
-    const fx = fixture({
+  test('a tool version change misses everything', async () => {
+    const fx = await fixture({
       'scripts/a.ts': `export const a = 1;\n${GREEN}`,
       'scripts/b.ts': `export const b = 1;\n${GREEN}`,
     });
 
-    for (const run of ['bun scripts/a.ts', 'bun scripts/b.ts']) expect(runGate(fx, run).refused).toBeUndefined();
+    for (const run of ['bun scripts/a.ts', 'bun scripts/b.ts']) expect((await runGate(fx, run)).refused).toBeUndefined();
 
-    for (const run of ['bun scripts/a.ts', 'bun scripts/b.ts']) expect(runGate(fx, run).plan.kind).toBe('hit');
+    for (const run of ['bun scripts/a.ts', 'bun scripts/b.ts']) expect((await runGate(fx, run)).plan.kind).toBe('hit');
 
     // The installed compiler moves: the key reads the manifest, not a list.
     writeFileSync(join(fx.root, 'node_modules', 'typescript', 'package.json'), JSON.stringify({ version: '7.1.0' }));
     const moved = toolVersions(fx.root, fx.tools.node);
     expect(moved.typescript).toBe('7.1.0');
 
-    for (const run of ['bun scripts/a.ts', 'bun scripts/b.ts']) expect(runGate(fx, run, DERIVED, moved).plan.kind).toBe('miss');
+    for (const run of ['bun scripts/a.ts', 'bun scripts/b.ts']) expect((await runGate(fx, run, DERIVED, moved)).plan.kind).toBe('miss');
 
     // Every field of the toolchain is a key input, not only the one that moved.
     for (const [field, value] of Object.entries(fx.tools)) {
       const other = { ...fx.tools, [field]: `${value}-other` };
-      expect(runGate(fx, 'bun scripts/a.ts', DERIVED, other).plan.kind, `${field} is not a key input`).toBe('miss');
+      expect((await runGate(fx, 'bun scripts/a.ts', DERIVED, other)).plan.kind, `${field} is not a key input`).toBe('miss');
     }
   });
 
-  test('a recorded green is reused only under the environment it was recorded in, name by name', () => {
-    const fx = fixture({ 'scripts/a.ts': `export const a = process.env.ALPHA;\n${GREEN}` });
+  test('a recorded green is reused only under the environment it was recorded in, name by name', async () => {
+    const fx = await fixture({ 'scripts/a.ts': `export const a = process.env.ALPHA;\n${GREEN}` });
     const declaredBeta: Inputs = { kind: 'derived', env: ['BETA'] };
     const recordedUnder = { ALPHA: undefined, BETA: undefined, CI: undefined };
     // Read once, so the git it runs is found on the PATH this process started with.
     const repo = fx.repo();
     const planned = (inputs: Inputs = DERIVED): Plan['kind'] => planGate({ run: 'bun scripts/a.ts', inputs, repo, tools: fx.tools, store: fx.store }).kind;
 
-    withEnv(recordedUnder, () => {
-      expect(runGate(fx, 'bun scripts/a.ts').refused).toBeUndefined();
-      expect(runGate(fx, 'bun scripts/a.ts', declaredBeta).refused).toBeUndefined();
+    await withEnvWhile(recordedUnder, async () => {
+      expect((await runGate(fx, 'bun scripts/a.ts')).refused).toBeUndefined();
+      expect((await runGate(fx, 'bun scripts/a.ts', declaredBeta)).refused).toBeUndefined();
     });
 
     expect(withEnv(recordedUnder, () => planned())).toBe('hit');
@@ -390,10 +411,10 @@ describe('ladder-cache — red in every direction it claims', () => {
     expect(withEnv({ ...recordedUnder, BETA: 'y' }, () => planned(declaredBeta))).toBe('miss');
   });
 
-  test('a name the key does not hash never reaches the gate, however the gate reads the environment', () => {
+  test('a name the key does not hash never reaches the gate, however the gate reads the environment', async () => {
     // The planted input: a verdict that flips on an environment name the
     // walker cannot see, read through a computed key and by enumeration.
-    const fx = fixture({
+    const fx = await fixture({
       'scripts/planted.ts': [
         "const name = ['PLAN', 'TED'].join('');",
         'console.log(JSON.stringify(Object.keys(process.env).sort()));',
@@ -406,23 +427,23 @@ describe('ladder-cache — red in every direction it claims', () => {
 
     if (plan.kind === 'uncacheable') throw new Error(plan.closure.why);
     const ambient = Object.assign(childEnv(), { PLANTED: 'x' });
-    const run = (env: Record<string, string | undefined>) => Bun.spawnSync(['bun', 'scripts/planted.ts'], { cwd: fx.root, env, stdout: 'pipe' });
+    const run = async (env: Record<string, string | undefined>) => runToExit(['bun', 'scripts/planted.ts'], { cwd: fx.root, env });
 
     // Handed the ambient environment, the planted value turns the gate red.
-    expect(run(ambient).exitCode).toBe(1);
+    expect((await run(ambient)).exitCode).toBe(1);
     // Handed its gate environment, the gate cannot see the name at all.
-    const gated = run(gateEnvironment(plan.closure, (name) => ambient[name]));
+    const gated = await run(gateEnvironment(plan.closure, (name) => ambient[name]));
     expect(gated.exitCode).toBe(0);
-    const seen = v.parse(v.array(v.string()), JSON.parse(gated.stdout.toString()));
+    const seen = v.parse(v.array(v.string()), JSON.parse(gated.stdout));
     expect(seen.filter((name) => !gateEnvNames(plan.closure).includes(name))).toEqual([]);
     // So a green recorded without the name is reused with it set: no value of
     // it can split two runs of one key.
-    withEnv({ PLANTED: undefined }, () => expect(runGate(fx, 'bun scripts/planted.ts').refused).toBeUndefined());
+    await withEnvWhile({ PLANTED: undefined }, async () => { expect((await runGate(fx, 'bun scripts/planted.ts')).refused).toBeUndefined(); });
     expect(withEnv({ PLANTED: 'x' }, planned).kind).toBe('hit');
   });
 
-  test('a closure that changes while the gate runs is not recorded', () => {
-    const fx = fixture({ 'scripts/a.ts': `import { s } from './s';\nexport const a = s;\n${GREEN}`, 'scripts/s.ts': 'export const s = 1;' });
+  test('a closure that changes while the gate runs is not recorded', async () => {
+    const fx = await fixture({ 'scripts/a.ts': `import { s } from './s';\nexport const a = s;\n${GREEN}`, 'scripts/s.ts': 'export const s = 1;' });
     const repo = fx.repo();
     const plan = planGate({ run: 'bun scripts/a.ts', inputs: DERIVED, repo, tools: fx.tools, store: fx.store });
 
@@ -434,18 +455,18 @@ describe('ladder-cache — red in every direction it claims', () => {
     expect(entries(fx.store)).toEqual([]);
   });
 
-  test('the never-cache list is read from each row\'s declaration, never matched by name', () => {
-    const fx = fixture({ 'scripts/a.ts': `export const a = 1;\n${GREEN}` });
-    const live = runGate(fx, 'bun scripts/a.ts', { kind: 'live', why: 'talks to the account' });
+  test('the never-cache list is read from each row\'s declaration, never matched by name', async () => {
+    const fx = await fixture({ 'scripts/a.ts': `export const a = 1;\n${GREEN}` });
+    const live = await runGate(fx, 'bun scripts/a.ts', { kind: 'live', why: 'talks to the account' });
     expect(live.plan.kind).toBe('uncacheable');
     expect(live.plan.kind === 'uncacheable' && live.plan.closure.kind).toBe('live');
     // The same command, declared derived, is cacheable: the declaration decided, not the name.
-    expect(runGate(fx, 'bun scripts/a.ts').plan.kind).toBe('miss');
-    expect(runGate(fx, 'bun scripts/a.ts').plan.kind).toBe('hit');
+    expect((await runGate(fx, 'bun scripts/a.ts')).plan.kind).toBe('miss');
+    expect((await runGate(fx, 'bun scripts/a.ts')).plan.kind).toBe('hit');
   });
 
-  test('a built output\'s own files are in the key, so a green over a stale build never stands for the fresh one', () => {
-    const fx = fixture({
+  test('a built output\'s own files are in the key, so a green over a stale build never stands for the fresh one', async () => {
+    const fx = await fixture({
       '.gitignore': 'node_modules/\nthird_party/mossaic/sdk/dist/\n',
       'third_party/mossaic/sdk/src/index.ts': 'export const sdk = 1;',
       'third_party/mossaic/upstream.json': '{}',
@@ -456,11 +477,11 @@ describe('ladder-cache — red in every direction it claims', () => {
     const dist = join(fx.root, 'third_party/mossaic/sdk/dist');
     mkdirSync(dist, { recursive: true });
     writeFileSync(join(dist, 'index.js'), 'export const sdk = 0;');
-    expect(runGate(fx, 'bun scripts/a.ts').plan.kind).toBe('miss');
-    expect(runGate(fx, 'bun scripts/a.ts').plan.kind).toBe('hit');
+    expect((await runGate(fx, 'bun scripts/a.ts')).plan.kind).toBe('miss');
+    expect((await runGate(fx, 'bun scripts/a.ts')).plan.kind).toBe('hit');
     // The build the next install makes from the same tracked source: only the output moved.
     writeFileSync(join(dist, 'index.js'), 'export const sdk = 1;');
-    expect(runGate(fx, 'bun scripts/a.ts').plan.kind).toBe('miss');
+    expect((await runGate(fx, 'bun scripts/a.ts')).plan.kind).toBe('miss');
   });
 });
 
@@ -469,8 +490,8 @@ describe('ladder-cache — the audit sees what the walker cannot', () => {
   // gate is a HOLE with the read undeclared and clean with it declared, so
   // the audit is red in the direction that matters and the declaration is
   // what turns it green — never an exclusion.
-  test('a tracked file read by path is a hole until the row declares it', () => {
-    const fx = fixture({
+  test('a tracked file read by path is a hole until the row declares it', async () => {
+    const fx = await fixture({
       'scripts/a.ts': `import { readFileSync } from 'node:fs';\nexport const a = readFileSync('fixtures/data.txt', 'utf8');\n${GREEN}`,
       'fixtures/data.txt': 'data',
     });
@@ -490,8 +511,8 @@ describe('ladder-cache — the audit sees what the walker cannot', () => {
     expect(audit.covered).toBeGreaterThan(0);
   });
 
-  test('a tracked file opened through its directory, or through a node_modules link, is judged where it lives', () => {
-    const fx = fixture({
+  test('a tracked file opened through its directory, or through a node_modules link, is judged where it lives', async () => {
+    const fx = await fixture({
       'packages/p/package.json': JSON.stringify({ name: '@fx/p' }),
       'packages/p/tsconfig.json': '{}',
       'packages/p/src/p.ts': GREEN,
@@ -560,14 +581,14 @@ describe('changed hooks prove complete files', () => {
     return proof;
   };
 
-  test('identical retries hit every file, while a one-file or imported-product change misses only its consumer', () => {
-    const fx = fixture(suites);
+  test('identical retries hit every file, while a one-file or imported-product change misses only its consumer', async () => {
+    const fx = await fixture(suites);
 
     for (const proof of plans(fx)) {
       expect(proof.plan.kind).toBe('miss');
-      const run = Bun.spawnSync([...proof.argv], { cwd: fx.root, env: gateEnvironment(proof.plan.closure), stdout: 'pipe', stderr: 'pipe' });
+      const run = await runToExit([...proof.argv], { cwd: fx.root, env: gateEnvironment(proof.plan.closure) });
 
-      expect(run.exitCode, run.stderr.toString()).toBe(0);
+      expect(run.exitCode, run.stderr).toBe(0);
 
       if (proof.plan.kind === 'miss') expect(recordGreen(proof.plan, { ...proof.request, repo: fx.repo() }, { seconds: 0.1, revision: 'fixture' })).toBeUndefined();
     }
@@ -580,20 +601,20 @@ describe('changed hooks prove complete files', () => {
     expect(plans(fx).map((proof) => [proof.file, proof.plan.kind])).toEqual([['tests/a.test.ts', 'hit'], ['tests/b.test.ts', 'miss']]);
   });
 
-  test('a native empty changed selection cannot record a green for a failing complete file', () => {
-    const fx = fixture({ ...suites, 'src/a.ts': 'export const a = 2;' });
+  test('a native empty changed selection cannot record a green for a failing complete file', async () => {
+    const fx = await fixture({ ...suites, 'src/a.ts': 'export const a = 2;' });
     const proof = plans(fx).find((entry) => entry.file === 'tests/a.test.ts');
 
     if (proof === undefined) throw new Error('the failing consumer was omitted');
     expect(proof.argv.some((word) => word.startsWith('--changed='))).toBe(false);
-    const run = Bun.spawnSync([...proof.argv], { cwd: fx.root, env: gateEnvironment(proof.plan.closure), stdout: 'pipe', stderr: 'pipe' });
+    const run = await runToExit([...proof.argv], { cwd: fx.root, env: gateEnvironment(proof.plan.closure) });
 
     expect(run.exitCode).not.toBe(0);
     expect(entries(fx.store)).toEqual([]);
   });
 
-  test('a file edit during planning cannot turn the operation snapshot into a stale hit', () => {
-    const fx = fixture(suites);
+  test('a file edit during planning cannot turn the operation snapshot into a stale hit', async () => {
+    const fx = await fixture(suites);
 
     for (const proof of plans(fx)) {
       if (proof.plan.kind === 'miss') expect(recordGreen(proof.plan, { ...proof.request, repo: fx.repo() }, { seconds: 0.1, revision: 'fixture' })).toBeUndefined();
@@ -617,34 +638,32 @@ describe('changed hooks prove complete files', () => {
 });
 
 describe('ladder-cache — single-gate CLI', () => {
-  test.each([[[]], [['--changed=HEAD']]])('a declared gate records its pass and reuses it on the next invocation: %j', (mode) => {
+  test.each([[[]], [['--changed=HEAD']]])('a declared gate records its pass and reuses it on the next invocation: %j', async (mode) => {
     const cache = scratchDir('ladder-cache-store');
 
-    const invoke = () => Bun.spawnSync(['bun', 'scripts/ladder.ts', '--gate', 'bun run gate:install-scripts', ...mode], {
+    const invoke = async () => runToExit(['bun', 'scripts/ladder.ts', '--gate', 'bun run gate:install-scripts', ...mode], {
       cwd: new URL('..', import.meta.url).pathname,
       env: childEnv({ XDG_CACHE_HOME: cache }),
-      stdout: 'pipe', stderr: 'pipe',
     });
 
-    const first = invoke();
+    const first = await invoke();
     expect(first.exitCode, first.stderr.toString()).toBe(0);
     expect(first.stdout.toString()).toContain('cache: 0 hit, 1 recorded');
-    const second = invoke();
+    const second = await invoke();
     expect(second.exitCode, second.stderr.toString()).toBe(0);
     expect(second.stdout.toString()).toContain('cache: 1 hit, 0 recorded');
   });
 
-  test('an undeclared command is refused rather than executed or cached', () => {
+  test('an undeclared command is refused rather than executed or cached', async () => {
     const cache = scratchDir('ladder-cache-store');
 
-    const result = Bun.spawnSync(['bun', 'scripts/ladder.ts', '--gate', 'bun undeclared-gate.ts'], {
+    const result = await runToExit(['bun', 'scripts/ladder.ts', '--gate', 'bun undeclared-gate.ts'], {
       cwd: new URL('..', import.meta.url).pathname,
       env: childEnv({ XDG_CACHE_HOME: cache }),
-      stdout: 'pipe', stderr: 'pipe',
     });
 
     expect(result.exitCode).toBe(2);
-    expect(result.stderr.toString()).toContain('expected an exact command');
+    expect(result.stderr).toContain('expected an exact command');
     expect(existsSync(join(cache, 'kinu-ladder'))).toBe(false);
   });
 });

@@ -8,8 +8,7 @@ import {
   packDriveFolder, receiveDriveUpload, renameDriveEntry,
 } from '../src/skills/drive';
 import { looksLikeZip, packZip, unpackZip } from '../src/utils/zip';
-import { fakeMossaic, scratchDir } from '@kinu.run/test-utils';
-import { execFileSync } from 'node:child_process';
+import { fakeMossaic, runOk, scratchDir } from '@kinu.run/test-utils';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -137,7 +136,7 @@ describe('the zip container', () => {
     mkdirSync(join(dir, 'triage', 'reference'), { recursive: true });
     writeFileSync(join(dir, 'triage', 'SKILL.md'), SKILL('triage').repeat(20));
     writeFileSync(join(dir, 'triage', 'reference', 'notes.md'), 'notes');
-    execFileSync('zip', ['-q', '-r', 'triage.zip', 'triage'], { cwd: dir });
+    await runOk(['zip', '-q', '-r', 'triage.zip', 'triage'], { cwd: dir });
     const deflated = await unpackZip(new Uint8Array(readFileSync(join(dir, 'triage.zip'))));
 
     expect(deflated.map((entry) => entry.path).sort()).toEqual(['triage/SKILL.md', 'triage/reference/notes.md']);

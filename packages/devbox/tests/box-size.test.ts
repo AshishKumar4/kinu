@@ -10,6 +10,7 @@ import { devboxFailure, type DevboxFailure } from '../src/errors';
 import { HARNESS_IMAGE, harness } from './support/devbox-harness';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
 import { pipeExec as localExec } from './support/native-process';
+import { runToExit } from '../../test-utils/src/spawn';
 
 const root = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}box-size-`));
 
@@ -132,7 +133,7 @@ test('resizing a running box commits and starts it again at the new size; a runn
   const supervised = await box.startSupervised('node server.js');
   // A FIFO: the read returns once the command runs, so the resize lands on a live command.
   const started = join(cwd, 'started');
-  Bun.spawnSync(['mkfifo', started]);
+  await runToExit(['mkfifo', started]);
   const running = box.execUntimed(`echo up > ${started}; exec sleep 60`, { cwd, execId: 'held' });
   await Bun.file(started).text();
 

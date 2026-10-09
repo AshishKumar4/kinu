@@ -3,7 +3,7 @@
  * launcher must run the Bun the installer verified: both inline one resolution (`src/cli/bun-runtime.ts`).
  */
 import { scratchDir } from '../../test-utils/src/scratch';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 
@@ -17,6 +17,7 @@ import { buildCliInstallCommand } from '@kinu.run/core';
 import { bunResolutionShell } from '@kinu.run/core';
 import { generateReleaseSigningKey, signRelease } from '@kinu.run/core';
 import { RUN_MARK } from '../../../scripts/deadline';
+import { runToExit } from '@kinu.run/test-utils';
 
 const ORIGIN = 'https://kinu.example.com';
 
@@ -100,9 +101,9 @@ async function makeDistTarballs(home: string): Promise<void> {
     ['runtime.tar.gz', join(stage, 'runtime'), 'kinu'],
   ] as const) {
     const tarball = join(home, name);
-    const tar = spawnSync('tar', ['-czf', tarball, '-C', from, member], { encoding: 'utf8' });
+    const tar = await runToExit(['tar', '-czf', tarball, '-C', from, member]);
 
-    if (tar.status !== 0) throw new Error(`tar failed: ${tar.stderr}`);
+    if (tar.exitCode !== 0) throw new Error(`tar failed: ${tar.stderr}`);
     const digest = createHash('sha256').update(readFileSync(tarball)).digest('hex');
     writeFileSync(`${tarball}.sha256`, `${digest}  ${name}\n`);
   }
@@ -257,16 +258,15 @@ describe('install.sh terminal handling', () => {
     // the directory exists. The installer is that shell's child, so a directory the caller searches is its only reach.
     const localBin = join(home, '.local/bin');
 
-    const run = spawnSync('bash', ['-c', [
+    const run = await runToExit(['bash', '-c', [
       install,
       'printf "RESOLVED=%s\\n" "$(command -v kinu)"',
       'kinu --help',
     ].join('\n')], {
-      encoding: 'utf8',
       env: { HOME: home, KINU_HOME: join(home, '.kinu'), PATH: `${localBin}:${stubBin}:/usr/bin:/bin`, SHELL: '/bin/bash', ...RELEASE_ENV },
     });
 
-    expect(run.status, run.stderr).toBe(0);
+    expect(run.exitCode, run.stderr).toBe(0);
     expect(run.stdout).toContain(`RESOLVED=${join(localBin, 'kinu')}\n`);
     expect(run.stdout).toContain('setup   connect your account');
     expect(run.stdout).not.toContain('To use kinu in this shell now');
@@ -279,15 +279,14 @@ describe('install.sh terminal handling', () => {
     const install = buildCliInstallCommand({ origin: ORIGIN, setup: false });
     const binDir = join(home, '.kinu/bin');
 
-    const run = spawnSync('bash', ['-c', [
+    const run = await runToExit(['bash', '-c', [
       install,
       'printf "BEFORE=%s\\n" "$(command -v kinu)"',
     ].join('\n')], {
-      encoding: 'utf8',
       env: { HOME: home, KINU_HOME: join(home, '.kinu'), PATH: `${stubBin}:/usr/bin:/bin`, SHELL: '/bin/bash', ...RELEASE_ENV },
     });
 
-    expect(run.status, run.stderr).toBe(0);
+    expect(run.exitCode, run.stderr).toBe(0);
     expect(run.stdout).toContain('BEFORE=\n');
     expect(run.stdout).toContain('To use kinu in this shell now, run:');
 
@@ -296,12 +295,11 @@ describe('install.sh terminal handling', () => {
 
     expect(hint).toBe(`export PATH="${binDir}:$PATH"`);
 
-    const activated = spawnSync('bash', ['-c', [hint ?? '', 'command -v kinu', 'kinu --help'].join('\n')], {
-      encoding: 'utf8',
+    const activated = await runToExit(['bash', '-c', [hint ?? '', 'command -v kinu', 'kinu --help'].join('\n')], {
       env: { HOME: home, KINU_HOME: join(home, '.kinu'), PATH: `${stubBin}:/usr/bin:/bin`, SHELL: '/bin/bash', ...RELEASE_ENV },
     });
 
-    expect(activated.status, activated.stderr).toBe(0);
+    expect(activated.exitCode, activated.stderr).toBe(0);
     expect(activated.stdout).toContain(join(home, '.kinu/bin/kinu'));
     expect(activated.stdout).toContain('setup   connect your account');
   });
@@ -316,12 +314,11 @@ describe('install.sh terminal handling', () => {
 
     writeFileSync(join(home, 'install.sh'), script);
 
-    const run = spawnSync('bash', ['-c', install], {
-      encoding: 'utf8',
+    const run = await runToExit(['bash', '-c', install], {
       env: { HOME: home, KINU_HOME: join(home, '.kinu'), PATH: `${stubBin}:/usr/bin:/bin`, SHELL: '/bin/bash', ...RELEASE_ENV },
     });
 
-    expect(run.status, run.stderr).toBe(0);
+    expect(run.exitCode, run.stderr).toBe(0);
     expect(run.stdout).toContain("STUB-CONNECT-RAN connect --label Ashish's Mac");
     expect(run.stdout).not.toContain('STUB-SETUP-RAN');
     expect(run.stdout.indexOf('STUB-CONNECT-RAN'))
@@ -348,8 +345,7 @@ describe('install.sh terminal handling', () => {
     const harnessPath = join(home, 'pty-harness.py');
     writeFileSync(harnessPath, PTY_HARNESS);
 
-    const run = spawnSync(python, [harnessPath, scriptPath], {
-      encoding: 'utf8',
+    const run = await runToExit([python, harnessPath, scriptPath], {
       env: {
         ...process.env,
         HOME: home,
@@ -361,7 +357,7 @@ describe('install.sh terminal handling', () => {
       },
     });
 
-    expect(run.status).toBe(0);
+    expect(run.exitCode).toBe(0);
     const lastLine = run.stdout.trim().split('\n').at(-1);
 
     if (!lastLine) throw new Error('PTY harness emitted no result');
@@ -386,9 +382,9 @@ describe('the CLI installs as a prebuilt artifact', () => {
     // A well-formed archive, so only verification stands between it and the install.
     const stage = join(home, 'stage', member);
     writeFileSync(join(stage, 'swapped.txt'), 'not the signed build\n');
-    const tar = spawnSync('tar', ['-czf', join(home, name), '-C', join(stage, '..'), 'kinu'], { encoding: 'utf8' });
+    const tar = await runToExit(['tar', '-czf', join(home, name), '-C', join(stage, '..'), 'kinu']);
 
-    if (tar.status !== 0) throw new Error(`tar failed: ${tar.stderr}`);
+    if (tar.exitCode !== 0) throw new Error(`tar failed: ${tar.stderr}`);
     const digest = createHash('sha256').update(readFileSync(join(home, name))).digest('hex');
     writeFileSync(join(home, `${name}.sha256`), `${digest}  ${name}\n`);
 
@@ -458,7 +454,7 @@ describe('Bun runtime resolution is one source of truth', () => {
     }
   });
 
-  test('the emitted parameter expansions compute a real version key', () => {
+  test('the emitted parameter expansions compute a real version key', async () => {
     // Behavioural: a mis-escaped expansion would hand the arithmetic literal text instead of digits.
     const script = `${bunResolutionShell()}\nkinu_bun_key "$1"\n`;
 
@@ -468,19 +464,19 @@ describe('Bun runtime resolution is one source of truth', () => {
       ['1.4.0-canary.20260101', '1004000'],
       ['2.0.13', '2000013'],
     ]) {
-      const run = spawnSync('bash', ['-c', script, 'kinu', version], { encoding: 'utf8' });
-      expect(run.status, `${version}: ${run.stderr}`).toBe(0);
+      const run = await runToExit(['bash', '-c', script, 'kinu', version]);
+      expect(run.exitCode, `${version}: ${run.stderr}`).toBe(0);
       expect(run.stdout.trim()).toBe(key);
     }
 
     for (const bad of ['1.4', 'not-a-version', '']) {
-      const run = spawnSync('bash', ['-c', script, 'kinu', bad], { encoding: 'utf8' });
-      expect(run.status, `${bad} should not be comparable`).toBe(1);
+      const run = await runToExit(['bash', '-c', script, 'kinu', bad]);
+      expect(run.exitCode, `${bad} should not be comparable`).toBe(1);
       expect(run.stdout.trim()).toBe('');
     }
   });
 
-  test('a candidate that is not an absolute path is refused', () => {
+  test('a candidate that is not an absolute path is refused', async () => {
     // `command -v` answers a bare word for functions/builtins, and a bare word resolves against the cwd:
     // a `bun` file in the user's directory must never become the runtime.
     const cwd = scratchDir('bun-cwd');
@@ -489,13 +485,13 @@ describe('Bun runtime resolution is one source of truth', () => {
     writeFileSync(decoy, `#!/bin/sh\nprintf '%s\\n' '${approvedBun()}'\n`);
     chmodSync(decoy, 0o755);
 
-    const probe = spawnSync('bash', ['-c', [
+    const probe = await runToExit(['bash', '-c', [
       'set -eu',
       'KINU_HOME="$PWD/.kinu"',
       bunResolutionShell(),
       'if kinu_bun_compatible bun; then echo TOOK-RELATIVE; else echo REFUSED; fi',
       'if kinu_bun_compatible "$PWD/bun"; then echo TOOK-ABSOLUTE; else echo REFUSED-ABSOLUTE; fi',
-    ].join('\n')], { cwd, encoding: 'utf8' });
+    ].join('\n')], { cwd });
 
     expect(probe.stdout).toContain('REFUSED');
     expect(probe.stdout).not.toContain('TOOK-RELATIVE');
@@ -549,8 +545,7 @@ describe('Bun runtime resolution is one source of truth', () => {
     expect(install.exitCode).toBe(0);
 
     // A fresh shell with no bun on PATH: a PATH-resolved Bun would say "Bun is required."
-    const later = spawnSync(join(home, '.kinu/bin/kinu'), ['--help'], {
-      encoding: 'utf8',
+    const later = await runToExit([join(home, '.kinu/bin/kinu'), '--help'], {
       env: {
         HOME: home,
         KINU_HOME: join(home, '.kinu'),
@@ -561,7 +556,7 @@ describe('Bun runtime resolution is one source of truth', () => {
     });
 
     expect(`${later.stdout}${later.stderr}`).not.toContain('Bun is required');
-    expect(later.status, later.stderr).toBe(0);
+    expect(later.exitCode, later.stderr).toBe(0);
     expect(later.stdout).toContain('setup   connect your account');
     const invocations = readFileSync(bunLog, 'utf8').trim().split('\n');
     expect(invocations.length).toBeGreaterThan(1);

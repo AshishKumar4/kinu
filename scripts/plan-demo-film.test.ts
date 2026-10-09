@@ -11,7 +11,6 @@
  * after an ask for the ask.
  */
 import { describe, expect, test } from 'bun:test';
-import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DYNAMIC_CONTEXT_OPEN_TAG, WORKSPACE_INSTRUCTIONS_TAG } from '@kinu.run/core';
@@ -21,6 +20,7 @@ import { scratchDir } from '../packages/test-utils/src/scratch';
 import { GIF_WIDTH, VIEWPORT, OPENING_LINE, concatManifest, filmScript, muxGif, probeGif } from './plan-demo-film';
 import { KEPT_TAB_NOTE, PLAN_MISSION, SLATE_TITLE, keptTabProbe, planWalkthrough } from './scripted-model';
 import { FALLBACK_ANSWER, readScriptedRequest } from './scripted-protocol';
+import { runOk, spawnTest } from '../packages/test-utils/src/spawn';
 
 const REPO = resolve(import.meta.dir, '..');
 
@@ -28,9 +28,8 @@ const FILM = join(REPO, 'docs/assets/kinu-plan-demo.gif');
 
 /** One solid frame of the recorder's own viewport, drawn by ffmpeg so the mux
  *  is measured without a browser. */
-function viewportFrame(path: string, colour: string): void {
-  execFileSync('ffmpeg', [
-    '-y', '-v', 'error',
+async function viewportFrame(path: string, colour: string): Promise<void> {
+  await runOk(['ffmpeg', '-y', '-v', 'error',
     '-f', 'lavfi', '-i', `color=c=${colour}:s=${String(VIEWPORT.width)}x${String(VIEWPORT.height)}`,
     '-frames:v', '1', path,
   ]);
@@ -52,10 +51,10 @@ function readmeFilmBox() {
 }
 
 describe('the recorder publishes the film at the width the README shows', () => {
-  test("held frames mux to a GIF of the published width, at the viewport's aspect", () => {
+  test("held frames mux to a GIF of the published width, at the viewport's aspect", async () => {
     const dir = scratchDir(`plan-demo-film-test-${String(process.pid)}`);
-    viewportFrame(join(dir, 'a.png'), 'black');
-    viewportFrame(join(dir, 'b.png'), 'gray');
+    await viewportFrame(join(dir, 'a.png'), 'black');
+    await viewportFrame(join(dir, 'b.png'), 'gray');
 
     const manifest = join(dir, 'frames.txt');
     writeFileSync(manifest, concatManifest([
@@ -92,10 +91,10 @@ describe('the recorder publishes the film at the width the README shows', () => 
    *
    * ffmpeg 8.0.1 / ffprobe, this host, 2026-09-18.
    */
-  test("an off-grid hold reaches the GIF as a delay the film never planned", () => {
+  test("an off-grid hold reaches the GIF as a delay the film never planned", async () => {
     const dir = scratchDir(`plan-demo-film-tick-${String(process.pid)}`);
-    viewportFrame(join(dir, 'a.png'), 'black');
-    viewportFrame(join(dir, 'b.png'), 'gray');
+    await viewportFrame(join(dir, 'a.png'), 'black');
+    await viewportFrame(join(dir, 'b.png'), 'gray');
 
     const holds = (first: number, second: number): readonly number[] => {
       const manifest = join(dir, `frames-${String(first)}.txt`);
@@ -128,17 +127,20 @@ describe('the recorder publishes the film at the width the README shows', () => 
     expect({ width: facts.width, height: facts.height }).toEqual(readmeFilmBox());
   });
 
-  test("the shipped film's first frame is fully opaque", () => {
+  test("the shipped film's first frame is fully opaque", async () => {
     const facts = probeGif(FILM);
     // Decoding, not the GCE flag: a transparent index in the palette says
     // nothing about whether the base frame's pixels use it. Every pixel of
     // frame 0 must carry its own colour, or whatever the compositor keeps
     // beneath it shows through the whole loop.
 
-    const rgba = execFileSync('ffmpeg', [
-      '-v', 'error', '-i', FILM,
+    const decode = spawnTest(['ffmpeg', '-v', 'error', '-i', FILM,
       '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgba', '-',
-    ], { encoding: 'buffer', maxBuffer: 64 * 1024 * 1024 });
+    ], { stdout: 'pipe', stderr: 'pipe' });
+
+    const [rgba, stderr, exitCode] = await Promise.all([new Response(decode.stdout).bytes(), new Response(decode.stderr).text(), decode.exited]);
+
+    expect(exitCode, stderr).toBe(0);
 
     expect(rgba.byteLength, 'the decode must yield width*height RGBA pixels')
       .toBe(facts.width * facts.height * 4);

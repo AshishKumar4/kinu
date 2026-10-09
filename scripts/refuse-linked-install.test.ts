@@ -15,7 +15,7 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
-import { childEnv, scratchDir } from '@kinu.run/test-utils';
+import { childEnv, runToExit, scratchDir } from '@kinu.run/test-utils';
 
 const REPO = join(import.meta.dir, '..');
 
@@ -95,24 +95,22 @@ function snapshot(dir: string) {
   return seen;
 }
 
-function bun(checkout: string, ...args: string[]) {
-  const proc = Bun.spawnSync([process.execPath, ...args], {
+async function bun(checkout: string, ...args: string[]) {
+  const proc = await runToExit([process.execPath, ...args], {
     cwd: checkout,
     env: childEnv({ BUN_INSTALL_CACHE_DIR: join(dirname(checkout), 'cache') }),
-    stdout: 'pipe',
-    stderr: 'pipe',
   });
 
-  return { exitCode: proc.exitCode, output: `${proc.stdout.toString()}${proc.stderr.toString()}` };
+  return { exitCode: proc.exitCode, output: `${proc.stdout}${proc.stderr}` };
 }
 
 describe('bun install over node_modules linked into another checkout', () => {
-  test('is refused before the lockfile or any module is written, here or through the links', () => {
+  test('is refused before the lockfile or any module is written, here or through the links', async () => {
     const { primary, checkout } = layout('linked');
     const primaryBefore = snapshot(primary);
     const modulesBefore = snapshot(join(checkout, 'node_modules'));
 
-    const install = bun(checkout, 'install');
+    const install = await bun(checkout, 'install');
 
     expect(install.exitCode, install.output).not.toBe(0);
     expect(install.output).toContain('refuse-linked-install');
@@ -121,36 +119,36 @@ describe('bun install over node_modules linked into another checkout', () => {
     expect(existsSync(join(checkout, 'bun.lock'))).toBe(false);
   });
 
-  test('bun pm scan, which writes nothing, still scans', () => {
+  test('bun pm scan, which writes nothing, still scans', async () => {
     // A scan reads the lockfile, which only an install writes.
     const { checkout } = layout('absent');
-    expect(bun(checkout, 'install').exitCode).toBe(0);
+    expect((await bun(checkout, 'install')).exitCode).toBe(0);
     linkInto(checkout);
 
-    const scan = bun(checkout, 'pm', 'scan');
+    const scan = await bun(checkout, 'pm', 'scan');
     expect(scan.exitCode, scan.output).toBe(0);
     expect(scan.output).not.toContain('refuse-linked-install');
   });
 });
 
 describe('bun install where nothing links out', () => {
-  test('installs: with no node_modules, and again over the real one it made', () => {
+  test('installs: with no node_modules, and again over the real one it made', async () => {
     const { checkout } = layout('absent');
-    const first = bun(checkout, 'install');
+    const first = await bun(checkout, 'install');
     expect(first.exitCode, first.output).toBe(0);
     expect(JSON.parse(readFileSync(join(checkout, 'node_modules', '@s', 'dep', 'package.json'), 'utf8'))).toMatchObject({ version: '2.0.0' });
 
-    const again = bun(checkout, 'install');
+    const again = await bun(checkout, 'install');
     expect(again.exitCode, again.output).toBe(0);
   });
 
-  test('installs over a link that resolves inside the checkout, the shape of a workspace package', () => {
+  test('installs over a link that resolves inside the checkout, the shape of a workspace package', async () => {
     const { checkout } = layout('absent');
     write(join(checkout, 'packages', 'local', 'package.json'), JSON.stringify({ name: 'local', version: '1.0.0' }));
     mkdirSync(join(checkout, 'node_modules'));
     symlinkSync(join('..', 'packages', 'local'), join(checkout, 'node_modules', 'local'));
 
-    const install = bun(checkout, 'install');
+    const install = await bun(checkout, 'install');
     expect(install.exitCode, install.output).toBe(0);
   });
 });

@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition, type ReactNode, type RefObject } from 'react';
 import type { ScrollBoxRenderable } from '@opentui/core';
-import { useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react';
+import { useRenderer, useTerminalDimensions } from '@opentui/react';
 
 import { diagnostics, renderThrownChain, settleLogged, toKinuError, settleSync, settle, detach } from '@kinu.run/core/obs';
 import { TUI_MARKS } from '@kinu.run/core/tui';
@@ -31,6 +31,7 @@ import {
   type ThemeRegistry,
   type TerminalColorCapability,
 } from './theme';
+import { useKeyboard } from './use-keys';
 
 const WORKSPACE_SIDEBAR_COLUMNS = 28;
 

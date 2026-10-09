@@ -39,7 +39,7 @@ import { ActorSession, type ActorTurnLease,
   BackgroundJobStore, BackgroundJobRunner, type BackgroundJobRunnerDeps, type JobHolder, processJobHolder, type TaskListStore,
   WorkspaceJobAuthorities, endedStepLoopJobs, actorReferenceOf, type JobAuthority, type JobRetirement, type WorkspaceJobPorts,
   backgroundJobNotice,
-  DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals,
+  DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals, admitSubordinateTask, type AgentSignal,
   BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob, type ActorToolsets,
   BACKGROUND_POLICY, type BackgroundPolicy,
   type MctsSearchStore,
@@ -136,7 +136,7 @@ import { ActorSession, type ActorTurnLease,
   type ChatTurnInput, type CompactOutcome, type ComposedRequest, type ContextFill, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
 } from '@kinu.run/core';
 import {
-  diagnostics, KinuError, renderThrownChain, settleSync, tolerate, toKinuError, detach, type Refusal,
+  attempt, diagnostics, KinuError, renderThrownChain, settleSync, tolerate, toKinuError, detach, type Refusal,
 } from '@kinu.run/core/obs';
 import { buildLocalActorRuntime, cleanupFacetScratch, makeSqlExec, soulIn, writeTransaction, type CLIRuntime } from './runtime';
 import { localActorDirectory, nodeWorkspace, registerLocalActor, retireLocalActor, type LocalActorBinding } from '@kinu.run/core';
@@ -160,6 +160,10 @@ interface LocalHostedSession {
   readonly actor: HostedActor;
   readonly host: ActorHost;
   readonly orchestration: LocalOrchestration;
+  /** A hire's: its root's queue of actions parked on the owner, which it parks on as itself. The root builds its own. */
+  readonly approvals?: DeferredApprovalQueue;
+  /** The root's: wakes a hire the owner's decision answers, on its own durable queue. */
+  readonly wakeHire?: (actorId: string, signal: AgentSignal) => Effect.Effect<void, KinuError>;
 }
 
 /**
@@ -623,18 +627,10 @@ export class LocalAgentSession {
     // The runtime's judge/fast/reflection seams predate this session; a runtime holds one sink.
     this.rt.setModelCallSink?.(this.modelCallSink);
     this.rt.setModelOperations?.(this.modelOperations);
-    this.deferrals = new DeferredApprovalQueue({
-      store: new DeferredApprovalStore(this.rt.storage.sql, this.rt.actor),
-      inbox: this.actorSession.orchestrator.inbox,
-      remember: (grants) => { this.config.grantShellApproval(grants); },
-      audit: (record) => {
-        this.eventRecorder.emit(this.chat.currentRunId ?? WORKSPACE_RUN_ID, { type: 'approval_consumed', ...record });
-      },
-      announce: () => { this.host.broadcast({ type: 'pending_actions_changed' }); },
-      writes: null,
-    });
+    // One queue per workspace (core safety/deferred-approval.ts): a hire parks on its root's, as itself.
+    this.deferrals = this.workspaceQueue(opts.hosted);
 
-    this.rt.setApprovalDeferrals?.(this.deferrals.channel);
+    this.rt.setApprovalDeferrals?.(this.deferrals.channelFor(this.rt.actor.actorId));
     this.jobHolder = processJobHolder(this.rt.storage, OS_LEASE_PROCESS);
     this.jobRunner = new BackgroundJobRunner({
       store: this.jobs,
@@ -763,8 +759,63 @@ export class LocalAgentSession {
     };
   }
 
+  /** The workspace's queue, from whichever of its agents is asked: the owner decides them all in one list. */
   async listDeferredApprovals(): Promise<DeferredApproval[]> {
     return this.deferrals.list();
+  }
+
+  /** The queue a hire of this root parks on (`LocalHostedSession.approvals`). */
+  get approvalQueue(): DeferredApprovalQueue {
+    return this.deferrals;
+  }
+
+  /**
+   * The workspace's queue of actions parked on its owner: a hire's is its root's. The root builds it, waking itself
+   * here and a hire through its host (`wakeHire`), on the hire's own durable queue.
+   */
+  private workspaceQueue(hosted: LocalHostedSession | undefined): DeferredApprovalQueue {
+    if (hosted?.approvals !== undefined) return hosted.approvals;
+    const wakeHire = hosted?.wakeHire;
+
+    return new DeferredApprovalQueue({
+      store: new DeferredApprovalStore(this.rt.storage.sql, this.rt.actor),
+      wake: (actorId, signal) => {
+        if (actorId === this.rt.actor.actorId) {
+          return Effect.asVoid(attempt({ doing: 'waking this agent with the owner\'s decision', otherwise: 'io' }, () => this.actorSession.orchestrator.inbox.send(signal)));
+        }
+
+        return wakeHire === undefined ? this.admitDecision(actorId, signal) : wakeHire(actorId, signal);
+      },
+      remember: (grants) => { this.config.grantShellApproval(grants); },
+      // A hire's consumption, or the root's outside a turn, is the workspace run's: the root's turn is not theirs.
+      audit: (record) => {
+        const runId = record.actor === this.rt.actor.actorId ? this.chat.currentRunId : undefined;
+
+        this.eventRecorder.emit(runId ?? WORKSPACE_RUN_ID, { type: 'approval_consumed', ...record });
+      },
+      announce: () => { this.host.broadcast({ type: 'pending_actions_changed' }); },
+      writes: null,
+    });
+  }
+
+  /**
+   * With no host here (the interactive CLI over a daemon's workspace), the decision is admitted to the hire's own
+   * event log, as its hirer's message would be: whichever process hosts it drains it there and runs its turn.
+   */
+  private admitDecision(actorId: string, signal: AgentSignal): Effect.Effect<void, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const record = localActorDirectory(this.rt.actor).directory.retained(actorId);
+
+      if (record === null || record.retiringAt !== null || record.deletedAt !== null) {
+        return yield* Effect.fail(new KinuError('missing', `No live agent ${actorId} to tell of the decision.`));
+      }
+
+      const { handle } = this.actorHost.bindStores(actorReferenceOf(record));
+
+      admitSubordinateTask(new EventLog(makeSqlExec(this.db), handle), {
+        fromWorkspace: this.rt.actor.name, kind: 'message', body: signal.text, mode: 'build', now: Date.now(),
+      });
+    });
   }
 
   async decideDeferredApprovals(
@@ -2204,7 +2255,7 @@ export class LocalAgentSession {
       missingCapabilities: [],
       subordinateDelegates: () => subordinateDelegatesOf(this.teamDeps?.snapshot() ?? []),
       approvals: () => {
-        const items = [...this.deferrals.approvals()];
+        const items = [...this.deferrals.approvals(this.rt.actor.actorId)];
 
         if (this.pendingShellApproval !== null) items.push(this.pendingShellApproval);
 

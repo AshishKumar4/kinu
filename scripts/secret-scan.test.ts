@@ -165,32 +165,32 @@ test('the scanned set is the enumerated set narrowed by content type, nothing el
   expect(scanned).toContain('scripts/secret-scan.test.ts');
 });
 
-function historyFixture() {
+async function historyFixture() {
   const repo = scratchDir('secret-history');
-  initRepo(repo);
+  await initRepo(repo);
   writeFileSync(join(repo, 'README.md'), 'clean\n');
-  git(repo, 'add', 'README.md');
-  git(repo, 'commit', '-qm', 'clean base');
-  const primary = git(repo, 'branch', '--show-current').trim();
+  await git(repo, 'add', 'README.md');
+  await git(repo, 'commit', '-qm', 'clean base');
+  const primary = (await git(repo, 'branch', '--show-current')).trim();
 
   // The credential exists only on a non-current local branch. A scanner that
   // reads HEAD or the working tree alone is green; every local ref is red.
-  git(repo, 'checkout', '-qb', 'history-fixture');
+  await git(repo, 'checkout', '-qb', 'history-fixture');
   const secret = CFUT_TOKEN;
   writeFileSync(join(repo, 'history.md'), `key=${secret}\n`);
   writeFileSync(join(repo, 'binary.bin'), Buffer.from([0x6b, 0, 0x69]));
   writeFileSync(join(repo, 'oversize.txt'), Buffer.alloc(MAX_HISTORY_BLOB_BYTES + 1, 0x78));
-  git(repo, 'add', 'history.md', 'binary.bin', 'oversize.txt');
-  git(repo, 'commit', '-qm', 'historical fixture');
-  const oid = git(repo, 'rev-parse', 'HEAD:history.md').trim();
-  git(repo, 'checkout', '-q', primary);
+  await git(repo, 'add', 'history.md', 'binary.bin', 'oversize.txt');
+  await git(repo, 'commit', '-qm', 'historical fixture');
+  const oid = (await git(repo, 'rev-parse', 'HEAD:history.md')).trim();
+  await git(repo, 'checkout', '-q', primary);
 
   return { repo, oid, secret };
 }
 
 describe('reachable history', () => {
   test('a historical credential is red until its exact blob/path/detector/count adjudication is present', async () => {
-    const fixture = historyFixture();
+    const fixture = await historyFixture();
 
     const expected = {
       detector: 'cloudflare-user-token',

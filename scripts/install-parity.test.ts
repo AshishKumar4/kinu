@@ -3,7 +3,7 @@
 import { describe, expect, test } from 'bun:test';
 import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { childEnv, scratchDir } from '@kinu.run/test-utils';
+import { childEnv, runToExit, scratchDir } from '@kinu.run/test-utils';
 import { installDrift } from './install-parity';
 import { bindPinnedCompiler } from './mossaic-sdk';
 import { MOSSAIC_SDK } from './sources';
@@ -63,7 +63,7 @@ function checkout(name: string): string {
 }
 
 describe('the installed tree is the one bun.lock names', () => {
-  test.each(['2.0.0', '1.0.0'])('worktree setup borrows only a donor installed at the matching lock’s version: %s', (version) => {
+  test.each(['2.0.0', '1.0.0'])('worktree setup borrows only a donor installed at the matching lock’s version: %s', async (version) => {
     const donor = checkout('install-parity-donor');
     const tree = scratchDir('install-parity-worktree');
     const bin = scratchDir('install-parity-bootstrap');
@@ -114,10 +114,13 @@ esac
 `);
     chmodSync(join(bin, 'git'), 0o755);
 
-    const run = Bun.spawnSync(['bash', 'scripts/setup-worktree.sh'], { cwd: tree, env: childEnv({
+    const run = await runToExit(['bash', 'scripts/setup-worktree.sh'], {
+      cwd: tree,
+      env: childEnv({
       PATH: `${bin}:/usr/bin:/bin`, KINU_WORKTREE_ROOT: tree, KINU_WORKTREE_DONOR: donor,
       KINU_WORKTREE_INSTALL_LOG: log, KINU_WORKTREE_BOOTSTRAP: join(bin, 'bun'),
-    }), stdout: 'pipe', stderr: 'pipe' });
+    }),
+});
 
     expect(run.exitCode, run.stderr.toString()).toBe(0);
     expect(readFileSync(join(donor, 'node_modules/tool/package.json'), 'utf8')).toBe(JSON.stringify({ version }));

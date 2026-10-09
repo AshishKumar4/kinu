@@ -5,12 +5,12 @@
 
 import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, test, expect } from 'bun:test';
-import { spawnSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as v from 'valibot';
+import { runToExit } from '@kinu.run/test-utils';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -37,7 +37,7 @@ const ObservedSchema = v.object({
 
 type Observed = v.InferOutput<typeof ObservedSchema>;
 
-function observeAfterLoading(specifier: string): Observed {
+async function observeAfterLoading(specifier: string): Promise<Observed> {
   const dir = scratchDir('init-order');
 
   const probe = join(dir, 'probe.mjs');
@@ -55,28 +55,29 @@ function observeAfterLoading(specifier: string): Observed {
       '',
     ].join('\n'),
   );
-  const run = spawnSync('bun', [probe], { env: process.env, encoding: 'utf8', cwd: here });
+  const run = await runToExit(['bun', probe], { env: process.env, cwd: here });
   expect(
-    run.status,
-    `importing ${specifier} first did not initialise cleanly (exit ${run.status}):\n${run.stderr}`,
+    run.exitCode,
+    `importing ${specifier} first did not initialise cleanly (exit ${run.exitCode}):\n${run.stderr}`,
   ).toBe(0);
 
   return v.parse(ObservedSchema, JSON.parse(run.stdout));
 }
 
-describe('module initialisation order', () => {
-  // The reference must itself initialise, or every comparison below is vacuous.
-  const [, referenceSpecifier] = ENTRY_POINTS[3];
-  const reference = observeAfterLoading(referenceSpecifier);
+// The reference must itself initialise, or every comparison below is vacuous.
+const [, referenceSpecifier] = ENTRY_POINTS[3];
 
+const reference = await observeAfterLoading(referenceSpecifier);
+
+describe('module initialisation order', () => {
   test('the constants under test are non-empty and related as documented', () => {
     expect(reference.head.length).toBeGreaterThan(0);
     expect(reference.node).toEqual([...reference.head, 'report']);
   });
 
   for (const [label, specifier] of ENTRY_POINTS) {
-    test(`NODE_BUILTIN_TOOLS is whole when loading starts at ${label}`, () => {
-      const observed = observeAfterLoading(specifier);
+    test(`NODE_BUILTIN_TOOLS is whole when loading starts at ${label}`, async () => {
+      const observed = await observeAfterLoading(specifier);
       expect(observed.head).toEqual([...reference.head]);
       expect(observed.node).toEqual([...reference.node]);
     });

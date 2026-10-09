@@ -8,6 +8,7 @@
  */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { resolve } from "node:path";
 import * as v from "valibot";
 
 const DiagnosticSchema = v.object({
@@ -32,12 +33,14 @@ export type LintReport = v.InferOutput<typeof LintReportSchema>;
 export type LintRun = LintReport & { readonly status: number | null; readonly stderr: string };
 
 /**
- * Run `oxlint -f json <args>` from the repository root and parse the report.
+ * Run `oxlint -f json <args>` and parse the report: from the repository root, or from `cwd` when a rule judges a
+ * planted file by its path from where oxlint runs.
  * Fails when oxlint printed nothing (the message carries stderr) or loaded no
  * rules, because a lint that ran no rule finds nothing and proves nothing.
  */
-export function lintJson(args: readonly string[]): LintRun {
-  const run = spawnSync("./node_modules/.bin/oxlint", ["-f", "json", ...args], {
+export function lintJson(args: readonly string[], cwd?: string): LintRun {
+  const run = spawnSync(resolve("node_modules/.bin/oxlint"), ["-f", "json", ...args], {
+    cwd,
     encoding: "utf8",
     maxBuffer: 256 * 1024 * 1024,
   });

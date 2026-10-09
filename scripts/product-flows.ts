@@ -32,7 +32,8 @@ import { holdForRelease } from '../packages/test-utils/src/scratch';
 import { DESKTOP } from './live-app-harness';
 import {
   AGENT_PLAN_ASK, FLOW_MEMORY_NOTE, FLOW_SHELL_PROBE, FLOW_SLATE, MEMORY_ASK, SLATE_ASK, STORM_ASK, STORM_DIR, STORM_FILES, STORM_SEED_ASK, WRITE_FILE_ASK,
-  APPROVALS_ASK, DECISION_HEARD, PROPOSAL_LINK_REPLY, WORKSPACE_PROPOSAL_ASK,
+  APPROVALS_ASK, DECISION_HEARD, HIRE_APPROVAL_ASK, HIRE_RAN, PROPOSAL_LINK_REPLY, WORKSPACE_PROPOSAL_ASK, ACCOUNT_FACT, ACCOUNT_FACT_ASK,
+  ACCOUNT_RECALL_ASK, ACCOUNT_RECALL_REPLY,
 } from './flows-script';
 import { FALLBACK_ANSWER } from './scripted-protocol';
 import {
@@ -732,6 +733,47 @@ export async function approvalsStackAtTheComposer(target: FlowTarget): Promise<A
   }
 }
 
+export interface HireApprovalVerdict {
+  /** The asks the hire's own pane stacked once its command parked, and the open card's words. */
+  readonly paneStacked: readonly string[];
+  readonly openWords: string;
+  /** Whether the hire, woken by the approval, said its re-issue ran. */
+  readonly ran: boolean;
+}
+
+/**
+ * Row: a chat agent the owner made runs a command its workspace gates (strict, nobody granted it). It parks as the
+ * hire's own ask, stacked on the hire's composer; approved there, the hire is woken on its own queue and its re-issue
+ * runs. Before, a hire was refused outright: "needs owner approval, nobody to ask".
+ */
+export async function hireParksAndRunsOnApproval(target: FlowTarget): Promise<HireApprovalVerdict> {
+  const workspace = await createFlowWorkspace(target, 'hire-approval');
+
+  try {
+    const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
+
+    await startNewChat(page);
+    const agentPath = `/workspace/${encodeURIComponent(workspace)}/agents/`;
+    const agent = v.parse(v.string(), await page.evaluate(`decodeURIComponent(location.pathname.slice(${String(agentPath.length)}))`));
+    const pane = `[data-agent-pane="${workspace}/agents/${agent}"]`;
+
+    await until(page, "the new agent's own composer", agentComposer(workspace, agent));
+    await sendAndSettle(page, HIRE_APPROVAL_ASK);
+    await until(page, "the hire's ask stacked on its composer", `document.querySelector(${JSON.stringify(`${pane} [data-attention-stack]`)}) !== null`);
+    const paneStacked = v.parse(v.array(v.string()), await page.evaluate(`[...document.querySelectorAll(${JSON.stringify(`${pane} [data-attention-card]`)})].map((card) => card.getAttribute('data-attention-card'))`));
+    const openWords = v.parse(v.string(), await page.evaluate(`document.querySelector(${JSON.stringify(`${pane} [data-attention-card]`)})?.textContent ?? ''`));
+
+    await page.evaluate(`[...document.querySelectorAll(${JSON.stringify(`${pane} [data-attention-card] button`)})].find((button) => button.textContent?.trim() === 'Approve')?.click()`);
+    await until(page, "the hire's stack cleared", `document.querySelector(${JSON.stringify(`${pane} [data-attention-stack]`)}) === null`);
+    await until(page, 'the hire, woken, saying its re-issue ran or did not', `/HIRE (RAN|STILL BLOCKED)/u.test(document.querySelector(${JSON.stringify(pane)})?.textContent ?? '')`);
+    const ran = v.parse(v.boolean(), await page.evaluate(`(document.querySelector(${JSON.stringify(pane)})?.textContent ?? '').includes(${JSON.stringify(HIRE_RAN)})`));
+
+    return { paneStacked, openWords, ran };
+  } finally {
+    await removeFlowWorkspace(target, workspace);
+  }
+}
+
 export interface WorkspaceProposalVerdict {
   /** What the Needs-you card offered the owner before anything existed. */
   readonly cardTitle: string;
@@ -807,6 +849,65 @@ export async function agentProposesAWorkspace(target: FlowTarget): Promise<Works
     await removeFlowWorkspace(target, workspace);
 
     if (created !== null) await removeFlowWorkspace(target, created);
+  }
+}
+
+export interface AccountMemoryVerdict {
+  /** The proposal Settings → Memory offered the owner, before anything was kept. */
+  readonly offered: string;
+  /** What another workspace's agent answered before the owner accepted, and after. */
+  readonly before: string;
+  readonly after: string;
+  /** What a share's viewer of the account's memory got: its status. */
+  readonly viewerStatus: number;
+}
+
+/** The chat's last `marker <answer>`, for the answers the script can give; '' when there is none. */
+async function lastReply(page: Page, marker: string, answers: readonly string[]): Promise<string> {
+  const said = v.parse(v.string(), await page.evaluate(`document.querySelector('#chat')?.textContent ?? ''`));
+  const replies = answers.map((answer) => `${marker} ${answer}`);
+  const at = Math.max(...replies.map((reply) => said.lastIndexOf(reply)));
+
+  return replies.find((reply) => said.startsWith(reply, at)) ?? '';
+}
+
+const RECALL_ANSWERS = [ACCOUNT_FACT.value, 'nowhere I know of'];
+
+/**
+ * Row: the owner says a fact about themselves in one workspace; its agent proposes it for the account; nothing another
+ * workspace reads holds it until the owner accepts it in Settings → Memory; then another workspace's agent recalls it.
+ * A request without the owner's session reads nothing of it.
+ */
+export async function accountMemoryCrossesWorkspaces(target: FlowTarget): Promise<AccountMemoryVerdict> {
+  const said = await createFlowWorkspace(target, 'memory-a');
+  const asked = await createFlowWorkspace(target, 'memory-b');
+
+  try {
+    const first = await openWorkspacePage(target, `/workspace/${encodeURIComponent(said)}`);
+
+    await sendAndSettle(first, ACCOUNT_FACT_ASK);
+    const second = await openWorkspacePage(target, `/workspace/${encodeURIComponent(asked)}`);
+
+    await sendAndSettle(second, ACCOUNT_RECALL_ASK);
+    const before = await lastReply(second, ACCOUNT_RECALL_REPLY, RECALL_ANSWERS);
+    const settings = await openWorkspacePage(target, '/user/settings#memory');
+    const proposal = '[data-account-memory-proposal]';
+
+    await until(settings, 'the proposal in Settings → Memory', `[...document.querySelectorAll(${JSON.stringify(proposal)})].some((node) => node.textContent.includes(${JSON.stringify(ACCOUNT_FACT.key)}))`);
+    const offered = v.parse(v.string(), await settings.evaluate(`[...document.querySelectorAll(${JSON.stringify(proposal)})].find((node) => node.textContent.includes(${JSON.stringify(ACCOUNT_FACT.key)}))?.textContent ?? ''`));
+
+    await settings.evaluate(`[...document.querySelectorAll(${JSON.stringify(proposal)})].find((node) => node.textContent.includes(${JSON.stringify(ACCOUNT_FACT.key)}))?.querySelector('button')?.click()`);
+    await until(settings, 'the fact kept', `document.querySelector('[data-account-memory-fact=${JSON.stringify(ACCOUNT_FACT.key)}]') !== null`);
+    await sendAndSettle(second, ACCOUNT_RECALL_ASK);
+    const after = await lastReply(second, ACCOUNT_RECALL_REPLY, RECALL_ANSWERS);
+    const viewer = await fetch(`${target.origin}/api/user/memory`);
+
+    return { offered, before, after, viewerStatus: viewer.status };
+  } finally {
+    // The account's fact goes with the row, so a rerun proposes it afresh.
+    await fetch(`${target.origin}/api/user/memory/facts/${ACCOUNT_FACT.key}`, { method: 'DELETE', headers: webHeaders(target.identity) });
+    await removeFlowWorkspace(target, said);
+    await removeFlowWorkspace(target, asked);
   }
 }
 

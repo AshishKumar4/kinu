@@ -1,11 +1,12 @@
-/** Hybrid retrieval: lexical arms (FTS5 notes, FactsStore) and VectorStore fused with Reciprocal Rank Fusion. */
+/** Hybrid retrieval: lexical arms (FTS5 notes, both scopes' facts, account notes) and VectorStore fused with Reciprocal Rank Fusion. */
 
 import { Effect } from 'effect';
 import type { Memory } from '../types/primitives';
 import type { VectorStore, VectorSearchHit } from './vector-store';
 import { reciprocalRankFusion } from './vector-store';
-import { searchFacts, type FactSearchHit, type FactsStore } from './facts';
-import { diagnostics, settle, toKinuError, type ErrorCode, type KinuError } from '../obs/index';
+import { searchFacts, unifiedFacts, type Fact, type FactSearchHit, type MemoryScope } from './facts';
+import type { AccountNoteHit } from './account';
+import { attempt, diagnostics, settle, toKinuError, type ErrorCode, type KinuError } from '../obs/index';
 
 export interface LexicalHit {
   readonly id: string;
@@ -23,9 +24,10 @@ export interface HybridHit {
   readonly endLine: number;
   readonly snippet: string;
   readonly rrfScore: number;
-  readonly sources: ReadonlyArray<'lexical' | 'semantic' | 'fact'>;
-  /** Display override for `path:start-end`; fact hits set `fact: <key>`. */
+  readonly sources: ReadonlyArray<'lexical' | 'semantic' | 'fact' | 'account-note'>;
+  /** Display override for `path:start-end`: `fact: <key>`, `account fact: <key>` or `account note: <id>`. */
   readonly label?: string;
+  readonly scope: MemoryScope;
   readonly lexicalScore?: number;
   readonly semanticScore?: number;
 }
@@ -68,8 +70,14 @@ export interface HybridSearchOptions {
   finalK?: number;
   /** RRF constant. Default 60 (Cormack/Lynam). */
   rrfK?: number;
-  /** Facts join the merge as a second lexical source, rendered `[fact: <key>]`. */
-  facts?: FactsStore;
+  /** This workspace's facts, a second lexical source rendered `fact: <key>`, read inside its arm so a failed read
+   *  degrades the arm, never the search. */
+  facts?: () => readonly Fact[];
+  /** The account's facts, joined below the workspace's in the same arm (`unifiedFacts`) and rendered `account fact: <key>`.
+   *  A failed read costs only them: the workspace's facts are still searched. */
+  accountFacts?: () => Promise<readonly Fact[]>;
+  /** The account's notes the query matches, a fourth source that degrades as the others do. */
+  accountNotes?: (query: string, limit: number) => Promise<readonly AccountNoteHit[]>;
   rehydrate?: SnippetRehydrator;
 }
 
@@ -82,6 +90,8 @@ type ArmOutcome<Hit> =
 type SemanticOutcome = ArmOutcome<VectorSearchHit> | { readonly kind: 'skipped' };
 
 type FactsOutcome = ArmOutcome<FactSearchHit> | { readonly kind: 'skipped' };
+
+type NotesOutcome = ArmOutcome<AccountNoteHit> | { readonly kind: 'skipped' };
 
 /**
  * Runs every wired source in parallel and merges via RRF. One failed arm degrades and is recorded;
@@ -96,7 +106,7 @@ export function hybridSearch(
   const perSourceK = options.perSourceK ?? 20;
   const finalK = options.finalK ?? 10;
   const rrfK = options.rrfK ?? 60;
-  const factsStore = options.facts;
+  const { facts: ownFacts, accountFacts } = options;
 
   const lexicalArm = armOf(() => lexicalSearch(query, perSourceK), 'run the lexical half of a hybrid search', 'io');
 
@@ -104,13 +114,27 @@ export function hybridSearch(
     ? armOf(() => vectorStore.search(query, perSourceK), 'run the semantic half of a hybrid search', 'unavailable')
     : Effect.succeed({ kind: 'skipped' });
 
-  const factsArm: Effect.Effect<FactsOutcome> = factsStore
-    ? armOf(() => searchFacts(factsStore, query, perSourceK), 'run the facts half of a hybrid search', 'io')
+  const sharedFacts: Effect.Effect<readonly Fact[]> = accountFacts === undefined ? Effect.succeed([]) : attempt(
+    { doing: "read the account's facts for a hybrid search", otherwise: 'unavailable' }, accountFacts,
+  ).pipe(Effect.catch((error) => Effect.sync(() => {
+    diagnostics.failure('memory.account_fact_search_failed', error);
+
+    return [];
+  })));
+
+  const factsArm: Effect.Effect<FactsOutcome> = ownFacts === undefined && accountFacts === undefined
+    ? Effect.succeed({ kind: 'skipped' })
+    : Effect.flatMap(sharedFacts, (shared) => armOf(() => searchFacts(unifiedFacts(ownFacts?.() ?? [], shared), query, perSourceK), 'run the facts half of a hybrid search', 'io'));
+
+  const notesSource = options.accountNotes;
+
+  const notesArm: Effect.Effect<NotesOutcome> = notesSource
+    ? armOf(() => notesSource(query, perSourceK), "search the account's notes", 'unavailable')
     : Effect.succeed({ kind: 'skipped' });
 
   return settle(Effect.gen(function* () {
-    const [lexical, semantic, factArm] = yield* Effect.all([lexicalArm, semanticArm, factsArm], { concurrency: 'unbounded' });
-    const answered = [lexical, semantic, factArm].some((arm) => arm.kind === 'answered');
+    const [lexical, semantic, factArm, noteArm] = yield* Effect.all([lexicalArm, semanticArm, factsArm, notesArm], { concurrency: 'unbounded' });
+    const answered = [lexical, semantic, factArm, noteArm].some((arm) => arm.kind === 'answered');
 
     if (answered) {
       if (lexical.kind === 'failed') diagnostics.failure('memory.lexical_search_failed', lexical.error);
@@ -118,8 +142,10 @@ export function hybridSearch(
       if (semantic.kind === 'failed') diagnostics.failure('memory.semantic_search_failed', semantic.error);
 
       if (factArm.kind === 'failed') diagnostics.failure('memory.fact_search_failed', factArm.error);
+
+      if (noteArm.kind === 'failed') diagnostics.failure('memory.account_note_search_failed', noteArm.error);
     } else {
-      const failures = [lexical, semantic, factArm].flatMap((arm) => (arm.kind === 'failed' ? [arm.error] : []));
+      const failures = [lexical, semantic, factArm, noteArm].flatMap((arm) => (arm.kind === 'failed' ? [arm.error] : []));
       const [only] = failures;
 
       if (failures.length === 1 && only !== undefined) return yield* only;
@@ -127,7 +153,7 @@ export function hybridSearch(
       return yield* Effect.die(new AggregateError(failures, 'hybrid search failed: no retrieval source answered', { cause: only }));
     }
 
-    return yield* fused({ lexical, semantic, factArm, finalK, rrfK, rehydrate: options.rehydrate });
+    return yield* fused({ lexical, semantic, factArm, accountNotes: noteArm.kind === 'answered' ? noteArm.hits : [], finalK, rrfK, rehydrate: options.rehydrate });
   }));
 }
 
@@ -135,6 +161,7 @@ interface FuseInput {
   readonly lexical: ArmOutcome<LexicalHit>;
   readonly semantic: SemanticOutcome;
   readonly factArm: FactsOutcome;
+  readonly accountNotes: readonly AccountNoteHit[];
   readonly finalK: number;
   readonly rrfK: number;
   readonly rehydrate: SnippetRehydrator | undefined;
@@ -153,7 +180,7 @@ function armOf<Hit>(
   );
 }
 
-function fused({ lexical, semantic, factArm, finalK, rrfK, rehydrate }: FuseInput): Effect.Effect<HybridHit[]> {
+function fused({ lexical, semantic, factArm, accountNotes, finalK, rrfK, rehydrate }: FuseInput): Effect.Effect<HybridHit[]> {
   const lexicalHits: readonly LexicalHit[] = lexical.kind === 'answered' ? lexical.hits : [];
 
   const factHits: readonly FactSearchHit[] = factArm.kind === 'answered' ? factArm.hits : [];
@@ -162,26 +189,23 @@ function fused({ lexical, semantic, factArm, finalK, rrfK, rehydrate }: FuseInpu
     ? semantic.hits
     : [];
 
-  // `fact:` ids never collide with note chunk ids.
-  const merged = reciprocalRankFusion<{ id: string }>([lexicalHits, factHits, semanticHits], rrfK);
+  const noteHits = accountNotes.map((note) => ({ ...note, id: `account-note:${note.id}` }));
+  // `fact:`, `account-fact:` and `account-note:` ids never collide with note chunk ids.
+  const merged = reciprocalRankFusion<{ id: string }>([lexicalHits, factHits, semanticHits, noteHits], rrfK);
 
   const byIdLex = new Map(lexicalHits.map((h) => [h.id, h]));
   const byIdFact = new Map(factHits.map((h) => [h.id, h]));
   const byIdSem = new Map(semanticHits.map((h) => [h.id, h]));
+  const byIdNote = new Map(noteHits.map((h) => [h.id, h]));
 
   return Effect.forEach(merged.slice(0, finalK), (m) => Effect.gen(function* () {
     const l = byIdLex.get(m.id);
     const f = byIdFact.get(m.id);
     const s = byIdSem.get(m.id);
-    const sources: Array<'lexical' | 'semantic' | 'fact'> = [];
-
-    if (l) sources.push('lexical');
-
-    if (f) sources.push('fact');
-
-    if (s) sources.push('semantic');
-    // Fact hits carry their value, so only semantic-only note hits need rehydrating.
-    let snippet = l?.snippet ?? f?.snippet ?? s?.text ?? '';
+    const n = byIdNote.get(m.id);
+    const sources = hitSources({ l, f, s, n });
+    // Fact and account note hits carry their text, so only semantic-only note hits need rehydrating.
+    let snippet = l?.snippet ?? f?.snippet ?? n?.text ?? s?.text ?? '';
 
     if (!snippet && s && rehydrate) {
       snippet = yield* Effect.tryPromise({
@@ -202,11 +226,27 @@ function fused({ lexical, semantic, factArm, finalK, rrfK, rehydrate }: FuseInpu
       snippet,
       rrfScore: m.rrfScore,
       sources,
-      label: f ? `fact: ${f.key}` : undefined,
+      ...hitScope(f, n),
       lexicalScore: l?.score,
       semanticScore: s?.score,
     };
 
     return hit;
   }), { concurrency: 'unbounded' });
+}
+
+type HitSource = HybridHit['sources'][number];
+
+/** Which arms found a hit, in the order the merge reads them. */
+function hitSources(found: { readonly l?: object; readonly f?: object; readonly s?: object; readonly n?: object }): HitSource[] {
+  const arms: ReadonlyArray<readonly [object | undefined, HitSource]> = [[found.l, 'lexical'], [found.f, 'fact'], [found.s, 'semantic'], [found.n, 'account-note']];
+
+  return arms.flatMap(([hit, source]) => (hit === undefined ? [] : [source]));
+}
+
+/** A fact or account note hit's label and scope; a note chunk's is the workspace's, labelled by its path. */
+function hitScope(fact: FactSearchHit | undefined, note: AccountNoteHit | undefined): Pick<HybridHit, 'label' | 'scope'> {
+  if (fact !== undefined) return { label: `${fact.scope === 'account' ? 'account fact' : 'fact'}: ${fact.key}`, scope: fact.scope };
+
+  return note === undefined ? { scope: 'workspace' } : { label: `account note: ${note.id.slice('account-note:'.length)}`, scope: 'account' };
 }

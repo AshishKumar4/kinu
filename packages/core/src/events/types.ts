@@ -216,9 +216,9 @@ export type RunEvent =
   /** The owner's Stop reached the running turn: what ends it, should its process die before it settles. */
   | (RunEventBase & { type: 'stop_requested' })
   | (RunEventBase & { type: 'fiber_recovered'; fiberName: string; fiberId: string; snapshot?: unknown })
-  /** The only durable consumption record; safety/deferred-approval.ts spends by deleting. */
+  /** The only durable consumption record; safety/deferred-approval.ts spends by deleting. `actor`: whose it was. */
   | (RunEventBase & { type: 'approval_consumed'; approvalId: string;
-      command: string; executor: string })
+      actor: string; command: string; executor: string })
   | (RunEventBase & { type: 'error'; message: string; details?: unknown })
   | (RunEventBase & { type: 'turn_end'; turnIndex: number;
       /** Absent on older rows; absence means before the denominator started, never build. */

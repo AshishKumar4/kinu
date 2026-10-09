@@ -106,7 +106,7 @@ const liveTest = test.skipIf(PLAN === null);
 
 const observations: EvalObservation[] = [];
 
-afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
+afterAll(async () => { await publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
 
 /**
  * The account a device case acts with: the eval-service identity on both of

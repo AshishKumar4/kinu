@@ -4,10 +4,10 @@
  */
 
 import { present } from '../../test-utils/src/present';
-import { handClock, isRunning } from '@kinu.run/test-utils';
+import { handClock, isRunning, runOk } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -232,7 +232,7 @@ describe('pc-agent exec RPC', () => {
 describe('a running command\'s output, for a hub that asked', () => {
   test('reaches the hub while the command runs, and the result follows it unchanged', async () => {
     const gate = join(scratchDir('pc-agent-live'), 'gate');
-    execFileSync('mkfifo', [gate]);
+    await runOk(['mkfifo', gate]);
     const ws = recorder();
     const id = rpcId(400);
 
@@ -298,7 +298,7 @@ describe('a running command\'s output, for a hub that asked', () => {
 
   test('a supervisor whose daemon is gone still finishes and records its result', async () => {
     const gate = join(scratchDir('pc-agent-live-orphan'), 'gate');
-    execFileSync('mkfifo', [gate]);
+    await runOk(['mkfifo', gate]);
     const id = rpcId(420);
 
     const frame = {
@@ -593,7 +593,7 @@ describe('pc-agent command cancellation', () => {
   // 2026-10-02: a drop's sweep ran while another socket's command was being started and removed the record its
   // supervisor was about to be spawned into.
   test("a sweep while a command is being started leaves its record to the start, and the command runs", async () => {
-    const held = heldMkfifo(scratchDir('pc-agent-sweep-starting'));
+    const held = await heldMkfifo(scratchDir('pc-agent-sweep-starting'));
     const ws = recorder();
     const id = rpcId(270);
 
@@ -608,7 +608,7 @@ describe('pc-agent command cancellation', () => {
   });
 
   test('a command whose socket dropped while it was being started is stopped once it has started', async () => {
-    const held = heldMkfifo(scratchDir('pc-agent-sweep-own-start'));
+    const held = await heldMkfifo(scratchDir('pc-agent-sweep-own-start'));
     const ws = recorder();
     let readyState: number = WebSocket.OPEN;
     const socket = { ...ws.socket, get readyState() { return readyState; } };
@@ -630,13 +630,13 @@ describe('pc-agent command cancellation', () => {
  * `mkfifo` as the daemon finds it on PATH, held where a start calls it: `reached` settles once one has, and `release`
  * lets it make the FIFO. PATH leads to it only until it is reached.
  */
-function heldMkfifo(dir: string) {
+async function heldMkfifo(dir: string) {
   const bin = join(dir, 'bin');
   const reached = join(dir, 'reached');
   const released = join(dir, 'released');
   mkdirSync(bin);
-  execFileSync('mkfifo', [reached]);
-  execFileSync('mkfifo', [released]);
+  await runOk(['mkfifo', reached]);
+  await runOk(['mkfifo', released]);
   writeFileSync(join(bin, 'mkfifo'), [
     '#!/bin/sh', `echo reached > "${reached}"`, `read go < "${released}"`, `exec "${present(Bun.which('mkfifo'), 'mkfifo')}" "$@"`, '',
   ].join('\n'), { mode: 0o755 });
@@ -657,9 +657,9 @@ async function release(gate: string): Promise<void> {
 }
 
 /** A process holding `dir`'s `life` FIFO open for writing from its start, as a supervisor does; it is no supervisor. */
-function holdingLife(dir: string, file: string, ...args: string[]): ChildProcess {
+async function holdingLife(dir: string, file: string, ...args: string[]): Promise<ChildProcess> {
   const life = join(dir, 'life');
-  execFileSync('mkfifo', [life]);
+  await runOk(['mkfifo', life]);
   // Read-write, so the open waits for no reader; once this copy closes, the child's is the only writer.
   const fd = openSync(life, 'r+');
 
@@ -680,7 +680,7 @@ describe('pc-agent durable supervisor', () => {
   // 2026-10-02: a supervisor killed before its result left its exec waiting on a file nothing would write.
   test('a supervisor killed mid-command answers its exec with its death, not silence', async () => {
     const gate = join(scratchDir('pc-agent-supervisor-killed'), 'gate');
-    execFileSync('mkfifo', [gate]);
+    await runOk(['mkfifo', gate]);
     const ws = recorder();
     const id = rpcId(440);
     handle({ id, method: 'exec', params: [`cat ${gate} > /dev/null`] }, ws.socket);
@@ -697,7 +697,7 @@ describe('pc-agent durable supervisor', () => {
 
   test('a daemon that adopted a supervisor after a restart hears of its death too', async () => {
     const gate = join(scratchDir('pc-agent-adopted-killed'), 'gate');
-    execFileSync('mkfifo', [gate]);
+    await runOk(['mkfifo', gate]);
     const ws = recorder();
     const id = rpcId(450);
     handle({ id, method: 'exec', params: [`cat ${gate} > /dev/null`] }, ws.socket);
@@ -725,7 +725,7 @@ describe('pc-agent durable supervisor', () => {
     const command = spawn('sleep', ['60'], { detached: true, stdio: 'ignore' });
     const commandEnded = new Promise((resolve) => command.once('exit', resolve));
     // SIGUSR1 ends `sleep` (its default action) before it does anything a supervisor does on it.
-    const supervisor = holdingLife(dir, 'sleep', '60');
+    const supervisor = await holdingLife(dir, 'sleep', '60');
     await recordSupervisor(dir, v.parse(PidSchema, supervisor.pid), v.parse(PidSchema, command.pid));
     const registry = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(root));
 
@@ -744,7 +744,7 @@ describe('pc-agent durable supervisor', () => {
     const dir = join(root, id);
     mkdirSync(dir, { mode: 0o700 });
     const command = Bun.spawn(['sleep', '60']);
-    const supervisor = holdingLife(dir, 'sleep', '60');
+    const supervisor = await holdingLife(dir, 'sleep', '60');
     const supervisorEnded = new Promise((resolve) => supervisor.once('exit', resolve));
 
     try {
@@ -771,7 +771,7 @@ describe('pc-agent durable supervisor', () => {
     const staging = scratchDir('pc-agent-reconcile-starting-state');
     mkdirSync(dir, { mode: 0o700 });
     const command = Bun.spawn(['sleep', '60']);
-    const supervisor = holdingLife(dir, 'sleep', '60');
+    const supervisor = await holdingLife(dir, 'sleep', '60');
     const supervisorEnded = new Promise((resolve) => supervisor.once('exit', resolve));
 
     try {
@@ -796,7 +796,7 @@ describe('pc-agent durable supervisor', () => {
     mkdirSync(released, { mode: 0o700 });
     mkdirSync(unstarted, { mode: 0o700 });
     // A supervisor that exited before its state, and a start that never reached its spawn.
-    execFileSync('mkfifo', [join(released, 'life')]);
+    await runOk(['mkfifo', join(released, 'life')]);
 
     const restarted = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(root));
 
@@ -847,9 +847,9 @@ describe('pc-agent durable supervisor', () => {
     const dir = join(root, id);
     mkdirSync(dir, { mode: 0o700 });
     writeFileSync(join(dir, 'result'), 'kind=exited\nexitCode=0\n', { mode: 0o600 });
-    execFileSync('mkfifo', [join(dir, 'ack')]);
+    await runOk(['mkfifo', join(dir, 'ack')]);
     // Reads the ACK, then exits without removing its directory.
-    const supervisor = holdingLife(dir, 'cat', join(dir, 'ack'));
+    const supervisor = await holdingLife(dir, 'cat', join(dir, 'ack'));
     const pid = v.parse(PidSchema, supervisor.pid);
     await recordSupervisor(dir, pid, pid);
     const registry = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(root));

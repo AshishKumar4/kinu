@@ -186,7 +186,7 @@ describe('against the real tree', () => {
     const limit = platformFact('worker.isolate.memory').limit;
 
     if (limit === null) throw new Error('Workspace memory fact has no limit');
-    const reported = rendered.match(/~([0-9.]+) MB/);
+    const reported = rendered.match(/([0-9.]+) MB/);
     expect(Number(reported?.[1])).toBe(limit.value / (1000 * 1000));
   });
 });

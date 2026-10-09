@@ -68,17 +68,17 @@ describe('a directive stays in front of the same code', () => {
   });
 });
 
-test('both sides come from git: the working tree, a commit range, and an untracked file', () => {
+test('both sides come from git: the working tree, a commit range, and an untracked file', async () => {
   const repo = scratchDir('comment-only');
   const file = join(repo, 'a.ts');
 
   const kinds = (head?: string): string[] =>
     proveCommentOnly(repo, head === undefined ? 'HEAD' : 'HEAD~1', head, []).map(({ verdict }) => verdict.kind);
 
-  initRepo(repo);
+  await initRepo(repo);
   writeFileSync(file, 'export const a = 1; // one\n');
-  git(repo, 'add', 'a.ts');
-  git(repo, 'commit', '-qm', 'base');
+  await git(repo, 'add', 'a.ts');
+  await git(repo, 'commit', '-qm', 'base');
 
   writeFileSync(file, 'export const a = 1;\n');
   expect(kinds()).toEqual(['comment-only']);
@@ -86,7 +86,7 @@ test('both sides come from git: the working tree, a commit range, and an untrack
   writeFileSync(file, 'export const a = 2; // one\n');
   expect(kinds()).toEqual(['code']);
 
-  git(repo, 'commit', '-qam', 'code');
+  await git(repo, 'commit', '-qam', 'code');
   expect(kinds('HEAD')).toEqual(['code']);
 
   writeFileSync(join(repo, 'b.ts'), 'export const b = 1;\n');

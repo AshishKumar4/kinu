@@ -2,7 +2,7 @@
 // token) and "api.openai.com" (the ChatGPT plan, the machine's own token, renewed at "auth.openai.com"): a TLS
 // proxy with a throwaway CA (`HTTPS_PROXY`, `NODE_EXTRA_CA_CERTS`) answering as each host does.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { spawnSync, type Subprocess } from 'bun';
+import { type Subprocess } from 'bun';
 import { createRequire } from 'node:module';
 import { mkdirSync, openSync, readFileSync, watch, writeFileSync } from 'node:fs';
 import { once } from 'node:events';
@@ -17,6 +17,7 @@ import {
 } from '@kinu.run/core';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { createTestUserDO, testOwner, type AcceptedSocket, type TestUserDO } from './helpers/user-do';
+import { runToExit } from '@kinu.run/test-utils';
 
 const require_ = createRequire(import.meta.url);
 
@@ -68,18 +69,18 @@ interface TestCertificates {
   readonly cert: string;
 }
 
-function mintCertificates(dir: string): TestCertificates {
-  const run = (args: string[]): void => {
-    const result = spawnSync(['openssl', ...args], { cwd: dir, stderr: 'pipe' });
+async function mintCertificates(dir: string): Promise<TestCertificates> {
+  const run = async (args: string[]): Promise<void> => {
+    const result = await runToExit(['openssl', ...args], { cwd: dir });
 
-    if (result.exitCode !== 0) throw new Error(`openssl ${args[0] ?? ''} failed: ${result.stderr.toString()}`);
+    if (result.exitCode !== 0) throw new Error(`openssl ${args[0] ?? ''} failed: ${result.stderr}`);
   };
 
-  run(['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'ca.key', '-out', 'ca.pem', '-days', '1', '-subj', '/CN=Kinu relay test CA',
+  await run(['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'ca.key', '-out', 'ca.pem', '-days', '1', '-subj', '/CN=Kinu relay test CA',
     '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=keyCertSign']);
-  run(['req', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'leaf.key', '-out', 'leaf.csr', '-subj', '/CN=chatgpt.com']);
+  await run(['req', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'leaf.key', '-out', 'leaf.csr', '-subj', '/CN=chatgpt.com']);
   writeFileSync(join(dir, 'leaf.ext'), `subjectAltName=${HOSTS.map((host) => `DNS:${host}`).join(',')}\nextendedKeyUsage=serverAuth\n`);
-  run(['x509', '-req', '-in', 'leaf.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-out', 'leaf.pem', '-days', '1', '-extfile', 'leaf.ext']);
+  await run(['x509', '-req', '-in', 'leaf.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-out', 'leaf.pem', '-days', '1', '-extfile', 'leaf.ext']);
 
   return { ca: join(dir, 'ca.pem'), key: readFileSync(join(dir, 'leaf.key'), 'utf8'), cert: readFileSync(join(dir, 'leaf.pem'), 'utf8') };
 }
@@ -245,7 +246,7 @@ describe('the daemon relays model calls from the owner\'s machine', () => {
 
   beforeAll(async () => {
     root = scratchDir('provider-relay');
-    const certs = mintCertificates(root);
+    const certs = await mintCertificates(root);
     harness = createTestUserDO();
     const owner = await testOwner();
     await harness.userDO.setCredential(owner, CODEX_CRED_KEY, { kind: 'oauth', accessToken: ACCESS_TOKEN, refreshToken: 'refresh-never-sent' });

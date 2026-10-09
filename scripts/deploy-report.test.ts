@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
-import { childEnv, scratchDir } from '@kinu.run/test-utils';
+import { childEnv, runToExit, scratchDir } from '@kinu.run/test-utils';
 import { measurePromptUsage, type Assertion } from '../evals/src/results';
 import { previousSummary, recordRunner, renderReport, type ReportEntry, type ReportSummary } from './deploy-report';
 
@@ -19,7 +19,7 @@ const summary = (sha: string, dir: string, mode: string, reds: readonly string[]
 });
 
 describe('the deploy report', () => {
-  test('the final report withdraws this staging run’s record at 1201 s, but keeps it at 1199 s', () => {
+  test('the final report withdraws this staging run’s record at 1201 s, but keeps it at 1199 s', async () => {
     const source = readFileSync(new URL('deploy.sh', import.meta.url), 'utf8');
     const start = source.indexOf('finish() {');
     const end = source.indexOf('\n}\n', start);
@@ -38,7 +38,7 @@ describe('the deploy report', () => {
         entries: [{ kind: 'mark', mark: 'end', seconds }],
       });
 
-      const run = Bun.spawnSync(['bash', '-c', `
+      const run = await runToExit(['bash', '-c', `
 KINU_ROOT=.
 KINU_ENV=staging
 KINU_REDS=0
@@ -50,9 +50,9 @@ report() { return ${verdict.reds.length === 0 ? '0' : '1'}; }
 bun() { [ "$1" = "./scripts/promote.ts" ] && [ "$2" = "forget" ] && verified=0; }
 ${finish}
 finish
-`], { env: childEnv(), stdout: 'pipe', stderr: 'pipe' });
+`], { env: childEnv() });
 
-      expect([run.exitCode, run.stdout.toString()], run.stderr.toString()).toEqual([...expected]);
+      expect([run.exitCode, run.stdout], run.stderr).toEqual([...expected]);
     }
   });
 

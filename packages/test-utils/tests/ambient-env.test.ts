@@ -10,24 +10,19 @@ import {
   AMBIENT_CREDENTIAL_ENV, LIVE_MODEL_ENV, envObject, stripAmbientCredentials,
 } from '../src/ambient-env';
 import { SCRATCH_ROOT_PREFIX } from '../src/scratch';
+import { runToExit } from '../src/spawn';
 
 const repoRoot = resolve(import.meta.dir, '../../..');
 
 const ChildEnvSchema = v.record(v.string(), v.string());
 
 /** What `scripts/test-scratch-home.ts` leaves behind, run for real under `env`. */
-function envAfterPreload(env: Record<string, string>) {
-  const proc = Bun.spawnSync({
-    cmd: [
-      process.execPath, '-e',
-      "import { release } from './scripts/test-scratch-home.ts';"
-      + 'console.log(JSON.stringify(process.env)); release();',
-    ],
-    cwd: repoRoot,
-    env: { ...process.env, ...env },
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
+async function envAfterPreload(env: Record<string, string>) {
+  const proc = await runToExit([
+    process.execPath, '-e',
+    "import { release } from './scripts/test-scratch-home.ts';"
+    + 'console.log(JSON.stringify(process.env)); release();',
+  ], { cwd: repoRoot, env: { ...process.env, ...env } });
 
   if (proc.exitCode !== 0) {
     throw new Error(`preload failed (${String(proc.exitCode)}): ${proc.stderr.toString()}`);
@@ -82,14 +77,14 @@ describe('the rule', () => {
 });
 
 describe('the wiring', () => {
-  test.each(['', '/outside-test-home'])('the daemon inflight root ignores the inherited value %j', (inherited) => {
-    const env = envAfterPreload({ KINU_INFLIGHT_ROOT: inherited });
+  test.each(['', '/outside-test-home'])('the daemon inflight root ignores the inherited value %j', async (inherited) => {
+    const env = await envAfterPreload({ KINU_INFLIGHT_ROOT: inherited });
     expect(env.KINU_INFLIGHT_ROOT).toBe(join(env.KINU_HOME, 'inflight'));
     expect(env.KINU_INFLIGHT_ROOT).not.toBe(inherited);
   });
 
-  test('a test process started from a signed-in shell sees no credential', () => {
-    const env = envAfterPreload(SIGNED_IN_SHELL);
+  test('a test process started from a signed-in shell sees no credential', async () => {
+    const env = await envAfterPreload(SIGNED_IN_SHELL);
 
     for (const name of AMBIENT_CREDENTIAL_ENV) expect(env[name]).toBeUndefined();
     // The throwaway home is `$TMPDIR/home`, and TMPDIR sits in the release-owned `kinu-scratch-` namespace.
@@ -98,8 +93,8 @@ describe('the wiring', () => {
     expect(basename(env.TMPDIR)).toStartWith(SCRATCH_ROOT_PREFIX);
   });
 
-  test('the eval tier keeps them, because it is the one that consented', () => {
-    const env = envAfterPreload({ ...SIGNED_IN_SHELL, KINU_EVAL_LIVE: '1' });
+  test('the eval tier keeps them, because it is the one that consented', async () => {
+    const env = await envAfterPreload({ ...SIGNED_IN_SHELL, KINU_EVAL_LIVE: '1' });
     expect(env.KINU_ORIGIN).toBe(SIGNED_IN_SHELL.KINU_ORIGIN);
     expect(env.KINU_TOKEN).toBe(SIGNED_IN_SHELL.KINU_TOKEN);
   });

@@ -14,7 +14,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type Comment, type Node, parseSync } from 'oxc-parser';
 
-import { gitEnv } from '../packages/test-utils/src/git';
+import { gitEnv } from '../packages/test-utils/src/git-env';
 import { isParseable } from './sources';
 import { parse, type Parsed, type SyntaxNode } from './syntax';
 

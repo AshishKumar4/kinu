@@ -1172,9 +1172,17 @@ export {
 
 // Top-K recent agent_facts render into the system prompt every turn.
 export {
-  initFactsTable, createFactsStore, renderFactsBlock, searchFacts, normalizeFactKey,
-  type Fact, type FactsStore, type FactSearchHit, type FactUpsertResult,
+  initFactsTable, createFactsStore, renderFactsBlock, searchFacts, normalizeFactKey, unifiedFacts,
+  ACCOUNT_FACTS_ACTOR, FactOriginSchema, VERACITIES,
+  type Fact, type FactsStore, type FactSearchHit, type FactUpsertResult, type FactOrigin, type FactRevision, type FactWrite,
+  type MemoryScope, type ScopedFact, type Veracity,
 } from './memory/facts';
+
+export {
+  AccountMemoryStore, AccountProposalSchema, initAccountMemoryTables,
+  type AccountMemory, type AccountMemoryProposal, type AccountMemoryView, type AccountNote, type AccountNoteHit, type AccountProposal,
+  type AccountProposalFiling, type AccountProposer,
+} from './memory/account';
 
 export {
   JsonValueSchema, JsonObjectSchema, JsonArraySchema,
@@ -1187,7 +1195,7 @@ export { MarkdownFrontmatterError, parseMarkdownFrontmatter } from './utils/mark
 export { compareCodeUnits } from './utils/text';
 
 export {
-  runSleepTimeCompute, applySleepTimeUpdate,
+  runSleepTimeCompute, applySleepTimeUpdate, accountProposals,
   SleepTimeUpdateSchema,
   SLEEP_TIME_CADENCE,
   sleepTimeDue, sleepTimeWakeAt, sleepTimeWindow,

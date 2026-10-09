@@ -536,9 +536,9 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         asserts: 'the facts block stops at its char budget rather than truncating mid-fact, and discloses the count it dropped',
         observe: (s) => s.renderFactsBlock(
           [
-            { key: 'deploy_target', value: 'staging', confidence: 0.9, source: 'turn', lastObservedAt: 0 },
-            { key: 'notes', value: 'x'.repeat(80), confidence: 0.5, source: 'turn', lastObservedAt: 0 },
-            { key: 'owner', value: { name: 'ashish' }, confidence: 0.8, source: 'turn', lastObservedAt: 0 },
+            { key: 'deploy_target', value: 'staging' },
+            { key: 'notes', value: 'x'.repeat(80) },
+            { key: 'owner', value: { name: 'ashish' } },
           ],
           { maxChars: 60 },
         ),

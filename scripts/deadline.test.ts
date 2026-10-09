@@ -8,6 +8,7 @@ import { tolerate } from '@kinu.run/core/obs';
 import { spawnTest, scratchPath } from '@kinu.run/test-utils'
 import { DEADLINE_EXIT_CODE, deadlineLine, leftoverLine, runUnderDeadline } from './deadline';
 import { GATE_DEADLINE_SECONDS, LADDER, scriptDeadline } from './ladder';
+import { runToExit } from '../packages/test-utils/src/spawn';
 
 const HANG = join(import.meta.dir, 'fixtures', 'deadline', 'hang.ts');
 
@@ -88,15 +89,15 @@ describe('a run under a deadline', () => {
   });
 
   // A deploy phase's lone row: its output reaches the terminal as it comes, and the deploy's report still quotes it.
-  test('a tee\'d run passes its output on as it comes and keeps it too', () => {
+  test('a tee\'d run passes its output on as it comes and keeps it too', async () => {
     const probe = `import { runUnderDeadline } from ${JSON.stringify(join(import.meta.dir, 'deadline.ts'))};\n`
       + 'const outcome = await runUnderDeadline({ argv: [process.execPath, \'-e\', \'console.log("from the row")\'], '
       + 'seconds: 30, label: \'tee\', stdio: \'tee\' });\n'
       + 'console.log(`KEPT ${JSON.stringify(outcome.stdout)}`);';
 
-    const run = Bun.spawnSync([process.execPath, '-e', probe], { env: process.env, stdout: 'pipe', stderr: 'pipe' });
+    const run = await runToExit([process.execPath, '-e', probe], { env: process.env });
 
-    expect(run.stdout.toString()).toBe('from the row\nKEPT "from the row\\n"\n');
+    expect(run.stdout).toBe('from the row\nKEPT "from the row\\n"\n');
   });
 
   test('a run that exits with a process of its own still running fails, naming it, and it is ended', async () => {
@@ -215,10 +216,10 @@ function cancellable(fifo: string, onTerm: string): string[] {
  */
 type WatchedRow = { readonly fifo: string; readonly pid: Promise<number>; readonly ended: Promise<void> };
 
-function watchRow(name: string): WatchedRow {
+async function watchRow(name: string): Promise<WatchedRow> {
   const fifo = scratchPath('deadline-cancel', name);
 
-  if (Bun.spawnSync(['mkfifo', fifo]).exitCode !== 0) throw new Error(`mkfifo ${fifo} failed`);
+  if ((await runToExit(['mkfifo', fifo])).exitCode !== 0) throw new Error(`mkfifo ${fifo} failed`);
 
   // Opened on demand: the open waits for the row to open its end.
   const chunks = (async function* read() { yield* createReadStream(fifo, { encoding: 'utf8' }); })();
@@ -247,7 +248,7 @@ describe("a runner that is cancelled, as a person's Ctrl-C or a stop of its serv
   // Until 2026-10-01 the runner killed every run at once with SIGKILL, so a run that records what it was doing when
   // cancelled never did: the eval pass's trials, and what held them, were lost with it.
   test('passes each run SIGTERM and waits for it to record and end, passing on what it says, then exits 130', async () => {
-    const rows = [watchRow('row-0'), watchRow('row-1')];
+    const rows = [await watchRow('row-0'), await watchRow('row-1')];
     const running = runner(rows.map((row, index) => cancellable(row.fifo, `setTimeout(() => { console.log('recorded ${String(index)}'); process.exit(143); }, 1000);`)));
     const pids = await Promise.all(rows.map((row) => row.pid));
 
@@ -269,7 +270,7 @@ describe("a runner that is cancelled, as a person's Ctrl-C or a stop of its serv
 
   // Its end is never told: a deploy's live status names it as still running when the runner exits.
   test('kills a run that does not end on SIGTERM once its grace has passed, and still exits', async () => {
-    const row = watchRow('row-stubborn');
+    const row = await watchRow('row-stubborn');
     const running = runner([cancellable(row.fifo, "console.log('ignored SIGTERM');")]);
     const pid = await row.pid;
 

@@ -687,7 +687,36 @@ type SettingsSlice =
     => Response | null | Promise<Response | null>;
 
 /* Path sets are disjoint: the order is for reading, not routing. */
+/** Settings → Memory: one fact an agent proposed and the owner accepted, one the owner promoted, one note, one waiting. */
+const ACCOUNT_MEMORY_FIXTURE: JsonValue = {
+  facts: [
+    {
+      key: "owner_name", value: "Ashish", importance: 0.9, veracity: "stated", lastObservedAt: NOW - 3 * 864e5,
+      origin: { by: "agent", workspace: "Support inbox", agent: "main" },
+      history: [{ forgotten: false, value: "Ashish", origin: { by: "agent", workspace: "Support inbox", agent: "main" }, at: NOW - 3 * 864e5 }],
+    },
+    {
+      key: "reply_language", value: "English, short answers", importance: 0.7, veracity: "stated", lastObservedAt: NOW - 864e5,
+      origin: { by: "owner" },
+      history: [
+        { forgotten: false, value: "English, short answers", origin: { by: "owner" }, at: NOW - 864e5 },
+        { forgotten: false, value: "English", origin: { by: "owner", workspace: "Storefront" }, at: NOW - 6 * 864e5 },
+      ],
+    },
+  ],
+  notes: [{ id: "acn_1", content: "Invoices go to accounts@example.com on the first of each month.", origin: { by: "agent", workspace: "Support inbox", agent: "main" }, createdAt: NOW - 2 * 864e5 }],
+  pending: [{
+    id: "amp_1", proposal: { kind: "fact", key: "timezone", value: "Asia/Kolkata" },
+    origin: { by: "background", workspace: "Storefront" }, createdAt: NOW - 36e5,
+  }],
+};
+
+function accountMemoryFixture(path: string, method: string): Response | null {
+  return path === "/api/user/memory" && method === "GET" ? fixtureJson(ACCOUNT_MEMORY_FIXTURE) : null;
+}
+
 const SETTINGS_SLICES: readonly SettingsSlice[] = [
+  accountMemoryFixture,
   accountProfileFixture,
   settingsSectionsFixture,
   workspaceRosterFixture,

@@ -272,6 +272,8 @@ async function promoteImport(rt: AgentRuntime, row: ImportedExperienceRow, turnI
       createFactsStore(rt.storage.sql, rt.actor).upsert(row.payload.key, row.payload.value, {
         confidence: row.payload.confidence,
         source: `experience:${row.sourceWorkspace}`,
+        veracity: 'imported',
+        origin: { by: 'import', workspace: row.sourceWorkspace },
       });
 
       return true;

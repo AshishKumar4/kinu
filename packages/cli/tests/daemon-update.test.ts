@@ -1,12 +1,11 @@
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Device daemon self-update, and the frames it shares with the hub, with the hub faked at its two seams (helpers/update-hub.ts). */
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { Subprocess } from 'bun';
 import { afterAll, afterEach, describe, expect, test } from 'bun:test';
-import { present, killAndAwaitExit, recordedIn, scratchDir } from '@kinu.run/test-utils';
+import { killAndAwaitExit, present, recordedIn, runOk, scratchDir } from '@kinu.run/test-utils';
 import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
@@ -457,7 +456,7 @@ describe('a socket the hub drops', () => {
     // Open for reading before the command runs, `life` ends only once no process holds it: a group left running is a
     // read that never ends. A descendant of the command holds it, then prints.
     const life = join(scratchDir('daemon-dropped-socket'), 'life');
-    execFileSync('mkfifo', [life]);
+    await runOk(['mkfifo', life]);
     const ended = readFile(life, 'utf8');
     const id = 'rpc-dropsocket-1';
 

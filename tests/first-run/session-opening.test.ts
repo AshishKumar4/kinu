@@ -2,10 +2,10 @@ import { scratchDir } from '../../packages/test-utils/src/scratch';
 import { expect, test } from 'bun:test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
 import * as v from 'valibot';
+import { runToExit } from '../../packages/test-utils/src/spawn';
 
-test('session opening failures remain attempted cases with explicitly unavailable evidence', () => {
+test('session opening failures remain attempted cases with explicitly unavailable evidence', async () => {
   // This fixture exercises the real durable-root policy, so it cannot live in /tmp.
   const parent = join(import.meta.dirname, '../../bench-artifacts');
   mkdirSync(parent, { recursive: true });
@@ -35,12 +35,12 @@ test('session opening failures remain attempted cases with explicitly unavailabl
       unavailable: collection.map(row => row.status), unmeasured: spend.episodesUnmeasured, noModel: spend.episodesWithoutModel }));
   `;
 
-  const run = spawnSync('bun', ['-e', script], {
-    cwd: join(import.meta.dirname, '../..'), encoding: 'utf8',
+  const run = await runToExit(['bun', '-e', script], {
+    cwd: join(import.meta.dirname, '../..'),
     env: { PATH: process.env.PATH, HOME: root, BENCH_ARTIFACTS: root },
   });
 
-  expect(run.status, run.stderr).toBe(0);
+  expect(run.exitCode, run.stderr).toBe(0);
 
   const result = v.parse(v.object({
     observations: v.array(v.looseObject({ taskId: v.string(), repetition: v.number(), outcome: v.string(), reason: v.string() })),
@@ -56,7 +56,7 @@ test('session opening failures remain attempted cases with explicitly unavailabl
   expect(result.noModel).toBe(0);
 });
 
-test('a teardown that fails is reported beside the case\'s own failure, never in its place', () => {
+test('a teardown that fails is reported beside the case\'s own failure, never in its place', async () => {
   // 2026-09-23, codemode-craft on the deployed build: the host's network
   // dropped, the turn failed on the closed socket, and then the teardown's
   // DELETE never reached the product. The run printed only the teardown.
@@ -87,12 +87,12 @@ test('a teardown that fails is reported beside the case\'s own failure, never in
     console.log(JSON.stringify({ message: thrown?.message ?? null, all: (thrown?.errors ?? [thrown]).map((error) => error.message) }));
   `;
 
-  const run = spawnSync('bun', ['-e', script], {
-    cwd: join(import.meta.dirname, '../..'), encoding: 'utf8',
+  const run = await runToExit(['bun', '-e', script], {
+    cwd: join(import.meta.dirname, '../..'),
     env: { PATH: process.env.PATH, HOME: root, BENCH_ARTIFACTS: root },
   });
 
-  expect(run.status, run.stderr).toBe(0);
+  expect(run.exitCode, run.stderr).toBe(0);
 
   const result = v.parse(v.object({ message: v.nullable(v.string()), all: v.array(v.string()) }), JSON.parse(run.stdout));
 

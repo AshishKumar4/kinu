@@ -322,6 +322,7 @@ export function createCFRuntime(
     : createInheritedApprovalPolicy({
       fetchRoot: () => fetchRootApprovalPolicy(env, actor.workspaceName),
       ownGrants: () => memoryConfig.getShellApprovalGrants(),
+      deferrals: () => hooks.deferrals?.(),
     });
 
   // The agent's own workspace, whose shell also serves the user's device and Drive; codemode runs in it too.

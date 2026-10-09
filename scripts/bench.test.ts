@@ -53,6 +53,7 @@ import {
 
 import { parseAgentWorkerInput, parseWorkerOutput } from './bench-worker-protocol';
 import { buildPilotReport, validatePilotReport } from './bench-pilot';
+import { runToExit } from '../packages/test-utils/src/spawn';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 
@@ -298,18 +299,18 @@ describe('stability pilot gate', () => {
       .toThrow(/no token measurement/);
   });
 
-  test('covers both model-backed panel arms', () => {
+  test('covers both model-backed panel arms', async () => {
     for (const variant of ['panel:self', 'panel:mixed']) {
-      const result = Bun.spawnSync([
+      const result = await runToExit([
         'bun', join(REPO_ROOT, 'scripts', 'bench.ts'), 'compare',
         '--run-root', tempDir('bench-panel-pilot-'),
         '--a', variant,
         '--b', 'null',
         '--repeats', '3',
-      ], { env: process.env, stdout: 'pipe', stderr: 'pipe' });
+      ], { env: process.env });
 
       expect(result.exitCode).toBe(1);
-      expect(result.stderr.toString()).toContain('model-backed runs need --pilot-report');
+      expect(result.stderr).toContain('model-backed runs need --pilot-report');
     }
   });
 });
@@ -506,18 +507,18 @@ describe('artifact retention — a scored run leaves evidence or it does not run
     }
   });
 
-  test('a scored run pointed at a swept root fails before it spends anything', () => {
-    const result = Bun.spawnSync([
+  test('a scored run pointed at a swept root fails before it spends anything', async () => {
+    const result = await runToExit([
       'bun', join(REPO_ROOT, 'scripts', 'bench.ts'), 'validate',
       '--run-root', tempDir('bench-retention-e2e-'),
       '--artifacts', join(tmpdir(), 'kinu-bench-swept'),
       '--limit', '1',
-    ], { env: process.env, cwd: REPO_ROOT, stdout: 'pipe', stderr: 'pipe' });
+    ], { env: process.env, cwd: REPO_ROOT });
 
     expect(result.exitCode).toBe(1);
-    expect(result.stderr.toString()).toContain('which is swept');
+    expect(result.stderr).toContain('which is swept');
     // Nothing ran: the refusal is at argument parsing, ahead of the first sandbox.
-    expect(result.stderr.toString()).not.toContain('Validating');
+    expect(result.stderr).not.toContain('Validating');
     expect(existsSync(join(tmpdir(), 'kinu-bench-swept'))).toBe(false);
   });
 });
@@ -1128,13 +1129,13 @@ describe('the long-horizon check scores what was actually materialized', () => {
 
   const spec = present(specs.get(task.id), `the spec for ${task.id}`);
 
-  function runCheck(dir: string): number {
+  async function runCheck(dir: string): Promise<number | null> {
     const [, script, encoded] = task.checks[0].command;
 
-    return Bun.spawnSync(['bun', join(REPO_ROOT, script), encoded], { env: process.env, cwd: dir, stdout: 'pipe', stderr: 'pipe' }).exitCode;
+    return (await runToExit(['bun', join(REPO_ROOT, script), encoded], { env: process.env, cwd: dir })).exitCode;
   }
 
-  test('materializes every part, and the null control fails for want of an answer', () => {
+  test('materializes every part, and the null control fails for want of an answer', async () => {
     const dir = tempDir('bench-lh-null-');
     materializeLongHorizon(dir, spec);
 
@@ -1142,26 +1143,26 @@ describe('the long-horizon check scores what was actually materialized', () => {
       expect(existsSync(join(dir, `bench-corpus/part-${part}`))).toBe(true);
     }
 
-    expect(runCheck(dir)).toBe(1);
+    expect(await runCheck(dir)).toBe(1);
   });
 
-  test('the oracle answer file passes; one wrong line fails the whole task', () => {
+  test('the oracle answer file passes; one wrong line fails the whole task', async () => {
     const dir = tempDir('bench-lh-oracle-');
     materializeLongHorizon(dir, spec);
     const answers = renderLongHorizonAnswerFile(buildLongHorizonQuestions(spec));
     writeFileSync(join(dir, LONGHORIZON_ANSWER_FILE), answers);
-    expect(runCheck(dir)).toBe(0);
+    expect(await runCheck(dir)).toBe(0);
 
     writeFileSync(join(dir, LONGHORIZON_ANSWER_FILE), answers.replace(/^q-count: .*$/m, 'q-count: 999999'));
-    expect(runCheck(dir)).toBe(1);
+    expect(await runCheck(dir)).toBe(1);
   });
 
-  test('deleting the corpus does not change the score — the answer key is not on disk', () => {
+  test('deleting the corpus does not change the score — the answer key is not on disk', async () => {
     const dir = tempDir('bench-lh-gone-');
     materializeLongHorizon(dir, spec);
     writeFileSync(join(dir, LONGHORIZON_ANSWER_FILE), renderLongHorizonAnswerFile(buildLongHorizonQuestions(spec)));
     rmSync(join(dir, 'bench-corpus'), { recursive: true, force: true });
-    expect(runCheck(dir)).toBe(0);
+    expect(await runCheck(dir)).toBe(0);
   });
 });
 

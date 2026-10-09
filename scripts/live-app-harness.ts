@@ -264,8 +264,8 @@ function loadDevVars(paths: readonly string[]) {
  *  with no `.dev.vars` at all boots (measured on armada 2026-10-08, job
  *  20261008023701-8cd576ae: every live-app row booted with no credential). A
  *  file that is there still binds its values. */
-function liveAppEnv() {
-  const primary = /^worktree (.+)$/mu.exec(git(REPO, 'worktree', 'list', '--porcelain'))?.[1];
+async function liveAppEnv() {
+  const primary = /^worktree (.+)$/mu.exec(await git(REPO, 'worktree', 'list', '--porcelain'))?.[1];
 
   const env = loadDevVars([
     join(REPO, '.dev.vars'),
@@ -387,7 +387,7 @@ export async function withDevServer<T>(body: (server: DevServer) => Promise<T>, 
       // reach it, a caller asking for the checkout's state is asking for the
       // defect this directory exists to end.
       env: {
-        ...process.env, ...liveAppEnv(), ...options.env,
+        ...process.env, ...await liveAppEnv(), ...options.env,
         KINU_DEV_STATE_DIR: statePath,
         // Its own optimizer cache, kept across the harness's boots of this checkout and never `bun run dev`'s.
         KINU_DEV_CACHE_DIR: join(CF, '.vite-harness'),
