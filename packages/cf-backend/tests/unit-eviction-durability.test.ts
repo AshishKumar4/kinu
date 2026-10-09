@@ -100,13 +100,13 @@ describe('a background job whose executor died', () => {
     const next = await nextActivation(harness, gateway);
     await arrived.promise;
 
-    // Still the wake's carrier while its turn runs: a reset now leaves the next activation the same row.
-    expect(next.agent.harnessOpenFiberRows().map((row) => row.id)).toContain(orphan);
+    // The wake is handed to main's isolate, which owns its turn durably once queued: the carrier is released then,
+    // while the turn still runs, and a reset now leaves the turn to that isolate.
+    expect({ job: jobs.get('bgjob-settled')?.status, carried: next.agent.harnessOpenFiberRows().map((row) => row.id).includes(orphan) })
+      .toEqual({ job: 'completed', carried: false });
 
     queued.resolve();
     await joinHarnessFibers();
-    expect(jobs.get('bgjob-settled')?.status).toBe('completed');
-    expect(next.agent.harnessOpenFiberRows().map((row) => row.id)).not.toContain(orphan);
   });
 });
 
