@@ -153,7 +153,12 @@ export class ContractBox extends Devbox<Env> {
     const container = this.ctx.container;
 
     if (container === undefined) throw new Error('this fixture has no container binding');
-    const restricted = { exec: (argv: string[], options?: ContainerExecOptions) => container.exec(argv, { ...options, user: '65534:65534' }) };
+
+    // 2026-10-09, job 20261009181805-03542862: native user=65534:65534 still read mode-0700 root directories.
+    const restricted = { exec: (argv: string[], options?: ContainerExecOptions) => container.exec([
+      'setpriv', '--reuid=65534', '--regid=65534', '--clear-groups', '--bounding-set=-all', '--inh-caps=-all', '--ambient-caps=-all', ...argv,
+    ], options) };
+
     const failures: [string, string][] = [[`${path}/missing`, 'ENOENT'], [`${path}/file`, 'ENOTDIR'], [`${path}/loop`, 'ELOOP'], [`${path}/private`, 'EACCES']];
 
     for (const [operand, code] of failures) {
