@@ -7,7 +7,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { FilesFocus, HeadDeltas } from "@kinu.run/core";
 import type { AgentStatus, ExecutorOutput, ReadMoves } from "@/hooks/use-kinu";
 import type { AsyncResource } from "@/hooks/use-async-resource";
-import { executorLabel, type ExecutorInfo, type InspectedWork } from "@kinu.run/core";
+import { executorLabel, previewPortTitle, type ExecutorInfo, type InspectedWork } from "@kinu.run/core";
 import { Loader } from "@cloudflare/kumo";
 import type { MemoryEntry, ForkNode, ExecutorCommandResult, Rpc, TabPresence } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
@@ -31,7 +31,6 @@ import {
 } from "@kinu.run/core";
 import { useSurfaceFocus } from "./use-surface-focus";
 import { InspectorBar, type PageTab, type ToolTab } from "./InspectorBar";
-import { portTitle } from "./port-title";
 import { ConnectDeviceDialog } from "@/components/ConnectDevicePanel";
 
 // A surface drawn only once it is chosen loads with its first view, outside the workspace's first chunk.
@@ -231,7 +230,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
     })),
     ...ports.map((port) => ({
       key: `preview:${port.executor}:${port.port}` as const,
-      title: portTitle(port),
+      title: previewPortTitle(port),
       Icon: GlobeIcon,
     })),
   ];
@@ -330,7 +329,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
                 onConnectDevice={openConnect}
               />
             )}
-            {openPort && <PreviewFrame url={openPort.url} label={portTitle(openPort)} />}
+            {openPort && <PreviewFrame url={openPort.url} label={previewPortTitle(openPort)} />}
             <SideSurface shown={surface} rpc={props.rpc} isStreaming={props.isStreaming} />
             {openSlate !== null && <OpenSlatePanel {...props} slate={openSlate} summary={openSlateSummary} />}
           </Suspense>

@@ -8,6 +8,11 @@ export interface PinnedPreviewPort {
   name?: string;
 }
 
+/** A preview's own name, or its environment's human label and port. */
+export function previewPortTitle(port: PinnedPreviewPort): string {
+  return port.name === undefined || port.name === '' ? `${executorLabel(port.executor)} :${port.port}` : port.name;
+}
+
 export interface ExposedPortList {
   ports: Array<{ port: number; url: string; name?: string }>;
   error?: string;

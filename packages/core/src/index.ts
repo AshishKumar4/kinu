@@ -2179,7 +2179,7 @@ export {
 } from './preview/preview-origin';
 
 export {
-  reconcilePreviewPorts,
+  previewPortTitle, reconcilePreviewPorts,
   type ExecutorPortRefresh, type ExposedPortList, type PinnedPreviewPort, type PreviewPortState,
 } from './preview/preview-ports';
 
