@@ -2040,7 +2040,6 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
     return { ok: true, value: kept };
   },
   listPendingConsents: galleryConsents,
-  listPendingActions: galleryPendingActions,
   decideDeferredApprovals: galleryDecideDeferred,
   inspectWork: galleryOwedWork,
   // The seed is the whole conversation, so the storage walk is exhausted at once.
@@ -2373,11 +2372,21 @@ const MIXED_ASKS: PendingAction[] = [
 
 const ASK_SETS = new Map([["two", PARKED_ASKS], ["mixed", MIXED_ASKS]]);
 
+/** `&asksHold=1`: a read of the queue after the first decision waits for `gallery:release-asks`, as a slow one would. */
+const ASKS_HELD = new URLSearchParams(location.search).get("asksHold") === "1";
+
 /** The workspace queue as `&asks=` sets it, less what the stack has decided. */
-function galleryPendingActions(): JsonValue {
+async function galleryPendingActions(): Promise<JsonValue> {
   const asked = new URLSearchParams(location.search).get("asks");
   const decided = (document.documentElement.dataset.galleryDecided ?? "").split(",");
   const asks = ASK_SETS.get(asked ?? "") ?? [];
+
+  if (ASKS_HELD && decided.some((id) => id !== "")) {
+    const released = Promise.withResolvers<void>();
+
+    window.addEventListener("gallery:release-asks", () => { released.resolve(); }, { once: true });
+    await released.promise;
+  }
 
   return v.parse(JsonValueSchema, asks.filter((action) => !decided.includes(action.id)));
 }
@@ -2582,6 +2591,7 @@ const ASYNC_PAGE_RPC = new Map<string, (args?: unknown[]) => Promise<JsonValue>>
   ["cancelCurrentWork", galleryCancelWork],
   ["resolveDeviceConsent", galleryResolveConsent],
   ["listBackgroundJobs", galleryJobsRead],
+  ["listPendingActions", galleryPendingActions],
   ["decidePlanReview", galleryDecidePlan],
   ["recoverStrandedTurn", galleryRecoverTurn],
 ]);

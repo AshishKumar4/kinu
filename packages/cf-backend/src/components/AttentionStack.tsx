@@ -173,7 +173,8 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
   const { asks, rpc, onDecided } = props;
   const { answered, mark } = useAnswered(asks);
   const [chosen, setChosen] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  // The card whose answer is in flight: its buttons wait for it, and the next card's are live as soon as it opens.
+  const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<{ key: string; message: string } | null>(null);
 
   const waiting = asks.filter((ask) => !answered.has(ask.key));
@@ -184,9 +185,11 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
   const shown = behind.slice(0, SHOWN_BEHIND).reverse();
   const unshown = behind.length - shown.length;
 
+  const answering = front.key;
+
   // A plan is not answered here: opening its review leaves it waiting until it is decided.
   const answer = (choice: Answer): Effect.Effect<void> => Effect.catchCause(Effect.gen(function* () {
-    setBusy(true);
+    setBusy(answering);
     setError(null);
     yield* Effect.promise(() => choice.run());
 
@@ -197,7 +200,7 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
     }
   }), (failed) => Effect.sync(() => {
     setError({ key: front.key, message: `Could not record the answer: ${renderThrownChain({ cause: Cause.squash(failed) })}` });
-  })).pipe(Effect.ensuring(Effect.sync(() => { setBusy(false); })));
+  })).pipe(Effect.ensuring(Effect.sync(() => { setBusy((was) => (was === answering ? null : was)); })));
 
   const FrontIcon = KIND_ICON[kindOf(front)];
 
@@ -228,7 +231,7 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
         {front.kind === "consent" ? <ConsentBody consent={front.consent} /> : <ActionBody action={front.action} rpc={rpc} />}
         {error?.key === front.key && <div className="mt-1.5 p-t-status p-danger" role="alert">{error.message}</div>}
         <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
-          {[...answersOf(front, props)].reverse().map((choice) => <AnswerButton key={choice.label} answer={choice} busy={busy} onAnswer={answer} />)}
+          {[...answersOf(front, props)].reverse().map((choice) => <AnswerButton key={choice.label} answer={choice} busy={busy === front.key} onAnswer={answer} />)}
         </div>
       </div>
     </section>
