@@ -95,8 +95,10 @@ beforeAll(async () => {
   const ended = (): number => mainDatabase(workspace).query<{ n: number }, []>("SELECT COUNT(*) AS n FROM run_events WHERE type = 'run_end'").get()?.n ?? 0;
 
   await workspace.started;
+  // A task is reviewed as its turn settles in the workspace, after its run ends in main's isolate.
+  const reviewedTurns = (): number => db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM evolution_events WHERE type = 'turn_complete'").get()?.n ?? 0;
   await agent.runTaskFromMcp(TASK);
-  await driveUntil(workspace, 'the cloud turn never ended', () => ended() > 0);
+  await driveUntil(workspace, 'the cloud turn never ended and was reviewed', () => ended() > 0 && reviewedTurns() > 0);
   await localTurn('localtest', TASK);
   writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: { localtest: {
     name: 'localtest', mode: 'local', localName: 'localtest', cwd: LOCAL_FOLDER, workspaceId: 'localtest', createdAt: '', updatedAt: '',

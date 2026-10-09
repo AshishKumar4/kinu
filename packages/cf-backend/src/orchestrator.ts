@@ -49,7 +49,7 @@ import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
 import { McpToolSurfaceSchema, ShareViewerClaimSchema, type ShareViewerClaim } from '@kinu.run/core';
 import {
-  AgentOpenTurns, AgentOwedWork, PROGRAMMATIC_MESSAGE_ID_PREFIX, RECOVERY_BACKOFF_CEILING_MS, type PromptFile, type AgentOpenTurn, CHAT_SESSION_ID, steerSkillsBlock, subordinateTurnContext, type SessionEvent, type SessionTranscript,
+  AgentOpenTurns, AgentOwedWork, PROGRAMMATIC_MESSAGE_ID_PREFIX, announcementOf, RECOVERY_BACKOFF_CEILING_MS, type PromptFile, type AgentOpenTurn, CHAT_SESSION_ID, steerSkillsBlock, subordinateTurnContext, type SessionEvent, type SessionTranscript,
 } from '@kinu.run/core';
 // Main actor's payload plane on both fork halves: the carried conversation references
 // payload files by absolute path, and the fork is a cut of the main actor's conversation.
@@ -2677,7 +2677,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * titles, replies and branches), declared and owed here once per turn, however often the handoff is repeated.
    */
   private async mainTurnSettled(settled: HandedOffTurn): Promise<void> {
-    const held = this.mainTurnFacts.get(settled.turnId) ?? this.liveMainTurnFacts(settled.turnId);
+    // Prepared here under its producer's identity (`announcementOf`): the key its facts are held by.
+    const prepared = announcementOf(settled.turnId);
+    const held = this.mainTurnFacts.get(prepared) ?? this.liveMainTurnFacts(prepared);
     // Scoped here: mission labels must travel with every recording, and a cold replay has no active governor scope.
     const scoped = this.orch.scopedTurn(v.parse(CompletedTurnSchema, settled.turn));
 
@@ -2688,8 +2690,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
 
     // The fleet's turn row, its outcome the run's own: a tool that failed inside a turn that answered is not a failed turn.
-    if (!this.mainTurnRows.has(settled.turnId)) {
-      this.mainTurnRows.add(settled.turnId);
+    if (!this.mainTurnRows.has(prepared)) {
+      this.mainTurnRows.add(prepared);
       this.recordMainTurnRow(scoped, settled.completed);
     }
 
@@ -2697,7 +2699,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       transition: { turnId: settled.turnId, messageId: settled.messageId },
       declare: () => declareTerminalRoster(facts, this.rosterParts(settled, scoped, held, missionOf(this.getSoulText()))),
     });
-    this.mainTurnFacts.delete(settled.turnId);
+    this.mainTurnFacts.delete(prepared);
   }
 
   /** Built per use: the actor handle and the fast lane are this activation's. Main's conversation is its isolate's. */
