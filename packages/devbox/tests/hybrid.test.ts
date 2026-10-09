@@ -33,6 +33,8 @@ class HybridBox extends ChainTestBox {
 
         return { kind: 'deleted' };
       },
+      // A box never deletes an application's snapshots; the fixtures and reset do.
+      deleteApplication: async () => { throw new Error('a box deleted an application\'s snapshots'); },
     };
   }
 }

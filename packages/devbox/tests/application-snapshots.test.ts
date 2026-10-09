@@ -1,11 +1,11 @@
-// A fixture's teardown deletes every snapshot its application made, against a registry with the semantics measured on
-// 2026-10-09: the catalog pages its names and lists every manifest by digest, tagged or not, and a DELETE of a manifest
-// a tag still names answers 204 and keeps it.
+// An application's snapshots, deleted through the registry client the boxes use (the fixtures' and reset's teardown),
+// against a registry with the semantics measured on 2026-10-09: the catalog pages its names and lists every manifest by
+// digest, tagged or not, and a DELETE of a manifest a tag still names answers 204 and keeps it.
 import { expect, test } from 'bun:test';
-import { createHash } from 'node:crypto';
-import { deleteApplicationSnapshots } from './fixtures/application-snapshots';
+import { snapshotRegistry } from '../src/snapshot-registry';
 
-const sha = (value: string) => createHash('sha256').update(value).digest('hex');
+/** The platform's tag naming: `rootfs-snapshot-` and `rootfs-set-` over the id's SHA-256 (measured 2026-10-09). */
+const sha = (value: string) => new Bun.CryptoHasher('sha256').update(value).digest('hex');
 
 const BASE = 'acct/cloudchamber-snapshots/base';
 
@@ -94,10 +94,10 @@ test('every snapshot of the application goes, tags before the manifest and a chi
     { id: 'other', app: 'cccc', parent: '', tagged: true },
   ]);
 
-  const swept = await deleteApplicationSnapshots({ account: 'acct', token: 't', applicationId: 'aaaabbbb', fetch: fake.fetcher });
+  const swept = await snapshotRegistry({ account: 'acct', token: 't', fetch: fake.fetcher }).deleteApplication('aaaabbbb');
 
   expect({ swept, left: fake.left(), deleted: fake.deleted }).toEqual({
-    swept: { deleted: 3, left: [] }, left: ['other'],
+    swept: { kind: 'swept', deleted: 3, left: [] }, left: ['other'],
     deleted: ['tag grandchild', 'tag grandchild', 'digest grandchild', 'digest child', 'tag root', 'tag root', 'digest root'],
   });
 });
@@ -113,8 +113,8 @@ test('a snapshot in its image\'s own repository is found by its config and delet
     { id: 'base-one', app: 'dddd', parent: '', tagged: true },
   ]);
 
-  const swept = await deleteApplicationSnapshots({ account: 'acct', token: 't', applicationId: 'dddd', fetch: fake.fetcher });
+  const swept = await snapshotRegistry({ account: 'acct', token: 't', fetch: fake.fetcher }).deleteApplication('dddd');
 
-  expect({ swept, left: fake.left() }).toEqual({ swept: { deleted: 3, left: [] }, left: ['image'] });
+  expect({ swept, left: fake.left() }).toEqual({ swept: { kind: 'swept', deleted: 3, left: [] }, left: ['image'] });
 });
 

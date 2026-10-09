@@ -746,7 +746,36 @@ describe('a deploy phase\'s armada report', () => {
     expect(read.map(({ gate, verdict, found }) => [gate.run, verdict?.seconds, found])).toEqual([
       ['bun run gate:first-run', 1805, 'job 20261008081731-1d7c41dd; first-run-tier has no verdict for bun run gate:first-run; missing is not green; '
         + 'first-run-tier reported first-run-tier, which its plan entry does not name'],
-      ['bash scripts/product-flows-tier.sh', 538, 'job 20261008081731-1d7c41dd'],
+      ['bash scripts/product-flows-tier.sh', 538, 'job 20261008081731-1d7c41dd; armada graded none of the run\'s rows: '
+        + 'first-run-tier has no verdict for bun run gate:first-run; missing is not green; first-run-tier reported first-run-tier, which its plan entry does not name'],
+    ]);
+  });
+});
+
+describe('a phase armada could not grade', () => {
+  // armada f8725d7's grade() names a row's evidence its task did not keep as `<task>: <row> names evidence <path> its
+  // task did not keep` and exits 2, while the row itself exited 0. Read by its exit code alone and matched by
+  // `<task> `, the row passed with its evidence missing.
+  test('greens no row, and gives each row the problems armada names for its task, colon or space', () => {
+    const rows = armadaPhaseRows(['post-publish']).filter((gate) => gate.run === 'bun run gate:first-run' || gate.run === 'bash scripts/product-flows-tier.sh');
+    const task = rows.find((gate) => gate.run === 'bun run gate:first-run')?.label.toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-|-$/gu, '').slice(0, 80) ?? '';
+    const missing = `${task}: bun run gate:first-run names evidence first-run/report.json its task did not keep`;
+
+    const read = armadaRowVerdicts(rows, {
+      job: '20261009-evidence',
+      problems: [missing],
+      verdicts: {
+        rows: [
+          { run: 'bun run gate:first-run', exitCode: 0, seconds: 61, output: '', artifacts: ['first-run/report.json'] },
+          { run: 'bash scripts/product-flows-tier.sh', exitCode: 0, seconds: 300, output: '' },
+        ],
+      },
+      artifacts: {},
+    }, 2);
+
+    expect(read.map(({ gate, green, found }) => [gate.run, green, found])).toEqual([
+      ['bun run gate:first-run', false, `job 20261009-evidence; ${missing}`],
+      ['bash scripts/product-flows-tier.sh', false, `job 20261009-evidence; armada graded none of the run's rows: ${missing}`],
     ]);
   });
 });
