@@ -7,7 +7,7 @@ import type { AgentWorkspace } from './agent-turn';
 /** 2026-10-09, workerd 2026-09-30, jobs 20261009183355-6c5db02f / 20261009183400-d64f3c13:
  * awaiting a rejected RpcPromise leaves its pipeline open; disposing that promise closes the relay's Tail as ok.
  * Fulfilled answers can own live stubs or streams, so their disposer belongs to the consumer, not this adapter. */
-export function workspaceRpcAnswer<T>(pending: Promise<T>): Promise<T> {
+function workspaceRpcAnswer<T>(pending: Promise<T>): Promise<T> {
   return settle(Effect.promise(() => pending).pipe(Effect.onError(() => Effect.sync(() => disposeWorkspaceRpc(pending)))));
 }
 
