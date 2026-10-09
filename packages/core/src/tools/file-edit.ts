@@ -2,7 +2,7 @@
  * Exact-match file editor behind the `file` tool's `edit`, and the numbered window its `read` shows: an edit that cannot
  * be placed exactly once fails without touching the file. No fuzzy fallback; line endings and BOM round-trip.
  */
-import { headEnd, lineCount } from '../utils/text';
+import { BOM, headEnd, lineCount, withoutBom } from '../utils/text';
 import { FILE_READ_LINE_CHARS, FILE_READ_LINES, type EditedSpan, type FileEditFailure } from '../types/file-edits';
 
 export {
@@ -25,8 +25,6 @@ interface AppliedEdit {
 export type FileEditOutcome =
   | { ok: true; content: string; applied: AppliedEdit[]; spans: EditedSpan[] }
   | { ok: false; reason: FileEditFailure; message: string };
-
-export const BOM = '\uFEFF';
 
 function detectLineEnding(content: string): '\r\n' | '\n' {
   const crlf = content.indexOf('\r\n');
@@ -93,7 +91,7 @@ function at(index: number, total: number): string {
 export function applyFileEdits(original: string, edits: readonly FileEdit[], path: string): FileEditOutcome {
   const hasBom = original.startsWith(BOM);
   const ending = detectLineEnding(original);
-  const body = hasBom ? original.slice(1) : original;
+  const body = withoutBom(original);
   const { text: base, origin } = normalizeWithOrigin(body);
 
   const anchors = edits.map((edit) => ({ oldText: toLF(edit.oldText), newText: toLF(edit.newText) }));

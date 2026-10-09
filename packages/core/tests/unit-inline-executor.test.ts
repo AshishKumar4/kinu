@@ -354,6 +354,24 @@ describe('workspace.* and file.* share the read-before-write gate', () => {
     expect(await readText(rt.storage.vfs, 'wide.md')).toBe('replacement');
   });
 
+  test('workspace.readFile and the file gate agree on a BOM file for writes and edits', async () => {
+    const { rt } = createTestRuntime();
+    const body = `head\n${'w'.repeat(FILE_READ_LINE_CHARS + 500)}\ntail\n`;
+    await writeText(rt.storage.vfs, 'bom.md', `\uFEFF${body}`);
+    const { exec, read, write, edit } = sharedScope(rt);
+
+    await read('bom.md');
+    expect(await write('bom.md', 'wiped')).toMatchObject({ success: false, reason: 'unread' });
+    expect(await exec.tools.readFile.execute('bom.md')).toBe(body);
+    expect(await write('bom.md', 'replacement')).toMatchObject({ action: 'replaced' });
+    expect(await readText(rt.storage.vfs, 'bom.md')).toBe('replacement');
+
+    await writeText(rt.storage.vfs, 'bom-edit.md', '\uFEFFHello world\n');
+    expect(await exec.tools.readFile.execute('bom-edit.md')).toBe('Hello world\n');
+    expect(await edit('bom-edit.md', [{ old_text: 'world', new_text: 'kinu' }])).toMatchObject({ path: 'bom-edit.md' });
+    expect(new TextDecoder('utf-8', { ignoreBOM: true }).decode(await rt.storage.vfs.readFile('bom-edit.md'))).toBe('\uFEFFHello kinu\n');
+  });
+
   test('workspace.writeFile then file.edit in the same program: the write counts as having read it', async () => {
     const { rt } = createTestRuntime();
     const { exec, edit } = sharedScope(rt);

@@ -4,6 +4,13 @@ const isHigh = (code: number): boolean => code >= 0xD800 && code <= 0xDBFF;
 
 const isLow = (code: number): boolean => code >= 0xDC00 && code <= 0xDFFF;
 
+export const BOM = '\uFEFF';
+
+/** The text a UTF-8 read returns: one leading byte-order mark is encoding metadata, not content. */
+export function withoutBom(text: string): string {
+  return text.startsWith(BOM) ? text.slice(1) : text;
+}
+
 export function headEnd(text: string, len: number): number {
   const splitsPair = len > 0 && len < text.length
     && isHigh(text.charCodeAt(len - 1)) && isLow(text.charCodeAt(len));

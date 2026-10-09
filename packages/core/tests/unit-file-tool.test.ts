@@ -356,6 +356,15 @@ describe('the honest read, scanned rather than made resident', () => {
 
 
 describe('TurnFileLedger', () => {
+
+  test('a leading BOM does not change the text identity observed by a read', () => {
+    const ledger = new TurnFileLedger();
+    ledger.observeWhole('/f', 'body\n');
+    expect(ledger.seenState('/f', '\uFEFFbody\n', 'whole')).toEqual({ state: 'seen', coveredTo: 1, total: 1 });
+    ledger.reset();
+    ledger.observeWhole('/f', '\uFEFFbody\n');
+    expect(ledger.seenState('/f', 'body\n', 'whole')).toEqual({ state: 'seen', coveredTo: 1, total: 1 });
+  });
   test('authorizes by content, so a different spelling of the same path is fine', () => {
     const ledger = new TurnFileLedger();
     ledger.observeWhole('a.ts', 'body');
