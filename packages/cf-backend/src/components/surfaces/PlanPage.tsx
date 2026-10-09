@@ -4,11 +4,32 @@ import { Loader } from "@cloudflare/kumo";
 import type { OwnedPlan, Rpc, WorkspaceWork } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import type { AsyncResource } from "@/hooks/use-async-resource";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+import type { PlanPages } from "./use-plan-pages";
 
 const PlanReviewView = lazy(() => import("./PlanReviewView"));
 
+/** The page of the plan the column shows, if it shows one: its own boundary per revision. */
+export function ShownPlanPage({ pages, rpc, planRpc, onReviewActor }: {
+  pages: PlanPages;
+  rpc: Rpc;
+  planRpc: Rpc | undefined;
+  onReviewActor?: (name: string, actorId?: string) => void | Promise<void>;
+}) {
+  const item = pages.shown;
+
+  if (item === undefined) return null;
+
+  return (
+    <ErrorBoundary key={`${item.owner.name}:${item.plan.id}:${String(item.plan.revision)}`} label="Plan">
+      <PlanPage item={item} owner={pages.owner} rpc={rpc} planRpc={planRpc ?? rpc} onReviewActor={onReviewActor}
+        resource={pages.read.resource} onRetry={pages.read.reload} />
+    </ErrorBoundary>
+  );
+}
+
 /** Its owner decides it from its own pane; anyone else reads it. */
-export function PlanPage({ item, owner, rpc, planRpc, onReviewActor, resource, onRetry }: {
+function PlanPage({ item, owner, rpc, planRpc, onReviewActor, resource, onRetry }: {
   item: OwnedPlan;
   owner: string;
   rpc: Rpc;

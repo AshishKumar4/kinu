@@ -1,7 +1,7 @@
 /** Workspace navigation: titled live previews first, then work/read surfaces. */
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { GlobeIcon, NotePencilIcon, SparkleIcon } from "@phosphor-icons/react";
-import type { SlateSummary, PendingAction, PlanReview, OwnedPlan } from "@kinu.run/core";
+import { Suspense, useCallback, useEffect, useState, type ReactNode } from "react";
+import { GlobeIcon, SparkleIcon } from "@phosphor-icons/react";
+import type { SlateSummary, PendingAction, PlanReview } from "@kinu.run/core";
 import type { WorkspacePlanArrival } from "@/hooks/use-kinu";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { FilesFocus, HeadDeltas } from "@kinu.run/core";
@@ -26,13 +26,13 @@ import { SlateFrame } from "@/components/slates/SlateFrame";
 import { ShareSlateControl } from "@/components/slates/ShareSlateControl";
 import { ForkReachPanel } from "@/components/slates/ForkReachPanel";
 import {
-  ACTIVITY_SURFACE, SLATE_PREFIX, SURFACES, landedSurface, openPortOf, parentDir, planOfSurface, planSurface, planTitle, surfaceHasContent,
-  type PanelAgent, type PlanPageRef, type SlateSurfaceKind, type SurfaceKind,
+  ACTIVITY_SURFACE, SLATE_PREFIX, SURFACES, landedSurface, openPortOf, parentDir, surfaceHasContent,
+  type PanelAgent, type SlateSurfaceKind, type SurfaceKind,
 } from "@kinu.run/core";
 import { useSurfaceFocus } from "./use-surface-focus";
 import { InspectorBar, type PageTab, type ToolTab } from "./InspectorBar";
-import { PlanPage } from "./PlanPage";
-import { useWorkspaceWork } from "./use-workspace-work";
+import { ShownPlanPage } from "./PlanPage";
+import { usePlanPages } from "./use-plan-pages";
 import { ConnectDeviceDialog } from "@/components/ConnectDevicePanel";
 
 // A surface drawn only once it is chosen loads with its first view, outside the workspace's first chunk.
@@ -154,32 +154,6 @@ function ListingStatus({ error, starting = [], onRetry }: { error: string | null
   );
 }
 
-const refOf = (item: OwnedPlan): PlanPageRef => ({ owner: item.owner.name, id: item.plan.id, revision: item.plan.revision });
-
-const sameRevision = (item: OwnedPlan, ref: PlanPageRef): boolean =>
-  item.owner.name === ref.owner && item.plan.id === ref.id && item.plan.revision === ref.revision;
-
-/**
- * The plans with a page: each plan's newest revision while it waits on review, and each revision the reader or the
- * workspace opened until a newer one of the same plan is in the read. The page shown keeps its tab either way.
- */
-function planPages(plans: readonly OwnedPlan[], opened: readonly string[], surface: SurfaceKind | null): OwnedPlan[] {
-  const newest = new Map<string, number>();
-
-  for (const item of plans) {
-    const key = `${item.owner.name}\u0000${item.plan.id}`;
-
-    newest.set(key, Math.max(newest.get(key) ?? 0, item.plan.revision));
-  }
-
-  return plans.filter((item) => {
-    const page = planSurface(refOf(item));
-    const latest = newest.get(`${item.owner.name}\u0000${item.plan.id}`) === item.plan.revision;
-
-    return page === surface || (latest && (item.plan.status === "pending" || opened.includes(page)));
-  });
-}
-
 export function WorkSurface(props: WorkSurfaceProps) {
   const requested = props.surface;
   const [changeCount, setChangeCount] = useState<number | null>(null);
@@ -201,48 +175,11 @@ export function WorkSurface(props: WorkSurfaceProps) {
   });
 
   const chip = focus.readyChip;
-  const planOwner = props.planOwner ?? "main";
-  const workRead = useWorkspaceWork({ rpc: props.rpc, readMoves: props.readMoves ?? {}, plan: props.plan, arrival: props.workspacePlanArrival });
-  const plans = useMemo(() => workRead.work?.plans ?? [], [workRead.work]);
-  // The plans the reader or the workspace opened this visit; a pending plan has its page without being opened.
-  const [openedPlans, setOpenedPlans] = useState<readonly string[]>([]);
 
-  const openPlan = useCallback((plan: PlanPageRef, show: boolean) => {
-    const key = planSurface(plan);
-
-    setOpenedPlans((held) => (held.includes(key) ? held : [...held, key]));
-
-    if (show) focus.navigate(key);
-  }, [focus.navigate]);
-
-  const showPlan = useCallback((plan: PlanPageRef) => openPlan(plan, true), [openPlan]);
-  const reported = props.plan === null ? null : `${props.plan.id}:${String(props.plan.revision)}`;
-  const openedReported = useRef<string | null>(null);
-
-  // The plan the pane reports gets its page once per revision, once the read holds it; it takes no surface.
-  useEffect(() => {
-    if (reported === null || props.plan === null || openedReported.current === reported) return;
-    const ref = { owner: planOwner, id: props.plan.id, revision: props.plan.revision };
-
-    if (!plans.some((item) => sameRevision(item, ref))) return;
-    openedReported.current = reported;
-    openPlan(ref, false);
-  }, [reported, props.plan, plans, planOwner, openPlan]);
-
-  // A new pending plan of the workspace's own opens its page, once the read holds it.
-  const focusedPlan = useRef<string | null>(null);
-
-  useEffect(() => {
-    const key = props.planFocus ?? null;
-    const cut = key?.lastIndexOf(":") ?? -1;
-
-    if (key === null || cut < 0 || focusedPlan.current === key) return;
-    const ref = { owner: "main", id: key.slice(0, cut), revision: Number(key.slice(cut + 1)) };
-
-    if (!plans.some((item) => sameRevision(item, ref))) return;
-    focusedPlan.current = key;
-    openPlan(ref, true);
-  }, [props.planFocus, plans, openPlan]);
+  const planPages = usePlanPages({
+    rpc: props.rpc, readMoves: props.readMoves, plan: props.plan, planOwner: props.planOwner, planFocus: props.planFocus,
+    arrival: props.workspacePlanArrival, surface, navigate: focus.navigate,
+  });
 
   // A tab the reader picks lands, presence known or not.
   const choose = useCallback((next: SurfaceKind) => {
@@ -277,13 +214,6 @@ export function WorkSurface(props: WorkSurfaceProps) {
   }, [chatFile, openFiles]);
 
   const openSlate = slateId(surface);
-  const shownPlan = planOfSurface(surface);
-  const shownPlanItem = shownPlan === null ? undefined : plans.find((item) => sameRevision(item, shownPlan));
-
-  // A plan gone from the read closes its page rather than deciding against a plan the workspace no longer holds.
-  useEffect(() => {
-    if (shownPlan !== null && workRead.work !== null && shownPlanItem === undefined) focus.navigate("Work");
-  }, [shownPlan, shownPlanItem, workRead.work, focus.navigate]);
 
   const openSlateSummary = openSlate === null
     ? undefined
@@ -305,11 +235,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
       title: port.name === undefined || port.name === "" ? `${port.executor} :${port.port}` : port.name,
       Icon: GlobeIcon,
     })),
-    ...planPages(plans, openedPlans, surface).map((item) => ({
-      key: planSurface(refOf(item)),
-      title: planTitle(item.plan.content),
-      Icon: NotePencilIcon,
-    })),
+    ...planPages.tabs,
   ];
 
   const waiting = props.pendingActions.length;
@@ -356,8 +282,8 @@ export function WorkSurface(props: WorkSurfaceProps) {
               plan={props.plan}
               planOwner={props.planOwner}
               workspacePlanArrival={props.workspacePlanArrival}
-              work={workRead}
-              onOpenPlan={showPlan}
+              work={planPages.read}
+              onOpenPlan={planPages.show}
               onReviewActor={props.onReviewActor}
               pendingActions={props.pendingActions}
               onRefreshQueue={props.onRefreshQueue}
@@ -373,12 +299,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
             />
           </ErrorBoundary>
         </div>
-        {shownPlanItem !== undefined && (
-          <ErrorBoundary key={`page-${surface ?? ""}`} label="Plan">
-            <PlanPage item={shownPlanItem} owner={planOwner} rpc={props.rpc} planRpc={props.planRpc ?? props.rpc}
-              onReviewActor={props.onReviewActor} resource={workRead.resource} onRetry={workRead.reload} />
-          </ErrorBoundary>
-        )}
+        <ShownPlanPage pages={planPages} rpc={props.rpc} planRpc={props.planRpc} onReviewActor={props.onReviewActor} />
         <ErrorBoundary key={surface} label={surface ?? undefined}>
           <Suspense fallback={<div className="h-full flex items-center justify-center"><Loader size="sm" /></div>}>
             {surface === "Files" && (
