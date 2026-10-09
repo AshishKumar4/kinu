@@ -21,6 +21,23 @@ export interface LostCallQuery {
 }
 
 /**
+ * The calls named `toolName` in the history's last assistant message that nothing after it answers: a turn that ended
+ * on such a call (an `ask_owner`) is waiting on its result. Read from memory, so a turn asks it for free.
+ */
+export function trailingUnpairedCalls(history: readonly ModelMessage[], toolName: string): Array<{ readonly toolCallId: string; readonly input: unknown }> {
+  let at = history.length - 1;
+
+  while (history[at]?.role === 'tool') at--;
+  const asking = history[at];
+
+  if (asking?.role !== 'assistant' || !Array.isArray(asking.content)) return [];
+  const answered = new Set(history.slice(at + 1).flatMap((message) => message.role === 'tool' ? message.content.map((part) => part.type === 'tool-result' ? part.toolCallId : '') : []));
+
+  return asking.content.flatMap((part) => part.type === 'tool-call' && part.toolName === toolName && !answered.has(part.toolCallId)
+    ? [{ toolCallId: part.toolCallId, input: part.input }] : []);
+}
+
+/**
  * Give every unpaired tool call a terminal result, inserted right after the
  * asking assistant message (providers validate position). Returns `undefined`
  * when already valid. `providerExecuted` calls are skipped, as in the SDK.

@@ -39,9 +39,10 @@ export const CONFORMANCE_PLANES = ['tool', 'agents-op', 'memory-op', 'producer']
 export type ConformancePlane = (typeof CONFORMANCE_PLANES)[number];
 
 export interface ConformanceManifest {
-  /** Keyed by the registry union and the plan review's submission, so a new tool cannot compile without a per-root
-   *  decision. `reply_to_comment` exists only on a sent-back review's turn, which no root's surface is observed on. */
-  readonly tool: Readonly<Record<BuiltinToolName | typeof SUBMIT_PLAN_TOOL, RootStatuses>>;
+  /** Keyed by the registry union, the plan review's submission and the owner's questions, so a new tool cannot compile
+   *  without a per-root decision. `reply_to_comment` exists only on a sent-back review's turn, which no root's surface
+   *  is observed on. */
+  readonly tool: Readonly<Record<BuiltinToolName | typeof SUBMIT_PLAN_TOOL | typeof ASK_OWNER_TOOL, RootStatuses>>;
   readonly 'agents-op': Readonly<Record<AgentsOp, RootStatuses>>;
   readonly 'memory-op': Readonly<Record<keyof typeof MEMORY, RootStatuses>>;
   /** Model producers whose client the root actually built. */

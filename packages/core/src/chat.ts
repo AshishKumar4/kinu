@@ -35,7 +35,7 @@ import type { SpendGate } from './mission-budget';
 import { sanitizeAttachmentsForModel, type AttachmentPolicy, type MediaModality } from './prompting/attachment-sanitizer';
 import { messageTokens } from './prompting/media-tokens';
 import { assembleTurnMessages } from './orchestrator/turn-context';
-import { settleUnpairedToolCalls } from './prompting/interrupted-tool-calls';
+import { settleUnpairedToolCalls, trailingUnpairedCalls } from './prompting/interrupted-tool-calls';
 import type { LostToolCall } from './tools/effect-claim';
 import type { LostCallQuery } from './prompting/interrupted-tool-calls';
 import type { AskCall } from './plans/owner-questions';
@@ -121,23 +121,12 @@ export interface ChatFallback {
 }
 
 /** A step's valid `ask_owner` calls: an invalid one is refused with a result, so the loop goes on. */
-/**
- * The open questions the history ends on: the last assistant message's `ask_owner` calls that nothing after it
- * answers. A turn re-opened after its step asked (its process died before the turn closed) finds them.
- */
+/** The open questions the history ends on: a turn re-opened after its step asked (its process died before the turn
+ *  closed) finds them, and sends nothing until they close. */
 function waitingAsks(history: readonly ModelMessage[], waitsOn: ((call: AskCall) => boolean) | undefined): AskCall[] {
   if (waitsOn === undefined) return [];
-  let at = history.length - 1;
 
-  while (history[at]?.role === 'tool') at--;
-  const asking = history[at];
-
-  if (asking?.role !== 'assistant' || !Array.isArray(asking.content)) return [];
-  const answered = new Set(history.slice(at + 1).flatMap((message) => message.role === 'tool' ? message.content.map((part) => part.type === 'tool-result' ? part.toolCallId : '') : []));
-
-  return asking.content.flatMap((part) => part.type === 'tool-call' && part.toolName === ASK_OWNER_TOOL && !answered.has(part.toolCallId)
-    ? [{ toolCallId: part.toolCallId, input: projectJsonValue({ value: part.input }) }] : [])
-    .filter(waitsOn);
+  return trailingUnpairedCalls(history, ASK_OWNER_TOOL).map((call) => ({ toolCallId: call.toolCallId, input: projectJsonValue({ value: call.input }) })).filter(waitsOn);
 }
 
 function askedIn(step: StepResult<ToolSet> | undefined): AskCall[] {

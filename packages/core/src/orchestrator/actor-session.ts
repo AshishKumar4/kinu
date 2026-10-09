@@ -55,6 +55,7 @@ import { turnReasonForMetadata } from '../prompting/surface';
 import { metadataTier } from './turn-assembly';
 import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
 import { ASK_OWNER_TOOL } from '../tools/registry';
+import { trailingUnpairedCalls } from '../prompting/interrupted-tool-calls';
 import type { MessageReference, MessagePartReference, PreparedMessage } from '../session/messages';
 
 /** What the owner reads when a run a dead process left is not run on, by why recovery closed it. */
@@ -280,6 +281,14 @@ export class ActorSession {
   }
 
   get history(): readonly ModelMessage[] { return this.messages; }
+
+  /**
+   * Whether the conversation ends on an `ask_owner` call nothing answers: only then may questions be open or an answer
+   * be owed its turn, so every other turn asks the store nothing.
+   */
+  get endsOnAsk(): boolean {
+    return trailingUnpairedCalls(this.messages, ASK_OWNER_TOOL).length > 0;
+  }
   get workMode(): WorkMode { return this.mode; }
   get profile(): ResolvedTurnProfile | null { return currentOperationProfile(this.runtime.actor)?.profile ?? this.active?.profile ?? null; }
   get profileInputs(): ProfileAuthorityInputs | null {

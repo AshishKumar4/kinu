@@ -505,6 +505,7 @@ export class ChatSession {
    */
   resumeAnswered(): void {
     const { questions } = this.actorSession;
+    let queued = false;
 
     for (const owed of questions.owedResumes()) {
       const identity = `owner-answer:${owed.turnId}`;
@@ -514,10 +515,12 @@ export class ChatSession {
         this.queue.unshift({
           text: answeredSummary(owed.asked), kind: 'programmatic', idempotencyKey: identity, metadata: resumeMetadata(owed), settle: () => {},
         });
+        queued = true;
       }
     }
 
-    this.pump();
+    // Asked at every wake: one that owes nothing leaves the loop as it was.
+    if (queued) this.pump();
   }
 
   /** Its producer is told, and so is every caller that joined it: a turn restored after a reset has only joiners. */
@@ -710,6 +713,9 @@ export class ChatSession {
     const closed = this.actorSession.questions.close('dismissed', id).length;
 
     this.resumeAnswered();
+
+    // What waited behind the questions may run now.
+    if (closed > 0) this.pump();
 
     return closed;
   }
@@ -1037,8 +1043,11 @@ export class ChatSession {
    * owner's message, an answer's turn or the asking turn re-opened runs, ahead of the work it holds, which keeps its order.
    */
   private nextRunnable(): QueueItem | undefined {
-    if (!this.actorSession.questions.hasOpen()) return this.queue.shift();
-    const at = this.queue.findIndex((item) => item.kind === 'user' || item.continuation !== undefined || item.metadata?.kinuEvent === OWNER_ANSWER_SIGNAL);
+    const runs = (item: QueueItem): boolean => item.kind === 'user' || item.continuation !== undefined || item.metadata?.kinuEvent === OWNER_ANSWER_SIGNAL;
+    const head = this.queue[0];
+
+    if (head === undefined || runs(head) || !this.actorSession.endsOnAsk || !this.actorSession.questions.hasOpen()) return this.queue.shift();
+    const at = this.queue.findIndex(runs);
 
     return at < 0 ? undefined : this.queue.splice(at, 1)[0];
   }
@@ -1112,7 +1121,7 @@ export class ChatSession {
     const { questions } = this.actorSession;
 
     // The owner wrote instead of choosing: their message answers the open questions, and the answers given ride it.
-    if (item.kind === 'user') {
+    if (item.kind === 'user' && this.actorSession.endsOnAsk) {
       questions.close('in_chat');
       questions.retireResumes();
     }

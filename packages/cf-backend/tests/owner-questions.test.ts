@@ -147,7 +147,7 @@ describe('the workspace agent asks its owner', () => {
     const asked = await openQuestion(workspace);
 
     await workspace.agent.answerOwnerQuestions(asked.id, ANSWER);
-    await workspace.agent.harnessChatLoop.pumpPromise;
+    await driveUntil(workspace, 'the answer never resumed the turn', () => sent.length >= 2);
 
     const resumed = resumedFrom(sent);
 
@@ -175,7 +175,6 @@ describe('the workspace agent asks its owner', () => {
     });
 
     await driveUntil(reopened, 'the next activation never resumed the answer', () => sent.length >= 2);
-    await reopened.agent.harnessChatLoop.pumpPromise;
 
     const resumed = resumedFrom(sent);
 
