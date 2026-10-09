@@ -30,11 +30,17 @@ features exist only in one.
 
 A cloud workspace's main agent can also propose a new workspace
 (`agent.proposeWorkspace`): a name, a brief that becomes its mission, and the
-rest of its soul. Nothing exists until you approve it under Work → Needs you,
-which shows the SOUL.md approving writes. Approved, it is created under your
-account as if you had created it, its first turn acts on the brief, and the
-agent that asked is told its link. Declined, nothing is created and the agent
-is told so.
+rest of its soul. Nothing exists until you approve it, which shows the SOUL.md
+approving writes. Approved, it is created under your account as if you had
+created it, its first turn acts on the brief, and the agent that asked is told
+its link. Declined, nothing is created and the agent is told so.
+
+Whatever waits on your answer (a command the agent wants to run outside its
+own workspace, a file it wants to replace, a machine it wants to use, a
+proposed workspace, a plan to review) waits as a stack of cards on top of the
+chat's message box: the newest open with its answers, the rest behind it, each
+opening as you answer the one before. Click a card behind to answer it first.
+Work → Needs you lists the same things.
 
 ## 2. Day one
 

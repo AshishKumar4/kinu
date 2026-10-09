@@ -16,7 +16,7 @@ import {
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
   resetGuardedExec, StoragePredatesResetError, ERROR_STATUS, LiveWorkers,
   type RunEventInput, type SubordinateInspectionAuthority, type ConversationRecall,
-  isSubordinateOrigin, WORKSPACE_ROOT,
+  isSubordinateOrigin, WORKSPACE_ROOT, PLATFORM_CATALOG, ProgramsInFlight,
 } from '@kinu.run/core';
 import type { EnqueueTurnResult, ProgrammaticTurn, SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
@@ -261,6 +261,13 @@ type ActorJobSeams = Pick<BackgroundJobRunnerDeps,
  * client whose authority is gone stops reconnecting. */
 const WEBSOCKET_POLICY_CLOSE = 1008;
 
+/**
+ * How long an alarm waits for the programs in flight, from its start: nine tenths of the wall an alarm handler is
+ * given (do.alarm.wall_ms), so the platform never ends the handler mid-wait. A handler ended at its wall resets the
+ * object and closes every socket (warm-forge-4d6acc02, 2026-09-25).
+ */
+const ALARM_PROGRAM_WAIT_MS = Math.floor(PLATFORM_CATALOG['do.alarm.wall_ms'].limit.value * 9 / 10);
+
 const CLI_AUTHORITY_REVOKED = 'This CLI authorization is invalid. Sign in again with: kinu auth';
 
 const SESSION_AUTHORITY_REVOKED = 'This session has been signed out. Sign in again.';
@@ -498,7 +505,43 @@ export abstract class ActorAgent extends Agent<Env> {
 
     if (refusal) return settle(Effect.fail(new KinuError(refusal.reason, refusal.error)));
 
-    return this.recoverLostJobs().then(async () => { await super.alarm(); });
+    return this.heldAlarm();
+  }
+
+  /** The alarm's work, a job it re-drives or a turn a wake admits, launches programs that end with the alarm. */
+  private async heldAlarm(): Promise<void> {
+    const began = Date.now();
+    const programs = new ProgramsInFlight();
+
+    try {
+      await programs.run(async () => {
+        await this.recoverLostJobs();
+        await super.alarm();
+      });
+    } finally {
+      await this.awaitPrograms(programs, began);
+    }
+  }
+
+  /**
+   * The alarm's last act: the programs its work launched stay open while it does, so it waits until none runs, at most
+   * until `ALARM_PROGRAM_WAIT_MS` past `began`. A program still running then ends with it, as before.
+   */
+  private async awaitPrograms(programs: ProgramsInFlight, began: number): Promise<void> {
+    const running = programs.size;
+
+    if (running === 0) return;
+    diagnostics.event('alarm.programs_awaited', { workspace: this.name, running });
+    const deadline = Promise.withResolvers<void>();
+    const timer = setTimeout(deadline.resolve, Math.max(0, began + ALARM_PROGRAM_WAIT_MS - Date.now()));
+
+    try {
+      const left = await programs.settled(deadline.promise);
+
+      if (left > 0) diagnostics.event('alarm.programs_outlived', { workspace: this.name, running: left, waitedMs: Date.now() - began });
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /** Each alarm, the keepAlive heartbeat a running job's fiber holds among them, asks whether a job's work went silent. */

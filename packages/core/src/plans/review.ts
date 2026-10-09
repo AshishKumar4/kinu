@@ -77,6 +77,17 @@ export function planTitle(content: string): string {
   return content.split('\n').find((line) => line.trim())?.replace(/^#+\s*/, '').trim() ?? 'Plan';
 }
 
+/** Pending plan reviews workspace-wide with owner name and id. Retired actors stay included: their undecided plan is still undecided. */
+export function listPendingPlanReviews(
+  sql: SqlExecutor,
+): ReadonlyArray<{ owner: string; actor: string; id: string; revision: number; content: string; updatedAt: number }> {
+  return sql<{ owner: string; actor: string; id: string; revision: number; content: string; updated_at: number }>`
+    SELECT a.name AS owner, a.actor_id AS actor, r.id, r.revision, r.content, r.updated_at
+    FROM plan_reviews r JOIN workspace_actors a ON a.actor_id = r.actor_id
+    WHERE r.status = 'pending'
+    ORDER BY r.updated_at DESC`.map((row) => ({ ...row, updatedAt: row.updated_at }));
+}
+
 interface PlanReviewRow {
   id: string;
   session_id: string;

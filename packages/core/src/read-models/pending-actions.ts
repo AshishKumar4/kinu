@@ -34,6 +34,8 @@ export interface PendingAction {
   readonly write?: { readonly path: string };
   /** A proposed workspace: the SOUL.md it would start with, exactly as approving writes it. */
   readonly proposal?: { readonly name: string; readonly brief: string; readonly soul: string };
+  /** The actor whose ask it is, by id; absent, the workspace's own (a parked command, a proposal). */
+  readonly raisedBy?: string;
 }
 
 /** What a workspace asks of the person now. */
@@ -60,6 +62,33 @@ export function needsTheUser(asks: PersonAsks): boolean {
     || asks.activePlan?.status === 'pending';
 }
 
+/**
+ * One thing waiting on the owner's answer: a queued row that holds them, or a machine's consent. `raisedBy`: the actor
+ * whose ask it is, by id; null for the workspace's own.
+ */
+export type OwnerAsk =
+  | { readonly key: string; readonly at: number; readonly raisedBy: string | null; readonly kind: 'action'; readonly action: PendingAction }
+  | { readonly key: string; readonly at: number; readonly raisedBy: null; readonly kind: 'consent'; readonly consent: PendingConsent };
+
+/**
+ * What the chat's attention stack shows, newest first: every row that holds the person (the rule
+ * {@link needsTheUser} reads) and every consent, from the same two reads the Work tab shows. The agent's notes and
+ * proposals that hold nobody stay in Work. `raisedBy`: only that actor's asks, for its own pane.
+ */
+export function ownerAsks(
+  asks: Pick<PersonAsks, 'pendingActions' | 'pendingConsents'>, { raisedBy }: { readonly raisedBy?: string } = {},
+): OwnerAsk[] {
+  const held: OwnerAsk[] = asks.pendingActions.filter((action) => HOLDS_THE_PERSON[action.kind])
+    .map((action) => ({ key: `action:${action.id}`, at: action.at, raisedBy: action.raisedBy ?? null, kind: 'action', action }));
+
+  const consents: OwnerAsk[] = asks.pendingConsents
+    .map((consent) => ({ key: `consent:${consent.consentId}`, at: consent.createdAt, raisedBy: null, kind: 'consent', consent }));
+
+  return [...held, ...consents]
+    .filter((ask) => raisedBy === undefined || ask.raisedBy === raisedBy)
+    .sort((a, b) => b.at - a.at || a.key.localeCompare(b.key));
+}
+
 export interface PendingActionInputs {
   readonly scaffoldVersions: ReadonlyArray<{
     version: number; status: string; rationale: string; written_at: number;
@@ -73,9 +102,9 @@ export interface PendingActionInputs {
   }>;
   /** Still-open only (safety/workspace-proposals.ts). */
   readonly workspaceProposals: readonly WorkspaceProposal[];
-  /** Workspace-wide and retired-inclusive: a subordinate's plan asks the same owner. */
+  /** Workspace-wide and retired-inclusive: a subordinate's plan asks the same owner. `actor`: its owner's id. */
   readonly pendingPlans: ReadonlyArray<{
-    owner: string; id: string; revision: number; content: string; updatedAt: number;
+    owner: string; actor: string; id: string; revision: number; content: string; updatedAt: number;
   }>;
 }
 
@@ -158,6 +187,7 @@ export function buildPendingActions(input: PendingActionInputs): PendingAction[]
       detail: plan.owner === 'main' ? null : `Submitted by ${plan.owner}`,
       at: plan.updatedAt,
       planRef: { owner: plan.owner, id: plan.id, revision: plan.revision },
+      raisedBy: plan.actor,
     });
   }
 

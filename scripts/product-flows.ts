@@ -32,7 +32,7 @@ import { holdForRelease } from '../packages/test-utils/src/scratch';
 import { DESKTOP } from './live-app-harness';
 import {
   AGENT_PLAN_ASK, FLOW_MEMORY_NOTE, FLOW_SHELL_PROBE, FLOW_SLATE, MEMORY_ASK, SLATE_ASK, STORM_ASK, STORM_DIR, STORM_FILES, STORM_SEED_ASK, WRITE_FILE_ASK,
-  PROPOSAL_LINK_REPLY, WORKSPACE_PROPOSAL_ASK,
+  APPROVALS_ASK, DECISION_HEARD, PROPOSAL_LINK_REPLY, WORKSPACE_PROPOSAL_ASK,
 } from './flows-script';
 import { FALLBACK_ANSWER } from './scripted-protocol';
 import {
@@ -667,6 +667,71 @@ export async function agentPlanIsReviewedInItsPane(target: FlowTarget): Promise<
   }
 }
 
+export interface ApprovalStackVerdict {
+  /** The stack's cards once both commands parked: the open one first, then those behind it. */
+  readonly stacked: readonly string[];
+  /** What the open card showed before any answer. */
+  readonly openWords: string;
+  /** The stack's cards once the open one was approved. */
+  readonly afterFirst: readonly string[];
+  /** What the chat showed once both answers reached the agent: each as its event, and the agent's reply to each. */
+  readonly heard: { readonly approvedEvent: boolean; readonly deniedEvent: boolean; readonly approvedReply: boolean; readonly deniedReply: boolean };
+}
+
+/** The stack's cards, the open one first, then those behind it, nearest first. */
+const STACK_KEYS = `(() => {
+  const cards = [...document.querySelectorAll('[data-attention-card], [data-attention-behind]')];
+  const open = cards.filter((card) => card.hasAttribute('data-attention-card')).map((card) => card.getAttribute('data-attention-card'));
+  const behind = cards.filter((card) => card.hasAttribute('data-attention-behind')).map((card) => card.getAttribute('data-attention-behind')).reverse();
+
+  return [...open, ...behind];
+})()`;
+
+/** Presses the open card's answer named `words`. */
+function stackAnswer(words: string): string {
+  return `[...document.querySelectorAll('[data-attention-card] button')].find((button) => button.textContent?.trim() === ${JSON.stringify(words)})?.click()`;
+}
+
+const CHAT_TEXT = `(document.querySelector('#chat')?.textContent ?? '')`;
+
+/**
+ * Row: one turn parks two commands for its owner. They wait as a stack docked to the composer, the newer open;
+ * approving it opens the other, denying that clears the stack, and each answer reaches the agent: its wake shows in
+ * the chat as the event it is, and the agent answers each.
+ */
+export async function approvalsStackAtTheComposer(target: FlowTarget): Promise<ApprovalStackVerdict> {
+  const workspace = await createFlowWorkspace(target, 'approvals');
+
+  try {
+    const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
+
+    await sendAndSettle(page, APPROVALS_ASK);
+    await until(page, 'both parked commands stacked at the composer', `document.querySelector('[data-attention-stack]')?.getAttribute('data-attention-count') === '2'`);
+    const stacked = v.parse(v.array(v.string()), await page.evaluate(STACK_KEYS));
+    const openWords = v.parse(v.string(), await page.evaluate(`document.querySelector('[data-attention-card]')?.textContent ?? ''`));
+
+    await page.evaluate(stackAnswer('Approve'));
+    await until(page, 'the next card opened', `document.querySelector('[data-attention-stack]')?.getAttribute('data-attention-count') === '1'`);
+    const afterFirst = v.parse(v.array(v.string()), await page.evaluate(STACK_KEYS));
+
+    await page.evaluate(stackAnswer('Deny'));
+    await until(page, 'the stack cleared', `document.querySelector('[data-attention-stack]') === null`);
+    await until(page, 'both answers in the chat and heard by the agent', `${CHAT_TEXT}.includes('You approved') && ${CHAT_TEXT}.includes('You denied')`
+      + ` && /${DECISION_HEARD}[^]*approved/u.test(${CHAT_TEXT}) && /${DECISION_HEARD}[^]*denied/u.test(${CHAT_TEXT})`);
+    const said = v.parse(v.string(), await page.evaluate(CHAT_TEXT));
+
+    return {
+      stacked, openWords, afterFirst,
+      heard: {
+        approvedEvent: said.includes('You approved'), deniedEvent: said.includes('You denied'),
+        approvedReply: new RegExp(`${DECISION_HEARD}[^]*approved`, 'u').test(said), deniedReply: new RegExp(`${DECISION_HEARD}[^]*denied`, 'u').test(said),
+      },
+    };
+  } finally {
+    await removeFlowWorkspace(target, workspace);
+  }
+}
+
 export interface WorkspaceProposalVerdict {
   /** What the Needs-you card offered the owner before anything existed. */
   readonly cardTitle: string;
@@ -878,10 +943,8 @@ const ClickScripts = {
     main.click();
   })()`,
   filesTab: `(() => {
-    const files = [...document.querySelectorAll('.p-tabstrip')]
-      .flatMap((el) => [...el.querySelectorAll('button')])
-      .find((b) => b.textContent?.trim() === 'Files');
-    if (files === undefined) throw new Error('no Files tab');
+    const files = document.querySelector('nav[aria-label="Workspace"] button[aria-label="Files"]');
+    if (!(files instanceof HTMLElement)) throw new Error('no Files tab');
     files.click();
   })()`,
 } as const;
@@ -1055,12 +1118,12 @@ export async function rightPanelKeepsItsState(target: FlowTarget): Promise<Panel
 
     await page.evaluate(ClickScripts.filesTab);
     await until(page, 'the Files tab, active',
-      `[...document.querySelectorAll('.p-tabstrip')].flatMap(el => [...el.querySelectorAll('button')]).some(b => b.textContent.trim() === 'Files' && b.className.includes('p-tab-active'))`);
+      `document.querySelector('nav[aria-label="Workspace"] button[aria-label="Files"][aria-current="true"]') !== null`);
 
     const marked = v.parse(
       v.object({ ok: v.literal(true), scrollTop: v.number() }),
       await page.evaluate(() => {
-        const strip = document.querySelector('#inspector .p-tabstrip');
+        const strip = document.querySelector('#inspector nav[aria-label="Workspace"]');
         const content = strip?.parentElement?.parentElement?.children[1];
 
         if (!content) return { ok: false as const, scrollTop: -1 };

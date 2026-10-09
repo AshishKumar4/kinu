@@ -7,7 +7,7 @@ import * as v from 'valibot';
 import { asSchema } from 'ai';
 import { present } from '@kinu.run/test-utils';
 import { explainSandboxError } from '../src/tools/sandbox-errors';
-import { BUILTIN_TOOLS, renderCodemodeDescription, TOOL_REACH } from '../src/tools/registry';
+import { BUILTIN_TOOLS, programDeclarations, TOOL_REACH } from '../src/tools/registry';
 import { branchableToolCall, failedToolOutcome, successfulToolOutcome, withCodemodeProgram } from '../src/tools/outcome';
 import { codemodeFunction, nativeToolFunctions } from '../src/tools/sandbox-contract';
 import { censusToolFailures } from '../src/read-models/tool-failures';
@@ -169,14 +169,14 @@ test('every member of every namespace refuses with the one declared Refusal, and
     createAgentSelfProvider(refusingDouble()),
   ];
 
-  // What the model reads: every member declared as a signature or a const (native tools by their schemas), and every
+  // What a program reads from `describe`: every member declared as a signature or a const (native tools by their schemas), and every
   // declared result admitting a Refusal.
   const undeclared = namespaces.filter((namespace) => namespace.name !== CRAFTED_TOOL_NAMESPACE).flatMap((namespace) => Object.keys(namespace.tools)
     .filter((member) => namespace.declarations?.[member] === undefined
       && ![` ${member}(`, `const ${member}:`].some((form) => (namespace.types ?? '').includes(form)))
     .map((member) => `${namespace.name}.${member}`));
 
-  const unadmitted = declaredResults(renderCodemodeDescription(namespaces, {}))
+  const unadmitted = declaredResults(Object.values(programDeclarations(namespaces)).join('\n'))
     .filter((alternatives) => !alternatives.includes('Refusal') && !alternatives.includes('unknown'))
     .map((alternatives) => alternatives.join(' | '));
 

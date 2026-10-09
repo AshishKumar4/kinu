@@ -104,7 +104,7 @@ describe('what the owner reads', () => {
 
   test('a start refused for good names the actions the card offers', () => {
     expect(startRefusedNote('[permanent -> refuse] no image to start'))
-      .toBe('The sandbox did not start: [permanent -> refuse] no image to start. It stays stopped until you start it again or choose another size.');
+      .toBe('The cloud computer did not start: [permanent -> refuse] no image to start. It stays stopped until you start it again or choose another size.');
   });
 
   test('User settings has a Sandbox section of its own', () => {

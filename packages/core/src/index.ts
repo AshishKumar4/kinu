@@ -475,7 +475,7 @@ export {
   replayPolicyFor,
   type ReplayPolicy,
   renderToolSchemaDescription,
-  renderCodemodeDescription, CODEMODE_CODE_DESCRIPTION,
+  renderCodemodeDescription, programDeclarations, describeProgramSource, CODEMODE_CODE_DESCRIPTION,
   TOOL_REACH,
   isBuiltinToolName,
   narrowToolSurface,
@@ -1044,6 +1044,8 @@ export {
 export { explainSandboxError } from './tools/sandbox-errors';
 
 export { callableToolNames, currentWorkMode, inWorkMode, runWorkModeInvocation, permitInPlan, hasPlanPermission, requireBuild, requireWorkModePermission, toolsInWorkMode, toolsForInvocation, providersInWorkMode } from './execution/work-mode';
+
+export { ProgramsInFlight, launched } from './execution/programs-in-flight';
 
 // Client-safe only: the Nimbus workspace host is exported from
 // `@kinu.run/core/workspace` so a browser bundle cannot pull in the server runtime.
@@ -1983,7 +1985,7 @@ export type {
   NodeTranscriptView, NodeTranscriptCrumb, NodeTranscriptOrigin,
 } from './read-models/node-transcript';
 
-export { buildPendingActions, needsTheUser } from './read-models/pending-actions';
+export { buildPendingActions, needsTheUser, ownerAsks, type OwnerAsk } from './read-models/pending-actions';
 
 export { reviewParkedWrite, type ParkedWriteReview } from './read-models/write-preview';
 
