@@ -2,7 +2,7 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  buildWorkspaceOverview, rosterHeadline, WorkspaceOverviewSchema, type WorkspaceOverview,
+  buildWorkspaceOverview, rosterBucket, rosterHeadline, WorkspaceOverviewSchema, type WorkspaceOverview,
   type WorkspaceOverviewInputs,
 } from '../src/read-models/workspace-overview';
 import type { PendingAction } from '../src/read-models/pending-actions';
@@ -19,6 +19,7 @@ const EMPTY: WorkspaceOverviewInputs = {
   pendingActions: [],
   pendingConsents: [],
   activePlan: null,
+  openQuestions: 0,
   latestRun: null,
   slates: [],
   shares: [],
@@ -38,6 +39,12 @@ describe('buildWorkspaceOverview', () => {
 
     expect(overview.decisionsWaiting).toBe(2);
     expect(overview.hasUpdates).toBe(true);
+  });
+
+  test('an open question to the owner waits on them, and puts the tile among those that need them', () => {
+    const overview = buildWorkspaceOverview({ ...EMPTY, openQuestions: 2 });
+
+    expect([overview.decisionsWaiting, rosterBucket(overview.activity, overview.decisionsWaiting)]).toEqual([2, 'needs']);
   });
 
   test('a proposed scaffold waits on the owner', () => {
