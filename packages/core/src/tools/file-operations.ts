@@ -30,7 +30,7 @@ import { BUILTIN_TOOL_DESCRIPTIONS } from './registry';
 import type { Tool } from 'ai';
 import { FILE, type SlateBuildNoteSchema } from '../operations/file';
 import { SLATES_ROOT } from '../vfs/workspace-path';
-import type { SlateCallResult, SlateOperation } from '../slates/rpc';
+import type { SlateCallResult } from '../slates/rpc';
 
 /** Most names one `list` returns; matches `tools/db-codemode.ts` SELECT_LIMIT_MAX. */
 const FILE_LIST_MAX_ENTRIES = 1_000;
@@ -130,10 +130,11 @@ export interface FileDeps {
   /** Where paths land (`vfs/resolve.ts`), so results name files as `root://path`. */
   readonly planes: PathPlanes;
   /**
-   * The workspace's slates, so a write into one answers whether it still builds, by the build its preview serves.
-   * Cloudflare only: the CLI hosts no slates, so it leaves this unset (`scripts/capability-parity.lock.json`).
+   * Whether a slate still builds, by the build its preview serves, so a write into one answers it. A check, not a
+   * preview: the turn's answer still draws the slate. Cloudflare only: the CLI hosts no slates, so it leaves this
+   * unset (`scripts/capability-parity.lock.json`).
    */
-  readonly slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
+  readonly slateBuild?: (slate: string) => Promise<SlateCallResult>;
 }
 
 const SLATE_FILE = new RegExp(`^${SLATES_ROOT}/([^/]+)/`);
@@ -144,12 +145,12 @@ const BrokenSchema = v.object({ broken: v.string() });
 async function slateBuild(deps: FileDeps, path: string): Promise<{ readonly build?: v.InferOutput<typeof SlateBuildNoteSchema> }> {
   const slate = SLATE_FILE.exec(resolvePath(path, deps.planes).absolute)?.[1];
 
-  if (slate === undefined || deps.slate === undefined) return {};
-  const previewed = await deps.slate({ op: 'preview', id: slate });
+  if (slate === undefined || deps.slateBuild === undefined) return {};
+  const built = await deps.slateBuild(slate);
 
   // Only its own files can be at fault; a preview this deployment cannot serve says nothing about them.
-  if (!previewed.ok) return previewed.reason === 'bad_input' ? { build: { slate, builds: false, error: previewed.error } } : {};
-  const broken = v.safeParse(BrokenSchema, previewed.value);
+  if (!built.ok) return built.reason === 'bad_input' ? { build: { slate, builds: false, error: built.error } } : {};
+  const broken = v.safeParse(BrokenSchema, built.value);
 
   return { build: broken.success ? { slate, builds: false, error: broken.output.broken } : { slate, builds: true } };
 }

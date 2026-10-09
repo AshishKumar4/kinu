@@ -1030,6 +1030,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       slate: (actor, operation) => this.slateAs(
         { path: [{ name: actor.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, operation,
       ),
+      slateBuild: (actor, slate) => this.slateBuildAs({ path: [{ name: actor.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, slate),
       deferrals: (actorId) => this.deferralChannel(actorId),
       refinementLane: () => async () => { await refinementPass(this.refinementDeps); },
       advisorPort: (reference) => this.temporaryAgentPort(reference),
@@ -1199,7 +1200,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ...(account !== undefined && { account }),
       webSearch,
       jobs: this.hireJobs(turn.actor, turn.input.mode),
-      slate: (operation) => this.slateAs({ path: [{ name: turn.actor.record.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, operation),
+      slateBuild: (slate) => this.slateBuildAs({ path: [{ name: turn.actor.record.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, slate),
       ...(report !== undefined && { report }),
       // The owner's own turns, and its plan's feedback turn; a hirer's turn is never asked for the owner's review.
       ...(!turn.parentDriven && planSubmissionReach(turn.input.mode, turn.driving) && { submitPlan: { submit: async (edits) => await this.hostedPlanSubmit(turn, edits) } }),
@@ -4651,6 +4652,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** An actor of this workspace acting as itself; DO-only, like `workspaceBoxOp`. */
   async slateAs(caller: SlateCaller, operation: SlateOperation): Promise<SlateCallResult> {
     return this.slates.operation(caller, operation);
+  }
+
+  override async slateBuild(slate: string): Promise<SlateCallResult> {
+    return this.slates.build(this.slateCaller(), slate);
+  }
+
+  /** Whether a slate still builds, for an actor of this workspace acting as itself; DO-only, like `slateAs`. */
+  async slateBuildAs(caller: SlateCaller, slate: string): Promise<SlateCallResult> {
+    return this.slates.build(caller, slate);
   }
 
   /** Names only, never surfaces: the graph shows what a slate has reached; each call is still decided as it comes. */

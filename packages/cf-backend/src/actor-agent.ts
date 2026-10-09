@@ -2962,6 +2962,7 @@ export abstract class ActorAgent extends Agent<Env> {
       const hooks: CFRuntimeHooks = {
         deferrals: () => this.deferralChannel(),
         slate: (operation) => this.slate(operation),
+        slateBuild: (slate) => this.slateBuild(slate),
         reportModelCall: (report) => this.reportModelCall(report),
         modelOperations: this.modelOperations,
         liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
@@ -3032,6 +3033,11 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Every actor's slate operations run on the object that owns its workspace, as this actor. */
   async slate(operation: SlateOperation): Promise<SlateCallResult> {
     return workspaceOwner(this.env, this.workspaceName()).slateAs(this.slateCaller(), operation);
+  }
+
+  /** Whether a slate still builds, asked as this actor; a check, never a preview. */
+  async slateBuild(slate: string): Promise<SlateCallResult> {
+    return workspaceOwner(this.env, this.workspaceName()).slateBuildAs(this.slateCaller(), slate);
   }
 
   /**
@@ -3408,7 +3414,7 @@ export abstract class ActorAgent extends Agent<Env> {
       }),
       files: () => ({
         vfs: this.rt.toolFiles, home: this.rt.storage.home, planes: this.rt.planes, memory: this.rt.memory, ledger: this.acc.files, budget: this.acc.context,
-        slate: (operation) => this.slate(operation),
+        slateBuild: (slate) => this.slateBuild(slate),
       }),
       // `this.taskList` is the store the turn's snapshot reads; the role switch is the native `tasks` tool's.
       tasks: () => ({ list: this.taskList, config: this.config, roleSwitch: agentRoleSwitch(() => this.operationProfile()?.inputs?.envelope ?? null) }),
@@ -3970,7 +3976,7 @@ export abstract class ActorAgent extends Agent<Env> {
         account: this.accountMemory({ by: 'agent', agent: this.actorHandle().name }),
         webSearch: this.ownedModelServices.getWebSearchProvider(),
         jobs: { jobRunner: this.jobRunner, backgroundable: BACKGROUNDABLE_TOOLS, mode: () => this.turnWorkMode() },
-        slate: (operation) => this.slate(operation),
+        slateBuild: (slate) => this.slateBuild(slate),
       };
 
       if (actorDeps.report) builtinDeps.report = actorDeps.report;
