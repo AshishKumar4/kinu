@@ -3612,11 +3612,13 @@ function rowArgv(gate: Gate, tracked: readonly string[], deploying: boolean, tim
 
 export const ArmadaReportSchema = v.object({
   job: v.string(),
+  graded: v.picklist(['pass', 'fail', 'not graded']),
   verdicts: v.optional(v.object({
     rows: v.array(v.object({
       run: v.optional(v.string()), name: v.optional(v.string()), exitCode: v.number(), seconds: v.number(), output: v.optional(v.string(), ''),
       /** Files in its task's artifacts directory the row names as its evidence. */
       artifacts: v.optional(v.array(v.string())),
+      problem: v.optional(v.string()),
     })),
   })),
   problems: v.optional(v.array(v.string()), []),
@@ -3646,9 +3648,9 @@ export function armadaPhaseRun(phase: string, rows: readonly Gate[], sha: string
   ];
 }
 
-/** `argv` run here: its exit code, what it answered on stdout, and its progress, which `--json` puts on stderr and which
+/** `argv` run here: what it answered on stdout, and its progress, which `--json` puts on stderr and which
  *  is printed as it comes. */
-async function echoed(argv: readonly string[]): Promise<{ readonly exitCode: number; readonly answered: string; readonly said: string }> {
+async function echoed(argv: readonly string[]): Promise<{ readonly answered: string; readonly said: string }> {
   const run = Bun.spawn([...argv], { cwd: root, stdout: 'pipe', stderr: 'pipe' });
   const answered = new Response(run.stdout).text();
   let said = '';
@@ -3660,7 +3662,9 @@ async function echoed(argv: readonly string[]): Promise<{ readonly exitCode: num
     await writeFully(process.stdout, text);
   }
 
-  return { exitCode: await run.exited, answered: await answered, said };
+  await run.exited;
+
+  return { answered: await answered, said };
 }
 
 export type ArmadaReport = v.InferOutput<typeof ArmadaReportSchema>;
@@ -3680,7 +3684,7 @@ type ArmadaRow = NonNullable<ArmadaReport['verdicts']>['rows'][number];
 /** One armada row's verdict into the deploy's report, the evidence its task `kept` copied beside it; whether it is green:
  *  armada's own grade (`armadaRowVerdicts`), never its exit code alone. */
 function recordArmadaRow(report: string, gate: Gate, verdict: ArmadaRow | undefined, why: { readonly green: boolean; readonly found: string; readonly reproduce: string; readonly said: string; readonly kept?: string }): boolean {
-  if (report !== '' && gate.evidence !== undefined && why.kept !== undefined && (verdict?.artifacts?.length ?? 0) > 0) {
+  if (report !== '' && gate.evidence !== undefined && why.kept !== undefined && verdict?.problem === undefined && (verdict?.artifacts?.length ?? 0) > 0) {
     cpSync(join(why.kept, gate.evidence), join(report, gate.evidence), { recursive: true });
   }
 
@@ -3692,13 +3696,14 @@ function recordArmadaRow(report: string, gate: Gate, verdict: ArmadaRow | undefi
     return true;
   }
 
-  const found = verdict === undefined || verdict.exitCode === 0 ? `armada did not grade it: ${why.found}` : `red on armada, ${why.found}`;
+  const ungraded = verdict === undefined || verdict.exitCode === 0 || verdict.problem !== undefined;
+  const found = ungraded ? `armada did not grade it: ${why.found}` : `red on armada, ${why.found}`;
 
   console.error(`\nFAILED  ${gate.run}  ${found}`);
 
   if (report !== '') {
     recordRed(report, {
-      phase: gate.phase ?? 'source', what: gate.label, command: gate.run, verdict: verdict === undefined || verdict.exitCode === 0 ? 'not graded' : `exit ${String(verdict.exitCode)}`,
+      phase: gate.phase ?? 'source', what: gate.label, command: gate.run, verdict: ungraded ? 'not graded' : `exit ${String(verdict.exitCode)}`,
       reproduce: why.reproduce, finding: found, output: verdict?.output ?? why.said.slice(-4000),
     });
   }
@@ -3726,34 +3731,28 @@ async function armadaPhaseJob(phases: readonly DeployPhase[], rows: readonly Gat
   const argv = armadaPhaseRun(phase, rows, sha);
 
   console.log(`\n── armada: ${String(rows.length)} row(s) of ${phase} at ${sha.slice(0, 12)}, as one job: ${argv.slice(1).join(' ')}`);
-  const { exitCode, answered, said } = await echoed(argv);
+  const { answered, said } = await echoed(argv);
   const graded = armadaReport(answered);
   const reproduce = `node_modules/.bin/armada run ${sha} -- ${argv.slice(argv.indexOf('--') + 1).join(' ')}`;
 
   if (report !== '' && graded !== undefined) recordNotice(report, { phase: phases[0] ?? 'source', what: `armada job ${graded.job}`, notice: `the ${phase} rows armada ran, at ${sha}: their logs and outputs are in that job` });
 
-  return armadaRowVerdicts(rows, graded, exitCode).filter(({ gate, verdict, green, found }) => !recordArmadaRow(report, gate, verdict, { green, found, reproduce, said, kept: graded?.artifacts[armadaTaskName(gate)] }))
+  return armadaRowVerdicts(rows, graded).filter(({ gate, verdict, green, found }) => !recordArmadaRow(report, gate, verdict, { green, found, reproduce, said, kept: graded?.artifacts[armadaTaskName(gate)] }))
     .map(({ gate }) => gate.run);
 }
 
-/** Each row's own verdict from a phase job's report, and what was found about it: the task that wrote no verdict is
- *  reported under its task's name, with its exit and output, and armada names each problem by the task it is about. */
-export function armadaRowVerdicts(rows: readonly Gate[], graded: ArmadaReport | undefined, exitCode: number): { readonly gate: Gate; readonly verdict: ArmadaRow | undefined; readonly green: boolean; readonly found: string }[] {
+/** The runner grades the run and its rows; a row's problem belongs to that row, without parsing prose to find it. */
+export function armadaRowVerdicts(rows: readonly Gate[], graded: ArmadaReport | undefined): { readonly gate: Gate; readonly verdict: ArmadaRow | undefined; readonly green: boolean; readonly found: string }[] {
   const reported = graded?.verdicts?.rows ?? [];
-  // armada grades a run whole: one it could not grade (exit 2, and every problem its report names) greens no row,
-  // whatever each row's own exit (armada src/grade.ts).
-  const ungraded = graded === undefined || exitCode === 2 || graded.problems.length > 0;
 
   return rows.flatMap(armadaUnits).map((gate) => {
-    const task = armadaTaskName(gate);
-    const verdict = reported.find((row) => row.run === gate.run) ?? reported.find((row) => row.run === undefined && row.name === task);
-    // armada names a problem by its task (`<task> has no verdict…`, `<task>: <row> names evidence…`) or by the row.
-    const own = graded?.problems.filter((problem) => [task, gate.run].some((name) => problem.startsWith(`${name} `) || problem.startsWith(`${name}:`))) ?? [];
+    const verdict = reported.find((row) => (row.name ?? row.run) === gate.run);
+    const problem = verdict?.problem ?? (graded?.graded === 'not graded' ? graded.problems.join('; ') : undefined);
 
-    const found = graded === undefined ? `\`armada run\` exited ${String(exitCode)} and wrote no report`
-      : [`job ${graded.job}`, ...own.length === 0 && ungraded ? [`armada graded none of the run's rows: ${graded.problems.join('; ')}`] : own].join('; ');
+    const found = graded === undefined ? '`armada run` wrote no report'
+      : [`job ${graded.job}`, ...problem === undefined ? [] : [problem]].join('; ');
 
-    return { gate, verdict, green: !ungraded && verdict?.exitCode === 0, found };
+    return { gate, verdict, green: graded !== undefined && graded.graded !== 'not graded' && verdict?.exitCode === 0, found };
   });
 }
 
