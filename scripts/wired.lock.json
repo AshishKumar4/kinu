@@ -160,7 +160,6 @@
   "packages/core/src/orchestrator/terminal-effects.ts#TerminalEffectInterrupt (unreached-export)",
   "packages/core/src/orchestrator/terminal-effects.ts#terminalEffectKey (unreached-export)",
   "packages/core/src/orchestrator/terminal-transition.ts#TERMINAL_TRANSITION_CALL_ID (unreached-export)",
-  "packages/core/src/orchestrator/turn-lifecycle.ts#TOOL_CALLS_PENDING (unreached-export)",
   "packages/core/src/orchestrator/turn-lifecycle.ts#TURN_ENDED_MID_WORK (unreached-export)",
   "packages/core/src/orchestrator/turn-steering.ts#CONSECUTIVE_FAILURES_BEFORE_STEER (unreached-export)",
   "packages/core/src/orchestrator/turn-steering.ts#IDENTICAL_CALLS_BEFORE_STEER (unreached-export)",

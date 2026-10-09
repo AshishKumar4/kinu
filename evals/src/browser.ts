@@ -72,6 +72,12 @@ async function bounded<T>(what: string, work: Promise<T>): Promise<T> {
   }
 }
 
+/** The first control a person's accessible name addresses. Kept whole because it runs inside the page. */
+function controlNamed(source: string, flags: string): Element | null {
+  return [...document.querySelectorAll('button, [role="button"], [role="gridcell"]')]
+    .find((element) => new RegExp(source, flags).test((element.getAttribute('aria-label') ?? element.getAttribute('title') ?? element.textContent ?? '').trim())) ?? null;
+}
+
 /** One slate's page as it is drawn inside the workspace: in the work surface or in the chat. */
 export class SlateView {
   constructor(readonly frame: Frame) {}
@@ -114,9 +120,7 @@ export class SlateView {
   /** Press the first control whose accessible name, its `aria-label`, else its `title`, else its text, `name` matches. */
   async pressNamed(name: RegExp): Promise<boolean> {
     return bounded(`the slate page, pressed for ${name.source}`, (async () => {
-      const control = await this.frame.evaluateHandle((source, flags) => [...document.querySelectorAll('button, [role="button"], [role="gridcell"]')]
-        .find((element) => new RegExp(source, flags).test((element.getAttribute('aria-label') ?? element.getAttribute('title') ?? element.textContent ?? '').trim()))
-        ?? null, name.source, name.flags);
+      const control = await this.frame.evaluateHandle(controlNamed, name.source, name.flags);
 
       if (!(control instanceof ElementHandle)) return false;
       await control.click();
@@ -124,6 +128,29 @@ export class SlateView {
 
       return true;
     })());
+  }
+
+  /** The page's own readiness signal: a control whose accessible name says its loaded state, not just DOM load. */
+  async waitForNamed(name: RegExp): Promise<void> {
+    await this.frame.waitForFunction(controlNamed, { polling: 100, timeout: DRAW_MS }, name.source, name.flags);
+  }
+
+  /**
+   * Press the control `name` names until the page shows the state `ready` reads, re-pressing what it ignored: a press
+   * made before the page could take it selects nothing, so one press is not one selection. What the page shows past the
+   * draw budget is what a person is still looking at, and the check fails on it.
+   */
+  async pressUntil(name: RegExp, ready: () => Promise<boolean>): Promise<void> {
+    const due = Date.now() + DRAW_MS;
+
+    for (;;) {
+      await this.pressNamed(name);
+
+      if (await ready()) return;
+
+      if (Date.now() >= due) throw new Error(`the slate page never showed its ${name.source} state in ${String(DRAW_MS / 1000)} s`);
+      await sleep(250);
+    }
   }
 
   /** What failed in the page: errors nothing caught and scripts that did not load (`script-failures.ts`). */

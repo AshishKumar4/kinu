@@ -549,7 +549,9 @@ pressing a piece and then a square plays that move.`,
         };
       });
       await verifier.check('the-board-shows-the-game', () => verifier.browse(async (browser) => {
-        const board = await squares(await browser.workSurface(SLATE_ID));
+        const view = await browser.workSurface(SLATE_ID);
+        await view.waitForNamed(/^e1\s+white\s+king\b/iu);
+        const board = await squares(view);
         const said = (square: string) => board[square] ?? '';
 
         return {
@@ -561,8 +563,16 @@ pressing a piece and then a square plays that move.`,
       await verifier.check('a-pressed-move-is-played', async () => {
         const pressed = await verifier.browse(async (browser) => {
           const view = await browser.workSurface(SLATE_ID);
+          await view.waitForNamed(/^e2\s+white\s+pawn\b/iu);
 
-          return { from: await pressSquare(view, 'e2'), to: await pressSquare(view, 'e4') };
+          // The initial FEN can render before legal moves load, and a press made then selects nothing. Press again
+          // until the page marks the selected pawn's legal target (Ch1, run 37880718948).
+          await view.pressUntil(/^e2\s+white\s+pawn\b/iu, () => view.frame.evaluate(
+            () => document.querySelector('[aria-label="e4 empty"]')?.getAttribute('style')?.includes('outline') ?? false));
+          const to = await pressSquare(view, 'e4');
+          await view.waitForNamed(/^e4\s+white\s+pawn\b/iu);
+
+          return { from: true, to };
         });
 
         const { fen } = v.parse(FenSchema, await verifier.slate(SLATE_ID, METHODS)('fen'));
@@ -982,4 +992,4 @@ if (importedBefore || !imported.isThreefoldRepetition()) {
   throw new Error("REPEATING_PGN does not reach threefold repetition on the next move");
 }
 
-defineTaskEval(task);
+await defineTaskEval(task);

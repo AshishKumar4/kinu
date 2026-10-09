@@ -51,11 +51,10 @@ function account(name: string): Person {
   return { name, password: name.split('').reverse().join('').padEnd(8, name).concat(String(name.length * 7)) };
 }
 
-const ALICE = account('alice');
-
-const BOB = account('bob');
-
-const CAROL = account('carol');
+/** Names belong to the trial, not to the model's own test users. The same identities survive later turns and evictions. */
+function people(workspace: string) {
+  return { ALICE: account(`alice-${workspace}`), BOB: account(`bob-${workspace}`), CAROL: account(`carol-${workspace}`) };
+}
 
 const ROOM_TITLE = 'Weekend plans';
 
@@ -132,6 +131,7 @@ signIn takes the caller's token, and answers { ok: false, error: "UNAUTHORIZED" 
 - rooms({ token }) -> { ok: true, rooms: Array<{ room, title, members }> }   members are names
 A refused call changes nothing.`,
     verify: async (verifier) => {
+      const { ALICE, BOB, CAROL } = people(verifier.workspace);
       await contract(verifier, 'accounts-sign-up-and-in', async (chat) => {
         const first = v.parse(Signed, await chat('signUp', ALICE));
         const again = v.parse(Signed, await chat('signUp', { ...ALICE, password: account('someone-else').password }));
@@ -167,7 +167,7 @@ A refused call changes nothing.`,
         return {
           pass: !before.ok && before.error === 'NOT_A_MEMBER' && !outsiderInvite.ok && outsiderInvite.error === 'NOT_A_MEMBER'
             && !forged.ok && forged.error === 'BAD_INVITE' && joined?.ok === true && joined.room === room && after.ok
-            && !carolReads.ok && carolReads.error === 'NOT_A_MEMBER' && [...members].sort().join() === 'alice,bob',
+            && !carolReads.ok && carolReads.error === 'NOT_A_MEMBER' && [...members].sort().join() === [ALICE.name, BOB.name].sort().join(),
           evidence: { before, outsiderInvite, forged, joined, after: after.ok, carolReads, members },
         };
       });
@@ -217,7 +217,7 @@ A refused call changes nothing.`,
         const signedIn = await signInOnPage(view, BOB);
         const { sight, held } = await view.until([ROOM_TITLE], (seen) => (seen.regions[ROOM_TITLE] ?? []).length > 0 || seen.text.includes(ROOM_TITLE));
         // A room opened shows its messages: pressing its title opens it where the list does not already.
-        await view.press([ROOM_TITLE], { name: ROOM_TITLE, label: null });
+        await view.pressNamed(new RegExp(`^${ROOM_TITLE}\\b`, 'iu'));
         const opened = await view.until([], (seen) => seen.text.includes('noon at the park'));
 
         return { pass: signedIn && held && opened.held, evidence: { signedIn, held, opened: opened.held, seen: sightEvidence(opened.sight), before: sightEvidence(sight) } };
@@ -226,6 +226,7 @@ A refused call changes nothing.`,
       await slateQuality(verifier, SIGN_IN);
     },
     verifyAfterEviction: async (verifier) => {
+      const { BOB } = people(verifier.workspace);
       await contract(verifier, 'the-chat-survives-an-eviction', async (chat) => {
         const room = await roomOf(chat, BOB, ROOM_TITLE);
         const read = room === null ? null : await said(chat, BOB, room);
@@ -241,6 +242,7 @@ And rooms() tells each member how many messages they have not read: each room ge
 messages others sent since that member last read the room with messages(). Show both on the page.
 Everything that already worked keeps working.`,
     verify: async (verifier) => {
+      const { ALICE, BOB } = people(verifier.workspace);
       await contract(verifier, 'only-the-owner-removes', async (chat) => {
         const room = await roomOf(chat, ALICE, ROOM_TITLE);
 
@@ -285,14 +287,15 @@ Everything that already worked keeps working.`,
       await buildsClean(verifier, SIGN_IN);
     },
   }],
-  evidence: async (call) => {
+  evidence: async (call, workspace) => {
+    const { ALICE } = people(workspace);
     const signed = v.safeParse(Signed, await call(SLATE_ID, 'signIn', ALICE));
 
     if (signed.success && signed.output.ok) await call(SLATE_ID, 'rooms', { token: signed.output.token });
   },
 };
 
-defineTaskEval(defineEvalTask({
+await defineTaskEval(defineEvalTask({
   id: 'chat-app',
   mission: "Ripple's workspace. We build the chat app our friends and family use, with our assistant, Kinu, in it.",
   parts: [build],

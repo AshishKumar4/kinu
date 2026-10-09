@@ -62,6 +62,17 @@ describe('the bank reconciliation', () => {
     expect(await failing(turn, report(rows), [sum])).toEqual([]);
   });
 
+  test('the stated sum can be in prose: a correct total passes, a wrong stated total fails', async () => {
+    const { turn, rows, sum, report } = await reconciled();
+
+    for (const reply of [`Sum of absolute differences: **${sum}**`, `Wrote 12 rows. The total is $${Number(sum).toLocaleString('en-US', { minimumFractionDigits: 2 })}.`,
+      `The sum over the report, counting a missing amount as 0: ${sum}\nVerified in integer cents (${String(Math.round(Number(sum) * 100))} cents).`]) {
+      expect(await failing(turn, report(rows), [reply])).toEqual([]);
+    }
+
+    expect(await failing(turn, report(rows), [`Sum of absolute differences: ${(Number(sum) + 1).toFixed(2)}`])).toEqual(['answers-with-the-sum-of-differences']);
+  });
+
   test('a mismatch left out, rows out of order, or a wrong sum each fail their own check', async () => {
     const { turn, rows, sum, report } = await reconciled();
 

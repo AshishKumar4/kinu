@@ -4,6 +4,7 @@
  * alarms that woke an object with nothing to do. A leg the logs could not be read for says why, and is not compared.
  */
 import * as v from 'valibot';
+import { idleWakeHours, type Filter, type Telemetry } from '../../scripts/prod-logs';
 
 const Count = v.pipe(v.number(), v.integer(), v.minValue(0));
 
@@ -32,6 +33,61 @@ export const PlatformReportSchema = v.variant('measured', [
 ]);
 
 export type PlatformReport = v.InferOutput<typeof PlatformReportSchema>;
+
+/** The telemetry service's grouped read cap; reaching it is an incomplete measurement, not a clean workspace. */
+const GROUPS = 2000;
+
+/** Platform failures and idle wakes in just the trial workspaces' objects. Scope precedes grouping: worker-wide calls
+ *  reached the 2,000-group cap in eval run 37880718948 before the reader could discard other workspaces. */
+export async function readWorkspacePlatform(telemetry: Pick<Telemetry, 'count' | 'buckets'>, workspaces: ReadonlySet<string>): Promise<WorkspaceRead[]> {
+  const eq = (key: string, value: string): Filter => ({ key, operation: 'eq', value, type: 'string' });
+
+  const whole = <T>(rows: readonly T[], what: string): readonly T[] => {
+    if (rows.length >= GROUPS) throw new Error(`the read of ${what} reached ${String(GROUPS)} groups and may have dropped objects`);
+
+    return rows;
+  };
+
+  return Promise.all([...workspaces].sort().map(async (workspace) => {
+    const named = whole(await telemetry.count({
+      filters: [eq('event', 'actor.startup'), eq('fields.workspace', workspace)],
+      groupBy: ['$workers.durableObjectId'], limit: GROUPS,
+    }), `objects of ${workspace}`);
+
+    const objects = [...new Set(named.map((row) => row.groups[0] ?? '').filter((object) => object !== ''))];
+
+    const readings = await Promise.all(objects.map(async (object) => {
+      const scope = eq('$workers.durableObjectId', object);
+      const invocation = eq('$metadata.type', 'cf-worker-event');
+
+      const ended = whole(await telemetry.count({
+        filters: [scope, invocation, { key: '$workers.outcome', operation: 'neq', value: 'ok', type: 'string' }],
+        groupBy: ['$workers.outcome'], limit: GROUPS,
+      }), `invocations of ${object}`);
+
+      const coded = whole(await telemetry.count({
+        filters: [scope, { key: 'code', operation: 'exists', type: 'string' }], groupBy: ['event', 'code'], limit: GROUPS,
+      }), `failures of ${object}`);
+
+      const perMinute = async (filters: readonly Filter[], what: string) => whole(await telemetry.buckets({
+        filters: [scope, ...filters], groupBy: ['$workers.durableObjectId'], limit: GROUPS,
+      }, 60_000), `${what} of ${object}`).map((row) => ({ object, minute: row.at, count: row.count }));
+
+      const alarms = await perMinute([invocation, eq('$workers.eventType', 'alarm')], 'alarms');
+      const calls = await perMinute([invocation, { key: '$workers.eventType', operation: 'neq', value: 'alarm', type: 'string' }], 'calls');
+      const streams = await perMinute([eq('$metadata.type', 'cf-worker'), eq('event', 'provider.stream_opened')], 'model calls');
+
+      return {
+        ended: ended.map((row) => ({ outcome: row.groups[0] ?? '', count: row.count })),
+        failures: coded.map((row) => ({ event: row.groups[0] ?? '', code: row.groups[1] ?? '', count: row.count })),
+        idleWakes: idleWakeHours(alarms, [...calls, ...streams]).reduce((sum, row) => sum + row.count, 0),
+      };
+    }));
+
+    return { workspace, objects: objects.length, ended: readings.flatMap((row) => row.ended), failures: readings.flatMap((row) => row.failures),
+      idleWakes: readings.reduce((sum, row) => sum + row.idleWakes, 0) };
+  }));
+}
 
 /** How an invocation ends when the platform, not the product, ended it for what it spent. */
 const EXCEEDED = /^exceeded/u;

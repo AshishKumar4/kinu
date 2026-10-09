@@ -1,8 +1,17 @@
 import { expect, test } from 'bun:test';
 import { join } from 'node:path';
+import { readdirSync } from 'node:fs';
 import { runToExit, scratchDir } from '@kinu.run/test-utils';
 
 const REPO = join(import.meta.dirname, '../..');
+
+test('a plain Bun script can collect every task without loading a Vitest suite or running a trial', async () => {
+  const run = await runToExit([process.execPath, '-e', `const { collectEvalTasks } = await import('./evals/src/eval.ts');
+    console.log(JSON.stringify((await collectEvalTasks()).map((task) => task.id).sort()));`], { cwd: REPO });
+
+  expect(run.exitCode).toBe(0);
+  expect(JSON.parse(run.stdout.trim())).toEqual(readdirSync(join(REPO, 'evals/tasks')).filter((name) => name.endsWith('.eval.ts')).map((name) => name.replace('.eval.ts', '')).sort());
+});
 
 test('every task file loads under the eval runner, as a run collects it', async () => {
   // Task files load only under vitest's module transform, never under `bun test`, which reads what that transform does
