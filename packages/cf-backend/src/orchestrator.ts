@@ -4438,10 +4438,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }));
   }
 
-  /** Retired ones hold their stores until destroyed; main's isolate, once it ran a turn, and not opened for none. */
+  /** Retired ones hold their stores until destroyed; main's isolate, once it ran a turn, and not opened for none. A store
+   *  this version refuses never ran one: its conversation is the workspace's own, old, table. */
   private agentsWithStores(): string[] {
+    const mainHolds = (): boolean => this.storageRefusal === undefined && this.config.getHoldsTurns();
+
     return this.actorDirectoryStore().list({ retired: true })
-      .filter((record) => (record.parentActorId === null ? this.config.getHoldsTurns() : hostedActorPlacement(record).homeName !== null))
+      .filter((record) => (record.parentActorId === null ? mainHolds() : hostedActorPlacement(record).homeName !== null))
       .map((record) => record.actorId);
   }
 
