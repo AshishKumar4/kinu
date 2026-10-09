@@ -1,5 +1,5 @@
 /**
- * Durable record of device commands still running on a user's computer, and the precedence protocol over it.
+ * Durable record of device commands still running on a user's PC, and the precedence protocol over it.
  * A row is inserted before its frame leaves the UserDO and removed only after the daemon acknowledges a terminal answer.
  * Claims are exclusive and activation-scoped (a fresh activation releases all); the first stored answer wins.
  */

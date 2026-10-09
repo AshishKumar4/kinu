@@ -5554,9 +5554,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       if (executorId !== 'sandbox') return { error: `${executorId} has no terminal` };
       const handle = this.rt.sandboxHandle;
 
-      if (!handle) return { error: 'the sandbox container is not configured for this workspace' };
+      if (!handle) return { error: 'this workspace has no computer configured' };
 
-      return (yield* terminalStep(Effect.promise(() => handle.ensureReady()), 'preparing the sandbox container for a terminal')) ?? { ok: true };
+      return (yield* terminalStep(Effect.promise(() => handle.ensureReady()), 'preparing the computer for a terminal')) ?? { ok: true };
     }));
   }
 

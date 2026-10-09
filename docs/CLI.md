@@ -76,14 +76,14 @@ kinu <command> [options]
 | [`kinu gepa <name> [runId]`](#kinu-gepa-name-runid) | Show GEPA searches, or run one over the scaffold with --run |
 | [`kinu quality <name>`](#kinu-quality-name) | Show satisfaction per day: the mean rating of the turns users answered, with 95% intervals |
 
-### This computer
+### This PC
 
 | Command | What it does |
 | --- | --- |
-| [`kinu connect`](#kinu-connect) | Connect this computer so your agents can run commands on it |
-| [`kinu desktop [action]`](#kinu-desktop-action) | Connect this computer, or show its connection status and daemon logs |
+| [`kinu connect`](#kinu-connect) | Connect this PC so your agents can run commands on it |
+| [`kinu desktop [action]`](#kinu-desktop-action) | Connect this PC, or show its connection status and daemon logs |
 | [`kinu daemon [action] [workspace]`](#kinu-daemon-action-workspace) | Start, stop or check the local scheduler daemon, or run one pass by hand with tick |
-| [`kinu deploy [target] [action]`](#kinu-deploy-target-action) | Run your own Kinu: `deploy cloudflare` in your Cloudflare account, `deploy local [start\|stop\|status]` on this computer |
+| [`kinu deploy [target] [action]`](#kinu-deploy-target-action) | Run your own Kinu: `deploy cloudflare` in your Cloudflare account, `deploy local [start\|stop\|status]` on this PC |
 | [`kinu doctor`](#kinu-doctor) | Check the installed Kinu CLI: paths, origin and version |
 | [`kinu update [target]`](#kinu-update-target) | Update the installed Kinu command |
 | [`kinu uninstall`](#kinu-uninstall) | Remove the installed Kinu command |
@@ -629,7 +629,7 @@ kinu quality jarvis
 
 ### kinu connect
 
-Connect this computer so your agents can run commands on it.
+Connect this PC so your agents can run commands on it.
 
 | Option | What it does |
 | --- | --- |
@@ -641,7 +641,7 @@ kinu connect --label studio
 
 ### kinu desktop [action]
 
-Connect this computer, or show its connection status and daemon logs.
+Connect this PC, or show its connection status and daemon logs.
 
 | Option | What it does |
 | --- | --- |
@@ -661,7 +661,7 @@ kinu daemon tick jarvis
 
 ### kinu deploy [target] [action]
 
-Run your own Kinu: `deploy cloudflare` in your Cloudflare account, `deploy local [start|stop|status]` on this computer.
+Run your own Kinu: `deploy cloudflare` in your Cloudflare account, `deploy local [start|stop|status]` on this PC.
 
 | Option | What it does |
 | --- | --- |

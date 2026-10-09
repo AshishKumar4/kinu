@@ -7,7 +7,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { FilesFocus, HeadDeltas } from "@kinu.run/core";
 import type { AgentStatus, ExecutorOutput, ReadMoves } from "@/hooks/use-kinu";
 import type { AsyncResource } from "@/hooks/use-async-resource";
-import { executorLabel, type ExecutorInfo, type InspectedWork } from "@kinu.run/core";
+import { executorLabel, previewPortTitle, type ExecutorInfo, type InspectedWork } from "@kinu.run/core";
 import { Loader } from "@cloudflare/kumo";
 import type { MemoryEntry, ForkNode, ExecutorCommandResult, Rpc, TabPresence } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
@@ -232,7 +232,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
     })),
     ...ports.map((port) => ({
       key: `preview:${port.executor}:${port.port}` as const,
-      title: port.name === undefined || port.name === "" ? `${port.executor} :${port.port}` : port.name,
+      title: previewPortTitle(port),
       Icon: GlobeIcon,
     })),
     ...planPages.pages.map((item) => ({
@@ -332,7 +332,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
                 onConnectDevice={openConnect}
               />
             )}
-            {openPort && <PreviewFrame url={openPort.url} label={openPort.name ?? `${openPort.executor} :${openPort.port}`} />}
+            {openPort && <PreviewFrame url={openPort.url} label={previewPortTitle(openPort)} />}
             <SideSurface shown={surface} rpc={props.rpc} isStreaming={props.isStreaming} />
             {openSlate !== null && <OpenSlatePanel {...props} slate={openSlate} summary={openSlateSummary} />}
           </Suspense>

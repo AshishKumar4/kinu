@@ -28,7 +28,7 @@ export function ChatGptPlanUsage() {
   );
 }
 
-type Way = "computer" | "here";
+type Way = "pc" | "here";
 
 const PASTE_OUTCOME = {
   declined: "You cancelled the sign-in at OpenAI.",
@@ -78,13 +78,13 @@ export function ChatGptConnect({ plan, onSignedIn }: { plan: ChatGptPlan; onSign
       )}
       {way === null && (
         <div className="grid gap-2 sm:grid-cols-2">
-          <WayButton icon={<DesktopTowerIcon size={16} />} title="Use your computer"
-            text="Sign in on a machine running Kinu. The sign-in stays on that machine." onClick={() => { setError(null); setWay("computer"); }} />
+          <WayButton icon={<DesktopTowerIcon size={16} />} title="Use your PC"
+            text="Sign in on a machine running Kinu. The sign-in stays on that machine." onClick={() => { setError(null); setWay("pc"); }} />
           <WayButton icon={<GlobeIcon size={16} />} title="Sign in here"
             text="Sign in in this browser, then paste back the address it lands on." onClick={() => { setError(null); setWay("here"); }} />
         </div>
       )}
-      {way === "computer" && <OnYourComputer plan={plan} onDone={finished} onGaveUp={gaveUp} onFailed={shown} />}
+      {way === "pc" && <OnYourPc plan={plan} onDone={finished} onGaveUp={gaveUp} onFailed={shown} />}
       {way === "here" && <SignInHere onDone={finished} onFailed={shown} />}
       {way !== null && (
         <button type="button" onClick={cancel} className="p-meta p-text-3 underline-offset-2 hover:p-text hover:underline">Cancel</button>
@@ -107,7 +107,7 @@ function WayButton({ icon, title, text, onClick }: { icon: ReactNode; title: str
 type Failed = (failure: { readonly cause?: unknown }) => Effect.Effect<void>;
 
 /** Signs in through a machine, first handing the command that connects one. */
-function OnYourComputer({ plan, onDone, onGaveUp, onFailed }: {
+function OnYourPc({ plan, onDone, onGaveUp, onFailed }: {
   plan: ChatGptPlan; onDone: (first: boolean) => void; onGaveUp: (reason: string) => void; onFailed: Failed;
 }) {
   const [current, setCurrent] = useState(plan);
@@ -149,7 +149,7 @@ function OnYourComputer({ plan, onDone, onGaveUp, onFailed }: {
 
   if (signIn?.state === "open") {
     return (
-      <div className="space-y-2" data-chatgpt-way="computer" data-chatgpt-state="open">
+      <div className="space-y-2" data-chatgpt-way="pc" data-chatgpt-state="open">
         <p className="text-xs p-text-2">Sign in from a browser on <span className="font-medium p-text">{signIn.device.label}</span>. The sign-in comes back to that machine.</p>
         <div className="flex flex-wrap items-center gap-2">
           <a href={signIn.authorizeUrl} target="_blank" rel="noopener noreferrer" className="p-btn-quiet inline-flex items-center gap-1.5 px-3 py-1.5 text-xs">
@@ -163,8 +163,8 @@ function OnYourComputer({ plan, onDone, onGaveUp, onFailed }: {
   }
 
   return (
-    <div className="space-y-2" data-chatgpt-way="computer" data-chatgpt-state="waiting">
-      <p className="text-xs p-text-2">Run this on your computer. It installs the Kinu CLI and connects the machine; the sign-in then opens there.</p>
+    <div className="space-y-2" data-chatgpt-way="pc" data-chatgpt-state="waiting">
+      <p className="text-xs p-text-2">Run this on your PC. It installs the Kinu CLI and connects the machine; the sign-in then opens there.</p>
       {command !== null && (
         <div className="flex items-start gap-2 rounded-md p-fill border p-border p-3">
           <code data-connect-command className="p-t-code p-text flex-1 break-all select-all">{command}</code>

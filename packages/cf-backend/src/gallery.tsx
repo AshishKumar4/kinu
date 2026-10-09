@@ -715,8 +715,26 @@ function accountMemoryFixture(path: string, method: string): Response | null {
   return path === "/api/user/memory" && method === "GET" ? fixtureJson(ACCOUNT_MEMORY_FIXTURE) : null;
 }
 
+function accountComputerSizeFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
+  if (path !== "/api/user/config/sandbox_size") return null;
+
+  if (method === "GET") return fixtureJson(v.parse(JsonValueSchema, STUB.get(path)));
+
+  if (method === "PUT") {
+    const { value } = v.parse(v.object({ value: v.string() }), JSON.parse(v.parse(v.string(), body)));
+    const stored = { key: "sandbox_size", value };
+
+    STUB.set(path, stored);
+
+    return fixtureJson(v.parse(JsonValueSchema, stored));
+  }
+
+  return null;
+}
+
 const SETTINGS_SLICES: readonly SettingsSlice[] = [
   accountMemoryFixture,
+  accountComputerSizeFixture,
   accountProfileFixture,
   settingsSectionsFixture,
   workspaceRosterFixture,
