@@ -40,7 +40,9 @@ own workspace, a file it wants to replace, a machine it wants to use, a
 proposed workspace, a plan to review) waits as a stack of cards on top of the
 chat's message box: the newest open with its answers, the rest behind it, each
 opening as you answer the one before. Click a card behind to answer it first.
-Work → Needs you lists the same things.
+Work → Needs you lists the same things. An agent you hired asks the same way:
+its commands wait on you in its own chat (and in the workspace's list), and
+once you approve one, it is told and runs it under its own permissions.
 
 ## 2. Day one
 

@@ -49,6 +49,15 @@ export const PARKED_COMMANDS = ['git push --force origin flow-release', 'npm pub
 /** The agent's reply to a decision's wake, before what it was told; it re-issues nothing, so nothing the row approves runs. */
 export const DECISION_HEARD = 'DECISION HEARD';
 
+/** The hire row's ask, sent to a chat agent the owner made: its command parks as the hire's own. */
+export const HIRE_APPROVAL_ASK = 'Flow hire approval: push the hire release.';
+
+/** Gated (git-force-push) and harmless anywhere: git cannot enter the directory, so nothing is pushed. */
+export const HIRE_PARKED_COMMAND = 'git -C /nonexistent-kinu-dir push --force origin flow-hire-release';
+
+/** The hire's reply once its re-issued command ran; the row reads it in the hire's chat. */
+export const HIRE_RAN = 'HIRE RAN';
+
 /** The live-memory row's ask, and the note its turn saves. */
 export const MEMORY_ASK = 'Flow memory: save the release note.';
 
@@ -122,8 +131,28 @@ const FLOW_SLATE_CALLS: readonly ScriptedAnswer[] = [
   },
 ];
 
+/** The hire row: its ask parks the command; the owner's approval wakes it to re-issue that once, which then runs. */
+function hireApprovalScript(request: ScriptedRequest, latest: string): ScriptedAnswer | null {
+  const asked = latest.includes(HIRE_APPROVAL_ASK);
+  const woken = latest.includes('still not run: re-issue once') && latest.includes(HIRE_PARKED_COMMAND);
+
+  if (!asked && !woken) return null;
+  const [done] = request.turn.filter((call) => call.name === 'shell');
+
+  if (done === undefined) return { toolCall: { name: 'shell', arguments: { runtime: 'workspace', command: HIRE_PARKED_COMMAND } } };
+
+  if (asked) return { text: 'HIRE PARKED' };
+
+  return { text: done.result.includes('NOT RUN') ? 'HIRE STILL BLOCKED' : HIRE_RAN };
+}
+
 /** The approvals row: its turn parks both commands, and each decision's wake is answered without re-issuing anything. */
 function approvalsScript(request: ScriptedRequest, latest: string): ScriptedAnswer | null {
+  // The hire row's first: both answer a decision's wake, and the hire's is told by its own command.
+  const hire = hireApprovalScript(request, latest);
+
+  if (hire !== null) return hire;
+
   // A decision's wake names what was approved and what denied (core safety/deferred-approval.ts `decisionWakeMessage`).
   const approvedHeard = latest.includes('still not run: re-issue once');
   const deniedHeard = latest.includes('DENIED: do not re-issue');

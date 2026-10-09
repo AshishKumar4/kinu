@@ -404,7 +404,8 @@ function buildCLIRuntime(
   };
 
   // As on the cloud: grants are written on the root's rows, so a child inherits the root's answers
-  // intersected with its own narrowing, and cannot remember or ask for wider reach.
+  // intersected with its own narrowing, and cannot remember or ask for wider reach. A gated command it runs parks on
+  // the workspace's one queue, as the root's do.
   const approvalPolicy: ShellApprovalPolicy = config.facet === undefined
     ? ownerPolicy
     : createInheritedApprovalPolicy({
@@ -414,6 +415,7 @@ function buildCLIRuntime(
         return { mode: root.getShellApprovalMode(), grants: root.getShellApprovalGrants() };
       },
       ownGrants: () => agentConfig.getShellApprovalGrants(),
+      deferrals: () => approvalDeferrals ?? undefined,
     });
 
   // The shell runs on the user's machine and may mutate the tree, so it snapshots first.

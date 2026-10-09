@@ -32,7 +32,7 @@ import { holdForRelease } from '../packages/test-utils/src/scratch';
 import { DESKTOP } from './live-app-harness';
 import {
   AGENT_PLAN_ASK, FLOW_MEMORY_NOTE, FLOW_SHELL_PROBE, FLOW_SLATE, MEMORY_ASK, SLATE_ASK, STORM_ASK, STORM_DIR, STORM_FILES, STORM_SEED_ASK, WRITE_FILE_ASK,
-  APPROVALS_ASK, DECISION_HEARD, PROPOSAL_LINK_REPLY, WORKSPACE_PROPOSAL_ASK,
+  APPROVALS_ASK, DECISION_HEARD, HIRE_APPROVAL_ASK, HIRE_RAN, PROPOSAL_LINK_REPLY, WORKSPACE_PROPOSAL_ASK,
 } from './flows-script';
 import { FALLBACK_ANSWER } from './scripted-protocol';
 import {
@@ -727,6 +727,47 @@ export async function approvalsStackAtTheComposer(target: FlowTarget): Promise<A
         approvedReply: new RegExp(`${DECISION_HEARD}[^]*approved`, 'u').test(said), deniedReply: new RegExp(`${DECISION_HEARD}[^]*denied`, 'u').test(said),
       },
     };
+  } finally {
+    await removeFlowWorkspace(target, workspace);
+  }
+}
+
+export interface HireApprovalVerdict {
+  /** The asks the hire's own pane stacked once its command parked, and the open card's words. */
+  readonly paneStacked: readonly string[];
+  readonly openWords: string;
+  /** Whether the hire, woken by the approval, said its re-issue ran. */
+  readonly ran: boolean;
+}
+
+/**
+ * Row: a chat agent the owner made runs a command its workspace gates (strict, nobody granted it). It parks as the
+ * hire's own ask, stacked on the hire's composer; approved there, the hire is woken on its own queue and its re-issue
+ * runs. Before, a hire was refused outright: "needs owner approval, nobody to ask".
+ */
+export async function hireParksAndRunsOnApproval(target: FlowTarget): Promise<HireApprovalVerdict> {
+  const workspace = await createFlowWorkspace(target, 'hire-approval');
+
+  try {
+    const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
+
+    await startNewChat(page);
+    const agentPath = `/workspace/${encodeURIComponent(workspace)}/agents/`;
+    const agent = v.parse(v.string(), await page.evaluate(`decodeURIComponent(location.pathname.slice(${String(agentPath.length)}))`));
+    const pane = `[data-agent-pane="${workspace}/agents/${agent}"]`;
+
+    await until(page, "the new agent's own composer", agentComposer(workspace, agent));
+    await sendAndSettle(page, HIRE_APPROVAL_ASK);
+    await until(page, "the hire's ask stacked on its composer", `document.querySelector(${JSON.stringify(`${pane} [data-attention-stack]`)}) !== null`);
+    const paneStacked = v.parse(v.array(v.string()), await page.evaluate(`[...document.querySelectorAll(${JSON.stringify(`${pane} [data-attention-card]`)})].map((card) => card.getAttribute('data-attention-card'))`));
+    const openWords = v.parse(v.string(), await page.evaluate(`document.querySelector(${JSON.stringify(`${pane} [data-attention-card]`)})?.textContent ?? ''`));
+
+    await page.evaluate(`[...document.querySelectorAll(${JSON.stringify(`${pane} [data-attention-card] button`)})].find((button) => button.textContent?.trim() === 'Approve')?.click()`);
+    await until(page, "the hire's stack cleared", `document.querySelector(${JSON.stringify(`${pane} [data-attention-stack]`)}) === null`);
+    await until(page, 'the hire, woken, saying its re-issue ran or did not', `/HIRE (RAN|STILL BLOCKED)/u.test(document.querySelector(${JSON.stringify(pane)})?.textContent ?? '')`);
+    const ran = v.parse(v.boolean(), await page.evaluate(`(document.querySelector(${JSON.stringify(pane)})?.textContent ?? '').includes(${JSON.stringify(HIRE_RAN)})`));
+
+    return { paneStacked, openWords, ran };
   } finally {
     await removeFlowWorkspace(target, workspace);
   }

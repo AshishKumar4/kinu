@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * An overwrite of the user's file parked on the owner and approved, on real Durable Object storage. Its bytes go
@@ -75,7 +76,7 @@ export class ParkedWritesProbeDO extends DurableObject<Cloudflare.Env> {
 
       const queue = new DeferredApprovalQueue({
         store: new DeferredApprovalStore(this.sql, actor), remember: () => {},
-        inbox: { send: async () => 'queued' },
+        wake: () => Effect.void,
         writes: {
           content: new ParkedWriteFiles(async () => kernel),
           perform: (write, bytes) => performBoundWrite(plane, write, bytes),

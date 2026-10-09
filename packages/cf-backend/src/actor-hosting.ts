@@ -82,8 +82,8 @@ export interface WorkspaceHostSeams {
   logActivity(actorId: string, event: string, detail?: string): void;
   tracing(): AgentTracing;
   slate(actor: ActorHandle, operation: SlateOperation): Promise<SlateCallResult>;
-  /** The owner's needs-you queue: one per workspace. */
-  deferrals(): DeferredApprovalChannel | undefined;
+  /** The owner's needs-you queue: one per workspace, which each actor parks on as itself. */
+  deferrals(actorId: string): DeferredApprovalChannel | undefined;
   refinementLane(bound: BoundActor & { readonly runtime: AgentRuntime }): () => Promise<void>;
   /** The port a hosted actor hires its advisor through, as every hire goes; absent, none is reviewed. */
   advisorPort?(reference: ActorReference): TemporaryAgentPort;
@@ -202,7 +202,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         servingMoved: () => seams.servingMoved(),
         boxUse: seams.boxUse,
         slate: (operation) => seams.slate(bound.handle, operation),
-        deferrals: () => seams.deferrals(),
+        deferrals: () => seams.deferrals(bound.handle.actorId),
         // The chat's authority: a self-resolved profile could differ from the turn's and make a search unreproducible.
         resolveProfile: async () => (await seams.resolveProfile({
           actor: bound.handle, availableTools: [], workMode: 'build',

@@ -8,7 +8,7 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
 import type { DynamicApproval } from '../types/dynamic-context';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import type { AgentInbox } from '../types/signals';
+import type { AgentSignal } from '../types/signals';
 import type { ApprovalConsumedRecord } from '../events/types';
 import * as v from 'valibot';
 import {
@@ -21,7 +21,8 @@ import {
 } from './approval-gate';
 import { boundWriteOf, type ApprovalContent, type BoundFileWrite } from './bound-write';
 import { nanoid } from '../utils/nanoid';
-import { diagnostics, KinuError, settleLoggedSync, toKinuError } from '../obs/index';
+import { diagnostics, KinuError, settle, settleLoggedSync, toKinuError } from '../obs/index';
+import { Effect } from 'effect';
 import { serialQueue } from '@kinu.run/agent-utils';
 
 /** The `kinuEvent` kind a decision wakes the agent under; same mechanism as the background-job wake. */
@@ -47,6 +48,8 @@ export const DENIAL_STANDING_MS = 24 * 60 * 60 * 1000;
 /** One action parked on the owner. */
 export interface DeferredApproval {
   readonly id: string;
+  /** The actor that asked, by id: its approvals and denials stand for it alone, and the decision wakes it. */
+  readonly actor: string;
   /** The exact command the agent asked to run. */
   readonly command: string;
   /** The machine it was bound for; a grant for one executor never answers for another. */
@@ -65,7 +68,7 @@ export type DeferredApprovalVerdict =
   | { readonly outcome: 'queued'; readonly action: DeferredApproval };
 
 interface Row {
-  id: string; command: string; executor: string; reason: string; status: string;
+  actor_id: string; id: string; command: string; executor: string; reason: string; status: string;
   requested_at: number; decided_at: number | null;
 }
 
@@ -77,6 +80,7 @@ function toAction(r: Row): DeferredApproval {
 
   return {
     id: r.id,
+    actor: r.actor_id,
     command: r.command,
     executor: r.executor,
     reason: r.reason,
@@ -121,11 +125,47 @@ export interface DeferredApprovalHit {
 
 /** The durable rows; pure storage. */
 export class DeferredApprovalStore {
-  private readonly actorId: string;
+  /** The actor whose rows these are. */
+  readonly actorId: string;
 
-  /** Bind the table to one actor: grants and denials never cross actors. */
-  constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle) {
-    this.actorId = actor.actorId;
+  /**
+   * Bind the table to one actor's rows: grants and denials never cross actors. `rowsOf`: a hired agent's rows, kept in
+   * the storage `actor` owns, as the one queue of its workspace keeps them ({@link forActor}).
+   */
+  constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle, rowsOf: string = actor.actorId) {
+    this.actorId = rowsOf;
+  }
+
+  /** Another actor's rows in the same storage: a hire's, in its root's. */
+  forActor(actorId: string): DeferredApprovalStore {
+    return new DeferredApprovalStore(this.sql, this.actor, actorId);
+  }
+
+  /** Every actor's rows still parked on the owner, oldest first: the workspace's one queue. */
+  workspaceQueued(limit = 100): DeferredApproval[] {
+    this.actor.assertCurrent();
+
+    return this.sql<Row>`
+      SELECT actor_id, id, command, executor, reason, status, requested_at, decided_at
+      FROM deferred_approvals WHERE status='queued'
+      ORDER BY requested_at ASC LIMIT ${limit}`.map(toAction);
+  }
+
+  /** The actors with a row of this id: ids are minted unique, so one. */
+  owners(id: string): string[] {
+    this.actor.assertCurrent();
+
+    return this.sql<{ actor_id: string }>`SELECT actor_id FROM deferred_approvals WHERE id = ${id}`.map((row) => row.actor_id);
+  }
+
+  /** Whether any actor's live row names these bytes: parked bytes are the workspace's, whoever parked them. */
+  namesBytes(sha256: string): boolean {
+    this.actor.assertCurrent();
+
+    return this.sql<{ id: string }>`
+      SELECT id FROM deferred_approvals
+      WHERE status IN ('queued','approved') AND instr(command, ${` sha256:${sha256} over sha256:`}) > 0
+      LIMIT 1`.length > 0;
   }
 
   /** This command's live row on this executor, never 'spent'; a decision outranks an ask, the newest wins. */
@@ -133,7 +173,7 @@ export class DeferredApprovalStore {
     this.actor.assertCurrent();
 
     const rows = this.sql<Row>`
-      SELECT id, command, executor, reason, status, requested_at, decided_at
+      SELECT actor_id, id, command, executor, reason, status, requested_at, decided_at
       FROM deferred_approvals
       WHERE actor_id = ${this.actorId} AND command = ${command} AND executor = ${executor}
         AND (status IN ('queued','approved')
@@ -161,17 +201,7 @@ export class DeferredApprovalStore {
     return swept.map((row) => row.command);
   }
 
-  namesBytes(sha256: string): boolean {
-    this.actor.assertCurrent();
-
-    return this.sql<{ id: string }>`
-      SELECT id FROM deferred_approvals
-      WHERE actor_id = ${this.actorId} AND status IN ('queued','approved')
-        AND instr(command, ${` sha256:${sha256} over sha256:`}) > 0
-      LIMIT 1`.length > 0;
-  }
-
-  create(action: Omit<DeferredApproval, 'status' | 'decidedAt'>, hits: readonly DeferredApprovalHit[]): DeferredApproval {
+  create(action: Omit<DeferredApproval, 'actor' | 'status' | 'decidedAt'>, hits: readonly DeferredApprovalHit[]): DeferredApproval {
     this.actor.assertCurrent();
     void this.sql`INSERT INTO deferred_approvals
         (actor_id, id, command, executor, reason, status, requested_at, decided_at)
@@ -184,7 +214,7 @@ export class DeferredApprovalStore {
         VALUES (${this.actorId}, ${action.id}, ${hit.rule}, ${hit.decision})`;
     }
 
-    return { ...action, status: 'queued', decidedAt: null };
+    return { ...action, actor: this.actorId, status: 'queued', decidedAt: null };
   }
 
   hits(id: string): DeferredApprovalHit[] {
@@ -222,7 +252,7 @@ export class DeferredApprovalStore {
     const rows = this.sql<SpendRow>`
       UPDATE deferred_approvals SET status='spent', spend_seq = spend_seq + 1
       WHERE actor_id = ${this.actorId} AND id = ${id} AND status = 'approved'
-      RETURNING id, command, executor, reason, status, requested_at, decided_at, spend_seq`;
+      RETURNING actor_id, id, command, executor, reason, status, requested_at, decided_at, spend_seq`;
 
     if (rows.length > 0) markStoreChanged(this.sql);
 
@@ -263,7 +293,7 @@ export class DeferredApprovalStore {
     this.actor.assertCurrent();
 
     const rows = this.sql<Row>`
-      SELECT id, command, executor, reason, status, requested_at, decided_at
+      SELECT actor_id, id, command, executor, reason, status, requested_at, decided_at
       FROM deferred_approvals WHERE actor_id = ${this.actorId} AND id = ${id} LIMIT 1`;
 
     return rows[0] ? toAction(rows[0]) : null;
@@ -274,7 +304,7 @@ export class DeferredApprovalStore {
     this.actor.assertCurrent();
 
     return this.sql<Row>`
-      SELECT id, command, executor, reason, status, requested_at, decided_at
+      SELECT actor_id, id, command, executor, reason, status, requested_at, decided_at
       FROM deferred_approvals WHERE actor_id = ${this.actorId} AND status='queued'
       ORDER BY requested_at ASC LIMIT ${limit}`.map(toAction);
   }
@@ -333,9 +363,13 @@ function decisionWakeMessage(decided: readonly DeferredApproval[], written: Read
 }
 
 export interface DeferredApprovalQueueDeps {
+  /** The root's rows: the queue's owner, whose storage holds every actor's ({@link DeferredApprovalStore.forActor}). */
   readonly store: DeferredApprovalStore;
-  /** The one way anything asynchronous reaches the agent, same as a settled background job. */
-  readonly inbox: AgentInbox;
+  /**
+   * Wakes the actor a decision answers: the root through its inbox, a hired agent through its own durable turn. The
+   * one way anything asynchronous reaches an agent, as a settled background job does.
+   */
+  wake(actorId: string, signal: AgentSignal): Effect.Effect<void, KinuError>;
   /** Record a standing grant from an 'always' answer; the host owns storage (actor_config). */
   remember(grants: readonly ApprovalGrant[]): void;
   /** Durable `approval_consumed` sink; optional only for tests. */
@@ -345,8 +379,11 @@ export interface DeferredApprovalQueueDeps {
   now?: () => number;
   /** Told when actions park and batches are decided. Never throws into the gate. */
   announce?(event: DeferredApprovalNotice): void;
-  /** An approved parked write runs on approval; failing, its row stays approved for a re-issue. Null: nothing parks a
-   *  write. */
+  /**
+   * The root's approved parked write runs on approval; failing, its row stays approved for a re-issue. A hired agent's
+   * is approved and re-issued by the agent, under its own credential: the root's would stand in for it. Null: nothing
+   * parks a write.
+   */
   readonly writes: ParkedWrites | null;
 }
 
@@ -355,6 +392,10 @@ export type DeferredApprovalNotice =
   | { readonly kind: 'queued'; readonly action: DeferredApproval }
   | { readonly kind: 'decided'; readonly actions: readonly DeferredApproval[] };
 
+/**
+ * A workspace's one queue of actions parked on its owner. Each actor parks through its own channel, so its rows, and
+ * the approvals and denials that stand on them, are its own; the owner sees and decides them all in one list.
+ */
 export class DeferredApprovalQueue {
   private readonly now: () => number;
   private readonly newId: () => string;
@@ -362,17 +403,31 @@ export class DeferredApprovalQueue {
   private readonly parking = new Map<string, number>();
   /** One at a time, so a delete's check sees every keep queued before it. */
   private readonly serial = serialQueue();
+  private readonly stores = new Map<string, DeferredApprovalStore>();
 
   constructor(private readonly deps: DeferredApprovalQueueDeps) {
     this.now = deps.now ?? Date.now;
     this.newId = deps.newId ?? (() => `defer-${nanoid(10)}`);
   }
 
-  /** The gate's view: run, or the words to hand the model, plus the way back for an unused spend. */
+  private storeOf(actorId: string): DeferredApprovalStore {
+    const held = this.stores.get(actorId) ?? this.deps.store.forActor(actorId);
+
+    this.stores.set(actorId, held);
+
+    return held;
+  }
+
+  /** The root's own channel. */
   get channel(): DeferredApprovalChannel {
+    return this.channelFor(this.deps.store.actorId);
+  }
+
+  /** The gate's view for one actor: run, or the words to hand the model, plus the way back for an unused spend. */
+  channelFor(actorId: string): DeferredApprovalChannel {
     return {
       park: async (req) => {
-        const verdict = await this.park(req);
+        const verdict = await this.park(req, actorId);
 
         if (verdict.outcome === 'run') return { run: true, spent: verdict.spend };
 
@@ -382,27 +437,27 @@ export class DeferredApprovalQueue {
           reason: verdict.outcome === 'denied' ? 'denied' : 'unavailable',
           message: verdict.outcome === 'denied'
             ? deniedActionMessage(verdict.action)
-            : queuedActionMessage(verdict.action, this.deps.store.hits(verdict.action.id)),
+            : queuedActionMessage(verdict.action, this.storeOf(actorId).hits(verdict.action.id)),
         };
       },
-      settle: async (spent, outcome) => { await this.settle(spent, outcome); },
+      settle: async (spent, outcome) => { await this.settle(spent, outcome, actorId); },
     };
   }
 
   /** Parks an action or answers with the owner's standing decision; a re-ask returns the same row, so the turn's
    *  repeat detector sees a loop. A write's bytes are kept first, then held until its row names them. */
-  async park(req: ShellApprovalRequest): Promise<DeferredApprovalVerdict> {
+  async park(req: ShellApprovalRequest, actorId: string = this.deps.store.actorId): Promise<DeferredApprovalVerdict> {
     const { writes } = this.deps;
     const digest = boundWriteOf(req.command)?.next;
     const next = req.write?.next;
 
-    if (writes === null || digest === undefined || next === undefined) return await this.parkNow(req);
+    if (writes === null || digest === undefined || next === undefined) return await this.parkNow(req, actorId);
     this.parking.set(digest, (this.parking.get(digest) ?? 0) + 1);
 
     try {
       await this.serial(() => writes.content.retain(next));
 
-      return await this.parkNow(req);
+      return await this.parkNow(req, actorId);
     } finally {
       const holds = (this.parking.get(digest) ?? 1) - 1;
 
@@ -412,24 +467,25 @@ export class DeferredApprovalQueue {
     }
   }
 
-  private async parkNow(req: ShellApprovalRequest): Promise<DeferredApprovalVerdict> {
+  private async parkNow(req: ShellApprovalRequest, actorId: string): Promise<DeferredApprovalVerdict> {
     const now = this.now();
+    const store = this.storeOf(actorId);
     // Delete expired denials on the write path; nothing else sweeps them.
-    const swept = this.deps.store.sweepDenials(now);
-    const verdict = this.answer(req, now);
+    const swept = store.sweepDenials(now);
+    const verdict = this.answer(req, now, store);
     await this.release(boundBytes(swept));
 
     return verdict;
   }
 
-  private answer(req: ShellApprovalRequest, now: number): DeferredApprovalVerdict {
-    const standing = this.deps.store.standing(req.command, req.executor, now);
+  private answer(req: ShellApprovalRequest, now: number, store: DeferredApprovalStore): DeferredApprovalVerdict {
+    const standing = store.standing(req.command, req.executor, now);
 
     if (standing?.status === 'denied') return { outcome: 'denied', action: standing };
 
     if (standing?.status === 'approved') {
       // Spend before running so a crash loses an approval rather than granting twice.
-      const spent = this.deps.store.spend(standing.id);
+      const spent = store.spend(standing.id);
 
       if (spent) return { outcome: 'run', action: spent.action, spend: spent.spend };
       // Lost the race to a concurrent re-issue: fall through and park again.
@@ -437,7 +493,7 @@ export class DeferredApprovalQueue {
 
     if (standing?.status === 'queued') return { outcome: 'queued', action: standing };
 
-    const action = this.deps.store.create({
+    const action = store.create({
       id: this.newId(),
       command: req.command,
       executor: req.executor,
@@ -451,10 +507,11 @@ export class DeferredApprovalQueue {
   }
 
   /** Closes a spend: 'spent' consumes and audits the grant, 'did-not-run' restores the row; whether this call closed it. */
-  async settle(spent: ApprovalSpend, outcome: ApprovalSpendOutcome): Promise<boolean> {
-    const action = this.deps.store.get(spent.approvalId);
+  async settle(spent: ApprovalSpend, outcome: ApprovalSpendOutcome, actorId: string = this.deps.store.actorId): Promise<boolean> {
+    const store = this.storeOf(actorId);
+    const action = store.get(spent.approvalId);
 
-    if (!this.deps.store.settle(spent, outcome)) return false;
+    if (!store.settle(spent, outcome)) return false;
 
     if (outcome === 'spent' && action) {
       this.audit(action);
@@ -488,17 +545,24 @@ export class DeferredApprovalQueue {
     }
   }
 
-  /** The owner decided on one or many actions; `always` also grants the tripped rules on that executor. */
+  /**
+   * The owner decided on one or many actions, whoever asked; `always` also grants the tripped rules on that executor.
+   * Each asking actor is woken once, with its own.
+   */
   async decide(ids: readonly string[], answer: DeferredApprovalAnswer): Promise<DeferredApproval[]> {
     const now = this.now();
-    const swept = this.deps.store.sweepDenials(now);
     const decided: DeferredApproval[] = [];
+    const swept: string[] = [];
 
     // Deduped so one command is not reported as two decisions.
     for (const id of new Set(ids)) {
-      const action = this.deps.store.decide(id, answer, now);
+      for (const actorId of this.deps.store.owners(id)) {
+        const store = this.storeOf(actorId);
+        swept.push(...store.sweepDenials(now));
+        const action = store.decide(id, answer, now);
 
-      if (action) decided.push(action);
+        if (action) decided.push(action);
+      }
     }
 
     await this.release(boundBytes([...swept, ...decided.filter((a) => a.status === 'denied').map((a) => a.command)]));
@@ -507,26 +571,33 @@ export class DeferredApprovalQueue {
 
     if (answer === 'always') {
       // Not re-reviewed: that would lose the call's member and cwd.
-      this.deps.remember(decided.flatMap((a) => this.deps.store.hits(a.id)
+      this.deps.remember(decided.flatMap((a) => this.storeOf(a.actor).hits(a.id)
         .filter((hit) => hit.decision === 'gate').map((hit) => ({ rule: hit.rule, executor: a.executor }))));
     }
 
-    const written = await this.performWrites(decided);
+    const written = await this.performWrites(decided.filter((a) => a.actor === this.deps.store.actorId));
     this.notify({ kind: 'decided', actions: decided });
-    await this.deps.inbox.send({
-      kind: DEFERRED_APPROVAL_SIGNAL,
-      text: decisionWakeMessage(decided, written),
-      metadata: { decision: answer, count: decided.length, ids: decided.map((a) => a.id) },
-    });
 
-    return decided;
+    // Each asker once, in turn: a wake that fails is the answer's failure, as the decision itself is already durable.
+    const wakes = Effect.forEach(new Set(decided.map((a) => a.actor)), (actorId) => {
+      const own = decided.filter((a) => a.actor === actorId);
+
+      return this.deps.wake(actorId, {
+        kind: DEFERRED_APPROVAL_SIGNAL,
+        text: decisionWakeMessage(own, written),
+        metadata: { decision: answer, count: own.length, ids: own.map((a) => a.id) },
+      });
+    }, { discard: true });
+
+    return settle(Effect.as(wakes, decided));
   }
 
   /** The bytes are read while the approved row still names them, then the row is spent, so a re-issue meanwhile
    *  cannot write twice. */
   private async performWrites(decided: readonly DeferredApproval[]): Promise<ReadonlyMap<string, WriteOutcome>> {
     const written = new Map<string, WriteOutcome>();
-    const { writes, store } = this.deps;
+    const { writes } = this.deps;
+    const store = this.storeOf(this.deps.store.actorId);
 
     for (const action of writes === null ? [] : decided) {
       const write = action.status === 'approved' ? boundWriteOf(action.command) : null;
@@ -558,22 +629,23 @@ export class DeferredApprovalQueue {
     return written;
   }
 
+  /** A queued write's change, whoever parked it. */
   async parkedWrite(id: string): Promise<{ readonly write: BoundFileWrite; readonly bytes: Uint8Array } | null> {
-    const action = this.deps.store.get(id);
-    const write = action?.status === 'queued' ? boundWriteOf(action.command) : null;
+    const action = this.deps.store.owners(id).map((actorId) => this.storeOf(actorId).get(id)).find((row) => row?.status === 'queued');
+    const write = action === undefined || action === null ? null : boundWriteOf(action.command);
     const bytes = write === null ? null : await this.deps.writes?.content.read(write.next) ?? null;
 
     return write === null || bytes === null ? null : { write, bytes };
   }
 
-  /** Everything still parked, oldest first. */
+  /** Everything still parked in the workspace, oldest first, each with the actor that asked. */
   list(): DeferredApproval[] {
-    return this.deps.store.listQueued();
+    return this.deps.store.workspaceQueued();
   }
 
-  /** Parked actions for the per-step dynamic-context block, re-telling the turn they have not run. */
-  approvals(): DynamicApproval[] {
-    return this.list().map((action) => ({
+  /** One actor's parked actions for its per-step dynamic-context block, re-telling the turn they have not run. */
+  approvals(actorId: string = this.deps.store.actorId): DynamicApproval[] {
+    return this.storeOf(actorId).listQueued().map((action) => ({
       id: action.id,
       kind: 'queued command (NOT run)',
       detail: clip(action.command),

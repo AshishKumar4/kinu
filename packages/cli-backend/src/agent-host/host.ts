@@ -614,6 +614,10 @@ export class LocalAgentHost {
         actor: input.actor,
         host: input.tree.host,
         orchestration,
+        // One queue per workspace: a hire parks on its root's, and the root's wakes the hire it answers.
+        ...(input.parentKey === null
+          ? { wakeHire: (actorId: string, signal: AgentSignal) => this.wakeHire(input.tree, actorId, signal) }
+          : { approvals: this.rootEntry(input.parentKey).session.approvalQueue }),
       },
       cwd: input.ref.cwd,
       onEvent: (event) => this.onSessionEvent(input.key, event),
@@ -1171,6 +1175,37 @@ export class LocalAgentHost {
     if (!entry) throw new Error(`local agent "${key}" is not hosted`);
 
     return entry;
+  }
+
+  /**
+   * Tells a hire what the owner decided, as work on its own event log, so an idle or unloaded hire wakes to it as it
+   * would to its hirer's message.
+   */
+  private wakeHire(tree: HostTree, actorId: string, signal: AgentSignal): Effect.Effect<void, KinuError> {
+    return Effect.flatMap(this.entryOf(tree, actorId), (child) => {
+      const { parentKey } = child;
+
+      return parentKey === null
+        ? Effect.fail(new KinuError('denied', 'A root is woken through its own inbox.'))
+        : Effect.sync(() => { this.admitChildWork(this.requireEntry(parentKey), child, { kind: 'message', body: signal.text, mode: 'build' }); });
+    });
+  }
+
+  /** The hosted entry of an actor in this tree, opening its ancestors' as needed. */
+  private entryOf(tree: HostTree, actorId: string): Effect.Effect<HostEntry, KinuError> {
+    const hosted = this.byActor.get(actorId);
+
+    if (hosted !== undefined) return Effect.succeed(hosted);
+    const record = tree.directory.retained(actorId);
+
+    if (record === null || record.parentActorId === null || record.deletedAt !== null) {
+      return Effect.fail(new KinuError('missing', `No live agent ${actorId} in this workspace.`));
+    }
+
+    return Effect.flatMap(this.entryOf(tree, record.parentActorId), (parent) => attempt(
+      { doing: `opening ${record.name} to tell it the owner's decision`, otherwise: 'io' },
+      () => this.openChildEntry(parent, record.name),
+    ));
   }
 
   /** The entry an issued actor id belongs to. */

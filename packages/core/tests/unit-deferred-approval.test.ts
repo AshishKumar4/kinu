@@ -2,9 +2,10 @@ import { readText, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // Deferred approval: a gated command in an unattended run parks durably. A queued action is
 // never reported as a success, and an approval is never reported as an effect.
 import { describe, test, expect } from 'bun:test';
+import { Effect } from 'effect';
 import { Database } from 'bun:sqlite';
 import { createMemoryVfs, fakeMossaic, toolExecute } from '@kinu.run/test-utils';
-import { DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable, DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, withApprovalGatedShell, buildBuiltinTools, formatApprovalGrant, createShellSession, withApprovalGatedFiles, performBoundWrite, withMountTable, sharedDriveMount, mossaicVfs, ParkedWriteFiles, type DeferredApproval, type ShellApprovalPolicy, type ShellApprovalOutcome, type AgentRuntime, type AgentSignal, type FilesOwner, type Shell, WORKSPACE_ROOT } from '../src/index';
+import { DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable, DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, withApprovalGatedShell, buildBuiltinTools, reviewCommand, type DeferredApprovalChannel, formatApprovalGrant, createShellSession, withApprovalGatedFiles, performBoundWrite, withMountTable, sharedDriveMount, mossaicVfs, ParkedWriteFiles, type DeferredApproval, type ShellApprovalPolicy, type ShellApprovalOutcome, type AgentRuntime, type AgentSignal, type FilesOwner, type Shell, WORKSPACE_ROOT } from '../src/index';
 import type { BoundFileWrite } from '../src/safety/bound-write';
 import { CHUNK_SIZE } from '@nimbus-sh/core/constants.js';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -63,11 +64,7 @@ function setup(opts: {
   const queue = new DeferredApprovalQueue({
     writes: null,
     store,
-    inbox: { send: async (signal) => {
-      delivered.push(signal);
-
-      return 'queued';
-    } },
+    wake: (_actor, signal) => Effect.sync(() => { delivered.push(signal); }),
     remember: (grants) => { for (const g of grants) granted.push(formatApprovalGrant(g)); },
     newId: () => `defer-${++seq}`,
     now: () => 1_000 + seq + elapsed,
@@ -117,7 +114,7 @@ describe('a gated action nobody is there to approve', () => {
     const queue = new DeferredApprovalQueue({
       writes: null,
       store: new DeferredApprovalStore(sql, actor),
-      inbox: { send: async () => 'queued' }, remember: () => {},
+      wake: () => Effect.void, remember: () => {},
       audit: () => { throw new Error('audit unavailable'); },
     });
 
@@ -562,12 +559,67 @@ describe('durability — the wait is a night, not a prompt window', () => {
     const queue = new DeferredApprovalQueue({
       writes: null,
       store,
-      inbox: { send: () => Promise.reject(new Error('no host')) },
+      wake: () => Effect.fail(new KinuError('unavailable', 'no host')),
       remember: () => { throw new Error('not an always answer'); },
     });
 
     await expect(queue.decide(['defer-7'], 'approved')).rejects.toThrow('no host');
     expect(store.get('defer-7')?.status).toBe('approved');
+  });
+});
+
+describe('a hired agent parks on its workspace\'s one queue, as itself', () => {
+  function workspaceQueue() {
+    const db = new Database(':memory:');
+    const sql = makeSql(db);
+    const execRaw = makeExecRaw(db);
+    initDeferredApprovalsTable(execRaw);
+    const actors = createTestActors(sql, execRaw);
+    const hire = actors.sibling('courier');
+    const woken: Array<[string, string]> = [];
+    let seq = 0;
+
+    const queue = new DeferredApprovalQueue({
+      writes: null, store: new DeferredApprovalStore(sql, actors.main), remember: () => {},
+      wake: (actorId, signal) => Effect.sync(() => { woken.push([actorId, signal.text]); }),
+      newId: () => `defer-${String(++seq)}`,
+      now: () => 1_000 + seq,
+    });
+
+    const ask = (channel: DeferredApprovalChannel, command: string) => channel.park({
+      command, executor: 'workspace', review: reviewCommand(command, 'agent'),
+    });
+
+    return { queue, root: actors.main, hire, woken, ask };
+  }
+
+  test('both asks wait in the one list, each with its asker; deciding them wakes each asker with its own', async () => {
+    const { queue, root, hire, woken, ask } = workspaceQueue();
+
+    await ask(queue.channel, 'git push --force origin main');
+    await ask(queue.channelFor(hire.actorId), 'git push --force origin release');
+
+    expect(queue.list().map((action) => [action.id, action.actor])).toEqual([['defer-1', root.actorId], ['defer-2', hire.actorId]]);
+    expect([queue.approvals().map((row) => row.id), queue.approvals(hire.actorId).map((row) => row.id)]).toEqual([['defer-1'], ['defer-2']]);
+
+    await queue.decide(['defer-1', 'defer-2'], 'approved');
+
+    expect(woken.map(([actorId, text]) => [actorId, text.split('\n')[1]])).toEqual([
+      [root.actorId, '  defer-1: git push --force origin main'],
+      [hire.actorId, '  defer-2: git push --force origin release'],
+    ]);
+  });
+
+  test('the hire\'s approval runs its own re-issue once, and stands for no one else', async () => {
+    const { queue, hire, ask } = workspaceQueue();
+
+    await ask(queue.channelFor(hire.actorId), GATED);
+    await queue.decide(['defer-1'], 'approved');
+
+    // The root asking the same command is a new ask: the hire's approval is the hire's.
+    expect(await ask(queue.channel, GATED)).toMatchObject({ run: false, reason: 'unavailable' });
+    expect(await ask(queue.channelFor(hire.actorId), GATED)).toMatchObject({ run: true });
+    expect(await ask(queue.channelFor(hire.actorId), GATED)).toMatchObject({ run: false, reason: 'unavailable' });
   });
 });
 
@@ -581,7 +633,7 @@ describe('"always" grants the rules the owner was shown', () => {
     const queue = new DeferredApprovalQueue({
       writes: null,
       store: new DeferredApprovalStore(sql, actor),
-      inbox: { send: async () => 'queued' },
+      wake: () => Effect.void,
       remember: (grants) => { for (const g of grants) granted.push(formatApprovalGrant(g)); },
       newId: () => `defer-${++seq}`,
       now: () => 1_000 + seq,
@@ -661,7 +713,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     const queue = new DeferredApprovalQueue({
       writes: null,
       store,
-      inbox: { send: async () => 'queued' },
+      wake: () => Effect.void,
       remember: () => { throw new Error('not an always answer'); },
       newId: () => `defer-${++seq}`,
       now: () => 1_000 + seq,
@@ -902,11 +954,7 @@ async function driveWithQueue(perform: (plane: VFS, write: BoundFileWrite, bytes
 
   const queue = new DeferredApprovalQueue({
     store, remember: () => {}, newId: () => `defer-${String(++seq)}`,
-    inbox: { send: async (signal) => {
-      woken.push(signal.text);
-
-      return 'queued';
-    } },
+    wake: (_actor, signal) => Effect.sync(() => { woken.push(signal.text); }),
     writes: {
       content: new ParkedWriteFiles(async () => kernel),
       perform: (write, bytes) => perform(plane, write, bytes),

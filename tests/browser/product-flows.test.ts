@@ -11,14 +11,14 @@ import { resolveWebIdentity } from '../../evals/src/session';
 import { withBrowser } from '../../scripts/live-app-harness';
 import {
   DRIVE_SLATE, INSPECTOR_SHUT_PX,
-  agentIsThereOnReturn, agentPlanIsReviewedInItsPane, agentProposesAWorkspace, approvalsStackAtTheComposer, driveKeepsWhatIsDone, driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState,
+  agentIsThereOnReturn, agentPlanIsReviewedInItsPane, agentProposesAWorkspace, approvalsStackAtTheComposer, hireParksAndRunsOnApproval, driveKeepsWhatIsDone, driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState,
   slateOpensFromMyStuff, slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer,
   writtenFileShowsInFilesAndChanges, changesStormStaysBounded, openMemoryFollowsItsWriter,
-  type AgentPlanVerdict, type AgentReturnVerdict, type ApprovalStackVerdict, type WorkspaceProposalVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
+  type AgentPlanVerdict, type AgentReturnVerdict, type ApprovalStackVerdict, type HireApprovalVerdict, type WorkspaceProposalVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
   type FlowTarget, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
   type StampedCardVerdict, type WrittenFileVerdict,
 } from '../../scripts/product-flows';
-import { FLOW_MEMORY_NOTE, FLOW_PROBE, FLOW_SHELL_PROBE, FLOW_SLATE, PARKED_COMMANDS, PROPOSED_WORKSPACE, STORM_FILES } from '../../scripts/flows-script';
+import { FLOW_MEMORY_NOTE, FLOW_PROBE, FLOW_SHELL_PROBE, FLOW_SLATE, HIRE_PARKED_COMMAND, PARKED_COMMANDS, PROPOSED_WORKSPACE, STORM_FILES } from '../../scripts/flows-script';
 import { rowVerdicts } from '../../scripts/row-verdicts';
 
 interface FlowVerdicts {
@@ -28,6 +28,7 @@ interface FlowVerdicts {
   agentPlan: AgentPlanVerdict | null;
   proposal: WorkspaceProposalVerdict | null;
   approvals: ApprovalStackVerdict | null;
+  hireApproval: HireApprovalVerdict | null;
   panel: PanelVerdict | null;
   stamped: StampedCardVerdict | null;
   writtenFile: WrittenFileVerdict | null;
@@ -41,7 +42,7 @@ interface FlowVerdicts {
 }
 
 const observed: FlowVerdicts = {
-  welcome: null, firstAnswer: null, agentReturn: null, agentPlan: null, proposal: null, approvals: null, panel: null, stamped: null, writtenFile: null, storm: null, liveMemory: null, slate: null, drive: null,
+  welcome: null, firstAnswer: null, agentReturn: null, agentPlan: null, proposal: null, approvals: null, hireApproval: null, panel: null, stamped: null, writtenFile: null, storm: null, liveMemory: null, slate: null, drive: null,
   driveOpens: null, slateOpens: null, slateShare: null,
 };
 
@@ -78,6 +79,7 @@ beforeAll(async () => {
     observed.agentPlan = await attempt('agent-plan', () => agentPlanIsReviewedInItsPane(target));
     observed.proposal = await attempt('workspace-proposal', () => agentProposesAWorkspace(target));
     observed.approvals = await attempt('approval-stack', () => approvalsStackAtTheComposer(target));
+    observed.hireApproval = await attempt('hire-approval', () => hireParksAndRunsOnApproval(target));
     observed.panel = await attempt('panel', () => rightPanelKeepsItsState(target));
     observed.stamped = await attempt('stamped', () => eachPaneKeepsItsTranscript(target));
     observed.writtenFile = await attempt('written-file', () => writtenFileShowsInFilesAndChanges(target));
@@ -160,6 +162,19 @@ describe('two commands a turn parks wait as a stack docked to the composer', () 
     const flow = verdictOf(observed.approvals, 'approval-stack');
 
     expect(flow.heard).toEqual({ approvedEvent: true, deniedEvent: true, approvedReply: true, deniedReply: true });
+  });
+});
+
+describe('a hire\'s gated command parks as its own, is approved from its pane, and runs', () => {
+  test('the hire\'s pane stacks its one ask, open with the command', () => {
+    const flow = verdictOf(observed.hireApproval, 'hire-approval');
+
+    expect(flow.paneStacked).toHaveLength(1);
+    expect(flow.openWords).toContain(HIRE_PARKED_COMMAND);
+  });
+
+  test('approved there, the hire is woken and its re-issue runs', () => {
+    expect(verdictOf(observed.hireApproval, 'hire-approval').ran).toBe(true);
   });
 });
 

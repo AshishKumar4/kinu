@@ -34,7 +34,7 @@ export interface PendingAction {
   readonly write?: { readonly path: string };
   /** A proposed workspace: the SOUL.md it would start with, exactly as approving writes it. */
   readonly proposal?: { readonly name: string; readonly brief: string; readonly soul: string };
-  /** The actor whose ask it is, by id; absent, the workspace's own (a parked command, a proposal). */
+  /** The actor whose ask it is, by id (a parked command, a plan); absent, the workspace's own (a proposal). */
   readonly raisedBy?: string;
 }
 
@@ -122,12 +122,14 @@ export function buildPendingActions(input: PendingActionInputs): PendingAction[]
       title: `Approve: a command the agent wants to run on ${action.executor}`,
       detail: action.command,
       at: action.requestedAt,
+      raisedBy: action.actor,
     } : {
       id: action.id,
       kind: 'deferred_action',
       title: `Replace ${write.path}`,
       detail: null,
       at: action.requestedAt,
+      raisedBy: action.actor,
       write: { path: write.path },
     });
   }
