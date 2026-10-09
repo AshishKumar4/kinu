@@ -3,6 +3,10 @@ import * as v from 'valibot';
 import { Cause, Effect } from 'effect';
 import { KinuError, settleSync } from '@kinu.run/core/obs';
 import { rosterMatches, WorkspaceOverviewSchema, WS_OPEN, type AccountMemoryProposal, type RosterBucket, type SqlExec, type WorkspaceOverview } from '@kinu.run/core';
+import {
+  SESSION_AUTHORITY_REVOKED, SESSION_BEARER_HEADER, WEBSOCKET_POLICY_CLOSE, sessionBearerConnectionTag, sessionBearerFromTags,
+} from '../cli/rpc-gate';
+import type { SessionStands } from './user-host';
 import type { WorkspaceEntry } from './workspaces';
 
 export const ROSTER_SOCKET_PATH = '/roster/live';
@@ -234,21 +238,27 @@ export function rosterRow(sql: SqlExec, name: string): RosterEntry | null {
   return raw === undefined ? null : rosterEntry(v.parse(RosterRowSchema, raw));
 }
 
-const RosterAttachmentSchema = v.object({ roster: v.literal(true) });
+/** `tags`: the session tag a workspace's connection keeps for the same upgrade (`getConnectionTags`), so one reader serves
+ *  both; empty when the upgrade named no session. */
+const RosterAttachmentSchema = v.object({ roster: v.literal(true), tags: v.array(v.string()) });
 
 export function isRosterSocket(ws: WebSocket): boolean {
   return v.is(RosterAttachmentSchema, ws.deserializeAttachment());
 }
 
-/** Hibernatable, so the object sleeps between frames. `opened`: what the new socket is sent first. */
+/**
+ * Hibernatable, so the object sleeps between frames. The socket runs on the browser session the edge verified for its
+ * upgrade, kept as a workspace's socket keeps it. `opened`: what the new socket is sent first.
+ */
 export function acceptRosterSocket(ctx: DurableObjectState, request: Request, opened?: (socket: WebSocket) => void): Response {
   if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
     return new Response('Expected WebSocket', { status: 426 });
   }
 
+  const session = sessionBearerConnectionTag(request.headers.get(SESSION_BEARER_HEADER));
   const [client, server] = Object.values(new WebSocketPair());
   ctx.acceptWebSocket(server, [ROSTER_SOCKET_TAG]);
-  server.serializeAttachment({ roster: true });
+  server.serializeAttachment({ roster: true, tags: session === null ? [] : [session] });
   opened?.(server);
   const init: ResponseInit & { webSocket: WebSocket } = { status: 101, webSocket: client };
 
@@ -259,7 +269,28 @@ export function rosterSockets(ctx: DurableObjectState): WebSocket[] {
   return ctx.getWebSockets(ROSTER_SOCKET_TAG);
 }
 
-export function sendRosterFrame(sockets: readonly WebSocket[], frame: RosterFrame | AccountMemoryFrame): void {
+/** A socket whose upgrade named no session (the dev identity, which no session backs) has none to lose; one whose
+ *  attachment or session cannot be read is refused. */
+function mayHear(socket: WebSocket, stands: SessionStands): boolean {
+  const attachment = v.safeParse(RosterAttachmentSchema, socket.deserializeAttachment());
+
+  if (!attachment.success) return false;
+  const session = sessionBearerFromTags(attachment.output.tags);
+
+  return session === null || ('tokenHash' in session && stands(session.tokenHash));
+}
+
+/** Logout and a raised credential floor reach a page that is only listening: its socket closes now, not at its next frame. */
+export function closeEndedRosterSockets(sockets: readonly WebSocket[], stands: SessionStands): void {
+  for (const socket of sockets) {
+    if (socket.readyState === WS_OPEN && !mayHear(socket, stands)) socket.close(WEBSOCKET_POLICY_CLOSE, SESSION_AUTHORITY_REVOKED);
+  }
+}
+
+/** A frame never goes to a socket whose session has ended; that socket is closed instead, which is how a lapsed session,
+ *  which nothing announces, is met. */
+export function sendRosterFrame(sockets: readonly WebSocket[], frame: RosterFrame | AccountMemoryFrame, stands: SessionStands): void {
+  closeEndedRosterSockets(sockets, stands);
   const text = JSON.stringify(frame);
 
   for (const socket of sockets) {

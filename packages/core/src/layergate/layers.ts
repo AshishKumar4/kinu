@@ -1465,7 +1465,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             };
           };
 
-          const sandboxAbsence = () => 'no Sandbox container bound';
+          const sandboxAbsence = () => 'this workspace has no computer bound';
 
           const mounted = s.withMountTable(tree({ '/notes.md': 'workspace' }), [
             { name: 'pc', files: () => tree({ '/home/dev/a.txt': 'from the device' }), absentReason: () => 'no device connected', filesOwner: 'user' },

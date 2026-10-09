@@ -113,7 +113,7 @@ export function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestor
     >
       <div className="space-y-2" data-revert-dialog={checked ? "ready" : "checking"}>
         <p className="text-xs p-text-2 leading-relaxed">
-          The messages from here on are removed from the conversation. Files in the workspace, sandbox
+          The messages from here on are removed from the conversation. Files in the workspace, its computer
           and your devices stay as they are.
         </p>
         {historyNote && <p data-device-history className="text-xs p-text-3 leading-relaxed">{historyNote}</p>}

@@ -1,5 +1,6 @@
 import * as v from 'valibot';
 import { JsonValueSchema, WORKSPACE_ROOT, type JsonValue, type RunEvent } from '@kinu.run/core';
+import { callInputs } from '../src/transcript';
 import type { EvalPart } from '../src/task';
 import { answersWithSlates, madeNoApp } from './ephemeral';
 import { Seeded } from './seeded';
@@ -47,9 +48,6 @@ const GAP = (RANKED[0]?.[1] ?? 0) - (RANKED.at(-1)?.[1] ?? 0);
 
 // ── What the lead did between its hire and the report ────────────────
 
-/** A call as one line of text: `args` is a digest, already a clipped JSON string past 800 characters. */
-const callText = (event: Extract<RunEvent, { type: 'tool_call_end' }>): string => typeof event.args === 'string' ? event.args : JSON.stringify(event.args ?? null);
-
 const HIRES = /"op":"hire"|agents\.hire\(/;
 
 /** A call that asks a helper how far it got, or sleeps to wait for one. */
@@ -64,6 +62,13 @@ const CHECKS_ON_A_HELPER = new Map([
  * such a run started at all: a lead still working when the report lands takes it mid-turn, so none does.
  */
 function waiting(events: readonly RunEvent[]) {
+  const inputs = callInputs(events);
+
+  // A call as one line of text, its input whole where a step recorded it: the ledger row's `args` is a digest cut at 800
+  // characters, and a hire's `"op":"hire"` follows its mission.
+  const callText = (event: Extract<RunEvent, { type: 'tool_call_end' }>): string =>
+    JSON.stringify(inputs.has(event) ? inputs.get(event) : event.args ?? null);
+
   const hire = events.findIndex((event) => event.type === 'tool_call_end' && HIRES.test(callText(event)));
   const after = hire === -1 ? [] : events.slice(hire + 1);
   const wake = after.findIndex((event) => event.type === 'run_start' && event.caused_by === 'event_drain');
@@ -113,7 +118,7 @@ product has the slowest median first response and by how many minutes it trails 
 
       await verifier.check('did-not-check-on-the-helper', async () => ({
         pass: seen.hired && seen.checks.length === 0,
-        evidence: { hired: seen.hired, checks: seen.checks, blindSpot: 'a check past the first 800 characters of a call is not seen' },
+        evidence: { hired: seen.hired, checks: seen.checks },
       }));
 
       await verifier.check('the-report-woke-a-new-turn', async () => ({ pass: seen.woken, evidence: { hired: seen.hired, woken: seen.woken } }));

@@ -107,6 +107,22 @@ export const ForkFactRowSchema = v.object({
   origin_json: v.nullable(v.string()),
 });
 
+/** One call's questions to the owner, closed: the result its carried call reads. An open one stays with its source. */
+export const ForkOwnerQuestionRowSchema = v.object({
+  id: v.string(),
+  call_id: v.string(),
+  turn_id: v.string(),
+  mode: v.string(),
+  tier: v.nullable(v.string()),
+  reason_json: v.string(),
+  digest: v.string(),
+  questions_json: v.string(),
+  status: v.picklist(['answered', 'dismissed', 'in_chat']),
+  answers_json: v.nullable(v.string()),
+  asked_at: v.number(),
+  closed_at: v.nullable(v.number()),
+});
+
 /** One of the `db` tool's tables, as its declaration's JSON text (the store checks it as it checks any declaration),
  *  and when the source declared it, which orders the fork's listing as it ordered the source's. */
 export const ForkAppTableRowSchema = v.object({ declaration: v.string(), created_at: v.number() });
@@ -134,6 +150,8 @@ export type ForkLessonRow = v.InferOutput<typeof ForkLessonRowSchema>;
 export type ForkToolLessonRow = v.InferOutput<typeof ForkToolLessonRowSchema>;
 
 export type ForkFactRow = v.InferOutput<typeof ForkFactRowSchema>;
+
+export type ForkOwnerQuestionRow = v.InferOutput<typeof ForkOwnerQuestionRowSchema>;
 
 export type ForkAppRow = v.InferOutput<typeof ForkAppRowSchema>;
 

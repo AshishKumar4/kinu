@@ -106,7 +106,7 @@ export async function getChatHistoryPage(
 
     const entry: ChatHistoryEntry = {
       id: row.id, position: row.position, role: transcriptRole({ id: row.id, role, metadata: row.metadata }),
-      turnId: row.turnId, content: row.content, createdAt: row.recordedAt,
+      turnId: row.turnId, runId: row.runId, content: row.content, createdAt: row.recordedAt,
     };
 
     if (row.metadata !== undefined) entry.metadata = row.metadata;

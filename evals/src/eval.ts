@@ -1,28 +1,12 @@
 import { readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createJudge, describeEval } from 'vitest-evals';
 import { resolveArtifactRoot } from '../../scripts/bench-retention';
 import { evalCommit, evalMatrix } from './config';
 import { createKinuHarness } from './harness';
 import { trialAccounts, trialSlot } from './slot';
 import { ARMS, resolveEvalTarget } from './target';
 import { failureRationale, taskVersion, type EvalRunInput, type EvalRunOutput, type EvalTask } from './task';
-
-const FunctionalJudge = createJudge<EvalRunInput, EvalRunOutput>('functional result', ({ output }) => {
-  const checks = output.turns.flatMap((turn) => turn.checks);
-  const failed = checks.filter((check) => !check.pass).map((check) => check.id);
-
-  return {
-    score: output.success ? 1 : 0,
-    metadata: {
-      rationale: output.success ? 'every turn and check passed' : failureRationale(output),
-      passedChecks: checks.length - failed.length,
-      totalChecks: checks.length,
-      failedChecks: failed,
-    },
-  };
-});
 
 /** Set while `collectEvalTasks` imports the task files: a task is gathered, not registered. */
 let collected: EvalTask[] | null = null;
@@ -49,13 +33,34 @@ export async function collectEvalTasks(): Promise<EvalTask[]> {
  * identity, a bad matrix or one past the trial accounts a deployment has fails here, at collection,
  * before any inference. Every trial's evidence goes under one directory per run, retained
  * beside every other family's runs (`resolveArtifactRoot`), never under a swept root.
+ *
+ * A task file awaits it: `vitest-evals` asserts the runner's current suite as it loads, so only a vitest worker can
+ * import it, and it is imported here, where a worker registers a task. A script that only collects the tasks
+ * (`review.ts`) never loads it.
  */
-export function defineTaskEval(task: EvalTask): void {
+export async function defineTaskEval(task: EvalTask): Promise<void> {
   if (collected !== null) {
     collected.push(task);
 
     return;
   }
+
+  const { createJudge, describeEval } = await import('vitest-evals');
+
+  const FunctionalJudge = createJudge<EvalRunInput, EvalRunOutput>('functional result', ({ output }) => {
+    const checks = output.turns.flatMap((turn) => turn.checks);
+    const failed = checks.filter((check) => !check.pass).map((check) => check.id);
+
+    return {
+      score: output.success ? 1 : 0,
+      metadata: {
+        rationale: output.success ? 'every turn and check passed' : failureRationale(output),
+        passedChecks: checks.length - failed.length,
+        totalChecks: checks.length,
+        failedChecks: failed,
+      },
+    };
+  });
 
   const matrix = evalMatrix(process.env, ARMS.map((arm) => arm.id));
   const target = resolveEvalTarget(process.env);

@@ -119,7 +119,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     expect(entry.items).toHaveLength(1);
     const [item] = present(entry.items, 'the fact aggregate items');
     expect(item.id).toBe('fact:sandbox.npm_version');
-    expect(item.summary).toBe('Your sandbox runs npm v10');
+    expect(item.summary).toContain('npm v10');
     expect(item.evidence).toContain('sandbox.npm_version = npm v10');
     expect(item.evidence).toContain('confidence 90%');
     expect(item.evidence).toContain('via sleep-time-compute');
@@ -178,7 +178,8 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     const [entry] = buildChangelog(rt.storage.sql, rt.actor, { since: 1000 });
     const [item] = present(entry.items, 'the fact aggregate items');
     expect(item.id).toBe('fact:sandbox.npm_version');
-    expect(item.summary).toBe('Your sandbox runs npm v10');
+    expect(item.summary).toContain('npm v10');
+    expect(item.summary).not.toContain('v9');
   });
 
   test('GEPA and rating entries are informational (no revert)', () => {

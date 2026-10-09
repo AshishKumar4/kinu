@@ -32,7 +32,7 @@ import { join } from 'node:path';
 import type { Page } from 'puppeteer';
 
 import { withGallery } from '../../scripts/gallery-harness';
-import { CHECKPOINTS_UNAVAILABLE_NO_GIT, parseJsonValue, redactPayload, type JsonObject } from '@kinu.run/core';
+import { CHECKPOINTS_UNAVAILABLE_NO_GIT, executorLabel, parseJsonValue, redactPayload, type JsonObject } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 
 
@@ -903,9 +903,9 @@ describe('the drive, browsing the one composite plane', () => {
   test('the root is the workspace tree beside the mounts, badges on the mounted folders', () => {
     expect(observed.filesRoot.crumbs).toBe('/');
     expect(observed.filesRoot.entries).toEqual(expect.arrayContaining(['home', 'pc', 'sandbox']));
-    // The origin badge names the machine, not the executor id — the device
-    // wears the user's own device name, per the consent naming contract.
-    expect(observed.filesRoot.badges).toEqual(expect.arrayContaining(["Ashish's MacBook", 'Cloud computer']));
+    // The origin badge names the machine, not the executor id: the device wears the user's own device name, per the
+    // consent naming contract, and the agent's computer wears its product label.
+    expect(observed.filesRoot.badges).toEqual(expect.arrayContaining(["Ashish's MacBook", executorLabel('sandbox')]));
   });
 
   test('crossing into /pc lists the machines; a machine lands inside its consented directory', () => {
@@ -961,7 +961,7 @@ describe('the Environment tab, as a user reads it', () => {
     expect(byName["Ashish's MacBook"]?.kind).toContain('Your PC');
     expect(byName["Ashish's MacBook"]?.mount).toBe('/pc');
     expect(byName['Workspace']?.mount).toBe('/');
-    expect(byName['Cloud computer']?.mount).toBe('/sandbox');
+    expect(byName[executorLabel('sandbox')]?.mount).toBe('/sandbox');
   });
 
   test('capability doctrine is model-facing and renders NOWHERE in user UI', () => {
@@ -1275,6 +1275,70 @@ function readingOrder(page: Page, needles: readonly string[]): Promise<number[]>
 
 const agentReport = (id: string, timestamp: number, content: string) => ({
   type: 'subordinate_event', id, kind: 'report', subordinate: 'coupon-auditor', status: 'completed', content, timestamp,
+});
+
+/** The gallery's spliced webhook, and the words of the answer's two steps around it. */
+const SPLICE = { brief: 'Translation job 4471 finished (de-DE)', before: 'Waiting on the German strings', after: 'The translation landed' } as const;
+
+/** How far the agent has got with the spliced card, as its mark says it and as its colour does. */
+function spliceDelivery(page: Page): Promise<{ state: string | null; tone: string | null } | null> {
+  return page.evaluate(() => {
+    const mark = document.querySelector('[data-spliced-signal="sig-lilt"] [data-delivery], .p-thread-column [data-signal-card] [data-delivery]');
+
+    if (mark === null) return null;
+    const tone = ['p-warning', 'p-success'].find((name) => mark.classList.contains(name)) ?? null;
+
+    return { state: mark.getAttribute('data-delivery'), tone };
+  });
+}
+
+/**
+ * An event that reaches the agent while it is answering sits between the parts of the answer it arrived between, live
+ * and after a reload; it is amber while it waits or is being shown, and green once the step that read it has ended.
+ * Production, 2026-10-08: such events collected after the live answer, grey then gold, and a reload lost them.
+ */
+describe('an event spliced into a running answer', () => {
+  test('it waits amber, is drawn between the parts it arrived between once a step takes it in, and turns green once seen', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 1600 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=splice-live`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('.p-thread-column');
+      const text = `Events arrived while you were working:\n- [webhook] from lilt: ${SPLICE.brief}`;
+
+      await pushFrames(page, [{ type: 'signal_card', id: 'sig-lilt', state: 'pending', metadata: { kinuEvent: 'event_drain', kinuAuthor: 'harness' }, text }]);
+      await page.waitForFunction(() => document.querySelector('.p-thread-column [data-signal-card] [data-delivery="pending"]') !== null);
+      expect(await spliceDelivery(page)).toEqual({ state: 'pending', tone: 'p-warning' });
+
+      await pushFrames(page, [{ type: 'signal_card', id: 'sig-lilt', state: 'shown', atStep: 1 }]);
+      await page.waitForSelector('[data-spliced-signal="sig-lilt"]');
+      const [before, splice, after] = await readingOrder(page, [SPLICE.before, SPLICE.brief, SPLICE.after]);
+
+      expect([before !== undefined && splice !== undefined && before < splice, splice !== undefined && after !== undefined && splice < after]).toEqual([true, true]);
+      expect(await spliceDelivery(page)).toEqual({ state: 'shown', tone: 'p-warning' });
+
+      await pushFrames(page, [{ type: 'signal_card', id: 'sig-lilt', state: 'seen' }]);
+      await page.waitForFunction(() => document.querySelector('[data-spliced-signal="sig-lilt"] [data-delivery="seen"]') !== null);
+      expect(await spliceDelivery(page)).toEqual({ state: 'seen', tone: 'p-success' });
+      // Once, in the answer: not a second loose card below it.
+      expect(await page.$$eval('.p-thread-column [data-signal-card]', (cards) => cards.length)).toBe(1);
+      await page.close();
+    });
+  });
+
+  test('after a reload the answer that read it still draws it, in place and seen', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 1600 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=splice-kept`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-spliced-signal="sig-lilt"]');
+      const [before, splice, after] = await readingOrder(page, [SPLICE.before, SPLICE.brief, SPLICE.after]);
+
+      expect([before !== undefined && splice !== undefined && before < splice, splice !== undefined && after !== undefined && splice < after]).toEqual([true, true]);
+      expect(await spliceDelivery(page)).toEqual({ state: 'seen', tone: 'p-success' });
+      await page.close();
+    });
+  });
 });
 
 /**
@@ -1671,7 +1735,6 @@ describe('the walk-back at the actual WorkspacePage boundary', () => {
 
       const dialog = await page.$eval('[role="dialog"]', (element) => element.textContent ?? '');
       expect(dialog).toContain('Revert the conversation to before this message?');
-      expect(dialog).toContain('Files in the workspace, sandbox and your devices stay as they are.');
       // The report itself: a workspace with no device must not be told its
       // file history is missing for pressing revert.
       expect(dialog).not.toContain('File history is unavailable');
@@ -3110,8 +3173,6 @@ describe('Now lists what is still owed, by the phase its store records', () => {
       await page.setViewport({ width: 1280, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage&owed=all`, { waitUntil: 'networkidle0' });
       await page.click('nav[aria-label="Workspace"] button[aria-label="Work"]');
-      // The frame's plan awaits review, so the tab opens on it.
-      await page.click('[data-back-to-work]');
       await page.waitForSelector('[data-inspected]');
       const owed = ['effect blocked', 'turn running', 'effect running', 'effect waiting', 'effect waiting'];
 
@@ -3191,7 +3252,7 @@ describe('Work keeps up with what is happening and what happened', () => {
 /**
  * The workspace's work is one thing: every actor's plans and tasks on one tab,
  * owners named, and a pending plan's decision one row in Needs you that opens
- * the review over the whole tab. `?frame=work`'s fixture carries a root plan
+ * the plan's own page. `?frame=work`'s fixture carries a root plan
  * beside a subordinate's and a task that holds the note its agent left.
  */
 describe('the Work tab reads the workspace, not the actor', () => {
@@ -3224,7 +3285,7 @@ describe('the Work tab reads the workspace, not the actor', () => {
     });
   });
 
-  test('a pending plan asks in Needs you, the row opens the review full-tab, and Back returns', async () => {
+  test('a pending plan asks in Needs you, the row opens its own page tab, and Work is one click back', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 430, height: 1400 });
@@ -3244,17 +3305,17 @@ describe('the Work tab reads the workspace, not the actor', () => {
         row.click();
       });
 
-      // The review takes the whole tab — the plan list is gone, and what is
-      // on screen is the pending revision's own decisions, the way the list
-      // row promised.
+      // The review is the plan's own page, its tab current among the pages: the plan list is gone, and what is on
+      // screen is the pending revision's own decisions, the way the row promised.
       await page.waitForSelector('[data-plan-review-root]');
       expect(await page.$eval('[data-plan-title]', (element) => element.textContent)).toContain('Gateway');
       expect(await page.$eval('[data-plan-status]', (element) => element.textContent)).toBe('Awaiting review');
-      expect(await page.$('[data-work-plans]')).toBeNull();
+      expect(await page.$eval('nav[aria-label="Pages"] [aria-current="true"]', (tab) => tab.getAttribute('aria-label'))).toContain('Gateway');
+      expect(await page.$eval('[data-work-plans]', (list) => list.checkVisibility())).toBe(false);
 
-      await page.click('[data-back-to-work]');
-      await page.waitForSelector('[data-work-plans]');
-      expect(await page.$('[data-plan-review-root]')).toBeNull();
+      await page.click('nav[aria-label="Workspace"] button[aria-label="Work"]');
+      await page.waitForSelector('[data-work-plans]', { visible: true });
+      expect(await page.$eval('[data-plan-review-root]', (review) => review.checkVisibility())).toBe(false);
       await page.close();
     });
   });

@@ -406,12 +406,12 @@ async function maybeOfferDeviceConnect(rl: readline.Interface, tty: boolean): Pr
   if (!(await shouldOfferDeviceConnect())) return;
 
   if (!tty) {
-    console.log(MUTED('No computer is connected. Connect this one with: kinu connect'));
+    console.log(MUTED('No PC is connected. Connect this one with: kinu connect'));
 
     return;
   }
 
-  console.log(`${WARN('Let this agent use this computer?')}`);
+  console.log(`${WARN('Let this agent use this PC?')}`);
   console.log(MUTED(`  Linking installs the Kinu daemon and registers this machine as "${defaultDeviceName()}".`));
   console.log(MUTED('  A workspace you approve runs commands here in a sandbox.'));
   console.log(MUTED('  You approve each workspace once, and revoke it in Account settings → Devices.'));
@@ -464,6 +464,22 @@ function showText(outcome: Extract<SlashOutcome, { kind: 'text' }>): void {
   console.log(`\n${MUTED(outcome.text)}\n`);
 }
 
+/** Line mode shows the questions; the full-screen chat and the web app answer them. */
+function showQuestions(outcome: Extract<SlashOutcome, { kind: 'questions' }>): void {
+  for (const question of outcome.asking.asked.questions) console.log(`\n  ${question.question}\n${question.options.map((option) => `    - ${option.label}`).join('\n')}`);
+  console.log(`\n${MUTED('Answer it in the web app or in the full-screen chat; this line mode cannot.')}\n`);
+}
+
+function showChangelog(outcome: Extract<SlashOutcome, { kind: 'changelog' }>): void {
+  console.log(`\n${MUTED(renderChangelogText(outcome.view.entries, { unseenCount: outcome.view.unseenCount }))}`);
+
+  if (outcome.view.entries.some((entry) => entry.revert)) {
+    console.log(MUTED('Revert a line with /changelog revert <n>. Keeping is the default.'));
+  }
+
+  console.log('');
+}
+
 async function applySlashOutcome(client: AgentClient, rl: readline.Interface, outcome: SlashOutcome): Promise<'ok' | 'exit'> {
   switch (outcome.kind) {
     case 'exit':
@@ -491,14 +507,12 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
       console.log('');
 
       return 'ok';
+    case 'questions':
+      showQuestions(outcome);
+
+      return 'ok';
     case 'changelog':
-      console.log(`\n${MUTED(renderChangelogText(outcome.view.entries, { unseenCount: outcome.view.unseenCount }))}`);
-
-      if (outcome.view.entries.some((entry) => entry.revert)) {
-        console.log(MUTED('Revert a line with /changelog revert <n>. Keeping is the default.'));
-      }
-
-      console.log('');
+      showChangelog(outcome);
 
       return 'ok';
     case 'takes':
@@ -546,7 +560,7 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
       if (process.stdin.isTTY === true && process.stdout.isTTY === true) {
         await promptDeviceConnect(rl, { allowDismiss: false });
       } else {
-        console.log(MUTED('Connect this computer with: kinu connect'));
+        console.log(MUTED('Connect this PC with: kinu connect'));
       }
 
       console.log('');

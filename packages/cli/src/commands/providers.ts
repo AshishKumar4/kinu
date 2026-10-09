@@ -403,12 +403,12 @@ async function printProviders(): Promise<void> {
 
     if (state.descriptor.id === 'cloudflare' && state.connected) {
       console.log(`    ${DIM('Cloud workspaces use your Workers AI quota if you granted AI permissions at sign-in.')}`);
-      console.log(`    ${DIM('Local workspaces use the same Workers AI while you are signed in, with no key on this computer.')}`);
+      console.log(`    ${DIM('Local workspaces use the same Workers AI while you are signed in, with no key on this PC.')}`);
     }
 
     if (state.descriptor.id === 'cloudflare' && connections.accountUnreachable !== undefined) {
       console.log(`    ${WARN('!')} Could not read the keys stored in your account (${connections.accountUnreachable}).`);
-      console.log(`    ${DIM('The rows below show only what is on this computer.')}`);
+      console.log(`    ${DIM('The rows below show only what is on this PC.')}`);
     }
   }
 
@@ -417,8 +417,8 @@ async function printProviders(): Promise<void> {
   }
 
   console.log('');
-  console.log(DIM('  New keys are stored in your Kinu account, not on this computer.'));
-  console.log(DIM('  To keep a key on this computer instead: kinu provider connect <name> --local'));
+  console.log(DIM('  New keys are stored in your Kinu account, not on this PC.'));
+  console.log(DIM('  To keep a key on this PC instead: kinu provider connect <name> --local'));
   console.log(DIM('  To remove a key: kinu provider disconnect <name>'));
   console.log(DIM('  Another account: kinu provider connect <name> <account>; pick the default: kinu provider default <name> <account>'));
   console.log('');

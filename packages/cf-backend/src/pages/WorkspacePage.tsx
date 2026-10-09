@@ -1,3 +1,4 @@
+import { AskedQuestionsContext, askedBy } from "@/components/QuestionCard";
 import { Effect, Cause } from 'effect';
 import { Fragment, createContext, startTransition, useContext, useState, useRef, useEffect, useCallback, useMemo, type RefObject } from "react";
 import { useParams, useLocation, Link, useMatch, useNavigate, useSearchParams } from "react-router-dom";
@@ -10,9 +11,10 @@ import {
 } from "@phosphor-icons/react";
 import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
-  isPlaceholderMission, ownerAsks, summarizeRestorePlan,
+  isPlaceholderMission, ownerAsks, planSurface, summarizeRestorePlan,
 } from "@kinu.run/core";
-import type { AlternateTakeSet, DiffAnchor, FileRestoreChange, PlanReview, Rpc, TakePickOutcome } from "@kinu.run/core";
+import type { AlternateTakeSet, DiffAnchor, FileRestoreChange, PlanReview, Rpc, SignalCard, TakePickOutcome } from "@kinu.run/core";
+import type { UIMessage } from "ai";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { useActorChat, useKinu, type WorkspaceNotice } from "@/hooks/use-kinu";
 import { useAutogrow } from "@/hooks/use-autogrow";
@@ -550,6 +552,9 @@ function SubordinateChatColumn({
 
   // Its answers' blocks resolve in its own chat, once the pane knows whose that is.
   const answerChat = useMemo(() => (state.paneActorId === null ? undefined : { actorId: state.paneActorId }), [state.paneActorId]);
+  // Its own questions, from the workspace's read, for each call's record.
+  const questions = attention?.reads.questions;
+  const asked = useMemo(() => (state.paneActorId === null ? [] : askedBy(questions ?? [], state.paneActorId)), [questions, state.paneActorId]);
 
   const { thread } = chat;
   const repeats = useMemo(() => foldEventTurns(thread.entries.map(({ message }) => message)), [thread.entries]);
@@ -590,6 +595,7 @@ function SubordinateChatColumn({
   return (
     <div className="@container relative flex flex-col flex-1 min-h-0" data-agent-pane={`${workspace}/agents/${subName}`}>
       <ErrorBoundary label="Agent chat">
+        <AskedQuestionsContext.Provider value={asked}>
         <TranscriptViewport chat={chat} live={live} padClass="pt-5 pb-12"
           scroll={{ initialScroll: ui.savedScroll, onScrollPosition: ui.rememberScroll, settled: state.transcriptSeeded }}
           pending={<ConversationSkeleton />}
@@ -618,6 +624,7 @@ function SubordinateChatColumn({
             />
           )}
         </TranscriptViewport>
+        </AskedQuestionsContext.Provider>
       </ErrorBoundary>
 
       {!takesInput && <ViewOnlyBar running={live} onStop={stop} />}
@@ -762,6 +769,13 @@ function GoneWorkspace() {
   );
 }
 
+/** Live steers' rule: a card spliced into a running turn goes into the last message when that is the answer being written. */
+function useLiveSplices(entries: readonly { readonly message: UIMessage }[], cards: readonly SignalCard[]): readonly SignalCard[] {
+  const answering = entries.at(-1)?.message.role === "assistant";
+
+  return useMemo(() => (answering ? cards.filter((card) => card.atStep !== undefined) : []), [answering, cards]);
+}
+
 export default function WorkspacePage() {
   const { agentId } = useParams();
   const [gone, setGone] = useState<string | null>(null);
@@ -857,11 +871,14 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
   const { rpc: workspaceRpc, resolveConsent, refreshPendingActions } = state;
   const { accountProposals } = useWorkspaceRoster();
 
+  // The workspace agent's questions, for each call's record in the transcript.
+  const asked = useMemo(() => askedBy(state.ownerQuestions, null), [state.ownerQuestions]);
+
   const attentionCalls = useMemo((): Omit<AttentionStackProps, "asks"> => ({
     rpc: workspaceRpc,
     resolveConsent,
     onDecided: refreshPendingActions,
-    onReview: () => show("Work"),
+    onReview: (plan) => show(planSurface(plan)),
     decideMemory: async (id, decision) => { await decideAccountMemory(id, decision); },
   }), [workspaceRpc, resolveConsent, refreshPendingActions, show]);
 
@@ -980,8 +997,8 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
   // Refreshed when a turn settles: a settled /branch redirect may have produced a fresh set.
   const [takesByTurn, setTakesByTurn] = useState<Record<string, AlternateTakeSet>>({});
 
-  // A signal that started a turn renders on its message; one spliced into a running turn
-  // never gets a message. Each card renders once.
+  // A signal that started a turn renders on its message; one spliced into a running turn renders inside the answer
+  // that read it, at the step that read it, and is kept there once seen. Each card renders once.
   const cardStates = useMemo(
     () => new Map(state.signalCards.map((card) => [card.id, card.state])),
     [state.signalCards]);
@@ -992,10 +1009,12 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
     return id ? [id] : [];
   })), [transcript]);
 
-  // A signal spliced into a running turn, and an agent given work or reporting, each where it happened.
+  const liveSplices = useLiveSplices(thread.entries, state.signalCards);
+
+  // An agent given work or reporting, and a signal with nowhere else to go, each where it happened.
   const looseEvents = useMemo((): PlacedEvent[] => [
     ...state.signalCards.flatMap((card): PlacedEvent[] => {
-      if (messageCardIds.has(card.id)) return [];
+      if (messageCardIds.has(card.id) || liveSplices.includes(card)) return [];
       const turn = classifyProgrammaticTurn({ metadata: card.metadata });
 
       return turn ? [{
@@ -1006,7 +1025,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
       }] : [];
     }),
     ...state.subordinateEvents.map((event) => subordinateEventRow(event, agentId ?? "")),
-  ], [state.signalCards, state.subordinateEvents, messageCardIds, agentId]);
+  ], [state.signalCards, state.subordinateEvents, messageCardIds, liveSplices, agentId]);
 
   const threadMessages = useMemo(() => thread.entries.map(({ message }) => message), [thread.entries]);
   const placed = useMemo(() => placeEvents(threadMessages, looseEvents), [threadMessages, looseEvents]);
@@ -1152,7 +1171,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
             )}
             {shownNode === null && (subName ? (
               <AgentPlanWindowContext.Provider value={reviewed.showAgentWindow}>
-                <AttentionContext.Provider value={{ reads: state, stack: attentionCalls }}>
+                <AttentionContext.Provider value={{ reads: { ...state, questions: state.ownerQuestions }, stack: attentionCalls }}>
                   <AgentChatColumn key={subName} workspace={agentId} subName={subName} subordinates={state.subordinates} rpc={state.rpc} ids={linkIds}
                     input={shownAgent?.input ?? true} />
                 </AttentionContext.Provider>
@@ -1169,6 +1188,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
               </div>
             )}
             <ErrorBoundary label="Chat">
+            <AskedQuestionsContext.Provider value={asked}>
             <TranscriptViewport chat={chat} live={live} startFirst padClass="pt-7 pb-12"
               scroll={{ initialScroll: ui.savedScroll, onScrollPosition: ui.rememberScroll, settled: state.transcriptSeeded }}
               pending={<ConversationSkeleton />}
@@ -1185,6 +1205,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
                       message={msg}
                       repeats={repeats[i]}
                       steers={steers}
+                      splices={i === thread.entries.length - 1 ? liveSplices : undefined}
                       answerSlates={WORKSPACE_CHAT}
                       liveTail={msg.id === mainLiveRow ? mainTail : null}
                       onRetry={i === thread.entries.length - 1 && !live ? state.retryLastMessage : undefined}
@@ -1228,6 +1249,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
                 />
               )}
             </TranscriptViewport>
+            </AskedQuestionsContext.Provider>
             </ErrorBoundary>
 
             <div className="p-composer-dock">
@@ -1243,7 +1265,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
                 onStop={handleStop}
                 onBranch={handleBranch}
                 attention={(
-                  <AttentionStack asks={ownerAsks({ ...state, accountProposals })} {...attentionCalls} />
+                  <AttentionStack asks={ownerAsks({ ...state, accountProposals, questions: state.ownerQuestions })} {...attentionCalls} />
                 )}
                 mode={{ value: ui.mode, onChange: setChatMode }}
                 attachments={{

@@ -9,6 +9,13 @@ export const FILE_READ_MAX_CHARS = 50_000;
 /** Characters of one line a read shows; the rest is counted, so a minified line cannot fill the window. */
 export const FILE_READ_LINE_CHARS = 2_000;
 
+/** One replacement in the original text's UTF-16 offsets, end exclusive; `inserted` is its new text's length. */
+export interface EditedSpan {
+  readonly start: number;
+  readonly end: number;
+  readonly inserted: number;
+}
+
 /** Durable counter keys in the `file_edit` run event. */
 export type FileEditFailure =
   | 'empty_anchor'

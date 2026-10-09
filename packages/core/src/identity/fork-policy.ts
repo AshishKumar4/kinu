@@ -34,6 +34,8 @@ export const FORK_WRITE_RESETS: readonly ForkReset[] = [
   workspace('crafted_tools'),
   // The main actor's lessons as of the cut, and its tool lessons and facts as they stand.
   actor('lessons'), actor('tool_lessons'), actor('agent_facts'),
+  // The closed questions the carried calls read their results from.
+  actor('owner_questions'),
   // Rebuilt from the carried notes by the target's first search.
   workspace('memory_note_chunks_fts'), workspace('memory_note_chunks'), workspace('memory_note_files'),
   // What makes the target a fork, written at publication.

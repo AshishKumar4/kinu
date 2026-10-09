@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Effect } from 'effect';
 import { detach } from '@kinu.run/core/obs';
+import { executorLabel } from '@kinu.run/core';
 import * as v from 'valibot';
 import { withGallery } from '../../scripts/gallery-harness';
 import type { Frame, Page } from 'puppeteer';
@@ -60,6 +61,8 @@ async function clickControl(page: Page, text: string): Promise<void> {
   if (!clicked) throw new Error('Missing plan control: ' + text);
 }
 
+// A plan page once shown stays drawn, hidden, while it has a tab: `:not([hidden]) > [data-plan-page]` is the one on
+// screen.
 async function openPlan(page: Page, label: string): Promise<void> {
   const clicked = await page.evaluate((text) => {
     const card = [...document.querySelectorAll<HTMLButtonElement>('[data-work-plans] button')]
@@ -71,7 +74,7 @@ async function openPlan(page: Page, label: string): Promise<void> {
   }, label);
 
   if (!clicked) throw new Error('Missing plan card: ' + label);
-  await page.waitForSelector('[data-plan-review-root]');
+  await page.waitForSelector(':not([hidden]) > [data-plan-page] [data-plan-review-root]');
 }
 
 /** One whole workspace-work read cycle, elapsed. The failure line appears
@@ -80,6 +83,17 @@ async function openPlan(page: Page, label: string): Promise<void> {
  *  clears only once the next read has succeeded. Both edges are the barrier;
  *  the caller must have seen the pane's first read land, or the failure it
  *  waits for is the fresh pane's own first refusal. */
+/** The inspector's current page tab, by its name; null while a workspace tool is shown instead. */
+async function currentPage(page: Page): Promise<string | null> {
+  return page.evaluate(() => document.querySelector('nav[aria-label="Pages"] [aria-current="true"]')?.getAttribute('aria-label') ?? null);
+}
+
+/** Work's list, by the tool's own tab. */
+async function openWork(page: Page): Promise<void> {
+  await page.click('nav[aria-label="Workspace"] button[aria-label="Work"]');
+  await page.waitForSelector('[data-work-plans]');
+}
+
 async function readCycleElapsed(page: Page): Promise<void> {
   await page.click('[data-break-plans]');
   await page.waitForFunction(() => document.body.textContent?.includes('Plan history temporarily unavailable'));
@@ -210,7 +224,7 @@ test('preview tabs lead the fixed surfaces and their URL can be copied and opene
 });
 
 
-test('preview tabs deduplicate live slates, fill the surface and keep plans in Work', async () => {
+test('preview tabs deduplicate live slates, fill the surface, and give each open plan its own page tab', async () => {
   await withGallery(async ({ newPage, origin }) => {
     const page = await newPage();
 
@@ -241,19 +255,19 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
           expect(await iframe.isIntersectingViewport()).toBe(true);
         }
 
+        // A new pending plan of the workspace's own opens on its page, its tab current among the pages.
         await page.click('[data-new-plan]');
-        await page.waitForSelector('[data-plan-review-root]');
-        expect(await page.$eval('[aria-label="Work"]', el => el.getAttribute('aria-current'))).toBe('true');
+        await page.waitForSelector(':not([hidden]) > [data-plan-page] [data-plan-review-root]');
+        expect(await currentPage(page)).toBe('Dashboard delivery');
         await page.evaluate(() => {
           const button = [...document.querySelectorAll('button')].find(el => el.textContent?.includes('Approve & implement'));
 
           if (!button) throw new Error('Approval missing');
           button.click();
         });
-        // The approved plan is one card in the list now; the review closes on
-        // Back, and a failed read keeps the stale rows under its retry line.
-        await page.click('[data-back-to-work]');
-        await page.waitForSelector('[data-work-plans]');
+        // The approved plan is one card in the list now, a click away in Work; a failed read keeps the stale rows
+        // under its retry line.
+        await openWork(page);
         await page.click('[data-break-plans]');
         await page.waitForFunction(() => document.body.textContent?.includes('Plan history temporarily unavailable'));
         expect(await page.$eval('[data-work-plans]', el => el.textContent)).toContain('Dashboard delivery');
@@ -262,10 +276,10 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         // A superseded revision opens read-only: its decisions are gone, and
         // so is the fresh pending plan's — the approval just made it Approved.
         await openPlan(page, 'Earlier dashboard plan');
-        await page.waitForFunction(() => document.querySelector('[data-plan-title]')?.textContent?.includes('Earlier'));
-        expect(await page.$('[data-plan-decisions]')).toBeNull();
-        await page.click('[data-back-to-work]');
-        await page.waitForSelector('[data-work-plans]');
+        await page.waitForFunction(() => document.querySelector(':not([hidden]) > [data-plan-page] [data-plan-title]')?.textContent?.includes('Earlier'));
+        expect(await page.$(':not([hidden]) > [data-plan-page] [data-plan-decisions]')).toBeNull();
+        expect(await currentPage(page)).toBe('Earlier dashboard plan');
+        await openWork(page);
         await page.click('[data-new-preview]');
         // A preview arriving on its own never moves the reader: the surface
         // stays where it was and the strip raises the "Preview ready" chip —
@@ -286,13 +300,13 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         // live actors' — no per-actor surface claims it.
         expect(await page.$eval('[data-work-plans]', el => el.textContent)).toContain('archive · retained');
         await openPlan(page, 'Archived delivery');
-        await page.waitForFunction(() => document.querySelector('[data-plan-title]')?.textContent?.includes('Archived'));
-        expect(await page.$('[data-plan-decisions]')).toBeNull();
-        await page.click('[data-back-to-work]');
+        await page.waitForFunction(() => document.querySelector(':not([hidden]) > [data-plan-page] [data-plan-title]')?.textContent?.includes('Archived'));
+        expect(await page.$(':not([hidden]) > [data-plan-page] [data-plan-decisions]')).toBeNull();
+        await openWork(page);
         await openPlan(page, 'Nested delivery');
-        await page.waitForFunction(() => document.querySelector('[data-plan-title]')?.textContent?.includes('Nested'));
-        expect(await page.$('[data-plan-decisions]')).toBeNull();
-        await page.click('[data-back-to-work]');
+        await page.waitForFunction(() => document.querySelector(':not([hidden]) > [data-plan-page] [data-plan-title]')?.textContent?.includes('Nested'));
+        expect(await page.$(':not([hidden]) > [data-plan-page] [data-plan-decisions]')).toBeNull();
+        await openWork(page);
 
 
         // ── A plan arrives whose card is already in the list ────────────
@@ -300,7 +314,7 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         // is listed from the first load. What the hint owns now is the
         // auto-open — and it is worth nothing until the exact row resolves in
         // the shared read.
-        expect(await page.$('[data-plan-review-root]')).toBeNull();
+        expect(await page.$(':not([hidden]) > [data-plan-page] [data-plan-review-root]')).toBeNull();
         // A pending plan of the reader's OWN is not a reason to bury news:
         // re-submitting the root plan puts a pending revision back in the
         // list while the reader is off on a preview tab.
@@ -315,47 +329,45 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         await page.click('[data-notify-malformed]');
         await page.click('[data-notify-stale]');
         await readCycleElapsed(page);
-        expect(await page.$('[data-plan-review-root]')).toBeNull();
+        expect(await page.$(':not([hidden]) > [data-plan-page] [data-plan-review-root]')).toBeNull();
         expect(await page.$eval('[aria-label="Device app"]', el => el.getAttribute('aria-current'))).toBe('true');
-        // The real reference: Work takes the user, the exact plan fills the
-        // tab — foreign, so read-only with the way to its owner's conversation.
+        // The real reference: the exact plan opens on its own page — foreign, so read-only with the way to its
+        // owner's conversation.
         await page.click('[data-notify-plan]');
-        await page.waitForSelector('[aria-label="Work"][aria-current="true"]');
-        await page.waitForSelector('[data-plan-review-root]');
-        await page.waitForFunction(() => document.querySelector('[data-plan-title]')?.textContent?.includes('Courier rollout'));
-        expect(await page.$('[data-plan-decisions]')).toBeNull();
+        await page.waitForSelector(':not([hidden]) > [data-plan-page] [data-plan-review-root]');
+        await page.waitForFunction(() => document.querySelector('nav[aria-label="Pages"] [aria-current="true"]')?.getAttribute('aria-label')?.includes('Courier') === true);
+        await page.waitForFunction(() => document.querySelector(':not([hidden]) > [data-plan-page] [data-plan-title]')?.textContent?.includes('Courier rollout'));
+        expect(await page.$(':not([hidden]) > [data-plan-page] [data-plan-decisions]')).toBeNull();
         expect(await page.$eval('[data-plan-owner]', el => el.getAttribute('data-plan-owner'))).toBe('main');
         // One presentation policy: a live actor's arrival is neither labelled
         // nor described as retained, and its review is an explicit navigation.
-        expect(await page.$eval('[data-preview-surface]', el => el.textContent)).not.toContain('retained');
-        expect(await page.$eval('[data-preview-surface]', el => el.textContent)).toContain("Review in courier's conversation");
+        expect(await page.$eval(':not([hidden]) > [data-plan-page]', el => el.textContent)).not.toContain('retained');
+        expect(await page.$eval(':not([hidden]) > [data-plan-page]', el => el.textContent)).toContain("Review in courier's conversation");
         // A repeat of a reference already seen is not an arrival: the claim is
-        // spent for the connection, so no amount of waiting re-opens it. The
-        // review under it is a stable mount — give the repeat a full read
-        // cycle to try, then the open review still stands.
-        await page.click('[data-back-to-work]');
+        // spent for the connection, so no amount of waiting re-opens it. Give
+        // the repeat a full read cycle to try, then the page open still stands.
+        await openWork(page);
         await openPlan(page, 'Nested delivery');
-        await page.waitForFunction(() => document.querySelector('[data-plan-title]')?.textContent?.includes('Nested'));
+        await page.waitForFunction(() => document.querySelector(':not([hidden]) > [data-plan-page] [data-plan-title]')?.textContent?.includes('Nested'));
         await page.click('[data-notify-plan]');
         await readCycleElapsed(page);
-        expect(await page.$eval('[data-plan-title]', el => el.textContent)).toContain('Nested');
+        expect(await page.$eval(':not([hidden]) > [data-plan-page] [data-plan-title]', el => el.textContent)).toContain('Nested');
         await page.click('[aria-label="Sandbox app"]');
         await page.click('[data-worker-plan]');
-        await page.click('[aria-label="Work"]');
-        await page.waitForSelector('[aria-label="Work"][aria-current="true"]');
-        // The nested review is still open — surfaces hide, they never unmount,
-        // and the review lives in the tab across them. Back is the way out.
-        await page.click('[data-back-to-work]');
+        // Another conversation's pending plan takes nobody anywhere: it waits as a page tab of its own.
+        await page.waitForSelector('nav[aria-label="Pages"] button[aria-label*="Worker revision two"]');
+        expect(await currentPage(page)).toBe('Sandbox app');
+        await openWork(page);
         await page.waitForFunction(() => document.querySelector('[data-work-plans]')?.textContent?.includes('Worker revision two'));
         await openPlan(page, 'Worker revision two');
         expect(await page.$eval('[data-plan-owner]', el => el.getAttribute('data-plan-owner'))).toBe('main');
-        expect(await page.$('[data-plan-decisions]')).toBeNull();
+        expect(await page.$(':not([hidden]) > [data-plan-page] [data-plan-decisions]')).toBeNull();
         await clickControl(page, "Review in worker's conversation");
         await page.waitForSelector('[data-plan-owner="worker"]');
-        await page.waitForSelector('[data-plan-decisions]');
+        await page.waitForSelector(':not([hidden]) > [data-plan-page] [data-plan-decisions]');
         await clickControl(page, 'Approve & implement');
-        await page.waitForFunction(() => document.querySelector('[data-plan-status]')?.textContent === 'Approved');
-        expect(await page.$eval('[data-plan-title]', el => el.textContent)).toContain('Worker revision two');
+        await page.waitForFunction(() => document.querySelector(':not([hidden]) > [data-plan-page] [data-plan-status]')?.textContent === 'Approved');
+        expect(await page.$eval(':not([hidden]) > [data-plan-page] [data-plan-title]', el => el.textContent)).toContain('Worker revision two');
         // ── The hint is spent for the CONNECTION, not for one pane ──────
         // Walking back out to the workspace conversation and into the actor's
         // again remounts both panes. An arrival the reader was already shown
@@ -363,12 +375,12 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         // pane it landed in, now read-only again under the root's ownership.
         await page.click('[data-open-workspace]');
         await page.waitForSelector('[data-plan-owner="main"]');
-        expect(await page.$eval('[data-plan-title]', el => el.textContent)).toContain('Worker revision two');
-        await page.click('[data-back-to-work]');
+        expect(await page.$eval(':not([hidden]) > [data-plan-page] [data-plan-title]', el => el.textContent)).toContain('Worker revision two');
+        await openWork(page);
         await page.waitForFunction(() => document.querySelector('[data-work-plans]')?.textContent?.includes('Worker revision two'));
         await page.click('[data-notify-plan]');
         await readCycleElapsed(page);
-        expect(await page.$('[data-plan-review-root]')).toBeNull();
+        expect(await page.$(':not([hidden]) > [data-plan-page] [data-plan-review-root]')).toBeNull();
         // Spending the hint never discards the reference: the arrived plan
         // stays a card in the list, reachable like every other row.
         expect(await page.$eval('[data-work-plans]', el => el.textContent)).toContain('Courier rollout');
@@ -527,7 +539,7 @@ test('Changes opens on a connected machine, and never reads a sandbox that is as
       await page.waitForFunction(() => (document.documentElement.dataset.galleryDiffReads ?? '').split(' ').filter((source) => source === 'device').length > 1);
       expect(await reads()).not.toContain('sandbox');
       await page.click('[data-changes] [data-source-menu]');
-      expect(await page.$$eval('[role="menuitemradio"]', (items) => items.map((item) => item.textContent ?? '').some((text) => /sandbox/iu.test(text)))).toBe(false);
+      expect(await page.$$eval('[role="menuitemradio"]', (items, label) => items.map((item) => item.textContent ?? '').some((text) => text.includes(label)), executorLabel('sandbox'))).toBe(false);
     } finally { await page.close(); }
   });
 });

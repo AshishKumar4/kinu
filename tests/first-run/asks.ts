@@ -101,7 +101,7 @@ export const SWARM_TASK = 'Name one fruit whose skin is yellow. Report only the 
 export const SWARM_ASK = `Use your agents tool with op swarm and preset ideate, with this task: "${SWARM_TASK}" `
   + 'When the swarm settles, reply with one line: SWARM <the names it returned>.';
 
-export const CONSENT_ASK = 'Use the shell tool with runtime "device" to run the command `hostname` on my computer, '
+export const CONSENT_ASK = 'Use the shell tool with runtime "device" to run the command `hostname` on my PC, '
   + 'even if you expect it to fail. Then reply with one line: HOST <what it printed>, or NONE if nothing ran.';
 
 /** device-job-output: a line a second for longer than a call's foreground window, so the command detaches into a job
@@ -110,7 +110,7 @@ export const DEVICE_JOB_TICKS = 45;
 
 export const DEVICE_JOB_COMMAND = `for i in $(seq 1 ${String(DEVICE_JOB_TICKS)}); do echo "tick $i"; sleep 1; done`;
 
-export const DEVICE_JOB_ASK = `Use the shell tool with runtime "device" to run this command on my computer: ${DEVICE_JOB_COMMAND} `
+export const DEVICE_JOB_ASK = `Use the shell tool with runtime "device" to run this command on my PC: ${DEVICE_JOB_COMMAND} `
   + 'Then reply with one line: JOB <the job id it was given>, or NONE if it did not start.';
 
 /** sandbox-mount-write: the mounted path the defect named, and the bytes this case chose. */

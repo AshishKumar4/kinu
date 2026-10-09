@@ -1,6 +1,6 @@
 import * as v from 'valibot';
 import {
-  BUILTIN_TOOL_NAMES, decodeModelMessageValues, JsonValueSchema, projectJsonValue, SUBMIT_PLAN_TOOL, TOOL_CALLS_PENDING, type RunEvent,
+  BUILTIN_TOOL_NAMES, decodeModelMessageValues, JsonValueSchema, projectJsonValue, SUBMIT_PLAN_TOOL, TOOL_CALLS_PENDING, type JsonValue, type RunEvent,
 } from '@kinu.run/core';
 import type { ModelMessage } from 'ai';
 import type { TranscriptEvent } from 'vitest-evals';
@@ -13,7 +13,7 @@ const ArgumentsSchema = v.record(v.string(), JsonValueSchema);
 
 const TextPartSchema = v.object({ type: v.literal('text'), text: v.string() });
 
-const ToolCallPartSchema = v.object({ type: v.literal('tool-call'), toolCallId: v.string(), input: v.unknown() });
+const ToolCallPartSchema = v.object({ type: v.literal('tool-call'), toolCallId: v.string(), input: JsonValueSchema });
 
 /** The native tools a turn can be offered; crafted tools run inside `eval`, so a call naming any other was invented. */
 const OFFERED_TOOLS: ReadonlySet<string> = new Set([...BUILTIN_TOOL_NAMES, SUBMIT_PLAN_TOOL]);
@@ -39,8 +39,8 @@ function stepText(messages: readonly ModelMessage[]): string {
  * a large call's arguments, which is where the code an agent writes lives; the step's messages keep
  * all of it.
  */
-function inputsOf(messages: readonly ModelMessage[]): Map<string, unknown> {
-  const inputs = new Map<string, unknown>();
+function inputsOf(messages: readonly ModelMessage[]): Map<string, JsonValue> {
+  const inputs = new Map<string, JsonValue>();
 
   for (const message of messages) {
     if (message.role !== 'assistant' || v.is(v.string(), message.content)) continue;
@@ -55,25 +55,56 @@ function inputsOf(messages: readonly ModelMessage[]): Map<string, unknown> {
   return inputs;
 }
 
+/** A call belongs to the next completed step of its own run, even when other runs interleave or reuse its id. */
+function* ledgerSteps(events: readonly RunEvent[]) {
+  const pending = new Map<string, ToolCallEnd[]>();
+
+  for (const event of events) {
+    if (event.type === 'tool_call_end') {
+      const calls = pending.get(event.runId) ?? [];
+
+      calls.push(event);
+      pending.set(event.runId, calls);
+    } else {
+      const messages = event.type === 'step_finish' ? decodeModelMessageValues(event.messages ?? []) : [];
+      const calls = event.type === 'step_finish' ? pending.get(event.runId) ?? [] : [];
+
+      if (event.type === 'step_finish') pending.delete(event.runId);
+
+      yield { event, messages, calls, inputs: inputsOf(messages) };
+    }
+  }
+}
+
+/** Full inputs keyed by the actual ledger call, never by a provider id that another run or step may reuse. */
+export function callInputs(events: readonly RunEvent[]): ReadonlyMap<ToolCallEnd, JsonValue> {
+  const associated = new Map<ToolCallEnd, JsonValue>();
+
+  for (const { calls, inputs } of ledgerSteps(events)) {
+    for (const call of calls) {
+      const input = inputs.get(call.toolCallId);
+
+      if (input !== undefined) associated.set(call, input);
+    }
+  }
+
+  return associated;
+}
+
 /**
  * The deployment's run ledger as a vitest-evals transcript, in ledger order: each run's opening
  * message, then per model step what it said and every tool call with its result or error.
  */
 export function toTranscript(events: readonly RunEvent[]): TranscriptEvent[] {
   const transcript: TranscriptEvent[] = [];
-  let calls: ToolCallEnd[] = [];
 
-  for (const event of events) {
+  for (const { event, messages, calls, inputs } of ledgerSteps(events)) {
     const metadata = { runId: event.runId, timestamp: event.timestamp };
 
     if (event.type === 'run_start') {
-      const content = event.userMessage ?? `(the workspace started a run: ${event.caused_by ?? 'programmatic'})`;
+      const content = event.turn?.text ?? event.userMessage ?? `(the workspace started a run: ${event.caused_by ?? 'programmatic'})`;
       transcript.push({ type: 'message', role: 'user', content: redact(content), metadata });
-    } else if (event.type === 'tool_call_end') {
-      calls.push(event);
     } else if (event.type === 'step_finish') {
-      const messages = decodeModelMessageValues(event.messages ?? []);
-      const inputs = inputsOf(messages);
       const text = stepText(messages);
 
       if (text !== '') transcript.push({ type: 'message', role: 'assistant', content: redact(text), metadata });
@@ -91,8 +122,6 @@ export function toTranscript(events: readonly RunEvent[]): TranscriptEvent[] {
           : { type: 'tool_result', toolCallId: call.toolCallId, name: call.name, metadata,
               content: redactJson(projectJsonValue({ value: call.result ?? null })) });
       }
-
-      calls = [];
     } else if (event.type === 'run_end' && event.reason !== 'completed') {
       const content = `(the run ended: ${event.reason ?? 'no reason'}${event.error === undefined ? '' : ` — ${event.error}`})`;
       transcript.push({ type: 'message', role: 'system', content: redact(content), metadata });

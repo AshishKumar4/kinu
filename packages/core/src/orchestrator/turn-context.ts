@@ -1,8 +1,8 @@
 /**
- * The one turn-assembly ordering both backends run: sanitize → onTurnStart → transformContext
- * → pairing invariant → admission. Sanitization never changes message count; the transform sees
- * only durable history. Dynamic context stays out: the step pipeline weaves it (prompting/prepare-step.ts), and
- * admission measures the unapproved instructions with the request.
+ * The one turn-assembly ordering both backends run: sanitize → onTurnStart → pairing invariant → transformContext
+ * → pairing invariant → admission. Sanitization never changes message count; the transform sees durable history with
+ * every call paired, so a summary keeps what each call came to. Dynamic context stays out: the step pipeline weaves it
+ * (prompting/prepare-step.ts), and admission measures the unapproved instructions with the request.
  */
 
 import { Effect } from 'effect';
@@ -11,6 +11,7 @@ import type { ModelMessage, ToolSet } from 'ai';
 import { sanitizeAttachmentsForModel, type AttachmentPolicy } from '../prompting/attachment-sanitizer';
 import { settleUnpairedToolCalls } from '../prompting/interrupted-tool-calls';
 import type { LostToolCall } from '../tools/effect-claim';
+import type { LostCallQuery } from '../prompting/interrupted-tool-calls';
 import { stepContextLimit, type ModelWindow } from '../context-window';
 import { turnInputStart } from '../prompting/volatile-context';
 import type { CountableRequest, InputTokenCount } from '../providers/input-tokens';
@@ -38,7 +39,7 @@ export interface TurnContextInput {
   trigger: CompactionTrigger;
   abortSignal?: AbortSignal | undefined;
   admission?: TurnAdmission;
-  lostToolCall?: ((call: { readonly toolCallId: string; readonly toolName: string }) => LostToolCall | null) | undefined;
+  lostToolCall?: ((call: LostCallQuery) => LostToolCall | null) | undefined;
 }
 
 export interface AssembledTurn {
@@ -126,9 +127,12 @@ export function assembleTurnMessages(input: TurnContextInput): Promise<Assembled
 
     // One closure: admission may re-run it with trigger:'force' and the ordering must match.
     const assemble = async (trigger: CompactionTrigger): Promise<AssembledTurn> => {
+      // Paired before compaction reads them too, so a summary folding an asked call keeps the owner's answer.
+      const paired = settleUnpairedToolCalls(history, input.lostToolCall) ?? history;
+
       const transformed = await input.extensions?.runTransformContext({
         sessionKey: input.sessionKey,
-        messages: history,
+        messages: paired,
         system: input.system,
         contextWindow: input.contextWindow,
         model: input.model,
@@ -137,7 +141,7 @@ export function assembleTurnMessages(input: TurnContextInput): Promise<Assembled
         abortSignal: input.abortSignal,
       });
 
-      const assembled = [...(transformed ?? history)];
+      const assembled = [...(transformed ?? paired)];
 
       return located(settleUnpairedToolCalls(assembled, input.lostToolCall) ?? assembled);
     };

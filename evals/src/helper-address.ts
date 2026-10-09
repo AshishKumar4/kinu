@@ -1,8 +1,7 @@
 /**
- * Where the inspector (`inspectSubordinate`) reaches one of a hirer's helpers. A path walks live children only, so a
- * helper released once its work ended, as every task helper is, is reached by its actor from the root, the inspector's
- * one read of a retained actor (core subordinates/inspection-path.ts). A build whose inspector predates actor reads
- * (2f660875cc) still reaches every live helper by its name.
+ * Where the inspector (`inspectSubordinate`) reaches one of a hirer's helpers: by its actor, which the inspector reads
+ * from the root at any depth, live or released (core subordinates/inspection-path.ts). A path walks live children by
+ * name only and answers `missing` for a helper released once its work ended, as every task helper is, or dismissed.
  */
 
 /** A helper as its hirer's roster lists it. */
@@ -20,11 +19,7 @@ export interface HelperAddress {
 
 export const ROOT: HelperAddress = { path: [] };
 
-/** `helper`, under the hirer at `hirer`. */
-export function helperAddress(hirer: HelperAddress, helper: RosterHelper): HelperAddress {
-  const named = hirer.actor === undefined && helper.status !== 'dismissed';
-
-  if (named || helper.actorReference === null) return { path: [...hirer.path, helper.name] };
-
-  return { path: [], actor: helper.actorReference.actorId };
+/** `helper`, wherever it hangs: its actor from the root. A hire with no actor yet has only its name under the root. */
+export function helperAddress(helper: RosterHelper): HelperAddress {
+  return helper.actorReference === null ? { path: [helper.name] } : { path: [], actor: helper.actorReference.actorId };
 }

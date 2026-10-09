@@ -1,6 +1,7 @@
 import { Button } from '@cloudflare/kumo';
 import { ArrowUpRightIcon, MoonIcon, SunIcon } from '@phosphor-icons/react';
-import { useState, type ReactElement, type ReactNode } from 'react';
+import { useMemo, useState, useSyncExternalStore, type ReactElement, type ReactNode } from 'react';
+import { buildCliInstallCommand } from '@kinu.run/core';
 
 import { KinuLogo } from '@/components/ui/KinuLogo';
 import { toggleMode, useTheme } from '@/hooks/use-theme';
@@ -23,6 +24,18 @@ const NOTE = 'px-1 pt-3 text-[11px] leading-relaxed p-text-4';
 
 const TRAILING_LINK = 'mt-6 inline-block text-sm font-semibold p-accent';
 
+/** The origin the build's prerender writes the install line for: production's, the one most visitors load. */
+const PRERENDERED_ORIGIN = 'https://kinu.run';
+
+const unchanging = (): (() => void) => () => {};
+
+/** The install line for this page's origin; the prerendered one while the markup hydrates, so the two match. */
+function useInstallCommand(): string {
+  const origin = useSyncExternalStore(unchanging, () => window.location.origin, () => PRERENDERED_ORIGIN);
+
+  return useMemo(() => buildCliInstallCommand({ origin }), [origin]);
+}
+
 function Accent({ children }: { children: ReactNode }): ReactElement {
   return <span className="p-accent">{children}</span>;
 }
@@ -43,7 +56,7 @@ function PlatformSection({ install }: { install: string }): ReactElement {
           <p className="mb-6 mt-4 text-[15px] leading-[1.7] p-text-3">Hosted on Cloudflare, so the agent keeps working with your device off. It can start its own work on a schedule, or when a webhook arrives.</p>
           <ul className="mb-6 space-y-3 text-sm leading-[1.65] p-text-2">
             <li>Each workspace gets its own webhook URL. Point something at it and the agent starts when the event lands.</li>
-            <li>Ask for a Linux container when a job needs one, with a preview URL you can open.</li>
+            <li>The agent gets a computer of its own when a job needs one, with a preview URL you can open.</li>
           </ul>
           <div className="mb-8 rounded-xl border p-border p-recessed p-4">
             <span className="font-mono text-[10px] uppercase tracking-[.14em] p-text-4">Give it your devices</span>
@@ -257,7 +270,9 @@ function Footer(): ReactElement {
   );
 }
 
-export function LandingPage({ install }: { install: string }): ReactElement {
+export function LandingPage(): ReactElement {
+  const install = useInstallCommand();
+
   return (
     <div className="min-h-screen overflow-x-clip p-bg font-sans p-text">
       <Header />

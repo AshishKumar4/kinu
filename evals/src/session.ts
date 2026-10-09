@@ -97,6 +97,7 @@ import * as v from 'valibot';
 import { Effect } from 'effect';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import type { ActorLedger } from './results';
+import { helperAddress, ROOT, type HelperAddress } from './helper-address';
 
 import {
   DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, hostedActorSocketPath, JOB_OUTPUT_EVENT, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG,
@@ -402,7 +403,8 @@ const InspectionAnswerSchema = v.variant('view', [
   v.object({ view: v.literal('children'), page: pageOf(v.object({
     name: v.string(), status: v.string(), lifetime: v.string(), actorReference: v.nullable(v.object({ actorId: v.string() })),
   })) }),
-  v.object({ view: v.literal('runs'), page: pageOf(v.object({ runId: v.string(), startedAt: v.number(), status: v.nullable(v.string()), userMessage: v.nullable(v.string()) })) }),
+  v.object({ view: v.literal('runs'), page: pageOf(v.object({ runId: v.string(), eventCount: v.optional(v.number()), startedAt: v.number(), status: v.nullable(v.string()), userMessage: v.nullable(v.string()) })) }),
+  v.object({ view: v.literal('history'), page: positionPageSchema(ChatHistoryEntrySchema) }),
   v.object({ view: v.literal('events'), page: v.variant('status', [
     v.object({ status: v.literal('more'), items: v.array(RunEventSchema), next: v.number() }),
     v.object({ status: v.literal('end'), items: v.array(RunEventSchema) }),
@@ -1038,29 +1040,10 @@ export class KinuPublicSession {
     await this.opening;
   }
 
-  /**
-   * Clear the chat as its Clear control does. The deployment answers the clear to every socket but the sender's, so a
-   * second socket hears it land: the clear is done once that socket is told, after storage dropped the conversation.
-   */
+  /** Clear the chat as its Clear control does (`use-kinu.ts`): the `clearConversation` callable, answered once storage
+   *  dropped the conversation and refused while a turn runs. */
   async clearConversation(): Promise<void> {
-    await this.boundary(`clearing the conversation on ${this.workspace}`, async () => {
-      const observer = this.newSocket();
-
-      try {
-        await new Promise<void>((resolve, reject) => {
-          observer.addEventListener('open', () => {
-            this.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.CHAT_CLEAR })).catch(reject);
-          }, { once: true });
-          observer.addEventListener('message', (event: MessageEvent) => {
-            const frame = decodeFrame(event.data);
-
-            if (frame?.kind === 'other' && frame.type === CHAT_MESSAGE_TYPES.CHAT_CLEAR) resolve();
-          });
-          observer.addEventListener('error', () => { reject(new Error('the socket that hears the clear failed')); }, { once: true });
-          observer.addEventListener('close', () => { reject(new Error('the socket that hears the clear closed before it was told')); }, { once: true });
-        });
-      } finally { observer.close(); }
-    });
+    await this.boundary(`clearing the conversation on ${this.workspace}`, () => this.rpc('clearConversation', []));
   }
 
   /** A socket on the workspace's room, or on a helper's when `room` is its path tail (`hostedActorSocketPath`). */
@@ -1772,27 +1755,19 @@ export class KinuPublicSession {
   async actorLedgers(rootEvents: readonly RunEvent[]): Promise<ActorLedger[]> {
     const ledgers: ActorLedger[] = [{ actor: 'main', events: rootEvents }];
 
-    const visit = async (path: string[], actor?: string): Promise<void> => {
+    const visit = async (hirer: HelperAddress): Promise<void> => {
       for (let cursor: { after: string } | undefined; ;) {
-        const request: SubordinateInspectionRequest = { path, view: 'children', page: { limit: RUN_PAGE } };
+        const children = await this.inspect({ ...hirer, path: [...hirer.path], view: 'children', page: cursor === undefined ? { limit: RUN_PAGE } : { limit: RUN_PAGE, cursor } });
 
-        if (actor !== undefined) request.actor = actor;
-
-        if (cursor !== undefined) request.page.cursor = cursor;
-
-        const children = await this.inspect(request);
-
-        if (children.view !== 'children') throw new Error(`the public inspector could not list children of ${path.join('/')}`);
+        if (children.view !== 'children') throw new Error(`the public inspector could not list the helpers of ${hirer.actor ?? 'main'}`);
 
         await Promise.all(children.page.items.map(async (child) => {
           if (child.actorReference === null) return;
 
-          const childPath = [...path, child.name];
-          const childActor = child.actorReference.actorId;
-          const events = await this.actorStepEvents(childPath, childActor);
+          const address = helperAddress(child);
 
-          ledgers.push({ actor: childActor, events });
-          await visit(childPath, childActor);
+          ledgers.push({ actor: child.actorReference.actorId, events: await this.actorStepEvents(address) });
+          await visit(address);
         }));
 
         if (children.page.status === 'end') return;
@@ -1800,35 +1775,31 @@ export class KinuPublicSession {
       }
     };
 
-    await visit([]);
+    await visit(ROOT);
 
     return ledgers;
   }
 
-  private async actorStepEvents(path: string[], actor: string): Promise<RunEvent[]> {
+  private async actorStepEvents(address: HelperAddress): Promise<RunEvent[]> {
     const events: RunEvent[] = [];
 
     for (let cursor: { after: string } | undefined; ;) {
-      const request: SubordinateInspectionRequest = { path, actor, view: 'runs', page: { limit: RUN_PAGE } };
+      const runs = await this.inspect({ ...address, path: [...address.path], view: 'runs', page: cursor === undefined ? { limit: RUN_PAGE } : { limit: RUN_PAGE, cursor } });
 
-      if (cursor !== undefined) request.page.cursor = cursor;
+      if (runs.view !== 'runs') throw new Error(`the public inspector could not read runs of ${address.actor ?? address.path.join('/')}`);
 
-      const runs = await this.inspect(request);
-
-      if (runs.view !== 'runs') throw new Error(`the public inspector could not read runs of ${path.join('/')}`);
-
-      for (const run of runs.page.items) await this.appendActorSteps(events, path, actor, run.runId);
+      for (const run of runs.page.items) await this.appendActorSteps(events, address, run.runId);
 
       if (runs.page.status === 'end') return events;
       cursor = runs.page.next;
     }
   }
 
-  private async appendActorSteps(events: RunEvent[], path: string[], actor: string, runId: string): Promise<void> {
+  private async appendActorSteps(events: RunEvent[], address: HelperAddress, runId: string): Promise<void> {
     for (let since = 0; ;) {
-      const page = await this.inspect({ path, actor, view: 'events', runId, query: { since, limit: EVENT_PAGE } });
+      const page = await this.inspect({ ...address, path: [...address.path], view: 'events', runId, query: { since, limit: EVENT_PAGE } });
 
-      if (page.view !== 'events') throw new Error(`the public inspector could not read requests of ${path.join('/')}/${runId}`);
+      if (page.view !== 'events') throw new Error(`the public inspector could not read requests of ${address.actor ?? address.path.join('/')}/${runId}`);
 
       for (const event of page.page.items) if (event.type === 'step_finish') events.push(event);
 

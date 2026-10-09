@@ -98,8 +98,8 @@ export function logoutCommand(opts: { origin?: string }): Promise<void> {
 
       if (!revoked) {
         yield* Effect.promise(() => bumpProviderRevision());
-        console.log(`${WARN('!')} Not signed out: the session is still valid, and this computer keeps its token so a later logout can revoke it.`);
-        console.log(DIM(`Run \`kinu logout\` again once ${origin} is reachable, or revoke it with \`kinu sessions revoke\` from any computer.`));
+        console.log(`${WARN('!')} Not signed out: the session is still valid, and this PC keeps its token so a later logout can revoke it.`);
+        console.log(DIM(`Run \`kinu logout\` again once ${origin} is reachable, or revoke it with \`kinu sessions revoke\` from any PC.`));
 
         return;
       }

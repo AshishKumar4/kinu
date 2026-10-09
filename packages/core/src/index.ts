@@ -1,3 +1,10 @@
+export {
+  AskingAgentSchema, OwnerAnswersSchema, OwnerQuestionStore,
+  type AskedQuestions, type AskingAgent, type OwnerAnswer, type QuestionStatus,
+} from './plans/owner-questions';
+
+export { AskOwnerInputSchema, OTHER_OPTION, OWNER_ANSWER_SIGNAL, type OwnerQuestion } from './types/owner-questions';
+
 export { initFiberTable, tableExists } from './identity/schema';
 
 export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult, type SubordinateChild } from './subordinates/inspection';
@@ -483,7 +490,7 @@ export {
   type ToolReach,
   type BuiltinToolName,
   type BuiltinToolSpec,
-  REPORT_TOOL, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, DEPS_GATED_TOOLS,
+  REPORT_TOOL, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, ASK_OWNER_TOOL, DEPS_GATED_TOOLS,
 } from './tools/registry';
 
 export {
@@ -636,6 +643,7 @@ export {
 } from './subordinates/depth';
 
 export {
+  askOwnerTool,
   buildBuiltinTools,
   codemodeSurface,
   type BuiltinToolDeps,
@@ -1179,7 +1187,7 @@ export {
 } from './memory/facts';
 
 export {
-  AccountMemoryStore, AccountProposalSchema, initAccountMemoryTables,
+  AccountMemoryStore, AccountMemoryProposalSchema, AccountProposalSchema, initAccountMemoryTables,
   type AccountMemory, type AccountMemoryProposal, type AccountMemoryView, type AccountNote, type AccountNoteHit, type AccountProposal,
   type AccountProposalFiling, type AccountProposer,
 } from './memory/account';
@@ -1624,7 +1632,7 @@ export {
   type StepLike, type ToolResultLike, type TurnSinks,
 } from './orchestrator/turn-accumulator';
 
-export { readWorkspaceWork, hasWorkspaceWork, actorReadHandle, WorkspaceWorkSchema } from './read-models/workspace-work';
+export { readWorkspaceWork, hasWorkspaceWork, actorReadHandle, WorkspaceWorkSchema, WORK_TAB_JOBS } from './read-models/workspace-work';
 
 export { agentTitle, nestedAgent, type AgentLinkIds } from './subordinates/nested-agent';
 
@@ -1652,6 +1660,8 @@ export {
 export { readAgentFigures, recordAgentFigures, reportedAgentFigures, NO_FIGURES, type AgentFigures } from './read-models/agent-figures';
 
 export type { WorkspaceWork, OwnedPlan, OwnedTask, WorkspaceWorkOwner } from './read-models/workspace-work';
+
+export { openingList, openingListOf, listedOn, type OpeningList } from './read-models/opening';
 
 export {
   AgentOrchestrator, type AgentOrchestratorDeps,
@@ -1992,7 +2002,7 @@ export type {
   NodeTranscriptView, NodeTranscriptCrumb, NodeTranscriptOrigin,
 } from './read-models/node-transcript';
 
-export { buildPendingActions, needsTheUser, ownerAsks, type AccountAsk, type OwnerAsk } from './read-models/pending-actions';
+export { buildPendingActions, needsTheUser, ownerAsks, type OwnerAsk } from './read-models/pending-actions';
 
 export { reviewParkedWrite, type ParkedWriteReview } from './read-models/write-preview';
 
@@ -2179,7 +2189,7 @@ export {
 } from './preview/preview-origin';
 
 export {
-  reconcilePreviewPorts,
+  previewPortTitle, reconcilePreviewPorts,
   type ExecutorPortRefresh, type ExposedPortList, type PinnedPreviewPort, type PreviewPortState,
 } from './preview/preview-ports';
 
@@ -2230,7 +2240,9 @@ export {
 
 export { THEME_CSS, THEME_TOKENS, type Mode, type PublicToken, type RadiusRole, type TokenSet } from './web/theme';
 
-export { SLATE_IMPORT_MAP, SLATE_PAGE_HEAD, SLATE_PAGE_PREAMBLE } from './web/slate-page';
+export { hueStops, rankHue } from './web/agent-colour';
+
+export { SLATE_PAGE_PREAMBLE } from './web/slate-page';
 
 export { APP_FONTS_PATH, appFontFile, SLATE_FONTS_PATH } from './web/fonts';
 
@@ -2244,6 +2256,7 @@ export {
 
 export {
   classifyProgrammaticTurn, delegatedTaskMetadata, messageSignalId, isSteeredMessage, endedMidWork, TURN_END_METADATA_KEY, turnFailure, TURN_FAILURE_METADATA_KEY, slatesChanged, SLATES_CHANGED_METADATA_KEY, slatesToPreview, applySignalCard,
+  splicesSeenOn, SIGNALS_SEEN_METADATA_KEY, type SeenSplice,
   parseSignalCardEvent, parseDrainedEvents, eventVariantLabel, eventSourceLabel,
   metadataBroadcastEvent,
   type ClassifiedProgrammaticTurn, type SignalCard, type DrainedEvent,
@@ -2323,6 +2336,8 @@ export {
 } from './read-models/tool-call-grouping';
 
 export {
+  type PlanPageRef,
+  type PlanSurfaceKind,
   type SlateSurfaceKind,
   type SurfaceContent,
   type SurfaceKind,
@@ -2331,6 +2346,8 @@ export {
   SURFACES,
   landedSurface,
   openPortOf,
+  planOfSurface,
+  planSurface,
   pruneSlateReloads,
   surfaceHasContent,
 } from './read-models/surface-presence';

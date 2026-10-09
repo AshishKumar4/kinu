@@ -84,7 +84,7 @@ import {
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SupervisorOpResult } from '@kinu.run/core/workspace';
-import { TURN_CLAIM_FRAME, type AccountSpend, type ActivitySnapshot, type TabPresence, type TurnClaimState } from "@kinu.run/core";
+import { openingList, TURN_CLAIM_FRAME, type AccountSpend, type ActivitySnapshot, type TabPresence, type TurnClaimState } from "@kinu.run/core";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { teamPeers } from "./lib/workspace-roster";
 import { nextAlarmTime } from '@kinu.run/core';
@@ -143,7 +143,7 @@ import {
   headStatusUnsettled, storedHeadReportStatus,
   STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
-  readWorkspaceWork, hasWorkspaceWork, type WorkspaceWork, inspectWork, type InspectedWork, addressedBlock, type EphemeralSlateAddress,
+  readWorkspaceWork, hasWorkspaceWork, WORK_TAB_JOBS, type WorkspaceWork, inspectWork, type InspectedWork, addressedBlock, type EphemeralSlateAddress,
   readWorkspaceAgents, readAgentFigures, recordAgentFigures, reportedAgentFigures, type AgentFigures, type PanelAgent,
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
@@ -221,7 +221,7 @@ import {
   EVOLUTION_LANE_FIBER,
   type ActorDynamicContextExtras,
   type ActorToolDeps,
-  type HostedPlanReviews,
+  type HostedOwnerQuestions, type HostedPlanReviews,
   type UntimedArms,
 } from "./actor-agent";
 import {
@@ -896,6 +896,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.overviewChanged();
 
     if (!this.liveActor(actorId)) return;
+
+    // Its questions are written in its own isolate, which the workspace's reads do not watch.
+    if (this.agentBound(actorId).stores.config.getHoldsQuestions()) this.hostedQuestionsMoved();
     recordAgentFigures(this.boundSql, actorId, figures);
     this.delegatedTurns.start([this.liveAgentOf(actorId)]);
   }
@@ -1030,6 +1033,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       slate: (actor, operation) => this.slateAs(
         { path: [{ name: actor.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, operation,
       ),
+      slateBuild: (actor, slate) => this.slateBuildAs({ path: [{ name: actor.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, slate),
       deferrals: (actorId) => this.deferralChannel(actorId),
       refinementLane: () => async () => { await refinementPass(this.refinementDeps); },
       advisorPort: (reference) => this.temporaryAgentPort(reference),
@@ -1199,10 +1203,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ...(account !== undefined && { account }),
       webSearch,
       jobs: this.hireJobs(turn.actor, turn.input.mode),
-      slate: (operation) => this.slateAs({ path: [{ name: turn.actor.record.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, operation),
+      slateBuild: (slate) => this.slateBuildAs({ path: [{ name: turn.actor.record.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, slate),
       ...(report !== undefined && { report }),
       // The owner's own turns, and its plan's feedback turn; a hirer's turn is never asked for the owner's review.
       ...(!turn.parentDriven && planSubmissionReach(turn.input.mode, turn.driving) && { submitPlan: { submit: async (edits) => await this.hostedPlanSubmit(turn, edits) } }),
+      // A person is the conversation partner only on the owner's turns; a hirer's question goes back in its report.
+      ...(!turn.parentDriven && { askOwner: this.offerAskOwner(turn) }),
       ...(await this.hostedPlanAwaitsReply(turn) && { replyToComment: { reply: async (comment, text) => await this.hostedPlanReply(turn, comment, text) } }),
     };
 
@@ -2272,7 +2278,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         async () => await (await facet()).send(snapshot(), { text: input.text, files: input.files }, { id: input.id, mode: input.mode }))),
       retry: (claim) => whenActorTakesInput(this.boundSql, actorId, async () => await (await facet()).retry(snapshot(), claim)),
       interrupt: () => {
-        this.detachOwned(Effect.promise(() => this.agentTurns.interrupt(actorId)));
+        this.detachOwned(Effect.promise(async () => {
+          await this.agentTurns.interrupt(actorId);
+
+          // A Stop dismisses the agent's open questions in its own isolate.
+          if (this.agentBound(actorId).stores.config.getHoldsQuestions()) this.hostedQuestionsMoved();
+        }));
         this.stopSubtree(actorId);
       },
       sendState: async (id) => await (await facet()).sendState(snapshot(), id),
@@ -2303,6 +2314,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return result;
   }
 
+  /** Marks the agent as one the stack asks for questions; its call parks in its own isolate's store. */
+  private offerAskOwner(turn: HostedTaskTurn): true {
+    const { config } = turn.actor.stores;
+
+    if (!config.getHoldsQuestions()) config.setHoldsQuestions();
+
+    return true;
+  }
+
   /** Asked only of an owner-driven turn of an agent that has submitted a plan. */
   private async hostedPlanAwaitsReply(turn: HostedTaskTurn): Promise<boolean> {
     if (turn.parentDriven || !turn.actor.stores.config.getHoldsPlans()) return false;
@@ -2315,6 +2335,47 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const actorId = turn.actor.handle.actorId;
 
     return await (await this.agentCalls(actorId)).replyPlanComment(this.agentSnapshot(actorId), comment, text, turn.driving);
+  }
+
+  /**
+   * A hosted agent's questions moved in its own isolate, which the workspace's store revision does not see: the held
+   * overview is read again, and the tabs read the list again.
+   */
+  private hostedQuestionsMoved(): void {
+    this.slowOverview = null;
+    this.liveReadsMoved(['listOwnerQuestions']);
+    this.overviewChanged();
+  }
+
+  /** Each live agent's questions from its own isolate (D9); only an agent offered `ask_owner` is asked. An answer is handed
+   *  in as words are, with a wake armed, so the turn it owes survives the isolate. */
+  protected override hostedQuestions(): HostedOwnerQuestions {
+    return {
+      list: async () => {
+        const askers = this.workspaceActors().list()
+          .filter((row) => row.parentActorId !== null && actorReadHandle(this.boundSql, row).config.getHoldsQuestions());
+
+        const asked = await Promise.all(askers.map(async (row) => (await (await this.agentCalls(row.actorId)).ownerQuestions(this.agentSnapshot(row.actorId)))
+          .map((questions) => ({ asked: questions, agent: row.name, actor: row.actorId }))));
+
+        return asked.flat();
+      },
+      answer: async (actorId, id, answers) => {
+        const calls = await this.agentCalls(actorId);
+
+        await this.handInput(actorId, async () => { await calls.answerOwnerQuestions(this.agentSnapshot(actorId), id, answers); });
+        this.hostedQuestionsMoved();
+      },
+      // A dismissal may leave a sibling's answer owed a turn, so it is handed in as an answer is.
+      dismiss: async (actorId, id) => {
+        const calls = await this.agentCalls(actorId);
+        const closed = await this.handInput(actorId, async () => await calls.dismissOwnerQuestions(this.agentSnapshot(actorId), id));
+
+        this.hostedQuestionsMoved();
+
+        return closed;
+      },
+    };
   }
 
   /** Each agent's plans from its own isolate (D9); only an agent that has submitted one is asked, retired ones included. */
@@ -2393,6 +2454,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       peers: this.getPeersToolDeps(),
       submitPlan: { submit: (edits) => this.submitPlanEdits(edits) },
       ...(replyToComment !== undefined && { replyToComment }),
+      askOwner: true,
     };
   }
 
@@ -4653,6 +4715,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.slates.operation(caller, operation);
   }
 
+  override async slateBuild(slate: string): Promise<SlateCallResult> {
+    return this.slates.build(this.slateCaller(), slate);
+  }
+
+  /** Whether a slate still builds, for an actor of this workspace acting as itself; DO-only, like `slateAs`. */
+  async slateBuildAs(caller: SlateCaller, slate: string): Promise<SlateCallResult> {
+    return this.slates.build(caller, slate);
+  }
+
   /** Names only, never surfaces: the graph shows what a slate has reached; each call is still decided as it comes. */
   protected async slateSurfaceCatalog(): Promise<SlateSurfaceCatalog> {
     const descriptors = await this.requireOwnerUserDO().userMcp_toolDescriptors(await this.userCaller());
@@ -5082,37 +5153,83 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return heads.length >= ORPHAN_SEAL_MAX_ROWS;
   }
 
-  /** Asks each lane's own read path at limit 1, since presence is a boolean. */
-  @callable() async getWorkspaceTabPresence(): Promise<TabPresence> {
-    // Same reads the Work tab mounts. A live turn is not content: streaming with
-    // nothing renderable keeps the tab hidden.
-    const [pendingActions, jobs, workspaceWork, changelog, memoryContent] = await Promise.all([
+  /**
+   * The rows the Work tab draws and its presence is decided from, each read once. `jobs`: presence needs one, the tab
+   * draws {@link WORK_TAB_JOBS}.
+   */
+  private async workReads(jobs: number) {
+    const [pendingActions, backgroundJobs, workspaceWork, changelog, memoryContent, inspectedWork] = await Promise.all([
       this.listPendingActions(),
-      this.listBackgroundJobs(20),
+      this.listBackgroundJobs(jobs),
       this.listWorkspaceWork(),
       this.getEvolutionChangelog({ limit: 1 }),
       this.getMemoryContent(),
+      this.inspectWork(),
     ]);
 
     return {
-      work: hasWorkspaceWork({
-        work: workspaceWork, pending: pendingActions, jobs,
-        changes: changelog.entries, notes: parseMemoryNotes(memoryContent ?? ''), owed: await this.inspectWork(),
-      }),
+      pendingActions, backgroundJobs, workspaceWork, memoryContent, inspectedWork,
+      // A live turn is not content: streaming with nothing renderable keeps the tab hidden.
+      presence: {
+        work: workspaceWork, pending: pendingActions, jobs: backgroundJobs,
+        changes: changelog.entries, notes: parseMemoryNotes(memoryContent ?? ''), owed: inspectedWork,
+      },
+    };
+  }
+
+  private async tabPresenceOf(work: Parameters<typeof hasWorkspaceWork>[0]): Promise<TabPresence> {
+    return {
+      work: hasWorkspaceWork(work),
       // Hidden with swarms off.
       explorations: await this.readAccountSwarms() && listForkRuns(this.boundSql, this.actorHandle(), null, 1).items.length > 0,
     };
   }
 
+  /** Asks each lane's own read path at limit 1, since presence is a boolean. */
+  @callable() async getWorkspaceTabPresence(): Promise<TabPresence> {
+    return await this.tabPresenceOf((await this.workReads(1)).presence);
+  }
+
   @callable()
   async getWorkspaceSnapshot() {
-    const [status, tools, memoryContent, executors, activePlan, tabPresence, { slates }] = await Promise.all([
+    const { memoryContent, presence } = await this.workReads(1);
+
+    return await this.snapshotOf(memoryContent, presence);
+  }
+
+  /**
+   * What a workspace tab draws first, in one read: the snapshot, and every list its first screen asked for after the
+   * snapshot came back (2026-10-09 on production: a second wave of six reads, 200-500 ms after the transcript). Each
+   * table is read once, and the tab presence is decided from the same rows. Browser-only: it is off the RPC access
+   * table, so a token never reaches it (`AGENT_RPC_ACCESS`).
+   */
+  @callable()
+  getWorkspaceOpening() {
+    return settle(Effect.gen({ self: this }, function* () {
+      const [reads, subordinates, pendingConsents, workspaceAgents] = yield* Effect.all([
+        attempt({ doing: 'reading what the Work tab draws', otherwise: 'io' }, () => this.workReads(WORK_TAB_JOBS)),
+        openingList('listing the subordinate roster', () => this.listSubordinates()),
+        openingList('listing the pending device consents', () => this.listPendingConsents()),
+        openingList("listing the workspace's agents", () => this.listWorkspaceAgents()),
+      ], { concurrency: 'unbounded' });
+
+      const snapshot = yield* attempt({ doing: 'reading the workspace snapshot', otherwise: 'io' }, () => this.snapshotOf(reads.memoryContent, reads.presence));
+
+      return {
+        ...snapshot,
+        pendingActions: reads.pendingActions, backgroundJobs: reads.backgroundJobs, workspaceWork: reads.workspaceWork,
+        inspectedWork: reads.inspectedWork, subordinates, pendingConsents, workspaceAgents,
+      };
+    }));
+  }
+
+  private async snapshotOf(memoryContent: string, presence: Parameters<typeof hasWorkspaceWork>[0]) {
+    const [status, tools, executors, activePlan, tabPresence, { slates }] = await Promise.all([
       this.getAgentStatus(),
       this.getToolDescriptions(),
-      this.getMemoryContent(),
       this.getExecutors(),
       this.getActivePlanReview(),
-      this.getWorkspaceTabPresence(),
+      this.tabPresenceOf(presence),
       this.listSlates(),
     ]);
 
@@ -5201,10 +5318,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const pendingConsents = new DeviceConsentStore(this.boundSql).live(Date.now());
 
-    const [activePlan, listing, hostedPlans] = await Promise.all([
+    const [activePlan, listing, hostedPlans, questions] = await Promise.all([
       this.getActivePlanReview(),
       this.slates.list(ROOT_SLATE_CALLER),
       this.hostedPlans(),
+      this.listOwnerQuestions(),
     ]);
 
     const pictures = this.pictures.digests();
@@ -5214,6 +5332,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       pendingActions: this.pendingActions(hostedPlans),
       pendingConsents,
       activePlan,
+      openQuestions: questions.filter((asking) => asking.asked.status === 'open').length,
       slates: listing.slates.map((slate) => ({
         id: slate.id, title: slate.title, picture: pictures.get(slate.id) ?? null,
       })),
@@ -5498,9 +5617,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       if (executorId !== 'sandbox') return { error: `${executorId} has no terminal` };
       const handle = this.rt.sandboxHandle;
 
-      if (!handle) return { error: 'the sandbox container is not configured for this workspace' };
+      if (!handle) return { error: 'this workspace has no computer configured' };
 
-      return (yield* terminalStep(Effect.promise(() => handle.ensureReady()), 'preparing the sandbox container for a terminal')) ?? { ok: true };
+      return (yield* terminalStep(Effect.promise(() => handle.ensureReady()), 'preparing the computer for a terminal')) ?? { ok: true };
     }));
   }
 

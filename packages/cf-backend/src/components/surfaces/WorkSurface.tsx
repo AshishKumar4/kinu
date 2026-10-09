@@ -1,13 +1,13 @@
 /** Workspace navigation: titled live previews first, then work/read surfaces. */
 import { Suspense, useCallback, useEffect, useState, type ReactNode } from "react";
-import { GlobeIcon, SparkleIcon } from "@phosphor-icons/react";
+import { GlobeIcon, NotePencilIcon, SparkleIcon } from "@phosphor-icons/react";
 import type { SlateSummary, PendingAction, PlanReview } from "@kinu.run/core";
 import type { WorkspacePlanArrival } from "@/hooks/use-kinu";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { FilesFocus, HeadDeltas } from "@kinu.run/core";
 import type { AgentStatus, ExecutorOutput, ReadMoves } from "@/hooks/use-kinu";
 import type { AsyncResource } from "@/hooks/use-async-resource";
-import { executorLabel, type ExecutorInfo, type InspectedWork } from "@kinu.run/core";
+import { executorLabel, previewPortTitle, type ExecutorInfo, type InspectedWork } from "@kinu.run/core";
 import { Loader } from "@cloudflare/kumo";
 import type { MemoryEntry, ForkNode, ExecutorCommandResult, Rpc, TabPresence } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
@@ -26,11 +26,13 @@ import { SlateFrame } from "@/components/slates/SlateFrame";
 import { ShareSlateControl } from "@/components/slates/ShareSlateControl";
 import { ForkReachPanel } from "@/components/slates/ForkReachPanel";
 import {
-  ACTIVITY_SURFACE, SLATE_PREFIX, SURFACES, landedSurface, openPortOf, parentDir, surfaceHasContent,
+  ACTIVITY_SURFACE, SLATE_PREFIX, SURFACES, landedSurface, openPortOf, parentDir, planSurface, planTitle, surfaceHasContent,
   type PanelAgent, type SlateSurfaceKind, type SurfaceKind,
 } from "@kinu.run/core";
 import { useSurfaceFocus } from "./use-surface-focus";
 import { InspectorBar, type PageTab, type ToolTab } from "./InspectorBar";
+import { PlanPageList } from "./PlanPage";
+import { usePlanPages } from "./use-plan-pages";
 import { ConnectDeviceDialog } from "@/components/ConnectDevicePanel";
 
 // A surface drawn only once it is chosen loads with its first view, outside the workspace's first chunk.
@@ -173,11 +175,11 @@ export function WorkSurface(props: WorkSurfaceProps) {
   });
 
   const chip = focus.readyChip;
-  const workAvailable = surfaceHasContent("Work", content);
 
-  useEffect(() => {
-    if (props.planFocus && workAvailable) focus.navigate("Work");
-  }, [props.planFocus, workAvailable, focus.navigate]);
+  const planPages = usePlanPages({
+    rpc: props.rpc, readMoves: props.readMoves, plan: props.plan, planOwner: props.planOwner, planFocus: props.planFocus,
+    arrival: props.workspacePlanArrival, surface, navigate: focus.navigate,
+  });
 
   // A tab the reader picks lands, presence known or not.
   const choose = useCallback((next: SurfaceKind) => {
@@ -230,8 +232,11 @@ export function WorkSurface(props: WorkSurfaceProps) {
     })),
     ...ports.map((port) => ({
       key: `preview:${port.executor}:${port.port}` as const,
-      title: port.name === undefined || port.name === "" ? `${port.executor} :${port.port}` : port.name,
+      title: previewPortTitle(port),
       Icon: GlobeIcon,
+    })),
+    ...planPages.pages.map((item) => ({
+      key: planSurface({ owner: item.owner.name, id: item.plan.id, revision: item.plan.revision }), title: planTitle(item.plan.content), Icon: NotePencilIcon,
     })),
   ];
 
@@ -271,15 +276,12 @@ export function WorkSurface(props: WorkSurfaceProps) {
       </>} />
 
       <div className={`flex-1 min-h-0 ${surface === "Changes" ? "hidden" : bodyFit}`}>
-        {/* Full height, so a plan under review fills the tab and keeps its decision bar in view; a longer list still scrolls here. */}
-        <div className={surface === "Work" ? "h-full" : "hidden"}>
+        <div className={surface === "Work" ? undefined : "hidden"}>
           <ErrorBoundary label="Work">
             {/* Keyed by workspace, never by agent: a chat-tab switch must not remount Work. */}
             <WorkTab key="workspace"
-              plan={props.plan}
-              planOwner={props.planOwner}
-              workspacePlanArrival={props.workspacePlanArrival}
-              planRpc={props.planRpc ?? props.rpc}
+              work={planPages.read}
+              onOpenPlan={planPages.show}
               onReviewActor={props.onReviewActor}
               pendingActions={props.pendingActions}
               onRefreshQueue={props.onRefreshQueue}
@@ -295,6 +297,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
             />
           </ErrorBoundary>
         </div>
+        <PlanPageList pages={planPages} rpc={props.rpc} planRpc={props.planRpc} onReviewActor={props.onReviewActor} />
         <ErrorBoundary key={surface} label={surface ?? undefined}>
           <Suspense fallback={<div className="h-full flex items-center justify-center"><Loader size="sm" /></div>}>
             {surface === "Files" && (
@@ -329,7 +332,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
                 onConnectDevice={openConnect}
               />
             )}
-            {openPort && <PreviewFrame url={openPort.url} label={openPort.name ?? `${openPort.executor} :${openPort.port}`} />}
+            {openPort && <PreviewFrame url={openPort.url} label={previewPortTitle(openPort)} />}
             <SideSurface shown={surface} rpc={props.rpc} isStreaming={props.isStreaming} />
             {openSlate !== null && <OpenSlatePanel {...props} slate={openSlate} summary={openSlateSummary} />}
           </Suspense>

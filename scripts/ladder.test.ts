@@ -21,13 +21,13 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { cpus } from 'node:os';
 import { basename, join, relative, resolve } from 'node:path';
-import { childEnv, git, initRepo, runToExit, scratchDir } from '@kinu.run/test-utils';
+import { childEnv, git, initRepo, runToExit, scratchDir, spawnTest } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
   CI_EXEMPT, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
   DEPLOY_PHASES, browserModules, deployOrder, deployPlan, gatesFor, liveTierTargets, packageScripts, phaseWave,
   localDeployGates, reportCIVerdicts, runnableArgv, sharedBrowserModules, sharedOf, tierRun, tierSchedule, tierWave, trackedTestFiles, waveCaps, type WaveRow,
-  HAMMER_REPEATS, ciUnits, changedTestGate, splitCIGate, type Gate, armadaPhaseRows, armadaPhaseRun, armadaReport, armadaRowVerdicts, ciVerdictRow, onArmada, secretGroup,
+  HAMMER_REPEATS, ciUnits, changedTestGate, splitCIGate, type Gate, type ArmadaReport, armadaPhaseRows, armadaPhaseRun, armadaReport, armadaRowVerdicts, ciVerdictRow, onArmada, secretGroup,
 } from './ladder';
 import {
   ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite,
@@ -95,9 +95,7 @@ const NON_BUN_RUNNERS: readonly {
  * The live-app suite is here because its own deploy rows are its only
  * runners: CI_EXEMPT carries why a pull request cannot boot the product's dev
  * server. The product flows run only against the deployment a deploy publishes,
- * in its post-publish wave, which a pull request has none of. The capability suite needs a user
- * systemd manager that grants a unit an ambient capability, which a CI runner's
- * does not; CI_EXEMPT carries that too.
+ * in its post-publish wave, which a pull request has none of.
  */
 const AFTER_CI_SUITES = {
   'evals/tasks/chat-app.eval.ts': 'bun run evals',
@@ -107,8 +105,8 @@ const AFTER_CI_SUITES = {
   'evals/tasks/delegation.eval.ts': 'bun run evals',
   'evals/tasks/office.eval.ts': 'bun run evals',
   'evals/tasks/swarm.eval.ts': 'bun run evals',
-  'scripts/deadline-capability.test.ts': 'bun test --timeout=0 scripts/deadline-capability.test.ts',
   'tests/browser/live-app-layout.test.ts': 'bun test --timeout=0 tests/browser/live-app-layout.test.ts',
+  'tests/browser/live-app-own-server.test.ts': 'bun test --timeout=0 tests/browser/live-app-own-server.test.ts',
   'tests/browser/live-app-plans.test.ts': 'bun test --timeout=0 tests/browser/live-app-plans.test.ts',
   'tests/browser/live-app-sleep.test.ts': 'bun test --timeout=0 tests/browser/live-app-sleep.test.ts',
   'tests/browser/live-app-turns.test.ts': 'bun test --timeout=0 tests/browser/live-app-turns.test.ts',
@@ -426,6 +424,7 @@ describe('the ladder measures something', () => {
       'Live app in a browser: a long chat and its plans',
       'Live app in a browser: a page that loses the turn',
       'Live app in a browser: a running turn',
+      'Live app in a browser: a slate that serves its own page, in its answer',
       'Live app in a browser: the inspector column\'s layout',
       'Product flows in a browser, on the deployment',
       'Public pages render',
@@ -692,7 +691,7 @@ describe('a deploy\'s armada rows', () => {
       atDeploy: here.every((gate) => atDeploy.has(gate.run)), local: localDeployGates(deployOrder()).filter((gate) => !onArmada(gate)).length,
     }).toEqual({
       rows: [
-        'preflight bun scripts/preflight.ts', 'source bun test --timeout=0 scripts/deadline-capability.test.ts', 'upload bun run gate:infra',
+        'preflight bun scripts/preflight.ts', 'upload bun run gate:infra',
       ],
       reasons: true, atDeploy: true, local: here.length,
     });
@@ -725,51 +724,119 @@ describe('a deploy row with secrets of its own', () => {
 });
 
 describe('a deploy phase\'s armada report', () => {
-  // The post-publish job of the staging deploy of 04a4dd0ab (2026-10-08, job 20261008081731-1d7c41dd): first-run was cut
-  // off at armada's task limit with no verdict, and product-flows was killed for its silence with one of its own. Both
-  // rows were told first-run's problems.
-  test('gives each row its own verdict, and only the problems armada names for its own task', () => {
-    const rows = armadaPhaseRows(['post-publish']).filter((gate) => ['bun run gate:first-run', 'bash scripts/product-flows-tier.sh'].includes(gate.run));
+  // d05ff368d, 2026-10-09: measuring all flows in beforeAll reached Armada's 1800s wall without reporting a test.
+  test('a finished product flow reports its assertions before the next flow can hang', async () => {
+    const child = spawnTest([
+      process.execPath, 'test', '--timeout=0', '--preload', './scripts/fixtures/product-flow-interruption.ts',
+      'tests/browser/product-flows.test.ts', '-t', 'the product reaches its home page|a workspace made from the home page answers its mission',
+    ], { cwd: join(import.meta.dir, '..'), stdout: 'ignore', stderr: 'pipe', stdin: 'ignore' });
+
+    const decoder = new TextDecoder();
+    let said = '';
+    let blocked = false;
+
+    try {
+      for await (const bytes of child.stderr) {
+        said += decoder.decode(bytes, { stream: true });
+
+        if (!said.includes('fixture: second flow blocked')) continue;
+        blocked = true;
+        child.kill('SIGTERM');
+        break;
+      }
+    } finally {
+      child.kill('SIGTERM');
+      await child.exited;
+    }
+
+    expect(blocked, said).toBe(true);
+    expect(said.match(/^\(pass\)/gmu)?.length ?? 0, said).toBe(1);
+    expect(said.match(/^\(fail\)/gmu)?.length ?? 0, said).toBe(0);
+  });
+
+  test('each product flow owns one task, so a timed-out sibling cannot overwrite a finished verdict', async () => {
+    const planned = await runToExit([process.execPath, 'scripts/ladder.ts', '--ci-plan', '--deploy-phase=post-publish', '--deploy-secrets='], { cwd: root });
+    expect(planned.exitCode, planned.stderr).toBe(0);
+
+    const plan = v.parse(v.object({ include: v.array(v.object({
+      name: v.string(), row: v.string(), rows: v.array(v.string()),
+    })) }), JSON.parse(planned.stdout));
+
+    const flows = plan.include.filter((entry) => entry.row.startsWith('bash scripts/product-flows-tier.sh'));
+    const complete = flows.find((entry) => entry.row.endsWith('--flow=welcome'));
+    const hung = flows.find((entry) => entry.row.endsWith('--flow=hire-home'));
+
+    expect(flows.length).toBe(25);
+    expect(new Set(flows.map((entry) => entry.name)).size).toBe(flows.length);
+    expect(flows.every((entry) => entry.rows.length === 1 && entry.rows[0] === entry.row)).toBe(true);
+
+    if (complete === undefined || hung === undefined) throw new Error('product flows were not split into independently reported tasks');
+
+    const rows = armadaPhaseRows(['post-publish']).filter((gate) => gate.run === 'bash scripts/product-flows-tier.sh');
 
     const read = armadaRowVerdicts(rows, {
-      job: '20261008081731-1d7c41dd',
-      problems: ['first-run-tier has no verdict for bun run gate:first-run; missing is not green', 'first-run-tier reported first-run-tier, which its plan entry does not name'],
+      job: 'interrupted-flow', graded: 'fail', problems: [], artifacts: {},
+      verdicts: { rows: flows.map((entry) => entry === hung
+        ? { name: entry.row, exitCode: 124, seconds: 1800, output: 'task ended before its verdict' }
+        : { run: entry.row, exitCode: 0, seconds: 10, output: '' }) },
+    });
+
+    expect(read.find(({ gate }) => gate.run === complete.row)?.green).toBe(true);
+    expect(read.filter(({ green }) => !green).map(({ gate }) => gate.run)).toEqual([hung.row]);
+  });
+
+});
+
+describe('a phase armada could not grade', () => {
+  test('trusts the run grade, keeps each row\'s problem, and refuses a missing verdict', () => {
+    const rows = armadaPhaseRows(['post-publish']).filter((gate) => gate.run === 'bun run gate:first-run' || gate.run === 'bash scripts/product-flows-tier.sh')
+      .map((gate) => gate.run === 'bash scripts/product-flows-tier.sh' ? { ...gate, run: `${gate.run} --flow=welcome` } : gate);
+
+    const report: ArmadaReport = {
+      job: '20261009-evidence',
+      graded: 'not graded',
+      problems: ['incomplete evidence'],
       verdicts: {
         rows: [
-          { name: 'first-run-tier', exitCode: 124, seconds: 1805, output: 'the task exited 124 and reported no row' },
-          { run: 'bash scripts/product-flows-tier.sh', exitCode: 124, seconds: 538, output: 'KILLED  Product flows in a browser, on the deployment  after 480s with no output' },
+          { name: 'bun run gate:first-run', exitCode: 2, seconds: 61, output: '', artifacts: ['first-run/report.json'], problem: 'evidence was not retained' },
+          { run: 'bash scripts/product-flows-tier.sh --flow=welcome', exitCode: 0, seconds: 300, output: '' },
         ],
       },
       artifacts: {},
-    }, 2);
+    };
 
-    expect(read.map(({ gate, verdict, found }) => [gate.run, verdict?.seconds, found])).toEqual([
-      ['bun run gate:first-run', 1805, 'job 20261008081731-1d7c41dd; first-run-tier has no verdict for bun run gate:first-run; missing is not green; '
-        + 'first-run-tier reported first-run-tier, which its plan entry does not name'],
-      ['bash scripts/product-flows-tier.sh', 538, 'job 20261008081731-1d7c41dd'],
+    const read = armadaRowVerdicts(rows, report);
+
+    expect(read.map(({ verdict }) => verdict)).toEqual(report.verdicts?.rows ?? []);
+    expect(read.map(({ green }) => green)).toEqual([false, false]);
+    expect(read.map(({ found }) => found)).toEqual([
+      'job 20261009-evidence; evidence was not retained', 'job 20261009-evidence; incomplete evidence',
     ]);
+    expect(armadaRowVerdicts(rows, { ...report, graded: 'fail' }).map(({ green }) => green)).toEqual([false, true]);
+    expect(armadaRowVerdicts(rows, { ...report, graded: 'pass', problems: [], verdicts: { rows: [] } }).map(({ green }) => green)).toEqual([false, false]);
+    expect(armadaRowVerdicts(rows, undefined).map(({ green }) => green)).toEqual([false, false]);
   });
 });
 
 describe('what `armada run --json` answers', () => {
-  // armada f8725d7's runCI prints one object on stdout as it ends, its progress then on stderr; the report it names
+  // armada 9dd4ed6's runCI prints one object on stdout as it ends, its progress then on stderr; the report it names
   // holds each task's extracted artifacts by task name.
   test('is read through the report it names, and a run that names none, or printed nothing, has no report', () => {
     const dir = scratchDir('armada-run-json');
     const path = join(dir, 'kinu-20261009-x.json');
 
     writeFileSync(path, JSON.stringify({
-      sha: 'a'.repeat(40), job: '20261009-x', problems: [], artifacts: { 'first-run-tier': join(dir, 'kinu-20261009-x', 'first-run-tier') },
+      sha: 'a'.repeat(40), job: '20261009-x', graded: 'pass', problems: [], artifacts: { 'first-run-tier': join(dir, 'kinu-20261009-x', 'first-run-tier') },
       verdicts: { rows: [{ run: 'bun run gate:first-run', exitCode: 0, seconds: 61, output: '', artifacts: ['first-run/report.json'] }] },
     }));
     const answered = `${JSON.stringify({ sha: 'a'.repeat(40), planJob: 'p', job: '20261009-x', report: path, graded: 'pass', problems: [], rows: [] })}\n`;
     const read = armadaReport(answered);
 
     expect({
-      job: read?.job, kept: read?.artifacts['first-run-tier']?.endsWith('first-run-tier'), evidence: read?.verdicts?.rows[0]?.artifacts,
+      job: read?.job, grade: read?.graded, kept: read?.artifacts['first-run-tier']?.endsWith('first-run-tier'), evidence: read?.verdicts?.rows[0]?.artifacts,
       planFailed: armadaReport(JSON.stringify({ sha: 'a'.repeat(40), planJob: null, job: null, report: null, graded: 'not graded', problems: ['the plan failed'], rows: [] })),
       nothing: armadaReport(''), progress: armadaReport('task job 20261009-x: 3 tasks\n'),
-    }).toEqual({ job: '20261009-x', kept: true, evidence: ['first-run/report.json'], planFailed: undefined, nothing: undefined, progress: undefined });
+    }).toEqual({ job: '20261009-x', grade: 'pass', kept: true, evidence: ['first-run/report.json'], planFailed: undefined, nothing: undefined, progress: undefined });
   });
 });
 

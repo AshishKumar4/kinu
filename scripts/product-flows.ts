@@ -34,6 +34,7 @@ import {
   AGENT_PLAN_ASK, FLOW_MEMORY_NOTE, FLOW_SHELL_PROBE, FLOW_SLATE, MEMORY_ASK, SLATE_ASK, STORM_ASK, STORM_DIR, STORM_FILES, STORM_SEED_ASK, WRITE_FILE_ASK,
   APPROVALS_ASK, DECISION_HEARD, HIRE_APPROVAL_ASK, HIRE_RAN, PROPOSAL_LINK_REPLY, WORKSPACE_PROPOSAL_ASK, ACCOUNT_FACT, ACCOUNT_FACT_ASK,
   ACCOUNT_RECALL_ASK, ACCOUNT_RECALL_REPLY, STACK_FACT, STACK_FACT_ASK, STACK_RECALL_ASK, STACK_RECALL_REPLY,
+  SPLICE_BEFORE, SPLICE_HEARD, SPLICE_PAGE_ASK, SPLICE_SENT, SPLICE_WORK_ASK,
 } from './flows-script';
 import { FALLBACK_ANSWER } from './scripted-protocol';
 import {
@@ -673,6 +674,83 @@ export async function agentPlanIsReviewedInItsPane(target: FlowTarget): Promise<
   }
 }
 
+/** Where the ping's card sits, and how far the agent has got with it. */
+export interface SpliceReading {
+  /** Its delivery mark and the colour it wears. */
+  readonly state: string | null;
+  readonly tone: string | null;
+  /** Drawn inside the answer, not as a loose card. */
+  readonly spliced: boolean;
+  /** The reading order of the turn's words before it, the card, and the answer after it (-1: not found). */
+  readonly order: readonly number[];
+}
+
+export interface SpliceVerdict {
+  /** While the agent slept: the card waiting on it. */
+  readonly waited: SpliceReading;
+  /** Once the turn ended, and again after a reload. */
+  readonly answered: SpliceReading;
+  readonly reloaded: SpliceReading;
+}
+
+/** The ping's card as the chat draws it, by the word it carries, read in the page. */
+const SPLICE_READING = `(() => {
+  const all = [...document.querySelectorAll('#chat *')];
+  const at = (needle) => all.findIndex((el) => (el.textContent ?? '').includes(needle)
+    && ![...el.children].some((child) => (child.textContent ?? '').includes(needle)));
+  const card = [...document.querySelectorAll('#chat [data-signal-card]')].find((el) => (el.textContent ?? '').includes(${JSON.stringify(SPLICE_SENT)}));
+  const mark = card?.querySelector('[data-delivery]') ?? null;
+
+  return {
+    state: mark?.getAttribute('data-delivery') ?? null,
+    tone: ['p-warning', 'p-success'].find((name) => mark?.classList.contains(name)) ?? null,
+    spliced: card?.closest('[data-spliced-signal]') != null,
+    order: [${JSON.stringify(SPLICE_BEFORE)}, ${JSON.stringify(SPLICE_SENT)}, ${JSON.stringify(SPLICE_HEARD)}].map(at),
+  };
+})()`;
+
+const SpliceReadingSchema = v.object({ state: v.nullable(v.string()), tone: v.nullable(v.string()), spliced: v.boolean(), order: v.array(v.number()) });
+
+/**
+ * Row: a page in the chat sends the agent a word while it works. Its card waits amber, is drawn inside the answer between
+ * the words before it and the answer that read it, turns green once read, and a reload draws it there still.
+ */
+export async function spliceSitsWhereItWasRead(target: FlowTarget): Promise<SpliceVerdict> {
+  const workspace = await createFlowWorkspace(target, 'splice');
+
+  try {
+    const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
+    const reading = async (): Promise<SpliceReading> => v.parse(SpliceReadingSchema, await page.evaluate(SPLICE_READING));
+
+    await sendAndSettle(page, SPLICE_PAGE_ASK);
+    await until(page, 'the Ping page drawn', `document.querySelector('[data-slate-ui="ping"] iframe') !== null`);
+    const src = await page.$eval('[data-slate-ui="ping"] iframe', (frame) => frame.getAttribute('src') ?? '');
+    const frame = await page.waitForFrame((each) => each.url().startsWith(new URL(src).origin));
+
+    await frame.waitForSelector('#ping');
+
+    // The work turn: sent, and clicked into while it sleeps.
+    const composer = await typeIntoComposer(page, SPLICE_WORK_ASK);
+    await composer.press('Enter');
+    await until(page, 'the work turn waiting on its build', `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(SPLICE_BEFORE)})`);
+    await frame.click('#ping');
+    await until(page, "the ping's card", `[...document.querySelectorAll('#chat [data-signal-card]')].some((el) => (el.textContent ?? '').includes(${JSON.stringify(SPLICE_SENT)}))`);
+    const waited = await reading();
+
+    await until(page, 'the answer that read the ping', `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(SPLICE_HEARD)}) && ${CHAT_IDLE}`);
+    const answered = await reading();
+
+    await page.reload({ waitUntil: 'load' });
+    await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
+    await until(page, 'the answer drawn again', `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(SPLICE_HEARD)})`);
+    const again = await reading();
+
+    return { waited, answered, reloaded: again };
+  } finally {
+    await removeFlowWorkspace(target, workspace);
+  }
+}
+
 export interface ApprovalStackVerdict {
   /** The stack's cards once both commands parked: the open one first, then those behind it. */
   readonly stacked: readonly string[];
@@ -1043,7 +1121,8 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
 
     // Back to the workspace, the way a person returns: its own page, not the agent's.
     await back.goto(`${target.origin}/workspace/${encodeURIComponent(workspace)}`, { waitUntil: 'load' });
-    await settledAfter(back, ledger, 'getWorkspaceSnapshot', 'getChatHistoryPage', 'listWorkspaceAgents');
+    // The agents list arrives on the opening read (`getWorkspaceOpening`), not on its own.
+    await settledAfter(back, ledger, 'getWorkspaceOpening', 'getChatHistoryPage');
     // The sidebar's workspaces arrive over HTTP once the roster socket opens, which the ledger does not see.
     await until(back, "the sidebar's workspace list", SIDEBAR_LISTED);
     await back.click('[data-agents-counter]');
@@ -1203,7 +1282,7 @@ export async function countRpc(page: Page): Promise<RpcCounter> {
  *  `rpc-gate` classifies it `interactive` rather than `workspace.read` — that
  *  axis is authorization, and the Journal it feeds is the workspace's. */
 const WORKSPACE_READS = [
-  'getWorkspaceSnapshot', 'getExposedPorts', 'listPendingActions', 'getMemoryContent',
+  'getWorkspaceOpening', 'getWorkspaceSnapshot', 'getExposedPorts', 'listPendingActions', 'getMemoryContent',
   'getToolDescriptions', 'getExecutors', 'listBackgroundJobs', 'listSlates',
   'listPendingConsents', 'getActivePlanReview', 'getEvolutionChangelog',
 ] as const;
@@ -1588,7 +1667,7 @@ export async function workspaceGetsFirstAnswer(target: FlowTarget): Promise<Firs
     // #21: a hello turn must not open an inspector. The initial snapshot and turn-triggered refreshes
     // supply its state; an idle page no longer polls listPendingActions.
     do {
-      await waitOn(page, 'the workspace snapshot and its outstanding reads', settledAfter(page, ledger, 'getWorkspaceSnapshot'));
+      await waitOn(page, 'the workspace opening and its outstanding reads', settledAfter(page, ledger, 'getWorkspaceOpening'));
       await rendered(page);
     } while (!ledger.quiet());
 
@@ -2303,6 +2382,24 @@ export interface SlateShareVerdict {
   readonly afterStop: readonly string[];
 }
 
+/** Open the share dialog only once its capability graph has supplied the limits. */
+export async function openSlateShareDialog(page: Page, tile: string): Promise<void> {
+  await page.click(`${tile} [data-drive-menu]`);
+  await page.click(`${tile} [data-drive-share-slate]`);
+  await until(page, 'the share dialog\'s limits', `document.querySelector('[role="dialog"] [data-share-limits]') !== null`);
+}
+
+/** Submit the public share when its control can accept the click, then read the created link. */
+export async function submitPublicSlateShare(page: Page): Promise<string | null> {
+  await page.click('[data-share-access]');
+  await page.click('[data-share-access-option="public"]');
+  await until(page, 'the public share to be ready', `document.querySelector('[data-share-submit]:not([disabled])') !== null`);
+  await page.click('[data-share-submit]');
+  await until(page, 'the share to be made', `document.querySelector('[data-share-created]') !== null`);
+
+  return v.parse(v.nullable(v.string()), await page.evaluate(`document.querySelector('[role="dialog"] a[href]')?.href ?? null`));
+}
+
 /**
  * Row: a slate that calls nothing of its owner's shares from its tile, and stops.
  *
@@ -2319,20 +2416,14 @@ export async function slateSharesReachingNothing(target: FlowTarget): Promise<Sl
   try {
     const page = await driveWithSlate(target, workspace);
 
-    await page.click(`${slateTile(workspace)} [data-drive-menu]`);
-    await page.click(`${slateTile(workspace)} [data-drive-share-slate]`);
-    await until(page, 'the share dialog\'s limits', `document.querySelector('[role="dialog"] [data-share-limits]') !== null`);
+    await openSlateShareDialog(page, slateTile(workspace));
 
     const reachRow = v.parse(v.boolean(), await page.evaluate(`document.querySelector('[data-share-reach]') !== null`));
 
     const limitsStated = v.parse(v.array(v.number()), await page.$eval('[data-share-limits]',
       (element) => [...(element.textContent ?? '').matchAll(/\d+(?:\.\d+)?/gu)].map((number) => Number(number[0]))));
 
-    await page.click('[data-share-access]');
-    await page.click('[data-share-access-option="public"]');
-    await page.click('[data-share-submit]');
-    await until(page, 'the share to be made', `document.querySelector('[data-share-created]') !== null`);
-    const link = v.parse(v.nullable(v.string()), await page.evaluate(`document.querySelector('[role="dialog"] a[href]')?.href ?? null`));
+    const link = await submitPublicSlateShare(page);
     let copied: string | null = null;
 
     if (link !== null) {

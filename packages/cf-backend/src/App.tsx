@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation, useParams } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, Outlet, matchPath, useLocation, useParams } from "react-router-dom";
 import { Suspense, type ReactNode } from "react";
 import Layout from "./components/layout";
 import HomePage from "./pages/HomePage";
@@ -78,11 +78,13 @@ function KeyedWorkspace() {
 }
 
 // An account needing setup lands on /welcome from any URL; /welcome stays open to all; a failed profile read gates nothing.
+// A workspace does not wait for the read: its socket is the page's longest wait, which the read delayed 453 ms on the
+// mobile profile (2026-10-09), and an account holding a workspace never needs setup (`needsOnboarding`).
 function OnboardingGate() {
   const { profile } = useAccount();
   const at = useLocation().pathname;
 
-  if (profile.status === "loading") return <LazyFallback />;
+  if (profile.status === "loading" && matchPath(`${APP_ROUTES.workspace}/*`, at) === null) return <LazyFallback />;
 
   if (at !== APP_ROUTES.welcome && needsOnboarding(lastValue(profile))) {
     return <Navigate to={APP_ROUTES.welcome} replace />;

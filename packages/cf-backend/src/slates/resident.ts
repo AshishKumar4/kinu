@@ -7,7 +7,7 @@ import { CRED_KERNEL, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.
 import type { ComposedFacetManager, LongRunningWorkerSpawnOptions } from '@nimbus-sh/worker/workspace-host';
 import type { WorkspaceSession } from '@kinu.run/core/workspace';
 import {
-  SLATE_DRIVEN_MEMBERS, SLATE_IMPORT_MAP, SLATE_METHOD_NAME_SOURCE, SLATE_PAGE_HEAD, SLATE_PAGE_PREAMBLE, slateTitle, type SlateProcess, type SlateProject,
+  SLATE_DRIVEN_MEMBERS, SLATE_METHOD_NAME_SOURCE, SLATE_PAGE_PREAMBLE, slateTitle, type SlateProcess, type SlateProject,
 } from '@kinu.run/core';
 import { attempt, diagnostics, KinuError, renderCauseChain, settle } from '@kinu.run/core/obs';
 import { slateCredentialKey } from './bindings';
@@ -210,6 +210,18 @@ export function slateRunnerSource(
     '});',
     // Invocation is async context: `undefined` means no method is running; `null` is the root lineage.
     'const invocations = new AsyncLocalStorage();',
+    // Every page this origin answers, the runner's own or the class's `fetch`, is opened one way: the import map,
+    // the host's palette and faces, and kinu:slate's `fit`, which takes the host's theme and tells it the page's height.
+    'const PAGE_PREAMBLE = ' + JSON.stringify(SLATE_PAGE_PREAMBLE) + ';',
+    'async function openedPage(response) {',
+    '  if (response.body === null || !/^text\\/html\\b/i.test(response.headers.get("content-type") ?? "")) return response;',
+    '  let opened = false;',
+    '  const page = await new HTMLRewriter().on("html", { element(element) { opened = true; element.prepend(PAGE_PREAMBLE, { html: true }); } }).transform(response).text();',
+    '  const headers = new Headers(response.headers);',
+    '  headers.delete("content-length");',
+    '  headers.delete("content-encoding");',
+    '  return new Response(opened ? page : PAGE_PREAMBLE + page, { status: response.status, statusText: response.statusText, headers });',
+    '}',
     // `workspace.memory.search(query)` calls ["memory", "search"]; outside a method or the socket there is no invocation.
     'function surface(stub, path) {',
     '  return new Proxy(function () {}, {',
@@ -318,7 +330,7 @@ export function slateRunnerSource(
     '  async fetch(request) { return this.handleHttpRequest(request); }',
     '  async handleHttpRequest(request) {',
     '    try {',
-    '      return await this.respond(request);',
+    '      return await openedPage(await this.respond(request));',
     '    }',
     '    catch (cause) { return Response.json({ reason: cause instanceof SlateRefusal ? cause.reason : "io", error: errorText(cause) }, { status: 500 }); }',
     '  }',
@@ -375,21 +387,6 @@ function isPageEntry(browser: string): boolean {
   return browser.endsWith('.html');
 }
 
-/** The page as written, opened with the import map and kinu:slate's `fit`, so it takes the host's theme and height. A
- *  fragment with no `<html>` is opened in front. */
-async function slatePage(html: string): Promise<string> {
-  let opened = false;
-
-  const page = await new HTMLRewriter().on('html', {
-    element(element) {
-      opened = true;
-      element.prepend(SLATE_PAGE_PREAMBLE, { html: true });
-    },
-  }).transform(new Response(html)).text();
-
-  return opened ? page : SLATE_PAGE_PREAMBLE + page;
-}
-
 function escapeHtml(text: string): string {
   return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }
@@ -407,8 +404,6 @@ function slateShell(input: { readonly title: string; readonly assets: readonly {
     '  <meta charset="utf-8">',
     '  <meta name="viewport" content="width=device-width, initial-scale=1">',
     `  <title>${escapeHtml(input.title)}</title>`,
-    `  ${SLATE_IMPORT_MAP}`,
-    `  ${SLATE_PAGE_HEAD}`,
     styles,
     '</head>',
     '<body>',
@@ -521,7 +516,8 @@ function browserSurface(build: SlateBuild, id: string, project: SlateProject, re
 
     if (browser === undefined) return { assets: [], shell: undefined };
 
-    if (isPageEntry(browser)) return { assets: [], shell: yield* Effect.promise(() => slatePage(read(browser))) };
+    // Served as written: the runner opens every page it answers, this one with the rest.
+    if (isPageEntry(browser)) return { assets: [], shell: read(browser) };
     const clientEntry = `${build.entries}/client.js`;
 
     build.provision('client.js', `import App from "${build.root}/${browser}";\nimport { mount } from "kinu:slate";\nmount(App);\nexport default App;\n`);

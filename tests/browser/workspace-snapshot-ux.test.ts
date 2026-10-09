@@ -108,10 +108,7 @@ test('a task written while the socket was down shows on the Work tab after the r
     // The stub's first open belongs to the initial connection.
     await page.evaluate(() => window.dispatchEvent(new Event('gallery-reconnect')));
     await page.click('[aria-label="Work"]');
-    // The fixture's plan opens in review; the task list is behind it.
-    await page.waitForSelector('[data-back-to-work]');
-    await page.click('[data-back-to-work]');
-    await page.waitForFunction(() => document.querySelector('[data-back-to-work]') === null);
+    await page.waitForSelector('[data-work-plans]');
     expect(await page.evaluate(() => document.body.textContent)).not.toContain('Written during the outage');
 
     await page.evaluate(() => {
@@ -383,14 +380,36 @@ test('a late answer to an older read never replaces a newer one, nor reports its
   });
 });
 
-/** Opens the Work tab's own list, past the plan the gallery workspace has waiting for review. */
+/** Opens the Work tab's own list. */
 async function openWorkList(page: Page): Promise<void> {
   await page.waitForSelector('[aria-label="Work"]');
   await page.click('[aria-label="Work"]');
-  await page.waitForFunction(() => document.querySelector('[data-back-to-work]') !== null || document.querySelector('[data-work-plans]') !== null);
-
-  if (await page.$('[data-back-to-work]') !== null) await page.click('[data-back-to-work]');
+  await page.waitForSelector('[data-work-plans]');
 }
+
+/**
+ * The opening is a dozen reads, so a load must not be paid twice. The gallery mounts under StrictMode, whose remount
+ * retires the first load in the commit that made it: 2026-10-09, two openings per arrival before the load waited a
+ * microtask to start.
+ */
+test('a page load and an arrival at another workspace each read the workspace once', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    const openings = () => page.evaluate(() => Number(document.documentElement.dataset.galleryOpenings ?? '0'));
+
+    await page.setViewport({ width: 1440, height: 900 });
+    await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('[aria-label="Work"]');
+    const loaded = await openings();
+
+    await page.evaluate(async () => { await window.galleryNavigate?.('/workspace/billing-cleanup'); });
+    await page.waitForFunction((was) => Number(document.documentElement.dataset.galleryOpenings ?? '0') > was, {}, loaded);
+    await framesDrawn(page);
+
+    expect({ loaded, arrived: await openings() }).toEqual({ loaded: 1, arrived: 2 });
+    await page.close();
+  });
+});
 
 /** A read the workspace left behind answers after the reader moved on: the next workspace never shows it. */
 test('a read answered after its workspace was left never shows in the next one', async () => {

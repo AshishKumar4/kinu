@@ -229,6 +229,9 @@ interface MovieReducedFact {
 interface Facts {
   /** Sockets the landing opened: a signed-out visitor has none to open. */
   landingSockets?: readonly string[];
+  /** Whether the served landing.html already held the page, and what hydrating it reported. */
+  landingPrerendered?: boolean;
+  landingHydrationFaults?: readonly string[];
   reduced?: { before: string; after: string; pixels: number; animations: number };
   treeFlows?: boolean;
   prunedNodes?: number;
@@ -362,7 +365,12 @@ beforeAll(async () => {
     origin = gallery.origin;
 
     {
+      const hydrationFaults: string[] = [];
+
       const page = await openLanding(DESKTOP, false, async (landing) => {
+        // React reports a hydration mismatch as a recoverable error: a console error, or an uncaught one.
+        landing.on('console', (message) => { if (message.type() === 'error' || message.type() === 'warn') hydrationFaults.push(message.text()); });
+        landing.on('pageerror', (error) => { hydrationFaults.push(error instanceof Error ? error.message : String(error)); });
         await landing.evaluateOnNewDocument(() => {
           const opened: string[] = [];
           window.__kinuSocketsOpened = opened;
@@ -377,6 +385,9 @@ beforeAll(async () => {
         });
       });
 
+      facts.landingPrerendered = await page.evaluate(async () => (await (await fetch('/landing.html')).text()).includes('<div id="landing-root"><'));
+      // A production build reports the hydration errors by number (react.dev/errors/418 and its neighbours).
+      facts.landingHydrationFaults = hydrationFaults.filter((text) => /hydrat|did not match|server rendered|errors\/(418|419|421|422|423|425)\b/i.test(text));
       await page.waitForSelector('canvas[data-settled="true"]');
       facts.prunedNodes = await page.$eval('canvas', (canvas) => Number(canvas.dataset.pruned ?? 0));
       facts.hiddenNodes = await page.$eval('canvas', (canvas) => Number(canvas.dataset.hidden ?? 0));
@@ -816,7 +827,8 @@ beforeAll(async () => {
         settled: document.querySelector('[data-landing-frame="plan"]')?.getAttribute('data-movie-settled') === 'true',
         cursor: document.querySelector('[data-landing-frame="plan"] [data-movie-cursor]') !== null,
         slate: document.querySelector('[data-landing-frame="plan"] [data-slate-dashboard]') !== null,
-        decided: document.querySelector('[data-landing-frame="plan"] [data-plan-status]')?.textContent === 'Approved',
+        // The slate is shown; the decided plan is a card in Work, behind it.
+        decided: document.querySelector('[data-landing-frame="plan"] [data-plan-card]')?.textContent?.includes('approved') === true,
       }));
 
       facts.movieReduced = {
@@ -1399,6 +1411,11 @@ describe('the hero heading names its rotation', () => {
 });
 
 describe('public actions work', () => {
+  test('the landing is drawn from its HTML and hydrates with no mismatch', () => {
+    expect({ prerendered: facts.landingPrerendered, faults: facts.landingHydrationFaults })
+      .toEqual({ prerendered: true, faults: [] });
+  });
+
   test('the install command uses this origin and copies', () => {
     expect(required(facts.command, 'install command')).toBe(
       `curl -fsSL '${origin}/install.sh' | bash`,

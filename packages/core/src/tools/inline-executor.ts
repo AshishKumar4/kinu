@@ -91,6 +91,8 @@ export interface InlineExecutorDeps {
   unmeasured?: readonly ExecutorCapability[];
   /** The owning workspace's slate operations; absent when this backend has no slate host. */
   slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
+  /** Whether a slate still builds, for the write a program makes into one; a check, never a preview. */
+  slateBuild?: (slate: string) => Promise<SlateCallResult>;
 }
 
 /** Every VFS error out of `workspace.*` gets vfsAddressingHint; code, errno and path are kept. */
@@ -130,7 +132,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   // The native `file` tool's write, on the same ledger read live per call.
   const fileWrite = serveFile(() => ({
     vfs, home: deps.home ?? WORKSPACE_ROOT, planes: deps.planes ?? cloudPlanes(deps.home ?? WORKSPACE_ROOT), ledger: currentLedger(), budget: currentBudget(), memory,
-    ...(deps.slate !== undefined && { slate: deps.slate }),
+    ...(deps.slateBuild !== undefined && { slateBuild: deps.slateBuild }),
   })).write;
 
   const tools: ExecutorProvider['tools'] = {

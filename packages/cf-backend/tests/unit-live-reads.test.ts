@@ -6,8 +6,9 @@
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  appendMemoryNote, LIVE_READS, READS_CHANGED_EVENT, type LiveRead,
+  appendMemoryNote, LIVE_READS, READS_CHANGED_EVENT, ROSTER_READS, type LiveRead,
 } from '@kinu.run/core';
+import { socketConnection } from './helpers/bindings';
 import {
   chatSessionTurns, hostedSubordinateHarness, jobsOver, orchestratorHarness, reactivateOrchestratorHarness,
   type HarnessOrchestratorAgent,
@@ -56,6 +57,7 @@ async function liveRead(agent: HarnessOrchestratorAgent, read: LiveRead): Promis
     getQuality: () => agent.getQuality(30),
     getWorkspaceGitHub: () => agent.getWorkspaceGitHub(),
     inspectWork: () => agent.inspectWork(),
+    listOwnerQuestions: () => agent.listOwnerQuestions(),
   };
 
   await reads[read]();
@@ -77,6 +79,25 @@ test('a wake over surviving storage tells an open page nothing', async () => {
   endTick(woken.agent);
 
   expect(heard).toEqual([]);
+});
+
+// 2026-10-09 on production: every page load read the roster twice. The sleep-time lane kept its instants in
+// actor_config, every write to which names the roster's reads, and a tab arriving after the last one left cleared one.
+test("a tab arriving after the last one left leaves the roster's reads alone", async () => {
+  const { agent } = orchestratorHarness();
+  const named = namedReads(agent);
+  const connect = { request: new Request('https://agent/connect') };
+  const left = socketConnection({ id: 'left-tab', send: () => {} });
+
+  await agent.onConnect(left, connect);
+  await agent.onClose(left, 1000, 'gone', true);
+  endTick(agent);
+  named();
+
+  await agent.onConnect(socketConnection({ id: 'arriving-tab', send: () => {} }), connect);
+  endTick(agent);
+
+  expect([...named()].filter((read) => ROSTER_READS.includes(read))).toEqual([]);
 });
 
 test('reading every live read names none, so a page that re-reads on a frame never loops', async () => {

@@ -60,6 +60,7 @@ function fakeClient(opts: FakeOptions = {}): Fake {
     consents: null,
     checkpoints: null,
     plans: null,
+    questions: null,
     localControls: {
       getAlwaysActiveSkills: () => [],
       setAlwaysActiveSkills: () => {},

@@ -6,13 +6,14 @@
 import { Cause, Effect } from "effect";
 import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@cloudflare/kumo";
-import { BrainIcon, CheckIcon, DesktopTowerIcon, NotePencilIcon, ShieldWarningIcon, SparkleIcon, XIcon, type Icon } from "@phosphor-icons/react";
+import { BrainIcon, ChatCircleTextIcon, CheckIcon, DesktopTowerIcon, NotePencilIcon, ShieldWarningIcon, SparkleIcon, XIcon, type Icon } from "@phosphor-icons/react";
 import {
-  revealMisrepresenting, timeAgo, type AccountAsk, type OwnerAsk, type PendingAction, type PendingActionKind, type PendingConsent, type Rpc,
+  revealMisrepresenting, timeAgo, type AccountMemoryProposal, type OwnerAsk, type PendingAction, type PendingActionKind, type PendingConsent, type PlanPageRef, type Rpc,
 } from "@kinu.run/core";
 import { detach, renderThrownChain } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { ParkedWriteChange } from "@/components/surfaces/WorkTab";
+import { QuestionCard } from "@/components/QuestionCard";
 
 type ConsentChoice = "once" | "always" | "deny";
 
@@ -23,8 +24,8 @@ export interface AttentionStackProps {
   readonly resolveConsent: (consentId: string, choice: ConsentChoice) => Promise<void>;
   /** Re-read the queue so an answered row leaves the read too, not only the stack; it reports its own failure. */
   readonly onDecided: () => Promise<void>;
-  /** A plan is decided in its review, under Work. */
-  readonly onReview: () => void;
+  /** A plan is decided on its own page. */
+  readonly onReview: (plan: PlanPageRef) => void;
   /** The owner's answer to an account-memory proposal; the user object then sends what still waits. */
   readonly decideMemory: (id: string, decision: "accept" | "decline") => Promise<void>;
 }
@@ -32,11 +33,12 @@ export interface AttentionStackProps {
 /** Collapsed cards drawn behind the open one; the rest are counted on the last. */
 const SHOWN_BEHIND = 2;
 
-type AskKind = PendingActionKind | "consent" | "memory";
+type AskKind = PendingActionKind | "consent" | "memory" | "question";
 
 /** Only the kinds that hold the owner are stacked; the others are named so the map is whole. */
 const KIND_ICON = {
   deferred_action: ShieldWarningIcon, workspace_proposal: SparkleIcon, plan_review: NotePencilIcon, consent: DesktopTowerIcon, memory: BrainIcon,
+  question: ChatCircleTextIcon,
   scaffold_version: ShieldWarningIcon, unseen_changes: ShieldWarningIcon, curriculum_task: ShieldWarningIcon,
 } satisfies Record<AskKind, Icon>;
 
@@ -45,7 +47,7 @@ function kindOf(ask: OwnerAsk): AskKind {
 }
 
 /** What an account-memory proposal would keep, in words: a fact's key and value, or a note's text. */
-function remembered(memory: AccountAsk): string {
+function remembered(memory: AccountMemoryProposal): string {
   const { proposal } = memory;
 
   return proposal.kind === "fact" ? `${proposal.key}: ${JSON.stringify(proposal.value)}` : proposal.content;
@@ -56,6 +58,12 @@ function headline(ask: OwnerAsk): string {
   if (ask.kind === "consent") return `Use ${ask.consent.deviceLabel}: ${ask.consent.command || "(command)"}`;
 
   if (ask.kind === "memory") return `Remember for every workspace: ${remembered(ask.memory)}`;
+
+  if (ask.kind === "question") {
+    const first = ask.question.asked.questions[0]?.question ?? "";
+
+    return ask.question.actor === null ? first : `${ask.question.agent} asks: ${first}`;
+  }
 
   const { action } = ask;
 
@@ -137,9 +145,10 @@ function ConsentBody({ consent }: { consent: PendingConsent }) {
   );
 }
 
-function MemoryBody({ memory }: { memory: AccountAsk }) {
-  const by = memory.origin?.agent ?? (memory.origin?.by === "background" ? "Kinu, from what you said" : "An agent");
-  const where = memory.origin?.workspace === undefined ? "" : ` in ${memory.origin.workspace}`;
+function MemoryBody({ memory }: { memory: AccountMemoryProposal }) {
+  const { origin } = memory;
+  const by = origin.agent ?? (origin.by === "background" ? "Kinu, from what you said" : "An agent");
+  const where = origin.workspace === undefined ? "" : ` in ${origin.workspace}`;
 
   return (
     <>
@@ -160,6 +169,9 @@ function answersOf(ask: OwnerAsk, props: AttentionStackProps): readonly Answer[]
       { label: "Decline", icon: XIcon, weight: "quiet", run: () => props.decideMemory(id, "decline") },
     ];
   }
+
+  // A question card carries its own answer and dismissal.
+  if (ask.kind === "question") return [];
 
   if (ask.kind === "consent") {
     const { consentId, deviceLabel } = ask.consent;
@@ -188,7 +200,7 @@ function answersOf(ask: OwnerAsk, props: AttentionStackProps): readonly Answer[]
     ];
   }
 
-  return [{ label: "Review plan", weight: "primary", run: async () => { props.onReview(); } }];
+  return [{ label: "Review plan", weight: "primary", run: async () => { if (action.planRef !== undefined) props.onReview(action.planRef); } }];
 }
 
 /** Answered here, so the next card opens on the click; dropped once the read no longer holds it. */
@@ -228,7 +240,7 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
     setError(null);
     yield* Effect.promise(() => choice.run());
 
-    if (front.kind === "memory") {
+    if (front.kind === "memory" || front.kind === "question") {
       mark(front.key);
       setChosen(null);
     }
@@ -271,6 +283,11 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
         {front.kind === "consent" && <ConsentBody consent={front.consent} />}
         {front.kind === "memory" && <MemoryBody memory={front.memory} />}
         {front.kind === "action" && <ActionBody action={front.action} rpc={rpc} />}
+        {front.kind === "question" && (
+          <QuestionCard asking={front.question} busy={busy === front.key}
+            onAnswer={(answers) => detach(answer({ label: "Answer", weight: "primary", run: async () => { await rpc("answerOwnerQuestions", [front.question.asked.id, answers, front.question.actor]); } }))}
+            onDismiss={() => detach(answer({ label: "Dismiss", weight: "quiet", run: async () => { await rpc("dismissOwnerQuestions", [front.question.asked.id, front.question.actor]); } }))} />
+        )}
         {error?.key === front.key && <div className="mt-1.5 p-t-status p-danger" role="alert">{error.message}</div>}
         <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
           {[...answersOf(front, props)].reverse().map((choice) => <AnswerButton key={choice.label} answer={choice} busy={busy === front.key} onAnswer={answer} />)}

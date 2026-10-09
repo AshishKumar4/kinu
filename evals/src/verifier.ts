@@ -5,11 +5,12 @@ import type { InspectionAnswer, PublicCraftedTool, PublicDirEntry, PublicExecuto
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { INFRA_FAILURE_MARKER, TRANSIENT_PLATFORM_ERRORS } from '@kinu.run/test-utils';
 import { browsing, DRAW_MS, type WorkspaceBrowser } from './browser';
-import { helperAddress, ROOT, type RosterHelper } from './helper-address';
+import { helperAddress, type HelperAddress, type RosterHelper } from './helper-address';
 import { judge, type Judgement } from './judge';
 import { WorkspaceHeld } from './workspace-completion';
 import { redact, redactJson } from './redact';
 import type { EvalCheck } from './task';
+import { callInputs } from './transcript';
 import { invokedInTurn } from '../tasks/crafted-reuse';
 
 /** Thrown errors are cut here in the report; a stack trace is not evidence. */
@@ -49,7 +50,7 @@ export type VerifierSession = {
 };
 
 /** A helper and its runs, as the inspector lists them: how each run ended, and the message that started it. */
-export type HelperWork = { name: string; status: string; runs: { startedAt: number; status: string | null; userMessage: string | null }[] };
+export type HelperWork = { name: string; status: string; runs: { startedAt: number; endedAt?: number | null; status: string | null; userMessage: string | null }[] };
 
 /**
  * A run naming `subject` assigns the work; that run or a later continuation must finish it.
@@ -60,6 +61,100 @@ export function finishedWork(helpers: readonly HelperWork[], subject: string): s
     .filter((helper) => helper.runs.some((assignment) => (assignment.userMessage ?? '').includes(subject)
       && helper.runs.some((run) => run.status === 'completed' && run.startedAt >= assignment.startedAt)))
     .map((helper) => helper.name);
+}
+
+type Inspecting = Pick<VerifierSession, 'inspect'>;
+
+/** Different helpers completed the assigned work while their observed runs overlapped, not just during one turn. */
+export function parallelFinishedWork(helpers: readonly HelperWork[], subjects: readonly string[]): boolean {
+  const runs = helpers.flatMap((helper) => helper.runs.flatMap((run) => {
+    const endedAt = run.endedAt;
+    const assigned = subjects.some((subject) => finishedWork([{ ...helper, runs: [run] }], subject).length > 0);
+
+    return assigned && endedAt !== undefined && endedAt !== null && endedAt > run.startedAt
+      ? [{ helper: helper.name, startedAt: run.startedAt, endedAt }] : [];
+  }));
+
+  return runs.some((first) => runs.some((other) => first.helper !== other.helper
+    && first.startedAt < other.endedAt && other.startedAt < first.endedAt));
+}
+
+/** The closed run's last journal row, not the helper's report status or the time the lead received it. */
+async function runEndedAt(session: Inspecting, address: HelperAddress, run: { runId: string; eventCount?: number }): Promise<number | null> {
+  if (run.eventCount === undefined) return null;
+
+  const answer = await session.inspect({ ...address, path: [...address.path], view: 'events', runId: run.runId,
+    query: { since: Math.max(0, run.eventCount - 1), limit: 1 } });
+
+  if (answer.view !== 'events') throw new Error(`the end of run ${run.runId} could not be read: ${JSON.stringify(answer)}`);
+  const end = answer.page.items.find((event) => event.type === 'run_end' && event.runId === run.runId);
+  const at = end === undefined ? NaN : Date.parse(end.timestamp);
+
+  return Number.isFinite(at) ? at : null;
+}
+
+/** The lead's helpers, retired ones included, as the Agents surface lists them. */
+export async function rosterOf(session: Inspecting): Promise<(RosterHelper & { lifetime: string })[]> {
+  const helpers: (RosterHelper & { lifetime: string })[] = [];
+
+  for (let cursor: { after: string } | undefined; ;) {
+    const answer = await session.inspect({ path: [], view: 'children', page: cursor === undefined ? {} : { cursor } });
+
+    if (answer.view !== 'children') throw new Error(`the lead's helpers could not be listed: ${JSON.stringify(answer)}`);
+    helpers.push(...answer.page.items);
+
+    if (answer.page.status === 'end') return helpers;
+    cursor = answer.page.next;
+  }
+}
+
+/** Full assignments from the actor's canonical conversation, keyed only by the run that stored them. */
+async function briefsOf(session: Inspecting, address: HelperAddress): Promise<ReadonlyMap<string, string>> {
+  const briefs = new Map<string, { position: number; content: string }>();
+
+  for (let cursor: { before: number } | undefined; ;) {
+    const answer = await session.inspect({ ...address, path: [...address.path], view: 'history', page: cursor === undefined ? {} : { cursor } });
+
+    if (answer.view !== 'history') throw new Error(`the helper's assignments could not be read: ${JSON.stringify(answer)}`);
+
+    for (const entry of answer.page.items) {
+      if (entry.role !== 'user' || typeof entry.runId !== 'string') continue;
+      const opening = briefs.get(entry.runId);
+
+      if (opening === undefined || entry.position < opening.position) briefs.set(entry.runId, entry);
+    }
+
+    if (answer.page.status === 'end') return new Map([...briefs].map(([runId, entry]) => [runId, entry.content]));
+    cursor = answer.page.next;
+  }
+}
+
+/** One helper's runs started at or after `since`: how each ended, and the message that started it. */
+async function runsOf(session: Inspecting, helper: RosterHelper, since: number): Promise<HelperWork['runs']> {
+  const runs: HelperWork['runs'] = [];
+  const address = helperAddress(helper);
+  const briefs = await briefsOf(session, address);
+
+  for (let cursor: { after: string } | undefined; ;) {
+    const answer = await session.inspect({ ...address, path: [...address.path], view: 'runs', page: cursor === undefined ? {} : { cursor } });
+
+    if (answer.view !== 'runs') throw new Error(`${helper.name}'s runs could not be listed: ${JSON.stringify(answer)}`);
+
+    for (const run of answer.page.items.filter((item) => item.startedAt >= since)) {
+      runs.push({ startedAt: run.startedAt, endedAt: run.status === 'completed' ? await runEndedAt(session, address, run) : null,
+        status: run.status, userMessage: briefs.get(run.runId) ?? null });
+    }
+
+    if (answer.page.status === 'end') return runs;
+    cursor = answer.page.next;
+  }
+}
+
+/** The lead's helpers with the runs they started at or after `since`. */
+export async function helperWorkSince(session: Inspecting, since: number): Promise<HelperWork[]> {
+  return Promise.all((await rosterOf(session)).map(async (helper) => ({
+    name: helper.name, status: helper.status, runs: await runsOf(session, helper, since),
+  })));
 }
 
 /** The cause the ledger gives a run a slate's page started: cf-backend's slate dispatcher sends the agent a `slate`
@@ -158,6 +253,8 @@ function truncate(text: string): string {
  * that throws fails alone, with the error as its evidence, and the rest still run.
  */
 export class EvalVerifier {
+  /** The trial's workspace identity, stable across its turns and evictions. */
+  readonly workspace: string;
   /** What the agent said in the chat after this turn's prompt, oldest first. */
   readonly replies: readonly string[];
   readonly #session: VerifierSession;
@@ -169,6 +266,7 @@ export class EvalVerifier {
   /** `settled` waits until the workspace has nothing left to do, as the harness waits out a turn. */
   constructor(session: VerifierSession, replies: readonly string[], startedAt: number, settled: () => Promise<void>) {
     this.#session = session;
+    this.workspace = session.web.workspace;
     this.replies = replies;
     this.#startedAt = startedAt;
     this.#settled = settled;
@@ -184,11 +282,14 @@ export class EvalVerifier {
     return (await this.#session.runEvents()).filter((event) => Date.parse(event.timestamp) >= this.#startedAt);
   }
 
-  /** This turn's tool calls: each one's name and its arguments as the run recorded them, a bounded digest. */
+  /** This turn's tool calls: each one's name and its arguments as the model sent them, whole. */
   async turnToolCalls(): Promise<{ name: string; args: string }[]> {
-    return (await this.leadEvents())
+    const events = await this.leadEvents();
+    const inputs = callInputs(events);
+
+    return events
       .filter((event): event is Extract<RunEvent, { type: 'tool_call_end' }> => event.type === 'tool_call_end')
-      .map((event) => ({ name: event.name, args: JSON.stringify(event.args ?? null) }));
+      .map((event) => ({ name: event.name, args: JSON.stringify(inputs.has(event) ? inputs.get(event) : event.args ?? null) }));
   }
 
   /**
@@ -347,25 +448,13 @@ export class EvalVerifier {
   }
 
   /** The lead's helpers, retired ones included, as the Agents surface lists them. */
-  async helpers(): Promise<(RosterHelper & { lifetime: string })[]> {
-    const helpers: (RosterHelper & { lifetime: string })[] = [];
-
-    for (let cursor: { after: string } | undefined; ;) {
-      const answer = await this.#session.inspect({ path: [], view: 'children', page: cursor === undefined ? {} : { cursor } });
-
-      if (answer.view !== 'children') throw new Error(`the lead's helpers could not be listed: ${JSON.stringify(answer)}`);
-      helpers.push(...answer.page.items);
-
-      if (answer.page.status === 'end') return helpers;
-      cursor = answer.page.next;
-    }
+  helpers(): Promise<(RosterHelper & { lifetime: string })[]> {
+    return rosterOf(this.#session);
   }
 
   /** The lead's helpers, with only runs started during this turn. */
-  async helperWork(): Promise<HelperWork[]> {
-    return Promise.all((await this.helpers()).map(async (helper) => ({
-      name: helper.name, status: helper.status, runs: await this.runsOf(helper),
-    })));
+  helperWork(): Promise<HelperWork[]> {
+    return helperWorkSince(this.#session, this.#startedAt);
   }
 
   /**
@@ -380,23 +469,6 @@ export class EvalVerifier {
       .filter((entry) => (entry.owner.path === undefined ? !helperNames.has(entry.owner.name) : entry.owner.path === null || entry.owner.path.length === 0))
       .flatMap((entry) => entry.tasks.flatMap((task) => [task, ...task.subtasks]))
       .map(({ title, status }) => ({ title, status }));
-  }
-
-  /** One of the lead's helpers' runs as its inspector lists them: how each ended, and the message that started it. */
-  async runsOf(helper: RosterHelper): Promise<HelperWork['runs']> {
-    const runs: HelperWork['runs'] = [];
-    const { path, actor } = helperAddress(ROOT, helper);
-
-    for (let cursor: { after: string } | undefined; ;) {
-      const page = cursor === undefined ? {} : { cursor };
-      const answer = await this.#session.inspect(actor === undefined ? { path: [...path], view: 'runs', page } : { path: [...path], actor, view: 'runs', page });
-
-      if (answer.view !== 'runs') throw new Error(`${helper.name}'s runs could not be listed: ${JSON.stringify(answer)}`);
-      runs.push(...answer.page.items.filter((run) => run.startedAt >= this.#startedAt));
-
-      if (answer.page.status === 'end') return runs;
-      cursor = answer.page.next;
-    }
   }
 
   /** Swarms started during this turn, as the Swarms pane draws them. */

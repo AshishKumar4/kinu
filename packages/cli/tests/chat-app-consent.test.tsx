@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 
 import { cleanupChats, fakeClient, mountChat } from './helpers/chat-app-fixture';
 import { deviceConsentCanApprove } from '../src/tui/overlays';
-import type { ShellApprovalRequest, ShellApprovalOutcome } from '@kinu.run/core';
+import { executorLabel, type ShellApprovalRequest, type ShellApprovalOutcome } from '@kinu.run/core';
 
 afterEach(cleanupChats);
 
@@ -30,7 +30,7 @@ describe('inline shell approval', () => {
       const answer = agent.requestShellApproval(shellRequest);
       await screen.waitFor('shell approval', () => screen.frame().includes('Run this command?'));
       expect(screen.frame()).toContain('sudo whoami');
-      expect(screen.frame()).toContain('Executor: device');
+      expect(screen.frame()).toContain(`Executor: ${executorLabel(shellRequest.executor)}`);
       expect(screen.frame()).toContain('Privilege escalation');
       await screen.mockInput.typeText('zzz');
       await screen.mockInput.pasteBracketedText('blocked paste');
@@ -101,7 +101,7 @@ describe('ChatApp consent ownership', () => {
     screen.mockInput.pressEnter();
     await screen.waitFor('settings below consent', () => screen.frame().includes('Filter settings'));
     controlled.emit({ type: 'turn-start', kind: 'user', text: 'run the suite' });
-    await screen.waitFor('the consent overlay', () => screen.frame().includes('Use your computer?'));
+    await screen.waitFor('the consent overlay', () => screen.frame().includes('Use your PC?'));
     await screen.mockInput.typeText('hidden draft');
     screen.mockInput.pressKey('l', { ctrl: true });
     screen.mockInput.pressTab();
@@ -141,7 +141,7 @@ describe('ChatApp consent ownership', () => {
     screen.mockInput.pressEnter();
     await screen.waitFor('settings below consent', () => screen.frame().includes('Filter settings'));
     controlled.emit({ type: 'turn-start', kind: 'user', text: 'run the suite' });
-    await screen.waitFor('consent above settings', () => screen.frame().includes('Use your computer?'));
+    await screen.waitFor('consent above settings', () => screen.frame().includes('Use your PC?'));
     screen.mockInput.pressEnter();
     await screen.waitFor('the one-time approval', () => decisions.length === 1);
     expect(decisions).toEqual(['once']);
@@ -206,7 +206,7 @@ describe('ChatApp consent ownership', () => {
     expect(await answer).toBe('deny');
 
     agent.emit({ type: 'turn-start', kind: 'user', text: 'run it' });
-    await screen.waitFor('the consent overlay', () => screen.frame().includes('Use your computer?'));
+    await screen.waitFor('the consent overlay', () => screen.frame().includes('Use your PC?'));
 
     for (const part of shown) expect(screen.frame()).toContain(part);
     expect(screen.frame().replaceAll('\n', '')).not.toMatch(/\p{Cc}/u);
@@ -233,7 +233,7 @@ describe('ChatApp consent ownership', () => {
     expect(await answer).toBe('deny');
 
     agent.emit({ type: 'turn-start', kind: 'user', text: 'run it' });
-    await screen.waitFor('the consent overlay', () => screen.frame().includes('Use your computer?'));
+    await screen.waitFor('the consent overlay', () => screen.frame().includes('Use your PC?'));
     expect(screen.frame()).not.toMatch(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/u);
     expect(screen.frame()).toContain('\uFFFD');
   });

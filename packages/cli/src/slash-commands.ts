@@ -1,7 +1,7 @@
 /** Slash commands shared by the TUI and classic REPL; outcomes are presentation-neutral. */
 
 import { fmtUsd, limitLines, MAIN_ACCOUNT, SERVER_COMPACTION_MIN_TOKENS, specWithoutAccount, usageTotal, type CompactOutcome } from '@kinu.run/core';
-import { ADVISOR_SEVERITIES, DEFAULT_ROLE_ID, REASONING_EFFORTS, REFINEMENT_DECISIONS, offeredReasoningEfforts, formatPlanWithLineNumbers, planTitle, type PlanReview, type StagedSkillView, type RefinementRequestView, type RefinementRoute, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
+import { ADVISOR_SEVERITIES, DEFAULT_ROLE_ID, REASONING_EFFORTS, REFINEMENT_DECISIONS, offeredReasoningEfforts, formatPlanWithLineNumbers, planTitle, type PlanReview, type StagedSkillView, type RefinementRequestView, type RefinementRoute, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type AskingAgent, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
 import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentRefinementView } from './agent-client';
 import type { InstructionSourceRow } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -19,7 +19,7 @@ export interface SlashCommandInfo {
   description: string;
   usage?: string;
   /** Only offered when the client exposes this capability surface. */
-  requires?: 'localControls' | 'consents' | 'checkpoints' | 'rename' | 'plans';
+  requires?: 'localControls' | 'consents' | 'checkpoints' | 'rename' | 'plans' | 'questions';
   /** The phase line while it runs. */
   working?: string;
 }
@@ -63,7 +63,7 @@ const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: '/takes', description: 'Compare the latest alternate takes; pick one by number', usage: '/takes [n]', run: takesCommand },
   { name: '/tree', description: 'Show the swarm search tree', aliases: ['/swarm'], run: treeCommand },
   { name: '/jobs', description: 'List background jobs', run: jobsCommand },
-  { name: '/connect', description: 'Connect this computer so the agent can run commands on it', requires: 'consents', run: connectCommand },
+  { name: '/connect', description: 'Connect this PC so the agent can run commands on it', requires: 'consents', run: connectCommand },
   { name: '/stop', description: 'Stop the running turn', run: stopCommand },
   { name: '/copy', description: 'Copy the last answer to the clipboard', run: copyCommand },
   { name: '/export', description: 'Write this conversation to a Markdown file', usage: '/export [path]', run: exportCommand },
@@ -75,6 +75,7 @@ const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: '/plan', description: 'Have the agent draft a plan, then approve it, send it back or dismiss it', usage: '/plan [<text>|show|approve [notes]|changes <feedback>|dismiss]', requires: 'plans', run: planCommand },
   { name: '/fork', description: 'Walk back: restart the conversation just before an earlier message', usage: '/fork [number]', run: forkCommand },
   { name: '/undo', description: 'Restore files to how they were n turns back, then offer to walk back the chat', usage: '/undo [n]', requires: 'checkpoints', run: undoCommand },
+  { name: '/answer', description: 'Answer the questions the agent is waiting on', requires: 'questions', run: answerCommand },
   { name: '/parked', description: 'Approve or deny the commands the agent parked for you; none has run', usage: PARKED_USAGE, requires: 'localControls', run: parkedCommand },
   { name: '/approval', description: 'Show or set when shell commands need your approval', usage: '/approval strict|allow_all|deny_all', requires: 'localControls', run: approvalCommand },
   { name: '/instructions', description: 'Approve which AGENTS.md and skill files the agent follows', usage: '/instructions [page <cursor>|read <page> <n>|approve <page> <n> <digest>|revoke <page> <n>]', requires: 'localControls', run: instructionsCommand },
@@ -86,7 +87,7 @@ const SLASH_COMMANDS: readonly SlashCommand[] = [
 ];
 
 export function commandsForClient(
-  client: Pick<AgentClient, 'localControls' | 'consents' | 'checkpoints' | 'rename' | 'plans'>,
+  client: Pick<AgentClient, 'localControls' | 'consents' | 'checkpoints' | 'rename' | 'plans' | 'questions'>,
 ): SlashCommandInfo[] {
   return SLASH_COMMANDS.filter((command) => {
     if (command.hidden) return false;
@@ -99,7 +100,7 @@ export function commandsForClient(
 }
 
 function commandHelp(
-  client: Pick<AgentClient, 'localControls' | 'consents' | 'checkpoints' | 'rename' | 'plans'>,
+  client: Pick<AgentClient, 'localControls' | 'consents' | 'checkpoints' | 'rename' | 'plans' | 'questions'>,
 ): string {
   const lines = ['Commands'];
 
@@ -183,6 +184,8 @@ export type SlashOutcome =
   | { kind: 'status'; status: AgentClientStatus }
   | { kind: 'changelog'; view: AgentChangelogView }
   | { kind: 'takes'; set: AlternateTakeSet }
+  /** The agent's open questions, answered in their overlay. */
+  | { kind: 'questions'; asking: AskingAgent }
   | { kind: 'exit' }
   | { kind: 'model-picker' }
   | { kind: 'settings' }
@@ -609,6 +612,13 @@ function undoCommand({ client, command, arg }: SlashContext): SlashOutcome {
   if (!client.checkpoints) return { kind: 'unknown', command };
 
   return { kind: 'undo', ref: arg || undefined };
+}
+
+async function answerCommand({ client, command }: SlashContext): Promise<SlashOutcome> {
+  if (!client.questions) return { kind: 'unknown', command };
+  const open = (await client.questions.list()).find((asking) => asking.asked.status === 'open');
+
+  return open === undefined ? { kind: 'text', text: 'The agent is not waiting on any question.' } : { kind: 'questions', asking: open };
 }
 
 async function parkedCommand({ client, command, rest }: SlashContext): Promise<SlashOutcome> {

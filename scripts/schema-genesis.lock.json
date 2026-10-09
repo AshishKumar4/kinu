@@ -935,6 +935,23 @@
     "actor_id TEXT PRIMARY KEY",
     "text TEXT NOT NULL"
   ],
+  "owner_questions@packages/core/src/plans/owner-questions.ts": [
+    "actor_id TEXT NOT NULL",
+    "id TEXT NOT NULL",
+    "call_id TEXT NOT NULL",
+    "turn_id TEXT NOT NULL",
+    "mode TEXT NOT NULL",
+    "tier TEXT",
+    "reason_json TEXT NOT NULL",
+    "digest TEXT NOT NULL",
+    "questions_json TEXT NOT NULL",
+    "status TEXT NOT NULL",
+    "answers_json TEXT",
+    "asked_at INTEGER NOT NULL",
+    "closed_at INTEGER",
+    "resumed_at INTEGER",
+    "PRIMARY KEY (actor_id, id)"
+  ],
   "pattern_extractions@packages/core/src/evolution/lessons.ts": [
     "actor_id TEXT NOT NULL",
     "effect_key TEXT NOT NULL",
@@ -1194,6 +1211,12 @@
     "revision INTEGER NOT NULL",
     "bytes BLOB NOT NULL",
     "PRIMARY KEY (id, revision)"
+  ],
+  "sleep_time_marks@packages/core/src/orchestrator/sleep-time-lane.ts": [
+    "actor_id TEXT NOT NULL",
+    "mark TEXT NOT NULL",
+    "at INTEGER NOT NULL",
+    "PRIMARY KEY (actor_id, mark)"
   ],
   "sleep_time_updates@packages/core/src/orchestrator/sleep-time-lane.ts": [
     "effect_key TEXT PRIMARY KEY",

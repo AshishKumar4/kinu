@@ -549,7 +549,9 @@ pressing a piece and then a square plays that move.`,
         };
       });
       await verifier.check('the-board-shows-the-game', () => verifier.browse(async (browser) => {
-        const board = await squares(await browser.workSurface(SLATE_ID));
+        const view = await browser.workSurface(SLATE_ID);
+        await view.waitForNamed(/^e1\s+white\s+king\b/iu);
+        const board = await squares(view);
         const said = (square: string) => board[square] ?? '';
 
         return {
@@ -559,15 +561,38 @@ pressing a piece and then a square plays that move.`,
         };
       }));
       await verifier.check('a-pressed-move-is-played', async () => {
-        const pressed = await verifier.browse(async (browser) => {
+        return verifier.browse(async (browser) => {
           const view = await browser.workSurface(SLATE_ID);
+          const api = verifier.slate(SLATE_ID, METHODS);
+          const attempts: { from: boolean; to: boolean; fen: string; e2: string; e4: string; held: boolean }[] = [];
+          const read = async () => ({ board: await squares(view), fen: v.parse(FenSchema, await api('fen')).fen });
+          const wrong = (fen: string) => fen !== DEFAULT_POSITION && fen.split(' ')[0] !== PAWN_TO_E4;
 
-          return { from: await pressSquare(view, 'e2'), to: await pressSquare(view, 'e4') };
+          for (let attempt = 0; attempt < 3; attempt++) {
+            await view.waitForNamed(/^e2\s+white\s+pawn\b/iu);
+            const from = await pressSquare(view, 'e2');
+            const selected = await read();
+
+            if (wrong(selected.fen)) {
+              attempts.push({ from, to: false, fen: selected.fen, e2: selected.board.e2 ?? '', e4: selected.board.e4 ?? '', held: true });
+
+              return { pass: false, evidence: { attemptCount: attempts.length, attempts, wrongMove: true } };
+            }
+
+            const to = await pressSquare(view, 'e4');
+
+            const { state, held } = await view.untilState(read, (drawn) => wrong(drawn.fen)
+              || (drawn.fen.split(' ')[0] === PAWN_TO_E4 && /^e4\s+white\s+pawn\b/iu.test(drawn.board.e4 ?? '')));
+
+            attempts.push({ from, to, fen: state.fen, e2: state.board.e2 ?? '', e4: state.board.e4 ?? '', held });
+
+            if (wrong(state.fen)) return { pass: false, evidence: { attemptCount: attempts.length, attempts, wrongMove: true } };
+
+            if (held) return { pass: from && to, evidence: { attemptCount: attempts.length, attempts } };
+          }
+
+          return { pass: false, evidence: { attemptCount: attempts.length, attempts } };
         });
-
-        const { fen } = v.parse(FenSchema, await verifier.slate(SLATE_ID, METHODS)('fen'));
-
-        return { pass: pressed.from && pressed.to && fen.split(' ')[0] === PAWN_TO_E4, evidence: { pressed, fen } };
       });
       await checkCurated(verifier, "agrees-with-the-oracle-on-the-hard-positions", BASE_STATUS, CURATED);
       await verifier.check("agrees-with-the-oracle-on-perft-positions", async () => {
@@ -982,4 +1007,4 @@ if (importedBefore || !imported.isThreefoldRepetition()) {
   throw new Error("REPEATING_PGN does not reach threefold repetition on the next move");
 }
 
-defineTaskEval(task);
+await defineTaskEval(task);

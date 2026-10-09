@@ -10,6 +10,7 @@ import type {
   DeviceConsentSurface,
   LocalSessionControls,
   PlanReviewSurface,
+  OwnerQuestionSurface,
 } from '../../src/agent-client';
 import type { AgentModelMenu } from '@kinu.run/core';
 import { createCliSession } from '../../src/session';
@@ -66,6 +67,7 @@ interface FakeClientOptions {
   consents?: DeviceConsentSurface | null;
   localControls?: LocalSessionControls;
   plans?: PlanReviewSurface | null;
+  questions?: OwnerQuestionSurface | null;
   listModels?: () => Promise<AgentModelMenu>;
   testModel?: AgentClient['testModel'];
   send?: AgentClient['send'];
@@ -92,6 +94,7 @@ export function fakeClient(options: FakeClientOptions) {
     cliSession: createCliSession(options.name, { noTranscript: true }),
     consents: options.consents ?? null,
     plans: options.plans ?? null,
+    questions: options.questions ?? null,
     localControls: mode === 'local' ? (options.localControls ?? {
       getAlwaysActiveSkills: () => [],
       setAlwaysActiveSkills: () => {},

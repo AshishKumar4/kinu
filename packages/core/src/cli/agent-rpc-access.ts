@@ -99,6 +99,10 @@ export const AGENT_RPC_ACCESS = {
   renameMainChat: 'interactive',
   decidePlanReview: 'interactive',
   dismissPlanReview: 'interactive',
+  // The agent's questions name what it is deciding, which a read-only token is not shown, and answering steers it.
+  listOwnerQuestions: 'interactive',
+  answerOwnerQuestions: 'interactive',
+  dismissOwnerQuestions: 'interactive',
   listDeferredApprovals: 'interactive',
   reviewParkedWrite: 'interactive',
   savePlanReviewAnnotations: 'interactive',

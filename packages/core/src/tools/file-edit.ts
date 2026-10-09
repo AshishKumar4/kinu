@@ -2,8 +2,8 @@
  * Exact-match file editor behind the `file` tool's `edit`, and the numbered window its `read` shows: an edit that cannot
  * be placed exactly once fails without touching the file. No fuzzy fallback; line endings and BOM round-trip.
  */
-import { headEnd, lineCount } from '../utils/text';
-import { FILE_READ_LINE_CHARS, FILE_READ_LINES, type FileEditFailure } from '../types/file-edits';
+import { BOM, headEnd, lineCount, withoutBom } from '../utils/text';
+import { FILE_READ_LINE_CHARS, FILE_READ_LINES, type EditedSpan, type FileEditFailure } from '../types/file-edits';
 
 export {
   FILE_READ_LINE_CHARS, FILE_READ_LINES, FILE_READ_MAX_CHARS, FILE_REFUSAL_REASONS, type FileEditFailure,
@@ -23,10 +23,8 @@ interface AppliedEdit {
 }
 
 export type FileEditOutcome =
-  | { ok: true; content: string; applied: AppliedEdit[] }
+  | { ok: true; content: string; applied: AppliedEdit[]; spans: EditedSpan[] }
   | { ok: false; reason: FileEditFailure; message: string };
-
-export const BOM = '\uFEFF';
 
 function detectLineEnding(content: string): '\r\n' | '\n' {
   const crlf = content.indexOf('\r\n');
@@ -93,12 +91,12 @@ function at(index: number, total: number): string {
 export function applyFileEdits(original: string, edits: readonly FileEdit[], path: string): FileEditOutcome {
   const hasBom = original.startsWith(BOM);
   const ending = detectLineEnding(original);
-  const body = hasBom ? original.slice(1) : original;
+  const body = withoutBom(original);
   const { text: base, origin } = normalizeWithOrigin(body);
 
   const anchors = edits.map((edit) => ({ oldText: toLF(edit.oldText), newText: toLF(edit.newText) }));
 
-  const matches: Array<{ index: number; start: number; length: number; newText: string }> = [];
+  const matches: Array<{ index: number; start: number; length: number; insert: string }> = [];
 
   for (let i = 0; i < anchors.length; i++) {
     const { oldText, newText } = anchors[i];
@@ -139,7 +137,7 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
     }
 
     const start = base.indexOf(oldText);
-    matches.push({ index: i, start, length: oldText.length, newText });
+    matches.push({ index: i, start, length: oldText.length, insert: ending === '\r\n' ? newText.replace(/\n/g, '\r\n') : newText });
   }
 
   const ordered = [...matches].sort((a, b) => a.start - b.start);
@@ -165,8 +163,7 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
 
   for (let i = ordered.length - 1; i >= 0; i--) {
     const m = ordered[i];
-    const insert = ending === '\r\n' ? m.newText.replace(/\n/g, '\r\n') : m.newText;
-    content = content.slice(0, origin[m.start]) + insert + content.slice(origin[m.start + m.length]);
+    content = content.slice(0, origin[m.start]) + m.insert + content.slice(origin[m.start + m.length]);
   }
 
   if (content === body) {
@@ -180,10 +177,14 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
   const applied = matches.map((m) => ({
     line: lineOf(base, m.start),
     removedLines: lineCount(base.slice(m.start, m.start + m.length)),
-    addedLines: lineCount(m.newText),
+    addedLines: lineCount(m.insert),
   }));
 
-  return { ok: true, content: (hasBom ? BOM : '') + content, applied };
+  const lead = hasBom ? 1 : 0;
+  // The ledger needs raw offsets, not the display's line counts: a replacement can join a seen line to an unseen one.
+  const spans = ordered.map((m) => ({ start: origin[m.start] + lead, end: origin[m.start + m.length] + lead, inserted: m.insert.length }));
+
+  return { ok: true, content: (hasBom ? BOM : '') + content, applied, spans };
 }
 
 export interface FileSlice {
@@ -194,6 +195,11 @@ export interface FileSlice {
   first: number;
   last: number;
   total: number;
+  /**
+   * The last line of `first..last` before the first one the read cut. Lines past a cut line showed, but a cut line's
+   * tail did not, so a reader has seen `first..uncutTo` and no more; `first - 1` when nothing showed uncut.
+   */
+  uncutTo: number;
 }
 
 /** One line of a read: its retained head (at most `FILE_READ_LINE_CHARS`) and its full length. */
@@ -238,7 +244,7 @@ export function formatFileSlice(
     named.length <= opts.maxChars ? named : plain;
 
   if (total === 0) {
-    return { output: affordable(`[${opts.path} is empty]`, '[this file is empty]'), omitted: 0, first: 1, last: 0, total: 0 };
+    return { output: affordable(`[${opts.path} is empty]`, '[this file is empty]'), omitted: 0, first: 1, last: 0, total: 0, uncutTo: 0 };
   }
 
   const count = `${String(total)} line${total === 1 ? '' : 's'}`;
@@ -248,7 +254,7 @@ export function formatFileSlice(
       output: affordable(
         `[${opts.path} has ${count}; offset=${String(first)} is past the end]`,
         `[this file has ${count}; offset=${String(first)} is past the end]`),
-      omitted: 0, first, last: first - 1, total,
+      omitted: 0, first, last: first - 1, total, uncutTo: first - 1,
     };
   }
 
@@ -275,6 +281,7 @@ export function formatFileSlice(
   const shown: string[] = [];
   let chars = 0;
   let raw = 0;
+  let cutAt: number | null = null;
 
   for (const [index, line] of range.lines.entries()) {
     const rendered = numberedLine(first + index, line);
@@ -285,6 +292,8 @@ export function formatFileSlice(
     chars += cost;
     raw += Math.min(line.chars, FILE_READ_LINE_CHARS) + (shown.length === 0 ? 0 : 1);
     shown.push(rendered);
+
+    if (cutAt === null && line.chars > FILE_READ_LINE_CHARS) cutAt = first + index;
   }
 
   if (shown.length === 0) {
@@ -294,7 +303,7 @@ export function formatFileSlice(
     const refusal = affordable(`\n\n[line ${String(first)} of ${opts.path} ${tail}`, `\n\n[line ${String(first)} ${tail}`);
     const head = line.text.slice(0, headEnd(line.text, Math.max(0, opts.maxChars - refusal.length)));
 
-    return { output: head + refusal, omitted: requestedChars - head.length, first, last: first - 1, total };
+    return { output: head + refusal, omitted: requestedChars - head.length, first, last: first - 1, total, uncutTo: first - 1 };
   }
 
   const last = first + shown.length - 1;
@@ -303,5 +312,5 @@ export function formatFileSlice(
   if (last < requestedLast) stop = capStop;
   else if (last < total) stop = windowStop;
 
-  return { output: shown.join('\n') + footer(last, stop), omitted: requestedChars - raw, first, last, total };
+  return { output: shown.join('\n') + footer(last, stop), omitted: requestedChars - raw, first, last, total, uncutTo: cutAt === null ? last : cutAt - 1 };
 }

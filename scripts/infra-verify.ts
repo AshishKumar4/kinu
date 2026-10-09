@@ -70,6 +70,8 @@
  * exits 0 is read as a pass by every human and every CI badge that sees it.
  */
 
+import { readFileSync } from 'node:fs';
+import * as v from 'valibot';
 import { declaredSignInProviders } from '@kinu.run/core';
 import { assertMeasured, blocked, finding } from './gate-ratchet';
 import {
@@ -83,6 +85,7 @@ import {
   INFRA_ENVIRONMENTS, UNCAPTURED, UNOBSERVABLE, WRANGLER_CONFIG, claimedHosts, deriveInfrastructure, envFields,
   environmentFrom, readSites, requiredIn, supplyCensus, vectorizeGeometry,
 } from './infra-manifest';
+import { ResetSchema, resetResourceIds, servingOf } from './reset';
 import { isProductSource, readMatching } from './sources';
 
 const GATE = 'infra';
@@ -112,10 +115,12 @@ export interface Row {
  * secret, a missing bucket, index, namespace-id or DNS record fails in every
  * phase, because none of those is anything a deploy could have created.
  *
- *   full         the gate. `bun run gate:infra`, and any direct call. The only
- *                tolerance in it is the one the manifest itself implies: before
- *                the FIRST deploy there is no Worker, so nothing bound to one can
- *                exist either.
+ *   full         the gate. `bun run gate:infra`, and any direct call. Its
+ *                tolerances are the one the manifest itself implies — before the
+ *                FIRST deploy there is no Worker, so nothing bound to one can
+ *                exist either — and, in a `--reset` deploy only, the rows the
+ *                reset record it carries says that reset deleted
+ *                (`KINU_RESET_RECORD`, {@link recordedResetIds}).
  *   bootstrap    the pre-deploy half of a deploy that is itself the provisioner
  *                of something newly declared — a Durable Object class added to
  *                `exports`, a new container, a new route. Those are DEFERRED,
@@ -529,18 +534,29 @@ function remedy(entry: Row, phase: Phase): string {
 /** Everything one audit judges: the manifest, what was observed of it, what the
  *  Worker supplies, and the classified values no product source reads. The
  *  `phase` default is the strict one: a caller that has not thought about phases
- *  gets the gate. */
+ *  gets the gate. `resetIds` is the reset record a `--reset` deploy's pre-upload
+ *  run carries: the resource ids its reset deleted, read from that record. An
+ *  absent row it names is deferred in `full` exactly as `bootstrap` defers it,
+ *  because the upload that recreates it has not run; everywhere else — a plain
+ *  deploy, the post-deploy run, a row the record does not name — it is a
+ *  finding. Absent by default: nothing outside that one run may soften the gate. */
 export interface AuditRequest {
   readonly infrastructure: Infrastructure;
   readonly rows: readonly Row[];
   readonly supplied: readonly SupplyRow[];
   readonly unreadFields: readonly string[];
   readonly phase?: Phase;
+  readonly resetIds?: readonly string[];
 }
+
+const DEFERRAL_NOTE: Record<Exclude<Phase, 'post-deploy'>, string> = {
+  full: 'absent before the first deploy, or deleted by this reset record; the post-deploy run rejects it if the upload does not create it',
+  bootstrap: 'deferred by the bootstrap phase; the post-deploy run rejects it if the upload does not create it',
+};
 
 /** Pure, so the self-test drives every branch without a Cloudflare account. */
 export function audit(request: AuditRequest): Audit {
-  const { infrastructure, rows, supplied, unreadFields, phase = 'full' } = request;
+  const { infrastructure, rows, supplied, unreadFields, phase = 'full', resetIds = [] } = request;
   const findings: string[] = [];
   const notes: string[] = [];
 
@@ -585,17 +601,16 @@ export function audit(request: AuditRequest): Audit {
       // every deploy-owned absence, because a class new to `exports` cannot
       // exist before the deploy that declares it. `full` defers one only while
       // the Worker itself is absent — the pre-first-deploy state, in which
-      // nothing bound to a Worker could exist either.
+      // nothing bound to a Worker could exist either — and the rows a reset
+      // deleted, by its record, which only a `--reset` deploy carries
+      // (`resetIds`): a reset deletes what the deploy owns by design, and the
+      // upload that recreates it has not run. No record, no deferral.
       && phase !== 'post-deploy'
-      && (phase === 'bootstrap' || !workerDeployed)
+      && (phase === 'bootstrap' || !workerDeployed || resetIds.includes(entry.id))
     ) {
       // Deferred, never skipped: nothing reachable from here can create it, and
       // the run that collects it tolerates nothing.
-      notes.push(`${entry.id} is absent and is created by the deploy itself — ${phase === 'bootstrap'
-        ? 'deferred by the bootstrap phase, which is why that phase exists; the post-deploy run '
-          + 'rejects it if the upload does not create it'
-        : 'expected before the first deploy carrying its migration; verify it exists after this '
-          + 'deploy lands'}`);
+      notes.push(`${entry.id} is absent and is created by the deploy itself — ${DEFERRAL_NOTE[phase]}`);
       continue;
     }
 
@@ -742,6 +757,29 @@ const PHASE_ENV = 'KINU_INFRA_PHASE';
 
 const ENVIRONMENT_ENV = 'KINU_INFRA_ENVIRONMENT';
 
+/** The file holding the reset record a `--reset` deploy carries: empty when the Worker was never reset. */
+const RESET_ENV = 'KINU_RESET_RECORD';
+
+/** The rows the reset recorded in `file` deleted, out of `infrastructure`, as the Worker `live` stands
+ *  ({@link resetResourceIds}). A file that is not a reset record throws, naming what it lacks. */
+export function recordedResetIds(file: string, infrastructure: Infrastructure, live: Deployment): readonly string[] {
+  const text = readFileSync(file, 'utf8');
+
+  if (text === '') return [];
+
+  const reset = v.parse(ResetSchema, JSON.parse(text));
+
+  if (reset.environment !== infrastructure.environment || reset.worker !== infrastructure.worker.workerName) {
+    throw new Error(`the reset record names ${reset.environment} ${reset.worker}, not ${infrastructure.environment} ${infrastructure.worker.workerName}`);
+  }
+
+  return resetResourceIds(
+    reset,
+    live.state === 'deployed' ? servingOf(live.versionId, live.bindings) : undefined,
+    infrastructure.resources,
+  );
+}
+
 /**
  * The phase this run is, from an explicit flag or from the variable the deploy
  * script exports. Neither ⇒ `full`, the gate.
@@ -824,9 +862,12 @@ async function main(): Promise<number> {
 
   const supplied = supplyRows(worker, secretNames(environment));
 
+  const resetFile = process.env[RESET_ENV] ?? '';
+  const resetIds = phase === 'post-deploy' || resetFile === '' ? [] : recordedResetIds(resetFile, infrastructure, live);
+
   const sources = readMatching(isProductSource);
   const unread = [...SUPPLY.keys()].filter((name) => readSites(name, sources).length === 0);
-  const verdict = audit({ infrastructure, rows, supplied, unreadFields: unread, phase });
+  const verdict = audit({ infrastructure, rows, supplied, unreadFields: unread, phase, resetIds });
 
   const fields = envFields();
 

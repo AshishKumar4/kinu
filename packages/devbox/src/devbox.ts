@@ -4,7 +4,8 @@ import * as v from 'valibot';
 import { Files, SandboxFileError } from '@cloudflare/sandbox';
 import { Processes, CONTAINER_TRUST_ENV, END_TREE } from "./processes";
 import { nativeStartClock } from './native-clock';
-import type { DevboxExecOptions, ExecResult, ReadOptions, FileResult, ListFilesOptions, ListedFile, GatewayBindings } from './contracts';
+import type { DevboxExecOptions, ExecResult, ReadOptions, FileResult, ListFilesOptions, FileMetadata, GatewayBindings } from './contracts';
+import { listFiles as readDirectory } from './file-listing';
 import { DEFAULT_EXCLUDES, DiskChainStateSchema, DiskChainStorage, diskChain, recoveryNotice, type DiskChain, type DiskChainPorts } from './disk-chain';
 import { STORE_MOUNT, chainStoreRoot, storeObjectUrl } from './store-gateway';
 import { snapshotRegistry, type SnapshotRegistry } from './snapshot-registry';
@@ -499,7 +500,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       destroy: () => this.#destroyGoldenContainer(),
       build: () => this.armAlarm(GOLDEN_BUILD_CALLBACK, 0),
       tell: async (box, answer) => { await this.peers?.box(box).goldenReady(answer); },
-      delete: (ref) => this.snapshotRegistry?.delete(ref),
+      delete: (ref, owe) => this.snapshotRegistry?.delete(ref, owe),
       now: () => Date.now(),
     };
   }
@@ -2417,7 +2418,20 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   async listFiles(path: string, options?: ListFilesOptions) {
-    return await settle(this.#claimed(pathScopes({ path, recursive: options?.recursive === true }), attempt("file", () => this.#listFiles(path, options))).pipe(Effect.mapError(fileFault)));
+    return await settle(this.#claimed(pathScopes({ path, recursive: options?.recursive === true }),
+      readDirectory(this.#container(), path, options)).pipe(Effect.mapError(fileFault)));
+  }
+
+  statFile(path: string, options?: { readonly follow?: boolean }): Promise<FileMetadata> {
+    return settle(this.#claimed(pathScopes({ path }), attempt('file', async () => {
+      const files = this.#files();
+      const stat = await (options?.follow === false ? files.lstat(path) : files.stat(path));
+
+      return {
+        type: stat.type, size: Number(stat.size), mode: stat.mode, mtimeMs: stat.modifiedAt.getTime(),
+        uid: stat.uid, gid: stat.gid, atimeMs: stat.accessedAt.getTime(), ctimeMs: stat.changedAt.getTime(),
+      };
+    })).pipe(Effect.mapError(fileFault)));
   }
 
   exists(path: string): Promise<{ exists: boolean }> {
@@ -3110,24 +3124,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     await this.#files().mkdir(path.slice(0, path.lastIndexOf('/')) || '/', { recursive: true });
     const bytes = options?.encoding === 'base64' && !(content instanceof ReadableStream) ? Buffer.from(content, 'base64') : content;
     await this.#files().writeFile(path, bytes);
-  }
-
-  async #listFiles(path: string, options: ListFilesOptions = {}): Promise<{ files: ListedFile[] }> {
-    const files: ListedFile[] = [];
-
-    const visit = async (directory: string): Promise<void> => {
-      for (const entry of await this.#files().readDirectory(directory)) {
-        const absolutePath = directory.replace(/\/$/, '') + '/' + entry.name;
-        const stat = await this.#files().lstat(absolutePath);
-        files.push({ name: entry.name, path: absolutePath, absolutePath, type: stat.type, size: Number(stat.size), isDirectory: stat.type === 'directory' });
-
-        if (options.recursive && stat.type === 'directory') await visit(absolutePath);
-      }
-    };
-
-    await visit(path);
-
-    return { files };
   }
 
   protected get previewName(): string { return this.ctx.id.toString(); }

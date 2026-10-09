@@ -8,7 +8,7 @@
 // and a row the trial could inherit stops it, named. A deployment that predates trial accounts runs its trials on
 // eval-service, as before, and the report says so.
 import * as v from 'valibot';
-import { EVAL_TRIAL_ACCOUNTS, inheritedRows, parseEvalAccount, type EvalAccount } from '@kinu.run/core';
+import { EVAL_TRIAL_ACCOUNTS, inheritedRows, JsonValueSchema, parseEvalAccount, ProfileCatalogEnvelopeSchema, type EvalAccount, type JsonValue } from '@kinu.run/core';
 import { deleteWorkspace, listWorkspaces, webHeaders, WORKSPACE_LEASE_MS } from './session';
 import type { EvalMatrix } from './config';
 import type { EvalTarget } from './target';
@@ -73,6 +73,28 @@ function accountOf(target: EvalTarget): string {
   return target.identity.account ?? 'eval-service';
 }
 
+/** What a trial would inherit, distinguishing the account's stored model catalog from other configuration. */
+export async function trialInheritedRows(target: EvalTarget): Promise<{ inherited: Record<string, number> } | { why: string }> {
+  const read = async (path: string): Promise<{ value: JsonValue } | { why: string }> => {
+    const response = await fetch(`${target.origin}${path}`, { headers: webHeaders(target.identity) });
+    const text = await response.text();
+
+    return response.ok ? { value: v.parse(JsonValueSchema, JSON.parse(text)) }
+      : { why: `reading ${path} answered ${String(response.status)}: ${text.slice(0, 300)}` };
+  };
+
+  const held = await read('/api/user/held-rows');
+
+  if ('why' in held) return { why: held.why };
+  const rows = v.parse(v.record(v.string(), v.number()), held.value);
+
+  if ((rows.user_config ?? 0) === 0) return { inherited: inheritedRows(rows) };
+  const catalog = await read('/api/user/profile-catalog');
+
+  return 'why' in catalog ? { why: catalog.why }
+    : { inherited: inheritedRows(rows, v.parse(ProfileCatalogEnvelopeSchema, catalog.value).version) };
+}
+
 /** Make `target`'s trial account its trial's own before the trial opens on it. */
 export async function prepareTrialAccount(target: EvalTarget, now: number): Promise<void> {
   const workspaces = await listWorkspaces(target.origin, target.identity);
@@ -84,11 +106,10 @@ export async function prepareTrialAccount(target: EvalTarget, now: number): Prom
   }
 
   for (const { name } of workspaces) await deleteWorkspace(target.origin, target.identity, name);
-  const response = await fetch(`${target.origin}/api/user/held-rows`, { headers: webHeaders(target.identity) });
-  const text = await response.text();
+  const read = await trialInheritedRows(target);
 
-  if (!response.ok) throw new Error(`reading what ${accountOf(target)} holds answered ${String(response.status)}: ${text.slice(0, 300)}`);
-  const inherited = Object.entries(inheritedRows(v.parse(v.record(v.string(), v.number()), JSON.parse(text))));
+  if ('why' in read) throw new Error(`${accountOf(target)}: ${read.why}`);
+  const inherited = Object.entries(read.inherited);
 
   if (inherited.length > 0) {
     throw new Error(`${accountOf(target)} holds rows a trial would inherit: ${inherited.map(([table, rows]) => `${table} ${String(rows)}`).join(', ')}; `

@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { CloudIcon } from "@phosphor-icons/react";
+import { DesktopIcon } from "@phosphor-icons/react";
 import { Effect } from "effect";
 import type { Rpc } from "@kinu.run/core";
 import { attempt, renderThrownChain, detach } from "@kinu.run/core/obs";
@@ -35,17 +35,17 @@ export function SandboxSizeRow({ rpc }: { rpc: Rpc }) {
   };
 
   const choose = (value: BoxSize | typeof ACCOUNT_DEFAULT) =>
-    act("resize", "resizing the cloud computer", "resizeSandbox", [value === ACCOUNT_DEFAULT ? null : value]);
+    act("resize", "resizing the computer", "resizeSandbox", [value === ACCOUNT_DEFAULT ? null : value]);
 
   const note = failure ?? workspaceSizeNote(state, pending === "resize");
 
   return (
     <div data-env-size className="space-y-1" onClick={(event) => event.stopPropagation()}
-      title="A running cloud computer restarts at the new size: files stay, supervised servers come back, a running command ends.">
+      title="A running computer restarts at the new size: files stay, supervised servers come back, a running command ends.">
       {/* A track that may shrink, and a trigger that may: the longest choice ran past the card (staging, 2026-10-08). */}
       <div className="grid grid-cols-1">
         <Choice
-          label="Cloud computer size"
+          label="Computer size"
           size="sm"
           className="min-w-0"
           value={state.chosen ?? ACCOUNT_DEFAULT}
@@ -59,7 +59,7 @@ export function SandboxSizeRow({ rpc }: { rpc: Rpc }) {
           <div className="p-meta p-danger">{startRefusedNote(state.startRefused)}</div>
           <button
             data-env-start-again
-            onClick={() => detach(act("start", "starting the cloud computer", "startSandbox", []))}
+            onClick={() => detach(act("start", "starting the computer", "startSandbox", []))}
             disabled={pending !== null}
             className="px-2 py-1 rounded-md p-t-control p-text-2 p-fill hover:p-text"
           >{pending === "start" ? "Starting…" : "Start again"}</button>
@@ -79,7 +79,7 @@ export function SandboxSizeSettings() {
     setSaving(true);
     setFailure(null);
 
-    return attempt({ doing: "saving the default sandbox size", otherwise: "io" }, () => setAccountSandboxSize(size)).pipe(
+    return attempt({ doing: "saving the default computer size", otherwise: "io" }, () => setAccountSandboxSize(size)).pipe(
       Effect.map(() => { set(size); }),
       Effect.catch(shownIn(setFailure)),
       Effect.ensuring(Effect.sync(() => { setSaving(false); })),
@@ -87,13 +87,13 @@ export function SandboxSizeSettings() {
   };
 
   return (
-    <Card title="Cloud computer size" icon={CloudIcon}
-      description="Each workspace's cloud computer starts at this size unless the workspace chooses its own on its Environment card. It applies the next time one starts.">
-      <CardSlot resource={resource} what="your sandbox size" onRetry={reload}>
+    <Card title="Computer size" icon={DesktopIcon}
+      description="Each workspace's computer starts at this size unless the workspace chooses its own on its Environment card. It applies the next time one starts.">
+      <CardSlot resource={resource} what="the computer size" onRetry={reload}>
         {(account) => (
           <Field label="Default size" hint={failure ?? (saving ? "Saving…" : undefined)}>
             <Choice
-              label="Default cloud computer size"
+              label="Default computer size"
               value={account ?? DEFAULT_BOX_SIZE}
               options={BOX_SIZE_ORDER.map((size) => ({ value: size, label: sandboxSizeText(size) }))}
               onChange={(value) => detach(choose(value))}
