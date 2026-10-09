@@ -243,8 +243,10 @@ async function observeMobile(newPage: Gallery['newPage'], origin: string): Promi
 async function openPlanPage(page: Page, title: string): Promise<void> {
   const tab = `nav[aria-label="Pages"] button[aria-label*=${JSON.stringify(title)}]`;
 
-  // Bounded: a plan with no page tab is the failure this names, not a wait without end.
-  await page.waitForSelector(tab, { timeout: 15_000 });
+  // Work, mounted behind every page, draws its plans from the read the tabs come from; a review in their place is the
+  // product before plans had pages.
+  await page.waitForSelector('[data-work-plans], [data-back-to-work]');
+  expect(await page.$(tab), `no page tab for the plan "${title}"`).not.toBeNull();
   await page.click(tab);
   await page.waitForSelector(`${tab}[aria-current="true"]`);
   await page.waitForSelector('[data-plan-review-root]');
@@ -552,7 +554,6 @@ describe('the plan review document, as a browser lays it out', () => {
   });
 });
 
-/** Nothing in a plan review reaches the network of its own accord: the old unit pin's intent, held at the page. */
 /**
  * The decision bar as drawn: each control's label on one line and nothing of it cut, and whether the two decisions sit
  * side by side. A control squeezed below its label wraps (two lines) or clips (its text wider than its box).
@@ -627,6 +628,7 @@ describe('the decision bar fits wherever a plan is read', () => {
   });
 });
 
+/** Nothing in a plan review reaches the network of its own accord: the old unit pin's intent, held at the page. */
 describe('a plan review sends nothing of its own', () => {
   test('a file and line in a plan is plain code, and hovering it past the preview delay sends nothing', () => {
     const { interactive, fetched, requested } = observed.codePath;
