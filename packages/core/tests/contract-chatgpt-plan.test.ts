@@ -183,7 +183,7 @@ describe('the request the preview accepts', () => {
   });
 
   // codex.ts `chatgptSessionHeaders`: the backend caches under the session, which a workspace's conversations share.
-  test('every call carries its workspace as the session and its own conversation, which another conversation does not share', async () => {
+  test('a login that names no account keeps its workspace as the session; each conversation is its own', async () => {
     const api = openai(answered(), answered(), answered(), answered());
     const { deps } = signedIn(api.fetch);
     const provider = createChatGptProvider();
@@ -197,6 +197,24 @@ describe('the request the preview accepts', () => {
     expect(session).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
     expect([again, request]).toEqual([[session, conversation, request], conversation]);
     expect([hireSession === session, hireConversation === conversation, otherSession === session]).toEqual([true, false, false]);
+  });
+
+  test('a login that names its account is that account\'s session in every workspace, and another account\'s is not', async () => {
+    const api = openai(answered(), answered(), answered());
+    const token = (account: string) => `h.${Buffer.from(JSON.stringify({ 'https://api.openai.com/auth': { chatgpt_account_id: account } })).toString('base64url')}.s`;
+    const provider = createChatGptProvider();
+
+    const model = (account: string, workspaceAffinity: string) => provider.createModel('gpt-6.1-sol', {
+      ...signedIn(api.fetch).deps, workspaceAffinity, getAuth: async () => ({ headers: { Authorization: `Bearer ${token(account)}` } }),
+    });
+
+    for (const called of [model('acct-1', 'kinu-workspace-a'), model('acct-1', 'kinu-workspace-b'), model('acct-2', 'kinu-workspace-a')]) {
+      expect(await streamText({ model: called, maxRetries: 0, prompt: 'hello' }).text).toBe('ok');
+    }
+
+    const [[a] = [], [b] = [], [other] = []] = api.sent.map((sent) => sent.session);
+
+    expect([a === b, a === other]).toEqual([true, false]);
   });
 
   test('a call that wants one answer still streams, and the stream becomes that answer', async () => {
