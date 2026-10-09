@@ -2,7 +2,7 @@
 import * as v from 'valibot';
 import { Cause, Effect } from 'effect';
 import { KinuError, settleSync } from '@kinu.run/core/obs';
-import { rosterMatches, WorkspaceOverviewSchema, WS_OPEN, type RosterBucket, type SqlExec, type WorkspaceOverview } from '@kinu.run/core';
+import { rosterMatches, WorkspaceOverviewSchema, WS_OPEN, type AccountMemoryProposal, type RosterBucket, type SqlExec, type WorkspaceOverview } from '@kinu.run/core';
 import type { WorkspaceEntry } from './workspaces';
 
 export const ROSTER_SOCKET_PATH = '/roster/live';
@@ -46,6 +46,12 @@ export interface RosterFrame {
   name: string;
   entry: RosterEntry | null;
   counts: RosterCounts;
+}
+
+/** On the same socket: the account-memory proposals waiting on the owner, so their chats' stacks show them. */
+export interface AccountMemoryFrame {
+  type: 'account_memory';
+  pending: readonly AccountMemoryProposal[];
 }
 
 const ACTIVE = 'w.delete_pending = 0 AND w.create_pending = 0';
@@ -234,8 +240,8 @@ export function isRosterSocket(ws: WebSocket): boolean {
   return v.is(RosterAttachmentSchema, ws.deserializeAttachment());
 }
 
-/** Hibernatable, so the object sleeps between frames. */
-export function acceptRosterSocket(ctx: DurableObjectState, request: Request): Response {
+/** Hibernatable, so the object sleeps between frames. `opened`: what the new socket is sent first. */
+export function acceptRosterSocket(ctx: DurableObjectState, request: Request, opened?: (socket: WebSocket) => void): Response {
   if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
     return new Response('Expected WebSocket', { status: 426 });
   }
@@ -243,6 +249,7 @@ export function acceptRosterSocket(ctx: DurableObjectState, request: Request): R
   const [client, server] = Object.values(new WebSocketPair());
   ctx.acceptWebSocket(server, [ROSTER_SOCKET_TAG]);
   server.serializeAttachment({ roster: true });
+  opened?.(server);
   const init: ResponseInit & { webSocket: WebSocket } = { status: 101, webSocket: client };
 
   return new Response(null, init);
@@ -252,7 +259,7 @@ export function rosterSockets(ctx: DurableObjectState): WebSocket[] {
   return ctx.getWebSockets(ROSTER_SOCKET_TAG);
 }
 
-export function sendRosterFrame(sockets: readonly WebSocket[], frame: RosterFrame): void {
+export function sendRosterFrame(sockets: readonly WebSocket[], frame: RosterFrame | AccountMemoryFrame): void {
   const text = JSON.stringify(frame);
 
   for (const socket of sockets) {
