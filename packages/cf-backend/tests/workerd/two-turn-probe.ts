@@ -2002,6 +2002,9 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     const target: QueueTarget = await this.queueTarget(workspace);
 
     await target.seedStaleDrainEvent(marker);
+    // The claim's settings reach main's isolate detached; the eviction under test comes after that, not inside its first
+    // load, which local workerd would keep failing under the abort's reason for the rest of the process.
+    await awaitSettled(target);
   }
 
   /** Ends on the woken drain run's close, so its turn leaves nothing for the next test to count. */
