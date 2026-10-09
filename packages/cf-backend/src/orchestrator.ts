@@ -4625,10 +4625,22 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private readonly deleting = new AbortController();
 
   private async quietAgents(): Promise<void> {
+    // An object that opened no isolate (one never claimed among them) has no main to stop here.
+    const main = this.openedIsolates.size === 0 ? null : this.actorHandle().actorId;
+
+    // Main stops and closes first, while its calls still reach this object: its settled turn hands its effects here, its
+    // naming among them, which reads the registry with the workspace's capability before the revoke that follows.
+    if (main !== null && !this.deleting.signal.aborted && this.openedIsolates.has(main)) {
+      await this.agentTurns.beforeRetirement(main, true);
+      await this.agentQuiet(main);
+    }
+
+    await this.terminalClosed();
+
     if (!this.deleting.signal.aborted) this.deleting.abort(new KinuError('missing', 'This workspace was deleted.'));
 
     for (const actorId of this.openedIsolates) {
-      if (!this.liveActor(actorId)) continue;
+      if (actorId === main || !this.liveActor(actorId)) continue;
       await this.agentTurns.beforeRetirement(actorId, true);
       await this.agentQuiet(actorId);
     }
@@ -5703,6 +5715,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           this.overviewDirty = true;
           break;
         }
+
+        // A workspace being deleted pushes no tile: its owner's roster drops it, and its capability is about to go.
+        if (this.deleting.signal.aborted) break;
 
         const { stub, caller } = yield* Effect.promise(() => this.userHub());
         yield* Effect.promise(() => stub.putWorkspaceOverview(caller, this.name, overview));

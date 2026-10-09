@@ -1314,6 +1314,11 @@ export abstract class ActorAgent extends Agent<Env> {
   private _terminalTransitions: TerminalTransitions | null = null;
 
   /** Core's once-only lifecycle; the DO supplies only effect bodies and the wake, as the CLI does. */
+  /** Every settled turn's close this activation began has ended; an activation that began none has none to wait for. */
+  protected async terminalClosed(): Promise<void> {
+    await this._terminalTransitions?.idle();
+  }
+
   protected get terminal(): TerminalTransitions {
     this._terminalTransitions ??= new TerminalTransitions({
       actor: this.actorHandle(),
