@@ -1,10 +1,11 @@
 /** The deploy tier's eval-owned throwaway Worker. No route is added to Kinu. */
 import * as v from 'valibot';
-import { Devbox, GOLDEN_NAME, type BoxPeers, type DevboxStore } from '../../../devbox/src/index';
-import type { FileMetadata, ListedFile, ListFilesOptions } from '../../../devbox/src/contracts';
+import { Files, SandboxFileError } from '@cloudflare/sandbox';
+import { Devbox, GOLDEN_NAME, type BoxPeers, type DevboxStore, type DevboxState } from '../../../devbox/src/index';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace/nimbus-workspace.js';
 import { GOLDEN_BASE, GoldenStateSchema, pipeParts } from '../../../devbox/src/golden';
 import { settle } from '../../../devbox/src/errors';
+import { listFiles as directoryMetadata } from '../../../devbox/src/file-listing';
 import { DEFAULT_DEVBOX_POLICY, describeThrown } from '../../../devbox/src/lifecycle';
 import { runContainerContract } from '../../../devbox/bench/container-contracts';
 import { CONTAINER_CONTRACTS, DISK_CONTRACTS } from '../../../devbox/bench/contract-types';
@@ -32,19 +33,20 @@ interface Env {
 const Snapshot = v.looseObject({ id: v.string(), lineage: v.optional(v.array(v.string()), []) });
 
 export class ContractBox extends Devbox<Env> {
-  /** Counts the calls the adapter makes; under the defect each one is not one remote process. D81 records the control. */
   #remoteCalls = 0;
 
-  override async listFiles(path: string, options?: ListFilesOptions): Promise<{ files: ListedFile[] }> {
-    this.#remoteCalls += 1;
+  constructor(ctx: DevboxState, env: Env) {
+    super(ctx, env);
+    const container = ctx.container;
 
-    return super.listFiles(path, options);
-  }
+    if (container !== undefined) {
+      const exec = container.exec.bind(container);
+      container.exec = (argv, options) => {
+        this.#remoteCalls += 1;
 
-  override statFile(path: string, options?: { readonly follow?: boolean }): Promise<FileMetadata> {
-    this.#remoteCalls += 1;
-
-    return super.statFile(path, options);
+        return exec(argv, options);
+      };
+    }
   }
 
   enableInternet = this.env.PROBE_HTTP === '1';
@@ -59,7 +61,7 @@ export class ContractBox extends Devbox<Env> {
   protected override get policy() { return { ...DEFAULT_DEVBOX_POLICY, checkpointIntervalMs: 2_000 }; }
   protected override get ambientCheckpoints(): boolean { return false; }
 
-  /** Counts the actual native exec boundary, not Files or listFiles mocks. D81 records the cloud control. */
+  /** 2026-10-09, D81: the native exec counter saw 73 calls for a 72-entry listing on df51186a7. */
   async fileContract() {
     await this.ensureReady();
 
@@ -83,6 +85,11 @@ export class ContractBox extends Devbox<Env> {
       listing.push({ width, calls: this.#remoteCalls - calls, ms: Date.now() - at });
     }
 
+    const native = await this.exec('find /usr/share -maxdepth 1');
+
+    if (native.exitCode !== 0) throw new Error(`the native find failed: ${native.stderr}`);
+    const expected = native.stdout.trim().split('\n').map(path => `/sandbox${path}`).sort().join('\n');
+
     for (let repeat = 0; repeat < 3; repeat += 1) {
       const command = 'find /sandbox/usr/share -maxdepth 1';
       const calls = this.#remoteCalls;
@@ -91,15 +98,24 @@ export class ContractBox extends Devbox<Env> {
 
       if (ran.exitCode !== 0) throw new Error(`the find failed: ${ran.stderr}`);
       find.push({ command, calls: this.#remoteCalls - calls, ms: Date.now() - at, entries: ran.stdout.trim().split('\n').length });
+
+      if (ran.stdout.trim().split('\n').sort().join('\n') !== expected) throw new Error('the mounted find differs from the native directory walk');
     }
 
     const measured = { listing, find };
 
     if (listing.some(row => row.calls !== 1)) throw new Error(`a directory listing must cost one guest call: ${JSON.stringify(measured)}`);
 
+    await this.#metadataContract();
+
+    return measured;
+  }
+
+  async #metadataContract(): Promise<void> {
     const path = '/var/tmp/devbox-contracts/metadata';
     await this.exec(`mkdir -p ${path}/private; printf bytes >${path}/file; chmod 600 ${path}/file; chmod 700 ${path}/private; `
-      + `touch -d @1700000000 ${path}/file; ln -s private ${path}/link; ln -s missing ${path}/dangling; mkfifo ${path}/fifo`);
+      + `printf child >${path}/private/child; touch -d @1700000000 ${path}/file; `
+      + `ln -s private ${path}/link; ln -s missing ${path}/dangling; ln -s loop ${path}/loop; mkfifo ${path}/fifo`);
     const files = sandboxFiles(adaptCloudflareSandbox(this, async () => {}, null));
     const entries = await files.readdir(path);
     const file = entries.find(entry => entry.name === 'file');
@@ -123,7 +139,38 @@ export class ContractBox extends Devbox<Env> {
       if ((stat?.type ?? null) !== type || this.#remoteCalls - before !== 1) throw new Error('stat/lstat did not read the single operand directly');
     }
 
-    return measured;
+    const calls = this.#remoteCalls;
+    const recursive = await this.listFiles(path, { recursive: true });
+
+    if (this.#remoteCalls - calls !== 1 || recursive.files.filter(entry => entry.name === 'child').length !== 1) {
+      throw new Error('a recursive listing spawned extra guest calls or followed a directory link');
+    }
+
+    await this.#fileErrors(path);
+  }
+
+  async #fileErrors(path: string): Promise<void> {
+    const container = this.ctx.container;
+
+    if (container === undefined) throw new Error('this fixture has no container binding');
+    const restricted = { exec: (argv: string[], options?: ContainerExecOptions) => container.exec(argv, { ...options, user: '65534:65534' }) };
+    const failures: [string, string][] = [[`${path}/missing`, 'ENOENT'], [`${path}/file`, 'ENOTDIR'], [`${path}/loop`, 'ELOOP'], [`${path}/private`, 'EACCES']];
+
+    for (const [operand, code] of failures) {
+      const [batch, sdk] = await Promise.allSettled([
+        settle(directoryMetadata(restricted, operand)), new Files(restricted).readDirectory(operand),
+      ]);
+
+      if (batch?.status !== 'rejected' || sdk?.status !== 'rejected' || !SandboxFileError.is(sdk.reason)) {
+        throw new Error('the batched listing or SDK accepted a filesystem failure');
+      }
+
+      const failure = v.parse(v.object({ cause: v.object({ code: v.string(), path: v.string(), operation: v.string() }) }), batch.reason);
+
+      if (failure.cause.code !== code || sdk.reason.code !== code || failure.cause.path !== sdk.reason.path || failure.cause.operation !== sdk.reason.operation) {
+        throw new Error('the batched listing changed the SDK POSIX failure contract');
+      }
+    }
   }
 
   async contract(kind: typeof CONTAINER_CONTRACTS[number]): Promise<void> {
@@ -225,6 +272,32 @@ async function desktopRoute(request: Request, env: Env, ctx: ExecutionContext, u
   return null;
 }
 
+async function contractRoute(url: URL, name: string, box: DurableObjectStub<ContractBox>, body: v.InferOutput<typeof Body>): Promise<Response> {
+  switch (url.pathname) {
+    case '/view': return new Response(`<iframe src="${desktopClientUrl(url, name)}" style="width:1280px;height:800px;border:0"></iframe>`, { headers: { 'content-type': 'text/html' } });
+    case '/golden': return Response.json({ id: await box.ensureGolden() });
+    case '/inspection': return Response.json(await box.inspection());
+    case '/file-contract': return Response.json(await box.fileContract());
+    case '/contract': await box.contract(v.parse(v.picklist(CONTAINER_CONTRACTS), url.searchParams.get('kind')));
+
+      return Response.json({ ok: true });
+    case '/disk-contract': await box.diskContract(v.parse(v.picklist(DISK_CONTRACTS), url.searchParams.get('kind')));
+
+      return Response.json({ ok: true });
+    case '/exec': return Response.json(await box.exec(body.command ?? ''));
+    case '/storage-probe': return Response.json(await box.storageProbe(body.command ?? ''));
+    case '/state': return Response.json(await box.devboxState());
+    case '/checkpoint': return Response.json(await box.checkpointNow(url.searchParams.get('kind') === 'tick' ? 'tick' : 'quiesce'));
+    case '/stop': return Response.json(await box.quiesce());
+    case '/lose-snapshot': return Response.json({ ok: await box.loseSnapshot() });
+    case '/snapshots': return Response.json(await box.snapshots());
+    case '/cleanup': await box.clear();
+
+      return Response.json({ ok: true });
+    default: return new Response('no route', { status: 404 });
+  }
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (env.EVAL_IDENTITY === undefined || request.headers.get('authorization') !== `Bearer ${env.EVAL_IDENTITY}`) return new Response('unauthorized', { status: 401 });
@@ -243,29 +316,7 @@ export default {
     const body = request.method === 'POST' ? v.parse(Body, await request.json()) : {};
 
     try {
-      switch (url.pathname) {
-        case '/view': return new Response(`<iframe src="${desktopClientUrl(url, name)}" style="width:1280px;height:800px;border:0"></iframe>`, { headers: { 'content-type': 'text/html' } });
-        case '/golden': return Response.json({ id: await box.ensureGolden() });
-        case '/inspection': return Response.json(await box.inspection());
-        case '/file-contract': return Response.json(await box.fileContract());
-        case '/contract': await box.contract(v.parse(v.picklist(CONTAINER_CONTRACTS), url.searchParams.get('kind')));
-
- return Response.json({ ok: true });
-        case '/disk-contract': await box.diskContract(v.parse(v.picklist(DISK_CONTRACTS), url.searchParams.get('kind')));
-
- return Response.json({ ok: true });
-        case '/exec': return Response.json(await box.exec(body.command ?? ''));
-        case '/storage-probe': return Response.json(await box.storageProbe(body.command ?? ''));
-        case '/state': return Response.json(await box.devboxState());
-        case '/checkpoint': return Response.json(await box.checkpointNow(url.searchParams.get('kind') === 'tick' ? 'tick' : 'quiesce'));
-        case '/stop': return Response.json(await box.quiesce());
-        case '/lose-snapshot': return Response.json({ ok: await box.loseSnapshot() });
-        case '/snapshots': return Response.json(await box.snapshots());
-        case '/cleanup': await box.clear();
-
- return Response.json({ ok: true });
-        default: return new Response('no route', { status: 404 });
-      }
+      return await contractRoute(url, name, box, body);
     } catch (cause) { return Response.json({ error: describeThrown({ cause }) }, { status: 500 }); }
   },
 } satisfies ExportedHandler<Env>;

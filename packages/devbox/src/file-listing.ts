@@ -18,13 +18,13 @@ const Reply = v.union([
 /** One guest process enumerates and lstats the entries; no child metadata crosses the exec boundary alone. */
 export function listFiles(container: Pick<Container, 'exec'>, path: string, options: ListFilesOptions = {}): Effect.Effect<{ files: ListedFile[] }, DevboxError> {
   return Effect.gen(function* () {
-    if (typeof path !== 'string') return yield* Effect.fail(new DevboxError('invalid-input', 'path must be a string'));
+    if (typeof path !== 'string') return yield* Effect.fail(new DevboxError('file', 'path must be a string', { cause: new TypeError('path must be a string') }));
 
-    if (path.length === 0) return yield* Effect.fail(new DevboxError('invalid-input', 'path must not be empty'));
+    if (path.length === 0) return yield* Effect.fail(new DevboxError('file', 'path must not be empty', { cause: new TypeError('path must not be empty') }));
 
-    if (path.includes('\0')) return yield* Effect.fail(new DevboxError('invalid-input', 'path cannot contain NUL characters'));
+    if (path.includes('\0')) return yield* Effect.fail(new DevboxError('file', 'path cannot contain NUL characters', { cause: new TypeError('path cannot contain NUL characters') }));
 
-    if (!path.startsWith('/')) return yield* Effect.fail(new DevboxError('invalid-input', 'cwd is required when path is relative'));
+    if (!path.startsWith('/')) return yield* Effect.fail(new DevboxError('file', 'cwd is required when path is relative', { cause: new TypeError('cwd is required when path is relative') }));
 
     const output = yield* attempt('io', async () => await (await container.exec(['python3', '-c', LIST_FILES, path, options.recursive === true ? '1' : '0'])).output());
 
@@ -51,6 +51,8 @@ export function listFiles(container: Pick<Container, 'exec'>, path: string, opti
 
 const LIST_FILES = `
 import errno, json, os, stat, sys
+for name in ('EAGAIN', 'EDEADLK', 'EOPNOTSUPP'):
+    errno.errorcode[getattr(errno, name)] = name
 kinds = {stat.S_IFREG: 'file', stat.S_IFDIR: 'directory', stat.S_IFLNK: 'symlink',
          stat.S_IFBLK: 'blockDevice', stat.S_IFCHR: 'characterDevice', stat.S_IFIFO: 'fifo', stat.S_IFSOCK: 'socket'}
 files = []
@@ -61,7 +63,7 @@ def visit(directory):
     with os.scandir(os.fsencode(directory)) as entries:
         for entry in entries:
             name = entry.name.decode('utf-8')
-            absolute = directory.rstrip('/') + '/' + name
+            absolute = directory.removesuffix('/') + '/' + name
             operation, path = 'lstat', absolute
             metadata = entry.stat(follow_symlinks=False)
             kind = kinds[stat.S_IFMT(metadata.st_mode)]
@@ -76,6 +78,6 @@ try:
     visit(sys.argv[1])
     print(json.dumps({'files': files}, ensure_ascii=True))
 except OSError as error:
-    print(json.dumps({'error': {'code': errno.errorcode[error.errno], 'path': path,
+    print(json.dumps({'error': {'code': errno.errorcode.get(error.errno, 'UNKNOWN'), 'path': path,
                                'operation': operation, 'detail': error.strerror}}, ensure_ascii=True))
 `;

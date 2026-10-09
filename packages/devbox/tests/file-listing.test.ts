@@ -104,3 +104,44 @@ test('a native stat reads one entry without listing any of its siblings, includi
     await expect(box.statFile('/workspace/absent')).rejects.toMatchObject({ cause: { kind: 'devbox.file', code: 'ENOENT' } });
   } finally { await box.destroy(); }
 });
+
+test('a listing keeps its directory claimed until the guest metadata read settles', async () => {
+  const path = join(root, 'claimed');
+  mkdirSync(path);
+  writeFileSync(join(path, 'item'), 'before');
+  const { box, state } = harness(Devbox);
+  await box.start();
+  const native = state.container;
+
+  if (native === undefined) throw new Error('the test box has no native container');
+  const exec = native.exec.bind(native);
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let calls = 0;
+  native.exec = async (argv: string[], options?: ContainerExecOptions) => {
+    calls += 1;
+
+    if (calls === 1) {
+      entered.resolve();
+      await release.promise;
+
+      return pipeExec(argv, options);
+    }
+
+    return exec(argv, options);
+  };
+
+  const listing = box.listFiles(path);
+  await entered.promise;
+  const writing = box.writeFile(`${path}/item`, 'after');
+
+  try {
+    for (let turn = 0; turn < 50; turn += 1) await Promise.resolve();
+    expect(calls).toBe(1);
+  } finally {
+    release.resolve();
+
+    try { await Promise.all([listing, writing]); }
+    finally { await box.destroy(); }
+  }
+});

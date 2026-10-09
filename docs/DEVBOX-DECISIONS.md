@@ -4482,24 +4482,27 @@ bytes (armada job `20261008204556-b92029c0`), 14 MB above D78's.
 D81. A directory listing is one guest-side metadata read, and stat reads one entry (2026-10-09).
 `Devbox.#listFiles` ran `readDirectory` once and then `lstat` once per entry, each a new
 sandbox-shim process, while core's `sandboxFiles.stat` re-listed the parent to find one child.
-A 72-entry directory cost 73 listings and about as many child stats; Nimbus's walk then paid
-that per directory it stated, so `find /sandbox/usr/share -maxdepth 1` ran about 5,200 guest
-calls in about 40 s, once per statted directory plus its parent listing.
+One listing of a 72-entry directory cost 73 guest calls: one enumeration and 72 child lstats.
+Nimbus's walk paid that listing again for each directory it stated, so
+`find /sandbox/usr/share -maxdepth 1` ran about 5,200 guest calls in about 40 s.
 
 Now one guest process (`python3`, present by the golden's own tools check) walks the directory
 and returns every entry's name, type, size, mode, mtime, uid, gid, atime and ctime in one JSON
 answer, and `Devbox.statFile` answers one path through the SDK's `stat`/`lstat` without touching
 its siblings. Symlink types stay the link's own (lstat); POSIX errors keep their code, operation
 and path in the `devbox.file` cause core classifies; every call keeps its `pathScopes` claim.
+D38's SDK content and stat operations stay; only the listing's per-entry SDK calls are replaced.
 
 Measured on real golden containers at the tier's `file-metadata` step
-(`scripts/devbox-container-tier.ts`), before and after on the same `find`:
+(`scripts/devbox-container-tier.ts`), using the same `find`:
 before (test-only `df51186a7`, armada job `20261009170530-f289c0c0`):
 width-1 listing 2 calls in 72 ms, width-72 listing 73 calls in 618 ms,
 `find /sandbox/usr/share -maxdepth 1` 5,195-5,196 calls in 39.6-40.3 s, 3 of 3;
-after (`377bb7a3`, armada job `20261009172321-bef9a18c`):
-width-1 and width-72 listings 1 call each in 108 and 28 ms,
-the same find 73 calls in 117-151 ms, 3 of 3, every contract green with cleanup verified.
+the walk emitted 72 paths, including its root (71 children in this golden).
+An initial green (`377bb7a3`, armada job `20261009172321-bef9a18c`) measured
+117-151 ms for that find, but counted public file methods, not guest calls.
+Its call counts do not prove the remote-operation bound. The contract now counts
+`container.exec` itself, as the red control did; neither SDK methods nor file results are mocked.
 
 ## Open
 

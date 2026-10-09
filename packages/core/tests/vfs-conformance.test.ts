@@ -451,14 +451,6 @@ test('sandbox stat preserves a denied parent instead of reporting absence', asyn
   expect(await rejectionCode(() => sandboxFiles(handle).stat('/private/file'))).toBe('EACCES');
 });
 
-// A link's own stat must not follow it or read its siblings.
-test('sandbox lstat reports a link as a link, with its own metadata', async () => {
-  const handle = sandboxHandle(new MemFs());
-  handle.statFile = async () => ({ type: 'symlink', size: 21, mode: 0o120777, mtimeMs: 1_700_000_000_000 });
-
-  expect(await sandboxFiles(handle).stat('/workspace/AGENTS.md', { follow: false })).toMatchObject({ type: 'symlink', size: 21 });
-});
-
 test('sandbox stat preserves a failed transport instead of reporting absence', async () => {
   const failure = new Error('the file transport disconnected');
   const handle = sandboxHandle(new MemFs());
