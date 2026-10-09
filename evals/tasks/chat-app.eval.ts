@@ -217,10 +217,10 @@ A refused call changes nothing.`,
         const signedIn = await signInOnPage(view, BOB);
         const { sight, held } = await view.until([ROOM_TITLE], (seen) => (seen.regions[ROOM_TITLE] ?? []).length > 0 || seen.text.includes(ROOM_TITLE));
         // A room opened shows its messages: pressing its title opens it where the list does not already.
-        await view.pressNamed(new RegExp(`^${ROOM_TITLE}\\b`, 'iu'));
+        const pressed = await view.press([ROOM_TITLE], { name: ROOM_TITLE, label: `^${ROOM_TITLE}\b` });
         const opened = await view.until([], (seen) => seen.text.includes('noon at the park'));
 
-        return { pass: signedIn && held && opened.held, evidence: { signedIn, held, opened: opened.held, seen: sightEvidence(opened.sight), before: sightEvidence(sight) } };
+        return { pass: signedIn && held && opened.held, evidence: { signedIn, held, pressed, opened: opened.held, seen: sightEvidence(opened.sight), before: sightEvidence(sight) } };
       }));
 
       await slateQuality(verifier, SIGN_IN);
