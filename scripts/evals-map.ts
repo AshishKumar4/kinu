@@ -19,11 +19,17 @@ const HEALTH = v.object({ build: v.object({ sha: v.pipe(v.string(), v.regex(/^[0
 
 /** Keep each cell's whole matrix for trialSlot: selection does not renumber its account. */
 export function evalItems(taskFiles: readonly string[], matrix: EvalMatrix, origins: readonly { leg: 'candidate' | 'baseline'; origin: string }[], pass: boolean): TrialItem[] {
-  return taskFiles.flatMap((file) => matrix.models.flatMap((model) => matrix.arms.flatMap((arm) =>
-    Array.from({ length: matrix.trials }, (_, index) => origins.map(({ leg, origin }) => ({
-      leg, origin, task: file.slice('evals/tasks/'.length).replace(/\.eval\.ts$/u, ''),
-      model, arm, trial: index + 1, trials: matrix.trials, models: [...matrix.models], arms: [...matrix.arms], pass,
-    }))).flat())));
+  const models = [...matrix.models];
+  const arms = [...matrix.arms];
+
+  return taskFiles.flatMap((file) => {
+    const task = file.slice('evals/tasks/'.length).replace(/\.eval\.ts$/u, '');
+
+    return models.flatMap((model) => arms.flatMap((arm) =>
+      Array.from({ length: matrix.trials }, (_, index) => origins.map(({ leg, origin }) => ({
+        leg, origin, task, model, arm, trial: index + 1, trials: matrix.trials, models, arms, pass,
+      }))).flat()));
+  });
 }
 
 /** Only armada's supported CLI: its one shared pool, commit checkout and per-task artifact extraction. */

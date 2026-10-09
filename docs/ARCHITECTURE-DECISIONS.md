@@ -1390,6 +1390,11 @@ name, to have completed green, and says "no eval verdict yet" while the run has
 none. The deploy's own one-trial pass (`eval-pass-tier.sh`) reports a task that
 fails outright the same day, as a red of that deploy.
 
+Amended 2026-10-09 by L25's eval cutover: the gate is still the comparison verdict, never the run's
+conclusion, but its transport is native armada trial artifacts and `evals/<sha>.json` beside the verified
+record. The deploy no longer dispatches GitHub, depends on main's workflow ref, or waits on a named
+GitHub job. A full statistical result is required; an explicit two-task pilot cannot authorize promotion.
+
 L20. A staging deploy reads what its version did, and each signal is a red.
 Decided 2026-09-30 by the owner: with zero users, staging's traffic is our own
 tiers and evals, so its own telemetry for the version is evidence beyond them.
