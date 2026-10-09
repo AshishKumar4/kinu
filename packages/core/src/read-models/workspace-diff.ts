@@ -19,13 +19,18 @@ import { SLATES_ROOT, WORKSPACE_ROOT } from '../vfs/workspace-path';
 /**
  * A side past one SQLite row is listed as large, without a body (a write's preview too). Nimbus's diff does not say
  * whether it was the content or only the metadata that moved, so a large file whose mode alone changed is listed too
- * (ASK: `VfsDiffEntry` names a content change).
+ * (ASK: `VfsDiffEntry` names a content change). This bound and the next are read on call: the browser reaches this
+ * module, and a module-scope catalog read ships the whole catalog to it.
  */
-export const BODY_MAX_BYTES = PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value - 64;
+export function bodyMaxBytes(): number {
+  return PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value - 64;
+}
 
 /** Quarter of the facet RPC ceiling: the reply is UTF-16 in the isolate plus per-line overhead.
  *  Files past it are listed with +/- counts and no body. */
-const MAX_CHANGESET_BODY_CHARS = PLATFORM_CATALOG['do.facet.rpc_bytes'].limit.value / 4;
+function maxChangesetBodyChars(): number {
+  return PLATFORM_CATALOG['do.facet.rpc_bytes'].limit.value / 4;
+}
 
 /** Installed dependency trees: installs, not work, and costly to walk. Hidden ones fall under {@link reviewed}. */
 const DEPENDENCY_TREES: ReadonlySet<string> = new Set(['__pycache__', 'node_modules', 'venv']);
@@ -106,7 +111,7 @@ function reviewedPath(path: string): string | null {
   return path.startsWith(WORKING_DIRECTORY) ? path.slice(WORKING_DIRECTORY.length) : `/${path}`;
 }
 
-/** One side of a changed path: its bytes' text, null for a binary file or one past {@link BODY_MAX_BYTES}. */
+/** One side of a changed path: its bytes' text, null for a binary file or one past {@link bodyMaxBytes}. */
 interface Side {
   readonly bytes: Uint8Array | null;
   readonly text: string | null;
@@ -133,7 +138,7 @@ function sideOf(files: CredentialedVfs, path: string): Side | undefined {
       return { bytes: new Uint8Array([...LINK_TAG, ...text]), text: target, size: text.byteLength };
     }
 
-    if (size > BODY_MAX_BYTES) return { bytes: null, text: null, size };
+    if (size > bodyMaxBytes()) return { bytes: null, text: null, size };
     const bytes = files.readFile(path);
 
     return { bytes, text: bytes.includes(0) ? null : new TextDecoder().decode(bytes), size };
@@ -146,9 +151,9 @@ function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
   return a.byteLength === b.byteLength && a.every((byte, i) => byte === b[i]);
 }
 
-/** Why a side of this size has no text: past {@link BODY_MAX_BYTES}, or binary. */
+/** Why a side of this size has no text: past {@link bodyMaxBytes}, or binary. */
 function unread(size: number): Omitted {
-  return size > BODY_MAX_BYTES ? 'large' : 'binary';
+  return size > bodyMaxBytes() ? 'large' : 'binary';
 }
 
 /** A file's two texts, null where a side could not be read, and the reason to give if one could not. */
@@ -184,7 +189,7 @@ export async function getWorkspaceDiff(rt: WorkspaceBaselineRuntime, baselines: 
 
     const d = diffLines(before, after);
 
-    if (bodyChars >= MAX_CHANGESET_BODY_CHARS) {
+    if (bodyChars >= maxChangesetBodyChars()) {
       files.push(fileDiff(path, status, { lines: [], added: d.added, removed: d.removed, truncated: true }));
 
       return;

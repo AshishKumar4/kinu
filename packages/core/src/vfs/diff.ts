@@ -20,14 +20,16 @@ export const MAX_LINES_PER_FILE = 1000;
 /** Bytes per table element, rounded up from measurement so the derived bound errs small. */
 const LCS_BYTES_PER_ELEMENT = 6;
 
-/** An eighth of the silent-reset wall; the rest is shared with the change-set, workspace state and runtime. */
-const LCS_TABLE_BUDGET_BYTES = PLATFORM_CATALOG['do.isolate.reset_silent'].limit.value / 8;
+/**
+ * The table gets an eighth of the silent-reset wall; the rest is shared with the change-set, workspace state and
+ * runtime. The min keeps the platform bound load-bearing: raising MAX_LINES_PER_FILE cannot raise alignment memory.
+ * Read on call: the browser reaches this module, and a module-scope catalog read ships the whole catalog to it.
+ */
+function maxAlignableLines(): number {
+  const tableBudgetBytes = PLATFORM_CATALOG['do.isolate.reset_silent'].limit.value / 8;
 
-/** The min keeps the platform bound load-bearing: raising MAX_LINES_PER_FILE cannot raise alignment memory. */
-const MAX_ALIGNABLE_LINES = Math.min(
-  MAX_LINES_PER_FILE,
-  Math.floor(Math.sqrt(LCS_TABLE_BUDGET_BYTES / LCS_BYTES_PER_ELEMENT)) - 1,
-);
+  return Math.min(MAX_LINES_PER_FILE, Math.floor(Math.sqrt(tableBudgetBytes / LCS_BYTES_PER_ELEMENT)) - 1);
+}
 
 export function diffLines(before: string, after: string): LineDiff {
   const a = before === '' ? [] : before.split('\n');
@@ -48,7 +50,9 @@ export function diffLines(before: string, after: string): LineDiff {
 
   // Past the bound, report the middle as a wholesale replacement with no body and no table.
   // A middle with one empty side needs no table, so it is exempt at any size.
-  if (n > 0 && m > 0 && (n > MAX_ALIGNABLE_LINES || m > MAX_ALIGNABLE_LINES)) {
+  const alignable = maxAlignableLines();
+
+  if (n > 0 && m > 0 && (n > alignable || m > alignable)) {
     return { lines: [], added: m, removed: n, truncated: true };
   }
 
