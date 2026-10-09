@@ -11,8 +11,9 @@ import {
 } from './flows-script';
 import {
   CHAT_IDLE, CHATS, createFlowWorkspace, frameLedger, openInspector, openWorkspacePage, PAGE_TABS, removeFlowWorkspace, sendAndSettle,
-  settled, settledAfter, startNewChat, until, waitOn, type FlowTarget,
+  settled, settledAfter, signedInPage, startNewChat, until, waitOn, type FlowTarget,
 } from './product-flows';
+import { webHeaders } from '../evals/src/session';
 
 const ChatTextSchema = v.string();
 
@@ -156,6 +157,8 @@ export interface SlateReachVerdict {
   readonly agentStream: StreamRead;
   /** What the slate's hire answered its page, its owner's. */
   readonly ownerHire: string;
+  /** What the same hire answered a viewer of the slate's public share link, signed out; null when no link was made. */
+  readonly viewerHire: string | null;
 }
 
 const StreamStateSchema = v.object({ state: v.string(), text: v.string() });
@@ -189,6 +192,7 @@ async function streamed(page: Page, frame: Frame, control: string, answer: { rea
  */
 export async function slateStreamsAndHires(target: FlowTarget): Promise<SlateReachVerdict> {
   const workspace = await createFlowWorkspace(target, 'slate-reach');
+  let share: { readonly id: string } | null = null;
 
   try {
     const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
@@ -211,13 +215,90 @@ export async function slateStreamsAndHires(target: FlowTarget): Promise<SlateRea
     const modelStream = await streamed(page, frame, '[data-stream-ai]', REACH_STREAM);
     const agentStream = await streamed(page, frame, '[data-stream-ask]', REACH_REPLY);
 
-    await frame.click('[data-hire]');
-    await waitOn(page, "the slate's hire, answered", frame.waitForFunction(`(document.querySelector('[data-hire-result]')?.textContent ?? '') !== ''`, { polling: 100 }));
+    const ownerHire = await hired(page, frame);
 
-    return { modelStream, agentStream, ownerHire: v.parse(v.string(), await frame.evaluate(`document.querySelector('[data-hire-result]')?.textContent ?? ''`)) };
+    const made = await sharedPublicly(target, workspace);
+
+    share = made;
+
+    return { modelStream, agentStream, ownerHire, viewerHire: made.url === null ? null : await viewerHired(target, made.url) };
   } finally {
+    if (share !== null) await revokeShare(target, workspace, share.id);
     await removeFlowWorkspace(target, workspace);
   }
+}
+
+/** Press the slate page's Hire, and read what it answered. */
+async function hired(page: Page, frame: Frame): Promise<string> {
+  await frame.click('[data-hire]');
+  await waitOn(page, "the slate's hire, answered", frame.waitForFunction(`(document.querySelector('[data-hire-result]')?.textContent ?? '') !== ''`, { polling: 100 }));
+
+  return v.parse(v.string(), await frame.evaluate(`document.querySelector('[data-hire-result]')?.textContent ?? ''`));
+}
+
+const SharedSchema = v.object({ id: v.string(), url: v.nullable(v.string()) });
+
+/** The reach slate shared with anyone who has the link, from its tile in My stuff: the share and its link. */
+async function sharedPublicly(target: FlowTarget, workspace: string): Promise<v.InferOutput<typeof SharedSchema>> {
+  const page = await signedInPage(target.browser, target.identity);
+  const tile = `[data-drive-slate="${REACH_SLATE.id}"][data-drive-workspace="${workspace}"]`;
+
+  await page.goto(`${target.origin}/drive`, { waitUntil: 'load' });
+  await until(page, "the slate's tile in My stuff", `document.querySelector(${JSON.stringify(tile)}) !== null`);
+  await page.click(`${tile} [data-drive-menu]`);
+  await page.click(`${tile} [data-drive-share-slate]`);
+  await until(page, 'the share dialog', `document.querySelector('[data-share-access]') !== null`);
+  await page.click('[data-share-access]');
+  await page.click('[data-share-access-option="public"]');
+  await page.click('[data-share-submit]');
+  await until(page, 'the share, made', `document.querySelector('[data-share-created]') !== null`);
+
+  const url = v.parse(v.nullable(v.string()), await page.evaluate(`document.querySelector('[role="dialog"] a[href]')?.href ?? null`));
+  const listed = await fetch(`${target.origin}/api/shared`, { headers: webHeaders(target.identity) });
+
+  if (!listed.ok) throw new Error(`listing the account's shares answered ${String(listed.status)}`);
+
+  const id = v.parse(SharesSchema, await listed.json()).mine
+    .find((row) => row.kind === 'live' && row.workspace === workspace && row.slate === REACH_SLATE.id)?.share;
+
+  await page.close();
+
+  if (id === undefined) throw new Error('the share was made, but the workspace lists no live share');
+
+  return { id, url };
+}
+
+/** The account's shares (`GET /api/shared`): each of its own by kind, workspace and slate, and the share's id. */
+const SharesSchema = v.looseObject({
+  mine: v.array(v.looseObject({ share: v.string(), kind: v.string(), workspace: v.optional(v.string()), slate: v.optional(v.string()) })),
+});
+
+/** Open `url` signed out, as anyone with the link, and press the slate page's Hire there. */
+async function viewerHired(target: FlowTarget, url: string): Promise<string> {
+  const context = await target.browser.createBrowserContext();
+
+  try {
+    const viewer = await context.newPage();
+
+    await viewer.goto(url, { waitUntil: 'load' });
+    await until(viewer, "the shared slate's page", `document.querySelector('[data-hire], iframe') !== null`);
+    const framed = await viewer.$('iframe');
+    const frame = framed === null || await viewer.$('[data-hire]') !== null ? viewer.mainFrame() : await frameOf(viewer, 'iframe');
+
+    await waitOn(viewer, "the shared slate's Hire", frame.waitForSelector('[data-hire]'));
+
+    return await hired(viewer, frame);
+  } finally {
+    await context.close();
+  }
+}
+
+async function revokeShare(target: FlowTarget, workspace: string, share: string): Promise<void> {
+  const left = await fetch(`${target.origin}/api/shared/revoke`, {
+    method: 'POST', headers: { ...webHeaders(target.identity), 'content-type': 'application/json' }, body: JSON.stringify({ workspace, share }),
+  });
+
+  if (!left.ok) console.warn(`owner-ask-flows: revoking ${share} answered ${String(left.status)}`);
 }
 
 /** The page a frame element holds, once it holds a document of its own. */

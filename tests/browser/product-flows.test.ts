@@ -378,8 +378,11 @@ describe("a slate streams answers as they are written, and its owner's slate hir
     expect(agentStream.final).toContain(REACH_REPLY.end);
   });
 
-  test("the owner's own slate hires a helper", () => {
-    expect(verdictOf(observed.slateReach, 'slate-reach').ownerHire).toMatch(/^hired /u);
+  test("the owner's own slate hires a helper, and the same slate opened from its share link cannot", () => {
+    const reach = verdictOf(observed.slateReach, 'slate-reach');
+
+    expect(reach.ownerHire).toMatch(/^hired /u);
+    expect(reach.viewerHire).toMatch(/^refused /u);
   });
 });
 
