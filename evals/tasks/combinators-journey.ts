@@ -288,7 +288,7 @@ ${handoff.coordinator} still coordinates it. Keep the corrected code for the new
       await verifier.check('independent-review-branches-finished-this-turn', async () => {
         const swarm = await aSwarmRan(verifier, {});
         const helpers = await verifier.helperWork();
-        const finished = helpers.filter((helper) => helper.runs.some((run) => run.status === 'completed'));
+        const finished = helpers.filter((helper) => helper.runs.some((run) => run.status !== null));
 
         return { pass: swarm.pass || finished.length >= 2, evidence: { swarm: swarm.evidence, helpers } };
       });

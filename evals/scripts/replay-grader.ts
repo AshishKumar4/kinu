@@ -8,6 +8,7 @@ import { EvalVerifier, type EvalCheckOutcome, type HelperWork, type ReachedRun, 
 import { openPublicSession, resolveWebIdentity, type WorkspaceWeb } from '../src/session';
 import type { Sight } from '../src/sight';
 import { taskTurns } from '../src/task';
+import { redactJson } from '../src/redact';
 
 // Replays saved inputs through the real check. Reads and RPC answers are tape boundaries, not replacement graders.
 const Region = v.object({ text: v.string(), controls: v.array(v.string()), columns: v.optional(v.record(v.string(), v.string())), occurrence: v.optional(v.number()) });
@@ -22,6 +23,7 @@ const Helper = v.object({ name: v.string(), status: v.string(), runs: v.array(v.
 
 const Input = v.object({
   task: v.string(), part: v.string(), turn: v.optional(v.number(), 1), checks: v.array(v.string()), expected: v.optional(v.boolean(), true),
+  prepare: v.optional(v.array(v.string()), []),
   files: v.optional(v.record(v.string(), v.string()), {}), replies: v.optional(v.array(v.string()), []),
   events: v.optional(v.array(RunEventSchema), []), helpers: v.optional(v.array(Helper)),
   rpc: v.optional(v.array(v.object({ id: v.string(), method: v.string(), args: v.array(JsonValueSchema), answer: JsonValueSchema })), []),
@@ -41,6 +43,10 @@ if (placed?.spec.verify === undefined) throw new Error('the replay names no grad
 
 class SelectedVerifier extends EvalVerifier {
   override check(id: string, body: () => Promise<EvalCheckOutcome>): Promise<void> {
+    if (input.prepare.includes(id)) return body().then((outcome) => {
+      if (!outcome.pass) throw new Error(`the replay's setup check ${id} failed: ${JSON.stringify(outcome.evidence)}`);
+    });
+
     return input.checks.includes(id) ? super.check(id, body) : Promise.resolve();
   }
 }
@@ -65,7 +71,7 @@ async function live(): Promise<void> {
     for (const call of target.seedCalls) {
       const answered = await session.slateOp({ op: 'call', id: target.slate, method: call.method, args: call.args });
 
-      console.log(JSON.stringify({ seeded: call.method, answered }));
+      console.log(JSON.stringify({ seeded: call.method, answered: redactJson(answered) }));
     }
 
     const checks = await new SelectedVerifier(session, input.replies, 0, () => Promise.resolve()).collect(placed.spec.verify);
