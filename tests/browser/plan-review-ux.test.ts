@@ -552,6 +552,73 @@ describe('the plan review document, as a browser lays it out', () => {
 });
 
 /** Nothing in a plan review reaches the network of its own accord: the old unit pin's intent, held at the page. */
+/**
+ * The decision bar as drawn: each control's label on one line and nothing of it cut, and whether the two decisions sit
+ * side by side. A control squeezed below its label wraps (two lines) or clips (its text wider than its box).
+ */
+async function decisionBar(page: Page): Promise<{ controls: { label: string; lines: number; clipped: boolean }[]; sideBySide: boolean }> {
+  await page.waitForSelector('[data-plan-decisions] button');
+
+  return page.evaluate(() => {
+    const footer = document.querySelector('[data-plan-footer]');
+    const buttons = [...(footer?.querySelectorAll('button') ?? [])].filter((button) => button.getClientRects().length > 0);
+
+    const controls = buttons.map((button) => {
+      const range = document.createRange();
+
+      range.selectNodeContents(button);
+      const tops = new Set([...range.getClientRects()].filter((rect) => rect.width > 0).map((rect) => Math.round(rect.top)));
+
+      return { label: (button.textContent ?? '').trim(), lines: tops.size, clipped: button.scrollWidth > button.clientWidth + 1 };
+    });
+
+    const decisions = [...document.querySelectorAll('[data-plan-decisions] button')].map((button) => button.getBoundingClientRect());
+    const [first, second] = decisions;
+
+    return { controls, sideBySide: first !== undefined && second !== undefined && Math.abs(first.top - second.top) < 2 };
+  });
+}
+
+describe('the decision bar fits wherever a plan is read', () => {
+  test('in the inspector column, on a phone, and on a wide page, every label stays on one line; a narrow bar stacks', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      // A wide page and a phone draw the review frame alone; the inspector column draws it as a page of the workspace.
+      const planFrame = async (width: number, height: number): Promise<Page> =>
+        openFrame(newPage, origin, { frame: 'planreview', mode: 'dark', viewport: { width, height } });
+
+      const inspector = async (): Promise<Page> => {
+        const page = await openFrame(newPage, origin, { frame: 'workspacepage', mode: 'light', viewport: { width: 1280, height: 900 } });
+
+        await openPlanPage(page, 'applyCoupon');
+
+        return page;
+      };
+
+      // `stacks`: whether the two decisions must sit one above the other there; null where a row of them fits or not.
+      const widths: { name: string; open: () => Promise<Page>; stacks: boolean | null }[] = [
+        { name: 'the inspector column', stacks: true, open: inspector },
+        { name: 'a phone', stacks: null, open: async () => planFrame(390, 844) },
+        { name: 'a wide page', stacks: false, open: async () => planFrame(1280, 900) },
+      ];
+
+      for (const { name, open, stacks } of widths) {
+        const page = await open();
+
+        try {
+          const bar = await decisionBar(page);
+
+          expect({ name, labels: bar.controls.map(({ label }) => label) }).toEqual({ name, labels: expect.arrayContaining(['Request changes', 'Approve & implement']) });
+          expect({ name, squeezed: bar.controls.filter(({ lines, clipped }) => lines !== 1 || clipped) }).toEqual({ name, squeezed: [] });
+
+          if (stacks !== null) expect({ name, sideBySide: bar.sideBySide }).toEqual({ name, sideBySide: !stacks });
+        } finally {
+          await page.close();
+        }
+      }
+    });
+  });
+});
+
 describe('a plan review sends nothing of its own', () => {
   test('a file and line in a plan is plain code, and hovering it past the preview delay sends nothing', () => {
     const { interactive, fetched, requested } = observed.codePath;
