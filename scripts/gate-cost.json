@@ -971,7 +971,7 @@
       "loadAtStart": 8.56,
       "exit": 0
     },
-    "bun test --timeout=0 --isolate scripts/bench*.test.ts scripts/storage-matrix-cleanup.test.ts scripts/deploy-substrate.test.ts scripts/devbox-container-tier.test.ts": {
+    "bun test --timeout=0 --isolate scripts/bench*.test.ts scripts/storage-matrix-cleanup.test.ts scripts/deploy-substrate.test.ts scripts/devbox-container-tier.test.ts scripts/application-snapshots.test.ts": {
       "wallSeconds": 62.83,
       "cpuSeconds": 27.97,
       "peakRssMb": 450.05,
