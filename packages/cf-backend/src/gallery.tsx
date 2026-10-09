@@ -61,7 +61,7 @@ import { useKinu, type SubordinateSnapshot } from "@/hooks/use-kinu";
 import { primePageDeployedBuildSha } from "@kinu.run/core";
 import { ChatLiveTail, DeviceOfflineRow, MessageView, SteerBubble } from "@/components/MessageView";
 import { buildTranscript, profileCatalogCanonical } from "@kinu.run/core";
-import WorkspacePage, { ConversationSkeleton, DeviceConsentCard, ChatErrorCard, EmptyConversation } from "@/pages/WorkspacePage";
+import WorkspacePage, { ConversationSkeleton, ChatErrorCard, EmptyConversation } from "@/pages/WorkspacePage";
 import { useChatThread } from "@/hooks/use-chat-thread";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useTheme } from "@/hooks/use-theme";
@@ -1540,6 +1540,9 @@ const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
   // Read as `result.plans` / `result.tasks`.
   if (method === "listWorkspaceWork") return rpcResult({ plans: [], tasks: [] }).json<T>();
 
+  // A `SandboxSizeState`: the blanket `[]` below reads as a start refused for `undefined`.
+  if (method === "getSandboxSize") return rpcResult(v.parse(JsonValueSchema, AGENT_RPC.get(method))).json<T>();
+
   // Read as `result.builtIn.map(...)`; three halves, as the orchestrator answers it.
   if (method === "getToolDescriptions") return rpcResult({ builtIn: [], executors: [], crafted: [] }).json<T>();
 
@@ -2037,6 +2040,8 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
     return { ok: true, value: kept };
   },
   listPendingConsents: galleryConsents,
+  listPendingActions: galleryPendingActions,
+  decideDeferredApprovals: galleryDecideDeferred,
   inspectWork: galleryOwedWork,
   // The seed is the whole conversation, so the storage walk is exhausted at once.
   getChatHistoryPage: () => ({ status: "end", items: [] }),
@@ -2157,7 +2162,8 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
   // Answered by the root; the header renders the roster title, never `mission`.
   const [name] = v.parse(v.tuple([v.string()]), args);
   const latest = GALLERY_SUBS.find((sub) => sub.name === name) ?? GALLERY_SUBS.at(-1);
-  const actor = latest?.name ?? "agent-0";
+  // A fixture's agent (the coupon auditor) is answered as itself, so its pane is its own actor's.
+  const actor = latest?.name ?? name;
 
   return {
     value: {
@@ -2344,6 +2350,66 @@ function galleryEvent<Schema extends v.GenericSchema>(
 
     window.addEventListener(name, listen);
   });
+}
+
+/** Two commands one turn parked, as the workspace queue lists them: `&asks=two`. */
+const PARKED_ASKS: PendingAction[] = [
+  { id: "park-push", kind: "deferred_action", title: "Approve: a command the agent wants to run on workspace", detail: "git push --force origin release", at: NOW - 90_000 },
+  { id: "park-publish", kind: "deferred_action", title: "Approve: a command the agent wants to run on workspace", detail: "npm publish --access public", at: NOW - 30_000 },
+];
+
+/** `&asks=mixed`: one of each kind that waits on the owner, and a version under trial that waits on nobody. */
+const MIXED_ASKS: PendingAction[] = [
+  ...PARKED_ASKS,
+  { id: "park-write", kind: "deferred_action", title: "Replace src/pricing-service.ts", detail: null, at: NOW - 150_000, write: { path: "src/pricing-service.ts" } },
+  { id: "proposal-pricing", kind: "workspace_proposal", title: "Create workspace “Pricing watch”", detail: "Watch competitor pricing and note each change.", at: NOW - 240_000,
+    proposal: { name: "Pricing watch", brief: "Watch competitor pricing and note each change.", soul: "# Pricing watch\n\nKeep notes short." } },
+  { id: "plan:main:pl-1:1", kind: "plan_review", title: "Review the plan: Repair the applyCoupon eligibility guard", detail: null, at: NOW - 300_000,
+    planRef: { owner: "main", id: "pl-1", revision: 1 }, raisedBy: galleryActorId(WORKSPACE_PAGE_NAME) },
+  { id: "plan:coupon-auditor:pa-1:1", kind: "plan_review", title: "Approve the plan · Audit every coupon rule", detail: "Submitted by coupon-auditor", at: NOW - 200_000,
+    planRef: { owner: "coupon-auditor", id: "pa-1", revision: 1 }, raisedBy: galleryActorId("coupon-auditor") },
+  { id: "scaffold-v8", kind: "scaffold_version", title: "Scaffold v8 is under trial", detail: "shorter tool preamble", at: NOW - 10_000 },
+];
+
+const ASK_SETS = new Map([["two", PARKED_ASKS], ["mixed", MIXED_ASKS]]);
+
+/** The workspace queue as `&asks=` sets it, less what the stack has decided. */
+function galleryPendingActions(): JsonValue {
+  const asked = new URLSearchParams(location.search).get("asks");
+  const decided = (document.documentElement.dataset.galleryDecided ?? "").split(",");
+  const asks = ASK_SETS.get(asked ?? "") ?? [];
+
+  return v.parse(JsonValueSchema, asks.filter((action) => !decided.includes(action.id)));
+}
+
+const DecisionsSchema = v.array(v.tuple([v.string(), v.string()]));
+
+/**
+ * Each decision as the agent is sent it, in order (`data-gallery-decisions`); the queue then moves, as the store's write
+ * moves it. `&decide=refused`: the first decision is refused, as a store that could not record it answers.
+ */
+function galleryDecideDeferred(args?: unknown[]): JsonValue {
+  const [ids, decision] = v.parse(v.tuple([v.array(v.string()), v.string()]), args);
+  const root = document.documentElement.dataset;
+
+  if (new URLSearchParams(location.search).get("decide") === "refused" && root.galleryDecideRefused !== "1") {
+    root.galleryDecideRefused = "1";
+
+    throw new Error("the approval store is unavailable");
+  }
+
+  root.galleryDecided = [root.galleryDecided ?? "", ...ids].filter((id) => id !== "").join(",");
+  root.galleryDecisions = JSON.stringify([...v.parse(DecisionsSchema, JSON.parse(root.galleryDecisions ?? "[]")), ...ids.map((id) => [id, decision])]);
+  queueMicrotask(() => {
+    galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listPendingActions"] }));
+    // The decision reaches the agent as its inbox wakes it (core safety/deferred-approval.ts `decide`).
+    galleryServerPush(JSON.stringify({
+      type: "signal_card", id: `sig-${ids.join("-")}`, state: "pending", text: `Your owner answered ${String(ids.length)} queued command(s): ${decision}.`,
+      metadata: { kinuEvent: "deferred_approval", decision, count: ids.length, ids },
+    }));
+  });
+
+  return { decided: ids };
 }
 
 const TWO_CONSENTS = [
@@ -3631,13 +3697,6 @@ function ChatMessages() {
             feedback={feedback[m.id]} onFeedback={onFeedback} />
         </div>
       ))}
-      <DeviceConsentCard
-        consent={{
-          consentId: "c1", deviceLabel: "ashish-device", method: "exec",
-          command: "git push origin fix/coupon-kind", createdAt: NOW,
-        }}
-        onResolve={() => {}}
-      />
       <DeviceOfflineRow devices={[{ id: "dev-1", label: "ashish-device", lastSeenAt: NOW }]} />
       <ChatErrorCard message="fetch failed: provider stream reset before completion (anthropic/claude-opus-4)" streaming={false} onRetry={() => {}} onDismiss={() => {}} />
       {/* The runtime refusing this tab, as `sunlit-stone-4a20` answers a resume ACK. */}
@@ -6522,8 +6581,15 @@ async function updatesFrame(): Promise<{ node: React.ReactNode; entries: string[
   };
 }
 
-/** Routed: FilesSurface reads `agentId` for the raw-bytes route. `&offline=device` shows the disconnected row, `&wide=1` the ≥64rem side-panel preview. */
+/** Routed: FilesSurface reads `agentId` for the raw-bytes route. `&offline=device` shows the disconnected row, `&wide=1` the ≥64rem side-panel preview,
+ *  `&narrow=1` the column at whatever width the viewport gives it, as a phone does. */
 interface MountedFrame { node: React.ReactNode; entries: string[] }
+
+function driveColumn(params: URLSearchParams, column: string): string {
+  if (params.get("wide") !== null) return "w-[1240px]";
+
+  return params.get("narrow") === null ? column : "w-full";
+}
 
 function driveFrame(frameName: "environment" | "files"): MountedFrame {
   const params = new URLSearchParams(location.search);
@@ -6537,7 +6603,7 @@ function driveFrame(frameName: "environment" | "files"): MountedFrame {
           element={<DriveFrame
             initialSurface={frameName === "files" ? "Files" : "Environment"}
             offlineDevice={params.get("offline") === "device"}
-            width={params.get("wide") === null ? column : "w-[1240px]"}
+            width={driveColumn(params, column)}
             deferPreview={params.get("deferpreview") === "1"}
           />} />
       </Routes>

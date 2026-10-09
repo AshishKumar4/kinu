@@ -561,7 +561,7 @@ export function scaffoldProviders(
       });
     }
 
-    out.push({ name: p.name, fns, types: p.declarations === undefined ? p.types : namespaceDeclaration(p.name, p.declarations, new Set()) });
+    out.push({ name: p.name, fns, types: p.declarations === undefined ? p.types : namespaceDeclaration(p.name, p.declarations) });
   }
 
   return out;

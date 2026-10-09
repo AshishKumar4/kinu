@@ -179,5 +179,5 @@ function recalled<A>(run: () => Promise<A>): Effect.Effect<A, KinuError> {
 
 /** `memory.*` for programs and slates: the operations the native `memory` tool serves. */
 export function createMemoryCodemodeProvider(deps: () => MemoryDeps): CodemodeProvider {
-  return codemodeNamespace('memory', serveMemory(deps));
+  return codemodeNamespace('memory', 'What you remember across conversations: notes, facts, and the conversations themselves.', serveMemory(deps));
 }

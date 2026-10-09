@@ -11,14 +11,14 @@ import { resolveWebIdentity } from '../../evals/src/session';
 import { withBrowser } from '../../scripts/live-app-harness';
 import {
   DRIVE_SLATE, INSPECTOR_SHUT_PX,
-  agentIsThereOnReturn, agentPlanIsReviewedInItsPane, agentProposesAWorkspace, accountMemoryCrossesWorkspaces, driveKeepsWhatIsDone, driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState,
+  agentIsThereOnReturn, agentPlanIsReviewedInItsPane, agentProposesAWorkspace, accountMemoryCrossesWorkspaces, approvalsStackAtTheComposer, driveKeepsWhatIsDone, driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState,
   slateOpensFromMyStuff, slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer,
   writtenFileShowsInFilesAndChanges, changesStormStaysBounded, openMemoryFollowsItsWriter,
-  type AgentPlanVerdict, type AgentReturnVerdict, type WorkspaceProposalVerdict, type AccountMemoryVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
+  type AgentPlanVerdict, type AgentReturnVerdict, type ApprovalStackVerdict, type WorkspaceProposalVerdict, type AccountMemoryVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
   type FlowTarget, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
   type StampedCardVerdict, type WrittenFileVerdict,
 } from '../../scripts/product-flows';
-import { ACCOUNT_FACT, ACCOUNT_RECALL_REPLY, FLOW_MEMORY_NOTE, FLOW_PROBE, FLOW_SHELL_PROBE, FLOW_SLATE, PROPOSED_WORKSPACE, STORM_FILES } from '../../scripts/flows-script';
+import { ACCOUNT_FACT, ACCOUNT_RECALL_REPLY, FLOW_MEMORY_NOTE, FLOW_PROBE, FLOW_SHELL_PROBE, FLOW_SLATE, PARKED_COMMANDS, PROPOSED_WORKSPACE, STORM_FILES } from '../../scripts/flows-script';
 import { rowVerdicts } from '../../scripts/row-verdicts';
 
 interface FlowVerdicts {
@@ -28,6 +28,7 @@ interface FlowVerdicts {
   agentPlan: AgentPlanVerdict | null;
   proposal: WorkspaceProposalVerdict | null;
   accountMemory: AccountMemoryVerdict | null;
+  approvals: ApprovalStackVerdict | null;
   panel: PanelVerdict | null;
   stamped: StampedCardVerdict | null;
   writtenFile: WrittenFileVerdict | null;
@@ -41,7 +42,7 @@ interface FlowVerdicts {
 }
 
 const observed: FlowVerdicts = {
-  welcome: null, firstAnswer: null, agentReturn: null, agentPlan: null, proposal: null, accountMemory: null, panel: null, stamped: null, writtenFile: null, storm: null, liveMemory: null, slate: null, drive: null,
+  welcome: null, firstAnswer: null, agentReturn: null, agentPlan: null, proposal: null, accountMemory: null, approvals: null, panel: null, stamped: null, writtenFile: null, storm: null, liveMemory: null, slate: null, drive: null,
   driveOpens: null, slateOpens: null, slateShare: null,
 };
 
@@ -78,6 +79,7 @@ beforeAll(async () => {
     observed.agentPlan = await attempt('agent-plan', () => agentPlanIsReviewedInItsPane(target));
     observed.proposal = await attempt('workspace-proposal', () => agentProposesAWorkspace(target));
     observed.accountMemory = await attempt('account-memory', () => accountMemoryCrossesWorkspaces(target));
+    observed.approvals = await attempt('approval-stack', () => approvalsStackAtTheComposer(target));
     observed.panel = await attempt('panel', () => rightPanelKeepsItsState(target));
     observed.stamped = await attempt('stamped', () => eachPaneKeepsItsTranscript(target));
     observed.writtenFile = await attempt('written-file', () => writtenFileShowsInFilesAndChanges(target));
@@ -158,6 +160,22 @@ describe('a workspace the agent proposes exists only once its owner approves it'
 
     expect(flow.created?.displayName).toBe(PROPOSED_WORKSPACE.name);
     expect(flow.link).toContain(`/workspace/${flow.created?.name ?? '(none)'}`);
+  });
+});
+
+describe('two commands a turn parks wait as a stack docked to the composer', () => {
+  test('both stack, the newer open with its command, and approving it opens the other', () => {
+    const flow = verdictOf(observed.approvals, 'approval-stack');
+
+    expect(flow.stacked).toHaveLength(2);
+    expect(flow.openWords).toContain(PARKED_COMMANDS[1]);
+    expect(flow.afterFirst).toEqual([flow.stacked[1]]);
+  });
+
+  test('each answer reaches the agent: its wake shows in the chat as an event, and the agent answers each', () => {
+    const flow = verdictOf(observed.approvals, 'approval-stack');
+
+    expect(flow.heard).toEqual({ approvedEvent: true, deniedEvent: true, approvedReply: true, deniedReply: true });
   });
 });
 

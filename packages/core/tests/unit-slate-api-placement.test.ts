@@ -12,7 +12,7 @@ import { executorNamespace } from '../src/tools/executor-operations';
 import { namespaceDeclaration } from '../src/tools/operation-surfaces';
 
 /** An executor's namespace as the model reads it. */
-const declared = (provider: Parameters<typeof executorNamespace>[0]): string => namespaceDeclaration(provider.name, executorNamespace(provider).declarations ?? {}, new Set());
+const declared = (provider: Parameters<typeof executorNamespace>[0]): string => namespaceDeclaration(provider.name, executorNamespace(provider).declarations ?? {});
 
 
 const MEMBERS = Object.keys(SLATE_PROGRAM_MEMBERS).map((op) => `$${op}(`);

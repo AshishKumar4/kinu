@@ -45,7 +45,7 @@ describe('callOperation', () => {
       ns: 'notes', name, help: `${name} a note.`, impact, slate: false, input: v.strictObject({}), output: v.string(),
     }), async () => name);
 
-    const providers = providersInWorkMode('plan', [codemodeNamespace('notes', [note('read', 'observe'), note('write', 'mutate')])]);
+    const providers = providersInWorkMode('plan', [codemodeNamespace('notes', 'Notes.', [note('read', 'observe'), note('write', 'mutate')])]);
 
     await expect(runWorkModeInvocation('plan', () => callOperation(providers, 'notes.write', {}, CALL))).rejects.toMatchObject({ code: 'denied' });
     expect(await runWorkModeInvocation('plan', () => callOperation(providers, 'notes.read', {}, CALL))).toEqual({ value: 'read' });

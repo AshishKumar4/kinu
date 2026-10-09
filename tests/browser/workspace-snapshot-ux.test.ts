@@ -22,7 +22,7 @@ async function openAgentTab(page: Page): Promise<void> {
     await page.waitForSelector('button[aria-label="Hide inspector"]');
   }
 
-  await page.click('button[title="Agent"]');
+  await page.click('button[aria-label="Agent"]');
   await page.waitForSelector('[data-section="memory"]');
 }
 
@@ -35,9 +35,9 @@ test('Files recovers current workspace data after a failed read and reconnect', 
     await page.waitForSelector('[data-composer-root]');
     // The first open belongs to the initial connection.
     await page.evaluate(() => window.dispatchEvent(new Event('gallery-reconnect')));
-    await page.click('button[title="Agent"]');
+    await page.click('button[aria-label="Agent"]');
     await page.waitForFunction(() => document.body.textContent?.includes('Memory before'));
-    await page.click('button[title="Files"]');
+    await page.click('button[aria-label="Files"]');
     await page.waitForFunction(() => document.querySelector('[data-files-surface]')?.textContent?.includes('before.txt'));
     await page.evaluate(() => { document.documentElement.dataset.workspaceFault = '1'; });
     await page.click('[aria-label="Refresh"]');
@@ -54,7 +54,7 @@ test('Files recovers current workspace data after a failed read and reconnect', 
     const recovered = await page.$eval('[data-files-surface]', (el) => el.textContent);
     expect(recovered).not.toContain('before.txt');
     expect(recovered).not.toContain('Network connection lost');
-    await page.click('button[title="Agent"]');
+    await page.click('button[aria-label="Agent"]');
     await page.waitForFunction(() => document.body.textContent?.includes('Memory current'));
     expect(await page.evaluate(() => document.body.textContent)).not.toContain('Memory before');
     await page.close();
@@ -176,7 +176,7 @@ async function filesOnSocket(page: Page, origin: string, socket: 'dead' | 'refus
   await page.waitForSelector('[data-composer-root]');
   // The stub's first open belongs to the initial connection, so a later one is the page's reconnect.
   await page.evaluate(() => window.dispatchEvent(new Event('gallery-reconnect')));
-  await page.click('button[title="Files"]');
+  await page.click('button[aria-label="Files"]');
   await page.waitForFunction(() => document.querySelector('[data-files-surface]')?.textContent?.includes('before.txt'));
   await page.evaluate((mode) => {
     document.documentElement.dataset.workspaceRevision = 'current';
@@ -274,16 +274,22 @@ async function settleConsent(page: Page, id: string, failed?: string): Promise<v
   await page.evaluate((detail) => { window.dispatchEvent(new CustomEvent('gallery:consent-settle', { detail })); }, { id, ...(failed !== undefined && { failed }) });
 }
 
-/** The consent cards on the page, by id. */
-function consentCards(page: Page): Promise<(string | null)[]> {
-  return page.$$eval('[data-device-bind]', (cards) => cards.map((card) => card.getAttribute('data-device-bind')));
+/** The attention stack's cards, the open one first, then those waiting behind it, nearest first. */
+function stacked(page: Page): Promise<(string | null)[]> {
+  return page.$$eval('[data-attention-card], [data-attention-behind]', (cards) => {
+    const open = cards.filter((card) => card.hasAttribute('data-attention-card')).map((card) => card.getAttribute('data-attention-card'));
+    const behind = cards.filter((card) => card.hasAttribute('data-attention-behind')).map((card) => card.getAttribute('data-attention-behind')).reverse();
+
+    return [...open, ...behind];
+  });
 }
 
 /**
- * Two device commands waiting at once are decided apart: one refused by the device hub keeps its card and says why,
- * the other's card goes, a re-read of the waiting list keeps the reason standing, and deciding the first again clears it.
+ * Two device commands waiting at once are one stack, the newer open: answering it opens the other, an answer the
+ * device hub refuses keeps that card open and says why, a re-read of the waiting list keeps the reason standing, and
+ * answering again clears both.
  */
-test('two waiting device commands are decided independently, and a refused decision keeps its card and its reason', async () => {
+test('two waiting device commands are a stack: answering the top opens the next, and a refused answer keeps its card and its reason', async () => {
   await withGallery(async ({ newPage, origin }) => {
     const page = await newPage();
     await page.setViewport({ width: 1440, height: 900 });
@@ -291,15 +297,17 @@ test('two waiting device commands are decided independently, and a refused decis
     await page.waitForSelector('[data-device-bind="c-2"]');
     // The stub's first open belongs to the initial connection, so a later one is the page's reconnect.
     await page.evaluate(() => window.dispatchEvent(new Event('gallery-reconnect')));
-    expect(await consentCards(page)).toEqual(['c-1', 'c-2']);
+    expect(await stacked(page)).toEqual(['consent:c-2', 'consent:c-1']);
+
+    await pressButtonIn(page, '[data-device-bind="c-2"]', 'Not now');
+    await settleConsent(page, 'c-2');
+    await page.waitForSelector('[data-device-bind="c-1"]');
+    expect(await stacked(page)).toEqual(['consent:c-1']);
 
     await pressButtonIn(page, '[data-device-bind="c-1"]', 'Use studio');
-    await pressButtonIn(page, '[data-device-bind="c-2"]', 'Not now');
     await settleConsent(page, 'c-1', 'device hub unavailable');
     await page.waitForFunction(() => document.body.textContent?.includes('device hub unavailable'));
-    await settleConsent(page, 'c-2');
-    await page.waitForFunction(() => document.querySelector('[data-device-bind="c-2"]') === null);
-    expect(await consentCards(page)).toEqual(['c-1']);
+    expect(await stacked(page)).toEqual(['consent:c-1']);
 
     // The waiting list is read again: the refused command is still waiting, and still says why.
     const reads = await page.evaluate(() => Number(document.documentElement.dataset.galleryConsentReads ?? '0'));
@@ -307,12 +315,12 @@ test('two waiting device commands are decided independently, and a refused decis
     await page.evaluate(() => window.dispatchEvent(new Event('gallery-reconnect')));
     await page.waitForFunction((was) => Number(document.documentElement.dataset.galleryConsentReads ?? '0') > was, {}, reads);
     await page.waitForFunction(() => document.querySelector('[data-device-bind="c-1"]') !== null);
-    expect(await consentCards(page)).toEqual(['c-1']);
+    expect(await stacked(page)).toEqual(['consent:c-1']);
     expect(await page.evaluate(() => document.body.textContent?.includes('device hub unavailable'))).toBe(true);
 
     await pressButtonIn(page, '[data-device-bind="c-1"]', 'Use studio');
     await settleConsent(page, 'c-1');
-    await page.waitForFunction(() => document.querySelector('[data-device-bind]') === null);
+    await page.waitForFunction(() => document.querySelector('[data-attention-stack]') === null);
     expect(await page.evaluate(() => document.body.textContent?.includes('device hub unavailable'))).toBe(false);
     await page.close();
   });

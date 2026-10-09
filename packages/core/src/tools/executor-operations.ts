@@ -15,8 +15,13 @@ import { programExecContext } from './outcome';
 import type { CodemodeProvider } from '../types/codemode';
 import { callArgs, codemodeNamespace } from './operation-surfaces';
 
-/** Each executor's declared members, by the executor's name. */
-const DECLARED = new Map<string, Readonly<Record<string, Operation>>>([['workspace', WORKSPACE], ['sandbox', SANDBOX], ['parent', PARENT], ['device', DEVICE]]);
+/** Each executor's declared members and what it is, by the executor's name. */
+const DECLARED = new Map<string, { readonly ops: Readonly<Record<string, Operation>>; readonly summary: string }>([
+  ['workspace', { ops: WORKSPACE, summary: 'Your workspace: its files and shell, the tools you save, and its slates.' }],
+  ['sandbox', { ops: SANDBOX, summary: 'The sandbox container, with files and a shell of its own.' }],
+  ['parent', { ops: PARENT, summary: 'The workspace that hired you.' }],
+  ['device', { ops: DEVICE, summary: 'The user\'s machine.' }],
+]);
 
 /**
  * A shell call's arguments, with what its backend says a program's shell calls carry, or else the call's own stop
@@ -63,8 +68,8 @@ export function executorNamespace(provider: ExecutorProviderSurface): CodemodePr
   if (declared === undefined) return settleSync(Effect.die(new Error(`executor ${provider.name} has no declared members`)));
   // Only a sandbox with sizes has `resize`, declared over them.
   const sizes = provider.tools.resize === undefined ? undefined : provider.getStatus?.().sizes;
-  const ops = sizes === undefined ? Object.values(declared) : [...Object.values(declared), sandboxResize(sizes.sizes)];
-  const namespace = codemodeNamespace(provider.name, forwarded(provider, ops));
+  const ops = sizes === undefined ? Object.values(declared.ops) : [...Object.values(declared.ops), sandboxResize(sizes.sizes)];
+  const namespace = codemodeNamespace(provider.name, declared.summary, forwarded(provider, ops));
   const slates = provider.tools.slates;
 
   if (slates === undefined) return namespace;

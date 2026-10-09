@@ -50,6 +50,15 @@ export const ACCOUNT_RECALL_ASK = 'Flow account memory: which city do I live in?
 
 export const ACCOUNT_RECALL_REPLY = 'YOU LIVE IN';
 
+/** The approvals row's ask: one turn whose two commands each reach outside the workspace, so each parks for its owner. */
+export const APPROVALS_ASK = 'Flow approvals: push and publish the release.';
+
+/** Each trips a gate rule that reaches out (git-force-push, package-publish); neither does anything if it ran. */
+export const PARKED_COMMANDS = ['git push --force origin flow-release', 'npm publish --dry-run'] as const;
+
+/** The agent's reply to a decision's wake, before what it was told; it re-issues nothing, so nothing the row approves runs. */
+export const DECISION_HEARD = 'DECISION HEARD';
+
 /** The live-memory row's ask, and the note its turn saves. */
 export const MEMORY_ASK = 'Flow memory: save the release note.';
 
@@ -123,6 +132,22 @@ const FLOW_SLATE_CALLS: readonly ScriptedAnswer[] = [
   },
 ];
 
+/** The approvals row: its turn parks both commands, and each decision's wake is answered without re-issuing anything. */
+function approvalsScript(request: ScriptedRequest, latest: string): ScriptedAnswer | null {
+  // A decision's wake names what was approved and what denied (core safety/deferred-approval.ts `decisionWakeMessage`).
+  const approvedHeard = latest.includes('still not run: re-issue once');
+  const deniedHeard = latest.includes('DENIED: do not re-issue');
+
+  if (approvedHeard || deniedHeard) {
+    return { text: [DECISION_HEARD, ...(approvedHeard ? ['approved'] : []), ...(deniedHeard ? ['denied'] : [])].join(' ') };
+  }
+
+  if (!latest.includes(APPROVALS_ASK)) return null;
+  const next = PARKED_COMMANDS[request.turn.filter((call) => call.name === 'shell').length];
+
+  return next === undefined ? { text: 'BOTH PARKED' } : { toolCall: { name: 'shell', arguments: { runtime: 'workspace', command: next } } };
+}
+
 /**
  * The flows' own calls, so the rows test the product and not a model's compliance: asked for a slate at /slates/flow/,
  * the real model wrote none, or wrote a React slate the ask did not name, in 2 of 6 runs (2026-09-25). Each ask gets
@@ -176,6 +201,10 @@ export function flowsScript(request: ScriptedRequest): ScriptedAnswer | null {
   const proposed = proposalAnswer(latest, request) ?? accountMemoryAnswer(latest, request);
 
   if (proposed !== undefined) return proposed;
+
+  const approvals = approvalsScript(request, latest);
+
+  if (approvals !== null) return approvals;
 
   if (latest.includes(MEMORY_ASK)) {
     return request.turn.length > 0 ? { text: 'DONE' } : { toolCall: { name: 'memory', arguments: { op: 'note', content: FLOW_MEMORY_NOTE } } };
