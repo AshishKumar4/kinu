@@ -23,7 +23,7 @@ import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { useAgentsNav } from "@/hooks/use-agents-nav";
 import { usePendingAttachments } from "@/hooks/use-pending-attachments";
 import { useFileDrop } from "@/hooks/use-file-drop";
-import { touchWorkspace } from "@/lib/user-api";
+import { decideAccountMemory, touchWorkspace } from "@/lib/user-api";
 import { describeError, useAsyncResource } from "@/hooks/use-async-resource";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { ConnectedModelPicker } from "@/components/ModelPicker";
@@ -851,14 +851,17 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
     workbench.current?.reveal();
   }, []);
 
-  // The stack answers through the workspace's own calls on every pane: one queue, whichever pane asks.
+  // The stack answers through the workspace's own calls on every pane: one queue, whichever pane asks. The account's
+  // memory proposals come from the owner's user object, on the roster's socket the shell already holds.
   const { rpc: workspaceRpc, resolveConsent, refreshPendingActions } = state;
+  const { accountProposals } = useWorkspaceRoster();
 
   const attentionCalls = useMemo((): Omit<AttentionStackProps, "asks"> => ({
     rpc: workspaceRpc,
     resolveConsent,
     onDecided: refreshPendingActions,
     onReview: () => show("Work"),
+    decideMemory: async (id, decision) => { await decideAccountMemory(id, decision); },
   }), [workspaceRpc, resolveConsent, refreshPendingActions, show]);
 
   // A chat file link, or a `?file=<reference>` landing, opens Files on the file it names.
@@ -1238,7 +1241,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
                 onStop={handleStop}
                 onBranch={handleBranch}
                 attention={(
-                  <AttentionStack asks={ownerAsks(state)} {...attentionCalls} />
+                  <AttentionStack asks={ownerAsks({ ...state, accountProposals })} {...attentionCalls} />
                 )}
                 mode={{ value: ui.mode, onChange: setChatMode }}
                 attachments={{

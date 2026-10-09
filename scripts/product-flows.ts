@@ -33,7 +33,7 @@ import { DESKTOP } from './live-app-harness';
 import {
   AGENT_PLAN_ASK, FLOW_MEMORY_NOTE, FLOW_SHELL_PROBE, FLOW_SLATE, MEMORY_ASK, SLATE_ASK, STORM_ASK, STORM_DIR, STORM_FILES, STORM_SEED_ASK, WRITE_FILE_ASK,
   APPROVALS_ASK, DECISION_HEARD, HIRE_APPROVAL_ASK, HIRE_RAN, PROPOSAL_LINK_REPLY, WORKSPACE_PROPOSAL_ASK, ACCOUNT_FACT, ACCOUNT_FACT_ASK,
-  ACCOUNT_RECALL_ASK, ACCOUNT_RECALL_REPLY,
+  ACCOUNT_RECALL_ASK, ACCOUNT_RECALL_REPLY, STACK_FACT, STACK_FACT_ASK, STACK_RECALL_ASK, STACK_RECALL_REPLY,
 } from './flows-script';
 import { FALLBACK_ANSWER } from './scripted-protocol';
 import {
@@ -913,6 +913,50 @@ export async function accountMemoryCrossesWorkspaces(target: FlowTarget): Promis
     await fetch(`${target.origin}/api/user/memory/facts/${ACCOUNT_FACT.key}`, { method: 'DELETE', headers: webHeaders(target.identity) });
     await removeFlowWorkspace(target, said);
     await removeFlowWorkspace(target, asked);
+  }
+}
+
+export interface StackMemoryVerdict {
+  /** The memory card's words in the stack once the agent proposed the fact. */
+  readonly offered: string;
+  /** The agent's recall, before the owner kept it and after. */
+  readonly before: string;
+  readonly after: string;
+}
+
+/**
+ * Row: an agent proposes an account fact; the proposal waits in the chat's attention stack, pushed by the owner's user
+ * object on the socket the page already holds; kept there, the agent's recall returns it.
+ */
+export async function accountMemoryInTheStack(target: FlowTarget): Promise<StackMemoryVerdict> {
+  const workspace = await createFlowWorkspace(target, 'stack-memory');
+  const card = `[data-attention-card^="memory:"]`;
+
+  try {
+    const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
+    const answers = [STACK_FACT.value, 'nowhere I know of'];
+
+    await sendAndSettle(page, STACK_FACT_ASK);
+    await sendAndSettle(page, STACK_RECALL_ASK);
+    const before = await lastReply(page, STACK_RECALL_REPLY, answers);
+
+    await until(page, 'the proposal in the attention stack', `[...document.querySelectorAll('[data-attention-card], [data-attention-behind]')]`
+      + `.some((node) => (node.getAttribute('data-attention-card') ?? node.getAttribute('data-attention-behind') ?? '').startsWith('memory:'))`);
+    // Brought to the front if anything newer waits.
+    await page.evaluate(`document.querySelector('[data-attention-behind^="memory:"]')?.click()`);
+    await until(page, 'the proposal open', `document.querySelector(${JSON.stringify(card)}) !== null`);
+    const offered = v.parse(v.string(), await page.evaluate(`document.querySelector(${JSON.stringify(card)})?.textContent ?? ''`));
+
+    await page.evaluate(`[...document.querySelectorAll(${JSON.stringify(`${card} button`)})].find((button) => button.textContent?.trim() === 'Keep for every workspace')?.click()`);
+    await until(page, 'the proposal gone from the stack', `document.querySelector('[data-attention-card^="memory:"], [data-attention-behind^="memory:"]') === null`);
+    await sendAndSettle(page, STACK_RECALL_ASK);
+    const after = await lastReply(page, STACK_RECALL_REPLY, answers);
+
+    return { offered, before, after };
+  } finally {
+    // The account's fact goes with the row, so a rerun proposes it afresh.
+    await fetch(`${target.origin}/api/user/memory/facts/${STACK_FACT.key}`, { method: 'DELETE', headers: webHeaders(target.identity) });
+    await removeFlowWorkspace(target, workspace);
   }
 }
 

@@ -261,7 +261,8 @@ export class AccountMemoryStore {
       .map((row) => ({ id: row.id, content: row.content, origin: originOf(row.origin_json), createdAt: row.created_at }));
   }
 
-  private pending(): AccountMemoryProposal[] {
+  /** What waits on the owner, oldest first: the view's `pending`, for a reader that needs only that. */
+  pending(): AccountMemoryProposal[] {
     return this.sql<ProposalRow>`
       SELECT id, proposal_json, origin_json, created_at FROM account_memory_proposals WHERE status = 'pending' ORDER BY created_at, id`
       .flatMap((row) => {

@@ -1,6 +1,6 @@
-import { expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import type { RunEvent } from '../../packages/core/src/index';
-import { backgroundSettleWait, firstRunReplyText, firstRunTurnEvents, firstRunTurnSettlement } from './turn-settlement';
+import { backgroundSettleWait, firstRunReplyText, firstRunTurnEvents, firstRunTurnSettlement, settledJob } from './turn-settlement';
 
 test('a later conversation cannot satisfy the first-run reply', () => {
   const history = [
@@ -117,4 +117,48 @@ test('background-settle waits for a wake or a settled job, and not at all when n
   expect(backgroundSettleWait('bgjob-1', [{ id: 'bgjob-1', status: 'done' }], asked)).toBe('job-settled');
   expect(backgroundSettleWait('bgjob-1', [], [...asked, ...run('wake', 'bgjob-1 finished').slice(0, 1)])).toBe('wait');
   expect(backgroundSettleWait('bgjob-1', [], [...asked, ...run('wake', 'bgjob-1 finished')])).toBe('wake-closed');
+});
+
+// A program held while a fresh base snapshot built outran the 30 s window and detached (staging d930f2537,
+// 2026-10-09): its line is the settled job's, read at the frames that say the jobs moved.
+describe('a detached call followed to its settled job', () => {
+  /** A workspace whose job settles at its `settlesAt`th read; a read of a running job lands a frame mid-read, as
+   *  the job's own progress would. */
+  function workspace(settlesAt: number) {
+    let reads = 0;
+    let moving = new AbortController();
+
+    return {
+      reads: () => reads,
+      session: {
+        get readsMoving() { return moving.signal; },
+        backgroundJobs: async () => {
+          reads += 1;
+          const status = reads >= settlesAt ? 'done' : 'running';
+
+          if (status === 'running') {
+            const was = moving;
+            moving = new AbortController();
+            was.abort();
+          }
+
+          return [{ id: 'bgjob-1', status, result: 'EXEC 600/600 LOST none' }];
+        },
+      },
+    };
+  }
+
+  test('is read again at each frame, a frame landing mid-read included, and answered once it settles', async () => {
+    const ws = workspace(3);
+
+    expect(await settledJob(ws.session, 'bgjob-1', new AbortController().signal)).toMatchObject({ status: 'done', result: 'EXEC 600/600 LOST none' });
+    expect(ws.reads()).toBe(3);
+  });
+
+  test('ends unanswered when the budget is spent first', async () => {
+    const budget = new AbortController();
+    budget.abort();
+
+    expect(await settledJob(workspace(Number.POSITIVE_INFINITY).session, 'bgjob-1', budget.signal)).toBeUndefined();
+  });
 });

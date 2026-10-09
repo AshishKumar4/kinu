@@ -50,6 +50,15 @@ export const ACCOUNT_RECALL_ASK = 'Flow account memory: which city do I live in?
 
 export const ACCOUNT_RECALL_REPLY = 'YOU LIVE IN';
 
+/** The stack row's own fact and asks, so it never meets the Settings row's on one account. */
+export const STACK_FACT_ASK = 'Flow stack memory: my editor is Helix. Remember that for every workspace.';
+
+export const STACK_FACT = { key: 'flow_owner_editor', value: 'Helix' } as const;
+
+export const STACK_RECALL_ASK = 'Flow stack memory: which editor do I use?';
+
+export const STACK_RECALL_REPLY = 'YOUR EDITOR IS';
+
 /** The approvals row's ask: one turn whose two commands each reach outside the workspace, so each parks for its owner. */
 export const APPROVALS_ASK = 'Flow approvals: push and publish the release.';
 
@@ -409,20 +418,38 @@ function proposalAnswer(latest: string, request: ScriptedRequest): ScriptedAnswe
     : { toolCall: { name: 'eval', arguments: { code: `return await agent.proposeWorkspace(${[PROPOSED_WORKSPACE.name, PROPOSED_WORKSPACE.brief, PROPOSED_WORKSPACE.soul].map((arg) => JSON.stringify(arg)).join(', ')});` } } };
 }
 
-/** The account-memory row's turns: propose a fact for the account, and recall it from another workspace. */
+/** An account-memory row's turns: propose a fact for the account, and recall it. */
+interface AccountFactRow {
+  readonly ask: string;
+  readonly fact: { readonly key: string; readonly value: string };
+  readonly recall: string;
+  readonly reply: string;
+}
+
+const ACCOUNT_FACT_ROWS: readonly AccountFactRow[] = [
+  { ask: ACCOUNT_FACT_ASK, fact: ACCOUNT_FACT, recall: ACCOUNT_RECALL_ASK, reply: ACCOUNT_RECALL_REPLY },
+  { ask: STACK_FACT_ASK, fact: STACK_FACT, recall: STACK_RECALL_ASK, reply: STACK_RECALL_REPLY },
+];
+
 function accountMemoryAnswer(latest: string, request: ScriptedRequest): ScriptedAnswer | undefined {
-  if (latest.includes(ACCOUNT_FACT_ASK)) {
+  const proposing = ACCOUNT_FACT_ROWS.find((row) => latest.includes(row.ask));
+
+  if (proposing !== undefined) {
+    const { key, value } = proposing.fact;
+
     return request.turn.length > 0
       ? { text: 'PROPOSED FOR YOUR ACCOUNT' }
-      : { toolCall: { name: 'memory', arguments: { op: 'remember', key: ACCOUNT_FACT.key, value: ACCOUNT_FACT.value, scope: 'account' } } };
+      : { toolCall: { name: 'memory', arguments: { op: 'remember', key, value, scope: 'account' } } };
   }
 
-  if (!latest.includes(ACCOUNT_RECALL_ASK)) return undefined;
+  const recalling = ACCOUNT_FACT_ROWS.find((row) => latest.includes(row.recall));
+
+  if (recalling === undefined) return undefined;
   const recalled = request.turn.find((call) => call.name === 'memory');
 
-  if (recalled === undefined) return { toolCall: { name: 'memory', arguments: { op: 'recall', key: ACCOUNT_FACT.key } } };
+  if (recalled === undefined) return { toolCall: { name: 'memory', arguments: { op: 'recall', key: recalling.fact.key } } };
 
-  return { text: `${ACCOUNT_RECALL_REPLY} ${recalled.result.includes(ACCOUNT_FACT.value) ? ACCOUNT_FACT.value : 'nowhere I know of'}` };
+  return { text: `${recalling.reply} ${recalled.result.includes(recalling.fact.value) ? recalling.fact.value : 'nowhere I know of'}` };
 }
 
 export function flowsScript(request: ScriptedRequest): ScriptedAnswer | null {

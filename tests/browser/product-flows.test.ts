@@ -19,16 +19,17 @@ import { defaultToScriptedModel, registerScriptedModel, startScriptedModel } fro
 import { tierModel } from '../../scripts/tier-model';
 import {
   DRIVE_SLATE, INSPECTOR_SHUT_PX,
-  agentIsThereOnReturn, agentPlanIsReviewedInItsPane, agentProposesAWorkspace, accountMemoryCrossesWorkspaces, approvalsStackAtTheComposer, hireParksAndRunsOnApproval, driveKeepsWhatIsDone, driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState,
+  agentIsThereOnReturn, agentPlanIsReviewedInItsPane, agentProposesAWorkspace, accountMemoryCrossesWorkspaces, accountMemoryInTheStack, approvalsStackAtTheComposer, hireParksAndRunsOnApproval, driveKeepsWhatIsDone, driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState,
   openWaitsNamed, slateOpensFromMyStuff, slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer,
   writtenFileShowsInFilesAndChanges, changesStormStaysBounded, openMemoryFollowsItsWriter,
-  type AgentPlanVerdict, type AgentReturnVerdict, type ApprovalStackVerdict, type HireApprovalVerdict, type WorkspaceProposalVerdict, type AccountMemoryVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
+  type AgentPlanVerdict, type AgentReturnVerdict, type ApprovalStackVerdict, type HireApprovalVerdict, type WorkspaceProposalVerdict, type AccountMemoryVerdict, type StackMemoryVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
   type FlowTarget, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
   type StampedCardVerdict, type WrittenFileVerdict,
 } from '../../scripts/product-flows';
 import {
   ACCOUNT_FACT, ACCOUNT_RECALL_REPLY, CONTINUE, FLOW_MEMORY_NOTE, FLOW_PROBE, FLOW_SHELL_PROBE, FLOW_SLATE, HIRE_PARKED_COMMAND, INTERRUPTED_BRIEF,
-  INTERRUPTED_TITLE, PARKED_COMMANDS, PIN_PAGE, PLAN_COMMENT, PROPOSED_WORKSPACE, REACH_REPLY, REACH_STREAM, STORM_FILES, THREAD_REPLY,
+  INTERRUPTED_TITLE, PARKED_COMMANDS, PIN_PAGE, PLAN_COMMENT, PROPOSED_WORKSPACE, REACH_REPLY, REACH_STREAM, STACK_FACT, STACK_RECALL_REPLY, STORM_FILES,
+  THREAD_REPLY,
 } from '../../scripts/flows-script';
 import {
   chatTitledFromItsBrief, hireLivesUnderItsName, pinKeepsAnInChatPage, planCommentReachesTheAgent, slateStreamsAndHires,
@@ -43,6 +44,7 @@ interface FlowVerdicts {
   agentPlan: AgentPlanVerdict | null;
   proposal: WorkspaceProposalVerdict | null;
   accountMemory: AccountMemoryVerdict | null;
+  stackMemory: StackMemoryVerdict | null;
   approvals: ApprovalStackVerdict | null;
   hireApproval: HireApprovalVerdict | null;
   panel: PanelVerdict | null;
@@ -63,7 +65,7 @@ interface FlowVerdicts {
 }
 
 const observed: FlowVerdicts = {
-  welcome: null, firstAnswer: null, agentReturn: null, agentPlan: null, proposal: null, accountMemory: null, approvals: null, hireApproval: null, panel: null, stamped: null, writtenFile: null, storm: null, liveMemory: null, slate: null, drive: null,
+  welcome: null, firstAnswer: null, agentReturn: null, agentPlan: null, proposal: null, accountMemory: null, stackMemory: null, approvals: null, hireApproval: null, panel: null, stamped: null, writtenFile: null, storm: null, liveMemory: null, slate: null, drive: null,
   driveOpens: null, slateOpens: null, slateShare: null, pin: null, titledChat: null, hireHome: null, slateReach: null, planComment: null,
 };
 
@@ -91,6 +93,7 @@ async function measureRows(at: Omit<FlowTarget, 'browser'>): Promise<void> {
   observed.agentPlan = await flowRow('agent-plan', at, agentPlanIsReviewedInItsPane);
   observed.proposal = await flowRow('workspace-proposal', at, agentProposesAWorkspace);
   observed.accountMemory = await flowRow('account-memory', at, accountMemoryCrossesWorkspaces);
+  observed.stackMemory = await flowRow('stack-memory', at, accountMemoryInTheStack);
   observed.approvals = await flowRow('approval-stack', at, approvalsStackAtTheComposer);
   observed.hireApproval = await flowRow('hire-approval', at, hireParksAndRunsOnApproval);
   observed.panel = await flowRow('panel', at, rightPanelKeepsItsState);
@@ -193,6 +196,16 @@ describe("a fact about the owner said in one workspace is every workspace's once
 
   test("a request without the owner's session reads none of it", () => {
     expect([401, 403]).toContain(verdictOf(observed.accountMemory, 'account-memory').viewerStatus);
+  });
+});
+
+describe("an account fact an agent proposes waits in the chat's stack, and kept there it is recalled", () => {
+  test('the stack offers it with its value, the agent knows nothing of it before, and recalls it after', () => {
+    const flow = verdictOf(observed.stackMemory, 'stack-memory');
+
+    expect(flow.offered).toContain(STACK_FACT.value);
+    expect(flow.before).toBe(`${STACK_RECALL_REPLY} nowhere I know of`);
+    expect(flow.after).toBe(`${STACK_RECALL_REPLY} ${STACK_FACT.value}`);
   });
 });
 

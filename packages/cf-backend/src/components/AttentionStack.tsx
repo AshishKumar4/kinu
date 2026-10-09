@@ -6,8 +6,10 @@
 import { Cause, Effect } from "effect";
 import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@cloudflare/kumo";
-import { CheckIcon, DesktopTowerIcon, NotePencilIcon, ShieldWarningIcon, SparkleIcon, XIcon, type Icon } from "@phosphor-icons/react";
-import { revealMisrepresenting, timeAgo, type OwnerAsk, type PendingAction, type PendingActionKind, type PendingConsent, type Rpc } from "@kinu.run/core";
+import { BrainIcon, CheckIcon, DesktopTowerIcon, NotePencilIcon, ShieldWarningIcon, SparkleIcon, XIcon, type Icon } from "@phosphor-icons/react";
+import {
+  revealMisrepresenting, timeAgo, type AccountAsk, type OwnerAsk, type PendingAction, type PendingActionKind, type PendingConsent, type Rpc,
+} from "@kinu.run/core";
 import { detach, renderThrownChain } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { ParkedWriteChange } from "@/components/surfaces/WorkTab";
@@ -23,26 +25,37 @@ export interface AttentionStackProps {
   readonly onDecided: () => Promise<void>;
   /** A plan is decided in its review, under Work. */
   readonly onReview: () => void;
+  /** The owner's answer to an account-memory proposal; the user object then sends what still waits. */
+  readonly decideMemory: (id: string, decision: "accept" | "decline") => Promise<void>;
 }
 
 /** Collapsed cards drawn behind the open one; the rest are counted on the last. */
 const SHOWN_BEHIND = 2;
 
-type AskKind = PendingActionKind | "consent";
+type AskKind = PendingActionKind | "consent" | "memory";
 
 /** Only the kinds that hold the owner are stacked; the others are named so the map is whole. */
 const KIND_ICON = {
-  deferred_action: ShieldWarningIcon, workspace_proposal: SparkleIcon, plan_review: NotePencilIcon, consent: DesktopTowerIcon,
+  deferred_action: ShieldWarningIcon, workspace_proposal: SparkleIcon, plan_review: NotePencilIcon, consent: DesktopTowerIcon, memory: BrainIcon,
   scaffold_version: ShieldWarningIcon, unseen_changes: ShieldWarningIcon, curriculum_task: ShieldWarningIcon,
 } satisfies Record<AskKind, Icon>;
 
 function kindOf(ask: OwnerAsk): AskKind {
-  return ask.kind === "consent" ? "consent" : ask.action.kind;
+  return ask.kind === "action" ? ask.action.kind : ask.kind;
+}
+
+/** What an account-memory proposal would keep, in words: a fact's key and value, or a note's text. */
+function remembered(memory: AccountAsk): string {
+  const { proposal } = memory;
+
+  return proposal.kind === "fact" ? `${proposal.key}: ${JSON.stringify(proposal.value)}` : proposal.content;
 }
 
 /** One line, for a card waiting behind the open one. */
 function headline(ask: OwnerAsk): string {
   if (ask.kind === "consent") return `Use ${ask.consent.deviceLabel}: ${ask.consent.command || "(command)"}`;
+
+  if (ask.kind === "memory") return `Remember for every workspace: ${remembered(ask.memory)}`;
 
   const { action } = ask;
 
@@ -124,8 +137,30 @@ function ConsentBody({ consent }: { consent: PendingConsent }) {
   );
 }
 
-/** Each kind's answers, the agreeing one first; each is the same call the Work tab makes. */
+function MemoryBody({ memory }: { memory: AccountAsk }) {
+  const by = memory.origin?.agent ?? (memory.origin?.by === "background" ? "Kinu, from what you said" : "An agent");
+  const where = memory.origin?.workspace === undefined ? "" : ` in ${memory.origin.workspace}`;
+
+  return (
+    <>
+      <div className="p-row-text p-text">Remember this for every workspace?</div>
+      <code className="mt-1 block max-h-28 overflow-auto rounded-sm px-2 py-1 p-t-code p-text-2 break-all whitespace-pre-wrap p-fill">{remembered(memory)}</code>
+      <div className="mt-1 p-meta p-text-3">{by}{where} asked {timeAgo(memory.createdAt)}. Forget it any time under Settings → Memory.</div>
+    </>
+  );
+}
+
+/** Each kind's answers, the agreeing one first; each is the same call the Work tab, or Settings, makes. */
 function answersOf(ask: OwnerAsk, props: AttentionStackProps): readonly Answer[] {
+  if (ask.kind === "memory") {
+    const { id } = ask.memory;
+
+    return [
+      { label: "Keep for every workspace", icon: CheckIcon, weight: "primary", run: () => props.decideMemory(id, "accept") },
+      { label: "Decline", icon: XIcon, weight: "quiet", run: () => props.decideMemory(id, "decline") },
+    ];
+  }
+
   if (ask.kind === "consent") {
     const { consentId, deviceLabel } = ask.consent;
 
@@ -173,7 +208,8 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
   const { asks, rpc, onDecided } = props;
   const { answered, mark } = useAnswered(asks);
   const [chosen, setChosen] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  // The card whose answer is in flight: its buttons wait for it, and the next card's are live as soon as it opens.
+  const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<{ key: string; message: string } | null>(null);
 
   const waiting = asks.filter((ask) => !answered.has(ask.key));
@@ -184,11 +220,18 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
   const shown = behind.slice(0, SHOWN_BEHIND).reverse();
   const unshown = behind.length - shown.length;
 
+  const answering = front.key;
+
   // A plan is not answered here: opening its review leaves it waiting until it is decided.
   const answer = (choice: Answer): Effect.Effect<void> => Effect.catchCause(Effect.gen(function* () {
-    setBusy(true);
+    setBusy(answering);
     setError(null);
     yield* Effect.promise(() => choice.run());
+
+    if (front.kind === "memory") {
+      mark(front.key);
+      setChosen(null);
+    }
 
     if (front.kind === "action" && front.action.kind !== "plan_review") {
       mark(front.key);
@@ -197,7 +240,7 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
     }
   }), (failed) => Effect.sync(() => {
     setError({ key: front.key, message: `Could not record the answer: ${renderThrownChain({ cause: Cause.squash(failed) })}` });
-  })).pipe(Effect.ensuring(Effect.sync(() => { setBusy(false); })));
+  })).pipe(Effect.ensuring(Effect.sync(() => { setBusy((was) => (was === answering ? null : was)); })));
 
   const FrontIcon = KIND_ICON[kindOf(front)];
 
@@ -225,10 +268,12 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
           <span>Waiting on you</span>
           {waiting.length > 1 && <span className="tabular-nums" data-attention-position>· 1 of {waiting.length}</span>}
         </div>
-        {front.kind === "consent" ? <ConsentBody consent={front.consent} /> : <ActionBody action={front.action} rpc={rpc} />}
+        {front.kind === "consent" && <ConsentBody consent={front.consent} />}
+        {front.kind === "memory" && <MemoryBody memory={front.memory} />}
+        {front.kind === "action" && <ActionBody action={front.action} rpc={rpc} />}
         {error?.key === front.key && <div className="mt-1.5 p-t-status p-danger" role="alert">{error.message}</div>}
         <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
-          {[...answersOf(front, props)].reverse().map((choice) => <AnswerButton key={choice.label} answer={choice} busy={busy} onAnswer={answer} />)}
+          {[...answersOf(front, props)].reverse().map((choice) => <AnswerButton key={choice.label} answer={choice} busy={busy === front.key} onAnswer={answer} />)}
         </div>
       </div>
     </section>
