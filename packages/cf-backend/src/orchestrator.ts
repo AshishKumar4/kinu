@@ -40,7 +40,7 @@ import { agentCallsThrough, AgentIsolateSlots } from "./dynamic-worker-slots";
 import { providerBindingsOf, routedModelReads } from "./providers/agent-registry";
 import { AgentTurns } from "./agent-turns";
 import { AgentWakes } from "./agent-wakes";
-import type { AgentTurnActivity, AgentSnapshot, StoredRow } from '@kinu.run/core';
+import type { AgentTurnActivity, AgentSnapshot, RunEventRecorder, StoredRow } from '@kinu.run/core';
 import type { SerializedMessage, WebSearchProvider } from '@kinu.run/core';
 import type { CFRuntime } from './runtime';
 import { callOperation, listOperations, type OperationCaller, type OperationListing, type OperationResult } from '@kinu.run/core';
@@ -4611,28 +4611,43 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** For resume, pass the last seen `since` index; returns events strictly after it. A turn's run is main's, in its own
    *  isolate; any other (a branch head's, the workspace's own lanes) is this object's. */
   async getRunEvents(runId: string, opts?: RunEventQuery): Promise<RunEvent[]> {
-    const main = this.actorHandle().actorId;
-    const turn = await (await this.agentCalls(main)).runEvents(this.agentSnapshot(main), runId, opts ?? null);
-
-    return turn.length > 0 ? turn : getRunEvents(this.eventRecorder, runId, opts);
+    return await this.runRead(runId, opts, (calls, snapshot) => calls.runEvents(snapshot, runId, opts ?? null), getRunEvents);
   }
 
   /** Not @callable: serves the run-event routes. */
   async getRunEventText(runId: string, opts?: RunEventQuery): Promise<StoredRunEvent[]> {
-    const main = this.actorHandle().actorId;
-    const turn = await (await this.agentCalls(main)).runEventText(this.agentSnapshot(main), runId, opts ?? null);
+    return await this.runRead(runId, opts, (calls, snapshot) => calls.runEventText(snapshot, runId, opts ?? null), getRunEventText);
+  }
 
-    return turn.length > 0 ? turn : getRunEventText(this.eventRecorder, runId, opts);
+  /** A run's events: main's isolate holds a turn's, this object any other run's. */
+  private async runRead<Event>(
+    runId: string, opts: RunEventQuery | undefined,
+    turn: (calls: AgentFacetCalls, snapshot: AgentSnapshot) => Promise<Event[]>,
+    own: (recorder: RunEventRecorder, runId: string, opts?: RunEventQuery) => Event[],
+  ): Promise<Event[]> {
+    const read = await this.mainRuns(turn);
+
+    return read.length > 0 ? read : own(this.eventRecorder, runId, opts);
   }
 
   /** Not @callable: the web UI uses `getRunSummaries`; serves `/runs`, MCP and CLI. Every run that starts is a turn of
    *  main's, in its own isolate. */
   async listRuns(request?: PageRequest): Promise<Page<RunListEntry>> {
+    return await this.mainRunPage((calls, snapshot) => calls.listRuns(snapshot, request ?? null));
+  }
+
+  /** A read of main's runs, kept in its own isolate. */
+  private async mainRuns<A>(read: (calls: AgentFacetCalls, snapshot: AgentSnapshot) => Promise<A>): Promise<A> {
     const main = this.actorHandle().actorId;
 
+    return await read(await this.agentCalls(main), this.agentSnapshot(main));
+  }
+
+  /** A page of main's runs: none until it has held a turn, so a fresh workspace never opens its isolate to list them. */
+  private async mainRunPage<Entry>(read: (calls: AgentFacetCalls, snapshot: AgentSnapshot) => Promise<Page<Entry>>): Promise<Page<Entry>> {
     if (!this.config.getHoldsTurns()) return { status: 'end', items: [] };
 
-    return await (await this.agentCalls(main)).listRuns(this.agentSnapshot(main), request ?? null);
+    return await this.mainRuns(read);
   }
 
   @callable()
@@ -4711,11 +4726,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   @callable()
   async getRunSummaries(request?: PageRequest): Promise<Page<RunSummary>> {
-    const main = this.actorHandle().actorId;
-
-    if (!this.config.getHoldsTurns()) return { status: 'end', items: [] };
-
-    return await (await this.agentCalls(main)).runSummaries(this.agentSnapshot(main), request ?? null);
+    return await this.mainRunPage((calls, snapshot) => calls.runSummaries(snapshot, request ?? null));
   }
 
   async accountSpend(): Promise<AccountSpend[]> {
