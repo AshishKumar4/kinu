@@ -78,7 +78,7 @@ function formatJobRead(job: BackgroundJob | null): BackgroundJob | RunningJobRea
 }
 
 export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
-  return codemodeNamespace('agent', [
+  return codemodeNamespace('agent', 'You yourself: schedules, background jobs, budget, scaffolds, curriculum and new workspaces.', [
     serve(AGENT.proposeCurriculum, async ({ count }) => await host.proposeCurriculumTasks(count)),
     serve(AGENT.listCurriculum, async ({ status }) => await host.listCurriculumTasks(status)),
     serve(AGENT.acceptCurriculumTask, async ({ id }) => await host.setCurriculumTaskStatus(id, 'accepted')),

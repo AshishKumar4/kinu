@@ -5,7 +5,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import {
-  buildPendingActions, needsTheUser, type PendingAction, type PendingActionInputs, type PersonAsks,
+  buildPendingActions, needsTheUser, ownerAsks, type PendingAction, type PendingActionInputs, type PersonAsks,
 } from '../src/read-models/pending-actions';
 import type { PendingConsent } from '../src/protocol';
 import type { PlanReview } from '../src/types/plans';
@@ -146,7 +146,7 @@ describe('a plan awaiting a decision', () => {
     const [action] = buildPendingActions({
       ...EMPTY,
       pendingPlans: [{
-        owner: 'courier', id: 'plan-9', revision: 2, updatedAt: 7000,
+        owner: 'courier', actor: 'actor-courier', id: 'plan-9', revision: 2, updatedAt: 7000,
         content: '# Courier rollout\n\nStage the rollout and verify the receipt.',
       }],
     });
@@ -158,6 +158,7 @@ describe('a plan awaiting a decision', () => {
       detail: 'Submitted by courier',
       at: 7000,
       planRef: { owner: 'courier', id: 'plan-9', revision: 2 },
+      raisedBy: 'actor-courier',
     });
   });
 
@@ -165,7 +166,7 @@ describe('a plan awaiting a decision', () => {
     const [action] = buildPendingActions({
       ...EMPTY,
       pendingPlans: [{
-        owner: 'main', id: 'plan-1', revision: 1, updatedAt: 1000,
+        owner: 'main', actor: 'actor-main', id: 'plan-1', revision: 1, updatedAt: 1000,
         content: '\n\n  \n## Ship the fix\nBody.',
       }],
     });
@@ -222,5 +223,41 @@ describe('what the inspector opens for on its own', () => {
     for (const status of ['changes_requested', 'approved', 'superseded'] as const) {
       expect(needsTheUser({ ...nothing, activePlan: plan(status) })).toBe(false);
     }
+  });
+});
+
+describe('the attention stack the chat shows', () => {
+  const row = (id: string, kind: PendingAction['kind'], at: number): PendingAction => ({ id, kind, title: id, detail: null, at });
+  const consent = (consentId: string, createdAt: number): PendingConsent => ({ consentId, deviceLabel: 'studio', method: 'exec', command: 'ls', createdAt });
+
+  test('is what holds the person and every consent, newest first, from the reads Work shows', () => {
+    const asks = ownerAsks({
+      pendingActions: [row('push', 'deferred_action', 30), row('v8', 'scaffold_version', 90), row('plan', 'plan_review', 10),
+        row('notes', 'unseen_changes', 80), row('pricing', 'workspace_proposal', 50), row('task', 'curriculum_task', 70)],
+      pendingConsents: [consent('c-1', 40)],
+    });
+
+    expect(asks.map((ask) => ask.key)).toEqual(['action:pricing', 'consent:c-1', 'action:push', 'action:plan']);
+  });
+
+  test('an agent\'s own pane stacks only the asks it raised; the workspace\'s own stay with the workspace', () => {
+    const reads = {
+      pendingActions: [row('push', 'deferred_action', 30), { ...row('plan:courier:p:1', 'plan_review', 20), raisedBy: 'actor-courier' },
+        { ...row('plan:scout:p:1', 'plan_review', 10), raisedBy: 'actor-scout' }],
+      pendingConsents: [consent('c-1', 40)],
+    };
+
+    expect(ownerAsks(reads, { raisedBy: 'actor-courier' }).map((ask) => ask.key)).toEqual(['action:plan:courier:p:1']);
+    expect(ownerAsks(reads).map((ask) => [ask.key, ask.raisedBy])).toEqual([
+      ['consent:c-1', null], ['action:push', null], ['action:plan:courier:p:1', 'actor-courier'], ['action:plan:scout:p:1', 'actor-scout'],
+    ]);
+  });
+
+  test('holds exactly what holds the inspector open', () => {
+    const quiet = { pendingActions: [row('v8', 'scaffold_version', 1)], pendingConsents: [], activePlan: null };
+    const parkedOne = { ...quiet, pendingActions: [row('push', 'deferred_action', 1)] };
+
+    expect([ownerAsks(quiet).length > 0, needsTheUser(quiet), ownerAsks(parkedOne).length > 0, needsTheUser(parkedOne)])
+      .toEqual([false, false, true, true]);
   });
 });

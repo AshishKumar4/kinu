@@ -79,7 +79,7 @@ const SANDBOX_MEMBERS = {
  * member as a refusal, so the program's census records it as it records a host member's.
  */
 export function createWebCodemodeProvider(deps: WebDeps & { readonly prelude?: { readonly source: string } | { readonly missing: string } }): CodemodeProvider {
-  const namespace = codemodeNamespace('web', serveWeb(deps));
+  const namespace = codemodeNamespace('web', 'Search the web, fetch a page as markdown, take a screenshot, or drive a browser.', serveWeb(deps));
   const { prelude } = deps;
 
   if (prelude === undefined) return namespace;

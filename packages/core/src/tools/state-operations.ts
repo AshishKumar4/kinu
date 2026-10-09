@@ -6,7 +6,7 @@ import { STATE } from '../operations/state';
 import { codemodeNamespace } from './operation-surfaces';
 
 export function createStateCodemodeProvider(state: ProgramStateStore): CodemodeProvider {
-  return codemodeNamespace('state', [
+  return codemodeNamespace('state', 'Values your programs keep from one run to the next.', [
     serve(STATE.get, async ({ key }) => state.get(key)),
     serve(STATE.set, async ({ key, value }) => {
       state.set(key, value);

@@ -95,7 +95,7 @@ function nativeCall(resolve: (input: JsonObject) => NativeCall | KinuError, said
     toModelOutput: imageModelOutput,
   });
 
-  return Object.assign(members.some(({ op }) => allowedInPlan(op)) ? permitInPlan(built) : built, { operations: members.map(({ op }) => operationId(op)) });
+  return members.some(({ op }) => allowedInPlan(op)) ? permitInPlan(built) : built;
 }
 
 /** An operation's input as the AI SDK takes a tool's: its JSON Schema, held to the operation's own check. */
@@ -255,10 +255,11 @@ function operationDeclaration(op: Operation): string {
   return `${doc}\n${op.name}(${params.join(', ')}): Promise<${returnsOf(op)} | Refusal>;`;
 }
 
-/** A namespace for programs and slates, over the same served operations. */
-export function codemodeNamespace(ns: string, members: readonly Served[]): CodemodeProvider {
+/** A namespace for programs and slates, over the same served operations; `summary` says what it is for. */
+export function codemodeNamespace(ns: string, summary: string, members: readonly Served[]): CodemodeProvider {
   return {
     name: ns,
+    summary,
     positionalArgs: true,
     operations: members,
     declarations: Object.fromEntries(members.map(({ op }) => [op.name, { full: operationDeclaration(op), call: callForm(op) }])),
@@ -283,26 +284,9 @@ export function codemodeNamespace(ns: string, members: readonly Served[]): Codem
   };
 }
 
-const DescribedOperations = v.object({ operations: v.array(v.string()) });
-
-/** The operation ids a native tool already describes in this request. */
-export function nativeOperations(entry: Tool): readonly string[] {
-  const described = v.safeParse(DescribedOperations, entry);
-
-  return described.success ? described.output.operations : [];
-}
-
-/**
- * A namespace's declaration for the eval description: an operation a native tool in the same request describes is
- * named by reference, never declared a second time.
- */
-export function namespaceDeclaration(ns: string, declarations: Readonly<Record<string, MemberDeclaration>>, described: ReadonlySet<string>): string {
-  const members = Object.entries(declarations);
-  const byReference = members.filter(([name]) => described.has(`${ns}.${name}`)).map(([, declared]) => declared.call);
-  const own = members.filter(([name]) => !described.has(`${ns}.${name}`)).map(([, declared]) => declared.full.replace(/^/gmu, '  '));
-  const reference = byReference.length === 0 ? [] : [`  // As the native ${ns} tool declares them, returning what it says: ${byReference.join(', ')}.`];
-
-  return [`declare const ${ns}: {`, ...reference, ...own, '};'].join('\n');
+/** A namespace's full declaration, as `describe(ns)` answers it in a program. */
+export function namespaceDeclaration(ns: string, declarations: Readonly<Record<string, MemberDeclaration>>): string {
+  return [`declare const ${ns}: {`, ...Object.values(declarations).map((declared) => declared.full.replace(/^/gmu, '  ')), '};'].join('\n');
 }
 
 /** Who calls an operation from outside eval: an actor, in the work mode it asks for, in a turn when one is open. */

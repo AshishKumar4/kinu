@@ -222,10 +222,6 @@
       "complexity": 28
     },
     {
-      "key": "packages/cf-backend/src/components/surfaces/WorkSurface.tsx#WorkSurface",
-      "complexity": 28
-    },
-    {
       "key": "packages/cli/src/config.ts#resolveLLMConfig",
       "complexity": 28
     },
@@ -267,6 +263,10 @@
     },
     {
       "key": "packages/cf-backend/src/components/MessageView.tsx#MessageView",
+      "complexity": 27
+    },
+    {
+      "key": "packages/cf-backend/src/components/surfaces/WorkSurface.tsx#WorkSurface",
       "complexity": 27
     },
     {

@@ -11,7 +11,7 @@ import { executorNamespace } from '../src/tools/executor-operations';
 import { namespaceDeclaration } from '../src/tools/operation-surfaces';
 
 /** An executor's namespace as the model reads it. */
-const declared = (provider: Parameters<typeof executorNamespace>[0]): string => namespaceDeclaration(provider.name, executorNamespace(provider).declarations ?? {}, new Set());
+const declared = (provider: Parameters<typeof executorNamespace>[0]): string => namespaceDeclaration(provider.name, executorNamespace(provider).declarations ?? {});
 
 
 /** A table of the host's shape; its figures are the ones the model must read back. */
