@@ -1177,7 +1177,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
     const script = async (options: ScriptedTurnOptions): Promise<ScriptedAnswer> => {
       // Main's own isolate titles its chat on this model too: a title's request offers no tools and ends on the reply it
       // names; a turn's, a continuation's included, offers its tools.
-      if ((options.tools ?? []).length === 0 && options.prompt.at(-1)?.role === 'assistant') return { text: 'A titled chat' };
+      if ((options.tools ?? []).length === 0 && options.prompt.at(-1)?.role === 'assistant') return { messageId: 'a-title', text: 'A titled chat' };
       calls += 1;
 
       if (calls === 1) arrived.resolve(options);

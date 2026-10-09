@@ -195,8 +195,8 @@ describe('a steer that never saw a step boundary', () => {
     const first = turns.settle({ messageId: 'assistant-1', text: 'deployed', requestId: 'req-1' });
 
     expect((await rerun).identity.turnId).toBe('steer-5');
-    const asked = (await storedChat(h)).filter((message) => message.role === 'user').at(-1);
-    expect(asked?.id).toBe('steer-5');
+    const asked = present((await storedChat(h)).filter((message) => message.role === 'user').at(-1), 'the rerun\'s user row');
+    expect(asked.id).toBe('steer-5');
     expect(turnAuthor(asked)).toBe('operator');
     // No kinuEvent: that would make it a programmatic turn (one-shot surface, no outcome review, a card instead of a bubble).
     expect(asked).not.toHaveProperty('metadata.kinuEvent');
