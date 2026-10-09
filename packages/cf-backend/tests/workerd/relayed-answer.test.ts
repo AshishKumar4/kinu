@@ -8,6 +8,7 @@
  */
 import { env } from 'cloudflare:test';
 import { expect, it } from 'vitest';
+import * as v from 'valibot';
 
 it("an agent's workspace call hands back its answer without the disposer it received", async () => {
   const probe = env.AGENT_FACET_PROBE.get(env.AGENT_FACET_PROBE.idFromName('relayed-agent-answer'));
@@ -45,4 +46,21 @@ it("a program's host call hands the launcher its answer without the disposer it 
 
   expect(seen.answer).toEqual({ Authorization: 'Bearer relay-probe-key' });
   expect(seen.carriesDisposer).toBe(false);
+});
+
+// 2026-10-09, workerd 2026-09-30, debugger job 20261009190056-d2d7425c: disposing only a
+// downstream session method left a rejected factory hung. A fulfilled session must remain usable after a method rejects.
+it('a rejected session closes its relay, while fulfilled sessions and streams keep their ownership', async () => {
+  const response = await env.RELAY_LIFETIME.fetch('http://relay-lifetime/');
+  const seen = v.parse(v.object({ exitCode: v.nullable(v.number()), stdout: v.string(), stderr: v.string() }), await response.json());
+
+  expect(seen.exitCode, seen.stderr || seen.stdout).toBe(0);
+  const summary = seen.stdout.split('\n').find(line => line.startsWith('SUMMARY '));
+
+  if (summary === undefined) throw new Error('the real-workerd lifetime oracle returned no observations');
+  const observations = v.parse(v.array(v.object({ mode: v.string(), tail: v.object({ outcome: v.string() }) })), JSON.parse(summary.slice('SUMMARY '.length)));
+
+  expect(observations.map(item => [item.mode, item.tail.outcome])).toEqual([
+    ['session-factory-rejection', 'ok'], ['session-method-rejection', 'ok'], ['fulfilled-stream', 'ok'],
+  ]);
 });

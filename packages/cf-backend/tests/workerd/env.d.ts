@@ -415,6 +415,7 @@ interface DeployDoorProbeRpc extends Rpc.WorkerEntrypointBranded {
 declare global {
   namespace Cloudflare {
     interface Env {
+      RELAY_LIFETIME: Fetcher;
       SLATE_EGRESS_PROBE: DurableObjectNamespace<SlateEgressRpc>;
       RETENTION: DurableObjectNamespace<RetentionDO>;
       NEIGHBOUR: DurableObjectNamespace<NeighbourDO>;
