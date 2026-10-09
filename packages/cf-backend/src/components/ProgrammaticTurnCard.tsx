@@ -1,7 +1,7 @@
 /** A turn the person did not type, drawn as quiet event rows: one line each, open on a click, repeats folded. */
 import { useState, type ReactNode } from "react";
 import {
-  CaretRightIcon, CheckCircleIcon, ClockIcon, EyeIcon, GearSixIcon, LightningIcon, ProhibitIcon, WarningCircleIcon,
+  CaretRightIcon, CheckCircleIcon, CheckIcon, ClockIcon, EyeIcon, GearSixIcon, LightningIcon, ProhibitIcon, WarningCircleIcon,
   type Icon,
 } from "@phosphor-icons/react";
 import {
@@ -11,14 +11,20 @@ import {
 
 export type CardState = SignalCard["state"];
 
-/** Whether the agent has been shown the event yet, as a mark: the words sit in its title. */
+/** Amber while the event waits or is being shown to the agent, green once the step that read it has ended. */
+const DELIVERY = {
+  pending: { mark: ClockIcon, tone: "p-warning", said: "Waiting to be shown to the agent" },
+  shown: { mark: EyeIcon, tone: "p-warning", said: "Being shown to the agent" },
+  seen: { mark: CheckIcon, tone: "p-success", said: "Seen by the agent" },
+} as const satisfies Record<CardState, { readonly mark: Icon; readonly tone: string; readonly said: string }>;
+
+/** Whether the agent has seen the event yet, as a mark: the words sit in its title. */
 function DeliveryMark({ state }: { state: CardState }) {
-  const said = state === "pending" ? "Waiting to be shown to the agent" : "Shown to the agent";
-  const Mark = state === "pending" ? ClockIcon : EyeIcon;
+  const { mark: Mark, tone, said } = DELIVERY[state];
 
   return (
-    <span className="inline-flex items-center" title={said} data-delivery={state}>
-      <Mark size={11} aria-hidden />
+    <span className={`inline-flex items-center ${tone}`} title={said} data-delivery={state}>
+      <Mark size={11} weight="bold" aria-hidden />
       <span className="sr-only">{said}</span>
     </span>
   );
@@ -119,7 +125,7 @@ function DrainedEvents({ text, state, count }: { text: string; state: CardState;
     <EventRow
       key={index}
       icon={LightningIcon}
-      tone={state === "pending" ? "p-text-4" : "p-accent"}
+      tone={DELIVERY[state].tone}
       label={eventVariantLabel(event.variant)}
       source={eventSourceLabel(event.source)}
       body={event.brief}

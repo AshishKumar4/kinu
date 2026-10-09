@@ -2246,6 +2246,7 @@ export {
 
 export {
   classifyProgrammaticTurn, delegatedTaskMetadata, messageSignalId, isSteeredMessage, endedMidWork, TURN_END_METADATA_KEY, turnFailure, TURN_FAILURE_METADATA_KEY, slatesChanged, SLATES_CHANGED_METADATA_KEY, SLATE_LINK, slatesToPreview, applySignalCard,
+  splicesSeenOn, SIGNALS_SEEN_METADATA_KEY, type SeenSplice,
   parseSignalCardEvent, parseDrainedEvents, eventVariantLabel, eventSourceLabel,
   metadataBroadcastEvent,
   type ClassifiedProgrammaticTurn, type SignalCard, type DrainedEvent,

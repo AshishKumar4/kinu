@@ -11,10 +11,10 @@ import { resolveWebIdentity } from '../../evals/src/session';
 import { withBrowser } from '../../scripts/live-app-harness';
 import {
   DRIVE_SLATE, INSPECTOR_SHUT_PX,
-  agentIsThereOnReturn, agentPlanIsReviewedInItsPane, agentProposesAWorkspace, accountMemoryCrossesWorkspaces, accountMemoryInTheStack, approvalsStackAtTheComposer, hireParksAndRunsOnApproval, driveKeepsWhatIsDone, driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState,
+  agentIsThereOnReturn, agentPlanIsReviewedInItsPane, agentProposesAWorkspace, accountMemoryCrossesWorkspaces, accountMemoryInTheStack, approvalsStackAtTheComposer, spliceSitsWhereItWasRead, hireParksAndRunsOnApproval, driveKeepsWhatIsDone, driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState,
   slateOpensFromMyStuff, slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer,
   writtenFileShowsInFilesAndChanges, changesStormStaysBounded, openMemoryFollowsItsWriter,
-  type AgentPlanVerdict, type AgentReturnVerdict, type ApprovalStackVerdict, type HireApprovalVerdict, type WorkspaceProposalVerdict, type AccountMemoryVerdict, type StackMemoryVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
+  type AgentPlanVerdict, type AgentReturnVerdict, type ApprovalStackVerdict, type HireApprovalVerdict, type WorkspaceProposalVerdict, type AccountMemoryVerdict, type StackMemoryVerdict, type SpliceVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
   type FlowTarget, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
   type StampedCardVerdict, type WrittenFileVerdict,
 } from '../../scripts/product-flows';
@@ -29,6 +29,7 @@ interface FlowVerdicts {
   proposal: WorkspaceProposalVerdict | null;
   accountMemory: AccountMemoryVerdict | null;
   stackMemory: StackMemoryVerdict | null;
+  splice: SpliceVerdict | null;
   approvals: ApprovalStackVerdict | null;
   hireApproval: HireApprovalVerdict | null;
   panel: PanelVerdict | null;
@@ -44,7 +45,7 @@ interface FlowVerdicts {
 }
 
 const observed: FlowVerdicts = {
-  welcome: null, firstAnswer: null, agentReturn: null, agentPlan: null, proposal: null, accountMemory: null, stackMemory: null, approvals: null, hireApproval: null, panel: null, stamped: null, writtenFile: null, storm: null, liveMemory: null, slate: null, drive: null,
+  welcome: null, firstAnswer: null, agentReturn: null, agentPlan: null, proposal: null, accountMemory: null, stackMemory: null, splice: null, approvals: null, hireApproval: null, panel: null, stamped: null, writtenFile: null, storm: null, liveMemory: null, slate: null, drive: null,
   driveOpens: null, slateOpens: null, slateShare: null,
 };
 
@@ -82,6 +83,7 @@ beforeAll(async () => {
     observed.proposal = await attempt('workspace-proposal', () => agentProposesAWorkspace(target));
     observed.accountMemory = await attempt('account-memory', () => accountMemoryCrossesWorkspaces(target));
     observed.stackMemory = await attempt('stack-memory', () => accountMemoryInTheStack(target));
+    observed.splice = await attempt('splice', () => spliceSitsWhereItWasRead(target));
     observed.approvals = await attempt('approval-stack', () => approvalsStackAtTheComposer(target));
     observed.hireApproval = await attempt('hire-approval', () => hireParksAndRunsOnApproval(target));
     observed.panel = await attempt('panel', () => rightPanelKeepsItsState(target));
@@ -146,6 +148,31 @@ describe("a fact about the owner said in one workspace is every workspace's once
 
   test("a request without the owner's session reads none of it", () => {
     expect([401, 403]).toContain(verdictOf(observed.accountMemory, 'account-memory').viewerStatus);
+  });
+});
+
+describe('what reaches the agent while it answers sits where it was read, amber until read, green after', () => {
+  const ordered = (order: readonly number[]) => order.every((at) => at >= 0) && order.every((at, i) => i === 0 || at > (order[i - 1] ?? -1));
+
+  test('while the agent works, the card waits amber', () => {
+    const { waited } = verdictOf(observed.splice, 'splice');
+
+    expect(waited.tone).toBe('p-warning');
+    expect(['pending', 'shown']).toContain(waited.state ?? 'none');
+  });
+
+  test('once read, it sits inside the answer between the words before it and the answer after it, green', () => {
+    const { answered } = verdictOf(observed.splice, 'splice');
+
+    expect({ spliced: answered.spliced, state: answered.state, tone: answered.tone, ordered: ordered(answered.order) })
+      .toEqual({ spliced: true, state: 'seen', tone: 'p-success', ordered: true });
+  });
+
+  test('a reload draws it there still', () => {
+    const { reloaded } = verdictOf(observed.splice, 'splice');
+
+    expect({ spliced: reloaded.spliced, state: reloaded.state, tone: reloaded.tone, ordered: ordered(reloaded.order) })
+      .toEqual({ spliced: true, state: 'seen', tone: 'p-success', ordered: true });
   });
 });
 
