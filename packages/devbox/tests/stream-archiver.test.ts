@@ -8,6 +8,7 @@ import { basename, dirname, join } from 'node:path';
 import { DEVBOX_RUNTIME_DIR } from '../src/storage';
 import { type StreamProfile, streamCommand } from '../src/stream-archive';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
+import { runToExit } from '../../test-utils/src/spawn';
 
 const root = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}archiver-`));
 
@@ -72,13 +73,13 @@ async function publish(source: string, url: string, archiver: (product: string) 
   return { code: stdout.split(' ')[0], stderr };
 }
 
-function listing(squashfs: Uint8Array | undefined, label: string): string {
+async function listing(squashfs: Uint8Array | undefined, label: string): Promise<string> {
   if (squashfs === undefined) return 'no object';
   const path = join(root, `${label}.sqsh`);
   writeFileSync(path, squashfs);
-  const listed = Bun.spawnSync(['unsquashfs', '-lls', path]);
+  const listed = await runToExit(['unsquashfs', '-lls', path]);
 
-  return listed.stdout.toString().split('\n').filter((line) => line.includes('squashfs-root')).map((line) => line.replace(/^\S+ \S+ +/, '')).sort().join('\n');
+  return listed.stdout.split('\n').filter((line) => line.includes('squashfs-root')).map((line) => line.replace(/^\S+ \S+ +/, '')).sort().join('\n');
 }
 
 test('an archiver that fails mid-stream and removes its output is reported in its own words, not the upload\'s', async () => {
@@ -129,10 +130,10 @@ test('small files that duplicate ones already uploaded stream like any others', 
   await target.stop();
 
   const direct = join(root, 'duplicates-direct.sqsh');
-  Bun.spawnSync(['mksquashfs', source, direct, '-noappend', '-comp', 'zstd', '-no-progress']);
+  await runToExit(['mksquashfs', source, direct, '-noappend', '-comp', 'zstd', '-no-progress']);
 
-  expect({ ...published, tree: listing(target.object(), 'duplicates') })
-    .toEqual({ code: '0', stderr: '', tree: listing(new Uint8Array(await Bun.file(direct).arrayBuffer()), 'duplicates-direct') });
+  expect({ ...published, tree: await listing(target.object(), 'duplicates') })
+    .toEqual({ code: '0', stderr: '', tree: await listing(new Uint8Array(await Bun.file(direct).arrayBuffer()), 'duplicates-direct') });
 });
 
 test('an input that fails after part of its tar is reported in its own words, and no object is kept', async () => {

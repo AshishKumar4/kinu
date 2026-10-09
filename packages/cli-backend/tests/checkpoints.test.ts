@@ -134,12 +134,12 @@ describe('createHostCheckpoints', () => {
   test("the user's own .git repo is never snapshotted or touched", async () => {
     const { work, engine } = setup();
 
-    // `git()` clears every GIT_ var: a hook-exported GIT_DIR would redirect these calls to the developer's checkout.
-    git(work, 'init', '--quiet', '-b', 'main');
+    // `await git()` clears every GIT_ var: a hook-exported GIT_DIR would redirect these calls to the developer's checkout.
+    await git(work, 'init', '--quiet', '-b', 'main');
     writeFileSync(join(work, 'file.txt'), 'v1');
-    git(work, 'add', '-A');
-    git(work, '-c', 'user.email=u@x', '-c', 'user.name=u', 'commit', '-q', '-m', 'user commit');
-    const userHeadBefore = git(work, 'rev-parse', 'HEAD').trim();
+    await git(work, 'add', '-A');
+    await git(work, '-c', 'user.email=u@x', '-c', 'user.name=u', 'commit', '-q', '-m', 'user commit');
+    const userHeadBefore = (await git(work, 'rev-parse', 'HEAD')).trim();
 
     engine.beginTurn({ turnId: 't', sessionId: 's' });
     const id = present(await engine.ensureCheckpoint(work), 'the turn checkpoint id');
@@ -147,8 +147,8 @@ describe('createHostCheckpoints', () => {
     writeFileSync(join(work, 'file.txt'), 'v2');
     await engine.restore(work, id);
 
-    expect(git(work, 'rev-parse', 'HEAD').trim()).toBe(userHeadBefore);
-    const refs = git(work, 'for-each-ref');
+    expect((await git(work, 'rev-parse', 'HEAD')).trim()).toBe(userHeadBefore);
+    const refs = await git(work, 'for-each-ref');
     expect(refs).not.toContain('refs/kinu');
     const plan = await engine.plan(work, id);
 

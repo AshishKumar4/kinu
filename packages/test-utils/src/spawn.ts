@@ -74,6 +74,23 @@ function ran(cmd: readonly string[], options?: RunOptions): Effect.Effect<Exited
   return attempt({ doing: `running ${cmd[0] ?? 'a command'}`, otherwise: 'io' }, () => runToExit(cmd, options));
 }
 
+function ranOk(cmd: readonly string[], options?: RunOptions): Effect.Effect<string, KinuError> {
+  return Effect.gen(function* () {
+    const exited = yield* ran(cmd, options);
+
+    if (exited.exitCode !== 0) {
+      return yield* Effect.fail(new KinuError('io', `${cmd.join(' ')} exited ${String(exited.exitCode ?? exited.signalCode)}: ${exited.stderr}`));
+    }
+
+    return exited.stdout;
+  });
+}
+
+/** `execFileSync`'s shape without the synchronous wait: stdout, or a failure naming the exit and stderr. */
+export async function runOk(cmd: readonly string[], options?: RunOptions): Promise<string> {
+  return settle(ranOk(cmd, options));
+}
+
 /** The exit of `pidwait`, `pwait`, `ps -p` and `pgrep`. */
 const NONE_LEFT = 1;
 

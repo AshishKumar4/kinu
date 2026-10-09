@@ -84,7 +84,7 @@ function announce(subgoals: readonly EvalSubgoal[]): readonly EvalSubgoal[] {
   return subgoals;
 }
 
-afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
+afterAll(async () => { await publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
 
 /** What `createSubordinateAgent` answers with, read for the two identities
  *  the pane uses: the name its socket is addressed by, the actor id its

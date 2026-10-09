@@ -1,13 +1,12 @@
-import { spawnSync } from 'node:child_process';
+import { runToExit } from '../../../test-utils/src/spawn';
 
 const parsed = new Map<string, string | undefined>();
 
-export function shellSyntaxError(command: string): Error | undefined {
+export async function shellSyntaxError(command: string): Promise<Error | undefined> {
   if (!parsed.has(command)) {
-    const checked = spawnSync('bash', ['-n', '-c', command], { encoding: 'utf8' });
+    const checked = await runToExit(['bash', '-n', '-c', command]);
 
-    if (checked.error !== undefined) throw checked.error;
-    parsed.set(command, checked.status === 0 ? undefined : checked.stderr.trim() || `bash -n exited ${checked.status}`);
+    parsed.set(command, checked.exitCode === 0 ? undefined : checked.stderr.trim() || `bash -n exited ${checked.exitCode}`);
   }
 
   const refusal = parsed.get(command);
@@ -15,8 +14,8 @@ export function shellSyntaxError(command: string): Error | undefined {
   return refusal === undefined ? undefined : new Error(`container shell syntax: ${refusal}`);
 }
 
-export function requireShellAccepts(command: string): void {
-  const refused = shellSyntaxError(command);
+export async function requireShellAccepts(command: string): Promise<void> {
+  const refused = await shellSyntaxError(command);
 
   if (refused !== undefined) throw new Error(`${refused.message}\n${command}`, { cause: refused });
 }

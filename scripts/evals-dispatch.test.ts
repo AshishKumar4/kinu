@@ -1,19 +1,19 @@
 import { beforeAll, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { childEnv, scratchDir } from '@kinu.run/test-utils';
+import { childEnv, runToExit, scratchDir } from '@kinu.run/test-utils';
 
 const SCRIPT = join(import.meta.dir, 'evals-dispatch.ts');
 
 /** A git that reads no config but the fixture's: no hooks, no signing, no ambient identity. */
-function git(cwd: string, ...args: string[]): string {
-  const run = Bun.spawnSync([
+async function git(cwd: string, ...args: string[]): Promise<string> {
+  const run = await runToExit([
     'git', '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', '-c', 'user.name=fixture', '-c', 'user.email=fixture@kinu.run', ...args,
-  ], { cwd, stdout: 'pipe', stderr: 'pipe', env: childEnv({ GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }) });
+  ], { cwd, env: childEnv({ GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }) });
 
-  if (run.exitCode !== 0) throw new Error(`git ${args.join(' ')}: ${run.stderr.toString()}`);
+  if (run.exitCode !== 0) throw new Error(`git ${args.join(' ')}: ${run.stderr}`);
 
-  return run.stdout.toString().trim();
+  return run.stdout.trim();
 }
 
 /** GitHub's side, which this suite cannot reach: a `gh` that writes down what it was asked and starts run 4242. */
@@ -32,44 +32,45 @@ const bin = join(root, 'bin');
 
 const builds = { deployed: '', unreleased: '' };
 
-beforeAll(() => {
-  git(root, 'init', '--bare', '-b', 'main', 'origin.git');
-  git(root, 'init', '-b', 'main', 'work');
-  git(work, 'remote', 'add', 'origin', join(root, 'origin.git'));
-  git(work, 'commit', '--allow-empty', '-m', 'the deployed build');
-  builds.deployed = git(work, 'rev-parse', '--short', 'HEAD');
-  git(work, 'push', '-q', 'origin', 'main', 'main:integration/0965');
-  git(work, 'checkout', '-q', '-b', 'integration/0965');
-  git(work, 'commit', '--allow-empty', '-m', 'merged while it deployed');
-  builds.unreleased = git(work, 'rev-parse', '--short', 'HEAD');
-  git(work, 'push', '-q', 'origin', 'integration/0965');
+beforeAll(async () => {
+  await git(root, 'init', '--bare', '-b', 'main', 'origin.git');
+  await git(root, 'init', '-b', 'main', 'work');
+  await git(work, 'remote', 'add', 'origin', join(root, 'origin.git'));
+  await git(work, 'commit', '--allow-empty', '-m', 'the deployed build');
+  builds.deployed = await git(work, 'rev-parse', '--short', 'HEAD');
+  await git(work, 'push', '-q', 'origin', 'main', 'main:integration/0965');
+  await git(work, 'checkout', '-q', '-b', 'integration/0965');
+  await git(work, 'commit', '--allow-empty', '-m', 'merged while it deployed');
+  builds.unreleased = await git(work, 'rev-parse', '--short', 'HEAD');
+  await git(work, 'push', '-q', 'origin', 'integration/0965');
   mkdirSync(bin);
   writeFileSync(join(bin, 'gh'), STAND_IN_GH, { mode: 0o755 });
 });
 
-function dispatchFor(build: string) {
+async function dispatchFor(build: string) {
   const log = join(root, `gh-${build}.log`);
 
-  const run = Bun.spawnSync([process.execPath, SCRIPT, build], {
-    cwd: work, stdout: 'pipe', stderr: 'pipe', env: childEnv({ PATH: `${bin}:${process.env.PATH ?? ''}`, GH_LOG: log }),
+  const run = await runToExit([process.execPath, SCRIPT, build], {
+    cwd: work,
+    env: childEnv({ PATH: `${bin}:${process.env.PATH ?? ''}`, GH_LOG: log }),
   });
 
-  return { status: run.exitCode, stdout: run.stdout.toString().trim(), asked: existsSync(log) ? readFileSync(log, 'utf8') : '' };
+  return { status: run.exitCode, stdout: run.stdout.trim(), asked: existsSync(log) ? readFileSync(log, 'utf8') : '' };
 }
 
 // The `eval` environment releases its secrets to main alone: run 37723534351, dispatched from integration/0965 where
 // both branches stood at the build, had both legs refused before a step ran.
 describe('the evals of a staging build start from main', () => {
-  test('a build main holds is dispatched from main, though a release branch stands at it too', () => {
-    const { status, stdout, asked } = dispatchFor(builds.deployed);
+  test('a build main holds is dispatched from main, though a release branch stands at it too', async () => {
+    const { status, stdout, asked } = await dispatchFor(builds.deployed);
 
     expect([status, stdout]).toEqual([0, '4242 https://github.com/o/r/actions/runs/4242']);
     expect(asked).toContain('-f ref=main');
     expect(asked).toContain(`-f inputs[build]=${builds.deployed}`);
   });
 
-  test('a build main does not hold is not dispatched, and the refusal names it', () => {
-    const { status, stdout, asked } = dispatchFor(builds.unreleased);
+  test('a build main does not hold is not dispatched, and the refusal names it', async () => {
+    const { status, stdout, asked } = await dispatchFor(builds.unreleased);
 
     expect(status).toBe(1);
     expect(stdout).toContain(builds.unreleased);

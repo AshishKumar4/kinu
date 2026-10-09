@@ -23,11 +23,10 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import * as v from 'valibot';
-import { git, gitEnv, initRepo, scratchDir } from '@kinu.run/test-utils';
+import { git, gitEnv, initRepo, runToExit, scratchDir } from '@kinu.run/test-utils';
 import {
   ALLOWED_PREFIXES, BLIND_SPOTS, GENERATED_SUBJECT, MESSAGE_LINE_CEILING, NAMES_WITHOUT_CODE,
   NARRATION, ROSTER, type Rule, SUBJECT_CEILING, cleanMessage, codeIdentifierTest,
@@ -435,47 +434,47 @@ describe('the message git hands the hook is cleaned the way git cleans it', () =
 describe('the hook judges the message git will store', () => {
   /** A merge of five conflicting files, resolved and staged, in a repository
    *  whose commit-msg hook is this gate. */
-  const conflictedMerge = (): string => {
+  const conflictedMerge = async (): Promise<string> => {
     const repo = scratchDir('commit-hygiene-merge');
     const files = ['a', 'b', 'c', 'd', 'e'].map((name) => `${name}.txt`);
     const write = (text: string): void => { for (const file of files) writeFileSync(join(repo, file), text); };
 
-    initRepo(repo);
+    await initRepo(repo);
     write('base\n');
-    git(repo, 'add', '.');
-    git(repo, 'commit', '-qm', 'chore(repo): seed');
-    git(repo, 'switch', '-qc', 'side');
+    await git(repo, 'add', '.');
+    await git(repo, 'commit', '-qm', 'chore(repo): seed');
+    await git(repo, 'switch', '-qc', 'side');
     write('side\n');
-    git(repo, 'commit', '-qam', 'chore(repo): side');
-    git(repo, 'switch', '-q', '-');
+    await git(repo, 'commit', '-qam', 'chore(repo): side');
+    await git(repo, 'switch', '-q', '-');
     write('ours\n');
-    git(repo, 'commit', '-qam', 'chore(repo): ours');
-    expect(spawnSync('git', ['-C', repo, 'merge', 'side'], { env: gitEnv() }).status).toBe(1);
+    await git(repo, 'commit', '-qam', 'chore(repo): ours');
+    expect((await runToExit(['git', '-C', repo, 'merge', 'side'], { env: gitEnv() })).exitCode).toBe(1);
     write('resolved\n');
-    git(repo, 'add', '.');
+    await git(repo, 'add', '.');
     writeFileSync(join(repo, '.git', 'hooks', 'commit-msg'),
       `#!/bin/sh\nexec bun ${join(import.meta.dir, 'commit-hygiene.ts')} "$1"\n`, { mode: 0o755 });
 
     return repo;
   };
 
-  test('a --no-edit merge keeps its # Conflicts: list, so the hook counts it and refuses', () => {
+  test('a --no-edit merge keeps its # Conflicts: list, so the hook counts it and refuses', async () => {
     // 2026-09-23: git opened no editor and stored the list; the hook had read the
     // message with every `#` line gone and passed it, and the history tier
     // refused the stored message at the next commit.
-    const repo = conflictedMerge();
-    const commit = spawnSync('git', ['-C', repo, 'commit', '--no-edit'], { env: gitEnv(), encoding: 'utf8' });
+    const repo = await conflictedMerge();
+    const commit = await runToExit(['git', '-C', repo, 'commit', '--no-edit'], { env: gitEnv() });
 
-    expect(commit.status).toBe(1);
+    expect(commit.exitCode).toBe(1);
     expect(commit.stderr + commit.stdout).toContain('message-size');
   });
 
-  test('from an editor git drops the list, the hook agrees, and the stored message passes as history', () => {
-    const repo = conflictedMerge();
-    const commit = spawnSync('git', ['-C', repo, 'commit'], { env: { ...gitEnv(), GIT_EDITOR: 'true' }, encoding: 'utf8' });
+  test('from an editor git drops the list, the hook agrees, and the stored message passes as history', async () => {
+    const repo = await conflictedMerge();
+    const commit = await runToExit(['git', '-C', repo, 'commit'], { env: { ...gitEnv(), GIT_EDITOR: 'true' } });
 
-    expect(commit.status).toBe(0);
-    expect(sizeViolations(git(repo, 'log', '-1', '--format=%B'))).toEqual([]);
+    expect(commit.exitCode).toBe(0);
+    expect(sizeViolations(await git(repo, 'log', '-1', '--format=%B'))).toEqual([]);
   });
 });
 
@@ -519,53 +518,53 @@ describe('the identifier allowlist is derived from code, not from prose', () => 
  * verdict, and no assertion pinned to real SHAs survives the next cutover — which
  * is the same rot this fix exists to remove.
  */
-function cutoverRepo() {
+async function cutoverRepo() {
   const repo = scratchDir('commit-hygiene-provenance');
-  initRepo(repo);
+  await initRepo(repo);
   mkdirSync(join(repo, 'src'), { recursive: true });
   writeFileSync(join(repo, 'src/delta.ts'), 'export type DeltaManifestV2 = { ops: string[] };\n');
   writeFileSync(join(repo, 'src/read.ts'), "import type { DeltaManifestV2 } from './delta';\n"
     + 'export const rows = (m: DeltaManifestV2): string[] => m.ops;\n');
-  git(repo, 'add', 'src/delta.ts', 'src/read.ts');
-  git(repo, 'commit', '-qm', 'feat(delta): one manifest schema\n\n'
+  await git(repo, 'add', 'src/delta.ts', 'src/read.ts');
+  await git(repo, 'commit', '-qm', 'feat(delta): one manifest schema\n\n'
     + "Rows take their type from DeltaManifestV2['ops'][number] rather than restating it, "
     + 'and SealSideDoor is a name no tree here declares.');
-  const cited = git(repo, 'rev-parse', 'HEAD').trim();
+  const cited = (await git(repo, 'rev-parse', 'HEAD')).trim();
   rmSync(join(repo, 'src/delta.ts'));
   writeFileSync(join(repo, 'src/read.ts'), 'export const rows = (ops: string[]): string[] => ops;\n');
-  git(repo, 'add', '-A');
-  git(repo, 'commit', '-qm', 'refactor(delta): retire the manifest schema');
+  await git(repo, 'add', '-A');
+  await git(repo, 'commit', '-qm', 'refactor(delta): retire the manifest schema');
 
-  return { repo, cited, deletion: git(repo, 'rev-parse', 'HEAD').trim() };
+  return { repo, cited, deletion: (await git(repo, 'rev-parse', 'HEAD')).trim() };
 }
 
 describe('a historical message is judged against the tree it shipped', () => {
-  test('a type deleted AFTER the commit that cites it is still code at that commit', () => {
+  test('a type deleted AFTER the commit that cites it is still code at that commit', async () => {
     // The defect, at full size: `DeltaManifestV2` is declared at `cited`, gone at
     // `deletion`, and judging the older message against the newer tree turns a
     // correct citation into a colleague being credited by name.
-    const { repo, cited, deletion } = cutoverRepo();
+    const { repo, cited, deletion } = await cutoverRepo();
     expect(committedIdentifierTest(repo, cited)('DeltaManifestV2')).toBe(true);
     expect(committedIdentifierTest(repo, deletion)('DeltaManifestV2')).toBe(true);
-    const message = git(repo, 'log', '-1', '--format=%B', cited).trim();
+    const message = (await git(repo, 'log', '-1', '--format=%B', cited)).trim();
     expect(inspect(message, committedIdentifierTest(repo, cited))).toEqual([]);
   });
 
-  test('a name no tree ever declared is still refused at its own commit', () => {
+  test('a name no tree ever declared is still refused at its own commit', async () => {
     // The half that must stay red. Provenance widens WHICH tree answers; it must
     // not widen the answer, or every subagent name passes once its commit ages.
-    const { repo, cited } = cutoverRepo();
+    const { repo, cited } = await cutoverRepo();
     const at = committedIdentifierTest(repo, cited);
     expect(at('SealSideDoor')).toBe(false);
     expect(inspect("fix(x): land it\n\nSealSideDoor's finding is folded in.", at)
       .map((violation) => violation.rule)).toEqual(['named-actor']);
   });
 
-  test('a commit may name what it REMOVES: the deletion commit spans its parent', () => {
+  test('a commit may name what it REMOVES: the deletion commit spans its parent', async () => {
     // `5c6498516`'s body quotes `FacetIdentity`, the type it deletes, so its own
     // tree does not hold it. Post-state alone is the live-tree error one commit
     // narrower, and it is why the parents are asked too.
-    const { repo, deletion } = cutoverRepo();
+    const { repo, deletion } = await cutoverRepo();
     expect(committedIdentifierTest(repo, deletion)('DeltaManifestV2')).toBe(true);
     expect(committedIdentifierTest(repo, deletion)('SealSideDoor')).toBe(false);
   });
@@ -585,21 +584,21 @@ describe('a historical message is judged against the tree it shipped', () => {
 describe('history mode refuses a clone that has no history, and says how to get one', () => {
   /** `cutoverRepo`'s two commits, cloned at depth 1 — what `actions/checkout@v4`
    *  produces by default, reproduced rather than described. */
-  const shallowClone = (): string => {
-    const { repo } = cutoverRepo();
+  const shallowClone = async (): Promise<string> => {
+    const { repo } = await cutoverRepo();
     const clone = join(scratchDir('commit-hygiene-shallow'), 'clone');
-    git(repo, 'clone', '-q', '--depth', '1', `file://${repo}`, clone);
+    await git(repo, 'clone', '-q', '--depth', '1', `file://${repo}`, clone);
 
     return clone;
   };
 
-  test('a depth-1 clone is refused, naming both ways to supply the history', () => {
+  test('a depth-1 clone is refused, naming both ways to supply the history', async () => {
     // Not a green badge over zero commits, and not the raw
     // `fatal: ambiguous argument 'HEAD^..HEAD'` this used to die on: a shallow
     // clone reports HEAD as the commit that ADDED this file, so the governed
     // range collapses and `commitsFrom` asks git for a parent it does not have.
-    const clone = shallowClone();
-    expect(git(clone, 'rev-parse', '--is-shallow-repository').trim()).toBe('true');
+    const clone = await shallowClone();
+    expect((await git(clone, 'rev-parse', '--is-shallow-repository')).trim()).toBe('true');
     const refusal = truncatedHistoryRefusal(clone);
     expect(refusal).toBeDefined();
     expect(refusal?.fix).toContain('git fetch --unshallow');
@@ -607,27 +606,27 @@ describe('history mode refuses a clone that has no history, and says how to get 
     expect(refusal?.silently).toContain('zero commits');
   });
 
-  test('a full clone is not refused, and neither is an empty governed range', () => {
+  test('a full clone is not refused, and neither is an empty governed range', async () => {
     // The control that keeps this from becoming "refuse everything". Emptiness is
     // legitimate — `boundary..HEAD` is empty right after the gate lands — so the
     // refusal is keyed on TRUNCATION, and a one-commit repository that is not a
     // shallow clone passes.
-    const { repo } = cutoverRepo();
+    const { repo } = await cutoverRepo();
     expect(truncatedHistoryRefusal(repo)).toBeUndefined();
     const fresh = scratchDir('commit-hygiene-fresh');
-    initRepo(fresh);
+    await initRepo(fresh);
     writeFileSync(join(fresh, 'only.ts'), 'export const only = 1;\n');
-    git(fresh, 'add', 'only.ts');
-    git(fresh, 'commit', '-qm', 'chore(repo): seed');
+    await git(fresh, 'add', 'only.ts');
+    await git(fresh, 'commit', '-qm', 'chore(repo): seed');
     expect(truncatedHistoryRefusal(fresh)).toBeUndefined();
   });
 
-  test('the shallow clone still answers the current-tree question the hook asks', () => {
+  test('the shallow clone still answers the current-tree question the hook asks', async () => {
     // The other boundary. `commit-msg` reads the working tree and the message
     // file and asks the history nothing, so a shallow checkout must still be able
     // to commit — a gate that blocks committing in the clone CI hands you would
     // be worse than the defect.
-    const clone = shallowClone();
+    const clone = await shallowClone();
 
     const live = codeIdentifierTest(new Map([
       ['src/read.ts', readFileSync(join(clone, 'src/read.ts'), 'utf8')],

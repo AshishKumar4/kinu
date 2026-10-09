@@ -1,12 +1,12 @@
 // Which layers a save takes in (D77), and the changes a merged layer is cut from, run on this host.
 import { afterAll, expect, test } from 'bun:test';
-import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { levelsAfter, mergeListsCommand } from '../src/disk-delta';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
+import { runToExit } from '../../test-utils/src/spawn';
 
 const root = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}levels-`));
 
@@ -56,7 +56,7 @@ const paths = (file: string) => readFileSync(file, 'utf8').split('\0').filter((p
 
 // A merged layer answers for every path any of its layers or this save touched: what is here now is written as it is,
 // and what is gone is whited out, whichever layer last touched it.
-test('a merged layer\'s changes are every path its layers or this save touched, split by what is here now', () => {
+test('a merged layer\'s changes are every path its layers or this save touched, split by what is here now', async () => {
   const changes = join(root, 'changes');
   const inventory = join(root, 'inventory');
 
@@ -65,7 +65,7 @@ test('a merged layer\'s changes are every path its layers or this save touched, 
   writeFileSync(join(root, 'older'), nul(['src/old', 'tmp', 'tmp/x', 'back']));
   writeFileSync(join(root, 'newer'), nul(['back', 'gone/file']));
   writeFileSync(inventory, nul(['back\tf\t2\t1.0\t644\t', 'src\td\t0\t1.0\t755\t', 'src/now\tf\t3\t1.0\t644\t', 'src/old\tf\t1\t1.0\t644\t']));
-  const ran = spawnSync('bash', ['-c', mergeListsCommand(changes, inventory, [join(root, 'older'), join(root, 'newer')])], { encoding: 'utf8' });
+  const ran = await runToExit(['bash', '-c', mergeListsCommand(changes, inventory, [join(root, 'older'), join(root, 'newer')])]);
 
   expect(ran.stderr).toBe('');
   expect([paths(`${changes}.changed`), paths(`${changes}.deleted`)]).toEqual([['back', 'src/now', 'src/old'], ['gone/file', 'tmp', 'tmp/x']]);

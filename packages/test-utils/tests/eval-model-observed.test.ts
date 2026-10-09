@@ -149,8 +149,8 @@ describe('publishRunRecord — the record carries the observed model', () => {
   ];
 
   for (const published of publishCases) {
-    test(published.name, () => {
-      const record = publishRunRecord({
+    test(published.name, async () => {
+      const record = await publishRunRecord({
         family: 'test', tier: 'scripted', modelId: published.modelId, modelObserved: published.observed,
         repeats: 1, seed: 1,
         arm: { evolution: false, settle: 'none', tools: [] },

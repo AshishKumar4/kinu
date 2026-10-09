@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { recipe, sh, task } from 'armada';
-import { gitEnv } from '../packages/test-utils/src/git';
+import { gitEnv } from '../packages/test-utils/src/git-env';
 
 const BLOCK_LOWER = join(import.meta.dirname, '..', 'packages/devbox/block-lower');
 

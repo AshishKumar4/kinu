@@ -243,6 +243,10 @@ const BOUNDARY: ReadonlyArray<{
   // plain receiver still fire.
   { file: "b17.test.ts", code: "exec('git clone https://x');", caught: true },
   { file: "b18.test.ts", code: "child_process.execSync('git status');", caught: true },
+  // The test-utils spawners every suite moved to when `no-sync-spawn` took in tests.
+  { file: "b19.test.ts", code: "await runToExit(['git', 'merge', 'side'], { cwd: repo });", caught: true },
+  { file: "b20.test.ts", code: "await runOk(['git', 'status']);", caught: true },
+  { file: "b21.test.ts", code: "spawnTest(['git', 'fetch'], { cwd: repo });", caught: true },
 
   // Green states: the environment is named, so the author has thought about it.
   { file: "g01.test.ts", code: "execFileSync('git', ['status'], { cwd: repo, env: gitEnv() });", caught: false },
@@ -258,6 +262,7 @@ const BOUNDARY: ReadonlyArray<{
   // A `.exec(…)` on a call result is a method on an in-process API object — the hosted workspace
   // shell is isomorphic-git over SQLite, with no child process behind it — never a spawn.
   { file: "g09.test.ts", code: "hosted.box('red').exec('git clone https://x');", caught: false },
+  { file: "g10.test.ts", code: "await runToExit(['git', '-C', repo, 'merge', 'side'], { env: gitEnv() });", caught: false },
 
   // Known missed, deliberately. Each needs resolution this rule does not do.
   { file: "m01.test.ts", code: "const bin = 'git';\nspawnSync(bin, ['status'], { cwd: repo });", caught: false },

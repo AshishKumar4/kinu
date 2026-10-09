@@ -95,7 +95,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-import { gitEnv } from '../packages/test-utils/src/git';
+import { gitEnv } from '../packages/test-utils/src/git-env';
 import { isProductSource, isRunnableSuite, readMatching, trackedFiles } from './sources';
 import {
   functionOwner, isFunctionLike, moduleSpecifiers, ownerName, parse, walk,

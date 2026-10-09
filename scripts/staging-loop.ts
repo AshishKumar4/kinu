@@ -93,9 +93,9 @@ export interface LoopInput {
   /** The last tip deployed, kept between runs. */
   readonly stateFile: string;
   /** Runs the deploy in `worktree` and answers its exit status. */
-  readonly deploy: (worktree: string) => number;
+  readonly deploy: (worktree: string) => number | Promise<number>;
   /** Returns once no deploy of the environment holds its lock. */
-  readonly waitForDeploys: () => void;
+  readonly waitForDeploys: () => void | Promise<void>;
 }
 
 function readState(file: string): string {
@@ -115,7 +115,7 @@ function checkout(worktree: string, tip: string): void {
 }
 
 /** Deploys the newest tip until the last one deployed is the tip; answers the tips it deployed, in order. */
-export function runLoop(input: LoopInput): string[] {
+export async function runLoop(input: LoopInput): Promise<string[]> {
   const deployed: string[] = [];
 
   for (;;) {
@@ -126,9 +126,9 @@ export function runLoop(input: LoopInput): string[] {
     input.prepare(input.worktree);
     console.log(`staging-loop: deploying ${tip} of origin/${input.branch}`);
 
-    if (input.deploy(input.worktree) === DEPLOY_BUSY) {
+    if (await input.deploy(input.worktree) === DEPLOY_BUSY) {
       console.log('staging-loop: another staging deploy is running; waiting for it, then reading the tip again');
-      input.waitForDeploys();
+      await input.waitForDeploys();
       continue;
     }
 
@@ -149,9 +149,9 @@ export interface PromoteInput {
   /** The build sha production serves, as its `/api/health` names it; empty when it names none. */
   readonly productionBuild: () => Promise<string>;
   /** `promote.ts check` in `worktree`: 0 once staging's record and the evals' green Verdict are both there. */
-  readonly verified: (worktree: string) => number;
+  readonly verified: (worktree: string) => number | Promise<number>;
   /** `deploy.sh --promote` in `worktree`, and its exit status. */
-  readonly promote: (worktree: string) => number;
+  readonly promote: (worktree: string) => number | Promise<number>;
 }
 
 /** One round: the last staged tip promoted, once verified and if never tried; answers what the round did. */
@@ -167,8 +167,8 @@ export async function promoteRound(input: PromoteInput): Promise<string> {
   checkout(input.worktree, staged);
   input.prepare(input.worktree);
 
-  if (input.verified(input.worktree) !== 0) return `${staged} is not verified yet`;
-  const status = input.promote(input.worktree);
+  if (await input.verified(input.worktree) !== 0) return `${staged} is not verified yet`;
+  const status = await input.promote(input.worktree);
 
   if (status === DEPLOY_BUSY) return 'another production deploy is running';
   // Never tried again, red or green: a red one stays as its report left it, and the next verified tip deploys forward.
@@ -334,7 +334,7 @@ if (import.meta.main) {
       promote: (where) => inWorktree(where, ['bash', 'scripts/deploy.sh', '--promote']),
     })}`);
   } else {
-    const deployed = runLoop({
+    const deployed = await runLoop({
       branch,
       worktree,
       stateFile: stateOf('staging-loop', branch),

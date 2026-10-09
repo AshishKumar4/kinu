@@ -4,7 +4,6 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -13,6 +12,7 @@ import {
   KinuError,
   toKinuError,
 } from '../src/obs/index';
+import { runToExit } from '@kinu.run/test-utils';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -32,17 +32,12 @@ interface CompileReport {
 }
 
 /** Uses the repo's `node_modules/.bin/tsc`, the binary `bun run check` runs. */
-function compileFixtures(): CompileReport {
+async function compileFixtures(): Promise<CompileReport> {
   const tsc = join(repoRoot, 'node_modules', '.bin', 'tsc');
 
-  const run = spawnSync(tsc, ['--noEmit', '--pretty', 'false', '-p', fixtureProject], {
+  const run = await runToExit([tsc, '--noEmit', '--pretty', 'false', '-p', fixtureProject], {
     cwd: repoRoot,
-    encoding: 'utf8',
   });
-
-  if (run.error) {
-    throw new Error(`could not run ${tsc}`, { cause: run.error });
-  }
 
   const output = `${run.stdout}${run.stderr}`;
   const diagnostics: Diagnostic[] = [];
@@ -54,7 +49,7 @@ function compileFixtures(): CompileReport {
     diagnostics.push({ file: match[1], line: Number.parseInt(match[2], 10), text: match[3] });
   }
 
-  return { status: run.status ?? -1, diagnostics };
+  return { status: run.exitCode ?? -1, diagnostics };
 }
 
 /** Lines come from the fixture's `[N]` markers, so renumbering cannot detach an assertion. */
@@ -76,7 +71,7 @@ function markedLines(file: string): ReadonlyMap<number, number> {
   return byCase;
 }
 
-const compiled = compileFixtures();
+const compiled = await compileFixtures();
 
 describe('a log call carrying a secret does not compile', () => {
   test('the fixture project fails to compile at all', () => {
