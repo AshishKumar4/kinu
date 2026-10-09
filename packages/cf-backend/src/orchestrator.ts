@@ -2311,8 +2311,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   protected override async hostedAdmit(actorId: string, input: { readonly text: string; readonly files: readonly PromptFile[]; readonly id: string; readonly mode: WorkMode }): Promise<void> {
-    await whenActorTakesInput(this.boundSql, actorId, () => this.handInput(actorId,
-      async () => { await (await this.agentCalls(actorId)).admit(this.agentSnapshot(actorId), { text: input.text, files: input.files }, { id: input.id, mode: input.mode }); }));
+    await this.takeWords(actorId, async () => {
+      await (await this.agentCalls(actorId)).admit(this.agentSnapshot(actorId), { text: input.text, files: input.files }, { id: input.id, mode: input.mode });
+    });
+  }
+
+  /** The owner's words to an agent. Main's wait out a turn this workspace's inbox is already handing it (its genesis
+   *  offer, a signal's turn): they reach its isolate behind that turn, and ride it rather than overtake it. */
+  private async takeWords<A>(actorId: string, hand: () => Promise<A>): Promise<A> {
+    if (actorId === this.actorHandle().actorId) await this.orch.inbox.handedOver();
+
+    return await whenActorTakesInput(this.boundSql, actorId, () => this.handInput(actorId, hand));
   }
 
   /** Armed before the words cross, and again once the agent took them: an answer it sent before taking them may have
@@ -2394,8 +2403,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       broadcast: (message, exclude) => { this.broadcastToActor(room, message, exclude); },
       history: (limit) => this.agentStores(actorId).history(limit),
       admitted: (id) => this.agentStores(actorId).admitted(id),
-      send: (input) => whenActorTakesInput(this.boundSql, actorId, () => this.handInput(actorId,
-        async () => await (await facet()).send(snapshot(), { text: input.text, files: input.files }, { id: input.id, mode: input.mode }))),
+      send: (input) => this.takeWords(actorId, async () => await (await facet()).send(snapshot(), { text: input.text, files: input.files }, { id: input.id, mode: input.mode })),
       retry: (claim) => whenActorTakesInput(this.boundSql, actorId, async () => await (await facet()).retry(snapshot(), claim)),
       interrupt: () => {
         this.detachOwned(Effect.promise(() => this.agentTurns.interrupt(actorId)));

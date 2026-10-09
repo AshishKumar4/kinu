@@ -305,6 +305,11 @@ export class Inbox implements AgentInbox {
     return this.starting !== null || this.host.turnInFlight();
   }
 
+  /** Settles once the turn being started has reached its host, however the host answered. */
+  async handedOver(): Promise<void> {
+    await Promise.allSettled([this.starting]);
+  }
+
   /**
    * The busy read and buffer push are synchronous. A signal with `idempotencyKey` derives its card id from it,
    * so a collapsed re-delivery never opens a second, forever-pending card.
