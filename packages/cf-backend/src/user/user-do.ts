@@ -81,6 +81,7 @@ export class UserDO extends Agent<Env> {
     ctx: this.ctx, env: this.env,
     sqlx: (query, ...bindings) => this.sqlx(query, ...bindings),
     requireTier: (caller, capability) => this.requireTier(caller, capability),
+    sessionStands: (tokenHash) => this.sessions.sessionStands(tokenHash),
   };
 
   private readonly credentials = new UserCredentials({ ...this.host, setConfig: (caller, key, value) => this.profile.setConfig(caller, key, value) });

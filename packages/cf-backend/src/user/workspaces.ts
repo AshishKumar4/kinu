@@ -43,7 +43,7 @@ class WorkspaceReservationNotPendingError extends Error {
   }
 }
 
-export interface UserWorkspacesHost extends Pick<UserObjectHost, 'ctx' | 'env' | 'requireTier' | 'sqlx'> {
+export interface UserWorkspacesHost extends Pick<UserObjectHost, 'ctx' | 'env' | 'requireTier' | 'sqlx' | 'sessionStands'> {
   readonly mcpServers: Pick<UserMcpServers, 'stopWorkspaceMcpCalls'>;
   /** Brings a workspace's share recipients to the shares its overview names. */
   readonly shareCards: Pick<ShareCardJobs, 'reconcile'>;
@@ -160,7 +160,7 @@ export class UserWorkspaces {
 
     if (sockets.length === 0) return;
     const sql = this.host.ctx.storage.sql;
-    sendRosterFrame(sockets, { type: 'workspace', name, entry: rosterRow(sql, name), counts: rosterCounts(sql) });
+    sendRosterFrame(sockets, { type: 'workspace', name, entry: rosterRow(sql, name), counts: rosterCounts(sql) }, this.host.sessionStands);
   }
 
   /** A repeat writes and sends nothing. */
