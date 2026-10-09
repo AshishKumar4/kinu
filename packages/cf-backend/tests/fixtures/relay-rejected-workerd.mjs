@@ -38,6 +38,7 @@ export class Client extends DurableObject {
       try { await session._rpcReady(); }
       catch (error) { failure = { code: error.code, name: error.name, message: error.message }; }
       const kept = await session._rpcReadFile('/kept');
+      session[Symbol.dispose]();
       return { failure, kept };
     }
     try {

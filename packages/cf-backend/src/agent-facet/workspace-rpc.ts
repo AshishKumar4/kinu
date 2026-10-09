@@ -8,14 +8,16 @@ import type { AgentWorkspace } from './agent-turn';
  * awaiting a rejected RpcPromise leaves its pipeline open; disposing that promise closes the relay's Tail as ok.
  * Fulfilled answers can own live stubs or streams, so their disposer belongs to the consumer, not this adapter. */
 export function workspaceRpcAnswer<T>(pending: Promise<T>): Promise<T> {
-  return settle(Effect.promise(() => pending).pipe(Effect.onError(() => Effect.sync(() => {
-    // Worker RPC's Promise type omits this native method; ordinary in-isolate promises have no pipeline to release.
-    if (Symbol.dispose in pending) {
-      const dispose = pending[Symbol.dispose];
+  return settle(Effect.promise(() => pending).pipe(Effect.onError(() => Effect.sync(() => disposeWorkspaceRpc(pending)))));
+}
 
-      if (typeof dispose === 'function') dispose.call(pending);
-    }
-  }))));
+function disposeWorkspaceRpc<T>(pending: Promise<T>): void {
+  // Worker RPC's Promise type omits this native method; ordinary in-isolate promises have no pipeline to release.
+  if (Symbol.dispose in pending) {
+    const dispose = pending[Symbol.dispose];
+
+    if (typeof dispose === 'function') dispose.call(pending);
+  }
 }
 
 export interface AgentWorkspaceCalls extends Omit<AgentWorkspace, 'session' | 'stateSession' | 'memory'> {
@@ -27,6 +29,8 @@ export interface AgentWorkspaceCalls extends Omit<AgentWorkspace, 'session' | 's
 /** Nimbus opens a synchronous session surface; its methods first consume the factory's own RpcPromise. */
 class WorkspaceSession implements NimbusSessionSurface {
   constructor(private readonly pending: Promise<NimbusSessionSurface>) {}
+
+  [Symbol.dispose](): void { disposeWorkspaceRpc(this.pending); }
 
   private call<T>(run: (session: NimbusSessionSurface) => Promise<T>): Promise<T> {
     return workspaceRpcAnswer(this.pending).then(session => workspaceRpcAnswer(run(session)));
@@ -72,6 +76,8 @@ class WorkspaceSession implements NimbusSessionSurface {
 
 class ConsumedMemory implements Memory {
   constructor(private readonly pending: Promise<Memory>) {}
+
+  [Symbol.dispose](): void { disposeWorkspaceRpc(this.pending); }
 
   private call<T>(run: (memory: Memory) => Promise<T>): Promise<T> {
     return workspaceRpcAnswer(this.pending).then(memory => workspaceRpcAnswer(run(memory)));
