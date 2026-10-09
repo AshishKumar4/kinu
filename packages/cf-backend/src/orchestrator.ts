@@ -1030,7 +1030,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       slate: (actor, operation) => this.slateAs(
         { path: [{ name: actor.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, operation,
       ),
-      deferrals: () => this.deferralChannel(),
+      deferrals: (actorId) => this.deferralChannel(actorId),
       refinementLane: () => async () => { await refinementPass(this.refinementDeps); },
       advisorPort: (reference) => this.temporaryAgentPort(reference),
       chosenLoopOrigin: (record: WorkspaceActor) => this._chosenLoopOrigins.get(record.actorId) ?? null,
@@ -3150,14 +3150,19 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this._deferrals ??= new DeferredApprovalQueue({
       store: new DeferredApprovalStore(this.boundSql, this.actorHandle()),
       // Read through `this.orch` at delivery time, never captured: this getter is reachable
-      // from the runtime's own construction path.
-      inbox: { send: (signal) => this.orch.inbox.send(signal) },
+      // from the runtime's own construction path. A hire is woken on its own durable queue, as its jobs wake it.
+      wake: (actorId, signal) => (actorId === this.rt.actor.actorId
+        ? Effect.asVoid(attempt({ doing: 'waking the workspace agent with the owner\'s decision', otherwise: 'io' }, () => this.orch.inbox.send(signal)))
+        : Effect.asVoid(attempt({ doing: `waking ${actorId} with the owner's decision`, otherwise: 'io' }, () => this.enqueueHostedTurn(
+          this.actorHost().bindStores(actorReferenceOf(this.liveAgentOf(actorId))),
+          { text: signal.text, ...(signal.metadata !== undefined && { metadata: { ...signal.metadata } }) },
+        )))),
       // Same actor_config as the approval mode, read live by the gate on the next command.
       remember: (grants) => { this.config.grantShellApproval(grants); },
-      // A spent grant's row is deleted, so this event is the only durable record of consumption.
-      // Outside any turn it falls back to the workspace run.
+      // A spent grant's row is deleted, so this event is the only durable record of consumption, naming whose it
+      // was. A hire's, or the root's outside any turn, falls back to the workspace run: the root's turn is not theirs.
       audit: (record) => {
-        this.eventRecorder.emit(this._currentRunId || WORKSPACE_RUN_ID, {
+        this.eventRecorder.emit(record.actor === this.rt.actor.actorId && this._currentRunId ? this._currentRunId : WORKSPACE_RUN_ID, {
           type: 'approval_consumed', ...record,
         });
       },
@@ -3171,8 +3176,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this._deferrals;
   }
 
-  protected override deferralChannel(): DeferredApprovalChannel {
-    return this.deferrals.channel;
+  protected override deferralChannel(actorId?: string): DeferredApprovalChannel {
+    return actorId === undefined ? this.deferrals.channel : this.deferrals.channelFor(actorId);
   }
 
   private announceDeferral(notice: DeferredApprovalNotice): void {
