@@ -192,7 +192,12 @@ function accountsDeployment() {
         },
       },
       '/api/user/models': (request) => Response.json({ models: of(request).keys.has('opencode-go.bearer') ? [{ spec: MODEL }] : [], failures: [] }),
-      '/api/user/held-rows': (request) => Response.json({ user_credentials: of(request).keys.size, ...of(request).inherited }),
+      '/api/user/held-rows': (request) => {
+        const account = of(request);
+
+        return Response.json({ user_credentials: account.keys.size, ...account.inherited,
+          user_config: (account.inherited.user_config ?? 0) + Number(account.catalog.version > 0) });
+      },
       '/api/user/workspaces': (request) => Response.json({ entries: of(request).workspaces, nextCursor: null }),
       '/api/user/profile': (request) => {
         const account = request.headers.get('x-kinu-dev-identity-account');
@@ -240,6 +245,15 @@ describe('every trial account a run acts as', () => {
 
       expect(await provisionEvalProviderKeys(input)).toEqual({ stored: [], findings: [], trials: { given: 0, reset: [] }, notes: [] });
       expect(input.trialAccounts.map((name) => accounts.get(name)?.catalog.version)).toEqual([1, 1, 1]);
+
+      const configured = accounts.get('trial-1');
+
+      if (configured === undefined) throw new Error('the trial account was never reached');
+      configured.inherited = { user_config: 1 };
+      const cleaned = await provisionEvalProviderKeys(input);
+
+      expect(cleaned.trials?.reset).toEqual(['trial-1']);
+      expect(cleaned.findings).toEqual([]);
     } finally {
       await server.stop(true);
     }

@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { join } from 'node:path';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { runToExit, scratchDir } from '@kinu.run/test-utils';
 
 const REPO = join(import.meta.dirname, '../..');
@@ -29,4 +30,30 @@ test('every task file loads under the eval runner, as a run collects it', async 
   const output = `${run.stdout}${run.stderr}`;
 
   expect({ status: run.exitCode, failed: output.split('\n').filter((line) => /\bFAIL\b|Failed Suites/.test(line)) }).toEqual({ status: 0, failed: [] });
+});
+
+test('the reviewer can stage current product evidence before it asks a model', async () => {
+  const directory = scratchDir('eval-collection', join(REPO, 'bench-artifacts'));
+  const results = join(directory, 'results.json');
+  const comparison = join(directory, 'comparison.json');
+  const out = join(directory, 'reviews');
+  const task = `fixture-${crypto.randomUUID()}`;
+
+  writeFileSync(results, JSON.stringify({ testResults: [{ name: 'review-evidence.fixture', assertionResults: [{
+    ancestorTitles: [task], title: 'trial', status: 'failed', duration: 0,
+    meta: { harness: { run: {
+      session: { metadata: { taskId: task, taskVersion: 'fixture', evalCommit: 'fixture', productSha: 'fixture', arm: 'product', trial: 1 } },
+      usage: { model: 'fixture/no-provider' },
+      output: { turns: [], metrics: { modelTurns: 0, toolCalls: 0, toolErrors: 0, badInputCalls: 0, unknownToolCalls: 0, providerWaits: 0, providerWaitMs: 0 } },
+      errors: [],
+    } } },
+  }] }] }));
+  writeFileSync(comparison, '{}');
+
+  const run = await runToExit([process.execPath, 'evals/scripts/review.ts', '--results', results, '--comparison', comparison, '--out', out], {
+    cwd: REPO, env: { ...process.env, KINU_EVAL_ORIGIN: 'http://127.0.0.1:9' },
+  });
+
+  expect(run.exitCode, run.stderr).toBe(0);
+  expect(JSON.parse(readFileSync(join(out, 'review.json'), 'utf8'))).toMatchObject([{ task, trial: 1, review: null }]);
 });

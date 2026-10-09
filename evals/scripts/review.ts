@@ -24,7 +24,7 @@ const REPO = join(import.meta.dirname, '../..');
 const PRODUCT = [
   ...readdirSync(join(REPO, 'packages/core/src/prompts')).filter((name) => name.endsWith('.md')).map((name) => `packages/core/src/prompts/${name}`),
   ...readdirSync(join(REPO, 'packages/core/src/operations')).filter((name) => name.endsWith('.ts')).map((name) => `packages/core/src/operations/${name}`),
-  'packages/core/src/tools/registry.ts', 'packages/core/src/tools/tool-schema.ts', 'packages/core/src/tools/tool-error-feedback.ts',
+  'packages/core/src/tools/registry.ts', 'packages/core/src/tools/tool-schema.ts', 'packages/core/src/prompting/tool-error-feedback.ts',
   'packages/core/src/prompt.ts',
 ];
 
