@@ -978,7 +978,7 @@ export class ChatSession {
   }
 
   /** When the queue's head is a re-opened turn still inside its backoff, on a host whose wake can end it: that end. */
-  private reaskDeferredTo(): number | null {
+  reaskDeferredTo(): number | null {
     const reaskAt = this.queue[0]?.continuation?.reaskAt ?? null;
 
     return reaskAt !== null && this.ports.armTurnWake !== undefined && reaskAt > Date.now() ? reaskAt : null;
