@@ -557,11 +557,12 @@ describe('the plan review document, as a browser lays it out', () => {
  * The decision bar as drawn: each control's label on one line and nothing of it cut, and whether the two decisions sit
  * side by side. A control squeezed below its label wraps (two lines) or clips (its text wider than its box).
  */
-async function decisionBar(page: Page): Promise<{ controls: { label: string; lines: number; clipped: boolean }[]; sideBySide: boolean }> {
+async function decisionBar(page: Page): Promise<{ controls: { label: string; lines: number; clipped: boolean; spills: boolean }[]; sideBySide: boolean; width: number }> {
   await page.waitForSelector('[data-plan-decisions] button');
 
   return page.evaluate(() => {
     const footer = document.querySelector('[data-plan-footer]');
+    const bar = footer?.getBoundingClientRect();
     const buttons = [...(footer?.querySelectorAll('button') ?? [])].filter((button) => button.getClientRects().length > 0);
 
     const controls = buttons.map((button) => {
@@ -570,13 +571,17 @@ async function decisionBar(page: Page): Promise<{ controls: { label: string; lin
       range.selectNodeContents(button);
       const tops = new Set([...range.getClientRects()].filter((rect) => rect.width > 0).map((rect) => Math.round(rect.top)));
 
-      return { label: (button.textContent ?? '').trim(), lines: tops.size, clipped: button.scrollWidth > button.clientWidth + 1 };
+      const box = button.getBoundingClientRect();
+      // A control laid past its bar's edge is squeezed out of it, however whole its label.
+      const spills = bar === undefined || box.left < bar.left - 1 || box.right > bar.right + 1;
+
+      return { label: (button.textContent ?? '').trim(), lines: tops.size, clipped: button.scrollWidth > button.clientWidth + 1, spills };
     });
 
     const decisions = [...document.querySelectorAll('[data-plan-decisions] button')].map((button) => button.getBoundingClientRect());
     const [first, second] = decisions;
 
-    return { controls, sideBySide: first !== undefined && second !== undefined && Math.abs(first.top - second.top) < 2 };
+    return { controls, sideBySide: first !== undefined && second !== undefined && Math.abs(first.top - second.top) < 2, width: Math.round(bar?.width ?? 0) };
   });
 }
 
@@ -595,11 +600,10 @@ describe('the decision bar fits wherever a plan is read', () => {
         return page;
       };
 
-      // `stacks`: whether the two decisions must sit one above the other there; null where a row of them may fit. The
-      // narrowest phone has no room for a row; the inspector column and a common phone sit near the line.
+      // Wherever the bar is, nothing in it wraps, clips or spills past its edge; a wide page has room for one row.
       const widths: { name: string; open: () => Promise<Page>; stacks: boolean | null }[] = [
         { name: 'the inspector column', stacks: null, open: inspector },
-        { name: 'a narrow phone', stacks: true, open: async () => planFrame(320, 640) },
+        { name: 'a narrow phone', stacks: null, open: async () => planFrame(320, 640) },
         { name: 'a phone', stacks: null, open: async () => planFrame(390, 844) },
         { name: 'a wide page', stacks: false, open: async () => planFrame(1280, 900) },
       ];
@@ -611,7 +615,8 @@ describe('the decision bar fits wherever a plan is read', () => {
           const bar = await decisionBar(page);
 
           expect({ name, labels: bar.controls.map(({ label }) => label) }).toEqual({ name, labels: expect.arrayContaining(['Request changes', 'Approve & implement']) });
-          expect({ name, squeezed: bar.controls.filter(({ lines, clipped }) => lines !== 1 || clipped) }).toEqual({ name, squeezed: [] });
+          expect({ name, width: bar.width, squeezed: bar.controls.filter(({ lines, clipped, spills }) => lines !== 1 || clipped || spills) })
+            .toEqual({ name, width: bar.width, squeezed: [] });
 
           if (stacks !== null) expect({ name, sideBySide: bar.sideBySide }).toEqual({ name, sideBySide: !stacks });
         } finally {
