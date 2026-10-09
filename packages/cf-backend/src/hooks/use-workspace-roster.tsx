@@ -14,8 +14,8 @@ import {
 
 import { rosterBucket, rosterMatches } from "@kinu.run/core";
 import {
-  listWorkspaces, RosterFrameSchema, ROSTER_SOCKET_ROUTE, UserApiError,
-  type RosterCounts, type RosterEntry, type RosterFilterBucket, type RosterFrame, type RosterPage, type WorkspaceEntry,
+  AccountMemoryFrameSchema, listWorkspaces, RosterFrameSchema, ROSTER_SOCKET_ROUTE, UserApiError,
+  type PendingAccountProposal, type RosterCounts, type RosterEntry, type RosterFilterBucket, type RosterFrame, type RosterPage, type WorkspaceEntry,
 } from "@/lib/user-api";
 import { detach, renderThrownChain, tolerate, settleSync } from "@kinu.run/core/obs";
 
@@ -51,6 +51,8 @@ interface WorkspaceRosterValue extends RosterPages {
   readonly subscribe: (listener: FrameListener) => () => void;
   /** Moves on each socket open, since frames missed while it was down are not replayed. */
   readonly epoch: number;
+  /** The account-memory proposals waiting on the owner, as the user object last sent them; null before it has. */
+  readonly accountProposals: readonly PendingAccountProposal[] | null;
 }
 
 const WorkspaceRosterContext = createContext<WorkspaceRosterValue | null>(null);
@@ -228,6 +230,7 @@ const ALL: RosterFilter = {};
 export function WorkspaceRosterProvider({ children, live = openRosterSocket }: { readonly children: ReactNode; readonly live?: RosterLive }) {
   const listeners = useRef(new Set<FrameListener>());
   const [epoch, setEpoch] = useState(0);
+  const [accountProposals, setAccountProposals] = useState<readonly PendingAccountProposal[] | null>(null);
 
   const subscribe = useCallback((listener: FrameListener): () => void => {
     listeners.current.add(listener);
@@ -269,7 +272,16 @@ export function WorkspaceRosterProvider({ children, live = openRosterSocket }: {
       opened.addEventListener("message", (event: Event) => {
         const data: unknown = event instanceof MessageEvent ? event.data : null;
         const text = v.is(v.string(), data) ? data : "";
-        const frame = v.safeParse(RosterFrameSchema, tolerate(() => JSON.parse(text), "malformed-input"));
+        const parsed: unknown = tolerate(() => JSON.parse(text), "malformed-input");
+        const memory = v.safeParse(AccountMemoryFrameSchema, parsed);
+
+        if (memory.success) {
+          setAccountProposals(memory.output.pending);
+
+          return;
+        }
+
+        const frame = v.safeParse(RosterFrameSchema, parsed);
 
         if (!frame.success) return;
 
@@ -335,8 +347,8 @@ export function WorkspaceRosterProvider({ children, live = openRosterSocket }: {
   }, [refresh, rename]);
 
   const value = useMemo<WorkspaceRosterValue>(() => ({
-    ...pages, total: pages.counts.all, pending, refresh, upsert, rename, remove, subscribe, epoch,
-  }), [pages, pending, refresh, upsert, rename, remove, subscribe, epoch]);
+    ...pages, total: pages.counts.all, pending, refresh, upsert, rename, remove, subscribe, epoch, accountProposals,
+  }), [pages, pending, refresh, upsert, rename, remove, subscribe, epoch, accountProposals]);
 
   return <WorkspaceRosterContext.Provider value={value}>{children}</WorkspaceRosterContext.Provider>;
 }

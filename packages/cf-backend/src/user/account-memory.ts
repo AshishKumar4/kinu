@@ -9,6 +9,7 @@ import {
   type SqlExecutor, type UserCaller,
 } from '@kinu.run/core';
 import type { UserObjectHost } from './user-host';
+import { rosterSockets, sendRosterFrame } from './roster';
 
 export interface AccountMemoryHost extends UserObjectHost {
   /** The user object's tagged SQL, as every store over it takes. */
@@ -39,8 +40,17 @@ export class UserAccountMemory {
   /** Where it was said is the calling workspace, never a field a caller writes. */
   async accountMemory_propose(caller: UserCaller, proposal: AccountProposal, proposer: AccountProposer, delivery?: string): Promise<string> {
     const resolved = await this.host.requireTier(caller, 'memory.account.propose');
+    const id = this.store.propose({ proposal, proposer, ...(delivery !== undefined && { delivery }) }, resolved.kind === 'workspace' ? resolved.workspace : null);
 
-    return this.store.propose({ proposal, proposer, ...(delivery !== undefined && { delivery }) }, resolved.kind === 'workspace' ? resolved.workspace : null);
+    this.pendingMoved();
+
+    return id;
+  }
+
+  /** The owner's open pages: what waits on them, sent on the roster's socket, so their chats' stacks show it. */
+  pendingMoved(sockets: readonly WebSocket[] = rosterSockets(this.host.ctx)): void {
+    if (sockets.length === 0) return;
+    sendRosterFrame(sockets, { type: 'account_memory', pending: this.store.pending() });
   }
 
   async accountMemory_view(caller: UserCaller): Promise<AccountMemoryView> {
@@ -51,8 +61,11 @@ export class UserAccountMemory {
 
   async accountMemory_decide(caller: UserCaller, id: string, decision: 'accept' | 'decline'): Promise<boolean> {
     await this.host.requireTier(caller, 'memory.account.manage');
+    const decided = this.store.decide(id, v.parse(DecisionSchema, decision));
 
-    return this.store.decide(id, v.parse(DecisionSchema, decision));
+    if (decided) this.pendingMoved();
+
+    return decided;
   }
 
   async accountMemory_put(caller: UserCaller, key: string, value: JsonValue, workspace?: string): Promise<string> {
