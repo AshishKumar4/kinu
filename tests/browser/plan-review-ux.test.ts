@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, test } from 'bun:test';
-import type { Page } from 'puppeteer';
+import type { Page, Viewport } from 'puppeteer';
 import * as v from 'valibot';
 
 import { unruledClasses, withGallery, type Gallery } from '../../scripts/gallery-harness';
@@ -113,7 +113,7 @@ interface ObservedPlan {
 interface FrameRequest {
   readonly frame: string;
   readonly mode: Mode;
-  readonly viewport: { readonly width: number; readonly height: number };
+  readonly viewport: Viewport;
   readonly params?: Record<string, string>;
 }
 
@@ -555,8 +555,8 @@ describe('the plan review document, as a browser lays it out', () => {
 });
 
 /**
- * The decision bar as drawn: each control's label on one line and nothing of it cut, and whether the two decisions sit
- * side by side. A control squeezed below its label wraps (two lines) or clips (its text wider than its box).
+ * The decision bar as drawn: each control's label on one line, inside its padding, its icon whole, and whether the two
+ * decisions sit side by side. A control squeezed below its content wraps its label, eats its padding or crushes its icon.
  */
 async function decisionBar(page: Page): Promise<{ controls: { label: string; lines: number; clipped: boolean; spills: boolean }[]; sideBySide: boolean; width: number }> {
   await page.waitForSelector('[data-plan-decisions] button');
@@ -567,16 +567,26 @@ async function decisionBar(page: Page): Promise<{ controls: { label: string; lin
     const buttons = [...(footer?.querySelectorAll('button') ?? [])].filter((button) => button.getClientRects().length > 0);
 
     const controls = buttons.map((button) => {
-      const range = document.createRange();
-
-      range.selectNodeContents(button);
-      const tops = new Set([...range.getClientRects()].filter((rect) => rect.width > 0).map((rect) => Math.round(rect.top)));
-
       const box = button.getBoundingClientRect();
+      const style = getComputedStyle(button);
+      const inner = { left: box.left + Number.parseFloat(style.paddingLeft) - 1, right: box.right - Number.parseFloat(style.paddingRight) + 1 };
+      const texts = document.createTreeWalker(button, NodeFilter.SHOW_TEXT);
+      const rects: DOMRect[] = [];
+
+      for (let text = texts.nextNode(); text !== null; text = texts.nextNode()) {
+        const range = document.createRange();
+
+        range.selectNodeContents(text);
+        rects.push(...[...range.getClientRects()].filter((rect) => rect.width > 0));
+      }
+
+      const icons = [...button.querySelectorAll('svg')].map((icon) => icon.getBoundingClientRect());
+      const crushed = icons.some((icon) => icon.width < 1);
+      const cut = [...rects, ...icons].some((rect) => rect.left < inner.left || rect.right > inner.right);
       // A control laid past its bar's edge is squeezed out of it, however whole its label.
       const spills = bar === undefined || box.left < bar.left - 1 || box.right > bar.right + 1;
 
-      return { label: (button.textContent ?? '').trim(), lines: tops.size, clipped: button.scrollWidth > button.clientWidth + 1, spills };
+      return { label: (button.textContent ?? '').trim(), lines: new Set(rects.map((rect) => Math.round(rect.top))).size, clipped: crushed || cut, spills };
     });
 
     const decisions = [...document.querySelectorAll('[data-plan-decisions] button')].map((button) => button.getBoundingClientRect());
@@ -593,8 +603,13 @@ describe('the decision bar fits wherever a plan is read', () => {
       const planFrame = async (width: number, height: number): Promise<Page> =>
         openFrame(newPage, origin, { frame: 'planreview', mode: 'dark', viewport: { width, height } });
 
-      const inspector = async (): Promise<Page> => {
-        const page = await openFrame(newPage, origin, { frame: 'workspacepage', mode: 'light', viewport: { width: 1280, height: 900 } });
+      const inspector = async (viewport: Viewport): Promise<Page> => {
+        const page = await openFrame(newPage, origin, { frame: 'workspacepage', mode: 'light', viewport });
+
+        // A phone shows the chat or the workspace; the plan is read in the workspace.
+        if (viewport.isMobile === true && await page.$eval('[data-inspector-toggle]', (toggle) => toggle.getAttribute('aria-pressed')) !== 'true') {
+          await page.tap('[data-inspector-toggle]');
+        }
 
         await openPlanPage(page, 'applyCoupon');
 
@@ -603,7 +618,8 @@ describe('the decision bar fits wherever a plan is read', () => {
 
       // Wherever the bar is, nothing in it wraps, clips or spills past its edge; a wide page has room for one row.
       const widths: { name: string; open: () => Promise<Page>; stacks: boolean | null }[] = [
-        { name: 'the inspector column', stacks: null, open: inspector },
+        { name: 'the inspector column', stacks: null, open: async () => inspector({ width: 1280, height: 900 }) },
+        { name: 'the workspace on a narrow phone', stacks: null, open: async () => inspector({ width: 320, height: 640, isMobile: true, hasTouch: true }) },
         { name: 'a narrow phone', stacks: null, open: async () => planFrame(320, 640) },
         { name: 'a phone', stacks: null, open: async () => planFrame(390, 844) },
         { name: 'a wide page', stacks: false, open: async () => planFrame(1280, 900) },

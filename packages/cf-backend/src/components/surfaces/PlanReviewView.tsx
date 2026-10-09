@@ -527,8 +527,8 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
         />
       </div>
 
-      {/* Laid out by its own width, not the window's: a plan reads in a column as narrow as a phone. Below a row's room
-          the decisions stack, each label on one line, rather than squeeze. */}
+      {/* Laid out by its own width, not the window's: a plan reads in a column as narrow as a phone. Where the two
+          decisions do not fit side by side, Approve wraps above Request changes, each whole, rather than squeeze. */}
       <footer data-plan-footer className="@container p-surface shrink-0 border-t p-border px-4 py-3">
         <div className="flex flex-col gap-2 @[36rem]:flex-row @[36rem]:items-center">
           {error ? (
@@ -540,19 +540,19 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
           )}
           <DismissPlan plan={plan} rpc={rpc} readOnly={readOnly} deciding={decisionBusy} saving={saving} onError={setError} />
           {editable && (
-            <div data-plan-decisions className="flex flex-col-reverse gap-2 @[22rem]:flex-row @[22rem]:justify-end">
+            <div data-plan-decisions className="flex shrink-0 flex-wrap-reverse justify-end gap-2">
               <Button
                 type="button"
                 size="sm"
                 variant="secondary"
-                className="w-full justify-center whitespace-nowrap @[22rem]:w-auto"
+                className="shrink-0 grow justify-center whitespace-nowrap @[36rem]:grow-0"
                 onClick={() => detach(Effect.promise(async () => decide("request_changes")))}
                 disabled={decisionBusy !== null || saving || written.length === 0}
               >
                 {decisionBusy === "request" ? <Loader size="sm" /> : "Request changes"}
               </Button>
               <FilledButton
-                className="w-full justify-center whitespace-nowrap @[22rem]:w-auto"
+                className="grow justify-center whitespace-nowrap @[36rem]:grow-0"
                 onClick={() => detach(Effect.promise(async () => decide("approve")))}
                 disabled={decisionBusy !== null || saving || written.length > 0}
               >
