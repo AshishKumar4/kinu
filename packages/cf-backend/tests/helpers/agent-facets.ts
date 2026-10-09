@@ -152,6 +152,9 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
 
   async function openFacet(placement: AgentFacetPlacement, host: AgentWorkspaceHost) {
       const db = agentDatabase(workspace(), placement.storageKey);
+      // The root agent's own turns relay too; a suite counting a node's calls counts the node's alone.
+      const counted = (call: string): void => { if (placement.home !== WORKSPACE_ROOT) traceCalls.push(call); };
+
       const session = await sessionOrFailure(host.session());
       const stateSession = await sessionOrFailure(host.stateSession());
 
@@ -162,12 +165,12 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           memory: () => host.memory(),
           program: (...args) => host.program(...args),
           traceTurn: (...args) => {
-            traceCalls.push('traceTurn');
+            counted('traceTurn');
 
             return host.traceTurn(...args);
           },
           traceStream: (...args) => {
-            traceCalls.push('traceStream');
+            counted('traceStream');
 
             return host.traceStream(...args);
           },
@@ -192,7 +195,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           executeTool: (call) => host.executeTool(call),
           observe: (lines) => host.observe(lines),
           paceStep: (turnId) => {
-            traceCalls.push('paceStep');
+            counted('paceStep');
 
             return host.paceStep(turnId);
           },
