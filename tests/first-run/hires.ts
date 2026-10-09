@@ -64,7 +64,7 @@ export async function helperRecord(
   const row = roster.page.items.find((item) => item.name === agent);
 
   if (row === undefined) throw new Error(`the roster at ${JSON.stringify(hirer)} has no hire ${agent}`);
-  const address = helperAddress(hirer, row);
+  const address = helperAddress(row);
   const runs = await inspect(socket, at(address, { view: 'runs', page: { limit: 200 } }), RunsPageSchema);
   const events: RunEvent[] = [];
 

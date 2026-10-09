@@ -209,4 +209,4 @@ const release: EvalPart = {
   }],
 };
 
-defineTaskEval(defineEvalTask({ id: 'coding', mission: MISSION, parts: [combinators, release] }));
+await defineTaskEval(defineEvalTask({ id: 'coding', mission: MISSION, parts: [combinators, release] }));

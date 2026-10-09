@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { heldSecrets, redact, redactJson } from './redact';
+import { heldSecrets, redact, redactFile, redactJson } from './redact';
 
 // Built from parts, as the repo's other redaction fixtures are, so no secret-shaped literal sits in the tree.
 const BASE64_SECRET = ['q7Lr+ZkX/9vT2mWp', '8sHc4Nd6Ye1Uf0Ab', '3Gi5Jo7Kl+Q='].join('');
@@ -44,5 +44,21 @@ describe('redact', () => {
   test('no credential held, or one too short to be one, scrubs nothing by value', () => {
     expect(heldSecrets({})).toEqual([]);
     expect(heldSecrets({ KINU_EVAL_WEB_IDENTITY: 'abc' })).toEqual([]);
+  });
+
+  test('scrubbing JSON and JSONL keeps escapes, structure, chess positions and run identity, while removing credentials', () => {
+    const fen = 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1';
+    const runId = `run-${['01234567', '89ab', '4cde', '8f01', '23456789abcd'].join('-')}`;
+    // The newline beside a long hex word is the shape of coding #2's branch listing and office #2–5's hashes.
+    const row = { runId, result: `branches\n${'a'.repeat(40)}\nposition ${fen}`, credential: BASE64_SECRET, count: 3, flags: [false, null] };
+    const json = JSON.stringify(row);
+    const expected = { ...row, result: `branches\n<hex>\nposition ${fen}`, credential: '<base64>' };
+
+    expect(JSON.parse(redactFile('data.json', json, []))).toEqual(expected);
+    const lines = redactFile('ledger.jsonl', `${json}\n${json}\n`, []).trimEnd().split('\n');
+    expect(lines.map((line) => JSON.parse(line))).toEqual([expected, expected]);
+    expect(redactFile('ledger.jsonl', lines.join('\n'), [])).toBe(lines.join('\n'));
+    expect(redact(`const fen = ${JSON.stringify(fen)};`, [])).toBe(`const fen = ${JSON.stringify(fen)};`);
+    expect(redactFile('data.json', JSON.stringify({ fen, credential: fen }), [fen])).toContain('<secret>');
   });
 });

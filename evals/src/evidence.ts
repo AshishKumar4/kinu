@@ -1,6 +1,6 @@
 // What a trial leaves behind when its workspace is torn down: its transcript and ledger, the files and
-// slates the workspace held at the end, and the data its slates served, under the run's directory. A
-// failed trial is read from here to tell the model's work from the product's.
+// slates the workspace held at the end, the data its slates served and every run its helpers were given, under the
+// run's directory. A failed trial is read from here to tell the model's work from the product's.
 import { isUtf8 } from 'node:buffer';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -13,12 +13,12 @@ import type { KinuPublicSession } from './session';
 import type { EvidenceCall } from './task';
 import type { TimelineEntry } from './timeline';
 import { renderTrial } from './trajectories';
-import { SlateAnswerSchema } from './verifier';
+import { helperWorkSince, SlateAnswerSchema } from './verifier';
 
 /** Folders that hold no one's work: installed packages and version-control history. */
 const SKIPPED = new Set(['node_modules', '.git']);
 
-export type EvidenceSession = Pick<KinuPublicSession, 'listFiles' | 'readBytes' | 'listSlates' | 'slateOp'>;
+export type EvidenceSession = Pick<KinuPublicSession, 'workspace' | 'listFiles' | 'readBytes' | 'listSlates' | 'slateOp' | 'inspect'>;
 
 /** The workspace as it ended, read before teardown. */
 export interface WorkspaceEvidence {
@@ -26,7 +26,9 @@ export interface WorkspaceEvidence {
   readonly files: ReadonlyMap<string, Uint8Array>;
   /** The slate listing, and each slate's `history` pages: its versions, or why it has none. */
   readonly slates: JsonValue;
-  /** The task's reads of its slates' data, each as the slate answered it. */
+  /** The lead's helpers, each with every run it was given: how the run ended and the whole message that started it,
+   *  so a failed child run can be told from its brief; then the task's reads of its slates' data, each as the slate
+   *  answered it. */
   readonly data: readonly JsonValue[];
   /** Each part the deployment would not give up, and why. A failed read ends its own part and keeps the others: the
    *  data reads call the agent's slates, and one that reset the workspace once took its files with it. */
@@ -74,7 +76,7 @@ async function readSlates(session: EvidenceSession): Promise<JsonValue> {
  * data reads run the agent's code. Every read is one a person could make.
  */
 /** One part's reads of its slates' data (`EvalPart.evidence`). */
-export type EvidenceReads = { readonly part: string; readonly reads: (call: EvidenceCall) => Promise<void> };
+export type EvidenceReads = { readonly part: string; readonly reads: (call: EvidenceCall, workspace: string) => Promise<void> };
 
 export async function gatherEvidence(session: EvidenceSession, reads: readonly EvidenceReads[]): Promise<WorkspaceEvidence> {
   const files = new Map<string, Uint8Array>();
@@ -95,6 +97,7 @@ export async function gatherEvidence(session: EvidenceSession, reads: readonly E
     for (const root of [WORKSPACE_ROOT, SLATES_ROOT]) await walk(session, root, files);
   });
   await part('slates', async () => { slates = await readSlates(session); });
+  await part('helpers', async () => { data.push({ helpers: await helperWorkSince(session, 0) }); });
 
   const call: EvidenceCall = async (slate, method, input) => {
     const answer = v.parse(SlateAnswerSchema, await session.slateOp({ op: 'call', id: slate, method, args: input === undefined ? [] : [input] }));
@@ -104,7 +107,7 @@ export async function gatherEvidence(session: EvidenceSession, reads: readonly E
     return answer.ok ? answer.value : null;
   };
 
-  for (const read of reads) await part(`data of ${read.part}`, () => read.reads(call));
+  for (const read of reads) await part(`data of ${read.part}`, () => read.reads(call, session.workspace));
 
   return { files, slates, data, unread };
 }

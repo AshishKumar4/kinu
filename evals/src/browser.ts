@@ -72,6 +72,12 @@ async function bounded<T>(what: string, work: Promise<T>): Promise<T> {
   }
 }
 
+/** The first control a person's accessible name addresses. Kept whole because it runs inside the page. */
+function controlNamed(source: string, flags: string): Element | null {
+  return [...document.querySelectorAll('button, [role="button"], [role="gridcell"]')]
+    .find((element) => new RegExp(source, flags).test((element.getAttribute('aria-label') ?? element.getAttribute('title') ?? element.textContent ?? '').trim())) ?? null;
+}
+
 /** One slate's page as it is drawn inside the workspace: in the work surface or in the chat. */
 export class SlateView {
   constructor(readonly frame: Frame) {}
@@ -114,9 +120,7 @@ export class SlateView {
   /** Press the first control whose accessible name, its `aria-label`, else its `title`, else its text, `name` matches. */
   async pressNamed(name: RegExp): Promise<boolean> {
     return bounded(`the slate page, pressed for ${name.source}`, (async () => {
-      const control = await this.frame.evaluateHandle((source, flags) => [...document.querySelectorAll('button, [role="button"], [role="gridcell"]')]
-        .find((element) => new RegExp(source, flags).test((element.getAttribute('aria-label') ?? element.getAttribute('title') ?? element.textContent ?? '').trim()))
-        ?? null, name.source, name.flags);
+      const control = await this.frame.evaluateHandle(controlNamed, name.source, name.flags);
 
       if (!(control instanceof ElementHandle)) return false;
       await control.click();
@@ -124,6 +128,25 @@ export class SlateView {
 
       return true;
     })());
+  }
+
+  /** The page's own readiness signal: a control whose accessible name says its loaded state, not just DOM load. */
+  async waitForNamed(name: RegExp): Promise<void> {
+    await this.frame.waitForFunction(controlNamed, { polling: 100, timeout: DRAW_MS }, name.source, name.flags);
+  }
+
+  /** Wait on rendered state that text alone cannot describe, retaining the final read when drawing never settles. */
+  async untilState<T>(read: () => Promise<T>, ready: (state: T) => boolean): Promise<{ state: T; held: boolean }> {
+    const due = Date.now() + DRAW_MS;
+
+    for (;;) {
+      const state = await bounded('the slate page, read for its rendered state', read());
+
+      if (ready(state)) return { state, held: true };
+
+      if (Date.now() >= due) return { state, held: false };
+      await sleep(250);
+    }
   }
 
   /** What failed in the page: errors nothing caught and scripts that did not load (`script-failures.ts`). */

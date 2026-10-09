@@ -1,6 +1,7 @@
 import * as v from 'valibot';
 import { WORKSPACE_ROOT, type JsonValue } from '@kinu.run/core';
 import type { EvalPart, SeedFile } from '../src/task';
+import { shows } from '../src/sight';
 import { matchesReference, type EvalVerifier, type Script, type SlateClient } from '../src/verifier';
 import { Seeded } from './seeded';
 import { builtItself, buildsClean, slateQuality, type DrawnSlate } from './slate-quality';
@@ -262,9 +263,11 @@ function dashboard(logs: Logs): DrawnSlate {
   return {
     id: 'logs', names: routes.map((row) => row.route),
     done: (sight) => routes.every((row) => (sight.regions[row.route] ?? []).some((region) => {
-      const numbers: string[] = region.text.replace(/(\d)[,\u202f ](?=\d{3}\b)/gu, '$1').match(/\d+/gu) ?? [];
+      const column = Object.entries(region.columns ?? {}).find(([header]) => /\bp95\b/iu.test(header))?.[1];
+      // A card has labelled metrics instead of column headers. Do not join the 95 of its label to the metric's value.
+      const p95 = column ?? /\bp95(?:\s*\(ms\))?\s*:?\s*(\d{1,3}(?:[,\u202f]\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)/iu.exec(region.text)?.[1] ?? '';
 
-      return numbers.includes(String(row.requests)) && numbers.includes(String(row.p95Ms));
+      return shows(region.text, row.requests) && shows(p95, row.p95Ms);
     })),
   };
 }

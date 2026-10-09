@@ -264,7 +264,8 @@ function sameDealers(answered: JsonValue, expected: readonly string[]): boolean 
   const parsed = v.safeParse(v.array(v.string()), field(answered, 'dealers'));
 
   if (!parsed.success) return false;
-  const named = new Set(parsed.output.map(plain));
+  // Delivery notes write the same dealer alone, with its city after a comma, or with its city in parentheses.
+  const named = new Set(parsed.output.map((name) => plain(name.replace(/(?:,\s*[^,]+|\s*\([^()]+\))$/u, ''))));
 
   return named.size === parsed.output.length && named.size === expected.length && expected.every((dealer) => named.has(plain(dealer)));
 }
@@ -346,4 +347,4 @@ Tell me when the brief is written.`,
   }],
 };
 
-defineTaskEval(defineEvalTask({ id: 'swarm', mission: MISSION, parts: [recall] }));
+await defineTaskEval(defineEvalTask({ id: 'swarm', mission: MISSION, parts: [recall] }));

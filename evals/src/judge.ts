@@ -10,8 +10,8 @@ import { askOnce, type EvalTarget } from './target';
 const PICTURES = `${WORKSPACE_ROOT}/judge`;
 
 /** Whether pictures of one table are different designs of it, which `calibrate-judge.ts` measures the judge on. */
-export const DIFFERENT_DESIGNS = 'Does each of these pictures show a visibly different design of the same pricing table: a '
-  + 'different layout or presentation, not only a different colour, font or wording, so that no two of them are the same design?';
+export const DIFFERENT_DESIGNS = 'Do these pictures together show at least three visibly different designs of the same pricing table, '
+  + 'whether on one page or separate pages: different layouts or presentations, not only different colours, fonts or wording?';
 
 /** The judge's answer: yes, no, or null when it said anything else, with what it said. */
 export type Judgement = { readonly verdict: boolean | null; readonly reply: string };
