@@ -1,18 +1,16 @@
 #!/usr/bin/env bun
-// Opt-in evaluations: one native armada map task per trial, followed by one artifact-reading post task.
+// Opt-in evaluations: native armada CLI map tasks and its artifact extractor; light post-steps read those outputs.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import * as v from 'valibot';
-import { connect, type Json } from 'armada';
-import { argvOf, cancelOnInterrupt, extractTar, onCommit } from 'armada/ci';
-import { commandTask } from 'armada/task';
 import { EVAL_MAP_POOL, EVAL_TASK_TIMEOUT_SECONDS, evalMatrix, type EvalMatrix } from '../evals/src/config';
 import { ARMS } from '../evals/src/target';
 import { evalTargetVerdict, evalWebIdentityEnv } from '../packages/test-utils/src/eval-identity';
 import { gitEnv } from '../packages/test-utils/src/git-env';
-import { readEvalRun, type EvalRun, type TrialItem } from './evals-artifacts';
+import { MapResultSchema, type EvalRun, type MapResult, type TrialItem } from './evals-artifacts';
+import { LOCAL_CHECK, processEvals } from './evals-post';
 import { isEvalTask, trackedFiles } from './sources';
 
 const ROOT = join(import.meta.dirname, '..');
@@ -26,6 +24,92 @@ export function evalItems(taskFiles: readonly string[], matrix: EvalMatrix, orig
       leg, origin, task: file.slice('evals/tasks/'.length).replace(/\.eval\.ts$/u, ''),
       model, arm, trial: index + 1, trials: matrix.trials, models: [...matrix.models], arms: [...matrix.arms], pass,
     }))).flat())));
+}
+
+/** Only armada's supported CLI: its one shared pool, commit checkout and per-task artifact extraction. */
+export function evalMapArgv(sha: string, out: string, identities: readonly string[]): string[] {
+  return [join(ROOT, 'node_modules', '.bin', 'armada'), 'map',
+    `--connection=${join(homedir(), '.config', 'armada', 'armada-kinu.json')}`, `--commit=${sha}`,
+    '--items=-', `--pool=${String(EVAL_MAP_POOL)}`, `--timeout=${String(EVAL_TASK_TIMEOUT_SECONDS)}`,
+    `--artifacts=${join(out, 'trials')}`, `--secrets=${identities.join(',')}`, '--json',
+    `--label=evals ${sha.slice(0, 12)}`, '--', 'bun', 'evals/scripts/trial.ts'];
+}
+
+/** Decode the native JSON-lines contract while draining progress concurrently, without a pipe deadlock. */
+async function mapTrials(argv: string[], items: readonly TrialItem[]) {
+  const env = { ...process.env };
+
+  delete env['ARMADA_URL'];
+  delete env['ARMADA_TOKEN'];
+
+  const child = Bun.spawn(argv, { cwd: ROOT, env, stdin: new Blob([JSON.stringify(items)]), stdout: 'pipe', stderr: 'pipe' });
+
+  const outcomes: MapResult[] = [];
+  let progress = '';
+  let pending = '';
+  const decode = new TextDecoder();
+
+  const interrupt = (): void => { child.kill('SIGINT'); };
+
+  const terminate = (): void => { child.kill('SIGTERM'); };
+
+  process.once('SIGINT', interrupt);
+  process.once('SIGTERM', terminate);
+
+  try {
+    await Promise.all([
+      (async () => {
+        for await (const bytes of child.stderr) {
+          const text = new TextDecoder().decode(bytes);
+
+          progress += text;
+          process.stderr.write(text);
+        }
+      })(),
+      (async () => {
+        for await (const bytes of child.stdout) {
+          pending += decode.decode(bytes, { stream: true });
+          let end = pending.indexOf('\n');
+
+          while (end !== -1) {
+            const line = pending.slice(0, end).trim();
+
+            pending = pending.slice(end + 1);
+
+            if (line !== '') {
+              const outcome = v.parse(MapResultSchema, JSON.parse(line));
+              const item = items[outcome.index];
+
+              if (item === undefined || outcomes.some((held) => held.index === outcome.index)) throw new Error(`unexpected armada task index ${String(outcome.index)}`);
+              outcomes.push(outcome);
+              console.log(`${item.leg} ${item.task} trial ${String(item.trial)}: ${outcome.kind}, ${outcome.seconds.toFixed(1)}s`);
+            }
+
+            end = pending.indexOf('\n');
+          }
+        }
+
+        pending += decode.decode();
+
+        if (pending.trim() !== '') outcomes.push(v.parse(MapResultSchema, JSON.parse(pending)));
+      })(),
+    ]);
+  } catch (cause) {
+    child.kill('SIGTERM');
+    await child.exited;
+
+    throw new Error('armada map did not produce its documented JSON-lines output', { cause });
+  } finally {
+    process.off('SIGINT', interrupt);
+    process.off('SIGTERM', terminate);
+  }
+
+  const exitCode = await child.exited;
+  const job = /^job (\S+)$/mu.exec(progress)?.[1];
+
+  if (job === undefined) throw new Error(`armada map exited ${String(exitCode)} without naming its job: ${progress}`);
+
+  return { job, outcomes, exitCode };
 }
 
 async function main(): Promise<number> {
@@ -77,91 +161,44 @@ async function main(): Promise<number> {
   }
 
   const items = evalItems(taskFiles, matrix, origins, values.pass);
-  const out = resolve(values.out ?? join(ROOT, 'bench-artifacts', 'evals-armada', `${String(Date.now())}-${sha.slice(0, 12)}`));
+  const out = resolve(values.out ?? process.env['BENCH_ARTIFACTS'] ?? join(ROOT, 'bench-artifacts', 'evals-armada', `${String(Date.now())}-${sha.slice(0, 12)}`));
 
   mkdirSync(out, { recursive: true });
-  // This deployment is explicit for the CLI and SDK. Never use another connection or print its bearer.
-  process.env['ARMADA_CONNECTION'] = join(homedir(), '.config', 'armada', 'armada-kinu.json');
+  const startedAt = Date.now();
 
-  const armada = connect();
-  const began = Date.now();
-  const spec = await onCommit(armada, sha);
-  const names = [...new Set(origins.map(({ origin }) => evalWebIdentityEnv(origin)))];
+  console.log(`evals: ${String(items.length)} trials, one shared pool of ${String(EVAL_MAP_POOL)}, native artifacts in ${join(out, 'trials')}`);
 
-  const map = commandTask<Json>(spec.recipe, argvOf(['bun', 'evals/scripts/trial.ts'], spec.recipe),
-    { timeout: EVAL_TASK_TIMEOUT_SECONDS, secrets: names }).stream(items, {
-    armada, pool: EVAL_MAP_POOL, label: `evals ${candidateBuild} definitions ${sha.slice(0, 12)}`,
-    env: spec.env, tmpfs: spec.tmpfs,
-  });
+  const identities = [...new Set(origins.map(({ origin }) => evalWebIdentityEnv(origin)))];
 
-  const job = await map.id;
+  const mapped = await mapTrials(evalMapArgv(sha, out, identities), items);
 
   const run: EvalRun = {
     definitions: sha, candidateBuild, baselineBuild, taskFiles, models: [...matrix.models], arms: [...matrix.arms],
-    trials: matrix.trials, startedAt: began, job, pool: EVAL_MAP_POOL, pass: values.pass,
+    trials: matrix.trials, startedAt, job: mapped.job, pool: EVAL_MAP_POOL, pass: values.pass,
   };
 
   writeFileSync(join(out, 'run.json'), `${JSON.stringify(run, null, 2)}\n`);
-  console.log(`evals job ${job}: ${String(items.length)} trials, pool ${String(EVAL_MAP_POOL)}, artifacts in ${out}`);
+  writeFileSync(join(out, 'trial-job.json'), `${JSON.stringify(mapped, null, 2)}\n`);
 
-  const outcomes: { index: number; kind: string; exitCode: number; tail: string }[] = [];
+  if (mapped.outcomes.some((outcome) => outcome.kind === 'cancelled')) return 130;
 
-  await cancelOnInterrupt(map, job, async () => {
-    for await (const result of map) {
-      outcomes.push({ index: result.index, kind: result.kind, exitCode: result.meta.exitCode, tail: result.meta.tail });
-      const item = items[result.index];
+  const postExit = await processEvals(run, items, mapped.outcomes, join(out, 'evals'));
 
-      console.log(`${item?.leg ?? ''} ${item?.task ?? ''} trial ${String(item?.trial ?? '')}: ${result.kind}, ${result.meta.seconds.toFixed(1)}s`);
-    }
-  });
-
-  const summary = await map.summary();
-
-  writeFileSync(join(out, 'trial-job.json'), `${JSON.stringify({ job, summary, outcomes }, null, 2)}\n`);
-
-  // Native deployToken supplies the masked bearer in the post task's environment, never a new secret file.
-  // The same commit recipe and native map/extractTar implementation serve trials and post artifacts.
-  const postJob = await armada.create({
-    recipe: spec.recipe, commit: spec.recipe.commit, run: { kind: 'command' },
-    items: [{ item: { run, items, outcomes }, argv: ['bun', 'scripts/evals-post.ts'] }],
-    timeout: EVAL_TASK_TIMEOUT_SECONDS, pool: 1, deployToken: true,
-    env: { ...spec.env, ARMADA_URL: armada.connection.url }, tmpfs: [...spec.tmpfs],
-    secrets: values.pass ? [] : ['KINU_EVAL_STAGING_WEB_IDENTITY', 'KINU_OBS_TOKEN'],
-    label: `evals comparison and Sol ${job}`,
-  });
-
-  const post = commandTask<Json>(spec.recipe, () => ['bun', 'scripts/evals-post.ts']).job(postJob, { armada });
-  let postExit = 2;
-
-  await cancelOnInterrupt(post, postJob, async () => {
-    for await (const result of post) {
-      const archive = await post.artifacts(result.index);
-
-      if (archive !== null) extractTar(archive, out);
-      postExit = result.meta.exitCode;
-      console.log(`evals post job ${postJob}: ${result.kind}, ${result.meta.seconds.toFixed(1)}s`);
-
-      if (!result.ok) console.error(result.meta.tail);
-    }
-  });
-
-  const finished = readEvalRun(join(out, 'evals', 'run.json'));
-
-  finished.postJob = postJob;
-  finished.wallSeconds = (Date.now() - began) / 1000;
-  writeFileSync(join(out, 'evals', 'run.json'), `${JSON.stringify(finished, null, 2)}\n`);
-  console.log(`report: ${join(out, 'evals')}; wall ${finished.wallSeconds.toFixed(1)}s, pool ${String(EVAL_MAP_POOL)}`);
+  run.wallSeconds = (Date.now() - startedAt) / 1000;
+  writeFileSync(join(out, 'evals', 'run.json'), `${JSON.stringify(run, null, 2)}\n`);
+  console.log(`report: ${join(out, 'evals')}; wall ${run.wallSeconds.toFixed(1)}s, pool ${String(EVAL_MAP_POOL)}, armada job ${mapped.job}`);
 
   if (values.record) {
-    const recorded = Bun.spawn([process.execPath, 'scripts/promote.ts', 'evals', join(out, 'evals')], { cwd: ROOT, stdout: 'inherit', stderr: 'inherit' });
+    const recorded = Bun.spawn([LOCAL_CHECK, process.execPath, 'scripts/promote.ts', 'evals', join(out, 'evals')],
+      { cwd: ROOT, env: { ...process.env, LOCAL_CHECK_MEMORY: '4G' }, stdout: 'inherit', stderr: 'inherit' });
 
     if (await recorded.exited !== 0) throw new Error('recording this eval verdict failed');
   }
 
   if (values.post !== undefined) {
     for (const [name, marker] of [['comparison', '<!-- kinu-evals-results -->'], ['why', '<!-- kinu-evals-why -->']] as const) {
-      const posted = Bun.spawn(['bash', 'evals/scripts/post-comment.sh', values.post, join(out, 'evals', name, 'comment.md'), marker],
-        { cwd: ROOT, stdout: 'inherit', stderr: 'inherit' });
+      const posted = Bun.spawn([LOCAL_CHECK, 'bash', 'evals/scripts/post-comment.sh', values.post, join(out, 'evals', name, 'comment.md'), marker],
+        { cwd: ROOT, env: { ...process.env, LOCAL_CHECK_MEMORY: '4G' }, stdout: 'inherit', stderr: 'inherit' });
 
       if (await posted.exited !== 0) throw new Error(`posting the ${name} comment failed`);
     }

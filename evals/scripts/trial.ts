@@ -2,7 +2,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
-import { ciVerdictRow } from '../../scripts/ladder';
+import { ciVerdictRow } from '../../scripts/ci-verdicts';
 import { selectTrialReport, TrialItemSchema } from '../../scripts/evals-artifacts';
 
 const ROOT = join(import.meta.dirname, '../..');

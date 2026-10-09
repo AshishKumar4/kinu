@@ -1,43 +1,34 @@
-// The reduce task: all inputs come from native armada trial artifacts, never the driver's checkout outputs.
+// Light post-steps on the deploy driver, reading only artifacts armada map --artifacts extracted.
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
-import { connect } from 'armada';
-import { extractTar } from 'armada/ci';
 import { parseResults, trials } from '../evals/src/results';
 import { redact } from '../evals/src/redact';
-import { joinTrialReports, PostItemSchema, type TrialItem } from './evals-artifacts';
-import { ciVerdictRow } from './ladder';
+import { joinTrialReports, type EvalRun, type MapResult, type TrialItem } from './evals-artifacts';
 
 const ROOT = join(import.meta.dirname, '..');
 
-async function main(): Promise<number> {
-  const { run, items, outcomes } = v.parse(PostItemSchema, JSON.parse(process.env['ARMADA_ITEM'] ?? '{}'));
-  const artifacts = process.env['ARMADA_ARTIFACTS'];
+/** Light deploy-driver post-steps use the workstation's serialized 4G scope, never uncapped local work. */
+export const LOCAL_CHECK = '/mnt/local/kinu/bin/local-check.sh';
 
-  if (artifacts === undefined) throw new Error('armada named no post-task artifacts directory');
-  const dir = join(ROOT, 'bench-artifacts', `evals-post-${run.job}`);
-  const inputs = join(dir, 'inputs');
-  const armada = connect();
-
-  mkdirSync(inputs, { recursive: true });
+export async function processEvals(run: EvalRun, items: readonly TrialItem[], outcomes: readonly MapResult[], dir: string): Promise<number> {
+  mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'run.json'), `${JSON.stringify(run, null, 2)}\n`);
+
   const reports: { item: TrialItem; path?: string; failure: string }[] = [];
 
   for (const [index, item] of items.entries()) {
     const outcome = outcomes.find((entry) => entry.index === index);
-    const archive = await armada.artifacts(run.job, index);
 
-    if (archive === null || outcome?.exitCode !== 0) {
+    if (outcome?.artifacts === undefined || outcome.exitCode !== 0) {
       reports.push({ item, failure: outcome === undefined ? 'armada returned no outcome' : `${outcome.kind}: ${outcome.tail}` });
       continue;
     }
 
-    const into = join(inputs, String(index));
-    const kept = new Set(extractTar(archive, into));
+    const into = outcome.artifacts;
     const row = v.parse(v.object({ artifacts: v.array(v.string()) }), JSON.parse(readFileSync(join(into, 'row.json'), 'utf8')));
 
-    if (row.artifacts.some((path) => !kept.has(path))) throw new Error(`trial ${String(index)} names evidence its task did not keep`);
+    if (row.artifacts.some((path) => !existsSync(join(into, path)))) throw new Error(`trial ${String(index)} names evidence its task did not keep`);
     const path = join(into, 'evals', 'results.json');
 
     reports.push({ item, path, failure: '' });
@@ -62,8 +53,12 @@ async function main(): Promise<number> {
   // Every command below is a post-step of the same artifacts. A failed advisory review is recorded,
   // never swapped for a mock diagnosis and never substituted for the comparison's verdict.
   const step = async (name: string, argv: readonly string[], origin?: string): Promise<number> => {
-    const child = Bun.spawn([process.execPath, ...argv], { cwd: ROOT,
-      env: origin === undefined ? process.env : { ...process.env, KINU_EVAL_ORIGIN: origin }, stdout: 'pipe', stderr: 'pipe' });
+    const env: NodeJS.ProcessEnv = { ...process.env, LOCAL_CHECK_MEMORY: '4G' };
+
+    if (origin !== undefined) env['KINU_EVAL_ORIGIN'] = origin;
+
+    const child = Bun.spawn([LOCAL_CHECK, process.execPath, ...argv], { cwd: ROOT,
+      env, stdout: 'pipe', stderr: 'pipe' });
 
     const chunks: string[] = [];
 
@@ -133,12 +128,5 @@ async function main(): Promise<number> {
     writeFileSync(join(dir, 'advisory.json'), `${JSON.stringify({ diagnosis, review })}\n`);
   }
 
-  const row = ciVerdictRow({ run: `evals post ${run.job}`, evidence: 'evals' },
-    { exitCode: verdictExit, seconds: (Date.now() - run.startedAt) / 1000, stdout: '', stderr: '' }, undefined, { dir, artifacts });
-
-  writeFileSync(join(artifacts, 'row.json'), `${JSON.stringify(row)}\n`);
-
   return verdictExit;
 }
-
-if (import.meta.main) process.exitCode = await main();

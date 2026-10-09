@@ -270,7 +270,7 @@ describe('the eval verdict a promotion waits for', () => {
     writeFileSync(join(dir, 'run.json'), JSON.stringify({
       definitions: 'abcdef1', candidateBuild: 'abcdef1', baselineBuild: 'abcdef2',
       taskFiles: ['evals/tasks/chess.eval.ts', 'evals/tasks/swarm.eval.ts'], models: ['opencode-go/muse-spark-1.3-contributor'],
-      arms: ['product'], trials: 2, startedAt: 1, job: 'armada-job', postJob: 'armada-post', pool: 3, pass: false,
+      arms: ['product'], trials: 2, startedAt: 1, job: 'armada-job', pool: 3, pass: false,
     }));
 
     expect(() => readEvalsVerdict(dir, 'abcdef1')).toThrow('full statistical matrix');

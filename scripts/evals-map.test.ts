@@ -5,9 +5,9 @@ import { scratchDir } from '@kinu.run/test-utils';
 import { EVAL_MAP_POOL, EVAL_TASK_TIMEOUT_SECONDS, EVAL_TRIAL_CALLS, MUSE_CALLS_AT_ONCE, evalMatrix } from '../evals/src/config';
 import { parseResults, trials } from '../evals/src/results';
 import { whyIncomplete } from '../evals/src/comparison';
-import { evalItems } from './evals-map';
+import { evalItems, evalMapArgv } from './evals-map';
 import { joinTrialReports, selectTrialReport, type TrialItem } from './evals-artifacts';
-import { ciVerdictRow } from './ladder';
+import { ciVerdictRow } from './ci-verdicts';
 
 const MATRIX = evalMatrix({ KINU_EVAL_TRIALS: '2' }, ['product']);
 
@@ -48,6 +48,21 @@ describe('parallel armada evaluations', () => {
     expect(EVAL_MAP_POOL * EVAL_TRIAL_CALLS).toBeLessThanOrEqual(MUSE_CALLS_AT_ONCE);
     expect((EVAL_MAP_POOL + 1) * EVAL_TRIAL_CALLS).toBeGreaterThan(MUSE_CALLS_AT_ONCE);
     expect(EVAL_TASK_TIMEOUT_SECONDS).toBe(6 * 60 * 60);
+  });
+
+  test('the supported CLI names Kinu\'s connection and its sole artifact extraction path', () => {
+    const argv = evalMapArgv('abcdef123456', '/tmp/evals', ['KINU_EVAL_STAGING_WEB_IDENTITY', 'KINU_EVAL_WEB_IDENTITY']);
+
+    expect(argv[0]).toContain('node_modules/.bin/armada');
+    expect(argv[1]).toBe('map');
+    expect(argv).toContain('--commit=abcdef123456');
+    expect(argv).toContain('--pool=3');
+    expect(argv).toContain('--timeout=21600');
+    expect(argv).toContain('--json');
+    expect(argv).toContain('--artifacts=/tmp/evals/trials');
+    expect(argv.find((word) => word.startsWith('--connection='))).toMatch(/armada-kinu\.json$/u);
+    expect(argv).toContain('--secrets=KINU_EVAL_STAGING_WEB_IDENTITY,KINU_EVAL_WEB_IDENTITY');
+    expect(argv.slice(argv.indexOf('--') + 1)).toEqual(['bun', 'evals/scripts/trial.ts']);
   });
 
   test('Vitest selection strips skipped cases, anchors trial one, and rejects the wrong or duplicated case', () => {

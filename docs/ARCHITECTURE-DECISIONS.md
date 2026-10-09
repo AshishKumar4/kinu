@@ -1473,8 +1473,9 @@ one opencode-go key for both legs; a swarm trial holds about six), each task kee
 own artifacts, joined per leg for the same compare, verdict, Sol diagnosis, review and results comment. armada's
 task timeout is infrastructure ceiling only (21600 s at the native job ceiling); the harness silence bound still ends a trial.
 The protocol itself has no timeout maximum. The three-container pool reserves six calls per trial (18 <= 20),
-including coding's swarm work, rather than averaging costs or hoping for a helpful queue order. The native
-post task reads retained trial artifacts; the deploy serializes soak before statistics so their jobs share this budget.
+including coding's swarm work, rather than averaging costs or hoping for a helpful queue order. The pinned
+CLI's `map --artifacts` extracts each trial's evidence; light compare/verdict/Sol steps on the driver read it.
+The deploy serializes soak before statistics so their jobs share this budget; no armada API or dependency patch is added.
 The old-shape evidence is run 37880718948: seven file workers with serial trials per file;
 candidate wall 4 h 15 min, baseline cancelled at GitHub's 6 h cap. The armada shape removes
 per-file head-of-line blocking, but keeps the actual provider limit rather than promising CI-tier wall times. On 2026-10-08 the rest moved: Lean verification is a CI row (armada's

@@ -29,8 +29,8 @@
  * hooks installed at all.
  */
 
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs';
-import { basename, dirname, join, relative, resolve } from 'node:path';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { cpus } from 'node:os';
 import * as v from 'valibot';
 import { EVAL_TASK_TIMEOUT_SECONDS } from '../evals/src/config';
@@ -61,7 +61,7 @@ import { AMBIENT_CREDENTIAL_ENV, AMBIENT_DECORATION_ENV, EVAL_IDENTITY_ENV, eval
 import { COST_TABLE, type CostTable, costRssMb, costThreads, readCosts } from './gate-cost';
 import { resourceCostFile, withResourceCosts } from './gate-cost';
 import {
-  armadaVerdict, parseRunnerTimings, readHostedCosts, readFileTimings, withRunnerCosts, writeVerdicts,
+  armadaVerdict, ciVerdictRow, parseRunnerTimings, readHostedCosts, readFileTimings, withRunnerCosts, writeVerdicts,
   type CIVerdict, type CIVerdictFile, type HostedCosts,
 } from './ci-verdicts';
 
@@ -1534,6 +1534,7 @@ export const LADDER: readonly Gate[] = [
     run: 'bun run evals',
     label: 'Eval suite',
     tier: 'evals',
+    deadline: { seconds: EVAL_TASK_TIMEOUT_SECONDS, why: 'orchestrates native armada work; the deployment harness decides trial silence.' },
     // MEASURED 2026-09-30 on kinu.run serving 2f660875cc: the four tasks' 40 trials, all
     // at once on Muse Spark, took 717s (kinu-logs/evals-fast/prod-muse-40), with no
     // provider wait. It is a floor, not the suite's runtime: a trial stops at its first
@@ -2863,7 +2864,8 @@ export const PRODUCT_FLOWS_TIER_SCRIPT = 'scripts/product-flows-tier.sh';
 
 /** `bun --bun vitest run --config evals/vitest.config.ts …`: the eval suite's runner, as `bun run evals` spells it. */
 function runsEvalSuite(words: readonly string[]): boolean {
-  return words.slice(0, 4).join(' ') === 'bun --bun vitest run' && words[words.indexOf('--config') + 1] === EVALS_CONFIG;
+  return (words.length === 2 && words[0] === 'bun' && words[1] === 'scripts/evals-map.ts')
+    || (words.slice(0, 4).join(' ') === 'bun --bun vitest run' && words[words.indexOf('--config') + 1] === EVALS_CONFIG);
 }
 
 /**
@@ -3083,37 +3085,6 @@ function adoptDeployEntry(gate: Gate): string | undefined {
   process.env['BENCH_ARTIFACTS'] = dir;
 
   return dir;
-}
-
-/** A deploy row's evidence: written under `dir` in the checkout, carried back in its task's `artifacts` directory. */
-export interface Evidence {
-  readonly dir: string;
-  readonly artifacts: string;
-}
-
-/** A row's CI verdict, with its evidence when it declares some: the files, copied into its task's artifacts directory
- *  under the row's evidence name, which armada keeps whole and extracts beside the run's report. */
-export function ciVerdictRow(gate: Pick<Gate, 'run' | 'evidence'>, outcome: { readonly exitCode: number; readonly seconds: number; readonly stdout: string; readonly stderr: string }, timings: CIVerdict['timings'], evidence: Evidence | undefined): CIVerdict {
-  const output = outcome.exitCode === 0 ? '' : outcome.stdout + outcome.stderr;
-  const row: CIVerdict = { run: gate.run, exitCode: outcome.exitCode, seconds: outcome.seconds, output, timings };
-
-  if (evidence === undefined || gate.evidence === undefined || !existsSync(evidence.dir)) return row;
-  const into = join(evidence.artifacts, gate.evidence);
-  const copied: string[] = [];
-
-  // The files the copy takes are the files the verdict names: the copy is the one walk of the evidence.
-  cpSync(evidence.dir, into, {
-    recursive: true,
-    filter: (source) => {
-      if (statSync(source).isFile()) copied.push(join(gate.evidence ?? '', relative(evidence.dir, source)));
-
-      return true;
-    },
-  });
-
-  if (copied.length > 0) row.artifacts = copied.sort();
-
-  return row;
 }
 
 /** `--deploy-phase=<phase>[,<phase>…]` as phases, or undefined when it names none or one that is not a phase. */

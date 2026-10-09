@@ -14,16 +14,19 @@ export type TrialItem = v.InferOutput<typeof TrialItemSchema>;
 export const EvalRunSchema = v.object({
   definitions: v.string(), candidateBuild: v.string(), baselineBuild: v.string(),
   taskFiles: v.array(v.string()), models: v.array(v.string()), arms: v.array(v.string()), trials: v.number(),
-  startedAt: v.number(), job: v.string(), postJob: v.optional(v.string()), pool: v.number(),
+  startedAt: v.number(), job: v.string(), pool: v.number(),
   wallSeconds: v.optional(v.number()), pass: v.boolean(),
 });
 
 export type EvalRun = v.InferOutput<typeof EvalRunSchema>;
 
-export const PostItemSchema = v.object({
-  run: EvalRunSchema, items: v.array(TrialItemSchema),
-  outcomes: v.array(v.object({ index: v.number(), kind: v.string(), exitCode: v.number(), tail: v.string() })),
+/** armada map --json emits one outcome per item, with the path its own artifact extractor kept. */
+export const MapResultSchema = v.object({
+  index: v.number(), kind: v.string(), exitCode: v.number(), tail: v.string(),
+  seconds: v.number(), artifacts: v.optional(v.string()),
 });
+
+export type MapResult = v.InferOutput<typeof MapResultSchema>;
 
 /** Vitest's name filter leaves unselected cases as skipped. Select the exact requested case,
  * including a skipped case when collection failed: missing or failed collection stays incomplete. */
