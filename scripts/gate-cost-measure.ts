@@ -515,7 +515,8 @@ if (import.meta.main) {
   if (capture !== undefined) process.exit(await captureRow(capture));
 
   const only = process.argv.find((argument) => argument.startsWith('--only='))?.slice('--only='.length);
-  const existing = existsSync(COST_TABLE) ? readCosts().rows : {};
+  const previous = existsSync(COST_TABLE) ? readCosts() : undefined;
+  const existing = Object.fromEntries(Object.entries(previous?.rows ?? {}).map(([run, cost]) => [run, { ...cost, machine: cost.machine ?? previous?.machine }]));
   const contendedOnly = process.argv.includes('--contended');
   const deployment = process.argv.find((argument) => argument.startsWith('--deployment='))?.slice('--deployment='.length);
 
@@ -619,7 +620,7 @@ if (import.meta.main) {
 
     // A run that failed stopped early, so its figure is short by whatever it never ran: it is
     // reported and not recorded, and the row keeps what it had.
-    if (cost.exit === 0) measured[gate.run] = cost;
+    if (cost.exit === 0) measured[gate.run] = { ...cost, machine };
     else failed.push(`${gate.label} — exit ${String(cost.exit)}, log ${join(scratch, `${String(index)}.log`)}`);
 
     // Written after EVERY row, so a sweep stopped halfway keeps what it measured.

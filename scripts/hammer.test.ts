@@ -190,17 +190,20 @@ describe('a run is ended by its silence, never by its length', () => {
   // Armada 2026-10-09: pipe hid 441 passing tests from the ladder's outer silence detector, killed at 481.7 s.
   // The tee control completed at 761.9 s, with 6.8 s as its longest silence (jobs 4e9a9b5e and d1f1895d).
   test('a writing hammer survives the ladder\'s outer silence detector, while a silent one is killed', async () => {
-    for (const { fixture, expectedExit } of [{ fixture: writing, expectedExit: 0 }, { fixture: silent, expectedExit: 124 }]) {
+    const silenceSeconds = 5;
+    const streaming = 'for (let line = 0; line < 1500; line += 1) { console.log(line); await Bun.sleep(10); }';
+
+    for (const { fixture, expectedExit } of [{ fixture: streaming, expectedExit: 0 }, { fixture: silent, expectedExit: 124 }]) {
       const outer = await runUnderDeadline({
         argv: [process.execPath, '-e', `
 import { hammerOnce } from ${JSON.stringify(import.meta.dir + '/hammer.ts')};
 const run = await hammerOnce(1, {
-  argv: ${JSON.stringify([process.execPath, '-e', fixture])}, seconds: 1, label: 'the suite inside the hammer',
+  argv: ${JSON.stringify([process.execPath, '-e', fixture])}, seconds: ${String(silenceSeconds)}, label: 'the suite inside the hammer',
 });
 process.exitCode = run.exit;
 `],
         cwd: import.meta.dir,
-        seconds: 1,
+        seconds: silenceSeconds,
         label: 'the ladder around the hammer',
         stdio: 'pipe',
       });
@@ -209,7 +212,7 @@ process.exitCode = run.exit;
 
       if (expectedExit === 0) {
         expect(outer.killed).toBe(false);
-        expect(outer.seconds).toBeGreaterThan(2);
+        expect(outer.seconds).toBeGreaterThan(silenceSeconds * 2);
       }
     }
   });

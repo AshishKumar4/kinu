@@ -31,7 +31,7 @@ import {
   SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK,
   laterReconnectTurn, toldBackTurn, unsentFirstTurn,
   DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, registerScriptedModel,
-  startScriptedModel, type HeldCall, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, planTasksProbe, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn,
+  startScriptedModel, type HeldCall, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, planTasksProbe, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn,
 } from './scripted-model';
 import { FALLBACK_ANSWER, type ScriptedRequest } from './scripted-protocol';
 import { openPublicSocket } from '../tests/first-run/public-socket';
@@ -194,6 +194,7 @@ export interface TierVerdicts {
   geometry: GeometryVerdict | null;
   controls: ControlsVerdict | null;
   walkthrough: WalkthroughVerdict | null;
+  ownServer: OwnServerVerdict | null;
   keptTab: KeptTabVerdict | null;
   chatScroll: ChatScrollVerdict | null;
   midThought: MidThoughtVerdict | null;
@@ -510,6 +511,88 @@ async function measureWalkthrough(newPage: LiveApp['newPage'], origin: string): 
   await page.close();
 
   return verdict;
+}
+
+/** The walkthrough again, in a workspace of its own, read for the slate its implement turn wrote. */
+async function measureOwnServer(newPage: LiveApp['newPage'], origin: string): Promise<OwnServerVerdict> {
+  const workspace = await createWorkspace(
+    origin,
+    { name: `live-row-own-server-${RUN_ID}`, purpose: 'own-server slate in the chat', model: SCRIPTED_MODEL_SPEC });
+
+  const page = await newPage();
+
+  try {
+    await drivePlanReview(page, origin, workspace, async () => {});
+
+    return await measureOwnServerSlate(page);
+  } finally {
+    await shoot(page, 'own-server-settled');
+    await page.close();
+  }
+}
+
+/** The implement turn's slate, drawn in its answer, read in one theme. */
+interface OwnServerReading {
+  /** The frame's height, and its page's own: a frame at its content's height is neither a fixed box nor a scroller. */
+  readonly frame: number;
+  readonly page: number;
+  /** Whether the page scrolls inside its frame. */
+  readonly scrolls: boolean;
+  /** The page's text and the chat's own, as drawn. */
+  readonly pageText: string;
+  readonly chatText: string;
+}
+
+export interface OwnServerVerdict {
+  readonly dark: OwnServerReading;
+  readonly light: OwnServerReading;
+}
+
+/** The support queue slate answers its page from its class's own `fetch`: read as the chat draws it, in each theme. */
+async function measureOwnServerSlate(page: Page): Promise<OwnServerVerdict> {
+  const card = `#chat [data-slate-inline=${JSON.stringify(SLATE_ID)}] iframe`;
+
+  // Bounded: a card, a page or a theme that never arrives is the failure this row names, not a hang.
+  const bound = { timeout: 60_000 };
+
+  await named('the support queue drawn in its answer', () => page.waitForSelector(card, bound));
+  const src = await page.$eval(card, (frame) => frame.getAttribute('src') ?? '');
+  const frame = await named('the support queue frame', () => page.waitForFrame((each) => src !== '' && each.url().startsWith(new URL(src).origin), bound));
+
+  await named('the support queue page', () => frame.waitForFunction(() => document.querySelector('table') !== null, bound));
+
+  const read = async (scheme: 'dark' | 'light'): Promise<OwnServerReading> => {
+    // The page follows the host's scheme; its text is then the chat's.
+    await named(`the support queue in ${scheme}`, () => frame.waitForFunction((want) => document.documentElement.dataset['mode'] === want, bound, scheme));
+    // The card is drawn once its frame has a height: a page loads inside a frame still held shut until it says its size.
+    await named(`the support queue's frame drawn in ${scheme}`, () => page.waitForFunction(
+      (selector) => (document.querySelector(selector)?.getBoundingClientRect().height ?? 0) > 0, bound, card));
+    // Settled: the frame takes the height its page last said, and the page stops growing.
+    await painted(page);
+    await painted(page);
+
+    const outer = await page.$eval(card, (element) => ({ frame: element.getBoundingClientRect().height, chatText: getComputedStyle(element.closest('#chat') ?? document.body).color }));
+
+    const inner = await frame.evaluate(() => {
+      const scroller = document.scrollingElement ?? document.documentElement;
+
+      return {
+        page: Math.ceil(document.documentElement.getBoundingClientRect().height),
+        scrolls: scroller.scrollHeight > scroller.clientHeight + 1,
+        pageText: getComputedStyle(document.body).color,
+      };
+    });
+
+    return { ...outer, ...inner };
+  };
+
+  const first = await page.evaluate(() => (document.documentElement.dataset['mode'] === 'light' ? 'light' : 'dark'));
+  const before = await read(first);
+
+  await page.click(first === 'light' ? 'button[aria-label="Switch to dark mode"]' : 'button[aria-label="Switch to light mode"]');
+  const after = await read(first === 'light' ? 'dark' : 'light');
+
+  return first === 'light' ? { light: before, dark: after } : { dark: before, light: after };
 }
 
 const MARKED_TAB = `(document.querySelector('#inspector :is(nav[aria-label="Pages"], nav[aria-label="Workspace"]) [aria-current="true"]')?.getAttribute('aria-label') ?? null)`;
@@ -1691,7 +1774,7 @@ async function measureState(app: LiveApp): Promise<StateVerdict> {
 /** A row a file can run, by the name its log line carries, in the order the suite ran them. */
 export const LIVE_ROWS = [
   'live-indicator', 'opened-mid-turn', 'reconnect', 'observed-reconnect', 'slept', 'watched-slept', 'answered',
-  'unsent-answer', 'plan-tabs', 'geometry', 'controls', 'walkthrough', 'kept-tab', 'chat-scroll', 'mid-thought', 'dropped-file', 'cleared', 'plan-tasks',
+  'unsent-answer', 'plan-tabs', 'geometry', 'controls', 'walkthrough', 'own-server', 'kept-tab', 'chat-scroll', 'mid-thought', 'dropped-file', 'cleared', 'plan-tasks',
   'slate-ui', 'state',
 ] as const;
 
@@ -1714,7 +1797,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
   const observed: TierVerdicts = {
     liveIndicator: null, openedMidTurn: null, reconnect: null, observedReconnect: null, slept: null, watchedSlept: null, answered: null,
     unsentAnswer: null, bootFailure: null, planTabs: null, geometry: null,
-    controls: null, walkthrough: null, keptTab: null, chatScroll: null, midThought: null, droppedFile: null, cleared: null, planTasks: null, slateUi: null, state: null,
+    controls: null, walkthrough: null, ownServer: null, keptTab: null, chatScroll: null, midThought: null, droppedFile: null, cleared: null, planTasks: null, slateUi: null, state: null,
   };
 
   // Set once the dev server is up: a row that breaks names the file its server's output is kept in.
@@ -1768,6 +1851,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
         'geometry': async () => { observed.geometry = await attempt('geometry', () => measureGeometry(newPage, origin)); },
         'controls': async () => { observed.controls = await attempt('controls', () => measureControls(newPage, origin)); },
         'walkthrough': async () => { observed.walkthrough = await attempt('walkthrough', () => measureWalkthrough(newPage, origin)); },
+        'own-server': async () => { observed.ownServer = await attempt('own-server', () => measureOwnServer(newPage, origin)); },
         'kept-tab': async () => { observed.keptTab = await attempt('kept-tab', () => measureKeptTab(newPage, origin)); },
         'chat-scroll': async () => { observed.chatScroll = await attempt('chat-scroll', () => measureChatScroll(newPage, origin)); },
         'mid-thought': async () => { observed.midThought = await attempt('mid-thought', () => measureMidThought(newPage, origin)); },
