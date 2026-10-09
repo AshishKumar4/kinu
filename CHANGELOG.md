@@ -25,6 +25,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **Exhausted rate limits keep the provider's refusal.** The surfaced failure retains the provider's status, headers, body and cause, so the chat and request log show the provider's message. The retry layer's next-attempt delay is a separate field, never an invented provider header. A stream that refuses after metadata but before output goes through that same final-failure path, so the SDK cannot retry it again.
+- **Code-quoted slate addresses draw their previews.** The server and Markdown renderer use one promotion pass, so an exact inline-code address draws one card, while addresses in code fences stay literal and changed slates still get their automatic preview.
 - **A hung product flow cannot erase finished verdicts.** Each flow is measured beside its assertions and runs as one Armada task in the deploy matrix. A process-interruption regression checks that a finished flow reports before the next flow blocks, and a timed-out task leaves sibling verdicts intact.
 - **Slate sharing flows wait for the capability graph.** Both sharing paths use the same dialog-readiness and enabled-submit flow, so the owner reach check no longer clicks a disabled Share control and waits for a share that was never created.
 - **The hire-home flow relays the hire's own home.** Its scripted parent reads the report before the brief quoted in that report, rather than running its own `pwd`. A real event-drain report now exercises that reply.

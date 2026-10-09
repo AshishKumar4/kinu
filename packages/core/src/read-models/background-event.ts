@@ -11,7 +11,7 @@ import type { SignalCardEvent, SignalCardState } from '../types/signals';
 import { TURN_AUTHOR_METADATA_KEY, turnAuthor } from '../utils/ui-message';
 import { JsonObjectSchema, type JsonObject } from '../utils/json';
 import * as v from 'valibot';
-import { slateLinkId } from '../slates/host-context';
+import { promotedSlateIds } from './markdown-links';
 import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
 
 /** A turn the backend enqueued; `system_event` is any harness event without its own card. */
@@ -134,24 +134,18 @@ export function slatesChanged(row: { metadata: unknown }): readonly string[] {
   return metadataField(row, SLATES_CHANGED_METADATA_KEY, v.array(v.string())) ?? [];
 }
 
-export const SLATE_LINK = /slate:\/\/[^\s)\]>"'`]+/g;
+export function slatesToPreview(changed: Iterable<string>, shown: ReadonlySet<string>, texts: readonly string[]): string[] {
+  const pending = new Set(changed);
 
-function slateLinkIds(text: string): Set<string> {
-  const ids = new Set<string>();
+  for (const id of shown) pending.delete(id);
 
-  for (const [link] of text.matchAll(SLATE_LINK)) {
-    const id = slateLinkId(link);
+  for (const text of texts) {
+    if (pending.size === 0) break;
 
-    if (id !== null) ids.add(id);
+    for (const id of promotedSlateIds(text)) pending.delete(id);
   }
 
-  return ids;
-}
-
-export function slatesToPreview(changed: Iterable<string>, shown: ReadonlySet<string>, texts: readonly string[]): string[] {
-  const linked = slateLinkIds(texts.join('\n'));
-
-  return [...changed].filter((id) => !shown.has(id) && !linked.has(id)).sort();
+  return [...pending].sort();
 }
 
 export function endedMidWork(row: { metadata: unknown }): boolean {

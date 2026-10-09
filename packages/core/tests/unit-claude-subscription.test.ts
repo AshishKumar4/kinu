@@ -10,7 +10,7 @@
 //   packages/catalog/src/compat/rules/auth/anthropic.kdl and registry/engine/oauth-code.ts  the sign-in
 import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { jsonSchema, streamText, tool, type ModelMessage } from 'ai';
+import { APICallError, jsonSchema, streamText, tool, type ModelMessage } from 'ai';
 import * as v from 'valibot';
 import { createClaudeProvider, CLAUDE_CRED_KEY } from '../src/providers/claude';
 import { cacheableSystem, resolvePromptCacheStrategy } from '../src/prompting/cache-breakpoints';
@@ -187,7 +187,7 @@ describe('the Claude subscription wire', () => {
         sent.length = 0;
         await expect(turn(createClaudeProvider(), deps(transport, [login('sk-ant-oat01-retries')]), {
           maxRetries: 0, providerOptions: callRetries(retries),
-        })).rejects.toThrow('is rate-limiting this account');
+        })).rejects.toBeInstanceOf(APICallError);
         expect(sent).toEqual(Array.from({ length: retries + 1 }, () => false));
       }
     } finally {
