@@ -24,6 +24,7 @@ import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB } from '../../src/wake-jobs';
 import { ROOT_SLATE_CALLER } from '../../src/slates/bindings';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import { SqlMeter, type OperationCost } from './sql-meter';
+import type { AgentFacet as ProbeAgentFacet } from './two-turn-probe-agent';
 import type {
   AgentLogEvent,
   CallRecord,
@@ -190,23 +191,28 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates', 'answerPageModes', 'cutTerminal', 'terminalState', 'alienEffect']);
   }
 
-  /** A storage fault on every reservation the workspace writes while `refused`. */
+  /** `query` over main's own isolate, where its conversation, sends, claims and runs are kept (D9). */
+  private async mainRows(query: string, ...bindings: SqlStorageValue[]): Promise<Array<Record<string, SqlStorageValue>>> {
+    return await (await this.agentFacetOf<ProbeAgentFacet>(this.actorHandle().actorId)).probeRows(query, ...bindings);
+  }
+
+  /** A storage fault on every reservation main's isolate writes while `refused`. */
   async refuseReservations(refused: boolean): Promise<void> {
-    this.unmetered(refused
+    await this.mainRows(refused
       ? "CREATE TRIGGER refuse_reservation BEFORE INSERT ON pending_steers BEGIN SELECT RAISE(ABORT, 'reservation refused'); END"
       : 'DROP TRIGGER refuse_reservation');
   }
 
-  /** The sends the workspace still owes, and how many of them carry a card. */
+  /** The sends main still owes, and how many of them carry a card. */
   async owedSends(): Promise<{ readonly sends: number; readonly cards: number }> {
-    const count = (where: string): number => Number(this.unmetered(`SELECT COUNT(*) AS n FROM pending_steers WHERE ${where}`).one().n);
+    const count = async (where: string): Promise<number> => Number((await this.mainRows(`SELECT COUNT(*) AS n FROM pending_steers WHERE ${where}`))[0]?.n);
 
-    return { sends: count('1'), cards: count('metadata_json IS NOT NULL') };
+    return { sends: await count('1'), cards: await count('metadata_json IS NOT NULL') };
   }
 
   /** The newest turn claim's outcome: null while its foreground owner holds it; `missing` with no claim at all. */
   async latestClaimOutcome(): Promise<string | null> {
-    const row = this.unmetered('SELECT outcome FROM actor_turn_claims ORDER BY claimed_at DESC LIMIT 1').toArray()[0];
+    const row = (await this.mainRows('SELECT outcome FROM actor_turn_claims ORDER BY claimed_at DESC LIMIT 1'))[0];
 
     if (row === undefined) return 'missing';
 
@@ -487,7 +493,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
           id: textColumn(row.id), kind: textColumn(row.kind), status: textColumn(row.status),
           result: row.result === null ? null : textColumn(row.result), settledAt: row.settled_at === null ? null : Number(row.settled_at),
         })),
-      runs: sql.exec("SELECT run_id, type, payload FROM run_events WHERE type IN ('run_start', 'run_end') ORDER BY rowid").toArray()
+      runs: (await this.mainRows("SELECT run_id, type, payload FROM run_events WHERE type IN ('run_start', 'run_end') ORDER BY rowid"))
         .reduce<Array<{ runId: string; userMessage: string; reason: string | null }>>((runs, row) => {
           const payload = v.parse(v.looseObject({ userMessage: v.optional(v.string()), reason: v.optional(v.string()) }), JSON.parse(textColumn(row.payload)));
 
@@ -519,9 +525,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
 
   /** The row a reset must restore so a replayed frame keeps its token. */
   async pendingSteers(): Promise<PendingSteer[]> {
-    return this.actorState.storage.sql
-      .exec('SELECT actor_id, id, turn_id, mode, text FROM pending_steers ORDER BY actor_id, id')
-      .toArray()
+    return (await this.mainRows('SELECT actor_id, id, turn_id, mode, text FROM pending_steers ORDER BY actor_id, id'))
       .map((row) => ({
         actorId: textColumn(row.actor_id),
         id: textColumn(row.id),
@@ -532,9 +536,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   }
 
   async pendingSteerFileRows(): Promise<PendingSteerFile[]> {
-    return this.actorState.storage.sql
-      .exec('SELECT actor_id, steer_id, filename, media_type, url FROM pending_steer_files ORDER BY actor_id, steer_id, seq')
-      .toArray()
+    return (await this.mainRows('SELECT actor_id, steer_id, filename, media_type, url FROM pending_steer_files ORDER BY actor_id, steer_id, seq'))
       .map((row) => ({
         actorId: textColumn(row.actor_id),
         steerId: textColumn(row.steer_id),
@@ -560,9 +562,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   /** The public `busy` getter `routeBusyChat` consults. */
   /** A run the loop continues after a reset closes exactly once, by the loop. */
   async runEnds(): Promise<Array<{ runId: string; reason: string }>> {
-    return this.actorState.storage.sql
-      .exec(`SELECT run_id, payload FROM run_events WHERE type = 'run_end' ORDER BY ts, rowid`)
-      .toArray()
+    return (await this.mainRows(`SELECT run_id, payload FROM run_events WHERE type = 'run_end' ORDER BY ts, rowid`))
       .map((row) => ({
         runId: textColumn(row.run_id),
         reason: v.parse(v.object({ reason: v.string() }), JSON.parse(textColumn(row.payload))).reason,
@@ -586,13 +586,16 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
           id: textColumn(row.id), kind: textColumn(row.kind), turnId: row.turn_id === null ? null : textColumn(row.turn_id),
           variant: row.variant === null ? null : textColumn(row.variant), consumed: row.consumed_at !== null, payload: textColumn(row.payload),
         })),
-      terminalEffects: sql.exec('SELECT sequence_id, effect_key, effect_name, scope, seq, input_json, lane, status, attempts FROM terminal_effects ORDER BY rowid').toArray()
-        .map((row) => ({
+      // Main's turns' own effects are its isolate's; what the workspace owes for them, its own.
+      terminalEffects: [
+        ...await this.mainRows('SELECT sequence_id, effect_key, effect_name, scope, seq, input_json, lane, status, attempts FROM terminal_effects ORDER BY rowid'),
+        ...sql.exec('SELECT sequence_id, effect_key, effect_name, scope, seq, input_json, lane, status, attempts FROM terminal_effects ORDER BY rowid').toArray(),
+      ].map((row) => ({
           sequenceId: textColumn(row.sequence_id), effectKey: textColumn(row.effect_key), effectName: textColumn(row.effect_name), scope: textColumn(row.scope),
           seq: Number(row.seq), input: textColumn(row.input_json), lane: textColumn(row.lane), status: textColumn(row.status),
           attempts: Number(row.attempts),
         })),
-      runEvents: sql.exec("SELECT run_id, type, payload FROM run_events WHERE type IN ('run_start', 'step_finish', 'tool_call_end', 'run_end') ORDER BY rowid").toArray()
+      runEvents: (await this.mainRows("SELECT run_id, type, payload FROM run_events WHERE type IN ('run_start', 'step_finish', 'tool_call_end', 'run_end') ORDER BY rowid"))
         .map((row) => ({ runId: textColumn(row.run_id), type: textColumn(row.type), payload: textColumn(row.payload) })),
     });
   }
@@ -674,12 +677,10 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
 
   /** Each run's cause in start order, and whether it closed; a drain turn is `caused_by: 'event_drain'`. */
   async runCauses(): Promise<Array<{ cause: string; closed: boolean }>> {
-    const sql = this.actorState.storage.sql;
-
-    const closed = new Set(sql.exec("SELECT run_id FROM run_events WHERE type = 'run_end'").toArray()
+    const closed = new Set((await this.mainRows("SELECT run_id FROM run_events WHERE type = 'run_end'"))
       .map((row) => textColumn(row.run_id)));
 
-    return sql.exec("SELECT run_id, payload FROM run_events WHERE type = 'run_start' ORDER BY rowid").toArray()
+    return (await this.mainRows("SELECT run_id, payload FROM run_events WHERE type = 'run_start' ORDER BY rowid"))
       .map((row) => ({
         cause: v.parse(
           v.fallback(v.looseObject({ caused_by: v.fallback(v.string(), '') }), { caused_by: '' }),

@@ -50,6 +50,7 @@
     "tests/workerd/delete-all-probe.ts",
     "tests/workerd/delete-all-shapes.ts",
     "tests/workerd/agent-facet-probe-agent.ts",
+    "tests/workerd/two-turn-probe-agent.ts",
     "tests/workerd/slate-egress-probe.ts"
   ]
 }

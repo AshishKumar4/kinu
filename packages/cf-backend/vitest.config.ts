@@ -284,7 +284,8 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           modules: probeModules('two-turn-probe.ts', probeRuntime),
           bindings: { DEV_USER_EMAIL: 'probe@local', WORKERS_AI_VIA_BINDING: 'on', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
           ai: await getTwoTurnAi(),
-          serviceBindings: { ASSETS: agentAssets() },
+          // Main's isolate is the shipped facet plus a read of its own SQLite, where its sends, claims and runs are kept.
+          serviceBindings: { ASSETS: agentAssets(fileURLToPath(new URL('./tests/workerd/two-turn-probe-agent.ts', import.meta.url))) },
           // Compat HTTP falls back to the
           // global fetch (owned-model-services passes no deps.fetch), which
           // routes to the Node-side fake; unknown hosts throw.
@@ -356,6 +357,8 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
         }, })],
 ['account-reset-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('account-reset-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
+        // Main's conversation is its own isolate's, loaded from the agent bundle as the deployed Worker serves it.
+        serviceBindings: { ASSETS: agentAssets() },
         outboundService: async (request) => {
           throw new Error('Unmatched test egress is disabled: ' + request.url);
         },
@@ -369,6 +372,8 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
            ...workerCompatibility, workerLoaders: { LOADER: {} },
           modules: probeModules('store-reset-probe.ts', { ...probeRuntime, keepNames: true }),
           bindings: { CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
+          // Main's conversation is its own isolate's, loaded from the agent bundle as the deployed Worker serves it.
+          serviceBindings: { ASSETS: agentAssets() },
           outboundService: async (request) => {
             throw new Error('Unmatched test egress is disabled: ' + request.url);
           },
@@ -379,6 +384,8 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           },
         })],
 ['addressed-name-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('addressed-name-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { CREDENTIAL_ENCRYPTION_KEY: 'YWRkcmVzc2VkLW5hbWUtcHJvYmUtY3JlZC1rZXktMzI=' },
+        // Main's conversation is its own isolate's, loaded from the agent bundle as the deployed Worker serves it.
+        serviceBindings: { ASSETS: agentAssets() },
         outboundService: async (request) => {
           throw new Error('Unmatched test egress is disabled: ' + request.url);
         },
