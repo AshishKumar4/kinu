@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import { attempt, settle } from '../obs/effect';
-import { KinuError } from '../obs/error';
+import { KinuError, renderCauseChain } from '../obs/error';
 
 /**
  * A list the workspace's opening read carries whose failure is its own: the tab reports it on that list's surface, as
@@ -12,7 +12,7 @@ export type OpeningList<T> = { readonly value: T } | { readonly error: string };
 export function openingList<T>(doing: string, read: () => PromiseLike<T>): Effect.Effect<OpeningList<T>> {
   return Effect.match(attempt({ doing, otherwise: 'io' }, read), {
     onSuccess: (value): OpeningList<T> => ({ value }),
-    onFailure: (failure): OpeningList<T> => ({ error: failure.message }),
+    onFailure: (failure): OpeningList<T> => ({ error: renderCauseChain(failure) }),
   });
 }
 

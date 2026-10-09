@@ -340,6 +340,22 @@ async function answerJobs(page: Page, at: number, answer: { label?: string; fail
   await page.evaluate((detail) => { window.dispatchEvent(new CustomEvent('gallery:jobs-answer', { detail })); }, { at, ...answer });
 }
 
+/**
+ * Answers every read the arriving workspace made from `from` on, and each it makes later, with one job named `label`:
+ * an arrival may read the list more than once (a load the next one retires still asks).
+ */
+async function answerArrival(page: Page, from: number, label: string): Promise<void> {
+  const asked = await page.evaluate((first, named) => {
+    const root = document.documentElement.dataset;
+    root.galleryJobsAnswerLabel = named;
+    root.galleryJobsAnswerFrom = String(first);
+
+    return Number(root.galleryJobReads ?? '0');
+  }, from, label);
+
+  for (let at = from; at < asked; at += 1) await answerJobs(page, at, { label });
+}
+
 /** Has the server say the jobs moved, and returns the number of the read that starts. */
 async function jobsMoved(page: Page): Promise<number> {
   const at = await jobReads(page);
@@ -409,7 +425,7 @@ test('a read answered after its workspace was left never shows in the next one',
     await page.waitForFunction((was) => Number(document.documentElement.dataset.galleryJobReads ?? '0') > was, {}, reads);
     const arrived = reads;
 
-    await answerJobs(page, arrived, { label: 'next workspace build' });
+    await answerArrival(page, arrived, 'next workspace build');
     await openWorkList(page);
     await page.waitForFunction(() => document.body.textContent?.includes('next workspace build'));
 

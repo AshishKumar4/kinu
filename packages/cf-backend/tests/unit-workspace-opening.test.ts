@@ -5,12 +5,13 @@
  */
 import { expect, test } from 'bun:test';
 import { WORK_TAB_JOBS } from '@kinu.run/core';
-import { catalogTurn, gatewayWorkspace } from './helpers/actor-harness';
+import { gatewayWorkspace } from './helpers/actor-harness';
 import { answeringGateway } from './helpers/platform-gateway';
 
 test("the opening carries the snapshot and every list the first screen draws, each as that list's own read answers it", async () => {
-  const { agent } = gatewayWorkspace(answeringGateway('Done.'));
-  await catalogTurn(agent, 'Say done.');
+  // No turn: a turn leaves effects (its title) that settle on their own clock, between the opening and the reads below.
+  const { agent, started } = gatewayWorkspace(answeringGateway('Done.'));
+  await started;
 
   const opening = await agent.getWorkspaceOpening();
   const snapshot = await agent.getWorkspaceSnapshot();

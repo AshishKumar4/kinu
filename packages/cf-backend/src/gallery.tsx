@@ -2466,7 +2466,8 @@ function heldJob(at: number, label: string | undefined): JsonValue {
 /**
  * `&jobs=held`: one running job, `first build`, until `data-gallery-jobs-hold="1"`; from then each read waits for
  * `gallery:jobs-answer` `{ at, label?, failed? }`, `at` counting held reads from 0, and answers one running job named
- * `label` or fails with `failed`. Otherwise there are none.
+ * `label` or fails with `failed`. A read at or past `data-gallery-jobs-answer-from` answers at once, named
+ * `data-gallery-jobs-answer-label`: a workspace's arrival may read more than once. Otherwise there are none.
  */
 async function galleryJobsRead(): Promise<JsonValue> {
   if (new URLSearchParams(location.search).get("jobs") !== "held") return [];
@@ -2476,6 +2477,8 @@ async function galleryJobsRead(): Promise<JsonValue> {
   const at = Number(root.galleryJobReads ?? "0");
 
   root.galleryJobReads = String(at + 1);
+
+  if (root.galleryJobsAnswerFrom !== undefined && at >= Number(root.galleryJobsAnswerFrom)) return heldJob(at, root.galleryJobsAnswerLabel);
 
   const answer = await galleryEvent("gallery:jobs-answer", JobsAnswerSchema, (asked) => asked.at === at);
 
