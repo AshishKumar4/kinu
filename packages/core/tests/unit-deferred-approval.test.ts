@@ -5,7 +5,7 @@ import { describe, test, expect } from 'bun:test';
 import { Effect } from 'effect';
 import { Database } from 'bun:sqlite';
 import { createMemoryVfs, fakeMossaic, toolExecute } from '@kinu.run/test-utils';
-import { DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable, DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, withApprovalGatedShell, buildBuiltinTools, reviewCommand, type DeferredApprovalChannel, formatApprovalGrant, createShellSession, withApprovalGatedFiles, performBoundWrite, withMountTable, sharedDriveMount, mossaicVfs, ParkedWriteFiles, type DeferredApproval, type ShellApprovalPolicy, type ShellApprovalOutcome, type AgentRuntime, type AgentSignal, type FilesOwner, type Shell, WORKSPACE_ROOT } from '../src/index';
+import { DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable, DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, withApprovalGatedShell, buildBuiltinTools, reviewCommand, actorReferenceOf, type DeferredApprovalChannel, formatApprovalGrant, createShellSession, withApprovalGatedFiles, performBoundWrite, withMountTable, sharedDriveMount, mossaicVfs, ParkedWriteFiles, type DeferredApproval, type ShellApprovalPolicy, type ShellApprovalOutcome, type AgentRuntime, type AgentSignal, type FilesOwner, type Shell, WORKSPACE_ROOT } from '../src/index';
 import type { BoundFileWrite } from '../src/safety/bound-write';
 import { CHUNK_SIZE } from '@nimbus-sh/core/constants.js';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -59,7 +59,7 @@ function setup(opts: {
   /** Wall-clock offset a test moves to let a denial age. */
   let elapsed = 0;
   /** Durable audit trail a consumed grant leaves behind. */
-  const audited: Array<{ approvalId: string; command: string; executor: string }> = [];
+  const audited: Array<{ approvalId: string; actor: string; command: string; executor: string }> = [];
 
   const queue = new DeferredApprovalQueue({
     writes: null,
@@ -446,7 +446,7 @@ describe('the spent grant leaves an audit, and no row the gate did not close', (
 
     expect(await shellTool.execute({ command: GATED })).toBe('ran');
     expect(audited).toEqual([
-      { approvalId: 'defer-1', command: GATED, executor: 'workspace' },
+      { approvalId: 'defer-1', actor: store.actorId, command: GATED, executor: 'workspace' },
     ]);
     // The row is deleted, not flipped to a terminal status.
     expect(store.get('defer-1')).toBeNull();
@@ -579,8 +579,10 @@ describe('a hired agent parks on its workspace\'s one queue, as itself', () => {
     const woken: Array<[string, string]> = [];
     let seq = 0;
 
+    const store = new DeferredApprovalStore(sql, actors.main);
+
     const queue = new DeferredApprovalQueue({
-      writes: null, store: new DeferredApprovalStore(sql, actors.main), remember: () => {},
+      writes: null, store, remember: () => {},
       wake: (actorId, signal) => Effect.sync(() => { woken.push([actorId, signal.text]); }),
       newId: () => `defer-${String(++seq)}`,
       now: () => 1_000 + seq,
@@ -590,7 +592,7 @@ describe('a hired agent parks on its workspace\'s one queue, as itself', () => {
       command, executor: 'workspace', review: reviewCommand(command, 'agent'),
     });
 
-    return { queue, root: actors.main, hire, woken, ask };
+    return { queue, store, root: actors.main, hire, woken, ask, directory: actors.directory };
   }
 
   test('both asks wait in the one list, each with its asker; deciding them wakes each asker with its own', async () => {
@@ -608,6 +610,48 @@ describe('a hired agent parks on its workspace\'s one queue, as itself', () => {
       [root.actorId, '  defer-1: git push --force origin main'],
       [hire.actorId, '  defer-2: git push --force origin release'],
     ]);
+  });
+
+  test('one asker that cannot be told does not leave the others untold; the answer reports it after', async () => {
+    const { queue, store, root, hire, ask } = workspaceQueue();
+    const told: string[] = [];
+
+    await ask(queue.channelFor(hire.actorId), 'git push --force origin release');
+    await ask(queue.channel, 'git push --force origin main');
+
+    const failing = new DeferredApprovalQueue({
+      writes: null, store, remember: () => {},
+      wake: (actorId) => (actorId === hire.actorId
+        ? Effect.fail(new KinuError('missing', 'the hire was retired'))
+        : Effect.sync(() => { told.push(actorId); })),
+    });
+
+    await expect(failing.decide(['defer-1', 'defer-2'], 'approved')).rejects.toThrow('the hire was retired');
+    expect(told).toEqual([root.actorId]);
+    expect(queue.list()).toEqual([]);
+  });
+
+  test('an id two actors share answers neither; a minted id is one no actor has', async () => {
+    const { queue, store, root, hire, ask } = workspaceQueue();
+    const shared = { id: 'defer-1', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 1 };
+
+    store.create(shared, []);
+    store.forActor(hire.actorId).create(shared, []);
+
+    expect(await queue.decide(['defer-1'], 'approved')).toEqual([]);
+    // Seeded at one instant, so in either order.
+    expect(queue.list().map((action) => action.actor).sort()).toEqual([root.actorId, hire.actorId].sort());
+    await ask(queue.channelFor(hire.actorId), 'git push --force origin release');
+    expect(queue.list().map((action) => action.id)).toEqual(['defer-1', 'defer-1', 'defer-2']);
+  });
+
+  test('a retired agent\'s ask leaves the owner\'s list: it could neither be told nor re-issue', async () => {
+    const { queue, hire, ask, directory, root } = workspaceQueue();
+
+    await ask(queue.channelFor(hire.actorId), 'git push --force origin release');
+    directory.apply(root, [], { action: 'retire', name: 'courier', reference: actorReferenceOf(directory.describe(hire)) });
+
+    expect(queue.list()).toEqual([]);
   });
 
   test('the hire\'s approval runs its own re-issue once, and stands for no one else', async () => {
@@ -708,7 +752,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     const { sql, actor } = approvalsDb();
     const store = new DeferredApprovalStore(sql, actor);
     let seq = 0;
-    const audited: Array<{ approvalId: string; command: string; executor: string }> = [];
+    const audited: Array<{ approvalId: string; actor: string; command: string; executor: string }> = [];
 
     const queue = new DeferredApprovalQueue({
       writes: null,
@@ -790,7 +834,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     expect(executed).toEqual([GATED, GATED]);
     expect(store.standing(GATED, 'device', 1_010)).toBeNull();
     expect(store.get('defer-1')).toBeNull();
-    expect(audited).toEqual([{ approvalId: 'defer-1', command: GATED, executor: 'device' }]);
+    expect(audited).toEqual([{ approvalId: 'defer-1', actor: store.actorId, command: GATED, executor: 'device' }]);
     expect(await exec(GATED)).toMatchObject({ reason: 'unavailable', error: expect.stringContaining('defer-2') });
   });
 

@@ -202,7 +202,8 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         servingMoved: () => seams.servingMoved(),
         boxUse: seams.boxUse,
         slate: (operation) => seams.slate(bound.handle, operation),
-        deferrals: () => seams.deferrals(bound.handle.actorId),
+        // The workspace's own actor's, or a hire's: a decision wakes either. A swarm head has none, as no drain resumes it.
+        deferrals: () => (bound.record.origin === 'swarm' ? undefined : seams.deferrals(bound.handle.actorId)),
         // The chat's authority: a self-resolved profile could differ from the turn's and make a search unreproducible.
         resolveProfile: async () => (await seams.resolveProfile({
           actor: bound.handle, availableTools: [], workMode: 'build',

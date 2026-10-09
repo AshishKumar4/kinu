@@ -52,8 +52,8 @@ export const DECISION_HEARD = 'DECISION HEARD';
 /** The hire row's ask, sent to a chat agent the owner made: its command parks as the hire's own. */
 export const HIRE_APPROVAL_ASK = 'Flow hire approval: push the hire release.';
 
-/** Gated (git-force-push) and harmless anywhere: git cannot enter the directory, so nothing is pushed. */
-export const HIRE_PARKED_COMMAND = 'git -C /nonexistent-kinu-dir push --force origin flow-hire-release';
+/** Gated (git-force-push) and harmless by construction: /dev/null is no repository, so git pushes nothing. */
+export const HIRE_PARKED_COMMAND = 'git --git-dir=/dev/null push --force origin flow-hire-release';
 
 /** The hire's reply once its re-issued command ran; the row reads it in the hire's chat. */
 export const HIRE_RAN = 'HIRE RAN';
@@ -143,7 +143,8 @@ function hireApprovalScript(request: ScriptedRequest, latest: string): ScriptedA
 
   if (asked) return { text: 'HIRE PARKED' };
 
-  return { text: done.result.includes('NOT RUN') ? 'HIRE STILL BLOCKED' : HIRE_RAN };
+  // Ran is git's own refusal in the result; any other answer, an empty one included, is not proof it ran.
+  return { text: done.result.includes('not a git repository') ? HIRE_RAN : 'HIRE STILL BLOCKED' };
 }
 
 /** The approvals row: its turn parks both commands, and each decision's wake is answered without re-issuing anything. */

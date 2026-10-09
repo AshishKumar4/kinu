@@ -3152,10 +3152,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         )))),
       // Same actor_config as the approval mode, read live by the gate on the next command.
       remember: (grants) => { this.config.grantShellApproval(grants); },
-      // A spent grant's row is deleted, so this event is the only durable record of consumption.
-      // Outside any turn it falls back to the workspace run.
+      // A spent grant's row is deleted, so this event is the only durable record of consumption, naming whose it
+      // was. A hire's, or the root's outside any turn, falls back to the workspace run: the root's turn is not theirs.
       audit: (record) => {
-        this.eventRecorder.emit(this._currentRunId || WORKSPACE_RUN_ID, {
+        this.eventRecorder.emit(record.actor === this.rt.actor.actorId && this._currentRunId ? this._currentRunId : WORKSPACE_RUN_ID, {
           type: 'approval_consumed', ...record,
         });
       },

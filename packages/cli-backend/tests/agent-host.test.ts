@@ -1026,8 +1026,8 @@ describe('LocalAgentHost', () => {
 
   test("a hire's gated command parks on its root's queue as its own; approved, the hire is woken and its re-issue runs", async () => {
     const brief = 'Push the release.';
-    // Gated (git-force-push) and harmless anywhere: git cannot enter the directory, so nothing is pushed.
-    const gated = 'git -C /nonexistent-kinu-dir push --force origin release';
+    // Gated (git-force-push) and harmless by construction: /dev/null is no repository, so git pushes nothing.
+    const gated = 'git --git-dir=/dev/null push --force origin release';
     const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
     const results: string[] = [];
 
@@ -1091,7 +1091,7 @@ describe('LocalAgentHost', () => {
       // Re-issued under its own approval, the command ran: git's own refusal, not the gate's.
       expect(results).toHaveLength(2);
       expect(results[1]).not.toContain('NOT RUN');
-      expect(results[1]).toContain('nonexistent-kinu-dir');
+      expect(results[1]).toContain('not a git repository');
       expect(await root.listDeferredApprovals()).toEqual([]);
     } finally {
       await host.close();

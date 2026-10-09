@@ -39,7 +39,7 @@ import { ActorSession, type ActorTurnLease,
   BackgroundJobStore, BackgroundJobRunner, type BackgroundJobRunnerDeps, type JobHolder, processJobHolder, type TaskListStore,
   WorkspaceJobAuthorities, endedStepLoopJobs, actorReferenceOf, type JobAuthority, type JobRetirement, type WorkspaceJobPorts,
   backgroundJobNotice,
-  DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals, type AgentSignal,
+  DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals, admitSubordinateTask, type AgentSignal,
   BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob, type ActorToolsets,
   BACKGROUND_POLICY, type BackgroundPolicy,
   type MctsSearchStore,
@@ -786,14 +786,37 @@ export class LocalAgentSession {
           return Effect.asVoid(attempt({ doing: 'waking this agent with the owner\'s decision', otherwise: 'io' }, () => this.actorSession.orchestrator.inbox.send(signal)));
         }
 
-        return wakeHire === undefined ? Effect.fail(new KinuError('missing', `No host can wake ${actorId}.`)) : wakeHire(actorId, signal);
+        return wakeHire === undefined ? this.admitDecision(actorId, signal) : wakeHire(actorId, signal);
       },
       remember: (grants) => { this.config.grantShellApproval(grants); },
+      // A hire's consumption, or the root's outside a turn, is the workspace run's: the root's turn is not theirs.
       audit: (record) => {
-        this.eventRecorder.emit(this.chat.currentRunId ?? WORKSPACE_RUN_ID, { type: 'approval_consumed', ...record });
+        const runId = record.actor === this.rt.actor.actorId ? this.chat.currentRunId : undefined;
+
+        this.eventRecorder.emit(runId ?? WORKSPACE_RUN_ID, { type: 'approval_consumed', ...record });
       },
       announce: () => { this.host.broadcast({ type: 'pending_actions_changed' }); },
       writes: null,
+    });
+  }
+
+  /**
+   * With no host here (the interactive CLI over a daemon's workspace), the decision is admitted to the hire's own
+   * event log, as its hirer's message would be: whichever process hosts it drains it there and runs its turn.
+   */
+  private admitDecision(actorId: string, signal: AgentSignal): Effect.Effect<void, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const record = localActorDirectory(this.rt.actor).directory.retained(actorId);
+
+      if (record === null || record.retiringAt !== null || record.deletedAt !== null) {
+        return yield* Effect.fail(new KinuError('missing', `No live agent ${actorId} to tell of the decision.`));
+      }
+
+      const { handle } = this.actorHost.bindStores(actorReferenceOf(record));
+
+      admitSubordinateTask(new EventLog(makeSqlExec(this.db), handle), {
+        fromWorkspace: this.rt.actor.name, kind: 'message', body: signal.text, mode: 'build', now: Date.now(),
+      });
     });
   }
 

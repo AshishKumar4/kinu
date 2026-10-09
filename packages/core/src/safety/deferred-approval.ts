@@ -22,7 +22,7 @@ import {
 import { boundWriteOf, type ApprovalContent, type BoundFileWrite } from './bound-write';
 import { nanoid } from '../utils/nanoid';
 import { diagnostics, KinuError, settle, settleLoggedSync, toKinuError } from '../obs/index';
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import { serialQueue } from '@kinu.run/agent-utils';
 
 /** The `kinuEvent` kind a decision wakes the agent under; same mechanism as the background-job wake. */
@@ -141,17 +141,21 @@ export class DeferredApprovalStore {
     return new DeferredApprovalStore(this.sql, this.actor, actorId);
   }
 
-  /** Every actor's rows still parked on the owner, oldest first: the workspace's one queue. */
+  /**
+   * Every live actor's rows still parked on the owner, oldest first: the workspace's one queue. A retired agent's
+   * would answer nobody: it can neither be told nor re-issue.
+   */
   workspaceQueued(limit = 100): DeferredApproval[] {
     this.actor.assertCurrent();
 
     return this.sql<Row>`
-      SELECT actor_id, id, command, executor, reason, status, requested_at, decided_at
-      FROM deferred_approvals WHERE status='queued'
-      ORDER BY requested_at ASC LIMIT ${limit}`.map(toAction);
+      SELECT d.actor_id, d.id, d.command, d.executor, d.reason, d.status, d.requested_at, d.decided_at
+      FROM deferred_approvals d JOIN workspace_actors a ON a.actor_id = d.actor_id
+      WHERE d.status='queued' AND a.retiring_at IS NULL AND a.deleted_at IS NULL
+      ORDER BY d.requested_at ASC LIMIT ${limit}`.map(toAction);
   }
 
-  /** The actors with a row of this id: ids are minted unique, so one. */
+  /** The actors with a row of this id, any status: ids are minted unique across them ({@link DeferredApprovalQueue}). */
   owners(id: string): string[] {
     this.actor.assertCurrent();
 
@@ -403,7 +407,6 @@ export class DeferredApprovalQueue {
   private readonly parking = new Map<string, number>();
   /** One at a time, so a delete's check sees every keep queued before it. */
   private readonly serial = serialQueue();
-  private readonly stores = new Map<string, DeferredApprovalStore>();
 
   constructor(private readonly deps: DeferredApprovalQueueDeps) {
     this.now = deps.now ?? Date.now;
@@ -411,11 +414,7 @@ export class DeferredApprovalQueue {
   }
 
   private storeOf(actorId: string): DeferredApprovalStore {
-    const held = this.stores.get(actorId) ?? this.deps.store.forActor(actorId);
-
-    this.stores.set(actorId, held);
-
-    return held;
+    return this.deps.store.forActor(actorId);
   }
 
   /** The root's own channel. */
@@ -494,7 +493,7 @@ export class DeferredApprovalQueue {
     if (standing?.status === 'queued') return { outcome: 'queued', action: standing };
 
     const action = store.create({
-      id: this.newId(),
+      id: this.unusedId(),
       command: req.command,
       executor: req.executor,
       reason: formatApproval(req.review),
@@ -504,6 +503,15 @@ export class DeferredApprovalQueue {
     this.notify({ kind: 'queued', action });
 
     return { outcome: 'queued', action };
+  }
+
+  /** An id no actor's row has: the owner answers by id alone, so one id is one ask. */
+  private unusedId(): string {
+    let id = this.newId();
+
+    while (this.deps.store.owners(id).length > 0) id = this.newId();
+
+    return id;
   }
 
   /** Closes a spend: 'spent' consumes and audits the grant, 'did-not-run' restores the row; whether this call closed it. */
@@ -525,7 +533,7 @@ export class DeferredApprovalQueue {
   private audit(action: DeferredApproval): void {
     settleLoggedSync('approval.audit_emit_failed', { doing: 'recording an approval_consumed run event', otherwise: 'io' }, () => {
       this.deps.audit?.({
-        approvalId: action.id, command: action.command, executor: action.executor,
+        approvalId: action.id, actor: action.actor, command: action.command, executor: action.executor,
       });
     });
   }
@@ -554,15 +562,16 @@ export class DeferredApprovalQueue {
     const decided: DeferredApproval[] = [];
     const swept: string[] = [];
 
-    // Deduped so one command is not reported as two decisions.
+    // Deduped so one command is not reported as two decisions; an id two actors share answers neither.
     for (const id of new Set(ids)) {
-      for (const actorId of this.deps.store.owners(id)) {
-        const store = this.storeOf(actorId);
-        swept.push(...store.sweepDenials(now));
-        const action = store.decide(id, answer, now);
+      const [actorId, ...others] = this.deps.store.owners(id);
 
-        if (action) decided.push(action);
-      }
+      if (actorId === undefined || others.length > 0) continue;
+      const store = this.storeOf(actorId);
+      swept.push(...store.sweepDenials(now));
+      const action = store.decide(id, answer, now);
+
+      if (action) decided.push(action);
     }
 
     await this.release(boundBytes([...swept, ...decided.filter((a) => a.status === 'denied').map((a) => a.command)]));
@@ -578,18 +587,26 @@ export class DeferredApprovalQueue {
     const written = await this.performWrites(decided.filter((a) => a.actor === this.deps.store.actorId));
     this.notify({ kind: 'decided', actions: decided });
 
-    // Each asker once, in turn: a wake that fails is the answer's failure, as the decision itself is already durable.
+    // Each asker once, every one tried: the decision is already durable, and one asker's failed wake (an agent
+    // retired meanwhile) is no reason another goes untold. The failures are the answer's, after.
     const wakes = Effect.forEach(new Set(decided.map((a) => a.actor)), (actorId) => {
       const own = decided.filter((a) => a.actor === actorId);
 
-      return this.deps.wake(actorId, {
+      return Effect.result(this.deps.wake(actorId, {
         kind: DEFERRED_APPROVAL_SIGNAL,
         text: decisionWakeMessage(own, written),
         metadata: { decision: answer, count: own.length, ids: own.map((a) => a.id) },
-      });
-    }, { discard: true });
+      }));
+    });
 
-    return settle(Effect.as(wakes, decided));
+    return settle(Effect.flatMap(wakes, (results) => {
+      const failed = results.flatMap((result) => (Result.isFailure(result) ? [result.failure] : []));
+      const [first] = failed;
+
+      return first === undefined ? Effect.succeed(decided) : Effect.fail(failed.length === 1 ? first : new KinuError(
+        first.code, `${String(failed.length)} agents were not told of the decision: ${failed.map((error) => error.message).join('; ')}`,
+      ));
+    }));
   }
 
   /** The bytes are read while the approved row still names them, then the row is spent, so a re-issue meanwhile
