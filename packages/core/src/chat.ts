@@ -1023,6 +1023,8 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         }
 
         try {
+          // Recorded: the step that ended is the turn's `stepCount - 1`, the number its request was prepared under.
+          await extensions?.emitStepEnd({ stepNumber: stepCount - 1 });
           await opts.onStep?.(step, own);
         } catch (cause) {
           call.stepFailure ??= { doing: 'run the step hook', cause };

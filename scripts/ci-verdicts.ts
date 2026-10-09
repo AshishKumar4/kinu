@@ -16,8 +16,8 @@ const RowSchema = v.object({
   timings: v.optional(v.record(v.string(), v.number())),
   /** The revision whose run this unchanged row reuses. */
   cached: v.optional(v.string()),
-  /** A deploy row's evidence from its container: `dir` under the deploy's report, and the files as a base64 tar.gz. */
-  evidence: v.optional(v.object({ dir: v.string(), tgz: v.string() })),
+  /** A deploy row's evidence: the files in its task's artifacts directory, each under the row's evidence name. */
+  artifacts: v.optional(v.array(v.string())),
 });
 
 export type CIVerdict = v.InferOutput<typeof RowSchema>;

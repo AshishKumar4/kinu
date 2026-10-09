@@ -32,7 +32,7 @@ import {
   type AnyToolPart,
 } from "@kinu.run/core";
 import { drawnText, toolCallRunning, type LiveTail } from "@kinu.run/core";
-import { redactPayload, redactSecrets, segmentBySteers } from "@kinu.run/core";
+import { redactPayload, redactSecrets, segmentBySteers, splicesSeenOn, type SignalCard } from "@kinu.run/core";
 import { classifyProgrammaticTurn, endedMidWork, isSteeredMessage, turnFailure } from "@kinu.run/core";
 import { EventRow, foldRepeats, ProgrammaticTurnCard, type CardState } from "@/components/ProgrammaticTurnCard";
 import { useToggledSet } from "@/hooks/use-toggled-set";
@@ -518,11 +518,41 @@ function SteeredMark({ state }: { state: "queued" | "landed" }) {
   );
 }
 
+/** An event the agent read mid-answer, with where it read it and how far it has got. */
+interface AnswerSplice {
+  readonly id: string;
+  readonly atStep: number;
+  readonly text: string;
+  readonly metadata: JsonObject;
+  readonly state: CardState;
+}
+
+/** What the answer keeps, seen, then the live cards it does not keep yet. */
+function answerSplices(message: UIMessage, live: readonly SignalCard[] = []): readonly AnswerSplice[] {
+  const kept = splicesSeenOn({ metadata: message.metadata }).map((splice) => ({ ...splice, state: "seen" as const }));
+  const keptIds = new Set(kept.map((splice) => splice.id));
+
+  return [...kept, ...live.flatMap((card) => (card.atStep === undefined || keptIds.has(card.id) ? [] : [{
+    id: card.id, atStep: card.atStep, text: card.text, metadata: { ...card.metadata }, state: card.state,
+  }]))];
+}
+
+/** Drawn between the parts it arrived between: the step before it, and the step that read it. */
+function SplicedEvent({ splice }: { splice: AnswerSplice }) {
+  const turn = classifyProgrammaticTurn({ metadata: splice.metadata });
+
+  return turn === null ? null : (
+    <div data-spliced-signal={splice.id}>
+      <ProgrammaticTurnCard turn={turn} text={splice.text} state={splice.state} />
+    </div>
+  );
+}
+
 // Memoized: @ai-sdk's replaceMessage clones only the streaming message, so history keeps
 // referential identity and skips re-rendering.
 export const MessageView = memo(function MessageView({
   message, liveTail: tail = null, onFork, onFeedback, feedback, onRevert, takesChip,
-  signalState, steers, onOpenChangeNote, answerSlates, onRetry, repeats,
+  signalState, steers, splices, onOpenChangeNote, answerSlates, onRetry, repeats,
 }: {
   message: UIMessage;
   /** A turn nobody typed that came this many times in a row ({@link eventTurnKey}), drawn once. */
@@ -538,6 +568,8 @@ export const MessageView = memo(function MessageView({
   /** A slot rather than an import: TakesChip renders a node transcript, which renders MessageView. */
   takesChip?: ReactNode;
   steers?: readonly PlacedSteer[];
+  /** Events spliced into this answer as it ran, live; once it is kept, the answer carries its own (`splicesSeenOn`). */
+  splices?: readonly SignalCard[];
   onOpenChangeNote?: (source: string, anchor: DiffAnchor | undefined) => void;
   /** The chat an answer's `<slate-ui>` blocks resolve in; absent, a transcript shows their source. */
   answerSlates?: AnswerChat | undefined;
@@ -556,16 +588,17 @@ export const MessageView = memo(function MessageView({
   // written before the author stamp existed.
   const programmatic = classifyProgrammaticTurn({ metadata: message.metadata, id: message.id });
 
+  // A kept row with no live card is a turn that ran: its agent has seen it.
   if (programmatic) {
     return (
       <ProgrammaticTurnCard
-        turn={programmatic} text={rowText(message)} state={signalState ?? "shown"} count={repeats} />
+        turn={programmatic} text={rowText(message)} state={signalState ?? "seen"} count={repeats} />
     );
   }
 
   if (message.role === "system") {
     return <ProgrammaticTurnCard turn={{ kind: "system_event", event: "system" }}
-      text={rowText(message)} state={signalState ?? "shown"} count={repeats} />;
+      text={rowText(message)} state={signalState ?? "seen"} count={repeats} />;
   }
 
   const sentNotes = isUser ? changeNotesCard({ metadata: message.metadata }) : null;
@@ -617,7 +650,7 @@ export const MessageView = memo(function MessageView({
     );
   }
 
-  const segments = segmentBySteers(message.parts, steers ?? []);
+  const segments = segmentBySteers(message.parts, steers ?? [], answerSplices(message, splices));
   // The fork button goes on the first segment that draws anything: a steer at step 0 leaves the first empty.
   const forkSegment = segments.findIndex((segment) => segment.parts.length > 0);
 
@@ -656,6 +689,7 @@ export const MessageView = memo(function MessageView({
       {segments.map((segment, s) => (
         <Fragment key={s}>
           {segment.steer && <SteerBubble steer={segment.steer} onFork={onFork} />}
+          {segment.signal && <SplicedEvent splice={segment.signal} />}
           {segment.parts.length > 0 && (
             <div className="group relative flex w-full flex-col">
               {s === forkSegment && canFork && (

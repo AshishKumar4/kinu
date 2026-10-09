@@ -483,7 +483,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       read: () => {
         const held = v.safeParse(GoldenStateSchema, this.ctx.storage.kv.get(GOLDEN_KEY));
 
-        return held.success ? held.output : { waiting: [] };
+        return held.success ? held.output : { waiting: [], retiring: [] };
       },
       write: (state) => { this.ctx.storage.kv.put(GOLDEN_KEY, state); },
       start: async (from) => {
@@ -499,6 +499,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       destroy: () => this.#destroyGoldenContainer(),
       build: () => this.armAlarm(GOLDEN_BUILD_CALLBACK, 0),
       tell: async (box, answer) => { await this.peers?.box(box).goldenReady(answer); },
+      delete: (ref, owe) => this.snapshotRegistry?.delete(ref, owe),
       now: () => Date.now(),
     };
   }

@@ -54,7 +54,7 @@ import type { MessageReference } from '../session/messages';
 import type { ContextSelection } from '../session/context';
 import { subordinateTurnContext } from '../subordinates/support';
 import { taskTurnEnding, type OwedReport, type TaskTurnEnding } from '../subordinates/temporary';
-import { TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY } from '../read-models/background-event';
+import { SIGNALS_SEEN_METADATA_KEY, TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY, type SeenSplice } from '../read-models/background-event';
 import { TaskReminders, TASK_REMINDER_EVENT } from '../tasks/reminder';
 import type { TaskListStore } from '../tools/task-store';
 import { inheritedAsModelMessage } from '../heads/head-inference';
@@ -200,13 +200,16 @@ export interface OwedTerminalEffectsInput {
   readonly taskReminder: { readonly text: string } | null;
 }
 
+/** `seen`: the splices the agent read mid-answer, kept once here; none from a turn whose events re-deliver. */
 async function answerMetadata(
-  ports: ChatSessionPorts, turnId: string, texts: () => Promise<readonly string[]>, end: RunEndClassification,
+  ports: ChatSessionPorts, turnId: string, texts: () => Promise<readonly string[]>,
+  { end, seen = [] }: { readonly end: RunEndClassification; readonly seen?: readonly SeenSplice[] },
 ): Promise<JsonObject | null> {
   const metadata: JsonObject = {
     ...await ports.answerMetadata?.(turnId, texts),
     ...(end.reason === 'incomplete' && { [TURN_END_METADATA_KEY]: end.reason }),
     ...(end.error !== undefined && { [TURN_FAILURE_METADATA_KEY]: end.error }),
+    ...(seen.length > 0 && { [SIGNALS_SEEN_METADATA_KEY]: seen.map((splice) => ({ ...splice })) }),
   };
 
   return Object.keys(metadata).length === 0 ? null : metadata;
@@ -1320,7 +1323,9 @@ export class ChatSession {
     const finalText = execution.claim === null ? execution.finalTextReference
       : await this.actorSession.recordTranscriptText(execution.claim, 'answer', fullText, execution.outputReferences);
 
-    const metadata = await answerMetadata(this.ports, lease.turnId, () => this.transcript.narration(answerParts(execution.outputPartReferences, finalText)), end);
+    // A failed turn re-queues what it absorbed (`Inbox.settle`), so only a turn without error keeps its splices.
+    const seen = runError === null ? this.actorSession.orchestrator.inbox.seenSplices() : [];
+    const metadata = await answerMetadata(this.ports, lease.turnId, () => this.transcript.narration(answerParts(execution.outputPartReferences, finalText)), { end, seen });
 
     const preparedAssistant = streamed || !interrupted ? await this.transcript.prepareAssistant({
       id: this.messageId, turnId: lease.turnId, runId: lease.runId, parts: execution.outputPartReferences, finalText,
@@ -1528,7 +1533,7 @@ export class ChatSession {
     if (end.error === undefined || this.transcript.has(this.messageId)) return;
 
     await settleLogged('turn.failure_unrecorded', { doing: 'recording the turn\'s failure on its answer', otherwise: 'io' }, async () => {
-      const metadata = await answerMetadata(this.ports, lease.turnId, async () => [], end);
+      const metadata = await answerMetadata(this.ports, lease.turnId, async () => [], { end });
 
       const answer = await this.transcript.prepareAssistant({
         id: this.messageId, turnId: lease.turnId, runId: lease.runId, parts: [], finalText: null, ...(metadata !== null && { metadata }),

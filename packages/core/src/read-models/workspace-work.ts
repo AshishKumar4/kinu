@@ -122,6 +122,9 @@ export function readWorkspaceWork(
   return { plans, tasks };
 }
 
+/** Background jobs the Work tab lists: one page, read by its own refresh and by the workspace's opening read. */
+export const WORK_TAB_JOBS = 50;
+
 /** Settled jobs count (the record is the content); a live turn with nothing renderable does not. */
 export function hasWorkspaceWork({ work, pending, jobs, changes, notes, owed }: {
   work: WorkspaceWork | null;

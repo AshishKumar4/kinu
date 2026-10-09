@@ -3,7 +3,7 @@
 // offers for an admitted, stranded or settled claim is proven on the page (tests/browser/chat-and-files-ux.test.ts).
 import { describe, test, expect } from 'bun:test';
 import type { ReasoningUIPart, TextUIPart, ToolUIPart, UIMessage } from 'ai';
-import { threadLiveTail, turnLiveness } from '@kinu.run/core';
+import { liveTailRow, threadLiveTail, turnLiveness } from '@kinu.run/core';
 
 type Part = UIMessage['parts'][number];
 
@@ -75,6 +75,23 @@ describe('the thread the page paints', () => {
     // `isLast && streaming && !isUser` is false before the first assistant row.
     const liveness = turnLiveness({ claim: { kind: 'admitted', turnId: 't1', claimedAt: 1 }, streaming: true });
     expect(threadLiveTail({ last: userTurn, liveness })).toEqual({ kind: 'thinking' });
+  });
+
+  // Staging, d930f2537: a Slate's click opened a turn whose claim reached the tab before its row did. The finished
+  // answer above was handed the tail, read as unstored, and its drawn Slate went back to a placeholder and reloaded.
+  test('a live turn draws into no row until its opening row is in the thread', () => {
+    const answer: UIMessage = { id: 'a0', role: 'assistant', parts: [text('<slate-ui name="first">…</slate-ui>', 'done')] };
+    const opened: UIMessage = { id: 'u-click', role: 'user', parts: [text('slate-ui-click')] };
+    const liveness = { kind: 'live', turnId: 'u-click' } as const;
+
+    expect(liveTailRow({ rows: [userTurn, answer], liveness })).toBeNull();
+    expect(liveTailRow({ rows: [userTurn, answer, opened], liveness })).toBe('u-click');
+    const streaming: UIMessage = { id: 'a1', role: 'assistant', parts: [] };
+
+    expect(liveTailRow({ rows: [userTurn, answer, opened, streaming], liveness })).toBe('a1');
+    // The tab's own stream, before its claim names the turn, owns the last row; nothing live owns none.
+    expect(liveTailRow({ rows: [userTurn, answer], liveness: { kind: 'live', turnId: null } })).toBe('a0');
+    expect(liveTailRow({ rows: [userTurn, answer], liveness: { kind: 'idle' } })).toBeNull();
   });
 
   test('a live assistant row reads its own parts', () => {
