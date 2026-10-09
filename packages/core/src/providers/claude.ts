@@ -234,19 +234,26 @@ function breakpointsOf(body: SdkBody): { readonly cache_control?: v.InferInput<t
   return decorated.filter((block) => block.cache_control !== undefined);
 }
 
-/** The identity block's breakpoint displaces the prompt's past four. */
+/**
+ * The identity block's breakpoint displaces the prompt's past four, the system's last first: the tail's breakpoints
+ * read through the end of the system, and the shared block before it is what a new workspace reads.
+ */
 function claudeSystem(body: SdkBody, billing: string): Block[] {
   const decorated = breakpointsOf(body);
   const ttl = decorated[0]?.cache_control ?? { type: 'ephemeral' };
   let overCap = decorated.length + 1 - ANTHROPIC_MAX_BREAKPOINTS;
 
-  const prompt = blocksOf(body.system).map((block) => {
-    if (overCap <= 0 || block.cache_control === undefined) return block;
+  const prompt = [...blocksOf(body.system)];
+
+  for (let at = prompt.length - 1; at >= 0 && overCap > 0; at--) {
+    const block = prompt[at];
+
+    if (block?.cache_control === undefined) continue;
     overCap--;
     const { cache_control: _yielded, ...rest } = block;
 
-    return rest;
-  });
+    prompt[at] = rest;
+  }
 
   return [{ type: 'text', text: billing }, { type: 'text', text: CLAUDE_CODE_IDENTITY, cache_control: ttl }, ...prompt];
 }

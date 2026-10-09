@@ -7,7 +7,7 @@ import type { KinuExtension } from '../extension';
 import { readMemoryTail } from '../memory/note';
 import type { Fact } from '../memory/facts';
 import type { SpendGate } from '../mission-budget';
-import { buildSystemPromptSync, renderUnverifiedInstructions, type SystemPromptOptions } from '../prompt';
+import { buildSystemPromptParts, renderUnverifiedInstructions, systemPromptText, type SystemPromptOptions } from '../prompt';
 import type { AgentsMdSources } from '../prompting/agents-md';
 import type { MediaModality } from '../prompting/attachment-sanitizer';
 import type { PromptBackend, PromptIdentity } from '../prompting/surface';
@@ -224,12 +224,15 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
   const { provider, modelId } = parseModelSpec(spec);
   const providerOptions = reasoningEffortOptions(profile.tier.reasoningEffort, provider);
 
+  const system = buildSystemPromptParts(sources.rt, prompt);
+
   const chat: ActorExecutionInput['chat'] = {
     model: models.resolve(spec),
     modelSpec: spec,
     // Without `modelOutputLimit` the whole window reads as the answer's allowance.
     modelContext: { id: spec, contextWindow: window.contextWindow, modelOutputLimit: window.modelOutputLimit },
-    system: buildSystemPromptSync(sources.rt, prompt),
+    system: systemPromptText(system),
+    systemShared: system.shared.length,
     attachments: { accepts: models.catalog.acceptedMedia(spec), vfs: sources.rt.storage.vfs, budget: sources.attachmentBudget },
     tools,
     conversationKey: sources.conversationKey(),

@@ -134,7 +134,7 @@ const ANTHROPIC_TEXT_SSE = [
 ].join('\n');
 
 describe('Anthropic cache breakpoints on the wire', () => {
-  async function runAnthropicTurn(retention?: CacheRetention): Promise<MockFetchHandle> {
+  async function runAnthropicTurn(retention?: CacheRetention, system: { readonly text: string; readonly shared?: number } = { text: 'You are Kinu.' }): Promise<MockFetchHandle> {
     const mock = createMockFetch([{
       match: 'api.anthropic.com',
       respond: (_req, callIndex) => ({
@@ -152,7 +152,8 @@ describe('Anthropic cache breakpoints on the wire', () => {
     await drain({
       modelSpec: 'test/model',
       model,
-      system: 'You are Kinu.',
+      system: system.text,
+      ...(system.shared !== undefined && { systemShared: system.shared }),
       history: [...HISTORY],
       tools: chatTools(),
       stopWhen: isStepCount(3),
@@ -184,6 +185,22 @@ describe('Anthropic cache breakpoints on the wire', () => {
     expect(prev[prev.length - 1]?.cache_control).toEqual({ type: 'ephemeral' });
 
     expect(countCacheControl(body)).toBeLessThanOrEqual(4);
+  });
+
+  test('the system part every workspace shares is a block of its own, its breakpoint in the tools\' place, on every step', async () => {
+    const shared = 'You are Kinu. The guidance every workspace shares.';
+    const mock = await runAnthropicTurn(undefined, { text: `${shared}\n\nYou work in the workspace "Ledger".`, shared: shared.length });
+
+    for (const index of [0, 1]) {
+      const body = bodyOf(mock, index);
+
+      expect(field(body, 'system', SystemBlocksSchema).map((block) => [block.text, block.cache_control])).toEqual([
+        [shared, { type: 'ephemeral' }],
+        ['You work in the workspace "Ledger".', { type: 'ephemeral' }],
+      ]);
+      expect(field(body, 'tools', ToolBlocksSchema).some((offered) => offered.cache_control !== undefined)).toBe(false);
+      expect(countCacheControl(body)).toBe(4);
+    }
   });
 
   test('breakpoints ROLL onto the newest tail on the second step of the tool loop', async () => {
