@@ -16,11 +16,11 @@
  *
  *   bun scripts/promote.ts digest                                   the artifact digest of packages/cf-backend/dist
  *   bun scripts/promote.ts forget                                   staging's deploy, before it builds: HEAD is not verified
- *   bun scripts/promote.ts record <staging version> <evals run | ''> [reset record]
+ *   bun scripts/promote.ts record <staging version> [reset record]
  *                                                                   staging's deploy, when every phase passed
- *   bun scripts/promote.ts evals <evals run>                        HEAD's record names the evals run dispatched after it
+ *   bun scripts/promote.ts evals <verdict dir>                      store HEAD's completed armada evaluation beside its record
  *   bun scripts/promote.ts check                                    before promotion builds: HEAD is verified, staging serves it,
- *                                                                   and its evals run's verdict is green
+ *                                                                   and its evals verdict is green
  *   bun scripts/promote.ts adopt                                    after the production build: downloads, digest, release tarball
  *   bun scripts/promote.ts promoted <version> [reset record]        production's deploy, after every post-deploy tier passed
  *   bun scripts/promote.ts rollback                                 production back to the build it took before the one it serves
@@ -28,12 +28,18 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, relative } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { deployment, environmentArgs, why, wrangler } from './infra-cloudflare';
 import { type InfraEnvironment, deriveInfrastructure } from './infra-manifest';
 import { type Reset, ResetSchema, latestReset } from './reset';
+import { DEFAULT_TRIALS } from '../evals/src/config';
+import { compareEvalResults, evalGateVerdict, whyIncomplete } from '../evals/src/comparison';
+import { parsePlatformReport } from '../evals/src/platform';
+import { parseResults, trials } from '../evals/src/results';
+import { EvalRunSchema, readEvalRun } from './evals-artifacts';
+import { isEvalTask, trackedFiles } from './sources';
 
 const REPO = new URL('..', import.meta.url).pathname;
 
@@ -122,81 +128,73 @@ export const VerifiedSchema = v.object({
   stagingVersion: v.string(),
   recordedAt: v.string(),
   downloads: DownloadsSchema,
-  /** The .github/workflows/evals.yml run dispatched against this build, by its deploy's `--evals` or by hand after it
-   *  (`evals`), whose verdict a promotion waits for. Absent until one is. */
-  evalsRun: v.optional(v.pipe(v.number(), v.integer())),
   reset: v.optional(ResetSchema),
 });
 
 export type Verified = v.InferOutput<typeof VerifiedSchema>;
 
-/** A workflow run's jobs, as the GitHub API lists them. */
-const RunJobsSchema = v.looseObject({
-  jobs: v.array(v.looseObject({ name: v.string(), status: v.string(), conclusion: v.nullable(v.string()), html_url: v.string() })),
-});
+/** The verdict file `evals/scripts/compare.ts` writes, as `scripts/evals-map.ts` keeps it per run. */
+const EvalVerdictSchema = v.object({ pass: v.boolean(), reason: v.string() });
 
-export type RunJob = v.InferOutput<typeof RunJobsSchema>['jobs'][number];
+export type EvalVerdict = v.InferOutput<typeof EvalVerdictSchema>;
 
-/** The evals workflow's job whose conclusion is the statistics' verdict: green only when a complete report was
- *  compared with a baseline and no cohort regressed. The run's own conclusion is not it: a run is green whenever it
- *  finished, trials failed or not. */
-export const EVAL_VERDICT_JOB = 'Verdict';
+/** Why the evals verdict `verdict` does not let its build be promoted, or undefined when it is green. */
+export function evalVerdictRefusal(verdict: EvalVerdict | undefined, where: string): string | undefined {
+  if (verdict === undefined) return `no eval verdict yet: ${where} names none`;
 
-/** Why the eval run `runUrl` does not let its build be promoted, or undefined when its verdict is green. */
-export function evalVerdictRefusal(jobs: readonly RunJob[], runUrl: string): string | undefined {
-  const verdict = jobs.find((job) => job.name === EVAL_VERDICT_JOB);
-
-  if (verdict === undefined) return `no eval verdict yet: ${runUrl} has no ${EVAL_VERDICT_JOB} job`;
-
-  if (verdict.status !== 'completed') return `the eval verdict is still ${verdict.status}: ${verdict.html_url}`;
-
-  return verdict.conclusion === 'success' ? undefined : `the eval verdict is ${verdict.conclusion ?? 'no conclusion'}: ${verdict.html_url}`;
+  return verdict.pass ? undefined : `the eval verdict refuses: ${verdict.reason} (${where})`;
 }
 
-/** The id of the evals run a staging deploy dispatched, as `record` is handed it. */
-function evalsRunOf(argument: string): number {
-  const run = Number(argument);
+/** The evals verdict a directory of `scripts/evals-map.ts` output holds, with the armada jobs that ran it. */
+export function readEvalsVerdict(dir: string, sha: string) {
+  const run = readEvalRun(join(dir, 'run.json'));
+  const all = trackedFiles().filter(isEvalTask).sort();
 
-  if (!Number.isInteger(run) || run <= 0) throw new Error(`${argument} is not the id of the evals run this deploy dispatched`);
-
-  return run;
-}
-
-/** THE STATISTICS GATE PRODUCTION: the five-trial run dispatched against `sha` on staging, by its verdict job. */
-function assertEvalVerdict(sha: string, record: Verified): void {
-  if (record.evalsRun === undefined) {
-    throw new Error(`${sha}'s record names no evals run: bun scripts/evals-dispatch.ts ${sha} on a quiet staging, then bun scripts/promote.ts evals <run>`);
+  if (run.pass || run.trials < DEFAULT_TRIALS || run.taskFiles.length !== all.length
+    || [...run.taskFiles].sort().some((file, index) => file !== all[index])) {
+    throw new Error('a promotion needs the full statistical matrix, never a pilot or a soak');
   }
 
-  const refusal = evalVerdictRefusal(runJobs(record.evalsRun), `evals run ${String(record.evalsRun)}`);
+  if (!run.definitions.startsWith(sha) || !run.candidateBuild.startsWith(sha)) throw new Error(`these evals did not measure ${sha} with its own definitions`);
+  const candidate = readFileSync(join(dir, 'candidate', 'results.json'), 'utf8');
+  const baseline = readFileSync(join(dir, 'baseline', 'results.json'), 'utf8');
 
-  if (refusal !== undefined) throw new Error(`${sha} cannot be promoted: ${refusal}`);
+  for (const text of [candidate, baseline]) {
+    if (trials(parseResults('promotion', text)).some((assertion) => assertion.meta.harness.run.session.metadata.evalCommit !== run.definitions)) {
+      throw new Error('the trial definitions do not match this evaluation run');
+    }
+  }
+
+  const comparison = compareEvalResults(baseline, candidate, {}, {
+    baseline: parsePlatformReport(readFileSync(join(dir, 'baseline', 'platform.json'), 'utf8')),
+    candidate: parsePlatformReport(readFileSync(join(dir, 'candidate', 'platform.json'), 'utf8')),
+  });
+
+  const verdict = evalGateVerdict(comparison, {
+    candidate: whyIncomplete(candidate, { trials: run.trials, taskFiles: all, build: run.candidateBuild }),
+    baseline: whyIncomplete(baseline, { trials: run.trials, taskFiles: all, build: run.baselineBuild }),
+  });
+
+  return { run, verdict };
 }
 
-/** A GitHub API answer, read through the `gh` session of whoever promotes, and parsed by `schema`. */
-function githubApi<Schema extends v.GenericSchema>(schema: Schema, path: string, what: string): v.InferOutput<Schema> {
-  const answer = Bun.spawnSync(['gh', 'api', path], { cwd: REPO, stdout: 'pipe', stderr: 'pipe' });
+const EvalProofSchema = v.object({ run: EvalRunSchema, verdict: EvalVerdictSchema });
 
-  if (answer.exitCode !== 0) throw new Error(`reading ${what} failed: ${answer.stderr.toString().trim()}`);
+export const evalsKey = (sha: string): string => `evals/${sha}.json`;
 
-  return v.parse(schema, JSON.parse(answer.stdout.toString()));
+/** The comparison may finish before the deploy writes its verified record. Keep them independent. */
+function assertEvalVerdict(sha: string, bucket: string): void {
+  const stored = wrangler(['r2', 'object', 'get', `${bucket}/${evalsKey(sha)}`, '--pipe', '--remote'], 600_000);
+
+  if (!stored.ok) throw new Error(`no eval verdict yet for ${sha}: ${why(stored)}`);
+  const proof = v.parse(EvalProofSchema, JSON.parse(stored.stdout));
+
+  if (!proof.run.candidateBuild.startsWith(sha)) throw new Error(`the eval verdict is not ${sha}'s`);
+  const refused = evalVerdictRefusal(proof.verdict, `armada job ${proof.run.job}`);
+
+  if (refused !== undefined) throw new Error(`${sha} cannot be promoted: ${refused}`);
 }
 
-/** The jobs of eval run `run`. */
-function runJobs(run: number): readonly RunJob[] {
-  return githubApi(RunJobsSchema, `repos/{owner}/{repo}/actions/runs/${String(run)}/jobs?per_page=100`, `eval run ${String(run)}'s jobs`).jobs;
-}
-
-const WorkflowRunSchema = v.looseObject({ path: v.string(), created_at: v.string() });
-
-/** When evals.yml run `run` started, in epoch ms; a run of another workflow is refused. */
-function evalsRunStart(run: number): number {
-  const { path, created_at: created } = githubApi(WorkflowRunSchema, `repos/{owner}/{repo}/actions/runs/${String(run)}`, `run ${String(run)}`);
-
-  if (!path.startsWith('.github/workflows/evals.yml')) throw new Error(`run ${String(run)} is ${path}, not an evals.yml run`);
-
-  return Date.parse(created);
-}
 
 export const verifiedKey = (sha: string): string => `verified/${sha}.json`;
 
@@ -433,6 +431,7 @@ function bucketAt(bucket: string, scratch: string) {
     get(name: string): Uint8Array {
       const file = join(scratch, `get-${name}`);
 
+      mkdirSync(dirname(file), { recursive: true });
       r2(['get', `${bucket}/${name}`, '--file', file]);
 
       return new Uint8Array(readFileSync(file));
@@ -440,6 +439,7 @@ function bucketAt(bucket: string, scratch: string) {
     put(name: string, bytes: Uint8Array | string, contentType: string): void {
       const file = join(scratch, `put-${name}`);
 
+      mkdirSync(dirname(file), { recursive: true });
       writeFileSync(file, bytes);
       r2(['put', `${bucket}/${name}`, '--file', file, '--content-type', contentType]);
     },
@@ -523,28 +523,13 @@ export async function downloadsServed(origin: string, fetcher: typeof fetch = fe
   return { sha: stamp.sha, downloads: Object.fromEntries([[STAMP, sha256(stampBytes)], ...hashed]) };
 }
 
-/** What staging's deploy records of HEAD, from `record <staging version> <evals run or ''> [reset record]`. */
-function verifiedRecord(sha: string, [version = '', run = '', reset]: readonly string[]): Verified {
+/** What staging's deploy records of HEAD, from `record <staging version> <evals verdict dir | ''> [reset record]`. */
+function verifiedRecord(sha: string, [version = '', reset]: readonly string[]): Verified {
   const record: Verified = {
     sha, digest: artifactDigest(DIST), stagingVersion: version, recordedAt: new Date().toISOString(), downloads: downloadsIn(DOWNLOADS), ...resetIn(reset),
   };
 
-  // Empty when the deploy ran without `--evals`: `evals` names the run once one is dispatched.
-  if (run !== '') record.evalsRun = evalsRunOf(run);
-
   return record;
-}
-
-/** `record` naming the evals run `[run]`, which started after it was written. */
-function withEvalsRun(record: Verified, [run = '']: readonly string[]): Verified {
-  const id = evalsRunOf(run);
-  const started = evalsRunStart(id);
-
-  if (started < Date.parse(record.recordedAt)) {
-    throw new Error(`evals run ${run} started ${new Date(started).toISOString()}, before ${record.sha} was verified on staging at ${record.recordedAt}`);
-  }
-
-  return { ...record, evalsRun: id };
 }
 
 async function main(argv: readonly string[], scratch: string): Promise<number> {
@@ -563,12 +548,13 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
 
   if (command === 'forget' && rest.length === 0) {
     r2(['delete', `${buckets.staging}/${verifiedKey(sha)}`]);
+    r2(['delete', `${buckets.staging}/${evalsKey(sha)}`]);
     console.log(`promote: ${sha} is not verified on staging until this deploy's tiers pass`);
 
     return 0;
   }
 
-  if (command === 'record' && (rest.length === 2 || rest.length === 3)) {
+  if (command === 'record' && (rest.length === 1 || rest.length === 2)) {
     const record = verifiedRecord(sha, rest);
 
     await servedAs(origins.staging, sha, record.downloads);
@@ -579,10 +565,10 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
   }
 
   if (command === 'evals' && rest.length === 1) {
-    const record = withEvalsRun(verified(buckets.staging, sha), rest);
+    const proof = readEvalsVerdict(rest[0] ?? '', sha);
 
-    staging.put(verifiedKey(sha), JSON.stringify(record), 'application/json');
-    console.log(`promote: ${sha}'s record names evals run ${String(record.evalsRun)}; a promotion waits for its Verdict`);
+    staging.put(evalsKey(sha), JSON.stringify(proof), 'application/json');
+    console.log(`promote: ${sha}'s eval verdict from armada ${proof.run.job}: ${proof.verdict.reason}`);
 
     return 0;
   }
@@ -595,7 +581,7 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
 
     await servedAs(origins.staging, sha, record.downloads);
 
-    assertEvalVerdict(sha, record);
+    assertEvalVerdict(sha, buckets.staging);
     console.log(`promote: ${sha} was verified on staging (version ${record.stagingVersion}), staging serves that run's downloads, and its evals verdict is green`);
 
     return 0;
@@ -661,7 +647,7 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
     return 0;
   }
 
-  console.error('usage: bun scripts/promote.ts digest | forget | record <staging version> <evals run | \'\'> [reset record] | evals <evals run> | check | adopt '
+  console.error('usage: bun scripts/promote.ts digest | forget | record <staging version> [reset record] | evals <verdict dir> | check | adopt '
     + '| promoted <version> [reset record] | rollback');
 
   return 2;

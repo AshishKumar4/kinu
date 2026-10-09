@@ -1466,8 +1466,18 @@ the pointer, and the release no longer waits on GitHub. The deploy reads the sam
 and a missing or red one ends it before any build; a promotion takes staging's record, which only a deploy past
 that gate wrote. armada grades every planned row exactly once, with each split suite's file timings, before it
 stores a verdict, so its stored verdict is the complete proof. The six hammer runs were in the CI tier and stay
-in it, each a task of its own. ci.yml and its part, artifact and collection plumbing are deleted; evals.yml
-and the secret scan stay on GitHub. On 2026-10-08 the rest moved: Lean verification is a CI row (armada's
+in it, each a task of its own. ci.yml and its part, artifact and collection plumbing are deleted; the secret scan stays on GitHub.
+Amended 2026-10-09: evals.yml leaves GitHub with the trials. `bun scripts/evals-map.ts` runs each trial as one
+`armada map` task at the commit, both legs at once inside the shared Muse cap (20 calls measured clean 2026-09-26,
+one opencode-go key for both legs; a swarm trial holds about six), each task keeping its report and evidence as its
+own artifacts, joined per leg for the same compare, verdict, Sol diagnosis, review and results comment. armada's
+task timeout is infrastructure ceiling only (21600 s at the native job ceiling); the harness silence bound still ends a trial.
+The protocol itself has no timeout maximum. The three-container pool reserves six calls per trial (18 <= 20),
+including coding's swarm work, rather than averaging costs or hoping for a helpful queue order. The native
+post task reads retained trial artifacts; the deploy serializes soak before statistics so their jobs share this budget.
+The old-shape evidence is run 37880718948: seven file workers with serial trials per file;
+candidate wall 4 h 15 min, baseline cancelled at GitHub's 6 h cap. The armada shape removes
+per-file head-of-line blocking, but keeps the actual provider limit rather than promising CI-tier wall times. On 2026-10-08 the rest moved: Lean verification is a CI row (armada's
 environment holds the Lean build), and the flake sweep and bench corpus validation are nightly `armada map` runs
 (scripts/nightly-sweeps.ts). armada is a pinned dev
 dependency, so the hook and the deploy run this checkout's `armada`, against `~/.config/armada/connection.json`.

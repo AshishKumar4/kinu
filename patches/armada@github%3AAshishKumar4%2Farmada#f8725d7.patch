@@ -1,0 +1,14 @@
+diff --git a/package.json b/package.json
+index e356958791753011e7be3d1152820589ca6b9809..8c4657a8cdb950d47943b6a8740799a91ccd2b0c 100644
+--- a/package.json
++++ b/package.json
+@@ -32,6 +32,8 @@
+     "wrangler": "4.145.0"
+   },
+   "exports": {
+-    ".": "./src/index.ts"
++    ".": "./src/index.ts",
++    "./ci": "./src/ci.ts",
++    "./task": "./src/task.ts"
+   }
+ }

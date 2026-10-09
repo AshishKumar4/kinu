@@ -596,8 +596,8 @@ describe("deploy gate", () => {
     expect(run.infraPhase).toBeNull();
   });
 
-  // A plain deploy runs no real-model eval (the owner, 2026-10-08): evals run on a quiet staging, dispatched by hand.
-  test("--evals is an option, and only a deploy given it dispatches evals.yml or starts the soak", async () => {
+  // A plain deploy runs no real-model eval (the owner, 2026-10-08): evals run on a quiet staging, started by hand.
+  test("--evals is an option, and only a deploy given it starts the armada evals or the soak", async () => {
     expect((await runDeploy({ option: "--gates-only", options: ["--evals"] })).status).toBe(0);
 
     // As TEXT, as the post-deploy phase below is: the fixture's build fails on purpose, so no run reaches a serving build.
@@ -613,7 +613,7 @@ describe("deploy gate", () => {
     // KINU_EVAL_KEYS stands for --evals only if it is set nowhere else.
     const keysAsked = callsOf("KINU_EVAL_KEYS=1").every(asked);
 
-    for (const started of ["dispatch_evals", "start_soak", "provision_eval_keys"]) {
+    for (const started of ["start_evals", "start_soak", "provision_eval_keys"]) {
       const calls = callsOf(started);
 
       expect(calls.length).toBeGreaterThan(0);
@@ -788,23 +788,6 @@ describe("one deploy path", () => {
    *  for sitting in a step body rather than in prose. */
   const PER_PACKAGE_DEPLOY = /--cwd\s+\S+\s+deploy/u;
 
-  /** Launching a run that spends on a credential: the live tier's script, the
-   *  root script that runs it, and the eval suite. */
-  const EVAL_LAUNCHERS = [
-    "scripts/live-tier.sh",
-    "bun run test:live",
-    "bun run evals",
-  ] as const;
-
-  /** What rules on which deployment a credential may name
-   *  (`packages/test-utils/src/eval-identity.ts` holds the allowlist both read):
-   *  `eval-credentials.ts` for a tier that takes KINU_EVAL_TOKEN, and the eval
-   *  suite's own harness, which refuses an origin outside the allowlist before any
-   *  trial (evals/src/target.test.ts). Without one, a job takes an origin and an
-   *  auth header straight from repository secrets, so one secret can name
-   *  production and nothing asks. */
-  const EVAL_RESOLVERS = ["scripts/eval-credentials.ts", "bun run evals"] as const;
-
   const ScriptsSchema = v.object({ scripts: v.optional(v.record(v.string(), v.string())) });
   const manifests = trackedFiles().filter((file) => basename(file) === "package.json");
 
@@ -930,12 +913,10 @@ describe("one deploy path", () => {
   // Blind spot: what a body then executes — `bun scripts/<name>.ts` is one word here
   // whatever `x.ts` publishes.
   test("every automation file GitHub executes is in the denominator", () => {
-    expect(automationFiles, "the enumerator stopped listing the workflows")
-      .toContain(".github/workflows/evals.yml");
     expect(automationFiles, "the enumerator stopped listing the secret scan")
       .toContain(".github/workflows/security-scan.yml");
-    expect(automationFiles.length, "the automation corpus collapsed").toBeGreaterThan(1);
-    expect(automationSteps.length, "the parse read no run body").toBeGreaterThan(10);
+    expect(automationFiles.length, "the automation corpus collapsed").toBeGreaterThan(0);
+    expect(automationSteps.length, "the parse read no run body").toBeGreaterThan(0);
 
     // Deploys are run by a person through `bun run deploy`; no workflow deploys.
     // Named so a workflow that starts deploying is a deliberate change here.
@@ -999,25 +980,12 @@ describe("one deploy path", () => {
     }
   });
 
-  // Harness boundary: the JOB, because a job is the unit GitHub binds an
-  // environment and its secrets to. Blind spot: ORDER inside the job — this
-  // reads that the resolving step is in the same job, not that it runs first.
-  // `eval-credentials.ts` refusing a target it does not allow is what stops a
-  // credential aimed at production; this only proves the refusal is reachable.
-  test("an eval a workflow launches resolves its target through the one resolver", () => {
-    let launching = 0;
+  test("no GitHub workflow launches real-model evals", () => {
+    const launchers = ['bun run evals', 'scripts/eval-pass-tier.sh', 'scripts/live-tier.sh', 'bun run test:live', 'scripts/evals-map.ts'];
 
-    for (const { label, bodies } of automation) {
-      if (!bodies.some((body) => EVAL_LAUNCHERS.some((launcher) => body.includes(launcher)))) continue;
-      launching += 1;
-      expect(
-        bodies.some((body) => EVAL_RESOLVERS.some((resolver) => body.includes(resolver))),
-        `${label} launches an eval without resolving its target through ${EVAL_RESOLVERS.join(' or ')}`,
-      ).toBe(true);
-    }
-
-    // Non-vacuity: a workflow really does launch an eval with a credential.
-    expect(launching, "no workflow launches an eval").toBeGreaterThan(0);
+    expect(automationSteps.filter(({ body }) => launchers.some((launcher) => body.includes(launcher)))
+      .map(({ label }) => label)).toEqual([]);
+    expect(launchers.some((launcher) => 'bun scripts/evals-map.ts'.includes(launcher))).toBe(true);
   });
 });
 

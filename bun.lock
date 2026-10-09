@@ -306,6 +306,7 @@
     "@ai-sdk/provider-utils@5.0.53": "patches/@ai-sdk%2Fprovider-utils@5.0.53.patch",
     "agents@0.26.0": "patches/agents@0.26.0.patch",
     "@cloudflare/codemode@0.5.2": "patches/@cloudflare%2Fcodemode@0.5.2.patch",
+    "armada@github:AshishKumar4/armada#f8725d7": "patches/armada@github%3AAshishKumar4%2Farmada#f8725d7.patch",
     "@nimbus-sh/core@0.15.0": "patches/@nimbus-sh%2Fcore@0.15.0.patch",
     "@nimbus-sh/worker@0.13.1": "patches/@nimbus-sh%2Fworker@0.13.1.patch",
     "ai@7.0.127": "patches/ai@7.0.127.patch",

@@ -51,12 +51,12 @@
 #   bash scripts/deploy.sh --rollback
 #
 # `--evals` runs the real-model evals a deploy can start: on staging, the
-# evals.yml dispatch (five trials on staging against production) and the soak;
+# armada evals (five trials on staging against production) and the soak;
 # on a promotion, the soak on production. Without it a deploy runs no real-model
 # eval (the owner, 2026-10-08): evals run on a staging that has stopped moving,
 # against production, and staging stays quiet while they run, so they are
-# dispatched by hand once it has (`bun scripts/evals-dispatch.ts <sha>`, then
-# `bun scripts/promote.ts evals <run>` names the run in the build's record).
+# started by hand once it has (`bun scripts/evals-map.ts <sha> --post=<sha>`, then
+# `bun scripts/promote.ts evals <out>` names the verdict in the build's record).
 #
 # `--promote` deploys production, and only the build staging verified: the
 # record staging's green deploy of HEAD wrote (scripts/promote.ts) stands for
@@ -924,31 +924,33 @@ fi
 # (packages/test-utils/src/eval-identity.ts): each deployment has its own.
 export KINU_EVAL_ORIGIN="${KINU_URL%/}"
 export KINU_ORIGIN="${KINU_URL%/}"
-# Production, the baseline .github/workflows/evals.yml runs every task on beside a staging build.
+# Production, the baseline leg's origin: the evals measure the candidate on staging against it.
 EVAL_BASELINE_ORIGIN="https://kinu.run"
 
-# THE STATISTICS, on GitHub (L19). scripts/evals-dispatch.ts starts
-# .github/workflows/evals.yml for this build from main, which must hold it
-# (the eval environment accepts only main): every eval task ten times on staging, which must be serving this
-# build, and on production, the baseline, and its Verdict job fails on a
-# regression between the two. Not awaited: the report names the run and the
-# record keeps its id, since a promotion waits for its verdict.
-KINU_EVALS_RUN=""
-KINU_EVALS_URL=""
+# THE STATISTICS, on armada (L19). scripts/evals-map.ts runs each trial as one `armada map` task at
+# this commit, both legs at once: every eval task five trials each on staging, which must be serving
+# this build, and on production, the baseline. Its comparison verdict fails on an incomplete report
+# or a regression between the two. Started first and never awaited. The soak finishes before the
+# statistical map starts so two jobs cannot multiply the one Muse budget. Its completed verdict is
+# stored beside the verified record; either may finish first, and promotion waits for both.
+KINU_EVALS_OUT=""
 KINU_EVALS_WHY=""
-dispatch_evals() {
-  local answer
-  if ! answer="$(bun "$KINU_ROOT/scripts/evals-dispatch.ts" "$KINU_SHA")"; then
-    KINU_EVALS_WHY="$answer"
-    return 1
-  fi
-  read -r KINU_EVALS_RUN KINU_EVALS_URL <<<"$answer"
-  report dispatched "the evals of $KINU_SHA from main, every task ten times on staging against production" "$KINU_EVALS_URL"
+start_evals() {
+  local out="$KINU_DEPLOY_REPORT/evals-map"
+  mkdir -p "$out"
+  setsid nohup bash -c '
+    bun scripts/ladder.ts --deploy-phase=soak
+    bun scripts/deploy-report.ts runner "$KINU_DEPLOY_REPORT" soak $?
+    bun scripts/deploy-report.ts render "$KINU_DEPLOY_REPORT" after-soak
+    exec bun scripts/evals-map.ts "$1" --out="$2" --record --post="$1"
+  ' _ "$KINU_SHA" "$out" >"$out/driver.log" 2>&1 </dev/null &
+  KINU_EVALS_OUT="$out"
+  report dispatched "the evals of $KINU_SHA on armada, every task five trials each on staging against production" "$out/driver.log"
 }
 
 # THE EVAL ACCOUNTS' PROVIDER KEYS (scripts/eval-provider-keys.ts), stored before any eval starts, on each deployment
-# one drives: this one and, for a staging build, production, the baseline evals.yml compares it with. The evals and the
-# soak run detached, on GitHub and after this deploy, and a key missing there is every trial's HTTP 401; this is their
+# one drives: this one and, for a staging build, production, the baseline the evals compare it with. The evals and the
+# soak run detached, on armada and after this deploy, and a key missing there is every trial's HTTP 401; this is their
 # one owner, awaited here. A key not stored is a red, its finding the provisioner's own, and no eval starts.
 provision_eval_keys() {
   local origin
@@ -987,17 +989,14 @@ if [ "$KINU_PROMOTE" = "1" ]; then
   mark tiers
 else
   # Started first, so its hours run while the wave runs here. Without its run
-  # this build has no verdict to be promoted on, so a failed dispatch is a red.
-  KINU_EVAL_KEYS=0
+  # this build has no verdict to be promoted on, so a failed start is a red.
   if [ "$KINU_EVALS" = "1" ] && [ "$KINU_SERVING" = "1" ]; then
     if provision_eval_keys "$KINU_EVAL_ORIGIN" "$EVAL_BASELINE_ORIGIN"; then
-      KINU_EVAL_KEYS=1
-      dispatch_evals \
-        || step_red evals "the evals" "evals.yml was not dispatched for $KINU_SHA: $KINU_EVALS_WHY; this build has no eval verdict to be promoted on"
+      start_evals \
+        || step_red evals "the evals" "evals-map.ts was not started for $KINU_SHA: $KINU_EVALS_WHY; this build has no eval verdict to be promoted on"
     fi
   fi
   if [ -z "$KINU_TIERS_WHY" ]; then
-    if [ "$KINU_EVAL_KEYS" = "1" ]; then start_soak; fi
     run_phase post-publish,source
   else
     skip_phase post-publish "$KINU_TIERS_WHY"
@@ -1079,7 +1078,7 @@ elif [ "$KINU_REDS" != "0" ]; then
   finish
 elif [ "$KINU_ENV" = "staging" ]; then
   echo -e "${BOLD}Step 6: Recording $KINU_SHA as verified on staging${NC}"
-  bun "$KINU_ROOT/scripts/promote.ts" record "${KINU_VERSION:-unknown}" "$KINU_EVALS_RUN" "${KINU_RECORD_ARGS[@]}" \
+  bun "$KINU_ROOT/scripts/promote.ts" record "${KINU_VERSION:-unknown}" "${KINU_RECORD_ARGS[@]}" \
     || { step_red record "the record" "the record was not written, so this build cannot be promoted"; finish; }
 elif ! bun "$KINU_ROOT/scripts/promote.ts" promoted "${KINU_VERSION:-}" "${KINU_RECORD_ARGS[@]}"; then
   step_red record "production's history" "production serves $KINU_SHA, and its history does not hold it, so no rollback can return to it"
@@ -1095,9 +1094,9 @@ echo "          version ${KINU_VERSION:-unknown}"
 echo "          build   $KINU_SHA"
 echo ""
 echo -e "${GREEN}✅ Kinu Worker deployed and verified.${NC}"
-if [ "$KINU_ENV" = "staging" ] && [ -z "$KINU_EVALS_RUN" ]; then
-  echo "No eval ran. Once staging has stopped moving: bun scripts/evals-dispatch.ts $KINU_SHA, then bun scripts/promote.ts evals <its run>;"
-  echo "a green Verdict lets it be promoted with: bun run deploy --promote"
+if [ "$KINU_ENV" = "staging" ] && [ -z "$KINU_EVALS_OUT" ]; then
+  echo "No eval ran. Once staging has stopped moving: bun scripts/evals-map.ts $KINU_SHA --post=$KINU_SHA, then bun scripts/promote.ts evals <its out>;"
+  echo "a passing verdict lets it be promoted with: bun run deploy --promote"
 elif [ "$KINU_ENV" = "staging" ]; then
   echo "Promote it to production with: bun run deploy --promote"
 else

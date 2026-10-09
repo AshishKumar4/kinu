@@ -24,9 +24,10 @@
  *   `pull_request` checkout is that pull request's code: it installed the
  *   branch's lockfile and ran the branch's scripts with the eval-service token and
  *   two vendor keys in the environment. So no job holding a secret may be started
- *   by a pull request at all (`evals.yml` measures the deployed build, dispatched
- *   after a deploy), and each is bound to a GitHub environment so the secret is
- *   not readable by every other workflow in the repository.
+ *   by a pull request at all, and each is bound to a GitHub environment so the secret is
+ *   not readable by every other workflow in the repository. The evals once held
+ *   such jobs (`evals.yml`, deleted when trials moved to armada); the secret
+ *   scan holds none.
  *
  * A4 NO WORKFLOW FETCHES ITS TOOLCHAIN FROM A MOVING TARGET. Three workflows
  *   piped `master` of the elan installer into a shell, and in the staging deploy
@@ -412,15 +413,12 @@ describe('the workflow readers see what GitHub and the shell run', () => {
 
 describe('the workflows that publish and measure this product', () => {
   test('every workflow is read, and the credential-bearing jobs are named', () => {
-    // GitHub keeps two: the secret scan and the dispatched evals (CI, Lean and the nightly sweeps run on armada).
+    // GitHub keeps one: the secret scan (CI, Lean, evals and the nightly sweeps run on armada).
     expect(WORKFLOW_FILES.map((workflow) => workflow.file).sort((a, b) => a.localeCompare(b)), 'the workflow corpus changed')
-      .toEqual(['.github/workflows/evals.yml', '.github/workflows/security-scan.yml']);
+      .toEqual(['.github/workflows/security-scan.yml']);
     // Named, not counted. These hold every credential in the repository, and
     // the assertions below are only worth anything if they are still these.
-    expect(SECRET_JOBS.map((entry) => entry.label).sort()).toEqual([
-      '.github/workflows/evals.yml#diagnose',
-      '.github/workflows/evals.yml#evals',
-    ]);
+    expect(SECRET_JOBS.map((entry) => entry.label).sort()).toEqual([]);
   });
 
   test('every workflow declares its token permissions, and none of them write', () => {
@@ -432,31 +430,16 @@ describe('the workflows that publish and measure this product', () => {
   });
 
   test('a job that holds a secret is bound to a GitHub environment', () => {
-    // Each credential-bearing job names its environment below, exactly as its
-    // workflow file spells it. Repository secrets are readable by every workflow
-    // in the repository, including one added by a branch. An environment is the
-    // only boundary GitHub offers that a file in the repository can ask for.
-    const bound = new Map([
-      ['.github/workflows/evals.yml#diagnose', 'eval'],
-      ['.github/workflows/evals.yml#evals', 'eval'],
-    ]);
-
     for (const { label, job } of SECRET_JOBS) {
-      expect(job.environment, `${label} reads a repository-wide secret`).toBe(bound.get(label));
+      expect(job.environment, `${label} reads a repository-wide secret`).toBeDefined();
     }
   });
 
   test('no pull request can start a job that holds a secret', () => {
-    // A `pull_request` checkout is that pull request's code, and a label is all
-    // it takes to start one: the job would run a branch nobody reviewed beside
-    // the credential.
-    const PULL_REQUEST = ['pull_request', 'pull_request_target'];
-
     for (const { label, triggers } of SECRET_JOBS) {
-      expect(triggers.filter((trigger) => PULL_REQUEST.includes(trigger)), `${label} can be started by a pull request`).toEqual([]);
+      expect(triggers.filter((trigger) => ['pull_request', 'pull_request_target'].includes(trigger)),
+        `${label} can be started by a pull request`).toEqual([]);
     }
-
-    expect(SECRET_JOBS.length, 'no job holds a secret, so nothing here was checked').toBeGreaterThan(0);
   });
 
   test('no run body interpolates event data into a command', () => {

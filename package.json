@@ -200,7 +200,8 @@
     "workers-ai-provider@4.0.0": "patches/workers-ai-provider@4.0.0.patch",
     "@ai-sdk/provider-utils@5.0.53": "patches/@ai-sdk%2Fprovider-utils@5.0.53.patch",
     "@ai-sdk/openai-compatible@3.0.62": "patches/@ai-sdk%2Fopenai-compatible@3.0.62.patch",
-    "vite@8.0.16": "patches/vite@8.0.16.patch"
+    "vite@8.0.16": "patches/vite@8.0.16.patch",
+    "armada@github:AshishKumar4/armada#f8725d7": "patches/armada@github%3AAshishKumar4%2Farmada#f8725d7.patch"
   },
   "//patchedDependencies:workers-ai-provider": "4.0.0's binding chat model hangs on a body workerd holds open after `data: [DONE]`, misreads the shapes `Ai.run` returns when a concurrent call rewrote its shared options, drops binding refusals' status and Retry-After, asks no stream usage, emits no raw chunks, swallows unreadable events, ignores call headers (`x-session-affinity`), merges index-less native tool calls, finishes tool calls as `stop`, reports `usage.raw` as `{ total }`, and reads no `workersAi` options. Delete once cloudflare/ai ships the fixes drafted in kinu-logs/agents-upstream/workers-ai-provider-binding-stream.md.",
   "//patchedDependencies:@ai-sdk/provider-utils": "5.0.53's `parseJsonEventStream` ignores `data: [DONE]`, so a producer that keeps the body open after it keeps the model stream open. Delete once vercel/ai ships the fix drafted in kinu-logs/agents-upstream/ai-sdk-sse-done-usage-only-chunk.md.",
