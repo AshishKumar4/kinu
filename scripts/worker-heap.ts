@@ -10,6 +10,12 @@
  * minified, 48.9 MB minified with ASCII-only output. esbuild's 11.9 MB wasm, then instantiated at load by a
  * static import, is outside V8's count; its absence is checked on the module graph instead.
  *
+ * Measured 2026-10-09 in workerd 1.20260930.2 (miniflare 5.20260926.0-alpha), two runs each: setup now loads the
+ * workspace agent's own isolate, and the workspace hands the Worker Loader the agent bundle's 6.2 MB of module text,
+ * garbage once loaded. V8's uncollected count read 31.5 MB on 5681dfd92 against 27.2-27.3 MB on e0cd7e435, which
+ * keeps the agent in this isolate, while the live heap fell from 28.9 MB to 28.3 MB. So the setup bound is read on
+ * the live heap, after the collection a heap snapshot makes.
+ *
  * `--no-build` reads the existing `dist/kinu` (a deploy already built it).
  */
 
@@ -36,12 +42,9 @@ export const GATE = 'worker-heap';
  *  runs on lane/memory-gap 9875bab49 with one; 26.4-26.5 MB on 871e789f1, where a module compiles when first imported
  *  (`new_module_registry`) and the slate vendor waits for a slate; 25.5-25.6 MB on a21347229, where a provider SDK
  *  loads with its first model; 24.4 MB on a9680b282, where core declares no import-time effects and passkeys and mail
- *  load their libraries per route. Plus 4 MB of room for the product to grow. Plus 6.2 MB since the workspace agent's
- *  turns moved into its own isolate (2026-10-09): setup's first turn loads it, and the workspace hands the Worker Loader
- *  the agent bundle's module text, 6.2 MB allocated through the V8 API and garbage once loaded, so how much of it this
- *  reads depends on when V8 last swept: 31.5-32.7 MB used over five runs against 27.1-27.3 MB without the isolate,
- *  while live heap after setup fell from 28.9 MB to 28.3 MB. */
-export const HEAP_AFTER_SETUP_BOUND_BYTES = 34_700_000;
+ *  load their libraries per route. Plus 4 MB of room for the product to grow. Read on the live heap since 2026-10-09
+ *  (see the header). */
+export const HEAP_AFTER_SETUP_BOUND_BYTES = 28_500_000;
 
 /** Measured 2026-09-26 at {@link STEP} (2.4 MB of answers): 9.8 MB live in the parked step; 7.3 MB once the Workers
  *  AI fetch stopped copying the request; 4.8 MB once our own prompt text left no character above U+00FF, so V8
@@ -402,8 +405,6 @@ const COMPAT_HOST = 'model.invalid';
 export const STEP = { turns: 12, answerBytes: 200_000 } as const;
 
 export interface HeapMeasurement {
-  /** Used heap after one workspace's claim and setup. */
-  readonly afterSetup: number;
   /** What a step parked on the model holds live beyond the idle workspace before it, at {@link STEP}. */
   readonly stepLive: number;
   /** What the idle workspace holds after {@link STEP}'s turns beyond right after setup. */
@@ -499,7 +500,6 @@ export async function measure(): Promise<HeapMeasurement> {
     const inspector = await inspect(port);
 
     try {
-      const afterSetup = await inspector.usedHeap();
       const setUp = await inspector.liveHeap();
       const setupMakeup = await inspector.makeup();
       await ask(`/model?answerBytes=${String(STEP.answerBytes)}`);
@@ -609,7 +609,7 @@ export async function measure(): Promise<HeapMeasurement> {
       await noRunners(0);
       await ask('/model?hires=0&nest=0');
 
-      return { afterSetup, stepLive: during - idle, idleRetained: idle - setUp, headsRetained, perHelperRetained, helperTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: lastLive - firstLive, longTurnAllocated, bindingTurnsAllocated, setupMakeup, live: { setUp, longTurnFirst: firstLive, longTurnLast: lastLive }, wide };
+      return { stepLive: during - idle, idleRetained: idle - setUp, headsRetained, perHelperRetained, helperTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: lastLive - firstLive, longTurnAllocated, bindingTurnsAllocated, setupMakeup, live: { setUp, longTurnFirst: firstLive, longTurnLast: lastLive }, wide };
     } finally {
       inspector.close();
     }
@@ -667,8 +667,8 @@ async function main(args: readonly string[]): Promise<number> {
 
   if (wasm.length > 0) findings.push(`index.js instantiates ${wasm.join(', ')} at load: a static import reaches it`);
 
-  if (measured.afterSetup > HEAP_AFTER_SETUP_BOUND_BYTES) {
-    findings.push(`used heap after setup ${mb(measured.afterSetup)} exceeds ${mb(HEAP_AFTER_SETUP_BOUND_BYTES)}`);
+  if (measured.live.setUp > HEAP_AFTER_SETUP_BOUND_BYTES) {
+    findings.push(`live heap after setup ${mb(measured.live.setUp)} exceeds ${mb(HEAP_AFTER_SETUP_BOUND_BYTES)}`);
   }
 
   if (measured.stepLive > STEP_LIVE_BOUND_BYTES) {
@@ -711,7 +711,7 @@ async function main(args: readonly string[]): Promise<number> {
   }
 
   // Every figure, red or green, so two runs compare.
-  console.log(`${GATE}: ${mb(measured.afterSetup)} used after setup, a parked step holds ${mb(measured.stepLive)} live at `
+  console.log(`${GATE}: ${mb(measured.live.setUp)} live after setup, a parked step holds ${mb(measured.stepLive)} live at `
     + `${transcript()}, the idle workspace holds ${mb(measured.idleRetained)} after them, `
     + `${String(HEADS.count)} released heads leave ${mb(measured.headsRetained)}, a finished helper `
     + `${mb(measured.perHelperRetained)}, a running helper turn ${mb(measured.helperTurnLive)}, a helper waiting on its `
