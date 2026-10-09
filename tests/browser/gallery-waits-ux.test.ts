@@ -243,11 +243,9 @@ test('a wait on a page whose render threw with nothing drawn ends at once by the
         return;
       }
 
-      const served = await (await fetch(request.url())).text();
+      const emptied = new HTMLRewriter().on('#landing-root', { element: (root) => { root.setInnerContent(''); } });
 
-      await request.respond({
-        status: 200, contentType: 'text/html', body: served.replace(/<div id="landing-root">[\s\S]*<\/div>(\s*<\/body>)/, '<div id="landing-root"></div>$1'),
-      });
+      await request.respond({ status: 200, contentType: 'text/html', body: await emptied.transform(await fetch(request.url())).text() });
     })));
     await page.goto(`${origin}/landing.html`, { waitUntil: 'load' });
 
