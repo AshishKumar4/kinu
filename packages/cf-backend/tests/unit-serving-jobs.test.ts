@@ -65,6 +65,13 @@ const sandboxFor = (id: string) => ({
 
     return { files: [] };
   },
+  statFile: async (path: string) => {
+    box.calls.push('statFile');
+
+    if (path === '/') return { type: 'directory', size: 0, mode: 0o40755, mtimeMs: 0, uid: 0, gid: 0, atimeMs: 0, ctimeMs: 0 };
+
+    throw new Error(`ENOENT: ${path}`, { cause: { kind: 'devbox.file', code: 'ENOENT', path, operation: 'stat' } });
+  },
   getExposedPorts: async (hostname: string) => {
     box.calls.push('getExposedPorts');
 

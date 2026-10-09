@@ -1,13 +1,11 @@
 /** The deploy tier's eval-owned throwaway Worker. No route is added to Kinu. */
 import * as v from 'valibot';
-import { Files, SandboxFileError } from '@cloudflare/sandbox';
 import { Devbox, GOLDEN_NAME, type BoxPeers, type DevboxStore, type DevboxState } from '../../../devbox/src/index';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace/nimbus-workspace.js';
 import { GOLDEN_BASE, GoldenStateSchema, pipeParts } from '../../../devbox/src/golden';
 import { settle } from '../../../devbox/src/errors';
-import { listFiles as directoryMetadata } from '../../../devbox/src/file-listing';
 import { DEFAULT_DEVBOX_POLICY, describeThrown } from '../../../devbox/src/lifecycle';
-import { runContainerContract } from '../../../devbox/bench/container-contracts';
+import { fileErrorContract, runContainerContract } from '../../../devbox/bench/container-contracts';
 import { CONTAINER_CONTRACTS, DISK_CONTRACTS } from '../../../devbox/bench/contract-types';
 import { diskContract } from '../../../devbox/bench/disk-contracts';
 import { desktopClientUrl, sandboxFiles, withAppSecurityHeaders } from '@kinu.run/core';
@@ -146,39 +144,10 @@ export class ContractBox extends Devbox<Env> {
       throw new Error('a recursive listing spawned extra guest calls or followed a directory link');
     }
 
-    await this.#fileErrors(path);
-  }
-
-  async #fileErrors(path: string): Promise<void> {
     const container = this.ctx.container;
 
     if (container === undefined) throw new Error('this fixture has no container binding');
-
-    // 2026-10-09, job 20261009181805-03542862: native user=65534:65534 still read mode-0700 root directories.
-    const restricted = { exec: (argv: string[], options?: ContainerExecOptions) => container.exec([
-      'setpriv', '--reuid=65534', '--regid=65534', '--clear-groups', '--bounding-set=-all', '--inh-caps=-all', '--ambient-caps=-all', ...argv,
-    ], options) };
-
-    const failures: [string, string][] = [[`${path}/missing`, 'ENOENT'], [`${path}/file`, 'ENOTDIR'], [`${path}/loop`, 'ELOOP'], [`${path}/private`, 'EACCES']];
-
-    for (const [operand, code] of failures) {
-      const [batch, sdk] = await Promise.allSettled([
-        settle(directoryMetadata(restricted, operand)), new Files(restricted).readDirectory(operand),
-      ]);
-
-      if (batch?.status !== 'rejected' || sdk?.status !== 'rejected' || !SandboxFileError.is(sdk.reason)) {
-        const batchDetail = batch?.status === 'rejected' ? describeThrown({ cause: batch.reason }) : batch?.status;
-        const sdkDetail = sdk?.status === 'rejected' ? describeThrown({ cause: sdk.reason }) : sdk?.status;
-
-        throw new Error(`the ${code} listing contract was not observed: batch=${batchDetail}, SDK=${sdkDetail}`);
-      }
-
-      const failure = v.parse(v.object({ cause: v.object({ code: v.string(), path: v.string(), operation: v.string() }) }), batch.reason);
-
-      if (failure.cause.code !== code || sdk.reason.code !== code || failure.cause.path !== sdk.reason.path || failure.cause.operation !== sdk.reason.operation) {
-        throw new Error('the batched listing changed the SDK POSIX failure contract');
-      }
-    }
+    await fileErrorContract(container, path);
   }
 
   async contract(kind: typeof CONTAINER_CONTRACTS[number]): Promise<void> {
