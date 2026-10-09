@@ -97,6 +97,21 @@ export class AgentDatabase {
     return taken;
   }
 
+  private relayed: Promise<void> = Promise.resolve();
+
+  /** A line no tool call or task's end takes first reaches the workspace's log as it is logged, in order: an offer's
+   *  yield, logged with no turn left to end, is never stranded here. */
+  private relayActivity(): void {
+    const before = this.relayed;
+
+    this.relayed = settle(attempt({ doing: "relaying an agent's activity to its workspace", otherwise: 'io' }, async () => {
+      await before;
+      const lines = this.takeActivity();
+
+      if (lines.length > 0) await this.workspace.logActivity(lines);
+    }).pipe(Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('agent.activity_relay_failed', failure); }))));
+  }
+
   private priced: { readonly model: string; readonly pricing: ModelPricing | null } | null = null;
   private recall: ConversationRecall | null = null;
   private execution: Executor | null = null;
@@ -116,6 +131,7 @@ export class AgentDatabase {
       readonly program: AgentWorkspace['program'];
       readonly memory: AgentWorkspace['memory'];
       readonly sayToParent: AgentWorkspace['sayToParent'];
+      readonly logActivity: AgentWorkspace['logActivity'];
     },
   ) {
     initWorkspaceSchema({
@@ -218,7 +234,10 @@ export class AgentDatabase {
           actor: bound.handle,
           pricing: (spec) => (this.priced !== null && (spec === undefined || spec === this.priced.model) ? this.priced.pricing : null),
         }),
-        sinks: runEventSinks(bound, (event, detail) => { this.lines.push(detail === undefined ? { event } : { event, detail }); }),
+        sinks: runEventSinks(bound, (event, detail) => {
+          this.lines.push(detail === undefined ? { event } : { event, detail });
+          this.relayActivity();
+        }),
         engine: new EvolutionEngine(bound.runtime, historyTurnPairs(bound.stores.history), {
           enabled: false,
           transaction: (body) => { storage.transactionSync(body); },

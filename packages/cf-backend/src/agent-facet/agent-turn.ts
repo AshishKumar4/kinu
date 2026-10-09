@@ -16,7 +16,7 @@ import { compactionDiagnostics, hostedActorCompaction } from '@kinu.run/compacti
 import type { AgentDatabase } from './agent-database';
 import type { StepPacer } from './step-pacer';
 import type { ChatTurnRequest } from '../agent-turns';
-import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, PreparedAgentTurn } from '@kinu.run/core';
+import type { AgentHeadDelta, AgentReview, AgentTurnActivity, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, PreparedAgentTurn } from '@kinu.run/core';
 
 export interface AgentWorkspace {
   session(): NimbusSessionSurface;
@@ -68,6 +68,8 @@ export interface AgentWorkspace {
   relayModelCall(deviceId: string, callId: string, request: Request): Promise<Response>;
   cancelModelRelay(callId: string): Promise<void>;
   sayToParent(signal: AgentSignal): Promise<SendOutcome>;
+  /** What the agent logged that no tool call or task's end carried, for the workspace's activity log. */
+  logActivity(lines: readonly AgentTurnActivity[]): Promise<void>;
   /** The agent's non-turn model calls (its compaction's folds), filed with the workspace's spend. */
   reportModelCall(report: ModelCallReport): Promise<void>;
   reportModelOperation(event: ModelOperationEvent): Promise<void>;

@@ -110,7 +110,7 @@ export function agentDatabase(workspace: Database, storageKey: string): Database
 
   agents.set(storageKey, db);
   databases.set(workspace, agents);
-  new AgentDatabase(contextOver(db, storageKey).storage, { agent: unreachable, home: WORKSPACE_ROOT, state: unreachable, enqueueTurn: unreachable, broadcast: unreachable, turnInFlight: () => false, memory: unreachable, program: unreachable, sayToParent: unreachable });
+  new AgentDatabase(contextOver(db, storageKey).storage, { agent: unreachable, home: WORKSPACE_ROOT, state: unreachable, enqueueTurn: unreachable, broadcast: unreachable, turnInFlight: () => false, memory: unreachable, program: unreachable, sayToParent: unreachable, logActivity: unreachable });
 
   return db;
 }
@@ -211,6 +211,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           relayModelCall: (deviceId, callId, request) => host.relayModelCall(deviceId, callId, request),
           cancelModelRelay: (callId) => host.cancelModelRelay(callId),
           sayToParent: (signal) => host.sayToParent(signal),
+          logActivity: (lines) => host.logActivity(lines),
           reportModelCall: (report) => host.reportModelCall(report),
           reportModelOperation: (event) => host.reportModelOperation(event),
         },

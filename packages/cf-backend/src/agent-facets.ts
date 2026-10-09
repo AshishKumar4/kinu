@@ -6,7 +6,7 @@ import { decodeModelMessageValues, relayedAnswer, remoteContextTree } from '@kin
 import type { AgentOwnInspection, ArchiveSqlCursor, ContextEditor, ContextTree, StepSpendSource, ConversationRecall, PositionPageRequest, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ProviderEnv, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import type { AgentWorkspace } from './agent-facet/agent-turn';
-import type { AdvisorRecoverySnapshot, AgentFigures, HandedOffTurn, ResolvedTurnProfile, AgentHeadDelta, AgentReview, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TurnRequestAt, ModelCallReport, ModelOperationEvent } from '@kinu.run/core';
+import type { AdvisorRecoverySnapshot, AgentFigures, AgentTurnActivity, HandedOffTurn, ResolvedTurnProfile, AgentHeadDelta, AgentReview, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TurnRequestAt, ModelCallReport, ModelOperationEvent } from '@kinu.run/core';
 import type { ChatTurnRequest } from './agent-turns';
 import { attempt, KinuError, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
@@ -94,6 +94,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   relayModelCall(deviceId: string, callId: string, request: Request) { return this.open(this.answers.relayModelCall(deviceId, callId, request)); }
   cancelModelRelay(callId: string) { return this.open(this.answers.cancelModelRelay(callId)); }
   sayToParent(signal: AgentSignal) { return this.open(this.answers.sayToParent(signal)); }
+  logActivity(lines: readonly AgentTurnActivity[]) { return this.open(this.answers.logActivity(lines)); }
 }
 
 /** One agent's own stores, in its isolate (D9). */
@@ -168,6 +169,7 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   relayModelCall(deviceId: string, callId: string, request: Request) { return relayedAnswer(this.host().relayModelCall(deviceId, callId, request)); }
   cancelModelRelay(callId: string) { return relayedAnswer(this.host().cancelModelRelay(callId)); }
   sayToParent(signal: AgentSignal) { return relayedAnswer(this.host().sayToParent(signal)); }
+  logActivity(lines: readonly AgentTurnActivity[]) { return relayedAnswer(this.host().logActivity(lines)); }
 }
 
 const UIChunkSchema = v.custom<UIMessageChunk>((value) => v.is(v.looseObject({ type: v.string() }), value), 'a UI message chunk');

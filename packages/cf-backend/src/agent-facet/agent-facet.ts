@@ -208,6 +208,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
       turnInFlight: () => this.held?.session.turnInFlight() ?? false,
       memory: () => this.env.WORKSPACE.memory(), program: (...args) => this.env.WORKSPACE.program(...args),
       sayToParent: (signal) => this.env.WORKSPACE.sayToParent(signal),
+      logActivity: (lines) => this.env.WORKSPACE.logActivity(lines),
     });
     this.database.adopt(snapshot);
 

@@ -34,7 +34,7 @@ describe("an agent's debounced timer", () => {
 
     try {
       const database = new AgentDatabase(makeCtx(new Database(':memory:'), 'timer-agent').storage, {
-        agent: unreachable, home: WORKSPACE_ROOT, state: unreachable, enqueueTurn: unreachable, broadcast: unreachable, turnInFlight: () => false, memory: unreachable, program: unreachable, sayToParent: unreachable,
+        agent: unreachable, home: WORKSPACE_ROOT, state: unreachable, enqueueTurn: unreachable, broadcast: unreachable, turnInFlight: () => false, memory: unreachable, program: unreachable, sayToParent: unreachable, logActivity: unreachable,
       });
 
       database.backendHost().setTimer(async () => { throw new Error('the drain failed'); }, 0);

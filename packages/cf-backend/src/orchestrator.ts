@@ -890,6 +890,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         await stub.cancelModelRelay(caller, callId);
       },
+      logActivity: async (lines) => { this.agentActivity(actorId, lines); },
       sayToParent: async (signal) => {
         const { parentActorId } = this.liveAgentOf(actorId);
 
