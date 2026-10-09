@@ -68,7 +68,16 @@ export function needsTheUser(asks: PersonAsks): boolean {
  */
 export type OwnerAsk =
   | { readonly key: string; readonly at: number; readonly raisedBy: string | null; readonly kind: 'action'; readonly action: PendingAction }
-  | { readonly key: string; readonly at: number; readonly raisedBy: null; readonly kind: 'consent'; readonly consent: PendingConsent };
+  | { readonly key: string; readonly at: number; readonly raisedBy: null; readonly kind: 'consent'; readonly consent: PendingConsent }
+  | { readonly key: string; readonly at: number; readonly raisedBy: null; readonly kind: 'memory'; readonly memory: AccountAsk };
+
+/** An account-memory proposal as the owner's page holds it: what would be kept, who asked, and when. */
+export interface AccountAsk {
+  readonly id: string;
+  readonly proposal: { readonly kind: 'fact'; readonly key: string; readonly value: unknown } | { readonly kind: 'note'; readonly content: string };
+  readonly origin: { readonly by: string; readonly workspace?: string | undefined; readonly agent?: string | undefined } | null;
+  readonly createdAt: number;
+}
 
 /**
  * What the chat's attention stack shows, newest first: every row that holds the person (the rule
@@ -76,7 +85,8 @@ export type OwnerAsk =
  * proposals that hold nobody stay in Work. `raisedBy`: only that actor's asks, for its own pane.
  */
 export function ownerAsks(
-  asks: Pick<PersonAsks, 'pendingActions' | 'pendingConsents'>, { raisedBy }: { readonly raisedBy?: string } = {},
+  asks: Pick<PersonAsks, 'pendingActions' | 'pendingConsents'> & { readonly accountProposals?: readonly AccountAsk[] | null },
+  { raisedBy }: { readonly raisedBy?: string } = {},
 ): OwnerAsk[] {
   const held: OwnerAsk[] = asks.pendingActions.filter((action) => HOLDS_THE_PERSON[action.kind])
     .map((action) => ({ key: `action:${action.id}`, at: action.at, raisedBy: action.raisedBy ?? null, kind: 'action', action }));
@@ -84,7 +94,11 @@ export function ownerAsks(
   const consents: OwnerAsk[] = asks.pendingConsents
     .map((consent) => ({ key: `consent:${consent.consentId}`, at: consent.createdAt, raisedBy: null, kind: 'consent', consent }));
 
-  return [...held, ...consents]
+  // The account's, held by the owner's user object: every workspace's chat shows them, its own agents' among them.
+  const memory: OwnerAsk[] = (asks.accountProposals ?? [])
+    .map((proposal) => ({ key: `memory:${proposal.id}`, at: proposal.createdAt, raisedBy: null, kind: 'memory', memory: proposal }));
+
+  return [...held, ...consents, ...memory]
     .filter((ask) => raisedBy === undefined || ask.raisedBy === raisedBy)
     .sort((a, b) => b.at - a.at || a.key.localeCompare(b.key));
 }

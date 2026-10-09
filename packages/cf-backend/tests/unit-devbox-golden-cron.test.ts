@@ -46,7 +46,8 @@ test('snapshot deletion uses the deployment account even when its image is the m
     made.rows.set('devbox:snapshot', { id: snapshot, image: 'cloudflare/debian-trixie', chainRev: 0, takenAt: Date.now(), lineage: [] });
     await made.box.discardState();
     expect(requests.some(request => new URL(request.url).pathname.includes('/accounts/account-for-this-deployment/'))).toBe(true);
-    expect(requests.filter(request => request.method === 'DELETE').length).toBe(2);
+    // Its two tags, then its manifest by digest.
+    expect(requests.filter(request => request.method === 'DELETE').length).toBe(3);
   } finally { network.mockRestore(); }
 });
 

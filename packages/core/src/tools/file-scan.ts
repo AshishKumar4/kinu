@@ -12,7 +12,7 @@ import { Fnv1a64 } from '../utils/fnv1a';
 
 import { isVfsError, syscallError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { RESIDENT_TEXT_MAX_BYTES } from '../vfs/mounts';
-import { BOM, type SliceWindow } from './file-edit';
+import { BOM, FILE_READ_LINE_CHARS, numberedLine, type SliceLine, type SliceWindow } from './file-edit';
 import { FileRefusalError } from '../types/file-edits';
 
 /** Bytes per ranged read (the scan's resident ceiling); intentionally smaller than `FILE_CHUNK_BYTES`. */
@@ -190,8 +190,9 @@ function unrangedText(vfs: VFS, path: string, size: number | null): Effect.Effec
 }
 
 /**
- * The line scanner. Chunks do not align with lines, so `requestedLines`, `requestedChars` and
- * `firstLineChars` are accumulated to describe the original file, not the kept `lines`.
+ * The line scanner. Chunks do not align with lines, so `requestedLines` and `requestedChars` are accumulated to
+ * describe the original file, not the kept `lines`. A kept line retains at most `FILE_READ_LINE_CHARS` and is charged
+ * as a read shows it, numbered and cut.
  */
 function beginScan(opts: { offset?: number | undefined; limit?: number | undefined; maxChars: number }) {
   const first = Math.max(1, Math.floor(opts.offset ?? 1));
@@ -205,15 +206,13 @@ function beginScan(opts: { offset?: number | undefined; limit?: number | undefin
   let bomPending = true;
   let line = 1;
   let total = 0;
-  let unterminated = false;
   let pendingChars = 0;
   let pendingHead = '';
 
-  const lines: string[] = [];
+  const lines: SliceLine[] = [];
   let keptChars = 0;
   let requestedLines = 0;
   let requestedChars = 0;
-  let firstLineChars = 0;
   /** False once a requested line did not fit; later lines are counted and discarded. */
   let accepting = true;
   let retaining = first === 1;
@@ -223,28 +222,28 @@ function beginScan(opts: { offset?: number | undefined; limit?: number | undefin
     requestedLines++;
     requestedChars += requestedLines === 1 ? pendingChars : pendingChars + 1;
 
-    if (requestedLines === 1) firstLineChars = pendingChars;
-
     if (!accepting) return;
+    const kept: SliceLine = { text: pendingHead, chars: pendingChars };
     // The joining newline is keyed on line count, so a leading blank line still costs one.
-    const cost = lines.length === 0 ? pendingChars : pendingChars + 1;
+    const shown = numberedLine(line, kept).length;
+    const cost = lines.length === 0 ? shown : shown + 1;
 
     if (keptChars + cost <= maxChars) {
-      lines.push(pendingHead);
+      lines.push(kept);
       keptChars += cost;
 
       return;
     }
 
-    // A single line larger than the budget keeps its head for the formatter.
-    if (lines.length === 0) lines.push(pendingHead);
+    // A line larger than the whole budget keeps its head for the formatter.
+    if (lines.length === 0) lines.push(kept);
     accepting = false;
   };
 
   const absorb = (text: string, from: number, to: number): void => {
-    if (retaining && pendingHead.length < maxChars) {
-      pendingHead += text.slice(from, Math.min(to, from + maxChars - pendingHead.length));
-    }
+    const room = Math.min(maxChars, FILE_READ_LINE_CHARS) - pendingHead.length;
+
+    if (retaining && room > 0) pendingHead += text.slice(from, Math.min(to, from + room));
 
     pendingChars += to - from;
   };
@@ -293,22 +292,9 @@ function beginScan(opts: { offset?: number | undefined; limit?: number | undefin
       if (pendingChars > 0) {
         record();
         total++;
-        unterminated = true;
       }
 
-      return {
-        fingerprint: hash.digest(),
-        revision,
-        window: {
-          first,
-          total,
-          trailingNewline: total > 0 && !unterminated,
-          lines,
-          requestedLines,
-          requestedChars,
-          firstLineChars,
-        },
-      };
+      return { fingerprint: hash.digest(), revision, window: { first, total, lines, requestedLines, requestedChars } };
     },
   };
 }

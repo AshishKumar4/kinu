@@ -883,6 +883,35 @@ const galleryRosterSockets: GalleryRosterSocket[] = [];
 
 Object.assign(window, { galleryRosterSockets });
 
+/** `&memory=waiting`: one account-memory proposal waits on the owner, sent as a roster socket opens, as the user
+ *  object sends it; deciding it (`POST /api/user/memory/proposals/:id`) sends what is left. */
+const MEMORY_WAITING = galleryQuery.get("memory") === "waiting";
+
+let galleryMemoryPending: JsonValue[] = MEMORY_WAITING ? [{
+  id: "amp_city", proposal: { kind: "fact", key: "owner_city", value: "Lisbon" },
+  origin: { by: "agent", workspace: "checkout-fixes", agent: "main" }, createdAt: NOW - 60_000,
+}] : [];
+
+function galleryMemoryFrame(socket: EventTarget): void {
+  socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ type: "account_memory", pending: galleryMemoryPending }) }));
+}
+
+/** The owner's decision on a proposal, recorded (`data-gallery-memory-decisions`), then what is left sent to every page. */
+function galleryMemoryDecision(path: string, method: string, body: BodyInit | null | undefined): Response | null {
+  const id = /^\/api\/user\/memory\/proposals\/([^/]+)$/u.exec(path)?.[1];
+
+  if (id === undefined || method !== "POST") return null;
+  const { decision } = v.parse(v.object({ decision: v.string() }), JSON.parse(typeof body === "string" ? body : "{}"));
+  const root = document.documentElement.dataset;
+
+  root.galleryMemoryDecisions = `${root.galleryMemoryDecisions ?? ""}${decodeURIComponent(id)}:${decision} `;
+  galleryMemoryPending = galleryMemoryPending.filter((row) => v.parse(v.object({ id: v.string() }), row).id !== decodeURIComponent(id));
+  queueMicrotask(() => { for (const socket of rosterSockets) galleryMemoryFrame(socket); });
+
+  // The route's own answer, as written: its body is the wire's, not a result this gallery decides.
+  return new Response('{"ok":true}', { headers: { "content-type": "application/json" } });
+}
+
 class GalleryRosterSocket extends EventTarget {
   readyState: number = WebSocket.CONNECTING;
 
@@ -899,6 +928,7 @@ class GalleryRosterSocket extends EventTarget {
 
       this.readyState = WebSocket.OPEN;
       this.dispatchEvent(new Event("open"));
+      galleryMemoryFrame(this);
     });
   }
 
@@ -977,6 +1007,14 @@ function touchFixture(): Response {
     : new Response('{"ok":true}', { headers: { "content-type": "application/json" } });
 }
 
+/** The account's own answers: Settings' frames whole, and on any page the owner's decision on a memory proposal. */
+function userFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response> | null {
+  if (ACCOUNT_FIXTURE_FRAMES.has(frame) && path.startsWith("/api/user/")) return userSettingsFixture(path, method, body);
+  const decided = galleryMemoryDecision(path, method, body);
+
+  return decided === null ? null : Promise.resolve(decided);
+}
+
 const galleryRequests: string[] = [];
 
 Object.assign(window, { galleryRequests });
@@ -990,9 +1028,9 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
   const path = url.startsWith("/") ? url : new URL(url, location.origin).pathname;
   const method = (init?.method ?? (parsedRequest.success ? parsedRequest.output.method : "GET")).toUpperCase();
 
-  if (ACCOUNT_FIXTURE_FRAMES.has(frame) && path.startsWith("/api/user/")) {
-    return userSettingsFixture(path, method, init?.body);
-  }
+  const user = userFixture(path, method, init?.body);
+
+  if (user !== null) return user;
 
 
   if (connectFixtureActive && path.startsWith("/api/user/devices")) {
@@ -2040,7 +2078,6 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
     return { ok: true, value: kept };
   },
   listPendingConsents: galleryConsents,
-  listPendingActions: galleryPendingActions,
   decideDeferredApprovals: galleryDecideDeferred,
   inspectWork: galleryOwedWork,
   // The seed is the whole conversation, so the storage walk is exhausted at once.
@@ -2373,11 +2410,21 @@ const MIXED_ASKS: PendingAction[] = [
 
 const ASK_SETS = new Map([["two", PARKED_ASKS], ["mixed", MIXED_ASKS]]);
 
+/** `&asksHold=1`: a read of the queue after the first decision waits for `gallery:release-asks`, as a slow one would. */
+const ASKS_HELD = new URLSearchParams(location.search).get("asksHold") === "1";
+
 /** The workspace queue as `&asks=` sets it, less what the stack has decided. */
-function galleryPendingActions(): JsonValue {
+async function galleryPendingActions(): Promise<JsonValue> {
   const asked = new URLSearchParams(location.search).get("asks");
   const decided = (document.documentElement.dataset.galleryDecided ?? "").split(",");
   const asks = ASK_SETS.get(asked ?? "") ?? [];
+
+  if (ASKS_HELD && decided.some((id) => id !== "")) {
+    const released = Promise.withResolvers<void>();
+
+    window.addEventListener("gallery:release-asks", () => { released.resolve(); }, { once: true });
+    await released.promise;
+  }
 
   return v.parse(JsonValueSchema, asks.filter((action) => !decided.includes(action.id)));
 }
@@ -2582,6 +2629,7 @@ const ASYNC_PAGE_RPC = new Map<string, (args?: unknown[]) => Promise<JsonValue>>
   ["cancelCurrentWork", galleryCancelWork],
   ["resolveDeviceConsent", galleryResolveConsent],
   ["listBackgroundJobs", galleryJobsRead],
+  ["listPendingActions", galleryPendingActions],
   ["decidePlanReview", galleryDecidePlan],
   ["recoverStrandedTurn", galleryRecoverTurn],
 ]);

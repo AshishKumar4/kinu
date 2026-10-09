@@ -1992,7 +1992,7 @@ export type {
   NodeTranscriptView, NodeTranscriptCrumb, NodeTranscriptOrigin,
 } from './read-models/node-transcript';
 
-export { buildPendingActions, needsTheUser, ownerAsks, type OwnerAsk } from './read-models/pending-actions';
+export { buildPendingActions, needsTheUser, ownerAsks, type AccountAsk, type OwnerAsk } from './read-models/pending-actions';
 
 export { reviewParkedWrite, type ParkedWriteReview } from './read-models/write-preview';
 
@@ -2254,7 +2254,7 @@ export {
   type HeadDelta, type HeadDeltaKind, type HeadDeltas,
 } from './read-models/head-chat';
 
-export { drawnText, threadLiveTail, toolCallRunning, type LiveTail } from './read-models/message-live-tail';
+export { drawnText, liveTailRow, threadLiveTail, toolCallRunning, type LiveTail } from './read-models/message-live-tail';
 
 export { messagesUpTo, turnRows } from './read-models/fork-count';
 

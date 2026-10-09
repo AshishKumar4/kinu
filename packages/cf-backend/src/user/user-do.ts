@@ -832,7 +832,8 @@ export class UserDO extends Agent<Env> {
   private readonly _sockets = new Hono({ getPath: rawPath })
     .all(DEVICE_CONNECT_PATH, async (c) => this.devices.acceptDeviceSocket(c.req.raw, new URL(c.req.url)))
     .all(DEVICE_TERMINAL_PATH, async (c) => this.terminals.acceptTerminalSocket(c.req.raw, new URL(c.req.url)))
-    .all(ROSTER_SOCKET_PATH, async (c) => acceptRosterSocket(this.ctx, c.req.raw))
+    // Frames a socket missed while it was down are not replayed, so a new one starts from what waits on the owner now.
+    .all(ROSTER_SOCKET_PATH, async (c) => acceptRosterSocket(this.ctx, c.req.raw, (socket) => { this.accountMemory.pendingMoved([socket]); }))
     .notFound(async (c) => super.fetch(c.req.raw))
     .onError(rethrow);
 

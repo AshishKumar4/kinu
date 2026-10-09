@@ -1,4 +1,5 @@
 import { readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import { FILE_READ_MAX_CHARS } from '../src/types/file-edits';
 // Oversize tool outputs are clamped head+tail after offloading the full output to the VFS.
 // The cap covers the whole string the model receives, marker and producer prefix included.
 import { describe, test, expect } from 'bun:test';
@@ -275,7 +276,7 @@ describe('tool result budget (behavior through the public tool surface)', () => 
     expect(restored).toEndWith(stdout.slice(-50));
   });
 
-  test('a ranged file read is bounded by the same cap and spills nothing twice', async () => {
+  test('a file read is bounded by its own window, names where to continue, and spills nothing', async () => {
     const { rt } = createTestRuntime();
     const tools = buildBuiltinTools({ rt, conversations: conversationsFor(rt) });
     const file = toolExecute<FileToolInput, JsonValue>(tools.file);
@@ -283,13 +284,13 @@ describe('tool result budget (behavior through the public tool surface)', () => 
     await file({ op: 'write', path: 'big.txt', content: lines.join('\n') });
 
     const page = v.parse(v.string(), await file({ op: 'read', path: 'big.txt' }));
-    expect(page.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
-    expect(page).toContain('continue with op=read offset=');
+    expect(page.length).toBeLessThanOrEqual(FILE_READ_MAX_CHARS);
+    expect(page).toMatch(/continue with offset=\d+/);
 
     const next = Number(/offset=(\d+)/.exec(page)?.[1]);
     const second = v.parse(v.string(), await file({ op: 'read', path: 'big.txt', offset: next }));
-    expect(second.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
-    expect(second.split('\n')[0]).toBe(lines[next - 1]);
+    expect(second.length).toBeLessThanOrEqual(FILE_READ_MAX_CHARS);
+    expect(second.split('\n')[0]).toBe(`${next}\t${lines[next - 1]}`);
 
     expect(await rt.storage.vfs.stat(TOOL_OUTPUT_DIR)).toBeNull();
   });

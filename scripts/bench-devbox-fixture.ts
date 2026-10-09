@@ -15,6 +15,8 @@ import {
   WRANGLER_FAILED, containerAppIds, delay, deleteContainerApps,
   describeThrown, runWrangler,
 } from './fixtures/r2-bench/deploy-substrate';
+import { deleteApplicationSnapshots } from './fixtures/application-snapshots';
+import { restApiToken } from './cloudflare-rest';
 import * as v from 'valibot';
 import {
   ExecReplySchema, CheckpointReplySchema, FileEvidenceSchema,
@@ -2186,6 +2188,22 @@ export async function teardownLanes(
   return { report: cleanupCheck, errors, failure };
 }
 
+/** The snapshots an arm's application made, deleted once the application is: deleting it leaves them in the account's
+ *  registry, which on 2026-10-09 held 801 snapshots of deleted applications. */
+async function deleteSnapshotsOf(application: string, ids: readonly string[]): Promise<DeleteOutcome> {
+  const token = (process.env['DEVBOX_REGISTRY_TOKEN'] ?? '').trim() || restApiToken();
+
+  if (token === '') return { ok: false, error: `${application}'s snapshots need DEVBOX_REGISTRY_TOKEN or KINU_CLOUDFLARE_API_TOKEN to be deleted` };
+
+  for (const applicationId of ids) {
+    const swept = await deleteApplicationSnapshots({ account: BENCH_ACCOUNT_ID, token, applicationId });
+
+    if (swept.left.length > 0) return { ok: false, error: `${application} left ${String(swept.left.length)} snapshot(s) in the registry` };
+  }
+
+  return { ok: true };
+}
+
 /** Deletes by resource name only: a recovered manifest's process is gone, so no lane state.
  *  "Already absent" is success so an interrupted recovery can be rerun. */
 export function orphanTeardownExecutor(
@@ -2215,10 +2233,14 @@ export function orphanTeardownExecutor(
     }
 
     if (entry.kind === 'container-app') {
-      if (containerAppIds(REPO_ROOT, [entry.name], log).length === 0) return { ok: true, absent: true };
+      const ids = containerAppIds(REPO_ROOT, [entry.name], log).map((found) => found.id);
+
+      if (ids.length === 0) return { ok: true, absent: true };
       const failed = deleteContainerApps(REPO_ROOT, [entry.name], log).find((status) => /failed/i.test(status));
 
-      return failed === undefined ? { ok: true } : { ok: false, error: failed };
+      if (failed !== undefined) return { ok: false, error: failed };
+
+      return await deleteSnapshotsOf(entry.name, ids);
     }
 
     if (entry.kind === 'r2-bucket') {

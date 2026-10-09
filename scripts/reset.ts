@@ -24,6 +24,7 @@ import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { evalSessionPath } from '@kinu.run/test-utils';
 import { deleteApplicationByRest, deleteR2Prefix, deletedByRest, restApiToken } from './cloudflare-rest';
+import { deleteApplicationSnapshots } from './fixtures/application-snapshots';
 import { type ContainerApplication, containerApplications, deployment, why, wrangler } from './infra-cloudflare';
 import { type DeployedConfig, INFRA_ENVIRONMENTS, type InfraEnvironment, deployedConfig, liveClasses } from './infra-manifest';
 
@@ -95,6 +96,8 @@ export interface ResetTarget {
   /** Uploads the placeholder that deletes `classes`, and answers its version. */
   deployPlaceholder: (classes: readonly string[], tag: string) => string;
   deleteApplication: (application: Reset['applications'][number]) => void;
+  /** Deletes every container snapshot the application made, which deleting it leaves, and answers how many. */
+  deleteSnapshots: (application: Reset['applications'][number]) => Promise<number>;
   /** Deletes every object under the prefix, and answers how many. */
   deleteChains: (chains: { readonly bucket: string; readonly prefix: string }) => Promise<number>;
   /** Puts the record in `file` at `key` in the releases bucket. */
@@ -208,6 +211,14 @@ function cloudflareTarget(environment: InfraEnvironment, config: DeployedConfig,
       const deleted = deleteApplicationByRest(config.account_id ?? '', application.id);
 
       if (!deleted.ok) throw new Error(deleted.reason);
+    },
+    deleteSnapshots: async (application) => {
+      const token = (process.env['DEVBOX_REGISTRY_TOKEN'] ?? '').trim() || restApiToken();
+      const swept = await deleteApplicationSnapshots({ account: config.account_id ?? '', token, applicationId: application.id });
+
+      if (swept.left.length > 0) throw new Error(`${application.name} left ${String(swept.left.length)} snapshot(s) in the registry: ${swept.left.join(', ')}`);
+
+      return swept.deleted;
     },
     deleteChains: (chains) => deleteR2Prefix({ accountId: config.account_id ?? '', bucket: chains.bucket, prefix: chains.prefix }),
     putRecord: (key, file) => {
@@ -339,6 +350,11 @@ async function finish(input: WipeInput, reset: Reset): Promise<Reset> {
     for (const application of left) {
       target.deleteApplication(application);
       console.log(`reset: deleted container application ${application.name} (${application.id})`);
+    }
+
+    // Every application the record names, those a stopped run already deleted included: the snapshots outlive it.
+    for (const application of reset.applications) {
+      console.log(`reset: deleted ${String(await target.deleteSnapshots(application))} snapshot(s) of ${application.name}`);
     }
 
     // Last, once no box is left to write one.

@@ -257,8 +257,8 @@ export const BUILTIN_TOOL_SPECS = {
     name: 'file',
     summary: 'Read, list, stat, search, edit or write files in your workspace.',
     notes: [
-      'Find before you read: `search` a file for the lines you need, then `read` around them. Read a large file in pages with `offset` and `limit`.',
-      'Read a file before you `edit` it. An edit matches the text as last read, and fails when its `old_text` is absent or occurs more than once: copy just enough to be unique.',
+      'Find before you read: `search` a file for the lines you need, then `read` around them with `offset` and `limit`. A read without them shows the file from the top, a window at a time; its footer says where to continue.',
+      'Read a file before you `edit` it. An edit matches the text as last read, and fails when its `old_text` is absent or occurs more than once: copy just enough to be unique, without the line numbers a read puts before each line.',
     ],
     example: "file({op:'edit', path:'src/api.ts', edits:[{old_text:'timeout: 30', new_text:'timeout: 60'}]})",
   },

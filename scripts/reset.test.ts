@@ -22,6 +22,9 @@ function account(failing?: keyof ResetTarget) {
 
   const checkpoints: string[] = [];
 
+  /** The applications whose snapshots were deleted, in order. */
+  const snapshotsOf: string[] = [];
+
   const state = {
     serving,
     applications: [
@@ -34,6 +37,7 @@ function account(failing?: keyof ResetTarget) {
     placeholders,
     sessions: true,
     checkpoints,
+    snapshotsOf,
   };
 
   const step = (name: keyof ResetTarget): void => {
@@ -56,6 +60,12 @@ function account(failing?: keyof ResetTarget) {
     deleteApplication: (application) => {
       step('deleteApplication');
       state.applications = state.applications.filter((each) => each.id !== application.id);
+    },
+    deleteSnapshots: async (application) => {
+      step('deleteSnapshots');
+      state.snapshotsOf.push(application.id);
+
+      return 1;
     },
     deleteChains: async () => {
       step('deleteChains');
@@ -172,3 +182,21 @@ describe('a reset stopped anywhere can be finished', () => {
     expect(pendingReset(worker, target.serving(), target.latest())).toBeUndefined();
   });
 });
+
+describe('a reset deletes the snapshots its applications made', () => {
+  // 2026-10-09: deleting an application leaves its snapshots, and 801 of deleted applications filled the account's
+  // registry. A run stopped after deleting an application still owes that application's snapshots.
+  test('of every application the record names, those a stopped run already deleted included', async () => {
+    const { state, target } = account('deleteSnapshots');
+    const input = { environment: 'staging' as const, config, recordFile, restToken: 'a-rest-token', target };
+
+    await expect(wipe(input)).rejects.toThrow('deleteSnapshots failed');
+    const stopped = { record: state.records.get(LATEST_RESET_KEY)?.state, applications: state.applications.map((application) => application.name) };
+    const done = await wipe(input);
+
+    expect({ stopped, done: done.state, swept: state.snapshotsOf }).toEqual({
+      stopped: { record: 'started', applications: ['another-worker-box'] }, done: 'done', swept: ['a'.repeat(32), '0b1c2d3e-0000-4000-8000-000000000000'],
+    });
+  });
+});
+

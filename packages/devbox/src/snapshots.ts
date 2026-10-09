@@ -86,10 +86,12 @@ export class Snapshots {
 
       if (outcome.kind === 'refused') {
         console.error(`[devbox] the dead snapshot ${id} was not deleted: ${outcome.reason}`);
-        continue;
       }
 
-      this.ports.kv.put(DEAD_SNAPSHOTS_KEY, this.#dead().filter(dead => dead !== id));
+      // Its tags gone, the manifest is found by its digest alone, so the debt is the digest from here on.
+      const owed = outcome.kind === 'refused' ? [outcome.left ?? id] : [];
+
+      this.ports.kv.put(DEAD_SNAPSHOTS_KEY, this.#dead().flatMap(dead => dead === id ? owed : [dead]));
     }
   }
 }
