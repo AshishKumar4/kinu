@@ -164,7 +164,7 @@ async function cloudflare(opens: BackendOpening): Promise<SharedBackend> {
   const gate = turnGate();
   agent.harnessSupplyTurnModel(gate.model);
   // Main's conversation is its own isolate's: any read through its window opens that isolate's database.
-  await agent.harnessMainHistory();
+  await agent.getChatHistoryPage({ limit: 1 });
   const main = agentHistory(harness, workspaceMainActor(db).actorId);
 
   return {

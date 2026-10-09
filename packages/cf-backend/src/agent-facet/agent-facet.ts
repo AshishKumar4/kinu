@@ -16,6 +16,7 @@ import {
 import { StepPacer } from './step-pacer';
 import { AgentDatabase } from './agent-database';
 import { runAgentTask, type AgentWorkspace } from './agent-turn';
+import { createAgentProviderRegistry, type AgentProviderDeps, type AgentProviderRegistry } from '../providers/agent-registry';
 import { FacetChat } from './agent-chat';
 import type {
   AgentAnswer, AgentAnswerTexts, AgentStanding, AgentSteps, AgentRecovery, AgentSnapshot, ConversationProjection, ConversationTurnPair, AgentTurnEnd, AgentTurnTask, EnqueueTurnResult, ProgrammaticTurn, PromptFile, SendLanding, SendOptions, TurnRequestAt,
@@ -184,6 +185,11 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   private readonly pacer = new StepPacer();
 
+  /** The registry this agent's turns resolve their models through, over its own providers. */
+  protected models(deps: Omit<AgentProviderDeps, 'env'>): AgentProviderRegistry {
+    return createAgentProviderRegistry({ ...deps, env: this.env });
+  }
+
   protected workspace(): NimbusSandboxHandle {
     this.box ??= sandboxHandle(Nimbus.fromSession((): NimbusSessionSurface => this.env.WORKSPACE.session())
       .sandbox(this.env.WORKSPACE_NAME, { shellId: this.env.SHELL_ID, root: this.env.HOME }));
@@ -222,7 +228,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
     database.adopt({ ...snapshot, scaffold: [prepared.scaffold] });
     const actor = await database.acquire();
-    const chat = new FacetChat({ actor, database, workspace: this.env.WORKSPACE, providers: this.env, storage: this.ctx.storage, pacer: this.pacer });
+    const chat = new FacetChat({ actor, database, workspace: this.env.WORKSPACE, models: (deps) => this.models(deps), storage: this.ctx.storage, pacer: this.pacer });
 
     chat.session.measureSessionStart({ restored: chat.session.restoreHistory() });
     this.held = chat;
@@ -240,7 +246,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   }
 
   async run(snapshot: AgentSnapshot, task: AgentTurnTask): Promise<AgentTurnEnd> {
-    return await runAgentTask({ database: this.open(snapshot), workspace: this.env.WORKSPACE, providers: this.env, pacer: this.pacer }, task);
+    return await runAgentTask({ database: this.open(snapshot), workspace: this.env.WORKSPACE, models: (deps) => this.models(deps), pacer: this.pacer }, task);
   }
 
   async enqueue(snapshot: AgentSnapshot, turn: ProgrammaticTurn): Promise<EnqueueTurnResult> {

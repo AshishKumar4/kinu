@@ -1,9 +1,8 @@
 /** An agent's isolate for bun suites: the shipped AgentFacet in this process over its own database. */
-import { mock } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import { MAIN_AGENT, WORKSPACE_ROOT } from '@kinu.run/core';
-import * as shippedRegistry from '../../src/providers/agent-registry';
+import type { AgentProviderDeps, AgentProviderRegistry } from '../../src/providers/agent-registry';
 import type { AgentContext } from 'agents';
 import { AgentFacet, type AgentFacetCalls, type AgentFacetEnv } from '../../src/agent-facet/agent-facet';
 import { agentCallsThrough } from '../../src/dynamic-worker-slots';
@@ -22,25 +21,14 @@ const databases = new WeakMap<Database, Map<string, Database>>();
 /** Models a suite scripts, by the session (`actorAffinity`'s) their calls are routed under. */
 const scriptedModels = new Map<string, () => LanguageModel>();
 
-const shippedProviderRegistry = shippedRegistry.createAgentProviderRegistry;
+/** The shipped isolate, whose turns resolve a model a suite scripts for their conversation first. */
+class ScriptedModelFacet extends AgentFacet {
+  protected override models(deps: Omit<AgentProviderDeps, 'env'>): AgentProviderRegistry {
+    const registry = super.models(deps);
 
-// An agent's isolate resolves its models through the shipped registry; a model a suite scripts for its conversation is
-// answered first. Harness only: production holds no hook for it.
-const registered = mock.module('../../src/providers/agent-registry', () => ({
-  ...shippedRegistry,
-  createAgentProviderRegistry: (deps: shippedRegistry.AgentProviderDeps): shippedRegistry.AgentProviderRegistry => {
-    const registry = shippedProviderRegistry(deps);
-
-    // Only an agent's isolate reads a script: its credentials are brokered through its workspace, under the empty token
-    // an isolate holds. The workspace's own lanes route under the same session as main's turns and keep their models.
-    const caller = deps.userDO?.caller;
-    const isolate = caller !== undefined && typeof caller !== 'function' && 'workspaceToken' in caller && caller.workspaceToken === '';
-
-    return { ...registry, resolveModel: (spec, conversation) => (isolate ? scriptedModels.get(conversation.sessionAffinity)?.() : undefined) ?? registry.resolveModel(spec, conversation) };
-  },
-}));
-
-if (registered !== undefined) throw new Error('mock.module(agent-registry) must register synchronously');
+    return { ...registry, resolveModel: (spec, conversation) => scriptedModels.get(conversation.sessionAffinity)?.() ?? registry.resolveModel(spec, conversation) };
+  }
+}
 
 /** Isolates whose next answer row fails to write, as a failed commit does. */
 const undurableAnswers = new Set<string>();
@@ -222,7 +210,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
         ...placement.providers,
       };
 
-      const facet = new AgentFacet(withUndurableAnswers(makeCtx(db, placement.storageKey), placement.storageKey), env);
+      const facet = new ScriptedModelFacet(withUndurableAnswers(makeCtx(db, placement.storageKey), placement.storageKey), env);
 
       if (placement.home === MAIN_AGENT) joinedOnlyByItself(facet);
       const lost = new AbortController();

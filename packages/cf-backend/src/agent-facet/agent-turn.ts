@@ -2,7 +2,7 @@
 import { jsonSchema, tool, type ModelMessage, type ToolSet, type UIMessageChunk } from 'ai';
 import {
   CHAT_SESSION_ID, actorAffinity, HeadCapture, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, withEffectClaims, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan, imageModelOutput,
-  type AuthRequest, type AuthResolution, type HandedOffTurn, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type JsonValue, type ProviderEnv, type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
+  type AuthRequest, type AuthResolution, type HandedOffTurn, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type JsonValue, type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
   turnSourcesFromBundle, captureOperationProfile, type ModelCallReport, type ModelOperationEvent,
   type AdvisorRecoverySnapshot, type AgentFigures, type HostedActor, type OwedReport, type SerializedMessage, type SessionEvent,
   type SubordinateReportLedger, type SubordinateReportStatus, type TaskTurnEnding, type WorkMode, type ResolvedTurnProfile, type DynamicContext,
@@ -11,7 +11,7 @@ import {
 import { attempt, diagnostics, hold, logged, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import type { NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
-import { createAgentProviderRegistry, routedModelReads, type AgentProviderRegistry, type UserCredentialClient } from '../providers/agent-registry';
+import { routedModelReads, type AgentProviderDeps, type AgentProviderRegistry, type UserCredentialClient } from '../providers/agent-registry';
 import { compactionDiagnostics, hostedActorCompaction } from '@kinu.run/compaction';
 import type { AgentDatabase } from './agent-database';
 import type { StepPacer } from './step-pacer';
@@ -221,9 +221,11 @@ export class FacetSpend {
   }
 }
 
-function facetModels(actor: HostedActor, workspace: AgentWorkspace, providers: ProviderEnv, prepared: PreparedAgentTurn): AgentProviderRegistry {
-  return createAgentProviderRegistry({
-    env: providers,
+/** The registry an agent's isolate resolves its models through, over its own providers (`AgentFacet.models`). */
+export type FacetModels = (deps: Omit<AgentProviderDeps, 'env'>) => AgentProviderRegistry;
+
+function facetModels(actor: HostedActor, workspace: AgentWorkspace, models: FacetModels, prepared: PreparedAgentTurn): AgentProviderRegistry {
+  return models({
     userDO: { stub: brokeredCredentials(workspace), caller: AGENT_CALLER },
     accountFor: (provider) => actor.stores.config.getProviderAccounts()[provider] ?? prepared.accounts[provider]
       ?? prepared.sources.profileInputs.envelope.catalog.accounts?.[provider],
@@ -236,7 +238,7 @@ function facetModels(actor: HostedActor, workspace: AgentWorkspace, providers: P
 export function facetTurnSources(turn: {
   readonly actor: HostedActor;
   readonly workspace: AgentWorkspace;
-  readonly providers: ProviderEnv;
+  readonly models: FacetModels;
   readonly prepared: PreparedAgentTurn;
   readonly spend: FacetSpend;
   readonly live: LiveTurn;
@@ -245,7 +247,7 @@ export function facetTurnSources(turn: {
   readonly pacer: StepPacer;
 }) {
   const { actor, prepared, spend } = turn;
-  const registry = facetModels(actor, turn.workspace, turn.providers, prepared);
+  const registry = facetModels(actor, turn.workspace, turn.models, prepared);
   // Its calls are routed under its own conversation, as a CLI hire's are, in its workspace's cache.
   const affinity = actorAffinity(actor.record);
 
@@ -297,7 +299,7 @@ export function facetTurnTools(workspace: AgentWorkspace, prepared: PreparedAgen
 
 /** A one-shot run on the shared assembly and step loop. */
 export async function runAgentTask(
-  { database, workspace, providers, pacer }: { readonly database: AgentDatabase; readonly workspace: AgentWorkspace; readonly providers: ProviderEnv; readonly pacer: StepPacer },
+  { database, workspace, models, pacer }: { readonly database: AgentDatabase; readonly workspace: AgentWorkspace; readonly models: FacetModels; readonly pacer: StepPacer },
   task: AgentTurnTask,
 ): Promise<AgentTurnEnd> {
   const prepared = await workspace.prepareTurn(task.sequenceId);
@@ -310,7 +312,7 @@ export async function runAgentTask(
   const capture = new HeadCapture();
   const runId = prepared.runId;
   const spend = new FacetSpend(workspace);
-  const { sources, trigger } = facetTurnSources({ actor, workspace, providers, prepared, spend, live, runId, turnId: task.sequenceId, pacer });
+  const { sources, trigger } = facetTurnSources({ actor, workspace, models, prepared, spend, live, runId, turnId: task.sequenceId, pacer });
 
   const inference: HeadInferenceDeps = {
     actor,

@@ -7,14 +7,14 @@ import {
   bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpening, type JsonObject, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
   type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalTurnFacts, type TerminalTurnParts,
-  type ProviderEnv, type SessionEvent, type TurnAssemblyRequest, type WorkMode,
+  type SessionEvent, type TurnAssemblyRequest, type WorkMode,
 } from '@kinu.run/core';
 import { createCompactionStateStore, type CompactionStateStore } from '@kinu.run/compaction';
 import { attempt, diagnostics, hold, logged, settle, type KinuError } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import type { AgentDatabase } from './agent-database';
 import type { StepPacer } from './step-pacer';
-import { FacetSpend, facetTurnSources, facetTurnTools, type AgentWorkspace, type LiveTurn } from './agent-turn';
+import { FacetSpend, facetTurnSources, facetTurnTools, type AgentWorkspace, type FacetModels, type LiveTurn } from './agent-turn';
 
 /** The words reach the room on the turn's own stream, and a turn's end on its own call. */
 const ROOM_EVENTS: ReadonlySet<SessionEvent['type']> = new Set(['turn-start', 'step-cut', 'error', 'broadcast', 'history-reverted']);
@@ -23,7 +23,7 @@ export interface FacetChatDeps {
   readonly actor: HostedActor;
   readonly database: AgentDatabase;
   readonly workspace: AgentWorkspace;
-  readonly providers: ProviderEnv;
+  readonly models: FacetModels;
   readonly storage: DurableObjectStorage;
   readonly pacer: StepPacer;
 }
@@ -116,14 +116,14 @@ export class FacetChat {
   }
 
   private async assemble(prepared: PreparedAgentTurn, turn: { readonly id: string; readonly mode: WorkMode; readonly runId: string }, asked: TurnAssemblyRequest, bind?: Parameters<typeof assembleActorTurn>[0]['settle']) {
-    const { actor, database, workspace, providers, pacer } = this.deps;
+    const { actor, database, workspace, models, pacer } = this.deps;
     const live: LiveTurn = { dynamic: prepared.dynamic };
 
     const tools = facetTurnTools(workspace, prepared, actor, {
       id: turn.id, mode: turn.mode, parentDriven: this.parentDriven, driving: this.driving, live, capture: new HeadCapture(), database,
     });
 
-    const { sources: bundle } = facetTurnSources({ actor, workspace, providers, prepared, spend: this.spend, live, runId: turn.runId, turnId: turn.id, pacer });
+    const { sources: bundle } = facetTurnSources({ actor, workspace, models, prepared, spend: this.spend, live, runId: turn.runId, turnId: turn.id, pacer });
 
     // A chat turn under a mission of its workspace's spends there, as each model call is guarded and charged.
     const { missionLabels } = prepared;
@@ -380,10 +380,10 @@ export class FacetChat {
 
   /** Down the fast tier's chain on the agent's own models, as every actor's title is named. */
   private async suggestTitle(mission: string): Promise<string | null> {
-    const { actor, workspace, providers, pacer } = this.deps;
+    const { actor, workspace, models, pacer } = this.deps;
     const workMode = actor.session.workMode;
     const prepared = await workspace.prepareChat({ turnId: null, mode: workMode, userText: '', parentDriven: false });
-    const { sources } = facetTurnSources({ actor, workspace, providers, prepared, spend: this.spend, live: { dynamic: prepared.dynamic }, runId: prepared.runId, turnId: 'title', pacer });
+    const { sources } = facetTurnSources({ actor, workspace, models, prepared, spend: this.spend, live: { dynamic: prepared.dynamic }, runId: prepared.runId, turnId: 'title', pacer });
     const inputs = await sources.profileInputs();
     const profile = resolveAgentTurnProfile({ ...inputs, ...ownProfileChoices(sources.config, inputs, sources.ancestors?.()), workMode, availableTools: [], activeSkills: [] });
     const route = resolveModelRoute('fast', profile);
