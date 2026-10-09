@@ -698,11 +698,17 @@ export class SlateHost {
     }));
   }
 
+  /**
+   * Whether the slate builds, by the build its preview serves: nothing is shown, so the turn's answer still draws the
+   * slate it changed. `{ broken }` is the compiler's words when its latest source does not build.
+   */
+  async build(caller: SlateCaller, id: string): Promise<SlateCallResult> {
+    return await this.answerServed(caller, id, 'build', async ({ broken }): Promise<JsonValue> => (broken === null ? {} : { broken }));
+  }
+
   /** The application is the root's, so the URL is the same whoever asks and across launches. */
   async preview(caller: SlateCaller, id: string): Promise<SlateCallResult> {
-    try {
-      requireWorkModePermission(caller.workMode, false, 'Starting or exposing a slate preview');
-      const { source, app, broken } = await this.served(id);
+    return await this.answerServed(caller, id, 'preview', async ({ source, app, broken }) => {
       const preview = await this.deps.apps.url(app.port, app.capability);
 
       if (preview.url === undefined) throw new KinuError('unavailable', 'This deployment cannot mint a slate preview URL: ' + preview.unavailable);
@@ -714,9 +720,21 @@ export class SlateHost {
       const shown = { url: preview.url, port: app.port, sized, title: slateTitle(source.project, id) };
 
       // Its latest source does not build: the last that did is what this URL serves, and the compiler's words say why.
-      return { ok: true, value: broken === null ? shown : { ...shown, broken } };
+      return broken === null ? shown : { ...shown, broken };
+    });
+  }
+
+  /** The slate's served build, booted for `caller`, as `answer` reads it; a slate that cannot be served is refused. */
+  private async answerServed(
+    caller: SlateCaller, id: string, doing: 'build' | 'preview',
+    answer: (served: RunningSlate & { readonly app: DurableAppIdentity }) => Promise<JsonValue>,
+  ): Promise<SlateCallResult> {
+    try {
+      requireWorkModePermission(caller.workMode, false, 'Starting or exposing a slate preview');
+
+      return { ok: true, value: await answer(await this.served(id)) };
     } catch (cause) {
-      return { ok: false, ...refusalOf(toKinuError({ doing: 'slate ' + id + ' preview', cause, otherwise: 'io' })) };
+      return { ok: false, ...refusalOf(toKinuError({ doing: 'slate ' + id + ' ' + doing, cause, otherwise: 'io' })) };
     }
   }
 
