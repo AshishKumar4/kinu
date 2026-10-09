@@ -1503,11 +1503,16 @@ export function armedWakes(db: Database): { id: string; time: number; payload: J
   ).all().map((row) => ({ id: row.id, time: row.time, payload: row.payload === null ? null : parseJsonValue(row.payload) }));
 }
 
-/** The platform's delivery: the clock reaches the soonest wake, and the alarm drives it. The caller resets the clock. */
+/**
+ * The platform's delivery: the clock reaches the soonest wake, the workspace's own or an agent's isolate's (as a hand-off
+ * to main arms), and the alarm drives it. The caller resets the clock.
+ */
 export async function fireSoonestWake(agent: Pick<HarnessOrchestratorAgent, 'alarm'>, db: Database): Promise<void> {
-  const [soonest] = armedWakes(db);
+  const soonest = db.query("SELECT 1 FROM sqlite_master WHERE name = 'cf_agents_jobs'").get() === null ? null : db.query<{ time: number }, []>(
+    "SELECT time FROM cf_agents_jobs WHERE capability IN ('kinu-wakes', 'kinu-agent-wakes') ORDER BY time LIMIT 1",
+  ).get();
 
-  if (soonest === undefined) throw new Error('no wake is armed');
+  if (soonest === null) throw new Error('no wake is armed');
 
   setSystemTime(new Date(Math.max(soonest.time, Date.now())));
   await agent.alarm();

@@ -2,8 +2,8 @@
 // reload the chat held the owner's message with no answer and no error. A refused turn's answer keeps the refusal, in the
 // provider's own words, on the row a reload reads.
 import { expect, test } from 'bun:test';
-import { CHAT_SESSION_ID, turnFailure } from '@kinu.run/core';
-import { catalogTurn, gatewayWorkspace, historyOver } from './helpers/actor-harness';
+import { turnFailure } from '@kinu.run/core';
+import { catalogTurn, gatewayWorkspace, storedChat } from './helpers/actor-harness';
 import { stubAiBinding } from './helpers/platform-gateway';
 
 test('a turn the provider refuses records the refusal, in its words, on the answer a reload reads', async () => {
@@ -15,7 +15,8 @@ test('a turn the provider refuses records the refusal, in its words, on the answ
   const workspace = gatewayWorkspace(gateway);
 
   await catalogTurn(workspace.agent, 'plan the quarterly offsite');
-  const [question, answer] = await historyOver(workspace).transcript(CHAT_SESSION_ID).history();
+  // Main's conversation is its own isolate's (D9): the rows a reload reads.
+  const [question, answer] = await storedChat(workspace);
 
   expect([question?.role, answer?.role]).toEqual(['user', 'assistant']);
   expect(turnFailure({ metadata: answer?.metadata })).toContain('Go usage limit exceeded');
