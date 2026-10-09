@@ -1,10 +1,10 @@
 diff --git a/packages/core/src/evolution/engine.ts b/packages/core/src/evolution/engine.ts
 --- a/packages/core/src/evolution/engine.ts
 +++ b/packages/core/src/evolution/engine.ts
-@@ -248,7 +248,7 @@
+@@ -156,7 +156,7 @@
    ) {
      this.rt = rt;
-     this.history = history;
+     this.turnPair = turnPair;
 -    this.config = { ...DEFAULT_EVOLUTION_CONFIG, ...config };
 +    this.config = { ...config, ...DEFAULT_EVOLUTION_CONFIG };
      rt.actor.assertCurrent();

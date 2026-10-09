@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-08",
-  "files": 3095,
-  "functions": 80987,
+  "measuredAt": "2026-10-09",
+  "files": 3106,
+  "functions": 81261,
   "ceiling": 87,
   "line": 27,
   "inventory": [
@@ -227,10 +227,6 @@
     },
     {
       "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply",
-      "complexity": 28
-    },
-    {
-      "key": "packages/core/src/orchestrator/terminal-roster.ts#declareTerminalRoster",
       "complexity": 28
     },
     {
