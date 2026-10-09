@@ -251,7 +251,7 @@ describe('the honest read, scanned rather than made resident', () => {
     expect(cut.startsWith('m'.repeat(FILE_READ_LINE_CHARS))).toBe(true);
     expect(cut).toContain('750 more characters');
     expect(next).toBe('next');
-    expect(read).toMatchObject({ last: 2, total: 2, omitted: 750 });
+    expect(read).toMatchObject({ last: 2, total: 2, omitted: 750, uncutTo: 0 });
   });
 
   test('one line larger than the cap hands over a recipe instead of clipping silently', async () => {
@@ -336,11 +336,11 @@ describe('the honest read, scanned rather than made resident', () => {
     const original = 'z'.repeat(500);
     const giant = await slice(original, { maxChars: CAP });
 
-    // `last` < `first` means no line shown; the ledger records no page.
-    expect(giant.last).toBe(giant.first - 1);
+    // `uncutTo` < `first` means no line showed whole; the ledger records no page.
+    expect(giant.uncutTo).toBe(giant.first - 1);
 
     const ledger = new TurnFileLedger();
-    ledger.observeRange('/f', { fingerprint: fnv1a64(original), first: giant.first, last: giant.last, total: giant.total });
+    ledger.observeRange('/f', { fingerprint: fnv1a64(original), first: giant.first, last: giant.uncutTo, total: giant.total });
     // That content is known and unread: an overwrite discarding it is refused.
     expect(ledger.seenState('/f', original, 'whole')).toEqual({ state: 'partial', coveredTo: 0, total: 1 });
   });
@@ -776,6 +776,36 @@ describe('a `file` read never makes the file resident', () => {
     expect(tail).toBe('tail');
     expect(out.length).toBeLessThan(giant.length);
     expect(vfs.wholeReads).toEqual([]);
+    // Seeing a prefix of one enormous line is not seeing the file.
+    await expect(call({ op: 'write', path: 'one.txt', content: 'wiped\n' }))
+      .rejects.toThrow('you have not seen');
+  });
+
+  test('a line the read cut stays unseen however the file is paged, and edits on lines shown whole still land', async () => {
+    const body = `alpha\nbeta\n${'w'.repeat(FILE_READ_LINE_CHARS + 500)}\ngamma\ndelta\n`;
+    const vfs = memoryVfs({ 'wide.txt': body }, { perRead: 512 });
+    const { call, ledger } = toolFor(vfs);
+    const overwrite = () => call({ op: 'write', path: 'wide.txt', content: 'wiped\n' });
+
+    // Every line shows, the third cut: the turn has seen the two lines before it, not what showed after it.
+    expect(shownLines(v.parse(StringResultSchema, await call({ op: 'read', path: 'wide.txt' })))).toHaveLength(5);
+    expect(ledger.seenState('wide.txt', body, 'whole')).toEqual({ state: 'partial', coveredTo: 2, total: 5 });
+
+    // Reading from the cut line, or past it, shows no more of that line, so coverage stays where it was.
+    for (const offset of [3, 4]) {
+      await call({ op: 'read', path: 'wide.txt', offset });
+      expect(ledger.seenState('wide.txt', body, 'whole')).toMatchObject({ state: 'partial', coveredTo: 2 });
+    }
+
+    // The refusal names the one read that does cover it.
+    await expect(overwrite()).rejects.toThrow('workspace.readFile');
+    expect(vfs.files.get('wide.txt')).toBe(body);
+
+    expect(await call({ op: 'edit', path: 'wide.txt', edits: [{ old_text: 'beta', new_text: 'BETA' }] }))
+      .toMatchObject({ applied: [expect.objectContaining({ line: 2 })] });
+    expect(await call({ op: 'edit', path: 'wide.txt', edits: [{ old_text: 'gamma', new_text: 'GAMMA' }] }))
+      .toMatchObject({ applied: [expect.objectContaining({ line: 4 })] });
+    expect(vfs.files.get('wide.txt')).toBe(body.replace('beta', 'BETA').replace('gamma', 'GAMMA'));
   });
 
   test('paging the file in contiguous windows earns the overwrite', async () => {

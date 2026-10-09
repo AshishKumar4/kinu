@@ -11,7 +11,7 @@ import type { CheckpointFiles, Memory, VfsWriteReport } from '../types/primitive
 import type { TurnContextBudget } from '../context-budget';
 import { ensureDir, vfsDirname } from '../utils/vfs-helpers';
 import { memoryIndexPath } from '../memory/note';
-import { applyFileEdits, formatFileSlice, FILE_READ_LINES, FILE_READ_MAX_CHARS, FILE_REFUSAL_REASONS, type FileEdit } from './file-edit';
+import { applyFileEdits, formatFileSlice, FILE_READ_LINE_CHARS, FILE_READ_LINES, FILE_READ_MAX_CHARS, FILE_REFUSAL_REASONS, type FileEdit } from './file-edit';
 import { FileRefusalError } from '../types/file-edits';
 import { readFileHead, readFileText, scanFileWindow, type ScannedFile } from './file-scan';
 import type { TurnFileLedger, FileEditOutcomeReason, FileSeenNeed } from '../vfs/file-ledger';
@@ -252,7 +252,9 @@ function fileOps(deps: FileDeps) {
         return { reason: 'unread', refusal:
           `You have read only lines 1-${verdict.coveredTo} of ${verdict.total} in ${path}, so replacing it ` +
           `would discard ${verdict.total - verdict.coveredTo} lines you have not seen. ` +
-          `Change part of it with op=edit, or read the rest first (op=read path=${path} offset=${verdict.coveredTo + 1}).` };
+          `Change part of it with op=edit, or read the rest first (op=read path=${path} offset=${verdict.coveredTo + 1}). ` +
+          `If line ${verdict.coveredTo + 1} runs past ${String(FILE_READ_LINE_CHARS)} characters, a read cuts it and never counts it as seen: ` +
+          'read the whole file with workspace.readFile inside eval to cover it.' };
       case 'stale':
         return { reason: 'stale', refusal:
           `${path} changed since you read it. Read it again (op=read path=${path}) before you ` +
@@ -304,7 +306,7 @@ function fileOps(deps: FileDeps) {
     const slice = formatFileSlice(scanned.window, { path, limit: args.limit, maxChars });
 
     ledger.observeRange(path, {
-      fingerprint: scanned.fingerprint, first: slice.first, last: slice.last, total: slice.total, revision: scanned.revision,
+      fingerprint: scanned.fingerprint, first: slice.first, last: slice.uncutTo, total: slice.total, revision: scanned.revision,
     });
 
     if (slice.omitted > 0) {

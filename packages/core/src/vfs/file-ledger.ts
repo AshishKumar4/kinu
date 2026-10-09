@@ -35,7 +35,10 @@ interface SeenContent {
   total: number;
 }
 
-/** `fingerprint` must be `fnv1a64` of the file's whole text. */
+/**
+ * The lines a read showed in full, `first` to `last`. A line the read cut is not in the range, whatever the read showed
+ * after it. `fingerprint` must be `fnv1a64` of the file's whole text.
+ */
 export interface RangeObservation {
   readonly fingerprint: string;
   readonly first: number;

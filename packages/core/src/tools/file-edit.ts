@@ -194,6 +194,11 @@ export interface FileSlice {
   first: number;
   last: number;
   total: number;
+  /**
+   * The last line of `first..last` before the first one the read cut. Lines past a cut line showed, but a cut line's
+   * tail did not, so a reader has seen `first..uncutTo` and no more; `first - 1` when nothing showed uncut.
+   */
+  uncutTo: number;
 }
 
 /** One line of a read: its retained head (at most `FILE_READ_LINE_CHARS`) and its full length. */
@@ -238,7 +243,7 @@ export function formatFileSlice(
     named.length <= opts.maxChars ? named : plain;
 
   if (total === 0) {
-    return { output: affordable(`[${opts.path} is empty]`, '[this file is empty]'), omitted: 0, first: 1, last: 0, total: 0 };
+    return { output: affordable(`[${opts.path} is empty]`, '[this file is empty]'), omitted: 0, first: 1, last: 0, total: 0, uncutTo: 0 };
   }
 
   const count = `${String(total)} line${total === 1 ? '' : 's'}`;
@@ -248,7 +253,7 @@ export function formatFileSlice(
       output: affordable(
         `[${opts.path} has ${count}; offset=${String(first)} is past the end]`,
         `[this file has ${count}; offset=${String(first)} is past the end]`),
-      omitted: 0, first, last: first - 1, total,
+      omitted: 0, first, last: first - 1, total, uncutTo: first - 1,
     };
   }
 
@@ -275,6 +280,7 @@ export function formatFileSlice(
   const shown: string[] = [];
   let chars = 0;
   let raw = 0;
+  let cutAt: number | null = null;
 
   for (const [index, line] of range.lines.entries()) {
     const rendered = numberedLine(first + index, line);
@@ -285,6 +291,8 @@ export function formatFileSlice(
     chars += cost;
     raw += Math.min(line.chars, FILE_READ_LINE_CHARS) + (shown.length === 0 ? 0 : 1);
     shown.push(rendered);
+
+    if (cutAt === null && line.chars > FILE_READ_LINE_CHARS) cutAt = first + index;
   }
 
   if (shown.length === 0) {
@@ -294,7 +302,7 @@ export function formatFileSlice(
     const refusal = affordable(`\n\n[line ${String(first)} of ${opts.path} ${tail}`, `\n\n[line ${String(first)} ${tail}`);
     const head = line.text.slice(0, headEnd(line.text, Math.max(0, opts.maxChars - refusal.length)));
 
-    return { output: head + refusal, omitted: requestedChars - head.length, first, last: first - 1, total };
+    return { output: head + refusal, omitted: requestedChars - head.length, first, last: first - 1, total, uncutTo: first - 1 };
   }
 
   const last = first + shown.length - 1;
@@ -303,5 +311,5 @@ export function formatFileSlice(
   if (last < requestedLast) stop = capStop;
   else if (last < total) stop = windowStop;
 
-  return { output: shown.join('\n') + footer(last, stop), omitted: requestedChars - raw, first, last, total };
+  return { output: shown.join('\n') + footer(last, stop), omitted: requestedChars - raw, first, last, total, uncutTo: cutAt === null ? last : cutAt - 1 };
 }
