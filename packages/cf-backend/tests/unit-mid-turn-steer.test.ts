@@ -114,9 +114,10 @@ describe('a message typed while the agent is working', () => {
     const h = steerHarness();
     const actorId = workspaceMainActor(h.db).actorId;
 
-    // Main's steers are its own isolate's rows (D9); a read through its window opens that isolate's database.
-    await h.agent.harnessMainHistory();
-    // Written through SQL as an eviction leaves them; the next activation's loop is the restore/sweep entry point.
+    // A turn is open in main's isolate, so the workspace holds its wake, as it does whenever it hands main words.
+    await h.startTurn('u-live');
+    // Written through SQL as an eviction leaves them, in main's own isolate (D9): the next activation's loop is the
+    // restore/sweep entry point.
     mainDatabase(h).query(
       `INSERT INTO pending_steers (actor_id, id, turn_id, mode, text)
        VALUES (?, 'steer-dead-file', 'turn-dead', 'build', 'attach this too')`,
@@ -127,16 +128,22 @@ describe('a message typed while the agent is working', () => {
     ).run(actorId);
 
     const restarted = await reactivateOrchestratorHarness(h.db);
-    const rerun = await chatSessionTurns(restarted.agent).resume();
+    const turns = chatSessionTurns(restarted.agent);
 
-    expect(rerun.messages.at(-1)).toEqual({
+    // The live turn reopens first; the dead turn's steer reruns after it, before main's isolate rests.
+    await turns.resume();
+    const rerun = turns.park();
+    const live = turns.settle({ messageId: 'a-live-again', text: 'kept' });
+
+    expect((await rerun).messages.at(-1)).toEqual({
       role: 'user',
       content: [
         { type: 'file', data: 'data:image/png;base64,AAAA', mediaType: 'image/png', filename: 'chart.png' },
         { type: 'text', text: 'attach this too' },
       ],
     });
-    await chatSessionTurns(restarted.agent).settle({ messageId: 'a-rerun-file', text: 'attached' });
+    await turns.settle({ messageId: 'a-rerun-file', text: 'attached' });
+    await live;
     expect(present(mainDatabase(restarted).query<{ c: number }, []>('SELECT count(*) AS c FROM pending_steers').get(), 'the pending_steers count row').c).toBe(0);
   });
 });
