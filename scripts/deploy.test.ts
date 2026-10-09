@@ -140,6 +140,10 @@ if [[ "$1" == */scripts/release-build.ts ]]; then
   exit 86
 fi
 if [[ "$1" == */scripts/reset.ts ]] && [ "$2" = "pending" ]; then
+  if [ -n "$KINU_DEPLOY_INFRA_PRELOAD" ]; then
+    (cd "${REPO_ROOT}" && PATH=/usr/local/bin:/usr/bin:/bin "${process.execPath}" --preload "$KINU_DEPLOY_INFRA_PRELOAD" "${join(REPO_ROOT, 'scripts/reset.ts')}" "\${@:2}")
+    exit $?
+  fi
   printf '%s\\n' "\${KINU_DEPLOY_PENDING_RESET:-none}"
   # The newest reset of the Worker, pending or finished, into the file the deploy names.
   if [ -n "$4" ]; then cp "$KINU_DEPLOY_NEWEST_RESET" "$4"; fi
@@ -245,6 +249,7 @@ const live: cloudflare.Deployment = ${JSON.stringify(account.live)};
 const present = (): cloudflare.Observation => ({ state: 'present', detail: 'fixture account' });
 mock.module(${JSON.stringify(cloudflare)}, () => ({
   ...cloudflare, authenticated: present, deployment: () => live,
+  wrangler: () => ({ ok: true, stdout: ${JSON.stringify(JSON.stringify(account.reset))}, stderr: '', code: 0 }),
   container: (name: string) => ${JSON.stringify(account.missingContainers)}.includes(name) ? { state: 'absent' } : present(),
   r2: (name: string) => ${JSON.stringify(account.missingBuckets ?? [])}.includes(name) ? { state: 'absent' } : present(),
   kvNamespace: present, vectorize: present, containerNamespace: present,
