@@ -3,10 +3,13 @@
  * deleted: the fixtures that deploy a throwaway application delete their snapshots with it.
  *
  * Deleting an application leaves its snapshots: 801 of the 923 orphans removed on 2026-10-09 were of deleted
- * applications, most deleted by these fixtures' teardowns. A snapshot is a manifest in a `cloudchamber-snapshots`
- * repository that a snapshot tag and a set tag name; the registry keeps a manifest any tag names, so the tags go first
- * and then the manifest by its digest (packages/devbox/src/snapshot-registry.ts). The catalog lists every manifest by
- * its digest, tagged or not, so a snapshot whose tags an earlier delete took is still found.
+ * applications, most deleted by these fixtures' teardowns. A snapshot is a manifest a snapshot tag and a set tag name,
+ * in its image's own repository: `<account>/cloudchamber-snapshots/<digest>` for an application on Cloudflare's base
+ * image, the image's repository for one on an image of ours (`<account>/kinu-devbox-native` held 313 snapshots of
+ * deleted applications, 673 GB, on 2026-10-09). So a snapshot is told by its config, which names `snapshot_id` and
+ * `application_id`, in any repository. The registry keeps a manifest any tag names, so the tags go first and then the
+ * manifest by its digest (packages/devbox/src/snapshot-registry.ts). The catalog lists every manifest by its digest,
+ * tagged or not, so a snapshot whose tags an earlier delete took is still found.
  */
 import { createHash } from 'node:crypto';
 import * as v from 'valibot';
@@ -19,10 +22,12 @@ const Minted = v.object({
 
 const Catalog = v.object({ repositories: v.record(v.string(), v.nullable(v.array(v.string()))) });
 
+/** An image index has no config: it is no snapshot. */
 const Manifest = v.object({ config: v.object({ digest: v.string() }) });
 
+/** A snapshot's config; an image's config names neither id, so it is none. */
 const Config = v.object({
-  application_id: v.optional(v.string(), ''), snapshot_id: v.optional(v.string(), ''),
+  application_id: v.pipe(v.string(), v.minLength(1)), snapshot_id: v.pipe(v.string(), v.minLength(1)),
   snapshot_set_id: v.optional(v.string(), ''), parent_snapshot_id: v.optional(v.string(), ''),
 });
 
@@ -62,8 +67,8 @@ async function credentials(account: string, token: string, fetcher: Fetch): Prom
   return `Basic ${btoa(`${answer.result.username}:${answer.result.password}`)}`;
 }
 
-/** The snapshot repositories' manifests by digest, page by page: the registry's link names the next page's cursor as
- *  `last`, without the angle brackets RFC 8288 gives a link. */
+/** Every repository's manifests by digest, page by page: the registry's link names the next page's cursor as `last`,
+ *  without the angle brackets RFC 8288 gives a link. */
 async function manifests(authorization: string, fetcher: Fetch): Promise<{ readonly repository: string; readonly digest: string }[]> {
   const found: { repository: string; digest: string }[] = [];
   let cursor: string | undefined;
@@ -73,8 +78,6 @@ async function manifests(authorization: string, fetcher: Fetch): Promise<{ reado
     const catalog = v.parse(Catalog, await listed.json());
 
     for (const [repository, names] of Object.entries(catalog.repositories)) {
-      if (!repository.includes('/cloudchamber-snapshots/')) continue;
-
       for (const name of names ?? []) if (name.startsWith('sha256:')) found.push({ repository, digest: name });
     }
 
@@ -94,11 +97,13 @@ async function ofApplication(authorization: string, applicationId: string, fetch
     const read = await fetcher(`${REGISTRY}/${repository}/manifests/${digest}`, { headers: { authorization, accept: ACCEPT } });
 
     if (read.status === 404) continue;
-    const manifest = v.parse(Manifest, await read.json());
-    const config = v.parse(Config, await (await fetcher(`${REGISTRY}/${repository}/blobs/${manifest.config.digest}`, { headers: { authorization } })).json());
+    const manifest = v.safeParse(Manifest, await read.json());
 
-    if (bare(config.application_id) !== bare(applicationId)) continue;
-    found.push({ repository, digest, snapshot: config.snapshot_id, set: config.snapshot_set_id, parent: config.parent_snapshot_id });
+    if (!manifest.success) continue;
+    const config = v.safeParse(Config, await (await fetcher(`${REGISTRY}/${repository}/blobs/${manifest.output.config.digest}`, { headers: { authorization } })).json());
+
+    if (!config.success || bare(config.output.application_id) !== bare(applicationId)) continue;
+    found.push({ repository, digest, snapshot: config.output.snapshot_id, set: config.output.snapshot_set_id, parent: config.output.parent_snapshot_id });
   }
 
   return found;

@@ -8,8 +8,9 @@ import { DevboxError, attempt, settle } from './errors';
 export type SnapshotDeletion = { readonly kind: 'deleted' | 'absent' } | { readonly kind: 'refused'; readonly reason: string; readonly left?: string };
 
 export interface SnapshotRegistry {
-  /** A snapshot id, or a manifest digest (`sha256:…`) an earlier delete left. */
-  delete(ref: string): Promise<SnapshotDeletion>;
+  /** A snapshot id, or a manifest digest (`sha256:…`) an earlier delete left. `owe` hears the manifest's digest before
+   *  any tag goes: once they are gone the id finds nothing, so a delete cut off after them is owed as the digest. */
+  delete(ref: string, owe?: (digest: string) => void): Promise<SnapshotDeletion>;
 }
 
 const Minted = v.object({
@@ -89,7 +90,7 @@ export function snapshotRegistry(input: {
 
   /** A manifest is deleted by its digest, and only once no tag names it: the registry answers 204 to a tagged one and
    *  keeps it. The snapshot tag goes last of the tags, so a refusal before it leaves the snapshot findable by id. */
-  const remove = (ref: string): Effect.Effect<SnapshotDeletion, DevboxError> => Effect.gen(function* () {
+  const remove = (ref: string, owe: (digest: string) => void): Effect.Effect<SnapshotDeletion, DevboxError> => Effect.gen(function* () {
     const authorization = yield* credentials;
 
     if (ref.startsWith('sha256:')) {
@@ -117,6 +118,8 @@ export function snapshotRegistry(input: {
     const parsed = v.safeParse(Manifest, body);
     const set = parsed.success ? parsed.output.annotations['io.cloudflare.cloudchamber.snapshot_set_id'] : undefined;
 
+    owe(digest);
+
     for (const tag of set === undefined ? [snapshot] : [`rootfs-set-${sha256(set)}`, snapshot]) yield* deleting(authorization, manifest(tag), tag);
 
     const freed = yield* Effect.result(deleting(authorization, manifest(digest), digest));
@@ -125,6 +128,6 @@ export function snapshotRegistry(input: {
   });
 
   return {
-    delete: (ref) => settle(remove(ref).pipe(Effect.catchTag('DevboxError', (failure) => Effect.succeed<SnapshotDeletion>({ kind: 'refused', reason: failure.message })))),
+    delete: (ref, owe = () => {}) => settle(remove(ref, owe).pipe(Effect.catchTag('DevboxError', (failure) => Effect.succeed<SnapshotDeletion>({ kind: 'refused', reason: failure.message })))),
   };
 }
