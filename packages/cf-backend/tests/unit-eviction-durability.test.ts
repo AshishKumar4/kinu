@@ -193,8 +193,8 @@ describe('the post-turn lanes', () => {
     expect(notes(restarted)).toBe(1);
     expect(owedReview(restarted)).toBe(0);
     // The signal is keyed on the turn so a re-delivery collapses onto the row it already opened.
-    expect((await programmaticTurns(restarted)).filter((turn) => turn.id.startsWith(`${PROGRAMMATIC_MESSAGE_ID_PREFIX}advisor:`)))
-      .toHaveLength(1);
+    // Said once: one programmatic turn of main's carries the note, whatever id its isolate admitted it under.
+    expect((await programmaticTurns(restarted)).filter((turn) => turn.text.includes(ADVISOR_HEADER))).toHaveLength(1);
   });
 
   test('an advisor answer stored before a death is delivered once, by the next activation', async () => {
@@ -224,8 +224,8 @@ describe('the post-turn lanes', () => {
 
     expect(calls()).toBe(1);
     expect(notes(restarted)).toBe(1);
-    expect((await programmaticTurns(restarted)).filter((turn) => turn.id.startsWith(`${PROGRAMMATIC_MESSAGE_ID_PREFIX}advisor:`)))
-      .toHaveLength(1);
+    // Said once: one programmatic turn of main's carries the note, whatever id its isolate admitted it under.
+    expect((await programmaticTurns(restarted)).filter((turn) => turn.text.includes(ADVISOR_HEADER))).toHaveLength(1);
   });
 
   test('a turn whose note had already landed hires no advisor again, so recovery cannot double it', async () => {
@@ -271,7 +271,8 @@ describe('an advisor answer handed to a turn', () => {
 
     const driving = driveUntil(harness, 'the note opened its turn', () => noteAsked).then(() => { drove = true; });
 
-    expect(JSON.stringify((await noteTurn).messages)).toContain(ADVISOR_HEADER);
+    // What the note's turn asks its model with: main's isolate admits the note as that turn's own words.
+    expect(JSON.stringify((await noteTurn).prompt)).toContain(ADVISOR_HEADER);
     await until(() => drove, "the alarm returned while the note's turn runs");
     await driving;
     expect(answers()).toBe(1);
