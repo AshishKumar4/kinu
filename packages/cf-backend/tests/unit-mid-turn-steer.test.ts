@@ -5,13 +5,15 @@
 
 import { describe, expect, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
-import { turnAuthor, type ProgrammaticTurn } from '@kinu.run/core';
+import { actorConnectionTag, turnAuthor } from '@kinu.run/core';
 import type { ModelMessage, UIMessage } from 'ai';
 import * as v from 'valibot';
 import {
-  mainDatabase, orchestratorHarness, reactivateOrchestratorHarness, chatSessionTurns, storedChat,
+  driveUntil, gatewayWorkspace, mainDatabase, orchestratorHarness, reactivateOrchestratorHarness, chatSessionTurns, storedChat,
   type HarnessOrchestratorAgent, workspaceMainActor,
 } from './helpers/actor-harness';
+import { asPane } from './helpers/agents-sdk';
+import { chatCompletion, openingOf, stubAiBinding } from './helpers/platform-gateway';
 import { present } from '@kinu.run/test-utils';
 
 const SteerFrameSchema = v.object({
@@ -36,7 +38,6 @@ interface SteerHarness {
   db: Database;
   frames: string[];
   appended(): Promise<UIMessage[]>;
-  enqueued: ProgrammaticTurn[];
   /** `liveTurnId` names the turn, which is what makes a resumed turn re-bind under it. */
   startTurn(liveTurnId?: string): Promise<void>;
 }
@@ -48,7 +49,6 @@ function steerHarness(): SteerHarness {
 
   return {
     agent, db, frames,
-    enqueued: agent.harnessEnqueued,
     appended: async () => (await storedChat({ agent, db }))
       .filter((message) => message.role === 'user' && v.is(v.object({ metadata: v.object({ kinuSteer: v.literal(true) }) }), message)),
     startTurn: async (liveTurnId) => {
@@ -160,51 +160,62 @@ describe('stopping a turn with a steer still pending', () => {
     expect(steerFrames(h.frames).map((f) => f.status)).toEqual(['queued']);
   });
 
-  test('two queued steers become the next turn text in order once the abort settles', async () => {
+  test('two queued steers become the next turn, in order, once the abort settles', async () => {
     const h = steerHarness();
+    const turns = chatSessionTurns(h.agent);
     await h.startTurn();
     await h.agent.send('first', 'steer-first');
     await h.agent.send('second', 'steer-second');
     await h.agent.cancelCurrentWork();
 
-    await chatSessionTurns(h.agent).settle({ messageId: 'assistant-stop', text: 'partial', requestId: 'req-stop', status: 'aborted' });
-    await h.agent.harnessJoinDetachedFibers();
+    const rerun = turns.park();
+    const stopped = turns.settle({ messageId: 'assistant-stop', text: 'partial', requestId: 'req-stop', status: 'aborted' });
 
-    expect(h.enqueued).toHaveLength(1);
-    expect(h.enqueued[0]).toMatchObject({
-      text: 'first\n\nsecond',
-      metadata: { kinuAuthor: 'operator', kinuMode: 'build' },
-    });
+    expect((await rerun).identity.turnId).toBe('steer-first');
+    await turns.settle({ messageId: 'a-rerun', text: 'both done' });
+    await stopped;
+
+    const rerunRows = (await storedChat(h)).filter((message) => message.role === 'user').slice(-2);
+    expect(rerunRows.map((message) => [message.id, message.parts, turnAuthor(message)])).toEqual([
+      ['steer-first', [{ type: 'text', text: 'first' }], 'operator'],
+      ['steer-second', [{ type: 'text', text: 'second' }], 'operator'],
+    ]);
+    expect(mainDatabase(h).query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get('steer-first')).toEqual({ work_mode: 'build' });
   });
 });
 
 describe('a steer that never saw a step boundary', () => {
   test('reruns as a USER-origin turn, not as a programmatic one', async () => {
     const h = steerHarness();
+    const turns = chatSessionTurns(h.agent);
     await h.startTurn();
     await h.agent.send('one more thing', 'steer-5');
-    const settled = await chatSessionTurns(h.agent).settle({ messageId: 'assistant-1', text: 'deployed', requestId: 'req-1' });
 
-    expect(h.enqueued).toHaveLength(1);
-    const steerId = steerFrames(h.frames).find((frame) => frame.status === 'queued')?.steerId;
-    expect(steerId).toBeDefined();
-    expect(h.enqueued[0]).toMatchObject({
-      text: 'one more thing',
-      origin: 'user',
-      metadata: { kinuAuthor: 'operator', kinuMode: 'build' },
-      idempotencyKey: `steer-rerun:${settled.turnId}:build:${steerId}`,
-    });
+    const rerun = turns.park();
+    const first = turns.settle({ messageId: 'assistant-1', text: 'deployed', requestId: 'req-1' });
+
+    expect((await rerun).identity.turnId).toBe('steer-5');
+    const asked = (await storedChat(h)).filter((message) => message.role === 'user').at(-1);
+    expect(asked?.id).toBe('steer-5');
+    expect(turnAuthor(asked)).toBe('operator');
     // No kinuEvent: that would make it a programmatic turn (one-shot surface, no outcome review, a card instead of a bubble).
-    expect(h.enqueued[0]).not.toHaveProperty('metadata.kinuEvent');
-    // The enqueue seam gives every row the `programmatic:` prefix, so the operator's authorship must be explicit.
+    expect(asked).not.toHaveProperty('metadata.kinuEvent');
+    expect(mainDatabase(h).query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get('steer-5')).toEqual({ work_mode: 'build' });
+    await turns.settle({ messageId: 'a-rerun', text: 'done' });
+    await first;
   });
 
   test('tells its sender the words became the next turn, under the id it holds', async () => {
     const h = steerHarness();
+    const turns = chatSessionTurns(h.agent);
     await h.startTurn();
     await h.agent.send('one more thing', 'steer-late');
 
-    await chatSessionTurns(h.agent).settle({ messageId: 'assistant-1', text: 'deployed', requestId: 'req-1' });
+    const rerun = turns.park();
+    const first = turns.settle({ messageId: 'assistant-1', text: 'deployed', requestId: 'req-1' });
+    await rerun;
+    await turns.settle({ messageId: 'a-rerun', text: 'done' });
+    await first;
 
     expect(steerFrames(h.frames).map((frame) => [frame.status, frame.steerId])).toEqual([
       ['queued', 'steer-late'], ['turn', 'steer-late'],
@@ -215,34 +226,42 @@ describe('a steer that never saw a step boundary', () => {
     expect(stored.filter((message) => message.role === 'assistant')).toHaveLength(2);
   });
 
-  test('leftovers of mixed modes rerun as ONE plan turn, once, across duplicate terminal callbacks', async () => {
+  test('leftovers of mixed modes rerun as ONE plan turn', async () => {
     const h = steerHarness();
+    const turns = chatSessionTurns(h.agent);
     await h.startTurn();
     await h.agent.send('first build', 'steer-b1', [], 'build');
     await h.agent.send('plan next', 'steer-p', [], 'plan');
     await h.agent.send('second build', 'steer-b2', [], 'build');
 
-    await chatSessionTurns(h.agent).settle({ messageId: 'assistant-groups', text: 'ok', requestId: 'req-groups' });
-    await chatSessionTurns(h.agent).settle({ messageId: 'assistant-groups', text: 'ok', requestId: 'req-groups-duplicate' });
+    const rerun = turns.park();
+    const first = turns.settle({ messageId: 'assistant-groups', text: 'ok', requestId: 'req-groups' });
 
+    expect((await rerun).identity.turnId).toBe('steer-b1');
     // Plan is the narrower grant, so one plan-mode message makes the whole rerun plan: merging never widens a grant.
-    expect(h.enqueued).toHaveLength(1);
-    expect(h.enqueued[0]).toMatchObject({
-      text: 'first build\n\nplan next\n\nsecond build',
-      metadata: { kinuMode: 'plan' },
-      origin: 'user',
-      idempotencyKey: expect.stringMatching(/^steer-rerun:.*:plan:steer-/),
-    });
+    expect(mainDatabase(h).query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get('steer-b1')).toEqual({ work_mode: 'plan' });
+    await turns.settle({ messageId: 'a-rerun', text: 'planned' });
+    await first;
+
+    const rerunRows = (await storedChat(h)).filter((message) => message.role === 'user').slice(-3);
+    expect(rerunRows.map((message) => message.id)).toEqual(['steer-b1', 'steer-p', 'steer-b2']);
   });
 
   test('is not rerun twice — the turn that takes it drains it', async () => {
     const h = steerHarness();
+    const turns = chatSessionTurns(h.agent);
     await h.startTurn();
     await h.agent.send('one more thing', 'steer-6');
 
-    await chatSessionTurns(h.agent).settle({ messageId: 'assistant-1', text: 'ok', requestId: 'req-1' });
-    await chatSessionTurns(h.agent).settle({ messageId: 'assistant-1', text: 'ok', requestId: 'req-2' });
-    expect(h.enqueued).toHaveLength(1);
+    const rerun = turns.park();
+    const first = turns.settle({ messageId: 'assistant-1', text: 'ok', requestId: 'req-1' });
+    await rerun;
+    await turns.settle({ messageId: 'a-rerun', text: 'ok again' });
+    await first;
+    await h.agent.harnessAgentsIdle();
+
+    expect(present(mainDatabase(h).query<{ c: number }, []>('SELECT count(*) AS c FROM pending_steers').get(), 'the pending_steers count row').c).toBe(0);
+    expect((await storedChat(h)).filter((message) => message.role === 'user' && message.id === 'steer-6')).toHaveLength(1);
   });
 });
 
@@ -284,5 +303,40 @@ describe('an eviction with acknowledged steers', () => {
     expect(mainDatabase(restarted).query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get('steer-dead-1')).toEqual({ work_mode: 'plan' });
 
     expect(present(mainDatabase(restarted).query<{ c: number }, []>('SELECT count(*) AS c FROM pending_steers').get(), 'the pending_steers count row').c).toBe(0);
+  });
+});
+
+describe("a message typed into an added agent's window while it works", () => {
+  // The agent's chat runs in its own isolate, whose frames reach its window only through the workspace.
+  test('tells its window the words were taken, then that they became the next turn', async () => {
+    const ASK = 'Note where the parser buffers tokens.';
+    const release = Promise.withResolvers<void>();
+    let held = false;
+
+    const gateway = stubAiBinding(async (run) => {
+      if (!openingOf(run).includes(ASK)) return chatCompletion(run, 'Noted.');
+      held = true;
+      await release.promise;
+
+      return chatCompletion(run, 'Tokens buffer in a lookahead ring.');
+    });
+
+    const workspace = gatewayWorkspace(gateway);
+    const frames: string[] = [];
+
+    Reflect.set(workspace.agent, 'broadcast', (payload: string) => { frames.push(payload); });
+    await workspace.agent.setSoul('# Purpose\n\nKeep the parser notes.');
+    const { subordinate } = await workspace.agent.createSubordinateAgent();
+    const pane = [actorConnectionTag(subordinate.actorId ?? '')];
+
+    await asPane(pane, () => workspace.agent.send(ASK, crypto.randomUUID()));
+    await driveUntil(workspace, "the agent's model was never asked", () => held);
+    await asPane(pane, () => workspace.agent.send('and the ring size', 'steer-added'));
+    release.resolve();
+    await workspace.agent.harnessAgentsIdle();
+
+    expect(steerFrames(frames).map((frame) => [frame.status, frame.steerId])).toEqual([
+      ['queued', 'steer-added'], ['turn', 'steer-added'],
+    ]);
   });
 });

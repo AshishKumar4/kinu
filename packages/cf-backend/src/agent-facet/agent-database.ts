@@ -111,6 +111,7 @@ export class AgentDatabase {
       readonly home: string;
       readonly state: () => NimbusSandboxHandle;
       readonly enqueueTurn: BackendHost['enqueueTurn'];
+      readonly broadcast: BackendHost['broadcast'];
       readonly turnInFlight: () => boolean;
       readonly program: AgentWorkspace['program'];
       readonly memory: AgentWorkspace['memory'];
@@ -270,7 +271,7 @@ export class AgentDatabase {
 
   backendHost(): BackendHost {
     return {
-      broadcast: () => undefined,
+      broadcast: (event) => { this.workspace.broadcast(event); },
       enqueueTurn: (input) => this.workspace.enqueueTurn(input),
       turnInFlight: () => this.workspace.turnInFlight(),
       closed: () => false,

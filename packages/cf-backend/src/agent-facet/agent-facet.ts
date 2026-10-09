@@ -203,6 +203,8 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     this.database ??= new AgentDatabase(this.ctx.storage, {
       agent: () => this.workspace(), home: this.env.HOME, state: () => this.state(),
       enqueueTurn: (input) => this.enqueue(snapshot, input),
+      // A steer's fate rides its chat's events, in order with the turns it names.
+      broadcast: (event) => { this.held?.session.emit({ type: 'broadcast', event }); },
       turnInFlight: () => this.held?.session.turnInFlight() ?? false,
       memory: () => this.env.WORKSPACE.memory(), program: (...args) => this.env.WORKSPACE.program(...args),
       sayToParent: (signal) => this.env.WORKSPACE.sayToParent(signal),
