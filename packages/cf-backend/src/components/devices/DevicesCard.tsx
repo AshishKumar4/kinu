@@ -87,7 +87,7 @@ export function DevicesCard() {
           </div>
         ) : roster.resource.status === "ready" && (
           <p data-devices-empty className="p-row-text p-text-3 leading-relaxed">
-            No machine is linked yet. On the computer you want to link, run{" "}
+            No machine is linked yet. On the PC you want to link, run{" "}
             <code className="font-mono p-text">kinu connect</code> in the folder the agent may use. No Kinu CLI
             there yet? Get the one-line install command below.
           </p>

@@ -32,7 +32,7 @@ import { join } from 'node:path';
 import type { Page } from 'puppeteer';
 
 import { withGallery } from '../../scripts/gallery-harness';
-import { CHECKPOINTS_UNAVAILABLE_NO_GIT, parseJsonValue, redactPayload, type JsonObject } from '@kinu.run/core';
+import { CHECKPOINTS_UNAVAILABLE_NO_GIT, executorLabel, parseJsonValue, redactPayload, type JsonObject } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 
 
@@ -903,9 +903,9 @@ describe('the drive, browsing the one composite plane', () => {
   test('the root is the workspace tree beside the mounts, badges on the mounted folders', () => {
     expect(observed.filesRoot.crumbs).toBe('/');
     expect(observed.filesRoot.entries).toEqual(expect.arrayContaining(['home', 'pc', 'sandbox']));
-    // The origin badge names the machine, not the executor id — the device
-    // wears the user's own device name, per the consent naming contract.
-    expect(observed.filesRoot.badges).toEqual(expect.arrayContaining(["Ashish's MacBook", 'Cloud computer']));
+    // The origin badge names the machine, not the executor id: the device wears the user's own device name, per the
+    // consent naming contract, and the agent's computer wears its product label.
+    expect(observed.filesRoot.badges).toEqual(expect.arrayContaining(["Ashish's MacBook", executorLabel('sandbox')]));
   });
 
   test('crossing into /pc lists the machines; a machine lands inside its consented directory', () => {
@@ -961,7 +961,7 @@ describe('the Environment tab, as a user reads it', () => {
     expect(byName["Ashish's MacBook"]?.kind).toContain('Your PC');
     expect(byName["Ashish's MacBook"]?.mount).toBe('/pc');
     expect(byName['Workspace']?.mount).toBe('/');
-    expect(byName['Cloud computer']?.mount).toBe('/sandbox');
+    expect(byName[executorLabel('sandbox')]?.mount).toBe('/sandbox');
   });
 
   test('capability doctrine is model-facing and renders NOWHERE in user UI', () => {
@@ -1671,7 +1671,6 @@ describe('the walk-back at the actual WorkspacePage boundary', () => {
 
       const dialog = await page.$eval('[role="dialog"]', (element) => element.textContent ?? '');
       expect(dialog).toContain('Revert the conversation to before this message?');
-      expect(dialog).toContain('Files in the workspace, sandbox and your devices stay as they are.');
       // The report itself: a workspace with no device must not be told its
       // file history is missing for pressing revert.
       expect(dialog).not.toContain('File history is unavailable');

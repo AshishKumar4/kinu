@@ -112,7 +112,7 @@ describe(SUITE, () => {
             env,
             steps: [
               // THE FIRST THING A FIRST RUN MEETS is the connect offer: the TUI
-              // raises "link this computer?" as a card over the transcript and
+              // raises "link this PC?" as a card over the transcript and
               // every keystroke goes to the card until it is answered. The card
               // is WAITED FOR by its own words and answered with its own key
               // (`device.not-now`, tui/actions.tsx:109).

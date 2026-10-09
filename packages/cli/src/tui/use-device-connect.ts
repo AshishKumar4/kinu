@@ -67,7 +67,7 @@ export function useDeviceConnectPrompt(): DeviceConnectPrompt {
     if (stateRef.current) return;
 
     if (!(await shouldOfferDeviceConnect())) return;
-    await beginAsk('No computer is connected to your account yet.');
+    await beginAsk('No PC is connected to your account yet.');
   }, [beginAsk]);
 
   const open = useCallback(async () => {

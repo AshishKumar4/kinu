@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 import type { SlateSummary } from "@kinu.run/core";
 import type { PinnedPreviewPort as PinnedPort } from "@kinu.run/core";
 import { SLATE_PREFIX, type SurfaceKind } from "@kinu.run/core";
+import { portTitle } from "./port-title";
 
 /**
  * SAFETY: use-kinu builds previewFocus as `slate:${id}` / `preview:${executor}:${port}`, so re-adding
@@ -35,10 +36,11 @@ function readyChipTitle(
   slates: readonly SlateSummary[] | undefined,
   pinnedPorts: readonly PinnedPort[],
 ): string {
-  return target.startsWith(SLATE_PREFIX)
-    ? (slates?.find((slate) => `slate:${slate.id}` === target)?.title ?? target.slice(SLATE_PREFIX.length))
-    : (pinnedPorts.find((port) => `preview:${port.executor}:${port.port}` === target)?.name
-      ?? target.slice("preview:".length).replace(":", " :"));
+  if (target.startsWith(SLATE_PREFIX)) return slates?.find((slate) => `slate:${slate.id}` === target)?.title ?? target.slice(SLATE_PREFIX.length);
+
+  const port = pinnedPorts.find((candidate) => `preview:${candidate.executor}:${candidate.port}` === target);
+
+  return port === undefined ? target.slice("preview:".length).replace(":", " :") : portTitle(port);
 }
 
 /** Landing on the arrival's surface consumes it; landing elsewhere leaves the dismissal alone. */

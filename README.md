@@ -51,8 +51,8 @@ You can use it for:
   under `/slates/<id>/` that opens in its own tab on a preview URL.
   A slate reads live data through bindings you declare, such as workspace
   files, a workspace read model, or an MCP connection narrowed to named tools.
-- Engineering. A real shell, git, package installs and a Linux container for
-  heavy jobs. In Plan mode the agent reads and
+- Engineering. A real shell, git, package installs and a computer of its own,
+  a full Linux machine, for heavy jobs. In Plan mode the agent reads and
   researches without touching project code, then hands you a plan to review
   before a Build turn starts.
 - Schedules and triggers. A cron timer, a one-shot timer or a webhook starts a
@@ -108,7 +108,7 @@ and [docs/USER-GUIDE.md](docs/USER-GUIDE.md) covers daily use.
 ### Lending your machine to a cloud workspace
 
 ```bash
-kinu connect          # link this computer, with a consent prompt
+kinu connect          # link this PC, with a consent prompt
 kinu desktop status   # is it attached?
 ```
 
@@ -127,7 +127,7 @@ you grant. Here is why I'm comfortable running it on my own machine:
   enforce the same view. Turning the sandbox off is an explicit switch per
   device.
 - Every shell command passes an approval check before it runs. Housekeeping in
-  the agent's own workspace or container runs without asking; the same
+  the agent's own workspace or computer runs without asking; the same
   destructive command on your machine, your Drive or a CLI workspace in one
   of your directories waits for you. Force-pushes and package
   publishing need approval everywhere. A standing approval is a rule you grant
@@ -168,8 +168,8 @@ self-host as of 2026-09-13; it depends on model use, storage and containers.
 | | |
 |---|---|
 | One real filesystem | A lasting POSIX filesystem with a shell, coreutils and git, on the Nimbus WASM OS. Pick an executor that has the runtime your project needs. |
-| Four executors | The workspace, a Linux container, your own machine over a consented tunnel, or the workspace a fork came from. The prompt tells the model what each one does. |
-| Container recovery | `@kinu.run/devbox` keeps workspace files and records supervised processes and ports, so it can bring them back after a recycle. Storage is an immutable base, one cumulative delta and a read-only block layer. Preview addresses can change after a recycle. The storage choice is still open: see the [decision log](docs/DEVBOX-DECISIONS.md). |
+| Four executors | The workspace, a computer of its own (a full Linux machine), your PC over a consented tunnel, or the workspace a fork came from. The prompt tells the model what each one does. |
+| Computer recovery | `@kinu.run/devbox` keeps workspace files and records supervised processes and ports, so it can bring them back after a recycle. Storage is an immutable base, one cumulative delta and a read-only block layer. Preview addresses can change after a recycle. The storage choice is still open: see the [decision log](docs/DEVBOX-DECISIONS.md). |
 | Slates | Live apps the agent writes as small Workers, previewed on their own hostname, reading your data through declared bindings. |
 | Plan mode | The agent reads and researches, then submits a Markdown plan. You mark lines that need work, or approve it, and only then does a Build turn start. |
 | Swarms | A search whose nodes are whole agents that call tools. Six named presets plus `custom`, six axes, and a workspace verifier whose number picks the winner. The Swarms tab draws the tree as it grows. |

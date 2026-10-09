@@ -52,7 +52,7 @@ const CONFIGURE = 'Configure:';
 
 const INSPECT = 'Inspect & evolve:';
 
-const THIS_COMPUTER = 'This computer:';
+const THIS_PC = 'This PC:';
 
 export function buildProgram(): Command {
   const program = new Command();
@@ -406,42 +406,42 @@ export function buildProgram(): Command {
 
   program
     .command('connect')
-    .helpGroup(THIS_COMPUTER)
-    .description('Connect this computer so your agents can run commands on it')
+    .helpGroup(THIS_PC)
+    .description('Connect this PC so your agents can run commands on it')
     .option('--label <name>', 'Name for this device (default: the hostname); skips the name prompt')
     .action((opts: { label?: string }) => desktopCommand('connect', opts));
 
   program
     .command('desktop [action]')
-    .helpGroup(THIS_COMPUTER)
-    .description('Connect this computer, or show its connection status and daemon logs')
+    .helpGroup(THIS_PC)
+    .description('Connect this PC, or show its connection status and daemon logs')
     .option('--label <name>', 'Name for this device (default: the hostname); skips the name prompt')
     .action(desktopCommand);
 
   program
     .command('daemon [action] [workspace]')
-    .helpGroup(THIS_COMPUTER)
+    .helpGroup(THIS_PC)
     .description('Start, stop or check the local scheduler daemon, or run one pass by hand with tick')
     .action(daemonCommand);
 
   program
     .command('deploy [target] [action]')
-    .helpGroup(THIS_COMPUTER)
+    .helpGroup(THIS_PC)
     .description('Run your own Kinu: `deploy cloudflare` in your Cloudflare account, '
-      + '`deploy local [start|stop|status]` on this computer')
+      + '`deploy local [start|stop|status]` on this PC')
     .option('--origin <url>', 'Kinu app origin')
     .option('--port <n>', 'Port for the local instance (default 8787)')
     .action(deployCommand);
 
   program
     .command('doctor')
-    .helpGroup(THIS_COMPUTER)
+    .helpGroup(THIS_PC)
     .description('Check the installed Kinu CLI: paths, origin and version')
     .action(doctorCommand);
 
   program
     .command('update [target]')
-    .helpGroup(THIS_COMPUTER)
+    .helpGroup(THIS_PC)
     .description('Update the installed Kinu command')
     .option('--origin <url>', 'Kinu app origin')
     .option('--force', 'Reinstall even when already up to date')
@@ -451,7 +451,7 @@ export function buildProgram(): Command {
 
   program
     .command('uninstall')
-    .helpGroup(THIS_COMPUTER)
+    .helpGroup(THIS_PC)
     .description('Remove the installed Kinu command')
     .option('--purge', 'Also delete ~/.kinu and everything in it')
     .action(uninstallCommand);

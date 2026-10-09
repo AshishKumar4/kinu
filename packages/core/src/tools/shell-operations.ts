@@ -50,7 +50,7 @@ function unprovisionedAdvice(runtimeKey: string): string {
   }
 
   if (runtimeKey === 'sandbox') {
-    return 'The full Cloudflare Sandbox is not active yet. It will be auto-provisioned on first use: retry.';
+    return 'The computer is not active yet. It provisions on first use: retry.';
   }
 
   return `Runtime "${runtimeKey}" is not registered.`;

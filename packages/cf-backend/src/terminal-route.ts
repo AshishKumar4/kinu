@@ -28,8 +28,8 @@ const SANDBOX_EXECUTOR = "sandbox";
 const NOT_READY = {
   device: { event: "terminal.not_ready", doing: "reaching this workspace's machine for a terminal" },
   workspace: { event: "terminal.workspace_not_ready", doing: "composing this workspace's runtime for a terminal" },
-  terminal: { event: "terminal.not_ready", doing: "preparing this workspace's container for a terminal" },
-  desktop: { event: "desktop.not_ready", doing: "preparing this workspace's container for a desktop" },
+  terminal: { event: "terminal.not_ready", doing: "preparing this workspace's computer for a terminal" },
+  desktop: { event: "desktop.not_ready", doing: "preparing this workspace's computer for a desktop" },
 } as const;
 
 const PREFLIGHT_FAILED = { terminal: "terminal.preflight_failed", desktop: "desktop.preflight_failed" } as const;
@@ -337,7 +337,7 @@ async function sandboxAttach(sandbox: TerminalSandbox, call: TerminalCall, ctx: 
     return settled;
   } catch (cause) {
     const error = toKinuError({
-      doing: `attaching a ${surface} to the sandbox container`,
+      doing: `attaching a ${surface} to the computer`,
       cause,
       otherwise: "unavailable",
     });
@@ -351,13 +351,13 @@ async function sandboxAttach(sandbox: TerminalSandbox, call: TerminalCall, ctx: 
 async function sandboxTerminal(call: TerminalCall, ctx: Pick<ExecutionContext, 'waitUntil'>): Promise<Response> {
   const sandbox = call.deps.resolveSandbox(call.agentName);
 
-  if (sandbox === null) return err(503, "no Sandbox binding is configured on this deployment");
+  if (sandbox === null) return err(503, "this deployment has no computer configured");
 
   // Proxied frames renew the platform's activity clock but not the durable lease `Devbox` reads
   // before quiescing; without this beat a container can stop under a typing user.
   if (call.verb === "keepalive") {
     return sandboxCommand(call, () => sandbox.noteTerminalActivity(), {
-      doing: "renewing the container's lease for an attached terminal",
+      doing: "renewing the computer's lease for an attached terminal",
       report: (error) => diagnostics.failure("terminal.lease_renewal_failed", error, call.scope),
     });
   }

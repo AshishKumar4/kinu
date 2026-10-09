@@ -31,6 +31,7 @@ import {
 } from "@kinu.run/core";
 import { useSurfaceFocus } from "./use-surface-focus";
 import { InspectorBar, type PageTab, type ToolTab } from "./InspectorBar";
+import { portTitle } from "./port-title";
 import { ConnectDeviceDialog } from "@/components/ConnectDevicePanel";
 
 // A surface drawn only once it is chosen loads with its first view, outside the workspace's first chunk.
@@ -230,7 +231,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
     })),
     ...ports.map((port) => ({
       key: `preview:${port.executor}:${port.port}` as const,
-      title: port.name === undefined || port.name === "" ? `${port.executor} :${port.port}` : port.name,
+      title: portTitle(port),
       Icon: GlobeIcon,
     })),
   ];
@@ -329,7 +330,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
                 onConnectDevice={openConnect}
               />
             )}
-            {openPort && <PreviewFrame url={openPort.url} label={openPort.name ?? `${openPort.executor} :${openPort.port}`} />}
+            {openPort && <PreviewFrame url={openPort.url} label={portTitle(openPort)} />}
             <SideSurface shown={surface} rpc={props.rpc} isStreaming={props.isStreaming} />
             {openSlate !== null && <OpenSlatePanel {...props} slate={openSlate} summary={openSlateSummary} />}
           </Suspense>

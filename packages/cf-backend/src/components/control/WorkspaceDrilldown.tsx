@@ -4,7 +4,7 @@
  */
 import { useCallback, useState, type ReactNode } from 'react';
 import { Button } from '@cloudflare/kumo';
-import { revealMisrepresenting } from '@kinu.run/core';
+import { executorLabel, revealMisrepresenting } from '@kinu.run/core';
 import { TrashIcon, WarningIcon } from '@phosphor-icons/react';
 import { FilledButton } from '../ui/FilledButton';
 import { Modal } from '../ui/Modal';
@@ -205,7 +205,7 @@ export function WorkspaceDrilldown(
                   onClick={() => confirm({
                     action: { action: 'workspace.remove', userId, workspace, confirm: '' },
                     title: 'Remove this workspace',
-                    body: 'This removes the workspace and everything in it: its conversation, model, scaffold, triggers, and sandbox. It belongs to another account and cannot be undone.',
+                    body: 'This removes the workspace and everything in it: its conversation, model, scaffold, triggers, and computer. It belongs to another account and cannot be undone.',
                     danger: true,
                   })}
                   className="text-xs p-danger hover:underline flex items-center gap-1 px-2 py-1"
@@ -363,7 +363,7 @@ function ApprovalRows(
         <li key={approval.id} className="space-y-1 border-b p-border last:border-b-0 pb-2 last:pb-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="p-t-status p-text-3">{approval.status}</span>
-            <span className="p-annotation p-text-2">{approval.executor}</span>
+            <span className="p-annotation p-text-2">{executorLabel(approval.executor)}</span>
             <span className="p-meta p-text-3">{when(approval.requestedAt)}</span>
           </div>
           <div className="font-mono text-xs p-text whitespace-pre-wrap break-all">{revealMisrepresenting(approval.command)}</div>
@@ -380,7 +380,7 @@ function ApprovalRows(
                     ids: [approval.id], decision,
                   },
                   title: `${label} this command`,
-                  body: `${body}\n\n${revealMisrepresenting(approval.command)}\n\non ${approval.executor}, in ${workspace}.`,
+                  body: `${body}\n\n${revealMisrepresenting(approval.command)}\n\non ${executorLabel(approval.executor)}, in ${workspace}.`,
                   danger: decision === 'always',
                 })}
               >

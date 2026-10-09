@@ -191,7 +191,7 @@ function humanizeFact(key: string, value: string): string {
       ? value
       : `${software} ${value}`;
 
-    return `Your sandbox runs ${runs}`;
+    return `The agent's computer runs ${runs}`;
   }
 
   const subject = normalizedKey.replace(/[._-]+/g, ' ').replace(/\s+/g, ' ').trim();

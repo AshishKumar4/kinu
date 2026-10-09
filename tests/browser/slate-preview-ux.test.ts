@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Effect } from 'effect';
 import { detach } from '@kinu.run/core/obs';
+import { executorLabel } from '@kinu.run/core';
 import * as v from 'valibot';
 import { withGallery } from '../../scripts/gallery-harness';
 import type { Frame, Page } from 'puppeteer';
@@ -527,7 +528,7 @@ test('Changes opens on a connected machine, and never reads a sandbox that is as
       await page.waitForFunction(() => (document.documentElement.dataset.galleryDiffReads ?? '').split(' ').filter((source) => source === 'device').length > 1);
       expect(await reads()).not.toContain('sandbox');
       await page.click('[data-changes] [data-source-menu]');
-      expect(await page.$$eval('[role="menuitemradio"]', (items) => items.map((item) => item.textContent ?? '').some((text) => /sandbox/iu.test(text)))).toBe(false);
+      expect(await page.$$eval('[role="menuitemradio"]', (items, label) => items.map((item) => item.textContent ?? '').some((text) => text.includes(label)), executorLabel('sandbox'))).toBe(false);
     } finally { await page.close(); }
   });
 });

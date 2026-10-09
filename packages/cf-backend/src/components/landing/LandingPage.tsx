@@ -43,7 +43,7 @@ function PlatformSection({ install }: { install: string }): ReactElement {
           <p className="mb-6 mt-4 text-[15px] leading-[1.7] p-text-3">Hosted on Cloudflare, so the agent keeps working with your device off. It can start its own work on a schedule, or when a webhook arrives.</p>
           <ul className="mb-6 space-y-3 text-sm leading-[1.65] p-text-2">
             <li>Each workspace gets its own webhook URL. Point something at it and the agent starts when the event lands.</li>
-            <li>Ask for a Linux container when a job needs one, with a preview URL you can open.</li>
+            <li>The agent gets a computer of its own when a job needs one, with a preview URL you can open.</li>
           </ul>
           <div className="mb-8 rounded-xl border p-border p-recessed p-4">
             <span className="font-mono text-[10px] uppercase tracking-[.14em] p-text-4">Give it your devices</span>

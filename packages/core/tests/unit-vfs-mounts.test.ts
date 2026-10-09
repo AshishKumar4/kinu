@@ -279,7 +279,7 @@ describe('the workspace plane mount table', () => {
 
 		const mounted = withMountTable(base, [
 			mountOf('pc', fakeTree({ '/home/dev/a.txt': 'x' })),
-			mountOf('sandbox', null, 'no Sandbox container bound'),
+			mountOf('sandbox', null, 'this workspace has no computer bound'),
 		]);
 
 		expect((await mounted.readdir('/')).map(({ name }) => name)).toEqual(expect.arrayContaining(['notes.md', 'memory', 'pc']));
