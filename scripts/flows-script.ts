@@ -40,6 +40,16 @@ export const PROPOSAL_APPROVED_WAKE = 'Your owner approved the workspace';
 
 export const PROPOSAL_LINK_REPLY = 'NEW WORKSPACE';
 
+/** The account-memory row: what the owner says in one workspace, the fact its agent proposes for the account, and the
+ *  ask in another workspace whose agent recalls it and repeats the value. */
+export const ACCOUNT_FACT_ASK = 'Flow account memory: I live in Lisbon. Remember that for every workspace.';
+
+export const ACCOUNT_FACT = { key: 'flow_owner_city', value: 'Lisbon' } as const;
+
+export const ACCOUNT_RECALL_ASK = 'Flow account memory: which city do I live in?';
+
+export const ACCOUNT_RECALL_REPLY = 'YOU LIVE IN';
+
 /** The approvals row's ask: one turn whose two commands each reach outside the workspace, so each parks for its owner. */
 export const APPROVALS_ASK = 'Flow approvals: push and publish the release.';
 
@@ -143,6 +153,36 @@ function approvalsScript(request: ScriptedRequest, latest: string): ScriptedAnsw
  * the real model wrote none, or wrote a React slate the ask did not name, in 2 of 6 runs (2026-09-25). Each ask gets
  * the calls it names, in order; null for every other request (titles, the mission, a one-word reply).
  */
+/** The proposed-workspace row's turns: the proposal, and the reply to the wake that brings its link. */
+function proposalAnswer(latest: string, request: ScriptedRequest): ScriptedAnswer | undefined {
+  // The workspace's own agent proposes; the owner's approval wakes it with the link, which its reply repeats.
+  const approved = latest.includes(PROPOSAL_APPROVED_WAKE) ? /\bhttps?:\/\/\S+\/workspace\/\S+/u.exec(latest)?.[0] : undefined;
+
+  if (approved !== undefined) return { text: `${PROPOSAL_LINK_REPLY} ${approved}` };
+
+  if (!latest.includes(WORKSPACE_PROPOSAL_ASK)) return undefined;
+
+  return request.turn.length > 0
+    ? { text: 'PROPOSED' }
+    : { toolCall: { name: 'eval', arguments: { code: `return await agent.proposeWorkspace(${[PROPOSED_WORKSPACE.name, PROPOSED_WORKSPACE.brief, PROPOSED_WORKSPACE.soul].map((arg) => JSON.stringify(arg)).join(', ')});` } } };
+}
+
+/** The account-memory row's turns: propose a fact for the account, and recall it from another workspace. */
+function accountMemoryAnswer(latest: string, request: ScriptedRequest): ScriptedAnswer | undefined {
+  if (latest.includes(ACCOUNT_FACT_ASK)) {
+    return request.turn.length > 0
+      ? { text: 'PROPOSED FOR YOUR ACCOUNT' }
+      : { toolCall: { name: 'memory', arguments: { op: 'remember', key: ACCOUNT_FACT.key, value: ACCOUNT_FACT.value, scope: 'account' } } };
+  }
+
+  if (!latest.includes(ACCOUNT_RECALL_ASK)) return undefined;
+  const recalled = request.turn.find((call) => call.name === 'memory');
+
+  if (recalled === undefined) return { toolCall: { name: 'memory', arguments: { op: 'recall', key: ACCOUNT_FACT.key } } };
+
+  return { text: `${ACCOUNT_RECALL_REPLY} ${recalled.result.includes(ACCOUNT_FACT.value) ? ACCOUNT_FACT.value : 'nowhere I know of'}` };
+}
+
 export function flowsScript(request: ScriptedRequest): ScriptedAnswer | null {
   const asked = (ask: string): boolean => request.userTexts.some((text) => text.includes(ask));
 
@@ -158,16 +198,9 @@ export function flowsScript(request: ScriptedRequest): ScriptedAnswer | null {
 
   const latest = request.userTexts.at(-1) ?? '';
 
-  // The workspace's own agent proposes; the owner's approval wakes it with the link, which its reply repeats.
-  const approved = latest.includes(PROPOSAL_APPROVED_WAKE) ? /\bhttps?:\/\/\S+\/workspace\/\S+/u.exec(latest)?.[0] : undefined;
+  const proposed = proposalAnswer(latest, request) ?? accountMemoryAnswer(latest, request);
 
-  if (approved !== undefined) return { text: `${PROPOSAL_LINK_REPLY} ${approved}` };
-
-  if (latest.includes(WORKSPACE_PROPOSAL_ASK)) {
-    return request.turn.length > 0
-      ? { text: 'PROPOSED' }
-      : { toolCall: { name: 'eval', arguments: { code: `return await agent.proposeWorkspace(${[PROPOSED_WORKSPACE.name, PROPOSED_WORKSPACE.brief, PROPOSED_WORKSPACE.soul].map((arg) => JSON.stringify(arg)).join(', ')});` } } };
-  }
+  if (proposed !== undefined) return proposed;
 
   const approvals = approvalsScript(request, latest);
 

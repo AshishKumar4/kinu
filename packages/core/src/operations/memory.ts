@@ -90,3 +90,42 @@ export const MEMORY = {
     output: v.strictObject({ conversations: v.array(ConversationSummary) }),
   }),
 } as const;
+
+const Scope = v.optional(described(v.picklist(['workspace', 'account']),
+  '"account": about your owner, kept for every workspace and agent of theirs once they approve it. Default "workspace".'));
+
+const ScopeLabel = v.picklist(['workspace', 'account']);
+
+const Pending = v.strictObject({ pending: v.literal(true), proposal: described(v.string(), 'The approval it waits on.') });
+
+/**
+ * The operations where the account's memory is wired (`MemoryDeps.account`): a write may ask for the account, and a
+ * read answers from both scopes, saying which. Elsewhere `MEMORY` is served and no call names a scope.
+ */
+export const MEMORY_WITH_ACCOUNT = {
+  ...MEMORY,
+  remember: memoryOp({
+    ...MEMORY.remember,
+    input: v.strictObject({ ...MEMORY.remember.input.entries, scope: Scope }),
+    output: v.union([MEMORY.remember.output, v.strictObject({ key: v.string(), ...Pending.entries })]),
+  }),
+  recall: memoryOp({
+    ...MEMORY.recall,
+    help: 'A fact by its key, this workspace\'s before the account\'s; null when neither holds it.',
+    output: v.nullable(v.strictObject({ key: v.string(), value: JsonValueSchema, confidence: v.number(), source: v.string(), lastObservedAt: v.number(), scope: ScopeLabel })),
+  }),
+  note: memoryOp({
+    ...MEMORY.note,
+    input: v.strictObject({ ...MEMORY.note.input.entries, scope: Scope }),
+    output: v.union([MEMORY.note.output, Pending]),
+  }),
+  search: memoryOp({
+    ...MEMORY.search,
+    help: 'Notes and facts, this workspace\'s and the account\'s, ranked for a query as one list.',
+    output: v.strictObject({
+      semantic: described(v.boolean(), 'false: lexical matching only, semantic recall is unavailable.'),
+      hits: v.array(v.strictObject({ ref: described(v.string(), 'A note\'s file and lines, "fact: <key>", "account fact: <key>" or "account note: <id>".'), text: v.string(), score: v.number(), scope: ScopeLabel })),
+    }),
+  }),
+} as const;
+

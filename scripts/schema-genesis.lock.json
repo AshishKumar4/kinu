@@ -91,6 +91,9 @@
     "confidence REAL NOT NULL DEFAULT 1.0",
     "source TEXT",
     "last_observed_at INTEGER NOT NULL",
+    "importance REAL NOT NULL DEFAULT 0.5",
+    "veracity TEXT NOT NULL DEFAULT 'stated'",
+    "origin_json TEXT",
     "PRIMARY KEY (actor_id, key)"
   ],
   "agent_figures@packages/core/src/read-models/agent-figures.ts": [
@@ -1534,5 +1537,36 @@
     "decided_at INTEGER",
     "workspace TEXT",
     "error TEXT"
+  ],
+  "agent_fact_history@packages/core/src/memory/facts.ts": [
+    "actor_id TEXT NOT NULL",
+    "key TEXT NOT NULL",
+    "rev INTEGER NOT NULL",
+    "value_json TEXT",
+    "importance REAL NOT NULL",
+    "veracity TEXT NOT NULL",
+    "origin_json TEXT",
+    "at INTEGER NOT NULL",
+    "PRIMARY KEY (actor_id, key, rev)"
+  ],
+  "account_notes@packages/core/src/memory/account.ts": [
+    "id TEXT PRIMARY KEY",
+    "content TEXT NOT NULL",
+    "origin_json TEXT",
+    "created_at INTEGER NOT NULL"
+  ],
+  "account_memory_proposals@packages/core/src/memory/account.ts": [
+    "id TEXT PRIMARY KEY",
+    "proposal_json TEXT NOT NULL",
+    "origin_json TEXT NOT NULL",
+    "fingerprint TEXT NOT NULL",
+    "delivery TEXT UNIQUE",
+    "status TEXT NOT NULL DEFAULT 'pending'",
+    "created_at INTEGER NOT NULL",
+    "decided_at INTEGER"
+  ],
+  "account_proposal_outbox@packages/core/src/orchestrator/sleep-time-lane.ts": [
+    "delivery TEXT PRIMARY KEY",
+    "proposal_json TEXT NOT NULL"
   ]
 }

@@ -9,7 +9,7 @@ import {
   type HeadInput, type RunInference, type HeadReport, type SqlExecutor, type MissionBudgetPort, type Executor,
 } from '@kinu.run/core';
 import { prepareHostedTurn, type HostedActorSeams, type HostedTurnRequest, type PreparedHostedTurn } from './hosted-actors';
-import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentToolDescriptor, AgentTrace, AgentTurnEnd, JsonObject, PreparedAgentTurn, StoredRow } from '@kinu.run/core';
+import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentToolDescriptor, AgentTrace, AgentTurnEnd, Fact, JsonObject, PreparedAgentTurn, StoredRow } from '@kinu.run/core';
 
 export interface AgentTurnsDeps {
   readonly sql: SqlExecutor;
@@ -42,6 +42,8 @@ interface OpenTurn {
   prepared: PreparedHostedTurn | null;
   /** Over the turn's own tools, as its isolate resolves it. */
   profile: ResolvedTurnProfile | null;
+  /** The account's facts, read once when the turn is read, so every step's block is the same bytes. */
+  accountFacts?: readonly Fact[];
 }
 
 async function describe(tools: ToolSet): Promise<AgentToolDescriptor[]> {
@@ -240,7 +242,9 @@ export class AgentTurns {
   private dynamic(turn: OpenTurn, prepared: PreparedHostedTurn): DynamicContext {
     const { tools, sources } = prepared;
 
-    return sources.dynamic({ memoryTail: undefined, activeSkills: null })(turn.profile ?? prepared.turn.profile.profile, tools);
+    const reads = { memoryTail: undefined, activeSkills: null, ...(turn.accountFacts !== undefined && { accountFacts: turn.accountFacts }) };
+
+    return sources.dynamic(reads)(turn.profile ?? prepared.turn.profile.profile, tools);
   }
 
   async prepareChat(actorId: string, request: ChatTurnRequest): Promise<PreparedAgentTurn> {
@@ -270,6 +274,7 @@ export class AgentTurns {
     const run = turn.request.run?.inference;
 
     turn.prepared = prepared;
+    turn.accountFacts = await prepared.sources.accountFacts?.();
     const { actor, input } = prepared.turn;
 
     const version = await actor.runtime.identity.scaffold.version();

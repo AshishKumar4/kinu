@@ -25,6 +25,7 @@ import { DevicesCard } from "@/components/devices/DevicesCard";
 import { AccountUsageCard } from "@/components/account/AccountUsageCard";
 import { SandboxSizeSettings } from "@/components/SandboxSize";
 import { BetaSettings } from "@/components/BetaSettings";
+import { AccountMemoryCard } from "@/components/account/AccountMemoryCard";
 import { showing, detach } from '@kinu.run/core/obs';
 
 function ProfileNameEditor({ profile, onSaved }: {
@@ -153,6 +154,8 @@ export default function UserSettingsPage() {
         {section === "sandbox" && <SandboxSizeSettings />}
 
         {section === "beta" && <BetaSettings />}
+
+        {section === "memory" && <AccountMemoryCard />}
 
         {section === "usage" && <AccountUsageCard />}
             </div>

@@ -27,6 +27,7 @@ import {
 import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth';
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 import type { JsonObject } from '../src/utils/json';
+import type { Fact, FactsStore } from '../src/memory/facts';
 
 interface CircularValue {
   self?: CircularValue;
@@ -60,17 +61,17 @@ const BASE_TOOLS = BUILTIN_TOOLS.filter(
 
 /** A FactsStore over one in-memory map, exposed so a test can read what the tool wrote. */
 function factsOverMap() {
-  const store = new Map<string, { key: string; value: JsonValue; confidence: number; source: string; lastObservedAt: number }>();
+  const store = new Map<string, Fact>();
 
-  const facts = {
-    upsert: (key: string, value: JsonValue, opts?: { confidence?: number }) => {
-      store.set(key, { key, value, confidence: opts?.confidence ?? 1, source: 'tool', lastObservedAt: 7 });
+  const facts: FactsStore = {
+    upsert: (key, value, opts) => {
+      store.set(key, { key, value, confidence: opts?.confidence ?? 1, source: 'tool', lastObservedAt: 7, importance: 0.5, veracity: 'stated', origin: null });
 
-      return 'created' as const;
+      return 'created';
     },
-    recall: (key: string) => store.get(key) ?? null,
-    forget: (key: string) => { store.delete(key); },
-    recentTopK: () => [], all: () => [],
+    recall: (key) => store.get(key) ?? null,
+    forget: (key) => { store.delete(key); },
+    recentTopK: () => [], all: () => [], history: () => [],
   };
 
   return { store, facts };
@@ -99,9 +100,9 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   test('with all conditional deps: full canonical surface present', () => {
     const { rt } = createTestRuntime();
 
-    const stubFacts = {
-      upsert: () => 'created' as const, recall: () => null, forget: () => {},
-      recentTopK: () => [], all: () => [],
+    const stubFacts: FactsStore = {
+      upsert: () => 'created', recall: () => null, forget: () => {},
+      recentTopK: () => [], all: () => [], history: () => [],
     };
 
     const stubWebSearch = {

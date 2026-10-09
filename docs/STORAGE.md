@@ -522,7 +522,8 @@ its own DDL, all of it `IF NOT EXISTS`, all of it run from the same
 | Live trials | `artifact_trials`, `trial_turns` | `core/src/evolution/trials.ts` |
 | Turn lifecycle | `actor_turn_claims` and the session tables above | `core/src/orchestrator/actor-claims.ts` |
 | Once-only effects | `tool_effect_claims`, `effect_tombstones` | `core/src/tools/effect-claim.ts`, `core/src/identity/effect-tombstones.ts` |
-| Facts | `agent_facts` | `core/src/memory/facts.ts` |
+| Facts | `agent_facts`, `agent_fact_history` | `core/src/memory/facts.ts` |
+| Account memory (user object) | `agent_facts`, `agent_fact_history` under `ACCOUNT_FACTS_ACTOR`, `account_notes`, `account_memory_proposals` | `core/src/memory/account.ts`, `cf-backend/src/user/account-memory.ts` |
 | Conversation search | `conversation_fts` (derived FTS5 index) | `core/src/memory/conversation-search.ts`, created by the store on first use |
 | Background jobs | `background_jobs` | `core/src/jobs/store.ts` |
 | Task list | `agent_tasks` (one plan per actor; note and plan link are columns) | `core/src/tools/task-store.ts` |

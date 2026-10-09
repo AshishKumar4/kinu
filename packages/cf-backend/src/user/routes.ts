@@ -43,6 +43,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'listCloudflareAccounts' | 'selectCloudflareAccount' | 'listAIGateways' | 'selectAIGateway'
   | 'userMcp_list' | 'userMcp_presets' | 'userMcp_add' | 'userMcp_remove' | 'userMcp_update'
   | 'userMcp_handleOAuthCallback'
+  | 'accountMemory_view' | 'accountMemory_decide' | 'accountMemory_put' | 'accountMemory_forget' | 'accountMemory_forgetNote'
 >;
 
 export interface UserRoutesEnv<Id> extends CreateWorkspaceEnv<Id>, AdminGateEnv {
@@ -622,6 +623,48 @@ userRoutes.patch('/api/user/mcp/servers/:id', (c) => {
     });
   }));
 });
+
+// The account's memory, owner only (`memory.account.manage`): every fact with its history, every note, what waits.
+userRoutes.get('/api/user/memory', mcpRead((stub, owner) => stub.accountMemory_view(owner)));
+
+const MemoryDecisionSchema = v.object({ decision: v.picklist(['accept', 'decline']) });
+
+const MemoryFactSchema = v.object({ value: JsonValueSchema, workspace: v.optional(v.pipe(v.string(), v.nonEmpty())) });
+
+userRoutes.post('/api/user/memory/proposals/:id', (c) => settle(Effect.gen(function* () {
+  const body = yield* Effect.promise(async () => safeJson(c.req.raw, MemoryDecisionSchema));
+
+  if (body === null) return err(400, 'Body must be JSON: { "decision": "accept" | "decline" }');
+
+  const decided = yield* Effect.tryPromise({
+    try: async () => await c.get('stub').accountMemory_decide(c.get('owner'), decodeURIComponent(rawParam(c, 'id')), body.decision),
+    catch: (cause) => authoredRefusal({ doing: 'deciding this account memory proposal', cause }),
+  });
+
+  return decided ? json({ body: { ok: true } }) : err(404, 'No pending proposal has that id');
+})));
+
+// An edit, or the owner promoting a workspace fact: `workspace` names where it came from.
+userRoutes.put('/api/user/memory/facts/:key', (c) => settle(Effect.gen(function* () {
+  const body = yield* Effect.promise(async () => safeJson(c.req.raw, MemoryFactSchema));
+
+  if (body === null) return err(400, 'Body must be JSON: { "value": ..., "workspace"?: string }');
+
+  return yield* Effect.tryPromise({
+    try: async () => json({ body: { key: await c.get('stub').accountMemory_put(c.get('owner'), decodeURIComponent(rawParam(c, 'key')), body.value, body.workspace) } }),
+    catch: (cause) => authoredRefusal({ doing: 'saving this account fact', cause }),
+  });
+})));
+
+userRoutes.delete('/api/user/memory/facts/:key', (c) => settle(Effect.tryPromise({
+  try: async () => json({ body: { existed: await c.get('stub').accountMemory_forget(c.get('owner'), decodeURIComponent(rawParam(c, 'key'))) } }),
+  catch: (cause) => authoredRefusal({ doing: 'forgetting this account fact', cause }),
+})));
+
+userRoutes.delete('/api/user/memory/notes/:id', (c) => settle(Effect.tryPromise({
+  try: async () => json({ body: { existed: await c.get('stub').accountMemory_forgetNote(c.get('owner'), decodeURIComponent(rawParam(c, 'id'))) } }),
+  catch: (cause) => authoredRefusal({ doing: 'forgetting this account note', cause }),
+})));
 
 userRoutes.get('/api/user/mcp/callback', async (c) => {
   // `userMcp_handleOAuthCallback` validates the `<nonce>.<serverId>` state inside UserDO.

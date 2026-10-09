@@ -1176,6 +1176,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // Named: both the tool surface and the framing read these deps.
     const agents = this.hostedAgentsToolDeps(turn);
+    const account = this.accountMemoryFor(turn.actor.record.name);
 
     const deps: ActorToolsetDeps = {
       rt: turn.runtime,
@@ -1194,6 +1195,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // observed under the same words.
       vectorStore: turn.runtime.vectorStore,
       facts: turn.actor.stores.facts,
+      // Every agent of the account reads its memory, a hire's too; its proposals name it.
+      ...(account !== undefined && { account }),
       webSearch,
       jobs: this.hireJobs(turn.actor, turn.input.mode),
       slate: (operation) => this.slateAs({ path: [{ name: turn.actor.record.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, operation),
@@ -1305,13 +1308,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       scaffoldSpend: { source: 'scaffold', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
       attachmentBudget: actor.session.orchestrator.acc.context,
       extensions: () => [],
-      dynamic: ({ memoryTail, activeSkills }) => (profile, tools) => collectDynamicContext({
+      accountFacts: () => this.accountFactsForTurn(),
+      dynamic: ({ memoryTail, activeSkills, accountFacts }) => (profile, tools) => collectDynamicContext({
         rt: actor.runtime,
         stores: actor.stores,
         profile,
         tools,
         runtime: { backend: 'cf', model: { id: profile.tier.model }, date: currentDateForPrompt() },
         memoryTail,
+        ...(accountFacts !== undefined && { accountFacts }),
         ...(activeSkills !== null && { activeSkills }),
         missingCapabilities: [],
         subordinateDelegates: () => subordinateDelegatesOf(new SubordinateRosterStore(this.watchedExec, actor.handle).list()),
@@ -2531,6 +2536,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       transcript: () => this.chatTranscript, llm: () => this.rt.fastLlm ?? this.rt.llm,
       transactionSync: (write) => this.ctx.storage.transactionSync(write),
       armWake: () => { this.armDurableWake(); }, workspace: this.name,
+      // Reads the account and proposes to it; the owner accepts what is kept.
+      account: () => (this.getOwnerUserId() === null ? undefined : this.accountMemory({ by: 'background' })),
     });
   }
 

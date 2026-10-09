@@ -13,7 +13,7 @@ const STOP_WORDS = new Set([
 ]);
 
 /** Terms an FTS query reduces to (operators and stop words removed). */
-export function ftsQueryTerms(query: string): string[] {
+function ftsQueryTerms(query: string): string[] {
 	const tokens = query
 		.replace(/[^\w\s]/g, " ")
 		.split(/\s+/)
