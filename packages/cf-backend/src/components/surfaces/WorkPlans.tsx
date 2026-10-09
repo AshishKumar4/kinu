@@ -12,13 +12,13 @@ const keyOf = ({ owner, plan }: OwnedPlan) => `${owner.name}:${plan.id}:${plan.r
 const arrivalOwner = (path: readonly string[]) => path.at(-1) ?? 'main';
 
 /** Only this pane's own new pending plan auto-opens. Draws nothing until the shared `listWorkspaceWork` read answers. */
-export function WorkPlans({ work, owner = 'main', arrival, onPresence, onNewPlan, onOpenReview }: {
+export function WorkPlans({ work, owner = 'main', arrival, onPresence, onOpen }: {
   work: WorkspaceWork | null;
   owner?: string;
   arrival?: WorkspacePlanArrival | null;
   onPresence: (present: boolean) => void;
-  onNewPlan: () => void;
-  onOpenReview: (item: OwnedPlan) => void;
+  /** Shows the plan's own page. */
+  onOpen: (item: OwnedPlan) => void;
 }) {
   const plans = work?.plans ?? [];
   const known = useRef<Set<string> | null>(null);
@@ -37,8 +37,8 @@ export function WorkPlans({ work, owner = 'main', arrival, onPresence, onNewPlan
     for (const item of plans) seen.add(keyOf(item));
     known.current = seen;
 
-    if (fresh) { onOpenReview(fresh); onNewPlan(); }
-  }, [work, plans, owner, onNewPlan, onOpenReview]);
+    if (fresh) onOpen(fresh);
+  }, [work, plans, owner, onOpen]);
 
   // The claim is the connection's: a pane remounts per conversation switch and would replay the hint.
   // A hint landing while a review is open claims on the next mount.
@@ -50,9 +50,8 @@ export function WorkPlans({ work, owner = 'main', arrival, onPresence, onNewPlan
         && candidate.owner.name === arrivalOwner(focus.path));
 
     if (!item || !arrival.claim(focus)) return;
-    onOpenReview(item);
-    onNewPlan();
-  }, [arrival, focus, work, plans, onNewPlan, onOpenReview]);
+    onOpen(item);
+  }, [arrival, focus, work, plans, onOpen]);
 
   useEffect(() => { onPresence(plans.length > 0); }, [plans.length, onPresence]);
 
@@ -64,7 +63,7 @@ export function WorkPlans({ work, owner = 'main', arrival, onPresence, onNewPlan
         icon={<NotePencilIcon size={14} className="p-text-2" />}
         badge={<Badge variant="secondary">{plans.length}</Badge>}>
         <div className="space-y-2">
-          {plans.map((item) => <PlanCard key={keyOf(item)} item={item} onOpen={() => onOpenReview(item)} />)}
+          {plans.map((item) => <PlanCard key={keyOf(item)} item={item} onOpen={() => onOpen(item)} />)}
         </div>
       </Section>
     </div>

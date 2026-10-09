@@ -80,6 +80,17 @@ async function openPlan(page: Page, label: string): Promise<void> {
  *  clears only once the next read has succeeded. Both edges are the barrier;
  *  the caller must have seen the pane's first read land, or the failure it
  *  waits for is the fresh pane's own first refusal. */
+/** The inspector's current page tab, by its name; null while a workspace tool is shown instead. */
+async function currentPage(page: Page): Promise<string | null> {
+  return page.evaluate(() => document.querySelector('nav[aria-label="Pages"] [aria-current="true"]')?.getAttribute('aria-label') ?? null);
+}
+
+/** Work's list, by the tool's own tab. */
+async function openWork(page: Page): Promise<void> {
+  await page.click('nav[aria-label="Workspace"] button[aria-label="Work"]');
+  await page.waitForSelector('[data-work-plans]');
+}
+
 async function readCycleElapsed(page: Page): Promise<void> {
   await page.click('[data-break-plans]');
   await page.waitForFunction(() => document.body.textContent?.includes('Plan history temporarily unavailable'));
@@ -210,7 +221,7 @@ test('preview tabs lead the fixed surfaces and their URL can be copied and opene
 });
 
 
-test('preview tabs deduplicate live slates, fill the surface and keep plans in Work', async () => {
+test('preview tabs deduplicate live slates, fill the surface, and give each open plan its own page tab', async () => {
   await withGallery(async ({ newPage, origin }) => {
     const page = await newPage();
 
@@ -241,19 +252,19 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
           expect(await iframe.isIntersectingViewport()).toBe(true);
         }
 
+        // A new pending plan of the workspace's own opens on its page, its tab current among the pages.
         await page.click('[data-new-plan]');
         await page.waitForSelector('[data-plan-review-root]');
-        expect(await page.$eval('[aria-label="Work"]', el => el.getAttribute('aria-current'))).toBe('true');
+        expect(await currentPage(page)).toBe('Dashboard delivery');
         await page.evaluate(() => {
           const button = [...document.querySelectorAll('button')].find(el => el.textContent?.includes('Approve & implement'));
 
           if (!button) throw new Error('Approval missing');
           button.click();
         });
-        // The approved plan is one card in the list now; the review closes on
-        // Back, and a failed read keeps the stale rows under its retry line.
-        await page.click('[data-back-to-work]');
-        await page.waitForSelector('[data-work-plans]');
+        // The approved plan is one card in the list now, a click away in Work; a failed read keeps the stale rows
+        // under its retry line.
+        await openWork(page);
         await page.click('[data-break-plans]');
         await page.waitForFunction(() => document.body.textContent?.includes('Plan history temporarily unavailable'));
         expect(await page.$eval('[data-work-plans]', el => el.textContent)).toContain('Dashboard delivery');
@@ -264,8 +275,8 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         await openPlan(page, 'Earlier dashboard plan');
         await page.waitForFunction(() => document.querySelector('[data-plan-title]')?.textContent?.includes('Earlier'));
         expect(await page.$('[data-plan-decisions]')).toBeNull();
-        await page.click('[data-back-to-work]');
-        await page.waitForSelector('[data-work-plans]');
+        expect(await currentPage(page)).toBe('Earlier dashboard plan');
+        await openWork(page);
         await page.click('[data-new-preview]');
         // A preview arriving on its own never moves the reader: the surface
         // stays where it was and the strip raises the "Preview ready" chip —
@@ -288,11 +299,11 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         await openPlan(page, 'Archived delivery');
         await page.waitForFunction(() => document.querySelector('[data-plan-title]')?.textContent?.includes('Archived'));
         expect(await page.$('[data-plan-decisions]')).toBeNull();
-        await page.click('[data-back-to-work]');
+        await openWork(page);
         await openPlan(page, 'Nested delivery');
         await page.waitForFunction(() => document.querySelector('[data-plan-title]')?.textContent?.includes('Nested'));
         expect(await page.$('[data-plan-decisions]')).toBeNull();
-        await page.click('[data-back-to-work]');
+        await openWork(page);
 
 
         // ── A plan arrives whose card is already in the list ────────────
@@ -317,11 +328,11 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         await readCycleElapsed(page);
         expect(await page.$('[data-plan-review-root]')).toBeNull();
         expect(await page.$eval('[aria-label="Device app"]', el => el.getAttribute('aria-current'))).toBe('true');
-        // The real reference: Work takes the user, the exact plan fills the
-        // tab — foreign, so read-only with the way to its owner's conversation.
+        // The real reference: the exact plan opens on its own page — foreign, so read-only with the way to its
+        // owner's conversation.
         await page.click('[data-notify-plan]');
-        await page.waitForSelector('[aria-label="Work"][aria-current="true"]');
         await page.waitForSelector('[data-plan-review-root]');
+        await page.waitForFunction(() => document.querySelector('nav[aria-label="Pages"] [aria-current="true"]')?.getAttribute('aria-label')?.includes('Courier') === true);
         await page.waitForFunction(() => document.querySelector('[data-plan-title]')?.textContent?.includes('Courier rollout'));
         expect(await page.$('[data-plan-decisions]')).toBeNull();
         expect(await page.$eval('[data-plan-owner]', el => el.getAttribute('data-plan-owner'))).toBe('main');
@@ -330,10 +341,9 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         expect(await page.$eval('[data-preview-surface]', el => el.textContent)).not.toContain('retained');
         expect(await page.$eval('[data-preview-surface]', el => el.textContent)).toContain("Review in courier's conversation");
         // A repeat of a reference already seen is not an arrival: the claim is
-        // spent for the connection, so no amount of waiting re-opens it. The
-        // review under it is a stable mount — give the repeat a full read
-        // cycle to try, then the open review still stands.
-        await page.click('[data-back-to-work]');
+        // spent for the connection, so no amount of waiting re-opens it. Give
+        // the repeat a full read cycle to try, then the page open still stands.
+        await openWork(page);
         await openPlan(page, 'Nested delivery');
         await page.waitForFunction(() => document.querySelector('[data-plan-title]')?.textContent?.includes('Nested'));
         await page.click('[data-notify-plan]');
@@ -341,11 +351,10 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         expect(await page.$eval('[data-plan-title]', el => el.textContent)).toContain('Nested');
         await page.click('[aria-label="Sandbox app"]');
         await page.click('[data-worker-plan]');
-        await page.click('[aria-label="Work"]');
-        await page.waitForSelector('[aria-label="Work"][aria-current="true"]');
-        // The nested review is still open — surfaces hide, they never unmount,
-        // and the review lives in the tab across them. Back is the way out.
-        await page.click('[data-back-to-work]');
+        // Another conversation's pending plan takes nobody anywhere: it waits as a page tab of its own.
+        await page.waitForSelector('nav[aria-label="Pages"] button[aria-label*="Worker revision two"]');
+        expect(await currentPage(page)).toBe('Sandbox app');
+        await openWork(page);
         await page.waitForFunction(() => document.querySelector('[data-work-plans]')?.textContent?.includes('Worker revision two'));
         await openPlan(page, 'Worker revision two');
         expect(await page.$eval('[data-plan-owner]', el => el.getAttribute('data-plan-owner'))).toBe('main');
@@ -364,7 +373,7 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         await page.click('[data-open-workspace]');
         await page.waitForSelector('[data-plan-owner="main"]');
         expect(await page.$eval('[data-plan-title]', el => el.textContent)).toContain('Worker revision two');
-        await page.click('[data-back-to-work]');
+        await openWork(page);
         await page.waitForFunction(() => document.querySelector('[data-work-plans]')?.textContent?.includes('Worker revision two'));
         await page.click('[data-notify-plan]');
         await readCycleElapsed(page);

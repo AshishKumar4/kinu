@@ -108,10 +108,7 @@ test('a task written while the socket was down shows on the Work tab after the r
     // The stub's first open belongs to the initial connection.
     await page.evaluate(() => window.dispatchEvent(new Event('gallery-reconnect')));
     await page.click('[aria-label="Work"]');
-    // The fixture's plan opens in review; the task list is behind it.
-    await page.waitForSelector('[data-back-to-work]');
-    await page.click('[data-back-to-work]');
-    await page.waitForFunction(() => document.querySelector('[data-back-to-work]') === null);
+    await page.waitForSelector('[data-work-plans]');
     expect(await page.evaluate(() => document.body.textContent)).not.toContain('Written during the outage');
 
     await page.evaluate(() => {
@@ -383,13 +380,11 @@ test('a late answer to an older read never replaces a newer one, nor reports its
   });
 });
 
-/** Opens the Work tab's own list, past the plan the gallery workspace has waiting for review. */
+/** Opens the Work tab's own list. */
 async function openWorkList(page: Page): Promise<void> {
   await page.waitForSelector('[aria-label="Work"]');
   await page.click('[aria-label="Work"]');
-  await page.waitForFunction(() => document.querySelector('[data-back-to-work]') !== null || document.querySelector('[data-work-plans]') !== null);
-
-  if (await page.$('[data-back-to-work]') !== null) await page.click('[data-back-to-work]');
+  await page.waitForSelector('[data-work-plans]');
 }
 
 /** A read the workspace left behind answers after the reader moved on: the next workspace never shows it. */

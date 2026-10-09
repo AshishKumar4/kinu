@@ -2321,6 +2321,8 @@ export {
 } from './read-models/tool-call-grouping';
 
 export {
+  type PlanPageRef,
+  type PlanSurfaceKind,
   type SlateSurfaceKind,
   type SurfaceContent,
   type SurfaceKind,
@@ -2329,6 +2331,8 @@ export {
   SURFACES,
   landedSurface,
   openPortOf,
+  planOfSurface,
+  planSurface,
   pruneSlateReloads,
   surfaceHasContent,
 } from './read-models/surface-presence';

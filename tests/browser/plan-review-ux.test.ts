@@ -236,12 +236,24 @@ async function observeMobile(newPage: Gallery['newPage'], origin: string): Promi
   return { ...before, ...rail };
 }
 
+/**
+ * A pending plan keeps a page tab among the inspector's pages, titled by its heading: pressing it shows that plan's
+ * review, and the tab is the current page.
+ */
+async function openPlanPage(page: Page, title: string): Promise<void> {
+  const tab = `nav[aria-label="Pages"] button[aria-label*=${JSON.stringify(title)}]`;
+
+  await page.waitForSelector(tab);
+  await page.click(tab);
+  await page.waitForSelector(`${tab}[aria-current="true"]`);
+  await page.waitForSelector('[data-plan-review-root]');
+}
+
 async function observeWorkspace(newPage: Gallery['newPage'], origin: string): Promise<WorkspacePlan> {
   const page = await openFrame(newPage, origin, { frame: 'workspacepage', mode: 'dark', viewport: { width: 1280, height: 900 } });
   await page.waitForSelector('[data-composer-root]');
   await page.waitForFunction(() => document.querySelectorAll('[data-panel]').length === 2);
-  await page.click('[aria-label="Work"]');
-  await page.waitForSelector('[data-plan-review-root]');
+  await openPlanPage(page, 'applyCoupon');
   await page.waitForFunction(
     () => document.querySelector('[data-plan-title] h1, h1[data-plan-title]')?.textContent?.includes('applyCoupon') === true,
   );
@@ -762,10 +774,9 @@ async function chooseMode(page: Page, mode: string): Promise<void> {
     .some((button) => button.getAttribute('aria-pressed') === 'true' && button.textContent?.trim() === label), {}, mode);
 }
 
-/** Opens the workspace's pending plan from the Work tab and presses one of its controls; the server then says the plan moved. */
+/** Opens the workspace's pending plan by its page tab and presses one of its controls; the server then says the plan moved. */
 async function decidePlan(page: Page, control: string, landed: string): Promise<void> {
-  await page.click('nav[aria-label="Workspace"] button[aria-label="Work"]');
-  await page.waitForSelector('[data-plan-review-root]');
+  await openPlanPage(page, 'applyCoupon');
   await page.$$eval('[data-plan-review-root] button', (buttons, label) => {
     const button = buttons.find((each) => each.textContent?.includes(label));
 

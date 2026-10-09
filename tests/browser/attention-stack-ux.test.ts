@@ -34,11 +34,9 @@ async function decisions(page: Page): Promise<string[][]> {
   return v.parse(v.array(v.array(v.string())), JSON.parse(recorded));
 }
 
-/** Opens the inspector's Work tab on its list: the frame's plan, awaiting review, opens the tab on its review. */
+/** Opens the inspector's Work tab on its list. */
 async function openWork(page: Page): Promise<void> {
   await page.click('nav[aria-label="Workspace"] [aria-label="Work"]');
-
-  if (await page.$('[data-back-to-work]') !== null) await page.click('[data-back-to-work]');
 }
 
 /** Work's own count of what waits, or 0 once its Needs you section is gone. */
