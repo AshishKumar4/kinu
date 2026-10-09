@@ -262,3 +262,11 @@ it('a slate\'s class reads ai.stream a piece at a time, as the model writes it, 
   expect(v.parse(v.array(v.string()), pieces).join('')).toBe('Typing live');
   expect(v.parse(v.array(v.string()), pieces).length).toBeGreaterThan(1);
 });
+
+it('a slate\'s class reads agent.ask\'s reply a piece at a time, the answer\'s stream carried across the binding', async () => {
+  const probe = env.SLATE_SHARE_PROBE.get(env.SLATE_SHARE_PROBE.idFromName('asker'));
+  const pieces = v.parse(v.array(v.string()), JSON.parse(await probe.typed('hello', 'ask')));
+
+  expect(pieces.join('')).toBe('The agent says hello');
+  expect(pieces.length).toBeGreaterThan(1);
+});

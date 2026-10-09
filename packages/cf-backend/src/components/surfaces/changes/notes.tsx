@@ -2,7 +2,7 @@
 import { createContext, useContext } from "react";
 import { PaperPlaneRightIcon } from "@phosphor-icons/react";
 import type { Annotation } from "@plannotator/ui/types";
-import type { DiffAnchor, DiffSide, ReviewAnnotation } from "@kinu.run/core";
+import { ALL_CHANGES_BLOCK, changeNoteAnchor, type ChangeNote, type DiffAnchor, type DiffSide } from "@kinu.run/core";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { annotationType } from "../annotation-type";
 
@@ -20,7 +20,7 @@ export interface Draft {
 }
 
 export interface Notes {
-  readonly notes: readonly ReviewAnnotation[];
+  readonly notes: readonly ChangeNote[];
   readonly moved: ReadonlySet<string>;
   readonly draft: Draft | null;
   readonly selected: string | null;
@@ -41,7 +41,11 @@ export function useNotes(): Notes | null {
   return useContext(NotesContext);
 }
 
-export function panelNote(note: ReviewAnnotation): Annotation {
+export function panelNote(note: ChangeNote): Annotation {
+  if (note.type === "GLOBAL_COMMENT") {
+    return { id: note.id, blockId: ALL_CHANGES_BLOCK, startOffset: 0, endOffset: 0, type: annotationType(note.type), text: note.text, originalText: "", createdA: note.createdA };
+  }
+
   return {
     id: note.id,
     blockId: note.blockId,
@@ -73,7 +77,7 @@ export interface NoteSpan {
   readonly start: number;
   readonly end: number;
   readonly id: string;
-  readonly type: ReviewAnnotation["type"];
+  readonly type: ChangeNote["type"];
 }
 
 function covers(anchor: DiffAnchor, path: string, side: DiffSide, line: number): boolean {
@@ -100,8 +104,10 @@ export function spansOn(notes: Notes | null, { path, side, line, length }: LineA
   const spans: NoteSpan[] = [];
 
   for (const note of notes.notes) {
-    if (note.anchor === undefined || notes.moved.has(note.id) || !covers(note.anchor, path, side, line)) continue;
-    const [start, end] = spanOf(note.anchor, line, length);
+    const anchor = changeNoteAnchor(note);
+
+    if (anchor === undefined || notes.moved.has(note.id) || !covers(anchor, path, side, line)) continue;
+    const [start, end] = spanOf(anchor, line, length);
 
     spans.push({ start, end, id: note.id, type: note.type });
   }

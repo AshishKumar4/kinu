@@ -2,7 +2,7 @@ import { Effect, Result } from 'effect';
 import * as v from 'valibot';
 import type { RawSqlExec } from '../types/primitives';
 import type { AgentRuntime } from '../types/agent-runtime';
-import type { DiffAnchor, ReviewAnnotation } from '../types/plans';
+import type { DiffAnchor, GeneralNote, PassageNote, ReviewAnnotation } from '../types/plans';
 import { admitReviewAnnotations, DiffAnchorSchema } from '../plans/annotation-admission';
 import type { JsonObject } from '../utils/json';
 import { comparePaths } from './change-view';
@@ -25,33 +25,49 @@ export function initChangeNotesTable(execRaw: RawSqlExec): void {
 type NotesRuntime = Pick<AgentRuntime, 'storage' | 'actor'>;
 
 export type ChangeNotesResult =
-  | { readonly ok: true; readonly notes: readonly ReviewAnnotation[] }
+  | { readonly ok: true; readonly notes: readonly ChangeNote[] }
   | { readonly ok: false; readonly error: string };
 
-function keptNotes(rt: NotesRuntime, source: string): Effect.Effect<{ readonly json: string; readonly notes: ReviewAnnotation[] } | null> {
-  return Effect.gen(function* () {
-    const row = rt.storage.sql<{ notes_json: string }>`SELECT notes_json FROM change_notes
+/** A note on a change-set: on a place in it, or on all of it. Change notes have no threads and no revisions. */
+export type ChangeNote = PassageNote | GeneralNote;
+
+export function changeNoteAnchor(note: ChangeNote): DiffAnchor | undefined {
+  return note.type === 'GLOBAL_COMMENT' ? undefined : note.anchor;
+}
+
+function changeNotesOf(notes: readonly ReviewAnnotation[]): ChangeNote[] | string {
+  const kept: ChangeNote[] = [];
+
+  for (const note of notes) {
+    if (note.type === 'REPLY' || note.revision !== undefined) return `note ${note.id} belongs to a plan review`;
+
+    if ((note.type === 'GLOBAL_COMMENT') === (changeNoteAnchor(note) !== undefined)) return `note ${note.id} must be on all the changes or on a place in them, not both`;
+    kept.push(note);
+  }
+
+  return kept.filter((note) => note.type === 'GLOBAL_COMMENT').length > 1 ? 'there is one note on all the changes' : kept;
+}
+
+/** A set kept under an earlier note shape is a draft this Kinu cannot read: it is dropped rather than failing every read. */
+function keptNotes(rt: NotesRuntime, source: string): { readonly json: string; readonly notes: ChangeNote[] } | null {
+  const row = rt.storage.sql<{ notes_json: string }>`SELECT notes_json FROM change_notes
     WHERE actor_id = ${rt.actor.actorId} AND source = ${source} LIMIT 1`[0];
 
-    if (row === undefined) return null;
-    const admission = admitReviewAnnotations({ value: JSON.parse(row.notes_json) });
+  if (row === undefined) return null;
+  const admission = admitReviewAnnotations({ value: JSON.parse(row.notes_json) });
+  const notes = Result.isFailure(admission) ? null : changeNotesOf(admission.success);
 
-    if (Result.isFailure(admission)) return yield* Effect.die(new Error(`the notes kept on ${source} no longer admit: ${admission.failure.error}`));
+  if (notes === null || typeof notes === 'string') {
+    void rt.storage.sql`DELETE FROM change_notes WHERE actor_id = ${rt.actor.actorId} AND source = ${source}`;
 
-    return { json: row.notes_json, notes: admission.success };
-  });
+    return null;
+  }
+
+  return { json: row.notes_json, notes };
 }
 
-export function readChangeNotes(rt: NotesRuntime, source: string): ReviewAnnotation[] {
-  return settleSync(Effect.map(keptNotes(rt, source), (kept) => kept?.notes ?? []));
-}
-
-function refusal(notes: readonly ReviewAnnotation[]): string | null {
-  const loose = notes.find((note) => (note.anchor === undefined) !== (note.type === 'GLOBAL_COMMENT'));
-
-  if (loose !== undefined) return `note ${loose.id} must be on all the changes or on a place in them, not both`;
-
-  return notes.filter((note) => note.type === 'GLOBAL_COMMENT').length > 1 ? 'there is one note on all the changes' : null;
+export function readChangeNotes(rt: NotesRuntime, source: string): ChangeNote[] {
+  return keptNotes(rt, source)?.notes ?? [];
 }
 
 export function saveChangeNotes(rt: NotesRuntime, source: string, notes: { value: unknown }): ChangeNotesResult {
@@ -59,10 +75,9 @@ export function saveChangeNotes(rt: NotesRuntime, source: string, notes: { value
   const admission = admitReviewAnnotations(notes);
 
   if (Result.isFailure(admission)) return { ok: false, error: admission.failure.error };
-  const admitted = admission.success;
-  const refused = refusal(admitted);
+  const admitted = changeNotesOf(admission.success);
 
-  if (refused !== null) return { ok: false, error: refused };
+  if (typeof admitted === 'string') return { ok: false, error: admitted };
   const actorId = rt.actor.actorId;
 
   if (admitted.length === 0) {
@@ -116,7 +131,7 @@ function fenced(quote: string): string {
   return `${fence}\n${quote}\n${fence}`;
 }
 
-function said(note: ReviewAnnotation): string {
+function said(note: ChangeNote): string {
   return note.type === 'DELETION' ? 'Remove this.' : note.text ?? '';
 }
 
@@ -124,22 +139,24 @@ function firstLine(anchor: DiffAnchor | undefined): number {
   return anchor === undefined || anchor.scope === 'file' ? 0 : anchor.lineStart;
 }
 
-export function inNoteOrder(notes: readonly ReviewAnnotation[]): ReviewAnnotation[] {
+export function inNoteOrder(notes: readonly ChangeNote[]): ChangeNote[] {
   return [...notes].sort((a, b) => {
-    if (a.anchor === undefined || b.anchor === undefined) return Number(a.anchor === undefined) - Number(b.anchor === undefined);
+    const [left, right] = [changeNoteAnchor(a), changeNoteAnchor(b)];
 
-    return comparePaths(a.anchor.path, b.anchor.path) || firstLine(a.anchor) - firstLine(b.anchor);
+    if (left === undefined || right === undefined) return Number(left === undefined) - Number(right === undefined);
+
+    return comparePaths(left.path, right.path) || firstLine(left) - firstLine(right);
   });
 }
 
-function changeNotesText(set: NotedChanges, notes: readonly ReviewAnnotation[]): string {
+function changeNotesText(set: NotedChanges, notes: readonly ChangeNote[]): string {
   const sorted = inNoteOrder(notes);
-  const baselines = new Set(sorted.flatMap((note) => (note.anchor === undefined ? [] : [note.anchor.baseline])));
+  const baselines = new Set(sorted.flatMap((note) => changeNoteAnchor(note)?.baseline ?? []));
   const one = baselines.size > 1 ? null : [...baselines][0] ?? '';
   const groups = new Map<string, string[]>();
 
   for (const note of sorted) {
-    const anchor = note.anchor;
+    const anchor = changeNoteAnchor(note);
     let title = 'All the changes';
 
     if (anchor !== undefined) title = one === null && anchor.baseline !== '' ? `${anchor.path} (${baselineName(set, anchor.baseline)})` : anchor.path;
@@ -147,7 +164,7 @@ function changeNotesText(set: NotedChanges, notes: readonly ReviewAnnotation[]):
 
     groups.set(title, blocks);
 
-    if (anchor === undefined) {
+    if (note.type === 'GLOBAL_COMMENT' || anchor === undefined) {
       blocks.push(said(note));
       continue;
     }
@@ -185,7 +202,7 @@ export interface ChangeNotesMessage {
   readonly metadata: JsonObject;
 }
 
-function changeNotesMessage(set: NotedChanges, notes: readonly ReviewAnnotation[]): ChangeNotesMessage {
+function changeNotesMessage(set: NotedChanges, notes: readonly ChangeNote[]): ChangeNotesMessage {
   const card: JsonObject = {
     source: set.source, label: set.label,
     notes: inNoteOrder(notes).map((note) => {
@@ -193,7 +210,7 @@ function changeNotesMessage(set: NotedChanges, notes: readonly ReviewAnnotation[
 
       if (note.text !== undefined) item.text = note.text;
 
-      if (note.anchor !== undefined) item.anchor = { ...note.anchor };
+      if (note.type !== 'GLOBAL_COMMENT' && note.anchor !== undefined) item.anchor = { ...note.anchor };
 
       return item;
     }),
@@ -215,7 +232,7 @@ export function sendChangeNotes(
 
     if (!parsed.success) return { ok: false, error: `the change-set: ${parsed.issues[0].message}` } satisfies ChangeNotesResult;
     const { source } = parsed.output;
-    const kept = yield* keptNotes(rt, source);
+    const kept = keptNotes(rt, source);
 
     if (kept === null || kept.notes.length === 0) return { ok: false, error: 'there are no notes to send' } satisfies ChangeNotesResult;
 
