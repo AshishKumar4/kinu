@@ -251,7 +251,7 @@ export function spawnContention(workers: number): Burner[] {
  *  ended once it has written nothing for its bound, however long it runs while writing, and with every process it
  *  leaves behind ended and named. */
 export async function hammerOnce(index: number, command: HammerCommand): Promise<HammerRun> {
-  const outcome = await runUnderDeadline({ ...command, cwd: root, stdio: 'pipe' });
+  const outcome = await runUnderDeadline({ ...command, cwd: root, stdio: 'tee' });
   const output = `${outcome.stdout}${outcome.stderr}`;
   const counts = reportedCounts(output);
 

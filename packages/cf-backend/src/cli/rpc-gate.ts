@@ -86,6 +86,13 @@ export function sessionBearerFromTags(tags: Iterable<string>): { tokenHash: stri
   return null;
 }
 
+/** The agents SDK treats this close code as terminal (`isTerminalCloseEvent`), so a client whose authority is gone
+ * stops reconnecting. */
+export const WEBSOCKET_POLICY_CLOSE = 1008;
+
+/** What a socket is told as it is closed for the browser session it runs on having ended. */
+export const SESSION_AUTHORITY_REVOKED = 'This session has been signed out. Sign in again.';
+
 /** Every identity header is rewritten from the verified identity: none can be smuggled or stripped. */
 export function appendIdentityHeaders(h: Headers, identity: AuthIdentity): Headers {
   const next = new Headers(h);

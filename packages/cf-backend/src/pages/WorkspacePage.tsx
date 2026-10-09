@@ -11,7 +11,7 @@ import {
 } from "@phosphor-icons/react";
 import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
-  isPlaceholderMission, ownerAsks, summarizeRestorePlan,
+  isPlaceholderMission, ownerAsks, planSurface, summarizeRestorePlan,
 } from "@kinu.run/core";
 import type { AlternateTakeSet, DiffAnchor, FileRestoreChange, PlanReview, Rpc, SignalCard, TakePickOutcome } from "@kinu.run/core";
 import type { UIMessage } from "ai";
@@ -878,7 +878,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
     rpc: workspaceRpc,
     resolveConsent,
     onDecided: refreshPendingActions,
-    onReview: () => show("Work"),
+    onReview: (plan) => show(planSurface(plan)),
     decideMemory: async (id, decision) => { await decideAccountMemory(id, decision); },
   }), [workspaceRpc, resolveConsent, refreshPendingActions, show]);
 

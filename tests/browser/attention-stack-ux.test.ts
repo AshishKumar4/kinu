@@ -34,11 +34,9 @@ async function decisions(page: Page): Promise<string[][]> {
   return v.parse(v.array(v.array(v.string())), JSON.parse(recorded));
 }
 
-/** Opens the inspector's Work tab on its list: the frame's plan, awaiting review, opens the tab on its review. */
+/** Opens the inspector's Work tab on its list. */
 async function openWork(page: Page): Promise<void> {
   await page.click('nav[aria-label="Workspace"] [aria-label="Work"]');
-
-  if (await page.$('[data-back-to-work]') !== null) await page.click('[data-back-to-work]');
 }
 
 /** Work's own count of what waits, or 0 once its Needs you section is gone. */
@@ -144,6 +142,29 @@ test('the next card answers at once, while the queue is still being read again a
     expect(await decisions(page)).toEqual([['park-publish', 'approved'], ['park-push', 'denied']]);
     await page.evaluate(() => { window.dispatchEvent(new Event('gallery:release-asks')); });
     await page.waitForFunction(() => document.querySelector('[data-attention-stack]') === null);
+    await page.close();
+  });
+});
+
+test('a plan in the stack opens on its own page, from whichever tool the inspector shows', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await opened(page, origin, '&asks=plan');
+    await page.waitForSelector('[data-attention-stack]');
+    const plan = await page.$eval('[data-attention-card]', (card) => card.getAttribute('data-attention-card') ?? '');
+
+    expect(plan).toStartWith('action:plan:');
+    await page.click('#inspector button[aria-label="Files"]');
+    await page.waitForSelector('#inspector button[aria-label="Files"][aria-current="true"]');
+
+    // The plan is not answered here: the card stays, and the inspector leaves Files for the plan's page.
+    await answer(page, 'Review plan');
+    await page.waitForFunction(() => document.querySelector('#inspector button[aria-label="Files"][aria-current="true"]') === null);
+    const shown = await page.$eval('#inspector nav [aria-current="true"]', (tab) => ({ nav: tab.closest('nav')?.getAttribute('aria-label'), tab: tab.getAttribute('aria-label') }));
+
+    expect(shown).toEqual({ nav: 'Pages', tab: expect.stringContaining('applyCoupon') });
+    await page.waitForSelector('[data-plan-review-root]');
+    expect(await stacked(page)).toEqual([plan]);
     await page.close();
   });
 });

@@ -225,7 +225,7 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
 
         // Shown, not fatal: the reason (container gone, attach failed) arrives here before the socket reports it.
         if (keepaliveOperations.current.get(keepaliveKey) === owner && !response.ok) {
-          setFailure(`the container refused the terminal's keepalive (${response.status})`);
+          setFailure(`the computer refused the terminal's keepalive (${response.status})`);
         }
       }), (failed) => Effect.sync(() => {
         if (keepaliveOperations.current.get(keepaliveKey) === owner) {

@@ -76,7 +76,7 @@ describe('the declaration the model reads', () => {
     const sized = buildSystemPromptSync(rt, { backend: 'cf', executors: router.listExecutors() });
 
     expect(sized).toContain('It starts at Medium unless the user chose another size; `sandbox.resize(size)` switches between '
-      + 'Small (1 vCPU, 4 GiB), Medium (2 vCPU, 8 GiB) and Large (4 vCPU, 12 GiB), restarting a running container.');
+      + 'Small (1 vCPU, 4 GiB), Medium (2 vCPU, 8 GiB) and Large (4 vCPU, 12 GiB)');
 
     const unsized = new DefaultExecutionRouter();
     unsized.register(createSandboxExecutor(boxAnswering(async (size) => ({ kind: 'recorded', size }))));

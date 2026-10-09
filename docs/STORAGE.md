@@ -45,6 +45,11 @@ loses the same race. The row answers both questions from every colo. Logout
 deletes the row first. The KV delete that follows is cleanup, and a failed
 cleanup never reports a completed revocation as failed.
 
+A websocket that runs on a session keeps its hash and answers to the same row. Logout and a raised credential floor
+close the sockets that named it, in every workspace (`closeRevokedSessionSockets`) and in the user's own `UserDO`,
+where the roster's socket lives (`closeEndedRosterSockets`). A lapsed session announces nothing, so the roster asks the
+row before each frame (`sendRosterFrame`) and closes a socket whose session has ended instead of sending to it.
+
 When the store does not answer, the request gets a 503
 (`packages/cf-backend/src/auth/session.ts`). It is never admitted, and it never
 gets the 401 that would send a signed-in user to sign in again. A sign-out that

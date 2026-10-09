@@ -2,13 +2,19 @@
  * The roster as the owner's object answers it: the tile each workspace pushed rides its entry, with the owner's
  * release approvals among its decisions; a filter or search pages the roster while the counts stay whole; and an
  * open page is told each change once, over its socket, and nothing for a push that changed nothing. On the same
- * socket it hears what account-memory proposals wait on the owner, as it opens and as each is filed or decided.
+ * socket it hears what account-memory proposals wait on the owner, as it opens and as each is filed or decided,
+ * for as long as the browser session it was opened under stands.
  */
 import * as v from 'valibot';
 import { describe, expect, setSystemTime, test } from 'bun:test';
-import type { UserCaller, WorkspaceOverview } from '@kinu.run/core';
+import { WS_OPEN, type UserCaller, type WorkspaceOverview } from '@kinu.run/core';
+import type { AuthIdentity } from '../src/auth/session';
+import { SESSION_BEARER_HEADER } from '../src/cli/rpc-gate';
+import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
+import { serveFamily } from './helpers/api';
 import { nextTurn, until } from './helpers/actor-harness';
-import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
+import { bootstrappedProfile, userAccount } from './helpers/bindings';
+import { createTestUserDO, provisionTestWorkspace, TEST_CREDENTIAL_ENCRYPTION_KEY, testOwner, type TestUserDO } from './helpers/user-do';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
@@ -26,24 +32,47 @@ const MemoryFrameSchema = v.object({
   pending: v.array(v.object({ id: v.string(), proposal: v.object({ kind: v.string() }) })),
 });
 
-/** The owner's page, listening: every frame the object sends it, by kind. */
-async function listen(harness: TestUserDO): Promise<() => Array<v.InferOutput<typeof FrameSchema> | v.InferOutput<typeof MemoryFrameSchema>>> {
+type Frame = v.InferOutput<typeof FrameSchema> | v.InferOutput<typeof MemoryFrameSchema>;
+
+/** The owner's page, listening: every frame the object sends it, by kind, and whether its socket is still open. */
+interface Page {
+  frames(): Frame[];
+  open(): boolean;
+}
+
+/** Opens the page's roster socket. `session`: the hash the edge writes into the upgrade of a signed-in browser; none,
+ *  as under the dev identity. */
+async function listen(harness: TestUserDO, session?: string): Promise<Page> {
   const accepted = harness.acceptedSockets.length;
-  const answer = await harness.userDO.fetch(new Request('https://kinu.test/roster/live', { headers: { Upgrade: 'websocket' } }));
+  const headers = new Headers({ Upgrade: 'websocket' });
+
+  if (session !== undefined) headers.set(SESSION_BEARER_HEADER, session);
+  const answer = await harness.userDO.fetch(new Request('https://kinu.test/roster/live', { headers }));
 
   expect(answer.status).toBe(101);
   const socket = harness.acceptedSockets[accepted];
 
   if (socket === undefined) throw new Error('the object accepted no roster socket');
 
-  return () => socket.sent.map((text) => v.parse(v.variant('type', [FrameSchema, MemoryFrameSchema]), JSON.parse(text)));
+  return {
+    frames: () => socket.sent.map((text) => v.parse(v.variant('type', [FrameSchema, MemoryFrameSchema]), JSON.parse(text))),
+    open: () => socket.ws.readyState === WS_OPEN,
+  };
 }
 
 /** The roster's own frames a page hears. */
 async function openPage(harness: TestUserDO): Promise<() => Array<v.InferOutput<typeof FrameSchema>>> {
-  const frames = await listen(harness);
+  const page = await listen(harness);
 
-  return () => frames().flatMap((frame) => (frame.type === 'workspace' ? [frame] : []));
+  return () => page.frames().flatMap((frame) => (frame.type === 'workspace' ? [frame] : []));
+}
+
+/** What each frame told a page waits on the owner: the proposals' ids, one list per frame. */
+const pendings = (page: Page): string[][] => page.frames().flatMap((frame) => (frame.type === 'account_memory' ? [frame.pending.map((row) => row.id)] : []));
+
+/** An agent of `ledger` asks the account to remember a city. */
+function propose(harness: TestUserDO, ledger: UserCaller): Promise<string> {
+  return harness.userDO.accountMemory_propose(ledger, { kind: 'fact', key: 'owner_city', value: 'Lisbon' }, { by: 'agent', agent: 'main' });
 }
 
 async function workspace(harness: TestUserDO, name: string): Promise<UserCaller> {
@@ -286,13 +315,119 @@ describe("the owner's page hears what account memory waits on them", () => {
     const harness = createTestUserDO({ durableObjectId: USER_ID });
     const owner = await testOwner();
     const ledger = await workspace(harness, 'ledger');
-    const frames = await listen(harness);
-    const pendings = () => frames().flatMap((frame) => (frame.type === 'account_memory' ? [frame.pending.map((row) => row.id)] : []));
+    const page = await listen(harness);
 
-    const id = await harness.userDO.accountMemory_propose(ledger, { kind: 'fact', key: 'owner_city', value: 'Lisbon' }, { by: 'agent', agent: 'main' });
+    const id = await propose(harness, ledger);
     await harness.userDO.accountMemory_decide(owner, id, 'accept');
 
-    expect(pendings()).toEqual([[], [id], []]);
+    expect(pendings(page)).toEqual([[], [id], []]);
     harness.close();
+  });
+});
+
+const SESSION_A = 'a'.repeat(64);
+
+const SESSION_B = 'b'.repeat(64);
+
+const SESSION_C = 'c'.repeat(64);
+
+/** A browser session as sign-in registers it: the row every frame to its page is sent under. */
+async function signIn(harness: TestUserDO, tokenHash: string, options: { readonly expiresAt?: number; readonly credentialGeneration?: number } = {}): Promise<void> {
+  await harness.userDO.registerBrowserSession(await testOwner(), tokenHash, options.expiresAt ?? Date.now() + 60_000, {
+    email: 'person@example.com', displayName: 'Person', provider: 'cloudflare', sub: 'cf-1', authTime: Date.now(),
+    ...(options.credentialGeneration !== undefined && { credentialGeneration: options.credentialGeneration }),
+  });
+}
+
+describe('a roster socket lives on the browser session it was opened under', () => {
+  test('a page signed out is closed and hears nothing more, while every other page hears the proposal', async () => {
+    const harness = createTestUserDO({ durableObjectId: USER_ID });
+    const owner = await testOwner();
+    const ledger = await workspace(harness, 'ledger');
+    await signIn(harness, SESSION_A);
+    await signIn(harness, SESSION_B);
+    const signedOut = await listen(harness, SESSION_A);
+    const signedIn = await listen(harness, SESSION_B);
+    // Opened under no session (the dev identity, which no session backs): no logout is its.
+    const unbacked = await listen(harness);
+
+    await harness.userDO.revokeBrowserSession(owner, SESSION_A);
+    expect(signedOut.open()).toBe(false);
+
+    const id = await propose(harness, ledger);
+
+    expect(pendings(signedOut)).toEqual([[]]);
+    expect([pendings(signedIn), pendings(unbacked)]).toEqual([[[], [id]], [[], [id]]]);
+    expect([signedIn.open(), unbacked.open()]).toEqual([true, true]);
+    harness.close();
+  });
+
+  test('a raised credential floor ends every page of the account, and a sign-in under the new floor hears again', async () => {
+    const harness = createTestUserDO({ durableObjectId: USER_ID });
+    const owner = await testOwner();
+    const ledger = await workspace(harness, 'ledger');
+    await signIn(harness, SESSION_A);
+    await signIn(harness, SESSION_B);
+    const ended = [await listen(harness, SESSION_A), await listen(harness, SESSION_B)];
+
+    await harness.userDO.raiseCredentialFloor(owner, 1);
+    expect(ended.map((page) => page.open())).toEqual([false, false]);
+
+    await signIn(harness, SESSION_C, { credentialGeneration: 1 });
+    const renewed = await listen(harness, SESSION_C);
+    const id = await propose(harness, ledger);
+
+    expect(ended.map((page) => pendings(page))).toEqual([[[]], [[]]]);
+    expect(pendings(renewed)).toEqual([[], [id]]);
+    harness.close();
+  });
+
+  test('a page whose session has lapsed is closed at the next frame, never sent it', async () => {
+    const harness = createTestUserDO({ durableObjectId: USER_ID });
+    const ledger = await workspace(harness, 'ledger');
+    await signIn(harness, SESSION_A, { expiresAt: Date.now() + 60_000 });
+    const page = await listen(harness, SESSION_A);
+
+    try {
+      setSystemTime(new Date(Date.now() + 61_000));
+      await propose(harness, ledger);
+
+      expect(pendings(page)).toEqual([[]]);
+      expect(page.open()).toBe(false);
+    } finally {
+      setSystemTime();
+      harness.close();
+    }
+  });
+});
+
+describe("the roster socket the edge hands the owner's object", () => {
+  test('names the session the edge verified, whichever session the page claims', async () => {
+    const handed: Request[] = [];
+
+    const stub = userAccount({
+      async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
+      async userMcp_warmConnections() { return { servers: 0 }; },
+      async fetch(request: Request) {
+        handed.push(request);
+
+        return new Response(null, { status: 200 });
+      },
+    });
+
+    const env: UserRoutesEnv<string> = {
+      UserDO: { idFromName: (name) => name, get: () => stub },
+      OrchestratorAgent: { idFromName: (name) => name, get: () => { throw new Error('a roster upgrade asked a workspace'); } },
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    };
+
+    const verified: AuthIdentity = { userId: USER_ID, email: 'owner@example.com', sub: 'sub', provider: 'test', authTime: Date.now(), sessionTokenHash: SESSION_A };
+
+    const answer = await serveFamily(userRoutes, { identity: verified, ctx: { waitUntil() {} } })(
+      new Request('https://kinu.example.com/api/user/workspaces/live', { headers: { Upgrade: 'websocket', [SESSION_BEARER_HEADER]: SESSION_B } }), env,
+    );
+
+    expect(answer).not.toBeNull();
+    expect(handed.map((request) => request.headers.get(SESSION_BEARER_HEADER))).toEqual([SESSION_A]);
   });
 });

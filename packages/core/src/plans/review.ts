@@ -75,9 +75,9 @@ export function workModeUnderReview(
   return planReviewAwaitingDecision(active()) ? 'plan' : requested;
 }
 
-/** First non-empty line of the content, headings stripped. */
+/** First non-empty line of the content as plain text: its heading marks and code spans' backticks stripped. */
 export function planTitle(content: string): string {
-  return content.split('\n').find((line) => line.trim())?.replace(/^#+\s*/, '').trim() ?? 'Plan';
+  return content.split('\n').find((line) => line.trim())?.replace(/^#+\s*/, '').replace(/`([^`]*)`/g, '$1').trim() ?? 'Plan';
 }
 
 /** Pending plan reviews workspace-wide with owner name and id. Retired actors stay included: their undecided plan is still undecided. */

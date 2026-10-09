@@ -30,6 +30,8 @@ import {
   CLI_BEARER_HEADER,
   CLI_SCOPES_HEADER,
   SESSION_BEARER_HEADER,
+  SESSION_AUTHORITY_REVOKED,
+  WEBSOCKET_POLICY_CLOSE,
   cliBearerConnectionTag,
   cliBearerFromTags,
   cliScopesConnectionTag,
@@ -268,10 +270,6 @@ type ActorJobSeams = Pick<BackgroundJobRunnerDeps,
   readonly notifySettled?: (job: BackgroundJob) => void;
 };
 
-/** The agents SDK treats this close code as terminal (`isTerminalCloseEvent`), so a
- * client whose authority is gone stops reconnecting. */
-const WEBSOCKET_POLICY_CLOSE = 1008;
-
 /**
  * How long an alarm waits for the programs in flight, from its start: nine tenths of the wall an alarm handler is
  * given (do.alarm.wall_ms), so the platform never ends the handler mid-wait. A handler ended at its wall resets the
@@ -280,8 +278,6 @@ const WEBSOCKET_POLICY_CLOSE = 1008;
 const ALARM_PROGRAM_WAIT_MS = Math.floor(PLATFORM_CATALOG['do.alarm.wall_ms'].limit.value * 9 / 10);
 
 const CLI_AUTHORITY_REVOKED = 'This CLI authorization is invalid. Sign in again with: kinu auth';
-
-const SESSION_AUTHORITY_REVOKED = 'This session has been signed out. Sign in again.';
 
 const PlanApprovalMetadataSchema = v.looseObject({
   kinuEvent: v.literal('plan_approved'), planId: v.string(),
@@ -3008,6 +3004,7 @@ export abstract class ActorAgent extends Agent<Env> {
       const hooks: CFRuntimeHooks = {
         deferrals: () => this.deferralChannel(),
         slate: (operation) => this.slate(operation),
+        slateBuild: (slate) => this.slateBuild(slate),
         reportModelCall: (report) => this.reportModelCall(report),
         modelOperations: this.modelOperations,
         liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
@@ -3078,6 +3075,11 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Every actor's slate operations run on the object that owns its workspace, as this actor. */
   async slate(operation: SlateOperation): Promise<SlateCallResult> {
     return workspaceOwner(this.env, this.workspaceName()).slateAs(this.slateCaller(), operation);
+  }
+
+  /** Whether a slate still builds, asked as this actor; a check, never a preview. */
+  async slateBuild(slate: string): Promise<SlateCallResult> {
+    return workspaceOwner(this.env, this.workspaceName()).slateBuildAs(this.slateCaller(), slate);
   }
 
   /**
@@ -3454,7 +3456,7 @@ export abstract class ActorAgent extends Agent<Env> {
       }),
       files: () => ({
         vfs: this.rt.toolFiles, home: this.rt.storage.home, planes: this.rt.planes, memory: this.rt.memory, ledger: this.acc.files, budget: this.acc.context,
-        slate: (operation) => this.slate(operation),
+        slateBuild: (slate) => this.slateBuild(slate),
       }),
       // `this.taskList` is the store the turn's snapshot reads; the role switch is the native `tasks` tool's.
       tasks: () => ({ list: this.taskList, config: this.config, roleSwitch: agentRoleSwitch(() => this.operationProfile()?.inputs?.envelope ?? null) }),
@@ -4016,7 +4018,7 @@ export abstract class ActorAgent extends Agent<Env> {
         account: this.accountMemory({ by: 'agent', agent: this.actorHandle().name }),
         webSearch: this.ownedModelServices.getWebSearchProvider(),
         jobs: { jobRunner: this.jobRunner, backgroundable: BACKGROUNDABLE_TOOLS, mode: () => this.turnWorkMode() },
-        slate: (operation) => this.slate(operation),
+        slateBuild: (slate) => this.slateBuild(slate),
       };
 
       if (actorDeps.report) builtinDeps.report = actorDeps.report;

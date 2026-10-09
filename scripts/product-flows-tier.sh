@@ -14,6 +14,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/repo-runtime.sh
 
+if [[ "${1:-}" == --flow=* ]]; then
+  pattern="$(bun scripts/product-flow-rows.ts "$1")"
+  shift
+  set -- -t "$pattern" "$@"
+fi
+
 # The live consent the test preload asks for before a suite may read
 # KINU_ORIGIN (scripts/test-scratch-home.ts); these rows drive a deployment.
 export KINU_EVAL_LIVE=1
@@ -43,5 +49,5 @@ KINU_EVAL_BACKEND=cloud KINU_TOKEN="${RESOLVED[1]}" bun scripts/scripted-tier.ts
 
 echo "── product flows ─────────────────────────────────────────"
 echo "target:   $KINU_ORIGIN as $KINU_EVAL_ACCOUNT"
-# Arguments go to `bun test`: `-t <pattern>` with KINU_FLOW_ROWS judges one row by hand.
+# --flow selects one independently measured suite; other arguments go to Bun unchanged.
 exec bun test --timeout=0 tests/browser/product-flows.test.ts "$@"

@@ -13,7 +13,7 @@ import { sandboxPreviewLabelOf } from "@kinu.run/core";
 import type { SandboxPreviewExposures } from "@kinu.run/core";
 
 type ContainerOperations = Pick<KinuDevbox,
-  "execUntimed" | "execUntimedStream" | "killUntimed" | "releaseUntimed" | "resolveReadiness" | "readFile" | "writeFile" | "listFiles"
+  "execUntimed" | "execUntimedStream" | "killUntimed" | "releaseUntimed" | "resolveReadiness" | "readFile" | "writeFile" | "listFiles" | "statFile"
   | "deleteFile" | "exposePort" | "getExposedPorts" | "unexposePort" | "startSupervised"
   | "stopSupervised" | "listSupervised" | "portToken" | "notePortRemoved" | "resize" | "portListeners" | "answerRest">;
 
@@ -30,7 +30,7 @@ const DEVBOX_FAILURE_CODES: Readonly<Record<DevboxErrorCode, ErrorCode>> = {
 };
 
 /** A terminal refusal names what its reader can do; the owner's own is on the Environment card (D52). */
-const REFUSED_NEXT = 'refused until something changes (choose another size with sandbox.resize(...), or ask the owner to start the sandbox again)';
+const REFUSED_NEXT = 'refused until something changes (choose another size with sandbox.resize(...), or ask the owner to start the computer again)';
 
 /** The one conversion from the standalone library's failures to the application's channel. An
  *  unclassified failure, a transport one included, is `io`: `unavailable` is a verdict
@@ -231,6 +231,7 @@ export function adaptCloudflareSandbox(
     writeFile: (path, content, opts) =>
       settle(onContainer(() => jsonResultOrVoid(handle.writeFile(path, content, opts)))),
     listFiles: (path, opts) => settle(onContainer(() => handle.listFiles(path, opts))),
+    statFile: (path, opts) => settle(onContainer(() => handle.statFile(path, opts))),
     deleteFile: (path) => settle(onContainer(() => jsonResultOrVoid(handle.deleteFile(path)))),
     // Published first: the edge verifies preview hostnames against the record (`preview-proxy.ts`).
     // Then `servePreviewRequest`'s gates run here, without forwarding.

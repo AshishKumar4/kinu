@@ -227,6 +227,7 @@ export interface CFRuntimeHooks {
      *  subordinate): no queue, so 'strict' refuses. */
   deferrals?: () => DeferredApprovalChannel | undefined;
   slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
+  slateBuild?: (slate: string) => Promise<SlateCallResult>;
   workspaceObserver?: WriteObserver;
   liveReadsMoved?: (reads: readonly LiveRead[]) => void;
   /** A sandbox port was exposed or withdrawn, which can change the job that serves it; awaited by the call. */
@@ -399,6 +400,7 @@ export function createCFRuntime(
       ledger: () => access.acc?.().files,
       budget: () => access.acc?.().context,
       slate: hooks.slate,
+      slateBuild: hooks.slateBuild,
     },
   }));
   const previewSuffix = previewHostSuffix(env) ?? undefined;

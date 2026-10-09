@@ -262,10 +262,6 @@
       "complexity": 27
     },
     {
-      "key": "packages/cf-backend/src/components/surfaces/WorkSurface.tsx#WorkSurface",
-      "complexity": 27
-    },
-    {
       "key": "packages/cf-backend/src/components/ui/BrandMark.tsx#providerBrand",
       "complexity": 27
     },

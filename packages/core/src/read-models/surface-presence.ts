@@ -11,7 +11,29 @@ export const ACTIVITY_SURFACE = "Activity";
 
 export type SlateSurfaceKind = `${typeof SLATE_PREFIX}${string}`;
 
-export type SurfaceKind = (typeof SURFACES)[number] | typeof ACTIVITY_SURFACE | SlateSurfaceKind | `preview:${string}`;
+/** A plan revision's own page: its owner's conversation, the plan's id and the revision. */
+export type PlanSurfaceKind = `plan:${string}`;
+
+export type SurfaceKind = (typeof SURFACES)[number] | typeof ACTIVITY_SURFACE | SlateSurfaceKind | PlanSurfaceKind | `preview:${string}`;
+
+export interface PlanPageRef {
+	readonly owner: string;
+	readonly id: string;
+	readonly revision: number;
+}
+
+export function planSurface({ owner, id, revision }: PlanPageRef): PlanSurfaceKind {
+	return `plan:${encodeURIComponent(owner)}:${encodeURIComponent(id)}:${String(revision)}`;
+}
+
+/** The plan revision a surface shows; null for any other surface. */
+export function planOfSurface(surface: SurfaceKind | null): PlanPageRef | null {
+	const match = surface === null ? null : /^plan:([^:]+):([^:]+):(\d+)$/.exec(surface);
+
+	if (match === null) return null;
+
+	return { owner: decodeURIComponent(match[1] ?? ""), id: decodeURIComponent(match[2] ?? ""), revision: Number(match[3]) };
+}
 
 export interface SurfaceContent {
 	tabPresence: TabPresence | undefined;

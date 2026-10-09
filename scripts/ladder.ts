@@ -58,6 +58,7 @@ import type { ModuleEdges } from './module-edges';
 import { identifierCalleeName, literalString, walk, type Parsed } from './syntax';
 import { AMBIENT_CREDENTIAL_ENV, AMBIENT_DECORATION_ENV, EVAL_IDENTITY_ENV, evalWebIdentityEnv, LIVE_MODEL_ENV, SCRIPTED_MODEL_KEY_ENV } from '../packages/test-utils/src/index';
 import { COST_TABLE, type CostTable, costRssMb, costThreads, readCosts } from './gate-cost';
+import { PRODUCT_FLOW_ROWS } from './product-flow-rows';
 import { resourceCostFile, withResourceCosts } from './gate-cost';
 import {
   armadaVerdict, parseRunnerTimings, readHostedCosts, readFileTimings, withRunnerCosts, writeVerdicts,
@@ -2430,6 +2431,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:devbox-e2e',
     label: 'Devbox contracts on real golden containers',
+    evidence: 'devbox',
     // Its Worker, bucket and containers through the deploy's REST token, never a wrangler login; its desktop client in
     // the container's own Chrome. The staging identity whatever the deployment: production is never its authority.
     secrets: ['DEVBOX_REGISTRY_TOKEN', 'KINU_CLOUDFLARE_API_TOKEN', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'KINU_EVAL_STAGING_WEB_IDENTITY'],
@@ -2439,7 +2441,7 @@ export const LADDER: readonly Gate[] = [
     tier: 'deploy',
     // 2026-10-06, dc20261006045352da6d8: 17 contracts and verified cleanup, 370 s whole run (D72).
     seconds: 370,
-    catches: 'tools and FUSE missing from the real golden; lost exec bytes, unsafe process kills or trust; a desktop that opens empty or cannot launch; '
+    catches: 'tools and FUSE missing from the real golden; per-entry remote metadata calls, incorrect file metadata; lost exec bytes, unsafe process kills or trust; a desktop that opens empty or cannot launch; '
       + 'snapshot and R2 recovery data loss, whole-file deltas, failed compaction, serial mounts and disk-pressure failures.',
     blind: 'long snapshot lifetime, account saturation, the model path, and a product adapter no contract drives. No Docker image is built or started.',
     inputs: { kind: 'live', why: 'deploys eval-owned Cloudflare fixtures from this tree, copies staging tools, runs real containers and R2, and verifies complete cleanup.' },
@@ -3041,6 +3043,13 @@ function armadaTaskName(gate: Gate): string {
   return gate.label.toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-|-$/gu, '').slice(0, 80);
 }
 
+/** Product flows share a tier command, not a task: each finished flow owns its verdict even if another is killed. */
+export function armadaUnits(gate: Gate): Gate[] {
+  return gate.run === `bash ${PRODUCT_FLOWS_TIER_SCRIPT}`
+    ? PRODUCT_FLOW_ROWS.map((row) => ({ ...gate, run: `${gate.run} --flow=${row}`, label: `${gate.label}: ${row}` }))
+    : [gate];
+}
+
 /** A row's own secrets as one name (`--deploy-secrets=`): the armada job it runs in. Empty for a row that names none. */
 export function secretGroup(gate: Gate): string {
   return [...gate.secrets ?? []].sort((left, right) => left.localeCompare(right)).join(',');
@@ -3050,7 +3059,7 @@ export function secretGroup(gate: Gate): string {
  *  --deploy-secrets=<group>`), weighed by their declared seconds so the longest start first. */
 function armadaPlan(phases: readonly DeployPhase[], origin: string | undefined, group: string): CIMatrix {
   return {
-    include: armadaPhaseRows(phases).filter((gate) => secretGroup(gate) === group).map((gate) => {
+    include: armadaPhaseRows(phases).filter((gate) => secretGroup(gate) === group).flatMap(armadaUnits).map((gate) => {
       const entry: CIMatrixEntry = { name: armadaTaskName(gate), row: gate.run, weight: Math.round(gate.seconds), rows: [gate.run] };
 
       if (readsDeployment(gate) && origin !== undefined) entry.origin = origin;
@@ -3735,7 +3744,7 @@ export function armadaRowVerdicts(rows: readonly Gate[], graded: ArmadaReport | 
   // whatever each row's own exit (armada src/grade.ts).
   const ungraded = graded === undefined || exitCode === 2 || graded.problems.length > 0;
 
-  return rows.map((gate) => {
+  return rows.flatMap(armadaUnits).map((gate) => {
     const task = armadaTaskName(gate);
     const verdict = reported.find((row) => row.run === gate.run) ?? reported.find((row) => row.run === undefined && row.name === task);
     // armada names a problem by its task (`<task> has no verdict…`, `<task>: <row> names evidence…`) or by the row.
@@ -4062,7 +4071,7 @@ if (import.meta.main) {
 
   // A deploy phase's armada job runs its rows the same way (`armadaPlan`).
   const rowGate = ciRow === undefined ? undefined
-    : ciUnits(costs).find((unit) => unit.gate.run === ciRow)?.gate ?? LADDER.find((gate) => gate.run === ciRow && onArmada(gate));
+    : ciUnits(costs).find((unit) => unit.gate.run === ciRow)?.gate ?? LADDER.filter(onArmada).flatMap(armadaUnits).find((gate) => gate.run === ciRow);
 
   if (ciRow !== undefined && (tier !== 'ci' || rowGate === undefined)) throw new Error('unknown CI row or a non-CI tier: ' + ciRow);
 

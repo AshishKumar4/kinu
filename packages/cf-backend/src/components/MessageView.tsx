@@ -15,7 +15,7 @@ import { AskRecord } from "@/components/QuestionCard";
 import { isToolUIPart, getToolName } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
 import {
-  describeToolCall, rowText, summarizeToolCall,
+  describeToolCall, executorLabel, rowText, summarizeToolCall,
 } from "@kinu.run/core";
 import type { DiffAnchor, InlineSteer, JsonObject, JsonValue, PlacedSteer, ToolCallEffect } from "@kinu.run/core";
 import { ASK_OWNER_TOOL, changeNotesCard, slatesChanged } from "@kinu.run/core";
@@ -289,7 +289,7 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
   const durationLabel = elapsed !== null && elapsed > 100 ? `${(elapsed / 1000).toFixed(1)}s` : null;
 
   const runtime = toolName === 'shell'
-    ? (jsonString(input, "runtime") ?? 'workspace')
+    ? executorLabel(jsonString(input, "runtime") ?? 'workspace')
     : null;
 
   const provisionErr = parseProvisionError(output);
@@ -348,8 +348,8 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
           <WrenchIcon size={12} className="p-warning mt-0.5 shrink-0" />
           <div className="space-y-1">
             <div>
-              The agent asked for the <code className="font-mono p-fill px-1 rounded-sm">{provisionErr.runtime}</code> runtime
-              but it isn't provisioned yet.
+              The agent asked for <span className="font-medium">{executorLabel(provisionErr.runtime)}</span>, which isn't
+              provisioned yet.
             </div>
             <div className="p-text-3">{provisionErr.message}</div>
             <div className="p-text-3">

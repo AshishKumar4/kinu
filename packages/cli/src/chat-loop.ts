@@ -406,12 +406,12 @@ async function maybeOfferDeviceConnect(rl: readline.Interface, tty: boolean): Pr
   if (!(await shouldOfferDeviceConnect())) return;
 
   if (!tty) {
-    console.log(MUTED('No computer is connected. Connect this one with: kinu connect'));
+    console.log(MUTED('No PC is connected. Connect this one with: kinu connect'));
 
     return;
   }
 
-  console.log(`${WARN('Let this agent use this computer?')}`);
+  console.log(`${WARN('Let this agent use this PC?')}`);
   console.log(MUTED(`  Linking installs the Kinu daemon and registers this machine as "${defaultDeviceName()}".`));
   console.log(MUTED('  A workspace you approve runs commands here in a sandbox.'));
   console.log(MUTED('  You approve each workspace once, and revoke it in Account settings → Devices.'));
@@ -560,7 +560,7 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
       if (process.stdin.isTTY === true && process.stdout.isTTY === true) {
         await promptDeviceConnect(rl, { allowDismiss: false });
       } else {
-        console.log(MUTED('Connect this computer with: kinu connect'));
+        console.log(MUTED('Connect this PC with: kinu connect'));
       }
 
       console.log('');

@@ -70,13 +70,18 @@ export interface AccountNote {
   readonly createdAt: number;
 }
 
-/** A proposal waiting on the owner, with who asked for it. */
-export interface AccountMemoryProposal {
-  readonly id: string;
-  readonly proposal: v.InferOutput<typeof AccountProposalSchema>;
-  readonly origin: FactOrigin;
-  readonly createdAt: number;
-}
+/**
+ * A proposal waiting on the owner, with who asked for it. The roster's socket and `GET /api/user/memory` carry it as it
+ * is, so the owner's page reads it with this schema and holds no second shape of it.
+ */
+export const AccountMemoryProposalSchema = v.object({
+  id: v.string(),
+  proposal: AccountProposalSchema,
+  origin: FactOriginSchema,
+  createdAt: v.number(),
+});
+
+export type AccountMemoryProposal = Readonly<v.InferOutput<typeof AccountMemoryProposalSchema>>;
 
 /** Settings → Memory: every account fact with its history, every note, and what waits on the owner. */
 export interface AccountMemoryView {

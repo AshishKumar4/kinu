@@ -8,7 +8,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@cloudflare/kumo";
 import { BrainIcon, ChatCircleTextIcon, CheckIcon, DesktopTowerIcon, NotePencilIcon, ShieldWarningIcon, SparkleIcon, XIcon, type Icon } from "@phosphor-icons/react";
 import {
-  revealMisrepresenting, timeAgo, type AccountAsk, type OwnerAsk, type PendingAction, type PendingActionKind, type PendingConsent, type Rpc,
+  revealMisrepresenting, timeAgo, type AccountMemoryProposal, type OwnerAsk, type PendingAction, type PendingActionKind, type PendingConsent, type PlanPageRef, type Rpc,
 } from "@kinu.run/core";
 import { detach, renderThrownChain } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -24,8 +24,8 @@ export interface AttentionStackProps {
   readonly resolveConsent: (consentId: string, choice: ConsentChoice) => Promise<void>;
   /** Re-read the queue so an answered row leaves the read too, not only the stack; it reports its own failure. */
   readonly onDecided: () => Promise<void>;
-  /** A plan is decided in its review, under Work. */
-  readonly onReview: () => void;
+  /** A plan is decided on its own page. */
+  readonly onReview: (plan: PlanPageRef) => void;
   /** The owner's answer to an account-memory proposal; the user object then sends what still waits. */
   readonly decideMemory: (id: string, decision: "accept" | "decline") => Promise<void>;
 }
@@ -47,7 +47,7 @@ function kindOf(ask: OwnerAsk): AskKind {
 }
 
 /** What an account-memory proposal would keep, in words: a fact's key and value, or a note's text. */
-function remembered(memory: AccountAsk): string {
+function remembered(memory: AccountMemoryProposal): string {
   const { proposal } = memory;
 
   return proposal.kind === "fact" ? `${proposal.key}: ${JSON.stringify(proposal.value)}` : proposal.content;
@@ -145,9 +145,10 @@ function ConsentBody({ consent }: { consent: PendingConsent }) {
   );
 }
 
-function MemoryBody({ memory }: { memory: AccountAsk }) {
-  const by = memory.origin?.agent ?? (memory.origin?.by === "background" ? "Kinu, from what you said" : "An agent");
-  const where = memory.origin?.workspace === undefined ? "" : ` in ${memory.origin.workspace}`;
+function MemoryBody({ memory }: { memory: AccountMemoryProposal }) {
+  const { origin } = memory;
+  const by = origin.agent ?? (origin.by === "background" ? "Kinu, from what you said" : "An agent");
+  const where = origin.workspace === undefined ? "" : ` in ${origin.workspace}`;
 
   return (
     <>
@@ -199,7 +200,7 @@ function answersOf(ask: OwnerAsk, props: AttentionStackProps): readonly Answer[]
     ];
   }
 
-  return [{ label: "Review plan", weight: "primary", run: async () => { props.onReview(); } }];
+  return [{ label: "Review plan", weight: "primary", run: async () => { if (action.planRef !== undefined) props.onReview(action.planRef); } }];
 }
 
 /** Answered here, so the next card opens on the click; dropped once the read no longer holds it. */

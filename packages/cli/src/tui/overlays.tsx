@@ -1,6 +1,6 @@
 import type { SelectOption, SelectRenderable } from '@opentui/core';
 import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
-import { filterModels, OTHER_OPTION, formatContextWindow, formatModelSpec, modelTestText, parseModelSpec, specWithoutAccount, takeEvidence, type AgentModelEntry, type AlternateTakeCandidate, type AlternateTakeSet, type AskingAgent, type ChangelogEntry, type OwnerAnswer, type ModelTestResult, type ProviderFailure, type ShellApprovalRequest } from '@kinu.run/core';
+import { executorLabel, filterModels, OTHER_OPTION, formatContextWindow, formatModelSpec, modelTestText, parseModelSpec, specWithoutAccount, takeEvidence, type AgentModelEntry, type AlternateTakeCandidate, type AlternateTakeSet, type AskingAgent, type ChangelogEntry, type OwnerAnswer, type ModelTestResult, type ProviderFailure, type ShellApprovalRequest } from '@kinu.run/core';
 import { CHANGE_KIND_GLYPH, TUI_COMPOSER_PLACEHOLDER, TUI_MARKS, clipText, literalText, SPINNER_FRAMES, meterText, type TurnMeter } from '@kinu.run/core/tui';
 import { filterCommands, type SlashCommandInfo } from '../slash-commands';
 import type { AgentChangelogView, ForkPoint } from '../agent-client';
@@ -841,7 +841,7 @@ export function DeviceConsentOverlay({ consent, terminal }: DeviceConsentOverlay
 
   return (
     <PaletteFrame
-      title="Use your computer?"
+      title="Use your PC?"
       width={layout.paletteWidth}
       height={layout.paletteHeight}
       left={position.left}
@@ -869,7 +869,7 @@ interface DeviceConnectOverlayProps {
 }
 
 function shellApprovalDetails(request: ShellApprovalRequest): string {
-  return `${shownCommand(request.command)}\nExecutor: ${request.executor}\n${request.review.hits.map((hit) => `${hit.rule}: ${hit.explanation}`).join('\n')}`;
+  return `${shownCommand(request.command)}\nExecutor: ${executorLabel(request.executor)}\n${request.review.hits.map((hit) => `${hit.rule}: ${hit.explanation}`).join('\n')}`;
 }
 
 export function shellApprovalCanApprove(request: ShellApprovalRequest, terminal: OverlayGeometry): boolean {
@@ -947,7 +947,7 @@ export function DeviceConnectOverlay({ prompt, terminal }: DeviceConnectOverlayP
 
   return (
     <PaletteFrame
-      title="Let this agent use this computer?"
+      title="Let this agent use this PC?"
       width={paletteWidth}
       height={paletteHeight}
       left={position.left}
@@ -966,12 +966,12 @@ export function DeviceConnectOverlay({ prompt, terminal }: DeviceConnectOverlayP
       {prompt.phase === 'connecting' && (
         <>
           <PaletteLine
-            text={prompt.session ? 'Connecting this computer for this session…' : 'Connecting this computer…'}
+            text={prompt.session ? 'Connecting this PC for this session…' : 'Connecting this PC…'}
             width={innerWidth}
             color={colors.text.primary}
           />
           <PaletteLine
-            text={`Waiting for this computer to answer${'.'.repeat(1 + (prompt.ticks % 3))}`}
+            text={`Waiting for this PC to answer${'.'.repeat(1 + (prompt.ticks % 3))}`}
             width={innerWidth}
             color={colors.intent.accent}
           />

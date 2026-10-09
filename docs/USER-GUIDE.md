@@ -118,10 +118,10 @@ it. `--no-transcript` skips the record for one run, and
 
 ## 4. Letting it touch your machine
 
-A cloud workspace reaches your computer through a daemon:
+A cloud workspace reaches your PC through a daemon:
 
 ```bash
-kinu connect          # link this computer, with a consent prompt
+kinu connect          # link this PC, with a consent prompt
 kinu desktop status   # is it attached?
 ```
 
@@ -130,17 +130,17 @@ sees only the folder you consented to. Access to the whole filesystem is a
 separate switch in the web app's workspace settings.
 
 `kinu executors <name>` lists where a workspace can run commands: the
-workspace itself, a sandbox container, or your connected machine.
+workspace itself, its computer, or your connected PC.
 `kinu executors <name> <executor> <command…>` runs one command there.
 
 Kinu never kills a command for running long. In a live session, a call still
 running after 30 seconds moves to the background and wakes the agent when it
 finishes. Under `kinu exec` the limit is 300 seconds, because a one-shot
 process exits after its answer and a background handle nobody reads is worse
-than waiting. Nothing inside the container caps a command either, since a cap
+than waiting. Nothing inside the computer caps a command either, since a cap
 there would kill work the layer above means to move to the background.
 
-In the sandbox container, commands run in `/workspace`, the directory that
+On the computer, commands run in `/workspace`, the directory that
 survives a recycle. Anything written elsewhere is gone on the next fresh
 instance.
 
