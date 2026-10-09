@@ -1588,9 +1588,6 @@ async function measurePlanTasks(newPage: LiveApp['newPage'], origin: string): Pr
     // The handoff turn runs on its own; the row reads the Work list once it has answered, whatever it shows.
     await until(page, "the approved plan's turn to end", `(${ANSWER_BLOCKS}).at(-1) === 'P:Implemented the approved plan.' && !(${STOP_OFFERED})`);
     await page.click('#inspector nav[aria-label="Workspace"] button[aria-label="Work"]');
-    await until(page, "the Work tab's list or its plan's review", `document.querySelector('[data-work-plans], [data-back-to-work]') !== null`);
-
-    if (await page.$('[data-back-to-work]') !== null) await page.click('[data-back-to-work]');
     await until(page, "the Work tab's plans", `document.querySelector('[data-work-plans]') !== null`);
     await painted(page);
 

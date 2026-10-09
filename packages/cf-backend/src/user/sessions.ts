@@ -8,7 +8,8 @@ import {
   builtinAdmission, createBuiltinInvite, findPasskeyAccount, findPasswordAccount, hasBuiltinOwner, initBuiltinAccounts, invitedEmail, isBuiltinOwner, issuePasskeyChallenge, recordPasskeyUse, registerBuiltinAccount, spendPasskeyChallenge, reserveAttempt, clearAttempts, replacePassword, applyReset, listBuiltinAccounts, resetAccount, type Admission, type AttemptBucket, type BuiltinSql, type ChallengePurpose, type Grant, type NewBuiltinAccount, type NewInvite, type PasskeyAccount, type PasswordAccount, type PasswordHash, type PendingChallenge, type ListedAccount, type Reset, type SigningAccount,
 } from '@kinu.run/core/identity';
 import type { UserProfile } from './profile';
-import { singletonValue, type UserObjectHost } from './user-host';
+import { closeEndedRosterSockets, rosterSockets } from './roster';
+import { singletonValue, type SessionStands, type UserObjectHost } from './user-host';
 
 const CLI_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000;
 
@@ -265,6 +266,7 @@ export class UserSessions {
   async revokeBrowserSession(caller: UserCaller, tokenHash: string): Promise<void> {
     await this.host.requireTier(caller, 'auth_tokens');
     this.host.sqlx(`DELETE FROM user_browser_sessions WHERE token_hash = ?`, tokenHash);
+    closeEndedRosterSockets(rosterSockets(this.host.ctx), this.sessionStands);
     await this.pushSessionSocketRevocation(tokenHash);
   }
 
@@ -289,6 +291,13 @@ export class UserSessions {
     }
   }
 
+  /** Whether a session stands: its row is there and has not lapsed. Revocation deletes the row and a raised credential
+   * floor deletes every one, so the row is the whole answer. */
+  readonly sessionStands: SessionStands = (tokenHash) => this.host.sqlx(
+    `SELECT 1 AS stands FROM user_browser_sessions WHERE token_hash = ? AND expires_at > ? LIMIT 1`,
+    tokenHash, Date.now(),
+  ).length > 0;
+
   /** Frame-time liveness check for a session-authenticated websocket; twin of verifyCliSocketBearer.
    * An unreachable workspace is refused by the caller, not answered here. */
   async verifySocketSession(caller: UserCaller, tokenHash: string): Promise<{ live: boolean }> {
@@ -296,12 +305,7 @@ export class UserSessions {
 
     if (!/^[a-f0-9]{64}$/.test(tokenHash)) return { live: false };
 
-    const row = this.host.sqlx<{ token_hash: string }>(
-      `SELECT token_hash FROM user_browser_sessions WHERE token_hash = ? AND expires_at > ? LIMIT 1`,
-      tokenHash, Date.now(),
-    )[0];
-
-    return { live: row !== undefined };
+    return { live: this.sessionStands(tokenHash) };
   }
 
   /**
@@ -403,6 +407,8 @@ export class UserSessions {
 
       return ended;
     });
+
+    closeEndedRosterSockets(rosterSockets(this.host.ctx), this.sessionStands);
 
     await this.revokeAllCliTokens(caller);
 

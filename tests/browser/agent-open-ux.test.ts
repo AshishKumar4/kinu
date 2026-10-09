@@ -64,8 +64,6 @@ describe('opening an agent shows its live chat in the main chat area', () => {
         }
 
         await page.click('nav[aria-label="Workspace"] button[aria-label="Work"]');
-        // The frame's plan awaits review, so the tab opens on it.
-        await page.click('[data-back-to-work]');
         // A task one past a head names its owner and offers no door: there is no conversation of its own to open.
         expect(await page.evaluate(() => document.body.textContent?.includes('Serialize gift-card lines · packages/cart/src/serializer.ts'))).toBe(true);
         expect(await page.$('button[aria-label="Open packages/cart/src/serializer.ts\'s conversation"]')).toBeNull();
@@ -85,7 +83,6 @@ describe('opening an agent shows its live chat in the main chat area', () => {
         if (viewport === 'phone') await page.click('.p-bar [data-inspector-toggle]');
 
         await page.click('nav[aria-label="Workspace"] button[aria-label="Work"]');
-        await page.click('[data-back-to-work]');
         await page.waitForSelector('[data-helper-row]');
         // The refiner works in the background with no tab, so Now lists it; a hired agent has a place of its own and is not listed.
         expect(await page.$$eval('[data-helper-row]', (rows) => rows.map((row) => row.getAttribute('data-helper-row')))).toEqual(['a-refine']);

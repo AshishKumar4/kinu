@@ -139,7 +139,7 @@ describe('account panels', () => {
             await providers.waitForSelector('[role="dialog"]');
             await settleAccountFixture(providers);
             await providers.waitForFunction(
-              () => document.querySelector('[role="dialog"]')?.textContent?.includes('Use your computer'),
+              () => document.querySelector('[role="dialog"] [data-chatgpt-connect]') !== null,
             );
 
             const text = await dialogText(providers);
@@ -237,9 +237,9 @@ describe('account panels', () => {
         await settleAccountFixture(page);
         await page.waitForSelector('[data-chatgpt-connect]');
 
-        // No machine is connected: choosing the computer hands the command that installs Kinu and connects it.
-        await clickByText(page, '[data-chatgpt-connect] button', 'Use your computer');
-        await page.waitForSelector('[data-chatgpt-way="computer"] [data-connect-command]');
+        // No machine is connected: choosing the PC hands the command that installs Kinu and connects it.
+        await clickByText(page, '[data-chatgpt-connect] button', 'Use your PC');
+        await page.waitForSelector('[data-chatgpt-way="pc"] [data-connect-command]');
         expect(await page.$eval('[data-connect-command]', (code) => code.textContent ?? '')).toContain('--connect');
         await clickByText(page, '[data-chatgpt-connect] button', 'Cancel');
 

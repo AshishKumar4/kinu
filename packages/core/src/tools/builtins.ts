@@ -71,7 +71,7 @@ export function codemodeSurface(
   };
 }
 
-import type { SlateCallResult, SlateOperation } from '../slates/rpc';
+import type { SlateCallResult } from '../slates/rpc';
 
 export interface BuiltinToolDeps {
   workMode?: WorkMode;
@@ -98,8 +98,8 @@ export interface BuiltinToolDeps {
   fileLedger?: TurnFileLedger;
   /** Per-turn context budget; omitted → fresh one, so the policy is per-root. */
   contextBudget?: TurnContextBudget;
-  /** The workspace's slates, so `file` answers whether a slate it wrote into still builds. */
-  slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
+  /** Whether a slate still builds, so `file` answers it for a slate it wrote into; a check, never a preview. */
+  slateBuild?: (slate: string) => Promise<SlateCallResult>;
   /** Per-turn escalation ledger; omitted → fresh one. */
   escalations?: TurnEscalationLedger;
   /** Test seam; defaults to one JSON line per event on `console`. */
@@ -144,7 +144,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
 
   const files = {
     vfs: rt.toolFiles, home: rt.storage.home, ledger: deps.fileLedger ?? new TurnFileLedger(), budget, memory, planes: rt.planes,
-    ...(deps.slate !== undefined && { slate: deps.slate }),
+    ...(deps.slateBuild !== undefined && { slateBuild: deps.slateBuild }),
   };
 
   tools.file = createFileTool(files);

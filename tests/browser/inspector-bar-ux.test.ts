@@ -5,7 +5,11 @@
  */
 import { describe, expect, test } from 'bun:test';
 import type { ElementHandle, Page } from 'puppeteer';
+import { executorLabel } from '@kinu.run/core';
 import { withGallery } from '../../scripts/gallery-harness';
+
+/** The agent's own machine, by the one label every surface gives it. */
+const COMPUTER = executorLabel('sandbox');
 
 const TOOL_NAMES = ['Work', 'Changes', 'Files', 'Swarms', 'Agent', 'Environment', 'Activity'];
 
@@ -145,7 +149,7 @@ describe('sharing the open Slate', () => {
 });
 
 describe('the Environment panel', () => {
-  test('the Linux container is the cloud computer: its card is a control by that name that opens its terminal', async () => {
+  test('the Linux container is the agent\'s computer: its card is a control named by its label that opens its terminal', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
 
@@ -154,7 +158,7 @@ describe('the Environment panel', () => {
         await page.goto(`${origin}/gallery.html?frame=environment`, { waitUntil: 'networkidle0' });
         await page.waitForSelector('[data-env-card="sandbox"]', SOON);
 
-        const card = await required(page, '[data-env-card="sandbox"]', 'button', 'Cloud computer');
+        const card = await required(page, '[data-env-card="sandbox"]', 'button', COMPUTER);
 
         // From the keyboard: the control takes focus and Enter selects it, so its pane offers its terminal and screen.
         await card.focus();
@@ -183,7 +187,7 @@ describe('the Environment panel', () => {
     });
   });
 
-  test('the cloud computer\'s desktop shows in a frame, and opens in a tab of its own at the same address', async () => {
+  test('the computer\'s desktop shows in a frame, and opens in a tab of its own at the same address', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
 
@@ -191,11 +195,11 @@ describe('the Environment panel', () => {
         await page.setViewport({ width: 1280, height: 1000 });
         await page.goto(`${origin}/gallery.html?frame=environment`, { waitUntil: 'networkidle0' });
         await page.waitForSelector('[data-env-card="sandbox"]', SOON);
-        await (await required(page, '[data-env-card="sandbox"]', 'button', 'Cloud computer')).click();
+        await (await required(page, '[data-env-card="sandbox"]', 'button', COMPUTER)).click();
         await (await required(page, 'body', 'tab', 'Desktop')).click();
 
-        const frame = await page.waitForSelector('iframe[title="Cloud computer\'s desktop"]', SOON);
-        const link = await required(page, 'body', 'link', 'Open Cloud computer\'s desktop in a new tab');
+        const frame = await page.waitForSelector(`iframe[title="${COMPUTER}'s desktop"]`, SOON);
+        const link = await required(page, 'body', 'link', `Open ${COMPUTER}'s desktop in a new tab`);
 
         if (frame === null) throw new Error('the desktop is not framed');
 

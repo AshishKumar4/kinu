@@ -715,8 +715,26 @@ function accountMemoryFixture(path: string, method: string): Response | null {
   return path === "/api/user/memory" && method === "GET" ? fixtureJson(ACCOUNT_MEMORY_FIXTURE) : null;
 }
 
+function accountComputerSizeFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
+  if (path !== "/api/user/config/sandbox_size") return null;
+
+  if (method === "GET") return fixtureJson(v.parse(JsonValueSchema, STUB.get(path)));
+
+  if (method === "PUT") {
+    const { value } = v.parse(v.object({ value: v.string() }), JSON.parse(v.parse(v.string(), body)));
+    const stored = { key: "sandbox_size", value };
+
+    STUB.set(path, stored);
+
+    return fixtureJson(v.parse(JsonValueSchema, stored));
+  }
+
+  return null;
+}
+
 const SETTINGS_SLICES: readonly SettingsSlice[] = [
   accountMemoryFixture,
+  accountComputerSizeFixture,
   accountProfileFixture,
   settingsSectionsFixture,
   workspaceRosterFixture,
@@ -2418,20 +2436,26 @@ const PARKED_ASKS: PendingAction[] = [
   { id: "park-publish", kind: "deferred_action", title: "Approve: a command the agent wants to run on workspace", detail: "npm publish --access public", at: NOW - 30_000 },
 ];
 
+/** The workspace's own plan awaiting review, as the queue lists it beside the work read's plan: `&asks=plan`. */
+const PLAN_ASKS: PendingAction[] = [{
+  id: `plan:${WORKSPACE_PAGE_NAME}:${galleryAgentPlan.id}:${String(galleryAgentPlan.revision)}`, kind: "plan_review",
+  title: "Review the plan: Repair the applyCoupon eligibility guard", detail: null, at: NOW - 300_000,
+  planRef: { owner: WORKSPACE_PAGE_NAME, id: galleryAgentPlan.id, revision: galleryAgentPlan.revision }, raisedBy: galleryActorId(WORKSPACE_PAGE_NAME),
+}];
+
 /** `&asks=mixed`: one of each kind that waits on the owner, and a version under trial that waits on nobody. */
 const MIXED_ASKS: PendingAction[] = [
   ...PARKED_ASKS,
   { id: "park-write", kind: "deferred_action", title: "Replace src/pricing-service.ts", detail: null, at: NOW - 150_000, write: { path: "src/pricing-service.ts" } },
   { id: "proposal-pricing", kind: "workspace_proposal", title: "Create workspace “Pricing watch”", detail: "Watch competitor pricing and note each change.", at: NOW - 240_000,
     proposal: { name: "Pricing watch", brief: "Watch competitor pricing and note each change.", soul: "# Pricing watch\n\nKeep notes short." } },
-  { id: "plan:main:pl-1:1", kind: "plan_review", title: "Review the plan: Repair the applyCoupon eligibility guard", detail: null, at: NOW - 300_000,
-    planRef: { owner: "main", id: "pl-1", revision: 1 }, raisedBy: galleryActorId(WORKSPACE_PAGE_NAME) },
+  ...PLAN_ASKS,
   { id: "plan:coupon-auditor:pa-1:1", kind: "plan_review", title: "Approve the plan · Audit every coupon rule", detail: "Submitted by coupon-auditor", at: NOW - 200_000,
     planRef: { owner: "coupon-auditor", id: "pa-1", revision: 1 }, raisedBy: galleryActorId("coupon-auditor") },
   { id: "scaffold-v8", kind: "scaffold_version", title: "Scaffold v8 is under trial", detail: "shorter tool preamble", at: NOW - 10_000 },
 ];
 
-const ASK_SETS = new Map([["two", PARKED_ASKS], ["mixed", MIXED_ASKS]]);
+const ASK_SETS = new Map([["two", PARKED_ASKS], ["mixed", MIXED_ASKS], ["plan", PLAN_ASKS]]);
 
 /** `&asksHold=1`: a read of the queue after the first decision waits for `gallery:release-asks`, as a slow one would. */
 const ASKS_HELD = new URLSearchParams(location.search).get("asksHold") === "1";
@@ -5174,12 +5198,14 @@ function WorkFrame() {
   const building = useBuildingJob();
   const lane = workLane(streaming ? null : params.get("lane"));
   const jobs = streaming ? [building, ...lane.jobs] : lane.jobs;
+  // Work opens a plan on its own page and the Work tab returns, as the workspace's column does.
+  const [surface, setSurface] = useState<SurfaceKind>("Work");
 
   return (
     <div className="p-bg min-h-screen flex justify-center">
       <div className="w-[430px] min-h-screen border-x p-border">
         <WorkSurface
-          surface="Work" onSurface={() => {}}
+          surface={surface} onSurface={setSurface}
           pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} memory={lane.memory} memoryContent=""
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}

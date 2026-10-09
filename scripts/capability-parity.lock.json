@@ -1,8 +1,7 @@
 [
-  "asymmetry FileDeps.slate#absent-in-cli",
+  "asymmetry FileDeps.slateBuild#absent-in-cli",
   "asymmetry MemoryDeps.account#absent-in-cli",
   "asymmetry SleepTimeLaneDeps.account#absent-in-cli",
   "movable packages/cf-backend/src/egress/model-relay-route.ts",
-  "movable packages/cf-backend/src/user/binding-completions.ts",
-  "movable packages/cf-backend/src/user/roster.ts"
+  "movable packages/cf-backend/src/user/binding-completions.ts"
 ]

@@ -339,6 +339,7 @@ const ORCHESTRATOR_METHODS = [
   'applyActorDirectory',
   // A browser cannot mint a caller.
   'slateAs',
+  'slateBuildAs',
   'slateCallAs',
   // An isolate running an actor's turn, or a slate, calls the actor's operations here.
   'callOperation',

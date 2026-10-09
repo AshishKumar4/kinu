@@ -16,6 +16,7 @@
 
 import { describe, expect, test } from 'bun:test';
 import { spawnTest } from '@kinu.run/test-utils';
+import { runUnderDeadline } from './deadline';
 
 import {
   BURNER, artifactPath, completeRun, failingBlocks, failingTests, hammerOnce, measuredFiles, reportedCounts, type HammerRun,
@@ -156,12 +157,15 @@ describe('contention ends with the gate however the gate ends', () => {
 });
 
 describe('a run is ended by its silence, never by its length', () => {
+  const writing = 'for (let line = 0; line < 25; line += 1) { console.log(line); await Bun.sleep(100); }';
+  const silent = 'console.log("started"); await Bun.sleep(30_000);';
+
   // SLOW IS NOT HUNG. 2026-09-30: five of six runs under load were killed at a per-run wall deadline with not one
   // failing test between them (2,460 to 3,616 of 3,624 passed); the run allowed to finish passed all 3,624. These
   // runs are real processes on the real clock the hang detector reads, which no fake timer in this process drives.
   test('a run that writes throughout is not killed for outlasting its bound', async () => {
     const run = await hammerOnce(1, {
-      argv: [process.execPath, '-e', 'for (let line = 0; line < 25; line += 1) { console.log(line); await Bun.sleep(100); }'],
+      argv: [process.execPath, '-e', writing],
       seconds: 1,
       label: 'a slow run that writes',
     });
@@ -173,13 +177,41 @@ describe('a run is ended by its silence, never by its length', () => {
 
   test('a run that writes nothing for its bound is ended', async () => {
     const run = await hammerOnce(1, {
-      argv: [process.execPath, '-e', 'console.log("started"); await Bun.sleep(30_000);'],
+      argv: [process.execPath, '-e', silent],
       seconds: 1,
       label: 'a silent run',
     });
 
     expect(run.killed).toBe(true);
+    expect(run.exit).toBe(124);
     expect(run.seconds).toBeLessThan(15);
+  });
+
+  // Armada 2026-10-09: pipe hid 441 passing tests from the ladder's outer silence detector, killed at 481.7 s.
+  // The tee control completed at 761.9 s, with 6.8 s as its longest silence (jobs 4e9a9b5e and d1f1895d).
+  test('a writing hammer survives the ladder\'s outer silence detector, while a silent one is killed', async () => {
+    for (const { fixture, expectedExit } of [{ fixture: writing, expectedExit: 0 }, { fixture: silent, expectedExit: 124 }]) {
+      const outer = await runUnderDeadline({
+        argv: [process.execPath, '-e', `
+import { hammerOnce } from ${JSON.stringify(import.meta.dir + '/hammer.ts')};
+const run = await hammerOnce(1, {
+  argv: ${JSON.stringify([process.execPath, '-e', fixture])}, seconds: 1, label: 'the suite inside the hammer',
+});
+process.exitCode = run.exit;
+`],
+        cwd: import.meta.dir,
+        seconds: 1,
+        label: 'the ladder around the hammer',
+        stdio: 'pipe',
+      });
+
+      expect(outer.exitCode).toBe(expectedExit);
+
+      if (expectedExit === 0) {
+        expect(outer.killed).toBe(false);
+        expect(outer.seconds).toBeGreaterThan(2);
+      }
+    }
   });
 });
 

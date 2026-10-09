@@ -7,7 +7,7 @@ export type { ExecutorInfo };
 /** The executor kind's human name, not a copy of the namespace (the namespace is the API). */
 const EXECUTOR_LABELS = {
   device:    "Your PC",
-  sandbox:   "Cloud computer",
+  sandbox:   "Computer",
   workspace: "Workspace",
   // Forks only: the workspace this one branched from, reached over DO RPC.
   parent:    "Parent workspace",

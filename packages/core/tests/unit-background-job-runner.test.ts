@@ -16,6 +16,7 @@ import { buildDrainBatch, EventLog, initEventsHubTables } from '../src/events/hu
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host';
 import type { Schedule, SqlExecutor, SqlValue } from '../src/types/primitives';
 import type { JsonValue } from '../src/utils/json';
+import { executorLabel } from '../src/read-models/executors';
 import { makeSql, makeExecRaw, makeSqlExec, conversationsFor } from './helpers';
 import { createTestRuntime, createTestActors, toolExecute, workspaceDatabase } from '@kinu.run/test-utils';
 import { buildBuiltinTools } from '../src/tools/builtins';
@@ -406,7 +407,7 @@ describe('BackgroundJobRunner.create — descriptive labels', () => {
   test('a run call labels the runtime + command', () => {
     const { runner, store } = setup();
     const id = runner.create('shell', { runtime: 'sandbox', command: 'npm test' }, 'build', new AbortController());
-    expect(store.get(id)?.label).toBe('sandbox: npm test');
+    expect(store.get(id)?.label).toBe(`${executorLabel('sandbox')}: npm test`);
   });
 
   test('an eval call labels the code snippet', () => {

@@ -3,6 +3,7 @@
  * Security: must never join `SLATE_READ_MODELS`: a Slate could draw a fake of this queue (`slates/read-models.ts`).
  */
 
+import type { AccountMemoryProposal } from '../memory/account';
 import type { DeferredApproval } from '../safety/deferred-approval';
 import { proposedSoul, type WorkspaceProposal } from '../safety/workspace-proposals';
 import { boundWriteOf } from '../safety/bound-write';
@@ -63,21 +64,14 @@ export function needsTheUser(asks: PersonAsks): boolean {
 }
 
 /**
- * One thing waiting on the owner's answer: a queued row that holds them, or a machine's consent. `raisedBy`: the actor
- * whose ask it is, by id; null for the workspace's own.
+ * One thing waiting on the owner's answer: a queued row that holds them, a machine's consent, or an account-memory
+ * proposal (the account's own record of it, held by the owner's user object). `raisedBy`: the actor whose ask it is, by
+ * id; null for the workspace's own.
  */
 export type OwnerAsk =
   | { readonly key: string; readonly at: number; readonly raisedBy: string | null; readonly kind: 'action'; readonly action: PendingAction }
   | { readonly key: string; readonly at: number; readonly raisedBy: null; readonly kind: 'consent'; readonly consent: PendingConsent }
-  | { readonly key: string; readonly at: number; readonly raisedBy: null; readonly kind: 'memory'; readonly memory: AccountAsk };
-
-/** An account-memory proposal as the owner's page holds it: what would be kept, who asked, and when. */
-export interface AccountAsk {
-  readonly id: string;
-  readonly proposal: { readonly kind: 'fact'; readonly key: string; readonly value: unknown } | { readonly kind: 'note'; readonly content: string };
-  readonly origin: { readonly by: string; readonly workspace?: string | undefined; readonly agent?: string | undefined } | null;
-  readonly createdAt: number;
-}
+  | { readonly key: string; readonly at: number; readonly raisedBy: null; readonly kind: 'memory'; readonly memory: AccountMemoryProposal };
 
 /**
  * What the chat's attention stack shows, newest first: every row that holds the person (the rule
@@ -85,7 +79,7 @@ export interface AccountAsk {
  * proposals that hold nobody stay in Work. `raisedBy`: only that actor's asks, for its own pane.
  */
 export function ownerAsks(
-  asks: Pick<PersonAsks, 'pendingActions' | 'pendingConsents'> & { readonly accountProposals?: readonly AccountAsk[] | null },
+  asks: Pick<PersonAsks, 'pendingActions' | 'pendingConsents'> & { readonly accountProposals?: readonly AccountMemoryProposal[] | null },
   { raisedBy }: { readonly raisedBy?: string } = {},
 ): OwnerAsk[] {
   const held: OwnerAsk[] = asks.pendingActions.filter((action) => HOLDS_THE_PERSON[action.kind])

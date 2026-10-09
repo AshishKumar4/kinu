@@ -69,7 +69,7 @@ export function standardMounts(provider: (name: string) => MountableProvider | u
 		{
 			name: EXECUTOR_MOUNTS.sandbox.slice(1),
 			files: () => provider('sandbox')?.files ?? null,
-			absentReason: () => 'no Sandbox container bound',
+			absentReason: () => 'this workspace has no computer bound',
 			filesOwner: 'agent',
 		},
 	];
