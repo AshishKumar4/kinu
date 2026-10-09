@@ -404,6 +404,7 @@ const InspectionAnswerSchema = v.variant('view', [
     name: v.string(), status: v.string(), lifetime: v.string(), actorReference: v.nullable(v.object({ actorId: v.string() })),
   })) }),
   v.object({ view: v.literal('runs'), page: pageOf(v.object({ runId: v.string(), startedAt: v.number(), status: v.nullable(v.string()), userMessage: v.nullable(v.string()) })) }),
+  v.object({ view: v.literal('history'), page: positionPageSchema(ChatHistoryEntrySchema) }),
   v.object({ view: v.literal('events'), page: v.variant('status', [
     v.object({ status: v.literal('more'), items: v.array(RunEventSchema), next: v.number() }),
     v.object({ status: v.literal('end'), items: v.array(RunEventSchema) }),

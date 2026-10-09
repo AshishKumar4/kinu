@@ -41,7 +41,8 @@ function everyTreatment(verifier: EvalVerifier): Promise<EvalCheckOutcome> {
     const readings = await readAnswer(browser, 1, NAMES, showsEveryPrice);
 
     const treatments = PLANS.map((plan) => readings.filter((reading) => reading.held).reduce((total, reading) => total
-      + (reading.sight.regions[plan.plan] ?? []).filter((region) => shows(region.text, plan.monthlyUsd) && shows(region.text, yearlyUsd(plan))).length, 0));
+      + new Set((reading.sight.regions[plan.plan] ?? []).flatMap((region) =>
+        region.occurrence !== undefined && shows(region.text, plan.monthlyUsd) && shows(region.text, yearlyUsd(plan)) ? [region.occurrence] : [])).size, 0));
 
     return { pass: treatments.every((count) => count >= 3), evidence: { treatments, readings: readings.map(readingEvidence) } };
   });

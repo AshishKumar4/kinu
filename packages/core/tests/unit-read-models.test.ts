@@ -342,7 +342,7 @@ describe('agent status', () => {
     if (recorded === null) throw new Error('the seeded user entry must be in the transcript');
     expect(await getChatHistoryPage(transcript)).toEqual({
       status: 'end',
-      items: [{ id: 'a', position: 0, role: 'user', turnId: recorded.turnId, content: 'hello', createdAt: recorded.recordedAt }],
+      items: [{ id: 'a', position: 0, role: 'user', turnId: recorded.turnId, runId: recorded.runId, content: 'hello', createdAt: recorded.recordedAt }],
     });
     w.db.close();
   });
@@ -366,10 +366,24 @@ describe('agent status', () => {
 
     if (recorded === null) throw new Error('the harness notice must be in the transcript');
     expect((await getChatHistoryPage(transcript)).items).toEqual([{
-      id, position: 0, role: 'system', turnId: id,
+      id, position: 0, role: 'system', turnId: id, runId: recorded.runId,
       content: '9 head(s) across 1 fork run(s)…', createdAt: recorded.recordedAt,
       metadata: { kinuEvent: 'fork_interrupted', heads: 9 },
     }]);
+    w.db.close();
+  });
+
+  test('a retained full assignment exposes the exact run already stored on its conversation row', async () => {
+    const w = workspace();
+    const { history, transcript } = chatStore(w);
+    const id = 'assignment';
+    const runId = 'run-assignment';
+    const content = `${'Read every row. '.repeat(50)}Write the report to the assigned file.`;
+    const message = await history.admitInput({ id, turnId: id, message: { role: 'user', content }, assertOwner: () => { w.actor.assertCurrent(); } });
+
+    transcript.appendUser(await transcript.prepareUser({ id, turnId: id, runId, message }));
+
+    expect((await getChatHistoryPage(transcript)).items).toMatchObject([{ runId, content }]);
     w.db.close();
   });
 

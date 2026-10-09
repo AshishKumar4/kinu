@@ -20,7 +20,7 @@ const MODEL = 'opencode-go/muse-spark-1.3-contributor';
  * `validateCredentialKey`, then `validateCredential`), and a provider's models are listed only once the key that
  * provider reads (`catalogCredKey`) is stored.
  */
-const store = new Map<string, unknown>();
+const store = new Map<string, ReturnType<typeof validateCredential>>();
 
 const posts: { key: string; identity: string | null }[] = [];
 

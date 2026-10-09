@@ -135,20 +135,16 @@ export class SlateView {
     await this.frame.waitForFunction(controlNamed, { polling: 100, timeout: DRAW_MS }, name.source, name.flags);
   }
 
-  /**
-   * Press the control `name` names until the page shows the state `ready` reads, re-pressing what it ignored: a press
-   * made before the page could take it selects nothing, so one press is not one selection. What the page shows past the
-   * draw budget is what a person is still looking at, and the check fails on it.
-   */
-  async pressUntil(name: RegExp, ready: () => Promise<boolean>): Promise<void> {
+  /** Wait on rendered state that text alone cannot describe, retaining the final read when drawing never settles. */
+  async untilState<T>(read: () => Promise<T>, ready: (state: T) => boolean): Promise<{ state: T; held: boolean }> {
     const due = Date.now() + DRAW_MS;
 
     for (;;) {
-      await this.pressNamed(name);
+      const state = await bounded('the slate page, read for its rendered state', read());
 
-      if (await ready()) return;
+      if (ready(state)) return { state, held: true };
 
-      if (Date.now() >= due) throw new Error(`the slate page never showed its ${name.source} state in ${String(DRAW_MS / 1000)} s`);
+      if (Date.now() >= due) return { state, held: false };
       await sleep(250);
     }
   }

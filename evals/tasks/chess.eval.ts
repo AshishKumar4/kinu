@@ -561,23 +561,38 @@ pressing a piece and then a square plays that move.`,
         };
       }));
       await verifier.check('a-pressed-move-is-played', async () => {
-        const pressed = await verifier.browse(async (browser) => {
+        return verifier.browse(async (browser) => {
           const view = await browser.workSurface(SLATE_ID);
-          await view.waitForNamed(/^e2\s+white\s+pawn\b/iu);
+          const api = verifier.slate(SLATE_ID, METHODS);
+          const attempts: { from: boolean; to: boolean; fen: string; e2: string; e4: string; held: boolean }[] = [];
+          const read = async () => ({ board: await squares(view), fen: v.parse(FenSchema, await api('fen')).fen });
+          const wrong = (fen: string) => fen !== DEFAULT_POSITION && fen.split(' ')[0] !== PAWN_TO_E4;
 
-          // The initial FEN can render before legal moves load, and a press made then selects nothing. Press again
-          // until the page marks the selected pawn's legal target (Ch1, run 37880718948).
-          await view.pressUntil(/^e2\s+white\s+pawn\b/iu, () => view.frame.evaluate(
-            () => document.querySelector('[aria-label="e4 empty"]')?.getAttribute('style')?.includes('outline') ?? false));
-          const to = await pressSquare(view, 'e4');
-          await view.waitForNamed(/^e4\s+white\s+pawn\b/iu);
+          for (let attempt = 0; attempt < 3; attempt++) {
+            await view.waitForNamed(/^e2\s+white\s+pawn\b/iu);
+            const from = await pressSquare(view, 'e2');
+            const selected = await read();
 
-          return { from: true, to };
+            if (wrong(selected.fen)) {
+              attempts.push({ from, to: false, fen: selected.fen, e2: selected.board.e2 ?? '', e4: selected.board.e4 ?? '', held: true });
+
+              return { pass: false, evidence: { attemptCount: attempts.length, attempts, wrongMove: true } };
+            }
+
+            const to = await pressSquare(view, 'e4');
+
+            const { state, held } = await view.untilState(read, (drawn) => wrong(drawn.fen)
+              || (drawn.fen.split(' ')[0] === PAWN_TO_E4 && /^e4\s+white\s+pawn\b/iu.test(drawn.board.e4 ?? '')));
+
+            attempts.push({ from, to, fen: state.fen, e2: state.board.e2 ?? '', e4: state.board.e4 ?? '', held });
+
+            if (wrong(state.fen)) return { pass: false, evidence: { attemptCount: attempts.length, attempts, wrongMove: true } };
+
+            if (held) return { pass: from && to, evidence: { attemptCount: attempts.length, attempts } };
+          }
+
+          return { pass: false, evidence: { attemptCount: attempts.length, attempts } };
         });
-
-        const { fen } = v.parse(FenSchema, await verifier.slate(SLATE_ID, METHODS)('fen'));
-
-        return { pass: pressed.from && pressed.to && fen.split(' ')[0] === PAWN_TO_E4, evidence: { pressed, fen } };
       });
       await checkCurated(verifier, "agrees-with-the-oracle-on-the-hard-positions", BASE_STATUS, CURATED);
       await verifier.check("agrees-with-the-oracle-on-perft-positions", async () => {

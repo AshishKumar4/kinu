@@ -43,11 +43,10 @@ function workspace(tree: Readonly<Record<string, string | Uint8Array>>): Evidenc
         return Promise.resolve({ view: 'runs', page: { status: 'end', items: [{ runId: 'run-1', startedAt: 5, status: 'completed', userMessage: BRIEF.slice(0, 500) }] } });
       }
 
-      if (request.view !== 'events') return Promise.resolve(missing);
+      if (request.view !== 'history') return Promise.resolve(missing);
 
-      return Promise.resolve({ view: 'events', page: { status: 'end', items: [{
-        eventIndex: 0, runId: 'run-1', timestamp: '2026-10-09T00:00:00.000Z', type: 'run_start', agentId: 'tally',
-        userMessage: BRIEF.slice(0, 500), turn: { turnId: 'turn-1', messageId: 'message-1', kind: 'user', text: BRIEF },
+      return Promise.resolve({ view: 'history', page: { status: 'end', items: [{
+        id: 'message-1', position: 0, role: 'user', turnId: 'turn-1', runId: 'run-1', content: BRIEF, createdAt: 5,
       }] } });
     },
     slateOp: (operation: JsonValue): Promise<JsonValue> => {

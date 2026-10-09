@@ -80,21 +80,32 @@ export async function rosterOf(session: Inspecting): Promise<(RosterHelper & { l
   }
 }
 
-/** The message that started a run, whole: a run summary keeps its first 500 characters (core turn-lifecycle.ts), the
- *  run's own `run_start` the turn's text. */
-async function briefOf(session: Inspecting, address: HelperAddress, runId: string): Promise<string | null> {
-  const answer = await session.inspect({ ...address, path: [...address.path], view: 'events', runId, query: { since: 0, limit: 1 } });
+/** Full assignments from the actor's canonical conversation, keyed only by the run that stored them. */
+async function briefsOf(session: Inspecting, address: HelperAddress): Promise<ReadonlyMap<string, string>> {
+  const briefs = new Map<string, { position: number; content: string }>();
 
-  if (answer.view !== 'events') throw new Error(`the start of run ${runId} could not be read: ${JSON.stringify(answer)}`);
-  const start = answer.page.items[0];
+  for (let cursor: { before: number } | undefined; ;) {
+    const answer = await session.inspect({ ...address, path: [...address.path], view: 'history', page: cursor === undefined ? {} : { cursor } });
 
-  return start?.type === 'run_start' ? start.turn?.text ?? start.userMessage ?? null : null;
+    if (answer.view !== 'history') throw new Error(`the helper's assignments could not be read: ${JSON.stringify(answer)}`);
+
+    for (const entry of answer.page.items) {
+      if (entry.role !== 'user' || typeof entry.runId !== 'string') continue;
+      const opening = briefs.get(entry.runId);
+
+      if (opening === undefined || entry.position < opening.position) briefs.set(entry.runId, entry);
+    }
+
+    if (answer.page.status === 'end') return new Map([...briefs].map(([runId, entry]) => [runId, entry.content]));
+    cursor = answer.page.next;
+  }
 }
 
 /** One helper's runs started at or after `since`: how each ended, and the message that started it. */
 async function runsOf(session: Inspecting, helper: RosterHelper, since: number): Promise<HelperWork['runs']> {
   const runs: HelperWork['runs'] = [];
   const address = helperAddress(helper);
+  const briefs = await briefsOf(session, address);
 
   for (let cursor: { after: string } | undefined; ;) {
     const answer = await session.inspect({ ...address, path: [...address.path], view: 'runs', page: cursor === undefined ? {} : { cursor } });
@@ -102,7 +113,7 @@ async function runsOf(session: Inspecting, helper: RosterHelper, since: number):
     if (answer.view !== 'runs') throw new Error(`${helper.name}'s runs could not be listed: ${JSON.stringify(answer)}`);
 
     for (const run of answer.page.items.filter((item) => item.startedAt >= since)) {
-      runs.push({ startedAt: run.startedAt, status: run.status, userMessage: await briefOf(session, address, run.runId) });
+      runs.push({ startedAt: run.startedAt, status: run.status, userMessage: briefs.get(run.runId) ?? null });
     }
 
     if (answer.page.status === 'end') return runs;

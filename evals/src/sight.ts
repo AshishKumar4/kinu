@@ -9,7 +9,7 @@ import type { JsonValue } from '@kinu.run/core';
  */
 
 /** A part of a page that belongs to one name: what it says, and the labels of the controls in it. */
-type ReadRegion = { text: string; controls: string[]; columns?: Readonly<Record<string, string>> };
+type ReadRegion = { text: string; controls: string[]; columns?: Readonly<Record<string, string>>; occurrence?: number };
 
 export type Region = Readonly<ReadRegion>;
 
@@ -177,7 +177,8 @@ export function look(names: readonly string[], press: Press | null): Looked {
   };
 
   for (const name of names) {
-    const parts: ((node: Node) => boolean)[] = [];
+    const parts: { inside: (node: Node) => boolean; occurrence: number }[] = [];
+    const rows = new Map<Element, number>();
     const columns: Record<string, string> = {};
 
     for (const label of labels.get(name) ?? []) {
@@ -187,7 +188,10 @@ export function look(names: readonly string[], press: Press | null): Looked {
         row = row.parentElement;
       }
 
-      parts.push((node) => row.contains(node));
+      const occurrence = rows.get(row) ?? rows.size;
+
+      rows.set(row, occurrence);
+      parts.push({ inside: (node) => row.contains(node), occurrence });
       Object.assign(columns, columnsOf(row));
 
       let cell = label;
@@ -195,25 +199,25 @@ export function look(names: readonly string[], press: Press | null): Looked {
       while (cell.parentElement !== null && ['inline', 'contents'].includes(getComputedStyle(cell).display)) cell = cell.parentElement;
       const column = columnOf(cell);
 
-      if (column !== null && !othersIn(name, column)) parts.push(column);
+      if (column !== null && !othersIn(name, column)) parts.push({ inside: column, occurrence });
     }
 
-    const readings: { text: Said[]; controls: Element[] }[] = [];
-    regions[name] = parts.flatMap((inside) => {
+    const readings: { text: Said[]; controls: Element[]; occurrence: number }[] = [];
+    regions[name] = parts.flatMap(({ inside, occurrence }) => {
       const held = controls.filter((control) => inside(control.element));
       const text = texts.filter(inside);
       const elements = held.map((control) => control.element);
 
       // A row and a column over the same nodes are one reading; identical copy in separate treatments stays separate.
-      if (readings.some((reading) => reading.text.length === text.length && reading.text.every((node, index) => node === text[index])
+      if (readings.some((reading) => reading.occurrence === occurrence && reading.text.length === text.length && reading.text.every((node, index) => node === text[index])
         && reading.controls.length === elements.length && reading.controls.every((node, index) => node === elements[index]))) return [];
-      readings.push({ text, controls: elements });
+      readings.push({ text, controls: elements, occurrence });
 
       if (press !== null && press.name === name) {
         for (const control of held) if (press.label === null ? held.length === 1 : new RegExp(press.label, 'i').test(control.label)) pressing.add(control.element);
       }
 
-      const region: ReadRegion = { text: saying(text), controls: held.map((control) => control.label) };
+      const region: ReadRegion = { text: saying(text), controls: held.map((control) => control.label), occurrence };
 
       if (Object.keys(columns).length > 0) region.columns = columns;
 
@@ -232,6 +236,8 @@ export function sightEvidence(sight: Sight): JsonValue {
       const evidence: ReadRegion = { text: region.text.slice(0, 300), controls: [...region.controls] };
 
       if (region.columns !== undefined) evidence.columns = region.columns;
+
+      if (region.occurrence !== undefined) evidence.occurrence = region.occurrence;
 
       return evidence;
     })])),

@@ -140,7 +140,7 @@ const LONG_BRIEF = `Tally the waitlist signups per country. ${'The file is a CSV
 /**
  * An inspector over one live helper and one released, as core subordinates/inspection-path.ts answers: a path reaches
  * live children only, so by name the released helper is missing, and every retained helper is reached by its actor from
- * the root. A run's summary keeps the first 500 characters of its brief, its `run_start` the whole of it.
+ * the root. Run summaries and events are previews; the canonical history retains the full run-linked assignment.
  */
 function inspecting(): VerifierSession {
   const missing = { view: 'missing' as const, reason: 'missing', error: 'The requested subordinate or retained history is unavailable.' };
@@ -170,13 +170,12 @@ function inspecting(): VerifierSession {
         })) } });
       }
 
-      if (request.view !== 'events') return Promise.resolve(missing);
-      const brief = runs[Number(request.runId.slice('run-'.length))]?.brief ?? '';
+      if (request.view !== 'history') return Promise.resolve(missing);
 
-      return Promise.resolve({ view: 'events', page: { status: 'end', items: [{
-        eventIndex: 0, runId: request.runId, timestamp: '2026-10-09T00:00:00.000Z', type: 'run_start', agentId: 'agent',
-        userMessage: brief.slice(0, 500), turn: { turnId: 'turn', messageId: 'message', kind: 'user', text: brief },
-      }] } });
+      return Promise.resolve({ view: 'history', page: { status: 'end', items: runs.map((run, index) => ({
+        id: `message-${String(index)}`, position: index, role: 'user', turnId: `turn-${String(index)}`,
+        runId: `run-${String(index)}`, content: run.brief, createdAt: 10 + index,
+      })) } });
     },
   };
 }
@@ -200,6 +199,51 @@ describe("a helper's runs", () => {
     const work = await new EvalVerifier(inspecting(), [], 0, settledAtOnce).helperWork();
 
     expect(finishedWork(work, 'signups-by-country.json')).toEqual(['ask-task-live']);
+  });
+
+  test('an absent run link cannot borrow a full assignment from a similar run or its preview', async () => {
+    const base = inspecting();
+
+    const connection: VerifierSession = {
+      ...base,
+      inspect: async (request) => {
+        const answer = await base.inspect(request);
+
+        if (answer.view !== 'history') return answer;
+
+        return { view: 'history', page: { status: 'end', items: answer.page.items.map((entry) => ({
+          ...entry, runId: `${entry.runId ?? ''}-different-run`,
+        })) } };
+      },
+    };
+
+    const work = await new EvalVerifier(connection, [], 0, settledAtOnce).helperWork();
+
+    expect(work.flatMap((helper) => helper.runs.map((run) => run.userMessage))).toEqual([null, null, null]);
+    expect(finishedWork(work, 'signups-by-country.json')).toEqual([]);
+  });
+
+  test('history paging finds the opening assignment, not a later steer from its run', async () => {
+    const base = inspecting();
+
+    const connection: VerifierSession = {
+      ...base,
+      inspect: async (request) => {
+        const answer = await base.inspect(request);
+
+        if (answer.view !== 'history' || request.view !== 'history') return answer;
+
+        if (request.page.cursor === undefined) return { view: 'history', page: { status: 'more', next: { before: 5 }, items: [{
+          id: 'steer', position: 5, role: 'user', turnId: 'turn', runId: 'run-0', content: 'Use integer counts', createdAt: 100,
+        }] } };
+
+        return answer;
+      },
+    };
+
+    const work = await new EvalVerifier(connection, [], 0, settledAtOnce).helperWork();
+
+    expect(work[0]?.runs[0]?.userMessage).toBe(LONG_BRIEF);
   });
 
   test('a reused helper must finish the assigned run, not just an earlier unrelated run', () => {
