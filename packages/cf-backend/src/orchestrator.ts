@@ -814,7 +814,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       prepareTurn: (turnId) => this.agentTurns.prepare(actorId, turnId),
       prepareChat: (request) => this.agentTurns.prepareChat(actorId, request),
       bindProfile: async (turnId, profile) => {
-        if (actorId === this.actorHandle().actorId) this.bindFacetProfile(turnId, profile);
+        // This object holds main's turn under its producer's identity (`announcementOf`), a programmatic one unprefixed.
+        if (actorId === this.actorHandle().actorId) this.bindFacetProfile(announcementOf(turnId), profile);
 
         return this.agentTurns.bindProfile(actorId, turnId, profile);
       },
