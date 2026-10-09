@@ -4504,6 +4504,16 @@ An initial green (`377bb7a3`, armada job `20261009172321-bef9a18c`) measured
 Its call counts do not prove the remote-operation bound. The contract now counts
 `container.exec` itself, as the red control did; neither SDK methods nor file results are mocked.
 
+The native-counter green (`4a41f2430`, job `20261009182208-1a65da31`, run
+`dc2026100918222477d60`) measured width-1 and width-72 listings at one guest call each,
+84 and 30 ms. The same find made 73 guest calls in 113, 99 and 121 ms, with the same 72 paths
+as native find: median 39,707 to 113 ms (351 times faster). Stat and lstat each cost one guest call,
+including root and a dangling-link miss; recursive listing cost one too and did not follow links.
+ENOENT, ENOTDIR, ELOOP and EACCES matched the SDK's code, path and operation. The EACCES probe
+explicitly drops guest capabilities: native `user: '65534:65534'` alone still read a root-owned
+0700 directory in job `20261009181805-03542862`. All container and disk contracts, the desktop
+client and cleanup passed. Source limits, full-depth walks and real-model behavior are not timed here.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean
