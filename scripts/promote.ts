@@ -523,7 +523,7 @@ export async function downloadsServed(origin: string, fetcher: typeof fetch = fe
   return { sha: stamp.sha, downloads: Object.fromEntries([[STAMP, sha256(stampBytes)], ...hashed]) };
 }
 
-/** What staging's deploy records of HEAD, from `record <staging version> <evals verdict dir | ''> [reset record]`. */
+/** What staging's deploy records of HEAD, from `record <staging version> [reset record]`; evals finish independently. */
 function verifiedRecord(sha: string, [version = '', reset]: readonly string[]): Verified {
   const record: Verified = {
     sha, digest: artifactDigest(DIST), stagingVersion: version, recordedAt: new Date().toISOString(), downloads: downloadsIn(DOWNLOADS), ...resetIn(reset),
