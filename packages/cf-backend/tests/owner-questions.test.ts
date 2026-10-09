@@ -9,6 +9,7 @@ import { actorConnectionTag, JsonValueSchema, OwnerQuestionStore, WORKSPACE_TITL
 import { settleSync } from '@kinu.run/core/obs';
 import { sqlOver } from '@kinu.run/test-utils';
 import { asPane } from './helpers/agents-sdk';
+import { createTestUserDO, provisionTestWorkspace } from './helpers/user-do';
 import {
   catalogTurn, driveUntil, gatewayWorkspace, GATEWAY_CATALOG, reactivateOrchestratorHarness, workspaceMainActor, type StartedHarness,
 } from './helpers/actor-harness';
@@ -110,15 +111,20 @@ function expectOneCallOneResult(resumed: ReturnType<typeof resumedFrom>, answer:
   expect(resumed.results[0]).toContain(answer);
 }
 
+const OWNER = 'abcdef0123456789abcdef0123456789';
+
 /**
- * A workspace past its first turn. That turn names it, and the system prompt names it (prompts/agent-names-line.md), so
- * the request after a first turn differs from it at the name, ask or not.
+ * A workspace its owner named, in a real account registry. The system prompt names the workspace
+ * (prompts/agent-names-line.md); the harness's own registry keeps no name, so every turn would rename it there and
+ * change the prompt, ask or not.
  */
 async function namedWorkspace(gateway: StubbedAiBinding): Promise<StartedHarness> {
-  const workspace = gatewayWorkspace(gateway);
+  const user = createTestUserDO({ durableObjectId: OWNER });
+  const token = await provisionTestWorkspace(user, 'ledger', 'Ledger');
+  const workspace = gatewayWorkspace(gateway, { userDO: user.userDO, workspace: 'ledger', ownerUserId: OWNER });
 
-  await catalogTurn(workspace.agent, 'Hello.');
-  await workspace.agent.terminalRetryPass();
+  workspace.agent.harnessHoldsCapability(token);
+  await workspace.agent.setDisplayName('Ledger');
 
   return workspace;
 }
