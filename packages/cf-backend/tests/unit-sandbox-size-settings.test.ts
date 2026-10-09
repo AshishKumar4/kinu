@@ -148,15 +148,11 @@ describe('sandbox.resize through the adapter', () => {
 
     const refused = await createSandboxExecutor(adaptCloudflareSandbox(box, async () => {}, null)).tools.readFile?.execute('/workspace/a.txt');
 
-    expect({ refused, asked }).toMatchObject({
-      refused: {
-        reason: 'unavailable',
-        error: expect.stringContaining(refusal),
-      },
-      asked: 1,
-    });
-    expect(refused).toMatchObject({ error: expect.stringContaining('sandbox.resize(') });
-    expect(refused).not.toMatchObject({ error: expect.stringContaining('attachNow') });
+    // toEqual, not toMatchObject: under --parallel, Bun's toMatchObject writes a nested asymmetric matcher into the
+    // actual value (measured 2026-10-09, armada), so the reads after it saw no text.
+    expect({ refused, asked }).toEqual({ refused: { reason: 'unavailable', error: expect.stringContaining(refusal) }, asked: 1 });
+    expect(refused).toEqual({ reason: 'unavailable', error: expect.stringContaining('sandbox.resize(') });
+    expect(refused).not.toEqual({ reason: 'unavailable', error: expect.stringContaining('attachNow') });
   });
 
   test('a size devbox does not know is refused as bad input', async () => {
