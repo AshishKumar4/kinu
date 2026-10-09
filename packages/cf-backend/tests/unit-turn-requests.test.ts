@@ -75,6 +75,8 @@ function canonicalFromWire(message: v.InferOutput<typeof WireMessageSchema>): Ca
 describe('the context number a page reads back', () => {
   test('a later output-only step cannot relabel the measured input or supply its cache count', async () => {
     const harness = gatewayWorkspace(answeringGateway('Noted.'));
+    // Main's isolate holds turns once one has run there; the measured run below is written after it, as its newest.
+    await catalogTurn(harness.agent, 'first prompt');
     const main = await mainRows(harness);
     const recorder = new RunEventRecorder(main.sql, main.actor);
     const context = measureContext({ messages: [{ role: 'user', content: 'first prompt' }] });
@@ -117,9 +119,11 @@ describe('the context number a page reads back', () => {
       "SELECT json_extract(payload, '$.tokens') AS tokens FROM run_events WHERE type = 'context_admitted' ORDER BY rowid",
     ).all().map((row) => row.tokens);
 
-    const lastTurn = gateRows().at(-1) ?? 0;
+    const before = gateRows();
+    const lastTurn = before.at(-1) ?? 0;
     await harness.agent.clearConversation();
-    expect(gateRows()).toHaveLength(3);
+    // The clear measures the emptied request once, beside every request main's isolate measured (its title's too).
+    expect(gateRows()).toHaveLength(before.length + 1);
 
     const { fill } = await harness.agent.getActivitySnapshot();
     expect(fill).toMatchObject({ tokens: gateRows().at(-1), source: 'gate' });
