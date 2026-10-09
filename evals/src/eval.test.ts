@@ -37,8 +37,17 @@ test('the reviewer can stage current product evidence before it asks a model', a
   const results = join(directory, 'results.json');
   const comparison = join(directory, 'comparison.json');
   const out = join(directory, 'reviews');
+  const task = `fixture-${crypto.randomUUID()}`;
 
-  writeFileSync(results, JSON.stringify({ testResults: [] }));
+  writeFileSync(results, JSON.stringify({ testResults: [{ name: 'review-evidence.fixture', assertionResults: [{
+    ancestorTitles: [task], title: 'trial', status: 'failed', duration: 0,
+    meta: { harness: { run: {
+      session: { metadata: { taskId: task, taskVersion: 'fixture', evalCommit: 'fixture', productSha: 'fixture', arm: 'product', trial: 1 } },
+      usage: { model: 'fixture/no-provider' },
+      output: { turns: [], metrics: { modelTurns: 0, toolCalls: 0, toolErrors: 0, badInputCalls: 0, unknownToolCalls: 0, providerWaits: 0, providerWaitMs: 0 } },
+      errors: [],
+    } } },
+  }] }] }));
   writeFileSync(comparison, '{}');
 
   const run = await runToExit([process.execPath, 'evals/scripts/review.ts', '--results', results, '--comparison', comparison, '--out', out], {
@@ -46,5 +55,5 @@ test('the reviewer can stage current product evidence before it asks a model', a
   });
 
   expect(run.exitCode, run.stderr).toBe(0);
-  expect(JSON.parse(readFileSync(join(out, 'review.json'), 'utf8'))).toEqual([]);
+  expect(JSON.parse(readFileSync(join(out, 'review.json'), 'utf8'))).toMatchObject([{ task, trial: 1, review: null }]);
 });
