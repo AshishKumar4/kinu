@@ -4479,6 +4479,28 @@ first frame, the black screen); green on this one (`dc2026100820574061df2`:
 the desktop step in 5.9 s, every other contract green, cleanup verified). The tarball is `5046244c…`, 349,830,567
 bytes (armada job `20261008204556-b92029c0`), 14 MB above D78's.
 
+D81. A directory listing is one guest-side metadata read, and stat reads one entry (2026-10-09).
+`Devbox.#listFiles` ran `readDirectory` once and then `lstat` once per entry, each a new
+sandbox-shim process, while core's `sandboxFiles.stat` re-listed the parent to find one child.
+A 72-entry directory cost 73 listings and about as many child stats; Nimbus's walk then paid
+that per directory it stated, so `find /sandbox/usr/share -maxdepth 1` ran about 5,200 guest
+calls in about 40 s, once per statted directory plus its parent listing.
+
+Now one guest process (`python3`, present by the golden's own tools check) walks the directory
+and returns every entry's name, type, size, mode, mtime, uid, gid, atime and ctime in one JSON
+answer, and `Devbox.statFile` answers one path through the SDK's `stat`/`lstat` without touching
+its siblings. Symlink types stay the link's own (lstat); POSIX errors keep their code, operation
+and path in the `devbox.file` cause core classifies; every call keeps its `pathScopes` claim.
+
+Measured on real golden containers at the tier's `file-metadata` step
+(`scripts/devbox-container-tier.ts`), before and after on the same `find`:
+before (test-only `df51186a7`, armada job `20261009170530-f289c0c0`):
+width-1 listing 2 calls in 72 ms, width-72 listing 73 calls in 618 ms,
+`find /sandbox/usr/share -maxdepth 1` 5,195-5,196 calls in 39.6-40.3 s, 3 of 3;
+after (`377bb7a3`, armada job `20261009172321-bef9a18c`):
+width-1 and width-72 listings 1 call each in 108 and 28 ms,
+the same find 73 calls in 117-151 ms, 3 of 3, every contract green with cleanup verified.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean
