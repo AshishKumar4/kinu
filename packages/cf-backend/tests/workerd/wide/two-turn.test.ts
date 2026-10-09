@@ -7,7 +7,7 @@
 import { abortAllDurableObjects, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
-import { KINU_TIMER_JOB } from '../../src/wake-jobs';
+import { KINU_TIMER_JOB } from '../../../src/wake-jobs';
 import {
   CallRecordSchema,
   DiagnosticFailureSchema,
@@ -19,7 +19,7 @@ import {
   type DiagnosticFailure,
   type HttpCall,
   type PendingSteer,
-} from './two-turn-shapes';
+} from '../two-turn-shapes';
 
 const FailuresSchema = v.array(DiagnosticFailureSchema);
 

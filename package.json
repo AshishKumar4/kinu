@@ -24,7 +24,7 @@
     "test:spine": "bun scripts/ladder.ts --run bun test --timeout=0 --isolate packages/agent-core/ packages/agent-utils/ packages/compaction/",
     "test:cli": "bun scripts/ladder.ts --run bun scripts/test-cli.ts",
     "test:workerd": "bun run test:workerd:cf && bun run test:workerd:cf-long && bun run test:workerd:devbox && bun run test:workerd:cf-complexity",
-    "test:workerd:cf": "bun scripts/ladder.ts --run vitest run --root packages/cf-backend tests/workerd/ --exclude tests/workerd/long/ --exclude tests/workerd/complexity/",
+    "test:workerd:cf": "bun scripts/ladder.ts --run vitest run --root packages/cf-backend tests/workerd/ --exclude tests/workerd/long/ --exclude tests/workerd/complexity/ --exclude tests/workerd/wide/ && bun scripts/ladder.ts --run vitest run --root packages/cf-backend tests/workerd/wide/",
     "test:workerd:cf-long": "bun scripts/ladder.ts --run vitest run --root packages/cf-backend tests/workerd/long/",
     "test:workerd:devbox": "bun scripts/ladder.ts --run vitest run --root packages/devbox tests/workerd/",
     "test:workerd:cf-complexity": "bun scripts/ladder.ts --run vitest run --root packages/cf-backend tests/workerd/complexity/",

@@ -39,7 +39,7 @@
       "clock-compare": 2,
       "sleep": 2
     },
-    "packages/cf-backend/tests/workerd/slate-durability.test.ts": {
+    "packages/cf-backend/tests/workerd/wide/slate-durability.test.ts": {
       "sleep": 1
     },
     "packages/cf-backend/tests/workerd/slate-share-probe.ts": {

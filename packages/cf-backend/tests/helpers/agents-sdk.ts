@@ -510,7 +510,7 @@ export function mockAgentsSdk(): void {
        *  Tests observing broadcasts override it on the instance (unit-mcts-broadcast.test.ts). */
       broadcast(_message: string | ArrayBuffer | ArrayBufferView, _without?: string[]): void {}
       /** Empty: workerd owns hibernating sockets (real one: `agents/dist/src-5W6JNKVb.js:3175`).
-       *  Recipient-set behaviour is measured in `tests/workerd/public-surface.test.ts`. */
+       *  Recipient-set behaviour is measured in `tests/workerd/wide/public-surface.test.ts`. */
       *getConnections(_tag?: string): Iterable<Connection> {}
       /** Registry SQL copied from `agents/dist/index.js` (table 5803, `_cf_resolveSubAgent` 5737,
        *  `hasSubAgent` 5870); the facet (`ctx.facets`) is workerd-only, so the stub throws. */

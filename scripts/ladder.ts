@@ -1909,6 +1909,13 @@ export const LADDER: readonly Gate[] = [
     // past the deadline twice under the deploy wave; `isolate: false` in the
     // vitest config (one runner and one Miniflare per row instead of one per
     // file) brought it to 40 s for 29 files at load 6-8, measured the same day.
+    // One Miniflare keeps every object and every agent isolate it ever loaded:
+    // on 2026-10-09 (armada medium, 12 GiB) the 49 files peaked at 7.2 GiB of
+    // workerd and 10.9 GiB in all, and with the workspace agent in its own
+    // isolate 9.3 GiB of workerd by the 28th file, past the container. So the
+    // row is two runs, two Miniflares: the four suites that grew workerd most
+    // (public-surface, two-turn, hire, slate-durability) live under
+    // `tests/workerd/wide/` and run second.
     seconds: 45,
     catches: 'Durable Object semantics no bun test can express, executed inside real '
       + 'workerd (1.20260811.1 — the pool\'s own nested copy, not the 1.20260601.1 the '
