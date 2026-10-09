@@ -155,8 +155,8 @@ describe('sandbox.resize through the adapter', () => {
       },
       asked: 1,
     });
-    expect(JSON.stringify(refused)).toContain('sandbox.resize(');
-    expect(JSON.stringify(refused)).not.toContain('attachNow');
+    expect(refused).toMatchObject({ error: expect.stringContaining('sandbox.resize(') });
+    expect(refused).not.toMatchObject({ error: expect.stringContaining('attachNow') });
   });
 
   test('a size devbox does not know is refused as bad input', async () => {
