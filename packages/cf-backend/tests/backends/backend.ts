@@ -84,8 +84,8 @@ export interface SharedBackend {
   readonly files: VFS;
   /** The main actor's conversation store, as each backend records its turns. */
   readonly history: SessionHistory;
-  /** Where the main actor's conversation, its context and its plans are kept: its own isolate's database on cf, the one
-   *  database on the CLI. */
+  /** Where the main actor's conversation, its context, its plans and its turns' runs are kept: its own isolate's database
+   *  on cf, the one database on the CLI. */
   readonly chat: { readonly sql: SqlExecutor; readonly actor: ActorHandle };
   /** Snapshot `dir` into the store this backend's checkpoint methods read, as a turn's first
    *  mutation there does: the owner's device for cf, this machine for the CLI. */

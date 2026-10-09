@@ -39,8 +39,10 @@ export const WORK_LEDGER_CASES: readonly SharedCase[] = [
   },
   {
     title: 'the run log pages newest first and a run reads back its own events',
-    async run({ surface, sql, actor }) {
-      const recorder = new RunEventRecorder(sql, actor);
+    async run({ surface, chat, holdTurn }) {
+      // The runs are the main actor's turns', kept where its conversation is, once it has taken one.
+      await (await holdTurn('Start the log.', 'build')).release();
+      const recorder = new RunEventRecorder(chat.sql, chat.actor);
 
       for (const runId of ['run-a', 'run-b', 'run-c']) {
         recorder.emit(runId, { type: 'run_start', agentId: 'main', userMessage: `do ${runId}` });
