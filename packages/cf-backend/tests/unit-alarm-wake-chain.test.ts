@@ -8,7 +8,7 @@ import { openWorkspaceMainActor } from '@kinu.run/core';
 import { createRecordingLogger } from '@kinu.run/core/obs';
 import { makeSql } from '../../core/tests/helpers';
 import {
-  armedWakes, catalogTurn, fireSoonestWake, gatewayWorkspace, hostedSubordinateHarness, jobsOver, orchestratorHarness, chatSessionTurns, reactivateOrchestratorHarness,
+  agentWakes, armedWakes, catalogTurn, fireSoonestWake, gatewayWorkspace, hostedSubordinateHarness, jobsOver, orchestratorHarness, chatSessionTurns, reactivateOrchestratorHarness,
   runDelegatedTask, tapDiagnostics, until, seedOrphanFiber,
 } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
@@ -771,51 +771,20 @@ describe('the workspace keeps exactly one wake per job', () => {
     expect(passes).toBe(1);
   });
 
-  test('a root turn arms the wake when it opens', async () => {
-    // An opened turn owes nothing yet but must leave exactly one wake (riding the terminal-retry job).
+  test("a root turn arms its own isolate's wake when it opens, and owes the workspace's chain nothing", async () => {
+    // Main's turn runs in its own isolate (D9): the open turn's wake is that agent's, which the workspace's tick neither
+    // owes nor fires; a finished pass keeps it while the turn is open.
     const { agent, db } = orchestratorHarness();
     await agent.activateActor();
-    expect(armedWakes(db)).toEqual([]);
+    const main = harnessActorId(db);
 
     const turns = chatSessionTurns(agent);
     const request = await turns.prepare({ messages: [{ role: 'user', content: 'a turn that opens' }] });
 
-    expect(armedAt(db, TERMINAL_RETRY_JOB)).toHaveLength(1);
-
-    // Settle so the pump finishes inside this test.
-    await turns.settle({ messageId: request.identity.messageId, text: 'done' });
-  });
-
-  test('a tick that fires inside a parked turn keeps a wake', async () => {
-    // An open turn is untimed owed work: a finished pass must keep its wake.
-    const { agent, db } = orchestratorHarness();
-    await agent.activateActor();
-    expect(armedWakes(db)).toEqual([]);
-
-    const turns = chatSessionTurns(agent);
-    const request = await turns.prepare({ messages: [{ role: 'user', content: 'a turn the tick fires inside' }] });
-
-    expect(armedAt(db, TERMINAL_RETRY_JOB)).toHaveLength(1);
-    await fireSoonestWake(agent, db);
-
-    const kept = armedAt(db, TERMINAL_RETRY_JOB);
-    expect(kept).toHaveLength(1);
-    expect(kept[0]).toBeGreaterThan(Date.now());
-
-    await turns.settle({ messageId: request.identity.messageId, text: 'done' });
-  });
-
-  test('a turn-open wake does not fire inside an ordinary turn', async () => {
-    // The turn-open arm is set at the recovery ceiling, after any ordinary turn.
-    const { agent, db } = orchestratorHarness();
-    await agent.activateActor();
-
-    const turns = chatSessionTurns(agent);
-    const openedAt = Date.now();
-    setSystemTime(new Date(openedAt));
-    const request = await turns.prepare({ messages: [{ role: 'user', content: 'a turn that opens' }] });
-
-    expect(armedAt(db, TERMINAL_RETRY_JOB)).toEqual([landing(openedAt + RECOVERY_CEILING_MS)]);
+    expect({ main: agentWakes(db), workspace: armedAt(db, TERMINAL_RETRY_JOB) }).toEqual({ main: [main], workspace: [] });
+    // A pass of the workspace's own chain inside the open turn.
+    await agent._kinuTimerTick();
+    expect(agentWakes(db)).toEqual([main]);
 
     await turns.settle({ messageId: request.identity.messageId, text: 'done' });
   });
