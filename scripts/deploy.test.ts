@@ -219,34 +219,8 @@ function resetAccount(placeholder = false): DeployAccount {
   };
 }
 
-async function runDeploy({
-  failingGate = "",
-  killGate = "",
-  dirty = false,
-  option,
-  options = [],
-  ambientPhase = "",
-  ambientEnvironment = "",
-  scriptedKey = "fixture-scripted-key",
-  lockHeld = false,
-  ciAbsent = false,
-  ciRed = false,
-  pendingReset = "none",
-  ambientRecord = "",
-  account,
-  uploadRuns,
-}: DeployRun = {}) {
-  const fixture = scratchDir("deploy-gate");
-  // The deploy lock lives in the runtime directory: the fixture's own, so a real deploy on this machine never blocks
-  // a run here, nor one here a real deploy. Another deploy holding it is `flock` holding it around this one's whole run.
-  const held = lockHeld ? ["flock", join(fixture, `kinu-deploy-${option === "--promote" ? "production" : "staging"}.lock`)] : [];
-  const log = join(fixture, "events.log");
-  const phaseLog = join(fixture, "infra-phase.log");
-  const infraEnvironmentLog = join(fixture, "infra-environment.log");
-  const recordLog = join(fixture, "infra-record.log");
-  const infraStatusLog = join(fixture, "infra-status.log");
+function accountFixture(fixture: string, pendingReset: string, account: DeployAccount | undefined) {
   const newestReset = join(fixture, "newest-reset.json");
-  const uploadArgv = join(fixture, "upload-argv.log");
   const preload = join(fixture, "account.ts");
 
   writeFileSync(newestReset, JSON.stringify(account?.reset ?? {
@@ -276,6 +250,67 @@ mock.module(${JSON.stringify(cloudflare)}, () => ({
 `);
   }
 
+  return { KINU_DEPLOY_NEWEST_RESET: newestReset, KINU_DEPLOY_INFRA_PRELOAD: account === undefined ? '' : preload };
+}
+
+function uploadFixture(fixture: string, uploadRuns: readonly UploadRun[] | undefined): void {
+  if (uploadRuns === undefined) return;
+  const build = join(fixture, 'packages', 'cf-backend', 'dist');
+  const downloads = join(build, 'client', 'downloads');
+
+  mkdirSync(join(build, 'kinu'), { recursive: true });
+  mkdirSync(downloads, { recursive: true });
+  mkdirSync(join(build, 'worker-release'));
+  mkdirSync(join(fixture, 'packages', 'cli'));
+  writeFileSync(join(fixture, 'packages', 'cli', 'package.json'), '{"version":"1.0.0"}');
+  writeFileSync(join(build, 'kinu', 'wrangler.json'), JSON.stringify({
+    targetEnvironment: 'staging', name: 'kinu-staging', vars: { CLI_PUBLIC_ORIGIN: 'https://fixture.invalid' },
+    r2_buckets: [{ binding: 'RELEASES_BUCKET', bucket_name: 'fixture-releases' }, { binding: 'BACKUP_BUCKET', bucket_name: 'fixture-backups' }],
+  }));
+
+  for (const file of ['kinu-version.json', 'release.json', 'kinu-worker-1.0.0+testsha.tar.gz.sha256',
+    ...['runtime-cpython', 'cli-darwin-arm64', 'cli-darwin-x64', 'cli-linux-arm64', 'cli-linux-x64']
+      .flatMap((platform) => [`kinu-${platform}.tar.gz`, `kinu-${platform}.tar.gz.sha256`])]) {
+    writeFileSync(join(downloads, file), 'fixture');
+  }
+
+  writeFileSync(join(build, 'worker-release', 'kinu-worker-1.0.0+testsha.tar.gz'), 'fixture');
+
+  for (const [index, result] of uploadRuns.entries()) {
+    writeFileSync(join(fixture, `upload.${String(index + 1)}.out`), result.says === 'success'
+      ? `KinuDevbox\nRead 1 files from the assets directory ${join(build, 'client')}\nVersion ID: 9b1f\n` : result.says);
+    writeFileSync(join(fixture, `upload.${String(index + 1)}.status`), String(result.status));
+  }
+}
+
+async function runDeploy({
+  failingGate = "",
+  killGate = "",
+  dirty = false,
+  option,
+  options = [],
+  ambientPhase = "",
+  ambientEnvironment = "",
+  scriptedKey = "fixture-scripted-key",
+  lockHeld = false,
+  ciAbsent = false,
+  ciRed = false,
+  pendingReset = "none",
+  ambientRecord = "",
+  account,
+  uploadRuns,
+}: DeployRun = {}) {
+  const fixture = scratchDir("deploy-gate");
+  // The deploy lock lives in the runtime directory: the fixture's own, so a real deploy on this machine never blocks
+  // a run here, nor one here a real deploy. Another deploy holding it is `flock` holding it around this one's whole run.
+  const held = lockHeld ? ["flock", join(fixture, `kinu-deploy-${option === "--promote" ? "production" : "staging"}.lock`)] : [];
+  const log = join(fixture, "events.log");
+  const phaseLog = join(fixture, "infra-phase.log");
+  const infraEnvironmentLog = join(fixture, "infra-environment.log");
+  const recordLog = join(fixture, "infra-record.log");
+  const infraStatusLog = join(fixture, "infra-status.log");
+  const uploadArgv = join(fixture, "upload-argv.log");
+
   mkdirSync(join(fixture, "scripts"));
   mkdirSync(join(fixture, "node_modules", ".bin"), { recursive: true });
   mkdirSync(join(fixture, "packages", "cf-backend"), { recursive: true });
@@ -291,34 +326,7 @@ mock.module(${JSON.stringify(cloudflare)}, () => ({
 
   if (existsSync(uploadHelper)) writeFileSync(join(fixture, 'scripts', 'deploy-upload.sh'), readFileSync(uploadHelper));
 
-  if (uploadRuns !== undefined) {
-    const build = join(fixture, 'packages', 'cf-backend', 'dist');
-    const downloads = join(build, 'client', 'downloads');
-
-    mkdirSync(join(build, 'kinu'), { recursive: true });
-    mkdirSync(downloads, { recursive: true });
-    mkdirSync(join(build, 'worker-release'));
-    mkdirSync(join(fixture, 'packages', 'cli'));
-    writeFileSync(join(fixture, 'packages', 'cli', 'package.json'), '{"version":"1.0.0"}');
-    writeFileSync(join(build, 'kinu', 'wrangler.json'), JSON.stringify({
-      targetEnvironment: 'staging', name: 'kinu-staging', vars: { CLI_PUBLIC_ORIGIN: 'https://fixture.invalid' },
-      r2_buckets: [{ binding: 'RELEASES_BUCKET', bucket_name: 'fixture-releases' }, { binding: 'BACKUP_BUCKET', bucket_name: 'fixture-backups' }],
-    }));
-
-    for (const file of ['kinu-version.json', 'release.json', 'kinu-worker-1.0.0+testsha.tar.gz.sha256',
-      ...['runtime-cpython', 'cli-darwin-arm64', 'cli-darwin-x64', 'cli-linux-arm64', 'cli-linux-x64']
-        .flatMap((platform) => [`kinu-${platform}.tar.gz`, `kinu-${platform}.tar.gz.sha256`])]) {
-      writeFileSync(join(downloads, file), 'fixture');
-    }
-
-    writeFileSync(join(build, 'worker-release', 'kinu-worker-1.0.0+testsha.tar.gz'), 'fixture');
-
-    for (const [index, result] of uploadRuns.entries()) {
-      writeFileSync(join(fixture, `upload.${String(index + 1)}.out`), result.says === 'success'
-        ? `KinuDevbox\nRead 1 files from the assets directory ${join(build, 'client')}\nVersion ID: 9b1f\n` : result.says);
-      writeFileSync(join(fixture, `upload.${String(index + 1)}.status`), String(result.status));
-    }
-  }
+  uploadFixture(fixture, uploadRuns);
 
   executable(join(fixture, "node_modules", ".bin", "bun"), commandStub("bun"));
   executable(join(fixture, "bash"), commandStub("bash"));
@@ -372,8 +380,7 @@ exit 87
       KINU_DEPLOY_PENDING_RESET: pendingReset,
       KINU_DEPLOY_INFRA_ENV_LOG: infraEnvironmentLog,
       KINU_DEPLOY_RECORD_LOG: recordLog,
-      KINU_DEPLOY_NEWEST_RESET: newestReset,
-      KINU_DEPLOY_INFRA_PRELOAD: account === undefined ? '' : preload,
+      ...accountFixture(fixture, pendingReset, account),
       KINU_DEPLOY_INFRA_STATUS_LOG: infraStatusLog,
       KINU_DEPLOY_UPLOAD_FIXTURE: uploadRuns === undefined ? '0' : '1',
       KINU_DEPLOY_UPLOAD_ARGV: uploadArgv,
@@ -415,6 +422,7 @@ exit 87
     report,
     ci: logged.filter((event) => event.startsWith('bun scripts/ladder.ts --ci-')),
     stdout: run.stdout.toString(),
+    stderr: run.stderr.toString(),
     infraPhase,
     infraEnvironment,
     infraRecord: existsSync(recordLog) ? readFileSync(recordLog, "utf8").trim() : null,
@@ -557,7 +565,7 @@ describe("deploy gate", () => {
     const account = resetAccount();
     const recovered = await runDeploy({ option: '--reset', account, uploadRuns: [{ says: 'success', status: 0 }] });
 
-    expect(recovered.infraStatuses, recovered.stdout).toEqual([0, 1]);
+    expect(recovered.infraStatuses, `${recovered.stdout}\n${recovered.stderr}`).toEqual([0, 1]);
     expect(recovered.uploads).toHaveLength(1);
     expect(recovered.events.some((event) => event.startsWith('bun scripts/promote.ts record'))).toBe(false);
   });
@@ -582,7 +590,7 @@ describe("deploy gate", () => {
 
     const placeholder = await runDeploy({ option: '--reset', pendingReset: account.reset.tag, account });
 
-    expect(placeholder.infraStatuses, placeholder.stdout).toEqual([0]);
+    expect(placeholder.infraStatuses, `${placeholder.stdout}\n${placeholder.stderr}`).toEqual([0]);
     expect(placeholder.events).toContain(armadaBuild('staging'));
 
     const unrelated = await runDeploy({ option: '--reset', account: {
