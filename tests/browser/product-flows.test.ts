@@ -1,7 +1,10 @@
 /**
  * The product flows (`scripts/product-flows.ts`) in real Chrome against ONE
  * origin, `KINU_ORIGIN`: the deployment a deploy has just published
- * (`scripts/product-flows-tier.sh`, in its post-publish wave).
+ * (`scripts/product-flows-tier.sh`, in its post-publish wave). `KINU_ORIGIN=local`
+ * boots this checkout under `vite dev` instead, answered by a local scripted
+ * model serving the same script (`tierModel`): a flow and its script proven
+ * before a deploy publishes the tiers' Worker that serves them.
  *
  * Every row runs in `beforeAll`, each in a browser of its own, and leaves a verdict or the reason it has none; the
  * tests below read only what the page showed. A row that hangs is ended when the tier's runner says its silence nears
@@ -10,7 +13,9 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { resolveWebIdentity } from '../../evals/src/session';
-import { withBrowser } from '../../scripts/live-app-harness';
+import { withBrowser, withDevServer } from '../../scripts/live-app-harness';
+import { defaultToScriptedModel, registerScriptedModel, startScriptedModel } from '../../scripts/scripted-model';
+import { tierModel } from '../../scripts/tier-model';
 import {
   DRIVE_SLATE, INSPECTOR_SHUT_PX,
   agentIsThereOnReturn, agentPlanIsReviewedInItsPane, agentProposesAWorkspace, accountMemoryCrossesWorkspaces, approvalsStackAtTheComposer, hireParksAndRunsOnApproval, driveKeepsWhatIsDone, driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState,
@@ -59,26 +64,8 @@ function flowRow<Value>(row: string, at: Omit<FlowTarget, 'browser'>, flow: (tar
   return attempt(row, () => withBrowser((browser) => endedNearSilence(flow({ ...at, browser }), () => browser.disconnect(), openWaitsNamed)));
 }
 
-beforeAll(async () => {
-  const origin = process.env.KINU_ORIGIN;
-
-  if (origin === undefined || origin === '') {
-    setup = 'KINU_ORIGIN is unset: these rows drive the deployment at that origin '
-      + '(`scripts/product-flows-tier.sh`, after a deploy publishes).';
-
-    return;
-  }
-
-  const resolution = resolveWebIdentity(origin);
-
-  if (resolution.kind === 'absent') {
-    setup = resolution.remedy;
-
-    return;
-  }
-
-  const at = { origin, identity: resolution.identity };
-
+/** Every row, in order, against one origin as one identity. */
+async function measureRows(at: Omit<FlowTarget, 'browser'>): Promise<void> {
   // Setup stands in front of every route until it is finished, so it goes first.
   observed.welcome = await flowRow('welcome', at, reachesHome);
   observed.firstAnswer = await flowRow('first-answer', at, workspaceGetsFirstAnswer);
@@ -99,7 +86,41 @@ beforeAll(async () => {
   observed.slateOpens = await flowRow('slate-opens', at, slateOpensFromMyStuff);
   observed.slateShare = await flowRow('slate-share', at, slateSharesReachingNothing);
 
-  process.stderr.write(`product-flows at ${origin}: ${JSON.stringify({ observed, broke: broken() }, null, 2)}\n`);
+  process.stderr.write(`product-flows at ${at.origin}: ${JSON.stringify({ observed, broke: broken() }, null, 2)}\n`);
+}
+
+beforeAll(async () => {
+  const origin = process.env.KINU_ORIGIN;
+
+  if (origin === undefined || origin === '') {
+    setup = 'KINU_ORIGIN is unset: these rows drive the deployment at that origin '
+      + '(`scripts/product-flows-tier.sh`, after a deploy publishes).';
+
+    return;
+  }
+
+  if (origin === 'local') {
+    const model = await startScriptedModel(tierModel);
+
+    await withDevServer(async (server) => {
+      await registerScriptedModel(server.origin, model.baseURL);
+      await defaultToScriptedModel(server.origin);
+      await measureRows({ origin: server.origin, identity: { kind: 'loopback' } });
+    });
+    await model.stop();
+
+    return;
+  }
+
+  const resolution = resolveWebIdentity(origin);
+
+  if (resolution.kind === 'absent') {
+    setup = resolution.remedy;
+
+    return;
+  }
+
+  await measureRows({ origin, identity: resolution.identity });
 });
 
 afterAll(() => {
