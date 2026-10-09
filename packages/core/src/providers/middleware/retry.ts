@@ -199,7 +199,7 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
       const waitMs = retryAfter ?? Math.floor(random() * backoffCeiling(attemptNumber));
       const declared = pacer.declareWait(yield* lane.billed(), waitMs);
 
-      yield* spendRetry(() => handedOver({ provider: policy.provider, status: limit.status, resetsInMs: retryAfter ?? waitMs }));
+      yield* spendRetry(() => handedOver(policy.provider, waitMs, failure));
       owned = declared;
       warn(`[kinu] ${policy.provider} rate-limited: waiting ${fmtSpan(waitMs)} (attempt ${String(attemptNumber)})`);
       yield* reportWait(waitMs, attemptNumber, retryAfter !== null ? 'header' : 'backoff', limit.status);
@@ -261,7 +261,7 @@ function cooledDown(check: CooldownCheck): Effect.Effect<void> {
       if (waitMs > MAX_RETRY_DELAY_MS) return yield* Effect.die(waitTooLong({ provider: policy.provider, untilMs, nowMs: check.now(), reason }));
 
       if (untilMs !== check.owned) {
-        if (check.retries === 0) return yield* Effect.die(handedOver({ provider: policy.provider, status: null, resetsInMs: waitMs }));
+        if (check.retries === 0) return yield* Effect.die(handedOver(policy.provider, waitMs));
         yield* check.reportWait(waitMs, 0, 'cooldown');
       }
 
@@ -525,16 +525,14 @@ function final(failure: APICallError): APICallError {
   });
 }
 
-function handedOver(input: { readonly provider: string; readonly status: number | null; readonly resetsInMs: number | null }): APICallError {
-  return new APICallError({
-    message: `${input.provider} is rate-limiting this account${input.status === null ? '' : ` (HTTP ${String(input.status)})`}`
-      + `${input.resetsInMs === null ? '' : `; it resets in ${fmtSpan(input.resetsInMs)}`}`,
-    url: input.provider,
-    requestBodyValues: undefined,
-    ...(input.status !== null && { statusCode: input.status }),
-    ...(input.resetsInMs !== null && { responseHeaders: { 'retry-after-ms': String(input.resetsInMs) } }),
-    isRetryable: false,
-  });
+/** A final refusal, with this layer's next-attempt delay separate from the provider's response. */
+function handedOver(provider: string, retryAfterMs: number, failure?: APICallError): APICallError & { readonly retryAfterMs: number } {
+  const refused = failure === undefined ? new APICallError({
+    message: `${provider} is cooling down after a refused request`,
+    url: provider, requestBodyValues: undefined, isRetryable: false,
+  }) : final(failure);
+
+  return Object.assign(refused, { cause: failure, retryAfterMs });
 }
 
 interface RateLimit {

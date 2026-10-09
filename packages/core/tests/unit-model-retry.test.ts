@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { generateText, wrapLanguageModel, type LanguageModel } from 'ai';
+import { APICallError, generateText, wrapLanguageModel, type LanguageModel } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { callRetries, retryMiddleware, type RetryPolicy } from '../src/providers/middleware/retry';
 import { DEFAULT_PROVIDER_RETRIES } from '../src/types/profile';
@@ -92,6 +92,29 @@ describe('the model stack retries every call once, in one place', () => {
     expect(statedRetryAfterMs({ cause: { responseHeaders: Object.fromEntries(limited.headers) } })).toBe(1_500);
   });
 
+  test.each([{ stated: true }, { stated: false }])('an exhausted 429 keeps the provider response and separates its next attempt ($stated)', async ({ stated }) => {
+    const providerText = 'This request exceeds the requests-per-minute allowance for this model.';
+    const body = JSON.stringify({ error: { message: providerText, code: 'rate_limit_exceeded' } });
+    const headers = new Headers({ 'content-type': 'application/json', 'x-request-id': 'request-refused' });
+
+    if (stated) headers.set('retry-after', '0');
+    const harness = retryHarness(Array.from({ length: 2 }, () => new Response(body, { status: 429, headers })));
+    const failure = await rejectionOf(() => harness.call(1));
+
+    expect(APICallError.isInstance(failure)).toBe(true);
+
+    if (!APICallError.isInstance(failure)) throw new Error('an exhausted response was not an API call failure', { cause: failure });
+
+    expect(harness.calls()).toBe(2);
+    expect(harness.waits).toEqual([stated ? 0 : 1_000]);
+    expect(failure.isRetryable).toBe(false);
+    expect(failure.cause).toMatchObject({ statusCode: 429, responseHeaders: Object.fromEntries(headers), responseBody: body });
+    expect(failure.responseHeaders).toEqual(Object.fromEntries(headers));
+    expect(failure.responseBody).toBe(body);
+    expect(describeProviderError({ cause: failure })).toContain(providerText);
+    expect(statedRetryAfterMs({ cause: failure }, 1_000_000)).toBe(stated ? 0 : 2_000);
+  });
+
   /** A lane a sibling already cooled, then `limited` 429s of this call's own. */
   async function behindSibling(limited: number, retries: number) {
     let nowMs = 1_000_000;
@@ -124,7 +147,11 @@ describe('the model stack retries every call once, in one place', () => {
     const { sent, answered } = await behindSibling(0, 0);
 
     expect(sent).toBe(0);
-    expect(answered.status === 'rejected' ? String(answered.reason) : '').toContain('rate-limiting this account');
+    expect(answered.status).toBe('rejected');
+
+    if (answered.status !== 'rejected') throw new Error('a cooling lane was called instead of handing over');
+
+    expect(statedRetryAfterMs({ cause: answered.reason }, 1_000_000)).toBe(1_000);
   });
 
   test('its own declared wait is never counted as a sibling\'s, whichever clock read it', async () => {
@@ -177,7 +204,7 @@ describe('the model stack retries every call once, in one place', () => {
   test('waits out at most the owner\u2019s retries, then fails with the limit instead of sleeping on', async () => {
     const harness = retryHarness(Array.from({ length: 6 }, () => new Response('limited', { status: 429, headers: { 'Retry-After': '1' } })));
 
-    await expect(harness.call()).rejects.toThrow('rate-limiting this account (HTTP 429)');
+    await expect(harness.call()).rejects.toBeInstanceOf(APICallError);
     expect(harness.calls()).toBe(4);
     expect(harness.waits).toEqual([1_000, 1_000, 1_000]);
   });
@@ -199,7 +226,7 @@ describe('the model stack retries every call once, in one place', () => {
   ] as const)('the call\'s %s retry budget is spent once, the SDK retrying nothing on top', async (_label, requested, retries) => {
     const harness = retryHarness([new Response('limited', { status: 429, headers: { 'Retry-After': '1' } })]);
 
-    await expect(harness.call(requested)).rejects.toThrow('rate-limiting this account');
+    await expect(harness.call(requested)).rejects.toBeInstanceOf(APICallError);
 
     expect(harness.calls()).toBe(retries + 1);
     expect(harness.waits).toHaveLength(retries);

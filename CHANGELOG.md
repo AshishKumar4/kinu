@@ -25,6 +25,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **Exhausted rate limits keep the provider's refusal.** The surfaced failure retains the provider's status, headers, body and cause, so the chat and request log show the provider's message. The retry layer's next-attempt delay is a separate field, never an invented provider header.
 - **Code-quoted slate addresses draw their previews.** The server and Markdown renderer use one promotion pass, so an exact inline-code address draws one card, while addresses in code fences stay literal and changed slates still get their automatic preview.
 - **Launcher-swap checks use the repo's runtime, not the test driver's.** Their managed Bun is the pinned local binary and installation is disabled, so a check run by the machine's older Bun cannot contact bun.sh or add install progress to its verdict.
 - **First-run collection uses the pinned runtime for the process and its workers.** Its credential-free probes no longer resolve the machine's Bun through PATH; an execution trace showed those workers using 1.4.0 while the suite ran on 1.4.2.

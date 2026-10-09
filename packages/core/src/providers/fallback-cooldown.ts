@@ -30,6 +30,7 @@ export function createFallbackCooldowns(now: () => number = Date.now): FallbackC
 }
 
 const WithHeadersSchema = v.looseObject({
+  retryAfterMs: v.optional(v.number()),
   responseHeaders: v.optional(v.record(v.string(), v.string())),
   cause: v.optional(v.unknown()),
 });
@@ -38,7 +39,7 @@ export function statedRetryAfterMs(failure: { readonly cause: unknown }, nowMs: 
   let at = v.safeParse(WithHeadersSchema, failure.cause);
 
   for (let depth = 0; at.success && depth < 4; depth += 1) {
-    const ms = retryAfterOf(new Headers(at.output.responseHeaders ?? {}), nowMs);
+    const ms = at.output.retryAfterMs ?? retryAfterOf(new Headers(at.output.responseHeaders ?? {}), nowMs);
 
     if (ms !== null) return ms;
     at = v.safeParse(WithHeadersSchema, at.output.cause);
