@@ -135,8 +135,9 @@ export default defineConfig(({ command }) => ({
     devPreviewZone(devPreviewTlsDir(__dirname), previewPort),
     tailwindcss(),
   ],
-  // The zone's requests reach vite with their preview host.
-  server: { allowedHosts: [`.${DEV_PREVIEW_SUFFIX}`] },
+  // The zone's requests reach vite with their preview host. Nimbus fetches its staged napi assets from ASSETS under a
+  // fixed synthetic host (@nimbus-sh/worker runtime/staged-source.js); refused, a TS slate cannot build under dev.
+  server: { allowedHosts: [`.${DEV_PREVIEW_SUFFIX}`, "nimbus-internal.invalid"] },
   // The fabric outbox imports a stubbed builtin, so it is served as source; the UMD-only highlighter
   // has no `default` export as source, so it is prebundled.
   optimizeDeps: {
