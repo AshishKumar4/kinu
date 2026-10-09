@@ -1301,7 +1301,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected maintenanceUnfinished = false;
 
   /** Nothing owed: a turn's arm goes. */
-  private async restWhenIdle(): Promise<void> {
+  protected async restWhenIdle(): Promise<void> {
     if (this.mainChatTurn() === null && !this.owedWorkExists()) await this.wakes.cancel(TERMINAL_RETRY_JOB);
   }
 

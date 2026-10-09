@@ -843,7 +843,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         new AgentOwedWork(this.boundSql).held(actorId, holds);
         await this.agentWakes.owes(actorId, next);
 
-        if (next === null) this.releaseIdleHosted(actorReferenceOf(this.liveAgentOf(actorId)));
+        if (next !== null) return;
+        this.releaseIdleHosted(actorReferenceOf(this.liveAgentOf(actorId)));
+
+        // Main's rest may come after the workspace's own close for its turn rested, while main's wake still held the chain.
+        if (actorId === this.actorHandle().actorId) await this.restWhenIdle();
       },
       birthContext: async (drainTurnId) => subordinateTurnContext(new EventLog(this.boundExec(), this.agentBound(actorId).handle), drainTurnId),
       steerSkills: async (text, alreadyActive) => await steerSkillsBlock({
