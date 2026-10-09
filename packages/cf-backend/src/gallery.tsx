@@ -5180,12 +5180,14 @@ function WorkFrame() {
   const building = useBuildingJob();
   const lane = workLane(streaming ? null : params.get("lane"));
   const jobs = streaming ? [building, ...lane.jobs] : lane.jobs;
+  // Work opens a plan on its own page and the Work tab returns, as the workspace's column does.
+  const [surface, setSurface] = useState<SurfaceKind>("Work");
 
   return (
     <div className="p-bg min-h-screen flex justify-center">
       <div className="w-[430px] min-h-screen border-x p-border">
         <WorkSurface
-          surface="Work" onSurface={() => {}}
+          surface={surface} onSurface={setSurface}
           pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} memory={lane.memory} memoryContent=""
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}

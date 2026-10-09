@@ -9,22 +9,36 @@ import type { PlanPages } from "./use-plan-pages";
 
 const PlanReviewView = lazy(() => import("./PlanReviewView"));
 
-/** The page of the plan the column shows, if it shows one: its own boundary per revision. */
-export function ShownPlanPage({ pages, rpc, planRpc, onReviewActor }: {
+/**
+ * Every plan page shown this visit that still has a tab, the shown one visible: a page left for another tab keeps its
+ * unsent comments and its save queue. A page asked for before the read holds its plan shows the read's loading or failure.
+ */
+export function PlanPageList({ pages, rpc, planRpc, onReviewActor }: {
   pages: PlanPages;
   rpc: Rpc;
   planRpc: Rpc | undefined;
   onReviewActor?: (name: string, actorId?: string) => void | Promise<void>;
 }) {
-  const item = pages.shown;
-
-  if (item === undefined) return null;
+  const { resource } = pages.read;
 
   return (
-    <ErrorBoundary key={`${item.owner.name}:${item.plan.id}:${String(item.plan.revision)}`} label="Plan">
-      <PlanPage item={item} owner={pages.owner} rpc={rpc} planRpc={planRpc ?? rpc} onReviewActor={onReviewActor}
-        resource={pages.read.resource} onRetry={pages.read.reload} />
-    </ErrorBoundary>
+    <>
+      {pages.selected && pages.shown === undefined && (resource.status === "error"
+        ? <LoadFailure what="the workspace's work" message={resource.message} onRetry={pages.read.reload} />
+        : <div className="flex justify-center py-8"><Loader size="sm" /></div>)}
+      {pages.drawn.map((item) => {
+        const key = `${item.owner.name}:${item.plan.id}:${String(item.plan.revision)}`;
+
+        return (
+          <div key={key} className="h-full" hidden={item !== pages.shown}>
+            <ErrorBoundary label="Plan">
+              <PlanPage item={item} owner={pages.owner} rpc={rpc} planRpc={planRpc ?? rpc} onReviewActor={onReviewActor}
+                resource={resource} onRetry={pages.read.reload} />
+            </ErrorBoundary>
+          </div>
+        );
+      })}
+    </>
   );
 }
 

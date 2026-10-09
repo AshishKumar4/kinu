@@ -3253,7 +3253,7 @@ describe('Work keeps up with what is happening and what happened', () => {
 /**
  * The workspace's work is one thing: every actor's plans and tasks on one tab,
  * owners named, and a pending plan's decision one row in Needs you that opens
- * the review over the whole tab. `?frame=work`'s fixture carries a root plan
+ * the plan's own page. `?frame=work`'s fixture carries a root plan
  * beside a subordinate's and a task that holds the note its agent left.
  */
 describe('the Work tab reads the workspace, not the actor', () => {
@@ -3312,11 +3312,11 @@ describe('the Work tab reads the workspace, not the actor', () => {
       expect(await page.$eval('[data-plan-title]', (element) => element.textContent)).toContain('Gateway');
       expect(await page.$eval('[data-plan-status]', (element) => element.textContent)).toBe('Awaiting review');
       expect(await page.$eval('nav[aria-label="Pages"] [aria-current="true"]', (tab) => tab.getAttribute('aria-label'))).toContain('Gateway');
-      expect(await page.$('[data-work-plans]')).toBeNull();
+      expect(await page.$eval('[data-work-plans]', (list) => list.checkVisibility())).toBe(false);
 
       await page.click('nav[aria-label="Workspace"] button[aria-label="Work"]');
-      await page.waitForSelector('[data-work-plans]');
-      expect(await page.$('[data-plan-review-root]')).toBeNull();
+      await page.waitForSelector('[data-work-plans]', { visible: true });
+      expect(await page.$eval('[data-plan-review-root]', (review) => review.checkVisibility())).toBe(false);
       await page.close();
     });
   });

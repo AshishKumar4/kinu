@@ -11,8 +11,8 @@ import {
   NotePencilIcon, DatabaseIcon,
 } from "@phosphor-icons/react";
 import { hasWorkspaceWork, jobPhase, revealMisrepresenting, timeAgo, type InspectedWork } from "@kinu.run/core";
-import type { AgentTaskTree, ChangelogEntry, MemoryEntry, Omitted, OwnedPlan, PanelAgent, ParkedWriteReview, PendingAction, PendingActionKind, PlanPageRef, PlanReview, WorkspaceWork, WorkspaceWorkOwner } from "@kinu.run/core";
-import type { ReadMoves, WorkspacePlanArrival } from "@/hooks/use-kinu";
+import type { AgentTaskTree, ChangelogEntry, MemoryEntry, Omitted, OwnedPlan, PanelAgent, ParkedWriteReview, PendingAction, PendingActionKind, PlanPageRef, WorkspaceWork, WorkspaceWorkOwner } from "@kinu.run/core";
+import type { ReadMoves } from "@/hooks/use-kinu";
 import type { Rpc } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -57,9 +57,6 @@ const PENDING_ICON = {
 } satisfies Record<Exclude<PendingActionKind, DecidedHere>, typeof ClockIcon>;
 
 export interface WorkTabProps {
-  plan: PlanReview | null;
-  planOwner?: string;
-  workspacePlanArrival?: WorkspacePlanArrival | null;
   onReviewActor?: (name: string, actorId?: string) => void | Promise<void>;
   /** The column's one read of plans and tasks. */
   work: WorkspaceWorkRead;
@@ -81,10 +78,9 @@ export interface WorkTabProps {
 }
 
 export function WorkTab({
-  plan, planOwner, workspacePlanArrival, onReviewActor, work: read, onOpenPlan, pendingActions, backgroundJobs, inspectedWork, onRefreshJobs, onOpenSurface, onChangelogSeen, onRefreshQueue, rpc, memory = [], readMoves = {}, agents,
+  onReviewActor, work: read, onOpenPlan, pendingActions, backgroundJobs, inspectedWork, onRefreshJobs, onOpenSurface, onChangelogSeen, onRefreshQueue, rpc, memory = [], readMoves = {}, agents,
 }: WorkTabProps) {
   const [filter, setFilter] = useState<JournalFilter>("all");
-  const [hasPlans, setHasPlans] = useState(plan !== null);
   const openPlan = useCallback((item: OwnedPlan) => onOpenPlan({ owner: item.owner.name, id: item.plan.id, revision: item.plan.revision }), [onOpenPlan]);
   const { work, resource: taskResource, reload: reloadTasks } = read;
 
@@ -116,15 +112,11 @@ export function WorkTab({
     changes: changelog.entries, notes: memory, owed: inspectedWork,
   });
 
-  if (nothingAtAll && !hasPlans && !plan) {
-    return (
-      <div className="space-y-6"><WorkPlans work={work} owner={planOwner ?? "main"} arrival={workspacePlanArrival} onPresence={setHasPlans} onOpen={openPlan} /><p className="p-row-text p-text-3">Nothing yet</p></div>
-    );
-  }
+  if (nothingAtAll) return <p className="p-row-text p-text-3">Nothing yet</p>;
 
   return (
     <div className="space-y-6 animate-fade-in">
-      <WorkPlans work={work} owner={planOwner ?? "main"} arrival={workspacePlanArrival} onPresence={setHasPlans} onOpen={openPlan} />
+      <WorkPlans work={work} onOpen={openPlan} />
       <NeedsYou pendingActions={pendingActions} rpc={rpc} onDecided={onRefreshQueue} onOpenSurface={onOpenSurface} onOpenPlan={onOpenPlan} />
       <WorkNow work={work} taskRows={taskRows} openTasks={openTasks} inspected={inspectedWork} runningJobs={runningJobs} helpers={helpers} onOpenHelper={agents?.open} resource={taskResource} onRetry={reloadTasks} onRefreshJobs={onRefreshJobs} onOpenOwner={onReviewActor} rpc={rpc} />
       <WorkJournal journal={journal} filter={filter} onFilter={setFilter} view={changelog} seenAt={changelogSeenAt} seenError={changelogSeenError} resource={changelogResource} onReload={reloadChangelog} rpc={rpc} onRefreshJobs={onRefreshJobs} onOpenOwner={onReviewActor} />
