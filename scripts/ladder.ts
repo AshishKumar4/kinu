@@ -2297,6 +2297,22 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
   },
   {
+    run: 'bun test --timeout=0 tests/browser/live-app-own-server.test.ts',
+    label: 'Live app in a browser: a slate that serves its own page, in its answer',
+    tier: 'deploy',
+    // Unmeasured: the plans file's walkthrough (about 60 s) and the dev server's boot, the plans row's figures.
+    seconds: 120,
+    catches: 'the shipped workspace page as it runs, on `vite dev` in cf-backend (workerd with real Durable Objects '
+      + 'behind the real client) in Chrome at 1440x900. Its row: the plan walkthrough\'s implement turn writes a '
+      + 'slate whose class\'s own `fetch` answers its page, and the answer that wrote it draws it in the chat, at '
+      + 'its page\'s height with no inner scroll, in the chat\'s text colour, dark and light. A card, page or theme '
+      + 'that never arrives fails the row in a minute rather than hanging it.',
+    blind: 'one slate, one viewport, one model: a scripted SSE server, so a real model\'s turn is unmeasured. A '
+      + 'LOCAL dev server: `vite dev`\'s workerd is not the production isolate, and the deployed build is the '
+      + 'product flows\' subject. No pixel is compared: the row reads heights and computed colours.',
+    inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
+  },
+  {
     run: 'bun test --timeout=0 tests/browser/live-app-layout.test.ts',
     label: 'Live app in a browser: the inspector column\'s layout',
     tier: 'deploy',
@@ -2942,6 +2958,7 @@ export const CI_EXEMPT = {
   'bun test --timeout=0 tests/browser/live-app-sleep.test.ts': LIVE_APP_AT_CI,
   'bun test --timeout=0 tests/browser/live-app-plans.test.ts': LIVE_APP_AT_CI,
   'bun test --timeout=0 tests/browser/live-app-layout.test.ts': LIVE_APP_AT_CI,
+  'bun test --timeout=0 tests/browser/live-app-own-server.test.ts': LIVE_APP_AT_CI,
   'bun test --timeout=0 scripts/deadline-capability.test.ts':
     'needs a user systemd manager that grants a unit an ambient capability. The GitHub runner\'s starts the unit '
     + 'and loses it at once (run 36216870343, 2026-09-26: ActiveState inactive), so there the suite fails for '

@@ -65,21 +65,6 @@ describe('the plan review flow end to end', () => {
   test("the slate that turn wrote stands in the strip under its own title", () => {
     expect(verdictOf(observed.walkthrough, 'walkthrough').stripLabels).toContain(SLATE_TITLE);
   });
-
-  // The slate answers its page from its class's own `fetch`: the runner opens it as it opens its own pages.
-  test('that slate, drawn in its answer, is as tall as its page and reads in the chat\'s theme, dark and light alike', () => {
-    const { ownServer } = verdictOf(observed.walkthrough, 'walkthrough');
-
-    for (const [scheme, reading] of Object.entries(ownServer)) {
-      expect({ scheme, scrolls: reading.scrolls }).toEqual({ scheme, scrolls: false });
-      // Within the rounding of a height said in whole pixels.
-      expect({ scheme, atContent: Math.abs(reading.frame - reading.page) <= 2 }).toEqual({ scheme, atContent: true });
-      expect({ scheme, text: reading.pageText }).toEqual({ scheme, text: reading.chatText });
-    }
-
-    // Two schemes, two palettes: a page that ignored the host would read the same in both.
-    expect(ownServer.dark.pageText).not.toBe(ownServer.light.pageText);
-  });
 });
 
 describe('the inspector never moves its selection on its own', () => {
