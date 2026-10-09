@@ -85,7 +85,8 @@ export function usePlanPages({ rpc, readMoves, plan, planOwner, planFocus, arriv
     open(ref, false);
   }, [reported, plan, plans, owner, open]);
 
-  // A new pending plan of the workspace's own opens its page, once the read holds it.
+  // A new pending plan of the workspace's own opens its page on the workspace's pane, whose owner is the root's
+  // registered name, once the read holds it.
   const focused = useRef<string | null>(null);
 
   useEffect(() => {
@@ -93,12 +94,12 @@ export function usePlanPages({ rpc, readMoves, plan, planOwner, planFocus, arriv
     const cut = key?.lastIndexOf(":") ?? -1;
 
     if (key === null || cut < 0 || focused.current === key) return;
-    const ref = { owner: "main", id: key.slice(0, cut), revision: Number(key.slice(cut + 1)) };
+    const ref = { owner, id: key.slice(0, cut), revision: Number(key.slice(cut + 1)) };
 
     if (!plans.some((item) => sameRevision(item, ref))) return;
     focused.current = key;
     open(ref, true);
-  }, [planFocus, plans, open]);
+  }, [planFocus, plans, owner, open]);
 
   const page = planOfSurface(surface);
   const shown = page === null ? undefined : plans.find((item) => sameRevision(item, page));

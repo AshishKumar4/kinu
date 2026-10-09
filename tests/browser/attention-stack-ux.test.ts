@@ -146,6 +146,29 @@ test('the next card answers at once, while the queue is still being read again a
   });
 });
 
+test('a plan in the stack opens on its own page, from whichever tool the inspector shows', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await opened(page, origin, '&asks=plan');
+    await page.waitForSelector('[data-attention-stack]');
+    const plan = await page.$eval('[data-attention-card]', (card) => card.getAttribute('data-attention-card') ?? '');
+
+    expect(plan).toStartWith('action:plan:');
+    await page.click('#inspector button[aria-label="Files"]');
+    await page.waitForSelector('#inspector button[aria-label="Files"][aria-current="true"]');
+
+    // The plan is not answered here: the card stays, and the inspector leaves Files for the plan's page.
+    await answer(page, 'Review plan');
+    await page.waitForFunction(() => document.querySelector('#inspector button[aria-label="Files"][aria-current="true"]') === null);
+    const shown = await page.$eval('#inspector nav [aria-current="true"]', (tab) => ({ nav: tab.closest('nav')?.getAttribute('aria-label'), tab: tab.getAttribute('aria-label') }));
+
+    expect(shown).toEqual({ nav: 'Pages', tab: expect.stringContaining('applyCoupon') });
+    await page.waitForSelector('[data-plan-review-root]');
+    expect(await stacked(page)).toEqual([plan]);
+    await page.close();
+  });
+});
+
 test('a refused answer keeps its card open and says why; the next try lands', async () => {
   await withGallery(async ({ newPage, origin }) => {
     const page = await newPage();
