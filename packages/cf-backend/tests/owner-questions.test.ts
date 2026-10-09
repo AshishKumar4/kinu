@@ -38,9 +38,11 @@ interface AskingModel {
   readonly sent: Sent[];
 }
 
+const TASK = 'Migrate the ledger.';
+
 /**
- * A model that asks once and then goes on: each request offered `ask_owner` (the conversation's, not a side lane's) is
- * kept, and is answered with the call until a request carries its result.
+ * A model that asks once about {@link TASK} and then goes on: each request of the conversation (one offering
+ * `ask_owner`, not a side lane's) from the task on is kept, and is answered with the call until one carries a result.
  */
 function asksOnce(): AskingModel {
   const sent: Sent[] = [];
@@ -49,11 +51,13 @@ function asksOnce(): AskingModel {
     const { messages, tools } = requestOf(run);
 
     if (!tools.includes('ask_owner') || JSON.stringify(messages).includes(WORKSPACE_TITLE_SYSTEM_PROMPT)) return chatCompletion(run, 'Noted.');
+
+    if (!JSON.stringify(messages).includes(TASK)) return chatCompletion(run, 'Hello.');
     const query = v.parse(SentQuerySchema, run.query);
 
     sent.push({ messages: query.messages, tools: JSON.stringify(query.tools) });
 
-    // The wire renames call ids: any result after the ask is its.
+    // The wire renames call ids: any result after the task is the ask's.
     return messages.some((message) => message.role === 'tool')
       ? chatCompletion(run, 'Storing integer cents.')
       : toolCallCompletion(run, { tool: 'ask_owner', args: ASK }, CALL);
@@ -85,7 +89,7 @@ function resumedFrom(sent: readonly Sent[]) {
   const [call] = calls;
   const results = resumed.messages.flatMap((message, at) => JSON.stringify(message).includes(`"tool_call_id":"${call?.id ?? ''}"`) ? [{ at, text: JSON.stringify(message) }] : []);
   const changed = asking.messages.findIndex((message, at) => JSON.stringify(message) !== JSON.stringify(resumed.messages[at]));
-  const [was, now] = [JSON.stringify(asking.messages[changed]), JSON.stringify(resumed.messages[changed])];
+  const [was, now] = changed < 0 ? ['', ''] : [JSON.stringify(asking.messages[changed]), JSON.stringify(resumed.messages[changed] ?? null)];
   const from = Array.from({ length: was.length }, (_, at) => at).find((at) => was[at] !== now[at]) ?? was.length;
 
   return {
@@ -107,13 +111,14 @@ function expectOneCallOneResult(resumed: ReturnType<typeof resumedFrom>, answer:
 }
 
 /**
- * A workspace named by its owner: the system prompt names it (prompts/agent-names-line.md), so the name the first turn
- * would give it changes every request after, ask or not.
+ * A workspace past its first turn. That turn names it, and the system prompt names it (prompts/agent-names-line.md), so
+ * the request after a first turn differs from it at the name, ask or not.
  */
 async function namedWorkspace(gateway: StubbedAiBinding): Promise<StartedHarness> {
   const workspace = gatewayWorkspace(gateway);
 
-  await workspace.agent.setInitialDisplayName('Ledger', 'user');
+  await catalogTurn(workspace.agent, 'Hello.');
+  await workspace.agent.terminalRetryPass();
 
   return workspace;
 }
@@ -131,7 +136,7 @@ describe('the workspace agent asks its owner', () => {
     const { gateway, sent } = asksOnce();
     const workspace = await namedWorkspace(gateway);
 
-    await catalogTurn(workspace.agent, 'Migrate the ledger.');
+    await catalogTurn(workspace.agent, TASK);
     expect(sent).toHaveLength(1);
     const asked = await openQuestion(workspace);
 
@@ -149,9 +154,10 @@ describe('the workspace agent asks its owner', () => {
 
   test('an answer the isolate took before it died is resumed by the next activation, from the same call', async () => {
     const { gateway, sent } = asksOnce();
-    const workspace = await namedWorkspace(gateway);
+    // Not named first: the harness's registry keeps no title, so the next activation would name it nothing either.
+    const workspace = gatewayWorkspace(gateway);
 
-    await catalogTurn(workspace.agent, 'Migrate the ledger.');
+    await catalogTurn(workspace.agent, TASK);
     const asked = await openQuestion(workspace);
 
     // Recorded, and the isolate gone before the turn it owes opened.
@@ -177,7 +183,7 @@ describe('the workspace agent asks its owner', () => {
     const { gateway, sent } = asksOnce();
     const workspace = await namedWorkspace(gateway);
 
-    await catalogTurn(workspace.agent, 'Migrate the ledger.');
+    await catalogTurn(workspace.agent, TASK);
     await workspace.agent.cancelCurrentWork();
     expect((await workspace.agent.listOwnerQuestions())[0]?.asked.status).toBe('dismissed');
 
@@ -201,7 +207,7 @@ describe("an agent the owner added asks them on the owner's turns", () => {
     // Named by the owner, as the workspace is, so its first turn names it nothing new.
     await workspace.agent.renameSubordinateAgent(subordinate.name, 'Ledger keeper');
 
-    await asPane([actorConnectionTag(actorId)], () => workspace.agent.send('Migrate the ledger.', crypto.randomUUID()));
+    await asPane([actorConnectionTag(actorId)], () => workspace.agent.send(TASK, crypto.randomUUID()));
     await driveUntil(workspace, 'the agent never asked', () => sent.length >= 1);
     await workspace.agent.harnessAgentsIdle();
     const asked = await openQuestion(workspace, actorId);
