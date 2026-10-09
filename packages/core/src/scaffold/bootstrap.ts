@@ -1,4 +1,4 @@
-import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { exists, readText, writeText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { markStoreChanged } from '@kinu.run/agent-utils';
 /**
  * Scaffold cold-start bootstrap and activation refresh. Fresh workspaces write
@@ -49,6 +49,14 @@ function insertV0Row(rt: AgentRuntime): void {
   markStoreChanged(rt.storage.sql);
 }
 
+/** A loop's version file, in a directory made for it: the version is written before the live file that would make it. */
+async function writeVersion(vfs: VFS, path: string, version: number, source: string): Promise<void> {
+  const slash = path.lastIndexOf('/');
+
+  if (slash > 0) await vfs.mkdir(path.slice(0, slash), { recursive: true });
+  await writeText(vfs, `${path}.v${version}`, source);
+}
+
 /** The one writer of an actor's first loop: `initialSource` at birth (a custom one when the creator names it), else the bundled loop. */
 export async function bootstrapScaffold(rt: AgentRuntime, initialSource: string = INITIAL_SCAFFOLD_SOURCE): Promise<void> {
   initScaffoldTables(rt.storage.execRaw);
@@ -61,7 +69,7 @@ export async function bootstrapScaffold(rt: AgentRuntime, initialSource: string 
   const liveExists = await exists(vfs, path);
 
   if (current === null && !liveExists) {
-    await writeText(vfs, versionedPath(0), initialSource);
+    await writeVersion(vfs, path, 0, initialSource);
     insertV0Row(rt);
     await rt.identity.scaffold.write(initialSource);
 
@@ -123,7 +131,7 @@ export function seedActorLoop(
     const inherited = yield* inheritedSource(parent, origin);
     const version = 1;
     const vfs = child.agentStateVfs ?? child.storage.vfs;
-    yield* Effect.promise(() => writeText(vfs, `${child.identity.scaffold.path}.v${version}`, inherited.source));
+    yield* Effect.promise(() => writeVersion(vfs, child.identity.scaffold.path, version, inherited.source));
     child.actor.assertCurrent();
     void child.storage.sql`
       INSERT OR IGNORE INTO scaffold_versions (actor_id, version, written_at, rationale, status, parent_version)
