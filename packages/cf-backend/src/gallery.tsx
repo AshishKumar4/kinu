@@ -389,6 +389,18 @@ function chatgptFixture(path: string, method: string, body: BodyInit | null | un
 }
 
 async function settingsSectionsFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response | null> {
+  if (path === "/api/user/config/sandbox_size") {
+    if (method === "GET") return fixtureJson(v.parse(JsonValueSchema, STUB.get(path)));
+
+    if (method === "PUT") {
+      const { value } = v.parse(v.object({ value: v.string() }), JSON.parse(v.parse(v.string(), body)));
+
+      STUB.set(path, { key: "sandbox_size", value });
+
+      return fixtureJson({ ok: true });
+    }
+  }
+
   if (path === "/api/user/credentials") {
     return fixtureJson([
       { key: "anthropic.bearer", kind: "bearer" },
