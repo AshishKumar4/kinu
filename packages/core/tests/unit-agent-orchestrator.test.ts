@@ -602,7 +602,7 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
     const replyTurnId = present(injected[0].replyTurnId, 'the reply turn the signal carries');
     const bound = log.query({ turn_id: replyTurnId });
     expect(bound.map((event) => event.id)).toHaveLength(1);
-    // The card exists from delivery; the step that takes the batch moves it to shown.
+    // The card exists from delivery; the step that takes the batch moves it to shown, at that step.
     const cardId = broadcasts[0]?.id;
     expect(broadcasts).toEqual([
       {
@@ -613,7 +613,7 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
         },
         text: injected[0].stepText,
       },
-      { type: 'signal_card', id: cardId, state: 'shown' },
+      { type: 'signal_card', id: cardId, state: 'shown', atStep: 0 },
     ]);
     expect(enqueued).toHaveLength(0);
   });

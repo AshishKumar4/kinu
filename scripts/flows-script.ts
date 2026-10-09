@@ -59,6 +59,44 @@ export const STACK_RECALL_ASK = 'Flow stack memory: which editor do I use?';
 
 export const STACK_RECALL_REPLY = 'YOUR EDITOR IS';
 
+/** The splice row: one answer draws a page whose Ping tells the agent a word; the next turn sleeps while it is clicked. */
+export const SPLICE_PAGE_ASK = 'Flow splice: draw a page with a Ping button.';
+
+export const SPLICE_WORK_ASK = 'Flow splice: wait on the build, then say whether a ping came.';
+
+/** What the page sends; built from two halves in the page, so its source never shows the word itself. */
+export const SPLICE_SENT = 'flow-splice-ping-6b1e';
+
+/** The work turn's words before it sleeps, and its answer once the ping reached it mid-turn. */
+export const SPLICE_BEFORE = 'WAITING ON THE BUILD';
+
+export const SPLICE_HEARD = 'PING HEARD';
+
+/** Long enough to click the page while the turn waits on it. */
+const SPLICE_SLEEP = 'sleep 25';
+
+const SPLICE_PAGE = [
+  '<slate-ui name="ping">',
+  '<!doctype html><html><body><button id="ping">Ping</button><script type="module">',
+  'import { workspace } from "kinu:slate";',
+  `document.getElementById("ping").onclick = () => workspace.agent.send({ text: ${JSON.stringify(SPLICE_SENT.slice(0, 11))} + ${JSON.stringify(SPLICE_SENT.slice(11))} });`,
+  '</script></body></html>',
+  '</slate-ui>',
+].join('\n');
+
+/** The splice row's turns; a ping that reaches the agent ends its turn whether it came mid-turn or after. */
+function spliceScript(request: ScriptedRequest, latest: string): ScriptedAnswer | null {
+  if (latest.includes(SPLICE_SENT)) return { text: SPLICE_HEARD };
+
+  if (latest.includes(SPLICE_PAGE_ASK)) return { text: `Here is the page.\n\n${SPLICE_PAGE}` };
+
+  if (!latest.includes(SPLICE_WORK_ASK)) return null;
+
+  return request.turn.length > 0
+    ? { text: 'NO PING' }
+    : { text: SPLICE_BEFORE, toolCall: { name: 'shell', arguments: { runtime: 'workspace', command: SPLICE_SLEEP } } };
+}
+
 /** The approvals row's ask: one turn whose two commands each reach outside the workspace, so each parks for its owner. */
 export const APPROVALS_ASK = 'Flow approvals: push and publish the release.';
 
@@ -471,7 +509,7 @@ export function flowsScript(request: ScriptedRequest): ScriptedAnswer | null {
 
   if (proposed !== undefined) return proposed;
 
-  const approvals = approvalsScript(request, latest);
+  const approvals = approvalsScript(request, latest) ?? spliceScript(request, latest);
 
   if (approvals !== null) return approvals;
 

@@ -64,11 +64,13 @@ export interface SettledSignals {
 /** Turn-metadata key carrying a signal's card identity (see Inbox.beginTurn). */
 export const SIGNAL_ID_METADATA_KEY = 'signalId';
 
-export type SignalCardState = 'pending' | 'shown' | 'undelivered';
+/** Waiting; taken into a step the model is reading (`shown`); that step ended, so the agent has seen it (`seen`). */
+export type SignalCardState = 'pending' | 'shown' | 'seen' | 'undelivered';
 
 /**
  * Broadcast only by the inbox, so 'shown' is emitted only where a step actually takes the signal
- * in. The opening event's `metadata` is the same `kinuEvent` shape the durable message carries.
+ * in, and 'seen' only once that step ended. The opening event's `metadata` is the same `kinuEvent` shape the durable
+ * message carries.
  */
 export type SignalCardEvent =
   | {
@@ -82,5 +84,12 @@ export type SignalCardEvent =
   | {
     readonly type: 'signal_card';
     readonly id: string;
-    readonly state: 'shown' | 'undelivered';
+    readonly state: 'shown';
+    /** The turn's step that took it in mid-answer: where the chat draws it inside the answer. */
+    readonly atStep?: number;
+  }
+  | {
+    readonly type: 'signal_card';
+    readonly id: string;
+    readonly state: 'seen' | 'undelivered';
   };

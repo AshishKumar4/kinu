@@ -36,6 +36,9 @@ export interface TeardownEntry {
   /** The resource's name, path, or `bucket#prefix` key. */
   readonly name: string;
   detail: string;
+  /** The platform ids the resource is known by, written before anything is deleted: a container application's, which
+   *  find its snapshots once the application, or the Worker that owned it, is gone. */
+  ids: string[];
   /** Persisted after every successful deletion attempt, so recovery resumes. */
   done: boolean;
   attempts: number;
@@ -67,6 +70,7 @@ const TeardownEntrySchema = v.object({
   kind: TeardownKindSchema,
   name: v.string(),
   detail: v.string(),
+  ids: v.optional(v.array(v.string()), []),
   done: v.boolean(),
   attempts: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
   lastError: v.nullable(v.string()),
@@ -179,6 +183,7 @@ export function createManifest(
       kind: entry.kind,
       name: entry.name,
       detail: entry.detail ?? '',
+      ids: [],
       done: false,
       attempts: 0,
       lastError: null,
@@ -194,6 +199,10 @@ export function createManifest(
  *  success: teardown must be safe to run twice. */
 export type DeleteOutcome = { ok: true; absent?: boolean } | { ok: false; error: string };
 
+/** One entry's deletion. A step that learns something before it deletes (an entry's `ids`) writes it with `persist`
+ *  first; `manifest` is the whole run's, for a step whose deletion takes a later entry's resource with it. */
+export type TeardownStep = (entry: TeardownEntry, persist: () => void, manifest: TeardownManifest) => Promise<DeleteOutcome>;
+
 /**
  * Replay every unfinished entry. Statuses persist to disk after EACH entry, so
  * a signal that lands mid-replay leaves a manifest whose remaining work is
@@ -202,7 +211,7 @@ export type DeleteOutcome = { ok: true; absent?: boolean } | { ok: false; error:
 export async function replayTeardown(
   repoRoot: string,
   manifest: TeardownManifest,
-  exec: (entry: TeardownEntry) => Promise<DeleteOutcome>,
+  exec: TeardownStep,
 ): Promise<{ manifest: TeardownManifest; failures: readonly string[] }> {
   const failures: string[] = [];
 
@@ -211,7 +220,7 @@ export async function replayTeardown(
     let outcome: DeleteOutcome;
 
     try {
-      outcome = await exec(entry);
+      outcome = await exec(entry, () => { writeManifest(repoRoot, manifest); }, manifest);
     } catch (error) {
       outcome = { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
@@ -312,7 +321,7 @@ export interface RecoveredRun {
 export async function recoverAbandonedRuns(
   repoRoot: string,
   exclude: string,
-  exec: (entry: TeardownEntry) => Promise<DeleteOutcome>,
+  exec: TeardownStep,
   report: (line: string) => void,
 ): Promise<readonly RecoveredRun[]> {
   const scan = scanUnfinishedManifests(repoRoot, exclude);

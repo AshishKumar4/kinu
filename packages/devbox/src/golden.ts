@@ -60,8 +60,9 @@ export interface GoldenPorts {
   readonly destroy: () => Promise<void>;
   readonly build: () => Promise<void>;
   readonly tell: (box: string, answer: GoldenAnswer) => Promise<void>;
-  /** Deletes a snapshot from the registry; undefined without the authority to. */
-  readonly delete: (ref: string) => Promise<SnapshotDeletion> | undefined;
+  /** Deletes a snapshot from the registry, telling `owe` its manifest's digest before any tag goes; undefined without the
+   *  authority to. */
+  readonly delete: (ref: string, owe: (digest: string) => void) => Promise<SnapshotDeletion> | undefined;
   readonly now: () => number;
 }
 
@@ -150,16 +151,24 @@ function deleteRetired(ports: GoldenPorts): Effect.Effect<void> {
     const now = ports.now();
 
     for (const due of ports.read().retiring.filter(retired => retired.at <= now)) {
-      const pending = ports.delete(due.ref);
+      let owing = due.ref;
+
+      // Written before any tag goes: once they are gone the digest alone finds the manifest.
+      const pending = ports.delete(due.ref, (digest) => {
+        const held = ports.read();
+
+        ports.write({ ...held, retiring: held.retiring.map(retired => retired.ref === owing ? { ...retired, ref: digest } : retired) });
+        owing = digest;
+      });
 
       if (pending === undefined) return;
       const outcome = yield* Effect.promise(() => pending);
-      const owed = outcome.kind === 'refused' ? [{ ...due, ref: outcome.left ?? due.ref }] : [];
+      const owed = outcome.kind === 'refused' ? [{ ...due, ref: outcome.left ?? owing }] : [];
 
       if (outcome.kind === 'refused') console.error(`[devbox] the retired golden ${due.ref} was not deleted: ${outcome.reason}`);
       const held = ports.read();
 
-      ports.write({ ...held, retiring: held.retiring.flatMap(retired => retired.ref === due.ref ? owed : [retired]) });
+      ports.write({ ...held, retiring: held.retiring.flatMap(retired => retired.ref === owing ? owed : [retired]) });
     }
   });
 }
