@@ -1,7 +1,7 @@
 /**
- * Placement of mid-turn steers inside the one assistant message of a turn. The step index
- * (`STEER_STEP_METADATA_KEY` durable, `atStep` live) maps onto the AI SDK's `step-start` parts, so
- * live and stored placement agree.
+ * Placement of mid-turn steers, and of the events spliced beside them, inside the one assistant message of a turn.
+ * The step index (`STEER_STEP_METADATA_KEY` or `SIGNALS_SEEN_METADATA_KEY` durable, `atStep` live) maps onto the AI
+ * SDK's `step-start` parts, so live and stored placement agree.
  */
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
@@ -31,9 +31,13 @@ export interface Transcript {
   readonly trailing: readonly InlineSteer[];
 }
 
-/** A run of assistant parts and the steer immediately before them; null on a turn's first segment. */
-export interface TurnSegment {
+/**
+ * A run of assistant parts and what the model read immediately before them: a steer, or an event spliced at that step.
+ * Both null on a turn's first segment.
+ */
+export interface TurnSegment<Signal = never> {
   readonly steer: PlacedSteer | null;
+  readonly signal: Signal | null;
   readonly parts: readonly TranscriptPart[];
 }
 
@@ -143,31 +147,37 @@ function isPlaced(steer: InlineSteer): steer is PlacedSteer {
 }
 
 /**
- * One assistant message's parts, cut at its steers. Cut on parts, not render blocks, so a tool
- * run is never folded across a steer. A step past the last `step-start` places the steer at the end.
+ * One assistant message's parts, cut at its steers and at the events spliced into it. Cut on parts, not render blocks,
+ * so a tool run is never folded across either. A step past the last `step-start` places it at the end. At one step a
+ * steer goes before the events, as the inbox admits them (`Inbox.prepareStep`).
  */
-export function segmentBySteers(
-  parts: readonly TranscriptPart[], steers: readonly PlacedSteer[],
-): readonly TurnSegment[] {
-  if (steers.length === 0) return [{ steer: null, parts }];
+export function segmentBySteers<Signal extends { readonly atStep: number } = never>(
+  parts: readonly TranscriptPart[], steers: readonly PlacedSteer[], signals: readonly Signal[] = [],
+): readonly TurnSegment<Signal>[] {
+  if (steers.length === 0 && signals.length === 0) return [{ steer: null, signal: null, parts }];
   const boundaries: number[] = [];
 
   for (const [index, part] of parts.entries()) {
     if (part.type === 'step-start') boundaries.push(index);
   }
 
-  const segments: TurnSegment[] = [];
-  let cursor = 0;
-  let steer: PlacedSteer | null = null;
+  const leads = [
+    ...steers.map((steer) => ({ atStep: steer.atStep, order: 0, steer, signal: null })),
+    ...signals.map((signal) => ({ atStep: signal.atStep, order: 1, steer: null, signal })),
+  ].sort((a, b) => a.atStep - b.atStep || a.order - b.order);
 
-  for (const next of [...steers].sort((a, b) => a.atStep - b.atStep)) {
+  const segments: TurnSegment<Signal>[] = [];
+  let cursor = 0;
+  let lead: Pick<TurnSegment<Signal>, 'steer' | 'signal'> = { steer: null, signal: null };
+
+  for (const next of leads) {
     const at = Math.max(cursor, boundaries[next.atStep] ?? parts.length);
-    segments.push({ steer, parts: parts.slice(cursor, at) });
+    segments.push({ ...lead, parts: parts.slice(cursor, at) });
     cursor = at;
-    steer = next;
+    lead = { steer: next.steer, signal: next.signal };
   }
 
-  segments.push({ steer, parts: parts.slice(cursor) });
+  segments.push({ ...lead, parts: parts.slice(cursor) });
 
   return segments;
 }

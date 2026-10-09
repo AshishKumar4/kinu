@@ -26,6 +26,11 @@ export type ToolResultContext = ToolOutcome & ToolCallContext & {
   readonly result: string;
 };
 
+/** A model step that ended and was recorded, by the turn's step number (as `PrepareStepContext.stepNumber`). */
+export interface StepEndContext {
+  readonly stepNumber: number;
+}
+
 export interface TurnEndContext {
   readonly text: string;
   readonly responseMessages: readonly ModelMessage[];
@@ -74,6 +79,8 @@ export interface KinuExtension {
   onTurnStart?(ctx: TurnStartContext): void | Promise<void>;
   onToolCall?(ctx: ToolCallContext): void | Promise<void>;
   onToolResult?(ctx: ToolResultContext): void | Promise<void>;
+  /** A step ended and was recorded: what was spliced into its request the model has now read. */
+  onStepEnd?(ctx: StepEndContext): void | Promise<void>;
   onTurnEnd?(ctx: TurnEndContext): void | Promise<void>;
   /** Per-step message rewrite, chained across extensions. Async is load-bearing: a persisted injection must land before the provider sees it. */
   prepareStep?(
@@ -247,7 +254,7 @@ export class ExtensionHost {
   }
 
   private observe(
-    hook: 'onTurnStart' | 'onToolCall' | 'onToolResult' | 'onTurnEnd',
+    hook: 'onTurnStart' | 'onToolCall' | 'onToolResult' | 'onStepEnd' | 'onTurnEnd',
     call: (ext: KinuExtension) => void | Promise<void>,
   ): Effect.Effect<void, KinuError> {
     return Effect.forEach(this.extensions, (ext) => (ext[hook] === undefined ? Effect.void : this.guardHook(hook, ext.name, () => call(ext))), { discard: true });
@@ -263,6 +270,10 @@ export class ExtensionHost {
 
   emitToolResult(ctx: ToolResultContext): Promise<void> {
     return settle(this.observe('onToolResult', (ext) => ext.onToolResult?.(ctx)));
+  }
+
+  emitStepEnd(ctx: StepEndContext): Promise<void> {
+    return settle(this.observe('onStepEnd', (ext) => ext.onStepEnd?.(ctx)));
   }
 
   emitTurnEnd(ctx: TurnEndContext): Promise<void> {
