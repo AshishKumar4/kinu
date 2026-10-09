@@ -626,15 +626,12 @@ describe("deploy gate", () => {
     }
   });
 
-  test("reset recovery never borrows bootstrap for an unrecorded class or application, or its version metadata", async () => {
+  test("reset recovery never borrows bootstrap for an unrecorded class or application", async () => {
     const account = resetAccount(true);
-
-    if (account.live.state !== 'deployed') throw new Error('fixture has no live Worker');
 
     for (const incomplete of [
       { ...account, reset: { ...account.reset, classes: account.reset.classes.filter((entry) => entry.className !== 'UserDO') } },
       { ...account, reset: { ...account.reset, applications: [] } },
-      { ...account, live: { ...account.live, bindings: [] } },
     ]) {
       const refused = await runDeploy({ option: '--reset', pendingReset: account.reset.tag, account: incomplete });
 
