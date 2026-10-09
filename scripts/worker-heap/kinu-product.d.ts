@@ -22,6 +22,9 @@ declare module 'kinu:product' {
       };
       register(input: { readonly creationId: string }): Promise<ActorReference>;
     };
+    protected get config(): { setSleepTimeComputeEnabled(enabled: boolean): void };
+    protected settleBackgroundTasks(): Promise<void>;
+    protected get terminal(): { idle(): Promise<void> };
   }
 
   const handler: ExportedHandler;

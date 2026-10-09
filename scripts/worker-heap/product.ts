@@ -15,6 +15,15 @@ export class OrchestratorAgent extends Product {
     // The product sealed its RPC surface with an own property over every unlisted name; these are the probe's.
     Reflect.deleteProperty(this, 'hostHeads');
     Reflect.deleteProperty(this, 'delegatedRunners');
+    Reflect.deleteProperty(this, 'quiesce');
+  }
+
+  /** Its sleep-time lane off, and what it has detached or still closing joined: a later phase's measurement in this
+   *  isolate reads no compression pass of this workspace's in flight. */
+  async quiesce(): Promise<void> {
+    this.config.setSleepTimeComputeEnabled(false);
+    await this.settleBackgroundTasks();
+    await this.terminal.idle();
   }
 
   /** Hired agents with a delegated turn runner: one ends only after its turn's release has run. */

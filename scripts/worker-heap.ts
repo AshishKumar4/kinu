@@ -63,7 +63,14 @@ export const STEP_LIVE_BOUND_BYTES = 5_500_000;
 
 /** Measured 2026-09-27 at {@link HEADS}: 7.7 MB on main 20cacf3423, every released head's runtime held by the
  *  workspace's mount table; 1.1 MB once release unmounts it: Nimbus's inode cache of the homes still on disk and
- *  code compiled for the heads, neither of them per released actor. */
+ *  code compiled for the heads, neither of them per released actor.
+ *
+ *  Since 2026-10-09 a full batch warms the path first, so code V8 tiers up while heads come and go is not read as
+ *  theirs (the first batch after five warm heads carried +397 compiled functions where integration 44b13e946 carried
+ *  +297), and two batches after it are each bounded, so a retention one batch hides shows in the next. The step's
+ *  workspace is quiesced before them: its compression pass, in flight in this isolate, read as 0.6 MB of one batch.
+ *  Each head's "sandbox.executor_registered" line stays live only because this gate attaches an inspector: its
+ *  retainer is the DevTools console's global handle, which V8 caps at 1000 messages; nothing of the product's holds it. */
 export const HEADS_RETAINED_BOUND_BYTES = 1_500_000;
 
 /** Measured 2026-09-27 at {@link HELPERS}: 0.8 MB on main 905d6665d4, each helper's chat room keeping its whole
@@ -386,8 +393,9 @@ async function inspect(port: number): Promise<{
   };
 }
 
-/** The swarm the release bound is about: WARM heads host every lazy module first, then COUNT come and go. */
-export const HEADS = { warm: 5, count: 200 } as const;
+/** The swarm the release bound is about: WARM heads host every lazy module and tier up the code they run first, then
+ *  COUNT come and go, twice, each batch bounded. */
+export const HEADS = { warm: 200, count: 200 } as const;
 
 /** The delegation the helper bound is about: the root hires COUNT task helpers, each working 4 pages of
  *  ANSWER_BYTES (`worker-heap/driver.ts`) before a one-word answer. */
@@ -411,8 +419,8 @@ export interface HeapMeasurement {
   readonly stepLive: number;
   /** What the idle workspace holds after {@link STEP}'s turns beyond right after setup. */
   readonly idleRetained: number;
-  /** What a workspace holds live after {@link HEADS} heads were hosted and released, beyond before them. */
-  readonly headsRetained: number;
+  /** What a workspace holds live after each of two batches of {@link HEADS} heads was hosted and released, beyond before it. */
+  readonly headsRetained: readonly number[];
   /** What a workspace holds live per finished task helper after {@link HELPERS} settle, beyond before them. */
   readonly perHelperRetained: number;
   /** What one running helper turn holds live, parked on its last working step, beyond the settled workspace. */
@@ -528,10 +536,16 @@ export async function measure(): Promise<HeapMeasurement> {
       await parked;
 
       await ask('/?workspace=heads');
+      // The step's workspace compresses its turns on a cadence of its own, in this isolate: none of it is the heads'.
+      await ask('/quiesce?workspace=heap');
       await ask(`/heads?workspace=heads&tag=warm&count=${String(HEADS.warm)}`);
-      const beforeHeads = await inspector.liveHeap();
-      await ask(`/heads?workspace=heads&tag=swarm&count=${String(HEADS.count)}`);
-      const headsRetained = await inspector.liveHeap() - beforeHeads;
+      const headsRetained: number[] = [];
+
+      for (const batch of ['swarm', 'swarm-again']) {
+        const beforeHeads = await inspector.liveHeap();
+        await ask(`/heads?workspace=heads&tag=${batch}&count=${String(HEADS.count)}`);
+        headsRetained.push(await inspector.liveHeap() - beforeHeads);
+      }
 
       await ask('/?workspace=long&compat=1');
       await ask(`/model?answerBytes=0&toolSteps=${String(LONG_TURN.steps - 1)}&stepBytes=${String(LONG_TURN.stepBytes)}`);
@@ -684,8 +698,10 @@ async function main(args: readonly string[]): Promise<number> {
     findings.push(`the idle workspace holds ${mb(measured.idleRetained)} after ${transcript()}, over ${mb(IDLE_RETAINED_BOUND_BYTES)}`);
   }
 
-  if (measured.headsRetained > HEADS_RETAINED_BOUND_BYTES) {
-    findings.push(`${String(HEADS.count)} released heads leave ${mb(measured.headsRetained)} live, over ${mb(HEADS_RETAINED_BOUND_BYTES)}`);
+  for (const retained of measured.headsRetained) {
+    if (retained > HEADS_RETAINED_BOUND_BYTES) {
+      findings.push(`${String(HEADS.count)} released heads leave ${mb(retained)} live, over ${mb(HEADS_RETAINED_BOUND_BYTES)}`);
+    }
   }
 
   if (measured.perHelperRetained > PER_HELPER_RETAINED_BOUND_BYTES) {
@@ -715,7 +731,7 @@ async function main(args: readonly string[]): Promise<number> {
   // Every figure, red or green, so two runs compare.
   console.log(`${GATE}: ${mb(measured.live.setUp)} live after setup, a parked step holds ${mb(measured.stepLive)} live at `
     + `${transcript()}, the idle workspace holds ${mb(measured.idleRetained)} after them, `
-    + `${String(HEADS.count)} released heads leave ${mb(measured.headsRetained)}, a finished helper `
+    + `${String(HEADS.count)} released heads leave ${measured.headsRetained.map((bytes) => mb(bytes)).join(' then ')}, a finished helper `
     + `${mb(measured.perHelperRetained)}, a running helper turn ${mb(measured.helperTurnLive)}, a helper waiting on its `
     + `own hire ${mb(measured.waitingParentLive)}, a ${String(LONG_TURN.steps)}-step turn peaks at `
     + `${mb(measured.longTurnPeak)} used and grows ${mb(measured.longTurnGrowth)} live; no wasm on the static graph, every module ASCII, every request Latin-1`);
