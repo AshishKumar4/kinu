@@ -299,8 +299,10 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   /** Main's conversation as its window reads it. */
   harnessMainHistory(): Promise<UIMessage[]> { return this.chatTransport.wire.history(); }
   /** The model main's turns run on, in its isolate and on this object's own model lanes. */
+  /** Main's turns, in its own isolate, run on `factory`; this object's own lanes (a judge, a title) keep theirs, so a
+   *  turn parked at its model call never parks them. */
   harnessScriptMainModel(factory: () => LanguageModel): void {
-    this.modelFactory = factory;
+    scriptConversationModel(actorAffinity({ name: this.name, workspaceId: '' }).sessionAffinity, factory);
   }
   private profileHold: { readonly reached: () => void; readonly release: Promise<void> } | null = null;
   /** The next profile read (a measure's or a turn's composition) waits for `release`; resolves once it is waiting. */
