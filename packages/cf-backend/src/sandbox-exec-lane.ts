@@ -30,7 +30,7 @@ const DEVBOX_FAILURE_CODES: Readonly<Record<DevboxErrorCode, ErrorCode>> = {
 };
 
 /** A terminal refusal names what its reader can do; the owner's own is on the Environment card (D52). */
-const REFUSED_NEXT = 'refused until something changes (choose another size with sandbox.resize(...), or ask the owner to start the sandbox again)';
+const REFUSED_NEXT = 'refused until something changes (choose another size with sandbox.resize(...), or ask the owner to start the computer again)';
 
 /** The one conversion from the standalone library's failures to the application's channel. An
  *  unclassified failure, a transport one included, is `io`: `unavailable` is a verdict

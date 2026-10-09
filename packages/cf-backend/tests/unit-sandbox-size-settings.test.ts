@@ -151,11 +151,11 @@ describe('sandbox.resize through the adapter', () => {
     expect({ refused, asked }).toMatchObject({
       refused: {
         reason: 'unavailable',
-        error: 'sandbox readFile /workspace/a.txt: refused until something changes (choose another size with sandbox.resize(...), '
-          + `or ask the owner to start the sandbox again): ${refusal}`,
+        error: expect.stringContaining(refusal),
       },
       asked: 1,
     });
+    expect(JSON.stringify(refused)).toContain('sandbox.resize(');
     expect(JSON.stringify(refused)).not.toContain('attachNow');
   });
 

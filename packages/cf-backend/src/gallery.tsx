@@ -389,18 +389,6 @@ function chatgptFixture(path: string, method: string, body: BodyInit | null | un
 }
 
 async function settingsSectionsFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response | null> {
-  if (path === "/api/user/config/sandbox_size") {
-    if (method === "GET") return fixtureJson(v.parse(JsonValueSchema, STUB.get(path)));
-
-    if (method === "PUT") {
-      const { value } = v.parse(v.object({ value: v.string() }), JSON.parse(v.parse(v.string(), body)));
-
-      STUB.set(path, { key: "sandbox_size", value });
-
-      return fixtureJson({ ok: STUB.has(path) });
-    }
-  }
-
   if (path === "/api/user/credentials") {
     return fixtureJson([
       { key: "anthropic.bearer", kind: "bearer" },
@@ -727,8 +715,25 @@ function accountMemoryFixture(path: string, method: string): Response | null {
   return path === "/api/user/memory" && method === "GET" ? fixtureJson(ACCOUNT_MEMORY_FIXTURE) : null;
 }
 
+function accountComputerSizeFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
+  if (path !== "/api/user/config/sandbox_size") return null;
+
+  if (method === "GET") return fixtureJson(v.parse(JsonValueSchema, STUB.get(path)));
+
+  if (method === "PUT") {
+    const { value } = v.parse(v.object({ value: v.string() }), JSON.parse(v.parse(v.string(), body)));
+
+    STUB.set(path, { key: "sandbox_size", value });
+
+    return fixtureJson({ ok: STUB.has(path) });
+  }
+
+  return null;
+}
+
 const SETTINGS_SLICES: readonly SettingsSlice[] = [
   accountMemoryFixture,
+  accountComputerSizeFixture,
   accountProfileFixture,
   settingsSectionsFixture,
   workspaceRosterFixture,
