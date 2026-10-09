@@ -1115,7 +1115,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-map.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/prod-logs.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/prod-logs.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts',
     label: 'Production deploy contract',
     tier: 'push',
     // Measured 2026-09-05 on the 24-thread box: 86.8/86.5s (33 tests). The 1s

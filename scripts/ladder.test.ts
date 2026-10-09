@@ -693,6 +693,7 @@ describe('a deploy\'s armada rows', () => {
     }).toEqual({
       rows: [
         'preflight bun scripts/preflight.ts', 'source bun test --timeout=0 scripts/deadline-capability.test.ts', 'upload bun run gate:infra',
+        'soak bash scripts/eval-pass-tier.sh',
       ],
       reasons: true, atDeploy: true, local: here.length,
     });

@@ -430,9 +430,9 @@ describe('the workflows that publish and measure this product', () => {
   });
 
   test('a job that holds a secret is bound to a GitHub environment', () => {
-    for (const { label, job } of SECRET_JOBS) {
-      expect(job.environment, `${label} reads a repository-wide secret`).toBeDefined();
-    }
+    const unbound = SECRET_JOBS.filter(({ job }) => job.environment === undefined);
+
+    expect(unbound.map(({ label }) => label), 'a credential-bearing job reads repository-wide secrets').toEqual([]);
   });
 
   test('no pull request can start a job that holds a secret', () => {

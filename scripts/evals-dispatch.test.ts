@@ -1,3 +1,4 @@
+// The existing dispatch suite now exercises native armada dispatch; no GitHub implementation or shim remains.
 import { describe, expect, test } from 'bun:test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -5,7 +6,7 @@ import { scratchDir } from '@kinu.run/test-utils';
 import { EVAL_MAP_POOL, EVAL_TASK_TIMEOUT_SECONDS, EVAL_TRIAL_CALLS, MUSE_CALLS_AT_ONCE, evalMatrix } from '../evals/src/config';
 import { parseResults, trials } from '../evals/src/results';
 import { whyIncomplete } from '../evals/src/comparison';
-import { evalItems, evalMapArgv } from './evals-map';
+import { evalItems, evalMapArgv, evalTaskFiles } from './evals-map';
 import { joinTrialReports, selectTrialReport, type TrialItem } from './evals-artifacts';
 import { ciVerdictRow } from './ci-verdicts';
 
@@ -23,7 +24,7 @@ function caseReport(item: TrialItem, status = 'passed') {
         session: { metadata: { taskId: item.task, taskVersion: 'version', evalCommit: 'definitions', productSha: 'abcdef1', arm: item.arm, trial: item.trial } },
         usage: { model: item.model },
         output: { metrics: { modelTurns: 1, toolCalls: 0, toolErrors: 0, badInputCalls: 0, unknownToolCalls: 0, providerWaits: 0, providerWaitMs: 0 },
-          turns: [{ part: 'build', turn: 1, outcome: { status: 'ok' }, checks: [{ id: 'answers', pass: status === 'passed' }] }] },
+          turns: [{ part: 'build', turn: 1, outcome: { status: 'completed' }, checks: [{ id: 'answers', pass: status === 'passed' }] }] },
         errors: [],
       } } },
     }],
@@ -31,6 +32,15 @@ function caseReport(item: TrialItem, status = 'passed') {
 }
 
 describe('parallel armada evaluations', () => {
+  test('the requested task matrix comes from the tracked population and rejects unknown or duplicate cells', () => {
+    const all = ['evals/tasks/office.eval.ts', 'evals/tasks/swarm.eval.ts'];
+
+    expect(evalTaskFiles(all, undefined)).toEqual(all);
+    expect(evalTaskFiles(all, 'swarm')).toEqual(['evals/tasks/swarm.eval.ts']);
+    expect(() => evalTaskFiles(all, 'missing')).toThrow('distinct tasks');
+    expect(() => evalTaskFiles(all, 'office,office')).toThrow('distinct tasks');
+  });
+
   test('two tasks times two trials on both legs produces eight distinct cells with their origins and whole slot matrix', () => {
     expect(ITEMS).toHaveLength(8);
     expect(new Set(ITEMS.map((item) => `${item.leg}/${item.task}/${item.model}/${item.arm}/${String(item.trial)}`)).size).toBe(8);
@@ -101,7 +111,7 @@ describe('parallel armada evaluations', () => {
     expect(trials(parseResults('joined', joined))).toHaveLength(4);
     expect(whyIncomplete(joined, options)).toBeNull();
     expect(whyIncomplete(joinTrialReports(reports.slice(1)), options)).not.toBeNull();
-    expect(whyIncomplete(joinTrialReports([...reports, ...reports.slice(0, 1)]), options)).toContain('numbering');
+    expect(whyIncomplete(joinTrialReports([...reports, ...reports.slice(0, 1)]), options)).toContain('expected 1 to 2 once each');
     const first = reports[0];
 
     if (first === undefined) throw new Error('no pilot report');

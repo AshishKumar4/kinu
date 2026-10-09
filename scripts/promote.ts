@@ -554,7 +554,7 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
     return 0;
   }
 
-  if (command === 'record' && (rest.length === 1 || rest.length === 2)) {
+  if (command === 'record' && [1, 2].includes(rest.length)) {
     const record = verifiedRecord(sha, rest);
 
     await servedAs(origins.staging, sha, record.downloads);

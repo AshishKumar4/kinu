@@ -41,6 +41,20 @@ export function evalMapArgv(sha: string, out: string, identities: readonly strin
     `--label=evals ${sha.slice(0, 12)}`, '--', 'bun', 'evals/scripts/trial.ts'];
 }
 
+/** The explicitly selected matrix, from the one tracked task enumeration; unknown or repeated tasks never run. */
+export function evalTaskFiles(allTasks: readonly string[], requested: string | undefined): string[] {
+  const selected = requested === undefined
+    ? allTasks.map((file) => file.slice('evals/tasks/'.length).replace(/\.eval\.ts$/u, '')) : requested.split(',');
+
+  const files = selected.map((task) => `evals/tasks/${task}.eval.ts`);
+
+  if (files.length === 0 || files.some((file) => !allTasks.includes(file)) || new Set(files).size !== files.length) {
+    throw new Error(`--tasks must name distinct tasks from ${allTasks.join(', ')}`);
+  }
+
+  return files;
+}
+
 /** Decode the native JSON-lines contract while draining progress concurrently, without a pipe deadlock. */
 async function mapTrials(argv: string[], items: readonly TrialItem[]) {
   const env = { ...process.env };
@@ -159,12 +173,8 @@ async function main(): Promise<number> {
 
   const matrix = evalMatrix({ ...process.env, KINU_EVAL_TRIALS: values.pass ? '1' : values.trials ?? process.env['KINU_EVAL_TRIALS'] }, ARMS.map((arm) => arm.id));
   const allTasks = trackedFiles().filter(isEvalTask).sort();
-  const selected = values.tasks?.split(',') ?? allTasks.map((file) => file.slice('evals/tasks/'.length).replace(/\.eval\.ts$/u, ''));
-  const taskFiles = selected.map((task) => `evals/tasks/${task}.eval.ts`);
 
-  if (taskFiles.length === 0 || taskFiles.some((file) => !allTasks.includes(file)) || new Set(taskFiles).size !== taskFiles.length) {
-    throw new Error(`--tasks must name distinct tasks from ${allTasks.join(', ')}`);
-  }
+  const taskFiles = evalTaskFiles(allTasks, values.tasks);
 
   const items = evalItems(taskFiles, matrix, origins, values.pass);
 
