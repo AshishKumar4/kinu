@@ -85,12 +85,15 @@ function resumedFrom(sent: readonly Sent[]) {
   const [call] = calls;
   const results = resumed.messages.flatMap((message, at) => JSON.stringify(message).includes(`"tool_call_id":"${call?.id ?? ''}"`) ? [{ at, text: JSON.stringify(message) }] : []);
   const changed = asking.messages.findIndex((message, at) => JSON.stringify(message) !== JSON.stringify(resumed.messages[at]));
+  const [was, now] = [JSON.stringify(asking.messages[changed]), JSON.stringify(resumed.messages[changed])];
+  const from = Array.from({ length: was.length }, (_, at) => at).find((at) => was[at] !== now[at]) ?? was.length;
 
   return {
     calls: calls.length, callAt: call?.at ?? -1, askedLength: asking.messages.length,
     results: results.map((result) => result.text), resultAt: results[0]?.at ?? -1,
     after: resumed.messages.slice((results.at(-1)?.at ?? resumed.messages.length) + 1),
-    firstChange: changed < 0 ? null : { at: changed, asked: JSON.stringify(asking.messages[changed]).slice(0, 400), resumed: JSON.stringify(resumed.messages[changed]).slice(0, 400) },
+    // Where the first changed message first differs, so a failure names the bytes that broke the cache.
+    firstChange: changed < 0 ? null : { message: changed, asked: was.slice(Math.max(0, from - 120), from + 200), resumed: now.slice(Math.max(0, from - 120), from + 200) },
     toolsKept: resumed.tools === asking.tools,
   };
 }

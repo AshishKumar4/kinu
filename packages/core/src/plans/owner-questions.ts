@@ -215,7 +215,7 @@ export class OwnerQuestionStore {
     this.actor.assertCurrent();
 
     const row = this.sql<Row>`SELECT * FROM owner_questions WHERE actor_id=${this.actorId} AND call_id=${call.toolCallId} AND digest=${callDigest(call.input)}
-      ORDER BY asked_at DESC LIMIT 1`[0];
+      ORDER BY asked_at DESC, rowid DESC LIMIT 1`[0];
 
     return row === undefined ? null : asked(row);
   }
