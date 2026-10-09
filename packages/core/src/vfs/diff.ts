@@ -2,8 +2,6 @@
  * Minimal LCS line diff (add/del/ctx rows plus +/- counts).
  * The O(n·m) table's size bound is enforced here, not by callers (see {@link MAX_LINES_PER_FILE}).
  */
-import { PLATFORM_CATALOG } from '../platform-catalog';
-
 /** `hunk`: a git hunk header (`@@ -40,6 +40,8 @@ context`), never a line of the file. */
 export interface DiffLine { kind: 'add' | 'del' | 'ctx' | 'hunk'; text: string }
 
@@ -14,22 +12,10 @@ export interface LineDiff {
 }
 
 /** Max rows carried per file and max lines per side aligned: an unreadable body is not worth the table.
- *  Memory binds, not CPU: breaching `do.isolate.reset_silent` is a silent object reset. */
+ *  Memory binds, not CPU: breaching `do.isolate.reset_silent` is a silent object reset. The table this allows must fit
+ *  an eighth of that wall, which `unit-workspace-diff.test.ts` holds rather than this module: the browser aligns lines
+ *  too, and reading the catalog here ships all of it to every page. */
 export const MAX_LINES_PER_FILE = 1000;
-
-/** Bytes per table element, rounded up from measurement so the derived bound errs small. */
-const LCS_BYTES_PER_ELEMENT = 6;
-
-/**
- * The table gets an eighth of the silent-reset wall; the rest is shared with the change-set, workspace state and
- * runtime. The min keeps the platform bound load-bearing: raising MAX_LINES_PER_FILE cannot raise alignment memory.
- * Read on call: the browser reaches this module, and a module-scope catalog read ships the whole catalog to it.
- */
-function maxAlignableLines(): number {
-  const tableBudgetBytes = PLATFORM_CATALOG['do.isolate.reset_silent'].limit.value / 8;
-
-  return Math.min(MAX_LINES_PER_FILE, Math.floor(Math.sqrt(tableBudgetBytes / LCS_BYTES_PER_ELEMENT)) - 1);
-}
 
 export function diffLines(before: string, after: string): LineDiff {
   const a = before === '' ? [] : before.split('\n');
@@ -50,9 +36,7 @@ export function diffLines(before: string, after: string): LineDiff {
 
   // Past the bound, report the middle as a wholesale replacement with no body and no table.
   // A middle with one empty side needs no table, so it is exempt at any size.
-  const alignable = maxAlignableLines();
-
-  if (n > 0 && m > 0 && (n > alignable || m > alignable)) {
+  if (n > 0 && m > 0 && (n > MAX_LINES_PER_FILE || m > MAX_LINES_PER_FILE)) {
     return { lines: [], added: m, removed: n, truncated: true };
   }
 
