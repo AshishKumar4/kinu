@@ -4051,12 +4051,25 @@ export abstract class ActorAgent extends Agent<Env> {
     const external = await sources.externalTools(this.modelCatalog.window());
 
     this._facetTurn = { turnId: turn.turnId, inputs: reads.profileInputs, external };
+    // Eval declares the turn's external tools in the description it is built with, and the surface was built before
+    // this turn read its MCP tools: one built on another turn's set is built again on this one's.
+    const declared = this.declaredExternal(turn.profile.profile.allowedTools, external);
+    const stale = Object.keys(declared).join('\0') !== Object.keys(this._turnExternalTools).join('\0');
+
+    this._turnExternalTools = declared;
+
+    if (stale) {
+      this._cachedTools = null;
+      this._cachedToolsKey = '';
+    }
+
+    const current = stale ? withToolText(this.getTools(), this.turnArtifacts().tools) : tools;
     // Until the facet binds the profile it assembled on, and again when a restarted workspace reads the turn anew.
     this._turnOperation = captureOperationProfile({ actor: this.actorHandle(), profile: turn.profile.profile, inputs: reads.profileInputs, runId: turn.turnId, turnId: turn.turnId });
 
     // A role imposing another mode (a planner on a Build message) runs the turn on that mode's tools.
     const { workMode } = turn.profile.profile;
-    const turnTools = workMode === turn.input.mode ? tools : withToolText(this.actorToolsets(workMode).turn, this.turnArtifacts().tools);
+    const turnTools = workMode === turn.input.mode ? current : withToolText(this.actorToolsets(workMode).turn, this.turnArtifacts().tools);
 
     return {
       tools: this.inFacetTurn(turnTools, turn.taskPlan),
@@ -4071,11 +4084,16 @@ export abstract class ActorAgent extends Agent<Env> {
     const turn = this._facetTurn;
 
     if (turn?.turnId !== turnId) return;
-    const allowed = new Set(profile.allowedTools);
-
     this._settledProfile = profile;
     this._turnOperation = captureOperationProfile({ actor: this.actorHandle(), profile, inputs: turn.inputs, runId: turnId, turnId });
-    this._turnExternalTools = allowed.has('eval') ? Object.fromEntries(Object.entries(turn.external).filter(([name]) => allowed.has(name))) : {};
+    this._turnExternalTools = this.declaredExternal(profile.allowedTools, turn.external);
+  }
+
+  /** The external tools a turn's eval declares and reaches: those its profile allows, when it allows eval. */
+  private declaredExternal(allowedTools: readonly string[], external: ToolSet): ToolSet {
+    const allowed = new Set(allowedTools);
+
+    return allowed.has('eval') ? Object.fromEntries(Object.entries(external).filter(([name]) => allowed.has(name))) : {};
   }
 
   /** Main's tools run under the profile its facet assembled on, and inside the approved plan it implements; each call is
