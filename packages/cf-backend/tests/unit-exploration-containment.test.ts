@@ -266,6 +266,7 @@ describe('the mission ledger bounds a hosted head', () => {
     expect(await agent.branchTurn(task)).toMatchObject({ accepted: true });
     releaseLive.resolve();
     await wake;
+    await agent.harnessAgentsIdle();
     await agent.harnessJoinDetachedFibers();
 
     // The live turn's call and the branch head's: a fork of a budgeted turn cannot spend outside its budget.
