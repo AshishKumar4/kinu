@@ -54,7 +54,7 @@ export function serveGalleryRpc(rpc: GalleryRpc): void {
 }
 
 /** The server's opening read (`getWorkspaceOpening`) from the frame's own reads, so every fixture mode applies to it;
- *  serialized, as the wire carries it. */
+ *  serialized, as the wire carries it. `data-gallery-openings` counts the openings asked. */
 async function galleryOpening(rpc: GalleryRpc): Promise<string> {
 	const list = (method: string) => openingListOf(`answering ${method}`, () => rpc<unknown>(method, []));
 
@@ -155,6 +155,10 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 				const failure = options.path === undefined || options.path === "" ? socketFailure(method) : null;
 
 				if (failure === null && served !== null && method === "getWorkspaceOpening") {
+					const root = document.documentElement.dataset;
+
+					root.galleryOpenings = String(Number(root.galleryOpenings ?? "0") + 1);
+
 					return galleryOpening(served).then((opening) => new Response(opening).json<T>());
 				}
 

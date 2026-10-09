@@ -340,22 +340,6 @@ async function answerJobs(page: Page, at: number, answer: { label?: string; fail
   await page.evaluate((detail) => { window.dispatchEvent(new CustomEvent('gallery:jobs-answer', { detail })); }, { at, ...answer });
 }
 
-/**
- * Answers every read the arriving workspace made from `from` on, and each it makes later, with one job named `label`:
- * an arrival may read the list more than once (a load the next one retires still asks).
- */
-async function answerArrival(page: Page, from: number, label: string): Promise<void> {
-  const asked = await page.evaluate((first, named) => {
-    const root = document.documentElement.dataset;
-    root.galleryJobsAnswerLabel = named;
-    root.galleryJobsAnswerFrom = String(first);
-
-    return Number(root.galleryJobReads ?? '0');
-  }, from, label);
-
-  for (let at = from; at < asked; at += 1) await answerJobs(page, at, { label });
-}
-
 /** Has the server say the jobs moved, and returns the number of the read that starts. */
 async function jobsMoved(page: Page): Promise<number> {
   const at = await jobReads(page);
@@ -408,6 +392,30 @@ async function openWorkList(page: Page): Promise<void> {
   if (await page.$('[data-back-to-work]') !== null) await page.click('[data-back-to-work]');
 }
 
+/**
+ * The opening is a dozen reads, so a load must not be paid twice. The gallery mounts under StrictMode, whose remount
+ * retires the first load in the commit that made it: 2026-10-09, two openings per arrival before the load waited a
+ * microtask to start.
+ */
+test('a page load and an arrival at another workspace each read the workspace once', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    const openings = () => page.evaluate(() => Number(document.documentElement.dataset.galleryOpenings ?? '0'));
+
+    await page.setViewport({ width: 1440, height: 900 });
+    await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('[aria-label="Work"]');
+    const loaded = await openings();
+
+    await page.evaluate(async () => { await window.galleryNavigate?.('/workspace/billing-cleanup'); });
+    await page.waitForFunction((was) => Number(document.documentElement.dataset.galleryOpenings ?? '0') > was, {}, loaded);
+    await framesDrawn(page);
+
+    expect({ loaded, arrived: await openings() }).toEqual({ loaded: 1, arrived: 2 });
+    await page.close();
+  });
+});
+
 /** A read the workspace left behind answers after the reader moved on: the next workspace never shows it. */
 test('a read answered after its workspace was left never shows in the next one', async () => {
   await withGallery(async ({ newPage, origin }) => {
@@ -425,7 +433,7 @@ test('a read answered after its workspace was left never shows in the next one',
     await page.waitForFunction((was) => Number(document.documentElement.dataset.galleryJobReads ?? '0') > was, {}, reads);
     const arrived = reads;
 
-    await answerArrival(page, arrived, 'next workspace build');
+    await answerJobs(page, arrived, { label: 'next workspace build' });
     await openWorkList(page);
     await page.waitForFunction(() => document.body.textContent?.includes('next workspace build'));
 

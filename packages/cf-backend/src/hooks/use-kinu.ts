@@ -907,14 +907,18 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
     return () => clearInterval(id);
   }, [agent, connectionStatus, isSubordinate, rpc, setSourceError]);
 
-  // Speaks only for itself. Re-running admits a newer load, which retires this one.
+  // Speaks only for itself. Re-running admits a newer load, which retires this one. It starts a microtask after the
+  // commit, so a load retired in the commit that made it (a remount, StrictMode's included) issues no read: the opening
+  // is a dozen reads, and a retired one paid them all for nothing (2026-10-09, two openings per arrival in the gallery).
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let disposed = false;
     const taskId = ++snapshotLoadTaskId.current;
     let task: Promise<void> | null = null;
-    task = (async () => {
+    task = Promise.resolve().then(async () => {
       try {
+        if (disposed) return;
+
         const outcome = await loadWorkspaceSnapshot(
           isSubordinate ? loadSubordinateData : loadAllData,
           setSourceError,
@@ -942,7 +946,7 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
       } finally {
         snapshotLoadTasks.current.delete(taskId);
       }
-    })();
+    });
     snapshotLoadTasks.current.set(taskId, task);
 
     return () => {
