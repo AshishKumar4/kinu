@@ -1017,11 +1017,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected override async modelSettingsChanged(): Promise<void> {
     await super.modelSettingsChanged();
 
-    for (const { actorId, parentActorId } of this.workspaceActors().list()) {
+    for (const { actorId } of this.workspaceActors().list()) {
       if (!this.isAgent(actorId)) continue;
-
-      // A root that never held a turn has no measure or parked refusal to revise, and its isolate is not opened for none.
-      if (parentActorId === null && !this.config.getHoldsTurns()) continue;
       this.detachOwned(logged('agent.settings_release_failed', { doing: "telling an agent's isolate the model settings changed", otherwise: 'unavailable' },
         async () => { await (await this.agentCalls(actorId)).modelSettingsChanged(this.agentSnapshot(actorId)); }, { workspace: this.name, actor: actorId }));
     }
