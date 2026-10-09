@@ -592,7 +592,7 @@ const RpcAskSchema = v.looseObject({ id: v.string(), method: v.string() });
 const RpcAnswerSchema = v.looseObject({ id: v.string(), result: v.optional(v.unknown()) });
 
 /** The reads whose answers carry Work's presence. */
-const PRESENCE_READS = new Set(['getWorkspaceTabPresence', 'getWorkspaceSnapshot']);
+const PRESENCE_READS = new Set(['getWorkspaceTabPresence', 'getWorkspaceSnapshot', 'getWorkspaceOpening']);
 
 /** Work's presence out of either answer that carries it. */
 const PresenceAnswerSchema = v.union([
@@ -655,7 +655,7 @@ interface ClaimRead {
   readonly atAsk: number;
 }
 
-/** The claim a workspace snapshot answer carries (`getWorkspaceSnapshot`'s `turnClaim`). */
+/** The claim a workspace snapshot or opening answer carries (its `turnClaim`). */
 const SnapshotClaimSchema = v.looseObject({ turnClaim: ClaimStateSchema });
 
 /** The turn errors {@link recordDeadEnds} recorded on this page, oldest first. */
@@ -819,7 +819,7 @@ async function measureOpenedMidTurn(
     await until(page, 'the workspace page, reloaded', `document.querySelector('textarea') !== null`);
     await until(page, "the bar's Main tab", `document.querySelector(${JSON.stringify(MAIN_TAB)}) !== null`);
     await page.evaluate(INSTALL_LIVE_SAMPLER);
-    await waitOn(page, 'the reloaded page\'s snapshot', settledAfter(page, reads, 'getWorkspaceSnapshot'));
+    await waitOn(page, 'the reloaded page\'s opening', settledAfter(page, reads, 'getWorkspaceOpening'));
     await rendered(page);
 
     const held = v.parse(v.nullable(LiveSampleSchema), await page.evaluate(LAST_LIVE_SAMPLE));

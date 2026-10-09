@@ -9,6 +9,7 @@ import { wgslVitePlugin } from "@vgpu/wgsl/loader-vite";
 import { defineConfig } from "vite";
 import { promptText } from './vite-prompt-text';
 import { iconWeights } from './vite-icon-weights';
+import { landingPrerender } from './vite-landing-prerender';
 import { kinuTheme } from './vite-theme';
 import { slateVendor } from './slate-vendor';
 import { workerLoadCost } from './vite-worker-bundle';
@@ -134,6 +135,7 @@ export default defineConfig(({ command }) => ({
     }),
     devPreviewZone(devPreviewTlsDir(__dirname), previewPort),
     tailwindcss(),
+    landingPrerender(),
   ],
   // The zone's requests reach vite with their preview host. Nimbus fetches its staged napi assets from ASSETS under a
   // fixed synthetic host (@nimbus-sh/worker runtime/staged-source.js); refused, a TS slate cannot build under dev.

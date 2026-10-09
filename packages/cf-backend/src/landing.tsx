@@ -1,7 +1,7 @@
-import { createRoot } from 'react-dom/client';
+import { createRoot, hydrateRoot } from 'react-dom/client';
 import * as v from 'valibot';
 
-import { buildCliInstallCommand, requestUrl } from '@kinu.run/core';
+import { requestUrl } from '@kinu.run/core';
 import { LANDING_PROFILE, LANDING_ROSTER } from '@/components/landing/landing-fixtures';
 import { LandingPage } from '@/components/landing/LandingPage';
 import "virtual:kinu-theme.css";
@@ -36,6 +36,6 @@ const mount = document.getElementById('landing-root');
 
 if (mount === null) throw new Error('landing root is missing');
 
-const install = buildCliInstallCommand({ origin: window.location.origin });
-
-createRoot(mount).render(<LandingPage install={install} />);
+// The build writes the page's markup into `landing.html` (scripts/prerender-landing.ts); a dev server's has none.
+if (mount.firstElementChild === null) createRoot(mount).render(<LandingPage />);
+else hydrateRoot(mount, <LandingPage />);

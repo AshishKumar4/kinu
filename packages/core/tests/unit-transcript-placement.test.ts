@@ -168,7 +168,7 @@ describe('cutting the turn at the steer', () => {
 
   test('no steer leaves the parts in one piece', () => {
     const parts = turn('a1', 3).parts;
-    expect(segmentBySteers(parts, [])).toEqual([{ steer: null, parts }]);
+    expect(segmentBySteers(parts, [])).toEqual([{ steer: null, signal: null, parts }]);
   });
 
   test('two steers in one turn are drawn in step order, each above its own work', () => {
@@ -185,6 +185,16 @@ describe('cutting the turn at the steer', () => {
 
     expect(segments.map((segment) => segment.steer?.id ?? null)).toEqual([null, 'a', 'b']);
     expect(segments[1].parts).toEqual([]);
+  });
+
+  test('an event spliced at a step leads that step\'s work, after a steer read at the same step', () => {
+    const parts = turn('a1', 4).parts;
+    const segments = segmentBySteers(parts, [live('s', 'wait', 2)], [{ id: 'mail', atStep: 2 }, { id: 'job', atStep: 1 }]);
+
+    expect(segments.map((segment) => segment.steer?.id ?? segment.signal?.id ?? null)).toEqual([null, 'job', 's', 'mail']);
+    expect(segments.map((segment) => segment.parts.map(partLabel))).toEqual([
+      ['start', 'step 0'], ['start', 'step 1'], [], ['start', 'step 2', 'start', 'step 3'],
+    ]);
   });
 
   test('a step the turn never reached puts the steer at the end, not off the list', () => {

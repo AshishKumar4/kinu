@@ -7,11 +7,12 @@ import { wgslVitePlugin } from "@vgpu/wgsl/loader-vite";
 import { defineConfig } from "vite";
 import { promptText } from "./vite-prompt-text";
 import { kinuTheme } from './vite-theme';
+import { landingPrerender } from './vite-landing-prerender';
 
 const galleryRoot = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
-  plugins: [kinuTheme(), promptText(), wgslVitePlugin(), react(), tailwindcss()],
+  plugins: [kinuTheme(), promptText(), wgslVitePlugin(), react(), tailwindcss(), landingPrerender()],
   // UMD-only, so it has no `default` export when served raw; prebundle it.
   optimizeDeps: {
     include: ["@plannotator/web-highlighter"],

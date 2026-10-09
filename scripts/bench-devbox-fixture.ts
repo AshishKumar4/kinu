@@ -15,7 +15,7 @@ import {
   WRANGLER_FAILED, containerAppIds, delay, deleteContainerApps,
   describeThrown, runWrangler,
 } from './fixtures/r2-bench/deploy-substrate';
-import { deleteApplicationSnapshots } from './fixtures/application-snapshots';
+import { snapshotRegistry, type ApplicationSweep } from '../packages/devbox/src/snapshot-registry';
 import { restApiToken } from './cloudflare-rest';
 import * as v from 'valibot';
 import {
@@ -35,7 +35,7 @@ import {
 import {
   checkCleanup, createManifest, replayTeardown, writeManifest,
   type CleanupProbes, type CleanupReport, type DeleteOutcome, type TeardownEntry,
-  type TeardownManifest,
+  type TeardownManifest, type TeardownStep,
 } from './fixtures/storage-matrix/cleanup';
 import { parseJsonc } from './jsonc';
 import { trackedFiles } from './sources';
@@ -802,8 +802,8 @@ export async function retryTransient<T extends { error?: string }>(
   throw new Error(`${operation}: retry loop ended without a reply`);
 }
 
-/** Each arm owns its Worker and container application alone, so this deletion
- *  is safe while a sibling arm is still measuring. */
+/** Each arm owns its Worker alone, so this deletion is safe while a sibling arm is still measuring. Its container
+ *  application is the manifest's `container-app` step's, with the snapshots it made (`containerAppTeardown`). */
 function deleteFixtureResources(fixture: ArmFixture): readonly string[] {
   let deleted = wrangler([
     'delete', '--config', fixture.configPath, '--force',
@@ -818,10 +818,7 @@ function deleteFixtureResources(fixture: ArmFixture): readonly string[] {
     ? `worker: FAILED ${deleted.slice(0, 160)}`
     : 'worker: deleted or absent';
 
-  return [
-    workerResult,
-    ...deleteContainerApps(REPO_ROOT, fixture.containerApps, log),
-  ];
+  return [workerResult];
 }
 
 interface DeployedFixture {
@@ -2108,6 +2105,8 @@ export async function teardownLanes(
   const errors: string[] = [];
   let failure: string | null = null;
 
+  recordApplicationIds(fixtures.manifest);
+
   // Each arm's boxes are swept through that arm's own Worker: an arm answers only on its own
   // deployment, and an arm that never deployed has nothing to sweep.
   for (const lane of lanes) {
@@ -2124,7 +2123,7 @@ export async function teardownLanes(
   // only the Worker and what it serves need this run's lane state.
   const byName = orphanTeardownExecutor(residue);
 
-  const replay = await replayTeardown(REPO_ROOT, fixtures.manifest, async (entry): Promise<DeleteOutcome> => {
+  const replay = await replayTeardown(REPO_ROOT, fixtures.manifest, async (entry, persist, manifest): Promise<DeleteOutcome> => {
     if (entry.kind === 'worker') {
       const lane = lanes.find((candidate) => candidate.fixture.worker === entry.name);
 
@@ -2150,7 +2149,7 @@ export async function teardownLanes(
         : { ok: false, error: 'Worker must be deleted before its durable state' };
     }
 
-    return await byName(entry);
+    return await byName(entry, persist, manifest);
   });
 
   if (replay.failures.length > 0) {
@@ -2188,33 +2187,90 @@ export async function teardownLanes(
   return { report: cleanupCheck, errors, failure };
 }
 
-/** The snapshots an arm's application made, deleted once the application is: deleting it leaves them in the account's
- *  registry, which on 2026-10-09 held 801 snapshots of deleted applications. */
-async function deleteSnapshotsOf(application: string, ids: readonly string[]): Promise<DeleteOutcome> {
-  const token = (process.env['DEVBOX_REGISTRY_TOKEN'] ?? '').trim() || restApiToken();
+/** Each container application's ids into its manifest entry, written before anything is deleted: deleting the
+ *  application, or the Worker that owns it, leaves its snapshots, and only its ids find them after. Called once its
+ *  application exists and again before a teardown, so a run interrupted anywhere has them. */
+export function recordApplicationIds(manifest: TeardownManifest): void {
+  const learnt = manifest.entries.filter((entry) => entry.kind === 'container-app' && !entry.done).map((entry) => {
+    const ids = containerAppIds(REPO_ROOT, [entry.name], log).map((found) => found.id).filter((id) => !entry.ids.includes(id));
 
-  if (token === '') return { ok: false, error: `${application}'s snapshots need DEVBOX_REGISTRY_TOKEN or KINU_CLOUDFLARE_API_TOKEN to be deleted` };
+    entry.ids.push(...ids);
+
+    return ids.length;
+  });
+
+  if (learnt.some((count) => count > 0)) writeManifest(REPO_ROOT, manifest);
+}
+
+/** What a container application's teardown reaches: the platform's listing and deletion, and the registry. */
+export interface ContainerAppPorts {
+  /** The ids the platform lists under `name` now. */
+  readonly listed: (name: string) => readonly string[];
+  /** Deletes the application `name`; a failure's words, or undefined. */
+  readonly remove: (name: string) => string | undefined;
+  readonly sweep: (applicationId: string) => Promise<ApplicationSweep>;
+}
+
+/**
+ * One step for a container application and every snapshot it made, the same for a finished run and an interrupted
+ * one: its ids recorded in the entry (`persist`) before anything is deleted, then the application if it is still
+ * listed, then each id's snapshots. A step after the application went, or a retry after a refused sweep, still has
+ * the ids; deleting the application leaves its snapshots, which on 2026-10-09 were 801 of the 923 orphans removed.
+ */
+export async function containerAppTeardown(entry: TeardownEntry, persist: () => void, ports: ContainerAppPorts): Promise<DeleteOutcome> {
+  const listed = ports.listed(entry.name);
+  const ids = [...new Set([...entry.ids, ...listed])];
+
+  if (ids.length > entry.ids.length) {
+    entry.ids = ids;
+    persist();
+  }
+
+  const failed = listed.length === 0 ? undefined : ports.remove(entry.name);
+
+  if (failed !== undefined) return { ok: false, error: failed };
+
+  if (ids.length === 0) return { ok: true, absent: true };
 
   for (const applicationId of ids) {
-    const swept = await deleteApplicationSnapshots({ account: BENCH_ACCOUNT_ID, token, applicationId });
+    const swept = await ports.sweep(applicationId);
 
-    if (swept.left.length > 0) return { ok: false, error: `${application} left ${String(swept.left.length)} snapshot(s) in the registry` };
+    if (swept.kind === 'refused') return { ok: false, error: `${entry.name}'s snapshots were not deleted: ${swept.reason}` };
+
+    if (swept.left.length > 0) return { ok: false, error: `${entry.name} left ${String(swept.left.length)} snapshot(s) in the registry` };
   }
 
   return { ok: true };
+}
+
+/** The account's own ports: wrangler's listing, the application deletion, and the registry client the boxes use. */
+function accountContainerAppPorts(): ContainerAppPorts {
+  const token = (process.env['DEVBOX_REGISTRY_TOKEN'] ?? '').trim() || restApiToken();
+  const registry = snapshotRegistry({ account: BENCH_ACCOUNT_ID, token, fetch: (input, init) => fetch(input, init) });
+
+  return {
+    listed: (name) => containerAppIds(REPO_ROOT, [name], log).map((found) => found.id),
+    remove: (name) => deleteContainerApps(REPO_ROOT, [name], log).find((status) => /failed/i.test(status)),
+    sweep: async (applicationId) => (token === ''
+      ? { kind: 'refused', reason: 'deleting snapshots needs DEVBOX_REGISTRY_TOKEN or KINU_CLOUDFLARE_API_TOKEN' }
+      : await registry.deleteApplication(applicationId)),
+  };
 }
 
 /** Deletes by resource name only: a recovered manifest's process is gone, so no lane state.
  *  "Already absent" is success so an interrupted recovery can be rerun. */
 export function orphanTeardownExecutor(
   residue: R2ResiduePlane | null,
-): (entry: TeardownEntry) => Promise<DeleteOutcome> {
+  ports: ContainerAppPorts = accountContainerAppPorts(),
+): TeardownStep {
   // Durable state is reachable only through its Worker, so a box-empty entry is worthless
   // until the Worker serving it is deleted.
   const workersDeleted = new Set<string>();
 
-  return async (entry: TeardownEntry): Promise<DeleteOutcome> => {
+  return async (entry, persist, manifest): Promise<DeleteOutcome> => {
     if (entry.kind === 'worker') {
+      // Deleting a Worker can take its container applications with it: their ids are written first.
+      recordApplicationIds(manifest);
       const deleted = wrangler(['delete', '--name', entry.name, '--force'], { allowFailure: true });
 
       if (!deleted.startsWith(WRANGLER_FAILED)) {
@@ -2232,16 +2288,7 @@ export function orphanTeardownExecutor(
       return { ok: false, error: deleted.slice(0, 240) };
     }
 
-    if (entry.kind === 'container-app') {
-      const ids = containerAppIds(REPO_ROOT, [entry.name], log).map((found) => found.id);
-
-      if (ids.length === 0) return { ok: true, absent: true };
-      const failed = deleteContainerApps(REPO_ROOT, [entry.name], log).find((status) => /failed/i.test(status));
-
-      if (failed !== undefined) return { ok: false, error: failed };
-
-      return await deleteSnapshotsOf(entry.name, ids);
-    }
+    if (entry.kind === 'container-app') return await containerAppTeardown(entry, persist, ports);
 
     if (entry.kind === 'r2-bucket') {
       let deleted = wrangler(['r2', 'bucket', 'delete', entry.name], { allowFailure: true });

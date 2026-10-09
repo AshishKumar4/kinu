@@ -24,7 +24,7 @@ import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { evalSessionPath } from '@kinu.run/test-utils';
 import { deleteApplicationByRest, deleteR2Prefix, deletedByRest, restApiToken } from './cloudflare-rest';
-import { deleteApplicationSnapshots } from './fixtures/application-snapshots';
+import { snapshotRegistry } from '../packages/devbox/src/snapshot-registry';
 import { type ContainerApplication, containerApplications, deployment, why, wrangler } from './infra-cloudflare';
 import { type DeployedConfig, INFRA_ENVIRONMENTS, type InfraEnvironment, deployedConfig, liveClasses } from './infra-manifest';
 
@@ -214,7 +214,9 @@ function cloudflareTarget(environment: InfraEnvironment, config: DeployedConfig,
     },
     deleteSnapshots: async (application) => {
       const token = (process.env['DEVBOX_REGISTRY_TOKEN'] ?? '').trim() || restApiToken();
-      const swept = await deleteApplicationSnapshots({ account: config.account_id ?? '', token, applicationId: application.id });
+      const swept = await snapshotRegistry({ account: config.account_id ?? '', token, fetch: (input, init) => fetch(input, init) }).deleteApplication(application.id);
+
+      if (swept.kind === 'refused') throw new Error(`${application.name}'s snapshots were not deleted: ${swept.reason}`);
 
       if (swept.left.length > 0) throw new Error(`${application.name} left ${String(swept.left.length)} snapshot(s) in the registry: ${swept.left.join(', ')}`);
 
