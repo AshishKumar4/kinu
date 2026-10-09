@@ -16,7 +16,7 @@ import {
   initPendingSendTables, initTerminalEffectTable, PendingSendStore, contextFill, announcementOf, classifyRunEnd, closeTurnRun, TurnReports,
   PlanReviewStore, type PlanReview,
 } from '@kinu.run/core';
-import { attempt, detach, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
+import { attempt, detach, diagnostics, hold, KinuError, logged, settle, settleSync } from '@kinu.run/core/obs';
 import { isDeepStrictEqual } from 'node:util';
 import { Effect } from 'effect';
 import * as v from 'valibot';
@@ -97,19 +97,16 @@ export class AgentDatabase {
     return taken;
   }
 
-  private relayed: Promise<void> = Promise.resolve();
+  private relayed: Promise<unknown> = Promise.resolve();
 
   /** A line no tool call or task's end takes first reaches the workspace's log as it is logged, in order: an offer's
    *  yield, logged with no turn left to end, is never stranded here. */
   private relayActivity(): void {
-    const before = this.relayed;
-
-    this.relayed = settle(attempt({ doing: "relaying an agent's activity to its workspace", otherwise: 'io' }, async () => {
-      await before;
+    this.relayed = this.relayed.then(() => hold(logged('agent.activity_relay_failed', { doing: "relaying an agent's activity to its workspace", otherwise: 'io' }, async () => {
       const lines = this.takeActivity();
 
       if (lines.length > 0) await this.workspace.logActivity(lines);
-    }).pipe(Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('agent.activity_relay_failed', failure); }))));
+    })));
   }
 
   private priced: { readonly model: string; readonly pricing: ModelPricing | null } | null = null;
