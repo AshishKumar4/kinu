@@ -202,16 +202,16 @@ export function look(names: readonly string[], press: Press | null): Looked {
       if (column !== null && !othersIn(name, column)) parts.push({ inside: column, occurrence });
     }
 
-    const readings: { text: Said[]; controls: Element[]; occurrence: number }[] = [];
+    const readings: { text: Said[]; controls: Element[] }[] = [];
     regions[name] = parts.flatMap(({ inside, occurrence }) => {
       const held = controls.filter((control) => inside(control.element));
       const text = texts.filter(inside);
       const elements = held.map((control) => control.element);
 
       // A row and a column over the same nodes are one reading; identical copy in separate treatments stays separate.
-      if (readings.some((reading) => reading.occurrence === occurrence && reading.text.length === text.length && reading.text.every((node, index) => node === text[index])
+      if (readings.some((reading) => reading.text.length === text.length && reading.text.every((node, index) => node === text[index])
         && reading.controls.length === elements.length && reading.controls.every((node, index) => node === elements[index]))) return [];
-      readings.push({ text, controls: elements, occurrence });
+      readings.push({ text, controls: elements });
 
       if (press !== null && press.name === name) {
         for (const control of held) if (press.label === null ? held.length === 1 : new RegExp(press.label, 'i').test(control.label)) pressing.add(control.element);
