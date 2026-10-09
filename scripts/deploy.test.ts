@@ -352,6 +352,7 @@ fi
 exit 87
 `);
   executable(join(fixture, 'curl'), '#!/usr/bin/bash\nexit 7\n');
+  executable(join(fixture, 'node'), `#!/usr/bin/bash\nexec "${process.execPath}" "$@"\n`);
 
   const argv = [...held, "/usr/bin/bash", "scripts/deploy.sh"];
 
