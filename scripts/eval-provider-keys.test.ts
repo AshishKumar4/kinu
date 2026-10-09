@@ -2,7 +2,8 @@ import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
-import { validateCredential, validateCredentialKey } from '@kinu.run/core';
+import { BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, JsonValueSchema, profileCatalogDigest, validateCredential, validateCredentialKey,
+  validateProfileCatalog, type JsonValue, type ProfileCatalogEnvelope } from '@kinu.run/core';
 import { childEnv, scratchDir } from '@kinu.run/test-utils';
 import { catalogCredKey } from '../packages/core/src/providers/catalog';
 import { provisionEvalProviderKeys } from './eval-provider-keys';
@@ -19,7 +20,7 @@ const MODEL = 'opencode-go/muse-spark-1.3-contributor';
  * `validateCredentialKey`, then `validateCredential`), and a provider's models are listed only once the key that
  * provider reads (`catalogCredKey`) is stored.
  */
-const store = new Map<string, unknown>();
+const store = new Map<string, ReturnType<typeof validateCredential>>();
 
 const posts: { key: string; identity: string | null }[] = [];
 
@@ -151,14 +152,18 @@ describe('eval-service provider keys on every deployment it drives', () => {
  * its workspaces, and the account delete that empties it.
  */
 function accountsDeployment() {
-  type Account = { keys: Map<string, unknown>; inherited: Record<string, number>; workspaces: { name: string; lastVisited: number }[] };
+  type Account = { keys: Map<string, JsonValue>; inherited: Record<string, number>; workspaces: { name: string; lastVisited: number }[]; catalog: ProfileCatalogEnvelope };
 
   const accounts = new Map<string, Account>();
   const resets: string[] = [];
 
   const of = (request: Request): Account => {
     const name = request.headers.get('x-kinu-dev-identity-account') ?? 'eval-service';
-    const account = accounts.get(name) ?? { keys: new Map(), inherited: {}, workspaces: [] };
+    const catalog = { ...BUILTIN_PROFILE_CATALOG, retries: 3 };
+
+    const account = accounts.get(name) ?? { keys: new Map(), inherited: {}, workspaces: [], catalog: {
+      authority: { kind: 'account', accountId: name }, version: 0, digest: profileCatalogDigest(catalog), catalog,
+    } };
 
     accounts.set(name, account);
 
@@ -168,11 +173,24 @@ function accountsDeployment() {
   const server = Bun.serve({ port: 0, hostname: '127.0.0.1',
     routes: {
       '/api/user/credentials/:key': { POST: async (request) => {
-        of(request).keys.set(decodeURIComponent(request.params.key), await request.json());
+        of(request).keys.set(decodeURIComponent(request.params.key), v.parse(JsonValueSchema, await request.json()));
 
         return Response.json({ ok: true });
       } },
       '/api/user/credentials': (request) => Response.json([...of(request).keys.keys()].map((key) => ({ key, kind: 'bearer' }))),
+      '/api/user/profile-catalog': {
+        GET: (request) => Response.json(of(request).catalog),
+        PUT: async (request) => {
+          const body = v.parse(v.object({ expectedVersion: v.number(), catalog: JsonValueSchema }), await request.json());
+          const account = of(request);
+
+          if (body.expectedVersion !== account.catalog.version) return Response.json({ error: 'Version conflict' }, { status: 409 });
+          const catalog = validateProfileCatalog({ value: body.catalog });
+          account.catalog = { ...account.catalog, catalog, version: account.catalog.version + 1, digest: profileCatalogDigest(catalog) };
+
+          return Response.json(account.catalog);
+        },
+      },
       '/api/user/models': (request) => Response.json({ models: of(request).keys.has('opencode-go.bearer') ? [{ spec: MODEL }] : [], failures: [] }),
       '/api/user/held-rows': (request) => Response.json({ user_credentials: of(request).keys.size, ...of(request).inherited }),
       '/api/user/workspaces': (request) => Response.json({ entries: of(request).workspaces, nextCursor: null }),
@@ -210,7 +228,18 @@ describe('every trial account a run acts as', () => {
       expect(await provisionEvalProviderKeys(input)).toEqual({ stored: ['opencode-go.bearer'], findings: [], trials: { given: 3, reset: [] }, notes: [] });
       expect([...accounts.keys()].sort()).toEqual(['eval-service', 'trial-1', 'trial-2', 'trial-3']);
       expect([...accounts.values()].every((account) => account.keys.has('opencode-go.bearer'))).toBe(true);
+
+      for (const name of input.trialAccounts) {
+        const configured = accounts.get(name)?.catalog;
+
+        expect(configured?.catalog.tiers.deep?.model).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
+        expect(configured?.catalog.modelFallbacks?.[DEFAULT_WORKERS_AI_MODEL_SPEC]).toEqual([MODEL]);
+        expect(configured?.catalog.retries).toBe(3);
+        expect(configured?.version).toBe(1);
+      }
+
       expect(await provisionEvalProviderKeys(input)).toEqual({ stored: [], findings: [], trials: { given: 0, reset: [] }, notes: [] });
+      expect(input.trialAccounts.map((name) => accounts.get(name)?.catalog.version)).toEqual([1, 1, 1]);
     } finally {
       await server.stop(true);
     }

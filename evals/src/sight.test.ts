@@ -77,6 +77,19 @@ describe('a page read as a person sees it', () => {
     expect(sight.regions.platform?.flatMap((region) => region.controls)).toEqual(['Pick']);
   });
 
+  test('overlapping row and column readings cannot turn one comparison into several treatments', async () => {
+    for (const count of [1, 2, 3]) {
+      const sight = await read(Array.from({ length: count }, () => `<div style="display:flex">${TEAMS.map((team) =>
+        `<section><h2>${team}</h2><p>19 monthly</p><p>205.20 yearly</p></section>`).join('')}</div>`).join(''));
+
+      for (const team of TEAMS) {
+        const priced = (sight.regions[team] ?? []).filter((region) => shows(region.text, 19) && shows(region.text, 205.2));
+
+        expect(new Set(priced.flatMap((region) => region.occurrence === undefined ? [] : [region.occurrence])).size).toBe(count);
+      }
+    }
+  });
+
   test('cards read like rows, and a heading naming every team is no team\'s part', async () => {
     const sight = await read(`<h1>Teams: design, growth and platform</h1><div style="display:flex">
       ${TEAMS.map((team, index) => `<section><h2>${team.toUpperCase()}</h2><p>Budget <b>${String(1000 * (index + 1))}</b></p><p>Spent ${String(900 * (index + 1))}</p></section>`).join('')}

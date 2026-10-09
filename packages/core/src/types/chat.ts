@@ -8,6 +8,8 @@ export const ChatHistoryEntrySchema = v.object({
   role: v.picklist(['user', 'assistant', 'system']),
   /** The turn it belongs to, which a send's state names. */
   turnId: v.nullable(v.string()),
+  /** The run that admitted this entry, retained even after its actor is released. */
+  runId: v.optional(v.nullable(v.string())),
   content: v.string(),
   createdAt: v.union([v.string(), v.number()]),
   /** Author and event markers must survive paging as well as live delivery. */

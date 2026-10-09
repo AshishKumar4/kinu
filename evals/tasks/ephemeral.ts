@@ -62,6 +62,8 @@ export function prototypeSteps(calls: readonly { readonly name: string; readonly
   let previewed = false;
 
   return calls.flatMap(({ name, args: recorded }) => {
+    // Plans, memories and reports describe work; only these tools execute a page, write one, or look at one.
+    if (!['eval', 'shell', 'file', 'web'].includes(name)) return [];
     const args = written(recorded);
     const named = [...args.matchAll(NAMED)].map((found) => ({ id: found[1] ?? found[2] ?? '', previews: found[3] !== undefined }));
     const pages = [...args.matchAll(PAGE)].map(([path]) => path).filter((path) => ![...asked].some((id) => path.includes(`/slates/${id}/`)));
