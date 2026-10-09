@@ -10,7 +10,7 @@ import {
 } from '@kinu.run/core';
 import {
   catalogTurn, chatSessionTurns, GATEWAY_CATALOG, gatewayWorkspace, jobsOver, orchestratorHarness,
-  alarmDue, driveUntil, reactivateOrchestratorHarness, seedOrphanFiber, until, workspaceMainActor,
+  agentWakes, alarmDue, driveUntil, reactivateOrchestratorHarness, seedOrphanFiber, until, workspaceMainActor,
   type ActorHarness, type HarnessOrchestratorAgent, storedChat,
 } from './helpers/actor-harness';
 import { answeringGateway, chatCompletion, openingOf, stubAiBinding, type StubbedAiBinding } from './helpers/platform-gateway';
@@ -224,7 +224,9 @@ describe('the post-turn lanes', () => {
 
     expect(calls()).toBe(1);
     expect(notes(restarted)).toBe(1);
-    // Said once: one programmatic turn of main's carries the note, whatever id its isolate admitted it under.
+    // Said once: one programmatic turn of main's carries the note, whatever id its isolate admitted it under; main's
+    // isolate runs it when the wake the workspace armed for it fires.
+    await driveUntil(restarted, "main's isolate took the note", () => agentWakes(restarted.db).length === 0);
     expect((await programmaticTurns(restarted)).filter((turn) => turn.text.includes(ADVISOR_HEADER))).toHaveLength(1);
   });
 
@@ -246,7 +248,7 @@ describe('the post-turn lanes', () => {
 // Review P1 (d35c1060fe): the answer job awaited the note's delivery, and a note sent to an idle actor settles only
 // when the whole turn it opens does, so the alarm held across that turn's inference and a long one met the wall.
 describe('an advisor answer handed to a turn', () => {
-  test('the alarm returns while the turn the note opened still runs; the answer is kept until it is said', async () => {
+  test('the alarm returns while the turn the note opened still runs; the answer is released once the note is said', async () => {
     const gateway = stubAiBinding((run) => chatCompletion(run, ADVISOR_REPLY));
     const harness = gatewayWorkspace(gateway);
     const turns = chatSessionTurns(harness.agent);
@@ -275,10 +277,11 @@ describe('an advisor answer handed to a turn', () => {
     expect(JSON.stringify((await noteTurn).prompt)).toContain(ADVISOR_HEADER);
     await until(() => drove, "the alarm returned while the note's turn runs");
     await driving;
-    expect(answers()).toBe(1);
+    // Said once main's isolate holds the note's turn, which it owns durably from then: the answer is released while
+    // that turn still runs.
+    expect(answers()).toBe(0);
 
     await turns.settle({ messageId: 'note-answer', text: 'Checked the backup.' });
-    await until(() => answers() === 0, 'the said note released its answer');
     expect(harness.db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM evolution_events WHERE type = 'advisor_note'").get()?.n).toBe(1);
   });
 });
