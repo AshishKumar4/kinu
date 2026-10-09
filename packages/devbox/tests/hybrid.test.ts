@@ -9,6 +9,8 @@ import type { SnapshotRegistry } from '../src/snapshot-registry';
 class Registry {
   readonly deleted: string[] = [];
   refuse: string | undefined;
+  /** The digest the next refusal says it left, its tags gone. */
+  left: string | undefined;
 }
 
 const registry = new Registry();
@@ -22,9 +24,11 @@ class HybridBox extends ChainTestBox {
     return {
       delete: async (id) => {
         const refused = registry.refuse;
+        const left = registry.left;
         registry.refuse = undefined;
+        registry.left = undefined;
 
-        if (refused !== undefined) return { kind: 'refused', reason: refused };
+        if (refused !== undefined) return left === undefined ? { kind: 'refused', reason: refused } : { kind: 'refused', reason: refused, left };
         registry.deleted.push(id);
 
         return { kind: 'deleted' };
@@ -227,4 +231,22 @@ test('discarding the workspace deletes its whole lineage', async () => {
 
   expect({ deleted: [...registry.deleted].sort(), snapshot: rows.has('devbox:snapshot'), pending: rows.get('devbox:dead-snapshots') ?? [] })
     .toEqual({ deleted: ['snapshot-1', 'snapshot-2'], snapshot: false, pending: [] });
+});
+
+test('a deletion refused after the tags went is owed as the digest the registry left, and the next sweep deletes that', async () => {
+  const { box, container, rows } = await rested();
+  container.snapshots.delete('snapshot-1');
+  registry.refuse = 'deleting sha256:ab answered 503: busy';
+  registry.left = 'sha256:ab';
+  const spy = spyOn(console, 'error').mockImplementation(() => {});
+
+  try {
+    await box.devboxStartup();
+    await box.quiesce();
+    await box.devboxStartup();
+    await box.quiesce();
+
+    // The id was refused once; what was deleted after is the digest it left, never the id again.
+    expect({ deleted: registry.deleted, pending: rows.get('devbox:dead-snapshots') ?? [] }).toEqual({ deleted: ['sha256:ab'], pending: [] });
+  } finally { spy.mockRestore(); }
 });

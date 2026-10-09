@@ -2,6 +2,7 @@
 import { Effect, Result } from 'effect';
 import * as v from 'valibot';
 import { DevboxError, attempt } from './errors';
+import type { SnapshotDeletion } from './snapshot-registry';
 import { shellPath } from './stream-archive';
 import { TOOLS_STAMP, toolsInstallCommand } from './tools';
 
@@ -17,6 +18,10 @@ const LIFE_MS = 29 * DAY_MS;
 
 export const GOLDEN_REFRESH_MS = 25 * DAY_MS;
 
+/** A box's own lineage wakes for LIFE_MS from its root, a delta on the golden it started from, so a golden no slot holds
+ *  any more is deleted once every lineage rooted on it is past waking, with a day's margin. */
+const RETIRE_MS = LIFE_MS + DAY_MS;
+
 const ARCHIVE = '/tmp/devbox-tools.tgz';
 
 /** A snapshot lives 30 days from its creation or last restore. */
@@ -30,6 +35,8 @@ export const GoldenStateSchema = v.object({
   failure: v.optional(v.string()),
   /** The step a build under way is at, so a box's caller can tell a moving build from a stuck one. */
   building: v.optional(v.string()),
+  /** Goldens no slot holds, each deleted from `at` on: a snapshot id, or the digest an earlier delete left. */
+  retiring: v.optional(v.array(v.object({ ref: v.string(), at: v.number() })), []),
 });
 
 export type GoldenState = v.InferOutput<typeof GoldenStateSchema>;
@@ -53,6 +60,8 @@ export interface GoldenPorts {
   readonly destroy: () => Promise<void>;
   readonly build: () => Promise<void>;
   readonly tell: (box: string, answer: GoldenAnswer) => Promise<void>;
+  /** Deletes a snapshot from the registry; undefined without the authority to. */
+  readonly delete: (ref: string) => Promise<SnapshotDeletion> | undefined;
   readonly now: () => number;
 }
 
@@ -77,10 +86,10 @@ const usable = (golden: v.InferOutput<typeof Golden> | undefined, now: number) =
 export function goldenFor(ports: GoldenPorts, box: string, lost?: string): Effect.Effect<GoldenAnswer, DevboxError> {
   return Effect.gen(function* () {
     const held = ports.read();
-    const state = lost === undefined ? held : { ...held, current: held.current?.id === lost ? undefined : held.current, previous: held.previous?.id === lost ? undefined : held.previous };
+    const now = ports.now();
+    const state = lost === undefined ? held : retire({ ...held, current: held.current?.id === lost ? undefined : held.current, previous: held.previous?.id === lost ? undefined : held.previous }, held, now);
 
     if (state !== held) ports.write(state);
-    const now = ports.now();
     const serving = [state.current, state.previous].find(golden => usable(golden, now));
 
     if (serving !== undefined && serving === state.current && serving.tools === ports.tools) return { kind: 'ready', id: serving.id, tools: serving.tools };
@@ -103,7 +112,7 @@ export function buildGolden(ports: GoldenPorts, keepAlive: boolean): Effect.Effe
     const after = ports.read();
 
     const state: GoldenState = Result.isSuccess(built)
-      ? { ...after, ...built.success, waiting: [], failure: undefined, building: undefined }
+      ? retire({ ...after, ...built.success, waiting: [], failure: undefined, building: undefined }, after, ports.now())
       : { ...after, waiting: [], failure: `the base snapshot could not be built: ${built.failure.message}`, building: undefined };
 
     ports.write(state);
@@ -121,7 +130,37 @@ export function buildGolden(ports: GoldenPorts, keepAlive: boolean): Effect.Effe
       if (Result.isSuccess(renewed)) ports.write({ ...state, previous: { ...previous, renewedAt: ports.now() } });
     }
 
+    yield* deleteRetired(ports);
+
     return Result.isSuccess(built) ? ports.read() : yield* Effect.fail(built.failure);
+  });
+}
+
+/** `next` with every golden `before` held and `next` no longer does put to retire. */
+function retire(next: GoldenState, before: GoldenState, now: number): GoldenState {
+  const held = new Set([next.current?.id, next.previous?.id]);
+  const dropped = [before.current, before.previous].flatMap(golden => golden === undefined || held.has(golden.id) ? [] : [{ ref: golden.id, at: now + RETIRE_MS }]);
+
+  return dropped.length === 0 ? next : { ...next, retiring: [...next.retiring, ...dropped] };
+}
+
+/** The retired goldens whose time has come, each deleted or kept owed: a refusal, or no authority, waits for the next. */
+function deleteRetired(ports: GoldenPorts): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    const now = ports.now();
+
+    for (const due of ports.read().retiring.filter(retired => retired.at <= now)) {
+      const pending = ports.delete(due.ref);
+
+      if (pending === undefined) return;
+      const outcome = yield* Effect.promise(() => pending);
+      const owed = outcome.kind === 'refused' ? [{ ...due, ref: outcome.left ?? due.ref }] : [];
+
+      if (outcome.kind === 'refused') console.error(`[devbox] the retired golden ${due.ref} was not deleted: ${outcome.reason}`);
+      const held = ports.read();
+
+      ports.write({ ...held, retiring: held.retiring.flatMap(retired => retired.ref === due.ref ? owed : [retired]) });
+    }
   });
 }
 
@@ -154,7 +193,10 @@ function build(ports: GoldenPorts, before: GoldenState): Effect.Effect<Pick<Gold
     yield* run('checking the tools', VERIFY_COMMAND);
     yield* at('snapshotting the base');
     const id = yield* attempt('io', () => ports.snapshot(`${toolsKey(ports.tools).slice(13, 21)}-${String(ports.now())}`), 'snapshotting the base');
-    yield* attempt('io', () => ports.destroy());
+    // The snapshot is made: a container that will not stop is no failed build, or its id would be lost unrecorded.
+    const stopped = yield* Effect.result(attempt('io', () => ports.destroy()));
+
+    if (Result.isFailure(stopped)) console.error(`[devbox] the golden ${id} is built, but its container did not stop: ${stopped.failure.message}`);
 
     return { current: { id, tools: ports.tools, base, takenAt: ports.now() }, previous: current ?? before.previous };
   });
