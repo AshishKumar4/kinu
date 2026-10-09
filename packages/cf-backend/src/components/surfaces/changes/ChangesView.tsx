@@ -7,15 +7,14 @@ import type { ComponentProps, Key, ReactNode } from "react";
 import { ChangesPanel } from "./ChangesPanel";
 import { NotesProvider } from "./notes-provider";
 
-export interface ChangesViewProps {
+export type ChangesViewProps = ComponentProps<typeof ChangesPanel> & {
   readonly notes: Omit<ComponentProps<typeof NotesProvider>, "children">;
-  readonly panel: ComponentProps<typeof ChangesPanel>;
   /** A new focus remounts the panel on its file. */
   readonly panelKey: Key;
   readonly banner: ReactNode;
-}
+};
 
-export function ChangesView({ notes, panel, panelKey, banner }: ChangesViewProps) {
+export function ChangesView({ notes, panelKey, banner, ...panel }: ChangesViewProps) {
   return (
     <NotesProvider {...notes}>
       <div className="flex h-full min-h-0 flex-col">

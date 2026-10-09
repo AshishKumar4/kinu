@@ -18,7 +18,12 @@ const SwarmExplorer = lazyRoute(() => import("./pages/SwarmExplorer"));
 // Home and the workspace are the first chunk; every other page loads when it is opened.
 const UserSettingsPage = lazyRoute(() => import("./pages/UserSettingsPage"));
 
-const UserMcpPage = lazyRoute(() => import("./pages/UserMcpPage"));
+// An awaited import, which `gate:wired` reads as the page's one reference.
+const UserMcpPage = lazyRoute(async () => {
+  const { default: page } = await import("./pages/UserMcpPage");
+
+  return { default: page };
+});
 
 const WelcomePage = lazyRoute(() => import("./pages/WelcomePage"));
 
@@ -32,7 +37,12 @@ const DevicesPage = lazyRoute(() => import("./pages/DevicesPage"));
 
 const BlueprintPage = lazyRoute(() => import("./pages/BlueprintPage"));
 
-const LiveSharePage = lazyRoute(() => import("./pages/LiveSharePage"));
+// An awaited import, which `gate:wired` reads as the page's one reference.
+const LiveSharePage = lazyRoute(async () => {
+  const { default: page } = await import("./pages/LiveSharePage");
+
+  return { default: page };
+});
 
 const ConnectedPage = lazyRoute(() => import("./pages/ConnectedPage"));
 

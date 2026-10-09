@@ -34,15 +34,35 @@ import { InspectorBar, type PageTab, type ToolTab } from "./InspectorBar";
 import { ConnectDeviceDialog } from "@/components/ConnectDevicePanel";
 
 // A surface drawn only once it is chosen loads with its first view, outside the workspace's first chunk.
-const FilesSurface = lazyRoute<FilesSurfaceProps>(async () => ({ default: (await import("./FilesSurface")).FilesSurface }));
+const FilesSurface = lazyRoute<FilesSurfaceProps>(async () => {
+  const { FilesSurface: surface } = await import("./FilesSurface");
 
-const ExplorationSurface = lazyRoute<ExplorationSurfaceProps>(async () => ({ default: (await import("./ExplorationSurface")).ExplorationSurface }));
+  return { default: surface };
+});
 
-const AgentSurface = lazyRoute<AgentSurfaceProps>(async () => ({ default: (await import("./AgentSurface")).AgentSurface }));
+const ExplorationSurface = lazyRoute<ExplorationSurfaceProps>(async () => {
+  const { ExplorationSurface: surface } = await import("./ExplorationSurface");
 
-const EnvironmentSurface = lazyRoute<EnvironmentSurfaceProps>(async () => ({ default: (await import("./EnvironmentSurface")).EnvironmentSurface }));
+  return { default: surface };
+});
 
-const ActivitySurface = lazyRoute<ActivitySurfaceProps>(async () => ({ default: (await import("./ActivitySurface")).ActivitySurface }));
+const AgentSurface = lazyRoute<AgentSurfaceProps>(async () => {
+  const { AgentSurface: surface } = await import("./AgentSurface");
+
+  return { default: surface };
+});
+
+const EnvironmentSurface = lazyRoute<EnvironmentSurfaceProps>(async () => {
+  const { EnvironmentSurface: surface } = await import("./EnvironmentSurface");
+
+  return { default: surface };
+});
+
+const ActivitySurface = lazyRoute<ActivitySurfaceProps>(async () => {
+  const { ActivitySurface: surface } = await import("./ActivitySurface");
+
+  return { default: surface };
+});
 
 const slateSurface = (id: string): SlateSurfaceKind => `${SLATE_PREFIX}${id}`;
 
