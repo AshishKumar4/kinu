@@ -31,7 +31,7 @@ import type { UserProfile } from '../../src/user/profile';
 import type { McpToolCall } from '../../src/user/mcp-servers';
 import type { WorkspaceHostTarget } from '../../src/workspace-host';
 import {
-  actorReferenceOf,
+  actorReferenceOf, announcementOf,
   type ActorHandle,
   type ActorHost, type HostedActor, type SubordinateSeed,
 } from '@kinu.run/core';
@@ -538,10 +538,14 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
     return stated !== null && stated.metadata !== undefined ? stated.metadata : super.turnUserMetadata();
   }
-  /** The tools main's last facet turn was handed, before its step pipeline splices the dynamic block in. */
-  private _preparedTools: ToolSet = {};
+  /** The tools main's facet turns were handed, before its step pipeline splices the dynamic block in, by turn: a
+   *  measure of the next request prepares a turn of its own, on the actor's own tools. */
+  private readonly _preparedTools = new Map<string, ToolSet>();
+  private _lastPreparedTools: ToolSet = {};
   private _prepareFailure: Error | null = null;
-  harnessPreparedTools(): ToolSet { return this._preparedTools; }
+  harnessPreparedTools(turnId?: string): ToolSet {
+    return (turnId === undefined ? undefined : this._preparedTools.get(announcementOf(turnId))) ?? this._lastPreparedTools;
+  }
   /** The working history main's turn was admitted over, as its isolate holds it. */
   async harnessAdmittedHistory(): Promise<readonly ModelMessage[]> {
     return await this.agentStores(this.actorHandle().actorId).workingContext();
@@ -558,15 +562,16 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     try {
       const profile = await super.mainTaskProfile(turn);
 
-      this._preparedTools = profile.tools;
+      this._preparedTools.set(turn.turnId, profile.tools);
+      this._lastPreparedTools = profile.tools;
 
       return profile;
     } catch (error) {
       this._prepareFailure = error instanceof Error ? error : new Error(String(error));
       throw error;
     } finally {
-      // Handed to one turn only.
-      this._suppliedTools = null;
+      // Handed to one turn only: the one it opens, never a measure of the next request.
+      if (turn.opening !== undefined) this._suppliedTools = null;
     }
   }
   /** A tool surface replacing the actor's own for the requested mode; a rebuild
@@ -1304,7 +1309,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
     const parked = {
       request: request === null
         ? { identity, messages: [], prompt: [], system: undefined, model, tools: {}, activeTools: undefined, providerOptions: undefined }
-        : requestView({ request, model, identity, tools: agent.harnessPreparedTools(), history: await agent.harnessAdmittedHistory() }),
+        : requestView({ request, model, identity, tools: agent.harnessPreparedTools(identity.turnId), history: await agent.harnessAdmittedHistory() }),
       answer, landed, identity,
     };
 
@@ -1397,7 +1402,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
       const landed: Promise<SendLanding> = agent.harnessAgentsIdle().then(() => 'turn' as const);
 
       const parked: ParkedTurn = {
-        request: requestView({ request, model, identity, tools: agent.harnessPreparedTools(), history: await agent.harnessAdmittedHistory() }),
+        request: requestView({ request, model, identity, tools: agent.harnessPreparedTools(identity.turnId), history: await agent.harnessAdmittedHistory() }),
         answer, landed, identity,
       };
 
@@ -1420,7 +1425,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
       const landed: Promise<SendLanding> = resumed.then(() => agent.harnessAgentsIdle()).then(() => 'turn' as const);
 
       const parked: ParkedTurn = {
-        request: requestView({ request, model, identity, tools: agent.harnessPreparedTools(), history: await agent.harnessAdmittedHistory() }),
+        request: requestView({ request, model, identity, tools: agent.harnessPreparedTools(identity.turnId), history: await agent.harnessAdmittedHistory() }),
         answer, landed, identity,
       };
 

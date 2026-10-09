@@ -573,7 +573,8 @@ describe('turn-pipeline correctness wiring', () => {
     // projection that skipped unreconciled turns. All readers use the canonical store.
     const harness = orchestratorHarness();
     chatSessionTurns(harness.agent).open('u-live');
-    await chatSessionTurns(harness.agent).settle({ messageId: 'a-live', text: 'partial answer', requestId: 'req-interrupted', status: 'aborted' });
+    // Main's isolate names the answer it settles.
+    const settled = await chatSessionTurns(harness.agent).settle({ messageId: 'a-live', text: 'partial answer', requestId: 'req-interrupted', status: 'aborted' });
 
     // The pane-era projection tables must not exist at all.
     const projections = harness.db.prepare<{ name: string }, []>(
@@ -583,7 +584,7 @@ describe('turn-pipeline correctness wiring', () => {
     expect(projections).toEqual([]);
 
     const page = await harness.agent.getChatHistoryPage({ limit: 10 });
-    expect(page.items.map((entry) => entry.id)).toEqual(['u-live', 'a-live']);
+    expect(page.items.map((entry) => entry.id)).toEqual(['u-live', settled.messageId]);
     expect(page.items[1].content).toBe('partial answer');
   });
 
@@ -634,12 +635,12 @@ describe('turn-pipeline correctness wiring', () => {
       WHEN NEW.consumed_at IS NULL BEGIN SELECT RAISE(ABORT, 'storage refused the lease close'); END`);
     harness.agent.harnessDrivingUserMessage('the drain text', { kinuEvent: 'event_drain', drainTurnId: 'drain-1' });
     await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'the drain text' }] });
-    await chatSessionTurns(harness.agent).settle({ messageId: 'a-drain', text: 'the answer' });
     const logger = createRecordingLogger();
     const restore = tapDiagnostics(logger);
 
     try {
-      // The alarm frame dispatches the owed reply.
+      // The settle hands the turn to the workspace, whose sequence dispatches the owed reply.
+      await chatSessionTurns(harness.agent).settle({ messageId: 'a-drain', text: 'the answer' });
       await harness.agent.terminalRetryPass();
     } finally {
       restore();
