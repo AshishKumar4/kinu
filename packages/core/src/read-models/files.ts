@@ -95,7 +95,13 @@ export interface ExecutorTextFile {
 
 /** Peak transient footprint is ~2x the total (parts plus assembled copy), so a quarter of the
  *  `do.isolate.transient_alloc_reset` wall keeps the peak near half of it. */
-export const FILE_TRANSFER_MAX_BYTES = PLATFORM_CATALOG['do.isolate.transient_alloc_reset'].limit.value / 4;
+function fileTransferMaxBytes(): number {
+  return PLATFORM_CATALOG['do.isolate.transient_alloc_reset'].limit.value / 4;
+}
+
+/** Read through a call marked pure: the browser reaches this module, and a bundle that never reads the bound then
+ *  leaves the catalog out of it. */
+export const FILE_TRANSFER_MAX_BYTES = /* @__PURE__ */ fileTransferMaxBytes();
 
 /** One chunked upload; the holder constructs a fresh instance on an `offset === 0` chunk. */
 export class ExecutorFileUpload {

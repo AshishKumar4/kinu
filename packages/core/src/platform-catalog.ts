@@ -2063,12 +2063,16 @@ export function platformFact(id: PlatformFactId): PlatformFact {
 }
 
 export function platformFactEntries(): readonly PlatformFactEntry[] {
-  return PLATFORM_FACT_IDS.map((id) => ({ id, fact: platformFact(id) }));
+  return platformFactIds().map((id) => ({ id, fact: platformFact(id) }));
 }
 
-/** The predicate narrows rather than casts, restoring the key union `Object.keys` loses. */
-export const PLATFORM_FACT_IDS: readonly PlatformFactId[] = Object.keys(PLATFORM_CATALOG)
-  .filter((id): id is PlatformFactId => id in PLATFORM_CATALOG);
+/**
+ * The predicate narrows rather than casts, restoring the key union `Object.keys` loses. A function, not a module-scope
+ * list: the browser imports modules that import this one, and a call at module scope ships the whole catalog to it.
+ */
+export function platformFactIds(): readonly PlatformFactId[] {
+  return Object.keys(PLATFORM_CATALOG).filter((id): id is PlatformFactId => id in PLATFORM_CATALOG);
+}
 
 /** Since the last byte, never a total. */
 export type SilenceBoundId = {
@@ -2081,5 +2085,5 @@ export function silenceBoundMs(id: SilenceBoundId): number {
 
 /** The faults a deterministic-simulation lane may inject: the catalog filtered to proven evidence. */
 export function injectableFaults(): readonly PlatformFactId[] {
-  return PLATFORM_FACT_IDS.filter((id) => PROVEN_LABELS.includes(platformFact(id).evidence));
+  return platformFactIds().filter((id) => PROVEN_LABELS.includes(platformFact(id).evidence));
 }

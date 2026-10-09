@@ -854,6 +854,21 @@ inbox takes it; a refusal makes it due again at the shared capped backoff, and
 the wake fold reads that instant. Dead-activation leases re-pend 256 a pass,
 the rest under the wake (f2619ff00).
 
+D12. A turn a reset cuts is settled only on evidence the cut is its own.
+Replaces "a turn cut at the same step in two activations is settled". Decided
+2026-10-08: on staging, two resets 10-25 s apart inside one long glm-5.2 step
+ended the user's turn, where tardigrade's kill5 survives five. Each execution
+records whether it is waiting on the provider or doing the step's own work
+(`actor_turn_cuts`); a finished step clears both counts, and a new build starts
+them over. Six cuts in the step's own work settle the turn (a tool that ends its
+own process), so five outside resets never do. Twenty cuts in a provider wait
+settle it too: none is the step's fault, but task-j7gjjr's model wait outlasted
+the workspace's memory and time limits fifteen times in a day (2026-09-25).
+Each re-ask after a repeated cut waits the shared capped backoff, and the
+turn's wake is what asks it again, in a live process or a new one; the first
+provider-wait cut is asked again at once. The CLI has no wake, and a person's
+start is its restart, so it asks at once.
+
 ## Deploy ladder
 
 L1. The deploy wave is scheduled by a thread budget, not a gate count. Each

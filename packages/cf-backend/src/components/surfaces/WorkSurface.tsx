@@ -1,5 +1,5 @@
 /** Workspace navigation: titled live previews first, then work/read surfaces. */
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Suspense, useCallback, useEffect, useState, type ReactNode } from "react";
 import { GlobeIcon, SparkleIcon } from "@phosphor-icons/react";
 import type { SlateSummary, PendingAction, PlanReview } from "@kinu.run/core";
 import type { WorkspacePlanArrival } from "@/hooks/use-kinu";
@@ -15,12 +15,13 @@ import { ChangesSurface, type ChangesFocus } from "./ChangesSurface";
 import type { PinnedPreviewPort as PinnedPort } from "@kinu.run/core";
 import { PreviewFrame } from "@/components/PreviewFrame";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { AgentSurface } from "./AgentSurface";
-import { ExplorationSurface } from "./ExplorationSurface";
+import type { AgentSurfaceProps } from "./AgentSurface";
+import type { ExplorationSurfaceProps } from "./ExplorationSurface";
 import { WorkTab } from "./WorkTab";
-import { EnvironmentSurface } from "./EnvironmentSurface";
-import { FilesSurface } from "./FilesSurface";
-import { ActivitySurface } from "./ActivitySurface";
+import type { EnvironmentSurfaceProps } from "./EnvironmentSurface";
+import type { FilesSurfaceProps } from "./FilesSurface";
+import type { ActivitySurfaceProps } from "./ActivitySurface";
+import { lazyRoute } from "@/lazy-route";
 import { SlateFrame } from "@/components/slates/SlateFrame";
 import { ShareSlateControl } from "@/components/slates/ShareSlateControl";
 import { ForkReachPanel } from "@/components/slates/ForkReachPanel";
@@ -31,6 +32,37 @@ import {
 import { useSurfaceFocus } from "./use-surface-focus";
 import { InspectorBar, type PageTab, type ToolTab } from "./InspectorBar";
 import { ConnectDeviceDialog } from "@/components/ConnectDevicePanel";
+
+// A surface drawn only once it is chosen loads with its first view, outside the workspace's first chunk.
+const FilesSurface = lazyRoute<FilesSurfaceProps>(async () => {
+  const { FilesSurface: surface } = await import("./FilesSurface");
+
+  return { default: surface };
+});
+
+const ExplorationSurface = lazyRoute<ExplorationSurfaceProps>(async () => {
+  const { ExplorationSurface: surface } = await import("./ExplorationSurface");
+
+  return { default: surface };
+});
+
+const AgentSurface = lazyRoute<AgentSurfaceProps>(async () => {
+  const { AgentSurface: surface } = await import("./AgentSurface");
+
+  return { default: surface };
+});
+
+const EnvironmentSurface = lazyRoute<EnvironmentSurfaceProps>(async () => {
+  const { EnvironmentSurface: surface } = await import("./EnvironmentSurface");
+
+  return { default: surface };
+});
+
+const ActivitySurface = lazyRoute<ActivitySurfaceProps>(async () => {
+  const { ActivitySurface: surface } = await import("./ActivitySurface");
+
+  return { default: surface };
+});
 
 const slateSurface = (id: string): SlateSurfaceKind => `${SLATE_PREFIX}${id}`;
 
@@ -264,41 +296,43 @@ export function WorkSurface(props: WorkSurfaceProps) {
           </ErrorBoundary>
         </div>
         <ErrorBoundary key={surface} label={surface ?? undefined}>
-          {surface === "Files" && (
-            <FilesSurface rpc={props.rpc} executors={props.executors} jump={filesJump} onConnectDevice={openConnect} />
-          )}
-          {surface === "Swarms" && (
-            <ExplorationSurface
-              liveTrees={props.mctsTrees}
-              headActivity={props.headActivity}
-              headDeltas={props.headDeltas}
-              isStreaming={props.isStreaming}
-              backgroundJobs={props.backgroundJobs}
-              rpc={props.rpc}
-            />
-          )}
-          {surface === "Agent" && (
-            <AgentSurface
-              snapshot={props.snapshot}
-              memory={props.memory} memoryContent={props.memoryContent}
-              onSearchMemory={props.onSearchMemory} onRetryLoad={props.onRetryLoad}
-              rpc={props.rpc} readMoves={props.readMoves}
-            />
-          )}
-          {surface === "Environment" && (
-            <EnvironmentSurface
-              rpc={props.rpc}
-              executors={props.executors}
-              executorOutputs={props.executorOutputs}
-              lastActiveExecutor={props.lastActiveExecutor}
-              onExecute={props.onExecute}
-              onOpenFiles={openFiles}
-              onConnectDevice={openConnect}
-            />
-          )}
-          {openPort && <PreviewFrame url={openPort.url} label={openPort.name ?? `${openPort.executor} :${openPort.port}`} />}
-          <SideSurface shown={surface} rpc={props.rpc} isStreaming={props.isStreaming} />
-          {openSlate !== null && <OpenSlatePanel {...props} slate={openSlate} summary={openSlateSummary} />}
+          <Suspense fallback={<div className="h-full flex items-center justify-center"><Loader size="sm" /></div>}>
+            {surface === "Files" && (
+              <FilesSurface rpc={props.rpc} executors={props.executors} jump={filesJump} onConnectDevice={openConnect} />
+            )}
+            {surface === "Swarms" && (
+              <ExplorationSurface
+                liveTrees={props.mctsTrees}
+                headActivity={props.headActivity}
+                headDeltas={props.headDeltas}
+                isStreaming={props.isStreaming}
+                backgroundJobs={props.backgroundJobs}
+                rpc={props.rpc}
+              />
+            )}
+            {surface === "Agent" && (
+              <AgentSurface
+                snapshot={props.snapshot}
+                memory={props.memory} memoryContent={props.memoryContent}
+                onSearchMemory={props.onSearchMemory} onRetryLoad={props.onRetryLoad}
+                rpc={props.rpc} readMoves={props.readMoves}
+              />
+            )}
+            {surface === "Environment" && (
+              <EnvironmentSurface
+                rpc={props.rpc}
+                executors={props.executors}
+                executorOutputs={props.executorOutputs}
+                lastActiveExecutor={props.lastActiveExecutor}
+                onExecute={props.onExecute}
+                onOpenFiles={openFiles}
+                onConnectDevice={openConnect}
+              />
+            )}
+            {openPort && <PreviewFrame url={openPort.url} label={openPort.name ?? `${openPort.executor} :${openPort.port}`} />}
+            <SideSurface shown={surface} rpc={props.rpc} isStreaming={props.isStreaming} />
+            {openSlate !== null && <OpenSlatePanel {...props} slate={openSlate} summary={openSlateSummary} />}
+          </Suspense>
         </ErrorBoundary>
       </div>
       <div className={surface === "Changes" ? "flex-1 min-h-0" : "hidden"}>

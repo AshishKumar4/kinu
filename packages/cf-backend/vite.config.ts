@@ -8,6 +8,7 @@ import agents from "agents/vite";
 import { wgslVitePlugin } from "@vgpu/wgsl/loader-vite";
 import { defineConfig } from "vite";
 import { promptText } from './vite-prompt-text';
+import { iconWeights } from './vite-icon-weights';
 import { kinuTheme } from './vite-theme';
 import { slateVendor } from './slate-vendor';
 import { workerLoadCost } from './vite-worker-bundle';
@@ -100,7 +101,7 @@ export default defineConfig(({ command }) => ({
   // checkout at a time (SHARED_RESOURCES in scripts/ladder.ts).
   cacheDir: process.env.KINU_DEV_CACHE_DIR ?? '.vite',
   plugins: [
-    kinuTheme(), promptText(), slateVendor(), agentBundle(), stubClientNodeBuiltins, workerSourceMaps, workerLoadCost(), wgslClientOnly, agents(), react(),
+    kinuTheme(), iconWeights(), promptText(), slateVendor(), agentBundle(), stubClientNodeBuiltins, workerSourceMaps, workerLoadCost(), wgslClientOnly, agents(), react(),
     cloudflare({
       persistState: devStateDir === undefined ? true : { path: devStateDir },
       // A harness boot opens no Workers inspector. The plugin's default takes 9229, or the next port it finds free

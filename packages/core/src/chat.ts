@@ -159,6 +159,8 @@ export interface ChatOptions {
    *  ended. A Durable Object facet runs each step under the call that grants it, which gives the step its own CPU
    *  budget (platform catalog `do.facet.cpu_ms`). */
   paceStep?: (signal: AbortSignal) => Promise<() => void>;
+  /** The step's own work began (a tool started), or the step finished: what a cut after it is charged to. */
+  stepPhase?: (phase: 'work' | 'finished') => void;
   providerOptions?: NonNullable<Parameters<typeof streamText>[0]['providerOptions']>;
   /** The subset of `tools` the model may call; the rest stay wired for execution. Absent, all are offered. */
   activeTools?: readonly string[];
@@ -938,7 +940,10 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       include: { requestBody: false },
       // The SDK default console.error dumped raw provider payloads; the rethrow below is the one place failures read.
       onError: ({ error }) => { call.streamError = error; },
-      onToolExecutionStart: ({ toolCall }) => { call.dispatched(toolCall); },
+      onToolExecutionStart: ({ toolCall }) => {
+        call.dispatched(toolCall);
+        opts.stepPhase?.('work');
+      },
       onToolExecutionEnd: ({ toolCall, toolExecutionMs }) => { call.settled(toolCall.toolCallId, toolExecutionMs); },
       // The only terminal handover: an aborted run never settles `result.steps`.
       onAbort: ({ steps }) => { call.aborted(steps); },
@@ -959,6 +964,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           stepCount++;
           const record = call.stepRecord(step, stepCount, meter?.take(), responsePrefix);
           await opts.persistStep?.(record);
+          opts.stepPhase?.('finished');
           own = call.stepFinished(step, record, responsePrefix.length);
         } catch (cause) {
           call.stepFailure ??= { doing: 'recording a finished model step', cause };

@@ -172,9 +172,11 @@ const turnStatements = new Map<number, OperationCost['tables']>();
  * 381 once a pump going quiet while its close is held rests the actor once, at the close's end (-14), with the root's
  * model_operation start and end as the CLI records them (+2); the agent_wakes read every owed-work check made (+3) and
  * the second read of the root's four pins (+4) came and went with one assembly (402 at b787ee9e3).
- * 382 once a turn's steps name the slates that do not build, read once per activation (+1).
+ * 382 once a turn's steps name the slates that do not build, read once per activation (+1). 384 once a turn records
+ * whether a reset would cut it in a provider wait or in its step's own work (D12): its cut row at admission and the
+ * phase each step enters (+2, measured at fd56c4de5).
  */
-const TURN_STATEMENTS = 382;
+const TURN_STATEMENTS = 384;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {

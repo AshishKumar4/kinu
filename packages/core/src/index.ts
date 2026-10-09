@@ -1375,7 +1375,7 @@ export {
 export {
   BOUNDS_KINDS,
   PLATFORM_CATALOG,
-  PLATFORM_FACT_IDS,
+  platformFactIds,
   injectableFaults,
   platformFact,
   platformFactEntries,

@@ -133,6 +133,8 @@ interface TurnContinuation {
   readonly usage: Usage;
   /** The outputs the cut step left open, named before a claim seals them. */
   readonly openOutputs: readonly string[];
+  /** Not asked again before this instant ({@link ActorSession.reaskAt}). */
+  readonly reaskAt: number | null;
 }
 
 
@@ -232,8 +234,11 @@ export interface ChatSessionPorts {
   terminal(): TerminalTransitions;
   /** Asked per item at dequeue and before a drain binds rows; a refusal settles the item to its producer. */
   driverGate(): Refusal | null;
-  /** Called at the turn's synchronous open; soonest-wins. A backend whose process is the wake arms nothing. */
-  armTurnWake(atMs: number): Promise<void>;
+  /**
+   * Called at the turn's synchronous open; soonest-wins. Absent where the process is the wake: a person's start is its
+   * restart, so a re-opened turn there is asked again at once.
+   */
+  armTurnWake?(atMs: number): Promise<void>;
   /** Owed until {@link quiet}. */
   owed?(): void;
   /** The queue drained and no turn runs. */
@@ -889,11 +894,23 @@ export class ChatSession {
   }
 
   private async runPump(): Promise<void> {
+    let deferred = false;
+
     try {
       for (;;) {
         // Before the item leaves the queue, so it still counts as in flight to a message sent meanwhile; and so the
         // turn's own measure is the newer.
         await this.revision;
+        const reaskAt = this.reaskDeferredTo();
+
+        // The re-opened turn waits out its backoff, and the wake that ends it asks again ({@link reaskDue}).
+        if (reaskAt !== null) {
+          deferred = true;
+          diagnostics.event('turn.reask_deferred', { turn: this.queue[0]?.turnId ?? 'unnamed', dueInMs: reaskAt - Date.now() });
+          await this.ports.armTurnWake?.(reaskAt);
+          break;
+        }
+
         const item = this.queue.shift();
 
         if (item === undefined) break;
@@ -955,8 +972,21 @@ export class ChatSession {
       // Cleared synchronously, not in .finally(): the microtask would leave `pumping` stale and orphan a queued turn.
       this.pumpActive = false;
       this.activePump = null;
-      this.ports.quiet?.();
+
+      if (!deferred) this.ports.quiet?.();
     }
+  }
+
+  /** When the queue's head is a re-opened turn still inside its backoff, on a host whose wake can end it: that end. */
+  reaskDeferredTo(): number | null {
+    const reaskAt = this.queue[0]?.continuation?.reaskAt ?? null;
+
+    return reaskAt !== null && this.ports.armTurnWake !== undefined && reaskAt > Date.now() ? reaskAt : null;
+  }
+
+  /** The wake a deferred re-ask armed: the pump asks it if its backoff is over, and defers it again if not. */
+  reaskDue(): void {
+    if ((this.queue[0]?.continuation?.reaskAt ?? null) !== null) this.pump();
   }
 
   /** Appended, not unshifted, so it verifies final state; kicked because a startup replay has no pump yet. */
@@ -1061,7 +1091,7 @@ export class ChatSession {
     });
 
     // Armed at the synchronous open, at the recovery ceiling; soonest-wins.
-    await this.ports.armTurnWake(Date.now() + RECOVERY_BACKOFF_CEILING_MS);
+    await this.ports.armTurnWake?.(Date.now() + RECOVERY_BACKOFF_CEILING_MS);
 
     try {
       // A run a dead process left goes on only if recovery says so; any other ends here as a Stop ends it.
@@ -1498,6 +1528,7 @@ export class ChatSession {
         finishedSteps,
         usage,
         openOutputs,
+        reaskAt: this.actorSession.reaskAt(turn.turnId),
       },
       settle: () => {},
     };

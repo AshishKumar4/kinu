@@ -437,6 +437,15 @@ describe('workspace diff lifecycle', () => {
     expect(told).toBe(4);
   });
 
+  test('the widest table the line bound allows fits an eighth of the silent-reset wall', () => {
+    // An eighth: the rest is the change-set's, the workspace state's and the runtime's. Raising the bound past this
+    // would let one alignment reset the object with no error. Six bytes a table element, rounded up from measurement
+    // so the bound errs small.
+    const table = (MAX_LINES_PER_FILE + 1) ** 2 * 6;
+
+    expect(table).toBeLessThanOrEqual(PLATFORM_CATALOG['do.isolate.reset_silent'].limit.value / 8);
+  });
+
   test('an appended log is diffed exactly, however long the file is', async () => {
     const { rt, workspace } = createTestRuntime();
     const baselines = await baselinesOf(rt, workspace);
