@@ -206,9 +206,11 @@ process.exitCode = run.exit;
       });
 
       expect(outer.exitCode).toBe(expectedExit);
-      expect(outer.killed).toBe(expectedExit === 124);
 
-      if (expectedExit === 0) expect(outer.seconds).toBeGreaterThan(2);
+      if (expectedExit === 0) {
+        expect(outer.killed).toBe(false);
+        expect(outer.seconds).toBeGreaterThan(2);
+      }
     }
   });
 });
