@@ -5425,7 +5425,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable() async recoverStrandedTurn(): Promise<{ readonly recovered: 'sealed' | 'requeued' | 'none' }> {
     const main = this.actorHandle().actorId;
 
-    if (!this.agentWakes.armed(main)) return { recovered: 'none' };
+    // Its own last answer may hold work with no wake to come back for it, as a parked effect is held.
+    if (!this.agentWakes.armed(main) && !new AgentOwedWork(this.boundSql).all().includes(main)) return { recovered: 'none' };
+    // Its isolate decides each claim it holds and no turn of its runs, as an agent's do after a reset; then it takes up
+    // what it still owes.
+    await (await this.agentCalls(main)).recover(this.agentSnapshot(main));
     await this.wakeAgent(main);
 
     return { recovered: 'requeued' };
