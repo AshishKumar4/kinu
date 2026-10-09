@@ -487,11 +487,29 @@ export class ChatSession {
 
   /** As {@link enqueueTurn}, answered once the turn is queued unless admission already decided it: a caller in another
    *  object, itself mid-settle, never waits out the turn it handed over. */
-  queueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> {
+  async queueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> {
     const queued: EnqueueTurnResult = { status: 'queued' };
 
+    // An offer whose operator already spoke is consumed now: answered once queued, its caller would never hear the
+    // yield its dequeue decides.
+    if (await this.offerYields(input)) return { status: 'yielded' };
+
     // An answer decided at admission resolves first; a turn still to run answers 'queued'.
-    return Promise.race([this.enqueueTurn(input), Promise.resolve(queued)]);
+    return await Promise.race([this.enqueueTurn(input), Promise.resolve(queued)]);
+  }
+
+  /** Whether an offer that yields to the operator meets one who spoke first: a user turn queued, or one in the
+   *  conversation. It then never runs, and the yield is logged as its activity. */
+  private async offerYields(offer: { readonly yieldsToUserMessage?: boolean; readonly metadata?: JsonObject }): Promise<boolean> {
+    if (offer.yieldsToUserMessage !== true) return false;
+
+    if (!this.queue.some((queued) => queued.kind === 'user') && !(await this.transcript.operatorSpoke())) return false;
+    diagnostics.event('genesis.yielded_to_message', {
+      signal: v.is(v.string(), offer.metadata?.kinuEvent) ? offer.metadata.kinuEvent : 'unknown',
+    });
+    this.actorSession.orchestrator.logActivity('genesis.yielded_to_message');
+
+    return true;
   }
 
   /** Its producer is told, and so is every caller that joined it: a turn restored after a reset has only joiners. */
@@ -924,14 +942,8 @@ export class ChatSession {
           continue;
         }
 
-        // Checked at dequeue, never admission: somebody spoke first, so the offer is consumed.
-        if (item.yieldsToUserMessage === true
-          && (this.queue.some((queued) => queued.kind === 'user')
-            || await this.transcript.operatorSpoke())) {
-          diagnostics.event('genesis.yielded_to_message', {
-            signal: v.is(v.string(), item.metadata?.kinuEvent) ? item.metadata.kinuEvent : 'unknown',
-          });
-          this.actorSession.orchestrator.logActivity('genesis.yielded_to_message');
+        // Checked at dequeue: somebody spoke first, so the offer is consumed.
+        if (await this.offerYields(item)) {
           this.settleItem(item, null, true);
           continue;
         }

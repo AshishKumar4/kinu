@@ -89,7 +89,7 @@ describe('a message typed while the agent is working', () => {
 
     // The words' reservation retires with the answer, in one transaction: nothing is left to redeliver.
     await turns.settle({ messageId: 'a-idle', text: 'ok' });
-    expect(present(h.db.query<{ c: number }, []>('SELECT count(*) AS c FROM pending_steers').get(), 'the pending_steers count row').c).toBe(0);
+    expect(present(mainDatabase(h).query<{ c: number }, []>('SELECT count(*) AS c FROM pending_steers').get(), 'the pending_steers count row').c).toBe(0);
   });
 
   test('a plan-mode steer that missed its turn queues a plan turn, not a build one', async () => {
@@ -114,12 +114,14 @@ describe('a message typed while the agent is working', () => {
     const h = steerHarness();
     const actorId = workspaceMainActor(h.db).actorId;
 
+    // Main's steers are its own isolate's rows (D9); a read through its window opens that isolate's database.
+    await h.agent.harnessMainHistory();
     // Written through SQL as an eviction leaves them; the next activation's loop is the restore/sweep entry point.
-    h.db.query(
+    mainDatabase(h).query(
       `INSERT INTO pending_steers (actor_id, id, turn_id, mode, text)
        VALUES (?, 'steer-dead-file', 'turn-dead', 'build', 'attach this too')`,
     ).run(actorId);
-    h.db.query(
+    mainDatabase(h).query(
       `INSERT INTO pending_steer_files (actor_id, steer_id, filename, media_type, url)
        VALUES (?, 'steer-dead-file', 'chart.png', 'image/png', 'data:image/png;base64,AAAA')`,
     ).run(actorId);
@@ -135,7 +137,7 @@ describe('a message typed while the agent is working', () => {
       ],
     });
     await chatSessionTurns(restarted.agent).settle({ messageId: 'a-rerun-file', text: 'attached' });
-    expect(present(restarted.db.query<{ c: number }, []>('SELECT count(*) AS c FROM pending_steers').get(), 'the pending_steers count row').c).toBe(0);
+    expect(present(mainDatabase(restarted).query<{ c: number }, []>('SELECT count(*) AS c FROM pending_steers').get(), 'the pending_steers count row').c).toBe(0);
   });
 });
 
@@ -245,12 +247,12 @@ describe('an eviction with acknowledged steers', () => {
     await h.startTurn('u-live');
     await h.agent.send('the live turn keeps me', 'steer-live');
 
-    // Written through SQL: SQL, not RAM, is the authority an eviction tests.
-    h.db.query(
+    // Written through SQL: SQL, not RAM, is the authority an eviction tests. Main's are its isolate's rows (D9).
+    mainDatabase(h).query(
       `INSERT INTO pending_steers (actor_id, id, turn_id, mode, text)
        VALUES (?, 'steer-dead-1', 'turn-dead', 'plan', 'orphaned by an eviction')`,
     ).run(actorId);
-    h.db.query(
+    mainDatabase(h).query(
       `INSERT INTO pending_steers (actor_id, id, turn_id, mode, text)
        VALUES (?, 'steer-dead-2', 'turn-dead', 'plan', 'also orphaned')`,
     ).run(actorId);
@@ -272,8 +274,8 @@ describe('an eviction with acknowledged steers', () => {
       ['steer-dead-1', [{ type: 'text', text: 'orphaned by an eviction' }], 'operator'],
       ['steer-dead-2', [{ type: 'text', text: 'also orphaned' }], 'operator'],
     ]);
-    expect(restarted.db.query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get('steer-dead-1')).toEqual({ work_mode: 'plan' });
+    expect(mainDatabase(restarted).query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get('steer-dead-1')).toEqual({ work_mode: 'plan' });
 
-    expect(present(restarted.db.query<{ c: number }, []>('SELECT count(*) AS c FROM pending_steers').get(), 'the pending_steers count row').c).toBe(0);
+    expect(present(mainDatabase(restarted).query<{ c: number }, []>('SELECT count(*) AS c FROM pending_steers').get(), 'the pending_steers count row').c).toBe(0);
   });
 });
