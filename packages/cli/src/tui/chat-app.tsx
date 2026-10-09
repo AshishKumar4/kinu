@@ -6,7 +6,7 @@ import {
   type ScrollBoxRenderable,
   type TextareaRenderable,
 } from '@opentui/core';
-import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react';
+import { createRoot, useRenderer, useTerminalDimensions } from '@opentui/react';
 import { useState, useCallback, useRef, useEffect, useMemo, type ReactNode } from 'react';
 
 import { tierIdsOf,
@@ -113,6 +113,7 @@ import {
 import { detach, diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { Effect, Result } from 'effect';
 import { readParkedNotice } from '../parked-actions';
+import { useKeyboard } from './use-keys';
 
 /** `local-peer` opens in place; `cloud-additional` runs server-side and is announced. */
 interface TuiCreatedAgent {

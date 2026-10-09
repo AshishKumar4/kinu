@@ -1,6 +1,5 @@
 import { Effect } from 'effect';
 import type { TextareaRenderable } from '@opentui/core';
-import { useKeyboard } from '@opentui/react';
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 
 import { renderThrownChain, settle, showing } from '@kinu.run/core/obs';
@@ -24,6 +23,7 @@ import {
   type WorkspaceLocationChoice,
 } from './preferences';
 import { useTuiTheme, type ThemeAppearance, type ThemeSelection } from './theme';
+import { useKeyboard } from './use-keys';
 
 export interface OnboardingReadiness {
   readonly location?: WorkspaceLocationChoice;
