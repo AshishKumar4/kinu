@@ -549,6 +549,11 @@ export interface AuditRequest {
   readonly resetIds?: readonly string[];
 }
 
+const DEFERRAL_NOTE: Record<Exclude<Phase, 'post-deploy'>, string> = {
+  full: 'absent before the first deploy, or deleted by this reset record; the post-deploy run rejects it if the upload does not create it',
+  bootstrap: 'deferred by the bootstrap phase; the post-deploy run rejects it if the upload does not create it',
+};
+
 /** Pure, so the self-test drives every branch without a Cloudflare account. */
 export function audit(request: AuditRequest): Audit {
   const { infrastructure, rows, supplied, unreadFields, phase = 'full', resetIds = [] } = request;
@@ -558,17 +563,6 @@ export function audit(request: AuditRequest): Audit {
   const workerDeployed = rows.some(
     (entry) => entry.id.startsWith('worker.') && entry.verdict === 'present',
   );
-
-  /** Why a deferred row may wait for the upload, by which tolerance deferred it. */
-  let deferredBecause = 'expected before the first deploy carrying its migration; verify it exists after this deploy lands';
-
-  if (phase === 'bootstrap') {
-    deferredBecause = 'deferred by the bootstrap phase, which is why that phase exists; the post-deploy run rejects it if '
-      + 'the upload does not create it';
-  } else if (workerDeployed) {
-    deferredBecause = 'deleted by the reset whose record this deploy carries; the post-deploy run rejects it if the '
-      + 'upload does not create it again';
-  }
 
   for (const entry of rows) {
     if (entry.verdict === 'unknown') {
@@ -616,7 +610,7 @@ export function audit(request: AuditRequest): Audit {
     ) {
       // Deferred, never skipped: nothing reachable from here can create it, and
       // the run that collects it tolerates nothing.
-      notes.push(`${entry.id} is absent and is created by the deploy itself — ${deferredBecause}`);
+      notes.push(`${entry.id} is absent and is created by the deploy itself — ${DEFERRAL_NOTE[phase]}`);
       continue;
     }
 

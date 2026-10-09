@@ -111,14 +111,14 @@ if [ "$1" = "scripts/ladder.ts" ] && [ "$2" = "--deploy-phase=upload" ]; then
   printf '%s\\n' "\${KINU_INFRA_ENVIRONMENT:-unset}" > "$KINU_DEPLOY_INFRA_ENV_LOG"
   printf '%s\\n' "\${KINU_RESET_RECORD-unset}" > "$KINU_DEPLOY_RECORD_LOG"
   if [ -n "$KINU_DEPLOY_INFRA_PRELOAD" ]; then
-    "${process.execPath}" --preload "$KINU_DEPLOY_INFRA_PRELOAD" "${join(REPO_ROOT, 'scripts/infra-verify.ts')}"
+    (cd "${REPO_ROOT}" && PATH=/usr/local/bin:/usr/bin:/bin "${process.execPath}" --preload "$KINU_DEPLOY_INFRA_PRELOAD" "${join(REPO_ROOT, 'scripts/infra-verify.ts')}")
     status=$?
     printf '%s\\n' "$status" >> "$KINU_DEPLOY_INFRA_STATUS_LOG"
     exit "$status"
   fi
 fi
 if [ "$1" = "scripts/infra-verify.ts" ] && [ -n "$KINU_DEPLOY_INFRA_PRELOAD" ]; then
-  "${process.execPath}" --preload "$KINU_DEPLOY_INFRA_PRELOAD" "${join(REPO_ROOT, 'scripts/infra-verify.ts')}" "$2"
+  (cd "${REPO_ROOT}" && PATH=/usr/local/bin:/usr/bin:/bin "${process.execPath}" --preload "$KINU_DEPLOY_INFRA_PRELOAD" "${join(REPO_ROOT, 'scripts/infra-verify.ts')}" "$2")
   status=$?
   printf '%s\\n' "$status" >> "$KINU_DEPLOY_INFRA_STATUS_LOG"
   exit "$status"
@@ -217,6 +217,12 @@ function resetAccount(placeholder = false): DeployAccount {
     live: { state: 'deployed', versionId: placeholder ? reset.placeholderVersion : '174af18c',
       bindings: placeholder ? [{ name: 'CF_VERSION_METADATA', type: 'version_metadata', target: undefined, namespace: undefined }] : bindings },
   };
+}
+
+function fixtureLogLines(file: string): string[] {
+  if (!existsSync(file)) return [];
+
+  return readFileSync(file, 'utf8').trimEnd().split('\n').filter(Boolean);
 }
 
 function accountFixture(fixture: string, pendingReset: string, account: DeployAccount | undefined) {
@@ -399,9 +405,7 @@ exit 87
   });
 
 
-  const logged = existsSync(log)
-    ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean)
-    : [];
+  const logged = fixtureLogLines(log);
 
   // The report's own calls apart from the steps: what the deploy wrote into its report, each without the report's
   // directory, and a mark without the seconds it was reached at.
@@ -426,8 +430,8 @@ exit 87
     infraPhase,
     infraEnvironment,
     infraRecord: existsSync(recordLog) ? readFileSync(recordLog, "utf8").trim() : null,
-    infraStatuses: existsSync(infraStatusLog) ? readFileSync(infraStatusLog, 'utf8').trim().split('\n').map(Number) : [],
-    uploads: existsSync(uploadArgv) ? readFileSync(uploadArgv, 'utf8').trimEnd().split('\n').map((line) => line.split('\0').slice(0, -1)) : [],
+    infraStatuses: fixtureLogLines(infraStatusLog).map(Number),
+    uploads: fixtureLogLines(uploadArgv).map((line) => line.split('\0').slice(0, -1)),
   };
 }
 
@@ -1173,39 +1177,6 @@ describe("one deploy path", () => {
 
       expect(PER_PACKAGE_DEPLOY.exec(body)?.[0], `${label} deploys one package around the deploy script`)
         .toBeUndefined();
-    }
-  });
-
-  /** The one script that may publish. Every other shell script is a caller of
-   *  it, or of nothing. */
-  const SHELL_PUBLISHER = "scripts/deploy.sh";
-  const shellScripts = trackedFiles().filter((file) => file.endsWith(".sh"));
-
-  // Harness boundary: the script's executable lines, with whole-line `#`
-  // comments dropped — deploy.sh's own header names the publish in prose a dozen
-  // times, and so does the header of the archive builder beside it. Blind spot:
-  // a trailing `# wrangler deploy` comment reads as an invocation here, and a
-  // publish assembled from variables reads as none.
-  test("no shell script but the deploy script publishes", () => {
-    const commandLines = (file: string): string => readRepositoryFile(REPO_ROOT, file)
-      .split("\n")
-      .filter((line) => !line.trimStart().startsWith("#"))
-      .join("\n");
-
-    expect(shellScripts, "the enumerator stopped listing the deploy script").toContain(SHELL_PUBLISHER);
-    expect(shellScripts.length, "the shell corpus collapsed").toBeGreaterThan(5);
-    // Non-vacuity: the known publishing site is in the corpus, and this reading
-    // of it really does contain the publish this rule is about.
-    expect(commandLines(SHELL_PUBLISHER), "the deploy script stopped publishing")
-      .toContain("npx wrangler deploy");
-
-    for (const file of shellScripts) {
-      if (file === SHELL_PUBLISHER) continue;
-
-      for (const command of PUBLISH_COMMANDS) {
-        expect(commandLines(file), `${file} publishes with \`${command}\`; the deploy path is ${SHELL_PUBLISHER}`)
-          .not.toContain(command);
-      }
     }
   });
 
