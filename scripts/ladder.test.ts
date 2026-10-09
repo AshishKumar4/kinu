@@ -427,6 +427,7 @@ describe('the ladder measures something', () => {
       'Live app in a browser: a long chat and its plans',
       'Live app in a browser: a page that loses the turn',
       'Live app in a browser: a running turn',
+      'Live app in a browser: a slate that serves its own page, in its answer',
       'Live app in a browser: the inspector column\'s layout',
       'Product flows in a browser, on the deployment',
       'Public pages render',
