@@ -82,16 +82,22 @@ export class Snapshots {
     if (registry === undefined) return;
 
     for (const id of this.#dead()) {
-      const outcome = await registry.delete(id);
+      // Once its tags go, the manifest is found by its digest alone, so the debt is the digest from then on: written
+      // before the first tag goes, so a sweep cut off mid-delete still owes what is left.
+      let owing = id;
+
+      const outcome = await registry.delete(id, (digest) => {
+        this.ports.kv.put(DEAD_SNAPSHOTS_KEY, this.#dead().map(dead => dead === owing ? digest : dead));
+        owing = digest;
+      });
 
       if (outcome.kind === 'refused') {
         console.error(`[devbox] the dead snapshot ${id} was not deleted: ${outcome.reason}`);
       }
 
-      // Its tags gone, the manifest is found by its digest alone, so the debt is the digest from here on.
-      const owed = outcome.kind === 'refused' ? [outcome.left ?? id] : [];
+      const owed = outcome.kind === 'refused' ? [outcome.left ?? owing] : [];
 
-      this.ports.kv.put(DEAD_SNAPSHOTS_KEY, this.#dead().flatMap(dead => dead === id ? owed : [dead]));
+      this.ports.kv.put(DEAD_SNAPSHOTS_KEY, this.#dead().flatMap(dead => dead === owing ? owed : [dead]));
     }
   }
 }

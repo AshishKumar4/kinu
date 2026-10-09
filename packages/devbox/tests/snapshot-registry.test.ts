@@ -118,6 +118,24 @@ test('a digest delete refused once the tags are gone leaves the digest, which a 
   });
 });
 
+// A delete cut off between its tags and its manifest leaves an untagged manifest no id finds: the owner hears the
+// digest before any tag goes, and owes that instead.
+test('the owner hears the manifest\'s digest before any tag goes, and the digest alone finds it once they are gone', async () => {
+  const fake = platform();
+  const registry = snapshotRegistry({ token: 'token-1', account: ACCOUNT, fetch: fake.fetcher });
+  const heard: string[] = [];
+  const deletesBefore: number[] = [];
+
+  fake.refuseNextDigest();
+  await registry.delete(SNAPSHOT, (digest) => {
+    heard.push(digest);
+    deletesBefore.push(fake.calls.filter((call) => call.startsWith('DELETE')).length);
+  });
+  const byDigest = await registry.delete(heard[0] ?? '');
+
+  expect({ heard, deletesBefore, byDigest, manifests: [...fake.manifests] }).toEqual({ heard: [DIGEST], deletesBefore: [0], byDigest: { kind: 'deleted' }, manifests: ['sha256:other'] });
+});
+
 test('a snapshot already gone is absent, not a failure', async () => {
   const fake = platform();
   const outcome = await snapshotRegistry({ token: 'token-1', account: ACCOUNT, fetch: fake.fetcher }).delete('never-taken');

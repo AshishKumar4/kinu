@@ -28,7 +28,7 @@ import * as v from 'valibot';
 import { copyPinnedTools } from './devbox-tools';
 import {
   BENCH_ACCOUNT_ID, cleanupObservationProbes, orphanTeardownExecutor, r2CleanupKeyRefusal, r2ResiduePlane,
-  sourceRevision,
+  recordApplicationIds, sourceRevision,
 } from './bench-devbox-fixture';
 import {
   WRANGLER_FAILED, containerAppIds, delay, describeThrown, publishTeardown,
@@ -293,6 +293,9 @@ async function main(): Promise<number> {
     runWrangler(REPO, ['r2', 'bucket', 'create', worker]);
     await copyPinnedTools(worker);
     const output = runWrangler(REPO, ['deploy', '--config', config, '--var', `EXAMPLE_TOKEN:${token}`]);
+
+    // The application exists now: its ids go into the manifest before anything can delete it.
+    recordApplicationIds(manifest);
     const origin = /https:\/\/[a-z0-9.-]+\.workers\.dev/.exec(output)?.[0];
     workerVersion = /Current Version ID:\s*([0-9a-f-]{8,})/i.exec(output)?.[1] ?? null;
 
