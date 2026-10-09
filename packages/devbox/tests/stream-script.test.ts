@@ -3,13 +3,13 @@
 import { afterAll, expect, test } from 'bun:test';
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { streamCommand, type StreamProfile } from '../src/stream-archive';
 import { DEVBOX_RUNTIME_DIR } from '../src/storage';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
+import { runToExit } from '../../test-utils/src/spawn';
 
 const root = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}stream-`));
 
@@ -139,13 +139,13 @@ function tree(name: string, files: number, bytes: number): string {
   return dir;
 }
 
-function listing(squashfs: Uint8Array | undefined, label: string): string {
+async function listing(squashfs: Uint8Array | undefined, label: string): Promise<string> {
   if (squashfs === undefined) return 'no object';
   const path = join(root, `${label}.sqsh`);
   writeFileSync(path, squashfs);
-  const listed = Bun.spawnSync(['unsquashfs', '-lls', path]);
+  const listed = await runToExit(['unsquashfs', '-lls', path]);
 
-  return listed.exitCode === 0 ? listed.stdout.toString().split('\n').filter((line) => line.includes('squashfs-root')).map((line) => line.replace(/^\S+ \S+ +/, '')).sort().join('\n') : listed.stderr.toString();
+  return listed.exitCode === 0 ? listed.stdout.split('\n').filter((line) => line.includes('squashfs-root')).map((line) => line.replace(/^\S+ \S+ +/, '')).sort().join('\n') : listed.stderr;
 }
 
 test('an archive many times the window streams in concurrent parts and the store holds exactly it', async () => {
@@ -155,11 +155,11 @@ test('an archive many times the window streams in concurrent parts and the store
   await store.stop();
   const landed = store.object();
   const direct = join(root, 'direct.sqsh');
-  Bun.spawnSync(['mksquashfs', source, direct, '-noappend', '-comp', 'zstd', '-no-progress']);
+  await runToExit(['mksquashfs', source, direct, '-noappend', '-comp', 'zstd', '-no-progress']);
   const [code, size, , digest] = stdout.split(' ');
 
-  expect({ code, stderr, partsAtOnce: store.partsAtOnce(), tree: listing(landed, 'landed') })
-    .toEqual({ code: '0', stderr: '', partsAtOnce: true, tree: listing(Bun.file(direct).size > 0 ? new Uint8Array(await Bun.file(direct).arrayBuffer()) : undefined, 'direct') });
+  expect({ code, stderr, partsAtOnce: store.partsAtOnce(), tree: await listing(landed, 'landed') })
+    .toEqual({ code: '0', stderr: '', partsAtOnce: true, tree: await listing(Bun.file(direct).size > 0 ? new Uint8Array(await Bun.file(direct).arrayBuffer()) : undefined, 'direct') });
   expect(Number(size)).toBe(landed?.byteLength ?? -1);
   // The parts went up out of order, the first last; the digest is of the object as stored.
   expect(digest).toBe(layerDigest(landed ?? new Uint8Array(), SMALL.partBytes));
@@ -207,7 +207,7 @@ test('the parts left when the archiver ends go up beside the one still in flight
   const go = join(root, 'stage', 'go');
   mkdirSync(join(root, 'stage'), { recursive: true });
   rmSync(go, { force: true });
-  expect(spawnSync('mkfifo', [go]).status).toBe(0);
+  expect((await runToExit(['mkfifo', go])).exitCode).toBe(0);
   let told = false;
 
   const store = r2LikeStore(undefined, () => {

@@ -14,7 +14,7 @@
 
 const { afterEach, describe, expect, test } = require('bun:test');
 
-const { AwaitedList, awaitExit } = require('@kinu.run/test-utils');
+const { AwaitedList, awaitExit, runToExit } = require('@kinu.run/test-utils');
 
 const { shellQuote } = require('@kinu.run/core');
 
@@ -117,12 +117,12 @@ describe('a device terminal is a real one', () => {
 
     // The other half of the claim, on the same machine, this second: the
     // daemon's one-shot path gives this program a pipe and it refuses.
-    const withoutTerminal = Bun.spawnSync(['bash', '-c', 'exec top'], {
-      env: shellEnv(), stdin: 'ignore', stdout: 'pipe', stderr: 'pipe',
+    const withoutTerminal = await runToExit(['bash', '-c', 'exec top'], {
+      env: shellEnv(),
     });
 
     expect(withoutTerminal.exitCode).toBe(1);
-    expect(withoutTerminal.stderr.toString()).toContain('failed tty get');
+    expect(withoutTerminal.stderr).toContain('failed tty get');
   });
 
   test('the terminal is the shell\'s controlling terminal, so it has job control', async () => {

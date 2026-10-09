@@ -7,13 +7,12 @@
 // arms actually did. These tests are written against that failure, not against
 // the happy path.
 import { describe, expect, test } from 'bun:test';
-import { spawnSync } from 'node:child_process';
 import {
   copyFileSync, mkdirSync, readFileSync, realpathSync, writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
-import { git, initRepo, scratchDir } from '@kinu.run/test-utils';
+import { git, initRepo, runToExit, scratchDir } from '@kinu.run/test-utils';
 import {
   admissibility, armSpend, flipAccounting, pairArms, readHarborJob,
 } from './bench-external';
@@ -477,24 +476,23 @@ describe('the Terminal-Bench arm before it spends anything', () => {
     return { ...env, HOME: home };
   }
 
-  test('the corpus it looks for is inside the tree it runs from', () => {
+  test('the corpus it looks for is inside the tree it runs from', async () => {
     // A throwaway repository holding nothing but the script, so the resolved
     // path is attributable: whatever the arm names, it derived from THIS tree.
     // The old absolute literal would have named a directory somewhere else
     // entirely, which is exactly the regression this asserts against.
     const tree = realpathSync(scratchDir('tbench-arm'));
-    initRepo(tree);
-    git(tree, 'commit', '--allow-empty', '-qm', 'root');
+    await initRepo(tree);
+    await git(tree, 'commit', '--allow-empty', '-qm', 'root');
     mkdirSync(join(tree, 'scripts'), { recursive: true });
     copyFileSync(ARM, join(tree, 'scripts/tbench-arm.sh'));
     const home = join(tree, 'home');
     mkdirSync(home, { recursive: true });
 
-    const run = spawnSync('bash', [join(tree, 'scripts/tbench-arm.sh'),
-      'false', '20260817', '40', '@cf/deepseek-ai/deepseek-v4-flash-0731', '2'],
-    { env: armEnv(home), encoding: 'utf8' });
+    const run = await runToExit(['bash', join(tree, 'scripts/tbench-arm.sh'),
+      'false', '20260817', '40', '@cf/deepseek-ai/deepseek-v4-flash-0731', '2'], { env: armEnv(home) });
 
-    expect(run.status).toBe(2);
+    expect(run.exitCode).toBe(2);
     const named = /^REFUSING: no Terminal-Bench corpus at (.+)\.$/m.exec(run.stderr);
     expect(named, `the arm refused without naming a corpus: ${run.stderr}`).not.toBeNull();
     expect(named?.[1]).toBe(join(tree, 'terminal-bench-2.1'));
@@ -507,7 +505,7 @@ describe('the Terminal-Bench arm before it spends anything', () => {
   // The real sampler needs task-directory names and task.toml presence, not
   // the optional 60 MB corpus. This pinned population is selection-only; the
   // expected draw comes from the original seal, never the sampler under test.
-  test('the seeded sample reproduces the pre-registered task list', () => {
+  test('the seeded sample reproduces the pre-registered task list', async () => {
     const population = v.parse(v.object({
       provenance: v.object({ expectedSampleOrdinal: v.number() }),
       sourceCorpus: v.object({ content_hash: v.string() }),
@@ -533,11 +531,10 @@ describe('the Terminal-Bench arm before it spends anything', () => {
       writeFileSync(join(task, 'task.toml'), '# Selection-only population marker; not a runnable task.\n');
     }
 
-    const drawn = spawnSync('python3', ['-m', 'bench.harbor.corpus', 'sample', corpus,
-      '--size', String(size), '--seed', String(seed)],
-    { cwd: REPO_ROOT, env: { ...process.env, PYTHONPATH: REPO_ROOT }, encoding: 'utf8' });
+    const drawn = await runToExit(['python3', '-m', 'bench.harbor.corpus', 'sample', corpus,
+      '--size', String(size), '--seed', String(seed)], { cwd: REPO_ROOT, env: { ...process.env, PYTHONPATH: REPO_ROOT } });
 
-    expect(drawn.status, drawn.stderr).toBe(0);
+    expect(drawn.exitCode, drawn.stderr).toBe(0);
 
     expect(v.parse(DrawnSample, JSON.parse(drawn.stdout)).tasks).toEqual(tasks);
   });

@@ -21,7 +21,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { cpus } from 'node:os';
 import { basename, join, relative, resolve } from 'node:path';
-import { childEnv, git, initRepo, scratchDir } from '@kinu.run/test-utils';
+import { childEnv, git, initRepo, runToExit, scratchDir } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
   CI_EXEMPT, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
@@ -941,7 +941,7 @@ describe('every test file is claimed by some runner', () => {
     expect(patterns).toEqual(['**/external/**', 'tools/oxlint/anti-slop/**', '**/tests/workerd/**']);
   });
 
-  test('the two runners cannot reach each other', () => {
+  test('the two runners cannot reach each other', async () => {
     // The parallel-systems objection, answered mechanically rather than by
     // convention. Vitest exists here for ONE thing — Durable Object semantics
     // bun cannot express — and the only thing stopping it becoming a second
@@ -963,14 +963,11 @@ describe('every test file is claimed by some runner', () => {
     // And vitest's own config selects exactly the files bun skips, asked of
     // vitest itself: a widened `include` is an overlap here and a narrowed one
     // is a workerd suite that runs nowhere, in both directions.
-    const listed = Bun.spawnSync(
-      [resolve(root, 'node_modules/.bin/vitest'), 'list', '--root', 'packages/cf-backend', '--filesOnly', '--json'],
-      { cwd: root, env: childEnv(), stdout: 'pipe', stderr: 'pipe' },
-    );
+    const listed = await runToExit([resolve(root, 'node_modules/.bin/vitest'), 'list', '--root', 'packages/cf-backend', '--filesOnly', '--json'], { cwd: root, env: childEnv() });
 
-    expect(listed.exitCode, listed.stderr.toString()).toBe(0);
+    expect(listed.exitCode, listed.stderr).toBe(0);
 
-    const selected = v.parse(v.array(v.object({ file: v.string() })), JSON.parse(listed.stdout.toString()))
+    const selected = v.parse(v.array(v.object({ file: v.string() })), JSON.parse(listed.stdout))
       .map(({ file }) => relative(root, file));
 
     const onDisk = tracked.filter((path) => path.startsWith('packages/cf-backend/tests/workerd/') && path.endsWith('.test.ts'));
@@ -1273,7 +1270,7 @@ describe('CI verdicts belong to the exact pushed revision and the complete row p
       .toEqual({ timed: 1e6, others: true, file: 2 });
   });
 
-  test('file partitions execute every original suite file once, each timed', () => {
+  test('file partitions execute every original suite file once, each timed', async () => {
     const directory = scratchDir('ci-file-partitions');
     const files = Array.from({ length: 5 }, (_, index) => join(directory, String(index) + '.test.ts'));
 
@@ -1287,14 +1284,17 @@ describe('CI verdicts belong to the exact pushed revision and the complete row p
 
     writeFileSync(seed, JSON.stringify({ version: 1, files: { 'scripts/not-selected.test.ts': 4000 } }));
 
-    const observed = units.map((unit, index) => {
+    const observed = [];
+
+    // One at a time: every unit updates the shared seed's timings.
+    for (const [index, unit] of units.entries()) {
       const path = join(directory, 'timings-' + String(index) + '.json');
-      const child = Bun.spawnSync([...runnableArgv(unit.run, files), '--shard=1/1', '--timings=' + path, '--timings=' + seed, '--update-timings'], { cwd: root, env: childEnv(), stdout: 'pipe', stderr: 'pipe' });
+      const child = await runToExit([...runnableArgv(unit.run, files), '--shard=1/1', '--timings=' + path, '--timings=' + seed, '--update-timings'], { cwd: root, env: childEnv() });
 
-      expect(child.exitCode, child.stderr.toString()).toBe(0);
+      expect(child.exitCode, child.stderr).toBe(0);
 
-      return { run: unit.run, exitCode: child.exitCode, seconds: 1, output: '', timings: readFileTimings(path) ?? {} };
-    });
+      observed.push({ run: unit.run, exitCode: child.exitCode, seconds: 1, output: '', timings: readFileTimings(path) ?? {} });
+    }
 
     const measured = observed.flatMap((row) => Object.keys(row.timings));
     const expected = files.map((file) => relative(root, file));
@@ -1306,7 +1306,7 @@ describe('CI verdicts belong to the exact pushed revision and the complete row p
 });
 
 describe('Native suite isolation and product-dependent selection', () => {
-  test('one suite cannot lend its mocked module or globals to another', () => {
+  test('one suite cannot lend its mocked module or globals to another', async () => {
     const directory = scratchDir('suite-isolation');
     const first = join(directory, 'a.test.ts');
     const second = join(directory, 'b.test.ts');
@@ -1327,24 +1327,24 @@ test('the second suite keeps its real provider', () => {
 
     if (gate === undefined) throw new Error('there is no broad devbox source row');
     const argv = runnableArgv(gate.run, tracked).slice(0, -1);
-    const child = Bun.spawnSync([process.execPath, 'scripts/ladder.ts', '--run', ...argv, first, second], { cwd: root, env: childEnv(), stdout: 'pipe', stderr: 'pipe' });
+    const child = await runToExit([process.execPath, 'scripts/ladder.ts', '--run', ...argv, first, second], { cwd: root, env: childEnv() });
 
-    expect(child.exitCode, child.stdout.toString() + child.stderr.toString()).toBe(0);
+    expect(child.exitCode, child.stdout + child.stderr).toBe(0);
   });
 
-  test('a product change catches its unchanged consumer without running unrelated tests', () => {
+  test('a product change catches its unchanged consumer without running unrelated tests', async () => {
     const directory = scratchDir('native-changed-tests');
     const affected = join(directory, 'value.test.ts');
     const unrelated = join(directory, 'unrelated.test.ts');
     const product = join(directory, 'product.ts');
 
-    initRepo(directory);
+    await initRepo(directory);
     writeFileSync(product, 'export const value = 42;');
     writeFileSync(affected, `import { test, expect } from 'bun:test'; import { value } from './product'; test('consumer', () => expect(value).toBe(42));`);
     writeFileSync(unrelated, `import { test, expect } from 'bun:test'; test('unrelated', () => expect(1).toBe(0));`);
-    git(directory, 'add', '-A');
-    git(directory, 'commit', '-qm', 'test(fixtures): seed unchanged consumers');
-    git(directory, 'branch', 'fixture/base');
+    await git(directory, 'add', '-A');
+    await git(directory, 'commit', '-qm', 'test(fixtures): seed unchanged consumers');
+    await git(directory, 'branch', 'fixture/base');
     const source = LADDER.find((gate) => gate.run.startsWith('bun test '));
 
     if (source === undefined) throw new Error('there is no native Bun source row');
@@ -1356,9 +1356,9 @@ test('the second suite keeps its real provider', () => {
 
     for (const [text, exit] of [['export const value = 43;', 1], ['export const value = 41 + 1;', 0]] as const) {
       writeFileSync(product, text);
-      const child = Bun.spawnSync([...runnableArgv(selected.run, files), '--reporter=junit', '--reporter-outfile=' + report], { cwd: directory, env: childEnv(), stdout: 'pipe', stderr: 'pipe' });
+      const child = await runToExit([...runnableArgv(selected.run, files), '--reporter=junit', '--reporter-outfile=' + report], { cwd: directory, env: childEnv() });
 
-      expect(child.exitCode, child.stdout.toString() + child.stderr.toString()).toBe(exit);
+      expect(child.exitCode, child.stdout + child.stderr).toBe(exit);
       const observed = parseJUnit(readFileSync(report, 'utf8'));
 
       expect([...observed.files].map((file) => basename(file))).toEqual(['value.test.ts']);

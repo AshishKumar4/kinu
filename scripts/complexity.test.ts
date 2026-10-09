@@ -15,6 +15,7 @@
 import { describe, expect, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
 import { scratchPath } from '../packages/test-utils/src/scratch';
+import { runToExit } from '../packages/test-utils/src/spawn';
 
 
 import {
@@ -387,7 +388,7 @@ describe('the lock only shrinks or is re-keyed', () => {
 
 /** oxlint's own reading of the same corpus: `kind` and complexity per byte
  *  offset, per file. */
-function oxlintComplexity(files: readonly string[]): Map<string, Map<number, { kind: string; complexity: number }>> {
+async function oxlintComplexity(files: readonly string[]): Promise<Map<string, Map<number, { kind: string; complexity: number }>>> {
   const config = scratchPath('complexity-parity', 'config.json');
   writeFileSync(config, JSON.stringify({
     categories: {
@@ -397,12 +398,7 @@ function oxlintComplexity(files: readonly string[]): Map<string, Map<number, { k
     rules: { complexity: ['error', { max: 0 }] },
   }));
 
-  const run = Bun.spawnSync({
-    cmd: ['./node_modules/.bin/oxlint', '-c', config, '-f', 'json', ...files],
-    cwd: root,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
+  const run = await runToExit(['./node_modules/.bin/oxlint', '-c', config, '-f', 'json', ...files], { cwd: root });
 
   const output = run.stdout.toString();
 
@@ -480,8 +476,9 @@ const LIVE_BY_FILE = new Map<string, Measured[]>(
 
 const LIVE = [...LIVE_BY_FILE.values()].flat();
 
+const theirs = await oxlintComplexity([...LIVE_FILES.keys()]);
+
 describe('the census and oxlint report the same number', () => {
-  const theirs = oxlintComplexity([...LIVE_FILES.keys()]);
 
   test('for every function this census measures, over the whole governed corpus', () => {
     const missing: string[] = [];

@@ -15,6 +15,7 @@ import { gate, harness } from './support/devbox-harness';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
 import { pipeExec as localExec } from './support/native-process';
 import { isRunning } from '../../test-utils/src/spawn';
+import { runToExit } from '../../test-utils/src/spawn';
 
 const root = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}untimed-exec-`));
 
@@ -59,7 +60,7 @@ describe('an untimed command on the runtime\'s exec', () => {
     const cwd = mkdtempSync(join(root, 'kill-'));
     // A FIFO: the read below returns once the command has started its child and written the child's pid.
     const started = join(cwd, 'started');
-    Bun.spawnSync(['mkfifo', started]);
+    await runToExit(['mkfifo', started]);
     const ran = box.execUntimed(`sleep 60 & echo $! > ${started}; wait`, { cwd, execId: 'held' });
     const child = Number((await Bun.file(started).text()).trim());
 
@@ -129,9 +130,9 @@ async function restDecision(box: Awaited<ReturnType<typeof readyBox>>, at: numbe
 }
 
 /** A FIFO the command reads before it goes on: it is still running until the test writes the FIFO. */
-function releaseFifo(cwd: string): string {
+async function releaseFifo(cwd: string): Promise<string> {
   const release = join(cwd, 'release');
-  Bun.spawnSync(['mkfifo', release]);
+  await runToExit(['mkfifo', release]);
 
   return release;
 }
@@ -163,7 +164,7 @@ describe('a streamed untimed command', () => {
   test('hands over what it printed while it still runs, and its exit code ends the stream', async () => {
     const box = await readyBox();
     const cwd = mkdtempSync(join(root, 'stream-'));
-    const release = releaseFifo(cwd);
+    const release = await releaseFifo(cwd);
     const stream = await box.execUntimedStream(`echo compiled; read line < ${release}; echo "built $line" >&2; exit 3`, { cwd, execId: 'stream' });
     const heard: string[] = [];
 
@@ -182,7 +183,7 @@ describe('a streamed untimed command', () => {
     const box = await readyBox();
     const cwd = mkdtempSync(join(root, 'stream-cancel-'));
     const started = join(cwd, 'started');
-    Bun.spawnSync(['mkfifo', started]);
+    await runToExit(['mkfifo', started]);
     const stream = await box.execUntimedStream(`sleep 60 & echo $! > ${started}; wait`, { cwd, execId: 'stream-cancel' });
     const child = Number((await Bun.file(started).text()).trim());
 
@@ -196,7 +197,7 @@ describe('a streamed untimed command', () => {
     const start = Date.now();
     const box = await readyBox();
     const cwd = mkdtempSync(join(root, 'stream-hold-'));
-    const release = releaseFifo(cwd);
+    const release = await releaseFifo(cwd);
     const { idleMs, quietConfirmMs } = DEFAULT_DEVBOX_POLICY;
 
     try {
@@ -223,7 +224,7 @@ describe('a streamed untimed command', () => {
     const start = Date.now();
     const box = await readyBox();
     const cwd = mkdtempSync(join(root, 'stream-cancel-rest-'));
-    const release = releaseFifo(cwd);
+    const release = await releaseFifo(cwd);
     const { idleMs, quietConfirmMs } = DEFAULT_DEVBOX_POLICY;
 
     try {

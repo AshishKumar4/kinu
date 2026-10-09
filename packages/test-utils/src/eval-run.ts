@@ -5,7 +5,6 @@
  */
 import { Cause, Effect, Result, type Exit } from 'effect';
 import { hold, settle } from '@kinu.run/core/obs';
-import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { recordNoModelEpisode, recordUnmeasuredEpisode, recordWorkspaceSpend, type LiveModelSpend } from './live-model';
@@ -14,7 +13,7 @@ import {
   type Clock, type ReasoningEffort, type RunEvent, type WorkspaceSpend, type ToolOutcome,
 } from '@kinu.run/core';
 import { SCRIPTED_MODEL_SPEC } from './scripted-model-spec';
-import { gitEnv } from './git';
+import { git } from './git';
 import { BEHAVIOUR_SCORERS } from './agent-evals';
 import { TASK_OUTCOME, isCovariateRow, type EvalSubgoal } from './eval-outcome';
 import { compareRunEventOrder } from './eval-target';
@@ -553,12 +552,12 @@ export interface GitProvenance {
   readonly gitDirty: boolean;
 }
 
-/** Uses `gitEnv` so an exported GIT_DIR/GIT_WORK_TREE (e.g. the pre-push hook) cannot redirect this. */
-export function gitProvenance(cwd: string): GitProvenance {
-  const git = (...args: string[]) =>
-    execFileSync('git', args, { cwd, env: gitEnv(), encoding: 'utf8' }).trim();
+/** Through `git`, so an exported GIT_DIR/GIT_WORK_TREE (e.g. the pre-push hook) cannot redirect this. */
+export async function gitProvenance(cwd: string): Promise<GitProvenance> {
+  const head = await git(cwd, 'rev-parse', 'HEAD');
+  const status = await git(cwd, 'status', '--porcelain');
 
-  return { gitSha: git('rev-parse', 'HEAD'), gitDirty: git('status', '--porcelain') !== '' };
+  return { gitSha: head.trim(), gitDirty: status.trim() !== '' };
 }
 
 /** Everything a family's suite knows about its run; one assembly point for runId, git provenance,
@@ -578,12 +577,12 @@ export interface RunRecordInputs {
   readonly repoRoot: string;
 }
 
-function assembleRunRecord(inputs: RunRecordInputs): EvalRunRecord {
+async function assembleRunRecord(inputs: RunRecordInputs): Promise<EvalRunRecord> {
   return {
     schema: 1,
     runId: `${inputs.family}-${inputs.tier}-${String(Date.now())}`,
     createdAt: new Date().toISOString(),
-    ...gitProvenance(inputs.repoRoot),
+    ...await gitProvenance(inputs.repoRoot),
     family: inputs.family,
     tier: inputs.tier,
     modelId: inputs.modelId,
@@ -617,7 +616,7 @@ function writeRunRecord(path: string, record: EvalRunRecord): void {
  * record. Destination is `KINU_EVAL_RECORD` or the run's transcripts directory, never a tracked directory:
  * that dirties the checkout and `deploy.sh` refuses a dirty tree. Returns the record, or null.
  */
-export function publishRunRecord(inputs: RunRecordInputs): EvalRunRecord | null {
+export async function publishRunRecord(inputs: RunRecordInputs): Promise<EvalRunRecord | null> {
   if (inputs.observations.length === 0) {
     console.warn(`\nNO RECORD: the ${inputs.family} run attempted 0 of `
       + `${String(inputs.declaredTasks.length)} declared task(s), so it measured nothing and `
@@ -627,7 +626,7 @@ export function publishRunRecord(inputs: RunRecordInputs): EvalRunRecord | null 
     return null;
   }
 
-  const record = assembleRunRecord(inputs);
+  const record = await assembleRunRecord(inputs);
   const out = process.env.KINU_EVAL_RECORD ?? join(inputs.transcripts, 'run-record.json');
   writeRunRecord(out, record);
   console.log(`\n${formatRunRecord(record)}\n\nrecord: ${out}\n`);

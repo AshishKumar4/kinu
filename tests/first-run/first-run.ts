@@ -963,11 +963,11 @@ export function expectReached(caseId: FirstRunCase, subgoal: EvalSubgoal): void 
 }
 
 /** Publish with the actual selected model; an operator-only case names none. */
-export function publishFirstRunRecord(
+export async function publishFirstRunRecord(
   suite: string, modelId: string | undefined, declared: readonly FirstRunCase[], observations: EvalObservation[],
-): void {
+): Promise<void> {
   const spend = reportLiveModelSpend(suite);
-  publishRunRecord({
+  await publishRunRecord({
     family: FIRST_RUN_FAMILY, tier: FIRST_RUN_TIER, modelId: modelId ?? 'no-model',
     modelObserved: observedModels.observed,
     repeats: 1, seed: 1, arm: FIRST_RUN_ARM, declaredTasks: [...declared], observations, spend,

@@ -25,7 +25,6 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { spawnSync } from 'node:child_process';
 import * as v from 'valibot';
 
 import {
@@ -33,6 +32,7 @@ import {
   referencesPackage, servedBy, typedRuntime, unusedDependencies,
 } from './dead-code';
 import { isManifest, isVendoredSource, readRepositoryFile, trackedFiles } from './sources';
+import { runToExit } from '../packages/test-utils/src/spawn';
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -303,12 +303,8 @@ describe('this repository', () => {
 /* ── The second implementation ─────────────────────────────────────────── */
 
 /** knip's own dependency findings, `manifest#name` keyed. */
-function knipDependencies(): Set<string> {
-  const run = spawnSync(
-    `${root}node_modules/.bin/knip`,
-    ['--no-progress', '--include', 'dependencies', '--reporter', 'json'],
-    { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
-  );
+async function knipDependencies(): Promise<Set<string>> {
+  const run = await runToExit([`${root}node_modules/.bin/knip`, '--no-progress', '--include', 'dependencies', '--reporter', 'json'], { cwd: root });
 
   const Report = v.object({
     issues: v.optional(v.array(v.object({
@@ -336,8 +332,8 @@ describe('measured against knip', () => {
   // bound is 5 s, and a bound below the tool's own duration made this test
   // red under load and green alone. The ceiling below is a bound on a finite
   // run, not a wait on a condition.
-  test('the two agree on this tree', () => {
-    const knip = knipDependencies();
+  test('the two agree on this tree', async () => {
+    const knip = await knipDependencies();
     const census = new Set(live.map((d) => `${d.manifest}#${d.name}`));
     expect(knip.size).toBeGreaterThan(0);
 

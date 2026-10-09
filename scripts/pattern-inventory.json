@@ -729,7 +729,7 @@
       "decision": "lexical"
     },
     {
-      "file": "packages/test-utils/src/git.ts",
+      "file": "packages/test-utils/src/git-env.ts",
       "kind": "hand-parser",
       "owner": "stripGitContext",
       "sourceSha256": "d6851f7dfc16565fc73f328d7e663184ba9ccb5804d19b862cdc5db6b86c6376",
