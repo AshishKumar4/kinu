@@ -256,3 +256,9 @@ export const CRAFT_ANSWER = CRAFT_INPUT.split('').reduce((sum, digit) => sum + N
 export const CRAFT_ASK = 'Build yourself a small reusable tool that adds up the digits of a number, then '
   + `use that tool on ${CRAFT_INPUT} and reply with the resulting number on its own line. `
   + 'Do the arithmetic with the tool rather than in your head.';
+
+/** agent-tab: an ask the agent's own window sends that is answered slowly, so the next words arrive while it works. */
+export const TAB_WORKING_ASK = 'Think this over carefully, then reply with only WORKED.';
+
+/** agent-tab: typed into the agent's window while it answers {@link TAB_WORKING_ASK}. */
+export const TAB_WHILE_WORKING = 'One more thing once you are done: reply with only NOTED.';

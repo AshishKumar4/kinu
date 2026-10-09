@@ -20,7 +20,7 @@ import {
   SEARCH_QUERY, SETTLE_ASK, SETTLE_MARKER, STANDBY_MISSION, SWARM_ASK, SWARM_TASK, TOOLS_CODEMODE_MARK, TOOLS_FACT,
   TOOLS_HEALTH_URL, TOOLS_LIST_ASK, TOOLS_PROBE_BYTES, TOOLS_PROBE_PATH, TOOLS_RUN_MARK, TOOLS_TASK_TITLE,
   TOOLS_USE_ASK, TREE_ASK, TREE_DEEP_WORD, TREE_SHALLOW_WORD, UNNAMED_MACHINE_ASK, WAKE_ASK, WAKE_STEPS,
-  NESTED_HIRE_ASK, NESTED_MISSION, NESTED_TASK_TITLE, NESTED_WORD,
+  NESTED_HIRE_ASK, NESTED_MISSION, NESTED_TASK_TITLE, NESTED_WORD, TAB_WORKING_ASK,
   sayWordMission,
 } from './asks';
 import { LISTING_TURN, STEER, STEER_MARKER, STEER_TURN } from './steer-observation';
@@ -327,10 +327,16 @@ const helper: Script = (request) => {
   return own === undefined ? null : own[1](request);
 };
 
+/** How long agent-tab's working ask takes to start answering: the row's next words arrive well inside it. */
+const TAB_WORKING_PACE = { firstTokenMs: 20_000, lead: '', leadMs: 0 };
+
+/** agent-tab: the working ask is answered slowly, so the words the window types after it reach the agent mid-turn. */
+const tabWorking: Script = (request) => latest(request) !== TAB_WORKING_ASK ? null : { text: 'WORKED', pace: TAB_WORKING_PACE };
+
 const SCRIPTS: readonly Script[] = [
   steerCorrection, backgroundSettle, backgroundWake, capabilityIsolation, delegation, delegationTree, exploration,
   machineConsent, deviceJob, sandboxMountWrite, sandboxExecOutput, twoMachines, webSearch, workspacePanes, everyTool, codemodeCraft, helloSlate,
-  jobWake,
+  jobWake, tabWorking,
   nestedChat, helper,
 ];
 
