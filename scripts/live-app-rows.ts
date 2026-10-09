@@ -564,6 +564,9 @@ async function measureOwnServerSlate(page: Page): Promise<OwnServerVerdict> {
   const read = async (scheme: 'dark' | 'light'): Promise<OwnServerReading> => {
     // The page follows the host's scheme; its text is then the chat's.
     await named(`the support queue in ${scheme}`, () => frame.waitForFunction((want) => document.documentElement.dataset['mode'] === want, bound, scheme));
+    // The card is drawn once its frame has a height: a page loads inside a frame still held shut until it says its size.
+    await named(`the support queue's frame drawn in ${scheme}`, () => page.waitForFunction(
+      (selector) => (document.querySelector(selector)?.getBoundingClientRect().height ?? 0) > 0, bound, card));
     // Settled: the frame takes the height its page last said, and the page stops growing.
     await painted(page);
     await painted(page);
