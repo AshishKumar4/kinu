@@ -10,11 +10,11 @@
  * minified, 48.9 MB minified with ASCII-only output. esbuild's 11.9 MB wasm, then instantiated at load by a
  * static import, is outside V8's count; its absence is checked on the module graph instead.
  *
- * Measured 2026-10-09 in workerd 1.20260930.2 (miniflare 5.20260926.0-alpha), two runs each: setup now loads the
- * workspace agent's own isolate, and the workspace hands the Worker Loader the agent bundle's 6.2 MB of module text,
- * garbage once loaded. V8's uncollected count read 31.5 MB on 5681dfd92 against 27.2-27.3 MB on e0cd7e435, which
- * keeps the agent in this isolate, while the live heap fell from 28.9 MB to 28.3 MB. So the setup bound is read on
- * the live heap, after the collection a heap snapshot makes.
+ * Measured 2026-10-09 in workerd 1.20260930.2 (miniflare 5.20260926.0-alpha): setup now loads the workspace agent's
+ * own isolate, and the workspace hands the Worker Loader the agent bundle's 6.2 MB of module text, garbage once loaded.
+ * V8's uncollected count read 31.5 MB on 5681dfd92 (two runs) against 27.2-27.3 MB on e0cd7e435, which keeps the
+ * agent in this isolate, while the live heap fell from 28.9 MB to 28.3 MB. So the setup bound is read on the live heap,
+ * after the collection a heap snapshot makes, and is derived for that quantity: see {@link HEAP_AFTER_SETUP_BOUND_BYTES}.
  *
  * `--no-build` reads the existing `dist/kinu` (a deploy already built it).
  */
@@ -38,13 +38,15 @@ const DIST = join(CF_BACKEND, 'dist/kinu');
 
 export const GATE = 'worker-heap';
 
-/** Measured 2026-10-07: 45.4 MB used on b0de8580f, where 15 dependents each bundled their own zod; 35.7-36.5 MB over 3
- *  runs on lane/memory-gap 9875bab49 with one; 26.4-26.5 MB on 871e789f1, where a module compiles when first imported
- *  (`new_module_registry`) and the slate vendor waits for a slate; 25.5-25.6 MB on a21347229, where a provider SDK
- *  loads with its first model; 24.4 MB on a9680b282, where core declares no import-time effects and passkeys and mail
- *  load their libraries per route. Plus 4 MB of room for the product to grow. Read on the live heap since 2026-10-09
- *  (see the header). */
-export const HEAP_AFTER_SETUP_BOUND_BYTES = 28_500_000;
+/** The live heap after setup, collected first. Measured 2026-10-09 on integration 44b13e946, three runs: 29.2, 28.9 and
+ *  29.2 MB live (27.5 MB used each). The highest, 29.2 MB, plus 4 MB of room for the product to grow.
+ *
+ *  Until 2026-10-09 this bounded the used heap, garbage included, at 28.5 MB: 45.4 MB used on b0de8580f, where 15
+ *  dependents each bundled their own zod; 35.7-36.5 MB over 3 runs on lane/memory-gap 9875bab49 with one; 26.4-26.5 MB
+ *  on 871e789f1, where a module compiles when first imported (`new_module_registry`) and the slate vendor waits for a
+ *  slate; 25.5-25.6 MB on a21347229, where a provider SDK loads with its first model; 24.4 MB on a9680b282, where core
+ *  declares no import-time effects and passkeys and mail load their libraries per route; plus the same 4 MB. */
+export const HEAP_AFTER_SETUP_BOUND_BYTES = 33_200_000;
 
 /** Measured 2026-09-26 at {@link STEP} (2.4 MB of answers): 9.8 MB live in the parked step; 7.3 MB once the Workers
  *  AI fetch stopped copying the request; 4.8 MB once our own prompt text left no character above U+00FF, so V8
