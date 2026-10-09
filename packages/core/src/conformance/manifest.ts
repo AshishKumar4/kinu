@@ -4,7 +4,7 @@
  * against the real composition output in both directions. Test-plane only.
  */
 
-import { BUILTIN_TOOLS, SUBMIT_PLAN_TOOL } from '../tools/registry';
+import { ASK_OWNER_TOOL, BUILTIN_TOOLS, SUBMIT_PLAN_TOOL } from '../tools/registry';
 import type { BuiltinToolName } from '../tools/registry';
 import { AGENTS_OPS, type AgentsOp } from '../operations/agents';
 import { MEMORY } from '../operations/memory';
@@ -85,6 +85,12 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': { absent: 'a delegated turn answers its parent through report; only the owner\'s own turns submit a plan for review' },
       cli: WIRED,
     },
+    // Where a person is the conversation partner: the owner's own turns. A delegated turn asks its hirer in its report.
+    ask_owner: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': { absent: 'a delegated turn answers its hirer through report; only the owner\'s own turns ask the owner' },
+      cli: WIRED,
+    },
   },
 
   'agents-op': {
@@ -128,7 +134,7 @@ export interface ObservedSurface {
 
 /** Registry-closed planes, to tell "undeclared" from impossible states. */
 export const PLANE_UNIVERSE = {
-  tool: [...BUILTIN_TOOLS, SUBMIT_PLAN_TOOL],
+  tool: [...BUILTIN_TOOLS, SUBMIT_PLAN_TOOL, ASK_OWNER_TOOL],
   'agents-op': AGENTS_OPS,
   'memory-op': Object.keys(MEMORY),
   producer: CONFORMANCE_PRODUCERS,
