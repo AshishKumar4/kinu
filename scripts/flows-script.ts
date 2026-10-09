@@ -353,6 +353,10 @@ function homeAnswer(request: ScriptedRequest, latest: string): ScriptedAnswer | 
     return { text: `${HIRED} ${/"name"\s*:\s*"([^"]+)"/u.exec(hired.result)?.[1] ?? `nobody: ${hired.result.slice(0, 200)}`}` };
   }
 
+  const home = /\bHOME (\/home\/[\w.-]+)/u.exec(latest)?.[1];
+
+  if (home !== undefined && !latest.includes(HOME_REPORTED)) return { text: `${HOME_REPORTED} ${home}` };
+
   if (latest.includes(HOME_BRIEF)) {
     const shell = request.turn.find((call) => call.name === 'shell');
 
@@ -361,9 +365,7 @@ function homeAnswer(request: ScriptedRequest, latest: string): ScriptedAnswer | 
     return { text: `HOME ${/\/home\/[\w.-]+/u.exec(shell.result)?.[0] ?? `unknown: ${shell.result.slice(0, 200)}`}` };
   }
 
-  const home = /\bHOME (\/home\/[\w.-]+)/u.exec(latest)?.[1];
-
-  return home === undefined || latest.includes(HOME_REPORTED) ? undefined : { text: `${HOME_REPORTED} ${home}` };
+  return undefined;
 }
 
 /** The reach row: the slate's build, its `ai.stream` prompt, its `agent.ask` message, and the helper it hires. */

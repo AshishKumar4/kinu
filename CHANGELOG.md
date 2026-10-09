@@ -25,6 +25,9 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **A hung product flow cannot erase finished verdicts.** Each flow is measured beside its assertions and runs as one Armada task in the deploy matrix. A process-interruption regression checks that a finished flow reports before the next flow blocks, and a timed-out task leaves sibling verdicts intact.
+- **Slate sharing flows wait for the capability graph.** Both sharing paths use the same dialog-readiness and enabled-submit flow, so the owner reach check no longer clicks a disabled Share control and waits for a share that was never created.
+- **The hire-home flow relays the hire's own home.** Its scripted parent reads the report before the brief quoted in that report, rather than running its own `pwd`. A real event-drain report now exercises that reply.
 - **Launcher-swap checks use the repo's runtime, not the test driver's.** Their managed Bun is the pinned local binary and installation is disabled, so a check run by the machine's older Bun cannot contact bun.sh or add install progress to its verdict.
 - **First-run collection uses the pinned runtime for the process and its workers.** Its credential-free probes no longer resolve the machine's Bun through PATH; an execution trace showed those workers using 1.4.0 while the suite ran on 1.4.2.
 - **Staging counts terminal sequences still owed, not repeated observations.** Each settlement emits one completion event. The version report follows each sequence's last event, separates those that settled after owing, and reports only those still owed at the window's end.

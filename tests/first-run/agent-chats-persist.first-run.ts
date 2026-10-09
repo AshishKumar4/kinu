@@ -194,7 +194,7 @@ interface DrawnRoster { readonly tabs: string[]; readonly rows: string[] }
 
 /**
  * Load the workspace in Chrome and read the agents it draws once the page is
- * settled: its workspace snapshot has answered and every rpc it sent has
+ * settled: its workspace opening has answered and every rpc it sent has
  * answered, and still none is outstanding after two frames. Read off the page's
  * own socket through CDP, so it holds whichever reads the page makes, and a
  * page that never settles is bounded by the case budget. The sidebar's roster
@@ -205,10 +205,10 @@ interface DrawnRoster { readonly tabs: string[]; readonly rows: string[] }
 async function drawnRoster(page: Page, plan: PublicSessionPlan, workspace: string, budget: AbortSignal): Promise<DrawnRoster> {
   const cdp = await page.createCDPSession();
   const pending = new Set<string>();
-  let snapshot: { id: string; answered: boolean } | null = null;
+  let opening: { id: string; answered: boolean } | null = null;
   let quiet = Promise.withResolvers<void>();
 
-  const check = () => { if (snapshot?.answered === true && pending.size === 0) quiet.resolve(); };
+  const check = () => { if (opening?.answered === true && pending.size === 0) quiet.resolve(); };
 
   cdp.on('Network.webSocketFrameSent', ({ response }) => {
     const frame = rpcFrame(response.payloadData);
@@ -216,7 +216,7 @@ async function drawnRoster(page: Page, plan: PublicSessionPlan, workspace: strin
     if (frame?.kind !== 'sent') return;
     pending.add(frame.id);
 
-    if (frame.method === 'getWorkspaceSnapshot') snapshot = { id: frame.id, answered: false };
+    if (frame.method === 'getWorkspaceOpening') opening = { id: frame.id, answered: false };
   });
   cdp.on('Network.webSocketFrameReceived', ({ response }) => {
     const frame = rpcFrame(response.payloadData);
@@ -224,7 +224,7 @@ async function drawnRoster(page: Page, plan: PublicSessionPlan, workspace: strin
     if (frame?.kind !== 'reply' || !frame.final) return;
     pending.delete(frame.id);
 
-    if (snapshot?.id === frame.id) snapshot.answered = true;
+    if (opening?.id === frame.id) opening.answered = true;
     check();
   });
   await cdp.send('Network.enable');

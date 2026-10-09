@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, test } from 'bun:test';
-import type { Page } from 'puppeteer';
+import type { Page, Viewport } from 'puppeteer';
 import * as v from 'valibot';
 
 import { unruledClasses, withGallery, type Gallery } from '../../scripts/gallery-harness';
@@ -113,7 +113,7 @@ interface ObservedPlan {
 interface FrameRequest {
   readonly frame: string;
   readonly mode: Mode;
-  readonly viewport: { readonly width: number; readonly height: number };
+  readonly viewport: Viewport;
   readonly params?: Record<string, string>;
 }
 
@@ -236,12 +236,27 @@ async function observeMobile(newPage: Gallery['newPage'], origin: string): Promi
   return { ...before, ...rail };
 }
 
+/**
+ * A pending plan keeps a page tab among the inspector's pages, titled by its heading: pressing it shows that plan's
+ * review, and the tab is the current page.
+ */
+async function openPlanPage(page: Page, title: string): Promise<void> {
+  const tab = `nav[aria-label="Pages"] button[aria-label*=${JSON.stringify(title)}]`;
+
+  // Work, mounted behind every page, draws its plans from the read the tabs come from; a review in their place is the
+  // product before plans had pages.
+  await page.waitForSelector('[data-work-plans], [data-back-to-work]');
+  expect(await page.$(tab), `no page tab for the plan "${title}"`).not.toBeNull();
+  await page.click(tab);
+  await page.waitForSelector(`${tab}[aria-current="true"]`);
+  await page.waitForSelector('[data-plan-review-root]');
+}
+
 async function observeWorkspace(newPage: Gallery['newPage'], origin: string): Promise<WorkspacePlan> {
   const page = await openFrame(newPage, origin, { frame: 'workspacepage', mode: 'dark', viewport: { width: 1280, height: 900 } });
   await page.waitForSelector('[data-composer-root]');
   await page.waitForFunction(() => document.querySelectorAll('[data-panel]').length === 2);
-  await page.click('[aria-label="Work"]');
-  await page.waitForSelector('[data-plan-review-root]');
+  await openPlanPage(page, 'applyCoupon');
   await page.waitForFunction(
     () => document.querySelector('[data-plan-title] h1, h1[data-plan-title]')?.textContent?.includes('applyCoupon') === true,
   );
@@ -539,6 +554,96 @@ describe('the plan review document, as a browser lays it out', () => {
   });
 });
 
+/**
+ * The decision bar as drawn: each control's label on one line, inside its padding, its icon whole, and whether the two
+ * decisions sit side by side. A control squeezed below its content wraps its label, eats its padding or crushes its icon.
+ */
+async function decisionBar(page: Page): Promise<{ controls: { label: string; lines: number; clipped: boolean; spills: boolean }[]; sideBySide: boolean; width: number }> {
+  await page.waitForSelector('[data-plan-decisions] button');
+
+  return page.evaluate(() => {
+    const footer = document.querySelector('[data-plan-footer]');
+    const bar = footer?.getBoundingClientRect();
+    const buttons = [...(footer?.querySelectorAll('button') ?? [])].filter((button) => button.getClientRects().length > 0);
+
+    const controls = buttons.map((button) => {
+      const box = button.getBoundingClientRect();
+      const style = getComputedStyle(button);
+      const inner = { left: box.left + Number.parseFloat(style.paddingLeft) - 1, right: box.right - Number.parseFloat(style.paddingRight) + 1 };
+      const texts = document.createTreeWalker(button, NodeFilter.SHOW_TEXT);
+      const rects: DOMRect[] = [];
+
+      for (let text = texts.nextNode(); text !== null; text = texts.nextNode()) {
+        const range = document.createRange();
+
+        range.selectNodeContents(text);
+        rects.push(...[...range.getClientRects()].filter((rect) => rect.width > 0));
+      }
+
+      const icons = [...button.querySelectorAll('svg')].map((icon) => icon.getBoundingClientRect());
+      const crushed = icons.some((icon) => icon.width < 1);
+      const cut = [...rects, ...icons].some((rect) => rect.left < inner.left || rect.right > inner.right);
+      // A control laid past its bar's edge is squeezed out of it, however whole its label.
+      const spills = bar === undefined || box.left < bar.left - 1 || box.right > bar.right + 1;
+
+      return { label: (button.textContent ?? '').trim(), lines: new Set(rects.map((rect) => Math.round(rect.top))).size, clipped: crushed || cut, spills };
+    });
+
+    const decisions = [...document.querySelectorAll('[data-plan-decisions] button')].map((button) => button.getBoundingClientRect());
+    const [first, second] = decisions;
+
+    return { controls, sideBySide: first !== undefined && second !== undefined && Math.abs(first.top - second.top) < 2, width: Math.round(bar?.width ?? 0) };
+  });
+}
+
+describe('the decision bar fits wherever a plan is read', () => {
+  test('in the inspector column, on a phone, and on a wide page, every label stays on one line; a narrow bar stacks', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      // A wide page and a phone draw the review frame alone; the inspector column draws it as a page of the workspace.
+      const planFrame = async (width: number, height: number): Promise<Page> =>
+        openFrame(newPage, origin, { frame: 'planreview', mode: 'dark', viewport: { width, height } });
+
+      const inspector = async (viewport: Viewport): Promise<Page> => {
+        const page = await openFrame(newPage, origin, { frame: 'workspacepage', mode: 'light', viewport });
+
+        // A phone shows the chat or the workspace; the plan is read in the workspace.
+        if (viewport.isMobile === true && await page.$eval('[data-inspector-toggle]', (toggle) => toggle.getAttribute('aria-pressed')) !== 'true') {
+          await page.tap('[data-inspector-toggle]');
+        }
+
+        await openPlanPage(page, 'applyCoupon');
+
+        return page;
+      };
+
+      // Wherever the bar is, nothing in it wraps, clips or spills past its edge; a wide page has room for one row.
+      const widths: { name: string; open: () => Promise<Page>; stacks: boolean | null }[] = [
+        { name: 'the inspector column', stacks: null, open: async () => inspector({ width: 1280, height: 900 }) },
+        { name: 'the workspace on a narrow phone', stacks: null, open: async () => inspector({ width: 320, height: 640, isMobile: true, hasTouch: true }) },
+        { name: 'a narrow phone', stacks: null, open: async () => planFrame(320, 640) },
+        { name: 'a phone', stacks: null, open: async () => planFrame(390, 844) },
+        { name: 'a wide page', stacks: false, open: async () => planFrame(1280, 900) },
+      ];
+
+      for (const { name, open, stacks } of widths) {
+        const page = await open();
+
+        try {
+          const bar = await decisionBar(page);
+
+          expect({ name, labels: bar.controls.map(({ label }) => label) }).toEqual({ name, labels: expect.arrayContaining(['Request changes', 'Approve & implement']) });
+          expect({ name, width: bar.width, squeezed: bar.controls.filter(({ lines, clipped, spills }) => lines !== 1 || clipped || spills) })
+            .toEqual({ name, width: bar.width, squeezed: [] });
+
+          if (stacks !== null) expect({ name, sideBySide: bar.sideBySide }).toEqual({ name, sideBySide: !stacks });
+        } finally {
+          await page.close();
+        }
+      }
+    });
+  });
+});
+
 /** Nothing in a plan review reaches the network of its own accord: the old unit pin's intent, held at the page. */
 describe('a plan review sends nothing of its own', () => {
   test('a file and line in a plan is plain code, and hovering it past the preview delay sends nothing', () => {
@@ -762,10 +867,9 @@ async function chooseMode(page: Page, mode: string): Promise<void> {
     .some((button) => button.getAttribute('aria-pressed') === 'true' && button.textContent?.trim() === label), {}, mode);
 }
 
-/** Opens the workspace's pending plan from the Work tab and presses one of its controls; the server then says the plan moved. */
+/** Opens the workspace's pending plan by its page tab and presses one of its controls; the server then says the plan moved. */
 async function decidePlan(page: Page, control: string, landed: string): Promise<void> {
-  await page.click('nav[aria-label="Workspace"] button[aria-label="Work"]');
-  await page.waitForSelector('[data-plan-review-root]');
+  await openPlanPage(page, 'applyCoupon');
   await page.$$eval('[data-plan-review-root] button', (buttons, label) => {
     const button = buttons.find((each) => each.textContent?.includes(label));
 

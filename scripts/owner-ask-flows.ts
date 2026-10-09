@@ -11,7 +11,7 @@ import {
 } from './flows-script';
 import {
   CHAT_IDLE, CHATS, createFlowWorkspace, frameLedger, openInspector, openWorkspacePage, PAGE_TABS, removeFlowWorkspace, sendAndSettle,
-  settled, settledAfter, signedInPage, startNewChat, until, waitOn, type FlowTarget,
+  settled, settledAfter, signedInPage, startNewChat, until, waitOn, openSlateShareDialog, submitPublicSlateShare, type FlowTarget,
 } from './product-flows';
 import { webHeaders } from '../evals/src/session';
 
@@ -257,15 +257,9 @@ async function sharedPublicly(target: FlowTarget, workspace: string): Promise<v.
 
   await page.goto(`${target.origin}/drive`, { waitUntil: 'load' });
   await until(page, "the slate's tile in My stuff", `document.querySelector(${JSON.stringify(tile)}) !== null`);
-  await page.click(`${tile} [data-drive-menu]`);
-  await page.click(`${tile} [data-drive-share-slate]`);
-  await until(page, 'the share dialog', `document.querySelector('[data-share-access]') !== null`);
-  await page.click('[data-share-access]');
-  await page.click('[data-share-access-option="public"]');
-  await page.click('[data-share-submit]');
-  await until(page, 'the share, made', `document.querySelector('[data-share-created]') !== null`);
+  await openSlateShareDialog(page, tile);
 
-  const url = v.parse(v.nullable(v.string()), await page.evaluate(`document.querySelector('[role="dialog"] a[href]')?.href ?? null`));
+  const url = await submitPublicSlateShare(page);
   const listed = await fetch(`${target.origin}/api/shared`, { headers: webHeaders(target.identity) });
 
   if (!listed.ok) throw new Error(`listing the account's shares answered ${String(listed.status)}`);

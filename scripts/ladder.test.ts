@@ -21,7 +21,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { cpus } from 'node:os';
 import { basename, join, relative, resolve } from 'node:path';
-import { childEnv, git, initRepo, runToExit, scratchDir } from '@kinu.run/test-utils';
+import { childEnv, git, initRepo, runToExit, scratchDir, spawnTest } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
   CI_EXEMPT, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
@@ -725,11 +725,73 @@ describe('a deploy row with secrets of its own', () => {
 });
 
 describe('a deploy phase\'s armada report', () => {
+  // d05ff368d, 2026-10-09: measuring all flows in beforeAll reached Armada's 1800s wall without reporting a test.
+  test('a finished product flow reports its assertions before the next flow can hang', async () => {
+    const child = spawnTest([
+      process.execPath, 'test', '--timeout=0', '--preload', './scripts/fixtures/product-flow-interruption.ts',
+      'tests/browser/product-flows.test.ts', '-t', 'the product reaches its home page|a workspace made from the home page answers its mission',
+    ], { cwd: join(import.meta.dir, '..'), stdout: 'ignore', stderr: 'pipe', stdin: 'ignore' });
+
+    const decoder = new TextDecoder();
+    let said = '';
+    let blocked = false;
+
+    try {
+      for await (const bytes of child.stderr) {
+        said += decoder.decode(bytes, { stream: true });
+
+        if (!said.includes('fixture: second flow blocked')) continue;
+        blocked = true;
+        child.kill('SIGTERM');
+        break;
+      }
+    } finally {
+      child.kill('SIGTERM');
+      await child.exited;
+    }
+
+    expect(blocked, said).toBe(true);
+    expect(said.match(/^\(pass\)/gmu)?.length ?? 0, said).toBe(1);
+    expect(said.match(/^\(fail\)/gmu)?.length ?? 0, said).toBe(0);
+  });
+
+  test('each product flow owns one task, so a timed-out sibling cannot overwrite a finished verdict', async () => {
+    const planned = await runToExit([process.execPath, 'scripts/ladder.ts', '--ci-plan', '--deploy-phase=post-publish', '--deploy-secrets='], { cwd: root });
+    expect(planned.exitCode, planned.stderr).toBe(0);
+
+    const plan = v.parse(v.object({ include: v.array(v.object({
+      name: v.string(), row: v.string(), rows: v.array(v.string()),
+    })) }), JSON.parse(planned.stdout));
+
+    const flows = plan.include.filter((entry) => entry.row.startsWith('bash scripts/product-flows-tier.sh'));
+    const complete = flows.find((entry) => entry.row.endsWith('--flow=welcome'));
+    const hung = flows.find((entry) => entry.row.endsWith('--flow=hire-home'));
+
+    expect(flows.length).toBe(25);
+    expect(new Set(flows.map((entry) => entry.name)).size).toBe(flows.length);
+    expect(flows.every((entry) => entry.rows.length === 1 && entry.rows[0] === entry.row)).toBe(true);
+
+    if (complete === undefined || hung === undefined) throw new Error('product flows were not split into independently reported tasks');
+
+    const rows = armadaPhaseRows(['post-publish']).filter((gate) => gate.run === 'bash scripts/product-flows-tier.sh');
+
+    const read = armadaRowVerdicts(rows, {
+      job: 'interrupted-flow', problems: [], artifacts: {},
+      verdicts: { rows: flows.map((entry) => entry === hung
+        ? { name: entry.name, exitCode: 124, seconds: 1800, output: 'task ended before its verdict' }
+        : { run: entry.row, exitCode: 0, seconds: 10, output: '' }) },
+    }, 1);
+
+    expect(read.find(({ gate }) => gate.run === complete.row)?.green).toBe(true);
+    expect(read.filter(({ green }) => !green).map(({ gate }) => gate.run)).toEqual([hung.row]);
+  });
+
   // The post-publish job of the staging deploy of 04a4dd0ab (2026-10-08, job 20261008081731-1d7c41dd): first-run was cut
   // off at armada's task limit with no verdict, and product-flows was killed for its silence with one of its own. Both
   // rows were told first-run's problems.
   test('gives each row its own verdict, and only the problems armada names for its own task', () => {
-    const rows = armadaPhaseRows(['post-publish']).filter((gate) => ['bun run gate:first-run', 'bash scripts/product-flows-tier.sh'].includes(gate.run));
+    const rows = armadaPhaseRows(['post-publish']).filter((gate) => ['bun run gate:first-run', 'bash scripts/product-flows-tier.sh'].includes(gate.run))
+      .map((gate) => gate.run === 'bash scripts/product-flows-tier.sh' ? { ...gate, run: `${gate.run} --flow=welcome` } : gate);
 
     const read = armadaRowVerdicts(rows, {
       job: '20261008081731-1d7c41dd',
@@ -737,7 +799,7 @@ describe('a deploy phase\'s armada report', () => {
       verdicts: {
         rows: [
           { name: 'first-run-tier', exitCode: 124, seconds: 1805, output: 'the task exited 124 and reported no row' },
-          { run: 'bash scripts/product-flows-tier.sh', exitCode: 124, seconds: 538, output: 'KILLED  Product flows in a browser, on the deployment  after 480s with no output' },
+          { run: 'bash scripts/product-flows-tier.sh --flow=welcome', exitCode: 124, seconds: 538, output: 'KILLED  Product flows in a browser, on the deployment  after 480s with no output' },
         ],
       },
       artifacts: {},
@@ -746,7 +808,7 @@ describe('a deploy phase\'s armada report', () => {
     expect(read.map(({ gate, verdict, found }) => [gate.run, verdict?.seconds, found])).toEqual([
       ['bun run gate:first-run', 1805, 'job 20261008081731-1d7c41dd; first-run-tier has no verdict for bun run gate:first-run; missing is not green; '
         + 'first-run-tier reported first-run-tier, which its plan entry does not name'],
-      ['bash scripts/product-flows-tier.sh', 538, 'job 20261008081731-1d7c41dd; armada graded none of the run\'s rows: '
+      ['bash scripts/product-flows-tier.sh --flow=welcome', 538, 'job 20261008081731-1d7c41dd; armada graded none of the run\'s rows: '
         + 'first-run-tier has no verdict for bun run gate:first-run; missing is not green; first-run-tier reported first-run-tier, which its plan entry does not name'],
     ]);
   });
@@ -757,7 +819,9 @@ describe('a phase armada could not grade', () => {
   // task did not keep` and exits 2, while the row itself exited 0. Read by its exit code alone and matched by
   // `<task> `, the row passed with its evidence missing.
   test('greens no row, and gives each row the problems armada names for its task, colon or space', () => {
-    const rows = armadaPhaseRows(['post-publish']).filter((gate) => gate.run === 'bun run gate:first-run' || gate.run === 'bash scripts/product-flows-tier.sh');
+    const rows = armadaPhaseRows(['post-publish']).filter((gate) => gate.run === 'bun run gate:first-run' || gate.run === 'bash scripts/product-flows-tier.sh')
+      .map((gate) => gate.run === 'bash scripts/product-flows-tier.sh' ? { ...gate, run: `${gate.run} --flow=welcome` } : gate);
+
     const task = rows.find((gate) => gate.run === 'bun run gate:first-run')?.label.toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-|-$/gu, '').slice(0, 80) ?? '';
     const missing = `${task}: bun run gate:first-run names evidence first-run/report.json its task did not keep`;
 
@@ -767,7 +831,7 @@ describe('a phase armada could not grade', () => {
       verdicts: {
         rows: [
           { run: 'bun run gate:first-run', exitCode: 0, seconds: 61, output: '', artifacts: ['first-run/report.json'] },
-          { run: 'bash scripts/product-flows-tier.sh', exitCode: 0, seconds: 300, output: '' },
+          { run: 'bash scripts/product-flows-tier.sh --flow=welcome', exitCode: 0, seconds: 300, output: '' },
         ],
       },
       artifacts: {},
@@ -775,7 +839,7 @@ describe('a phase armada could not grade', () => {
 
     expect(read.map(({ gate, green, found }) => [gate.run, green, found])).toEqual([
       ['bun run gate:first-run', false, `job 20261009-evidence; ${missing}`],
-      ['bash scripts/product-flows-tier.sh', false, `job 20261009-evidence; armada graded none of the run's rows: ${missing}`],
+      ['bash scripts/product-flows-tier.sh --flow=welcome', false, `job 20261009-evidence; armada graded none of the run's rows: ${missing}`],
     ]);
   });
 });

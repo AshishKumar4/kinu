@@ -3174,8 +3174,6 @@ describe('Now lists what is still owed, by the phase its store records', () => {
       await page.setViewport({ width: 1280, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage&owed=all`, { waitUntil: 'networkidle0' });
       await page.click('nav[aria-label="Workspace"] button[aria-label="Work"]');
-      // The frame's plan awaits review, so the tab opens on it.
-      await page.click('[data-back-to-work]');
       await page.waitForSelector('[data-inspected]');
       const owed = ['effect blocked', 'turn running', 'effect running', 'effect waiting', 'effect waiting'];
 
@@ -3255,7 +3253,7 @@ describe('Work keeps up with what is happening and what happened', () => {
 /**
  * The workspace's work is one thing: every actor's plans and tasks on one tab,
  * owners named, and a pending plan's decision one row in Needs you that opens
- * the review over the whole tab. `?frame=work`'s fixture carries a root plan
+ * the plan's own page. `?frame=work`'s fixture carries a root plan
  * beside a subordinate's and a task that holds the note its agent left.
  */
 describe('the Work tab reads the workspace, not the actor', () => {
@@ -3288,7 +3286,7 @@ describe('the Work tab reads the workspace, not the actor', () => {
     });
   });
 
-  test('a pending plan asks in Needs you, the row opens the review full-tab, and Back returns', async () => {
+  test('a pending plan asks in Needs you, the row opens its own page tab, and Work is one click back', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 430, height: 1400 });
@@ -3308,17 +3306,17 @@ describe('the Work tab reads the workspace, not the actor', () => {
         row.click();
       });
 
-      // The review takes the whole tab — the plan list is gone, and what is
-      // on screen is the pending revision's own decisions, the way the list
-      // row promised.
+      // The review is the plan's own page, its tab current among the pages: the plan list is gone, and what is on
+      // screen is the pending revision's own decisions, the way the row promised.
       await page.waitForSelector('[data-plan-review-root]');
       expect(await page.$eval('[data-plan-title]', (element) => element.textContent)).toContain('Gateway');
       expect(await page.$eval('[data-plan-status]', (element) => element.textContent)).toBe('Awaiting review');
-      expect(await page.$('[data-work-plans]')).toBeNull();
+      expect(await page.$eval('nav[aria-label="Pages"] [aria-current="true"]', (tab) => tab.getAttribute('aria-label'))).toContain('Gateway');
+      expect(await page.$eval('[data-work-plans]', (list) => list.checkVisibility())).toBe(false);
 
-      await page.click('[data-back-to-work]');
-      await page.waitForSelector('[data-work-plans]');
-      expect(await page.$('[data-plan-review-root]')).toBeNull();
+      await page.click('nav[aria-label="Workspace"] button[aria-label="Work"]');
+      await page.waitForSelector('[data-work-plans]', { visible: true });
+      expect(await page.$eval('[data-plan-review-root]', (review) => review.checkVisibility())).toBe(false);
       await page.close();
     });
   });

@@ -27,12 +27,21 @@ export interface ListFilesOptions {
   readonly recursive?: boolean;
 }
 
-export interface ListedFile {
+export interface FileMetadata {
+  readonly type: string;
+  readonly size: number;
+  readonly mode: number;
+  readonly mtimeMs: number;
+  readonly uid: number;
+  readonly gid: number;
+  readonly atimeMs: number;
+  readonly ctimeMs: number;
+}
+
+export interface ListedFile extends FileMetadata {
   readonly name: string;
   readonly path: string;
   readonly absolutePath: string;
-  readonly type: string;
-  readonly size: number;
   readonly isDirectory: boolean;
 }
 
