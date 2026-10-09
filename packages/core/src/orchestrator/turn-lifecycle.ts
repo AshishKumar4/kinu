@@ -94,6 +94,8 @@ export interface RunEndFacts {
   readonly errorText?: string | undefined;
   /** Last step's `finishReason`, if any; lets {@link TURN_ENDED_MID_WORK} detect a pending-tool clean end. */
   readonly lastFinishReason?: string | undefined;
+  /** The last step asked the owner: its pending call waits on them by design. */
+  readonly askedOwner?: boolean | undefined;
 }
 
 /** Reason and text travel as one decision; callers cannot re-source the text. */
@@ -120,7 +122,7 @@ export function classifyRunEnd(facts: RunEndFacts): RunEndClassification {
     return { reason: 'error', error: STREAM_ENDED_UNNAMED };
   }
 
-  if (facts.lastFinishReason === TOOL_CALLS_PENDING) {
+  if (facts.lastFinishReason === TOOL_CALLS_PENDING && facts.askedOwner !== true) {
     diagnostics.failure(TURN_ENDED_MID_WORK, toKinuError({
       doing: 'seal a turn that reported a clean end',
       cause: new Error(

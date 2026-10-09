@@ -1,3 +1,10 @@
+export {
+  AskingAgentSchema, OwnerAnswersSchema, OWNER_ANSWER_SIGNAL, OwnerQuestionStore, answeredSummary,
+  type AskedQuestions, type AskingAgent, type OwnerAnswer, type QuestionStatus,
+} from './plans/owner-questions';
+
+export { AskOwnerInputSchema, OTHER_OPTION, type OwnerQuestion } from './types/owner-questions';
+
 export { initFiberTable, tableExists } from './identity/schema';
 
 export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult, type SubordinateChild } from './subordinates/inspection';
@@ -483,7 +490,7 @@ export {
   type ToolReach,
   type BuiltinToolName,
   type BuiltinToolSpec,
-  REPORT_TOOL, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, DEPS_GATED_TOOLS,
+  REPORT_TOOL, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, ASK_OWNER_TOOL, DEPS_GATED_TOOLS,
 } from './tools/registry';
 
 export {

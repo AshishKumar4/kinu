@@ -2393,6 +2393,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       peers: this.getPeersToolDeps(),
       submitPlan: { submit: (edits) => this.submitPlanEdits(edits) },
       ...(replyToComment !== undefined && { replyToComment }),
+      askOwner: true,
     };
   }
 

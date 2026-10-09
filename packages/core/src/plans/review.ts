@@ -18,6 +18,7 @@ import type {
 } from '../types/plans';
 import type { BackendHost, EnqueueTurnResult, ProgrammaticTurn } from '../types/backend-host';
 import { admitReviewAnnotations, byteLength, MAX_PLAN_ANNOTATIONS_BYTES } from './annotation-admission';
+import { OWNER_ANSWER_SIGNAL } from './owner-questions';
 
 export type {
   PlanAnnotationMathTarget, PlanAnnotationTextPosition, PlanDecisionOutcome, PlanEdit,
@@ -270,9 +271,9 @@ export function planSubmissionReach(mode: WorkMode, driving: JsonObject | undefi
   return mode === 'plan' || planSubmissionAllowed(driving);
 }
 
-/** The owner's own turn, or the feedback turn of their review: the only turns whose plan is the owner's to review. */
+/** The owner's own turn, the feedback turn of their review, or the turn their answer resumes: the owner's conversation. */
 function planSubmissionAllowed(driving: JsonObject | undefined): boolean {
-  return turnAuthor({ metadata: driving }) === 'operator' || driving?.kinuEvent === 'plan_feedback';
+  return turnAuthor({ metadata: driving }) === 'operator' || driving?.kinuEvent === 'plan_feedback' || driving?.kinuEvent === OWNER_ANSWER_SIGNAL;
 }
 
 /**

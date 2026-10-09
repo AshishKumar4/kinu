@@ -16,6 +16,7 @@ import type {
   ForkNode,
   ExecutorCommandResult,
   PendingConsent,
+  AskingAgent,
   Rpc,
   SubordinateActivityEvent,
   TabPresence,
@@ -204,6 +205,7 @@ export type LiveRefreshSource =
   | "jobs"
   | "work"
   | "pendingActions"
+  | "questions"
   | "presence"
   | "memoryContent"
   | "executors"
@@ -226,6 +228,7 @@ const LIVE_REFRESH_DESCRIPTORS: readonly LiveRefreshDescriptor[] = [
   { source: "jobs", label: "background jobs" },
   { source: "work", label: "work in progress" },
   { source: "pendingActions", label: "pending actions" },
+  { source: "questions", label: "the agent's questions" },
   { source: "memoryContent", label: "memory content" },
   { source: "presence", label: "tab presence" },
   { source: "executors", label: "executors" },
@@ -1316,6 +1319,7 @@ function useWorkspaceReads(link: ChatLink) {
   const [changesMoved, setChangesMoved] = useState(0);
   const [readMoves, setReadMoves] = useState<ReadMoves>({});
   const [pendingConsents, setPendingConsents] = useState<PendingConsent[]>([]);
+  const [ownerQuestions, setOwnerQuestions] = useState<AskingAgent[]>([]);
   /** A connect clears it. */
   const [unavailableDevices, setUnavailableDevices] = useState<UnavailableDevice[] | null>(null);
   // One read behind both the Work queue and the strip's accent badge, so they cannot disagree.
@@ -1407,6 +1411,10 @@ function useWorkspaceReads(link: ChatLink) {
     "pendingActions",
     () => rpc<PendingAction[]>("listPendingActions", []),
     setPendingActions,
+  ), [refreshCurrentLiveResource, rpc]);
+
+  const refreshOwnerQuestions = useCallback(() => refreshCurrentLiveResource(
+    "questions", () => rpc<AskingAgent[]>("listOwnerQuestions", []), setOwnerQuestions,
   ), [refreshCurrentLiveResource, rpc]);
 
   const refreshTabPresence = useCallback(() => refreshCurrentLiveResource(
@@ -1630,11 +1638,12 @@ function useWorkspaceReads(link: ChatLink) {
     listBackgroundJobs: refreshBackgroundJobs,
     inspectWork: refreshInspectedWork,
     listPendingActions: refreshPendingActions,
+    listOwnerQuestions: refreshOwnerQuestions,
     getWorkspaceTabPresence: refreshTabPresence,
     listSlates: refreshSlates,
     getActivePlanReview: rereadPlan,
   }), [
-    refreshBackgroundJobs, refreshCurrentLiveResource, refreshExposedPorts, refreshInspectedWork, refreshPendingActions, refreshRoster,
+    refreshBackgroundJobs, refreshCurrentLiveResource, refreshExposedPorts, refreshInspectedWork, refreshOwnerQuestions, refreshPendingActions, refreshRoster,
     refreshSlates, refreshTabPresence, rereadPlan, rpc,
   ]);
 
@@ -1710,7 +1719,7 @@ function useWorkspaceReads(link: ChatLink) {
 
     try {
       await Promise.all([
-        refreshExposedPorts(), refreshPendingActions(), refreshRoster(), refreshBackgroundJobs(), refreshInspectedWork(), refreshPendingConsents(),
+        refreshExposedPorts(), refreshPendingActions(), refreshOwnerQuestions(), refreshRoster(), refreshBackgroundJobs(), refreshInspectedWork(), refreshPendingConsents(),
         liveReads.listWorkspaceAgents?.(),
       ]);
     } catch (cause) {
@@ -1857,6 +1866,7 @@ function useWorkspaceReads(link: ChatLink) {
       changesMoved,
       readMoves,
       pendingConsents,
+      ownerQuestions,
       resolveConsent,
       unavailableDevices,
       /** Work marks self-changes seen server-side, then calls the clear. */

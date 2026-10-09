@@ -2,7 +2,7 @@
 import {
   CHAT_SESSION_ID, ChatSession, EventLog, HeadCapture, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TerminalTransitions,
   PlanReviewActions, announcementOf, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork,
-  planHandoffStillOwed, projectJsonValue,
+  planHandoffStillOwed, projectJsonValue, OWNER_ANSWER_SIGNAL,
   metadataTier, subordinateTerminalEffects, withCompactionTrigger,
   bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type JsonObject, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
@@ -28,10 +28,12 @@ export interface FacetChatDeps {
   readonly pacer: StepPacer;
 }
 
-/** A hirer's or the harness's turn runs in the hirer's lane, with `report`; the owner's, and a plan's feedback or approval
- *  (the owner's decision), in the owner's. */
+/** A hirer's or the harness's turn runs in the hirer's lane, with `report`; the owner's, a plan's feedback or approval and
+ *  the turn an answer resumes (the owner's decisions), in the owner's. */
+const OWNER_EVENTS: ReadonlySet<unknown> = new Set(['plan_feedback', 'plan_approved', OWNER_ANSWER_SIGNAL]);
+
 function parentDrivenTurn(item: ChatTurnInput): boolean {
-  return item.kind === 'programmatic' && item.metadata?.kinuEvent !== 'plan_feedback' && item.metadata?.kinuEvent !== 'plan_approved';
+  return item.kind === 'programmatic' && !OWNER_EVENTS.has(item.metadata?.kinuEvent);
 }
 
 export class FacetChat {

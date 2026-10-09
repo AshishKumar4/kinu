@@ -4,6 +4,7 @@
  * one turn; restart replays pending sends and owed effects; an interrupted turn continues once, in its run.
  */
 
+import { answeredSummary, OWNER_ANSWER_SIGNAL } from '../plans/owner-questions';
 import type { TrialTurn } from '../evolution/trial-rules';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
@@ -490,6 +491,30 @@ export class ChatSession {
     return promise;
   }
 
+  /**
+   * Each answered question owes the turn that continues from its call. That turn has no input of its own: the
+   * answer is the call's result (`plans/owner-questions.ts`), so the model goes on from the call. It runs before
+   * what waited behind the question. Asked after an answer and at every wake, so an answer outlives the process.
+   */
+  resumeAnswered(): void {
+    const { questions } = this.actorSession;
+
+    for (const row of questions.owedResumes()) {
+      const identity = `owner-answer:${row.id}`;
+
+      if (this.announcementOnDisk(identity)) questions.markResumed(row.id);
+      else if (!this.ended && !this.announcementInFlight(identity)) {
+        this.queue.unshift({
+          text: answeredSummary(row), kind: 'programmatic', idempotencyKey: identity,
+          metadata: { kinuEvent: OWNER_ANSWER_SIGNAL, kinuMode: row.mode, askId: row.id },
+          settle: () => {},
+        });
+      }
+    }
+
+    this.pump();
+  }
+
   /** Its producer is told, and so is every caller that joined it: a turn restored after a reset has only joiners. */
   private settleItem(item: QueueItem, failure: KinuError | null, yielded?: boolean, abandoned?: string): void {
     item.settle(failure, yielded, abandoned);
@@ -652,6 +677,7 @@ export class ChatSession {
 
   /** Pending steers are dropped and returned so the surface can restore them. */
   interrupt(): string[] {
+    this.dismissQuestions();
     const returned = this.actorSession.interrupt();
     // The returned words' reservation is spent, or a restart would re-deliver them.
     const ids = returned.flatMap((steer) => steer.id === undefined ? [] : [steer.id]);
@@ -664,7 +690,13 @@ export class ChatSession {
 
   /** Unseen steers stay queued and rerun; {@link interrupt} hands them back instead. */
   stop(): void {
+    this.dismissQuestions();
     this.actorSession.stop();
+  }
+
+  /** A Stop closes the agent's open questions unanswered; what waited behind them may then run. */
+  private dismissQuestions(): void {
+    if (this.actorSession.questions.close('dismissed').length > 0) this.pump();
   }
 
   /** Only a running turn keyed under `prefix`. */
@@ -911,6 +943,7 @@ export class ChatSession {
           break;
         }
 
+        if (this.heldByQuestions()) break;
         const item = this.queue.shift();
 
         if (item === undefined) break;
@@ -975,6 +1008,13 @@ export class ChatSession {
 
       if (!deferred) this.ports.quiet?.();
     }
+  }
+
+  /** A question to the owner holds the agent as a call to them would: only their message or answer runs. */
+  private heldByQuestions(): boolean {
+    const head = this.queue[0];
+
+    return head?.kind === 'programmatic' && head.metadata?.kinuEvent !== OWNER_ANSWER_SIGNAL && this.actorSession.questions.hasOpen();
   }
 
   /** When the queue's head is a re-opened turn still inside its backoff, on a host whose wake can end it: that end. */
@@ -1043,6 +1083,11 @@ export class ChatSession {
 
     this.runId = item.continuation?.runId ?? `run-${crypto.randomUUID()}`;
     const inputReference = await this.actorSession.canonical.admitInput({ id: this.turnId, turnId: this.turnId, message: turnInputMessage(item), assertOwner: () => this.actorSession.runtime.actor.assertCurrent() });
+    const { questions } = this.actorSession;
+
+    // The owner wrote instead of choosing: their message answers the open questions. An answer's own turn is under way.
+    if (item.kind === 'user') questions.close('in_chat');
+    else if (event === OWNER_ANSWER_SIGNAL && v.is(v.string(), item.metadata?.askId)) questions.markResumed(item.metadata.askId);
 
     const metadata = authoredTurnMetadata(item);
 
@@ -1240,6 +1285,7 @@ export class ChatSession {
       interrupted,
       ...(runError !== null && { errorText: runError }),
       lastFinishReason: this.actorSession.orchestrator.acc.lastFinishReason,
+      askedOwner: this.actorSession.orchestrator.acc.askedOwner,
     };
 
     const end = classifyRunEnd(facts);

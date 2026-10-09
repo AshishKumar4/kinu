@@ -12,7 +12,7 @@ import type {
   AdmittedInstructionDecision,
   InstructionSourceRow, InstructionSourceView, Page, PageRequest, PositionCursor, PositionPageRequest,
   DeferredApproval, DeferredApprovalAnswer,
-  PlanReview, ReviewAnnotation, PlanReviewDecision, PlanReviewResult, WorkMode,
+  PlanReview, ReviewAnnotation, PlanReviewDecision, PlanReviewResult, WorkMode, AskingAgent, OwnerAnswer,
   SubordinateInspectionRequest, SubordinateInspectionResult, ChatHistoryEntry, WorkspaceSpend, WorkspaceWork,
   ModelTestResult, ContextFill,
 } from '@kinu.run/core';
@@ -289,6 +289,15 @@ export interface LocalSessionControls {
   compact(): Promise<CompactOutcome>;
 }
 
+/** The owner's answers to the agent's questions; both backends serve core's `OwnerQuestionStore`. */
+export interface OwnerQuestionSurface {
+  /** Recent questions; the open ones wait for an answer. */
+  list(): Promise<AskingAgent[]>;
+  /** Rejects with the reason the answer was refused. */
+  answer(id: string, answers: readonly OwnerAnswer[]): Promise<void>;
+  dismiss(id: string): Promise<{ readonly closed: number }>;
+}
+
 /** The owner's half of Plan mode; both backends serve core's `PlanReviewStore`. */
 export interface PlanReviewSurface {
   active(): Promise<PlanReview | null>;
@@ -306,6 +315,8 @@ export interface AgentClient {
   readonly localControls: LocalSessionControls | null;
   readonly checkpoints: FileCheckpointSurface | null;
   readonly plans: PlanReviewSurface | null;
+  /** Null where the agent's conversation partner is not the owner (a subordinate's window). */
+  readonly questions: OwnerQuestionSurface | null;
   /** Rename this conversation's agent when the backend exposes a complete
    * owner-authoritative path. Root cloud workspaces keep the web sidebar path. */
   readonly rename?: (displayName: string) => Promise<{ name: string; displayName: string }>;

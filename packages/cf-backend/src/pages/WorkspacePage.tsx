@@ -1,3 +1,4 @@
+import { AskedQuestionsContext } from "@/components/QuestionCard";
 import { Effect, Cause } from 'effect';
 import { Fragment, createContext, startTransition, useContext, useState, useRef, useEffect, useCallback, useMemo, type RefObject } from "react";
 import { useParams, useLocation, Link, useMatch, useNavigate, useSearchParams } from "react-router-dom";
@@ -856,6 +857,9 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
   const { rpc: workspaceRpc, resolveConsent, refreshPendingActions } = state;
   const { accountProposals } = useWorkspaceRoster();
 
+  // The workspace agent's questions by the call that asked each, for that call's record in the transcript.
+  const askedByCall = useMemo(() => new Map(state.ownerQuestions.filter((asking) => asking.actor === null).map((asking) => [asking.asked.callId, asking.asked])), [state.ownerQuestions]);
+
   const attentionCalls = useMemo((): Omit<AttentionStackProps, "asks"> => ({
     rpc: workspaceRpc,
     resolveConsent,
@@ -1150,7 +1154,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
             )}
             {shownNode === null && (subName ? (
               <AgentPlanWindowContext.Provider value={reviewed.showAgentWindow}>
-                <AttentionContext.Provider value={{ reads: state, stack: attentionCalls }}>
+                <AttentionContext.Provider value={{ reads: { ...state, questions: state.ownerQuestions }, stack: attentionCalls }}>
                   <AgentChatColumn key={subName} workspace={agentId} subName={subName} subordinates={state.subordinates} rpc={state.rpc} ids={linkIds}
                     input={shownAgent?.input ?? true} />
                 </AttentionContext.Provider>
@@ -1167,6 +1171,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
               </div>
             )}
             <ErrorBoundary label="Chat">
+            <AskedQuestionsContext.Provider value={askedByCall}>
             <TranscriptViewport chat={chat} live={live} startFirst padClass="pt-7 pb-12"
               scroll={{ initialScroll: ui.savedScroll, onScrollPosition: ui.rememberScroll, settled: state.transcriptSeeded }}
               pending={<ConversationSkeleton />}
@@ -1226,6 +1231,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
                 />
               )}
             </TranscriptViewport>
+            </AskedQuestionsContext.Provider>
             </ErrorBoundary>
 
             <div className="p-composer-dock">
@@ -1241,7 +1247,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
                 onStop={handleStop}
                 onBranch={handleBranch}
                 attention={(
-                  <AttentionStack asks={ownerAsks({ ...state, accountProposals })} {...attentionCalls} />
+                  <AttentionStack asks={ownerAsks({ ...state, accountProposals, questions: state.ownerQuestions })} {...attentionCalls} />
                 )}
                 mode={{ value: ui.mode, onChange: setChatMode }}
                 attachments={{

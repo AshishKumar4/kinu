@@ -11,13 +11,14 @@ import {
   ThumbsUpIcon, ThumbsDownIcon,
 } from "@phosphor-icons/react";
 import { Link } from "react-router-dom";
+import { AskRecord } from "@/components/QuestionCard";
 import { isToolUIPart, getToolName } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
 import {
   describeToolCall, rowText, summarizeToolCall,
 } from "@kinu.run/core";
 import type { DiffAnchor, InlineSteer, JsonObject, JsonValue, PlacedSteer, ToolCallEffect } from "@kinu.run/core";
-import { changeNotesCard, slatesChanged } from "@kinu.run/core";
+import { ASK_OWNER_TOOL, changeNotesCard, slatesChanged } from "@kinu.run/core";
 import { FeedbackCard } from "@/components/surfaces/changes/FeedbackCard";
 import * as v from "valibot";
 import { diagnostics, renderThrownChain, detach } from "@kinu.run/core/obs";
@@ -420,6 +421,9 @@ function ToolCallFold({ parts, expandedCalls, onToggleCall }: {
 function ToolCallPart({ part, expanded, onToggleExpand }: { part: AnyToolPart; expanded: boolean; onToggleExpand: () => void }) {
   const output = partOutput(part);
   const input = partInput(part);
+
+  if (getToolName(part) === ASK_OWNER_TOOL) return <AskRecord callId={part.toolCallId} input={input} />;
+
   const previewUrl = extractPreviewUrl(output);
 
   return (

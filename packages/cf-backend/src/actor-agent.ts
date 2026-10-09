@@ -125,7 +125,7 @@ import {
   inheritedContextFromTranscript,
   PlanReviewActions, planHandoffStillOwed, type PlanDecisionOutcome,
   type PlanEdit, type PlanReview, type ReviewAnnotation,
-  type PlanReviewDecision, type PlanReviewResult, type ReplyToCommentToolDeps, type SubmitPlanToolDeps,
+  type PlanReviewDecision, type PlanReviewResult, type ReplyToCommentToolDeps, type SubmitPlanToolDeps, type AskingAgent,
   answerParentRpc,
   type ParentExecResult,
   type ParentRpcWrite,
@@ -160,7 +160,7 @@ import {
   resolveModelRoute, completeOnRoute, routedLlm, tierRefusals, type TierRefusals, type ModelRouteResolution,
   narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, requireCodemodeMember, inWorkMode,
   toolSurfaceTokens, McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
-  SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, REPORT_TOOL, planSubmissionReach,
+  SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, ASK_OWNER_TOOL, OwnerAnswersSchema, REPORT_TOOL, planSubmissionReach,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ProfileCatalogEnvelope,
   toolsInWorkMode, type TaskPlan, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
@@ -399,6 +399,8 @@ export interface ActorToolDeps {
   submitPlan?: SubmitPlanToolDeps;
   /** Present while the owner's sent-back review holds comments the agent may answer. */
   replyToComment?: ReplyToCommentToolDeps;
+  /** Present where a person is the conversation partner: the workspace's own agent. */
+  askOwner?: true;
 }
 
 /** BUILTIN_TOOLS filtered to what this actor's deps wire; the prompt and activeTools must not
@@ -836,6 +838,34 @@ export abstract class ActorAgent extends Agent<Env> {
     if (window === null) return this.planActions.decideAndHandOff({ id, revision, decision, feedback }, (turn) => this.host.enqueueTurn(turn));
 
     return await settle(Effect.flatMap(this.windowPlans(window), (plans) => Effect.promise(async () => await plans.decide(id, revision, decision, feedback))));
+  }
+
+  /** The workspace agent's recent questions to its owner: the open ones for the attention stack, each for its record. */
+  @callable()
+  async listOwnerQuestions(): Promise<AskingAgent[]> {
+    return this.actorSession.questions.recent().map((asked) => ({ asked, agent: this.name, actor: null }));
+  }
+
+  /** The owner's answer: the asking call's result, and the turn that continues from it. */
+  @callable()
+  async answerOwnerQuestions(id: string, answers: JsonValue): Promise<void> {
+    const parsed = v.safeParse(OwnerAnswersSchema, answers);
+
+    const answered = parsed.success
+      ? this.actorSession.questions.answer(id, parsed.output)
+      : Effect.fail(new KinuError('bad_input', `answers: ${parsed.issues[0].message}`));
+
+    return settle(Effect.andThen(answered, Effect.sync(() => { this.chatLoop.resumeAnswered(); })));
+  }
+
+  /** Closed unanswered; the agent reads that at its next turn, and what waited behind the questions runs. */
+  @callable()
+  async dismissOwnerQuestions(id: string): Promise<{ readonly closed: number }> {
+    const closed = this.actorSession.questions.close('dismissed', id).length;
+
+    if (closed > 0) this.chatLoop.pump();
+
+    return { closed };
   }
 
   /** The orchestrator answers with the root budget; a facet actor answers from durable storage,
@@ -1286,14 +1316,15 @@ export abstract class ActorAgent extends Agent<Env> {
   /** True when an open turn or undrained acknowledged send exists; the loop is then built under
    *  a wake, never inside the init gate, because a turn is external work. */
   protected chatLoopOwesWork(): boolean {
-    return this.eventRecorder.openRun() !== null || this.pendingSends.restore().length > 0;
+    return this.eventRecorder.openRun() !== null || this.pendingSends.restore().length > 0 || this.actorSession.questions.owedResumes().length > 0;
   }
 
   /** Constructing the loop re-opens the last open turn and reruns acknowledged sends; a re-opened turn waiting out its
-   *  backoff is asked again by the wake that ends it. */
+   *  backoff is asked again by the wake that ends it, and an answer whose turn never opened is resumed. */
   protected resumeChatLoop(): ChatSession {
     const loop = this.chatLoop;
     loop.reaskDue();
+    loop.resumeAnswered();
 
     return loop;
   }
@@ -3978,6 +4009,8 @@ export abstract class ActorAgent extends Agent<Env> {
       if (actorDeps.submitPlan && this.submitsPlans(mode)) builtinDeps.submitPlan = actorDeps.submitPlan;
 
       if (actorDeps.replyToComment) builtinDeps.replyToComment = actorDeps.replyToComment;
+
+      if (actorDeps.askOwner) builtinDeps.askOwner = true;
       const toolsets = buildActorTools(builtinDeps);
 
       if (claimScope === undefined) {
@@ -4368,6 +4401,7 @@ export abstract class ActorAgent extends Agent<Env> {
       wiredToolNames: (mode) => [
         ...(turnActorDeps.submitPlan && this.submitsPlans(mode) ? [SUBMIT_PLAN_TOOL] : []),
         ...(turnActorDeps.replyToComment ? [REPLY_TO_COMMENT_TOOL] : []),
+        ...(turnActorDeps.askOwner ? [ASK_OWNER_TOOL] : []),
       ],
       // `agent` / `llm` are reachable only inside `eval`: derived from the providers wired for this mode.
       codemodeCapabilities: (mode) => codemodeCapabilitiesFor(this.ownNamespaces(mode)),

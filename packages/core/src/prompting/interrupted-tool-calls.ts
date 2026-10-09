@@ -1,6 +1,7 @@
 /**
  * A `tool-call` needs a `tool-result` before the next message, else `streamText` throws
- * `AI_MissingToolResultsError` on every later turn. Repairs ride the request, never stored history.
+ * `AI_MissingToolResultsError` on every later turn. Repairs ride the request, never stored history: an interrupted
+ * call's, and an `ask_owner` call's, whose result is the owner's answer once they give it.
  */
 
 import type { ModelMessage, ToolModelMessage, ToolResultPart } from 'ai';
@@ -12,6 +13,13 @@ export const INTERRUPTED_TOOL_RESULT =
   'The turn was interrupted before this tool call returned. Whether it ran is unknown. '
   + 'Check the current state before issuing it again.';
 
+/** An unpaired call, as its lookup is asked about it: `input` tells two calls a provider gave one id apart. */
+export interface LostCallQuery {
+  readonly toolCallId: string;
+  readonly toolName: string;
+  readonly input: unknown;
+}
+
 /**
  * Give every unpaired tool call a terminal result, inserted right after the
  * asking assistant message (providers validate position). Returns `undefined`
@@ -19,12 +27,12 @@ export const INTERRUPTED_TOOL_RESULT =
  */
 export function settleUnpairedToolCalls(
   messages: readonly ModelMessage[],
-  lost?: (call: { readonly toolCallId: string; readonly toolName: string }) => LostToolCall | null,
+  lost?: (call: LostCallQuery) => LostToolCall | null,
 ): ModelMessage[] | undefined {
   // Copied only once a call needs a result: every step reads the whole history, and almost every history is paired.
   // Indexed walks: an iterator would allocate a result per part of every message, every step.
   let settled: ModelMessage[] | undefined;
-  const pending = new Map<string, string>();
+  const pending = new Map<string, { readonly toolName: string; readonly input: unknown }>();
 
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
@@ -35,7 +43,7 @@ export function settleUnpairedToolCalls(
         const part = message.content[at];
 
         if (part.type === 'tool-call' && part.providerExecuted !== true) {
-          pending.set(part.toolCallId, part.toolName);
+          pending.set(part.toolCallId, { toolName: part.toolName, input: part.input });
         }
       }
     } else if (message.role === 'tool') {
@@ -56,14 +64,14 @@ export function settleUnpairedToolCalls(
 }
 
 function interruptedResults(
-  pending: ReadonlyMap<string, string>,
-  lost: ((call: { readonly toolCallId: string; readonly toolName: string }) => LostToolCall | null) | undefined,
+  pending: ReadonlyMap<string, { readonly toolName: string; readonly input: unknown }>,
+  lost: ((call: LostCallQuery) => LostToolCall | null) | undefined,
 ): ToolModelMessage {
-  const content = [...pending].map(([toolCallId, toolName]): ToolResultPart => ({
+  const content = [...pending].map(([toolCallId, { toolName, input }]): ToolResultPart => ({
     type: 'tool-result',
     toolCallId,
     toolName,
-    output: lostOutput(lost?.({ toolCallId, toolName }) ?? null),
+    output: lostOutput(lost?.({ toolCallId, toolName, input }) ?? null),
   }));
 
   return { role: 'tool', content };
