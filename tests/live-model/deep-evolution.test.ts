@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { generateText, isStepCount, type LanguageModel, type ToolSet, type StepResult } from 'ai';
 
 import {
-  EvolutionEngine,
+  EvolutionEngine, historyTurnPairs,
   type LLMProviderConfig,
   type CompletedTurn,
   type EvolutionEvent,
@@ -133,7 +133,7 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
     rt = target.runtime;
 
     events = [];
-    engine = new EvolutionEngine(rt, rt.stores.history, { enabled: true });
+    engine = new EvolutionEngine(rt, historyTurnPairs(rt.stores.history), { enabled: true });
     engine.onEvent(e => events.push(e));
 
     // The model is resolved BEFORE the surface, because the production actor

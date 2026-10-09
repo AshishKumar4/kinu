@@ -22,7 +22,7 @@ import { generateText, isStepCount, type LanguageModel, type ToolSet, type StepR
 import * as v from 'valibot';
 
 import {
-  EvolutionEngine,
+  EvolutionEngine, historyTurnPairs,
   recordTurnRating,
   thumbsRating,
   type LLMProviderConfig,
@@ -426,7 +426,7 @@ describe('Evolution Proof', () => {
     // `reviewTurn` in this proof routes a reflection lane, so without it the
     // whole cross-session comparison dies on the second turn.
     model = liveChatModel(LLM_CONFIG);
-    engine = new EvolutionEngine(rt, rt.stores.history, { enabled: true });
+    engine = new EvolutionEngine(rt, historyTurnPairs(rt.stores.history), { enabled: true });
     surface = buildEvalAgentSurface({ rt, model, llm: LLM_CONFIG });
     engine.onEvent(e => console.log(`    [evolution] ${e.type}: ${e.message.slice(0, 80)}`));
   });
