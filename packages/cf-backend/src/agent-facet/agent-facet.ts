@@ -15,8 +15,9 @@ import {
 } from '@kinu.run/core';
 import { StepPacer } from './step-pacer';
 import { AgentDatabase } from './agent-database';
-import { runAgentTask, type AgentWorkspace } from './agent-turn';
+import { runAgentTask } from './agent-turn';
 import { FacetChat } from './agent-chat';
+import { workspaceClient, type AgentWorkspaceCalls } from './workspace-rpc';
 import type {
   AgentAnswerTexts, AgentRecovery, AgentSnapshot, AgentTurnEnd, AgentTurnTask, EnqueueTurnResult, ProgrammaticTurn, PromptFile, SendLanding, SendOptions, TurnRequestAt,
   JsonObject, PlanDecisionOutcome, PlanEdit, PlanReview, PlanReviewDecision, PlanReviewResult, ReviewAnnotation, AskedQuestions, OwnerAnswer,
@@ -25,7 +26,7 @@ import type {
 export type { AgentWorkspace } from './agent-turn';
 
 export interface AgentFacetEnv {
-  readonly WORKSPACE: AgentWorkspace;
+  readonly WORKSPACE: AgentWorkspaceCalls;
   readonly WORKSPACE_NAME: string;
   readonly SHELL_ID: string;
   readonly HOME: string;
@@ -144,6 +145,8 @@ export interface AgentFacetCalls {
 }
 
 export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFacetCalls {
+  private readonly workspaceCalls = workspaceClient(this.env.WORKSPACE);
+
   private box: NimbusSandboxHandle | undefined;
 
   private stateBox: NimbusSandboxHandle | undefined;
@@ -158,14 +161,14 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   private readonly pacer = new StepPacer();
 
   protected workspace(): NimbusSandboxHandle {
-    this.box ??= sandboxHandle(Nimbus.fromSession((): NimbusSessionSurface => this.env.WORKSPACE.session())
+    this.box ??= sandboxHandle(Nimbus.fromSession((): NimbusSessionSurface => this.workspaceCalls.session())
       .sandbox(this.env.WORKSPACE_NAME, { shellId: this.env.SHELL_ID, root: this.env.HOME }));
 
     return this.box;
   }
 
   private state(): NimbusSandboxHandle {
-    this.stateBox ??= sandboxHandle(Nimbus.fromSession((): NimbusSessionSurface => this.env.WORKSPACE.stateSession())
+    this.stateBox ??= sandboxHandle(Nimbus.fromSession((): NimbusSessionSurface => this.workspaceCalls.stateSession())
       .sandbox(this.env.WORKSPACE_NAME, { shellId: this.env.STATE_SHELL_ID }));
 
     return this.stateBox;
@@ -177,8 +180,8 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
       agent: () => this.workspace(), home: this.env.HOME, state: () => this.state(),
       enqueueTurn: (input) => this.enqueue(snapshot, input),
       turnInFlight: () => this.held?.session.turnInFlight() ?? false,
-      memory: () => this.env.WORKSPACE.memory(), program: (...args) => this.env.WORKSPACE.program(...args),
-      sayToParent: (signal) => this.env.WORKSPACE.sayToParent(signal),
+      memory: () => this.workspaceCalls.memory(), program: (...args) => this.workspaceCalls.program(...args),
+      sayToParent: (signal) => this.workspaceCalls.sayToParent(signal),
     });
     this.database.adopt(snapshot);
 
@@ -188,11 +191,11 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   private async prepared(snapshot: AgentSnapshot): Promise<FacetChat> {
     const database = this.open(snapshot);
     // The workspace's program first: the actor is built on it.
-    const prepared = await this.env.WORKSPACE.prepareChat({ turnId: null, mode: 'build', userText: '', parentDriven: false });
+    const prepared = await this.workspaceCalls.prepareChat({ turnId: null, mode: 'build', userText: '', parentDriven: false });
 
     database.adopt({ ...snapshot, scaffold: [prepared.scaffold] });
     const actor = await database.acquire();
-    const chat = new FacetChat({ actor, database, workspace: this.env.WORKSPACE, providers: this.env, storage: this.ctx.storage, pacer: this.pacer });
+    const chat = new FacetChat({ actor, database, workspace: this.workspaceCalls, providers: this.env, storage: this.ctx.storage, pacer: this.pacer });
 
     chat.session.measureSessionStart({ restored: chat.session.restoreHistory() });
     this.held = chat;
@@ -210,7 +213,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   }
 
   async run(snapshot: AgentSnapshot, task: AgentTurnTask): Promise<AgentTurnEnd> {
-    return await runAgentTask({ database: this.open(snapshot), workspace: this.env.WORKSPACE, providers: this.env, pacer: this.pacer }, task);
+    return await runAgentTask({ database: this.open(snapshot), workspace: this.workspaceCalls, providers: this.env, pacer: this.pacer }, task);
   }
 
   async enqueue(snapshot: AgentSnapshot, turn: ProgrammaticTurn): Promise<EnqueueTurnResult> {
