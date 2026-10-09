@@ -19,7 +19,7 @@ const Colour = v.tuple([v.number(), v.number(), v.number()]);
 
 const Appearance = v.object({ background: Colour, light: v.number(), host: v.nullable(Colour), hostLight: v.nullable(v.number()), letters: v.number(), readable: v.number(), overflow: v.number() });
 
-const Helper = v.object({ name: v.string(), status: v.string(), runs: v.array(v.object({ startedAt: v.number(), status: v.nullable(v.string()), userMessage: v.nullable(v.string()) })) });
+const Helper = v.object({ name: v.string(), status: v.string(), runs: v.array(v.object({ startedAt: v.number(), endedAt: v.optional(v.nullable(v.number())), status: v.nullable(v.string()), userMessage: v.nullable(v.string()) })) });
 
 const Input = v.object({
   task: v.string(), part: v.string(), turn: v.optional(v.number(), 1), checks: v.array(v.string()), expected: v.optional(v.boolean(), true),

@@ -50,7 +50,7 @@ export type VerifierSession = {
 };
 
 /** A helper and its runs, as the inspector lists them: how each run ended, and the message that started it. */
-export type HelperWork = { name: string; status: string; runs: { startedAt: number; status: string | null; userMessage: string | null }[] };
+export type HelperWork = { name: string; status: string; runs: { startedAt: number; endedAt?: number | null; status: string | null; userMessage: string | null }[] };
 
 /**
  * A run naming `subject` assigns the work; that run or a later continuation must finish it.
@@ -64,6 +64,34 @@ export function finishedWork(helpers: readonly HelperWork[], subject: string): s
 }
 
 type Inspecting = Pick<VerifierSession, 'inspect'>;
+
+/** Different helpers completed the assigned work while their observed runs overlapped, not just during one turn. */
+export function parallelFinishedWork(helpers: readonly HelperWork[], subjects: readonly string[]): boolean {
+  const runs = helpers.flatMap((helper) => helper.runs.flatMap((run) => {
+    const endedAt = run.endedAt;
+    const assigned = subjects.some((subject) => finishedWork([{ ...helper, runs: [run] }], subject).length > 0);
+
+    return assigned && endedAt !== undefined && endedAt !== null && endedAt > run.startedAt
+      ? [{ helper: helper.name, startedAt: run.startedAt, endedAt }] : [];
+  }));
+
+  return runs.some((first) => runs.some((other) => first.helper !== other.helper
+    && first.startedAt < other.endedAt && other.startedAt < first.endedAt));
+}
+
+/** The closed run's last journal row, not the helper's report status or the time the lead received it. */
+async function runEndedAt(session: Inspecting, address: HelperAddress, run: { runId: string; eventCount?: number }): Promise<number | null> {
+  if (run.eventCount === undefined) return null;
+
+  const answer = await session.inspect({ ...address, path: [...address.path], view: 'events', runId: run.runId,
+    query: { since: Math.max(0, run.eventCount - 1), limit: 1 } });
+
+  if (answer.view !== 'events') throw new Error(`the end of run ${run.runId} could not be read: ${JSON.stringify(answer)}`);
+  const end = answer.page.items.find((event) => event.type === 'run_end' && event.runId === run.runId);
+  const at = end === undefined ? NaN : Date.parse(end.timestamp);
+
+  return Number.isFinite(at) ? at : null;
+}
 
 /** The lead's helpers, retired ones included, as the Agents surface lists them. */
 export async function rosterOf(session: Inspecting): Promise<(RosterHelper & { lifetime: string })[]> {
@@ -113,7 +141,8 @@ async function runsOf(session: Inspecting, helper: RosterHelper, since: number):
     if (answer.view !== 'runs') throw new Error(`${helper.name}'s runs could not be listed: ${JSON.stringify(answer)}`);
 
     for (const run of answer.page.items.filter((item) => item.startedAt >= since)) {
-      runs.push({ startedAt: run.startedAt, status: run.status, userMessage: briefs.get(run.runId) ?? null });
+      runs.push({ startedAt: run.startedAt, endedAt: run.status === 'completed' ? await runEndedAt(session, address, run) : null,
+        status: run.status, userMessage: briefs.get(run.runId) ?? null });
     }
 
     if (answer.page.status === 'end') return runs;
@@ -260,7 +289,7 @@ export class EvalVerifier {
 
     return events
       .filter((event): event is Extract<RunEvent, { type: 'tool_call_end' }> => event.type === 'tool_call_end')
-      .map((event) => ({ name: event.name, args: JSON.stringify(inputs.has(event.toolCallId) ? inputs.get(event.toolCallId) : event.args ?? null) }));
+      .map((event) => ({ name: event.name, args: JSON.stringify(inputs.has(event) ? inputs.get(event) : event.args ?? null) }));
   }
 
   /**
