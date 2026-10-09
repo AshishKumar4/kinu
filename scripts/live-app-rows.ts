@@ -31,7 +31,7 @@ import {
   SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK,
   laterReconnectTurn, toldBackTurn, unsentFirstTurn,
   DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, registerScriptedModel,
-  startScriptedModel, type HeldCall, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, planTasksProbe, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn,
+  startScriptedModel, type HeldCall, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, planTasksProbe, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn,
 } from './scripted-model';
 import { FALLBACK_ANSWER, type ScriptedRequest } from './scripted-protocol';
 import { openPublicSocket } from '../tests/first-run/public-socket';
@@ -193,7 +193,7 @@ export interface TierVerdicts {
   planTabs: PlanTabsVerdict | null;
   geometry: GeometryVerdict | null;
   controls: ControlsVerdict | null;
-  walkthrough: WalkthroughVerdict | null;
+  walkthrough: (WalkthroughVerdict & { readonly ownServer: OwnServerVerdict }) | null;
   keptTab: KeptTabVerdict | null;
   chatScroll: ChatScrollVerdict | null;
   midThought: MidThoughtVerdict | null;
@@ -498,7 +498,7 @@ async function measureControls(newPage: LiveApp['newPage'], origin: string): Pro
  *  script the README's film is cut from. The drive lives in the recorder
  *  (`drivePlanReview`) so the film and this row cannot tell different stories:
  *  the recorder is that drive plus a camera. */
-async function measureWalkthrough(newPage: LiveApp['newPage'], origin: string): Promise<WalkthroughVerdict> {
+async function measureWalkthrough(newPage: LiveApp['newPage'], origin: string): Promise<WalkthroughVerdict & { readonly ownServer: OwnServerVerdict }> {
   const workspace = await createWorkspace(
     origin,
     { name: `live-row-plan-flow-${RUN_ID}`, purpose: 'plan review walkthrough', model: SCRIPTED_MODEL_SPEC });
@@ -507,9 +507,71 @@ async function measureWalkthrough(newPage: LiveApp['newPage'], origin: string): 
 
   const verdict = await drivePlanReview(page, origin, workspace, async () => {});
   await shoot(page, 'walkthrough-settled');
+  const ownServer = await measureOwnServerSlate(page);
+
   await page.close();
 
-  return verdict;
+  return { ...verdict, ownServer };
+}
+
+/** The implement turn's slate, drawn in its answer, read in one theme. */
+interface OwnServerReading {
+  /** The frame's height, and its page's own: a frame at its content's height is neither a fixed box nor a scroller. */
+  readonly frame: number;
+  readonly page: number;
+  /** Whether the page scrolls inside its frame. */
+  readonly scrolls: boolean;
+  /** The page's text and the chat's own, as drawn. */
+  readonly pageText: string;
+  readonly chatText: string;
+}
+
+export interface OwnServerVerdict {
+  readonly dark: OwnServerReading;
+  readonly light: OwnServerReading;
+}
+
+/** The support queue slate answers its page from its class's own `fetch`: read as the chat draws it, in each theme. */
+async function measureOwnServerSlate(page: Page): Promise<OwnServerVerdict> {
+  const card = `#chat [data-slate-inline=${JSON.stringify(SLATE_ID)}] iframe`;
+
+  await until(page, 'the support queue drawn in its answer', `document.querySelector(${JSON.stringify(card)}) !== null`);
+  const src = await page.$eval(card, (frame) => frame.getAttribute('src') ?? '');
+  // Bounded: a page that never arrives or never takes the host's theme is the failure this row names, not a hang.
+  const bound = { timeout: 60_000 };
+  const frame = await named('the support queue frame', () => page.waitForFrame((each) => src !== '' && each.url().startsWith(new URL(src).origin), bound));
+
+  await named('the support queue page', () => frame.waitForFunction(() => document.querySelector('table') !== null, bound));
+
+  const read = async (scheme: 'dark' | 'light'): Promise<OwnServerReading> => {
+    // The page follows the host's scheme; its text is then the chat's.
+    await named(`the support queue in ${scheme}`, () => frame.waitForFunction((want) => document.documentElement.dataset['mode'] === want, bound, scheme));
+    // Settled: the frame takes the height its page last said, and the page stops growing.
+    await painted(page);
+    await painted(page);
+
+    const outer = await page.$eval(card, (element) => ({ frame: element.getBoundingClientRect().height, chatText: getComputedStyle(element.closest('#chat') ?? document.body).color }));
+
+    const inner = await frame.evaluate(() => {
+      const scroller = document.scrollingElement ?? document.documentElement;
+
+      return {
+        page: Math.ceil(document.documentElement.getBoundingClientRect().height),
+        scrolls: scroller.scrollHeight > scroller.clientHeight + 1,
+        pageText: getComputedStyle(document.body).color,
+      };
+    });
+
+    return { ...outer, ...inner };
+  };
+
+  const first = await page.evaluate(() => (document.documentElement.dataset['mode'] === 'light' ? 'light' : 'dark'));
+  const before = await read(first);
+
+  await page.click(first === 'light' ? 'button[aria-label="Switch to dark mode"]' : 'button[aria-label="Switch to light mode"]');
+  const after = await read(first === 'light' ? 'dark' : 'light');
+
+  return first === 'light' ? { light: before, dark: after } : { dark: before, light: after };
 }
 
 const MARKED_TAB = `(document.querySelector('#inspector :is(nav[aria-label="Pages"], nav[aria-label="Workspace"]) [aria-current="true"]')?.getAttribute('aria-label') ?? null)`;
