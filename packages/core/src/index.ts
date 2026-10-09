@@ -2232,7 +2232,7 @@ export { THEME_CSS, THEME_TOKENS, type Mode, type PublicToken, type RadiusRole, 
 
 export { hueStops, rankHue } from './web/agent-colour';
 
-export { SLATE_IMPORT_MAP, SLATE_PAGE_HEAD, SLATE_PAGE_PREAMBLE } from './web/slate-page';
+export { SLATE_PAGE_PREAMBLE } from './web/slate-page';
 
 export { APP_FONTS_PATH, appFontFile, SLATE_FONTS_PATH } from './web/fonts';
 
