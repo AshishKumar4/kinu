@@ -378,7 +378,6 @@ export class CloudAgentClient implements AgentClient {
       // A hosted agent's questions are answered from the web app's stack, where its window is.
       list: async () => v.parse(v.array(AskingAgentSchema), await this.callRpc('listOwnerQuestions', [])).filter((asking) => asking.actor === null),
       answer: async (id, answers) => { await this.callRpc('answerOwnerQuestions', [id, v.parse(JsonValueSchema, answers)]); },
-      dismiss: async (id) => v.parse(v.object({ closed: v.number() }), await this.callRpc('dismissOwnerQuestions', [id])),
     };
     // The sealed plan RPCs (`agent-rpc-access.ts`).
     this.plans = subordinateName ? null : {

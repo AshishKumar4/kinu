@@ -979,7 +979,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (!this.liveActor(actorId)) return;
 
     // Its questions are written in its own isolate, which the workspace's reads do not watch.
-    if (this.agentBound(actorId).stores.config.getHoldsQuestions()) this.liveReadsMoved(['listOwnerQuestions']);
+    if (this.agentBound(actorId).stores.config.getHoldsQuestions()) this.hostedQuestionsMoved();
     recordAgentFigures(this.boundSql, actorId, figures);
     this.delegatedTurns.start([this.liveAgentOf(actorId)]);
   }
@@ -2413,6 +2413,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const main = this.actorHandle().actorId;
 
     await (await this.agentCalls(main)).stopChat(this.agentSnapshot(main));
+
+    // A Stop dismisses main's open questions, in its own isolate.
+    if (this.config.getHoldsQuestions()) this.hostedQuestionsMoved();
   }
 
   protected override mainChatTurn(): string | null {
@@ -2437,7 +2440,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       send: (input) => this.takeWords(actorId, async () => await (await facet()).send(snapshot(), { text: input.text, files: input.files }, { id: input.id, mode: input.mode })),
       retry: (claim) => whenActorTakesInput(this.boundSql, actorId, async () => await (await facet()).retry(snapshot(), claim)),
       interrupt: () => {
-        this.detachOwned(Effect.promise(() => this.agentTurns.interrupt(actorId)));
+        this.detachOwned(Effect.promise(async () => {
+          await this.agentTurns.interrupt(actorId);
+
+          // A Stop dismisses the agent's open questions in its own isolate.
+          if (this.agentBound(actorId).stores.config.getHoldsQuestions()) this.hostedQuestionsMoved();
+        }));
         this.stopSubtree(actorId);
       },
       sendState: async (id) => await (await facet()).sendState(snapshot(), id),
@@ -2499,6 +2507,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return await (await this.agentCalls(actorId)).replyPlanComment(this.agentSnapshot(actorId), comment, text, turn.driving);
   }
 
+  /**
+   * A hosted agent's questions moved in its own isolate, which the workspace's store revision does not see: the held
+   * overview is read again, and the tabs read the list again.
+   */
+  private hostedQuestionsMoved(): void {
+    this.slowOverview = null;
+    this.liveReadsMoved(['listOwnerQuestions']);
+    this.overviewChanged();
+  }
+
   /** Each live agent's questions from its own isolate (D9); only an agent offered `ask_owner` is asked. An answer is handed
    *  in as words are, with a wake armed, so the turn it owes survives the isolate. */
   protected override hostedQuestions(): HostedOwnerQuestions {
@@ -2519,14 +2537,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         const calls = await this.agentCalls(actorId);
 
         await this.handInput(actorId, async () => { await calls.answerOwnerQuestions(this.agentSnapshot(actorId), id, answers); });
-        this.liveReadsMoved(['listOwnerQuestions']);
+        this.hostedQuestionsMoved();
       },
       // A dismissal may leave a sibling's answer owed a turn, so it is handed in as an answer is.
       dismiss: async (actorId, id) => {
         const calls = await this.agentCalls(actorId);
         const closed = await this.handInput(actorId, async () => await calls.dismissOwnerQuestions(this.agentSnapshot(actorId), id));
 
-        this.liveReadsMoved(['listOwnerQuestions']);
+        this.hostedQuestionsMoved();
 
         return closed;
       },
@@ -5560,10 +5578,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const pendingConsents = new DeviceConsentStore(this.boundSql).live(Date.now());
 
-    const [activePlan, listing, hostedPlans] = await Promise.all([
+    const [activePlan, listing, hostedPlans, questions] = await Promise.all([
       this.getActivePlanReview(),
       this.slates.list(ROOT_SLATE_CALLER),
       this.hostedPlans(),
+      this.listOwnerQuestions(),
     ]);
 
     const pictures = this.pictures.digests();
@@ -5573,6 +5592,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       pendingActions: this.pendingActions(hostedPlans),
       pendingConsents,
       activePlan,
+      openQuestions: questions.filter((asking) => asking.asked.status === 'open').length,
       slates: listing.slates.map((slate) => ({
         id: slate.id, title: slate.title, picture: pictures.get(slate.id) ?? null,
       })),

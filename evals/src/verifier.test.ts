@@ -166,9 +166,13 @@ function inspecting(): VerifierSession {
 
       if (request.view === 'runs') {
         return Promise.resolve({ view: 'runs', page: { status: 'end', items: runs.map((run, index) => ({
-          runId: `run-${String(index)}`, startedAt: 10 + index, status: run.status, userMessage: run.brief.slice(0, 500),
+          runId: `run-${String(index)}`, eventCount: 2, startedAt: 10 + index, status: run.status, userMessage: run.brief.slice(0, 500),
         })) } });
       }
+
+      if (request.view === 'events') return Promise.resolve({ view: 'events', page: { status: 'end', items: [{
+        type: 'run_end', eventIndex: 1, runId: request.runId, timestamp: new Date(20).toISOString(), reason: 'completed',
+      }] } });
 
       if (request.view !== 'history') return Promise.resolve(missing);
 
@@ -188,9 +192,9 @@ describe("a helper's runs", () => {
 
     expect(work).toEqual([
       { name: 'ask-task-live', status: 'working', runs: [
-        { startedAt: 10, status: 'error', userMessage: LONG_BRIEF }, { startedAt: 11, status: 'completed', userMessage: 'Retry the same tally' },
+        { startedAt: 10, endedAt: null, status: 'error', userMessage: LONG_BRIEF }, { startedAt: 11, endedAt: 20, status: 'completed', userMessage: 'Retry the same tally' },
       ] },
-      { name: 'ask-task-done', status: 'dismissed', runs: [{ startedAt: 10, status: 'completed', userMessage: 'Write the totals' }] },
+      { name: 'ask-task-done', status: 'dismissed', runs: [{ startedAt: 10, endedAt: 20, status: 'completed', userMessage: 'Write the totals' }] },
     ]);
   });
 

@@ -480,7 +480,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
             <WorkbenchPanels
               scope={kind}
               workspace={undefined}
-              contents={{ pendingActions: isMovie ? [] : work.pending(), pendingConsents: [], activePlan: plan }}
+              contents={{ pendingActions: isMovie ? [] : work.pending(), pendingConsents: [], activePlan: plan, ownerQuestions: [] }}
               onInspector={setInspectorControl}
               chat={() => <>
                 <div className="@container flex min-h-0 flex-1 flex-col">

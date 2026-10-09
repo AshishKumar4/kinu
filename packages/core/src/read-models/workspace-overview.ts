@@ -59,6 +59,8 @@ export interface WorkspaceOverviewInputs {
   readonly pendingActions: readonly PendingAction[];
   readonly pendingConsents: readonly PendingDeviceConsent[];
   readonly activePlan: { readonly status: PlanReviewStatus } | null;
+  /** Open questions to the owner, the workspace agent's and its hosted agents': each waits on their decision. */
+  readonly openQuestions: number;
   readonly latestRun: { readonly status: string | null; readonly task: string | null } | null;
   readonly slates: readonly Omit<WorkspaceOverviewSlate, 'visibility'>[];
   readonly shares: readonly WorkspaceOverviewShare[];
@@ -92,7 +94,7 @@ function activityOf(working: boolean, unfinished: boolean): WorkspaceOverview['a
 }
 
 export function buildWorkspaceOverview(inputs: WorkspaceOverviewInputs): WorkspaceOverview {
-  let decisionsWaiting = inputs.pendingConsents.length + (inputs.activePlan?.status === 'pending' ? 1 : 0);
+  let decisionsWaiting = inputs.pendingConsents.length + (inputs.activePlan?.status === 'pending' ? 1 : 0) + inputs.openQuestions;
   let hasUpdates = false;
 
   for (const action of inputs.pendingActions) {

@@ -45,6 +45,8 @@ export interface PersonAsks {
   readonly pendingActions: readonly PendingAction[];
   readonly pendingConsents: readonly PendingConsent[];
   readonly activePlan: PlanReview | null;
+  /** The workspace agent's and its hosted agents' questions; the open ones wait on the person. */
+  readonly ownerQuestions: readonly AskingAgent[];
 }
 
 /** Rows holding the person's work until they decide; the agent's own proposals and notes do not (#21). */
@@ -57,11 +59,12 @@ const HOLDS_THE_PERSON = {
   unseen_changes: false,
 } satisfies Record<PendingActionKind, boolean>;
 
-/** What the inspector opens for on its own: an action or a consent to approve, or a plan to review. */
+/** What the inspector opens for on its own: an action or a consent to approve, a plan to review, or a question. */
 export function needsTheUser(asks: PersonAsks): boolean {
   return asks.pendingActions.some((action) => HOLDS_THE_PERSON[action.kind])
     || asks.pendingConsents.length > 0
-    || asks.activePlan?.status === 'pending';
+    || asks.activePlan?.status === 'pending'
+    || asks.ownerQuestions.some((asking) => asking.asked.status === 'open');
 }
 
 /**

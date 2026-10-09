@@ -1,5 +1,6 @@
 import * as v from 'valibot';
-import { USER_AI_PROXY_PATH } from '@kinu.run/core';
+import { USER_AI_PROXY_PATH, type RunEvent } from '@kinu.run/core';
+import { KinuError } from '@kinu.run/core/obs';
 import { DeploymentAnswer, evalTargetVerdict, evalWorkspaceName, infraBoundary } from '@kinu.run/test-utils';
 import {
   openPublicSession, resolveWebIdentity, webHeaders, type CatalogNeed, type KinuPublicSession, type PublicWebIdentity,
@@ -123,10 +124,23 @@ export async function askOnce(target: EvalTarget, request: {
 
     const watch = new TurnWatch(session);
 
-    await answered(watch, session.prompt(request.prompt, 'plan'));
-    await settle(watch);
+    const result = await answered(watch, session.prompt(request.prompt, 'plan'));
+    let terminal: Extract<RunEvent, { type: 'run_end' }> | undefined;
 
-    return repliesTo(await session.history(), request.prompt).at(-1)?.trim() ?? '';
+    await settle(watch, (_busy, events) => {
+      terminal = events.filter((event): event is Extract<RunEvent, { type: 'run_end' }> => event.type === 'run_end').at(-1);
+    });
+
+    if ((result.landed === 'turn' && result.hadError) || terminal?.error !== undefined
+      || (terminal?.reason !== undefined && terminal.reason !== 'completed')) {
+      throw new KinuError('unavailable', terminal?.error ?? `The reviewer turn ended ${terminal?.reason ?? 'in error'} without a recorded cause.`);
+    }
+
+    const reply = repliesTo(await session.history(), request.prompt).at(-1)?.trim();
+
+    if (reply === undefined || reply === '') throw new KinuError('unavailable', 'The reviewer finished without an answer to its prompt.');
+
+    return reply;
   } finally {
     await session.teardown();
   }

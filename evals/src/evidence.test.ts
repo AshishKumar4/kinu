@@ -99,7 +99,7 @@ describe('a trial\'s evidence', () => {
     expect(JSON.parse(readFileSync(join(directory, 'slates.json'), 'utf8')).histories)
       .toEqual([{ id: 'exchange', history: [{ ok: true, value: { versions: [{ id: 'v-1' }] } }] }]);
     expect(JSON.parse(readFileSync(join(directory, 'data.json'), 'utf8'))).toEqual([
-      { helpers: [{ name: 'tally', status: 'dismissed', runs: [{ startedAt: 5, status: 'completed', userMessage: BRIEF }] }] },
+      { helpers: [{ name: 'tally', status: 'dismissed', runs: [{ startedAt: 5, endedAt: null, status: 'completed', userMessage: BRIEF }] }] },
       { slate: 'exchange', method: 'book', input: { symbol: 'ACME' }, answer: { ok: true, value: { bids: [], asks: [] } } },
       { slate: 'exchange', method: 'trades', input: { symbol: 'ACME' }, answer: { ok: false, reason: 'bad_input', error: 'Slate compilation failed' } },
     ]);

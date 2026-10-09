@@ -258,7 +258,6 @@ export class LocalAgentClient implements AgentClient {
     this.questions = {
       list: () => this.session.listOwnerQuestions(),
       answer: (id, answers) => this.session.answerOwnerQuestions(id, answers),
-      dismiss: (id) => this.session.dismissOwnerQuestions(id),
     };
     this.plans = {
       active: () => this.session.getActivePlanReview(),

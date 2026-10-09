@@ -130,6 +130,31 @@ describe('LocalAgentSession: asking the owner', () => {
     }
   });
 
+  test('a Stop after the answer and before its turn opens leaves that turn unrun', async () => {
+    const { db, agent, requests } = session([
+      { call: 'ask_owner', input: ASK },
+      { answer: 'Storing integer cents.' },
+    ]);
+
+    try {
+      await agent.send('Migrate the ledger.', { id: crypto.randomUUID(), mode: 'build' });
+      const [open] = (await agent.listOwnerQuestions()).filter((asking) => asking.asked.status === 'open');
+
+      if (open === undefined) throw new Error('the ask left no open question');
+      // The answer queues its turn at once; the Stop lands before the pump takes it.
+      const answered = agent.answerOwnerQuestions(open.asked.id, ANSWER);
+
+      agent.interrupt();
+      await answered;
+      await agent.settleBackgroundWork();
+
+      expect(requests).toHaveLength(1);
+    } finally {
+      await agent.end();
+      db.close();
+    }
+  });
+
   test('work that arrives while a question is open waits for it, then runs after the answer\'s own turn', async () => {
     const { db, agent, requests } = session([
       { call: 'ask_owner', input: ASK },

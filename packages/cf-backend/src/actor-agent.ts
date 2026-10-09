@@ -770,7 +770,7 @@ export abstract class ActorAgent extends Agent<Env> {
       const [answered, asker] = parsed.output;
 
       return attemptInItsWords('unavailable', () => this.hostedQuestions().answer(asker ?? this.actorHandle().actorId, id, answered));
-    }));
+    }).pipe(Effect.andThen(Effect.sync(() => { this.overviewChanged(); }))));
   }
 
   /** Closed unanswered; the agent reads that at its next turn, and what waited behind the questions runs. */
@@ -780,7 +780,12 @@ export abstract class ActorAgent extends Agent<Env> {
 
     if (!asker.success) return settle(Effect.fail(new KinuError('bad_input', 'actor: an agent id, or null for the workspace agent')));
 
-    return { closed: await this.hostedQuestions().dismiss(asker.output ?? this.actorHandle().actorId, id) };
+    const closed = await this.hostedQuestions().dismiss(asker.output ?? this.actorHandle().actorId, id);
+
+    // A tile counts the open questions as decisions waiting.
+    this.overviewChanged();
+
+    return { closed };
   }
 
   /** The orchestrator answers with the root budget; a facet actor answers from durable storage,

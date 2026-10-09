@@ -2178,22 +2178,19 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun test --timeout=0 scripts/deadline-capability.test.ts',
     label: 'The runner beside a process holding a capability',
-    here: 'measures this machine: the runner it proves is the one this box\'s deploy runs, beside a process its user '
-      + 'manager granted a capability, which no container has.',
-    tier: 'deploy',
+    tier: 'ci',
     seconds: 0.4,
     catches: 'a runner that crashes on a process it may not read. The leftover scan reads the environment of every '
       + 'process this user started after the run began, and the kernel refuses that read (EACCES) for one that '
-      + 'holds a capability its reader lacks, as a unit the user manager grants one does; a commit tier crashed on '
-      + 'one. The suite starts such a unit, asserts it runs and its process holds CAP_WAKE_ALARM before claiming '
-      + 'anything, and requires a run beside it to end 0 with the unit left running.',
-    blind: 'a machine whose user manager cannot grant a unit an ambient capability, which fails this suite rather '
-      + 'than passing it on nothing; CI is one, so CI never schedules it (CI_EXEMPT). Other unreadable processes, '
-      + 'another user\'s, are the uid check\'s.',
+      + 'holds any capability its reader lacks; a commit tier crashed on one. Prepare gives a sleep binary a file '
+      + 'capability, and the suite asserts its process holds it before anything else, then requires a run beside it '
+      + 'to end 0 with the subject left running.',
+    blind: 'any capability tests the kernel\'s permission check, not every capability or another user\'s process, '
+      + 'which the uid check excludes. A missing subject capability fails this suite rather than proving nothing.',
     inputs: {
       kind: 'live',
-      why: 'needs a user systemd manager that grants a unit an ambient capability (CAP_WAKE_ALARM): its subject is '
-        + 'a process of this machine\'s user manager, which no hash over the tree stands for.',
+      why: 'the kernel\'s permission check for a same-uid process holding any capability its reader lacks; '
+        + 'prepare grants the file capability, whose effective bit and refused environ read the suite asserts.',
     },
   },
   {
@@ -2302,6 +2299,22 @@ export const LADDER: readonly Gate[] = [
       + 'regression passes, and the geometry rows read boxes rather than whether the layout is '
       + 'the right one. The deployed build\'s browser rows are the product flows\' '
       + '(`scripts/product-flows.ts`), which run against the deployment alone.',
+    inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
+  },
+  {
+    run: 'bun test --timeout=0 tests/browser/live-app-own-server.test.ts',
+    label: 'Live app in a browser: a slate that serves its own page, in its answer',
+    tier: 'deploy',
+    // Unmeasured: the plans file's walkthrough (about 60 s) and the dev server's boot, the plans row's figures.
+    seconds: 120,
+    catches: 'the shipped workspace page as it runs, on `vite dev` in cf-backend (workerd with real Durable Objects '
+      + 'behind the real client) in Chrome at 1440x900. Its row: the plan walkthrough\'s implement turn writes a '
+      + 'slate whose class\'s own `fetch` answers its page, and the answer that wrote it draws it in the chat, at '
+      + 'its page\'s height with no inner scroll, in the chat\'s text colour, dark and light. A card, page or theme '
+      + 'that never arrives fails the row in a minute rather than hanging it.',
+    blind: 'one slate, one viewport, one model: a scripted SSE server, so a real model\'s turn is unmeasured. A '
+      + 'LOCAL dev server: `vite dev`\'s workerd is not the production isolate, and the deployed build is the '
+      + 'product flows\' subject. No pixel is compared: the row reads heights and computed colours.',
     inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
   },
   {
@@ -2951,10 +2964,7 @@ export const CI_EXEMPT = {
   'bun test --timeout=0 tests/browser/live-app-sleep.test.ts': LIVE_APP_AT_CI,
   'bun test --timeout=0 tests/browser/live-app-plans.test.ts': LIVE_APP_AT_CI,
   'bun test --timeout=0 tests/browser/live-app-layout.test.ts': LIVE_APP_AT_CI,
-  'bun test --timeout=0 scripts/deadline-capability.test.ts':
-    'needs a user systemd manager that grants a unit an ambient capability. The GitHub runner\'s starts the unit '
-    + 'and loses it at once (run 36216870343, 2026-09-26: ActiveState inactive), so there the suite fails for '
-    + 'the machine, never the code. It runs at deploy, on the box whose user manager holds CAP_WAKE_ALARM.',
+  'bun test --timeout=0 tests/browser/live-app-own-server.test.ts': LIVE_APP_AT_CI,
 } satisfies Record<string, string>;
 
 /** Every gate at or below `tier`. */
@@ -3619,11 +3629,13 @@ function rowArgv(gate: Gate, tracked: readonly string[], deploying: boolean, tim
 
 export const ArmadaReportSchema = v.object({
   job: v.string(),
+  graded: v.picklist(['pass', 'fail', 'not graded']),
   verdicts: v.optional(v.object({
     rows: v.array(v.object({
       run: v.optional(v.string()), name: v.optional(v.string()), exitCode: v.number(), seconds: v.number(), output: v.optional(v.string(), ''),
       /** Files in its task's artifacts directory the row names as its evidence. */
       artifacts: v.optional(v.array(v.string())),
+      problem: v.optional(v.string()),
     })),
   })),
   problems: v.optional(v.array(v.string()), []),
@@ -3653,9 +3665,9 @@ export function armadaPhaseRun(phase: string, rows: readonly Gate[], sha: string
   ];
 }
 
-/** `argv` run here: its exit code, what it answered on stdout, and its progress, which `--json` puts on stderr and which
+/** `argv` run here: what it answered on stdout, and its progress, which `--json` puts on stderr and which
  *  is printed as it comes. */
-async function echoed(argv: readonly string[]): Promise<{ readonly exitCode: number; readonly answered: string; readonly said: string }> {
+async function echoed(argv: readonly string[]): Promise<{ readonly answered: string; readonly said: string }> {
   const run = Bun.spawn([...argv], { cwd: root, stdout: 'pipe', stderr: 'pipe' });
   const answered = new Response(run.stdout).text();
   let said = '';
@@ -3667,7 +3679,9 @@ async function echoed(argv: readonly string[]): Promise<{ readonly exitCode: num
     await writeFully(process.stdout, text);
   }
 
-  return { exitCode: await run.exited, answered: await answered, said };
+  await run.exited;
+
+  return { answered: await answered, said };
 }
 
 export type ArmadaReport = v.InferOutput<typeof ArmadaReportSchema>;
@@ -3687,7 +3701,7 @@ type ArmadaRow = NonNullable<ArmadaReport['verdicts']>['rows'][number];
 /** One armada row's verdict into the deploy's report, the evidence its task `kept` copied beside it; whether it is green:
  *  armada's own grade (`armadaRowVerdicts`), never its exit code alone. */
 function recordArmadaRow(report: string, gate: Gate, verdict: ArmadaRow | undefined, why: { readonly green: boolean; readonly found: string; readonly reproduce: string; readonly said: string; readonly kept?: string }): boolean {
-  if (report !== '' && gate.evidence !== undefined && why.kept !== undefined && (verdict?.artifacts?.length ?? 0) > 0) {
+  if (report !== '' && gate.evidence !== undefined && why.kept !== undefined && verdict?.problem === undefined && (verdict?.artifacts?.length ?? 0) > 0) {
     cpSync(join(why.kept, gate.evidence), join(report, gate.evidence), { recursive: true });
   }
 
@@ -3699,13 +3713,14 @@ function recordArmadaRow(report: string, gate: Gate, verdict: ArmadaRow | undefi
     return true;
   }
 
-  const found = verdict === undefined || verdict.exitCode === 0 ? `armada did not grade it: ${why.found}` : `red on armada, ${why.found}`;
+  const ungraded = verdict === undefined || verdict.exitCode === 0 || verdict.problem !== undefined;
+  const found = ungraded ? `armada did not grade it: ${why.found}` : `red on armada, ${why.found}`;
 
   console.error(`\nFAILED  ${gate.run}  ${found}`);
 
   if (report !== '') {
     recordRed(report, {
-      phase: gate.phase ?? 'source', what: gate.label, command: gate.run, verdict: verdict === undefined || verdict.exitCode === 0 ? 'not graded' : `exit ${String(verdict.exitCode)}`,
+      phase: gate.phase ?? 'source', what: gate.label, command: gate.run, verdict: ungraded ? 'not graded' : `exit ${String(verdict.exitCode)}`,
       reproduce: why.reproduce, finding: found, output: verdict?.output ?? why.said.slice(-4000),
     });
   }
@@ -3733,34 +3748,28 @@ async function armadaPhaseJob(phases: readonly DeployPhase[], rows: readonly Gat
   const argv = armadaPhaseRun(phase, rows, sha);
 
   console.log(`\n── armada: ${String(rows.length)} row(s) of ${phase} at ${sha.slice(0, 12)}, as one job: ${argv.slice(1).join(' ')}`);
-  const { exitCode, answered, said } = await echoed(argv);
+  const { answered, said } = await echoed(argv);
   const graded = armadaReport(answered);
   const reproduce = `node_modules/.bin/armada run ${sha} -- ${argv.slice(argv.indexOf('--') + 1).join(' ')}`;
 
   if (report !== '' && graded !== undefined) recordNotice(report, { phase: phases[0] ?? 'source', what: `armada job ${graded.job}`, notice: `the ${phase} rows armada ran, at ${sha}: their logs and outputs are in that job` });
 
-  return armadaRowVerdicts(rows, graded, exitCode).filter(({ gate, verdict, green, found }) => !recordArmadaRow(report, gate, verdict, { green, found, reproduce, said, kept: graded?.artifacts[armadaTaskName(gate)] }))
+  return armadaRowVerdicts(rows, graded).filter(({ gate, verdict, green, found }) => !recordArmadaRow(report, gate, verdict, { green, found, reproduce, said, kept: graded?.artifacts[armadaTaskName(gate)] }))
     .map(({ gate }) => gate.run);
 }
 
-/** Each row's own verdict from a phase job's report, and what was found about it: the task that wrote no verdict is
- *  reported under its task's name, with its exit and output, and armada names each problem by the task it is about. */
-export function armadaRowVerdicts(rows: readonly Gate[], graded: ArmadaReport | undefined, exitCode: number): { readonly gate: Gate; readonly verdict: ArmadaRow | undefined; readonly green: boolean; readonly found: string }[] {
+/** The runner grades the run and its rows; a row's problem belongs to that row, without parsing prose to find it. */
+export function armadaRowVerdicts(rows: readonly Gate[], graded: ArmadaReport | undefined): { readonly gate: Gate; readonly verdict: ArmadaRow | undefined; readonly green: boolean; readonly found: string }[] {
   const reported = graded?.verdicts?.rows ?? [];
-  // armada grades a run whole: one it could not grade (exit 2, and every problem its report names) greens no row,
-  // whatever each row's own exit (armada src/grade.ts).
-  const ungraded = graded === undefined || exitCode === 2 || graded.problems.length > 0;
 
   return rows.flatMap(armadaUnits).map((gate) => {
-    const task = armadaTaskName(gate);
-    const verdict = reported.find((row) => row.run === gate.run) ?? reported.find((row) => row.run === undefined && row.name === task);
-    // armada names a problem by its task (`<task> has no verdict…`, `<task>: <row> names evidence…`) or by the row.
-    const own = graded?.problems.filter((problem) => [task, gate.run].some((name) => problem.startsWith(`${name} `) || problem.startsWith(`${name}:`))) ?? [];
+    const verdict = reported.find((row) => (row.name ?? row.run) === gate.run);
+    const problem = verdict?.problem ?? (graded?.graded === 'not graded' ? graded.problems.join('; ') : undefined);
 
-    const found = graded === undefined ? `\`armada run\` exited ${String(exitCode)} and wrote no report`
-      : [`job ${graded.job}`, ...own.length === 0 && ungraded ? [`armada graded none of the run's rows: ${graded.problems.join('; ')}`] : own].join('; ');
+    const found = graded === undefined ? '`armada run` wrote no report'
+      : [`job ${graded.job}`, ...problem === undefined ? [] : [problem]].join('; ');
 
-    return { gate, verdict, green: !ungraded && verdict?.exitCode === 0, found };
+    return { gate, verdict, green: graded !== undefined && graded.graded !== 'not graded' && verdict?.exitCode === 0, found };
   });
 }
 

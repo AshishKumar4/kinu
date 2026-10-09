@@ -1092,10 +1092,6 @@ export class LocalAgentSession {
       : this.chat.answerQuestions(id, answers));
   }
 
-  async dismissOwnerQuestions(id: string): Promise<{ readonly closed: number }> {
-    return { closed: this.chat.dismissQuestions(id) };
-  }
-
   async dismissPlanReview(id: string, revision: number): Promise<PlanReviewResult> {
     return this.planActions.dismiss(id, revision, (prefix) => { this.chat.stopIfRunning(prefix); });
   }
