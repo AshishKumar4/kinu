@@ -1918,8 +1918,8 @@ export interface SlatePreviewVerdict {
   readonly pageTabs: readonly string[];
 }
 
-/** The names the inspector's Pages strip shows, one per tab. */
-export const PAGE_TABS = `[...document.querySelectorAll('#inspector nav[aria-label="Pages"] button[aria-label]')].map((tab) => tab.getAttribute('aria-label') ?? '')`;
+/** The names the inspector's Pages strip shows, one per tab: its links, not the actions beside them ("Share Flow probe"). */
+export const PAGE_TABS = `[...document.querySelectorAll('#inspector nav[aria-label="Pages"] button.p-bar-link[aria-label]')].map((tab) => tab.getAttribute('aria-label') ?? '')`;
 
 /**
  * Row: a slate the agent builds shows its running preview in its own tab.

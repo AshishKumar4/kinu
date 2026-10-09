@@ -339,7 +339,7 @@ describe('a page an answer draws in the chat is kept by its pin (1008-c)', () =>
 
     expect(pin.kept).not.toBeNull();
     expect(pin.keptName).toContain(PIN_PAGE.title);
-    expect(pin.pageTabs).toContain(PIN_PAGE.title);
+    expect(pin.listed).toContain(`${pin.kept ?? ''} ${PIN_PAGE.title}`);
   });
 });
 

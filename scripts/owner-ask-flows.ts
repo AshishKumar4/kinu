@@ -27,8 +27,19 @@ export interface PinVerdict {
   readonly kept: string | null;
   /** The pin's accessible name once it answered. */
   readonly keptName: string;
-  /** The inspector's Pages strip once the workspace re-listed its slates. */
-  readonly pageTabs: readonly string[];
+  /** The workspace's slates as the account lists them (`GET /api/shared`), each by its directory and title: the
+   *  Pages strip shows an answer's page whether or not it was kept, so it is no receipt. */
+  readonly listed: readonly string[];
+}
+
+/** In the page: the account's own slates in `workspace`, each as `<id> <title>`, from the route My stuff reads. */
+function slatesOf(workspace: string): string {
+  return `(async () => {
+    const answer = await fetch('/api/shared');
+    if (!answer.ok) return [];
+    const { slates } = await answer.json();
+    return slates.filter((slate) => slate.workspace === ${JSON.stringify(workspace)}).map((slate) => slate.id + ' ' + slate.title);
+  })()`;
 }
 
 const KeptSchema = v.object({ id: v.nullable(v.string()), name: v.string() });
@@ -55,10 +66,11 @@ export async function pinKeepsAnInChatPage(target: FlowTarget): Promise<PinVerdi
       id: button.getAttribute('data-slate-saved'), name: button.getAttribute('aria-label') ?? '',
     })));
 
-    await openInspector(page);
-    await until(page, "the kept page among the workspace's pages", `${PAGE_TABS}.includes(${JSON.stringify(PIN_PAGE.title)})`);
+    const receipt = `${kept.id ?? ''} ${PIN_PAGE.title}`;
 
-    return { kept: kept.id, keptName: kept.name, pageTabs: v.parse(v.array(v.string()), await page.evaluate(PAGE_TABS)) };
+    await waitOn(page, "the kept page among the workspace's slates", page.waitForFunction(`${slatesOf(workspace)}.then((listed) => listed.includes(${JSON.stringify(receipt)}))`, { polling: 500 }));
+
+    return { kept: kept.id, keptName: kept.name, listed: v.parse(v.array(v.string()), await page.evaluate(slatesOf(workspace))) };
   } finally {
     await removeFlowWorkspace(target, workspace);
   }
