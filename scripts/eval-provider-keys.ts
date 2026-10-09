@@ -19,11 +19,11 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import * as v from 'valibot';
-import { DEFAULT_WORKERS_AI_MODEL_SPEC, DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, inheritedRows, ProfileCatalogEnvelopeSchema, type EvalAccount } from '@kinu.run/core';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC, DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, ProfileCatalogEnvelopeSchema, type EvalAccount } from '@kinu.run/core';
 import { evalWebIdentityEnv } from '@kinu.run/test-utils';
 import { DEFAULT_MODELS, DEFAULT_TRIALS, evalMatrix, PASS_FIRST_SLOT } from '../evals/src/config';
 import { WORKSPACE_LEASE_MS } from '../evals/src/session';
-import { trialAccounts, trialAccountsAt } from '../evals/src/slot';
+import { trialAccounts, trialAccountsAt, trialInheritedRows } from '../evals/src/slot';
 import { ARMS } from '../evals/src/target';
 import { recordStep } from './deploy-report';
 import { isEvalTask, trackedFiles } from './sources';
@@ -100,8 +100,6 @@ export interface Provisioned {
   readonly notes?: readonly string[];
 }
 
-const JsonRowsSchema = v.record(v.string(), v.number());
-
 const WorkspacesSchema = v.looseObject({ entries: v.array(v.object({ name: v.string(), lastVisited: v.number() })) });
 
 const EmailSchema = v.looseObject({ email: v.string() });
@@ -117,10 +115,10 @@ type TrialOutcome = { readonly given: boolean; readonly reset: boolean; readonly
 async function readyTrialAccount(input: Provisioning & { identity: string }, account: EvalAccount, keys: Readonly<Record<string, string>>): Promise<TrialOutcome> {
   const headers = { [DEV_IDENTITY_HEADER]: input.identity, [DEV_IDENTITY_ACCOUNT_HEADER]: account };
   const read = async (path: string) => fetch(`${input.origin}${path}`, { headers, signal: AbortSignal.timeout(CALL_MS) });
-  const held = await read('/api/user/held-rows');
+  const held = await trialInheritedRows({ origin: input.origin, identity: { kind: 'secret', secret: input.identity, account } });
 
-  if (!held.ok) return { given: false, reset: false, finding: `reading what ${account} holds answered ${String(held.status)}` };
-  const inherited = Object.entries(inheritedRows(v.parse(JsonRowsSchema, await held.json())));
+  if ('why' in held) return { given: false, reset: false, finding: `${account}: ${held.why}` };
+  const inherited = Object.entries(held.inherited);
   let reset = false;
 
   if (inherited.length > 0) {
