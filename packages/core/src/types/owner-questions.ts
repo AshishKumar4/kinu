@@ -13,7 +13,8 @@ const OptionSchema = v.strictObject({
 
 export const OwnerQuestionSchema = v.pipe(
   v.strictObject({
-    id: v.pipe(v.string(), v.regex(/^[\w-]{1,40}$/u), v.description('A short id the answer names this question by, e.g. "auth".')),
+    // No flags: a provider is handed the pattern as JSON Schema, which has none.
+    id: v.pipe(v.string(), v.regex(/^[A-Za-z0-9_-]{1,40}$/), v.description('A short id the answer names this question by, e.g. "auth".')),
     question: v.pipe(v.string(), v.trim(), v.nonEmpty(), v.maxLength(500), v.description('The whole question, ending in a question mark.')),
     header: v.optional(v.pipe(v.string(), v.trim(), v.maxLength(12), v.description('A label of at most 12 characters shown as a chip, e.g. "Library".'))),
     options: v.pipe(v.array(OptionSchema), v.minLength(2), v.maxLength(4), v.description('Two to four distinct choices; "Other" is added for the owner.')),
