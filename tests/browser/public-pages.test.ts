@@ -827,7 +827,8 @@ beforeAll(async () => {
         settled: document.querySelector('[data-landing-frame="plan"]')?.getAttribute('data-movie-settled') === 'true',
         cursor: document.querySelector('[data-landing-frame="plan"] [data-movie-cursor]') !== null,
         slate: document.querySelector('[data-landing-frame="plan"] [data-slate-dashboard]') !== null,
-        decided: document.querySelector('[data-landing-frame="plan"] [data-plan-status]')?.textContent === 'Approved',
+        // The slate is shown; the decided plan is a card in Work, behind it.
+        decided: document.querySelector('[data-landing-frame="plan"] [data-plan-card]')?.textContent?.includes('approved') === true,
       }));
 
       facts.movieReduced = {

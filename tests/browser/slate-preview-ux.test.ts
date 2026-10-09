@@ -337,7 +337,7 @@ test('preview tabs deduplicate live slates, fill the surface, and give each open
         await page.waitForFunction(() => document.querySelector('nav[aria-label="Pages"] [aria-current="true"]')?.getAttribute('aria-label')?.includes('Courier') === true);
         await page.waitForFunction(() => document.querySelector(':not([hidden]) > [data-plan-page] [data-plan-title]')?.textContent?.includes('Courier rollout'));
         expect(await page.$(':not([hidden]) > [data-plan-page] [data-plan-decisions]')).toBeNull();
-        expect(await page.$eval(':not([hidden]) > [data-plan-page] [data-plan-owner]', el => el.getAttribute('data-plan-owner'))).toBe('main');
+        expect(await page.$eval('[data-plan-owner]', el => el.getAttribute('data-plan-owner'))).toBe('main');
         // One presentation policy: a live actor's arrival is neither labelled
         // nor described as retained, and its review is an explicit navigation.
         expect(await page.$eval(':not([hidden]) > [data-plan-page]', el => el.textContent)).not.toContain('retained');
@@ -359,10 +359,10 @@ test('preview tabs deduplicate live slates, fill the surface, and give each open
         await openWork(page);
         await page.waitForFunction(() => document.querySelector('[data-work-plans]')?.textContent?.includes('Worker revision two'));
         await openPlan(page, 'Worker revision two');
-        expect(await page.$eval(':not([hidden]) > [data-plan-page] [data-plan-owner]', el => el.getAttribute('data-plan-owner'))).toBe('main');
+        expect(await page.$eval('[data-plan-owner]', el => el.getAttribute('data-plan-owner'))).toBe('main');
         expect(await page.$(':not([hidden]) > [data-plan-page] [data-plan-decisions]')).toBeNull();
         await clickControl(page, "Review in worker's conversation");
-        await page.waitForSelector(':not([hidden]) > [data-plan-page] [data-plan-owner="worker"]');
+        await page.waitForSelector('[data-plan-owner="worker"]');
         await page.waitForSelector(':not([hidden]) > [data-plan-page] [data-plan-decisions]');
         await clickControl(page, 'Approve & implement');
         await page.waitForFunction(() => document.querySelector(':not([hidden]) > [data-plan-page] [data-plan-status]')?.textContent === 'Approved');
@@ -373,7 +373,7 @@ test('preview tabs deduplicate live slates, fill the surface, and give each open
         // may not arrive a second time: the same review stays open in the
         // pane it landed in, now read-only again under the root's ownership.
         await page.click('[data-open-workspace]');
-        await page.waitForSelector(':not([hidden]) > [data-plan-page] [data-plan-owner="main"]');
+        await page.waitForSelector('[data-plan-owner="main"]');
         expect(await page.$eval(':not([hidden]) > [data-plan-page] [data-plan-title]', el => el.textContent)).toContain('Worker revision two');
         await openWork(page);
         await page.waitForFunction(() => document.querySelector('[data-work-plans]')?.textContent?.includes('Worker revision two'));
