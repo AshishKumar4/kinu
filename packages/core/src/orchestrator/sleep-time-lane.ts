@@ -18,9 +18,10 @@ import { isDefinitiveTerminalFailure, terminalEffect, type TerminalEffect, type 
 
 const PROCESSED = 'sleep_time';
 
-const SETTLED_AT = 'sleep_time_settled_at';
+/** The lane's instants, in `sleep_time_marks`. */
+const SETTLED_AT = 'settled';
 
-const CLOSED_AT = 'sleep_time_closed_at';
+const CLOSED_AT = 'closed';
 
 /** One answer past the cadence, plus steers: decides as the whole transcript would. */
 const READ_ROWS = (SLEEP_TIME_CADENCE.everyTurns + 1) * 8;
@@ -36,6 +37,14 @@ export function initSleepTimeUpdatesTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS account_proposal_outbox (
       delivery      TEXT PRIMARY KEY,
       proposal_json TEXT NOT NULL
+    )`);
+  // The lane's own instants, out of actor_config: every write to that table moves the roster's live reads, so each
+  // arriving tab and each settled turn made every tab read the roster again (2026-10-09 on production, twice a load).
+  execRaw(`CREATE TABLE IF NOT EXISTS sleep_time_marks (
+      actor_id TEXT NOT NULL,
+      mark     TEXT NOT NULL,
+      at       INTEGER NOT NULL,
+      PRIMARY KEY (actor_id, mark)
     )`);
 }
 
@@ -121,16 +130,16 @@ export class SleepTimeLane {
   }
 
   releaseWake(): void {
-    this.deps.config.delete(SETTLED_AT);
+    this.clear(SETTLED_AT);
   }
 
   lastClientLeft(): void {
-    this.deps.config.set(CLOSED_AT, String(Date.now()));
+    this.mark(CLOSED_AT);
     this.deps.armWake();
   }
 
   clientArrived(): void {
-    this.deps.config.delete(CLOSED_AT);
+    this.clear(CLOSED_AT);
   }
 
   /** Bounded by the newest consumed answer, so two triggers never share turns. */
@@ -152,7 +161,7 @@ export class SleepTimeLane {
       const window = this.deps.config.getSleepTimeComputeEnabled() ? yield* this.window() : null;
 
       if (window === null || window.completedTurns < 2 || window.turns.length === 0 || window.inputPending) {
-        this.deps.config.delete(SETTLED_AT);
+        this.clear(SETTLED_AT);
 
         if (woke) this.nothingDue(idleReason(window));
 
@@ -185,21 +194,33 @@ export class SleepTimeLane {
 
   private arm(window: SleepTimeWindow): void {
     if (window.completedTurns < 2 || window.turns.length === 0) {
-      this.deps.config.delete(SETTLED_AT);
+      this.clear(SETTLED_AT);
 
       return;
     }
 
-    this.deps.config.set(SETTLED_AT, String(Date.now()));
+    this.mark(SETTLED_AT);
     this.deps.armWake();
   }
 
-  private instant(key: string): number | null {
-    const raw = this.deps.config.get(key);
-    const at = raw === null ? Number.NaN : Number(raw);
+  private instant(mark: string): number | null {
+    this.deps.actor.assertCurrent();
 
-    return Number.isFinite(at) ? at : null;
+    return this.deps.sql<{ at: number }>`SELECT at FROM sleep_time_marks WHERE actor_id = ${this.deps.actor.actorId} AND mark = ${mark}`[0]?.at ?? null;
   }
+
+  private mark(mark: string): void {
+    this.deps.actor.assertCurrent();
+    void this.deps.sql`INSERT INTO sleep_time_marks (actor_id, mark, at) VALUES (${this.deps.actor.actorId}, ${mark}, ${Date.now()})
+      ON CONFLICT(actor_id, mark) DO UPDATE SET at = excluded.at`;
+  }
+
+  private clear(...marks: string[]): void {
+    this.deps.actor.assertCurrent();
+    void this.deps.sql`DELETE FROM sleep_time_marks WHERE actor_id = ${this.deps.actor.actorId}
+      AND mark IN (SELECT value FROM json_each(${JSON.stringify(marks)}))`;
+  }
+
 
   private compute(window: SleepTimeWindow): Effect.Effect<void, KinuError> {
     const key = window.newestId;
@@ -293,7 +314,7 @@ export class SleepTimeLane {
   private finish(key: string): void {
     recordEffectDone(this.deps.sql, this.deps.actor, { scope: PROCESSED, key });
     void this.deps.sql`DELETE FROM sleep_time_updates WHERE effect_key = ${key}`;
-    this.deps.config.delete(SETTLED_AT, CLOSED_AT);
+    this.clear(SETTLED_AT, CLOSED_AT);
   }
 
   private recordedUpdate(key: string): SleepTimeUpdate | undefined {
