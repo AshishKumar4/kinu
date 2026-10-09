@@ -141,7 +141,17 @@ absolute differences over every row of the report, counting a missing amount as 
       await checkReport(verifier);
 
       await verifier.check('answers-with-the-sum-of-differences', async () => {
-        const answer = verifier.bareAnswer(/^\$?(\d+(?:,\d{3})*(?:\.\d+)?)$/u);
+        // The prompt asks for the sum, not for a bare reply. Read the amount in its sum/total statement, or a bare amount.
+        const answer = [...verifier.replies].reverse().flatMap((reply) => {
+          const plain = reply.replace(/[*_`]/gu, '');
+
+          const statement = /(?:sum|total)\b[^\n]*?[=:]\s*\$?([\d,]+\.\d{2})(?!\d)/iu.exec(plain)
+            ?? /(?:sum|total)\b[^\n]*?\s\$?([\d,]+\.\d{2})(?!\d)/iu.exec(plain)
+            ?? /^\s*\$?([\d,]+(?:\.\d+)?)\s*[.!]?\s*$/u.exec(plain);
+
+          return statement?.[1] === undefined ? [] : [statement[1]];
+        })[0] ?? null;
+
         const value = answer === null ? null : Number(answer.replace(/,/gu, ''));
 
         return {

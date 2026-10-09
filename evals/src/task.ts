@@ -26,7 +26,7 @@ export type EvalPart = {
   readonly objectives: readonly [string, ...string[]];
   readonly turns: readonly [EvalTurn, ...EvalTurn[]];
   /** Reads that show the data the part's slates hold, made at the end of every trial and kept with its evidence. */
-  readonly evidence?: (call: EvidenceCall) => Promise<void>;
+  readonly evidence?: (call: EvidenceCall, workspace: string) => Promise<void>;
 };
 
 /** A slate call as a trial's evidence makes it: `slate.method(input)`, answered with what the slate returned. */

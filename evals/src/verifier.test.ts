@@ -134,13 +134,21 @@ describe('EvalVerifier', () => {
   });
 });
 
+/** A brief longer than the 500 characters a run summary keeps (core turn-lifecycle.ts), its file named past them. */
+const LONG_BRIEF = `Tally the waitlist signups per country. ${'The file is a CSV with a header row. '.repeat(14)}Write the totals to signups-by-country.json`;
+
 /**
  * An inspector over one live helper and one released, as core subordinates/inspection-path.ts answers: a path reaches
- * live children only, and a released helper is reached by its actor.
+ * live children only, so by name the released helper is missing, and every retained helper is reached by its actor from
+ * the root. Run summaries and events are previews; the canonical history retains the full run-linked assignment.
  */
 function inspecting(): VerifierSession {
-  const runs = (status: string, userMessage: string) => ({ view: 'runs' as const, page: { status: 'end' as const, items: [{ runId: 'inspection-run', startedAt: 10, status, userMessage }] } });
   const missing = { view: 'missing' as const, reason: 'missing', error: 'The requested subordinate or retained history is unavailable.' };
+
+  const actors = new Map([
+    ['actor-live', [{ status: 'error', brief: LONG_BRIEF }, { status: 'completed', brief: 'Retry the same tally' }]],
+    ['actor-done', [{ status: 'completed', brief: 'Write the totals' }]],
+  ]);
 
   return {
     ...session({}),
@@ -152,13 +160,22 @@ function inspecting(): VerifierSession {
         ] } });
       }
 
-      if (request.view !== 'runs') return Promise.resolve(missing);
+      const runs = request.path.length === 0 && 'actor' in request && request.actor !== undefined ? actors.get(request.actor) : undefined;
 
-      if (request.actor === 'actor-done' && request.path.length === 0) return Promise.resolve(runs('completed', 'Write the totals'));
+      if (runs === undefined) return Promise.resolve(missing);
 
-      if (request.actor === undefined && request.path.join('/') === 'ask-task-live') return Promise.resolve(runs('running', 'Write the ratings'));
+      if (request.view === 'runs') {
+        return Promise.resolve({ view: 'runs', page: { status: 'end', items: runs.map((run, index) => ({
+          runId: `run-${String(index)}`, startedAt: 10 + index, status: run.status, userMessage: run.brief.slice(0, 500),
+        })) } });
+      }
 
-      return Promise.resolve(missing);
+      if (request.view !== 'history') return Promise.resolve(missing);
+
+      return Promise.resolve({ view: 'history', page: { status: 'end', items: runs.map((run, index) => ({
+        id: `message-${String(index)}`, position: index, role: 'user', turnId: `turn-${String(index)}`,
+        runId: `run-${String(index)}`, content: run.brief, createdAt: 10 + index,
+      })) } });
     },
   };
 }
@@ -166,13 +183,67 @@ function inspecting(): VerifierSession {
 describe("a helper's runs", () => {
   // Staging f75f06932, 2026-10-01: both task helpers of a capture were dismissed once they answered, and their runs
   // read by name answered missing (kinu-logs/evals-fast/FINDINGS.md F3B), as every task helper's do.
-  test('a released helper is read by its actor, a live one by its name', async () => {
+  test('every helper is read by its actor, live or released, and each run by the brief that started it, whole', async () => {
     const work = await new EvalVerifier(inspecting(), [], 0, settledAtOnce).helperWork();
 
-    expect(work).toMatchObject([
-      { name: 'ask-task-live', status: 'working', runs: [{ startedAt: 10, status: 'running', userMessage: 'Write the ratings' }] },
+    expect(work).toEqual([
+      { name: 'ask-task-live', status: 'working', runs: [
+        { startedAt: 10, status: 'error', userMessage: LONG_BRIEF }, { startedAt: 11, status: 'completed', userMessage: 'Retry the same tally' },
+      ] },
       { name: 'ask-task-done', status: 'dismissed', runs: [{ startedAt: 10, status: 'completed', userMessage: 'Write the totals' }] },
     ]);
+  });
+
+  // delegation trial 3 (run 37880718948): the first brief named the report past the summary's cut, the retry named none.
+  test('a retry finishes the assignment whose brief names its file only past the summary\'s first 500 characters', async () => {
+    const work = await new EvalVerifier(inspecting(), [], 0, settledAtOnce).helperWork();
+
+    expect(finishedWork(work, 'signups-by-country.json')).toEqual(['ask-task-live']);
+  });
+
+  test('an absent run link cannot borrow a full assignment from a similar run or its preview', async () => {
+    const base = inspecting();
+
+    const connection: VerifierSession = {
+      ...base,
+      inspect: async (request) => {
+        const answer = await base.inspect(request);
+
+        if (answer.view !== 'history') return answer;
+
+        return { view: 'history', page: { status: 'end', items: answer.page.items.map((entry) => ({
+          ...entry, runId: `${entry.runId ?? ''}-different-run`,
+        })) } };
+      },
+    };
+
+    const work = await new EvalVerifier(connection, [], 0, settledAtOnce).helperWork();
+
+    expect(work.flatMap((helper) => helper.runs.map((run) => run.userMessage))).toEqual([null, null, null]);
+    expect(finishedWork(work, 'signups-by-country.json')).toEqual([]);
+  });
+
+  test('history paging finds the opening assignment, not a later steer from its run', async () => {
+    const base = inspecting();
+
+    const connection: VerifierSession = {
+      ...base,
+      inspect: async (request) => {
+        const answer = await base.inspect(request);
+
+        if (answer.view !== 'history' || request.view !== 'history') return answer;
+
+        if (request.page.cursor === undefined) return { view: 'history', page: { status: 'more', next: { before: 5 }, items: [{
+          id: 'steer', position: 5, role: 'user', turnId: 'turn', runId: 'run-0', content: 'Use integer counts', createdAt: 100,
+        }] } };
+
+        return answer;
+      },
+    };
+
+    const work = await new EvalVerifier(connection, [], 0, settledAtOnce).helperWork();
+
+    expect(work[0]?.runs[0]?.userMessage).toBe(LONG_BRIEF);
   });
 
   test('a reused helper must finish the assigned run, not just an earlier unrelated run', () => {

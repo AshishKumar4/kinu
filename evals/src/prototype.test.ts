@@ -43,3 +43,16 @@ test('a page, server or other slate standing in for the asked-for one is a proto
   expect(steps.map((step) => ['scratch/board.html', 'chess-test', 'http.server', 'localhost:8000'].findIndex((mark) => step.includes(mark))))
     .toEqual([0, 1, 2, 3]);
 });
+
+test('plans, briefs and reports about a browser check are not execution of a prototype', () => {
+  const words = 'Verify RPC and screenshot; do not run vite or write scratch.html';
+
+  const plans = [
+    { name: 'tasks', args: JSON.stringify({ op: 'add', titles: [words] }) },
+    { name: 'agents', args: JSON.stringify({ op: 'hire', mission: words }) },
+    { name: 'memory', args: JSON.stringify({ op: 'save', content: words }) },
+  ];
+
+  expect(prototypeSteps(plans, ['chess'])).toEqual([]);
+  expect(prototypeSteps([...plans, { name: 'web', args: JSON.stringify({ op: 'screenshot', url: 'http://localhost:8000' }) }], ['chess'])).toHaveLength(1);
+});

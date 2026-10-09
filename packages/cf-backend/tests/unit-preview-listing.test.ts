@@ -5,7 +5,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import * as v from 'valibot';
-import { isPreviewUrl, reconcilePreviewPorts, type ExposedPortList, type PinnedPreviewPort } from '@kinu.run/core';
+import { executorLabel, isPreviewUrl, reconcilePreviewPorts, type ExposedPortList, type PinnedPreviewPort } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { socketConnection, unreachableObjects } from "./helpers/bindings";
 import type { RecordedUserPlaneCalls } from './helpers/actor-harness';
@@ -144,7 +144,7 @@ describe('the preview listing of a used sandbox', () => {
     const listed = await agent.getExposedPorts('sandbox');
 
     expect(listed).toEqual({ ports: [], error: TERMINAL });
-    expect(afterPoll(pinned.ports, listed)).toEqual({ ports: pinned.ports, error: `sandbox: ${TERMINAL}`, starting: [] });
+    expect(afterPoll(pinned.ports, listed)).toEqual({ ports: pinned.ports, error: `${executorLabel('sandbox')}: ${TERMINAL}`, starting: [] });
   });
 
   // A sandbox that dies mid-restore sends no settle; the old poll healed that, so a page's open asks it once.

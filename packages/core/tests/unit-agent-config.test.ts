@@ -251,6 +251,7 @@ describe('AgentConfigStore — every key has a write path', () => {
     (c) => c.setLiveTrials(true),
     (c) => c.setHoldsPlans(),
     (c) => c.setHoldsTurns(),
+    (c) => c.setHoldsQuestions(),
     (c) => c.setLearning(false),
     (c) => c.setAdvisorEnabled(true),
     (c) => c.setAdvisorMinSeverity('blocker'),

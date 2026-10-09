@@ -1,6 +1,6 @@
 import * as v from 'valibot';
 import { decodeModelMessageValues, type RunEvent } from '../packages/core/src/index';
-import { helperAddress, ROOT } from '../evals/src/helper-address';
+import { helperAddress } from '../evals/src/helper-address';
 import type { KinuPublicSession, PublicBackgroundJob, PublicMessage } from '../evals/src/session';
 import { CANARY_PREFIX, canaryMarker, type CanaryLoad } from './canary-script';
 
@@ -39,7 +39,7 @@ export interface CanaryLedger {
 async function helperEvents(session: KinuPublicSession, child: {
   readonly name: string; readonly status: string; readonly actorReference: { readonly actorId: string } | null;
 }): Promise<RunEvent[]> {
-  const address = helperAddress(ROOT, child);
+  const address = helperAddress(child);
   const events: RunEvent[] = [];
 
   for (let cursor: { after: string } | undefined; ;) {

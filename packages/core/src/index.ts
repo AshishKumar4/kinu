@@ -1,3 +1,10 @@
+export {
+  AskingAgentSchema, OwnerAnswersSchema, OwnerQuestionStore,
+  type AskedQuestions, type AskingAgent, type OwnerAnswer, type QuestionStatus,
+} from './plans/owner-questions';
+
+export { AskOwnerInputSchema, OTHER_OPTION, OWNER_ANSWER_SIGNAL, type OwnerQuestion } from './types/owner-questions';
+
 export { initFiberTable, tableExists } from './identity/schema';
 
 export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult, type SubordinateChild } from './subordinates/inspection';
@@ -484,7 +491,7 @@ export {
   type ToolReach,
   type BuiltinToolName,
   type BuiltinToolSpec,
-  REPORT_TOOL, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, DEPS_GATED_TOOLS,
+  REPORT_TOOL, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, ASK_OWNER_TOOL, DEPS_GATED_TOOLS,
 } from './tools/registry';
 
 export {
@@ -637,6 +644,7 @@ export {
 } from './subordinates/depth';
 
 export {
+  askOwnerTool,
   buildBuiltinTools,
   codemodeSurface,
   type BuiltinToolDeps,
@@ -1180,7 +1188,7 @@ export {
 } from './memory/facts';
 
 export {
-  AccountMemoryStore, AccountProposalSchema, initAccountMemoryTables,
+  AccountMemoryStore, AccountMemoryProposalSchema, AccountProposalSchema, initAccountMemoryTables,
   type AccountMemory, type AccountMemoryProposal, type AccountMemoryView, type AccountNote, type AccountNoteHit, type AccountProposal,
   type AccountProposalFiling, type AccountProposer,
 } from './memory/account';
@@ -1996,7 +2004,7 @@ export type {
   NodeTranscriptView, NodeTranscriptCrumb, NodeTranscriptOrigin,
 } from './read-models/node-transcript';
 
-export { buildPendingActions, needsTheUser, ownerAsks, type AccountAsk, type OwnerAsk } from './read-models/pending-actions';
+export { buildPendingActions, needsTheUser, ownerAsks, type OwnerAsk } from './read-models/pending-actions';
 
 export { reviewParkedWrite, type ParkedWriteReview } from './read-models/write-preview';
 
@@ -2183,7 +2191,7 @@ export {
 } from './preview/preview-origin';
 
 export {
-  reconcilePreviewPorts,
+  previewPortTitle, reconcilePreviewPorts,
   type ExecutorPortRefresh, type ExposedPortList, type PinnedPreviewPort, type PreviewPortState,
 } from './preview/preview-ports';
 
@@ -2328,6 +2336,8 @@ export {
 } from './read-models/tool-call-grouping';
 
 export {
+  type PlanPageRef,
+  type PlanSurfaceKind,
   type SlateSurfaceKind,
   type SurfaceContent,
   type SurfaceKind,
@@ -2336,6 +2346,8 @@ export {
   SURFACES,
   landedSurface,
   openPortOf,
+  planOfSurface,
+  planSurface,
   pruneSlateReloads,
   surfaceHasContent,
 } from './read-models/surface-presence';

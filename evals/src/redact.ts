@@ -4,6 +4,18 @@ import { EVAL_WEB_IDENTITY_ENV } from '@kinu.run/test-utils';
 
 const JsonObjectSchema = v.record(v.string(), JsonValueSchema);
 
+const JsonText = v.pipe(v.string(), v.parseJson(), JsonValueSchema);
+
+/**
+ * Shapes the two catch-alls below would take for a credential though nobody keeps them secret, each told from one by its
+ * structure: a chess position's piece placement (eight ranks of digits and both cases of letters between slashes, the
+ * alphabet of base64), and a run's id, `run-<uuid>`, forty characters, which every ledger row names (7,130 rows of run
+ * 37880718948's evidence read `"runId":"<opaque>"`, so no row said which run it belonged to).
+ */
+const FEN_PLACEMENT = '(?:[1-8pnbrqkPNBRQK]{1,8}/){7}[1-8pnbrqkPNBRQK]{1,8}';
+
+const RUN_ID = 'run-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}';
+
 /**
  * The repository is public, so text a trial produced is scrubbed before it is stored or posted:
  * preview hosts carry a capability, and a tool error can echo a header. Patterns catch the
@@ -19,8 +31,8 @@ const SECRETS: readonly (readonly [RegExp, string])[] = [
   [/\b[0-9a-f]{32,}\b/gi, '<hex>'],
   // Base64 splits into short words at `+`, `/` and `=`, so it is matched as one run of its own
   // alphabet that mixes both cases and digits, as random bytes do and paths and prose do not.
-  [/(?<![A-Za-z0-9+/])(?=[A-Za-z0-9+/]*[0-9])(?=[A-Za-z0-9+/]*[A-Z])(?=[A-Za-z0-9+/]*[a-z])[A-Za-z0-9+/]{32,}={0,2}/g, '<base64>'],
-  [/\b[\w-]{40,}\b/g, '<opaque>'],
+  [new RegExp(`(?<![A-Za-z0-9+/])(?!${FEN_PLACEMENT}(?![A-Za-z0-9+/]))(?=[A-Za-z0-9+/]*[0-9])(?=[A-Za-z0-9+/]*[A-Z])(?=[A-Za-z0-9+/]*[a-z])[A-Za-z0-9+/]{32,}={0,2}`, 'g'), '<base64>'],
+  [new RegExp(`\\b(?!${RUN_ID}\\b)[\\w-]{40,}\\b`, 'g'), '<opaque>'],
 ];
 
 /** Shorter than this, a value is no credential worth the name, and scrubbing it would scrub words. */
@@ -59,4 +71,25 @@ export function redactJson(value: JsonValue, held: readonly string[] = HELD): Js
   if (!v.is(JsonObjectSchema, value)) return value;
 
   return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactJson(item, held)]));
+}
+
+/**
+ * A JSON text with its string values scrubbed and everything else as written, or the text scrubbed whole when it is not
+ * JSON (a file the agent wrote). Pretty when the text spans lines. Scrubbing the serialized text instead reads the `n`
+ * of a `\n` escape and the long word after it as one token, and leaves `\<opaque>`, an escape JSON refuses: 22 ledger
+ * rows of run 37880718948's evidence.
+ */
+function redactJsonText(text: string, held: readonly string[]): string {
+  const parsed = v.safeParse(JsonText, text);
+
+  if (!parsed.success) return redact(text, held);
+
+  return `${JSON.stringify(redactJson(parsed.output, held), null, text.trim().includes('\n') ? 2 : undefined)}${text.endsWith('\n') ? '\n' : ''}`;
+}
+
+/** The text of the file at `path`, scrubbed so a structured file stays one: a `.jsonl` file row by row, a `.json` file whole. */
+export function redactFile(path: string, text: string, held: readonly string[] = HELD): string {
+  if (path.endsWith('.jsonl')) return text.split('\n').map((row) => row.trim() === '' ? row : redactJsonText(row, held)).join('\n');
+
+  return path.endsWith('.json') ? redactJsonText(text, held) : redact(text, held);
 }

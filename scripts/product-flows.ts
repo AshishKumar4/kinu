@@ -2382,6 +2382,24 @@ export interface SlateShareVerdict {
   readonly afterStop: readonly string[];
 }
 
+/** Open the share dialog only once its capability graph has supplied the limits. */
+export async function openSlateShareDialog(page: Page, tile: string): Promise<void> {
+  await page.click(`${tile} [data-drive-menu]`);
+  await page.click(`${tile} [data-drive-share-slate]`);
+  await until(page, 'the share dialog\'s limits', `document.querySelector('[role="dialog"] [data-share-limits]') !== null`);
+}
+
+/** Submit the public share when its control can accept the click, then read the created link. */
+export async function submitPublicSlateShare(page: Page): Promise<string | null> {
+  await page.click('[data-share-access]');
+  await page.click('[data-share-access-option="public"]');
+  await until(page, 'the public share to be ready', `document.querySelector('[data-share-submit]:not([disabled])') !== null`);
+  await page.click('[data-share-submit]');
+  await until(page, 'the share to be made', `document.querySelector('[data-share-created]') !== null`);
+
+  return v.parse(v.nullable(v.string()), await page.evaluate(`document.querySelector('[role="dialog"] a[href]')?.href ?? null`));
+}
+
 /**
  * Row: a slate that calls nothing of its owner's shares from its tile, and stops.
  *
@@ -2398,20 +2416,14 @@ export async function slateSharesReachingNothing(target: FlowTarget): Promise<Sl
   try {
     const page = await driveWithSlate(target, workspace);
 
-    await page.click(`${slateTile(workspace)} [data-drive-menu]`);
-    await page.click(`${slateTile(workspace)} [data-drive-share-slate]`);
-    await until(page, 'the share dialog\'s limits', `document.querySelector('[role="dialog"] [data-share-limits]') !== null`);
+    await openSlateShareDialog(page, slateTile(workspace));
 
     const reachRow = v.parse(v.boolean(), await page.evaluate(`document.querySelector('[data-share-reach]') !== null`));
 
     const limitsStated = v.parse(v.array(v.number()), await page.$eval('[data-share-limits]',
       (element) => [...(element.textContent ?? '').matchAll(/\d+(?:\.\d+)?/gu)].map((number) => Number(number[0]))));
 
-    await page.click('[data-share-access]');
-    await page.click('[data-share-access-option="public"]');
-    await page.click('[data-share-submit]');
-    await until(page, 'the share to be made', `document.querySelector('[data-share-created]') !== null`);
-    const link = v.parse(v.nullable(v.string()), await page.evaluate(`document.querySelector('[role="dialog"] a[href]')?.href ?? null`));
+    const link = await submitPublicSlateShare(page);
     let copied: string | null = null;
 
     if (link !== null) {

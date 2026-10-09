@@ -375,14 +375,10 @@ describe("executor lifecycle state", () => {
   test("sandbox stat of a directory with a trailing slash still finds it", async () => {
     const handle = sandboxHandle();
     const seen: string[] = [];
-    const inner = handle.listFiles.bind(handle);
-    handle.listFiles = async (path: string) => {
+    handle.statFile = async (path: string) => {
       seen.push(path);
-      await inner(path);
 
-      if (path === "/") return { files: [{ name: "/mydir", type: "directory" as const, size: 0 }] };
-
-      return { files: [] };
+      return { type: 'directory', size: 0, mode: 0o40755, mtimeMs: 1 };
     };
 
     const executor = createSandboxExecutor(handle, { previewHostSuffix: "kinu.example.test" });
@@ -390,7 +386,7 @@ describe("executor lifecycle state", () => {
 
     expect(await files.stat("/mydir")).toMatchObject({ type: 'directory' });
     expect(await files.stat("/mydir/")).toMatchObject({ type: 'directory' });
-    expect(seen).toContain("/");
+    expect(seen).toEqual(['/mydir', '/mydir/']);
   });
 });
 

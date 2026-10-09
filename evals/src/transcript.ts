@@ -1,6 +1,6 @@
 import * as v from 'valibot';
 import {
-  BUILTIN_TOOL_NAMES, decodeModelMessageValues, JsonValueSchema, projectJsonValue, SUBMIT_PLAN_TOOL, TOOL_CALLS_PENDING, type RunEvent,
+  BUILTIN_TOOL_NAMES, decodeModelMessageValues, JsonValueSchema, projectJsonValue, SUBMIT_PLAN_TOOL, TOOL_CALLS_PENDING, type JsonValue, type RunEvent,
 } from '@kinu.run/core';
 import type { ModelMessage } from 'ai';
 import type { TranscriptEvent } from 'vitest-evals';
@@ -13,7 +13,7 @@ const ArgumentsSchema = v.record(v.string(), JsonValueSchema);
 
 const TextPartSchema = v.object({ type: v.literal('text'), text: v.string() });
 
-const ToolCallPartSchema = v.object({ type: v.literal('tool-call'), toolCallId: v.string(), input: v.unknown() });
+const ToolCallPartSchema = v.object({ type: v.literal('tool-call'), toolCallId: v.string(), input: JsonValueSchema });
 
 /** The native tools a turn can be offered; crafted tools run inside `eval`, so a call naming any other was invented. */
 const OFFERED_TOOLS: ReadonlySet<string> = new Set([...BUILTIN_TOOL_NAMES, SUBMIT_PLAN_TOOL]);
@@ -39,8 +39,8 @@ function stepText(messages: readonly ModelMessage[]): string {
  * a large call's arguments, which is where the code an agent writes lives; the step's messages keep
  * all of it.
  */
-function inputsOf(messages: readonly ModelMessage[]): Map<string, unknown> {
-  const inputs = new Map<string, unknown>();
+function inputsOf(messages: readonly ModelMessage[]): Map<string, JsonValue> {
+  const inputs = new Map<string, JsonValue>();
 
   for (const message of messages) {
     if (message.role !== 'assistant' || v.is(v.string(), message.content)) continue;
@@ -50,6 +50,17 @@ function inputsOf(messages: readonly ModelMessage[]): Map<string, unknown> {
 
       if (call.success) inputs.set(call.output.toolCallId, call.output.input);
     }
+  }
+
+  return inputs;
+}
+
+/** Every tool call in `events` as the model sent it, by call id: whole, where a ledger row keeps only a digest. */
+export function callInputs(events: readonly RunEvent[]): ReadonlyMap<string, JsonValue> {
+  const inputs = new Map<string, JsonValue>();
+
+  for (const event of events) {
+    if (event.type === 'step_finish') for (const [id, input] of inputsOf(decodeModelMessageValues(event.messages ?? []))) inputs.set(id, input);
   }
 
   return inputs;
@@ -67,7 +78,7 @@ export function toTranscript(events: readonly RunEvent[]): TranscriptEvent[] {
     const metadata = { runId: event.runId, timestamp: event.timestamp };
 
     if (event.type === 'run_start') {
-      const content = event.userMessage ?? `(the workspace started a run: ${event.caused_by ?? 'programmatic'})`;
+      const content = event.turn?.text ?? event.userMessage ?? `(the workspace started a run: ${event.caused_by ?? 'programmatic'})`;
       transcript.push({ type: 'message', role: 'user', content: redact(content), metadata });
     } else if (event.type === 'tool_call_end') {
       calls.push(event);

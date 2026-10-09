@@ -5,6 +5,7 @@ import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   JsonValueSchema,
   PlanReviewSchema,
+  AskingAgentSchema,
   ChatHistoryEntrySchema, SendStateSchema, type SendState,
   ORCHESTRATOR_AGENT_SLUG,
   hostedActorSocketPath,
@@ -70,6 +71,7 @@ import {
   type ForkPoint,
   type PendingDeviceConsent,
   type PlanReviewSurface,
+  type OwnerQuestionSurface,
 } from './agent-client';
 import * as v from 'valibot';
 
@@ -309,6 +311,7 @@ export class CloudAgentClient implements AgentClient {
   readonly localControls = null;
   readonly checkpoints: FileCheckpointSurface | null;
   readonly plans: PlanReviewSurface | null;
+  readonly questions: OwnerQuestionSurface | null;
   readonly inlineAttachmentLimitBytes = CLOUD_MAX_INLINE_ATTACHMENT_BYTES;
   readonly planes = null;
   readonly rename?: (displayName: string) => Promise<{ name: string; displayName: string }>;
@@ -369,6 +372,13 @@ export class CloudAgentClient implements AgentClient {
       restore: async (dir, id) => v.parse(
         FileRestoreResultSchema, await this.callRpc('restoreFileCheckpoint', [dir, id]),
       ),
+    };
+    // The agent's questions, the workspace agent's: a window on a subordinate answers its hirer, not the owner.
+    this.questions = subordinateName ? null : {
+      // A hosted agent's questions are answered from the web app's stack, where its window is.
+      list: async () => v.parse(v.array(AskingAgentSchema), await this.callRpc('listOwnerQuestions', [])).filter((asking) => asking.actor === null),
+      answer: async (id, answers) => { await this.callRpc('answerOwnerQuestions', [id, v.parse(JsonValueSchema, answers)]); },
+      dismiss: async (id) => v.parse(v.object({ closed: v.number() }), await this.callRpc('dismissOwnerQuestions', [id])),
     };
     // The sealed plan RPCs (`agent-rpc-access.ts`).
     this.plans = subordinateName ? null : {

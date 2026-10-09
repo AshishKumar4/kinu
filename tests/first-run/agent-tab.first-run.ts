@@ -74,6 +74,41 @@ const observations: EvalObservation[] = [];
  * on the first live drive, which reported only "expected model calls
  * expected, observed 0" over four decided subgoals.
  */
+/** Why typing into the window while it works failed, or nothing. */
+async function typedReply(tab: PublicSocket): Promise<string> {
+  const [typing] = await Promise.allSettled([tab.chat(TAB_WHILE_WORKING)]);
+
+  return typing.status === 'rejected' ? String(typing.reason) : '';
+}
+
+/**
+ * Words typed while the agent works. Its turn runs in its own isolate, whose word that it took them, and where they
+ * went, reaches only this window. The working ask's answer is slow, so the words follow the turn's open, which the
+ * window hears as the transcript it is sent.
+ */
+async function midTurnSendTold(tab: PublicSocket): Promise<EvalSubgoal> {
+  const turnOpened = tab.broadcast('cf_agent_chat_messages');
+  // Settled, not awaited: the words typed while it works are this subgoal's, whatever the ask itself answers.
+  const working = Promise.allSettled([tab.chat(TAB_WORKING_ASK)]);
+  const typed = await turnOpened ? await typedReply(tab) : 'the working ask\'s turn never opened in the window';
+
+  await working;
+
+  const told = tab.heard().flatMap(({ type, frame }) => {
+    const steer = type === 'steer_status' ? v.safeParse(SteerFrameSchema, frame) : null;
+
+    return steer?.success === true && steer.output.text === TAB_WHILE_WORKING ? [steer.output.status] : [];
+  });
+
+  const why = typed === '' ? '' : `; ${typed.slice(0, 300)}`;
+
+  return {
+    what: 'mid-turn-send-told',
+    reached: told[0] === 'queued' && told.slice(1).some((status) => status === 'landed' || status === 'turn'),
+    detail: told.length > 0 ? `the window was told ${told.join(' then ')}${why}` : `the window heard no steer_status for the words${why}`,
+  };
+}
+
 function announce(subgoals: readonly EvalSubgoal[]): readonly EvalSubgoal[] {
   for (const subgoal of subgoals) {
     console.warn(`    [agent-tab] ${subgoal.what}: ${subgoal.reached ? 'ok' : 'MISSED'} — ${subgoal.detail}`);
@@ -225,39 +260,7 @@ describe(SUITE, () => {
               : `no answer on the tab socket: ${replyFailure.slice(0, 300)}`,
           });
 
-          // ── Words typed while the agent works. Its turn runs in its own isolate, whose word that it took them,
-          // and where they went, reaches only this window. The working ask's answer is slow, so the words
-          // follow the turn's open, which the window hears as the transcript it is sent. ──
-          const turnOpened = tabSocket.broadcast('cf_agent_chat_messages');
-          // Settled, not awaited: the words typed while it works are this subgoal's, whatever the ask itself answers.
-          const working = Promise.allSettled([tabSocket.chat(TAB_WORKING_ASK)]);
-          let typedFailure = '';
-
-          if (await turnOpened) {
-            try {
-              await tabSocket.chat(TAB_WHILE_WORKING);
-            } catch (error) {
-              typedFailure = error instanceof Error ? error.message : String(error);
-            }
-          } else {
-            typedFailure = 'the working ask\'s turn never opened in the window';
-          }
-
-          await working;
-
-          const told = tabSocket.heard().flatMap(({ type, frame }) => {
-            const steer = type === 'steer_status' ? v.safeParse(SteerFrameSchema, frame) : null;
-
-            return steer?.success === true && steer.output.text === TAB_WHILE_WORKING ? [steer.output.status] : [];
-          });
-
-          subgoals.push({
-            what: 'mid-turn-send-told',
-            reached: told[0] === 'queued' && told.slice(1).some((status) => status === 'landed' || status === 'turn'),
-            detail: told.length > 0
-              ? `the window was told ${told.join(' then ')}${typedFailure === '' ? '' : `; ${typedFailure.slice(0, 200)}`}`
-              : `the window heard no steer_status for the words${typedFailure === '' ? '' : `: ${typedFailure.slice(0, 300)}`}`,
-          });
+          subgoals.push(await midTurnSendTold(tabSocket));
 
           return announce(subgoals);
         } finally {

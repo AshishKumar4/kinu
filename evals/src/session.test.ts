@@ -166,17 +166,20 @@ test('trial usage walks retained descendants and every run and event page withou
     timestamp: `2026-10-02T19:00:0${String(index)}Z`, usage: { input, cacheRead, output },
   } satisfies Extract<RunEvent, { type: 'step_finish' }>);
 
-  const child = (name: string) => ({ name, status: 'idle', lifetime: 'workspace', actorReference: { actorId: name } });
+  const child = (name: string) => ({ name, status: 'dismissed', lifetime: 'task', actorReference: { actorId: name } });
   const run = (runId: string) => ({ runId, startedAt: 10, status: 'completed', userMessage: 'work' });
 
   const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: socketOnly,
     websocket: { message: answerRpcs((request) => {
       const query = v.parse(SubordinateInspectionRequestSchema, request.args[0]);
 
+      // Retired hires no longer resolve through a name path, even when an actor id is also supplied.
+      if (query.path.length > 0) return { view: 'missing', reason: 'missing', error: 'The requested subordinate or retained history is unavailable.' };
+
       if (query.view === 'children') {
         const items = [];
 
-        if (query.path.length === 0) items.push(child('helper'));
+        if (query.actor === undefined) items.push(child('helper'));
         else if (query.actor === 'helper') items.push(child('nested'));
 
         return v.parse(JsonValueSchema, { view: 'children', page: { status: 'end', items } });
@@ -246,11 +249,11 @@ test('executor RPC decoding preserves refusal provenance and successful refusal-
   } finally { await session.teardown(); await server.stop(true); }
 });
 
-test('clearing a conversation waits for the clear the deployment tells another socket, not the sender', async () => {
+test('clearing a conversation is the callable the Clear control calls: done when it answers, refused while a turn runs', async () => {
   const requested = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
-  const connections = new Set<ServerWebSocket>();
   let messages = [{ id: 'old', role: 'user', parts: [{ type: 'text', text: 'previous conversation' }] }];
+  let refusal: string | undefined = 'a turn is running';
 
   const server = Bun.serve({
     port: 0, hostname: '127.0.0.1',
@@ -260,17 +263,21 @@ test('clearing a conversation waits for the clear the deployment tells another s
       return socketOnly(request, upgrading);
     },
     websocket: {
-      open(socket) { connections.add(socket); },
-      close(socket) { connections.delete(socket); },
       async message(socket, data) {
-        if (v.parse(v.object({ type: v.string() }), JSON.parse(data.toString())).type !== 'cf_agent_chat_clear') return;
+        const request = v.parse(RpcRequestFrameSchema, JSON.parse(data.toString()));
+
+        if (request.method !== 'clearConversation') return;
         requested.resolve();
         await release.promise;
-        messages = [];
 
-        for (const peer of connections) {
-          if (peer !== socket) peer.send(JSON.stringify({ type: 'cf_agent_chat_clear' }));
+        if (refusal !== undefined) {
+          socket.send(rpcReplyFrame({ requestId: request.id, error: refusal }));
+
+          return;
         }
+
+        messages = [];
+        socket.send(rpcReplyFrame({ requestId: request.id }));
       },
     },
   });
@@ -281,14 +288,18 @@ test('clearing a conversation waits for the clear the deployment tells another s
   }, 'probe');
 
   try {
+    expect(isAgentRpcMethod('clearConversation')).toBe(true);
     let cleared = false;
-    const clear = session.clearConversation().then(() => { cleared = true; });
+    const refused = session.clearConversation().then(() => { cleared = true; });
 
     await requested.promise;
-    expect(await session.history()).toEqual([{ id: 'old', role: 'user', text: 'previous conversation' }]);
     expect(cleared).toBe(false);
     release.resolve();
-    await clear;
+    await expect(refused).rejects.toThrow('a turn is running');
+    expect(await session.history()).toEqual([{ id: 'old', role: 'user', text: 'previous conversation' }]);
+
+    refusal = undefined;
+    await session.clearConversation();
     expect(await session.history()).toEqual([]);
   } finally {
     release.resolve();

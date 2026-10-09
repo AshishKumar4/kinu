@@ -1,10 +1,16 @@
 import { isPreviewUrl } from './preview-origin';
+import { executorLabel } from '../read-models/executors';
 
 export interface PinnedPreviewPort {
   executor: string;
   port: number;
   url: string;
   name?: string;
+}
+
+/** A preview's own name, or its environment's human label and port. */
+export function previewPortTitle(port: PinnedPreviewPort): string {
+  return port.name === undefined || port.name === '' ? `${executorLabel(port.executor)} :${port.port}` : port.name;
 }
 
 export interface ExposedPortList {
@@ -36,7 +42,7 @@ export function reconcilePreviewPorts(
 
   for (const { executor, result } of refreshes) {
     if (result.error) {
-      failures.push(`${executor}: ${result.error}`);
+      failures.push(`${executorLabel(executor)}: ${result.error}`);
       continue;
     }
 
@@ -70,7 +76,7 @@ export function reconcilePreviewPorts(
     }
 
     if (invalidPort !== null) {
-      failures.push(`${executor}: invalid preview registration for port ${invalidPort}`);
+      failures.push(`${executorLabel(executor)}: invalid preview registration for port ${invalidPort}`);
       continue;
     }
 

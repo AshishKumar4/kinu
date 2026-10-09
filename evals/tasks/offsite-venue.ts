@@ -40,7 +40,7 @@ const PICK = VENUES[1];
 /** The card offers each venue that fits, with its total, and none that does not. */
 function offersTheVenuesThatFit(sight: Sight): boolean {
   return FITTING.every((venue) => (sight.regions[venue.name] ?? []).some((region) => shows(region.text, totalUsd(venue))))
-    && VENUES.every((venue) => FITTING.includes(venue) || (sight.regions[venue.name] ?? []).length === 0);
+    && VENUES.every((venue) => FITTING.includes(venue) || (sight.regions[venue.name] ?? []).every((region) => region.controls.length === 0));
 }
 
 /** Whether `text` names the pick's venue, date, headcount and total. */

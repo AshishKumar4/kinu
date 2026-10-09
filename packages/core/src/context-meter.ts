@@ -32,13 +32,16 @@ export interface ContextComposition {
 /** Structural rather than the AI SDK's `ToolSet` so the meter stays a leaf. */
 export type ToolDefsLike = Readonly<Record<string, Partial<Pick<ToolSet[string], 'description' | 'inputSchema'>> | undefined>>;
 
-export type SystemText = string | SystemModelMessage | undefined;
+export type SystemText = string | SystemModelMessage | readonly SystemModelMessage[] | undefined;
 
 function systemText(system: SystemText): string {
   if (system === undefined) return '';
   const text = v.safeParse(v.string(), system);
 
-  return text.success ? text.output : v.parse(v.object({ content: v.string() }), system).content;
+  if (text.success) return text.output;
+
+  return v.parse(v.union([v.pipe(v.object({ content: v.string() }), v.transform((block) => [block])), v.array(v.object({ content: v.string() }))]), system)
+    .map((block) => block.content).join('\n\n');
 }
 
 /** Frozen messages and a turn's schemas are measured once. */

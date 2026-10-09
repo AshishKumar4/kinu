@@ -15,7 +15,9 @@
  *   bun scripts/reset.ts plan <environment>           what a reset deletes, read from wrangler.jsonc
  *   bun scripts/reset.ts wipe <environment> <record>  delete it, recorded in <record> and the releases bucket;
  *                                                     production asks for `reset production` typed at a terminal
- *   bun scripts/reset.ts pending <environment>        the tag of a reset whose build never uploaded, or `none`
+ *   bun scripts/reset.ts pending <environment> <record>  the tag of a reset whose build never uploaded, or `none`;
+ *                                                     the newest reset of the Worker, if any, written to <record> for
+ *                                                     the pre-upload gate, which defers exactly the rows it deleted
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -25,8 +27,10 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 import { evalSessionPath } from '@kinu.run/test-utils';
 import { deleteApplicationByRest, deleteR2Prefix, deletedByRest, restApiToken } from './cloudflare-rest';
 import { snapshotRegistry } from '../packages/devbox/src/snapshot-registry';
-import { type ContainerApplication, containerApplications, deployment, why, wrangler } from './infra-cloudflare';
-import { type DeployedConfig, INFRA_ENVIRONMENTS, type InfraEnvironment, deployedConfig, liveClasses } from './infra-manifest';
+import { type ContainerApplication, type DeployedBinding, containerApplications, deployment, why, wrangler } from './infra-cloudflare';
+import {
+  type DeployedConfig, INFRA_ENVIRONMENTS, type InfraEnvironment, type Resource, deployedConfig, liveClasses,
+} from './infra-manifest';
 
 /** What one reset deleted, or is deleting. */
 export const ResetSchema = v.object({
@@ -54,13 +58,17 @@ export const LATEST_RESET_KEY = 'resets/latest.json';
 /** The words a production reset is confirmed with. */
 export const PRODUCTION_CONFIRMATION = 'reset production';
 
+/** The one binding the placeholder carries, the version metadata it names itself with. Every other binding of the
+ *  Worker is gone while it serves, which is what lets the pre-upload gate tell which rows a reset owes. */
+const PLACEHOLDER_BINDING = 'CF_VERSION_METADATA';
+
 /** It names its own version on every answer, as the product does (`x-kinu-version`), so a deploy's smoke test can tell
  *  the placeholder still answering at an edge from the build it deployed. */
 const PLACEHOLDER = `const notice = { ok: false, resetting: true, build: null, message: 'Kinu is being reset to a fresh deployment. Back in a few minutes.' };
 export default {
   async fetch(request, env) {
     const health = new URL(request.url).pathname === '/api/health';
-    const headers = { 'content-type': 'application/json', 'retry-after': '300', 'x-kinu-version': env.CF_VERSION_METADATA.id };
+    const headers = { 'content-type': 'application/json', 'retry-after': '300', 'x-kinu-version': env.${PLACEHOLDER_BINDING}.id };
     return new Response(JSON.stringify(notice), { status: health ? 200 : 503, headers });
   },
 };
@@ -81,6 +89,15 @@ const StamplessSchema = v.pipe(v.string(), v.parseJson(), v.object({ build: v.nu
 export interface Serving {
   readonly versionId: string;
   readonly bound: ReadonlyMap<string, string>;
+}
+
+/** What a deployed version serves, read off its bindings. */
+export function servingOf(versionId: string, bindings: readonly DeployedBinding[]): Serving {
+  return {
+    versionId,
+    bound: new Map(bindings.flatMap((binding) => (binding.type === 'durable_object_namespace' && binding.target !== undefined
+      && binding.namespace !== undefined ? [[binding.target, binding.namespace] as const] : []))),
+  };
 }
 
 /**
@@ -170,11 +187,7 @@ function cloudflareTarget(environment: InfraEnvironment, config: DeployedConfig,
 
       if (live.state !== 'deployed') throw new Error(`${worker} serves no version to reset: ${live.state === 'unknown' ? live.reason : 'it has no deployment'}`);
 
-      return {
-        versionId: live.versionId,
-        bound: new Map(live.bindings.flatMap((binding) => (binding.type === 'durable_object_namespace' && binding.target !== undefined
-          && binding.namespace !== undefined ? [[binding.target, binding.namespace] as const] : []))),
-      };
+      return servingOf(live.versionId, live.bindings);
     },
     applications: () => {
       const listed = containerApplications();
@@ -195,7 +208,7 @@ function cloudflareTarget(environment: InfraEnvironment, config: DeployedConfig,
         compatibility_date: config.compatibility_date,
         workers_dev: false,
         routes: config.routes,
-        version_metadata: { binding: 'CF_VERSION_METADATA' },
+        version_metadata: { binding: PLACEHOLDER_BINDING },
         exports: Object.fromEntries(classes.map((name) => [name, { type: 'durable-object', state: 'deleted' }])),
       }));
 
@@ -261,14 +274,31 @@ function record(target: ResetTarget, file: string, reset: Reset): void {
   for (const key of [`resets/${reset.tag}.json`, LATEST_RESET_KEY]) target.putRecord(key, file);
 }
 
-/** A version that binds no class is a reset's placeholder: this reset, then, which stopped before it was done or
- *  finished before its build uploaded. Only its record can say which, and what is left. */
 /** The reset `worker` is still in: it serves a placeholder, binding no class, that the newest record names. Its build
  *  never uploaded, so its classes are gone and the next deploy creates them. */
 export function pendingReset(worker: string, live: Serving, latest: Reset | undefined): Reset | undefined {
   if (live.bound.size !== 0 || latest === undefined || latest.worker !== worker) return undefined;
 
   return latest.placeholderVersion === '' || latest.placeholderVersion === live.versionId ? latest : undefined;
+}
+
+/**
+ * The infrastructure rows `reset` deleted and a deploy recreates, by the ids every infra report keys resources on:
+ * the namespace of each class it deleted and each container application it deleted, and — while `live` is still its
+ * placeholder — every binding the placeholder does not carry, out of `resources`. Only the pre-upload gate of a
+ * `--reset` deploy asks; a version that is not the placeholder carries its own bindings, so the record then answers
+ * for its classes and applications alone.
+ */
+export function resetResourceIds(reset: Reset, live: Serving | undefined, resources: readonly Resource[]): readonly string[] {
+  const placeholder = live !== undefined && live.versionId === reset.placeholderVersion;
+
+  return [
+    ...reset.classes.map((entry) => `durable-object.${reset.worker}:${entry.className}`),
+    ...reset.applications.map((application) => `container.${application.name}`),
+    ...placeholder
+      ? resources.filter((resource) => resource.kind === 'binding' && resource.binding !== PLACEHOLDER_BINDING).map((resource) => resource.id)
+      : [],
+  ];
 }
 
 function resumed(worker: string, live: Serving, target: ResetTarget): Reset {
@@ -441,16 +471,19 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
     return 0;
   }
 
-  if (known && command === 'pending' && recordFile === undefined) {
+  if (known && command === 'pending' && recordFile !== undefined) {
     const { config } = plan(environment);
+    const worker = config.name ?? '';
     const target = cloudflareTarget(environment, config, scratch);
+    const latest = target.latest();
 
-    console.log(pendingReset(config.name ?? '', target.serving(), target.latest())?.tag ?? 'none');
+    if (latest?.worker === worker) writeFileSync(recordFile, JSON.stringify(latest));
+    console.log(pendingReset(worker, target.serving(), latest)?.tag ?? 'none');
 
     return 0;
   }
 
-  console.error('usage: bun scripts/reset.ts plan <environment> | wipe <environment> <record> | pending <environment>');
+  console.error('usage: bun scripts/reset.ts plan <environment> | wipe <environment> <record> | pending <environment> <record>');
 
   return 2;
 }

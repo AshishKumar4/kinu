@@ -30,6 +30,8 @@ import {
   CLI_BEARER_HEADER,
   CLI_SCOPES_HEADER,
   SESSION_BEARER_HEADER,
+  SESSION_AUTHORITY_REVOKED,
+  WEBSOCKET_POLICY_CLOSE,
   cliBearerConnectionTag,
   cliBearerFromTags,
   cliScopesConnectionTag,
@@ -43,7 +45,7 @@ import {
 import { codemodeSurface, hostedWindowMay, PAGE_KEEPALIVE, readsWrittenBy, requiredRpcAccess, ROSTER_READS, rpcMovesOverview, type LiveRead, type SqlExec } from "@kinu.run/core";
 import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
-import { attempt, createAgentTracing, hold, recording, renderThrownChain, type AgentTracing, settle, settleSync, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
+import { attempt, attemptInItsWords, createAgentTracing, hold, recording, renderThrownChain, type AgentTracing, settle, settleSync, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
 import {
   createActorCompaction, type CompactionExtension,
   createCompactionStateStore,
@@ -122,7 +124,7 @@ import {
   inheritedContextFromTranscript,
   type PlanDecisionOutcome,
   type PlanReview, type ReviewAnnotation,
-  type PlanReviewDecision, type PlanReviewResult, type ReplyToCommentToolDeps, type SubmitPlanToolDeps,
+  type PlanReviewDecision, type PlanReviewResult, type ReplyToCommentToolDeps, type SubmitPlanToolDeps, type AskingAgent, type OwnerAnswer,
   answerParentRpc,
   type ParentExecResult,
   type ParentRpcWrite,
@@ -157,7 +159,7 @@ import {
   resolveModelRoute, completeOnRoute, routedLlm, tierRefusals, type TierRefusals, type ModelRouteResolution,
   narrowToolSurface, effectiveRoleCatalog, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, requireCodemodeMember, inWorkMode,
   toolSurfaceTokens, McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
-  SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, REPORT_TOOL, planSubmissionReach,
+  SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, ASK_OWNER_TOOL, OwnerAnswersSchema, REPORT_TOOL, planSubmissionReach,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ProfileCatalogEnvelope,
   toolsInWorkMode, type TaskPlan, withTaskPlan, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
@@ -258,10 +260,6 @@ type ActorJobSeams = Pick<BackgroundJobRunnerDeps,
   readonly notifySettled?: (job: BackgroundJob) => void;
 };
 
-/** The agents SDK treats this close code as terminal (`isTerminalCloseEvent`), so a
- * client whose authority is gone stops reconnecting. */
-const WEBSOCKET_POLICY_CLOSE = 1008;
-
 /**
  * How long an alarm waits for the programs in flight, from its start: nine tenths of the wall an alarm handler is
  * given (do.alarm.wall_ms), so the platform never ends the handler mid-wait. A handler ended at its wall resets the
@@ -271,7 +269,6 @@ const ALARM_PROGRAM_WAIT_MS = Math.floor(PLATFORM_CATALOG['do.alarm.wall_ms'].li
 
 const CLI_AUTHORITY_REVOKED = 'This CLI authorization is invalid. Sign in again with: kinu auth';
 
-const SESSION_AUTHORITY_REVOKED = 'This session has been signed out. Sign in again.';
 
 /** Text-only: attachment parts are dropped here but still reach the model via
  * `host.defaultInference()` (see _transformInferenceResult). */
@@ -355,6 +352,8 @@ export interface ActorToolDeps {
   submitPlan?: SubmitPlanToolDeps;
   /** Present while the owner's sent-back review holds comments the agent may answer. */
   replyToComment?: ReplyToCommentToolDeps;
+  /** Present where a person is the conversation partner: the workspace's own agent. */
+  askOwner?: true;
 }
 
 /** BUILTIN_TOOLS filtered to what this actor's deps wire; the prompt and activeTools must not
@@ -373,6 +372,14 @@ function actorAgentsActions(deps: ActorToolDeps, swarms: boolean): AgentsOp[] {
 }
 
 /** The owner's review calls on one hosted agent's plans, answered by its isolate. */
+/** Agents' questions to the owner, each in its own isolate (D9), the workspace agent's included: answered by the asking
+ *  agent's id. */
+export interface HostedOwnerQuestions {
+  list(): Promise<AskingAgent[]>;
+  answer(actorId: string, id: string, answers: readonly OwnerAnswer[]): Promise<void>;
+  dismiss(actorId: string, id: string): Promise<number>;
+}
+
 export interface HostedPlanReviews {
   active(): Promise<PlanReview | null>;
   saveAnnotations(id: string, revision: number, annotations: ReviewAnnotation[]): Promise<PlanReviewResult>;
@@ -743,6 +750,37 @@ export abstract class ActorAgent extends Agent<Env> {
     feedback?: string,
   ): Promise<PlanDecisionOutcome> {
     return await settle(Effect.flatMap(this.windowPlans(), (plans) => Effect.promise(async () => await plans.decide(id, revision, decision, feedback))));
+  }
+
+  /** Recent questions to the owner, every agent's from its own isolate, the workspace agent's included: the open ones for
+   *  the attention stack, each for its call's record. */
+  @callable()
+  async listOwnerQuestions(): Promise<AskingAgent[]> {
+    return await this.hostedQuestions().list();
+  }
+
+  /** The owner's answer: the asking call's result, and the turn that continues from it, in the agent that asked
+   *  (`actor`; null for the workspace agent). */
+  @callable()
+  async answerOwnerQuestions(id: string, answers: JsonValue, actor: JsonValue = null): Promise<void> {
+    const parsed = v.safeParse(v.tuple([OwnerAnswersSchema, v.nullable(v.string())]), [answers, actor]);
+
+    return settle(Effect.suspend(() => {
+      if (!parsed.success) return Effect.fail(new KinuError('bad_input', `answers: ${parsed.issues[0].message}`));
+      const [answered, asker] = parsed.output;
+
+      return attemptInItsWords('unavailable', () => this.hostedQuestions().answer(asker ?? this.actorHandle().actorId, id, answered));
+    }));
+  }
+
+  /** Closed unanswered; the agent reads that at its next turn, and what waited behind the questions runs. */
+  @callable()
+  async dismissOwnerQuestions(id: string, actor: JsonValue = null): Promise<{ readonly closed: number }> {
+    const asker = v.safeParse(v.nullable(v.string()), actor);
+
+    if (!asker.success) return settle(Effect.fail(new KinuError('bad_input', 'actor: an agent id, or null for the workspace agent')));
+
+    return { closed: await this.hostedQuestions().dismiss(asker.output ?? this.actorHandle().actorId, id) };
   }
 
   /** The orchestrator answers with the root budget; a facet actor answers from durable storage,
@@ -1762,6 +1800,8 @@ export abstract class ActorAgent extends Agent<Env> {
   /** A hosted agent's plan reviews, in its own isolate; null for a name this workspace holds no agent under. */
   protected abstract hostedPlanReviews(actorId: string): HostedPlanReviews | null;
 
+  protected abstract hostedQuestions(): HostedOwnerQuestions;
+
   /** An owner's words to an agent, resolved once its chat has reserved them, as the root's `admit` is. */
   protected abstract hostedAdmit(actorId: string, input: { readonly text: string; readonly files: readonly PromptFile[]; readonly id: string; readonly mode: WorkMode }): Promise<void>;
 
@@ -2752,6 +2792,7 @@ export abstract class ActorAgent extends Agent<Env> {
       const hooks: CFRuntimeHooks = {
         deferrals: () => this.deferralChannel(),
         slate: (operation) => this.slate(operation),
+        slateBuild: (slate) => this.slateBuild(slate),
         reportModelCall: (report) => this.reportModelCall(report),
         modelOperations: this.modelOperations,
         liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
@@ -2823,6 +2864,11 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Every actor's slate operations run on the object that owns its workspace, as this actor. */
   async slate(operation: SlateOperation): Promise<SlateCallResult> {
     return workspaceOwner(this.env, this.workspaceName()).slateAs(this.slateCaller(), operation);
+  }
+
+  /** Whether a slate still builds, asked as this actor; a check, never a preview. */
+  async slateBuild(slate: string): Promise<SlateCallResult> {
+    return workspaceOwner(this.env, this.workspaceName()).slateBuildAs(this.slateCaller(), slate);
   }
 
   /**
@@ -3199,7 +3245,7 @@ export abstract class ActorAgent extends Agent<Env> {
       }),
       files: () => ({
         vfs: this.rt.toolFiles, home: this.rt.storage.home, planes: this.rt.planes, memory: this.rt.memory, ledger: this.acc.files, budget: this.acc.context,
-        slate: (operation) => this.slate(operation),
+        slateBuild: (slate) => this.slateBuild(slate),
       }),
       // `this.taskList` is the store the turn's snapshot reads; the role switch is the native `tasks` tool's.
       tasks: () => ({ list: this.taskList, config: this.config, roleSwitch: agentRoleSwitch(() => this.operationProfile()?.inputs?.envelope ?? null) }),
@@ -3753,7 +3799,7 @@ export abstract class ActorAgent extends Agent<Env> {
         account: this.accountMemory({ by: 'agent', agent: this.actorHandle().name }),
         webSearch: this.ownedModelServices.getWebSearchProvider(),
         jobs: { jobRunner: this.jobRunner, backgroundable: BACKGROUNDABLE_TOOLS, mode: () => this.turnWorkMode() },
-        slate: (operation) => this.slate(operation),
+        slateBuild: (slate) => this.slateBuild(slate),
       };
 
       if (actorDeps.report) builtinDeps.report = actorDeps.report;
@@ -3761,6 +3807,8 @@ export abstract class ActorAgent extends Agent<Env> {
       if (actorDeps.submitPlan && this.submitsPlans(mode)) builtinDeps.submitPlan = actorDeps.submitPlan;
 
       if (actorDeps.replyToComment) builtinDeps.replyToComment = actorDeps.replyToComment;
+
+      if (actorDeps.askOwner) builtinDeps.askOwner = true;
       const toolsets = buildActorTools(builtinDeps);
 
       if (claimScope === undefined) {
@@ -4243,6 +4291,7 @@ export abstract class ActorAgent extends Agent<Env> {
       wiredToolNames: (mode) => [
         ...(turnActorDeps.submitPlan && this.submitsPlans(mode) ? [SUBMIT_PLAN_TOOL] : []),
         ...(turnActorDeps.replyToComment ? [REPLY_TO_COMMENT_TOOL] : []),
+        ...(turnActorDeps.askOwner ? [ASK_OWNER_TOOL] : []),
       ],
       // `agent` / `llm` are reachable only inside `eval`: derived from the providers wired for this mode.
       codemodeCapabilities: (mode) => codemodeCapabilitiesFor(this.ownNamespaces(mode)),

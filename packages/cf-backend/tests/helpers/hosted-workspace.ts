@@ -152,6 +152,7 @@ export async function hostedWorkspace(
     logActivity: () => undefined,
     tracing: () => createAgentTracing({ tracer: createRecordingTracer(), isolateGen: 1, selfPath: [], actor: { id: main.actorId, kind: 'main' } }),
     slate: () => Promise.resolve({ ok: false, reason: 'unavailable', error: 'no slate host in this fixture' }),
+    slateBuild: () => Promise.resolve({ ok: false, reason: 'unavailable', error: 'no slate host in this fixture' }),
     deferrals: () => undefined,
     refinementLane: () => () => Promise.resolve(),
     chosenLoopOrigin: (record) => chosen.get(record.actorId) ?? null,

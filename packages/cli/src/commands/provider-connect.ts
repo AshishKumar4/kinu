@@ -124,7 +124,7 @@ export const PROVIDER_CONNECTORS: readonly ProviderDescriptor[] = Object.freeze(
   {
     id: 'opencode',
     label: 'OpenCode',
-    blurb: 'Uses the providers and sign-ins from the opencode CLI on this computer.',
+    blurb: 'Uses the providers and sign-ins from the opencode CLI on this PC.',
   },
 ] satisfies readonly ProviderDescriptor[]).map((descriptor) => Object.freeze(descriptor)));
 

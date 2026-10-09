@@ -1,12 +1,13 @@
 import type { SandboxHandle } from '../../src/index';
 
-/** Lifecycle surface every fake handle must carry; suites that never touch processes spread this in. */
+/** Unused native stat and lifecycle routes: file fixtures override statFile with their filesystem's metadata. */
 export const sandboxHandleLifecycle: Pick<
   SandboxHandle,
   | 'ensureReady' | 'startSupervisedProcess' | 'stopSupervisedProcess'
-  | 'listSupervisedProcesses' | 'portToken' | 'notePortRemoved' | 'resize' | 'portListeners' | 'answerRest'
+  | 'listSupervisedProcesses' | 'portToken' | 'notePortRemoved' | 'resize' | 'portListeners' | 'answerRest' | 'statFile'
 > = {
   ensureReady: async () => {},
+  statFile: async () => { throw new Error('this fixture does not read native metadata'); },
   startSupervisedProcess: async () => ({ processId: 'proc-1' }),
   stopSupervisedProcess: async () => ({ stopped: true }),
   listSupervisedProcesses: async () => [],

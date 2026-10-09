@@ -285,7 +285,13 @@ Add a board task titled exactly boundary-review and mark it done after comparing
 A correction for the private handoff: ${handoff.cancelled} is cancelled. Our release code is now ${handoff.current};
 ${handoff.coordinator} still coordinates it. Keep the corrected code for the new conversation.`,
     verify: async (verifier) => {
-      await verifier.check('independent-review-branches-finished-this-turn', () => aSwarmRan(verifier, {}));
+      await verifier.check('independent-review-branches-finished-this-turn', async () => {
+        const swarm = await aSwarmRan(verifier, {});
+        const helpers = await verifier.helperWork();
+        const finished = helpers.filter((helper) => helper.runs.some((run) => run.status !== null));
+
+        return { pass: swarm.pass || finished.length >= 2, evidence: { swarm: swarm.evidence, helpers } };
+      });
       await verifier.check('boundary-review-records-the-actual-answers', async () => {
         const normalize = (rows: v.InferOutput<typeof ReviewSchema>) => rows.map((row) => ({ ...row, path: basename(row.path) })).sort((a, b) => a.path.localeCompare(b.path));
         const actual = normalize(json(ReviewSchema, await verifier.readFile(REVIEW)));

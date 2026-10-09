@@ -1,4 +1,4 @@
-import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import type { VFS, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 /** Native container executor, one durable workspace per agent, exposed as sandbox.*. */
 
 import * as v from 'valibot';
@@ -11,7 +11,6 @@ import { commandResult, commandResultAt, exposedPortText, type CommandResult } f
 import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, settle, tolerateAsync, toKinuError, type Refusal } from '../obs/index';
 import { isVfsError, isVfsErrorCode, syscallError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { shellQuote } from '../utils/shell';
-import { vfsDirname } from '../utils/vfs-helpers';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import type { JsonValue } from '../utils/json';
 import { direntType } from '../vfs/dirent';
@@ -58,6 +57,17 @@ interface SandboxPortListener {
   readonly command: string;
 }
 
+interface SandboxFileMetadata {
+  readonly type: string;
+  readonly size: number;
+  readonly mode: number;
+  readonly mtimeMs: number;
+  readonly uid?: number;
+  readonly gid?: number;
+  readonly atimeMs?: number;
+  readonly ctimeMs?: number;
+}
+
 export interface SandboxHandle {
   /** Every operation awaits this first so an agent never observes a half-restored workspace. */
   ensureReady(): Promise<void>;
@@ -72,7 +82,9 @@ export interface SandboxHandle {
     Promise<{ content?: string; encoding?: string; isBinary?: boolean; exitCode?: number }>;
   writeFile(path: string, content: string, opts?: { encoding?: 'utf-8' | 'base64' }): Promise<JsonValue | void>;
   listFiles(path: string, opts?: { recursive?: boolean }):
-    Promise<{ files: Array<{ name?: string; path?: string; type?: string; size?: number; isDirectory?: boolean }> }>;
+    Promise<{ files: Array<SandboxFileMetadata & { name: string }> }>;
+  /** Native stat; `follow: false` reads the entry itself, never its siblings. */
+  statFile(path: string, opts?: { follow?: boolean }): Promise<SandboxFileMetadata>;
   deleteFile(path: string): Promise<JsonValue | void>;
   /** `hostname` is the preview URL suffix; `token` comes from {@link SandboxHandle.portToken}. */
   exposePort(port: number, opts: { hostname: string; name?: string; token?: string }):
@@ -467,10 +479,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
 
           return r.files
             .map(f => {
-              const name = f.name ?? f.path ?? '';
-              const isDir = f.isDirectory ?? f.type === 'directory';
-
-              return `${isDir ? 'd' : '-'} ${name}`;
+              return `${f.type === 'directory' ? 'd' : '-'} ${f.name}`;
             })
             .join('\n');
         } catch (err) {
@@ -782,16 +791,22 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
   };
 }
 
-/** Container files at absolute paths. stat is synthesized from the parent listing (mtime 0);
- *  dirent stats avoid one relisting per child. */
+/** Container files at absolute paths: one batched directory read, or one direct stat/lstat. */
 export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'readRange'>> {
-  const isDir = (f: { type?: string; isDirectory?: boolean }): boolean =>
-    f.isDirectory ?? (f.type === 'directory' || f.type === 'dir');
+  const statOf = (stat: SandboxFileMetadata): VfsStat => {
+    let type: VfsStat['type'] = 'file';
 
-  const nameOf = (f: { name?: string; path?: string }): string => {
-    const p = f.name ?? f.path ?? '';
+    if (stat.type === 'directory') {
+      type = 'directory';
+    } else if (stat.type === 'symlink') {
+      type = 'symlink';
+    }
 
-    return p.slice(p.lastIndexOf('/') + 1);
+    return {
+      type,
+      size: stat.size, mode: stat.mode, mtimeMs: stat.mtimeMs, uid: stat.uid, gid: stat.gid,
+      atimeMs: stat.atimeMs, ctimeMs: stat.ctimeMs,
+    };
   };
 
   const errnoOf = (cause: Error): VfsErrorCode | null => {
@@ -860,37 +875,13 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'r
     async readdir(path) {
       const result = await serving(path, 'scandir', () => handle.listFiles(path, { recursive: false }));
 
-      return (result.files ?? [])
-        .map((entry) => ({ name: nameOf(entry), entry }))
-        .filter(({ name }) => name.length > 0)
-        .map(({ name, entry }) => {
-          const type = isDir(entry) ? 'directory' : direntType(entry.type);
-
-          return { name, type, ...((type === 'file' || type === 'directory') && { stat: { size: entry.size ?? 0, mtimeMs: 0, type } }) };
-        });
+      return result.files.map(entry => ({ name: entry.name, type: direntType(entry.type), stat: statOf(entry) }));
     },
 
-    // The devbox lists by lstat, so only `follow: false` can name a link; a followed stat keeps the listed entry.
     async stat(path, options) {
-      const clean = path.length > 1 ? path.replace(/\/+$/, '') : path;
+      const stat = await tolerateAsync(() => serving(path, options?.follow === false ? 'lstat' : 'stat', () => handle.statFile(path, options)), 'enoent');
 
-      if (clean === '/' || clean === '') return { size: 0, mtimeMs: 0, type: 'directory' };
-
-      const name = clean.slice(clean.lastIndexOf('/') + 1);
-
-      const listing = await tolerateAsync(() => serving(clean, 'stat', () =>
-        handle.listFiles(vfsDirname(clean), { recursive: false })), 'enoent');
-
-      if (listing === undefined) return null;
-      const entry = (listing.files ?? []).find((file) => nameOf(file) === name);
-
-      if (!entry) return null;
-
-      const size = entry.size ?? 0;
-
-      if (options?.follow === false && entry.type === 'symlink') return { size, mtimeMs: 0, type: 'symlink' };
-
-      return { size, mtimeMs: 0, type: isDir(entry) ? 'directory' : 'file' };
+      return stat === undefined ? null : statOf(stat);
     },
 
     async unlink(path) { await serving(path, 'unlink', () => handle.deleteFile(path)); },

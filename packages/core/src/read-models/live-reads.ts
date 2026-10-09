@@ -5,6 +5,7 @@ export const LIVE_READS = [
   'getExposedPorts', 'getToolDescriptions', 'listSlates', 'getEvolutionChangelog', 'listPendingActions',
   'getMemoryContent', 'getExecutors', 'listBackgroundJobs', 'getWorkspaceTabPresence', 'getActivePlanReview',
   'listWorkspaceWork', 'listWorkspaceAgents', 'listSubordinates', 'getQuality', 'getWorkspaceGitHub', 'inspectWork',
+  'listOwnerQuestions',
 ] as const;
 
 export type LiveRead = typeof LIVE_READS[number];
@@ -49,6 +50,7 @@ const READS_BY_TABLE: ReadonlyMap<string, readonly LiveRead[]> = new Map<string,
   ['workspace_proposals', QUEUE],
   ['proposed_tasks', QUEUE],
   ['plan_reviews', ['getActivePlanReview', 'getToolDescriptions', ...QUEUE, 'listWorkspaceWork', ...AGENTS]],
+  ['owner_questions', ['listOwnerQuestions', 'getWorkspaceTabPresence', ...AGENTS]],
   ['background_jobs', ['listBackgroundJobs', 'getWorkspaceTabPresence']],
   ['background_job_serves', ['listBackgroundJobs', 'getWorkspaceTabPresence']],
   ['agent_tasks', WORK],

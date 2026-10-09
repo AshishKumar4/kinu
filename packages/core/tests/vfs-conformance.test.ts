@@ -151,7 +151,7 @@ function sandboxHandle(fs: MemFs): SandboxHandle {
 
 				if (!s) throw new Error(`Expected '${name}' in in-memory filesystem`);
 
-				return { name, type: s.isDir ? 'directory' : 'file', size: s.size };
+				return { name, type: s.isDir ? 'directory' : 'file', size: s.size, mode: s.isDir ? 0o40755 : 0o100644, mtimeMs: fs.mtimeMs };
 			}) };
 		},
 		async deleteFile(path: string) {
@@ -191,6 +191,13 @@ function sandboxHandle(fs: MemFs): SandboxHandle {
     async unexposePort() {},
     async getExposedPorts() { return []; },
     ...sandboxHandleLifecycle,
+    async statFile(path: string) {
+      const stat = fs.stat(path);
+
+      if (stat === null) throw nativeFileError('ENOENT', path, 'stat');
+
+      return { type: stat.isDir ? 'directory' : 'file', size: stat.size, mode: stat.isDir ? 0o40755 : 0o100644, mtimeMs: fs.mtimeMs };
+    },
   };
 
   return handle;
@@ -439,25 +446,63 @@ for (const c of cases) {
 
 test('sandbox stat preserves a denied parent instead of reporting absence', async () => {
   const handle = sandboxHandle(new MemFs());
-  handle.listFiles = async () => { throw nativeFileError('EACCES', '/private', 'readDirectory'); };
+  handle.statFile = async () => { throw nativeFileError('EACCES', '/private/file', 'stat'); };
 
   expect(await rejectionCode(() => sandboxFiles(handle).stat('/private/file'))).toBe('EACCES');
-});
-
-// The devbox lists entries by lstat, so a link is known; reporting it as a file would let a reader follow it.
-test('sandbox lstat reports a link as a link, with the size the listing gives', async () => {
-  const handle = sandboxHandle(new MemFs());
-  handle.listFiles = async () => ({ files: [{ name: 'AGENTS.md', type: 'symlink', size: 21, isDirectory: false }] });
-
-  expect(await sandboxFiles(handle).stat('/workspace/AGENTS.md', { follow: false })).toMatchObject({ type: 'symlink', size: 21 });
 });
 
 test('sandbox stat preserves a failed transport instead of reporting absence', async () => {
   const failure = new Error('the file transport disconnected');
   const handle = sandboxHandle(new MemFs());
-  handle.listFiles = async () => { throw failure; };
+  handle.statFile = async () => { throw failure; };
 
   await expect(sandboxFiles(handle).stat('/workspace/file')).rejects.toBe(failure);
+});
+
+test('a directory walk lists once and reads each stat directly at any sibling count', async () => {
+  for (const width of [1, 72]) {
+    const fs = new MemFs();
+
+    for (let entry = 0; entry < width; entry += 1) fs.mkdir(`/workspace/entry-${String(entry)}`);
+    const handle = sandboxHandle(fs);
+    const calls = { list: 0, stat: 0 };
+    const list = handle.listFiles.bind(handle);
+    const stat = handle.statFile.bind(handle);
+
+    handle.listFiles = (path, options) => {
+      calls.list += 1;
+
+      return list(path, options);
+    };
+
+    handle.statFile = (path, options) => {
+      calls.stat += 1;
+
+      return stat(path, options);
+    };
+
+    const files = sandboxFiles(handle);
+    const entries = await files.readdir('/workspace');
+
+    for (const entry of entries) {
+      expect(entry.stat).toMatchObject({ type: 'directory', mode: 0o40755, mtimeMs: fs.mtimeMs });
+      expect(await files.stat(`/workspace/${entry.name}`, { follow: false })).toEqual(entry.stat ?? null);
+    }
+
+    expect(calls).toEqual({ list: 1, stat: width });
+  }
+});
+
+test('a listing carries a link\'s own metadata while stat follows it only when asked', async () => {
+  const handle = sandboxHandle(new MemFs());
+  const link = { type: 'symlink', size: 7, mode: 0o120777, mtimeMs: 1_700_000_000_000 };
+  handle.listFiles = async () => ({ files: [{ name: 'link', ...link }] });
+  handle.statFile = async (_path, options) => options?.follow === false ? link : { type: 'directory', size: 4096, mode: 0o40700, mtimeMs: link.mtimeMs };
+  const files = sandboxFiles(handle);
+
+  expect(await files.readdir('/workspace')).toMatchObject([{ name: 'link', type: 'symlink', stat: link }]);
+  expect(await files.stat('/workspace/link', { follow: false })).toMatchObject(link);
+  expect(await files.stat('/workspace/link')).toMatchObject({ type: 'directory', mode: 0o40700 });
 });
 
 test('the workspace filesystem names the absolute path, never the storage key, when a relative listing fails', async () => {

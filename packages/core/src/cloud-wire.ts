@@ -43,9 +43,12 @@ const TRIAL_ACCOUNT_KEEPS: ReadonlySet<string> = new Set([
   'user_schema_meta', 'user_profile', 'user_onboarding', 'user_auth_generation', 'cf_agents_state', 'device_status_watchers',
 ]);
 
-/** Of an account's rows by table (`heldRows`), the ones a trial would inherit from the trial before it in its slot. */
-export function inheritedRows(held: Readonly<Record<string, number>>): Record<string, number> {
-  return Object.fromEntries(Object.entries(held).filter(([table, rows]) => rows > 0 && !TRIAL_ACCOUNT_KEEPS.has(table)));
+/** A positive catalog CAS version proves its sole stored configuration row. It routes the trial's models; every
+ *  other configuration row, and every runtime row from earlier work, still belongs to the isolation check. */
+export function inheritedRows(held: Readonly<Record<string, number>>, catalogVersion = 0): Record<string, number> {
+  return Object.fromEntries(Object.entries(held)
+    .map(([table, rows]) => [table, rows - Number(table === 'user_config' && catalogVersion > 0)] satisfies [string, number])
+    .filter(([table, rows]) => rows > 0 && !TRIAL_ACCOUNT_KEEPS.has(table)));
 }
 
 // Cloud chat messages persist as one DO SQLite row (`do.sqlite.row_bytes`); file parts must fit whole under the

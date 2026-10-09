@@ -5,7 +5,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import {
-  ArrowSquareOutIcon, CircleIcon, CloudIcon, DesktopTowerIcon, FolderOpenIcon, GitForkIcon, LockSimpleIcon, PlugIcon, SquaresFourIcon,
+  ArrowSquareOutIcon, CircleIcon, DesktopIcon, DesktopTowerIcon, FolderOpenIcon, GitForkIcon, LockSimpleIcon, PlugIcon, SquaresFourIcon,
   type Icon,
 } from "@phosphor-icons/react";
 import { EXECUTOR_MOUNTS, desktopClientUrl, type MountInfo } from "@kinu.run/core";
@@ -54,7 +54,7 @@ function filesRootFor(name: string): string | null {
 const ENVIRONMENT_ICONS = {
   workspace: SquaresFourIcon,
   device: DesktopTowerIcon,
-  sandbox: CloudIcon,
+  sandbox: DesktopIcon,
   parent: GitForkIcon,
 } satisfies Record<string, Icon>;
 
@@ -197,7 +197,7 @@ function SelectedEnvironmentPane({ mount, exec, workspace, executorOutputs, onEx
 
   const name = exec?.label ?? executorLabel(mount.name);
   const KindIcon = environmentIcon(mount.name);
-  // Only the cloud computer has a screen.
+  // Only the computer has a screen.
   const desktop = exec?.name === "sandbox" ? desktopClientUrl(location, workspace) : null;
   const shown = desktop === null ? "terminal" : view;
 
@@ -309,7 +309,7 @@ function EnvironmentCard({ rpc, mount, exec, active, onSelect, onOpenFiles }: {
 
 function UnavailableMount({ mount, exec }: { mount: MountInfo; exec: ExecutorInfo | undefined }) {
   const docs = mount.name === "sandbox"
-      ? { text: "This deployment has no cloud computer. Use the Workspace shell instead.", href: "https://github.com/AshishKumar4/kinu/blob/main/docs/EXECUTION-LAYER-SPEC.md" }
+      ? { text: "This deployment has no computer. Use the Workspace shell instead.", href: "https://github.com/AshishKumar4/kinu/blob/main/docs/EXECUTION-LAYER-SPEC.md" }
       : { text: mount.reason ?? exec?.reason ?? "This environment is not enabled here.", href: "https://github.com/AshishKumar4/kinu/blob/main/docs/EXECUTION-LAYER-SPEC.md" };
 
   return (

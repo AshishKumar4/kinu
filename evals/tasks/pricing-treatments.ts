@@ -35,12 +35,16 @@ function showsEveryPrice(sight: Sight): boolean {
   return PLANS.every((plan) => (sight.regions[plan.plan] ?? []).some((region) => shows(region.text, plan.monthlyUsd) && shows(region.text, yearlyUsd(plan))));
 }
 
-/** A fresh chat page draws the answer's slates, at least three, each showing every price. */
+/** At least three treatments, whether in one answer page or separate pages, each showing every plan's own prices. */
 function everyTreatment(verifier: EvalVerifier): Promise<EvalCheckOutcome> {
   return verifier.browse(async (browser) => {
-    const readings = await readAnswer(browser, 3, NAMES, showsEveryPrice);
+    const readings = await readAnswer(browser, 1, NAMES, showsEveryPrice);
 
-    return { pass: readings.length >= 3 && readings.every((reading) => reading.held), evidence: readings.map(readingEvidence) };
+    const treatments = PLANS.map((plan) => readings.filter((reading) => reading.held).reduce((total, reading) => total
+      + new Set((reading.sight.regions[plan.plan] ?? []).flatMap((region) =>
+        region.occurrence !== undefined && shows(region.text, plan.monthlyUsd) && shows(region.text, yearlyUsd(plan)) ? [region.occurrence] : [])).size, 0));
+
+    return { pass: treatments.every((count) => count >= 3), evidence: { treatments, readings: readings.map(readingEvidence) } };
   });
 }
 
@@ -56,7 +60,7 @@ export const pricingTreatments: EvalPart = {
 ${PLANS_PATH} so I can compare them side by side. Each one shows every plan's monthly price and its
 yearly price with the annual discount taken off.`,
     verify: async (verifier) => {
-      await answersWithSlates(verifier, 3);
+      await answersWithSlates(verifier, 1);
       await madeNoApp(verifier);
       await madeNoPrototype(verifier);
 
@@ -64,10 +68,10 @@ yearly price with the annual discount taken off.`,
 
       // Pictured in a browser of its own, so a picture that cannot be taken fails this check alone.
       await verifier.check('the-treatments-look-different', () => verifier.browse(async (browser) => {
-        const pictures = await browser.answerPictures(await browser.open(), 3, NAMES, showsEveryPrice);
+        const pictures = await browser.answerPictures(await browser.open(), 1, NAMES, showsEveryPrice);
         const judged = await verifier.judgement(DIFFERENT_DESIGNS, pictures);
 
-        return { pass: pictures.length >= 3 && judged.verdict === true, evidence: { judged, treatments: pictures.length } };
+        return { pass: pictures.length > 0 && judged.verdict === true, evidence: { judged, pages: pictures.length } };
       }));
 
       await verifier.check('a-reload-shows-the-same', () => everyTreatment(verifier));

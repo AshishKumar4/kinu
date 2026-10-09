@@ -1,7 +1,7 @@
 /** One delegated turn in the agent's isolate: its model loop here, every tool call back in the workspace. */
 import { jsonSchema, tool, type ModelMessage, type ToolSet, type UIMessageChunk } from 'ai';
 import {
-  CHAT_SESSION_ID, actorAffinity, HeadCapture, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, withEffectClaims, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan, imageModelOutput,
+  ASK_OWNER_TOOL, CHAT_SESSION_ID, actorAffinity, askOwnerTool, HeadCapture, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, withEffectClaims, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan, imageModelOutput,
   type AuthRequest, type AuthResolution, type HandedOffTurn, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type JsonValue, type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
   turnSourcesFromBundle, captureOperationProfile, type ModelCallReport, type ModelOperationEvent,
   type AdvisorRecoverySnapshot, type AgentFigures, type HostedActor, type OwedReport, type SerializedMessage, type SessionEvent,
@@ -171,6 +171,9 @@ function workspaceTools(
   turn: FacetToolTurn,
 ): ToolSet {
   return Object.fromEntries(prepared.tools.map((descriptor) => {
+    // The owner answers it, nothing executes it: its call parks in this isolate's store, which the repair reads.
+    if (descriptor.name === ASK_OWNER_TOOL) return [descriptor.name, askOwnerTool()];
+
     const entry = tool({
       description: descriptor.description,
       inputSchema: jsonSchema(descriptor.inputSchema),

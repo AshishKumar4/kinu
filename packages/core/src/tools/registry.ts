@@ -84,6 +84,16 @@ export const SUBMIT_PLAN_TOOL = 'submit_plan';
 /** The agent's reply in a review comment thread; wired like `submit_plan`, and only while the owner awaits replies. */
 export const REPLY_TO_COMMENT_TOOL = 'reply_to_comment';
 
+/** The agent's questions to the owner; wired only where a person is the conversation partner. It has no executor. */
+export const ASK_OWNER_TOOL = 'ask_owner';
+
+export const ASK_OWNER_DESCRIPTION = [
+  'Ask the owner one to four questions with set choices, when you are blocked on a decision that is theirs to make: choices whose tradeoffs they must weigh, which nothing you can read settles.',
+  'Default to action. Settle what you can from the request, the workspace and sensible defaults; when several choices are acceptable, take the conventional one and say so.',
+  'Give each question two to four short options (one to five words) with the tradeoff in `description`, mark the one you recommend with `recommended`, and ask related questions together in one call. The owner can always write their own answer, so never offer "Other". A single-choice question\'s options may carry a `preview` to compare: a mockup, a snippet or a configuration.',
+  'Do the work that does not depend on the answer first: asking ends your turn, and the owner\'s answer becomes this call\'s result when they reply.',
+].join('\n');
+
 /** Builtins dropped when an actor's profile wires no deps for them. `agents` is never dropped. */
 export const DEPS_GATED_TOOLS: readonly BuiltinToolName[] = [REPORT_TOOL];
 

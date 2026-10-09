@@ -153,9 +153,9 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
 
       const env: AgentFacetEnv = {
         WORKSPACE: {
-          session,
-          stateSession,
-          memory: () => host.memory(),
+          session: async () => session(),
+          stateSession: async () => stateSession(),
+          memory: async () => host.memory(),
           program: (...args) => host.program(...args),
           traceTurn: (...args) => {
             counted('traceTurn');

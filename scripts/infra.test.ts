@@ -27,13 +27,14 @@ import {
   edgeResponds, namespaceBinding, routeAnswer, secretListing,
 } from './infra-cloudflare';
 import {
-  type AuditRequest, type Phase, type Row, PHASES, audit, environmentOf, observe, observedRow, phaseFrom, supplyDrift,
-  supplyRows, supplySummary, unobservableDrift,
+  type Audit, type AuditRequest, type Phase, type Row, PHASES, audit, environmentOf, observe, observedRow, phaseFrom, recordedResetIds,
+  supplyDrift, supplyRows, supplySummary, unobservableDrift,
 } from './infra-verify';
 import { deleteR2Prefix, deletedByRest, restApiToken } from './cloudflare-rest';
 import { confirmationPhrase, partition } from './infra-teardown';
 import { POLL_SECONDS, settle, type SettleClock } from './edge-settled';
 import { plan, provisionSecrets, putSecret, type SecretIo } from './infra-provision';
+import { type Reset, resetResourceIds, servingOf } from './reset';
 import { isProductSource, readMatching } from './sources';
 
 const infrastructure = deriveInfrastructure();
@@ -796,13 +797,96 @@ describe('the phases differ in exactly one tolerance, and only one direction', (
     }
   });
 
+  /**
+   * A RESET'S RECORD, the one other tolerance before the upload. The red case is staging's of 2026-10-09: a `--reset`
+   * deploy wiped every class and container application, its upload stored the build's version and stopped short of
+   * the container application, and the deploy it printed, `--reset` again, was refused by this gate on
+   * `container.kinu-kinudevbox-staging` — absent because the reset deleted it, while the Worker was up. The record
+   * says what the reset deleted, and its placeholder version says when the Worker still serves the placeholder, which
+   * carries no binding but its version metadata. Nothing else answers for any row.
+   */
+  test('a reset record defers what its reset deleted before the upload, and nothing after it', () => {
+    const staging = deriveInfrastructure('staging');
+
+    const id = (kind: Resource['kind'], name: string): string => {
+      const found = staging.resources.find((resource) => resource.kind === kind && (resource.binding === name || resource.name === name));
+
+      if (found === undefined) throw new Error(`staging declares no ${kind} ${name}`);
+
+      return found.id;
+    };
+
+    const reset: Reset = {
+      environment: 'staging', worker: 'kinu-staging', tag: 'reset-20261009T164913Z', at: '2026-10-09T16:49:13.363Z',
+      placeholderVersion: '9c840710', state: 'done', classes: [{ className: 'KinuDevbox', namespace: 'dd0f1c28' }],
+      applications: [{ name: 'kinu-kinudevbox-staging', id: 'a'.repeat(32) }],
+    };
+
+    const devbox = id('durable-object', 'KinuDevbox');
+    const container = id('container', 'kinu-kinudevbox-staging');
+    const assets = id('binding', 'ASSETS');
+    const userDo = id('durable-object', 'UserDO');
+
+    // Every one absent while the Worker is up; the reset deleted the first two and its placeholder carries no third,
+    // and nothing of the reset's answers for the last.
+    const rows: readonly Row[] = [
+      ...blindRows(),
+      row(authStore().id, 'present', true),
+      row('worker.kinu-staging', 'present', true, 'wrangler-deploy'),
+      ...[devbox, container, assets, userDo].map((absent) => row(absent, 'absent', true, 'wrangler-deploy')),
+    ];
+
+    const auditAt = (phase: Phase, resetIds: readonly string[]) =>
+      audit({ infrastructure: staging, rows, supplied: [], unreadFields: [], phase, resetIds });
+
+    const found = (verdict: Audit) => [devbox, container, assets, userDo]
+      .filter((absent) => verdict.findings.some((entry) => entry.includes(absent)));
+
+    // While the Worker serves the record's placeholder: its classes, its applications and every binding the
+    // placeholder lacks wait for the upload.
+    const placeholder = resetResourceIds(reset, servingOf('9c840710', []), staging.resources);
+    expect(placeholder).not.toContain(id('binding', 'CF_VERSION_METADATA'));
+    expect(found(auditAt('full', placeholder))).toEqual([userDo]);
+
+    // Once a version that is not the placeholder serves, as on 2026-10-09 after the upload stopped short: only the
+    // record's classes and applications. That version carries its own bindings, so a missing one is a finding.
+    const stoppedShort = resetResourceIds(reset, servingOf('174af18c', [
+      { name: 'KinuDevbox', type: 'durable_object_namespace', target: 'KinuDevbox', namespace: 'e01a' },
+    ]), staging.resources);
+
+    expect(found(auditAt('full', stoppedShort))).toEqual([assets, userDo]);
+    expect(found(auditAt('full', resetResourceIds(reset, servingOf('unrelated-placeholder', []), staging.resources))))
+      .toEqual([assets, userDo]);
+    expect(found(auditAt('full', resetResourceIds({ ...reset, placeholderVersion: '' }, servingOf('9c840710', []), staging.resources))))
+      .toEqual([assets, userDo]);
+
+    // After the upload, and in a deploy that carries no record, every absence is a finding.
+    expect(found(auditAt('post-deploy', placeholder))).toEqual([devbox, container, assets, userDo]);
+    expect(found(auditAt('full', []))).toEqual([devbox, container, assets, userDo]);
+
+    // The record is read as a reset record or not at all: a Worker never reset leaves the file empty, and anything
+    // else that is not one refuses, naming what it lacks.
+    const file = join(scratchDir('reset-record'), 'record.json');
+    const live: Deployment = { state: 'deployed', versionId: '9c840710', bindings: [] };
+
+    writeFileSync(file, '');
+    expect(recordedResetIds(file, staging, live)).toEqual([]);
+    writeFileSync(file, JSON.stringify(reset));
+    expect(recordedResetIds(file, staging, live)).toEqual(placeholder);
+    writeFileSync(file, JSON.stringify({ ...reset, environment: 'production', worker: 'kinu' }));
+    expect(() => recordedResetIds(file, staging, live)).toThrow();
+    writeFileSync(file, '{"tag":"reset-20261009T164913Z"}');
+    expect(() => recordedResetIds(file, staging, live)).toThrow();
+    writeFileSync(file, '{');
+    expect(() => recordedResetIds(file, staging, live)).toThrow();
+  });
+
   test('the fix for a deploy-owned absence never names provisioning', () => {
     // The diagnostic that made the red unactionable. `bun run infra:provision`
     // cannot create a Durable Object namespace and is forbidden from touching
     // what the upload owns, so naming it sends the operator to a command that
     // exits 0 having done nothing — after which the gate refuses again.
     const rows = [...clean, deployedWorker, absentNamespace];
-
     const full = at('full', rows).findings.join('\n');
     expect(full).not.toContain('infra:provision —');
     expect(full).toContain('--bootstrap');

@@ -1,8 +1,8 @@
 /** Typed client for `/api/user/*`; the session rides the HttpOnly cookie (dev synthesizes DEV_USER_EMAIL server-side). */
 import { Cause, Data, Effect } from 'effect';
 import {
-  DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS, DEVICE_UPDATE_STATES,
-  AccountUsageSchema, ProfileCatalogEnvelopeSchema, REASONING_EFFORTS,
+  AccountMemoryProposalSchema, DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS, DEVICE_UPDATE_STATES,
+  AccountUsageSchema, FactOriginSchema, ProfileCatalogEnvelopeSchema, REASONING_EFFORTS,
   type Credential,
   type DeviceTier,
   type JsonValue,
@@ -380,24 +380,11 @@ export const getAccountSandboxSize = (): Promise<BoxSize | null> =>
 
 export const setAccountSandboxSize = (size: BoxSize) => settle(api(OkSchema, 'PUT', SANDBOX_SIZE_PATH, { value: size }));
 
-const MemoryOriginSchema = v.nullable(v.object({ by: v.picklist(['agent', 'background', 'owner', 'import']), workspace: v.optional(v.string()), agent: v.optional(v.string()) }));
-
-/** A proposal waiting on the owner, as the account's memory lists it. */
-const PendingProposalSchema = v.object({
-  id: v.string(),
-  proposal: v.variant('kind', [
-    v.object({ kind: v.literal('fact'), key: v.string(), value: JsonValueSchema }),
-    v.object({ kind: v.literal('note'), content: v.string() }),
-  ]),
-  origin: MemoryOriginSchema,
-  createdAt: v.number(),
-});
-
-export type PendingAccountProposal = v.InferOutput<typeof PendingProposalSchema>;
+const MemoryOriginSchema = v.nullable(FactOriginSchema);
 
 /** On the roster's socket beside its workspace frames: the proposals waiting on the owner, sent as a socket opens and
  *  again whenever one is filed or decided. */
-export const AccountMemoryFrameSchema = v.object({ type: v.literal('account_memory'), pending: v.array(PendingProposalSchema) });
+export const AccountMemoryFrameSchema = v.object({ type: v.literal('account_memory'), pending: v.array(AccountMemoryProposalSchema) });
 
 const AccountMemorySchema = v.object({
   facts: v.array(v.object({
@@ -405,7 +392,7 @@ const AccountMemorySchema = v.object({
     history: v.array(v.object({ forgotten: v.boolean(), value: v.nullable(JsonValueSchema), origin: MemoryOriginSchema, at: v.number() })),
   })),
   notes: v.array(v.object({ id: v.string(), content: v.string(), origin: MemoryOriginSchema, createdAt: v.number() })),
-  pending: v.array(PendingProposalSchema),
+  pending: v.array(AccountMemoryProposalSchema),
 });
 
 export type AccountMemoryState = v.InferOutput<typeof AccountMemorySchema>;
