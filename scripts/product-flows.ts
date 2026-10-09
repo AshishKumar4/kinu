@@ -33,7 +33,8 @@ import { DESKTOP } from './live-app-harness';
 import {
   AGENT_PLAN_ASK, FLOW_MEMORY_NOTE, FLOW_SHELL_PROBE, FLOW_SLATE, MEMORY_ASK, SLATE_ASK, STORM_ASK, STORM_DIR, STORM_FILES, STORM_SEED_ASK, WRITE_FILE_ASK,
   APPROVALS_ASK, DECISION_HEARD, HIRE_APPROVAL_ASK, HIRE_RAN, PROPOSAL_LINK_REPLY, WORKSPACE_PROPOSAL_ASK, ACCOUNT_FACT, ACCOUNT_FACT_ASK,
-  ACCOUNT_RECALL_ASK, ACCOUNT_RECALL_REPLY,
+  ACCOUNT_RECALL_ASK, ACCOUNT_RECALL_REPLY, STACK_FACT, STACK_FACT_ASK, STACK_RECALL_ASK, STACK_RECALL_REPLY,
+  SPLICE_BEFORE, SPLICE_HEARD, SPLICE_PAGE_ASK, SPLICE_SENT, SPLICE_WORK_ASK,
 } from './flows-script';
 import { FALLBACK_ANSWER } from './scripted-protocol';
 import {
@@ -133,7 +134,7 @@ const CreatedSchema = v.object({ name: v.string() });
 /** The beat each row's workspace keeps until it is removed, so no eval run's sweep takes it mid-row. */
 const beats = new Map<string, () => void>();
 
-async function createFlowWorkspace(target: FlowTarget, subject: string): Promise<string> {
+export async function createFlowWorkspace(target: FlowTarget, subject: string): Promise<string> {
   const response = await fetch(`${target.origin}/api/user/workspaces`, {
     method: 'POST',
     headers: { ...webHeaders(target.identity), 'content-type': 'application/json' },
@@ -152,7 +153,7 @@ async function createFlowWorkspace(target: FlowTarget, subject: string): Promise
 
 /** Delete the row's workspace, the same DELETE the sidebar's Remove issues. A
  *  failed teardown is reported, never thrown over the row's own verdict. */
-async function removeFlowWorkspace(target: FlowTarget, workspace: string): Promise<void> {
+export async function removeFlowWorkspace(target: FlowTarget, workspace: string): Promise<void> {
   beats.get(workspace)?.();
   beats.delete(workspace);
 
@@ -175,14 +176,14 @@ async function removeFlowWorkspace(target: FlowTarget, workspace: string): Promi
 export const CHAT_COMPOSER_LIVE = `[...document.querySelectorAll('#chat textarea')].some(t => !t.disabled)`;
 
 /** The workspace bar's chats, Main first. */
-const CHATS = 'nav[aria-label="Chats"]';
+export const CHATS = 'nav[aria-label="Chats"]';
 
 /** The opening every flow gives a chat it starts: the bar's + asks for one, and the scripted model answers it. */
 const NEW_CHAT_OPENING = 'Reply with one word: ready.';
 
 /** The chat column's Send control is back to sending, so no turn is running:
  *  while one runs, the same control steers it instead. */
-const CHAT_IDLE = `[...document.querySelectorAll('#chat button')].some((el) => el.getClientRects().length > 0
+export const CHAT_IDLE = `[...document.querySelectorAll('#chat button')].some((el) => el.getClientRects().length > 0
   && /send$/iu.test((el.getAttribute('aria-label') ?? '').trim()))`;
 
 /** What stops a row dead: an app script that never loaded, which leaves the
@@ -221,6 +222,11 @@ const openWaits = new Set<{ readonly what: string }>();
 const liveLedgers = new Set<() => string>();
 
 let dropWaitsHold: (() => void) | null = null;
+
+/** The waits open now, `; `-joined: what a row stopped for being silent was waiting on (`endedNearSilence`). */
+export function openWaitsNamed(): string {
+  return [...openWaits].map((pending) => pending.what).join('; ');
+}
 
 /** `wait`, logged by what it waits for when it opens and when it is reached, and named while it is open. A step
  *  that is not a wait on a page (a create through the API, a navigation) is named through it too, so a slow run's
@@ -291,7 +297,7 @@ export async function waitOn<Value>(page: Page, what: string, promise: Promise<V
   });
 }
 
-async function openWorkspacePage(target: FlowTarget, path: string): Promise<Page> {
+export async function openWorkspacePage(target: FlowTarget, path: string): Promise<Page> {
   const page = await signedInPage(target.browser, target.identity);
 
   // 'load', not 'networkidle0': the app holds its event socket open from
@@ -329,7 +335,7 @@ export async function typeIntoComposer(page: Page, text: string): Promise<Elemen
  *  before the page learns the turn began, and a message sent then steers it: the agent-plan row's Plan ask became a
  *  steer of the Auto opening, which offered no submit_plan (staging, 2026-10-08). The turn's close on the socket is
  *  its end. */
-async function startNewChat(page: Page): Promise<void> {
+export async function startNewChat(page: Page): Promise<void> {
   const ledger = await frameLedger(page);
 
   try {
@@ -349,7 +355,7 @@ async function startNewChat(page: Page): Promise<void> {
 
 /** Send is back before the page learns the turn began, so the turn's close on the socket is its end: read as idle
  *  0.7 s after the send, the changes-storm row went on before its seed was written (staging, 2026-10-08). */
-async function sendAndSettle(page: Page, text: string): Promise<void> {
+export async function sendAndSettle(page: Page, text: string): Promise<void> {
   await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
 
   const composer = await typeIntoComposer(page, text);
@@ -668,6 +674,83 @@ export async function agentPlanIsReviewedInItsPane(target: FlowTarget): Promise<
   }
 }
 
+/** Where the ping's card sits, and how far the agent has got with it. */
+export interface SpliceReading {
+  /** Its delivery mark and the colour it wears. */
+  readonly state: string | null;
+  readonly tone: string | null;
+  /** Drawn inside the answer, not as a loose card. */
+  readonly spliced: boolean;
+  /** The reading order of the turn's words before it, the card, and the answer after it (-1: not found). */
+  readonly order: readonly number[];
+}
+
+export interface SpliceVerdict {
+  /** While the agent slept: the card waiting on it. */
+  readonly waited: SpliceReading;
+  /** Once the turn ended, and again after a reload. */
+  readonly answered: SpliceReading;
+  readonly reloaded: SpliceReading;
+}
+
+/** The ping's card as the chat draws it, by the word it carries, read in the page. */
+const SPLICE_READING = `(() => {
+  const all = [...document.querySelectorAll('#chat *')];
+  const at = (needle) => all.findIndex((el) => (el.textContent ?? '').includes(needle)
+    && ![...el.children].some((child) => (child.textContent ?? '').includes(needle)));
+  const card = [...document.querySelectorAll('#chat [data-signal-card]')].find((el) => (el.textContent ?? '').includes(${JSON.stringify(SPLICE_SENT)}));
+  const mark = card?.querySelector('[data-delivery]') ?? null;
+
+  return {
+    state: mark?.getAttribute('data-delivery') ?? null,
+    tone: ['p-warning', 'p-success'].find((name) => mark?.classList.contains(name)) ?? null,
+    spliced: card?.closest('[data-spliced-signal]') != null,
+    order: [${JSON.stringify(SPLICE_BEFORE)}, ${JSON.stringify(SPLICE_SENT)}, ${JSON.stringify(SPLICE_HEARD)}].map(at),
+  };
+})()`;
+
+const SpliceReadingSchema = v.object({ state: v.nullable(v.string()), tone: v.nullable(v.string()), spliced: v.boolean(), order: v.array(v.number()) });
+
+/**
+ * Row: a page in the chat sends the agent a word while it works. Its card waits amber, is drawn inside the answer between
+ * the words before it and the answer that read it, turns green once read, and a reload draws it there still.
+ */
+export async function spliceSitsWhereItWasRead(target: FlowTarget): Promise<SpliceVerdict> {
+  const workspace = await createFlowWorkspace(target, 'splice');
+
+  try {
+    const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
+    const reading = async (): Promise<SpliceReading> => v.parse(SpliceReadingSchema, await page.evaluate(SPLICE_READING));
+
+    await sendAndSettle(page, SPLICE_PAGE_ASK);
+    await until(page, 'the Ping page drawn', `document.querySelector('[data-slate-ui="ping"] iframe') !== null`);
+    const src = await page.$eval('[data-slate-ui="ping"] iframe', (frame) => frame.getAttribute('src') ?? '');
+    const frame = await page.waitForFrame((each) => each.url().startsWith(new URL(src).origin));
+
+    await frame.waitForSelector('#ping');
+
+    // The work turn: sent, and clicked into while it sleeps.
+    const composer = await typeIntoComposer(page, SPLICE_WORK_ASK);
+    await composer.press('Enter');
+    await until(page, 'the work turn waiting on its build', `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(SPLICE_BEFORE)})`);
+    await frame.click('#ping');
+    await until(page, "the ping's card", `[...document.querySelectorAll('#chat [data-signal-card]')].some((el) => (el.textContent ?? '').includes(${JSON.stringify(SPLICE_SENT)}))`);
+    const waited = await reading();
+
+    await until(page, 'the answer that read the ping', `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(SPLICE_HEARD)}) && ${CHAT_IDLE}`);
+    const answered = await reading();
+
+    await page.reload({ waitUntil: 'load' });
+    await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
+    await until(page, 'the answer drawn again', `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(SPLICE_HEARD)})`);
+    const again = await reading();
+
+    return { waited, answered, reloaded: again };
+  } finally {
+    await removeFlowWorkspace(target, workspace);
+  }
+}
+
 export interface ApprovalStackVerdict {
   /** The stack's cards once both commands parked: the open one first, then those behind it. */
   readonly stacked: readonly string[];
@@ -911,6 +994,50 @@ export async function accountMemoryCrossesWorkspaces(target: FlowTarget): Promis
   }
 }
 
+export interface StackMemoryVerdict {
+  /** The memory card's words in the stack once the agent proposed the fact. */
+  readonly offered: string;
+  /** The agent's recall, before the owner kept it and after. */
+  readonly before: string;
+  readonly after: string;
+}
+
+/**
+ * Row: an agent proposes an account fact; the proposal waits in the chat's attention stack, pushed by the owner's user
+ * object on the socket the page already holds; kept there, the agent's recall returns it.
+ */
+export async function accountMemoryInTheStack(target: FlowTarget): Promise<StackMemoryVerdict> {
+  const workspace = await createFlowWorkspace(target, 'stack-memory');
+  const card = `[data-attention-card^="memory:"]`;
+
+  try {
+    const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
+    const answers = [STACK_FACT.value, 'nowhere I know of'];
+
+    await sendAndSettle(page, STACK_FACT_ASK);
+    await sendAndSettle(page, STACK_RECALL_ASK);
+    const before = await lastReply(page, STACK_RECALL_REPLY, answers);
+
+    await until(page, 'the proposal in the attention stack', `[...document.querySelectorAll('[data-attention-card], [data-attention-behind]')]`
+      + `.some((node) => (node.getAttribute('data-attention-card') ?? node.getAttribute('data-attention-behind') ?? '').startsWith('memory:'))`);
+    // Brought to the front if anything newer waits.
+    await page.evaluate(`document.querySelector('[data-attention-behind^="memory:"]')?.click()`);
+    await until(page, 'the proposal open', `document.querySelector(${JSON.stringify(card)}) !== null`);
+    const offered = v.parse(v.string(), await page.evaluate(`document.querySelector(${JSON.stringify(card)})?.textContent ?? ''`));
+
+    await page.evaluate(`[...document.querySelectorAll(${JSON.stringify(`${card} button`)})].find((button) => button.textContent?.trim() === 'Keep for every workspace')?.click()`);
+    await until(page, 'the proposal gone from the stack', `document.querySelector('[data-attention-card^="memory:"], [data-attention-behind^="memory:"]') === null`);
+    await sendAndSettle(page, STACK_RECALL_ASK);
+    const after = await lastReply(page, STACK_RECALL_REPLY, answers);
+
+    return { offered, before, after };
+  } finally {
+    // The account's fact goes with the row, so a rerun proposes it afresh.
+    await fetch(`${target.origin}/api/user/memory/facts/${STACK_FACT.key}`, { method: 'DELETE', headers: webHeaders(target.identity) });
+    await removeFlowWorkspace(target, workspace);
+  }
+}
+
 export interface AgentReturnVerdict {
   readonly workspace: string;
   readonly agent: string;
@@ -994,7 +1121,8 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
 
     // Back to the workspace, the way a person returns: its own page, not the agent's.
     await back.goto(`${target.origin}/workspace/${encodeURIComponent(workspace)}`, { waitUntil: 'load' });
-    await settledAfter(back, ledger, 'getWorkspaceSnapshot', 'getChatHistoryPage', 'listWorkspaceAgents');
+    // The agents list arrives on the opening read (`getWorkspaceOpening`), not on its own.
+    await settledAfter(back, ledger, 'getWorkspaceOpening', 'getChatHistoryPage');
     // The sidebar's workspaces arrive over HTTP once the roster socket opens, which the ledger does not see.
     await until(back, "the sidebar's workspace list", SIDEBAR_LISTED);
     await back.click('[data-agents-counter]');
@@ -1154,7 +1282,7 @@ export async function countRpc(page: Page): Promise<RpcCounter> {
  *  `rpc-gate` classifies it `interactive` rather than `workspace.read` — that
  *  axis is authorization, and the Journal it feeds is the workspace's. */
 const WORKSPACE_READS = [
-  'getWorkspaceSnapshot', 'getExposedPorts', 'listPendingActions', 'getMemoryContent',
+  'getWorkspaceOpening', 'getWorkspaceSnapshot', 'getExposedPorts', 'listPendingActions', 'getMemoryContent',
   'getToolDescriptions', 'getExecutors', 'listBackgroundJobs', 'listSlates',
   'listPendingConsents', 'getActivePlanReview', 'getEvolutionChangelog',
 ] as const;
@@ -1539,7 +1667,7 @@ export async function workspaceGetsFirstAnswer(target: FlowTarget): Promise<Firs
     // #21: a hello turn must not open an inspector. The initial snapshot and turn-triggered refreshes
     // supply its state; an idle page no longer polls listPendingActions.
     do {
-      await waitOn(page, 'the workspace snapshot and its outstanding reads', settledAfter(page, ledger, 'getWorkspaceSnapshot'));
+      await waitOn(page, 'the workspace opening and its outstanding reads', settledAfter(page, ledger, 'getWorkspaceOpening'));
       await rendered(page);
     } while (!ledger.quiet());
 
@@ -1908,7 +2036,13 @@ export interface SlatePreviewVerdict {
   readonly bumped: string | null;
   /** Whether the page heard its host's context. */
   readonly hosted: boolean;
+  /** Every tab of the inspector's Pages strip, by the name it shows: a slate's is its title, never its preview's port
+   *  ("workspace :20000", 1008-f). */
+  readonly pageTabs: readonly string[];
 }
+
+/** The names the inspector's Pages strip shows, one per tab: its links, not the actions beside them ("Share Flow probe"). */
+export const PAGE_TABS = `[...document.querySelectorAll('#inspector nav[aria-label="Pages"] button.p-bar-link[aria-label]')].map((tab) => tab.getAttribute('aria-label') ?? '')`;
 
 /**
  * Row: a slate the agent builds shows its running preview in its own tab.
@@ -1956,10 +2090,12 @@ export async function slateShowsItsPreview(target: FlowTarget): Promise<SlatePre
       }
     }
 
+    const pageTabs = v.parse(v.array(v.string()), await page.evaluate(PAGE_TABS));
+
     await ledger.stop();
     await page.close();
 
-    return { workspace, slateTab, frameText, bumped, hosted };
+    return { workspace, slateTab, frameText, bumped, hosted, pageTabs };
   } finally {
     await removeFlowWorkspace(target, workspace);
   }

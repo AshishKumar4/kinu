@@ -26,7 +26,13 @@ const SignalCardEventSchema: v.GenericSchema<SignalCardEvent> = v.variant('state
   v.object({
     type: v.literal('signal_card'),
     id: v.string(),
-    state: v.picklist(['shown', 'undelivered']),
+    state: v.literal('shown'),
+    atStep: v.optional(v.number()),
+  }),
+  v.object({
+    type: v.literal('signal_card'),
+    id: v.string(),
+    state: v.picklist(['seen', 'undelivered']),
   }),
 ]);
 
@@ -221,7 +227,8 @@ describe('Inbox — the user\'s card', () => {
 
     await inbox.prepareStep({ stepNumber: 0, messages: [user('q')] });
     expect(lifecycle(cards)).toEqual(['pending', 'shown']);
-    expect(cards[1]).toEqual({ type: 'signal_card', id: opened.id, state: 'shown' });
+    // The step that took it in: where the chat draws it inside the answer.
+    expect(cards[1]).toEqual({ type: 'signal_card', id: opened.id, state: 'shown', atStep: 0 });
     await inbox.prepareStep({ stepNumber: 1, messages: [user('q'), assistant('a')] });
     expect(lifecycle(cards)).toEqual(['pending', 'shown']);
   });
@@ -276,6 +283,48 @@ describe('Inbox — the user\'s card', () => {
     await inbox.prepareStep({ stepNumber: 0, messages: [user('q')] }, [nudge('fork now')]);
     expect(lifecycle(cards)).toEqual(['pending', 'pending', 'shown', 'shown']);
     expect(cards.map((c) => c.id)).toEqual([cards[0].id, cards[1].id, cards[0].id, cards[1].id]);
+  });
+});
+
+describe('Inbox — what the agent has seen', () => {
+  test('the step that took a splice ends: its card is seen, and the answer keeps it where it was read', async () => {
+    const { inbox, cards } = setup({ turnInFlight: true });
+    inbox.beginTurn(false, undefined);
+    await inbox.prepareStep({ stepNumber: 0, messages: [user('q')] });
+    await inbox.send(wake('turn text', { stepText: 'mid-turn: mail from bob' }));
+    await inbox.prepareStep({ stepNumber: 1, messages: [user('q'), assistant('a')] });
+
+    expect(lifecycle(cards)).toEqual(['pending', 'shown']);
+    inbox.stepEnded(0);
+    expect(lifecycle(cards)).toEqual(['pending', 'shown']);
+    inbox.stepEnded(1);
+
+    expect(lifecycle(cards)).toEqual(['pending', 'shown', 'seen']);
+    expect(inbox.seenSplices()).toEqual([{
+      id: cards[0]?.id, atStep: 1, text: 'mid-turn: mail from bob', metadata: expect.objectContaining({ kinuEvent: 'event_drain' }),
+    }]);
+  });
+
+  test('a step that never ended leaves its card being shown, and the answer keeps none', async () => {
+    const { inbox, cards } = setup({ turnInFlight: true });
+    inbox.beginTurn(false, undefined);
+    await inbox.send(wake('turn text', { stepText: 'mid-turn: mail from bob' }));
+    await inbox.prepareStep({ stepNumber: 0, messages: [user('q')] });
+    inbox.settle({ completed: false });
+    inbox.stepEnded(0);
+
+    expect(lifecycle(cards)).not.toContain('seen');
+    expect(inbox.seenSplices()).toEqual([]);
+  });
+
+  test('the signal that opens a turn is seen once the first step ends, and keeps its own row', async () => {
+    const { inbox, queued, cards } = setup({ turnInFlight: false });
+    await inbox.send(wake('1 event arrived while you were idle'));
+    inbox.beginTurn(false, carriedSignalId(queued[0]));
+    inbox.stepEnded(0);
+
+    expect(lifecycle(cards)).toEqual(['pending', 'shown', 'seen']);
+    expect(inbox.seenSplices()).toEqual([]);
   });
 });
 

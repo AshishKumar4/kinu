@@ -104,6 +104,7 @@ export class AgentOrchestrator {
 
       return this.inbox.prepareStep(ctx, steer ? [steer] : []);
     },
+    onStepEnd: (ctx) => { this.inbox.stepEnded(ctx.stepNumber); },
   };
   /** Recorded through the engine at observation time, since an episode can outlive this instance;
    *  collected here only for the turn's `execution_recovery` run event. */

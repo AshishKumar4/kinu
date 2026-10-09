@@ -1626,7 +1626,7 @@ export {
   type StepLike, type ToolResultLike, type TurnSinks,
 } from './orchestrator/turn-accumulator';
 
-export { readWorkspaceWork, hasWorkspaceWork, actorReadHandle, WorkspaceWorkSchema } from './read-models/workspace-work';
+export { readWorkspaceWork, hasWorkspaceWork, actorReadHandle, WorkspaceWorkSchema, WORK_TAB_JOBS } from './read-models/workspace-work';
 
 export { agentTitle, nestedAgent, type AgentLinkIds } from './subordinates/nested-agent';
 
@@ -1654,6 +1654,8 @@ export {
 export { readAgentFigures, recordAgentFigures, reportedAgentFigures, NO_FIGURES, type AgentFigures } from './read-models/agent-figures';
 
 export type { WorkspaceWork, OwnedPlan, OwnedTask, WorkspaceWorkOwner } from './read-models/workspace-work';
+
+export { openingList, openingListOf, listedOn, type OpeningList } from './read-models/opening';
 
 export {
   AgentOrchestrator, type AgentOrchestratorDeps,
@@ -1994,7 +1996,7 @@ export type {
   NodeTranscriptView, NodeTranscriptCrumb, NodeTranscriptOrigin,
 } from './read-models/node-transcript';
 
-export { buildPendingActions, needsTheUser, ownerAsks, type OwnerAsk } from './read-models/pending-actions';
+export { buildPendingActions, needsTheUser, ownerAsks, type AccountAsk, type OwnerAsk } from './read-models/pending-actions';
 
 export { reviewParkedWrite, type ParkedWriteReview } from './read-models/write-preview';
 
@@ -2232,7 +2234,9 @@ export {
 
 export { THEME_CSS, THEME_TOKENS, type Mode, type PublicToken, type RadiusRole, type TokenSet } from './web/theme';
 
-export { SLATE_IMPORT_MAP, SLATE_PAGE_HEAD, SLATE_PAGE_PREAMBLE } from './web/slate-page';
+export { hueStops, rankHue } from './web/agent-colour';
+
+export { SLATE_PAGE_PREAMBLE } from './web/slate-page';
 
 export { APP_FONTS_PATH, appFontFile, SLATE_FONTS_PATH } from './web/fonts';
 
@@ -2246,6 +2250,7 @@ export {
 
 export {
   classifyProgrammaticTurn, delegatedTaskMetadata, messageSignalId, isSteeredMessage, endedMidWork, TURN_END_METADATA_KEY, turnFailure, TURN_FAILURE_METADATA_KEY, slatesChanged, SLATES_CHANGED_METADATA_KEY, SLATE_LINK, slatesToPreview, applySignalCard,
+  splicesSeenOn, SIGNALS_SEEN_METADATA_KEY, type SeenSplice,
   parseSignalCardEvent, parseDrainedEvents, eventVariantLabel, eventSourceLabel,
   metadataBroadcastEvent,
   type ClassifiedProgrammaticTurn, type SignalCard, type DrainedEvent,
@@ -2256,7 +2261,7 @@ export {
   type HeadDelta, type HeadDeltaKind, type HeadDeltas,
 } from './read-models/head-chat';
 
-export { drawnText, threadLiveTail, toolCallRunning, type LiveTail } from './read-models/message-live-tail';
+export { drawnText, liveTailRow, threadLiveTail, toolCallRunning, type LiveTail } from './read-models/message-live-tail';
 
 export { messagesUpTo, turnRows } from './read-models/fork-count';
 

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { UIMessage } from "ai";
 import * as v from "valibot";
+import { openingListOf, WORK_TAB_JOBS } from "@kinu.run/core";
 
 interface GalleryConnectionError {
 	readonly code: number;
@@ -50,6 +51,25 @@ let served: GalleryRpc | null = null;
 
 export function serveGalleryRpc(rpc: GalleryRpc): void {
 	served = rpc;
+}
+
+/** The server's opening read (`getWorkspaceOpening`) from the frame's own reads, so every fixture mode applies to it;
+ *  serialized, as the wire carries it. `data-gallery-openings` counts the openings asked. */
+async function galleryOpening(rpc: GalleryRpc): Promise<string> {
+	const list = (method: string) => openingListOf(`answering ${method}`, () => rpc<unknown>(method, []));
+
+	const [snapshot, pendingActions, backgroundJobs, inspectedWork, subordinates, pendingConsents, workspaceAgents] = await Promise.all([
+		rpc<unknown>("getWorkspaceSnapshot", []),
+		rpc<unknown>("listPendingActions", []),
+		rpc<unknown>("listBackgroundJobs", [WORK_TAB_JOBS]),
+		rpc<unknown>("inspectWork", []),
+		list("listSubordinates"), list("listPendingConsents"), list("listWorkspaceAgents"),
+	]);
+
+	return JSON.stringify({
+		...v.parse(v.looseObject({}), snapshot),
+		pendingActions, backgroundJobs, inspectedWork, subordinates, pendingConsents, workspaceAgents,
+	});
 }
 
 /** Each chat's transcript by socket path ("" the workspace's), sent on connect as the chat room does. */
@@ -133,6 +153,14 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 			connectionError: terminalClose,
 			call: <T,>(method: string, args: unknown[] = []): Promise<T> => {
 				const failure = options.path === undefined || options.path === "" ? socketFailure(method) : null;
+
+				if (failure === null && served !== null && method === "getWorkspaceOpening") {
+					const root = document.documentElement.dataset;
+
+					root.galleryOpenings = String(Number(root.galleryOpenings ?? "0") + 1);
+
+					return galleryOpening(served).then((opening) => new Response(opening).json<T>());
+				}
 
 				if (failure === null && served !== null) return served<T>(method, args);
 

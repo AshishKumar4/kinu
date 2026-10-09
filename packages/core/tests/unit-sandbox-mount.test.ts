@@ -197,7 +197,7 @@ describe('the file tool across the /sandbox mount', () => {
 		expect(written).toMatchObject({ action: 'created' });
 		expect(new TextDecoder().decode(fs.files.get('/workspace/broken.mjs'))).toBe('export const x = 1;\n');
 		expect(await file({ op: 'read', path: '/sandbox/workspace/broken.mjs' }))
-			.toBe('export const x = 1;\n');
+			.toStartWith('1\texport const x = 1;\n');
 	});
 
 	test('write of an existing file replaces it', async () => {
@@ -211,7 +211,7 @@ describe('the file tool across the /sandbox mount', () => {
 		});
 
 		expect(replaced).toMatchObject({ action: 'replaced' });
-		expect(await file({ op: 'read', path: '/sandbox/workspace/broken.mjs' })).toBe('v2\n');
+		expect(await file({ op: 'read', path: '/sandbox/workspace/broken.mjs' })).toStartWith('1\tv2\n');
 	});
 
 	test('a write under a directory the container does not have fails ENOENT, not io', async () => {

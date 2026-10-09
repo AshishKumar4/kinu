@@ -390,7 +390,8 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
 
   /** The closed-tab sleep-time wake, run now: the tab closed past its grace, then a timer tick. */
   async sleepTimeNow(): Promise<void> {
-    this.config.set('sleep_time_closed_at', String(Date.now() - SLEEP_TIME_CADENCE.closeGraceMs));
+    this.unmetered(`INSERT INTO sleep_time_marks (actor_id, mark, at) VALUES (?, 'closed', ?)
+      ON CONFLICT(actor_id, mark) DO UPDATE SET at = excluded.at`, this.actorHandle().actorId, Date.now() - SLEEP_TIME_CADENCE.closeGraceMs);
     await this._kinuTimerTick();
   }
 

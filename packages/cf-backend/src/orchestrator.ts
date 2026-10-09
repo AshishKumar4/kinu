@@ -85,7 +85,7 @@ import {
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SupervisorOpResult } from '@kinu.run/core/workspace';
-import { TURN_CLAIM_FRAME, type AccountSpend, type ActivitySnapshot, type TabPresence, type TurnClaimState } from "@kinu.run/core";
+import { openingList, TURN_CLAIM_FRAME, type AccountSpend, type ActivitySnapshot, type TabPresence, type TurnClaimState } from "@kinu.run/core";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { teamPeers } from "./lib/workspace-roster";
 import { nextAlarmTime } from '@kinu.run/core';
@@ -144,7 +144,7 @@ import {
   headStatusUnsettled, storedHeadReportStatus,
   STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
-  readWorkspaceWork, hasWorkspaceWork, type WorkspaceWork, inspectWork, type InspectedWork, addressedBlock, type EphemeralSlateAddress,
+  readWorkspaceWork, hasWorkspaceWork, WORK_TAB_JOBS, type WorkspaceWork, inspectWork, type InspectedWork, addressedBlock, type EphemeralSlateAddress,
   readWorkspaceAgents, readAgentFigures, recordAgentFigures, reportedAgentFigures, type AgentFigures, type AgentAnswer, type ConversationTurnPair, type PanelAgent,
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
@@ -5341,37 +5341,83 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return heads.length >= ORPHAN_SEAL_MAX_ROWS;
   }
 
-  /** Asks each lane's own read path at limit 1, since presence is a boolean. */
-  @callable() async getWorkspaceTabPresence(): Promise<TabPresence> {
-    // Same reads the Work tab mounts. A live turn is not content: streaming with
-    // nothing renderable keeps the tab hidden.
-    const [pendingActions, jobs, workspaceWork, changelog, memoryContent] = await Promise.all([
+  /**
+   * The rows the Work tab draws and its presence is decided from, each read once. `jobs`: presence needs one, the tab
+   * draws {@link WORK_TAB_JOBS}.
+   */
+  private async workReads(jobs: number) {
+    const [pendingActions, backgroundJobs, workspaceWork, changelog, memoryContent, inspectedWork] = await Promise.all([
       this.listPendingActions(),
-      this.listBackgroundJobs(20),
+      this.listBackgroundJobs(jobs),
       this.listWorkspaceWork(),
       this.getEvolutionChangelog({ limit: 1 }),
       this.getMemoryContent(),
+      this.inspectWork(),
     ]);
 
     return {
-      work: hasWorkspaceWork({
-        work: workspaceWork, pending: pendingActions, jobs,
-        changes: changelog.entries, notes: parseMemoryNotes(memoryContent ?? ''), owed: await this.inspectWork(),
-      }),
+      pendingActions, backgroundJobs, workspaceWork, memoryContent, inspectedWork,
+      // A live turn is not content: streaming with nothing renderable keeps the tab hidden.
+      presence: {
+        work: workspaceWork, pending: pendingActions, jobs: backgroundJobs,
+        changes: changelog.entries, notes: parseMemoryNotes(memoryContent ?? ''), owed: inspectedWork,
+      },
+    };
+  }
+
+  private async tabPresenceOf(work: Parameters<typeof hasWorkspaceWork>[0]): Promise<TabPresence> {
+    return {
+      work: hasWorkspaceWork(work),
       // Hidden with swarms off.
       explorations: await this.readAccountSwarms() && listForkRuns(this.boundSql, this.actorHandle(), null, 1).items.length > 0,
     };
   }
 
+  /** Asks each lane's own read path at limit 1, since presence is a boolean. */
+  @callable() async getWorkspaceTabPresence(): Promise<TabPresence> {
+    return await this.tabPresenceOf((await this.workReads(1)).presence);
+  }
+
   @callable()
   async getWorkspaceSnapshot() {
-    const [status, tools, memoryContent, executors, activePlan, tabPresence, { slates }] = await Promise.all([
+    const { memoryContent, presence } = await this.workReads(1);
+
+    return await this.snapshotOf(memoryContent, presence);
+  }
+
+  /**
+   * What a workspace tab draws first, in one read: the snapshot, and every list its first screen asked for after the
+   * snapshot came back (2026-10-09 on production: a second wave of six reads, 200-500 ms after the transcript). Each
+   * table is read once, and the tab presence is decided from the same rows. Browser-only: it is off the RPC access
+   * table, so a token never reaches it (`AGENT_RPC_ACCESS`).
+   */
+  @callable()
+  getWorkspaceOpening() {
+    return settle(Effect.gen({ self: this }, function* () {
+      const [reads, subordinates, pendingConsents, workspaceAgents] = yield* Effect.all([
+        attempt({ doing: 'reading what the Work tab draws', otherwise: 'io' }, () => this.workReads(WORK_TAB_JOBS)),
+        openingList('listing the subordinate roster', () => this.listSubordinates()),
+        openingList('listing the pending device consents', () => this.listPendingConsents()),
+        openingList("listing the workspace's agents", () => this.listWorkspaceAgents()),
+      ], { concurrency: 'unbounded' });
+
+      const snapshot = yield* attempt({ doing: 'reading the workspace snapshot', otherwise: 'io' }, () => this.snapshotOf(reads.memoryContent, reads.presence));
+
+      return {
+        ...snapshot,
+        pendingActions: reads.pendingActions, backgroundJobs: reads.backgroundJobs, workspaceWork: reads.workspaceWork,
+        inspectedWork: reads.inspectedWork, subordinates, pendingConsents, workspaceAgents,
+      };
+    }));
+  }
+
+  private async snapshotOf(memoryContent: string, presence: Parameters<typeof hasWorkspaceWork>[0]) {
+    const [status, tools, executors, activePlan, tabPresence, { slates }] = await Promise.all([
       this.getAgentStatus(),
       this.getToolDescriptions(),
-      this.getMemoryContent(),
       this.getExecutors(),
       this.getActivePlanReview(),
-      this.getWorkspaceTabPresence(),
+      this.tabPresenceOf(presence),
       this.listSlates(),
     ]);
 

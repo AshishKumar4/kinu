@@ -1,7 +1,8 @@
 /**
  * The roster as the owner's object answers it: the tile each workspace pushed rides its entry, with the owner's
  * release approvals among its decisions; a filter or search pages the roster while the counts stay whole; and an
- * open page is told each change once, over its socket, and nothing for a push that changed nothing.
+ * open page is told each change once, over its socket, and nothing for a push that changed nothing. On the same
+ * socket it hears what account-memory proposals wait on the owner, as it opens and as each is filed or decided.
  */
 import * as v from 'valibot';
 import { describe, expect, setSystemTime, test } from 'bun:test';
@@ -20,8 +21,13 @@ const FrameSchema = v.object({
   counts: v.object({ all: v.number(), needs: v.number(), working: v.number(), idle: v.number(), decisions: v.number() }),
 });
 
-/** The owner's page, listening: every frame the object sends it. */
-async function openPage(harness: TestUserDO): Promise<() => Array<v.InferOutput<typeof FrameSchema>>> {
+const MemoryFrameSchema = v.object({
+  type: v.literal('account_memory'),
+  pending: v.array(v.object({ id: v.string(), proposal: v.object({ kind: v.string() }) })),
+});
+
+/** The owner's page, listening: every frame the object sends it, by kind. */
+async function listen(harness: TestUserDO): Promise<() => Array<v.InferOutput<typeof FrameSchema> | v.InferOutput<typeof MemoryFrameSchema>>> {
   const accepted = harness.acceptedSockets.length;
   const answer = await harness.userDO.fetch(new Request('https://kinu.test/roster/live', { headers: { Upgrade: 'websocket' } }));
 
@@ -30,7 +36,14 @@ async function openPage(harness: TestUserDO): Promise<() => Array<v.InferOutput<
 
   if (socket === undefined) throw new Error('the object accepted no roster socket');
 
-  return () => socket.sent.map((text) => v.parse(FrameSchema, JSON.parse(text)));
+  return () => socket.sent.map((text) => v.parse(v.variant('type', [FrameSchema, MemoryFrameSchema]), JSON.parse(text)));
+}
+
+/** The roster's own frames a page hears. */
+async function openPage(harness: TestUserDO): Promise<() => Array<v.InferOutput<typeof FrameSchema>>> {
+  const frames = await listen(harness);
+
+  return () => frames().flatMap((frame) => (frame.type === 'workspace' ? [frame] : []));
 }
 
 async function workspace(harness: TestUserDO, name: string): Promise<UserCaller> {
@@ -264,6 +277,22 @@ describe("an open page's socket", () => {
     await harness.userDO.removeWorkspace(owner, 'ledger', USER_ID);
 
     expect(frames().at(-1)).toMatchObject({ name: 'ledger', entry: null, counts: { all: 0 } });
+    harness.close();
+  });
+});
+
+describe("the owner's page hears what account memory waits on them", () => {
+  test('as it opens, and again as a proposal is filed and as it is decided', async () => {
+    const harness = createTestUserDO({ durableObjectId: USER_ID });
+    const owner = await testOwner();
+    const ledger = await workspace(harness, 'ledger');
+    const frames = await listen(harness);
+    const pendings = () => frames().flatMap((frame) => (frame.type === 'account_memory' ? [frame.pending.map((row) => row.id)] : []));
+
+    const id = await harness.userDO.accountMemory_propose(ledger, { kind: 'fact', key: 'owner_city', value: 'Lisbon' }, { by: 'agent', agent: 'main' });
+    await harness.userDO.accountMemory_decide(owner, id, 'accept');
+
+    expect(pendings()).toEqual([[], [id], []]);
     harness.close();
   });
 });

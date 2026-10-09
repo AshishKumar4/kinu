@@ -1,9 +1,12 @@
 /**
  * The frame is a separate chunk (`LandingWorkspaceFrame`) so the landing's first paint does not
- * carry the product's renderers. The window bar is landing chrome beside the mock, not in it.
+ * carry the product's renderers, and it mounts once the prerendered page is hydrated: it draws
+ * only in a browser. The window bar is landing chrome beside the mock, not in it.
  */
-import { lazy, Suspense, useState, type ReactElement } from 'react';
+import { lazy, Suspense, type ReactElement } from 'react';
 
+import { useHydrated } from '@/hooks/use-hydrated';
+import { useMediaQuery } from '@/hooks/use-media-query';
 import type { LandingFrameKind } from './LandingWorkspaceFrame';
 
 const LandingWorkspaceFrame = lazy(() => import('./LandingWorkspaceFrame'));
@@ -16,7 +19,7 @@ const WINDOW_TITLE = {
 
 /** Hidden under `prefers-reduced-motion`, where there is no playback to restart. */
 function LandingMovieReplay(): ReactElement | null {
-  const [reduced] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const reduced = useMediaQuery('(prefers-reduced-motion: reduce)');
 
   if (reduced) return null;
 
@@ -32,6 +35,9 @@ function LandingMovieReplay(): ReactElement | null {
 }
 
 export function LandingFrame({ kind, caption }: { kind: LandingFrameKind; caption: string }): ReactElement {
+  const hydrated = useHydrated();
+  const waiting = <div aria-busy="true" className="h-[760px] rounded-b-2xl border p-border p-surface" />;
+
   return (
     <div>
       <div className="flex items-center gap-3 rounded-t-2xl border border-b-0 p-border p-recessed px-4 py-2.5 font-mono text-[11px] p-text-4 sm:px-5">
@@ -46,8 +52,8 @@ export function LandingFrame({ kind, caption }: { kind: LandingFrameKind; captio
           {kind === 'plan' && <LandingMovieReplay />}
         </span>
       </div>
-      <Suspense fallback={<div aria-busy="true" className="h-[760px] rounded-b-2xl border p-border p-surface" />}>
-        <LandingWorkspaceFrame kind={kind} />
+      <Suspense fallback={waiting}>
+        {hydrated ? <LandingWorkspaceFrame kind={kind} /> : waiting}
       </Suspense>
       <p className="px-1 pt-3 text-[11px] leading-relaxed p-text-4 sm:hidden">{caption}</p>
     </div>

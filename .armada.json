@@ -10,7 +10,7 @@
   "pool": 60,
   "plan": { "command": ["bun", "scripts/ladder.ts", "--ci-plan", "--ci-costs={timings}"] },
   "task": {
-    "command": ["bun", "scripts/ladder.ts", "--tier=ci", "--ci-row={row}", "--ci-costs={timings}", "--verdicts={out}"],
+    "command": ["bun", "scripts/ladder.ts", "--tier=ci", "--ci-row={row}", "--ci-costs={timings}", "--verdicts={out}", "--artifacts={artifacts}"],
     "name": "name",
     "timeout": 1800,
     "secrets": ["KINU_PROOFS_ACCESS_KEY_ID", "KINU_PROOFS_SECRET_ACCESS_KEY"]

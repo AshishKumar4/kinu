@@ -7,6 +7,7 @@ import type {
 } from './types';
 import { parseModelSpec } from './types';
 import { StaleModelList } from './util';
+import { withModelsDevRead } from './models-dev';
 import { Effect, Result } from 'effect';
 import { diagnostics, KinuError, renderThrownChain, settle, settleSync } from '../obs/index';
 import { accountCredentialKey, MAIN_ACCOUNT, storedAccounts } from '../credentials/accounts';
@@ -223,7 +224,10 @@ export function createProviderRegistry(): ProviderRegistry {
       }));
     },
 
-    listAllModels(deps) {
+    listAllModels(listing) {
+      // The menu's listings run at once and read models.dev once between them: a read of this call's own.
+      const deps = withModelsDevRead(listing);
+
       return settle(Effect.gen(function* () {
         const { providers, failures: sourceFailures } = yield* allProviders(deps);
         const models: Array<ModelInfo & { provider: string }> = [];
