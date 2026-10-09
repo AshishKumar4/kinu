@@ -243,7 +243,8 @@ async function observeMobile(newPage: Gallery['newPage'], origin: string): Promi
 async function openPlanPage(page: Page, title: string): Promise<void> {
   const tab = `nav[aria-label="Pages"] button[aria-label*=${JSON.stringify(title)}]`;
 
-  await page.waitForSelector(tab);
+  // Bounded: a plan with no page tab is the failure this names, not a wait without end.
+  await page.waitForSelector(tab, { timeout: 15_000 });
   await page.click(tab);
   await page.waitForSelector(`${tab}[aria-current="true"]`);
   await page.waitForSelector('[data-plan-review-root]');
@@ -594,9 +595,11 @@ describe('the decision bar fits wherever a plan is read', () => {
         return page;
       };
 
-      // `stacks`: whether the two decisions must sit one above the other there; null where a row of them fits or not.
+      // `stacks`: whether the two decisions must sit one above the other there; null where a row of them may fit. The
+      // narrowest phone has no room for a row; the inspector column and a common phone sit near the line.
       const widths: { name: string; open: () => Promise<Page>; stacks: boolean | null }[] = [
-        { name: 'the inspector column', stacks: true, open: inspector },
+        { name: 'the inspector column', stacks: null, open: inspector },
+        { name: 'a narrow phone', stacks: true, open: async () => planFrame(320, 640) },
         { name: 'a phone', stacks: null, open: async () => planFrame(390, 844) },
         { name: 'a wide page', stacks: false, open: async () => planFrame(1280, 900) },
       ];

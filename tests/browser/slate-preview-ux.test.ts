@@ -338,8 +338,8 @@ test('preview tabs deduplicate live slates, fill the surface, and give each open
         expect(await page.$eval('[data-plan-owner]', el => el.getAttribute('data-plan-owner'))).toBe('main');
         // One presentation policy: a live actor's arrival is neither labelled
         // nor described as retained, and its review is an explicit navigation.
-        expect(await page.$eval('[data-preview-surface]', el => el.textContent)).not.toContain('retained');
-        expect(await page.$eval('[data-preview-surface]', el => el.textContent)).toContain("Review in courier's conversation");
+        expect(await page.$eval('[data-plan-page]', el => el.textContent)).not.toContain('retained');
+        expect(await page.$eval('[data-plan-page]', el => el.textContent)).toContain("Review in courier's conversation");
         // A repeat of a reference already seen is not an arrival: the claim is
         // spent for the connection, so no amount of waiting re-opens it. Give
         // the repeat a full read cycle to try, then the page open still stands.
