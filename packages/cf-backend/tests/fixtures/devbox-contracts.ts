@@ -162,7 +162,10 @@ export class ContractBox extends Devbox<Env> {
       ]);
 
       if (batch?.status !== 'rejected' || sdk?.status !== 'rejected' || !SandboxFileError.is(sdk.reason)) {
-        throw new Error('the batched listing or SDK accepted a filesystem failure');
+        const batchDetail = batch?.status === 'rejected' ? describeThrown({ cause: batch.reason }) : batch?.status;
+        const sdkDetail = sdk?.status === 'rejected' ? describeThrown({ cause: sdk.reason }) : sdk?.status;
+
+        throw new Error(`the ${code} listing contract was not observed: batch=${batchDetail}, SDK=${sdkDetail}`);
       }
 
       const failure = v.parse(v.object({ cause: v.object({ code: v.string(), path: v.string(), operation: v.string() }) }), batch.reason);
