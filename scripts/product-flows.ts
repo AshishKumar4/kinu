@@ -133,7 +133,7 @@ const CreatedSchema = v.object({ name: v.string() });
 /** The beat each row's workspace keeps until it is removed, so no eval run's sweep takes it mid-row. */
 const beats = new Map<string, () => void>();
 
-async function createFlowWorkspace(target: FlowTarget, subject: string): Promise<string> {
+export async function createFlowWorkspace(target: FlowTarget, subject: string): Promise<string> {
   const response = await fetch(`${target.origin}/api/user/workspaces`, {
     method: 'POST',
     headers: { ...webHeaders(target.identity), 'content-type': 'application/json' },
@@ -152,7 +152,7 @@ async function createFlowWorkspace(target: FlowTarget, subject: string): Promise
 
 /** Delete the row's workspace, the same DELETE the sidebar's Remove issues. A
  *  failed teardown is reported, never thrown over the row's own verdict. */
-async function removeFlowWorkspace(target: FlowTarget, workspace: string): Promise<void> {
+export async function removeFlowWorkspace(target: FlowTarget, workspace: string): Promise<void> {
   beats.get(workspace)?.();
   beats.delete(workspace);
 
@@ -175,14 +175,14 @@ async function removeFlowWorkspace(target: FlowTarget, workspace: string): Promi
 export const CHAT_COMPOSER_LIVE = `[...document.querySelectorAll('#chat textarea')].some(t => !t.disabled)`;
 
 /** The workspace bar's chats, Main first. */
-const CHATS = 'nav[aria-label="Chats"]';
+export const CHATS = 'nav[aria-label="Chats"]';
 
 /** The opening every flow gives a chat it starts: the bar's + asks for one, and the scripted model answers it. */
 const NEW_CHAT_OPENING = 'Reply with one word: ready.';
 
 /** The chat column's Send control is back to sending, so no turn is running:
  *  while one runs, the same control steers it instead. */
-const CHAT_IDLE = `[...document.querySelectorAll('#chat button')].some((el) => el.getClientRects().length > 0
+export const CHAT_IDLE = `[...document.querySelectorAll('#chat button')].some((el) => el.getClientRects().length > 0
   && /send$/iu.test((el.getAttribute('aria-label') ?? '').trim()))`;
 
 /** What stops a row dead: an app script that never loaded, which leaves the
@@ -296,7 +296,7 @@ export async function waitOn<Value>(page: Page, what: string, promise: Promise<V
   });
 }
 
-async function openWorkspacePage(target: FlowTarget, path: string): Promise<Page> {
+export async function openWorkspacePage(target: FlowTarget, path: string): Promise<Page> {
   const page = await signedInPage(target.browser, target.identity);
 
   // 'load', not 'networkidle0': the app holds its event socket open from
@@ -334,7 +334,7 @@ export async function typeIntoComposer(page: Page, text: string): Promise<Elemen
  *  before the page learns the turn began, and a message sent then steers it: the agent-plan row's Plan ask became a
  *  steer of the Auto opening, which offered no submit_plan (staging, 2026-10-08). The turn's close on the socket is
  *  its end. */
-async function startNewChat(page: Page): Promise<void> {
+export async function startNewChat(page: Page): Promise<void> {
   const ledger = await frameLedger(page);
 
   try {
@@ -354,7 +354,7 @@ async function startNewChat(page: Page): Promise<void> {
 
 /** Send is back before the page learns the turn began, so the turn's close on the socket is its end: read as idle
  *  0.7 s after the send, the changes-storm row went on before its seed was written (staging, 2026-10-08). */
-async function sendAndSettle(page: Page, text: string): Promise<void> {
+export async function sendAndSettle(page: Page, text: string): Promise<void> {
   await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
 
   const composer = await typeIntoComposer(page, text);
@@ -1913,7 +1913,13 @@ export interface SlatePreviewVerdict {
   readonly bumped: string | null;
   /** Whether the page heard its host's context. */
   readonly hosted: boolean;
+  /** Every tab of the inspector's Pages strip, by the name it shows: a slate's is its title, never its preview's port
+   *  ("workspace :20000", 1008-f). */
+  readonly pageTabs: readonly string[];
 }
+
+/** The names the inspector's Pages strip shows, one per tab. */
+export const PAGE_TABS = `[...document.querySelectorAll('#inspector nav[aria-label="Pages"] button[aria-label]')].map((tab) => tab.getAttribute('aria-label') ?? '')`;
 
 /**
  * Row: a slate the agent builds shows its running preview in its own tab.
@@ -1961,10 +1967,12 @@ export async function slateShowsItsPreview(target: FlowTarget): Promise<SlatePre
       }
     }
 
+    const pageTabs = v.parse(v.array(v.string()), await page.evaluate(PAGE_TABS));
+
     await ledger.stop();
     await page.close();
 
-    return { workspace, slateTab, frameText, bumped, hosted };
+    return { workspace, slateTab, frameText, bumped, hosted, pageTabs };
   } finally {
     await removeFlowWorkspace(target, workspace);
   }

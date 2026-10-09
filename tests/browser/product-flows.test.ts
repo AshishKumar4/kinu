@@ -9,7 +9,8 @@
  * Every row runs in `beforeAll`, each in a browser of its own, and leaves a verdict or the reason it has none; the
  * tests below read only what the page showed. A row that hangs is ended when the tier's runner says its silence nears
  * the bound (`endedNearSilence`), and fails alone: on staging d930f2537 one row's hang ended the run, and no test of
- * any row ran.
+ * any row ran. `KINU_FLOW_ROWS` (comma-separated row names) runs only those rows, to prove one before the rest: the
+ * tests of a row not run then fail, so pick them with `-t`.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { resolveWebIdentity } from '../../evals/src/session';
@@ -25,7 +26,14 @@ import {
   type FlowTarget, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
   type StampedCardVerdict, type WrittenFileVerdict,
 } from '../../scripts/product-flows';
-import { ACCOUNT_FACT, ACCOUNT_RECALL_REPLY, FLOW_MEMORY_NOTE, FLOW_PROBE, FLOW_SHELL_PROBE, FLOW_SLATE, HIRE_PARKED_COMMAND, PARKED_COMMANDS, PROPOSED_WORKSPACE, STORM_FILES } from '../../scripts/flows-script';
+import {
+  ACCOUNT_FACT, ACCOUNT_RECALL_REPLY, CONTINUE, FLOW_MEMORY_NOTE, FLOW_PROBE, FLOW_SHELL_PROBE, FLOW_SLATE, HIRE_PARKED_COMMAND, INTERRUPTED_BRIEF,
+  INTERRUPTED_TITLE, PARKED_COMMANDS, PIN_PAGE, PLAN_COMMENT, PROPOSED_WORKSPACE, REACH_REPLY, REACH_STREAM, STORM_FILES, THREAD_REPLY,
+} from '../../scripts/flows-script';
+import {
+  chatTitledFromItsBrief, hireLivesUnderItsName, pinKeepsAnInChatPage, planCommentReachesTheAgent, slateStreamsAndHires,
+  type HireHomeVerdict, type PinVerdict, type PlanCommentVerdict, type SlateReachVerdict, type TitledChatVerdict,
+} from '../../scripts/owner-ask-flows';
 import { endedNearSilence, rowVerdicts } from '../../scripts/row-verdicts';
 
 interface FlowVerdicts {
@@ -47,11 +55,16 @@ interface FlowVerdicts {
   driveOpens: DriveOpensVerdict | null;
   slateOpens: SlateOpensVerdict | null;
   slateShare: SlateShareVerdict | null;
+  pin: PinVerdict | null;
+  titledChat: TitledChatVerdict | null;
+  hireHome: HireHomeVerdict | null;
+  slateReach: SlateReachVerdict | null;
+  planComment: PlanCommentVerdict | null;
 }
 
 const observed: FlowVerdicts = {
   welcome: null, firstAnswer: null, agentReturn: null, agentPlan: null, proposal: null, accountMemory: null, approvals: null, hireApproval: null, panel: null, stamped: null, writtenFile: null, storm: null, liveMemory: null, slate: null, drive: null,
-  driveOpens: null, slateOpens: null, slateShare: null,
+  driveOpens: null, slateOpens: null, slateShare: null, pin: null, titledChat: null, hireHome: null, slateReach: null, planComment: null,
 };
 
 /** Why no row could start: no origin, or no identity for it. */
@@ -59,9 +72,14 @@ let setup: string | null = null;
 
 const { attempt, verdictOf, broken } = rowVerdicts('product-flows', () => setup);
 
+/** The rows `KINU_FLOW_ROWS` names, or every row. */
+const chosen = new Set((process.env.KINU_FLOW_ROWS ?? '').split(',').map((row) => row.trim()).filter((row) => row !== ''));
+
 /** `flow` as the row `row`, in a browser of its own that its runner's silence notice closes. */
-function flowRow<Value>(row: string, at: Omit<FlowTarget, 'browser'>, flow: (target: FlowTarget) => Promise<Value>): Promise<Value | null> {
-  return attempt(row, () => withBrowser((browser) => endedNearSilence(flow({ ...at, browser }), () => browser.disconnect(), openWaitsNamed)));
+async function flowRow<Value>(row: string, at: Omit<FlowTarget, 'browser'>, flow: (target: FlowTarget) => Promise<Value>): Promise<Value | null> {
+  if (chosen.size > 0 && !chosen.has(row)) return null;
+
+  return await attempt(row, () => withBrowser((browser) => endedNearSilence(flow({ ...at, browser }), () => browser.disconnect(), openWaitsNamed)));
 }
 
 /** Every row, in order, against one origin as one identity. */
@@ -85,6 +103,11 @@ async function measureRows(at: Omit<FlowTarget, 'browser'>): Promise<void> {
   observed.driveOpens = await flowRow('drive-opens', at, driveOpens);
   observed.slateOpens = await flowRow('slate-opens', at, slateOpensFromMyStuff);
   observed.slateShare = await flowRow('slate-share', at, slateSharesReachingNothing);
+  observed.pin = await flowRow('pin', at, pinKeepsAnInChatPage);
+  observed.titledChat = await flowRow('titled-chat', at, chatTitledFromItsBrief);
+  observed.hireHome = await flowRow('hire-home', at, hireLivesUnderItsName);
+  observed.slateReach = await flowRow('slate-reach', at, slateStreamsAndHires);
+  observed.planComment = await flowRow('plan-comment', at, planCommentReachesTheAgent);
 
   process.stderr.write(`product-flows at ${at.origin}: ${JSON.stringify({ observed, broke: broken() }, null, 2)}\n`);
 }
@@ -298,6 +321,78 @@ describe('a slate the agent built shows its running preview', () => {
 
     expect(slate.bumped).toBe('2');
     expect(slate.hosted).toBe(true);
+  });
+
+  // 1008-f: its tab read "workspace :20000", the port its preview serves on.
+  test('its tab is named by its title, and no tab by its preview\'s port', () => {
+    const { pageTabs } = verdictOf(observed.slate, 'slate-preview');
+
+    expect(pageTabs).toContain(FLOW_SLATE.title);
+    expect(pageTabs.filter((tab) => /:\d{2,5}\b/u.test(tab))).toEqual([]);
+  });
+});
+
+// The owner's asks of 2026-10-08 (docs/research/REQUESTS-LEDGER.md), each as the owner meets it.
+describe('a page an answer draws in the chat is kept by its pin (1008-c)', () => {
+  test('the pin keeps it as a slate, one of the workspace\'s pages under the page\'s own title', () => {
+    const pin = verdictOf(observed.pin, 'pin');
+
+    expect(pin.kept).not.toBeNull();
+    expect(pin.keptName).toContain(PIN_PAGE.title);
+    expect(pin.pageTabs).toContain(PIN_PAGE.title);
+  });
+});
+
+describe('a chat is named from its brief (1008-e)', () => {
+  test('even when its first turn is stopped and the owner says Continue', () => {
+    const chat = verdictOf(observed.titledChat, 'titled-chat');
+
+    expect(chat.continued).toBe(true);
+    expect([INTERRUPTED_BRIEF, INTERRUPTED_TITLE]).toContain(chat.title);
+    expect(chat.title).not.toBe(CONTINUE);
+  });
+});
+
+describe('a hire lives in a home of its own name (1008-g)', () => {
+  test('its shell starts in /home/<its name>, not /home/sub-<id>', () => {
+    const hire = verdictOf(observed.hireHome, 'hire-home');
+
+    expect(hire.hired).not.toMatch(/^sub-/u);
+    expect(hire.home).toBe(`/home/${hire.hired}`);
+  });
+});
+
+describe("a slate streams answers as they are written, and its owner's slate hires (1008-ac, 1008-ad)", () => {
+  test("ai.stream's answer shows its start before its end", () => {
+    const { modelStream } = verdictOf(observed.slateReach, 'slate-reach');
+
+    expect(modelStream.partway).toContain(REACH_STREAM.lead.trim());
+    expect([modelStream.state, modelStream.final]).toEqual(['done', `${REACH_STREAM.lead}${REACH_STREAM.end}`]);
+  });
+
+  test("agent.ask streams the agent's own reply into the slate", () => {
+    const { agentStream } = verdictOf(observed.slateReach, 'slate-reach');
+
+    expect(agentStream.partway).toContain(REACH_REPLY.lead.trim());
+    expect(agentStream.state).toBe('done');
+    expect(agentStream.final).toContain(REACH_REPLY.end);
+  });
+
+  test("the owner's own slate hires a helper", () => {
+    expect(verdictOf(observed.slateReach, 'slate-reach').ownerHire).toMatch(/^hired /u);
+  });
+});
+
+describe('a comment on the whole plan reaches the agent, which answers it in its thread (1008-ao, 1008-ar)', () => {
+  test('the review admits it and Request changes carries it to the agent', () => {
+    const plan = verdictOf(observed.planComment, 'plan-comment');
+
+    expect(plan.commentAdmitted).toBe(true);
+    expect(plan.heard).toContain(PLAN_COMMENT);
+  });
+
+  test("the agent's answer shows in the comment's own thread", () => {
+    expect(verdictOf(observed.planComment, 'plan-comment').threadReplies.some((reply) => reply.includes(THREAD_REPLY))).toBe(true);
   });
 });
 
