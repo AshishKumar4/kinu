@@ -354,10 +354,11 @@ describe('a chat is named from its brief (1008-e)', () => {
 });
 
 describe('a hire lives in a home of its own name (1008-g)', () => {
-  test('its shell starts in /home/<its name>, not /home/sub-<id>', () => {
+  // Its name is its brief's first telling words (`mintAgentName`): "Harbour lamps keeper: …".
+  test('it is named from its brief, and its shell starts in /home/<that name>, not /home/sub-<id>', () => {
     const hire = verdictOf(observed.hireHome, 'hire-home');
 
-    expect(hire.hired).not.toMatch(/^sub-/u);
+    expect(hire.hired).toBe('harbour-lamps-keeper');
     expect(hire.home).toBe(`/home/${hire.hired}`);
   });
 });
