@@ -9,7 +9,9 @@ import type { JsonValue } from '@kinu.run/core';
  */
 
 /** A part of a page that belongs to one name: what it says, and the labels of the controls in it. */
-export type Region = { readonly text: string; readonly controls: readonly string[] };
+type ReadRegion = { text: string; controls: string[]; columns?: Readonly<Record<string, string>>; occurrence?: number };
+
+export type Region = Readonly<ReadRegion>;
 
 /** A page as read once: all its visible text, and every region for each name asked about. */
 export type Sight = { readonly text: string; readonly regions: Readonly<Record<string, readonly Region[]>> };
@@ -137,9 +139,12 @@ export function look(names: readonly string[], press: Press | null): Looked {
   const columnOf = (cell: Element): ((node: Node) => boolean) | null => {
     let holder = cell.parentElement;
 
-    while (holder !== null && holder !== document.body && !holder.matches('table,svg') && !['grid', 'inline-grid'].includes(getComputedStyle(holder).display)) {
+    while (holder !== null && holder !== document.body && !holder.matches('table,svg') && !['grid', 'inline-grid', 'flex', 'inline-flex'].includes(getComputedStyle(holder).display)) {
       holder = holder.parentElement;
     }
+
+    // A flex chart can put its bars and axis labels in separate rows under one drawing, rather than in one grid.
+    if (holder !== null && ['flex', 'inline-flex'].includes(getComputedStyle(holder).display)) holder = holder.parentElement;
 
     if (holder === null || holder === document.body) return null;
     const across = cell.getBoundingClientRect(), group = holder.getBoundingClientRect();
@@ -155,8 +160,26 @@ export function look(names: readonly string[], press: Press | null): Looked {
   const regions: Record<string, Region[]> = {};
   const pressing = new Set<Element>();
 
+  const columnsOf = (row: Element) => {
+    const table = row.closest('table');
+
+    if (!row.matches('tr') || table === null) return {};
+    const columns: Record<string, string> = {};
+    const headers = [...((table.querySelector('thead tr:last-child') ?? table.querySelector('tr'))?.children ?? [])];
+
+    for (const [index, cell] of [...row.children].entries()) {
+      const header = headers[index];
+
+      if (header !== undefined && header.matches('th, [role="columnheader"]')) columns[textIn(header).trim()] = saying(texts.filter((node) => cell.contains(node)));
+    }
+
+    return columns;
+  };
+
   for (const name of names) {
-    const parts: ((node: Node) => boolean)[] = [];
+    const parts: { inside: (node: Node) => boolean; occurrence: number }[] = [];
+    const rows = new Map<Element, number>();
+    const columns: Record<string, string> = {};
 
     for (const label of labels.get(name) ?? []) {
       let row = label;
@@ -165,23 +188,40 @@ export function look(names: readonly string[], press: Press | null): Looked {
         row = row.parentElement;
       }
 
-      parts.push((node) => row.contains(node));
+      const occurrence = rows.get(row) ?? rows.size;
+
+      rows.set(row, occurrence);
+      parts.push({ inside: (node) => row.contains(node), occurrence });
+      Object.assign(columns, columnsOf(row));
+
       let cell = label;
 
       while (cell.parentElement !== null && ['inline', 'contents'].includes(getComputedStyle(cell).display)) cell = cell.parentElement;
       const column = columnOf(cell);
 
-      if (column !== null && !othersIn(name, column)) parts.push(column);
+      if (column !== null && !othersIn(name, column)) parts.push({ inside: column, occurrence });
     }
 
-    regions[name] = parts.map((inside) => {
+    const readings: { text: Said[]; controls: Element[] }[] = [];
+    regions[name] = parts.flatMap(({ inside, occurrence }) => {
       const held = controls.filter((control) => inside(control.element));
+      const text = texts.filter(inside);
+      const elements = held.map((control) => control.element);
+
+      // A row and a column over the same nodes are one reading; identical copy in separate treatments stays separate.
+      if (readings.some((reading) => reading.text.length === text.length && reading.text.every((node, index) => node === text[index])
+        && reading.controls.length === elements.length && reading.controls.every((node, index) => node === elements[index]))) return [];
+      readings.push({ text, controls: elements });
 
       if (press !== null && press.name === name) {
         for (const control of held) if (press.label === null ? held.length === 1 : new RegExp(press.label, 'i').test(control.label)) pressing.add(control.element);
       }
 
-      return { text: saying(texts.filter(inside)), controls: held.map((control) => control.label) };
+      const region: ReadRegion = { text: saying(text), controls: held.map((control) => control.label), occurrence };
+
+      if (Object.keys(columns).length > 0) region.columns = columns;
+
+      return [region];
     });
   }
 
@@ -192,9 +232,15 @@ export function look(names: readonly string[], press: Press | null): Looked {
 export function sightEvidence(sight: Sight): JsonValue {
   return {
     text: sight.text.slice(0, 600),
-    regions: Object.fromEntries(Object.entries(sight.regions).map(([name, regions]) => [name, regions.map((region) => ({
-      text: region.text.slice(0, 300), controls: [...region.controls],
-    }))])),
+    regions: Object.fromEntries(Object.entries(sight.regions).map(([name, regions]) => [name, regions.map((region) => {
+      const evidence: ReadRegion = { text: region.text.slice(0, 300), controls: [...region.controls] };
+
+      if (region.columns !== undefined) evidence.columns = region.columns;
+
+      if (region.occurrence !== undefined) evidence.occurrence = region.occurrence;
+
+      return evidence;
+    })])),
   };
 }
 

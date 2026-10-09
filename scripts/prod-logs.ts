@@ -229,8 +229,9 @@ async function live(args: Args): Promise<void> {
 
 // ---- telemetry client ------------------------------------------------------
 
+/** A query's condition on one key. `in` takes its values comma-separated. */
 export type Filter =
-  | { readonly key: string; readonly operation: 'eq' | 'neq' | 'includes' | 'exists'; readonly value?: string; readonly type: 'string' }
+  | { readonly key: string; readonly operation: 'eq' | 'neq' | 'includes' | 'exists' | 'in'; readonly value?: string; readonly type: 'string' }
   | { readonly key: string; readonly operation: 'gt'; readonly value: number; readonly type: 'number' };
 
 const eq = (key: string, value: string): Filter => ({ key, operation: 'eq', value, type: 'string' });

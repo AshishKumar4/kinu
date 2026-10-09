@@ -7,7 +7,7 @@ import * as v from 'valibot';
 import { EXERCISED_PATHS, reviewModelOverride } from '../src/config';
 import { CHANGES, ORCHESTRATION_CAUSES, SIMPLE_CAUSES, parseDiagnosis, renderDiagnosis } from '../src/diagnosis';
 import { evidenceDirectories, evidenceDirectory, extractInsights, readTrialEvidence, resultsRow } from '../src/insights';
-import { redact } from '../src/redact';
+import { redact, redactFile } from '../src/redact';
 import { parseResults, trials, type Assertion } from '../src/results';
 import { askOnce, resolveEvalTarget } from '../src/target';
 import { renderLeg, renderTrajectories } from '../src/trajectories';
@@ -137,7 +137,7 @@ const target = resolveEvalTarget(process.env);
 const model = reviewModelOverride(process.env) ?? undefined;
 
 const files = [
-  { path: `${REVIEW}/comparison.json`, content: redact(comparisonText) },
+  { path: `${REVIEW}/comparison.json`, content: redactFile('comparison.json', comparisonText) },
   { path: `${REVIEW}/changes.json`, content: JSON.stringify(changes.map((change) => ({ id: change.id, taskId: change.taskId, model: change.model, arm: change.arm })), null, 2) },
   ...changes.flatMap((change) => [
     { path: `${REVIEW}/changes/${change.id}/baseline.md`, content: change.legs.baseline },
@@ -149,10 +149,10 @@ const files = [
     const root = `${REVIEW}/trials/${review.id}`;
 
     return [
-      { path: `${root}/ledger.jsonl`, content: redact(review.evidence.ledger) },
-      { path: `${root}/timeline.jsonl`, content: redact(review.evidence.timeline) },
+      { path: `${root}/ledger.jsonl`, content: redactFile('ledger.jsonl', review.evidence.ledger) },
+      { path: `${root}/timeline.jsonl`, content: redactFile('timeline.jsonl', review.evidence.timeline) },
       { path: `${root}/transcript.md`, content: redact(review.evidence.transcript) },
-      { path: `${root}/results.json`, content: redact(resultsRow(review.assertion)) },
+      { path: `${root}/results.json`, content: redactFile('results.json', resultsRow(review.assertion)) },
     ];
   }),
   ...(comparison.baseline === null ? [] : [{

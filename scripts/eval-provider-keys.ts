@@ -19,9 +19,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import * as v from 'valibot';
-import { DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, inheritedRows, type EvalAccount } from '@kinu.run/core';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC, DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, inheritedRows, ProfileCatalogEnvelopeSchema, type EvalAccount } from '@kinu.run/core';
 import { evalWebIdentityEnv } from '@kinu.run/test-utils';
-import { DEFAULT_TRIALS, evalMatrix, PASS_FIRST_SLOT } from '../evals/src/config';
+import { DEFAULT_MODELS, DEFAULT_TRIALS, evalMatrix, PASS_FIRST_SLOT } from '../evals/src/config';
 import { WORKSPACE_LEASE_MS } from '../evals/src/session';
 import { trialAccounts, trialAccountsAt } from '../evals/src/slot';
 import { ARMS } from '../evals/src/target';
@@ -111,7 +111,8 @@ type TrialOutcome = { readonly given: boolean; readonly reset: boolean; readonly
 
 /**
  * A trial account made ready for the runs that act as it: reset first when it holds a row a trial would inherit and no
- * run is on it (the product's own account delete, which empties it whole), then given each key it does not hold.
+ * run is on it (the product's own account delete, which empties it whole), then given each key it does not hold and a
+ * deep-tier route with an independent provider fallback, through the same catalog settings API a user saves.
  */
 async function readyTrialAccount(input: Provisioning & { identity: string }, account: EvalAccount, keys: Readonly<Record<string, string>>): Promise<TrialOutcome> {
   const headers = { [DEV_IDENTITY_HEADER]: input.identity, [DEV_IDENTITY_ACCOUNT_HEADER]: account };
@@ -157,6 +158,27 @@ async function readyTrialAccount(input: Provisioning & { identity: string }, acc
 
     if (!answer.ok) return { given, reset, finding: `storing ${key} for ${account} answered ${String(answer.status)}` };
     given = true;
+  }
+
+  // A bare account inherits a single Workers AI model for its swarm judge. Its refusal ended every research swarm
+  // in run 37880718948. Keys alone do not configure that route: keep the user's retry count, and cross providers.
+  const catalogResponse = await read('/api/user/profile-catalog');
+
+  if (!catalogResponse.ok) return { given, reset, finding: `reading ${account}'s profile catalog answered ${String(catalogResponse.status)}` };
+  const { version, catalog } = v.parse(ProfileCatalogEnvelopeSchema, await catalogResponse.json());
+  const model = DEFAULT_WORKERS_AI_MODEL_SPEC;
+
+  if (catalog.tiers.deep?.model !== model || JSON.stringify(catalog.modelFallbacks?.[model]) !== JSON.stringify(DEFAULT_MODELS)) {
+    const answer = await fetch(`${input.origin}/api/user/profile-catalog`, {
+      method: 'PUT', headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify({ expectedVersion: version, catalog: {
+        ...catalog, tiers: { ...catalog.tiers, deep: { ...catalog.tiers.deep, model } },
+        modelFallbacks: { ...catalog.modelFallbacks, [model]: DEFAULT_MODELS },
+      } }), signal: AbortSignal.timeout(CALL_MS),
+    });
+
+    if (!answer.ok) return { given, reset, finding: `configuring ${account}'s deep tier and provider fallback answered ${String(answer.status)}` };
+    v.parse(ProfileCatalogEnvelopeSchema, await answer.json());
   }
 
   return { given, reset };

@@ -436,8 +436,9 @@ how far over budget the team is, in dollars, and which of its expenses that mont
         const books = await booksAfter([TURN_1]);
         const over = -(books.status(QUESTION_MONTH).find((row) => row.team === 'design')?.remainingCents ?? 0) / 100;
         const [largest] = books.listed({ team: 'design', month: QUESTION_MONTH }).sort((left, right) => right.amountCents - left.amountCents);
-        // Written before anyone asked, a note says nothing about the request reaching the agent.
+        // The model can test its own Ask. Clear that note so only the newly observed run can supply the answer.
         const early = await verifier.readFile(note);
+        await verifier.writeFile(note, '');
 
         const reached = await verifier.browse(async (browser) => {
           const board = await browser.workSurface('board');
@@ -461,15 +462,15 @@ how far over budget the team is, in dollars, and which of its expenses that mont
         const written = await verifier.readFile(note);
 
         return {
-          pass: early === '' && reached.runs.some((run) => run.tools.length > 0) && shows(written, over)
+          pass: reached.runs.some((run) => run.tools.length > 0) && shows(written, over)
             && largest !== undefined && (written.includes(largest.id) || shows(written, largest.amountCents / 100)),
           evidence: { early: early.slice(0, 300), ...reached, expected: { over, largest: largest?.id }, note: written.slice(0, 600) },
         };
       });
 
       await verifier.check('cover-raises-the-budget', async () => {
-        const rows = (await booksAfter([TURN_1])).status(QUESTION_MONTH);
-        const covered = (await booksAfter([TURN_1, COVER_DESIGN])).status(QUESTION_MONTH);
+        const rows = (await booksAfter([TURN_1])).status(QUESTION_MONTH).filter((row) => row.team === 'design');
+        const covered = (await booksAfter([TURN_1, COVER_DESIGN])).status(QUESTION_MONTH).filter((row) => row.team === 'design');
 
         const page = await verifier.browse(async (browser) => {
           const board = await browser.workSurface('board');

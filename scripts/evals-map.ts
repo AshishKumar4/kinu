@@ -167,6 +167,18 @@ async function main(): Promise<number> {
   }
 
   const items = evalItems(taskFiles, matrix, origins, values.pass);
+
+  // Standalone runs need the same actual credentials/catalog as deploy --evals. Only the operator's
+  // provisioning step reads the existing key file; trial containers receive identities, never Muse keys.
+  for (const { origin } of origins) {
+    const provision = Bun.spawn([LOCAL_CHECK, process.execPath, 'scripts/eval-provider-keys.ts', origin], {
+      cwd: ROOT, env: { ...process.env, LOCAL_CHECK_MEMORY: '4G', KINU_EVAL_MODELS: matrix.models.join(',') },
+      stdout: 'inherit', stderr: 'inherit',
+    });
+
+    if (await provision.exited !== 0) throw new Error(`actual eval keys/catalog were not provisioned at ${origin}; no trials started`);
+  }
+
   const out = resolve(values.out ?? process.env['BENCH_ARTIFACTS'] ?? join(ROOT, 'bench-artifacts', 'evals-armada', `${String(Date.now())}-${sha.slice(0, 12)}`));
 
   mkdirSync(out, { recursive: true });

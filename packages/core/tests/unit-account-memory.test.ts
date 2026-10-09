@@ -219,7 +219,7 @@ describe("an agent's memory where the account is wired", () => {
 
 describe('the background pass proposes to the account from the owner\'s own words only', () => {
   const row = (id: string, role: 'user' | 'assistant', content: string, metadata?: Record<string, string>): ConversationProjection => ({
-    id, position: 0, role, turnId: null, content, toolCalls: [], recordedAt: 0, ...(metadata !== undefined && { metadata }),
+    id, position: 0, role, turnId: null, runId: null, content, toolCalls: [], recordedAt: 0, ...(metadata !== undefined && { metadata }),
   });
 
   test("a turn's owner words are the operator-authored rows; a harness turn has none", () => {
@@ -246,8 +246,8 @@ describe("the background pass's proposals reach the account, once each", () => {
 
   /** Three answered turns in the owner's own words, newest first, as the transcript reads them. */
   const TURNS: ConversationProjection[] = [3, 2, 1].flatMap((turn) => [
-    { id: `a${String(turn)}`, position: 0, role: 'assistant' as const, turnId: null, content: 'noted', toolCalls: [], recordedAt: 0 },
-    { id: `u${String(turn)}`, position: 0, role: 'user' as const, turnId: null, content: `I live in Lisbon (${String(turn)})`, toolCalls: [], recordedAt: 0 },
+    { id: `a${String(turn)}`, position: 0, role: 'assistant' as const, turnId: null, runId: null, content: 'noted', toolCalls: [], recordedAt: 0 },
+    { id: `u${String(turn)}`, position: 0, role: 'user' as const, turnId: null, runId: null, content: `I live in Lisbon (${String(turn)})`, toolCalls: [], recordedAt: 0 },
   ]);
 
   test('a proposal the user object refuses stays owed, and the next pass delivers it under the same delivery', async () => {

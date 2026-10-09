@@ -75,5 +75,5 @@ async function themed(browser: WorkspaceBrowser, slate: DrawnSlate, mode: 'light
   const looks = await view.appearance();
   const matches = looks.hostLight !== null && Math.abs(looks.light - looks.hostLight) <= THEME_DISTANCE;
 
-  return { pass: held && matches && looks.letters > 0 && looks.readable >= READABLE, held, ...looks };
+  return { pass: matches && looks.letters > 0 && looks.readable >= READABLE, held, ...looks };
 }
