@@ -25,6 +25,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **Test browsers leave no Crashpad daemons behind.** Chrome 155's handlers daemonize outside the browser group and use a global report directory. Each test launch now owns its config directory and ends only handlers rooted there. Reporting is disabled without the testing flag's pipe-navigation crash; the global ownership scan is unchanged.
 - **Exhausted rate limits keep the provider's refusal.** The surfaced failure retains the provider's status, headers, body and cause, so the chat and request log show the provider's message. The retry layer's next-attempt delay is a separate field, never an invented provider header. A stream that refuses after metadata but before output goes through that same final-failure path, so the SDK cannot retry it again.
 - **Code-quoted slate addresses draw their previews.** The server and Markdown renderer use one promotion pass, so an exact inline-code address draws one card, while addresses in code fences stay literal and changed slates still get their automatic preview.
 - **A hung product flow cannot erase finished verdicts.** Each flow is measured beside its assertions and runs as one Armada task in the deploy matrix. A process-interruption regression checks that a finished flow reports before the next flow blocks, and a timed-out task leaves sibling verdicts intact.

@@ -26,6 +26,24 @@ function runningFrom(profile: string): number[] {
     .map(Number);
 }
 
+/** Crashpad is a daemon without Chrome's profile argument or process-group ownership. */
+function crashpads(): number[] {
+  return readdirSync('/proc').filter((pid) => /^\d+$/u.test(pid))
+    .filter((pid) => (procFile(Number(pid), 'cmdline') ?? '').includes('chrome_crashpad_handler'))
+    .filter((pid) => Number(/^Uid:\s+(\d+)/mu.exec(procFile(Number(pid), 'status') ?? '')?.[1]) === process.getuid?.())
+    .map(Number);
+}
+
+// Chrome 155, Armada 20261010004029-649aeaa6 (2026-10-10 UTC): reporting disabled, two handlers still outlived group teardown.
+test('closing a test browser leaves none of the Crashpad daemons it started', async () => {
+  const before = new Set(crashpads());
+  const chrome = await launchTestChrome();
+
+  await chrome.close();
+
+  expect(crashpads().filter((pid) => !before.has(pid))).toEqual([]);
+});
+
 /** The scratch profile the browser process `pid` runs from. */
 function profileOf(pid: number | undefined): string {
   const profile = testBrowserProfile(argsOf(procFile(pid ?? 0, 'cmdline') ?? ''));

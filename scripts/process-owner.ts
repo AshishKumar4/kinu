@@ -54,6 +54,28 @@ export function processStartTicks(pid: number): number | undefined {
   return stat === undefined ? undefined : Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]);
 }
 
+/** Chrome's handlers daemonize outside its group; their database is rooted by the launch's CHROME_CONFIG_HOME. */
+export function crashpadsIn(root: string): { pid: number; startTicks: number }[] {
+  const handlers: { pid: number; startTicks: number }[] = [];
+  const database = `\0--database=${root}/`;
+  const ownerUid = process.getuid?.();
+
+  for (const entry of readdirSync('/proc')) {
+    if (!/^\d+$/u.test(entry)) continue;
+
+    const pid = Number(entry);
+    const startTicks = processStartTicks(pid);
+    const command = procFile(pid, 'cmdline') ?? '';
+    const uid = Number(/^Uid:\s+(\d+)/mu.exec(procFile(pid, 'status') ?? '')?.[1]);
+
+    if (startTicks === undefined || uid !== ownerUid || !command.slice(0, command.indexOf('\0')).endsWith('/chrome_crashpad_handler') || !command.includes(database)) continue;
+
+    handlers.push({ pid, startTicks });
+  }
+
+  return handlers;
+}
+
 /** Whether a process of `group` still runs; a zombie has ended and only waits for its parent to collect it. */
 export function groupRuns(group: number): boolean {
   return readdirSync('/proc').some((pid) => {
