@@ -183,9 +183,16 @@ const CLOSED_AS = { dismissed: "Dismissed", in_chat: "Answered in the chat" } as
 export function AskRecord({ callId, input }: { callId: string; input: unknown }): ReactNode {
   const parsed = v.safeParse(AskOwnerInputSchema, input);
 
+  // Each side as the schema reads it, so key order (the model's, or the store's) cannot tell one ask from another.
+  const canonical = (questions: readonly OwnerQuestion[]): string | null => {
+    const read = v.safeParse(AskOwnerInputSchema, { questions });
+
+    return read.success ? JSON.stringify(read.output.questions) : null;
+  };
+
   const asked = useContext(AskedQuestionsContext)
     // A provider may reuse a call id across turns: the questions tell the calls apart, as the store's digest does.
-    .find((each) => each.callId === callId && (!parsed.success || JSON.stringify(each.questions) === JSON.stringify(parsed.output.questions)));
+    .find((each) => each.callId === callId && (!parsed.success || canonical(each.questions) === canonical(parsed.output.questions)));
 
   const questions = asked?.questions ?? (parsed.success ? parsed.output.questions : []);
 
