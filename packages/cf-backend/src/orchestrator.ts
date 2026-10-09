@@ -698,8 +698,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Each `callOperation` still running, by its call id, so `cancelOperation` can stop it. */
   private readonly operationCalls = new Map<string, AbortController>();
 
+  /** An agent's storage key, read once an activation: `workspace_actors` rows are never deleted, and an agent's key and
+   *  home never change, so what made it an agent here holds for as long as its id does. */
+  private agentKey(actorId: string): string {
+    const known = this.agentKeys.get(actorId);
+
+    if (known !== undefined) return known;
+    const { storageKey } = this.agentOf(actorId);
+
+    this.agentKeys.set(actorId, storageKey);
+
+    return storageKey;
+  }
+
+  private readonly agentKeys = new Map<string, string>();
+
   protected async agentCalls(actorId: string): Promise<AgentFacetCalls> {
-    const key = `kinu-agent:${this.agentOf(actorId).storageKey}`;
+    const key = `kinu-agent:${this.agentKey(actorId)}`;
 
     this.openedIsolates.add(actorId);
 
@@ -726,19 +741,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const agent = this.agentOf(actorId);
     const lineage: StoredRow[] = [];
 
-    for (let step: WorkspaceActor | null = this.actorDirectoryStore().retained(actorId); step !== null;
-      step = step.parentActorId === null ? null : this.actorDirectoryStore().retained(step.parentActorId)) {
-      const row = this.ctx.storage.sql.exec<StoredRow>('SELECT * FROM workspace_actors WHERE actor_id = ?', step.actorId).toArray()[0];
+    // Each row names its parent: the walk reads one row a hop.
+    for (let step: string | null = actorId; step !== null;) {
+      const row: StoredRow | undefined = this.ctx.storage.sql.exec<StoredRow>('SELECT * FROM workspace_actors WHERE actor_id = ?', step).toArray()[0];
 
       if (row === undefined) return settleSync(Effect.fail(new KinuError('missing', `Agent ${actorId} has an ancestor the roster does not hold.`)));
       lineage.unshift(row);
+      step = v.parse(v.nullable(v.string()), row.parent_actor_id);
     }
 
     const identity = this.ctx.storage.sql.exec<StoredRow>('SELECT * FROM workspace_identity').toArray()[0];
 
     if (identity === undefined) return settleSync(Effect.fail(new KinuError('missing', 'The workspace has no durable identity to hand an agent.')));
 
-    const config = lineage.flatMap((row) => this.ctx.storage.sql.exec<StoredRow>('SELECT * FROM actor_config WHERE actor_id = ?', row.actor_id).toArray());
+    const config = this.ctx.storage.sql.exec<StoredRow>(
+      `SELECT * FROM actor_config WHERE actor_id IN (${lineage.map(() => '?').join(', ')})`, ...lineage.map((row) => row.actor_id),
+    ).toArray();
+
     const scaffold = this.ctx.storage.sql.exec<StoredRow>("SELECT * FROM scaffold_versions WHERE actor_id = ? AND status = 'current'", actorId).toArray();
 
     return {
@@ -792,7 +811,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   agentWorkspace(actorId: string): AgentWorkspaceHost {
     if (this.deleting.signal.aborted) return settleSync(Effect.fail(new KinuError('missing', 'This workspace was deleted.')));
-    this.agentOf(actorId);
+    this.agentKey(actorId);
     const credentials = async () => await this.userHub();
 
     return new AgentWorkspaceHost({
