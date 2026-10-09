@@ -179,6 +179,15 @@ export function look(names: readonly string[], press: Press | null): Looked {
   for (const name of names) {
     const parts: { inside: (node: Node) => boolean; occurrence: number }[] = [];
     const rows = new Map<Element, number>();
+
+    const occurrenceOf = (row: Element): number => {
+      const occurrence = rows.get(row) ?? rows.size;
+
+      rows.set(row, occurrence);
+
+      return occurrence;
+    };
+
     const columns: Record<string, string> = {};
 
     for (const label of labels.get(name) ?? []) {
@@ -188,9 +197,7 @@ export function look(names: readonly string[], press: Press | null): Looked {
         row = row.parentElement;
       }
 
-      const occurrence = rows.get(row) ?? rows.size;
-
-      rows.set(row, occurrence);
+      const occurrence = occurrenceOf(row);
       parts.push({ inside: (node) => row.contains(node), occurrence });
       Object.assign(columns, columnsOf(row));
 
