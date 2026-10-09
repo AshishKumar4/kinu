@@ -162,7 +162,23 @@ function answersRefusal(questions: readonly OwnerQuestion[], answers: readonly O
 
 /** One actor's questions, in that actor's own storage, so a request's repair reads them synchronously. */
 export class OwnerQuestionStore {
+  /**
+   * Whether a question may be open or an answer owed its turn: read once an activation, then kept by this store's own
+   * writes, so a turn that asked nothing asks the table nothing. Undefined until read, and after a write that may have
+   * settled the last one.
+   */
+  private pending: boolean | undefined;
+
   constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle, private readonly now: () => number = Date.now) {}
+
+  /** Whether anything waits on the owner or on its turn; every other read is asked only when this says so. */
+  mayWait(): boolean {
+    this.actor.assertCurrent();
+    this.pending ??= this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM owner_questions
+      WHERE actor_id=${this.actorId} AND (status='open' OR (status='answered' AND resumed_at IS NULL))`[0]?.n !== 0;
+
+    return this.pending;
+  }
 
   get actorId(): string {
     return this.actor.actorId;
@@ -191,6 +207,7 @@ export class OwnerQuestionStore {
       void this.sql`INSERT INTO owner_questions(actor_id,id,call_id,turn_id,mode,tier,reason_json,digest,questions_json,status,asked_at)
         VALUES(${this.actorId},${id},${call.toolCallId},${turn.turnId},${turn.mode},${turn.tier},${JSON.stringify(turn.reason)},${digest},
           ${JSON.stringify(input.output.questions)},'open',${this.now()})`;
+      this.pending = true;
       markStoreChanged(this.sql);
       const row = this.get(id);
 
@@ -233,13 +250,13 @@ export class OwnerQuestionStore {
   }
 
   open(): AskedQuestions[] {
-    this.actor.assertCurrent();
+    if (!this.mayWait()) return [];
 
     return this.sql<Row>`SELECT * FROM owner_questions WHERE actor_id=${this.actorId} AND status='open' ORDER BY asked_at`.map(asked);
   }
 
   hasOpen(): boolean {
-    this.actor.assertCurrent();
+    if (!this.mayWait()) return false;
 
     return this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM owner_questions WHERE actor_id=${this.actorId} AND status='open'`[0]?.n !== 0;
   }
@@ -265,6 +282,7 @@ export class OwnerQuestionStore {
       if (refusal !== null) return Effect.fail(new KinuError('bad_input', refusal));
       void this.sql`UPDATE owner_questions SET status='answered', answers_json=${JSON.stringify(answers)}, closed_at=${this.now()}
         WHERE actor_id=${this.actorId} AND id=${id} AND status='open'`;
+      this.pending = true;
       markStoreChanged(this.sql);
 
       return Effect.void;
@@ -280,6 +298,7 @@ export class OwnerQuestionStore {
     const at = this.now();
 
     for (const row of open) void this.sql`UPDATE owner_questions SET status=${status}, closed_at=${at} WHERE actor_id=${this.actorId} AND id=${row.id} AND status='open'`;
+    this.pending = undefined;
     markStoreChanged(this.sql);
 
     return open.map((row) => ({ ...row, status, closedAt: at }));
@@ -290,7 +309,7 @@ export class OwnerQuestionStore {
    * recorded: one turn continues from all its calls at once, so a step that asked twice is resumed once.
    */
   owedResumes(): OwedResume[] {
-    this.actor.assertCurrent();
+    if (!this.mayWait()) return [];
 
     const turns = this.sql<{ turn_id: string }>`SELECT DISTINCT turn_id FROM owner_questions
       WHERE actor_id=${this.actorId} AND status='answered' AND resumed_at IS NULL ORDER BY asked_at`;
@@ -312,16 +331,19 @@ export class OwnerQuestionStore {
   markResumed(turnId: string): void {
     this.actor.assertCurrent();
     void this.sql`UPDATE owner_questions SET resumed_at=${this.now()} WHERE actor_id=${this.actorId} AND turn_id=${turnId} AND resumed_at IS NULL`;
+    this.pending = undefined;
   }
 
   /** The conversation moved on without the continuing turns: a message carries the answers, or a Stop drops them. */
   retireResumes(): void {
     this.actor.assertCurrent();
     void this.sql`UPDATE owner_questions SET resumed_at=${this.now()} WHERE actor_id=${this.actorId} AND status='answered' AND resumed_at IS NULL`;
+    this.pending = undefined;
   }
 
   /** A Stop, a clear or a walk-back: the open questions close unanswered and no answer is resumed. */
   abandon(): number {
+    if (!this.mayWait()) return 0;
     const closed = this.close('dismissed').length;
 
     this.retireResumes();

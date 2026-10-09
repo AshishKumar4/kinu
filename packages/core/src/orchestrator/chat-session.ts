@@ -1046,7 +1046,7 @@ export class ChatSession {
     const runs = (item: QueueItem): boolean => item.kind === 'user' || item.continuation !== undefined || item.metadata?.kinuEvent === OWNER_ANSWER_SIGNAL;
     const head = this.queue[0];
 
-    if (head === undefined || runs(head) || !this.actorSession.endsOnAsk || !this.actorSession.questions.hasOpen()) return this.queue.shift();
+    if (head === undefined || runs(head) || !this.actorSession.questions.hasOpen()) return this.queue.shift();
     const at = this.queue.findIndex(runs);
 
     return at < 0 ? undefined : this.queue.splice(at, 1)[0];
@@ -1121,7 +1121,7 @@ export class ChatSession {
     const { questions } = this.actorSession;
 
     // The owner wrote instead of choosing: their message answers the open questions, and the answers given ride it.
-    if (item.kind === 'user' && this.actorSession.endsOnAsk) {
+    if (item.kind === 'user' && questions.mayWait()) {
       questions.close('in_chat');
       questions.retireResumes();
     }
