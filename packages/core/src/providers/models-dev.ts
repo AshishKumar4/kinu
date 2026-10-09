@@ -120,14 +120,29 @@ const ModelsDevProviderSchema = v.object({
 
 const ModelsDevCatalogSchema = v.record(v.string(), ModelsDevProviderSchema);
 
+/**
+ * The last catalog read, settled: data any request may read. A read in flight is never shared. A stateless Worker
+ * request that awaits I/O another request started hangs for good once that request is cancelled, because workerd drops
+ * a cancelled request's subrequests and the promise never settles. Measured in workerd 2026-09-30 (miniflare, this
+ * module's own read, 2026-10-09): A starts the read, B joins, A's client goes away, the read answers, and B is still
+ * waiting 15 s on; a later request joined the same dead read and never reached models.dev at all. On staging
+ * d930f2537 that held every create and model menu on one isolate for up to 270 s (03:09:43 to 03:10:04Z). Each cold
+ * request reads for itself instead, and the edge cache (`EDGE_CACHE`) keeps those reads from reaching models.dev twice.
+ * The latch before the flight failed the same way (1101 on concurrent workspace creates).
+ */
 let cache: ModelsDevCache | null = null;
 
-/**
- * The read in flight per fetch function: listings that find the cache cold share it rather than each downloading the
- * catalog. A flight joins callers through a promise; a cached Effect's latch resumed another request's fiber in the
- * reader's request context, which Workers cancels as hung (1101 on concurrent workspace creates).
- */
-const reads = new WeakMap<typeof fetch, Flight<void, Record<string, ModelsDevProvider>, KinuError>>();
+/** As long at the edge as in an isolate. Bun's fetch ignores `cf`. */
+const EDGE_CACHE = { cacheTtl: DEFAULT_TTL_MS / 1000, cacheEverything: true } as const;
+
+/** One call's catalog read, which that call's listings share and no other call's: made in the call's own scope. */
+type ModelsDevRead = Flight<void, Record<string, ModelsDevProvider>, KinuError>;
+
+/** `deps` with a catalog read of their own, for one call whose listings run at once (a whole menu): they read the
+ *  catalog once between them, and a cancelled call takes only its own read with it. */
+export function withModelsDevRead<Deps extends Pick<ProviderDeps, 'fetch'>>(deps: Deps): Deps & { readonly modelsDev: ModelsDevRead } {
+  return { ...deps, modelsDev: flight(() => getModelsDevCatalog(deps.fetch, DEFAULT_TTL_MS)) };
+}
 
 export interface ModelsDevListOptions {
   /** models.dev is the provider's only list, so naming none of its models is a failure to show, not an empty menu. */
@@ -139,9 +154,10 @@ export interface ModelsDevListOptions {
   textOnly?: boolean;
 }
 
+/** `deps.modelsDev`, when its call made one (`withModelsDevRead`), is the read it shares with the call's other listings. */
 export async function listModelsDevProviderModels(
   providerId: string,
-  deps: Pick<ProviderDeps, 'fetch'>,
+  deps: Pick<ProviderDeps, 'fetch'> & { readonly modelsDev?: ModelsDevRead },
   opts: ModelsDevListOptions = {},
 ): Promise<ModelInfo[]> {
   const stale = (failure: { readonly reason: string; readonly cause?: unknown }): StaleModelList => {
@@ -151,7 +167,9 @@ export async function listModelsDevProviderModels(
   };
 
   return settle(Effect.gen(function* () {
-    const data = yield* getModelsDevCatalog(deps.fetch, opts.ttlMs ?? DEFAULT_TTL_MS).pipe(
+    const read = deps.modelsDev?.() ?? getModelsDevCatalog(deps.fetch, opts.ttlMs ?? DEFAULT_TTL_MS);
+
+    const data = yield* read.pipe(
       Effect.catch((failed) => Effect.fail(stale({ reason: 'models.dev could not be read', cause: failed }))),
     );
 
@@ -290,21 +308,16 @@ function getModelsDevCatalog(fetchFn: typeof fetch | undefined, ttlMs: number): 
 
     if (cache && cache.fetchFn === fetchImpl && Date.now() - cache.at < ttlMs) return Effect.succeed(cache.data);
 
-    let read = reads.get(fetchImpl);
-
-    if (read === undefined) {
-      read = flight(() => readModelsDevCatalog(fetchImpl));
-      reads.set(fetchImpl, read);
-    }
-
-    return read();
+    return readModelsDevCatalog(fetchImpl);
   });
 }
 
 function readModelsDevCatalog(fetchImpl: typeof fetch): Effect.Effect<Record<string, ModelsDevProvider>, KinuError> {
   return Effect.gen(function* () {
+    const init: RequestInit & { readonly cf: typeof EDGE_CACHE } = { headers: { accept: 'application/json' }, cf: EDGE_CACHE };
+
     const response = yield* Effect.tryPromise({
-      try: () => fetchImpl(MODELS_DEV_URL, { headers: { accept: 'application/json' } }),
+      try: () => fetchImpl(MODELS_DEV_URL, init),
       catch: (cause) => new KinuError('unavailable', 'models.dev could not be reached', { cause }),
     });
 

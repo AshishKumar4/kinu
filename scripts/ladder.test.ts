@@ -27,7 +27,7 @@ import {
   CI_EXEMPT, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
   DEPLOY_PHASES, browserModules, deployOrder, deployPlan, gatesFor, liveTierTargets, packageScripts, phaseWave,
   localDeployGates, reportCIVerdicts, runnableArgv, sharedBrowserModules, sharedOf, tierRun, tierSchedule, tierWave, trackedTestFiles, waveCaps, type WaveRow,
-  HAMMER_REPEATS, ciUnits, changedTestGate, splitCIGate, type Gate, armadaPhaseRows, armadaPhaseRun, armadaRowVerdicts, onArmada, secretGroup,
+  HAMMER_REPEATS, ciUnits, changedTestGate, splitCIGate, type Gate, armadaPhaseRows, armadaPhaseRun, armadaReport, armadaRowVerdicts, ciVerdictRow, onArmada, secretGroup,
 } from './ladder';
 import {
   ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite,
@@ -710,10 +710,11 @@ describe('a deploy row with secrets of its own', () => {
     const devbox = armadaPhaseRun('post-publish', own, sha, 'https://staging.kinu.run');
     const secretsOf = (argv: readonly string[]) => argv.find((arg) => arg.startsWith('--secrets='))?.slice('--secrets='.length).split(',').sort((a, b) => a.localeCompare(b));
 
-    expect({ own: own.map((gate) => gate.run), shared: secretsOf(shared), devbox: secretsOf(devbox), plan: devbox.slice(devbox.indexOf('--') + 1) }).toEqual({
+    expect({ own: own.map((gate) => gate.run), shared: secretsOf(shared), devbox: secretsOf(devbox), json: devbox.indexOf('--json') !== -1 && devbox.indexOf('--json') < devbox.indexOf('--'), plan: devbox.slice(devbox.indexOf('--') + 1) }).toEqual({
       own: ['bun run gate:devbox-e2e'],
       shared: ['KINU_EVAL_STAGING_WEB_IDENTITY', 'KINU_SCRIPTED_MODEL_KEY'],
       devbox: ['DEVBOX_REGISTRY_TOKEN', 'KINU_CLOUDFLARE_API_TOKEN', 'KINU_EVAL_STAGING_WEB_IDENTITY', 'KINU_SCRIPTED_MODEL_KEY', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY'],
+      json: devbox.indexOf('--json') !== -1 && devbox.indexOf('--json') < devbox.indexOf('--'),
       plan: [
         '--deploy-phase=post-publish', '--deploy-origin=https://staging.kinu.run',
         '--deploy-secrets=DEVBOX_REGISTRY_TOKEN,KINU_CLOUDFLARE_API_TOKEN,KINU_EVAL_STAGING_WEB_IDENTITY,R2_ACCESS_KEY_ID,R2_SECRET_ACCESS_KEY',
@@ -739,13 +740,86 @@ describe('a deploy phase\'s armada report', () => {
           { run: 'bash scripts/product-flows-tier.sh', exitCode: 124, seconds: 538, output: 'KILLED  Product flows in a browser, on the deployment  after 480s with no output' },
         ],
       },
+      artifacts: {},
     }, 2);
 
     expect(read.map(({ gate, verdict, found }) => [gate.run, verdict?.seconds, found])).toEqual([
       ['bun run gate:first-run', 1805, 'job 20261008081731-1d7c41dd; first-run-tier has no verdict for bun run gate:first-run; missing is not green; '
         + 'first-run-tier reported first-run-tier, which its plan entry does not name'],
-      ['bash scripts/product-flows-tier.sh', 538, 'job 20261008081731-1d7c41dd'],
+      ['bash scripts/product-flows-tier.sh', 538, 'job 20261008081731-1d7c41dd; armada graded none of the run\'s rows: '
+        + 'first-run-tier has no verdict for bun run gate:first-run; missing is not green; first-run-tier reported first-run-tier, which its plan entry does not name'],
     ]);
+  });
+});
+
+describe('a phase armada could not grade', () => {
+  // armada f8725d7's grade() names a row's evidence its task did not keep as `<task>: <row> names evidence <path> its
+  // task did not keep` and exits 2, while the row itself exited 0. Read by its exit code alone and matched by
+  // `<task> `, the row passed with its evidence missing.
+  test('greens no row, and gives each row the problems armada names for its task, colon or space', () => {
+    const rows = armadaPhaseRows(['post-publish']).filter((gate) => gate.run === 'bun run gate:first-run' || gate.run === 'bash scripts/product-flows-tier.sh');
+    const task = rows.find((gate) => gate.run === 'bun run gate:first-run')?.label.toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-|-$/gu, '').slice(0, 80) ?? '';
+    const missing = `${task}: bun run gate:first-run names evidence first-run/report.json its task did not keep`;
+
+    const read = armadaRowVerdicts(rows, {
+      job: '20261009-evidence',
+      problems: [missing],
+      verdicts: {
+        rows: [
+          { run: 'bun run gate:first-run', exitCode: 0, seconds: 61, output: '', artifacts: ['first-run/report.json'] },
+          { run: 'bash scripts/product-flows-tier.sh', exitCode: 0, seconds: 300, output: '' },
+        ],
+      },
+      artifacts: {},
+    }, 2);
+
+    expect(read.map(({ gate, green, found }) => [gate.run, green, found])).toEqual([
+      ['bun run gate:first-run', false, `job 20261009-evidence; ${missing}`],
+      ['bash scripts/product-flows-tier.sh', false, `job 20261009-evidence; armada graded none of the run's rows: ${missing}`],
+    ]);
+  });
+});
+
+describe('what `armada run --json` answers', () => {
+  // armada f8725d7's runCI prints one object on stdout as it ends, its progress then on stderr; the report it names
+  // holds each task's extracted artifacts by task name.
+  test('is read through the report it names, and a run that names none, or printed nothing, has no report', () => {
+    const dir = scratchDir('armada-run-json');
+    const path = join(dir, 'kinu-20261009-x.json');
+
+    writeFileSync(path, JSON.stringify({
+      sha: 'a'.repeat(40), job: '20261009-x', problems: [], artifacts: { 'first-run-tier': join(dir, 'kinu-20261009-x', 'first-run-tier') },
+      verdicts: { rows: [{ run: 'bun run gate:first-run', exitCode: 0, seconds: 61, output: '', artifacts: ['first-run/report.json'] }] },
+    }));
+    const answered = `${JSON.stringify({ sha: 'a'.repeat(40), planJob: 'p', job: '20261009-x', report: path, graded: 'pass', problems: [], rows: [] })}\n`;
+    const read = armadaReport(answered);
+
+    expect({
+      job: read?.job, kept: read?.artifacts['first-run-tier']?.endsWith('first-run-tier'), evidence: read?.verdicts?.rows[0]?.artifacts,
+      planFailed: armadaReport(JSON.stringify({ sha: 'a'.repeat(40), planJob: null, job: null, report: null, graded: 'not graded', problems: ['the plan failed'], rows: [] })),
+      nothing: armadaReport(''), progress: armadaReport('task job 20261009-x: 3 tasks\n'),
+    }).toEqual({ job: '20261009-x', kept: true, evidence: ['first-run/report.json'], planFailed: undefined, nothing: undefined, progress: undefined });
+  });
+});
+
+describe('a deploy row\'s evidence', () => {
+  // armada keeps a task's artifacts directory whole and extracts it beside the run's report, so the verdict names files
+  // instead of carrying them: the base64 tar.gz it replaced dropped evidence past 64 MiB compressed.
+  test('is copied into its task\'s artifacts under its evidence name, and the verdict names each file', () => {
+    const gate = armadaPhaseRows(['post-publish']).find((row) => row.evidence !== undefined);
+    const dir = scratchDir('row-evidence');
+    const artifacts = scratchDir('row-artifacts');
+
+    mkdirSync(join(dir, 'trial-1'), { recursive: true });
+    writeFileSync(join(dir, 'report.json'), '{}');
+    writeFileSync(join(dir, 'trial-1', 'transcript.jsonl'), 'x'.repeat(70 * 1024 * 1024));
+
+    if (gate?.evidence === undefined) throw new Error('no post-publish row declares evidence');
+    const row = ciVerdictRow(gate, { exitCode: 0, seconds: 1, stdout: '', stderr: '' }, undefined, { dir, artifacts });
+    const none = ciVerdictRow(gate, { exitCode: 0, seconds: 1, stdout: '', stderr: '' }, undefined, { dir: join(dir, 'absent'), artifacts });
+
+    expect({ named: row.artifacts, copied: readFileSync(join(artifacts, gate.evidence, 'trial-1', 'transcript.jsonl')).byteLength, none: none.artifacts })
+      .toEqual({ named: [`${gate.evidence}/report.json`, `${gate.evidence}/trial-1/transcript.jsonl`], copied: 70 * 1024 * 1024, none: undefined });
   });
 });
 
@@ -791,8 +865,8 @@ describe('CI is not a silent subset of deploy', () => {
     // independently, because that is how it came to skip five packages.
     const config = v.parse(v.object({ plan: v.object({ command: v.array(v.string()) }), task: v.object({ command: v.array(v.string()) }) }), JSON.parse(readFileSync(resolve(root, '.armada.json'), 'utf8')));
 
-    expect([config.plan.command.slice(0, 3), config.task.command.slice(0, 4)])
-      .toEqual([['bun', 'scripts/ladder.ts', '--ci-plan'], ['bun', 'scripts/ladder.ts', '--tier=ci', '--ci-row={row}']]);
+    expect([config.plan.command.slice(0, 3), config.task.command.slice(0, 4), config.task.command.includes('--artifacts={artifacts}')])
+      .toEqual([['bun', 'scripts/ladder.ts', '--ci-plan'], ['bun', 'scripts/ladder.ts', '--tier=ci', '--ci-row={row}'], true]);
   });
 });
 

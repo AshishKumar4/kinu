@@ -387,6 +387,30 @@ async function openWorkList(page: Page): Promise<void> {
   await page.waitForSelector('[data-work-plans]');
 }
 
+/**
+ * The opening is a dozen reads, so a load must not be paid twice. The gallery mounts under StrictMode, whose remount
+ * retires the first load in the commit that made it: 2026-10-09, two openings per arrival before the load waited a
+ * microtask to start.
+ */
+test('a page load and an arrival at another workspace each read the workspace once', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    const openings = () => page.evaluate(() => Number(document.documentElement.dataset.galleryOpenings ?? '0'));
+
+    await page.setViewport({ width: 1440, height: 900 });
+    await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('[aria-label="Work"]');
+    const loaded = await openings();
+
+    await page.evaluate(async () => { await window.galleryNavigate?.('/workspace/billing-cleanup'); });
+    await page.waitForFunction((was) => Number(document.documentElement.dataset.galleryOpenings ?? '0') > was, {}, loaded);
+    await framesDrawn(page);
+
+    expect({ loaded, arrived: await openings() }).toEqual({ loaded: 1, arrived: 2 });
+    await page.close();
+  });
+});
+
 /** A read the workspace left behind answers after the reader moved on: the next workspace never shows it. */
 test('a read answered after its workspace was left never shows in the next one', async () => {
   await withGallery(async ({ newPage, origin }) => {

@@ -185,6 +185,23 @@ describe('who is at work, and who is who', () => {
     });
   });
 
+  // Production, 2026-10-08: a palette of twelve gave a workspace's thirteenth agent its first one's colour.
+  test('a workspace\'s first 24 agents, born one after another, wear 24 colours', async () => {
+    await withGallery(async (gallery) => {
+      const page = await gallery.newPage();
+
+      try {
+        await page.goto(`${gallery.origin}/gallery.html?frame=characters`, { waitUntil: 'networkidle0' });
+        await page.waitForSelector('[data-mascot-size="16"] [data-mascot-state="idle"] .p-mascot');
+        const worn = await mascotColours(page, '[data-mascot-size="16"] [data-mascot-state="idle"]');
+
+        expect({ drawn: worn.length, distinct: new Set(worn).size }).toEqual({ drawn: 24, distinct: 24 });
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
   test('agents at work with no tab spin on the All agents row and are counted on the bar\'s agents button', async () => {
     await withGallery(async (gallery) => {
       // The fixture's out-of-sight workers: the coupon auditor it hired, and two swarm workers.

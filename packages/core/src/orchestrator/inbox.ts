@@ -18,7 +18,7 @@ import type {
 import { SIGNAL_ID_METADATA_KEY, USER_MESSAGE_SIGNAL_KIND } from '../types/signals';
 import { StepInjections } from '../prompting/step-injections';
 import { nanoid } from '../utils/nanoid';
-import { metadataBroadcastEvent } from '../read-models/background-event';
+import { metadataBroadcastEvent, type SeenSplice } from '../read-models/background-event';
 import type { WorkMode } from '../types/turn';
 import { parseJsonObject, type JsonObject } from '../utils/json';
 import { stampTurnAuthor, TURN_AUTHOR_METADATA_KEY } from '../utils/ui-message';
@@ -274,6 +274,11 @@ export class Inbox implements AgentInbox {
   private settled: DeliveredSignal[] = [];
   /** The host enqueue in flight until the turn opens; while set, a message rides that turn's first step. */
   private starting: Promise<EnqueueTurnResult> | null = null;
+  /** The cards each step of this turn took in, by step number, until that step ends and they are seen. */
+  private readonly stepCards = new Map<number, string[]>();
+  /** This turn's mid-answer splices, by card: kept on its answer once seen ({@link seenSplices}). */
+  private readonly splices = new Map<string, SeenSplice>();
+  private seen: SeenSplice[] = [];
   private readonly injections = new StepInjections<{
     readonly message: ModelMessage;
     readonly durable: boolean;
@@ -368,8 +373,12 @@ export class Inbox implements AgentInbox {
       }
 
       this.absorbed.push(...drained);
+      this.tookIn(ctx.stepNumber, events.map((event) => event.cardId));
 
-      for (const event of events) this.moveCard(event.cardId, 'shown');
+      for (const event of events) {
+        this.splices.set(event.cardId, { id: event.cardId, atStep: ctx.stepNumber, text: stepBody(event), metadata: turnMetadata(event) });
+        this.host.broadcast({ type: 'signal_card', id: event.cardId, state: 'shown', atStep: ctx.stepNumber });
+      }
 
       for (const user of users) {
         this.host.broadcast({
@@ -413,6 +422,8 @@ export class Inbox implements AgentInbox {
     this.absorbed = [];
     this.injections.reset();
     this.redeliver(leftoverUsers, requeue);
+    this.stepCards.clear();
+    this.splices.clear();
 
     return { absorbed: absorbedEvents };
   }
@@ -453,12 +464,40 @@ export class Inbox implements AgentInbox {
   beginTurn(continuation: boolean, signalId?: string): void {
     this.starting = null;
     this.absorbed = [];
+    this.stepCards.clear();
+    this.splices.clear();
+    this.seen = [];
     this.injections.reset();
 
     if (continuation) this.pending.unshift(...this.settled);
     this.settled = [];
 
-    if (signalId) this.moveCard(signalId, 'shown');
+    if (signalId) {
+      this.moveCard(signalId, 'shown');
+      // Its own message opens the turn, so it is read by the first step; it keeps its row, not the answer's.
+      this.tookIn(0, [signalId]);
+    }
+  }
+
+  /** A step ended and was recorded: every card it took in, the agent has seen. */
+  stepEnded(stepNumber: number): void {
+    for (const cardId of this.stepCards.get(stepNumber) ?? []) {
+      this.moveCard(cardId, 'seen');
+      const splice = this.splices.get(cardId);
+
+      if (splice !== undefined) this.seen.push(splice);
+    }
+
+    this.stepCards.delete(stepNumber);
+  }
+
+  /** The mid-answer splices this turn's agent has seen, in step order: what its answer keeps, where a reload reads them. */
+  seenSplices(): readonly SeenSplice[] {
+    return this.seen;
+  }
+
+  private tookIn(stepNumber: number, cardIds: readonly string[]): void {
+    if (cardIds.length > 0) this.stepCards.set(stepNumber, [...this.stepCards.get(stepNumber) ?? [], ...cardIds]);
   }
 
   /** The turn's response messages with each durable (user-kind) injection back where the model saw it. */

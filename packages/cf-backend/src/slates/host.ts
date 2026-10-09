@@ -709,8 +709,8 @@ export class SlateHost {
 
       // An answer's own block is shown where the answer is, never again as a card of the turn's slates.
       if (source.kind === 'files') this.deps.previewed?.(id);
-      // Every page the runner serves reports its height; a slate's own server serves pages that do not.
-      const sized = source.project.browser !== undefined && source.project.slate.runtime === 'worker';
+      // Every page the runner answers reports its height, its class's own `fetch` pages too.
+      const sized = source.project.slate.runtime === 'worker';
       const shown = { url: preview.url, port: app.port, sized, title: slateTitle(source.project, id) };
 
       // Its latest source does not build: the last that did is what this URL serves, and the compiler's words say why.

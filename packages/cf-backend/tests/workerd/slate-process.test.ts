@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { expect, it } from 'vitest';
 import * as v from 'valibot';
+import { SLATE_PAGE_PREAMBLE } from '@kinu.run/core';
 
 it('runs an authored class: the prototype is the surface and the reserved storage round-trips', async () => {
   const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('resident-class'));
@@ -198,7 +199,9 @@ it('a slate declaring a browser surface serves the shell, the client bundle, and
     expect(artifacts.client).not.toContain('React.createElement');
     expect(artifacts.client).not.toContain('server-only-marker-1c9e');
     expect(artifacts.client).not.toContain('this.storage');
-    expect(artifacts.shell).toBe(shell.body);
+    // The page served is the one built, opened once with the head the runner gives every page it answers.
+    expect(shell.body.split(SLATE_PAGE_PREAMBLE)).toHaveLength(2);
+    expect(shell.body.replace(SLATE_PAGE_PREAMBLE, '')).toBe(artifacts.shell);
   } finally {
     await subject.stop();
   }

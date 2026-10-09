@@ -66,6 +66,20 @@ describe('a run under a deadline', () => {
     expect(outcome.stdout.split('\n').filter((line) => line.startsWith('told: '))).toHaveLength(1);
   });
 
+  // A suite of rows answers the notice by ending the row in flight (`endedNearSilence`, scripts/row-verdicts.ts): on
+  // staging d930f2537 one product flow's hang ended the run, and no row after it gave a verdict.
+  test('a row that hangs is ended at the notice and fails alone, and the rows after it run', async () => {
+    const outcome = await runUnderDeadline({ argv: ['bun', join(import.meta.dir, 'fixtures', 'deadline', 'rows.ts')], seconds: 2, label: 'rows', stdio: 'pipe' });
+    const printed = outcome.stdout.trim().split('\n').at(-1) ?? '';
+
+    expect(outcome).toMatchObject({ killed: false, exitCode: 0 });
+    expect(JSON.parse(printed)).toEqual({
+      verdicts: [null, 'answered', 'answered too'],
+      ended: ['hangs'],
+      broke: { hangs: "the row went silent near its runner's bound while waiting for hangs's stack cleared" },
+    });
+  });
+
   test('a run that ends keeps its own exit code and is not reported as killed', async () => {
     const ok = await runUnderDeadline({ argv: ['bun', '-e', 'process.exit(0)'], seconds: 30, label: 'ends', stdio: 'pipe' });
     const failed = await runUnderDeadline({ argv: ['bun', '-e', 'process.exit(3)'], seconds: 30, label: 'fails', stdio: 'pipe' });

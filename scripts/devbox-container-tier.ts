@@ -195,6 +195,11 @@ async function main(): Promise<void> {
   const collectSnapshots = async (name: string) => { for (const id of await call('/snapshots', v.array(v.string()), undefined, name)) snapshots.add(id); };
 
   const registry = snapshotRegistry({ account: ACCOUNT, token, fetch: (input, init) => fetch(input, init) });
+  // The application's ids, learnt once it exists and again before anything is deleted: deleting the Worker or the
+  // application leaves its snapshots, and only these ids find them after.
+  const applicationIds = new Set<string>();
+  const learnApplication = () => { for (const found of containerAppIds(REPO, [app], () => undefined)) applicationIds.add(found.id); };
+
   publishTeardown(async () => {
     const finish = async <Evidence>(name: string, work: () => Promise<Evidence>) => {
       const [outcome] = await Promise.allSettled([work()]);
@@ -205,6 +210,8 @@ async function main(): Promise<void> {
     const outcome = await completeTeardown({
       health: async () => origin === undefined ? null : (await fetch(`${origin}/health`, { headers: { authorization: `Bearer ${identity}` } })).status,
       beforeDelete: async (health) => {
+      await finish('application ids', async () => { learnApplication(); });
+
       if (origin !== undefined && 'status' in health && health.status !== 404) for (const name of names) {
         await finish(`snapshots ${name}`, () => collectSnapshots(name));
         await finish(`cleanup ${name}`, () => call('/cleanup', Json, {}, name));
@@ -223,10 +230,21 @@ async function main(): Promise<void> {
       if (!wranglerProvesAbsence(deleted)) throw new Error(deleted);
       },
       application: async () => {
+      learnApplication();
+      const ids = [...applicationIds];
       const removed = deleteContainerApps(REPO, [app], line => { process.stderr.write(`${line}\n`); });
 
       if (removed.some(line => line.includes('FAILED'))) throw new Error(removed.join('; '));
       requireEqual(containerAppIds(REPO, [app], () => undefined), []);
+
+      // Deleting the application leaves every snapshot it made, the ones no box still names included.
+      for (const applicationId of ids) {
+        const swept = await registry.deleteApplication(applicationId);
+
+        if (swept.kind === 'refused') throw new Error(`${app}'s snapshots were not deleted: ${swept.reason}`);
+
+        if (swept.left.length > 0) throw new Error(`${app} left ${String(swept.left.length)} snapshot(s) in the registry: ${swept.left.join(', ')}`);
+      }
       },
       bucket: async () => {
       // By name: `r2 bucket list` answers its first 20 buckets only, so a bucket past that page read as gone, and
@@ -423,6 +441,7 @@ async function main(): Promise<void> {
     finally { rmSync(secrets); }
 
     origin = /https:\/\/[\w.-]+\.workers\.dev/u.exec(published)?.[0];
+    learnApplication();
 
     if (origin === undefined) throw new Error('the fixture deploy printed no origin');
     writeReport();

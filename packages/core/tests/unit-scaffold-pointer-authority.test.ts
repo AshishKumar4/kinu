@@ -1,5 +1,5 @@
 import { Result } from 'effect';
-import { exists, writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { exists, writeText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * S4: scaffold promotion is pointer-first. The `.vN` file is canonical and the `current` row the single
  * pointer; each fault leaves one current pointer whose file a cold reopen executes.
@@ -20,7 +20,7 @@ import {
 import { createTestRuntime } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import { RunEventRecorder } from '../src/events/recorder';
-import { present } from '@kinu.run/test-utils';
+import { createMemoryVfs, present } from '@kinu.run/test-utils';
 
 const V0 = 'async function* run(rt, task) { yield "v0"; }';
 
@@ -80,6 +80,31 @@ describe('bootstrap seeds the canonical source', () => {
     expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(0);
     // The live view materialises from the same canonical source.
     expect(await rt.identity.scaffold.read()).toBe(INITIAL_SCAFFOLD_SOURCE);
+  });
+
+  test('a workspace whose home holds no scaffold directory yet is born with one', async () => {
+    const { rt: base } = createTestRuntime();
+    const { vfs: lenient } = createMemoryVfs();
+
+    // As a Durable Object's storage writes: a file whose directory is absent is refused, never made for it.
+    const vfs: VFS = {
+      ...lenient,
+      writeFile: async (file, data, options) => {
+        if (!(await exists(lenient, file.slice(0, file.lastIndexOf('/'))))) throw Object.assign(new Error(`ENOENT: ${file}`), { code: 'ENOENT' });
+
+        await lenient.writeFile(file, data, options);
+      },
+    };
+
+    // A loop path in a directory nothing has made, as a home no turn has written into yet.
+    const path = `${base.identity.scaffold.path.slice(0, base.identity.scaffold.path.lastIndexOf('/'))}-unborn/agent.js`;
+    const scaffold = createScaffoldSurface({ vfs, sql: base.storage.sql, actor: base.actor, path });
+    const rt: AgentRuntime = { ...base, agentStateVfs: vfs, identity: { ...base.identity, scaffold } };
+
+    await bootstrapScaffold(rt);
+
+    expect({ v0: await readScaffoldVersion(rt, 0), live: await rt.identity.scaffold.read() })
+      .toEqual({ v0: INITIAL_SCAFFOLD_SOURCE, live: INITIAL_SCAFFOLD_SOURCE });
   });
 
   test('a preserved workspace gets its exact one-shot .v0 seed from the live source', async () => {

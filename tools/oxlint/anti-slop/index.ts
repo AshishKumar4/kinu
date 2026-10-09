@@ -33,6 +33,7 @@ import { noSentinelCatchRule } from "./rules/no-sentinel-catch.ts";
 import { noUnaccountedCatchRule } from "./rules/no-unaccounted-catch.ts";
 import { noForbiddenTermInSymbolNamesRule } from "./rules/no-shape-in-symbol-names.ts";
 import { noSyncSpawnRule } from "./rules/no-sync-spawn.ts";
+import { noModuleScopeFlightRule } from "./rules/no-module-scope-flight.ts";
 import { noUntypedConsoleRule } from "./rules/no-untyped-console.ts";
 import { noUnknownParametersRule } from "./rules/no-unknown-parameters.ts";
 import { noUnknownReturnsRule } from "./rules/no-unknown-returns.ts";
@@ -91,6 +92,7 @@ const antiSlopPlugin = eslintCompatPlugin({
 		"no-near-duplicate-functions": noNearDuplicateFunctionsRule,
 		"no-unknown-parameters": noUnknownParametersRule,
 		"no-sync-spawn": noSyncSpawnRule,
+		"no-module-scope-flight": noModuleScopeFlightRule,
 		"no-untyped-console": noUntypedConsoleRule,
 		"no-unknown-returns": noUnknownReturnsRule,
 		"no-unknown-type-aliases": noUnknownTypeAliasesRule,

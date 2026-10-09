@@ -1195,6 +1195,12 @@
     "bytes BLOB NOT NULL",
     "PRIMARY KEY (id, revision)"
   ],
+  "sleep_time_marks@packages/core/src/orchestrator/sleep-time-lane.ts": [
+    "actor_id TEXT NOT NULL",
+    "mark TEXT NOT NULL",
+    "at INTEGER NOT NULL",
+    "PRIMARY KEY (actor_id, mark)"
+  ],
   "sleep_time_updates@packages/core/src/orchestrator/sleep-time-lane.ts": [
     "effect_key TEXT PRIMARY KEY",
     "update_json TEXT NOT NULL"

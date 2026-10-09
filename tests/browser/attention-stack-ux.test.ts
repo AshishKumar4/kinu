@@ -105,6 +105,47 @@ test('only what waits on the owner is stacked, newest first; an older card can b
   });
 });
 
+test('an account-memory proposal waits in the stack as the user object sends it, and keeping it there decides it', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await opened(page, origin, '&asks=two&memory=waiting');
+    await page.waitForSelector('[data-attention-card="memory:amp_city"], [data-attention-behind="memory:amp_city"]');
+
+    // Newest first: the proposal, a minute old, between the commands parked 30 s and 90 s ago.
+    expect(await stacked(page)).toEqual(['action:park-publish', 'memory:amp_city', 'action:park-push']);
+    await page.click('[data-attention-behind="memory:amp_city"]');
+    await page.waitForFunction(() => document.querySelector('[data-attention-card]')?.getAttribute('data-attention-card') === 'memory:amp_city');
+    expect(await page.$eval('[data-attention-card]', (card) => card.textContent)).toContain('owner_city: "Lisbon"');
+
+    await answer(page, 'Keep for every workspace');
+    await page.waitForFunction(() => document.documentElement.dataset.galleryMemoryDecisions === 'amp_city:accept ');
+    await page.waitForFunction(() => document.querySelector('[data-attention-card]')?.getAttribute('data-attention-card') === 'action:park-publish');
+    expect(await stacked(page)).toEqual(['action:park-publish', 'action:park-push']);
+    await page.close();
+  });
+});
+
+// Staging d930f2537 (2026-10-09): the product flow answered the next card 0.2 s after it opened, while the queue's
+// re-read after the first answer was still in flight, and the click was dropped: the answer was never sent.
+test('the next card answers at once, while the queue is still being read again after the first answer', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await opened(page, origin, '&asks=two&asksHold=1');
+    await page.waitForSelector('[data-attention-stack]');
+
+    await answer(page, 'Approve');
+    await page.waitForFunction(() => document.querySelector('[data-attention-card]')?.getAttribute('data-attention-card') === 'action:park-push');
+    // The re-read is held: the next card is answered before it lands.
+    await answer(page, 'Deny');
+    await page.waitForFunction(() => (document.documentElement.dataset.galleryDecisions ?? '').includes('park-push'));
+
+    expect(await decisions(page)).toEqual([['park-publish', 'approved'], ['park-push', 'denied']]);
+    await page.evaluate(() => { window.dispatchEvent(new Event('gallery:release-asks')); });
+    await page.waitForFunction(() => document.querySelector('[data-attention-stack]') === null);
+    await page.close();
+  });
+});
+
 test('a refused answer keeps its card open and says why; the next try lands', async () => {
   await withGallery(async ({ newPage, origin }) => {
     const page = await newPage();

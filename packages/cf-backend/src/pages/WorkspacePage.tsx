@@ -12,7 +12,8 @@ import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   isPlaceholderMission, ownerAsks, summarizeRestorePlan,
 } from "@kinu.run/core";
-import type { AlternateTakeSet, DiffAnchor, FileRestoreChange, PlanReview, Rpc, TakePickOutcome } from "@kinu.run/core";
+import type { AlternateTakeSet, DiffAnchor, FileRestoreChange, PlanReview, Rpc, SignalCard, TakePickOutcome } from "@kinu.run/core";
+import type { UIMessage } from "ai";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { useActorChat, useKinu, type WorkspaceNotice } from "@/hooks/use-kinu";
 import { useAutogrow } from "@/hooks/use-autogrow";
@@ -23,7 +24,7 @@ import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { useAgentsNav } from "@/hooks/use-agents-nav";
 import { usePendingAttachments } from "@/hooks/use-pending-attachments";
 import { useFileDrop } from "@/hooks/use-file-drop";
-import { touchWorkspace } from "@/lib/user-api";
+import { decideAccountMemory, touchWorkspace } from "@/lib/user-api";
 import { describeError, useAsyncResource } from "@/hooks/use-async-resource";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { ConnectedModelPicker } from "@/components/ModelPicker";
@@ -36,7 +37,7 @@ import { AttentionStack, type AttentionStackProps } from "@/components/Attention
 import { foldEventTurns, placeEvents, subordinateEventRow, type PlacedEvent } from "@/components/ChatEvents";
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { cloudPlanes, filesFocusOf, hasComparableTakes, referencePrefixes, WORKSPACE_ROOT, type FilesFocus } from "@kinu.run/core";
-import { classifyProgrammaticTurn, messageSignalId, messagesUpTo, threadLiveTail, turnRows } from "@kinu.run/core";
+import { classifyProgrammaticTurn, liveTailRow, messageSignalId, messagesUpTo, threadLiveTail, turnRows } from "@kinu.run/core";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import type { ChangesFocus } from "@/components/surfaces/ChangesSurface";
 import { SlateInlineContext } from "@/components/slates/context";
@@ -585,6 +586,7 @@ function SubordinateChatColumn({
   // An admitted turn with the operator's message last has no assistant row to ask, so the
   // live indicator is decided here. See `threadLiveTail`.
   const tail = threadLiveTail({ last: thread.entries.at(-1)?.message, liveness: state.liveness });
+  const liveRow = liveTailRow({ rows: thread.entries.map(({ message }) => message), liveness: state.liveness });
 
   return (
     <div className="@container relative flex flex-col flex-1 min-h-0" data-agent-pane={`${workspace}/agents/${subName}`}>
@@ -601,7 +603,7 @@ function SubordinateChatColumn({
           rows={(before) => thread.entries.map(({ message: msg, steers }, i) => (
             <Fragment key={msg.id}>
               {before(msg.id)}
-              {repeats[i] !== 0 && <MessageView message={msg} steers={steers} answerSlates={answerChat} liveTail={i === thread.entries.length - 1 ? tail : null}
+              {repeats[i] !== 0 && <MessageView message={msg} steers={steers} answerSlates={answerChat} liveTail={msg.id === liveRow ? tail : null}
                 repeats={repeats[i]} onRetry={i === thread.entries.length - 1 && !live ? state.retryLastMessage : undefined} />}
             </Fragment>
           ))}>
@@ -761,6 +763,13 @@ function GoneWorkspace() {
   );
 }
 
+/** Live steers' rule: a card spliced into a running turn goes into the last message when that is the answer being written. */
+function useLiveSplices(entries: readonly { readonly message: UIMessage }[], cards: readonly SignalCard[]): readonly SignalCard[] {
+  const answering = entries.at(-1)?.message.role === "assistant";
+
+  return useMemo(() => (answering ? cards.filter((card) => card.atStep !== undefined) : []), [answering, cards]);
+}
+
 export default function WorkspacePage() {
   const { agentId } = useParams();
   const [gone, setGone] = useState<string | null>(null);
@@ -851,14 +860,17 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
     workbench.current?.reveal();
   }, []);
 
-  // The stack answers through the workspace's own calls on every pane: one queue, whichever pane asks.
+  // The stack answers through the workspace's own calls on every pane: one queue, whichever pane asks. The account's
+  // memory proposals come from the owner's user object, on the roster's socket the shell already holds.
   const { rpc: workspaceRpc, resolveConsent, refreshPendingActions } = state;
+  const { accountProposals } = useWorkspaceRoster();
 
   const attentionCalls = useMemo((): Omit<AttentionStackProps, "asks"> => ({
     rpc: workspaceRpc,
     resolveConsent,
     onDecided: refreshPendingActions,
     onReview: () => show("Work"),
+    decideMemory: async (id, decision) => { await decideAccountMemory(id, decision); },
   }), [workspaceRpc, resolveConsent, refreshPendingActions, show]);
 
   // A chat file link, or a `?file=<reference>` landing, opens Files on the file it names.
@@ -976,8 +988,8 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
   // Refreshed when a turn settles: a settled /branch redirect may have produced a fresh set.
   const [takesByTurn, setTakesByTurn] = useState<Record<string, AlternateTakeSet>>({});
 
-  // A signal that started a turn renders on its message; one spliced into a running turn
-  // never gets a message. Each card renders once.
+  // A signal that started a turn renders on its message; one spliced into a running turn renders inside the answer
+  // that read it, at the step that read it, and is kept there once seen. Each card renders once.
   const cardStates = useMemo(
     () => new Map(state.signalCards.map((card) => [card.id, card.state])),
     [state.signalCards]);
@@ -988,10 +1000,12 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
     return id ? [id] : [];
   })), [transcript]);
 
-  // A signal spliced into a running turn, and an agent given work or reporting, each where it happened.
+  const liveSplices = useLiveSplices(thread.entries, state.signalCards);
+
+  // An agent given work or reporting, and a signal with nowhere else to go, each where it happened.
   const looseEvents = useMemo((): PlacedEvent[] => [
     ...state.signalCards.flatMap((card): PlacedEvent[] => {
-      if (messageCardIds.has(card.id)) return [];
+      if (messageCardIds.has(card.id) || liveSplices.includes(card)) return [];
       const turn = classifyProgrammaticTurn({ metadata: card.metadata });
 
       return turn ? [{
@@ -1002,13 +1016,14 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
       }] : [];
     }),
     ...state.subordinateEvents.map((event) => subordinateEventRow(event, agentId ?? "")),
-  ], [state.signalCards, state.subordinateEvents, messageCardIds, agentId]);
+  ], [state.signalCards, state.subordinateEvents, messageCardIds, liveSplices, agentId]);
 
   const threadMessages = useMemo(() => thread.entries.map(({ message }) => message), [thread.entries]);
   const placed = useMemo(() => placeEvents(threadMessages, looseEvents), [threadMessages, looseEvents]);
   const repeats = useMemo(() => foldEventTurns(threadMessages), [threadMessages]);
 
   const mainTail = threadLiveTail({ last: thread.entries.at(-1)?.message, liveness: state.liveness });
+  const mainLiveRow = liveTailRow({ rows: threadMessages, liveness: state.liveness });
   const providerWait = useProviderWaitNotice(state.providerWait);
 
   const settledBranchCount = state.branchRuns.filter((b) => b.status === "settled").length;
@@ -1180,8 +1195,9 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
                       message={msg}
                       repeats={repeats[i]}
                       steers={steers}
+                      splices={i === thread.entries.length - 1 ? liveSplices : undefined}
                       answerSlates={WORKSPACE_CHAT}
-                      liveTail={i === thread.entries.length - 1 ? mainTail : null}
+                      liveTail={msg.id === mainLiveRow ? mainTail : null}
                       onRetry={i === thread.entries.length - 1 && !live ? state.retryLastMessage : undefined}
                       onFork={onForkMessage}
                       onFeedback={onMessageFeedback}
@@ -1238,7 +1254,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
                 onStop={handleStop}
                 onBranch={handleBranch}
                 attention={(
-                  <AttentionStack asks={ownerAsks(state)} {...attentionCalls} />
+                  <AttentionStack asks={ownerAsks({ ...state, accountProposals })} {...attentionCalls} />
                 )}
                 mode={{ value: ui.mode, onChange: setChatMode }}
                 attachments={{

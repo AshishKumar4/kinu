@@ -1,5 +1,14 @@
 import { KinuError } from '../obs/error';
 
+/** Lines one `file` read shows by default, as Claude Code's Read and pi's read do. */
+export const FILE_READ_LINES = 2_000;
+
+/** Characters one read shows at most, its footer included: about 12,500 tokens, pi's and oh-my-pi's 50 KB. */
+export const FILE_READ_MAX_CHARS = 50_000;
+
+/** Characters of one line a read shows; the rest is counted, so a minified line cannot fill the window. */
+export const FILE_READ_LINE_CHARS = 2_000;
+
 /** Durable counter keys in the `file_edit` run event. */
 export type FileEditFailure =
   | 'empty_anchor'
