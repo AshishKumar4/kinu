@@ -25,6 +25,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **Code-quoted slate addresses draw their previews.** The server and Markdown renderer use one promotion pass, so an exact inline-code address draws one card, while addresses in code fences stay literal and changed slates still get their automatic preview.
 - **Launcher-swap checks use the repo's runtime, not the test driver's.** Their managed Bun is the pinned local binary and installation is disabled, so a check run by the machine's older Bun cannot contact bun.sh or add install progress to its verdict.
 - **First-run collection uses the pinned runtime for the process and its workers.** Its credential-free probes no longer resolve the machine's Bun through PATH; an execution trace showed those workers using 1.4.0 while the suite ran on 1.4.2.
 - **Staging counts terminal sequences still owed, not repeated observations.** Each settlement emits one completion event. The version report follows each sequence's last event, separates those that settled after owing, and reports only those still owed at the window's end.

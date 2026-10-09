@@ -5,7 +5,7 @@ import { useAsyncResource } from "@/hooks/use-async-resource";
 import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
-import { findPlaneReferences, isWholeReference, MAX_LINES_PER_FILE, SLATE_LINK, slateLinkId, type ChangelogEntry, type DiffLine } from "@kinu.run/core";
+import { findPlaneReferences, isWholeReference, linkProse, MAX_LINES_PER_FILE, promoteSlateLinks, slateLinkId, type ChangelogEntry, type DiffLine, type MarkdownNode } from "@kinu.run/core";
 import { ephemeralSlateId, slateUiSegments, type EphemeralSlateAddress, type SlateUiSegment } from "@kinu.run/core";
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { InlineSlate } from "@/components/slates/InlineSlate";
@@ -167,76 +167,14 @@ export function AnswerText({ text, place }: { text: string; place: AnswerPlace }
   return <>{segments.map((segment, index) => <AnswerSegment key={index} segment={segment} place={place} />)}</>;
 }
 
-// Local mdast slice: importing `mdast` types for two plugins is heavier than the plugins.
-interface MdNode {
-  readonly type: string;
-  readonly value?: string;
-  readonly url?: string;
-  children?: MdNode[];
-}
-
-/**
- * Links every hit `find` reports in the tree's prose, outside links and code; `code` says which whole inline code
- * spans are links too, wrapped as they are.
- */
-function linkProse(tree: MdNode, find: (value: string) => ReadonlyArray<{ readonly index: number; readonly text: string }>, code: (value: string) => boolean): void {
-  const split = (value: string): MdNode[] | null => {
-    const parts: MdNode[] = [];
-    let from = 0;
-
-    for (const hit of find(value)) {
-      if (hit.index > from) parts.push({ type: 'text', value: value.slice(from, hit.index) });
-      parts.push({ type: 'link', url: hit.text, children: [{ type: 'text', value: hit.text }] });
-      from = hit.index + hit.text.length;
-    }
-
-    if (parts.length === 0) return null;
-
-    if (from < value.length) parts.push({ type: 'text', value: value.slice(from) });
-
-    return parts;
-  };
-
-  const walk = (node: MdNode): void => {
-    if (node.type === 'link' || node.type === 'linkReference' || node.type === 'inlineCode' || node.type === 'code') return;
-
-    const children = node.children ?? [];
-
-    for (let i = 0; i < children.length; i++) {
-      const child = children[i];
-
-      if (child.type === 'inlineCode' && code(child.value ?? '')) {
-        children[i] = { type: 'link', url: child.value, children: [child] };
-        continue;
-      }
-
-      const parts = child.type === 'text' ? split(child.value ?? '') : null;
-
-      if (parts === null) {
-        walk(child);
-        continue;
-      }
-
-      children.splice(i, 1, ...parts);
-      i += parts.length - 1;
-    }
-  };
-
-  walk(tree);
-}
-
 function remarkSlateLinks() {
-  const find = (value: string) => [...value.matchAll(SLATE_LINK)]
-    .filter((hit) => slateLinkId(hit[0]) !== null)
-    .map((hit) => ({ index: hit.index, text: hit[0] }));
-
-  return (tree: MdNode) => { linkProse(tree, find, () => false); };
+  return (tree: MarkdownNode) => { promoteSlateLinks(tree); };
 }
 
 function remarkFileLinks({ roots }: { readonly roots: readonly string[] }) {
   const find = (value: string) => findPlaneReferences(value, roots).map(({ index, reference }) => ({ index, text: reference }));
 
-  return (tree: MdNode) => { linkProse(tree, find, (value) => isWholeReference(value, roots)); };
+  return (tree: MarkdownNode) => { linkProse(tree, find, (value) => isWholeReference(value, roots)); };
 }
 
 // Memoized on content: the react-markdown re-parse dominates render cost.

@@ -175,8 +175,8 @@ async function boardTurn(also: (tools: Awaited<ReturnType<ReturnType<typeof chat
 
 // Owner 2026-09-26: "if the agent itself also previews it, this doesn't trigger." Each way a turn can show the slate
 // leaves exactly one preview of it.
-test('an answer that writes the slate:// line itself gets no second preview', async () => {
-  const answer = await boardTurn(async () => {}, 'Added it.\n\nslate://board');
+test.each(['slate://board', '`slate://board`'])('an answer that writes %s itself gets no second preview', async (address) => {
+  const answer = await boardTurn(async () => {}, `Added it.\n\n${address}`);
 
   expect(slatesChanged({ metadata: answer?.metadata })).toEqual([]);
   expect(previewsDrawn(answer)).toEqual(['board']);

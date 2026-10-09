@@ -29,10 +29,10 @@
       "decision": "traversal"
     },
     {
-      "file": "packages/cf-backend/src/components/surfaces/shared.tsx",
+      "file": "packages/core/src/read-models/markdown-links.ts",
       "kind": "hand-parser",
       "owner": "split",
-      "sourceSha256": "e8ecc192ec25131540227de86f04b65d7234cdb026f8a839ccba43f68a305de8",
+      "sourceSha256": "654ce7bf6eb3cfd963f3127d5d55ccf5135ce1c55535888bc0968032613183de",
       "decision": "lexical"
     },
     {
