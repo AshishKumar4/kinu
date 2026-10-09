@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { DEV_IDENTITY_ACCOUNT_HEADER, inheritedRows, parseEvalAccount } from '@kinu.run/core';
+import { BUILTIN_PROFILE_CATALOG, DEV_IDENTITY_ACCOUNT_HEADER, inheritedRows, parseEvalAccount, profileCatalogDigest } from '@kinu.run/core';
 import { WORKSPACE_LEASE_MS } from './session';
 import { evalMatrix } from './config';
 import { claimTrialAccount, prepareTrialAccount, sharedAccounts, trialAccounts, trialAccountsAt, trialSlot } from './slot';
@@ -49,6 +49,12 @@ test('a trial account may hold its provider keys and its own bookkeeping, and no
   })).toEqual({ experience_library: 3, user_mcp_servers: 1 });
 });
 
+test('the stored model catalog is one provisioned row, not a waiver for other configuration or runtime rows', () => {
+  expect(inheritedRows({ user_config: 1 }, 1)).toEqual({});
+  expect(inheritedRows({ user_config: 1 }, 0)).toEqual({ user_config: 1 });
+  expect(inheritedRows({ user_config: 2, experience_library: 3 }, 7)).toEqual({ user_config: 1, experience_library: 3 });
+});
+
 // Every trial's workspace registers on its account as a device-status watcher, and deleting the workspace leaves the
 // row, which the account prunes only when a device moves: on staging f75f06932 the next run's trial on trial-4 refused
 // to open on it (2026-10-01).
@@ -61,6 +67,7 @@ function deployment(state: {
   readonly takesTrials: 'yes' | 'refuses' | 'ignores';
   workspaces: { name: string; lastVisited: number }[];
   readonly held?: Record<string, number>;
+  readonly catalogVersion?: number;
 }) {
   const deleted: string[] = [];
 
@@ -82,6 +89,11 @@ function deployment(state: {
       if (url.pathname === '/api/user/workspaces') return Response.json({ entries: state.workspaces, nextCursor: null });
 
       if (url.pathname === '/api/user/held-rows') return Response.json(state.held ?? { user_credentials: 1, user_profile: 1 });
+
+      if (url.pathname === '/api/user/profile-catalog') return Response.json({
+        authority: { kind: 'account', accountId: account ?? 'eval-service' }, version: state.catalogVersion ?? 0,
+        digest: profileCatalogDigest(BUILTIN_PROFILE_CATALOG), catalog: BUILTIN_PROFILE_CATALOG,
+      });
 
       if (request.method === 'DELETE' && url.pathname.startsWith('/api/user/workspaces/')) {
         const name = decodeURIComponent(url.pathname.slice('/api/user/workspaces/'.length));
@@ -151,6 +163,15 @@ describe('opening on a trial account', () => {
 
     servers.push(server);
     expect(prepareTrialAccount(target, now)).rejects.toThrow('trial-7 holds rows a trial would inherit: experience_library 2, user_mcp_servers 1');
+  });
+
+  test('a provisioned model catalog survives opening the trial; another configuration row still stops it', async () => {
+    const configured = deployment({ takesTrials: 'yes', workspaces: [], held: { user_config: 1 }, catalogVersion: 1 });
+    const stale = deployment({ takesTrials: 'yes', workspaces: [], held: { user_config: 2 }, catalogVersion: 1 });
+
+    servers.push(configured.server, stale.server);
+    await expect(prepareTrialAccount(configured.target, now)).resolves.toBeUndefined();
+    await expect(prepareTrialAccount(stale.target, now)).rejects.toThrow('user_config 1');
   });
 
   test('two runs that open on one account at once: the earlier workspace name keeps it, the later one gives it up', async () => {
