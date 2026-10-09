@@ -4,8 +4,8 @@ import { Effect } from "effect";
 import {
   activateMctsProgressActor, applyMctsProgress, createMctsProgressState,
   branchHeadId, CHANGES_MOVED_EVENT, followJobOutput, JOB_OUTPUT_EVENT, LIVE_READS, ORCHESTRATOR_AGENT_SLUG, PAGE_KEEPALIVE,
-  READS_CHANGED_EVENT, SLATES_CHANGED_EVENT, type JobOutputTail,
-  hostedActorSocketPath, type LiveRead, type PendingAction, type PlanReview, type ReasoningEffort, type RoleId, type SlateProblem, type SlateSummary, type TierSource,
+  READS_CHANGED_EVENT, SLATES_CHANGED_EVENT, WORK_TAB_JOBS, type JobOutputTail,
+  hostedActorSocketPath, listedOn, type LiveRead, type OpeningList, type PendingAction, type PlanReview, type ReasoningEffort, type RoleId, type SlateProblem, type SlateSummary, type TierSource,
 } from "@kinu.run/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { FileUIPart, UIMessage } from "ai";
@@ -162,6 +162,17 @@ interface WorkspaceSnapshot {
   turnClaim: TurnClaimState;
 }
 
+/** The snapshot and the lists the first screen draws, in the one read a workspace tab opens with (`getWorkspaceOpening`). */
+interface WorkspaceOpening extends WorkspaceSnapshot {
+  pendingActions: PendingAction[];
+  backgroundJobs: BackgroundJob[];
+  inspectedWork: InspectedWork[];
+  subordinates: OpeningList<unknown>;
+  pendingConsents: OpeningList<PendingConsent[]>;
+  workspaceAgents: OpeningList<PanelAgent[]>;
+}
+
+
 import { PlanReviewSchema, type WorkspacePlanReference } from "@kinu.run/core";
 
 const SubordinateRosterEntrySchema = v.object({
@@ -236,13 +247,16 @@ const LIVE_REFRESH_DESCRIPTORS: readonly LiveRefreshDescriptor[] = [
   { source: "plan", label: "active plan" },
 ];
 
-/** A landed snapshot is a fresh read of each of these, so it clears their failures. */
+/** A landed opening is a fresh read of each of these, so it clears their failures. */
 const SNAPSHOT_SEEDED_SOURCES: readonly LiveRefreshSource[] = [
   "memoryContent",
   "executors",
   "presence",
   "plan",
   "slates",
+  "pendingActions",
+  "jobs",
+  "work",
 ];
 
 /** Action failures keep their own prose: they name what did not happen. */
@@ -504,7 +518,7 @@ export interface WorkspacePlanArrival {
 
 
 interface WorkspaceExtension {
-  readonly snapshot: (snap: WorkspaceSnapshot, isSourceCurrent: (source: LiveRefreshSource) => boolean) => Promise<void>;
+  readonly snapshot: (snap: WorkspaceOpening, isSourceCurrent: (source: LiveRefreshSource) => boolean) => Promise<void>;
   readonly frame: (msg: SocketFrame) => Promise<void>;
   readonly refresh: () => void;
   readonly jobs: () => Promise<void>;
@@ -1007,12 +1021,13 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
   }, [extension, rpc, setSourceError]);
 
   // One round trip: a second awaited RPC for the active plan makes a plan-gated composer paint in
-  // build mode and jump. The exploration canvas is not seeded here; its surface fetches its own.
+  // build mode and jump, and the lists the first screen draws came back a wave later. The exploration
+  // canvas is not seeded here; its surface fetches its own.
   async function loadAllData(
     isCurrent: () => boolean,
     isSourceCurrent: (source: LiveRefreshSource) => boolean,
   ): Promise<void> {
-    const snap = await rpc<WorkspaceSnapshot>("getWorkspaceSnapshot", []);
+    const snap = await rpc<WorkspaceOpening>("getWorkspaceOpening", []);
 
     if (!isCurrent()) return;
     setAgentStatus(snap.status);
@@ -1387,7 +1402,7 @@ function useWorkspaceReads(link: ChatLink) {
 
   const refreshBackgroundJobs = useCallback(() => refreshCurrentLiveResource(
     "jobs",
-    () => rpc<BackgroundJob[]>("listBackgroundJobs", [50]),
+    () => rpc<BackgroundJob[]>("listBackgroundJobs", [WORK_TAB_JOBS]),
     setBackgroundJobs,
   ), [refreshCurrentLiveResource, rpc]);
 
@@ -1685,7 +1700,7 @@ function useWorkspaceReads(link: ChatLink) {
     }
   }, [streaming, refreshLiveData]);
 
-  async function applySnapshot(snap: WorkspaceSnapshot, isSourceCurrent: (source: LiveRefreshSource) => boolean): Promise<void> {
+  async function applySnapshot(snap: WorkspaceOpening, isSourceCurrent: (source: LiveRefreshSource) => boolean): Promise<void> {
     if (isSourceCurrent("memoryContent")) {
       setMemoryContent(snap.memoryContent);
 
@@ -1708,10 +1723,19 @@ function useWorkspaceReads(link: ChatLink) {
       branchId: run.branchId, task: run.task, status: run.status,
     })));
 
+    if (isSourceCurrent("pendingActions")) setPendingActions(snap.pendingActions);
+
+    if (isSourceCurrent("jobs")) setBackgroundJobs(snap.backgroundJobs);
+
+    if (isSourceCurrent("work")) setInspectedWork(snap.inspectedWork);
+
+    // Each fails on its own surface, as its own read did; each port list is its executor's answer, not the workspace's.
     try {
       await Promise.all([
-        refreshExposedPorts(), refreshPendingActions(), refreshRoster(), refreshBackgroundJobs(), refreshInspectedWork(), refreshPendingConsents(),
-        liveReads.listWorkspaceAgents?.(),
+        refreshExposedPorts(),
+        refreshCurrentLiveResource("roster", async () => v.parse(v.array(SubordinateRosterEntrySchema), await listedOn(snap.subordinates)), setSubordinates),
+        refreshCurrentLiveResource("consents", () => listedOn(snap.pendingConsents), setPendingConsents),
+        refreshCurrentLiveResource("agents", () => listedOn(snap.workspaceAgents), setWorkspaceAgents),
       ]);
     } catch (cause) {
       diagnostics.failure('workspace.snapshot_followup_refresh_failed', toKinuError({
