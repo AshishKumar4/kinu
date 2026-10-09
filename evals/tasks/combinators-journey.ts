@@ -3,7 +3,7 @@ import { basename, posix } from 'node:path';
 import * as v from 'valibot';
 import { unpackZip, WORKSPACE_ROOT } from '@kinu.run/core';
 import type { EvalTurn, SeedFile } from '../src/task';
-import { matchesReference, type EvalCheckOutcome, type EvalVerifier } from '../src/verifier';
+import { matchesReference, parallelFinishedWork, type EvalCheckOutcome, type EvalVerifier } from '../src/verifier';
 import { published } from './npm';
 import { aSwarmRan } from './swarm-runs';
 import { boardHolds } from './work-board';
@@ -288,9 +288,9 @@ ${handoff.coordinator} still coordinates it. Keep the corrected code for the new
       await verifier.check('independent-review-branches-finished-this-turn', async () => {
         const swarm = await aSwarmRan(verifier, {});
         const helpers = await verifier.helperWork();
-        const finished = helpers.filter((helper) => helper.runs.some((run) => run.status !== null));
+        const parallel = parallelFinishedWork(helpers, [REVIEW, `${DESK}/reports/review`, `${DESK}/report-totals.js`, `${DESK}/candidates/`, 'report_totals']);
 
-        return { pass: swarm.pass || finished.length >= 2, evidence: { swarm: swarm.evidence, helpers } };
+        return { pass: swarm.pass || parallel, evidence: { swarm: swarm.evidence, parallel, helpers } };
       });
       await verifier.check('boundary-review-records-the-actual-answers', async () => {
         const normalize = (rows: v.InferOutput<typeof ReviewSchema>) => rows.map((row) => ({ ...row, path: basename(row.path) })).sort((a, b) => a.path.localeCompare(b.path));

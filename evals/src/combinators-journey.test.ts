@@ -40,7 +40,9 @@ type Defect = 'board' | 'invented-report' | 'skipped' | 'hardcoded-calculator' |
   | 'workspace-preview' | 'sandbox-preview' | 'invisible-preview' | 'swarm' | 'old-swarm' | 'audit' | 'npm-version' | 'npm-integrity'
   | 'export-missing' | 'export-changed' | 'export-duplicate' | 'export-extra' | 'memory-code' | 'memory-coordinator' | 'escaped-preview' | 'reopened-module'
   | 'board-case' | 'relative-review' | 'scratch-after-pack' | 'agent-unused' | 'agent-used-once' | 'empty-memory' | 'memory-note' | 'renamed-export'
-  | 'cached-workspace-preview' | 'cached-sandbox-preview' | 'dot-entrypoint' | 'no-main' | 'no-package-members' | 'review-with-rerun' | 'lagged-use';
+  | 'cached-workspace-preview' | 'cached-sandbox-preview' | 'dot-entrypoint' | 'no-main' | 'no-package-members' | 'review-with-rerun' | 'lagged-use'
+  | 'completed-review-helpers' | 'error-review-helpers' | 'aborted-review-helpers' | 'incomplete-review-helpers'
+  | 'unrelated-review-helpers' | 'serial-review-helpers' | 'unmeasured-review-helpers';
 
 /** The fixture flattens assertions and counts statuses independently of the grader's loop. */
 function calculate(text: string, defect?: Defect) {
@@ -59,6 +61,7 @@ function desk(defect?: Defect) {
   const encoder = new TextEncoder(), decoder = new TextDecoder();
   const put = (path: string, text: string) => files.set(path, encoder.encode(text));
   const read = (path: string) => decoder.decode(files.get(path));
+  const hiredReview = defect?.endsWith('review-helpers') === true;
   put(REPORT, defect === 'invented-report' ? JSON.stringify({ testResults: [{ assertionResults: [{ status: 'passed' }] }] }) : INITIAL);
   put(`/sandbox${CHECKOUT}/vitest-report.json`, read(REPORT));
   put('/sandbox/workspace/combinators/reports/vitest.json', read(REPORT));
@@ -152,8 +155,44 @@ function desk(defect?: Defect) {
     workspaceWork: () => Promise.resolve({ plans: [], tasks: [{ owner: { name: 'main', path: [] },
       tasks: titles.map((title) => ({ title: defect === 'board-case' ? `\`${title.toUpperCase()}\`.` : title,
         status: defect === 'board' || (defect === 'reopened-module' && title === 'src/maybe.ts') ? 'in_progress' : 'done', subtasks: [] })) }] }),
-    inspect: () => Promise.resolve({ view: 'children', page: { status: 'end', items: [] } }),
-    swarmRuns: () => Promise.resolve([{ run: { id: 'review', status: 'completed', startedAt: defect === 'old-swarm' ? 90 : 100, winnerScore: null }, params: null,
+    inspect: (request) => {
+      if (request.view === 'children') return Promise.resolve({ view: 'children', page: { status: 'end', items: hiredReview
+        ? ['review-a', 'review-b'].map((name) => ({ name, status: 'dismissed', lifetime: 'task', actorReference: { actorId: name } })) : [] } });
+
+      const actor = 'actor' in request ? request.actor : undefined;
+      let startedAt = actor === 'review-a' ? 100 : 101;
+
+      if (actor !== 'review-a' && defect === 'serial-review-helpers') startedAt = 201;
+      const endedAt = actor === 'review-a' ? 200 : 301;
+      const userMessage = defect === 'unrelated-review-helpers' ? 'Review the newsletter draft.' : `Read ${DESK}/reports/review and implement report_totals.`;
+
+      let status = 'completed';
+
+      if (defect === 'error-review-helpers') status = 'error';
+
+      if (defect === 'aborted-review-helpers') status = 'aborted';
+
+      if (defect === 'incomplete-review-helpers') status = 'incomplete';
+
+      const runId = `${actor ?? ''}-run`;
+
+      if (request.view === 'runs') {
+        const run = { runId, startedAt, status, userMessage, eventCount: defect === 'unmeasured-review-helpers' ? undefined : 2 };
+
+        return Promise.resolve({ view: 'runs', page: { status: 'end', items: [run] } });
+      }
+
+      if (request.view === 'history') return Promise.resolve({ view: 'history', page: { status: 'end', items: [{
+        id: runId, position: 0, role: 'user', turnId: runId, runId, content: userMessage, createdAt: startedAt,
+      }] } });
+
+      if (request.view === 'events') return Promise.resolve({ view: 'events', page: { status: 'end', items: [{
+        type: 'run_end', runId, eventIndex: 1, timestamp: new Date(endedAt).toISOString(), reason: status,
+      }] } });
+
+      return Promise.resolve({ view: 'missing', reason: 'missing', error: 'not an inspector view this fixture serves' });
+    },
+    swarmRuns: () => Promise.resolve(hiredReview ? [] : [{ run: { id: 'review', status: 'completed', startedAt: defect === 'old-swarm' ? 90 : 100, winnerScore: null }, params: null,
       head: { rationale: 'custom', heads: [0, 1].map(() => ({ depth: 1, status: defect === 'swarm' ? 'error' : 'completed', spawnedAt: 100, wallClockMs: 1 })) } }]),
     execute: () => {
       put(`/sandbox${CHECKOUT}/.kinu-eval-vitest.json`, INITIAL);
@@ -268,6 +307,8 @@ async function grade(index: number, defect?: Defect): Promise<EvalCheck[]> {
 }
 
 const defects: readonly { defect: Defect; turn: number; checks: readonly string[] }[] = [
+  ...(['error-review-helpers', 'aborted-review-helpers', 'incomplete-review-helpers', 'unrelated-review-helpers', 'serial-review-helpers', 'unmeasured-review-helpers'] as const)
+    .map((defect) => ({ defect, turn: 1, checks: ['independent-review-branches-finished-this-turn'] })),
   { defect: 'board', turn: 0, checks: ['release-provenance-is-done'] },
   { defect: 'npm-version', turn: 0, checks: ['release-provenance-matches-the-live-registry'] },
   { defect: 'npm-integrity', turn: 0, checks: ['release-provenance-matches-the-live-registry'] },
@@ -324,6 +365,7 @@ for (const [name, defect, turn] of [
   ['only requested entry points, without package metadata', 'no-package-members', 3],
   ['the correctly checked rerun alongside the three examples', 'review-with-rerun', 1],
   ['this-turn invocation before its counter review', 'lagged-use', 2],
+  ['two completed parallel review helpers', 'completed-review-helpers', 1],
 ] as const) {
   test(`accepts ${name}`, async () => {
     expect((await grade(turn, defect)).filter((check) => !check.pass)).toEqual([]);

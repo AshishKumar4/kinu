@@ -177,7 +177,7 @@ export function look(names: readonly string[], press: Press | null): Looked {
   };
 
   for (const name of names) {
-    const parts: { inside: (node: Node) => boolean; occurrence: number }[] = [];
+    const parts: { inside: (node: Node) => boolean; occurrence: number; columns: Readonly<Record<string, string>> }[] = [];
     const rows = new Map<Element, number>();
 
     const occurrenceOf = (row: Element): number => {
@@ -188,8 +188,6 @@ export function look(names: readonly string[], press: Press | null): Looked {
       return occurrence;
     };
 
-    const columns: Record<string, string> = {};
-
     for (const label of labels.get(name) ?? []) {
       let row = label;
 
@@ -198,19 +196,20 @@ export function look(names: readonly string[], press: Press | null): Looked {
       }
 
       const occurrence = occurrenceOf(row);
-      parts.push({ inside: (node) => row.contains(node), occurrence });
-      Object.assign(columns, columnsOf(row));
+      const columns = columnsOf(row);
+
+      parts.push({ inside: (node) => row.contains(node), occurrence, columns });
 
       let cell = label;
 
       while (cell.parentElement !== null && ['inline', 'contents'].includes(getComputedStyle(cell).display)) cell = cell.parentElement;
       const column = columnOf(cell);
 
-      if (column !== null && !othersIn(name, column)) parts.push({ inside: column, occurrence });
+      if (column !== null && !othersIn(name, column)) parts.push({ inside: column, occurrence, columns });
     }
 
     const readings: { text: Said[]; controls: Element[] }[] = [];
-    regions[name] = parts.flatMap(({ inside, occurrence }) => {
+    regions[name] = parts.flatMap(({ inside, occurrence, columns }) => {
       const held = controls.filter((control) => inside(control.element));
       const text = texts.filter(inside);
       const elements = held.map((control) => control.element);

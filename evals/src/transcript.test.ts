@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { encodeModelMessageValues, type RunEvent } from '@kinu.run/core';
-import { cutButCompleted, measure, toolFailures, toTranscript } from './transcript';
+import { callInputs, cutButCompleted, measure, toolFailures, toTranscript } from './transcript';
 
 let index = 0;
 
@@ -25,6 +25,30 @@ function run(runId: string, steps: number, lastReason: string, ended: string): R
 }
 
 describe('the transcript', () => {
+  test('reused provider ids retain the input of their own run and step, even with interleaved runs', () => {
+    const timestamp = '2026-10-09T20:00:00.000Z';
+    const first = { op: 'read', path: '/home/main/first.txt' };
+    const other = { op: 'read', path: '/home/main/other.txt' };
+    const later = { op: 'read', path: '/home/main/later.txt' };
+
+    const call = (runId: string, eventIndex: number): Extract<RunEvent, { type: 'tool_call_end' }> => ({
+      runId, eventIndex, timestamp, type: 'tool_call_end', name: 'file', toolCallId: 'reused', args: { op: 'digest' }, result: 'read',
+    });
+
+    const step = (runId: string, eventIndex: number, input: typeof first): RunEvent => ({
+      runId, eventIndex, timestamp, type: 'step_finish', stepIndex: eventIndex,
+      messages: encodeModelMessageValues([{ role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'reused', toolName: 'file', input }] }]),
+    });
+
+    const a = call('a', 0), b = call('b', 0), next = call('a', 2);
+    const events = [a, b, step('a', 1, first), next, step('b', 1, other), step('a', 3, later)];
+    const associated = callInputs(events);
+
+    expect([associated.get(a), associated.get(b), associated.get(next)]).toEqual([first, other, later]);
+    expect(toTranscript(events).filter((event) => event.type === 'tool_call').map((event) => event.arguments))
+      .toEqual([first, other, later]);
+  });
+
   // The ledger's own row digests a large argument, and a large argument is the code the agent wrote.
   test('a tool call carries its whole arguments, as the model sent them, not the ledger row\'s digest', () => {
     const source = `export class Slate {\n${'  async book() { return this.storage.get("book"); }\n'.repeat(40)}}\n`;

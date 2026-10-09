@@ -67,7 +67,7 @@ function waiting(events: readonly RunEvent[]) {
   // A call as one line of text, its input whole where a step recorded it: the ledger row's `args` is a digest cut at 800
   // characters, and a hire's `"op":"hire"` follows its mission.
   const callText = (event: Extract<RunEvent, { type: 'tool_call_end' }>): string =>
-    JSON.stringify(inputs.has(event.toolCallId) ? inputs.get(event.toolCallId) : event.args ?? null);
+    JSON.stringify(inputs.has(event) ? inputs.get(event) : event.args ?? null);
 
   const hire = events.findIndex((event) => event.type === 'tool_call_end' && HIRES.test(callText(event)));
   const after = hire === -1 ? [] : events.slice(hire + 1);
