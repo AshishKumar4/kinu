@@ -106,6 +106,18 @@ function expectOneCallOneResult(resumed: ReturnType<typeof resumedFrom>, answer:
   expect(resumed.results[0]).toContain(answer);
 }
 
+/**
+ * A workspace named by its owner: the system prompt names it (prompts/agent-names-line.md), so the name the first turn
+ * would give it changes every request after, ask or not.
+ */
+async function namedWorkspace(gateway: StubbedAiBinding): Promise<StartedHarness> {
+  const workspace = gatewayWorkspace(gateway);
+
+  await workspace.agent.setInitialDisplayName('Ledger', 'user');
+
+  return workspace;
+}
+
 async function openQuestion(workspace: StartedHarness, actor: string | null = null) {
   const open = (await workspace.agent.listOwnerQuestions()).find((asking) => asking.actor === actor && asking.asked.status === 'open');
 
@@ -117,7 +129,7 @@ async function openQuestion(workspace: StartedHarness, actor: string | null = nu
 describe('the workspace agent asks its owner', () => {
   test('the turn ends on the ask, and the answer is the call\'s one result, the prefix untouched', async () => {
     const { gateway, sent } = asksOnce();
-    const workspace = gatewayWorkspace(gateway);
+    const workspace = await namedWorkspace(gateway);
 
     await catalogTurn(workspace.agent, 'Migrate the ledger.');
     expect(sent).toHaveLength(1);
@@ -137,7 +149,7 @@ describe('the workspace agent asks its owner', () => {
 
   test('an answer the isolate took before it died is resumed by the next activation, from the same call', async () => {
     const { gateway, sent } = asksOnce();
-    const workspace = gatewayWorkspace(gateway);
+    const workspace = await namedWorkspace(gateway);
 
     await catalogTurn(workspace.agent, 'Migrate the ledger.');
     const asked = await openQuestion(workspace);
@@ -163,7 +175,7 @@ describe('the workspace agent asks its owner', () => {
 
   test('Stop dismisses the questions: the next request carries the dismissal as the call\'s result, then the owner\'s words', async () => {
     const { gateway, sent } = asksOnce();
-    const workspace = gatewayWorkspace(gateway);
+    const workspace = await namedWorkspace(gateway);
 
     await catalogTurn(workspace.agent, 'Migrate the ledger.');
     await workspace.agent.cancelCurrentWork();
@@ -180,11 +192,14 @@ describe('the workspace agent asks its owner', () => {
 describe("an agent the owner added asks them on the owner's turns", () => {
   test('its question waits in the workspace stack, and the answer resumes it in its own isolate', async () => {
     const { gateway, sent } = asksOnce();
-    const workspace = gatewayWorkspace(gateway);
+    const workspace = await namedWorkspace(gateway);
 
     await workspace.agent.setSoul('# Purpose\n\nKeep the ledger.');
     const { subordinate } = await workspace.agent.createSubordinateAgent();
     const actorId = subordinate.actorId ?? '';
+
+    // Named by the owner, as the workspace is, so its first turn names it nothing new.
+    await workspace.agent.renameSubordinateAgent(subordinate.name, 'Ledger keeper');
 
     await asPane([actorConnectionTag(actorId)], () => workspace.agent.send('Migrate the ledger.', crypto.randomUUID()));
     await driveUntil(workspace, 'the agent never asked', () => sent.length >= 1);
