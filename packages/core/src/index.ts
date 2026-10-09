@@ -1179,7 +1179,7 @@ export {
 } from './memory/facts';
 
 export {
-  AccountMemoryStore, AccountProposalSchema, initAccountMemoryTables,
+  AccountMemoryStore, AccountMemoryProposalSchema, AccountProposalSchema, initAccountMemoryTables,
   type AccountMemory, type AccountMemoryProposal, type AccountMemoryView, type AccountNote, type AccountNoteHit, type AccountProposal,
   type AccountProposalFiling, type AccountProposer,
 } from './memory/account';
@@ -1992,7 +1992,7 @@ export type {
   NodeTranscriptView, NodeTranscriptCrumb, NodeTranscriptOrigin,
 } from './read-models/node-transcript';
 
-export { buildPendingActions, needsTheUser, ownerAsks, type AccountAsk, type OwnerAsk } from './read-models/pending-actions';
+export { buildPendingActions, needsTheUser, ownerAsks, type OwnerAsk } from './read-models/pending-actions';
 
 export { reviewParkedWrite, type ParkedWriteReview } from './read-models/write-preview';
 

@@ -8,7 +8,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@cloudflare/kumo";
 import { BrainIcon, CheckIcon, DesktopTowerIcon, NotePencilIcon, ShieldWarningIcon, SparkleIcon, XIcon, type Icon } from "@phosphor-icons/react";
 import {
-  revealMisrepresenting, timeAgo, type AccountAsk, type OwnerAsk, type PendingAction, type PendingActionKind, type PendingConsent, type Rpc,
+  revealMisrepresenting, timeAgo, type AccountMemoryProposal, type OwnerAsk, type PendingAction, type PendingActionKind, type PendingConsent, type Rpc,
 } from "@kinu.run/core";
 import { detach, renderThrownChain } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -45,7 +45,7 @@ function kindOf(ask: OwnerAsk): AskKind {
 }
 
 /** What an account-memory proposal would keep, in words: a fact's key and value, or a note's text. */
-function remembered(memory: AccountAsk): string {
+function remembered(memory: AccountMemoryProposal): string {
   const { proposal } = memory;
 
   return proposal.kind === "fact" ? `${proposal.key}: ${JSON.stringify(proposal.value)}` : proposal.content;
@@ -137,9 +137,10 @@ function ConsentBody({ consent }: { consent: PendingConsent }) {
   );
 }
 
-function MemoryBody({ memory }: { memory: AccountAsk }) {
-  const by = memory.origin?.agent ?? (memory.origin?.by === "background" ? "Kinu, from what you said" : "An agent");
-  const where = memory.origin?.workspace === undefined ? "" : ` in ${memory.origin.workspace}`;
+function MemoryBody({ memory }: { memory: AccountMemoryProposal }) {
+  const { origin } = memory;
+  const by = origin.agent ?? (origin.by === "background" ? "Kinu, from what you said" : "An agent");
+  const where = origin.workspace === undefined ? "" : ` in ${origin.workspace}`;
 
   return (
     <>
