@@ -19,7 +19,7 @@ function reportOffered(run: RecordedGatewayRun) {
   const tools = v.parse(OfferedSchema, run.query).tools ?? [];
   const program = tools.find((tool) => tool.function.name === 'eval')?.function.description ?? '';
 
-  return { native: tools.some((tool) => tool.function.name === 'report'), program: program.includes('declare const report') };
+  return { native: tools.some((tool) => tool.function.name === 'report'), program: /^- report:/mu.test(program) };
 }
 
 /** The tool-bearing request that carried `words`. */

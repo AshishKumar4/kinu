@@ -906,7 +906,7 @@ describe('the drive, browsing the one composite plane', () => {
     expect(observed.filesRoot.entries).toEqual(expect.arrayContaining(['home', 'pc', 'sandbox']));
     // The origin badge names the machine, not the executor id — the device
     // wears the user's own device name, per the consent naming contract.
-    expect(observed.filesRoot.badges).toEqual(expect.arrayContaining(["Ashish's MacBook", 'Sandbox']));
+    expect(observed.filesRoot.badges).toEqual(expect.arrayContaining(["Ashish's MacBook", 'Cloud computer']));
   });
 
   test('crossing into /pc lists the machines; a machine lands inside its consented directory', () => {
@@ -962,7 +962,7 @@ describe('the Environment tab, as a user reads it', () => {
     expect(byName["Ashish's MacBook"]?.kind).toContain('Your PC');
     expect(byName["Ashish's MacBook"]?.mount).toBe('/pc');
     expect(byName['Workspace']?.mount).toBe('/');
-    expect(byName['Sandbox']?.mount).toBe('/sandbox');
+    expect(byName['Cloud computer']?.mount).toBe('/sandbox');
   });
 
   test('capability doctrine is model-facing and renders NOWHERE in user UI', () => {
@@ -2189,9 +2189,9 @@ describe('linking a machine happens on the surface that asked for it', () => {
       const page = await newPage();
       await page.setViewport({ width: 1100, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=environment&offline=device&connect=1`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('[data-env-card="device"] [data-env-connect]');
+      await page.waitForSelector('[data-env-connect]');
 
-      await page.click('[data-env-card="device"] [data-env-connect]');
+      await page.click('[data-env-connect]');
       await page.waitForSelector('[role="dialog"] [data-connect-state="ready"]');
       // In place: the Environment surface is still mounted behind the dialog,
       // and the URL never moved.
@@ -2234,8 +2234,8 @@ describe('linking a machine happens on the surface that asked for it', () => {
       const page = await newPage();
       await page.setViewport({ width: 1100, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=environment&offline=device&connect=stall`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('[data-env-card="device"] [data-env-connect]');
-      await page.click('[data-env-card="device"] [data-env-connect]');
+      await page.waitForSelector('[data-env-connect]');
+      await page.click('[data-env-connect]');
       await page.waitForSelector('[role="dialog"] [data-connect-start]');
       await page.click('[role="dialog"] [data-connect-start]');
       await page.waitForSelector('[data-connect-waiting]');
@@ -2262,7 +2262,7 @@ describe('linking a machine happens on the surface that asked for it', () => {
       const page = await newPage();
       await page.setViewport({ width: 1100, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=environment&offline=device&connect=fail-first`, { waitUntil: 'networkidle0' });
-      await page.click('[data-env-card="device"] [data-env-connect]');
+      await page.click('[data-env-connect]');
       await page.waitForSelector('[role="dialog"] [data-connect-start]');
 
       await page.click('[role="dialog"] [data-connect-start]');
@@ -2797,23 +2797,25 @@ test('code retains syntax colors through streaming and long sidebar titles stay 
   });
 });
 
-test('workspace tabs past the edge stay reachable by scrolling the strip sideways', async () => {
+test('page tabs past the edge stay reachable by scrolling the strip sideways', async () => {
   await withGallery(async ({ newPage, origin }) => {
     const page = await newPage();
-    await page.setViewport({ width: 390, height: 844 });
-    await page.goto(`${origin}/gallery.html?frame=work`, { waitUntil: 'networkidle0' });
-    await page.waitForSelector('[aria-label="Work"]');
+    // The default inspector width with three slates: their tabs share the bar with the workspace's pinned tools.
+    await page.setViewport({ width: 1440, height: 900 });
+    await page.goto(`${origin}/gallery.html?frame=workspacepage&slates=3`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('[aria-label="Tally"]');
 
-    // The tabs' own container, capped narrower than its tabs so the last one starts out of view.
-    const reach = await page.$eval('[aria-label="Work"]', (tab) => {
-      const row = tab.parentElement;
+    // The tabs' own scroller: the nearest container around the first page that scrolls sideways.
+    const reach = await page.$eval('[aria-label="Board"]', (tab) => {
+      let scroller = tab.parentElement;
 
-      if (row === null) throw new Error('the Work tab has no container');
-      row.setAttribute('style', 'max-width: 120px');
-      const tabs = [...row.querySelectorAll<HTMLElement>('button[aria-label]')];
-      const last = tabs.at(-1);
+      while (scroller !== null && getComputedStyle(scroller).overflowX !== 'auto') scroller = scroller.parentElement;
 
-      if (last === undefined) throw new Error('the strip has no tabs');
+      if (scroller === null) throw new Error('the page tabs have no scrolling container');
+      const row = scroller;
+      const last = row.querySelector<HTMLElement>('button[aria-label="Tally"]');
+
+      if (last === null) throw new Error('the strip has no Tally tab');
 
       const inView = (): boolean => {
         const box = last.getBoundingClientRect();
@@ -3108,7 +3110,7 @@ describe('Now lists what is still owed, by the phase its store records', () => {
       const page = await newPage();
       await page.setViewport({ width: 1280, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage&owed=all`, { waitUntil: 'networkidle0' });
-      await page.click('.p-tabstrip button[aria-label="Work"]');
+      await page.click('nav[aria-label="Workspace"] button[aria-label="Work"]');
       // The frame's plan awaits review, so the tab opens on it.
       await page.click('[data-back-to-work]');
       await page.waitForSelector('[data-inspected]');

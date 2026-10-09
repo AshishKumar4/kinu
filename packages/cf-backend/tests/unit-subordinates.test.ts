@@ -103,8 +103,8 @@ describe('subordinate wiring', () => {
     // `hire scope=workspace` mints a fresh tree root, so holding it would let a subordinate escape its depth cap.
     expect(observedOpEnum(subTools.get('agents')?.inputSchema)).not.toContain('reply');
     expect(observedOpEnum(subTools.get('agents')?.inputSchema)).toContain('hire');
-    expect(subTools.get('eval')?.description).toContain('declare const report:');
-    expect(orchTools.eval?.description).not.toContain('declare const report:');
+    expect(subTools.get('eval')?.description).toMatch(/^- report:/mu);
+    expect(orchTools.eval?.description).not.toMatch(/^- report:/mu);
   });
 
   test('every deps-gated tool core declares is answered by this backend', async () => {
