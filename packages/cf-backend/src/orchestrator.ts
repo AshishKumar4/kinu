@@ -3737,10 +3737,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  private hostedPendingPlans(hostedPlans: ReadonlyMap<string, readonly PlanReview[]>): { owner: string; id: string; revision: number; content: string; updatedAt: number }[] {
+  private hostedPendingPlans(hostedPlans: ReadonlyMap<string, readonly PlanReview[]>): { owner: string; actor: string; id: string; revision: number; content: string; updatedAt: number }[] {
     return [...hostedPlans].flatMap(([actorId, plans]) => plans
       .filter((plan) => plan.status === 'pending')
-      .map((plan) => ({ owner: this.agentOf(actorId).name, id: plan.id, revision: plan.revision, content: plan.content, updatedAt: plan.updatedAt })));
+      .map((plan) => ({ owner: this.agentOf(actorId).name, actor: actorId, id: plan.id, revision: plan.revision, content: plan.content, updatedAt: plan.updatedAt })));
   }
 
   /** Run-level swarm search ledger, newest-updated first; identifies the latest search without node ordering. */

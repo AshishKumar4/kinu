@@ -183,11 +183,13 @@ export interface ComposerProps {
   /** Offered only mid-stream, never in Plan mode. */
   onBranch?: () => void;
   textareaRef?: React.Ref<HTMLTextAreaElement>;
+  /** What waits on the owner's answer, attached to the prompt box's top edge (`AttentionStack`). */
+  attention?: ReactNode;
 }
 
 export function Composer({
   value, onValueChange, onSend, placeholder, disabled, liveness, onStop, onRecover,
-  notices, mode, attachments, modelPicker, onBranch, textareaRef,
+  notices, mode, attachments, modelPicker, onBranch, textareaRef, attention,
 }: ComposerProps) {
   const empty = value.trim() === "" && (attachments?.parts.length ?? 0) === 0;
   const streaming = liveness.kind === "live";
@@ -214,6 +216,8 @@ export function Composer({
           {notices.map((n) => <Notice key={n.id} notice={n} />)}
         </div>
       )}
+
+      {attention}
 
       <div className="p-composer">
         {attachments && <AttachmentTray attachments={attachments} />}

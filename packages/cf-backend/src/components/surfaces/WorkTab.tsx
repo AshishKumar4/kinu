@@ -584,7 +584,7 @@ function byteCount(bytes: number): string {
 }
 
 /** The parked bytes against the file as it is now: approving writes exactly these. */
-function ParkedWriteChange({ id, rpc }: { id: string; rpc: Rpc }) {
+export function ParkedWriteChange({ id, rpc }: { id: string; rpc: Rpc }) {
   const [open, setOpen] = useState(false);
 
   return (

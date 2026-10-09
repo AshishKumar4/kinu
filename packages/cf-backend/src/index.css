@@ -782,6 +782,47 @@ body { background: var(--c-bg); color: var(--c-text); }
 }
 .p-composer:focus-within { border-color: var(--c-composer-line-focus); }
 
+/* The attention stack: what waits on the owner, attached to the composer's top
+   edge. The open card is the composer's own surface, inset so it reads as a
+   tab of it; the cards behind it peek above as narrower strips, a deck. */
+.p-attention {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  z-index: 1;
+  margin-bottom: -1px;
+}
+.p-attention-card {
+  margin-inline: 12px;
+  padding: 10px 14px 10px;
+  background: var(--c-composer-bg);
+  border: 1px solid var(--c-composer-line);
+  border-bottom: 0;
+  border-radius: 16px 16px 0 0;
+  box-shadow: 0 -8px 24px -18px rgba(0, 0, 0, 0.45);
+}
+.p-attention-behind {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  margin-bottom: -4px;
+  padding: 0 12px 4px;
+  background: var(--c-elevated);
+  border: 1px solid var(--c-composer-line);
+  border-bottom: 0;
+  border-radius: 12px 12px 0 0;
+  color: var(--c-text-2);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
+}
+.p-attention-behind:hover { color: var(--c-text); }
+@media (max-width: 640px) {
+  .p-attention-card { margin-inline: 6px; padding: 9px 11px; }
+}
+
 /* The composer's controls are quiet: text and round icons that ink on
    hover; the one filled shape is Send. */
 .p-composer-quiet {
@@ -1453,13 +1494,14 @@ body > .annotation-toolbar {
    outline scrolls with its tab, and glide when the selection moves. */
 .p-bar {
   --bar-line: var(--c-border-strong);
+  --bar-ground: var(--c-bg);
   --flare: 8px;
   position: relative;
   display: flex;
   flex-shrink: 0;
   align-items: stretch;
   height: 46px;
-  background: var(--c-bg);
+  background: var(--bar-ground);
 }
 [data-mode="light"] .p-bar { --bar-line: var(--c-border); }
 .p-bar > :not(.p-bar-strip) { border-bottom: 1px solid var(--bar-line); }
@@ -1477,8 +1519,8 @@ body > .annotation-toolbar {
   opacity: 0;
   transition: opacity var(--dur-base) ease-out;
 }
-.p-bar-strip::before { left: 0; background: linear-gradient(to left, transparent, var(--c-bg)); }
-.p-bar-strip::after { right: 0; background: linear-gradient(to right, transparent, var(--c-bg)); }
+.p-bar-strip::before { left: 0; background: linear-gradient(to left, transparent, var(--bar-ground)); }
+.p-bar-strip::after { right: 0; background: linear-gradient(to right, transparent, var(--bar-ground)); }
 .p-bar-strip:is([data-overflow="start"], [data-overflow="both"])::before,
 .p-bar-strip:is([data-overflow="end"], [data-overflow="both"])::after { opacity: 1; }
 .p-bar-tabs {
@@ -1642,6 +1684,22 @@ body > .annotation-toolbar {
 @media (prefers-reduced-motion: reduce) {
   .p-bar-outline[data-glide] > span { transition: none; }
 }
+
+/* The inspector's bar, in the same grammar on the column's ground: its pages are tabs on the left, and the
+   workspace's own tools are pinned at the right as icon tabs, the way a browser pins tabs. A pinned tool is as
+   wide as its icon and count, never squeezed, and draws no divider: the icons space themselves. */
+.p-bar-inspector { --bar-ground: var(--c-sidebar); }
+/* The column opens at 340px, so a page's tab gives way sooner than a chat's: the tools keep their room. */
+.p-bar-inspector .p-bar-tab { min-width: 96px; }
+.p-bar-tools { flex: none; }
+.p-bar-tools .p-bar-tabs { flex: none; padding: 0 6px 0 0; }
+.p-bar-tools .p-bar-tab { flex: none; min-width: 0; }
+.p-bar-tools .p-bar-tab::before { content: none; }
+.p-bar-tools :is(.p-bar-sizer, .p-bar-link) { gap: 3px; padding: 0 calc(var(--flare) + 1px) 2px; }
+.p-bar-inspector .p-bar-trailing { padding: 0 4px; }
+.p-bar-inspector .p-bar-trailing:empty { padding: 0; }
+.p-bar-tools .p-bar-link:focus-visible { text-decoration: none; }
+.p-bar-tools .p-bar-link:focus-visible > svg { border-radius: 4px; outline: 1.5px solid var(--c-accent); outline-offset: 3px; }
 
 /* An agent's status, read by shape as well as hue: a turning arc while it
    works, the accent with a slow halo when it needs the person, a small

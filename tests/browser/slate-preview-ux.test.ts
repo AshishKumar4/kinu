@@ -149,18 +149,24 @@ test('preview tabs lead the fixed surfaces and their URL can be copied and opene
         await page.goto(`${origin}/gallery.html?frame=previewtabs`, { waitUntil: 'networkidle0' });
         await page.waitForSelector('[aria-label="Dashboard"]');
 
-        const tabs = await page.$eval('[aria-label="Dashboard"]', (first) => {
-          const box = first.parentElement;
+        // The bar is whatever holds both the first preview and Activity; its tabs are read in the order it draws them.
+        const previews = ['Dashboard', 'Sandbox app', 'Device app'];
+        const surfaces = ['Work', 'Changes', 'Files', 'Swarms', 'Agent', 'Environment', 'Activity'];
 
-          if (!(box instanceof HTMLElement)) throw new Error('the tab strip is not an element');
+        const tabs = await page.$eval('[aria-label="Dashboard"]', (first, known) => {
+          let bar = first.parentElement;
 
-          return [...box.querySelectorAll<HTMLElement>('button')].map((tab) => tab.getAttribute('aria-label'));
-        });
+          while (bar !== null && bar.querySelector('[aria-label="Activity"]') === null) bar = bar.parentElement;
+
+          if (bar === null) throw new Error('no bar holds both the preview and Activity');
+
+          return [...bar.querySelectorAll('button')].map((tab) => tab.getAttribute('aria-label') ?? '').filter((name) => known.includes(name));
+        }, [...previews, ...surfaces]);
 
         expect(tabs[0]).toBe('Dashboard');
-        const previews = ['Dashboard', 'Sandbox app', 'Device app'];
-        const lastPreview = Math.max(...tabs.flatMap((name, index) => previews.includes(name ?? '') ? [index] : []));
-        const firstSurface = tabs.findIndex((name) => !previews.includes(name ?? ''));
+        const lastPreview = Math.max(...tabs.flatMap((name, index) => previews.includes(name) ? [index] : []));
+        const firstSurface = tabs.findIndex((name) => surfaces.includes(name));
+        expect(firstSurface).toBeGreaterThan(-1);
         expect(lastPreview).toBeLessThan(firstSurface);
 
         await page.click('[aria-label="Dashboard"]');
@@ -649,11 +655,11 @@ test('a mouse wheel over the inspector strip scrolls it sideways, so a tab past 
     const page = await newPage();
 
     try {
-      // The default inspector width, with three slates' tabs ahead of the workspace's own.
+      // The default inspector width, with three slates' tabs in the pages' share of the bar.
       await page.setViewport({ width: 1440, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage&slates=3`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('.p-tabstrip button[aria-label="Tally"]');
-      const strip = await page.$('.p-tabstrip:has(button[aria-label="Tally"])');
+      await page.waitForSelector('nav[aria-label="Pages"] button[aria-label="Tally"]');
+      const strip = await page.$('nav[aria-label="Pages"] ul');
       const box = await strip?.boundingBox();
 
       if (strip === null || strip === undefined || box === null || box === undefined) throw new Error('the inspector strip is not drawn');
@@ -716,11 +722,11 @@ describe('inline slate previews in the chat', () => {
         await page.waitForSelector('[data-inspector-expand]');
         await openFromChat(page, 'board');
         expect(await page.$('[data-inspector-collapse]')).not.toBeNull();
-        expect(await page.$('.p-tabstrip button[aria-label="Board"][aria-current="true"]')).not.toBeNull();
+        expect(await page.$('nav[aria-label="Pages"] button[aria-label="Board"][aria-current="true"]')).not.toBeNull();
 
         // Shown beside the chat, the board's preview folds; moved off it, the preview comes back.
         expect(await inlinePreviews(page)).toEqual([['board', false], ['notes', true], ['board', false]]);
-        await page.click('.p-tabstrip button[aria-label="Work"]');
+        await page.click('nav[aria-label="Workspace"] button[aria-label="Work"]');
         await drawn(page);
         expect(await inlinePreviews(page)).toEqual([['board', false], ['notes', true], ['board', true]]);
 
@@ -759,7 +765,7 @@ describe('inline slate previews in the chat', () => {
         expect(await inlinePreviews(page)).toEqual([['board', false], ['notes', true], ['board', true]]);
 
         // Moved off it, that reason ends and takes the reader's choice with it: shown again, the preview folds.
-        await page.click('.p-tabstrip button[aria-label="Work"]');
+        await page.click('nav[aria-label="Workspace"] button[aria-label="Work"]');
         await drawn(page);
         await openFromChat(page, 'board');
         expect(await inlinePreviews(page)).toEqual([['board', false], ['notes', true], ['board', false]]);
@@ -822,7 +828,7 @@ describe('inline slate previews in the chat', () => {
         expect(await shown()).toBe('Chat');
         await openFromChat(page, 'board');
         expect(await shown()).toBe('Workspace');
-        expect(await page.$('.p-tabstrip button[aria-label="Board"][aria-current="true"]')).not.toBeNull();
+        expect(await page.$('nav[aria-label="Pages"] button[aria-label="Board"][aria-current="true"]')).not.toBeNull();
 
         // The two panes never share the screen, so back in the chat the board's preview is still unfolded.
         await page.click('.p-bar [data-inspector-toggle]');

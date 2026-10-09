@@ -169,9 +169,9 @@ const INSPECTOR_WIDTH = `(() => {
   return column === null ? -1 : Math.round(column.getBoundingClientRect().width);
 })()`;
 
-/** The inspector strip's tab labels, in order. */
-const STRIP_LABELS = `[...document.querySelectorAll('#inspector .p-tabstrip button')]
-  .map((button) => (button.textContent ?? '').trim()).filter((label) => label.length > 0)`;
+/** The inspector bar's tab names, in order: its pages, then its tools. */
+const STRIP_LABELS = `[...document.querySelectorAll('#inspector :is(nav[aria-label="Pages"], nav[aria-label="Workspace"]) li > button')]
+  .map((button) => button.getAttribute('aria-label') ?? '').filter((label) => label.length > 0)`;
 
 /**
  * Tool cards standing in the transcript — what a turn that ran tools leaves.
@@ -331,7 +331,7 @@ const WHERE = `JSON.stringify({
   mode: [...document.querySelectorAll('[aria-label="Turn mode"] button')].map((b) => b.textContent + '=' + String(b.getAttribute('aria-pressed'))),
   planStatus: document.querySelector('#inspector [data-plan-status]')?.textContent ?? null,
   toolCards: document.querySelectorAll('#chat [data-tool-state]').length,
-  strip: [...document.querySelectorAll('#inspector .p-tabstrip button')].map((b) => (b.textContent ?? '').trim()),
+  strip: [...document.querySelectorAll('#inspector :is(nav[aria-label="Pages"], nav[aria-label="Workspace"]) li > button')].map((b) => b.getAttribute('aria-label') ?? ''),
   notices: [...document.querySelectorAll('[role="alert"], [role="status"]')].map((n) => (n.textContent ?? '').trim()).slice(0, 4),
   chatTail: (document.querySelector('#chat')?.textContent ?? '').slice(-400),
 })`;
