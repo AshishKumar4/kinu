@@ -63,6 +63,10 @@ describe('the instruction desk on a Durable Object', () => {
 
     expect(toolResults).toHaveLength(2);
     expect(toolResults[0]).toContain('Focus on memory only.');
-    expect(toolResults[1]).toContain(JSON.stringify(BUILTIN_SKILL_FILES.slates.slice(0, 40)).slice(1, -1));
+
+    // Each line of the built-in arrives under its number.
+    for (const [index, line] of BUILTIN_SKILL_FILES.slates.split('\n').slice(0, 3).entries()) {
+      expect(toolResults[1]).toContain(JSON.stringify(`${index + 1}\t${line}`).slice(1, -1));
+    }
   });
 });

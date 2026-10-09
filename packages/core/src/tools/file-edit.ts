@@ -1,12 +1,12 @@
 /**
- * Exact-match file editor behind the `file` tool's `edit`/`read`: an edit that cannot be placed exactly once
- * fails without touching the file. No fuzzy fallback; line endings and BOM round-trip.
+ * Exact-match file editor behind the `file` tool's `edit`, and the numbered window its `read` shows: an edit that cannot
+ * be placed exactly once fails without touching the file. No fuzzy fallback; line endings and BOM round-trip.
  */
 import { headEnd, lineCount } from '../utils/text';
-import type { FileEditFailure } from '../types/file-edits';
+import { FILE_READ_LINE_CHARS, FILE_READ_LINES, type FileEditFailure } from '../types/file-edits';
 
 export {
-  FILE_REFUSAL_REASONS, type FileEditFailure,
+  FILE_READ_LINE_CHARS, FILE_READ_LINES, FILE_READ_MAX_CHARS, FILE_REFUSAL_REASONS, type FileEditFailure,
 } from '../types/file-edits';
 
 /** One replacement. Every edit matches the file as read, never a sibling edit's result. */
@@ -114,12 +114,17 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
     const occurrences = countOccurrences(base, oldText);
 
     if (occurrences === 0) {
+      // Copied with the numbers a read puts before each line, which are not in the file.
+      const numbered = oldText.split('\n').every((line) => /^\d+\t/.test(line));
+
       return {
         ok: false,
         reason: 'not_found',
         message:
           `${at(i, anchors.length)} does not appear in ${path}. It must match the file byte for byte, ` +
-          'including indentation and blank lines. Read the file again and copy the text from what it returned.',
+          'including indentation and blank lines. ' + (numbered
+            ? 'It starts each line with a number and a tab, as a read shows lines; copy only the text after the tab.'
+            : 'Read the file again and copy the text from what it returned.'),
       };
     }
 
@@ -183,7 +188,7 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
 
 export interface FileSlice {
   output: string;
-  /** Characters of the requested range withheld; 0 when the whole range fit. */
+  /** Characters of the requested range withheld; 0 when the whole range showed. */
   omitted: number;
   /** 1-indexed line range shown plus the file's line count; `last` is `first - 1` when nothing showed. */
   first: number;
@@ -191,27 +196,36 @@ export interface FileSlice {
   total: number;
 }
 
+/** One line of a read: its retained head (at most `FILE_READ_LINE_CHARS`) and its full length. */
+export interface SliceLine {
+  readonly text: string;
+  readonly chars: number;
+}
+
 /**
- * One read of a file: the retained head of the range plus the range's pre-budget counts.
- * `lines` may be shorter than `requestedLines` and its first entry a prefix; counts never come from it.
+ * One read of a file: the retained lines of the range plus the range's pre-budget counts.
+ * `lines` may be shorter than `requestedLines`; counts never come from it.
  */
 export interface SliceWindow {
   readonly first: number;
   /** Lines in the whole file; 0 means no displayable text. */
   readonly total: number;
-  readonly trailingNewline: boolean;
-  /** Whole lines, except a first line over budget arrives alone as its prefix. */
-  readonly lines: readonly string[];
+  readonly lines: readonly SliceLine[];
   readonly requestedLines: number;
   /** Includes newline joins. */
   readonly requestedChars: number;
-  /** The range's first line at full length; `lines[0]` may be a prefix. */
-  readonly firstLineChars: number;
+}
+
+/** A line as a read shows it: its number, a tab, then its text, cut at `FILE_READ_LINE_CHARS` with what follows counted. */
+export function numberedLine(number: number, line: SliceLine): string {
+  const rest = line.chars - FILE_READ_LINE_CHARS;
+
+  return `${String(number)}\t${rest > 0 ? `${line.text.slice(0, FILE_READ_LINE_CHARS)} [... ${String(rest)} more characters on this line]` : line.text}`;
 }
 
 /**
- * Render one window capped at `maxChars`, marker included; a capped read always names the continuing offset.
- * Lines are not numbered: the model copies `old_text` from this output.
+ * Render one window capped at `maxChars`, footer included. Each line carries its number; the footer says which lines
+ * showed, of how many, and the offset that continues a read that stopped early.
  */
 export function formatFileSlice(
   range: SliceWindow,
@@ -219,7 +233,7 @@ export function formatFileSlice(
 ): FileSlice {
   const { first, total, requestedLines, requestedChars } = range;
 
-  /** Marker that fits the cap: names the file when it fits, else path-free; the continue offset is never dropped. */
+  /** The footer naming the file when it fits the cap, else without it; the continuing offset is never dropped. */
   const affordable = (named: string, plain: string): string =>
     named.length <= opts.maxChars ? named : plain;
 
@@ -227,77 +241,67 @@ export function formatFileSlice(
     return { output: affordable(`[${opts.path} is empty]`, '[this file is empty]'), omitted: 0, first: 1, last: 0, total: 0 };
   }
 
-  if (first > total) {
-    const lines = `${total} line${total === 1 ? '' : 's'}`;
+  const count = `${String(total)} line${total === 1 ? '' : 's'}`;
 
+  if (first > total) {
     return {
       output: affordable(
-        `[${opts.path} has ${lines}; offset=${first} is past the end]`,
-        `[this file has ${lines}; offset=${first} is past the end]`),
+        `[${opts.path} has ${count}; offset=${String(first)} is past the end]`,
+        `[this file has ${count}; offset=${String(first)} is past the end]`),
       omitted: 0, first, last: first - 1, total,
     };
   }
 
   const requestedLast = first + requestedLines - 1;
-  // A whole read includes the trailing newline, so it is byte-identical to the file.
-  const ending = requestedLast === total && range.trailingNewline ? '\n' : '';
+  const capStop = `one read shows at most ${String(opts.maxChars)} characters`;
+  const windowStop = opts.limit == null ? `one read shows at most ${String(FILE_READ_LINES)} lines` : `limit=${String(Math.max(1, Math.floor(opts.limit)))}`;
 
-  if (requestedLines === range.lines.length && requestedLast === total
-    && requestedChars + ending.length <= opts.maxChars) {
-    return { output: range.lines.join('\n') + ending, omitted: 0, first, last: requestedLast, total };
-  }
+  const footer = (last: number, stop: string | null): string => {
+    const lines = `lines ${String(first)}-${String(last)} of ${String(total)}`;
 
-  // Past here the output carries a marker; reserve its worst-case length before choosing lines.
-  const continuation = (last: number, reason: string): string => {
-    const tail = `${reason} stopped it; continue with op=read offset=${last + 1}]`;
+    if (stop !== null) {
+      const tail = `${stop}; continue with offset=${String(last + 1)}]`;
 
-    return affordable(
-      `\n\n[showing lines ${first}-${last} of ${total} in ${opts.path}: ${tail}`,
-      `\n\n[showing lines ${first}-${last} of ${total}: ${tail}`);
+      return affordable(`\n\n[${lines} in ${opts.path}: ${tail}`, `\n\n[${lines}: ${tail}`);
+    }
+
+    return first === 1 && last === total
+      ? affordable(`\n\n[${opts.path}: all ${count}]`, `\n\n[all ${count}]`)
+      : affordable(`\n\n[${lines} in ${opts.path}: through the end]`, `\n\n[${lines}: through the end]`);
   };
 
-  const capReason = `the ${opts.maxChars}-char cap`;
-  // A limit under one line is one line; an empty range has no honest rendering.
-  const limitReason = opts.limit == null ? capReason : `limit=${Math.max(1, Math.floor(opts.limit))}`;
-
-  const reserve = Math.max(
-    continuation(requestedLast, capReason).length,
-    continuation(requestedLast, limitReason).length,
-  );
-
-  let kept = 0;
+  // Reserve the footer's worst case before choosing lines.
+  const reserve = Math.max(footer(requestedLast, capStop).length, footer(requestedLast, windowStop).length, footer(requestedLast, null).length);
+  const shown: string[] = [];
   let chars = 0;
+  let raw = 0;
 
-  for (const line of range.lines) {
-    // Newline joins cost a char per line after the first, keyed on line count.
-    const cost = kept === 0 ? line.length : line.length + 1;
+  for (const [index, line] of range.lines.entries()) {
+    const rendered = numberedLine(first + index, line);
+    // Newline joins cost a char per line after the first.
+    const cost = shown.length === 0 ? rendered.length : rendered.length + 1;
 
     if (chars + cost > opts.maxChars - reserve) break;
     chars += cost;
-    kept++;
+    raw += Math.min(line.chars, FILE_READ_LINE_CHARS) + (shown.length === 0 ? 0 : 1);
+    shown.push(rendered);
   }
 
-  if (kept === 0) {
-    // A single line larger than the whole budget: show its head and name the readFile-in-eval recipe.
-    const line = range.lines[0] ?? '';
+  if (shown.length === 0) {
+    // A cap smaller than one line: show its head and name the readFile-in-eval recipe.
+    const line = range.lines[0] ?? { text: '', chars: 0 };
+    const tail = `is ${String(line.chars)} chars and does not fit the ${String(opts.maxChars)}-char cap; read or slice it with workspace.readFile inside eval]`;
+    const refusal = affordable(`\n\n[line ${String(first)} of ${opts.path} ${tail}`, `\n\n[line ${String(first)} ${tail}`);
+    const head = line.text.slice(0, headEnd(line.text, Math.max(0, opts.maxChars - refusal.length)));
 
-    const tail =
-      `is ${range.firstLineChars} chars and does not fit the ${opts.maxChars}-char cap; ` +
-      'read or slice it with workspace.readFile inside eval]';
-
-    const refusal = affordable(`\n\n[line ${first} of ${opts.path} ${tail}`, `\n\n[line ${first} ${tail}`);
-
-    const shown = line.slice(0, headEnd(line, Math.max(0, opts.maxChars - refusal.length)));
-
-    return { output: shown + refusal, omitted: requestedChars - shown.length, first, last: first - 1, total };
+    return { output: head + refusal, omitted: requestedChars - head.length, first, last: first - 1, total };
   }
 
-  const last = first + kept - 1;
-  const shown = range.lines.slice(0, kept).join('\n');
+  const last = first + shown.length - 1;
+  let stop: string | null = null;
 
-  return {
-    output: shown + continuation(last, kept < requestedLines ? capReason : limitReason),
-    omitted: requestedChars - shown.length,
-    first, last, total,
-  };
+  if (last < requestedLast) stop = capStop;
+  else if (last < total) stop = windowStop;
+
+  return { output: shown.join('\n') + footer(last, stop), omitted: requestedChars - raw, first, last, total };
 }
