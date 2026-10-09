@@ -621,6 +621,23 @@ describe("deploy gate", () => {
     }
   });
 
+  test("reset recovery never borrows bootstrap for an unrecorded class or application, or its version metadata", async () => {
+    const account = resetAccount(true);
+
+    if (account.live.state !== 'deployed') throw new Error('fixture has no live Worker');
+
+    for (const incomplete of [
+      { ...account, reset: { ...account.reset, classes: account.reset.classes.filter((entry) => entry.className !== 'UserDO') } },
+      { ...account, reset: { ...account.reset, applications: [] } },
+      { ...account, live: { ...account.live, bindings: [] } },
+    ]) {
+      const refused = await runDeploy({ option: '--reset', pendingReset: account.reset.tag, account: incomplete });
+
+      expect(refused.infraStatuses, refused.stdout).toEqual([1]);
+      expect(refused.events).not.toContain(armadaBuild('staging'));
+    }
+  });
+
   test("an ambient environment variable cannot point the account gate at the other deployment", async () => {
     // Assigned in both arms, like the phase: `export KINU_INFRA_ENVIRONMENT=production`
     // in a shell must not make a staging deploy certify production's resources.
