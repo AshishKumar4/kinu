@@ -29,9 +29,9 @@
  * hooks installed at all.
  */
 
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
-import { cpus, homedir } from 'node:os';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { basename, dirname, join, relative, resolve } from 'node:path';
+import { cpus } from 'node:os';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
 import { plantedInputs, readCensusLock } from './census-plants';
@@ -3080,38 +3080,35 @@ function adoptDeployEntry(gate: Gate): string | undefined {
   return dir;
 }
 
-/** The most evidence, compressed, a row's verdict carries back. The largest a real run left is first-run's report
- *  directory, 92,683 bytes before compression (bench-artifacts/first-run-reports-cloud-pm8myk, 2026-10). No deploy has
- *  carried a soak's back yet, and it holds every trial's transcript, so the cap leaves it room. Past it the verdict
- *  says so and the evidence stays in the job's log. */
-const EVIDENCE_BYTES = 64 * 1024 * 1024;
-
-/** A row's evidence for its verdict, or a note why its verdict does not carry it. */
-interface PackedEvidence {
-  readonly evidence?: NonNullable<CIVerdict['evidence']>;
-  readonly note?: string;
+/** A deploy row's evidence: written under `dir` in the checkout, carried back in its task's `artifacts` directory. */
+export interface Evidence {
+  readonly dir: string;
+  readonly artifacts: string;
 }
 
-/** A row's CI verdict, with its evidence when it declares some (`evidenceDir`). */
-function ciVerdictRow(gate: Gate, outcome: { readonly exitCode: number; readonly seconds: number; readonly stdout: string; readonly stderr: string }, timings: CIVerdict['timings'], evidenceDir: string | undefined): CIVerdict {
-  const packed: PackedEvidence = evidenceDir === undefined ? {} : packEvidence(gate, evidenceDir);
+/** A row's CI verdict, with its evidence when it declares some: the files, copied into its task's artifacts directory
+ *  under the row's evidence name, which armada keeps whole and extracts beside the run's report. */
+export function ciVerdictRow(gate: Gate, outcome: { readonly exitCode: number; readonly seconds: number; readonly stdout: string; readonly stderr: string }, timings: CIVerdict['timings'], evidence: Evidence | undefined): CIVerdict {
   const output = outcome.exitCode === 0 ? '' : outcome.stdout + outcome.stderr;
-  const row: CIVerdict = { run: gate.run, exitCode: outcome.exitCode, seconds: outcome.seconds, output: packed.note === undefined ? output : `${packed.note}\n${output}`, timings };
+  const row: CIVerdict = { run: gate.run, exitCode: outcome.exitCode, seconds: outcome.seconds, output, timings };
 
-  if (packed.evidence !== undefined) row.evidence = packed.evidence;
+  if (evidence === undefined || gate.evidence === undefined || !existsSync(evidence.dir)) return row;
+  const into = join(evidence.artifacts, gate.evidence);
+  const copied: string[] = [];
+
+  // The files the copy takes are the files the verdict names: the copy is the one walk of the evidence.
+  cpSync(evidence.dir, into, {
+    recursive: true,
+    filter: (source) => {
+      if (statSync(source).isFile()) copied.push(join(gate.evidence ?? '', relative(evidence.dir, source)));
+
+      return true;
+    },
+  });
+
+  if (copied.length > 0) row.artifacts = copied.sort();
 
   return row;
-}
-
-/** `dir` as a base64 tar.gz for a row's verdict, or a note why it is not there. */
-function packEvidence(gate: Gate, dir: string): PackedEvidence {
-  const packed = Bun.spawnSync(['tar', '-czf', '-', '-C', dir, '.'], { stdout: 'pipe', stderr: 'pipe' });
-
-  if (packed.exitCode !== 0) return { note: `its evidence was not packed: ${packed.stderr.toString().trim()}` };
-
-  if (packed.stdout.byteLength > EVIDENCE_BYTES) return { note: `its evidence is ${String(packed.stdout.byteLength)} bytes compressed, past ${String(EVIDENCE_BYTES)}, so only its log holds it` };
-
-  return { evidence: { dir: gate.evidence ?? '', tgz: Buffer.from(packed.stdout).toString('base64') } };
 }
 
 /** `--deploy-phase=<phase>[,<phase>…]` as phases, or undefined when it names none or one that is not a phase. */
@@ -3609,21 +3606,17 @@ export const ArmadaReportSchema = v.object({
   verdicts: v.optional(v.object({
     rows: v.array(v.object({
       run: v.optional(v.string()), name: v.optional(v.string()), exitCode: v.number(), seconds: v.number(), output: v.optional(v.string(), ''),
-      evidence: v.optional(v.object({ dir: v.string(), tgz: v.string() })),
+      /** Files in its task's artifacts directory the row names as its evidence. */
+      artifacts: v.optional(v.array(v.string())),
     })),
   })),
   problems: v.optional(v.array(v.string()), []),
+  /** Each task's artifacts, extracted on this machine, by task name. */
+  artifacts: v.optional(v.record(v.string(), v.string()), {}),
 });
 
-/** A row's evidence from its container, unpacked where the deploy's report keeps it. */
-function unpackEvidence(report: string, evidence: { readonly dir: string; readonly tgz: string }): void {
-  const into = join(report, evidence.dir);
-
-  mkdirSync(into, { recursive: true });
-  const unpacked = Bun.spawnSync(['tar', '-xzf', '-', '-C', into], { stdin: Buffer.from(evidence.tgz, 'base64'), stdout: 'pipe', stderr: 'pipe' });
-
-  if (unpacked.exitCode !== 0) throw new Error(`unpacking evidence into ${into}: ${unpacked.stderr.toString().trim()}`);
-}
+/** What `armada run --json` prints as it ends; its report holds the rest. */
+const ArmadaRunSchema = v.object({ report: v.nullable(v.string()) });
 
 /** The `armada run` of a deploy phase's rows at this exact SHA, all of one {@link secretGroup}. A row that drives the
  *  deployment gets its origin through its matrix entry, and the stable secrets it needs by name: the scripted model's
@@ -3640,44 +3633,46 @@ export function armadaPhaseRun(phase: string, rows: readonly Gate[], sha: string
 
   return [
     resolve(root, 'node_modules/.bin/armada'), 'run', sha, `--label=deploy ${phase}${group === '' ? '' : ` (${String(rows.length)} row with its own secrets)`}`,
-    ...names.length === 0 ? [] : [`--secrets=${names.join(',')}`], '--', ...planArgs,
+    ...names.length === 0 ? [] : [`--secrets=${names.join(',')}`], '--json', '--', ...planArgs,
   ];
 }
 
-/** `argv` run here, its output printed as it comes, with its exit code and everything it printed. */
-async function echoed(argv: readonly string[]): Promise<{ readonly exitCode: number; readonly said: string }> {
-  const run = Bun.spawn([...argv], { cwd: root, stdout: 'pipe', stderr: 'inherit' });
+/** `argv` run here: its exit code, what it answered on stdout, and its progress, which `--json` puts on stderr and which
+ *  is printed as it comes. */
+async function echoed(argv: readonly string[]): Promise<{ readonly exitCode: number; readonly answered: string; readonly said: string }> {
+  const run = Bun.spawn([...argv], { cwd: root, stdout: 'pipe', stderr: 'pipe' });
+  const answered = new Response(run.stdout).text();
   let said = '';
 
-  for await (const chunk of run.stdout) {
+  for await (const chunk of run.stderr) {
     const text = new TextDecoder().decode(chunk);
 
     said += text;
     await writeFully(process.stdout, text);
   }
 
-  return { exitCode: await run.exited, said };
+  return { exitCode: await run.exited, answered: await answered, said };
 }
 
 export type ArmadaReport = v.InferOutput<typeof ArmadaReportSchema>;
 
-/** Where `armada run` keeps each run's report, as `<project>-<task job>.json` (armada's src/ci.ts). */
-const ARMADA_REPORTS = join(homedir(), '.local', 'state', 'armada', 'runs');
+/** The report `armada run --json` named in what it `answered`, or none: a run that failed before its tasks ran, or that
+ *  an error or signal ended, names no report or prints nothing. */
+export function armadaReport(answered: string): ArmadaReport | undefined {
+  const last = answered.trim().split('\n').at(-1) ?? '';
+  const ran = v.safeParse(v.pipe(v.string(), v.parseJson(), ArmadaRunSchema), last);
+  const path = ran.success ? ran.output.report : null;
 
-/** The report of the `armada run` that printed `said`, named by its task job. A run it could not grade whole (exit 2)
- *  prints no `report:` line, and its report still holds every row that did report. */
-function armadaReport(said: string): ArmadaReport | undefined {
-  const job = /^task job (\S+):/mu.exec(said)?.[1];
-  const path = job === undefined ? undefined : join(ARMADA_REPORTS, `kinu-${job}.json`);
-
-  return path === undefined || !existsSync(path) ? undefined : v.parse(ArmadaReportSchema, JSON.parse(readFileSync(path, 'utf8')));
+  return path === null || !existsSync(path) ? undefined : v.parse(ArmadaReportSchema, JSON.parse(readFileSync(path, 'utf8')));
 }
 
 type ArmadaRow = NonNullable<ArmadaReport['verdicts']>['rows'][number];
 
-/** One armada row's verdict into the deploy's report, its evidence unpacked beside it; whether it is green. */
-function recordArmadaRow(report: string, gate: Gate, verdict: ArmadaRow | undefined, why: { readonly found: string; readonly reproduce: string; readonly said: string }): boolean {
-  if (report !== '' && verdict?.evidence !== undefined) unpackEvidence(report, verdict.evidence);
+/** One armada row's verdict into the deploy's report, the evidence its task `kept` copied beside it; whether it is green. */
+function recordArmadaRow(report: string, gate: Gate, verdict: ArmadaRow | undefined, why: { readonly found: string; readonly reproduce: string; readonly said: string; readonly kept?: string }): boolean {
+  if (report !== '' && gate.evidence !== undefined && why.kept !== undefined && (verdict?.artifacts?.length ?? 0) > 0) {
+    cpSync(join(why.kept, gate.evidence), join(report, gate.evidence), { recursive: true });
+  }
 
   if (report !== '' && verdict !== undefined) recordTiming(report, { phase: gate.phase ?? 'source', what: gate.label, command: gate.run, seconds: verdict.seconds });
 
@@ -3721,13 +3716,13 @@ async function armadaPhaseJob(phases: readonly DeployPhase[], rows: readonly Gat
   const argv = armadaPhaseRun(phase, rows, sha);
 
   console.log(`\n── armada: ${String(rows.length)} row(s) of ${phase} at ${sha.slice(0, 12)}, as one job: ${argv.slice(1).join(' ')}`);
-  const { exitCode, said } = await echoed(argv);
-  const graded = armadaReport(said);
+  const { exitCode, answered, said } = await echoed(argv);
+  const graded = armadaReport(answered);
   const reproduce = `node_modules/.bin/armada run ${sha} -- ${argv.slice(argv.indexOf('--') + 1).join(' ')}`;
 
   if (report !== '' && graded !== undefined) recordNotice(report, { phase: phases[0] ?? 'source', what: `armada job ${graded.job}`, notice: `the ${phase} rows armada ran, at ${sha}: their logs and outputs are in that job` });
 
-  return armadaRowVerdicts(rows, graded, exitCode).filter(({ gate, verdict, found }) => !recordArmadaRow(report, gate, verdict, { found, reproduce, said }))
+  return armadaRowVerdicts(rows, graded, exitCode).filter(({ gate, verdict, found }) => !recordArmadaRow(report, gate, verdict, { found, reproduce, said, kept: graded?.artifacts[armadaTaskName(gate)] }))
     .map(({ gate }) => gate.run);
 }
 
@@ -4066,6 +4061,9 @@ if (import.meta.main) {
   if (ciRow !== undefined && (tier !== 'ci' || rowGate === undefined)) throw new Error('unknown CI row or a non-CI tier: ' + ciRow);
 
   const evidenceDir = rowGate !== undefined && onArmada(rowGate) ? adoptDeployEntry(rowGate) : undefined;
+  // The task's own artifacts directory (`.armada.json`'s `{artifacts}`), which armada keeps and hands the run back.
+  const artifactsDir = process.argv.find((argument) => argument.startsWith('--artifacts='))?.slice('--artifacts='.length);
+  const evidence = evidenceDir === undefined || artifactsDir === undefined ? undefined : { dir: evidenceDir, artifacts: artifactsDir };
 
   const chosen = rowGate === undefined ? declared : [rowGate];
   const tracked = trackedTestFiles();
@@ -4341,7 +4339,7 @@ if (import.meta.main) {
     const { seconds } = outcome;
 
     if (verdictPath !== undefined) {
-      ciRows.push(ciVerdictRow(gate, { ...outcome, seconds }, readFileTimings(timingPath), evidenceDir));
+      ciRows.push(ciVerdictRow(gate, { ...outcome, seconds }, readFileTimings(timingPath), evidence));
       writeVerdicts(verdictPath, { sha: revision, part: 'all', rows: ciRows });
     }
 
