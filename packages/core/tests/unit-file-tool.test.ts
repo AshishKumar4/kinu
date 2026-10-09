@@ -4,7 +4,7 @@ import type { VFS, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, test } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
-import { applyFileEdits, formatFileSlice, type FileEditFailure } from '../src/tools/file-edit';
+import { applyFileEdits, FILE_READ_LINE_CHARS, FILE_READ_LINES, FILE_READ_MAX_CHARS, formatFileSlice, type FileEditFailure } from '../src/tools/file-edit';
 import { scanFileWindow } from '../src/tools/file-scan';
 import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { createFileTool } from '../src/tools/file-operations';
@@ -18,7 +18,6 @@ import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { RESIDENT_TEXT_MAX_BYTES } from '../src/vfs/mounts';
 import type { Memory } from '../src/types/primitives';
 import { fnv1a64 } from '../src/utils/fnv1a';
-import { DEFAULT_TOOL_RESULT_MAX_CHARS } from '../src/tools/clamp';
 import type { JsonValue } from '../src/utils/json';
 import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
 import { classifyToolFailure } from '../src/read-models/tool-failures';
@@ -170,11 +169,22 @@ describe('applyFileEdits', () => {
 });
 
 
+/** What a read showed of the file: each line's text after its number and tab, footer dropped. */
+function shownLines(output: string): string[] {
+  return output.split('\n\n[')[0].split('\n').map((line) => {
+    const tab = line.indexOf('\t');
+
+    expect(line.slice(0, tab)).toMatch(/^\d+$/);
+
+    return line.slice(tab + 1);
+  });
+}
+
 describe('the honest read, scanned rather than made resident', () => {
   const lines = Array.from({ length: 10 }, (_, i) => `line ${i + 1} ${'.'.repeat(12)}`);
   const file = lines.join('\n');
-  // Above the continuation marker's length and below the file, so the cap truncates. Under the marker, the marker wins.
-  const CAP = 180;
+  // Above the footer's length and below the file, so the cap truncates.
+  const CAP = 200;
 
   /**
    * The tool's real read: range-only plane scanned seven bytes at a time to cross chunk boundaries.
@@ -192,17 +202,20 @@ describe('the honest read, scanned rather than made resident', () => {
     return formatFileSlice(scanned.window, { path, limit: opts.limit, maxChars: opts.maxChars });
   };
 
-  test('returns the whole file unmarked when it fits', async () => {
-    expect(await slice(file, { maxChars: 10_000 }))
-      .toEqual({ output: file, omitted: 0, first: 1, last: 10, total: 10 });
+  test('each line carries its number, and the text after the tab is the line as the file holds it', async () => {
+    const whole = await slice(file, { maxChars: 10_000 });
+
+    expect(whole).toMatchObject({ omitted: 0, first: 1, last: 10, total: 10 });
+    expect(whole.output.split('\n').slice(0, 10).map((line) => line.slice(0, line.indexOf('\t')))).toEqual(lines.map((_, i) => String(i + 1)));
+    expect(shownLines(whole.output)).toEqual(lines);
+    expect(whole.output).not.toMatch(/offset=/);
   });
 
-  test('a cap-truncated read names the offset that continues it, marker inside the cap', async () => {
+  test('a cap-truncated read names the offset that continues it, footer inside the cap', async () => {
     const capped = await slice(file, { maxChars: CAP });
     expect(capped.omitted).toBeGreaterThan(0);
     expect(capped.output).toContain('of 10 in /f');
-    expect(capped.output).toMatch(/op=read offset=\d+/);
-    // The marker counts against the budget.
+    expect(capped.output).toContain(`offset=${capped.last + 1}`);
     expect(capped.output.length).toBeLessThanOrEqual(CAP);
   });
 
@@ -214,18 +227,31 @@ describe('the honest read, scanned rather than made resident', () => {
     const next = Number(offsetMatch[1]);
     const second = await slice(file, { offset: next, maxChars: 10_000 });
     expect(second.omitted).toBe(0);
-    expect(second.output.split('\n')[0]).toBe(lines[next - 1]);
+    expect(second.output.startsWith(`${next}\t${lines[next - 1]}`)).toBe(true);
+    expect(second.output).not.toMatch(/offset=/);
   });
 
-  test('a limit that stops early says so too', async () => {
+  test('a limit that stops early says so, and names where to continue', async () => {
     const limited = await slice(file, { limit: 3, maxChars: 10_000 });
     expect(limited.output).toContain('limit=3');
     expect(limited.output).toContain('offset=4');
   });
 
-  test('a limit that reaches the end is not marked', async () => {
-    expect((await slice(file, { offset: 8, limit: 3, maxChars: 10_000 })).output)
-      .toBe(lines.slice(7).join('\n'));
+  test('a limit that reaches the end names no offset to continue', async () => {
+    const tail = await slice(file, { offset: 8, limit: 3, maxChars: 10_000 });
+    expect(shownLines(tail.output)).toEqual(lines.slice(7));
+    expect(tail.output).not.toMatch(/offset=/);
+  });
+
+  test('a line longer than the line cap is cut, says how much follows, and the read goes on to the next line', async () => {
+    const minified = `${'m'.repeat(FILE_READ_LINE_CHARS + 750)}\nnext\n`;
+    const read = await slice(minified, { maxChars: 10_000 });
+    const [cut = '', next] = shownLines(read.output);
+
+    expect(cut.startsWith('m'.repeat(FILE_READ_LINE_CHARS))).toBe(true);
+    expect(cut).toContain('750 more characters');
+    expect(next).toBe('next');
+    expect(read).toMatchObject({ last: 2, total: 2, omitted: 750 });
   });
 
   test('one line larger than the cap hands over a recipe instead of clipping silently', async () => {
@@ -233,34 +259,36 @@ describe('the honest read, scanned rather than made resident', () => {
     expect(huge.output).toContain('is 500 chars and does not fit');
     expect(huge.output).toContain('workspace.readFile inside eval');
     expect(huge.output.length).toBeLessThanOrEqual(300);
-    expect(huge.omitted).toBe(500 - huge.output.indexOf('\n\n['));
   });
 
-  test('a leading blank line does not make the next line look free', async () => {
-    // The joining newline costs a char per line after the first; at this cap the rule keeps 2 lines, not 3.
-    const rows = ['', ...Array.from({ length: 29 }, (_, i) => String.fromCharCode(97 + (i % 26)).repeat(10))];
-    const blank = await slice(rows.join('\n'), { maxChars: 117 });
+  test('every cap holds its footer, and paging with the offsets it hands back reassembles the file exactly', async () => {
+    const big = Array.from({ length: 40 }, (_, i) => (i % 7 === 0 ? '' : `row ${i + 1}`));
 
-    expect(blank.output.split('\n\n[')[0]).toBe('\naaaaaaaaaa');
-    expect(blank.last).toBe(2);
-    expect(blank.output).toContain('offset=3');
-    expect(blank.output.length).toBeLessThanOrEqual(121);
+    for (const cap of [120, 160, 200, 260]) {
+      let offset = 1;
+      const rebuilt: string[] = [];
+
+      for (let guard = 0; guard < 80; guard++) {
+        const page = await slice(`${big.join('\n')}\n`, { offset, maxChars: cap });
+        expect(page.output.length).toBeLessThanOrEqual(cap);
+        rebuilt.push(...shownLines(page.output));
+
+        if (page.last >= page.total) break;
+        offset = page.last + 1;
+      }
+
+      expect(rebuilt).toEqual(big);
+    }
   });
 
   test('an offset past the end says so rather than returning empty', async () => {
     expect((await slice(file, { offset: 99, maxChars: 10_000 })).output).toContain('past the end');
   });
 
-  test('a trailing newline ends the last line — no phantom line, no empty continuation', async () => {
-    expect(await slice('a\nb\n', { limit: 2, maxChars: 1000 }))
-      .toEqual({ output: 'a\nb\n', omitted: 0, first: 1, last: 2, total: 2 });
-  });
-
-  test('a whole read that only just fits keeps the file byte-identical', async () => {
-    // The file's trailing newline counts toward the cap.
-    const content = 'ab\ncd\n';
-    expect((await slice(content, { maxChars: content.length })).output).toBe(content);
-    expect((await slice(content, { maxChars: content.length - 1 })).output).not.toBe(content);
+  test('a trailing newline ends the last line: no phantom line, no continuation', async () => {
+    const read = await slice('a\nb\n', { limit: 2, maxChars: 1000 });
+    expect(read).toMatchObject({ omitted: 0, first: 1, last: 2, total: 2 });
+    expect(shownLines(read.output)).toEqual(['a', 'b']);
   });
 
   test('multibyte text survives the slice as characters, not halves', async () => {
@@ -276,41 +304,19 @@ describe('the honest read, scanned rather than made resident', () => {
   test('a fractional or non-positive limit is one line, never an empty range', async () => {
     for (const limit of [0.5, 0, -3]) {
       const one = await slice('a\nb\nc\n', { limit, maxChars: 100 });
-      expect(one.output.split('\n')[0]).toBe('a');
+      expect(shownLines(one.output)).toEqual(['a']);
       expect(one.last).toBe(1);
       expect(one.output).toContain('limit=1');
     }
   });
 
-  test('paging with the offsets it hands back reassembles the file exactly', async () => {
-    const big = Array.from({ length: 40 }, (_, i) => `row ${i + 1}`).join('\n') + '\n';
-    let offset = 1;
-    let rebuilt = '';
-
-    for (let guard = 0; guard < 50; guard++) {
-      const page = await slice(big, { offset, maxChars: CAP });
-      expect(page.output.length).toBeLessThanOrEqual(CAP);
-      rebuilt += page.output.split('\n\n[')[0];
-
-      if (page.last >= page.total) break;
-      rebuilt += '\n';
-      offset = page.last + 1;
-    }
-
-    expect(rebuilt).toBe(big);
-  });
-
-  test('never numbers lines — old_text is copied out of this output', async () => {
-    expect((await slice(file, { maxChars: 10_000 })).output.split('\n')[0]).toBe(lines[0]);
-  });
-
-  test('a path too long for the cap leaves the marker, never the other way round', async () => {
+  test('a path too long for the cap leaves the footer, never the other way round', async () => {
     const deep = `/${'deep-directory-name/'.repeat(12)}file.ts`;
     expect(deep.length).toBeGreaterThan(CAP);
 
     const capped = await slice(file, { maxChars: CAP, path: deep });
     expect(capped.output.length).toBeLessThanOrEqual(CAP);
-    expect(capped.output).toContain(`continue with op=read offset=${capped.last + 1}`);
+    expect(capped.output).toContain(`offset=${capped.last + 1}`);
     expect(capped.output).not.toContain(deep);
 
     const empty = await slice('', { maxChars: CAP, path: deep });
@@ -319,7 +325,6 @@ describe('the honest read, scanned rather than made resident', () => {
 
     const huge = await slice('z'.repeat(500), { maxChars: CAP, path: deep });
     expect(huge.output.length).toBeLessThanOrEqual(CAP);
-    expect(huge.output).toContain('does not fit');
     expect(huge.output).toContain('is 500 chars');
 
     const past = await slice(file, { offset: 99, maxChars: CAP, path: deep });
@@ -344,11 +349,7 @@ describe('the honest read, scanned rather than made resident', () => {
     const vfs = memoryVfs({ '/f': file }, { perRead: 7 });
     const { window } = await scanFileWindow(vfs, '/f', { maxChars: CAP });
     // Counts describe the whole requested range; `lines` is only the head that fit.
-    expect(window).toMatchObject({ first: 1, total: 10, trailingNewline: false, requestedLines: 10 });
-    const [firstLine = ''] = lines;
-
-    expect(window.requestedChars).toBe(file.length);
-    expect(window.firstLineChars).toBe(firstLine.length);
+    expect(window).toMatchObject({ first: 1, total: 10, requestedLines: 10, requestedChars: file.length });
     expect(window.lines.length).toBeLessThan(window.requestedLines);
   });
 });
@@ -485,7 +486,7 @@ describe('file tool', () => {
   test('read returns the content and authorizes the edit that follows', async () => {
     const vfs = memoryVfs({ 'a.ts': 'const x = 1;\n' });
     const { call } = toolFor(vfs);
-    expect(await call({ op: 'read', path: 'a.ts' })).toBe('const x = 1;\n');
+    expect(shownLines(v.parse(StringResultSchema, await call({ op: 'read', path: 'a.ts' })))).toEqual(['const x = 1;']);
 
     const edited = await call({
       op: 'edit', path: 'a.ts',
@@ -576,10 +577,10 @@ describe('file tool', () => {
     const vfs = memoryVfs({ 'a.cs': '\uFEFFusing System;\nclass A {}\n' });
     const { call } = toolFor(vfs);
     const shown = v.parse(StringResultSchema, await call({ op: 'read', path: 'a.cs' }));
-    expect(shown.startsWith('\uFEFF')).toBe(false);
-    const firstLine = shown.split('\n')[0];
+    const [firstLine] = shownLines(shown);
 
     if (firstLine === undefined) throw new Error('file read returned no first line');
+    expect(firstLine.startsWith('\uFEFF')).toBe(false);
     expect(await call({ op: 'edit', path: 'a.cs', edits: [{ old_text: firstLine, new_text: 'using X;' }] }))
       .toMatchObject({ path: 'a.cs', applied: [expect.objectContaining({ line: expect.any(Number) })] });
     expect(vfs.files.get('a.cs')).toBe('\uFEFFusing X;\nclass A {}\n');
@@ -631,7 +632,7 @@ describe('file tool', () => {
     const bytes = new TextEncoder().encode('hello\n');
     const unranged = { ...memoryVfs({ 'a.bin': 'hello\n' }), readRange: undefined };
     const { call } = toolFor({ ...unranged, readFile: async () => bytes });
-    expect(await call({ op: 'read', path: 'a.bin' })).toBe('hello\n');
+    expect(shownLines(v.parse(StringResultSchema, await call({ op: 'read', path: 'a.bin' })))).toEqual(['hello']);
   });
 
   test('write creates a new file without a prior read', async () => {
@@ -675,8 +676,29 @@ describe('file tool', () => {
     const ledger = new TurnFileLedger();
     const budget = new TurnContextBudget();
     const entry = createFileTool({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs, ledger, budget });
-    await toolExecute(entry)({ op: 'read', path: 'big.txt' });
-    expect(budget.snapshot().admittedChars).toBe(500);
+    const shown = v.parse(StringResultSchema, await toolExecute(entry)({ op: 'read', path: 'big.txt' }));
+    expect(budget.snapshot().admittedChars).toBe(shown.length);
+  });
+
+  test('a read shows up to its line window of a long file, whole, and names the offset that continues it', async () => {
+    const body = Array.from({ length: FILE_READ_LINES + 500 }, (_, i) => `x = ${i + 1};`).join('\n');
+    const { call } = toolFor(memoryVfs({ 'long.ts': body }, { perRead: 4096 }));
+    const shown = v.parse(StringResultSchema, await call({ op: 'read', path: 'long.ts' }));
+
+    expect(shownLines(shown)).toHaveLength(FILE_READ_LINES);
+    expect(shown).toContain(`of ${FILE_READ_LINES + 500} in long.ts`);
+    expect(shown).toContain(`offset=${FILE_READ_LINES + 1}`);
+    expect(shown.length).toBeLessThanOrEqual(FILE_READ_MAX_CHARS);
+  });
+
+  test('an old_text copied with its line numbers is refused with what to drop', async () => {
+    const vfs = memoryVfs({ 'a.ts': 'const x = 1;\nconst y = 2;\n' });
+    const { call } = toolFor(vfs);
+    const shown = v.parse(StringResultSchema, await call({ op: 'read', path: 'a.ts' }));
+    const numbered = shown.split('\n').slice(0, 2).join('\n');
+
+    await expect(call({ op: 'edit', path: 'a.ts', edits: [{ old_text: numbered, new_text: 'gone' }] })).rejects.toThrow('copy only the text after the tab');
+    expect(vfs.files.get('a.ts')).toBe('const x = 1;\nconst y = 2;\n');
   });
 
 
@@ -694,27 +716,31 @@ describe('file tool', () => {
 describe('a `file` read never makes the file resident', () => {
   const numbered = (count: number) => Array.from({ length: count }, (_, i) => `line ${i + 1}`).join('\n') + '\n';
 
-  const exactly: ReadonlyArray<{ what: string; body: string; shown: string }> = [
-    { what: 'multi-byte UTF-8 split across reads', body: 'héllo 😀\nκόσμε\nlast\n', shown: 'héllo 😀\nκόσμε\nlast\n' },
-    { what: 'CRLF line endings', body: 'a\r\nb\r\nc\r\n', shown: 'a\r\nb\r\nc\r\n' },
-    { what: 'a trailing newline', body: 'alpha\nbeta\n', shown: 'alpha\nbeta\n' },
-    { what: 'no trailing newline', body: 'alpha\nbeta', shown: 'alpha\nbeta' },
-    { what: 'an empty file', body: '', shown: '[f.txt is empty]' },
+  const exactly: ReadonlyArray<{ what: string; body: string; shown: readonly string[] }> = [
+    { what: 'multi-byte UTF-8 split across reads', body: 'héllo 😀\nκόσμε\nlast\n', shown: ['héllo 😀', 'κόσμε', 'last'] },
+    { what: 'CRLF line endings', body: 'a\r\nb\r\nc\r\n', shown: ['a\r', 'b\r', 'c\r'] },
+    { what: 'a trailing newline', body: 'alpha\nbeta\n', shown: ['alpha', 'beta'] },
+    { what: 'no trailing newline', body: 'alpha\nbeta', shown: ['alpha', 'beta'] },
   ];
 
   for (const { what, body, shown } of exactly) {
     test(`three bytes at a time returns ${what} exactly`, async () => {
       const vfs = memoryVfs({ 'f.txt': body }, { perRead: 3 });
       const { call } = toolFor(vfs);
-      expect(await call({ op: 'read', path: 'f.txt' })).toBe(shown);
+      expect(shownLines(v.parse(StringResultSchema, await call({ op: 'read', path: 'f.txt' })))).toEqual([...shown]);
       expect(vfs.wholeReads).toEqual([]);
     });
   }
 
+  test('an empty file read three bytes at a time says it is empty', async () => {
+    const vfs = memoryVfs({ 'f.txt': '' }, { perRead: 3 });
+    expect(await toolFor(vfs).call({ op: 'read', path: 'f.txt' })).toBe('[f.txt is empty]');
+  });
+
   test('a BOM split from its own line still never reaches the model, and survives the edit', async () => {
     const vfs = memoryVfs({ 'a.cs': '\uFEFFusing System;\nclass A {}\n' }, { perRead: 2 });
     const { call } = toolFor(vfs);
-    expect(await call({ op: 'read', path: 'a.cs' })).toBe('using System;\nclass A {}\n');
+    expect(shownLines(v.parse(StringResultSchema, await call({ op: 'read', path: 'a.cs' })))).toEqual(['using System;', 'class A {}']);
     expect(await call({ op: 'edit', path: 'a.cs', edits: [{ old_text: 'using System;', new_text: 'using X;' }] }))
       .toMatchObject({ path: 'a.cs', applied: [expect.objectContaining({ line: expect.any(Number) })] });
     expect(vfs.files.get('a.cs')).toBe('\uFEFFusing X;\nclass A {}\n');
@@ -724,7 +750,7 @@ describe('a `file` read never makes the file resident', () => {
     const vfs = memoryVfs({ 'big.ts': numbered(4000) }, { perRead: 997 });
     const { call } = toolFor(vfs);
     const out = v.parse(StringResultSchema, await call({ op: 'read', path: 'big.ts', offset: 5, limit: 3 }));
-    expect(out.split('\n\n[')[0]).toBe('line 5\nline 6\nline 7');
+    expect(out.split('\n\n[')[0]).toBe('5\tline 5\n6\tline 6\n7\tline 7');
     expect(out).toContain('of 4000 in big.ts');
     expect(out).toContain('offset=8');
     expect(vfs.wholeReads).toEqual([]);
@@ -739,18 +765,17 @@ describe('a `file` read never makes the file resident', () => {
       .rejects.toThrow('you have not seen');
   });
 
-  test('one line bigger than the cap is truncated honestly and does not authorize an overwrite', async () => {
-    const giant = 'z'.repeat(DEFAULT_TOOL_RESULT_MAX_CHARS + 1000);
+  test('one line bigger than the whole window is cut, counted, and the lines after it still show', async () => {
+    const giant = 'z'.repeat(FILE_READ_MAX_CHARS + 1000);
     const vfs = memoryVfs({ 'one.txt': `${giant}\ntail\n` }, { perRead: 1024 });
     const { call } = toolFor(vfs);
     const out = v.parse(StringResultSchema, await call({ op: 'read', path: 'one.txt' }));
-    expect(out).toContain('does not fit');
-    expect(out).toContain(String(giant.length));
+    const [cut = '', tail] = shownLines(out);
+
+    expect(cut).toContain(`${giant.length - FILE_READ_LINE_CHARS} more characters`);
+    expect(tail).toBe('tail');
     expect(out.length).toBeLessThan(giant.length);
     expect(vfs.wholeReads).toEqual([]);
-    // Seeing a prefix of one enormous line is not seeing the file.
-    await expect(call({ op: 'write', path: 'one.txt', content: 'wiped\n' }))
-      .rejects.toThrow('you have not seen');
   });
 
   test('paging the file in contiguous windows earns the overwrite', async () => {
@@ -813,7 +838,7 @@ describe('a `file` read never makes the file resident', () => {
   test('a stable revision across the scan is not mistaken for a change', async () => {
     const vfs = memoryVfs({ 'f.txt': 'alpha\nbeta\n' }, { perRead: 3, revisions: true });
     const { call } = toolFor(vfs);
-    expect(await call({ op: 'read', path: 'f.txt' })).toBe('alpha\nbeta\n');
+    expect(shownLines(v.parse(StringResultSchema, await call({ op: 'read', path: 'f.txt' })))).toEqual(['alpha', 'beta']);
   });
 
   test('a ranged read the credential may not make is reported as denied, not as a broken file', async () => {
@@ -832,7 +857,7 @@ describe('a `file` read never makes the file resident', () => {
 
   test('a plane with no ranged read serves a small file and refuses a large one rather than fetching it', async () => {
     const small = { ...memoryVfs({ 'f.txt': 'alpha\nbeta\n' }), readRange: undefined };
-    expect(await toolFor(small).call({ op: 'read', path: 'f.txt' })).toBe('alpha\nbeta\n');
+    expect(shownLines(v.parse(StringResultSchema, await toolFor(small).call({ op: 'read', path: 'f.txt' })))).toEqual(['alpha', 'beta']);
     expect(small.wholeReads).toEqual(['f.txt']);
 
     const big = { ...memoryVfs({ 'f.txt': 'x'.repeat(RESIDENT_TEXT_MAX_BYTES + 1) }), readRange: undefined };

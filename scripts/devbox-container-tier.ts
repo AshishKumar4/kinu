@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { copyPinnedTools } from './devbox-tools';
 import { requireEqual, tierIdentity } from './fixtures/devbox-e2e/oracle';
+import { deleteApplicationSnapshots } from './fixtures/application-snapshots';
 import { completeTeardown } from './fixtures/devbox-e2e/teardown';
 import { r2 } from './infra-cloudflare';
 import { deployedConfig } from './infra-manifest';
@@ -223,10 +224,18 @@ async function main(): Promise<void> {
       if (!wranglerProvesAbsence(deleted)) throw new Error(deleted);
       },
       application: async () => {
+      const ids = containerAppIds(REPO, [app], () => undefined).map(found => found.id);
       const removed = deleteContainerApps(REPO, [app], line => { process.stderr.write(`${line}\n`); });
 
       if (removed.some(line => line.includes('FAILED'))) throw new Error(removed.join('; '));
       requireEqual(containerAppIds(REPO, [app], () => undefined), []);
+
+      // Deleting the application leaves every snapshot it made, the ones no box still names included.
+      for (const applicationId of ids) {
+        const swept = await deleteApplicationSnapshots({ account: ACCOUNT, token, applicationId });
+
+        if (swept.left.length > 0) throw new Error(`${app} left ${String(swept.left.length)} snapshot(s) in the registry: ${swept.left.join(', ')}`);
+      }
       },
       bucket: async () => {
       // By name: `r2 bucket list` answers its first 20 buckets only, so a bucket past that page read as gone, and

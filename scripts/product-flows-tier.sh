@@ -43,4 +43,5 @@ KINU_EVAL_BACKEND=cloud KINU_TOKEN="${RESOLVED[1]}" bun scripts/scripted-tier.ts
 
 echo "── product flows ─────────────────────────────────────────"
 echo "target:   $KINU_ORIGIN as $KINU_EVAL_ACCOUNT"
-exec bun test --timeout=0 tests/browser/product-flows.test.ts
+# Arguments go to `bun test`: `-t <pattern>` with KINU_FLOW_ROWS judges one row by hand.
+exec bun test --timeout=0 tests/browser/product-flows.test.ts "$@"

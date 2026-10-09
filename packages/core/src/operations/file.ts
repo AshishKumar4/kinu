@@ -2,6 +2,7 @@
 import * as v from 'valibot';
 import { ImageCarrierSchema } from '../types/tool-images';
 import { defineOperation, type Operation } from './operation';
+import { FILE_READ_LINE_CHARS, FILE_READ_LINES, FILE_READ_MAX_CHARS } from '../types/file-edits';
 
 const described = <S extends v.GenericSchema>(schema: S, text: string) => v.pipe(schema, v.description(text));
 
@@ -22,9 +23,12 @@ const Written = {
 
 /** One replacement. The input format may change; every other operation reads files as they are. */
 const FileEditSchema = v.strictObject({
-  old_text: described(v.string(), 'Text copied exactly from the file, with enough context to occur once.'),
+  old_text: described(v.string(), 'Text copied exactly from the file, with enough context to occur once: from a read, the text after each line\'s number and tab.'),
   new_text: described(v.string(), 'The replacement; empty deletes.'),
 });
+
+/** Interpolated, so the help states the window the executor shows. */
+const READ_WINDOW = `${String(FILE_READ_LINES)} lines or ${String(FILE_READ_MAX_CHARS)} characters, whichever ends first`;
 
 const fileOp = <const I extends v.StrictObjectSchema<v.ObjectEntries, undefined>, const O extends v.GenericSchema>(
   op: Pick<Operation<I, O>, 'name' | 'help' | 'impact' | 'input' | 'output'>,
@@ -33,9 +37,9 @@ const fileOp = <const I extends v.StrictObjectSchema<v.ObjectEntries, undefined>
 export const FILE = {
   read: fileOp({
     name: 'read',
-    help: 'A text file as it is, a window of lines at a time; a read that stops early names the offset that continues it. An image is shown to you.',
+    help: `A text file, up to ${READ_WINDOW}, each line as its number, a tab, then the line; a line past ${String(FILE_READ_LINE_CHARS)} characters is cut, with how much follows. A footer names the lines shown and their total, and the offset that continues a read that stopped early. An image is shown to you.`,
     impact: 'observe',
-    input: v.strictObject({ path: Path, offset: Lines('The first line, 1-indexed; default 1.'), limit: Lines('Lines to return; default as many as fit.') }),
+    input: v.strictObject({ path: Path, offset: Lines('The first line, 1-indexed; default 1.'), limit: Lines(`Lines to return; default ${String(FILE_READ_LINES)}.`) }),
     output: v.union([v.string(), ImageCarrierSchema]),
   }),
   edit: fileOp({

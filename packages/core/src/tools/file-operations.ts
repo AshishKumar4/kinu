@@ -11,11 +11,10 @@ import type { CheckpointFiles, Memory, VfsWriteReport } from '../types/primitive
 import type { TurnContextBudget } from '../context-budget';
 import { ensureDir, vfsDirname } from '../utils/vfs-helpers';
 import { memoryIndexPath } from '../memory/note';
-import { applyFileEdits, formatFileSlice, FILE_REFUSAL_REASONS, type FileEdit } from './file-edit';
+import { applyFileEdits, formatFileSlice, FILE_READ_LINES, FILE_READ_MAX_CHARS, FILE_REFUSAL_REASONS, type FileEdit } from './file-edit';
 import { FileRefusalError } from '../types/file-edits';
 import { readFileHead, readFileText, scanFileWindow, type ScannedFile } from './file-scan';
 import type { TurnFileLedger, FileEditOutcomeReason, FileSeenNeed } from '../vfs/file-ledger';
-import { DEFAULT_TOOL_RESULT_MAX_CHARS } from './clamp';
 import { KinuError, renderThrownChain } from '../obs/index';
 import { requireBuild } from '../execution/work-mode';
 import { uncheckpointedSentence } from '../execution/exec-result';
@@ -169,10 +168,19 @@ export function serveFile(current: () => FileDeps): Readonly<Record<keyof typeof
   };
 }
 
-/** The native `file` tool; a read the turn's budget cannot hold is spilled, as any tool result is. */
+const ReadCallSchema = v.object({ op: v.literal('read') });
+
+/**
+ * The native `file` tool. A read shows its own window, up to `FILE_READ_MAX_CHARS`, so only its larger cap applies to
+ * it; any other result the turn's budget cannot hold is spilled, as any tool result is.
+ */
 export function createFileTool(files: FileDeps): Tool {
-  return withClampedToolResult(nativeTool(BUILTIN_TOOL_DESCRIPTIONS.file, Object.values(serveFile(() => files))),
-    { files: { vfs: files.vfs, home: files.home }, budget: files.budget, producer: 'file_read', images: true });
+  const tool = nativeTool(BUILTIN_TOOL_DESCRIPTIONS.file, Object.values(serveFile(() => files)));
+  const clamp = { files: { vfs: files.vfs, home: files.home }, budget: files.budget, producer: 'file_read', images: true } as const;
+  const reads = withClampedToolResult(tool, { ...clamp, maxChars: FILE_READ_MAX_CHARS });
+  const others = withClampedToolResult(tool, clamp);
+
+  return { ...others, execute: async (input, options) => await (v.is(ReadCallSchema, input) ? reads : others).execute?.(input, options) };
 }
 
 /** `file.*` for programs and slates, on the native tool's ledger. */
@@ -279,14 +287,14 @@ function fileOps(deps: FileDeps) {
 
   /** A text read reads every byte (the ledger keys on the whole-content fingerprint) but retains only this window and the running hash. */
   const read = async (path: string, args: { readonly offset?: number | undefined; readonly limit?: number | undefined }): Promise<string | ImageCarrier> => {
-    const maxChars = DEFAULT_TOOL_RESULT_MAX_CHARS;
+    const maxChars = FILE_READ_MAX_CHARS;
     let scanned: ScannedFile;
 
     try {
       const shown = RASTER_PATH.test(path) ? await imageRead(path) : null;
 
       if (shown !== null) return shown;
-      scanned = await scanFileWindow(vfs, path, { offset: args.offset, limit: args.limit, maxChars });
+      scanned = await scanFileWindow(vfs, path, { offset: args.offset, limit: args.limit ?? FILE_READ_LINES, maxChars });
     } catch (err) {
       const vfsFail = await vfsFailure(vfs, { error: err }, 'read', path);
 

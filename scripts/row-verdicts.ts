@@ -5,7 +5,9 @@
  * break and end go to the run's log under the suite's name, so a run a tier's
  * deadline ends still names the row it was in.
  */
+import { watch } from 'node:fs';
 import { renderThrownChain } from '@kinu.run/core/obs';
+import { SILENCE_NOTICE_ENV } from './deadline';
 
 export interface RowVerdicts {
   /** Run `measure` as `row`: its verdict, or null once its failure is recorded. */
@@ -14,6 +16,33 @@ export interface RowVerdicts {
   readonly verdictOf: <Value>(value: Value | null, row: string) => Value;
   /** Every row that broke, with why. */
   readonly broken: () => Readonly<Record<string, string>>;
+}
+
+/**
+ * `work`'s value, unless the row's runner says first that its silence nears the bound (`SILENCE_NOTICE_ENV`, appended
+ * by `runUnderDeadline` at three quarters of it): then `end` stops what the work waits on, a row's browser, so its
+ * waits reject, and the row fails naming `waiting()`, what it was waiting for. A row that hangs then fails alone and
+ * the next row runs, where before the runner's kill took every row after it. No runner, no notice: `work` alone.
+ */
+export async function endedNearSilence<Value>(work: Promise<Value>, end: () => Promise<void>, waiting: () => string): Promise<Value> {
+  const path = process.env[SILENCE_NOTICE_ENV];
+
+  if (path === undefined || path === '') return await work;
+  const near = Promise.withResolvers<string>();
+  const watcher = watch(path, () => { near.resolve(waiting()); });
+
+  const silenced = near.promise.then(async (named) => {
+    await end();
+
+    throw new Error(`the row went silent near its runner's bound${named === '' ? '' : ` while waiting for ${named}`}`);
+  });
+
+  // The race holds both: when the notice wins, what the work rejects with once its browser is gone is handled by it.
+  try {
+    return await Promise.race([work, silenced]);
+  } finally {
+    watcher.close();
+  }
 }
 
 /** `unrun` says why no row ran at all (the suite's own setup failed), or null. `evidence`, when given, names where

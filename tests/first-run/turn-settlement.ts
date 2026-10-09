@@ -121,3 +121,39 @@ export function backgroundSettleWait(
 
   return job !== undefined && job.status !== 'running' && started.every((run) => ended.has(run.runId)) ? 'job-settled' : 'wait';
 }
+
+/** What a case needs to follow a detached call to its end: the job rows, and the frame saying they moved. */
+export interface JobsWatch<Job extends { readonly id: string; readonly status: string }> {
+  backgroundJobs(): Promise<readonly Job[]>;
+  /** Aborts at the workspace's next `reads_changed` frame: a job settling moves `listBackgroundJobs`. */
+  readonly readsMoving: AbortSignal;
+}
+
+/**
+ * The row of a job a call detached, once it settled: read again at each frame saying the jobs moved, the product's
+ * own signal, never on a timer. Undefined if the case's budget is spent first, so the verdict reads the ledger as found.
+ */
+export async function settledJob<Job extends { readonly id: string; readonly status: string }>(
+  session: JobsWatch<Job>, jobId: string, budget: AbortSignal,
+): Promise<Job | undefined> {
+  while (!budget.aborted) {
+    // Taken before the read: a frame that lands while the read is in flight still wakes the next one.
+    const moving = session.readsMoving;
+    const job = (await session.backgroundJobs()).find((row) => row.id === jobId);
+
+    if (job !== undefined && job.status !== 'running') return job;
+
+    await new Promise<void>((resolve) => {
+      if (moving.aborted || budget.aborted) {
+        resolve();
+
+        return;
+      }
+
+      moving.addEventListener('abort', () => { resolve(); }, { once: true });
+      budget.addEventListener('abort', () => { resolve(); }, { once: true });
+    });
+  }
+
+  return undefined;
+}

@@ -52,6 +52,22 @@ function liveTail(parts: readonly Part[]): LiveTail {
   return { kind: "thinking" };
 }
 
+/**
+ * The row a live turn draws into: the thread's last, once the turn's opening row (the claim's `turnId`) is in the
+ * thread. Until it lands the last row is a finished turn's, and handing it the tail reopens what it already drew: its
+ * Slate blocks go back to their placeholder and their pages load again. A turn the tab streams before its claim names
+ * it owns the last row. Null when nothing is live or the turn has no row yet.
+ */
+export function liveTailRow(input: { readonly rows: readonly Pick<UIMessage, "id">[]; readonly liveness: TurnLiveness }): string | null {
+  if (input.liveness.kind !== "live") return null;
+  const { turnId } = input.liveness;
+  const last = input.rows.at(-1);
+
+  if (last === undefined) return null;
+
+  return turnId === null || input.rows.some((row) => row.id === turnId) ? last.id : null;
+}
+
 /** Before the first assistant row the tail is `thinking`; a thread that is not live has none. */
 export function threadLiveTail(input: { readonly last: Pick<UIMessage, "role" | "parts"> | undefined; readonly liveness: TurnLiveness }): LiveTail | null {
   if (input.liveness.kind !== "live") return null;

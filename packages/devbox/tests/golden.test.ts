@@ -7,8 +7,13 @@ import { GOLDEN_BASE, buildGolden, goldenFor, type GoldenAnswer, type GoldenPort
 const DAY = 24 * 60 * 60 * 1000;
 
 class Platform {
-  state: GoldenState = { waiting: [] };
+  state: GoldenState = { waiting: [], retiring: [] };
   readonly calls: string[] = [];
+  /** What the registry was asked to delete; `refuse` answers the next ask, and no registry answers undefined. */
+  readonly deleted: string[] = [];
+  refuse: { readonly reason: string; readonly left?: string } | undefined;
+  registry = true;
+  stopRefused: string | undefined;
   readonly told: [string, GoldenAnswer][] = [];
   builds = 0;
   failInstall: string | undefined;
@@ -44,9 +49,23 @@ class Platform {
 
         return `golden-${String(this.#taken)}`;
       },
-      destroy: async () => { this.calls.push('destroy'); },
+      destroy: async () => {
+        this.calls.push('destroy');
+
+        if (this.stopRefused !== undefined) throw new Error(this.stopRefused);
+      },
       build: async () => { this.builds += 1; },
       tell: async (box, answer) => { this.told.push([box, answer]); },
+      delete: (ref) => {
+        if (!this.registry) return undefined;
+        const refused = this.refuse;
+        this.refuse = undefined;
+
+        if (refused !== undefined) return Promise.resolve({ kind: 'refused', ...refused });
+        this.deleted.push(ref);
+
+        return Promise.resolve({ kind: 'deleted' });
+      },
       now: () => this.clock,
     };
   }
@@ -140,4 +159,55 @@ test('the refresh builds a new golden at 25 days and restores the previous, whic
   expect({ refreshed, renewed, expired: expired.kind }).toEqual({
     refreshed: ['destroy', 'start golden-1', 'destroy'], renewed: { kind: 'ready', id: 'golden-1', tools: 'tools-2' }, expired: 'pending',
   });
+});
+
+// A box's own lineage is a delta on the golden it started from and wakes for 29 days from its root, so a golden no slot
+// holds is deleted 30 days after it left, never when it leaves.
+test('a golden pushed out of both slots is deleted once every lineage rooted on it is past waking, and not before', async () => {
+  const platform = new Platform();
+  await settle(buildGolden(platform.ports('tools-1'), false));
+  await settle(buildGolden(platform.ports('tools-2'), false));
+  await settle(buildGolden(platform.ports('tools-3'), false));
+  const retiring = platform.state.retiring.map((retired) => retired.ref);
+  platform.clock += 29 * DAY;
+  await settle(buildGolden(platform.ports('tools-3'), false));
+  const early = [...platform.deleted];
+  platform.clock += DAY;
+  await settle(buildGolden(platform.ports('tools-3'), false));
+
+  // The refresh at 29 days pushed golden-2 out in turn; it waits its own 30 days.
+  expect({ retiring, early, deleted: platform.deleted, left: platform.state.retiring.map((retired) => retired.ref) })
+    .toEqual({ retiring: ['golden-1'], early: [], deleted: ['golden-1'], left: ['golden-2'] });
+});
+
+test('a golden the platform refused a box is retired as one pushed out is', async () => {
+  const platform = new Platform();
+  await settle(buildGolden(platform.ports(), false));
+  await settle(goldenFor(platform.ports(), 'box-a', 'golden-1'));
+
+  expect(platform.state.retiring).toEqual([{ ref: 'golden-1', at: platform.clock + 30 * DAY }]);
+});
+
+test('a refused or unauthorised delete stays owed, as the digest the registry left once its tags went', async () => {
+  const platform = new Platform();
+  platform.state = { ...platform.state, retiring: [{ ref: 'golden-0', at: 0 }, { ref: 'golden-9', at: 0 }] };
+  platform.registry = false;
+  await settle(buildGolden(platform.ports(), false));
+  const unauthorised = platform.state.retiring.map((retired) => retired.ref);
+  platform.registry = true;
+  platform.refuse = { reason: 'deleting sha256:aa answered 500: busy', left: 'sha256:aa' };
+  await settle(buildGolden(platform.ports(), false));
+  const refused = platform.state.retiring.map((retired) => retired.ref);
+  await settle(buildGolden(platform.ports(), false));
+
+  expect({ unauthorised, refused, deleted: platform.deleted, left: platform.state.retiring })
+    .toEqual({ unauthorised: ['golden-0', 'golden-9'], refused: ['sha256:aa'], deleted: ['golden-9', 'sha256:aa'], left: [] });
+});
+
+test('a golden whose container will not stop is built and recorded, not lost', async () => {
+  const platform = new Platform();
+  platform.stopRefused = 'the container did not stop';
+  const state = await settle(buildGolden(platform.ports(), false));
+
+  expect({ current: state.current?.id, failure: state.failure }).toEqual({ current: 'golden-1', failure: undefined });
 });
