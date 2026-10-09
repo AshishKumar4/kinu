@@ -349,6 +349,8 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
 ['delete-all-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('delete-all-probe.ts'),
         durableObjects: { DELETE_ALL_PROBE: { className: 'DeleteAllProbeDO', useSQLite: true } } })],
 ['device-user-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('device-user-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { CREDENTIAL_ENCRYPTION_KEY: 'ZGV2aWNlLXVzZXItcHJvYmUtY3JlZGVudGlhbC1rZXk=' },
+        // Main's turns are its own isolate's, loaded from the agent bundle as the deployed Worker serves it.
+        serviceBindings: { ASSETS: agentAssets() },
         // The fake models and their control host, shared with the public surface's drives (files run one at a time).
         outboundService: probeOutbound,
         durableObjects: {

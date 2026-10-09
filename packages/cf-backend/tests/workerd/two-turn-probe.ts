@@ -24,7 +24,7 @@ import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB } from '../../src/wake-jobs';
 import { ROOT_SLATE_CALLER } from '../../src/slates/bindings';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import { SqlMeter, type OperationCost } from './sql-meter';
-import type { AgentFacet as ProbeAgentFacet } from './two-turn-probe-agent';
+import type { AgentFacet as ProbeAgentFacet, SeededEntry } from './two-turn-probe-agent';
 import type {
   AgentLogEvent,
   CallRecord,
@@ -83,10 +83,9 @@ import {
   type WakeDriveResult,
   type WakeRows,
 } from './two-turn-shapes';
-import { CHAT_SESSION_ID, changeNotesCard, ownerCaller, turnAuthor, type NotedChanges, type PeerMessage, type ReviewAnnotation, type WorkMode } from '@kinu.run/core';
+import { changeNotesCard, ownerCaller, turnAuthor, type NotedChanges, type PeerMessage, type ReviewAnnotation, type WorkMode } from '@kinu.run/core';
 import type { ChatWire, ChatWireTransport } from '../../src/chat-transport';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { seedTranscriptEntry } from '@kinu.run/test-utils/transcript';
 import type { ToolSet } from 'ai';
 
 // Re-exported under production names so the auxiliary worker binds the shipped
@@ -186,9 +185,10 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'answerSlates');
     Reflect.deleteProperty(this, 'answerPageModes');
     Reflect.deleteProperty(this, 'cutTerminal');
+    Reflect.deleteProperty(this, 'liveTerminal');
     Reflect.deleteProperty(this, 'terminalState');
     Reflect.deleteProperty(this, 'alienEffect');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates', 'answerPageModes', 'cutTerminal', 'terminalState', 'alienEffect']);
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates', 'answerPageModes', 'cutTerminal', 'liveTerminal', 'terminalState', 'alienEffect']);
   }
 
   /** `query` over main's own isolate, where its conversation, sends, claims and runs are kept (D9). */
@@ -230,24 +230,30 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
    */
   async seedOwedReplies(): Promise<void> {
     const actorId = this.actorHandle().actorId;
+    const chat: SeededEntry[] = [];
 
     for (const turn of ['answered', 'unanswered']) {
       this.unmetered(`INSERT INTO agent_log
           (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant, trust, priority, payload_visibility, payload, received_at, dedupe_key, consumed_at)
         VALUES (?, ?, 'event', ?, 0, NULL, 'tr-1', 'webhook_bearer', 'webhook', 'authenticated', 'normal', 'full',
           '{"webhook_id":"w1","http_method":"POST","http_headers":{},"body":{"x":1},"delivery_id":"d1"}', 1, NULL, 5)`, actorId, `ev-${turn}`, `evt-${turn}`);
-      await seedTranscriptEntry(this.stores.history, CHAT_SESSION_ID, {
-        id: `u-evt-${turn}`, origin: 'input', message: { role: 'user', content: `The ${turn} event arrived while you were idle.` },
+      chat.push({
+        id: `u-evt-${turn}`, origin: 'input', role: 'user', content: `The ${turn} event arrived while you were idle.`,
         metadata: { kinuEvent: 'event_drain', drainTurnId: `evt-${turn}` },
       });
 
       // Each answer follows its own drain turn, as the loop writes them.
-      if (turn === 'answered') {
-        await seedTranscriptEntry(this.stores.history, CHAT_SESSION_ID, { id: 'a-evt-answered', origin: 'output', message: { role: 'assistant', content: 'the build passed' } });
-      }
+      if (turn === 'answered') chat.push({ id: 'a-evt-answered', origin: 'output', role: 'assistant', content: 'the build passed' });
     }
 
+    await this.seedMainChat(chat);
     this.terminal.begin({ turnId: 'u-owed', messageId: 'a-1' });
+  }
+
+  /** Entries in main's conversation, kept in its own isolate (D9), once a read there opened it. */
+  private async seedMainChat(entries: readonly SeededEntry[]): Promise<void> {
+    await this.getChatHistoryPage({ limit: 1 });
+    await (await this.agentFacetOf<ProbeAgentFacet>(this.actorHandle().actorId)).seedChat(this.actorHandle().actorId, entries);
   }
 
   /** Each seeded event's lease: the drain turn it is bound to and when that took it. */
@@ -268,8 +274,10 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     const actorId = this.actorHandle().actorId;
     const agentId = textColumn(this.unmetered('SELECT actor_id FROM workspace_actors WHERE name = ?', agent).one().actor_id);
 
-    this.unmetered(`INSERT INTO actor_turn_claims (actor_id, turn_id, run_id, epoch, work_mode, program_kind, program_version, claimed_at)
+    // Main's turn is stranded in its own isolate, whose last answer told this workspace it still owes work (D9).
+    await this.mainRows(`INSERT INTO actor_turn_claims (actor_id, turn_id, run_id, epoch, work_mode, program_kind, program_version, claimed_at)
       VALUES (?, 'turn-stranded', 'run-stranded', 2, 'build', 'builtin', 1, ?)`, actorId, Date.now());
+    this.unmetered('INSERT INTO agent_owed_work (actor_id) VALUES (?)', actorId);
     this.unmetered(`INSERT INTO terminal_effects (actor_id, sequence_id, effect_key, effect_name, scope, seq, input_json, status)
       VALUES (?, 'seq-retired', 'retired', 'no_such_effect', '', 0, '{}', 'pending')`, actorId);
     this.unmetered("INSERT INTO agent_open_turns (actor_id, turn_id, opened_at) VALUES (?, 'agent-turn', ?)", agentId, Date.now());
@@ -301,14 +309,23 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     return this.dying ? Promise.resolve() : super.scheduleTerminalRetry(atMs, pace);
   }
 
-  /** The isolate stops once at `name`, `phase` its side effect, as an eviction would stop it there. */
+  /** The isolate stops at `name`, `phase` its side effect, as an eviction would stop it there, and runs no effect after
+   *  until {@link liveTerminal}: main's isolate may hand its settled turn again within the activation, which a dead one
+   *  would never hear. */
   async cutTerminal(name: TerminalEffectName, phase: TerminalEffectPhase): Promise<void> {
+    let cut = false;
+
     this.dying = true;
     this.terminalEffectFault = (atPhase, atName, atScope) => {
-      if (atName !== name || atPhase !== phase) return;
-      this.terminalEffectFault = null;
+      if (!cut && (atName !== name || atPhase !== phase)) return;
+      cut = true;
       throw new TerminalEffectInterrupt(atPhase, atName, atScope);
     };
+  }
+
+  /** The activation lives on from here: its next pass is not cut. */
+  async liveTerminal(): Promise<void> {
+    this.terminalEffectFault = null;
   }
 
   async terminalState(): Promise<TerminalState> {
@@ -348,18 +365,16 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
       return result.ok ? 'ok' : result.reason;
     };
 
-    await seedTranscriptEntry(this.stores.history, CHAT_SESSION_ID, { id: 'u-page', origin: 'input', message: { role: 'user', content: 'Draw the card.' } });
-    await seedTranscriptEntry(this.stores.history, CHAT_SESSION_ID, {
-      id: 'a-page', origin: 'output', message: { role: 'assistant', content: 'Here:\n<slate-ui name="card">\n<p>card</p>\n</slate-ui>' },
-    });
+    await this.seedMainChat([
+      { id: 'u-page', origin: 'input', role: 'user', content: 'Draw the card.' },
+      { id: 'a-page', origin: 'output', role: 'assistant', content: 'Here:\n<slate-ui name="card">\n<p>card</p>\n</slate-ui>' },
+    ]);
     const auto = await write();
 
-    await seedTranscriptEntry(this.stores.history, CHAT_SESSION_ID, {
-      id: 'u-plan', origin: 'input', message: { role: 'user', content: 'Plan it first.' }, metadata: { kinuMode: 'plan' },
-    });
+    await this.seedMainChat([{ id: 'u-plan', origin: 'input', role: 'user', content: 'Plan it first.', metadata: { kinuMode: 'plan' } }]);
     const plan = await write();
 
-    await seedTranscriptEntry(this.stores.history, CHAT_SESSION_ID, { id: 'u-auto', origin: 'input', message: { role: 'user', content: 'Go ahead.' } });
+    await this.seedMainChat([{ id: 'u-auto', origin: 'input', role: 'user', content: 'Go ahead.' }]);
     const autoAgain = await write();
 
     // A planner's role holds every call to Plan, whatever its last ask asked for.
@@ -634,6 +649,9 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
    * and synced first, since an abort drops writes not yet durable. The rows ride the abort's reason.
    */
   async receivePeerThenEvict(msg: PeerMessage): Promise<void> {
+    // The claim's own detached work first: what it hands main's isolate is answered by calls back into this object,
+    // which the section would hold off.
+    await this.settleBackgroundTasks();
     await this.ctx.blockConcurrencyWhile(async () => {
       this.host.setTimer = () => undefined;
       const armedBefore = this.armedWakes();
@@ -697,25 +715,29 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
    * deadline ends a close that never comes.
    */
   async drainRunClosed(): Promise<string[]> {
-    let recorded = Promise.withResolvers<void>();
+    for (;;) {
+      // Main's runs end in its own isolate, which tells this object each turn's end (D9).
+      const next = Promise.withResolvers<void>();
 
-    const stop = this.eventRecorder.observe((event) => {
-      if (event.type === 'run_end') recorded.resolve();
-    });
+      this.mainTurnEnds.add(next.resolve);
 
-    try {
-      for (;;) {
-        const next = Promise.withResolvers<void>();
-
-        recorded = next;
+      try {
         const runs = await this.runCauses();
 
         if (runs.some((run) => run.cause === 'event_drain' && run.closed)) return runs.map((run) => run.cause);
         await next.promise;
+      } finally {
+        this.mainTurnEnds.delete(next.resolve);
       }
-    } finally {
-      stop();
     }
+  }
+
+  private readonly mainTurnEnds = new Set<() => void>();
+
+  protected override mainFacetTurnEnded(): void {
+    super.mainFacetTurnEnded();
+
+    for (const ended of this.mainTurnEnds) ended();
   }
 }
 
@@ -773,7 +795,7 @@ type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   | 'createSubordinateAgent' | 'readWorkspaceFile'>
   & Pick<ProductionOrchestrator, 'getChangeNotes' | 'saveChangeNotes' | 'sendChangeNotes'>
   & Pick<ObservedOrchestrator, 'refuseReservations' | 'owedSends' | 'latestClaimOutcome' | 'recoveryPass'
-  | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'answerSlates' | 'answerPageModes' | 'cutTerminal' | 'terminalState' | 'alienEffect' | 'inspectWork' | 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
+  | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'answerSlates' | 'answerPageModes' | 'cutTerminal' | 'liveTerminal' | 'terminalState' | 'alienEffect' | 'inspectWork' | 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
   | 'receivePeerThenEvict' | 'timerTickFinished' | 'runCauses' | 'drainRunClosed' | 'meterBegin' | 'meterEnd' | 'settleState'>;
 
 /** Sleeps past the interactive detach window, so the call detaches and settles out of turn. */
@@ -1516,7 +1538,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
   async recoverRecording(workspace: string, cut?: { readonly name: TerminalEffectName; readonly phase: TerminalEffectPhase }): Promise<TerminalState> {
     const target: QueueTarget = await this.queueTarget(workspace);
 
-    if (cut !== undefined) await target.cutTerminal(cut.name, cut.phase);
+    if (cut === undefined) await target.liveTerminal();
+    else await target.cutTerminal(cut.name, cut.phase);
     await target.recoveryPass();
     await awaitSettled(target);
 
@@ -2017,13 +2040,18 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
     const fresh: QueueTarget = await this.queueTarget(workspace);
     await fresh.timerTickFinished();
-    const drained = (await fresh.agentLogEvents()).filter((row) => row.variant === 'peer_agent');
+    const peerRows = async () => (await fresh.agentLogEvents()).filter((row) => row.variant === 'peer_agent');
+    const bound = await peerRows();
 
     // A tick that left the event unbound is the finding; its drain's model call would never come.
-    if (drained.every((row) => row.turnId === null)) return { ...evicted, drained, causes: [] };
+    if (bound.every((row) => row.turnId === null)) return { ...evicted, drained: bound, causes: [] };
     await fetch(`http://probe-control.invalid/log/until?marker=${encodeURIComponent(body)}`);
+    const causes = await fresh.drainRunClosed();
 
-    return { ...evicted, drained, causes: await fresh.drainRunClosed() };
+    // The tick handed the drain to main's isolate; the lease closes once that turn's reply is sent.
+    await awaitSettled(fresh);
+
+    return { ...evicted, drained: await peerRows(), causes };
   }
 
   /** Returns the model-call count and terminal evidence so the test can say where the drive stopped. */
