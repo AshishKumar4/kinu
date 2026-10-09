@@ -183,7 +183,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   harnessIsolateRefusal: { readonly refuses: (actorId: string) => boolean; readonly error: Error } | null = null;
   /** Joined with the fibers and not with the keep-alives, as production's lanes were fibers before D11. */
   protected override holdLane<T>(body: () => Promise<T>): Promise<T> {
-    return trackHarnessLane(body());
+    return trackHarnessLane(body(), this);
   }
 
   protected override async agentIsolate(actorId: string): Promise<AgentFacetCalls> {
