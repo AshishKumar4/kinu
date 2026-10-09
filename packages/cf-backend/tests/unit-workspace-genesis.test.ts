@@ -171,8 +171,10 @@ describe('the workspace takes its own first turn', () => {
     const genesis = turns.park();
 
     expect(await harness.agent.beginGenesisTurn()).toEqual({ started: true });
-    await harness.agent.send('Summarize the incident timeline first.', 'm-first');
+    // Admitted by main's isolate, which reads the held measure before it answers: sent inside the hold, read after it.
+    const sent = harness.agent.send('Summarize the incident timeline first.', 'm-first');
     held.resolve();
+    await sent;
 
     const asked = requestText((await genesis).prompt);
     expect(asked).toContain('first turn');
