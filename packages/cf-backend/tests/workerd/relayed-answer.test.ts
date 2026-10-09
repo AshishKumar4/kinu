@@ -64,3 +64,18 @@ it('a rejected session closes its relay, while fulfilled sessions and streams ke
     ['session-factory-rejection', 'ok'], ['session-method-rejection', 'ok'], ['fulfilled-stream', 'ok'],
   ]);
 });
+
+// 2026-10-09, staging 44b13e946: a callback-bearing codemode program answered, yet its relay read as hung, its host stub
+// never disposed and its capability held once a collection ran inside the program.
+it('a program whose host collected under its callbacks closes its relay once it answered', async () => {
+  const response = await env.RELAY_HOST.fetch('http://relay-host/');
+  const seen = v.parse(v.object({ exitCode: v.nullable(v.number()), stdout: v.string(), stderr: v.string() }), await response.json());
+
+  expect(seen.exitCode, seen.stderr || seen.stdout).toBe(0);
+  const summary = seen.stdout.split('\n').find(line => line.startsWith('SUMMARY '));
+
+  if (summary === undefined) throw new Error('the real-workerd relay host oracle returned no observations');
+  const observations = v.parse(v.array(v.object({ mode: v.string(), answer: v.object({ result: v.unknown() }), tail: v.object({ outcome: v.string() }) })), JSON.parse(summary.slice('SUMMARY '.length)));
+
+  expect(observations.map(item => [item.mode, item.answer.result, item.tail.outcome])).toEqual([['program-codemode-callback-pressure', 7, 'ok']]);
+});

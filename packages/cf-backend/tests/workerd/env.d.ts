@@ -415,6 +415,7 @@ declare global {
   namespace Cloudflare {
     interface Env {
       RELAY_LIFETIME: Fetcher;
+      RELAY_HOST: Fetcher;
       SLATE_EGRESS_PROBE: DurableObjectNamespace<SlateEgressRpc>;
       RETENTION: DurableObjectNamespace<RetentionDO>;
       NEIGHBOUR: DurableObjectNamespace<NeighbourDO>;

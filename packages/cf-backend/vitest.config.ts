@@ -457,6 +457,27 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
         })]
 ]);
 
+/** A fixture run in a workerd of its own, by node, so its Tail is read before that runtime is disposed. */
+async function realWorkerdOracle(args: readonly string[]): Promise<Response> {
+  const root = fileURLToPath(new URL('../..', import.meta.url));
+
+  const child = spawn('node', [...args], {
+    cwd: root, env: { ...process.env, MINIFLARE_WORKERD_PATH: `${root}/node_modules/workerd/bin/workerd` }, stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8').on('data', (chunk: string) => { stdout += chunk; });
+  child.stderr.setEncoding('utf8').on('data', (chunk: string) => { stderr += chunk; });
+
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    child.on('error', reject);
+    child.on('close', resolve);
+  });
+
+  return Response.json({ exitCode, stdout, stderr });
+}
+
 const runnerOptions = {
         ...workerCompatibility,
         // `useSQLite` mirrors `exports`' `storage: "sqlite"` (wrangler.jsonc); without it `ctx.storage.sql`
@@ -471,25 +492,9 @@ const runnerOptions = {
           // A slate's esbuild facet loads its adapter from ASSETS.
           ASSETS: nimbusAssets,
           // This oracle must own its runtime: Tail completion is checked before mf.dispose(), not after the pool closes.
-          RELAY_LIFETIME: async () => {
-            const root = fileURLToPath(new URL('../..', import.meta.url));
-
-            const child = spawn('node', ['packages/cf-backend/tests/fixtures/relay-rejected-workerd.mjs', 'session-factory-rejection', 'session-method-rejection', 'fulfilled-stream'], {
-              cwd: root, env: { ...process.env, MINIFLARE_WORKERD_PATH: `${root}/node_modules/workerd/bin/workerd` }, stdio: ['ignore', 'pipe', 'pipe'],
-            });
-
-            let stdout = '';
-            let stderr = '';
-            child.stdout.setEncoding('utf8').on('data', (chunk: string) => { stdout += chunk; });
-            child.stderr.setEncoding('utf8').on('data', (chunk: string) => { stderr += chunk; });
-
-            const exitCode = await new Promise<number | null>((resolve, reject) => {
-              child.on('error', reject);
-              child.on('close', resolve);
-            });
-
-            return Response.json({ exitCode, stdout, stderr });
-          },
+          RELAY_LIFETIME: async () => await realWorkerdOracle(['packages/cf-backend/tests/fixtures/relay-rejected-workerd.mjs', 'session-factory-rejection', 'session-method-rejection', 'fulfilled-stream']),
+          // The relay's own host under a collection, in a runtime of its own whose Tail closes before disposal.
+          RELAY_HOST: async () => await realWorkerdOracle(['packages/cf-backend/tests/fixtures/relay-host-workerd.mjs', 'program-codemode-callback-pressure']),
           PUBLIC_SURFACE: { name: 'public-surface-probe' },
           HIRE_APP: { name: 'hire-probe' },
           // Node-side fake state is shared across workers; these entrypoints reset and read it.
