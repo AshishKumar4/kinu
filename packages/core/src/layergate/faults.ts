@@ -273,6 +273,7 @@ export const FAULTS: readonly Fault[] = Object.freeze([
             ok: true,
             content: original.slice(0, at) + first.newText + original.slice(at + first.oldText.length),
             applied: [{ line: 1, removedLines: 1, addedLines: 1 }],
+            spans: [{ start: at, end: at + first.oldText.length, inserted: first.newText.length }],
           };
         }
 

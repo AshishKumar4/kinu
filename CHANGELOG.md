@@ -25,6 +25,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **Deleting read lines does not make unread lines safe to overwrite.** The file ledger now follows the replacements in an edit, including joined lines, batched edits and CRLF files. An edit that removes the read prefix still leaves the remaining unread lines protected; reading them earns the overwrite.
 - **A file read that cut a long line no longer lets a whole-file write replace it.** A read shows at most 2,000 characters of a line and says how many follow, but the turn counted that line as read, so a later `write` over the file was allowed to discard text nobody had been shown. The record now ends before the first cut line; an overwrite is refused until `workspace.readFile` in `eval` reads the file whole, and an `edit` on a line that showed whole still lands.
 - **Launcher-swap checks use the repo's runtime, not the test driver's.** Their managed Bun is the pinned local binary and installation is disabled, so a check run by the machine's older Bun cannot contact bun.sh or add install progress to its verdict.
 - **First-run collection uses the pinned runtime for the process and its workers.** Its credential-free probes no longer resolve the machine's Bun through PATH; an execution trace showed those workers using 1.4.0 while the suite ran on 1.4.2.

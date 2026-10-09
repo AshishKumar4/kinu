@@ -7,7 +7,7 @@ import type { VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 import { fnv1a64 } from '../utils/fnv1a';
 import { lineCount } from '../utils/text';
 
-import type { FileEditOutcomeReason, FileEditSnapshot } from '../types/file-edits';
+import type { EditedSpan, FileEditOutcomeReason, FileEditSnapshot } from '../types/file-edits';
 import { countSharedWrite, newWriteAuthor } from '../obs/msg-counters';
 
 export type { FileEditOutcomeReason, FileEditSnapshot } from '../types/file-edits';
@@ -54,6 +54,30 @@ interface RangeCoverage {
   readonly revision?: VfsRevision;
 }
 
+/** Carry the first unseen character through ordered, non-overlapping replacements; only complete lines before it count. */
+function carriedCoverage(before: string, after: string, covered: number, spans: readonly EditedSpan[]): number {
+  let frontier = 0;
+
+  for (let line = 0; line < covered; line++) frontier = before.indexOf('\n', frontier) + 1;
+  let shift = 0;
+
+  for (const span of spans) {
+    if (span.start > frontier) break;
+    // Authored text is known. If it replaces the frontier, the next unseen character is after this span.
+    frontier = Math.max(frontier, span.end);
+    shift += span.inserted - (span.end - span.start);
+  }
+
+  const edge = frontier + shift;
+
+  if (edge === after.length) return lineCount(after);
+  let lines = 0;
+
+  for (let at = after.indexOf('\n'); at !== -1 && at < edge; at = after.indexOf('\n', at + 1)) lines++;
+
+  return lines;
+}
+
 export class TurnFileLedger {
   /** Keyed on content digest, not path spelling, so two spellings of one file match. */
   private readonly seen = new Map<string, SeenContent>();
@@ -95,13 +119,15 @@ export class TurnFileLedger {
     this.record(path, { fingerprint: scan.fingerprint, coveredTo, total: scan.total, revision: scan.revision });
   }
 
-  observeEdited(path: string, before: string, after: string, revision?: VfsRevision): void {
+  /** `spans` are ordered in the original text's coordinates, including its BOM and line endings. */
+  observeEdited(path: string, before: string, edited: { readonly content: string; readonly spans: readonly EditedSpan[] }, revision?: VfsRevision): void {
+    const { content: after, spans } = edited;
     const previous = this.seen.get(fnv1a64(before));
     const total = lineCount(after);
 
     const covered = previous && previous.coveredTo >= previous.total
       ? total
-      : Math.min(previous?.coveredTo ?? 0, total);
+      : carriedCoverage(before, after, previous?.coveredTo ?? 0, spans);
 
     this.record(path, { fingerprint: fnv1a64(after), coveredTo: covered, total, revision });
   }

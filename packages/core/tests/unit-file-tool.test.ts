@@ -573,6 +573,70 @@ describe('file tool', () => {
     expect(await call({ op: 'write', path: 's.txt', content: 'z\n' })).toMatchObject({ action: 'replaced' });
   });
 
+  test('deleting the five lines read from a ten-line file does not cover the five unseen lines that replace them', async () => {
+    const body = Array.from({ length: 10 }, (_, i) => `line ${i + 1}\n`).join('');
+    const vfs = memoryVfs({ 'f.txt': body });
+    const { call, ledger } = toolFor(vfs);
+    await call({ op: 'read', path: 'f.txt', limit: 5 });
+    await call({ op: 'edit', path: 'f.txt', edits: [{ old_text: 'line 1\nline 2\nline 3\nline 4\nline 5\n', new_text: '' }] });
+
+    const left = 'line 6\nline 7\nline 8\nline 9\nline 10\n';
+    expect(vfs.files.get('f.txt')).toBe(left);
+    await expect(call({ op: 'write', path: 'f.txt', content: 'wiped\n' })).rejects.toMatchObject({ verdict: 'unread' });
+    expect(vfs.files.get('f.txt')).toBe(left);
+    expect(ledger.seenState('f.txt', left, 'whole')).toEqual({ state: 'partial', coveredTo: 0, total: 5 });
+    await call({ op: 'read', path: 'f.txt' });
+    expect(await call({ op: 'write', path: 'f.txt', content: 'replacement\n' })).toMatchObject({ action: 'replaced' });
+  });
+
+  const COVERAGE_EDITS = [
+    { name: 'removing a read line shifts coverage down', edits: [{ old_text: 'line 2\n', new_text: '' }], coveredTo: 4, total: 9 },
+    { name: 'adding a line among the read lines shifts coverage up', edits: [{ old_text: 'line 2', new_text: 'line 2\nadded' }], coveredTo: 6, total: 11 },
+    { name: 'joining the last read line to an unread one does not cover the joined line', edits: [{ old_text: 'line 5\n', new_text: 'joined ' }], coveredTo: 4, total: 9 },
+    { name: 'an edit after the read prefix leaves coverage where it was', edits: [{ old_text: 'line 8\n', new_text: '' }], coveredTo: 5, total: 9 },
+    { name: 'a batch in reverse file order carries every shift', edits: [{ old_text: 'line 4', new_text: 'four\nadded' }, { old_text: 'line 2\n', new_text: '' }], coveredTo: 5, total: 10 },
+    { name: 'an edit crossing the read frontier covers its authored lines, not what follows', edits: [{ old_text: 'line 5\nline 6\n', new_text: 'five\nsix\n' }], coveredTo: 6, total: 10 },
+  ];
+
+  for (const { name, edits, coveredTo, total } of COVERAGE_EDITS) {
+    test(name, async () => {
+      const body = Array.from({ length: 10 }, (_, i) => `line ${i + 1}\n`).join('');
+      const vfs = memoryVfs({ 'f.txt': body });
+      const { call, ledger } = toolFor(vfs);
+      await call({ op: 'read', path: 'f.txt', limit: 5 });
+      await call({ op: 'edit', path: 'f.txt', edits });
+      const after = vfs.files.get('f.txt');
+
+      if (after === undefined) throw new Error('the edit removed the file');
+      expect(ledger.seenState('f.txt', after, 'whole')).toEqual({ state: 'partial', coveredTo, total });
+      await expect(call({ op: 'write', path: 'f.txt', content: 'wiped\n' })).rejects.toMatchObject({ verdict: 'unread' });
+      expect(vfs.files.get('f.txt')).toBe(after);
+    });
+  }
+
+  test('removing lines before a cut line does not move the cut line into coverage', async () => {
+    const wide = `${'w'.repeat(FILE_READ_LINE_CHARS + 500)}\n`;
+    const vfs = memoryVfs({ 'f.txt': `alpha\nbeta\n${wide}` });
+    const { call, ledger } = toolFor(vfs);
+    await call({ op: 'read', path: 'f.txt' });
+    await call({ op: 'edit', path: 'f.txt', edits: [{ old_text: 'alpha\n', new_text: '' }] });
+    await expect(call({ op: 'write', path: 'f.txt', content: 'wiped\n' })).rejects.toMatchObject({ verdict: 'unread' });
+    expect(vfs.files.get('f.txt')).toBe(`beta\n${wide}`);
+    expect(ledger.seenState('f.txt', `beta\n${wide}`, 'whole')).toEqual({ state: 'partial', coveredTo: 1, total: 2 });
+  });
+
+  test('coverage crosses an edit at the read frontier in a BOM-prefixed CRLF file', async () => {
+    const body = `\uFEFF${Array.from({ length: 10 }, (_, i) => `line ${i + 1}\r\n`).join('')}`;
+    const vfs = memoryVfs({ 'f.txt': body });
+    const { call, ledger } = toolFor(vfs);
+    await call({ op: 'read', path: 'f.txt', limit: 5 });
+    await call({ op: 'edit', path: 'f.txt', edits: [{ old_text: 'line 5\nline 6\n', new_text: 'five\nsix\n' }] });
+    const after = body.replace('line 5\r\nline 6\r\n', 'five\r\nsix\r\n');
+
+    expect(vfs.files.get('f.txt')).toBe(after);
+    expect(ledger.seenState('f.txt', after, 'whole')).toEqual({ state: 'partial', coveredTo: 6, total: 10 });
+  });
+
   test('a BOM is never shown, so the first line the read returns can be matched', async () => {
     const vfs = memoryVfs({ 'a.cs': '\uFEFFusing System;\nclass A {}\n' });
     const { call } = toolFor(vfs);

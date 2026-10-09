@@ -407,8 +407,7 @@ function fileOps(deps: FileDeps) {
       let report: VfsWriteReport | null;
 
       try {
-        // Coverage carries across the edit: only the named span changed.
-        report = await persist(path, outcome.content, (writtenRevision) => ledger.observeEdited(path, current, outcome.content, writtenRevision), revision);
+        report = await persist(path, outcome.content, (writtenRevision) => ledger.observeEdited(path, current, outcome, writtenRevision), revision);
       } catch (err) {
         const vfsFail = await vfsFailure(vfs, { error: err }, 'edit', path);
         ledger.recordEdit(path, vfsFail.reason);

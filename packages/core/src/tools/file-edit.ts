@@ -3,7 +3,7 @@
  * be placed exactly once fails without touching the file. No fuzzy fallback; line endings and BOM round-trip.
  */
 import { headEnd, lineCount } from '../utils/text';
-import { FILE_READ_LINE_CHARS, FILE_READ_LINES, type FileEditFailure } from '../types/file-edits';
+import { FILE_READ_LINE_CHARS, FILE_READ_LINES, type EditedSpan, type FileEditFailure } from '../types/file-edits';
 
 export {
   FILE_READ_LINE_CHARS, FILE_READ_LINES, FILE_READ_MAX_CHARS, FILE_REFUSAL_REASONS, type FileEditFailure,
@@ -23,7 +23,7 @@ interface AppliedEdit {
 }
 
 export type FileEditOutcome =
-  | { ok: true; content: string; applied: AppliedEdit[] }
+  | { ok: true; content: string; applied: AppliedEdit[]; spans: EditedSpan[] }
   | { ok: false; reason: FileEditFailure; message: string };
 
 export const BOM = '\uFEFF';
@@ -98,7 +98,7 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
 
   const anchors = edits.map((edit) => ({ oldText: toLF(edit.oldText), newText: toLF(edit.newText) }));
 
-  const matches: Array<{ index: number; start: number; length: number; newText: string }> = [];
+  const matches: Array<{ index: number; start: number; length: number; insert: string }> = [];
 
   for (let i = 0; i < anchors.length; i++) {
     const { oldText, newText } = anchors[i];
@@ -139,7 +139,7 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
     }
 
     const start = base.indexOf(oldText);
-    matches.push({ index: i, start, length: oldText.length, newText });
+    matches.push({ index: i, start, length: oldText.length, insert: ending === '\r\n' ? newText.replace(/\n/g, '\r\n') : newText });
   }
 
   const ordered = [...matches].sort((a, b) => a.start - b.start);
@@ -165,8 +165,7 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
 
   for (let i = ordered.length - 1; i >= 0; i--) {
     const m = ordered[i];
-    const insert = ending === '\r\n' ? m.newText.replace(/\n/g, '\r\n') : m.newText;
-    content = content.slice(0, origin[m.start]) + insert + content.slice(origin[m.start + m.length]);
+    content = content.slice(0, origin[m.start]) + m.insert + content.slice(origin[m.start + m.length]);
   }
 
   if (content === body) {
@@ -180,10 +179,14 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
   const applied = matches.map((m) => ({
     line: lineOf(base, m.start),
     removedLines: lineCount(base.slice(m.start, m.start + m.length)),
-    addedLines: lineCount(m.newText),
+    addedLines: lineCount(m.insert),
   }));
 
-  return { ok: true, content: (hasBom ? BOM : '') + content, applied };
+  const lead = hasBom ? 1 : 0;
+  // The ledger needs raw offsets, not the display's line counts: a replacement can join a seen line to an unseen one.
+  const spans = ordered.map((m) => ({ start: origin[m.start] + lead, end: origin[m.start + m.length] + lead, inserted: m.insert.length }));
+
+  return { ok: true, content: (hasBom ? BOM : '') + content, applied, spans };
 }
 
 export interface FileSlice {
