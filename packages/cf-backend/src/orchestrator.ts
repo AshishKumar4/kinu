@@ -145,7 +145,7 @@ import {
   STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
   readWorkspaceWork, hasWorkspaceWork, WORK_TAB_JOBS, type WorkspaceWork, inspectWork, type InspectedWork, addressedBlock, type EphemeralSlateAddress,
-  readWorkspaceAgents, readAgentFigures, recordAgentFigures, reportedAgentFigures, type AgentFigures, type AgentAnswer, type ConversationTurnPair, type PanelAgent, type AgentConfigStore,
+  readWorkspaceAgents, readAgentFigures, recordAgentFigures, reportedAgentFigures, type AgentFigures, type AgentAnswer, type ConversationTurnPair, type PanelAgent, type AgentConfigStore, type AskingAgent,
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
   ROOT_DELEGATION_BUDGET, type DelegationBudget,
@@ -201,7 +201,7 @@ import {
   setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
   type EvolutionConfigView,
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
-  planAwaitingReply, planSubmissionReach,
+  planAwaitingReply, planSubmissionReach, ASK_OWNER_TOOL,
   JsonValueSchema, type JsonValue, type JsonObject, type KinuEvent,
   EVENT_VARIANTS,
   boundEventQuery,
@@ -979,7 +979,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (!this.liveActor(actorId)) return;
 
     // Its questions are written in its own isolate, which the workspace's reads do not watch.
-    if (this.agentBound(actorId).stores.config.getHoldsQuestions()) this.hostedQuestionsMoved();
+    if (this.agentBound(actorId).stores.config.getHoldsQuestions() && this.questionsMayHaveMoved(actorId, event)) this.hostedQuestionsMoved();
     recordAgentFigures(this.boundSql, actorId, figures);
     this.delegatedTurns.start([this.liveAgentOf(actorId)]);
   }
@@ -2513,6 +2513,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    */
   private hostedQuestionsMoved(): void {
     this.slowOverview = null;
+    this.heldQuestions = null;
+    this.questionMoves += 1;
     this.liveReadsMoved(['listOwnerQuestions']);
     this.overviewChanged();
   }
@@ -5560,6 +5562,32 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return { recovered: 'requeued' };
   }
 
+  /** The agents' questions as the overview counts them: asked of their isolates once, and again only once they moved
+   *  (`hostedQuestionsMoved`), never on a write of the workspace's own. */
+  private heldQuestions: AskingAgent[] | null = null;
+
+  private questionMoves = 0;
+
+  /** A turn moved its agent's questions if it asked, or if one was open as it ran: the owner's words close them. Unread,
+   *  they may have. */
+  private questionsMayHaveMoved(actorId: string, event: SessionEvent): boolean {
+    if (event.type === 'turn-end' && event.turn.toolCalls.some((call) => call.name === ASK_OWNER_TOOL)) return true;
+
+    const main = this.actorHandle().actorId;
+
+    return this.heldQuestions?.some((asking) => asking.asked.status === 'open' && (asking.actor ?? main) === actorId) ?? true;
+  }
+
+  private async questionsAsked(): Promise<AskingAgent[]> {
+    const moves = this.questionMoves;
+    const asked = this.heldQuestions ?? await this.listOwnerQuestions();
+
+    // Held only if nothing moved while they were asked; a failed read is never held.
+    if (moves === this.questionMoves) this.heldQuestions = asked;
+
+    return asked;
+  }
+
   private slowOverview: {
     readonly sqlRevision: number;
     readonly slateRevision: number;
@@ -5582,7 +5610,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       this.getActivePlanReview(),
       this.slates.list(ROOT_SLATE_CALLER),
       this.hostedPlans(),
-      this.listOwnerQuestions(),
+      this.questionsAsked(),
     ]);
 
     const pictures = this.pictures.digests();
