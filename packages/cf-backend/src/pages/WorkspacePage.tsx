@@ -1,4 +1,4 @@
-import { AskedQuestionsContext } from "@/components/QuestionCard";
+import { AskedQuestionsContext, askedBy } from "@/components/QuestionCard";
 import { Effect, Cause } from 'effect';
 import { Fragment, createContext, startTransition, useContext, useState, useRef, useEffect, useCallback, useMemo, type RefObject } from "react";
 import { useParams, useLocation, Link, useMatch, useNavigate, useSearchParams } from "react-router-dom";
@@ -551,6 +551,9 @@ function SubordinateChatColumn({
 
   // Its answers' blocks resolve in its own chat, once the pane knows whose that is.
   const answerChat = useMemo(() => (state.paneActorId === null ? undefined : { actorId: state.paneActorId }), [state.paneActorId]);
+  // Its own questions, from the workspace's read, for each call's record.
+  const questions = attention?.reads.questions;
+  const asked = useMemo(() => (state.paneActorId === null ? [] : askedBy(questions ?? [], state.paneActorId)), [questions, state.paneActorId]);
 
   const { thread } = chat;
   const repeats = useMemo(() => foldEventTurns(thread.entries.map(({ message }) => message)), [thread.entries]);
@@ -590,6 +593,7 @@ function SubordinateChatColumn({
   return (
     <div className="@container relative flex flex-col flex-1 min-h-0" data-agent-pane={`${workspace}/agents/${subName}`}>
       <ErrorBoundary label="Agent chat">
+        <AskedQuestionsContext.Provider value={asked}>
         <TranscriptViewport chat={chat} live={live} padClass="pt-5 pb-12"
           scroll={{ initialScroll: ui.savedScroll, onScrollPosition: ui.rememberScroll, settled: state.transcriptSeeded }}
           pending={<ConversationSkeleton />}
@@ -618,6 +622,7 @@ function SubordinateChatColumn({
             />
           )}
         </TranscriptViewport>
+        </AskedQuestionsContext.Provider>
       </ErrorBoundary>
 
       {!takesInput && <ViewOnlyBar running={live} onStop={stop} />}
@@ -857,8 +862,8 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
   const { rpc: workspaceRpc, resolveConsent, refreshPendingActions } = state;
   const { accountProposals } = useWorkspaceRoster();
 
-  // The workspace agent's questions by the call that asked each, for that call's record in the transcript.
-  const askedByCall = useMemo(() => new Map(state.ownerQuestions.filter((asking) => asking.actor === null).map((asking) => [asking.asked.callId, asking.asked])), [state.ownerQuestions]);
+  // The workspace agent's questions, for each call's record in the transcript.
+  const asked = useMemo(() => askedBy(state.ownerQuestions, null), [state.ownerQuestions]);
 
   const attentionCalls = useMemo((): Omit<AttentionStackProps, "asks"> => ({
     rpc: workspaceRpc,
@@ -1171,7 +1176,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
               </div>
             )}
             <ErrorBoundary label="Chat">
-            <AskedQuestionsContext.Provider value={askedByCall}>
+            <AskedQuestionsContext.Provider value={asked}>
             <TranscriptViewport chat={chat} live={live} startFirst padClass="pt-7 pb-12"
               scroll={{ initialScroll: ui.savedScroll, onScrollPosition: ui.rememberScroll, settled: state.transcriptSeeded }}
               pending={<ConversationSkeleton />}

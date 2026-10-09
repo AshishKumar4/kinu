@@ -26,12 +26,13 @@ import { isMcpToolKey } from './mcp-naming';
 import { selectInjectableCraftedTools, type CraftedToolSource } from './crafted-executor';
 import { TurnEscalationLedger } from '../execution/escalation';
 import { serveMemory } from './memory-operations';
-import { nativeTool, operationTool } from './operation-surfaces';
+import { nativeTool, operationInputSchema, operationTool } from './operation-surfaces';
 import { serveTasks, type RoleSwitch } from './tasks-operations';
 import type { WebSearchProvider } from '../web/index';
 import { serveWeb } from './web-operations';
 import type { ReplyToCommentToolDeps, SubmitPlanToolDeps } from '../types/plans';
 import { PLAN } from '../operations/plan';
+import { defineOperation } from '../operations/operation';
 import { servePlan, servePlanReply } from './plan-operations';
 import { AskOwnerInputSchema } from '../types/owner-questions';
 import type { JsonValue } from '../utils/json';
@@ -60,13 +61,18 @@ export interface CodemodeSurface {
 /** Core has no codegen; the CLI supplies `createNodeCodemodeToolFactory`. */
 export type CodemodeBuilder = (surface: CodemodeSurface) => ToolSet[string];
 
+/** `ask_owner`'s input as an operation's, so a malformed call is refused by field before it can park; nothing serves it. */
+const ASK_OWNER = defineOperation({
+  ns: ASK_OWNER_TOOL, name: 'ask', impact: 'externalSend', plan: true, slate: false,
+  help: ASK_OWNER_DESCRIPTION, input: AskOwnerInputSchema, output: v.unknown(),
+});
+
 /**
  * `ask_owner`, with no executor: its call stays unpaired, so the loop stops on its step and the owner's answer reaches
  * the model through the repair that pairs interrupted calls (`plans/owner-questions.ts`).
  */
-function askOwnerTool() {
-  // Valibot is a Standard Schema: the SDK validates with it, so an invalid call is refused before it can park.
-  return permitInPlan(tool({ description: ASK_OWNER_DESCRIPTION, inputSchema: AskOwnerInputSchema }));
+export function askOwnerTool() {
+  return permitInPlan(tool({ description: ASK_OWNER_DESCRIPTION, inputSchema: operationInputSchema(ASK_OWNER) }));
 }
 
 /** The one reader of a runtime's crafted tools, for every `eval` built over its surface. */

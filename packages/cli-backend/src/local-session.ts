@@ -1087,19 +1087,13 @@ export class LocalAgentSession {
   async answerOwnerQuestions(id: string, answers: readonly OwnerAnswer[]): Promise<void> {
     const refusal = this.driverGate?.() ?? null;
 
-    const answered = refusal
+    return settleSync(refusal
       ? Effect.fail(new KinuError('denied', `${refusal.error}. Answer from the session driving the conversation.`))
-      : this.actorSession.questions.answer(id, answers);
-
-    return settleSync(Effect.andThen(answered, Effect.sync(() => { this.chat.resumeAnswered(); })));
+      : this.chat.answerQuestions(id, answers));
   }
 
   async dismissOwnerQuestions(id: string): Promise<{ readonly closed: number }> {
-    const closed = this.actorSession.questions.close('dismissed', id).length;
-
-    if (closed > 0) this.chat.pump();
-
-    return { closed };
+    return { closed: this.chat.dismissQuestions(id) };
   }
 
   async dismissPlanReview(id: string, revision: number): Promise<PlanReviewResult> {

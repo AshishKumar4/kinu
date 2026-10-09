@@ -4,7 +4,7 @@
  * one turn; restart replays pending sends and owed effects; an interrupted turn continues once, in its run.
  */
 
-import { answeredSummary, OWNER_ANSWER_SIGNAL } from '../plans/owner-questions';
+import { answeredSummary, OWNER_ANSWER_SIGNAL, type OwnerAnswer } from '../plans/owner-questions';
 import type { TrialTurn } from '../evolution/trial-rules';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
@@ -694,9 +694,18 @@ export class ChatSession {
     this.actorSession.stop();
   }
 
-  /** A Stop closes the agent's open questions unanswered; what waited behind them may then run. */
-  private dismissQuestions(): void {
-    if (this.actorSession.questions.close('dismissed').length > 0) this.pump();
+  /** The owner's answer: the asking call's result, and the turn that continues from it, owed at once. */
+  answerQuestions(id: string, answers: readonly OwnerAnswer[]): Effect.Effect<void, KinuError> {
+    return Effect.andThen(this.actorSession.questions.answer(id, answers), Effect.sync(() => { this.resumeAnswered(); }));
+  }
+
+  /** Closes questions unanswered, `id`'s or (a Stop) every open one; what waited behind them may then run. */
+  dismissQuestions(id?: string): number {
+    const closed = this.actorSession.questions.close('dismissed', id).length;
+
+    if (closed > 0) this.pump();
+
+    return closed;
   }
 
   /** Only a running turn keyed under `prefix`. */

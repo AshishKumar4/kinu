@@ -43,7 +43,7 @@ import {
 import { codemodeSurface, hostedWindowMay, PAGE_KEEPALIVE, readsWrittenBy, requiredRpcAccess, ROSTER_READS, rpcMovesOverview, type LiveRead, type SqlExec } from "@kinu.run/core";
 import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
-import { attempt, createAgentTracing, hold, recording, renderThrownChain, type AgentTracing, settle, settleSync, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
+import { attempt, attemptInItsWords, createAgentTracing, hold, recording, renderThrownChain, type AgentTracing, settle, settleSync, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
 import {
   createActorCompaction, type CompactionExtension,
   createCompactionStateStore,
@@ -125,7 +125,7 @@ import {
   inheritedContextFromTranscript,
   PlanReviewActions, planHandoffStillOwed, type PlanDecisionOutcome,
   type PlanEdit, type PlanReview, type ReviewAnnotation,
-  type PlanReviewDecision, type PlanReviewResult, type ReplyToCommentToolDeps, type SubmitPlanToolDeps, type AskingAgent,
+  type PlanReviewDecision, type PlanReviewResult, type ReplyToCommentToolDeps, type SubmitPlanToolDeps, type AskingAgent, type OwnerAnswer,
   answerParentRpc,
   type ParentExecResult,
   type ParentRpcWrite,
@@ -419,6 +419,14 @@ function actorAgentsActions(deps: ActorToolDeps, swarms: boolean): AgentsOp[] {
 }
 
 /** The owner's review calls on one hosted agent's plans, answered by its isolate. */
+/** Hosted agents' questions to the owner, each in its own isolate (D9): listed beside the workspace agent's, answered by
+ *  the asking agent's id. */
+export interface HostedOwnerQuestions {
+  list(): Promise<AskingAgent[]>;
+  answer(actorId: string, id: string, answers: readonly OwnerAnswer[]): Promise<void>;
+  dismiss(actorId: string, id: string): Promise<number>;
+}
+
 export interface HostedPlanReviews {
   active(): Promise<PlanReview | null>;
   saveAnnotations(id: string, revision: number, annotations: ReviewAnnotation[]): Promise<PlanReviewResult>;
@@ -840,32 +848,37 @@ export abstract class ActorAgent extends Agent<Env> {
     return await settle(Effect.flatMap(this.windowPlans(window), (plans) => Effect.promise(async () => await plans.decide(id, revision, decision, feedback))));
   }
 
-  /** The workspace agent's recent questions to its owner: the open ones for the attention stack, each for its record. */
+  /** Recent questions to the owner, the workspace agent's and its hosted agents': the open ones for the attention stack,
+   *  each for its call's record. */
   @callable()
   async listOwnerQuestions(): Promise<AskingAgent[]> {
-    return this.actorSession.questions.recent().map((asked) => ({ asked, agent: this.name, actor: null }));
+    const own = this.actorSession.questions.recent().map((asked) => ({ asked, agent: this.name, actor: null }));
+
+    return [...own, ...await this.hostedQuestions().list()];
   }
 
-  /** The owner's answer: the asking call's result, and the turn that continues from it. */
+  /** The owner's answer: the asking call's result, and the turn that continues from it, in the agent that asked
+   *  (`actor`; null for the workspace agent). */
   @callable()
-  async answerOwnerQuestions(id: string, answers: JsonValue): Promise<void> {
-    const parsed = v.safeParse(OwnerAnswersSchema, answers);
+  async answerOwnerQuestions(id: string, answers: JsonValue, actor: JsonValue = null): Promise<void> {
+    const parsed = v.safeParse(v.tuple([OwnerAnswersSchema, v.nullable(v.string())]), [answers, actor]);
 
-    const answered = parsed.success
-      ? this.actorSession.questions.answer(id, parsed.output)
-      : Effect.fail(new KinuError('bad_input', `answers: ${parsed.issues[0].message}`));
+    return settle(Effect.suspend(() => {
+      if (!parsed.success) return Effect.fail(new KinuError('bad_input', `answers: ${parsed.issues[0].message}`));
+      const [answered, asker] = parsed.output;
 
-    return settle(Effect.andThen(answered, Effect.sync(() => { this.chatLoop.resumeAnswered(); })));
+      return asker === null ? this.chatLoop.answerQuestions(id, answered) : attemptInItsWords('unavailable', () => this.hostedQuestions().answer(asker, id, answered));
+    }));
   }
 
   /** Closed unanswered; the agent reads that at its next turn, and what waited behind the questions runs. */
   @callable()
-  async dismissOwnerQuestions(id: string): Promise<{ readonly closed: number }> {
-    const closed = this.actorSession.questions.close('dismissed', id).length;
+  async dismissOwnerQuestions(id: string, actor: JsonValue = null): Promise<{ readonly closed: number }> {
+    const asker = v.safeParse(v.nullable(v.string()), actor);
 
-    if (closed > 0) this.chatLoop.pump();
+    if (!asker.success) return settle(Effect.fail(new KinuError('bad_input', 'actor: an agent id, or null for the workspace agent')));
 
-    return { closed };
+    return { closed: asker.output === null ? this.chatLoop.dismissQuestions(id) : await this.hostedQuestions().dismiss(asker.output, id) };
   }
 
   /** The orchestrator answers with the root budget; a facet actor answers from durable storage,
@@ -1980,6 +1993,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** A hosted agent's plan reviews, in its own isolate; null for a name this workspace holds no agent under. */
   protected abstract hostedPlanReviews(actorId: string): HostedPlanReviews | null;
+
+  protected abstract hostedQuestions(): HostedOwnerQuestions;
 
   /** An owner's words to an agent, resolved once its chat has reserved them, as the root's `admit` is. */
   protected abstract hostedAdmit(actorId: string, input: { readonly text: string; readonly files: readonly PromptFile[]; readonly id: string; readonly mode: WorkMode }): Promise<void>;

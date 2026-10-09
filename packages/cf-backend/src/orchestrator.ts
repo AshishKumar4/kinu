@@ -221,7 +221,7 @@ import {
   EVOLUTION_LANE_FIBER,
   type ActorDynamicContextExtras,
   type ActorToolDeps,
-  type HostedPlanReviews,
+  type HostedOwnerQuestions, type HostedPlanReviews,
   type UntimedArms,
 } from "./actor-agent";
 import {
@@ -896,6 +896,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.overviewChanged();
 
     if (!this.liveActor(actorId)) return;
+
+    // Its questions are written in its own isolate, which the workspace's reads do not watch.
+    if (this.agentBound(actorId).stores.config.getHoldsQuestions()) this.liveReadsMoved(['listOwnerQuestions']);
     recordAgentFigures(this.boundSql, actorId, figures);
     this.delegatedTurns.start([this.liveAgentOf(actorId)]);
   }
@@ -1203,6 +1206,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ...(report !== undefined && { report }),
       // The owner's own turns, and its plan's feedback turn; a hirer's turn is never asked for the owner's review.
       ...(!turn.parentDriven && planSubmissionReach(turn.input.mode, turn.driving) && { submitPlan: { submit: async (edits) => await this.hostedPlanSubmit(turn, edits) } }),
+      // A person is the conversation partner only on the owner's turns; a hirer's question goes back in its report.
+      ...(!turn.parentDriven && { askOwner: this.offerAskOwner(turn) }),
       ...(await this.hostedPlanAwaitsReply(turn) && { replyToComment: { reply: async (comment, text) => await this.hostedPlanReply(turn, comment, text) } }),
     };
 
@@ -2303,6 +2308,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return result;
   }
 
+  /** Marks the agent as one the stack asks for questions; its call parks in its own isolate's store. */
+  private offerAskOwner(turn: HostedTaskTurn): true {
+    const { config } = turn.actor.stores;
+
+    if (!config.getHoldsQuestions()) config.setHoldsQuestions();
+
+    return true;
+  }
+
   /** Asked only of an owner-driven turn of an agent that has submitted a plan. */
   private async hostedPlanAwaitsReply(turn: HostedTaskTurn): Promise<boolean> {
     if (turn.parentDriven || !turn.actor.stores.config.getHoldsPlans()) return false;
@@ -2315,6 +2329,35 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const actorId = turn.actor.handle.actorId;
 
     return await (await this.agentCalls(actorId)).replyPlanComment(this.agentSnapshot(actorId), comment, text, turn.driving);
+  }
+
+  /** Each live agent's questions from its own isolate (D9); only an agent offered `ask_owner` is asked. An answer is handed
+   *  in as words are, with a wake armed, so the turn it owes survives the isolate. */
+  protected override hostedQuestions(): HostedOwnerQuestions {
+    return {
+      list: async () => {
+        const askers = this.workspaceActors().list()
+          .filter((row) => row.parentActorId !== null && actorReadHandle(this.boundSql, row).config.getHoldsQuestions());
+
+        const asked = await Promise.all(askers.map(async (row) => (await (await this.agentCalls(row.actorId)).ownerQuestions(this.agentSnapshot(row.actorId)))
+          .map((questions) => ({ asked: questions, agent: row.name, actor: row.actorId }))));
+
+        return asked.flat();
+      },
+      answer: async (actorId, id, answers) => {
+        const calls = await this.agentCalls(actorId);
+
+        await this.handInput(actorId, async () => { await calls.answerOwnerQuestions(this.agentSnapshot(actorId), id, answers); });
+        this.liveReadsMoved(['listOwnerQuestions']);
+      },
+      dismiss: async (actorId, id) => {
+        const closed = await (await this.agentCalls(actorId)).dismissOwnerQuestions(this.agentSnapshot(actorId), id);
+
+        this.liveReadsMoved(['listOwnerQuestions']);
+
+        return closed;
+      },
+    };
   }
 
   /** Each agent's plans from its own isolate (D9); only an agent that has submitted one is asked, retired ones included. */

@@ -284,8 +284,8 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
         {front.kind === "action" && <ActionBody action={front.action} rpc={rpc} />}
         {front.kind === "question" && (
           <QuestionCard asking={front.question} busy={busy === front.key}
-            onAnswer={(answers) => detach(answer({ label: "Answer", weight: "primary", run: async () => { await rpc("answerOwnerQuestions", [front.question.asked.id, answers]); } }))}
-            onDismiss={() => detach(answer({ label: "Dismiss", weight: "quiet", run: async () => { await rpc("dismissOwnerQuestions", [front.question.asked.id]); } }))} />
+            onAnswer={(answers) => detach(answer({ label: "Answer", weight: "primary", run: async () => { await rpc("answerOwnerQuestions", [front.question.asked.id, answers, front.question.actor]); } }))}
+            onDismiss={() => detach(answer({ label: "Dismiss", weight: "quiet", run: async () => { await rpc("dismissOwnerQuestions", [front.question.asked.id, front.question.actor]); } }))} />
         )}
         {error?.key === front.key && <div className="mt-1.5 p-t-status p-danger" role="alert">{error.message}</div>}
         <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">

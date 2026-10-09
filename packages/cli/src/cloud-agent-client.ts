@@ -375,7 +375,8 @@ export class CloudAgentClient implements AgentClient {
     };
     // The agent's questions, the workspace agent's: a window on a subordinate answers its hirer, not the owner.
     this.questions = subordinateName ? null : {
-      list: async () => v.parse(v.array(AskingAgentSchema), await this.callRpc('listOwnerQuestions', [])),
+      // A hosted agent's questions are answered from the web app's stack, where its window is.
+      list: async () => v.parse(v.array(AskingAgentSchema), await this.callRpc('listOwnerQuestions', [])).filter((asking) => asking.actor === null),
       answer: async (id, answers) => { await this.callRpc('answerOwnerQuestions', [id, v.parse(JsonValueSchema, answers)]); },
       dismiss: async (id) => v.parse(v.object({ closed: v.number() }), await this.callRpc('dismissOwnerQuestions', [id])),
     };

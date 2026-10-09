@@ -39,7 +39,9 @@ function QuestionField({ question, draft, onDraft, busy }: {
   const preview = many ? undefined : question.options[focused]?.preview;
   const name = `question-${question.id}`;
 
-  const choose = (label: string): void => {
+  const choose = (label: string, index: number): void => {
+    setFocused(index);
+
     if (many) {
       onDraft({ ...draft, selected: draft.selected.includes(label) ? draft.selected.filter((each) => each !== label) : [...draft.selected, label] });
 
@@ -63,12 +65,12 @@ function QuestionField({ question, draft, onDraft, busy }: {
             return (
               <label key={option.label} className="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 hover:p-fill" data-question-option={option.label}
                 onMouseEnter={() => setFocused(index)}>
-                <input type={many ? "checkbox" : "radio"} name={name} className="mt-0.5 shrink-0 accent-[var(--p-accent)]" checked={checked}
-                  onChange={() => choose(option.label)} onFocus={() => setFocused(index)} />
+                <input type={many ? "checkbox" : "radio"} name={name} className="mt-0.5 shrink-0 accent-[var(--c-accent)]" checked={checked}
+                  onChange={() => choose(option.label, index)} onFocus={() => setFocused(index)} />
                 <span className="min-w-0">
                   <span className="p-row-text p-text">
                     {option.label}
-                    {question.recommended === index && <span className="ml-1 p-meta p-accent-fg" data-question-recommended> (Recommended)</span>}
+                    {question.recommended === index && <span className="ml-1 p-meta p-accent" data-question-recommended> (Recommended)</span>}
                   </span>
                   {option.description !== undefined && <span className="block p-meta p-text-2">{option.description}</span>}
                 </span>
@@ -76,7 +78,7 @@ function QuestionField({ question, draft, onDraft, busy }: {
             );
           })}
           <label className="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 hover:p-fill" data-question-option={OTHER_OPTION}>
-            <input type={many ? "checkbox" : "radio"} name={name} className="mt-0.5 shrink-0 accent-[var(--p-accent)]" checked={draft.other !== null}
+            <input type={many ? "checkbox" : "radio"} name={name} className="mt-0.5 shrink-0 accent-[var(--c-accent)]" checked={draft.other !== null}
               onChange={() => onDraft(draft.other === null ? { ...draft, other: "", selected: many ? draft.selected : [] } : { ...draft, other: null })} />
             <span className="min-w-0 flex-1">
               <span className="p-row-text p-text">{OTHER_OPTION}</span>
@@ -89,7 +91,7 @@ function QuestionField({ question, draft, onDraft, busy }: {
           </label>
         </div>
         {preview !== undefined && (
-          <pre className="max-h-48 min-w-0 overflow-auto rounded-md px-2 py-1.5 p-t-code p-text-2 whitespace-pre p-fill" data-question-preview>{preview}</pre>
+          <pre className="p-code max-h-48 min-w-0 overflow-auto rounded-md px-2.5 py-2 text-xs leading-5 whitespace-pre" data-question-preview>{preview}</pre>
         )}
       </div>
     </fieldset>
@@ -123,7 +125,7 @@ export function QuestionCard({ asking, busy, onAnswer, onDismiss }: {
 
   return (
     <div data-question-card={asking.asked.id}>
-      <div className="flex flex-col gap-3">
+      <div className="-mx-1 flex max-h-[min(55vh,32rem)] flex-col gap-3 overflow-y-auto px-1">
         {questions.map((question) => (
           <QuestionField key={question.id} question={question} draft={draftOf(question.id)} busy={busy}
             onDraft={(draft) => setDrafts((was) => new Map([...was, [question.id, draft]]))} />
@@ -133,7 +135,7 @@ export function QuestionCard({ asking, busy, onAnswer, onDismiss }: {
         <textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} placeholder="A note for the agent" aria-label="A note for the agent"
           className="mt-2 block w-full resize-y rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-ring" />
       ) : (
-        <button type="button" className="mt-1.5 p-meta p-accent-fg hover:underline" onClick={() => setNoting(true)}>Add a note</button>
+        <button type="button" className="mt-1.5 p-meta p-accent hover:underline" onClick={() => setNoting(true)}>Add a note</button>
       )}
       <div className="mt-1 p-meta p-text-3">{asking.actor === null ? "Asked" : `${asking.agent} asked`} {timeAgo(asking.asked.askedAt)}. The agent waits for your answer.</div>
       <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
@@ -148,15 +150,24 @@ export function QuestionCard({ asking, busy, onAnswer, onDismiss }: {
   );
 }
 
-/** The agent's questions, closed or open, by the call that asked them: what the transcript's record of each reads. */
-export const AskedQuestionsContext = createContext<ReadonlyMap<string, AskedQuestions>>(new Map());
+/** One agent's questions, closed or open: what the transcript's record of each call reads. */
+export const AskedQuestionsContext = createContext<readonly AskedQuestions[]>([]);
+
+/** The questions `actor` asked (null: the workspace agent). */
+export function askedBy(asking: readonly AskingAgent[], actor: string | null): readonly AskedQuestions[] {
+  return asking.filter((each) => each.actor === actor).map((each) => each.asked);
+}
 
 const CLOSED_AS = { dismissed: "Dismissed", in_chat: "Answered in the chat" } as const;
 
 /** Where the agent asked, a small record of what it asked and what came back; the questions themselves are answered in the stack. */
 export function AskRecord({ callId, input }: { callId: string; input: unknown }): ReactNode {
-  const asked = useContext(AskedQuestionsContext).get(callId);
   const parsed = v.safeParse(AskOwnerInputSchema, input);
+
+  const asked = useContext(AskedQuestionsContext)
+    // A provider may reuse a call id across turns: the questions tell the calls apart, as the store's digest does.
+    .find((each) => each.callId === callId && (!parsed.success || JSON.stringify(each.questions) === JSON.stringify(parsed.output.questions)));
+
   const questions = asked?.questions ?? (parsed.success ? parsed.output.questions : []);
 
   return (

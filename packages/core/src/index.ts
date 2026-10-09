@@ -643,6 +643,7 @@ export {
 } from './subordinates/depth';
 
 export {
+  askOwnerTool,
   buildBuiltinTools,
   codemodeSurface,
   type BuiltinToolDeps,
