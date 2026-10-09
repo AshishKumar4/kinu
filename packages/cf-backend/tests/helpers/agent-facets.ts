@@ -34,7 +34,7 @@ const registered = mock.module('../../src/providers/agent-registry', () => ({
     // Only an agent's isolate reads a script: its credentials are brokered through its workspace, under the empty token
     // an isolate holds. The workspace's own lanes route under the same session as main's turns and keep their models.
     const caller = deps.userDO?.caller;
-    const isolate = caller !== undefined && typeof caller !== 'function' && caller.workspaceToken === '';
+    const isolate = caller !== undefined && typeof caller !== 'function' && 'workspaceToken' in caller && caller.workspaceToken === '';
 
     return { ...registry, resolveModel: (spec, conversation) => (isolate ? scriptedModels.get(conversation.sessionAffinity)?.() : undefined) ?? registry.resolveModel(spec, conversation) };
   },
