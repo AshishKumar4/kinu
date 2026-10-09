@@ -114,7 +114,7 @@ const called = (p: CodemodeProvider, member: string) => codemodeFunction("agent"
 const refused = (text: string) => ({ success: false, reason: "bad_input", error: expect.stringContaining(text) });
 
 /** The namespace as a program reads it. */
-const declared = (p: CodemodeProvider): string => namespaceDeclaration(p.name, p.declarations ?? {}, new Set());
+const declared = (p: CodemodeProvider): string => namespaceDeclaration(p.name, p.declarations ?? {});
 
 describe("createAgentSelfProvider — shape", () => {
   test("is a well-formed CodemodeProvider", () => {

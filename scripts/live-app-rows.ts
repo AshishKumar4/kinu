@@ -344,12 +344,12 @@ async function measurePlanTabs(newPage: LiveApp['newPage'], origin: string): Pro
 
       const visible = (el: Element): boolean => el.getClientRects().length > 0;
       const nameOf = (el: Element): string => (el.getAttribute('aria-label') ?? el.textContent ?? '').trim();
-      const strip = panel.querySelector('.p-tabstrip');
-      const labels = [...(strip?.querySelectorAll('button') ?? [])].filter(visible).map(nameOf);
+      const tabs = ':is(nav[aria-label="Pages"], nav[aria-label="Workspace"]) li > button';
+      const labels = [...panel.querySelectorAll(tabs)].filter(visible).map(nameOf);
 
-      // Tab-like controls only: the strip's tabs and the journal's filter
+      // Tab-like controls only: the bar's tabs and the journal's filter
       // chips. A plan CARD inside the Work surface is content, not an owner.
-      const planBearing = [...panel.querySelectorAll('.p-tabstrip button, [aria-pressed]')]
+      const planBearing = [...panel.querySelectorAll(`${tabs}, [aria-pressed]`)]
         .filter(visible)
         .map(nameOf)
         .filter((label) => /plan/iu.test(label));
@@ -365,12 +365,12 @@ async function measurePlanTabs(newPage: LiveApp['newPage'], origin: string): Pro
 }
 
 const readStripGeometry = `(() => {
-  const strip = document.querySelector('#inspector .p-tabstrip');
+  const strip = document.querySelector('#inspector nav[aria-label="Pages"]');
   if (strip === null) throw new Error('no inspector tab strip');
   const rule = strip.parentElement;
   if (rule === null) throw new Error('no strip rule container');
-  const active = [...strip.querySelectorAll('button')].find((b) => b.className.includes('p-tab-active'));
-  if (active === undefined) throw new Error('no active tab');
+  const active = rule.querySelector('nav li:has(> button[aria-current="true"])');
+  if (active === null) throw new Error('no active tab');
   const panel = rule.closest('#inspector');
   if (panel === null) throw new Error('no inspector column around the strip');
   return {
@@ -512,7 +512,7 @@ async function measureWalkthrough(newPage: LiveApp['newPage'], origin: string): 
   return verdict;
 }
 
-const MARKED_TAB = `(document.querySelector('#inspector .p-tabstrip [aria-current="true"]')?.getAttribute('aria-label') ?? null)`;
+const MARKED_TAB = `(document.querySelector('#inspector :is(nav[aria-label="Pages"], nav[aria-label="Workspace"]) [aria-current="true"]')?.getAttribute('aria-label') ?? null)`;
 
 const RECORD_MARKS = `(() => {
   const marks = [${MARKED_TAB}];
@@ -1118,7 +1118,7 @@ async function measureUnsentAnswer(newPage: LiveApp['newPage'], origin: string, 
   }
 }
 
-const WORK_TAB = `document.querySelector('#inspector .p-tabstrip [aria-label="Work"]')`;
+const WORK_TAB = `document.querySelector('#inspector nav[aria-label="Workspace"] [aria-label="Work"]')`;
 
 /** Row 8: the inspector never moves its selection on its own. In a new
  *  workspace the panel resolves to its first tab; the first turn saves a note,
@@ -1587,7 +1587,7 @@ async function measurePlanTasks(newPage: LiveApp['newPage'], origin: string): Pr
     });
     // The handoff turn runs on its own; the row reads the Work list once it has answered, whatever it shows.
     await until(page, "the approved plan's turn to end", `(${ANSWER_BLOCKS}).at(-1) === 'P:Implemented the approved plan.' && !(${STOP_OFFERED})`);
-    await page.click('#inspector .p-tabstrip button[aria-label="Work"]');
+    await page.click('#inspector nav[aria-label="Workspace"] button[aria-label="Work"]');
     await until(page, "the Work tab's list or its plan's review", `document.querySelector('[data-work-plans], [data-back-to-work]') !== null`);
 
     if (await page.$('[data-back-to-work]') !== null) await page.click('[data-back-to-work]');

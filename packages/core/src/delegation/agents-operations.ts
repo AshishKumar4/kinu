@@ -213,7 +213,7 @@ export function createAgentsTool(deps: AgentsToolDeps) {
 export function createAgentsCodemodeProvider(deps: () => AgentsToolDeps): CodemodeProvider {
   const { mode } = deps();
 
-  return codemodeNamespace('agents', serveAgents(() => ({ ...deps(), mode })).map((served) => ({
+  return codemodeNamespace('agents', 'Delegate work to other agents and message them.', serveAgents(() => ({ ...deps(), mode })).map((served) => ({
     ...served,
     run: async (input, call) => await settle(Effect.catchCause(Effect.promise(() => served.run(input, call)), (failed) => {
       const cause = Cause.squash(failed);

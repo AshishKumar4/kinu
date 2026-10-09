@@ -22,7 +22,7 @@ async function openAgentTab(page: Page): Promise<void> {
     await page.waitForSelector('button[aria-label="Hide inspector"]');
   }
 
-  await page.click('button[title="Agent"]');
+  await page.click('button[aria-label="Agent"]');
   await page.waitForSelector('[data-section="memory"]');
 }
 
@@ -35,9 +35,9 @@ test('Files recovers current workspace data after a failed read and reconnect', 
     await page.waitForSelector('[data-composer-root]');
     // The first open belongs to the initial connection.
     await page.evaluate(() => window.dispatchEvent(new Event('gallery-reconnect')));
-    await page.click('button[title="Agent"]');
+    await page.click('button[aria-label="Agent"]');
     await page.waitForFunction(() => document.body.textContent?.includes('Memory before'));
-    await page.click('button[title="Files"]');
+    await page.click('button[aria-label="Files"]');
     await page.waitForFunction(() => document.querySelector('[data-files-surface]')?.textContent?.includes('before.txt'));
     await page.evaluate(() => { document.documentElement.dataset.workspaceFault = '1'; });
     await page.click('[aria-label="Refresh"]');
@@ -54,7 +54,7 @@ test('Files recovers current workspace data after a failed read and reconnect', 
     const recovered = await page.$eval('[data-files-surface]', (el) => el.textContent);
     expect(recovered).not.toContain('before.txt');
     expect(recovered).not.toContain('Network connection lost');
-    await page.click('button[title="Agent"]');
+    await page.click('button[aria-label="Agent"]');
     await page.waitForFunction(() => document.body.textContent?.includes('Memory current'));
     expect(await page.evaluate(() => document.body.textContent)).not.toContain('Memory before');
     await page.close();
@@ -176,7 +176,7 @@ async function filesOnSocket(page: Page, origin: string, socket: 'dead' | 'refus
   await page.waitForSelector('[data-composer-root]');
   // The stub's first open belongs to the initial connection, so a later one is the page's reconnect.
   await page.evaluate(() => window.dispatchEvent(new Event('gallery-reconnect')));
-  await page.click('button[title="Files"]');
+  await page.click('button[aria-label="Files"]');
   await page.waitForFunction(() => document.querySelector('[data-files-surface]')?.textContent?.includes('before.txt'));
   await page.evaluate((mode) => {
     document.documentElement.dataset.workspaceRevision = 'current';

@@ -181,11 +181,11 @@ describe('an answer\'s page in the chat', () => {
         await page.hover(CARD);
         await page.click(`${CARD} button[aria-label="Save redemptions as a slate"]`);
         await page.waitForSelector(`${CARD} [data-slate-saved="coupon-redemptions"]`);
-        await page.waitForSelector('.p-tabstrip button[aria-label="Coupon redemptions"]');
+        await page.waitForSelector('nav[aria-label="Pages"] button[aria-label="Coupon redemptions"]');
 
         await page.hover(CARD);
         await page.click(`${CARD} [data-slate-saved="coupon-redemptions"]`);
-        await page.waitForSelector('.p-tabstrip button[aria-label="Coupon redemptions"][aria-current="true"]');
+        await page.waitForSelector('nav[aria-label="Pages"] button[aria-label="Coupon redemptions"][aria-current="true"]');
       } finally { await page.close(); }
     });
   });

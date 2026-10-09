@@ -1511,6 +1511,9 @@ const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
   // Read as `result.plans` / `result.tasks`.
   if (method === "listWorkspaceWork") return rpcResult({ plans: [], tasks: [] }).json<T>();
 
+  // A `SandboxSizeState`: the blanket `[]` below reads as a start refused for `undefined`.
+  if (method === "getSandboxSize") return rpcResult(v.parse(JsonValueSchema, AGENT_RPC.get(method))).json<T>();
+
   // Read as `result.builtIn.map(...)`; three halves, as the orchestrator answers it.
   if (method === "getToolDescriptions") return rpcResult({ builtIn: [], executors: [], crafted: [] }).json<T>();
 
@@ -6549,8 +6552,15 @@ async function updatesFrame(): Promise<{ node: React.ReactNode; entries: string[
   };
 }
 
-/** Routed: FilesSurface reads `agentId` for the raw-bytes route. `&offline=device` shows the disconnected row, `&wide=1` the ≥64rem side-panel preview. */
+/** Routed: FilesSurface reads `agentId` for the raw-bytes route. `&offline=device` shows the disconnected row, `&wide=1` the ≥64rem side-panel preview,
+ *  `&narrow=1` the column at whatever width the viewport gives it, as a phone does. */
 interface MountedFrame { node: React.ReactNode; entries: string[] }
+
+function driveColumn(params: URLSearchParams, column: string): string {
+  if (params.get("wide") !== null) return "w-[1240px]";
+
+  return params.get("narrow") === null ? column : "w-full";
+}
 
 function driveFrame(frameName: "environment" | "files"): MountedFrame {
   const params = new URLSearchParams(location.search);
@@ -6564,7 +6574,7 @@ function driveFrame(frameName: "environment" | "files"): MountedFrame {
           element={<DriveFrame
             initialSurface={frameName === "files" ? "Files" : "Environment"}
             offlineDevice={params.get("offline") === "device"}
-            width={params.get("wide") === null ? column : "w-[1240px]"}
+            width={driveColumn(params, column)}
             deferPreview={params.get("deferpreview") === "1"}
           />} />
       </Routes>

@@ -308,14 +308,7 @@ async function launchBrowser(): Promise<{ browser: TestChrome; page: Page }> {
 
 async function sendMission(page: Page): Promise<void> {
   await page.waitForSelector("textarea", { timeout: 60_000 });
-  const tabs = await page.$$("button");
-
-  for (const tab of tabs) {
-    if ((await tab.evaluate((el) => (el.title ?? el.textContent ?? "").trim())) === "Swarms") {
-      await tab.click();
-      break;
-    }
-  }
+  await (await page.$('button[aria-label="Swarms"]'))?.click();
 
   await Bun.sleep(500);
 

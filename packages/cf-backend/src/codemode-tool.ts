@@ -7,7 +7,7 @@ import * as v from 'valibot';
 import { createCodeTool } from "@cloudflare/codemode/ai";
 import { type Tool, type ToolSet } from 'ai';
 import { execCallArgs, readDeviceRequestChannel, type CodemodeSurface, type DeviceRequestChannel, type ExecutorProviderSurface } from "@kinu.run/core";
-import { renderCodemodeDescription, nativeToolFunctions, toolsNamespace, CRAFTED_TOOL_NAMESPACE, type CodemodeProvider, type WorkMode, currentWorkMode, permitInPlan, toolsInWorkMode, providersInWorkMode, withCraftedToolDeclarations, codemodeInputSchema, withCodemodeProgram, craftedFailureFunctions, codemodeFunction, JsonValueSchema, type JsonObject, type JsonValue, type ToolSurfaceNarrowing } from "@kinu.run/core";
+import { renderCodemodeDescription, programDeclarations, describeProgramSource, nativeToolFunctions, toolsNamespace, CRAFTED_TOOL_NAMESPACE, type CodemodeProvider, type WorkMode, currentWorkMode, permitInPlan, toolsInWorkMode, providersInWorkMode, withCraftedToolDeclarations, codemodeInputSchema, withCodemodeProgram, craftedFailureFunctions, codemodeFunction, JsonValueSchema, type JsonObject, type JsonValue, type ToolSurfaceNarrowing } from "@kinu.run/core";
 import { KinuError } from '@kinu.run/core/obs';
 import {
   KinuSandboxExecutor, renderToolsPrelude, type ProgramLaunch,
@@ -118,8 +118,6 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
       // Built per call with the call's signal: createCodeTool runs its executor without the tool call's options,
       // so a program's tool calls are stopped with its eval only through what this closure binds.
       const build = (mode: WorkMode, signal: AbortSignal | undefined): Tool => {
-        const executor = new KinuSandboxExecutor(options.launch(mode !== 'plan'));
-
         // No prelude here: createCodeTool drops every one; the per-call executor below restores them. A native name
         // shadows an external one.
         const toolsProvider = toolsNamespace({ ...toolsInWorkMode(mode, reach(surface.external())), ...reachable }, signal);
@@ -128,10 +126,11 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
         const reached = [...scope.reach.narrowProviders([toolsProvider]), ...providersInWorkMode(mode, scope.reach.narrowProviders(providers))];
         const { nested } = scope;
         const bound = nested === undefined ? reached : reached.map((provider) => guarded(provider, nested));
+        const executor = new KinuSandboxExecutor(options.launch(mode !== 'plan'), describeProgramSource(programDeclarations(bound)));
 
         const built = createCodeTool({
           // Composed here: the vendor's `{{types}}` replace reads `$` as a pattern.
-          description: renderCodemodeDescription(bound, surface.native),
+          description: renderCodemodeDescription(bound),
           tools: bound,
           executor: {
             // Crafted set and prelude are read as the program starts.
