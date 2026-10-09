@@ -2417,7 +2417,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const snapshot = () => this.agentSnapshot(actorId);
 
     return {
-      turnOwed: async () => this.currentTurnOf(reference) !== null || await (await facet()).owed(snapshot()),
+      // Only an agent that has not said it rests is asked: asking opens its chat, which a page's open must not do idly.
+      turnOwed: async () => this.currentTurnOf(reference) !== null
+        || (this.agentWakes.armed(actorId) && await (await facet()).owed(snapshot())),
       // A hosted turn opens its room at step 0 in each activation (`drainActorAssignments`): its relay holds every step the room restates.
       steps: () => [],
       getConnection: (id) => this.getConnection(id),
