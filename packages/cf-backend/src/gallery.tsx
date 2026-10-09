@@ -722,10 +722,11 @@ function accountComputerSizeFixture(path: string, method: string, body: BodyInit
 
   if (method === "PUT") {
     const { value } = v.parse(v.object({ value: v.string() }), JSON.parse(v.parse(v.string(), body)));
+    const stored = { key: "sandbox_size", value };
 
-    STUB.set(path, { key: "sandbox_size", value });
+    STUB.set(path, stored);
 
-    return fixtureJson({ ok: STUB.has(path) });
+    return fixtureJson(v.parse(JsonValueSchema, stored));
   }
 
   return null;
