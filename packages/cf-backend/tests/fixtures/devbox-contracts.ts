@@ -1,13 +1,15 @@
 /** The deploy tier's eval-owned throwaway Worker. No route is added to Kinu. */
 import * as v from 'valibot';
-import { Devbox, GOLDEN_NAME, type BoxPeers, type DevboxStore } from '../../../devbox/src/index';
+import { Devbox, GOLDEN_NAME, type BoxPeers, type DevboxStore, type DevboxState } from '../../../devbox/src/index';
+import { NimbusWorkspace } from '@nimbus-sh/core/workspace/nimbus-workspace.js';
 import { GOLDEN_BASE, GoldenStateSchema, pipeParts } from '../../../devbox/src/golden';
 import { settle } from '../../../devbox/src/errors';
 import { DEFAULT_DEVBOX_POLICY, describeThrown } from '../../../devbox/src/lifecycle';
 import { runContainerContract } from '../../../devbox/bench/container-contracts';
 import { CONTAINER_CONTRACTS, DISK_CONTRACTS } from '../../../devbox/bench/contract-types';
 import { diskContract } from '../../../devbox/bench/disk-contracts';
-import { desktopClientUrl, withAppSecurityHeaders } from '@kinu.run/core';
+import { desktopClientUrl, sandboxFiles, withAppSecurityHeaders } from '@kinu.run/core';
+import { adaptCloudflareSandbox } from '../../src/sandbox-exec-lane';
 import { terminalRoutes } from '../../src/terminal-route';
 import { serveFamily } from '../helpers/api';
 
@@ -29,6 +31,22 @@ interface Env {
 const Snapshot = v.looseObject({ id: v.string(), lineage: v.optional(v.array(v.string()), []) });
 
 export class ContractBox extends Devbox<Env> {
+  #guestCalls = 0;
+
+  constructor(ctx: DevboxState, env: Env) {
+    super(ctx, env);
+    const container = ctx.container;
+
+    if (container !== undefined) {
+      const exec = container.exec.bind(container);
+      container.exec = (argv, options) => {
+        this.#guestCalls += 1;
+
+        return exec(argv, options);
+      };
+    }
+  }
+
   enableInternet = this.env.PROBE_HTTP === '1';
   protected override get containerImage(): string { return GOLDEN_BASE; }
   protected override get store(): DevboxStore { return { binding: 'STORE', bucket: this.env.STORE }; }
@@ -40,6 +58,42 @@ export class ContractBox extends Devbox<Env> {
   }
   protected override get policy() { return { ...DEFAULT_DEVBOX_POLICY, checkpointIntervalMs: 2_000 }; }
   protected override get ambientCheckpoints(): boolean { return false; }
+
+  /** Counts the actual native exec boundary, not Files or listFiles mocks. D81 records the cloud control. */
+  async fileContract() {
+    await this.ensureReady();
+    const workspace = await NimbusWorkspace.create({ sql: this.ctx.storage.sql, transactions: this.ctx });
+    workspace.filesystem.vfs.mount('/sandbox', sandboxFiles(adaptCloudflareSandbox(this, async () => {}, null)), { resolvesPaths: true });
+    const listing: { width: number; calls: number; ms: number }[] = [];
+    const find: { command: string; calls: number; ms: number; entries: number }[] = [];
+
+    for (const width of [1, 72]) {
+      const path = `/var/tmp/devbox-contracts/list-${String(width)}`;
+      await this.exec(`mkdir -p ${path}; for i in $(seq 1 ${String(width)}); do mkdir -p ${path}/entry-$i; done`);
+      const calls = this.#guestCalls;
+      const at = Date.now();
+      const listed = await this.listFiles(path);
+
+      if (listed.files.length !== width) throw new Error('the listing lost a directory');
+      listing.push({ width, calls: this.#guestCalls - calls, ms: Date.now() - at });
+    }
+
+    for (let repeat = 0; repeat < 3; repeat += 1) {
+      const command = 'find /sandbox/usr/share -maxdepth 1';
+      const calls = this.#guestCalls;
+      const at = Date.now();
+      const ran = await workspace.exec(command);
+
+      if (ran.exitCode !== 0) throw new Error(`the find failed: ${ran.stderr}`);
+      find.push({ command, calls: this.#guestCalls - calls, ms: Date.now() - at, entries: ran.stdout.trim().split('\n').length });
+    }
+
+    const measured = { listing, find };
+
+    if (listing.some(row => row.calls !== 1)) throw new Error(`a directory listing must cost one guest call: ${JSON.stringify(measured)}`);
+
+    return measured;
+  }
 
   async contract(kind: typeof CONTAINER_CONTRACTS[number]): Promise<void> {
     const container = this.ctx.container;
@@ -162,6 +216,7 @@ export default {
         case '/view': return new Response(`<iframe src="${desktopClientUrl(url, name)}" style="width:1280px;height:800px;border:0"></iframe>`, { headers: { 'content-type': 'text/html' } });
         case '/golden': return Response.json({ id: await box.ensureGolden() });
         case '/inspection': return Response.json(await box.inspection());
+        case '/file-contract': return Response.json(await box.fileContract());
         case '/contract': await box.contract(v.parse(v.picklist(CONTAINER_CONTRACTS), url.searchParams.get('kind')));
 
  return Response.json({ ok: true });

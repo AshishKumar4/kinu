@@ -361,6 +361,8 @@ async function main(): Promise<void> {
 
   /** The container's contracts, the desktop through the product routes, and the product's own chain. */
   const productContracts = async () => {
+    await step('file-metadata', () => call('/file-contract', Json, {}, names[1]));
+
     for (const kind of CONTAINER_CONTRACTS) await step(kind, () => call(`/contract?kind=${kind}`, Json, {}, names[1]));
 
     // `--headless`: everything but the desktop's client, which drives a browser on this host.
