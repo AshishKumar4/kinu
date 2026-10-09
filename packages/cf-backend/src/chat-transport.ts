@@ -26,8 +26,9 @@ export type ChatSocket = Pick<Connection, 'id' | 'send' | 'readyState'>;
 
 /** Every room replays a joiner the open turn: the steps its ledger records, then the relay's chunks after them. */
 export interface ChatWire {
-  /** A turn this activation has not opened yet: the one an ended activation left open, or an acknowledged send. */
-  turnOwed(): boolean;
+  /** A turn this activation has not opened yet: the one an ended activation left open, or an acknowledged send. Asked of
+   *  the agent's own isolate, which re-opens such a turn when it starts, before it has told this room. */
+  turnOwed(): Promise<boolean>;
   /** The open turn's finished steps as its ledger records them, drawn. */
   steps(): readonly (readonly JsonObject[])[];
   broadcast(message: string, exclude?: string[]): void;
@@ -245,6 +246,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   private readonly parked = new Map<string, { readonly connection: ChatSocket; readonly probeId: string | undefined }>();
   private readonly requests = new Map<string, string>();
   private live: LiveStream | null = null;
+  /** Turns this room has opened, so an answer awaited across one knows a turn came and went. */
+  private opened = 0;
 
   constructor(readonly wire: ChatWire) {}
 
@@ -252,7 +255,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   async onConnect(connection: ChatSocket): Promise<void> {
     const history = await this.wire.history(TRANSCRIPT_WINDOW);
 
-    this.announce(connection);
+    await this.announce(connection);
     sendIfOpen(connection, transcriptFrame(history));
   }
 
@@ -265,8 +268,14 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
   /** Told proactively on connect and again on the tab's own request; the client acknowledges once. False when no
    *  turn streams here and none is owed. */
-  private announce(connection: ChatSocket, probeId?: string): boolean {
+  private async announce(connection: ChatSocket, probeId?: string): Promise<boolean> {
+    const opened = this.opened;
+
+    if (this.live === null && !await this.wire.turnOwed()) return false;
     const { live } = this;
+
+    // The owed turn may have opened here while its isolate answered, and ended too: then nothing is pending.
+    if (live === null && this.opened !== opened) return false;
 
     if (live !== null) {
       this.notifyResuming(connection, live, probeId);
@@ -274,7 +283,6 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       return true;
     }
 
-    if (!this.wire.turnOwed()) return false;
     this.parked.set(connection.id, { connection, probeId });
     sendIfOpen(connection, JSON.stringify({ type: MessageType.CF_AGENT_STREAM_PENDING, ...(probeId !== undefined && { probeId }) }));
 
@@ -357,7 +365,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     switch (event.type) {
       case 'stream-resume-request':
         // `idle` is load-bearing: the hook keeps waiting on a probe answered with anything weaker.
-        if (!this.announce(connection, event.probeId)) {
+        if (!await this.announce(connection, event.probeId)) {
           sendIfOpen(connection, JSON.stringify({ type: MessageType.CF_AGENT_STREAM_RESUME_NONE, reason: 'idle', probeId: event.probeId }));
         }
 
@@ -492,6 +500,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     };
 
     this.live = live;
+    this.opened += 1;
 
     for (const { connection, probeId } of this.parked.values()) this.notifyResuming(connection, live, probeId);
     this.parked.clear();

@@ -2398,7 +2398,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const snapshot = () => this.agentSnapshot(actorId);
 
     return {
-      turnOwed: () => this.currentTurnOf(reference) !== null,
+      turnOwed: async () => this.currentTurnOf(reference) !== null || await (await facet()).owed(snapshot()),
       // A hosted turn opens its room at step 0 in each activation (`drainActorAssignments`): its relay holds every step the room restates.
       steps: () => [],
       getConnection: (id) => this.getConnection(id),
