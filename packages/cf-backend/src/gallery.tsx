@@ -1026,8 +1026,31 @@ function touchFixture(): Response {
 }
 
 /** The account's own answers: Settings' frames whole, and on any page the owner's decision on a memory proposal. */
+/** Uploads the files frame has asked about: the first over a file already listed is a conflict, the replace lands. */
+const uploadsAsked = new Set<string>();
+
+/**
+ * The files frame's raw upload route: an upload over `AGENTS.md`, which the listing holds, answers as the route does for
+ * a create over a file already there (412, naming its revision); the owner's replace that follows lands.
+ */
+function galleryUploadFixture(path: string, method: string): Response | null {
+  if (method !== "PUT" || !/^\/api\/workspaces\/[^/]+\/files\?/.test(path)) return null;
+  const target = new URLSearchParams(path.slice(path.indexOf("?") + 1)).get("path") ?? "";
+
+  if (target.endsWith("/AGENTS.md") && !uploadsAsked.has(target)) {
+    uploadsAsked.add(target);
+
+    return Response.json({ error: "This file changed after you opened it.", revision: 7 }, { status: 412 });
+  }
+
+  return Response.json({ ok: true, revision: 8 });
+}
+
 function userFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response> | null {
   if (ACCOUNT_FIXTURE_FRAMES.has(frame) && path.startsWith("/api/user/")) return userSettingsFixture(path, method, body);
+  const upload = galleryUploadFixture(path, method);
+
+  if (upload !== null) return Promise.resolve(upload);
   const decided = galleryMemoryDecision(path, method, body);
 
   return decided === null ? null : Promise.resolve(decided);
