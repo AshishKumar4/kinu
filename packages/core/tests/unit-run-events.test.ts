@@ -247,6 +247,18 @@ describe('RunEventRecorder.read', () => {
     expect(runEnd.error).toBe('Bad Request: content parts must be text or image_url');
   });
 
+  test('filters in SQL before decoding an unrelated event payload', () => {
+    const { recorder, sql, actor } = setup();
+
+    recorder.emit('run-1', { type: 'turn_start', turnIndex: 0 });
+    const selected = recorder.emit('run-1', { type: 'error', message: 'selected failure' });
+
+    void sql`UPDATE run_events SET payload = ${'not-json'} WHERE actor_id = ${actor.actorId} AND run_id = 'run-1' AND event_index = 0`;
+
+    expect(recorder.read('run-1', { types: ['error'] })).toEqual([selected]);
+    expect(recorder.readText('run-1', boundRunEventQuery({ types: ['error'] })).map((row) => row.eventIndex)).toEqual([selected.eventIndex]);
+  });
+
   test('honors types filter', () => {
     const { recorder } = setup();
     recorder.emit('run-1', { type: 'run_start', agentId: 'a' });
@@ -291,57 +303,7 @@ describe('RunEventRecorder.read', () => {
   });
 });
 
-describe('RunEventRecorder.readSince', () => {
-  test('returns events strictly after the given index — for SSE resume', () => {
-    const { recorder } = setup();
-
-    for (let i = 0; i < 5; i++) {
-      recorder.emit('run-1', { type: 'error', message: `t${i}` });
-    }
-
-    const after2 = recorder.readSince('run-1', 2);
-    expect(after2.length).toBe(2);
-    expect(after2[0].eventIndex).toBe(3);
-  });
-
-  test('returns empty when no events after', () => {
-    const { recorder } = setup();
-    recorder.emit('run-1', { type: 'run_end' });
-    expect(recorder.readSince('run-1', 100).length).toBe(0);
-  });
-  test('a negative limit reads one row, never the whole tail', () => {
-    // `LIMIT -1` in SQLite means no limit.
-    const { recorder } = setup();
-
-    for (let i = 0; i < 40; i++) {
-      recorder.emit('run-1', { type: 'error', message: `t${i}` });
-    }
-
-    expect(recorder.readSince('run-1', -1, -1).length).toBe(1);
-    expect(recorder.readSince('run-1', 0, -9999).length).toBe(1);
-  });
-
-  test('a non-finite limit means unstated and takes the default', () => {
-    const { recorder } = setup();
-
-    for (let i = 0; i < 600; i++) {
-      recorder.emit('run-1', { type: 'error', message: `t${i}` });
-    }
-
-    expect(recorder.readSince('run-1', -1, Number.NaN).length).toBe(500);
-    expect(recorder.readSince('run-1', -1, Number.POSITIVE_INFINITY).length).toBe(500);
-  });
-
-  test('a fractional limit truncates instead of failing the query', () => {
-    const { recorder } = setup();
-
-    for (let i = 0; i < 40; i++) {
-      recorder.emit('run-1', { type: 'error', message: `t${i}` });
-    }
-
-    expect(recorder.readSince('run-1', -1, 2.7).length).toBe(2);
-  });
-});
+;
 
 describe('RunEventRecorder.observe', () => {
   test('fans out new events to subscribers', () => {

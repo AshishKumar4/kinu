@@ -222,7 +222,7 @@ describe('v2 e2e: scaffold proposal and promotion', () => {
 });
 
 describe('v2 e2e: durable event log', () => {
-  test('emit through a turn lifecycle; replay via readSince', () => {
+  test('emit through a turn lifecycle; resume with the indexed reader', () => {
     const db = new Database(':memory:');
     initRunEventTables(makeExecRaw(db));
     const sql = makeSql(db);
@@ -246,7 +246,7 @@ describe('v2 e2e: durable event log', () => {
     expect(all[0].eventIndex).toBe(0);
     expect(all[6].eventIndex).toBe(6);
 
-    const resumed = recorder.readSince(runId, 3);
+    const resumed = recorder.read(runId, { since: 4 });
     expect(resumed.length).toBe(3);
     expect(resumed[0].eventIndex).toBe(4);
 

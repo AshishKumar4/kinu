@@ -434,47 +434,16 @@ export class RunEventRecorder {
     this.actor.assertCurrent();
     const limit = boundedInt(opts.limit, RUN_EVENT_LIMIT_DEFAULT, 1, Number.MAX_SAFE_INTEGER);
     const since = boundedInt(opts.since, 0, 0, Number.MAX_SAFE_INTEGER);
-    const types = opts.types && opts.types.length > 0 ? new Set<string>(opts.types) : null;
+    const types = opts.types !== undefined && opts.types.length > 0 ? JSON.stringify(opts.types) : null;
 
-    if (!types) {
-      const rows = this.sql<{ payload: string }>`
-        SELECT payload FROM run_events
-        WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND event_index >= ${since}
-        ORDER BY event_index ASC
-        LIMIT ${limit}`;
+    const rows = this.sql<{ payload: string }>`
+      SELECT payload FROM run_events
+      WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND event_index >= ${since}
+        AND (${types} IS NULL OR type IN (SELECT value FROM json_each(${types})))
+      ORDER BY event_index ASC
+      LIMIT ${limit}`;
 
-      return rows.map((r) => parseStoredRunEvent(r.payload));
-    }
-
-    // Type filter runs client-side (no portable dynamic IN-clause), paging forward on `event_index`
-    // until `limit` matches are filled so sparse matches are not lost.
-    const matched: RunEvent[] = [];
-    let cursor = since;
-    const fetchLimit = Math.min(limit * 4, 2000);
-
-    while (matched.length < limit) {
-      const rows = this.sql<{ payload: string; event_index: number }>`
-        SELECT payload, event_index FROM run_events
-        WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND event_index >= ${cursor}
-        ORDER BY event_index ASC
-        LIMIT ${fetchLimit}`;
-
-      const last = rows[rows.length - 1];
-
-      if (last === undefined) break;
-
-      for (const row of rows) {
-        if (matched.length >= limit) break;
-        const event = parseStoredRunEvent(row.payload);
-
-        if (types.has(event.type)) matched.push(event);
-      }
-
-      if (rows.length < fetchLimit) break;
-      cursor = last.event_index + 1;
-    }
-
-    return matched;
+    return rows.map((row) => parseStoredRunEvent(row.payload));
   }
 
   /**
@@ -613,20 +582,6 @@ export class RunEventRecorder {
     const event = parseStoredRunEvent(row.payload);
 
     return event.type === 'step_finish' ? event : null;
-  }
-
-  /** No live caller; SSE resume goes through {@link readText}. */
-  readSince(runId: string, afterIndex: number, limit = RUN_EVENT_LIMIT_MAX): RunEvent[] {
-    this.actor.assertCurrent();
-    const capped = boundedInt(limit, RUN_EVENT_LIMIT_MAX, 1, Number.MAX_SAFE_INTEGER);
-
-    const rows = this.sql<{ payload: string }>`
-      SELECT payload FROM run_events
-      WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND event_index > ${afterIndex}
-      ORDER BY event_index ASC
-      LIMIT ${capped}`;
-
-    return rows.map((r) => parseStoredRunEvent(r.payload));
   }
 
   finishedSteps(runId: string): { readonly messages: readonly JsonValue[]; readonly usage: Usage | undefined }[] {
