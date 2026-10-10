@@ -201,8 +201,13 @@ const turnStatements = new Map<number, { readonly workspace: OperationCost['tabl
  * workspace's 376 and main's 449 once its figures ask nothing. Most of main's re-read what the workspace reads too:
  * its actor and identity rows (workspace_actors 133, workspace_identity 10) and its config (actor_config 56); then
  * its claims and stream parts (65) and run events (31).
+ * 836 once main's isolate asks the workspace what it alone holds, at both sizes over 3 runs (194a6f8b8 against
+ * f1ee92551): the open tasks and running jobs its task reminder reads as the turn settles (agent_tasks +1,
+ * background_jobs +2; main's own agent_tasks -1), the warming lane each request and turn end tells (cache_warm +3),
+ * and the fleet row its handoff owes as an effect (terminal_effects +2). Each of those four calls resolves the agent's
+ * roster row twice on entry (workspace_actors +8); the activity log writes 4 fewer. The workspace's 388, main's 448.
  */
-const TURN_STATEMENTS = 825;
+const TURN_STATEMENTS = 836;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {
