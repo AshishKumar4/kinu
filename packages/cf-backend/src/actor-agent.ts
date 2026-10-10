@@ -2895,7 +2895,7 @@ export abstract class ActorAgent extends Agent<Env> {
         return yield* new KinuError('denied', 'A caller path names one hosted actor; a nested path names an actor no directory holds.');
       }
 
-      return yield* Effect.promise(async () => this.actorHost().run(this.hostedSlateCaller(name), { kind: 'actor' }, async (actor) => {
+      return yield* Effect.promise(async () => this.withHostedActor(this.hostedSlateCaller(name), async (actor) => {
         if (route.kind === 'ai') {
           // A hosted actor runs the model call through its own profile, resolved now.
           return await this.slateAiRun(route, actor.handle);
@@ -3201,7 +3201,7 @@ export abstract class ActorAgent extends Agent<Env> {
     actor: ActorReference | null, requested: WorkMode, use: (providers: readonly CodemodeProvider[]) => Promise<A>,
   ): Promise<A> {
     if (actor !== null) {
-      return await this.actorHost().run(actor, { kind: 'actor' }, async (hosted) => {
+      return await this.withHostedActor(actor, async (hosted) => {
         // An operation call is the agent's own, so it reaches the account as the agent's programs do; a slate's never does.
         const surface = hostedActorSurface(hosted, {
           search: this.ownedModelServices.getWebSearchProvider(), sessions: this.browserSessionsFor(hosted.handle.actorId),
@@ -3220,6 +3220,15 @@ export abstract class ActorAgent extends Agent<Env> {
     const authority = await this.slateAuthority(requested, providers, Object.keys(mcp));
 
     return await reachedIn(authority, providers, { ...this.extensions.tools(), ...mcp, ...this.getRawToolsForWorkMode(authority.mode) }, use);
+  }
+
+  /** Cold ordinary actors retain their existing opener; active run seats are used, never re-composed. */
+  private async withHostedActor<Result>(reference: ActorReference, work: (actor: HostedActor) => Promise<Result>): Promise<Result> {
+    const host = this.actorHost();
+
+    if (host.hosted(reference) === null) await host.acquire(reference, { kind: 'actor' });
+
+    return await host.runHosted(reference, work);
   }
 
   /** The namespaces this actor's own programs reach in `mode`: what a role names and narrows. */
