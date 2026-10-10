@@ -25,6 +25,8 @@ export type InputMachineEvent =
   | { type: 'turn-start' }
   | { type: 'turn-settled' }
   | { type: 'escape'; now: number; draft: string; hasUserMessages: boolean }
+  /** Stop the running turn, from a key or a signal: what was queued behind it returns to the input, never fires. */
+  | { type: 'interrupt'; draft: string }
   | { type: 'queue-shortcut'; draft: string }
   | { type: 'backspace'; draft: string }
   | { type: 'queue'; text: string }
@@ -119,16 +121,9 @@ export function reduceInput(state: InputState, event: InputMachineEvent): InputT
       }
 
       if (busy) {
-        // Interrupt means stop: queued drafts return to the composer instead of auto-firing.
-        const restored = [event.draft.trim(), ...state.queue].filter(Boolean).join('\n');
+        const stopped = reduceInput(state, { type: 'interrupt', draft: event.draft });
 
-        return {
-          state: { ...state, escArmedAt: event.now, queue: [] },
-          effects: [
-            { kind: 'interrupt' },
-            ...(state.queue.length > 0 ? [{ kind: 'set-input', text: restored } satisfies InputEffect] : []),
-          ],
-        };
+        return { state: { ...stopped.state, escArmedAt: event.now }, effects: stopped.effects };
       }
 
       if (event.draft.trim()) {
@@ -143,6 +138,19 @@ export function reduceInput(state: InputState, event: InputMachineEvent): InputT
       }
 
       return { state, effects: [{ kind: 'exit' }] };
+    }
+
+    case 'interrupt': {
+      // Interrupt means stop: queued drafts return to the input instead of auto-firing.
+      const restored = [event.draft.trim(), ...state.queue].filter(Boolean).join('\n');
+
+      return {
+        state: { ...state, queue: [] },
+        effects: [
+          { kind: 'interrupt' },
+          ...(state.queue.length > 0 ? [{ kind: 'set-input', text: restored } satisfies InputEffect] : []),
+        ],
+      };
     }
 
     case 'queue-shortcut': {
