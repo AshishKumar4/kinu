@@ -145,7 +145,7 @@ import {
   STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
   readWorkspaceWork, hasWorkspaceWork, WORK_TAB_JOBS, type WorkspaceWork, inspectWork, type InspectedWork, addressedBlock, type EphemeralSlateAddress,
-  readWorkspaceAgents, readAgentFigures, recordAgentFigures, reportedAgentFigures, type AgentFigures, type AgentAnswer, type ConversationTurnPair, type PanelAgent, type AgentConfigStore, type AskingAgent,
+  readWorkspaceAgents, recordAgentFigures, reportedAgentFigures, type AgentFigures, type AgentAnswer, type ConversationTurnPair, type PanelAgent, type AgentConfigStore, type AskingAgent,
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
   ROOT_DELEGATION_BUDGET, type DelegationBudget,
@@ -3262,11 +3262,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return readWorkspaceAgents({
       sql: this.boundSql, exec: this.ctx.storage.sql, root: this.actorHandle(), queued: this.agentWakes.armed(this.actorHandle().actorId),
       actors: this.workspaceActors().list({ retired: true }),
-      figures: (actorIds) => {
-        const main = this.actorHandle().actorId;
-
-        return new Map([...readAgentFigures(this.boundSql, [main]), ...reportedAgentFigures(this.boundSql, actorIds.filter((actorId) => actorId !== main))]);
-      },
+      // Each agent's own isolate reports them at its turns' ends, main's as any other's: its steps are its isolate's (D9).
+      figures: (actorIds) => reportedAgentFigures(this.boundSql, actorIds),
     });
   }
 
