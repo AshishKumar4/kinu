@@ -12,6 +12,7 @@ import type { ChatTurnRequest } from './agent-turns';
 import { attempt, KinuError, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import type { AgentFacet, AgentFacetCalls, AgentFacetEnv } from './agent-facet/agent-facet';
+import { ASSETS_HOSTS } from './assets-hosts';
 
 export const AGENT_BUNDLE_DIRECTORY = '/_agent';
 
@@ -257,7 +258,7 @@ export interface AgentFacetPlacement {
 }
 
 function agentBundle(assets: Fetcher): Effect.Effect<Response, KinuError> {
-  return attempt({ doing: 'fetching the agent bundle', otherwise: 'unavailable' }, () => assets.fetch(new URL(AGENT_BUNDLE_PATH, 'https://assets.invalid')))
+  return attempt({ doing: 'fetching the agent bundle', otherwise: 'unavailable' }, () => assets.fetch(new URL(AGENT_BUNDLE_PATH, `https://${ASSETS_HOSTS.agentBundle}`)))
     .pipe(Effect.flatMap((response) => {
       const type = response.headers.get('content-type') ?? '';
 
@@ -265,7 +266,7 @@ function agentBundle(assets: Fetcher): Effect.Effect<Response, KinuError> {
         ? Effect.succeed(response)
         : Effect.fail(new KinuError(
           'unavailable', `The agent bundle is missing from this deployment (${AGENT_BUNDLE_PATH} answered ${response.status} ${type}). `
-            + 'Under `vite dev` the ASSETS binding serves only HTML, so agent turns need a deployed Worker.',
+            + 'Under `vite dev` the dev server refuses a host vite.config.ts does not admit (src/assets-hosts.ts).',
         ));
     }));
 }
@@ -274,7 +275,7 @@ const CompatibilitySchema = v.object({ compatibilityDate: v.string(), compatibil
 
 function agentCompatibility(assets: Fetcher) {
   return attempt({ doing: 'reading deployment compatibility', otherwise: 'unavailable' }, async () => {
-    const response = await assets.fetch(new URL(`${AGENT_BUNDLE_DIRECTORY}/compatibility.json`, 'https://assets.invalid'));
+    const response = await assets.fetch(new URL(`${AGENT_BUNDLE_DIRECTORY}/compatibility.json`, `https://${ASSETS_HOSTS.agentBundle}`));
 
     return v.parse(CompatibilitySchema, await response.json());
   });
