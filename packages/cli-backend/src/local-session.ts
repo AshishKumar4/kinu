@@ -460,7 +460,11 @@ export class LocalAgentSession {
     this.workspaceTitleSource = opts.workspaceTitle ?? null;
     this.ancestors = opts.ancestors;
     this.fallbackModel = opts.model ?? null;
-    this.modelResolver = opts.modelResolver?.withAccountChoice?.((provider) => this.accountChoice(provider))
+    this.modelResolver = opts.modelResolver?.withCallScope?.({
+      accountFor: (provider) => this.accountChoice(provider),
+      onProviderWait: (info) => this.recordRunEvent({ type: 'provider_wait', ...info },
+        currentOperationProfile(this.rt.actor)?.runId ?? this.chat.currentRunId ?? WORKSPACE_RUN_ID),
+    })
       ?? opts.modelResolver ?? null;
     this.rt.setModelForRoute?.((resolution) => this.localRouteLlm(resolution));
 
@@ -599,22 +603,6 @@ export class LocalAgentSession {
           alreadyActive: new Set(this.turnActiveSkillNames),
         }),
       },
-    });
-    // The resolver predates this session, so the wait sink is installed. Notices land as
-    // `provider_wait` run events; `recordRunEvent` contains its own failures.
-    this.modelResolver?.setProviderWaitSink?.((info) => {
-      this.recordRunEvent(
-        {
-          type: 'provider_wait',
-          provider: info.provider,
-          waitMs: info.waitMs,
-          attempt: info.attempt,
-          source: info.source,
-          ...(info.modelId !== undefined && { modelId: info.modelId }),
-          ...(info.status !== undefined && { status: info.status }),
-        },
-        currentOperationProfile(this.rt.actor)?.runId ?? this.chat.currentRunId ?? WORKSPACE_RUN_ID,
-      );
     });
     this.compactionExtension = createActorCompaction({
       files: () => this.rt,

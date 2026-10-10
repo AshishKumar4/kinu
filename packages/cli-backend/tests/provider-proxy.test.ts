@@ -87,7 +87,7 @@ function resolverWith(
   if (credentials) options.credentials = credentials;
   const resolver = createLocalModelResolver(options);
 
-  return accountFor ? resolver.withAccountChoice?.(accountFor) ?? resolver : resolver;
+  return accountFor ? resolver.withCallScope?.({ accountFor }) ?? resolver : resolver;
 }
 
 describe('web-UI-connected providers reach local agents', () => {

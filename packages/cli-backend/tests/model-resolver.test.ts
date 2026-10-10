@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { generateText, streamText } from 'ai';
 import {
-  DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, usageTotal,
+  DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, usageTotal, WORKSPACE_RUN_ID,
 } from '@kinu.run/core';
 import type { JsonObject, JsonValue, LLMProviderConfig, ModelCallReport, ModelCallSpend } from '@kinu.run/core';
 import { cloudProxyBaseURL, createLocalModelResolver, createLocalProviderLLM } from '../src/model-resolver';
@@ -18,6 +18,48 @@ import { LocalAgentSession } from '../src/local-session';
 const UNOBSERVED: ModelCallSpend = { source: 'reflection', report: unobservedSpend };
 
 describe('createLocalModelResolver', () => {
+  test('sessions sharing credentials keep routed waits in the calling actor after a sibling closes', async () => {
+    const received: string[] = [];
+
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
+      received.push(request.headers.get('cf-aig-affinity') ?? '');
+
+      return new Response('limited', { status: 429, headers: { 'retry-after': '0' } });
+    } });
+
+    const llm = { name: 'workers-ai', baseURL: server.url.toString(), headers: { Authorization: 'Bearer test' }, model: '@cf/test/owned-waits' };
+    const resolver = createLocalModelResolver({ llm });
+
+    const actors = ['parent', 'child'].map((agentName) => {
+      const db = workspaceDatabase(scratchPath(`wait-${agentName}`, 'agent.db'));
+      const rt = createCLIRuntime(db, { cwd: scratchDir(`wait-folder-${agentName}`), agentName, llm });
+      rt.actor.config.setLearning(false);
+
+      return { db, rt, session: new LocalAgentSession({ rt, db, modelResolver: resolver, onEvent: () => {} }) };
+    });
+
+    const parent = actors[0];
+    const child = actors[1];
+
+    if (parent === undefined || child === undefined) throw new Error('both actors must exist');
+
+    try {
+      await child.session.end();
+      const lane = parent.rt.modelForRoute?.({ source: 'fast', tier: 'fast', model: `workers-ai/${llm.model}`, reasoningEffort: 'high', fallbacks: [], retries: 1 });
+
+      if (lane === undefined) throw new Error('the actor must have its routed model');
+      await expect(lane.complete('title this actor')).rejects.toThrow();
+      expect(parent.session.getRunEvents(WORKSPACE_RUN_ID).some((event) => event.type === 'provider_wait')).toBe(true);
+      expect(child.session.getRunEvents(WORKSPACE_RUN_ID).some((event) => event.type === 'provider_wait')).toBe(false);
+      expect(received.length).toBe(2);
+    } finally {
+      await parent.session.end();
+
+      for (const actor of actors) actor.db.close();
+      await server.stop(true);
+    }
+  });
+
   test('a cloud Workers AI model keeps the cached tokens a trailing duplicate usage report zeroed', async () => {
     const usage = (cached: number) => `data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],`
       + `"usage":{"prompt_tokens":100,"completion_tokens":3,"total_tokens":103,"prompt_tokens_details":{"cached_tokens":${String(cached)}}}}\n\n`;
@@ -411,7 +453,7 @@ describe('createLocalModelResolver', () => {
 
     await generateText({ model: resolver.resolveModel('anthropic@work/claude-x', { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }), prompt: 'hi' });
     await generateText({ model: resolver.resolveModel('anthropic/claude-x', { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }), prompt: 'hi' });
-    const chosen = resolver.withAccountChoice?.((provider) => (provider === 'anthropic' ? 'work' : undefined));
+    const chosen = resolver.withCallScope?.({ accountFor: (provider) => (provider === 'anthropic' ? 'work' : undefined) });
     await generateText({ model: (chosen ?? resolver).resolveModel('anthropic/claude-x', { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }), prompt: 'hi' });
 
     expect(sent).toEqual(['sk-ant-work', 'sk-ant-main', 'sk-ant-work']);

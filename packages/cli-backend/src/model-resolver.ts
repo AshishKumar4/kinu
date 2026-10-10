@@ -37,7 +37,6 @@ import {
   type ModelProvider,
   type ProviderDeps,
   type ProviderInfo,
-  type ProviderWaitInfo,
   type ModelCallSpend,
   type ModelRouteResolution,
   type GenerateRequest,
@@ -123,12 +122,7 @@ export interface LocalModelResolver {
    *  means the turn is assembled ungated rather than gated on an estimate. */
   countInputTokens(specOrNull: string | null | undefined, request: CountableRequest): Promise<InputTokenCount>;
   getAuth: AuthResolver;
-  /**
-   * A setter: the resolver is built before the session owning the sink, and is
-   * shared across sessions, so the last install wins. Unset leaves waits unreported.
-   */
-  setProviderWaitSink?(sink: ((info: ProviderWaitInfo) => void) | undefined): void;
-  withAccountChoice?(choice: (providerId: string) => string | undefined): LocalModelResolver;
+  withCallScope?(scope: Pick<ProviderDeps, 'accountFor' | 'onProviderWait'>): LocalModelResolver;
 }
 
 export interface LocalModelResolverConfig {
@@ -141,9 +135,6 @@ export interface LocalModelResolverConfig {
    *  when absent they list as unavailable, signed out. */
   cloud?: LocalCloudSession;
   fetch?: typeof fetch;
-  /** Read per call so {@link LocalModelResolver.setProviderWaitSink} can install
-   *  the session's sink after construction. */
-  onProviderWait?: (info: ProviderWaitInfo) => void;
 }
 
 /**
@@ -297,7 +288,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     },
   };
 
-  const depsFor = (accountFor?: (providerId: string) => string | undefined): ProviderDeps => ({
+  const deps: ProviderDeps = {
     env: {},
     fetch: cloud
       ? perCloudSession(proxyFetches, cloud, opts.fetch, () => createProviderProxyFetch({
@@ -305,11 +296,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
       }))
       : opts.fetch,
     ...credentialReads,
-    onProviderWait: (info) => { opts.onProviderWait?.(info); },
-    accountFor,
-  });
-
-  const deps = depsFor();
+  };
 
   const normalizeSpecSync = (specOrNull?: string | null): string =>
     normalizeModelSpec(specOrNull, registry, { spec: defaultSpec, missing: noDefaultModelMessage() });
@@ -341,12 +328,9 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
 
       return countRequestInputTokens(registry.get(provider), modelId, accountDeps(own, provider, account), request);
     },
-    getAuth: deps.getAuth,
-    setProviderWaitSink(sink) {
-      opts.onProviderWait = sink;
-    },
-    withAccountChoice(choice) {
-      return resolverWith(depsFor(choice));
+    getAuth: own.getAuth,
+    withCallScope(scope) {
+      return resolverWith({ ...own, ...scope });
     },
   });
 
