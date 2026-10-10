@@ -260,7 +260,7 @@ export const DECLARED = byFile([
       'a gallery fixture that mirrors SlateHost.preview\'s answer'],
     ['packages/cf-backend/src/gallery.tsx', ['accountProfileFixture', 'deviceRowsFixture', 'galleryFetch', 'data', 'savePlanReviewAnnotations', 'galleryAnnotationSave', 'previewSlate', 'slate', 'galleryPlanRpc', 'galleryRosterRpc', 'PICKER_TEST_RESULTS', 'galleryModelTest', 'slateRpc', 'approvalsRpc', 'filesRpc'],
       'gallery fixtures that mirror RPC, HTTP and model-test answers'],
-    ['packages/cf-backend/src/hooks/use-kinu.ts', ['dismissSubordinate'],
+    ['packages/cf-backend/src/hooks/use-workspace-reads.ts', ['dismissSubordinate'],
       'the dismissSubordinate RPC answer as the hook passes it on'],
     ['packages/cf-backend/src/mcp-server.ts', ['McpAgentClient'],
       'the saveNoteFromMcp RPC answer the MCP save_note tool returns'],

@@ -8,7 +8,7 @@ import { KinuLogo } from "./ui/KinuLogo";
 import type { RosterEntry, WorkspaceEntry } from "../lib/user-api";
 import { useAccount } from "@/hooks/use-account";
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
-import { useWorkspaceRpc, type ConnectionStatus } from "../hooks/use-kinu";
+import { useWorkspaceRpc, type ConnectionStatus } from "../hooks/use-chat-owner";
 import { useWorkspaceRoster } from "../hooks/use-workspace-roster";
 import { lastValue } from "../hooks/use-async-resource";
 import { ModeToggle, ThemeToggle } from "./theme-toggle";

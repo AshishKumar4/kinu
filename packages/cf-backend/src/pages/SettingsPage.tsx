@@ -16,7 +16,7 @@ import {
   ArchiveCursorSchema,
 } from "@kinu.run/core";
 import { executorLabel } from "@kinu.run/core";
-import type { AgentStatus, ConnectionStatus } from "@/hooks/use-kinu";
+import type { AgentStatus, ConnectionStatus } from "@/hooks/use-chat-owner";
 import type { WorkspaceNotice } from "@kinu.run/core";
 import { WorkspaceAutomations } from "@/components/WorkspaceAutomations";
 import { Card, Field, composing, inputCls } from "@/components/ui/form";

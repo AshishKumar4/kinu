@@ -58,7 +58,8 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AgentsNavProvider } from "@/hooks/use-agents-nav";
 import { APP_ROUTES, rosterBucket, rosterMatches, WorkspaceOverviewSchema, type AgentTaskTree, type WorkspaceOverview } from "@kinu.run/core";
 import { CHUNK_FIXED_KEY, lazyRoute } from "@/lazy-route";
-import { useKinu, type SubordinateSnapshot } from "@/hooks/use-kinu";
+import { useKinu } from "@/hooks/use-kinu";
+import type { SubordinateSnapshot } from "@/hooks/use-chat-owner";
 import { primePageDeployedBuildSha } from "@kinu.run/core";
 import { ChatLiveTail, DeviceOfflineRow, MessageView, SteerBubble } from "@/components/MessageView";
 import { buildTranscript, profileCatalogCanonical } from "@kinu.run/core";
@@ -94,7 +95,7 @@ import {
 import type { ActivitySnapshot, ExecutorCommandResult, ForkNode, MemoryEntry, Rpc } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { buildTree, type MctsRow } from "@kinu.run/core";
-import type { AgentStatus, ExecutorOutput } from "@/hooks/use-kinu";
+import type { AgentStatus, ExecutorOutput } from "@/hooks/use-chat-owner";
 import { formatWorkspaceError, type WorkspaceErrors } from "@kinu.run/core";
 import { lastValue, type AsyncResource } from "@/hooks/use-async-resource";
 import type { ExecutorInfo } from "@kinu.run/core";

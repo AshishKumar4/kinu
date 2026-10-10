@@ -37,7 +37,7 @@
  *               from the SDK constant, so a rename there is a compile error here
  *               rather than a silent hang.
  *   steer       the socket RPC `send` (actor-agent.ts), which is
- *               exactly what the composer calls mid-turn (hooks/use-kinu.ts
+ *               exactly what the composer calls mid-turn (hooks/use-chat-owner.ts
  *               `sendChat`): the call admits the words under an id minted
  *               here, and the DO's `steer_status` broadcast for that id says
  *               where they landed — `landed` (the running turn read them) or
@@ -571,7 +571,7 @@ export type PublicSlateListing = v.InferOutput<typeof SlateListingSchema>;
  *  makes "a task hire retired itself" checkable at all.
  *
  *  The RPC the AGENT SURFACE reads: `AgentSurface.tsx:321`'s `loadRoster` and
- *  the chat's own roster refresh (`hooks/use-kinu.ts:1990`) both call it. */
+ *  the chat's own roster refresh (`hooks/use-workspace-reads.ts`) both call it. */
 const SubordinateRowSchema = v.object({
   name: v.string(),
   status: v.picklist(['idle', 'working', 'awaiting_input', 'dismissed']),
@@ -1040,7 +1040,7 @@ export class KinuPublicSession {
     await this.opening;
   }
 
-  /** Clear the chat as its Clear control does (`use-kinu.ts`): the `clearConversation` callable, answered once storage
+  /** Clear the chat as its Clear control does (`use-chat-owner.ts`): the `clearConversation` callable, answered once storage
    *  dropped the conversation and refused while a turn runs. */
   async clearConversation(): Promise<void> {
     await this.boundary(`clearing the conversation on ${this.workspace}`, () => this.rpc('clearConversation', []));
@@ -1238,7 +1238,7 @@ export class KinuPublicSession {
   /**
    * Run one command on an executor, the way the Env tab's terminal runs one.
    *
-   * `executeInExecutor` is the RPC the pane is bound to (hooks/use-kinu.ts:1775)
+   * `executeInExecutor` is the RPC the pane is bound to (hooks/use-workspace-reads.ts)
    * and this is the same frame over the same socket, so a green here is a
    * statement about the surface a person uses. The answer is returned whole
    * rather than reduced to stdout: a refusal arrives as `{error}` or as a

@@ -1,7 +1,7 @@
 /** The workspace's plans and tasks, one read for the column: Work's lists and each plan's page draw from the same rows. */
 import { useCallback, useEffect, useRef } from "react";
 import type { PlanReview, Rpc, WorkspaceWork } from "@kinu.run/core";
-import type { ReadMoves, WorkspacePlanArrival } from "@/hooks/use-kinu";
+import type { ReadMoves, WorkspacePlanArrival } from "@/hooks/use-workspace-reads";
 import { lastValue, useAsyncResource, type AsyncResource } from "@/hooks/use-async-resource";
 
 export interface WorkspaceWorkRead {

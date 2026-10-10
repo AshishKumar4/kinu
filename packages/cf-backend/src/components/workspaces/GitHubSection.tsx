@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { shortAge, type PanelAgent, type Rpc, type WorkspaceGitHubView } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
-import type { ReadMoves } from "@/hooks/use-kinu";
+import type { ReadMoves } from "@/hooks/use-workspace-reads";
 
 type Repo = WorkspaceGitHubView["repos"][number];
 

@@ -12,7 +12,7 @@ import {
 } from "@phosphor-icons/react";
 import { hasWorkspaceWork, jobPhase, taskTreePhase, revealMisrepresenting, timeAgo, type InspectedWork } from "@kinu.run/core";
 import type { AgentTaskTree, ChangelogEntry, MemoryEntry, Omitted, OwnedPlan, PanelAgent, ParkedWriteReview, PendingAction, PendingActionKind, PlanPageRef, WorkspaceWork, WorkspaceWorkOwner } from "@kinu.run/core";
-import type { ReadMoves } from "@/hooks/use-kinu";
+import type { ReadMoves } from "@/hooks/use-workspace-reads";
 import type { Rpc } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";

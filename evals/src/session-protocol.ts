@@ -73,7 +73,7 @@ export function encodeChatRequest(input: {
 
 /** One `{type:'rpc', id, method, args}` frame — the shape the agents-SDK client
  *  sends for a callable method, which is what `useKinu`'s `rpc()` wrapper is
- *  bound to (hooks/use-kinu.ts:639-641). The type word is a literal because the
+ *  bound to (`bindRpc` in hooks/use-chat-owner.ts). The type word is a literal because the
  *  SDK exports no constant for it. */
 export function encodeRpcRequest(input: {
   readonly requestId: string;
