@@ -6,6 +6,11 @@ test('misspelled Slate requirements fail instead of changing runtime or authorit
   expect(() => parseSlateProject({ name: 'notes', scripts: { dev: 'vite' }, slate: { runtime: 'node' } })).toThrow('slate.port');
 });
 
+test('a node slate is refused where its package.json is read, saying where a Node server runs', () => {
+  expect(() => parseSlateProject({ name: 'notes', scripts: { dev: 'vite' }, slate: { runtime: 'node', port: 5173 } }))
+    .toThrow('run a Node server through the sandbox');
+});
+
 test('package.json names no capabilities: a slate reaches its caller\'s surface, and a declared table is refused', () => {
   expect(() => parseSlateProject({ main: 'server.js', slate: { bindings: { FILES: { kind: 'namespace', namespace: 'workspace' } } } }))
     .toThrow('slate.bindings');
