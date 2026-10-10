@@ -855,3 +855,13 @@ describe('SOUL.md is the workspace\'s own file', () => {
   });
 
 });
+
+// The workspace executor names one home: where its shell starts and its files list from, the bound directory.
+test('the workspace executor\'s home is where its shell starts: the bound directory, not the cloud\'s', async () => {
+  const { state, project } = roots('cwd-plane-home');
+  const rt = agentRuntime(state, 'solo', project);
+  const workspace = present(rt.executionRouter?.getProvider('workspace'), 'the workspace executor');
+  const pwd = v.parse(v.string(), await workspace.tools.exec?.execute('pwd'));
+
+  expect([await workspace.homeDir(), pwd.trim()]).toEqual([project, project]);
+});
