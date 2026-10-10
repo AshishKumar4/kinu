@@ -1,12 +1,10 @@
-import { Effect, Cause } from 'effect';
-import { detach } from '@kinu.run/core/obs';
 import { useState, useCallback, useEffect, useRef } from "react";
 import { Loader } from "@cloudflare/kumo";
 import { DatabaseIcon, GaugeIcon } from "@phosphor-icons/react";
 import { scoreInterval, type QualityDay } from "@kinu.run/core";
 import type { Rpc } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
+import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { EmptyState, Metric } from "./shared";
 
 interface GepaRunRow { runId: string; target: string; startedAt: number; status: string; winnerId: string | null; iterations: number; metricCalls: number }
@@ -25,23 +23,8 @@ function runDot(status: string): string {
 
 export function GepaView({ rpc }: { rpc: Rpc }) {
   const [sel, setSel] = useState<string | null>(null);
-  const [detail, setDetail] = useState<AsyncResource<GepaRunDetail>>({ status: "loading" });
   const load = useCallback(() => rpc<GepaRunRow[]>("getGepaRuns", [20]), [rpc]);
   const { resource, reload } = useAsyncResource(load);
-
-  const open = useCallback((runId: string) => detach(Effect.gen(function* () {
-    setSel(runId);
-    setDetail({ status: "loading" });
-
-    return yield* Effect.catchCause(Effect.gen(function* () {
-      const runDetail = yield* Effect.promise(async () => rpc<GepaRunDetail>("getGepaRun", [runId]));
-      setDetail(loadSucceeded(runDetail));
-    }), (failed) => Effect.sync(() => {
-      const cause = Cause.squash(failed);
-      setDetail((previous) => loadFailed(previous, { cause }));
-    }));
-  })), [rpc]);
-
   const runs = lastValue(resource);
 
   if (runs === null) {
@@ -52,15 +35,11 @@ export function GepaView({ rpc }: { rpc: Rpc }) {
 
   if (runs.length === 0) return <EmptyState icon={<DatabaseIcon size={28} />} title="No self-tuning runs yet" />;
 
-  const loadedDetail = lastValue(detail);
-  const paretoIds = new Set((loadedDetail?.pareto ?? []).map((p) => p.candidateId));
-  const maxAgg = Math.max(0.0001, ...(loadedDetail?.candidates ?? []).map((c) => c.aggregateScore));
-
   return (
     <div className="space-y-3 animate-fade-in overflow-y-auto h-full">
       <div className="space-y-1">
         {runs.map((r) => (
-          <button key={r.runId} onClick={() => open(r.runId)}
+          <button key={r.runId} onClick={() => setSel(r.runId)}
             className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left transition-colors ${sel === r.runId ? "p-fill" : "p-card-hover"}`}>
             <span className={`size-1.5 rounded-full shrink-0 ${runDot(r.status)}`} />
             <span className="p-row-text p-text-2 flex-1 truncate">{r.target} · {r.iterations} iters · {r.metricCalls} evals</span>
@@ -68,37 +47,49 @@ export function GepaView({ rpc }: { rpc: Rpc }) {
           </button>
         ))}
       </div>
+      {sel !== null && <GepaRunCandidates rpc={rpc} runId={sel} />}
+    </div>
+  );
+}
 
-      {sel !== null && loadedDetail === null && (
-        detail.status === "error"
-          ? <LoadFailure what="this run's candidates" message={detail.message} onRetry={() => open(sel)} />
-          : <div className="flex justify-center py-4"><Loader size="sm" /></div>
-      )}
-      {sel !== null && loadedDetail !== null && (
-        <div className="space-y-2">
-          <div className="p-meta p-text-3">{loadedDetail.candidates.length} candidates · {paretoIds.size} on the Pareto front · winner {loadedDetail.run?.winnerId?.slice(0, 8) ?? "—"}</div>
-          <div className="space-y-1">
-            {loadedDetail.candidates.map((c) => {
-              const onPareto = paretoIds.has(c.id);
-              const isWinner = loadedDetail.run?.winnerId === c.id;
-              // The interval keeps candidates from being read apart on a gap the eval set cannot resolve.
-              const ci = scoreInterval(Object.values(c.scores));
-              const barTone = onPareto ? "p-dot-info" : "p-dot-neutral";
+/** The selected run's candidates, read for that run: a slower answer for a run no longer selected is never shown. */
+function GepaRunCandidates({ rpc, runId }: { rpc: Rpc; runId: string }) {
+  const load = useCallback(() => rpc<GepaRunDetail>("getGepaRun", [runId]), [rpc, runId]);
+  const { resource, reload } = useAsyncResource(load, undefined, runId);
+  const detail = lastValue(resource);
 
-              return (
-                <div key={c.id} className="flex items-center gap-2 p-meta">
-                  <span className={`font-mono shrink-0 w-14 truncate ${isWinner ? "p-success" : "p-text-3"}`}>{c.id.slice(0, 8)}</span>
-                  <div className="flex-1 h-2 rounded-full p-fill overflow-hidden" title={`95% CI ${ci.lo.toFixed(2)}–${ci.hi.toFixed(2)} over ${ci.n} instances`}>
-                    <div className={`h-full ${isWinner ? "p-dot-success" : barTone}`} style={{ width: `${(c.aggregateScore / maxAgg) * 100}%` }} />
-                  </div>
-                  <span className="font-mono p-text-3 tabular-nums shrink-0 w-10 text-right">{c.aggregateScore.toFixed(2)}</span>
-                  <span className="hidden sm:inline font-mono p-text-3 tabular-nums shrink-0 w-20 text-right opacity-70">[{ci.lo.toFixed(2)}–{ci.hi.toFixed(2)}]</span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
+  if (detail === null) {
+    return resource.status === "error"
+      ? <LoadFailure what="this run's candidates" message={resource.message} onRetry={reload} />
+      : <div className="flex justify-center py-4"><Loader size="sm" /></div>;
+  }
+
+  const paretoIds = new Set(detail.pareto.map((p) => p.candidateId));
+  const maxAgg = Math.max(0.0001, ...detail.candidates.map((c) => c.aggregateScore));
+
+  return (
+    <div className="space-y-2">
+      <div className="p-meta p-text-3">{detail.candidates.length} candidates · {paretoIds.size} on the Pareto front · winner {detail.run?.winnerId?.slice(0, 8) ?? "—"}</div>
+      <div className="space-y-1">
+        {detail.candidates.map((c) => {
+          const onPareto = paretoIds.has(c.id);
+          const isWinner = detail.run?.winnerId === c.id;
+          // The interval keeps candidates from being read apart on a gap the eval set cannot resolve.
+          const ci = scoreInterval(Object.values(c.scores));
+          const barTone = onPareto ? "p-dot-info" : "p-dot-neutral";
+
+          return (
+            <div key={c.id} className="flex items-center gap-2 p-meta">
+              <span className={`font-mono shrink-0 w-14 truncate ${isWinner ? "p-success" : "p-text-3"}`}>{c.id.slice(0, 8)}</span>
+              <div className="flex-1 h-2 rounded-full p-fill overflow-hidden" title={`95% CI ${ci.lo.toFixed(2)}–${ci.hi.toFixed(2)} over ${ci.n} instances`}>
+                <div className={`h-full ${isWinner ? "p-dot-success" : barTone}`} style={{ width: `${(c.aggregateScore / maxAgg) * 100}%` }} />
+              </div>
+              <span className="font-mono p-text-3 tabular-nums shrink-0 w-10 text-right">{c.aggregateScore.toFixed(2)}</span>
+              <span className="hidden sm:inline font-mono p-text-3 tabular-nums shrink-0 w-20 text-right opacity-70">[{ci.lo.toFixed(2)}–{ci.hi.toFixed(2)}]</span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

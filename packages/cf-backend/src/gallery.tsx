@@ -3493,12 +3493,30 @@ const GEPA_DETAIL = {
   pareto: [{ candidateId: "cand_2b", instanceId: "i1", score: 0.81 }, { candidateId: "cand_2a", instanceId: "i3", score: 0.68 }],
 };
 
+const GEPA_OLDER_DETAIL = {
+  run: GEPA_RUNS[1],
+  candidates: [
+    { id: "cand_1a", parentId: null, aggregateScore: 0.52, scores: { i1: 0.5, i2: 0.49, i3: 0.57 }, createdAt: NOW - 12 * 864e5 },
+    { id: "cand_1c", parentId: "cand_1a", aggregateScore: 0.66, scores: { i1: 0.7, i2: 0.6, i3: 0.68 }, createdAt: NOW - 12 * 864e5 },
+  ],
+  pareto: [{ candidateId: "cand_1c", instanceId: "i1", score: 0.7 }],
+};
+
 const evolutionRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "getQuality") return rpcResult(QUALITY_DAYS).json<T>();
 
   if (method === "getGepaRuns") return rpcResult(GEPA_RUNS).json<T>();
 
-  if (method === "getGepaRun") return rpcResult(GEPA_DETAIL).json<T>();
+  if (method === "getGepaRun") {
+    const [runId] = v.parse(v.tuple([v.string()]), args);
+
+    // `&gepa=held`: the newer run's candidates wait for `gallery:release-gepa`, as a slow read would.
+    if (runId === "gepa_2" && new URLSearchParams(location.search).get("gepa") === "held") {
+      await new Promise((resolve) => { window.addEventListener("gallery:release-gepa", resolve, { once: true }); });
+    }
+
+    return rpcResult(runId === "gepa_2" ? GEPA_DETAIL : GEPA_OLDER_DETAIL).json<T>();
+  }
 
   if (method === "getFacts") return rpcResult([
     { key: "test.command", value: "bun test", confidence: 0.9, source: "project configuration", lastObservedAt: NOW - 50e5 },
@@ -6200,7 +6218,7 @@ function AgentPanel(
   const banner = formatWorkspaceError(errors, lastValue(snapshot) !== null);
 
   return (
-    <section className="space-y-3 border-t p-border pt-6 first:border-0 first:pt-0">
+    <section data-gallery-panel={label} className="space-y-3 border-t p-border pt-6 first:border-0 first:pt-0">
       <div className="p-eyebrow">{label}</div>
       <GalleryComposer notices={banner
         ? [{ id: "load", tone: banner.severity === "blocking" ? "danger" : "warning",
