@@ -255,7 +255,8 @@ describe("deleteExecutorPathOp", () => {
   });
 
   test("a tree removal that fails mid-tree reports what was removed and what remains", async () => {
-    // KINU-013: removal fails closed and the refusal carries both entry sets.
+    // KINU-013: the refusal carries both entry sets. Nimbus's walk goes on past a refused entry, as `rm -r` does, and
+    // keeps the directories that hold it.
     const { deps, files, dirs } = makeTree({
       "/home/main/build/out.js": "x",
       "/home/main/build/deep/two.js": "y",
@@ -267,12 +268,12 @@ describe("deleteExecutorPathOp", () => {
     expect("error" in out && out.error).toContain("/home/main/build/deep");
     expect("error" in out && out.error).toContain("still present");
     expect(out).toMatchObject({
-      removed: ["/home/main/build/deep/two.js"],
-      remaining: ["/home/main/build/deep", "/home/main/build/out.js", "/home/main/build"],
+      removed: ["/home/main/build/deep/two.js", "/home/main/build/out.js"],
+      remaining: ["/home/main/build", "/home/main/build/deep"],
     });
     expect(files.has("/home/main/build/deep/two.js")).toBe(false);
     expect(dirs.has("/home/main/build/deep")).toBe(true);
-    expect(files.has("/home/main/build/out.js")).toBe(true);
+    expect(files.has("/home/main/build/out.js")).toBe(false);
   });
 
   test("a missing path and the root both refuse", async () => {

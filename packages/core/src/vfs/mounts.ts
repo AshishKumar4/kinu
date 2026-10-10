@@ -8,11 +8,11 @@ import { type Awaitable, type VFS, type VfsCred, type VfsRemoval, type VfsStat }
 
 
 import type { CheckpointFiles } from '../types/primitives';
-import { Effect } from 'effect';
+import { Cause, Effect, Exit, Result } from 'effect';
 import type { FilesOwner } from '../safety/command-review';
 import type { ExecutorStatus } from '../execution/types';
-import { KinuError, renderThrownChain, settleSync, tolerateAsync } from '../obs/index';
-import { isVfsError, syscallError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { attempt, hold, KinuError, renderThrownChain, settle, settleSync, tolerateAsync } from '../obs/index';
+import { isVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { CompositeVFS, normalizePath, type Principal, type VfsRoute } from '@nimbus-sh/core/vfs/composite.js';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { observeNamespace, type WriteObserver } from './write-events';
@@ -252,7 +252,7 @@ export function workspaceFilePlane(box: NamespaceBox, input: {
 		});
 
 		// The workspace's own files made a write's missing directories; its namespace does so as the principal.
-		const files = withMountTable({ namespace: opened, home: input.home, writesParents: true }, input.mounts);
+		const files = withMountTable({ namespace: opened, home: input.home, writesParents: true, ...(observer !== undefined && { observer }) }, input.mounts);
 
 		return { files, unmount: () => { unobserve(); unmountWriter(); unmountShell(); } };
 	}));
@@ -315,27 +315,34 @@ function movable(files: CompositeVFS): MoveFs {
  * whose target is not there yet: a write follows it, so the route does, and one the namespace cannot name is refused.
  */
 async function routeCreating(namespace: CompositeVFS, at: string, follow: boolean): Promise<VfsRoute> {
-	try {
-		return await namespace.route(at, { follow });
-	} catch (cause) {
-		const cut = at.lastIndexOf('/');
-		const leaf = at.slice(cut + 1);
+	const cut = at.lastIndexOf('/');
+	const leaf = at.slice(cut + 1);
 
-		if (!isVfsError(cause, 'ENOENT') || cut < 0 || leaf === '..' || at === '/') throw cause;
-		const parent = await routeCreating(namespace, at.slice(0, cut) || '/', true);
-		const above = namespacePath(parent);
-		const named = above === '/' ? `/${leaf}` : `${above}/${leaf}`;
+	if (cut < 0 || leaf === '..' || at === '/') return namespace.route(at, { follow });
+	const found = await tolerateAsync(() => namespace.route(at, { follow }), 'enoent');
 
-		if (follow && (await namespace.stat(named, { follow: false }))?.type === 'symlink') {
-			const target = namespace.linkLeadsTo(named, await namespace.readlink(named));
+	if (found !== undefined) return found;
+	const parent = await routeCreating(namespace, at.slice(0, cut) || '/', true);
+	const above = namespacePath(parent);
+	const named = above === '/' ? `/${leaf}` : `${above}/${leaf}`;
 
-			if (target === null) throw cause;
+	if (follow && (await namespace.stat(named, { follow: false }))?.type === 'symlink') {
+		const target = namespace.linkLeadsTo(named, await namespace.readlink(named));
 
-			return routeCreating(namespace, target, follow);
-		}
+		// A link the namespace has no name for is refused as the route refused it; its own links read from their directory.
+		if (target === null) return namespace.route(at, { follow });
 
-		return { ...parent, path: parent.path === '/' ? `/${leaf}` : `${parent.path}/${leaf}` };
+		return routeCreating(namespace, normalizePath(target.startsWith('/') ? target : `${above}/${target}`), follow);
 	}
+
+	return { ...parent, path: parent.path === '/' ? `/${leaf}` : `${parent.path}/${leaf}` };
+}
+
+/** Whether `from` and `to` are on one mount, the directories a move would make passing as named. */
+async function sameMount(namespace: CompositeVFS, from: string, to: string): Promise<boolean> {
+	const [left, right] = await Promise.all([routeCreating(namespace, from, false), routeCreating(namespace, to, false)]);
+
+	return left.point === right.point;
 }
 
 /** A route's path in the namespace. */
@@ -351,6 +358,8 @@ export interface MountedNamespace {
 	readonly home: string;
 	/** A write makes its missing directories, as a host's file tool does. */
 	readonly writesParents?: true;
+	/** Hears a write a routed extra makes on a source that reports none itself; the namespace reports its own. */
+	readonly observer?: WriteObserver;
 }
 
 /** Where a call lands: the namespace and its absolute path there, or a bare base's own relative path. */
@@ -380,6 +389,24 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 		? target.namespace.writeFile(target.at, data, { parents: true })
 		: target.files.writeFile(target.at, data));
 
+	const observer = 'namespace' in base ? base.observer : undefined;
+
+	/** A routed extra's write of `data` to `at`, landed on `landing.source` at `landing.rel`; told to the plane's observer, since that source reports none. */
+	const heard = async <T>(landing: { readonly source: VFS; readonly rel: string; readonly at: string }, data: Uint8Array, writing: () => Promise<T>): Promise<T> => {
+		if (observer === undefined || landing.source.observeWrites !== undefined) return writing();
+
+		const baseline = observer.needsBaseline(landing.at) ? await settle(Effect.result(attempt({ doing: `reading ${landing.at} before a write`, otherwise: 'io' },
+			async () => tolerateAsync(() => Promise.resolve(landing.source.readFile(landing.rel)), 'enoent')))) : null;
+
+		const result = await writing();
+
+		if (baseline === null) observer.record({ path: landing.at, after: data });
+		else if (Result.isSuccess(baseline)) observer.record({ path: landing.at, before: baseline.success ?? null, after: data });
+		else observer.record({ path: landing.at, unread: 'unreadable', after: data });
+
+		return result;
+	};
+
 	const via = async <T>(path: string, op: (files: VFS, at: string) => Awaitable<T>): Promise<T> => {
 		const { files, at } = await on(path);
 
@@ -390,9 +417,10 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 	const capable = <T>(path: string, reason: string, ask: (files: VFS, at: string) => Awaitable<T> | undefined): Promise<T> => via(path, (files, at) => {
 		const answer = ask(files, at);
 
-		if (answer === undefined) throw new VfsError('ENOTSUP', reason, path);
+		// Absent, not null: a backend's answer may itself be null.
+		if (answer !== undefined) return answer;
 
-		return answer;
+		return settle(Effect.fail(new VfsError('ENOTSUP', reason, path)));
 	});
 
 	return {
@@ -407,7 +435,7 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 			// Nimbus answers a path on an absent mount as nothing there; Kinu refuses it with the mount's reason.
 			const route = await tolerateAsync(() => namespace.route(target.at, { follow: options?.follow !== false }), 'enoent');
 
-			if (route?.source === null) throw new VfsError('ENXIO', route.absentReason ?? route.point, path);
+			if (route?.source === null) return settle(Effect.fail(new VfsError('ENXIO', route.absentReason ?? route.point, path)));
 
 			return null;
 		},
@@ -421,11 +449,15 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 
 			if (source.namespace === null || target.namespace === null) return move(source.files, source.at, target.at);
 			const { namespace } = source;
-			const [left, right] = await Promise.all([routeCreating(namespace, source.at, false), routeCreating(namespace, target.at, false)]);
+			const renamed = await hold(Effect.promise(() => namespace.rename(source.at, target.at)));
 
-			// Kinu's move rule: within one mount it is mv's move (rename, or Nimbus's carry where the backend cannot rename
-			// in place); across mounts it is EXDEV, so nothing crosses into or out of /pc or /sandbox as a side effect.
-			if (left.point !== right.point) throw syscallError('EXDEV', 'rename', from, { dest: to });
+			if (Exit.isSuccess(renamed)) return;
+
+			// Kinu's move rule: within one mount, mv's move (Nimbus's carry where the backend cannot rename in place); across
+			// mounts EXDEV stands, so nothing crosses into or out of /pc or /sandbox as a side effect.
+			if (!isVfsError(Cause.squash(renamed.cause), 'EXDEV') || !await sameMount(namespace, source.at, target.at)) {
+				return settle(Effect.failCause(renamed.cause));
+			}
 
 			return move(movable(namespace), source.at, target.at);
 		},
@@ -454,7 +486,11 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 			const own: (VFS & CheckpointFiles) | null = route === null || route.point === '/' || route.path === '/' ? null : route.source;
 			const readOnly = target.namespace?.mounts().find((mount) => mount.point === route?.point)?.options.readOnly === true;
 
-			if (own?.writeFileWithReport !== undefined && route !== null && !readOnly) return own.writeFileWithReport(route.path, data);
+			if (own?.writeFileWithReport !== undefined && route !== null && !readOnly) {
+				const report = own.writeFileWithReport.bind(own);
+
+				return heard({ source: own, rel: route.path, at: target.at }, data, () => report(route.path, data));
+			}
 
 			await write(target, data);
 

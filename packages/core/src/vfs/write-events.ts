@@ -1,9 +1,9 @@
 /** Write attribution happens where a write lands: sibling heads run concurrently over the same files. */
 
-import { Effect, Result } from 'effect';
+import { Effect } from 'effect';
 import type { CompositeVFS, Principal } from '@nimbus-sh/core/vfs/composite.js';
 import type { VfsContentRef, VfsWriteEvent } from '@nimbus-sh/core/vfs/vfs.js';
-import { attempt, diagnostics, settle, toKinuError, type KinuError } from '../obs/index';
+import { attempt, diagnostics, settle, settleSync, toKinuError, type KinuError } from '../obs/index';
 
 export interface WriteEvent {
   readonly path: string;
@@ -75,23 +75,27 @@ function side(ref: VfsContentRef | null | undefined, path: string, asked: boolea
   if (!asked) return 'unasked';
   const doing = `reading what a write left at ${path}`;
 
-  try {
-    const read = ref.read();
+  return settleSync(Effect.match(Effect.try({ try: () => ref.read(), catch: (cause) => toKinuError({ doing, cause, otherwise: 'io' }) }), {
+    onFailure: (failure) => unreadable(failure, path),
+    onSuccess: (read): Side | Promise<Side> => (read instanceof Uint8Array ? read : awaited(read, doing, path)),
+  }));
+}
 
-    if (read instanceof Uint8Array) return read;
-
-    return settle(Effect.result(attempt({ doing, otherwise: 'io' }, async () => read))).then((settled) => (
-      Result.isSuccess(settled) ? settled.success : unreadable(settled.failure, path)));
-  } catch (cause) {
-    return unreadable(toKinuError({ doing, cause, otherwise: 'io' }), path);
-  }
+/** Content the backend reads asynchronously, read while the event is held. */
+function awaited(pending: PromiseLike<Uint8Array>, doing: string, path: string): Promise<Side> {
+  return settle(Effect.match(attempt({ doing, otherwise: 'io' }, async () => pending), {
+    onFailure: (failure) => unreadable(failure, path),
+    onSuccess: (bytes): Side => bytes,
+  }));
 }
 
 const isBytes = (value: Side): value is Uint8Array | null => value === null || value instanceof Uint8Array;
 
-/** `path`'s change as the observer keeps it; a change between a directory and nothing is not a file's. */
+/** `path`'s change as the observer keeps it. A directory made, or kept, is no file's change; one removed is reported. */
 function recorded(observer: WriteObserver, path: string, before: Side, after: Side): void {
-  if ((before === null || before === 'directory') && (after === null || after === 'directory')) return;
+  if ((before === null || before === 'directory') && after === 'directory') return;
+
+  if (before === null && after === null) return;
   const baseline = observer.needsBaseline(path);
   let unread: WriteEvent['unread'];
 

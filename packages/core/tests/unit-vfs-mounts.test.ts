@@ -13,6 +13,7 @@ import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { mossaicVfs } from '../src/vfs/mossaic-vfs';
 import { deviceFiles, type DeviceFileScope, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import { createWorkspaceBundle } from './helpers';
+import { storeFiles } from '../src/vfs/nimbus-workspace';
 import type { JsonValue } from '../src/utils/json';
 import { agentCred, agentHome, agentTmpRoot, confineAgentTmp, provisionAgentHome } from '../src/vfs/agent-home';
 
@@ -635,11 +636,42 @@ describe('a watched file tool on the workspace\'s namespace', () => {
 		});
 
 		await writeText(files, '/home/main/by-tool.txt', 'tool');
-		await writeText(bundle.files({ home: WORKSPACE_ROOT }), '/home/main/by-store.txt', 'store');
+		await writeText(storeFiles(async () => (await bundle.session()).vfs, { home: WORKSPACE_ROOT }), '/home/main/by-store.txt', 'store');
 		expect(await bundle.shell.exec('echo shell > /home/main/by-shell.txt')).toMatchObject({ exitCode: 0 });
 		await writeText(files, '/home/main/by-tool.txt', 'tool again');
 
 		expect(heard).toEqual(['/home/main/by-tool.txt', '/home/main/by-tool.txt']);
+	});
+});
+
+describe('a device\'s own write report, on a watched plane', () => {
+	// A device writes with its own report (writeFileWithReport), past the namespace, and reports no writes itself: the
+	// head's review must still hear it, with what stood there before.
+	test('is heard with the bytes it replaced, as a namespace write is', async () => {
+		const bundle = createWorkspaceBundle(new Database(':memory:'));
+		const device = fakeTree({ '/notes.md': 'before' });
+
+		const reported = Object.assign(device, {
+			writeFileWithReport: async (path: string, data: Uint8Array) => {
+				await device.writeFile(path, data);
+
+				return null;
+			},
+		});
+
+		const heard: Array<{ path: string; before?: string | null; after: string | null }> = [];
+
+		const text = (value: string | Uint8Array | null | undefined) => (value instanceof Uint8Array ? new TextDecoder().decode(value) : value ?? null);
+
+		const { files } = workspaceFilePlane(bundle, {
+			mounts: [mountOf('pc', reported)], principal: {}, home: WORKSPACE_ROOT,
+			observer: { needsBaseline: () => true, record: (event) => { heard.push({ path: event.path, before: text(event.before), after: text(event.after) }); } },
+		});
+
+		await files.writeFileWithReport?.('/pc/notes.md', new TextEncoder().encode('after'));
+
+		expect(await readText(device, '/notes.md')).toBe('after');
+		expect(heard).toEqual([{ path: '/pc/notes.md', before: 'before', after: 'after' }]);
 	});
 });
 

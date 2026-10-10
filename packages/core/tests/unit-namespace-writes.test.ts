@@ -63,15 +63,17 @@ describe('observeNamespace', () => {
     expect(events).toEqual([{ path: '/a.txt', after: null }, { path: '/b.txt', after: 'kept' }]);
   });
 
-  test('a write that fails reports nothing, and neither does a directory made or removed', async () => {
+  test('a write that fails reports nothing, a directory made is no change, and one removed says what it was', async () => {
     const { plane, events } = watched();
     plane.mount('/ro', new MemoryVFS(), { readOnly: true });
 
     await expect(plane.writeFile('/ro/x', bytes('x'))).rejects.toMatchObject({ code: 'EROFS' });
     await expect(plane.unlink('/absent.txt')).rejects.toMatchObject({ code: 'ENOENT' });
     await plane.mkdir('/dir/deeper', { recursive: true });
-    await plane.rmdir('/dir/deeper');
     expect(events).toEqual([]);
+
+    await plane.rmdir('/dir/deeper');
+    expect(events).toEqual([{ path: '/dir/deeper', after: null, unread: 'directory' }]);
   });
 
   test('only the views it names are heard', async () => {
