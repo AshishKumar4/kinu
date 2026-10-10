@@ -8,6 +8,7 @@ export interface Slice {
   readonly sql: OperationCost;
   readonly rpc: Readonly<Record<string, number>>;
   readonly writes: Readonly<Record<string, { readonly rows: number; readonly bytes: number }>>;
+  readonly queryReads: readonly { readonly query: string; readonly statements: number; readonly rowsRead: number }[];
 }
 
 const CountsSchema = v.record(v.string(), v.number());
@@ -20,6 +21,7 @@ export const SliceSchema = v.object({
   }),
   rpc: CountsSchema,
   writes: v.record(v.string(), v.object({ rows: v.number(), bytes: v.number() })),
+  queryReads: v.array(v.object({ query: v.string(), statements: v.number(), rowsRead: v.number() })),
 });
 
 const CONVERSATION = /^(?:session_messages|stream_parts|actor_contexts|actor_context_selection|context_revisions|context_memberships|context_proposals|context_proposal_entries|actor_requests|request_renders|conversation_entries|conversation_entry_parts)$/u;
@@ -71,12 +73,19 @@ export class Meter {
   private calls: Record<string, number> = {};
   private readonly real: SqlStorage['exec'];
   private ignoredRpc: string | null = null;
+  private ran: { readonly query: string; readonly cursor: Pick<SqlStorageCursor, 'rowsRead'> }[] = [];
 
   constructor(storage: SqlStorage) {
     const exec = storage.exec.bind(storage);
     this.real = exec;
     this.sql = new SqlMeter({ exec, get databaseSize() { return storage.databaseSize; } });
-    storage.exec = (query, ...bindings) => this.active ? this.sql.exec(query, ...bindings) : exec(query, ...bindings);
+    storage.exec = (query, ...bindings) => {
+      if (!this.active) return exec(query, ...bindings);
+      const cursor = this.sql.exec(query, ...bindings);
+      this.ran.push({ query, cursor });
+
+      return cursor;
+    };
   }
 
   rpc(name: string): void {
@@ -111,6 +120,7 @@ export class Meter {
     this.real('UPDATE perf_write_scope SET enabled = 1');
     this.sql.begin();
     this.calls = {};
+    this.ran = [];
     this.active = true;
   }
 
@@ -118,11 +128,21 @@ export class Meter {
     this.real('UPDATE perf_write_scope SET enabled = 0');
     const sql = this.sql.end(null);
     const rpc = this.calls;
+    const read = new Map<string, { query: string; statements: number; rowsRead: number }>();
+
+    for (const { query, cursor } of this.ran) {
+      const counted = read.get(query) ?? { query, statements: 0, rowsRead: 0 };
+      counted.statements++;
+      counted.rowsRead += cursor.rowsRead;
+      read.set(query, counted);
+    }
+
+    const queryReads = [...read.values()].sort((a, b) => b.rowsRead - a.rowsRead).slice(0, 10);
     const writes = Object.fromEntries(v.parse(WritesSchema, this.real('SELECT name, COUNT(*) AS rows, SUM(bytes) AS bytes FROM perf_write_audit GROUP BY name').toArray()).map(({ name, rows, bytes }) => [name, { rows, bytes }]));
     this.active = false;
 
     if (resume) this.begin();
 
-    return { label, sql, rpc, writes };
+    return { label, sql, rpc, writes, queryReads };
   }
 }
