@@ -4,6 +4,7 @@
  */
 import { SLATES_ROOT, workspacePath, WORKSPACE_ROOT } from '../packages/core/src/vfs/workspace-path';
 import type { ScriptedAnswer, ScriptedRequest } from './scripted-protocol';
+import { safeJsonParse } from '../packages/core/src/utils/json';
 
 /** A file name no scaffold file can carry. */
 export const FLOW_PROBE = 'flow-probe.txt';
@@ -109,8 +110,10 @@ export const DECISION_HEARD = 'DECISION HEARD';
 /** The hire row's ask, sent to a chat agent the owner made: its command parks as the hire's own. */
 export const HIRE_APPROVAL_ASK = 'Flow hire approval: push the hire release.';
 
-/** Gated (git-force-push) and harmless by construction: /dev/null is no repository, so git pushes nothing. */
-export const HIRE_PARKED_COMMAND = 'git --git-dir=/dev/null push --force origin flow-hire-release';
+export const HIRE_EXECUTED = 'flow-hire-executed';
+
+/** Gated (git-force-push) and harmless: Git cannot push from /dev/null; stdout proves the approved shell ran. */
+export const HIRE_PARKED_COMMAND = `git --git-dir=/dev/null push --force origin flow-hire-release; printf '%s\\n' ${HIRE_EXECUTED}`;
 
 /** The hire's reply once its re-issued command ran; the row reads it in the hire's chat. */
 export const HIRE_RAN = 'HIRE RAN';
@@ -414,8 +417,9 @@ function hireApprovalScript(request: ScriptedRequest, latest: string): ScriptedA
 
   if (asked) return { text: 'HIRE PARKED' };
 
-  // Ran is git's own refusal in the result; any other answer, an empty one included, is not proof it ran.
-  return { text: done.result.includes('not a git repository') ? HIRE_RAN : 'HIRE STILL BLOCKED' };
+  const output = safeJsonParse(done.result);
+
+  return { text: typeof output === 'string' && output.split(/\r?\n/u).includes(HIRE_EXECUTED) ? HIRE_RAN : 'HIRE STILL BLOCKED' };
 }
 
 /** The approvals row: its turn parks both commands, and each decision's wake is answered without re-issuing anything. */
@@ -425,12 +429,21 @@ function approvalsScript(request: ScriptedRequest, latest: string): ScriptedAnsw
 
   if (hire !== null) return hire;
 
-  // A decision's wake names what was approved and what denied (core safety/deferred-approval.ts `decisionWakeMessage`).
-  const approvedHeard = latest.includes('still not run: re-issue once');
-  const deniedHeard = latest.includes('DENIED: do not re-issue');
+  // A decision's wake names each command below its status (core safety/deferred-approval.ts `decisionWakeMessage`).
+  const heard = new Set<'approved' | 'denied'>();
 
-  if (approvedHeard || deniedHeard) {
-    return { text: [DECISION_HEARD, ...(approvedHeard ? ['approved'] : []), ...(deniedHeard ? ['denied'] : [])].join(' ') };
+  for (const text of request.unansweredUserTexts) {
+    let decision: 'approved' | 'denied' | null = null;
+
+    for (const line of text.split('\n')) {
+      if (line.includes('APPROVED, still not run: re-issue once:')) decision = 'approved';
+      else if (line.includes('DENIED: do not re-issue:')) decision = 'denied';
+      else if (decision !== null && PARKED_COMMANDS.some((command) => line.endsWith(command))) heard.add(decision);
+    }
+  }
+
+  if (heard.size > 0) {
+    return { text: [DECISION_HEARD, ...heard].join(' ') };
   }
 
   if (!latest.includes(APPROVALS_ASK)) return null;

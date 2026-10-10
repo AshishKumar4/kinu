@@ -16,8 +16,9 @@ import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import puppeteer, { type Browser, type LaunchOptions } from 'puppeteer';
 import { BROWSER_PROFILE_PARENT, holdForRelease, releaseScratch, scratchDir } from '../packages/test-utils/src/scratch';
-import { groupRuns, reapAbandonedRoots, recordOwner } from './process-owner';
+import { crashpadsIn, groupRuns, procFile, processStartTicks, reapAbandonedRoots, recordOwner } from './process-owner';
 import { signalGroup } from './process-group';
+import { tolerate } from '@kinu.run/core/obs';
 
 // A caller that is a script rather than a `bun test` row has no preload `afterAll`: a browser it left open, and the
 // profile under it, go when it exits.
@@ -59,7 +60,13 @@ const GROUP_END_POLLS = 500;
 function endAndRemove(group: number | undefined, root: string): void {
   signalGroup(group, 'SIGKILL');
 
-  for (let poll = 0; group !== undefined && groupRuns(group); poll++) {
+  const handlers = crashpadsIn(root);
+
+  for (const handler of handlers) {
+    if (processStartTicks(handler.pid) === handler.startTicks) tolerate(() => process.kill(handler.pid, 'SIGKILL'), 'esrch');
+  }
+
+  for (let poll = 0; (group !== undefined && groupRuns(group)) || handlers.some((handler) => processStartTicks(handler.pid) === handler.startTicks && (procFile(handler.pid, 'cmdline') ?? '') !== ''); poll++) {
     if (poll === GROUP_END_POLLS) return;
     Atomics.wait(PAUSE, 0, 0, 10);
   }
@@ -86,10 +93,13 @@ export async function launchTestChrome(options: TestChromeOptions = {}): Promise
   // the process inside its own re-raise, so no `finally` opens.
   const dropHold = holdForRelease('a test browser', abandon);
 
+  // Chrome 155, Armada 20261010002420-bd8a6c86: the Crashpad testing flag crashes pipe FDs; keep reporting disabled instead.
   const launchOptions: LaunchOptions = {
-    args: ['--no-sandbox', '--disable-dev-shm-usage', ...(options.args ?? [])],
+    args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-crash-reporter', ...(options.args ?? [])],
     pipe: true,
     userDataDir: join(root, 'profile'),
+    // 20261010004413-e9a788d5: --user-data-dir did not isolate Crashpad's database; this environment variable did.
+    env: { ...process.env, CHROME_CONFIG_HOME: join(root, 'config') },
     // No clock on the launch or a protocol round trip (puppeteer 25.10 guards every timer with `if (timeout)`): a
     // launch ran past 30 s at load 109 on 2026-09-22. A browser that dies fails the launch on its exit.
     timeout: 0,
@@ -104,7 +114,7 @@ export async function launchTestChrome(options: TestChromeOptions = {}): Promise
     browser = await puppeteer.launch(launchOptions);
   } catch (error) {
     dropHold();
-    rmSync(root, { recursive: true, force: true });
+    endAndRemove(group, root);
     throw error;
   }
 
