@@ -129,9 +129,13 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   const currentLedger = (): TurnFileLedger => deps.ledger?.() ?? fallbackLedger;
   const currentBudget = (): TurnContextBudget => deps.budget?.() ?? fallbackBudget;
 
+  // One place for where paths land and where the shell starts: its home, as files list from it too.
+  const home = deps.home ?? WORKSPACE_ROOT;
+  const planes = deps.planes ?? cloudPlanes(home);
+
   // The native `file` tool's write, on the same ledger read live per call.
   const fileWrite = serveFile(() => ({
-    vfs, home: deps.home ?? WORKSPACE_ROOT, planes: deps.planes ?? cloudPlanes(deps.home ?? WORKSPACE_ROOT), ledger: currentLedger(), budget: currentBudget(), memory,
+    vfs, home, planes, ledger: currentLedger(), budget: currentBudget(), memory,
     ...(deps.slateBuild !== undefined && { slateBuild: deps.slateBuild }),
   })).write;
 
@@ -366,7 +370,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     name: TOOL_REACH.slate.codemode,
     kind: 'workspace',
     files: deps.files ?? vfs,
-    homeDir: async () => WORKSPACE_ROOT,
+    homeDir: async () => planes.cwd,
     capabilities: new Set<ExecutorCapability>([
       'javascript', 'typescript', 'shell', 'fs_shared', ...(deps.toolchain ?? []),
     ]),
