@@ -338,13 +338,13 @@ test('a gate that lets detach run anywhere fails the hook-module case', async ()
 
   expect(source).toContain('  return reactCaller(fn);');
 
-  // A copy outside the tree, its relative imports pointed back into it.
+  // A copy beside the tree's packages, so its own imports resolve, with its relative imports pointed back into it.
   const widened = source
     .replace('  return reactCaller(fn);', "  return fn === undefined ? 'react' : reactCaller(fn) ?? 'react';")
     .replace(/from '\.\/([^']+)'/g, (_whole, path: string) => `from '${join(import.meta.dir, path)}'`)
     .replace(/from '\.\.\/([^']+)'/g, (_whole, path: string) => `from '${join(import.meta.dir, '..', path)}'`);
 
-  const mutant = join(scratchDir('error-model-mutant'), 'error-model.ts');
+  const mutant = join(scratchDir('error-model-mutant', join(import.meta.dir, '..', 'node_modules', '.cache')), 'error-model.ts');
 
   writeFileSync(mutant, widened);
   const loose = v.parse(v.object({ bridgeSites: v.function() }), await import(mutant));
