@@ -1002,6 +1002,15 @@
     "status TEXT NOT NULL DEFAULT 'pending'",
     "PRIMARY KEY (actor_id, id)"
   ],
+  "queued_turns@packages/core/src/orchestrator/inbox.ts": [
+    "seq INTEGER PRIMARY KEY AUTOINCREMENT",
+    "actor_id TEXT NOT NULL",
+    "id TEXT NOT NULL",
+    "text TEXT NOT NULL",
+    "metadata_json TEXT",
+    "yields INTEGER NOT NULL DEFAULT 0",
+    "UNIQUE (actor_id, id)"
+  ],
   "refinement_lane_holds@packages/core/src/evolution/refinement.ts": [
     "actor_id TEXT PRIMARY KEY",
     "answered INTEGER NOT NULL"

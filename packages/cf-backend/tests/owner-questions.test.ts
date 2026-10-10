@@ -164,6 +164,22 @@ describe('the workspace agent asks its owner', () => {
     expect((await workspace.agent.listOwnerQuestions())[0]?.asked.status).toBe('answered');
   });
 
+  test('work queued behind an open question outlives the isolate that acknowledged it', async () => {
+    const { gateway, sent } = asksOnce();
+    const workspace = await namedWorkspace(gateway);
+    const main = workspace.agent.agentOf(workspaceMainActor(workspace.db).actorId);
+
+    await catalogTurn(workspace.agent, TASK);
+    const asked = await openQuestion(workspace);
+
+    // Acknowledged while the question holds the agent, then its isolate is gone before the work could start.
+    expect(await workspace.agent.runTaskFromMcp('Also tally the refunds.')).toEqual({ status: 'queued' });
+    workspace.agent.harnessResetAgentIsolate(main.storageKey);
+    await workspace.agent.answerOwnerQuestions(asked.id, ANSWER);
+
+    await driveUntil(workspace, 'the acknowledged work never ran', () => sent.some((request) => JSON.stringify(request.messages).includes('Also tally the refunds.')));
+  });
+
   test('an answer whose turn the isolate died in is resumed by the next activation, from the same call', async () => {
     let die = (): void => {};
 

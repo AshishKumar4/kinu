@@ -35,6 +35,7 @@ import type { TierId } from '../types/profile';
 import type { SendLanding, SettledSignals } from '../types/signals';
 import type { WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
+import { nanoid } from '../utils/nanoid';
 import type { Usage } from '../usage';
 import { announcementOf, authoredTurnMetadata, PROGRAMMATIC_MESSAGE_ID_PREFIX } from '../utils/ui-message';
 import { CLEAR_NEEDS_IDLE, COMPACT_NEEDS_IDLE, REVERT_NEEDS_IDLE } from './actor-session';
@@ -376,6 +377,7 @@ export class ChatSession {
     });
     this.restoreOpenTurn();
     this.restorePendingSends();
+    this.restoreQueuedTurns();
     this.unobserveMeasures = this.eventRecorder.observe((event) => {
       if (event.type === 'context_admitted' || (event.type === 'step_finish' && event.usage?.input !== undefined)) this.broadcastContextFill();
     });
@@ -508,8 +510,17 @@ export class ChatSession {
     // yield its dequeue decides.
     if (await this.offerYields(input)) return { status: 'yielded' };
 
+    // Its producer takes 'queued' as delivered, so the turn is held durably first, under its key (one minted when it
+    // has none): a later process restores it through this queue ({@link restoreQueuedTurns}), and its settle retires it.
+    const turn = input.origin === 'user' ? input : { ...input, idempotencyKey: input.idempotencyKey ?? `queued:${nanoid()}` };
+    const key = turn.idempotencyKey;
+
+    if (turn.origin !== 'user' && key !== undefined && !this.ended && !this.announcementInFlight(key) && !this.announcementOnDisk(key)) {
+      this.pendingSends.reserveTurn({ ...turn, id: key });
+    }
+
     // An answer decided at admission resolves first; a turn still to run answers 'queued'.
-    return await Promise.race([this.enqueueTurn(input), Promise.resolve(queued)]);
+    return await Promise.race([this.enqueueTurn(turn), Promise.resolve(queued)]);
   }
 
   /** Whether an offer that yields to the operator meets one who spoke first: a user turn queued, or one in the
@@ -557,6 +568,8 @@ export class ChatSession {
     this.wakeSendWaiters();
 
     if (item.idempotencyKey === undefined) return;
+
+    if (item.kind === 'programmatic') this.pendingSends.retireTurn(item.idempotencyKey);
     const result = settledAnnouncement(failure, yielded, abandoned);
 
     for (const joined of this.joiners.get(item.idempotencyKey) ?? []) joined(result);
@@ -1674,6 +1687,30 @@ export class ChatSession {
       if (this.ended) return;
       this.pump();
     });
+  }
+
+  /** Programmatic turns a producer heard queued and the last process never settled re-enter the queue behind the
+   *  operator's own; one whose turn was admitted is the re-opened run's, or done. */
+  private restoreQueuedTurns(): void {
+    let queued = 0;
+
+    for (const row of this.pendingSends.restoreTurns()) {
+      if (this.announcementOnDisk(row.id)) {
+        this.pendingSends.retireTurn(row.id);
+        continue;
+      }
+
+      this.queue.push({
+        text: row.text, kind: 'programmatic', idempotencyKey: row.id,
+        ...(row.metadata !== undefined && { metadata: row.metadata }),
+        ...(row.yieldsToUserMessage === true && { yieldsToUserMessage: true }),
+        settle: () => {},
+      });
+      queued += 1;
+    }
+
+    // Not synchronous: the driver gate is installed after the constructor returns.
+    if (queued > 0) queueMicrotask(() => { if (!this.ended) this.pump(); });
   }
 
   /** Mid-turn rows re-enter the inbox; idle rows re-enter the pump in sequence order. */
