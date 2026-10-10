@@ -43,8 +43,8 @@ export interface FailingSlateBuild {
 }
 
 export class SlateBuilds {
-  /** Read once per activation, as every model step asks; each write below keeps it current. */
-  #failing: FailingSlateBuild[] | null = null;
+  /** Read once per activation per authority, as every model step asks; each write below keeps it current. */
+  readonly #failing = new Map<string, FailingSlateBuild[]>();
 
   constructor(private readonly db: SqlExec) {}
 
@@ -61,7 +61,7 @@ export class SlateBuilds {
        ON CONFLICT (slate, authority) DO UPDATE SET good_key = excluded.good_key, good_image = excluded.good_image, failed_key = NULL, failure = NULL`,
       slate, authority, key, JSON.stringify(image),
     );
-    this.#failing = null;
+    this.#failing.clear();
   }
 
   /** The source `key` did not compile as `authority`. */
@@ -71,7 +71,7 @@ export class SlateBuilds {
        ON CONFLICT (slate, authority) DO UPDATE SET failed_key = excluded.failed_key, failure = excluded.failure`,
       slate, authority, key, failure,
     );
-    this.#failing = null;
+    this.#failing.clear();
   }
 
   /** The last source that built as `authority`, and its image; null before any did. */
@@ -88,24 +88,31 @@ export class SlateBuilds {
     return row?.failed_key === key ? row.failure : null;
   }
 
-  /** Every slate whose latest attempted build failed, as any authority, once each. */
-  failing(): FailingSlateBuild[] {
-    this.#failing ??= this.db.exec(`SELECT slate, MIN(failure) AS failure FROM slate_images WHERE failure IS NOT NULL GROUP BY slate ORDER BY slate`).toArray()
+  /** Every slate whose latest build as `cred` failed: another caller's refusal says nothing of what this one is served. */
+  failing(cred: VfsCred): FailingSlateBuild[] {
+    const authority = slateAuthority(cred);
+    const known = this.#failing.get(authority);
+
+    if (known !== undefined) return known;
+
+    const failing = this.db.exec(`SELECT slate, failure FROM slate_images WHERE failure IS NOT NULL AND authority = ? ORDER BY slate`, authority).toArray()
       .map((row) => v.parse(v.object({ slate: v.string(), failure: v.string() }), row));
 
-    return this.#failing;
+    this.#failing.set(authority, failing);
+
+    return failing;
   }
 
   /** Its files changed since: whether it builds is not yet known. */
   changed(slates: readonly string[]): void {
     for (const slate of slates) this.db.exec(`UPDATE slate_images SET failed_key = NULL, failure = NULL WHERE slate = ?`, slate);
 
-    if (slates.length > 0) this.#failing = null;
+    if (slates.length > 0) this.#failing.clear();
   }
 
   forget(slate: string): void {
     this.db.exec(`DELETE FROM slate_images WHERE slate = ?`, slate);
-    this.#failing = null;
+    this.#failing.clear();
   }
 
   /** Every image a slate's last working build reads, kept past any process that ran it. */

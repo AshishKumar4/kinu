@@ -738,9 +738,9 @@ export class SlateHost {
     }
   }
 
-  /** Every slate whose latest source does not build, in the compiler's words. */
+  /** Every slate whose latest source does not build for the workspace's own agent, in the compiler's words. */
   failingBuilds(): FailingSlateBuild[] {
-    return this.builds.failing();
+    return this.builds.failing(ROOT_SLATE_CALLER.cred);
   }
 
   /** Answers the refusal instead of throwing, so the route can tell `missing` from `bad_input`. */
