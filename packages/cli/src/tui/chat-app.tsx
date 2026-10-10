@@ -12,7 +12,7 @@ import { useState, useCallback, useRef, useEffect, useMemo, type ReactNode } fro
 import { tierIdsOf,
   DEFAULT_ROLE_ID, nextReasoningEffort, offeredReasoningEfforts,
   effectiveRoleCatalog,
-  type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type PositionCursor, type ReasoningEffort, type SeekCursor,
+  type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type ReasoningEffort, type SeekCursor,
   type SubordinateChild, type TierId,
 } from '@kinu.run/core';
 import { TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER, composerVisibleRows } from '@kinu.run/core/tui';
@@ -52,6 +52,7 @@ import { canonicalProjectRoot } from '../config';
 import { openBrowser } from '../commands/auth';
 import { StatusBar } from './status-bar';
 import { MessageList, type DisplayMessage } from './messages';
+import { useSubagentChat } from './use-subagent-chat';
 import { createHostShell } from '@kinu.run/cli-backend';
 import type { TurnMeter } from '@kinu.run/core/tui';
 import {
@@ -95,7 +96,7 @@ import { createKeyDispatcher, openTuiKeyBindings } from './actions';
 import {
   buildAgentHubEntries, HubOverlay, SubagentChatOverlay, subordinatesFromRoster, workFromWorkspace, answeredHelpers, evolutionWork,
   jobOwners, jobWork, lastPrinted, newerTail, type TuiJobOwner,
-  type TuiHubData, type TuiHubRow, type TuiWorkEntry, type TuiHubView, type TuiSubagentChat,
+  type TuiHubData, type TuiHubRow, type TuiWorkEntry, type TuiHubView,
 } from './hubs';
 import { DEFAULT_TUI_THEME_SELECTION, useTuiTheme, type ThemeSelection } from './theme';
 import {
@@ -281,7 +282,6 @@ function ChatScene({
     setHubSelectedIdState(id);
   }, []);
 
-  const [subagentChat, setSubagentChat] = useState<TuiSubagentChat | null>(null);
   const subagentScrollRef = useRef<ScrollBoxRenderable | null>(null);
 
   const [draft, setDraft] = useState('');
@@ -343,11 +343,6 @@ function ChatScene({
   const hintedTakesRef = useRef<string | null>(null);
   const modelRequestRef = useRef(0);
   // Effects cannot return their tasks; these refs hold scene-owned work until cleanup.
-  const hubRefreshTaskRef = useRef<Promise<void> | null>(null);
-  const connectionTaskRef = useRef<Promise<void> | null>(null);
-  const metadataTaskRef = useRef<Promise<void> | null>(null);
-  const rosterTaskRef = useRef<Promise<void> | null>(null);
-  const subagentTaskRef = useRef<Promise<void> | null>(null);
   const commands = useMemo(() => commandsForClient(client), [client]);
   const deviceConnect = useDeviceConnectPrompt();
 
@@ -820,9 +815,7 @@ function ChatScene({
 
     if (hub !== null && hub.identity === identity) return;
     const abort = new AbortController();
-    let task: Promise<void> | null = null;
-    let settled = false;
-    task = (async () => {
+    detach(Effect.promise(async () => {
       try {
         const fresh = await (readHub ?? loadHubData)(client);
 
@@ -833,15 +826,8 @@ function ChatScene({
           toKinuError({ doing: 'refreshing the agent hub', cause, otherwise: 'unavailable' }),
           { workspace: client.agentName },
         );
-      } finally {
-        settled = true;
-
-        if (task !== null && hubRefreshTaskRef.current === task) hubRefreshTaskRef.current = null;
       }
-    })();
-    hubRefreshTaskRef.current = task;
-
-    if (settled && hubRefreshTaskRef.current === task) hubRefreshTaskRef.current = null;
+    }));
 
     return () => { abort.abort(); };
   }, [client, hub, readHub]);
@@ -898,7 +884,7 @@ function ChatScene({
     const identity = `${client.mode}:${client.agentName}`;
     let live = true;
 
-    rosterTaskRef.current = (async () => {
+    detach(Effect.promise(async () => {
       const read = await readRoster(client);
 
       if (!live) return;
@@ -906,7 +892,7 @@ function ChatScene({
       setHub((current) => (current?.identity === identity
         ? { ...current, data: { agents: current.data.agents, profile: current.data.profile, ...read } }
         : current));
-    })();
+    }));
 
     return () => { live = false; };
   }, [client, hubView, hubReadsMoved]);
@@ -918,25 +904,7 @@ function ChatScene({
 
   const subagentSurface = activeSurface?.kind === 'subagent' ? activeSurface : null;
 
-  useEffect(() => {
-    if (subagentSurface === null) return;
-    const { path, label, actorId } = subagentSurface;
-    const name = path.join('/');
-    let live = true;
-    setSubagentChat({ name, label, messages: null, error: null });
-
-    subagentTaskRef.current = (async () => {
-      try {
-        const conversation = await readSubagentConversation(client, actorId === null ? { path: [...path] } : { path: [], actor: actorId });
-
-        if (live) setSubagentChat({ name, label, messages: conversation, error: null });
-      } catch (cause) {
-        if (live) setSubagentChat({ name, label, messages: null, error: `Its conversation could not be read: ${renderThrownChain({ cause })}` });
-      }
-    })();
-
-    return () => { live = false; };
-  }, [client, subagentSurface]);
+  const subagentChat = useSubagentChat(client, subagentSurface);
 
   const openModelPicker = useCallback(async () => {
     const request = ++modelRequestRef.current;
@@ -1609,9 +1577,7 @@ function ChatScene({
       })();
     }
 
-    let task: Promise<void> | null = null;
-    let settled = false;
-    task = (async () => {
+    detach(Effect.promise(async () => {
       try {
         if (!skipHydrationRef.current) {
           try {
@@ -1660,18 +1626,9 @@ function ChatScene({
       } catch (cause) {
         if (!abort.signal.aborted) addError({ cause });
       } finally {
-        try {
-          if (replayTask) await replayTask;
-        } finally {
-          settled = true;
-
-          if (task !== null && connectionTaskRef.current === task) connectionTaskRef.current = null;
-        }
+        if (replayTask) await replayTask;
       }
-    })();
-    connectionTaskRef.current = task;
-
-    if (settled && connectionTaskRef.current === task) connectionTaskRef.current = null;
+    }));
 
     return () => {
       abort.abort();
@@ -1681,51 +1638,40 @@ function ChatScene({
 
   useEffect(() => {
     const abort = new AbortController();
-    let task: Promise<void> | null = null;
-    let settled = false;
-    task = (async () => {
-      try {
-        await Promise.all([
-          (async () => {
-            try {
-              const next = await client.status();
+    detach(Effect.promise(async () => {
+      await Promise.all([
+        (async () => {
+          try {
+            const next = await client.status();
 
-              if (abort.signal.aborted) return;
-              setStatus(next);
-              setModelSpec((current) => current || (next.model ?? ''));
-            } catch (cause) {
-              if (!abort.signal.aborted) {
-                addMessage({
-                  role: 'system',
-                  content: errorLine(`Workspace status could not be read: ${renderThrownChain({ cause })}`),
-                });
-              }
+            if (abort.signal.aborted) return;
+            setStatus(next);
+            setModelSpec((current) => current || (next.model ?? ''));
+          } catch (cause) {
+            if (!abort.signal.aborted) {
+              addMessage({
+                role: 'system',
+                content: errorLine(`Workspace status could not be read: ${renderThrownChain({ cause })}`),
+              });
             }
-          })(),
-          (async () => {
-            try {
-              const menu = await client.listModels();
+          }
+        })(),
+        (async () => {
+          try {
+            const menu = await client.listModels();
 
-              if (!abort.signal.aborted) setModelCatalog(menu.models);
-            } catch (cause) {
-              if (!abort.signal.aborted) {
-                addMessage({
-                  role: 'system',
-                  content: errorLine(`The model catalog could not be read: ${renderThrownChain({ cause })}`),
-                });
-              }
+            if (!abort.signal.aborted) setModelCatalog(menu.models);
+          } catch (cause) {
+            if (!abort.signal.aborted) {
+              addMessage({
+                role: 'system',
+                content: errorLine(`The model catalog could not be read: ${renderThrownChain({ cause })}`),
+              });
             }
-          })(),
-        ]);
-      } finally {
-        settled = true;
-
-        if (task !== null && metadataTaskRef.current === task) metadataTaskRef.current = null;
-      }
-    })();
-    metadataTaskRef.current = task;
-
-    if (settled && metadataTaskRef.current === task) metadataTaskRef.current = null;
+          }
+        })(),
+      ]);
+    }));
 
     return () => { abort.abort(); };
   }, [addMessage, client]);
@@ -2015,13 +1961,9 @@ function ChatScene({
     }
 
     if (subagentSurface !== null) {
-      const shown = subagentChat?.name === subagentSurface.path.join('/')
-        ? subagentChat
-        : { name: subagentSurface.path.join('/'), label: subagentSurface.label, messages: null, error: null };
-
       return (
         <SubagentChatOverlay
-          chat={shown}
+          chat={subagentChat ?? { name: subagentSurface.path.join('/'), label: subagentSurface.label, messages: null, error: null }}
           width={sceneWidth}
           height={height}
           scrollRef={(value) => { subagentScrollRef.current = value; }}
@@ -2391,24 +2333,6 @@ async function readRoster(client: AgentClient): Promise<Pick<TuiHubData, 'subord
       ? { work: [...workFromWorkspace(work.value), ...evolution] }
       : { work: evolution, workError: `Work could not be read: ${renderThrownChain({ cause: work.reason })}` }),
   };
-}
-
-/** Pages arrive newest first. */
-async function readSubagentConversation(client: AgentClient, target: { path: string[]; actor?: string }): Promise<DisplayMessage[]> {
-  const pages: DisplayMessage[][] = [];
-  let cursor: PositionCursor | undefined;
-
-  do {
-    const result = await client.inspectSubordinate({ ...target, view: 'history', page: cursor === undefined ? {} : { cursor } });
-
-    if (result.view === 'missing') throw new Error(result.error);
-
-    if (result.view !== 'history') throw new Error(`the conversation read answered "${result.view}"`);
-    pages.unshift(result.page.items.map((item) => ({ id: item.id, role: item.role, content: item.content })));
-    cursor = result.page.status === 'more' ? result.page.next : undefined;
-  } while (cursor !== undefined);
-
-  return pages.flat();
 }
 
 async function readSubordinates(client: AgentClient): Promise<Pick<TuiHubData, 'subordinates' | 'helpers'> & { evolution: TuiWorkEntry[]; owners: TuiJobOwner[] }> {
