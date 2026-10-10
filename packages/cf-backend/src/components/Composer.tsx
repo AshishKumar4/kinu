@@ -12,7 +12,7 @@ import {
 } from "@phosphor-icons/react";
 import { fmtSpan, type TurnLiveness, type WorkMode } from "@kinu.run/core";
 import { AttachButton, AttachmentTray, pasteAttachments, type AttachmentsControl } from "@/components/Attachments";
-import type { WorkspaceNotice } from "@/hooks/workspace-reads";
+import type { WorkspaceNotice } from "@kinu.run/core";
 import { composing } from "@/components/ui/form";
 
 const CHAT_MODES: readonly WorkMode[] = ["build", "plan"];

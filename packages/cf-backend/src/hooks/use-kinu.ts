@@ -54,9 +54,9 @@ import { jobPhase, type InspectedWork } from "@kinu.run/core";
 import type { AsyncResource } from "./use-async-resource";
 import { useSocketFrames, type SocketFrame } from "./socket-frames";
 import {
-  createLiveRefreshAdmission, errorMessage, formatNaturalList, formatWorkspaceError, loadWorkspaceSnapshot, refreshLiveResource,
+  createLiveRefreshAdmission, formatWorkspaceError, loadWorkspaceSnapshot, naturalList, readFailureText, refreshLiveResource,
   SNAPSHOT_SEEDED_SOURCES, type ConsentResolutionReporter, type ErrorSource, type LiveRefreshAdmission, type LiveRefreshSource,
-} from "./workspace-reads";
+} from "@kinu.run/core";
 import { pruneSlateReloads } from "@kinu.run/core";
 
 
@@ -643,7 +643,7 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
         await rpc("getActorSnapshot", [subordinate]);
         setSourceError("snapshot", null);
       } catch (cause) {
-        setSourceError("snapshot", errorMessage({ cause }));
+        setSourceError("snapshot", readFailureText({ cause }));
       }
     })), 25_000);
 
@@ -778,7 +778,7 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
     }
 
     if (thrown !== null) {
-      const reason = `Recovery failed: ${errorMessage(thrown)}`;
+      const reason = `Recovery failed: ${readFailureText(thrown)}`;
       setSourceError("recover", reason);
 
       return reason;
@@ -937,7 +937,7 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
       return null;
     } catch (err) {
       // Roll back to the stored spec so the picker never shows an unsaved model.
-      let reason = `Could not switch model: ${errorMessage({ cause: err })}`;
+      let reason = `Could not switch model: ${readFailureText({ cause: err })}`;
 
       try {
         const stored = subordinate === undefined
@@ -946,7 +946,7 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
 
         setAgentStatus(prev => prev ? { ...prev, model: stored.spec ?? '' } : prev);
       } catch (rollbackErr) {
-        reason += `. Could not re-read the saved model either (${errorMessage({ cause: rollbackErr })}), so the picker may not show the saved model`;
+        reason += `. Could not re-read the saved model either (${readFailureText({ cause: rollbackErr })}), so the picker may not show the saved model`;
       }
 
       setSourceError("model", reason);
@@ -965,7 +965,7 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
       setSourceError("model", null);
     } catch (err) {
       setAgentStatus((prev) => prev ? { ...prev, reasoningEffort: before } : prev);
-      setSourceError("model", `Could not set the thinking level: ${errorMessage({ cause: err })}`);
+      setSourceError("model", `Could not set the thinking level: ${readFailureText({ cause: err })}`);
     }
   }, [rpc, setSourceError, subordinate, agentStatus?.reasoningEffort]);
 
@@ -1063,7 +1063,7 @@ function useWorkspaceReads(link: ChatLink) {
 
   const liveErrors = consentResolutionReasons.length === 0
     ? errors
-    : { ...errors, consentResolution: formatNaturalList(consentResolutionReasons) };
+    : { ...errors, consentResolution: naturalList(consentResolutionReasons) };
 
   const error = formatWorkspaceError(liveErrors, loaded);
   const [executors, setExecutors] = useState<ExecutorInfo[]>([]);
@@ -1387,7 +1387,7 @@ function useWorkspaceReads(link: ChatLink) {
       } catch (cause) {
         return {
           executor,
-          result: { ports: [], error: errorMessage({ cause }) },
+          result: { ports: [], error: readFailureText({ cause }) },
         } satisfies ExecutorPortRefresh;
       }
     }));
@@ -1605,7 +1605,7 @@ function useWorkspaceReads(link: ChatLink) {
       }
 
       if (thrown !== null && seq === searchSeq.current) {
-        setSourceError("memory", `Memory search failed: ${errorMessage(thrown)}`);
+        setSourceError("memory", `Memory search failed: ${readFailureText(thrown)}`);
       }
     })), MEMORY_SEARCH_DEBOUNCE_MS);
   }, [rpc, memoryContent, setSourceError]);

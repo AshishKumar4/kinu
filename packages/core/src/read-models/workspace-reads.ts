@@ -1,10 +1,10 @@
 /**
  * The workspace page's reads as one policy: which sources it reads, which a landed opening refreshes, which read may
- * still publish, and how their failures read to the owner. Pure; `useKinu` drives it.
+ * still publish, and how their failures read to the owner. Pure; the browser's `useKinu` drives it.
  */
-import { looksLikeSecretField } from "@kinu.run/core";
-import { renderThrownChain } from "@kinu.run/core/obs";
-import * as v from "valibot";
+import * as v from 'valibot';
+import { looksLikeSecretField } from '../events/hub/visibility';
+import { renderThrownChain } from '../obs/index';
 
 /** Each source owns and clears its own message, so one recovery never hides another failure.
  *  Sources store the bare reason; the sentence is composed once, below. */
@@ -169,7 +169,7 @@ export function formatWorkspaceError(errors: WorkspaceErrors, loaded: boolean): 
   const scope = blocking ? blocked : available;
 
   // Reasons are arbitrary RPC text, so they are listed one after another, not conjoined.
-  const list = formatNaturalList(labels);
+  const list = naturalList(labels);
 
   const sentenceCased = `${list.slice(0, 1).toUpperCase()}${list.slice(1)}`;
   const blockedTitle = loaded ? `Could not refresh ${list}.` : "Could not open this workspace";
@@ -220,7 +220,7 @@ export async function loadWorkspaceSnapshot(
     return "loaded";
   } catch (error) {
     if (!isCurrent()) return "superseded";
-    const failed = errorMessage({ cause: error });
+    const failed = readFailureText({ cause: error });
     report("snapshot", failed);
 
     return { failed };
@@ -248,11 +248,12 @@ export async function refreshLiveResource<Value>(
     report(source, null);
   } catch (error) {
     if (!isCurrent()) return;
-    report(source, errorMessage({ cause: error }));
+    report(source, readFailureText({ cause: error }));
   }
 }
 
-export function errorMessage({ cause }: { cause: unknown }): string {
+/** A failure as one line of the owner's notice, whatever was thrown. */
+export function readFailureText({ cause }: { cause: unknown }): string {
   if (cause instanceof Error && cause.message) return renderThrownChain({ cause });
   const text = v.safeParse(v.string(), cause);
 
@@ -262,7 +263,8 @@ export function errorMessage({ cause }: { cause: unknown }): string {
   catch (error) { return `unrenderable error: ${renderThrownChain({ cause: error })}`; }
 }
 
-export function formatNaturalList(values: readonly string[]): string {
+/** `a`, `a and b`, `a, b, and c`. */
+export function naturalList(values: readonly string[]): string {
   if (values.length <= 1) return values[0] ?? "unknown data";
 
   if (values.length === 2) return `${values[0]} and ${values[1]}`;
