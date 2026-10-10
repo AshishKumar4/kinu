@@ -330,6 +330,7 @@ describe('a seated head whose job its owner refused to stop', () => {
     const clock = handClock(Date.now());
     const BUILD_MS = 60_000;
     const events: string[] = [];
+    const stopRefused = Promise.withResolvers<void>();
 
     const build = tool({
       description: 'Run code on the machine.',
@@ -361,7 +362,13 @@ describe('a seated head whose job its owner refused to stop', () => {
           release: async () => { events.push('the seat was released'); },
           jobs: {
             ...seat.jobs,
-            ports: { jobOutput: () => {}, clock, onCancelled: () => { throw new Error('the machine did not answer the stop'); } },
+            ports: {
+              jobOutput: () => {}, clock,
+              onCancelled: () => {
+                stopRefused.resolve();
+                throw new Error('the machine did not answer the stop');
+              },
+            },
           },
         };
       },
@@ -380,8 +387,9 @@ describe('a seated head whose job its owner refused to stop', () => {
     await clock.whenArmed(2);
     await head.abort('the owner stopped it');
 
-    // Every turn of the event loop the stop takes, and more: nothing has let go of the running build.
-    for (let turn = 0; turn < 200 && events.length === 0; turn++) await new Promise<void>((resolve) => { setImmediate(resolve); });
+    // Once the refusal is answered, all the stop does is settle: by the next turn of the event loop it has let go, or not.
+    await stopRefused.promise;
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
 
     expect(events).toEqual([]);
 
