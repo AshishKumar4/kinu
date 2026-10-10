@@ -1,4 +1,5 @@
 // The agent's `file` tool reaches another machine's file through that machine's mount, `/pc/<name>/...`,
+import * as v from 'valibot';
 // and names what it touched by the machine's reference, `<name>://...`, which a chat surface turns into a link.
 import { describe, expect, test } from 'bun:test';
 import { present, toolExecute } from '@kinu.run/test-utils';
@@ -15,7 +16,8 @@ import type { ShellApprovalPolicy } from '../src/safety/approval-gate';
 
 type FileToolInput = JsonObject & { readonly op: string };
 
-import type { JsonValue, JsonObject } from '../src/utils/json';
+import { isJsonObject, type JsonValue, type JsonObject } from '../src/utils/json';
+import { sha256Hex } from '../src/safety/argument-digest';
 import { standardMounts, withMountTable } from '../src/vfs/mounts';
 import { createTestRuntime, conversationsFor } from './helpers';
 import { cloudPlanes } from '../src/vfs/resolve';
@@ -46,6 +48,19 @@ function fleet(written: JsonValue): DeviceTransport & { readonly frames: Frame[]
       if (method === 'statPath') return { size: bytes.length, mtimeMs: 0, isDir: false };
 
       if (method === 'writeFile') return written;
+
+      // The machine compares the bytes it holds against the digest the write names, and answers the new one.
+      if (method === 'writeFileIfDigest') {
+        const expected = params[2] ?? null;
+        const held = sha256Hex(bytesOn(opts?.deviceId));
+
+        if (expected !== held && expected !== null) return { ok: false, sha256: held };
+        const answer: JsonObject = { ok: true, sha256: sha256Hex(Buffer.from(v.parse(v.string(), params[1]), 'base64')) };
+
+        if (isJsonObject(written)) Object.assign(answer, written);
+
+        return answer;
+      }
 
       if (method === 'readRange') {
         const offset = Number(params[1]);
@@ -116,8 +131,8 @@ describe('a file on another machine', () => {
 
     expect(await file({ op: 'write', path: '/pc/ashish@studio/home/notes.md', content: 'moved here' }))
       .toMatchObject({ reference: 'ashish@studio://home/notes.md' });
-    expect(transport.frames.filter((frame) => frame.method === 'writeFile'))
-      .toEqual([{ method: 'writeFile', path: '/home/notes.md', deviceId: 'dev-studio' }]);
+    expect(transport.frames.filter((frame) => frame.method.startsWith('writeFile')))
+      .toEqual([{ method: 'writeFileIfDigest', path: '/home/notes.md', deviceId: 'dev-studio' }]);
   });
 
   test('written where no checkpoint covers it, says undo cannot restore the write', async () => {

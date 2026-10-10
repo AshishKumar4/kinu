@@ -1,4 +1,5 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import { sha256Hex } from '../src/safety/argument-digest';
 /**
  * The `/sandbox` mount end to end: `file` tool and codemode `sandbox.*` over one container view.
  * The double follows the native file boundary: a miss carries its errno in `Error.cause`, an empty
@@ -59,6 +60,7 @@ class ContainerFs {
 
 function container(fs: ContainerFs): SandboxHandle {
 	const handle: SandboxHandle = {
+		...sandboxHandleLifecycle,
 		async readFile(path, opts) {
 			const resolved = fs.resolve(path);
 
@@ -81,6 +83,17 @@ function container(fs: ContainerFs): SandboxHandle {
 			fs.files.set(resolved, opts?.encoding === 'base64'
 				? new Uint8Array(Buffer.from(content, 'base64'))
 				: new TextEncoder().encode(content));
+		},
+		// The guest compares what it holds against the digest named, then replaces, as the devbox's guest process does.
+		async writeFileIfDigest(path, contentBase64, expected) {
+			const resolved = fs.resolve(path);
+			const held = fs.files.get(resolved);
+			const found = held === undefined ? null : sha256Hex(held);
+
+			if (found !== expected) return { ok: false, sha256: found };
+			await handle.writeFile(path, contentBase64, { encoding: 'base64' });
+
+			return { ok: true, sha256: sha256Hex(Buffer.from(contentBase64, 'base64')) };
 		},
 		async listFiles(path) {
 			const resolved = fs.resolve(path);
@@ -153,7 +166,6 @@ function container(fs: ContainerFs): SandboxHandle {
 		async exposePort(port) { return { url: `https://preview.invalid/${port}`, port, route: { reached: true } }; },
 		async unexposePort() {},
 		async getExposedPorts() { return []; },
-		...sandboxHandleLifecycle,
 		async statFile(path) {
 			const resolved = fs.resolve(path);
 			const bytes = fs.files.get(resolved);
