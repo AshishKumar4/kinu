@@ -1,6 +1,8 @@
 /**
- * The account's memory as one resource the shell owns: seeded by a read, and its proposals kept current by the
- * account socket's frames. Settings shows all of it and the attention stack what waits, both from this one owner.
+ * The account's memory as one resource the shell owns: seeded by a read, and read whole again on each account socket
+ * frame, since a proposal decided anywhere can keep a fact or a note. A frame's proposals show at once; the read
+ * that follows brings the facts and notes. Settings shows all of it and the attention stack what waits, both from
+ * this one owner.
  */
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { Cause, Effect } from "effect";
@@ -16,7 +18,7 @@ export interface AccountMemory {
   readonly pending: readonly AccountMemoryProposal[] | null;
   /** Reads the memory again: after a change the owner made here, or a read that failed. */
   readonly reload: () => void;
-  /** The account socket's frame of what waits. */
+  /** The account socket's frame of what waits: shown at once, and the whole memory read again behind it. */
   readonly framed: (pending: readonly AccountMemoryProposal[]) => void;
 }
 
@@ -75,7 +77,8 @@ export function useAccountMemory(): AccountMemory {
   const framed = useCallback((pending: readonly AccountMemoryProposal[]): void => {
     frames.current += 1;
     dispatch({ kind: "framed", pending });
-  }, []);
+    reload();
+  }, [reload]);
 
   return useMemo(() => ({
     resource: state.resource, pending: state.pending ?? lastValue(state.resource)?.pending ?? null, reload, framed,

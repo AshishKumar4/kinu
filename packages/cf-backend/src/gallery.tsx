@@ -733,7 +733,10 @@ const ACCOUNT_MEMORY_FIXTURE: JsonValue = {
 
 /** The read and the roster socket answer one list of proposals, as the user object does. */
 function accountMemoryFixture(path: string, method: string): Response | null {
-  return path === "/api/user/memory" && method === "GET" ? fixtureJson({ ...v.parse(JsonObjectSchema, ACCOUNT_MEMORY_FIXTURE), pending: galleryMemoryPending }) : null;
+  if (path !== "/api/user/memory" || method !== "GET") return null;
+  const memory = v.parse(v.looseObject({ facts: v.array(JsonValueSchema) }), ACCOUNT_MEMORY_FIXTURE);
+
+  return fixtureJson({ ...memory, facts: [...memory.facts, ...galleryKeptFacts], pending: galleryMemoryPending });
 }
 
 function accountComputerSizeFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
@@ -960,6 +963,18 @@ function galleryMemoryFrame(socket: EventTarget): void {
   socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ type: "account_memory", pending: galleryMemoryPending }) }));
 }
 
+/** The facts the owner kept from proposals here. */
+let galleryKeptFacts: JsonValue[] = [];
+
+function keptFact(proposal: JsonValue): JsonValue {
+  const { proposal: fact, origin } = v.parse(v.object({ proposal: v.object({ key: v.string(), value: v.string() }), origin: JsonValueSchema }), proposal);
+
+  return {
+    key: fact.key, value: fact.value, importance: 0.5, veracity: "stated", lastObservedAt: NOW, origin,
+    history: [{ forgotten: false, value: fact.value, origin, at: NOW }],
+  };
+}
+
 /** The owner's decision on a proposal, recorded (`data-gallery-memory-decisions`), then what is left sent to every page. */
 function galleryMemoryDecision(path: string, method: string, body: BodyInit | null | undefined): Response | null {
   const id = /^\/api\/user\/memory\/proposals\/([^/]+)$/u.exec(path)?.[1];
@@ -969,7 +984,11 @@ function galleryMemoryDecision(path: string, method: string, body: BodyInit | nu
   const root = document.documentElement.dataset;
 
   root.galleryMemoryDecisions = `${root.galleryMemoryDecisions ?? ""}${decodeURIComponent(id)}:${decision} `;
-  galleryMemoryPending = galleryMemoryPending.filter((row) => v.parse(v.object({ id: v.string() }), row).id !== decodeURIComponent(id));
+  const decided = galleryMemoryPending.find((row) => v.parse(v.object({ id: v.string() }), row).id === decodeURIComponent(id));
+  galleryMemoryPending = galleryMemoryPending.filter((row) => row !== decided);
+
+  // A fact kept is a fact the next read answers, as the user object keeps it.
+  if (decision === "accept" && decided !== undefined) galleryKeptFacts = [...galleryKeptFacts, keptFact(decided)];
   queueMicrotask(() => { for (const socket of rosterSockets) galleryMemoryFrame(socket); });
 
   // The route's own answer, as written: its body is the wire's, not a result this gallery decides.

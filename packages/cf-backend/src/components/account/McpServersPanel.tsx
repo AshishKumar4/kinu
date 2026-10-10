@@ -26,7 +26,7 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
   const { servers: read, presets, refresh: reload } = mcp;
   const { resource } = read;
 
-  // Open, it reads servers and presets every few seconds, so a sign-in or a rotated credential elsewhere shows here.
+  // Open, it watches: the shared read chooses the cadence.
   useMcpWatch(mcp);
   const servers = lastValue(resource) ?? [];
   const [showAdd, setShowAdd] = useState(false);

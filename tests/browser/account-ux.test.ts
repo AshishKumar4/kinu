@@ -798,6 +798,28 @@ describe('Settings → Memory', () => {
     });
   });
 
+  // 26244c765 review: a proposal kept from the attention stack left Settings' facts as they were; the account's
+  // frame now reads the whole memory again.
+  test('a proposal kept elsewhere is a kept fact in Settings at once', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'usersettingsstate&section=memory&memory=waiting', 'light', 'desktop');
+
+      try {
+        await page.waitForSelector('[data-account-memory-proposal="amp_city"]');
+        expect(await page.$('[data-account-memory-fact="owner_city"]')).toBeNull();
+
+        // Kept as the stack keeps it: the route, not this page's button.
+        await page.evaluate(async () => {
+          await fetch('/api/user/memory/proposals/amp_city', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ decision: 'accept' }) });
+        });
+        await page.waitForSelector('[data-account-memory-fact="owner_city"]');
+        expect(await page.$('[data-account-memory-proposal="amp_city"]')).toBeNull();
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
   // 26244c765: Settings kept its own copy of what waits, read once, so a proposal filed while it was open never showed.
   test('a proposal filed while Settings is open joins what waits, as the attention stack shows it', async () => {
     await withGallery(async (gallery) => {

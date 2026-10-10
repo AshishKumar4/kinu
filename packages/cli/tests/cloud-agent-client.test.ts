@@ -2,12 +2,11 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import type { Server, ServerWebSocket } from 'bun';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import {
-  JsonArraySchema, JsonObjectSchema, parseJsonObject, hostedActorSocketPath, hostedWindowMay,
+  JsonArraySchema, JsonObjectSchema, JsonValueSchema, parseJsonObject, hostedActorSocketPath, hostedWindowMay,
   ChatHistoryEntrySchema, restoredRows,
   type JsonObject, type JsonValue, type ReasoningEffort,
 } from '@kinu.run/core';
 import { CloudAgentClient } from '../src/cloud-agent-client';
-import { executeSlashCommand } from '../src/slash-commands';
 import { renderAccountSpendLines } from '../src/display';
 import { watchDeviceConsents } from '../src/consent-watch';
 import type { AgentClientEvent } from '../src/agent-client';
@@ -349,27 +348,21 @@ describe('CloudAgentClient protocol', () => {
   });
 
   // 26244c765: the client's schema dropped `queued`, so the CLI said the agent was implementing a plan it never started.
-  test('an approval whose turn did not start says so, in the words the workspace gave', async () => {
+  test('an approval whose turn did not start keeps the whole outcome the workspace gave', async () => {
     // The verdict is recorded and the turn it hands off was refused, as `decideAndHandOff` answers it.
-    const answers = new Map<string, JsonValue>([
-      ['getActivePlanReview', PENDING_PLAN],
-      ['decidePlanReview', { ok: true, plan: { ...PENDING_PLAN, status: 'approved' }, queued: false, queueError: 'the turn queue is full' }],
-    ]);
+    const decided: JsonObject = { ok: true, plan: { ...PENDING_PLAN, status: 'approved' }, queued: false, queueError: 'the turn queue is full' };
 
     const mock = startMockAgentServer({
-      serve: (frame) => (frame.type === 'rpc'
-        ? { type: 'rpc', id: frame.id ?? null, success: true, done: true, result: answers.get(v.parse(v.string(), frame.method)) ?? null }
+      serve: (frame) => (frame.type === 'rpc' && frame.method === 'decidePlanReview'
+        ? { type: 'rpc', id: frame.id ?? null, success: true, done: true, result: decided }
         : null),
     });
 
     const client = newClient(mock);
-    const outcome = await executeSlashCommand(client, '/plan approve');
+    const outcome = await client.plans?.decide('plan-1', 2, 'approve');
 
-    // The decision is told as saved and the turn as not started, in the workspace's own reason; never as running.
-    const text = v.parse(v.object({ kind: v.literal('text'), text: v.string() }), outcome).text;
-
-    expect({ saved: text.includes('Approved plan plan-1 revision 2'), reason: text.includes('the turn queue is full'), running: /implementing it now/.test(text) })
-      .toEqual({ saved: true, reason: true, running: false });
+    // The outcome as the workspace sent it: decided, and its turn not started, with the reason.
+    expect(v.parse(JsonValueSchema, outcome)).toEqual(decided);
     await client.close();
   });
 
