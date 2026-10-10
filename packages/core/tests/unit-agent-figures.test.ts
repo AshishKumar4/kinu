@@ -97,3 +97,25 @@ test('an agent\'s figures, read at each of its turns\' ends, are the ones a read
     { tokens: 2_750_000, usd: 20, activeMs: 18_821, cacheEma: 0.02 },
   ]);
 });
+
+test("the cache EMA reads the newest 400 steps, so steps that reported no cache use push a measured one out", () => {
+  const db = new Database(':memory:');
+  const sql = makeSql(db);
+  const execRaw = makeExecRaw(db);
+  initRunEventTables(execRaw);
+  initAgentFiguresTable(execRaw);
+  const { main } = createTestActors(sql, execRaw);
+  const recorder = new RunEventRecorder(sql, main);
+  const ema = () => readAgentFigures(sql, [main.actorId]).get(main.actorId)?.cacheEma;
+
+  openTurnRun(recorder, 'sparse', { agentId: main.actorId, causedBy: 'chat', userMessage: 'sparse', turnIndex: 0 });
+  recorder.emit('sparse', { type: 'step_finish', stepIndex: 0, usage: { input: 1_000, cacheRead: 1_000 } });
+  expect(ema()).toBe(1);
+
+  for (let stepIndex = 1; stepIndex <= 400; stepIndex += 1) recorder.emit('sparse', { type: 'step_finish', stepIndex });
+
+  // Read once at the end of the 400, and once a step at a time across them: the same window either way.
+  expect(ema()).toBeNull();
+  recorder.emit('sparse', { type: 'step_finish', stepIndex: 401, usage: { input: 1_000, cacheRead: 0 } });
+  expect(ema()).toBe(0);
+});

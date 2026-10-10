@@ -18,17 +18,24 @@ export const NO_FIGURES: AgentFigures = { activeMs: 0, cacheEma: null };
  *  folded a turn at a time is the one a single SUM over every row gave. */
 const CompensatedSchema = v.tuple([v.number(), v.number()]);
 
+/** The prompt-cache EMA is summarized over the agent's newest steps, measured or not. */
+const AGENT_STEP_WINDOW = 400;
+
+/** One step as the EMA reads it: its input and how much of it was read from the cache, each absent when unreported. */
+const WindowStepSchema = v.tuple([v.nullable(v.number()), v.nullable(v.number())]);
+
 const TotalsSchema = v.object({
   input: v.nullable(v.number()),
   output: v.nullable(v.number()),
   usd: v.nullable(CompensatedSchema),
   activeMs: CompensatedSchema,
-  cacheEma: v.nullable(v.number()),
+  /** The newest {@link AGENT_STEP_WINDOW} steps, oldest first. */
+  window: v.array(WindowStepSchema),
 });
 
 type Compensated = v.InferOutput<typeof CompensatedSchema>;
 
-const NO_TOTALS: v.InferOutput<typeof TotalsSchema> = { input: null, output: null, usd: null, activeMs: [0, 0], cacheEma: null };
+const NO_TOTALS: v.InferOutput<typeof TotalsSchema> = { input: null, output: null, usd: null, activeMs: [0, 0], window: [] };
 
 function compensated([sum, error]: Compensated, value: number): Compensated {
   const next = sum + value;
@@ -57,9 +64,9 @@ export function readAgentFigures(sql: SqlExecutor, actorIds: readonly string[]):
 }
 
 /** Folded forward: the events since the last read are added to the totals stored with it, so a turn's end reads its own
- *  turn's events, never the whole history (the join over every turn read 2,999 rows at turn 300). The EMA continues
- *  from the one stored, where it was summarized over the newest 400 steps: the weight a step 400 back still carries,
- *  0.8^400, is below a double's precision. */
+ *  turn's events, never the whole history (the join over every turn read 2,999 rows at turn 300). The EMA is
+ *  summarized, as it always was, over the newest {@link AGENT_STEP_WINDOW} steps, kept with the totals: a step that
+ *  reported no cache use still pushes an older measured one out. */
 function actorFigures(sql: SqlExecutor, actorId: string): AgentFigures {
   const [stored] = sql<{ through: number; totals: string }>`SELECT through, totals FROM agent_figure_folds WHERE actor_id = ${actorId}`;
   const totals = stored === undefined ? NO_TOTALS : v.parse(TotalsSchema, JSON.parse(stored.totals));
@@ -91,20 +98,24 @@ function actorFigures(sql: SqlExecutor, actorId: string): AgentFigures {
     if (event.ms !== null) activeMs = compensated(activeMs, event.ms);
   }
 
-  const steps = events.flatMap((event): StepCost[] => {
+  const window = [...totals.window, ...events.flatMap((event): Array<v.InferOutput<typeof WindowStepSchema>> => {
     const step = event.step === null ? null : parseStoredRunEvent(event.step);
 
-    return step?.type === 'step_finish' ? [step] : [];
-  });
+    return step?.type === 'step_finish' ? [[step.usage?.input ?? null, step.usage?.cacheRead ?? null]] : [];
+  })].slice(-AGENT_STEP_WINDOW);
 
-  const cacheEma = summarizeSteps(steps, { windowLimit: steps.length, emaFrom: totals.cacheEma }).cacheHit.ema;
+  const steps = window.map(([stepInput, cacheRead]): StepCost => ({
+    usage: { ...(stepInput !== null && { input: stepInput }), ...(cacheRead !== null && { cacheRead }) },
+  }));
+
+  const cacheEma = summarizeSteps(steps, { windowLimit: AGENT_STEP_WINDOW }).cacheHit.ema;
 
   if (events.length > 0) {
     // Reduced, not spread: an agent's first read folds its whole history.
     const through = events.reduce((newest, event) => Math.max(newest, event.seq), 0);
 
     void sql`INSERT INTO agent_figure_folds (actor_id, through, totals)
-      VALUES (${actorId}, ${through}, ${JSON.stringify({ input, output, usd, activeMs, cacheEma })})
+      VALUES (${actorId}, ${through}, ${JSON.stringify({ input, output, usd, activeMs, window })})
       ON CONFLICT (actor_id) DO UPDATE SET through = excluded.through, totals = excluded.totals`;
   }
 
