@@ -15,7 +15,8 @@ const OPERATION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 /**
  * Writes `data` at `path` only if the file's bytes hash to `expected` (null: only if no file is there). One guest
  * process reads the new bytes from stdin, compares, and replaces through a temp file and a rename, so the compare and
- * the write are the guest's own instant, and a reader never sees half a file.
+ * the write are the guest's own instant, and a reader never sees half a file. The guest keeps each `operation`'s
+ * answer, so a resend after a lost reply gets the first send's answer rather than a second compare.
  */
 export function writeFileIfDigest(
   container: Pick<Container, 'exec'>,
@@ -43,9 +44,33 @@ export function writeFileIfDigest(
 }
 
 const WRITE_IF_DIGEST = `
-import hashlib, json, os, secrets, sys
-path, expected = sys.argv[1], sys.argv[2] or None
+import fcntl, hashlib, json, os, secrets, sys, time
+path, expected, operation = sys.argv[1], sys.argv[2] or None, sys.argv[3]
 data = sys.stdin.buffer.read()
+# Each operation's answer, kept for its resends: a resend after a lost reply is answered what the first send did, and
+# one that arrives while the first still runs waits for it. A day-old answer has no resend left to serve.
+journal = '/tmp/kinu-digest-writes'
+os.makedirs(journal, mode=0o700, exist_ok=True)
+for entry in os.scandir(journal):
+    try:
+        if entry.stat().st_mtime < time.time() - 86400:
+            os.unlink(entry.path)
+    except FileNotFoundError:
+        pass
+answered = os.path.join(journal, operation + '.json')
+lock = os.open(os.path.join(journal, operation + '.lock'), os.O_RDWR | os.O_CREAT, 0o600)
+fcntl.flock(lock, fcntl.LOCK_EX)
+if os.path.exists(answered):
+    with open(answered) as first:
+        sys.stdout.write(first.read())
+    sys.exit(0)
+def answer(reply):
+    text = json.dumps(reply)
+    pending = answered + '.' + secrets.token_hex(6)
+    with open(pending, 'w') as out:
+        out.write(text)
+    os.rename(pending, answered)
+    print(text)
 try:
     with open(path, 'rb') as held:
         found = hashlib.sha256(held.read()).hexdigest()
@@ -53,7 +78,7 @@ try:
 except FileNotFoundError:
     found, mode = None, None
 if found != expected:
-    print(json.dumps({'ok': False, 'sha256': found}))
+    answer({'ok': False, 'sha256': found})
     sys.exit(0)
 directory = os.path.dirname(path) or '/'
 os.makedirs(directory, exist_ok=True)
@@ -70,5 +95,5 @@ except BaseException:
     if os.path.exists(temporary):
         os.unlink(temporary)
     raise
-print(json.dumps({'ok': True, 'sha256': hashlib.sha256(data).hexdigest()}))
+answer({'ok': True, 'sha256': hashlib.sha256(data).hexdigest()})
 `;

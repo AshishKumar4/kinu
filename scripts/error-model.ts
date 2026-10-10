@@ -238,8 +238,6 @@ export const DECLARED = byFile([
       'DO RPC answers (capability install, subordinate title, model-settings fan-out, cancel) and the Agents SDK\'s `{ success: false }` socket denial, read across the isolate'],
     ['packages/cf-backend/src/cli/routes.ts', ['body'],
       'the CLI routes\' HTTP JSON bodies, read by the CLI\'s fetch'],
-    ['packages/core/src/execution/sandbox.ts', ['writeFileIfDigest'],
-      'the sandbox plane\'s answer to a digest-checked write, `VfsDigestWrite`, the plane contract every plane answers'],
     ['packages/cli-backend/src/host-mount.ts', ['replaceNow'],
       'the host folder\'s answer to a digest-checked write, `VfsDigestWrite`, the plane contract every plane answers'],
     ['packages/core/src/types/primitives.ts', ['VfsDigestWrite'],
