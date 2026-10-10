@@ -520,10 +520,10 @@ test('a denied edit keeps its counter through the persisted file-edit event', as
   const { stores, db } = createTestRuntime();
   const files = memoryVfs({ '/denied.txt': 'before' });
 
-  const denied = {
-    ...files,
-    async writeFile(path: string) { throw new VfsError('EACCES', `permission denied, write '${path}'`, path); },
-  };
+  const refuse = async (path: string): Promise<never> => { throw new VfsError('EACCES', `permission denied, write '${path}'`, path); };
+
+  // Every way the plane writes: the tool replaces a file it read through the plane's own check.
+  const denied = { ...files, writeFile: refuse, writeFileIfRevision: refuse, writeFileIfDigest: refuse };
 
   const { call, ledger } = toolFor(denied);
 
