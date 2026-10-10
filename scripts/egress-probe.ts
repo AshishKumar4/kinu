@@ -17,7 +17,7 @@ const VAULT_DOWN = { UserDO: { idFromName: (name) => name, get: () => { throw ne
 export class Egress extends WorkerEntrypoint {
   fetch(request) { return handleContainerEgress(request, VAULT_DOWN, PARAMS); }
   connect(socket) { return handleEgressConnect(socket, PARAMS); }
-  connectTls(target, toServer) { return handleEgressTls(target, toServer, PARAMS); }
+  connectTls(target) { return handleEgressTls(target, PARAMS); }
 }
 
 const text = (bytes) => new TextDecoder().decode(bytes);
@@ -51,11 +51,14 @@ export default {
       return first.done ? 'ended empty' : text(first.value).split('\\r\\n')[0];
     })().catch((error) => 'failed: ' + String(error)), 10000);
     out.tls = await within((async () => {
-      const toServer = new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode(http)); controller.close(); } });
-      const answer = await egress.connectTls({ hostname: 'example.com', port: 443 }, toServer);
-      return text(new Uint8Array(await new Response(answer).arrayBuffer())).split('\\r\\n')[0];
+      const tls = await egress.connectTls({ hostname: 'example.com', port: 443 });
+      const writer = tls.writable.getWriter();
+      await writer.write(new TextEncoder().encode(http));
+      const reader = tls.readable.getReader();
+      const first = await reader.read();
+      return first.done ? 'ended empty' : text(first.value).split('\\r\\n')[0];
     })().catch((error) => 'failed: ' + String(error)), 10000);
-    out.tlsPrivate = await within(egress.connectTls({ hostname: '192.168.1.1', port: 443 }, new ReadableStream()).then(() => 'opened', (error) => 'refused: ' + String(error)), 5000);
+    out.tlsPrivate = await within(egress.connectTls({ hostname: '192.168.1.1', port: 443 }).then(() => 'opened', (error) => 'refused: ' + String(error)), 5000);
     out.websocket = await within((async () => {
       const response = await egress.fetch('https://echo.websocket.org/', { headers: { upgrade: 'websocket' } });
       if (response.webSocket === null) return 'status ' + response.status;
