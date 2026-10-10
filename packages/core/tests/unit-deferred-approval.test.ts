@@ -1037,6 +1037,37 @@ test('a new file on the Drive is free; an overwrite parks, and a write that fail
   expect(store.get('defer-1')).toBeNull();
 });
 
+test('an approved write over a file changed after its compare is refused, and the change stands', async () => {
+  let raced = false;
+
+  const { drive, files, queue, woken } = await driveWithQueue(async (plane, write, bytes) => {
+    // The owner saves on the Drive just after the approval read the file it was asked about.
+    const racing: VFS = {
+      ...plane,
+      readFile: async (path) => {
+        const held = await plane.readFile(path);
+
+        if (!raced) {
+          raced = true;
+          await writeText(drive, '/notes.md', 'the owner\u2019s later edit\n');
+        }
+
+        return held;
+      },
+    };
+
+    return await performBoundWrite(racing, write, bytes);
+  });
+
+  await writeText(drive, '/notes.md', 'the owner\u2019s\n');
+  await expect(writeText(files, '/shared/notes.md', 'rewritten\n')).rejects.toMatchObject({ code: 'unavailable' });
+
+  await queue.decide(['defer-1'], 'approved');
+  expect(raced).toBe(true);
+  expect(await readText(drive, '/notes.md')).toBe('the owner\u2019s later edit\n');
+  expect(woken.at(-1)).toContain('APPROVED, not written: the file changed since the ask');
+});
+
 test('a parked write that is denied leaves no bytes behind', async () => {
   const { drive, files, queue, kernel } = await driveWithQueue();
 
