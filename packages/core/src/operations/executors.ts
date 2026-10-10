@@ -96,11 +96,10 @@ export const SANDBOX = {
       + 'A sandbox restored after it slept keeps its source and lockfiles but not node_modules or build output: after a failed '
       + 'import there, run `bun install` once.',
   }),
-  listFiles: sb({
-    name: 'listFiles', help: 'A directory\'s entries; the working directory when no path is given.', impact: 'observe',
+  readdir: sb({
+    name: 'readdir', help: 'A directory\'s entries; the working directory when no path is given.', impact: 'observe',
     input: v.strictObject({ path: v.optional(v.string()) }), output: Text,
   }),
-  readdir: sb({ name: 'readdir', help: 'As listFiles.', impact: 'observe', input: v.strictObject({ path: v.optional(v.string()) }), output: Text }),
   deleteFile: sb({ name: 'deleteFile', help: 'Delete a file in the sandbox.', impact: 'mutate', input: v.strictObject({ path: Path }), output: Text }),
   exists: sb({ name: 'exists', help: '"true" or "false".', impact: 'observe', input: v.strictObject({ path: Path }), output: Text }),
   startProcess: sb({

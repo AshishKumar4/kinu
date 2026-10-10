@@ -192,7 +192,7 @@ const PathSchema = v.pipe(v.string(), v.minLength(1));
 
 const OptionalStringSchema = v.optional(v.string());
 
-/** `listFiles({ path? })` and `readdir({ path? })`: the working directory when `path` is absent or empty. */
+/** `readdir({ path? })`: the working directory when `path` is absent or empty. */
 const ListOptionsSchema = v.optional(v.object({ path: v.optional(v.string()) }), {});
 
 const ExposeOptionsSchema = v.optional(v.object({ name: v.optional(v.string()) }), {});
@@ -375,7 +375,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
         }
       },
     },
-    listFiles: {
+    readdir: {
       planAllowed: true,
       description: 'List files in a directory: the working directory when `path` is omitted or empty. Returns newline-separated entries prefixed "d" or "-".',
       execute: async (...args: unknown[]): Promise<string | Refusal> => {
@@ -383,7 +383,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
         const listing = parseInput(ListOptionsSchema, { value: args[0] });
 
         if (listing === undefined) {
-          return refusalOf(new KinuError('bad_input', 'sandbox listFiles: takes its options as one object, `{ path? }`'));
+          return refusalOf(new KinuError('bad_input', 'sandbox readdir: takes its options as one object, `{ path? }`'));
         }
 
         const dir = listing.path === undefined || listing.path === '' ? WORKSPACE_BACKUP_DIR : listing.path;
@@ -399,14 +399,9 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
             })
             .join('\n');
         } catch (err) {
-          return refusalOf(sandboxFailure({ doing: `sandbox listFiles ${dir}`, cause: err }));
+          return refusalOf(sandboxFailure({ doing: `sandbox readdir ${dir}`, cause: err }));
         }
       },
-    },
-    readdir: {
-      planAllowed: true,
-      description: 'Alias for listFiles: list entries in a directory.',
-      execute: async (...args: unknown[]) => tools.listFiles.execute(args[0]),
     },
     deleteFile: {
       description: 'Delete a file or directory.',

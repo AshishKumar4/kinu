@@ -53,7 +53,7 @@ export const EXECUTOR_CAPABILITIES = [
 
 export type ExecutorCapability = (typeof EXECUTOR_CAPABILITIES)[number];
 
-export type ExecutorKind = 'workspace' | 'nimbus' | 'sandbox' | 'device' | 'parent';
+export type ExecutorKind = 'workspace' | 'sandbox' | 'device' | 'parent';
 
 export type ExecutorLifecycleStatus =
   | 'not_configured'
