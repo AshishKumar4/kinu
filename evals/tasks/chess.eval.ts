@@ -918,7 +918,14 @@ Everything that already worked keeps working.`,
   },
 };
 
-const task = defineEvalTask({ id: SLATE_ID, mission: MISSION, parts: [game] });
+const task = defineEvalTask({
+  id: SLATE_ID,
+  modelCallPeak: {
+    calls: 1,
+    source: "GitHub run37880718948 candidate chess-trial-2/ledger.jsonl: Muse model_operation start/end overlap; peak1 across five retained trials.",
+  },
+  mission: MISSION, parts: [game]
+});
 
 // The oracle must accept every PGN the task calls valid and refuse every one it calls invalid.
 for (const [name, pgn] of Object.entries(PGN_GAMES)) {
