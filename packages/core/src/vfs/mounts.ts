@@ -314,29 +314,34 @@ function movable(files: CompositeVFS): MoveFs {
  * #32), so the nearest ancestor that is there is routed and the rest appended. The first name appended may be a link
  * whose target is not there yet: a write follows it, so the route does, and one the namespace cannot name is refused.
  */
-async function routeCreating(namespace: CompositeVFS, at: string, follow: boolean): Promise<VfsRoute> {
+async function routeCreating(namespace: CompositeVFS, at: string, follow: boolean, hops = 0): Promise<VfsRoute> {
 	const cut = at.lastIndexOf('/');
 	const leaf = at.slice(cut + 1);
 
-	if (cut < 0 || leaf === '..' || at === '/') return namespace.route(at, { follow });
+	// As Nimbus's own lookup: the namespace answers a `..` (through links) and a chain of links past SYMLOOP_MAX.
+	if (cut < 0 || leaf === '..' || at === '/' || hops > SYMLOOP_MAX) return namespace.route(at, { follow });
 	const found = await tolerateAsync(() => namespace.route(at, { follow }), 'enoent');
 
 	if (found !== undefined) return found;
-	const parent = await routeCreating(namespace, at.slice(0, cut) || '/', true);
+	const parent = await routeCreating(namespace, at.slice(0, cut) || '/', true, hops);
 	const above = namespacePath(parent);
 	const named = above === '/' ? `/${leaf}` : `${above}/${leaf}`;
 
 	if (follow && (await namespace.stat(named, { follow: false }))?.type === 'symlink') {
 		const target = namespace.linkLeadsTo(named, await namespace.readlink(named));
 
-		// A link the namespace has no name for is refused as the route refused it; its own links read from their directory.
+		// A link the namespace has no name for is refused as the route refused it; its own links read from their directory,
+		// spelled as written: the namespace walks their `..`.
 		if (target === null) return namespace.route(at, { follow });
 
-		return routeCreating(namespace, normalizePath(target.startsWith('/') ? target : `${above}/${target}`), follow);
+		return routeCreating(namespace, target.startsWith('/') ? target : `${above}/${target}`, follow, hops + 1);
 	}
 
 	return { ...parent, path: parent.path === '/' ? `/${leaf}` : `${parent.path}/${leaf}` };
 }
+
+/** Links a lookup follows before it answers ELOOP (Linux's MAXSYMLINKS). */
+const SYMLOOP_MAX = 40;
 
 /** Whether `from` and `to` are on one mount, the directories a move would make passing as named. */
 async function sameMount(namespace: CompositeVFS, from: string, to: string): Promise<boolean> {

@@ -120,4 +120,15 @@ describe('withMountTable resolve', () => {
     expect(await plane.resolve('/home/main/near/file.txt')).toBe('/home/main/relative/target/file.txt');
     expect(await plane.resolve('/home/main/link', { follow: false })).toBe('/home/main/link');
   });
+
+  // Its target walks back through a directory that is not there: the namespace's lookup refuses it, and so does this.
+  test('a dangling link whose target climbs out of a missing directory is refused, not followed forever', async () => {
+    const namespace = new CompositeVFS(new MemoryVFS());
+    const plane = withMountTable({ namespace: async () => namespace, home: '/home/main' }, []);
+
+    await namespace.mkdir('/home/main', { recursive: true });
+    await namespace.symlink('missing/../loop', '/home/main/loop');
+
+    await expect(plane.resolve('/home/main/loop/file.txt')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
 });
