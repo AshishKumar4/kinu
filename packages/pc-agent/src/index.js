@@ -56,11 +56,20 @@ function replaceIfDigest(target, data, expected) {
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${crypto.randomBytes(6).toString('hex')}.kinu-write`);
 
-  try {
-    fs.writeFileSync(temporary, data);
+  const mode = found === null ? null : fs.statSync(target).mode & 0o7777;
 
-    // A replaced file keeps its mode whole: a creation mode is cut by the umask, so it is set after.
-    if (found !== null) fs.chmodSync(temporary, fs.statSync(target).mode & 0o7777);
+  try {
+    // Created with the replaced file's mode, which the umask can only narrow, and given the bits it cut before any byte
+    // is written: the new bytes are never readable by anyone the file did not let read them.
+    const fd = fs.openSync(temporary, 'wx', mode ?? 0o666);
+
+    try {
+      if (mode !== null) fs.fchmodSync(fd, mode);
+      fs.writeFileSync(fd, data);
+    } finally {
+      fs.closeSync(fd);
+    }
+
     fs.renameSync(temporary, target);
   } catch (cause) {
     fs.rmSync(temporary, { force: true });

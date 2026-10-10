@@ -53,10 +53,12 @@ directory = os.path.dirname(path) or '/'
 os.makedirs(directory, exist_ok=True)
 temporary = os.path.join(directory, '.' + os.path.basename(path) + '.' + secrets.token_hex(6) + '.kinu-write')
 try:
-    with open(temporary, 'wb') as out:
+    # Created with the replaced file's mode and given the bits the umask cut before any byte is written.
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666 if mode is None else mode)
+    with os.fdopen(descriptor, 'wb') as out:
+        if mode is not None:
+            os.fchmod(descriptor, mode)
         out.write(data)
-    if mode is not None:
-        os.chmod(temporary, mode)
     os.rename(temporary, path)
 except BaseException:
     if os.path.exists(temporary):
