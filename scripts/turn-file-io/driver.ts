@@ -40,19 +40,11 @@ export class PerfDriver extends DurableObject<DriverEnv> {
 
   async begin(workspace: string): Promise<void> {
     const target = this.target(workspace);
-    const facet = await target.perfFacet();
-    await facet?.perfBegin();
     await target.perfBegin();
   }
 
   async cut(workspace: string, label: string, resume: boolean): Promise<{ workspace: Slice; facet: Slice | null }> {
-    const target = this.target(workspace);
-    // Opened before the workspace meter is read: its own probe lookups are separately visible in SQL.
-    const facet = await target.perfFacet();
-    const local = await target.perfCut(label, resume);
-    const isolated = await facet?.perfCut(label, resume);
-
-    return { workspace: local, facet: isolated ?? null };
+    return await this.target(workspace).perfCut(label, resume);
   }
 
   async seed(workspace: string): Promise<void> { await this.target(workspace).perfSeed(); }

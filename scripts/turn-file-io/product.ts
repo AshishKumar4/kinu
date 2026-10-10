@@ -57,16 +57,30 @@ export class OrchestratorAgent extends Product {
     return host;
   }
 
-  async perfFacet(): Promise<Fetcher<MeasuredFacet> | null> {
+  private async perfFacet(): Promise<Fetcher<MeasuredFacet> | null> {
     // Before f2fa713f7 main has no isolate. Its actor directory row is the placement authority.
     if (v.parse(v.object({ PERF_ISOLATED: v.string() }), this.env).PERF_ISOLATED !== '1') return null;
 
     return await this.agentFacetOf<MeasuredFacet>(this.actorHandle().actorId);
   }
 
-  async perfBegin(): Promise<void> { this.perfMeter.begin(); }
+  async perfBegin(): Promise<void> {
+    await (await this.perfFacet())?.perfBegin();
+    this.perfMeter.begin();
+  }
 
-  async perfCut(label: string, resume: boolean): Promise<Slice> { return this.perfMeter.cut(label, resume); }
+  async perfCut(label: string, resume: boolean): Promise<{ workspace: Slice; facet: Slice | null }> {
+    const local = this.perfMeter.cut(label, false);
+    const facet = await this.perfFacet();
+    const cost = await facet?.perfCut(label, false);
+
+    if (resume) {
+      await facet?.perfBegin();
+      this.perfMeter.begin();
+    }
+
+    return { workspace: local, facet: cost ?? null };
+  }
 
   async perfQuiet(): Promise<void> {
     this.config.setSleepTimeComputeEnabled(false);
