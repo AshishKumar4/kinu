@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef, useMemo, type RefObject, type
 import { useAgent } from "agents/react";
 import { Effect } from "effect";
 import {
-  activateMctsProgressActor, applyMctsProgress, createMctsProgressState,
+  activateMctsProgressActor, applyMctsProgress, createMctsProgressState, SubordinateActivityEventSchema, type MctsProgress,
   branchHeadId, CHANGES_MOVED_EVENT, followJobOutput, JOB_OUTPUT_EVENT, LIVE_READS, ORCHESTRATOR_AGENT_SLUG, PAGE_KEEPALIVE,
   READS_CHANGED_EVENT, SLATES_CHANGED_EVENT, WORK_TAB_JOBS, type JobOutputTail,
   hostedActorSocketPath, listedOn, type LiveRead, type OpeningList, type PendingAction, type PlanReview, type ReasoningEffort, type RoleId, type SlateProblem, type SlateSummary, type TierSource,
@@ -52,10 +52,9 @@ import { terminalChatError, turnFailure, type ChatTurnError } from "@kinu.run/co
 import { turnLiveness, TURN_CLAIM_FRAME, type TurnClaimState } from "@kinu.run/core";
 import { jobPhase, type InspectedWork } from "@kinu.run/core";
 import type { AsyncResource } from "./use-async-resource";
-import { SubordinateActivityEventSchema, useSocketFrames, type MctsProgress, type SocketFrame } from "./socket-frames";
+import { useSocketFrames, type SocketFrame } from "./socket-frames";
 import { pruneSlateReloads } from "@kinu.run/core";
 
-export { WorkspacePlanUpdatedFrameSchema, type MctsProgress } from "./socket-frames";
 
 export type { ExecutorInfo };
 
@@ -194,20 +193,8 @@ const SubordinateMutationEnvelopeSchema = v.object({
   subordinate: SubordinateRosterEntrySchema,
 });
 
-function branchRunStatus(status: string | undefined): "settled" | "error" | "running" {
-  if (status === "settled") return "settled";
-
-  return status === "error" ? "error" : "running";
-}
-
 
 /** The browser treats the actor boundary as untrusted despite the shared type. */
-function parsePlanReview({ value }: { value: unknown }): PlanReview | null {
-  const parsed = v.safeParse(PlanReviewSchema, value);
-
-  return parsed.success ? parsed.output : null;
-}
-
 /** Each source owns and clears its own message, so one recovery never hides another failure.
  *  Sources store the bare reason; the sentence is composed once, below. */
 export type LiveRefreshSource =
@@ -984,8 +971,7 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
     }
   }, [stop, rpc, extension]);
 
-  const adoptPlan = (plan: PlanReview | null): void => {
-    if (!plan) return;
+  const adoptPlan = (plan: PlanReview): void => {
     const key = `${plan.id}:${plan.revision}`;
 
     if (!knownPlans.current.has(key) && plan.status === "pending") setPlanFocus(key);
@@ -1010,7 +996,7 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
           },
         ]);
     } else if (msg.type === "plan_updated") {
-      adoptPlan(parsePlanReview({ value: msg.plan }));
+      adoptPlan(msg.plan);
     } else if (msg.type === TURN_CLAIM_FRAME) {
       setTurnClaim(msg.claim);
     } else {
@@ -1067,7 +1053,8 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
     setAgentStatus(snap.status);
 
     if (isSourceCurrent("plan")) {
-      const loadedPlan = parsePlanReview({ value: snap.activePlan });
+      // Strict: an opening whose plan does not decode fails as a load, never reads as "no plan".
+      const loadedPlan = parseActivePlanReview({ value: snap.activePlan });
 
       if (loadedPlan) knownPlans.current.add(`${loadedPlan.id}:${loadedPlan.revision}`);
       setActivePlan(loadedPlan);
@@ -1570,7 +1557,7 @@ function useWorkspaceReads(link: ChatLink) {
     } else if (msg.type === CHANGES_MOVED_EVENT) {
       setChangesMoved((moved) => moved + 1);
     } else if (msg.type === "branch_status") {
-      const status = branchRunStatus(msg.status);
+      const { status } = msg;
 
       // The head id derives from the run id, so retire without waiting for a journal write a
       // failed branch never makes.
@@ -1579,11 +1566,11 @@ function useWorkspaceReads(link: ChatLink) {
         ...prev.filter((b) => b.branchId !== msg.branchId),
         {
           branchId: msg.branchId,
-          task: msg.task ?? "",
+          task: msg.task,
           status,
-          takeSetId: msg.takeSetId,
-          turnId: msg.turnId,
-          message: msg.message,
+          takeSetId: msg.status === "settled" ? msg.takeSetId : undefined,
+          turnId: msg.status === "settled" ? msg.turnId : undefined,
+          message: msg.status === "error" ? msg.message : undefined,
         },
       ]);
     } else if (msg.type === "head_activity") {

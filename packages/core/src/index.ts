@@ -2282,6 +2282,10 @@ export {
   turnLiveness, TURN_CLAIM_FRAME, TurnClaimFrameSchema, type TurnClaimState, type TurnLiveness,
 } from './read-models/turn-liveness';
 
+export {
+  SubordinateActivityEventSchema, WorkspaceBroadcastSchema, WorkspacePlanUpdatedFrameSchema, type MctsProgress, type WorkspaceBroadcast,
+} from './read-models/workspace-broadcasts';
+
 export { inspectWork, jobPhase, type InspectedWork } from './read-models/work-inspection';
 
 export {

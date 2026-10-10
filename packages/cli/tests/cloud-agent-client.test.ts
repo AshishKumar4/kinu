@@ -904,28 +904,36 @@ describe('CloudAgentClient — Steer-as-Branch RPC contract', () => {
   });
 
   // 2026-10-01: a cloud workspace's reads_changed frames were dropped here, so the TUI's agents hub went stale on cloud too.
-  test('a frame naming the reads a write moved reaches the client as a broadcast', async () => {
-    const mock = startMockAgentServer();
-    const client = newClient(mock);
-    const events: AgentClientEvent[] = [];
-    client.subscribe((event) => events.push(event));
+  // 26244c765: the cloud client's own broadcast decoder had no plan_updated, so a cloud plan never reached the TUI.
+  const broadcasts: Array<[string, JsonObject & { type: string }]> = [
+    ['the reads a write moved', { type: 'reads_changed', reads: ['listWorkspaceAgents', 'listSubordinates'] }],
+    ['a plan the workspace updated', { type: 'plan_updated', plan: PENDING_PLAN }],
+  ];
 
-    const turn = client.send('hire a scout');
-    const request = await firstChatRequest(mock);
+  for (const [what, frame] of broadcasts) {
+    test(`a frame naming ${what} reaches the client as a broadcast`, async () => {
+      const mock = startMockAgentServer();
+      const client = newClient(mock);
+      const events: AgentClientEvent[] = [];
+      client.subscribe((event) => events.push(event));
 
-    mock.reply({ type: 'reads_changed', reads: ['listWorkspaceAgents', 'listSubordinates'] });
+      const turn = client.send('hire a scout');
+      const request = await firstChatRequest(mock);
 
-    const moved = await waitFor(() => events
-      .filter((e): e is Extract<AgentClientEvent, { type: 'broadcast' }> => e.type === 'broadcast')
-      .map((e) => e.event)
-      .find((e) => e.type === 'reads_changed'), 'the reads frame');
+      mock.reply(frame);
 
-    expect(moved).toEqual({ type: 'reads_changed', reads: ['listWorkspaceAgents', 'listSubordinates'] });
+      const reached = await waitFor(() => events
+        .filter((e): e is Extract<AgentClientEvent, { type: 'broadcast' }> => e.type === 'broadcast')
+        .map((e) => e.event)
+        .find((e) => e.type === frame.type), what);
 
-    mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'hired' }, true));
-    await turn;
-    await client.close();
-  });
+      expect(reached).toEqual(frame);
+
+      mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'done' }, true));
+      await turn;
+      await client.close();
+    });
+  }
 
   // 2026-10-04: the TUI linked a cloud workspace's vfs://pc/<machine>/x but not <machine>://x, because the client never
   // read which machines are live. It reads them on connect, and again before it reports that the executors moved.

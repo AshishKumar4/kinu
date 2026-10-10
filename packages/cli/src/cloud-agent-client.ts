@@ -43,7 +43,7 @@ import {
 } from './session';
 import { CloudTurnStream, jsonErrorMessage } from './cloud-turn-stream';
 import { SessionRecorder } from './session-recorder';
-import { cloudFileLinks, JobOutputFrameSchema, LIVE_READS, READS_CHANGED_EVENT, type AgentModelMenu, type AgentRpcMethod, type FileLinks } from '@kinu.run/core';
+import { cloudFileLinks, JOB_OUTPUT_EVENT, READS_CHANGED_EVENT, WorkspaceBroadcastSchema, type WorkspaceBroadcast, type AgentModelMenu, type AgentRpcMethod, type FileLinks } from '@kinu.run/core';
 import { hostedWindowCalls, positionPageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, WorkspaceWorkSchema, type WorkspaceWork, type SubordinateInspectionRequest, type SubordinateInspectionResult } from '@kinu.run/core';
 import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, EvolutionConfigView, ReasoningEffort, TakePickOutcome } from '@kinu.run/core';
 import {
@@ -258,30 +258,17 @@ interface SendEnd {
   readonly answer: string | null;
 }
 
-const BranchStatusEventSchema = v.variant('status', [
-  v.object({
-    type: v.literal('branch_status'), status: v.literal('running'), branchId: v.string(), task: v.string(),
-  }),
-  v.object({
-    type: v.literal('branch_status'), status: v.literal('settled'), branchId: v.string(), task: v.string(),
-    takeSetId: v.string(), turnId: v.string(),
-  }),
-  v.object({
-    type: v.literal('branch_status'), status: v.literal('error'), branchId: v.string(), task: v.string(),
-    message: v.optional(v.string(), 'branch failed'),
-  }),
-]);
-
 /** The executors read as chat links need it: a device fleet's live machines, by the segment each mounts under. */
 const ExecutorMountsSchema = v.array(v.object({ mounts: v.optional(v.array(v.string())) }));
 
-const BroadcastFrameSchema = v.union([
-  BranchStatusEventSchema,
-  v.object({ type: v.literal(READS_CHANGED_EVENT), reads: v.array(v.picklist(LIVE_READS)) }),
-  JobOutputFrameSchema,
-  v.object({ type: v.literal('model_fallback'), message: v.string() }),
-  v.object({ type: v.literal('context_fill'), contextTokens: v.optional(v.number()), contextWindow: v.optional(v.number()) }),
-]);
+/** The workspace's broadcasts the terminal renders; a hosted actor's stamped frames and the browser's panels are not. */
+const RENDERED_BROADCASTS = ['branch_status', READS_CHANGED_EVENT, JOB_OUTPUT_EVENT, 'model_fallback', 'context_fill', 'plan_updated'] as const;
+
+type RenderedBroadcast = Extract<WorkspaceBroadcast, { type: typeof RENDERED_BROADCASTS[number] }>;
+
+function rendered(frame: WorkspaceBroadcast): frame is RenderedBroadcast {
+  return RENDERED_BROADCASTS.some((type) => type === frame.type);
+}
 
 interface CloudAgentClientOptions {
   origin: string;
@@ -979,7 +966,7 @@ export class CloudAgentClient implements AgentClient {
   }
 
   /** A broadcast that moved the executors is reported once the machines are re-read, so its hearer renders their links. */
-  private reportBroadcast(frame: v.InferOutput<typeof BroadcastFrameSchema>): void {
+  private reportBroadcast(frame: RenderedBroadcast): void {
     if (frame.type !== READS_CHANGED_EVENT || !frame.reads.includes('getExecutors')) {
       this.emit({ type: 'broadcast', event: frame });
 
@@ -1014,10 +1001,10 @@ export class CloudAgentClient implements AgentClient {
       return;
     }
 
-    const broadcast = v.safeParse(BroadcastFrameSchema, payload);
+    const broadcast = v.safeParse(WorkspaceBroadcastSchema, payload);
 
     if (broadcast.success) {
-      this.reportBroadcast(broadcast.output);
+      if (rendered(broadcast.output)) this.reportBroadcast(broadcast.output);
 
       return;
     }
