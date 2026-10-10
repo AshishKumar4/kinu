@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { Link } from "react-router-dom";
 import type { AgentTaskTree, PanelAgent, Rpc, WorkspaceWork, WorkspaceWorkOwner } from "@kinu.run/core";
-import type { ForkLineage, ReadMoves } from "@/hooks/use-kinu";
+import type { ForkLineage } from "@/hooks/use-chat-owner";
+import type { ReadMoves } from "@/hooks/use-workspace-reads";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { AgentStatusMark } from "@/components/AgentStatus";

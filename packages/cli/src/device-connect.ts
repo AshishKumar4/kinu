@@ -17,7 +17,7 @@ import { enforceOwnerOnly, ensureSecretDir } from '@kinu.run/cli-backend';
 import { AGENT_HOME, ensureAgentHome, loadConfigFile, requireAuthConfig, resolveCloudSession, updateConfigFile } from './config';
 import { listCloudDevices, registerCloudDevice, type CloudDevice, type CloudDeviceSandbox } from './cloud-api';
 import { readDaemonLogTail, rotateDaemonLogIfNeeded } from './daemon-log';
-import { waitForAnswer, type StoppableWaitOptions } from '@kinu.run/core';
+import { issuedDeviceConnected, waitForAnswer, type StoppableWaitOptions } from '@kinu.run/core';
 import PC_AGENT_DAEMON_SOURCE from '../../pc-agent/src/index.js' with { type: 'text' };
 import PC_AGENT_SANDBOX_SOURCE from '../../pc-agent/src/sandbox.js' with { type: 'text' };
 import PC_AGENT_PTY_SOURCE from '../../pc-agent/src/pty.js' with { type: 'text' };
@@ -74,9 +74,6 @@ function ensureAgentRoot(): void {
   ensureSecretDir(AGENT_ROOT);
 }
 
-/** Lives in `@kinu.run/core` because the web connect panel renders the same lines. */
-export { DEVICE_CONNECT_DISCLOSURE } from '@kinu.run/core';
-
 export interface DeviceAuth {
   origin: string;
   token: string;
@@ -84,6 +81,8 @@ export interface DeviceAuth {
 
 export interface ConnectDeviceOptions {
   label?: string;
+  /** The device a browser issued for this machine; it registers as that id, so the page that asked sees it arrive. */
+  device?: string;
   session?: boolean;
   onWaiting?: () => void;
   /** The daemon keeps running and trying to connect. */
@@ -106,12 +105,12 @@ export function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions = {})
       // The running daemon owns device.json and its credentials.
       const devices = yield* listDevicesForConnect(auth, 'checking whether the installed daemon is connected');
 
-      return { kind: 'already-running', connected: devices.some((device) => device.connected) } satisfies ConnectDeviceResult;
+      return { kind: 'already-running', connected: thisDeviceIn(devices, auth.origin) } satisfies ConnectDeviceResult;
     }
 
     yield* assertDaemonPlatformSupported();
     const runtime = yield* daemonRuntime();
-    const device = yield* registerDeviceForConnect(auth, opts.label, previousDeviceToken(auth.origin));
+    const device = yield* registerDeviceForConnect(auth, opts.label, localDevice(auth.origin)?.token, opts.device);
     yield* installDaemonFiles(device);
     const launch = yield* startInstalledDaemon(opts.session === true, runtime);
     // The daemon must show as connected on the server before success is claimed.
@@ -148,9 +147,12 @@ let offerConsumed = false;
 
 let thisDeviceConnected: boolean | null = null;
 
-/** Compares hostnames: `device.json` holds no device id, so the hostname is the only local identity. */
-function isThisMachine(device: CloudDevice): boolean {
-  return device.hostname !== null && device.hostname.trim() === defaultDeviceName();
+/** Whether the device the hub issued this machine, as `device.json` names it, is connected; a file from before it
+ *  named its device, or another account's, names none. */
+function thisDeviceIn(devices: readonly CloudDevice[], origin: string): boolean {
+  const id = localDevice(origin)?.device;
+
+  return id !== undefined && issuedDeviceConnected(devices, id) !== undefined;
 }
 
 /**
@@ -173,7 +175,7 @@ export function shouldOfferDeviceConnect(): Promise<boolean> {
       );
 
       if (listed === null) return false;
-      thisDeviceConnected = listed.some((device) => device.connected && isThisMachine(device));
+      thisDeviceConnected = thisDeviceIn(listed, auth.origin);
     }
 
     if (thisDeviceConnected) return false;
@@ -194,13 +196,13 @@ export function deviceStatusLine(): Promise<string> {
     try: async () => {
       const auth = requireAuthConfig();
 
-      return listCloudDevices(auth.origin, auth.token);
+      return { origin: auth.origin, devices: await listCloudDevices(auth.origin, auth.token) };
     },
     catch: (err) => ({ err }),
   }).pipe(Effect.match({
     onFailure: ({ err }) => `Device status unavailable: ${renderThrownChain({ cause: err })}`,
-    onSuccess: (devices) => {
-      thisDeviceConnected = devices.some((device) => device.connected && isThisMachine(device));
+    onSuccess: ({ origin, devices }) => {
+      thisDeviceConnected = thisDeviceIn(devices, origin);
       const connected = devices.filter((device) => device.connected);
 
       if (connected.length > 0) {
@@ -310,23 +312,24 @@ function listDevicesForConnect(auth: DeviceAuth, doing: string): Effect.Effect<C
   return Effect.tryPromise({ try: () => listCloudDevices(auth.origin, auth.token), catch: (cause) => listingFailure(auth, doing, { cause }) });
 }
 
-/** This machine's token on `origin`: linking again replaces its registration. */
-function previousDeviceToken(origin: string): string | undefined {
+/** This machine's registration on `origin`, as the daemon's `device.json` holds it: its token, which linking again
+ *  replaces, and the device the hub issued it. */
+function localDevice(origin: string): v.InferOutput<typeof LocalDeviceSchema> | undefined {
   const text = tolerate(() => readFileSync(DEVICE_CONFIG_PATH, 'utf-8'), 'enoent');
 
   if (text === undefined) return undefined;
-  const parsed = v.safeParse(PreviousDeviceSchema, tolerate(() => JSON.parse(text), 'malformed-input'));
+  const parsed = v.safeParse(LocalDeviceSchema, tolerate(() => JSON.parse(text), 'malformed-input'));
 
   if (!parsed.success || parsed.output.origin.replace(/\/+$/, '') !== origin.replace(/\/+$/, '')) return undefined;
 
-  return parsed.output.token;
+  return parsed.output;
 }
 
-const PreviousDeviceSchema = v.object({ origin: v.string(), token: v.string() });
+const LocalDeviceSchema = v.object({ origin: v.string(), token: v.string(), device: v.optional(v.string()) });
 
-function registerDeviceForConnect(auth: DeviceAuth, label: string | undefined, replaces: string | undefined) {
+function registerDeviceForConnect(auth: DeviceAuth, label: string | undefined, replaces: string | undefined, device: string | undefined) {
   return Effect.tryPromise({
-    try: () => registerCloudDevice(auth.origin, auth.token, label, replaces),
+    try: () => registerCloudDevice(auth.origin, auth.token, { label, replaces, device }),
     catch: (cause) => {
       const detail = redactSecrets(renderThrownChain({ cause }), [auth.token, ...(replaces === undefined ? [] : [replaces])]);
 
@@ -372,7 +375,7 @@ const removeAfter = (doing: string, { cause }: { readonly cause: unknown }, path
   catch: (cleanup) => toKinuError({ doing, cause: new AggregateError([cause, cleanup], 'device install and cleanup both failed'), otherwise: 'io' }),
 });
 
-function installDaemonFiles(device: { origin: string; userId: string; token: string }): Effect.Effect<void, KinuError> {
+function installDaemonFiles(device: { origin: string; userId: string; deviceId: string; token: string }): Effect.Effect<void, KinuError> {
   return Effect.gen(function* () {
     yield* io(`preparing the device install directory ${AGENT_HOME}`, () => {
       ensureAgentHome();
@@ -381,6 +384,7 @@ function installDaemonFiles(device: { origin: string; userId: string; token: str
 
     const config = `${JSON.stringify({
       user: device.userId,
+      device: device.deviceId,
       token: device.token,
       origin: device.origin.replace(/\/+$/, ''),
       // The directory `kinu connect` ran in is the consented root.
@@ -532,7 +536,7 @@ function waitForDeviceConnected(
           return undefined;
         }
 
-        return rows?.find((device) => device.id === deviceId && device.connected);
+        return rows === undefined ? undefined : issuedDeviceConnected(rows, deviceId);
       }, wait));
 
       if (connected !== undefined) return connected;

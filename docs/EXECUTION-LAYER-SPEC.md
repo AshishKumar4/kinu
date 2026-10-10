@@ -372,7 +372,7 @@ diff visits only the paths written since (`core/src/read-models/workspace-diff.t
 A read never advances that baseline; the review before it is kept for Undo.
 
 Preview discovery asks `workspace`, `sandbox` and `device` for ports
-(`cf-backend/src/hooks/use-kinu.ts`). A transport failure keeps the last
+(`cf-backend/src/hooks/use-workspace-reads.ts`). A transport failure keeps the last
 result with an error; a successful empty result removes stale previews
 (`reconcilePreviewPorts`, `core/src/preview/preview-ports.ts`).
 

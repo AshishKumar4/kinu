@@ -2288,36 +2288,38 @@ describe('linking a machine happens on the surface that asked for it', () => {
     });
   });
 
-  test('a machine that never dials in leaves the panel open and waiting', async () => {
-    // The non-vacuity arm for the close above: same flow, same clicks, and a
-    // roster whose row stays `connected: false`. A panel that closed on any
-    // roster tick would pass the first test and fail this one.
-    await withGallery(async ({ newPage, origin }) => {
-      const page = await newPage();
-      await page.setViewport({ width: 1100, height: 900 });
-      await page.goto(`${origin}/gallery.html?frame=environment&offline=device&connect=stall`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('[data-env-connect]');
-      await page.click('[data-env-connect]');
-      await page.waitForSelector('[role="dialog"] [data-connect-start]');
-      await page.click('[role="dialog"] [data-connect-start]');
-      await page.waitForSelector('[data-connect-waiting]');
+  // The non-vacuity arms for the close above: same flow, same clicks, and a roster where the device the connect issued
+  // stays `connected: false`, alone or beside another machine of the account that connects. A panel that closed on any
+  // roster tick, or on any machine that arrived (26244c765), would pass the first test and fail these.
+  for (const [what, mode] of [['a machine that never dials in', 'stall'], ['another machine connecting', 'other']]) {
+    test(`${what} leaves the panel open and waiting`, async () => {
+      await withGallery(async ({ newPage, origin }) => {
+        const page = await newPage();
+        await page.setViewport({ width: 1100, height: 900 });
+        await page.goto(`${origin}/gallery.html?frame=environment&offline=device&connect=${mode}`, { waitUntil: 'networkidle0' });
+        await page.waitForSelector('[data-env-connect]');
+        await page.click('[data-env-connect]');
+        await page.waitForSelector('[role="dialog"] [data-connect-start]');
+        await page.click('[role="dialog"] [data-connect-start]');
+        await page.waitForSelector('[data-connect-waiting]');
 
-      // Wait for polls to have HAPPENED rather than for a clock: three roster
-      // reads after the registration is three chances to close wrongly.
-      const readsAtHandover = await page.evaluate(
-        () => Number(document.documentElement.dataset.galleryRosterReads ?? '0'),
-      );
+        // Wait for polls to have HAPPENED rather than for a clock: three roster
+        // reads after the registration is three chances to close wrongly.
+        const readsAtHandover = await page.evaluate(
+          () => Number(document.documentElement.dataset.galleryRosterReads ?? '0'),
+        );
 
-      await page.waitForFunction(
-        (base: number) => Number(document.documentElement.dataset.galleryRosterReads ?? '0') >= base + 3,
-        {},
-        readsAtHandover,
-      );
-      expect(await page.$('[role="dialog"] [data-connect-waiting]')).not.toBeNull();
-      expect(await page.$('[data-connect-command]')).not.toBeNull();
-      await page.close();
+        await page.waitForFunction(
+          (base: number) => Number(document.documentElement.dataset.galleryRosterReads ?? '0') >= base + 3,
+          {},
+          readsAtHandover,
+        );
+        expect(await page.$('[role="dialog"] [data-connect-waiting]')).not.toBeNull();
+        expect(await page.$('[data-connect-command]')).not.toBeNull();
+        await page.close();
+      });
     });
-  });
+  }
 
   test('a refused registration is named, and the next press registers', async () => {
     await withGallery(async ({ newPage, origin }) => {

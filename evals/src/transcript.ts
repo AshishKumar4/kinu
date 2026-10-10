@@ -6,8 +6,70 @@ import type { ModelMessage } from 'ai';
 import type { TranscriptEvent } from 'vitest-evals';
 import { redact, redactJson } from './redact';
 import type { EvalMetrics } from './task';
+import type { InspectionAnswer } from './session';
+import type { SubordinateInspectionRequest } from '@kinu.run/core';
 
 type ToolCallEnd = Extract<RunEvent, { type: 'tool_call_end' }>;
+
+type FinishedStep = Extract<RunEvent, { type: 'step_finish' }>;
+
+export type StepMessages = ReadonlyMap<FinishedStep, readonly ModelMessage[]>;
+
+export type StepMessageCache = WeakMap<FinishedStep, readonly ModelMessage[]>;
+
+/** Materialize the same sealed references for every reader, preserving the inspector's pagination. */
+export async function readStepMessages(events: readonly RunEvent[], pageOf: (step: FinishedStep, from: number) => Promise<{
+  readonly messages: readonly JsonValue[]; readonly nextFrom: number | null;
+}>, cache?: StepMessageCache): Promise<StepMessages> {
+  const output = new Map<FinishedStep, readonly ModelMessage[]>();
+
+  for (const step of events) {
+    if (step.type !== 'step_finish') continue;
+
+    const known = cache?.get(step);
+
+    if (known !== undefined) {
+      output.set(step, known);
+      continue;
+    }
+
+    const messages: ModelMessage[] = [];
+
+    for (let from = 0; step.parts.length > 0;) {
+      const page = await pageOf(step, from);
+
+      messages.push(...decodeModelMessageValues(page.messages));
+
+      if (page.nextFrom === null) break;
+      from = page.nextFrom;
+    }
+
+    if (step.parts.length > 0 && messages.length === 0) throw new Error(`canonical output is empty for referenced step ${step.runId}/${String(step.eventIndex)}`);
+    cache?.set(step, messages);
+    output.set(step, messages);
+  }
+
+  return output;
+}
+
+export function messagesOfStep(step: FinishedStep, output: StepMessages): readonly ModelMessage[] {
+  const messages = output.get(step);
+
+  if (messages === undefined) throw new Error(`canonical output was not read for ${step.runId}/${String(step.eventIndex)}`);
+
+  return messages;
+}
+
+/** One actor-authorized output reader for live verification and final artifact capture. */
+export function inspectedStepMessages(events: readonly RunEvent[], inspect: (request: SubordinateInspectionRequest) => Promise<InspectionAnswer>, cache: StepMessageCache): Promise<StepMessages> {
+  return readStepMessages(events, async (step, from) => {
+    const output = await inspect({ path: [], view: 'step', runId: step.runId, eventIndex: step.eventIndex, from });
+
+    if (output.view !== 'step') throw new Error(`the public inspector could not read canonical output of ${step.runId}/${String(step.eventIndex)}`);
+
+    return output;
+  }, cache);
+}
 
 const ArgumentsSchema = v.record(v.string(), JsonValueSchema);
 
@@ -56,7 +118,7 @@ function inputsOf(messages: readonly ModelMessage[]): Map<string, JsonValue> {
 }
 
 /** A call belongs to the next completed step of its own run, even when other runs interleave or reuse its id. */
-function* ledgerSteps(events: readonly RunEvent[]) {
+function* ledgerSteps(events: readonly RunEvent[], output: StepMessages) {
   const pending = new Map<string, ToolCallEnd[]>();
 
   for (const event of events) {
@@ -66,7 +128,7 @@ function* ledgerSteps(events: readonly RunEvent[]) {
       calls.push(event);
       pending.set(event.runId, calls);
     } else {
-      const messages = event.type === 'step_finish' ? decodeModelMessageValues(event.messages ?? []) : [];
+      const messages = event.type === 'step_finish' ? messagesOfStep(event, output) : [];
       const calls = event.type === 'step_finish' ? pending.get(event.runId) ?? [] : [];
 
       if (event.type === 'step_finish') pending.delete(event.runId);
@@ -77,10 +139,10 @@ function* ledgerSteps(events: readonly RunEvent[]) {
 }
 
 /** Full inputs keyed by the actual ledger call, never by a provider id that another run or step may reuse. */
-export function callInputs(events: readonly RunEvent[]): ReadonlyMap<ToolCallEnd, JsonValue> {
+export function callInputs(events: readonly RunEvent[], output: StepMessages): ReadonlyMap<ToolCallEnd, JsonValue> {
   const associated = new Map<ToolCallEnd, JsonValue>();
 
-  for (const { calls, inputs } of ledgerSteps(events)) {
+  for (const { calls, inputs } of ledgerSteps(events, output)) {
     for (const call of calls) {
       const input = inputs.get(call.toolCallId);
 
@@ -95,10 +157,10 @@ export function callInputs(events: readonly RunEvent[]): ReadonlyMap<ToolCallEnd
  * The deployment's run ledger as a vitest-evals transcript, in ledger order: each run's opening
  * message, then per model step what it said and every tool call with its result or error.
  */
-export function toTranscript(events: readonly RunEvent[]): TranscriptEvent[] {
+export function toTranscript(events: readonly RunEvent[], output: StepMessages): TranscriptEvent[] {
   const transcript: TranscriptEvent[] = [];
 
-  for (const { event, messages, calls, inputs } of ledgerSteps(events)) {
+  for (const { event, messages, calls, inputs } of ledgerSteps(events, output)) {
     const metadata = { runId: event.runId, timestamp: event.timestamp };
 
     if (event.type === 'run_start') {
@@ -112,7 +174,7 @@ export function toTranscript(events: readonly RunEvent[]): TranscriptEvent[] {
       for (const call of calls) {
         const input = inputs.has(call.toolCallId) ? inputs.get(call.toolCallId) : call.args;
         const args = v.safeParse(ArgumentsSchema, redactJson(projectJsonValue({ value: input ?? {} })));
-        const invoked: TranscriptEvent = { type: 'tool_call', id: call.toolCallId, name: call.name, metadata };
+        const invoked: TranscriptEvent = { type: 'tool_call', id: call.toolCallId, name: call.name, metadata: { ...metadata, eventIndex: call.eventIndex } };
 
         if (args.success) invoked.arguments = args.output;
         transcript.push(invoked);

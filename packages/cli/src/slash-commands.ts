@@ -1,7 +1,7 @@
 /** Slash commands shared by the TUI and classic REPL; outcomes are presentation-neutral. */
 
 import { fmtUsd, limitLines, MAIN_ACCOUNT, SERVER_COMPACTION_MIN_TOKENS, specWithoutAccount, usageTotal, type CompactOutcome } from '@kinu.run/core';
-import { ADVISOR_SEVERITIES, DEFAULT_ROLE_ID, REASONING_EFFORTS, REFINEMENT_DECISIONS, offeredReasoningEfforts, formatPlanWithLineNumbers, planTitle, type PlanReview, type StagedSkillView, type RefinementRequestView, type RefinementRoute, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type AskingAgent, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
+import { ADVISOR_SEVERITIES, DEFAULT_ROLE_ID, REASONING_EFFORTS, REFINEMENT_DECISIONS, offeredReasoningEfforts, formatPlanWithLineNumbers, planHandoffShortfall, planTitle, type PlanReview, type StagedSkillView, type RefinementRequestView, type RefinementRoute, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type AskingAgent, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
 import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentRefinementView } from './agent-client';
 import type { InstructionSourceRow } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -581,10 +581,6 @@ async function planCommand({ client, command, arg, rest }: SlashContext): Promis
     if (!active) return { kind: 'text', text: 'No plan is waiting for you. Draft one with /plan <what to plan>.' };
     const feedback = args.join(' ').trim();
 
-    if (sub === 'changes' && !feedback) {
-      return { kind: 'text', text: 'Usage: /plan changes <feedback>. Say what has to change; the agent revises against it.' };
-    }
-
     const decided = await plans.decide(
       active.id, active.revision,
       sub === 'approve' ? 'approve' : 'request_changes',
@@ -593,12 +589,14 @@ async function planCommand({ client, command, arg, rest }: SlashContext): Promis
 
     if (!decided.ok) return { kind: 'text', text: `The plan was not decided: ${decided.error}` };
 
-    return {
-      kind: 'text',
-      text: sub === 'approve'
-        ? `Approved plan ${decided.plan.id} revision ${String(decided.plan.revision)}. The agent is implementing it now.`
-        : `Sent plan ${decided.plan.id} revision ${String(decided.plan.revision)} back for changes. The agent is revising it now.`,
-    };
+    const done = sub === 'approve'
+      ? `Approved plan ${decided.plan.id} revision ${String(decided.plan.revision)}.`
+      : `Sent plan ${decided.plan.id} revision ${String(decided.plan.revision)} back for changes.`;
+
+    const next = sub === 'approve' ? 'The agent is implementing it now.' : 'The agent is revising it now.';
+    const shortfall = planHandoffShortfall(decided);
+
+    return { kind: 'text', text: `${done} ${shortfall ?? next}` };
   }
 
   return { kind: 'plan', text: arg || undefined };

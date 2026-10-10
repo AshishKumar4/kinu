@@ -72,7 +72,7 @@ function workspace() {
     setSystemTime(start);
     recorder.emit(runId, { type: 'turn_start', turnIndex: 0 });
 
-    for (const [stepIndex, { usd, ...usage }] of steps.entries()) recorder.emit(runId, { type: 'step_finish', stepIndex, usage, usd });
+    for (const [stepIndex, { usd, ...usage }] of steps.entries()) recorder.emit(runId, { type: 'step_finish', parts: [], stepIndex, usage, usd });
 
     setSystemTime(start + minutes * 60_000);
     recorder.emit(runId, { type: 'turn_end', turnIndex: 0 });

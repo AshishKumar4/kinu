@@ -56,7 +56,7 @@ export interface AgentProviderRegistry {
 
 export function routedModelReads(providers: AgentProviderRegistry): NonNullable<TurnModelSources['routed']> {
   return {
-    credentialFor: (spec) => providers.registry.credentialFor(providers.normalizeSpecSync(spec), providers.deps),
+    attemptFor: (spec) => providers.registry.attemptFor(providers.normalizeSpecSync(spec), providers.deps),
     countInputTokens: (spec, request) => {
       const counted = parseModelSpec(spec);
 

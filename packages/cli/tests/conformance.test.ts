@@ -86,7 +86,7 @@ function staticResolver(model: LanguageModel): LocalModelResolver {
         return trimmed === undefined || trimmed === '' ? 'conformance/conformance-model' : trimmed;
       },
     resolveModel: () => model,
-    credentialFor: async () => null,
+    attemptFor: async () => null,
     listProviders: async () => [],
     listModels: async () => ({ models: [], failures: [] }),
     modelInfo: async () => null,

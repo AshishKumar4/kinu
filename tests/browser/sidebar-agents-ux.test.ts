@@ -67,6 +67,30 @@ describe('the sidebar drills into a workspace\'s agents', () => {
     });
   });
 
+  // 26244c765: the nested column's loader was a fresh closure each render, and the read it keyed re-ran on every answer.
+  test('an agent nested under another opens on one read of its roster, which stays read', async () => {
+    await withGallery(async (gallery) => {
+      const page = await shell(gallery, 1280);
+      await page.waitForSelector('[data-agents-counter]');
+      await page.click('[data-agents-counter]');
+      await page.waitForFunction((list) => document.querySelector(list)?.closest('[inert]') === null, {}, LIST);
+      await still(page);
+      await page.click(`${LIST} [data-agent-row="a-check"]`);
+      await page.waitForFunction(() => Number(document.documentElement.dataset.galleryChildrenReads ?? '0') > 0);
+
+      const frames = () => page.evaluate(() => new Promise<number>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve(Number(document.documentElement.dataset.galleryChildrenReads ?? '0'))));
+      }));
+
+      const settled = await frames();
+
+      // One lookup reads its live parent's roster, and the kept one its hirer's: at most two reads, and then none.
+      expect(settled).toBeLessThanOrEqual(2);
+      expect(await frames()).toBe(settled);
+      await page.close();
+    });
+  });
+
   test('the bar\'s agents button opens the same list', async () => {
     await withGallery(async (gallery) => {
       const page = await shell(gallery, 1280);
@@ -196,6 +220,64 @@ describe('who is at work, and who is who', () => {
         const worn = await mascotColours(page, '[data-mascot-size="16"] [data-mascot-state="idle"]');
 
         expect({ drawn: worn.length, distinct: new Set(worn).size }).toEqual({ drawn: 24, distinct: 24 });
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  // The owner, 2026-10-10: the tab mascots a step bigger, each wearing something picked at random but its own.
+  test('each agent wears its own accessory at every size, Main the crown, a few nothing, and the waiting dot over all', async () => {
+    await withGallery(async (gallery) => {
+      const page = await gallery.newPage();
+
+      try {
+        await page.goto(`${gallery.origin}/gallery.html?frame=characters`, { waitUntil: 'networkidle0' });
+        await page.waitForSelector('[data-mascot-size="32"] .p-mascot');
+
+        const worn = await page.evaluate(() => Object.fromEntries(['16', '32'].map((size) => [size,
+          [...document.querySelectorAll(`[data-mascot-size="${size}"] [data-mascot-state="idle"] .p-mascot`)]
+            .map((mascot) => mascot.getAttribute('data-accessory') ?? 'none')])));
+
+        // The dot is the last thing drawn, so nothing an agent wears covers it.
+        const dotLast = await page.$$eval('[data-mascot-state="waiting"] .p-mascot svg', (tiles) => tiles.every((tile) => tile.lastElementChild?.classList.contains('p-mascot-badge') === true));
+        // A tile takes the box it always took, so a tab's name loses nothing to it.
+        const boxes = await page.$$eval('[data-mascot-size="16"] .p-mascot', (mascots) => [...new Set(mascots.map((mascot) => mascot.getBoundingClientRect().width))]);
+
+        expect(worn['16']).toEqual(worn['32']);
+        expect(worn['16']?.[0]).toBe('crown');
+        expect(new Set(worn['16'])).toEqual(new Set(['crown', 'party', 'beanie', 'tophat', 'cap', 'bow', 'headphones', 'glasses', 'flower', 'none']));
+        expect(worn['16']?.slice(1).filter((accessory) => accessory === 'crown')).toEqual([]);
+        expect({ dotLast, boxes }).toEqual({ dotLast: true, boxes: [16] });
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  // Tiers, 2026-10-10: a row reached for while its panel was still off to the side scrolled the sidebar's hidden
+  // overflow, so the slide landed the list beside the press and the press hit the list's frame.
+  test('the agents list off to the side cannot be scrolled into view; it opens where it slides to', async () => {
+    await withGallery(async (gallery) => {
+      const page = await shell(gallery, 1280);
+
+      try {
+        await page.waitForSelector('[data-rail] [data-agents-counter]');
+        await page.click('[data-rail] [data-agents-counter]');
+        // Reached for as the slide starts, as a press, a find-in-page or a focus without preventScroll may.
+        await page.$eval(`[data-rail] ${LIST} [data-agent-row="a-scout"]`, (row) => { row.scrollIntoView({ block: 'center', inline: 'center' }); });
+        await page.waitForFunction((list) => document.querySelector(list)?.closest('[inert]') === null, {}, `[data-rail] ${LIST}`);
+        await still(page);
+
+        const landed = await page.$eval(`[data-rail] ${LIST} [data-agent-row="a-scout"]`, (row) => {
+          const box = row.getBoundingClientRect();
+          const rail = row.closest('[data-rail]')?.getBoundingClientRect();
+          const at = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+
+          return { inRail: rail !== undefined && box.left >= rail.left && box.right <= rail.right, pressed: at?.closest('[data-agent-row]') === row };
+        });
+
+        expect(landed).toEqual({ inRail: true, pressed: true });
       } finally {
         await page.close();
       }

@@ -36,7 +36,7 @@ import { redactPayload, redactSecrets, segmentBySteers, splicesSeenOn, type Sign
 import { classifyProgrammaticTurn, endedMidWork, isSteeredMessage, turnFailure } from "@kinu.run/core";
 import { EventRow, foldRepeats, ProgrammaticTurnCard, type CardState } from "@/components/ProgrammaticTurnCard";
 import { useToggledSet } from "@/hooks/use-toggled-set";
-import type { UnavailableDevice } from "@/hooks/use-kinu";
+import type { UnavailableDevice } from "@/hooks/use-workspace-reads";
 
 const MessageCreatedAtSchema = v.looseObject({
   createdAt: v.optional(v.union([v.string(), v.number(), v.instance(Date)])),

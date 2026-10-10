@@ -174,7 +174,7 @@ export class ForkTargetWriter {
       }
 
       // The search index keyed on old rows is stale (equal counts evade its rowid watermark); invalidate it.
-      invalidateConversationSearchIndex(this.target);
+      invalidateConversationSearchIndex(this.target, actorId);
 
       openWorkspaceMainActor(this.target).config.setDisplayName(this.opts.workspaceName);
 

@@ -39,6 +39,7 @@ export class AgentMemory extends RpcTarget implements Memory {
   async index(path: string) { await (await this.open()).index(path); }
   async search(query: string, limit?: number) { return await (await this.open()).search(query, limit); }
   async read(path: string) { return await (await this.open()).read(path); }
+  async chunk(id: string) { return await (await this.open()).chunk(id); }
   async tail(path: string, bytes: number) { return await (await this.open()).tail(path, bytes); }
 }
 

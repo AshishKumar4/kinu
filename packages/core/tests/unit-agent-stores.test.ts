@@ -3,11 +3,25 @@ import { Database } from 'bun:sqlite';
 import { createMemoryVfs } from '@kinu.run/test-utils';
 import { createAgentStores } from '../src/state/agent-stores';
 import { initRunEventTables } from '../src/events/recorder';
+import { ConversationSearchStore } from '../src/memory/conversation-search';
 import { makeSql, makeExecRaw, createTestActor } from './helpers';
 
 const files = async () => ({ vfs: createMemoryVfs().vfs, artifactDirectory: '/actor/.kinu/context' });
 
 describe('createAgentStores', () => {
+  test('conversation tools share the actor-owned search instance', () => {
+    const db = new Database(':memory:');
+
+    try {
+      const sql = makeSql(db);
+      const actor = createTestActor(sql, makeExecRaw(db), crypto.randomUUID(), 'conversation-owner');
+      const stores = createAgentStores(() => sql, () => actor, write => db.transaction(write)(), files);
+
+      expect(stores.conversationSearch).toBeInstanceOf(ConversationSearchStore);
+      expect(stores.conversationSearch).toBe(stores.conversationSearch);
+    } finally { db.close(); }
+  });
+
   test('does not reach Durable Object SQL before its initializer can finish', () => {
     const db = new Database(':memory:');
 

@@ -24,6 +24,23 @@ export const AgentTaskTreeSchema = v.object({ ...AgentTaskSchema.entries, subtas
 
 export type AgentTaskTree = v.InferOutput<typeof AgentTaskTreeSchema>;
 
+/** Done or dropped: nothing is left to do on it. */
+export function taskSettled(status: TaskStatus): boolean {
+  return !OPEN_STATUSES.has(status);
+}
+
+/**
+ * A task and its subtasks as every renderer shows them: running while any is active, idle while any is still open,
+ * settled once all are done or dropped. A subtask lives on its own, so one active under a closed parent still runs.
+ */
+export function taskTreePhase(tree: AgentTaskTree): 'running' | 'idle' | 'settled' {
+  const items = [tree, ...tree.subtasks];
+
+  if (items.some((item) => item.status === 'active')) return 'running';
+
+  return items.every((item) => taskSettled(item.status)) ? 'settled' : 'idle';
+}
+
 /** Read-only plan progress for one actor, usable without a write handle. */
 export function readPlanTasks(sql: SqlExecutor, actor: ActorHandle, plan: TaskPlan): AgentTaskTree[] {
   actor.assertCurrent();

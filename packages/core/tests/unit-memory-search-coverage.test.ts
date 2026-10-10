@@ -18,7 +18,7 @@ async function searched(pending: Promise<unknown>): Promise<{ semantic: boolean;
 
 type MemoryCall = JsonObject;
 
-import { conversationsFor, storesFor } from './helpers';
+import { conversationsFor } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { JsonObject } from '../src/utils/json';
 
@@ -58,12 +58,12 @@ describe('memory search coverage across backend capabilities', () => {
       const { rt, testSql } = createTestRuntime();
       initAllTables(testSql.execRaw, testSql.sql);
       rt.memory.search = needleIndex('needle');
-      const { history } = storesFor(rt);
-      const native = toolExecute<MemoryCall, unknown>(buildBuiltinTools({ rt, vectorStore, conversations: conversationsFor(rt, history) }).memory);
+      
+      const native = toolExecute<MemoryCall, unknown>(buildBuiltinTools({ rt, vectorStore, conversations: conversationsFor(rt) }).memory);
 
       const provider = createMemoryCodemodeProvider(() => ({
         memory: rt.memory, actor: rt.actor, vectorStore,
-        conversations: conversationsFor(rt, history),
+        conversations: conversationsFor(rt),
       }));
 
       const search = provider.tools.search;
@@ -84,10 +84,10 @@ describe('memory search coverage across backend capabilities', () => {
       initFactsTable(testSql.execRaw);
       rt.memory.search = async () => [];
       const facts = createFactsStore(testSql.sql, rt.actor);
-      const { history } = storesFor(rt);
+      
 
       const native = toolExecute<MemoryCall, unknown>(
-        buildBuiltinTools({ rt, vectorStore, facts, conversations: conversationsFor(rt, history) }).memory);
+        buildBuiltinTools({ rt, vectorStore, facts, conversations: conversationsFor(rt) }).memory);
 
       // remember landed but search never saw it: the failure this guards.
       await native({ op: 'remember', key: 'every-tool probe', value: 'ok' });
@@ -98,7 +98,7 @@ describe('memory search coverage across backend capabilities', () => {
 
       const provider = createMemoryCodemodeProvider(() => ({
         memory: rt.memory, actor: rt.actor, vectorStore, facts,
-        conversations: conversationsFor(rt, history),
+        conversations: conversationsFor(rt),
       }));
 
       const search = provider.tools.search;

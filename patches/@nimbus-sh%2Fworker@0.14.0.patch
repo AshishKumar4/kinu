@@ -1,34 +1,27 @@
 diff --git a/dist/facets/manager.js b/dist/facets/manager.js
-index b6ce290..ffd5856 100644
+index b6ce290..b84d9db 100644
 --- a/dist/facets/manager.js
 +++ b/dist/facets/manager.js
-@@ -847,21 +847,49 @@ ${sources.residentStore}
-     // number: what a replay prints again of the stopped run's output is
-     // checked and dropped here, and a chunk the session has not acknowledged
-     // when the run stops rides the stop (runtime/stop-replay.ts).
+@@ -498,6 +498,53 @@ const ENTRYPOINT_TIMER_TRACKER = `
+  * resident process into its final exit report — because a program's exit is
+  * the only place that knows whether a miss was ever answered.
+  */
++// Kinu patch (NIMBUS-ASKS #39): both runners' output relay, one source.
++const KINU_OUTPUT_RELAY = `
 +    // Kinu patch (NIMBUS-ASKS #39): writes made while the call before them is
 +    // in flight ride the next call together, up to __RPC_BATCH_MAX bytes of
 +    // one stream and run; each write's promise settles with its call. One
 +    // call per write cost ~330 us a console.log through a pipe.
 +    const __RPC_BATCH_MAX = 65536;
 +    let __rpcBatch = null;
-     const __queueRpcWrite = (method, bytes) => {
-       const __chunk = __nimbusStopReplay.write(method, bytes);
-       if (__chunk === null) return;
-       __rpcWriteCount++;
-       // Released at the filesystem client's gate, taken now: once every
--      // change logged ahead of it is answered (ProcessFsClient.effect).
++    const __queueRpcWrite = (method, bytes) => {
++      const __chunk = __nimbusStopReplay.write(method, bytes);
++      if (__chunk === null) return;
++      __rpcWriteCount++;
++      // Released at the filesystem client's gate, taken now: once every
 +      // change logged ahead of it is answered (ProcessFsClient.effect). A
 +      // batch waits for its last write's gate, which follows the earlier ones.
-       const __gate = __nimbusOutputGate();
--      const __task = __rpcWriteChain
--        .then(() => __gate)
--        .then(() => __supervisor[method](__chunk.b, __chunk.at, __chunk.run))
--        .then(() => __nimbusStopReplay.acked(__chunk))
--        .catch((e) => __onRpcDrop(__chunk.b.byteLength, e));
--      __rpcWriteChain = __task.then(() => {}, () => {});
--      __pendingIO.push(__task);
--      return __task;
++      const __gate = __nimbusOutputGate();
 +      const __size = __chunk.b.byteLength;
 +      const __open = __rpcBatch;
 +      if (__open !== null && __open.method === method && __open.run === __chunk.run && __open.end === __chunk.at
@@ -58,10 +51,36 @@ index b6ce290..ffd5856 100644
 +      __rpcWriteChain = __batch.task.then(() => {}, () => {});
 +      __pendingIO.push(__batch.task);
 +      return __batch.task;
-     };
++    };
++`;
+ const RESIDENCY_MISS_REPORT = `
+ // What the next launch of this entry must stage, kept apart because they are
+ // staged differently: files read synchronously and not answered (data), and
+@@ -847,22 +894,7 @@ ${sources.residentStore}
+     // number: what a replay prints again of the stopped run's output is
+     // checked and dropped here, and a chunk the session has not acknowledged
+     // when the run stops rides the stop (runtime/stop-replay.ts).
+-    const __queueRpcWrite = (method, bytes) => {
+-      const __chunk = __nimbusStopReplay.write(method, bytes);
+-      if (__chunk === null) return;
+-      __rpcWriteCount++;
+-      // Released at the filesystem client's gate, taken now: once every
+-      // change logged ahead of it is answered (ProcessFsClient.effect).
+-      const __gate = __nimbusOutputGate();
+-      const __task = __rpcWriteChain
+-        .then(() => __gate)
+-        .then(() => __supervisor[method](__chunk.b, __chunk.at, __chunk.run))
+-        .then(() => __nimbusStopReplay.acked(__chunk))
+-        .catch((e) => __onRpcDrop(__chunk.b.byteLength, e));
+-      __rpcWriteChain = __task.then(() => {}, () => {});
+-      __pendingIO.push(__task);
+-      return __task;
+-    };
++${KINU_OUTPUT_RELAY}
      let cwd = _cwd || "/home/user";
      let stdout = "", stderr = "";
-@@ -888,7 +916,9 @@ ${RESIDENCY_MISS_REPORT}
+     let exitCode = 0;
+@@ -888,7 +920,9 @@ ${RESIDENCY_MISS_REPORT}
        stderr += __text;
        if (!__supervisor || captureOutput) return;
        const __bytes = __nimbusOutEnc.encode(__text);
@@ -72,25 +91,17 @@ index b6ce290..ffd5856 100644
        const __gate = __nimbusOutputGate();
        const __task = __rpcWriteChain.then(() => __gate).then(() => __supervisor.stderr(__bytes)).catch((e) => __onRpcDrop(__bytes.byteLength, e));
        __rpcWriteChain = __task.then(() => {}, () => {});
-@@ -1366,21 +1396,49 @@ ${VFS_CURSOR_SEED_SOURCE}
+@@ -1366,22 +1400,7 @@ ${VFS_CURSOR_SEED_SOURCE}
      let __rpcWriteCount = 0;
      // The relay carries bytes (see "Process output is bytes" in the shims),
      // each chunk placed in what this run printed (runtime/stop-replay.ts).
-+    // Kinu patch (NIMBUS-ASKS #39): writes made while the call before them is
-+    // in flight ride the next call together, up to __RPC_BATCH_MAX bytes of
-+    // one stream and run; each write's promise settles with its call. One
-+    // call per write cost ~330 us a console.log through a pipe.
-+    const __RPC_BATCH_MAX = 65536;
-+    let __rpcBatch = null;
-     const __queueRpcWrite = (method, bytes) => {
-       const __chunk = __nimbusStopReplay.write(method, bytes);
-       if (__chunk === null) return;
-       __rpcWriteCount++;
-       // Released at the filesystem client's gate, taken now: once every
+-    const __queueRpcWrite = (method, bytes) => {
+-      const __chunk = __nimbusStopReplay.write(method, bytes);
+-      if (__chunk === null) return;
+-      __rpcWriteCount++;
+-      // Released at the filesystem client's gate, taken now: once every
 -      // change logged ahead of it is answered (ProcessFsClient.effect).
-+      // change logged ahead of it is answered (ProcessFsClient.effect). A
-+      // batch waits for its last write's gate, which follows the earlier ones.
-       const __gate = __nimbusOutputGate();
+-      const __gate = __nimbusOutputGate();
 -      const __task = __rpcWriteChain
 -        .then(() => __gate)
 -        .then(() => __supervisor[method](__chunk.b, __chunk.at, __chunk.run))
@@ -99,39 +110,12 @@ index b6ce290..ffd5856 100644
 -      __rpcWriteChain = __task.then(() => {}, () => {});
 -      __pendingIO.push(__task);
 -      return __task;
-+      const __size = __chunk.b.byteLength;
-+      const __open = __rpcBatch;
-+      if (__open !== null && __open.method === method && __open.run === __chunk.run && __open.end === __chunk.at
-+          && __open.bytes + __size <= __RPC_BATCH_MAX) {
-+        __open.chunks.push(__chunk);
-+        __open.bytes += __size;
-+        __open.end = __chunk.at === undefined ? undefined : __chunk.at + __size;
-+        __open.gate = __gate;
-+        return __open.task;
-+      }
-+      const __batch = { method, run: __chunk.run, chunks: [__chunk], bytes: __size, end: __chunk.at === undefined ? undefined : __chunk.at + __size, gate: __gate, task: null };
-+      __rpcBatch = __batch;
-+      __batch.task = __rpcWriteChain
-+        .then(() => { if (__rpcBatch === __batch) __rpcBatch = null; return __batch.gate; })
-+        .then(() => {
-+          const __first = __batch.chunks[0];
-+          let __bytes = __first.b;
-+          if (__batch.chunks.length > 1) {
-+            __bytes = new Uint8Array(__batch.bytes);
-+            let __at = 0;
-+            for (const __part of __batch.chunks) { __bytes.set(__part.b, __at); __at += __part.b.byteLength; }
-+          }
-+          return __supervisor[method](__bytes, __first.at, __first.run);
-+        })
-+        .then(() => __nimbusStopReplay.ackedRun(__batch.chunks))
-+        .catch((e) => __onRpcDrop(__batch.bytes, e));
-+      __rpcWriteChain = __batch.task.then(() => {}, () => {});
-+      __pendingIO.push(__batch.task);
-+      return __batch.task;
-     };
+-    };
++${KINU_OUTPUT_RELAY}
      let cwd = _cwd || "/home/user";
      let stdout = "", stderr = "";
-@@ -1407,7 +1465,9 @@ ${RESIDENCY_MISS_REPORT}
+     let exitCode = 0;
+@@ -1407,7 +1426,9 @@ ${RESIDENCY_MISS_REPORT}
        stderr += __text;
        if (!__supervisor || captureOutput) return;
        const __bytes = __nimbusOutEnc.encode(__text);

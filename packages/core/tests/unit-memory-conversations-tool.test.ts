@@ -11,7 +11,7 @@ import type { JsonObject } from '../src/utils/json';
 
 function setup() {
   const { rt, stores } = createTestRuntime();
-  const tools = buildBuiltinTools({ rt, conversations: conversationsFor(rt, stores.history) });
+  const tools = buildBuiltinTools({ rt, conversations: conversationsFor(rt) });
   const memoryExec = toolExecute<JsonObject, JsonValue>(tools.memory);
   let row = 0;
 

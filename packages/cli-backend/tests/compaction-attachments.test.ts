@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { APICallError } from 'ai';
 import type { LanguageModelV2CallOptions, LanguageModelV2StreamPart } from '@ai-sdk/provider';
 import {
-  ConversationSearchStore, buildBuiltinTools, initWorkspaceSchema, profileCatalogDigest, type JsonValue, type ProfileCatalogEnvelope,
+  buildBuiltinTools, initWorkspaceSchema, profileCatalogDigest, type JsonValue, type ProfileCatalogEnvelope,
 } from '@kinu.run/core';
 import { present, scratchDir, scratchPath, toolExecute, workspaceDatabase } from '@kinu.run/test-utils';
 import { screenshot } from '../../compaction/tests/helpers';
@@ -52,7 +52,7 @@ function carried(prompt: Prompt) {
 
 /** The screenshots each link opens to, through the workspace's own file tool. */
 async function reopened(rt: CLIRuntime, links: readonly string[]): Promise<number[]> {
-  const file = present(buildBuiltinTools({ rt, conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (id) => rt.stores.history.transcript(id)) }).file, 'the file tool');
+  const file = present(buildBuiltinTools({ rt, conversations: rt.stores.conversationSearch }).file, 'the file tool');
   const read = toolExecute<JsonValue, JsonValue>(file);
   const shown = present(file.toModelOutput, 'the image output');
 

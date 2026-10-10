@@ -5,7 +5,7 @@ import { FilledButton } from "@/components/ui/FilledButton";
 import { PlayIcon, CheckCircleIcon, ArrowUUpLeftIcon } from "@phosphor-icons/react";
 import type { Rpc } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
+import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { DiffLines } from "./shared";
 import { renderThrownChain, showing, detach } from "@kinu.run/core/obs";
 
@@ -35,15 +35,16 @@ function DiffView({ diff }: { diff: ScaffoldDiff }) {
   );
 }
 
-function VersionDiff({ detail, version, onRetry }: {
-  detail: AsyncResource<ScaffoldDiff>;
-  version: number;
-  onRetry: () => void;
-}) {
+/** A scaffold version's diff, read for that version and again each time `readAgain` moves: a slower answer for a
+ *  version no longer shown is never drawn. */
+export function ScaffoldVersionDiff({ rpc, version, readAgain }: { rpc: Rpc; version: number; readAgain: number }) {
+  const load = useCallback(() => rpc<ScaffoldDiff>("getScaffoldDiff", [version]), [rpc, version]);
+  const { resource: detail, reload } = useAsyncResource(load, undefined, `${String(version)}:${String(readAgain)}`);
+
   if (detail.status === "ready") return <DiffView diff={detail.value} />;
 
   if (detail.status === "error") {
-    return <LoadFailure what={`the v${version} diff`} message={detail.message} onRetry={onRetry} />;
+    return <LoadFailure what={`the v${version} diff`} message={detail.message} onRetry={reload} />;
   }
 
   return <div className="flex justify-center py-4"><Loader size="sm" /></div>;
@@ -56,7 +57,8 @@ export interface ScaffoldLineageProps {
 
 export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
   const [selected, setSelected] = useState<number | null>(null);
-  const [detail, setDetail] = useState<AsyncResource<ScaffoldDiff>>({ status: "loading" });
+  // Each decision moves the selected diff's base, so it is read again.
+  const [decisions, setDecisions] = useState(0);
   const [busy, setBusy] = useState<string | null>(null);
   const [decideErr, setDecideErr] = useState<string | null>(null);
   const [previewTask, setPreviewTask] = useState("");
@@ -67,23 +69,9 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
   const { resource: lineage, reload } = useAsyncResource(loadVersions);
   const versions = lastValue(lineage) ?? [];
 
-  const loadDetail = useCallback((version: number) => detach(Effect.gen(function* () {
-    setDetail({ status: "loading" });
-
-    return yield* Effect.catchCause(Effect.gen(function* () {
-      const diff = yield* Effect.promise(() => rpc<ScaffoldDiff>("getScaffoldDiff", [version]));
-      setDetail(loadSucceeded(diff));
-    }), (failed) => Effect.sync(() => {
-      const cause = Cause.squash(failed);
-      setDetail((prev) => loadFailed(prev, { cause }));
-    }));
-  })), [rpc]);
-
   const select = useCallback((version: number) => {
     setSelected(version); setPreviewOut(null); setDecideErr(null);
-
-    return loadDetail(version);
-  }, [loadDetail]);
+  }, []);
 
   const decide = useCallback((mode: "promote" | "rollback") => detach(Effect.gen(function* () {
     setBusy(mode);
@@ -92,11 +80,10 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
     return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
       yield* Effect.promise(async () => rpc("applyScaffoldDecision", [mode]));
       reload();
-
-      if (selected != null) yield* Effect.promise(async () => loadDetail(selected));
+      setDecisions((made) => made + 1);
     }), (failed) => Effect.sync(() => {
       const e = Cause.squash(failed); setDecideErr(`${mode} failed: ${renderThrownChain({ cause: e })}`); })), Effect.sync(() => { setBusy(null); }));
-  })), [rpc, reload, loadDetail, selected]);
+  })), [rpc, reload]);
 
   const runPreview = useCallback(() => detach(Effect.gen(function* () {
     if (selected == null || !previewTask.trim()) return;
@@ -145,7 +132,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
 
           {selected != null && (
             <div className="space-y-3 pt-1">
-              <VersionDiff detail={detail} version={selected} onRetry={() => loadDetail(selected)} />
+              <ScaffoldVersionDiff rpc={rpc} version={selected} readAgain={decisions} />
 
               <div className="space-y-1.5">
                 <div className="flex items-center gap-2">

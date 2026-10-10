@@ -1,7 +1,7 @@
 // The cf Memory adapter's tail over the real SQLite-backed plane: newest bytes as whole code points, null for a missing file.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { createWorkspaceBundle, createTestActor, makeExecRaw, makeSql } from '../../core/tests/helpers';
+import { createWorkspaceBundle, makeSql } from '../../core/tests/helpers';
 import { MemoryStore } from '@kinu.run/agent-utils/memory';
 import type { VectorStore } from '@kinu.run/core';
 import { adaptMemory } from '@kinu.run/core';
@@ -12,16 +12,15 @@ function memoryOver(content: string) {
   const database = new Database(':memory:');
   const sql = makeSql(database);
   const files = createWorkspaceBundle(database).vfs;
-  const store = new MemoryStore(files, sql);
+  const store = new MemoryStore(files, sql, write => database.transaction(write)());
   store.ensureSchema();
-  const config = createTestActor(sql, makeExecRaw(database), crypto.randomUUID(), 'memory-tail').config;
 
   const vectors: VectorStore = {
     available: false,
     async upsertChunk() {}, async upsertChunks() {}, async deleteChunks() {}, async search() { return []; },
   };
 
-  const memory = adaptMemory(store, files, { store: vectors, config });
+  const memory = adaptMemory(store, files, { store: vectors });
 
   return { memory, ready: memory.write(PATH, content) };
 }

@@ -7,7 +7,8 @@ import { Badge, Loader } from "@cloudflare/kumo";
 import {
   FingerprintIcon, MagnifyingGlassIcon, DatabaseIcon, FolderOpenIcon, BrainIcon, GitBranchIcon,
 } from "@phosphor-icons/react";
-import type { AgentStatus, ReadMoves } from "@/hooks/use-kinu";
+import type { AgentStatus } from "@/hooks/use-chat-owner";
+import type { ReadMoves } from "@/hooks/use-workspace-reads";
 import type { JsonValue, MemoryEntry, Rpc } from "@kinu.run/core";
 import { Effect } from "effect";
 import { attempt, detach, renderThrownChain } from "@kinu.run/core/obs";

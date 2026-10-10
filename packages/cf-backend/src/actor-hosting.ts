@@ -252,6 +252,8 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
 
       return runtime;
     },
+    scaffoldFor: async (bound) => ({ path: actorScaffoldPath(bound.record),
+      vfs: seams.workspaceBox(hostedActorPlacement(bound.record).shellId).store({ home: WORKSPACE_ROOT }) }),
 
     /**
      * Heads and branches inherit the parent's promoted loop; hired subordinates start builtin.

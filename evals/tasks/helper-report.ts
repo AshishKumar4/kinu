@@ -61,8 +61,8 @@ const CHECKS_ON_A_HELPER = new Map([
  * The lead's calls between its first hire and the first run a report started that check on the helper, and whether
  * such a run started at all: a lead still working when the report lands takes it mid-turn, so none does.
  */
-function waiting(events: readonly RunEvent[]) {
-  const inputs = callInputs(events);
+function waiting(events: readonly RunEvent[], output: import('../src/transcript').StepMessages) {
+  const inputs = callInputs(events, output);
 
   // A call as one line of text, its input whole where a step recorded it: the ledger row's `args` is a digest cut at 800
   // characters, and a hire's `"op":"hire"` follows its mission.
@@ -101,7 +101,7 @@ median first-response time of its tickets in minutes, like {"Trail 2": 41}. When
 product has the slowest median first response and by how many minutes it trails the fastest.`,
     verify: async (verifier) => {
       const events = await verifier.leadEvents();
-      const seen = waiting(events);
+      const seen = waiting(events, await verifier.stepMessages(events));
 
       await verifier.check('a-helper-wrote-the-report', async () => {
         const worked = await verifier.helperWork();

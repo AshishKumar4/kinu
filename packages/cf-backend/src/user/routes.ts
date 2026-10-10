@@ -35,7 +35,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   UserDO,
   'ensureProfile' | 'userMcp_warmConnections' | 'getProfile' | 'getProfileCatalog' | 'putProfileCatalog'
   | 'fetch' | 'listWorkspaces' | 'touchWorkspace' | 'removeWorkspace' | 'hasWorkspace'
-  | 'listDevices' | 'acknowledgeUnstoppedDevice' | 'revokeDevice' | 'renameDevice' | 'listDeviceConsents'
+  | 'listDevices' | 'issueDeviceJoin' | 'acknowledgeUnstoppedDevice' | 'revokeDevice' | 'renameDevice' | 'listDeviceConsents'
   | 'setDeviceTier' | 'revokeDeviceConsent'
   | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'checkpointCredentials' | 'restoreCredentials' | 'listUnrevokedGrants' | 'dismissUnrevokedGrant' | 'listActiveWorkspaces' | 'getAuthHeaders'
   | 'getCodexStatus' | 'disconnectCodex' | 'startCodexDeviceFlow' | 'pollCodexDeviceFlow' | 'startClaudeSignIn' | 'finishClaudeSignIn'
@@ -252,18 +252,21 @@ userRoutes.delete('/api/user/workspaces/:name', (c) => settle(Effect.tryPromise(
 
 userRoutes.get('/api/user/devices', async (c) => json({ body: await c.get('stub').listDevices(c.get('owner')) }));
 
+// The device is issued here, so the page that asked watches the one row the machine registers as.
 userRoutes.post('/api/user/devices', async (c) => {
   const body = await safeJson(c.req.raw, OptionalLabelSchema);
   const cliOrigin = cliOriginFor(c);
+  const { deviceId } = await c.get('stub').issueDeviceJoin(c.get('owner'));
 
   const installCommand = buildCliInstallCommand({
     origin: cliOrigin,
     setup: false,
     connect: true,
     label: body?.label,
+    device: deviceId,
   });
 
-  return json({ body: { origin: cliOrigin, installCommand } }, { status: 201 });
+  return json({ body: { origin: cliOrigin, installCommand, deviceId } }, { status: 201 });
 });
 
 userRoutes.delete('/api/user/devices/:id/unstopped', (c) => settle(Effect.tryPromise({

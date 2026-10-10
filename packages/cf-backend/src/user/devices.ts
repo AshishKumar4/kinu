@@ -22,6 +22,9 @@ const DEVICE_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000;
 
 const DEVICE_CONNECT_TICKET_TTL_MS = 60 * 1000;
 
+/** How long a browser's connect command stays claimable: long enough to install the CLI and sign in. */
+const DEVICE_JOIN_TTL_MS = 30 * 60 * 1000;
+
 const DEVICE_NAME_MAX_LENGTH = 80;
 
 const MINTED_DEVICE_TOKEN = /^pdt_[A-Za-z0-9_-]{32,}$/;
@@ -393,25 +396,52 @@ export class UserDevices {
     };
   }
 
-  /** The raw token is returned once to the CLI; only its hash is stored. 'Your PC' is the default
-   * label. `replaces` is the machine's previous token, whose registration this one replaces. */
-  async registerDevice(caller: UserCaller, label?: string, replaces?: string): Promise<{ deviceId: string; token: string }> {
+  /** The device a browser's connect command names, issued now: the machine that runs it registers as this id. Joins
+   *  past their time are dropped here, as the next is issued. */
+  async issueDeviceJoin(caller: UserCaller): Promise<{ deviceId: string }> {
     await this.host.requireTier(caller, 'device.manage');
-    const replaced = replaces === undefined ? null : await this.deviceHoldingToken(caller, replaces);
     const deviceId = `dev-${nanoid(10)}`;
-    const token = `pdt_${randomToken(32)}`;
-    const tokenHash = await sha256Hex(token);
     const now = Date.now();
-    const trimmedLabel = label?.trim().slice(0, DEVICE_NAME_MAX_LENGTH) ?? '';
-    this.host.sqlx(
-      `INSERT INTO user_devices (id, token_hash, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`,
-      deviceId, tokenHash, trimmedLabel === '' ? 'Your PC' : trimmedLabel, now, now + DEVICE_TOKEN_TTL_MS,
-    );
+    this.host.sqlx(`DELETE FROM device_joins WHERE expires_at <= ?`, now);
+    this.host.sqlx(`INSERT INTO device_joins (device_id, expires_at) VALUES (?, ?)`, deviceId, now + DEVICE_JOIN_TTL_MS);
 
-    if (replaced !== null) await this.revokeDevice(caller, replaced);
-    else await this.devicesMoved();
+    return { deviceId };
+  }
 
-    return { deviceId, token };
+  /** The raw token is returned once to the CLI; only its hash is stored. 'Your PC' is the default
+   * label. `replaces` is the machine's previous token, whose registration this one replaces. `join` is the device a
+   * browser issued for this machine; it registers as that id, once, while the join lasts. */
+  registerDevice(caller: UserCaller, label?: string, replaces?: string, join?: string): Promise<{ deviceId: string; token: string }> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* Effect.promise(() => this.host.requireTier(caller, 'device.manage'));
+      const replaced = replaces === undefined ? null : yield* Effect.promise(() => this.deviceHoldingToken(caller, replaces));
+      const deviceId = join === undefined ? `dev-${nanoid(10)}` : yield* this.claimDeviceJoin(join);
+      const token = `pdt_${randomToken(32)}`;
+      const tokenHash = sha256Hex(token);
+      const now = Date.now();
+      const trimmedLabel = label?.trim().slice(0, DEVICE_NAME_MAX_LENGTH) ?? '';
+      this.host.sqlx(
+        `INSERT INTO user_devices (id, token_hash, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`,
+        deviceId, tokenHash, trimmedLabel === '' ? 'Your PC' : trimmedLabel, now, now + DEVICE_TOKEN_TTL_MS,
+      );
+
+      if (replaced !== null) yield* Effect.promise(() => this.revokeDevice(caller, replaced));
+      else yield* Effect.promise(() => this.devicesMoved());
+
+      return { deviceId, token };
+    }));
+  }
+
+  private claimDeviceJoin(deviceId: string): Effect.Effect<string, KinuError> {
+    return Effect.suspend(() => {
+      const [claimed] = this.host.sqlx<{ device_id: string }>(
+        `DELETE FROM device_joins WHERE device_id = ? AND expires_at > ? RETURNING device_id`, deviceId, Date.now(),
+      );
+
+      return claimed === undefined
+        ? Effect.fail(new KinuError('bad_input', 'This connect command has expired or was already used. Open Connect a machine again for a new one.'))
+        : Effect.succeed(claimed.device_id);
+    });
   }
 
   /** Expired or not, holding the token proves the caller had that machine's `device.json`. */

@@ -668,6 +668,17 @@ test('!command output joins the next prompt, and !!command stays on screen only'
   expect(sent[1]).not.toContain('seen-');
 });
 
+// 26244c765: a send the client refused left its prompt on screen as if the agent had it.
+test('a prompt the client could not send leaves no row behind, only the reason', async () => {
+  const agent = fakeClient({ name: 'refused', send: async () => { throw new Error('the workspace is unreachable'); } });
+  const screen = await mountChat(agent.client);
+
+  await screen.mockInput.typeText('ship the coupon fix');
+  screen.mockInput.pressEnter();
+  await screen.waitFor('the failure', () => screen.frame().includes('the workspace is unreachable'));
+  expect(screen.frame()).not.toContain('ship the coupon fix');
+});
+
 test('a failed connect says so and Enter retries it, instead of staying on Connecting', async () => {
   let attempts = 0;
   const sent: unknown[] = [];

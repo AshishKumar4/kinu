@@ -26,7 +26,7 @@ import {
 } from './display';
 import { renderThrownChain, detach } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
-import { type WorkMode } from '@kinu.run/core';
+import { initialInputState, reduceInput, type InputMachineEvent, type WorkMode } from '@kinu.run/core';
 import { clipText } from '@kinu.run/core/tui';
 
 export interface ChatLoopOpts {
@@ -37,25 +37,57 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   let client = opts.client;
   const tty = process.stdin.isTTY === true && process.stdout.isTTY === true;
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
   // Reset per user turn so the name header prints once and the status line stops on first output.
   let turnStatus = createTurnStatus({ hold: () => consentAskPending || rl.line.length > 0 });
   let headerPrinted = false;
-  let turnInFlight = false;
   let interruptRequested = false;
   let exiting = false;
-  /** Counts paired turn events, covering cascaded turns past send(). */
-  let activeTurns = 0;
-  /** Drained FIFO before the next prompt. */
-  const queuedInputs: string[] = [];
+  /** The TUI's input machine: turns counted by their events, and what waits behind them. */
+  let machine = initialInputState;
+  /** Resolves the prompt loop's wait once no turn runs and none is owed. */
+  let idle: (() => void) | null = null;
   let pendingPrefill: string | null = null;
   /** Answer lines to a consent question must not be read as steering input. */
   let consentAskPending = false;
 
+  // A send is owed a turn from the moment it leaves: the machine counts it until it is answered.
+  const busy = () => machine.activeTurns > 0 || machine.sending > 0;
+
+  const settleIfIdle = () => {
+    if (busy() || idle === null) return;
+    const resolve = idle;
+    idle = null;
+    resolve();
+  };
+
+  const dispatch = (event: InputMachineEvent) => {
+    const transition = reduceInput(machine, event);
+    machine = transition.state;
+
+    for (const effect of transition.effects) {
+      if (effect.kind === 'interrupt') client.stop();
+      // readline answers a written newline as Enter, so what was queued comes back as one line to edit and send.
+      else if (effect.kind === 'set-input') pendingPrefill = effect.text.replace(/\s*\n\s*/g, ' ');
+      else if (effect.kind === 'hint') console.log(DIM(`  ${effect.text}`));
+      // A released prompt is owed from now, so nothing queued after it overtakes it; it leaves once this event's
+      // handling has returned.
+      else if (effect.kind === 'send-queued') {
+        dispatch({ type: 'send-started' });
+        queueMicrotask(() => detach(Effect.promise(async () => runTurn(effect.text, undefined, true))));
+      }
+      else if (effect.kind === 'send-branch' && !client.branch(effect.text, { cwd: process.cwd() })) {
+        console.log(DIM('  ⧗ the turn just finished. Queued to send next.'));
+        dispatch({ type: 'queue', text: effect.text });
+      }
+    }
+
+    settleIfIdle();
+  };
+
   const onClientEvent = (event: AgentClientEvent) => {
-    if (event.type === 'turn-start') activeTurns += 1;
-    else if (event.type === 'turn-end') activeTurns = Math.max(0, activeTurns - 1);
+    if (event.type === 'turn-start') dispatch({ type: 'turn-start' });
+    else if (event.type === 'turn-end') dispatch({ type: 'turn-settled' });
     renderClientEvent({
       event, agentName: client.agentName, status: turnStatus,
       getHeader: () => headerPrinted, setHeader: (printed) => { headerPrinted = printed; },
@@ -92,17 +124,15 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   };
 
   const onInterrupt = async (): Promise<void> => {
-    if (turnInFlight && !interruptRequested) {
+    if (busy() && !interruptRequested) {
       interruptRequested = true;
-      client.stop();
       console.log(WARN('\n  Interrupting the active turn… (Ctrl+C again to exit)'));
+      const queued = machine.queue.length;
 
-      // Interrupt means stop — held messages must not auto-fire afterwards.
-      if (queuedInputs.length > 0) {
-        console.log(WARN(`  Dropping ${queuedInputs.length} queued message(s):`));
+      dispatch({ type: 'interrupt', draft: rl.line });
 
-        for (const queued of queuedInputs.splice(0)) console.log(DIM(`    ⧗ ${queued}`));
-      }
+      // Held messages never fire after a stop; they come back as the next prompt's text.
+      if (queued > 0) console.log(WARN(`  ${String(queued)} queued message(s) are back in the next prompt.`));
 
       return;
     }
@@ -132,12 +162,10 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     if (command === '/queue') {
       const text = input.slice('/queue'.length).trim();
 
-      if (text) {
-        queuedInputs.push(text);
-        console.log(DIM(`  ⧗ queued: sends after this turn (${queuedInputs.length} waiting)`));
-      } else {
-        console.log(DIM('  Usage while a turn runs: /queue <text>'));
-      }
+      if (!text) console.log(DIM('  Usage while a turn runs: /queue <text>'));
+      dispatch({ type: 'queue', text });
+
+      if (text && machine.queue.length > 0) console.log(DIM(`  ⧗ queued: sends after this turn (${String(machine.queue.length)} waiting)`));
 
       return;
     }
@@ -146,10 +174,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
       const text = input.slice('/branch'.length).trim();
 
       if (!text) console.log(DIM('  Usage while a turn runs: /branch <text>. It runs the redirect in parallel.'));
-      else if (!client.branch(text, { cwd: process.cwd() })) {
-        queuedInputs.push(text);
-        console.log(DIM('  ⧗ the turn just finished. Queued to send next.'));
-      }
+      else dispatch({ type: 'branch', draft: text });
 
       return;
     }
@@ -171,7 +196,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     else console.log(DIM('  ⧗ the turn had just finished, so this ran as the next message.'));
   };
 
-  rl.on('line', (line) => detach(Effect.promise(async () => { if (!turnInFlight || consentAskPending || exiting) return;
+  rl.on('line', (line) => detach(Effect.promise(async () => { if (!busy() || consentAskPending || exiting) return;
   const input = line.trim();
   
   if (!input) return;
@@ -194,17 +219,11 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
 
   const promptLabel = () => tty ? `${ACCENT(client.agentName)} ${DIM('›')} ` : '';
 
-  /** A cascaded turn starts moments after the previous turn-end, so idle holds through a short debounce. */
-  const waitForTurnsToSettle = async () => {
-    for (;;) {
-      while (activeTurns > 0 && !exiting) await sleep(25);
-
-      if (exiting) return;
-      await sleep(60);
-
-      if (activeTurns === 0) return;
-    }
-  };
+  /** No turn runs and none is owed: the machine settles queued sends itself, so the loop only waits for the end. */
+  const settled = () => new Promise<void>((resolve) => {
+    idle = resolve;
+    settleIfIdle();
+  });
 
   const consentAsk = async (question: string, signal: AbortSignal) => {
     consentAskPending = true;
@@ -215,44 +234,51 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     } finally {
       consentAskPending = false;
 
-      if (turnInFlight) turnStatus.resume();
+      if (busy()) turnStatus.resume();
     }
   };
 
-  const runTurn = async (input: string, mode?: WorkMode) => {
-    const resolved = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes, planes: client.planes ?? undefined });
-
-    for (const problem of resolved.errors) console.log(WARN(`  ${problem}`));
-
-    if (resolved.attached.length > 0) {
-      console.log(DIM(`  + ${resolved.attached.map(describePromptAttachment).join(' · ')}`));
-    }
-
-    headerPrinted = false;
-    turnInFlight = true;
+  /** `reserved`: the machine already counts this send, as it does one it released from the queue. */
+  const runTurn = async (input: string, mode?: WorkMode, reserved = false) => {
+    if (!reserved) dispatch({ type: 'send-started' });
     interruptRequested = false;
-    turnStatus.show('thinking');
-
-    const consentWatch = client.consents
-      ? watchTerminalConsents(client.consents, client.agentName, consentAsk)
-      : null;
+    let consentWatch: ReturnType<typeof watchTerminalConsents> | null = null;
 
     try {
+      const resolved = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes, planes: client.planes ?? undefined });
+
+      // Stopped while its attachments were read: it never leaves, and comes back to edit like what was queued.
+      if (interruptRequested) {
+        pendingPrefill = [input, pendingPrefill].filter(Boolean).join(' ');
+        console.log(WARN('  Stopped before it was sent.'));
+
+        return;
+      }
+
+      for (const problem of resolved.errors) console.log(WARN(`  ${problem}`));
+
+      if (resolved.attached.length > 0) {
+        console.log(DIM(`  + ${resolved.attached.map(describePromptAttachment).join(' · ')}`));
+      }
+
+      headerPrinted = false;
+      turnStatus.show('thinking');
+      consentWatch = client.consents ? watchTerminalConsents(client.consents, client.agentName, consentAsk) : null;
+
       await client.send(
         resolved.files.length > 0 ? { text: resolved.text, files: resolved.files } : resolved.text,
         { cwd: process.cwd(), ...(mode !== undefined && { mode }) },
       );
-      await waitForTurnsToSettle();
     } catch (err) {
       turnStatus.clear();
       console.log(`\n${formatFailure({ cause: err })}\n`);
     } finally {
       consentWatch?.stop();
-      turnInFlight = false;
       turnStatus.clear();
+      console.log('\n');
+      // Answered, admitted or refused: what waits behind it goes once nothing else runs.
+      dispatch({ type: 'send-ended' });
     }
-
-    console.log('\n');
   };
 
   const handleFork = async (ref: string | undefined) => {
@@ -304,13 +330,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   };
 
   while (!exiting) {
-    while (!exiting && queuedInputs.length > 0) {
-      const queued = queuedInputs.shift();
-
-      if (queued === undefined) break;
-      await runTurn(queued);
-    }
-
+    await settled();
     const prefill = pendingPrefill;
     pendingPrefill = null;
     const line = await ask(rl, promptLabel(), undefined, prefill ?? undefined);
@@ -325,7 +345,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
         const outcome = await executeSlashCommand(client, input);
 
         if (outcome.kind === 'queue') {
-          queueOrExplain(outcome.text, queuedInputs);
+          queueOrExplain(outcome.text, dispatch);
           continue;
         }
 
@@ -623,14 +643,14 @@ async function runUndo(
   await handleFork(undefined);
 }
 
-function queueOrExplain(text: string | undefined, queued: string[]): void {
+function queueOrExplain(text: string | undefined, dispatch: (event: InputMachineEvent) => void): void {
   if (text === undefined || text === '') {
     console.log(DIM('  Usage: /queue <text>. It sends after the running turn, or at once when idle.'));
 
     return;
   }
 
-  queued.push(text);
+  dispatch({ type: 'queue', text });
 }
 
 /** Status-line labels are only states the turn actually entered; vocabulary matches the TUI phase line. */

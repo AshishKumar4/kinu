@@ -1,6 +1,6 @@
 import type { LanguageModel } from 'ai';
 import type { EnginePorts } from '@better-compact/core';
-import type { HostedActor, ModelCallSpend } from '@kinu.run/core';
+import type { HostedActor, ModelCallSpend, ModelCallReport, ModelOperationSink, TurnModelSources } from '@kinu.run/core';
 import { diagnostics, KinuError } from '@kinu.run/core/obs';
 import type { AttachmentDeps } from './attachments';
 import { createCompactionExtension, type CompactionExtension, type EphemeralContextPlane } from './extension';
@@ -14,6 +14,7 @@ export interface ActorCompactionDeps {
   readonly logger: EnginePorts['logger'];
   readonly summarizer: () => LanguageModel;
   readonly spend: Omit<ModelCallSpend, 'source'>;
+  readonly modelSpec?: () => string;
 }
 
 export const compactionDiagnostics: EnginePorts['logger'] = {
@@ -27,7 +28,7 @@ export function createActorCompaction(deps: ActorCompactionDeps): CompactionExte
   return createCompactionExtension({
     ports: { transcripts: createVfsTranscriptStore(() => deps.files().storage.vfs), plans: deps.state.plans, logger: deps.logger },
     archive: deps.state.archive,
-    summarize: createModelSummarizer(deps.summarizer, { source: 'compaction', ...deps.spend }),
+    summarize: createModelSummarizer(deps.summarizer, { source: 'compaction', ...deps.spend }, deps.modelSpec),
     ephemeral: deps.ledger,
     // Only a byte-stable replay keeps the ledger's frozen positions.
     onOutcome: ({ outcome }) => {
@@ -42,11 +43,21 @@ export interface HostedActorCompaction {
   readonly trigger: { readonly state: CompactionStateStore; readonly key: string };
 }
 
-export function hostedActorCompaction(actor: HostedActor, deps: Omit<ActorCompactionDeps, 'files' | 'state' | 'ledger'>): HostedActorCompaction {
+export function hostedActorCompaction(actor: HostedActor, deps: {
+  readonly logger: ActorCompactionDeps['logger'];
+  readonly models: Pick<TurnModelSources, 'normalize' | 'resolve'>;
+  report(actor: HostedActor, report: ModelCallReport): void;
+  readonly operations?: ModelOperationSink;
+}): HostedActorCompaction {
   const state = createCompactionStateStore(actor.runtime.storage.sql, actor.handle);
+  const spec = () => deps.models.normalize(actor.session.profile?.tier.model ?? actor.stores.config.getModel() ?? '');
 
   return {
-    extension: createActorCompaction({ ...deps, files: () => actor.runtime, state, ledger: actor.session.dynamic }),
+    extension: createActorCompaction({
+      files: () => actor.runtime, state, ledger: actor.session.dynamic, logger: deps.logger,
+      summarizer: () => deps.models.resolve(spec()), modelSpec: spec,
+      spend: { report: (report) => deps.report(actor, report), operations: deps.operations },
+    }),
     trigger: { state, key: actor.record.actorId },
   };
 }

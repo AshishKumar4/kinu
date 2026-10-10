@@ -34,10 +34,10 @@ export interface SubordinateInspectionAccess {
   readonly ownRows: (actor: ActorHandle, request: AgentOwnInspection) => Promise<SubordinateInspectionResult>;
 }
 
-export type AgentOwnInspection = Extract<SubordinateInspectionRequest, { readonly view: 'history' | 'runs' | 'events' }>;
+export type AgentOwnInspection = Extract<SubordinateInspectionRequest, { readonly view: 'history' | 'runs' | 'events' | 'step' }>;
 
 function ownView(request: SubordinateInspectionRequest): request is AgentOwnInspection {
-  return request.view === 'history' || request.view === 'runs' || request.view === 'events';
+  return request.view === 'history' || request.view === 'runs' || request.view === 'events' || request.view === 'step';
 }
 
 const OwnerRowSchema = v.object({ name: v.string(), owner_user_id: v.nullable(v.string()) });

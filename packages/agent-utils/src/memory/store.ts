@@ -14,6 +14,7 @@ interface FtsRow extends ChunkRow { rank: number }
 
 /** A memory chunk with its verbatim text. Declared here because core depends on agent-utils. */
 export interface IndexedChunk {
+	hash?: string;
 	id: string;
 	path: string;
 	startLine: number;
@@ -44,6 +45,11 @@ export function initMemoryChunkTables(sql: SqlExecutor): void {
 		)
 	`;
 	void sql`CREATE INDEX IF NOT EXISTS idx_mc_path ON memory_note_chunks(path)`;
+	void sql`CREATE TABLE IF NOT EXISTS memory_projection_updates (
+		revision INTEGER PRIMARY KEY AUTOINCREMENT,
+		id TEXT NOT NULL UNIQUE,
+		kind TEXT NOT NULL CHECK (kind IN ('upsert', 'delete'))
+	)`;
 	void sql`
 		CREATE TABLE IF NOT EXISTS memory_note_files (
 			path  TEXT PRIMARY KEY,
@@ -60,7 +66,7 @@ export function initMemoryChunkTables(sql: SqlExecutor): void {
 }
 
 export class MemoryStore {
-	constructor(private readonly vfs: Pick<VFS, 'readFile' | 'writeFile'>, private readonly sql: SqlExecutor) {}
+	constructor(private readonly vfs: Pick<VFS, 'readFile' | 'writeFile'>, private readonly sql: SqlExecutor, private readonly transactionSync: (write: () => void) => void) {}
 
 	ensureSchema(): void {
 		initMemoryChunkTables(this.sql);
@@ -108,75 +114,89 @@ export class MemoryStore {
 
 	/** (Re)index a note as the file `stamp` names held it; the vector index's delta. */
 	async indexFile(path: string, content: string, stamp: NoteStamp = null): Promise<MemoryIndexDelta> {
-		const delta = await this.replaceChunks(path, content);
-
-		void this.sql`
-			INSERT INTO memory_note_files (path, stamp) VALUES (${path}, ${stamp})
-			ON CONFLICT(path) DO UPDATE SET stamp = excluded.stamp
-		`;
-
-		return delta;
+		return this.replaceChunks(path, content, stamp);
 	}
 
 	/** A note that is gone, or is no file: its chunks and its stamp leave. */
 	async forgetFile(path: string): Promise<MemoryIndexDelta> {
-		const delta = await this.replaceChunks(path, '');
-		void this.sql`DELETE FROM memory_note_files WHERE path = ${path}`;
+		return this.replaceChunks(path, '', undefined);
+	}
+
+	private async replaceChunks(path: string, content: string, stamp: NoteStamp | undefined): Promise<MemoryIndexDelta> {
+		const chunks = await chunkMarkdown(content);
+		const delta: MemoryIndexDelta = { upserted: [], deletedIds: [] };
+
+		this.transactionSync(() => {
+			const existing = this.sql<{ id: string; hash: string }>`
+				SELECT id, hash FROM memory_note_chunks WHERE path = ${path}
+			`;
+
+			const existingMap = new Map(existing.map((r) => [r.id, r.hash]));
+			const newIds = new Set<string>();
+
+			for (const chunk of chunks) {
+				const id = `${path}:${chunk.startLine}-${chunk.endLine}`;
+				newIds.add(id);
+
+				if (existingMap.get(id) === chunk.hash) continue;
+
+				void this.sql`DELETE FROM memory_note_chunks_fts WHERE rowid IN (SELECT rowid FROM memory_note_chunks WHERE id = ${id})`;
+				void this.sql`
+					INSERT OR REPLACE INTO memory_note_chunks (id, path, start_line, end_line, hash)
+					VALUES (${id}, ${path}, ${chunk.startLine}, ${chunk.endLine}, ${chunk.hash})
+				`;
+				void this.sql`INSERT INTO memory_note_chunks_fts (rowid, text) SELECT rowid, ${chunk.text} FROM memory_note_chunks WHERE id = ${id}`;
+				delta.upserted.push({ id, path, startLine: chunk.startLine, endLine: chunk.endLine, text: chunk.text, hash: chunk.hash });
+			}
+
+			for (const [id] of existingMap) {
+				if (!newIds.has(id)) {
+					void this.sql`DELETE FROM memory_note_chunks_fts WHERE rowid IN (SELECT rowid FROM memory_note_chunks WHERE id = ${id})`;
+					void this.sql`DELETE FROM memory_note_chunks WHERE id = ${id}`;
+					delta.deletedIds.push(id);
+				}
+			}
+
+			if (stamp === undefined) void this.sql`DELETE FROM memory_note_files WHERE path = ${path}`;
+			else void this.sql`
+				INSERT INTO memory_note_files (path, stamp) VALUES (${path}, ${stamp})
+				ON CONFLICT(path) DO UPDATE SET stamp = excluded.stamp`;
+			this.queueProjection(delta);
+		});
 
 		return delta;
 	}
 
-	private async replaceChunks(path: string, content: string): Promise<MemoryIndexDelta> {
-		const chunks = await chunkMarkdown(content);
+	/** Derived-index obligations are private index state, not user-visible agent configuration. */
+	private queueProjection(delta: MemoryIndexDelta): void {
+		for (const id of delta.deletedIds) void this.sql`INSERT OR REPLACE INTO memory_projection_updates (id, kind) VALUES (${id}, 'delete')`;
 
-		const existing = this.sql<{ id: string; hash: string }>`
-			SELECT id, hash FROM memory_note_chunks WHERE path = ${path}
-		`;
-
-		const existingMap = new Map(existing.map((r) => [r.id, r.hash]));
-		const newIds = new Set<string>();
-		const upserted: IndexedChunk[] = [];
-
-		for (const chunk of chunks) {
-			const id = `${path}:${chunk.startLine}-${chunk.endLine}`;
-			newIds.add(id);
-
-			if (existingMap.get(id) === chunk.hash) continue;
-
-			void this.sql`DELETE FROM memory_note_chunks_fts WHERE rowid IN (SELECT rowid FROM memory_note_chunks WHERE id = ${id})`;
-			void this.sql`
-				INSERT OR REPLACE INTO memory_note_chunks (id, path, start_line, end_line, hash)
-				VALUES (${id}, ${path}, ${chunk.startLine}, ${chunk.endLine}, ${chunk.hash})
-			`;
-			void this.sql`INSERT INTO memory_note_chunks_fts (rowid, text) SELECT rowid, ${chunk.text} FROM memory_note_chunks WHERE id = ${id}`;
-			upserted.push({ id, path, startLine: chunk.startLine, endLine: chunk.endLine, text: chunk.text });
-		}
-
-		const deletedIds: string[] = [];
-
-		for (const [id] of existingMap) {
-			if (!newIds.has(id)) {
-				void this.sql`DELETE FROM memory_note_chunks_fts WHERE rowid IN (SELECT rowid FROM memory_note_chunks WHERE id = ${id})`;
-				void this.sql`DELETE FROM memory_note_chunks WHERE id = ${id}`;
-				deletedIds.push(id);
-			}
-		}
-
-		return { upserted, deletedIds };
+		for (const chunk of delta.upserted) void this.sql`INSERT OR REPLACE INTO memory_projection_updates (id, kind) VALUES (${chunk.id}, 'upsert')`;
 	}
 
-	/** A backfill page; `next` is null after the last. */
-	async allChunksAfter(afterId: string, limit: number): Promise<{ readonly chunks: IndexedChunk[]; readonly next: string | null }> {
-		const rows = this.sql<ChunkRow>`
-			SELECT id, path, start_line, end_line, hash FROM memory_note_chunks
-			WHERE id > ${afterId} ORDER BY id LIMIT ${limit}
-		`;
+	pendingProjection(limit = Number.MAX_SAFE_INTEGER): { id: string; kind: 'upsert' | 'delete'; revision: number }[] {
+		return this.sql<{ id: string; kind: 'upsert' | 'delete'; revision: number }>`SELECT id, kind, revision FROM memory_projection_updates ORDER BY revision LIMIT ${limit}`;
+	}
 
-		const chunks = (await chunkTexts(rows, (path) => this.readFile(path))).flatMap(({ row, text }) => (text === null ? [] : [{
-			id: row.id, path: row.path, startLine: row.start_line, endLine: row.end_line, text,
-		}]));
+	ackProjection(updates: readonly { id: string; revision: number }[]): void {
+		for (const update of updates) void this.sql`DELETE FROM memory_projection_updates WHERE id = ${update.id} AND revision = ${update.revision}`;
+	}
 
-		return { chunks, next: rows.length < limit ? null : rows.at(-1)?.id ?? null };
+	/** Pending semantic references are hydrated from the current note and hash, never from a queued body. */
+	async chunksByIds(ids: readonly string[]): Promise<IndexedChunk[]> {
+		if (ids.length === 0) return [];
+
+		const rows = this.sql<ChunkRow>`SELECT id, path, start_line, end_line, hash FROM memory_note_chunks
+			WHERE id IN (SELECT value FROM json_each(${JSON.stringify(ids)})) ORDER BY id`;
+
+		return this.hydrateChunks(rows);
+	}
+
+
+	private async hydrateChunks(rows: readonly ChunkRow[]): Promise<IndexedChunk[]> {
+		return (await chunkTexts(rows, (path) => this.readFile(path))).flatMap(({ row, text }) => text === null ? [] : [{
+			id: row.id, path: row.path, startLine: row.start_line, endLine: row.end_line, text, hash: row.hash,
+		}]);
 	}
 
 	async search(query: string, limit = 10, reindex: (path: string) => Promise<void> = async (path) => this.reindex(path)): Promise<MemorySearchResult[]> {

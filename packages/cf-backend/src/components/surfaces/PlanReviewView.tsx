@@ -3,6 +3,7 @@ import { Button, Loader } from "@cloudflare/kumo";
 import { CheckCircleIcon, ChatCircleDotsIcon, NotePencilIcon, TrashIcon } from "@phosphor-icons/react";
 import {
   freshNotes,
+  planDecisionRefusal,
   planReviewAwaitingDecision,
   type GeneralNote,
   type NoteReply,
@@ -547,14 +548,14 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
                 variant="secondary"
                 className="shrink-0 grow justify-center whitespace-nowrap @[36rem]:grow-0"
                 onClick={() => detach(Effect.promise(async () => decide("request_changes")))}
-                disabled={decisionBusy !== null || saving || written.length === 0}
+                disabled={decisionBusy !== null || saving || planDecisionRefusal(shown, "request_changes") !== null}
               >
                 {decisionBusy === "request" ? <Loader size="sm" /> : "Request changes"}
               </Button>
               <FilledButton
                 className="grow justify-center whitespace-nowrap @[36rem]:grow-0"
                 onClick={() => detach(Effect.promise(async () => decide("approve")))}
-                disabled={decisionBusy !== null || saving || written.length > 0}
+                disabled={decisionBusy !== null || saving || planDecisionRefusal(shown, "approve") !== null}
               >
                 {decisionBusy === "approve" ? <Loader size="sm" /> : <><CheckCircleIcon size={14} />Approve &amp; implement</>}
               </FilledButton>

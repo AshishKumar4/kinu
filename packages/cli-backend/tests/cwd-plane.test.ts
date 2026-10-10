@@ -8,7 +8,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import * as v from 'valibot';
 import type { AgentRuntime, DeferredApprovalChannel, LLMProviderConfig, ShellApprovalOutcome, WriteEvent, WriteObserver } from '@kinu.run/core';
-import { ConversationSearchStore, buildBuiltinTools, discoverSkills, initWorkspaceSchema, reviewCommand, WORKSPACE_ROOT, actorHomeName } from '@kinu.run/core';
+import { buildBuiltinTools, discoverSkills, initWorkspaceSchema, reviewCommand, WORKSPACE_ROOT, actorHomeName } from '@kinu.run/core';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { present, scratchDir, spawnTest, toolExecute, workspaceDatabase } from '@kinu.run/test-utils';
@@ -258,7 +258,7 @@ describe('addressing the bound directory', () => {
       return answer();
     });
 
-    const file = toolExecute(present(buildBuiltinTools({ rt, workMode: 'build', conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)) }).file, 'the file tool'));
+    const file = toolExecute(present(buildBuiltinTools({ rt, workMode: 'build', conversations: rt.stores.conversationSearch }).file, 'the file tool'));
     const writeFile = present(rt.executionRouter?.getProvider('workspace'), 'the workspace executor').tools.writeFile;
 
     return { file, writeFile: (path: string, content: string) => present(writeFile, 'workspace.writeFile').execute(path, content), asked };
@@ -628,7 +628,7 @@ test('local Plan file inspection remains useful without granting native project 
   const { state, project } = roots('plan-cwd-inspection');
   writeFileSync(join(project, 'inspect.txt'), 'alpha\nneedle\nomega');
   const rt = agentRuntime(state, 'inspector', project);
-  const planned = buildBuiltinTools({ rt, workMode: 'plan', conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)) });
+  const planned = buildBuiltinTools({ rt, workMode: 'plan', conversations: rt.stores.conversationSearch });
   const file = planned.file;
 
   if (file === undefined) throw new Error('No Plan file tool');
@@ -639,7 +639,7 @@ test('local Plan file inspection remains useful without granting native project 
   expect(await inspect({ op: 'read', path: 'inspect.txt' })).toEqual(expect.stringContaining('needle'));
   await expect(inspect({ op: 'write', path: 'inspect.txt', content: 'changed' })).rejects.toMatchObject({ code: 'denied' });
   expect(readFileSync(join(project, 'inspect.txt'), 'utf8')).toBe('alpha\nneedle\nomega');
-  const buildFile = buildBuiltinTools({ rt, workMode: 'build', conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)) }).file;
+  const buildFile = buildBuiltinTools({ rt, workMode: 'build', conversations: rt.stores.conversationSearch }).file;
 
   if (buildFile === undefined) throw new Error('No Build file tool');
   const build = toolExecute(buildFile);
@@ -652,7 +652,7 @@ test('a file the agent writes in its folder is named local://', async () => {
   const { state, project } = roots('cwd-plane-reference');
 
   const write = (rt: CLIRuntime) => {
-    const file = buildBuiltinTools({ rt, workMode: 'build', conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)) }).file;
+    const file = buildBuiltinTools({ rt, workMode: 'build', conversations: rt.stores.conversationSearch }).file;
 
     if (file === undefined) throw new Error('No Build file tool');
 
@@ -669,7 +669,7 @@ test('the agent\'s own space is real files beside its database, and only its wor
   const { state, project } = roots('cwd-plane-own-space');
   const rt = agentRuntime(state, 'solo', project);
   const space = join(state, 'solo');
-  const file = toolExecute(present(buildBuiltinTools({ rt, workMode: 'build', conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)) }).file, 'the file tool'));
+  const file = toolExecute(present(buildBuiltinTools({ rt, workMode: 'build', conversations: rt.stores.conversationSearch }).file, 'the file tool'));
 
   expect(await file({ op: 'write', path: 'vfs://slates/board/index.ts', content: 'board' })).toMatchObject({ reference: 'vfs://slates/board/index.ts' });
   expect(await file({ op: 'write', path: join(space, 'slates/widgets/package.json'), content: '{}' })).toMatchObject({ action: 'created' });
@@ -693,7 +693,7 @@ test('the file tool shows the agent a screenshot the rung moved out, from the li
   const { state, project } = roots('cwd-plane-attachment');
   const rt = agentRuntime(state, 'shots', project);
   const { links } = await compactedScreenshots(rt);
-  const file = present(buildBuiltinTools({ rt, conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)) }).file, 'the file tool');
+  const file = present(buildBuiltinTools({ rt, conversations: rt.stores.conversationSearch }).file, 'the file tool');
   const read = await toolExecute(file)({ op: 'read', path: links[0] ?? '' });
 
   expect(links[0]).toStartWith('vfs://home/main/attachments/');
@@ -712,7 +712,7 @@ describe('main\'s state keeps its writer, whatever path reaches it', () => {
     await rt.memory.append('memory/MEMORY.md', '\nlearned something\n');
     const memory = join(state, 'jarvis', 'home', 'main', 'memory');
     symlinkSync(memory, join(project, 'notes-link'));
-    const file = toolExecute(present(buildBuiltinTools({ rt, workMode: 'build', conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)) }).file, 'the file tool'));
+    const file = toolExecute(present(buildBuiltinTools({ rt, workMode: 'build', conversations: rt.stores.conversationSearch }).file, 'the file tool'));
 
     expect(await file({ op: 'read', path: 'notes-link/MEMORY.md' })).toContain('learned something');
     await expect(file({ op: 'write', path: 'notes-link/MEMORY.md', content: 'forged' })).rejects.toThrow('EROFS');

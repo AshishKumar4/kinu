@@ -5,7 +5,7 @@
  */
 import { afterEach, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { ConversationSearchStore, buildBuiltinTools, type JsonValue } from '@kinu.run/core';
+import { buildBuiltinTools, type JsonValue } from '@kinu.run/core';
 import { present, toolExecute } from '@kinu.run/test-utils';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type DeviceFrame, type TestUserDO } from './helpers/user-do';
 import { CAPABLE_HELLO } from './helpers/device-harness';
@@ -93,7 +93,7 @@ async function workspaceWithMachine() {
   const main = await hostedMainActor(workspace);
   const runtime = main.actor.runtime;
   await present(runtime.deviceTransport, 'the device transport').refreshStatus();
-  const file = toolExecute(present(buildBuiltinTools({ rt: runtime, workMode: 'build', conversations: new ConversationSearchStore(runtime.storage.sql, runtime.actor, (sessionId) => main.actor.stores.history.transcript(sessionId)) }).file, 'the file tool'));
+  const file = toolExecute(present(buildBuiltinTools({ rt: runtime, workMode: 'build', conversations: main.actor.stores.conversationSearch }).file, 'the file tool'));
   // A program reaches the machine's files as the file tool does, through the workspace's own, under /pc.
   const workspaceFiles = present(runtime.executionRouter?.getProvider('workspace'), 'the workspace executor').tools;
 

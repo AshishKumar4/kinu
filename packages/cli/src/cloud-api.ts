@@ -444,15 +444,18 @@ export function revokeCliAccessToken(origin: string, token: string, ref: string)
   return settle(cloudJson(OkSchema, origin, `/api/cli/tokens/${encodeURIComponent(ref)}`, { method: 'DELETE', token }));
 }
 
+/** `replaces`: this machine's previous token. `device`: the device a browser issued for this machine to register as. */
 export function registerCloudDevice(
-  origin: string, token: string, label?: string, replaces?: string,
+  origin: string, token: string, registration: { readonly label?: string; readonly replaces?: string; readonly device?: string },
 ): Promise<CloudDeviceRegistration> {
   return settle(Effect.gen(function* () {
     const body: Record<string, JsonValue> = {};
 
-    if (label) body.label = label;
+    if (registration.label) body.label = registration.label;
 
-    if (replaces !== undefined) body.replaces = replaces;
+    if (registration.replaces !== undefined) body.replaces = registration.replaces;
+
+    if (registration.device !== undefined) body.device = registration.device;
 
     return yield* cloudJson(CloudDeviceRegistrationSchema, origin, '/api/cli/devices', { method: 'POST', token, body });
   }));

@@ -294,14 +294,17 @@ function forwardUpstream(
     if ('refused' in sent) return sent.refused;
     const upstream = sent.upstream;
 
-    // An accepted WebSocket upgrade is handed back whole: its frames are the program's, as a TLS stream's bytes are,
-    // and only the upgrade request's headers carried a secret in.
-    if (substitutions.length === 0 || upstream.status === 101) return upstream;
+    if (substitutions.length === 0) return upstream;
 
     // Scrubbed with the same pairs reversed, so an upstream echo of the request cannot become an oracle for the secret.
     const responseHeaders = new Headers();
 
     for (const [name, value] of upstream.headers) responseHeaders.set(name, scrubText(value, injected));
+
+    // An accepted WebSocket upgrade keeps its socket; its frames are the program's, as a TLS stream's bytes are.
+    if (upstream.status === 101) {
+      return new Response(null, { status: 101, statusText: scrubText(upstream.statusText, injected), headers: responseHeaders, webSocket: upstream.webSocket });
+    }
 
     return new Response(
       upstream.body === null ? null : upstream.body.pipeThrough(createScrubStream(injected)),

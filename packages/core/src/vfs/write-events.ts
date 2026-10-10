@@ -1,6 +1,6 @@
 /** Write attribution happens where a write lands: sibling heads run concurrently over the same files. */
 
-import { Effect, Semaphore } from 'effect';
+import { Effect } from 'effect';
 import type { CompositeVFS, Principal } from '@nimbus-sh/core/vfs/composite.js';
 import type { VfsContentRef, VfsWriteEvent } from '@nimbus-sh/core/vfs/vfs.js';
 import { attempt, diagnostics, settle, toKinuError, type KinuError } from '../obs/index';
@@ -108,17 +108,31 @@ function recorded(observer: WriteObserver, path: string, before: Side, after: Si
  * read for those views alone; answers the unsubscribe. A rename is the source's removal and the destination's change.
  */
 export function observeNamespace(namespace: CompositeVFS, observer: WriteObserver, mine: (writer: Principal) => boolean = () => true): () => void {
-  // Records keep commit order: Nimbus calls once per commit without waiting for the last call to settle.
-  const inOrder = Semaphore.makeUnsafe(1);
+  // Records keep commit order: Nimbus calls once per commit without waiting for the last call to settle, so each event
+  // takes its place behind the one before as it arrives, and records once that one has.
+  let tail: Promise<void> = Promise.resolve();
+  let unsettled = 0;
 
   return namespace.observeWrites((event: VfsWriteEvent) => {
     if (!mine(event.principal)) return undefined;
+    const before = tail;
+    // Nothing ahead of it: held content records before the write answers, as the write's own turn.
+    const waits = unsettled > 0;
+    const turn = Promise.withResolvers<void>();
 
-    return settle(inOrder.withPermits(1)(Effect.gen(function* () {
-      const [before, after] = yield* Effect.all([side(event.before, event.path, observer.needsBaseline(event.path)), side(event.after, event.path, true)]);
+    tail = turn.promise;
+    unsettled += 1;
 
-      if (event.oldPath !== undefined) recorded(observer, event.oldPath, after, null);
-      recorded(observer, event.path, before, after);
-    })));
+    return settle(Effect.gen(function* () {
+      if (waits) yield* Effect.promise(() => before);
+
+      const [was, now] = yield* Effect.all([side(event.before, event.path, observer.needsBaseline(event.path)), side(event.after, event.path, true)]);
+
+      if (event.oldPath !== undefined) recorded(observer, event.oldPath, now, null);
+      recorded(observer, event.path, was, now);
+    }).pipe(Effect.ensuring(Effect.sync(() => {
+      unsettled -= 1;
+      turn.resolve();
+    }))));
   }, { wants: (_path, writer) => mine(writer) });
 }
