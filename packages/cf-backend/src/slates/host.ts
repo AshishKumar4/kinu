@@ -723,8 +723,7 @@ export class SlateHost {
       // An answer's own block is shown where the answer is, never again as a card of the turn's slates.
       if (source.kind === 'files') this.deps.previewed?.(id);
       // Every page the runner answers reports its height, its class's own `fetch` pages too.
-      const sized = source.project.slate.runtime === 'worker';
-      const shown = { url: preview.url, port: app.port, sized, title: slateTitle(source.project, id) };
+      const shown = { url: preview.url, port: app.port, sized: true, title: slateTitle(source.project, id) };
 
       // Its latest source does not build: the last that did is what this URL serves, and the compiler's words say why.
       return broken === null ? shown : { ...shown, broken };
@@ -1065,7 +1064,6 @@ export class SlateHost {
         throw new KinuError('unsupported', 'Resident slate egress requires the shared outbound policy binding');
       }
 
-      if (project.slate.runtime !== 'worker') throw new KinuError('unsupported', 'Resident slate previews require slate.runtime worker; run node projects through the sandbox executor');
       // The loader evaluates boot options only on a cache miss. This identity
       // must not reuse an image created before outbound mediation was supplied.
       const digest = `${await this.slateSources.digest(caller.cred, id, source)}:${String(this.importsMoved.get(id) ?? 0)}`;

@@ -329,7 +329,7 @@ One preview operation must return a URL that serves the Slate. Its home is
 declared in the strict `slate` field of `package.json`, not a second manifest
 (`core/src/slates/project.ts`):
 
-- `slate.runtime: "worker"` selects the `workspace` provider. It is the default.
+- `slate.runtime: "worker"` is the one runtime, and the default: the `workspace` provider.
   Nimbus EsbuildService bundles the authored module named by `main` and the
   optional browser entry named by `browser`. A resident Fabric process runs
   the default export's fetch handler and serves the compiled client bytes.
@@ -349,13 +349,11 @@ declared in the strict `slate` field of `package.json`, not a second manifest
   deleted, so `this.sql` persists across restarts and eviction. Only the
   `remove` operation ends the application: it stops the process, releases
   the reservation, and deletes the facet's SQLite and the authored tree.
-- `slate.runtime: "node"` selects the `sandbox` provider. Standard npm scripts
-  run a real server on `slate.port`; dependencies and required native tools
-  must be installed in that project.
+- `slate.runtime: "node"` is refused when `package.json` is read: no host runs
+  a Node slate. A Node server is a sandbox process whose port is exposed
+  through the sandbox executor's preview rail.
 
-The declaration selects a provider name. ExecutionRouter decides availability
-and approval. An absent sandbox is a classified refusal, never a switch to a
-Worker. Both homes use the existing preview exposure rail. Running state is
+The preview uses the existing exposure rail. Running state is
 derived from the process; an exposure row is not evidence of a live server.
 Bindings carry the agent's own capabilities with the same gates: loopback
 stubs in a resident process, HTTP with a scoped token across the container

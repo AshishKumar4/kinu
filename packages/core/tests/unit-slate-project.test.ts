@@ -3,7 +3,6 @@ import { parseSlateProject, slateTitle } from '../src/slates/project';
 
 test('misspelled Slate requirements fail instead of changing runtime or authority', () => {
   expect(() => parseSlateProject({ name: 'notes', main: './server.ts', slate: { runtme: 'node' } })).toThrow('slate.runtme');
-  expect(() => parseSlateProject({ name: 'notes', scripts: { dev: 'vite' }, slate: { runtime: 'node' } })).toThrow('slate.port');
 });
 
 test('a node slate is refused where its package.json is read, saying where a Node server runs', () => {
