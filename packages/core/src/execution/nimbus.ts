@@ -14,7 +14,7 @@ import { workspacePath } from '../vfs/workspace-path';
 import { sessionRuntimeBins, workspaceCommandNotFound } from '../vfs/workspace-runtimes';
 import { shellQuote } from '../utils/shell';
 import type { ExecutorCapability, ExecutorProvider, ExecutorStatus, PortExposureResult, PreviewRouteCheck } from './types';
-import { commandResult, exposedPortText, formatExecResult, type CommandResult } from './exec-result';
+import { commandResult, exposedPortText, type CommandResult } from './exec-result';
 import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -132,42 +132,6 @@ function handleLacks(surface: string): Refusal {
   return refusalOf(new KinuError('unsupported', `Nimbus SDK handle does not expose ${surface}`));
 }
 
-/**
- * The workspace `node` shim compiles via `new Function` (forbidden hosted) and `vfs/workspace-runtimes.ts` loopback guard
- * refuses container-naming programs. The guard marker classifies any command; the V8 mark only a command invoking `node`.
- */
-const CODEGEN_BLOCKED_MARK = 'Code generation from strings disallowed';
-
-const WORKSPACE_NODE_UNAVAILABLE_MARK = 'cannot run JavaScript in this workspace';
-
-const WORKSPACE_NODE_REFUSAL =
-  `workspace node cannot run programs on this host: the runtime forbids code compilation from strings, so no node server starts here. `
-  + `Run Node/Vite programs in an available capable executor, such as sandbox. `
-  + `Worker slates compile separately: call workspace.slates.<id>.$preview(), without a node precheck.`;
-
-function invokesWorkspaceNode(command: string): boolean {
-  return /(^|[;&|(\s])node(\s|$)/m.test(command);
-}
-
-
-/** A thrown failure, classified the same way before it becomes `io`. */
-function workspaceExecFailure(input: { doing: string; cause: unknown; command?: string }): KinuError {
-  const text = renderThrownChain({ cause: input.cause });
-
-  if (text.includes(WORKSPACE_NODE_UNAVAILABLE_MARK)) {
-    return new KinuError('unsupported', WORKSPACE_NODE_REFUSAL);
-  }
-
-  if (
-    (input.command === undefined || invokesWorkspaceNode(input.command))
-    && text.includes(CODEGEN_BLOCKED_MARK)
-  ) {
-    return new KinuError('unsupported', WORKSPACE_NODE_REFUSAL);
-  }
-
-  return nimbusFailure({ doing: input.doing, cause: input.cause });
-}
-
 const NO_LISTENER_MARK = 'nothing is serving port';
 
 function workspaceNoListenerReason(port: number): string {
@@ -178,17 +142,6 @@ function workspaceNoListenerReason(port: number): string {
 /** Session RPC failures default to `io`; abort, timeout and memory-wall keep the classifier's precise code. */
 function nimbusFailure(input: { doing: string; cause: unknown }): KinuError {
   return toKinuError({ ...input, otherwise: 'io' });
-}
-
-/** A transport failure is not evidence that a process exited with a made-up code. */
-function nimbusTransportRefusal(result: NimbusExecResult): Refusal | null {
-  return !result.success && result.exitCode === 0
-    ? { reason: 'io', error: 'Nimbus execution did not report success: ' + formatExecResult(result) }
-    : null;
-}
-
-function normalizeExec(result: NimbusExecResult): CommandResult {
-  return nimbusTransportRefusal(result) ?? commandResult(result);
 }
 
 const StringSchema = v.string();
@@ -319,9 +272,9 @@ export function nimbusSession(opts: NimbusSessionOpts) {
         const options = parseInput(NimbusRunCodeOptionsSchema, { value: args[1] });
 
         try {
-          return normalizeExec(await touch(() => runCode(code, options)));
+          return commandResult(await touch(() => runCode(code, options)));
         } catch (err) {
-          return refusalOf(workspaceExecFailure({ doing: 'nimbus runCode', cause: err }));
+          return refusalOf(nimbusFailure({ doing: 'nimbus runCode', cause: err }));
         }
       },
     },
@@ -342,7 +295,7 @@ export function nimbusSession(opts: NimbusSessionOpts) {
         try {
           return formatStartResult(await touch(() => startProcess(command, options)));
         } catch (err) {
-          return refusalOf(workspaceExecFailure({ doing: `nimbus startProcess \`${command}\``, cause: err, command }));
+          return refusalOf(nimbusFailure({ doing: `nimbus startProcess \`${command}\``, cause: err }));
         }
       },
     },
@@ -388,7 +341,7 @@ export function nimbusSession(opts: NimbusSessionOpts) {
         try {
           return stringifyResult({ value: await touch(() => readLogs(pid, limits)) });
         } catch (err) {
-          return refusalOf(workspaceExecFailure({ doing: `nimbus logs ${pid}`, cause: err }));
+          return refusalOf(nimbusFailure({ doing: `nimbus logs ${pid}`, cause: err }));
         }
       },
     },
@@ -500,8 +453,8 @@ export function nimbusSession(opts: NimbusSessionOpts) {
     },
   };
 
-  // JS/TS, shell, coreutils, `node`, `npm`/`npx`, and `git` need no install. `python`/`native_binary` also need a facet
-  // host (`runtimeCatalog`); Cloudflare says false, the CLI supplies `localFacetHost()`.
+  // JS/TS, shell, coreutils, `node`, `npm`/`npx`, and `git` need no install. `python`/`native_binary` install from the
+  // runtime catalog (`runtimeCatalog`).
   const capabilities: ExecutorCapability[] = [
     'javascript', 'typescript', 'shell', 'npm', 'git', 'net_outbound',
     ...(box.ports?.expose && opts.inboundNetwork !== false ? (['net_inbound'] as const) : []),
@@ -626,9 +579,6 @@ export function nimbusSessionShell(box: NimbusSandboxHandle, place: { readonly h
       const final = options.name === undefined ? null : await shellCwd?.(options.name) ?? null;
 
       if (final !== null) outcome.finalCwd = final;
-      const refusal = nimbusTransportRefusal(result);
-
-      if (refusal !== null) return { ...outcome, refusal };
 
       // 127 means the command is not in the box's catalog; the install remedy derives from the box's runtime list.
       const runtimes = box.runtimes?.list?.bind(box.runtimes);

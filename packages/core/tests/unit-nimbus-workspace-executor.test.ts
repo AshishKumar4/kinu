@@ -71,13 +71,6 @@ function fakeBox() {
 }
 
 describe('hosted Nimbus workspace provider', () => {
-  test('a transport failure never acquires a fabricated process exit', async () => {
-    const box = fakeBox();
-    box.exec = async (command) => ({ command, success: false, stdout: '', stderr: 'transport unavailable', exitCode: 0 });
-    const shell = await nimbusSessionShell(box, { home: WORKSPACE_ROOT }).exec('work');
-    expect(shell).toMatchObject({ exitCode: 0, refusal: { reason: 'io' } });
-    expect(shell.refusal).not.toHaveProperty('execution');
-  });
   test('one workspace namespace owns both files and the live session', async () => {
     const { rt } = createTestRuntime();
     const box = fakeBox();
@@ -293,8 +286,7 @@ describe('hosted Nimbus workspace provider', () => {
   });
 });
 
-describe('a workspace whose host cannot compile node programs', () => {
-  const CODEGEN_STDERR = '[probe-8789.js] Code generation from strings disallowed for this context';
+describe('the workspace process and port surface', () => {
 
   function blockedProvider(box: RemoteSessionBox) {
     const { rt } = createTestRuntime();
@@ -311,39 +303,10 @@ describe('a workspace whose host cannot compile node programs', () => {
   test('a command that exited nonzero retains its execution failure', async () => {
     const box = fakeBox();
     box.exec = async (command) => ({
-      command, success: false, stdout: '', stderr: CODEGEN_STDERR, exitCode: 1,
+      command, success: false, stdout: '', stderr: 'node: boom', exitCode: 1,
     });
     const refusal = await blockedProvider(box).tools.exec.execute('node -e "console.log(1)"');
-    expect(refusal).toMatchObject({ reason: 'io', error: expect.stringContaining(CODEGEN_STDERR) });
-  });
-
-  test('a node program the host cannot compile refuses as unsupported, naming where it can run', async () => {
-    // A missing compiler is `unsupported`, not a retryable `io` failure.
-    const box = fakeBox();
-    box.startProcess = async () => { throw new Error(CODEGEN_STDERR); };
-
-    const refusal = await blockedProvider(box).tools.startProcess.execute('node server.js');
-    // Read before any asymmetric match, which rewrites the field it matches (docs/TESTING.md).
-    expect(JSON.stringify(refusal)).not.toContain('Code generation from strings disallowed');
-    expect(refusal).toMatchObject({ reason: 'unsupported', error: expect.stringContaining('sandbox') });
-  });
-
-  test('the same compiler failure under a command that never invoked node stays an io failure', async () => {
-    // The V8 mark in other output is not the node guard; reclassifying would wrongly forbid retry.
-    const box = fakeBox();
-    box.startProcess = async () => { throw new Error(CODEGEN_STDERR); };
-
-    expect(await blockedProvider(box).tools.startProcess.execute('cat build.log')).toMatchObject({ reason: 'io' });
-  });
-
-  test('process logs are data even when they contain a compiler failure', async () => {
-    const box = fakeBox();
-    box.processes = {
-      kill: async (pid) => ({ ok: true, pid }),
-      logs: async (pid) => ({ pid, text: CODEGEN_STDERR }),
-    };
-    const logs = await blockedProvider(box).tools.logs.execute(41);
-    expect(JSON.parse(toolText(logs))).toEqual({ pid: 41, text: CODEGEN_STDERR });
+    expect(refusal).toMatchObject({ reason: 'io', error: expect.stringContaining('node: boom') });
   });
 
   test("a program's workspace.logs(pid, { lines, bytes }) reads the process with both limits", async () => {
