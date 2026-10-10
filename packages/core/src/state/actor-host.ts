@@ -99,7 +99,7 @@ export interface ActorHost {
   hosted(this: void, reference: ActorReference): HostedActor | null;
   /** Any lifecycle state; builds no session. */
   describe(actorId: string): WorkspaceActor | null;
-  /** Stores without runtime or session; still refuses a retired or re-parented actor. */
+  /** Host-owned stores, independent of a runtime lease; refuses a retired or re-parented actor. */
   bindStores(this: void, reference: ActorReference): BoundActor;
   /** Reads retained source bytes without choosing an execution seat. */
   readScaffold(this: void, reference: ActorReference, version: number): Promise<string | null>;
@@ -183,15 +183,6 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
   const bind = (reference: ActorReference) => Effect.gen(function* () {
     // Ancestry is validated once here; per statement only the row and the release fence are checked.
     deps.directory.validate(reference, deps.directory.storagePath(reference));
-    const known = bindings.get(reference.actorId);
-
-    if (known !== undefined && !known.fence.released) {
-      if (!sameActorReference(known.bound.reference, reference)) return yield* new KinuError('denied', 'The hosted actor reference does not match the retained binding.');
-      known.bound.handle.assertCurrent();
-
-      return known;
-    }
-
     const record = deps.directory.retained(reference.actorId);
 
     if (!record) return yield* new KinuError('missing', 'The actor is not registered in this workspace.');
@@ -223,11 +214,24 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
       });
     }
 
-    const retained = { bound: { ...binding, stores }, fence };
+    return { bound: { ...binding, stores }, fence };
+  });
 
-    bindings.set(reference.actorId, retained);
+  /** Job authorities and public readers outlive an idle runtime, but not their host or actor. */
+  const storeBinding = (reference: ActorReference) => Effect.gen(function* () {
+    const known = bindings.get(reference.actorId);
 
-    return retained;
+    if (known !== undefined) {
+      deps.directory.validate(reference, deps.directory.storagePath(reference));
+      known.bound.handle.assertCurrent();
+
+      return known;
+    }
+
+    const created = yield* bind(reference);
+    bindings.set(reference.actorId, created);
+
+    return created;
   });
 
   const build = (reference: ActorReference, seat: ActorSeat): Effect.Effect<{ actor: HostedActor; fence: ReleaseFence }, KinuError> => Effect.gen(function* () {
@@ -319,7 +323,6 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
   const drop = (slot: HostSlot): void => {
     slot.fence.released = true;
     slots.delete(slot.actor.reference.actorId);
-    bindings.delete(slot.actor.reference.actorId);
     slot.actor.runtime.release?.();
   };
 
@@ -337,14 +340,6 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     const slot = yield* slotFor(reference);
 
     if (!slot || slot.fence.released) {
-      const binding = bindings.get(reference.actorId);
-
-      if (binding !== undefined) {
-        if (!sameActorReference(binding.bound.reference, reference)) return yield* new KinuError('denied', 'The hosted actor reference does not match the retained binding.');
-        binding.fence.released = true;
-        bindings.delete(reference.actorId);
-      }
-
       ports.delete(reference.actorId);
 
       return;
@@ -362,9 +357,9 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     acquire: (reference, seat) => settle(acquired(reference, seat)),
     hosted: (reference) => settleSync(Effect.map(slotFor(reference), (slot) => (slot && !slot.fence.released ? slot.actor : null))),
     describe: (actorId) => deps.directory.retained(actorId),
-    bindStores: (reference) => settleSync(Effect.map(bind(reference), ({ bound }) => bound)),
+    bindStores: (reference) => settleSync(Effect.map(storeBinding(reference), ({ bound }) => bound)),
     readScaffold: (reference, version) => settle(Effect.gen(function* () {
-      const { bound } = yield* bind(reference);
+      const { bound } = yield* storeBinding(reference);
       const source = yield* Effect.promise(() => deps.scaffoldFor(bound));
 
       return yield* Effect.promise(() => readVersionedScaffoldSource(source, version));
@@ -452,6 +447,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
       deps.directory.apply(parent, parentPath, {
         action: 'release', name: retirement.name, reference: retirement.reference,
       });
+      bindings.delete(retirement.reference.actorId);
     })),
     installedBuild: deps.installedBuild,
     ...(deps.workspace !== undefined && { workspace: deps.workspace }),
