@@ -206,8 +206,9 @@ const turnStatements = new Map<number, { readonly workspace: OperationCost['tabl
  * background_jobs +2; main's own agent_tasks -1), the warming lane each request and turn end tells (cache_warm +3),
  * and the fleet row its handoff owes as an effect (terminal_effects +2). Each of those four calls resolves the agent's
  * roster row twice on entry (workspace_actors +8); the activity log writes 4 fewer. The workspace's 388, main's 448.
+ * 835 once a stream part opens with its first window in the row it inserts (main's isolate -1, at both sizes).
  */
-const TURN_STATEMENTS = 836;
+const TURN_STATEMENTS = 835;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {

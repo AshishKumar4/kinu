@@ -372,10 +372,37 @@ test('a window never splits a surrogate pair across two statements', async () =>
     // The first delta opens the part; the flush ten deltas later falls on the high surrogate, which is held back.
     for (let i = 0; i < 10; i++) await stream.nativePart({ type: 'text-delta', id: '0', text: 'a' });
     await stream.nativePart({ type: 'text-delta', id: '0', text: '\ud83d' });
-    expect(s.rows()).toEqual(['a'.repeat(10)]);
+    expect(s.rows()).toEqual(['a', 'a'.repeat(9)]);
     await stream.nativePart({ type: 'text-delta', id: '0', text: '\ude00' });
     await stream.nativePart({ type: 'text-end', id: '0' });
-    expect(s.rows()).toEqual([`${'a'.repeat(10)}😀`]);
+    expect(s.rows()).toEqual(['a', 'a'.repeat(9), '😀']);
+  } finally { s.testSql.close(); }
+});
+
+// 2026-10-10 (turn-sql): a flush appended its window to the part's last segment, rewriting all of it: 66,579 bytes
+// written for a 2,390-byte answer streamed in 500 deltas.
+test('an answer streamed over many flushes writes each window once, and reads back whole while it is open', async () => {
+  const s = setup();
+
+  try {
+    s.testSql.db.run('CREATE TABLE stream_writes (bytes INTEGER NOT NULL)');
+
+    for (const write of ['INSERT', 'UPDATE']) {
+      s.testSql.db.run(`CREATE TRIGGER stream_${write} AFTER ${write} ON stream_parts BEGIN INSERT INTO stream_writes VALUES (length(CAST(NEW.text AS BLOB))); END`);
+    }
+
+    const { stream } = await s.turn('t1');
+    const words = Array.from({ length: 500 }, (_, index) => `w${String(index)} `);
+    await stream.nativePart({ type: 'text-start', id: '0' });
+
+    for (const word of words) await stream.nativePart({ type: 'text-delta', id: '0', text: word });
+    await stream.nativePart({ type: 'text-end', id: '0' });
+    const [open] = s.open();
+
+    if (open === undefined) throw new Error('the answer is open');
+    expect((await s.history.messages.openParts(open))?.map((part) => part.value.text)).toEqual([words.join('')]);
+    // Each window is written once; the part's end rewrites the last, at most the whole answer again.
+    expect(s.testSql.db.query<{ bytes: number }, []>('SELECT SUM(bytes) AS bytes FROM stream_writes').get()?.bytes).toBeLessThanOrEqual(2 * words.join('').length);
   } finally { s.testSql.close(); }
 });
 
