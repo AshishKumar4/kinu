@@ -324,7 +324,9 @@ export class AgentDatabase {
 
     const actor = actorReadHandle(this.sql, record);
 
-    return { actor, transcript: readSessionTranscript(this.sql, actor, CHAT_SESSION_ID, null) };
+    // The workspace owner still holds this actor's retained home. Reading payloads needs no actor reacquisition.
+    return { actor, transcript: readSessionTranscript(this.sql, actor, CHAT_SESSION_ID,
+      async () => nimbusSessionFiles(this.workspace.agent(), { home: this.workspace.home })) };
   }
 
   async inspect(request: AgentOwnInspection): Promise<SubordinateInspectionResult> {

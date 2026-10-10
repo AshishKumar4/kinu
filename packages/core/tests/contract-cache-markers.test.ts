@@ -5,7 +5,7 @@ import { isStepCount, tool, type ModelMessage, type ToolSet } from 'ai';
 import * as v from 'valibot';
 import { z } from 'zod';
 import {
-  runChat, createFallbackCooldowns,
+  runChat, ProviderPacer,
   createAnthropicProvider, createOpenAIProvider, createOpenRouterProvider, createOpenAICompatProvider, createClaudeProvider, CLAUDE_CRED_KEY,
   ANTHROPIC_CRED_KEY, OPENAI_CRED_KEY, OPENROUTER_CRED_KEY,
   JsonObjectSchema, JsonValueSchema, parseJsonObject,
@@ -302,7 +302,7 @@ describe('one TTL per request, in the order Anthropic reads it', () => {
         spec: 'anthropic/claude-opus-5-5', accepts: new Set(), window: { contextWindow: null, modelOutputLimit: null },
         bind: () => ({ model: createAnthropicProvider().createModel('claude-opus-5-5', deps), provider: 'anthropic' }),
       }],
-      cooldowns: createFallbackCooldowns(),
+      pacer: new ProviderPacer(),
       system: 'You are Kinu.', history: GPT_THEN_CLAUDE, tools: chatTools(),
       cache: { providerId: 'openai', modelId: 'gpt-5.5' },
     });

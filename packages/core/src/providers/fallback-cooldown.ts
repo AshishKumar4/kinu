@@ -2,32 +2,11 @@
 
 import * as v from 'valibot';
 
-const UNSTATED_COOLDOWN_MS = 5 * 60 * 1000;
 
-export interface FallbackCooldowns {
-  park(attempt: string, retryAfterMs: number | null): void;
-  parked(attempt: string): boolean;
-}
 
-export function createFallbackCooldowns(now: () => number = Date.now): FallbackCooldowns {
-  const until = new Map<string, number>();
 
-  return {
-    park: (attempt, retryAfterMs) => {
-      until.set(attempt, now() + (retryAfterMs === null || retryAfterMs <= 0 ? UNSTATED_COOLDOWN_MS : retryAfterMs));
-    },
-    parked: (attempt) => {
-      const end = until.get(attempt);
 
-      if (end === undefined) return false;
 
-      if (end > now()) return true;
-      until.delete(attempt);
-
-      return false;
-    },
-  };
-}
 
 const WithHeadersSchema = v.looseObject({
   retryAfterMs: v.optional(v.number()),

@@ -36,7 +36,7 @@ export class ProviderPacer {
   private readonly now: () => number;
   private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   /** Each host's declared cooldown, as a deadline. */
-  private readonly cooldowns = new Map<string, { readonly untilMs: number; readonly reason: string | undefined }>();
+  private readonly cooldowns = new Map<string, { readonly untilMs: number; readonly reason: string | undefined; readonly wait: boolean }>();
 
   constructor(opts: ProviderPacerOptions = {}) {
     this.now = opts.now ?? Date.now;
@@ -48,7 +48,7 @@ export class ProviderPacer {
     const cooldown = this.cooldowns.get(host);
     const waitMs = (cooldown?.untilMs ?? 0) - this.now();
 
-    return cooldown === undefined || waitMs <= 0 ? null : { waitMs, untilMs: cooldown.untilMs, reason: cooldown.reason };
+    return cooldown === undefined || !cooldown.wait || waitMs <= 0 ? null : { waitMs, untilMs: cooldown.untilMs, reason: cooldown.reason };
   }
 
   /** Whether any lane under `route` is cooling: only then is a call's own lane worth looking up. */
@@ -56,7 +56,7 @@ export class ProviderPacer {
     const now = this.now();
 
     for (const [lane, cooldown] of this.cooldowns) {
-      if (lane.startsWith(`${route}|`) && cooldown.untilMs > now) return true;
+      if (cooldown.wait && lane.startsWith(`${route}|`) && cooldown.untilMs > now) return true;
     }
 
     return false;
@@ -72,10 +72,30 @@ export class ProviderPacer {
     if (!(ms > 0)) return null;
     const untilMs = this.now() + ms;
 
-    if (untilMs <= (this.cooldowns.get(host)?.untilMs ?? 0)) return null;
-    this.cooldowns.set(host, { untilMs, reason });
+    const previous = this.cooldowns.get(host);
+
+    if (previous?.wait === true && untilMs <= previous.untilMs) return null;
+    this.cooldowns.set(host, { untilMs, reason, wait: true });
 
     return untilMs;
+  }
+
+  /** Selection and pacing consult the same refusal deadline. Non-rate refusals park without making retries wait. */
+  park(attempt: string, retryAfterMs: number | null): void {
+    if (this.parked(attempt)) return;
+    const duration = retryAfterMs !== null && retryAfterMs > 0 ? retryAfterMs : 5 * 60 * 1000;
+    this.cooldowns.set(attempt, { untilMs: this.now() + duration, reason: undefined, wait: false });
+  }
+
+  parked(attempt: string): boolean {
+    const deadline = this.cooldowns.get(attempt);
+
+    if (deadline === undefined) return false;
+
+    if (deadline.untilMs > this.now()) return true;
+    this.cooldowns.delete(attempt);
+
+    return false;
   }
 }
 

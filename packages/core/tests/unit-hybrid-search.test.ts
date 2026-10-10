@@ -108,48 +108,32 @@ describe('hybridSearch', () => {
     expect(shared.snippet).toBe('shared snippet');
   });
 
-  test('a semantic-only hit carries its text, rehydrated from the chunk it points at', async () => {
-    // The lexical index missed it, so there is no snippet to borrow, and a blank one is useless.
-    const lines = Array.from({ length: 8 }, (_, i) => `line ${i + 1}`).join('\n');
-    const reads: string[] = [];
+  test('semantic candidates must still identify their canonical chunk and hash', async () => {
+      const chunks = new Map([
+        ['x.md:3-5', { id: 'x.md:3-5', path: 'x.md', startLine: 3, endLine: 5, text: 'line 3\nline 4\nline 5', hash: 'current' }],
+        ['x.md:7-8', { id: 'x.md:7-8', path: 'x.md', startLine: 7, endLine: 8, text: 'line 7\nline 8', hash: 'current' }],
+      ]);
 
-    const memory = {
-      read: async (path: string) => {
-        reads.push(path);
+      const memory = { chunk: async (id: string) => chunks.get(id) ?? null };
 
-        return path === 'x.md' ? lines : null;
-      },
-    };
+      const sem: VectorSearchHit[] = [
+        { id: 'x.md:3-5', path: 'x.md', startLine: 3, endLine: 5, score: 0.9, hash: 'current' },
+        { id: 'x.md:7-8', path: 'x.md', startLine: 7, endLine: 8, score: 0.8, hash: 'current' },
+        { id: 'gone.md:1-2', path: 'gone.md', startLine: 1, endLine: 2, score: 0.7, hash: 'current' },
+        { id: 'x.md:3-5', path: 'x.md', startLine: 3, endLine: 5, score: 1, hash: 'replaced' },
+      ];
 
-    const sem: VectorSearchHit[] = [
-      { id: 'x.md:3-5', path: 'x.md', startLine: 3, endLine: 5, score: 0.9 },
-      { id: 'x.md:7-8', path: 'x.md', startLine: 7, endLine: 8, score: 0.8 },
-      { id: 'gone.md:1-2', path: 'gone.md', startLine: 1, endLine: 2, score: 0.7 },
-    ];
-
-    const out = await hybridSearch('q', async () => [], vectorStore(sem), {
-      rehydrate: memorySnippetRehydrator(memory),
+      const out = await hybridSearch('q', async () => [], vectorStore(sem), { rehydrate: memorySnippetRehydrator(memory) });
+      expect(out.map((hit) => [hit.id, hit.snippet, hit.sources])).toEqual([
+        ['x.md:3-5', 'line 3\nline 4\nline 5', ['semantic']],
+        ['x.md:7-8', 'line 7\nline 8', ['semantic']],
+      ]);
     });
-
-    expect(out.map((h) => h.snippet)).toEqual([
-      'line 3\nline 4\nline 5',
-      'line 7\nline 8',
-      '',                                  // unreadable source → no invented text
-    ]);
-    expect(out.map((h) => h.sources)).toEqual([['semantic'], ['semantic'], ['semantic']]);
-    // One read per file, not per hit.
-    expect(reads).toEqual(['x.md', 'gone.md']);
-  });
 
   test('a lexical snippet is never replaced by a rehydrated one', async () => {
-    const memory = { read: async () => 'rehydrated text' };
-
-    const out = await hybridSearch('q', lexicalFn, vectorStore(semanticCorpus), {
-      rehydrate: memorySnippetRehydrator(memory),
+      const out = await hybridSearch('q', lexicalFn, vectorStore(semanticCorpus), { rehydrate: async () => 'rehydrated text' });
+      expect(present(out.find((hit) => hit.id === 'shared'), "the 'shared' hit").snippet).toBe('shared snippet');
     });
-
-    expect(present(out.find((h) => h.id === 'shared'), "the 'shared' hit").snippet).toBe('shared snippet');
-  });
 
   test('fuses lexical + semantic hits keyed on the canonical chunk id', async () => {
     // The production id both sources emit for a chunk: `path:start-end`.
@@ -172,7 +156,7 @@ describe('hybridSearch', () => {
     expect(out[0].semanticScore).toBe(0.9);
   });
 
-  test('a throwing rehydrator degrades that hit to an empty snippet', async () => {
+  test('a throwing rehydrator excludes the unverifiable semantic hit', async () => {
     const log = createRecordingLogger();
     const restore = setDiagnosticsSink(log);
 
@@ -185,34 +169,31 @@ describe('hybridSearch', () => {
         rehydrate: async () => { throw new Error('rehydrate boom'); },
       });
 
-      expect(out.length).toBe(1);
-      expect(out[0].snippet).toBe('');
-      expect(out[0].sources).toEqual(['semantic']);
+      expect(out).toEqual([]);
       expect(log.emitted.some((line) => line.event === 'memory.snippet_rehydrate_failed')).toBe(true);
     } finally {
       restore();
     }
   });
 
-  test('a rejected memo entry is evicted so the next hit retries the read', async () => {
-    let calls = 0;
+  test('a failed canonical read does not poison a later lookup', async () => {
+      let calls = 0;
+      const chunk = { id: 'x.md:1-1', path: 'x.md', startLine: 1, endLine: 1, text: 'line1', hash: 'current' };
 
-    const memory = {
-      read: async (_path: string): Promise<string | null> => {
+      const memory = { chunk: async () => {
         calls++;
 
         if (calls === 1) throw new Error('transient read');
 
-        return 'line1\nline2';
-      },
-    };
+        return chunk;
+      } };
 
-    const rehydrate = memorySnippetRehydrator(memory);
-    const hit: VectorSearchHit = { id: 'x.md:1-1', path: 'x.md', startLine: 1, endLine: 1, score: 1 };
-    await expect(rehydrate(hit)).rejects.toThrow('transient read');
-    await expect(rehydrate(hit)).resolves.toBe('line1');
-    expect(calls).toBe(2);
-  });
+      const rehydrate = memorySnippetRehydrator(memory);
+      const hit: VectorSearchHit = { ...chunk, score: 1 };
+      await expect(rehydrate(hit)).rejects.toThrow('transient read');
+      await expect(rehydrate(hit)).resolves.toBe('line1');
+      expect(calls).toBe(2);
+    });
 
   test('a remembered fact surfaces as a fact-source hit, labelled by its key', async () => {
     const { facts } = createTestFactsStore();

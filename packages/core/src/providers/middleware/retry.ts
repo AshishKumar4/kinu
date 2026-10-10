@@ -23,6 +23,7 @@ import { inAttempt, type Attempt } from './attempt';
 import { generateFromStream } from './stream-generate';
 import { abortableSleep, providerPacer, type ProviderPacer } from '../pacing';
 import type { ProviderWaitInfo } from '../types';
+import { attemptKey, recordAttemptFailure, withAttemptIdentity, type AttemptIdentityCapture } from '../attempt-identity';
 
 /** Full-jitter backoff; unmeasured. */
 const BASE_DELAY_MS = 2_000;
@@ -107,7 +108,7 @@ export function retryMiddleware(policy: RetryPolicy): LanguageModelMiddleware {
 
       return call;
     },
-    wrapGenerate: ({ doGenerate, doStream, params }) => settle(retrying(policy, params, policy.generateByStream === true
+    wrapGenerate: ({ doGenerate, doStream, params }) => runRetried(policy, params, policy.generateByStream === true
       ? async (last) => {
         const opened = await openStream({ provider: policy.provider, start: doStream, last, keepRaw: false, caller: params.abortSignal });
 
@@ -116,21 +117,27 @@ export function retryMiddleware(policy: RetryPolicy): LanguageModelMiddleware {
 
         return collected.status === 'fulfilled' ? { kind: 'answer', value: collected.value } : { kind: 'failed', error: collected.reason };
       }
-      : async () => ({ kind: 'answer', value: await doGenerate() }))),
-    wrapStream: ({ doStream, params }) => settle(retrying(policy, params, (last) => openStream({
+      : async () => ({ kind: 'answer', value: await doGenerate() })),
+    wrapStream: ({ doStream, params }) => runRetried(policy, params, (last) => openStream({
       provider: policy.provider, start: doStream, last, keepRaw: kinuOptions(params).raw, caller: params.abortSignal,
-    }))),
+    })),
   };
 }
 
-function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, open: Open<T>): Effect.Effect<T, KinuError> {
+function runRetried<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, open: Open<T>): Promise<T> {
+  const capture: AttemptIdentityCapture = { identity: null };
+
+  return recordAttemptFailure(capture, () => settle(retrying(policy, params, open, capture)));
+}
+
+function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, open: Open<T>, capture: AttemptIdentityCapture): Effect.Effect<T, KinuError> {
   const sleep = policy.sleep ?? abortableSleep;
   const now = policy.now ?? Date.now;
   const random = policy.random ?? Math.random;
   const pacer = policy.pacer ?? providerPacer;
   const signal = params.abortSignal;
   const { retries } = kinuOptions(params);
-  const lane = new CallLane(policy.lane);
+  const lane = new CallLane(policy.lane, capture);
 
   const warn = policy.warn ?? ((message: string) => diagnostics.failure('provider.rate_limited', new KinuError('unavailable', message)));
 
@@ -162,7 +169,8 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
 
       if (checked !== null) yield* cooledDown({ policy, pacer, lane: checked, owned, retries, now, signal, reportWait });
 
-      const [opened] = yield* Effect.promise(() => Promise.allSettled([open(waits >= retries)]));
+      capture.identity = null;
+      const [opened] = yield* Effect.promise(() => Promise.allSettled([withAttemptIdentity(capture, () => open(waits >= retries))]));
       const outcome: Opened<T> = opened.status === 'fulfilled' ? opened.value : { kind: 'refused', error: opened.reason };
 
       if (outcome.kind === 'answer') return outcome.value;
@@ -217,31 +225,21 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
   });
 }
 
-/** The call's lane, looked up at most once and only when a wait is in play. */
+/** The answering attempt owns a refusal; a new send checks its prospective lane afresh. */
 class CallLane {
-  private known: string | null;
-  private readonly lookup: LaneLookup | null;
-
-  constructor(lane: string | LaneLookup) {
-    this.known = typeof lane === 'string' ? lane : null;
-    this.lookup = typeof lane === 'string' ? null : lane;
-  }
+  constructor(private readonly lane: string | LaneLookup, private readonly capture: AttemptIdentityCapture) {}
 
   billed(): Effect.Effect<string> {
-    const { known, lookup } = this;
+    if (this.capture.identity !== null) return Effect.succeed(attemptKey(this.capture.identity));
 
-    if (known !== null || lookup === null) return Effect.succeed(known ?? '');
-
-    return Effect.map(Effect.promise(lookup.billed), (billed) => {
-      this.known = billed;
-
-      return billed;
-    });
+    return typeof this.lane === 'string' ? Effect.succeed(this.lane) : Effect.promise(this.lane.billed);
   }
 
   /** The lane to check before an attempt, or null while nothing under its route is cooling. */
   toCheck(pacer: ProviderPacer): Effect.Effect<string | null> {
-    return this.known !== null || this.lookup === null || pacer.coolingUnder(this.lookup.route) ? this.billed() : Effect.succeed(null);
+    if (typeof this.lane === 'string') return Effect.succeed(this.lane);
+
+    return pacer.coolingUnder(this.lane.route) ? Effect.promise(this.lane.billed) : Effect.succeed(null);
   }
 }
 

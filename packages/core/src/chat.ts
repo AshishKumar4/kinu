@@ -55,7 +55,7 @@ import * as v from 'valibot';
 import { JsonObjectSchema, projectJsonValue, type JsonObject, type JsonValue } from './utils/json';
 import { answeredPromptTokens, normalizeUsage, usageReported, type Usage } from './usage';
 import { callRetries } from './providers/middleware/retry';
-import type { FallbackCooldowns } from './providers/fallback-cooldown';
+import type { ProviderPacer } from './providers/pacing';
 import { FallbackRoute, type CallFailure } from './providers/fallback-route';
 import { callAccountOf, type CallAccount } from './providers/quota';
 import { EGRESS_ROUTE_HEADER } from './execution/device-relay';
@@ -163,7 +163,7 @@ export interface ChatOptions {
   /** The same resolved attempt as registry pacing; a 401 skips aliases of its refused credential snapshot. */
   attemptOf?: (spec: string) => Promise<ModelAttemptIdentity | null>;
   retries?: number;
-  cooldowns?: FallbackCooldowns;
+  pacer?: ProviderPacer;
   /** Provider-reported prompt tokens of the previous turn's final request, the measured compaction trigger. */
   providerReportedTokens?: number;
   transformTrigger?: CompactionTrigger;

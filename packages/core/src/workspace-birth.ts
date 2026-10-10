@@ -45,7 +45,7 @@ interface WorkspaceComponents {
 
 function buildComponents(components: WorkspaceComponents) {
   const { db, sql, execRaw, transactionSync, home, actor } = components;
-  const memoryStore = new MemoryStore(home, sql);
+  const memoryStore = new MemoryStore(home, sql, transactionSync);
   memoryStore.ensureSchema();
   const memory = adaptMemory(memoryStore, home);
   const craftStore = createInlineCraftStore(db);

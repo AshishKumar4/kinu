@@ -6,7 +6,7 @@ import { tool, type ModelMessage, type UIMessageChunk } from 'ai';
 import { z } from 'zod';
 import * as v from 'valibot';
 import {
-  runChat, createAnthropicProvider, createOpenAIProvider, createFallbackCooldowns, decodeModelMessageValues, drawnStep, encodeModelMessageValues, TurnAccumulator,
+  runChat, createAnthropicProvider, createOpenAIProvider, ProviderPacer, decodeModelMessageValues, drawnStep, encodeModelMessageValues, TurnAccumulator,
   ANTHROPIC_CRED_KEY, OPENAI_CRED_KEY, parseJsonObject,
   type ChatEvent, type ChatOptions, type JsonObject, type ModelCallDeps,
 } from '../src/index';
@@ -183,7 +183,7 @@ describe('Anthropic server-side compaction', () => {
       model: createAnthropicProvider().createModel('claude-opus-4-7', deps(mock.fetch)),
       modelSpec: 'anthropic/claude-opus-4-7', modelContext: { id: 'anthropic/claude-opus-4-7', contextWindow: 200_000 },
       fallbacks: [{ spec: 'anthropic/claude-sonnet-4-6', accepts: new Set(), window: { contextWindow: 1_000_000, modelOutputLimit: 64_000 }, bind: () => ({ model: createAnthropicProvider().createModel('claude-sonnet-4-6', deps(mock.fetch)), provider: 'anthropic' }) }],
-      cooldowns: createFallbackCooldowns(),
+      pacer: new ProviderPacer(),
       system: 'You are Kinu.', history: [{ role: 'user', content: 'rename the parser' }], tools: {},
       transformTrigger: 'force', countInputTokens: async () => ({ kind: 'counted' as const, tokens: 120_000 }),
     })) { /* drain */ }

@@ -1,4 +1,5 @@
 import { KinuError } from '../obs/error';
+import * as v from 'valibot';
 
 /** Lines one `file` read shows by default, as Claude Code's Read and pi's read do. */
 export const FILE_READ_LINES = 2_000;
@@ -40,21 +41,22 @@ export class FileRefusalError extends KinuError {
   }
 }
 
-export type FileEditOutcomeReason =
-  | FileEditFailure
-  /** The file was never read this turn. */
-  | 'unread'
-  /** The file changed after the read this turn. */
-  | 'stale'
-  | 'missing'
-  | 'denied'
-  | 'io';
+/** The persisted counters and the ledger's vocabulary are the same contract. */
+export const FileEditFailuresSchema = v.object({
+  empty_anchor: v.optional(v.number()), not_found: v.optional(v.number()),
+  ambiguous: v.optional(v.number()), overlap: v.optional(v.number()),
+  no_change: v.optional(v.number()), unread: v.optional(v.number()),
+  stale: v.optional(v.number()), missing: v.optional(v.number()),
+  denied: v.optional(v.number()), io: v.optional(v.number()),
+});
+
+export type FileEditOutcomeReason = keyof v.InferOutput<typeof FileEditFailuresSchema>;
 
 /** `attempts`/`applied` count calls; `recoveredPaths`/`abandonedPaths` count paths. */
 export interface FileEditSnapshot {
   attempts: number;
   applied: number;
-  failures: Partial<Record<FileEditOutcomeReason, number>>;
+  failures: v.InferOutput<typeof FileEditFailuresSchema>;
   /** Paths that failed an edit and then landed one in the same turn. */
   recoveredPaths: number;
   abandonedPaths: number;

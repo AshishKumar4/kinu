@@ -25,6 +25,10 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **Memory changes survive a restart before semantic delivery.** The lexical index, file stamp and pending vector revisions commit together. Semantic results must still match the canonical chunk and hash, so a deleted or replaced note cannot return stale text during an outage.
+- **Renewed provider logins own their refusals.** Retry pacing and fallback selection use one deadline record and the credential that answered the actual send, rather than a prospective lookup that may already have changed.
+- **Inspection preserves retained content and failure evidence.** Step output materializes media bytes, retired actors retain their read-only payload plane, denied file edits keep their counters, and repeated conversation searches reuse the actor's warm index.
+
 - **A replacement credential or endpoint is not parked by the previous attempt.** Retry pacing and fallback selection share a resolved route, model and credential-snapshot identity rather than using spec text for one of them. Identical login aliases share refusals, including across reconstructed registries; edited credentials and endpoints name fresh attempts.
 - **Memory vector updates survive cooldowns and failed writes.** Lexical changes queue durable, revisioned chunk references before contacting the semantic backend. Live sync and backfill share deletion/upsert acknowledgment, and hydrate current note text; recovery no longer leaves deleted vector chunks behind or consumes a newer update.
 - **Finished-step events reference canonical output instead of copying message bodies.** Sealing publishes part references and step accounting together; reopen reads the canonical transcript, not an event-body reconstruction. The public event type derives from its stored/RPC schema. The new event shape requires reset deployment and has no old-row reader.

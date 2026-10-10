@@ -25,6 +25,7 @@ import {
 import { Effect } from 'effect';
 import { diagnostics, KinuError, settleSync, toKinuError } from '../obs/index';
 import { ToolOutcomeSchema } from '../types/tool-outcome';
+import { FileEditFailuresSchema } from '../types/file-edits';
 import { turnAuthor } from '../utils/ui-message';
 import { CallAccountSchema, QuotaSnapshotSchema } from '../providers/quota';
 
@@ -124,12 +125,7 @@ export const RunEventSchema = v.variant('type', [
       attachment: v.optional(v.number()), pasted_text: v.optional(v.number()),
     }), referenced: v.number(), followUps: v.number() }),
   v.object({ ...BaseFields, type: v.literal('file_edit'), attempts: v.number(), applied: v.number(),
-    failures: v.object({
-      empty_anchor: v.optional(v.number()), not_found: v.optional(v.number()),
-      ambiguous: v.optional(v.number()), overlap: v.optional(v.number()),
-      no_change: v.optional(v.number()), unread: v.optional(v.number()),
-      stale: v.optional(v.number()), missing: v.optional(v.number()), io: v.optional(v.number()),
-    }), recoveredPaths: v.number(), abandonedPaths: v.number() }),
+    failures: FileEditFailuresSchema, recoveredPaths: v.number(), abandonedPaths: v.number() }),
   v.object({ ...BaseFields, type: v.literal('turn_steering'),
     trigger: v.picklist(['repeated_call', 'repeated_failure', 'no_progress']),
     step: v.number(), tool: v.optional(v.string()), converted: v.boolean() }),

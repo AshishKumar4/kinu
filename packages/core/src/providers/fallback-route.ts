@@ -3,8 +3,9 @@ import type { LanguageModel } from 'ai';
 import { DEFAULT_PROVIDER_RETRIES } from '../types/profile';
 import { KinuError, attempt, classifyErrorCode, diagnostics, settle } from '../obs/index';
 import { codeForStatus, describeProviderError, providerFailureFacts } from './util';
-import { createFallbackCooldowns, statedRetryAfterMs, type FallbackCooldowns } from './fallback-cooldown';
-import { attemptKey, modelAttempt, type ModelAttemptIdentity } from './attempt-identity';
+import { statedRetryAfterMs } from './fallback-cooldown';
+import { providerPacer, type ProviderPacer } from './pacing';
+import { attemptKey, failedModelAttempt, modelAttempt, type ModelAttemptIdentity } from './attempt-identity';
 
 export interface CallFailure {
   readonly error: Error;
@@ -21,7 +22,7 @@ export interface FallbackRouteOptions<E extends FallbackEntry> {
   readonly modelSpec?: string;
   readonly model?: LanguageModel;
   readonly fallbacks?: readonly E[];
-  readonly cooldowns?: FallbackCooldowns;
+  readonly pacer?: ProviderPacer;
   readonly retries?: number;
   readonly attemptOf?: (spec: string) => Promise<ModelAttemptIdentity | null>;
 }
@@ -53,19 +54,17 @@ export function attemptOrUnknown(lookup: (spec: string) => Promise<ModelAttemptI
   );
 }
 
-const isolateCooldowns = createFallbackCooldowns();
-
 /** One chain: hand over at once, park the exact failed attempt, and retry only the final entry. */
 export class FallbackRoute<E extends FallbackEntry> {
   readonly tried: string[];
   private readonly chain: E[];
-  private readonly cooldowns: FallbackCooldowns;
+  private readonly pacer: ProviderPacer;
   private readonly retries: number;
   private current: ModelAttemptIdentity | null = null;
 
   constructor(private readonly opts: FallbackRouteOptions<E>) {
     this.chain = [...(opts.fallbacks ?? [])];
-    this.cooldowns = opts.cooldowns ?? isolateCooldowns;
+    this.pacer = opts.pacer ?? providerPacer;
     this.retries = opts.retries ?? DEFAULT_PROVIDER_RETRIES;
     this.tried = [opts.modelSpec ?? 'the turn model'];
   }
@@ -84,13 +83,13 @@ export class FallbackRoute<E extends FallbackEntry> {
     return settle(Effect.gen({ self: this }, function* () {
       this.current = yield* this.identity(this.opts.modelSpec, this.opts.model);
 
-      if (this.current === null || !this.cooldowns.parked(attemptKey(this.current))) return undefined;
+      if (this.current === null || !this.pacer.parked(attemptKey(this.current))) return undefined;
 
       for (let at = 0; at < this.chain.length; at++) {
         const entry = this.chain[at];
         const identity = yield* this.identity(entry.spec, entry.model);
 
-        if (identity !== null && this.cooldowns.parked(attemptKey(identity))) continue;
+        if (identity !== null && this.pacer.parked(attemptKey(identity))) continue;
         this.current = identity;
 
         return this.chain.splice(0, at + 1).at(-1);
@@ -105,7 +104,9 @@ export class FallbackRoute<E extends FallbackEntry> {
     return settle(Effect.gen({ self: this }, function* () {
       if (!handsOver(failure)) return undefined;
 
-      if (this.current !== null) this.cooldowns.park(attemptKey(this.current), statedRetryAfterMs({ cause: failure.cause }));
+      this.current = failedModelAttempt(failure.error) ?? this.current;
+
+      if (this.current !== null) this.pacer.park(attemptKey(this.current), statedRetryAfterMs({ cause: failure.cause }));
 
       const { status } = providerFailureFacts({ cause: failure.cause });
       const refused = status === 401 ? this.current?.credential ?? null : null;
@@ -113,7 +114,7 @@ export class FallbackRoute<E extends FallbackEntry> {
       for (let next = this.chain.shift(); next !== undefined; next = this.chain.shift()) {
         const identity = yield* this.identity(next.spec, next.model);
 
-        if (identity !== null && this.cooldowns.parked(attemptKey(identity)) && this.chain.length > 0) continue;
+        if (identity !== null && this.pacer.parked(attemptKey(identity)) && this.chain.length > 0) continue;
 
         if (refused !== null && identity?.credential === refused) continue;
         this.current = identity;

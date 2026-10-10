@@ -536,14 +536,14 @@ describe('a workspace fork', () => {
     await seedForkTarget(tgt);
     const chat = await seedForkSource(src);
     await chat.say({ id: 'm1', role: 'user', text: 'hi' });
-    const notes = adaptMemory(new MemoryStore(src.vfs, src.sql), src.vfs);
+    const notes = adaptMemory(new MemoryStore(src.vfs, src.sql, write => src.db.transaction(write)()), src.vfs);
     await notes.write('memory/deploy.md', 'wrangler staging deploy succeeded');
     await notes.index('memory/deploy.md');
     // A shell edit after the index was taken: the fork must not carry the old words as the note's.
     await writeText(src.vfs, 'memory/deploy.md', 'kubernetes ingress now fronts staging');
 
     await forkInto(src, tgt, { untilMessageId: 'm1' });
-    const store = new MemoryStore(tgt.vfs, tgt.sql);
+    const store = new MemoryStore(tgt.vfs, tgt.sql, write => tgt.db.transaction(write)());
     store.ensureSchema();
     const forked = adaptMemory(store, tgt.vfs);
 

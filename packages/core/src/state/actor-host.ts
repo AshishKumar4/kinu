@@ -154,6 +154,7 @@ function actorScopedTables(sql: SqlExecutor): readonly string[] {
 
 export function createActorHost(deps: ActorHostDeps): ActorHost {
   const slots = new Map<string, HostSlot>();
+  const bindings = new Map<string, { bound: BoundActor; fence: ReleaseFence }>();
   const ports = new Map<string, TemporaryAgentPort>();
 
   const slotFor = (reference: ActorReference): Effect.Effect<HostSlot | null, KinuError> => {
@@ -169,6 +170,15 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
   const bind = (reference: ActorReference) => Effect.gen(function* () {
     // Ancestry is validated once here; per statement only the row and the release fence are checked.
     deps.directory.validate(reference, deps.directory.storagePath(reference));
+    const known = bindings.get(reference.actorId);
+
+    if (known !== undefined && !known.fence.released) {
+      if (!sameActorReference(known.bound.reference, reference)) return yield* new KinuError('denied', 'The hosted actor reference does not match the retained binding.');
+      known.bound.handle.assertCurrent();
+
+      return known;
+    }
+
     const record = deps.directory.retained(reference.actorId);
 
     if (!record) return yield* new KinuError('missing', 'The actor is not registered in this workspace.');
@@ -200,7 +210,11 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
       });
     }
 
-    return { bound: { ...binding, stores }, fence };
+    const retained = { bound: { ...binding, stores }, fence };
+
+    bindings.set(reference.actorId, retained);
+
+    return retained;
   });
 
   const build = (reference: ActorReference): Effect.Effect<{ actor: HostedActor; fence: ReleaseFence }, KinuError> => Effect.gen(function* () {
@@ -276,6 +290,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
   const drop = (slot: HostSlot): void => {
     slot.fence.released = true;
     slots.delete(slot.actor.reference.actorId);
+    bindings.delete(slot.actor.reference.actorId);
     slot.actor.runtime.release?.();
   };
 
@@ -293,6 +308,14 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     const slot = yield* slotFor(reference);
 
     if (!slot || slot.fence.released) {
+      const binding = bindings.get(reference.actorId);
+
+      if (binding !== undefined) {
+        if (!sameActorReference(binding.bound.reference, reference)) return yield* new KinuError('denied', 'The hosted actor reference does not match the retained binding.');
+        binding.fence.released = true;
+        bindings.delete(reference.actorId);
+      }
+
       ports.delete(reference.actorId);
 
       return;
@@ -337,6 +360,9 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     },
     releaseAll: () => {
       for (const slot of slots.values()) drop(slot);
+
+      for (const binding of bindings.values()) binding.fence.released = true;
+      bindings.clear();
       ports.clear();
     },
     retire: (parent, retirement) => settle(Effect.gen(function* () {

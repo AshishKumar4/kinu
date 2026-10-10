@@ -339,7 +339,7 @@ export {
   type ChatEvent, type ChatFallback, type ChatOptions, type ChatToolOutput, type ObserveStream,
 } from './chat';
 
-export { createFallbackCooldowns, type FallbackCooldowns } from './providers/fallback-cooldown';
+export { ProviderPacer } from './providers/pacing';
 
 export type { ModelAttemptIdentity } from './providers/attempt-identity';
 

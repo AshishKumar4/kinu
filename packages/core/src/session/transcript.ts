@@ -6,6 +6,7 @@ import type { PromptFile } from '../types/backend-host';
 import type { SqlExecutor } from '../types/primitives';
 import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { KinuError } from '../obs/error';
+import { encodeModelMessage } from './message-codec';
 import { type SessionMessages, SessionMessageReader, type ActorReadAuthority, type MessagePartReference, type MessageReference, type StoredPart } from './messages';
 import { type SessionPayloads, SessionPayloadReader, type SessionPayload } from './payload';
 import { rowText, turnAuthor, UIMessageSchema } from '../utils/ui-message';
@@ -219,7 +220,7 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     let next = Math.min(from, ids.length);
 
     for (; next < ids.length; next++) {
-      const message = await this.messages.projection({ messageId: ids[next] });
+      const message = encodeModelMessage(await this.messages.materialize({ messageId: ids[next] }));
       const size = outputUtf8.encode(JSON.stringify(message)).byteLength;
 
       // As on the request inspector, one oversized message still ships whole instead of losing its tool input.

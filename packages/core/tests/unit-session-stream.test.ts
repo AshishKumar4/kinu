@@ -11,10 +11,35 @@ import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
 import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
 import { readSubordinateInspection } from '../src/subordinates/inspection';
 import { makeSqlExec } from './helpers';
+import { decodeModelMessageValues } from '../src/session/message-codec';
 
 const BUILTIN: ActorProgramIdentity = { kind: 'builtin', version: 0, digest: null, build: 'test' };
 
 const remoteFailure = { isError: true, content: [{ type: 'text', text: 'remote failed' }], structuredContent: { reason: 'remote-code' } };
+
+test('step inspection returns decoded image and file bytes, not storage placeholders', async () => {
+  const s = setup();
+
+  try {
+    initRunEventTables(s.rt.storage.execRaw);
+    const events = new RunEventRecorder(s.rt.storage.sql, s.rt.actor);
+    const acc = new TurnAccumulator({ onStepEvent: (step) => { events.emit('run-media', { type: 'step_finish', ...step }); } });
+    const { stream } = await s.turn('media');
+    const bytes = new Uint8Array([137, 80, 78, 71, 13, 10]);
+    const message: ModelMessage = { role: 'assistant', content: [{ type: 'file', data: bytes, mediaType: 'image/png' }] };
+    const record = { messages: [message], toolResults: [], step: { stepIndex: 0, finishReason: 'stop' } };
+    await stream.nativeStep(record, (parts) => acc.writeNative(record, parts));
+    const event = events.read('run-media')[0];
+
+    if (event?.type !== 'step_finish') throw new Error('missing sealed media step');
+
+    const inspected = await readSubordinateInspection({ sql: s.rt.storage.sql, raw: makeSqlExec(s.testSql.db), actor: s.rt.actor,
+      transcriptFor: () => s.history.transcript('default') }, { view: 'step', path: [], runId: event.runId, eventIndex: event.eventIndex });
+
+    if (inspected.view !== 'step') throw new Error('missing media inspection');
+    expect(decodeModelMessageValues(inspected.messages)).toEqual([message]);
+  } finally { s.testSql.close(); }
+});
 
 test('a sealed step stores canonical output references, not a second transcript body', async () => {
   const s = setup();

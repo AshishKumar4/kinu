@@ -277,17 +277,16 @@ export function createCFRuntime(
     ? nimbusSessionFiles(workspaceBox, hooks.workspaceExecution)
     : originVfs;
 
-  const memoryStore = new MemoryStore(originVfs, sql);
+  const memoryStore = new MemoryStore(originVfs, sql, write => access.ctx.storage.transactionSync(write));
   memoryStore.ensureSchema();
 
   // Built before the memory adapter so writes embed.
   const vectorStore = buildVectorStore(env, actor, hooks.reportModelCall);
-  const memoryConfig = actor.actor.config;
 
   const craftStore = new AgentUtilsCraftStore(sql);
   craftStore.ensureSchema();
 
-  const memory = adaptMemory(memoryStore, originVfs, { store: vectorStore, config: memoryConfig });
+  const memory = adaptMemory(memoryStore, originVfs, { store: vectorStore });
 
   const executor = createRuntimeExecutor(codemodeLauncher({ kinuNode: false, egress: null }));
 
@@ -315,14 +314,14 @@ export function createCFRuntime(
 
   const approvalPolicy: ShellApprovalPolicy = isRootActor
     ? {
-      mode: () => memoryConfig.getShellApprovalMode(),
-      granted: (grant) => holdsGrant(memoryConfig.getShellApprovalGrants(), grant),
+      mode: () => actor.actor.config.getShellApprovalMode(),
+      granted: (grant) => holdsGrant(actor.actor.config.getShellApprovalGrants(), grant),
       requestApproval: null,
       get deferrals() { return hooks.deferrals?.(); },
     }
     : createInheritedApprovalPolicy({
       fetchRoot: () => fetchRootApprovalPolicy(env, actor.workspaceName),
-      ownGrants: () => memoryConfig.getShellApprovalGrants(),
+      ownGrants: () => actor.actor.config.getShellApprovalGrants(),
       deferrals: () => hooks.deferrals?.(),
     });
 
@@ -425,7 +424,7 @@ export function createCFRuntime(
           workspaceName: actor.workspaceName,
           ownerUserId: userId,
           vault: await listOwnerEgressVault(env, actor),
-          grants: memoryConfig.getShellApprovalGrants(),
+          grants: actor.actor.config.getShellApprovalGrants(),
         }));
         // Unread, the box keeps its last default.
         const [accountSize] = await Promise.allSettled([ownerSandboxSize(env, actor)]);
@@ -485,7 +484,7 @@ export function createCFRuntime(
     await Promise.all([
       (async (): Promise<void> => {
         try {
-          await backfillMemoryVectors(memoryStore, memoryConfig, vectorStore);
+          await backfillMemoryVectors(memoryStore, vectorStore);
         } catch (cause) {
           diagnostics.failure('memory.vector_backfill_detached_failed', toKinuError({
             doing: 'backfilling semantic-memory vectors at runtime construction',

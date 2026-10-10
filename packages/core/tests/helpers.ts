@@ -118,7 +118,7 @@ export function createWorkspaceBundle(db: Database) {
 
 /** The Memory every backend builds: MemoryStore through the one adapter, FTS5 alone. */
 export function createMemoryMemory(db: Database, vfs: VFS & Required<Pick<VFS, 'readRange'>>): Memory {
-  const store = new MemoryStore(vfs, wrapDatabase(db).sql);
+  const store = new MemoryStore(vfs, wrapDatabase(db).sql, write => db.transaction(write)());
   store.ensureSchema();
 
   return adaptMemory(store, vfs);

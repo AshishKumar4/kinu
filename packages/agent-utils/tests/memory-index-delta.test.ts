@@ -3,9 +3,9 @@ import { MemoryStore } from "../src/memory/store";
 import { createTestDb, createMemoryVfs } from "./helpers";
 
 function createStore() {
-	const { sql } = createTestDb();
+	const { sql, transactionSync } = createTestDb()
 	const fs = createMemoryVfs();
-	const store = new MemoryStore(fs, sql);
+	const store = new MemoryStore(fs, sql, transactionSync);
 	store.ensureSchema();
 
 	return { store };
@@ -66,28 +66,36 @@ describe("MemoryStore.indexFile delta", () => {
 	});
 });
 
-describe("MemoryStore.allChunksAfter (backfill pagination)", () => {
-	test("returns all chunks from an empty cursor, ordered by id", async () => {
-		const { store } = createStore();
-		await store.writeFile(PATH, doc(60));
-		const { upserted } = await store.indexFile(PATH, doc(60));
-		const all = (await store.allChunksAfter("", 1000)).chunks;
-		expect(all.length).toBe(upserted.length);
-		const ids = all.map((c) => c.id);
-		expect([...ids].sort()).toEqual(ids);
-		expect(all[0].text.length).toBeGreaterThan(0);
-	});
+describe("canonical index publication", () => {
+  test.each(['replace', 'delete'])('a failed %s publication rolls back lexical rows, stamp and projection obligations together', async (operation) => {
+    const { sql, transactionSync } = createTestDb();
+    const fs = createMemoryVfs();
+    const initial = new MemoryStore(fs, sql, transactionSync);
+    initial.ensureSchema();
+    await initial.writeFile(PATH, 'retained words');
+    await initial.indexFile(PATH, 'retained words', 'before');
+    initial.ackProjection(initial.pendingProjection());
 
-	test("pages the table across a cursor without overlap or gaps", async () => {
-		const { store } = createStore();
-		await store.writeFile(PATH, doc(60));
-		await store.indexFile(PATH, doc(60));
-		const all = (await store.allChunksAfter("", 1000)).chunks;
-		expect(all.length).toBeGreaterThan(1);
-		const firstPage = await store.allChunksAfter("", 1);
-		expect(firstPage.chunks.map((c) => c.id)).toEqual([all[0].id]);
-		const rest = await store.allChunksAfter(firstPage.next ?? "", 1000);
-		expect(rest.chunks.map((c) => c.id)).toEqual(all.slice(1).map((c) => c.id));
-		expect(rest.next).toBeNull();
-	});
+    const failing = new MemoryStore(fs, sql, (write) => transactionSync(() => {
+      write();
+      throw new Error('publication failed before commit');
+    }));
+
+    await expect(operation === 'delete' ? failing.forgetFile(PATH) : failing.indexFile(PATH, 'replacement words', 'after'))
+      .rejects.toThrow('publication failed before commit');
+    const reopened = new MemoryStore(fs, sql, transactionSync);
+    expect(reopened.stampOf(PATH)).toBe('before');
+    expect((await reopened.search('retained')).map((hit) => hit.snippet)).toEqual(['retained words']);
+    expect(reopened.pendingProjection()).toEqual([]);
+  });
+
+  test('acknowledging an old delivery cannot erase a newer change to the same chunk', async () => {
+    const { store } = createStore();
+    await store.indexFile(PATH, 'first content');
+    const delivered = store.pendingProjection();
+    await store.indexFile(PATH, 'changed content');
+    store.ackProjection(delivered);
+    expect(store.pendingProjection()).toHaveLength(1);
+    expect(store.pendingProjection()[0].revision).toBeGreaterThan(delivered[0].revision);
+  });
 });

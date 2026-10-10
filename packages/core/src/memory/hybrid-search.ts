@@ -37,29 +37,15 @@ export type LexicalSearchFn = (query: string, limit: number) => Promise<LexicalH
 /** The vector store holds no chunk text, so semantic-only hits need their text read back. Null when unreadable. */
 export type SnippetRehydrator = (hit: VectorSearchHit) => Promise<string | null>;
 
-/** Reads are memoized per rehydrator: one read per file per page of hits. */
-export function memorySnippetRehydrator(memory: Pick<Memory, 'read'>): SnippetRehydrator {
-  const reads = new Map<string, Promise<string | null>>();
-
+/** Remote candidates must still identify the canonical chunk and content. */
+export function memorySnippetRehydrator(memory: Pick<Memory, 'chunk'>): SnippetRehydrator {
   return async (hit) => {
-    if (!hit.path) return null;
-    let content = reads.get(hit.path);
+    const chunk = await memory.chunk(hit.id);
 
-    if (!content) {
-      content = memory.read(hit.path);
-      reads.set(hit.path, content);
-    }
+    if (chunk === null || hit.hash === undefined || chunk.hash !== hit.hash
+      || chunk.path !== hit.path || chunk.startLine !== hit.startLine || chunk.endLine !== hit.endLine) return null;
 
-    const pending = content;
-
-    return settle(Effect.tryPromise({ try: () => pending, catch: (cause) => ({ cause }) }).pipe(
-      Effect.tapError(() => Effect.sync(() => {
-        if (reads.get(hit.path) === pending) reads.delete(hit.path);
-      })),
-      Effect.catch((failed) => Effect.die(failed.cause)),
-      // 1-based, inclusive — the line convention memory chunk ids are minted with.
-      Effect.map((text) => (text === null ? null : text.split('\n').slice(Math.max(0, hit.startLine - 1), hit.endLine).join('\n'))),
-    ));
+    return chunk.text;
   };
 }
 
@@ -110,9 +96,24 @@ export function hybridSearch(
 
   const lexicalArm = armOf(() => lexicalSearch(query, perSourceK), 'run the lexical half of a hybrid search', 'io');
 
-  const semanticArm: Effect.Effect<SemanticOutcome> = vectorStore.available
+  const semanticArm: Effect.Effect<SemanticOutcome> = (vectorStore.available
     ? armOf(() => vectorStore.search(query, perSourceK), 'run the semantic half of a hybrid search', 'unavailable')
-    : Effect.succeed({ kind: 'skipped' });
+    : Effect.succeed<SemanticOutcome>({ kind: 'skipped' })).pipe(Effect.flatMap((outcome) => {
+      const rehydrate = options.rehydrate;
+  
+      if (outcome.kind !== 'answered' || rehydrate === undefined) return Effect.succeed(outcome);
+  
+      return Effect.forEach(outcome.hits, (hit) => attempt(
+        { doing: 'validate a semantic candidate against canonical memory', otherwise: 'io' }, () => rehydrate(hit),
+      ).pipe(
+        Effect.catch((error) => Effect.sync(() => {
+          diagnostics.failure('memory.snippet_rehydrate_failed', error, { id: hit.id });
+  
+          return null;
+        })),
+        Effect.map((text) => text === null ? null : { ...hit, text }),
+      )).pipe(Effect.map((hits): SemanticOutcome => ({ kind: 'answered', hits: hits.flatMap((hit) => hit === null ? [] : [hit]) })));
+    }))
 
   const sharedFacts: Effect.Effect<readonly Fact[]> = accountFacts === undefined ? Effect.succeed([]) : attempt(
     { doing: "read the account's facts for a hybrid search", otherwise: 'unavailable' }, accountFacts,
@@ -153,7 +154,7 @@ export function hybridSearch(
       return yield* Effect.die(new AggregateError(failures, 'hybrid search failed: no retrieval source answered', { cause: only }));
     }
 
-    return yield* fused({ lexical, semantic, factArm, accountNotes: noteArm.kind === 'answered' ? noteArm.hits : [], finalK, rrfK, rehydrate: options.rehydrate });
+    return yield* fused({ lexical, semantic, factArm, accountNotes: noteArm.kind === 'answered' ? noteArm.hits : [], finalK, rrfK });
   }));
 }
 
@@ -164,7 +165,6 @@ interface FuseInput {
   readonly accountNotes: readonly AccountNoteHit[];
   readonly finalK: number;
   readonly rrfK: number;
-  readonly rehydrate: SnippetRehydrator | undefined;
 }
 
 function armOf<Hit>(
@@ -180,7 +180,7 @@ function armOf<Hit>(
   );
 }
 
-function fused({ lexical, semantic, factArm, accountNotes, finalK, rrfK, rehydrate }: FuseInput): Effect.Effect<HybridHit[]> {
+function fused({ lexical, semantic, factArm, accountNotes, finalK, rrfK }: FuseInput): Effect.Effect<HybridHit[]> {
   const lexicalHits: readonly LexicalHit[] = lexical.kind === 'answered' ? lexical.hits : [];
 
   const factHits: readonly FactSearchHit[] = factArm.kind === 'answered' ? factArm.hits : [];
@@ -198,25 +198,16 @@ function fused({ lexical, semantic, factArm, accountNotes, finalK, rrfK, rehydra
   const byIdSem = new Map(semanticHits.map((h) => [h.id, h]));
   const byIdNote = new Map(noteHits.map((h) => [h.id, h]));
 
-  return Effect.forEach(merged.slice(0, finalK), (m) => Effect.gen(function* () {
+  return Effect.sync(() => merged.slice(0, finalK).map((m) => {
     const l = byIdLex.get(m.id);
     const f = byIdFact.get(m.id);
     const s = byIdSem.get(m.id);
     const n = byIdNote.get(m.id);
     const sources = hitSources({ l, f, s, n });
     // Fact and account note hits carry their text, so only semantic-only note hits need rehydrating.
-    let snippet = l?.snippet ?? f?.snippet ?? n?.text ?? s?.text ?? '';
+    const snippet = l?.snippet ?? f?.snippet ?? n?.text ?? s?.text ?? '';
 
-    if (!snippet && s && rehydrate) {
-      snippet = yield* Effect.tryPromise({
-        try: async () => (await rehydrate(s)) ?? '',
-        catch: (cause) => toKinuError({ doing: 'rehydrate a semantic hit snippet', cause, otherwise: 'io' }),
-      }).pipe(Effect.catch((error) => {
-        diagnostics.failure('memory.snippet_rehydrate_failed', error, { id: m.id });
-
-        return Effect.succeed('');
-      }));
-    }
+    
 
     const hit: HybridHit = {
       id: m.id,
@@ -232,7 +223,7 @@ function fused({ lexical, semantic, factArm, accountNotes, finalK, rrfK, rehydra
     };
 
     return hit;
-  }), { concurrency: 'unbounded' });
+  }));
 }
 
 type HitSource = HybridHit['sources'][number];

@@ -161,8 +161,8 @@ export function makeExecRaw(db: { exec(sql: string): void }): RawSqlExec {
 }
 
 /** Main's memory over its notes: the one its memory tool, and `kinu memory`, read and search. */
-function notesMemory(notes: ReturnType<typeof agentHomeFiles>, sql: SqlExecutor) {
-  const store = new MemoryStore(notes, sql);
+function notesMemory(notes: ReturnType<typeof agentHomeFiles>, sql: SqlExecutor, transactionSync: (write: () => void) => void) {
+  const store = new MemoryStore(notes, sql, transactionSync);
   store.ensureSchema();
 
   return { store, memory: adaptMemory(store, notes) };
@@ -170,7 +170,7 @@ function notesMemory(notes: ReturnType<typeof agentHomeFiles>, sql: SqlExecutor)
 
 /** The memory of the workspace whose database `db` is, as its memory tool reads and searches it. */
 export function workspaceMemory(db: Database): Memory {
-  return notesMemory(agentStateFiles(db), makeSql(db)).memory;
+  return notesMemory(agentStateFiles(db), makeSql(db), write => db.transaction(write)()).memory;
 }
 
 /** Main's home beside `db`, as real files. */
@@ -389,7 +389,7 @@ function buildCLIRuntime(
 
   const { planes, home: ownHome } = runtimePlanes(cwd, space, config.facet, views);
 
-  const { store: memoryStore, memory } = notesMemory(agentStateVfs, sql);
+  const { store: memoryStore, memory } = notesMemory(agentStateVfs, sql, write => db.transaction(write)());
 
   const craftStore = new CraftStore(sql);
   craftStore.ensureSchema();
