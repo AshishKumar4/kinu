@@ -5,8 +5,8 @@
  * row exactly once, with a timing for each file a split suite declares, before it stores a commit's verdict; absence is
  * never green.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { cpSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative } from 'node:path';
 import * as v from 'valibot';
 
 const Sha = v.pipe(v.string(), v.regex(/^[0-9a-f]{40}$/u));
@@ -21,6 +21,35 @@ const RowSchema = v.object({
 });
 
 export type CIVerdict = v.InferOutput<typeof RowSchema>;
+
+/** Evidence written in the checkout and carried by armada's native task artifacts. */
+export interface Evidence {
+  readonly dir: string;
+  readonly artifacts: string;
+}
+
+/** One copier for deploy rows and eval trials: the exact files copied are the row's declared artifacts. */
+export function ciVerdictRow(gate: { readonly run: string; readonly evidence?: string }, outcome: { readonly exitCode: number; readonly seconds: number; readonly stdout: string; readonly stderr: string }, timings: CIVerdict['timings'], evidence: Evidence | undefined): CIVerdict {
+  const output = outcome.exitCode === 0 ? '' : outcome.stdout + outcome.stderr;
+  const row: CIVerdict = { run: gate.run, exitCode: outcome.exitCode, seconds: outcome.seconds, output, timings };
+
+  if (evidence === undefined || gate.evidence === undefined || !existsSync(evidence.dir)) return row;
+  const into = join(evidence.artifacts, gate.evidence);
+  const copied: string[] = [];
+
+  cpSync(evidence.dir, into, {
+    recursive: true,
+    filter: (source) => {
+      if (statSync(source).isFile()) copied.push(join(gate.evidence ?? '', relative(evidence.dir, source)));
+
+      return true;
+    },
+  });
+
+  if (copied.length > 0) row.artifacts = copied.sort();
+
+  return row;
+}
 
 export const VerdictFileSchema = v.object({ sha: Sha, part: v.string(), rows: v.array(RowSchema) });
 

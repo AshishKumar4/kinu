@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # Post a comment about a deployed build: on the pull request that merged it, else on the commit.
-# This workflow's earlier comments there that start with the marker, or with any further marker
+# This run's earlier comments there that start with the marker, or with any further marker
 # named (comments the new one supersedes), are deleted first, so the latest is the only one.
-# GH_TOKEN and GH_REPO come from the environment.
+# Uses the operator's gh session, or GH_TOKEN; GH_REPO defaults to this checkout's repository.
 #   evals/scripts/post-comment.sh <sha> <body-file> <marker> [<superseded-marker>...]
 set -euo pipefail
+
+: "${GH_REPO:=$(gh repo view --json nameWithOwner --jq .nameWithOwner)}"
+author=$(gh api user --jq .login)
 
 sha="$1"
 body="$2"
@@ -21,8 +24,8 @@ else
 fi
 
 for marker in "$@"; do
-  MARKER="$marker" gh api --paginate "$comments?per_page=100" \
-    --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith(env.MARKER))) | .id' |
+  MARKER="$marker" AUTHOR="$author" gh api --paginate "$comments?per_page=100" \
+    --jq '.[] | select((.user.login == "github-actions[bot]" or .user.login == env.AUTHOR) and (.body | startswith(env.MARKER))) | .id' |
     while read -r id; do
       gh api --method DELETE "$one/$id" > /dev/null
     done
