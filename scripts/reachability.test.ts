@@ -187,7 +187,7 @@ describe('reachability gate, against the real tree', () => {
   /** RPC → the one UI file that invokes it, verified live below. */
   const WIRES = {
     previewScaffoldLive: 'packages/cf-backend/src/components/surfaces/ScaffoldLineage.tsx',
-    listTurnFeedback: 'packages/cf-backend/src/pages/WorkspacePage.tsx',
+    listTurnFeedback: 'packages/cf-backend/src/hooks/use-turn-annotations.ts',
   } satisfies Record<string, string>;
 
   test('cutting the socket hook every workspace frame reaches leaves its channels unread', () => {

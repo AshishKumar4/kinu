@@ -12,13 +12,13 @@ import type { ChangesFocus } from "@/components/surfaces/ChangesSurface";
 import type { WorkbenchHandle } from "@/components/WorkbenchPanels";
 
 /** A chat's file links: the prefixes it links, and what opens one. */
-export interface FileLinks {
+interface FileLinks {
   readonly roots: readonly string[];
   readonly open: (reference: string) => void;
 }
 
 /** A fork's landing: the slate it opens on, and the namespaces it reaches, from `?slate=&reaches=`. */
-export type ForkLanding = { readonly slate: string; readonly reaches: readonly string[] };
+type ForkLanding = { readonly slate: string; readonly reaches: readonly string[] };
 
 function forkLandingOf(search: URLSearchParams): ForkLanding | null {
   const slate = search.get("slate");
