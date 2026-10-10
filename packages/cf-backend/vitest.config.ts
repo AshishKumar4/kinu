@@ -23,7 +23,7 @@ import {
   assetsOutbound, deployOutbound,
 } from './tests/workerd/deploy-fake';
 import type { V4ModuleDefinition } from 'miniflare';
-import { builtinModules } from 'node:module';
+import { builtinModules, createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import { promptText } from './vite-prompt-text';
 import { AGENT_BUNDLE_ENTRY, buildAgentBundle, workerCompatibility, writeWhole } from './vite-agent-bundle';
@@ -116,8 +116,22 @@ const probeRuntime = {
   alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter(name => !name.startsWith('node:')).map(name => [name, 'node:' + name])) },
 } satisfies BuildOptions;
 
+/**
+ * One probe build at a time, as buildSync ran them: each bundles most of the Worker, and seventeen at once in one
+ * esbuild service grew it until it died ("The service was stopped").
+ */
+let probeBuilds: Promise<unknown> = Promise.resolve();
+
 /** A selected probe keeps its own entry and flags; unused probes perform no build. */
 async function probeModules(file: string, options: BuildOptions = {}): Promise<V4ModuleDefinition[]> {
+  const turn = probeBuilds.then(() => builtProbe(file, options), () => builtProbe(file, options));
+
+  probeBuilds = turn;
+
+  return await turn;
+}
+
+async function builtProbe(file: string, options: BuildOptions): Promise<V4ModuleDefinition[]> {
   if (!vendorMaterialized && options.alias?.['virtual:kinu-slate-vendor'] !== undefined) {
     mkdirSync(dirname(slateVendorModulePath), { recursive: true });
     writeWhole(slateVendorModulePath, `export const workerCompatibility = ${JSON.stringify(workerCompatibility)};\nexport default ${JSON.stringify(buildSlateVendor())};\n`);
@@ -607,6 +621,38 @@ const workerSelection: Reporter = {
   },
 };
 
+/**
+ * Nimbus core's shell npm imports CommonJS packages the workers pool cannot load there: a require of a built-in, and of
+ * a dependency nested under another (hosted-git-info's own lru-cache), are "Module not found". Each is bundled to one
+ * ESM module, as the Worker's bundler makes it, and aliased (NIMBUS-ASKS #35).
+ */
+const NPM_COMMONJS = [
+  'npm-package-arg', 'nopt', 'validate-npm-package-name', 'validate-npm-package-license', 'hosted-git-info',
+  '@npmcli/config/lib/definitions/index.js', '@npmcli/config/lib/env-replace.js', '@npmcli/config/lib/parse-field.js',
+  '@npmcli/config/lib/type-defs.js', '@npmcli/config/lib/type-description.js',
+];
+
+async function bundledNpmCommonJs(): Promise<{ find: RegExp; replacement: string }[]> {
+  const fromCore = createRequire(fileURLToPath(new URL('../../node_modules/@nimbus-sh/core/package.json', import.meta.url)));
+  const into = fileURLToPath(new URL('../../node_modules/.cache/kinu/npm-commonjs/', import.meta.url));
+
+  mkdirSync(into, { recursive: true });
+
+  return await Promise.all(NPM_COMMONJS.map(async (specifier) => {
+    const built = await bundled({
+      entryPoints: [fromCore.resolve(specifier)], bundle: true, write: false, format: 'esm', platform: 'neutral',
+      mainFields: ['main'], ...probeRuntime, plugins: [nodeRequireAsImport], external: ['node:*'],
+    });
+
+    const file = `${into}${specifier.replace(/[^a-z0-9.-]/gi, '_')}.mjs`;
+    const exact = specifier.replace(/[.*+?^$()|[\]\\/]/g, '\\$&');
+
+    writeWhole(file, built.outputFiles[0]?.text ?? '');
+
+    return { find: new RegExp(`^${exact}$`), replacement: file };
+  }));
+}
+
 const sharedTestOptions = {
     forceRerunTriggers: workerSourceTriggers() ?? configDefaults.forceRerunTriggers,
     // Asserts the pool actually started (adopted from cloudflare-os `test-setup/assert-workerd.ts`).
@@ -631,6 +677,7 @@ const sharedTestOptions = {
 } satisfies NonNullable<UserConfig['test']>;
 
 export default defineConfig({
+  resolve: { alias: await bundledNpmCommonJs() },
   plugins: [promptText(), slateVendor(), standardDecorators(), {
     name: 'kinu:workerd-bindings',
     configureVitest({ vitest }) {

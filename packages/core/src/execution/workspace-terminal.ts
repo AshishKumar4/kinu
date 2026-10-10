@@ -22,6 +22,8 @@ export const WorkspaceTerminalInputSchema = v.variant('type', [
 export const WorkspaceTerminalOutputSchema = v.variant('type', [
   v.object({ type: v.literal('output'), data: v.string() }),
   v.object({ type: v.literal('ready') }),
+  // Nimbus 0.16 marks the shell's prompt and each submitted command's start and end (`ShellIntegrationEvent`).
+  v.object({ type: v.literal('shell-integration'), event: v.picklist(['prompt', 'input', 'start', 'finish', 'end']) }),
 ]);
 
 export function isWorkspaceTerminal(tags: Iterable<string>): boolean {

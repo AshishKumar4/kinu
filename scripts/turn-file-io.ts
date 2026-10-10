@@ -487,10 +487,29 @@ try {
 
   const shell = async (command: string) => await invoke('shell', { command, runtime: 'workspace' });
 
-  if (subject === 'commands') {
+  const node = (program: string) => `node -e ${JSON.stringify(program)}`;
+
+  if (subject === 'pipes') {
+    await ask('/seed');
+
+    // A process's output through a pipe, by how many writes carry it, and as an agent's `npm test | tail` reads it.
+    for (const lines of [2_000, 20_000, 200_000]) {
+      const program = node(`for (let i = 0; i < ${String(lines)}; i++) console.log(i)`);
+
+      await measureOp(`pipe.tail.${String(lines)}`, () => shell(`${program} | tail -1 | sed 's/^/last=/'`), undefined, `last=${String(lines - 1)}`);
+      await measureOp(`pipe.grep.${String(lines)}`, () => shell(`${program} | grep -c 1 | sed 's/^/count=/'`), undefined, 'count=');
+      await measureOp(`pipe.head.${String(lines)}`, () => shell(`${program} | head -1 | sed 's/^/first=/'`), undefined, 'first=0');
+    }
+
+    const project = '/home/main/perfio/tested';
+    const tests = "for (let i = 0; i < 3000; i++) console.log('ok ' + (i + 1) + ' - case ' + i); console.log('# pass ' + 3000)";
+
+    await shell(`mkdir -p ${project} && cd ${project} && echo '{"name":"tested","private":true,"scripts":{"test":"node test.js"}}' > package.json && echo ${JSON.stringify(tests)} > test.js`);
+    await measureOp('pipe.npmtest', () => shell(`cd ${project} && npm test 2>&1 | tail -20`), undefined, '# pass 3000');
+    measured.push(...fileResults);
+  } else if (subject === 'commands') {
     await ask('/seed');
     // An expected answer is what only the command's own run prints: a byte count, a line, an exit status, a package's name.
-    const node = (program: string) => `node -e ${JSON.stringify(program)}`;
 
     await measureOp('process.out1m', () => shell(`${node("process.stdout.write('x'.repeat(1 << 20))")} | wc -c`), undefined, '1048576');
     await measureOp('process.utf8.200k', () => shell(`${node("process.stdout.write('\\u00e9'.repeat(100000))")} | wc -c`), undefined, '200000');
