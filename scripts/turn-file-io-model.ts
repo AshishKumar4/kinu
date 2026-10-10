@@ -17,7 +17,7 @@ const PerfIoSchema = v.object({
 
 export function perfIoModel(request: ScriptedRequest): ScriptedAnswer | null {
   if (!request.streamed) return null;
-  const prompt = request.userTexts.findLast((text) => text.startsWith(PERF_IO_MARKER));
+  const prompt = request.userTexts.filter((text) => text.startsWith(PERF_IO_MARKER)).at(-1);
 
   if (prompt === undefined) return null;
   const plan = v.parse(PerfIoSchema, JSON.parse(prompt.slice(PERF_IO_MARKER.length)));
