@@ -814,4 +814,27 @@ describe('Settings → Memory', () => {
       }
     });
   });
+
+  // 26244c765: Settings read the profile beside the shell's read and read it again after a save, so the shell kept
+  // the old name until its own next read.
+  test('Settings shows the shell\'s account, and a saved name is that account at once', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'usersettingsstate', 'light', 'desktop');
+
+      try {
+        await page.waitForSelector('input[aria-label="Your name"]');
+        const reads = () => page.evaluate(() => Number(document.documentElement.dataset.galleryProfileReads ?? '0'));
+
+        expect(await reads()).toBe(1);
+        await page.click('input[aria-label="Your name"]', { count: 3 });
+        await page.keyboard.type('Ada');
+        await page.$$eval('button', (buttons) => buttons.find((button) => button.textContent?.trim() === 'Save')?.click());
+        await page.waitForFunction(() => document.documentElement.dataset.galleryProfilePatches === '1');
+        await page.waitForFunction(() => [...document.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'Save')?.disabled === true);
+        expect(await reads()).toBe(1);
+      } finally {
+        await page.close();
+      }
+    });
+  });
 });

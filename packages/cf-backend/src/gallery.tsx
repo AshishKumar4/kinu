@@ -294,6 +294,10 @@ function accountProfileFixture(path: string, method: string, body: BodyInit | nu
   }
 
   if (path === "/api/user/profile") {
+    // Counted: the shell reads the account once, and every view of it shares that read.
+    const root = document.documentElement;
+    root.dataset.galleryProfileReads = String(Number(root.dataset.galleryProfileReads ?? "0") + 1);
+
     // The wizard's profile step renders only without a display name: `&noname=1` answers that account.
     if (frame === "welcome" && new URLSearchParams(location.search).get("noname") === "1") {
       return fixtureJson({

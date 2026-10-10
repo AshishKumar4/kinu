@@ -3,14 +3,14 @@
  * is a gesture and persists; any other (mount, own decision, ResizeObserver) is adopted unpersisted.
  */
 
-import { startTransition, useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import {
   usePanelRef,
   type Layout,
   type PanelImperativeHandle,
   type PanelProps,
 } from "react-resizable-panels";
-import { getProfile } from "@/lib/user-api";
+import { useAccount } from "./use-account";
 import { useMediaQuery } from "./use-media-query";
 
 import {
@@ -25,16 +25,6 @@ import {
 const panelId = (panel: "chat" | "inspector", scope: string | undefined): string => (
   scope === undefined ? panel : `${panel}-${scope}`
 );
-
-/** Each of the three resolutions is an answer; only the pending promise means "unknown". */
-let readAccountKeyCache: Promise<InspectorAccount> | null = null;
-
-function readAccountKey(): Promise<InspectorAccount> {
-  return (readAccountKeyCache ??= getProfile().then(
-    (profile): InspectorAccount => (profile?.email ? { kind: "known", email: profile.email } : { kind: "none" }),
-    (): InspectorAccount => ({ kind: "unreadable" }),
-  ));
-}
 
 type InspectorPanelProps = Pick<
   PanelProps,
@@ -120,25 +110,31 @@ export function useInspectorLayout(input: {
     return cached === null ? null : { kind: "known", email: cached };
   });
 
+  // The account is the shell's one profile read: a sign-in or a name saved there is this layout's account too.
+  // Each of its three answers is a resolution; only loading means "unknown".
+  const { profile } = useAccount();
+  let profileAccount: InspectorAccount | null = null;
+
+  if (profile.status === "ready") profileAccount = profile.value?.email ? { kind: "known", email: profile.value.email } : { kind: "none" };
+  else if (profile.status === "error") profileAccount = { kind: "unreadable" };
+
+  const resolvedEmail = profileAccount?.kind === "known" ? profileAccount.email : null;
+  const resolvedKind = profileAccount?.kind ?? null;
+
   useEffect(() => {
-    if (!keyed) return;
-    let live = true;
+    if (!keyed || resolvedKind === null) return;
 
-    startTransition(async () => {
-      const resolved = await readAccountKey();
+    const resolved: InspectorAccount = resolvedEmail === null
+      ? { kind: resolvedKind === "unreadable" ? "unreadable" : "none" }
+      : { kind: "known", email: resolvedEmail };
 
-      if (!live) return;
+    if (resolved.kind === "known") localStorage.setItem("kinu.inspector.account", resolved.email);
 
-      if (resolved.kind === "known") localStorage.setItem("kinu.inspector.account", resolved.email);
-
-      // Keep the cached object when unchanged so the decision effect does not re-run.
-      setAccount((prev) => (
-        prev?.kind === "known" && resolved.kind === "known" && prev.email === resolved.email ? prev : resolved
-      ));
-    });
-
-    return () => { live = false; };
-  }, [keyed]);
+    // Keep the cached object when unchanged so the decision effect does not re-run.
+    setAccount((prev) => (
+      prev?.kind === "known" && resolved.kind === "known" && prev.email === resolved.email ? prev : resolved
+    ));
+  }, [keyed, resolvedKind, resolvedEmail]);
 
   // An unkeyed layout stores nothing yet is still decided; `null` would mean no policy at all.
   const readLayout = useCallback(
