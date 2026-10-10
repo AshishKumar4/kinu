@@ -779,7 +779,20 @@ function galleryRegister(body: BodyInit | null | undefined): Response {
   if (connectFixtureMode === "fail-first" && galleryRegistrations.length === 1) return fixtureJson({ error: "the hub is busy" }, 503);
   connectRegistrations += 1;
 
-  return fixtureJson({ origin: location.origin, installCommand: GALLERY_CONNECT_COMMAND }, 201);
+  return fixtureJson({ origin: location.origin, installCommand: GALLERY_CONNECT_COMMAND, deviceId: GALLERY_ISSUED_DEVICE }, 201);
+}
+
+/** The device the fixture's connect issues; `&connect=other` has another machine of the account connect instead. */
+const GALLERY_ISSUED_DEVICE = "dev-issued";
+
+function galleryConnectDevice(id: string, label: string, connected: boolean) {
+  return {
+    id, label, os: "darwin", hostname: "owner-mac", connected,
+    createdAt: NOW, lastSeenAt: NOW, expiresAt: NOW + 864e5,
+    replacedAt: null,
+    revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
+    sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
+  };
 }
 
 function deviceConnectFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
@@ -790,14 +803,11 @@ function deviceConnectFixture(path: string, method: string, body: BodyInit | nul
     // On the document, not `window`: `dataset` is a typed string map, a global is not.
     document.documentElement.dataset.galleryRosterReads = String(connectRosterReads);
 
-    return fixtureJson(connectRegistrations === 0 ? [] : [{
-      id: "dev-arrived", label: "Owner PC", os: "darwin", hostname: "owner-mac",
-      connected: connectFixtureMode !== "stall",
-      createdAt: NOW, lastSeenAt: NOW, expiresAt: NOW + 864e5,
-      replacedAt: null,
-      revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
-      sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
-    }]);
+    if (connectRegistrations === 0) return fixtureJson([]);
+
+    const issued = galleryConnectDevice(GALLERY_ISSUED_DEVICE, "Owner PC", connectFixtureMode !== "stall" && connectFixtureMode !== "other");
+
+    return fixtureJson(connectFixtureMode === "other" ? [issued, galleryConnectDevice("dev-other", "Laptop", true)] : [issued]);
   }
 
   if (path === "/api/user/devices/consents" && method === "GET") return fixtureJson([]);

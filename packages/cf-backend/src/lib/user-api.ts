@@ -255,7 +255,7 @@ const UserDeviceSchema = v.object({
   updateRefusal: v.optional(v.nullable(v.string()), null),
 });
 
-const RegisteredDeviceSchema = v.object({ origin: v.string(), installCommand: v.string() });
+const RegisteredDeviceSchema = v.object({ origin: v.string(), installCommand: v.string(), deviceId: v.string() });
 
 export const listDevices    = () => settle(api(v.array(UserDeviceSchema), 'GET', '/devices'));
 

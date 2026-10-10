@@ -1505,6 +1505,7 @@ export {
   DEVICE_CONSENT_DENIED,
   DEVICE_CONSENT_UNANSWERED,
   DEVICE_CONNECT_DISCLOSURE,
+  issuedDeviceConnected,
   summarizeDeviceAction,
   type DeviceConsentDecision,
   type DeviceConsentAnswer,

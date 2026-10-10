@@ -22,6 +22,14 @@ export const DEVICE_CONSENT_UNANSWERED =
   'device use is still unapproved: the consent prompt expired with no answer, so nobody decided. '
   + 'Continue without the device and ask again later.';
 
+/** A connect is done when the device the hub issued for it is connected: the one rule the browser's panel and
+ *  `kinu connect` both read, never "some device arrived". */
+export function issuedDeviceConnected<Device extends { readonly id: string; readonly connected: boolean }>(
+  devices: readonly Device[], deviceId: string,
+): Device | undefined {
+  return devices.find((device) => device.id === deviceId && device.connected);
+}
+
 /** Stated by every connect surface before the daemon is installed; one copy shared by CLI and web. */
 export const DEVICE_CONNECT_DISCLOSURE: readonly string[] = [
   'Kinu installs a small daemon here and links this machine to your account.',

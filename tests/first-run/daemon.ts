@@ -99,7 +99,7 @@ export async function attachMachine(request: AttachMachineRequest): Promise<Atta
 
   const registration = await infraBoundary(
     `POST ${account.origin}/api/cli/devices (${name})`,
-    () => registerCloudDevice(account.origin, account.cliToken, name),
+    () => registerCloudDevice(account.origin, account.cliToken, { label: name }),
   );
 
   // `~/.local/bin`, not `~/bin`: a sandboxed command's PATH is rebuilt by the

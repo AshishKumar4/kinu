@@ -47,7 +47,7 @@ import { authenticateCli, type CliBearerVariables } from '../api/cli-bearer';
 import * as v from 'valibot';
 import { authoredRefusal, classify, diagnostics, KinuError, renderThrownChain, toKinuError, settleLogged, settle } from '@kinu.run/core/obs';
 
-const DeviceRegistrationRequestSchema = v.object({ label: v.optional(v.string()), replaces: v.optional(v.string()) });
+const DeviceRegistrationRequestSchema = v.object({ label: v.optional(v.string()), replaces: v.optional(v.string()), device: v.optional(v.string()) });
 
 export type CliRoutesAuthority = CliAuthAuthority & SessionAuthority & CloudWorkspaceRegistry & Pick<
   UserDO,
@@ -356,13 +356,16 @@ cliRoutes.post('/api/cli/workspaces/:name/triggers/webhook', (c) => {
 
 cliRoutes.get('/api/cli/devices', async (c) => json({ body: await c.get('cli').userDO.listDevices(await ownerCaller(c.env)) }));
 
-cliRoutes.post('/api/cli/devices', async (c) => {
-  const cli = c.get('cli');
-  const registration = await safeJson(c.req.raw, DeviceRegistrationRequestSchema) ?? {};
-  const { deviceId, token } = await cli.userDO.registerDevice(await ownerCaller(c.env), registration.label, registration.replaces);
+cliRoutes.post('/api/cli/devices', (c) => settle(Effect.tryPromise({
+  try: async () => {
+    const cli = c.get('cli');
+    const registration = await safeJson(c.req.raw, DeviceRegistrationRequestSchema) ?? {};
+    const { deviceId, token } = await cli.userDO.registerDevice(await ownerCaller(c.env), registration.label, registration.replaces, registration.device);
 
-  return json({ body: { deviceId, token, userId: cli.userId, origin: new URL(c.req.url).origin } }, { status: 201 });
-});
+    return json({ body: { deviceId, token, userId: cli.userId, origin: new URL(c.req.url).origin } }, { status: 201 });
+  },
+  catch: (cause) => authoredRefusal({ doing: 'registering this device', cause }),
+})));
 
 // Interactive sessions only: a CI token writing a provider key could swap the account's inference
 // credentials. Secrets are never readable back.
@@ -642,6 +645,7 @@ YES=0
 NO_SETUP=0
 CONNECT=0
 CONNECT_LABEL=""
+CONNECT_DEVICE=""
 UNINSTALL=0
 PURGE=0
 
@@ -656,6 +660,12 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -gt 0 ] || { echo "--label requires a value" >&2; exit 2; }
       CONNECT=1
       CONNECT_LABEL="$1"
+      ;;
+    --device)
+      shift
+      [ "$#" -gt 0 ] || { echo "--device requires a value" >&2; exit 2; }
+      CONNECT=1
+      CONNECT_DEVICE="$1"
       ;;
     --origin)
       shift
@@ -734,18 +744,13 @@ run_setup_if_requested() {
 
 run_connect_if_requested() {
   if [ "$CONNECT" != "1" ]; then return 0; fi
+  set -- connect
+  if [ -n "$CONNECT_LABEL" ]; then set -- "$@" --label "$CONNECT_LABEL"; fi
+  if [ -n "$CONNECT_DEVICE" ]; then set -- "$@" --device "$CONNECT_DEVICE"; fi
   if has_tty; then
-    if [ -n "$CONNECT_LABEL" ]; then
-      run_on_tty "$BIN_PATH" connect --label "$CONNECT_LABEL"
-    else
-      run_on_tty "$BIN_PATH" connect
-    fi
+    run_on_tty "$BIN_PATH" "$@"
   else
-    if [ -n "$CONNECT_LABEL" ]; then
-      KINU_HOME="$KINU_HOME" "$BIN_PATH" connect --label "$CONNECT_LABEL"
-    else
-      KINU_HOME="$KINU_HOME" "$BIN_PATH" connect
-    fi
+    KINU_HOME="$KINU_HOME" "$BIN_PATH" "$@"
   fi
 }
 

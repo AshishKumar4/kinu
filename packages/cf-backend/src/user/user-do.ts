@@ -610,8 +610,12 @@ export class UserDO extends Agent<Env> {
     return this.terminals.openDeviceTerminal(caller, agentName, window, deviceId);
   }
 
-  registerDevice(caller: UserCaller, label?: string, replaces?: string): ReturnType<UserDevices['registerDevice']> {
-    return this.devices.registerDevice(caller, label, replaces);
+  issueDeviceJoin(caller: UserCaller): ReturnType<UserDevices['issueDeviceJoin']> {
+    return this.devices.issueDeviceJoin(caller);
+  }
+
+  registerDevice(caller: UserCaller, label?: string, replaces?: string, join?: string): ReturnType<UserDevices['registerDevice']> {
+    return this.devices.registerDevice(caller, label, replaces, join);
   }
 
   renameDevice(caller: UserCaller, deviceId: string, name: string): ReturnType<UserDevices['renameDevice']> {

@@ -394,6 +394,15 @@ export function initUserTables(sql: SqlExec): void {
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_device_connect_tickets_exp ON device_connect_tickets (expires_at, used_at)`);
 
+  // A device the browser asked to connect, issued before the machine registers: the machine claims this id, so the
+  // page that asked watches the one row it will become. Unclaimed past `expires_at`, it claims nothing.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS device_joins (
+      device_id  TEXT PRIMARY KEY,
+      expires_at INTEGER NOT NULL
+    )
+  `);
+
   sql.exec(`
     CREATE TABLE IF NOT EXISTS cli_agent_connect_tickets (
       ticket_hash    TEXT PRIMARY KEY,

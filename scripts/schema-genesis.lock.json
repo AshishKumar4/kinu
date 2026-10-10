@@ -581,6 +581,10 @@
     "cancel_claim TEXT",
     "cancel_outcome TEXT CHECK (cancel_outcome IN ('terminated', 'unknown'))"
   ],
+  "device_joins@packages/core/src/state/user-schema.ts": [
+    "device_id TEXT PRIMARY KEY",
+    "expires_at INTEGER NOT NULL"
+  ],
   "device_notice_pending@packages/core/src/state/user-schema.ts": [
     "agent_name TEXT PRIMARY KEY"
   ],
