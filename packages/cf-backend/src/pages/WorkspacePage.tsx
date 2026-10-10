@@ -7,13 +7,12 @@ import { FilledButton } from "@/components/ui/FilledButton";
 import {
   ArrowsClockwiseIcon, GitBranchIcon, GearIcon, ListIcon, UsersThreeIcon,
   WarningCircleIcon, PaperclipIcon,
-  ClockCounterClockwiseIcon,
 } from "@phosphor-icons/react";
 import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
-  isPlaceholderMission, ownerAsks, planSurface, summarizeRestorePlan,
+  isPlaceholderMission, ownerAsks, planSurface,
 } from "@kinu.run/core";
-import type { AlternateTakeSet, DiffAnchor, FileRestoreChange, PlanReview, Rpc, SignalCard, TakePickOutcome } from "@kinu.run/core";
+import type { PlanReview, Rpc, SignalCard } from "@kinu.run/core";
 import type { UIMessage } from "ai";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { useActorChat, useKinu } from "@/hooks/use-kinu";
@@ -26,25 +25,26 @@ import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { useAgentsNav } from "@/hooks/use-agents-nav";
 import { usePendingAttachments } from "@/hooks/use-pending-attachments";
 import { useFileDrop } from "@/hooks/use-file-drop";
+import { useWorkbenchSurfaces } from "@/hooks/use-workbench-surfaces";
+import { useTurnAnnotations } from "@/hooks/use-turn-annotations";
 import { decideAccountMemory, touchWorkspace } from "@/lib/user-api";
 import { describeError, useAsyncResource } from "@/hooks/use-async-resource";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { ConnectedModelPicker } from "@/components/ModelPicker";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Modal } from "@/components/ui/Modal";
-import { RevertTurnDialog, type DeviceRestorePlan } from "@/components/RevertTurnDialog";
+import { TurnRevert } from "@/components/RevertTurnDialog";
 import { ChatLiveTail, DeviceOfflineRow, HelperChatBase, MessageView, ModelFallbackRows, SteerBubble } from "@/components/MessageView";
 import { ProgrammaticTurnCard } from "@/components/ProgrammaticTurnCard";
 import { AttentionStack, type AttentionStackProps } from "@/components/AttentionStack";
 import { foldEventTurns, placeEvents, subordinateEventRow, type PlacedEvent } from "@/components/ChatEvents";
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
-import { cloudPlanes, filesFocusOf, hasComparableTakes, referencePrefixes, WORKSPACE_ROOT, type FilesFocus } from "@kinu.run/core";
+import { hasComparableTakes } from "@kinu.run/core";
 import { classifyProgrammaticTurn, liveTailRow, messageSignalId, messagesUpTo, threadLiveTail, turnRows } from "@kinu.run/core";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
-import type { ChangesFocus } from "@/components/surfaces/ChangesSurface";
 import { SlateInlineContext } from "@/components/slates/context";
 import { ChatSlates } from "@/components/slates/InlineSlate";
-import { SLATE_PREFIX, agentTitle, nestedAgent, type AgentLinkIds, type ForkNode, type PanelAgent, type SurfaceKind } from "@kinu.run/core";
+import { SLATE_PREFIX, agentTitle, nestedAgent, type AgentLinkIds, type ForkNode, type PanelAgent } from "@kinu.run/core";
 import { ViewOnlyBar } from "@/components/ViewOnlyBar";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { FileLinkContext } from "@/components/surfaces/shared";
@@ -66,16 +66,6 @@ import { useCarriedAttachments, useOpeningMessage } from "@/components/workspace
 
 /** The mission is shown as the standing brief, not sent as an opening message
  *  the agent would then try to carry out. */
-/** A fork's landing: the slate it opens on, and the namespaces it reaches, from `?slate=&reaches=`. */
-function forkLandingOf(search: URLSearchParams): { readonly slate: string; readonly reaches: readonly string[] } | null {
-  const slate = search.get("slate");
-  const reaches = search.get("reaches");
-
-  if (slate === null || reaches === null) return null;
-
-  return { slate, reaches: reaches.split(",").filter((namespace) => namespace !== "") };
-}
-
 export function EmptyConversation({ mission }: { mission: string }) {
   const brief = isPlaceholderMission(mission) ? null : mission.trim();
 
@@ -835,9 +825,11 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
 
   const reviewed = useReviewedPlan(subName, { plan: state.activePlan, rpc: state.rpc });
   const visiblePlan = reviewed.plan;
-  const [surface, setSurface] = useState<SurfaceKind>("Work");
-  const [changesFocus, setChangesFocus] = useState<ChangesFocus | null>(null);
-  const workbench = useRef<WorkbenchHandle | null>(null);
+
+  // Which surface the inspector shows, and every way the chat, the stack and a landing ask for one.
+  const { workbench, surface, setSurface, show, filesFocus, fileLinks, changesFocus, openChangeNote, forkLanding, forkLandingOpened } = useWorkbenchSurfaces({
+    executors: state.executors, slates: state.slates, search: location.search,
+  });
 
   const { shownAgent, rosterLoaded, panel: agentsPanel } = useAgentsPanel({ listed: state.workspaceAgents, live, workspace: agentId, node: shownNode, subName, workbench });
   const agentsNav = useAgentsNav();
@@ -861,13 +853,6 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
     if (agentId !== undefined) publish({ workspace: agentId, ...agentsPanel, actions: chatActions });
   }, [agentId, agentsPanel, chatActions, publish]);
 
-  // A surface opened from the chat, a note or a landing is brought into view; a collapsed inspector or a phone
-  // showing the chat would hide it.
-  const show = useCallback((next: SurfaceKind): void => {
-    setSurface(next);
-    workbench.current?.reveal();
-  }, []);
-
   // The stack answers through the workspace's own calls on every pane: one queue, whichever pane asks. The account's
   // memory proposals come from the owner's user object, on the roster's socket the shell already holds.
   const { rpc: workspaceRpc, resolveConsent, refreshPendingActions } = state;
@@ -884,41 +869,6 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
     decideMemory: async (id, decision) => { await decideAccountMemory(id, decision); },
   }), [workspaceRpc, resolveConsent, refreshPendingActions, show]);
 
-  // A chat file link, or a `?file=<reference>` landing, opens Files on the file it names.
-  const [filesFocus, setFilesFocus] = useState<FilesFocus | null>(null);
-
-  const openFile = useCallback((reference: string): void => {
-    const focus = filesFocusOf(reference);
-
-    if (focus === null) return;
-    setFilesFocus((prior) => ({ ...focus, nonce: (prior?.nonce ?? 0) + 1 }));
-    show("Files");
-  }, [show]);
-
-  // Every prefix, and each live machine's own name: `<name>://x` opens that machine's file in Files.
-  const machines = useMemo(() => state.executors.flatMap((executor) => executor.mounts ?? []), [state.executors]);
-  const fileLinks = useMemo(() => ({ roots: referencePrefixes(cloudPlanes(WORKSPACE_ROOT), machines), open: openFile }), [machines, openFile]);
-  const [landingFile, setLandingFile] = useState<string | null>(() => new URLSearchParams(location.search).get("file"));
-
-  useEffect(() => {
-    if (landingFile === null) return;
-    openFile(landingFile);
-    setLandingFile(null);
-  }, [landingFile, openFile]);
-
-  const openChangeNote = useCallback((source: string, anchor: DiffAnchor | undefined): void => {
-    show("Changes");
-    setChangesFocus((prior) => ({ source, path: anchor?.path ?? null, nonce: (prior?.nonce ?? 0) + 1 }));
-  }, [show]);
-
-  // `?slate=<id>&reaches=<namespaces>` is a fork's landing; the jump waits until the listing names the slate.
-  const [landingSlate, setLandingSlate] = useState<string | null>(() => new URLSearchParams(location.search).get("slate"));
-  const [forkLanding, setForkLanding] = useState(() => forkLandingOf(new URLSearchParams(location.search)));
-  useEffect(() => {
-    if (landingSlate === null || !state.slates.some((slate) => slate.id === landingSlate)) return;
-    show(`${SLATE_PREFIX}${landingSlate}`);
-    setLandingSlate(null);
-  }, [landingSlate, state.slates, show]);
   const ui = useConversationUiState(`${agentId ?? ""}/main`);
   const setChatMode = ui.setMode;
   usePlanApprovedMode(subName === undefined ? state.activePlan : null, setChatMode);
@@ -985,19 +935,10 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
   // Identity-stable handlers so memo(MessageView) holds across stream ticks.
   const onForkMessage = useCallback((mid: string) => setForkFor(mid), []);
 
-  // Committed locally only after the RPC succeeds, so the toggle never misreports scoring input.
-  const [feedbackByMessage, setFeedbackByMessage] = useState<Record<string, 'positive' | 'negative'>>({});
-  useEffect(() => {
-    if (state.connectionStatus !== "connected") return;
-    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
-      const loaded = yield* Effect.promise(async () => state.rpc<Record<string, 'positive' | 'negative'>>('listTurnFeedback'));
-      setFeedbackByMessage(loaded);
-      reportSide("feedback", null);
-    }), sideFailed("feedback"))));
-  }, [state.connectionStatus, state.rpc, reportSide, sideFailed]);
-
-  // Refreshed when a turn settles: a settled /branch redirect may have produced a fresh set.
-  const [takesByTurn, setTakesByTurn] = useState<Record<string, AlternateTakeSet>>({});
+  const { feedback: feedbackByMessage, rate: onMessageFeedback, takes: takesByTurn, pickTake: onPickTake } = useTurnAnnotations({
+    rpc: state.rpc, connected: state.connectionStatus === "connected", live,
+    settledBranches: state.branchRuns.filter((b) => b.status === "settled").length, report: reportSide,
+  });
 
   // A signal that started a turn renders on its message; one spliced into a running turn renders inside the answer
   // that read it, at the step that read it, and is kept there once seen. Each card renders once.
@@ -1037,62 +978,9 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
   const mainLiveRow = liveTailRow({ rows: threadMessages, liveness: state.liveness });
   const providerWait = useProviderWaitNotice(state.providerWait);
 
-  const settledBranchCount = state.branchRuns.filter((b) => b.status === "settled").length;
-  useEffect(() => {
-    if (state.connectionStatus !== "connected" || live) return;
-    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
-      const loaded = yield* Effect.promise(async () => state.rpc<Record<string, AlternateTakeSet>>('listAlternateTakes'));
-      setTakesByTurn(loaded);
-      reportSide("takes", null);
-    }), sideFailed("takes"))));
-    // settledBranchCount: a branch settling after the turn ended persists a fresh set.
-  }, [state.connectionStatus, live, state.rpc, settledBranchCount, reportSide, sideFailed]);
-
-  const onPickTake = useCallback(async (takeId: string, nodeId: string): Promise<TakePickOutcome> => {
-    const result = await state.rpc<TakePickOutcome>('pickAlternateTake', [takeId, nodeId]);
-    const turnId = result.set.turnId;
-
-    if (turnId) setTakesByTurn((prev) => ({ ...prev, [turnId]: result.set }));
-
-    return result;
-  }, [state.rpc]);
-
-  // Device file restore exists only while a device is connected; overwriting real files gets
-  // its own confirm, preceded by a safety snapshot.
+  // A turn being reverted, and what the revert said once done.
   const [revertFor, setRevertFor] = useState<string | null>(null);
   const [restoreNotice, setRestoreNotice] = useState<string | null>(null);
-  const [restorePlan, setRestorePlan] = useState<DeviceRestorePlan | null>(null);
-  const [restoring, setRestoring] = useState(false);
-
-  const applyRestore = useCallback(() => detach(Effect.gen(function* () {
-    if (!restorePlan) return;
-    setRestoring(true);
-
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      for (const entry of restorePlan.entries) {
-        yield* Effect.promise(async () => state.rpc('restoreFileCheckpoint', [entry.dir, entry.id]));
-      }
-
-      setRestoreNotice(`Restored ${restorePlan.files.length} ${restorePlan.files.length === 1 ? "file" : "files"}. Run restore again to undo it.`);
-      setRestorePlan(null);
-    }), showing((chain) => {
-      setRestoreNotice(`Restore failed: ${chain}`);
-      setRestorePlan(null);
-    })), Effect.sync(() => {
-      setRestoring(false);
-    }));
-  })), [restorePlan, state.rpc]);
-
-  const onMessageFeedback = useCallback(async (mid: string, fb: 'positive' | 'negative' | null) => {
-    await state.rpc('setTurnFeedback', [mid, fb]);
-    setFeedbackByMessage((prev) => {
-      const next = { ...prev };
-
-      if (fb) next[mid] = fb; else delete next[mid];
-
-      return next;
-    });
-  }, [state.rpc]);
 
   const slateInline = useMemo(() => ({
     rpc: state.rpc,
@@ -1356,7 +1244,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
             rpc={state.rpc}
             workspace={agentId}
             forkLanding={forkLanding}
-            onForkLandingOpened={() => setForkLanding(null)}
+            onForkLandingOpened={forkLandingOpened}
           />
         )}
       />
@@ -1384,80 +1272,11 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
         // history resets with it, or an in-flight first page would restore the cleared messages.
         onClear={async () => { await state.clearConversation(); history.reset(); }} />
 
-      {revertFor !== null && <RevertTurnDialog
-        messageId={revertFor}
-        rpc={state.rpc}
-        onClose={() => setRevertFor(null)}
+      <TurnRevert messageId={revertFor} rpc={state.rpc} onClose={() => setRevertFor(null)}
         // Reset with the revert: an in-flight first page would otherwise restore the removed messages.
-        onReverted={history.reset}
-        onRestorePlan={setRestorePlan}
-      />}
-
-      {restorePlan && (
-        <RestoreFilesModal plan={restorePlan} busy={restoring}
-          onCancel={() => setRestorePlan(null)} onConfirm={applyRestore} />
-      )}
+        onReverted={history.reset} onNotice={setRestoreNotice} />
 
     </div>
     </FileLinkContext.Provider></SlateInlineContext.Provider>
-  );
-}
-
-const RESTORE_PREVIEW_LIMIT = 12;
-
-const RESTORE_MARK = {
-  modify: { mark: "~", tone: "p-warning" },
-  create: { mark: "+", tone: "p-success" },
-  delete: { mark: "-", tone: "p-danger" },
-} satisfies Record<FileRestoreChange["kind"], { mark: string; tone: string }>;
-
-function RestoreFilesModal({ plan, busy, onCancel, onConfirm }: {
-  plan: DeviceRestorePlan; busy: boolean; onCancel: () => void; onConfirm: () => void;
-}) {
-  const { modified, created, deleted } = summarizeRestorePlan(plan.files);
-
-  const counts = [
-    modified ? `${modified} modified` : null,
-    created ? `${created} recreated` : null,
-    deleted ? `${deleted} removed` : null,
-  ].filter(Boolean).join(", ");
-
-  const shown = plan.files.slice(0, RESTORE_PREVIEW_LIMIT);
-
-  return (
-    <Modal
-      title="Restore device files to before this turn"
-      icon={<ClockCounterClockwiseIcon size={18} className="p-warning" />}
-      onClose={onCancel}
-      busy={busy}
-      footer={<>
-        <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
-        <FilledButton onClick={onConfirm} disabled={busy}>
-          {busy ? <><Loader size="sm" /><span className="ml-1">Restoring…</span></> : `Restore ${plan.files.length} file${plan.files.length === 1 ? "" : "s"}`}
-        </FilledButton>
-      </>}
-    >
-      <div className="space-y-2">
-        <p className="text-xs p-text-2 leading-relaxed">
-          This changes files under <span className="font-mono p-text">{plan.dirs.join(", ")}</span> on your
-          device: {counts}. Kinu creates a safety snapshot first. Restore again to undo this change.
-        </p>
-        <ul className="rounded-md border p-border p-elevated max-h-52 overflow-y-auto p-annotation">
-          {shown.map((f) => {
-            const { mark, tone } = RESTORE_MARK[f.kind];
-
-            return (
-              <li key={`${f.kind}:${f.path}`} className="flex gap-2 px-2.5 py-1 border-b p-border last:border-0">
-                <span className={`shrink-0 ${tone}`}>{mark}</span>
-                <span className="p-text-2 truncate" title={f.path}>{f.path}</span>
-              </li>
-            );
-          })}
-          {plan.files.length > shown.length && (
-            <li className="px-2.5 py-1 p-text-3">… {plan.files.length - shown.length} more</li>
-          )}
-        </ul>
-      </div>
-    </Modal>
   );
 }
