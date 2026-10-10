@@ -435,6 +435,24 @@ describe("a main turn's workspace facts outlive the activation that gathered the
  */
 // Core's `creditedTurnId` decides; this pins that the orchestrator hands its verdict to the branch settle.
 describe('mid-turn captures are credited to the turn only when it answered', () => {
+  test("a steer branch starts from main's conversation as main's own isolate keeps it", async () => {
+    const inherited: string[] = [];
+
+    const harness = orchestratorHarness(undefined, {
+      heads: async (_task, context) => {
+        inherited.push(JSON.stringify(context));
+
+        return { status: 'completed', summary: 'the branch answer' };
+      },
+    });
+
+    turns(harness).open('u-before');
+    await turns(harness).settle({ messageId: 'a-before', text: 'The ledger keeps integer cents.' });
+    await branchDuring(harness, 'u-branch-context', 'a-branch-context', 'try the other library');
+
+    expect(inherited).toEqual([expect.stringContaining('The ledger keeps integer cents.')]);
+  });
+
   test('a completed turn credits its branch take set to its answer', async () => {
     const harness = orchestratorHarness(undefined, { heads: headsAnswering({ status: 'completed', summary: 'the branch answer' }) });
     await branchDuring(harness, 'u-credit', 'a-credit', 'try the other library');

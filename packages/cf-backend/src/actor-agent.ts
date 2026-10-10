@@ -121,7 +121,6 @@ import {
   type MctsSearchStore, readSearchTree, isSteerBranchRunId,
   EventLog,
   type ActiveSkillSet,
-  inheritedContextFromTranscript,
   type PlanDecisionOutcome,
   type PlanReview, type ReviewAnnotation,
   type PlanReviewDecision, type PlanReviewResult, type ReplyToCommentToolDeps, type SubmitPlanToolDeps, type AskingAgent, type OwnerAnswer,
@@ -3905,15 +3904,14 @@ export abstract class ActorAgent extends Agent<Env> {
    * per child, so a shared seat would give a whole wave one claim ledger and one loop pointer.
    */
 
-  /**
-   * An actor's recent conversation (last N messages), handed to each spawned head as context.
-   * A hosted actor hiring its own child must pass its own transcript, not the workspace root's.
-   */
+  /** An actor's transcript as this object's stores bind it. */
   protected abstract transcriptFor(actor: ActorHandle): SessionTranscript;
 
-  protected readInheritedContext(actor: ActorHandle = this.actorHandle()): Promise<SerializedMessage[]> {
-    return inheritedContextFromTranscript(this.transcriptFor(actor));
-  }
+  /**
+   * An actor's recent conversation (last N messages), handed to each spawned head as context.
+   * A hosted actor hiring its own child must pass its own conversation, not the workspace root's.
+   */
+  protected abstract readInheritedContext(actor?: ActorHandle): Promise<SerializedMessage[]>;
 
   /**
    * Rebuilds AI-SDK tools from MCP descriptors; cache invalidates on descriptor content hash, and a

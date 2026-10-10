@@ -2373,9 +2373,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return new AgentStoreBroker(() => this.agentCalls(actorId), () => this.agentSnapshot(actorId));
   }
 
+  /** Every agent's conversation is its own isolate's, main's included (D9). */
   protected override async readInheritedContext(actor: ActorHandle = this.actorHandle()): Promise<SerializedMessage[]> {
-    if (actor.parentActorId === null) return await super.readInheritedContext(actor);
-
     return await this.agentStores(actor.actorId).inheritedContext();
   }
 

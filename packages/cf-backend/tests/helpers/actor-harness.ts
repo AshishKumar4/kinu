@@ -651,7 +651,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
         return {
           id: input.id,
           run: async (): Promise<HeadReport> => {
-            const report = await heads(input.task);
+            const report = await heads(input.task, input.inheritedContext);
 
             const reported: HeadReport = {
               id: input.id, status: report.status, summary: report.summary,
@@ -1597,7 +1597,7 @@ export interface HarnessActorWorld {
   cut?: readonly [TerminalEffectName, TerminalEffectPhase];
   /** The platform steer-branch heads run on: each head's report, when it lands. A promise that never
    *  settles is a head still running. Unset, branching needs the production head runtime. */
-  heads?: (task: string) => Promise<ScriptedHeadReport>;
+  heads?: (task: string, inherited: HeadInput['inheritedContext']) => Promise<ScriptedHeadReport>;
   /** The clock every actor's job runner detaches on, the box's commands too when a suite times them by it. Unset,
    *  the real one. */
   jobClock?: Clock;
