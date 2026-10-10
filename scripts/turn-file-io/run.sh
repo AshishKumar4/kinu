@@ -8,5 +8,5 @@ git diff --binary 26244c765 HEAD -- scripts/turn-file-io.ts scripts/turn-file-io
 git switch --detach "$target_sha"
 git apply "$probe_dir/probes.patch"
 bun install --frozen-lockfile
-bun run --cwd packages/cf-backend build
+(cd packages/cf-backend && bunx vite build)
 bun scripts/turn-file-io.ts --sha="$target_sha" --shape="$shape" --mode="$mode"
