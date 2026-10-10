@@ -129,7 +129,7 @@ export interface HostedWorkspace {
   box(scope: string): HostedBox;
   /**
    * Each exposed workspace port with the job whose process listens on it, by the exec id that process carries, and every
-   * job with a live process here: the jobs this read answers for.
+   * job with a live process here.
    */
   serving(): Promise<WorkspaceServing>;
   /** Answered by the hosted runtime (host ops need it), for every name this object is opened under; a

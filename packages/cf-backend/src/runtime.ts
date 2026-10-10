@@ -590,7 +590,7 @@ export function createCFRuntime(
       const boxed = () => sandbox ??= box === null ? Promise.resolve([]) : box.handle.getExposedPorts(box.suffix).then((rows) => rows.map((row) => row.port));
 
       // A job's id names both planes: the box's listener carries it in its environment, a workspace process as its exec
-      // id. Each plane is asked for its own exposed ports only; a box this activation did not use answers for no job.
+      // id. Each plane is asked for its own exposed ports only.
       return {
         exposedPorts: async () => [...await boxed(), ...(await served()).held.map((held) => held.port)],
         holders: async (ports) => {
@@ -599,7 +599,13 @@ export function createCFRuntime(
 
           return listened === null ? null : [...listened, ...(await served()).held.filter((held) => ports.includes(held.port))];
         },
-        answersFor: async () => (box === null ? (await served()).jobs : null),
+        // Unread, the box's facts stand: the workspace answers for its exposed ports and the jobs it runs a process for.
+        answersFor: async () => {
+          if (box !== null) return null;
+          const { held, jobs } = await served();
+
+          return (fact) => jobs.has(fact.job) || held.some((port) => port.port === fact.port);
+        },
       };
     },
   };

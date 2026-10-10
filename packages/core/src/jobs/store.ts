@@ -2,6 +2,7 @@
 // and on a lease `epoch` that `reclaim` bumps, which fences zombie executors (agent-core SPEC §5.3 / §10.3).
 // Rows are actor-owned; `*InWorkspace` reads are machine-wide (cap, wake instant) by contract.
 
+import type { ServingScope } from './serving';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { WorkMode } from '../types/turn';
@@ -257,13 +258,13 @@ export class BackgroundJobStore {
   }
 
   /**
-   * Writes only changed rows: facts announce once. `scope` names the running jobs `holders` answers for (null: all); a
-   * running job outside it keeps its row, since nothing read its plane.
+   * Writes only changed rows: facts announce once. `scope` says which recorded facts `holders` answers for (null: all);
+   * a running job's fact outside it is kept, since nothing read its plane. A job no longer running loses its fact.
    */
-  recordServingInWorkspace(holders: ReadonlyMap<string, number>, scope: ReadonlySet<string> | null = null): void {
+  recordServingInWorkspace(holders: ReadonlyMap<string, number>, scope: ServingScope | null = null): void {
     this.actor.assertCurrent();
     const running = this.sql<{ actor_id: string; id: string }>`SELECT actor_id, id FROM background_jobs WHERE status='running'`;
-    const unread = new Set(running.flatMap((job) => (scope === null || scope.has(job.id) ? [] : [`${job.actor_id}/${job.id}` as const])));
+    const live = new Set(running.map((job) => `${job.actor_id}/${job.id}` as const));
 
     const wanted = new Map(running.flatMap((job) => {
       const port = holders.get(job.id);
@@ -276,7 +277,9 @@ export class BackgroundJobStore {
       const kept = wanted.get(key);
 
       if (kept?.port === row.port) wanted.delete(key);
-      else if (kept === undefined && !unread.has(key)) void this.sql`DELETE FROM background_job_serves WHERE actor_id=${row.actor_id} AND job_id=${row.job_id}`;
+      else if (kept === undefined && (!live.has(key) || scope === null || scope({ job: row.job_id, port: row.port }))) {
+        void this.sql`DELETE FROM background_job_serves WHERE actor_id=${row.actor_id} AND job_id=${row.job_id}`;
+      }
     }
 
     for (const job of wanted.values()) {

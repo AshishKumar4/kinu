@@ -1,10 +1,13 @@
 import type { BackgroundJobStore } from './store';
 
+/** A recorded serving fact, as a read decides whether it answers for it. */
+export type ServingScope = (fact: { readonly job: string; readonly port: number }) => boolean;
+
 export interface PortHolders {
   exposedPorts(): Promise<readonly number[]>;
   holders(ports: readonly number[]): Promise<readonly { readonly port: number; readonly stamp: string | null }[] | null>;
-  /** The running jobs whose serving this read answers for; null: every job. A job outside it keeps its record. */
-  answersFor(): Promise<ReadonlySet<string> | null>;
+  /** Which recorded serving facts this read answers for; null: all. A running job's fact outside it is kept. */
+  answersFor(): Promise<ServingScope | null>;
 }
 
 export async function recordServingJobs(store: BackgroundJobStore, runtime: PortHolders): Promise<void> {
