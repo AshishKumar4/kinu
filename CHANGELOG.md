@@ -25,6 +25,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **Core store and compaction comments describe the current data model.** Removed the deleted recorder-cache claim and the lossless-binary-text claim; the diagnostic transcript still uses size placeholders for binary bodies.
 - **A failed Files listing ends its product flow with evidence.** A visible listing error cannot count as settled, even when directory markup is present. The written-file row retains the listing RPC reply and its arguments alongside the visible error and navigation state in its failure report, with secrets redacted.
 - **The hire-approval fixture proves execution with stdout.** Its harmless gated command now writes an explicit marker after re-issue, and the script recognizes that output line. A Git implementation's error wording, or a refusal quoting the command, no longer stands in for execution.
 - **Fast approval decisions are both acknowledged.** The scripted approval flow reads the current unanswered wakes together and matches their own fixture commands, so immediate Deny no longer erases the Approve acknowledgment. Earlier answered decisions and unrelated commands are not counted.

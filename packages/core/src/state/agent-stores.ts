@@ -46,8 +46,7 @@ export function createAgentStores(sql: () => SqlExecutor, actor: () => ActorHand
   let appData: AppDataStore | undefined;
   let history: SessionHistory | undefined;
 
-  // Members reach siblings through `bundle` to keep one memo per store; a second recorder
-  // would be a second `nextIndex` cache and duplicate event indexes.
+  // Members reach siblings through `bundle` so each actor owns one instance of every store.
   const bundle: AgentStores = {
     get config(): AgentConfigStore {
       return actor().config;
