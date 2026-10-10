@@ -80,7 +80,8 @@ export interface SandboxPreviewExposures {
   publish(port: number, token: string): Promise<void>;
   /**
    * Keeps an exposure a listing read at `observedAt` alive: written only when missing or past half-life, at its own
-   * generation (or `observedAt` when it was never published here), so a withdrawal since outranks it.
+   * generation (or `observedAt` when it was never published here). A port withdrawn here is carried back only by a
+   * publish: no listing, however late, vouches for it again.
    */
   refresh(port: number, token: string, observedAt: number): Promise<void>;
   /** Outranks every generation of this port so far; only a later publish exposes it again. */
@@ -134,8 +135,8 @@ export function sandboxPreviewExposures(
       const same = held !== null && timingSafeEqual(held.tokenHash, await sha256Hex(token));
       const generation = same ? held.publishedAt : observedAt;
 
-      // Withdrawn since the authority it would carry: re-observation vouches for nothing.
-      if (withdrawn !== null && generation <= withdrawn) return;
+      // Withdrawn here: only a record a later publish made is kept alive; re-observation vouches for nothing.
+      if (withdrawn !== null && !(same && held.publishedAt > withdrawn)) return;
 
       if (same && (held.refreshedAt ?? held.publishedAt) > Date.now() - REFRESH_AFTER_MS) return;
       await write(port, token, generation);

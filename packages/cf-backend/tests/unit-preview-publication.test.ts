@@ -196,12 +196,14 @@ describe('a withdrawn port stays withdrawn, whatever the container still reports
   test('a listing that read the container before the withdrawal does not vouch for the port after it', async () => {
     const kv = makeKv();
     const { box } = portBox();
+    const reached = Promise.withResolvers<void>();
     const read = Promise.withResolvers<void>();
     const answered = box.getExposedPorts.bind(box);
 
     Object.assign(box, {
       getExposedPorts: async (hostname: string) => {
         const rows = await answered(hostname);
+        reached.resolve();
         await read.promise;
 
         return rows;
@@ -210,7 +212,7 @@ describe('a withdrawn port stays withdrawn, whatever the container still reports
     await sandboxPreviewExposures(kv, SANDBOX_ID).publish(PORT, TOKEN);
 
     const listing = lane(kv, box).getExposedPorts(SUFFIX);
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await reached.promise;
     await lane(kv, box).unexposePort(PORT);
     read.resolve();
     await listing;
@@ -222,12 +224,14 @@ describe('a withdrawn port stays withdrawn, whatever the container still reports
     const kv = makeKv();
     const { box } = portBox();
     await sandboxPreviewExposures(kv, SANDBOX_ID).publish(PORT, TOKEN);
+    setSystemTime(new Date('2026-03-01T12:00:00.000Z'));
     await lane(kv, box).unexposePort(PORT);
-    await new Promise((resolve) => setTimeout(resolve, 2));
+    setSystemTime(new Date('2026-03-01T12:00:01.000Z'));
 
     await lane(kv, box).exposePort(PORT, { hostname: SUFFIX });
 
     expect(await sandboxPreviewExposed(kv, claim)).toBe(true);
+    setSystemTime();
   });
 });
 
