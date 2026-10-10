@@ -16,7 +16,7 @@ import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { ComposedFacetManager, HostedRuntime, HostedRuntimeOptions, HostedRuntimeTask, HostedSession, HostedSessionScope, WorkerRecipe } from '@nimbus-sh/worker/workspace-host';
-import { clearPortCapability, readPortReservation, readPortReservationByOwner, releasePortReservation } from '@nimbus-sh/worker/port-capability';
+import { clearPortCapability, listPortReservations, readPortReservation, readPortReservationByOwner, releasePortReservation } from '@nimbus-sh/worker/port-capability';
 import type { DurableApps } from '@kinu.run/core/slates';
 import * as v from 'valibot';
 import type { NimbusTasks } from './nimbus-tasks';
@@ -122,6 +122,8 @@ export interface HostedWorkspace {
   readonly bundle: WorkspaceBundle;
   /** One agent's view: a named call runs in the runtime's named shell, keyed by `scope` and the name. */
   box(scope: string): HostedBox;
+  /** Each exposed workspace port and the job whose process listens on it, by the exec id that process carries. */
+  servingPorts(): Promise<readonly { readonly port: number; readonly stamp: string | null }[]>;
   /** Answered by the hosted runtime (host ops need it), for every name this object is opened under; a
      *  sibling is never a Kinu workspace, so nothing here claims an owner or writes a transcript. The envelope
      *  is a hosted process's own data: Nimbus's dispatcher is the one place that refuses an op it does not serve. */
@@ -331,12 +333,25 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
     session: async (scope) => (await runtime()).session(scope),
     box: (scope) => ({
       ...workspaceBox({
-        runtime, ports: portRegistry, ctx: deps.ctx, scope, previewUrl: deps.previewUrl, previewGates,
+        runtime, ports: portRegistry, ctx: deps.ctx, scope, previewUrl: deps.previewUrl, previewGates, exposed: deps.onPortsChanged,
         mountTable: (mounts, principal) => bundle.mountTable(mounts, principal),
         namespace: (principal) => bundle.namespace(principal),
       }),
       store: (plane) => bundle.files(plane),
     }),
+    // A listing says which job serves a port; it is no authority over the port's exposure.
+    servingPorts: async () => {
+      const exposed = [...await listPortReservations(deps.ctx)].flatMap(([port, held]) => (held.capability === null ? [] : [port]));
+
+      if (exposed.length === 0) return [];
+      const { processes } = await bundle.session();
+
+      return exposed.map((port) => {
+        const listener = portRegistry.get(port);
+
+        return { port, stamp: listener === undefined ? null : processes.get(listener.pid)?.execId ?? null };
+      });
+    },
     facetManager: async () => (await compose()).facets,
     ports: async () => (await compose()).ports,
     terminal: async () => {
@@ -466,6 +481,8 @@ function workspaceBox(deps: {
   scope: string;
   previewUrl(port: number, capability: string): Promise<WorkspacePreviewUrl>;
   previewGates(port: number, handle: string): Promise<PreviewGates>;
+  /** An exposure changed which ports are exposed; a withdrawal is the registry's own move. */
+  exposed: (() => void) | undefined;
   mountTable: NonNullable<NimbusSandboxHandle['mountTable']>;
   namespace: NonNullable<NimbusSandboxHandle['namespace']>;
 }): NimbusSandboxHandle {
@@ -515,6 +532,8 @@ function workspaceBox(deps: {
         }
 
         const gates = await deps.previewGates(port, exposed.capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH));
+
+        deps.exposed?.();
 
         return { port: exposed.port, pid: exposed.pid, capability: exposed.capability, url: answer.url, route: routeCheck(gates) };
       },

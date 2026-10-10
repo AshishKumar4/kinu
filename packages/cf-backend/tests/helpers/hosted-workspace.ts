@@ -110,6 +110,7 @@ export async function hostedWorkspace(
     },
     holdLane: (body) => body(),
     workspaceBox: (shellId) => workspace.box(shellId),
+    workspaceServing: () => workspace.servingPorts(),
     homeHost: () => workspace.bundle.privileged()
       .then((privileged) => ({ ...privileged, sql: ctx.storage.sql })),
     sql,

@@ -547,7 +547,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         this.broadcastToActor(null, JSON.stringify({ type: SLATES_CHANGED_EVENT, ids }));
         this.overviewChanged();
       },
-      onPortsChanged: () => { this.liveReadsMoved(['getExposedPorts', 'listSlates']); },
+      onPortsChanged: () => {
+        this.liveReadsMoved(['getExposedPorts', 'listSlates']);
+        this.detachOwned(Effect.promise(() => this.servingMoved()));
+      },
       ensureSlate: (owner) => this.slates.ensureDurable(owner),
       slateInvocation: (port, socket) => this.slates.slateInvocation(port, socket),
       ...(this.pictureCapture() !== null && {
@@ -587,6 +590,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       camera: () => browserCamera(browser),
     };
+  }
+
+  protected workspaceServing(): ReturnType<HostedWorkspace['servingPorts']> {
+    return this.hostedWorkspace().servingPorts();
   }
 
   protected workspaceBox(shellId: string): HostedBox {
@@ -1092,6 +1099,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ownerUserId: () => this.getOwnerUserId(),
       capabilityToken: () => this.workspaceCapabilityToken(),
       workspaceBox: (shellId) => this.workspaceBox(shellId),
+      workspaceServing: () => this.workspaceServing(),
       homeHost: () => this.facetHomeHost(),
       homes: this.actorHomes,
       // The root's durable program is always readable because the root is this runtime;

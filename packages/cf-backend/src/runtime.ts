@@ -74,6 +74,8 @@ export interface CFRuntimeAccess {
   /** One box per workspace: a child composing its own gets a second, empty filesystem
      *  (tests/unit-head-fork.test.ts). Actors are separated by `shellId` and credential. */
   workspaceBox(shellId: string): HostedBox;
+  /** Each exposed workspace port and the job whose process listens on it (`HostedWorkspace.servingPorts`). */
+  workspaceServing(): Promise<readonly { readonly port: number; readonly stamp: string | null }[]>;
   /** Absent for facets without a budget ledger; the `workspace` provider then uses a private ledger. */
   readonly acc?: () => Pick<TurnAccumulator, 'files' | 'context'>;
   getCliCwdForDevice?(): string | null;
@@ -209,9 +211,11 @@ export type CFRuntime = AgentRuntime & {
   vectorStore: import("@kinu.run/core").VectorStore;
   startupWork: Promise<void>;
   sandboxHandle: SandboxHandle | null;
-  /** Who holds the box's exposed ports, read without the executor's touch; null until this activation used its box:
-   *  a call activates the box's object, and only real use keeps a box alive (D56). */
-  sandboxPortHolders(): PortHolders | null;
+  /**
+   * Which job holds each exposed port, the workspace's and the box's, read without the executor's touch. The box is read
+   * only once this activation used it: a call activates the box's object, and only real use keeps a box alive (D56).
+   */
+  portHolders(): PortHolders;
 };
 
 /** Every runtime this backend builds carries a vector store (noop when unbound). */
@@ -578,14 +582,22 @@ export function createCFRuntime(
     deviceTransport,
     vectorStore,
     sandboxHandle,
-    sandboxPortHolders: () => {
-      const handle = sandboxHandle;
+    portHolders: () => {
+      const box = hooks.boxUse.used && previewSuffix !== undefined && sandboxHandle !== null ? { handle: sandboxHandle, suffix: previewSuffix } : null;
+      let workspace: ReturnType<CFRuntimeAccess['workspaceServing']> | undefined;
+      const served = () => workspace ??= access.workspaceServing();
 
-      if (handle === null || !hooks.boxUse.used || previewSuffix === undefined) return null;
-
+      // A job's id names both: the box's listener carries it in its environment, the workspace's process as its exec id.
       return {
-        exposedPorts: async () => (await handle.getExposedPorts(previewSuffix)).map((row) => row.port),
-        holders: (ports) => handle.portListeners(JOB_STAMP_ENV, ports),
+        exposedPorts: async () => [
+          ...box === null ? [] : (await box.handle.getExposedPorts(box.suffix)).map((row) => row.port),
+          ...(await served()).map((held) => held.port),
+        ],
+        holders: async (ports) => {
+          const boxed = box === null ? [] : await box.handle.portListeners(JOB_STAMP_ENV, ports);
+
+          return boxed === null ? null : [...boxed, ...(await served()).filter((held) => ports.includes(held.port))];
+        },
       };
     },
   };

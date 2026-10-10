@@ -24,7 +24,7 @@ import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { flight, KinuError, settle, type AgentTracing } from '@kinu.run/core/obs';
 import { Cause, Effect } from 'effect';
 import { createCFRuntime, type CFRuntime, type CFRuntimeHooks, type WorkspaceBoxUse } from './runtime';
-import type { HostedBox } from './workspace-host';
+import type { HostedBox, HostedWorkspace } from './workspace-host';
 import type { LiveRead, TemporaryAgentPort } from '@kinu.run/core';
 
 /** The root agents-SDK members a hosted actor's runtime borrows; projected from `Agent` so upstream drift fails to compile. */
@@ -50,6 +50,7 @@ export interface WorkspaceHostSeams {
   ownerUserId(): string | null;
   capabilityToken(): string | null;
   workspaceBox(shellId: string): HostedBox;
+  workspaceServing(): ReturnType<HostedWorkspace['servingPorts']>;
   /** Root-owned uid-0 view, principal registry and uid table, so homes are provisioned in this isolate. */
   homeHost(): Promise<NodeHomeHost>;
   readonly homes: HostedActorHomes;
@@ -235,6 +236,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         ctx: seams.ctx,
         holdLane: (body) => seams.holdLane(body),
         workspaceBox: (shellId) => seams.workspaceBox(shellId),
+        workspaceServing: () => seams.workspaceServing(),
       }, {
         actor: bound.handle,
         // Not this actor's name: a self-named child derives a second, empty filesystem.

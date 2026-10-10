@@ -29,6 +29,8 @@ export interface NimbusExecOptions {
   cred?: VfsCred;
   /** A named shell, whose directory and exported variables last between the calls naming it; absent keeps nothing. */
   name?: string;
+  /** The job a call runs as: every process it starts, and theirs, carry it, and a port's listener reports it. */
+  execId?: string;
 }
 
 type NimbusRunCodeOptions = NimbusExecOptions & {
@@ -59,6 +61,8 @@ export interface NimbusPortInfo {
   pid?: number;
   registeredAt?: number;
   capability?: string;
+  /** The job whose process listens (`NimbusExecOptions.execId`). */
+  execId?: string;
 }
 
 /** `startProcess` result (SDK ≥0.2.0): the process is still running, so no exit code or output; read `logs`, stop via `killProcess`. */
@@ -523,7 +527,7 @@ async function sessionCall(
   command: string, options: ShellExecOptions, place: { readonly home: string; readonly cred?: VfsCred }, shellCwd: ((name: string) => Promise<string | null>) | undefined,
 ): Promise<SessionCall> {
   const { home, cred } = place;
-  const { name, stdin } = options;
+  const { name, stdin, job } = options;
   const kept = name === undefined ? null : await shellCwd?.(name) ?? null;
   const start = startIn(kept ?? home, options.cwd);
   // Absent option must be an absent key: the substrate reads `'cred' in options` to decide whether to inherit.
@@ -533,6 +537,8 @@ async function sessionCall(
   if (stdin !== undefined) execOptions.stdin = stdin;
 
   if (cred !== undefined) execOptions.cred = cred;
+
+  if (job !== undefined) execOptions.execId = job;
 
   // Absolute, so no `--`, which Nimbus's `cd` reads as a directory.
   return { run: moves ? `cd ${shellQuote(start)} || exit\n${command}` : command, execOptions, start };

@@ -201,7 +201,7 @@ import type { UserDO } from "./user/user-do";
 import type { McpToolSurface } from "./user/mcp-servers";
 import type { UserDoRpcMethod } from "./rpc-surface";
 import { isWorkspaceTerminal, WorkspaceTerminalInputSchema } from "@kinu.run/core";
-import type { HostedBox, WorkspaceTerminal } from "./workspace-host";
+import type { HostedBox, HostedWorkspace, WorkspaceTerminal } from "./workspace-host";
 import type { UserCaller } from "@kinu.run/core";
 import { sha256Hex } from '@kinu.run/core';
 import { attributeWorkspace, installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
@@ -580,6 +580,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** One Durable Object owns the workspace bytes: a top-level workspace DO serves from its own
    * storage; a facet actor returns a client onto that object. */
   protected abstract workspaceBox(shellId: string): HostedBox;
+  protected abstract workspaceServing(): ReturnType<HostedWorkspace['servingPorts']>;
 
   protected scaffoldPath(): string { return 'scaffold/agent.js'; }
 
@@ -2550,14 +2551,14 @@ export abstract class ActorAgent extends Agent<Env> {
   protected readonly boxUse: WorkspaceBoxUse = { used: false };
 
   /**
-   * Records which running job's command holds each exposed sandbox port when that can move (a port exposed or
-   * withdrawn, a job detached or settled), so a listing reads a row and never the box. Only a box this activation
-   * used is asked, and one that is down is not read: the next exposure reads again.
+   * Records which running job's command holds each exposed port, the workspace's or the box's, when that can move (a
+   * port exposed, listened on or withdrawn, a job detached or settled), so a listing reads a row and never the box. Only
+   * a box this activation used is asked, and one that is down is not read: the next exposure reads again.
    */
   protected async servingMoved(): Promise<void> {
-    const holders = this._rt?.sandboxPortHolders() ?? null;
+    const holders = this._rt?.portHolders();
 
-    if (holders !== null) await recordServingJobs(this.jobs, holders);
+    if (holders !== undefined) await recordServingJobs(this.jobs, holders);
   }
   protected get config(): AgentConfigStore {
     return this.stores.config;
@@ -2832,6 +2833,7 @@ export abstract class ActorAgent extends Agent<Env> {
         ctx: this.ctx,
         holdLane: (body) => this.holdLane(body),
         workspaceBox: (shellId) => this.workspaceBox(shellId),
+        workspaceServing: () => this.workspaceServing(),
         acc: () => this.acc,
         getCliCwdForDevice: () => this.getCliCwdForDevice(),
         getCheckpointMetaForDevice: () => this.getCheckpointMetaForDevice(),
