@@ -5,6 +5,7 @@ import { describe, expect, test } from 'bun:test';
 import { present, toolExecute } from '@kinu.run/test-utils';
 import { createDeviceTunnelExecutor, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import { DEVICE_ERRORS, DEVICE_UPDATE_REQUIRED, deviceFailure } from '../src/execution/device-protocol';
+import { renderThrownChain } from '../src/obs/index';
 import type { DeviceFleetEntry, DeviceStatus } from '../src/execution/device-status';
 import { DefaultExecutionRouter } from '../src/execution/router';
 import { buildBuiltinTools } from '../src/tools/builtins';
@@ -151,7 +152,12 @@ describe('a file on another machine', () => {
     const { transport, file } = fileToolOverTheFleet(undefined, false, OWNER_ALLOWS, older);
 
     await file({ op: 'read', path: '/pc/ashish@studio/home/notes.md' });
-    await expect(file({ op: 'write', path: '/pc/ashish@studio/home/notes.md', content: 'moved here' })).rejects.toThrow('kinu update');
+    const [refused] = await Promise.allSettled([file({ op: 'write', path: '/pc/ashish@studio/home/notes.md', content: 'moved here' })]);
+
+    if (refused.status !== 'rejected') throw new Error('expected the write to be refused');
+    // The chain the agent is shown, as a tool error renders it.
+    expect(refused.reason).toMatchObject({ code: 'unsupported' });
+    expect(renderThrownChain({ cause: refused.reason })).toContain('update the daemon (kinu update)');
     expect(transport.frames.filter((frame) => frame.method.startsWith('writeFile')).map((frame) => frame.method)).toEqual(['writeFileIfDigest']);
   });
 
