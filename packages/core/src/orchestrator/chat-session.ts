@@ -1691,6 +1691,9 @@ export class ChatSession {
     let queued = 0;
 
     for (const row of this.pendingSends.restoreTurns()) {
+      // The turn the last process left open re-opens under its announcement and retires the row as it settles.
+      if (this.announcementInFlight(row.id)) continue;
+
       if (this.announcementOnDisk(row.id)) {
         this.pendingSends.retireTurn(row.id);
         continue;
