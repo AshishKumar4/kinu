@@ -219,15 +219,19 @@ export interface EgressTlsTarget {
   readonly port: number;
 }
 
+/** A TLS socket's plaintext ends, as the program holds them: what it writes goes to the server, what it reads came back. */
+export interface EgressTlsStreams {
+  readonly readable: ReadableStream<Uint8Array>;
+  readonly writable: WritableStream<Uint8Array>;
+}
+
 /**
  * A workspace program's TLS socket, made here rather than in the isolate (NIMBUS-ASKS #37): the destination judged as a
- * request's host is, the session Kinu's own (`secureTransport: 'on'`, the host as its server name), and the plaintext
- * carried both ways as it is: `toServer` in, the answer out. Nimbus refuses a program's TLS socket under an egress until
- * it calls this; workerd carries no TLS over an entrypoint's `connect`.
+ * request's host is, the session Kinu's own (`secureTransport: 'on'`, the host as its server name), and its plaintext
+ * ends handed back for the program to write and read. Nimbus refuses a program's TLS socket under an egress until it
+ * calls this; workerd carries no TLS over an entrypoint's `connect`.
  */
-export function handleEgressTls(
-  target: EgressTlsTarget, toServer: ReadableStream<Uint8Array>, params: KinuEgressParams | undefined,
-): Promise<ReadableStream<Uint8Array>> {
+export function handleEgressTls(target: EgressTlsTarget, params: KinuEgressParams | undefined): Promise<EgressTlsStreams> {
   return settle(Effect.gen(function* () {
     const refused = params === undefined ? null : refusedHostname(target.hostname);
     const valid = Number.isInteger(target.port) && target.port > 0 && target.port <= 65_535;
@@ -243,12 +247,7 @@ export function handleEgressTls(
     const { connect } = yield* Effect.promise(() => import('cloudflare:sockets'));
     const upstream = connect({ hostname: target.hostname, port: target.port }, { secureTransport: 'on', allowHalfOpen: true });
 
-    const sent = settle(attempt({ doing: `carrying a TLS socket to ${target.hostname}`, otherwise: 'io' }, () => toServer.pipeTo(upstream.writable)).pipe(
-      Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('egress.socket_ended', failure, { seam: 'workspace-tls' }); })),
-    ));
-
-    // The answer ends after what was sent has gone: the program's reader holds the session open, nothing else does.
-    return upstream.readable.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({ flush: () => sent }));
+    return { readable: upstream.readable, writable: upstream.writable };
   }));
 }
 

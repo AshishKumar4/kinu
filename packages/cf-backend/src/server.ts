@@ -10,7 +10,7 @@ import { tracing, WorkerEntrypoint } from 'cloudflare:workers';
 import { adoptTracing } from '@nimbus-sh/platform/tracing.js';
 import {
   containerEventResolver, GitHubEgressRecorder, handleContainerEgress, handleContainerEvent, handleEgressConnect, handleEgressTls, parseEgressParams,
-  type EgressTlsTarget, type KinuEgressParams,
+  type EgressTlsStreams, type EgressTlsTarget, type KinuEgressParams,
 } from './egress/outbound';
 import { ORCHESTRATOR_AGENT_SLUG } from "@kinu.run/core";
 import { diagnostics, settle, toKinuError, type ErrorCode, type KinuError, settleLogged } from "@kinu.run/core/obs";
@@ -82,8 +82,8 @@ export class KinuEgress extends WorkerEntrypoint<Env, KinuEgressParams> {
   }
 
   /** A workspace program's TLS socket, the session made here (`handleEgressTls`). */
-  connectTls(target: EgressTlsTarget, toServer: ReadableStream<Uint8Array>): Promise<ReadableStream<Uint8Array>> {
-    return handleEgressTls(target, toServer, parseEgressParams(this.ctx));
+  connectTls(target: EgressTlsTarget): Promise<EgressTlsStreams> {
+    return handleEgressTls(target, parseEgressParams(this.ctx));
   }
 }
 
