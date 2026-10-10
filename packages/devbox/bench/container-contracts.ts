@@ -108,7 +108,7 @@ async function processes(box: Devbox<unknown>, container: Container): Promise<vo
     const faulted = new Processes({
       get running() { return container.running; },
       exec: async (argv: string[], options?: ContainerExecOptions) => {
-        if (!injected && argv[3] === 'devbox-process') {
+        if (!injected && (argv[3] === 'devbox-process' || argv[8] === 'devbox-process')) {
           injected = true;
 
           if (fault === 'lose') await container.exec(argv, options);
@@ -141,20 +141,30 @@ async function processes(box: Devbox<unknown>, container: Container): Promise<vo
   await native(container, 'kill -0 1');
   await new Files(container).remove(`${ROOT}/current`, { recursive: true });
 
-  // A real RUN request queued before confirmed stop can arrive in the successor kernel. Its atomic
-  // launch claim must neither replace an already restored id nor recreate a canceled old directory.
-  for (const sameId of [true, false]) {
+  // Queue each real mutating boundary before confirmed destroy. Delivery in the successor must not
+  // launch a canceled process, kill its replacement, or overwrite that replacement's private record.
+  for (const operation of ['run-same-id', 'run-successor', 'kill', 'write-record'] as const) {
     const entered = Promise.withResolvers<void>();
     const released = Promise.withResolvers<void>();
     let queued = true;
     let current = true;
     const oldId = 'before-generation';
-    const nextId = sameId ? oldId : 'after-generation';
+    const nextId = operation === 'run-successor' ? 'after-generation' : oldId;
+
+    if (operation === 'kill') await process.start('exec sleep 7121', { cwd: '/', processId: oldId });
 
     const delayed = new Processes({
       get running() { return container.running; },
       exec: async (argv: string[], options?: ContainerExecOptions) => {
-        if (queued && argv[3] === 'devbox-process') {
+        const inner = argv[3] === 'devbox-incarnation' ? argv.slice(5) : argv;
+
+        let selected: boolean;
+
+        if (operation === 'kill') selected = inner[3] === 'devbox-kill';
+        else if (operation === 'write-record') selected = inner[0] === '/usr/local/bin/sandbox-shim' && inner.includes(`${ROOT}/${oldId}/process.json`);
+        else selected = inner[3] === 'devbox-process';
+
+        if (queued && selected) {
           queued = false;
           entered.resolve();
           await released.promise;
@@ -164,7 +174,8 @@ async function processes(box: Devbox<unknown>, container: Container): Promise<vo
       },
     });
 
-    const obsolete = delayed.start('exec sleep 7121', { cwd: '/', processId: oldId, current: () => current });
+    const obsolete = operation === 'kill' ? delayed.kill(oldId, { current: () => current })
+      : delayed.start('exec sleep 7121', { cwd: '/', processId: oldId, current: () => current });
 
     await entered.promise;
 
