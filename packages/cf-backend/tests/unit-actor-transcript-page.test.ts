@@ -41,11 +41,11 @@ function retainedDatabase() {
   if (identity === undefined) throw new Error('the workspace fixture has no identity');
   database.adopt({ identity,
     lineage: created.sql<StoredRow>`SELECT * FROM workspace_actors WHERE actor_id IN (${actors.main.actorId}, ${child.actorId}) ORDER BY parent_actor_id`,
-    config: [], scaffold: [], workspaceName: 'inspection-owner', installedBuild: null, artifactDirectory: '/retained/context',
+    config: [], scaffold: [], workspaceName: 'inspection-owner', installedBuild: null, artifactDirectory: `${WORKSPACE_ROOT}/.kinu/retained`,
   });
 
   const history = new SessionHistory({ sql: created.sql, actor: child, transactionSync: write => created.db.transaction(write)(),
-    files: async () => ({ vfs: created.vfs, artifactDirectory: '/retained/context' }) });
+    files: async () => ({ vfs: created.vfs, artifactDirectory: `${WORKSPACE_ROOT}/.kinu/retained` }) });
 
   return { ...created, actors, child, database, history, indexInitializations: () => indexInitializations };
 }
