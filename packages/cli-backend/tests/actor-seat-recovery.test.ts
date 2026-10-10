@@ -7,6 +7,7 @@ import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { workspaceHome, type CLIRuntime } from '../src/runtime';
 import { LocalAgentHost, type LocalAgentHostOptions } from '../src/agent-host/host';
 import { openWorkspaceCLI } from '../src/open';
+import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 
 const model = scriptedTurnModel({ doGenerate: () => ({
   content: [{ type: 'text', text: 'retained answer' }], finishReason: { unified: 'stop', raw: undefined },
@@ -222,6 +223,38 @@ test('a retained child without its owned program bytes names the required local 
 
     expect(result).toEqual([{ status: 'rejected', reason: expect.objectContaining({ code: 'unsupported', message: expect.stringContaining('reset') }) }]);
     expect(await workspace.runtimes.get('root')?.identity.scaffold.read()).toBe(before);
+  } finally {
+    await cold.close();
+  }
+});
+
+test('refusing a head layout happens before it can leave an observer on the parent workspace', async () => {
+  const workspace = await reopenableWorkspace('head-observer-refusal');
+  const first = new LocalAgentHost(workspace.options);
+  const owner = await first.acquire('root');
+  const branch = await owner.hostHead(head('invalid-head-layout'), new HeadCapture().files);
+  const actorId = branch.actor.reference.actorId;
+  const program = branch.actor.runtime.identity.scaffold;
+  const version = await program.version();
+  const state = branch.actor.runtime.agentStateVfs ?? branch.actor.runtime.storage.vfs;
+
+  await state.unlink(`${program.path}.v${version}`);
+  await state.unlink(program.path);
+  await first.close();
+  const cold = new LocalAgentHost(workspace.options);
+
+  try {
+    const reopened = await cold.acquire('root');
+    const leaked = new HeadCapture();
+    const admission = await Promise.allSettled([reopened.hostHead(head('invalid-head-layout'), leaked.files)]);
+
+    expect(admission).toEqual([{ status: 'rejected', reason: expect.objectContaining({ code: 'unsupported' }) }]);
+    const parent = workspace.runtimes.get('root');
+
+    if (parent === undefined) throw new Error('the owner runtime must be open');
+
+    await writeText(parent.plane.composite.as(CRED_SESSION_USER, actorId), join(workspace.folder, 'after-refusal.txt'), 'parent work\n');
+    expect(leaked.files.snapshot()).toEqual([]);
   } finally {
     await cold.close();
   }

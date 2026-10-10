@@ -106,6 +106,8 @@ export interface ActorHost {
   list(): readonly ActorReference[];
   /** Serialized per actor only. Abandoning the promise cancels nothing; use `session.interrupt()`. */
   run<T>(reference: ActorReference, seat: ActorSeat, work: (actor: HostedActor) => Promise<T>): Promise<T>;
+  /** Work on an already composed actor, serialized on the same queue; never chooses a different seat. */
+  runHosted<T>(reference: ActorReference, work: (actor: HostedActor) => Promise<T>): Promise<T>;
   /** Rows stay. Refused while a turn is in flight. */
   release(reference: ActorReference): void;
   releaseAll(): void;
@@ -330,6 +332,15 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     ? Effect.fail(new KinuError('missing', 'The actor is not hosted by this root.'))
     : Effect.succeed(slot)));
 
+  const queued = <T>(reference: ActorReference, work: (actor: HostedActor) => Promise<T>): Effect.Effect<T, KinuError> => Effect.gen(function* () {
+    const slot = yield* requireSlot(reference);
+    // A failed operation cannot poison this actor's queue; other actors have their own tails.
+    const result = slot.queue.then(() => work(slot.actor));
+    slot.queue = Promise.allSettled([result]);
+
+    return yield* Effect.promise(() => result);
+  });
+
   const released = (reference: ActorReference): Effect.Effect<void, KinuError> => Effect.gen(function* () {
     // The root's fence is read by its opener; only `releaseAll` (process end) may take it.
     if (reference.parentActorId === null) {
@@ -366,15 +377,11 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     })),
     list: () => [...slots.values()].filter((slot) => !slot.fence.released).map((slot) => slot.actor.reference),
     run: <T>(reference: ActorReference, seat: ActorSeat, work: (actor: HostedActor) => Promise<T>): Promise<T> => settle(Effect.gen(function* () {
-      const actor = yield* acquired(reference, seat);
-      const slot = yield* requireSlot(reference);
-      // The tail waits for settlement so a failure does not poison the next operation;
-      // the caller still receives the rejection.
-      const result = slot.queue.then(() => work(actor));
-      slot.queue = Promise.allSettled([result]);
+      yield* acquired(reference, seat);
 
-      return yield* Effect.promise(() => result);
+      return yield* queued(reference, work);
     })),
+    runHosted: <T>(reference: ActorReference, work: (actor: HostedActor) => Promise<T>): Promise<T> => settle(queued(reference, work)),
     release: (reference) => settleSync(released(reference)),
     temporary: (reference, portFor) => {
       const known = ports.get(reference.actorId);
