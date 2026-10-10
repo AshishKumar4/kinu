@@ -97,7 +97,7 @@ describe('what counts as the same resource', () => {
   test('ports and processes are their own namespaces, and adjacent numbers do not touch', () => {
     expect(scopesOverlap(portScope(3000), portScope(3000))).toBe(true);
     expect(scopesOverlap(portScope(3000), portScope(30001))).toBe(false);
-    expect(scopesOverlap(portScope(3000), processScope('3000', 1))).toBe(false);
+    expect(scopesOverlap(portScope(3000), processScope('3000', 'kernel-one'))).toBe(false);
     expect(scopesOverlap(portScope(3000), pathScopes({ path: '/workspace' }))).toBe(false);
   });
 });

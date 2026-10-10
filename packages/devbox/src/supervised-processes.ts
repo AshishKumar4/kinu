@@ -5,7 +5,7 @@ import { DEVBOX_WORKDIR } from './storage';
 import { Effect, Result } from 'effect';
 import { attempt, settle, type DevboxError } from './errors';
 
-export const SUPERVISED_SPEC_PREFIX = 'devbox:proc:';
+const SUPERVISED_SPEC_PREFIX = 'devbox:proc:';
 
 export type SupervisedStart =
   | { readonly kind: 'start'; readonly command: string; readonly cwd: string }
@@ -37,7 +37,7 @@ interface Ports {
   readonly generation: () => number;
   readonly storage: Pick<DurableObjectStorage, 'get' | 'put' | 'delete' | 'list'>;
   readonly lane: ResourceLane;
-  readonly native: () => Pick<Processes, 'get' | 'start' | 'kill'>;
+  readonly native: () => Processes;
   readonly failedStop: (processId: string, cause: DevboxError) => Promise<void>;
 }
 
@@ -51,7 +51,9 @@ function sameReservation(left: SupervisedProcessSpec | undefined, right: Supervi
 
 /** One reservation operation for all launches, restores and removals. Readiness belongs to the caller and is
  * awaited before entry, never while holding these scopes. A late continuation retains its claim until actual
- * native work settles, but its validity is revoked immediately and checked before each following mutation. */
+ * native work settles, but its validity is revoked immediately and checked before each following mutation.
+ * Claim namespaces use the actual kernel incarnation: a controller change in the same kernel cannot
+ * release destructive work against its successor, while confirmed replacement cannot inherit old claims. */
 export class SupervisedProcesses {
   constructor(readonly ports: Ports) {}
 
@@ -61,117 +63,135 @@ export class SupervisedProcesses {
 
   run(request: SupervisedStart, context?: ReservationContext): Promise<Started | typeof STALE>;
   run(request: SupervisedStop, context?: ReservationContext): Promise<Stopped | typeof STALE>;
-  async run(request: Request, context?: ReservationContext): Promise<Outcome> {
-    const generation = context === undefined ? this.ports.generation() : context.generation;
-    const current = () => this.ports.generation() === generation && (context === undefined || context.current());
-
-    for (;;) {
-      if (!current()) return STALE;
-
-      let seen: SupervisedProcessSpec | undefined;
-
-      if (request.kind === 'restore') seen = request.spec;
-      else if (request.kind !== 'start') seen = await this.ports.storage.get<SupervisedProcessSpec>(`${SUPERVISED_SPEC_PREFIX}${request.processId}`);
+  run(request: Request, context?: ReservationContext): Promise<Outcome> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const generation = context === undefined ? this.ports.generation() : context.generation;
+      const current = () => this.ports.generation() === generation && (context === undefined || context.current());
+      const native = this.ports.native();
+      const kernel = yield* attempt('process', () => native.incarnation());
 
       if (!current()) return STALE;
+      const operation = native.inIncarnation(kernel);
 
-      let scopes: readonly ResourceScope[];
+      for (;;) {
+        if (!current()) return STALE;
 
-      if (request.kind === 'start') scopes = supervisedScope(request.command, request.cwd, generation);
-      else {
+        let seen: SupervisedProcessSpec | undefined;
+
+        if (request.kind === 'restore') seen = request.spec;
+        else if (request.kind !== 'start') seen = yield* attempt('io', () => this.ports.storage.get<SupervisedProcessSpec>(`${SUPERVISED_SPEC_PREFIX}${request.processId}`));
+
+        if (!current()) return STALE;
+
+        let scopes: readonly ResourceScope[];
+
+        if (request.kind === 'start') scopes = supervisedScope(request.command, request.cwd, kernel);
+        else {
+          const processId = request.kind === 'restore' ? request.spec.processId : request.processId;
+
+          scopes = seen === undefined ? processScope(processId, kernel) : [
+            ...processScope(seen.processId, kernel), ...supervisedScope(seen.command, seen.cwd ?? DEVBOX_WORKDIR, kernel),
+          ];
+        }
+
+        const release = yield* attempt('io', () => this.ports.lane.hold(scopes));
+        const outcome = yield* Effect.ensuring(this.claimed(request, seen, current, operation), Effect.sync(release));
+
+        if (outcome.kind !== 'rebind') return outcome;
+      }
+    }));
+  }
+
+  private claimed(request: Request, seen: SupervisedProcessSpec | undefined, current: () => boolean, native: Processes): Effect.Effect<Outcome | typeof REBIND, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      if (!current()) return STALE;
+      let owner: SupervisedProcessSpec | undefined;
+      let known = true;
+
+      if (request.kind === 'start') {
+        owner = (yield* attempt('io', () => this.list())).find((spec) => spec.command === request.command && (spec.cwd ?? DEVBOX_WORKDIR) === request.cwd);
+
+        if (!current()) return STALE;
+
+        if (owner === undefined) {
+          known = false;
+          owner = { processId: crypto.randomUUID(), command: request.command, cwd: request.cwd, createdAt: Date.now() };
+          const reserved = owner;
+
+          yield* attempt('io', () => this.ports.storage.put(`${SUPERVISED_SPEC_PREFIX}${reserved.processId}`, reserved));
+        }
+      } else {
         const processId = request.kind === 'restore' ? request.spec.processId : request.processId;
 
-        scopes = seen === undefined ? processScope(processId, generation) : [
-          ...processScope(seen.processId, generation), ...supervisedScope(seen.command, seen.cwd ?? DEVBOX_WORKDIR, generation),
-        ];
+        owner = yield* attempt('io', () => this.ports.storage.get<SupervisedProcessSpec>(`${SUPERVISED_SPEC_PREFIX}${processId}`));
+
+        if (!current()) return STALE;
+
+        if (!sameReservation(seen, owner)) return request.kind === 'restore' ? STALE : REBIND;
       }
 
-      const outcome = await this.ports.lane.run(scopes, () => this.claimed(request, seen, current));
+      if (!current()) return STALE;
 
-      if (outcome.kind !== 'rebind') return outcome;
-    }
+      return yield* (request.kind === 'stop' || request.kind === 'native-stop'
+        ? this.stop(request, owner, current, native) : this.start(request, owner, current, { known, native }));
+    });
   }
 
-  private async claimed(request: Request, seen: SupervisedProcessSpec | undefined, current: () => boolean): Promise<Outcome | typeof REBIND> {
-    if (!current()) return STALE;
-    let owner: SupervisedProcessSpec | undefined;
-    let known = true;
+  private start(request: SupervisedStart, owner: SupervisedProcessSpec | undefined, current: () => boolean, options: { readonly known: boolean; readonly native: Processes }): Effect.Effect<Started | typeof STALE, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      const processId = request.kind === 'native-start' ? request.processId : owner?.processId;
 
-    if (request.kind === 'start') {
-      owner = (await this.list()).find((spec) => spec.command === request.command && (spec.cwd ?? DEVBOX_WORKDIR) === request.cwd);
+      if (processId === undefined) return STALE;
+      const { known, native } = options;
+      const existing = known && request.kind !== 'native-start' ? yield* attempt('process', () => native.get(processId)) : null;
 
       if (!current()) return STALE;
 
-      if (owner === undefined) {
-        known = false;
-        owner = { processId: crypto.randomUUID(), command: request.command, cwd: request.cwd, createdAt: Date.now() };
-        await this.ports.storage.put(`${SUPERVISED_SPEC_PREFIX}${owner.processId}`, owner);
+      if (known && owner !== undefined) {
+        const held = yield* attempt('io', () => this.ports.storage.get<SupervisedProcessSpec>(`${SUPERVISED_SPEC_PREFIX}${processId}`));
+
+        if (!current() || !sameReservation(owner, held)) return STALE;
       }
-    } else {
-      const processId = request.kind === 'restore' ? request.spec.processId : request.processId;
 
-      owner = await this.ports.storage.get<SupervisedProcessSpec>(`${SUPERVISED_SPEC_PREFIX}${processId}`);
+      if (existing !== null && isProcessLive(existing.status)) return { kind: 'started', process: existing };
+      const command = request.kind === 'restore' ? request.spec.command : request.command;
+      const cwd = request.kind === 'restore' ? request.spec.cwd ?? DEVBOX_WORKDIR : request.cwd;
+      const started = yield* Effect.result(attempt('process', () => native.start(command, { cwd, processId, current })));
+
+      if (Result.isFailure(started)) {
+        if (!current()) return STALE;
+
+        return yield* Effect.fail(started.failure);
+      }
+
+      return current() ? { kind: 'started', process: started.success } : STALE;
+    });
+  }
+
+  private stop(request: SupervisedStop, owner: SupervisedProcessSpec | undefined, current: () => boolean, native: Processes): Effect.Effect<Stopped | typeof STALE, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      const killed = yield* Effect.result(attempt('process', () => native.kill(request.processId, { current })));
+
+      if (Result.isFailure(killed)) {
+        if (!current()) return STALE;
+
+        if (request.kind === 'native-stop') return yield* Effect.fail(killed.failure);
+
+        yield* attempt('io', () => this.ports.failedStop(request.processId, killed.failure));
+
+        return { kind: 'stopped', stopped: false };
+      }
 
       if (!current()) return STALE;
 
-      if (!sameReservation(seen, owner)) return request.kind === 'restore' ? STALE : REBIND;
-    }
+      if (request.kind === 'stop') {
+        const held = yield* attempt('io', () => this.ports.storage.get<SupervisedProcessSpec>(`${SUPERVISED_SPEC_PREFIX}${request.processId}`));
 
-    if (!current()) return STALE;
+        if (!current() || !sameReservation(owner, held)) return STALE;
+        yield* attempt('io', () => this.ports.storage.delete(`${SUPERVISED_SPEC_PREFIX}${request.processId}`));
+      }
 
-    return request.kind === 'stop' || request.kind === 'native-stop'
-      ? this.stop(request, owner, current) : this.start(request, owner, current, known);
-  }
-
-  private async start(request: SupervisedStart, owner: SupervisedProcessSpec | undefined, current: () => boolean, known: boolean): Promise<Started | typeof STALE> {
-    const processId = request.kind === 'native-start' ? request.processId : owner?.processId;
-
-    if (processId === undefined) return STALE;
-    const native = this.ports.native();
-    const existing = known && request.kind !== 'native-start' ? await native.get(processId) : null;
-
-    if (!current()) return STALE;
-
-    if (known && owner !== undefined) {
-      const held = await this.ports.storage.get<SupervisedProcessSpec>(`${SUPERVISED_SPEC_PREFIX}${processId}`);
-
-      if (!current() || !sameReservation(owner, held)) return STALE;
-    }
-
-    if (existing !== null && isProcessLive(existing.status)) return { kind: 'started', process: existing };
-    const command = request.kind === 'restore' ? request.spec.command : request.command;
-    const cwd = request.kind === 'restore' ? request.spec.cwd ?? DEVBOX_WORKDIR : request.cwd;
-    const started = await settle(Effect.result(attempt('process', () => native.start(command, { cwd, processId, current }))));
-
-    if (Result.isFailure(started)) {
-      if (!current()) return STALE;
-
-      return settle(Effect.fail(started.failure));
-    }
-
-    return current() ? { kind: 'started', process: started.success } : STALE;
-  }
-
-  private async stop(request: SupervisedStop, owner: SupervisedProcessSpec | undefined, current: () => boolean): Promise<Stopped | typeof STALE> {
-    const killed = await settle(Effect.result(attempt('process', () => this.ports.native().kill(request.processId))));
-
-    if (Result.isFailure(killed)) {
-      if (request.kind === 'native-stop') return settle(Effect.fail(killed.failure));
-
-      await this.ports.failedStop(request.processId, killed.failure);
-
-      return { kind: 'stopped', stopped: false };
-    }
-
-    if (!current()) return STALE;
-
-    if (request.kind === 'stop') {
-      const held = await this.ports.storage.get<SupervisedProcessSpec>(`${SUPERVISED_SPEC_PREFIX}${request.processId}`);
-
-      if (!current() || !sameReservation(owner, held)) return STALE;
-      await this.ports.storage.delete(`${SUPERVISED_SPEC_PREFIX}${request.processId}`);
-    }
-
-    return current() ? { kind: 'stopped', stopped: true } : STALE;
+      return current() ? { kind: 'stopped', stopped: true } : STALE;
+    });
   }
 }

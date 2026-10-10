@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-09",
-  "files": 3142,
-  "functions": 82472,
+  "measuredAt": "2026-10-10",
+  "files": 3152,
+  "functions": 82840,
   "ceiling": 87,
   "line": 27,
   "inventory": [
@@ -303,10 +303,6 @@
     },
     {
       "key": "packages/devbox/src/store-gateway.ts#serveStore>gen",
-      "complexity": 27
-    },
-    {
-      "key": "packages/devbox/tests/support/devbox-harness.ts#FakeSandbox.native",
       "complexity": 27
     },
     {

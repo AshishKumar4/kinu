@@ -2162,12 +2162,12 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   /** Durable spec row is written before the process starts and is idempotent on (command, cwd):
    *  a re-issue restarts under the same id; a failed start keeps the row for `stopSupervised`. */
   async startSupervised(command: string, cwd?: string): Promise<{ processId: string }> {
-    return await settle(this.#withActiveCaller(attempt("io", async () => {
-      await this.ensureReady();
-      const result = await this.#supervised().run({ kind: 'start', command, cwd: cwd ?? DEVBOX_WORKDIR });
+    return await settle(this.#withActiveCaller(Effect.gen({ self: this }, function* () {
+      yield* attempt('io', () => this.ensureReady());
+      const result = yield* attempt('process', () => this.#supervised().run({ kind: 'start', command, cwd: cwd ?? DEVBOX_WORKDIR }));
 
       return result.kind === 'started' ? { processId: result.process.id }
-        : settle(Effect.fail(new DevboxError('cancelled', 'supervised start was superseded')));
+        : yield* Effect.fail(new DevboxError('cancelled', 'supervised start was superseded'));
     })));
   }
 
@@ -3052,14 +3052,14 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   async startProcess(command: string, options: { cwd?: string; processId?: string } = {}) {
-    return settle(this.#withActiveCaller(attempt("io", async () => {
-      await this.ensureReady();
+    return settle(this.#withActiveCaller(Effect.gen({ self: this }, function* () {
+      yield* attempt('io', () => this.ensureReady());
 
-      const result = await this.#supervised().run({ kind: 'native-start', command, cwd: options.cwd ?? DEVBOX_WORKDIR,
-        processId: options.processId ?? crypto.randomUUID() });
+      const result = yield* attempt('process', () => this.#supervised().run({ kind: 'native-start', command, cwd: options.cwd ?? DEVBOX_WORKDIR,
+        processId: options.processId ?? crypto.randomUUID() }));
 
       return result.kind === 'started' ? result.process
-        : settle(Effect.fail(new DevboxError('cancelled', 'native start was superseded')));
+        : yield* Effect.fail(new DevboxError('cancelled', 'native start was superseded'));
     })));
   }
 
@@ -3070,12 +3070,12 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
  return this.#processes().list(); }))); }
   async killProcess(id: string): Promise<void> {
-    return settle(this.#withActiveCaller(attempt('io', async () => {
-      await this.ensureReady();
+    return settle(this.#withActiveCaller(Effect.gen({ self: this }, function* () {
+      yield* attempt('io', () => this.ensureReady());
 
-      const result = await this.#supervised().run({ kind: 'native-stop', processId: id });
+      const result = yield* attempt('process', () => this.#supervised().run({ kind: 'native-stop', processId: id }));
 
-      if (result.kind === 'stale') return settle(Effect.fail(new DevboxError('cancelled', 'native stop was superseded')));
+      if (result.kind === 'stale') return yield* Effect.fail(new DevboxError('cancelled', 'native stop was superseded'));
     })));
   }
 
