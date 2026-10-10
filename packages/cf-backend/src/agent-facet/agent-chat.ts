@@ -3,7 +3,7 @@ import {
   CHAT_SESSION_ID, ChatSession, EventLog, HeadCapture, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TerminalTransitions,
   PlanReviewActions, announcementOf, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork,
   planHandoffStillOwed, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, terminalEffect, turnAuthorship,
-  metadataTier, reportReadsNarration, subordinateTerminalEffects, withCompactionTrigger,
+  actorPolicy, metadataTier, reportReadsNarration, subordinateTerminalEffects, withCompactionTrigger, type ActorPolicy,
   bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpening, type JsonObject, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
   type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalTurnFacts, type TerminalTurnParts,
@@ -42,6 +42,11 @@ export class FacetChat {
   private readonly trigger: { readonly state: CompactionStateStore; readonly key: string };
 
   private readonly spend: FacetSpend;
+
+  /** What this agent is, from its row: its hierarchy and placement decide what its turns owe. */
+  private get policy(): ActorPolicy {
+    return actorPolicy(this.deps.actor.record);
+  }
 
   /** Whether an advisor reviews the turn running. */
   private reviewsTurns = false;
@@ -108,10 +113,11 @@ export class FacetChat {
         owedTerminalEffects: (input) => this.owedTerminalEffects(input),
         answerMetadata: async (turnId, texts) => await answerMetadataOf(workspace, turnId, texts),
         // What the turn already told its hirer is the agent's own record, so a reset of the workspace cannot repeat it.
-        owedReport: async (ending, assistantText, narration) => await workspace.owedReport(
+        // An agent with no hirer owes no report, so it asks the workspace for none.
+        owedReport: async (ending, assistantText, narration) => (this.policy.hirer === null ? null : await workspace.owedReport(
           { reports: this.deps.database.reports(this.session.currentTurnId ?? ''), ownerDriven: !this.parentDriven },
           { ending, assistantText, narration: reportReadsNarration(ending) ? await narration() : [] },
-        ),
+        )),
         terminal: () => this.terminal,
         driverGate: () => null,
         armTurnWake: (atMs) => this.tell(atMs),
@@ -238,7 +244,7 @@ export class FacetChat {
     const turnId = this.session.currentTurnId ?? '';
     const opened = this.deps.database.factsOf(turnId);
 
-    if (this.deps.actor.record.parentActorId === null) {
+    if (this.policy.workspaceAgent) {
       return declareHandoffRoster(chatTurnParts(input), {
         turnId, messageId: input.messageId, status: input.status, completed: input.completed,
         workMode: session.workMode, userText: input.userText, assistantText: input.assistantText, event: input.event ?? null,

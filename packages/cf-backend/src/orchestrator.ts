@@ -1,5 +1,5 @@
 import { exists as nimbusExists, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
-import { PLATFORM_CATALOG, GitHubFactSchema, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs } from '@kinu.run/core';
+import { PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs } from '@kinu.run/core';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -665,8 +665,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   async agentCred(record: WorkspaceActor): Promise<VfsCred> {
-    // Main acts as the session user, in its turns as in the owner's own shell.
-    if (record.parentActorId === null) return CRED_SESSION_USER;
+    // The workspace's own agent acts as the session user, in its turns as in the owner's own shell.
+    if (actorPolicy(record).workspaceAgent) return CRED_SESSION_USER;
     const home = await this.actorHomes.get(record, actorReferenceOf(record));
 
     if (home?.cred !== undefined) return home.cred;
@@ -789,8 +789,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       chatIdle: async (reference) => { await (await this.agentCalls(reference.actorId)).idle(); },
       pricing: (spec) => this.modelCatalog.pricing(spec),
       accounts: () => this.config.getProviderAccounts(),
-      // Main's missions are the workspace's: owner-declared here, and charged here as its turns spend.
-      missions: (actorId) => (actorId === this.actorHandle().actorId ? this.budget : null),
+      // The workspace agent's missions are the workspace's: owner-declared here, and charged here as its turns spend.
+      missions: (actorId) => (actorPolicy(this.agentOf(actorId)).workspaceAgent ? this.budget : null),
     });
 
     return this._agentTurns;
@@ -851,12 +851,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       chatEvent: (event) => this.hostedChatEvent(actorId, event),
       turnEnded: (event, figures) => this.hostedTurnEnded(actorId, event, figures),
-      // The turn's report disposition is the agent's own, kept where the turn ran. Main has no hirer to owe one.
-      owedReport: async (turn, ended) => (actorId === this.actorHandle().actorId ? null : await hostedOwedReport(this.hostedSeams(), this.agentBound(actorId), turn, ended)),
+      // The turn's report disposition is the agent's own, kept where the turn ran. An agent with no hirer owes none.
+      owedReport: async (turn, ended) => (actorPolicy(this.agentOf(actorId)).hirer === null ? null : await hostedOwedReport(this.hostedSeams(), this.agentBound(actorId), turn, ended)),
       parentReport: (report) => hostedParentReport(this.hostedSeams(), this.agentBound(actorId), report),
       autoTitle: (subject, title) => hostedAutoTitle(this.hostedSeams(), this.agentBound(actorId), subject, title),
       turnSettled: async (settled) => {
-        if (actorId !== this.actorHandle().actorId) {
+        if (!actorPolicy(this.agentOf(actorId)).workspaceAgent) {
           return settleSync(Effect.fail(new KinuError('denied', "Only the workspace's own agent hands its turns to the workspace.")));
         }
 
@@ -1294,7 +1294,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * escape the subtree); codemode built last; all calls wrapped into the run's capture.
    */
   private async hostedTaskProfile(turn: HostedTaskTurn): Promise<HostedTaskProfile> {
-    if (turn.actor.handle.actorId === this.actorHandle().actorId) {
+    if (actorPolicy(turn.actor.record).workspaceAgent) {
       // Asked of main's isolate before its tools are built: whether the owner's sent-back review awaits its answers.
       const awaitsReply = await this.hostedPlanAwaitsReply(turn);
       const planReply = awaitsReply ? { reply: async (comment: string, text: string) => await this.hostedPlanReply(turn, comment, text) } : undefined;

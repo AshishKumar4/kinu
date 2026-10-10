@@ -224,8 +224,10 @@ const turnStatements = new Map<number, { readonly workspace: OperationCost['tabl
  * workspace's 386: each of the turn's four reports checked against the newest taken (+4), the opening's key (+1), the
  * turn's fence (+2), and its branches' rows where main_turn_facts kept three statements (-1). Main's 428: its four
  * reports numbered (+4), its facts frozen and read back for the handoff (+2), its claim read for the opening's epoch (+1).
+ * 807 once an agent with no hirer asks the workspace for no report (ActorPolicy), at both sizes over 3 runs on
+ * ceb97fb8e: main's 419 (-9, the report's ledger reads), the workspace's 388 (+2, the policy's row reads).
  */
-const TURN_STATEMENTS = 814;
+const TURN_STATEMENTS = 807;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {
@@ -347,9 +349,10 @@ test('a production turn runs no more statements than it was measured at, and ask
  * the workspace not counted: the same figures, so no turn crossing was a helper. The planted session read was three
  * crossings before (its `client()` and `cred()` counted, scratch 335c923de) and is one.
  * The close is 55 once it no longer reads main's answer back to announce it to no extension (`facet.answer`,
- * b65abe3ff), over 3 runs on 380d7148e.
+ * b65abe3ff), over 3 runs on 380d7148e; 52 once main, which has no hirer, asks for no report (`relay.owedReport`,
+ * `host.owedReport` and the host it opened), over 3 runs on ceb97fb8e.
  */
-const CROSSINGS = { open: 39, step: 19, close: 55 } as const;
+const CROSSINGS = { open: 39, step: 19, close: 52 } as const;
 
 /**
  * The planted calls (`ObservedOrchestrator.plantCrossings`), each counted once where it lands, and nothing else: the

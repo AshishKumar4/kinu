@@ -604,6 +604,8 @@ export {
   type SurfaceActor, type SurfaceCall, type SurfacePolicy, type SurfaceWeb,
 } from './delegation/actor-surface';
 
+export { actorPolicy, type ActorPolicy } from './delegation/actor-policy';
+
 export { AGENTS_OPS, type AgentsOp } from './operations/agents';
 
 export { createAgentSelfProvider, type AgentSelfHost } from './tools/agent-self';
