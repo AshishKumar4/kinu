@@ -760,6 +760,37 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
   });
 });
 
+// A dev server a job started reads as that job serving, as a sandbox job's does: Nimbus names each process by the exec
+// that started it (execId), and Kinu runs a job's command under the job's id.
+test('an exposed workspace port is served by the job whose process listens on it, and no other port is', async () => {
+  const actor = actorObject();
+  Object.assign(actor.ctx.storage, durableStorage(new Map<string, JsonValue>()));
+
+  const workspace = createHostedWorkspace({
+    tasks: HELD_NIMBUS_TASKS,
+    ctx: actor.ctx, env: workspaceBindings(),
+    previewUrl: async (_port, capability) => ({ url: `https://preview.test/${capability}/` }),
+  });
+
+  const session = await workspace.bundle.session();
+  const manager = (await workspace.facetManager()).manager;
+
+  // Each listener as `listen` makes one, its process named by the exec that started it where one did.
+  for (const [port, execId] of [[8090, 'bgjob-server'], [8091, undefined], [8092, 'bgjob-quiet']] as const) {
+    const pid = session.processes.spawn('slate', ['node', 'server.js'], SLATE_CWD, { longRunning: true, ...(execId !== undefined && { execId }) }).pid;
+    (await workspace.ports()).bindFacetStub(pid, { handleHttpRequest: async () => new Response('ok') });
+    await manager.registerPort(pid, port);
+  }
+
+  const ports = workspace.box('agent').ports;
+
+  if (ports?.expose === undefined) throw new Error('the workspace box has no port exposure');
+  await ports.expose(8090);
+  await ports.expose(8091);
+
+  expect(await workspace.servingPorts()).toEqual([{ port: 8090, stamp: 'bgjob-server' }, { port: 8091, stamp: null }]);
+});
+
 test('a port that starts or stops listening is heard by the workspace, which re-reads its pages\' port lists', async () => {
   let moved = 0;
 
