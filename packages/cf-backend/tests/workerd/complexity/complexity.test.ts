@@ -76,6 +76,14 @@ const SUBJECTS: readonly Subject[] = [{
   why: 'every wake tick asks it (`owedUntimedArms`): it reads the claims that never settled, never the settled claim '
     + 'each response leaves behind',
 }, {
+  name: "a turn's end, its agent's figures",
+  unit: 'turns before it',
+  sizes: [50, 300],
+  run: async (probe, size) => await probe.turnEndFigures(size),
+  rows: { rowsRead: 'O(1)', rowsWritten: 'O(1)', statements: 'O(1)', rowsScanned: 'O(1)' },
+  why: 'every turn\'s end reports its agent\'s tokens, dollars, active time and cache EMA (main\'s isolate at each of its '
+    + 'own): the totals the last read stored and the events since, never a join over every turn before it (2,999 rows at turn 300)',
+}, {
   name: 'session store, one turn',
   unit: 'turns of history',
   sizes: [50, 300],

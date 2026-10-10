@@ -15,7 +15,7 @@ import type { SubordinateRosterEntry } from '../src/delegation/agents-tool';
 import { readWorkspaceAgents, type PanelAgent } from '../src/read-models/workspace-agents';
 import { OWNER_STOPPED } from '../src/heads/types';
 import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
-import { readAgentFigures } from '../src/read-models/agent-figures';
+import { initAgentFiguresTable, readAgentFigures } from '../src/read-models/agent-figures';
 import { EventLog, initEventsHubTables, type EmailPayload } from '../src/events/hub/index';
 import { admitSubordinateTask } from '../src/subordinates/support';
 import { initDeferredApprovalsTable } from '../src/safety/deferred-approval';
@@ -39,6 +39,7 @@ function workspace() {
   initActorClaimTables(execRaw);
   initEventsHubTables(exec);
   initRunEventTables(execRaw);
+  initAgentFiguresTable(execRaw);
   const actors = createTestActors(sql, execRaw);
   new SubordinateRosterStore(exec, actors.main).ensureSchema();
 

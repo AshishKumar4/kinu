@@ -53,12 +53,16 @@ function percentile(sorted: readonly number[], q: number): number | null {
 /** Samples oldest first. `warms` are rows so they can only move `cacheHit.warms`. */
 export function summarizeSteps(
   samples: readonly StepCost[],
-  opts: { windowLimit: number; emaAlpha?: number; warms?: readonly StepCost[] },
+  opts: {
+    windowLimit: number; emaAlpha?: number; warms?: readonly StepCost[];
+    /** The EMA the steps before `samples` left; absent or null, the first rate seeds it. */
+    emaFrom?: number | null;
+  },
 ): StepTelemetry {
   const alpha = opts.emaAlpha ?? CACHE_HIT_EMA_ALPHA;
   let tokens: Usage = {};
   const rates: number[] = [];
-  let ema: number | null = null;
+  let ema: number | null = opts.emaFrom ?? null;
   let usd = 0;
   let pricedSteps = 0;
   let unpricedSteps = 0;

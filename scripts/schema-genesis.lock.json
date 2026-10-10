@@ -138,6 +138,11 @@
     "origin_json TEXT",
     "PRIMARY KEY (actor_id, key)"
   ],
+  "agent_figure_folds@packages/core/src/read-models/agent-figures.ts": [
+    "actor_id TEXT PRIMARY KEY",
+    "through INTEGER NOT NULL",
+    "totals TEXT NOT NULL"
+  ],
   "agent_figures@packages/core/src/read-models/agent-figures.ts": [
     "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)",
     "figures TEXT NOT NULL"
