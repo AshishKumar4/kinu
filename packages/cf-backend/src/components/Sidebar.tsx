@@ -225,7 +225,9 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
       <nav aria-label="Primary" className="px-2 pt-1 space-y-1">
         {PRIMARY_NAV.map((item) => <PrimaryNavRow key={item.to} {...item} />)}
       </nav>
-      <div className="relative min-h-0 flex-1 overflow-hidden">
+      {/* Clipped, never scrollable: a scrollIntoView, a focus or a find-in-page that reaches the panel off to the side
+          would scroll a hidden overflow, and the slide would then land both panels half out of view. */}
+      <div className="relative min-h-0 flex-1 overflow-clip">
       <div className="p-slide" data-drilled={drilled || undefined}>
       <div className="h-full overflow-y-auto pt-2 pb-3" inert={drilled}>
         <div className="px-5 pb-2 pt-4 p-eyebrow">

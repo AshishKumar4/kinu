@@ -255,6 +255,35 @@ describe('who is at work, and who is who', () => {
     });
   });
 
+  // Tiers, 2026-10-10: a row reached for while its panel was still off to the side scrolled the sidebar's hidden
+  // overflow, so the slide landed the list beside the press and the press hit the list's frame.
+  test('the agents list off to the side cannot be scrolled into view; it opens where it slides to', async () => {
+    await withGallery(async (gallery) => {
+      const page = await shell(gallery, 1280);
+
+      try {
+        await page.waitForSelector('[data-rail] [data-agents-counter]');
+        // What a find-in-page or a focus without preventScroll does to a match in the panel off to the side.
+        await page.$eval(`[data-rail] ${LIST} [data-agent-row="a-scout"]`, (row) => { row.scrollIntoView({ block: 'center', inline: 'center' }); });
+        await page.click('[data-rail] [data-agents-counter]');
+        await page.waitForFunction((list) => document.querySelector(list)?.closest('[inert]') === null, {}, `[data-rail] ${LIST}`);
+        await still(page);
+
+        const landed = await page.$eval(`[data-rail] ${LIST} [data-agent-row="a-scout"]`, (row) => {
+          const box = row.getBoundingClientRect();
+          const rail = row.closest('[data-rail]')?.getBoundingClientRect();
+          const at = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+
+          return { inRail: rail !== undefined && box.left >= rail.left && box.right <= rail.right, pressed: at?.closest('[data-agent-row]') === row };
+        });
+
+        expect(landed).toEqual({ inRail: true, pressed: true });
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
   test('agents at work with no tab spin on the All agents row and are counted on the bar\'s agents button', async () => {
     await withGallery(async (gallery) => {
       // The fixture's out-of-sight workers: the coupon auditor it hired, and two swarm workers.
