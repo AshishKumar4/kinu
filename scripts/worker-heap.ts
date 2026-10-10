@@ -157,8 +157,11 @@ export const LONG_TURN_GROWTH_BOUND_BYTES = { workspace: 2_500_000, main: 8_000_
  *  copying or re-walking per step. The sampler's spread is about 15 MB; past this row, a per-step rebuild came back.
  *  Since D9 the turn runs in two isolates, of which this row read the workspace's alone until 2026-10-09: on 2ac877244
  *  over 3 runs, 145.8-153.1 MB together, 47.7-50.8 MB in the workspace's and 95.0-104.3 MB in main's
- *  (armada 20261010034927-e852fa06). A step moved from one isolate to the other is the same work. */
-export const LONG_TURN_ALLOCATED_BOUND_BYTES = 170_000_000;
+ *  (armada 20261010034927-e852fa06). A step moved from one isolate to the other is the same work.
+ *  Until 2026-10-10 the read raced the turn's tail, about 20 MB in main's isolate and 10 MB in the workspace's: 143-154 MB
+ *  in 7 of 9 runs before the turn-surface work (b9c667740) and 165-169 MB in 2, as on 5724b7472. Read at settlement, its
+ *  sleep-time lane off: 171.6-183.0 MB over 15 runs on 0d3f6491a, 54-60 MB in the workspace's and 116-125 MB in main's. */
+export const LONG_TURN_ALLOCATED_BOUND_BYTES = 195_000_000;
 
 /** Measured 2026-09-26 at {@link STEP} before any copy fix: 13.5 MB, the transcript and, whole, the last request;
  *  11.1 MB (twice) on 2026-09-27 once the root's chat room no longer keeps each answer; 9.8-10.0 MB over 3 runs on
@@ -495,6 +498,9 @@ export async function measure(): Promise<HeapMeasurement> {
       const longWorkspace = await ask('/?workspace=long&compat=1');
       const longIsolates = { workspace, main: await inspect(port, `${ISOLATE_NAMES.main} in the long turn's workspace`, mainOf(longWorkspace)) };
       sessions.push(longIsolates.main);
+      // Its sleep-time lane off from the start: the pass a settled turn owes is not the turn's, and switched off only at the
+      // settle below it would run or not as the two raced (1-2 MB in main's isolate over 9 runs each way).
+      await ask('/quiesce?workspace=long');
       await ask(`/model?answerBytes=0&toolSteps=${String(LONG_TURN.steps - 1)}&stepBytes=${String(LONG_TURN.stepBytes)}`);
       await inEach(longIsolates, async (session) => { await session.sampleAllocations(); });
       const long = ask('/turn?workspace=long&text=long');
@@ -514,14 +520,15 @@ export async function measure(): Promise<HeapMeasurement> {
         await ask(`/model?released=${String(step)}`);
       }
 
+      // Sampled to its settlement: main's isolate and the workspace settle before the profile is read, and a call past the
+      // turn's last release is answered rather than left parked.
       await long;
-      const longTurnAllocated = await inEach(longIsolates, async (session) => await session.allocations());
-
-      // No longer stepping: a call that arrived past the long turn's last release (its sleep-time pass) is released, and
-      // main's isolate and the workspace settle before anything is read.
-      await ask('/model?answerBytes=0&toolSteps=0&released=1000000');
+      await ask('/model?released=1000000');
       await ask('/main-idle?workspace=long');
       await ask('/quiesce?workspace=long');
+      const longTurnAllocated = await inEach(longIsolates, async (session) => await session.allocations());
+
+      await ask('/model?answerBytes=0&toolSteps=0');
       const failedBefore = v.parse(v.number(), JSON.parse(await ask('/failed-tool-calls?workspace=long')));
       const beforeFailing = await inEach(longIsolates, async (session) => await session.liveHeap());
       await ask(`/model?failingSteps=${String(FAILING_STEPS)}`);
