@@ -27,7 +27,7 @@ import {
   CI_EXEMPT, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
   DEPLOY_PHASES, browserModules, deployOrder, deployPlan, gatesFor, liveTierTargets, packageScripts, phaseWave,
   localDeployGates, reportCIVerdicts, runnableArgv, sharedBrowserModules, sharedOf, tierRun, tierSchedule, tierWave, trackedTestFiles, waveCaps, type WaveRow,
-  HAMMER_REPEATS, ciUnits, changedTestGate, splitCIGate, type Gate, type ArmadaReport, armadaPhaseRows, armadaPhaseRun, armadaReport, armadaRowVerdicts, ciVerdictRow, onArmada, secretGroup,
+  HAMMER_REPEATS, ciUnits, changedTestGate, splitCIGate, type Gate, type ArmadaReport, armadaPhaseRows, armadaPhaseRun, armadaReport, armadaRowVerdicts, onArmada, secretGroup,
 } from './ladder';
 import {
   ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite,
@@ -38,7 +38,7 @@ import { declaredName, parse, walk } from './syntax';
 import { auditClosure } from './ladder-audit';
 import { gateEnvironment } from './ladder-cache';
 import { deriveClosure, repoAt } from './ladder-closure';
-import { armadaVerdict, readFileTimings, readHostedCosts, withRunnerCosts } from './ci-verdicts';
+import { armadaVerdict, ciVerdictRow, readFileTimings, readHostedCosts, withRunnerCosts } from './ci-verdicts';
 import { COST_TABLE, type CostTable } from './gate-cost';
 import { costTableFaults } from './cost-table';
 
@@ -427,6 +427,7 @@ describe('the ladder measures something', () => {
       'Live app in a browser: a slate that serves its own page, in its answer',
       'Live app in a browser: the inspector column\'s layout',
       'Product flows in a browser, on the deployment',
+      'Production deploy contract',
       'Public pages render',
       'React runtime identity',
       'Swarm-tree geometry',
@@ -692,6 +693,7 @@ describe('a deploy\'s armada rows', () => {
     }).toEqual({
       rows: [
         'preflight bun scripts/preflight.ts', 'upload bun run gate:infra',
+        'soak bash scripts/eval-pass-tier.sh',
       ],
       reasons: true, atDeploy: true, local: here.length,
     });
