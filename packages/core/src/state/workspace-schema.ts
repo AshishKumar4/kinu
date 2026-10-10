@@ -2,6 +2,7 @@
 // declared in `conformance/manifest.ts`, which checks `sqlite_master` against this.
 
 import { initAgentOpenTurnsTable } from '../subordinates/open-turns';
+import { initAgentReportsTable, initReportSequenceTable } from '../subordinates/report-sequence';
 import { initTurnReportTable } from '../subordinates/turn-reports';
 import { initAgentFiguresTable } from '../read-models/agent-figures';
 import type { RawSqlExec, SqlExec, SqlExecutor, Storage } from '../types/primitives';
@@ -109,6 +110,8 @@ function createWorkspaceTables(db: WorkspaceSchemaSql): void {
   initWorkspaceOwnershipTables(execRaw);
   initWorkspaceActorTable(execRaw);
   initAgentOpenTurnsTable(execRaw);
+  initReportSequenceTable(execRaw);
+  initAgentReportsTable(execRaw);
   initAgentFiguresTable(execRaw);
   initActorStateSchema(db);
   execRaw(`CREATE TABLE IF NOT EXISTS slates (

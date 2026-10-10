@@ -14,7 +14,7 @@ import {
   type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
   type Executor, type JsonObject, type NimbusSandboxHandle, type SqlValue, WORKSPACE_ROOT, cloudPlanes, answersForDrainTurns,
   initPendingSendTables, initTerminalEffectTable, PendingSendStore, contextFill, announcementOf, classifyRunEnd, closeTurnRun, TurnReports,
-  PlanReviewStore, TurnFactsStore, type PlanReview, type TurnFacts,
+  PlanReviewStore, ReportSequence, TurnFactsStore, type PlanReview, type TurnFacts,
   forkArtifactPath, localForkConversationSource, localForkConversationTarget, type ForkConversationSource, type ForkConversationTarget,
 } from '@kinu.run/core';
 import { attempt, detach, diagnostics, hold, KinuError, logged, settle, settleSync } from '@kinu.run/core/obs';
@@ -310,6 +310,10 @@ export class AgentDatabase {
       this.selectScaffold(prepared.scaffold);
       this.turnFacts.freeze(turnId, prepared.facts);
     });
+  }
+
+  nextReport(): number {
+    return new ReportSequence(this.sql, this.reference().actorId).next();
   }
 
   /** What the workspace decided as the turn opened, as this isolate froze it then. */

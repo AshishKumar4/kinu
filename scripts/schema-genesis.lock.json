@@ -181,6 +181,14 @@
   "agent_owed_work@packages/core/src/subordinates/open-turns.ts": [
     "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)"
   ],
+  "agent_report_sequence@packages/core/src/subordinates/report-sequence.ts": [
+    "actor_id TEXT PRIMARY KEY",
+    "seq INTEGER NOT NULL"
+  ],
+  "agent_reports@packages/core/src/subordinates/report-sequence.ts": [
+    "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)",
+    "seq INTEGER NOT NULL"
+  ],
   "agent_tasks@packages/core/src/tools/task-store.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",

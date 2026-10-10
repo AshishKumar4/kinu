@@ -9,19 +9,19 @@
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  TERMINAL_EFFECT_RETRY_CEILING_MS, claimToolEffect, createFactsStore,
+  AgentOwedWork, TERMINAL_EFFECT_RETRY_CEILING_MS, claimToolEffect, createFactsStore,
   type TerminalEffectName, type TerminalEffectPhase,
 } from '@kinu.run/core';
 import { createRecordingLogger } from '@kinu.run/core/obs';
 import { sqlOver } from '@kinu.run/test-utils';
 import {
-  chatSessionTurns, driveUntil, ledgerOver, mainRows, orchestratorHarness,
+  agentWakes, chatSessionTurns, driveUntil, ledgerOver, mainRows, orchestratorHarness,
   reactivateOrchestratorHarness,
   tapDiagnostics, until, workspaceMainActor, type ActorHarness, type HarnessActorWorld, type HarnessOrchestratorAgent,
   type ScriptedHeadReport,
 } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
-import { loseNextHandoff, loseNextHandoffAnswer } from './helpers/agent-facets';
+import { catchNextOwingReport, loseNextHandoff, loseNextHandoffAnswer } from './helpers/agent-facets';
 import { analyticsEngine } from './helpers/analytics-engine';
 import type { SettledTurn, TurnHarness } from './helpers/turn-harness';
 
@@ -363,6 +363,35 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     }
   });
 
+});
+
+describe("an agent's reports reach its workspace newest first", () => {
+  /** Numbered in the agent's own store (design v3 B). A report main's isolate sent while it owed work, in flight past
+   *  the next activation's isolate driving that work and reporting itself at rest, armed main's wake again. */
+  test('a report delayed past a newer one changes nothing', async () => {
+    const harness = orchestratorHarness();
+    const main = workspaceMainActor(harness.db).actorId;
+    const storageKey = harness.agent.agentOf(main).storageKey;
+
+    const caught = catchNextOwingReport(storageKey);
+    loseNextHandoff(storageKey);
+    turns(harness).open('u-stale');
+    await Promise.allSettled([turns(harness).settle({ messageId: 'a-stale', text: 'the live answer' })]);
+    const deliverStale = await caught;
+
+    laterBy(1);
+    const restarted = await reactivateOrchestratorHarness(harness.db);
+    const owes = () => new AgentOwedWork(sqlOver(restarted.db)).all().includes(main) || agentWakes(restarted.db).includes(main);
+    const { db } = await mainRows(restarted);
+    const handedOver = () => db.query("SELECT 1 FROM terminal_effects WHERE effect_key LIKE 'v1:workspace_settle:%'").get() === null;
+
+    await driveUntil(restarted, 'main never handed its turn over and rested', () => handedOver() && !owes());
+    await restarted.agent.harnessAgentsIdle();
+    await deliverStale();
+    await joinHarnessFibers();
+
+    expect(owes()).toBe(false);
+  });
 });
 
 describe("a main turn's close reads back only what something reads", () => {

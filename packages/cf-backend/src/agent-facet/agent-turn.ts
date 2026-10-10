@@ -68,7 +68,7 @@ export interface AgentWorkspace {
   hireAdvisor(advisor: AdvisorRecoverySnapshot): Promise<void>;
   /** A facet sets no alarm: the instant it next needs waking, or none, and whether it holds owed work at all (a parked
    *  effect needs no wake but is still owed), replacing what it said before. */
-  owes(next: number | null, holds: boolean): Promise<void>;
+  owes(seq: number, next: number | null, holds: boolean): Promise<void>;
   birthContext(drainTurnId: string): Promise<SerializedMessage[]>;
   steerSkills(text: string, alreadyActive: readonly string[]): Promise<string | null>;
   /** Its open tasks and running jobs, where its tools wrote them. */

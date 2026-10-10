@@ -365,7 +365,8 @@ export class FacetChat {
     const told = this.telling.then(() => {
       const owed = this.owed();
 
-      return this.deps.workspace.owes(at === undefined ? owed : Math.min(at, owed ?? Infinity), owed !== null || this.owedWork().length > 0);
+      // Numbered as it leaves, in this agent's store: the workspace takes no report older than one it took.
+      return this.deps.workspace.owes(this.deps.database.nextReport(), at === undefined ? owed : Math.min(at, owed ?? Infinity), owed !== null || this.owedWork().length > 0);
     });
 
     this.telling = hold(attempt({ doing: 'telling the workspace what an agent still owes', otherwise: 'unavailable' }, () => told));

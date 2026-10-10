@@ -41,8 +41,8 @@ export function loseNextTurnEnd(storageKey: string): void {
   lostTurnEnds.add(storageKey);
 }
 
-/** A turn's end held on its way to the workspace: `reached` once it is held, and it goes on once released. */
-export interface DelayedTurnEnd {
+/** A call held on its way to the workspace: `reached` once it is held, and it goes on once released. */
+export interface HeldCall {
   readonly reached: Promise<void>;
   readonly release: () => void;
 }
@@ -51,7 +51,7 @@ const delayedTurnEnds = new Map<string, { readonly reached: () => void; readonly
 
 /** The isolate under `storageKey` commits its next turn, and the end it tells the workspace waits on the way until
  *  released. */
-export function delayNextTurnEnd(storageKey: string): DelayedTurnEnd {
+export function delayNextTurnEnd(storageKey: string): HeldCall {
   const reached = Promise.withResolvers<void>();
   const released = Promise.withResolvers<void>();
 
@@ -69,6 +69,20 @@ export function narrationsHandedOver(storageKey: string): readonly (readonly str
 
 function handNarration(storageKey: string, narration: readonly string[] | null): void {
   if (narration !== null && narration.length > 0) handedNarrations.set(storageKey, [...narrationsHandedOver(storageKey), narration]);
+}
+
+const heldReports = new Map<string, (deliver: () => Promise<void>) => void>();
+
+/**
+ * The next report the isolate under `storageKey` sends that it owes anything is caught in flight: the isolate goes on as
+ * if it was told, as one that died after sending would, and the report reaches the workspace only once `deliver`ed.
+ */
+export async function catchNextOwingReport(storageKey: string): Promise<() => Promise<void>> {
+  const caught = Promise.withResolvers<() => Promise<void>>();
+
+  heldReports.set(storageKey, caught.resolve);
+
+  return await caught.promise;
 }
 
 const failedBroadcasts = new Set<string>();
@@ -264,7 +278,18 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
             if (lostHandoffAnswers.delete(placement.storageKey)) throw new Error('the workspace took the handoff and was reset before it answered');
           },
           hireAdvisor: (advisor) => host.hireAdvisor(advisor),
-          owes: (next, holds) => host.owes(next, holds),
+          owes: async (seq, next, holds) => {
+            const catching = heldReports.get(placement.storageKey);
+
+            if (catching !== undefined && (holds || next !== null)) {
+              heldReports.delete(placement.storageKey);
+              catching(async () => { await host.owes(seq, next, holds); });
+
+              return;
+            }
+
+            await host.owes(seq, next, holds);
+          },
           birthContext: (drainTurnId) => host.birthContext(drainTurnId),
           steerSkills: (text, alreadyActive) => host.steerSkills(text, alreadyActive),
           openWork: () => host.openWork(),
