@@ -285,8 +285,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return await settle(this.withChat(snapshot, async (chat) => {
       const words = input.files === undefined ? input.text : { text: input.text, files: input.files };
 
-      // A card's reservation has nothing of the workspace's to take in its transaction: the workspace takes its own after.
-      await chat.session.admit(words, input.card === undefined ? opts : { ...opts, metadata: input.card, consume: () => {} });
+      await chat.session.admit(words, input.card === undefined ? opts : { ...opts, metadata: input.card });
       await chat.taken();
     }));
   }

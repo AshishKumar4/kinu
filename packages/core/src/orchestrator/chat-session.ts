@@ -287,10 +287,9 @@ export interface SendOptions {
   readonly mode?: WorkMode;
 }
 
-/** Its own turn; `consume` runs in reserve's transaction. */
+/** Its own turn, under the card its metadata draws. */
 export interface CardSend extends SendOptions {
   readonly metadata: JsonObject;
-  readonly consume: () => void;
 }
 
 export type SendLandingWaiter = Pick<ReturnType<typeof Promise.withResolvers<SendLanding>>, 'resolve' | 'reject'>;
@@ -696,10 +695,7 @@ export class ChatSession {
     const turnId = opts.id;
 
     if (landing !== null) this.landings.set(turnId, landing);
-    this.transaction(() => {
-      card?.consume();
-      this.pendingSends.reserve({ id: pendingSendId, turnId: null, mode, text, files, ...(card !== undefined && { metadata: card.metadata }) });
-    });
+    this.pendingSends.reserve({ id: pendingSendId, turnId: null, mode, text, files, ...(card !== undefined && { metadata: card.metadata }) });
     this.queue.push({
       text, files, metadata, kind: 'user',
       turnId, pendingSendId,

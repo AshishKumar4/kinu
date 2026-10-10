@@ -403,6 +403,7 @@ export interface UntimedArms {
   readonly admittedDelegations?: boolean;
   readonly agentTurns?: boolean;
   readonly chatLoop?: boolean;
+  readonly changeNotes?: boolean;
 }
 
 export interface ActorDynamicContextExtras {

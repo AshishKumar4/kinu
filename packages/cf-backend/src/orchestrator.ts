@@ -184,7 +184,7 @@ import {
   LiveReadsNotice, readsMovedByFiles, readsOfTables, readsWrittenBy, ROSTER_READS, sameDeviceStatus, type LiveRead,
   CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline, restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult, type WorkspaceReviewResult,
-  initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes,
+  initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes, deliverOwedChangeNotes, owesChangeNotes, type ChangeNotesMessage,
   type ChangeNotesResult, type NotedChanges, type ReviewAnnotation,
   diffLines, type DiffLine,
   getExecutorFiles, readExecutorFile, listEnvironments,
@@ -1568,6 +1568,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       agentTurns: this.agentTurns.inFlightAny(),
       // Main's chat, in its own isolate: work handed to it that it has not yet said it rests from.
       chatLoop: this.agentWakes.armed(this.actorHandle().actorId),
+      changeNotes: owesChangeNotes(this.rt),
     };
   }
 
@@ -1935,6 +1936,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     this.deliverForkNotices();
+    await deliverOwedChangeNotes(this.rt, (message) => this.deliverChangeNotes(message), (failure) => {
+      diagnostics.failure('change_notes.delivery_failed', failure);
+    });
     await super.owedDeliveryWork();
   }
 
@@ -4449,13 +4453,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   @callable()
   async sendChangeNotes(set: NotedChanges): Promise<ChangeNotesResult> {
+    return sendChangeNotes(this.rt, { value: set }, (message) => this.deliverChangeNotes(message));
+  }
+
+  /** Main's chat, in its own isolate, holds the card under the message's id; one it holds already is not sent again. */
+  private async deliverChangeNotes(message: ChangeNotesMessage): Promise<void> {
     const main = this.actorHandle().actorId;
 
-    // Main's chat is in its own isolate, whose reservation cannot share a transaction with these rows: the notes are taken
-    // once the card is reserved there.
-    return sendChangeNotes(this.rt, { value: set }, async (message, consume) => {
-      await (await this.agentCalls(main)).admit(this.agentSnapshot(main), { text: message.text, card: message.metadata }, { id: message.id });
-      consume();
+    await this.takeWords(main, async () => {
+      const calls = await this.agentCalls(main);
+
+      if ((await calls.sendState(this.agentSnapshot(main), message.id)).status !== 'none') return;
+      await calls.admit(this.agentSnapshot(main), { text: message.text, card: message.metadata }, { id: message.id });
     });
   }
 

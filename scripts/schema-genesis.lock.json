@@ -310,6 +310,16 @@
     "retention TEXT",
     "body TEXT"
   ],
+  "change_notes_outbox@packages/core/src/read-models/change-notes.ts": [
+    "seq INTEGER PRIMARY KEY AUTOINCREMENT",
+    "actor_id TEXT NOT NULL",
+    "id TEXT NOT NULL",
+    "source TEXT NOT NULL",
+    "notes_json TEXT NOT NULL",
+    "text TEXT NOT NULL",
+    "metadata_json TEXT NOT NULL",
+    "UNIQUE (actor_id, id)"
+  ],
   "change_notes@packages/core/src/read-models/change-notes.ts": [
     "actor_id TEXT NOT NULL",
     "source TEXT NOT NULL",
