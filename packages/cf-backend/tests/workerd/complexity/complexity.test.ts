@@ -336,13 +336,26 @@ test('a production turn runs no more statements than it was measured at, and ask
  * 19, 16, 14 and 14, and closes in 56 (158 in all; a one-step turn 112). A steady tool step is 14: its pace (relay,
  * host, the facet's grant), its auth (relay, host, account), its tool (relay, host), its activity (relay, host) and
  * four host openings. Before the isolate (d05ff368d) a steady step crossed once; design v2 §8 targets 3.
+ * Counted again at f0fd1ee06 by entry alone, a receiver's calls on itself and a target's instances that never left
+ * the workspace not counted: the same figures, so no turn crossing was a helper. The planted session read was three
+ * crossings before (its `client()` and `cred()` counted, scratch 335c923de) and is one.
  */
 const CROSSINGS = { open: 39, step: 19, close: 56 } as const;
 
-/** The planted calls (`ObservedOrchestrator.plantCrossings`), one at each boundary, each where it lands. */
+/**
+ * The planted calls (`ObservedOrchestrator.plantCrossings`), each counted once where it lands, and nothing else: the
+ * workspace into the account and into main's isolate; main's isolate into the relay, which opens the workspace's host
+ * and calls it, a real call nested in another; and into a memory and a Nimbus session the host answers with. The
+ * session's read calls `client()` and `cred()` on itself: helpers of the one call, never crossings of their own.
+ */
 const PLANTED = {
-  workspace: ['account.getCredentialsRevision', 'relay.logActivity', 'AgentMemory.tail'],
-  main: ['facet.newestFirst'],
+  workspace: {
+    'account.getCredentialsRevision': 1, 'AgentMemory.tail': 1, 'HostedSession._rpcReadFile': 1,
+    'host.logActivity': 1, 'host.memory': 1, 'host.session': 1,
+    'relay.logActivity': 1, 'relay.memory': 1, 'relay.session': 1,
+    'workspace.agentWorkspace': 3,
+  },
+  main: { 'facet.newestFirst': 1 },
 } as const;
 
 /** A turn's crossings by place, both sides summed: its open, each model step's, and its last step's with its close. */
@@ -382,11 +395,7 @@ test("a task turn crosses between the workspace and main's isolate no more than 
   // A phase a step on each side: the open, four tool steps, and the answer's step with the close.
   expect([four.turn.crossings.workspace.phases.length, four.turn.crossings.main.phases.length]).toEqual([6, 6]);
 
-  for (const [side, entries] of Object.entries(PLANTED)) {
-    const planted = side === 'main' ? four.planted.main.total : four.planted.workspace.total;
-
-    for (const entry of entries) expect({ side, entry, crossed: planted[entry] ?? 0 }).toEqual({ side, entry, crossed: 1 });
-  }
+  expect({ workspace: four.planted.workspace.total, main: four.planted.main.total }).toEqual(PLANTED);
 
   expect(phases.open).toBeLessThanOrEqual(CROSSINGS.open);
   expect(Math.max(...phases.steps)).toBeLessThanOrEqual(CROSSINGS.step);
