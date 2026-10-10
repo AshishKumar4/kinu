@@ -24,6 +24,9 @@ const STATUS_RECHECK_FAILED: LogEventName = 'device.status_refresh_failed';
 /** `toolchain: null` distinguishes "not asked" from "has no toolchain". */
 const DISCONNECTED: DeviceStatus = { connected: false, registered: false, toolchain: null };
 
+/** The methods the daemon snapshots for undo before they change the machine; it reads the turn from their hint. */
+const CHECKPOINTED: ReadonlySet<string> = new Set([DEVICE_METHOD.exec, DEVICE_METHOD.writeFile, DEVICE_METHOD.writeFileIfDigest]);
+
 /** UserDO surface the transport needs. Both methods are attenuated, so both carry caller identity. */
 export interface DeviceHubClient {
   /** Presence and toolchain; the hub asks the machine (a Worker has no PATH). */
@@ -133,7 +136,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
             ? [`cd ${shellQuote(cwd)} && ${first}`]
             : params;
 
-          const meta = (method === DEVICE_METHOD.exec || method === DEVICE_METHOD.writeFile) ? opts.checkpointMeta?.() ?? null : null;
+          const meta = CHECKPOINTED.has(method) ? opts.checkpointMeta?.() ?? null : null;
 
           const checkpoint: DeviceCheckpointHint | undefined = meta ? {
             agent: opts.agentName,

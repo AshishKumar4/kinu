@@ -933,6 +933,29 @@ describe('daemon checkpoint protocol', () => {
     expect(fs.readFileSync(path.join(work, 'src', 'a.txt'), 'utf8')).toBe('original');
   });
 
+  test('a digest-checked replace under a hint is snapshotted first, and undo restores what it replaced', async () => {
+    const digest = (text) => require('node:crypto').createHash('sha256').update(text).digest('hex');
+    const { work, ctx } = setup();
+    const file = path.join(work, 'a.txt');
+
+    fs.writeFileSync(file, 'original');
+    const ws = fakeWs();
+
+    handle({
+      id: 'w1', method: 'writeFileIfDigest', sandbox: RAW, params: [file, 'REPLACED', digest('original'), {}],
+      checkpoint: { agent: 'a', turnId: 't', sessionId: 's', dir: work },
+    }, ws, ctx);
+    expect((await ws.response('w1')).result).toEqual({ ok: true, sha256: digest('REPLACED') });
+
+    handle({ id: 'l', method: 'checkpointList', params: ['a'] }, ws, ctx);
+    const list = (await ws.response('l')).result;
+
+    expect(list).toHaveLength(1);
+    handle({ id: 'r', method: 'checkpointRestore', sandbox: RAW, params: ['a', work, list[0].id] }, ws, ctx);
+    await ws.response('r');
+    expect(fs.readFileSync(file, 'utf8')).toBe('original');
+  });
+
   test('frames without a checkpoint hint behave exactly as before (no snapshot)', async () => {
     const { work, ctx } = setup();
 
