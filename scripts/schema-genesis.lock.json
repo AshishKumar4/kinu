@@ -119,6 +119,7 @@
     "turn_id TEXT NOT NULL",
     "epoch INTEGER NOT NULL",
     "ended_at INTEGER",
+    "superseded_at INTEGER",
     "cancelled_at INTEGER",
     "facts_json TEXT",
     "PRIMARY KEY (actor_id, turn_id)"
