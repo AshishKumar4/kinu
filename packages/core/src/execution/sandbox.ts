@@ -685,7 +685,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
     async unexposePort(port) {
       if (!handle) return;
 
-      if (!v.is(ExecutorPortSchema, port)) throw new KinuError('bad_input', `invalid port ${String(port)}`);
+      if (!v.is(ExecutorPortSchema, port)) return settle(Effect.fail(new KinuError('bad_input', `invalid port ${String(port)}`)));
       // No catch: unexposing an unexposed port already succeeds; other errors must surface.
       await withSandboxRetry(() => touch(() => Promise.resolve(handle.unexposePort(Number(port)))));
     },

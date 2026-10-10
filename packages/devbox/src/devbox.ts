@@ -1829,12 +1829,16 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /** The same native listener command/parser used during restore; core receives evidence, not a curl protocol. */
-  async probePort(port: number): Promise<boolean> {
-    if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new DevboxError('invalid-input', `invalid port ${String(port)}`);
+  probePort(port: number): Promise<boolean> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+        return yield* Effect.fail(new DevboxError('invalid-input', `invalid port ${String(port)}`));
+      }
 
-    const answer = await this.exec(healthProbeCommand(port), { cwd: DEVBOX_WORKDIR });
+      const answer = yield* attempt('io', () => this.exec(healthProbeCommand(port), { cwd: DEVBOX_WORKDIR }));
 
-    return !healthProbeSilent(answer.stdout);
+      return !healthProbeSilent(answer.stdout);
+    }));
   }
 
   /** No deadline; the SDK's process lane lost output (D37). */

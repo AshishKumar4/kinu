@@ -154,7 +154,9 @@ describe('a service that does not come back on a wake', () => {
         answer, commands, files, service: service.length, cause: service[0]?.includes('PROCESS_ERROR'), others: turns.length - service.length - recovery.length,
         recovery: recovery.map(turn => ({ failed: turn.includes('container failed'), refused: turn.includes('tools are refused'), rebuild: turn.includes('node_modules') })),
       }).toEqual({
-        answer: 'ran cat app.ts\n', commands: [{ command: 'cat app.ts', restoration: { phase: 'repair', incomplete: 'process p1 did not restart; no port was exposed' } }],
+        answer: 'ran cat app.ts\n', commands: [{ command: 'cat app.ts', restoration: {
+          phase: 'repair', down: ['process p1 did not restart', 'no port was exposed'], bootStamp: 'done',
+        } }],
         files: ['export const port = 3000;\n', 'the server is p1\n'], service: 1, cause: true, others: 0,
         recovery: wake === 'from its snapshot' ? [] : [{ failed: false, refused: false, rebuild: true }],
       });
