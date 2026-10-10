@@ -6,6 +6,10 @@
  */
 
 import { expect, test } from 'bun:test';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import * as v from 'valibot';
+import { scratchDir } from '../packages/test-utils/src/scratch';
 
 import { bridgeSites, type ErrorModelLock, judge, lower, measure } from './error-model';
 
@@ -302,10 +306,9 @@ export class Host {
 
 // React's positions are read by syntax, not by a file's extension: a hook's `.ts` module hands React an effect's
 // callback and a useCallback body as a component does, and a runner anywhere else in it is still a finding.
-test('a hook module\'s effect and callback may detach; its top level and plain functions may not', () => {
-  const HOOK = 'packages/fixture/src/hooks/use-reads.ts';
+const HOOK = 'packages/fixture/src/hooks/use-reads.ts';
 
-  const source = `
+const HOOK_SOURCE = `
 import { detach } from '../obs/index';
 detach(warm());
 export function useReads() {
@@ -318,13 +321,37 @@ function refresh() {
 }
 `;
 
-  const only = 'detach runs only where its caller never awaits: a timer, a listener, or a function a component hands out';
-  const sites = bridgeSites(new Map([[HOOK, source]]));
+const DETACH_ONLY = 'detach runs only where its caller never awaits: a timer, a listener, or a function a component hands out';
 
-  expect({ react: sites.react, findings: sites.findings }).toEqual({
-    react: [`${HOOK}:5`, `${HOOK}:6`],
-    findings: [`${HOOK}:10: ${only}`, `${HOOK}:3: ${only}`],
-  });
+const HOOK_JUDGED = { react: [`${HOOK}:5`, `${HOOK}:6`], findings: [`${HOOK}:10: ${DETACH_ONLY}`, `${HOOK}:3: ${DETACH_ONLY}`] };
+
+test('a hook module\'s effect and callback may detach; its top level and plain functions may not', () => {
+  const sites = bridgeSites(new Map([[HOOK, HOOK_SOURCE]]));
+
+  expect({ react: sites.react, findings: sites.findings }).toEqual(HOOK_JUDGED);
+});
+
+// The case above is red against a gate that lets detach run anywhere: the gate's React test widened to every
+// function, as an over-permissive change would, accepts the top level and the plain function, and the case says so.
+test('a gate that lets detach run anywhere fails the hook-module case', async () => {
+  const source = readFileSync(join(import.meta.dir, 'error-model.ts'), 'utf8');
+
+  expect(source).toContain('  return reactCaller(fn);');
+
+  // A copy outside the tree, its relative imports pointed back into it.
+  const widened = source
+    .replace('  return reactCaller(fn);', "  return fn === undefined ? 'react' : reactCaller(fn) ?? 'react';")
+    .replace(/from '\.\/([^']+)'/g, (_whole, path: string) => `from '${join(import.meta.dir, path)}'`)
+    .replace(/from '\.\.\/([^']+)'/g, (_whole, path: string) => `from '${join(import.meta.dir, '..', path)}'`);
+
+  const mutant = join(scratchDir('error-model-mutant'), 'error-model.ts');
+
+  writeFileSync(mutant, widened);
+  const loose = v.parse(v.object({ bridgeSites: v.function() }), await import(mutant));
+  const sites = v.parse(v.object({ react: v.array(v.string()), findings: v.array(v.string()) }), loose.bridgeSites(new Map([[HOOK, HOOK_SOURCE]])));
+
+  expect(sites).not.toEqual(HOOK_JUDGED);
+  expect(sites.findings).toEqual([]);
 });
 
 test('React calls an intrinsic element\'s handler and an effect\'s, where only detach runs; it tracks a transition\'s or action\'s returned settle', () => {
