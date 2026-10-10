@@ -16,6 +16,10 @@ if [[ "$shape" == all ]]; then
     done
   done
   bun scripts/turn-file-io.ts --sha="$target_sha" --shape=files --mode=time
+elif [[ "$mode" == all ]]; then
+  for metric in counts time heap; do
+    bun scripts/turn-file-io.ts --sha="$target_sha" --shape="$shape" --mode="$metric"
+  done
 else
   bun scripts/turn-file-io.ts --sha="$target_sha" --shape="$shape" --mode="$mode"
 fi

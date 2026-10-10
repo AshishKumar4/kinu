@@ -254,9 +254,11 @@ async function model(request: Request): Promise<Response> {
     let tools = 0;
 
     if (kind === 'five') tools = 4;
-    else if (kind === 'growth' || kind === 'long') tools = 1;
+    else if (kind === 'growth') tools = 1;
     answer = step < tools
-      ? { toolCall: { name: 'file', arguments: { op: 'stat', path: '.' } } }
+      ? { toolCall: { name: 'file', arguments: kind === 'five'
+        ? { op: 'write', path: `notes/perfio-step-${String(step)}.txt`, content: `note ${String(step)}` }
+        : { op: 'stat', path: '.' } } }
       : { text: kind === 'prior' || kind === 'long' ? Array.from({ length: Number(deltasText) }, (_, index) => `w${String(index)} `).join('') : 'ok' };
   }
 
