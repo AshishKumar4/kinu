@@ -87,7 +87,7 @@ export class HeapDriver extends DurableObject<DriverEnv> {
 }
 
 /** What the model answers and whether it answers yet; module state, which the entrypoint and fetch share. */
-const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepBytes: 0, stepping: false, arrived: 0, released: 0, hires: 0, helpersAnswered: 0, holdHelper: false, helperParked: false, nest: false };
+const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepBytes: 0, stepping: false, arrived: 0, released: 0, hires: 0, helpersAnswered: 0, holdHelper: false, helperParked: false, nest: false, failingSteps: 0 };
 
 /** Each character above U+00FF in `request`, with the text before it: one of them stores the whole request two bytes each. */
 function noteWide(request: string): void {
@@ -235,6 +235,11 @@ async function compatAnswer(body: string): Promise<Response> {
       : { text: 'done' };
 
     if (model.toolSteps > 0) model.toolSteps -= 1;
+    // Failing: each step reads a file no workspace has, so the workspace's tool call rejects back across the port.
+    else if (model.failingSteps > 0) {
+      answer = { toolCall: { name: 'file', arguments: { op: 'read', path: `missing/step-${String(model.failingSteps)}.md` } } };
+      model.failingSteps -= 1;
+    }
   }
 
   const out = compatBody(answer, asked);
@@ -280,13 +285,15 @@ export default {
 
       if (url.searchParams.has('nest')) model.nest = url.searchParams.get('nest') === '1';
 
+      if (url.searchParams.has('failingSteps')) model.failingSteps = Number(url.searchParams.get('failingSteps'));
+
       if (url.searchParams.has('hires')) {
         model.hires = Number(url.searchParams.get('hires'));
         model.helpersAnswered = 0;
         model.stepping = false;
       }
 
-      return Response.json({ parked: model.parked, calls: model.calls, wide: [...model.wide], arrived: model.arrived, helpersAnswered: model.helpersAnswered, helperParked: model.helperParked });
+      return Response.json({ parked: model.parked, calls: model.calls, wide: [...model.wide], arrived: model.arrived, helpersAnswered: model.helpersAnswered, helperParked: model.helperParked, failingSteps: model.failingSteps });
     }
 
     if (url.pathname === '/runners') return Response.json(await driver.runners(workspace));
