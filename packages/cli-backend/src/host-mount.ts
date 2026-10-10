@@ -38,11 +38,6 @@ function throwVfsError(input: { error: unknown; syscall: string; path: string })
 type HostFiles = VFS & Required<Pick<VFS, 'readRange' | 'rmdir' | 'rename' | 'readlink'>> & Required<Pick<CheckpointFiles, 'writeFileIfDigest'>>;
 
 /**
- * `data` at `path` only if its bytes still hash to `expected` (null: only if none is there), replaced through a temp file
- * and a rename. The compare and the rename run back to back in this process; this host gives no lock against another
- * process's write in that instant, and a reader never sees half a file.
- */
-/**
  * Each path's compare-through-rename, one at a time in this process: every head's plane over the machine shares this
  * table, so two of them cannot both pass a compare and the later rename lose the first write. Keyed by the path's real
  * directory, so a link to it is the same file.
@@ -52,19 +47,31 @@ const replacing = new Map<string, Promise<unknown>>();
 async function oneAtATime<T>(path: string, run: () => Promise<T>): Promise<T> {
   const directory = await tolerateAsync(() => fs.realpath(dirname(path)), 'enoent') ?? dirname(path);
   const key = join(directory, basename(path));
-  const before = replacing.get(key) ?? Promise.resolve();
-  // After the one before, whether it landed or failed.
-  const mine = before.then(run, run);
+  const before = replacing.get(key);
 
-  replacing.set(key, mine);
+  const mine = (async () => {
+    await before;
+
+    return run();
+  })();
+
+  // What the next one waits on: this one settled, whether it landed or failed.
+  const settled = Promise.allSettled([mine]);
+
+  replacing.set(key, settled);
 
   try {
     return await mine;
   } finally {
-    if (replacing.get(key) === mine) replacing.delete(key);
+    if (replacing.get(key) === settled) replacing.delete(key);
   }
 }
 
+/**
+ * `data` at `path` only if its bytes still hash to `expected` (null: only if none is there), replaced through a temp file
+ * and a rename. The compare and the rename run back to back in this process; this host gives no lock against another
+ * process's write in that instant, and a reader never sees half a file.
+ */
 function replaceIfDigest(path: string, data: Uint8Array, expected: string | null): Promise<VfsDigestWrite> {
   return oneAtATime(path, () => replaceNow(path, data, expected));
 }

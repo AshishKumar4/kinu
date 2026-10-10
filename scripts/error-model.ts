@@ -238,7 +238,7 @@ export const DECLARED = byFile([
       'DO RPC answers (capability install, subordinate title, model-settings fan-out, cancel) and the Agents SDK\'s `{ success: false }` socket denial, read across the isolate'],
     ['packages/cf-backend/src/cli/routes.ts', ['body'],
       'the CLI routes\' HTTP JSON bodies, read by the CLI\'s fetch'],
-    ['packages/cli-backend/src/host-mount.ts', ['replaceIfDigest'],
+    ['packages/cli-backend/src/host-mount.ts', ['replaceNow'],
       'the host folder\'s answer to a digest-checked write, `VfsDigestWrite`, the plane contract every plane answers'],
     ['packages/core/src/types/primitives.ts', ['VfsDigestWrite'],
       'a plane\'s digest-checked write answer, as Nimbus\'s `VfsCasResult` is a revision-checked one: the device daemon and the sandbox guest program answer it'],
