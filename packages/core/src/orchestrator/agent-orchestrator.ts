@@ -198,16 +198,14 @@ export class AgentOrchestrator {
   /**
    * A new user message arrived: dispatch the previous turn's detached outcome review. Programmatic turns must
    * not call this. Only a `'conversation'` message counts as follow-up evidence; otherwise no follow-up is passed.
+   * An idempotent open transition keyed by the turn, recorded whether or not it grades: a preparation of `turnId`
+   * replayed, after a reset or after a later turn, grades nothing more, not even the turn itself once it is recorded.
    */
-  /** An idempotent open transition keyed by the turn, recorded whether or not it grades: a preparation of `turnId`
-   *  replayed, after a reset or for a re-read, grades nothing more, not even the turn itself once it is recorded. */
   observeUserTurn(turnId: string, userText: string, continuity: TurnContinuity): void {
-    if (!this.window.opened(turnId) || !this.turnEvolutionEnabled) return;
-    const previous = this.window.claimPendingReview();
-
-    if (!previous) return;
     const followup = continuity === 'conversation' ? userText : null;
-    this.dispatchReview(previous.turn, followup, previous.rowId);
+    const previous = this.window.openTurn(turnId, this.turnEvolutionEnabled ? { followup } : null);
+
+    if (previous !== null) this.dispatchReview(previous.turn, followup, previous.rowId);
   }
 
   /**

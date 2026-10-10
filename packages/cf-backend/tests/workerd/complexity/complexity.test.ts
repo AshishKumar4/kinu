@@ -220,14 +220,19 @@ const turnStatements = new Map<number, { readonly workspace: OperationCost['tabl
  * 801 once a turn's close neither reads its answer back to announce it to no extension (b65abe3ff) nor reads its
  * narration for no slate and no failed task (8f78f86e9): the workspace's 380, main's 421, at both sizes over 3 runs
  * on 380d7148e.
- * 814 with the turn surface's durable facts (design v2 §2, v3 B), at both sizes over 3 runs on 9d7fb8edb. The
+ * 814 with the turn surface's durable facts (design v2 §2, v3 B), at both sizes over 3 runs on 9d7fb8edb, accepted on
+ * 2026-10-10 as a temporary cost of the fences and report sequence: this bound is back below 801 by the end of the
+ * design's step 7, when the root's accumulator and mirrored writes go, and is not raised again without the root's say. The
  * workspace's 386: each of the turn's four reports checked against the newest taken (+4), the opening's key (+1), the
  * turn's fence (+2), and its branches' rows where main_turn_facts kept three statements (-1). Main's 428: its four
  * reports numbered (+4), its facts frozen and read back for the handoff (+2), its claim read for the opening's epoch (+1).
  * 807 once an agent with no hirer asks the workspace for no report (ActorPolicy), at both sizes over 3 runs on
  * ceb97fb8e: main's 419 (-9, the report's ledger reads), the workspace's 388 (+2, the policy's row reads).
+ * 809 with the review's durability fixes, within the accepted 814, at both sizes over 3 runs on 9c6e5ba52: the
+ * workspace's 390 (+2, the facts it first offered the turn's preparation, kept for an agent that dies before it froze
+ * them, and the ended tombstone the turn's handoff writes on its fence).
  */
-const TURN_STATEMENTS = 807;
+const TURN_STATEMENTS = 809;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {

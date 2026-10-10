@@ -33,7 +33,8 @@ function webhook(deliveryId: string, body: JsonObject = { x: 1 }): IngressDescri
   };
 }
 
-function fakeEngine(opts?: { enabled?: boolean }) {
+/** `dying.first` makes the first review die before it ran, as an isolate that ended inside it. */
+function fakeEngine(opts?: { enabled?: boolean; dying?: { first: boolean } }) {
   const reviews: Array<{ turn: CompletedTurn; followup: string | null }> = [];
   const sessions: number[] = [];
   const trials: number[] = [];
@@ -44,6 +45,11 @@ function fakeEngine(opts?: { enabled?: boolean }) {
   const observed: Array<{ names: string[]; quality: number }> = [];
 
   const reviewTurn = async (turn: CompletedTurn, followup: string | null): Promise<void> => {
+    if (opts?.dying?.first === true) {
+      opts.dying.first = false;
+      throw new Error('the isolate died inside the review');
+    }
+
     reviews.push({ turn, followup });
   };
 
@@ -89,7 +95,7 @@ function fakeEngine(opts?: { enabled?: boolean }) {
     },
   };
 
-  return { engine, reviews, sessions, crafted, observed, trials, sql, store };
+  return { engine, reviews, sessions, crafted, observed, trials, sql, execRaw, store };
 }
 
 function fakeHost(opts?: { activeTurn?: boolean }) {
@@ -547,6 +553,56 @@ describe('AgentOrchestrator — turn-outcome review dispatch', () => {
     orch.observeUserTurn('u-next', 'that was wrong', 'conversation');
 
     expect(reviews).toEqual([{ turn: aTurn(1), followup: 'that was wrong' }]);
+  });
+
+  test("a turn's opening replayed after a later turn opened grades nothing more", () => {
+    const { engine, reviews } = fakeEngine();
+    const { host } = fakeHost();
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+
+    orch.recordTurn(aTurn(0), 'conversation');
+    orch.observeUserTurn('u-first', 'first follow-up', 'conversation');
+    orch.recordTurn(aTurn(1), 'conversation');
+    orch.observeUserTurn('u-second', 'second follow-up', 'conversation');
+    orch.recordTurn(aTurn(2), 'conversation');
+    orch.observeUserTurn('u-first', 'first follow-up', 'conversation');
+
+    expect(reviews).toEqual([{ turn: aTurn(0), followup: 'first follow-up' }, { turn: aTurn(1), followup: 'second follow-up' }]);
+  });
+
+  /** Cut between the opening's record and its claim (an isolate that died there): the replay grades the review the
+   *  opening named, not a newer one, with its follow-up. */
+  test('an opening cut after it named the review it grades grades that review on its replay', () => {
+    const { engine, reviews, execRaw } = fakeEngine();
+    const { host } = fakeHost();
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+
+    orch.recordTurn(aTurn(0), 'conversation');
+    execRaw(`CREATE TRIGGER cut_claim BEFORE UPDATE ON completed_turns WHEN NEW.review = 'claimed'
+      BEGIN SELECT RAISE(ABORT, 'the isolate died'); END`);
+    expect(() => { orch.observeUserTurn('u-cut', 'that was wrong', 'conversation'); }).toThrow('the isolate died');
+    execRaw('DROP TRIGGER cut_claim');
+    orch.recordTurn(aTurn(1), 'conversation');
+    orch.observeUserTurn('u-cut', 'that was wrong', 'conversation');
+
+    expect(reviews).toEqual([{ turn: aTurn(0), followup: 'that was wrong' }]);
+  });
+
+  /** Cut after the claim, before its review ran: the stale-claim recovery runs the same review with its follow-up. */
+  test('an opening whose review died before it ran leaves the review and its follow-up for the recovery', async () => {
+    const { engine, reviews, store } = fakeEngine({ dying: { first: true } });
+    const { host } = fakeHost();
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+
+    orch.recordTurn(aTurn(0), 'conversation');
+    orch.observeUserTurn('u-died', 'that was wrong', 'conversation');
+    await orch.settleTracked();
+    expect(reviews).toEqual([]);
+
+    store.resetStaleClaims();
+    await engine.runDeferredTurnReviews();
+
+    expect(reviews).toEqual([{ turn: aTurn(0), followup: 'that was wrong' }]);
   });
 
   test('programmatic turns review immediately with no follow-up and do not displace the pending user turn', () => {

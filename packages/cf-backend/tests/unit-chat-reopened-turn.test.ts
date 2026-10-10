@@ -42,7 +42,7 @@ import {
 } from './helpers/actor-harness';
 import { answeringGateway, chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion, type StubbedAiBinding } from './helpers/platform-gateway';
 import { abandonHarnessFibers } from './helpers/agents-sdk';
-import { agentDatabase, copyNextOpening, delayNextTurnEnd } from './helpers/agent-facets';
+import { agentDatabase, copyNextOpening, delayNextTurnEnd, loseNextOpeningAnswer } from './helpers/agent-facets';
 import { socketConnection } from './helpers/bindings';
 
 const FrameSchema = v.looseObject({
@@ -394,6 +394,58 @@ test('an opening of a turn older than its re-opening is refused, before and afte
   await expect((await workspace.agent.agentWorkspace(main)).prepareChat(opening)).rejects.toThrow('opened again at a later epoch');
   const restarted = await reactivateOrchestratorHarness(workspace.db);
   await expect((await restarted.agent.agentWorkspace(main)).prepareChat(opening)).rejects.toThrow('opened again at a later epoch');
+});
+
+/** The turns the workspace's evolution window recorded. */
+function recordedTurns(workspace: StartedHarness): number {
+  return v.parse(v.object({ n: v.number() }), workspace.db.query('SELECT COUNT(*) AS n FROM completed_turns').get()).n;
+}
+
+/** Asks `id` on a socket of its own and answers once its turn has ended. */
+async function askedAndAnswered(workspace: StartedHarness, id: string): Promise<void> {
+  await workspace.started;
+  const { socket } = socketOn(workspace.agent, `${id}-socket`, () => {});
+
+  await workspace.agent.onConnect(socket, CONNECT);
+  await workspace.agent.onMessage(socket, chatRequest(id));
+}
+
+/** The fence keeps every turn the agent opened: one that ended is no opening's, before or after the workspace resets,
+ *  and a refused opening leaves the later turn's fence as it was. */
+test("an opening of a turn delivered after the agent's next turn opened is refused, before and after the workspace resets", async () => {
+  const workspace = gatewayWorkspace(counting({ held: 0, answer: 'Done.', holding: new AwaitedList<number>() }));
+  const main = workspaceMainActor(workspace.db).actorId;
+  const copied = copyNextOpening(workspace.agent.agentOf(main).storageKey);
+
+  await askedAndAnswered(workspace, 'req-first');
+  const first = await copied;
+  await askedAndAnswered(workspace, 'req-second');
+
+  await expect((await workspace.agent.agentWorkspace(main)).prepareChat(first)).rejects.toThrow('has ended');
+  const restarted = await reactivateOrchestratorHarness(workspace.db);
+  await expect((await restarted.agent.agentWorkspace(main)).prepareChat(first)).rejects.toThrow('has ended');
+});
+
+/** The workspace keeps the facts it first offered a turn until the agent's copy is durable (design v2 §2): an isolate
+ *  that died after the workspace prepared the turn and before freezing them, with learning turned off meanwhile, is
+ *  offered the first facts again, and the turn is recorded as it opened. */
+test('a turn whose isolate died between its preparation and freezing its facts keeps the facts first prepared', async () => {
+  const workspace = gatewayWorkspace(counting({ held: 0, answer: 'Done.', holding: new AwaitedList<number>() }));
+  const main = workspaceMainActor(workspace.db).actorId;
+  const preparedThenLost = loseNextOpeningAnswer(workspace.agent.agentOf(main).storageKey);
+
+  await workspace.started;
+  const { socket } = socketOn(workspace.agent, 'req-facts-socket', () => {});
+
+  await workspace.agent.onConnect(socket, CONNECT);
+  const answered = Promise.resolve(workspace.agent.onMessage(socket, chatRequest('req-facts')));
+
+  await preparedThenLost;
+  workspaceMainActor(workspace.db).config.setLearning(false);
+  await resetRootIsolate(workspace);
+  await answered;
+
+  await driveUntil(workspace, 'the turn was never recorded under the facts it opened with', () => recordedTurns(workspace) === 1);
 });
 
 test('an open web pane removes a cut step before the re-run streams', async () => {

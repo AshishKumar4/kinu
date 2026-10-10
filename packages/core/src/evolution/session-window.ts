@@ -78,11 +78,13 @@ export function initCompletedTurnTable(execRaw: RawSqlExec): void {
              ON completed_turns(actor_id, review, created_at)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_completed_turns_window
              ON completed_turns(actor_id, in_window, created_at)`);
-  // The turn whose opening last graded a parked review: an actor's turns open one at a time, so its latest is the
-  // only one a replayed preparation can repeat.
+  // Each turn's opening and the parked review it grades, if any: kept for every turn, so a preparation replayed, after
+  // a reset or after a later turn, opens nothing again.
   execRaw(`CREATE TABLE IF NOT EXISTS opened_turns (
-    actor_id TEXT PRIMARY KEY,
-    turn_id  TEXT NOT NULL
+    actor_id  TEXT NOT NULL,
+    turn_id   TEXT NOT NULL,
+    review_id TEXT,
+    PRIMARY KEY (actor_id, turn_id)
   )`);
   // Both lifetimes end in a DELETE of replayable work, so tombstones are part
   // of this table's contract.
@@ -167,9 +169,13 @@ export interface CompletedTurnStore {
   size(): number;
   /** Null when empty; the caller settles once the pass has run. */
   claim(): ClaimedWindow | null;
-  /** Whether this is `turnId`'s first opening, recorded as it answers: its preparation replayed after a reset is not. */
-  opened(turnId: string): boolean;
-  claimPendingReview(): PendingTurnReview | null;
+  /**
+   * `turnId`'s opening, once however often its preparation is replayed. It records the newest parked review as the one
+   * it grades, then claims that review with `grade.followup` on its row, so a death between the two, or before the
+   * review runs, leaves the same obligation for the replay or the stale-claim recovery. `grade` null opens without
+   * grading. Null when there is nothing (left) to grade.
+   */
+  openTurn(turnId: string, grade: { readonly followup: string | null } | null): PendingTurnReview | null;
   /** Demote parked reviews into the owed queue; the caller decides when a
    *  follow-up can no longer grade them. `before` limits demotion to rows
    *  created at or before it, so a replayed old task cannot demote a newer
@@ -295,24 +301,24 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
       };
     },
 
-    opened(turnId) {
+    openTurn(turnId, grade) {
       authorize();
 
-      return sql<{ turn_id: string }>`INSERT INTO opened_turns (actor_id, turn_id) VALUES (${actorId}, ${turnId})
-        ON CONFLICT (actor_id) DO UPDATE SET turn_id = excluded.turn_id WHERE opened_turns.turn_id <> excluded.turn_id RETURNING turn_id`.length > 0;
-    },
+      if (grade === null) void sql`INSERT INTO opened_turns (actor_id, turn_id, review_id) VALUES (${actorId}, ${turnId}, NULL) ON CONFLICT (actor_id, turn_id) DO NOTHING`;
+      else {
+        void sql`INSERT INTO opened_turns (actor_id, turn_id, review_id) VALUES (${actorId}, ${turnId}, (SELECT id FROM completed_turns
+          WHERE actor_id = ${actorId} AND review = 'awaiting_followup' ORDER BY created_at DESC, rowid DESC LIMIT 1)) ON CONFLICT (actor_id, turn_id) DO NOTHING`;
+      }
 
-    claimPendingReview() {
-      authorize();
+      const graded = sql<{ review_id: string | null }>`SELECT review_id FROM opened_turns WHERE actor_id = ${actorId} AND turn_id = ${turnId}`[0]?.review_id;
 
-      const row = sql<TurnRow>`
-        SELECT id, turn, followup, created_at FROM completed_turns
-        WHERE actor_id = ${actorId} AND review = 'awaiting_followup'
-        ORDER BY created_at DESC, rowid DESC LIMIT 1`[0];
+      if (graded === undefined || graded === null || grade === null) return null;
+
+      const row = sql<TurnRow>`UPDATE completed_turns SET review = 'claimed', followup = ${grade.followup}
+        WHERE actor_id = ${actorId} AND id = ${graded} AND review = 'awaiting_followup'
+        RETURNING id, turn, followup, created_at`[0];
 
       if (!row) return null;
-      void sql`UPDATE completed_turns SET review = 'claimed'
-        WHERE actor_id = ${actorId} AND id = ${row.id}`;
       const turn = decode(row);
 
       if (!turn) {

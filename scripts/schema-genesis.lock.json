@@ -118,7 +118,9 @@
     "actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id)",
     "turn_id TEXT NOT NULL",
     "epoch INTEGER NOT NULL",
+    "ended_at INTEGER",
     "cancelled_at INTEGER",
+    "facts_json TEXT",
     "PRIMARY KEY (actor_id, turn_id)"
   ],
   "agent_data_tables@packages/core/src/tools/db-codemode.ts": [
@@ -977,8 +979,10 @@
     "PRIMARY KEY (actor_id, run_id)"
   ],
   "opened_turns@packages/core/src/evolution/session-window.ts": [
-    "actor_id TEXT PRIMARY KEY",
-    "turn_id TEXT NOT NULL"
+    "actor_id TEXT NOT NULL",
+    "turn_id TEXT NOT NULL",
+    "review_id TEXT",
+    "PRIMARY KEY (actor_id, turn_id)"
   ],
   "operator_requests@packages/core/src/events/recorder.ts": [
     "actor_id TEXT PRIMARY KEY",

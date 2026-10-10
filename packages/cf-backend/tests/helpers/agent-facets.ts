@@ -84,6 +84,18 @@ export async function copyNextOpening(storageKey: string): Promise<TurnOpeningRe
   return await copied.promise;
 }
 
+const lostOpeningAnswers = new Map<string, () => void>();
+
+/** The isolate under `storageKey` dies once the workspace has answered its next opening of a turn, before it reads the
+ *  answer: the promise settles then. */
+export async function loseNextOpeningAnswer(storageKey: string): Promise<void> {
+  const answered = Promise.withResolvers<void>();
+
+  lostOpeningAnswers.set(storageKey, answered.resolve);
+
+  await answered.promise;
+}
+
 const heldReports = new Map<string, (deliver: () => Promise<void>) => void>();
 
 /**
@@ -257,7 +269,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           guard: (...args) => host.guard(...args),
           debit: (...args) => host.debit(...args),
           prepareTurn: (turnId) => host.prepareTurn(turnId),
-          prepareChat: (request) => {
+          prepareChat: async (request) => {
             const copy = copiedOpenings.get(placement.storageKey);
 
             if (copy !== undefined && request.turnId !== null) {
@@ -265,7 +277,14 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
               copy(request);
             }
 
-            return host.prepareChat(request);
+            const lost = lostOpeningAnswers.get(placement.storageKey);
+            const prepared = await host.prepareChat(request);
+
+            if (lost === undefined || request.turnId === null) return prepared;
+            lostOpeningAnswers.delete(placement.storageKey);
+            lost();
+
+            return await new Promise<never>(() => {});
           },
           bindProfile: (turnId, profile) => host.bindProfile(turnId, profile),
           chatEvent: async (event) => {

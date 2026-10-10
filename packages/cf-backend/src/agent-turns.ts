@@ -272,7 +272,7 @@ export class AgentTurns {
 
     // Delayed past the agent's later opening of the turn, or sent before the workspace reset: its execution is gone.
     if (request.turnId !== null && request.epoch !== undefined && !new TurnFences(this.deps.sql).open(actorId, turnId, request.epoch)) {
-      return settleSync(Effect.fail(new KinuError('denied', `The turn ${turnId} was opened again at a later epoch than ${String(request.epoch)}.`)));
+      return settleSync(Effect.fail(new KinuError('denied', `The turn ${turnId} has ended, was cancelled, or was opened again at a later epoch than ${String(request.epoch)}.`)));
     }
 
     const hosted: HostedTurnRequest = {
@@ -345,7 +345,7 @@ export class AgentTurns {
       ...(prepared.trial !== undefined && { trial: prepared.trial }),
       ...(run?.mission !== undefined && { missionLabels: run.mission.labels }),
       ...(this.chatMission(turn.reference.actorId, turn).length > 0 && { missionLabels: this.chatMission(turn.reference.actorId, turn) }),
-      facts: this.facts(turn, prepared),
+      facts: this.offeredFacts(turn, prepared),
       trace: run?.reportStep !== undefined || run?.reportDelta !== undefined,
       resume: run?.resume !== undefined,
       reportMessages: run?.reportMessages !== undefined,
@@ -430,6 +430,15 @@ export class AgentTurns {
       continuity: surface?.continuity ?? 'conversation', evolutionEnabled: surface?.evolutionEnabled ?? false,
       missionLabels: [...turn.request.run?.inference.mission?.labels ?? readMissionLabels(turn.request.driving)],
     };
+  }
+
+  /** A chat turn's facts as the workspace first offered them: the agent may die before it froze them, and its next
+   *  preparation must freeze the same, whatever changed here meanwhile. */
+  private offeredFacts(turn: OpenTurn, prepared: PreparedHostedTurn): TurnFacts {
+    const facts = this.facts(turn, prepared);
+    const { chatTurnId } = turn.request;
+
+    return chatTurnId === undefined ? facts : new TurnFences(this.deps.sql).offer(turn.reference.actorId, chatTurnId, facts);
   }
 
   /** Main's chat turn names its missions when it is prepared under any. */
