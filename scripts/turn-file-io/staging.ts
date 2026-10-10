@@ -147,6 +147,8 @@ try {
         { key: '$workers.cpuTimeMs', operation: 'gt', type: 'number', value: -1 },
       ], 1000);
 
+      if (events.sampling !== 1) throw new Error(`CPU window is sampled at ${String(events.sampling)}, not an exact count`);
+
       rememberCpu(requests, events.events);
     }
   }
