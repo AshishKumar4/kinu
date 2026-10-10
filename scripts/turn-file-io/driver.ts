@@ -27,6 +27,7 @@ export class PerfDriver extends DurableObject<DriverEnv> {
     await users.setCredential(caller, 'openai-compat.default', { kind: 'openai-compat', baseURL: 'http://model.invalid', apiKey: 'perf' });
     await target.setSoul('# Probe\n\nAnswer.');
     await target.setModel(SCRIPTED_MODEL_SPEC);
+    await target.getWorkspaceSnapshot();
     await target.perfQuiet();
   }
 
