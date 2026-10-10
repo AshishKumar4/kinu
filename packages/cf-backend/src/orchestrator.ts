@@ -920,9 +920,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         if (parentActorId === null) return settleSync(Effect.fail(new KinuError('missing', 'A root actor has no hirer to tell.')));
 
+        const reference = actorReferenceOf(this.actorDirectoryStore().open(parentActorId));
+
         const parent = parentActorId === this.actorHandle().actorId
           ? this.actorSession
-          : (await this.actorHost().acquire(actorReferenceOf(this.actorDirectoryStore().open(parentActorId)), { kind: 'actor' })).session;
+          : (this.actorHost().hosted(reference) ?? await this.actorHost().acquire(reference, { kind: 'actor' })).session;
 
         return await parent.orchestrator.inbox.send(signal);
       },
@@ -3713,21 +3715,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         installedBuild: host.installedBuild,
         workspace: this.workspaceName(),
         resumable: (limit) => host.resumable(limit).filter((turn) => turn.record.actorId === rootActorId),
-        acquire: async (reference, seat) => {
-          const actor = await host.acquire(reference, seat);
+        bindStores: (reference) => {
+          host.bindStores(reference);
 
-          return {
-            runtime: actor.runtime,
-            // The root recovers through the stores its session, resumed above, admits and settles through:
-            // its tabs are told about every claim written there.
-            stores: this.stores,
-            session: {
-              get turnOpen() {
-                return rootIsLive();
-              },
-            },
-          };
+          // The live root's session and tabs observe claims through this store owner.
+          return { stores: this.stores };
         },
+        readScaffold: host.readScaffold,
+        hosted: () => ({ session: { get turnOpen() { return rootIsLive(); } } }),
       });
     }, { workspace: this.name });
 

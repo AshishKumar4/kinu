@@ -14,13 +14,14 @@ import type { StoredActorClaim } from '../orchestrator/actor-claims';
 import type { SessionFilePlane } from '../session/payload';
 import { actorReferenceOf, sameActorReference, type ActorHandle, type ActorReference } from '../identity/actor-handle';
 import { createAgentStores, type AgentStores } from './agent-stores';
-import { tracedActorKind, type WorkspaceActor, type WorkspaceActorDirectory } from '../identity/workspace-actors';
+import { actorScaffoldPath, tracedActorKind, type WorkspaceActor, type WorkspaceActorDirectory } from '../identity/workspace-actors';
 import { localContextTree, type ActorContextStores, type ChildContextResolver, type ContextTree } from '../vfs/context-plane';
 import type { ContextEventRecorder } from '../types/context-plane';
 import type { TemporaryAgentPort } from '../types/subordinates';
 import type { AgentSignal, SendOutcome } from '../types/signals';
 import { seedActorLoop, type LoopOrigin } from '../scaffold/bootstrap';
 import { decideInterruptedTurn } from '../orchestrator/turn-recovery';
+import { readVersionedScaffoldSource } from '../scaffold/versions';
 import type { ReportedTurn } from '../subordinates/turn-reports';
 import type { WriteObserver } from '../vfs/write-events';
 import { diagnostics, flight, settle, settleSync, toKinuError, type AgentTracing } from '../obs/index';
@@ -93,11 +94,13 @@ export interface ActorHostDeps {
 export interface ActorHost {
   acquire(reference: ActorReference, seat: ActorSeat): Promise<HostedActor>;
   /** Never starts anything. */
-  hosted(reference: ActorReference): HostedActor | null;
+  hosted(this: void, reference: ActorReference): HostedActor | null;
   /** Any lifecycle state; builds no session. */
   describe(actorId: string): WorkspaceActor | null;
   /** Stores without runtime or session; still refuses a retired or re-parented actor. */
-  bindStores(reference: ActorReference): BoundActor;
+  bindStores(this: void, reference: ActorReference): BoundActor;
+  /** Reads retained source bytes without choosing an execution seat. */
+  readScaffold(this: void, reference: ActorReference, version: number): Promise<string | null>;
   list(): readonly ActorReference[];
   /** Serialized per actor only. Abandoning the promise cancels nothing; use `session.interrupt()`. */
   run<T>(reference: ActorReference, seat: ActorSeat, work: (actor: HostedActor) => Promise<T>): Promise<T>;
@@ -134,6 +137,7 @@ interface ReleaseFence {
 
 interface HostSlot {
   readonly actor: HostedActor;
+  readonly seat: ActorSeat;
   readonly fence: ReleaseFence;
   queue: Promise<unknown>;
 }
@@ -161,6 +165,7 @@ function actorScopedTables(sql: SqlExecutor): readonly string[] {
 export function createActorHost(deps: ActorHostDeps): ActorHost {
   const slots = new Map<string, HostSlot>();
   const ports = new Map<string, TemporaryAgentPort>();
+  const opening = new Map<string, { readonly reference: ActorReference; readonly seat: ActorSeat }>();
 
   const slotFor = (reference: ActorReference): Effect.Effect<HostSlot | null, KinuError> => {
     const slot = slots.get(reference.actorId);
@@ -251,7 +256,8 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
           },
           parent: async (signal) => {
             if (deps.sayToParent !== undefined) return await deps.sayToParent(reference, signal);
-            const parent = await host.acquire(actorReferenceOf(deps.directory.open(parentId)), { kind: 'actor' });
+            const parentReference = actorReferenceOf(deps.directory.open(parentId));
+            const parent = host.hosted(parentReference) ?? await host.acquire(parentReference, { kind: 'actor' });
 
             return parent.session.orchestrator.inbox.send(signal);
           },
@@ -265,16 +271,31 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     return { actor: { ...bound, runtime, session: built }, fence };
   });
 
-  const opened = flight(({ reference, seat }: { readonly reference: ActorReference; readonly seat: ActorSeat }) => Effect.map(build(reference, seat), ({ actor, fence }) => {
-    slots.set(reference.actorId, { actor, fence, queue: Promise.resolve() });
+  const opened = flight(({ reference, seat }: { readonly reference: ActorReference; readonly seat: ActorSeat }) => Effect.ensuring(
+    Effect.map(build(reference, seat), ({ actor, fence }) => {
+      slots.set(reference.actorId, { actor, fence, seat, queue: Promise.resolve() });
 
-    return actor;
-  }), { key: ({ reference }) => reference.actorId });
+      return actor;
+    }),
+    Effect.sync(() => { opening.delete(reference.actorId); }),
+  ), { key: ({ reference }) => reference.actorId });
 
   const acquired = (reference: ActorReference, seat: ActorSeat): Effect.Effect<HostedActor, KinuError> => Effect.gen(function* () {
     const live = yield* slotFor(reference);
+    const pending = opening.get(reference.actorId);
+    const selected = live?.seat ?? pending?.seat;
+
+    if (pending !== undefined && !sameActorReference(pending.reference, reference)) {
+      return yield* new KinuError('denied', 'The actor reference differs from its acquisition in progress.');
+    }
+
+    if (selected !== undefined && (selected.kind !== seat.kind || selected.writes !== seat.writes)) {
+      return yield* new KinuError('denied', 'The actor is already bound to another seat kind or write observer.');
+    }
 
     if (live && !live.fence.released) return live.actor;
+
+    if (pending === undefined) opening.set(reference.actorId, { reference: actorReferenceOf(reference), seat });
 
     return yield* opened({ reference, seat });
   });
@@ -317,6 +338,20 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     hosted: (reference) => settleSync(Effect.map(slotFor(reference), (slot) => (slot && !slot.fence.released ? slot.actor : null))),
     describe: (actorId) => deps.directory.retained(actorId),
     bindStores: (reference) => settleSync(Effect.map(bind(reference), ({ bound }) => bound)),
+    readScaffold: (reference, version) => settle(Effect.gen(function* () {
+      const live = yield* slotFor(reference);
+
+      if (live !== null && !live.fence.released) {
+        const runtime = live.actor.runtime;
+
+        return yield* Effect.promise(() => readVersionedScaffoldSource({ path: runtime.identity.scaffold.path, vfs: runtime.agentStateVfs ?? runtime.storage.vfs }, version));
+      }
+
+      const { bound } = yield* bind(reference);
+      const files = yield* Effect.promise(() => deps.filesFor(bound));
+
+      return yield* Effect.promise(() => readVersionedScaffoldSource({ path: actorScaffoldPath(bound.record), vfs: files.vfs }, version));
+    })),
     list: () => [...slots.values()].filter((slot) => !slot.fence.released).map((slot) => slot.actor.reference),
     run: <T>(reference: ActorReference, seat: ActorSeat, work: (actor: HostedActor) => Promise<T>): Promise<T> => settle(Effect.gen(function* () {
       const actor = yield* acquired(reference, seat);
@@ -499,9 +534,11 @@ export function recoverActorTurns(
   host: Pick<ActorHost, 'resumable' | 'installedBuild' | 'workspace'> & {
     /** Whether a turn already gave its hirer the report that answers its assignment. */
     readonly answered?: (turn: ReportedTurn) => boolean;
-    acquire(reference: ActorReference, seat: ActorSeat): Promise<Pick<HostedActor, 'runtime' | 'stores'> & {
+    bindStores(reference: ActorReference): Pick<BoundActor, 'stores'>;
+    readScaffold(reference: ActorReference, version: number): Promise<string | null>;
+    hosted(reference: ActorReference): {
       readonly session: Pick<ActorSession, 'turnOpen'>;
-    }>;
+    } | null;
   },
 ): Promise<{
   readonly verified: readonly string[];
@@ -520,13 +557,13 @@ export function recoverActorTurns(
     const stalled: ResumableActorTurn[] = [];
 
     const recoverOne = (turn: ResumableActorTurn): Effect.Effect<void, KinuError> => Effect.gen(function* () {
-        const actor = yield* Effect.promise(() => host.acquire(turn.reference, { kind: turn.record.origin === 'swarm' ? 'head' : 'actor' }));
+        const actor = host.bindStores(turn.reference);
 
         const verdict = yield* decideInterruptedTurn({
-          runtime: actor.runtime, stores: actor.stores, runs: actor.stores.eventRecorder, installedBuild: host.installedBuild,
+          source: (version) => host.readScaffold(turn.reference, version), stores: actor.stores, runs: actor.stores.eventRecorder, installedBuild: host.installedBuild,
           workspace: host.workspace ?? '', actor: turn.record.name, runId: turn.claim.runId, claim: turn.claim,
           ...(host.answered !== undefined && { answered: host.answered }),
-          turnOpen: () => actor.session.turnOpen,
+          turnOpen: () => host.hosted(turn.reference)?.session.turnOpen ?? false,
         });
 
         if (verdict.kind === 'active') active.push(turn.claim.turnId);

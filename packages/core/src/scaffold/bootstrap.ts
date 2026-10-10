@@ -156,7 +156,7 @@ function inheritedSource(
         SELECT version FROM scaffold_versions
         WHERE actor_id = ${parent.actor.actorId} AND version = ${origin.version}`.length > 0;
 
-      const source = known ? yield* Effect.promise(() => readVersionedScaffoldSource(parent, origin.version)) : null;
+      const source = known ? yield* Effect.promise(() => readVersionedScaffoldSource({ path: parent.identity.scaffold.path, vfs: parent.agentStateVfs ?? parent.storage.vfs }, origin.version)) : null;
 
       if (source === null) {
         return yield* new KinuError('missing', `the parent actor retains no version ${origin.version} to inherit`);

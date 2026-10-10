@@ -7,7 +7,7 @@ import { Database } from 'bun:sqlite';
 import { sqlOver, createMemoryVfs, createTestRuntime } from '@kinu.run/test-utils';
 import { makeSqlExec } from './helpers';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
-import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
+import { actorScaffoldPath, WorkspaceActorDirectory, type WorkspaceActor } from '../src/identity/workspace-actors';
 import {
   createActorHost, childContextResolver, hostedChildTree, recoverActorTurns,
   type ActorHost, type BoundActor,
@@ -46,12 +46,12 @@ interface Fixture {
 }
 
 /** A real per-actor scaffold identity, since the host seeds every actor's loop pointer and bytes. */
-function scaffoldIdentity(name: string, vfs: VFS, sql: SqlExecutor, actorId: string): Identity {
-  const path = `agents/${name}/scaffold/agent.js`;
+function scaffoldIdentity(record: WorkspaceActor, vfs: VFS, sql: SqlExecutor, actorId: string): Identity {
+  const path = actorScaffoldPath(record);
 
   return {
-    id: `actor-${name}`,
-    name,
+    id: `actor-${record.name}`,
+    name: record.name,
     scaffold: {
       path,
       exists: () => exists(vfs, path),
@@ -119,12 +119,12 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, in
     },
     directory,
     installedBuild,
-    filesFor: async (bound) => ({
-      vfs: planeFor(bound.record.actorId),
-      artifactDirectory: agentArtifactDirectory(`/actors/${bound.record.actorId}`),
-    }),
-    runtimeFor: (bound) => {
+    filesFor: async (bound) => {
       if (bound.record.name === unreadableActor) throw new Error('actor file plane is unreadable');
+
+      return { vfs: planeFor(bound.record.actorId), artifactDirectory: agentArtifactDirectory(`/actors/${bound.record.actorId}`) };
+    },
+    runtimeFor: (bound) => {
       const plane = planeFor(bound.record.actorId);
 
       return {
@@ -132,7 +132,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, in
         actor: bound.handle,
         storage: { vfs: plane, home: WORKSPACE_ROOT, sql, execRaw, transactionSync: (write) => db.transaction(write)() },
         agentStateVfs: plane,
-        identity: scaffoldIdentity(bound.record.name, plane, sql, bound.record.actorId),
+        identity: scaffoldIdentity(bound.record, plane, sql, bound.record.actorId),
         release: () => { released.push(bound.record.name); },
       };
     },
@@ -327,6 +327,30 @@ describe('one workspace database, many logical actors', () => {
     expect(() => claims.read('t')).toThrow(/released by its root/);
     // The rows survive releasing the runtime objects.
     expect(fx.sql<{ n: number }>`SELECT COUNT(*) AS n FROM actor_turn_claims WHERE actor_id = ${ref.actorId}`[0]?.n).toBe(1);
+  });
+
+  test('a cached head cannot silently lose its write observer or become a node', async () => {
+    const fx = build();
+    const ref = fx.child('exp:captured-head', 'captured-head', 'swarm');
+    const writes = { needsBaseline: () => false, record: () => {} };
+
+    try {
+      const actor = await fx.host.acquire(ref, { kind: 'head', writes });
+
+      const refused = await Promise.allSettled([
+        fx.host.acquire(ref, { kind: 'head' }),
+        fx.host.acquire(ref, { kind: 'node' }),
+      ]);
+
+      expect(refused).toEqual([
+        { status: 'rejected', reason: expect.objectContaining({ code: 'denied' }) },
+        { status: 'rejected', reason: expect.objectContaining({ code: 'denied' }) },
+      ]);
+      expect(await fx.host.acquire(ref, { kind: 'head', writes })).toBe(actor);
+    } finally {
+      fx.host.releaseAll();
+      fx.db.close();
+    }
   });
 
   test('every way out of the host lets the actor go exactly once', async () => {
@@ -652,7 +676,11 @@ describe('one workspace database, many logical actors', () => {
   test('recovery leaves an unreadable actor claim owed across repeated opens', async () => {
     const fx = build();
     const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'), { kind: 'actor' });
-    await actor.stores.claims.admit({ runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: contextOf(actor), program: BUILTIN });
+    const source = 'export default async function main() { return "retained"; }';
+
+    await writeText(actor.runtime.storage.vfs, `${actor.runtime.identity.scaffold.path}.v1`, source);
+    await actor.stores.claims.admit({ runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: contextOf(actor),
+      program: { kind: 'scaffold', version: 1, digest: sha256Hex(source), build: null } });
     const cold = build(fx.db, 'alpha');
 
     const first = await recoverActorTurns(cold.host);
