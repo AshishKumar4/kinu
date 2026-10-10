@@ -962,8 +962,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         this.turnClaimChanged();
       }
 
-      // The owner's words close the questions open as the turn opens.
-      if (this.agentBound(actorId).stores.config.getHoldsQuestions() && this.questionsMayHaveMoved(actorId, event)) this.hostedQuestionsMoved();
+      // The owner's words close the questions held open as the turn opens; none held, the next read is fresh.
+      if (this.heldOpenQuestion(actorId) === true) this.hostedQuestionsMoved();
     }
 
     await this.chatRooms.hostedRoom(actorId)?.deliver(event);
@@ -1081,7 +1081,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       retire: async (parent, retirement) => {
         const record = this.actorDirectoryStore().retained(retirement.reference.actorId);
         const own = record !== null && hostedActorPlacement(record).homeName !== null;
-        // A retired agent's questions leave the stack with it.
+        // Read before it retires: its questions leave the stack with it.
         const asked = record !== null && actorReadHandle(this.boundSql, record).config.getHoldsQuestions();
 
         if (own) await this.agentTurns.beforeRetirement(record.actorId, retirement.destroy || retirement.interrupt);
@@ -1098,7 +1098,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         if (own && retirement.destroy) this.dropAgentFacet(record.storageKey);
 
-        if (asked) this.hostedQuestionsMoved();
+        // The others' stand as held: no isolate is asked again.
+        if (asked) this.askerRetired(retirement.reference.actorId);
       },
     };
   }
@@ -2572,8 +2573,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * overview is read again, and the tabs read the list again.
    */
   private hostedQuestionsMoved(): void {
-    this.slowOverview = null;
     this.heldQuestions = null;
+    this.questionsChanged();
+  }
+
+  /** A retired agent's questions leave with it. The tile is read again only if it counted one of them open, or may
+   *  have: a read already asking it is not held. */
+  private askerRetired(actorId: string): void {
+    const open = this.heldOpenQuestion(actorId);
+
+    this.heldQuestions = this.heldQuestions?.filter((asking) => asking.actor !== actorId) ?? null;
+
+    if (open === false) this.liveReadsMoved(['listOwnerQuestions']);
+    else this.questionsChanged();
+  }
+
+  private questionsChanged(): void {
+    this.slowOverview = null;
     this.questionMoves += 1;
     this.liveReadsMoved(['listOwnerQuestions']);
     this.overviewChanged();
@@ -5658,9 +5674,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private questionsMayHaveMoved(actorId: string, event: SessionEvent): boolean {
     if (event.type === 'turn-end' && (event.turn.askedOwner === true || event.turn.toolCalls.some((call) => call.name === ASK_OWNER_TOOL))) return true;
 
+    return this.heldOpenQuestion(actorId) ?? true;
+  }
+
+  /** Whether the held list shows the agent with a question open; null when none is held. */
+  private heldOpenQuestion(actorId: string): boolean | null {
     const main = this.actorHandle().actorId;
 
-    return this.heldQuestions?.some((asking) => asking.asked.status === 'open' && (asking.actor ?? main) === actorId) ?? true;
+    return this.heldQuestions?.some((asking) => asking.asked.status === 'open' && (asking.actor ?? main) === actorId) ?? null;
   }
 
   private async questionsAsked(): Promise<AskingAgent[]> {
