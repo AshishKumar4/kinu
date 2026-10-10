@@ -8,14 +8,25 @@ import { expect, test } from 'bun:test';
 import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
 import { createTestUserDO, testOwner } from './helpers/user-do';
 import { gatewayWorkspace, type StartedHarness } from './helpers/actor-harness';
-import { chatCompletion, stubAiBinding } from './helpers/platform-gateway';
+import { chatCompletion, requestOf, stubAiBinding } from './helpers/platform-gateway';
 
 const OWNER = 'abcdef0123456789abcdef0123456789';
 
-test("a deletion during the root's naming waits for it to close, and nothing of the root's is refused", async () => {
+interface DeletedDuringNaming {
+  readonly wrote: readonly string[];
+  readonly log: ReturnType<typeof createRecordingLogger>;
+  readonly asked: readonly string[];
+}
+
+/**
+ * A workspace deleted while the root's genesis turn names it: the naming's registry write is held until the quiet has
+ * reached the root's rest, and `during` runs in that window, while the quiet waits for the root's close.
+ */
+async function deletedDuringNaming(during: (workspace: StartedHarness) => Promise<void>): Promise<DeletedDuringNaming> {
   const naming = Promise.withResolvers<void>();
   const named = Promise.withResolvers<void>();
   const wrote: string[] = [];
+  const asked: string[] = [];
   let holding = false;
 
   let workspace: StartedHarness | null = null;
@@ -28,6 +39,8 @@ test("a deletion during the root's naming waits for it to close, and nothing of 
       const quiet = workspace?.agent.quietForDeletion(owner);
 
       await workspace?.agent.harnessAgentsIdle();
+
+      if (workspace !== null) await during(workspace);
       named.resolve();
       await quiet;
     },
@@ -55,7 +68,14 @@ test("a deletion during the root's naming waits for it to close, and nothing of 
   const token = user.installed.get('ledger');
 
   if (token === undefined) throw new Error('the workspace was not provisioned');
-  const started = gatewayWorkspace(stubAiBinding((run) => chatCompletion(run, 'Noted.')), { userDO: user.userDO, workspace: 'ledger', ownerUserId: OWNER });
+
+  const gateway = stubAiBinding((run) => {
+    asked.push(JSON.stringify(requestOf(run).messages));
+
+    return chatCompletion(run, 'Noted.');
+  });
+
+  const started = gatewayWorkspace(gateway, { userDO: user.userDO, workspace: 'ledger', ownerUserId: OWNER });
 
   workspace = started;
   started.agent.harnessHoldsCapability(token);
@@ -73,9 +93,28 @@ test("a deletion during the root's naming waits for it to close, and nothing of 
     restore();
   }
 
+  return { wrote, log, asked };
+}
+
+test("a deletion during the root's naming waits for it to close, and nothing of the root's is refused", async () => {
+  const { wrote, log } = await deletedDuringNaming(async () => {});
+
   // The write reached the registry under the workspace's capability, before the revoke; already marking the deletion,
   // the registry did not apply it.
   expect(wrote).toEqual(['applied false']);
   expect(log.emitted.filter((line) => line.event === 'capability.denied' || JSON.stringify(line.fields).includes('capability token'))
     .map((line) => line.event)).toEqual([]);
+});
+
+test('words sent while a deletion waits for the root to close are refused, and start no turn', async () => {
+  const refused: string[] = [];
+
+  const { asked } = await deletedDuringNaming(async (workspace) => {
+    const [sent] = await Promise.allSettled([workspace.agent.harnessAdmitMain('Also archive the old ledger.', crypto.randomUUID(), undefined)]);
+
+    if (sent.status === 'rejected') refused.push(String(sent.reason));
+  });
+
+  expect(refused).toEqual([expect.stringContaining('being deleted')]);
+  expect(asked.some((messages) => messages.includes('Also archive the old ledger.'))).toBe(false);
 });

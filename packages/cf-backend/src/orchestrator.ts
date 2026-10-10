@@ -823,15 +823,27 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // Its own named shell, never the agent's: the session user's identity must not reach the agent's commands.
       stateSession: async () => await this.hostedWorkspace().session({ shellId: agentStateShellId(this.liveAgentOf(actorId).storageKey) }),
       memory: () => new AgentMemory(async () => (await this.actorHost().acquire(actorReferenceOf(this.liveAgentOf(actorId)))).runtime.memory),
-      program: (turnId, ...args) => this.agentTurns.program(actorId, turnId, ...args),
+      program: async (turnId, ...args) => {
+        this.admitWork();
+
+        return await this.agentTurns.program(actorId, turnId, ...args);
+      },
       traceTurn: (turnId, event) => this.agentTurns.trace(actorId, turnId, event),
       traceStream: (turnId, lines) => this.agentTurns.traceStream(actorId, turnId, headDeltas(lines)),
       paceStep: async (turnId) => { await (await this.agentCalls(actorId)).step(turnId); },
       resume: (turnId) => this.agentTurns.resume(actorId, turnId),
       guard: (turnId, ...args) => this.agentTurns.guard(actorId, turnId, ...args),
       debit: (turnId, ...args) => this.agentTurns.debit(actorId, turnId, ...args),
-      prepareTurn: (turnId) => this.agentTurns.prepare(actorId, turnId),
-      prepareChat: (request) => this.agentTurns.prepareChat(actorId, request),
+      prepareTurn: async (turnId) => {
+        this.admitWork();
+
+        return await this.agentTurns.prepare(actorId, turnId);
+      },
+      prepareChat: async (request) => {
+        this.admitWork();
+
+        return await this.agentTurns.prepareChat(actorId, request);
+      },
       bindProfile: async (turnId, profile) => {
         // This object holds main's turn under its producer's identity (`announcementOf`), a programmatic one unprefixed.
         if (actorId === this.actorHandle().actorId) this.bindFacetProfile(announcementOf(turnId), profile);
@@ -881,6 +893,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       advise: (review) => this.agentTurns.advise(actorId, review),
       enqueueTurn: (input) => this.enqueueHostedTurn(this.actorHost().bindStores(actorReferenceOf(this.liveAgentOf(actorId))), input),
       executeTool: (call) => {
+        this.admitWork();
         this.agentActivity(actorId, call.activity);
 
         // Open while the tool runs, under the RPC that relayed it: a kill keeps the cut span's name.
@@ -1914,6 +1927,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   private async wakeAgent(actorId: string): Promise<void> {
     if (!this.liveActor(actorId)) return await this.agentWakes.owes(actorId, null);
+
+    // A deletion's quiet stops what runs and closes it; it wakes nothing to take up more.
+    if (this.admitting.signal.aborted) return;
     await (await this.agentCalls(actorId)).wake(this.agentSnapshot(actorId));
   }
 
@@ -2389,6 +2405,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Armed before the words cross; the agent answers what it owes once it took them (`FacetChat.taken`), behind any
    *  answer it sent before, so that answer, not this arm, is the agent's last word. */
   private async handInput<A>(actorId: string, hand: () => Promise<A>): Promise<A> {
+    this.admitWork();
     // The agent reads working from here: its turn claims are its own isolate's, whose writes this object never sees.
     this.liveReadsMoved(readsOfTables(['actor_turn_claims']));
     await this.agentWakes.arm(actorId, Date.now() + RECOVERY_BACKOFF_CEILING_MS);
@@ -4659,7 +4676,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    *  refused then. */
   private readonly deleting = new AbortController();
 
+  /** Aborted as a deletion's quiet begins, before it waits on anything: no agent takes new words, a wake, a turn or a
+   *  tool call after it, while the turns it stops still close and hand off here. */
+  private readonly admitting = new AbortController();
+
+  /** Refuses new work for an agent once a deletion's quiet began. */
+  private admitWork(): void {
+    if (this.admitting.signal.aborted) throw new KinuError('missing', 'This workspace is being deleted.');
+  }
+
   private async quietAgents(): Promise<void> {
+    if (!this.admitting.signal.aborted) this.admitting.abort();
     // An object that opened no isolate (one never claimed among them) has no main to stop here.
     const main = this.openedIsolates.size === 0 ? null : this.actorHandle().actorId;
 
