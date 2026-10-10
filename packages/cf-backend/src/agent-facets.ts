@@ -2,7 +2,8 @@
 import { RpcTarget, WorkerEntrypoint, exports } from 'cloudflare:workers';
 import type { UIMessageChunk } from 'ai';
 import * as v from 'valibot';
-import { decodeModelMessageValues, relayedAnswer, remoteContextTree } from '@kinu.run/core';
+import { decodeModelMessageValues, forkConversationRowSchema, relayedAnswer, remoteContextTree } from '@kinu.run/core';
+import type { ForkConversationPlan, ForkConversationSection, ForkConversationSource, ForkConversationTarget, ForkRows } from '@kinu.run/core';
 import type { AgentOwnInspection, ArchiveSqlCursor, ContextEditor, ContextTree, StepSpendSource, ConversationRecall, PositionPageRequest, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ProviderEnv, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import type { AgentWorkspace } from './agent-facet/agent-turn';
@@ -122,6 +123,32 @@ export class AgentStoreBroker {
       search: async (query, limit) => await (await this.calls()).searchConversations(this.snapshot(), query, limit),
       scroll: async (around, window, maxChars) => await (await this.calls()).scrollConversation(this.snapshot(), around, window, maxChars),
       browse: async (limit) => await (await this.calls()).browseConversations(this.snapshot(), limit),
+    };
+  }
+
+  /** Its conversation as a fork of its workspace reads it: a section's rows are pulled from its isolate as the fork's
+   *  frames go out. */
+  forkSource(): ForkConversationSource {
+    const { calls, snapshot } = this;
+
+    return {
+      has: async (messageId) => await (await calls()).forkHas(snapshot(), messageId),
+      plan: async (untilMessageId, artifactDirectory) => await (await calls()).forkPlan(snapshot(), untilMessageId, artifactDirectory),
+      count: async (kind, plan, artifactDirectory) => await (await calls()).forkCount(snapshot(), kind, plan, artifactDirectory),
+      rows: async function* <K extends ForkConversationSection>(kind: K, plan: ForkConversationPlan, artifactDirectory: string): AsyncIterable<ForkRows[K]> {
+        const lines = await (await calls()).forkRows(snapshot(), kind, plan, artifactDirectory);
+
+        yield* jsonLines(lines, forkConversationRowSchema(kind));
+      },
+    };
+  }
+
+  /** A fork of its workspace landing its conversation in its isolate, carried payloads re-rooted under `artifactDirectory`. */
+  forkTarget(artifactDirectory: string): ForkConversationTarget {
+    return {
+      clear: async () => { await (await this.calls()).forkClear(this.snapshot(), artifactDirectory); },
+      stage: async (kind, rows) => { await (await this.calls()).forkStage(this.snapshot(), artifactDirectory, kind, rows); },
+      publish: async (cutMessageId) => { await (await this.calls()).forkPublish(this.snapshot(), artifactDirectory, cutMessageId); },
     };
   }
 }

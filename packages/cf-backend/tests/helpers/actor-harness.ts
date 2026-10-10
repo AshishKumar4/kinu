@@ -1601,6 +1601,9 @@ export interface HarnessActorWorld {
   /** The clock every actor's job runner detaches on, the box's commands too when a suite times them by it. Unset,
    *  the real one. */
   jobClock?: Clock;
+  /** Other workspaces this one reaches by name through `env.OrchestratorAgent` (a fork's target); any other name
+   *  reaches this one. */
+  workspaces?: ReadonlyMap<string, HarnessOrchestratorAgent>;
 }
 
 /** What a scripted steer-branch head reports; the rest of the report is the empty run it did. */
@@ -1792,7 +1795,14 @@ function instantiate<T extends WorkspaceHostTarget>(
     // This workspace answers its own standing-policy reads: a hosted actor's approval
     // gate fetches the root's policy through `env.OrchestratorAgent`.
     Object.assign(builtEnv, {
-      OrchestratorAgent: { idFromName: (n: string) => n, idFromString: (id: string) => id, get: () => stubOf(agent, world?.rpcServed) },
+      OrchestratorAgent: {
+        idFromName: (n: string) => n, idFromString: (id: string) => id,
+        get: (id: string) => {
+          const other = world?.workspaces?.get(id);
+
+          return other === undefined ? stubOf(agent, world?.rpcServed) : stubOf(other);
+        },
+      },
     });
   }
 

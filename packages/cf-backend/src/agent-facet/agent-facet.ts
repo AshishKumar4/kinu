@@ -23,6 +23,7 @@ import type {
   AgentAnswer, AgentAnswerTexts, AgentStanding, AgentSteps, AgentRecovery, AgentSnapshot, ConversationProjection, ConversationTurnPair, AgentTurnEnd, AgentTurnTask, EnqueueTurnResult, ProgrammaticTurn, PromptFile, SendLanding, SendOptions, TurnRequestAt,
   JsonObject, PlanDecisionOutcome, PlanEdit, PlanReview, PlanReviewDecision, PlanReviewResult, ReviewAnnotation, AskedQuestions, OwnerAnswer,
   Page, PageRequest, RunEvent, RunEventQuery, RunListEntry, RunSummary, StoredRunEvent,
+  ForkConversationPlan, ForkConversationSection, ForkRowSection, ForkRows,
 } from '@kinu.run/core';
 import { getRunEvents, getRunEventText, getRunSummaries, listRuns } from '@kinu.run/core';
 
@@ -119,6 +120,17 @@ export interface AgentFacetCalls {
   answer(snapshot: AgentSnapshot, messageId: string): Promise<AgentAnswer | null>;
   /** Its conversation's newest rows first, for a lane its workspace runs on it. */
   newestFirst(snapshot: AgentSnapshot, limit: number): Promise<readonly ConversationProjection[]>;
+  /** Its conversation as a fork of its workspace reads it: whether a message can be cut at, the cut's plan, a section's
+   *  count, and its rows as JSON lines, pulled as the fork's frames are sent. */
+  forkHas(snapshot: AgentSnapshot, messageId: string): Promise<boolean>;
+  forkPlan(snapshot: AgentSnapshot, untilMessageId: string, artifactDirectory: string): Promise<ForkConversationPlan>;
+  forkCount(snapshot: AgentSnapshot, kind: ForkConversationSection, plan: ForkConversationPlan, artifactDirectory: string): Promise<number>;
+  forkRows(snapshot: AgentSnapshot, kind: ForkConversationSection, plan: ForkConversationPlan, artifactDirectory: string): Promise<ReadableStream<Uint8Array>>;
+  /** A fork of its workspace landing its conversation here, a batch at a time, then pointing the cut at its context;
+   *  carried payloads re-root under `artifactDirectory`. */
+  forkClear(snapshot: AgentSnapshot, artifactDirectory: string): Promise<void>;
+  forkStage<K extends ForkRowSection>(snapshot: AgentSnapshot, artifactDirectory: string, kind: K, rows: readonly ForkRows[K][]): Promise<void>;
+  forkPublish(snapshot: AgentSnapshot, artifactDirectory: string, cutMessageId: string): Promise<void>;
   /** Where its chat stands between turns, for its window and its workspace's tile; `contextWindow` is its model's. */
   standing(snapshot: AgentSnapshot, contextWindow: number | null): Promise<AgentStanding>;
   /** Its runs, newest first, plain or folded with each run's provenance and usage, and one run's events; the workspace's
@@ -380,6 +392,46 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async newestFirst(snapshot: AgentSnapshot, limit: number): Promise<readonly ConversationProjection[]> {
     return await this.open(snapshot).newestFirst(limit);
+  }
+
+  async forkHas(snapshot: AgentSnapshot, messageId: string): Promise<boolean> {
+    return await this.open(snapshot).forkSource().has(messageId);
+  }
+
+  async forkPlan(snapshot: AgentSnapshot, untilMessageId: string, artifactDirectory: string): Promise<ForkConversationPlan> {
+    return await this.open(snapshot).forkSource().plan(untilMessageId, artifactDirectory);
+  }
+
+  async forkCount(snapshot: AgentSnapshot, kind: ForkConversationSection, plan: ForkConversationPlan, artifactDirectory: string): Promise<number> {
+    return await this.open(snapshot).forkSource().count(kind, plan, artifactDirectory);
+  }
+
+  async forkRows(snapshot: AgentSnapshot, kind: ForkConversationSection, plan: ForkConversationPlan, artifactDirectory: string): Promise<ReadableStream<Uint8Array>> {
+    const rows = this.open(snapshot).forkSource().rows(kind, plan, artifactDirectory)[Symbol.asyncIterator]();
+    const encoder = new TextEncoder();
+
+    // Pulled a row at a time as the fork's frames go out: the section never sits whole in either isolate.
+    return new ReadableStream<Uint8Array>({
+      pull: async (controller) => {
+        const next = await rows.next();
+
+        if (next.done === true) controller.close();
+        else controller.enqueue(encoder.encode(`${JSON.stringify(next.value)}\n`));
+      },
+      cancel: async () => { await rows.return?.(); },
+    });
+  }
+
+  async forkClear(snapshot: AgentSnapshot, artifactDirectory: string): Promise<void> {
+    await this.open(snapshot).forkTarget(artifactDirectory).clear();
+  }
+
+  async forkStage<K extends ForkRowSection>(snapshot: AgentSnapshot, artifactDirectory: string, kind: K, rows: readonly ForkRows[K][]): Promise<void> {
+    await this.open(snapshot).forkTarget(artifactDirectory).stage(kind, rows);
+  }
+
+  async forkPublish(snapshot: AgentSnapshot, artifactDirectory: string, cutMessageId: string): Promise<void> {
+    await this.open(snapshot).forkTarget(artifactDirectory).publish(cutMessageId);
   }
 
   async standing(snapshot: AgentSnapshot, contextWindow: number | null): Promise<AgentStanding> {

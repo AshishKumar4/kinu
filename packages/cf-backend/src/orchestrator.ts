@@ -6163,6 +6163,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       const fork = yield* Effect.promise(async () => forkWorkspace({
         sql: this.boundSql,
         actor: this.rt.actor,
+        // Kept in the root's own isolate (D9): the cut and the conversation's sections are read there.
+        conversation: this.agentStores(this.rt.actor.actorId).forkSource(),
         // One pin of the workspace files, exported a page and a frame of chunks at a time: a fork holds one frame.
         vfs: createWorkspaceForkSource(this.hostedWorkspace().bundle),
         artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)),
@@ -6233,12 +6235,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   #forkReceiverFor(forkName: string, transferId: string, ownerUserId: string): ForkTransferReceiver {
     if (this.forkReceiver?.transferId === transferId) return this.forkReceiver.receiver;
 
+    // The target's own payload plane: carried payloads are re-rooted so the fork never reads its source.
+    const artifactDirectory = agentArtifactDirectory(agentHome(MAIN_AGENT));
+
     const writer = new ForkTargetWriter(this.boundSql, {
-      workspaceId: this.ctx.id.toString(), workspaceName: forkName, ownerUserId,
-      // The target's own payload plane: carried payloads are re-rooted so the fork never reads its source.
-      artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)),
+      workspaceId: this.ctx.id.toString(), workspaceName: forkName, ownerUserId, artifactDirectory,
       transaction: (rows) => this.ctx.storage.transactionSync(rows),
       appData: () => this.stores.appData.fork,
+      // The root's conversation lands in its own isolate (D9), born with the workspace before the first frame.
+      conversation: this.agentStores(this.actorHandle().actorId).forkTarget(artifactDirectory),
     });
 
     const receiver = new ForkTransferReceiver(

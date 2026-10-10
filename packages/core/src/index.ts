@@ -125,6 +125,15 @@ export {
   forkWorkspace, type ForkTransport, type ForkDriverDeps, type ForkOutcome,
 } from './identity/fork-driver';
 
+export {
+  isForkConversationSection, localForkConversationSource, localForkConversationTarget, forkConversationRowSchema,
+  type ForkConversationSource, type ForkConversationTarget,
+} from './identity/fork-conversation';
+
+export { FORK_CONVERSATION_SECTIONS, FORK_SECTIONS, type ForkConversationSection, type ForkRows } from './identity/fork-sections';
+
+export { forkArtifactPath, type ForkConversationPlan } from './identity/fork-plan';
+
 // Workspace archive: one backup format for both backends.
 export {
   WORKSPACE_ARCHIVE_EXTENSION,

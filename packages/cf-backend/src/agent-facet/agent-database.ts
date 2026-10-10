@@ -15,6 +15,7 @@ import {
   type Executor, type JsonObject, type NimbusSandboxHandle, type SqlValue, WORKSPACE_ROOT, cloudPlanes, answersForDrainTurns,
   initPendingSendTables, initTerminalEffectTable, PendingSendStore, contextFill, announcementOf, classifyRunEnd, closeTurnRun, TurnReports,
   PlanReviewStore, type PlanReview,
+  forkArtifactPath, localForkConversationSource, localForkConversationTarget, type ForkConversationSource, type ForkConversationTarget,
 } from '@kinu.run/core';
 import { attempt, detach, diagnostics, hold, KinuError, logged, settle, settleSync } from '@kinu.run/core/obs';
 import { isDeepStrictEqual } from 'node:util';
@@ -411,6 +412,21 @@ export class AgentDatabase {
   }
 
   /** Its conversation's newest rows first, projected as a lane reads them. */
+  /** Its conversation as a fork of its workspace reads it. */
+  forkSource(): ForkConversationSource {
+    return localForkConversationSource(this.sql, this.readable().actor);
+  }
+
+  /** A fork of its workspace landing its conversation here; carried payloads re-root under `artifactDirectory`. */
+  forkTarget(artifactDirectory: string): ForkConversationTarget {
+    return localForkConversationTarget(this.sql, {
+      actorId: () => this.reference().actorId,
+      artifactPath: (relative) => forkArtifactPath(relative, artifactDirectory),
+      now: Date.now(),
+      transaction: (write) => { this.storage.transactionSync(write); },
+    });
+  }
+
   async newestFirst(limit: number): Promise<readonly ConversationProjection[]> {
     return await this.readable().transcript.newestFirst(limit);
   }
