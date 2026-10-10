@@ -23,7 +23,7 @@ import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestra
 import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB } from '../../src/wake-jobs';
 import { ROOT_SLATE_CALLER } from '../../src/slates/bindings';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
-import { SqlMeter, type OperationCost } from './sql-meter';
+import { meterInPlace, type OperationCost, type SqlMeter } from './sql-meter';
 import type { AgentFacet as ProbeAgentFacet, SeededEntry } from './two-turn-probe-agent';
 import type {
   AgentLogEvent,
@@ -96,18 +96,6 @@ export * from '../../src/server';
 /** DO SQLite types columns as `ArrayBuffer | string | number | null`; refuse a blob at the read. */
 const textColumn = (value: SqlStorageValue): string => v.parse(v.string(), value);
 
-/** The production orchestrator plus fixture reads; adds no production method or state,
- *  only retains DurableObjectState to observe the durable send ledger. */
-/** Meters `sql` in place: the platform refuses a wrapped state object, and a patched `exec` counts every caller. */
-function meterInPlace(sql: SqlStorage) {
-  const unmetered = sql.exec.bind(sql);
-  const meter = new SqlMeter({ exec: unmetered, get databaseSize() { return sql.databaseSize; } });
-
-  sql.exec = (query, ...bindings) => meter.exec(query, ...bindings);
-
-  return { meter, unmetered };
-}
-
 const JobRowsSchema = v.array(v.looseObject({ id: v.string(), capability: v.string() }));
 
 /** What still runs in the object, by name, and its queued jobs as read now. */
@@ -141,6 +129,8 @@ async function awaitSettled(target: { settleState(): Promise<SettleState> }): Pr
   }
 }
 
+/** The production orchestrator plus fixture reads; adds no production method or state,
+ *  only retains DurableObjectState to observe the durable send ledger. */
 export class ObservedOrchestrator extends ProductionOrchestrator {
   private readonly actorState: AgentContext;
   private readonly meter: SqlMeter;
@@ -148,6 +138,8 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   private readonly unmetered: SqlStorage['exec'];
   /** Transcript reads the chat transport made while the meter runs. */
   private historyReads: number | null = null;
+  /** Main's isolate while the meter runs, reached before the workspace's meter opens: the reach is the probe's, not the turn's. */
+  private meteredMain: Fetcher<ProbeAgentFacet> | null = null;
 
   constructor(ctx: AgentContext, env: ProbeEnv) {
     super(ctx, env);
@@ -425,16 +417,26 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   }
 
   async meterBegin(): Promise<void> {
+    const main = await this.agentFacetOf<ProbeAgentFacet>(this.actorHandle().actorId);
+
+    await main.meterBegin();
+    this.meteredMain = main;
     this.meter.begin();
     this.historyReads = 0;
   }
 
-  async meterEnd(): Promise<{ cost: OperationCost; historyReads: number }> {
+  /** The workspace's statements and those of main's isolate, which keeps its model loop, transcript, claims and runs (D9). */
+  async meterEnd(): Promise<{ workspace: OperationCost; main: OperationCost; historyReads: number }> {
     const historyReads = this.historyReads ?? 0;
+    const main = this.meteredMain;
 
     this.historyReads = null;
+    this.meteredMain = null;
 
-    return { cost: this.meter.end(null), historyReads };
+    if (main === null) throw new Error('the meter was not started');
+    const workspace = this.meter.end(null);
+
+    return { workspace, main: await main.meterEnd(), historyReads };
   }
 
   private countedWire: ChatWire | null = null;
@@ -988,8 +990,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
   }
 
   /** A 500-delta turn after twenty answers of `priorDeltas` deltas, counted in the production orchestrator's own
-   *  SQLite and transcript reads, from enqueue to its sleep-time settle. */
-  async longTurnCost(priorDeltas: number): Promise<{ cost: OperationCost; historyReads: number }> {
+   *  SQLite, in main's isolate's and in transcript reads, from enqueue to its sleep-time settle. */
+  async longTurnCost(priorDeltas: number): Promise<{ workspace: OperationCost; main: OperationCost; historyReads: number }> {
     const workspace = `long-cost-${String(priorDeltas)}-${crypto.randomUUID()}`;
     const target: QueueTarget = await this.queueTarget(workspace);
     const caller = await ownerCaller(this.env);

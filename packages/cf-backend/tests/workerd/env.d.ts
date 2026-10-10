@@ -120,7 +120,7 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   firstChatAfterGenesis(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; inbox: { busy: boolean }; landed: string | null; transcript: Array<{ id: string; role: string }>; failures: Array<{ event: string; code: string; cause: string }> }>;
   parityPrepare(): Promise<ParityPrepared>;
   parityComplete(prepared: ParityPrepared): Promise<ParityCompleted>;
-  longTurnCost(priorDeltas: number): Promise<{ cost: OperationCost; historyReads: number }>;
+  longTurnCost(priorDeltas: number): Promise<{ workspace: OperationCost; main: OperationCost; historyReads: number }>;
   backgroundWakeConversation(): Promise<WakeDriveResult>;
   rawChat(): Promise<RawChatProbeResult>;
 }

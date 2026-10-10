@@ -47,6 +47,18 @@ function diffsAt(size: number): Promise<{ readonly read: OperationCost; readonly
   return measured;
 }
 
+/** The orchestrator's measured turn at each size, counted in the workspace's SQLite and in main's isolate's, run once
+ *  for both subjects. */
+const longTurns = new Map<number, Promise<{ readonly workspace: OperationCost; readonly main: OperationCost; readonly historyReads: number }>>();
+
+function longTurnAt(size: number): Promise<{ readonly workspace: OperationCost; readonly main: OperationCost; readonly historyReads: number }> {
+  const measured = longTurns.get(size) ?? env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName(`long-cost-${String(size)}`)).longTurnCost(size);
+
+  longTurns.set(size, measured);
+
+  return measured;
+}
+
 const SUBJECTS: readonly Subject[] = [{
   name: 'activation, the open-turn lookup',
   unit: 'finished turns',
@@ -88,16 +100,24 @@ const SUBJECTS: readonly Subject[] = [{
   unit: 'deltas in each earlier answer',
   sizes: [20, 2_000],
   run: async (_probe, size) => {
-    const measured = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName(`long-cost-${String(size)}`)).longTurnCost(size);
+    const measured = await longTurnAt(size);
 
     transportReads.set(size, measured.historyReads);
-    turnStatements.set(size, measured.cost.tables);
+    turnStatements.set(size, { workspace: measured.workspace.tables, main: measured.main.tables });
 
-    return measured.cost;
+    return measured.workspace;
   },
   rows: { rowsRead: 'O(1)', rowsWritten: 'O(1)', statements: 'O(1)', rowsScanned: 'O(1)' },
   why: 'the production turn path, chat transport included: the store subject above drives the pipeline directly, so '
     + 'per-delta work in the transport (a transcript read, a broadcast) shows only here',
+}, {
+  name: "main's isolate, the same turn",
+  unit: 'deltas in each earlier answer',
+  sizes: [20, 2_000],
+  run: async (_probe, size) => (await longTurnAt(size)).main,
+  rows: { rowsRead: 'O(1)', rowsWritten: 'O(1)', statements: 'O(1)', rowsScanned: 'O(1)' },
+  why: 'main keeps its model loop, transcript, turn claims and runs in its own isolate\'s SQLite (D9), so the turn\'s '
+    + 'session writes and its read of the earlier answers land there: sealed messages, never their deltas',
 }, {
   name: 'workspace Diffs, one read',
   unit: 'files in the workspace',
@@ -136,8 +156,8 @@ const SUBJECTS: readonly Subject[] = [{
 /** The chat transport's whole-transcript reads during the orchestrator subject's measured turn, by size. */
 const transportReads = new Map<number, number>();
 
-/** The orchestrator subject's measured turn, its statements by the tables they name, by size. */
-const turnStatements = new Map<number, OperationCost['tables']>();
+/** The orchestrator subject's measured turn, its statements by the tables they name in each isolate, by size. */
+const turnStatements = new Map<number, { readonly workspace: OperationCost['tables']; readonly main: OperationCost['tables'] }>();
 
 /**
  * Statements one production turn runs, measured 2026-09-27 on this subject: 5,087 at 7dd73e1ac9, 2,035 of them
@@ -175,8 +195,14 @@ const turnStatements = new Map<number, OperationCost['tables']>();
  * 382 once a turn's steps name the slates that do not build, read once per activation (+1). 384 once a turn records
  * whether a reset would cut it in a provider wait or in its step's own work (D12): its cut row at admission and the
  * phase each step enters (+2, measured at fd56c4de5).
+ * Since D9 main keeps its model loop, transcript, claims and runs in its own isolate, whose SQLite this count did not
+ * read: at 2ac877244 the workspace ran 376, green, while main's isolate ran 450 more, one of them asking
+ * `sqlite_master` for `run_events` at every turn's end. Both are counted since, at both sizes over 3 runs: 825, the
+ * workspace's 376 and main's 449 once its figures ask nothing. Most of main's re-read what the workspace reads too:
+ * its actor and identity rows (workspace_actors 133, workspace_identity 10) and its config (actor_config 56); then
+ * its claims and stream parts (65) and run events (31).
  */
-const TURN_STATEMENTS = 384;
+const TURN_STATEMENTS = 825;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {
@@ -223,7 +249,8 @@ afterAll(() => {
     ...reports,
     'complexity: blind to',
     '  CPU, memory and wall time: a path that re-parses or copies in memory while its SQL stays flat is invisible;',
-    '  storage outside this object\'s SQLite (KV, R2, D1, another object\'s database, the model provider);',
+    '  storage outside the measured SQLite (KV, R2, D1, another object\'s database or a hired agent\'s isolate, the',
+    '    model provider): the orchestrator subjects count the workspace\'s and main\'s isolate\'s;',
     '  growth past the largest size measured, and growth hidden inside the exponent slack of a class;',
     '  which of the tables a statement names its rows came from: it is charged to all of them jointly, and a',
     '    trigger\'s rows to the statement that fired it;',
@@ -262,18 +289,24 @@ for (const subject of SUBJECTS) {
   });
 }
 
-// Runs after the subjects: the orchestrator subject fills `turnStatements`.
+// Runs after the subjects: the orchestrator subject fills `turnStatements`. Main's isolate is counted with the
+// workspace: moving a statement from one to the other does not make a turn cheaper.
 test('a production turn runs no more statements than it was measured at, and asks sqlite_master nothing', () => {
-  const totals = [...turnStatements.values()].map((tables) => ({
-    statements: Object.values(tables).reduce((sum, table) => sum + table.statements, 0),
-    schema: tables.sqlite_master?.statements ?? 0,
-  }));
+  const totals = [...turnStatements].map(([size, isolates]) => {
+    const [workspace = 0, main = 0] = [isolates.workspace, isolates.main]
+      .map((tables) => Object.values(tables).reduce((sum, table) => sum + table.statements, 0));
 
+    return { size, workspace, main, schema: (isolates.workspace.sqlite_master?.statements ?? 0) + (isolates.main.sqlite_master?.statements ?? 0) };
+  });
+
+  reports.push(`complexity: a production turn's statements, by size: ${totals.map((total) => `${String(total.size)}: `
+    + `${String(total.workspace)} in the workspace + ${String(total.main)} in main's isolate = ${String(total.workspace + total.main)}`).join('; ')}`
+    + `; at most ${String(TURN_STATEMENTS)} together`);
   expect(totals).toHaveLength(2);
 
   for (const total of totals) {
     expect(total.schema).toBe(0);
-    expect(total.statements).toBeLessThanOrEqual(TURN_STATEMENTS);
+    expect(total.workspace + total.main, `${String(total.workspace)} in the workspace, ${String(total.main)} in main's isolate`).toBeLessThanOrEqual(TURN_STATEMENTS);
   }
 });
 
