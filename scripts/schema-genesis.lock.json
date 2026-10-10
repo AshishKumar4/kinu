@@ -891,6 +891,7 @@
     "turn_id TEXT NOT NULL",
     "continuity TEXT NOT NULL",
     "evolution_enabled INTEGER NOT NULL",
+    "mission_labels_json TEXT NOT NULL",
     "branches_json TEXT NOT NULL",
     "PRIMARY KEY (actor_id, turn_id)"
   ],

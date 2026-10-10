@@ -385,6 +385,26 @@ describe("a main turn's workspace facts outlive the activation that gathered the
     await driveUntil(restarted, 'the handoff landed without the branch or the review its turn owed', () => takeSets(restarted) === 1 && owedReviews(restarted) === 1);
   });
 
+  test('a turn handed over after its workspace reset is recorded under the missions it ran for', async () => {
+    const harness = orchestratorHarness();
+
+    harness.agent.harnessDrivingUserMessage('Tally the refunds.', { missionLabels: ['refunds'] });
+    loseNextHandoff(harness.agent.agentOf(workspaceMainActor(harness.db).actorId).storageKey);
+    await turns(harness).settle({ messageId: 'a-mission', text: 'the live answer' });
+    await joinHarnessFibers();
+
+    // The governor that scoped the turn as it ran is this activation's; the next one opens with none.
+    laterBy(1);
+    const restarted = await reactivateOrchestratorHarness(harness.db);
+
+    await driveUntil(restarted, 'the handed-over turn was never recorded', () => windowedTurns(restarted) === 1);
+
+    const RecordedSchema = v.object({ missionLabels: v.optional(v.array(v.string())) });
+    const recorded = restarted.db.query<{ turn: string }, []>('SELECT turn FROM completed_turns').all();
+
+    expect(recorded.map((row) => v.parse(RecordedSchema, JSON.parse(row.turn)).missionLabels)).toEqual([['refunds']]);
+  });
+
   test("a handoff driven again after its workspace reset records main's turn on the fleet once", async () => {
     const engine = analyticsEngine();
     const world: HarnessActorWorld = { analytics: engine.bindings };

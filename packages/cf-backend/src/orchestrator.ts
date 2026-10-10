@@ -185,7 +185,7 @@ import {
   CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline, restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult, type WorkspaceReviewResult,
   initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes, deliverOwedChangeNotes, owesChangeNotes, type ChangeNotesChat,
-  initMainTurnFactsTable, MainTurnFactsStore, type MainTurnFacts, type TurnSurface,
+  initMainTurnFactsTable, MainTurnFactsStore, readMissionLabels, type MainTurnFacts, type TurnSurface,
   type ChangeNotesResult, type NotedChanges, type ReviewAnnotation,
   diffLines, type DiffLine,
   getExecutorFiles, readExecutorFile, listEnvironments,
@@ -1282,7 +1282,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       const profile = await this.mainTaskProfile(turn, planReply);
       const { surface } = profile;
 
-      if (surface !== undefined) this.mainTurnFacts.opened(turn.turnId, { continuity: surface.continuity, evolutionEnabled: surface.evolutionEnabled });
+      if (surface !== undefined) {
+        this.mainTurnFacts.opened(turn.turnId, {
+          continuity: surface.continuity, evolutionEnabled: surface.evolutionEnabled, missionLabels: readMissionLabels(turn.driving),
+        });
+      }
 
       return profile;
     }
@@ -2807,8 +2811,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // Prepared here under its producer's identity (`announcementOf`): the key its facts are held by.
     const prepared = announcementOf(settled.turnId);
     const held = this.mainTurnFacts.read(prepared);
-    // Scoped here: mission labels must travel with every recording, and a cold replay has no active governor scope.
-    const scoped = this.orch.scopedTurn(v.parse(CompletedTurnSchema, settled.turn));
+    const turn = v.parse(CompletedTurnSchema, settled.turn);
+    // Its missions travel with every recording: the governor may hold another turn's by now, or none after a reset.
+    const scoped: CompletedTurn = held.missionLabels.length === 0 ? turn : { ...turn, missionLabels: [...held.missionLabels] };
 
     const facts: TerminalTurnFacts = {
       messageId: settled.messageId, status: settled.status, workMode: settled.workMode, continuity: held.continuity,

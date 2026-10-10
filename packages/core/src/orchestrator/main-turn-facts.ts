@@ -1,7 +1,7 @@
 /**
  * What main's turn left on the workspace's side, kept on disk from the turn's preparation to its handoff: how the
- * workspace opened it (its continuity, and whether it records evolution) and the branches its owner started while it
- * ran. Main's isolate commits the answer and hands the turn over afterwards, and the handoff may land on a later
+ * workspace opened it (its continuity, whether it records evolution, and the missions it spends for) and the branches its
+ * owner started while it ran. Main's isolate commits the answer and hands the turn over afterwards, and the handoff may land on a later
  * activation than the turn's; the turn's roster is declared from these, never from what one activation held.
  */
 import * as v from 'valibot';
@@ -17,12 +17,18 @@ export interface MainTurnBranch {
 export interface MainTurnFacts {
   readonly continuity: TurnContinuity;
   readonly evolutionEnabled: boolean;
+  /** Its recording and review are scoped by these, never by whichever mission the workspace's governor holds then. */
+  readonly missionLabels: readonly string[];
   readonly branches: readonly MainTurnBranch[];
 }
 
 const BranchesSchema = v.array(v.object({ id: v.string(), task: v.string() }));
 
-const FactsRowSchema = v.object({ continuity: TurnContinuitySchema, evolution_enabled: v.picklist([0, 1]), branches_json: v.string() });
+const LabelsSchema = v.array(v.pipe(v.string(), v.nonEmpty()));
+
+const FactsRowSchema = v.object({
+  continuity: TurnContinuitySchema, evolution_enabled: v.picklist([0, 1]), mission_labels_json: v.string(), branches_json: v.string(),
+});
 
 export function initMainTurnFactsTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS main_turn_facts (
@@ -30,6 +36,7 @@ export function initMainTurnFactsTable(execRaw: RawSqlExec): void {
     turn_id           TEXT NOT NULL,
     continuity        TEXT NOT NULL,
     evolution_enabled INTEGER NOT NULL,
+    mission_labels_json TEXT NOT NULL,
     branches_json     TEXT NOT NULL,
     PRIMARY KEY (actor_id, turn_id)
   )`);
@@ -42,8 +49,8 @@ export class MainTurnFactsStore {
   /** As the turn is prepared, before its isolate hears the preparation; a turn prepared again after a restart keeps
    *  what it opened with. */
   opened(turnId: string, facts: Omit<MainTurnFacts, 'branches'>): void {
-    void this.sql`INSERT INTO main_turn_facts (actor_id, turn_id, continuity, evolution_enabled, branches_json)
-      VALUES (${this.actorId}, ${turnId}, ${facts.continuity}, ${facts.evolutionEnabled ? 1 : 0}, ${'[]'})
+    void this.sql`INSERT INTO main_turn_facts (actor_id, turn_id, continuity, evolution_enabled, mission_labels_json, branches_json)
+      VALUES (${this.actorId}, ${turnId}, ${facts.continuity}, ${facts.evolutionEnabled ? 1 : 0}, ${JSON.stringify(facts.missionLabels)}, ${'[]'})
       ON CONFLICT (actor_id, turn_id) DO NOTHING`;
   }
 
@@ -57,15 +64,16 @@ export class MainTurnFactsStore {
 
   /** A turn with nothing on disk is one whose handoff already settled, which declares nothing again. */
   read(turnId: string): MainTurnFacts {
-    const row = this.sql<v.InferInput<typeof FactsRowSchema>>`SELECT continuity, evolution_enabled, branches_json FROM main_turn_facts
-      WHERE actor_id = ${this.actorId} AND turn_id = ${turnId}`[0];
+    const row = this.sql<v.InferInput<typeof FactsRowSchema>>`SELECT continuity, evolution_enabled, mission_labels_json, branches_json
+      FROM main_turn_facts WHERE actor_id = ${this.actorId} AND turn_id = ${turnId}`[0];
 
-    if (row === undefined) return { continuity: 'conversation', evolutionEnabled: false, branches: [] };
+    if (row === undefined) return { continuity: 'conversation', evolutionEnabled: false, missionLabels: [], branches: [] };
     const facts = v.parse(FactsRowSchema, row);
 
     return {
       continuity: facts.continuity,
       evolutionEnabled: facts.evolution_enabled === 1,
+      missionLabels: v.parse(LabelsSchema, JSON.parse(facts.mission_labels_json)),
       branches: v.parse(BranchesSchema, JSON.parse(facts.branches_json)),
     };
   }
