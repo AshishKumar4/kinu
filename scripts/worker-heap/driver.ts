@@ -264,6 +264,44 @@ const AIRequestSchema = v.object({
   inputs: v.looseObject({ stream: v.optional(v.boolean()), messages: v.optional(v.array(v.record(v.string(), v.unknown()))) }),
 });
 
+/** The gate's script for the model, as `/model`'s parameters set it; answered with what the model has seen. */
+function scriptModel(asked: URLSearchParams): Response {
+  model.answerBytes = Number(asked.get('answerBytes') ?? model.answerBytes);
+  model.holding = asked.get('holding') === '1';
+
+  if (asked.has('toolSteps')) {
+    model.toolSteps = Number(asked.get('toolSteps'));
+    model.stepBytes = Number(asked.get('stepBytes') ?? 0);
+    model.stepping = model.toolSteps > 0;
+    model.arrived = 0;
+    model.released = 0;
+  }
+
+  if (asked.has('released')) model.released = Number(asked.get('released'));
+
+  // Released here, not when the held call next polls: the next phase's wait must not read this one's park.
+  if (asked.has('holdHelper')) {
+    model.holdHelper = asked.get('holdHelper') === '1';
+    model.helperParked &&= model.holdHelper;
+  }
+
+  if (asked.has('nest')) model.nest = asked.get('nest') === '1';
+
+  if (asked.has('failingSteps')) {
+    model.failingSteps = Number(asked.get('failingSteps'));
+
+    if (model.failingSteps > 0) model.failingAsked = 0;
+  }
+
+  if (asked.has('hires')) {
+    model.hires = Number(asked.get('hires'));
+    model.helpersAnswered = 0;
+    model.stepping = false;
+  }
+
+  return Response.json({ parked: model.parked, calls: model.calls, wide: [...model.wide], arrived: model.arrived, helpersAnswered: model.helpersAnswered, helperParked: model.helperParked, failingSteps: model.failingSteps });
+}
+
 export default {
   async fetch(request: Request, env: DriverEnv & { readonly HEAP_DRIVER: DurableObjectNamespace<HeapDriver> }): Promise<Response> {
     const url = new URL(request.url);
@@ -276,42 +314,7 @@ export default {
     const workspace = url.searchParams.get('workspace') ?? 'heap';
     const driver = env.HEAP_DRIVER.get(env.HEAP_DRIVER.idFromName(workspace));
 
-    if (url.pathname === '/model') {
-      model.answerBytes = Number(url.searchParams.get('answerBytes') ?? model.answerBytes);
-      model.holding = url.searchParams.get('holding') === '1';
-
-      if (url.searchParams.has('toolSteps')) {
-        model.toolSteps = Number(url.searchParams.get('toolSteps'));
-        model.stepBytes = Number(url.searchParams.get('stepBytes') ?? 0);
-        model.stepping = model.toolSteps > 0;
-        model.arrived = 0;
-        model.released = 0;
-      }
-
-      if (url.searchParams.has('released')) model.released = Number(url.searchParams.get('released'));
-
-      // Released here, not when the held call next polls: the next phase's wait must not read this one's park.
-      if (url.searchParams.has('holdHelper')) {
-        model.holdHelper = url.searchParams.get('holdHelper') === '1';
-        model.helperParked &&= model.holdHelper;
-      }
-
-      if (url.searchParams.has('nest')) model.nest = url.searchParams.get('nest') === '1';
-
-      if (url.searchParams.has('failingSteps')) {
-        model.failingSteps = Number(url.searchParams.get('failingSteps'));
-
-        if (model.failingSteps > 0) model.failingAsked = 0;
-      }
-
-      if (url.searchParams.has('hires')) {
-        model.hires = Number(url.searchParams.get('hires'));
-        model.helpersAnswered = 0;
-        model.stepping = false;
-      }
-
-      return Response.json({ parked: model.parked, calls: model.calls, wide: [...model.wide], arrived: model.arrived, helpersAnswered: model.helpersAnswered, helperParked: model.helperParked, failingSteps: model.failingSteps });
-    }
+    if (url.pathname === '/model') return scriptModel(url.searchParams);
 
     if (url.pathname === '/runners') return Response.json(await driver.runners(workspace));
 
