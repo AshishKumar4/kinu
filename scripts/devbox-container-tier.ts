@@ -9,6 +9,9 @@ import * as v from 'valibot';
 import { copyPinnedTools } from './devbox-tools';
 import { requireEqual, tierIdentity } from './fixtures/devbox-e2e/oracle';
 import { completeTeardown } from './fixtures/devbox-e2e/teardown';
+import { CONTRACT_TEARDOWN_BUCKET, contractLedger } from './fixtures/devbox-e2e/ledger';
+import type { ContractLedger } from './fixtures/devbox-e2e/ledger';
+import armadaConfig from '../.armada.json';
 import { r2 } from './infra-cloudflare';
 import { deployedConfig } from './infra-manifest';
 import { r2ResiduePlane, drainBucketResidue } from './bench-devbox-fixture';
@@ -109,6 +112,8 @@ function recoveryReport(argument: number) {
   return v.parse(v.object({
     run: v.pipe(v.string(), v.regex(/^dc\d{14}[a-f0-9]{5}$/u)), origin: v.optional(v.string()), declared: v.string(),
     snapshots: v.array(v.string()), steps: v.array(v.object({ contract: v.string(), ms: v.number(), detail: v.unknown() })),
+    notAfter: v.optional(v.pipe(v.number(), v.safeInteger())), applicationIds: v.optional(v.array(v.string()), []),
+    worker: v.optional(v.string()), app: v.optional(v.string()), bucket: v.optional(v.string()), boxes: v.optional(v.array(v.string())),
   }), JSON.parse(readFileSync(process.argv[argument + 1] ?? '', 'utf8')));
 }
 
@@ -126,21 +131,71 @@ function fixtureTokens() {
   return { token, rest };
 }
 
+function fixturePlan(recovering: ReturnType<typeof recoveryReport>) {
+  const run = recovering?.run ?? `dc${new Date().toISOString().replace(/\D/gu, '').slice(0, 14)}${crypto.randomUUID().slice(0, 5)}`;
+  const worker = recovering?.worker ?? `kinu-${run}`;
+  const bucket = recovering?.bucket ?? worker;
+  const box = `eval-devbox-${run}`;
+  // The last is a box only the desktop's check opens, so it opens on a fresh box.
+  const names = recovering?.boxes ?? [box, `${box}-native`, `${box}-disk`, 'devbox-golden', `${box}-desktop`];
+  const app = recovering?.app ?? `${worker}-contractbox`;
+  // This is the platform hard wall passed by armada run, not the row's silence deadline.
+  const notAfter = recovering?.notAfter ?? Date.now() + armadaConfig.task.timeout * 1_000;
+
+  return { run, worker, bucket, box, names, app, notAfter };
+}
+
+function prepareLedger() {
+  const accessKeyId = process.env['R2_ACCESS_KEY_ID'];
+  const secretAccessKey = process.env['R2_SECRET_ACCESS_KEY'];
+
+  if (accessKeyId === undefined || secretAccessKey === undefined) throw new Error('the real-container tier requires its R2 keys to persist teardown outside the checkout');
+  const control = r2(CONTRACT_TEARDOWN_BUCKET);
+
+  if (control.state === 'unknown') throw new Error(control.reason);
+
+  if (control.state === 'absent') {
+    // Another tier may have provisioned the same permanent control bucket after this read.
+    runWrangler(REPO, ['r2', 'bucket', 'create', CONTRACT_TEARDOWN_BUCKET], { allowFailure: true });
+    const provisioned = r2(CONTRACT_TEARDOWN_BUCKET);
+
+    if (provisioned.state !== 'present') throw new Error(`contract teardown control bucket was not provisioned: ${JSON.stringify(provisioned)}`);
+  }
+
+  const ledger = contractLedger({ account: ACCOUNT, accessKeyId, secretAccessKey });
+
+  return { ledger, accessKeyId, secretAccessKey };
+}
+
+async function recoverContracts(ledger: ContractLedger, scratch: string): Promise<Step[]> {
+  const recovered: Step[] = [];
+
+  for (const abandoned of await ledger.pending(Date.now())) {
+    const directory = join(scratch, abandoned.run);
+
+    mkdirSync(directory, { recursive: true });
+    const recovery = join(directory, 'recovery.json');
+
+    writeFileSync(recovery, JSON.stringify({ ...abandoned, steps: [] }));
+    const replay = Bun.spawn([process.execPath, import.meta.path, '--cleanup-report', recovery], { cwd: REPO, env: process.env, stdout: 'inherit', stderr: 'inherit' });
+
+    if (await replay.exited !== 0) throw new Error(`unfinished contract teardown ${abandoned.run} failed; no new fixture was created`);
+    recovered.push({ contract: 'recovered-teardown', ms: 0, detail: { run: abandoned.run, notAfter: abandoned.notAfter } });
+  }
+
+  return recovered;
+}
+
 async function main(): Promise<void> {
   const identity = tierIdentity(process.env);
   const recoveryArgument = process.argv.indexOf('--cleanup-report');
-
   const recovering = recoveryReport(recoveryArgument);
-
-  const run = recovering?.run ?? `dc${new Date().toISOString().replace(/\D/gu, '').slice(0, 14)}${crypto.randomUUID().slice(0, 5)}`;
-  const worker = `kinu-${run}`;
-  const box = `eval-devbox-${run}`;
-  // The last is a box only the desktop's check opens, so it opens on a fresh box.
-  const names = [box, `${box}-native`, `${box}-disk`, 'devbox-golden', `${box}-desktop`];
-  const app = `${worker}-contractbox`;
+  const { run, worker, bucket, box, names, app, notAfter } = fixturePlan(recovering);
   const scratch = recovering === undefined ? mkdtempSync(join(tmpdir(), 'kinu-devbox-contracts-')) : dirname(process.argv[recoveryArgument + 1] ?? '');
   process.env['WRANGLER_LOG_PATH'] = join(scratch, 'wrangler');
   const { token, rest } = fixtureTokens();
+  const { ledger, accessKeyId, secretAccessKey } = prepareLedger();
+  const applicationIds = new Set<string>(recovering?.applicationIds);
   const report = join(scratch, 'report.json');
   const steps: Step[] = recovering?.steps ?? [];
   const snapshots = new Set<string>(recovering?.snapshots);
@@ -151,8 +206,9 @@ async function main(): Promise<void> {
   const revision = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: REPO, encoding: 'utf8' }).stdout.trim();
   const dirtyDigest = createHash('sha256').update(spawnSync('git', ['diff', 'HEAD'], { cwd: REPO }).stdout).digest('hex');
 
-  const writeReport = () => {
-    const contents = JSON.stringify({ run, worker, app, bucket: worker, box, declared, origin, revision, dirtyDigest, steps, snapshots: [...snapshots], cleanupErrors }, null, 2);
+  const writeReport = async () => {
+    await ledger.put({ schema: 'devbox-contracts/teardown@1', run, worker, app, bucket, boxes: names, declared, origin, snapshots: [...snapshots], applicationIds: [...applicationIds], notAfter });
+    const contents = JSON.stringify({ run, worker, app, bucket, boxes: names, box, declared, origin, revision, dirtyDigest, steps, snapshots: [...snapshots], applicationIds: [...applicationIds], notAfter, cleanupErrors }, null, 2);
     writeFileSync(report, contents);
     const evidence = process.env['BENCH_ARTIFACTS'];
 
@@ -191,7 +247,7 @@ async function main(): Promise<void> {
     const at = Date.now();
     const detail = await work();
     steps.push({ contract, ms: Date.now() - at, detail });
-    writeReport();
+    await writeReport();
     process.stdout.write(`[${run}] ${contract}: ${String(Date.now() - at)} ms\n`);
   };
 
@@ -203,15 +259,19 @@ async function main(): Promise<void> {
     return ran.stdout.trim();
   };
 
-  const collectSnapshots = async (name: string) => { for (const id of await call('/snapshots', v.array(v.string()), undefined, name)) snapshots.add(id); };
+  const collectSnapshots = async (name: string) => {
+    for (const id of await call('/snapshots', v.array(v.string()), undefined, name)) snapshots.add(id);
+    await writeReport();
+  };
 
   const registry = snapshotRegistry({ account: ACCOUNT, token, fetch: (input, init) => fetch(input, init) });
   // The application's ids, learnt once it exists and again before anything is deleted: deleting the Worker or the
   // application leaves its snapshots, and only these ids find them after.
-  const applicationIds = new Set<string>();
   const learnApplication = () => { for (const found of containerAppIds(REPO, [app], () => undefined)) applicationIds.add(found.id); };
 
   publishTeardown(async () => {
+    let recorded = false;
+
     const finish = async <Evidence>(name: string, work: () => Promise<Evidence>) => {
       const [outcome] = await Promise.allSettled([work()]);
 
@@ -221,7 +281,9 @@ async function main(): Promise<void> {
     const outcome = await completeTeardown({
       health: async () => origin === undefined ? null : (await fetch(`${origin}/health`, { headers: { authorization: `Bearer ${identity}` } })).status,
       beforeDelete: async (health) => {
-      await finish('application ids', async () => { learnApplication(); });
+      learnApplication();
+      await writeReport();
+      recorded = true;
 
       if (origin !== undefined && 'status' in health && health.status !== 404) for (const name of names) {
         await finish(`snapshots ${name}`, () => collectSnapshots(name));
@@ -236,12 +298,15 @@ async function main(): Promise<void> {
     });
       },
       worker: async () => {
+      if (!recorded) throw new Error('application identities were not persisted; Worker retained for recovery');
       const deleted = runWrangler(REPO, ['delete', '--name', worker, '--force'], { allowFailure: true });
 
       if (!wranglerProvesAbsence(deleted)) throw new Error(deleted);
       },
       application: async () => {
+      if (!recorded) throw new Error('application identities were not persisted; application retained for recovery');
       learnApplication();
+      await writeReport();
       const ids = [...applicationIds];
       const removed = deleteContainerApps(REPO, [app], line => { process.stderr.write(`${line}\n`); });
 
@@ -258,20 +323,18 @@ async function main(): Promise<void> {
       }
       },
       bucket: async () => {
+      if (!recorded) throw new Error('application identities were not persisted; bucket retained for recovery');
       // By name: `r2 bucket list` answers its first 20 buckets only, so a bucket past that page read as gone, and
       // every run on an account of more than 20 left its bucket behind (seven on 2026-10-08).
-      const before = r2(worker);
+      const before = r2(bucket);
 
       if (before.state === 'absent') return;
 
       if (before.state === 'unknown') throw new Error(before.reason);
-      await deleteR2Prefix({ accountId: ACCOUNT, bucket: worker, prefix: '', token: rest });
-      const accessKeyId = process.env['R2_ACCESS_KEY_ID'];
-      const secretAccessKey = process.env['R2_SECRET_ACCESS_KEY'];
-
-      if (accessKeyId !== undefined && secretAccessKey !== undefined) await drainBucketResidue(r2ResiduePlane({ accountId: ACCOUNT, accessKeyId, secretAccessKey }), worker);
-      runWrangler(REPO, ['r2', 'bucket', 'delete', worker]);
-      const after = r2(worker);
+      await deleteR2Prefix({ accountId: ACCOUNT, bucket, prefix: '', token: rest });
+      await drainBucketResidue(r2ResiduePlane({ accountId: ACCOUNT, accessKeyId, secretAccessKey }), bucket);
+      runWrangler(REPO, ['r2', 'bucket', 'delete', bucket]);
+      const after = r2(bucket);
 
       if (after.state !== 'absent') throw new Error(`the bucket is ${after.state === 'present' ? 'still there' : after.reason} after deletion`);
       },
@@ -279,7 +342,9 @@ async function main(): Promise<void> {
 
     steps.push({ contract: 'cleanup-health', ms: 0, detail: outcome.health });
     cleanupErrors.push(...outcome.errors);
-    writeReport();
+    await writeReport();
+
+    if (cleanupErrors.length === 0) await ledger.remove(run);
   });
 
   for (const [signal, status] of [['SIGTERM', 143], ['SIGINT', 130]] as const) process.once(signal, () => {
@@ -289,7 +354,11 @@ async function main(): Promise<void> {
       process.exit(1);
     });
   });
-  writeReport();
+
+  if (recovering === undefined) steps.push(...await recoverContracts(ledger, scratch));
+
+  // Durable before the first fixture bucket, Worker or application exists.
+  await writeReport();
   process.stdout.write(`[${run}] report ${report}\n`);
 
   if (recovering !== undefined) {
@@ -462,7 +531,7 @@ async function main(): Promise<void> {
     learnApplication();
 
     if (origin === undefined) throw new Error('the fixture deploy printed no origin');
-    writeReport();
+    await writeReport();
     // D17's fixture readiness: deploy returns before the workers.dev route answers.
     const readyBy = Date.now() + 180_000;
 
@@ -509,7 +578,7 @@ async function main(): Promise<void> {
     }
   } catch (cause) {
     steps.push({ contract: 'failure', ms: 0, detail: String(cause) });
-    writeReport();
+    await writeReport();
     throw cause;
   } finally {
     await runTeardownOnce();
@@ -520,4 +589,9 @@ async function main(): Promise<void> {
   process.stdout.write('Real-container contracts passed. Blind spots: account saturation, long snapshot lifetime, and the full product\'s model path.\n');
 }
 
-if (import.meta.main) await main();
+if (import.meta.main) {
+  if (process.env['ARMADA_INDEX'] === undefined) {
+    process.stderr.write(`Devbox contracts require armada: armada map --commit=HEAD --times=1 --timeout=${String(armadaConfig.task.timeout)} --secrets=DEVBOX_REGISTRY_TOKEN,KINU_CLOUDFLARE_API_TOKEN,R2_ACCESS_KEY_ID,R2_SECRET_ACCESS_KEY,KINU_EVAL_STAGING_WEB_IDENTITY -- bun run gate:devbox-e2e\n`);
+    process.exitCode = 1;
+  } else await main();
+}
