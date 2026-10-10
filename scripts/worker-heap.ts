@@ -114,7 +114,8 @@ export const CONCURRENT_AGENT_LIVE_BOUND_BYTES = 19_000_000;
  *  workspace's (its setup's garbage collected first), 0.5 MB in main's; 1 MB of room above each. */
 export const COLD_STEP_LIVE_BOUND_BYTES = { workspace: 1_000_000, main: 1_500_000 } as const;
 
-/** A turn whose {@link FAILING_STEPS} workspace tool calls each reject back across the port. */
+/** A turn whose model asks for {@link FAILING_STEPS} reads of files no workspace has: each workspace tool call rejects
+ *  back across the port, which the gate counts in main's ledger rather than assumes (a turn may stop short). */
 export const FAILING_STEPS = 20;
 
 /** What each isolate keeps of that turn once its workspace is quiet, beyond before it: a rejected call's pipeline and
@@ -336,8 +337,10 @@ export interface HeapMeasurement {
   readonly waitingParentLive: number;
   /** Each agent isolate's live heap at that wait, main's and each helper's: every one of them is open at once. */
   readonly concurrentAgentsLive: readonly number[];
-  /** What a turn of {@link FAILING_STEPS} failing workspace tool calls left live once quiet, beyond before it. */
+  /** What a turn of failing workspace tool calls left live once quiet, beyond before it. */
   readonly failedPortRetained: Isolates<number>;
+  /** That turn's tool calls that came back failed, as main's ledger records them. */
+  readonly failedPortCalls: number;
   /** What a fresh workspace's first turn, parked mid-stream, holds live beyond its setup. */
   readonly coldStepLive: Isolates<number>;
   /** The most used heap (uncollected) read at any model call of {@link LONG_TURN}. */
@@ -535,12 +538,14 @@ export async function measure(): Promise<HeapMeasurement> {
       await ask('/model?answerBytes=0&toolSteps=0&released=1000000');
       await modelQuiet();
       await ask('/quiesce?workspace=long');
+      const failedBefore = v.parse(v.number(), JSON.parse(await ask('/failed-tool-calls?workspace=long')));
       const beforeFailing = await inEach(longIsolates, async (session) => await session.liveHeap());
       await ask(`/model?failingSteps=${String(FAILING_STEPS)}`);
       await ask('/turn?workspace=long&text=failing');
       await modelQuiet();
       await ask('/quiesce?workspace=long');
       const failedPortRetained = beyond(await inEach(longIsolates, async (session) => await session.liveHeap()), beforeFailing);
+      const failedPortCalls = v.parse(v.number(), JSON.parse(await ask('/failed-tool-calls?workspace=long'))) - failedBefore;
 
       // A root turn returns once it has hired; its helpers' turns end with their runners, each after its release.
       const noRunners = async (left: number): Promise<void> => {
@@ -618,7 +623,7 @@ export async function measure(): Promise<HeapMeasurement> {
 
       const planted = { workspace: await plant('workspace'), main: await plant('main') };
 
-      return { planted, concurrentAgentsLive, failedPortRetained, coldStepLive, stepLive: beyond(during, idle), idleRetained: beyond(idle, setUp), headsRetained, perHelperRetained, helperTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: beyond(lastLive, firstLive), longTurnAllocated, bindingTurnsAllocated, setupMakeup, live: { setUp, longTurnFirst: firstLive, longTurnLast: lastLive }, wide };
+      return { planted, concurrentAgentsLive, failedPortRetained, failedPortCalls, coldStepLive, stepLive: beyond(during, idle), idleRetained: beyond(idle, setUp), headsRetained, perHelperRetained, helperTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: beyond(lastLive, firstLive), longTurnAllocated, bindingTurnsAllocated, setupMakeup, live: { setUp, longTurnFirst: firstLive, longTurnLast: lastLive }, wide };
     } finally {
       for (const session of sessions) session.close();
     }
@@ -658,7 +663,14 @@ function workloadFindings(measured: HeapMeasurement): string[] {
   const out: string[] = [];
 
   console.log(`${GATE}: with the root, a helper and its hire open, the agent isolates hold ${measured.concurrentAgentsLive.map(mb).join(', ')} live`);
-  console.log(`${GATE}: a turn of ${String(FAILING_STEPS)} failing workspace tool calls leaves ${inEachIsolate(measured.failedPortRetained)} live once quiet`);
+  console.log(`${GATE}: a turn of ${String(measured.failedPortCalls)} workspace tool calls rejected across the port (of the ${String(FAILING_STEPS)} its `
+    + `model asked for) leaves ${inEachIsolate(measured.failedPortRetained)} live once quiet`);
+
+  // None, and the turn bounded nothing about a rejected call; a turn that stops short of its model's asks measures fewer.
+  if (measured.failedPortCalls < 1 || measured.failedPortCalls > FAILING_STEPS) {
+    out.push(`the failing turn's ledger records ${String(measured.failedPortCalls)} rejected tool calls, not 1 to ${String(FAILING_STEPS)}`);
+  }
+
   console.log(`${GATE}: a fresh workspace's first turn, parked, holds ${inEachIsolate(measured.coldStepLive)} live beyond its setup`);
 
   for (const isolate of ISOLATES) {
@@ -670,7 +682,7 @@ function workloadFindings(measured: HeapMeasurement): string[] {
 
   for (const isolate of ISOLATES) {
     if (measured.failedPortRetained[isolate] > FAILED_PORT_RETAINED_BOUND_BYTES[isolate]) {
-      out.push(`a turn of ${String(FAILING_STEPS)} failing workspace tool calls leaves ${mb(measured.failedPortRetained[isolate])} live in `
+      out.push(`a turn of ${String(measured.failedPortCalls)} rejected workspace tool calls leaves ${mb(measured.failedPortRetained[isolate])} live in `
         + `${ISOLATE_NAMES[isolate]} once quiet, over ${mb(FAILED_PORT_RETAINED_BOUND_BYTES[isolate])}`);
     }
   }

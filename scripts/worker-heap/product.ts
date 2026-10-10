@@ -15,6 +15,7 @@ const planted: Uint8Array[] = [];
 /** Main's isolate as the gate loads it (`packages/cf-backend/tests/workerd/heap-plant-agent.ts`). */
 interface PlantingFacet extends Rpc.WorkerEntrypointBranded {
   plant(bytes: number): Promise<void>;
+  failedToolCalls(): Promise<number>;
 }
 
 export class OrchestratorAgent extends Product {
@@ -26,6 +27,12 @@ export class OrchestratorAgent extends Product {
     Reflect.deleteProperty(this, 'quiesce');
     Reflect.deleteProperty(this, 'joinDetached');
     Reflect.deleteProperty(this, 'plant');
+    Reflect.deleteProperty(this, 'failedToolCalls');
+  }
+
+  /** Main's tool calls that came back failed, as its isolate's ledger records them. */
+  async failedToolCalls(): Promise<number> {
+    return await (await this.agentFacetOf<PlantingFacet>(this.actorHandle().actorId)).failedToolCalls();
   }
 
   /** `bytes` held in `isolate` for its life: the gate reads it back to prove it reads that isolate. */

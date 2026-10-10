@@ -23,6 +23,8 @@ interface WorkspaceRpc extends Rpc.DurableObjectBranded {
   joinDetached(): Promise<void>;
   /** `worker-heap/product.ts`'s probe RPC. */
   plant(isolate: 'workspace' | 'main', bytes: number): Promise<void>;
+  /** `worker-heap/product.ts`'s probe RPC. */
+  failedToolCalls(): Promise<number>;
 }
 
 interface AccountRpc extends Rpc.DurableObjectBranded {
@@ -79,6 +81,10 @@ export class HeapDriver extends DurableObject<DriverEnv> {
 
   async plant(workspace: string, isolate: 'workspace' | 'main', bytes: number): Promise<void> {
     await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).plant(isolate, bytes);
+  }
+
+  async failedToolCalls(workspace: string): Promise<number> {
+    return await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).failedToolCalls();
   }
 
   async quiesce(workspace: string): Promise<void> {
@@ -297,6 +303,8 @@ export default {
     }
 
     if (url.pathname === '/runners') return Response.json(await driver.runners(workspace));
+
+    if (url.pathname === '/failed-tool-calls') return Response.json(await driver.failedToolCalls(workspace));
 
     if (url.pathname === '/turn') await driver.turn(workspace, url.searchParams.get('text') ?? 'hello');
     else if (url.pathname === '/heads') await driver.heads(workspace, url.searchParams.get('tag') ?? 'head', Number(url.searchParams.get('count')));
