@@ -39,6 +39,7 @@ import { agentFacet, agentStateShellId, AgentMemory, AgentStoreBroker, AgentWork
 import { agentCallsThrough, AgentIsolateSlots } from "./dynamic-worker-slots";
 import { providerBindingsOf, routedModelReads } from "./providers/agent-registry";
 import { AgentTurns } from "./agent-turns";
+import { initMainTurnFactsTable, MainTurnFactsStore, type MainTurnFacts } from "./main-turn-facts";
 import { AgentWakes } from "./agent-wakes";
 import type { AgentTurnActivity, AgentSnapshot, RunEventRecorder, StoredRow } from '@kinu.run/core';
 import type { SerializedMessage, WebSearchProvider } from '@kinu.run/core';
@@ -266,7 +267,7 @@ import type { ExposedPortList } from "@kinu.run/core";
 import {
   terminalEffect, declareTerminalRoster, isDefinitiveTerminalFailure, CompletedTurnSchema,
   branchesTerminalEffect,
-  type HandedOffTurn, type CompletedTurn, type TurnContinuity, type TerminalEffectTable, type TerminalTurnFacts,
+  type HandedOffTurn, type CompletedTurn, type TerminalEffectTable, type TerminalTurnFacts,
   type TerminalTurnParts,
 } from "@kinu.run/core";
 
@@ -282,14 +283,6 @@ const LeasedRowSchema = v.object({ id: v.string() });
  */
 
 const ANSWERED_TURNS_KEPT = 32;
-
-/** What a main turn's workspace-side tools left here, read by its roster. */
-interface MainTurnFacts {
-  readonly craftedToolsUsed: readonly string[];
-  readonly branches: readonly { readonly id: string; readonly task: string }[];
-  readonly continuity: TurnContinuity;
-  readonly evolutionEnabled: boolean;
-}
 
 const SANDBOX_STARTING = 'sandbox_starting';
 
@@ -1290,7 +1283,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // Its questions park in its own isolate, as every agent's do: the stack asks it once its turn was offered the tool.
       this.offerAskOwner(turn.actor.stores.config);
 
-      return await this.mainTaskProfile(turn);
+      const profile = await this.mainTaskProfile(turn);
+
+      this.mainTurnFacts.opened(turn.turnId, { continuity: this._turnContinuity, evolutionEnabled: this._turnEvolutionEnabled });
+
+      return profile;
     }
 
     const webSearch = this.ownedModelServices.getWebSearchProvider();
@@ -2796,29 +2793,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Readings this root's settled response owes; all taken now, before any effect runs, since the
    * list is claimed up front. Row order, lanes and gates belong to {@link declareTerminalRoster}.
    */
-  /** What main's facet turn left here as it ran, kept past its end: its handoff may come after the next turn opened. */
-  private readonly mainTurnFacts = new Map<string, MainTurnFacts>();
   /** The turns whose fleet row this activation recorded: a settlement its isolate retries records none again. */
   private readonly mainTurnRows = new Set<string>();
 
-  /** The live turn's, else none: a workspace that restarted mid-turn holds nothing of it. */
-  private liveMainTurnFacts(turnId: string): MainTurnFacts {
-    if (this.facetTurnId() !== turnId) return { craftedToolsUsed: [], branches: [], continuity: 'conversation', evolutionEnabled: false };
-
-    return {
-      craftedToolsUsed: this.acc.craftedToolsUsed(),
-      branches: this._pendingBranches.map((branch) => ({ id: branch.id, task: branch.task })),
-      continuity: this._turnContinuity,
-      evolutionEnabled: this._turnEvolutionEnabled,
-    };
-  }
-
-  /** Held at the turn's end until its handoff, which main's own terminal ledger re-drives until it lands. */
-  protected override mainFacetTurnEnded(): void {
-    const turnId = this.facetTurnId();
-
-    if (turnId !== null) this.mainTurnFacts.set(turnId, this.liveMainTurnFacts(turnId));
-    super.mainFacetTurnEnded();
+  /** What main's turns left here, from their preparation to their handoff. */
+  private get mainTurnFacts(): MainTurnFactsStore {
+    return new MainTurnFactsStore(this.boundSql, this.actorHandle().actorId);
   }
 
   /**
@@ -2828,7 +2808,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private async mainTurnSettled(settled: HandedOffTurn): Promise<void> {
     // Prepared here under its producer's identity (`announcementOf`): the key its facts are held by.
     const prepared = announcementOf(settled.turnId);
-    const held = this.mainTurnFacts.get(prepared) ?? this.liveMainTurnFacts(prepared);
+    const held = this.mainTurnFacts.read(prepared);
     // Scoped here: mission labels must travel with every recording, and a cold replay has no active governor scope.
     const scoped = this.orch.scopedTurn(v.parse(CompletedTurnSchema, settled.turn));
 
@@ -2848,7 +2828,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       transition: { turnId: settled.turnId, messageId: settled.messageId },
       declare: () => declareTerminalRoster(facts, this.rosterParts(settled, scoped, held, missionOf(this.getSoulText()))),
     });
-    this.mainTurnFacts.delete(prepared);
+    this.mainTurnFacts.retire(prepared);
   }
 
   /** Built per use: the actor handle and the fast lane are this activation's. Main's conversation is its isolate's. */
@@ -2872,7 +2852,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // Over the row main's transcript persisted, so a cut turn's announcement replays from it.
       turnEndExtensions: true,
       credited: settled.credited,
-      craftedToolsUsed: held.craftedToolsUsed,
+      // Main's own isolate saw its tools run, and recorded them in the turn it handed over.
+      craftedToolsUsed: scoped.craftedToolsUsed ?? [],
       eventReplies: { answered: new Set(settled.answeredDeliveries), requestId: settled.messageId },
       branches: held.branches,
       // Owed only when the actor reviews turns, as the lane it replaced was started only then.
@@ -3553,6 +3534,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     initSubordinateRosterTable(this.ctx.storage.sql);
 
     initSleepTimeUpdatesTable(execRaw);
+    initMainTurnFactsTable(execRaw);
     // Keyed per actor and message, as a thumb is: the thumbs re-score reads this table.
     execRaw(`CREATE TABLE IF NOT EXISTS turn_craft_usage (
       actor_id   TEXT NOT NULL,
@@ -4165,6 +4147,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       const id = newBranchId();
       // Read before the await: the branch charges the turn the owner redirected, not whichever runs next.
       const missionLabels = this.budget.scope;
+      const redirected = this.facetTurnId();
       const inheritedContext = yield* Effect.promise(async () => this.readInheritedContext());
       this._pendingBranches.push({
         id, task,
@@ -4172,6 +4155,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           id, task, inheritedContext, missionLabels,
         }),
       });
+
+      // The turn the owner redirected settles it, whichever activation its handoff lands on.
+      if (redirected !== null) this.mainTurnFacts.branched(redirected, { id, task });
       this.broadcastBranchStatus({ type: 'branch_status', status: 'running', branchId: id, task });
       this.logActivity('branch_start', task.slice(0, 120));
 

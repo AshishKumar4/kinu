@@ -41,6 +41,13 @@ export function loseNextTurnEnd(storageKey: string): void {
   lostTurnEnds.add(storageKey);
 }
 
+const lostHandoffs = new Set<string>();
+
+/** The isolate under `storageKey` hands its next settled turn to a workspace that is gone before it takes it. */
+export function loseNextHandoff(storageKey: string): void {
+  lostHandoffs.add(storageKey);
+}
+
 /** The isolate under `storageKey` fails to write its next answer row; the commit is one transaction, so nothing lands. */
 export function failNextAnswerWrite(storageKey: string): void {
   undurableAnswers.add(storageKey);
@@ -190,7 +197,11 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           owedReport: (...args) => host.owedReport(...args),
           parentReport: (report) => host.parentReport(report),
           autoTitle: (subject, title) => host.autoTitle(subject, title),
-          turnSettled: (settled) => host.turnSettled(settled),
+          turnSettled: async (settled) => {
+            if (lostHandoffs.delete(placement.storageKey)) throw new Error('the workspace was reset before it took the handoff');
+
+            await host.turnSettled(settled);
+          },
           hireAdvisor: (advisor) => host.hireAdvisor(advisor),
           owes: (next, holds) => host.owes(next, holds),
           birthContext: (drainTurnId) => host.birthContext(drainTurnId),

@@ -886,6 +886,14 @@
     "corroborated_at INTEGER",
     "PRIMARY KEY (actor_id, id)"
   ],
+  "main_turn_facts@packages/cf-backend/src/main-turn-facts.ts": [
+    "actor_id TEXT NOT NULL",
+    "turn_id TEXT NOT NULL",
+    "continuity TEXT NOT NULL",
+    "evolution_enabled INTEGER NOT NULL",
+    "branches_json TEXT NOT NULL",
+    "PRIMARY KEY (actor_id, turn_id)"
+  ],
   "mcts_search_runs@packages/core/src/mcts/search-store.ts": [
     "actor_id TEXT NOT NULL",
     "root_id TEXT NOT NULL",

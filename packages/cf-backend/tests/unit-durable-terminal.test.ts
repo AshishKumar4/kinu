@@ -15,12 +15,13 @@ import {
 import { createRecordingLogger } from '@kinu.run/core/obs';
 import { sqlOver } from '@kinu.run/test-utils';
 import {
-  chatSessionTurns, ledgerOver, orchestratorHarness,
+  chatSessionTurns, driveUntil, ledgerOver, orchestratorHarness,
   reactivateOrchestratorHarness,
   tapDiagnostics, until, workspaceMainActor, type ActorHarness, type HarnessActorWorld, type HarnessOrchestratorAgent,
   type ScriptedHeadReport,
 } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
+import { loseNextHandoff } from './helpers/agent-facets';
 import type { SettledTurn, TurnHarness } from './helpers/turn-harness';
 
 type Harness = ActorHarness<HarnessOrchestratorAgent>;
@@ -361,6 +362,27 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     }
   });
 
+});
+
+/**
+ * What the workspace decided as main's turn opened, and the branches its owner started during it, are the turn's roster
+ * inputs; main's isolate commits the answer and hands the turn over afterwards, and the workspace may be gone between.
+ */
+describe("a main turn's workspace facts outlive the activation that gathered them", () => {
+  test('a reset between the answer and its handoff keeps the branch and the evolution gate the turn opened with', async () => {
+    const world: HarnessActorWorld = { heads: headsAnswering({ status: 'completed', summary: 'the branch answer' }) };
+    const harness = orchestratorHarness(undefined, world);
+
+    await branchDuring(harness, 'u-reset', 'a-reset', 'try the other library');
+    loseNextHandoff(harness.agent.agentOf(workspaceMainActor(harness.db).actorId).storageKey);
+    await turns(harness).settle({ messageId: 'a-reset', text: 'the live answer' });
+    await joinHarnessFibers();
+
+    laterBy(1);
+    const restarted = await reactivateOrchestratorHarness(harness.db, undefined, { world });
+
+    await driveUntil(restarted, 'the handoff landed without the branch or the review its turn owed', () => takeSets(restarted) === 1 && owedReviews(restarted) === 1);
+  });
 });
 
 /**

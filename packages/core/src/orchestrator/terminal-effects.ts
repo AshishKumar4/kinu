@@ -35,7 +35,7 @@ import { TASK_REMINDER_EVENT, taskReminderIdempotencyKey } from '../tasks/remind
 export const RunEndReasonSchema = v.picklist(RUN_END_REASONS);
 
 /** Recorded rather than re-read: a fresh actor defaults to `conversation`. */
-const TurnContinuitySchema: v.GenericSchema<TurnContinuity> = v.union([
+export const TurnContinuitySchema: v.GenericSchema<TurnContinuity> = v.union([
   v.literal('conversation'), v.literal('independent_task'),
 ]);
 
