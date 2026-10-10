@@ -38,6 +38,7 @@
     "./agent-facet-probe.ts",
     "./agent-facet-probe-agent.ts",
     "./two-turn-probe-agent.ts",
+    "./heap-plant-agent.ts",
     "./slate-egress-probe.ts"
   ]
 }

@@ -9,6 +9,14 @@ export * from 'kinu:product';
 
 export { default } from 'kinu:product';
 
+/** Held for the isolate's life, as a leak would be. */
+const planted: Uint8Array[] = [];
+
+/** Main's isolate as the gate loads it (`packages/cf-backend/tests/workerd/heap-plant-agent.ts`). */
+interface PlantingFacet extends Rpc.WorkerEntrypointBranded {
+  plant(bytes: number): Promise<void>;
+}
+
 export class OrchestratorAgent extends Product {
   constructor(...args: ConstructorParameters<typeof Product>) {
     super(...args);
@@ -17,6 +25,13 @@ export class OrchestratorAgent extends Product {
     Reflect.deleteProperty(this, 'delegatedRunners');
     Reflect.deleteProperty(this, 'quiesce');
     Reflect.deleteProperty(this, 'joinDetached');
+    Reflect.deleteProperty(this, 'plant');
+  }
+
+  /** `bytes` held in `isolate` for its life: the gate reads it back to prove it reads that isolate. */
+  async plant(isolate: 'workspace' | 'main', bytes: number): Promise<void> {
+    if (isolate === 'workspace') planted.push(new Uint8Array(bytes).fill(7));
+    else await (await this.agentFacetOf<PlantingFacet>(this.actorHandle().actorId)).plant(bytes);
   }
 
   /** What it has detached joined: setting a model tells each agent's isolate, which loads main's (D9). */

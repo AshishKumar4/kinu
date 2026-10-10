@@ -21,6 +21,8 @@ interface WorkspaceRpc extends Rpc.DurableObjectBranded {
   quiesce(): Promise<void>;
   /** `worker-heap/product.ts`'s probe RPC. */
   joinDetached(): Promise<void>;
+  /** `worker-heap/product.ts`'s probe RPC. */
+  plant(isolate: 'workspace' | 'main', bytes: number): Promise<void>;
 }
 
 interface AccountRpc extends Rpc.DurableObjectBranded {
@@ -73,6 +75,10 @@ export class HeapDriver extends DurableObject<DriverEnv> {
 
   async heads(workspace: string, tag: string, count: number): Promise<void> {
     await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).hostHeads(tag, count);
+  }
+
+  async plant(workspace: string, isolate: 'workspace' | 'main', bytes: number): Promise<void> {
+    await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).plant(isolate, bytes);
   }
 
   async quiesce(workspace: string): Promise<void> {
@@ -288,6 +294,7 @@ export default {
     if (url.pathname === '/turn') await driver.turn(workspace, url.searchParams.get('text') ?? 'hello');
     else if (url.pathname === '/heads') await driver.heads(workspace, url.searchParams.get('tag') ?? 'head', Number(url.searchParams.get('count')));
     else if (url.pathname === '/quiesce') await driver.quiesce(workspace);
+    else if (url.pathname === '/plant') await driver.plant(workspace, v.parse(v.picklist(['workspace', 'main']), url.searchParams.get('isolate')), Number(url.searchParams.get('bytes')));
     else return new Response(await driver.setUp(workspace, url.searchParams.get('compat') === '1'));
 
     return new Response(null, { status: 204 });

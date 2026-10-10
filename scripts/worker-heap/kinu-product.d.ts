@@ -25,6 +25,9 @@ declare module 'kinu:product' {
     protected get config(): { setSleepTimeComputeEnabled(enabled: boolean): void };
     protected settleBackgroundTasks(): Promise<void>;
     protected get terminal(): { idle(): Promise<void> };
+    protected actorHandle(): { readonly actorId: string };
+    /** Main's isolate, or another agent's, as the bundle reaches it. */
+    protected agentFacetOf<Facet extends Rpc.WorkerEntrypointBranded>(actorId: string): Promise<Fetcher<Facet>>;
   }
 
   const handler: ExportedHandler;

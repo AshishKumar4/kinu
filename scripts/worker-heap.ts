@@ -26,7 +26,8 @@
  * `--no-build` reads the existing `dist/kinu` (a deploy already built it).
  */
 
-import { readFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { builtinModules } from 'node:module';
 import { createServer } from 'node:net';
 import { dirname, join, normalize, resolve as resolvePath } from 'node:path';
@@ -36,6 +37,7 @@ import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import * as v from 'valibot';
 import { ownerCaller } from '../packages/core/src/safety/workspace-capability';
 import { workersAiBinding } from '../packages/cf-backend/tests/helpers/workers-ai-binding';
+import { buildAgentBundle } from '../packages/cf-backend/vite-agent-bundle';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 
@@ -471,6 +473,22 @@ function beyond(after: Isolates<number>, before: Isolates<number>): Isolates<num
   return { workspace: after.workspace - before.workspace, main: after.main - before.main };
 }
 
+/**
+ * Planted in each isolate in turn at the end of the run and read back: a gate that read the wrong isolate, or none,
+ * would bound nothing there. Bigger than any step's bound, so a misread one is not lost in the noise of a turn.
+ */
+export const PLANTED_BYTES = 4_000_000;
+
+/** The built assets with main's isolate swapped for the shipped facet plus `plant` (`tests/workerd/heap-plant-agent.ts`). */
+function plantingAssets(directory: string): string {
+  const assets = mkdtempSync(join(tmpdir(), 'worker-heap-assets-'));
+
+  cpSync(directory, assets, { recursive: true });
+  writeFileSync(join(assets, '_agent/modules.json'), JSON.stringify(buildAgentBundle(join(CF_BACKEND, 'tests/workerd/heap-plant-agent.ts')).modules));
+
+  return assets;
+}
+
 export interface HeapMeasurement {
   /** What a step parked on the model holds live beyond the idle workspace before it, at {@link STEP}. */
   readonly stepLive: Isolates<number>;
@@ -496,6 +514,8 @@ export interface HeapMeasurement {
   readonly bindingTurnsAllocated: Isolates<Allocations>;
   /** Each character above U+00FF in the requests, with the text before it; the scripted turns write none. */
   readonly wide: readonly string[];
+  /** For each isolate {@link PLANTED_BYTES} were planted in, the live heap it added in each isolate. */
+  readonly planted: Isolates<Isolates<number>>;
 }
 
 export async function measure(): Promise<HeapMeasurement> {
@@ -528,7 +548,7 @@ export async function measure(): Promise<HeapMeasurement> {
       name: 'kinu', ...compat, modulesRoot: DIST, modules: await productModules(), workerLoaders: { LOADER: {} },
       bindings: { ...wrangler.vars, CREDENTIAL_ENCRYPTION_KEY: key },
       ai,
-      assets: { binding: wrangler.assets.binding, directory: resolvePath(DIST, wrangler.assets.directory) },
+      assets: { binding: wrangler.assets.binding, directory: plantingAssets(resolvePath(DIST, wrangler.assets.directory)) },
       r2Buckets: wrangler.r2_buckets.map((bucket) => bucket.binding),
       kvNamespaces: wrangler.kv_namespaces.map((namespace) => namespace.binding),
       durableObjects: Object.fromEntries(wrangler.durable_objects.bindings.map((binding) =>
@@ -689,7 +709,18 @@ export async function measure(): Promise<HeapMeasurement> {
       await noRunners(0);
       await ask('/model?hires=0&nest=0');
 
-      return { stepLive: beyond(during, idle), idleRetained: beyond(idle, setUp), headsRetained, perHelperRetained, helperTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: beyond(lastLive, firstLive), longTurnAllocated, bindingTurnsAllocated, setupMakeup, live: { setUp, longTurnFirst: firstLive, longTurnLast: lastLive }, wide };
+      // Last, so nothing measured above carries it: each isolate's planted bytes, read in both.
+      const plant = async (isolate: (typeof ISOLATES)[number]): Promise<Isolates<number>> => {
+        const before = await inEach(stepIsolates, async (session) => await session.liveHeap());
+
+        await ask(`/plant?workspace=heap&isolate=${isolate}&bytes=${String(PLANTED_BYTES)}`);
+
+        return beyond(await inEach(stepIsolates, async (session) => await session.liveHeap()), before);
+      };
+
+      const planted = { workspace: await plant('workspace'), main: await plant('main') };
+
+      return { planted, stepLive: beyond(during, idle), idleRetained: beyond(idle, setUp), headsRetained, perHelperRetained, helperTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: beyond(lastLive, firstLive), longTurnAllocated, bindingTurnsAllocated, setupMakeup, live: { setUp, longTurnFirst: firstLive, longTurnLast: lastLive }, wide };
     } finally {
       for (const session of sessions) session.close();
     }
@@ -753,6 +784,20 @@ async function main(args: readonly string[]): Promise<number> {
   }
 
   const findings: string[] = [];
+
+  // The gate reads each isolate it bounds: a buffer planted in one shows there, and not in the other.
+  for (const isolate of ISOLATES) {
+    const other = isolate === 'workspace' ? 'main' : 'workspace';
+    const seen = measured.planted[isolate];
+
+    const read = `${mb(seen[isolate])} there and ${mb(seen[other])} in ${ISOLATE_NAMES[other]}`;
+
+    console.log(`${GATE}: ${mb(PLANTED_BYTES)} planted in ${ISOLATE_NAMES[isolate]} read as ${read}`);
+
+    if (seen[isolate] < PLANTED_BYTES * 0.9 || seen[other] > PLANTED_BYTES * 0.25) {
+      findings.push(`${mb(PLANTED_BYTES)} planted in ${ISOLATE_NAMES[isolate]} read as ${read}: the gate does not read that isolate alone`);
+    }
+  }
 
   if (wide.length > 0) findings.push(`${wide.join(', ')} carry characters outside ASCII, which V8 keeps two bytes each`);
 
