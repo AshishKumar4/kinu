@@ -428,7 +428,7 @@ export class LocalAgentClient implements AgentClient {
   async describeTools(): Promise<AgentToolSurface> {
     return {
       builtIn: this.session.describeTools(),
-      crafted: getToolList(this.deps.rt.storage.sql, this.deps.rt.craftStore).crafted.map(({ name, description }) => ({ name, description })),
+      crafted: getToolList(this.deps.rt.storage.sql).crafted.map(({ name, description }) => ({ name, description })),
     };
   }
 

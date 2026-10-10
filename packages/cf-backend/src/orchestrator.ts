@@ -3955,7 +3955,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   async getToolList() {
-    return getToolList(this.boundSql, this.rt.craftStore);
+    return getToolList(this.boundSql);
   }
 
   /** Latest search's tree only; settled earlier searches in search_nodes must not shadow it. */
