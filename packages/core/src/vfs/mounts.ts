@@ -512,7 +512,8 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 		async writeFileIfDigest(path, data, expected) {
 			const target = await on(path);
 			const route = target.namespace === null ? null : await routeCreating(target.namespace, target.at, true);
-			const own: (VFS & CheckpointFiles) | null = route === null || route.point === '/' || route.path === '/' ? null : route.source;
+			// The root's own source too: the CLI's folder plane compares there (its host adapter); a store that cannot answers ENOTSUP.
+			const own: (VFS & CheckpointFiles) | null = route === null || route.path === '/' ? null : route.source;
 			const readOnly = target.namespace?.mounts().find((mount) => mount.point === route?.point)?.options.readOnly === true;
 			const replace = own?.writeFileIfDigest?.bind(own);
 

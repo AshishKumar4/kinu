@@ -608,7 +608,7 @@ describe('a plane with no compare-and-write says so, once, in one voice', () => 
     expect(nimbusSessionFiles(sessionBox(f, ORIGIN), { home: WORKSPACE_ROOT })).not.toHaveProperty('writeFileIfRevision');
   });
 
-  test('an in-place save is refused as unsupported and writes nothing; an unconditional save lands', async () => {
+  test('an in-place save is refused as unsupported and writes nothing; the owner\'s replace lands', async () => {
     const f = await openFixture();
     const aHome = await f.provision(node('cw2'));
     const a = credOf(aHome);
@@ -621,7 +621,12 @@ describe('a plane with no compare-and-write says so, once, in one voice', () => 
     if (!('unsupported' in refused)) throw new Error('expected the unsupported refusal');
     expect(await readText(plane, target)).toBe('the previous file');
 
-    expect(await writeExecutorFileOp(lookupFor(plane), 'workspace', target, { bytes: new TextEncoder().encode('the replacement') })).toEqual({ ok: true });
+    // An upload over it only creates: it is the owner's to replace, and their replace names what they were shown.
+    const create = await writeExecutorFileOp(lookupFor(plane), 'workspace', target, { bytes: new TextEncoder().encode('the replacement') });
+
+    if (!('conflict' in create)) throw new Error('expected the create to find the file there');
+    expect(await writeExecutorFileOp(lookupFor(plane), 'workspace', target, { bytes: new TextEncoder().encode('the replacement'), expectedRevision: create.revision }))
+      .toMatchObject({ ok: true });
     expect(await readText(plane, target)).toBe('the replacement');
   });
 
