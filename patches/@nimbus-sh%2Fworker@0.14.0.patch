@@ -1,0 +1,172 @@
+diff --git a/dist/facets/manager.js b/dist/facets/manager.js
+index b6ce290..ffd5856 100644
+--- a/dist/facets/manager.js
++++ b/dist/facets/manager.js
+@@ -847,21 +847,49 @@ ${sources.residentStore}
+     // number: what a replay prints again of the stopped run's output is
+     // checked and dropped here, and a chunk the session has not acknowledged
+     // when the run stops rides the stop (runtime/stop-replay.ts).
++    // Kinu patch (NIMBUS-ASKS #39): writes made while the call before them is
++    // in flight ride the next call together, up to __RPC_BATCH_MAX bytes of
++    // one stream and run; each write's promise settles with its call. One
++    // call per write cost ~330 us a console.log through a pipe.
++    const __RPC_BATCH_MAX = 65536;
++    let __rpcBatch = null;
+     const __queueRpcWrite = (method, bytes) => {
+       const __chunk = __nimbusStopReplay.write(method, bytes);
+       if (__chunk === null) return;
+       __rpcWriteCount++;
+       // Released at the filesystem client's gate, taken now: once every
+-      // change logged ahead of it is answered (ProcessFsClient.effect).
++      // change logged ahead of it is answered (ProcessFsClient.effect). A
++      // batch waits for its last write's gate, which follows the earlier ones.
+       const __gate = __nimbusOutputGate();
+-      const __task = __rpcWriteChain
+-        .then(() => __gate)
+-        .then(() => __supervisor[method](__chunk.b, __chunk.at, __chunk.run))
+-        .then(() => __nimbusStopReplay.acked(__chunk))
+-        .catch((e) => __onRpcDrop(__chunk.b.byteLength, e));
+-      __rpcWriteChain = __task.then(() => {}, () => {});
+-      __pendingIO.push(__task);
+-      return __task;
++      const __size = __chunk.b.byteLength;
++      const __open = __rpcBatch;
++      if (__open !== null && __open.method === method && __open.run === __chunk.run && __open.end === __chunk.at
++          && __open.bytes + __size <= __RPC_BATCH_MAX) {
++        __open.chunks.push(__chunk);
++        __open.bytes += __size;
++        __open.end = __chunk.at === undefined ? undefined : __chunk.at + __size;
++        __open.gate = __gate;
++        return __open.task;
++      }
++      const __batch = { method, run: __chunk.run, chunks: [__chunk], bytes: __size, end: __chunk.at === undefined ? undefined : __chunk.at + __size, gate: __gate, task: null };
++      __rpcBatch = __batch;
++      __batch.task = __rpcWriteChain
++        .then(() => { if (__rpcBatch === __batch) __rpcBatch = null; return __batch.gate; })
++        .then(() => {
++          const __first = __batch.chunks[0];
++          let __bytes = __first.b;
++          if (__batch.chunks.length > 1) {
++            __bytes = new Uint8Array(__batch.bytes);
++            let __at = 0;
++            for (const __part of __batch.chunks) { __bytes.set(__part.b, __at); __at += __part.b.byteLength; }
++          }
++          return __supervisor[method](__bytes, __first.at, __first.run);
++        })
++        .then(() => __nimbusStopReplay.ackedRun(__batch.chunks))
++        .catch((e) => __onRpcDrop(__batch.bytes, e));
++      __rpcWriteChain = __batch.task.then(() => {}, () => {});
++      __pendingIO.push(__batch.task);
++      return __batch.task;
+     };
+     let cwd = _cwd || "/home/user";
+     let stdout = "", stderr = "";
+@@ -888,7 +916,9 @@ ${RESIDENCY_MISS_REPORT}
+       stderr += __text;
+       if (!__supervisor || captureOutput) return;
+       const __bytes = __nimbusOutEnc.encode(__text);
+-      // At the output gate, as all of the process's output is.
++      // At the output gate, as all of the process's output is. After the
++      // batch open now, which nothing written later joins (Kinu patch, #39).
++      __rpcBatch = null;
+       const __gate = __nimbusOutputGate();
+       const __task = __rpcWriteChain.then(() => __gate).then(() => __supervisor.stderr(__bytes)).catch((e) => __onRpcDrop(__bytes.byteLength, e));
+       __rpcWriteChain = __task.then(() => {}, () => {});
+@@ -1366,21 +1396,49 @@ ${VFS_CURSOR_SEED_SOURCE}
+     let __rpcWriteCount = 0;
+     // The relay carries bytes (see "Process output is bytes" in the shims),
+     // each chunk placed in what this run printed (runtime/stop-replay.ts).
++    // Kinu patch (NIMBUS-ASKS #39): writes made while the call before them is
++    // in flight ride the next call together, up to __RPC_BATCH_MAX bytes of
++    // one stream and run; each write's promise settles with its call. One
++    // call per write cost ~330 us a console.log through a pipe.
++    const __RPC_BATCH_MAX = 65536;
++    let __rpcBatch = null;
+     const __queueRpcWrite = (method, bytes) => {
+       const __chunk = __nimbusStopReplay.write(method, bytes);
+       if (__chunk === null) return;
+       __rpcWriteCount++;
+       // Released at the filesystem client's gate, taken now: once every
+-      // change logged ahead of it is answered (ProcessFsClient.effect).
++      // change logged ahead of it is answered (ProcessFsClient.effect). A
++      // batch waits for its last write's gate, which follows the earlier ones.
+       const __gate = __nimbusOutputGate();
+-      const __task = __rpcWriteChain
+-        .then(() => __gate)
+-        .then(() => __supervisor[method](__chunk.b, __chunk.at, __chunk.run))
+-        .then(() => __nimbusStopReplay.acked(__chunk))
+-        .catch((e) => __onRpcDrop(__chunk.b.byteLength, e));
+-      __rpcWriteChain = __task.then(() => {}, () => {});
+-      __pendingIO.push(__task);
+-      return __task;
++      const __size = __chunk.b.byteLength;
++      const __open = __rpcBatch;
++      if (__open !== null && __open.method === method && __open.run === __chunk.run && __open.end === __chunk.at
++          && __open.bytes + __size <= __RPC_BATCH_MAX) {
++        __open.chunks.push(__chunk);
++        __open.bytes += __size;
++        __open.end = __chunk.at === undefined ? undefined : __chunk.at + __size;
++        __open.gate = __gate;
++        return __open.task;
++      }
++      const __batch = { method, run: __chunk.run, chunks: [__chunk], bytes: __size, end: __chunk.at === undefined ? undefined : __chunk.at + __size, gate: __gate, task: null };
++      __rpcBatch = __batch;
++      __batch.task = __rpcWriteChain
++        .then(() => { if (__rpcBatch === __batch) __rpcBatch = null; return __batch.gate; })
++        .then(() => {
++          const __first = __batch.chunks[0];
++          let __bytes = __first.b;
++          if (__batch.chunks.length > 1) {
++            __bytes = new Uint8Array(__batch.bytes);
++            let __at = 0;
++            for (const __part of __batch.chunks) { __bytes.set(__part.b, __at); __at += __part.b.byteLength; }
++          }
++          return __supervisor[method](__bytes, __first.at, __first.run);
++        })
++        .then(() => __nimbusStopReplay.ackedRun(__batch.chunks))
++        .catch((e) => __onRpcDrop(__batch.bytes, e));
++      __rpcWriteChain = __batch.task.then(() => {}, () => {});
++      __pendingIO.push(__batch.task);
++      return __batch.task;
+     };
+     let cwd = _cwd || "/home/user";
+     let stdout = "", stderr = "";
+@@ -1407,7 +1465,9 @@ ${RESIDENCY_MISS_REPORT}
+       stderr += __text;
+       if (!__supervisor || captureOutput) return;
+       const __bytes = __nimbusOutEnc.encode(__text);
+-      // At the output gate, as all of the process's output is.
++      // At the output gate, as all of the process's output is. After the
++      // batch open now, which nothing written later joins (Kinu patch, #39).
++      __rpcBatch = null;
+       const __gate = __nimbusOutputGate();
+       const __task = __rpcWriteChain.then(() => __gate).then(() => __supervisor.stderr(__bytes)).catch((e) => __onRpcDrop(__bytes.byteLength, e));
+       __rpcWriteChain = __task.then(() => {}, () => {});
+diff --git a/dist/runtime/stop-replay.js b/dist/runtime/stop-replay.js
+index c3123df..a4d6aa6 100644
+--- a/dist/runtime/stop-replay.js
++++ b/dist/runtime/stop-replay.js
+@@ -396,6 +396,23 @@ const __nimbusStopReplay = (() => {
+         }
+       }
+     },
++    // Kinu patch (NIMBUS-ASKS #39): the chunks one relay call carried, written
++    // in order and so pending in order: taken out in one pass, not one each.
++    ackedRun(chunks) {
++      if (!run || chunks.length === 0) return;
++      const pending = run.pending;
++      for (let i = 0; i < pending.length; i++) {
++        if (pending[i] === chunks[0]) {
++          let k = 0;
++          while (k < chunks.length && i + k < pending.length && pending[i + k] === chunks[k]) k++;
++          for (let j = i; j < pending.length - k; j++) pending[j] = pending[j + k];
++          pending.length = pending.length - k;
++          for (let r = k; r < chunks.length; r++) this.acked(chunks[r]);
++          return;
++        }
++      }
++      for (let r = 0; r < chunks.length; r++) this.acked(chunks[r]);
++    },
+     // A synchronous read of stdin that wants bytes and finds \\\`available\\\`
+     // (\\\`ended\\\`: no more will come): how many it returns, or -1 when it has
+     // to wait for more.
