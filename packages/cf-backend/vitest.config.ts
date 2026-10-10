@@ -519,7 +519,6 @@ const runnerOptions = {
           FORK_SOURCE: { className: 'ForkSourceProbeDO', useSQLite: true },
           FORK_TARGET: { className: 'ForkTargetProbeDO', useSQLite: true },
           STREAM_LIFECYCLE: { className: 'StreamLifecycleDO', useSQLite: true },
-          FILES_EIO_PROBE: { className: 'FilesEioProbeDO', useSQLite: true },
           PARKED_WRITES_PROBE: { className: 'ParkedWritesProbeDO', useSQLite: true },
           COMPLEXITY_PROBE: { className: 'ComplexityProbeDO', useSQLite: true },
           EFFECT_ATOMICITY_PROBE: { className: 'EffectAtomicityProbeDO', useSQLite: true },

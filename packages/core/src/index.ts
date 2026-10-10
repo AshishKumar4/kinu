@@ -1027,7 +1027,7 @@ export {
   DeviceTerminalHub, terminalFromSocket,
   type TerminalHolder,
   nimbusSessionShell,
-  type NimbusSandboxHandle,
+  type NimbusSandboxHandle, type RemoteSessionBox,
   type NimbusStartResult, type NimbusExecOptions, type NimbusExecResult, type NimbusPortInfo,
   EXECUTOR_CAPABILITIES, NO_TIMER_DEADLINE_MS,
   type ExecutorCapability, type ExecutorKind, type ExecutorProvider, type ExecutorProviderSurface,
@@ -1071,7 +1071,7 @@ export {
 } from './vfs/agent-home';
 
 export type {
-  WorkspaceAgent, WorkspaceAgentPlane, WorkspaceBundle, WorkspaceOptions,
+  WorkspaceAgent, WorkspaceAgentPlane, WorkspaceBundle, WorkspaceFiles, WorkspaceOptions,
   WorkspaceSession,
 } from './vfs/nimbus-workspace';
 

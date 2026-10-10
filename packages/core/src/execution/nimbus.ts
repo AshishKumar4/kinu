@@ -13,59 +13,11 @@ import { syscallError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { workspacePath } from '../vfs/workspace-path';
 import { sessionRuntimeBins, workspaceCommandNotFound } from '../vfs/workspace-runtimes';
 import { shellQuote } from '../utils/shell';
-import { base64ToBytes } from '../utils/base64';
 import type { ExecutorCapability, ExecutorProvider, ExecutorStatus, PortExposureResult, PreviewRouteCheck } from './types';
 import { commandResult, exposedPortText, formatExecResult, type CommandResult } from './exec-result';
 import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
-
-/** Shell-fallback constants: path and offsets travel as JSON in one env value, never quoted into shell text. */
-const NIMBUS_RANGE_ENV = 'KINU_NIMBUS_RANGE_REQUEST';
-
-const NIMBUS_RANGE_READER = `const fs=require('node:fs');const r=JSON.parse(process.env.${NIMBUS_RANGE_ENV});if(!Number.isSafeInteger(r.offset)||r.offset<0||!Number.isSafeInteger(r.length)||r.length<=0)throw new Error('invalid range');const fd=fs.openSync(r.path,'r');try{const b=Buffer.allocUnsafe(r.length);const n=fs.readSync(fd,b,0,r.length,r.offset);process.stdout.write(b.subarray(0,n).toString('base64'));}finally{fs.closeSync(fd);}`;
-
-interface NimbusOriginRangeRead {
-  readonly box: NimbusSandboxHandle;
-  readonly files: NimbusSandboxFiles;
-  readonly path: string;
-  readonly offset: number;
-  readonly length: number;
-  readonly cred?: VfsCred;
-}
-
-/** One window of a file's bytes. Prefers the box's native ranged read; the `node -e` shell reader is a fallback
- *  only for handles lacking the op (Workers forbid `new Function`, so it would fail hosted). */
-async function readNimbusOriginRange(read: NimbusOriginRangeRead): Promise<Uint8Array> {
-  const { box, files, path, offset, length, cred } = read;
-
-  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
-    throw syscallError('EIO', 'read', path, { detail: 'range offset and length must be positive safe integers' });
-  }
-
-  const native = files.readRange;
-
-  if (native) {
-    const bytes = await native.call(files, path, offset, length);
-
-    if (bytes === null) throw syscallError('ENOENT', 'open', path);
-
-    return bytes;
-  }
-
-  const result = await box.exec(`node -e ${shellQuote(NIMBUS_RANGE_READER)}`, {
-    env: { [NIMBUS_RANGE_ENV]: JSON.stringify({ path, offset, length }) },
-    ...asCred(cred),
-  });
-
-  if (!result.success || result.exitCode !== 0) {
-    throw syscallError('EIO', 'read', path, {
-      detail: `this file's bytes could not be read right now: try opening it again, or download it instead`,
-    });
-  }
-
-  return base64ToBytes(result.stdout.trim());
-}
 
 export interface NimbusExecOptions {
   cwd?: string;
@@ -118,28 +70,21 @@ export interface NimbusStartResult {
   startedAt: number;
 }
 
-/** The handle's file plane. `as(cred)` binds it to one identity; when absent the credentialed plane refuses
- *  rather than acting as the session user. */
+/** A remote session's file plane: the SDK's `NimbusSandbox.files`. `as(cred)` binds it to one identity. */
 interface NimbusSandboxFiles {
-  as?(cred: VfsCred): NimbusSandboxFiles;
-    read(path: string): Promise<string | null>;
-    /** Raw-byte read (SDK ≥0.1.4). */
-    readBytes?(path: string): Promise<Uint8Array | null>;
-    /** Exactly this window of a file's bytes; absent on older SDK handles; null when the path is absent. */
-    readRange?: (path: string, offset: number, length: number) => Promise<Uint8Array | null>;
-    /** Whole-file write; no precondition, so no compare-and-write. */
-    write(path: string, content: string | Uint8Array): Promise<void>;
-    list(path?: string): Promise<Array<{ name: string; type?: string; isDir?: boolean; size?: number }>>;
-    /** Native stat (SDK ≥0.2.0). `mtime` and `ctime` are in milliseconds; null when absent. No revision or inode field. */
-    stat?(path: string): Promise<{ type: string; size: number; mtime: number; ctime?: number } | null>;
-    lstat?(path: string): Promise<{ type: string; size: number; mtime: number; ctime?: number; mode?: number } | null>;
-    /** A link's target text; null when the path is absent. */
-    readlink?(path: string): Promise<string | null>;
-    rename?(from: string, to: string): Promise<void>;
-    chmod?(path: string, mode: number): Promise<void>;
-    exists(path: string): Promise<boolean>;
-    mkdir?(path: string): Promise<void>;
-    delete(path: string, options?: { recursive?: boolean }): Promise<void>;
+  as(cred: VfsCred): NimbusSandboxFiles;
+  readBytes(path: string): Promise<Uint8Array | null>;
+  /** Exactly this window of a file's bytes; null when the path is absent. */
+  readRange(path: string, offset: number, length: number): Promise<Uint8Array | null>;
+  /** Whole-file write; no precondition, so no compare-and-write. */
+  write(path: string, content: string | Uint8Array): Promise<void>;
+  list(path?: string): Promise<Array<{ name: string; type: string }>>;
+  /** `mtime` and `ctime` are in milliseconds; null when absent. No revision or inode field. */
+  stat(path: string): Promise<{ type: string; size: number; mtime: number; ctime?: number } | null>;
+  lstat(path: string): Promise<{ type: string; size: number; mtime: number; ctime?: number } | null>;
+  rename(from: string, to: string): Promise<void>;
+  mkdir(path: string): Promise<void>;
+  delete(path: string, options?: { recursive?: boolean }): Promise<void>;
 }
 
 export interface NimbusSandboxHandle {
@@ -150,7 +95,8 @@ export interface NimbusSandboxHandle {
   execStream?: (command: string, options?: NimbusExecOptions) => Promise<ExecStream>;
   startProcess?: (command: string, options?: NimbusExecOptions) => Promise<NimbusStartResult>;
   runCode?: (code: string, options?: NimbusRunCodeOptions) => Promise<NimbusExecResult>;
-  files: NimbusSandboxFiles;
+  /** A remote session's file plane (the SDK's); a hosted box has none: its files are the store itself (`WorkspaceBundle.files`). */
+  files?: NimbusSandboxFiles;
   runtimes?: {
     ensure?(specs: string | string[], options?: { force?: boolean }): Promise<JsonValue | undefined>;
     install?(spec: string, options?: { force?: boolean }): Promise<JsonValue | undefined>;
@@ -714,53 +660,38 @@ async function heard(stream: ExecStream, output: OutputSink | undefined, stop: A
   return collectExecStream({ output: told, exit: stream.exit });
 }
 
-/**
- * A Nimbus session's files in its own absolute paths. With `cred`, the plane is `files.as(cred)`; a handle without
- * that view is refused as `unsupported`. Absent is the origin. Shell fallbacks run as the same credential.
- */
-/** Binds a shell fallback to the plane's credential; absent must be an absent key (`'cred' in options`). */
+/** Binds a shell call to the plane's credential; absent must be an absent key (`'cred' in options`). */
 function asCred(cred: VfsCred | undefined): { cred: VfsCred } | Record<string, never> {
   return cred === undefined ? {} : { cred };
 }
 
+/** A remote box, which carries its session's file plane. */
+export type RemoteSessionBox = NimbusSandboxHandle & { readonly files: NimbusSandboxFiles };
+
+/**
+ * A remote Nimbus session's files in its own absolute paths, a relative one from `home`. With `cred`, the plane is
+ * `files.as(cred)`. Absent is the origin.
+ */
 export function nimbusSessionFiles(
-  box: NimbusSandboxHandle,
+  box: RemoteSessionBox,
   plane: { readonly home: string; readonly cred?: VfsCred },
 ): VFS & Required<Pick<VFS, 'readlink' | 'removeRecursive' | 'rename' | 'readRange'>> {
   const { home, cred } = plane;
   const at = (path: string): string => workspacePath(path, home);
-  let files = box.files;
+  const files = cred === undefined ? box.files : box.files.as(cred);
 
-  if (cred !== undefined) {
-    if (files.as === undefined) {
-      throw new KinuError('unsupported', 'this workspace handle has no credential-bound file plane, so it cannot act as the agent');
-    }
+  const present = async <T>(path: string, syscall: string, read: (absolute: string) => Promise<T | null>): Promise<T> => {
+    const absolute = at(path);
+    const answer = await atVfsPath(absolute, syscall, () => read(absolute));
 
-    files = files.as(cred);
-  }
+    if (answer === null) throw syscallError('ENOENT', syscall, absolute);
+
+    return answer;
+  };
 
   return {
-    async readFile(path) {
-      const absolute = at(path);
-
-      if (files.readBytes) {
-        const bytes = await atVfsPath(absolute, 'open', () => files.readBytes?.(absolute) ?? null);
-
-        if (bytes === null) throw syscallError('ENOENT', 'open', absolute);
-
-        return bytes;
-      }
-
-      const content = await atVfsPath(absolute, 'open', () => files.read(absolute));
-
-      if (content === null) throw syscallError('ENOENT', 'open', absolute);
-
-      return new TextEncoder().encode(content);
-    },
-    /** Prefix the origin's fixed Node reader reads; the SDK file methods cannot express a range. */
-    async readRange(path, offset, length) {
-      return readNimbusOriginRange({ box, files, path: at(path), offset, length, cred });
-    },
+    readFile: (path) => present(path, 'open', (absolute) => files.readBytes(absolute)),
+    readRange: (path, offset, length) => present(path, 'read', (absolute) => files.readRange(absolute, offset, length)),
     async writeFile(path, data) {
       const absolute = at(path);
 
@@ -771,21 +702,11 @@ export function nimbusSessionFiles(
     async readdir(path) {
       const absolute = at(path);
 
-      return (await atVfsPath(absolute, 'scandir', () => files.list(absolute)))
-        .map((entry) => ({ name: entry.name, type: entry.isDir === true ? 'directory' : direntType(entry.type) }));
+      return (await atVfsPath(absolute, 'scandir', () => files.list(absolute))).map((entry) => ({ name: entry.name, type: direntType(entry.type) }));
     },
+    // The SDK's files have no readlink: the session's own `readlink` answers, as the same credential.
     async readlink(path) {
       const absolute = at(path);
-
-      if (files.readlink) {
-        const target = await atVfsPath(absolute, 'readlink', () => files.readlink?.(absolute) ?? null);
-
-        if (target === null) throw syscallError('ENOENT', 'readlink', absolute);
-
-        return target;
-      }
-
-      // Like the `stat` fallback, a failed readlink reads as an absent link; its stderr says why.
       const r = await box.exec(`readlink -- ${shellQuote(absolute)}`, asCred(cred));
 
       if (!r.success || r.exitCode !== 0) throw syscallError('ENOENT', 'readlink', absolute, { detail: r.stderr.trim() || undefined });
@@ -794,47 +715,18 @@ export function nimbusSessionFiles(
     },
     async stat(path, options) {
       const absolute = at(path);
-      const native = options?.follow === false ? files.lstat?.bind(files) : files.stat?.bind(files);
+      const stat = await atVfsPath(absolute, options?.follow === false ? 'lstat' : 'stat', () => (options?.follow === false ? files.lstat(absolute) : files.stat(absolute)));
 
-      if (native) {
-        const stat = await native.call(files, absolute);
+      if (stat === null) return null;
+      const type = stat.type === 'symlink' ? 'symlink' as const : 'file' as const;
+      // The change time moves on every write and no caller sets it: what a note's stamp is told apart by.
+      const changed = stat.ctime === undefined ? {} : { ctimeMs: stat.ctime };
 
-        if (stat === null) return null;
-        const type = stat.type === 'symlink' ? 'symlink' as const : 'file' as const;
-        // The change time moves on every write and no caller sets it: what a note's stamp is told apart by.
-        const changed = stat.ctime === undefined ? {} : { ctimeMs: stat.ctime };
-
-        return { size: stat.size, mtimeMs: stat.mtime, ...changed, type: stat.type === 'directory' ? 'directory' : type };
-      }
-
-      const result = await box.exec(`stat -c '%s %Y %F' ${shellQuote(absolute)}`, asCred(cred));
-
-      if (!result.success || result.exitCode !== 0) return null;
-      const [size, seconds, ...kind] = result.stdout.trim().split(/\s+/);
-      const type = kind.join(' ');
-
-      const entryType = type === 'symbolic link' ? 'symlink' as const : 'file' as const;
-
-      return { size: Number(size), mtimeMs: Number(seconds) * 1_000, type: type === 'directory' ? 'directory' : entryType };
+      return { size: stat.size, mtimeMs: stat.mtime, ...changed, type: stat.type === 'directory' ? 'directory' : type };
     },
     async unlink(path) { await files.delete(at(path)); },
     async removeRecursive(path) { await files.delete(at(path), { recursive: true }); },
-    async rename(from, to) {
-      if (!files.rename) throw syscallError('EIO', 'rename', from, { detail: 'Nimbus SDK handle does not expose rename', dest: to });
-      await files.rename(at(from), at(to));
-    },
-    async mkdir(path, opts) {
-      if (files.mkdir) {
-        await files.mkdir(at(path));
-
-        return;
-      }
-
-      const r = await box.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(at(path))}`, asCred(cred));
-
-      if (!r.success || r.exitCode !== 0) {
-        throw syscallError('EIO', 'mkdir', path, { detail: r.stderr.trim() || undefined });
-      }
-    },
+    async rename(from, to) { await files.rename(at(from), at(to)); },
+    async mkdir(path) { await files.mkdir(at(path)); },
   };
 }

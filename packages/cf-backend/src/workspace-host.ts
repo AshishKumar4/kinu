@@ -4,7 +4,7 @@
  * Nimbus's hosted runtime (`composeHostedRuntime`); facets reach it through {@link createWorkspaceBoxClient}.
  */
 
-import { createWorkspace, workspaceBoxFiles, workspaceGenerationStorage } from '@kinu.run/core/workspace';
+import { createWorkspace, workspaceGenerationStorage } from '@kinu.run/core/workspace';
 import type { RuntimeSource, SupervisorOpResult, WorkspaceBundle } from '@kinu.run/core/workspace';
 import { jsonResultOrVoid, sha256Hex } from '@kinu.run/core';
 import type {
@@ -113,10 +113,15 @@ export interface WorkspaceTerminal {
   terminalClose(ws: TerminalSocket): void;
 }
 
+/** A box over the workspace this object hosts: its store is the database itself, so its files need no session call. */
+export interface HostedBox extends NimbusSandboxHandle {
+  store: WorkspaceBundle['files'];
+}
+
 export interface HostedWorkspace {
   readonly bundle: WorkspaceBundle;
   /** One agent's view: a named call runs in the runtime's named shell, keyed by `scope` and the name. */
-  box(scope: string): NimbusSandboxHandle;
+  box(scope: string): HostedBox;
   /** Answered by the hosted runtime (host ops need it), for every name this object is opened under; a
      *  sibling is never a Kinu workspace, so nothing here claims an owner or writes a transcript. The envelope
      *  is a hosted process's own data: Nimbus's dispatcher is the one place that refuses an op it does not serve. */
@@ -320,16 +325,17 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
     return { routed: true, capability, slate, capture, refused: null };
   };
 
-  const files = workspaceBoxFiles(async () => (await bundle.session()).vfs);
-
   return {
     bundle,
     supervisorOp: async (envelope) => (await runtime()).supervisorOp(envelope),
     session: async (scope) => (await runtime()).session(scope),
-    box: (scope) => workspaceBox({
-      runtime, ports: portRegistry, ctx: deps.ctx, files, scope, previewUrl: deps.previewUrl, previewGates,
-      mountTable: (mounts, principal) => bundle.mountTable(mounts, principal),
-      namespace: (principal) => bundle.namespace(principal),
+    box: (scope) => ({
+      ...workspaceBox({
+        runtime, ports: portRegistry, ctx: deps.ctx, scope, previewUrl: deps.previewUrl, previewGates,
+        mountTable: (mounts, principal) => bundle.mountTable(mounts, principal),
+        namespace: (principal) => bundle.namespace(principal),
+      }),
+      store: (plane) => bundle.files(plane),
     }),
     facetManager: async () => (await compose()).facets,
     ports: async () => (await compose()).ports,
@@ -457,7 +463,6 @@ function workspaceBox(deps: {
   runtime: () => Promise<HostedRuntime>;
   ports: PortRegistry;
   ctx: DurableObjectState;
-  files: NimbusSandboxHandle['files'];
   scope: string;
   previewUrl(port: number, capability: string): Promise<WorkspacePreviewUrl>;
   previewGates(port: number, handle: string): Promise<PreviewGates>;
@@ -488,7 +493,6 @@ function workspaceBox(deps: {
 
       return saved.success ? saved.output.cwd : null;
     },
-    files: deps.files,
     runtimes: {
       ensure: async (specs, options) => await jsonResultOrVoid((await runtime()).ensureRuntimes(Array.isArray(specs) ? [...specs] : [specs], options)),
       install: async (spec, options) => await jsonResultOrVoid((await runtime()).installRuntime(spec, options)),

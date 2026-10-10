@@ -1,6 +1,7 @@
 import { Effect } from 'effect';
 import { settle } from '@kinu.run/core/obs';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import type { RemoteSessionBox } from '@kinu.run/core';
 // Map-backed VFS; `mkdir` surfaces EEXIST on repeat unless recursive, like the real backends.
 
 
@@ -62,4 +63,33 @@ export function createMemoryVfs(): MemoryVfs {
   };
 
   return { vfs, files };
+}
+
+/** A remote session's file plane over `files`, shaped as the Nimbus SDK's: an absent path answers null. */
+export function sessionFilesOver(files = new Map<string, Uint8Array>()): RemoteSessionBox['files'] {
+  const stat = async (path: string) => {
+    const bytes = files.get(path);
+
+    return bytes === undefined ? null : { type: 'file', size: bytes.byteLength, mtime: 1 };
+  };
+
+  const plane: RemoteSessionBox['files'] = {
+    as: () => plane,
+    readBytes: async (path) => files.get(path)?.slice() ?? null,
+    readRange: async (path, offset, length) => files.get(path)?.slice(offset, offset + length) ?? null,
+    write: async (path, content) => { files.set(path, content instanceof Uint8Array ? content.slice() : new TextEncoder().encode(content)); },
+    stat,
+    lstat: stat,
+    list: async () => [],
+    rename: async (from, to) => {
+      const bytes = files.get(from);
+
+      if (bytes !== undefined) files.set(to, bytes);
+      files.delete(from);
+    },
+    mkdir: async () => {},
+    delete: async (path) => { files.delete(path); },
+  };
+
+  return plane;
 }

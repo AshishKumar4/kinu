@@ -17,7 +17,7 @@ import {
 import type { PortReservationTransaction } from '@nimbus-sh/worker/port-capability';
 import * as v from 'valibot';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
-import type { NimbusSandboxHandle } from '@kinu.run/core';
+import type { RemoteSessionBox } from '@kinu.run/core';
 import type { HostedWorkspaceDeps, WorkspaceHostTarget } from '../../src/workspace-host';
 import { noEntrypoints, workerContext } from './bindings';
 
@@ -426,15 +426,20 @@ const FileStatSchema = v.object({ type: v.string(), size: v.number(), mtime: v.n
 export function credentialedSessionBox(
   runtime: () => Promise<HostedRuntime>,
   cred: VfsCred,
-): NimbusSandboxHandle {
+): RemoteSessionBox {
   const refuse = async (): Promise<never> => { throw new Error('a credentialed plane must not fall back to the session user'); };
 
-  const filesAs = (agent: VfsCred): NimbusSandboxHandle['files'] => {
+  const filesAs = (agent: VfsCred): RemoteSessionBox['files'] => {
     const view = async () => (await runtime()).files.as(agent);
+
+    const stat = async (path: string) => {
+      const found = await (await view()).stat(path);
+
+      return found === null ? null : v.parse(FileStatSchema, { type: found.type, size: found.size, mtime: found.mtimeMs });
+    };
 
     return {
       as: filesAs,
-      read: async (path) => await (await view()).exists(path) ? (await view()).readFileString(path) : null,
       readBytes: async (path) => await (await view()).exists(path) ? (await view()).readFile(path) : null,
       readRange: async (path, offset, length) => {
         const vfs = (await runtime()).workspace.vfs.as(agent);
@@ -443,13 +448,9 @@ export function credentialedSessionBox(
       },
       write: async (path, content) => { await (await view()).writeFile(path, content); },
       list: async (path) => (await (await view()).readdir(path ?? '/')).map((entry) => ({ name: entry.name, type: entry.type })),
-      stat: async (path) => {
-        const stat = await (await view()).stat(path);
-
-        return stat === null ? null : v.parse(FileStatSchema, { type: stat.type, size: stat.size, mtime: stat.mtimeMs });
-      },
+      stat,
+      lstat: stat,
       rename: async (from, to) => { await (await view()).rename(from, to); },
-      exists: async (path) => (await view()).exists(path),
       mkdir: async (path) => { await (await view()).mkdir(path, { recursive: true }); },
       delete: async (path, options) => { await (await view()).remove(path, { recursive: options?.recursive ?? false }); },
     };
@@ -474,6 +475,8 @@ export function credentialedSessionBox(
         stderr: result.stderr,
       };
     },
-    files: { as: filesAs, read: refuse, write: refuse, list: refuse, exists: refuse, delete: refuse },
+    files: {
+      as: filesAs, readBytes: refuse, readRange: refuse, write: refuse, list: refuse, stat: refuse, lstat: refuse, rename: refuse, mkdir: refuse, delete: refuse,
+    },
   };
 }

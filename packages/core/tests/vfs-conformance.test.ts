@@ -16,7 +16,7 @@ import {
   nimbusSessionFiles,
   deviceFiles,
   type DeviceTransport,
-  type NimbusSandboxHandle,
+  type RemoteSessionBox,
   type SandboxHandle,
 } from '../src/execution/index';
 import { createWorkspaceBundle } from './helpers';
@@ -203,34 +203,40 @@ function sandboxHandle(fs: MemFs): SandboxHandle {
   return handle;
 }
 
-function nimbusHandle(fs: MemFs): NimbusSandboxHandle {
-  const handle: NimbusSandboxHandle = {
-    async ready() {},
-    files: {
-      async read(path: string) {
-        const b = fs.read(path);
+function nimbusHandle(fs: MemFs): RemoteSessionBox {
+  const stat = async (path: string) => {
+    const found = fs.stat(path);
 
-        return b === null ? null : new TextDecoder().decode(b);
-      },
-      async readBytes(path: string) { return fs.read(path); },
-      async write(path: string, data: string | Uint8Array) {
-        const text = v.safeParse(v.string(), data);
-        fs.write(path, text.success
-          ? new TextEncoder().encode(text.output)
-          : v.parse(v.instance(Uint8Array), data));
-      },
-      async list(path: string) { return fs.list(path).map((name) => ({ name })); },
-      async exists(path: string) { return fs.exists(path); },
-      async mkdir(path: string) { fs.mkdir(path); },
-      async delete(path: string) { fs.del(path); },
+    return found === null ? null : { type: found.isDir ? 'directory' : 'file', size: found.size, mtime: fs.mtimeMs };
+  };
+
+  const files: RemoteSessionBox['files'] = {
+    as: () => files,
+    async readBytes(path: string) { return fs.read(path); },
+    async readRange(path: string, offset: number, length: number) { return fs.read(path)?.slice(offset, offset + length) ?? null; },
+    async write(path: string, data: string | Uint8Array) {
+      const text = v.safeParse(v.string(), data);
+      fs.write(path, text.success
+        ? new TextEncoder().encode(text.output)
+        : v.parse(v.instance(Uint8Array), data));
     },
+    async list(path?: string) { return fs.list(path ?? '/').map((name) => ({ name, type: fs.stat(`${path ?? ''}/${name}`)?.isDir === true ? 'directory' : 'file' })); },
+    stat,
+    lstat: stat,
+    async rename(from: string, to: string) {
+      const bytes = fs.read(from);
+
+      if (bytes !== null) fs.write(to, bytes);
+      fs.del(from);
+    },
+    async mkdir(path: string) { fs.mkdir(path); },
+    async delete(path: string) { fs.del(path); },
+  };
+
+  const handle: RemoteSessionBox = {
+    async ready() {},
+    files,
     async exec(cmd: string) {
-      if (cmd.startsWith('stat -c')) {
-        const result = fs.statLine(quoted(cmd));
-
-        return { command: cmd, success: true, ...result, stderr: '' };
-      }
-
       return { command: cmd, success: true, exitCode: 0, stdout: '', stderr: '' };
     },
   };

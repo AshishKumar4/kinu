@@ -7,7 +7,7 @@ import { createNimbusWorkspaceExecutor } from '../src/tools/inline-executor';
 import {
   nimbusSessionFiles,
   nimbusSessionShell,
-  type NimbusSandboxHandle,
+  type RemoteSessionBox,
 } from '../src/execution/nimbus';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { DefaultExecutionRouter } from '../src/execution/router';
@@ -16,6 +16,7 @@ import type { SQLQueryBindings } from 'bun:sqlite';
 import type { SqlValue } from '@nimbus-sh/core';
 import type { ExecutorToolResult } from '../src/execution/types';
 import { present } from '@kinu.run/test-utils';
+import { sessionFilesOver } from '@kinu.run/test-utils/vfs';
 import { CommandResultSchema } from '../src/execution/exec-result';
 import { executorNamespace } from '../src/tools/executor-operations';
 import { namespaceDeclaration } from '../src/tools/operation-surfaces';
@@ -31,9 +32,9 @@ function toolText(result: ExecutorToolResult): string {
 function fakeBox() {
   const files = new Map<string, Uint8Array>();
   const decoder = new TextDecoder();
-  const encoder = new TextEncoder();
+  const sdkFiles = sessionFilesOver(files);
 
-  const box: NimbusSandboxHandle = {
+  const box: RemoteSessionBox = {
     ready: async () => {},
     exec: async (command) => {
       const match = /^cat (.+)$/.exec(command);
@@ -53,22 +54,7 @@ function fakeBox() {
       ports: [{ port: 4321, pid: 41 }],
       startedAt: 1,
     }),
-    files: {
-      read: async (path) => files.has(path) ? decoder.decode(files.get(path)) : null,
-      readBytes: async (path) => files.get(path)?.slice() ?? null,
-      write: async (path, content) => {
-        files.set(path, content instanceof Uint8Array ? content.slice() : encoder.encode(content));
-      },
-      stat: async (path) => {
-        const bytes = files.get(path);
-
-        return bytes === undefined ? null : { type: 'file', size: bytes.byteLength, mtime: 1 };
-      },
-      list: async () => [],
-      exists: async (path) => files.has(path),
-      mkdir: async () => {},
-      delete: async (path) => { files.delete(path); },
-    },
+    files: sdkFiles,
     processes: {
       kill: async (pid) => ({ ok: true, pid }),
       logs: async (pid) => ({ pid, text: 'ready' }),
@@ -140,33 +126,6 @@ describe('hosted Nimbus workspace provider', () => {
       url: 'https://4321.example.test',
       route: { reached: true },
     });
-  });
-
-  test('the origin file plane reads a bounded prefix through fixed Node code', async () => {
-    const box = fakeBox();
-    const expected = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
-    let requestEnv: Record<string, string> | undefined;
-    box.exec = async (command, options) => {
-      requestEnv = options?.env;
-
-      return {
-        command,
-        success: true,
-        stdout: Buffer.from(expected).toString('base64'),
-        stderr: '',
-        exitCode: 0,
-      };
-    };
-
-    const bytes = await nimbusSessionFiles(box, { home: WORKSPACE_ROOT }).readRange('/home/main/large.png', 0, 512 * 1024);
-
-    expect(bytes).toEqual(expected);
-    // Path/offset/length travel only in the reader's JSON env, never interpolated into shell text.
-    expect(requestEnv).toBeDefined();
-    const payload = Object.values(requestEnv ?? {})[0] ?? '';
-    expect(payload).toContain('"path":"/home/main/large.png"');
-    expect(payload).toContain('"offset":0');
-    expect(payload).toContain('"length":524288');
   });
 
   test('declares inbound networking only when the host can publish previews', () => {
@@ -337,7 +296,7 @@ describe('hosted Nimbus workspace provider', () => {
 describe('a workspace whose host cannot compile node programs', () => {
   const CODEGEN_STDERR = '[probe-8789.js] Code generation from strings disallowed for this context';
 
-  function blockedProvider(box: NimbusSandboxHandle) {
+  function blockedProvider(box: RemoteSessionBox) {
     const { rt } = createTestRuntime();
 
     return createNimbusWorkspaceExecutor({

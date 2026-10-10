@@ -10,7 +10,7 @@ import { createHostedWorkspace, type HostedWorkspace, type HostedWorkspaceEnv } 
 import { MemoryStore } from '@kinu.run/agent-utils/memory';
 import { fakeMossaic, sqlOver } from '@kinu.run/test-utils';
 import {
-  agentCred, agentIdentity, mossaicVfs, nimbusSessionFiles, provisionAgentHome, sharedDriveMount, workspaceSoul, workspaceFilePlane, WORKSPACE_ROOT,
+  agentCred, agentIdentity, mossaicVfs, provisionAgentHome, sharedDriveMount, workspaceSoul, workspaceFilePlane, WORKSPACE_ROOT,
   initWorkspaceActorTable, WORKSPACE_IDENTITY_DDL, writeWorkspaceSoul, type JsonValue,
 } from '@kinu.run/core';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -136,7 +136,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       .toBe('the bytes are here\n');
 
     // A memory note is stamped by its change time: a same-length rewrite with its mtime restored still moves it.
-    const plane = nimbusSessionFiles(workspace.box('main'), { home: WORKSPACE_ROOT });
+    const plane = workspace.box('main').store({ home: WORKSPACE_ROOT });
     const before = await plane.stat('memory/MEMORY.md', { follow: false });
     setSystemTime(Date.now() + 5_000);
 
@@ -196,7 +196,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const actor = actorObject();
     const open = await ownedSoul(actor);
     const workspace = open();
-    await workspace.box('agent:main').files.write('/home/main/SOUL.md', '# main edited this\n');
+    await writeText(workspace.box('agent:main').store({ home: WORKSPACE_ROOT }), '/home/main/SOUL.md', '# main edited this\n');
     expect(await workspaceSoul(workspace.bundle)).toBe('# main edited this\n');
 
     const session = await workspace.bundle.session();
@@ -250,8 +250,10 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     expect(await readText(workspace.bundle.vfs, 'proof/from-shell.txt'))
       .toBe('from the shell');
 
-    expect(await box.files.read('/home/main/proof/from-shell.txt')).toBe('from the shell');
-    expect(await box.files.exists('/home/main/proof/from-vfs.txt')).toBe(true);
+    const store = box.store({ home: WORKSPACE_ROOT });
+
+    expect(await readText(store, '/home/main/proof/from-shell.txt')).toBe('from the shell');
+    expect(await exists(store, '/home/main/proof/from-vfs.txt')).toBe(true);
   });
 
   test('the shell serves the file plane\'s mount points: /shared lists and reads through the same table', async () => {

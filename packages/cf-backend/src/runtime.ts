@@ -6,7 +6,7 @@ import type { VFS as CoreVFS } from '@nimbus-sh/core/vfs/vfs.js';
 
 import type { AgentRuntime, ActorHandle, LLM, Schedule, Identity, SqlExecutor, SqlValue, RawSqlExec, FiberCtx, ExecutionRouter, TurnAccumulator, DeferredApprovalChannel, WriteObserver, ModelCallSink, ModelOperationSink, ResolvedTurnProfile, SlateCallResult, SlateOperation, ChildContextResolver, ContextTree } from "@kinu.run/core";
 import {
-  nimbusSessionFiles, nimbusSessionShell, createShellSession,
+  nimbusSessionShell, createShellSession,
   DefaultExecutionRouter, createNimbusWorkspaceExecutor,
   workspaceFilePlane, standardMounts, contextMount, skillsMount, type WorkspacePrincipal,
   sharedDriveMount, SHARED_DRIVE_UNCLAIMED, SHARED_DRIVE_UNBOUND, type MossaicVfs,
@@ -14,7 +14,7 @@ import {
   type ShellApprovalPolicy, type ShellApprovalMode, type ApprovalGrant,
   type EgressSecretBinding,
   createSandboxExecutor, createDeviceTunnelExecutor, type DeviceTransport,
-  type NimbusSandboxHandle,
+  type WorkspaceFiles,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore, createSqlFiber,
   createRoutedModelLane, routedLlm, bindRoute,
   createScaffoldSurface,
@@ -58,6 +58,7 @@ import { ownerCaller, type UserCaller } from "@kinu.run/core";
 import { adaptMemory, backfillMemoryVectors } from "@kinu.run/core";
 import { actorAffinity } from "@kinu.run/core";
 import { nimbusPreviewConfigured } from "./nimbus-route";
+import type { HostedBox } from "./workspace-host";
 
 /**
  * Every logical actor in a workspace is built over the root object's `name` and `sql`; runtimes
@@ -72,7 +73,7 @@ export interface CFRuntimeAccess {
   holdLane<T>(body: () => Promise<T>): Promise<T>;
   /** One box per workspace: a child composing its own gets a second, empty filesystem
      *  (tests/unit-head-fork.test.ts). Actors are separated by `shellId` and credential. */
-  workspaceBox(shellId: string): NimbusSandboxHandle;
+  workspaceBox(shellId: string): HostedBox;
   /** Absent for facets without a budget ledger; the `workspace` provider then uses a private ledger. */
   readonly acc?: () => Pick<TurnAccumulator, 'files' | 'context'>;
   getCliCwdForDevice?(): string | null;
@@ -202,7 +203,7 @@ function userCredentialSourceFor(env: Env, actor: ActorRuntimeIdentity): UserCre
 
 export type CFRuntime = AgentRuntime & {
   /** Also what the parent-file RPC serves a fork, so a fork reads exactly its parent's bytes. */
-  localVfs: ReturnType<typeof nimbusSessionFiles>;
+  localVfs: WorkspaceFiles;
   /** `refreshStatus()` is awaited at turn start. */
   deviceTransport: DeviceTransport;
   vectorStore: import("@kinu.run/core").VectorStore;
@@ -269,13 +270,11 @@ export function createCFRuntime(
     : workspaceBox;
 
   // Workspace state belongs to the session user: a facet's uid could not create entries under `.kinu`.
-  const originVfs = nimbusSessionFiles(workspaceBox, { home: WORKSPACE_ROOT });
+  const originVfs = workspaceBox.store({ home: WORKSPACE_ROOT });
 
   // Both of the actor's planes or neither (see `workspaceExecution`). This unmounted tree keeps foreign
   // bytes out of memory and agent-state snapshots.
-  const baseWorkspaceVfs = hooks.workspaceExecution
-    ? nimbusSessionFiles(workspaceBox, hooks.workspaceExecution)
-    : originVfs;
+  const baseWorkspaceVfs = hooks.workspaceExecution ? workspaceBox.store(hooks.workspaceExecution) : originVfs;
 
   const memoryStore = new MemoryStore(originVfs, sql);
   memoryStore.ensureSchema();

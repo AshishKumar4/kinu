@@ -12,7 +12,7 @@ import {
   type ActorHandle, type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
   type SessionTranscriptReader, type SubordinateInspectionResult, type SubordinateReportLedger, type ModelPricing, type SqlExecutor,
   type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
-  type Executor, type JsonObject, type NimbusSandboxHandle, type SqlValue, WORKSPACE_ROOT, cloudPlanes, answersForDrainTurns,
+  type Executor, type JsonObject, type RemoteSessionBox, type SqlValue, WORKSPACE_ROOT, cloudPlanes, answersForDrainTurns,
   initPendingSendTables, initTerminalEffectTable, PendingSendStore, contextFill, announcementOf, classifyRunEnd, closeTurnRun, TurnReports,
   PlanReviewStore, type PlanReview,
 } from '@kinu.run/core';
@@ -119,9 +119,9 @@ export class AgentDatabase {
   constructor(
     private readonly storage: DurableObjectStorage,
     private readonly workspace: {
-      readonly agent: () => NimbusSandboxHandle;
+      readonly agent: () => RemoteSessionBox;
       readonly home: string;
-      readonly state: () => NimbusSandboxHandle;
+      readonly state: () => RemoteSessionBox;
       readonly enqueueTurn: BackendHost['enqueueTurn'];
       readonly broadcast: BackendHost['broadcast'];
       readonly turnInFlight: () => boolean;
