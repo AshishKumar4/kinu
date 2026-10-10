@@ -45,9 +45,31 @@ const TargetsSchema = v.array(v.object({ id: v.string(), webSocketDebuggerUrl: v
 
 const CutSchema = v.object({ workspace: SliceSchema, facet: v.nullable(SliceSchema) });
 
+const TraceSchema = v.object({
+  entrypoint: v.nullable(v.string()), object: v.nullable(v.string()), cpuMs: v.number(), wallMs: v.number(), outcome: v.string(),
+  script: v.nullable(v.string()), event: v.nullable(v.looseObject({ rpcMethod: v.optional(v.string()) })),
+});
+
+const traceRows: v.InferOutput<typeof TraceSchema>[] = [];
+
+const traceWaiters: { count: number; done: () => void }[] = [];
+
+async function tailSettled(count: number): Promise<void> {
+  if (traceRows.length >= count) return;
+  const waiting = Promise.withResolvers<void>();
+
+  traceWaiters.push({ count, done: waiting.resolve });
+  await waiting.promise;
+}
+
 type Cut = v.InferOutput<typeof CutSchema>;
 
-interface TurnMeasurement { readonly text: string; readonly wallMs: number; readonly cpuMs: number; phases?: Cut[] }
+interface StepMeasurement { readonly label: string; readonly wallMs: number; readonly cpuMs: number }
+
+interface TurnMeasurement {
+  readonly text: string; readonly wallMs: number; readonly cpuMs: number;
+  readonly modelSteps: number; phases?: Cut[]; timings?: StepMeasurement[]; peaks?: Record<string, number>;
+}
 
 interface DriverRequest { method?: string; body?: string }
 
@@ -153,6 +175,20 @@ let currentText = '';
 
 let driver: Awaited<ReturnType<Miniflare['getWorker']>>;
 
+let enginePid = 0;
+
+let phaseWall = 0;
+
+let phaseCpu = 0;
+
+let modelWall = 0;
+
+let modelStep = 0;
+
+let phaseExcluded = 0;
+
+const stepTimings: StepMeasurement[] = [];
+
 const workspace = `perf-${subject}`;
 
 const inspectorPort = await freePort();
@@ -185,6 +221,8 @@ async function ask(path: string, input?: JsonObject): Promise<string> {
 }
 
 async function model(request: Request): Promise<Response> {
+  const entered = performance.now();
+  const consumed = measuring ? cpu(enginePid) : 0;
   const url = new URL(request.url);
 
   if (url.pathname === '/models') return new Response(SCRIPTED_MODELS_BODY);
@@ -197,7 +235,13 @@ async function model(request: Request): Promise<Response> {
   if ('refusal' in parsed) throw new Error(parsed.refusal.body);
   const asked = parsed.request;
   const [kind, deltasText = '0'] = currentText.split(':');
-  const step = asked.turn.length;
+  const step = asked.streamed ? modelStep++ : 0;
+
+  if (measuring && asked.streamed) {
+    if (mode === 'time') stepTimings.push({ label: step === 0 ? 'open' : `step-${String(step)}`, wallMs: entered - phaseWall - phaseExcluded, cpuMs: consumed - phaseCpu });
+
+    if (mode === 'heap') await sampleHeap();
+  }
 
   if (measuring && mode === 'counts' && asked.streamed) {
     phases.push(v.parse(CutSchema, JSON.parse(await ask(`/cut?label=${step === 0 ? 'open' : `step-${String(step)}`}&resume=1`))));
@@ -228,25 +272,52 @@ async function model(request: Request): Promise<Response> {
 
     frames.push(`data: ${JSON.stringify({ ...prefix, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })}\n\n`, 'data: [DONE]\n\n');
 
-    return new Response(frames.join(''), { headers: { 'content-type': out.contentType } });
+    const reply = new Response(frames.join(''), { headers: { 'content-type': out.contentType } });
+    modelFinished(entered, asked.streamed);
+
+    return reply;
   }
 
-  return new Response(out.body, { headers: { 'content-type': out.contentType } });
+  const reply = new Response(out.body, { headers: { 'content-type': out.contentType } });
+  modelFinished(entered, asked.streamed);
+
+  return reply;
+}
+
+function modelFinished(entered: number, streamed: boolean): void {
+  const finished = performance.now();
+
+  if (measuring) {
+    modelWall += finished - entered;
+    phaseExcluded += finished - entered;
+
+    if (streamed) {
+      phaseWall = finished;
+      phaseCpu = cpu(enginePid);
+      phaseExcluded = 0;
+    }
+  }
 }
 
 const ai = await workersAiBinding(async (request) => workersAiAnswer(await readAiRun(request)));
+
+const product = {
+  name: 'kinu', ...compat, modulesRoot: dist, modules: await productModules(), workerLoaders: { LOADER: {} },
+  bindings: { ...wrangler.vars, CREDENTIAL_ENCRYPTION_KEY: key, PERF_ISOLATED: isolated ? '1' : '0' }, ai,
+  assets: { binding: wrangler.assets.binding, directory: resolve(dist, wrangler.assets.directory) },
+  r2Buckets: wrangler.r2_buckets.map((bucket) => bucket.binding),
+  kvNamespaces: wrangler.kv_namespaces.map((namespace) => namespace.binding),
+  durableObjects: Object.fromEntries(wrangler.durable_objects.bindings.map((binding) => [binding.name, { className: binding.class_name, useSQLite: true }])),
+  outboundService: model,
+};
 
 const mf = new Miniflare(convertV4MiniflareOptions({
   inspectorPort,
   handleStructuredLogs: ({ level, message }) => { if (level === 'error') process.stderr.write(message + '\n'); },
   workers: [{
-    name: 'kinu', ...compat, modulesRoot: dist, modules: await productModules(), workerLoaders: { LOADER: {} },
-    bindings: { ...wrangler.vars, CREDENTIAL_ENCRYPTION_KEY: key, PERF_ISOLATED: isolated ? '1' : '0' }, ai,
-    assets: { binding: wrangler.assets.binding, directory: resolve(dist, wrangler.assets.directory) },
-    r2Buckets: wrangler.r2_buckets.map((bucket) => bucket.binding),
-    kvNamespaces: wrangler.kv_namespaces.map((namespace) => namespace.binding),
-    durableObjects: Object.fromEntries(wrangler.durable_objects.bindings.map((binding) => [binding.name, { className: binding.class_name, useSQLite: true }])),
-    outboundService: model,
+    ...product,
+    tails: mode === 'tail' ? ['perf-tail'] : [],
+    serviceBindings: mode === 'tail' ? { PERF_TAIL: 'perf-tail' } : {},
   }, {
     name: 'driver', ...compat,
     modules: [{ type: 'ESModule', path: join(dist, 'perf-driver.js'), contents: await bundle('driver.ts') }],
@@ -256,6 +327,19 @@ const mf = new Miniflare(convertV4MiniflareOptions({
       OrchestratorAgent: { className: 'OrchestratorAgent', scriptName: 'kinu', useSQLite: true },
       UserDO: { className: 'UserDO', scriptName: 'kinu', useSQLite: true },
     },
+  }, {
+    name: 'perf-tail', ...compat, modules: [{ type: 'ESModule', path: join(dist, 'perf-tail.js'), contents: await bundle('tail.ts') }],
+    serviceBindings: { SINK: async (request: Request) => {
+      const events = v.parse(v.array(TraceSchema), await request.json());
+      traceRows.push(...events.filter((event) => event.entrypoint === 'OrchestratorAgent' && event.event?.rpcMethod === 'perfTool'));
+
+      for (const waiter of traceWaiters.filter((entry) => entry.count <= traceRows.length)) {
+        traceWaiters.splice(traceWaiters.indexOf(waiter), 1);
+        waiter.done();
+      }
+
+      return new Response(null, { status: 204 });
+    } },
   }],
 }));
 
@@ -279,27 +363,43 @@ try {
   driver = await mf.getWorker('driver');
   await ask('/setup');
   const pid = workerdPid();
+  enginePid = pid;
   const measured: object[] = [];
 
   const runTurn = async (text: string, record: boolean) => {
     currentText = text;
     phases.length = 0;
+    stepTimings.length = 0;
+    modelWall = 0;
+    modelStep = 0;
+    phaseExcluded = 0;
+
+    if (record && mode === 'heap') { peaks.clear(); await sampleHeap(); }
 
     if (record && mode === 'counts') await ask('/begin');
     measuring = record;
     const started = performance.now();
     const cpuBefore = cpu(pid);
+    phaseWall = started;
+    phaseCpu = cpuBefore;
     await ask(`/turn?text=${encodeURIComponent(text)}`);
-    const elapsed = performance.now() - started;
+    const finished = performance.now();
+    const elapsed = finished - started - modelWall;
     const spent = cpu(pid) - cpuBefore;
+
+    if (record && mode === 'time') stepTimings.push({ label: 'close', wallMs: finished - phaseWall - phaseExcluded, cpuMs: cpu(pid) - phaseCpu });
     measuring = false;
 
     if (record && mode === 'counts') phases.push(v.parse(CutSchema, JSON.parse(await ask('/cut?label=close&resume=0'))));
 
     if (record) {
-      const result: TurnMeasurement = { text, wallMs: elapsed, cpuMs: spent };
+      const result: TurnMeasurement = { text, wallMs: elapsed, cpuMs: spent, modelSteps: modelStep };
 
       if (mode === 'counts') result.phases = [...phases];
+
+      if (mode === 'time') result.timings = [...stepTimings];
+
+      if (mode === 'heap') result.peaks = Object.fromEntries(peaks);
       measured.push(result);
       process.stdout.write(JSON.stringify({ event: 'turn', sha, subject, mode, ...result }) + '\n');
     }
@@ -316,55 +416,80 @@ try {
 
   if (subject === 'files') {
     await ask('/seed');
-    const invoke = async (name: string, input: JsonObject) => await ask(`/tool?name=${name}`, input);
+    let toolCalls = 0;
+
+    const invoke = async (name: string, input: JsonObject) => {
+      toolCalls++;
+
+      return await ask(`/tool?name=${name}`, input);
+    };
+
     const fileResults: object[] = [];
 
-    const measureOp = async (label: string, operation: (index: number) => Promise<void>) => {
+    const measureOp = async (label: string, operation: (index: number) => Promise<void>, prepare?: () => Promise<void>) => {
+      await prepare?.();
       await operation(-1);
+
+      if (mode === 'tail') await tailSettled(toolCalls);
       const walls: number[] = [];
       const cpus: number[] = [];
+      const runtimeCpus: number[] = [];
 
       for (let index = 0; index < samples; index++) {
+        await prepare?.();
+
+        if (mode === 'tail') await tailSettled(toolCalls);
+        const traceAt = traceRows.length;
         const before = cpu(pid);
         const started = performance.now();
         await operation(index);
         walls.push(performance.now() - started);
         cpus.push(cpu(pid) - before);
+
+        if (mode === 'tail') {
+          await tailSettled(toolCalls);
+          runtimeCpus.push(traceRows.slice(traceAt).reduce((sum, trace) => sum + trace.cpuMs, 0));
+        }
       }
 
       const quantile = (values: number[], p: number) => [...values].sort((a, b) => a - b)[Math.ceil(values.length * p) - 1];
-      const result = { label, samples, wallP50Ms: quantile(walls, 0.5), wallP95Ms: quantile(walls, 0.95), cpuP50Ms: quantile(cpus, 0.5), cpuP95Ms: quantile(cpus, 0.95), cpuMeanMs: cpus.reduce((a, b) => a + b, 0) / samples };
+      const result = { label, samples, wallP50Ms: quantile(walls, 0.5), wallP95Ms: quantile(walls, 0.95), cpuP50Ms: quantile(cpus, 0.5), cpuP95Ms: quantile(cpus, 0.95), cpuMeanMs: cpus.reduce((a, b) => a + b, 0) / samples, runtimeCpuP50Ms: quantile(runtimeCpus, 0.5), runtimeCpuP95Ms: quantile(runtimeCpus, 0.95) };
       fileResults.push(result);
       process.stdout.write(JSON.stringify({ event: 'file', sha, ...result }) + '\n');
     };
 
     for (const bytes of [4096, 65536, 1048576]) {
-      const path = `/home/perfio/read-${String(bytes)}.txt`;
+      const path = `/home/main/perfio/read-${String(bytes)}.txt`;
       await measureOp(`file.read.${String(bytes)}`, async () => { await invoke('file', { op: 'read', path }); });
       await measureOp(`shell.read.${String(bytes)}`, async () => { await invoke('shell', { command: `cat ${path}`, runtime: 'workspace' }); });
       const content = 'x'.repeat(bytes);
-      await measureOp(`file.write.${String(bytes)}`, async (index) => { await invoke('file', { op: 'write', path: `/home/perfio/fw-${String(bytes)}-${String(index)}.txt`, content }); });
+      await measureOp(`file.write.${String(bytes)}`, async (index) => { await invoke('file', { op: 'write', path: `/home/main/perfio/fw-${String(bytes)}-${String(index)}.txt`, content }); });
       await measureOp(`shell.write.${String(bytes)}`, async (index) => {
-        await invoke('shell', { command: `head -c ${String(bytes)} /dev/zero > /home/perfio/sw-${String(bytes)}-${String(index)}.bin`, runtime: 'workspace' });
+        await invoke('shell', { command: `head -c ${String(bytes)} /dev/zero > /home/main/perfio/sw-${String(bytes)}-${String(index)}.bin`, runtime: 'workspace' });
       });
     }
 
-    await measureOp('file.stat', async () => { await invoke('file', { op: 'stat', path: '/home/perfio/read-4096.txt' }); });
-    await measureOp('shell.stat', async () => { await invoke('shell', { command: 'stat /home/perfio/read-4096.txt', runtime: 'workspace' }); });
-    await measureOp('file.list500', async () => { await invoke('file', { op: 'list', path: '/home/perfio/many' }); });
-    await measureOp('shell.list500', async () => { await invoke('shell', { command: 'ls /home/perfio/many', runtime: 'workspace' }); });
-    await measureOp('shell.search500', async () => { await invoke('shell', { command: 'grep -r -l needle /home/perfio/many', runtime: 'workspace' }); });
+    await measureOp('file.stat', async () => { await invoke('file', { op: 'stat', path: '/home/main/perfio/read-4096.txt' }); });
+    await measureOp('shell.stat', async () => { await invoke('shell', { command: 'stat /home/main/perfio/read-4096.txt', runtime: 'workspace' }); });
+    await measureOp('file.list500', async () => { await invoke('file', { op: 'list', path: '/home/main/perfio/many' }); });
+    await measureOp('shell.list500', async () => { await invoke('shell', { command: 'ls /home/main/perfio/many', runtime: 'workspace' }); });
+    await measureOp('shell.search500', async () => { await invoke('shell', { command: 'grep -r -l needle /home/main/perfio/many', runtime: 'workspace' }); });
     await measureOp('file.search500', async () => {
-      for (let at = 0; at < 500; at++) await invoke('file', { op: 'search', path: `/home/perfio/many/f${String(at).padStart(3, '0')}.txt`, query: 'needle' });
+      for (let at = 0; at < 500; at++) await invoke('file', { op: 'search', path: `/home/main/perfio/many/f${String(at).padStart(3, '0')}.txt`, query: 'needle' });
     });
-    await measureOp('file.edit', async (index) => {
-      const path = '/home/perfio/edit.txt';
-      await invoke('file', { op: 'read', path });
-      const old = index % 2 === 0 ? 'anchor-b' : 'anchor-a';
-      await invoke('file', { op: 'edit', path, edits: [{ old_text: old, new_text: old === 'anchor-a' ? 'anchor-b' : 'anchor-a' }] });
-    });
+    let anchor = 'anchor-a';
+    const readEdit = async () => { await invoke('file', { op: 'read', path: '/home/main/perfio/edit.txt' }); };
+
+    await measureOp('file.edit', async () => {
+      const path = '/home/main/perfio/edit.txt';
+      const next = anchor === 'anchor-a' ? 'anchor-b' : 'anchor-a';
+      await invoke('file', { op: 'edit', path, edits: [{ old_text: anchor, new_text: next }] });
+      anchor = next;
+    }, readEdit);
     await measureOp('shell.edit', async () => {
-      await invoke('shell', { command: "sed -i 's/anchor/ANCHOR/' /home/perfio/edit.txt", runtime: 'workspace' });
+      const next = anchor === 'anchor-a' ? 'anchor-b' : 'anchor-a';
+      await invoke('shell', { command: `sed -i 's/${anchor}/${next}/' /home/main/perfio/edit.txt`, runtime: 'workspace' });
+      anchor = next;
     });
     measured.push(...fileResults);
   } else if (subject === 'growth') {
