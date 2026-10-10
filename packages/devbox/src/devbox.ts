@@ -54,7 +54,7 @@ import {
   type RestProcess,
   type RunningForRest,
 } from './lifecycle';
-import { createCheckpointLane, createResourceLane, heldUntilDrained, pathScopes, portScope, processScope, type ResourceScope } from './operation-lanes';
+import { createCheckpointLane, createResourceLane, heldUntilDrained, pathScopes, portScope, processScope, supervisedScope, type ResourceScope } from './operation-lanes';
 import { DevboxError, attempt, attemptSync, settle, settleSync, startOverrun, startInterrupted, chainAdvanced, type DevboxErrorCode } from './errors';
 import { execRecords } from './exec-stream';
 import { BOX_SIZE_ORDER, BoxSizeSchema, DEFAULT_BOX_SIZE, instanceOf, type BoxSize, type ResizeOutcome } from './sizes';
@@ -2168,32 +2168,35 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       await this.ensureReady();
       const workDir = cwd ?? DEVBOX_WORKDIR;
 
-      const reserved = (await this.#procSpecs())
-        .find(spec => spec.command === command && spec.cwd === workDir);
+      // The logical launch is claimed before lookup/write/start; the native manager deduplicates only its resulting id.
+      return this.#resources.run(supervisedScope(command, workDir), async () => {
+        const reserved = (await this.#procSpecs())
+          .find(spec => spec.command === command && spec.cwd === workDir);
 
-      const spec: SupervisedProcessSpec = reserved ?? {
-        processId: crypto.randomUUID(),
-        command,
-        cwd: workDir,
-        createdAt: Date.now(),
-      };
+        const spec: SupervisedProcessSpec = reserved ?? {
+          processId: crypto.randomUUID(),
+          command,
+          cwd: workDir,
+          createdAt: Date.now(),
+        };
 
-      if (reserved === undefined) {
-        await this.ctx.storage.put(`${PROC_SPEC_PREFIX}${spec.processId}`, spec);
-      } else {
-        const existing = await this.#processes().get(spec.processId);
+        if (reserved === undefined) {
+          await this.ctx.storage.put(`${PROC_SPEC_PREFIX}${spec.processId}`, spec);
+        } else {
+          const existing = await this.#processes().get(spec.processId);
 
-        if (existing !== null && isProcessLive(existing.status)) {
-          return { processId: spec.processId };
+          if (existing !== null && isProcessLive(existing.status)) {
+            return { processId: spec.processId };
+          }
         }
-      }
 
-      await this.#processes().start(command, {
-        cwd: workDir,
-        processId: spec.processId,
+        await this.#processes().start(command, {
+          cwd: workDir,
+          processId: spec.processId,
+        });
+
+        return { processId: spec.processId };
       });
-
-      return { processId: spec.processId };
     })));
   }
 

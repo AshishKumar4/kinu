@@ -17,6 +17,34 @@ async function reservations(box: InstanceType<typeof Devbox>): Promise<readonly 
 }
 
 describe('starting a supervised process reserves its id before the process exists', () => {
+  test('concurrent starts reserve one process identity for the same command and cwd', async () => {
+    const { box, container } = harness(Devbox);
+
+    const [first, second] = await Promise.all([
+      box.startSupervised(COMMAND, '/workspace'),
+      box.startSupervised(COMMAND, '/workspace'),
+    ]);
+
+    expect(second.processId).toBe(first.processId);
+    expect(container.starts.map(({ processId }) => processId)).toEqual([first.processId]);
+    expect(await reservations(box)).toEqual([first.processId]);
+  });
+
+  test('cwd is part of the supervised command identity', async () => {
+    const { box, container } = harness(Devbox);
+
+    await box.mkdir('/workspace/other', { recursive: true });
+
+    const [first, second] = await Promise.all([
+      box.startSupervised(COMMAND, '/workspace'),
+      box.startSupervised(COMMAND, '/workspace/other'),
+    ]);
+
+    expect(second.processId).not.toBe(first.processId);
+    expect(new Set(container.starts.map(({ cwd }) => cwd))).toEqual(new Set(['/workspace', '/workspace/other']));
+    expect(new Set(await reservations(box))).toEqual(new Set([first.processId, second.processId]));
+  });
+
   test('the durable spec names the process the container was asked to create', async () => {
     const { box, container } = harness(Devbox);
 
