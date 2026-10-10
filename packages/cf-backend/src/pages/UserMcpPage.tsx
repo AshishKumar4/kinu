@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { ArrowLeftIcon } from "@phosphor-icons/react";
-import { McpServersPanel } from "@/components/account/McpServersPanel";
+import { McpServersSection } from "@/components/account/McpServersPanel";
 
 export default function UserMcpPage() {
   return (
@@ -16,7 +16,7 @@ export default function UserMcpPage() {
           </p>
         </header>
 
-        <McpServersPanel />
+        <McpServersSection />
       </div>
     </div>
   );

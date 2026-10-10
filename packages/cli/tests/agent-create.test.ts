@@ -3,11 +3,8 @@ import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
 
 import { join } from 'node:path';
-import { asFetchFunction, workspaceSlug } from '@kinu.run/core';
-import {
-  createCloudAgentFromMission,
-  suggestAgentIdentityFromMission,
-} from '../src/agent-create';
+import { asFetchFunction, fallbackWorkspaceIdentity, workspaceSlug } from '@kinu.run/core';
+import { createCloudAgentFromMission } from '../src/agent-create';
 import type { CreateCloudAgentInput } from '../src/cloud-api';
 import * as v from 'valibot';
 
@@ -31,7 +28,7 @@ function recordingCreate(seen: RecordedCreate) {
 describe('CLI mission workspace names', () => {
   test('a new workspace gets a neutral slug and the mission as its stand-in title, and no model is asked', () => {
     // The stand-in is what the workspace's own first-turn `auto_title` effect names, down the fast tier's route.
-    expect(suggestAgentIdentityFromMission('Review the OAuth callback flow', '123456abcdef')).toEqual({
+    expect(fallbackWorkspaceIdentity('Review the OAuth callback flow', '123456abcdef')).toEqual({
       name: 'ironwood-elm-56abcdef',
       displayName: 'Review the OAuth callback flow',
       nameOrigin: 'auto',

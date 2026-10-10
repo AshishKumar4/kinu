@@ -503,13 +503,13 @@ describe('agent status', () => {
     });
     void sql`UPDATE crafted_tools SET score = 0.9, uses = 7 WHERE name = 'summarize'`;
 
-    const list = getToolList(sql, rt.craftStore);
+    const list = getToolList(sql);
     expect(list.crafted).toEqual([
       { name: 'summarize', description: 'sum', qualityScore: 0.9, usageCount: 7 },
     ]);
     // An unscored tool reads as the neutral prior, never as zero.
     void sql`UPDATE crafted_tools SET score = 0.5, uses = 0 WHERE name = 'summarize'`;
-    expect(getToolList(sql, rt.craftStore).crafted[0]).toMatchObject({ qualityScore: 0.5, usageCount: 0 });
+    expect(getToolList(sql).crafted[0]).toMatchObject({ qualityScore: 0.5, usageCount: 0 });
     db.close();
   });
 });

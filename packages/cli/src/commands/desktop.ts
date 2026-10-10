@@ -8,7 +8,6 @@ import {
   describeConnectOutcome,
   describeDeviceSandbox,
   DEVICE_CONFIG_PATH,
-  DEVICE_CONNECT_DISCLOSURE,
   type ConnectDeviceResult,
   waitingDots,
 } from '../device-connect';
@@ -17,12 +16,13 @@ import { ACCENT, DIM, ERR, OK } from '../display';
 import { ask, canPrompt, confirm } from '../prompt';
 import { authCommand } from './auth';
 import { renderThrownChain, settle } from '@kinu.run/core/obs';
+import { DEVICE_CONNECT_DISCLOSURE } from '@kinu.run/core';
 
 function daemonLogTail(lines: number): string {
   return readDaemonLogTail(DAEMON_LOG_PATH, lines) ?? DIM(`No daemon log at ${DAEMON_LOG_PATH}`);
 }
 
-export function desktopCommand(action: string | undefined, opts: { label?: string }): Promise<void> {
+export function desktopCommand(action: string | undefined, opts: { label?: string; device?: string }): Promise<void> {
   return settle(Effect.gen(function* () {
     const sub = action ?? 'status';
 
@@ -39,7 +39,7 @@ export function desktopCommand(action: string | undefined, opts: { label?: strin
       const dots = waitingDots('');
 
       const result: ConnectDeviceResult = yield* Effect.catchCause(
-        Effect.promise(async () => connectDevice(auth, { label: name, onWaiting: dots.onWaiting })),
+        Effect.promise(async () => connectDevice(auth, { label: name, device: opts.device, onWaiting: dots.onWaiting })),
         (failed) => Effect.sync((): never => {
           // The readiness failure already quotes the daemon log; this only ends the progress line.
           dots.end();

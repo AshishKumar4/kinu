@@ -8,7 +8,7 @@ import { KinuLogo } from "./ui/KinuLogo";
 import type { RosterEntry, WorkspaceEntry } from "../lib/user-api";
 import { useAccount } from "@/hooks/use-account";
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
-import { useWorkspaceRpc, type ConnectionStatus } from "../hooks/use-kinu";
+import { useWorkspaceRpc, type ConnectionStatus } from "../hooks/use-chat-owner";
 import { useWorkspaceRoster } from "../hooks/use-workspace-roster";
 import { lastValue } from "../hooks/use-async-resource";
 import { ModeToggle, ThemeToggle } from "./theme-toggle";
@@ -225,7 +225,9 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
       <nav aria-label="Primary" className="px-2 pt-1 space-y-1">
         {PRIMARY_NAV.map((item) => <PrimaryNavRow key={item.to} {...item} />)}
       </nav>
-      <div className="relative min-h-0 flex-1 overflow-hidden">
+      {/* Clipped, never scrollable: a scrollIntoView, a focus or a find-in-page that reaches the panel off to the side
+          would scroll a hidden overflow, and the slide would then land both panels half out of view. */}
+      <div className="relative min-h-0 flex-1 overflow-clip">
       <div className="p-slide" data-drilled={drilled || undefined}>
       <div className="h-full overflow-y-auto pt-2 pb-3" inert={drilled}>
         <div className="px-5 pb-2 pt-4 p-eyebrow">

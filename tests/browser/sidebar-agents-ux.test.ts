@@ -67,6 +67,30 @@ describe('the sidebar drills into a workspace\'s agents', () => {
     });
   });
 
+  // 26244c765: the nested column's loader was a fresh closure each render, and the read it keyed re-ran on every answer.
+  test('an agent nested under another opens on one read of its roster, which stays read', async () => {
+    await withGallery(async (gallery) => {
+      const page = await shell(gallery, 1280);
+      await page.waitForSelector('[data-agents-counter]');
+      await page.click('[data-agents-counter]');
+      await page.waitForFunction((list) => document.querySelector(list)?.closest('[inert]') === null, {}, LIST);
+      await still(page);
+      await page.click(`${LIST} [data-agent-row="a-check"]`);
+      await page.waitForFunction(() => Number(document.documentElement.dataset.galleryChildrenReads ?? '0') > 0);
+
+      const frames = () => page.evaluate(() => new Promise<number>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve(Number(document.documentElement.dataset.galleryChildrenReads ?? '0'))));
+      }));
+
+      const settled = await frames();
+
+      // One lookup reads its live parent's roster, and the kept one its hirer's: at most two reads, and then none.
+      expect(settled).toBeLessThanOrEqual(2);
+      expect(await frames()).toBe(settled);
+      await page.close();
+    });
+  });
+
   test('the bar\'s agents button opens the same list', async () => {
     await withGallery(async (gallery) => {
       const page = await shell(gallery, 1280);
@@ -225,6 +249,35 @@ describe('who is at work, and who is who', () => {
         expect(new Set(worn['16'])).toEqual(new Set(['crown', 'party', 'beanie', 'tophat', 'cap', 'bow', 'headphones', 'glasses', 'flower', 'none']));
         expect(worn['16']?.slice(1).filter((accessory) => accessory === 'crown')).toEqual([]);
         expect({ dotLast, boxes }).toEqual({ dotLast: true, boxes: [16] });
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  // Tiers, 2026-10-10: a row reached for while its panel was still off to the side scrolled the sidebar's hidden
+  // overflow, so the slide landed the list beside the press and the press hit the list's frame.
+  test('the agents list off to the side cannot be scrolled into view; it opens where it slides to', async () => {
+    await withGallery(async (gallery) => {
+      const page = await shell(gallery, 1280);
+
+      try {
+        await page.waitForSelector('[data-rail] [data-agents-counter]');
+        await page.click('[data-rail] [data-agents-counter]');
+        // Reached for as the slide starts, as a press, a find-in-page or a focus without preventScroll may.
+        await page.$eval(`[data-rail] ${LIST} [data-agent-row="a-scout"]`, (row) => { row.scrollIntoView({ block: 'center', inline: 'center' }); });
+        await page.waitForFunction((list) => document.querySelector(list)?.closest('[inert]') === null, {}, `[data-rail] ${LIST}`);
+        await still(page);
+
+        const landed = await page.$eval(`[data-rail] ${LIST} [data-agent-row="a-scout"]`, (row) => {
+          const box = row.getBoundingClientRect();
+          const rail = row.closest('[data-rail]')?.getBoundingClientRect();
+          const at = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+
+          return { inRail: rail !== undefined && box.left >= rail.left && box.right <= rail.right, pressed: at?.closest('[data-agent-row]') === row };
+        });
+
+        expect(landed).toEqual({ inRail: true, pressed: true });
       } finally {
         await page.close();
       }

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import type { Server, ServerWebSocket } from 'bun';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import {
-  JsonArraySchema, JsonObjectSchema, parseJsonObject, hostedActorSocketPath, hostedWindowMay,
+  JsonArraySchema, JsonObjectSchema, JsonValueSchema, parseJsonObject, hostedActorSocketPath, hostedWindowMay,
   ChatHistoryEntrySchema, restoredRows,
   type JsonObject, type JsonValue, type ReasoningEffort,
 } from '@kinu.run/core';
@@ -55,6 +55,11 @@ const SPEND_BEFORE_ACCOUNTS = {
   coverage: { calls: 3, measured: 3, reported: null, silent: [], partial: [] },
   offTurnShare: null,
   missions: [],
+};
+
+const PENDING_PLAN: JsonObject = {
+  id: 'plan-1', sessionId: 'default', revision: 2, content: '# Ship the fix', status: 'pending', annotations: [],
+  feedback: null, handoffAccepted: false, createdAt: 1, updatedAt: 1,
 };
 
 /** `serve` answers a socket frame as it lands, as the workspace object would; null leaves it to the test. */
@@ -339,6 +344,43 @@ describe('CloudAgentClient protocol', () => {
     const client = newClient(mock);
     await expect(client.getReasoningEffort()).resolves.toBe('medium');
     await expect(client.setReasoningEffort('xhigh')).resolves.toEqual({ effort: 'xhigh' });
+    await client.close();
+  });
+
+  // 26244c765: the client's schema dropped `queued`, so the CLI said the agent was implementing a plan it never started.
+  test('an approval whose turn did not start keeps the whole outcome the workspace gave', async () => {
+    // The verdict is recorded and the turn it hands off was refused, as `decideAndHandOff` answers it.
+    const decided: JsonObject = { ok: true, plan: { ...PENDING_PLAN, status: 'approved' }, queued: false, queueError: 'the turn queue is full' };
+
+    const mock = startMockAgentServer({
+      serve: (frame) => (frame.type === 'rpc' && frame.method === 'decidePlanReview'
+        ? { type: 'rpc', id: frame.id ?? null, success: true, done: true, result: decided }
+        : null),
+    });
+
+    const client = newClient(mock);
+    const outcome = await client.plans?.decide('plan-1', 2, 'approve');
+
+    // The outcome as the workspace sent it: decided, and its turn not started, with the reason.
+    expect(v.parse(JsonValueSchema, outcome)).toEqual(decided);
+    await client.close();
+  });
+
+  // 26244c765 review: a send the workspace refused at its door resolved as a failed turn, so the TUI kept its row.
+  test('a send refused before admission fails as a send, in the workspace\'s words, with no turn left open', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+    const events: AgentClientEvent[] = [];
+    client.subscribe((event) => events.push(event));
+
+    const sent = client.send('ship the fix');
+    const request = await firstChatRequest(mock);
+
+    mock.reply({ type: CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE, id: request.id, body: 'This workspace is moving; try again shortly.', done: true, error: true, reason: 'unavailable' });
+
+    await expect(sent).rejects.toThrow('This workspace is moving; try again shortly.');
+    expect(events.filter((event) => event.type === 'error')).toEqual([]);
+    expect(events.filter((event) => event.type === 'turn-start').length).toBe(events.filter((event) => event.type === 'turn-end').length);
     await client.close();
   });
 
@@ -881,28 +923,38 @@ describe('CloudAgentClient — Steer-as-Branch RPC contract', () => {
   });
 
   // 2026-10-01: a cloud workspace's reads_changed frames were dropped here, so the TUI's agents hub went stale on cloud too.
-  test('a frame naming the reads a write moved reaches the client as a broadcast', async () => {
-    const mock = startMockAgentServer();
-    const client = newClient(mock);
-    const events: AgentClientEvent[] = [];
-    client.subscribe((event) => events.push(event));
+  // 26244c765: the cloud client's own broadcast decoder had no plan_updated, so a cloud plan never reached the TUI.
+  const broadcasts: Array<[string, JsonObject & { type: string }]> = [
+    ['the reads a write moved', { type: 'reads_changed', reads: ['listWorkspaceAgents', 'listSubordinates'] }],
+    ['a plan the workspace updated', { type: 'plan_updated', plan: PENDING_PLAN }],
+  ];
 
-    const turn = client.send('hire a scout');
-    const request = await firstChatRequest(mock);
+  for (const [what, frame] of broadcasts) {
+    test(`a frame naming ${what} reaches the client as a broadcast`, async () => {
+      const mock = startMockAgentServer();
+      const client = newClient(mock);
+      const events: AgentClientEvent[] = [];
+      client.subscribe((event) => events.push(event));
 
-    mock.reply({ type: 'reads_changed', reads: ['listWorkspaceAgents', 'listSubordinates'] });
+      const turn = client.send('hire a scout');
+      const request = await firstChatRequest(mock);
 
-    const moved = await waitFor(() => events
-      .filter((e): e is Extract<AgentClientEvent, { type: 'broadcast' }> => e.type === 'broadcast')
-      .map((e) => e.event)
-      .find((e) => e.type === 'reads_changed'), 'the reads frame');
+      // Frames arrive in order: once the one after it is read, a frame the client dropped is known to be dropped.
+      mock.reply(frame);
+      mock.reply({ type: 'model_fallback', message: 'after' });
 
-    expect(moved).toEqual({ type: 'reads_changed', reads: ['listWorkspaceAgents', 'listSubordinates'] });
+      const reported = () => events
+        .filter((e): e is Extract<AgentClientEvent, { type: 'broadcast' }> => e.type === 'broadcast')
+        .map((e) => e.event);
 
-    mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'hired' }, true));
-    await turn;
-    await client.close();
-  });
+      await waitFor(() => reported().find((e) => e.type === 'model_fallback'), 'the frame after it');
+      expect(reported().find((e) => e.type === frame.type)).toEqual(frame);
+
+      mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'done' }, true));
+      await turn;
+      await client.close();
+    });
+  }
 
   // 2026-10-04: the TUI linked a cloud workspace's vfs://pc/<machine>/x but not <machine>://x, because the client never
   // read which machines are live. It reads them on connect, and again before it reports that the executors moved.

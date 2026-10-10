@@ -6,7 +6,7 @@ import { tierIdsOf,
   type RoleId,
   type SubordinateChild,
   type WorkspaceWork,
-  type AgentTaskTree,
+  taskTreePhase,
   type JobOutputTail,
   evolutionHelper, jobName, lastOutputLines, ownerFacingSubordinate,
 } from '@kinu.run/core';
@@ -52,16 +52,10 @@ export interface TuiWorkEntry extends TuiHubRow {
 
 type WorkEntryDraft = { -readonly [Key in keyof TuiWorkEntry]: TuiWorkEntry[Key] };
 
-function workStatus(task: AgentTaskTree): TuiWorkEntry['status'] {
-  if (task.status === 'active') return 'running';
-
-  return [task, ...task.subtasks].some((item) => item.status === 'open' || item.status === 'active') ? 'idle' : 'settled';
-}
-
 export function workFromWorkspace(work: WorkspaceWork): TuiWorkEntry[] {
   const entries = [...work.tasks, ...work.plans].flatMap(({ owner, tasks }) => tasks.map((task): TuiWorkEntry => {
     const entry: WorkEntryDraft = {
-      id: `task:${owner.actorId}:${task.id}`, title: task.title, label: owner.name, actorId: owner.actorId, status: workStatus(task),
+      id: `task:${owner.actorId}:${task.id}`, title: task.title, label: owner.name, actorId: owner.actorId, status: taskTreePhase(task),
     };
 
     if (owner.path !== null && owner.path.length > 0) entry.path = owner.path;

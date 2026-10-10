@@ -7,13 +7,11 @@ import {
   PlugsConnectedIcon, UserCircleIcon, ArrowSquareOutIcon,
   ArrowLeftIcon,
 } from "@phosphor-icons/react";
-import {
-  getProfile, setDisplayName,
-} from "../lib/user-api";
+import { setDisplayName, type UserProfile } from "../lib/user-api";
 import { Card } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { useAsyncResource } from "@/hooks/use-async-resource";
+import { useAccount } from "@/hooks/use-account";
 import { SettingsRail, SettingsSectionHead, settingsSection } from "@/components/SettingsRail";
 import { ProfileCatalogSettings } from "@/components/ProfileCatalogSettings";
 import { ProvidersPanel } from "@/components/account/ProvidersPanel";
@@ -30,7 +28,7 @@ import { showing, detach } from '@kinu.run/core/obs';
 
 function ProfileNameEditor({ profile, onSaved }: {
   profile: { email: string; displayName: string | null } | null;
-  onSaved: () => void;
+  onSaved: (saved: UserProfile | null) => void;
 }) {
   const [name, setName] = useState(profile?.displayName ?? '');
   const [saving, setSaving] = useState(false);
@@ -42,7 +40,7 @@ function ProfileNameEditor({ profile, onSaved }: {
     setSaving(true);
     setError(null);
 
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () { yield* Effect.promise(async () => setDisplayName(name)); onSaved(); }), showing(setError)), Effect.sync(() => { setSaving(false); }));
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () { onSaved(yield* Effect.promise(async () => setDisplayName(name))); }), showing(setError)), Effect.sync(() => { setSaving(false); }));
   });
 
   return (
@@ -76,7 +74,9 @@ function PageHeader() {
 }
 
 export default function UserSettingsPage() {
-  const profile = useAsyncResource(getProfile);
+  // The shell's one profile read: a name saved here is the name the bar and the sidebar show.
+  const { profile: resource, reload, set } = useAccount();
+  const profile = { resource, reload };
 
   // Section state lives in the URL so deep links, reloads and Back agree.
   const section = settingsSection(useLocation().hash);
@@ -110,7 +110,7 @@ export default function UserSettingsPage() {
               <CardSlot resource={profile.resource} what="your profile" onRetry={profile.reload}>
                 {(p) => (
                   <div className="space-y-5">
-                    <ProfileNameEditor profile={p} onSaved={profile.reload} />
+                    <ProfileNameEditor profile={p} onSaved={set} />
                     <dl className="grid gap-5 sm:grid-cols-2">
                       <div>
                         <dt className="p-meta p-text-3">Email</dt>

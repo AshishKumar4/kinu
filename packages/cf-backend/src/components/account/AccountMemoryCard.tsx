@@ -2,13 +2,13 @@ import { useState } from "react";
 import { ClockCounterClockwiseIcon, NotebookIcon, SealCheckIcon } from "@phosphor-icons/react";
 import { Effect } from "effect";
 import * as v from "valibot";
-import { JsonValueSchema, type JsonValue } from "@kinu.run/core";
+import { JsonValueSchema, type AccountMemoryProposal, type JsonValue } from "@kinu.run/core";
 import { attempt, detach, renderThrownChain, tolerate } from "@kinu.run/core/obs";
 import { Card } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
-import { useAsyncResource } from "@/hooks/use-async-resource";
+import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import {
-  decideAccountMemory, forgetAccountFact, forgetAccountNote, getAccountMemory, putAccountFact,
+  decideAccountMemory, forgetAccountFact, forgetAccountNote, putAccountFact,
   type AccountMemoryState, type MemoryOrigin,
 } from "../../lib/user-api";
 
@@ -51,7 +51,8 @@ type Busy = { readonly what: string } | null;
 
 /** Settings → Memory: what every workspace and agent of the account reads, what waits on the owner, and every revision. */
 export function AccountMemoryCard() {
-  const { resource, reload } = useAsyncResource(getAccountMemory);
+  // The shell's one account memory: what waits is the account socket's newest, the list the attention stack shows.
+  const { resource, reload } = useWorkspaceRoster().accountMemory;
   const [busy, setBusy] = useState<Busy>(null);
   const [failure, setFailure] = useState<string | null>(null);
 
@@ -73,7 +74,7 @@ export function AccountMemoryCard() {
         {(state) => (
           <div className="space-y-4" data-account-memory>
             {failure !== null && <div className="p-meta p-danger">{failure}</div>}
-            <Pending state={state} busy={busy} act={act} />
+            <Pending pending={state.pending} busy={busy} act={act} />
             <Facts state={state} busy={busy} act={act} />
             <Notes state={state} busy={busy} act={act} />
           </div>
@@ -89,13 +90,13 @@ interface SectionProps {
   readonly act: (what: string, run: () => Promise<void>) => Effect.Effect<void>;
 }
 
-function Pending({ state, busy, act }: SectionProps) {
-  if (state.pending.length === 0) return null;
+function Pending({ pending, busy, act }: Omit<SectionProps, "state"> & { readonly pending: readonly AccountMemoryProposal[] }) {
+  if (pending.length === 0) return null;
 
   return (
     <section className="space-y-2" data-account-memory-pending>
       <div className="p-t-label p-text-2">Waiting for you</div>
-      {state.pending.map((item) => (
+      {pending.map((item) => (
         <div key={item.id} className="rounded-md px-3 py-2 p-elevated space-y-1" data-account-memory-proposal={item.id}>
           <div className="p-row-text p-text break-words">
             {item.proposal.kind === "fact" ? <><span className="font-mono">{item.proposal.key}</span>: {valueText(item.proposal.value)}</> : item.proposal.content}

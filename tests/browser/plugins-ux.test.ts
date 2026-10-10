@@ -219,6 +219,51 @@ describe('MCP presets', () => {
     });
   });
 
+  // 26244c765 review: one failed read of the deployment's apps left GitHub's card asking to sign in for good, though
+  // the deployment has no GitHub app; the manager had read them again every few seconds.
+  test('a failed first read of the deployment\'s apps is asked again, and GitHub then offers its token', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'plugins&mcp-secrets=google&presets=down', 'dark', 'desktop');
+
+      try {
+        // Every read on mount fails; once the deployment answers, only a read made after can see it.
+        await page.waitForSelector('[data-plugin-add][aria-label="Add GitHub"]');
+        const failed = await page.evaluate(() => Number(document.documentElement.dataset.galleryPresetReads ?? '0'));
+
+        await page.evaluate(() => { window.dispatchEvent(new Event('gallery:presets-up')); });
+        await page.waitForFunction((after) => Number(document.documentElement.dataset.galleryPresetReads ?? '0') > after, {}, failed);
+        await page.click('[data-plugin-add][aria-label="Add GitHub"]');
+        await page.waitForSelector('input[aria-label="Personal access token"]');
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  // 26244c765: the manager kept its own list, so a server added there was missing from the page once it closed.
+  test('a server added in the manager is on the page once the manager closes', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'plugins', 'dark', 'desktop');
+
+      try {
+        await page.waitForSelector('[aria-label="MCP servers"] button');
+        await page.click('[aria-label="MCP servers"] button');
+        await page.waitForSelector('[role="dialog"]');
+        await page.$$eval('[role="dialog"] button', (buttons) => buttons.find((button) => button.textContent?.includes('Add custom server'))?.click());
+        await page.type('[role="dialog"] input[placeholder="github"]', 'tracker');
+        await page.type('[role="dialog"] input[placeholder="https://mcp.example.com/v1"]', 'https://mcp.tracker.example/v1');
+        await page.$$eval('[role="dialog"] button', (buttons) => buttons.find((button) => button.textContent === 'Add server')?.click());
+        await page.waitForFunction(() => document.querySelector('[role="dialog"]')?.textContent?.includes('mcp.tracker.example') === true);
+        await page.$$eval('[role="dialog"] button', (buttons) => buttons.find((button) => button.textContent === 'Done')?.click());
+        await page.waitForFunction(() => document.querySelector('[role="dialog"]') === null);
+
+        expect((await drawnRows(page)).map((row) => row.name)).toContain('tracker');
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
   test('the preset row renders in the account modal and on the plugins page at both widths in both themes', async () => {
     await withGallery(async (gallery) => {
       

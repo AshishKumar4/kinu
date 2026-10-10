@@ -8,7 +8,7 @@ import {
 } from "@phosphor-icons/react";
 import type { AlternateTakeSet, TakePickOutcome } from "@kinu.run/core";
 import { branchHeadId, takeEvidence } from "@kinu.run/core";
-import type { BranchRun } from "@/hooks/use-kinu";
+import type { BranchRun } from "@/hooks/use-workspace-reads";
 import type { Rpc } from "@kinu.run/core";
 import { Modal } from "@/components/ui/Modal";
 import { MarkdownContent } from "@/components/surfaces/shared";

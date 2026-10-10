@@ -8,7 +8,6 @@ import { readForkLineage, type ForkLineageRow } from '../identity/fork';
 import { missionOf } from '../identity/soul';
 import { BUILTIN_TOOLS } from '../tools/registry';
 import { CRAFT_NEUTRAL_PRIOR } from '../craft/in-episode';
-import type { CraftStore } from '../types/agent-runtime';
 import type { SqlExecutor } from '../types/primitives';
 import type { ReasoningEffort } from '../providers/effort';
 import { transcriptRole } from '../utils/ui-message';
@@ -119,17 +118,14 @@ export async function getChatHistoryPage(
 
 export type ChatHistoryPage = Page<ChatHistoryEntry, PositionCursor>;
 
-export function getToolList(sql: SqlExecutor, craftStore: CraftStore) {
-  const crafted = craftStore.list().map((t) => {
-    const scoreRow = sql<{ score: number; uses: number }>`
-      SELECT score, uses FROM crafted_tools WHERE name = ${t.name} LIMIT 1`;
-
-    return {
-      name: t.name, description: t.description,
-      qualityScore: scoreRow[0]?.score ?? CRAFT_NEUTRAL_PRIOR,
-      usageCount: scoreRow[0]?.uses ?? 0,
-    };
-  });
+/** The tools an agent has: the built-ins and what it crafted, newest first, each with its quality and use. */
+export function getToolList(sql: SqlExecutor) {
+  const crafted = sql<{ name: string; description: string; score: number | null; uses: number | null }>`
+    SELECT name, description, score, uses FROM crafted_tools ORDER BY updated_at DESC`.map((row) => ({
+    name: row.name, description: row.description,
+    qualityScore: row.score ?? CRAFT_NEUTRAL_PRIOR,
+    usageCount: row.uses ?? 0,
+  }));
 
   return { builtIn: [...BUILTIN_TOOLS], crafted };
 }

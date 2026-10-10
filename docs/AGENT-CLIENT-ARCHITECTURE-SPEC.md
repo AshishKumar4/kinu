@@ -23,7 +23,7 @@ turn runs in the Durable Object; the CLI keeps no model loop for it.
 targets, and points `--model` at `kinu model`. `--no-auto-evolve` turns the
 agent's `learning` setting off on either target. The
 web UI is the canonical cloud client through `useAgent` and `useAgentChat`
-(`packages/cf-backend/src/hooks/use-kinu.ts`).
+(`packages/cf-backend/src/hooks/use-chat-owner.ts`, composed with the workspace's reads in `use-kinu.ts`).
 
 ## State ownership
 

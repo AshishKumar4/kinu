@@ -54,3 +54,8 @@ export function inheritedRows(held: Readonly<Record<string, number>>, catalogVer
 // Cloud chat messages persist as one DO SQLite row (`do.sqlite.row_bytes`); file parts must fit whole under the
 // SDK's 1.8 MB row guard. 1 MiB raw is ~1.4 MB base64; unit-files.test.ts asserts it against the catalog.
 export const CLOUD_MAX_INLINE_ATTACHMENT_BYTES = 1024 * 1024;
+
+/** The raw bytes a data-URL file part encodes (base64 ≈ 4/3 × raw): what the inline cap is measured in. */
+export function dataUrlRawBytes(url: string): number {
+  return Math.floor(((url.length - url.indexOf(',') - 1) * 3) / 4);
+}

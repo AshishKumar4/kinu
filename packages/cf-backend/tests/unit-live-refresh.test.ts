@@ -7,9 +7,8 @@ import {
   type LiveRefreshAdmission,
   type LiveRefreshErrors,
   type LiveRefreshSource,
-  type MctsProgress,
-} from '../src/hooks/use-kinu';
-import { explorationForkTree } from '@kinu.run/core';
+} from '@kinu.run/core';
+import { explorationForkTree, type MctsProgress } from '@kinu.run/core';
 import { pruneSlateReloads } from '@kinu.run/core';
 import type { ForkNode } from '@kinu.run/core';
 import {

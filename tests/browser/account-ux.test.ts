@@ -772,7 +772,7 @@ describe('Settings → Memory', () => {
       mkdirSync(MEMORY_SHOTS, { recursive: true });
 
       for (const viewport of ['desktop', 'mobile'] as const) {
-        const page = await freshPage(gallery, 'usersettingsstate&section=memory', 'light', viewport);
+        const page = await freshPage(gallery, 'usersettingsstate&section=memory&memory=timezone', 'light', viewport);
 
         try {
           await page.waitForSelector('[data-account-memory]');
@@ -794,6 +794,75 @@ describe('Settings → Memory', () => {
         } finally {
           await page.close();
         }
+      }
+    });
+  });
+
+  // 26244c765 review: a proposal kept from the attention stack left Settings' facts as they were; the account's
+  // frame now reads the whole memory again.
+  test('a proposal kept elsewhere is a kept fact in Settings at once', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'usersettingsstate&section=memory&memory=waiting', 'light', 'desktop');
+
+      try {
+        await page.waitForSelector('[data-account-memory-proposal="amp_city"]');
+        expect(await page.$('[data-account-memory-fact="owner_city"]')).toBeNull();
+
+        // Kept as the stack keeps it: the route, not this page's button.
+        await page.evaluate(async () => {
+          await fetch('/api/user/memory/proposals/amp_city', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ decision: 'accept' }) });
+        });
+        await page.waitForSelector('[data-account-memory-fact="owner_city"]');
+        expect(await page.$('[data-account-memory-proposal="amp_city"]')).toBeNull();
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  // 26244c765: Settings kept its own copy of what waits, read once, so a proposal filed while it was open never showed.
+  test('a proposal filed while Settings is open joins what waits, as the attention stack shows it', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'usersettingsstate&section=memory&memory=timezone', 'light', 'desktop');
+
+      try {
+        await page.waitForSelector('[data-account-memory-proposal="amp_1"]');
+        await page.evaluate(() => { window.dispatchEvent(new Event('gallery:memory-proposal')); });
+        await page.waitForSelector('[data-account-memory-proposal="amp_city"]');
+        expect(await page.$$eval('[data-account-memory-proposal]', (rows) => rows.map((row) => row.getAttribute('data-account-memory-proposal'))))
+          .toEqual(['amp_1', 'amp_city']);
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  // 26244c765: Settings read the profile beside the shell's read and read it again after a save, so the shell kept
+  // the old name until its own next read.
+  test('Settings shows the shell\'s account, and a saved name is that account at once', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'usersettingsstate&shell=1', 'light', 'desktop');
+
+      try {
+        await page.waitForSelector('input[aria-label="Your name"]');
+        // Settings is one reader of the shell's account; no other surface shows the name, so the frame mounts one.
+        const held = () => page.$eval('[data-gallery-account-name]', (reader) => reader.textContent);
+
+        expect(await held()).toBe('Owner');
+        const reads = () => page.evaluate(() => Number(document.documentElement.dataset.galleryProfileReads ?? '0'));
+
+        const before = await reads();
+
+        await page.click('input[aria-label="Your name"]', { count: 3 });
+        await page.keyboard.type('Ada');
+        await page.$$eval('button', (buttons) => buttons.find((button) => button.textContent?.trim() === 'Save')?.click());
+        await page.waitForFunction(() => document.documentElement.dataset.galleryProfilePatches === '1');
+        await page.waitForFunction(() => [...document.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'Save')?.disabled === true);
+        // The saved profile is the account's answer: nothing reads it again, and every reader holds it at once.
+        expect(await reads()).toBe(before);
+        expect(await held()).toBe('Ada');
+      } finally {
+        await page.close();
       }
     });
   });

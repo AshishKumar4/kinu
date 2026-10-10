@@ -9,11 +9,9 @@ import {
 import { createRoot, useRenderer, useTerminalDimensions } from '@opentui/react';
 import { useState, useCallback, useRef, useEffect, useMemo, type ReactNode } from 'react';
 
-import { tierIdsOf,
-  DEFAULT_ROLE_ID, nextReasoningEffort, offeredReasoningEfforts,
-  effectiveRoleCatalog,
-  type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type PositionCursor, type ReasoningEffort, type SeekCursor,
-  type SubordinateChild, type TierId,
+import {
+  nextReasoningEffort, offeredReasoningEfforts, type AlternateTakeCandidate, type AlternateTakeSet,
+  type ChangelogEntry, type ReasoningEffort, type TierId,
 } from '@kinu.run/core';
 import { TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER, composerVisibleRows } from '@kinu.run/core/tui';
 import {
@@ -47,11 +45,12 @@ import { listSidebarAgents } from '../agent-list';
 import { watchDeviceConsents } from '../consent-watch';
 import { ASK_OWNER_TOOL, contextWindowForSpec, describeProviderError, EMPTY_MODEL_MENU, specWithoutAccount, turnFailure, type AgentModelEntry, type AgentModelMenu, type AskingAgent, type OwnerAnswer } from '@kinu.run/core';
 import { requireInteractiveTerminal, TUI_EXIT_SIGNALS } from '../prompt';
-import { loadActiveProfile } from '../default-model';
 import { canonicalProjectRoot } from '../config';
 import { openBrowser } from '../commands/auth';
 import { StatusBar } from './status-bar';
 import { MessageList, type DisplayMessage } from './messages';
+import { useSubagentChat } from './use-subagent-chat';
+import { loadHubData, useHub } from './use-hub';
 import { createHostShell } from '@kinu.run/cli-backend';
 import type { TurnMeter } from '@kinu.run/core/tui';
 import {
@@ -76,8 +75,7 @@ import {
 import { useDeviceConnectPrompt, type DeviceConnectPromptState } from './use-device-connect';
 import { useShellApproval } from './use-shell-approval';
 import {
-  followJobOutput, JobOutputFrameSchema, READS_CHANGED_EVENT, ROSTER_READS,
-  type BroadcastEvent, type JobOutputTail, type LiveRead, type ShellApprovalRequest, type WorkMode,
+  JobOutputFrameSchema, READS_CHANGED_EVENT, type BroadcastEvent, type ShellApprovalRequest, type WorkMode,
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { useComposerPaste } from './use-composer-paste';
@@ -93,9 +91,7 @@ import { initialInputState, reduceInput, type InputEffect, type InputMachineEven
 import { agentDisplayLabel, clipText } from '@kinu.run/core/tui';
 import { createKeyDispatcher, openTuiKeyBindings } from './actions';
 import {
-  buildAgentHubEntries, HubOverlay, SubagentChatOverlay, subordinatesFromRoster, workFromWorkspace, answeredHelpers, evolutionWork,
-  jobOwners, jobWork, lastPrinted, newerTail, type TuiJobOwner,
-  type TuiHubData, type TuiHubRow, type TuiWorkEntry, type TuiHubView, type TuiSubagentChat,
+  HubOverlay, SubagentChatOverlay, type TuiHubData, type TuiHubRow, type TuiHubView,
 } from './hubs';
 import { DEFAULT_TUI_THEME_SELECTION, useTuiTheme, type ThemeSelection } from './theme';
 import {
@@ -153,8 +149,6 @@ export type ActiveSurface =
   | { kind: 'subagent'; path: readonly string[]; label: string; actorId: string | null }
   | null;
 
-const HUB_READS: ReadonlySet<string> = new Set<LiveRead>([...ROSTER_READS, 'listWorkspaceWork', 'listBackgroundJobs']);
-
 function surfaceTitleFor(surface: ActiveSurface, walkbackOpen: boolean): string | null {
   if (surface === null) return walkbackOpen ? 'Walk back ›' : null;
 
@@ -187,7 +181,6 @@ function anyOverlayOpen(input: {
     || input.shellApproval !== null
     || input.deviceConnect !== null;
 }
-
 
 interface CaughtFailure {
   cause: unknown;
@@ -267,11 +260,6 @@ function ChatScene({
   const settingsOpen = activeSurface?.kind === 'settings';
   const themePickerOpen = activeSurface?.kind === 'theme';
 
-  // The hub carries its workspace's identity so a switch resets it alongside other per-client state.
-  const [hub, setHub] = useState<{ identity: string; data: TuiHubData } | null>(
-    hubData ? { identity: `${initialClient.mode}:${initialClient.agentName}`, data: hubData } : null,
-  );
-
   const [hubSelectedId, setHubSelectedIdState] = useState<string | null>(null);
   // Keys between renders read the latest choice.
   const hubSelectedRef = useRef<string | null>(null);
@@ -281,7 +269,6 @@ function ChatScene({
     setHubSelectedIdState(id);
   }, []);
 
-  const [subagentChat, setSubagentChat] = useState<TuiSubagentChat | null>(null);
   const subagentScrollRef = useRef<ScrollBoxRenderable | null>(null);
 
   const [draft, setDraft] = useState('');
@@ -343,11 +330,6 @@ function ChatScene({
   const hintedTakesRef = useRef<string | null>(null);
   const modelRequestRef = useRef(0);
   // Effects cannot return their tasks; these refs hold scene-owned work until cleanup.
-  const hubRefreshTaskRef = useRef<Promise<void> | null>(null);
-  const connectionTaskRef = useRef<Promise<void> | null>(null);
-  const metadataTaskRef = useRef<Promise<void> | null>(null);
-  const rosterTaskRef = useRef<Promise<void> | null>(null);
-  const subagentTaskRef = useRef<Promise<void> | null>(null);
   const commands = useMemo(() => commandsForClient(client), [client]);
   const deviceConnect = useDeviceConnectPrompt();
 
@@ -412,11 +394,17 @@ function ChatScene({
 
   const isProcessing = inputState.activeTurns > 0;
 
-  const addMessage = useCallback((msg: Omit<DisplayMessage, 'id'>) => {
+  // The agent hub: what it shows, read for the open workspace and moved by the frames that name its reads.
+  const { hub, live: hubLive, shownRoster, answered, reset: resetHub, jobOutput: hubJobOutput, readsChanged: hubReadsChanged } = useHub({
+    client, seed: hubData, readHub, view: hubView, roster, label: status?.name, running: isProcessing, projectRoot, messages,
+  });
+
+  const addMessage = useCallback((msg: Omit<DisplayMessage, 'id'>): string => {
     const id = `msg-${++msgIdRef.current}`;
     setMessages((prev) => [...prev, { ...msg, id }]);
-  }, []);
 
+    return id;
+  }, []);
 
   const addError = useCallback((failure: CaughtFailure) => {
     addMessage({ role: 'system', content: errorLine(renderThrownChain(failure)) });
@@ -553,6 +541,7 @@ function ChatScene({
     rememberPrompt(input);
     const generation = clientGenerationRef.current;
     clientActionCountRef.current += 1;
+    let sentRow: string | null = null;
 
     try {
       const prompt = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes, planes: client.planes ?? undefined });
@@ -560,16 +549,16 @@ function ChatScene({
       if (clientGenerationRef.current !== generation) return;
 
       for (const problem of prompt.errors) addMessage({ role: 'system', content: problem });
-      const steering = machineRef.current.activeTurns > 0;
 
-      const message: Omit<DisplayMessage, 'id'> = {
+      // Shown as sent; whether it steered the running turn is the client's answer once it lands, never a guess here.
+      const sentMessage: Omit<DisplayMessage, 'id'> = {
         role: 'user',
         content: prompt.text,
         attachments: prompt.attached.length > 0 ? prompt.attached.map(describePromptAttachment) : undefined,
-        steered: steering,
+        steered: false,
       };
 
-      addMessage(message);
+      sentRow = addMessage(sentMessage);
       const text = [...localOutputsRef.current.splice(0), prompt.text].join('\n\n');
       const payload = prompt.files.length > 0 ? { text, files: prompt.files } : text;
       const sendOptions: AgentClientSendOptions = { cwd: process.cwd(), ...(mode !== undefined && { mode }) };
@@ -577,9 +566,18 @@ function ChatScene({
       if (nextTier) sendOptions.tier = nextTier;
 
       setNextTier(null);
-      await client.send(payload, sendOptions);
+      const sent = await client.send(payload, sendOptions);
+      const shown = sentRow;
+
+      if (sent.landed === 'mid-turn') setMessages((prev) => prev.map((m) => (m.id === shown ? { ...m, steered: true } : m)));
     } catch (err) {
-      if (clientGenerationRef.current === generation) addError({ cause: err });
+      const unsent = sentRow;
+
+      // A send that failed was never admitted: its row goes, and the failure says why, unless the workspace changed.
+      if (clientGenerationRef.current === generation) {
+        if (unsent !== null) setMessages((prev) => prev.filter((m) => m.id !== unsent));
+        addError({ cause: err });
+      }
     } finally {
       clientActionCountRef.current -= 1;
     }
@@ -725,7 +723,7 @@ function ChatScene({
       setBranchTasks({});
       // A pending next-turn tier does not survive a switch.
       setNextTier(null);
-      setHub(null);
+      resetHub();
       setInputState(initialInputState);
       setInputText(draftsRef.current.get(`${candidate.mode}:${candidate.agentName}`) ?? '');
       setMessages([
@@ -774,7 +772,6 @@ function ChatScene({
     }
   }, [addError, addMessage, client, forgetSessionTurn, onClientChange, onWorkspaceSelect, setInputText, stream]);
 
-
   /** Cloud supplies a facet client: the conversation nests under its parent workspace. */
   const createNewAgent = useCallback(async () => {
     if (onNewAgent === undefined || selectionPendingRef.current) return;
@@ -807,102 +804,6 @@ function ChatScene({
     }
   }, [addError, addMessage, client, onNewAgent, roster, switchWorkspace]);
 
-  useEffect(() => {
-    const identity = `${client.mode}:${client.agentName}`;
-
-    if (hub !== null && hub.identity === identity) return;
-    const abort = new AbortController();
-    let task: Promise<void> | null = null;
-    let settled = false;
-    task = (async () => {
-      try {
-        const fresh = await (readHub ?? loadHubData)(client);
-
-        if (!abort.signal.aborted) setHub({ identity, data: fresh });
-      } catch (cause) {
-        diagnostics.failure(
-          'tui.hub_refresh_failed',
-          toKinuError({ doing: 'refreshing the agent hub', cause, otherwise: 'unavailable' }),
-          { workspace: client.agentName },
-        );
-      } finally {
-        settled = true;
-
-        if (task !== null && hubRefreshTaskRef.current === task) hubRefreshTaskRef.current = null;
-      }
-    })();
-    hubRefreshTaskRef.current = task;
-
-    if (settled && hubRefreshTaskRef.current === task) hubRefreshTaskRef.current = null;
-
-    return () => { abort.abort(); };
-  }, [client, hub, readHub]);
-
-  // Only the open agent's roster is read.
-  const shownRoster = useMemo(() => {
-    const subordinates = hub?.identity === `${client.mode}:${client.agentName}` ? hub.data.subordinates : [];
-
-    if (subordinates.length === 0) return roster;
-
-    const items = roster.page.items.map((item) => (item.name === client.agentName && item.mode === client.mode
-      ? { ...item, subordinates }
-      : item));
-
-    return { ...roster, page: { ...roster.page, items } };
-  }, [client, hub, roster]);
-
-  const [jobTails, setJobTails] = useState<Readonly<Record<string, JobOutputTail>>>({});
-  const listedTails = useRef<Readonly<Record<string, JobOutputTail>>>({});
-
-  useEffect(() => {
-    listedTails.current = Object.fromEntries((hub?.data.work ?? []).flatMap((item) => (item.output === undefined ? [] : [[item.id.replace(/^job:/, ''), item.output]])));
-  }, [hub]);
-
-  const hubLive = useMemo<TuiHubData | undefined>(() => !hub ? undefined : {
-    ...hub.data,
-    work: hub.data.work.map((item) => {
-      const printed = lastPrinted(newerTail(jobTails[item.id.replace(/^job:/, '')], item.output));
-
-      return item.id.startsWith('job:') && printed !== undefined ? { ...item, printed } : item;
-    }),
-    agents: buildAgentHubEntries({
-      items: roster.page.items,
-      subordinates: hub.identity === `${client.mode}:${client.agentName}` ? hub.data.subordinates : [],
-      current: { name: client.agentName, mode: client.mode },
-      currentEntry: {
-        ...(hub.data.agents[0] ?? { kind: 'main' as const }),
-        id: `${client.mode}:${client.agentName}`,
-        label: status?.name ?? client.agentName,
-        kind: 'main',
-        status: isProcessing ? 'running' : 'idle',
-        workspace: hub.data.agents[0]?.workspace ?? client.agentName,
-      },
-      projectRoot,
-    }),
-  }, [hub, roster.page.items, client, status?.name, isProcessing, projectRoot, jobTails]);
-
-  const answered = useMemo(() => answeredHelpers(messages, hub?.data.helpers ?? []), [messages, hub]);
-  // Bumped by each frame naming a read the hub shows, so the hub reads again.
-  const [hubReadsMoved, setHubReadsMoved] = useState(0);
-
-  useEffect(() => {
-    if (hubView !== 'agents') return;
-    const identity = `${client.mode}:${client.agentName}`;
-    let live = true;
-
-    rosterTaskRef.current = (async () => {
-      const read = await readRoster(client);
-
-      if (!live) return;
-
-      setHub((current) => (current?.identity === identity
-        ? { ...current, data: { agents: current.data.agents, profile: current.data.profile, ...read } }
-        : current));
-    })();
-
-    return () => { live = false; };
-  }, [client, hubView, hubReadsMoved]);
-
   const openSubagent = useCallback((entry: TuiHubRow) => {
     if (entry.path === undefined) return;
     setActiveSurface({ kind: 'subagent', path: entry.path, label: entry.label, actorId: entry.actorId ?? null });
@@ -910,25 +811,7 @@ function ChatScene({
 
   const subagentSurface = activeSurface?.kind === 'subagent' ? activeSurface : null;
 
-  useEffect(() => {
-    if (subagentSurface === null) return;
-    const { path, label, actorId } = subagentSurface;
-    const name = path.join('/');
-    let live = true;
-    setSubagentChat({ name, label, messages: null, error: null });
-
-    subagentTaskRef.current = (async () => {
-      try {
-        const conversation = await readSubagentConversation(client, actorId === null ? { path: [...path] } : { path: [], actor: actorId });
-
-        if (live) setSubagentChat({ name, label, messages: conversation, error: null });
-      } catch (cause) {
-        if (live) setSubagentChat({ name, label, messages: null, error: `Its conversation could not be read: ${renderThrownChain({ cause })}` });
-      }
-    })();
-
-    return () => { live = false; };
-  }, [client, subagentSurface]);
+  const subagentChat = useSubagentChat(client, subagentSurface);
 
   const openModelPicker = useCallback(async () => {
     const request = ++modelRequestRef.current;
@@ -1061,7 +944,6 @@ function ChatScene({
     switch (outcome.kind) {
       case 'text':
         if (outcome.cleared) setMessages([]);
-
 
         if (outcome.workspaces) {
           openWorkspaces();
@@ -1405,13 +1287,13 @@ function ChatScene({
 
     if (printed.success) {
       const frame = printed.output;
-      setJobTails((tails) => ({ ...tails, [frame.jobId]: followJobOutput(newerTail(tails[frame.jobId], listedTails.current[frame.jobId]), frame) }));
+      hubJobOutput(frame);
 
       return;
     }
 
     if (event.event.type === READS_CHANGED_EVENT) {
-      if (event.event.reads?.some((read) => HUB_READS.has(read)) === true) setHubReadsMoved((moves) => moves + 1);
+      hubReadsChanged(event.event.reads ?? []);
 
       return;
     }
@@ -1601,9 +1483,7 @@ function ChatScene({
       })();
     }
 
-    let task: Promise<void> | null = null;
-    let settled = false;
-    task = (async () => {
+    detach(Effect.promise(async () => {
       try {
         if (!skipHydrationRef.current) {
           try {
@@ -1652,18 +1532,9 @@ function ChatScene({
       } catch (cause) {
         if (!abort.signal.aborted) addError({ cause });
       } finally {
-        try {
-          if (replayTask) await replayTask;
-        } finally {
-          settled = true;
-
-          if (task !== null && connectionTaskRef.current === task) connectionTaskRef.current = null;
-        }
+        if (replayTask) await replayTask;
       }
-    })();
-    connectionTaskRef.current = task;
-
-    if (settled && connectionTaskRef.current === task) connectionTaskRef.current = null;
+    }));
 
     return () => {
       abort.abort();
@@ -1673,51 +1544,40 @@ function ChatScene({
 
   useEffect(() => {
     const abort = new AbortController();
-    let task: Promise<void> | null = null;
-    let settled = false;
-    task = (async () => {
-      try {
-        await Promise.all([
-          (async () => {
-            try {
-              const next = await client.status();
+    detach(Effect.promise(async () => {
+      await Promise.all([
+        (async () => {
+          try {
+            const next = await client.status();
 
-              if (abort.signal.aborted) return;
-              setStatus(next);
-              setModelSpec((current) => current || (next.model ?? ''));
-            } catch (cause) {
-              if (!abort.signal.aborted) {
-                addMessage({
-                  role: 'system',
-                  content: errorLine(`Workspace status could not be read: ${renderThrownChain({ cause })}`),
-                });
-              }
+            if (abort.signal.aborted) return;
+            setStatus(next);
+            setModelSpec((current) => current || (next.model ?? ''));
+          } catch (cause) {
+            if (!abort.signal.aborted) {
+              addMessage({
+                role: 'system',
+                content: errorLine(`Workspace status could not be read: ${renderThrownChain({ cause })}`),
+              });
             }
-          })(),
-          (async () => {
-            try {
-              const menu = await client.listModels();
+          }
+        })(),
+        (async () => {
+          try {
+            const menu = await client.listModels();
 
-              if (!abort.signal.aborted) setModelCatalog(menu.models);
-            } catch (cause) {
-              if (!abort.signal.aborted) {
-                addMessage({
-                  role: 'system',
-                  content: errorLine(`The model catalog could not be read: ${renderThrownChain({ cause })}`),
-                });
-              }
+            if (!abort.signal.aborted) setModelCatalog(menu.models);
+          } catch (cause) {
+            if (!abort.signal.aborted) {
+              addMessage({
+                role: 'system',
+                content: errorLine(`The model catalog could not be read: ${renderThrownChain({ cause })}`),
+              });
             }
-          })(),
-        ]);
-      } finally {
-        settled = true;
-
-        if (task !== null && metadataTaskRef.current === task) metadataTaskRef.current = null;
-      }
-    })();
-    metadataTaskRef.current = task;
-
-    if (settled && metadataTaskRef.current === task) metadataTaskRef.current = null;
+          }
+        })(),
+      ]);
+    }));
 
     return () => { abort.abort(); };
   }, [addMessage, client]);
@@ -2007,13 +1867,9 @@ function ChatScene({
     }
 
     if (subagentSurface !== null) {
-      const shown = subagentChat?.name === subagentSurface.path.join('/')
-        ? subagentChat
-        : { name: subagentSurface.path.join('/'), label: subagentSurface.label, messages: null, error: null };
-
       return (
         <SubagentChatOverlay
-          chat={shown}
+          chat={subagentChat ?? { name: subagentSurface.path.join('/'), label: subagentSurface.label, messages: null, error: null }}
           width={sceneWidth}
           height={height}
           scrollRef={(value) => { subagentScrollRef.current = value; }}
@@ -2234,7 +2090,6 @@ function ChatScene({
   );
 }
 
-
 function copyRefused(outcome: Extract<SlashOutcome, { kind: 'text' }>, renderer: CliRenderer): string | null {
   if (outcome.copy === undefined || renderer.copyToClipboardOSC52(outcome.copy)) return null;
 
@@ -2340,88 +2195,6 @@ function lastUrlFromMessages(messages: DisplayMessage[]): string | null {
 function welcomeMessage(agentName: string): DisplayMessage {
   return { id: 'welcome', role: 'system', content: `Connected to ${agentName}. Type a message or /help for commands.` };
 }
-
-async function loadHubData(client: AgentClient): Promise<TuiHubData> {
-  const workspace = client.agentName;
-  const [envelope, status, roster] = await Promise.all([loadActiveProfile(), client.status(), readRoster(client)]);
-  const roles = effectiveRoleCatalog(envelope.catalog);
-  const activeRoleId = status.roleId && roles[status.roleId] ? status.roleId : DEFAULT_ROLE_ID;
-  const tierId = status.tierId && tierIdsOf(envelope.catalog).includes(status.tierId) ? status.tierId : roles[activeRoleId]?.tier ?? 'default';
-
-  return {
-    agents: [{
-      id: workspace,
-      label: status.name,
-      kind: 'main',
-      status: 'idle',
-      roleId: activeRoleId,
-      tierId,
-      workspace,
-    }],
-    ...roster,
-    profile: {
-      envelope,
-      activeRoleId,
-      allowedRoleIds: Object.keys(roles),
-    },
-  };
-}
-
-async function readRoster(client: AgentClient): Promise<Pick<TuiHubData, 'subordinates' | 'subordinatesError' | 'work' | 'workError' | 'helpers'>> {
-  const [subordinates, work] = await Promise.allSettled([readSubordinates(client), client.workspaceWork()]);
-  const owners = subordinates.status === 'fulfilled' ? subordinates.value.owners : [];
-  // Each agent's own jobs, the workspace's first, each under the agent that runs it.
-  const jobs = await Promise.allSettled([client.listJobs(20), ...owners.map((owner) => client.listJobs(20, owner.name))]);
-  const jobRows = jobs.flatMap((listed, at) => (listed.status === 'fulfilled' ? jobWork(listed.value, owners[at - 1]) : []));
-  const evolution = [...jobRows, ...subordinates.status === 'fulfilled' ? subordinates.value.evolution : []];
-
-  return {
-    ...(subordinates.status === 'fulfilled'
-      ? { subordinates: subordinates.value.subordinates, helpers: subordinates.value.helpers }
-      : { subordinates: [], helpers: [], subordinatesError: `Subagents could not be read: ${renderThrownChain({ cause: subordinates.reason })}` }),
-    ...(work.status === 'fulfilled'
-      ? { work: [...workFromWorkspace(work.value), ...evolution] }
-      : { work: evolution, workError: `Work could not be read: ${renderThrownChain({ cause: work.reason })}` }),
-  };
-}
-
-/** Pages arrive newest first. */
-async function readSubagentConversation(client: AgentClient, target: { path: string[]; actor?: string }): Promise<DisplayMessage[]> {
-  const pages: DisplayMessage[][] = [];
-  let cursor: PositionCursor | undefined;
-
-  do {
-    const result = await client.inspectSubordinate({ ...target, view: 'history', page: cursor === undefined ? {} : { cursor } });
-
-    if (result.view === 'missing') throw new Error(result.error);
-
-    if (result.view !== 'history') throw new Error(`the conversation read answered "${result.view}"`);
-    pages.unshift(result.page.items.map((item) => ({ id: item.id, role: item.role, content: item.content })));
-    cursor = result.page.status === 'more' ? result.page.next : undefined;
-  } while (cursor !== undefined);
-
-  return pages.flat();
-}
-
-async function readSubordinates(client: AgentClient): Promise<Pick<TuiHubData, 'subordinates' | 'helpers'> & { evolution: TuiWorkEntry[]; owners: TuiJobOwner[] }> {
-  const entries: SubordinateChild[] = [];
-  let cursor: SeekCursor | undefined;
-
-  do {
-    const result = await client.inspectSubordinate({ path: [], view: 'children', page: cursor === undefined ? {} : { cursor } });
-
-    if (result.view !== 'children') break;
-    entries.push(...result.page.items);
-    cursor = result.page.status === 'more' ? result.page.next : undefined;
-  } while (cursor !== undefined);
-
-  const helpers = entries.flatMap((entry) => entry.lifetime === 'task' && entry.actorReference !== null
-    ? [{ name: entry.name, actorId: entry.actorReference.actorId }]
-    : []);
-
-  return { subordinates: subordinatesFromRoster(entries), helpers, evolution: evolutionWork(entries), owners: jobOwners(entries) };
-}
-
 
 export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
   requireInteractiveTerminal();

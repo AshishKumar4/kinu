@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-09",
-  "files": 3142,
-  "functions": 82472,
+  "measuredAt": "2026-10-10",
+  "files": 3165,
+  "functions": 82877,
   "ceiling": 87,
   "line": 27,
   "inventory": [
@@ -26,10 +26,6 @@
       "complexity": 42
     },
     {
-      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
-      "complexity": 41
-    },
-    {
       "key": "packages/cli/src/tui/home-app.tsx#HomeScene",
       "complexity": 41
     },
@@ -39,6 +35,10 @@
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/PlanReviewView.tsx#PlanReviewView",
+      "complexity": 40
+    },
+    {
+      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
       "complexity": 40
     },
     {
@@ -67,10 +67,6 @@
     },
     {
       "key": "packages/core/src/bench/stats.ts#pairedBinaryComparison>gen",
-      "complexity": 36
-    },
-    {
-      "key": "packages/core/src/tui/input-state.ts#reduceInput",
       "complexity": 36
     },
     {
@@ -191,6 +187,10 @@
     },
     {
       "key": "packages/core/src/feedback/png.ts#sanitizePng",
+      "complexity": 29
+    },
+    {
+      "key": "packages/core/src/tui/input-state.ts#reduceInput",
       "complexity": 29
     },
     {

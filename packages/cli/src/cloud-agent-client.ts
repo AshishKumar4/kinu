@@ -4,12 +4,13 @@ import {
   CHANGELOG_ENTRY_KINDS,
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   JsonValueSchema,
-  PlanReviewSchema,
+  PlanDecisionOutcomeSchema, PlanReviewResultSchema, PlanReviewSchema,
   AskingAgentSchema,
   ChatHistoryEntrySchema, SendStateSchema, type SendState,
   ORCHESTRATOR_AGENT_SLUG,
   hostedActorSocketPath,
   decodeJsonValue,
+  terminalChatError,
   parseJsonValue,
   type JsonObject,
   type JsonValue,
@@ -23,7 +24,7 @@ import { attempt, detach, diagnostics, renderThrownChain, settle, tolerate } fro
 import { Effect } from 'effect';
 import {
   AlternateTakeCandidateSchema, CheckpointAvailabilitySchema, FileCheckpointEntrySchema, FileRestorePlanSchema,
-  FileRestoreResultSchema, ReasoningEffortSchema, type FileCheckpointListing, type PlanReviewResult, type WorkspaceSpend,
+  FileRestoreResultSchema, ReasoningEffortSchema, type FileCheckpointListing, type WorkspaceSpend,
 } from '@kinu.run/core';
 import {
   ActivitySpendSchema,
@@ -43,7 +44,7 @@ import {
 } from './session';
 import { CloudTurnStream, jsonErrorMessage } from './cloud-turn-stream';
 import { SessionRecorder } from './session-recorder';
-import { cloudFileLinks, JobOutputFrameSchema, LIVE_READS, READS_CHANGED_EVENT, type AgentModelMenu, type AgentRpcMethod, type FileLinks } from '@kinu.run/core';
+import { cloudFileLinks, JOB_OUTPUT_EVENT, READS_CHANGED_EVENT, WorkspaceBroadcastSchema, type WorkspaceBroadcast, type AgentModelMenu, type AgentRpcMethod, type FileLinks } from '@kinu.run/core';
 import { hostedWindowCalls, positionPageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, WorkspaceWorkSchema, type WorkspaceWork, type SubordinateInspectionRequest, type SubordinateInspectionResult } from '@kinu.run/core';
 import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, EvolutionConfigView, ReasoningEffort, TakePickOutcome } from '@kinu.run/core';
 import {
@@ -99,11 +100,6 @@ const FileCheckpointListingSchema: v.GenericSchema<FileCheckpointListing> = v.ob
 
 /** Core's own `PlanReviewSchema`, so a forged annotation cannot arrive by a route the workspace UI lacks. */
 const CloudPlanReviewSchema = v.nullable(PlanReviewSchema);
-
-const CloudPlanReviewResultSchema: v.GenericSchema<unknown, PlanReviewResult> = v.variant('ok', [
-  v.object({ ok: v.literal(true), plan: PlanReviewSchema }),
-  v.object({ ok: v.literal(false), error: v.string(), plan: CloudPlanReviewSchema }),
-]);
 
 const CloudChatPageSchema = positionPageSchema(ChatHistoryEntrySchema);
 
@@ -253,6 +249,8 @@ const SocketFrameSchema = v.objectWithRest({
   body: v.optional(v.string()),
   done: v.optional(v.boolean()),
   landed: v.optional(v.picklist(['mid-turn', 'turn'])),
+  /** Set only when the workspace refused the request at its door: it was never admitted as a turn. */
+  reason: v.optional(v.string()),
 }, JsonValueSchema);
 
 type SocketFrame = v.InferOutput<typeof SocketFrameSchema>;
@@ -263,30 +261,17 @@ interface SendEnd {
   readonly answer: string | null;
 }
 
-const BranchStatusEventSchema = v.variant('status', [
-  v.object({
-    type: v.literal('branch_status'), status: v.literal('running'), branchId: v.string(), task: v.string(),
-  }),
-  v.object({
-    type: v.literal('branch_status'), status: v.literal('settled'), branchId: v.string(), task: v.string(),
-    takeSetId: v.string(), turnId: v.string(),
-  }),
-  v.object({
-    type: v.literal('branch_status'), status: v.literal('error'), branchId: v.string(), task: v.string(),
-    message: v.optional(v.string(), 'branch failed'),
-  }),
-]);
-
 /** The executors read as chat links need it: a device fleet's live machines, by the segment each mounts under. */
 const ExecutorMountsSchema = v.array(v.object({ mounts: v.optional(v.array(v.string())) }));
 
-const BroadcastFrameSchema = v.union([
-  BranchStatusEventSchema,
-  v.object({ type: v.literal(READS_CHANGED_EVENT), reads: v.array(v.picklist(LIVE_READS)) }),
-  JobOutputFrameSchema,
-  v.object({ type: v.literal('model_fallback'), message: v.string() }),
-  v.object({ type: v.literal('context_fill'), contextTokens: v.optional(v.number()), contextWindow: v.optional(v.number()) }),
-]);
+/** The workspace's broadcasts the terminal renders; a hosted actor's stamped frames and the browser's panels are not. */
+const RENDERED_BROADCASTS = ['branch_status', READS_CHANGED_EVENT, JOB_OUTPUT_EVENT, 'model_fallback', 'context_fill', 'plan_updated'] as const;
+
+type RenderedBroadcast = Extract<WorkspaceBroadcast, { type: typeof RENDERED_BROADCASTS[number] }>;
+
+function rendered(frame: WorkspaceBroadcast): frame is RenderedBroadcast {
+  return RENDERED_BROADCASTS.some((type) => type === frame.type);
+}
 
 interface CloudAgentClientOptions {
   origin: string;
@@ -383,14 +368,14 @@ export class CloudAgentClient implements AgentClient {
     this.plans = subordinateName ? null : {
       active: async () => v.parse(CloudPlanReviewSchema, await this.callRpc('getActivePlanReview', [])),
       saveAnnotations: async (id, revision, annotations) => v.parse(
-        CloudPlanReviewResultSchema,
+        PlanReviewResultSchema,
         await this.callRpc('savePlanReviewAnnotations', [id, revision, v.parse(JsonValueSchema, annotations)]),
       ),
       decide: async (id, revision, decision, feedback) => v.parse(
-        CloudPlanReviewResultSchema,
+        PlanDecisionOutcomeSchema,
         await this.callRpc('decidePlanReview', [id, revision, decision, feedback ?? null]),
       ),
-      dismiss: async (id, revision) => v.parse(CloudPlanReviewResultSchema, await this.callRpc('dismissPlanReview', [id, revision])),
+      dismiss: async (id, revision) => v.parse(PlanReviewResultSchema, await this.callRpc('dismissPlanReview', [id, revision])),
     };
   }
 
@@ -494,8 +479,8 @@ export class CloudAgentClient implements AgentClient {
 
     const requestId = randomRequestId();
 
-    return await new Promise<AgentSendResult>((resolve) => {
-      const turn = new CloudTurnStream((event) => this.emit(event), resolve, { deferStart: steered ? text : null });
+    return await new Promise<AgentSendResult>((resolve, reject) => {
+      const turn = new CloudTurnStream((event) => this.emit(event), { resolve, reject }, { deferStart: steered ? text : null });
       this.activeTurns.set(requestId, turn);
 
       try {
@@ -521,9 +506,9 @@ export class CloudAgentClient implements AgentClient {
 
         ws.send(JSON.stringify(request));
       } catch (err) {
+        // The request never left: a failed send, not a turn that failed.
         this.activeTurns.delete(requestId);
-        this.emit({ type: 'error', message: renderThrownChain({ cause: err }) });
-        turn.settle(true);
+        turn.refused(renderThrownChain({ cause: err }));
       }
     });
   }
@@ -984,7 +969,7 @@ export class CloudAgentClient implements AgentClient {
   }
 
   /** A broadcast that moved the executors is reported once the machines are re-read, so its hearer renders their links. */
-  private reportBroadcast(frame: v.InferOutput<typeof BroadcastFrameSchema>): void {
+  private reportBroadcast(frame: RenderedBroadcast): void {
     if (frame.type !== READS_CHANGED_EVENT || !frame.reads.includes('getExecutors')) {
       this.emit({ type: 'broadcast', event: frame });
 
@@ -1019,10 +1004,10 @@ export class CloudAgentClient implements AgentClient {
       return;
     }
 
-    const broadcast = v.safeParse(BroadcastFrameSchema, payload);
+    const broadcast = v.safeParse(WorkspaceBroadcastSchema, payload);
 
     if (broadcast.success) {
-      this.reportBroadcast(broadcast.output);
+      if (rendered(broadcast.output)) this.reportBroadcast(broadcast.output);
 
       return;
     }
@@ -1039,6 +1024,15 @@ export class CloudAgentClient implements AgentClient {
       this.activeTurns.delete(id);
       const body = payload.body ?? '';
       const message = body === '' ? 'Cloud agent stream failed.' : body;
+      const ended = terminalChatError({ type: payload.type, error: true, done: payload.done, body: payload.body, reason: payload.reason });
+
+      // Refused at the door, the send was never admitted: it fails as a send, and no turn is said to have run.
+      if (ended?.refused === true) {
+        active.refused(message);
+
+        return;
+      }
+
       this.emit({ type: 'error', message });
       active.settle(true);
 

@@ -12,7 +12,7 @@ import {
 } from "@/lib/drive-api";
 import { revokeShare } from "@/lib/shared-api";
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
-import { useWorkspaceRpc } from "@/hooks/use-kinu";
+import { useWorkspaceRpc } from "@/hooks/use-chat-owner";
 import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { FilledButton } from "@/components/ui/FilledButton";

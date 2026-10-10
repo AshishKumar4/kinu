@@ -314,6 +314,7 @@ export function userAccount<Built extends Partial<UserRoutesAuthority>>(
     releaseWorkspaceReservation: refuse('releaseWorkspaceReservation'),
     ensureWorkspaceCapability: refuse('ensureWorkspaceCapability'),
     listDevices: refuse('listDevices'),
+    issueDeviceJoin: refuse('issueDeviceJoin'),
     acknowledgeUnstoppedDevice: refuse('acknowledgeUnstoppedDevice'),
     revokeDevice: refuse('revokeDevice'),
     renameDevice: refuse('renameDevice'),

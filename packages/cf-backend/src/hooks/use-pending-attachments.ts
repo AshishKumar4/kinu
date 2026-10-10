@@ -4,9 +4,9 @@
  */
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { convertFileListToFileUIParts, type FileUIPart } from "ai";
-import { dataUrlRawBytes } from "@/components/AttachmentChip";
-import { Cause, Effect, type Exit } from "effect";
-import { diagnostics, hold, renderThrownChain } from "@kinu.run/core/obs";
+import { dataUrlRawBytes } from "@kinu.run/core";
+import { Cause, Effect } from "effect";
+import { detach, diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 
 interface AttachmentAdmission {
   readonly parts: readonly FileUIPart[];
@@ -93,10 +93,6 @@ export interface PendingAttachments {
   readonly clear: () => void;
 }
 
-interface ConversionTask {
-  promise: Promise<Exit.Exit<void>> | null;
-}
-
 export function usePendingAttachments(limitBytes: number): PendingAttachments {
   const [state, dispatch] = useReducer(
     (current: State, action: Action) => reduce(current, action, limitBytes),
@@ -104,10 +100,8 @@ export function usePendingAttachments(limitBytes: number): PendingAttachments {
   );
 
   const conversionGeneration = useRef(0);
-  const nextConversionTaskId = useRef(0);
   // Each drop's offer waits for the one dropped before it: the cap keeps what came first, not what read first.
   const lastOffer = useRef<Promise<void>>(Promise.resolve());
-  const conversionTasks = useRef(new Map<number, ConversionTask>());
   useEffect(() => () => {
     conversionGeneration.current += 1;
   }, []);
@@ -126,14 +120,11 @@ export function usePendingAttachments(limitBytes: number): PendingAttachments {
 
     // Materialize now: FileList empties when the input is cleared, dataTransfer when the handler returns.
     const generation = conversionGeneration.current;
-    const taskId = ++nextConversionTaskId.current;
-    const owner: ConversionTask = { promise: null };
-    conversionTasks.current.set(taskId, owner);
     const before = lastOffer.current;
     let offered = (): void => {};
 
     lastOffer.current = new Promise((resolve) => { offered = resolve; });
-    owner.promise = hold(Effect.gen(function* () {
+    detach(Effect.gen(function* () {
       const thrown = yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
         const transfer = new DataTransfer();
 
@@ -146,8 +137,6 @@ export function usePendingAttachments(limitBytes: number): PendingAttachments {
         return null;
       }), (failed) => Effect.succeed({ cause: Cause.squash(failed) })), Effect.sync(() => {
         offered();
-
-        if (conversionTasks.current.get(taskId) === owner) conversionTasks.current.delete(taskId);
       }));
 
       if (thrown === null || generation !== conversionGeneration.current) return;
