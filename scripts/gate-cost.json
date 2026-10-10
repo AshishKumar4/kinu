@@ -1004,6 +1004,17 @@
       "samples": 513,
       "loadAtStart": 1.05,
       "exit": 0
+    },
+    "bun test --timeout=0 tests/browser/live-app-root-turn.test.ts": {
+      "wallSeconds": 144.35,
+      "cpuSeconds": 331.25,
+      "peakRssMb": 5007.2,
+      "peakRunnable": 20,
+      "peakCpuThreads": 4.41,
+      "meanThreads": 2.29,
+      "samples": 517,
+      "loadAtStart": 0.38,
+      "exit": 0
     }
   }
 }
