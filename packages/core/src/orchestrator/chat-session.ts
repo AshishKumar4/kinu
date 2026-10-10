@@ -568,7 +568,8 @@ export class ChatSession {
 
     if (item.idempotencyKey === undefined) return;
 
-    if (item.kind === 'programmatic') this.pendingSends.retireTurn(item.idempotencyKey);
+    // A closed session's store may be gone with it: the turn stays owed there, and the next process settles it.
+    if (item.kind === 'programmatic' && !this.ended) this.pendingSends.retireTurn(item.idempotencyKey);
     const result = settledAnnouncement(failure, yielded, abandoned);
 
     for (const joined of this.joiners.get(item.idempotencyKey) ?? []) joined(result);
