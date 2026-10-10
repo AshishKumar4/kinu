@@ -130,9 +130,14 @@ try {
 
   const result = labels.map((label) => {
     const rows = measured.filter((sample) => sample.label === label);
-    const cpuSamples = rows.map((sample) => cpu.filter((event) => event.at >= sample.startedAt && event.at <= sample.endedAt).reduce((sum, event) => sum + event.ms, 0));
 
-    return { label, samples: rows.length, wallP50Ms: quantile(rows.map((sample) => sample.wallMs), 0.5), wallP95Ms: quantile(rows.map((sample) => sample.wallMs), 0.95), rootDoCpuP50Ms: ids.length === 0 ? null : quantile(cpuSamples, 0.5), rootDoCpuP95Ms: ids.length === 0 ? null : quantile(cpuSamples, 0.95) };
+    const cpuSamples = rows.flatMap((sample) => {
+      const events = cpu.filter((event) => event.at >= sample.startedAt && event.at <= sample.endedAt);
+
+      return events.length === 0 ? [] : [events.reduce((sum, event) => sum + event.ms, 0)];
+    });
+
+    return { label, samples: rows.length, wallP50Ms: quantile(rows.map((sample) => sample.wallMs), 0.5), wallP95Ms: quantile(rows.map((sample) => sample.wallMs), 0.95), rootCpuMatchedSamples: cpuSamples.length, rootDoCpuP50Ms: telemetry.sampling === 1 ? quantile(cpuSamples, 0.5) : null, rootDoCpuP95Ms: telemetry.sampling === 1 ? quantile(cpuSamples, 0.95) : null };
   });
 
   process.stdout.write(JSON.stringify({ event: 'staging-measurement', sha: health.build.sha, workspace: session.workspace, boundary: 'public raw-file HTTP and public terminal RPC; not native file/shell tools', startedAt: allStarted, endedAt: ended, cpuSampling: telemetry.sampling, rootDoIds: ids, rootCpuEvents: cpu.length, measured: result }) + '\n');

@@ -47,7 +47,7 @@ const CutSchema = v.object({ workspace: SliceSchema, facet: v.nullable(SliceSche
 
 const TraceSchema = v.object({
   entrypoint: v.nullable(v.string()), object: v.nullable(v.string()), cpuMs: v.number(), wallMs: v.number(), outcome: v.string(),
-  script: v.nullable(v.string()), event: v.nullable(v.looseObject({ rpcMethod: v.optional(v.string()) })),
+  script: v.nullable(v.string()), event: v.nullable(v.looseObject({ rpcMethod: v.optional(v.string()), rpcMethods: v.optional(v.array(v.string())) })),
 });
 
 const traceRows: v.InferOutput<typeof TraceSchema>[] = [];
@@ -332,7 +332,7 @@ const mf = new Miniflare(convertV4MiniflareOptions({
     name: 'perf-tail', ...compat, modules: [{ type: 'ESModule', path: join(dist, 'perf-tail.js'), contents: await bundle('tail.ts') }],
     serviceBindings: { SINK: async (request: Request) => {
       const events = v.parse(v.array(TraceSchema), await request.json());
-      traceRows.push(...events.filter((event) => event.entrypoint === 'OrchestratorAgent' && event.event?.rpcMethod === 'perfTool'));
+      traceRows.push(...events.filter((event) => event.event?.rpcMethod === 'perfTool' || event.event?.rpcMethods?.includes('perfTool')));
 
       for (const waiter of traceWaiters.filter((entry) => entry.count <= traceRows.length)) {
         traceWaiters.splice(traceWaiters.indexOf(waiter), 1);
