@@ -14,6 +14,10 @@ import { pricingTreatments } from './pricing-treatments';
 // the plan comes last, as the review it leaves pending would hold any later turn.
 await defineTaskEval(defineEvalTask({
   id: 'office',
+  modelCallPeak: {
+    calls: 2,
+    source: "Armada job20261009230611-39f29c69 candidate office-trial-2/ledger.jsonl: peak2 Muse model_operation overlap, paired by runId+operationId and fenced at recorded run_end; maximum across13 retained office trials.",
+  },
   mission: "Juniper Row's back office. We run two bakery shops and the Tern Street deli, take deliveries through the "
     + 'Harbor Freight co-op, sell Lumen Notes, an app whose payments API we keep on call, and plan the team offsites. '
     + 'Files, books, prices and the codes we keep land here.',
