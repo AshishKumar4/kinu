@@ -4680,13 +4680,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    *  tool call after it, while the turns it stops still close and hand off here. */
   private readonly admitting = new AbortController();
 
-  /** Refuses new work for an agent once a deletion's quiet began. */
+  /** Refuses new work for an agent once a deletion's quiet began, with the refusal the quiet aborted with. */
   private admitWork(): void {
-    if (this.admitting.signal.aborted) throw new KinuError('missing', 'This workspace is being deleted.');
+    this.admitting.signal.throwIfAborted();
   }
 
   private async quietAgents(): Promise<void> {
-    if (!this.admitting.signal.aborted) this.admitting.abort();
+    if (!this.admitting.signal.aborted) this.admitting.abort(new KinuError('missing', 'This workspace is being deleted.'));
     // An object that opened no isolate (one never claimed among them) has no main to stop here.
     const main = this.openedIsolates.size === 0 ? null : this.actorHandle().actorId;
 

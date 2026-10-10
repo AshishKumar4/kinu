@@ -7,7 +7,7 @@ import { admitReviewAnnotations, DiffAnchorSchema } from '../plans/annotation-ad
 import { parseJsonObject, type JsonObject } from '../utils/json';
 import { comparePaths } from './change-view';
 import { KinuError, toKinuError } from '../obs/index';
-import { settle } from '../obs/effect';
+import { attemptInItsWords, settle } from '../obs/effect';
 
 const CHANGE_NOTES_EVENT = 'change_notes';
 
@@ -257,7 +257,7 @@ export function sendChangeNotes(rt: NotesRuntime, set: { value: unknown }, deliv
       void rt.storage.sql`INSERT INTO change_notes_outbox (actor_id, id, source, notes_json, text, metadata_json)
         VALUES (${rt.actor.actorId}, ${message.id}, ${source}, ${kept.json}, ${message.text}, ${JSON.stringify(message.metadata)})`;
     });
-    yield* Effect.promise(async () => deliverOwed(rt, { message, source, json: kept.json }, deliver));
+    yield* deliverOwed(rt, { message, source, json: kept.json }, deliver);
 
     return { ok: true, notes: [] } satisfies ChangeNotesResult;
   }));
@@ -271,21 +271,20 @@ interface OwedChangeNotes {
 
 /** One owed delivery: held, it is no longer owed; refused at the chat's door, its notes are a draft again unless a
  *  newer draft took their place; failed in transit, it stays owed and the failure is its caller's. */
-async function deliverOwed(rt: NotesRuntime, owed: OwedChangeNotes, deliver: DeliverChangeNotes): Promise<void> {
-  try {
-    await deliver(owed.message);
-  } catch (failure) {
-    if (!(failure instanceof KinuError) || failure.code !== 'bad_input') throw failure;
-    rt.storage.transactionSync(() => {
-      void rt.storage.sql`INSERT OR IGNORE INTO change_notes (actor_id, source, notes_json)
-        VALUES (${rt.actor.actorId}, ${owed.source}, ${owed.json})`;
+function deliverOwed(rt: NotesRuntime, owed: OwedChangeNotes, deliver: DeliverChangeNotes): Effect.Effect<void, KinuError> {
+  return attemptInItsWords('unavailable', () => deliver(owed.message)).pipe(
+    Effect.tapError((failure) => Effect.sync(() => {
+      if (failure.code !== 'bad_input') return;
+      rt.storage.transactionSync(() => {
+        void rt.storage.sql`INSERT OR IGNORE INTO change_notes (actor_id, source, notes_json)
+          VALUES (${rt.actor.actorId}, ${owed.source}, ${owed.json})`;
+        void rt.storage.sql`DELETE FROM change_notes_outbox WHERE actor_id = ${rt.actor.actorId} AND id = ${owed.message.id}`;
+      });
+    })),
+    Effect.andThen(() => Effect.sync(() => {
       void rt.storage.sql`DELETE FROM change_notes_outbox WHERE actor_id = ${rt.actor.actorId} AND id = ${owed.message.id}`;
-    });
-
-    throw failure;
-  }
-
-  void rt.storage.sql`DELETE FROM change_notes_outbox WHERE actor_id = ${rt.actor.actorId} AND id = ${owed.message.id}`;
+    })),
+  );
 }
 
 /** Whether notes taken from a draft still wait for the chat to hold them. */
@@ -295,17 +294,17 @@ export function owesChangeNotes(rt: NotesRuntime): boolean {
 
 /** Sends again, in the order they were taken, the notes a process took and did not live to see held. A failure leaves
  *  its notes owed for the next pass and is reported; the rest still go. */
-export async function deliverOwedChangeNotes(rt: NotesRuntime, deliver: DeliverChangeNotes, failed: (cause: KinuError) => void): Promise<void> {
-  const owed = rt.storage.sql<{ id: string; source: string; notes_json: string; text: string; metadata_json: string }>`
-    SELECT id, source, notes_json, text, metadata_json FROM change_notes_outbox WHERE actor_id = ${rt.actor.actorId} ORDER BY seq ASC`;
+export function deliverOwedChangeNotes(rt: NotesRuntime, deliver: DeliverChangeNotes, failed: (cause: KinuError) => void): Promise<void> {
+  return settle(Effect.gen(function* () {
+    const owed = rt.storage.sql<{ id: string; source: string; notes_json: string; text: string; metadata_json: string }>`
+      SELECT id, source, notes_json, text, metadata_json FROM change_notes_outbox WHERE actor_id = ${rt.actor.actorId} ORDER BY seq ASC`;
 
-  for (const row of owed) {
-    const message: ChangeNotesMessage = { id: row.id, text: row.text, metadata: parseJsonObject(row.metadata_json) };
+    for (const row of owed) {
+      const message: ChangeNotesMessage = { id: row.id, text: row.text, metadata: parseJsonObject(row.metadata_json) };
 
-    try {
-      await deliverOwed(rt, { message, source: row.source, json: row.notes_json }, deliver);
-    } catch (cause) {
-      failed(toKinuError({ doing: 'sending change notes the chat does not hold yet', cause, otherwise: 'unavailable' }));
+      yield* deliverOwed(rt, { message, source: row.source, json: row.notes_json }, deliver).pipe(Effect.catch((cause) => Effect.sync(() => {
+        failed(toKinuError({ doing: 'sending change notes the chat does not hold yet', cause, otherwise: 'unavailable' }));
+      })));
     }
-  }
+  }));
 }

@@ -110,7 +110,7 @@ test('words sent while a deletion waits for the root to close are refused, and s
   const refused: string[] = [];
 
   const { asked } = await deletedDuringNaming(async (workspace) => {
-    const [sent] = await Promise.allSettled([workspace.agent.harnessAdmitMain('Also archive the old ledger.', crypto.randomUUID(), undefined)]);
+    const [sent] = await Promise.allSettled([workspace.agent.send('Also archive the old ledger.', crypto.randomUUID(), [])]);
 
     if (sent.status === 'rejected') refused.push(String(sent.reason));
   });
