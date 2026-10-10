@@ -7,6 +7,13 @@ import { CHAT_SESSION_ID, SessionHistory, WorkspaceActorDirectory, type JsonObje
 import { seedTranscriptEntry } from '@kinu.run/test-utils/transcript';
 import { AgentFacet as ShippedAgentFacet } from '../../src/agent-facet/agent-facet';
 import { meterInPlace, type OperationCost, type SqlMeter } from './sql-meter';
+import { Crossings } from './crossings';
+
+/** The calls the workspace makes into main's isolate while the meter runs. */
+const crossings = new Crossings();
+
+/** Each facet call counted once: the isolate is cached by id, so its class serves every activation. */
+let counting = false;
 
 /** An entry of main's conversation as a dead activation left it. */
 export interface SeededEntry {
@@ -31,15 +38,19 @@ export class AgentFacet extends ShippedAgentFacet {
     this.unmetered = metered.unmetered;
   }
 
-  async meterBegin(): Promise<void> {
+  /** `calls` are the facet's calls as the workspace makes them (`AgentFacetCalls`), each counted as it lands. */
+  async meterBegin(calls: readonly string[]): Promise<void> {
+    if (!counting) crossings.count(ShippedAgentFacet, 'facet', calls);
+    counting = true;
     this.meter.begin();
+    crossings.begin();
   }
 
   /** Read once this isolate is idle, so the turn's tail here counts on every run. */
-  async meterEnd(): Promise<OperationCost> {
-    await this.idle();
+  async meterEnd(): Promise<{ readonly cost: OperationCost; readonly crossings: Record<string, number> }> {
+    await crossings.aside(() => this.idle());
 
-    return this.meter.end(null);
+    return { cost: this.meter.end(null), crossings: crossings.end() };
   }
 
   /** `query` over this agent's own SQLite: its rows for a read, none for a statement. */

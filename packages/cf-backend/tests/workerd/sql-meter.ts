@@ -240,3 +240,11 @@ export function meterInPlace(sql: SqlStorage) {
 
   return { meter, unmetered };
 }
+
+/** A metered turn: statements in the workspace and in main's isolate, transcript reads, and the calls that crossed into each. */
+export interface MeteredTurn {
+  readonly workspace: OperationCost;
+  readonly main: OperationCost;
+  readonly historyReads: number;
+  readonly crossings: { readonly workspace: Readonly<Record<string, number>>; readonly main: Readonly<Record<string, number>> };
+}

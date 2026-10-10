@@ -15,6 +15,7 @@ import { env } from 'cloudflare:workers';
 import { afterAll, expect, test } from 'vitest';
 import type { ComplexityProbeDO, OperationCost } from './complexity-probe';
 import { judge, steepest, type GrowthClass, type GrowthCounter, type GrowthFinding } from './growth';
+import { crossingTotal } from '../crossings';
 
 type Probe = DurableObjectStub<ComplexityProbeDO>;
 
@@ -322,6 +323,38 @@ test('a production turn runs no more statements than it was measured at, and ask
     expect(total.schema).toBe(0);
     expect(total.workspace + total.main, `${String(total.workspace)} in the workspace, ${String(total.main)} in main's isolate`).toBeLessThanOrEqual(TURN_STATEMENTS);
   }
+});
+
+/**
+ * A task turn's calls across an isolate or object boundary, counted where each lands: the relay main's isolate calls
+ * into, the workspace host that call opens and calls, the account, and main's isolate the workspace calls into (D9).
+ * A one-step turn is its open, its close and a step; a step is the slope from it to a four-step turn. Measured
+ * 2026-10-10 at b32ef0a7e (lane 6a52bffb0): 111 and 157, so 15.3 a step; before the isolate (d05ff368d, the perf probe)
+ * a steady step crossed once. Design v2 §8 targets 3 a tool step (up `step`, the down grant, up `executeTool`); each
+ * fold lowers these to what it measured.
+ */
+const TURN_CROSSINGS = 111;
+
+const FOUR_STEP_CROSSINGS = 157;
+
+test("a task turn crosses between the workspace and main's isolate no more than it was measured to", async () => {
+  // One after the other: the worker counts the calls landing in it, whichever workspace they are for.
+  const crossingsOf = async (steps: number) => await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName(`crossings-${String(steps)}`)).turnCrossings(steps);
+  const one = await crossingsOf(1);
+  const four = await crossingsOf(4);
+  const total = (turn: typeof one) => crossingTotal(turn.crossings.workspace) + crossingTotal(turn.crossings.main);
+  const step = (total(four) - total(one)) / 3;
+
+  reports.push([
+    `complexity: a task turn's crossings: one step ${String(total(one))} (at most ${String(TURN_CROSSINGS)}), four steps `
+      + `${String(total(four))} (at most ${String(FOUR_STEP_CROSSINGS)}), so ${step.toFixed(1)} a step`,
+    `  one step, into the workspace: ${JSON.stringify(one.crossings.workspace)}`,
+    `  one step, into main's isolate: ${JSON.stringify(one.crossings.main)}`,
+    `  four steps, into the workspace: ${JSON.stringify(four.crossings.workspace)}`,
+    `  four steps, into main's isolate: ${JSON.stringify(four.crossings.main)}`,
+  ].join('\n'));
+  expect(total(one)).toBeLessThanOrEqual(TURN_CROSSINGS);
+  expect(total(four)).toBeLessThanOrEqual(FOUR_STEP_CROSSINGS);
 });
 
 // Runs after the subjects: the orchestrator subject fills `transportReads`.

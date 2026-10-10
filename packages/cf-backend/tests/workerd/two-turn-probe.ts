@@ -7,6 +7,7 @@
 import { Agent, getAgentByName, getCurrentAgent, type AgentContext } from 'agents';
 import { subscribe } from 'agents/observability';
 import * as v from 'valibot';
+import { Effect } from 'effect';
 import {
   HOSTED_ACTOR_ID_HEADER, SLEEP_TIME_CADENCE, TerminalEffectInterrupt, hostedActorSocketPath, JsonValueSchema,
   type SlateAnswer, type TerminalEffectName, type TerminalEffectPhase,
@@ -23,7 +24,12 @@ import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestra
 import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB } from '../../src/wake-jobs';
 import { ROOT_SLATE_CALLER } from '../../src/slates/bindings';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
-import { meterInPlace, type OperationCost, type SqlMeter } from './sql-meter';
+import { meterInPlace, type MeteredTurn, type SqlMeter } from './sql-meter';
+import { Crossings, type CountedClass } from './crossings';
+import { AgentWorkspaceHost, AgentWorkspaceRPC } from '../../src/agent-facets';
+import { agentCallsThrough } from '../../src/dynamic-worker-slots';
+import { UserDO } from '../../src/user/user-do';
+import { USER_DO_RPC_SURFACE } from '../../src/rpc-surface';
 import type { AgentFacet as ProbeAgentFacet, SeededEntry } from './two-turn-probe-agent';
 import type {
   AgentLogEvent,
@@ -131,6 +137,26 @@ async function awaitSettled(target: { settleState(): Promise<SettleState> }): Pr
 
 /** The production orchestrator plus fixture reads; adds no production method or state,
  *  only retains DurableObjectState to observe the durable send ledger. */
+/**
+ * Calls into this worker while the meter runs: the relay main's isolate calls, the workspace host each relay call opens
+ * and calls, and the account. Counted once per worker, for the one workspace a meter runs over.
+ */
+const crossings = new Crossings();
+
+/** The facet's calls as the workspace makes them. */
+const FACET_CALLS = Object.keys(agentCallsThrough(() => Effect.die('names only')));
+
+/** A class's own calls, its constructor and the members it keeps to itself left out. */
+function callsOf(owner: CountedClass, internal: readonly string[]): string[] {
+  return Object.getOwnPropertyNames(owner.prototype).filter((name) => name !== 'constructor' && !internal.includes(name));
+}
+
+crossings.count(AgentWorkspaceRPC, 'relay', callsOf(AgentWorkspaceRPC, ['host', 'owned']));
+
+crossings.count(AgentWorkspaceHost, 'host', callsOf(AgentWorkspaceHost, ['open']));
+
+crossings.count(UserDO, 'account', USER_DO_RPC_SURFACE);
+
 export class ObservedOrchestrator extends ProductionOrchestrator {
   private readonly actorState: AgentContext;
   private readonly meter: SqlMeter;
@@ -419,14 +445,16 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   async meterBegin(): Promise<void> {
     const main = await this.agentFacetOf<ProbeAgentFacet>(this.actorHandle().actorId);
 
-    await main.meterBegin();
+    await main.meterBegin(FACET_CALLS);
     this.meteredMain = main;
     this.meter.begin();
+    crossings.begin();
     this.historyReads = 0;
   }
 
-  /** The workspace's statements and those of main's isolate, which keeps its model loop, transcript, claims and runs (D9). */
-  async meterEnd(): Promise<{ workspace: OperationCost; main: OperationCost; historyReads: number }> {
+  /** The workspace's statements and those of main's isolate, which keeps its model loop, transcript, claims and runs (D9),
+   *  and the calls that crossed into each. */
+  async meterEnd(): Promise<MeteredTurn> {
     const historyReads = this.historyReads ?? 0;
     const main = this.meteredMain;
 
@@ -435,8 +463,17 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
 
     if (main === null) throw new Error('the meter was not started');
     const workspace = this.meter.end(null);
+    const intoWorkspace = crossings.end();
+    const measuredMain = await main.meterEnd();
 
-    return { workspace, main: await main.meterEnd(), historyReads };
+    return { workspace, main: measuredMain.cost, historyReads, crossings: { workspace: intoWorkspace, main: measuredMain.crossings } };
+  }
+
+  /** Each relay call opens the workspace's host: a crossing of its own. */
+  override agentWorkspace(actorId: string): AgentWorkspaceHost {
+    crossings.crossed('workspace.agentWorkspace');
+
+    return super.agentWorkspace(actorId);
   }
 
   private countedWire: ChatWire | null = null;
@@ -991,7 +1028,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
   /** A 500-delta turn after twenty answers of `priorDeltas` deltas, counted in the production orchestrator's own
    *  SQLite, in main's isolate's and in transcript reads, from enqueue to its sleep-time settle. */
-  async longTurnCost(priorDeltas: number): Promise<{ workspace: OperationCost; main: OperationCost; historyReads: number }> {
+  async longTurnCost(priorDeltas: number): Promise<MeteredTurn> {
     const workspace = `long-cost-${String(priorDeltas)}-${crypto.randomUUID()}`;
     const target: QueueTarget = await this.queueTarget(workspace);
     const caller = await ownerCaller(this.env);
@@ -1028,6 +1065,42 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     const lost = recording.of(workspace).filter((event) => event.event === 'memory.fact_compression_failed');
 
     if (lost.length > 0) throw new Error(`long cost: the AI binding lost ${String(lost.length)} call(s): ${lost[0]?.cause ?? ''}`);
+
+    return await target.meterEnd();
+  }
+
+  /**
+   * A task turn of `steps` tool steps after one of the same shape, its calls counted into the workspace and into main's
+   * isolate from enqueue to its sleep-time settle: the window the statement count is taken over.
+   */
+  async turnCrossings(steps: number): Promise<MeteredTurn> {
+    const workspace = `crossings-${String(steps)}-${crypto.randomUUID()}`;
+    const target: QueueTarget = await this.queueTarget(workspace);
+    const caller = await ownerCaller(this.env);
+    const userDO = this.env.UserDO.get(this.env.UserDO.idFromName('crossings-owner'));
+    await userDO.registerWorkspace(caller, workspace, 'Crossings');
+    const claim = await target.claimOwner('crossings-owner');
+    await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
+    await userDO.setCredential(caller, 'openai-compat.default', {
+      kind: 'openai-compat', baseURL: 'http://fake-models.invalid/v1', apiKey: 'probe-fixture-key',
+    });
+    await target.setModel('openai-compat/probe-steps');
+    await this.httpReset();
+    const recording = createWorkspaceRecording();
+    setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
+
+    // The first turn opens main's isolate and fills the account's caches: a cost of the workspace's first turn, not of a turn.
+    const first = await target.runTaskFromMcp(`steps:${String(steps)}`);
+
+    if (first.status !== 'queued') throw new Error(`crossings: first turn ${JSON.stringify(first)}`);
+    await awaitSleepTimeSettled(recording, workspace, 1);
+    await awaitSettled(target);
+    await target.meterBegin();
+    const measured = await target.runTaskFromMcp(`steps:${String(steps)}`);
+
+    if (measured.status !== 'queued') throw new Error(`crossings: measured turn ${JSON.stringify(measured)}`);
+    await awaitSleepTimeSettled(recording, workspace, 2);
+    await awaitSettled(target);
 
     return await target.meterEnd();
   }
