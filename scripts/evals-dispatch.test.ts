@@ -1,79 +1,160 @@
-import { beforeAll, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+// The existing dispatch suite now exercises native armada dispatch; no GitHub implementation or shim remains.
+import { describe, expect, test } from 'bun:test';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { childEnv, runToExit, scratchDir } from '@kinu.run/test-utils';
+import { scratchDir } from '@kinu.run/test-utils';
+import { EVAL_TASK_TIMEOUT_SECONDS, MUSE_CALLS_AT_ONCE, evalMatrix } from '../evals/src/config';
+import { collectEvalTasks } from '../evals/src/eval';
+import { parseResults, trials } from '../evals/src/results';
+import { whyIncomplete } from '../evals/src/comparison';
+import { evalItems, evalMapArgv, evalTaskFiles, evalWidthQueues } from './evals-map';
+import { joinTrialReports, selectTrialReport, type TrialItem } from './evals-artifacts';
+import { ciVerdictRow } from './ci-verdicts';
 
-const SCRIPT = join(import.meta.dir, 'evals-dispatch.ts');
+const MATRIX = evalMatrix({ KINU_EVAL_TRIALS: '2' }, ['product']);
 
-/** A git that reads no config but the fixture's: no hooks, no signing, no ambient identity. */
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  const run = await runToExit([
-    'git', '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', '-c', 'user.name=fixture', '-c', 'user.email=fixture@kinu.run', ...args,
-  ], { cwd, env: childEnv({ GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }) });
+const ORIGINS = [{ leg: 'candidate', origin: 'https://staging.kinu.run' }, { leg: 'baseline', origin: 'https://kinu.run' }] as const;
 
-  if (run.exitCode !== 0) throw new Error(`git ${args.join(' ')}: ${run.stderr}`);
+const ITEMS = evalItems(['evals/tasks/chess.eval.ts', 'evals/tasks/swarm.eval.ts'], MATRIX, ORIGINS, false);
 
-  return run.stdout.trim();
+function caseReport(item: TrialItem, status = 'passed') {
+  return {
+    name: `/repo/evals/tasks/${item.task}.eval.ts`, startTime: 100, endTime: 200,
+    assertionResults: [{ title: `${item.model} | ${item.arm} | trial ${String(item.trial)}`, status, duration: 100,
+      meta: { harness: { run: {
+        session: { metadata: { taskId: item.task, taskVersion: 'version', evalCommit: 'definitions', productSha: 'abcdef1', arm: item.arm, trial: item.trial } },
+        usage: { model: item.model },
+        output: { metrics: { modelTurns: 1, toolCalls: 0, toolErrors: 0, badInputCalls: 0, unknownToolCalls: 0, providerWaits: 0, providerWaitMs: 0 },
+          turns: [{ part: 'build', turn: 1, outcome: { status: 'completed' }, checks: [{ id: 'answers', pass: status === 'passed' }] }] },
+        errors: [],
+      } } },
+    }],
+  };
 }
 
-/** GitHub's side, which this suite cannot reach: a `gh` that writes down what it was asked and starts run 4242. */
-const STAND_IN_GH = `#!/usr/bin/env bash
-printf '%s\\n' "$*" >> "$GH_LOG"
-printf '{"workflow_run_id":4242,"run_url":"https://api.github.com/repos/o/r/actions/runs/4242","html_url":"https://github.com/o/r/actions/runs/4242"}'
-`;
+describe('parallel armada evaluations', () => {
+  test('the requested task matrix comes from the tracked population and rejects unknown or duplicate cells', () => {
+    const all = ['evals/tasks/office.eval.ts', 'evals/tasks/swarm.eval.ts'];
 
-// A release in flight: main and integration/0965 both stand at the deployed build, then integration/0965 takes one
-// more commit that main does not hold.
-const root = scratchDir('evals-dispatch');
-
-const work = join(root, 'work');
-
-const bin = join(root, 'bin');
-
-const builds = { deployed: '', unreleased: '' };
-
-beforeAll(async () => {
-  await git(root, 'init', '--bare', '-b', 'main', 'origin.git');
-  await git(root, 'init', '-b', 'main', 'work');
-  await git(work, 'remote', 'add', 'origin', join(root, 'origin.git'));
-  await git(work, 'commit', '--allow-empty', '-m', 'the deployed build');
-  builds.deployed = await git(work, 'rev-parse', '--short', 'HEAD');
-  await git(work, 'push', '-q', 'origin', 'main', 'main:integration/0965');
-  await git(work, 'checkout', '-q', '-b', 'integration/0965');
-  await git(work, 'commit', '--allow-empty', '-m', 'merged while it deployed');
-  builds.unreleased = await git(work, 'rev-parse', '--short', 'HEAD');
-  await git(work, 'push', '-q', 'origin', 'integration/0965');
-  mkdirSync(bin);
-  writeFileSync(join(bin, 'gh'), STAND_IN_GH, { mode: 0o755 });
-});
-
-async function dispatchFor(build: string) {
-  const log = join(root, `gh-${build}.log`);
-
-  const run = await runToExit([process.execPath, SCRIPT, build], {
-    cwd: work,
-    env: childEnv({ PATH: `${bin}:${process.env.PATH ?? ''}`, GH_LOG: log }),
+    expect(evalTaskFiles(all, undefined)).toEqual(all);
+    expect(evalTaskFiles(all, 'swarm')).toEqual(['evals/tasks/swarm.eval.ts']);
+    expect(() => evalTaskFiles(all, 'missing')).toThrow('distinct tasks');
+    expect(() => evalTaskFiles(all, 'office,office')).toThrow('distinct tasks');
   });
 
-  return { status: run.exitCode, stdout: run.stdout.trim(), asked: existsSync(log) ? readFileSync(log, 'utf8') : '' };
-}
+  test('two tasks times two trials on both legs produces eight distinct cells with their origins and whole slot matrix', () => {
+    expect(ITEMS).toHaveLength(8);
+    expect(new Set(ITEMS.map((item) => `${item.leg}/${item.task}/${item.model}/${item.arm}/${String(item.trial)}`)).size).toBe(8);
 
-// The `eval` environment releases its secrets to main alone: run 37723534351, dispatched from integration/0965 where
-// both branches stood at the build, had both legs refused before a step ran.
-describe('the evals of a staging build start from main', () => {
-  test('a build main holds is dispatched from main, though a release branch stands at it too', async () => {
-    const { status, stdout, asked } = await dispatchFor(builds.deployed);
-
-    expect([status, stdout]).toEqual([0, '4242 https://github.com/o/r/actions/runs/4242']);
-    expect(asked).toContain('-f ref=main');
-    expect(asked).toContain(`-f inputs[build]=${builds.deployed}`);
+    for (const item of ITEMS) {
+      expect(item.origin).toBe(item.leg === 'candidate' ? 'https://staging.kinu.run' : 'https://kinu.run');
+      expect(item.trials).toBe(2);
+      expect(item.models).toEqual([...MATRIX.models]);
+      expect(item.arms).toEqual([...MATRIX.arms]);
+    }
   });
 
-  test('a build main does not hold is not dispatched, and the refusal names it', async () => {
-    const { status, stdout, asked } = await dispatchFor(builds.unreleased);
+  test('the full matrix reserves each task peak across both legs, twelve trials within one twenty-call budget', async () => {
+    const tasks = await collectEvalTasks();
+    const full = evalMatrix({ KINU_EVAL_TRIALS: '5' }, ['product']);
+    const files = tasks.map((task) => `evals/tasks/${task.id}.eval.ts`);
+    const items = evalItems(files, full, ORIGINS, false);
+    const queues = evalWidthQueues(items, tasks);
 
-    expect(status).toBe(1);
-    expect(stdout).toContain(builds.unreleased);
-    expect(asked).toBe('');
+    expect(items).toHaveLength(70);
+    expect(queues.map(({ calls, pool }) => ({ calls, pool }))).toEqual([
+      { calls: 1, pool: 9 }, { calls: 2, pool: 1 }, { calls: 3, pool: 1 }, { calls: 6, pool: 1 },
+    ]);
+    expect(queues.reduce((sum, queue) => sum + queue.pool, 0)).toBe(12);
+    expect(queues.reduce((sum, queue) => sum + queue.pool * queue.calls, 0)).toBeLessThanOrEqual(MUSE_CALLS_AT_ONCE);
+    expect(queues.flatMap(({ cells }) => cells.map(({ index }) => index)).sort((a, b) => a - b))
+      .toEqual(Array.from({ length: 70 }, (_, index) => index));
+
+    for (const queue of queues) {
+      expect(new Set(queue.cells.map(({ item }) => item.leg))).toEqual(new Set(['candidate', 'baseline']));
+      expect(queue.cells.every(({ item }) => tasks.find((task) => task.id === item.task)?.modelCallPeak?.calls === queue.calls)).toBe(true);
+    }
+
+    expect(() => evalWidthQueues(items, tasks.map((task) => ({ ...task, modelCallPeak: undefined })))).toThrow('measured model-call peak');
+    expect(EVAL_TASK_TIMEOUT_SECONDS).toBe(6 * 60 * 60);
+  });
+
+  test('the supported CLI names Kinu\'s connection and its sole artifact extraction path', () => {
+    const argv = evalMapArgv('abcdef123456', '/tmp/evals', ['KINU_EVAL_STAGING_WEB_IDENTITY', 'KINU_EVAL_WEB_IDENTITY'], { calls: 1, pool: 9 });
+
+    expect(argv[0]).toContain('node_modules/.bin/armada');
+    expect(argv[1]).toBe('map');
+    expect(argv).toContain('--commit=abcdef123456');
+    expect(argv).toContain('--pool=9');
+    expect(argv).toContain('--timeout=21600');
+    expect(argv).toContain('--json');
+    expect(argv).toContain('--artifacts=/tmp/evals/trials');
+    expect(argv.find((word) => word.startsWith('--connection='))).toMatch(/armada-kinu\.json$/u);
+    expect(argv).toContain('--secrets=KINU_EVAL_STAGING_WEB_IDENTITY,KINU_EVAL_WEB_IDENTITY');
+    expect(argv.slice(argv.indexOf('--') + 1)).toEqual(['bun', 'evals/scripts/trial.ts']);
+  });
+
+  test('Vitest selection strips skipped cases, anchors trial one, and rejects the wrong or duplicated case', () => {
+    const item = ITEMS[0];
+
+    if (item === undefined) throw new Error('the pilot matrix is empty');
+
+    const report = caseReport(item);
+
+    report.assertionResults.push({ ...report.assertionResults[0], title: `${item.model} | ${item.arm} | trial 10`, status: 'skipped' });
+
+    const selected = selectTrialReport(JSON.stringify({ testResults: [report] }), item);
+
+    expect(trials(parseResults('trial', selected))).toHaveLength(1);
+    expect(trials(parseResults('trial', selected))[0]?.meta.harness.run.session.metadata.trial).toBe(1);
+    expect(() => selectTrialReport(selected, { ...item, trial: 2 })).toThrow('expected one');
+    expect(() => selectTrialReport(JSON.stringify({ testResults: [report, report] }), item)).toThrow('expected one');
+  });
+
+  test('per-trial artifacts merge by file; missing and duplicate trials stay incomplete instead of invented outcomes', () => {
+    const dir = scratchDir('eval-artifact-merge');
+    const candidate = ITEMS.filter((item) => item.leg === 'candidate');
+
+    const reports = candidate.map((item, index) => {
+      const path = join(dir, `${String(index)}.json`);
+
+      writeFileSync(path, selectTrialReport(JSON.stringify({ testResults: [caseReport(item)] }), item));
+
+      return { item, path, failure: '' };
+    });
+
+    const joined = joinTrialReports(reports);
+    const options = { trials: 2, taskFiles: ['evals/tasks/chess.eval.ts', 'evals/tasks/swarm.eval.ts'], build: 'abcdef1' };
+
+    expect(parseResults('joined', joined)).toHaveLength(2);
+    expect(trials(parseResults('joined', joined))).toHaveLength(4);
+    expect(whyIncomplete(joined, options)).toBeNull();
+    expect(whyIncomplete(joinTrialReports(reports.slice(1)), options)).not.toBeNull();
+    expect(whyIncomplete(joinTrialReports([...reports, ...reports.slice(0, 1)]), options)).toContain('expected 1 to 2 once each');
+    const first = reports[0];
+
+    if (first === undefined) throw new Error('no pilot report');
+
+    const lost = joinTrialReports([{ item: first.item, failure: 'armada wall exit 124' }, ...reports.slice(1)]);
+
+    expect(trials(parseResults('lost', lost))).toHaveLength(3);
+    expect(lost).toContain('armada wall exit 124');
+    expect(whyIncomplete(lost, options)).not.toBeNull();
+  });
+
+  test('the deploy ladder artifact copier retains evidence paths declared in a row, without renaming the trial', () => {
+    const root = scratchDir('eval-evidence-copy');
+    const dir = join(root, 'source');
+    const artifacts = join(root, 'artifacts');
+    const evidence = 'evals-chess-123/model/product/chess-trial-1/ledger.jsonl';
+
+    mkdirSync(join(dir, 'evals-chess-123/model/product/chess-trial-1'), { recursive: true });
+    writeFileSync(join(dir, evidence), '{"type":"run_start"}\n');
+    writeFileSync(join(dir, 'results.json'), '{"testResults":[]}');
+    const row = ciVerdictRow({ run: 'trial', evidence: 'evals' }, { exitCode: 0, seconds: 1, stdout: '', stderr: '' }, undefined, { dir, artifacts });
+
+    expect(row.artifacts).toContain(`evals/${evidence}`);
+    expect(row.artifacts).toContain('evals/results.json');
+    expect(readFileSync(join(artifacts, 'evals', evidence), 'utf8')).toBe('{"type":"run_start"}\n');
   });
 });

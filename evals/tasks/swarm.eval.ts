@@ -347,4 +347,11 @@ Tell me when the brief is written.`,
   }],
 };
 
-await defineTaskEval(defineEvalTask({ id: 'swarm', mission: MISSION, parts: [recall] }));
+await defineTaskEval(defineEvalTask({
+  id: 'swarm',
+  modelCallPeak: {
+    calls: 6,
+    source: "Owner measured peak6, cited by Main on2026-10-09. Job20261009230611-39f29c69 ledger covers agent/judge intervals (peak3), but swarm-node model_call rows have no request intervals; six is not falsely inferred from those rows.",
+  },
+  mission: MISSION, parts: [recall]
+}));

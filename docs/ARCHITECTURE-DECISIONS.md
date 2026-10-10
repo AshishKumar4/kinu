@@ -1421,6 +1421,11 @@ name, to have completed green, and says "no eval verdict yet" while the run has
 none. The deploy's own one-trial pass (`eval-pass-tier.sh`) reports a task that
 fails outright the same day, as a red of that deploy.
 
+Amended 2026-10-09 by L25's eval cutover: the gate is still the comparison verdict, never the run's
+conclusion, but its transport is native armada trial artifacts and `evals/<sha>.json` beside the verified
+record. The deploy no longer dispatches GitHub, depends on main's workflow ref, or waits on a named
+GitHub job. A full statistical result is required; an explicit two-task pilot cannot authorize promotion.
+
 L20. A staging deploy reads what its version did, and each signal is a red.
 Decided 2026-09-30 by the owner: with zero users, staging's traffic is our own
 tiers and evals, so its own telemetry for the version is evidence beyond them.
@@ -1497,8 +1502,23 @@ the pointer, and the release no longer waits on GitHub. The deploy reads the sam
 and a missing or red one ends it before any build; a promotion takes staging's record, which only a deploy past
 that gate wrote. armada grades every planned row exactly once, with each split suite's file timings, before it
 stores a verdict, so its stored verdict is the complete proof. The six hammer runs were in the CI tier and stay
-in it, each a task of its own. ci.yml and its part, artifact and collection plumbing are deleted; evals.yml
-and the secret scan stay on GitHub. On 2026-10-08 the rest moved: Lean verification is a CI row (armada's
+in it, each a task of its own. ci.yml and its part, artifact and collection plumbing are deleted; the secret scan stays on GitHub.
+Amended 2026-10-09: evals.yml leaves GitHub with the trials. `bun scripts/evals-map.ts` runs each trial as one
+`armada map` task at the commit, both legs at once inside the shared Muse cap (20 calls measured clean 2026-09-26,
+one opencode-go key for both legs; a swarm trial holds about six), each task keeping its report and evidence as its
+own artifacts, joined per leg for the same compare, verdict, Sol diagnosis, review and results comment. armada's
+task timeout is infrastructure ceiling only (21600 s at the native job ceiling); the harness silence bound still ends a trial.
+The protocol itself has no timeout maximum. Amended after the eight-cell proof: universal six-call reservations
+kept the full run at only three trials. Each definition now records its measured peak and evidence source:
+chess/dashboards1, chat-app/office2, delegation3, coding/swarm6. Native width queues1/2/3/6 use pools9/1/1/1,
+so the full70-cell run admits12 trials and reserves9+2+3+6=20 calls across both legs. Recorded operation intervals
+are paired per run and fenced at its recorded end; missing node intervals are not manufactured. Swarm6 remains
+the owner's measured authority rather than an invented reconstruction from node call totals. The pinned
+CLI's `map --artifacts` extracts each trial's evidence; light compare/verdict/Sol steps on the driver read it.
+The deploy serializes soak before statistics so their jobs share this budget; no armada API or dependency patch is added.
+The old-shape evidence is run 37880718948: seven file workers with serial trials per file;
+candidate wall 4 h 15 min, baseline cancelled at GitHub's 6 h cap. The armada shape removes
+per-file head-of-line blocking, but keeps the actual provider limit rather than promising CI-tier wall times. On 2026-10-08 the rest moved: Lean verification is a CI row (armada's
 environment holds the Lean build), and the flake sweep and bench corpus validation are nightly `armada map` runs
 (scripts/nightly-sweeps.ts). armada is a pinned dev
 dependency, so the hook and the deploy run this checkout's `armada`, against `~/.config/armada/connection.json`.
