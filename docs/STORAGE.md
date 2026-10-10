@@ -4,8 +4,9 @@ A hosted workspace has one shared authority: its `OrchestratorAgent` Durable
 Object. Nimbus runs over that object's `ctx.storage.sql` and owns the workspace
 files and execution state. The workspace also keeps the roster, the shared
 ledgers (evolution, event log, jobs, tasks, missions), main's handed-over turns
-and the facts each kept from its preparation (`main_turn_facts`), and tool
-execution. No shadow VFS or file sync path runs between agents.
+and the branches the owner started during each (`turn_branches`), and tool
+execution. A turn's facts from its preparation are its agent's, frozen beside its
+claims (`actor_turn_facts`) and carried in its handoff. No shadow VFS or file sync path runs between agents.
 
 Every agent, main included, has an `AgentFacet` in a Worker Loader isolate, with
 its own SQLite for its conversation, turn and effect claims, run events, plans

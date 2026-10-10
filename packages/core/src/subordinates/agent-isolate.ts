@@ -2,6 +2,7 @@ import type { AgentFigures } from '../read-models/agent-figures';
 import type { JSONSchema7, ModelMessage, UIMessage } from 'ai';
 import type { CompletedTurn } from '../evolution/types';
 import type { TrialTurn } from '../evolution/trial-rules';
+import type { TurnFacts } from '../orchestrator/turn-facts';
 import type { ContextFill } from '../read-models/context-fill';
 import type { InlineSteer } from '../read-models/transcript';
 import type { RunEvent } from '../events/types';
@@ -65,6 +66,8 @@ export interface PreparedAgentTurn {
   /** The live trial's arm the turn runs, when the workspace's own agent runs one; recorded with its completed turn. */
   readonly trial?: TrialTurn;
   readonly missionLabels?: readonly string[];
+  /** What the workspace decided as the turn opened; the agent keeps the first it is told for a turn. */
+  readonly facts: TurnFacts;
   readonly trace: boolean;
   readonly resume: boolean;
   readonly reportMessages: boolean;

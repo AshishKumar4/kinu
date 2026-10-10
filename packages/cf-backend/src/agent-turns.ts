@@ -9,7 +9,7 @@ import {
   type HeadInput, type RunInference, type HeadReport, type SqlExecutor, type MissionBudgetPort, type MissionGovernor, type Executor, readMissionLabels,
 } from '@kinu.run/core';
 import { prepareHostedTurn, type HostedActorSeams, type HostedTurnRequest, type PreparedHostedTurn } from './hosted-actors';
-import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentToolDescriptor, AgentTrace, AgentTurnEnd, Fact, JsonObject, PreparedAgentTurn, StoredRow, TaskPlan, TurnOpening } from '@kinu.run/core';
+import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentToolDescriptor, AgentTrace, AgentTurnEnd, Fact, JsonObject, PreparedAgentTurn, StoredRow, TaskPlan, TurnFacts, TurnOpening } from '@kinu.run/core';
 
 export interface AgentTurnsDeps {
   readonly sql: SqlExecutor;
@@ -338,6 +338,7 @@ export class AgentTurns {
       ...(prepared.trial !== undefined && { trial: prepared.trial }),
       ...(run?.mission !== undefined && { missionLabels: run.mission.labels }),
       ...(this.chatMission(turn.reference.actorId, turn).length > 0 && { missionLabels: this.chatMission(turn.reference.actorId, turn) }),
+      facts: this.facts(turn, prepared),
       trace: run?.reportStep !== undefined || run?.reportDelta !== undefined,
       resume: run?.resume !== undefined,
       reportMessages: run?.reportMessages !== undefined,
@@ -411,6 +412,17 @@ export class AgentTurns {
     if (governor !== null) return { guard: async (seam, labels) => governor.guard(seam, labels), debit: async (tokens, opts) => { governor.debit(tokens, opts); } };
 
     return this.turn(actorId, turnId).request.run?.inference.mission?.port ?? null;
+  }
+
+  /** Main's surface decides its continuity and evolution gate; any other agent's turns continue its conversation. A run
+   *  spends for its own missions, a chat turn for those its driving message names. */
+  private facts(turn: OpenTurn, prepared: PreparedHostedTurn): TurnFacts {
+    const { surface } = prepared;
+
+    return {
+      continuity: surface?.continuity ?? 'conversation', evolutionEnabled: surface?.evolutionEnabled ?? false,
+      missionLabels: [...turn.request.run?.inference.mission?.labels ?? readMissionLabels(turn.request.driving)],
+    };
   }
 
   /** Main's chat turn names its missions when it is prepared under any. */

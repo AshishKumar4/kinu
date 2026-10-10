@@ -187,7 +187,7 @@ import {
   CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline, restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult, type WorkspaceReviewResult,
   initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes, deliverOwedChangeNotes, owesChangeNotes, type ChangeNotesChat,
-  initMainTurnFactsTable, MainTurnFactsStore, readMissionLabels, type MainTurnFacts, type TurnSurface,
+  initTurnBranchesTable, TurnBranchesStore, branchHeadId, type TurnSurface,
   type ChangeNotesResult, type NotedChanges, type ReviewAnnotation,
   diffLines, type DiffLine,
   getExecutorFiles, readExecutorFile, listEnvironments,
@@ -1299,16 +1299,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // Its questions park in its own isolate, as every agent's do: the stack asks it once its turn was offered the tool.
       this.offerAskOwner(turn.actor.stores.config);
 
-      const profile = await this.mainTaskProfile(turn, planReply);
-      const { surface } = profile;
-
-      if (surface !== undefined) {
-        this.mainTurnFacts.opened(surface.turnId, {
-          continuity: surface.continuity, evolutionEnabled: surface.evolutionEnabled, missionLabels: readMissionLabels(turn.driving),
-        });
-      }
-
-      return profile;
+      return await this.mainTaskProfile(turn, planReply);
     }
 
     const webSearch = this.ownedModelServices.getWebSearchProvider();
@@ -2852,8 +2843,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * list is claimed up front. Row order, lanes and gates belong to {@link declareTerminalRoster}.
    */
   /** What main's turns left here, from their preparation to their handoff. */
-  private get mainTurnFacts(): MainTurnFactsStore {
-    return new MainTurnFactsStore(this.boundSql, this.actorHandle().actorId);
+  private get turnBranches(): TurnBranchesStore {
+    return new TurnBranchesStore(this.boundSql, this.actorHandle().actorId);
   }
 
   /**
@@ -2861,8 +2852,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * titles, replies and branches), declared and owed here once per turn, however often the handoff is repeated.
    */
   private async mainTurnSettled(settled: HandedOffTurn): Promise<void> {
-    // Prepared here under the id main's chat ran it under, which its facts and claims are kept by.
-    const held = this.mainTurnFacts.read(settled.turnId);
+    // What the workspace decided as the turn opened, as main's isolate froze it then and handed it over.
+    const held = settled.facts;
     const turn = v.parse(CompletedTurnSchema, settled.turn);
     // Its missions travel with every recording: the governor may hold another turn's by now, or none after a reset.
     const scoped: CompletedTurn = held.missionLabels.length === 0 ? turn : { ...turn, missionLabels: [...held.missionLabels] };
@@ -2876,12 +2867,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     await this.terminal.settle({
       transition: { turnId: settled.turnId, messageId: settled.messageId },
       declare: () => [
-        ...declareTerminalRoster(facts, this.rosterParts(settled, scoped, held, missionOf(this.getSoulText()))),
+        ...declareTerminalRoster(facts, this.rosterParts(settled, scoped, missionOf(this.getSoulText()))),
         // Its outcome the run's own: a tool that failed inside a turn that answered is not a failed turn.
         { name: 'fleet_turn', scope: settled.messageId, lane: 'detached', input: { turn: facts.scopedTurn, completed: settled.completed } },
       ],
     });
-    this.mainTurnFacts.retire(settled.turnId);
+    this.turnBranches.retire(settled.turnId);
   }
 
   /** Built per use: the actor handle and the fast lane are this activation's. Main's conversation is its isolate's. */
@@ -2900,7 +2891,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Its chat's follow-up turns are owed in main's own isolate; everything else its settled turn owes, here. */
-  private rosterParts(settled: HandedOffTurn, scoped: CompletedTurn, held: MainTurnFacts, mission: string | null): TerminalTurnParts {
+  private rosterParts(settled: HandedOffTurn, scoped: CompletedTurn, mission: string | null): TerminalTurnParts {
     return {
       // Over the row main's transcript persisted, so a cut turn's announcement replays from it; owed only when an
       // extension here listens, as reading the answer back crosses into main's isolate for the whole turn.
@@ -2909,7 +2900,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // Main's own isolate saw its tools run, and recorded them in the turn it handed over.
       craftedToolsUsed: scoped.craftedToolsUsed ?? [],
       eventReplies: { answered: new Set(settled.answeredDeliveries), requestId: settled.messageId },
-      branches: held.branches,
+      // Each with the task its head was started on, as the journal recorded it at the branch's start.
+      branches: this.turnBranches.of(settled.turnId).map((id) => ({ id, task: this.headJournal.readHeadView(branchHeadId(id))?.task ?? '' })),
       // Owed only when the actor reviews turns, as the lane it replaced was started only then.
       advisor: this.actorSession.reviewsTurns ? projectJsonValue({ value: this.advisorSnapshotFor(scoped, settled.reachableTools) }) : undefined,
       sleepTime: true,
@@ -3594,7 +3586,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     initSubordinateRosterTable(this.ctx.storage.sql);
 
     initSleepTimeUpdatesTable(execRaw);
-    initMainTurnFactsTable(execRaw);
+    initTurnBranchesTable(execRaw);
     // Keyed per actor and message, as a thumb is: the thumbs re-score reads this table.
     execRaw(`CREATE TABLE IF NOT EXISTS turn_craft_usage (
       actor_id   TEXT NOT NULL,
@@ -4209,7 +4201,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       });
 
       // The turn the owner redirected settles it, whichever activation its handoff lands on.
-      if (redirected !== null) this.mainTurnFacts.branched(redirected, { id, task });
+      if (redirected !== null) this.turnBranches.admitted(redirected, id);
       this.broadcastBranchStatus({ type: 'branch_status', status: 'running', branchId: id, task });
       this.logActivity('branch_start', task.slice(0, 120));
 

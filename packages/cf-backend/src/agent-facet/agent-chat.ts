@@ -233,22 +233,26 @@ export class FacetChat {
   private owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[] {
     const { session } = this.deps.actor;
 
+    const turnId = this.session.currentTurnId ?? '';
+    const opened = this.deps.database.factsOf(turnId);
+
     if (this.deps.actor.record.parentActorId === null) {
       return declareHandoffRoster(chatTurnParts(input), {
-        turnId: this.session.currentTurnId ?? '', messageId: input.messageId, status: input.status, completed: input.completed,
+        turnId, messageId: input.messageId, status: input.status, completed: input.completed,
         workMode: session.workMode, userText: input.userText, assistantText: input.assistantText, event: input.event ?? null,
         turn: projectJsonValue({ value: input.turn }), credited: input.credited, answeredDeliveries: [...input.answeredDeliveries],
-        reachableTools: [...input.reachableTools], recordedAt: Date.now(),
+        reachableTools: [...input.reachableTools], recordedAt: Date.now(), facts: opened,
       });
     }
 
-    const scoped = session.orchestrator.scopedTurn(input.turn);
+    // A replay already carries the scope its first attempt recorded.
+    const scoped = input.turn.missionLabels !== undefined || opened.missionLabels.length === 0 ? input.turn : { ...input.turn, missionLabels: [...opened.missionLabels] };
 
     const facts: TerminalTurnFacts = {
       messageId: input.messageId,
       status: input.status,
       workMode: session.workMode,
-      continuity: 'conversation',
+      continuity: opened.continuity,
       completed: input.completed,
       userText: input.userText,
       assistantText: input.assistantText,

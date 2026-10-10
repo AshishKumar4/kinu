@@ -124,8 +124,10 @@ which `AgentTurns` holds with the open turn. Every tool call returns through
 claims and run events. Main's settled turn crosses back once, as the facet's
 durable `workspace_settle` effect: the workspace declares its roster
 (evolution, event log, titles, replies, branches, the fleet row) from that
-handoff and the facts it kept from the turn's preparation (`main_turn_facts`),
-never from what one activation held. A head keeps its accumulator tools and split
+handoff, never from what one activation held. The handoff carries the facts the
+workspace decided as the turn opened, frozen in the agent's own store at its
+preparation (`actor_turn_facts`), and the branches the owner started during the
+turn are rows of the workspace's from their admission (`turn_branches`). A head keeps its accumulator tools and split
 callback in the workspace. A swarm node keeps its report, branch arbiter,
 background jobs and wake queue there too. Steps, live deltas and mission
 charges return over RPC; the completed turn returns its report and produced

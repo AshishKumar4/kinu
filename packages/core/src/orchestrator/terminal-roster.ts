@@ -13,6 +13,7 @@ import { isPlaceholderMission } from '../identity/soul';
 import * as v from 'valibot';
 import { CompletedTurnSchema } from '../evolution/session-window';
 import { RunEndReasonSchema } from './terminal-effects';
+import { TurnFactsSchema } from './turn-facts';
 import { owesTurnLessons } from '../evolution/struggles';
 
 /** `completed` is the driver's verdict; rows keyed to the answer gate on the narrower `durablyAnswered`. */
@@ -237,6 +238,8 @@ export const HandedOffTurnSchema = v.object({
   answeredDeliveries: v.array(v.string()),
   reachableTools: v.array(v.string()),
   recordedAt: v.number(),
+  /** What the workspace decided as the turn opened, as the agent froze it then. */
+  facts: TurnFactsSchema,
 });
 
 export type HandedOffTurn = v.InferOutput<typeof HandedOffTurnSchema>;

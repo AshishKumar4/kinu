@@ -755,8 +755,10 @@ as a reset deployment, so main's facet starts empty, as a fresh workspace's
 does. Its socket, roster and shared stores stay in the workspace object, and a
 root tab's socket opening pre-warms main's isolate. Main's settled turn is handed
 back as the facet's durable `workspace_settle` effect; the workspace declares
-the turn's evolution, event, title, reply, branch and fleet lanes from it and
-from the facts it kept from the turn's preparation (`main_turn_facts`). A fork
+the turn's evolution, event, title, reply, branch and fleet lanes from it, from
+the facts it carries (frozen in main's isolate at the turn's preparation,
+`actor_turn_facts`) and from the branches admitted during the turn
+(`turn_branches`). A fork
 reads and lands main's conversation through main's isolate. The figures below
 were measured on 2026-10-07, before main moved, comparing main's turn in the
 workspace object with a facet's turn on the same path; the shipped build is held

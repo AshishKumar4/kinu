@@ -108,6 +108,12 @@
     "provider_cuts INTEGER NOT NULL",
     "PRIMARY KEY(actor_id,turn_id)"
   ],
+  "actor_turn_facts@packages/core/src/orchestrator/turn-facts.ts": [
+    "actor_id TEXT NOT NULL",
+    "turn_id TEXT NOT NULL",
+    "facts_json TEXT NOT NULL",
+    "PRIMARY KEY(actor_id,turn_id)"
+  ],
   "agent_data_tables@packages/core/src/tools/db-codemode.ts": [
     "name TEXT PRIMARY KEY",
     "scope TEXT NOT NULL CHECK(scope IN ('actor','workspace'))",
@@ -1344,6 +1350,12 @@
     "last_fire_at INTEGER",
     "fire_count INTEGER NOT NULL DEFAULT 0",
     "PRIMARY KEY (actor_id, id)"
+  ],
+  "turn_branches@packages/core/src/orchestrator/turn-facts.ts": [
+    "actor_id TEXT NOT NULL",
+    "turn_id TEXT NOT NULL",
+    "head_id TEXT NOT NULL",
+    "PRIMARY KEY(actor_id,turn_id,head_id)"
   ],
   "turn_craft_usage@packages/cf-backend/src/orchestrator.ts": [
     "actor_id TEXT NOT NULL",

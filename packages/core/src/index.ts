@@ -46,7 +46,9 @@ export {
   type TerminalSequenceRun,
 } from './orchestrator/terminal-effects';
 
-export { initMainTurnFactsTable, MainTurnFactsStore, type MainTurnBranch, type MainTurnFacts } from './orchestrator/main-turn-facts';
+export {
+  initTurnBranchesTable, TurnBranchesStore, TurnFactsSchema, TurnFactsStore, type TurnFacts,
+} from './orchestrator/turn-facts';
 
 export { inTurnSurface, scopedTurnSurface, TurnSurface, type TurnSurfaceOpening } from './orchestrator/main-turn-surface';
 
