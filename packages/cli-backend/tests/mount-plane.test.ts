@@ -3,6 +3,7 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // executor, with no `/pc` or `/sandbox` mount.
 import { describe, expect, test } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { open, type FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createCLIRuntime, type CLIRuntime } from '../src/runtime';
 import { localFilePlane } from '../src/host-mount';
@@ -133,5 +134,34 @@ describe('a replace the folder checks against what was read', () => {
     }
 
     expect([readFileSync(target, 'utf8'), statSync(target).mode & 0o777]).toEqual(['v2', 0o775]);
+  });
+
+  test('a private file\'s replacement bytes are never written into a file anyone else may read', async () => {
+    const folder = scratchDir('mount-plane-private');
+    const target = join(folder, 'secret.env');
+    writeFileSync(target, 'v1');
+    chmodSync(target, 0o600);
+    const plane = localFilePlane({ folder, space: join(folder, 'space'), views: [], checkpoints: undefined });
+    // Every file handle's write records its file's mode the moment the bytes are in it.
+    const opened = await open(target, 'r');
+    const handles: { writeFile: (this: FileHandle, ...args: Parameters<FileHandle['writeFile']>) => Promise<void> } = Object.getPrototypeOf(opened);
+    const write = handles.writeFile;
+    const modes: number[] = [];
+    const was = process.umask(0o022);
+
+    await opened.close();
+    handles.writeFile = async function (this: FileHandle, ...args) {
+      await write.apply(this, args);
+      modes.push((await this.stat()).mode & 0o777);
+    };
+
+    try {
+      await present(plane.writeFileIfDigest?.bind(plane), 'the digest write')(target, bytes('v2'), sha256('v1'));
+    } finally {
+      handles.writeFile = write;
+      process.umask(was);
+    }
+
+    expect({ modes, now: statSync(target).mode & 0o777 }).toEqual({ modes: [0o600], now: 0o600 });
   });
 });

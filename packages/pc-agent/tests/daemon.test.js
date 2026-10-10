@@ -825,6 +825,33 @@ describe('a write that names the bytes it replaces', () => {
     expect(fs.statSync(file).mode & 0o777).toBe(0o775);
   });
 
+  test('a private file\'s replacement bytes are never written into a file anyone else may read', async () => {
+    const root = scratchDir('daemon-digest-private');
+    const file = path.join(root, 'secret.env');
+    fs.writeFileSync(file, 'v1');
+    fs.chmodSync(file, 0o600);
+    const ws = fakeWs();
+    // Each write records its file's mode the moment the bytes are in it.
+    const write = fs.writeFileSync;
+    const modes = [];
+    const was = process.umask(0o022);
+
+    fs.writeFileSync = (target, ...rest) => {
+      write(target, ...rest);
+      modes.push((typeof target === 'number' ? fs.fstatSync(target) : fs.statSync(target)).mode & 0o777);
+    };
+
+    try {
+      handle({ id: 'private', method: 'writeFileIfDigest', sandbox: scoped([root]), params: [file, 'v2', sha256('v1'), {}] }, ws, {});
+      expect((await ws.response('private')).result).toMatchObject({ ok: true });
+    } finally {
+      fs.writeFileSync = write;
+      process.umask(was);
+    }
+
+    expect({ modes, now: fs.statSync(file).mode & 0o777 }).toEqual({ modes: [0o600], now: 0o600 });
+  });
+
   test('with no digest, creates the file only where none is', async () => {
     const root = scratchDir('daemon-digest-create');
     const file = path.join(root, 'new.md');
