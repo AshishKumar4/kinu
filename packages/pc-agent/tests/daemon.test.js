@@ -784,6 +784,8 @@ describe('daemon device path confinement', () => {
 
 describe('a write that names the bytes it replaces', () => {
   const sha256 = (text) => require('node:crypto').createHash('sha256').update(text).digest('hex');
+  // A hub with the Sandbox switch on: the consented directories ride the frame.
+  const scoped = (roots) => ({ tier: 'sandboxed', agentHome: path.join(DEVICE_HOME, 'agents', 'ws-1', 'home'), roots });
 
   test('lands only over those bytes, and a write between the read and it is refused with what is there now', async () => {
     const root = scratchDir('daemon-digest');

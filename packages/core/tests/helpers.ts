@@ -1,4 +1,4 @@
-import { type Awaitable, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { type Awaitable, type VFS, type VfsRevision, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Test helpers: in-memory SQLite via bun:sqlite, mock LLM, mock Executor. */
 
 import { Database } from 'bun:sqlite';
@@ -87,6 +87,9 @@ export function createMemoryVFS(db: Database): WorkspaceBundle['vfs'] {
  * an eager seed outlives a test that closes its database. A seed failure rejects the first call.
  */
 function afterSeed(vfs: WorkspaceBundle['vfs'], seed: () => Promise<void>): VFS & Required<Pick<VFS, 'readRange'>> {
+  const atRevision = vfs.readFileAtRevision?.bind(vfs);
+  const ifRevision = vfs.writeFileIfRevision?.bind(vfs);
+
   let seeded: Promise<void> | null = null;
 
   const chain = <A extends unknown[], R>(fn: (...args: A) => Awaitable<R>) =>
@@ -107,7 +110,9 @@ function afterSeed(vfs: WorkspaceBundle['vfs'], seed: () => Promise<void>): VFS 
     readlink: chain((p: string) => vfs.readlink(p)),
     unlink: chain((p: string) => vfs.unlink(p)),
     mkdir: chain((p: string, o?: { recursive?: boolean }) => vfs.mkdir(p, o)),
-
+    // The workspace store versions its files, as production's does: an overwrite is checked against the revision read.
+    ...(atRevision !== undefined && { readFileAtRevision: chain((p: string, r: VfsRevision) => atRevision(p, r)) }),
+    ...(ifRevision !== undefined && { writeFileIfRevision: chain((p: string, d: Uint8Array, r: VfsRevision) => ifRevision(p, d, r)) }),
   };
 }
 

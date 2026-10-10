@@ -28,12 +28,20 @@ export function processResult(work: Promise<{ stdout: string; stderr: string; ex
 
 /** The native pipe boundary backed by a real Linux process, with caller env over inherited env. */
 export const pipeExec: Container['exec'] = async (argv, options) => {
-  const child = Bun.spawn(argv, { cwd: options?.cwd, env: { ...process.env, ...options?.env }, stdout: 'pipe', stderr: 'pipe' });
+  const piped = options?.stdin === 'pipe';
+  const child = Bun.spawn(argv, { cwd: options?.cwd, env: { ...process.env, ...options?.env }, stdin: piped ? 'pipe' : 'ignore', stdout: 'pipe', stderr: 'pipe' });
+  const sink = child.stdin;
+
+  // The container's stdin is a WritableStream; Bun's is a sink.
+  const stdin = piped && sink !== undefined && typeof sink !== 'number' ? new WritableStream<Uint8Array>({
+    write: async (chunk) => { await sink.write(chunk); },
+    close: async () => { await sink.end(); },
+  }) : null;
 
   return {
     isPty: false,
     resize: () => { throw new Error('the pipe test cannot resize a PTY'); },
-    stdin: null,
+    stdin,
     stdout: child.stdout,
     stderr: child.stderr,
     pid: child.pid,
