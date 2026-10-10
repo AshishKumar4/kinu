@@ -497,7 +497,10 @@ try {
       const program = node(`for (let i = 0; i < ${String(lines)}; i++) console.log(i)`);
 
       await measureOp(`pipe.tail.${String(lines)}`, () => shell(`${program} | tail -1 | sed 's/^/last=/'`), undefined, `last=${String(lines - 1)}`);
-      await measureOp(`pipe.grep.${String(lines)}`, () => shell(`${program} | grep -c 1 | sed 's/^/count=/'`), undefined, 'count=');
+      // Every line holding a 1, so a lost write anywhere in the stream shows as a wrong count.
+      const ones = Array.from({ length: lines }, (_, index) => String(index)).filter((line) => line.includes('1')).length;
+
+      await measureOp(`pipe.grep.${String(lines)}`, () => shell(`${program} | grep -c 1 | sed 's/^/count=/'`), undefined, `count=${String(ones)}\n`);
       await measureOp(`pipe.head.${String(lines)}`, () => shell(`${program} | head -1 | sed 's/^/first=/'`), undefined, 'first=0');
     }
 
