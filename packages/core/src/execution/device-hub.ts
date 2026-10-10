@@ -9,7 +9,7 @@ import { attempt, settle } from '../obs/effect';
 import { Effect } from 'effect';
 import type { JsonValue } from '../utils/json';
 import { DeviceTunnel, NO_DEVICE_CONNECTED, type TunnelSocket } from './device-tunnel';
-import { DEVICE_ERRORS, DEVICE_FRAMES, DEVICE_METHOD, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, DEVICE_VERSION_REFUSAL_CLOSE, DEVICE_UPDATE_REQUIRED, deviceFailure } from './device-protocol';
+import { DEVICE_ERRORS, DEVICE_FRAMES, DEVICE_METHOD, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, DEVICE_VERSION_REFUSAL_CLOSE, DEVICE_UPDATE_REQUIRED, deviceFailure, deviceMethodHas } from './device-protocol';
 import { DEVICE_CHATGPT, DEVICE_RELAY, DeviceRelays, parseDeviceRelayFrame, type DeviceChatGptMethod, type DeviceRelayRequest } from './device-relay';
 import { REAL_CLOCK } from '../types/clock';
 import { deviceToolchainAnswer, freshDeviceToolchain, type DeviceToolchain } from './device-status';
@@ -102,7 +102,11 @@ export class DeviceSocketHub {
   }
 
   hello(deviceId: string, version: number | undefined, features: readonly string[] | undefined): boolean {
-    if (version === undefined || version < DEVICE_PROTOCOL_VERSION || DEVICE_FEATURES.some((method) => !features?.includes(method))) {
+    // An `optional` method arrived after the protocol it is on: a daemon without it still connects, so the hub can push
+    // it the update, and is refused only that method (`supports`).
+    const lacking = DEVICE_FEATURES.some((method) => !deviceMethodHas(method, 'optional') && !features?.includes(method));
+
+    if (version === undefined || version < DEVICE_PROTOCOL_VERSION || lacking) {
       diagnostics.event('device.protocol_refused', { device: deviceId, reason: DEVICE_UPDATE_REQUIRED });
       this.dropTunnel(deviceId);
       this.liveSocket(deviceId)?.close(DEVICE_VERSION_REFUSAL_CLOSE, DEVICE_UPDATE_REQUIRED);
@@ -183,6 +187,14 @@ export class DeviceSocketHub {
     const held = v.safeParse(DeviceAttachmentSchema, ws.deserializeAttachment());
     const attachment: JsonValue = held.success ? { ...held.output, ...patch } : { device: deviceId, ...patch };
     ws.serializeAttachment(attachment);
+  }
+
+  /** Whether the device's daemon answers `method`: every required one does, an optional one only if its HELLO listed it. */
+  supports(deviceId: string, method: string): boolean {
+    if (!deviceMethodHas(method, 'optional')) return true;
+    const attachment = v.safeParse(DeviceAttachmentSchema, this.liveSocket(deviceId)?.deserializeAttachment());
+
+    return attachment.success && attachment.output.features?.includes(method) === true;
   }
 
   relayDevice(): string | null {
