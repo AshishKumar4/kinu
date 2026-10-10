@@ -2218,13 +2218,32 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   stopSupervised(processId: string): Promise<{ stopped: boolean }> {
     return settle(attempt('io', async () => {
       const arrived = this.#teardowns;
+      const key = `${PROC_SPEC_PREFIX}${processId}`;
+      const native = processScope(processId);
 
-      return await this.#resources.run(processScope(processId), () => this.#stopSupervised(processId, arrived));
+      for (;;) {
+        const reserved = await this.ctx.storage.get<SupervisedProcessSpec>(key);
+        const scopes = reserved === undefined ? native : [...native, ...supervisedScope(reserved.command, reserved.cwd ?? DEVBOX_WORKDIR)];
+
+        const stopped = await this.#resources.run(scopes, async () => {
+          await this.#ensureReady(arrived);
+          const owner = await this.ctx.storage.get<SupervisedProcessSpec>(key);
+
+          // A changed reservation needs its actual logical authority. Rebind after releasing these
+          // scopes; never retry a failed kill or refuse a valid stop because its lookup moved.
+          if (owner !== undefined && (owner.command !== reserved?.command
+            || (owner.cwd ?? DEVBOX_WORKDIR) !== (reserved?.cwd ?? DEVBOX_WORKDIR)
+            || owner.createdAt !== reserved?.createdAt)) return undefined;
+
+          return this.#stopSupervised(processId);
+        });
+
+        if (stopped !== undefined) return stopped;
+      }
     }));
   }
 
-  async #stopSupervised(processId: string, arrived: number): Promise<{ stopped: boolean }> {
-    await this.#ensureReady(arrived);
+  async #stopSupervised(processId: string): Promise<{ stopped: boolean }> {
     let thrown: { readonly cause: unknown } | undefined;
 
     try {
