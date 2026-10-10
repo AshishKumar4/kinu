@@ -580,12 +580,13 @@ function ChatScene({
 
       if (sent.landed === 'mid-turn') setMessages((prev) => prev.map((m) => (m.id === shown ? { ...m, steered: true } : m)));
     } catch (err) {
-      if (clientGenerationRef.current !== generation) return;
       const unsent = sentRow;
 
-      // A send that failed was never admitted: its row goes, and the failure says why.
-      if (unsent !== null) setMessages((prev) => prev.filter((m) => m.id !== unsent));
-      addError({ cause: err });
+      // A send that failed was never admitted: its row goes, and the failure says why, unless the workspace changed.
+      if (clientGenerationRef.current === generation) {
+        if (unsent !== null) setMessages((prev) => prev.filter((m) => m.id !== unsent));
+        addError({ cause: err });
+      }
     } finally {
       clientActionCountRef.current -= 1;
     }

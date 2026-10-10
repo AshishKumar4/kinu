@@ -8,17 +8,17 @@ import { settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { refusal, request, respond } from './http';
 
-function api<Schema extends v.GenericSchema>(schema: Schema, method: string, path: string, body?: JsonValue): Promise<v.InferOutput<Schema>> {
-  return settle(request(schema, path, { method, ...(body !== undefined && { json: body }) }));
+function api<Schema extends v.GenericSchema>(schema: Schema, method: string, path: string, body?: JsonValue): Effect.Effect<v.InferOutput<Schema>> {
+  return request(schema, path, { method, ...(body !== undefined && { json: body }) });
 }
 
 export function getSharedLibrary(): Promise<SharedLibrary> {
-  return api(SharedLibrarySchema, 'GET', '/api/shared');
+  return settle(api(SharedLibrarySchema, 'GET', '/api/shared'));
 }
 
 /** Refused as 404 when unminted or revoked. */
 export function getBlueprint(id: string): Promise<BlueprintView> {
-  return api(BlueprintViewSchema, 'GET', `/api/shared/blueprint/${encodeURIComponent(id)}`);
+  return settle(api(BlueprintViewSchema, 'GET', `/api/shared/blueprint/${encodeURIComponent(id)}`));
 }
 
 const Listing = v.optional(v.literal('pending'));
@@ -28,16 +28,16 @@ const PublishedLink = v.object({ id: v.string(), share: v.string(), users: v.arr
 export type Published = v.InferOutput<typeof PublishedLink>;
 
 export function publishBlueprint(input: { workspace: string; slate: string; version: string; include?: string[]; emails?: string[] }): Promise<Published> {
-  return api(PublishedLink, 'POST', '/api/shared/publish', input);
+  return settle(api(PublishedLink, 'POST', '/api/shared/publish', input));
 }
 
 export function forkBlueprint(input: { blueprint: string; workspace: string }): Promise<BlueprintFork> {
-  return api(BlueprintForkSchema, 'POST', '/api/shared/fork', input);
+  return settle(api(BlueprintForkSchema, 'POST', '/api/shared/fork', input));
 }
 
 /** Fork a live share: admitted the same as a blueprint; `ownerWorkspace` names where it runs. */
 export function forkLiveShare(input: { live: string; ownerWorkspace: string; workspace: string }): Promise<BlueprintFork> {
-  return api(BlueprintForkSchema, 'POST', '/api/shared/fork', input);
+  return settle(api(BlueprintForkSchema, 'POST', '/api/shared/fork', input));
 }
 
 const MeSchema = v.object({ user: v.nullable(v.object({ email: v.string(), signedInWith: v.optional(v.nullable(v.string()), null) })) });
@@ -68,15 +68,15 @@ export function shareLive(input: {
   approved: { slate: string; namespace: string; member: string }[];
   fork?: boolean;
 }): Promise<LiveShareCreated & { listing?: 'pending' }> {
-  return api(v.object({ ...LiveShareCreatedSchema.entries, listing: Listing }), 'POST', '/api/shared/live', input);
+  return settle(api(v.object({ ...LiveShareCreatedSchema.entries, listing: Listing }), 'POST', '/api/shared/live', input));
 }
 
 /** Ends a live share or a blueprint link. */
 export async function revokeShare(input: { workspace: string; share: string }): Promise<{ listing?: 'pending' }> {
-  return await api(v.object({ listing: Listing }), 'POST', '/api/shared/revoke', input);
+  return settle(api(v.object({ listing: Listing }), 'POST', '/api/shared/revoke', input));
 }
 
 /** Share origin for a public share; a ticket-bearing entry for one that names people. */
 export function openLiveShare(input: { workspace: string; share: string }): Promise<{ url: string }> {
-  return api(v.object({ url: v.string() }), 'POST', '/api/shared/live/open', input);
+  return settle(api(v.object({ url: v.string() }), 'POST', '/api/shared/live/open', input));
 }

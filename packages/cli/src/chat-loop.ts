@@ -70,7 +70,8 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
       if (effect.kind === 'interrupt') client.stop();
       else if (effect.kind === 'set-input') pendingPrefill = effect.text;
       else if (effect.kind === 'hint') console.log(DIM(`  ${effect.text}`));
-      else if (effect.kind === 'send-queued') detach(Effect.promise(async () => runTurn(effect.text)));
+      // The machine releases a queued prompt as a turn settles; it is sent once that event's handling has returned.
+      else if (effect.kind === 'send-queued') queueMicrotask(() => detach(Effect.promise(async () => runTurn(effect.text))));
       else if (effect.kind === 'send-branch' && !client.branch(effect.text, { cwd: process.cwd() })) {
         console.log(DIM('  ⧗ the turn just finished. Queued to send next.'));
         dispatch({ type: 'queue', text: effect.text });

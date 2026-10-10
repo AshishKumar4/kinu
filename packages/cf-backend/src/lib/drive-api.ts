@@ -10,8 +10,8 @@ import { settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { refusal, request, respond, type HttpRequest } from './http';
 
-function api<Schema extends v.GenericSchema>(schema: Schema, method: string, path: string, init: Omit<HttpRequest, 'method'> = {}): Promise<v.InferOutput<Schema>> {
-  return settle(request(schema, `/api/drive${path}`, { method, ...init }));
+function api<Schema extends v.GenericSchema>(schema: Schema, method: string, path: string, init: Omit<HttpRequest, 'method'> = {}): Effect.Effect<v.InferOutput<Schema>> {
+  return request(schema, `/api/drive${path}`, { method, ...init });
 }
 
 const Ok = v.object({ ok: v.literal(true) });
@@ -32,27 +32,27 @@ async function zipped(files: readonly PickedFile[]): Promise<Blob> {
 }
 
 export function listDrive(path: string): Promise<DriveListing> {
-  return api(DriveListingSchema, 'GET', `?path=${encodeURIComponent(path)}`);
+  return settle(api(DriveListingSchema, 'GET', `?path=${encodeURIComponent(path)}`));
 }
 
 export async function makeFolder(path: string): Promise<void> {
-  await api(Ok, 'POST', '/folders', { json: { path } });
+  return settle(Effect.asVoid(api(Ok, 'POST', '/folders', { json: { path } })));
 }
 
 export async function renameEntry(from: string, to: string): Promise<void> {
-  await api(Ok, 'POST', '/rename', { json: { from, to } });
+  return settle(Effect.asVoid(api(Ok, 'POST', '/rename', { json: { from, to } })));
 }
 
 export async function deleteEntry(path: string): Promise<void> {
-  await api(Ok, 'DELETE', `?path=${encodeURIComponent(path)}`);
+  return settle(Effect.asVoid(api(Ok, 'DELETE', `?path=${encodeURIComponent(path)}`)));
 }
 
 export async function uploadFile(path: string, file: Blob, signal?: AbortSignal): Promise<void> {
-  await api(Ok, 'PUT', `/files?path=${encodeURIComponent(path)}`, { body: file, signal });
+  return settle(Effect.asVoid(api(Ok, 'PUT', `/files?path=${encodeURIComponent(path)}`, { body: file, signal })));
 }
 
 export async function uploadZip(folder: string, archive: Blob, signal?: AbortSignal): Promise<void> {
-  await api(Ok, 'PUT', `/files?folder=${encodeURIComponent(folder)}&unpack=zip`, { body: archive, signal });
+  return settle(Effect.asVoid(api(Ok, 'PUT', `/files?folder=${encodeURIComponent(folder)}&unpack=zip`, { body: archive, signal })));
 }
 
 export async function uploadFolder(folder: string, files: readonly PickedFile[], signal?: AbortSignal): Promise<void> {
@@ -60,18 +60,18 @@ export async function uploadFolder(folder: string, files: readonly PickedFile[],
 }
 
 export function markAsSkill(path: string): Promise<MarkedSkill> {
-  return api(MarkedSkillSchema, 'POST', '/skills/mark', { json: { path } });
+  return settle(api(MarkedSkillSchema, 'POST', '/skills/mark', { json: { path } }));
 }
 
 export function addSkillText(skill: string): Promise<MarkedSkill> {
-  return api(MarkedSkillSchema, 'POST', '/skills', { json: { skill } });
+  return settle(api(MarkedSkillSchema, 'POST', '/skills', { json: { skill } }));
 }
 
 /** `name` is the folder's name, used as the skill's name when front matter states none. */
 export async function addSkillArchive(archive: Blob, name: string | null): Promise<MarkedSkill> {
   const query = name === null ? '' : `?name=${encodeURIComponent(name)}`;
 
-  return api(MarkedSkillSchema, 'PUT', `/skills${query}`, { body: archive });
+  return settle(api(MarkedSkillSchema, 'PUT', `/skills${query}`, { body: archive }));
 }
 
 export async function addSkillFolder(files: readonly PickedFile[], name: string | null): Promise<MarkedSkill> {

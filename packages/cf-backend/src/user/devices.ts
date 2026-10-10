@@ -411,23 +411,25 @@ export class UserDevices {
   /** The raw token is returned once to the CLI; only its hash is stored. 'Your PC' is the default
    * label. `replaces` is the machine's previous token, whose registration this one replaces. `join` is the device a
    * browser issued for this machine; it registers as that id, once, while the join lasts. */
-  async registerDevice(caller: UserCaller, label?: string, replaces?: string, join?: string): Promise<{ deviceId: string; token: string }> {
-    await this.host.requireTier(caller, 'device.manage');
-    const replaced = replaces === undefined ? null : await this.deviceHoldingToken(caller, replaces);
-    const deviceId = join === undefined ? `dev-${nanoid(10)}` : await settle(this.claimDeviceJoin(join));
-    const token = `pdt_${randomToken(32)}`;
-    const tokenHash = await sha256Hex(token);
-    const now = Date.now();
-    const trimmedLabel = label?.trim().slice(0, DEVICE_NAME_MAX_LENGTH) ?? '';
-    this.host.sqlx(
-      `INSERT INTO user_devices (id, token_hash, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`,
-      deviceId, tokenHash, trimmedLabel === '' ? 'Your PC' : trimmedLabel, now, now + DEVICE_TOKEN_TTL_MS,
-    );
+  registerDevice(caller: UserCaller, label?: string, replaces?: string, join?: string): Promise<{ deviceId: string; token: string }> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* Effect.promise(() => this.host.requireTier(caller, 'device.manage'));
+      const replaced = replaces === undefined ? null : yield* Effect.promise(() => this.deviceHoldingToken(caller, replaces));
+      const deviceId = join === undefined ? `dev-${nanoid(10)}` : yield* this.claimDeviceJoin(join);
+      const token = `pdt_${randomToken(32)}`;
+      const tokenHash = sha256Hex(token);
+      const now = Date.now();
+      const trimmedLabel = label?.trim().slice(0, DEVICE_NAME_MAX_LENGTH) ?? '';
+      this.host.sqlx(
+        `INSERT INTO user_devices (id, token_hash, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`,
+        deviceId, tokenHash, trimmedLabel === '' ? 'Your PC' : trimmedLabel, now, now + DEVICE_TOKEN_TTL_MS,
+      );
 
-    if (replaced !== null) await this.revokeDevice(caller, replaced);
-    else await this.devicesMoved();
+      if (replaced !== null) yield* Effect.promise(() => this.revokeDevice(caller, replaced));
+      else yield* Effect.promise(() => this.devicesMoved());
 
-    return { deviceId, token };
+      return { deviceId, token };
+    }));
   }
 
   private claimDeviceJoin(deviceId: string): Effect.Effect<string, KinuError> {

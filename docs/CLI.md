@@ -634,6 +634,7 @@ Connect this PC so your agents can run commands on it.
 | Option | What it does |
 | --- | --- |
 | `--label <name>` | Name for this device (default: the hostname); skips the name prompt |
+| `--device <id>` | The device a browser issued for this machine, from its connect command |
 
 ```bash
 kinu connect --label studio
