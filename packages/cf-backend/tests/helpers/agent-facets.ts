@@ -48,6 +48,13 @@ export function loseNextHandoff(storageKey: string): void {
   lostHandoffs.add(storageKey);
 }
 
+const lostHandoffAnswers = new Set<string>();
+
+/** The workspace takes the next settled turn the isolate under `storageKey` hands it, and is gone before it answers. */
+export function loseNextHandoffAnswer(storageKey: string): void {
+  lostHandoffAnswers.add(storageKey);
+}
+
 /** The isolate under `storageKey` fails to write its next answer row; the commit is one transaction, so nothing lands. */
 export function failNextAnswerWrite(storageKey: string): void {
   undurableAnswers.add(storageKey);
@@ -201,6 +208,8 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
             if (lostHandoffs.delete(placement.storageKey)) throw new Error('the workspace was reset before it took the handoff');
 
             await host.turnSettled(settled);
+
+            if (lostHandoffAnswers.delete(placement.storageKey)) throw new Error('the workspace took the handoff and was reset before it answered');
           },
           hireAdvisor: (advisor) => host.hireAdvisor(advisor),
           owes: (next, holds) => host.owes(next, holds),

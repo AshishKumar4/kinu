@@ -2795,9 +2795,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Readings this root's settled response owes; all taken now, before any effect runs, since the
    * list is claimed up front. Row order, lanes and gates belong to {@link declareTerminalRoster}.
    */
-  /** The turns whose fleet row this activation recorded: a settlement its isolate retries records none again. */
-  private readonly mainTurnRows = new Set<string>();
-
   /** What main's turns left here, from their preparation to their handoff. */
   private get mainTurnFacts(): MainTurnFactsStore {
     return new MainTurnFactsStore(this.boundSql, this.actorHandle().actorId);
@@ -2820,15 +2817,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       scopedTurn: projectJsonValue({ value: scoped }), recordedAt: settled.recordedAt, evolutionEnabled: held.evolutionEnabled,
     };
 
-    // The fleet's turn row, its outcome the run's own: a tool that failed inside a turn that answered is not a failed turn.
-    if (!this.mainTurnRows.has(prepared)) {
-      this.mainTurnRows.add(prepared);
-      this.recordMainTurnRow(scoped, settled.completed);
-    }
-
     await this.terminal.settle({
       transition: { turnId: settled.turnId, messageId: settled.messageId },
-      declare: () => declareTerminalRoster(facts, this.rosterParts(settled, scoped, held, missionOf(this.getSoulText()))),
+      declare: () => [
+        ...declareTerminalRoster(facts, this.rosterParts(settled, scoped, held, missionOf(this.getSoulText()))),
+        // Its outcome the run's own: a tool that failed inside a turn that answered is not a failed turn.
+        { name: 'fleet_turn', scope: settled.messageId, lane: 'detached', input: { turn: facts.scopedTurn, completed: settled.completed } },
+      ],
     });
     this.mainTurnFacts.retire(prepared);
   }
@@ -2874,6 +2869,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected override terminalEffectTable(): TerminalEffectTable {
     return {
       ...this.sharedTerminalEffects(),
+
+      fleet_turn: terminalEffect({
+        input: v.object({ turn: JsonValueSchema, completed: v.boolean() }),
+        runSync: ({ turn, completed }) => {
+          this.recordMainTurnRow(v.parse(CompletedTurnSchema, turn), completed);
+
+          return { status: 'completed' };
+        },
+      }),
 
       craft_usage: terminalEffect({
         input: v.object({ messageId: v.string(), toolNames: v.array(v.string()) }),

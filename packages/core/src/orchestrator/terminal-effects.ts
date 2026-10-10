@@ -92,6 +92,9 @@ const TERMINAL_EFFECT_NAMES = [
   'parent_report',
   // Detached: a turn whose lanes are another object's hands it the settled turn, which that object owes on its own.
   'workspace_settle',
+  // Detached: the fleet's row for a turn handed over, owed once as its sequence is first recorded however often the
+  // handoff repeats. An analytics write: a crash between it and its claim can write it twice, never lose it.
+  'fleet_turn',
   // Retired (docs/EVOLUTION-REDESIGN.md §6): no turn owes them, and a row an older build wrote completes unrun.
   'shadow_trial', 'auto_gepa',
 ] as const;

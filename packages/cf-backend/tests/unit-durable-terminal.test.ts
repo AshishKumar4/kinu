@@ -15,13 +15,14 @@ import {
 import { createRecordingLogger } from '@kinu.run/core/obs';
 import { sqlOver } from '@kinu.run/test-utils';
 import {
-  chatSessionTurns, driveUntil, ledgerOver, orchestratorHarness,
+  chatSessionTurns, driveUntil, ledgerOver, mainRows, orchestratorHarness,
   reactivateOrchestratorHarness,
   tapDiagnostics, until, workspaceMainActor, type ActorHarness, type HarnessActorWorld, type HarnessOrchestratorAgent,
   type ScriptedHeadReport,
 } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
-import { loseNextHandoff } from './helpers/agent-facets';
+import { loseNextHandoff, loseNextHandoffAnswer } from './helpers/agent-facets';
+import { analyticsEngine } from './helpers/analytics-engine';
 import type { SettledTurn, TurnHarness } from './helpers/turn-harness';
 
 type Harness = ActorHarness<HarnessOrchestratorAgent>;
@@ -382,6 +383,29 @@ describe("a main turn's workspace facts outlive the activation that gathered the
     const restarted = await reactivateOrchestratorHarness(harness.db, undefined, { world });
 
     await driveUntil(restarted, 'the handoff landed without the branch or the review its turn owed', () => takeSets(restarted) === 1 && owedReviews(restarted) === 1);
+  });
+
+  test("a handoff driven again after its workspace reset records main's turn on the fleet once", async () => {
+    const engine = analyticsEngine();
+    const world: HarnessActorWorld = { analytics: engine.bindings };
+    const harness = orchestratorHarness(undefined, world);
+    const fleetTurns = () => engine.tables.kinu_agent_metrics.filter((row) => Object.values(row).includes('turn.settled')).length;
+
+    // The workspace takes the handoff and is gone before main's isolate hears it did: the isolate hands it over again.
+    loseNextHandoffAnswer(harness.agent.agentOf(workspaceMainActor(harness.db).actorId).storageKey);
+    turns(harness).open('u-fleet');
+    await turns(harness).settle({ messageId: 'a-fleet', text: 'the live answer' });
+    await joinHarnessFibers();
+
+    laterBy(1);
+    const restarted = await reactivateOrchestratorHarness(harness.db, undefined, { world });
+    const { db } = await mainRows(restarted);
+    const OwedSchema = v.object({ n: v.number() });
+    const owedHandoffs = () => v.parse(OwedSchema, db.query("SELECT COUNT(*) AS n FROM terminal_effects WHERE effect_key LIKE 'v1:workspace_settle:%'").get()).n;
+
+    await driveUntil(restarted, 'main never handed its turn over again', () => owedHandoffs() === 0);
+
+    expect(fleetTurns()).toBe(1);
   });
 });
 
