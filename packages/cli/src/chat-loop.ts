@@ -241,10 +241,19 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   /** `reserved`: the machine already counts this send, as it does one it released from the queue. */
   const runTurn = async (input: string, mode?: WorkMode, reserved = false) => {
     if (!reserved) dispatch({ type: 'send-started' });
+    interruptRequested = false;
     let consentWatch: ReturnType<typeof watchTerminalConsents> | null = null;
 
     try {
       const resolved = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes, planes: client.planes ?? undefined });
+
+      // Stopped while its attachments were read: it never leaves, and comes back to edit like what was queued.
+      if (interruptRequested) {
+        pendingPrefill = [input, pendingPrefill].filter(Boolean).join(' ');
+        console.log(WARN('  Stopped before it was sent.'));
+
+        return;
+      }
 
       for (const problem of resolved.errors) console.log(WARN(`  ${problem}`));
 
@@ -253,7 +262,6 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
       }
 
       headerPrinted = false;
-      interruptRequested = false;
       turnStatus.show('thinking');
       consentWatch = client.consents ? watchTerminalConsents(client.consents, client.agentName, consentAsk) : null;
 
