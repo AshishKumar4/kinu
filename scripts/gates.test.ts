@@ -555,6 +555,26 @@ describe('root-branches census (design v2 §9)', () => {
     ]);
   });
 
+  test('follows a renamed or aliased root id, policy and parent, and not the same name bound elsewhere', () => {
+    const found = censusOf(source(`class Agent {
+  private get placement(): ActorPolicy { return actorPolicy(this.row); }
+  private get me() { return this.actorHandle().actorId; }
+  aliased(id: string) { const main = this.actorHandle().actorId; return id === main; }
+  destructured(id: string) { const { actorId } = this.actorHandle(); return id === actorId; }
+  member(id: string) { return id === this.me; }
+  getter() { return this.placement.workspaceAgent; }
+  bound(row: Row) { const placed = actorPolicy(row); return placed.workspaceAgent; }
+  typed(where: ActorPolicy) { return where.workspaceAgent; }
+  read(row: Row) { const { workspaceAgent } = actorPolicy(row); return workspaceAgent; }
+  parent(row: Row) { const { parentActorId: up } = row; return up === null; }
+  elsewhere(actorId: string, main: string) { return actorId === main; }
+}`));
+
+    expect([...found.keys()].map((key) => key.split('#')[1])).toEqual([
+      'Agent.aliased', 'Agent.destructured', 'Agent.member', 'Agent.getter', 'Agent.bound', 'Agent.typed', 'Agent.read', 'Agent.parent',
+    ]);
+  });
+
   test('an unclassified branch, a stale entry and a moved count each disagree', () => {
     const found = censusOf(source('function owns(id: string) { return id === this.actorHandle().actorId; }'));
 

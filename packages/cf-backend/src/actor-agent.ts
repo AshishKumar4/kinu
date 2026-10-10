@@ -705,9 +705,9 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /** What this agent's turn may reach in `mode`, decided by core's `turnReach` as every agent's is. It has no hirer, so
-   *  each of its turns runs in its owner's lane. */
-  private reach(mode: WorkMode): TurnReach {
-    return turnReach({ lane: 'owner', mode, driving: this.turnDrivingMetadata(), ownerSurface: true, awaitsReply: this.planReplyDeps() !== undefined });
+   *  each of its turns runs in its owner's lane; `deps` say whether its sent-back plan awaits its answers. */
+  private reach(mode: WorkMode, deps: ActorToolDeps): TurnReach {
+    return turnReach({ lane: 'owner', mode, driving: this.turnDrivingMetadata(), ownerSurface: true, awaitsReply: deps.replyToComment !== undefined });
   }
 
   /**
@@ -3759,7 +3759,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** One build per mode: the turn surface, and the raw one. */
   protected actorToolsets(mode: WorkMode, claimScope?: string): ActorToolsets {
     const actorDeps = this.actorToolDeps();
-    const reach = this.reach(mode);
+    const reach = this.reach(mode, actorDeps);
     const profileKey = actorActiveTools(actorDeps).join(',');
     // Key includes crafted_tools quality (score filtering depends on recency) and the actor profile,
     // so an owner chat never reuses an assigned turn's upward-reporting surface.
@@ -4256,11 +4256,15 @@ export abstract class ActorAgent extends Agent<Env> {
       toolset: (mode) => (mode === input.requestedWorkMode ? input.tools : this.actorToolsets(mode).turn),
       // MCP tools were admitted against the request's model in `readTurnInputs`.
       externalTools: async () => ({ ...extensionTools, ...reads.mcpTools }),
-      wiredToolNames: (mode) => [
-        ...(turnActorDeps.submitPlan && this.reach(mode).submitPlan ? [SUBMIT_PLAN_TOOL] : []),
-        ...(turnActorDeps.replyToComment && this.reach(mode).replyToComment ? [REPLY_TO_COMMENT_TOOL] : []),
-        ...(turnActorDeps.askOwner && this.reach(mode).askOwner ? [ASK_OWNER_TOOL] : []),
-      ],
+      wiredToolNames: (mode) => {
+        const reach = this.reach(mode, turnActorDeps);
+
+        return [
+          ...(turnActorDeps.submitPlan && reach.submitPlan ? [SUBMIT_PLAN_TOOL] : []),
+          ...(turnActorDeps.replyToComment && reach.replyToComment ? [REPLY_TO_COMMENT_TOOL] : []),
+          ...(turnActorDeps.askOwner && reach.askOwner ? [ASK_OWNER_TOOL] : []),
+        ];
+      },
       // `agent` / `llm` are reachable only inside `eval`: derived from the providers wired for this mode.
       codemodeCapabilities: (mode) => codemodeCapabilitiesFor(this.ownNamespaces(mode)),
       agentsActions: () => actorAgentsActions(turnActorDeps, this._accountSwarms === true),

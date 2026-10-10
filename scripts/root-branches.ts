@@ -33,42 +33,192 @@ const CensusSchema = v.record(v.string(), EntrySchema);
 
 export type CensusEntry = v.InferOutput<typeof EntrySchema>;
 
-const isNull = (node: SyntaxNode): boolean => node.raw.type === 'Literal' && 'value' in node.raw && node.raw.value === null;
+/** An ESTree node as the parser hands it over: read by its fields, which differ by `type`. */
+type Raw = SyntaxNode['raw'];
 
-function memberName(node: SyntaxNode): string | undefined {
-  if (node.raw.type !== 'MemberExpression' || node.raw.computed) return undefined;
+/** What a name or member holds, where it is one of the three a branch reads. */
+type Held = 'rootId' | 'policy' | 'parent';
 
-  return node.raw.property.type === 'Identifier' ? node.raw.property.name : undefined;
+/**
+ * What one file binds to a root id, a policy or a parent: a variable or class member whose value is one, a parameter,
+ * variable or getter typed `ActorPolicy`, and a name destructured out of one. A name resolves to its nearest binding,
+ * function scope by function scope, so a rename or an alias does not take a branch out of the census and the same name
+ * bound to something else elsewhere is not one.
+ */
+interface Aliases {
+  /** Each function scope's (and the module's) bindings: what each holds, or null for anything else. */
+  readonly scopes: Map<SyntaxNode, Map<string, Held | null>>;
+  /** `this.<name>` members, class by class alike. */
+  readonly members: Map<string, Held>;
+  readonly nodes: Map<Raw, SyntaxNode>;
 }
 
-/** `….actorHandle().actorId`. */
-function isRootId(node: SyntaxNode): boolean {
-  if (memberName(node) !== 'actorId') return false;
-  const [object] = node.children;
+const FUNCTIONS: ReadonlySet<string> = new Set(['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression']);
 
-  return object?.raw.type === 'CallExpression' && object.children[0] !== undefined && memberName(object.children[0]) === 'actorHandle';
+/** The function (or module) a node's names are bound in. */
+function scopeOf(node: SyntaxNode): SyntaxNode {
+  let up = node.parent;
+
+  while (up?.parent !== undefined && !FUNCTIONS.has(up.raw.type)) up = up.parent;
+
+  return up ?? node;
 }
 
-/** An ActorPolicy: `actorPolicy(…)`, or a value named `policy`. */
-function isPolicy(node: SyntaxNode | undefined): boolean {
-  if (node === undefined) return false;
+const nameOf = (raw: Raw | null | undefined): string | undefined => (raw?.type === 'Identifier' ? raw.name : undefined);
 
-  if (node.raw.type === 'CallExpression') return node.children[0]?.raw.type === 'Identifier' && node.children[0].raw.name === 'actorPolicy';
+function memberOf(raw: Raw | null | undefined): string | undefined {
+  if (raw?.type !== 'MemberExpression' || raw.computed) return undefined;
 
-  return (node.raw.type === 'Identifier' && node.raw.name === 'policy') || memberName(node) === 'policy';
+  return nameOf(raw.property);
 }
 
-function isRootBranch(node: SyntaxNode): boolean {
-  if (node.raw.type === 'MemberExpression') return memberName(node) === 'workspaceAgent' && isPolicy(node.children[0]);
+const isNull = (raw: Raw | undefined): boolean => raw?.type === 'Literal' && 'value' in raw && raw.value === null;
 
-  if (node.raw.type !== 'BinaryExpression' || !['===', '!==', '==', '!='].includes(node.raw.operator)) return false;
-  const [left, right] = node.children;
+/** What `raw` holds through a name or a `this` member bound to one. */
+function heldBy(raw: Raw | null | undefined, aliases: Aliases): Held | null {
+  if (raw === null || raw === undefined) return null;
 
-  if (left === undefined || right === undefined) return false;
+  if (raw.type === 'MemberExpression' && raw.object.type === 'ThisExpression') return aliases.members.get(memberOf(raw) ?? '') ?? null;
+  const name = nameOf(raw);
+  const node = aliases.nodes.get(raw);
 
-  return [[left, right], [right, left]].some(([side, other]) => isRootId(side)
-    || (PARENT_MEMBERS.has(memberName(side) ?? '') && isNull(other))
-    || (memberName(side) === 'origin' && literalString(other.raw) === 'system'));
+  if (name === undefined || node === undefined) return null;
+
+  for (let scope: SyntaxNode | undefined = scopeOf(node); scope !== undefined; scope = scope.parent === undefined ? undefined : scopeOf(scope)) {
+    const bound = aliases.scopes.get(scope)?.get(name);
+
+    if (bound !== undefined) return bound;
+
+    if (scope.parent === undefined) break;
+  }
+
+  return null;
+}
+
+/** `….actorHandle().actorId`, or a name bound to one. */
+function isRootId(raw: Raw | null | undefined, aliases: Aliases): boolean {
+  if (raw?.type === 'MemberExpression' && memberOf(raw) === 'actorId' && raw.object.type === 'CallExpression') {
+    return memberOf(raw.object.callee) === 'actorHandle';
+  }
+
+  return heldBy(raw, aliases) === 'rootId';
+}
+
+/** `actorPolicy(…)`, or a name bound or typed to one. */
+function isPolicy(raw: Raw | null | undefined, aliases: Aliases): boolean {
+  if (raw?.type === 'CallExpression') return nameOf(raw.callee) === 'actorPolicy';
+
+  return heldBy(raw, aliases) === 'policy';
+}
+
+/** A parent: a member naming one, or a name destructured out of one. */
+const isParent = (raw: Raw, aliases: Aliases): boolean => PARENT_MEMBERS.has(memberOf(raw) ?? '') || heldBy(raw, aliases) === 'parent';
+
+/** What a value holds, read through the aliases known so far. */
+function heldIn(value: Raw | null | undefined, aliases: Aliases): Held | null {
+  if (isRootId(value, aliases)) return 'rootId';
+
+  return isPolicy(value, aliases) ? 'policy' : null;
+}
+
+/** The value a getter yields: its one `return`'s argument. */
+function yielded(fn: Raw): Raw | undefined {
+  if (fn.type !== 'FunctionExpression' || fn.body?.type !== 'BlockStatement') return undefined;
+  const [only] = fn.body.body;
+
+  return only?.type === 'ReturnStatement' ? only.argument ?? undefined : undefined;
+}
+
+/** Every name a binding pattern binds, with the key it was destructured by, if any. */
+function boundNames(pattern: Raw, key?: string): { readonly name: string; readonly key: string | undefined; readonly typed: Raw | undefined }[] {
+  if (pattern.type === 'Identifier') return [{ name: pattern.name, key, typed: pattern.typeAnnotation ?? undefined }];
+
+  if (pattern.type === 'AssignmentPattern') return boundNames(pattern.left, key);
+
+  if (pattern.type === 'ObjectPattern') {
+    return pattern.properties.flatMap((property) => (property.type === 'Property' && !property.computed
+      ? boundNames(property.value, nameOf(property.key))
+      : []));
+  }
+
+  return [];
+}
+
+/** A file's aliases, to a fixed point: an alias of an alias is one too. */
+function aliasesOf(tree: SyntaxNode, text: string): Aliases {
+  const aliases: Aliases = { scopes: new Map(), members: new Map(), nodes: new Map() };
+  const typedPolicy = (raw: Raw | undefined): boolean => raw !== undefined && /\bActorPolicy\b/u.test(text.slice(raw.start, raw.end));
+
+  walk(tree, (node) => { aliases.nodes.set(node.raw, node); });
+
+  const bind = (scope: SyntaxNode, name: string, held: Held | null): boolean => {
+    const names = aliases.scopes.get(scope) ?? new Map<string, Held | null>();
+    const before = names.get(name);
+
+    aliases.scopes.set(scope, names);
+    // A name bound twice in one scope is what either binding holds: the census over-counts rather than misses.
+    names.set(name, before ?? held);
+
+    return before === undefined || (before === null && held !== null);
+  };
+
+  const pattern = (scope: SyntaxNode, id: Raw, init: Raw | null | undefined): boolean => boundNames(id).map(({ name, key, typed }) => {
+    if (typedPolicy(typed)) return bind(scope, name, 'policy');
+
+    if (key === undefined) return bind(scope, name, heldIn(init, aliases));
+
+    if (key === 'actorId' && init?.type === 'CallExpression' && memberOf(init.callee) === 'actorHandle') return bind(scope, name, 'rootId');
+
+    return bind(scope, name, PARENT_MEMBERS.has(key) ? 'parent' : null);
+  }).some(Boolean);
+
+  // A class field holds what its value does; a getter what it yields, or a policy where it is typed one.
+  const memberHeld = (raw: Raw): Held | null => {
+    if (raw.type === 'PropertyDefinition') return heldIn(raw.value, aliases);
+
+    if (raw.type !== 'MethodDefinition' || raw.kind !== 'get') return null;
+
+    return typedPolicy(raw.value.returnType ?? undefined) ? 'policy' : heldIn(yielded(raw.value), aliases);
+  };
+
+  for (let changed = true; changed;) {
+    changed = false;
+    walk(tree, (node) => {
+      const { raw } = node;
+
+      if (raw.type === 'VariableDeclarator') changed = pattern(scopeOf(node), raw.id, raw.init) || changed;
+
+      if (FUNCTIONS.has(raw.type) && 'params' in raw) {
+        for (const param of raw.params) changed = (param.type !== 'TSParameterProperty' && pattern(node, param, undefined)) || changed;
+      }
+
+      const member = raw.type === 'PropertyDefinition' || raw.type === 'MethodDefinition' ? nameOf(raw.key) : undefined;
+      const held = memberHeld(raw);
+
+      if (member !== undefined && held !== null && !aliases.members.has(member)) {
+        aliases.members.set(member, held);
+        changed = true;
+      }
+    });
+  }
+
+  return aliases;
+}
+
+function isRootBranch(node: SyntaxNode, aliases: Aliases): boolean {
+  const { raw } = node;
+
+  if (raw.type === 'MemberExpression') return memberOf(raw) === 'workspaceAgent' && isPolicy(raw.object, aliases);
+
+  // `const { workspaceAgent } = actorPolicy(…)` reads it where it destructures it.
+  if (raw.type === 'VariableDeclarator' && isPolicy(raw.init, aliases)) return boundNames(raw.id).some(({ key }) => key === 'workspaceAgent');
+
+  if (raw.type !== 'BinaryExpression' || !['===', '!==', '==', '!='].includes(raw.operator) || raw.left.type === 'PrivateIdentifier') return false;
+  const sides: readonly (readonly [Raw, Raw])[] = [[raw.left, raw.right], [raw.right, raw.left]];
+
+  return sides.some(([side, other]) => isRootId(side, aliases)
+    || (isParent(side, aliases) && isNull(other))
+    || (memberOf(side) === 'origin' && literalString(other) === 'system'));
 }
 
 /** The enclosing declarations' names, outermost first: `OrchestratorAgent.hostedTaskProfile`. */
@@ -97,11 +247,13 @@ export function rootBranches(sources: ReadonlyMap<string, string>): RootBranch[]
 
   for (const [file, text] of sources) {
     // A cheap prefilter: no file without one of the names holds a branch.
-    if (!/actorHandle|parentActorId|parentKey|parentRelay|hirer|origin|workspaceAgent/u.test(text)) continue;
+    if (!/actorHandle|parentActorId|parentKey|parentRelay|hirer|origin|workspaceAgent|ActorPolicy|actorPolicy/u.test(text)) continue;
     const parsed = parse(file, text);
 
+    const aliases = aliasesOf(parsed.root, text);
+
     walk(parsed.root, (node) => {
-      if (isRootBranch(node)) found.push({ key: `${file}#${symbolOf(node)}`, line: parsed.lineAt(node.start), code: text.slice(node.start, node.end) });
+      if (isRootBranch(node, aliases)) found.push({ key: `${file}#${symbolOf(node)}`, line: parsed.lineAt(node.start), code: text.slice(node.start, node.end) });
     });
   }
 

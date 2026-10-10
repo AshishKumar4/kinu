@@ -107,6 +107,11 @@
     "until": "step 7",
     "why": "An id compared to the root's: the root acting as itself, which design v2 step 7 removes with the census H sites."
   },
+  "packages/cf-backend/src/orchestrator.ts#OrchestratorAgent.agentWorkspace.sayToParent": {
+    "count": 1,
+    "kind": "J",
+    "why": "Hierarchy read from the row (a null parent is the tree root), not an id compared to the root."
+  },
   "packages/cf-backend/src/orchestrator.ts#OrchestratorAgent.agentWorkspace.sayToParent.parent": {
     "count": 1,
     "kind": "H",
@@ -167,10 +172,34 @@
     "kind": "J",
     "why": "Hierarchy read from the row (a null parent is the tree root), not an id compared to the root."
   },
+  "packages/cf-backend/src/orchestrator.ts#OrchestratorAgent.hostedWindowName": {
+    "count": 1,
+    "kind": "H",
+    "until": "step 7",
+    "why": "An id compared to the root's: the root acting as itself, which design v2 step 7 removes with the census H sites."
+  },
+  "packages/cf-backend/src/orchestrator.ts#OrchestratorAgent.inspectWork.actorName": {
+    "count": 1,
+    "kind": "H",
+    "until": "step 7",
+    "why": "An id compared to the root's: the root acting as itself, which design v2 step 7 removes with the census H sites."
+  },
+  "packages/cf-backend/src/orchestrator.ts#OrchestratorAgent.inspectWork.running": {
+    "count": 1,
+    "kind": "H",
+    "until": "step 7",
+    "why": "An id compared to the root's: the root acting as itself, which design v2 step 7 removes with the census H sites."
+  },
   "packages/cf-backend/src/orchestrator.ts#OrchestratorAgent.isAgent": {
     "count": 1,
     "kind": "J",
     "why": "Hierarchy read from the row (a null parent is the tree root), not an id compared to the root."
+  },
+  "packages/cf-backend/src/orchestrator.ts#OrchestratorAgent.maintenanceWork.resumable": {
+    "count": 1,
+    "kind": "H",
+    "until": "step 7",
+    "why": "An id compared to the root's: the root acting as itself, which design v2 step 7 removes with the census H sites."
   },
   "packages/cf-backend/src/orchestrator.ts#OrchestratorAgent.operationActor": {
     "count": 1,
@@ -227,6 +256,11 @@
     "kind": "J",
     "why": "Hierarchy read from the row (a null parent is the tree root), not an id compared to the root."
   },
+  "packages/cli-backend/src/agent-host/host.ts#LocalAgentHost.drainAssignedWork": {
+    "count": 1,
+    "kind": "J",
+    "why": "The CLI tree: a null parent key is the tree root, a structural fact of the hosted tree."
+  },
   "packages/cli-backend/src/agent-host/host.ts#LocalAgentHost.drainAssignedWork.swept.run.hirer": {
     "count": 1,
     "kind": "J",
@@ -256,6 +290,11 @@
     "count": 1,
     "kind": "J",
     "why": "Hierarchy read from the row (a null parent is the tree root), not an id compared to the root."
+  },
+  "packages/cli-backend/src/agent-host/host.ts#LocalAgentHost.wakeHire": {
+    "count": 1,
+    "kind": "J",
+    "why": "The CLI tree: a null parent key is the tree root, a structural fact of the hosted tree."
   },
   "packages/cli-backend/src/local-session.ts#LocalAgentSession.applyAutoTitle.state.slug": {
     "count": 1,

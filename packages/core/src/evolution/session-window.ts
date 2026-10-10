@@ -201,7 +201,7 @@ export interface CompletedTurnStore {
   releaseQueuedReview(rowId: string): void;
   countQueuedReviews(): number;
   /** Re-queue claims whose process died, unless the review already ran (then
-   *  settle). Returns how many rows were re-queued. */
+   *  settle), and the reviews openings took but died before claiming. Returns how many rows were re-queued. */
   resetStaleClaims(): number;
 }
 
@@ -218,6 +218,14 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
     void sql`DELETE FROM completed_turns
       WHERE actor_id = ${actorId} AND in_window = 0 AND review IN ('none','done')`;
   };
+
+  // An opening that died before its claim: its obligation goes to the deferred lane with its own follow-up. `except` is
+  // the opening asking, whose replay claims its own.
+  const queueCutObligations = (except: string | null): number => sql<{ id: string }>`UPDATE completed_turns SET review = 'queued',
+      followup = (SELECT o.followup FROM opened_turns o WHERE o.actor_id = ${actorId} AND o.review_id = completed_turns.id)
+    WHERE actor_id = ${actorId} AND review = 'awaiting_followup'
+      AND id IN (SELECT review_id FROM opened_turns WHERE actor_id = ${actorId} AND turn_id IS NOT ${except} AND review_id IS NOT NULL)
+    RETURNING id`.length;
 
   const decode = (row: TurnRow): CompletedTurn | null => {
     // Unreadable rows (e.g. another code version) are skipped so the cadence never stalls.
@@ -306,12 +314,7 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
 
     openTurn(turnId, grade) {
       authorize();
-
-      // An earlier opening that died before its claim: its obligation goes to the deferred lane with its own follow-up.
-      void sql`UPDATE completed_turns SET review = 'queued', followup = (SELECT o.followup FROM opened_turns o
-          WHERE o.actor_id = ${actorId} AND o.review_id = completed_turns.id)
-        WHERE actor_id = ${actorId} AND review = 'awaiting_followup'
-          AND id IN (SELECT review_id FROM opened_turns WHERE actor_id = ${actorId} AND turn_id <> ${turnId} AND review_id IS NOT NULL)`;
+      queueCutObligations(turnId);
 
       if (grade === null) void sql`INSERT INTO opened_turns (actor_id, turn_id, review_id, followup) VALUES (${actorId}, ${turnId}, NULL, NULL) ON CONFLICT (actor_id, turn_id) DO NOTHING`;
       else {
@@ -448,10 +451,13 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
     resetStaleClaims() {
       authorize();
 
+      // Recovery owes what a cut opening took as much as what a claim leased: no later opening may come to queue it.
+      const cut = queueCutObligations(null);
+
       const stale = sql<{ id: string }>`
         SELECT id FROM completed_turns WHERE actor_id = ${actorId} AND review = 'claimed'`;
 
-      if (stale.length === 0) return 0;
+      if (stale.length === 0) return cut;
       // A claim is a lease: an eviction after `reviewTurn`'s append-only writes
       // but before `settleReview` must not re-run the review, so tombstoned rows
       // are settled and only the rest re-queued.
@@ -471,7 +477,7 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
 
       sweepSettled();
 
-      return requeued;
+      return cut + requeued;
     },
   };
 }
