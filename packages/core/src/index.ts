@@ -1956,7 +1956,7 @@ export {
 } from './read-models/files';
 
 export type {
-  DirEntry, ExecutorFileLookup, ExecutorRowLookup, ExecutorWriteResult,
+  DirEntry, ExecutorFileLookup, ExecutorRowLookup, ExecutorTextFile, ExecutorWriteResult,
   EnvironmentInfo, MountInfo,
 } from './read-models/files';
 

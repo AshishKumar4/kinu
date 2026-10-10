@@ -274,9 +274,24 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
   // nothing is there, and every overwrite is checked by the revision read.
   test('a create says it checked absence; an overwrite is checked by the revision read, and a peer\'s write refused', async () => {
     const { rt, vfs } = buildPlane();
+    let peer: (() => Promise<void>) | null = null;
+    const check = present(vfs.writeFileIfRevision?.bind(vfs), 'the store\'s check');
+
+    // A peer's write that lands after the tool's own checks and before the store's: only the revision catches it.
+    const racing: typeof vfs = {
+      ...vfs,
+      writeFileIfRevision: async (path, data, expected) => {
+        const landing = peer;
+
+        peer = null;
+        await landing?.();
+
+        return await check(path, data, expected);
+      },
+    };
 
     const file = toolExecute<FileToolInput, JsonValue>(createFileTool({
-      home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory: rt.memory,
+      home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: racing, ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory: rt.memory,
     }));
 
     expect(await file({ op: 'write', path: 'plan.md', content: 'first\n' })).toMatchObject({ action: 'created', checked: 'absence' });
@@ -284,9 +299,9 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
     expect(await file({ op: 'write', path: 'plan.md', content: 'second\n' })).toMatchObject({ action: 'replaced', checked: 'revision' });
 
     await file({ op: 'read', path: 'plan.md' });
-    await writeText(vfs, 'plan.md', 'the owner saved this\n');
+    peer = async () => { await writeText(vfs, 'plan.md', 'the owner saved this\n'); };
 
-    await expect(file({ op: 'write', path: 'plan.md', content: 'third\n' })).rejects.toThrow('changed since it was read');
+    await expect(file({ op: 'write', path: 'plan.md', content: 'third\n' })).rejects.toThrow('changed since it was read: it now holds revision');
     expect(await readText(vfs, 'plan.md')).toBe('the owner saved this\n');
   });
 

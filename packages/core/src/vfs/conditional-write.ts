@@ -27,9 +27,10 @@ export type ObservedFile =
 
 /**
  * Which check held: the plane's revision, the read bytes' digest compared by the plane, the same compared across the
- * wire where the plane cannot (`/shared`), or, for a create on the workspace store, that nothing was there just before.
+ * wire where the plane cannot (`/shared`), for a create on the workspace store that nothing was there just before, or
+ * none, on a plane that checks neither (`unchecked`).
  */
-export type WriteGuarantee = 'revision' | 'digest' | 'digest-remote' | 'absence';
+export type WriteGuarantee = 'revision' | 'digest' | 'digest-remote' | 'absence' | 'none';
 
 /** What the file holds now, in the plane's own terms: its revision, or its bytes' digest (null: no file). */
 export type FileNow = { readonly revision: VfsRevision } | { readonly sha256: string | null };
@@ -60,7 +61,7 @@ function changed(path: string, now: FileNow): FileRefusalError {
   });
 }
 
-const UNSUPPORTED = (path: string) => new KinuError('unsupported', `${path}: this file plane can check neither a revision nor a digest, so a write there could lose a newer one`);
+const UNSUPPORTED = (path: string) => new KinuError('unsupported', `${path}: this file plane keeps no revisions, so a save over the one you opened cannot be checked`);
 
 /** A plane's own refusal of a check it does not make (ENOTSUP): the other check may still be its. Null for that. */
 function made<A>(attempt: () => Awaitable<A>): Effect.Effect<A | null> {
@@ -137,8 +138,26 @@ function byAbsence(vfs: VFS & CheckpointFiles, path: string, data: Uint8Array): 
 }
 
 /**
+ * A plane that checks neither a revision nor a digest writes as it did before there was a check, and says so (`none`);
+ * a create still finds out first whether a file is there. No plane the agent's file tool or the file manager reaches
+ * is one: this keeps a plane without them working, not silently guarded.
+ */
+function unchecked(vfs: VFS & CheckpointFiles, path: string, data: Uint8Array, observed: ObservedFile): Effect.Effect<ConditionalWrite, KinuError> {
+  return Effect.gen(function* () {
+    if (observed.kind === 'absent' && (yield* Effect.promise(async () => vfs.stat(path))) !== null) {
+      return yield* Effect.fail(changed(path, { sha256: sha256Hex(yield* Effect.promise(async () => vfs.readFile(path))) }));
+    }
+
+    yield* Effect.promise(async () => vfs.writeFile(path, data));
+
+    return { guarantee: 'none' as const, now: { sha256: sha256Hex(data) }, report: null };
+  });
+}
+
+/**
  * `data` at `path`, only over what `observed` says was there: by the revision read where the plane checks one, else by
- * the read bytes' digest. A plane that makes neither check refuses; nothing ever writes unconditionally.
+ * the read bytes' digest; a plane that makes neither writes as before (`unchecked`). An editor's revision on a plane
+ * with no revision check is refused, as the file manager always refused it.
  */
 export function writeConditionally(
   vfs: VFS & CheckpointFiles, path: string, data: Uint8Array, observed: ObservedFile,
@@ -168,6 +187,6 @@ export function writeConditionally(
 
     const absentByRevision = observed.kind === 'absent' ? yield* byAbsence(vfs, path, data) : null;
 
-    return absentByRevision ?? (yield* Effect.fail(UNSUPPORTED(path)));
+    return absentByRevision ?? (yield* unchecked(vfs, path, data, observed));
   }));
 }

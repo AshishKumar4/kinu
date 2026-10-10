@@ -190,7 +190,7 @@ import {
   getExecutorFiles, readExecutorFile, listEnvironments,
   renameExecutorPathOp, deleteExecutorPathOp,
   ExecutorFileUpload, ExecutorFileDownload,
-  type DirEntry, type ExecutorWriteResult,
+  type DirEntry, type ExecutorTextFile, type ExecutorWriteResult,
   cancelBackgroundJob, clearBackgroundJobs, dismissBackgroundJob,
   jobResult, listBackgroundJobs, retryBackgroundJob, reconcileInterruptedForks,
   jobRedriveResumeGate, resumableForkRoots,
@@ -5779,7 +5779,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return getExecutorFiles(this.rt.executionRouter, executorId, path);
   }
 
-  @callable() async readExecutorFile(executorId: string, path: string): Promise<{ content?: string; truncated?: boolean; error?: string }> {
+  @callable() async readExecutorFile(executorId: string, path: string): Promise<ExecutorTextFile> {
     if (!this.rt.executionRouter) return { error: 'no execution router' };
 
     return readExecutorFile(this.rt.executionRouter, executorId, path);

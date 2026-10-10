@@ -79,7 +79,7 @@ describe("writeExecutorFileOp", () => {
     const { deps, written } = makeDeps();
     const bytes = new Uint8Array([0, 1, 2, 255, 0, 128]);
     const result = await writeExecutorFileOp(deps, "workspace", "/uploads/blob.bin", { bytes: bytes });
-    expect(result).toEqual({ ok: true });
+    expect(result).toMatchObject({ ok: true });
     expect(written.get("/uploads/blob.bin")).toEqual(bytes);
   });
 
@@ -87,7 +87,7 @@ describe("writeExecutorFileOp", () => {
     const { deps, written } = makeDeps();
     const bin = new Uint8Array([0x89, 0x50, 0x00, 0xff, 0xfe]);
     // Each environment gets the path in its own namespace: nothing prefixed or stripped.
-    expect(await writeExecutorFileOp(deps, "sandbox", "/workspace/logo.png", { bytes: bin })).toEqual({ ok: true });
+    expect(await writeExecutorFileOp(deps, "sandbox", "/workspace/logo.png", { bytes: bin })).toMatchObject({ ok: true });
     expect(written.get("/workspace/logo.png")).toEqual(bin);
 
     expect(await writeExecutorFileOp(deps, "nimbus", "/home/main/a.bin", { bytes: bin })).toEqual({ ok: true });
@@ -127,7 +127,7 @@ describe("writeExecutorFileOp", () => {
     // Uploads are HTTP with raw bytes and the VFS chunks storage, so no app-level size cap applies.
     const { deps, written } = makeDeps();
     const big = new Uint8Array(3 * 1024 * 1024);
-    expect(await writeExecutorFileOp(deps, "workspace", "/uploads/big.bin", { bytes: big })).toEqual({ ok: true });
+    expect(await writeExecutorFileOp(deps, "workspace", "/uploads/big.bin", { bytes: big })).toMatchObject({ ok: true });
     const stored = written.get("/uploads/big.bin");
 
     if (!(stored instanceof Uint8Array)) throw new Error("binary upload was not stored as bytes");
