@@ -166,7 +166,13 @@ export const LONG_TURN_GROWTH_BOUND_BYTES = { workspace: 2_500_000, main: 8_000_
  *  (armada 20261010034927-e852fa06). A step moved from one isolate to the other is the same work.
  *  Until 2026-10-10 the read raced the turn's tail, about 20 MB in main's isolate and 10 MB in the workspace's: 143-154 MB
  *  in 7 of 9 runs before the turn-surface work (b9c667740) and 165-169 MB in 2, as on 5724b7472. Read at settlement, its
- *  sleep-time lane off: 171.6-183.0 MB over 15 runs on 0d3f6491a, 54-60 MB in the workspace's and 116-125 MB in main's. */
+ *  sleep-time lane off: 171.6-183.0 MB over 15 runs on 0d3f6491a, 54-60 MB in the workspace's and 116-125 MB in main's.
+ *  The tail, profiled apart from the last step's release to settlement (scratch eaabadf3a, 3 runs): 18.0-20.6 MB in
+ *  main's isolate and 10.9-11.1 MB in the workspace's. Of main's, 3.4 MB announced the turn to no extension (cut,
+ *  b65abe3ff) and 3.2 MB read its narration for nothing (cut, 8f78f86e9), leaving 10.8-13.1 MB: the transcript frame's
+ *  read, the output references decoded from every part, the figures, the commit and about 5 MB of RPC serialization; the
+ *  workspace's is mostly that serialization and the 1.7 MB frame. With both cuts, 167.5-175.5 MB over 9 runs on
+ *  5a5a155be, 110.7-116.6 MB of it main's. */
 export const LONG_TURN_ALLOCATED_BOUND_BYTES = 195_000_000;
 
 /** Measured 2026-09-26 at {@link STEP} before any copy fix: 13.5 MB, the transcript and, whole, the last request;

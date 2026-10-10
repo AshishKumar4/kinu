@@ -217,8 +217,11 @@ const turnStatements = new Map<number, { readonly workspace: OperationCost['tabl
  * and the fleet row its handoff owes as an effect (terminal_effects +2). Each of those four calls resolves the agent's
  * roster row twice on entry (workspace_actors +8); the activity log writes 4 fewer. The workspace's 388, main's 448.
  * 835 once a stream part opens with its first window in the row it inserts (main's isolate -1, at both sizes).
+ * 801 once a turn's close neither reads its answer back to announce it to no extension (b65abe3ff) nor reads its
+ * narration for no slate and no failed task (8f78f86e9): the workspace's 380, main's 421, at both sizes over 3 runs
+ * on 380d7148e.
  */
-const TURN_STATEMENTS = 835;
+const TURN_STATEMENTS = 801;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {
@@ -339,8 +342,10 @@ test('a production turn runs no more statements than it was measured at, and ask
  * Counted again at f0fd1ee06 by entry alone, a receiver's calls on itself and a target's instances that never left
  * the workspace not counted: the same figures, so no turn crossing was a helper. The planted session read was three
  * crossings before (its `client()` and `cred()` counted, scratch 335c923de) and is one.
+ * The close is 55 once it no longer reads main's answer back to announce it to no extension (`facet.answer`,
+ * b65abe3ff), over 3 runs on 380d7148e.
  */
-const CROSSINGS = { open: 39, step: 19, close: 56 } as const;
+const CROSSINGS = { open: 39, step: 19, close: 55 } as const;
 
 /**
  * The planted calls (`ObservedOrchestrator.plantCrossings`), each counted once where it lands, and nothing else: the
