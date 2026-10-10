@@ -106,7 +106,8 @@ function afterSeed(workspace: WorkspaceBundle, seed: () => Promise<void>): VFS &
     readRange: chain((p: string, offset: number, length: number) => vfs.readRange(p, offset, length)),
     writeFile: chain((p: string, d: Uint8Array) => vfs.writeFile(p, d)),
     readdir: chain((p: string) => vfs.readdir(p)),
-    stat: chain((p: string, options?: { follow?: boolean }) => vfs.stat(p, options)),
+    // Through the namespace, as production's file plane stats: its revision is the one its compare-and-write checks.
+    stat: chain(async (p: string, options?: { follow?: boolean }) => (await workspace.namespace()).stat(at(p), options)),
 
     readlink: chain((p: string) => vfs.readlink(p)),
     unlink: chain((p: string) => vfs.unlink(p)),

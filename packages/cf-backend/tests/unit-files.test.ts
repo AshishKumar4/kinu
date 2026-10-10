@@ -9,6 +9,24 @@ import {
 } from "@kinu.run/core";
 import { requestUrl } from '@kinu.run/core';
 import { VfsError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
+import type { CheckpointFiles } from '@kinu.run/core';
+
+/** A plane that compares a write's digest itself, as the host folder, a machine and the sandbox do. */
+function digestChecked(files: VFS): VFS & CheckpointFiles {
+  const digest = (bytes: Uint8Array) => new Bun.CryptoHasher('sha256').update(bytes).digest('hex');
+
+  return {
+    ...files,
+    writeFileIfDigest: async (path, data, expected) => {
+      const held = await files.stat(path) === null ? null : digest(await files.readFile(path));
+
+      if (held !== expected) return { ok: false, sha256: held };
+      await files.writeFile(path, data);
+
+      return { ok: true, sha256: digest(data) };
+    },
+  };
+}
 
 describe("sortDirEntries", () => {
   test("dirs before files, alphabetical within each group", () => {
@@ -52,7 +70,7 @@ describe("writeExecutorFileOp", () => {
       mkdir: async () => undefined,
     };
 
-    const deps = { getProvider: () => ({ files, homeDir: async () => "/home/main" }) };
+    const deps = { getProvider: () => ({ files: digestChecked(files), homeDir: async () => "/home/main" }) };
 
     return { deps, written };
   }
@@ -175,7 +193,7 @@ function makeTree(seed: Record<string, string>, opts: { native?: boolean; unlink
     }
     : {};
 
-  const deps = { getProvider: () => ({ files: { ...vfs, ...native }, homeDir: async () => "/home/main" }) };
+  const deps = { getProvider: () => ({ files: { ...digestChecked(vfs), ...native }, homeDir: async () => "/home/main" }) };
 
   return { deps, files, dirs, renames, removed };
 }

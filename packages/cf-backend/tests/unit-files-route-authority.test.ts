@@ -59,6 +59,11 @@ function statOf(files: Map<string, string>, path: string): JsonValue {
   return [...files.keys()].some((name) => name.startsWith(`${path}/`)) ? { size: 0, mtimeMs: 1, isDir: true } : null;
 }
 
+const sha256Of = (text: string): string => new Bun.CryptoHasher('sha256').update(text).digest('hex');
+
+/** The editor's token for a machine's file: the digest of the bytes it was shown. */
+const shownAs = (text: string): string => JSON.stringify(`sha256:${sha256Of(text)}`);
+
 /** The far end has to answer, or a call that passed consent could not be told from one that was stopped. */
 function daemon(files: Map<string, string>) {
   return (frame: DeviceFrame): JsonValue => {
@@ -82,6 +87,18 @@ function daemon(files: Map<string, string>) {
         files.set(path, v.is(Base64WriteSchema, frame.params[2]) ? atob(raw) : raw);
 
         return { success: true };
+      }
+
+      // The machine compares what it holds against the digest named, then replaces, as the daemon does.
+      case 'writeFileIfDigest': {
+        const held = body === undefined ? null : sha256Of(body);
+
+        if (held !== (frame.params[2] ?? null)) return { ok: false, sha256: held };
+        const next = atob(v.parse(v.string(), frame.params[1] ?? ''));
+
+        files.set(path, next);
+
+        return { ok: true, sha256: sha256Of(next) };
       }
 
       default: return { stdout: DEVICE_HOME, stderr: '', exitCode: 0 };
@@ -512,8 +529,9 @@ describe('the authority the caller does hold', () => {
 
     const read = await rail.files({ session: rail.ownerSession, workspace: 'allowed-device', path: PC_FILE });
 
+    // A replace names the bytes it replaces, as the owner's "Replace" does.
     const write = await rail.files({
-      session: rail.ownerSession, workspace: 'allowed-device', path: PC_FILE, method: 'PUT', body: 'rewritten',
+      session: rail.ownerSession, workspace: 'allowed-device', path: PC_FILE, method: 'PUT', body: 'rewritten', ifMatch: shownAs('hello'),
     });
 
     const renamed = await rail.actorFor('allowed-device').renameExecutorFile('workspace', PC_FILE, MOVED);
@@ -547,10 +565,10 @@ describe('a transfer that does not finish', () => {
     expect(await errorOf(interrupted)).toBe('the upload stopped before the whole file arrived');
     // No half file: bytes are held until the final chunk.
     expect(rail.device.get(DEVICE_FILE)).toBe('hello');
-    expect(rail.fileFrames().some((frame) => frame.method === 'writeFile')).toBe(false);
+    expect(rail.fileFrames().some((frame) => frame.method.startsWith('writeFile'))).toBe(false);
 
     const retried = await rail.files({
-      session: rail.ownerSession, workspace: 'upload-cut', path: PC_FILE, method: 'PUT', body: 'all of it',
+      session: rail.ownerSession, workspace: 'upload-cut', path: PC_FILE, method: 'PUT', body: 'all of it', ifMatch: shownAs('hello'),
     });
 
     expect(v.parse(OkReplySchema, await retried.json())).toEqual({ ok: true });

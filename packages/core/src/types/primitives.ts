@@ -29,7 +29,13 @@ export interface VfsWriteReport {
 }
 
 /** A digest-checked write's answer: the bytes' new digest, or `ok: false` with the digest found (null: absent). */
-export type VfsDigestWrite = { readonly ok: true; readonly sha256: string; readonly report?: VfsWriteReport } | { readonly ok: false; readonly sha256: string | null };
+export type VfsDigestWrite =
+  | {
+    readonly ok: true; readonly sha256: string; readonly report?: VfsWriteReport;
+    /** The plane could not compare and write in one step of its own: the caller's read and write were a round trip apart. */
+    readonly remote?: true;
+  }
+  | { readonly ok: false; readonly sha256: string | null };
 
 export interface CheckpointFiles {
   writeFileWithReport?(path: string, data: Uint8Array): Promise<VfsWriteReport | null>;

@@ -3,6 +3,7 @@ import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, test } from 'bun:test';
 import { createMemoryVfs } from '@kinu.run/test-utils';
 import { withMountTable } from '../src/vfs/mounts';
+import { writeConditionally } from '../src/vfs/conditional-write';
 import { mossaicVfs, type MossaicClient } from '../src/vfs/mossaic-vfs';
 import { sharedDriveMount, SHARED_DRIVE_UNCLAIMED } from '../src/vfs/shared-drive';
 import { isVfsError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
@@ -43,6 +44,21 @@ describe('the /shared mount', () => {
     expect(await readText(alice, `${SHARED_ROOT}/notes.txt`)).toBe('alice only');
     expect(mossaic.stores.get('user-bob')?.size).toBe(1);
     expect(mossaic.stores.get('user-alice')?.size).toBe(1);
+  });
+
+  test('the owner\'s Drive is edited over what was read, compared a round trip before the write, and says so', async () => {
+    const mossaic = fakeMossaic();
+    const plane = workspacePlane(mossaic, () => 'user-alice');
+    const path = `${SHARED_ROOT}/plan.md`;
+    const bytes = (text: string) => new TextEncoder().encode(text);
+
+    expect(await writeConditionally(plane, path, bytes('first'), { kind: 'absent' })).toMatchObject({ guarantee: 'digest-remote' });
+    const read = await plane.readFile(path);
+
+    await writeText(plane, path, 'the owner saved this');
+
+    await expect(writeConditionally(plane, path, bytes('second'), { kind: 'read', bytes: read })).rejects.toThrow('changed since it was read');
+    expect(await readText(plane, path)).toBe('the owner saved this');
   });
 
   test('an unclaimed workspace has no Drive: a stated absence, never an empty folder', async () => {

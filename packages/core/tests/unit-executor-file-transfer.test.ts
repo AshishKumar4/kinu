@@ -72,7 +72,7 @@ describe("ExecutorFileUpload", () => {
     for (let at = 0; at < whole.byteLength; at += FILE_CHUNK_BYTES) {
       const slice = whole.subarray(at, Math.min(at + FILE_CHUNK_BYTES, whole.byteLength));
       const last = at + slice.byteLength >= whole.byteLength;
-      expect(await upload.chunk(at, slice, last)).toEqual({ ok: true });
+      expect(await upload.chunk(at, slice, last)).toEqual(last ? { ok: true, revision: 1 } : { ok: true });
     }
 
     expect(upload.done).toBe(true);
@@ -84,7 +84,7 @@ describe("ExecutorFileUpload", () => {
     const plane = makePlane();
     const upload = new ExecutorFileUpload(plane.router, "workspace", "/home/main/SOUL.md");
 
-    expect(await upload.chunk(0, new TextEncoder().encode("# mine"), true)).toEqual({ ok: true });
+    expect(await upload.chunk(0, new TextEncoder().encode("# mine"), true)).toEqual({ ok: true, revision: 1 });
     expect(new TextDecoder().decode(plane.files.get("/home/main/SOUL.md"))).toBe("# mine");
     expect(await deleteExecutorPathOp(plane.router, "workspace", "/home/main/SOUL.md")).toEqual({ ok: true });
     expect(plane.files.size).toBe(0);
@@ -97,7 +97,7 @@ describe("ExecutorFileUpload", () => {
     const skipped = await upload.chunk(FILE_CHUNK_BYTES + 1, patternBytes(4), false);
     expect(skipped).toMatchObject({ error: expect.stringContaining("expected offset") });
     // The honest continuation still lands: the refusal did not poison state.
-    expect(await upload.chunk(FILE_CHUNK_BYTES, patternBytes(4), true)).toEqual({ ok: true });
+    expect(await upload.chunk(FILE_CHUNK_BYTES, patternBytes(4), true)).toEqual({ ok: true, revision: 1 });
   });
 
   test("a chunk larger than FILE_CHUNK_BYTES is refused", async () => {

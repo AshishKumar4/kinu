@@ -1043,7 +1043,8 @@ function galleryUploadFixture(path: string, method: string): Response | null {
     return Response.json({ error: "This file changed after you opened it.", revision: 7 }, { status: 412 });
   }
 
-  return Response.json({ ok: true, revision: 8 });
+  // The route's own body, as the client parses it.
+  return new Response('{"ok":true,"revision":8}', { headers: { "content-type": "application/json" } });
 }
 
 function userFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response> | null {

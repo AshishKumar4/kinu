@@ -219,15 +219,15 @@ describe("files route — PUT", () => {
     expect(text(await ws.held())).toBe("newer");
   });
 
-  test("an upload without If-Match remains unconditional", async () => {
+  test("an upload without If-Match only creates: over a file already there it is a 412 naming that file's revision", async () => {
     const ws = workspace();
     await ws.files.writeFile(PATH, new TextEncoder().encode("newer"));
 
-    const response = await route(put("unconditional"), ws.agent);
+    const response = await route(put("dropped over it"), ws.agent);
 
-    expect(response.status).toBe(200);
-    expect(v.parse(OkReplySchema, await response.json())).toEqual({ ok: true });
-    expect(text(await ws.held())).toBe("unconditional");
+    expect(response.status).toBe(412);
+    expect(v.parse(ConflictReplySchema, await response.json()).revision).toEqual(await ws.revision());
+    expect(text(await ws.held())).toBe("newer");
   });
 
   // The plane's half is core's (writeExecutorFileOp answers `unsupported` where no compare-and-write exists).
@@ -265,9 +265,10 @@ describe("files route — PUT", () => {
 
     expect(await chunk("upload-a", 0, a.subarray(0, 1), false)).toEqual({ ok: true });
     expect(await chunk("upload-b", 0, b.subarray(0, 1), false)).toEqual({ ok: true });
-    expect(await chunk("upload-a", 1, a.subarray(1), true)).toEqual({ ok: true });
-    expect(await chunk("upload-b", 1, b.subarray(1), true)).toEqual({ ok: true });
-    expect(text(await ws.held())).toBe("BB");
+    // Both create: the first lands, the second finds a file there and is the owner's to choose.
+    expect(await chunk("upload-a", 1, a.subarray(1), true)).toMatchObject({ ok: true });
+    expect(await chunk("upload-b", 1, b.subarray(1), true)).toMatchObject({ conflict: true });
+    expect(text(await ws.held())).toBe("AA");
   });
 
   test("every chunk carries the expected revision fixed by offset zero", async () => {

@@ -6,6 +6,8 @@ import type { VFS, VfsDirent, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import { settle } from '../obs/effect';
+import { sha256Hex } from '../safety/argument-digest';
+import type { CheckpointFiles } from '../types/primitives';
 
 import { VfsError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 
@@ -44,7 +46,7 @@ export interface MossaicClient {
   createReadStream(path: string, opts?: { start?: number; end?: number }): Promise<ReadableStream<Uint8Array>>;
 }
 
-export interface MossaicVfs extends VFS {
+export interface MossaicVfs extends VFS, Required<Pick<CheckpointFiles, 'writeFileIfDigest'>> {
   readlink: NonNullable<VFS['readlink']>;
   symlink: NonNullable<VFS['symlink']>;
   rename: NonNullable<VFS['rename']>;
@@ -118,6 +120,17 @@ export function mossaicVfs(client: MossaicClient): MossaicVfs {
   return {
     readFile: (path) => settle(guarded(path, () => client.readFile(path))),
     writeFile: (path, data) => settle(guarded(path, () => client.writeFile(path, data))),
+    // Mossaic's writeFile takes no precondition, so Kinu reads, compares and writes across the wire: the window is a
+    // round trip, and the answer says so (`remote`). The tenant-side check we asked for: mossaic-asks/conditional-write.md.
+    writeFileIfDigest: (path, data, expected) => settle(Effect.gen(function* () {
+      const present = yield* guarded(path, () => client.exists(path));
+      const found = present ? sha256Hex(yield* guarded(path, () => client.readFile(path))) : null;
+
+      if (found !== expected) return { ok: false as const, sha256: found };
+      yield* guarded(path, () => client.writeFile(path, data));
+
+      return { ok: true as const, sha256: sha256Hex(data), remote: true as const };
+    })),
     stat: (path) => settle(guarded(path, async () => entryStat(await client.stat(path))).pipe(
       Effect.catchIf((translated) => translated.code === 'ENOENT', () => Effect.succeed(null)),
     )),

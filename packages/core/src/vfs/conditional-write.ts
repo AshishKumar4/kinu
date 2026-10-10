@@ -26,10 +26,10 @@ export type ObservedFile =
   | { readonly kind: 'digest'; readonly sha256: string };
 
 /**
- * Which check held: the plane's revision, the read bytes' digest, or, for a create on the workspace store, that nothing
- * was there just before (see `byAbsence`).
+ * Which check held: the plane's revision, the read bytes' digest compared by the plane, the same compared across the
+ * wire where the plane cannot (`/shared`), or, for a create on the workspace store, that nothing was there just before.
  */
-export type WriteGuarantee = 'revision' | 'digest' | 'absence';
+export type WriteGuarantee = 'revision' | 'digest' | 'digest-remote' | 'absence';
 
 /** What the file holds now, in the plane's own terms: its revision, or its bytes' digest (null: no file). */
 export type FileNow = { readonly revision: VfsRevision } | { readonly sha256: string | null };
@@ -94,7 +94,7 @@ function byDigest(vfs: VFS & CheckpointFiles, path: string, data: Uint8Array, ex
     if (result === null) return Effect.succeed(null);
 
     return result.ok
-      ? Effect.succeed({ guarantee: 'digest' as const, now: { sha256: result.sha256 }, report: result.report ?? null })
+      ? Effect.succeed({ guarantee: result.remote === true ? 'digest-remote' as const : 'digest' as const, now: { sha256: result.sha256 }, report: result.report ?? null })
       : Effect.fail(changed(path, { sha256: result.sha256 }));
   });
 }

@@ -822,7 +822,8 @@ describe('a write that names the bytes it replaces', () => {
 
   test('stays inside the consented directory', async () => {
     const root = scratchDir('daemon-digest-scope');
-    const outside = path.join(scratchDir('daemon-digest-outside'), 'x.md');
+    // Outside every home, temp root and system tree the sandbox names, as the confinement tests plant.
+    const outside = path.join('/dev/shm', `kinu-daemon-digest-${process.pid}.md`);
     const ws = fakeWs();
 
     handle({ id: 'escape', method: 'writeFileIfDigest', sandbox: scoped([root]), params: [outside, 'planted', null, {}] }, ws, {});
