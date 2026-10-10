@@ -145,7 +145,9 @@ export interface AgentFacetCalls {
   steps(snapshot: AgentSnapshot, limit: number): Promise<AgentSteps>;
   /** The finished steps of its open turn `turnId`, drawn, for a tab its room replays the turn to; none when the turn
    *  open is another, or none is. */
-  openSteps(snapshot: AgentSnapshot, turnId: string): Promise<readonly (readonly JsonObject[])[]>;
+  /** The open turn's first `before` finished steps, drawn, as JSON lines pulled a step at a time: a long turn's
+   *  steps never cross as one value (`do.facet.rpc_bytes`). */
+  openSteps(snapshot: AgentSnapshot, turnId: string, before: number): Promise<ReadableStream<Uint8Array>>;
   /** A turn's request and response by its answer's id, for a rating its workspace records; null for none. */
   turnPair(snapshot: AgentSnapshot, messageId: string): Promise<ConversationTurnPair | null>;
   /** The metadata of its newest message from a person, which its idle work mode reads; null before any. */
@@ -192,6 +194,22 @@ export interface AgentFacetCalls {
   /** The answer becomes the asking call's result, and the turn that continues from it is queued in its own chat. */
   answerOwnerQuestions(snapshot: AgentSnapshot, id: string, answers: readonly OwnerAnswer[]): Promise<void>;
   dismissOwnerQuestions(snapshot: AgentSnapshot, id: string): Promise<number>;
+}
+
+/** `rows` as JSON lines, each pulled as its reader asks for it: none sits whole in either isolate. */
+function jsonLineStream<Row>(rows: AsyncIterable<Row>): ReadableStream<Uint8Array> {
+  const pulled = rows[Symbol.asyncIterator]();
+  const encoder = new TextEncoder();
+
+  return new ReadableStream<Uint8Array>({
+    pull: async (controller) => {
+      const next = await pulled.next();
+
+      if (next.done === true) controller.close();
+      else controller.enqueue(encoder.encode(`${JSON.stringify(next.value)}\n`));
+    },
+    cancel: async () => { await pulled.return?.(); },
+  });
 }
 
 export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFacetCalls {
@@ -416,19 +434,8 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   }
 
   async forkRows(snapshot: AgentSnapshot, kind: ForkConversationSection, plan: ForkConversationPlan, artifactDirectory: string): Promise<ReadableStream<Uint8Array>> {
-    const rows = this.open(snapshot).forkSource().rows(kind, plan, artifactDirectory)[Symbol.asyncIterator]();
-    const encoder = new TextEncoder();
-
     // Pulled a row at a time as the fork's frames go out: the section never sits whole in either isolate.
-    return new ReadableStream<Uint8Array>({
-      pull: async (controller) => {
-        const next = await rows.next();
-
-        if (next.done === true) controller.close();
-        else controller.enqueue(encoder.encode(`${JSON.stringify(next.value)}\n`));
-      },
-      cancel: async () => { await rows.return?.(); },
-    });
+    return jsonLineStream(this.open(snapshot).forkSource().rows(kind, plan, artifactDirectory));
   }
 
   async forkClear(snapshot: AgentSnapshot, artifactDirectory: string): Promise<void> {
@@ -467,8 +474,8 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return this.open(snapshot).steps(limit);
   }
 
-  async openSteps(snapshot: AgentSnapshot, turnId: string): Promise<readonly (readonly JsonObject[])[]> {
-    return this.open(snapshot).openSteps(turnId);
+  async openSteps(snapshot: AgentSnapshot, turnId: string, before: number): Promise<ReadableStream<Uint8Array>> {
+    return jsonLineStream(this.open(snapshot).openSteps(turnId, before));
   }
 
   async turnPair(snapshot: AgentSnapshot, messageId: string): Promise<ConversationTurnPair | null> {

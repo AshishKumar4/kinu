@@ -17,12 +17,18 @@ import type { UIMessage, UIMessageChunk } from 'ai';
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import {
-  isWorkMode, INTERRUPTED_TURN, JsonValueSchema, UIMessageSchema,
+  isWorkMode, INTERRUPTED_TURN, JsonObjectSchema, JsonValueSchema, UIMessageSchema,
   type ChatTransport, type JsonObject, type PromptFile, type SendLanding, type SendState, type SessionEvent, type WorkMode,
 } from '@kinu.run/core';
 import { attempt, attemptInItsWords, diagnostics, KinuError, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
 
-export type ChatSocket = Pick<Connection, 'id' | 'send' | 'readyState'>;
+export type ChatSocket = Pick<Connection, 'id' | 'send' | 'readyState' | 'close'>;
+
+/** A tab whose replay could not be read is closed with this and redials: 1013, Try Again Later (RFC 6455 §7.4.1). */
+const REPLAY_RETRY_CODE = 1013;
+
+/** One step as a replay restates it: its parts, drawn. */
+export const DrawnStepSchema = v.array(JsonObjectSchema);
 
 /** Every room replays a joiner the open turn: the steps its ledger recorded before the room opened it, then the
  *  relay's chunks. */
@@ -30,8 +36,9 @@ export interface ChatWire {
   /** A turn this activation has not opened yet: the one an ended activation left open, or an acknowledged send. Asked of
    *  the agent's own isolate, which re-opens such a turn when it starts, before it has told this room. */
   turnOwed(): Promise<boolean>;
-  /** The finished steps of the open turn `turnId` as its agent's ledger records them, drawn; none once another is open. */
-  steps(turnId: string): Promise<readonly (readonly JsonObject[])[]>;
+  /** The first `before` finished steps of the open turn `turnId` as its agent's ledger records them, drawn, a step at
+   *  a time; none once another is open. */
+  steps(turnId: string, before: number): AsyncIterable<readonly JsonObject[]>;
   broadcast(message: string, exclude?: string[]): void;
   /** The handshake asks by id before it replays to a replacement. */
   getConnection(id: string): ChatSocket | undefined;
@@ -310,9 +317,10 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     this.parked.clear();
   }
 
-  /** The steps before the room opened the turn, restated from its agent's ledger, then the relay's chunks, cut markers
-   *  among them; later live chunks follow. The tab is held from the live chunks until its replay goes out, so none runs
-   *  ahead of the parts the replay opens while the ledger is read. */
+  /** The steps before the room opened the turn, restated from its agent's ledger as each is read, then the relay's
+   *  chunks, cut markers among them; later live chunks follow. The tab is held from the live chunks until its replay is
+   *  complete, so none runs ahead of the parts the replay opens. A ledger that cannot be read leaves the replay
+   *  unfinished: the tab is told to reconnect and ask again, never that it holds the turn. */
   replay(connection: ChatSocket, requestId: string): Promise<void> {
     return settle(Effect.gen({ self: this }, function* () {
       const { live } = this;
@@ -328,46 +336,46 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         return;
       }
 
-      // A turn this room opened at its first step relayed every step itself. An agent that cannot be asked leaves the
-      // relay's steps replayed alone.
-      const recorded = live.firstStep === 0 ? [] : yield* attempt(
-        { doing: "reading a re-opened turn's finished steps from its agent's ledger", otherwise: 'unavailable' },
-        () => this.wire.steps(live.turnId),
-      ).pipe(Effect.catch((failure) => Effect.sync(() => {
-        diagnostics.failure('chat.replay_steps_unread', failure);
-
-        return [];
-      })));
-
-      const restated = recorded.slice(0, live.firstStep);
-
-      // Ended or replaced while its ledger answered: what ended it told the tabs it held.
-      if (this.live !== live) return;
-      const frames: string[] = [];
-
       // Before anything is replayed, the relay's first chunk opens the message live.
-      if (restated.length > 0 || live.relayed.length > 0) frames.push(frame({ body: JSON.stringify({ type: 'start', messageId: live.messageId }), done: false }));
+      const opened = frame({ body: JSON.stringify({ type: 'start', messageId: live.messageId }), done: false });
 
-      for (const [step, parts] of restated.entries()) {
-        for (const chunk of restatedChunks(parts, step)) frames.push(frame({ body: JSON.stringify(chunk), done: false }));
-      }
+      // A turn this room opened at its first step relayed every step itself.
+      if (live.firstStep > 0) {
+        const restated = yield* attempt({ doing: "replaying a re-opened turn's finished steps from its agent's ledger", otherwise: 'unavailable' }, async () => {
+          let step = 0;
+
+          for await (const parts of this.wire.steps(live.turnId, live.firstStep)) {
+            // Ended or replaced while its ledger answered: what ended it told the tabs it held.
+            if (this.live !== live) return false;
+
+            if (step === 0 && !sendIfOpen(connection, opened)) return false;
+
+            for (const chunk of restatedChunks(parts, step)) if (!sendIfOpen(connection, frame({ body: JSON.stringify(chunk), done: false }))) return false;
+            step += 1;
+          }
+
+          return step > 0 || live.relayed.length === 0 || sendIfOpen(connection, opened);
+        }).pipe(Effect.catch((failure) => Effect.sync(() => {
+          diagnostics.failure('chat.replay_steps_unread', failure);
+          this.pendingResume.delete(connection.id);
+          // The tab redials and asks again; it never hears a replay it did not get as complete.
+          connection.close(REPLAY_RETRY_CODE, "the turn's earlier steps could not be read; reconnect to resume");
+
+          return false;
+        })));
+
+        if (!restated || this.live !== live) return;
+      } else if (live.relayed.length > 0 && !sendIfOpen(connection, opened)) return;
 
       for (const { type, body } of live.relayed) {
-        if (type !== 'start') frames.push(frame({ body, done: false }));
+        if (type !== 'start' && !sendIfOpen(connection, frame({ body, done: false }))) return;
       }
 
-      frames.push(frame({ body: '', done: false, replayComplete: true }));
-
-      for (const [place, sent] of frames.entries()) {
-        if (!sendIfOpen(connection, sent)) return;
-
-        // Released as its replay goes out: a socket that closed while the ledger answered leaves alone the hold its
-        // redial under the same id took.
-        if (place === 0) {
-          this.pendingResume.delete(connection.id);
-          live.joined.add(connection.id);
-        }
-      }
+      // A socket that closed while the ledger answered never gets here, and leaves alone the hold its redial under the same
+      // id took.
+      if (!sendIfOpen(connection, frame({ body: '', done: false, replayComplete: true }))) return;
+      this.pendingResume.delete(connection.id);
+      live.joined.add(connection.id);
     }));
   }
 

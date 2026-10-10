@@ -658,6 +658,37 @@ export class RunEventRecorder {
       ORDER BY opened_at DESC, rowid DESC LIMIT 1`[0]?.run_id ?? null;
   }
 
+  /** The run open for `turnId`, from its start row alone; null when the open run is another turn's, or none is open. */
+  openRunOf(turnId: string): string | null {
+    const runId = this.openRun();
+
+    if (runId === null) return null;
+
+    const row = this.sql<{ payload: string }>`
+      SELECT payload FROM run_events
+      WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND type = ${'run_start' satisfies RunEventType}
+      ORDER BY event_index LIMIT 1`[0];
+
+    const start = row === undefined ? null : parseStoredRunEvent(row.payload);
+
+    return start?.type === 'run_start' && start.turn?.turnId === turnId ? runId : null;
+  }
+
+  /** `runId`'s next finished step after the event at `after`: one row a read, so a long run's steps are never held at once. */
+  finishedStepAfter(runId: string, after: number): { readonly at: number; readonly messages: readonly JsonValue[] } | null {
+    this.actor.assertCurrent();
+
+    const row = this.sql<{ event_index: number; payload: string }>`
+      SELECT event_index, payload FROM run_events
+      WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND type = ${'step_finish' satisfies RunEventType} AND event_index > ${after}
+      ORDER BY event_index ASC LIMIT 1`[0];
+
+    if (row === undefined) return null;
+    const event = parseStoredRunEvent(row.payload);
+
+    return { at: row.event_index, messages: event.type === 'step_finish' ? event.messages ?? [] : [] };
+  }
+
   /** Whether the owner's Stop reached `runId` (`stop_requested`). */
   stopRequested(runId: string): boolean {
     this.actor.assertCurrent();

@@ -35,7 +35,8 @@ import {
   type PlanEdit, type PlanReview, type PlanReviewResult, actorReadHandle,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
-import { agentFacet, agentStateShellId, AgentMemory, AgentStoreBroker, AgentWorkspaceHost, headDeltas, uiChunks, type AgentFacetPlacement } from "./agent-facets";
+import { agentFacet, agentStateShellId, AgentMemory, AgentStoreBroker, AgentWorkspaceHost, headDeltas, jsonLines, uiChunks, type AgentFacetPlacement } from "./agent-facets";
+import { DrawnStepSchema } from "./chat-transport";
 import { agentCallsThrough, AgentIsolateSlots } from "./dynamic-worker-slots";
 import { providerBindingsOf, routedModelReads } from "./providers/agent-registry";
 import { AgentTurns } from "./agent-turns";
@@ -2491,7 +2492,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       turnOwed: async () => this.currentTurnOf(reference) !== null
         || (this.agentWakes.armed(actorId) && await (await facet()).owed(snapshot())),
       // A turn its isolate re-opened finished its first steps in an isolate that ended: its own ledger holds them.
-      steps: async (turnId) => await (await facet()).openSteps(snapshot(), turnId),
+      steps: async function* (turnId, before) {
+        yield* jsonLines(await (await facet()).openSteps(snapshot(), turnId, before), DrawnStepSchema);
+      },
       getConnection: (id) => this.getConnection(id),
       broadcast: (message, exclude) => { this.broadcastToActor(room, message, exclude); },
       history: (limit) => this.agentStores(actorId).history(limit),

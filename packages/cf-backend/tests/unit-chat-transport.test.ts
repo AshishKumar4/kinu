@@ -52,6 +52,8 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
 
   /** Sockets that closed: a send to one fails as the platform's does. */
   const closed = new Set<Connection>();
+  /** The code each socket the server closed was closed with, by id. */
+  const closedWith = new Map<string, number | undefined>();
 
   /** Drivable by the SDK's protocol helpers; any other member throws, naming itself. */
   const connection = (id: string): Connection => {
@@ -60,11 +62,18 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
     frames.set(id, socketFrames);
     received.set(id, heard);
 
-    const socket = socketConnection({ id, send: (frame: string) => {
-      if (closed.has(socket)) throw new TypeError('WebSocket send() after close');
-      socketFrames.push(frame);
-      heard.push(frame);
-    } });
+    const socket = socketConnection({
+      id,
+      send: (frame: string) => {
+        if (closed.has(socket)) throw new TypeError('WebSocket send() after close');
+        socketFrames.push(frame);
+        heard.push(frame);
+      },
+      close: (code?: number) => {
+        closed.add(socket);
+        closedWith.set(id, code);
+      },
+    });
 
     connections.set(id, socket);
 
@@ -73,11 +82,11 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
 
   const wire: ChatWire = {
     turnOwed: async () => owed,
-    steps: async (turnId) => {
+    steps: async function* (turnId, before) {
       asked.push(turnId);
       await reading();
 
-      return recorded;
+      yield* recorded.slice(0, before);
     },
     broadcast: (message, exclude) => {
       broadcasts.push({ frame: v.parse(FrameSchema, JSON.parse(message)), exclude });
@@ -116,6 +125,8 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
     ledgerReads: (read: () => Promise<void>) => { reading = read; },
     /** The socket closed under the transport: it hears nothing more. */
     hangUp: (socket: Connection) => { closed.add(socket); },
+    /** The code the server closed `id` with, if it closed it. */
+    closedWith: (id: string) => closedWith.get(id),
     transport, broadcasts, history, reserved, recorded, asked, sent: sent.items, taken: (count: number) => sent.until((items) => items.length >= count), connection, db,
     interrupts: () => interrupts,
     responses: () => broadcasts.filter((b) => b.frame.type === 'cf_agent_use_chat_response').map((b) => b.frame),
@@ -779,14 +790,36 @@ describe('ChatWireTransport', () => {
     expect(answersHeard(h.received('c2'))).toEqual(['done']);
   });
 
-  test("a re-opened turn whose agent cannot be asked for its ledger replays the relay's steps alone", async () => {
+  // The steps before the cut are the agent's alone: a replay without them would tell the tab it holds a turn it does not.
+  test('a re-opened turn whose agent cannot be asked for its ledger is never replayed as complete: the tab redials', async () => {
     const { h, revived, acked, refuse } = await joinedWhileLedgerReads();
 
     await revived.observe(chunks([{ type: 'start' }, { type: 'start-step' }, { type: 'text-start', id: 't1' }, { type: 'text-delta', id: 't1', delta: 'tw' }]));
     refuse(new Error("the agent's isolate reset"));
     await acked;
 
-    expect(replayOf(h.connectionFrames('c2'))).toEqual(['start', 'start-step', 'text-start', 'text-delta tw', 'complete']);
+    expect({ replayed: replayOf(h.connectionFrames('c2')), closed: h.closedWith('c2') }).toEqual({ replayed: [], closed: 1013 });
+  });
+
+  // A long turn's steps cross a step at a time: the ledger is asked for the steps before the cut alone.
+  test("a re-opened turn's replay asks its ledger for the steps before the room opened it, no more", async () => {
+    const h = harness();
+    const first = h.connection('c1');
+    await h.transport.onMessage(first, chatRequest('req-1', 'hello'));
+    const revived = h.afterEviction();
+
+    for (let step = 0; step < 3; step += 1) h.recorded.push([{ type: 'text', text: `step ${String(step)}`, state: 'done' }]);
+
+    const joining = h.connection('c2');
+    await revived.onConnect(joining);
+    await revived.deliver(turnStart('input-req-1', 'msg-1', [], 2));
+    const resuming = v.parse(FrameSchema, JSON.parse(h.connectionFrames('c2').find((text) => text.includes('cf_agent_stream_resuming')) ?? '{}'));
+    await revived.onMessage(joining, JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: resuming.id }));
+
+    expect(replayOf(h.connectionFrames('c2'))).toEqual([
+      'start', 'start-step', 'R text-start', 'R text-delta step 0', 'R text-end', 'finish-step',
+      'start-step', 'R text-start', 'R text-delta step 1', 'R text-end', 'finish-step', 'complete',
+    ]);
   });
 
   // A redial keeps the socket's id: the replay the closed socket was owed must not release the hold its redial took.

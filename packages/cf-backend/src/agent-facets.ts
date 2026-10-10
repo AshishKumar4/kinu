@@ -219,7 +219,7 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
 
 const UIChunkSchema = v.custom<UIMessageChunk>((value) => v.is(v.looseObject({ type: v.string() }), value), 'a UI message chunk');
 
-function jsonLines<T>(lines: ReadableStream<Uint8Array>, schema: v.GenericSchema<unknown, T>): ReadableStream<T> {
+export function jsonLines<T>(lines: ReadableStream<Uint8Array>, schema: v.GenericSchema<unknown, T>): ReadableStream<T> {
   const decoder = new TextDecoder();
   let partial = '';
 

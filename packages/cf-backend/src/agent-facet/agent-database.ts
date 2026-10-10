@@ -401,14 +401,22 @@ export class AgentDatabase {
     };
   }
 
-  /** The finished steps of its open turn `turnId`, drawn as a replay restates them; none when the turn open is another. */
-  openSteps(turnId: string): JsonObject[][] {
+  /** The first `before` finished steps of its open turn `turnId`, drawn as a replay restates them, read a step at a time;
+   *  none when the turn open is another. */
+  async *openSteps(turnId: string, before: number): AsyncGenerator<JsonObject[]> {
     const { eventRecorder } = this.actorHost().bindStores(this.reference()).stores;
-    const open = eventRecorder.openTurn();
+    const runId = eventRecorder.openRunOf(turnId);
 
-    if (open?.turn.turnId !== turnId) return [];
+    if (runId === null) return;
+    let at = -1;
 
-    return eventRecorder.finishedSteps(open.runId).map(({ messages }) => drawnStep(messages));
+    for (let step = 0; step < before; step += 1) {
+      const next = eventRecorder.finishedStepAfter(runId, at);
+
+      if (next === null) return;
+      at = next.at;
+      yield drawnStep(next.messages);
+    }
   }
 
   /** The metadata of its newest message from a person; null before any. */
