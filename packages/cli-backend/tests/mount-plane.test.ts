@@ -2,7 +2,7 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // Local environments and the mount table: a directory-bound session works on the real bytes through one `workspace`
 // executor, with no `/pc` or `/sandbox` mount.
 import { describe, expect, test } from 'bun:test';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createCLIRuntime, type CLIRuntime } from '../src/runtime';
 import { localFilePlane } from '../src/host-mount';
@@ -95,5 +95,43 @@ describe('the local backend file plane', () => {
     }
 
     expect(existsSync(join(folder, 'dir/locked/kept'))).toBe(true);
+  });
+});
+
+describe('a replace the folder checks against what was read', () => {
+  const sha256 = (text: string): string => new Bun.CryptoHasher('sha256').update(text).digest('hex');
+  const bytes = (text: string): Uint8Array => new TextEncoder().encode(text);
+
+  // Two heads in this process each hold their own plane over the same folder.
+  test('two planes replacing the same read at once: exactly one lands, the other is told what is there now', async () => {
+    const folder = scratchDir('mount-plane-race');
+    const target = join(folder, 'plan.md');
+    writeFileSync(target, 'read by both');
+    const first = localFilePlane({ folder, space: join(folder, 'space-a'), views: [], checkpoints: undefined });
+    const second = localFilePlane({ folder, space: join(folder, 'space-b'), views: [], checkpoints: undefined });
+    const replace = (plane: typeof first, text: string) => present(plane.writeFileIfDigest?.bind(plane), 'the digest write')(target, bytes(text), sha256('read by both'));
+
+    const answers = await Promise.all([replace(first, 'from the first head'), replace(second, 'from the second head')]);
+    const landed = answers.filter((answer) => answer.ok);
+
+    expect(landed).toHaveLength(1);
+    expect(answers.find((answer) => !answer.ok)).toEqual({ ok: false, sha256: sha256(readFileSync(target, 'utf8')) });
+  });
+
+  test('a replaced file keeps every mode bit, the ones a umask would cut too', async () => {
+    const folder = scratchDir('mount-plane-mode');
+    const target = join(folder, 'shared.sh');
+    writeFileSync(target, 'v1');
+    chmodSync(target, 0o775);
+    const plane = localFilePlane({ folder, space: join(folder, 'space'), views: [], checkpoints: undefined });
+    const was = process.umask(0o022);
+
+    try {
+      await present(plane.writeFileIfDigest?.bind(plane), 'the digest write')(target, bytes('v2'), sha256('v1'));
+    } finally {
+      process.umask(was);
+    }
+
+    expect([readFileSync(target, 'utf8'), statSync(target).mode & 0o777]).toEqual(['v2', 0o775]);
   });
 });

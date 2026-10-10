@@ -57,8 +57,10 @@ function replaceIfDigest(target, data, expected) {
   const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${crypto.randomBytes(6).toString('hex')}.kinu-write`);
 
   try {
-    // A replaced file keeps its mode.
-    fs.writeFileSync(temporary, data, found === null ? undefined : { mode: fs.statSync(target).mode });
+    fs.writeFileSync(temporary, data);
+
+    // A replaced file keeps its mode whole: a creation mode is cut by the umask, so it is set after.
+    if (found !== null) fs.chmodSync(temporary, fs.statSync(target).mode & 0o7777);
     fs.renameSync(temporary, target);
   } catch (cause) {
     fs.rmSync(temporary, { force: true });

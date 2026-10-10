@@ -7,11 +7,11 @@ import { cleanupChats, fakeClient, mountChat } from './helpers/chat-app-fixture'
 afterEach(cleanupChats);
 
 function editResult(path: string, applied: Array<{ line: number; removedLines: number; addedLines: number }>): string {
-  return JSON.stringify({ path, reference: `root://${path}`, applied });
+  return JSON.stringify({ path, reference: `root://${path}`, applied, checked: 'revision' });
 }
 
 function writeResult(path: string, action: 'created' | 'replaced', bytes: number): string {
-  return JSON.stringify({ path, reference: `root://${path}`, bytes, action });
+  return JSON.stringify({ path, reference: `root://${path}`, bytes, action, checked: action === 'created' ? 'absence' : 'revision' });
 }
 
 describe('the file diff card', () => {

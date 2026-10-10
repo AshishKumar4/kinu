@@ -807,6 +807,24 @@ describe('a write that names the bytes it replaces', () => {
     expect(fs.readdirSync(root)).toEqual(['notes.md']);
   });
 
+  test('a replaced file keeps every mode bit, the ones a umask would cut too', async () => {
+    const root = scratchDir('daemon-digest-mode');
+    const file = path.join(root, 'shared.sh');
+    fs.writeFileSync(file, 'v1');
+    fs.chmodSync(file, 0o775);
+    const ws = fakeWs();
+    const was = process.umask(0o022);
+
+    try {
+      handle({ id: 'mode', method: 'writeFileIfDigest', sandbox: scoped([root]), params: [file, 'v2', sha256('v1'), {}] }, ws, {});
+      expect((await ws.response('mode')).result).toMatchObject({ ok: true });
+    } finally {
+      process.umask(was);
+    }
+
+    expect(fs.statSync(file).mode & 0o777).toBe(0o775);
+  });
+
   test('with no digest, creates the file only where none is', async () => {
     const root = scratchDir('daemon-digest-create');
     const file = path.join(root, 'new.md');

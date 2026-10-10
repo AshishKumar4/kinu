@@ -42,7 +42,34 @@ type HostFiles = VFS & Required<Pick<VFS, 'readRange' | 'rmdir' | 'rename' | 're
  * and a rename. The compare and the rename run back to back in this process; this host gives no lock against another
  * process's write in that instant, and a reader never sees half a file.
  */
-async function replaceIfDigest(path: string, data: Uint8Array, expected: string | null): Promise<VfsDigestWrite> {
+/**
+ * Each path's compare-through-rename, one at a time in this process: every head's plane over the machine shares this
+ * table, so two of them cannot both pass a compare and the later rename lose the first write. Keyed by the path's real
+ * directory, so a link to it is the same file.
+ */
+const replacing = new Map<string, Promise<unknown>>();
+
+async function oneAtATime<T>(path: string, run: () => Promise<T>): Promise<T> {
+  const directory = await tolerateAsync(() => fs.realpath(dirname(path)), 'enoent') ?? dirname(path);
+  const key = join(directory, basename(path));
+  const before = replacing.get(key) ?? Promise.resolve();
+  // After the one before, whether it landed or failed.
+  const mine = before.then(run, run);
+
+  replacing.set(key, mine);
+
+  try {
+    return await mine;
+  } finally {
+    if (replacing.get(key) === mine) replacing.delete(key);
+  }
+}
+
+function replaceIfDigest(path: string, data: Uint8Array, expected: string | null): Promise<VfsDigestWrite> {
+  return oneAtATime(path, () => replaceNow(path, data, expected));
+}
+
+async function replaceNow(path: string, data: Uint8Array, expected: string | null): Promise<VfsDigestWrite> {
   const held = await tolerateAsync(() => fs.readFile(path), 'enoent');
   const found = held === undefined ? null : sha256Hex(held);
 
@@ -51,7 +78,10 @@ async function replaceIfDigest(path: string, data: Uint8Array, expected: string 
   const temporary = join(dirname(path), `.${basename(path)}.${crypto.randomUUID()}.kinu-write`);
 
   try {
-    await fs.writeFile(temporary, data, held === undefined ? undefined : { mode: (await fs.stat(path)).mode });
+    await fs.writeFile(temporary, data);
+
+    // A replaced file keeps its mode whole: a creation mode is cut by the umask, so it is set after.
+    if (held !== undefined) await fs.chmod(temporary, (await fs.stat(path)).mode & 0o7777);
     await fs.rename(temporary, path);
   } finally {
     // Renamed, it is gone already; a failed write or rename leaves none behind.
