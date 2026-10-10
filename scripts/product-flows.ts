@@ -973,7 +973,10 @@ export async function accountMemoryCrossesWorkspaces(target: FlowTarget): Promis
 
     await sendAndSettle(second, ACCOUNT_RECALL_ASK);
     const before = await lastReply(second, ACCOUNT_RECALL_REPLY, RECALL_ANSWERS);
-    const settings = await openWorkspacePage(target, '/user/settings#memory');
+    const settings = await signedInPage(target.browser, target.identity);
+
+    await settings.goto(`${target.origin}/user/settings#memory`, { waitUntil: 'load' });
+    await until(settings, 'Settings → Memory loaded', `document.querySelector('[data-account-memory]') !== null`);
     const proposal = '[data-account-memory-proposal]';
 
     await until(settings, 'the proposal in Settings → Memory', `[...document.querySelectorAll(${JSON.stringify(proposal)})].some((node) => node.textContent.includes(${JSON.stringify(ACCOUNT_FACT.key)}))`);
