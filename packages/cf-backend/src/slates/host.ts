@@ -23,14 +23,14 @@ import {
   type MissionGovernor, type WorkspaceOverviewShare, slateCapabilityGraph, type SlateCapabilityGraph,
   ephemeralSlateAddress, type EphemeralSlateAddress,
 } from '@kinu.run/core';
-import { SLATES_ROOT } from '@kinu.run/core';
+import { SLATES_ROOT, slateAuthority } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import { ERROR_CODES, KinuError, classifyErrorCode, refusalOf, settle, toKinuError, type Refusal } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
 import { SlateBuilds, slateImage, type FailingSlateBuild } from './builds';
 import { slateBatchStub } from './rpc-transport';
-import { ROOT_SLATE_CALLER, slateCallerKey, slateCredentialKey, shareCaller, type SlateBinding, type SlateBindingProps, type SlateCaller } from './bindings';
+import { ROOT_SLATE_CALLER, slateCallerKey, shareCaller, type SlateBinding, type SlateBindingProps, type SlateCaller } from './bindings';
 import { codemodeEgress } from '../codemode-egress';
 import { SlateSources, type MessageBlock, type SlateSource } from './sources';
 
@@ -515,7 +515,7 @@ export class SlateHost {
   private async sources(cred: VfsCred): Promise<WorkspaceSlates> {
     const session = await this.deps.session();
     this.content ??= session.vfs.withTransaction(() => new WorkspaceSlateContentStore(session.vfs.as(CRED_KERNEL)));
-    const key = slateCredentialKey(cred);
+    const key = slateAuthority(cred);
     let runtime = this.sourceRuntimes.get(key);
 
     if (runtime === undefined) {
@@ -738,9 +738,9 @@ export class SlateHost {
     }
   }
 
-  /** Every slate whose latest source does not build, in the compiler's words. */
+  /** Every slate whose latest source does not build for the workspace's own agent, in the compiler's words. */
   failingBuilds(): FailingSlateBuild[] {
-    return this.builds.failing();
+    return this.builds.failing(ROOT_SLATE_CALLER.cred);
   }
 
   /** Answers the refusal instead of throwing, so the route can tell `missing` from `bad_input`. */
@@ -1074,7 +1074,7 @@ export class SlateHost {
 
       // A source that does not compile ships nothing: the slate keeps the last build that did, and says why.
       const { image, key: built, broken } = await slateImage({
-        builds: this.builds, slate: id, key: digest, build: () => this.resident.build({ owner: id, root, project, read, cred: caller.cred }),
+        builds: this.builds, slate: id, key: digest, cred: caller.cred, build: () => this.resident.build({ owner: id, root, project, read, cred: caller.cred }),
       });
 
       if (running !== undefined && running.built === built && await running.process.isRunning()) {

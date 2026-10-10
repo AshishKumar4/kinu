@@ -1,7 +1,7 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { workspaceOwner, type WorkspaceOwnerNamespace } from '../workspace-owner-rpc';
-import { relayedAnswer, type JsonValue, type SlateSurfaceResult, type WorkMode } from '@kinu.run/core';
+import { relayedAnswer, slateAuthority, type JsonValue, type SlateSurfaceResult, type WorkMode } from '@kinu.run/core';
 
 /** A registered actor name: every actor shares one root object, so the name, not a class, is the identity. */
 export interface SlateCallerHop {
@@ -24,14 +24,9 @@ export function shareCaller(share: string): SlateCaller {
 
 export const ROOT_SLATE_CALLER: SlateCaller = { path: [], cred: CRED_SESSION_USER, workMode: 'build' };
 
-/** Every field changes the VFS view or the permissions of files it creates. */
-export function slateCredentialKey(cred: VfsCred): string {
-  return JSON.stringify([cred.uid, cred.gid, cred.groups, cred.umask]);
-}
-
 /** The share is in the key so a share's process never coalesces with the owner's private preview. */
 export function slateCallerKey(caller: SlateCaller): string {
-  return JSON.stringify([slateCredentialKey(caller.cred), caller.path, caller.workMode, caller.share ?? null]);
+  return JSON.stringify([slateAuthority(caller.cred), caller.path, caller.workMode, caller.share ?? null]);
 }
 
 /** Only the host mints these props; a process receives the stub, not authority to mint one. `name` is `workspace`, the
