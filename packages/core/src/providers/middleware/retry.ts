@@ -108,7 +108,7 @@ export function retryMiddleware(policy: RetryPolicy): LanguageModelMiddleware {
 
       return call;
     },
-    wrapGenerate: ({ doGenerate, doStream, params }) => runRetried(policy, params, policy.generateByStream === true
+    wrapGenerate: ({ doGenerate, doStream, params }) => settle(retrying(policy, params, policy.generateByStream === true
       ? async (last) => {
         const opened = await openStream({ provider: policy.provider, start: doStream, last, keepRaw: false, caller: params.abortSignal });
 
@@ -117,20 +117,15 @@ export function retryMiddleware(policy: RetryPolicy): LanguageModelMiddleware {
 
         return collected.status === 'fulfilled' ? { kind: 'answer', value: collected.value } : { kind: 'failed', error: collected.reason };
       }
-      : async () => ({ kind: 'answer', value: await doGenerate() })),
-    wrapStream: ({ doStream, params }) => runRetried(policy, params, (last) => openStream({
+      : async () => ({ kind: 'answer', value: await doGenerate() }))),
+    wrapStream: ({ doStream, params }) => settle(retrying(policy, params, (last) => openStream({
       provider: policy.provider, start: doStream, last, keepRaw: kinuOptions(params).raw, caller: params.abortSignal,
-    })),
+    }))),
   };
 }
 
-function runRetried<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, open: Open<T>): Promise<T> {
+function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, open: Open<T>): Effect.Effect<T, KinuError> {
   const capture: AttemptIdentityCapture = { identity: null };
-
-  return recordAttemptFailure(capture, () => settle(retrying(policy, params, open, capture)));
-}
-
-function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, open: Open<T>, capture: AttemptIdentityCapture): Effect.Effect<T, KinuError> {
   const sleep = policy.sleep ?? abortableSleep;
   const now = policy.now ?? Date.now;
   const random = policy.random ?? Math.random;
@@ -222,7 +217,7 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
       yield* reportWait(waitMs, attemptNumber, retryAfter !== null ? 'header' : 'backoff', limit.status);
       yield* Effect.promise(() => sleep(waitMs, signal));
     }
-  });
+  }).pipe(Effect.onError((cause) => Effect.sync(() => recordAttemptFailure(capture, cause))));
 }
 
 /** The answering attempt owns a refusal; a new send checks its prospective lane afresh. */

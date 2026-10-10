@@ -550,7 +550,8 @@ export {
 // open-38: one physical workspace SQLite for every logical actor.
 export {
   createActorHost, recoverActorTurns, childContextResolver, hostedChildTree, registeredParent,
-  type ActorHost, type ActorHostDeps, type BoundActor, type HostedActor,
+  type ActorHost,
+  type ActorSeat, type ActorHostDeps, type BoundActor, type HostedActor,
   type LoopSeed, type ActorRetirement, type ResumableActorTurn,
 } from './state/actor-host';
 

@@ -1938,7 +1938,7 @@ export async function hostedSubordinateHarness(
   };
 
   const reference = await workspace.agent.observeSubordinateRuntime().spawn(seed);
-  const actor = await workspace.agent.observeActorHost().acquire(reference);
+  const actor = await workspace.agent.observeActorHost().acquire(reference, { kind: 'actor' });
 
   return { actor, workspace };
 }
@@ -1951,7 +1951,7 @@ export async function hostedExplorationHarness(
     action: 'register', creationId: id, name: `exp:${id}`, origin: 'swarm', lifetime: 'task',
   });
 
-  const actor = await workspace.agent.observeActorHost().acquire(entry.reference);
+  const actor = await workspace.agent.observeActorHost().acquire(entry.reference, { kind: 'actor' });
 
   return { actor, workspace };
 }
@@ -1960,7 +1960,7 @@ export async function hostedMainActor(
   workspace: ActorHarness<HarnessOrchestratorAgent>,
 ): Promise<HostedActorHarness> {
   const host = workspace.agent.observeActorHost();
-  const actor = await host.acquire(actorReferenceOf(workspace.agent.observeRuntime().actor));
+  const actor = await host.acquire(actorReferenceOf(workspace.agent.observeRuntime().actor), { kind: 'actor' });
 
   return { actor, workspace };
 }

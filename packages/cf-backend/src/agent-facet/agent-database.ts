@@ -304,7 +304,7 @@ export class AgentDatabase {
   }
 
   async acquire(): Promise<HostedActor> {
-    return await this.actorHost().acquire(this.reference());
+    return await this.actorHost().acquire(this.reference(), { kind: 'actor' });
   }
 
   private transcript() {
@@ -470,16 +470,14 @@ export class AgentDatabase {
       // Its hirer holds the report that answers the turn: recovery settles it rather than running it again.
       answered: (turn) => new TurnReports(this.sql).answered(turn),
       resumable: (limit) => host.resumable(limit),
-      acquire: async (reference) => {
-        const actor = await host.acquire(reference);
-
-        return { runtime: actor.runtime, stores: actor.stores, session: { get turnOpen() { return actor.session.turnOpen; } } };
-      },
+      bindStores: host.bindStores,
+      readScaffold: host.readScaffold,
+      hosted: host.hosted,
     });
 
     // A stalled turn's run is closed, so the agent's chat does not take it up a third time when it next opens.
     for (const turn of recovered.stalled) {
-      const { eventRecorder } = (await host.acquire(turn.reference)).stores;
+      const { eventRecorder } = host.bindStores(turn.reference).stores;
       const open = eventRecorder.openTurn();
 
       if (open?.turn.turnId !== turn.claim.turnId) continue;

@@ -170,12 +170,7 @@ function notesMemory(notes: ReturnType<typeof agentHomeFiles>, sql: SqlExecutor,
 
 /** The memory of the workspace whose database `db` is, as its memory tool reads and searches it. */
 export function workspaceMemory(db: Database): Memory {
-  return notesMemory(agentStateFiles(db), makeSql(db), write => db.transaction(write)()).memory;
-}
-
-/** Main's home beside `db`, as real files. */
-export function agentStateFiles(db: Database): ReturnType<typeof agentHomeFiles> {
-  return workspaceHome(db);
+  return notesMemory(workspaceHome(db), makeSql(db), write => db.transaction(write)()).memory;
 }
 
 /** Session payload reads for inspection, over the workspace's folder and own space. */
@@ -607,8 +602,8 @@ function ownSpaceOf(db: Database): Effect.Effect<string, KinuError> {
 export async function buildLocalActorRuntime(
   parent: CLIRuntime,
   bound: { readonly reference: ActorReference; readonly handle: ActorHandle },
+  seat: 'head' | 'node',
   writeObserver?: WriteObserver,
-  swarmSeat?: boolean,
 ): Promise<AgentRuntime> {
   // Carry the host's own handle: `ActorHost` refuses a runtime bound anew, since
   // release must revoke every statement the runtime can make.
@@ -617,7 +612,7 @@ export async function buildLocalActorRuntime(
 
   const run = binding.origin === 'swarm';
 
-  if (run && swarmSeat === true) return parent.nodeRuntime(bound.handle, parent);
+  if (run && seat === 'node') return parent.nodeRuntime(bound.handle, parent);
 
   if (run) {
     const opts: Parameters<typeof buildCLIHeadRuntime>[0] = {

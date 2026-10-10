@@ -127,7 +127,6 @@ export class MemoryStore {
 		const delta: MemoryIndexDelta = { upserted: [], deletedIds: [] };
 
 		this.transactionSync(() => {
-
 			const existing = this.sql<{ id: string; hash: string }>`
 				SELECT id, hash FROM memory_note_chunks WHERE path = ${path}
 			`;

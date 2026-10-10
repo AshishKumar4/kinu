@@ -26,7 +26,12 @@ test('step inspection returns decoded image and file bytes, not storage placehol
     const acc = new TurnAccumulator({ onStepEvent: (step) => { events.emit('run-media', { type: 'step_finish', ...step }); } });
     const { stream } = await s.turn('media');
     const bytes = new Uint8Array([137, 80, 78, 71, 13, 10]);
-    const message: ModelMessage = { role: 'assistant', content: [{ type: 'file', data: bytes, mediaType: 'image/png' }] };
+
+    const message: ModelMessage = { role: 'assistant', content: [
+      { type: 'file', data: bytes, mediaType: 'image/png' },
+      { type: 'file', data: new Uint8Array([37, 80, 68, 70]), mediaType: 'application/pdf', filename: 'result.pdf' },
+    ] };
+
     const record = { messages: [message], toolResults: [], step: { stepIndex: 0, finishReason: 'stop' } };
     await stream.nativeStep(record, (parts) => acc.writeNative(record, parts));
     const event = events.read('run-media')[0];

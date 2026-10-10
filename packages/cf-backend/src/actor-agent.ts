@@ -911,7 +911,7 @@ export abstract class ActorAgent extends Agent<Env> {
         afterTurn: (child, work) => {
           this.detachOwned(Effect.promise(async () => {
             await this.agentTurnSettled(child);
-            await this.actorHost().run(child, () => Promise.resolve());
+            await this.actorHost().run(child, { kind: 'actor' }, () => Promise.resolve());
             await work();
           }));
         },
@@ -2895,7 +2895,7 @@ export abstract class ActorAgent extends Agent<Env> {
         return yield* new KinuError('denied', 'A caller path names one hosted actor; a nested path names an actor no directory holds.');
       }
 
-      return yield* Effect.promise(async () => this.actorHost().run(this.hostedSlateCaller(name), async (actor) => {
+      return yield* Effect.promise(async () => this.actorHost().run(this.hostedSlateCaller(name), { kind: 'actor' }, async (actor) => {
         if (route.kind === 'ai') {
           // A hosted actor runs the model call through its own profile, resolved now.
           return await this.slateAiRun(route, actor.handle);
@@ -3201,7 +3201,7 @@ export abstract class ActorAgent extends Agent<Env> {
     actor: ActorReference | null, requested: WorkMode, use: (providers: readonly CodemodeProvider[]) => Promise<A>,
   ): Promise<A> {
     if (actor !== null) {
-      return await this.actorHost().run(actor, async (hosted) => {
+      return await this.actorHost().run(actor, { kind: 'actor' }, async (hosted) => {
         // An operation call is the agent's own, so it reaches the account as the agent's programs do; a slate's never does.
         const surface = hostedActorSurface(hosted, {
           search: this.ownedModelServices.getWebSearchProvider(), sessions: this.browserSessionsFor(hosted.handle.actorId),

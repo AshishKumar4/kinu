@@ -1,7 +1,7 @@
 /** CLI backend: macOS/Linux Bun runtime for the self-evolving agent. */
 
 export {
-  agentStateFiles, createCLIRuntime, makeSql, makeExecRaw, makeSqlExec, makeWorkspaceSchemaSql, inspectionFiles,
+  createCLIRuntime, makeSql, makeExecRaw, makeSqlExec, makeWorkspaceSchemaSql, inspectionFiles,
   createHostShell, soulIn, soulOf, workspaceHome, workspaceMemory,
   type CLIRuntime,
 } from './runtime';

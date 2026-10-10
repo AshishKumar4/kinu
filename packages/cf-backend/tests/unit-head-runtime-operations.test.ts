@@ -48,6 +48,7 @@ const neverHost: HostedActorSeams = {
     hosted() { throw new Error('mergeLLM read the hosted actor set'); },
     describe() { throw new Error('mergeLLM read the actor directory'); },
     bindStores() { throw new Error("mergeLLM bound an actor's stores"); },
+    readScaffold() { throw new Error("mergeLLM read an actor's scaffold"); },
     list() { throw new Error('mergeLLM listed the hosted actors'); },
     run() { throw new Error('mergeLLM ran work as a hosted actor'); },
     release() { throw new Error('mergeLLM released a hosted actor'); },

@@ -1,12 +1,6 @@
-/** OMP "cooldown-expiry" (turn-recovery.ts 1623-1630, 2184-2240): Retry-After, else 5 min; per isolate. */
+/** Provider-declared retry delays, read without replacing the response's headers. */
 
 import * as v from 'valibot';
-
-
-
-
-
-
 
 const WithHeadersSchema = v.looseObject({
   retryAfterMs: v.optional(v.number()),

@@ -1,5 +1,7 @@
 import type { LanguageModel } from 'ai';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { Cause } from 'effect';
+import type { KinuError } from '../obs/error';
 
 /** One resolved attempt: pacing shares its billed route; parking also names the model. */
 export interface ModelAttemptIdentity {
@@ -31,12 +33,10 @@ export async function captureModelAttempt(resolve: () => Promise<ModelAttemptIde
   if (capture !== undefined) capture.identity = await resolve();
 }
 
-export async function recordAttemptFailure<T>(capture: AttemptIdentityCapture, run: () => Promise<T>): Promise<T> {
-  try { return await run(); }
-  catch (failure) {
-    if (failure instanceof Error && capture.identity !== null) failures.set(failure, capture.identity);
-    throw failure;
-  }
+export function recordAttemptFailure(capture: AttemptIdentityCapture, cause: Cause.Cause<KinuError>): void {
+  const failure = Cause.squash(cause);
+
+  if (failure instanceof Error && capture.identity !== null) failures.set(failure, capture.identity);
 }
 
 export function failedModelAttempt(failure: Error): ModelAttemptIdentity | null {

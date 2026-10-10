@@ -54,8 +54,8 @@ describe('the semantic mirror survives an unavailable or failed backend', () => 
       await memory.index('memory/mirror.md');
 
       expect(await memory.search('old remote-only')).toEqual([]);
-      expect(await hybridSearch('old remote-only', async () => [], vectors, { rehydrate: memorySnippetRehydrator(memory) })).toEqual([]);
       available = true;
+      expect(await hybridSearch('old remote-only', async () => [], vectors, { rehydrate: memorySnippetRehydrator(memory) })).toEqual([]);
       rejectDeletes = false;
       // A later boot is not holding the index call's in-memory delta.
       const reopened = new MemoryStore(workspace.vfs, rt.storage.sql, rt.storage.transactionSync);

@@ -113,7 +113,7 @@ export function hybridSearch(
         })),
         Effect.map((text) => text === null ? null : { ...hit, text }),
       )).pipe(Effect.map((hits): SemanticOutcome => ({ kind: 'answered', hits: hits.flatMap((hit) => hit === null ? [] : [hit]) })));
-    }))
+    }));
 
   const sharedFacts: Effect.Effect<readonly Fact[]> = accountFacts === undefined ? Effect.succeed([]) : attempt(
     { doing: "read the account's facts for a hybrid search", otherwise: 'unavailable' }, accountFacts,
@@ -204,10 +204,7 @@ function fused({ lexical, semantic, factArm, accountNotes, finalK, rrfK }: FuseI
     const s = byIdSem.get(m.id);
     const n = byIdNote.get(m.id);
     const sources = hitSources({ l, f, s, n });
-    // Fact and account note hits carry their text, so only semantic-only note hits need rehydrating.
     const snippet = l?.snippet ?? f?.snippet ?? n?.text ?? s?.text ?? '';
-
-    
 
     const hit: HybridHit = {
       id: m.id,
