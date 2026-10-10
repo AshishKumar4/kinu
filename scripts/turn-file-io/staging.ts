@@ -60,6 +60,11 @@ async function record(label: string, operation: (index: number) => Promise<void>
     await operation(index);
     measured.push({ label, startedAt, endedAt: Date.now(), wallMs: performance.now() - started });
   }
+
+  const rows = measured.filter((sample) => sample.label === label);
+  const ordered = rows.map((sample) => sample.wallMs).sort((a, b) => a - b);
+  process.stdout.write(JSON.stringify({ event: 'staging-operation', sha: health.build.sha, workspace: session.workspace, label, samples: rows.length,
+    p50Ms: ordered[Math.ceil(ordered.length * 0.5) - 1], p95Ms: ordered[Math.ceil(ordered.length * 0.95) - 1], windows: rows }) + '\n');
 }
 
 try {
@@ -70,6 +75,7 @@ try {
 
   if (short.landed !== 'turn' || short.hadError) throw new Error('short turn did not complete');
   measured.push({ label: 'short-chat', startedAt, endedAt: Date.now(), wallMs: performance.now() - started });
+  process.stdout.write(JSON.stringify({ event: 'staging-short', sha: health.build.sha, workspace: session.workspace, ...measured.at(-1) }) + '\n');
 
   for (const executor of ['workspace', 'sandbox']) {
     const root = executor === 'workspace' ? '/home/main/perfio' : '/home/perfio';
@@ -112,7 +118,11 @@ try {
   const cpu: { readonly at: number; readonly ms: number }[] = [];
 
   for (const id of ids) {
-    const events = await telemetry.events([{ key: '$workers.durableObjectId', operation: 'eq', type: 'string', value: id }], 20_000);
+    const events = await telemetry.events([
+      { key: '$workers.durableObjectId', operation: 'eq', type: 'string', value: id },
+      { key: '$workers.cpuTimeMs', operation: 'gt', type: 'number', value: -1 },
+    ], 1000);
+
     const requests = new Map<string, { at: number; ms: number }>();
 
     for (const row of events.events) {
