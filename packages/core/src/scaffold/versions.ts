@@ -7,6 +7,7 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime';
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { diagnostics, KinuError, settle, toKinuError } from '../obs/index';
@@ -47,18 +48,22 @@ export function getCurrentScaffoldVersion(sql: SqlExecutor, actor: Pick<ActorHan
   return rows[0]?.version ?? null;
 }
 
-export async function readVersionedScaffoldSource(rt: AgentRuntime, version: number): Promise<string | null> {
-  const versioned = `${rt.identity.scaffold.path}.v${version}`;
-  const scaffoldVfs = rt.agentStateVfs ?? rt.storage.vfs;
+export interface VersionedScaffoldSource {
+  readonly path: string;
+  readonly vfs: VFS;
+}
 
-  if (!await exists(scaffoldVfs, versioned)) return null;
+export async function readVersionedScaffoldSource(source: VersionedScaffoldSource, version: number): Promise<string | null> {
+  const versioned = `${source.path}.v${version}`;
 
-  return v.parse(v.string(), await readText(scaffoldVfs, versioned));
+  if (!await exists(source.vfs, versioned)) return null;
+
+  return v.parse(v.string(), await readText(source.vfs, versioned));
 }
 
 /** Prefers the canonical `agent.js.v{N}` file; the live file holds the current version, not a pending one. */
 export async function readScaffoldVersion(rt: AgentRuntime, version: number): Promise<string | null> {
-  const versioned = await readVersionedScaffoldSource(rt, version);
+  const versioned = await readVersionedScaffoldSource({ path: rt.identity.scaffold.path, vfs: rt.agentStateVfs ?? rt.storage.vfs }, version);
 
   if (versioned !== null) return versioned;
 

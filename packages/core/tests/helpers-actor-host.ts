@@ -220,6 +220,7 @@ export function hostedSeatsOver(input: {
 
       return { vfs: rt.storage.vfs, artifactDirectory: `/actors/${bound.handle.actorId}/.kinu/context` };
     },
+    scaffoldFor: async (bound) => ({ path: `actors/${bound.record.storageKey}/scaffold/agent.js`, vfs: rt.storage.vfs }),
     storage: {
       sql,
       transactionSync: (write) => rt.storage.transactionSync(write),

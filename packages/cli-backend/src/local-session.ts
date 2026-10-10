@@ -1360,9 +1360,11 @@ export class LocalAgentSession {
       installedBuild: this.actorHost.installedBuild,
       answered: (turn) => new TurnReports(this.rt.storage.sql).answered(turn),
       resumable: (limit) => this.actorHost.resumable(limit),
-      acquire: async (reference, seat) => reference.actorId === this.rt.actor.actorId
-        ? { runtime: this.rt, stores: this.stores, session: this.actorSession }
-        : await this.actorHost.acquire(reference, seat),
+      bindStores: (reference) => reference.actorId === this.rt.actor.actorId
+        ? { stores: this.stores } : this.actorHost.bindStores(reference),
+      readScaffold: this.actorHost.readScaffold,
+      hosted: (reference) => reference.actorId === this.rt.actor.actorId
+        ? { session: this.actorSession } : this.actorHost.hosted(reference),
     });
 
     diagnostics.event('actor.turns_recovered', {

@@ -475,6 +475,7 @@ function buildCLIRuntime(
 
   const runtime: CLIRuntime = Object.assign(buildRuntime({
     transactionSync: write => writeTransaction(db, write),
+    ...(config.actorBinding !== undefined && { scaffoldPath: actorScaffoldPath(config.actorBinding) }),
     planes,
     actor, sql,
     execRaw,

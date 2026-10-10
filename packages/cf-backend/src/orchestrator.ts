@@ -822,7 +822,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       // Its own named shell, never the agent's: the session user's identity must not reach the agent's commands.
       stateSession: async () => await this.hostedWorkspace().session({ shellId: agentStateShellId(this.liveAgentOf(actorId).storageKey) }),
-      memory: () => new AgentMemory(async () => (await this.actorHost().acquire(actorReferenceOf(this.liveAgentOf(actorId)), { kind: 'actor' })).runtime.memory),
+      memory: () => new AgentMemory(async () => {
+        const reference = actorReferenceOf(this.liveAgentOf(actorId));
+        const actor = this.actorHost().hosted(reference) ?? await this.actorHost().acquire(reference, { kind: 'actor' });
+
+        return actor.runtime.memory;
+      }),
       program: (turnId, ...args) => this.agentTurns.program(actorId, turnId, ...args),
       traceTurn: (turnId, event) => this.agentTurns.trace(actorId, turnId, event),
       traceStream: (turnId, lines) => this.agentTurns.traceStream(actorId, turnId, headDeltas(lines)),
@@ -852,7 +857,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         await this.mainTurnSettled(settled);
       },
       hireAdvisor: async (advisor) => {
-        const { session } = await this.actorHost().acquire(actorReferenceOf(this.liveAgentOf(actorId)), { kind: 'actor' });
+        const reference = actorReferenceOf(this.liveAgentOf(actorId));
+        const { session } = this.actorHost().hosted(reference) ?? await this.actorHost().acquire(reference, { kind: 'actor' });
 
         await session.hireAdvisor(advisor);
       },
@@ -920,9 +926,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         if (parentActorId === null) return settleSync(Effect.fail(new KinuError('missing', 'A root actor has no hirer to tell.')));
 
+        const reference = actorReferenceOf(this.actorDirectoryStore().open(parentActorId));
+
         const parent = parentActorId === this.actorHandle().actorId
           ? this.actorSession
-          : (await this.actorHost().acquire(actorReferenceOf(this.actorDirectoryStore().open(parentActorId)), { kind: 'actor' })).session;
+          : (this.actorHost().hosted(reference) ?? await this.actorHost().acquire(reference, { kind: 'actor' })).session;
 
         return await parent.orchestrator.inbox.send(signal);
       },
@@ -3713,21 +3721,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         installedBuild: host.installedBuild,
         workspace: this.workspaceName(),
         resumable: (limit) => host.resumable(limit).filter((turn) => turn.record.actorId === rootActorId),
-        acquire: async (reference, seat) => {
-          const actor = await host.acquire(reference, seat);
+        bindStores: (reference) => {
+          host.bindStores(reference);
 
-          return {
-            runtime: actor.runtime,
-            // The root recovers through the stores its session, resumed above, admits and settles through:
-            // its tabs are told about every claim written there.
-            stores: this.stores,
-            session: {
-              get turnOpen() {
-                return rootIsLive();
-              },
-            },
-          };
+          // The live root's session and tabs observe claims through this store owner.
+          return { stores: this.stores };
         },
+        readScaffold: host.readScaffold,
+        hosted: () => ({ session: { get turnOpen() { return rootIsLive(); } } }),
       });
     }, { workspace: this.name });
 

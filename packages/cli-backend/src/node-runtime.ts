@@ -1,4 +1,4 @@
-import { createAgentStores, contextMount, localContextTree, withMountTable, requireLocalActorWorkspace } from '@kinu.run/core';
+import { actorReferenceOf, actorScaffoldPath, bindLocalActorReference, createAgentStores, createScaffoldSurface, contextMount, localContextTree, withMountTable, requireLocalActorWorkspace } from '@kinu.run/core';
 import type { ActorHandle, AgentRuntime } from '@kinu.run/core';
 import type { CLIRuntime, NodeSource } from './runtime';
 import { join } from 'node:path';
@@ -11,6 +11,7 @@ import { join } from 'node:path';
 export function localNodeRuntime(owner: CLIRuntime, actor: ActorHandle, source: NodeSource): AgentRuntime {
   requireLocalActorWorkspace(owner.actor, actor);
   requireLocalActorWorkspace(owner.actor, source.actor);
+  const binding = bindLocalActorReference(owner.actor, actorReferenceOf(actor));
 
   // A node reading the parent's claim ledger would present the parent's turns as its own history.
   const stores = createAgentStores(() => source.storage.sql, () => actor, (write) => source.storage.transactionSync(write), () => owner.filesForActor(actor));
@@ -33,7 +34,9 @@ export function localNodeRuntime(owner: CLIRuntime, actor: ActorHandle, source: 
     executor: source.executor,
     llm: source.llm,
     schedule: source.schedule,
-    identity: { id: actor.actorId, name: actor.name, scaffold: source.identity.scaffold },
+    identity: { id: actor.actorId, name: actor.name,
+      scaffold: createScaffoldSurface({ actor, sql: source.storage.sql, vfs: source.agentStateVfs ?? source.storage.vfs,
+        path: actorScaffoldPath(binding) }) },
     craftStore: source.craftStore,
     get judgeModel() { return source.judgeModel; },
     get fastLlm() { return source.fastLlm; },
