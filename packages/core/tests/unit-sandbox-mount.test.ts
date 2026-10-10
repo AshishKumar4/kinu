@@ -10,7 +10,7 @@ import { describe, test, expect } from 'bun:test';
 import { present, toolExecute } from '@kinu.run/test-utils';
 import { executorNamespace } from '../src/tools/executor-operations';
 import { TurnContextBudget } from '../src/context-budget';
-import { createSandboxExecutor, WORKSPACE_BACKUP_DIR, type SandboxHandle } from '../src/execution/sandbox';
+import { createSandboxExecutor, sandboxFiles, WORKSPACE_BACKUP_DIR, type SandboxHandle } from '../src/execution/sandbox';
 import { nativeFileRead } from './helpers/sandbox-handle-lifecycle';
 import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { createFileTool } from '../src/tools/file-operations';
@@ -244,6 +244,39 @@ describe('the file tool across the /sandbox mount', () => {
 		try { await mounted.readFile('/sandbox/nowhere/x.txt'); } catch (cause) { error = cause; }
 
 		expect(isVfsError(error) && error.code === 'ENOENT').toBe(true);
+	});
+});
+
+describe('a digest-checked write to the sandbox', () => {
+	test('whose reply was lost after it landed is not reported as a change when the call is sent again', async () => {
+		const fs = new ContainerFs();
+		const box = container(fs);
+		let dropped = false;
+
+		fs.files.set('/workspace/a.txt', new TextEncoder().encode('v1'));
+
+		const handle: SandboxHandle = {
+			...box,
+			async writeFileIfDigest(path, contentBase64, expected) {
+				const answer = await box.writeFileIfDigest(path, contentBase64, expected);
+
+				if (dropped) return answer;
+				dropped = true;
+
+				throw new Error('Network connection lost.');
+			},
+		};
+
+		// Sent once more after a failure, as the executor's retry of a dropped connection does.
+		const files = sandboxFiles(handle, async (call) => {
+			const [first] = await Promise.allSettled([call()]);
+
+			return first.status === 'fulfilled' ? first.value : call();
+		});
+
+		expect(await files.writeFileIfDigest('/workspace/a.txt', new TextEncoder().encode('v2'), sha256Hex('v1')))
+			.toEqual({ ok: true, sha256: sha256Hex('v2') });
+		expect(new TextDecoder().decode(fs.files.get('/workspace/a.txt'))).toBe('v2');
 	});
 });
 
