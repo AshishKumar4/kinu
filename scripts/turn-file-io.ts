@@ -52,6 +52,7 @@ interface StepMeasurement { readonly label: string; readonly wallMs: number; rea
 interface TurnMeasurement {
   readonly text: string; readonly wallMs: number; readonly cpuMs: number;
   readonly modelSteps: number; phases?: Cut[]; timings?: StepMeasurement[]; peaks?: Record<string, number>;
+  stepPeaks?: Record<string, Record<string, number>>;
 }
 
 interface DriverRequest { method?: string; body?: string }
@@ -281,6 +282,7 @@ function modelFinished(entered: number, streamed: boolean): void {
       phaseWall = finished;
       phaseCpu = cpu(enginePid);
       phaseExcluded = 0;
+      heapPhase = `step-${String(modelStep)}`;
     }
   }
 }
@@ -316,6 +318,10 @@ const inspectors = new Map<string, Inspector>();
 
 const peaks = new Map<string, number>();
 
+const stepPeaks = new Map<string, Map<string, number>>();
+
+let heapPhase = 'open';
+
 let sampling = false;
 
 let heapRead = Promise.resolve();
@@ -332,7 +338,13 @@ async function readHeap(): Promise<void> {
     if (!inspectors.has(target.id)) inspectors.set(target.id, await connectInspector(target.webSocketDebuggerUrl));
   }
 
-  for (const [id, inspector] of inspectors) peaks.set(id, Math.max(peaks.get(id) ?? 0, await inspector.heap()));
+  for (const [id, inspector] of inspectors) {
+    const used = await inspector.heap();
+    peaks.set(id, Math.max(peaks.get(id) ?? 0, used));
+    const held = stepPeaks.get(heapPhase) ?? new Map<string, number>();
+    held.set(id, Math.max(held.get(id) ?? 0, used));
+    stepPeaks.set(heapPhase, held);
+  }
 }
 
 try {
@@ -349,6 +361,8 @@ try {
     modelWall = 0;
     modelStep = 0;
     phaseExcluded = 0;
+    heapPhase = 'open';
+    stepPeaks.clear();
 
     if (record && mode === 'heap') { peaks.clear(); await sampleHeap(); }
 
@@ -375,7 +389,11 @@ try {
 
       if (mode === 'time') result.timings = [...stepTimings];
 
-      if (mode === 'heap') result.peaks = Object.fromEntries(peaks);
+      if (mode === 'heap') {
+        result.peaks = Object.fromEntries(peaks);
+        result.stepPeaks = Object.fromEntries([...stepPeaks].map(([phase, held]) => [phase, Object.fromEntries(held)]));
+      }
+
       measured.push(result);
       process.stdout.write(JSON.stringify({ event: 'turn', sha, subject, mode, ...result }) + '\n');
     }
