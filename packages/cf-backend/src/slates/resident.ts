@@ -1,7 +1,7 @@
 import { Cause, Effect } from 'effect';
 import * as v from 'valibot';
 import { FACET_IMAGE_DIR, facetImageDigest, facetImagePath } from '@nimbus-sh/fabric/process-fabric.js';
-import type { EsbuildService } from '@nimbus-sh/core/runtime/esbuild-service.js';
+import { vfsBuildInputs, type EsbuildService } from '@nimbus-sh/core/runtime/esbuild-service.js';
 import type { NamespaceFs } from '@nimbus-sh/core/runtime/process-files.js';
 import { CRED_KERNEL, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { ComposedFacetManager, LongRunningWorkerSpawnOptions } from '@nimbus-sh/worker/workspace-host';
@@ -47,6 +47,8 @@ export interface SlateImage {
   readonly modules: Readonly<Record<string, string>>;
   readonly client?: string;
   readonly shell?: string;
+  /** The workspace files outside the slate's own tree the compiler read: a change to one is a change to the build. */
+  readonly reads?: readonly string[];
 }
 
 /** What a build that did not compile says: the compiler's own words, file and line among them. */
@@ -473,6 +475,8 @@ interface SlateBuild {
   readonly root: string;
   readonly entries: string;
   readonly provision: (name: string, contents: string) => void;
+  /** Every workspace path a compile of this build read. */
+  readonly reads: Set<string>;
 }
 
 const COMPILED_JSX = JSON.stringify({ compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'react' } });
@@ -495,6 +499,8 @@ function serverModule(build: SlateBuild, project: SlateProject): Effect.Effect<s
     });
 
     if (server.errors.length !== 0) return yield* new KinuError('bad_input', server.errors.map((error) => error.text).join('\n'));
+
+    for (const path of vfsBuildInputs(server.metafile)) build.reads.add(path);
     const compiled = server.outputFiles.find((file) => file.path === '/application.js');
 
     if (compiled === undefined) return yield* new KinuError('io', 'Slate compiler did not produce the server module');
@@ -528,6 +534,8 @@ function browserSurface(build: SlateBuild, id: string, project: SlateProject, re
     });
 
     if (client.errors.length !== 0) return yield* new KinuError('bad_input', client.errors.map((error) => error.text).join('\n'));
+
+    for (const path of vfsBuildInputs(client.metafile)) build.reads.add(path);
 
     return { assets: client.outputFiles, shell: slateShell({ title: slateTitle(project, id), assets: client.outputFiles }) };
   });
@@ -595,7 +603,7 @@ export class ResidentSlateProcesses {
         }
       };
 
-      const build: SlateBuild = { bundler, root: input.root, entries: entriesDir, provision };
+      const build: SlateBuild = { bundler, root: input.root, entries: entriesDir, provision, reads: new Set() };
       const application = yield* serverModule(build, input.project);
       const { assets, shell } = yield* browserSurface(build, input.owner, input.project, (entry) => input.read(entry) ?? '');
 
@@ -627,9 +635,13 @@ export class ResidentSlateProcesses {
       for (const [name, contents] of Object.entries(modules)) digests[name] = yield* held(contents);
       const client = assets.find((asset) => asset.path === '/__kinu/client.js');
 
+      // Its own tree is the source's digest already, and the generated entries and runtime are this build's own.
+      const reads = [...build.reads].filter((path) => !path.startsWith(`${input.root}/`) && !path.startsWith(`${RUNTIME_DIR}/`)).sort();
+
       return {
         modules: digests,
         ...(shell !== undefined && client !== undefined && { client: yield* held(client.contents), shell: yield* held(shell) }),
+        ...(reads.length > 0 && { reads }),
       };
     }), (error): error is KinuError => error instanceof KinuError && error.code === 'bad_input', (error) => Effect.succeed({ failed: renderCauseChain(error) })));
   }

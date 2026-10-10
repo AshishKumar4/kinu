@@ -30,6 +30,7 @@ const SlateImageSchema = v.object({
   modules: v.record(v.string(), v.string()),
   client: v.optional(v.string()),
   shell: v.optional(v.string()),
+  reads: v.optional(v.array(v.string())),
 });
 
 const RowSchema = v.object({

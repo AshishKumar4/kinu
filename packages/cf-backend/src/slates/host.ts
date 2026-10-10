@@ -170,6 +170,13 @@ export class SlateHost {
   private readonly running = new Map<string, RunningSlate>();
   private readonly starting = new Map<string, Promise<RunningSlate>>();
   private readonly revisions = new Map<string, number>();
+  /** Each slate's builds since it was last told a file it imports from outside its tree moved: part of what keys them. */
+  private readonly importsMoved = new Map<string, number>();
+  /** The files outside its tree each slate's served build read, and the slates that read each. */
+  private readonly readsOf = new Map<string, readonly string[]>();
+  private readonly readersOf = new Map<string, Set<string>>();
+  /** Slates whose latest source does not build: what it failed to read is not known, so any outside change may fix it. */
+  private readonly unbuilt = new Set<string>();
   private readonly live: SlateLiveShareStore;
   private readonly pages: EphemeralSlates;
   private readonly slateSources: SlateSources;
@@ -787,6 +794,8 @@ export class SlateHost {
         this.state.forget(id);
         this.usage.forget(id);
         this.builds.forget(id);
+        this.noteReads(id, [], false);
+        this.importsMoved.delete(id);
       });
       await this.deps.forgetPicture?.(id);
 
@@ -1059,7 +1068,7 @@ export class SlateHost {
       if (project.slate.runtime !== 'worker') throw new KinuError('unsupported', 'Resident slate previews require slate.runtime worker; run node projects through the sandbox executor');
       // The loader evaluates boot options only on a cache miss. This identity
       // must not reuse an image created before outbound mediation was supplied.
-      const digest = await this.slateSources.digest(caller.cred, id, source);
+      const digest = `${await this.slateSources.digest(caller.cred, id, source)}:${String(this.importsMoved.get(id) ?? 0)}`;
       const key = `slate:mediated:${this.deps.workspace}:${held}:${digest}`;
       const running = this.running.get(held);
 
@@ -1076,6 +1085,8 @@ export class SlateHost {
       const { image, key: built, broken } = await slateImage({
         builds: this.builds, slate: id, key: digest, cred: caller.cred, build: () => this.resident.build({ owner: id, root, project, read, cred: caller.cred }),
       });
+
+      this.noteReads(id, image.reads ?? [], broken !== null);
 
       if (running !== undefined && running.built === built && await running.process.isRunning()) {
         const kept = { ...running, revision, broken };
@@ -1113,14 +1124,43 @@ export class SlateHost {
     }
   }
 
+  /** What the build `id` now serves read outside its tree, and whether its latest source failed to build. */
+  private noteReads(id: string, reads: readonly string[], unbuilt: boolean): void {
+    for (const path of this.readsOf.get(id) ?? []) this.readersOf.get(path)?.delete(id);
+
+    this.readsOf.set(id, reads);
+
+    for (const path of reads) {
+      const readers = this.readersOf.get(path) ?? new Set<string>();
+
+      readers.add(id);
+      this.readersOf.set(path, readers);
+    }
+
+    if (unbuilt) this.unbuilt.add(id);
+    else this.unbuilt.delete(id);
+  }
+
   filesChanged(paths: readonly string[]): string[] {
     const ids = new Set<string>();
+    const imported = new Set<string>();
 
-    for (const path of paths) {
-      const match = SLATE_FILE.exec(path.startsWith('/') ? path : `/${path}`);
-      const id = match?.[1];
+    for (const written of paths) {
+      const path = written.startsWith('/') ? written : `/${written}`;
+      const id = SLATE_FILE.exec(path)?.[1];
 
-      if (id !== undefined) ids.add(id);
+      if (id !== undefined) {
+        ids.add(id);
+        continue;
+      }
+
+      for (const reader of [...this.readersOf.get(path) ?? [], ...this.unbuilt]) imported.add(reader);
+    }
+
+    // A file a build read moved: the next boot builds again, though the slate's own tree did not change.
+    for (const id of imported) {
+      this.importsMoved.set(id, (this.importsMoved.get(id) ?? 0) + 1);
+      ids.add(id);
     }
 
     for (const id of ids) this.revisions.set(id, (this.revisions.get(id) ?? 0) + 1);
