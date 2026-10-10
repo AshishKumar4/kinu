@@ -29,7 +29,7 @@ export function scopesOverlap(
   return left.some(a => right.some(b => scopesTouch(a, b)));
 }
 
-interface ResourceLane {
+export interface ResourceLane {
   /** A streamed read keeps the lane busy until its body drains or is cancelled. */
   busy(): boolean;
   drain(): Promise<void>;

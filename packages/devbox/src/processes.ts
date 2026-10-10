@@ -32,6 +32,16 @@ export interface ProcessRecord {
   readonly exitCode: number | undefined;
 }
 
+export function isProcessLive(status: string): boolean {
+  return status === 'starting' || status === 'running';
+}
+
+/** The claim remains held while native I/O settles, but expiry revokes permission to issue a later mutation. */
+function whileCurrent<A>(current: (() => boolean) | undefined, mutate: () => Promise<A>): Promise<A> {
+  return current === undefined || current() ? mutate()
+    : settle(Effect.fail(new DevboxError('cancelled', 'process launch reservation was superseded')));
+}
+
 // File-backed identities survive a DO eviction; a process group carries signals. A launch whose exec
 // answer was lost is decided by one symlink: `launched` before anything runs, or `unlaunched` set by
 // a caller finding no pid and no exit (D48). A missing cwd is the launch's own recorded failure.
@@ -99,11 +109,11 @@ export class Processes {
     this.#files = new Files(container);
   }
 
-  start(command: string, options: { readonly cwd?: string; readonly processId: string }): Promise<ProcessRecord> {
+  start(command: string, options: { readonly cwd?: string; readonly processId: string; readonly current?: () => boolean }): Promise<ProcessRecord> {
     return settle(Effect.gen({ self: this }, function* () {
       const dir = yield* directory(options.processId);
-      yield* attempt('file', () => this.#files.mkdir(ROOT, { recursive: true }));
-      const made = yield* Effect.result(attempt('file', () => this.#files.mkdir(dir)));
+      yield* attempt('file', () => whileCurrent(options.current, () => this.#files.mkdir(ROOT, { recursive: true })));
+      const made = yield* Effect.result(attempt('file', () => whileCurrent(options.current, () => this.#files.mkdir(dir))));
 
       if (Result.isFailure(made)) {
         const cause = made.failure.cause;
@@ -115,16 +125,16 @@ export class Processes {
 
         // A launch with no pid yet is live only if its wrapper claimed it.
         if (held.status === 'running' || (held.status === 'starting' && !(yield* this.#unlaunched(dir)))) return held;
-        yield* attempt('file', () => this.#files.remove(dir, { recursive: true }));
-        yield* attempt('file', () => this.#files.mkdir(dir));
+        yield* attempt('file', () => whileCurrent(options.current, () => this.#files.remove(dir, { recursive: true })));
+        yield* attempt('file', () => whileCurrent(options.current, () => this.#files.mkdir(dir)));
       }
 
       const record = { id: options.processId, command, cwd: options.cwd ?? '/workspace' };
-      yield* attempt('file', () => this.#files.writeFile(`${dir}/process.json`, JSON.stringify(record)));
+      yield* attempt('file', () => whileCurrent(options.current, () => this.#files.writeFile(`${dir}/process.json`, JSON.stringify(record))));
 
-      const launched = yield* Effect.result(attempt('process', () => this.container.exec(['/bin/sh', '-c', RUN, 'devbox-process', dir, record.cwd, '/bin/bash', '-c', command], {
+      const launched = yield* Effect.result(attempt('process', () => whileCurrent(options.current, () => this.container.exec(['/bin/sh', '-c', RUN, 'devbox-process', dir, record.cwd, '/bin/bash', '-c', command], {
         env: CONTAINER_TRUST_ENV, stdout: 'ignore', stderr: 'ignore',
-      })));
+      }))));
 
       if (Result.isFailure(launched)) {
         // The claim records a launch that never ran, so neither a retry nor a kill adopts it.
