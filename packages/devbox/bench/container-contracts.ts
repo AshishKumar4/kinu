@@ -76,7 +76,7 @@ async function exec(box: Devbox<unknown>): Promise<void> {
   equal([...new Uint8Array(await new Response(await box.readFileStream(`${SCRATCH}/binary`)).arrayBuffer())], [...binary]);
 }
 
-async function processes(container: Container): Promise<void> {
+async function processes(box: Devbox<unknown>, container: Container): Promise<void> {
   const process = new Processes(container);
   const ready = (id: string) => native(container, `until [ -e ${SCRATCH}/${id} ]; do sleep 0.05; done`);
 
@@ -140,6 +140,52 @@ async function processes(container: Container): Promise<void> {
   equal([(await process.get('restored'))?.status, (await process.get('foreign'))?.status, (await process.get('current'))?.status], ['failed', 'failed', 'running']);
   await native(container, 'kill -0 1');
   await new Files(container).remove(`${ROOT}/current`, { recursive: true });
+
+  // A real RUN request queued before confirmed stop can arrive in the successor kernel. Its atomic
+  // launch claim must neither replace an already restored id nor recreate a canceled old directory.
+  for (const sameId of [true, false]) {
+    const entered = Promise.withResolvers<void>();
+    const released = Promise.withResolvers<void>();
+    let queued = true;
+    let current = true;
+    const oldId = 'before-generation';
+    const nextId = sameId ? oldId : 'after-generation';
+
+    const delayed = new Processes({
+      get running() { return container.running; },
+      exec: async (argv: string[], options?: ContainerExecOptions) => {
+        if (queued && argv[3] === 'devbox-process') {
+          queued = false;
+          entered.resolve();
+          await released.promise;
+        }
+
+        return container.exec(argv, options);
+      },
+    });
+
+    const obsolete = delayed.start('exec sleep 7121', { cwd: '/', processId: oldId, current: () => current });
+
+    await entered.promise;
+
+    try {
+      current = false;
+      await container.destroy();
+      await box.devboxStartup();
+      const successor = new Processes(container);
+
+      await successor.start('exec sleep 7122', { cwd: '/', processId: nextId });
+      released.resolve();
+      await Promise.allSettled([obsolete]);
+      equal(await native(container, "ps -eo args= | awk '$0 == \"sleep 7121\" { n++ } END { print n+0 }'"), '0');
+      equal(await native(container, "ps -eo args= | awk '$0 == \"sleep 7122\" { n++ } END { print n+0 }'"), '1');
+      equal((await successor.get(nextId))?.command, 'exec sleep 7122');
+      await successor.kill(nextId);
+    } finally {
+      released.resolve();
+      await Promise.allSettled([obsolete]);
+    }
+  }
 }
 
 async function kill(box: Devbox<unknown>, container: Container): Promise<void> {
@@ -240,7 +286,7 @@ export async function runContainerContract(kind: ContainerContract, box: Devbox<
   switch (kind) {
     case 'tools': return tools(container, pin);
     case 'exec': return exec(box);
-    case 'processes': return processes(container);
+    case 'processes': return processes(box, container);
     case 'kill': return kill(box, container);
     case 'trust': return trust(container);
   }

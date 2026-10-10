@@ -28,7 +28,13 @@ const REBIND = { kind: 'rebind' } as const;
 
 type Outcome = Started | Stopped | typeof STALE;
 
+export interface ReservationContext {
+  readonly generation: number;
+  readonly current: () => boolean;
+}
+
 interface Ports {
+  readonly generation: () => number;
   readonly storage: Pick<DurableObjectStorage, 'get' | 'put' | 'delete' | 'list'>;
   readonly lane: ResourceLane;
   readonly native: () => Pick<Processes, 'get' | 'start' | 'kill'>;
@@ -53,9 +59,12 @@ export class SupervisedProcesses {
     return [...(await this.ports.storage.list<SupervisedProcessSpec>({ prefix: SUPERVISED_SPEC_PREFIX })).values()];
   }
 
-  run(request: SupervisedStart, current: () => boolean): Promise<Started | typeof STALE>;
-  run(request: SupervisedStop, current: () => boolean): Promise<Stopped | typeof STALE>;
-  async run(request: Request, current: () => boolean): Promise<Outcome> {
+  run(request: SupervisedStart, context?: ReservationContext): Promise<Started | typeof STALE>;
+  run(request: SupervisedStop, context?: ReservationContext): Promise<Stopped | typeof STALE>;
+  async run(request: Request, context?: ReservationContext): Promise<Outcome> {
+    const generation = context === undefined ? this.ports.generation() : context.generation;
+    const current = () => this.ports.generation() === generation && (context === undefined || context.current());
+
     for (;;) {
       if (!current()) return STALE;
 
@@ -68,12 +77,12 @@ export class SupervisedProcesses {
 
       let scopes: readonly ResourceScope[];
 
-      if (request.kind === 'start') scopes = supervisedScope(request.command, request.cwd);
+      if (request.kind === 'start') scopes = supervisedScope(request.command, request.cwd, generation);
       else {
         const processId = request.kind === 'restore' ? request.spec.processId : request.processId;
 
-        scopes = seen === undefined ? processScope(processId) : [
-          ...processScope(seen.processId), ...supervisedScope(seen.command, seen.cwd ?? DEVBOX_WORKDIR),
+        scopes = seen === undefined ? processScope(processId, generation) : [
+          ...processScope(seen.processId, generation), ...supervisedScope(seen.command, seen.cwd ?? DEVBOX_WORKDIR, generation),
         ];
       }
 

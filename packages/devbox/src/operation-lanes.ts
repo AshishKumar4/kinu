@@ -87,8 +87,8 @@ export function portScope(port: number): readonly ResourceScope[] {
   return [{ path: `port:${port}`, subtree: false }];
 }
 
-export function processScope(processId: string): readonly ResourceScope[] {
-  return [{ path: `proc:${processId}`, subtree: false }];
+export function processScope(processId: string, generation: number): readonly ResourceScope[] {
+  return [{ path: `proc:${generation}:${processId}`, subtree: false }];
 }
 
 /** A returned `ReadableStream` is unconsumed, so releasing on return lets a sibling write race
@@ -167,8 +167,8 @@ export function canonicalPath(path: string): string {
 
 /** A supervised launch owns command/cwd before it has a native process id. Encode the tuple as one
  * path component so command text or cwd separators cannot change the resource's identity. */
-export function supervisedScope(command: string, cwd: string): readonly ResourceScope[] {
-  return [{ path: `supervised:${encodeURIComponent(JSON.stringify([command, cwd]))}`, subtree: false }];
+export function supervisedScope(command: string, cwd: string, generation: number): readonly ResourceScope[] {
+  return [{ path: `supervised:${generation}:${encodeURIComponent(JSON.stringify([command, cwd]))}`, subtree: false }];
 }
 
 interface CheckpointLane {

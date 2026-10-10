@@ -1514,7 +1514,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       if (!this.#owns(generation)) return superseded;
 
       const started = await steps.run(
-        (current) => this.#supervised().run({ kind: 'restore', spec }, () => current() && this.#owns(generation)),
+        (current) => this.#supervised().run({ kind: 'restore', spec }, { generation, current }),
         logLate(`process ${spec.processId}`),
       );
 
@@ -2164,8 +2164,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   async startSupervised(command: string, cwd?: string): Promise<{ processId: string }> {
     return await settle(this.#withActiveCaller(attempt("io", async () => {
       await this.ensureReady();
-      const generation = this.#generation;
-      const result = await this.#supervised().run({ kind: 'start', command, cwd: cwd ?? DEVBOX_WORKDIR }, () => this.#owns(generation));
+      const result = await this.#supervised().run({ kind: 'start', command, cwd: cwd ?? DEVBOX_WORKDIR });
 
       return result.kind === 'started' ? { processId: result.process.id }
         : settle(Effect.fail(new DevboxError('cancelled', 'supervised start was superseded')));
@@ -2177,8 +2176,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return settle(attempt('io', async () => {
       const arrived = this.#teardowns;
       await this.#ensureReady(arrived);
-      const generation = this.#generation;
-      const result = await this.#supervised().run({ kind: 'stop', processId }, () => this.#owns(generation));
+      const result = await this.#supervised().run({ kind: 'stop', processId });
 
       this.stampInteraction();
 
@@ -2972,7 +2970,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   #supervised(): SupervisedProcesses {
     return this.#supervisedClient ??= new SupervisedProcesses({
-      storage: this.ctx.storage, lane: this.#resources, native: () => this.#processes(),
+      storage: this.ctx.storage, lane: this.#resources, native: () => this.#processes(), generation: () => this.#generation,
       failedStop: (processId, cause) => this.#record('process', describe({ cause }), { processId }),
     });
   }
@@ -3057,10 +3055,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return settle(this.#withActiveCaller(attempt("io", async () => {
       await this.ensureReady();
 
-      const generation = this.#generation;
-
       const result = await this.#supervised().run({ kind: 'native-start', command, cwd: options.cwd ?? DEVBOX_WORKDIR,
-        processId: options.processId ?? crypto.randomUUID() }, () => this.#owns(generation));
+        processId: options.processId ?? crypto.randomUUID() });
 
       return result.kind === 'started' ? result.process
         : settle(Effect.fail(new DevboxError('cancelled', 'native start was superseded')));
@@ -3077,8 +3073,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return settle(this.#withActiveCaller(attempt('io', async () => {
       await this.ensureReady();
 
-      const generation = this.#generation;
-      const result = await this.#supervised().run({ kind: 'native-stop', processId: id }, () => this.#owns(generation));
+      const result = await this.#supervised().run({ kind: 'native-stop', processId: id });
 
       if (result.kind === 'stale') return settle(Effect.fail(new DevboxError('cancelled', 'native stop was superseded')));
     })));
