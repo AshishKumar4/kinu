@@ -270,7 +270,7 @@ import type { ExposedPortList } from "@kinu.run/core";
 import {
   terminalEffect, declareTerminalRoster, isDefinitiveTerminalFailure, CompletedTurnSchema,
   branchesTerminalEffect,
-  type HandedOffTurn, type CompletedTurn, type TerminalEffectTable, type TerminalTurnFacts, type TurnReach,
+  type HandedOffTurn, type CompletedTurn, type OpenedAt, type TerminalEffectTable, type TerminalTurnFacts, type TurnReach,
   type TerminalTurnParts,
 } from "@kinu.run/core";
 
@@ -989,40 +989,52 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** An end delayed past the agent's later opening, a later turn's or its Retry's, is that earlier run's: it closes
    *  nothing of the run now open, in its room or here. */
   private async hostedTurnEnded(actorId: string, event: SessionEvent, figures: AgentFigures): Promise<void> {
-    const runId = event.type === 'turn-end' ? event.runId : null;
+    const runId = event.type === 'turn-end' ? event.runId : '';
+    const ended = new TurnFences(this.boundSql).ended(actorId, { runId });
 
-    if (!new TurnFences(this.boundSql).ended(actorId, runId)) {
-      diagnostics.event('agent.stale_turn_end', { actorId, runId: runId ?? '' });
+    if (ended === null) {
+      diagnostics.event('agent.stale_turn_end', { actorId, runId });
 
       return;
     }
 
     await this.hostedChatEvent(actorId, event);
-    await this.chatTurnClosed(actorId, { event, figures });
+    await this.chatTurnClosed(actorId, { event, figures }, ended === 'unfenced' ? null : ended);
   }
 
   /**
    * An agent that says it rests holds no turn, whatever this object last heard: the end of a turn its isolate committed
-   * and did not live to tell is closed here. Its chat is asked again first, and the turn closed only if it is still the one
-   * this object holds, so a report made before a later turn began closes nothing.
+   * and did not live to tell is closed here. Its chat is asked again first, and the run closed only if the opening this
+   * object saw open before it asked is still the open one: a reply made before a later turn or the same turn's Retry
+   * opened, here or after this object reset, closes nothing.
    */
   private async closeLostChatTurn(actorId: string): Promise<void> {
-    const open = this.agentTurns.chatTurn(actorId);
+    const open = this.agentTurns.chatOpening(actorId);
 
-    if (open === null || await (await this.agentCalls(actorId)).owed(this.agentSnapshot(actorId))) return;
+    if (open === null) return;
+    const fences = new TurnFences(this.boundSql);
+    // Seen before it asks: the opening this activation admitted, or, for a turn it read again after a restart, the fence's.
+    const expected = open.fenced ?? fences.current(actorId);
 
-    if (this.agentTurns.chatTurn(actorId) !== open) return;
-    diagnostics.event('agent.turn_end_lost', { turnId: open });
-    new TurnFences(this.boundSql).ended(actorId, null);
+    if (await (await this.agentCalls(actorId)).owed(this.agentSnapshot(actorId))) return;
+
+    if (expected === null ? this.agentTurns.chatOpening(actorId)?.turnId !== open.turnId : fences.ended(actorId, expected) === null) {
+      diagnostics.event('agent.lost_end_superseded', { turnId: open.turnId });
+
+      return;
+    }
+
+    diagnostics.event('agent.turn_end_lost', { turnId: open.turnId });
     await this.chatRooms.hostedRoom(actorId)?.closeTurn();
-    await this.chatTurnClosed(actorId, null);
+    await this.chatTurnClosed(actorId, null, expected);
   }
 
-  /** What a turn's end moves in this object, told (`ended`) or lost with its isolate. */
-  private async chatTurnClosed(actorId: string, ended: { readonly event: SessionEvent; readonly figures: AgentFigures } | null): Promise<void> {
+  /** What a turn's end moves in this object, told (`ended`) or lost with its isolate. `closing` is the opening that
+   *  ended: a later one, opened while this one's end was applied, stays open. */
+  private async chatTurnClosed(actorId: string, ended: { readonly event: SessionEvent; readonly figures: AgentFigures } | null, closing: OpenedAt | null): Promise<void> {
     const event = ended?.event ?? null;
 
-    this.agentTurns.chatClosed(actorId);
+    this.agentTurns.chatClosed(actorId, closing);
     // Its claim closed and its sequence opened in its own isolate.
     this.liveReadsMoved(readsOfTables(['actor_turn_claims', 'terminal_effects']));
 
@@ -1910,7 +1922,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** A hand-off its isolate lost: the agent's claims decide. One stalled twice retires with a blocked report, any other
    *  re-drives; an isolate that cannot load cannot run the task, and its hirer is told so. */
   private async redriveLostHire(record: WorkspaceActor, task: { readonly sequenceId: string; readonly mode: WorkMode; readonly turnId: string }, log: EventLog, lost: KinuError): Promise<void> {
-    this.agentTurns.chatClosed(record.actorId);
+    this.agentTurns.chatClosed(record.actorId, null);
     const recovered = await hold(attempt({ doing: 'recovering an agent whose hand-off was lost', otherwise: 'io' }, () => this.recoverAgent(record.actorId, [task.sequenceId])));
 
     if (Exit.isFailure(recovered)) {

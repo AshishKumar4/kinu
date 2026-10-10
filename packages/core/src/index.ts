@@ -13,7 +13,7 @@ export { AgentOpenTurns, AgentOwedWork, type AgentOpenTurn } from './subordinate
 
 export { AgentReports, AgentSequence } from './subordinates/report-sequence';
 
-export { TurnFences } from './subordinates/turn-fence';
+export { TurnFences, type OpenedAt } from './subordinates/turn-fence';
 
 export { TurnReports, type ReportedTurn } from './subordinates/turn-reports';
 

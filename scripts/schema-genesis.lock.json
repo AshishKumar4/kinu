@@ -119,6 +119,7 @@
     "seq INTEGER NOT NULL",
     "turn_id TEXT NOT NULL",
     "run_id TEXT NOT NULL",
+    "ended_at INTEGER",
     "facts_json TEXT"
   ],
   "agent_data_tables@packages/core/src/tools/db-codemode.ts": [

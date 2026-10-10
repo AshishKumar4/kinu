@@ -43,7 +43,8 @@ import {
 } from './helpers/actor-harness';
 import { answeringGateway, chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion, type StubbedAiBinding } from './helpers/platform-gateway';
 import { abandonHarnessFibers } from './helpers/agents-sdk';
-import { agentDatabase, copyNextOpening, copyNextTurnEnd, delayNextTurnEnd, loseNextOpeningAnswer } from './helpers/agent-facets';
+import { agentDatabase, copyNextOpening, copyNextTurnEnd, delayNextTurnEnd, holdNextRestingAnswer, loseNextOpeningAnswer, loseNextTurnEnd, type TurnOpeningRequest } from './helpers/agent-facets';
+import { MISSION_LABELS_METADATA_KEY } from '@kinu.run/core';
 import { socketConnection } from './helpers/bindings';
 
 const FrameSchema = v.looseObject({
@@ -472,6 +473,91 @@ test("a turn's end delayed past the next turn's opening ends nothing, after the 
     await askedAndAnswered(restarted, 'req-third');
   } finally {
     untap();
+  }
+});
+
+/** A copied opening of the agent's turn as a later run, `ahead` places along the agent's sequence. */
+function laterRun(opening: TurnOpeningRequest, runId: string, ahead: number, changes: Partial<TurnOpeningRequest> = {}): TurnOpeningRequest {
+  return { ...opening, ...changes, runId, seq: (opening.seq ?? 0) + ahead };
+}
+
+/** A preparation names the opening it was admitted under (design v3 B): one that finishes after the same turn's Retry
+ *  opened offers the Retry none of its facts, and is refused. */
+test("a turn's preparation that finishes after its Retry opened is refused, and the Retry keeps its own facts", async () => {
+  const workspace = gatewayWorkspace(counting({ held: 0, answer: 'Done.', holding: new AwaitedList<number>() }));
+  const main = workspaceMainActor(workspace.db).actorId;
+  const copied = copyNextOpening(workspace.agent.agentOf(main).storageKey);
+
+  await askedAndAnswered(workspace, 'req-template');
+  const opening = await copied;
+  const entry = await workspace.agent.agentWorkspace(main);
+  const missions = (label: string) => ({ driving: { ...opening.driving, [MISSION_LABELS_METADATA_KEY]: [label] } });
+
+  // Both admitted before either is read: the first's facts would land in the second's offer.
+  const first = entry.prepareChat(laterRun(opening, 'run-first', 10, missions('alpha')));
+  const retried = entry.prepareChat(laterRun(opening, 'run-retry', 11, missions('beta')));
+
+  await expect(first).rejects.toThrow('finished after a later opening');
+  expect((await retried).facts.missionLabels).toEqual(['beta']);
+});
+
+/** Asks `id` with its end lost, and answers once the isolate's rest, which would close it, is held: the workspace still
+ *  holds the turn open. `asked` is the ask, which settles only once the workspace closes the turn. */
+async function lostEndHeld(workspace: StartedHarness, id: string): Promise<{ readonly opening: TurnOpeningRequest; readonly release: () => void; readonly asked: Promise<unknown> }> {
+  await workspace.started;
+  const key = workspace.agent.agentOf(workspaceMainActor(workspace.db).actorId).storageKey;
+  const copied = copyNextOpening(key);
+  const held = holdNextRestingAnswer(key);
+  const { socket } = socketOn(workspace.agent, `${id}-socket`, () => {});
+
+  loseNextTurnEnd(key);
+  await workspace.agent.onConnect(socket, CONNECT);
+  const asked = Promise.resolve(workspace.agent.onMessage(socket, chatRequest(id)));
+
+  return { opening: await copied, release: await held, asked };
+}
+
+/** The lost end closes the opening the workspace saw open before it asked (design v3 B): a rest the isolate reported
+ *  before the turn's Retry opened, or another turn, here or after the workspace reset, closes nothing of it. */
+test("a rest reported before the turn's Retry opened closes nothing of the Retry", async () => {
+  const workspace = gatewayWorkspace(counting({ held: 0, answer: 'Done.', holding: new AwaitedList<number>() }));
+  const main = workspaceMainActor(workspace.db).actorId;
+  const { opening, release } = await lostEndHeld(workspace, 'req-lost');
+  const log = createRecordingLogger();
+  const untap = tapDiagnostics(log);
+
+  try {
+    await (await workspace.agent.agentWorkspace(main)).prepareChat(laterRun(opening, 'run-retry', 10));
+    release();
+    await driveUntil(workspace, 'the held rest never landed', () => log.emitted.some((line) => ['agent.lost_end_superseded', 'agent.turn_end_lost'].includes(line.event)));
+
+    expect(log.emitted.filter((line) => line.event === 'agent.turn_end_lost')).toEqual([]);
+  } finally {
+    untap();
+    // The turn its lost end left open is the test's to drop: no end of it is coming, so nothing closes it.
+    abandonHarnessFibers();
+  }
+});
+
+test("a rest reported before the workspace reset and the next turn opened closes nothing of that turn", async () => {
+  const workspace = gatewayWorkspace(counting({ held: 0, answer: 'Done.', holding: new AwaitedList<number>() }));
+  const main = workspaceMainActor(workspace.db).actorId;
+  const { opening, release } = await lostEndHeld(workspace, 'req-lost');
+  const restarted = await reactivateOrchestratorHarness(workspace.db);
+  // Tapped after the reset: an activation installs its own sink.
+  const log = createRecordingLogger();
+  const untap = tapDiagnostics(log);
+
+  try {
+    await (await restarted.agent.agentWorkspace(main)).prepareChat(laterRun(opening, 'run-next', 10, { turnId: 'req-next' }));
+    release();
+    await driveUntil(restarted, 'the held rest never landed', () => log.emitted.some((line) => ['agent.lost_end_superseded', 'agent.turn_end_lost'].includes(line.event)));
+
+    expect(log.emitted.filter((line) => line.event === 'agent.turn_end_lost')).toEqual([]);
+  } finally {
+    untap();
+    // The turn its lost end left open is the test's to drop: no end of it is coming, so nothing closes it.
+    abandonHarnessFibers();
   }
 });
 

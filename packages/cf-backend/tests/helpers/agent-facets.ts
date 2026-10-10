@@ -1,7 +1,7 @@
 /** An agent's isolate for bun suites: the shipped AgentFacet in this process over its own database. */
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
-import { MAIN_AGENT, WORKSPACE_ROOT } from '@kinu.run/core';
+import { MAIN_AGENT, WORKSPACE_ROOT, type AgentSnapshot } from '@kinu.run/core';
 import type { AgentProviderDeps, AgentProviderRegistry } from '../../src/providers/agent-registry';
 import type { AgentContext } from 'agents';
 import { AgentFacet, type AgentFacetCalls, type AgentFacetEnv } from '../../src/agent-facet/agent-facet';
@@ -71,7 +71,7 @@ function handNarration(storageKey: string, narration: readonly string[] | null):
   if (narration !== null && narration.length > 0) handedNarrations.set(storageKey, [...narrationsHandedOver(storageKey), narration]);
 }
 
-type TurnOpeningRequest = Parameters<AgentWorkspaceHost['prepareChat']>[0];
+export type TurnOpeningRequest = Parameters<AgentWorkspaceHost['prepareChat']>[0];
 
 const copiedOpenings = new Map<string, (opening: TurnOpeningRequest) => void>();
 
@@ -108,6 +108,20 @@ export async function loseNextOpeningAnswer(storageKey: string): Promise<void> {
   lostOpeningAnswers.set(storageKey, answered.resolve);
 
   await answered.promise;
+}
+
+const restingAnswers = new Map<string, (release: () => void) => void>();
+
+/**
+ * The next time the isolate under `storageKey` answers that it owes nothing, the answer, its own as it was when asked, is
+ * held on its way back to the workspace: the promise settles with `release`, which lets it arrive.
+ */
+export async function holdNextRestingAnswer(storageKey: string): Promise<() => void> {
+  const held = Promise.withResolvers<() => void>();
+
+  restingAnswers.set(storageKey, held.resolve);
+
+  return await held.promise;
 }
 
 const heldReports = new Map<string, (deliver: () => Promise<void>) => void>();
@@ -395,7 +409,24 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
       // error thrown across an RPC does.
       const calls = agentCallsThrough((call) => attemptInItsWords('io', () => untilLost(call(facet), lost.signal)));
 
-      return { facet, calls, lost };
+      const heldWhenResting = async (snapshot: AgentSnapshot): Promise<boolean> => {
+        const answer = await calls.owed(snapshot);
+        const hold = answer ? undefined : restingAnswers.get(placement.storageKey);
+
+        if (hold === undefined) return answer;
+        restingAnswers.delete(placement.storageKey);
+        const released = Promise.withResolvers<void>();
+
+        hold(released.resolve);
+        await released.promise;
+
+        return answer;
+      };
+
+      // Untouched unless a hold waits: the answer arrives on the tick it always did.
+      const owed = (snapshot: AgentSnapshot): Promise<boolean> => (restingAnswers.has(placement.storageKey) ? heldWhenResting(snapshot) : calls.owed(snapshot));
+
+      return { facet, calls: { ...calls, owed }, lost };
   }
 }
 
