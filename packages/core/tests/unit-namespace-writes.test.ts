@@ -102,4 +102,20 @@ describe('withMountTable resolve', () => {
     expect(await plane.resolve('/home/main/missing/deeper/new.txt')).toBe('/home/main/missing/deeper/new.txt');
     expect(await plane.resolve('/home/main/pc-link/missing/new.txt')).toBe('/pc/laptop/missing/new.txt');
   });
+
+  // A write makes its parents through a link whose target is not there yet: the gate must judge where it lands.
+  test('a link whose target is not there yet is followed to where the write would land', async () => {
+    const namespace = new CompositeVFS(new MemoryVFS());
+    const plane = withMountTable({ namespace: async () => namespace, home: '/home/main' }, []);
+
+    await namespace.mkdir('/home/main', { recursive: true });
+    await namespace.mkdir('/outside', { recursive: true });
+    await namespace.symlink('/outside/missing/deeper', '/home/main/link');
+    await namespace.symlink('relative/target', '/home/main/near');
+
+    expect(await plane.resolve('/home/main/link/file.txt')).toBe('/outside/missing/deeper/file.txt');
+    expect(await plane.resolve('/home/main/link/a/b.txt')).toBe('/outside/missing/deeper/a/b.txt');
+    expect(await plane.resolve('/home/main/near/file.txt')).toBe('/home/main/relative/target/file.txt');
+    expect(await plane.resolve('/home/main/link', { follow: false })).toBe('/home/main/link');
+  });
 });

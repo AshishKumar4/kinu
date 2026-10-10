@@ -565,6 +565,17 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		expect(await exists(device, '/home/dev/build/out.js')).toBe(false);
 	});
 
+	test('a relative path removes the bare base\'s own tree, as it spells it', async () => {
+		const base = fakeTree({ 'build/out.js': 'x', 'build/deep/two.js': 'y', '/build/kept.js': 'rooted' });
+		const mounted = withMountTable(base, [mountOf('pc', fakeTree({}))]);
+
+		await mounted.removeRecursive('build');
+
+		expect(await exists(base, 'build/out.js')).toBe(false);
+		expect(await exists(base, 'build/deep/two.js')).toBe(false);
+		expect(await readText(base, '/build/kept.js')).toBe('rooted');
+	});
+
 	test('removing an absent path names it instead of quietly succeeding', async () => {
 		await expect(removeTree(fakeTree({}), '/gone')).rejects.toMatchObject({ code: 'ENOENT' });
 	});
@@ -608,6 +619,27 @@ describe('a write on the workspace\'s namespace', () => {
 		expect(await bundle.shell.exec('cat /slates/keeper/package.json /home/main/notes/2026/today.md')).toMatchObject({ stdout: '{"main":"server.ts"}kept', exitCode: 0 });
 		await expect(writeText(files, '/etc/kinu/probe.conf', 'x')).rejects.toMatchObject({ code: 'EACCES' });
 		expect(await exists(files, '/etc/kinu')).toBe(false);
+	});
+});
+
+describe('a watched file tool on the workspace\'s namespace', () => {
+	// Nimbus reports every commit to the store, whoever made it: a head's review lists what its file tool wrote, not what
+	// its shell, its installs or its own state writes did under the same credential.
+	test('hears its own writes, not the shell\'s or the store\'s made as the same user', async () => {
+		const bundle = createWorkspaceBundle(new Database(':memory:'));
+		const heard: string[] = [];
+
+		const { files } = workspaceFilePlane(bundle, {
+			mounts: [], principal: {}, home: WORKSPACE_ROOT,
+			observer: { needsBaseline: () => true, record: (event) => { heard.push(event.path); } },
+		});
+
+		await writeText(files, '/home/main/by-tool.txt', 'tool');
+		await writeText(bundle.files({ home: WORKSPACE_ROOT }), '/home/main/by-store.txt', 'store');
+		expect(await bundle.shell.exec('echo shell > /home/main/by-shell.txt')).toMatchObject({ exitCode: 0 });
+		await writeText(files, '/home/main/by-tool.txt', 'tool again');
+
+		expect(heard).toEqual(['/home/main/by-tool.txt', '/home/main/by-tool.txt']);
 	});
 });
 

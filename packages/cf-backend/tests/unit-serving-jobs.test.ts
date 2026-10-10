@@ -203,6 +203,18 @@ test('a box that answers nothing leaves the record standing', async () => {
   expect((await listed(agent))['bgjob-server']).toBe('serving');
 });
 
+// A workspace port moving in an activation that never used the box reads the workspace alone: the box's jobs keep their record.
+test('a read that answers for some jobs leaves every other running job serving as recorded', async () => {
+  const { agent, jobs } = await workspaceWithJobs();
+  jobs.recordServingInWorkspace(new Map([['bgjob-server', SERVED]]));
+
+  jobs.recordServingInWorkspace(new Map(), new Set(['bgjob-build']));
+  expect((await listed(agent))['bgjob-server']).toBe('serving');
+
+  jobs.recordServingInWorkspace(new Map(), new Set(['bgjob-server']));
+  expect((await listed(agent))['bgjob-server']).toBe('running');
+});
+
 test('a held port whose holder carries no stamp makes no job serving', async () => {
   const { agent } = await workspaceWithJobs();
   box.holders.set(SERVED, null);
