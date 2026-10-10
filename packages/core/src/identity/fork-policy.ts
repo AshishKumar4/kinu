@@ -38,6 +38,7 @@ export const FORK_WRITE_RESETS: readonly ForkReset[] = [
   actor('owner_questions'),
   // Rebuilt from the carried notes by the target's first search.
   workspace('memory_note_chunks_fts'), workspace('memory_note_chunks'), workspace('memory_note_files'),
+  workspace('memory_projection_updates'),
   // What makes the target a fork, written at publication.
   workspace('fork_lineage'),
 ];

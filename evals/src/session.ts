@@ -97,6 +97,8 @@ import * as v from 'valibot';
 import { Effect } from 'effect';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import type { ActorLedger } from './results';
+import { inspectedStepMessages, type StepMessageCache, type StepMessages } from './transcript';
+import { StepOutputInspectionSchema } from '../../packages/core/src/subordinates/inspection';
 import { helperAddress, ROOT, type HelperAddress } from './helper-address';
 
 import {
@@ -364,23 +366,13 @@ const RunPageSchema = v.variant('status', [
   v.object({ status: v.literal('end'), items: v.array(v.object({ runId: v.string() })) }),
 ]);
 
-/** Every ledger row type this harness reads. A row of another type is another build's (`LedgerPageSchema`). */
-const RUN_EVENT_TYPES: ReadonlySet<string> = new Set(RunEventSchema.options.map((option) => option.entries.type.literal));
-
-/** A ledger row as far as paging needs it: its type and its index. */
-const LedgerRowSchema = v.looseObject({ type: v.string(), eventIndex: v.number() });
-
-/**
- * A page of a run's ledger, less the rows of a type this harness does not know: those are another build's. The eval
- * verdict's baseline leg runs the promoted build, which can still write a type the candidate retired (2f660875cc
- * writes `step_partial`). A row of a known type that does not parse is a broken contract, and fails the read.
- */
+/** Current canonical rows only; reset deployment removes the retired vocabulary. */
 const LedgerPageSchema = v.pipe(
-  v.array(LedgerRowSchema),
+  v.array(RunEventSchema),
   v.transform((rows) => ({
     rows: rows.length,
     highest: rows.reduce((max, row) => Math.max(max, row.eventIndex), -1),
-    events: rows.filter((row) => RUN_EVENT_TYPES.has(row.type)),
+    events: rows,
   })),
   v.object({ rows: v.number(), highest: v.number(), events: v.array(RunEventSchema) }),
 );
@@ -399,7 +391,8 @@ function pageOf<Item extends v.GenericSchema>(item: Item) {
 }
 
 /** The inspector's answers a check reads (`inspectSubordinate`): the lead's helpers and each helper's runs. */
-const InspectionAnswerSchema = v.variant('view', [
+export const InspectionAnswerSchema = v.variant('view', [
+  StepOutputInspectionSchema,
   v.object({ view: v.literal('children'), page: pageOf(v.object({
     name: v.string(), status: v.string(), lifetime: v.string(), actorReference: v.nullable(v.object({ actorId: v.string() })),
   })) }),
@@ -1633,14 +1626,10 @@ export class KinuPublicSession {
 
       for await (const message of sseMessages(response.body)) {
         if (message.event === 'error') break;
-        const row = v.parse(LedgerRowSchema, JSON.parse(message.data));
+        const event = v.parse(RunEventSchema, JSON.parse(message.data));
 
-        if (row.eventIndex <= cursor) continue;
-        cursor = row.eventIndex;
-
-        // Another build's row type, as `LedgerPageSchema` leaves out of a page.
-        if (!RUN_EVENT_TYPES.has(row.type)) continue;
-        const event = v.parse(RunEventSchema, row);
+        if (event.eventIndex <= cursor) continue;
+        cursor = event.eventIndex;
 
         yield event;
 
@@ -1749,6 +1738,13 @@ export class KinuPublicSession {
     events.sort(compareRunEventOrder);
 
     return events;
+  }
+
+  private readonly cachedStepMessages: StepMessageCache = new WeakMap();
+
+  /** Full native output comes from immutable canonical payloads, once, never from event JSON. */
+  stepMessages(events: readonly RunEvent[]): Promise<StepMessages> {
+    return inspectedStepMessages(events, (request) => this.inspect(request), this.cachedStepMessages);
   }
 
   /** Main's already-read ledger and every retained descendant's requests, through the public inspector's pages. */

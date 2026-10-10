@@ -1,3 +1,4 @@
+import type { ModelAttemptIdentity } from '@kinu.run/core';
 import { createChatModel, type LLMProviderConfig } from '@kinu.run/core';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID,
@@ -37,7 +38,6 @@ import {
   type ModelProvider,
   type ProviderDeps,
   type ProviderInfo,
-  type ProviderWaitInfo,
   type ModelCallSpend,
   type ModelRouteResolution,
   type GenerateRequest,
@@ -52,7 +52,7 @@ import { OPENCODE_PROVIDER_ID, createOpenCodeProvider } from './opencode-provide
 import { isOAuthLoginKey, type LocalOAuthStore } from './oauth-store';
 import * as v from 'valibot';
 import { Effect } from 'effect';
-import { renderThrownChain, settle } from '@kinu.run/core/obs';
+import { KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
 
 const proxiedCredentialsSchema = v.object({
   credentials: v.optional(v.array(v.object({
@@ -113,7 +113,7 @@ export interface LocalModelResolver {
   normalizeSpecSync(specOrNull?: string | null): string;
   /** `affinity`: the conversation and workspace the calls are routed and cached under (`actorAffinity`). */
   resolveModel(specOrNull: string | null | undefined, affinity: ModelAffinity): LanguageModel;
-  credentialFor(specOrNull?: string | null): Promise<string | null>;
+  attemptFor(specOrNull?: string | null): Promise<ModelAttemptIdentity | null>;
   listProviders(): Promise<ProviderInfo[]>;
   /** One broken credential never empties the menu. */
   listModels(): Promise<ModelMenu>;
@@ -123,12 +123,7 @@ export interface LocalModelResolver {
    *  means the turn is assembled ungated rather than gated on an estimate. */
   countInputTokens(specOrNull: string | null | undefined, request: CountableRequest): Promise<InputTokenCount>;
   getAuth: AuthResolver;
-  /**
-   * A setter: the resolver is built before the session owning the sink, and is
-   * shared across sessions, so the last install wins. Unset leaves waits unreported.
-   */
-  setProviderWaitSink?(sink: ((info: ProviderWaitInfo) => void) | undefined): void;
-  withAccountChoice?(choice: (providerId: string) => string | undefined): LocalModelResolver;
+  withCallScope?(scope: Pick<ProviderDeps, 'accountFor' | 'onProviderWait'>): LocalModelResolver;
 }
 
 export interface LocalModelResolverConfig {
@@ -141,9 +136,6 @@ export interface LocalModelResolverConfig {
    *  when absent they list as unavailable, signed out. */
   cloud?: LocalCloudSession;
   fetch?: typeof fetch;
-  /** Read per call so {@link LocalModelResolver.setProviderWaitSink} can install
-   *  the session's sink after construction. */
-  onProviderWait?: (info: ProviderWaitInfo) => void;
 }
 
 /**
@@ -205,22 +197,23 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
   const cloud = opts.cloud;
   const defaultSpec = defaultSpecForEndpoint(localEndpoint);
   const gateway = workersAiRoute(localEndpoint, cloud)?.gateway ?? null;
+  const listings = cloud ? new LocalCloudListings(cloud, opts.fetch) : null;
 
-  const menu = cloud ? perCloudSession(cloudMenus, cloud, opts.fetch, () => cloudListing<CloudMenu>(
-    () => settle(readCloudModelMenu(cloud, opts.fetch)),
+  const menu = () => listings ? cloudAnswer<CloudMenu>(
+    () => listings.menu(),
     (reason) => ({ entries: [], failures: new Map(CLOUD_PROVIDERS.map((provider) => [provider, `Could not reach your Kinu account to list its models (${reason}).`])) }),
-  )) : null;
+  ) : Promise.resolve({ entries: [], failures: new Map<string, string>() });
 
-  const cloudProvider = (id: CloudProxyProviderId, label: string, unavailableReason: string, defaultModel?: string): ModelProvider => {
-    if (!cloud || !menu) return createSignedOutCloudProvider(id, label);
+  const cloudProvider = (readMenu: () => Promise<CloudMenu>, provider: { id: CloudProxyProviderId; label: string; unavailableReason: string; defaultModel?: string }): ModelProvider => {
+    if (!cloud) return createSignedOutCloudProvider(provider.id, provider.label);
 
-    return createCloudProxyProvider({ id, label, cloud, menu: () => menu.read(), defaultModel, unavailableReason, fetch: opts.fetch });
+    return new CloudProxyProvider({ ...provider, cloud, menu: readMenu, fetch: opts.fetch });
   };
 
-  const registry = createModelRegistry({
+  const registryFor = (readMenu: () => Promise<CloudMenu>) => createModelRegistry({
     workersAi: gateway === null
-      ? cloudProvider('workers-ai', 'Cloudflare Workers AI (your account)',
-        'Connect Cloudflare in Account settings in the Kinu app to use Workers AI.', DEFAULT_WORKERS_AI_MODEL_ID)
+      ? cloudProvider(readMenu, { id: 'workers-ai', label: 'Cloudflare Workers AI (your account)',
+        unavailableReason: 'Connect Cloudflare in Account settings in the Kinu app to use Workers AI.', defaultModel: DEFAULT_WORKERS_AI_MODEL_ID })
       : createGatewayBackedProvider({
         id: 'workers-ai',
         label: 'Cloudflare Workers AI (local gateway)',
@@ -229,8 +222,8 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
         catalogProviderId: 'cloudflare-workers-ai',
         fetch: opts.fetch,
       }),
-    myGateway: cloudProvider('my-gateway', 'Your AI Gateway',
-      'Connect Cloudflare and pick an AI Gateway in Account settings in the Kinu app.'),
+    myGateway: cloudProvider(readMenu, { id: 'my-gateway', label: 'Your AI Gateway',
+      unavailableReason: 'Connect Cloudflare and pick an AI Gateway in Account settings in the Kinu app.' }),
     aiGateway: gateway === null ? undefined : createGatewayBackedProvider({
       id: 'ai-gateway',
       label: 'Cloudflare AI Gateway (local)',
@@ -248,68 +241,36 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
 
   // Web-UI-connected providers resolve through the worker's proxy. A local
   // credential always wins: offline use and explicit override.
-  const proxied = cloud ? perCloudSession(proxyCredentialSources, cloud, opts.fetch, () => cloudListing<ProxiedCredentials>(
-    () => settle(readProxyCredentialListing(cloud, opts.fetch)),
+  const proxied = () => listings ? cloudAnswer<ProxiedCredentials>(
+    () => listings.credentials(),
     (reason) => ({ byKey: new Map(), error: `Could not reach your Kinu account to list connected providers (${reason}).` }),
-  )) : null;
+  ) : Promise.resolve({ byKey: new Map(), error: null });
 
-  const credentialReads: Pick<ProviderDeps, 'getAuth' | 'hasCredential' | 'listCredentialKeys'> = {
-    getAuth(key, authOpts) {
-      return settle(Effect.gen(function* () {
-        const local = yield* Effect.promise(() => authStore.get(key, authOpts));
+  const credentialReads = (readProxy: () => Promise<ProxiedCredentials>): Pick<ProviderDeps, 'getAuth' | 'hasCredential' | 'listCredentialKeys'> => {
+    const access = new LocalCredentialAccess({ authStore, cloud: cloud !== undefined, readProxy });
 
-        if (local) return local;
-        const remote = proxied ? (yield* Effect.promise(() => proxied.read())).byKey.get(key) : undefined;
-
-        if (remote?.failure !== undefined) return yield* Effect.die(new Error(remote.failure));
-
-        return remote ? proxyAuthResolution(key, remote) : null;
-      }));
-    },
-    hasCredential(key) {
-      return settle(Effect.gen(function* () {
-        if (authStore.has(key)) return true;
-
-        // A credential the proxy never fronts: the local answer is complete.
-        if (isProxyDeniedCredentialKey(key) || !proxied) return false;
-        const remote = yield* Effect.promise(() => proxied.read());
-        const listed = remote.byKey.get(key);
-
-        // Connected but unreadable is that provider's failure, never an absence.
-        if (listed?.failure !== undefined) return yield* Effect.die(new Error(listed.failure));
-
-        if (listed) return true;
-
-        // Never listed successfully: "not connected" would be a guess.
-        if (remote.error) return yield* Effect.die(new Error(remote.error));
-
-        return false;
-      }));
-    },
-    listCredentialKeys() {
-      return settle(Effect.gen(function* () {
-        const keys = new Set(authStore.keys());
-
-        for (const key of proxied ? (yield* Effect.promise(() => proxied.read())).byKey.keys() : []) keys.add(key);
-
-        return [...keys];
-      }));
-    },
+    return { getAuth: access.getAuth.bind(access), hasCredential: access.hasCredential.bind(access), listCredentialKeys: access.listCredentialKeys.bind(access) };
   };
 
-  const depsFor = (accountFor?: (providerId: string) => string | undefined): ProviderDeps => ({
+  const deps: ProviderDeps = {
     env: {},
     fetch: cloud
       ? perCloudSession(proxyFetches, cloud, opts.fetch, () => createProviderProxyFetch({
         forwardURL: providerProxyForwardURL(cloud.origin), authorization: `Bearer ${cloud.token}`, fetch: opts.fetch,
       }))
       : opts.fetch,
-    ...credentialReads,
-    onProviderWait: (info) => { opts.onProviderWait?.(info); },
-    accountFor,
-  });
+    ...credentialReads(proxied),
+  };
 
-  const deps = depsFor();
+  const registry = registryFor(menu);
+
+  const listingScope = (own: ProviderDeps) => {
+    let menuRead: Promise<CloudMenu> | undefined;
+    let proxyRead: Promise<ProxiedCredentials> | undefined;
+    const readProxy = () => proxyRead ??= proxied();
+
+    return { registry: registryFor(() => menuRead ??= menu()), deps: { ...own, ...credentialReads(readProxy) }, readProxy };
+  };
 
   const normalizeSpecSync = (specOrNull?: string | null): string =>
     normalizeModelSpec(specOrNull, registry, { spec: defaultSpec, missing: noDefaultModelMessage() });
@@ -319,18 +280,22 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     resolveModel(specOrNull, affinity) {
       return registry.resolve(normalizeSpecSync(specOrNull), { ...own, ...affinity });
     },
-    credentialFor(specOrNull) {
-      return registry.credentialFor(normalizeSpecSync(specOrNull), own);
+    attemptFor(specOrNull) {
+      return registry.attemptFor(normalizeSpecSync(specOrNull), own);
     },
     listProviders() {
-      return registry.listProviders(own);
-    },
-    // The provider sweep: what the account serves is asked again, so a sweep after an invalidation is never stale.
-    listModels() {
-      menu?.refresh();
-      proxied?.refresh();
+      const scope = listingScope(own);
 
-      return registry.listAllModels(own);
+      return scope.registry.listProviders(scope.deps);
+    },
+    async listModels() {
+      const scope = listingScope(own);
+      const listed = await scope.registry.listAllModels(scope.deps);
+      const remote = await scope.readProxy();
+
+      if (remote.error) listed.failures.push({ provider: 'connected-providers', label: 'Connected providers', reason: remote.error });
+
+      return listed;
     },
     modelInfo(specOrNull) {
       return specModelInfo(registry, own, normalizeSpecSync(specOrNull));
@@ -341,12 +306,9 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
 
       return countRequestInputTokens(registry.get(provider), modelId, accountDeps(own, provider, account), request);
     },
-    getAuth: deps.getAuth,
-    setProviderWaitSink(sink) {
-      opts.onProviderWait = sink;
-    },
-    withAccountChoice(choice) {
-      return resolverWith(depsFor(choice));
+    getAuth: own.getAuth,
+    withCallScope(scope) {
+      return resolverWith({ ...own, ...scope });
     },
   });
 
@@ -403,48 +365,67 @@ function createGatewayBackedProvider(opts: {
   };
 }
 
-/**
- * One account listing the cloud serves this machine, per session: its model menu or its connected credentials.
- * Read within 60 s it is served as it stands, so a call does not fetch; `refresh` makes the next read fetch, which the
- * provider sweep does, so an invalidated listing never repeats a stale one. A fetch joins one in flight. A failed fetch
- * serves the last good answer, else an explicit failure carrying its reason.
- */
-interface CloudListing<T> {
-  read(): Promise<T>;
-  refresh(): void;
+async function cloudAnswer<T>(fetchValue: () => Promise<T>, failed: (reason: string) => T): Promise<T> {
+  const [fetched] = await Promise.allSettled([fetchValue()]);
+
+  return fetched.status === 'fulfilled' ? fetched.value : failed(renderThrownChain({ cause: fetched.reason }));
 }
 
-const CLOUD_LISTING_TTL_MS = 60_000;
+class LocalCredentialAccess {
+  constructor(private readonly source: { authStore: ReturnType<typeof buildAuthStore>; cloud: boolean; readProxy: () => Promise<ProxiedCredentials> }) {}
 
-function cloudListing<T>(fetchValue: () => Promise<T>, failed: (reason: string) => T): CloudListing<T> {
-  let good: { at: number; value: T } | null = null;
-  let stale = false;
-  let inFlight: Promise<T> | null = null;
+  getAuth(key: string, authOpts?: Parameters<AuthResolver>[1]): ReturnType<AuthResolver> {
+    const { authStore, readProxy } = this.source;
 
-  const fetchNow = async (): Promise<T> => {
-    const [fetched] = await Promise.allSettled([fetchValue()]);
+    return settle(Effect.gen(function* () {
+        const local = yield* Effect.promise(() => authStore.get(key, authOpts));
 
-    if (fetched.status === 'fulfilled') {
-      good = { at: Date.now(), value: fetched.value };
-      stale = false;
+        if (local) return local;
+        const listing = yield* Effect.promise(readProxy);
 
-      return fetched.value;
-    }
+        if (listing.error) return yield* Effect.die(new Error(listing.error));
+        const remote = listing.byKey.get(key);
 
-    // Said where it is read: the menu's provider reasons, the credential listing's error.
-    return good?.value ?? failed(renderThrownChain({ cause: fetched.reason }));
-  };
+        if (remote?.failure !== undefined) return yield* Effect.die(new Error(remote.failure));
 
-  return {
-    read() {
-      if (good !== null && !stale && Date.now() - good.at < CLOUD_LISTING_TTL_MS) return Promise.resolve(good.value);
+        return remote ? proxyAuthResolution(key, remote) : null;
+      }));
+  }
 
-      inFlight ??= fetchNow().finally(() => { inFlight = null; });
+  hasCredential(key: string): Promise<boolean> {
+    const { authStore, cloud, readProxy } = this.source;
 
-      return inFlight;
-    },
-    refresh() { stale = true; },
-  };
+    return settle(Effect.gen(function* () {
+        if (authStore.has(key)) return true;
+
+        // A credential the proxy never fronts: the local answer is complete.
+        if (isProxyDeniedCredentialKey(key) || !cloud) return false;
+        const remote = yield* Effect.promise(readProxy);
+        const listed = remote.byKey.get(key);
+
+        // Connected but unreadable is that provider's failure, never an absence.
+        if (listed?.failure !== undefined) return yield* Effect.die(new Error(listed.failure));
+
+        if (listed) return true;
+
+        // Never listed successfully: "not connected" would be a guess.
+        if (remote.error) return yield* Effect.die(new Error(remote.error));
+
+        return false;
+      }));
+  }
+
+  listCredentialKeys(): Promise<string[]> {
+    const { authStore, readProxy } = this.source;
+
+    return settle(Effect.gen(function* () {
+        const keys = new Set(authStore.keys());
+
+        for (const key of (yield* Effect.promise(readProxy)).byKey.keys()) keys.add(key);
+
+        return [...keys];
+      }));
+  }
 }
 
 interface CloudMenu {
@@ -454,85 +435,101 @@ interface CloudMenu {
 
 const CLOUD_PROVIDERS = ['workers-ai', 'my-gateway'] as const;
 
-/** Shared across resolvers so one listing serves every conversation. */
-const cloudMenus: PerCloudSession<CloudListing<CloudMenu>> = new Map();
+class LocalCloudListings {
+  constructor(private readonly cloud: LocalCloudSession, private readonly fetchImpl: typeof fetch | undefined) {}
 
-function readCloudModelMenu(cloud: LocalCloudSession, fetchImpl?: typeof fetch): Effect.Effect<CloudMenu> {
-  const baseFetch = fetchImpl ?? fetch;
+  menu(): Promise<CloudMenu> {
+    const cloud = this.cloud;
+    const baseFetch = this.fetchImpl ?? fetch;
 
-  return Effect.gen(function* () {
-    const res = yield* Effect.promise(() => baseFetch(`${cloud.origin.replace(/\/+$/, '')}/api/cli/models`, {
-      headers: { authorization: `Bearer ${cloud.token}`, accept: 'application/json' },
+    return settle(Effect.gen(function* () {
+      const res = yield* Effect.promise(() => baseFetch(`${cloud.origin.replace(/\/+$/, '')}/api/cli/models`, {
+        headers: { authorization: `Bearer ${cloud.token}`, accept: 'application/json' },
+      }));
+
+      if (!res.ok) return yield* Effect.die(new Error(`the Kinu model menu returned HTTP ${String(res.status)}`));
+      const source = normalizeModelMenu({ payload: yield* Effect.promise(() => res.json()) });
+
+      return { entries: source.models, failures: new Map(source.failures.map(({ provider, reason }) => [provider, reason])) };
     }));
+  }
 
-    if (!res.ok) return yield* Effect.die(new Error(`the Kinu model menu returned HTTP ${String(res.status)}`));
-    const source = normalizeModelMenu({ payload: yield* Effect.promise(() => res.json()) });
+  credentials(): Promise<ProxiedCredentials> {
+    const cloud = this.cloud;
+    const baseFetch = this.fetchImpl ?? fetch;
 
-    return { entries: source.models, failures: new Map(source.failures.map(({ provider, reason }) => [provider, reason])) };
-  });
+    return settle(Effect.gen(function* () {
+      const res = yield* Effect.promise(() => baseFetch(providerProxyCredentialsURL(cloud.origin), {
+        headers: { authorization: `Bearer ${cloud.token}`, accept: 'application/json' },
+      }));
+
+      // A rejected session is a real answer; serving the last listing would advertise providers that 401.
+      if (res.status === 401 || res.status === 403) return { byKey: new Map(), error: null };
+
+      if (!res.ok) return yield* Effect.die(new Error(`the Kinu provider proxy returned HTTP ${String(res.status)}`));
+      const body = v.parse(proxiedCredentialsSchema, yield* Effect.promise(() => res.json()));
+      const byKey: ProxiedCredentials['byKey'] = new Map();
+
+      for (const { key, failure, ...endpoint } of body.credentials) {
+        if (!key) continue;
+
+        byKey.set(key, failure === undefined ? endpoint : { failure });
+      }
+
+      return { byKey, error: null };
+    }));
+  }
 }
 
 interface ProxiedCredentials {
   byKey: Map<string, { baseURL?: string; contextWindow?: number; failure?: string }>;
-  /** Set only until a listing succeeds; afterwards a failure serves the last good answer. */
+  /** An unreadable listing, never a stale successful snapshot. */
   error: string | null;
 }
 
 
-/** Shared across resolvers so one listing serves every conversation. */
-const proxyCredentialSources: PerCloudSession<CloudListing<ProxiedCredentials>> = new Map();
-
-function readProxyCredentialListing(cloud: LocalCloudSession, fetchImpl?: typeof fetch): Effect.Effect<ProxiedCredentials> {
-  const baseFetch = fetchImpl ?? fetch;
-
-  return Effect.gen(function* () {
-    const res = yield* Effect.promise(() => baseFetch(providerProxyCredentialsURL(cloud.origin), {
-      headers: { authorization: `Bearer ${cloud.token}`, accept: 'application/json' },
-    }));
-
-    // A rejected session is a real answer; serving the last listing would advertise providers that 401.
-    if (res.status === 401 || res.status === 403) return { byKey: new Map(), error: null };
-
-    if (!res.ok) return yield* Effect.die(new Error(`the Kinu provider proxy returned HTTP ${String(res.status)}`));
-    const body = v.parse(proxiedCredentialsSchema, yield* Effect.promise(() => res.json()));
-    const byKey: ProxiedCredentials['byKey'] = new Map();
-
-    for (const { key, failure, ...endpoint } of body.credentials) {
-      if (!key) continue;
-
-      byKey.set(key, failure === undefined ? endpoint : { failure });
-    }
-
-    return { byKey, error: null };
-  });
-}
 
 /** The model id is the proxy wire id (`@cf/…` or `{author}/{model}`), so specs
  *  match the hosted backend exactly. */
-function createCloudProxyProvider(opts: {
-  id: 'workers-ai' | 'my-gateway';
-  label: string;
-  cloud: LocalCloudSession;
-  menu: () => Promise<CloudMenu>;
-  defaultModel?: string;
-  unavailableReason: string;
-  fetch?: typeof fetch;
-}): ModelProvider {
-  const baseURL = cloudProxyBaseURL(opts.cloud.origin);
-  const prefix = `${opts.id}/`;
+class CloudProxyProvider implements ModelProvider {
+  constructor(private readonly opts: {
+    id: 'workers-ai' | 'my-gateway';
+    label: string;
+    cloud: LocalCloudSession;
+    menu: () => Promise<CloudMenu>;
+    defaultModel?: string;
+    unavailableReason: string;
+    fetch?: typeof fetch;
+  }) {}
 
-  return {
-    id: opts.id,
-    label: opts.label,
-    defaultModel: opts.defaultModel,
-    async isAvailable() {
-      return (await opts.menu()).entries.some((entry) => entry.provider === opts.id);
-    },
-    async unavailableReason() {
-      return (await opts.menu()).failures.get(opts.id) ?? opts.unavailableReason;
-    },
-    async listModels(): Promise<ModelInfo[]> {
-      return (await opts.menu()).entries
+  get id() { return this.opts.id; }
+  get label() { return this.opts.label; }
+  get defaultModel() { return this.opts.defaultModel; }
+
+  isAvailable() {
+    const opts = this.opts;
+
+    return settle(Effect.gen(function* () {
+        const menu = yield* Effect.promise(opts.menu);
+        const failure = menu.failures.get(opts.id);
+
+        if (failure !== undefined) return yield* new KinuError('unavailable', failure);
+
+        return menu.entries.some((entry) => entry.provider === opts.id);
+    }));
+  }
+
+  async unavailableReason() {
+    const opts = this.opts;
+
+    return (await opts.menu()).failures.get(opts.id) ?? opts.unavailableReason;
+  }
+
+  async listModels(): Promise<ModelInfo[]> {
+    const opts = this.opts;
+    const prefix = opts.id + '/';
+
+    return (await opts.menu()).entries
         .filter((entry) => entry.provider === opts.id)
         .map((entry) => ({
           id: entry.spec.startsWith(prefix) ? entry.spec.slice(prefix.length) : entry.spec,
@@ -541,20 +538,23 @@ function createCloudProxyProvider(opts: {
           contextWindow: entry.contextWindow,
           reasoningEfforts: entry.reasoningEfforts,
         }));
-    },
-    // A relay: this machine's model stack retries; the worker answers each request once.
-    createModel(modelId, deps): LanguageModel {
-      const transport = {
+  }
+
+  // A relay: this machine's model stack retries; the worker answers each request once.
+  createModel(modelId: string, deps: ProviderDeps & ModelAffinity): LanguageModel {
+    const opts = this.opts;
+    const baseURL = cloudProxyBaseURL(opts.cloud.origin);
+
+    const transport = {
         baseURL,
         headers: { Authorization: `Bearer ${opts.cloud.token}`, [SESSION_AFFINITY_HEADER]: deps.sessionAffinity },
         ...(opts.fetch !== undefined && { fetch: opts.fetch }),
       };
 
-      return opts.id === 'my-gateway'
+    return opts.id === 'my-gateway'
         ? gatewayWireModel(opts.id, modelId, transport)
         : createWireModel({ name: opts.id, modelId, ...transport, protocol: 'chat-completions', reasoning: false });
-    },
-  };
+  }
 }
 
 /** Signed out: providers stay visible in /model, saying what they lack. */

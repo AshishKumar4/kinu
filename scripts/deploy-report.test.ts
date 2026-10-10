@@ -86,9 +86,7 @@ finish
     const measured = (sha: string, input: number, cacheRead: number, output: number): Assertion => ({
       status: 'passed', duration: 1000, meta: { harness: { run: {
         session: { metadata: { taskId: 'task', taskVersion: 'v1', evalCommit: sha, productSha: sha, arm: 'product', trial: 1 }, events: [] },
-        usage: { model: 'muse', ...measurePromptUsage([{ actor: 'main', events: [{
-          type: 'step_finish', runId: 'run', eventIndex: 0, stepIndex: 1, timestamp: '2026-10-02T19:00:00Z', usage: { input, cacheRead, output },
-        }] }]) }, errors: [],
+        usage: { model: 'muse', ...measurePromptUsage([{ actor: 'main', events: [{ type: 'step_finish', parts: [], runId: 'run', eventIndex: 0, stepIndex: 1, timestamp: '2026-10-02T19:00:00Z', usage: { input, cacheRead, output }, }] }]) }, errors: [],
         output: { metrics: { modelTurns: 1, toolCalls: 0, toolErrors: 0, badInputCalls: 0, unknownToolCalls: 0, providerWaits: 0, providerWaitMs: 0 }, toolFailures: [], turns: [] },
       } } },
     });

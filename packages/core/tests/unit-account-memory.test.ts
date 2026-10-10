@@ -155,7 +155,7 @@ function actorWith(account: AccountMemory | undefined): SurfaceActor {
     executors: () => [],
     web: { search: { search: unreached, fetch: unreached, render: unreached, screenshot: unreached }, files: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT }, browser: null },
     memory: () => ({
-      memory: rt.memory, facts: stores.facts, actor: rt.actor, conversations: conversationsFor(rt, stores.history), vectorStore: null,
+      memory: rt.memory, facts: stores.facts, actor: rt.actor, conversations: conversationsFor(rt), vectorStore: null,
       ...(account !== undefined && { account }),
     }),
     files: () => ({ vfs: rt.toolFiles, home: rt.storage.home, planes: rt.planes, memory: rt.memory, ledger: new TurnFileLedger(), budget: new TurnContextBudget() }),

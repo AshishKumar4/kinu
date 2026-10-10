@@ -45,6 +45,22 @@ describe('a wait one caller was told to take holds its siblings', () => {
 
     expect(pacer.cooling('api.openai.com')).toBeNull();
   });
+
+  test.each([[10_000, 60_000], [60_000, 10_000]])('overlapping selection refusals preserve the latest deadline: %j', (first, second) => {
+    const clock = fixedClock();
+    const pacer = new ProviderPacer({ now: clock.now });
+    const refused = `${HOST}|model-a`;
+    pacer.park(refused, first);
+    clock.advance(1_000);
+    pacer.park(refused, second);
+    clock.advance(20_000);
+
+    expect(pacer.parked(refused)).toBe(true);
+    expect(pacer.parked(`${HOST}|model-b`)).toBe(false);
+    expect(pacer.cooling(HOST)).toBeNull();
+    clock.advance(41_000);
+    expect(pacer.parked(refused)).toBe(false);
+  });
 });
 
 describe('a cancelled caller stops waiting', () => {

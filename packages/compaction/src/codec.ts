@@ -117,7 +117,7 @@ export const kinuCodec: Codec<ModelMessage> = {
     return formatOpaque(nativeHandle(item.handle));
   },
 
-  // Raw JSON of each turn's native messages (binary as size placeholders): a lossless read-back surface.
+  // Diagnostic JSON of native messages; size placeholders stand in for binary bodies.
   transcriptDocument(turns) {
     const blocks = turns.map((turn) => {
       const native = turn.handle ? decodeTurn(turn) : { role: turn.role, content: syntheticText(turn.items) };

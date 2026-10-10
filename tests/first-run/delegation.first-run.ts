@@ -37,9 +37,9 @@ import type { KinuPublicSession } from '../../evals/src/session';
 import {
   DELEGATION_ROSTER_ASK as ROSTER_ASK, DELEGATION_TASK_ASK as TASK_ASK, DELEGATION_WORD as WORD, delegationDismissAsk,
 } from './asks';
-import { delivered, finalAnswer, observeDelegationRetirement, observeDurableHire, taskHires } from './delegation-observation';
+import { delivered, observeDelegationRetirement, observeDurableHire, taskHires } from './delegation-observation';
 import { ROOT } from '../../evals/src/helper-address';
-import { helperRecord, hirerHeard } from './hires';
+import { helperAnswer, hirerHeard } from './hires';
 import { openPublicSocket } from './public-socket';
 import { firstRunSpliceStep, firstRunTurnEvents } from './turn-settlement';
 import {
@@ -125,7 +125,7 @@ describe(SUITE, () => {
             && await hirerHeard(room, closed, async () => delivered(await session.history(), TASK_ASK, hire.agent) !== null);
 
           const delivery = hire === undefined ? null : delivered(await session.history(), TASK_ASK, hire.agent);
-          const answer = hire === undefined || !heard ? '' : finalAnswer((await helperRecord(room, ROOT, hire.agent)).events);
+          const answer = hire === undefined || !heard ? '' : await helperAnswer(room, ROOT, hire.agent);
 
           let settled = `no task hire answered at once in the requested turn's ${String(taskEvents.length)} events`;
 

@@ -77,6 +77,7 @@ const EXCLUDED_TABLES = {
   memory_note_chunks: true,
   memory_note_chunks_fts: true,
   memory_note_files: true,
+  memory_projection_updates: true,
 } satisfies Record<string, true>;
 
 function isInternalTable(name: string): boolean {

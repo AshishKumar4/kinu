@@ -1,5 +1,6 @@
 // A replacement transfer empties what an abandoned one landed before it stages, over the store's own foreign keys.
 import { describe, expect, test } from 'bun:test';
+import { MemoryStore } from '@kinu.run/agent-utils/memory';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import { sealForkFrame } from '../src/index';
 import { createTestWorkspace as fresh } from './helpers';
@@ -28,11 +29,16 @@ describe('a fork target taking a replacement transfer', () => {
       : tgt.db.query<{ n: number }, [string]>(`SELECT COUNT(*) AS n FROM ${table} WHERE actor_id = ?`).get(actorId)?.n) ?? 0]));
 
     expect(Object.values(rows()).every((count) => count > 0)).toBe(true);
+    const memory = new MemoryStore(tgt.vfs, tgt.sql, write => tgt.db.transaction(write)());
+    memory.ensureSchema();
+    await memory.indexFile('memory/replaced.md', 'an abandoned semantic projection');
+    expect(memory.pendingProjection()).toHaveLength(1);
     tgt.db.exec('PRAGMA foreign_keys = ON');
     const replacement = (await sourceFrames(src, 'm1')).find((frame) => frame.kind === 'begin');
 
     if (replacement === undefined) throw new Error('the source stream has no begin frame');
     await receiverFor(tgt, target).accept(sealForkFrame({ ...replacement, transferId: 'tx-replacement' }));
     expect(rows()).toEqual(Object.fromEntries(LANDED.map((table) => [table, 0])));
+    expect(memory.pendingProjection()).toEqual([]);
   });
 });

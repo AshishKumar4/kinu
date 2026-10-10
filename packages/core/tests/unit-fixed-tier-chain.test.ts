@@ -184,7 +184,10 @@ test('a primary its cooldown skipped is not named', async () => {
   const calls: string[] = [];
   const { refusals, said } = notices();
   const answers = new Map([['gateway/cooling-primary', 503]]);
-  const lane = { llm: gateway(answers, calls), refusals };
+
+  const lane = { llm: gateway(answers, calls), refusals,
+    attemptOf: async (spec: string) => ({ lane: 'fixture-primary-cooldown', modelId: spec, credential: null, ref: null }) };
+
   const cooling = route('gateway/cooling-primary', ['gateway/cooling-backup']);
 
   expect(await completeOnRoute(cooling, lane, 'one')).toBe('answered by gateway/cooling-backup');
@@ -202,7 +205,11 @@ test('each model that refused is named, in the order called, with the named acco
 
   await expect(completeOnRoute(route('gateway/unfunded-work', ['gateway/unfunded-main']), {
     llm: gateway(new Map([['gateway/unfunded-work', 402], ['gateway/unfunded-main', 402]]), []),
-    credentialOf: async (spec) => keys.get(spec) ?? null,
+    attemptOf: async (spec) => {
+      const ref = keys.get(spec);
+
+      return ref === undefined ? null : { lane: ref, modelId: spec, credential: ref, ref };
+    },
     refusals,
   }, 'compress the facts')).rejects.toThrow();
 

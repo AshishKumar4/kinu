@@ -5,9 +5,9 @@ import { MemoryStore } from "../src/memory/store";
 import { createTestDb, createMemoryVfs } from "./helpers";
 
 function createStore() {
-	const { sql } = createTestDb();
+	const { sql, transactionSync } = createTestDb()
 	const fs = createMemoryVfs();
-	const store = new MemoryStore(fs, sql);
+	const store = new MemoryStore(fs, sql, transactionSync);
 	store.ensureSchema();
 
 	return { store };

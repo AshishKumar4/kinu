@@ -400,7 +400,7 @@ export class FacetChat {
 
     return await suggestWorkspaceTitle((system, prompt) => completeOnRoute(route, {
       llm: (resolution) => routedLlm((serving) => bindRoute(sources.models, serving), resolution, { report: this.spend.report, operations: this.spend.operations }, system),
-      ...(routed !== undefined && { credentialOf: (spec: string) => routed.credentialFor(spec) }),
+      ...(routed !== undefined && { attemptOf: (spec: string) => routed.attemptFor(spec) }),
     }, prompt), mission);
   }
 

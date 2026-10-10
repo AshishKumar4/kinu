@@ -1,254 +1,59 @@
-/** Run events: persisted in run_events, served by /api/runs/<runId>/events and /stream (SSE). */
-
-import type { ModelMessage } from 'ai';
-import type { ContextBudgetSnapshot } from '../context-budget';
-import type { JsonObject, JsonValue } from '../utils/json';
-import type { ContextComposition } from '../context-meter';
-import type { FileEditSnapshot } from '../types/file-edits';
-import type { DbOpRecord } from '../types/app-store';
-import type { EscalationSnapshot } from '../execution/escalation';
-import type { MissionBudgetRefusal } from '../mission-budget';
-import type { HeadFileChangeSet } from '../types/heads';
-import type { Usage } from '../usage';
-import type { CallAccount } from '../providers/quota';
-import type { ProviderWaitInfo } from '../providers/types';
+/** The public run-event contract is derived from its one canonical stored/RPC schema. */
+import * as v from 'valibot';
+import type { JsonObject } from '../utils/json';
 import type { ToolOutcome } from '../types/tool-outcome';
-import type { WorkMode } from '../types/turn';
-import type {
-  SpendSource, ModelOperationKind, ModelOperationOutcome, ModelOperationPhase,
-} from './model-call';
+import type { RunEventSchema } from './recorder';
 
-/** `usd` is present only when the model had a catalog rate; absent means unpriced, never free. */
-export type StepCost = Pick<
-  Extract<RunEvent, { type: 'step_finish' }>, 'usage' | 'usd' | 'modelId'
->;
+export type RunEvent = v.InferOutput<typeof RunEventSchema>;
 
-/** Explicit list: `RunEventBase` carries `type`, so deriving it from the union is circular. */
-export type RunEventType =
-  | 'run_start'
-  | 'turn_start'
-  | 'tool_call_end'
-  | 'step_finish'
-  | 'model_call'
-  | 'provider_wait'
-  | 'model_fallback'
-  | 'context_admitted'
-  | 'context_overflow'
-  | 'model_operation'
-  | 'head_split'
-  | 'head_merge'
-  | 'head_abandoned'
-  | 'scaffold_promotion'
-  | 'scaffold_rollback'
-  | 'memory_write'
-  | 'db_op'
-  | 'context_edit'
-  | 'context_budget'
-  | 'file_edit'
-  | 'turn_steering'
-  | 'profile_resolution'
-  | 'completion_gate'
-  | 'craft_cycle'
-  | 'execution_recovery'
-  | 'approval_consumed'
-  | 'execution_escalation'
-  | 'budget_exhausted'
-  | 'stop_requested'
-  | 'fiber_recovered'
-  | 'error'
-  | 'turn_end'
-  | 'run_end';
+export type RunEventType = RunEvent['type'];
 
-/** `owner` is a human editing through the UI, a different authority from the agent. */
-export const CONTEXT_EDIT_VIA = ['file', 'session', 'owner'] as const;
+export type RunEventBase = Pick<RunEvent, 'eventIndex' | 'runId' | 'type' | 'timestamp'>;
+
+/** `usd` is absent when the model had no catalog rate, not zero. */
+export type StepCost = Pick<Extract<RunEvent, { type: 'step_finish' }>, 'usage' | 'usd' | 'modelId'>;
+
+/** `owner` is the human editing through the UI, not the agent. */
+export const CONTEXT_EDIT_VIA = v.picklist(['file', 'session', 'owner']).options;
 
 export type ContextEditVia = (typeof CONTEXT_EDIT_VIA)[number];
 
-export const CONTEXT_EDIT_STATUSES = ['staged', 'activated'] as const;
+export const CONTEXT_EDIT_STATUSES = v.picklist(['staged', 'activated']).options;
 
 export type ContextEditStatus = (typeof CONTEXT_EDIT_STATUSES)[number];
 
-export const CONTEXT_EDIT_BOUNDARIES = ['step', 'turn'] as const;
+export const CONTEXT_EDIT_BOUNDARIES = v.picklist(['step', 'turn']).options;
 
 export type ContextEditBoundary = (typeof CONTEXT_EDIT_BOUNDARIES)[number];
 
-export interface RunEventBase {
-  readonly eventIndex: number;
-  readonly runId: string;
-  readonly type: RunEventType;
-  readonly timestamp: string;
-}
-
-/** What the loop needs to re-open a turn after its process died. Only on turn-loop runs. */
+/** Enough admission identity to reopen a turn without copying its canonical transcript into events. */
 export interface OpenTurnIdentity {
-  readonly turnId: string;
-  readonly messageId: string;
-  readonly kind: 'user' | 'programmatic';
-  readonly text: string;
-  readonly metadata?: JsonObject;
-  readonly pendingSendId?: string;
-  readonly steerIds?: readonly string[];
+  turnId: string;
+  messageId: string;
+  kind: 'user' | 'programmatic';
+  text: string;
+  metadata?: JsonObject;
+  pendingSendId?: string;
+  steerIds?: readonly string[];
 }
 
-export type RunEvent =
-  | (RunEventBase & { type: 'run_start'; agentId: string; userMessage?: string;
-      caused_by?: string;
-      ingress_kind?: string;
-      trigger_id?: string;
-      turn?: OpenTurnIdentity })
-  | (RunEventBase & { type: 'turn_start'; turnIndex: number })
-  /** There is no `tool_call_start`; this row carries identity, input and outcome. `args` is a
-   *  digest (`digestJsonValue`). Rows lacking `outcome` are unmeasured. */
-  | (RunEventBase & { type: 'tool_call_end'; name: string; toolCallId: string;
-      args?: JsonValue; result?: JsonValue; error?: string; durationMs?: number; outcome?: ToolOutcome })
-  /** The durable record of one step's output; pairing holds within a row, so a run's rows
-   *  concatenate into a valid request. */
-  | (RunEventBase & {
-      type: 'step_finish';
-      stepIndex: number;
-      reason?: string;
-      /** In the session codec's durable form (`session/message-codec.ts`); the recorder encodes. */
-      messages?: JsonValue[];
-      usage?: Usage;
-      usd?: number;
-      modelId?: string;
-      context?: ContextComposition;
-      account?: CallAccount | undefined;
-      egress?: string | undefined;
-    })
-  /** A model call that is not a turn step; separate from `step_finish` so it stays out of the
-   *  prefix-cache EMA. `usage` is always written (`{}` = unmeasured); `usd` uses the call's own model. */
-  | (RunEventBase & {
-      type: 'model_call';
-      source: SpendSource;
-      usage?: Usage;
-      usd?: number;
-      spec?: string;
-      modelId?: string;
-      account?: CallAccount;
-    })
-  /** Start/end pair: a start without an end marks a dead process
-   *  (`RunEventRecorder.unterminatedModelOperations`). The census reads `model_call`, not this. */
-  | (RunEventBase & {
-      type: 'model_operation';
-      operationId: string;
-      source: SpendSource;
-      op: ModelOperationKind;
-      phase: ModelOperationPhase;
-      outcome?: ModelOperationOutcome;
-      usage?: Usage;
-      spec?: string;
-      modelId?: string;
-      error?: string;
-    })
-  /** One row per declared transport sleep (Retry-After, backoff, or pacer cooldown join). */
-  | (RunEventBase & {
-      type: 'provider_wait';
-      provider: string;
-      modelId?: string;
-      waitMs: number;
-      /** 1-based; 0 for a pacer cooldown join before the first attempt. */
-      attempt: number;
-      status?: number;
-      source: ProviderWaitInfo['source'];
-    })
-  | (RunEventBase & { type: 'model_fallback'; from: string; to: string; reason: string })
-  /** Null `tokens`: the next request could not be measured, so no true number exists. */
-  | (RunEventBase & { type: 'context_admitted'; tokens: number | null; contextWindow: number | null })
-  /** A too-long refusal on `model`; `window` is its stated limit, else the refused request's size. */
-  | (RunEventBase & { type: 'context_overflow'; model: string; window: number })
-  | (RunEventBase & { type: 'head_split'; rootId: string; headIds: string[]; rationale: string })
-  /** `totalTokens` is absent when no head reported usage: unknown, not zero. */
-  | (RunEventBase & { type: 'head_merge'; rootId: string; headCount: number;
-      headsWithFindings: number; totalTokens?: number; mergedNarrative: string;
-      fileChanges: HeadFileChangeSet[];
-      /** Empty on the deterministic empty-split and merge-fallback paths. */
-      blindSpots: string[] })
-  /** Terminal counterpart to `head_split` when `head_merge` never arrives (heads/reconcile.ts). */
-  | (RunEventBase & { type: 'head_abandoned'; rootId: string; headCount: number;
-      abandoned: number; rationale: string; reason: string })
-  | (RunEventBase & { type: 'scaffold_promotion'; fromVersion: number; toVersion: number })
-  | (RunEventBase & { type: 'scaffold_rollback'; fromVersion: number; toVersion: number })
-  | (RunEventBase & { type: 'memory_write'; path: string; bytes: number })
-  /** Written inside the mutation's transaction, so a row proves the write committed. */
-  | (RunEventBase & { type: 'db_op' } & DbOpRecord)
-  /** Two per landed edit: `staged` (accepted, `stepIndex` null) and `activated` (consumed by a
-   *  boundary). A refused edit writes neither. */
-  | (RunEventBase & { type: 'context_edit'; contextId: string; proposalId: string; revision: number; baseRevision: number;
-      messageCount: number; author: string;
-      via: ContextEditVia; status: ContextEditStatus; effectiveAt: ContextEditBoundary;
-      turnId: string | null; stepIndex: number | null })
-  | (RunEventBase & { type: 'context_budget' } & ContextBudgetSnapshot)
-  | (RunEventBase & { type: 'file_edit' } & FileEditSnapshot)
-  /** Declared here rather than imported from orchestrator/turn-steering.ts to keep the producer's
-   *  mid-turn machinery out of this widely reachable union. */
-  | (RunEventBase & { type: 'turn_steering';
-      trigger: 'repeated_call' | 'repeated_failure' | 'no_progress';
-      step: number;
-      /** Not set for the stall trigger. */
-      tool?: string;
-      converted: boolean })
-  | (RunEventBase & { type: 'profile_resolution';
-      durationMs: number;
-      providerCache: 'hit' | 'joined' | 'miss';
-      providerRevision: string;
-      unavailableProviders: number;
-      catalogVersion: number;
-      authority: 'local' | 'account' })
-  | (RunEventBase & { type: 'completion_gate';
-      converted: boolean })
-  | (RunEventBase & { type: 'craft_cycle';
-      crafted: string[];
-      invoked: string[];
-      /** Crafted this turn and called by a later execute call. */
-      reused: string[];
-      returned: number;
-      raised: number;
-      /** Pushed below the injection floor this turn. */
-      dropped: string[] })
-  | (RunEventBase & { type: 'execution_recovery';
-      recoveries: Array<{
-        tool: string;
-        failures: number;
-        failedSignature: string }> })
-  | (RunEventBase & { type: 'execution_escalation' } & EscalationSnapshot)
-  | (RunEventBase & { type: 'budget_exhausted' } & Omit<MissionBudgetRefusal, 'error'>)
-  /** The owner's Stop reached the running turn: what ends it, should its process die before it settles. */
-  | (RunEventBase & { type: 'stop_requested' })
-  | (RunEventBase & { type: 'fiber_recovered'; fiberName: string; fiberId: string; snapshot?: unknown })
-  /** The only durable consumption record; safety/deferred-approval.ts spends by deleting. `actor`: whose it was. */
-  | (RunEventBase & { type: 'approval_consumed'; approvalId: string;
-      actor: string; command: string; executor: string })
-  | (RunEventBase & { type: 'error'; message: string; details?: unknown })
-  | (RunEventBase & { type: 'turn_end'; turnIndex: number;
-      /** Absent on older rows; absence means before the denominator started, never build. */
-      workMode?: WorkMode; usage?: Usage })
-  | (RunEventBase & { type: 'run_end'; reason?: string;
-      error?: string });
-
-export type TurnSteeringRecord =
-  Omit<Extract<RunEvent, { type: 'turn_steering' }>, keyof RunEventBase | 'type'>;
+export type TurnSteeringRecord = Omit<Extract<RunEvent, { type: 'turn_steering' }>, keyof RunEventBase | 'type'>;
 
 export type TurnSteeringTrigger = TurnSteeringRecord['trigger'];
 
-export type CompletionGateRecord =
-  Omit<Extract<RunEvent, { type: 'completion_gate' }>, keyof RunEventBase | 'type'>;
+export type CompletionGateRecord = Omit<Extract<RunEvent, { type: 'completion_gate' }>, keyof RunEventBase | 'type'>;
 
-export type CraftCycleRecord =
-  Omit<Extract<RunEvent, { type: 'craft_cycle' }>, keyof RunEventBase | 'type'>;
+export type CraftCycleRecord = Omit<Extract<RunEvent, { type: 'craft_cycle' }>, keyof RunEventBase | 'type'>;
 
-export type ExecutionRecoveryRecord =
-  Omit<Extract<RunEvent, { type: 'execution_recovery' }>, keyof RunEventBase | 'type'>;
+export type ExecutionRecoveryRecord = Omit<Extract<RunEvent, { type: 'execution_recovery' }>, keyof RunEventBase | 'type'>;
 
-export type ApprovalConsumedRecord =
-  Omit<Extract<RunEvent, { type: 'approval_consumed' }>, keyof RunEventBase | 'type'>;
+export type ApprovalConsumedRecord = Omit<Extract<RunEvent, { type: 'approval_consumed' }>, keyof RunEventBase | 'type'>;
 
+/** Producers must describe each tool's outcome; all other fields follow the canonical variant unchanged. */
 export type RunEventInput = {
-  [K in RunEvent['type']]: Omit<Extract<RunEvent, { type: K }>, keyof RunEventBase | (K extends 'step_finish' ? 'messages' : never)> & { type: K }
+  [K in RunEvent['type']]: Omit<Extract<RunEvent, { type: K }>, keyof RunEventBase> & { type: K }
     & (K extends 'tool_call_end' ? { outcome: ToolOutcome } : object)
-    & (K extends 'step_finish' ? { messages?: ModelMessage[] } : object)
 }[RunEvent['type']];
 
-/** Sentinel so a failed call with a nullish error still reads as an error; producer and census
- *  both match it. */
+/** Producer and failure census match the same sentinel for a nullish failed-call error. */
 export const FAILURE_WITHOUT_ERROR = 'the tool reported failure without an error';

@@ -1,3 +1,4 @@
+import type { ModelAttemptIdentity } from '@kinu.run/core';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Local CLI runtime factory. Two file planes: agent state always lives in the
@@ -121,7 +122,7 @@ export interface CLIRuntime extends AgentRuntime {
   setModelForRoute?(factory: (resolution: ModelRouteResolution) => LLM): void;
   modelForRoute?: (resolution: ModelRouteResolution) => LLM;
   /** A facet's lanes share its parent's credential lookup and refusal notices. */
-  credentialOf?: (spec: string) => Promise<string | null>;
+  attemptOf?: (spec: string) => Promise<ModelAttemptIdentity | null>;
   /** The actor's one notice state for its runtime's life; the session's titling says through it too. */
   refusals: TierRefusals;
   /**
@@ -160,8 +161,8 @@ export function makeExecRaw(db: { exec(sql: string): void }): RawSqlExec {
 }
 
 /** Main's memory over its notes: the one its memory tool, and `kinu memory`, read and search. */
-function notesMemory(notes: ReturnType<typeof agentHomeFiles>, sql: SqlExecutor) {
-  const store = new MemoryStore(notes, sql);
+function notesMemory(notes: ReturnType<typeof agentHomeFiles>, sql: SqlExecutor, transactionSync: (write: () => void) => void) {
+  const store = new MemoryStore(notes, sql, transactionSync);
   store.ensureSchema();
 
   return { store, memory: adaptMemory(store, notes) };
@@ -169,12 +170,7 @@ function notesMemory(notes: ReturnType<typeof agentHomeFiles>, sql: SqlExecutor)
 
 /** The memory of the workspace whose database `db` is, as its memory tool reads and searches it. */
 export function workspaceMemory(db: Database): Memory {
-  return notesMemory(agentStateFiles(db), makeSql(db)).memory;
-}
-
-/** Main's home beside `db`, as real files. */
-export function agentStateFiles(db: Database): ReturnType<typeof agentHomeFiles> {
-  return workspaceHome(db);
+  return notesMemory(workspaceHome(db), makeSql(db), write => db.transaction(write)()).memory;
 }
 
 /** Session payload reads for inspection, over the workspace's folder and own space. */
@@ -326,14 +322,14 @@ function buildCLIRuntime(
   const modelForRoute = (resolution: ModelRouteResolution): LLM =>
     modelRouteFactory(resolution);
 
-  const credentialOf = (spec: string): Promise<string | null> => localResolver().credentialFor(spec);
+  const attemptOf = (spec: string): Promise<ModelAttemptIdentity | null> => localResolver().attemptFor(spec);
   // A local session reads the owner's model settings as it opens; nothing changes them under it.
   const refusals = tierRefusals({ sql, actor, config: agentConfig, now: Date.now, settings: LOCAL_MODEL_SETTINGS, changes: () => 0 });
 
   const modelLanes = {
     resolveProfile: ensureProfile,
     llm: modelForRoute,
-    credentialOf,
+    attemptOf,
     refusals,
   };
 
@@ -388,7 +384,7 @@ function buildCLIRuntime(
 
   const { planes, home: ownHome } = runtimePlanes(cwd, space, config.facet, views);
 
-  const { store: memoryStore, memory } = notesMemory(agentStateVfs, sql);
+  const { store: memoryStore, memory } = notesMemory(agentStateVfs, sql, write => db.transaction(write)());
 
   const craftStore = new CraftStore(sql);
   craftStore.ensureSchema();
@@ -480,6 +476,7 @@ function buildCLIRuntime(
 
   const runtime: CLIRuntime = Object.assign(buildRuntime({
     transactionSync: write => writeTransaction(db, write),
+    ...(config.actorBinding !== undefined && { scaffoldPath: actorScaffoldPath(config.actorBinding) }),
     planes,
     actor, sql,
     execRaw,
@@ -514,7 +511,7 @@ function buildCLIRuntime(
     setModelOperations: (sink: ModelOperationSink | null) => { modelOperations = sink; },
     profiles,
     modelForRoute,
-    credentialOf,
+    attemptOf,
     refusals,
     setModelForRoute: (factory: (resolution: ModelRouteResolution) => LLM) => {
       modelRouteFactory = factory;
@@ -606,8 +603,8 @@ function ownSpaceOf(db: Database): Effect.Effect<string, KinuError> {
 export async function buildLocalActorRuntime(
   parent: CLIRuntime,
   bound: { readonly reference: ActorReference; readonly handle: ActorHandle },
+  seat: 'head' | 'node',
   writeObserver?: WriteObserver,
-  swarmSeat?: boolean,
 ): Promise<AgentRuntime> {
   // Carry the host's own handle: `ActorHost` refuses a runtime bound anew, since
   // release must revoke every statement the runtime can make.
@@ -616,7 +613,7 @@ export async function buildLocalActorRuntime(
 
   const run = binding.origin === 'swarm';
 
-  if (run && swarmSeat === true) return parent.nodeRuntime(bound.handle, parent);
+  if (run && seat === 'node') return parent.nodeRuntime(bound.handle, parent);
 
   if (run) {
     const opts: Parameters<typeof buildCLIHeadRuntime>[0] = {
@@ -749,7 +746,7 @@ async function buildCLIHeadRuntime(
     runtimeOptions.modelLanes = {
       resolveProfile: parentProfile,
       llm: parentModelForRoute,
-      ...(parent.credentialOf !== undefined && { credentialOf: parent.credentialOf }),
+      ...(parent.attemptOf !== undefined && { attemptOf: parent.attemptOf }),
       refusals: parent.refusals,
     };
   }

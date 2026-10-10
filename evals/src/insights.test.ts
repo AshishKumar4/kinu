@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { encodeModelMessageValues, type JsonValue, type RunEvent } from '@kinu.run/core';
+import type { JsonValue, RunEvent } from '@kinu.run/core';
 import { extractInsights, type InsightFact, type TrialEvidence } from './insights';
 import { assertion, base, end, evidence, missingFile, start } from './fixtures/insight-evidence';
 import type { Assertion } from './results';
@@ -20,9 +20,8 @@ function helperResult(helpers: JsonValue): Assertion {
 }
 
 describe('deterministic trial insights', () => {
-  test('counts actual call rows and their refusal code, not partial snapshots or results-row totals', () => {
-    const partial = { type: 'step_partial', runId: start.runId, toolCalls: [{ toolName: 'file' }] };
-    const observed = facts([start, missingFile, partial, end]);
+  test('counts actual call rows and their refusal code, not results-row totals', () => {
+    const observed = facts([start, missingFile, end]);
     expect(observed.find((fact) => fact.kind === 'tool-calls')).toMatchObject({ data: { tool: 'file', calls: 1, errors: 1 } });
     expect(observed.find((fact) => fact.kind === 'tool-errors')).toMatchObject({
       data: { tool: 'file', code: 'missing', kind: 'refusal', count: 1 }, evidence: [{ file: 'ledger.jsonl', line: 2 }],
@@ -44,18 +43,19 @@ describe('deterministic trial insights', () => {
       .filter((fact) => fact.kind === 'failing-call-loop')).toEqual([]);
   });
 
-  test('digests are not identical inputs: full step messages distinguish calls with the same truncated prefix', () => {
+  test('digests are not identical inputs: canonical transcript inputs distinguish the same truncated prefix', () => {
     const first = { ...missingFile, args: 'same truncated input…' };
     const second = { ...missingFile, toolCallId: 'second', args: 'same truncated input…' };
 
-    const step: RunEvent = { ...base, type: 'step_finish', stepIndex: 1, messages: encodeModelMessageValues([{
-      role: 'assistant', content: [
-        { type: 'tool-call', toolName: 'file', toolCallId: first.toolCallId, input: { op: 'list', path: '/one' } },
-        { type: 'tool-call', toolName: 'file', toolCallId: second.toolCallId, input: { op: 'list', path: '/two' } },
-      ],
-    }]) };
+    const step: RunEvent = { ...base, type: 'step_finish', parts: [], stepIndex: 1 };
+    const result = assertion();
 
-    expect(facts([start, first, second, step, end]).filter((fact) => fact.kind === 'failing-call-loop')).toEqual([]);
+    result.meta.harness.run.session.events = [
+      { type: 'tool_call', name: 'file', id: first.toolCallId, arguments: { op: 'list', path: '/one' }, metadata: { runId: first.runId, eventIndex: first.eventIndex } },
+      { type: 'tool_call', name: 'file', id: second.toolCallId, arguments: { op: 'list', path: '/two' }, metadata: { runId: second.runId, eventIndex: second.eventIndex } },
+    ];
+
+    expect(facts([start, first, second, step, end], result).filter((fact) => fact.kind === 'failing-call-loop')).toEqual([]);
   });
 
   test('successful hires are helpers, while refused hire attempts remain tool errors', () => {
@@ -128,7 +128,7 @@ describe('deterministic trial insights', () => {
   });
 
   test('whole turns with no tools remain distinct from the final no-tool step of a turn that did work', () => {
-    const step: RunEvent = { ...base, type: 'step_finish', stepIndex: 1 };
+    const step: RunEvent = { ...base, type: 'step_finish', parts: [], stepIndex: 1 };
 
     for (const causedBy of ['chat', 'task_reminder']) {
       const observed = facts([{ ...start, caused_by: causedBy }, step, end]);

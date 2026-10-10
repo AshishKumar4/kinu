@@ -1,21 +1,19 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** An agent's own SQLite, under the core stores; its roster rows are copies the workspace sends on each call. */
 import type { ModelMessage, UIMessage } from 'ai';
-import {
-  CHAT_SESSION_ID, EventLog, EvolutionEngine, WorkspaceActorDirectory, runEventSinks, historyTurnPairs, conversationTurnPair, type ConversationTurnPair,
-  actorReferenceOf, actorScaffoldPath, createActorHost, createScaffoldSurface, defaultLoopOrigin,
-  initWorkspaceSchema, nimbusSessionFiles, recoverActorTurns, MissionGovernor, actorReadHandle, readSessionTranscript, readSubordinateInspection,
-  getChatHistoryPage, inheritedContextFromTranscript, turnRequestIndex, turnRequestPage,
-  type TurnRequestIndex, type TurnRequestPage, ConversationSearchStore, RunEventRecorder, spendLedger, type SpendLedger, type StepSpendSource,
-  readAgentFigures, NO_FIGURES, type AgentFigures,
-  localContextTree, type ContextEditor, type ContextTree, type ConversationRecall,
-  type ActorHandle, type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
-  type SessionTranscriptReader, type SubordinateInspectionResult, type SubordinateReportLedger, type ModelPricing, type SqlExecutor,
-  type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
-  type Executor, type JsonObject, type NimbusSandboxHandle, type SqlValue, WORKSPACE_ROOT, cloudPlanes, answersForDrainTurns,
-  initPendingSendTables, initTerminalEffectTable, PendingSendStore, contextFill, announcementOf, classifyRunEnd, closeTurnRun, TurnReports,
-  PlanReviewStore, type PlanReview,
-} from '@kinu.run/core';
+import { CHAT_SESSION_ID, EventLog, EvolutionEngine, WorkspaceActorDirectory, runEventSinks, historyTurnPairs, conversationTurnPair, type ConversationTurnPair,
+actorReferenceOf, actorScaffoldPath, createActorHost, createScaffoldSurface, defaultLoopOrigin,
+initWorkspaceSchema, nimbusSessionFiles, recoverActorTurns, MissionGovernor, actorReadHandle, readSessionTranscript, readSubordinateInspection,
+getChatHistoryPage, inheritedContextFromTranscript, turnRequestIndex, turnRequestPage,
+type TurnRequestIndex, type TurnRequestPage, RunEventRecorder, spendLedger, type SpendLedger, type StepSpendSource,
+readAgentFigures, NO_FIGURES, type AgentFigures,
+localContextTree, type ContextEditor, type ContextTree, type ConversationRecall,
+type ActorHandle, type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
+type SessionTranscriptReader, type SubordinateInspectionResult, type SubordinateReportLedger, type ModelPricing, type SqlExecutor,
+type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
+type Executor, type JsonObject, type NimbusSandboxHandle, type SqlValue, WORKSPACE_ROOT, cloudPlanes, answersForDrainTurns,
+initPendingSendTables, initTerminalEffectTable, PendingSendStore, contextFill, announcementOf, classifyRunEnd, closeTurnRun, TurnReports,
+PlanReviewStore, type PlanReview, } from '@kinu.run/core'
 import { attempt, detach, diagnostics, hold, KinuError, logged, settle, settleSync } from '@kinu.run/core/obs';
 import { isDeepStrictEqual } from 'node:util';
 import { Effect } from 'effect';
@@ -110,7 +108,6 @@ export class AgentDatabase {
   }
 
   private priced: { readonly model: string; readonly pricing: ModelPricing | null } | null = null;
-  private recall: ConversationRecall | null = null;
   private execution: Executor | null = null;
 
   private readonly sql: SqlExecutor = <T,>(query: TemplateStringsArray, ...values: SqlValue[]): T[] =>
@@ -223,6 +220,7 @@ export class AgentDatabase {
       answered: (turn) => new TurnReports(this.sql).answered(turn),
       runtimeFor: (bound) => this.runtime(bound, files),
       filesFor: async () => ({ vfs: files.agent(), artifactDirectory: snapshot.artifactDirectory }),
+      scaffoldFor: async (bound) => ({ path: actorScaffoldPath(bound.record), vfs: files.state() }),
       loopFor: (bound) => ({ origin: defaultLoopOrigin(bound.record.origin), parent: null }),
       orchestrationFor: (bound) => ({
         host: this.backendHost(),
@@ -307,7 +305,7 @@ export class AgentDatabase {
   }
 
   async acquire(): Promise<HostedActor> {
-    return await this.actorHost().acquire(this.reference());
+    return await this.actorHost().acquire(this.reference(), { kind: 'actor' });
   }
 
   private transcript() {
@@ -327,7 +325,9 @@ export class AgentDatabase {
 
     const actor = actorReadHandle(this.sql, record);
 
-    return { actor, transcript: readSessionTranscript(this.sql, actor, CHAT_SESSION_ID, null) };
+    // The workspace owner still holds this actor's retained home. Reading payloads needs no actor reacquisition.
+    return { actor, transcript: readSessionTranscript(this.sql, actor, CHAT_SESSION_ID,
+      async () => nimbusSessionFiles(this.workspace.agent(), { home: this.workspace.home })) };
   }
 
   async inspect(request: AgentOwnInspection): Promise<SubordinateInspectionResult> {
@@ -433,12 +433,7 @@ export class AgentDatabase {
   }
 
   conversations(): ConversationRecall {
-    const reference = this.reference();
-
-    this.recall ??= new ConversationSearchStore(this.sql, this.actorHost().bindStores(reference).handle,
-      (sessionId) => this.actorHost().bindStores(reference).stores.history.transcript(sessionId));
-
-    return this.recall;
+    return this.actorHost().bindStores(this.reference()).stores.conversationSearch;
   }
 
   contextTree(editor: ContextEditor): ContextTree {
@@ -476,16 +471,14 @@ export class AgentDatabase {
       // Its hirer holds the report that answers the turn: recovery settles it rather than running it again.
       answered: (turn) => new TurnReports(this.sql).answered(turn),
       resumable: (limit) => host.resumable(limit),
-      acquire: async (reference) => {
-        const actor = await host.acquire(reference);
-
-        return { runtime: actor.runtime, stores: actor.stores, session: { get turnOpen() { return actor.session.turnOpen; } } };
-      },
+      bindStores: host.bindStores,
+      readScaffold: host.readScaffold,
+      hosted: host.hosted,
     });
 
     // A stalled turn's run is closed, so the agent's chat does not take it up a third time when it next opens.
     for (const turn of recovered.stalled) {
-      const { eventRecorder } = (await host.acquire(turn.reference)).stores;
+      const { eventRecorder } = host.bindStores(turn.reference).stores;
       const open = eventRecorder.openTurn();
 
       if (open?.turn.turnId !== turn.claim.turnId) continue;

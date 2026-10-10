@@ -11,10 +11,10 @@ import { TestLanguageModelV2 } from './test-language-model';
 import type { LanguageModelV2Usage, LanguageModelV2StreamPart } from '@ai-sdk/provider';
 import type { TemporaryAgentPort } from '@kinu.run/core';
 import {
-  initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, Inbox, backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage, CHAT_SESSION_ID, drawnStep, type ModelInfo, type SqlExecutor, openWorkspaceMainActor, InstructionApprovalStore, instructionDigest, OUTPUT_CONTINUATION_EVENT, sha256Hex,
+  initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, Inbox, backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage, CHAT_SESSION_ID, drawnStep, type ModelInfo, type SqlExecutor, openWorkspaceMainActor, InstructionApprovalStore, instructionDigest, OUTPUT_CONTINUATION_EVENT, sha256Hex, serializeContentForHeads,
 } from '@kinu.run/core';
 import { createCLIRuntime, makeExecRaw, makeSql, type CLIRuntime } from '../src/runtime';
-import { LocalAgentSession, serializeContentForHeads, type SessionEvent } from '../src/local-session';
+import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { type LocalModelResolver } from '../src/model-resolver';
 import { resolverRest, namedSpec, textStream, type PromptMessage, fakeModel, historyCapturingModel, systemCapturingModel, workspaceRuntime, transcript, setup, setupWithResolver, kinds, turnStarts, isDynamicBlock, isWorkspaceInstructions, writeFocusedSkill, messageText, } from './helpers/local-session';
 
@@ -175,9 +175,15 @@ test('an output-limit continuation records each sealed step once across SDK call
     if (run === undefined) throw new Error('the turn left no run');
     const steps = session.getRunEvents(run.runId).filter((event) => event.type === 'step_finish');
 
-    expect(steps.map((event) => ({ step: event.stepIndex,
-      text: drawnStep(event.messages ?? []).flatMap((part) => part.type === 'text' ? [v.parse(v.string(), part.text)] : []).join(''),
-    }))).toEqual([{ step: 1, text: 'first half' }, { step: 2, text: 'second half' }]);
+    const output = await Promise.all(steps.map(async (event) => {
+      const ids = [...new Set(event.parts.map((part) => part.messageId))];
+      const messages = await Promise.all(ids.map((messageId) => rt.stores.history.messages.projection({ messageId })));
+
+      return { step: event.stepIndex,
+        text: drawnStep(messages).flatMap((part) => part.type === 'text' ? [v.parse(v.string(), part.text)] : []).join('') };
+    }));
+
+    expect(output).toEqual([{ step: 1, text: 'first half' }, { step: 2, text: 'second half' }]);
     expect(events.flatMap((event) => event.type === 'turn-end' ? [event.turn.steps] : [])).toEqual([2]);
   } finally { await session.end(); db.close(); }
 });
@@ -1204,11 +1210,11 @@ describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
   });
 
   test('persisted turns are searchable through the conversation-search seam', async () => {
-    const { ConversationSearchStore } = await import('@kinu.run/core');
+
     const { rt, session } = setup('the staging deploy used wrangler version three');
     await session.send('how did we deploy to staging?', { id: crypto.randomUUID() });
 
-    const store = new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId));
+    const store = rt.stores.conversationSearch;
     const hits = await store.search('wrangler staging');
     expect(hits.length).toBeGreaterThan(0);
     expect(hits[0].conversationId).toBe('default');

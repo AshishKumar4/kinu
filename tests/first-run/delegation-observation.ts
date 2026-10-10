@@ -1,6 +1,7 @@
 import * as v from 'valibot';
 import type { RunEvent } from '../../packages/core/src/index';
 import type { PublicMessage } from '../../evals/src/session';
+import { messagesOfStep, type StepMessages } from '../../evals/src/transcript';
 
 type ToolCallEnd = Extract<RunEvent, { type: 'tool_call_end' }>;
 
@@ -77,13 +78,13 @@ export function deliveredInLedger(events: readonly RunEvent[], agent: string): b
 }
 
 /** What an actor's own turns ended on: the text of its last finished step. */
-export function finalAnswer(events: readonly RunEvent[]): string {
+export function finalAnswer(events: readonly RunEvent[], output: StepMessages): string {
   const last = [...events]
     .filter((event): event is Extract<RunEvent, { type: 'step_finish' }> => event.type === 'step_finish' && event.reason === 'stop')
     .sort((a, b) => a.timestamp.localeCompare(b.timestamp) || a.eventIndex - b.eventIndex)
     .at(-1);
 
-  const messages = v.safeParse(StepMessagesSchema, last?.messages);
+  const messages = v.safeParse(StepMessagesSchema, last === undefined ? [] : messagesOfStep(last, output));
 
   if (!messages.success) return '';
 

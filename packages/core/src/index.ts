@@ -339,7 +339,9 @@ export {
   type ChatEvent, type ChatFallback, type ChatOptions, type ChatToolOutput, type ObserveStream,
 } from './chat';
 
-export { createFallbackCooldowns, type FallbackCooldowns } from './providers/fallback-cooldown';
+export { ProviderPacer } from './providers/pacing';
+
+export type { ModelAttemptIdentity } from './providers/attempt-identity';
 
 // Extension seam (public plugin API)
 export {
@@ -548,7 +550,8 @@ export {
 // open-38: one physical workspace SQLite for every logical actor.
 export {
   createActorHost, recoverActorTurns, childContextResolver, hostedChildTree, registeredParent,
-  type ActorHost, type ActorHostDeps, type BoundActor, type HostedActor,
+  type ActorHost,
+  type ActorSeat, type ActorHostDeps, type BoundActor, type HostedActor,
   type LoopSeed, type ActorRetirement, type ResumableActorTurn,
 } from './state/actor-host';
 
@@ -970,7 +973,7 @@ export { pumpScaffoldEvents } from './scaffold/event-pump';
 export { scaffoldChatTransform } from './scaffold/chat-transform';
 
 export {
-  getCurrentScaffoldVersion, readScaffoldVersion, readVersionedScaffoldSource, getPendingScaffold, applyPromotionDecision,
+  getCurrentScaffoldVersion, readScaffoldVersion, readVersionedScaffoldSource, getPendingScaffold, applyPromotionDecision, type VersionedScaffoldSource,
   type PendingScaffold, type ScaffoldDecisionEvents,
 } from './scaffold/versions';
 

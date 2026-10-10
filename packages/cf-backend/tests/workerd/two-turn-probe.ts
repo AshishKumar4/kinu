@@ -613,6 +613,10 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
         })),
       runEvents: (await this.mainRows("SELECT run_id, type, payload FROM run_events WHERE type IN ('run_start', 'step_finish', 'tool_call_end', 'run_end') ORDER BY rowid"))
         .map((row) => ({ runId: textColumn(row.run_id), type: textColumn(row.type), payload: textColumn(row.payload) })),
+      canonicalParts: (await this.mainRows(`SELECT message_id, json_extract(part.value, '$.partNo') AS part_no,
+        json_extract(part.value, '$.value') AS value FROM session_messages, json_each(content_json) part
+        WHERE origin = 'output' AND sealed_at IS NOT NULL ORDER BY session_messages.rowid, part_no`))
+        .map((row) => ({ messageId: textColumn(row.message_id), partNo: Number(row.part_no), value: textColumn(row.value) })),
     });
   }
   /** `consumed_at = 0` is older than any grace, so the next wake's unbindStale must re-pend it. */

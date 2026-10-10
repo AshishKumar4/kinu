@@ -1,7 +1,7 @@
 // Per-turn accounting shared by both backends; platform side-effects inject as optional sinks.
 // Usage arrives already normalized: absence means the provider said nothing, zero means zero.
 
-import type { ModelMessage } from 'ai';
+import type { MessagePartReference } from '../session/messages';
 import type { ChatEvent, StepRecord } from '../chat';
 import type { ToolCallRecord } from '../evolution/types';
 import { compactToolCall } from '../evolution/tool-call-record';
@@ -28,8 +28,7 @@ export interface StepLike {
   usage?: Usage;
   /** The prompt the step's request answered from, where it differs from `usage.input` (a server-side compaction). */
   promptTokens?: number;
-  /** `messages` is cumulative across the turn; the per-step delta is taken here. */
-  response?: { modelId?: string; messages?: readonly ModelMessage[] };
+  response?: { modelId?: string };
   /** The request body this step sent and when; a cache warm replays the turn's last one. */
   request?: { body?: unknown; sentAt?: number };
   account?: CallAccount | undefined;
@@ -91,9 +90,6 @@ export class TurnAccumulator {
   private readonly craftUsed = new Set<string>();
   /** The tool lessons a step listed, id to the revision shown. */
   private readonly lessons = new Map<string, number>();
-  /** Messages already durable; a shorter array is a re-drive, resynced without recording the step twice. */
-  private durableMessages = 0;
-
   private gate: SpendGate | undefined;
 
   constructor(
@@ -127,7 +123,6 @@ export class TurnAccumulator {
     this.escalations.reset();
     this.craftUsed.clear();
     this.lessons.clear();
-    this.durableMessages = 0;
   }
 
   /** Restores totals without charging them again. */
@@ -172,11 +167,11 @@ export class TurnAccumulator {
       error: event.error ?? (event.success ? undefined : event.result) });
   }
 
-  recordBoundary(event: Extract<ChatEvent, { type: 'step-finish' }>): void {
-    this.recordStep({ ...event, response: { messages: event.responseMessages, modelId: event.modelId } });
+  recordBoundary(event: Extract<ChatEvent, { type: 'step-finish' }>, parts: readonly MessagePartReference[]): void {
+    this.recordStep({ ...event, response: { modelId: event.modelId } }, parts);
   }
 
-  writeNative(record: StepRecord): () => void {
+  writeNative(record: StepRecord, parts: readonly MessagePartReference[]): () => void {
     const committed = record.toolResults.map(({ event, args }) => this.writeToolCall({
       input: args,
       ...event, output: event.output ?? (event.success ? event.result : undefined), error: event.error ?? (event.success ? undefined : event.result),
@@ -185,8 +180,8 @@ export class TurnAccumulator {
     if (record.step !== undefined) {
       const step = record.step;
       committed.push(this.writeStep({
-        ...step, response: { messages: record.messages, modelId: step.modelId }, request: step.request,
-      }));
+        ...step, response: { modelId: step.modelId }, request: step.request,
+      }, parts));
     }
 
     return () => { for (const commit of committed) commit(); };
@@ -250,11 +245,11 @@ export class TurnAccumulator {
     }
   }
 
-  recordStep(ctx: StepLike): void {
-    this.writeStep(ctx)();
+  recordStep(ctx: StepLike, parts: readonly MessagePartReference[]): void {
+    this.writeStep(ctx, parts)();
   }
 
-  writeStep(ctx: StepLike): () => void {
+  writeStep(ctx: StepLike, parts: readonly MessagePartReference[]): () => void {
     const stepCount = this.stepCount + 1;
     const toolCalls = Array.isArray(ctx.toolCalls) ? ctx.toolCalls : [];
     const toolResults = Array.isArray(ctx.toolResults) ? ctx.toolResults : [];
@@ -280,12 +275,10 @@ export class TurnAccumulator {
 
     if (ctx.response?.modelId) extras.push(`model=${ctx.response.modelId}`);
     const extrasStr = extras.length > 0 ? ` ${extras.join(' ')}` : '';
-    // An empty array means no response reported (scaffold step boundary); never rewind on it.
-    const cumulative = ctx.response?.messages ?? [];
-    const produced = cumulative.length > 0 ? cumulative.slice(this.durableMessages) : [];
 
     const stepEvent: Parameters<NonNullable<TurnSinks['onStepEvent']>>[0] = {
       stepIndex: stepCount,
+      parts,
       account: ctx.account,
       egress: ctx.egress,
     };
@@ -294,7 +287,6 @@ export class TurnAccumulator {
       stepEvent.reason = ctx.finishReason;
     }
 
-    if (produced.length > 0) stepEvent.messages = [...produced];
 
     if (ctx.context) stepEvent.context = ctx.context;
 
@@ -319,7 +311,6 @@ export class TurnAccumulator {
       this.usage = addUsage(this.usage, usage);
       this.noteLastRequest(ctx, usage);
 
-      if (cumulative.length > 0) this.durableMessages = cumulative.length;
 
       if (ctx.finishReason !== undefined) this.lastFinishReason = ctx.finishReason;
 

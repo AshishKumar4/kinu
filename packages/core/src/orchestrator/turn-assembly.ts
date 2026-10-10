@@ -1,5 +1,6 @@
 // One turn assembly for every actor kind on every backend; a backend supplies only the sources.
 
+import type { ModelAttemptIdentity } from '../providers/attempt-identity';
 import type { LanguageModel, ToolSet } from 'ai';
 import { Effect } from 'effect';
 import type { ModelWindow } from '../context-window';
@@ -44,7 +45,7 @@ export interface TurnModelSources {
   normalize(spec: string): string;
   resolve(spec: string): LanguageModel;
   readonly routed?: {
-    credentialFor(spec: string): Promise<string | null>;
+    attemptFor(spec: string): Promise<ModelAttemptIdentity | null>;
     countInputTokens(spec: string, request: CountableRequest): Promise<InputTokenCount>;
   };
 }
@@ -266,7 +267,7 @@ function routedChat(models: TurnModelSources, spec: string, profile: ResolvedTur
   if (routed === undefined) return {};
 
   return {
-    credentialOf: (fallback: string) => routed.credentialFor(fallback),
+    attemptOf: (fallback: string) => routed.attemptFor(fallback),
     countInputTokens: (counted: CountableRequest) => routed.countInputTokens(spec, counted),
     retries: profile.retries,
     fallbacks: profile.tier.fallbacks.map(({ model, reasoningEffort }) => {

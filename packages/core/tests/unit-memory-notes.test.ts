@@ -3,7 +3,11 @@ import { exists, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // them. Rows go through the writer; only headingless hand-edited documents are typed in.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { createWorkspaceBundle, createMemoryMemory } from './helpers';
+import { createWorkspaceBundle, createMemoryMemory, createTestRuntime } from './helpers';
+import { MemoryStore, type IndexedChunk } from '@kinu.run/agent-utils/memory';
+import { adaptMemory, backfillMemoryVectors } from '../src/memory/vector-sync';
+import { hybridSearch, memorySnippetRehydrator } from '../src/memory/hybrid-search';
+import type { VectorStore } from '../src/memory/vector-store';
 import { appendMemoryNote, memoryIndexPath, parseMemoryNotes, readMemoryTail } from '../src/memory/note';
 import type { Memory } from '../src/types/primitives';
 
@@ -14,6 +18,56 @@ function store() {
 
   return { memory: createMemoryMemory(db, vfs), vfs };
 }
+
+describe('the semantic mirror survives an unavailable or failed backend', () => {
+  test.each(['unavailable', 'delete-failure'])('a $0 update retains its tombstone until recovery', async (failure) => {
+    const { rt, db, workspace } = createTestRuntime();
+    const chunks = new Map<string, IndexedChunk>();
+    let available = true;
+    let rejectDeletes = false;
+
+    const vectors: VectorStore = {
+      get available() { return available; },
+      upsertChunk: async (chunk) => { chunks.set(chunk.id, chunk); },
+      upsertChunks: async (fresh) => { for (const chunk of fresh) chunks.set(chunk.id, chunk); },
+      deleteChunks: async (ids) => {
+        if (rejectDeletes) throw new Error('the semantic backend rejected deletion');
+
+        for (const id of ids) chunks.delete(id);
+      },
+      search: async () => [...chunks.values()].map((chunk) => ({ ...chunk, score: 1 })),
+    };
+
+    const indexed = new MemoryStore(workspace.vfs, rt.storage.sql, rt.storage.transactionSync);
+    indexed.ensureSchema();
+
+    const memory = adaptMemory(indexed, workspace.vfs, { store: vectors });
+
+    try {
+      await memory.write('memory/mirror.md', 'old remote-only words');
+      await memory.index('memory/mirror.md');
+      expect(chunks.size).toBe(1);
+      expect((await hybridSearch('old remote-only', async () => [], vectors, { rehydrate: memorySnippetRehydrator(memory) }))[0]?.snippet).toBe('old remote-only words');
+      available = failure !== 'unavailable';
+      rejectDeletes = failure === 'delete-failure';
+      await memory.write('memory/mirror.md', failure === 'unavailable' ? 'replacement canonical words' : '');
+      await memory.index('memory/mirror.md');
+
+      expect(await memory.search('old remote-only')).toEqual([]);
+      available = true;
+      expect(await hybridSearch('old remote-only', async () => [], vectors, { rehydrate: memorySnippetRehydrator(memory) })).toEqual([]);
+      rejectDeletes = false;
+      // A later boot is not holding the index call's in-memory delta.
+      const reopened = new MemoryStore(workspace.vfs, rt.storage.sql, rt.storage.transactionSync);
+
+      await backfillMemoryVectors(reopened, vectors);
+      expect([...chunks.values()].map((chunk) => chunk.text)).toEqual(failure === 'unavailable' ? ['replacement canonical words'] : []);
+      const current = await hybridSearch('replacement canonical', async () => [], vectors, { rehydrate: memorySnippetRehydrator(memory) });
+
+      expect(current.map((hit) => hit.snippet)).toEqual(failure === 'unavailable' ? ['replacement canonical words'] : []);
+    } finally { db.close(); }
+  });
+});
 
 /** The note's path is a real, indexed memory file, asked of the writer's filesystem. */
 async function namesTheWrittenFile(vfs: VFS, path: string): Promise<boolean> {

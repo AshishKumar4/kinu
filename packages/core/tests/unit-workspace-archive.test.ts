@@ -5,6 +5,7 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import * as v from 'valibot';
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { MemoryStore } from '@kinu.run/agent-utils/memory';
 import {
   archiveSqlFromDatabase,
   initActorClaimTables,
@@ -102,7 +103,7 @@ async function seeded() {
   await ws.vfs.writeFile('artifacts/logo.bin', bytes);
   await ws.vfs.mkdir('notes', { recursive: true });
   await writeText(ws.vfs, 'notes/plan.md', 'a plan with a "quote" and a \\ backslash');
-  await new ConversationSearchStore(ws.sql, actor, (sessionId) => history.transcript(sessionId)).search('sqlite');
+  await new ConversationSearchStore(ws.sql, actor, (sessionId) => history.transcript(sessionId), write => ws.db.transaction(write)()).search('sqlite');
 
   return { ...ws, bytes, actor, history };
 }
@@ -200,7 +201,7 @@ describe('workspace archive', () => {
 
     const restored = openWorkspaceMainActor(target.sql);
     const history = historyOver(target, restored);
-    const hits = await new ConversationSearchStore(target.sql, restored, (sessionId) => history.transcript(sessionId)).search('sqlite');
+    const hits = await new ConversationSearchStore(target.sql, restored, (sessionId) => history.transcript(sessionId), write => target.db.transaction(write)()).search('sqlite');
     expect(hits.length).toBe(5);
     // FTS shadow tables are rebuilt on the target, never carried as rows.
     expect(lines.some((l) => l.includes('"table":"conversation_fts_data"'))).toBe(false);
@@ -209,7 +210,7 @@ describe('workspace archive', () => {
     await seedTranscriptEntry(history, CHAT_SESSION_ID, {
       id: 'm5', origin: 'input', message: { role: 'user', content: 'local post-import' },
     });
-    const after = await new ConversationSearchStore(target.sql, restored, (sessionId) => history.transcript(sessionId)).search('post-import');
+    const after = await new ConversationSearchStore(target.sql, restored, (sessionId) => history.transcript(sessionId), write => target.db.transaction(write)()).search('post-import');
     expect(after.map((hit) => hit.messageId)).toEqual(['m5']);
   });
   test('the workspace capability secret is never in an archive', async () => {
@@ -415,9 +416,13 @@ const OWNER_TEXT = '# the owner wrote this\n';
     expect(target.sql<{ n: number }>`SELECT COUNT(*) AS n FROM conversation_entries`[0].n).toBe(0);
   });
 
-  test('omits derived conversation revision triggers and restores a mutable transcript', async () => {
+  test('omits derived retrieval state and restores a mutable transcript', async () => {
     const source = fresh();
     initSchema(source);
+    const memory = new MemoryStore(source.vfs, source.sql, write => source.db.transaction(write)());
+    memory.ensureSchema();
+    await memory.indexFile('memory/note.md', 'a pending semantic projection');
+    expect(memory.pendingProjection()).toHaveLength(1);
     // Every transcript row names its writer, so a restore files it under that owner, not the archive's main actor.
     const cloudActor = createTestActor(source.sql, source.execRaw, 'cloud', 'cloud');
     const cloud = historyOver(source, cloudActor);
@@ -427,7 +432,7 @@ const OWNER_TEXT = '# the owner wrote this\n';
     await seedTranscriptEntry(cloud, CHAT_SESSION_ID, {
       id: 'a1', origin: 'output', message: { role: 'assistant', content: 'cloud answer' },
     });
-    await new ConversationSearchStore(source.sql, openWorkspaceMainActor(source.sql), (sessionId) => cloud.transcript(sessionId)).search('cloud');
+    await new ConversationSearchStore(source.sql, openWorkspaceMainActor(source.sql), (sessionId) => cloud.transcript(sessionId), write => source.db.transaction(write)()).search('cloud');
 
     const lines = await writeWorkspaceArchive(source.archive, { workspace: 'cloud', source: 'cloud' });
     expect(lines.some((line) => line.includes('conversation_fts'))).toBe(false);
@@ -437,6 +442,7 @@ const OWNER_TEXT = '# the owner wrote this\n';
     await restoreWorkspaceArchive(target.archive, lines);
 
     // Read unscoped: an actor-predicated read would answer an empty set and pass for the wrong reason.
+    expect(target.sql`SELECT name FROM sqlite_master WHERE name = 'memory_projection_updates'`).toEqual([]);
     expect(target.sql<{ id: string; actor_id: string }>`
       SELECT id, actor_id FROM conversation_entries ORDER BY id`).toEqual([
       { id: 'a1', actor_id: cloudActor.actorId },
@@ -448,7 +454,7 @@ const OWNER_TEXT = '# the owner wrote this\n';
     await seedTranscriptEntry(history, CHAT_SESSION_ID, {
       id: 'u2', origin: 'input', message: { role: 'user', content: 'local continuation' },
     });
-    const continued = await new ConversationSearchStore(target.sql, landed, (sessionId) => history.transcript(sessionId)).search('local continuation');
+    const continued = await new ConversationSearchStore(target.sql, landed, (sessionId) => history.transcript(sessionId), write => target.db.transaction(write)()).search('local continuation');
     expect(continued.map((hit) => hit.messageId)).toEqual(['u2']);
   });
 });

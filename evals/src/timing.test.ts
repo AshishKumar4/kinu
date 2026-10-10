@@ -35,8 +35,8 @@ const LEDGER: LedgerRow[] = [
   { type: 'run_start', runId: 'r1', eventIndex: 0, userMessage: 'build it' },
   { type: 'provider_wait', runId: 'r1', eventIndex: 1, waitMs: 2_000 },
   { type: 'tool_call_end', runId: 'r1', eventIndex: 2, durationMs: 2_900 },
-  { type: 'step_finish', runId: 'r1', eventIndex: 3, usage: { output: 400, reasoning: 100 } },
-  { type: 'step_finish', runId: 'r1', eventIndex: 4, usage: { output: 600 } },
+  { type: 'step_finish', parts: [], runId: 'r1', eventIndex: 3, usage: { output: 400, reasoning: 100 } },
+  { type: 'step_finish', parts: [], runId: 'r1', eventIndex: 4, usage: { output: 600 } },
   { type: 'run_end', runId: 'r1', eventIndex: 5 },
 ];
 

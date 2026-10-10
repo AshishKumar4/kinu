@@ -269,6 +269,7 @@ export const ParityRowsSchema = v.object({
     input: v.string(), lane: v.string(), status: v.string(), attempts: v.number(),
   })),
   runEvents: v.array(v.object({ runId: v.string(), type: v.string(), payload: v.string() })),
+  canonicalParts: v.array(v.object({ messageId: v.string(), partNo: v.number(), value: v.string() })),
 });
 
 export type ParityRows = v.InferOutput<typeof ParityRowsSchema>;

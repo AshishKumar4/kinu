@@ -46,6 +46,8 @@ export type { MemorySearchResult } from '@kinu.run/agent-utils/memory';
 
 /** FTS5-indexed markdown files in VFS. */
 export interface Memory {
+  /** A currently hash-verified canonical chunk; null after deletion or an unindexed file replacement. */
+  chunk(id: string): Promise<import('@kinu.run/agent-utils/memory').IndexedChunk | null>;
   write(path: string, content: string): Promise<void>;
   append(path: string, content: string): Promise<void>;
   index(path: string): Promise<void>;

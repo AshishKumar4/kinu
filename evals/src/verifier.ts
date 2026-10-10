@@ -10,7 +10,7 @@ import { judge, type Judgement } from './judge';
 import { WorkspaceHeld } from './workspace-completion';
 import { redact, redactJson } from './redact';
 import type { EvalCheck } from './task';
-import { callInputs } from './transcript';
+import { callInputs, inspectedStepMessages, type StepMessageCache, type StepMessages } from './transcript';
 import { invokedInTurn } from '../tasks/crafted-reuse';
 
 /** Thrown errors are cut here in the report; a stack trace is not evidence. */
@@ -282,10 +282,17 @@ export class EvalVerifier {
     return (await this.#session.runEvents()).filter((event) => Date.parse(event.timestamp) >= this.#startedAt);
   }
 
+  readonly #stepMessages: StepMessageCache = new WeakMap();
+
+  /** The same canonical snapshot used by the final transcript, scoped to this verifier's actor. */
+  stepMessages(events: readonly RunEvent[]): Promise<StepMessages> {
+    return inspectedStepMessages(events, (request) => this.#session.inspect(request), this.#stepMessages);
+  }
+
   /** This turn's tool calls: each one's name and its arguments as the model sent them, whole. */
   async turnToolCalls(): Promise<{ name: string; args: string }[]> {
     const events = await this.leadEvents();
-    const inputs = callInputs(events);
+    const inputs = callInputs(events, await this.stepMessages(events));
 
     return events
       .filter((event): event is Extract<RunEvent, { type: 'tool_call_end' }> => event.type === 'tool_call_end')

@@ -1,3 +1,4 @@
+import type { ModelAttemptIdentity } from '@kinu.run/core';
 import { Effect } from 'effect';
 import type { LanguageModel } from 'ai';
 import {
@@ -112,10 +113,10 @@ export class OwnedModelServices<Id = DurableObjectId> {
     return model;
   }
 
-  credentialFor(spec: string): Promise<string | null> {
+  attemptFor(spec: string): Promise<ModelAttemptIdentity | null> {
     const agent = this.providerRegistry();
 
-    return agent.registry.credentialFor(agent.normalizeSpecSync(spec), agent.deps);
+    return agent.registry.attemptFor(agent.normalizeSpecSync(spec), agent.deps);
   }
 
   resolveModelWithEffort(spec: string, effort: ReasoningEffort | null) {

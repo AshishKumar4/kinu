@@ -15,7 +15,6 @@ import { initEventsHubTables, EventLog } from '../src/events/hub/index';
 import { EvolutionEngine } from '../src/evolution/engine';
 import { createScaffoldSurface } from '../src/scaffold/surface';
 import type { ProviderCatalogSnapshot } from '../src/profiles/resolve';
-import { ConversationSearchStore } from '../src/memory/conversation-search';
 import {
   profileCatalogDigest,
   type ProfileCatalogEnvelope, type RoleDefinition, type TierAssignments,
@@ -220,6 +219,7 @@ export function hostedSeatsOver(input: {
 
       return { vfs: rt.storage.vfs, artifactDirectory: `/actors/${bound.handle.actorId}/.kinu/context` };
     },
+    scaffoldFor: async (bound) => ({ path: `actors/${bound.record.storageKey}/scaffold/agent.js`, vfs: rt.storage.vfs }),
     storage: {
       sql,
       transactionSync: (write) => rt.storage.transactionSync(write),
@@ -256,7 +256,7 @@ export function hostedSeatsOver(input: {
 
     const actor = await host.acquire({
       actorId: handle.actorId, workspaceId: handle.workspaceId, parentActorId: handle.parentActorId,
-    });
+    }, { kind: origin === 'swarm' ? 'node' : 'actor' });
 
     const compaction = fixtureCompaction(actor.record.actorId);
 
@@ -268,7 +268,7 @@ export function hostedSeatsOver(input: {
         throw new KinuError('unavailable', `the hosted fixture was given no model, so ${name} cannot run a turn`);
       })),
       infer: (headInput, inference) => runHeadInference(headInput, { ...inference, compaction }),
-      conversations: new ConversationSearchStore(actor.runtime.storage.sql, actor.handle, (sessionId) => actor.stores.history.transcript(sessionId)),
+      conversations: actor.stores.conversationSearch,
       jobs: { ports: { jobOutput: () => {} }, attach: (authority) => jobs.attach(authority) },
     };
 

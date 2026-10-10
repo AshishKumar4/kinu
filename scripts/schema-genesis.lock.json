@@ -460,8 +460,7 @@
     "FOREIGN KEY(actor_id,message_id) REFERENCES session_messages(actor_id,message_id)"
   ],
   "conversation_fts_state@packages/core/src/memory/conversation-search.ts": [
-    "id INTEGER PRIMARY KEY CHECK (id = 1)",
-    "actor_id TEXT NOT NULL",
+    "actor_id TEXT PRIMARY KEY NOT NULL",
     "rev INTEGER NOT NULL DEFAULT 0",
     "purges INTEGER NOT NULL DEFAULT 0",
     "synced_rev INTEGER NOT NULL DEFAULT -1",
@@ -902,6 +901,11 @@
   "memory_note_files@packages/agent-utils/src/memory/store.ts": [
     "path TEXT PRIMARY KEY",
     "stamp TEXT"
+  ],
+  "memory_projection_updates@packages/agent-utils/src/memory/store.ts": [
+    "revision INTEGER PRIMARY KEY AUTOINCREMENT",
+    "id TEXT NOT NULL UNIQUE",
+    "kind TEXT NOT NULL CHECK (kind IN ('upsert', 'delete'))"
   ],
   "mission_budget@packages/core/src/mission-budget.ts": [
     "actor_id TEXT NOT NULL",

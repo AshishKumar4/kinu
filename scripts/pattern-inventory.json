@@ -1,6 +1,13 @@
 {
   "candidates": [
     {
+      "file": "evals/src/insights.ts",
+      "kind": "hand-parser",
+      "owner": "extractInsights",
+      "sourceSha256": "7638d096a0d93778bdd4e34229bee6833080b58e77f10586d7a073ba8e55afc7",
+      "decision": "traversal"
+    },
+    {
       "file": "lean/check-traceability.mjs",
       "kind": "hand-parser",
       "owner": "parseTraceability",

@@ -92,11 +92,7 @@ const TERMINAL_EFFECT_NAMES = [
   'parent_report',
   // Detached: a turn whose lanes are another object's hands it the settled turn, which that object owes on its own.
   'workspace_settle',
-  // Retired (docs/EVOLUTION-REDESIGN.md §6): no turn owes them, and a row an older build wrote completes unrun.
-  'shadow_trial', 'auto_gepa',
 ] as const;
-
-const RETIRED_TERMINAL_EFFECTS: ReadonlySet<TerminalEffectName> = new Set(['shadow_trial', 'auto_gepa']);
 
 export type TerminalEffectName = (typeof TERMINAL_EFFECT_NAMES)[number];
 
@@ -136,8 +132,6 @@ export function terminalEffect<I>(spec: {
     ? { synchronous: true, run: (raw, scope) => spec.runSync(v.parse(spec.input, raw), scope) }
     : { synchronous: false, run: async (raw, scope) => await spec.run(v.parse(spec.input, raw), scope) };
 }
-
-const RETIRED_EFFECT = terminalEffect({ input: v.unknown(), runSync: () => ({ status: 'completed', detail: 'the effect is retired' }) });
 
 /** `announcementOnDisk` is the backend's durable answer; a queued turn is only RAM until it says yes. */
 export interface OwedTurnQueue {
@@ -713,7 +707,7 @@ export class TerminalEffectLedger {
       return { kind: 'blocked', name: null, reason: `unknown effect "${rawName}"` };
     }
 
-    const effect = RETIRED_TERMINAL_EFFECTS.has(parsed.output) ? RETIRED_EFFECT : this.deps.effects[parsed.output];
+    const effect = this.deps.effects[parsed.output];
 
     if (effect === undefined) {
       return {

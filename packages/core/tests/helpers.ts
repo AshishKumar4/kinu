@@ -17,7 +17,7 @@ import { adaptMemory } from '../src/memory/vector-sync';
 import type { WorkspaceBundle } from '../src/vfs/nimbus-workspace';
 import { createWorkspaceForkSource } from '../src/vfs/workspace-planes';
 import type { ForkFileSource } from '../src/identity/fork';
-import { ConversationSearchStore, type ConversationRecall } from '../src/memory/conversation-search';
+import type { ConversationRecall } from '../src/memory/conversation-search';
 import { initActorStateSchema, initWorkspaceSchema } from '../src/state/workspace-schema';
 import { createAgentStores, type AgentStores } from '../src/state/agent-stores';
 import { BackgroundJobRunner } from '../src/jobs/runner';
@@ -118,7 +118,7 @@ export function createWorkspaceBundle(db: Database) {
 
 /** The Memory every backend builds: MemoryStore through the one adapter, FTS5 alone. */
 export function createMemoryMemory(db: Database, vfs: VFS & Required<Pick<VFS, 'readRange'>>): Memory {
-  const store = new MemoryStore(vfs, wrapDatabase(db).sql);
+  const store = new MemoryStore(vfs, wrapDatabase(db).sql, write => db.transaction(write)());
   store.ensureSchema();
 
   return adaptMemory(store, vfs);
@@ -271,19 +271,29 @@ export function createTestRuntime(opts?: {
   return { rt, db, workspace, stores: storesFor(rt) };
 }
 
-/** The store bundle over an already-built runtime. */
 /** The actor's own past conversations, over its own rows. */
-export function conversationsFor(rt: AgentRuntime, history: AgentStores['history'] = storesFor(rt).history): ConversationRecall {
-  return new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => history.transcript(sessionId));
+export function conversationsFor(rt: AgentRuntime): ConversationRecall {
+  return storesFor(rt).conversationSearch;
 }
 
+const runtimeStores = new WeakMap<AgentRuntime, AgentStores>();
+
+/** The store bundle over an already-built runtime, including all derived actor views. */
 export function storesFor(rt: AgentRuntime): AgentStores {
-  return createAgentStores(
+  const existing = runtimeStores.get(rt);
+
+  if (existing !== undefined) return existing;
+
+  const stores = createAgentStores(
     () => rt.storage.sql,
     () => rt.actor,
     write => rt.storage.transactionSync(write),
     async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actor/.kinu/context' }),
   );
+
+  runtimeStores.set(rt, stores);
+
+  return stores;
 }
 
 /** The runtime's actor's own jobs, as a root chat's: a call that settles inside its window never reaches them. */

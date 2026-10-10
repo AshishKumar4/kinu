@@ -1,5 +1,6 @@
 import * as v from 'valibot';
-import { decodeModelMessageValues, type RunEvent } from '../packages/core/src/index';
+import { decodeModelMessageValues, encodeModelMessageValues, type JsonValue, type RunEvent } from '../packages/core/src/index';
+import { readStepMessages, type StepMessages } from '../evals/src/transcript';
 import { helperAddress } from '../evals/src/helper-address';
 import type { KinuPublicSession, PublicBackgroundJob, PublicMessage } from '../evals/src/session';
 import { CANARY_PREFIX, canaryMarker, type CanaryLoad } from './canary-script';
@@ -23,17 +24,26 @@ interface HelperRecord {
   readonly actor: string | null;
   readonly status: string;
   readonly events: readonly RunEvent[];
+  readonly output: readonly CapturedOutput[];
   readonly failure: string | null;
 }
 
 export interface CanaryLedger {
   readonly events: readonly RunEvent[];
+  readonly output: readonly CapturedOutput[];
   readonly history: readonly PublicMessage[];
   readonly jobs: readonly PublicBackgroundJob[];
   readonly helpers: readonly HelperRecord[];
   readonly roster: Awaited<ReturnType<KinuPublicSession['subordinates']>>;
   readonly agents: Awaited<ReturnType<KinuPublicSession['agents']>>;
   readonly swarms: Awaited<ReturnType<KinuPublicSession['swarmRuns']>>;
+}
+
+interface CapturedOutput { readonly runId: string; readonly eventIndex: number; readonly messages: readonly JsonValue[] }
+
+/** The canary artifact records what it read before teardown; the server ledger itself carries references only. */
+function capturedOutput(messages: StepMessages): CapturedOutput[] {
+  return [...messages].map(([step, body]) => ({ runId: step.runId, eventIndex: step.eventIndex, messages: encodeModelMessageValues(body) }));
 }
 
 async function helperEvents(session: KinuPublicSession, child: {
@@ -67,6 +77,7 @@ async function helperEvents(session: KinuPublicSession, child: {
 
 export async function readCanaryLedger(session: KinuPublicSession): Promise<CanaryLedger> {
   const events = await session.runEvents();
+  const output = capturedOutput(await session.stepMessages(events));
 
   const [history, jobs, roster, agents, swarms] = await Promise.all([
     session.history(), session.backgroundJobs(), session.subordinates(), session.agents(), session.swarmRuns(),
@@ -84,11 +95,22 @@ export async function readCanaryLedger(session: KinuPublicSession): Promise<Cana
       if (child.lifetime !== 'task') continue;
 
       try {
+        const helperLedger = await helperEvents(session, child);
+        const address = helperAddress(child);
+
+        const helperOutput = capturedOutput(await readStepMessages(helperLedger, async (step, from) => {
+          const read = await session.inspect({ ...address, path: [...address.path], view: 'step', runId: step.runId, eventIndex: step.eventIndex, from });
+
+          if (read.view !== 'step') throw new Error(`helper ${child.name}: canonical output unavailable`);
+
+          return read;
+        }));
+
         helpers.push({ name: child.name, actor: child.actorReference?.actorId ?? null, status: child.status,
-          events: await helperEvents(session, child), failure: null });
+          events: helperLedger, output: helperOutput, failure: null });
       } catch (error) {
         helpers.push({ name: child.name, actor: child.actorReference?.actorId ?? null, status: child.status,
-          events: [], failure: String(error) });
+          events: [], output: [], failure: String(error) });
       }
     }
 
@@ -96,7 +118,7 @@ export async function readCanaryLedger(session: KinuPublicSession): Promise<Cana
     cursor = children.page.next;
   }
 
-  return { events, history, jobs, helpers, roster, agents, swarms };
+  return { events, output, history, jobs, helpers, roster, agents, swarms };
 }
 
 function shellWitnesses(events: readonly RunEvent[]): MarkerWitness[] {
@@ -105,13 +127,17 @@ function shellWitnesses(events: readonly RunEvent[]): MarkerWitness[] {
       .map(([marker]) => ({ marker, at: event.timestamp, runId: event.runId })));
 }
 
-function answers(events: readonly RunEvent[], marker: string): MarkerWitness[] {
+function answers(events: readonly RunEvent[], output: readonly CapturedOutput[], marker: string): MarkerWitness[] {
   const witnesses: MarkerWitness[] = [];
 
   for (const event of events) {
     if (event.type !== 'step_finish') continue;
 
-    for (const message of decodeModelMessageValues(event.messages ?? [])) {
+    const captured = output.find((row) => row.runId === event.runId && row.eventIndex === event.eventIndex);
+
+    if (captured === undefined) throw new Error('the canary did not capture canonical output for its sealed step');
+
+    for (const message of decodeModelMessageValues(captured.messages)) {
       if (message.role !== 'assistant') continue;
 
       const texts = v.is(v.string(), message.content) ? [message.content]
@@ -191,7 +217,7 @@ export function measureCanaryLedger(ledger: CanaryLedger, load: CanaryLoad) {
   const asked = new Set(ledger.events.flatMap((event) => event.type === 'run_start'
     && event.userMessage?.includes(`${CANARY_PREFIX} root steps=`) === true ? [event.runId] : []));
 
-  const rootDone = answers(ledger.events, `${CANARY_PREFIX}_ROOT_DONE`).filter((witness) => witness.runId === null || asked.has(witness.runId));
+  const rootDone = answers(ledger.events, ledger.output, `${CANARY_PREFIX}_ROOT_DONE`).filter((witness) => witness.runId === null || asked.has(witness.runId));
   const allRuns = runs(ledger.events, rootDone);
   const rootRuns = allRuns.filter((run) => asked.has(run.runId));
 
@@ -203,7 +229,7 @@ export function measureCanaryLedger(ledger: CanaryLedger, load: CanaryLoad) {
     event.type === 'run_start' && event.userMessage?.includes(`${CANARY_PREFIX} helper`) === true));
 
   const helpers = helperRecords.map((helper) => {
-    const done = answers(helper.events, `${CANARY_PREFIX}_HELPER_DONE`);
+    const done = answers(helper.events, helper.output, `${CANARY_PREFIX}_HELPER_DONE`);
 
     return { name: helper.name, actor: helper.actor, status: helper.status, failure: helper.failure,
       runs: runs(helper.events, done), done: { count: done.length, evidence: done },

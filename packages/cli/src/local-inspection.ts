@@ -85,7 +85,7 @@ import {
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { tolerateAsync } from '@kinu.run/core/obs';
 import {
-  agentStateFiles, makeSql, makeSqlExec, schemaGenesisOf, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles,
+  workspaceHome, makeSql, makeSqlExec, schemaGenesisOf, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles,
   openWorkspaceCLI, resolverModelPlane, soulOf, workspaceMemory,
 } from '@kinu.run/cli-backend';
 import * as v from 'valibot';
@@ -225,7 +225,7 @@ export async function readLocalNextTurnTier(name: string, opts: LocalModelResolv
 
 /** The note itself, a real file of main's home; `memory_note_chunks` is the search index. */
 export function readLocalMemory(name: string): Promise<string> {
-  return withLocalDbAsync(name, async (db) => await tolerateAsync(() => readText(agentStateFiles(db), MEMORY_PATH), 'enoent') ?? '');
+  return withLocalDbAsync(name, async (db) => await tolerateAsync(() => readText(workspaceHome(db), MEMORY_PATH), 'enoent') ?? '');
 }
 
 /** `limit` is user input bound to raw `LIMIT ?`: SQLite reads -1 as unlimited and rejects NaN/fractions. Validity only, no ceiling. */

@@ -1,31 +1,33 @@
-/** The one fallback policy: a turn and a fixed-tier call walk the configured chain alike (T3). */
 import { Effect } from 'effect';
-import { attempt, classifyErrorCode, diagnostics, KinuError, settle } from '../obs/index';
+import type { LanguageModel } from 'ai';
 import { DEFAULT_PROVIDER_RETRIES } from '../types/profile';
-import { createFallbackCooldowns, statedRetryAfterMs, type FallbackCooldowns } from './fallback-cooldown';
+import { KinuError, attempt, classifyErrorCode, diagnostics, settle } from '../obs/index';
 import { codeForStatus, describeProviderError, providerFailureFacts } from './util';
+import { statedRetryAfterMs } from './fallback-cooldown';
+import { providerPacer, type ProviderPacer } from './pacing';
+import { attemptKey, failedModelAttempt, modelAttempt, type ModelAttemptIdentity } from './attempt-identity';
 
 export interface CallFailure {
-  readonly cause: unknown;
   readonly error: Error;
-  /** The failing step had streamed text or started a tool. */
+  readonly cause: Parameters<typeof providerFailureFacts>[0]['cause'];
   readonly streamed: boolean;
 }
 
-export interface FallbackEntry {
+interface FallbackEntry {
   readonly spec: string;
+  readonly model?: LanguageModel;
 }
 
 export interface FallbackRouteOptions<E extends FallbackEntry> {
   readonly modelSpec?: string;
+  readonly model?: LanguageModel;
   readonly fallbacks?: readonly E[];
-  readonly cooldowns?: FallbackCooldowns;
+  readonly pacer?: ProviderPacer;
   readonly retries?: number;
-  readonly credentialOf?: (spec: string) => Promise<string | null>;
+  readonly attemptOf?: (spec: string) => Promise<ModelAttemptIdentity | null>;
 }
 
-/** A fallback takes a call that failed before streaming for a provider or account failure; a malformed or
- *  too-large request fails the call. */
+/** Handover requires a provider/account failure before output; malformed or too-large requests end the call. */
 function handsOver(failure: CallFailure): boolean {
   if (failure.streamed) return false;
   const { status } = providerFailureFacts({ cause: failure.cause });
@@ -41,9 +43,9 @@ function handsOver(failure: CallFailure): boolean {
   return code === null || code === 'unavailable' || code === 'timeout' || code === 'budget';
 }
 
-/** A failed lookup is logged and unknown: it skips nothing. */
-export function credentialOrUnknown(credentialOf: (spec: string) => Promise<string | null>, spec: string): Effect.Effect<string | null> {
-  return attempt({ doing: 'look up the credential a model is called with', otherwise: 'io' }, () => credentialOf(spec)).pipe(
+/** A failed metadata lookup is unknown: it skips and parks nothing; the actual call keeps its own failure. */
+export function attemptOrUnknown(lookup: (spec: string) => Promise<ModelAttemptIdentity | null>, spec: string): Effect.Effect<ModelAttemptIdentity | null> {
+  return attempt({ doing: 'look up the attempt a model is called with', otherwise: 'io' }, () => lookup(spec)).pipe(
     Effect.catch((failed) => Effect.sync(() => {
       diagnostics.failure('llm_call.fallback_credential_unknown', failed, { spec });
 
@@ -52,18 +54,17 @@ export function credentialOrUnknown(credentialOf: (spec: string) => Promise<stri
   );
 }
 
-const isolateCooldowns = createFallbackCooldowns();
-
-/** OMP's chain (coding-agent session/turn-recovery.ts 2448-2490): hand over at once, park, retry only the last. */
+/** One chain: hand over at once, park the exact failed attempt, and retry only the final entry. */
 export class FallbackRoute<E extends FallbackEntry> {
   readonly tried: string[];
   private readonly chain: E[];
-  private readonly cooldowns: FallbackCooldowns;
+  private readonly pacer: ProviderPacer;
   private readonly retries: number;
+  private current: ModelAttemptIdentity | null = null;
 
   constructor(private readonly opts: FallbackRouteOptions<E>) {
     this.chain = [...(opts.fallbacks ?? [])];
-    this.cooldowns = opts.cooldowns ?? isolateCooldowns;
+    this.pacer = opts.pacer ?? providerPacer;
     this.retries = opts.retries ?? DEFAULT_PROVIDER_RETRIES;
     this.tried = [opts.modelSpec ?? 'the turn model'];
   }
@@ -72,31 +73,53 @@ export class FallbackRoute<E extends FallbackEntry> {
     return this.chain.length > 0 ? 0 : this.retries;
   }
 
-  cooledStart(): E | undefined {
-    const spec = this.opts.modelSpec;
+  private identity(spec: string | undefined, model?: LanguageModel): Effect.Effect<ModelAttemptIdentity | null> {
+    if (this.opts.attemptOf !== undefined && spec !== undefined) return attemptOrUnknown(this.opts.attemptOf, spec);
 
-    if (spec === undefined || !this.cooldowns.parked(spec)) return undefined;
-    const at = this.chain.findIndex((entry) => !this.cooldowns.parked(entry.spec));
-
-    return at < 0 ? undefined : this.chain.splice(0, at + 1).at(-1);
+    return model === undefined ? Effect.succeed(null) : Effect.promise(() => modelAttempt(model));
   }
 
-  /** A 401 refuses the credential, so entries holding it are passed over; a 403 may be model-scoped. */
-  async next(failed: string | undefined, failure: CallFailure): Promise<E | undefined> {
-    if (!handsOver(failure)) return undefined;
+  cooledStart(): Promise<E | undefined> {
+    return settle(Effect.gen({ self: this }, function* () {
+      this.current = yield* this.identity(this.opts.modelSpec, this.opts.model);
 
-    if (failed !== undefined) this.cooldowns.park(failed, statedRetryAfterMs({ cause: failure.cause }));
-    const { status } = providerFailureFacts({ cause: failure.cause });
-    const lookup = status === 401 && failed !== undefined ? this.opts.credentialOf : undefined;
-    const { chain, cooldowns } = this;
+      if (this.current === null || !this.pacer.parked(attemptKey(this.current))) return undefined;
 
-    return await settle(Effect.gen(function* () {
-      const refused = lookup !== undefined && failed !== undefined ? yield* credentialOrUnknown(lookup, failed) : null;
+      for (let at = 0; at < this.chain.length; at++) {
+        const entry = this.chain[at];
+        const identity = yield* this.identity(entry.spec, entry.model);
 
-      for (let next = chain.shift(); next !== undefined; next = chain.shift()) {
-        if (cooldowns.parked(next.spec) && chain.length > 0) continue;
+        if (identity !== null && this.pacer.parked(attemptKey(identity))) continue;
+        this.current = identity;
 
-        if (refused === null || lookup === undefined || (yield* credentialOrUnknown(lookup, next.spec)) !== refused) return next;
+        return this.chain.splice(0, at + 1).at(-1);
+      }
+
+      return undefined;
+    }));
+  }
+
+  /** A 401 refuses its credential snapshot: aliases of that login are passed over, but a replacement is usable. */
+  next(failure: CallFailure): Promise<E | undefined> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (!handsOver(failure)) return undefined;
+
+      this.current = failedModelAttempt(failure.error) ?? this.current;
+
+      if (this.current !== null) this.pacer.park(attemptKey(this.current), statedRetryAfterMs({ cause: failure.cause }));
+
+      const { status } = providerFailureFacts({ cause: failure.cause });
+      const refused = status === 401 ? this.current?.credential ?? null : null;
+
+      for (let next = this.chain.shift(); next !== undefined; next = this.chain.shift()) {
+        const identity = yield* this.identity(next.spec, next.model);
+
+        if (identity !== null && this.pacer.parked(attemptKey(identity)) && this.chain.length > 0) continue;
+
+        if (refused !== null && identity?.credential === refused) continue;
+        this.current = identity;
+
+        return next;
       }
 
       return undefined;

@@ -382,7 +382,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
     });
 
-    const store = new MemoryStore(workspace.bundle.vfs, sqlOver(actor.database));
+    const store = new MemoryStore(workspace.bundle.vfs, sqlOver(actor.database), write => actor.database.transaction(write)());
     store.ensureSchema();
     await store.writeFile('memory/MEMORY.md', '# Notes\n\nthe indexed bytes\n');
     await store.indexFile('memory/MEMORY.md', '# Notes\n\nthe indexed bytes\n');

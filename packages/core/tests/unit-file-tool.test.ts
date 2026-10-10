@@ -7,6 +7,7 @@ import * as v from 'valibot';
 import { applyFileEdits, FILE_READ_LINE_CHARS, FILE_READ_LINES, FILE_READ_MAX_CHARS, formatFileSlice, type FileEditFailure } from '../src/tools/file-edit';
 import { scanFileWindow } from '../src/tools/file-scan';
 import { TurnFileLedger } from '../src/vfs/file-ledger';
+import { createTestRuntime } from './helpers';
 import { createFileTool } from '../src/tools/file-operations';
 
 type FileToolInput = JsonObject & { readonly op: string };
@@ -490,6 +491,28 @@ function toolFor(vfs: VFS, ledger = new TurnFileLedger()) {
 
 const StringResultSchema = v.string();
 
+test('a denied edit keeps its counter through the persisted file-edit event', async () => {
+  const { stores, db } = createTestRuntime();
+  const files = memoryVfs({ '/denied.txt': 'before' });
+
+  const denied = {
+    ...files,
+    async writeFile(path: string) { throw new VfsError('EACCES', `permission denied, write '${path}'`, path); },
+  };
+
+  const { call, ledger } = toolFor(denied);
+
+  try {
+    await call({ op: 'read', path: '/denied.txt' });
+    await expect(call({ op: 'edit', path: '/denied.txt', edits: [{ old_text: 'before', new_text: 'after' }] })).rejects.toMatchObject({ code: 'denied' });
+    const snapshot = ledger.snapshot();
+
+    expect(snapshot.failures.denied).toBe(1);
+    stores.eventRecorder.emit('denied-file-edit', { type: 'file_edit', ...snapshot });
+    expect(stores.eventRecorder.read('denied-file-edit')[0]).toMatchObject({ type: 'file_edit', failures: { denied: 1 } });
+  } finally { db.close(); }
+});
+
 
 describe('file tool', () => {
   test('read returns the content and authorizes the edit that follows', async () => {
@@ -689,6 +712,7 @@ describe('file tool', () => {
       async index(path: string) { indexed.push(path); },
       async search() { return []; },
       async read() { return null; },
+      async chunk() { return null; },
       async tail() { return null; },
     };
 

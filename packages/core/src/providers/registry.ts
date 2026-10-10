@@ -1,6 +1,8 @@
 // ProviderRegistry: resolves "<provider>/<modelId>" synchronously; static providers win.
-import type { LaneLookup } from './middleware/retry';
+
 import { withModelStack } from './wire-model';
+import { hashText } from '@kinu.run/agent-utils/memory';
+import { bindModelAttempt, captureModelAttempt, type ModelAttemptIdentity } from './attempt-identity';
 import type { LanguageModel } from 'ai';
 import type {
   AuthResolution, ModelCallDeps, ModelProvider, ProviderDeps, ProviderInfo, ModelInfo,
@@ -47,23 +49,13 @@ export interface ProviderRegistry {
   /** Never rejects because of one provider. */
   listAllModels(deps: ProviderDeps): Promise<ModelMenu>;
   resolve(spec: string, deps: ModelCallDeps): LanguageModel;
-  /** The stored credential `spec` authenticates with, found without authenticating; null when none would serve. */
-  credentialFor(spec: string, deps: ProviderDeps): Promise<string | null>;
+  /** The current credential snapshot, billed route and model the same retry lookup names. */
+  attemptFor(spec: string, deps: ProviderDeps): Promise<ModelAttemptIdentity | null>;
 }
 
 const SLOW_LISTING_MS = 2_000;
 
-/** As {@link accountDeps} picks, without authenticating; null where it finds none or refuses. */
-async function chosenCredentialKey(deps: ProviderDeps, providerId: string, key: string, named?: string): Promise<string | null> {
-  const chosen = named ?? deps.accountFor?.(providerId);
 
-  if (chosen !== undefined) return accountCredentialKey(key, chosen);
-
-  if (await deps.hasCredential(key)) return key;
-  const [only, ...others] = storedAccounts(key, await deps.listCredentialKeys?.() ?? []);
-
-  return only === undefined || only === MAIN_ACCOUNT || others.length > 0 ? null : accountCredentialKey(key, only);
-}
 
 /** `named`, else `accountFor`'s, else `main`, else the only one; several unchosen: refused. */
 export function accountDeps<Deps extends ProviderDeps>(deps: Deps, providerId: string, named?: string): Deps {
@@ -132,6 +124,31 @@ export function createProviderRegistry(): ProviderRegistry {
   const ordered: ModelProvider[] = [];
   const byId = new Map<string, ModelProvider>();
   const dynamic: DynamicProviderSource[] = [];
+
+  /** Secret-free prefix used by the pacer's cheap cooldown gate and the resolved billed lane. */
+  const routeOf = (parsed: ReturnType<typeof parseModelSpec>, provider: ModelProvider): string =>
+    JSON.stringify([parsed.provider, provider.laneOf?.(parsed.modelId) ?? parsed.provider]);
+
+  async function resolvedAttempt(parsed: ReturnType<typeof parseModelSpec>, provider: ModelProvider, deps: ProviderDeps): Promise<ModelAttemptIdentity> {
+    const key = provider.credentialKey;
+    const auth = key === undefined ? null : await accountDeps(deps, parsed.provider, parsed.account).getAuth(key);
+
+    return identityFromAuth(parsed, provider, auth);
+  }
+
+  async function identityFromAuth(parsed: ReturnType<typeof parseModelSpec>, provider: ModelProvider, auth: AuthResolution | null): Promise<ModelAttemptIdentity> {
+    const route = routeOf(parsed, provider);
+    const ref = auth?.credentialKey ?? null;
+
+    const revision = auth === null ? 'environment' : await hashText(JSON.stringify({
+      baseURL: auth.baseURL ?? null,
+      headers: Object.entries(auth.headers).sort(([left], [right]) => left.localeCompare(right)),
+    }));
+
+    const credential = ref === null ? null : JSON.stringify([ref, revision]);
+
+    return { lane: `${route}|${JSON.stringify([ref, revision])}`, modelId: parsed.modelId, credential, ref };
+  }
 
   /** Static plus servable dynamic providers; a dynamic enumeration failure is one reported failure. */
   function allProviders(deps: ProviderDeps): Effect.Effect<{ providers: ModelProvider[]; failures: ProviderFailure[] }> {
@@ -278,31 +295,30 @@ export function createProviderRegistry(): ProviderRegistry {
       return settleSync(provider
         ? Effect.sync(() => {
           const own = accountDeps(deps, parsed.provider, parsed.account);
-          const route = provider.laneOf?.(parsed.modelId) ?? parsed.provider;
-          const key = provider.credentialKey;
+          const attempt = () => resolvedAttempt(parsed, provider, deps);
 
-          // A wait is the credential's: aliases of one stored login share it, as `credentialFor` resolves them. Asked
-          // per call, as authentication asks, so a default changed since this model resolved names the new account. A
-          // lookup that fails fails the call in its own words: a wait on a guessed account parks another's calls.
-          const lane: LaneLookup | string = key === undefined ? `${route}|` : {
-            route,
-            billed: async () => `${route}|${await chosenCredentialKey(deps, parsed.provider, key, parsed.account) ?? key}`,
-          };
+          const inference = { ...own, getAuth: async (...args: Parameters<typeof own.getAuth>) => {
+            const auth = await own.getAuth(...args);
 
-          return withModelStack(provider.createModel(parsed.modelId, own), {
-            provider: parsed.provider, modelId: parsed.modelId, lane,
+            if (auth !== null) await captureModelAttempt(() => identityFromAuth(parsed, provider, auth));
+
+            return auth;
+          } };
+
+          return bindModelAttempt(withModelStack(provider.createModel(parsed.modelId, inference), {
+            provider: parsed.provider, modelId: parsed.modelId, lane: { route: routeOf(parsed, provider), billed: async () => (await attempt()).lane },
             ...(deps.onProviderWait !== undefined && { onWait: deps.onProviderWait }),
             ...(provider.streamsGenerate === true && { generateByStream: true }),
-          });
+          }), attempt);
         })
         : Effect.die(new Error(`Unknown provider ${JSON.stringify(parsed.provider)} (registered: ${Array.from(byId.keys()).join(', ') || 'none'}).`)));
     },
 
-    async credentialFor(spec, deps) {
+    async attemptFor(spec, deps) {
       const parsed = parseModelSpec(spec);
-      const key = providerFor(parsed.provider)?.credentialKey;
+      const provider = providerFor(parsed.provider);
 
-      return key === undefined ? null : chosenCredentialKey(deps, parsed.provider, key, parsed.account);
+      return provider === undefined ? null : resolvedAttempt(parsed, provider, deps);
     },
   };
 }

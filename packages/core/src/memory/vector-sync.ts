@@ -3,31 +3,53 @@ import { direntTypeOfStat } from '@nimbus-sh/core/vfs/dirent-type.js';
 /** Keeps the Vectorize index in step with the FTS5 memory store; separate from runtime.ts to stay dependency-light. */
 
 import { Effect } from 'effect';
-import { type AgentConfigStore } from '../config/store';
+import { serialQueue } from '@kinu.run/agent-utils';
+
 import { type Memory } from '../types/primitives';
 import { type VectorStore } from './vector-store';
 
-import { AGENT_CONFIG_KEYS } from '../config/store';
 import { readTailWithVfsOps } from '../vfs/mounts';
 import { MEMORY_DIR } from './note';
 import type { MemoryStore, NoteStamp } from "@kinu.run/agent-utils/memory";
 import { diagnostics, settle, toKinuError } from "../obs/index";
 
-/** Clearing the completeness marker and cursor hands the repair to the idempotent backfill. */
-function invalidateSemanticIndex(config: AgentConfigStore): void {
-  config.set(AGENT_CONFIG_KEYS.memoryVectorBackfillDone, 'false');
-  config.set(AGENT_CONFIG_KEYS.memoryVectorBackfillCursor, '');
+const mirrorLanes = new WeakMap<MemoryStore, ReturnType<typeof serialQueue>>();
+
+/** One owned mirror lane acknowledges durable index revisions, never a user configuration update. */
+async function flushPendingVectors(store: MemoryStore, vectors: VectorStore, cap = Number.MAX_SAFE_INTEGER): Promise<void> {
+  let serial = mirrorLanes.get(store);
+
+  if (serial === undefined) {
+    serial = serialQueue();
+    mirrorLanes.set(store, serial);
+  }
+
+  await serial(async () => {
+    const pending = store.pendingProjection(cap);
+    const upsert = pending.filter((operation) => operation.kind === 'upsert').map((operation) => operation.id);
+
+    if (pending.length === 0) return;
+
+    const fresh = await store.chunksByIds(upsert);
+    const current = new Set(fresh.map((chunk) => chunk.id));
+    const remove = pending.filter((operation) => operation.kind === 'delete' || !current.has(operation.id)).map((operation) => operation.id);
+
+    if (remove.length > 0) await vectors.deleteChunks(remove);
+
+    if (fresh.length > 0) await vectors.upsertChunks(fresh);
+
+    store.ackProjection(pending);
+  });
 }
 
-/** A semantic index beside FTS5, and the config whose backfill marker a failed sync clears. */
+/** A semantic projection beside the canonical memory index. */
 export interface MemoryVectors {
   readonly store: VectorStore;
-  readonly config: AgentConfigStore;
 }
 
 /**
- * Every backend's memory. FTS5 is the source of truth: vector failures are recorded, never fail the write, and clear
- * the backfill marker so chunks are re-embedded. Vector calls are awaited so embeddings are durable before the turn
+ * Every backend's memory. FTS5 is the source of truth: vector failures retain durable projection obligations,
+ * never fail the write. Vector calls are awaited so embeddings are durable before the turn
  * continues. Without `vectors` (the CLI, workspace birth) the index is FTS5 alone.
  */
 export function adaptMemory(
@@ -44,27 +66,26 @@ export function adaptMemory(
   };
 
   const memory: Memory = {
+    chunk: async (id) => (await store.chunksByIds([id]))[0] ?? null,
     write: (path, content) => store.writeFile(path, content),
     append: (path, content) => store.appendToFile(path, content),
     index(path) {
       return settle(Effect.gen(function* () {
         const note = yield* Effect.promise(() => settledNote(store, files, path));
         // A note that is gone, or is no file, leaves the index with its chunks; an emptied one indexes to none.
-        const delta = yield* Effect.promise(() => (note === null ? store.forgetFile(path) : store.indexFile(path, note.content, note.stamp)));
+        yield* Effect.promise(() => (note === null ? store.forgetFile(path) : store.indexFile(path, note.content, note.stamp)));
 
-        if (vectors === undefined || !vectors.store.available) return;
+        if (vectors === undefined) return;
+
+        if (!vectors.store.available) return;
+
         const vectorStore = vectors.store;
 
         yield* Effect.tryPromise({
-          try: async () => {
-            if (delta.deletedIds.length > 0) await vectorStore.deleteChunks(delta.deletedIds);
-
-            if (delta.upserted.length > 0) await vectorStore.upsertChunks(delta.upserted);
-          },
+          try: () => flushPendingVectors(store, vectorStore),
           catch: (cause) => toKinuError({ doing: 'syncing the memory chunk delta into the vector index', cause, otherwise: 'unavailable' }),
         }).pipe(Effect.catch((failure) => Effect.sync(() => {
           diagnostics.failure('memory.vector_sync_failed', failure, { path });
-          invalidateSemanticIndex(vectors.config);
         })));
       }));
     },
@@ -151,27 +172,8 @@ async function notePaths(files: VFS, dir = MEMORY_DIR.slice(0, -1)): Promise<str
 /** Bounded so a large memory table embeds across several boots. */
 const MEMORY_VECTOR_BACKFILL_CAP = 512;
 
-/** Pages across boots by cursor; rejects before moving cursor or marker, so the next boot retries the page. */
-export async function backfillMemoryVectors(
-  store: MemoryStore,
-  config: AgentConfigStore,
-  vectorStore: VectorStore,
-  cap: number = MEMORY_VECTOR_BACKFILL_CAP,
-): Promise<void> {
+/** Acknowledges delivered revisions only; a failed page remains owed across boots. */
+export async function backfillMemoryVectors(store: MemoryStore, vectorStore: VectorStore, cap = MEMORY_VECTOR_BACKFILL_CAP): Promise<void> {
   if (!vectorStore.available) return;
-
-  if (config.get(AGENT_CONFIG_KEYS.memoryVectorBackfillDone) === 'true') return;
-
-  const cursor = config.get(AGENT_CONFIG_KEYS.memoryVectorBackfillCursor) ?? '';
-  const page = await store.allChunksAfter(cursor, cap);
-
-  if (page.chunks.length > 0) await vectorStore.upsertChunks(page.chunks);
-
-  if (page.next === null) {
-    config.set(AGENT_CONFIG_KEYS.memoryVectorBackfillDone, 'true');
-
-    return;
-  }
-
-  config.set(AGENT_CONFIG_KEYS.memoryVectorBackfillCursor, page.next);
+  await flushPendingVectors(store, vectorStore, cap);
 }

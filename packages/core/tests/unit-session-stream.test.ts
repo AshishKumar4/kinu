@@ -8,10 +8,80 @@ import type { ActorProgramIdentity } from '../src/orchestrator/actor-claims';
 import { KinuError } from '../src/obs/error';
 import { McpToolError } from '../src/tools/mcp-error';
 import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
+import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
+import { readSubordinateInspection } from '../src/subordinates/inspection';
+import { makeSqlExec } from './helpers';
+import { decodeModelMessageValues } from '../src/session/message-codec';
 
 const BUILTIN: ActorProgramIdentity = { kind: 'builtin', version: 0, digest: null, build: 'test' };
 
 const remoteFailure = { isError: true, content: [{ type: 'text', text: 'remote failed' }], structuredContent: { reason: 'remote-code' } };
+
+test('step inspection returns decoded image and file bytes, not storage placeholders', async () => {
+  const s = setup();
+
+  try {
+    initRunEventTables(s.rt.storage.execRaw);
+    const events = new RunEventRecorder(s.rt.storage.sql, s.rt.actor);
+    const acc = new TurnAccumulator({ onStepEvent: (step) => { events.emit('run-media', { type: 'step_finish', ...step }); } });
+    const { stream } = await s.turn('media');
+    const bytes = new Uint8Array([137, 80, 78, 71, 13, 10]);
+
+    const message: ModelMessage = { role: 'assistant', content: [
+      { type: 'file', data: bytes, mediaType: 'image/png' },
+      { type: 'file', data: new Uint8Array([37, 80, 68, 70]), mediaType: 'application/pdf', filename: 'result.pdf' },
+    ] };
+
+    const record = { messages: [message], toolResults: [], step: { stepIndex: 0, finishReason: 'stop' } };
+    await stream.nativeStep(record, (parts) => acc.writeNative(record, parts));
+    const event = events.read('run-media')[0];
+
+    if (event?.type !== 'step_finish') throw new Error('missing sealed media step');
+
+    const inspected = await readSubordinateInspection({ sql: s.rt.storage.sql, raw: makeSqlExec(s.testSql.db), actor: s.rt.actor,
+      transcriptFor: () => s.history.transcript('default') }, { view: 'step', path: [], runId: event.runId, eventIndex: event.eventIndex });
+
+    if (inspected.view !== 'step') throw new Error('missing media inspection');
+    expect(decodeModelMessageValues(inspected.messages)).toEqual([message]);
+  } finally { s.testSql.close(); }
+});
+
+test('a sealed step stores canonical output references, not a second transcript body', async () => {
+  const s = setup();
+
+  try {
+    initRunEventTables(s.rt.storage.execRaw);
+    const events = new RunEventRecorder(s.rt.storage.sql, s.rt.actor);
+    const acc = new TurnAccumulator({ onStepEvent: (step) => { events.emit('run-references', { type: 'step_finish', ...step }); } });
+    const { stream } = await s.turn('references');
+    const text = 'canonical-payload-only '.repeat(3000);
+    const message: ModelMessage = { role: 'assistant', content: [{ type: 'text', text }] };
+    const record = { messages: [message], toolResults: [], step: { stepIndex: 0, finishReason: 'stop' } };
+
+    await stream.nativeStep(record, (parts) => acc.writeNative(record, parts));
+
+    const payload = s.rt.storage.sql<{ payload: string }>`SELECT payload FROM run_events WHERE run_id = 'run-references' AND type = 'step_finish'`[0]?.payload;
+
+    expect(payload).toBeDefined();
+    expect(payload?.length).toBeLessThan(text.length / 10);
+    expect(payload).not.toContain(text);
+
+    const event = events.read('run-references')[0];
+
+    if (event?.type !== 'step_finish') throw new Error('a sealed step emitted no reference event');
+
+    expect(event.parts.length).toBe(1);
+    expect(await s.history.messages.materialize({ messageId: event.parts[0].messageId })).toEqual(message);
+
+    const read = await readSubordinateInspection({ sql: s.rt.storage.sql, raw: makeSqlExec(s.testSql.db), actor: s.rt.actor,
+      transcriptFor: () => s.history.transcript('default') }, { view: 'step', path: [], runId: event.runId, eventIndex: event.eventIndex });
+
+    if (read.view !== 'step') throw new Error('the inspector could not read sealed canonical output');
+
+    expect(read.messages).toEqual([{ role: 'assistant', content: [{ type: 'text', text }] }]);
+    expect(read.nextFrom).toBeNull();
+  } finally { s.testSql.close(); }
+});
 
 test.each([
   { name: 'shell', error: new KinuError('io', 'command exited 7', { execution: { exitCode: 7 } }),
@@ -143,7 +213,7 @@ test('a failed ledger write rolls back its step, and a committed step is publish
     const final: ModelMessage = { role: 'assistant', content: [{ type: 'text', text: 'record me' }] };
     const heard: { inTransaction: boolean; open: readonly string[] }[] = [];
     events.observe(() => { heard.push({ inTransaction: s.testSql.db.inTransaction, open: s.open() }); });
-    const row = () => events.emitDeferred('run-t1', { type: 'step_finish', stepIndex: 1, usage: { input: 7, output: 2 }, usd: 0.000003 });
+    const row = () => events.emitDeferred('run-t1', { type: 'step_finish', parts: [], stepIndex: 1, usage: { input: 7, output: 2 }, usd: 0.000003 });
 
     await expect(stream.nativeStep({ messages: [final], toolResults: [] }, () => {
       row();
@@ -156,7 +226,7 @@ test('a failed ledger write rolls back its step, and a committed step is publish
     await stream.nativeStep({ messages: [final], toolResults: [] }, () => row().publish);
     expect(heard).toEqual([{ inTransaction: false, open: [] }]);
     expect((await s.history.materialize()).messages.at(-1)).toEqual(final);
-    expect(events.read('run-t1')).toEqual([expect.objectContaining({ type: 'step_finish', stepIndex: 1, usage: { input: 7, output: 2 }, usd: 0.000003 })]);
+    expect(events.read('run-t1')).toEqual([expect.objectContaining({ type: 'step_finish', parts: [], stepIndex: 1, usage: { input: 7, output: 2 }, usd: 0.000003 })]);
   } finally { s.testSql.close(); }
 });
 
@@ -188,9 +258,9 @@ test('recorders sharing a database publish distinct ordered rows without a stale
     const heard: number[] = [];
     first.observe((event) => { heard.push(event.eventIndex); });
     second.observe((event) => { heard.push(event.eventIndex); });
-    first.emit('run-shared', { type: 'step_finish', stepIndex: 1, usage: { input: 1, output: 1 } });
-    second.emit('run-shared', { type: 'step_finish', stepIndex: 2, usage: { input: 2, output: 2 } });
-    first.emit('run-shared', { type: 'step_finish', stepIndex: 3, usage: { input: 3, output: 3 } });
+    first.emit('run-shared', { type: 'step_finish', parts: [], stepIndex: 1, usage: { input: 1, output: 1 } });
+    second.emit('run-shared', { type: 'step_finish', parts: [], stepIndex: 2, usage: { input: 2, output: 2 } });
+    first.emit('run-shared', { type: 'step_finish', parts: [], stepIndex: 3, usage: { input: 3, output: 3 } });
 
     expect(heard).toEqual([0, 1, 2]);
     expect(first.read('run-shared').map((event) => event.eventIndex)).toEqual([0, 1, 2]);
@@ -215,7 +285,7 @@ test('a late native finish after a terminal seal cannot duplicate the tool row',
       { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'call-a', toolName: 'shell', output: { type: 'text', value: 'home' } }] },
     ], toolResults: [] }, () => {
       const tools = tool();
-      const finished = events.emitDeferred('run-t1', { type: 'step_finish', stepIndex: 1, usage: { input: 5, output: 2 } }).publish;
+      const finished = events.emitDeferred('run-t1', { type: 'step_finish', parts: [], stepIndex: 1, usage: { input: 5, output: 2 } }).publish;
 
       return () => { tools(); finished(); };
     });

@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-10",
-  "files": 3165,
-  "functions": 82877,
+  "files": 3170,
+  "functions": 83079,
   "ceiling": 87,
   "line": 27,
   "inventory": [
@@ -174,10 +174,6 @@
       "complexity": 29
     },
     {
-      "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.constructor",
-      "complexity": 29
-    },
-    {
       "key": "packages/cli/src/tui/onboarding.tsx#GuidedOnboarding>useKeyboard",
       "complexity": 29
     },
@@ -270,6 +266,10 @@
       "complexity": 27
     },
     {
+      "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.constructor",
+      "complexity": 27
+    },
+    {
       "key": "packages/cli/src/commands/debug.ts#summarizeRun",
       "complexity": 27
     },
@@ -287,10 +287,6 @@
     },
     {
       "key": "packages/core/src/orchestrator/session-stream.ts#SessionStream.writePart",
-      "complexity": 27
-    },
-    {
-      "key": "packages/core/src/orchestrator/turn-accumulator.ts#TurnAccumulator.writeStep",
       "complexity": 27
     },
     {

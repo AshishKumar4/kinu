@@ -7,7 +7,7 @@ import {
   chatSessionTurns, gatewayWorkspace, workspaceMainActor,
 } from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding, type StubbedAiBinding } from './helpers/platform-gateway';
-import { ConversationSearchStore } from '@kinu.run/core';
+
 import {
   HeadCapture,
   HeadController,
@@ -108,7 +108,7 @@ function buildSurface(opts?: {
     input: opts?.input ?? headInput(),
     capture,
     rt,
-    conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => stores.history.transcript(sessionId)),
+    conversations: stores.conversationSearch,
     codemodeTool,
     webSearch: noopWebSearch,
     jobs: {

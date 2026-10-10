@@ -1,25 +1,28 @@
 import { describe, expect, test } from 'bun:test';
-import { encodeModelMessageValues, type RunEvent } from '@kinu.run/core';
-import { callInputs, cutButCompleted, measure, toolFailures, toTranscript } from './transcript';
+import type { RunEvent } from '@kinu.run/core';
+import type { ModelMessage } from 'ai';
+import { callInputs, cutButCompleted, measure, toolFailures, toTranscript, type StepMessages } from './transcript';
 
 let index = 0;
 
+const output = new Map<Extract<RunEvent, { type: 'step_finish' }>, readonly ModelMessage[]>();
+
 /** One ledger row of `runId`, stamped as the route serves it. */
-function row(runId: string, body: { type: 'step_finish'; reason: string } | { type: 'run_end'; reason: string } | { type: 'run_start' }): RunEvent {
+function row(runId: string, body: { type: 'step_finish'; reason: string; parts: [] } | { type: 'run_end'; reason: string } | { type: 'run_start' }): RunEvent {
   index += 1;
   const base = { runId, eventIndex: index, timestamp: '2026-09-24T00:00:00.000Z' };
 
   if (body.type === 'run_start') return { ...base, type: 'run_start', agentId: 'root' };
 
-  return body.type === 'step_finish' ? { ...base, type: 'step_finish', stepIndex: index, reason: body.reason } : { ...base, type: 'run_end', reason: body.reason };
+  return body.type === 'step_finish' ? { ...base, type: 'step_finish', parts: [], stepIndex: index, reason: body.reason } : { ...base, type: 'run_end', reason: body.reason };
 }
 
 /** A run of `steps` steps, the last finishing with `lastReason`, ended `ended`. */
 function run(runId: string, steps: number, lastReason: string, ended: string): RunEvent[] {
   return [
     row(runId, { type: 'run_start' }),
-    ...Array.from({ length: steps - 1 }, () => row(runId, { type: 'step_finish', reason: 'tool-calls' })),
-    row(runId, { type: 'step_finish', reason: lastReason }),
+    ...Array.from({ length: steps - 1 }, () => row(runId, { type: 'step_finish', parts: [], reason: 'tool-calls' })),
+    row(runId, { type: 'step_finish', parts: [], reason: lastReason }),
     row(runId, { type: 'run_end', reason: ended }),
   ];
 }
@@ -35,17 +38,22 @@ describe('the transcript', () => {
       runId, eventIndex, timestamp, type: 'tool_call_end', name: 'file', toolCallId: 'reused', args: { op: 'digest' }, result: 'read',
     });
 
-    const step = (runId: string, eventIndex: number, input: typeof first): RunEvent => ({
-      runId, eventIndex, timestamp, type: 'step_finish', stepIndex: eventIndex,
-      messages: encodeModelMessageValues([{ role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'reused', toolName: 'file', input }] }]),
-    });
+    const step = (runId: string, eventIndex: number, input: typeof first): RunEvent => {
+      const event: Extract<RunEvent, { type: 'step_finish' }> = {
+        runId, eventIndex, timestamp, type: 'step_finish', stepIndex: eventIndex, parts: [{ messageId: `${runId}-${String(eventIndex)}`, partNo: 0 }],
+      };
+
+      output.set(event, [{ role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'reused', toolName: 'file', input }] }]);
+
+      return event;
+    };
 
     const a = call('a', 0), b = call('b', 0), next = call('a', 2);
     const events = [a, b, step('a', 1, first), next, step('b', 1, other), step('a', 3, later)];
-    const associated = callInputs(events);
+    const associated = callInputs(events, output);
 
     expect([associated.get(a), associated.get(b), associated.get(next)]).toEqual([first, other, later]);
-    expect(toTranscript(events).filter((event) => event.type === 'tool_call').map((event) => event.arguments))
+    expect(toTranscript(events, output).filter((event) => event.type === 'tool_call').map((event) => event.arguments))
       .toEqual([first, other, later]);
   });
 
@@ -55,19 +63,20 @@ describe('the transcript', () => {
     const input = { op: 'write', path: '/slates/exchange/server.ts', content: source };
     const base = { runId: 'run-1', timestamp: '2026-09-26T00:00:00.000Z' };
 
+    const finished: Extract<RunEvent, { type: 'step_finish' }> = {
+      ...base, eventIndex: 3, type: 'step_finish', stepIndex: 1, reason: 'tool-calls', parts: [{ messageId: 'full-input', partNo: 0 }],
+    };
+
+    const canonical: StepMessages = new Map([[finished, [{ role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'call-1', toolName: 'file', input }] }]]]);
+
     const events: RunEvent[] = [
       { ...base, eventIndex: 1, type: 'run_start', agentId: 'root', userMessage: 'Build it.' },
       // As the ledger stores a large argument: its first 800 characters (`digestJsonValue`, core utils/json.ts).
       { ...base, eventIndex: 2, type: 'tool_call_end', name: 'file', toolCallId: 'call-1', args: `${JSON.stringify(input).slice(0, 800)}…`, result: { ok: true } },
-      {
-        ...base, eventIndex: 3, type: 'step_finish', stepIndex: 1, reason: 'tool-calls',
-        messages: encodeModelMessageValues([{
-          role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'call-1', toolName: 'file', input }],
-        }]),
-      },
+      finished,
     ];
 
-    expect(toTranscript(events).find((event) => event.type === 'tool_call')).toMatchObject({ name: 'file', arguments: input });
+    expect(toTranscript(events, canonical).find((event) => event.type === 'tool_call')).toMatchObject({ name: 'file', arguments: input });
   });
 });
 

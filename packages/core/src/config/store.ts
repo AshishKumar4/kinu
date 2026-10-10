@@ -62,9 +62,7 @@ export const AGENT_CONFIG_KEYS = {
   closedTurnWindows: 'closed_turn_windows',
   /** 'false' silences owner emails; defaults on. */
   emailNotifications: 'email_notifications',
-  /** Lazy Vectorize backfill of chunks indexed before embeddings existed; cursor pages across boots. */
-  memoryVectorBackfillDone: 'memory_vector_backfill_done',
-  memoryVectorBackfillCursor: 'memory_vector_backfill_cursor',
+
   /** Persisted because a boot counter misses reconstructions that reuse the isolate (e.g. `ctx.facets.abort()`). */
   isolateGen: 'isolate_gen',
   /** Canonical conversation id (config/conversation.ts); absent on first open, adopted as `default`. */
