@@ -4,6 +4,8 @@
 // container harness), and the box's incidents go through the restatement KinuDevbox makes to a real
 // workspace's `acceptSandboxLifecycleIncident`, whose inbox turns are counted.
 import { describe, expect, test } from 'bun:test';
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { present } from '@kinu.run/test-utils';
 import { Effect } from 'effect';
 import { PROGRAMMATIC_MESSAGE_ID_PREFIX, createSandboxExecutor } from '@kinu.run/core';
 import type { DevboxIncident, IncidentDisposition } from '@kinu.run/devbox';
@@ -105,8 +107,10 @@ async function restedWithService() {
   });
 
   const agent = createSandboxExecutor(adaptCloudflareSandbox(sdk, async () => {}, null));
-  await agent.tools.writeFile?.execute('/workspace/app.ts', 'export const port = 3000;\n');
-  await agent.tools.writeFile?.execute('/workspace/notes.md', 'the server is p1\n');
+  const files = present(agent.files, 'the sandbox\'s files');
+
+  await writeText(files, '/workspace/app.ts', 'export const port = 3000;\n');
+  await writeText(files, '/workspace/notes.md', 'the server is p1\n');
   await made.box.quiesce();
 
   return { ...made, agent };
@@ -136,7 +140,8 @@ describe('a service that does not come back on a wake', () => {
 
       // The agent's first command is what wakes the box.
       const answer = await agent.tools.exec?.execute('cat app.ts');
-      const files = [await agent.tools.readFile?.execute('/workspace/app.ts'), await agent.tools.readFile?.execute('/workspace/notes.md')];
+      const sandbox = present(agent.files, 'the sandbox\'s files');
+      const files = [await readText(sandbox, '/workspace/app.ts'), await readText(sandbox, '/workspace/notes.md')];
       await box.devboxIncidents();
       // A second delivery pass finds nothing left to tell.
       await box.devboxIncidents();

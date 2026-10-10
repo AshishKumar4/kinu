@@ -1,4 +1,4 @@
-import { exists, writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // createCLIHeadRuntime: a head forks the parent's host executor and files, with a private durable scratch.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -529,7 +529,8 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
     const rt = await createHeadRuntime(parent, 'h');
 
     const parentExec = present(routerOf(rt).getProvider('parent'), 'the parent executor');
-    expect(await parentExec.tools.readFile.execute('hello.txt')).toBe('from the parent workspace');
+    // Its own file tools reach the folder they share, gated as every plane's files are.
+    expect(await readText(rt.toolFiles, 'hello.txt')).toBe('from the parent workspace');
     expect(v.parse(v.string(), await parentExec.tools.exec.execute('cat hello.txt')))
       .toContain('from the parent workspace');
 
@@ -541,12 +542,12 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
 
   test("a parent file error reaches the head with the errno the parent's VFS threw", async () => {
     const parent = makeParent();
-    await parent.storage.vfs.mkdir('notes', { recursive: true });
+    await writeText(parent.storage.vfs, 'notes', 'a file, not a directory');
     const rt = await createHeadRuntime(parent, 'errno');
     const parentExec = present(routerOf(rt).getProvider('parent'), 'the parent executor');
 
     // The DO producer and this in-process one answer the same wire through `answerParentRpc`.
-    await expect(parentExec.tools.readFile.execute('notes')).rejects.toMatchObject({ code: 'EISDIR' });
+    await expect(parentExec.tools.readdir.execute('notes')).rejects.toMatchObject({ code: 'ENOTDIR' });
   });
 
   test('a head of a parent bound to a directory runs its shell there: the machine is the workspace', async () => {
@@ -701,7 +702,7 @@ describe("a local head's state is its own actor's rows in the parent's ONE datab
   });
 });
 
-/** Writes into shared /parent, waits for siblings, then extends: a workspace diff would misattribute sibling work. */
+/** Writes into the folder it shares with its parent, waits for siblings, then extends: a workspace diff would misattribute sibling work. */
 function sharedWorkspaceProbeModel(arrive: () => Promise<void>): LanguageModel {
   const stepsByHead = new Map<string, number>();
 
@@ -717,7 +718,7 @@ function sharedWorkspaceProbeModel(arrive: () => Promise<void>): LanguageModel {
       const write = (content: string) => envelope([{
         type: 'tool-call' as const, toolCallId: `${marker}-${step}`, toolName: 'eval',
         input: JSON.stringify({
-          code: `await parent.writeFile(${JSON.stringify(`${marker}.ts`)}, ${JSON.stringify(content)})`,
+          code: `await workspace.readFile(${JSON.stringify(`${marker}.ts`)}).catch(() => null); await workspace.writeFile(${JSON.stringify(`${marker}.ts`)}, ${JSON.stringify(content)})`,
         }),
       }], 'tool-calls');
 

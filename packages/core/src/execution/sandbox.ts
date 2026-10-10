@@ -410,55 +410,6 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
         }
       },
     },
-    readFile: {
-      planAllowed: true,
-      description: 'Read a file from the sandbox.',
-      execute: async (...args: unknown[]): Promise<string | Refusal> => {
-        if (!handle) return notConfigured();
-        const path = parseInput(PathSchema, { value: args[0] });
-
-        if (path === undefined) {
-          return refusalOf(new KinuError('bad_input', 'sandbox readFile: path must be a non-empty string'));
-        }
-
-        try {
-          const r = await withSandboxRetry(() => touch(() => handle.readFile(path)));
-
-          // A failed read is only an exit code, so `io`: `missing` would over-claim.
-          if (r.exitCode && r.exitCode !== 0) {
-            return refusalOf(new KinuError('io', `sandbox readFile ${path}: exit ${r.exitCode}`));
-          }
-
-          return r.content ?? '';
-        } catch (err) {
-          return refusalOf(sandboxFailure({ doing: `sandbox readFile ${path}`, cause: err }));
-        }
-      },
-    },
-    writeFile: {
-      description: 'Write content to a file in the sandbox. Creates parent dirs.',
-      execute: async (...args: unknown[]): Promise<string | Refusal> => {
-        if (!handle) return notConfigured();
-        const path = parseInput(PathSchema, { value: args[0] });
-        const content = parseInput(StringSchema, { value: args[1] });
-
-        if (path === undefined) {
-          return refusalOf(new KinuError('bad_input', 'sandbox writeFile: path must be a non-empty string'));
-        }
-
-        if (content === undefined) {
-          return refusalOf(new KinuError('bad_input', 'sandbox writeFile: content must be a string'));
-        }
-
-        try {
-          await withSandboxRetry(() => touch(() => handle.writeFile(path, content)));
-
-          return `wrote ${path}`;
-        } catch (err) {
-          return refusalOf(sandboxFailure({ doing: `sandbox writeFile ${path}`, cause: err }));
-        }
-      },
-    },
     listFiles: {
       planAllowed: true,
       description: 'List files in a directory: the working directory when `path` is omitted or empty. Returns newline-separated entries prefixed "d" or "-".',
@@ -730,7 +681,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
   return {
     name: 'sandbox',
     kind: 'sandbox',
-    files: handle ? sandboxFiles(handle) : undefined,
+    files: handle ? sandboxFiles(handle, (call) => withSandboxRetry(() => touch(call))) : undefined,
     homeDir: async () => WORKSPACE_BACKUP_DIR,
     capabilities: new Set(capabilities),
     filesOwner: 'agent',
@@ -792,7 +743,14 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
 }
 
 /** Container files at absolute paths: one batched directory read, or one direct stat/lstat. */
-export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'readRange'>> {
+/**
+ * The sandbox's files over its handle: the one path the agent's file tools reach them by, under `/sandbox`. `through`
+ * carries each call, so the executor's retry of a dropped connection and its activity mark cover file calls as they
+ * cover commands.
+ */
+export function sandboxFiles(
+  handle: SandboxHandle, through: <T>(call: () => Promise<T>) => Promise<T> = (call) => call(),
+): VFS & Required<Pick<VFS, 'readRange'>> {
   const statOf = (stat: SandboxFileMetadata): VfsStat => {
     let type: VfsStat['type'] = 'file';
 
@@ -828,7 +786,7 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'r
 
   const serving = async <T>(path: string, syscall: string, op: () => Promise<T>): Promise<T> => {
     try {
-      return await op();
+      return await through(op);
     } catch (cause) {
       if (!(cause instanceof Error)) throw cause;
 
@@ -857,9 +815,9 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'r
         throw syscallError('EIO', 'read', path, { detail: 'range offset and length must be positive safe integers' });
       }
 
-      const r = await handle.exec(
+      const r = await through(() => handle.exec(
         `set -o pipefail; dd if=${shellQuote(path)} bs=1 skip=${String(offset)} count=${String(length)} status=none | base64 -w 0`,
-      );
+      ));
 
       if ((r.exitCode ?? 0) !== 0) {
         throw syscallError('EIO', 'read', path, { detail: (r.stderr ?? r.output ?? '').trim() || undefined });
@@ -887,7 +845,7 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'r
     async unlink(path) { await serving(path, 'unlink', () => handle.deleteFile(path)); },
 
     async mkdir(path, opts) {
-      const r = await handle.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(path)}`);
+      const r = await through(() => handle.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(path)}`));
 
       if ((r.exitCode ?? 0) !== 0) {
         throw syscallError('EIO', 'mkdir', path, { detail: (r.stderr ?? r.output ?? '').trim() || undefined });

@@ -64,7 +64,7 @@ export function spawnSeatedHead(input: HeadInput, deps: SeatedHeadDeps): Spawned
       return await seat.infer(input, inference);
     } finally {
       // Its jobs' results have no reader left.
-      runner.cancelRunning();
+      await runner.cancelRunning();
       detach();
     }
   };

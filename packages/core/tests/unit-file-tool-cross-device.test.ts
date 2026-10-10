@@ -8,6 +8,9 @@ import { DefaultExecutionRouter } from '../src/execution/router';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { withApprovalGatedFiles } from '../src/execution/approval';
 import { createInlineExecutor } from '../src/tools/inline-executor';
+import { executorNamespace } from '../src/tools/executor-operations';
+import { createSandboxExecutor } from '../src/execution/sandbox';
+import { createParentExecutor, type ParentWorkspaceHandle } from '../src/execution/parent';
 import type { ShellApprovalPolicy } from '../src/safety/approval-gate';
 
 type FileToolInput = JsonObject & { readonly op: string };
@@ -58,7 +61,10 @@ function fleet(written: JsonValue): DeviceTransport & { readonly frames: Frame[]
 /** The owner answers every ask `allow`, as production's toolFiles gate reaches them. */
 const OWNER_ALLOWS: ShellApprovalPolicy = { mode: () => 'strict', granted: () => false, requestApproval: async () => 'allow' };
 
-function fileToolOverTheFleet(written: JsonValue = { success: true }, gated = false) {
+/** No ask is answered yes: a secret-looking read is refused. */
+const DENY_ALL: ShellApprovalPolicy = { mode: () => 'deny_all', granted: () => false, requestApproval: async () => 'deny' };
+
+function fileToolOverTheFleet(written: JsonValue = { success: true }, gated = false, policy: ShellApprovalPolicy = OWNER_ALLOWS) {
   const transport = fleet(written);
   const { rt } = createTestRuntime();
   const router = new DefaultExecutionRouter();
@@ -70,7 +76,7 @@ function fileToolOverTheFleet(written: JsonValue = { success: true }, gated = fa
   const plane = withMountTable(rt.storage.vfs, standardMounts((name) => router.getProvider(name)));
 
   const toolFiles = gated
-    ? withApprovalGatedFiles(plane, 'workspace', { planes: cloudPlanes(WORKSPACE_ROOT), resolve: (path, follow) => plane.resolve(path, { follow }), userRoots: () => plane.userRoots(), locate: null, parksWrites: true }, OWNER_ALLOWS)
+    ? withApprovalGatedFiles(plane, 'workspace', { planes: cloudPlanes(WORKSPACE_ROOT), resolve: (path, follow) => plane.resolve(path, { follow }), userRoots: () => plane.userRoots(), locate: null, parksWrites: true }, policy)
     : plane;
 
   const tools = buildBuiltinTools({
@@ -141,5 +147,36 @@ describe('a file on another machine', () => {
 
     await readFile('/pc/ashish@studio/home/notes.md');
     expect(await writeFile('/pc/ashish@studio/home/notes.md', 'moved again')).toContain(undo);
+  });
+});
+
+// One path for every file plane: the workspace's `file` and `workspace.readFile/writeFile`, over the gated plane where
+// each machine and the sandbox are mounted, carry the prior-read ledger and the approval gate. An executor's own
+// file members would be a second path past both.
+describe('a program reaches another plane\'s files', () => {
+  const unused = async (): Promise<never> => { throw new Error('not reached'); };
+
+  const parentHandle: ParentWorkspaceHandle = { read: unused, write: unused, list: unused, stat: unused, delete: unused, exec: unused };
+
+  test('only through the workspace\'s files: the machine, the sandbox and the parent offer no read or write of their own', () => {
+    const providers = [
+      createDeviceTunnelExecutor(fleet({ success: true }), { consentedRoot: async () => '/', deviceHome: async () => '/home', scope: async () => 'unconfined' }),
+      createSandboxExecutor(),
+      createParentExecutor({ handle: parentHandle }),
+    ];
+
+    const ownFileMembers = providers.map((provider) => {
+      const members = Object.keys(executorNamespace(provider).declarations ?? {});
+
+      return [provider.name, members.filter((member) => member === 'readFile' || member === 'writeFile')];
+    });
+
+    expect(ownFileMembers).toEqual([['device', []], ['sandbox', []], ['parent', []]]);
+  });
+
+  test('and a secret on the machine is refused there as the file tool refuses it', async () => {
+    const { readFile } = fileToolOverTheFleet({ success: true }, true, DENY_ALL);
+
+    await expect(readFile('/pc/ashish@studio/home/.env')).rejects.toMatchObject({ code: 'denied' });
   });
 });

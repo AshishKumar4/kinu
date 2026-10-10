@@ -38,20 +38,6 @@ function parentHandle(calls: string[]): ParentWorkspaceHandle {
 }
 
 describe('parent executor input validation', () => {
-  test('readFile with no path refuses instead of reading "undefined"', async () => {
-    const calls: string[] = [];
-    const parent = createParentExecutor({ handle: parentHandle(calls) });
-    expect(await parent.tools.readFile.execute(undefined)).toMatchObject({ reason: 'bad_input' });
-    expect(calls).toEqual([]);
-  });
-
-  test('writeFile with no path refuses instead of writing "undefined"', async () => {
-    const calls: string[] = [];
-    const parent = createParentExecutor({ handle: parentHandle(calls) });
-    expect(await parent.tools.writeFile.execute(undefined, 'x')).toMatchObject({ reason: 'bad_input' });
-    expect(calls).toEqual([]);
-  });
-
   test('exists with no path refuses instead of stating "undefined" is absent', async () => {
     const calls: string[] = [];
     const parent = createParentExecutor({ handle: parentHandle(calls) });
