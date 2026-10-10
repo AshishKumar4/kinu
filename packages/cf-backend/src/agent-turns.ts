@@ -114,6 +114,11 @@ export class AgentTurns {
     this.chats.set(actorId, turnId);
   }
 
+  /** The chat turn the agent last said it began and has not said it ended. */
+  chatTurn(actorId: string): string | null {
+    return this.chats.get(actorId) ?? null;
+  }
+
   chatClosed(actorId: string): void {
     const turnId = this.chats.get(actorId);
 

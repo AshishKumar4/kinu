@@ -863,6 +863,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         await this.agentWakes.owes(actorId, next);
 
         if (next !== null) return;
+        await this.closeLostChatTurn(actorId);
         this.releaseIdleHosted(actorReferenceOf(this.liveAgentOf(actorId)));
 
         // Main's rest may come after the workspace's own close for its turn rested, while main's wake still held the chain.
@@ -963,14 +964,38 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   private async hostedTurnEnded(actorId: string, event: SessionEvent, figures: AgentFigures): Promise<void> {
     await this.hostedChatEvent(actorId, event);
+    await this.chatTurnClosed(actorId, { event, figures });
+  }
+
+  /**
+   * An agent that says it rests holds no turn, whatever this object last heard: the end of a turn its isolate committed
+   * and did not live to tell is closed here. Its chat is asked again first, and the turn closed only if it is still the one
+   * this object holds, so a report made before a later turn began closes nothing.
+   */
+  private async closeLostChatTurn(actorId: string): Promise<void> {
+    const open = this.agentTurns.chatTurn(actorId);
+
+    if (open === null || await (await this.agentCalls(actorId)).owed(this.agentSnapshot(actorId))) return;
+
+    if (this.agentTurns.chatTurn(actorId) !== open) return;
+    diagnostics.event('agent.turn_end_lost', { turnId: open });
+    await this.chatRooms.hostedRoom(actorId)?.closeTurn();
+    await this.chatTurnClosed(actorId, null);
+  }
+
+  /** What a turn's end moves in this object, told (`ended`) or lost with its isolate. */
+  private async chatTurnClosed(actorId: string, ended: { readonly event: SessionEvent; readonly figures: AgentFigures } | null): Promise<void> {
+    const event = ended?.event ?? null;
+
     this.agentTurns.chatClosed(actorId);
     // Its claim closed and its sequence opened in its own isolate.
     this.liveReadsMoved(readsOfTables(['actor_turn_claims', 'terminal_effects']));
 
     if (actorId === this.actorHandle().actorId) {
       this.mainFacetTurnEnded();
-      // Every signal held for it re-delivers, detached: none reached its isolate's steps.
-      this.orch.inbox.settle({ completed: event.type === 'turn-end' && !event.turn.hadError });
+      // Every signal held for it re-delivers, detached: none reached its isolate's steps. A lost end re-delivers
+      // what the turn absorbed too, as an errored turn's does.
+      this.orch.inbox.settle({ completed: event?.type === 'turn-end' && !event.turn.hadError });
       this.turnClaimChanged();
     }
 
@@ -978,9 +1003,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (!this.liveActor(actorId)) return;
 
-    // Its questions are written in its own isolate, which the workspace's reads do not watch.
-    if (this.agentBound(actorId).stores.config.getHoldsQuestions() && this.questionsMayHaveMoved(actorId, event)) this.hostedQuestionsMoved();
-    recordAgentFigures(this.boundSql, actorId, figures);
+    // Its questions are written in its own isolate, which the workspace's reads do not watch; a lost end may have moved them.
+    if (this.agentBound(actorId).stores.config.getHoldsQuestions() && (event === null || this.questionsMayHaveMoved(actorId, event))) this.hostedQuestionsMoved();
+
+    if (ended !== null) recordAgentFigures(this.boundSql, actorId, ended.figures);
     this.delegatedTurns.start([this.liveAgentOf(actorId)]);
   }
 

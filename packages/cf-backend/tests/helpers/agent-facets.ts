@@ -33,6 +33,14 @@ class ScriptedModelFacet extends AgentFacet {
 /** Isolates whose next answer row fails to write, as a failed commit does. */
 const undurableAnswers = new Set<string>();
 
+/** Isolates whose next turn's end never reaches the workspace, as one whose isolate died after its commit. */
+const lostTurnEnds = new Set<string>();
+
+/** The isolate under `storageKey` commits its next turn, and the end it tells the workspace is lost on the way. */
+export function loseNextTurnEnd(storageKey: string): void {
+  lostTurnEnds.add(storageKey);
+}
+
 /** The isolate under `storageKey` fails to write its next answer row; the commit is one transaction, so nothing lands. */
 export function failNextAnswerWrite(storageKey: string): void {
   undurableAnswers.add(storageKey);
@@ -174,7 +182,11 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           prepareChat: (request) => host.prepareChat(request),
           bindProfile: (turnId, profile) => host.bindProfile(turnId, profile),
           chatEvent: (event) => host.chatEvent(event),
-          turnEnded: (event, figures) => host.turnEnded(event, figures),
+          turnEnded: async (event, figures) => {
+            if (lostTurnEnds.delete(placement.storageKey)) return;
+
+            await host.turnEnded(event, figures);
+          },
           owedReport: (...args) => host.owedReport(...args),
           parentReport: (report) => host.parentReport(report),
           autoTitle: (subject, title) => host.autoTitle(subject, title),
