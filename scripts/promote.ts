@@ -190,7 +190,7 @@ function assertEvalVerdict(sha: string, bucket: string): void {
   const proof = v.parse(EvalProofSchema, JSON.parse(stored.stdout));
 
   if (!proof.run.candidateBuild.startsWith(sha)) throw new Error(`the eval verdict is not ${sha}'s`);
-  const refused = evalVerdictRefusal(proof.verdict, `armada job ${proof.run.job}`);
+  const refused = evalVerdictRefusal(proof.verdict, `armada jobs ${proof.run.jobs.join(', ')}`);
 
   if (refused !== undefined) throw new Error(`${sha} cannot be promoted: ${refused}`);
 }
@@ -568,7 +568,7 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
     const proof = readEvalsVerdict(rest[0] ?? '', sha);
 
     staging.put(evalsKey(sha), JSON.stringify(proof), 'application/json');
-    console.log(`promote: ${sha}'s eval verdict from armada ${proof.run.job}: ${proof.verdict.reason}`);
+    console.log(`promote: ${sha}'s eval verdict from armada ${proof.run.jobs.join(', ')}: ${proof.verdict.reason}`);
 
     return 0;
   }

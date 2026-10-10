@@ -111,7 +111,7 @@ export async function processEvals(run: EvalRun, items: readonly TrialItem[], ou
     verdictExit = verdict.pass ? 0 : 1;
     writeFileSync(join(dir, 'verdict.log'), `${verdict.reason}\n`);
     await step('trajectories', ['evals/scripts/trajectories.ts', join(dir, 'candidate', 'results.json'), join(dir, 'comparison', 'trajectories.md')]);
-    writeFileSync(join(dir, 'comparison', 'comment.md'), `<!-- kinu-evals-results -->\n${readFileSync(join(dir, 'comparison', 'comparison.md'), 'utf8')}\nArmada job: ${run.job}.\n`);
+    writeFileSync(join(dir, 'comparison', 'comment.md'), `<!-- kinu-evals-results -->\n${readFileSync(join(dir, 'comparison', 'comparison.md'), 'utf8')}\nArmada jobs: ${run.jobs.join(', ')}.\n`);
     mkdirSync(join(dir, 'why'), { recursive: true });
 
     const diagnosis = await step('diagnose', ['evals/scripts/diagnose.ts', '--results', join(dir, 'candidate', 'results.json'),

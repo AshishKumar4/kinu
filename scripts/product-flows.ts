@@ -22,7 +22,7 @@
  */
 import type { Browser, ElementHandle, Page } from 'puppeteer';
 import * as v from 'valibot';
-import { hostedActorSocketPath, SLATES_ROOT } from '@kinu.run/core';
+import { AccountMemoryProposalSchema, hostedActorSocketPath, JsonValueSchema, redactSecrets, SLATES_ROOT, type AccountMemoryProposal, type JsonValue } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -196,7 +196,15 @@ export const CHAT_IDLE = `[...document.querySelectorAll('#chat button')].some((e
  *  load that failed or a view that crashed draws in its place (`data-failure`).
  *  A Drive whose listing failed draws no section and no empty state, so a wait
  *  for either outlived the failure it showed (2026-09-24, 36 minutes). */
+const FILES_FAILURE = `(() => {
+  const error = document.querySelector('[data-files-list] > .p-danger');
+  const text = error?.getClientRects().length > 0 ? (error.textContent ?? '').trim() : '';
+  return text === '' ? null : 'a failed Files listing: ' + text;
+})()`;
+
 const DEAD_END = `(() => {
+  const files = ${FILES_FAILURE};
+  if (files !== null) return files;
   const script = ${FAILED_APP_SCRIPT};
   if (script !== null) return script;
   const failed = (window.__turnErrors ?? []).at(-1);
@@ -267,12 +275,14 @@ export async function named<Value>(what: string, wait: () => Promise<Value>): Pr
 export async function until(page: Page, what: string, condition: string): Promise<void> {
   await named(what, async () => {
     for (;;) {
-      const outcome = String(await (await page.waitForFunction(`(${condition}) ? 'reached' : ${DEAD_END}`, { polling: 100 })).jsonValue());
+      const outcome = String(await (await page.waitForFunction(`${FILES_FAILURE} ?? ((${condition}) ? 'reached' : ${DEAD_END})`, { polling: 100 })).jsonValue());
 
       if (outcome === 'reached') return;
 
       if (!(await reloadedAfterNetworkChange(page, what, outcome))) {
-        throw new Error(`waiting for ${what}, the page showed ${await explained(page, outcome)}`);
+        const evidence = outcome.startsWith('a failed Files listing:') ? await filesFailureAccount(page) : '';
+
+        throw new Error(`waiting for ${what}, the page showed ${await explained(page, outcome)}${evidence === '' ? '' : `; Files evidence: ${evidence}`}`);
       }
     }
   });
@@ -374,7 +384,20 @@ export async function sendAndSettle(page: Page, text: string): Promise<void> {
 
 const FrameSchema = v.object({
   type: v.string(), id: v.optional(v.string()), method: v.optional(v.string()), done: v.optional(v.boolean()),
+  args: v.optional(v.array(JsonValueSchema)), result: v.optional(JsonValueSchema), error: v.optional(JsonValueSchema),
 });
+
+const filesReplies = new WeakMap<Page, { args: readonly JsonValue[]; result?: JsonValue; error?: JsonValue }>();
+
+async function filesFailureAccount(page: Page): Promise<string> {
+  const visible = v.parse(v.object({ path: v.string(), listing: v.nullable(v.string()), error: v.nullable(v.string()) }), await page.evaluate(() => ({
+    path: location.pathname,
+    listing: document.querySelector('[data-files-list]')?.textContent ?? null,
+    error: document.querySelector('[data-files-list] > .p-danger')?.textContent ?? null,
+  })));
+
+  return redactSecrets(JSON.stringify({ getExecutorFiles: filesReplies.get(page) ?? null, visible }));
+}
 
 /** The page's socket traffic, read off its frames over CDP: the RPCs it asked,
  *  by id, which of them has had its final answer, and the kinds of frame the
@@ -402,7 +425,7 @@ export async function frameLedger(page: Page): Promise<FrameLedger> {
   await cdp.send('Page.enable');
 
   /** An ask is keyed by its socket and its id: ids restart per socket, so two sockets or two loads reuse them. */
-  interface Ask { readonly socket: string; readonly method: string }
+  interface Ask { readonly socket: string; readonly method: string; readonly args: readonly JsonValue[] }
 
   const asked = new Map<string, Ask>();
   const answered = new Set<string>();
@@ -447,6 +470,8 @@ export async function frameLedger(page: Page): Promise<FrameLedger> {
   cdp.on('Page.frameNavigated', (event: { frame: { parentId?: string } }) => {
     if (event.frame.parentId !== undefined) return;
 
+    filesReplies.delete(page);
+
     for (const socket of socketPaths.keys()) retiredSockets.add(socket);
 
     for (const [key, ask] of asked) {
@@ -470,7 +495,7 @@ export async function frameLedger(page: Page): Promise<FrameLedger> {
     tally(framesSent, socketPaths.get(event.requestId) ?? event.requestId);
 
     if (sent?.type === 'rpc' && sent.id !== undefined && sent.method !== undefined) {
-      asked.set(`${event.requestId} ${sent.id}`, { socket: event.requestId, method: sent.method });
+      asked.set(`${event.requestId} ${sent.id}`, { socket: event.requestId, method: sent.method, args: sent.args ?? [] });
     }
   });
   cdp.on('Network.webSocketFrameReceived', (event: { requestId: string; response?: { payloadData?: string } }) => {
@@ -484,7 +509,19 @@ export async function frameLedger(page: Page): Promise<FrameLedger> {
 
     // A streamed answer's chunks carry `done: false`; only its last frame, or
     // a plain answer, ends the ask.
-    if (received.type === 'rpc' && received.id !== undefined && received.done !== false) answered.add(`${event.requestId} ${received.id}`);
+    if (received.type === 'rpc' && received.id !== undefined && received.done !== false) {
+      const key = `${event.requestId} ${received.id}`;
+      const ask = asked.get(key);
+
+      if (ask?.method === 'getExecutorFiles') filesReplies.set(page, {
+        args: ask.args,
+        ...(received.result !== undefined && { result: received.result }),
+        ...(received.error !== undefined && { error: received.error }),
+      });
+
+      answered.add(key);
+    }
+
     check();
   });
   // A socket that closed will answer nothing more: its open asks are retired, as the page's own client rejects them.
@@ -529,9 +566,11 @@ export async function frameLedger(page: Page): Promise<FrameLedger> {
       arrived.clear();
       framesSent.clear();
       requests.clear();
+      filesReplies.delete(page);
     },
     stop: async () => {
       liveLedgers.delete(account);
+      filesReplies.delete(page);
       await cdp.detach();
     },
   };
@@ -772,8 +811,13 @@ const STACK_KEYS = `(() => {
 })()`;
 
 /** Presses the open card's answer named `words`. */
-function stackAnswer(words: string): string {
-  return `[...document.querySelectorAll('[data-attention-card] button')].find((button) => button.textContent?.trim() === ${JSON.stringify(words)})?.click()`;
+function stackAnswer(words: string, key: string): string {
+  return `[...document.querySelectorAll(${JSON.stringify(`[data-attention-card=${JSON.stringify(key)}] button`)})].find((button) => button.textContent?.trim() === ${JSON.stringify(words)})?.click()`;
+}
+
+async function openStackCard(page: Page, key: string): Promise<void> {
+  await page.evaluate(`document.querySelector(${JSON.stringify(`[data-attention-behind=${JSON.stringify(key)}]`)})?.click()`);
+  await until(page, 'the flow\'s own card open', `document.querySelector(${JSON.stringify(`[data-attention-card=${JSON.stringify(key)}]`)}) !== null`);
 }
 
 const CHAT_TEXT = `(document.querySelector('#chat')?.textContent ?? '')`;
@@ -790,16 +834,23 @@ export async function approvalsStackAtTheComposer(target: FlowTarget): Promise<A
     const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
 
     await sendAndSettle(page, APPROVALS_ASK);
-    await until(page, 'both parked commands stacked at the composer', `document.querySelector('[data-attention-stack]')?.getAttribute('data-attention-count') === '2'`);
-    const stacked = v.parse(v.array(v.string()), await page.evaluate(STACK_KEYS));
-    const openWords = v.parse(v.string(), await page.evaluate(`document.querySelector('[data-attention-card]')?.textContent ?? ''`));
+    // Actions belong to this fresh workspace; account-memory cards belong to every workspace of the account.
+    const actions = `${STACK_KEYS}.filter((key) => key.startsWith('action:'))`;
 
-    await page.evaluate(stackAnswer('Approve'));
-    await until(page, 'the next card opened', `document.querySelector('[data-attention-stack]')?.getAttribute('data-attention-count') === '1'`);
-    const afterFirst = v.parse(v.array(v.string()), await page.evaluate(STACK_KEYS));
+    await until(page, 'both of the flow\'s parked commands stacked', `${actions}.length === 2`);
+    const stacked = v.parse(v.tuple([v.string(), v.string()]), await page.evaluate(actions));
 
-    await page.evaluate(stackAnswer('Deny'));
-    await until(page, 'the stack cleared', `document.querySelector('[data-attention-stack]') === null`);
+    await openStackCard(page, stacked[0]);
+    const openWords = v.parse(v.string(), await page.evaluate(`document.querySelector(${JSON.stringify(`[data-attention-card=${JSON.stringify(stacked[0])}]`)})?.textContent ?? ''`));
+    const remaining = `${STACK_KEYS}.filter((key) => ${JSON.stringify(stacked)}.includes(key))`;
+
+    await page.evaluate(stackAnswer('Approve', stacked[0]));
+    await until(page, 'the flow\'s other card remains', `${remaining}.length === 1`);
+    const afterFirst = v.parse(v.array(v.string()), await page.evaluate(remaining));
+
+    await openStackCard(page, stacked[1]);
+    await page.evaluate(stackAnswer('Deny', stacked[1]));
+    await until(page, 'the flow\'s own stack cleared', `${remaining}.length === 0`);
     await until(page, 'both answers in the chat and heard by the agent', `${CHAT_TEXT}.includes('You approved') && ${CHAT_TEXT}.includes('You denied')`
       + ` && /${DECISION_HEARD}[^]*approved/u.test(${CHAT_TEXT}) && /${DECISION_HEARD}[^]*denied/u.test(${CHAT_TEXT})`);
     const said = v.parse(v.string(), await page.evaluate(CHAT_TEXT));
@@ -956,6 +1007,32 @@ async function lastReply(page: Page, marker: string, answers: readonly string[])
 
 const RECALL_ANSWERS = [ACCOUNT_FACT.value, 'nowhere I know of'];
 
+async function flowMemoryProposals(target: FlowTarget, workspace: string, key: string): Promise<readonly AccountMemoryProposal[]> {
+  const response = await fetch(`${target.origin}/api/user/memory`, { headers: webHeaders(target.identity) });
+
+  if (!response.ok) throw new Error(`reading the flow's account-memory proposals answered ${String(response.status)}`);
+  const view = v.parse(v.object({ pending: v.array(AccountMemoryProposalSchema) }), await response.json());
+
+  return view.pending.filter((row) => row.origin.workspace === workspace && row.proposal.kind === 'fact' && row.proposal.key === key);
+}
+
+/** End only this workspace's fixture proposals; the shared account's other proposals stay pending. */
+async function clearFlowMemory(target: FlowTarget, workspace: string, key: string): Promise<void> {
+  const headers = webHeaders(target.identity);
+
+  for (const proposal of await flowMemoryProposals(target, workspace, key)) {
+    const declined = await fetch(`${target.origin}/api/user/memory/proposals/${encodeURIComponent(proposal.id)}`, {
+      method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ decision: 'decline' }),
+    });
+
+    if (!declined.ok && declined.status !== 404) throw new Error(`declining the flow's proposal answered ${String(declined.status)}`);
+  }
+
+  const forgotten = await fetch(`${target.origin}/api/user/memory/facts/${encodeURIComponent(key)}`, { method: 'DELETE', headers });
+
+  if (!forgotten.ok) throw new Error(`forgetting the flow's fixture fact answered ${String(forgotten.status)}`);
+}
+
 /**
  * Row: the owner says a fact about themselves in one workspace; its agent proposes it for the account; nothing another
  * workspace reads holds it until the owner accepts it in Settings → Memory; then another workspace's agent recalls it.
@@ -973,13 +1050,20 @@ export async function accountMemoryCrossesWorkspaces(target: FlowTarget): Promis
 
     await sendAndSettle(second, ACCOUNT_RECALL_ASK);
     const before = await lastReply(second, ACCOUNT_RECALL_REPLY, RECALL_ANSWERS);
-    const settings = await openWorkspacePage(target, '/user/settings#memory');
-    const proposal = '[data-account-memory-proposal]';
+    const settings = await signedInPage(target.browser, target.identity);
 
-    await until(settings, 'the proposal in Settings → Memory', `[...document.querySelectorAll(${JSON.stringify(proposal)})].some((node) => node.textContent.includes(${JSON.stringify(ACCOUNT_FACT.key)}))`);
-    const offered = v.parse(v.string(), await settings.evaluate(`[...document.querySelectorAll(${JSON.stringify(proposal)})].find((node) => node.textContent.includes(${JSON.stringify(ACCOUNT_FACT.key)}))?.textContent ?? ''`));
+    await settings.goto(`${target.origin}/user/settings#memory`, { waitUntil: 'load' });
+    await until(settings, 'Settings → Memory loaded', `document.querySelector('[data-account-memory]') !== null`);
 
-    await settings.evaluate(`[...document.querySelectorAll(${JSON.stringify(proposal)})].find((node) => node.textContent.includes(${JSON.stringify(ACCOUNT_FACT.key)}))?.querySelector('button')?.click()`);
+    const filed = (await flowMemoryProposals(target, said, ACCOUNT_FACT.key))[0];
+
+    if (filed === undefined) throw new Error('the flow\'s workspace filed no account-memory proposal');
+    const proposal = `[data-account-memory-proposal=${JSON.stringify(filed.id)}]`;
+
+    await until(settings, 'the flow\'s proposal in Settings → Memory', `document.querySelector(${JSON.stringify(proposal)}) !== null`);
+    const offered = v.parse(v.string(), await settings.evaluate(`document.querySelector(${JSON.stringify(proposal)})?.textContent ?? ''`));
+
+    await settings.evaluate(`document.querySelector(${JSON.stringify(proposal)})?.querySelector('button')?.click()`);
     await until(settings, 'the fact kept', `document.querySelector('[data-account-memory-fact=${JSON.stringify(ACCOUNT_FACT.key)}]') !== null`);
     await sendAndSettle(second, ACCOUNT_RECALL_ASK);
     const after = await lastReply(second, ACCOUNT_RECALL_REPLY, RECALL_ANSWERS);
@@ -987,8 +1071,7 @@ export async function accountMemoryCrossesWorkspaces(target: FlowTarget): Promis
 
     return { offered, before, after, viewerStatus: viewer.status };
   } finally {
-    // The account's fact goes with the row, so a rerun proposes it afresh.
-    await fetch(`${target.origin}/api/user/memory/facts/${ACCOUNT_FACT.key}`, { method: 'DELETE', headers: webHeaders(target.identity) });
+    await clearFlowMemory(target, said, ACCOUNT_FACT.key);
     await removeFlowWorkspace(target, said);
     await removeFlowWorkspace(target, asked);
   }
@@ -1008,7 +1091,6 @@ export interface StackMemoryVerdict {
  */
 export async function accountMemoryInTheStack(target: FlowTarget): Promise<StackMemoryVerdict> {
   const workspace = await createFlowWorkspace(target, 'stack-memory');
-  const card = `[data-attention-card^="memory:"]`;
 
   try {
     const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
@@ -1018,22 +1100,27 @@ export async function accountMemoryInTheStack(target: FlowTarget): Promise<Stack
     await sendAndSettle(page, STACK_RECALL_ASK);
     const before = await lastReply(page, STACK_RECALL_REPLY, answers);
 
-    await until(page, 'the proposal in the attention stack', `[...document.querySelectorAll('[data-attention-card], [data-attention-behind]')]`
-      + `.some((node) => (node.getAttribute('data-attention-card') ?? node.getAttribute('data-attention-behind') ?? '').startsWith('memory:'))`);
+    const filed = (await flowMemoryProposals(target, workspace, STACK_FACT.key))[0];
+
+    if (filed === undefined) throw new Error('the flow\'s workspace filed no stack-memory proposal');
+    const key = `memory:${filed.id}`;
+    const card = `[data-attention-card=${JSON.stringify(key)}]`;
+    const behind = `[data-attention-behind=${JSON.stringify(key)}]`;
+
+    await until(page, 'the flow\'s proposal in the attention stack', `document.querySelector(${JSON.stringify(`${card}, ${behind}`)}) !== null`);
     // Brought to the front if anything newer waits.
-    await page.evaluate(`document.querySelector('[data-attention-behind^="memory:"]')?.click()`);
+    await page.evaluate(`document.querySelector(${JSON.stringify(behind)})?.click()`);
     await until(page, 'the proposal open', `document.querySelector(${JSON.stringify(card)}) !== null`);
     const offered = v.parse(v.string(), await page.evaluate(`document.querySelector(${JSON.stringify(card)})?.textContent ?? ''`));
 
     await page.evaluate(`[...document.querySelectorAll(${JSON.stringify(`${card} button`)})].find((button) => button.textContent?.trim() === 'Keep for every workspace')?.click()`);
-    await until(page, 'the proposal gone from the stack', `document.querySelector('[data-attention-card^="memory:"], [data-attention-behind^="memory:"]') === null`);
+    await until(page, 'the flow\'s proposal gone from the stack', `document.querySelector(${JSON.stringify(`${card}, ${behind}`)}) === null`);
     await sendAndSettle(page, STACK_RECALL_ASK);
     const after = await lastReply(page, STACK_RECALL_REPLY, answers);
 
     return { offered, before, after };
   } finally {
-    // The account's fact goes with the row, so a rerun proposes it afresh.
-    await fetch(`${target.origin}/api/user/memory/facts/${STACK_FACT.key}`, { method: 'DELETE', headers: webHeaders(target.identity) });
+    await clearFlowMemory(target, workspace, STACK_FACT.key);
     await removeFlowWorkspace(target, workspace);
   }
 }
@@ -1834,10 +1921,10 @@ function stripHas(name: string): string {
   return `document.querySelector(${JSON.stringify(`#inspector button[aria-label="${name}"]`)}) !== null`;
 }
 
-/** The Files tab has listed its directory: no "Loading…" row stands in the list. */
+/** The Files tab has listed its directory successfully: no loading row or visible listing failure. */
 const FILES_SETTLED = `(() => {
   const list = document.querySelector('[data-files-list]');
-  return list !== null && !(list.textContent ?? '').includes('Loading…');
+  return list !== null && ${FILES_FAILURE} === null && !(list.textContent ?? '').includes('Loading…');
 })()`;
 
 /** The names the Files tab lists, as its rows show them. */
@@ -1873,11 +1960,13 @@ export interface WrittenFileVerdict {
  */
 export async function writtenFileShowsInFilesAndChanges(target: FlowTarget): Promise<WrittenFileVerdict> {
   const workspace = await createFlowWorkspace(target, 'files-diffs');
+  let filesLedger: FrameLedger | null = null;
 
   try {
     const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
 
     await sendAndSettle(page, WRITE_FILE_ASK);
+    filesLedger = await frameLedger(page);
     await openInspector(page);
     await page.evaluate(stripTab('Files'));
     await until(page, "the Files tab's listing", FILES_SETTLED);
@@ -1903,10 +1992,13 @@ export async function writtenFileShowsInFilesAndChanges(target: FlowTarget): Pro
     await until(page, 'the reviewed change-set to empty', `${CHANGED_PATHS}.length === 0`);
     const afterReview = v.parse(v.array(v.string()), await page.evaluate(CHANGED_PATHS));
 
+    await filesLedger.stop();
+    filesLedger = null;
     await page.close();
 
     return { workspace, filesListed, changedPaths, afterReview };
   } finally {
+    await filesLedger?.stop();
     await removeFlowWorkspace(target, workspace);
   }
 }

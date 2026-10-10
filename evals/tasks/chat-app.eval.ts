@@ -297,6 +297,10 @@ Everything that already worked keeps working.`,
 
 await defineTaskEval(defineEvalTask({
   id: 'chat-app',
+  modelCallPeak: {
+    calls: 2,
+    source: "GitHub run37880718948 candidate chat-app-trial-2/ledger.jsonl: overlapping Muse agent/slate model_operation intervals; five retained trials, paired by runId+operationId and fenced at recorded run_end.",
+  },
   mission: "Ripple's workspace. We build the chat app our friends and family use, with our assistant, Kinu, in it.",
   parts: [build],
 }));

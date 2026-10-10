@@ -56,6 +56,8 @@ export interface ScriptedRequest {
    *  product sends in that role (dynamic context, workspace instructions, stop reminders, activated skills),
    *  so the last entry is the latest ask. */
   readonly userTexts: readonly string[];
+  /** Inputs since the last tool-less answer: simultaneous wakes and steers, without prior answered turns. */
+  readonly unansweredUserTexts: readonly string[];
   /** What the agent said, oldest first: every assistant-role message's text. */
   readonly assistantTexts: readonly string[];
   /** The system messages' text: where a workspace's mission reaches its model. */
@@ -159,10 +161,16 @@ export function readScriptedRequest(body: string): { readonly request: ScriptedR
 
   const messages = parsed.output.messages ?? [];
   const { calls, latestAsk } = callsOf(messages);
+  let unansweredFrom = 0;
+
+  for (const [index, message] of messages.entries()) {
+    if (message.role === 'assistant' && message.content && (message.tool_calls?.length ?? 0) === 0) unansweredFrom = index + 1;
+  }
 
   return {
     request: {
       userTexts: messages.flatMap((message) => isAsk(message) ? [message.content ?? ''] : []),
+      unansweredUserTexts: messages.slice(unansweredFrom).flatMap((message) => isAsk(message) ? [message.content ?? ''] : []),
       assistantTexts: messages.flatMap((message) => message.role === 'assistant' && message.content ? [message.content] : []),
       system: messages.flatMap((message) => message.role === 'system' ? [message.content ?? ''] : []).join('\n'),
       called: calls.map((call) => call.name),

@@ -1508,8 +1508,12 @@ Amended 2026-10-09: evals.yml leaves GitHub with the trials. `bun scripts/evals-
 one opencode-go key for both legs; a swarm trial holds about six), each task keeping its report and evidence as its
 own artifacts, joined per leg for the same compare, verdict, Sol diagnosis, review and results comment. armada's
 task timeout is infrastructure ceiling only (21600 s at the native job ceiling); the harness silence bound still ends a trial.
-The protocol itself has no timeout maximum. The three-container pool reserves six calls per trial (18 <= 20),
-including coding's swarm work, rather than averaging costs or hoping for a helpful queue order. The pinned
+The protocol itself has no timeout maximum. Amended after the eight-cell proof: universal six-call reservations
+kept the full run at only three trials. Each definition now records its measured peak and evidence source:
+chess/dashboards1, chat-app/office2, delegation3, coding/swarm6. Native width queues1/2/3/6 use pools9/1/1/1,
+so the full70-cell run admits12 trials and reserves9+2+3+6=20 calls across both legs. Recorded operation intervals
+are paired per run and fenced at its recorded end; missing node intervals are not manufactured. Swarm6 remains
+the owner's measured authority rather than an invented reconstruction from node call totals. The pinned
 CLI's `map --artifacts` extracts each trial's evidence; light compare/verdict/Sol steps on the driver read it.
 The deploy serializes soak before statistics so their jobs share this budget; no armada API or dependency patch is added.
 The old-shape evidence is run 37880718948: seven file workers with serial trials per file;

@@ -5,7 +5,9 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import * as v from 'valibot';
-import { EVAL_MAP_POOL, EVAL_TASK_TIMEOUT_SECONDS, evalMatrix, type EvalMatrix } from '../evals/src/config';
+import { EVAL_WIDTH_POOLS, EVAL_TASK_TIMEOUT_SECONDS, MUSE_CALLS_AT_ONCE, evalMatrix, type EvalMatrix } from '../evals/src/config';
+import { collectEvalTasks } from '../evals/src/eval';
+import type { EvalCallWidth, EvalTask } from '../evals/src/task';
 import { ARMS } from '../evals/src/target';
 import { evalTargetVerdict, evalWebIdentityEnv } from '../packages/test-utils/src/eval-identity';
 import { gitEnv } from '../packages/test-utils/src/git-env';
@@ -32,13 +34,50 @@ export function evalItems(taskFiles: readonly string[], matrix: EvalMatrix, orig
   });
 }
 
-/** Only armada's supported CLI: its one shared pool, commit checkout and per-task artifact extraction. */
-export function evalMapArgv(sha: string, out: string, identities: readonly string[]): string[] {
+export interface EvalWidthQueue {
+  readonly calls: EvalCallWidth;
+  readonly pool: number;
+  readonly cells: readonly { readonly index: number; readonly item: TrialItem }[];
+}
+
+/** Equal-width native queues reserve actual task peaks under one shared provider ceiling, across both legs. */
+export function evalWidthQueues(items: readonly TrialItem[], tasks: readonly EvalTask[]): EvalWidthQueue[] {
+  const definitions = new Map(tasks.map((task) => [task.id, task]));
+  const widths = new Map<EvalCallWidth, { index: number; item: TrialItem }[]>();
+
+  for (const [index, item] of items.entries()) {
+    const peak = definitions.get(item.task)?.modelCallPeak;
+
+    if (peak === undefined || peak.source.trim() === '' || !Object.hasOwn(EVAL_WIDTH_POOLS, peak.calls)) {
+      throw new Error(`${item.task} names no supported measured model-call peak with a source`);
+    }
+
+    const cells = widths.get(peak.calls) ?? [];
+
+    cells.push({ index, item });
+    widths.set(peak.calls, cells);
+  }
+
+  const queues = [...widths.entries()].sort(([a], [b]) => a - b).map(([calls, cells]) => {
+    const capacity = EVAL_WIDTH_POOLS[calls];
+
+    return { calls, pool: Math.min(capacity, cells.length), cells };
+  });
+
+  const reserved = queues.reduce((total, queue) => total + queue.calls * queue.pool, 0);
+
+  if (reserved > MUSE_CALLS_AT_ONCE) throw new Error(`native width queues reserve ${String(reserved)} calls, past ${String(MUSE_CALLS_AT_ONCE)}`);
+
+  return queues;
+}
+
+/** Only armada's supported CLI: a native uniform-width pool, commit checkout and per-task artifact extraction. */
+export function evalMapArgv(sha: string, out: string, identities: readonly string[], queue: Pick<EvalWidthQueue, 'calls' | 'pool'>): string[] {
   return [join(ROOT, 'node_modules', '.bin', 'armada'), 'map',
     `--connection=${join(homedir(), '.config', 'armada', 'armada-kinu.json')}`, `--commit=${sha}`,
-    '--items=-', `--pool=${String(EVAL_MAP_POOL)}`, `--timeout=${String(EVAL_TASK_TIMEOUT_SECONDS)}`,
+    '--items=-', `--pool=${String(queue.pool)}`, `--timeout=${String(EVAL_TASK_TIMEOUT_SECONDS)}`,
     `--artifacts=${join(out, 'trials')}`, `--secrets=${identities.join(',')}`, '--json',
-    `--label=evals ${sha.slice(0, 12)}`, '--', 'bun', 'evals/scripts/trial.ts'];
+    `--label=evals ${sha.slice(0, 12)} width ${String(queue.calls)}`, '--', 'bun', 'evals/scripts/trial.ts'];
 }
 
 /** The explicitly selected matrix, from the one tracked task enumeration; unknown or repeated tasks never run. */
@@ -177,6 +216,7 @@ async function main(): Promise<number> {
   const taskFiles = evalTaskFiles(allTasks, values.tasks);
 
   const items = evalItems(taskFiles, matrix, origins, values.pass);
+  const queues = evalWidthQueues(items, await collectEvalTasks());
 
   // Standalone runs need the same actual credentials/catalog as deploy --evals. Only the operator's
   // provisioning step reads the existing key file; trial containers receive identities, never Muse keys.
@@ -194,27 +234,41 @@ async function main(): Promise<number> {
   mkdirSync(out, { recursive: true });
   const startedAt = Date.now();
 
-  console.log(`evals: ${String(items.length)} trials, one shared pool of ${String(EVAL_MAP_POOL)}, native artifacts in ${join(out, 'trials')}`);
+  const pool = queues.reduce((total, queue) => total + queue.pool, 0);
+  const reserved = queues.reduce((total, queue) => total + queue.pool * queue.calls, 0);
+
+  console.log(`evals: ${String(items.length)} trials, ${String(pool)} simultaneous across ${String(queues.length)} native width queues, ${String(reserved)}/${String(MUSE_CALLS_AT_ONCE)} calls reserved`);
 
   const identities = [...new Set(origins.map(({ origin }) => evalWebIdentityEnv(origin)))];
 
-  const mapped = await mapTrials(evalMapArgv(sha, out, identities), items);
+  const mapped = await Promise.all(queues.map(async (queue) => ({ queue,
+    ...(await mapTrials(evalMapArgv(sha, join(out, `width-${String(queue.calls)}`), identities, queue), queue.cells.map(({ item }) => item))),
+  })));
+
+  const outcomes = mapped.flatMap(({ queue, outcomes: local }) => local.map((outcome) => {
+    const cell = queue.cells[outcome.index];
+
+    if (cell === undefined) throw new Error(`native width ${String(queue.calls)} returned unknown index ${String(outcome.index)}`);
+
+    return { ...outcome, index: cell.index };
+  }));
 
   const run: EvalRun = {
     definitions: sha, candidateBuild, baselineBuild, taskFiles, models: [...matrix.models], arms: [...matrix.arms],
-    trials: matrix.trials, startedAt, job: mapped.job, pool: EVAL_MAP_POOL, pass: values.pass,
+    trials: matrix.trials, startedAt, jobs: mapped.map(({ job }) => job), pool, pass: values.pass,
+    queues: mapped.map(({ job, queue }) => ({ job, calls: queue.calls, pool: queue.pool, tasks: [...new Set(queue.cells.map(({ item }) => item.task))] })),
   };
 
   writeFileSync(join(out, 'run.json'), `${JSON.stringify(run, null, 2)}\n`);
   writeFileSync(join(out, 'trial-job.json'), `${JSON.stringify(mapped, null, 2)}\n`);
 
-  if (mapped.outcomes.some((outcome) => outcome.kind === 'cancelled')) return 130;
+  if (outcomes.some((outcome) => outcome.kind === 'cancelled')) return 130;
 
-  const postExit = await processEvals(run, items, mapped.outcomes, join(out, 'evals'));
+  const postExit = await processEvals(run, items, outcomes, join(out, 'evals'));
 
   run.wallSeconds = (Date.now() - startedAt) / 1000;
   writeFileSync(join(out, 'evals', 'run.json'), `${JSON.stringify(run, null, 2)}\n`);
-  console.log(`report: ${join(out, 'evals')}; wall ${run.wallSeconds.toFixed(1)}s, pool ${String(EVAL_MAP_POOL)}, armada job ${mapped.job}`);
+  console.log(`report: ${join(out, 'evals')}; wall ${run.wallSeconds.toFixed(1)}s, ${String(pool)} simultaneous, armada jobs ${run.jobs.join(', ')}`);
 
   if (values.record) {
     const recorded = Bun.spawn([LOCAL_CHECK, process.execPath, 'scripts/promote.ts', 'evals', join(out, 'evals')],

@@ -83,12 +83,11 @@ function positiveInteger(env: Env, name: string, fallback: number): number {
  * trial accounts or running both deployments does not give their common bearer another budget. */
 export const MUSE_CALLS_AT_ONCE = 20;
 
-/** Observed trial fan-out: about one request per agent, up to six during swarm work (owner, 2026-10-09).
- * Reserve the peak for every trial, including coding's review swarm and hired agents, rather than
- * averaging task weights or relying on queue order. The map has three containers: 3 * 6 = 18 <= 20. */
-export const EVAL_TRIAL_CALLS = 6;
-
-export const EVAL_MAP_POOL = Math.floor(MUSE_CALLS_AT_ONCE / EVAL_TRIAL_CALLS);
+/** Native map pools for equal measured call widths. Their jobs include both legs and share one budget:
+ * 9*1 + 1*2 + 1*3 + 1*6 = 20 calls, 12 trials at once for the full matrix. Each task definition
+ * records its own peak and evidence; a width queue never averages peaks or relies on queue order.
+ * Static allocation approved by Main, 2026-10-09, after the retained operation-overlap measurement. */
+export const EVAL_WIDTH_POOLS = { 1: 9, 2: 1, 3: 1, 6: 1 } as const;
 
 /** Infrastructure ceiling only: armada f8725d7 worker/src/job.ts JOB_DEADLINE_MS is six hours.
  * Its protocol has no timeout maximum; do not confuse the retracted client `timeout 2400` probe
