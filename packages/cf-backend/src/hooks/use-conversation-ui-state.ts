@@ -3,15 +3,14 @@
  * stay separate per agent (never one shared state), and reset on reload.
  */
 import { useCallback, useEffect, useState } from "react";
-import type { PlanReview } from "@kinu.run/core";
-import type { ChatMode } from "@/components/Composer";
+import type { PlanReview, WorkMode } from "@kinu.run/core";
 
 /** At the live edge, 'pinned' follows new messages; offsets exclude the unloaded history prefix. */
 export type ConversationScroll = number | "pinned";
 
 interface ConversationUiEntry {
   draft: string;
-  mode: ChatMode;
+  mode: WorkMode;
   scroll: ConversationScroll;
 }
 
@@ -32,8 +31,8 @@ export interface ConversationUiState {
   draft: string;
   setDraft: (draft: string) => void;
   updateDraft: (update: (current: string) => string) => void;
-  mode: ChatMode;
-  setMode: (mode: ChatMode) => void;
+  mode: WorkMode;
+  setMode: (mode: WorkMode) => void;
   /** Read live on every render: the scroller re-arms its restore on each remount and needs the latest position. */
   savedScroll: ConversationScroll;
   /** Writes the store only; scroll is not render state. */
@@ -61,7 +60,7 @@ export function useConversationUiState(key: string): ConversationUiState {
     updateDraft(() => draft);
   }, [updateDraft]);
 
-  const setMode = useCallback((mode: ChatMode) => {
+  const setMode = useCallback((mode: WorkMode) => {
     entryFor(key).mode = mode;
     setCurrent((prev) => prev.key === key ? { ...prev, mode } : prev);
   }, [key]);

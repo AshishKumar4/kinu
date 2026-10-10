@@ -4,7 +4,7 @@
  */
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { convertFileListToFileUIParts, type FileUIPart } from "ai";
-import { dataUrlRawBytes } from "@/components/AttachmentChip";
+import { dataUrlRawBytes } from "@kinu.run/core";
 import { Cause, Effect, type Exit } from "effect";
 import { diagnostics, hold, renderThrownChain } from "@kinu.run/core/obs";
 

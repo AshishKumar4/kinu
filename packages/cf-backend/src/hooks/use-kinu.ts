@@ -56,7 +56,6 @@ import { useSocketFrames, type SocketFrame } from "./socket-frames";
 import { pruneSlateReloads } from "@kinu.run/core";
 
 
-export type { ExecutorInfo };
 
 /** `stdout`/`stderr` are clipped by the server; `*_len` are the stored lengths, so the pane
  *  can say what it withheld. */
@@ -99,7 +98,6 @@ export type ReadMoves = Readonly<Partial<Record<LiveRead, number>>>;
 
 /** Driven by steer_status broadcasts. `queued` (taken) and `landed` (model reading it) stay
  *  distinct; a `returned` steer is removed and goes back to the composer. */
-export type { InlineSteer as SteerRun } from "@kinu.run/core";
 
 export interface ForkLineage {
   sourceWorkspaceId: string;
@@ -811,8 +809,6 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
   // reconnect after the first, and `retryLoad`. Calls queue client-side while the socket is down.
   const [loadGeneration, setLoadGeneration] = useState(0);
   const failureStreak = useRef(0);
-  const snapshotLoadTaskId = useRef(0);
-  const snapshotLoadTasks = useRef(new Map<number, Promise<void>>());
 
   // `agentRef` indirection keeps the recovery callbacks stable across renders.
   const agentRef = useRef(agent);
@@ -903,9 +899,8 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let disposed = false;
-    const taskId = ++snapshotLoadTaskId.current;
-    let task: Promise<void> | null = null;
-    task = Promise.resolve().then(async () => {
+
+    detach(Effect.promise(() => Promise.resolve().then(async () => {
       try {
         if (disposed) return;
 
@@ -933,11 +928,8 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
           cause,
           otherwise: 'io',
         }));
-      } finally {
-        snapshotLoadTasks.current.delete(taskId);
       }
-    });
-    snapshotLoadTasks.current.set(taskId, task);
+    })));
 
     return () => {
       disposed = true;
@@ -1680,13 +1672,8 @@ function useWorkspaceReads(link: ChatLink) {
     refreshSlates, refreshTabPresence, rereadPlan, rpc,
   ]);
 
-  const liveRefreshTaskId = useRef(0);
-  const liveRefreshTasks = useRef(new Map<number, Promise<void>>());
-
   const rereadLive = useCallback((reads: readonly LiveRead[], also: readonly (() => Promise<void>)[] = []): void => {
-    const taskId = ++liveRefreshTaskId.current;
-
-    const task = (async () => {
+    detach(Effect.promise(async () => {
       try {
         await Promise.all([...reads.map((read) => liveReads[read]?.()), ...also.map((read) => read())]);
       } catch (cause) {
@@ -1695,12 +1682,8 @@ function useWorkspaceReads(link: ChatLink) {
           cause,
           otherwise: 'io',
         }));
-      } finally {
-        liveRefreshTasks.current.delete(taskId);
       }
-    })();
-
-    liveRefreshTasks.current.set(taskId, task);
+    }));
   }, [liveReads]);
 
   const refreshLiveData = useCallback((): void => {

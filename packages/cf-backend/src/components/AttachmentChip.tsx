@@ -1,11 +1,6 @@
 import { FileIcon, XIcon } from "@phosphor-icons/react";
 import type { FileUIPart } from "ai";
 
-/** Raw bytes a data-URL file part encodes (base64 ≈ 4/3 × raw). */
-export function dataUrlRawBytes(url: string): number {
-  return Math.floor(((url.length - url.indexOf(",") - 1) * 3) / 4);
-}
-
 export function AttachmentChip({ part, onRemove }: { part: FileUIPart; onRemove?: () => void }) {
   const name = part.filename ?? "file";
 

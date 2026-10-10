@@ -5,7 +5,8 @@ import { MemoryRouter } from 'react-router-dom';
 import type { UIMessage } from 'ai';
 import { threadLiveTail, type PlanReview } from '@kinu.run/core';
 
-import { Composer, type ChatMode } from '@/components/Composer';
+import { Composer } from '@/components/Composer';
+import type { WorkMode } from '@kinu.run/core';
 import { ChatLiveTail, MessageView } from '@/components/MessageView';
 import { ModelPicker } from '@/components/ModelPicker';
 import { PreviewChrome } from '@/components/PreviewFrame';
@@ -42,7 +43,7 @@ const NO_HEAD_ACTIVITY: ReadonlyMap<string, number> = new Map();
 interface FrameSpec {
   readonly title: string;
   readonly surface: SurfaceKind;
-  readonly mode: ChatMode;
+  readonly mode: WorkMode;
 }
 
 const FRAME = {
@@ -132,7 +133,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
   const [, setWorkVersion] = useState(0);
   const work = useMemo(() => checkoutWorkFixture(() => setWorkVersion((version) => version + 1)), []);
   const rpc = kind === 'plan' ? decidePlan : work.rpc;
-  const [mode, setMode] = useState<ChatMode>(frame.mode);
+  const [mode, setMode] = useState<WorkMode>(frame.mode);
   usePlanApprovedMode(plan, setMode);
   useEffect(() => {
     if (isMovie) setSurface(discrete.surface);

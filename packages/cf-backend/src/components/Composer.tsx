@@ -10,16 +10,14 @@ import {
   StopIcon, GitBranchIcon, ArrowBendUpRightIcon, ArrowsClockwiseIcon, ArrowUpIcon,
   WarningCircleIcon, InfoIcon, CheckCircleIcon,
 } from "@phosphor-icons/react";
-import { fmtSpan, type TurnLiveness } from "@kinu.run/core";
+import { fmtSpan, type TurnLiveness, type WorkMode } from "@kinu.run/core";
 import { AttachButton, AttachmentTray, pasteAttachments, type AttachmentsControl } from "@/components/Attachments";
 import type { WorkspaceNotice } from "@/hooks/use-kinu";
 import { composing } from "@/components/ui/form";
 
-const CHAT_MODES = ["build", "plan"] as const;
+const CHAT_MODES: readonly WorkMode[] = ["build", "plan"];
 
 const RECOVER_LABEL = { idle: "Recover", busy: "Recovering…" } as const;
-
-export type ChatMode = (typeof CHAT_MODES)[number];
 
 /** `progress` is `neutral` plus a spinner, with no tint of its own. */
 type NoticeTone = "danger" | "warning" | "info" | "success" | "neutral" | "progress";
@@ -131,14 +129,14 @@ export function workspaceLoadNotice(notice: WorkspaceNotice, onRetry: () => void
 const MODE_TITLE = {
   build: "Auto. The agent makes the change, or submits a plan first when you ask for one or the work warrants it.",
   plan: "Plan. Review a plan before anything changes.",
-} satisfies Record<ChatMode, string>;
+} satisfies Record<WorkMode, string>;
 
 /**
  * Plan is a trust boundary (the agent changes nothing until a plan is approved), so it is a two-item segment,
  * not an ambiguous toggle. The wire value for Auto stays `build`.
  */
 function ModeSegment({ value, onChange, disabled }: {
-  value: ChatMode; onChange: (mode: ChatMode) => void; disabled: boolean;
+  value: WorkMode; onChange: (mode: WorkMode) => void; disabled: boolean;
 }) {
   return (
     <div className="p-composer-mode" role="group" aria-label="Turn mode">
@@ -176,7 +174,7 @@ export interface ComposerProps {
   /** Offered only for a stranded turn. Resolves the failure reason, or null once settled; rejects on RPC failure. */
   onRecover?: () => Promise<string | null>;
   notices?: readonly ComposerNotice[];
-  mode?: { value: ChatMode; onChange: (mode: ChatMode) => void };
+  mode?: { value: WorkMode; onChange: (mode: WorkMode) => void };
   attachments?: AttachmentsControl;
   /** Passed in so the composer stays renderable without a socket. */
   modelPicker?: ReactNode;

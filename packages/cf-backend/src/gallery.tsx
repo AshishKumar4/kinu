@@ -33,7 +33,8 @@ import {
 import Sidebar from "@/components/Sidebar";
 import Layout from "@/components/layout";
 import { ModelPicker } from "@/components/ModelPicker";
-import { Composer, useProviderWaitNotice, type ChatMode, type ComposerNotice } from "@/components/Composer";
+import { Composer, useProviderWaitNotice, type ComposerNotice } from "@/components/Composer";
+import type { WorkMode } from "@kinu.run/core";
 import { WorkspaceHeader, type ChatTab } from "@/components/WorkspaceHeader";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { BranchRunChip } from "@/components/AlternateTakes";
@@ -3858,7 +3859,7 @@ const REFRESH_NOTICE: readonly ComposerNotice[] = [{
 /* The real composer over real draft/mode/model state; `notices` is a parameter so the status treatment can be reviewed. */
 function GalleryComposer({ notices = [] }: { notices?: readonly ComposerNotice[] }) {
   const [value, setValue] = useState("");
-  const [mode, setMode] = useState<ChatMode>("build");
+  const [mode, setMode] = useState<WorkMode>("build");
   const [model, setModel] = useState("anthropic/claude-opus-4");
 
   return (
@@ -4176,7 +4177,7 @@ function ChatLoadingFrame() {
 /* The real composer at reading width: at rest with a draft, mid-turn (Stop / Branch / Steer), and with a status row. */
 function ComposerFrame() {
   const [value, setValue] = useState("Ship the coupon fix behind a preview first.");
-  const [mode, setMode] = useState<ChatMode>("build");
+  const [mode, setMode] = useState<WorkMode>("build");
   const [model, setModel] = useState("anthropic/claude-opus-4");
   /* The thinking level travels with the model; the composer sizes the row, so the picker takes no width class. */
   const [effort, setEffort] = useState<ReasoningEffort | null>(null);
