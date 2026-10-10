@@ -22,6 +22,7 @@ import { standardMounts, withMountTable } from '../src/vfs/mounts';
 import { bytesToBase64 } from '../src/utils/base64';
 
 import type { JsonValue, JsonObject } from '../src/utils/json';
+import type { VfsDigestWrite } from '../src/types/primitives';
 import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { cloudPlanes } from '../src/vfs/resolve';
@@ -248,20 +249,26 @@ describe('the file tool across the /sandbox mount', () => {
 });
 
 describe('a digest-checked write to the sandbox', () => {
-	test('whose reply was lost after it landed is not reported as a change when the call is sent again', async () => {
-		const fs = new ContainerFs();
-		const box = container(fs);
-		let dropped = false;
+	const digest = (text: string): string => new Bun.CryptoHasher('sha256').update(text).digest('hex');
 
-		fs.files.set('/workspace/a.txt', new TextEncoder().encode('v1'));
+	/**
+	 * A container whose guest answers a repeated operation what it answered first, as the devbox's guest program
+	 * does, and whose first reply is lost after the guest acted; `meanwhile` runs between the two sends.
+	 */
+	function lossy(fs: ContainerFs, meanwhile: () => void) {
+		const box = container(fs);
+		const answered = new Map<string, VfsDigestWrite>();
+		const operations: string[] = [];
 
 		const handle: SandboxHandle = {
 			...box,
 			async writeFileIfDigest(path, contentBase64, expected, operation) {
-				const answer = await box.writeFileIfDigest(path, contentBase64, expected, operation);
+				operations.push(operation);
+				const answer = answered.get(operation) ?? await box.writeFileIfDigest(path, contentBase64, expected, operation);
 
-				if (dropped) return answer;
-				dropped = true;
+				if (answered.has(operation)) return answer;
+				answered.set(operation, answer);
+				meanwhile();
 
 				throw new Error('Network connection lost.');
 			},
@@ -274,9 +281,28 @@ describe('a digest-checked write to the sandbox', () => {
 			return first.status === 'fulfilled' ? first.value : call();
 		});
 
-		expect(await files.writeFileIfDigest('/workspace/a.txt', new TextEncoder().encode('v2'), sha256Hex('v1')))
-			.toEqual({ ok: true, sha256: sha256Hex('v2') });
-		expect(new TextDecoder().decode(fs.files.get('/workspace/a.txt'))).toBe('v2');
+		return { files, operations };
+	}
+
+	test('a landed write whose reply was lost stays landed, though the file moved before the resend', async () => {
+		const fs = new ContainerFs();
+		fs.files.set('/workspace/a.txt', new TextEncoder().encode('v1'));
+		const { files, operations } = lossy(fs, () => { fs.files.set('/workspace/a.txt', new TextEncoder().encode('the owner\'s save')); });
+
+		expect(await files.writeFileIfDigest('/workspace/a.txt', new TextEncoder().encode('v2'), digest('v1')))
+			.toEqual({ ok: true, sha256: digest('v2') });
+		expect(new Set(operations).size).toBe(1);
+		expect(operations).toHaveLength(2);
+	});
+
+	test('a refused write whose reply was lost stays refused, though the file holds the bytes it carried', async () => {
+		const fs = new ContainerFs();
+		fs.files.set('/workspace/a.txt', new TextEncoder().encode('v2'));
+		const { files, operations } = lossy(fs, () => {});
+
+		expect(await files.writeFileIfDigest('/workspace/a.txt', new TextEncoder().encode('v2'), digest('v1')))
+			.toEqual({ ok: false, sha256: digest('v2') });
+		expect(new Set(operations).size).toBe(1);
 	});
 });
 

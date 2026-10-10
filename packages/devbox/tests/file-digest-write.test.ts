@@ -50,3 +50,31 @@ test('with no digest it creates the file, parents too, only where none is', asyn
   expect(await settle(writeFileIfDigest({ exec: pipeExec }, { path, data: bytes('second'), expected: null, operation: randomUUID() }))).toEqual({ ok: false, sha256: sha256('first') });
   expect(readFileSync(path, 'utf8')).toBe('first');
 });
+
+test('a repeated operation is answered what its first send did: a landed write stays landed though the file moved since', async () => {
+  const path = join(root, 'landed.md');
+  const write = { path, data: bytes('the rewrite'), expected: sha256('read'), operation: randomUUID() };
+  writeFileSync(path, 'read');
+
+  const first = await settle(writeFileIfDigest({ exec: pipeExec }, write));
+
+  // Saved over after the first send landed and before its resend.
+  writeFileSync(path, 'saved by the owner');
+
+  expect(await settle(writeFileIfDigest({ exec: pipeExec }, write))).toEqual(first);
+  expect({ first, now: readFileSync(path, 'utf8') }).toEqual({ first: { ok: true, sha256: sha256('the rewrite') }, now: 'saved by the owner' });
+});
+
+test('a repeated operation is answered what its first send did: a refused write stays refused though the file now holds its bytes', async () => {
+  const path = join(root, 'refused.md');
+  // Already the bytes the write carries, but not the ones it was read as.
+  writeFileSync(path, 'the rewrite');
+  const write = { path, data: bytes('the rewrite'), expected: sha256('read'), operation: randomUUID() };
+
+  const first = await settle(writeFileIfDigest({ exec: pipeExec }, write));
+
+  writeFileSync(path, 'read');
+
+  expect(await settle(writeFileIfDigest({ exec: pipeExec }, write))).toEqual(first);
+  expect({ first, now: readFileSync(path, 'utf8') }).toEqual({ first: { ok: false, sha256: sha256('the rewrite') }, now: 'read' });
+});
