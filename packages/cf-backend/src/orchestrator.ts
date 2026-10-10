@@ -951,6 +951,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         this.config.setHoldsTurns();
         this.turnClaimChanged();
       }
+
+      // The owner's words close the questions open as the turn opens.
+      if (this.agentBound(actorId).stores.config.getHoldsQuestions() && this.questionsMayHaveMoved(actorId, event)) this.hostedQuestionsMoved();
     }
 
     await this.chatRooms.hostedRoom(actorId)?.deliver(event);
@@ -1068,6 +1071,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       retire: async (parent, retirement) => {
         const record = this.actorDirectoryStore().retained(retirement.reference.actorId);
         const own = record !== null && hostedActorPlacement(record).homeName !== null;
+        // A retired agent's questions leave the stack with it.
+        const asked = record !== null && actorReadHandle(this.boundSql, record).config.getHoldsQuestions();
 
         if (own) await this.agentTurns.beforeRetirement(record.actorId, retirement.destroy || retirement.interrupt);
 
@@ -1082,6 +1087,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         }
 
         if (own && retirement.destroy) this.dropAgentFacet(record.storageKey);
+
+        if (asked) this.hostedQuestionsMoved();
       },
     };
   }
@@ -5638,7 +5645,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** A turn moved its agent's questions if it asked, or if one was open as it ran: the owner's words close them. Unread,
    *  they may have. */
   private questionsMayHaveMoved(actorId: string, event: SessionEvent): boolean {
-    if (event.type === 'turn-end' && event.turn.toolCalls.some((call) => call.name === ASK_OWNER_TOOL)) return true;
+    if (event.type === 'turn-end' && (event.turn.askedOwner === true || event.turn.toolCalls.some((call) => call.name === ASK_OWNER_TOOL))) return true;
 
     const main = this.actorHandle().actorId;
 

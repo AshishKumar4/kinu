@@ -254,4 +254,22 @@ describe("an agent the owner added asks them on the owner's turns", () => {
     expect(resumed.after).toEqual([]);
     expect((await workspace.agent.listOwnerQuestions()).find((asking) => asking.actor === actorId)?.asked.status).toBe('answered');
   });
+
+  test("its open question stops waiting on the workspace's tile once the owner dismisses it", async () => {
+    const { gateway, sent } = asksOnce();
+    const workspace = await namedWorkspace(gateway);
+
+    await workspace.agent.setSoul('# Purpose\n\nKeep the ledger.');
+    const { subordinate } = await workspace.agent.createSubordinateAgent();
+    const actorId = subordinate.actorId ?? '';
+
+    await asPane([actorConnectionTag(actorId)], () => workspace.agent.send(TASK, crypto.randomUUID()));
+    await driveUntil(workspace, 'the agent never asked', () => sent.length >= 1);
+    await workspace.agent.harnessAgentsIdle();
+    expect((await workspace.agent.foldOverview()).decisionsWaiting).toBe(1);
+
+    await workspace.agent.dismissSubordinate(subordinate.name, false);
+
+    expect((await workspace.agent.foldOverview()).decisionsWaiting).toBe(0);
+  });
 });

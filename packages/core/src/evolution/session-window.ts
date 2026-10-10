@@ -55,6 +55,7 @@ export const CompletedTurnSchema: v.GenericSchema<CompletedTurn> = v.object({
   struggles: v.optional(v.array(StruggleSchema)),
   shownLessons: v.optional(v.array(v.object({ id: v.string(), revision: v.number() }))),
   trial: v.optional(v.object({ trialId: v.string(), segmentId: v.string(), arm: v.picklist(['candidate', 'incumbent']) })),
+  askedOwner: v.optional(v.boolean()),
 });
 
 const APPEND_SCOPE = 'turn_append';
