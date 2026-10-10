@@ -39,6 +39,8 @@ export interface ChatWire {
   admitted(id: string): Promise<boolean>;
   /** Each slate `agent.ask` reply: fed a turn's text deltas, and told when the turn ends. */
   readonly replies?: { feed(turnId: string, delta: string): void; ended(turnId: string, failure: string | null): void };
+  /** The open turn's first answer text reached the room: told once a turn, as the text streams in. */
+  firstText?(): void;
   /** Rejects when the loop refuses the message: nothing was written and no turn ran. */
   send(input: { readonly text: string; readonly files: readonly PromptFile[]; readonly id: string; readonly mode: WorkMode }): Promise<SendLanding>;
   retry(claim: (turnId: string) => void): Promise<SendLanding>;
@@ -145,6 +147,8 @@ interface LiveStream {
   broken: boolean;
   /** Why the turn failed, sent as the frame that ends it. */
   failure: string | null;
+  /** Its first answer text went out. */
+  spoke: boolean;
 }
 
 /**
@@ -496,7 +500,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
     const live: LiveStream = {
       requestId, turnId: turn.turnId, carried, messageId: turn.messageId, open: new OpenParts(), relayed: [],
-      finished: turn.finishedSteps, joined: new Set(), broken: false, failure: null,
+      finished: turn.finishedSteps, joined: new Set(), broken: false, failure: null, spoke: false,
     };
 
     this.live = live;
@@ -635,7 +639,11 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
           live.finished += 1;
         }
 
-        if (chunk.type === 'text-delta') this.wire.replies?.feed(live.turnId, chunk.delta);
+        if (chunk.type === 'text-delta') {
+          if (!live.spoke) this.wire.firstText?.();
+          live.spoke = true;
+          this.wire.replies?.feed(live.turnId, chunk.delta);
+        }
       }
     } catch (cause) {
       this.degradeRelay(live, toKinuError({

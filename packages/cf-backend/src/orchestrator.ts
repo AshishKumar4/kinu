@@ -948,24 +948,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       if (actorId === this.actorHandle().actorId) {
         this.mainChatOpenedAt = Date.now();
-        this.mainFirstTokenHeard = false;
         this.config.setHoldsTurns();
         this.turnClaimChanged();
       }
     }
 
-    if (event.type === 'text-delta' && actorId === this.actorHandle().actorId && !this.mainFirstTokenHeard) {
-      this.mainFirstTokenHeard = true;
-      this.recordMainFirstToken(this.mainChatOpenedAt);
-    }
-
     await this.chatRooms.hostedRoom(actorId)?.deliver(event);
   }
 
-  /** When main's running turn opened, as its room heard it, and whether its first token has been heard since. */
+  /** When main's running turn opened, as its room heard it. */
   private mainChatOpenedAt = 0;
-
-  private mainFirstTokenHeard = false;
 
   private async hostedTurnEnded(actorId: string, event: SessionEvent, figures: AgentFigures): Promise<void> {
     await this.hostedChatEvent(actorId, event);
@@ -2498,6 +2490,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       sendState: async (id) => await (await facet()).sendState(snapshot(), id),
       awaitSend: async (id) => await (await facet()).awaitSend(snapshot(), id),
+      // Main's text streams into its room, never through its events: its first token is heard there.
+      ...(actorId === this.actorHandle().actorId && { firstText: () => { this.recordMainFirstToken(this.mainChatOpenedAt); } }),
     };
   }
 
