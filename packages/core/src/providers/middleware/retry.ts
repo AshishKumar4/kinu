@@ -36,7 +36,7 @@ const MAX_RETRY_DELAY_MS = 60_000;
 
 /** A lane known only by looking which credential the call bills (a sole named account stands in for `main`): looked up
  *  only when a wait is declared, or when some lane under `route` is cooling, so a call costs no lookup otherwise. */
-export interface LaneLookup {
+interface LaneLookup {
   readonly route: string;
   readonly billed: () => Promise<string>;
 }

@@ -9,7 +9,7 @@ import * as v from 'valibot';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
 import { boundedInt } from '../utils/bounds';
 import { KinuError } from '../obs/error';
-import { settle } from '../obs/effect';
+import { settle, settleSync } from '../obs/effect';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { SessionTranscriptReader } from '../session/transcript';
@@ -243,20 +243,20 @@ export class ConversationSearchStore implements ConversationRecall {
     });
   }
 
-  private syncState(): SyncState {
-    const state = this.sql<SyncState>`
-      SELECT actor_id, rev, purges, synced_rev, synced_purges, synced_rowid
-      FROM conversation_fts_state WHERE actor_id = ${this.actorId}`[0];
+  private syncState(): Effect.Effect<SyncState, KinuError> {
+    return Effect.suspend(() => {
+      const state = this.sql<SyncState>`
+        SELECT actor_id, rev, purges, synced_rev, synced_purges, synced_rowid
+        FROM conversation_fts_state WHERE actor_id = ${this.actorId}`[0];
 
-    if (state === undefined) throw new KinuError('io', 'the actor transcript index lost its sync state');
-
-    return state;
+      return state === undefined ? Effect.fail(new KinuError('io', 'the actor transcript index lost its sync state')) : Effect.succeed(state);
+    });
   }
 
   private sync(): Effect.Effect<void, KinuError> {
     return Effect.gen({ self: this }, function* () {
       for (;;) {
-        const state = this.syncState();
+        const state = yield* this.syncState();
         const rebuild = state.purges !== state.synced_purges;
 
         if (!rebuild && state.rev === state.synced_rev) return;
@@ -280,7 +280,7 @@ export class ConversationSearchStore implements ConversationRecall {
 
         this.transactionSync(() => {
           this.actor.assertCurrent();
-          const current = this.syncState();
+          const current = settleSync(this.syncState());
 
           // A purge changes canonical row identities; project that new generation rather than publishing stale text.
           if (current.purges !== state.purges) return;

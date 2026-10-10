@@ -4,7 +4,7 @@ import { direntTypeOfStat } from '@nimbus-sh/core/vfs/dirent-type.js';
 
 import { Effect } from 'effect';
 import { serialQueue } from '@kinu.run/agent-utils';
-import * as v from 'valibot';
+
 import { type AgentConfigStore } from '../config/store';
 import { type Memory } from '../types/primitives';
 import { type VectorStore } from './vector-store';
@@ -15,34 +15,10 @@ import { MEMORY_DIR } from './note';
 import type { MemoryStore, NoteStamp } from "@kinu.run/agent-utils/memory";
 import { diagnostics, settle, toKinuError } from "../obs/index";
 
-const PendingVectorsSchema = v.object({
-  revision: v.number(),
-  operations: v.record(v.string(), v.object({ kind: v.picklist(['upsert', 'delete']), revision: v.number() })),
-});
-
 const mirrorLanes = new WeakMap<AgentConfigStore, ReturnType<typeof serialQueue>>();
 
-function pendingVectors(config: AgentConfigStore): v.InferOutput<typeof PendingVectorsSchema> {
-  const stored = config.get(AGENT_CONFIG_KEYS.memoryVectorPending);
-
-  return stored === null ? { revision: 0, operations: {} } : v.parse(PendingVectorsSchema, JSON.parse(stored));
-}
-
-/** Persist references before any remote call: a cooldown or lost acknowledgment cannot consume a lexical delta. */
-function rememberVectors(config: AgentConfigStore, delta: { upserted: readonly { id: string }[]; deletedIds: readonly string[] }): void {
-  if (delta.upserted.length === 0 && delta.deletedIds.length === 0) return;
-
-  const pending = pendingVectors(config);
-  pending.revision += 1;
-
-  for (const id of delta.deletedIds) pending.operations[id] = { kind: 'delete', revision: pending.revision };
-
-  for (const chunk of delta.upserted) pending.operations[chunk.id] = { kind: 'upsert', revision: pending.revision };
-
-  config.set(AGENT_CONFIG_KEYS.memoryVectorPending, JSON.stringify(pending));
-}
-
-async function flushPendingVectors(store: MemoryStore, config: AgentConfigStore, vectors: VectorStore): Promise<void> {
+/** One owned mirror lane acknowledges durable index revisions, never a user configuration update. */
+async function flushPendingVectors(store: MemoryStore, config: AgentConfigStore, vectors: VectorStore, page?: ReadonlySet<string>): Promise<void> {
   let serial = mirrorLanes.get(config);
 
   if (serial === undefined) {
@@ -51,26 +27,20 @@ async function flushPendingVectors(store: MemoryStore, config: AgentConfigStore,
   }
 
   await serial(async () => {
-    const pending = pendingVectors(config);
-    const ids = Object.keys(pending.operations);
-  
-    if (ids.length === 0) return;
-  
-    const upsert = ids.filter((id) => pending.operations[id].kind === 'upsert');
+    const pending = store.pendingProjection().filter((operation) => page === undefined || operation.kind === 'delete' || page.has(operation.id));
+    const upsert = pending.filter((operation) => operation.kind === 'upsert').map((operation) => operation.id);
+
+    if (pending.length === 0) return;
+
     const fresh = await store.chunksByIds(upsert);
     const current = new Set(fresh.map((chunk) => chunk.id));
-    const remove = ids.filter((id) => pending.operations[id].kind === 'delete' || !current.has(id));
-  
+    const remove = pending.filter((operation) => operation.kind === 'delete' || !current.has(operation.id)).map((operation) => operation.id);
+
     if (remove.length > 0) await vectors.deleteChunks(remove);
-  
+
     if (fresh.length > 0) await vectors.upsertChunks(fresh);
-  
-    const remaining = pendingVectors(config);
-  
-    // A newer operation for the same id belongs to a later flush; idempotent acknowledgments clear only this snapshot.
-    for (const id of ids) if (remaining.operations[id]?.revision === pending.operations[id].revision) delete remaining.operations[id];
-  
-    config.set(AGENT_CONFIG_KEYS.memoryVectorPending, JSON.stringify(remaining));
+
+    store.ackProjection(pending);
   });
 }
 
@@ -114,13 +84,9 @@ export function adaptMemory(
         const delta = yield* Effect.promise(() => (note === null ? store.forgetFile(path) : store.indexFile(path, note.content, note.stamp)));
 
         if (vectors === undefined) return;
-        rememberVectors(vectors.config, delta);
+        store.queueProjection(delta);
 
-        if (!vectors.store.available) {
-          invalidateSemanticIndex(vectors.config);
-
-          return;
-        }
+        if (!vectors.store.available) return;
 
         const vectorStore = vectors.store;
 
@@ -225,17 +191,20 @@ export async function backfillMemoryVectors(
 ): Promise<void> {
   if (!vectorStore.available) return;
 
-  await flushPendingVectors(store, config, vectorStore);
+  if (config.get(AGENT_CONFIG_KEYS.memoryVectorBackfillDone) === 'true') {
+    await flushPendingVectors(store, config, vectorStore);
 
-  if (config.get(AGENT_CONFIG_KEYS.memoryVectorBackfillDone) === 'true') return;
+    return;
+  }
 
   const cursor = config.get(AGENT_CONFIG_KEYS.memoryVectorBackfillCursor) ?? '';
   const page = await store.allChunksAfter(cursor, cap);
 
-  rememberVectors(config, { upserted: page.chunks, deletedIds: [] });
-  await flushPendingVectors(store, config, vectorStore);
+  store.queueProjection({ upserted: page.chunks, deletedIds: [] });
+  await flushPendingVectors(store, config, vectorStore, new Set(page.chunks.map((chunk) => chunk.id)));
 
   if (page.next === null) {
+    await flushPendingVectors(store, config, vectorStore);
     config.set(AGENT_CONFIG_KEYS.memoryVectorBackfillDone, 'true');
 
     return;

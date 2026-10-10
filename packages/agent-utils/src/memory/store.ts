@@ -44,6 +44,11 @@ export function initMemoryChunkTables(sql: SqlExecutor): void {
 		)
 	`;
 	void sql`CREATE INDEX IF NOT EXISTS idx_mc_path ON memory_note_chunks(path)`;
+	void sql`CREATE TABLE IF NOT EXISTS memory_projection_updates (
+		revision INTEGER PRIMARY KEY AUTOINCREMENT,
+		id TEXT NOT NULL UNIQUE,
+		kind TEXT NOT NULL CHECK (kind IN ('upsert', 'delete'))
+	)`;
 	void sql`
 		CREATE TABLE IF NOT EXISTS memory_note_files (
 			path  TEXT PRIMARY KEY,
@@ -163,6 +168,21 @@ export class MemoryStore {
 		}
 
 		return { upserted, deletedIds };
+	}
+
+	/** Derived-index obligations are private index state, not user-visible agent configuration. */
+	queueProjection(delta: MemoryIndexDelta): void {
+		for (const id of delta.deletedIds) void this.sql`INSERT OR REPLACE INTO memory_projection_updates (id, kind) VALUES (${id}, 'delete')`;
+
+		for (const chunk of delta.upserted) void this.sql`INSERT OR REPLACE INTO memory_projection_updates (id, kind) VALUES (${chunk.id}, 'upsert')`;
+	}
+
+	pendingProjection(): { id: string; kind: 'upsert' | 'delete'; revision: number }[] {
+		return this.sql<{ id: string; kind: 'upsert' | 'delete'; revision: number }>`SELECT id, kind, revision FROM memory_projection_updates ORDER BY revision`;
+	}
+
+	ackProjection(updates: readonly { id: string; revision: number }[]): void {
+		for (const update of updates) void this.sql`DELETE FROM memory_projection_updates WHERE id = ${update.id} AND revision = ${update.revision}`;
 	}
 
 	/** Pending semantic references are hydrated from the current note and hash, never from a queued body. */

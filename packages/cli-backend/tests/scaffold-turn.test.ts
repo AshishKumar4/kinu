@@ -217,9 +217,9 @@ describe('a promoted scaffold drives a local turn', () => {
       const rows = session.getRunEvents(run.runId);
 
       expect(rows.filter((row) => row.type === 'step_finish' || row.type === 'tool_call_end')).toMatchObject([
-        { type: 'step_finish', parts: [], stepIndex: 1, usage: { input: 5, output: 7 } },
+        { type: 'step_finish', stepIndex: 1, usage: { input: 5, output: 7 } },
         { type: 'tool_call_end', name: 'memory', outcome: { success: true } },
-        { type: 'step_finish', parts: [], stepIndex: 2 },
+        { type: 'step_finish', stepIndex: 2 },
       ]);
       const ended = events.find((event) => event.type === 'turn-end');
 

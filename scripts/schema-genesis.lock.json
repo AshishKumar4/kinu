@@ -898,6 +898,11 @@
     "path TEXT PRIMARY KEY",
     "stamp TEXT"
   ],
+  "memory_projection_updates@packages/agent-utils/src/memory/store.ts": [
+    "revision INTEGER PRIMARY KEY AUTOINCREMENT",
+    "id TEXT NOT NULL UNIQUE",
+    "kind TEXT NOT NULL CHECK (kind IN ('upsert', 'delete'))"
+  ],
   "mission_budget@packages/core/src/mission-budget.ts": [
     "actor_id TEXT NOT NULL",
     "label TEXT NOT NULL",
