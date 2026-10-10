@@ -4,11 +4,12 @@ import type { VFS, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus, PortExposureResult, PreviewRouteCheck, SandboxSize, SandboxSizes } from './types';
+import { ExecutorPortSchema } from './types';
 import { callJob, createShellSession, machineShellCall, reportsCwd, shellExecOptions, type MachineShells } from './shell-session';
 import type { OutputSink } from '../types/primitives';
 import { JOB_STAMP_ENV } from '../types/jobs';
 import { commandResult, commandResultAt, exposedPortText, type CommandResult } from './exec-result';
-import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, settle, tolerateAsync, toKinuError, type Refusal } from '../obs/index';
+import { classifyErrorCode, KinuError, refusalOf, renderThrownChain, settle, tolerateAsync, toKinuError, type Refusal } from '../obs/index';
 import { isVfsError, isVfsErrorCode, syscallError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { shellQuote } from '../utils/shell';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
@@ -17,22 +18,6 @@ import { direntType } from '../vfs/dirent';
 
 /** The container's working directory and default cwd; declared here because core must not depend on @kinu.run/devbox. */
 export const WORKSPACE_BACKUP_DIR = '/workspace';
-
-/** Any HTTP answer counts, even 4xx/5xx; curl exit 7 is a refused connection. */
-function healthProbeCommand(port: number): string {
-  return `curl -sS -o /dev/null -m 3 -w '%{http_code}|%{exitcode}' --connect-timeout 2 `
-    + `--head http://127.0.0.1:${port}/ 2>&1 || true`;
-}
-
-/** An unparsable answer is not evidence of a listener; exposing on that guess yields a URL that 502s. */
-function healthProbeSilent(output: string): boolean {
-  const [codeStr, exitStr] = output.trim().split('|');
-
-  if (exitStr !== undefined && parseInt(exitStr, 10) === 7) return true;
-  const code = codeStr === undefined ? Number.NaN : parseInt(codeStr, 10);
-
-  return !Number.isFinite(code) || code === 0;
-}
 
 interface SandboxExposeOptions {
   hostname: string;
@@ -101,6 +86,8 @@ export interface SandboxHandle {
   }>>;
   /** Asked before the first exposure: restarts re-expose with the stored token, so the first URL must use it too. */
   portToken(port: number, name?: string): Promise<{ urlToken: string }>;
+  /** Required native HTTP listener proof. A transport failure throws rather than answering false. */
+  probePort(port: number): Promise<boolean>;
   /** `stamp` read up holders' ancestry; null while down (never starts it). */
   portListeners(stamp: string, ports?: readonly number[]): Promise<readonly SandboxPortListener[] | null>;
   notePortRemoved(port: number): Promise<void>;
@@ -210,8 +197,6 @@ const ListOptionsSchema = v.optional(v.object({ path: v.optional(v.string()) }),
 
 const ExposeOptionsSchema = v.optional(v.object({ name: v.optional(v.string()) }), {});
 
-const PortSchema = v.pipe(v.number(), v.minValue(1), v.maxValue(65535));
-
 export function isSandboxTransientError(error: Error | string): boolean {
   const msg = (error instanceof Error ? error.message : error).toLowerCase();
 
@@ -308,31 +293,11 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
     return fn();
   };
 
-  /** `unprobeable` is not evidence either way; each caller decides what it means. */
-  const probeListener = async (
-    box: SandboxHandle, port: number,
-  ): Promise<{ listening: boolean } | { unprobeable: unknown }> => {
-    try {
-      const probe = await withSandboxRetry(() => touch(() =>
-        box.exec(healthProbeCommand(port), { cwd: WORKSPACE_BACKUP_DIR })));
-
-      const out = (probe.stdout ?? probe.output ?? '').toString().trim();
-
-      return { listening: !healthProbeSilent(out) };
-    } catch (cause) {
-      return { unprobeable: cause };
-    }
-  };
-
-  /** The one exposure path. A probe that cannot run is stepped over: the exposure reports its own error. */
+  /** One exposure path: Devbox owns listener proof; a failed probe is a real failure, never evidence of absence. */
   const exposeOn = async (box: SandboxHandle, suffix: string, port: number, name?: string): Promise<PortExposureResult> => {
-    const probe = await probeListener(box, port);
+    const listening = await withSandboxRetry(() => touch(() => box.probePort(port)));
 
-    if ('unprobeable' in probe) {
-      diagnostics.failure('sandbox.port_probe_failed', toKinuError({
-        doing: 'probe a sandbox port before exposing it', cause: probe.unprobeable, otherwise: 'unavailable',
-      }), { port });
-    } else if (!probe.listening) {
+    if (!listening) {
       return {
         supported: false,
         reason: `nothing is listening on port ${port} inside the sandbox. `
@@ -495,7 +460,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
         if (!handle) return notConfigured();
 
         if (!previewHostSuffix) return previewsUnconfigured();
-        const p = parseInput(PortSchema, { value: args[0] });
+        const p = parseInput(ExecutorPortSchema, { value: args[0] });
         const name = parseInput(ExposeOptionsSchema, { value: args[1] })?.name;
 
         if (p === undefined) {
@@ -518,7 +483,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
       description: 'Stop exposing a port.',
       execute: async (...args: unknown[]): Promise<string | Refusal> => {
         if (!handle) return notConfigured();
-        const port = parseInput(PortSchema, { value: args[0] });
+        const port = parseInput(ExecutorPortSchema, { value: args[0] });
 
         if (port === undefined) {
           return refusalOf(new KinuError('bad_input', `sandbox unexposePort: invalid port ${String(args[0])}`));
@@ -711,8 +676,8 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
 
       if (!previewHostSuffix) return { supported: false, reason: PREVIEWS_NOT_CONFIGURED };
 
-      if (!Number.isFinite(port) || port <= 0 || port > 65535) {
-        return { supported: false, reason: `invalid port ${port}` };
+      if (!v.is(ExecutorPortSchema, port)) {
+        return { supported: false, reason: `invalid port ${String(port)}` };
       }
 
       try {
@@ -724,6 +689,8 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
 
     async unexposePort(port) {
       if (!handle) return;
+
+      if (!v.is(ExecutorPortSchema, port)) throw new KinuError('bad_input', `invalid port ${String(port)}`);
       // No catch: unexposing an unexposed port already succeeds; other errors must surface.
       await withSandboxRetry(() => touch(() => Promise.resolve(handle.unexposePort(Number(port)))));
     },

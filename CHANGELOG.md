@@ -25,6 +25,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **Sandbox exposures use one native listener proof and integer ports.** Initial exposure and Devbox restore share the same listener command/parser; core calls the required Devbox proof instead of copying curl logic or treating a disconnected probe as an empty listener. Codemode and direct exposure/withdrawal use one integer-port contract.
 - **Boot repair does not parse its own explanation.** Restoration retains the boot stamp's typed obligation and missing-workload list. Same-container repair reads the obligation directly; readiness text is generated only when shown, so changing its wording cannot silently skip repair.
 - **Concurrent supervised starts keep one process.** Devbox reserves the command and working directory as one resource before reading or writing its durable spec and starting the native process. Re-issued or overlapping starts share the same id; different working directories remain distinct.
 - **A failed Files listing ends its product flow with evidence.** A visible listing error cannot count as settled, even when directory markup is present. The written-file row retains the listing RPC reply and its arguments alongside the visible error and navigation state in its failure report, with secrets redacted.

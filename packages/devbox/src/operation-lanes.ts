@@ -168,7 +168,7 @@ export function canonicalPath(path: string): string {
 /** A supervised launch owns command/cwd before it has a native process id. Encode the tuple as one
  * path component so command text or cwd separators cannot change the resource's identity. */
 export function supervisedScope(command: string, cwd: string): readonly ResourceScope[] {
-  return [{ path: `supervised:${encodeURIComponent(JSON.stringify([command, cwd]))}` }];
+  return [{ path: `supervised:${encodeURIComponent(JSON.stringify([command, cwd]))}`, subtree: false }];
 }
 
 interface CheckpointLane {

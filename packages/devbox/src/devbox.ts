@@ -24,6 +24,7 @@ import { Deferred, Effect, Result } from 'effect';
 import {
   DEFAULT_DEVBOX_POLICY,
   generatePortToken,
+  healthProbeCommand,
   healthProbeSilent,
   describeThrown as describe,
   type LateStartFailure,
@@ -1825,6 +1826,15 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       return await this.#execute(command, { cwd: DEVBOX_WORKDIR, ...options });
     })));
+  }
+
+  /** The same native listener command/parser used during restore; core receives evidence, not a curl protocol. */
+  async probePort(port: number): Promise<boolean> {
+    if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new DevboxError('invalid-input', `invalid port ${String(port)}`);
+
+    const answer = await this.exec(healthProbeCommand(port), { cwd: DEVBOX_WORKDIR });
+
+    return !healthProbeSilent(answer.stdout);
   }
 
   /** No deadline; the SDK's process lane lost output (D37). */
