@@ -111,14 +111,23 @@ export function writeConditionally(
     else if (observed.kind === 'revision') revision = observed.revision;
     else if (observed.kind === 'digest') [revision, digest] = [undefined, observed.sha256];
 
-    const byRevisionRead = revision === undefined ? null : yield* byRevision(vfs, path, data, revision);
+    // A file read with its revision is checked by it; a file read without one, or none at all, by its bytes first,
+    // which every plane but the versioned store checks, and an absence by revision 0 where only that store does.
+    if (revision !== undefined && observed.kind !== 'absent') {
+      const byRevisionRead = yield* byRevision(vfs, path, data, revision);
 
-    if (byRevisionRead !== null) return byRevisionRead;
+      if (byRevisionRead !== null) return byRevisionRead;
 
-    // A revision alone names no bytes to compare.
-    if (observed.kind === 'revision') return yield* Effect.fail(UNSUPPORTED(path));
+      // A revision alone names no bytes to compare.
+      if (observed.kind === 'revision') return yield* Effect.fail(UNSUPPORTED(path));
+    }
+
     const byDigestRead = yield* byDigest(vfs, path, data, digest);
 
-    return byDigestRead ?? (yield* Effect.fail(UNSUPPORTED(path)));
+    if (byDigestRead !== null) return byDigestRead;
+
+    const absentByRevision = observed.kind === 'absent' ? yield* byRevision(vfs, path, data, ABSENT_REVISION) : null;
+
+    return absentByRevision ?? (yield* Effect.fail(UNSUPPORTED(path)));
   }));
 }

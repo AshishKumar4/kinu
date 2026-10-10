@@ -230,9 +230,11 @@ function fileOps(deps: FileDeps) {
 
   /** The file as it is now, with the revision that names it where the plane versions its files; absent, none. */
   const readObserved = async (path: string, revision?: VfsRevision): Promise<{ readonly text: string | null; readonly observed: ObservedFile }> => {
+    // The revision read before the bytes: a write between the two is refused by the plane's own check, not lost.
     const at = revision ?? (await vfs.stat(path))?.revision;
+    const historical = revision === undefined ? undefined : vfs.readFileAtRevision?.bind(vfs);
 
-    const load = async () => (at !== undefined && vfs.readFileAtRevision ? await vfs.readFileAtRevision(path, at) : await vfs.readFile(path));
+    const load = async () => (historical !== undefined && revision !== undefined ? await historical(path, revision) : await vfs.readFile(path));
     // A file the agent read and is gone now is a change, not an absence to create into.
     const bytes = revision === undefined ? await tolerateAsync(load, 'enoent') : await load();
 

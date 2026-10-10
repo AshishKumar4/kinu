@@ -112,7 +112,6 @@ function afterSeed(workspace: WorkspaceBundle, seed: () => Promise<void>): VFS &
     unlink: chain((p: string) => vfs.unlink(p)),
     mkdir: chain((p: string, o?: { recursive?: boolean }) => vfs.mkdir(p, o)),
     // The workspace store versions its files, as production's does: an overwrite is checked against the revision read.
-    readFileAtRevision: chain(async (p: string, r: VfsRevision) => (await workspace.namespace()).readFileAtRevision(at(p), r)),
     writeFileIfRevision: chain(async (p: string, d: Uint8Array, r: VfsRevision) => (await workspace.namespace()).writeFileIfRevision(at(p), d, r)),
   };
 }
