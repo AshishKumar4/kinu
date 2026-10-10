@@ -16,7 +16,8 @@ import {
   ArchiveCursorSchema,
 } from "@kinu.run/core";
 import { executorLabel } from "@kinu.run/core";
-import type { AgentStatus, ConnectionStatus, WorkspaceNotice } from "@/hooks/use-kinu";
+import type { AgentStatus, ConnectionStatus } from "@/hooks/use-kinu";
+import type { WorkspaceNotice } from "@/hooks/workspace-reads";
 import { WorkspaceAutomations } from "@/components/WorkspaceAutomations";
 import { Card, Field, composing, inputCls } from "@/components/ui/form";
 import { CopyButton } from "@/components/ui/CopyButton";

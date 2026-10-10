@@ -16,7 +16,8 @@ import {
 import type { AlternateTakeSet, DiffAnchor, FileRestoreChange, PlanReview, Rpc, SignalCard, TakePickOutcome } from "@kinu.run/core";
 import type { UIMessage } from "ai";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
-import { useActorChat, useKinu, type WorkspaceNotice } from "@/hooks/use-kinu";
+import { useActorChat, useKinu } from "@/hooks/use-kinu";
+import type { WorkspaceNotice } from "@/hooks/workspace-reads";
 import { useAutogrow } from "@/hooks/use-autogrow";
 import { useChatThread } from "@/hooks/use-chat-thread";
 import { useConversationUiState, usePlanApprovedMode } from "@/hooks/use-conversation-ui-state";
