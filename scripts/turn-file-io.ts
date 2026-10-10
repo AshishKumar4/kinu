@@ -45,23 +45,6 @@ const TargetsSchema = v.array(v.object({ id: v.string(), webSocketDebuggerUrl: v
 
 const CutSchema = v.object({ workspace: SliceSchema, facet: v.nullable(SliceSchema) });
 
-const TraceSchema = v.object({
-  entrypoint: v.nullable(v.string()), object: v.nullable(v.string()), cpuMs: v.number(), wallMs: v.number(), outcome: v.string(),
-  script: v.nullable(v.string()), event: v.nullable(v.looseObject({ rpcMethod: v.optional(v.string()), rpcMethods: v.optional(v.array(v.string())) })),
-});
-
-const traceRows: v.InferOutput<typeof TraceSchema>[] = [];
-
-const traceWaiters: { count: number; done: () => void }[] = [];
-
-async function tailSettled(count: number): Promise<void> {
-  if (traceRows.length >= count) return;
-  const waiting = Promise.withResolvers<void>();
-
-  traceWaiters.push({ count, done: waiting.resolve });
-  await waiting.promise;
-}
-
 type Cut = v.InferOutput<typeof CutSchema>;
 
 interface StepMeasurement { readonly label: string; readonly wallMs: number; readonly cpuMs: number }
@@ -317,11 +300,7 @@ const product = {
 const mf = new Miniflare(convertV4MiniflareOptions({
   inspectorPort,
   handleStructuredLogs: ({ level, message }) => { if (level === 'error') process.stderr.write(message + '\n'); },
-  workers: [{
-    ...product,
-    tails: mode === 'tail' ? ['perf-tail'] : [],
-    serviceBindings: mode === 'tail' ? { PERF_TAIL: 'perf-tail' } : {},
-  }, {
+  workers: [product, {
     name: 'driver', ...compat,
     modules: [{ type: 'ESModule', path: join(dist, 'perf-driver.js'), contents: await bundle('driver.ts') }],
     bindings: { OWNER_TOKEN: owner.ownerToken },
@@ -330,19 +309,6 @@ const mf = new Miniflare(convertV4MiniflareOptions({
       OrchestratorAgent: { className: 'OrchestratorAgent', scriptName: 'kinu', useSQLite: true },
       UserDO: { className: 'UserDO', scriptName: 'kinu', useSQLite: true },
     },
-  }, {
-    name: 'perf-tail', ...compat, modules: [{ type: 'ESModule', path: join(dist, 'perf-tail.js'), contents: await bundle('tail.ts') }],
-    serviceBindings: { SINK: async (request: Request) => {
-      const events = v.parse(v.array(TraceSchema), await request.json());
-      traceRows.push(...events.filter((event) => event.event?.rpcMethod === 'perfTool' || event.event?.rpcMethods?.includes('perfTool')));
-
-      for (const waiter of traceWaiters.filter((entry) => entry.count <= traceRows.length)) {
-        traceWaiters.splice(traceWaiters.indexOf(waiter), 1);
-        waiter.done();
-      }
-
-      return new Response(null, { status: 204 });
-    } },
   }],
 }));
 
@@ -426,13 +392,7 @@ try {
 
   if (subject === 'files') {
     await ask('/seed');
-    let toolCalls = 0;
-
-    const invoke = async (name: string, input: JsonObject) => {
-      toolCalls++;
-
-      return await ask(`/tool?name=${name}`, input);
-    };
+    const invoke = async (name: string, input: JsonObject) => await ask(`/tool?name=${name}`, input);
 
     const fileResults: object[] = [];
 
@@ -440,30 +400,22 @@ try {
       await prepare?.();
       await operation(-1);
 
-      if (mode === 'tail') await tailSettled(toolCalls);
       const walls: number[] = [];
       const cpus: number[] = [];
-      const runtimeCpus: number[] = [];
 
       for (let index = 0; index < samples; index++) {
         await prepare?.();
 
-        if (mode === 'tail') await tailSettled(toolCalls);
-        const traceAt = traceRows.length;
         const before = cpu(pid);
         const started = performance.now();
         await operation(index);
         walls.push(performance.now() - started);
         cpus.push(cpu(pid) - before);
 
-        if (mode === 'tail') {
-          await tailSettled(toolCalls);
-          runtimeCpus.push(traceRows.slice(traceAt).reduce((sum, trace) => sum + trace.cpuMs, 0));
-        }
       }
 
       const quantile = (values: number[], p: number) => [...values].sort((a, b) => a - b)[Math.ceil(values.length * p) - 1];
-      const result = { label, samples, wallP50Ms: quantile(walls, 0.5), wallP95Ms: quantile(walls, 0.95), cpuP50Ms: quantile(cpus, 0.5), cpuP95Ms: quantile(cpus, 0.95), cpuMeanMs: cpus.reduce((a, b) => a + b, 0) / samples, runtimeCpuP50Ms: quantile(runtimeCpus, 0.5), runtimeCpuP95Ms: quantile(runtimeCpus, 0.95) };
+      const result = { label, samples, wallP50Ms: quantile(walls, 0.5), wallP95Ms: quantile(walls, 0.95), cpuP50Ms: quantile(cpus, 0.5), cpuP95Ms: quantile(cpus, 0.95), cpuMeanMs: cpus.reduce((a, b) => a + b, 0) / samples };
       fileResults.push(result);
       process.stdout.write(JSON.stringify({ event: 'file', sha, ...result }) + '\n');
     };

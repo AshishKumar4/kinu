@@ -44,8 +44,6 @@ function countedSession(returned: HostedSession, meter: Meter): HostedSession {
   return returned;
 }
 
-const FetcherSchema = v.custom<Fetcher>((value) => typeof value === 'object' && value !== null && 'fetch' in value && typeof value.fetch === 'function');
-
 instrument(Relay.prototype, 'relay', (receiver) => relayMeters.get(receiver), { internal: ['host', 'owned'] });
 
 export class AgentWorkspaceRPC extends Relay {
@@ -65,14 +63,6 @@ export class OrchestratorAgent extends Product {
 
   constructor(...args: ConstructorParameters<typeof Product>) {
     super(...args);
-    const tail = v.safeParse(v.object({ PERF_TAIL: FetcherSchema }), this.env);
-
-    if (tail.success) {
-      const loader = this.env.LOADER;
-      const original = loader.get.bind(loader);
-      loader.get = (name, load) => original(name, async () => ({ ...await load(), tails: [tail.output.PERF_TAIL] }));
-    }
-
     this.perfMeter = new Meter(this.ctx.storage.sql);
     meters.set(this.ctx.id.toString(), this.perfMeter);
 
