@@ -3,7 +3,6 @@
 import { AwaitedList, awaitExit, killAndAwaitExit, recordedIn, runToExit } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { hostname } from 'node:os';
 
 import { join, resolve } from 'node:path';
 import type { Server, Subprocess } from 'bun';
@@ -280,8 +279,10 @@ describe('device-connect prompt policy', () => {
   });
 
   test('THIS machine connected suppresses the offer without re-fetching', async () => {
-    const stub = startStubCloud({ devices: () => [connectedDevice(true, { hostname: hostname() })] });
+    // This machine is the device its device.json names, whatever its hostname.
+    const stub = startStubCloud({ devices: () => [connectedDevice(true, { id: 'dev_this', hostname: 'renamed-box' })] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', device: 'dev_this', token: 'pdt_this', origin: stub.origin }));
 
     const out = await runScript(home, `
       import { shouldOfferDeviceConnect } from './packages/cli/src/device-connect.ts';
