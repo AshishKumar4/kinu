@@ -1066,7 +1066,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     console.log(`[devbox] attach ${outcome.kind}: ${outcome.detail}`);
     // Boot proof and durable settlement still need their shares after services.
     steps.declare(2);
-    const restored = await this.#restartWorkloads(generation, steps);
+    const restored = await this.#restartWorkloads(generation, steps, 'startup');
 
     if (!this.#owns(generation)) return;
 
@@ -1309,7 +1309,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     const steps = racedRestoreSteps(openStartBudget(this.policy.attachBudgetMs, this.startClock));
     steps.declare(2);
-    const restored = await this.#restartWorkloads(generation, steps);
+    const restored = await this.#restartWorkloads(generation, steps, 'repair');
 
     if (!this.#owns(generation)) return;
 
@@ -1502,7 +1502,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /** A port is exposed only once its listener answers; each failure is recorded and the phase continues. */
-  async #restartWorkloads(generation: number, steps: RestoreSteps): Promise<readonly string[]> {
+  async #restartWorkloads(generation: number, steps: RestoreSteps, authority: 'startup' | 'repair'): Promise<readonly string[]> {
     const [processes, ports] = await Promise.all([this.#procSpecs(), this.#portSpecs()]);
     const plan = restartPlan(processes, ports);
     // Every step is declared; the caller declares the boot stamp. Each allowance divides by the
@@ -1516,21 +1516,37 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     for (const spec of plan.start) {
       if (!this.#owns(generation)) return superseded;
 
-      // `super`, not the public override: that waits on `ensureReady()` and claims a lane, so the
-      // restoration would wait for itself and could take a lane a gate-blocked caller holds.
+      const restartOwned = async () => {
+        if (!this.#owns(generation)) return undefined;
+
+        if (authority === 'repair') {
+          const owner = await this.ctx.storage.get<SupervisedProcessSpec>(`${PROC_SPEC_PREFIX}${spec.processId}`);
+
+          // A withdrawn or replaced request is not a failed service: this stale plan no longer owns it.
+          if (!this.#owns(generation) || owner === undefined || owner.command !== spec.command
+            || (owner.cwd ?? DEVBOX_WORKDIR) !== (spec.cwd ?? DEVBOX_WORKDIR)
+            || owner.createdAt !== spec.createdAt) return undefined;
+        }
+
+        const existing = await this.#processes().get(spec.processId);
+
+        if (!this.#owns(generation)) return undefined;
+
+        if (existing !== null && isProcessLive(existing.status)) return existing;
+
+        return await this.#processes().start(spec.command, {
+          cwd: spec.cwd ?? DEVBOX_WORKDIR,
+          processId: spec.processId,
+        });
+      };
+
+      // Startup owns the readiness fence and must not wait on callers holding resource scopes while
+      // they wait for startup. Repair admits callers: share their atomic reservation, without
+      // recursively entering public readiness, and recheck the snapshot inside that authority.
       const started = await steps.run(
-        async () => {
-          // The walk is re-runnable (`attachNow()` repairs an incomplete restore), so a live process
-          // under the id is reused: a second start would put two processes on one port.
-          const existing = await this.#processes().get(spec.processId);
-
-          if (existing !== null && isProcessLive(existing.status)) return existing;
-
-          return await this.#processes().start(spec.command, {
-            cwd: spec.cwd ?? DEVBOX_WORKDIR,
-            processId: spec.processId,
-          });
-        },
+        authority === 'startup' ? restartOwned : () => this.#resources.run([
+          ...processScope(spec.processId), ...supervisedScope(spec.command, spec.cwd ?? DEVBOX_WORKDIR),
+        ], restartOwned),
         logLate(`process ${spec.processId}`),
       );
 
