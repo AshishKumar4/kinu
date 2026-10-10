@@ -177,6 +177,6 @@ describe('a program reaches another plane\'s files', () => {
   test('and a secret on the machine is refused there as the file tool refuses it', async () => {
     const { readFile } = fileToolOverTheFleet({ success: true }, true, DENY_ALL);
 
-    expect(JSON.stringify(await readFile('/pc/ashish@studio/home/.env'))).toContain('denied');
+    await expect(readFile('/pc/ashish@studio/home/.env')).rejects.toMatchObject({ code: 'denied' });
   });
 });

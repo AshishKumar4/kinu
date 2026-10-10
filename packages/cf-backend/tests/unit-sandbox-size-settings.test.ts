@@ -2,6 +2,9 @@
 // takes only a size the table names, the words the Environment card and User settings show for it, and
 // `sandbox.resize` through the adapter.
 import './helpers/ui-module-globals';
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
+import { present } from '@kinu.run/test-utils';
+import { renderThrownChain } from '@kinu.run/core/obs';
 import { describe, expect, test } from 'bun:test';
 import { createSandboxExecutor } from '@kinu.run/core';
 import { DevboxError } from '@kinu.run/devbox';
@@ -146,13 +149,17 @@ describe('sandbox.resize through the adapter', () => {
       },
     });
 
-    const refused = await createSandboxExecutor(adaptCloudflareSandbox(box, async () => {}, null)).tools.readFile?.execute('/workspace/a.txt');
+    const files = present(createSandboxExecutor(adaptCloudflareSandbox(box, async () => {}, null)).files, 'the sandbox\'s files');
+    let refused: string | null = null;
 
-    // toEqual, not toMatchObject: under --parallel, Bun's toMatchObject writes a nested asymmetric matcher into the
-    // actual value (measured 2026-10-09, armada), so the reads after it saw no text.
-    expect({ refused, asked }).toEqual({ refused: { reason: 'unavailable', error: expect.stringContaining(refusal) }, asked: 1 });
-    expect(refused).toEqual({ reason: 'unavailable', error: expect.stringContaining('sandbox.resize(') });
-    expect(refused).not.toEqual({ reason: 'unavailable', error: expect.stringContaining('attachNow') });
+    try {
+      await readText(files, '/workspace/a.txt');
+    } catch (cause) {
+      refused = renderThrownChain({ cause });
+    }
+
+    expect({ asked, refusal: refused?.includes(refusal), resize: refused?.includes('sandbox.resize('), attachNow: refused?.includes('attachNow') })
+      .toEqual({ asked: 1, refusal: true, resize: true, attachNow: false });
   });
 
   test('a size devbox does not know is refused as bad input', async () => {

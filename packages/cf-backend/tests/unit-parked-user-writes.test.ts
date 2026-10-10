@@ -81,7 +81,8 @@ async function workspaceWithMachine() {
   const runtime = main.actor.runtime;
   await present(runtime.deviceTransport, 'the device transport').refreshStatus();
   const file = toolExecute(present(buildBuiltinTools({ rt: runtime, workMode: 'build', conversations: new ConversationSearchStore(runtime.storage.sql, runtime.actor, (sessionId) => main.actor.stores.history.transcript(sessionId)) }).file, 'the file tool'));
-  const device = present(runtime.executionRouter?.getProvider('device'), 'the device executor').tools;
+  // A program reaches the machine's files as the file tool does, through the workspace's own, under /pc.
+  const workspaceFiles = present(runtime.executionRouter?.getProvider('workspace'), 'the workspace executor').tools;
 
   const parked = async () => {
     const rows = await workspace.agent.listDeferredApprovals();
@@ -101,7 +102,7 @@ async function workspaceWithMachine() {
     return workspace.agent.reviewParkedWrite(present(row, 'a parked row').id);
   };
 
-  return { machine, file, device, parked, decide, review, agent: workspace.agent };
+  return { machine, file, workspaceFiles, parked, decide, review, agent: workspace.agent };
 }
 
 const QUEUED = { code: 'unavailable', message: expect.stringContaining('queued for owner approval') };
@@ -109,10 +110,10 @@ const QUEUED = { code: 'unavailable', message: expect.stringContaining('queued f
 const digest = (text: string): string => new Bun.CryptoHasher('sha256').update(text).digest('hex');
 
 test('a new file on the user\u2019s machine needs no approval', async () => {
-  const { machine, file, device, parked } = await workspaceWithMachine();
+  const { machine, file, workspaceFiles, parked } = await workspaceWithMachine();
 
   expect(await file({ op: 'write', path: `${PC}${DEVICE_HOME}/new.md`, content: 'from the file tool\n' })).toMatchObject({ action: 'created' });
-  expect(await device.writeFile?.execute(`${DEVICE_HOME}/other.md`, 'from codemode\n')).toBe(`Written 14 bytes to ${DEVICE_HOME}/other.md`);
+  expect(await workspaceFiles.writeFile?.execute(`${PC}${DEVICE_HOME}/other.md`, 'from codemode\n')).toContain('Written 14 bytes');
 
   expect(machine.get(`${DEVICE_HOME}/new.md`)).toBe('from the file tool\n');
   expect(machine.get(`${DEVICE_HOME}/other.md`)).toBe('from codemode\n');
@@ -160,10 +161,13 @@ test('"always" writes the parked bytes and lets the next overwrite run unasked',
   expect(await parked()).toEqual([]);
 });
 
-test('codemode\u2019s device.writeFile over the user\u2019s file parks as the /pc write does', async () => {
-  const { machine, device, parked, decide } = await workspaceWithMachine();
+test('codemode\u2019s writeFile over the user\u2019s file is refused unread, then parks as the file tool\u2019s write does', async () => {
+  const { machine, workspaceFiles, parked, decide } = await workspaceWithMachine();
+  const write = async () => await workspaceFiles.writeFile?.execute(`${PC}${NOTES}`, 'from codemode\n');
 
-  expect(await device.writeFile?.execute(NOTES, 'from codemode\n')).toMatchObject({ error: expect.stringContaining('queued for owner approval') });
+  expect(JSON.stringify(await write())).toContain('has not been read here yet');
+  await workspaceFiles.readFile?.execute(`${PC}${NOTES}`);
+  expect(JSON.stringify(await write())).toContain('queued for owner approval');
   expect(await parked()).toEqual([`file write ${PC}${NOTES} sha256:${digest('from codemode\n')} over sha256:${digest(OWNERS)}`]);
   expect(machine.get(NOTES)).toBe(OWNERS);
 

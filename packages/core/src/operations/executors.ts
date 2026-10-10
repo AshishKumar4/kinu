@@ -88,7 +88,8 @@ export const WORKSPACE = {
 
 const sb = executorOp('sandbox');
 
-/** The sandbox container's members; `resize` is declared over the host's own size table. */
+/** The sandbox container's members; `resize` is declared over the host's own size table. Its files are read and
+ *  written through the workspace's, under `/sandbox`, as every plane's are. */
 export const SANDBOX = {
   exec: sb({
     name: 'exec', impact: 'execute', input: v.strictObject({ command: Command }), output: Text,
@@ -96,8 +97,6 @@ export const SANDBOX = {
       + 'A sandbox restored after it slept keeps its source and lockfiles but not node_modules or build output: after a failed '
       + 'import there, run `bun install` once.',
   }),
-  readFile: sb({ name: 'readFile', help: 'A file of the sandbox, as text.', impact: 'observe', input: v.strictObject({ path: Path }), output: Text }),
-  writeFile: sb({ name: 'writeFile', help: 'Write a file in the sandbox.', impact: 'mutate', input: v.strictObject({ path: Path, content: v.string() }), output: Text }),
   listFiles: sb({
     name: 'listFiles', help: 'A directory\'s entries; the working directory when no path is given.', impact: 'observe',
     input: v.strictObject({ path: v.optional(v.string()) }), output: Text,
@@ -136,10 +135,9 @@ export function sandboxResize(sizes: readonly { readonly size: string; readonly 
 
 const parent = executorOp('parent');
 
-/** The parent workspace a hire reads, in the parent's own paths. */
+/** The parent workspace a hire reads, in the parent's own paths. Its files are read and written through the
+ *  workspace's, which share its folder, as every plane's are. */
 export const PARENT = {
-  readFile: parent({ name: 'readFile', help: 'A file of the parent workspace.', impact: 'observe', input: v.strictObject({ path: Path }), output: Text }),
-  writeFile: parent({ name: 'writeFile', help: 'Write a file in the parent workspace.', impact: 'mutate', input: v.strictObject({ path: Path, content: v.string() }), output: Text }),
   readdir: parent({ name: 'readdir', help: 'A directory\'s entry names.', impact: 'observe', input: v.strictObject({ path: Path }), output: v.array(v.string()) }),
   exists: parent({ name: 'exists', help: 'Whether a path exists.', impact: 'observe', input: v.strictObject({ path: Path }), output: v.boolean() }),
   exec: parent({
@@ -153,11 +151,10 @@ const device = executorOp('device');
 
 const Device = v.optional(described(v.string(), 'With several machines connected, which one, by name.'));
 
-/** The user's own machine; `unavailable` means none is attached, and the error says how to attach one. */
+/** The user's own machine; `unavailable` means none is attached, and the error says how to attach one. Its files are
+ *  read and written through the workspace's, under `/pc/<machine>`, as every plane's are. */
 export const DEVICE = {
   exec: device({ name: 'exec', help: 'Run a command on the machine.', impact: 'execute', input: v.strictObject({ command: Command, device: Device }), output: Text }),
-  readFile: device({ name: 'readFile', help: 'A file on the machine.', impact: 'observe', input: v.strictObject({ path: Path, device: Device }), output: Text }),
-  writeFile: device({ name: 'writeFile', help: 'Write a file on the machine.', impact: 'mutate', input: v.strictObject({ path: Path, content: v.string(), device: Device }), output: Text }),
   readdir: device({ name: 'readdir', help: 'A directory\'s entry names.', impact: 'observe', input: v.strictObject({ path: Path, device: Device }), output: v.array(v.string()) }),
   exists: device({ name: 'exists', help: 'Whether a path exists.', impact: 'observe', input: v.strictObject({ path: Path, device: Device }), output: v.boolean() }),
 } as const;

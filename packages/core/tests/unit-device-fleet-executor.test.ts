@@ -1,4 +1,4 @@
-import { exists, readText } from '@nimbus-sh/core/vfs/vfs.js';
+import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // Device fleet at the executor surface: commands name their machine, and the file plane serves
 // one machine at `/pc` and several under `/pc/<name>`.
 import { describe, expect, test } from 'bun:test';
@@ -14,11 +14,22 @@ import { getExecutorFiles } from '../src/read-models/files';
 import { withMountTable, standardMounts } from '../src/vfs/mounts';
 import { setDiagnosticsSink } from '../src/obs/log';
 import { DefaultExecutionRouter } from '../src/execution/router';
-import type { ApprovalGrant } from '../src/safety/approval-gate';
 import { buildBuiltinTools } from '../src/tools/builtins';
-import { toolExecute } from '@kinu.run/test-utils';
+import { present, toolExecute } from '@kinu.run/test-utils';
+import { renderThrownChain } from '../src/obs/index';
 import { createTestRuntime, createWorkspaceBundle, conversationsFor } from './helpers';
 import type { JsonValue } from '../src/utils/json';
+
+/** What a file call that failed says, or null when it did not fail. */
+async function failureOf(call: Promise<unknown>): Promise<string | null> {
+  try {
+    await call;
+
+    return null;
+  } catch (cause) {
+    return renderThrownChain({ cause });
+  }
+}
 
 const STUDIO: DeviceFleetEntry = {
   id: 'dev-studio', name: 'ashish@studio', os: 'darwin', hostname: 'studio', connected: true,
@@ -109,12 +120,12 @@ describe('the device fleet at the executor surface', () => {
 
     const offline = answeredRefusal(await provider.tools.exec.execute('ls', { device: 'spare box' }) ?? null);
 
-    const unknown = await provider.tools.readFile.execute('/etc/hosts', { device: 'toaster' });
+    const unknown = await failureOf(readText(present(provider.files, 'the machines\' files'), '/toaster/etc/hosts'));
 
     expect(offline?.reason).toBe('unavailable');
     expect(offline?.error).toContain('"spare box"');
     expect(offline?.error).toContain('ashish@studio, mrwhite@rig');
-    expect(unknown).toMatchObject({ reason: 'unavailable', error: expect.stringContaining('"toaster"') });
+    expect(unknown).toContain('"toaster"');
     expect(t.sent).toEqual([]);
   });
 
@@ -133,18 +144,15 @@ describe('the device fleet at the executor surface', () => {
     expect(t.sent.map((frame) => frame.deviceId)).toEqual(['dev-studio', 'dev-studio', 'dev-studio']);
   });
 
-  test('every file tool rides the named machine, not the first live one', async () => {
+  test('every file call rides the named machine, not the first live one', async () => {
     const t = fleetTransport([STUDIO, RIG]);
+    const provider = createDeviceTunnelExecutor(t);
+    const files = present(provider.files, 'the machines\' files');
 
-    // The owner lets the agent replace files there: the write's approval asks nothing, but its probe still rides.
-    const provider = createDeviceTunnelExecutor(t, undefined, {
-      mode: () => 'strict', granted: (grant: ApprovalGrant) => grant.rule === 'overwrite-user-files',
-    });
-
-    expect(await provider.tools.readFile.execute('/etc/hosts', { device: 'mrwhite@rig' })).toBe('bytes of dev-rig');
+    expect(await readText(files, '/mrwhite@rig/etc/hosts')).toBe('bytes of dev-rig');
     expect(await provider.tools.readdir.execute('/home', { device: 'mrwhite@rig' })).toEqual(['entry-of-dev-rig']);
     expect(await provider.tools.exists.execute('/home', { device: 'ashish@studio' })).toBe(true);
-    expect(await provider.tools.writeFile.execute('/tmp/x', 'y', { device: 'ashish@studio' })).toBe('Written 1 bytes to /tmp/x');
+    await writeText(files, '/ashish@studio/tmp/x', 'y');
 
     expect(t.sent.find((frame) => frame.method === 'writeFile')?.deviceId).toBe('dev-studio');
   });
