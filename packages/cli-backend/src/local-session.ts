@@ -287,6 +287,8 @@ export class LocalAgentSession {
   private readonly taskList: TaskListStore;
   private readonly jobRunner: BackgroundJobRunner;
   private readonly jobHolder: JobHolder;
+  /** Every job a runner in this process drives now, shared by the session's runners. */
+  private readonly jobsDrivenHere = new Set<string>();
   /** Every job operation in this session reaches the runner over the job's rows: the root's, or a node's or head's. */
   private readonly jobAuthorities: WorkspaceJobAuthorities;
   private readonly clock: Clock;
@@ -577,6 +579,7 @@ export class LocalAgentSession {
       // Arms the session's one terminal-retry timer, which sweeps due jobs before replaying owed effects.
       scheduleResume: (atMs) => this.scheduleTerminalRetry(atMs),
       holder: this.jobHolder,
+      drivenHere: this.jobsDrivenHere,
     } satisfies BackgroundJobRunnerDeps);
     this.jobAuthorities = new WorkspaceJobAuthorities({
       root: () => ({ kind: 'root', actorId: this.rt.actor.actorId, store: this.jobs, runner: this.jobRunner }),
@@ -2531,7 +2534,7 @@ export class LocalAgentSession {
 
   /** The session's own job seams: a node's or head's output reaches the same listeners its chat's does. */
   private loopJobPorts(): WorkspaceJobPorts {
-    return { jobOutput: (frame) => { this.host.broadcast(frame); }, onDetached: null, onCancelled: null, holder: this.jobHolder };
+    return { jobOutput: (frame) => { this.host.broadcast(frame); }, onDetached: null, onCancelled: null, holder: this.jobHolder, drivenHere: this.jobsDrivenHere };
   }
 
   /** A swarm actor no loop holds: its loop ended, with this process or before it, so its rows settle and wake nobody. */

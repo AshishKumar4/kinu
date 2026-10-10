@@ -78,6 +78,7 @@ function setup(opts: {
   onCancelled?: ((jobId: string) => Promise<void> | void) | null;
   scheduleResume?: (atMs: number) => Promise<void> | void;
   holder?: JobHolder;
+  drivenHere?: Set<string>;
   clock?: Clock;
   alive?: () => Promise<void>;
 } = {}) {
@@ -120,6 +121,7 @@ function setup(opts: {
     harvest: opts.harvest,
     scheduleResume: opts.scheduleResume,
     holder: opts.holder,
+    drivenHere: opts.drivenHere,
     clock: opts.clock,
     alive: opts.alive,
   };
@@ -932,6 +934,18 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
     } finally {
       setSystemTime();
     }
+  });
+
+  test('a re-drive another runner in this process drives owes the others no wake', async () => {
+    const drivenHere = new Set<string>();
+    const driver = setup({ resume: () => new Promise<never>(() => {}), drivenHere });
+    const other = setup({ db: driver.db, drivenHere });
+
+    driver.store.create({ id: 'jh', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
+    expect((await driver.runner.recoverOrphans()).map((job) => job.id)).toEqual(['jh']);
+
+    expect({ driver: driver.runner.nextResumeAt(), other: other.runner.nextResumeAt(), driven: [...drivenHere] })
+      .toEqual({ driver: null, other: null, driven: ['jh'] });
   });
 
   /** Two processes on one SQLite file: this one, and a live `sleep` standing in for the other. */

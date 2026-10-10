@@ -2468,6 +2468,9 @@ export abstract class ActorAgent extends Agent<Env> {
 
   private _jobAuthorities: WorkspaceJobAuthorities | null = null;
 
+  /** Every job a runner in this Durable Object drives now, shared by all of them through their ports. */
+  private readonly jobsDrivenHere = new Set<string>();
+
   protected get jobAuthorities(): WorkspaceJobAuthorities {
     this._jobAuthorities ??= new WorkspaceJobAuthorities({
       root: () => ({ kind: 'root', actorId: this.actorHandle().actorId, store: this.jobs, runner: this.jobRunner }),
@@ -2500,6 +2503,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected workspaceJobPorts(owner: string | null): WorkspaceJobPorts {
     return {
       clock: this.jobClock(),
+      drivenHere: this.jobsDrivenHere,
       alive: jobContextAnswers,
       jobOutput: (frame) => { this.broadcastToActor(owner, JSON.stringify(frame)); },
       // Only this request's device work moves; parallel foreground commands remain stoppable.
