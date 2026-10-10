@@ -2,7 +2,7 @@
 // process; stop keeps the row unless the kill is confirmed, so the row names a live process.
 import { beforeEach, describe, expect, test } from 'bun:test';
 
-import { Devbox, harness, SandboxFailure, type FakeSandbox } from './support/devbox-harness';
+import { Devbox, gate, harness, SandboxFailure, type FakeSandbox } from './support/devbox-harness';
 
 const COMMAND = 'bun run server.ts';
 
@@ -28,6 +28,48 @@ describe('starting a supervised process reserves its id before the process exist
     expect(second.processId).toBe(first.processId);
     expect(container.starts.map(({ processId }) => processId)).toEqual([first.processId]);
     expect(await reservations(box)).toEqual([first.processId]);
+  });
+
+  test('start-stop-start cannot delete a held launch reservation or leave an unsupervised process', async () => {
+    const { box, container } = harness(Devbox);
+    const first = await box.startSupervised(COMMAND);
+    const nativeGet = container.getProcess.bind(container);
+    const paused = gate();
+    let held = true;
+
+    container.processes.clear();
+    container.getProcess = async (id) => {
+      if (id === first.processId && held) {
+        held = false;
+        paused.enter();
+        await paused.promise;
+      }
+
+      return nativeGet(id);
+    };
+
+    const restarting = box.startSupervised(COMMAND);
+
+    await paused.reached;
+    const stopping = box.stopSupervised(first.processId);
+
+    // Let stop's native/storage work reach its reservation claim before the successor is submitted.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const next = box.startSupervised(COMMAND);
+    let whileHeld: readonly string[] = [];
+
+    try {
+      whileHeld = await reservations(box);
+    } finally {
+      paused.release();
+      await Promise.all([restarting, stopping, next]);
+    }
+
+    const last = await next;
+
+    expect(last.processId).not.toBe(first.processId);
+    expect({ whileHeld, stopped: (await stopping).stopped, supervised: await reservations(box), live: [...container.processes.keys()] })
+      .toEqual({ whileHeld: [first.processId], stopped: true, supervised: [last.processId], live: [last.processId] });
   });
 
   test('cwd is part of the supervised command identity', async () => {

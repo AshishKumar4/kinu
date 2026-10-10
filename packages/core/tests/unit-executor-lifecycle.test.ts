@@ -418,13 +418,18 @@ describe("the sandbox namespace a program calls", () => {
   });
 
   test('exposure uses the required listener capability and keeps its transport failure', async () => {
+    const fault = new Error('listener RPC disconnected');
+    const refused = async (): Promise<never> => { throw fault; };
+
     const handle = Object.assign(sandboxHandle(), {
-      probePort: async (): Promise<boolean> => { throw new Error('listener RPC disconnected'); },
+      exec: refused, probePort: refused,
     });
 
     const provider = createSandboxExecutor(handle, { previewHostSuffix: 'kinu.example.test' });
 
     expect(await provider.tools.exposePort.execute(8787)).toMatchObject({ error: expect.stringContaining('listener RPC disconnected') });
+    expect(await present(provider.exposePort, 'direct sandbox exposure')(8787))
+      .toMatchObject({ supported: false, reason: expect.stringContaining('listener RPC disconnected') });
     expect(handle.calls).toEqual([]);
   });
 

@@ -4,18 +4,38 @@
 // incident (the agent has nothing to act on); operations, saves and the heartbeat run as usual. A pid
 // from an earlier boot is fenced by the kernel's boot id, not by this stamp (processes-image.test.ts).
 import { expect, test } from 'bun:test';
-import { chainBox } from './support/chain-box';
-import { settledRestoration, unreadyOf } from '../src/restoration';
+import { ChainTestBox, chainBox } from './support/chain-box';
+import { settledRestoration } from '../src/restoration';
 
-test('repair keeps typed boot-stamp obligations separate from its presentation', () => {
-  const failed = settledRestoration([], 'failed');
-  const pending = settledRestoration([], 'pending');
+test('same-container repair writes an outstanding stamp and becomes ready independently of its explanation', async () => {
+  const { box, container, rows } = chainBox();
 
-  expect(failed).toMatchObject({ phase: 'repair', bootStamp: 'failed' });
-  expect(pending).toMatchObject({ phase: 'repair', bootStamp: 'pending' });
-  expect(unreadyOf(failed, false)).toBe('the boot id stamp failed');
-  expect(unreadyOf(pending, false)).toBe('the boot id stamp was kept for a settled restoration');
-  expect(settledRestoration([], 'done')).toMatchObject({ phase: 'attached' });
+  await box.devboxStartup();
+  const before = await box.devboxState();
+
+  expect(before.ready).toBe(true);
+  expect(before.bootId).toBeString();
+  // A fresh isolate adopts the durable, still-owed stamp on the same native container, not a replacement.
+  rows.set('devbox:restoration', settledRestoration([], 'pending'));
+  const repaired = new ChainTestBox(container.ctx, {});
+
+  container.owner = repaired;
+  expect((await repaired.devboxState()).ready).toBe(false);
+
+  // Losing the durable witness while its obligation is outstanding forces the actual repair decision.
+  rows.delete('devbox:boot-id');
+  const starts = container.startOptions.length;
+
+  await repaired.attachNow();
+  const after = await repaired.devboxState();
+
+  expect(after.ready).toBe(true);
+  expect(after.restoration).toBe('attached');
+  expect(after.bootId).toBeString();
+  expect(after.bootId).not.toBe(before.bootId);
+  expect(container.bootId).toBe(after.bootId);
+  expect(rows.get('devbox:boot-id')).toBe(after.bootId);
+  expect(container.startOptions.length).toBe(starts);
 });
 
 test('a final boot stamp that fails changes nothing a user or agent can see', async () => {
@@ -30,10 +50,10 @@ test('a final boot stamp that fails changes nothing a user or agent can see', as
   await box.devboxHeartbeat();
 
   expect({
-    restoration: settled.restoration, unready: settled.unready, incidents: [...rows.keys()].filter(key => key.startsWith('devbox:incident:')).length,
+    restoration: settled.restoration, ready: settled.ready, incidents: [...rows.keys()].filter(key => key.startsWith('devbox:incident:')).length,
     ran: ran.exitCode, saved: saved.kind, startsAfterBeat: container.startOptions.length - starts, after: (await box.devboxState()).restoration,
     p1: (await box.getProcess('p1'))?.status,
   }).toEqual({
-    restoration: 'repair', unready: 'the boot id stamp failed', incidents: 0, ran: 0, saved: 'committed', startsAfterBeat: 0, after: 'repair', p1: 'running',
+    restoration: 'repair', ready: false, incidents: 0, ran: 0, saved: 'committed', startsAfterBeat: 0, after: 'repair', p1: 'running',
   });
 });
