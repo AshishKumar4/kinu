@@ -284,8 +284,15 @@ describe('a hosted process is untrusted code: the host serves only what Nimbus s
   });
 
   test("a hosted process's file mutation, delivered once, lands in the workspace", async () => {
-    // Inside the clone's own tree: a git facet's mutations are confined to its destination (Nimbus 0.14).
-    const actor = hostActor(async (supervisor) => { await supervisor.mkdir('/home/main/hello/delivered', { recursive: true }); });
+    // Inside the clone's own tree, which a git facet's mutations are confined to (Nimbus 0.14), once the clone has made
+    // it: its first call checks the destination is empty.
+    let calls = 0;
+
+    const actor = hostActor(async (supervisor) => {
+      calls += 1;
+
+      if (calls === 2) await supervisor.mkdir('/home/main/hello/delivered', { recursive: true });
+    });
 
     const clone = await actor.hosted.box('delivered').exec('git clone https://example.invalid/hello.git /home/main/hello');
 
