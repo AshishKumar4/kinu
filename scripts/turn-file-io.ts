@@ -482,7 +482,7 @@ try {
 
   if (subject === 'commands') {
     await ask('/seed');
-    // Each expected answer is absent from its command's text, so an echoed command cannot pass for its output.
+    // An expected answer is what only the command's own run prints: a byte count, a line, an exit status, a package's name.
     const node = (program: string) => `node -e ${JSON.stringify(program)}`;
 
     await measureOp('process.out1m', () => shell(`${node("process.stdout.write('x'.repeat(1 << 20))")} | wc -c`), undefined, '1048576');
@@ -495,13 +495,13 @@ try {
     await measureOp('git.clone', (index) => {
       const at = `/home/main/perfio/clone-${String(index + 1)}`;
 
-      return shell(`git clone --depth 1 https://github.com/expressjs/express ${at} && echo "commits=$(git -C ${at} rev-list --count HEAD)"`);
-    }, undefined, 'commits=1');
+      return shell(`git clone --depth 1 https://github.com/expressjs/express ${at} && ${node(`console.log('name=' + require('${at}/package.json').name)`)}`);
+    }, undefined, 'name=express');
     await measureOp('npm.install', (index) => {
       const at = `/home/main/perfio/npm-${String(index + 1)}`;
 
       return shell(`mkdir -p ${at} && cd ${at} && echo '{"name":"probe","private":true}' > package.json`
-        + ` && npm install --no-audit --no-fund express@4.21.2 && echo "express=$(node -p "require('express/package.json').version")"`);
+        + ` && npm install --no-audit --no-fund express@4.21.2 && ${node("console.log('express=' + require('express/package.json').version)")}`);
     }, undefined, 'express=4.21.2');
     measured.push(...fileResults);
   } else if (subject === 'files') {
