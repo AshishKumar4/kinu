@@ -292,7 +292,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
 
     // A later one-shot process with a different task.
     const exec = new AgentOrchestrator({ host, engine, eventLog, oneShot: true });
-    exec.observeUserTurn('unrelated next task', 'independent_task');
+    exec.observeUserTurn('u-1', 'unrelated next task', 'independent_task');
     await exec.settleTracked();
     expect(reviews).toEqual([]);
     const next = new AgentOrchestrator({ host, engine, eventLog });
@@ -327,7 +327,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
 
     for (let i = 0; i < 5; i++) orch.recordTurn(aTurn(i), 'conversation');
-    orch.observeUserTurn('anything', 'conversation');
+    orch.observeUserTurn('u-2', 'anything', 'conversation');
     expect(sessions).toEqual([]);
     expect(reviews).toEqual([]);
     expect(orch.sessionTurnIndex).toBe(0);
@@ -485,7 +485,7 @@ describe('AgentOrchestrator — the durable session window', () => {
     new AgentOrchestrator({ host, engine, eventLog }).recordTurn(aTurn(0), 'conversation');
     expect(reviews).toHaveLength(0);
     // Continuing the conversation: this user message is turn 0's follow-up.
-    new AgentOrchestrator({ host, engine, eventLog }).observeUserTurn('that broke the build', 'conversation');
+    new AgentOrchestrator({ host, engine, eventLog }).observeUserTurn('u-3', 'that broke the build', 'conversation');
     expect(reviews).toEqual([{ turn: aTurn(0), followup: 'that broke the build' }]);
   });
 
@@ -498,7 +498,7 @@ describe('AgentOrchestrator — the durable session window', () => {
     // Deferred rather than run: this process is about to exit.
     expect(reviews).toEqual([]);
     new AgentOrchestrator({ host, engine, eventLog, oneShot: true })
-      .observeUserTurn('a completely different task', 'independent_task');
+      .observeUserTurn('u-4', 'a completely different task', 'independent_task');
     await new AgentOrchestrator({ host, engine, eventLog }).runDeferredTurnReviews();
     expect(reviews).toEqual([{ turn: aTurn(0), followup: null }]);
   });
@@ -509,7 +509,7 @@ describe('AgentOrchestrator — the durable session window', () => {
     const { host } = fakeHost();
     new AgentOrchestrator({ host, engine, eventLog }).recordTurn(aTurn(0), 'conversation');
     new AgentOrchestrator({ host, engine, eventLog, oneShot: true })
-      .observeUserTurn('unrelated task', 'independent_task');
+      .observeUserTurn('u-5', 'unrelated task', 'independent_task');
     await new AgentOrchestrator({ host, engine, eventLog }).runDeferredTurnReviews();
     expect(reviews).toEqual([{ turn: aTurn(0), followup: null }]);
   });
@@ -521,17 +521,32 @@ describe('AgentOrchestrator — turn-outcome review dispatch', () => {
     const { host } = fakeHost();
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
 
-    orch.observeUserTurn('first message', 'conversation');
+    orch.observeUserTurn('u-6', 'first message', 'conversation');
     expect(reviews).toHaveLength(0);
 
     orch.recordTurn(aTurn(0), 'conversation');
     expect(reviews).toHaveLength(0);
 
-    orch.observeUserTurn('actually, that was wrong', 'conversation');
+    orch.observeUserTurn('u-7', 'actually, that was wrong', 'conversation');
     expect(reviews).toEqual([{ turn: aTurn(0), followup: 'actually, that was wrong' }]);
 
-    orch.observeUserTurn('another message', 'conversation');
+    orch.observeUserTurn('u-8', 'another message', 'conversation');
     expect(reviews).toHaveLength(1);
+  });
+
+  /** One turn's opening grades one turn (design v2 §2): a preparation replayed after a reset took the next parked
+   *  review too, and graded it with words that never followed it. */
+  test("a turn's opening observed again grades nothing more", () => {
+    const { engine, reviews } = fakeEngine();
+    const { host } = fakeHost();
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+
+    orch.recordTurn(aTurn(0), 'conversation');
+    orch.recordTurn(aTurn(1), 'conversation');
+    orch.observeUserTurn('u-next', 'that was wrong', 'conversation');
+    orch.observeUserTurn('u-next', 'that was wrong', 'conversation');
+
+    expect(reviews).toEqual([{ turn: aTurn(1), followup: 'that was wrong' }]);
   });
 
   test('programmatic turns review immediately with no follow-up and do not displace the pending user turn', () => {
@@ -543,7 +558,7 @@ describe('AgentOrchestrator — turn-outcome review dispatch', () => {
     orch.recordTurn(aTurn(1, 'programmatic'), 'conversation'); // reactor/job-wake turn
     expect(reviews).toEqual([{ turn: aTurn(1, 'programmatic'), followup: null }]);
 
-    orch.observeUserTurn('follow-up for the USER turn', 'conversation');
+    orch.observeUserTurn('u-11', 'follow-up for the USER turn', 'conversation');
     expect(reviews[1]).toEqual({ turn: aTurn(0), followup: 'follow-up for the USER turn' });
   });
 });

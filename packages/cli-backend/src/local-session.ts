@@ -1595,7 +1595,7 @@ export class LocalAgentSession {
     this.turnDriving = authoredTurnMetadata(item);
 
     // A user message grades the previous turn, unless this is a one-shot process.
-    if (item.kind === 'user') this.actorSession.orchestrator.observeUserTurn(item.text, this.turnContinuity);
+    if (item.kind === 'user') this.actorSession.orchestrator.observeUserTurn(lease.turnId, item.text, this.turnContinuity);
 
     if (item.kind === 'user' && this.oneShot) this.chat.completionGate.arm(item.text);
 

@@ -202,7 +202,7 @@ describe('a headless actor runs the step clock only', () => {
 
     const root = await seats.host.acquire(actorReferenceOf(rt.actor), { kind: 'actor' });
     root.session.orchestrator.recordTurn(turn, 'conversation');
-    root.session.orchestrator.observeUserTurn('the probe kept failing and you never changed its arguments', 'conversation');
+    root.session.orchestrator.observeUserTurn('u-1', 'the probe kept failing and you never changed its arguments', 'conversation');
     await root.session.orchestrator.settleTracked();
     expect(windowRows(rt.storage.sql, actor.actorId)).toBe(0);
     expect(windowRows(rt.storage.sql, root.handle.actorId)).toBe(1);

@@ -961,6 +961,10 @@
     "opened_at TEXT NOT NULL",
     "PRIMARY KEY (actor_id, run_id)"
   ],
+  "opened_turns@packages/core/src/evolution/session-window.ts": [
+    "actor_id TEXT PRIMARY KEY",
+    "turn_id TEXT NOT NULL"
+  ],
   "operator_requests@packages/core/src/events/recorder.ts": [
     "actor_id TEXT PRIMARY KEY",
     "text TEXT NOT NULL"

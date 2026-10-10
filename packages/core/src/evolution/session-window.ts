@@ -78,6 +78,12 @@ export function initCompletedTurnTable(execRaw: RawSqlExec): void {
              ON completed_turns(actor_id, review, created_at)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_completed_turns_window
              ON completed_turns(actor_id, in_window, created_at)`);
+  // The turn whose opening last graded a parked review: an actor's turns open one at a time, so its latest is the
+  // only one a replayed preparation can repeat.
+  execRaw(`CREATE TABLE IF NOT EXISTS opened_turns (
+    actor_id TEXT PRIMARY KEY,
+    turn_id  TEXT NOT NULL
+  )`);
   // Both lifetimes end in a DELETE of replayable work, so tombstones are part
   // of this table's contract.
   initEffectTombstoneTable(execRaw);
@@ -161,6 +167,8 @@ export interface CompletedTurnStore {
   size(): number;
   /** Null when empty; the caller settles once the pass has run. */
   claim(): ClaimedWindow | null;
+  /** Whether this is `turnId`'s first opening, recorded as it answers: its preparation replayed after a reset is not. */
+  opened(turnId: string): boolean;
   claimPendingReview(): PendingTurnReview | null;
   /** Demote parked reviews into the owed queue; the caller decides when a
    *  follow-up can no longer grade them. `before` limits demotion to rows
@@ -285,6 +293,13 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
           sweepSettled();
         },
       };
+    },
+
+    opened(turnId) {
+      authorize();
+
+      return sql<{ turn_id: string }>`INSERT INTO opened_turns (actor_id, turn_id) VALUES (${actorId}, ${turnId})
+        ON CONFLICT (actor_id) DO UPDATE SET turn_id = excluded.turn_id WHERE opened_turns.turn_id <> excluded.turn_id RETURNING turn_id`.length > 0;
     },
 
     claimPendingReview() {

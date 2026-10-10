@@ -4049,9 +4049,9 @@ export abstract class ActorAgent extends Agent<Env> {
     this._executorsUsedThisTurn.clear();
     this._cliCwd = readCliCwd(body);
 
-    // A real user message is the verdict on the previous turn; programmatic turns
-    // (reactor / job wake) are not.
-    if (item.kind === 'user' && opening !== null) this.orch.observeUserTurn(item.text, surface.continuity);
+    // A real user message is the verdict on the previous turn; programmatic turns (reactor / job wake) are not. A turn
+    // read again after a restart is no opening; one opened again, as a preparation replayed, finds its own key.
+    if (item.kind === 'user' && opening !== null) this.orch.observeUserTurn(surface.turnId, item.text, surface.continuity);
     openAnalyticsWindow(this.env);
 
     return { tools, reads: read.reads, trial: artifacts.trial };
