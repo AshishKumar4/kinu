@@ -314,6 +314,11 @@ describe('listing ports re-observes what the container still reports', () => {
     const kv = makeKv();
     const { box } = portBox();
 
+    // A published record past its half-life, whose renewal the store refuses.
+    setSystemTime(new Date('2026-03-01T12:00:00.000Z'));
+    await sandboxPreviewExposures(kv, SANDBOX_ID).publish(PORT, TOKEN);
+    setSystemTime(new Date(Date.now() + (EXPOSURE_LIFETIME_MS * 2) / 3));
+
     // A failed maintenance write must not empty the panel, and is reported.
     const refusing: KvStore = {
       get: (key) => kv.get(key),
@@ -330,6 +335,7 @@ describe('listing ports re-observes what the container still reports', () => {
     });
 
     expect(emitted.map((line) => line.event)).toContain('preview.refresh_failed');
+    setSystemTime();
   });
 });
 

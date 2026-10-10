@@ -263,12 +263,10 @@ export function adaptCloudflareSandbox(
 
       return removed;
     })),
-    // Re-publishing keeps long-lived previews from ageing out. A failed refresh is reported and the
-    // listing stands: the record is already correct, unlike an unpublished URL in `exposePort`.
+    // Renewing what was published keeps long-lived previews from ageing out; what the container reports publishes
+    // nothing. A failed renewal is reported and the listing stands: the record is already correct.
     // Not `onContainer`: a read never starts a container.
     getExposedPorts: (hostname) => settle(callDevbox(async () => {
-      // Before the read: a withdrawal after it outranks what it saw.
-      const observedAt = Date.now();
       const rows = await handle.getExposedPorts(hostname);
 
       if (previews !== null) {
@@ -279,7 +277,7 @@ export function adaptCloudflareSandbox(
           if (label === null || label.port !== row.port) return;
 
           try {
-            await index.refresh(row.port, label.token, observedAt);
+            await index.refresh(row.port, label.token);
           } catch (cause) {
             diagnostics.failure('preview.refresh_failed', toKinuError({
               doing: 'refreshing a published sandbox preview',

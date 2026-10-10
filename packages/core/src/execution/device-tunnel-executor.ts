@@ -579,7 +579,7 @@ const ALWAYS_CONSENTED: DeviceFileConsent = {
 
 const AGENT_TMP_PATHS = ['/tmp', '/var/tmp'] as const;
 
-export type DeviceVFS = VFS & Required<CheckpointFiles> & Pick<ExecutorProvider, 'homeDir'> & Required<Pick<VFS, 'readRange'>>;
+export type DeviceVFS = VFS & Required<Pick<CheckpointFiles, 'writeFileWithReport'>> & Pick<ExecutorProvider, 'homeDir'> & Required<Pick<VFS, 'readRange'>>;
 
 /** The machine's files in its own absolute paths: the daemon resolves root and path, this guard only rejects lexical
  *  escapes, and `homeDir` is HELLO's, never an `exec`'s. */
