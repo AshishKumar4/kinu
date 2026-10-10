@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import { builtinModules } from 'node:module';
 import { createServer } from 'node:net';
 import { build } from 'esbuild';
+import { nodeRequireAsImport } from '../packages/cf-backend/esbuild-node-require';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { ownerCaller, type JsonObject } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -64,7 +65,7 @@ async function bundle(file: string): Promise<string> {
     entryPoints: [join(import.meta.dir, 'turn-file-io', file)], bundle: true, write: false, format: 'esm',
     platform: 'neutral', mainFields: ['module', 'main'], conditions: ['workerd', 'worker', 'browser'], target: 'es2022',
     alias: Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, `node:${name}`])),
-    external: ['cloudflare:*', 'node:*'], plugins: [{ name: 'product', setup: (plugin) => {
+    external: ['cloudflare:*', 'node:*'], plugins: [nodeRequireAsImport, { name: 'product', setup: (plugin) => {
       plugin.onResolve({ filter: /^kinu:product$/ }, () => ({ path: './index.js', external: true }));
     } }],
   });
@@ -186,7 +187,7 @@ const compat = { compatibilityDate: wrangler.compatibility_date, compatibilityFl
 
 const key = btoa('worker-heap-credential-key-32byt');
 
-const agent = buildAgentBundle(join(import.meta.dir, 'turn-file-io/facet.ts')).modules;
+const agent = (await buildAgentBundle(join(import.meta.dir, 'turn-file-io/facet.ts'))).modules;
 
 writeWhole(join(resolve(dist, wrangler.assets.directory), '_agent/modules.json'), JSON.stringify(agent));
 
@@ -207,21 +208,40 @@ async function ask(path: string, input?: JsonObject): Promise<string> {
   return body;
 }
 
+/** `request` answered by the network; Bun's fetch decodes the body and keeps its content-encoding, which workerd would decode again. */
+async function passedThrough(request: Request): Promise<Response> {
+  const fetched = await fetch(request);
+  const headers = new Headers(fetched.headers);
+
+  headers.delete('content-encoding');
+  headers.delete('content-length');
+
+  return new Response(fetched.body, { status: fetched.status, statusText: fetched.statusText, headers });
+}
+
+/** A streamed step's answer for the current prompt kind: its file tool calls first, then its text. */
+function streamedAnswer(kind: string | undefined, step: number, deltas: number): ScriptedAnswer {
+  let tools = 0;
+
+  if (kind === 'five') tools = 4;
+  else if (kind === 'growth') tools = 1;
+
+  if (step < tools) {
+    return { toolCall: { name: 'file', arguments: kind === 'five'
+      ? { op: 'write', path: `notes/perfio-step-${String(step)}.txt`, content: `note ${String(step)}` }
+      : { op: 'stat', path: '.' } } };
+  }
+
+  return { text: kind === 'prior' || kind === 'long' ? Array.from({ length: deltas }, (_, index) => `w${String(index)} `).join('') : 'ok' };
+}
+
 async function model(request: Request): Promise<Response> {
   const entered = performance.now();
   const consumed = measuring ? cpu(enginePid) : 0;
   const url = new URL(request.url);
 
   // Only the commands subject reaches the network: its clone and install are what it measures.
-  if (subject === 'commands' && COMMAND_HOSTS.includes(url.hostname)) {
-    // Bun's fetch decodes the body and keeps its content-encoding, which workerd would then decode again.
-    const fetched = await fetch(request);
-    const headers = new Headers(fetched.headers);
-    headers.delete('content-encoding');
-    headers.delete('content-length');
-
-    return new Response(fetched.body, { status: fetched.status, statusText: fetched.statusText, headers });
-  }
+  if (subject === 'commands' && COMMAND_HOSTS.includes(url.hostname)) return await passedThrough(request);
 
   if (url.pathname === '/models') return new Response(SCRIPTED_MODELS_BODY);
 
@@ -245,20 +265,7 @@ async function model(request: Request): Promise<Response> {
     phases.push(v.parse(CutSchema, JSON.parse(await ask(`/cut?label=${step === 0 ? 'open' : `step-${String(step)}`}&resume=1`))));
   }
 
-  let answer: ScriptedAnswer = { text: 'Perf' };
-
-  if (asked.streamed) {
-    let tools = 0;
-
-    if (kind === 'five') tools = 4;
-    else if (kind === 'growth') tools = 1;
-    answer = step < tools
-      ? { toolCall: { name: 'file', arguments: kind === 'five'
-        ? { op: 'write', path: `notes/perfio-step-${String(step)}.txt`, content: `note ${String(step)}` }
-        : { op: 'stat', path: '.' } } }
-      : { text: kind === 'prior' || kind === 'long' ? Array.from({ length: Number(deltasText) }, (_, index) => `w${String(index)} `).join('') : 'ok' };
-  }
-
+  const answer: ScriptedAnswer = asked.streamed ? streamedAnswer(kind, step, Number(deltasText)) : { text: 'Perf' };
   const out = scriptedBody(answer, asked);
 
   // The long-answer subject uses the same 500/2000 independent deltas as D23, not one artificial giant token.

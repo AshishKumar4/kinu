@@ -6,7 +6,7 @@ import type { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import type { ProcessFiles } from '@nimbus-sh/core/runtime/process-files.js';
 import type { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import type { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
-import { ISOLATE_NETWORK } from '@nimbus-sh/core';
+import { ISOLATE_NETWORK } from '@nimbus-sh/core/_shared/workspace-network.js';
 import { composeFacetManager, type ComposedFacetManager } from '@nimbus-sh/worker/workspace-host';
 
 export interface ProbeFacetManagerDeps {
