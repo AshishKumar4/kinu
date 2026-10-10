@@ -23,7 +23,7 @@ mockAgentsSdk();
 
 const {
   CONTAINER_EVENT_HOST,
-  handleContainerEgress, handleContainerEvent, parseEgressParams,
+  handleContainerEgress, handleContainerEvent, handleEgressConnect, parseEgressParams,
 } = await import('../src/egress/outbound');
 
 const {
@@ -157,6 +157,20 @@ describe('the secret reaches the upstream and comes back scrubbed', () => {
 
       expect(response.status).toBe(503);
       expect(upstream.seen).toHaveLength(0);
+    } finally { upstream.restore(); }
+  });
+
+  // A workspace's npm install sends hundreds of requests through here; none names a secret, so none waits on the vault.
+  test('traffic with no placeholder is forwarded without asking the vault, which may be down', async () => {
+    const upstream = captureFetch(() => new Response('ok'));
+
+    try {
+      const response = await handleContainerEgress(
+        new Request('https://registry.npmjs.org/express'), throwingVaultEnv({ cause: new Error('durable object reset') }), PARAMS,
+      );
+
+      expect(response.status).toBe(200);
+      expect(upstream.seen.map((request) => request.url)).toEqual(['https://registry.npmjs.org/express']);
     } finally { upstream.restore(); }
   });
 
@@ -463,7 +477,7 @@ describe('a throw at the boundary becomes a classified answer', () => {
     const timeout = new DOMException('The operation timed out', 'TimeoutError');
 
     const response = await handleContainerEgress(
-      new Request('https://api.stripe.com/'), throwingVaultEnv({ cause: timeout }), PARAMS,
+      new Request('https://api.stripe.com/', { headers: { authorization: `Bearer ${PLACEHOLDER}` } }), throwingVaultEnv({ cause: timeout }), PARAMS,
     );
 
     expect(response.status).toBe(504);
@@ -634,5 +648,53 @@ describe('every redirect hop is judged, not trusted', () => {
       expect(await second.json()).toMatchObject({ reason: 'denied' });
       expect(refused.seen).toHaveLength(0);
     } finally { refused.restore(); }
+  });
+});
+
+/** A program's socket as the egress's connect handler receives it, naming `address`; records whether it was closed. */
+function inboundSocket(address: string): Socket & { readonly wasClosed: () => boolean } {
+  let closed = false;
+
+  // workerd's `Socket` has no constructor a test can call; the handler reads only these members.
+  const socket: Socket & { readonly wasClosed: () => boolean } = {
+    opened: Promise.resolve({ localAddress: address }),
+    closed: new Promise<void>(() => {}),
+    upgraded: false,
+    secureTransport: 'off',
+    readable: new ReadableStream(),
+    writable: new WritableStream(),
+    close: async () => { closed = true; },
+    startTls: () => { throw new Error('not reached'); },
+    wasClosed: () => closed,
+  };
+
+  return socket;
+}
+
+// Owner's rule (2026-10-10): a workspace program's raw socket is judged by where it goes, as a request is, and only that.
+describe('a workspace program\'s TCP socket', () => {
+  test.each(['127.0.0.1:5432', '10.0.0.7:22', '[::1]:6379', 'metadata.google.internal:80', 'db.localhost:5432'])('to %p is refused before anything is sent', async (address) => {
+    const socket = inboundSocket(address);
+
+    const emitted = await recordDiagnostics(async () => { await handleEgressConnect(socket, PARAMS); });
+
+    expect(socket.wasClosed()).toBe(true);
+    expect(emitted.map((line) => line.event)).toEqual(['egress.socket_refused']);
+  });
+
+  test('from an unconfigured workspace is refused, as its requests are', async () => {
+    const socket = inboundSocket('example.com:5432');
+
+    await handleEgressConnect(socket, undefined);
+
+    expect(socket.wasClosed()).toBe(true);
+  });
+
+  test('that names no port is refused', async () => {
+    const socket = inboundSocket('example.com');
+
+    await handleEgressConnect(socket, PARAMS);
+
+    expect(socket.wasClosed()).toBe(true);
   });
 });

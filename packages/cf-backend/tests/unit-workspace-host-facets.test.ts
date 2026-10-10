@@ -4,17 +4,18 @@
  * loads before any workspace (defends a `NIMBUS_SESSION` composition beating `HOST_FABRIC_COMPOSITION`), and every ctx
  * here carries the script's one exports object (`SCRIPT_EXPORTS`), as workerd gives every object of a script.
  */
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import * as v from 'valibot';
-import { scratchDir } from '@kinu.run/test-utils';
+import { git, gitEnv, initRepo, scratchDir, spawnTest } from '@kinu.run/test-utils';
 import { createHostedWorkspace, type HostedWorkspace, type HostedWorkspaceEnv } from '../src/workspace-host';
 import {
   actorObjectState, durableObjectStorage, durableSqlStorage, durableStorage, HELD_NIMBUS_TASKS, OBJECT_NAMESPACE, SCRIPT_EXPORTS, serveObject,
 } from './helpers/programmatic-host';
+import { asFetchFunction } from '@kinu.run/core';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SupervisorRPC } from '@nimbus-sh/worker/workspace-host';
 import { mockAgentsSdk } from './helpers/agents-sdk';
@@ -92,7 +93,7 @@ function hostActor(duringFacet?: (supervisor: SupervisorRPC) => Promise<void>): 
       facetLoads.push({ supervisorBound: facetEnv.SUPERVISOR !== undefined });
       const dir = scratchDir('host-facet');
       writeFileSync(join(dir, 'git-network-worker.mjs'), source);
-      writeFileSync(join(dir, 'git-bundle.js'), GIT_BUNDLE_STUB);
+      writeFileSync(join(dir, 'git-bundle.js'), v.parse(v.pipe(v.string(), v.nonEmpty()), code.modules['git-bundle.js']));
       const moduleUrl = pathToFileURL(join(dir, 'git-network-worker.mjs')).href;
       let loaded: Promise<unknown> | undefined;
 
@@ -141,34 +142,56 @@ function hostActor(duringFacet?: (supervisor: SupervisorRPC) => Promise<void>): 
   return { hosted, facetLoads, dispatched };
 }
 
-/** Deterministic stand-in for isomorphic-git's network half, writing through the facet's buffered fs adapter. */
-const GIT_BUNDLE_STUB = `
-const enc = new TextEncoder();
-export const gitHttp = {};
-export const git = {
-  async clone({ fs, dir, cache, ref }) {
-    const root = dir.replace(/^\\/+/, '');
-    const packDir = root + '/.git/objects/pack';
-    const pack = new Uint8Array(4096);
-    for (let i = 0; i < pack.length; i++) pack[i] = (i * 31 + 7) & 0xff;
-    await fs.promises.mkdir(packDir);
-    await fs.promises.writeFile(packDir + '/pack-${'3'.repeat(40)}.pack', pack);
-    await fs.promises.writeFile(packDir + '/pack-${'3'.repeat(40)}.idx', enc.encode('idx'));
-    await fs.promises.mkdir(root + '/.git/refs/heads');
-    await fs.promises.writeFile(root + '/.git/HEAD', 'ref: refs/heads/' + (ref || 'main') + '\\n');
-    await fs.promises.writeFile(root + '/.git/refs/heads/' + (ref || 'main'), '${'1'.repeat(40)}' + '\\n');
-    cache.prepared = true;
-  },
-  async resolveRef() { return '${'1'.repeat(40)}'; },
-  async readCommit() { return { commit: { tree: '${'2'.repeat(40)}' } }; },
-  async currentBranch() { return 'refs/heads/main'; },
-  async checkoutFreshChunk({ fs, dir }) {
-    const root = dir.replace(/^\\/+/, '');
-    await fs.promises.writeFile(root + '/README.md', '# hello from the facet\\n');
-    return { nextCursor: null, files: 1, decodedBytes: 23, treeEntriesVisited: 1, indexEntries: 1 };
-  },
-};
-`;
+/**
+ * `https://example.invalid/hello.git`, served as git's smart HTTP serves a repository (git http-backend): `git upload-pack`
+ * over a real one-commit repository, so the facet's own pack client clones it as it would GitHub's.
+ */
+let hello: Promise<string> | undefined;
+
+async function helloRepository(): Promise<string> {
+  const work = scratchDir('hello-repo');
+
+  await initRepo(work);
+  await git(work, 'checkout', '-q', '-b', 'main');
+  writeFileSync(join(work, 'README.md'), '# hello from the facet\n');
+  await git(work, 'add', 'README.md');
+  await git(work, 'commit', '-q', '-m', 'hello');
+
+  return join(work, '.git');
+}
+
+const packet = (text: string): string => `${(text.length + 4).toString(16).padStart(4, '0')}${text}`;
+
+async function uploadPack(request: Request): Promise<Response> {
+  const advertise = new URL(request.url).pathname.endsWith('/info/refs');
+  const repository = await (hello ??= helloRepository());
+
+  const ran = spawnTest(['git', 'upload-pack', '--stateless-rpc', ...(advertise ? ['--advertise-refs'] : []), repository], {
+    env: gitEnv(), stdin: advertise ? 'ignore' : new Uint8Array(await request.arrayBuffer()), stdout: 'pipe', stderr: 'pipe',
+  });
+
+  const body = new Uint8Array(await new Response(ran.stdout).arrayBuffer());
+
+  if (await ran.exited !== 0) return new Response(`upload-pack failed: ${await new Response(ran.stderr).text()}`, { status: 500 });
+
+  if (!advertise) return new Response(body, { headers: { 'content-type': 'application/x-git-upload-pack-result' } });
+
+  return new Response(new Blob([`${packet('# service=git-upload-pack\n')}0000`, body]), {
+    headers: { 'content-type': 'application/x-git-upload-pack-advertisement' },
+  });
+}
+
+const originalFetch = globalThis.fetch;
+
+beforeEach(() => {
+  globalThis.fetch = asFetchFunction(async (input, init) => {
+    const request = new Request(input, init);
+
+    return new URL(request.url).hostname === 'example.invalid' ? uploadPack(request) : originalFetch(request);
+  });
+});
+
+afterEach(() => { globalThis.fetch = originalFetch; });
 
 function refusingBindings(): ActorBindings {
   const spawned = (): never => { throw new Error('no facet may spawn'); };
@@ -261,7 +284,8 @@ describe('a hosted process is untrusted code: the host serves only what Nimbus s
   });
 
   test("a hosted process's file mutation, delivered once, lands in the workspace", async () => {
-    const actor = hostActor(async (supervisor) => { await supervisor.mkdir('/home/main/delivered'); });
+    // Inside the clone's own tree: a git facet's mutations are confined to its destination (Nimbus 0.14).
+    const actor = hostActor(async (supervisor) => { await supervisor.mkdir('/home/main/hello/delivered', { recursive: true }); });
 
     const clone = await actor.hosted.box('delivered').exec('git clone https://example.invalid/hello.git /home/main/hello');
 
@@ -269,7 +293,7 @@ describe('a hosted process is untrusted code: the host serves only what Nimbus s
     // Worker 0.11 sends a mutation as `deliverOnce` wherever the host keeps receipts, which the hosted runtime does.
     expect(actor.dispatched.map((call) => call.op)).toContain('deliverOnce');
     const vfs = (await actor.hosted.bundle.session()).vfs.as(CRED_SESSION_USER);
-    expect(vfs.isDirectory('home/main/delivered')).toBe(true);
+    expect(vfs.isDirectory('home/main/hello/delivered')).toBe(true);
   });
 });
 

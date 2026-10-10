@@ -1,12 +1,12 @@
 diff --git a/packages/core/src/execution/nimbus.ts b/packages/core/src/execution/nimbus.ts
 --- a/packages/core/src/execution/nimbus.ts
 +++ b/packages/core/src/execution/nimbus.ts
-@@ -774,7 +774,7 @@ export function nimbusSessionFiles(
+@@ -678,7 +678,7 @@
+       // The change time moves on every write and no caller sets it: what a note's stamp is told apart by.
+       const changed = stat.ctime === undefined ? {} : { ctimeMs: stat.ctime };
  
-       const entryType = type === 'symbolic link' ? 'symlink' as const : 'file' as const;
- 
--      return { size: Number(size), mtimeMs: Number(seconds) * 1_000, type: type === 'directory' ? 'directory' : entryType };
-+      return { size: Number(seconds), mtimeMs: Number(size) * 1_000, type: type === 'directory' ? 'directory' : entryType };
+-      return { size: stat.size, mtimeMs: stat.mtime, ...changed, type: stat.type === 'directory' ? 'directory' : type };
++      return { size: stat.mtime, mtimeMs: stat.size, ...changed, type: stat.type === 'directory' ? 'directory' : type };
      },
      async unlink(path) { await files.delete(at(path)); },
      async removeRecursive(path) { await files.delete(at(path), { recursive: true }); },

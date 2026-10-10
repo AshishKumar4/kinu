@@ -391,18 +391,22 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 
 	const observer = 'namespace' in base ? base.observer : undefined;
 
-	/** A routed extra's write of `data` to `at`, landed on `landing.source` at `landing.rel`; told to the plane's observer, since that source reports none. */
-	const heard = async <T>(
+	/**
+	 * A routed extra's write of `data` to `at`, landed on `landing.source` at `landing.rel`; told to the plane's observer,
+	 * since that source reports none. `landed` says whether a conditional write was made.
+	 */
+	const heard = <T>(
 		landing: { readonly source: VFS; readonly rel: string; readonly at: string }, data: Uint8Array, writing: () => Promise<T>,
-		// A conditional write that was refused changed nothing, so it is not heard.
 		landed: (result: T) => boolean = () => true,
-	): Promise<T> => {
-		if (observer === undefined || landing.source.observeWrites !== undefined) return writing();
+	): Effect.Effect<T> => Effect.gen(function* () {
+		if (observer === undefined || landing.source.observeWrites !== undefined) return yield* Effect.promise(writing);
 
-		const baseline = observer.needsBaseline(landing.at) ? await settle(Effect.result(attempt({ doing: `reading ${landing.at} before a write`, otherwise: 'io' },
-			async () => tolerateAsync(() => Promise.resolve(landing.source.readFile(landing.rel)), 'enoent')))) : null;
+		const baseline = observer.needsBaseline(landing.at)
+			? yield* Effect.result(attempt({ doing: `reading ${landing.at} before a write`, otherwise: 'io' },
+				async () => tolerateAsync(() => Promise.resolve(landing.source.readFile(landing.rel)), 'enoent')))
+			: null;
 
-		const result = await writing();
+		const result = yield* Effect.promise(writing);
 
 		if (!landed(result)) return result;
 
@@ -411,7 +415,7 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 		else observer.record({ path: landing.at, unread: 'unreadable', after: data });
 
 		return result;
-	};
+	});
 
 	const via = async <T>(path: string, op: (files: VFS, at: string) => Awaitable<T>): Promise<T> => {
 		const { files, at } = await on(path);
@@ -420,13 +424,14 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 	};
 
 	/** The plane's optional operation, or ENOTSUP with `reason` where a bare base has none; the namespace answers its own. */
-	const capable = <T>(path: string, reason: string, ask: (files: VFS, at: string) => Awaitable<T> | undefined): Promise<T> => via(path, (files, at) => {
+	const capable = <T>(path: string, reason: string, ask: (files: VFS, at: string) => Awaitable<T> | undefined): Effect.Effect<T, VfsError> => Effect.gen(function* () {
+		const { files, at } = yield* Effect.promise(() => on(path));
 		const answer = ask(files, at);
 
 		// Absent, not null: a backend's answer may itself be null.
-		if (answer !== undefined) return answer;
+		if (answer === undefined) return yield* Effect.fail(new VfsError('ENOTSUP', reason, path));
 
-		return settle(Effect.fail(new VfsError('ENOTSUP', reason, path)));
+		return yield* Effect.promise(async () => answer);
 	});
 
 	return {
@@ -479,12 +484,12 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 			return target.namespace === null ? target.at : namespacePath(await routeCreating(target.namespace, target.at, options?.follow ?? true));
 		},
 		// ENOTSUP, not EPERM: callers like the `file` scan fall back on this code; only `readBoundedWithVfsOps` may whole-read.
-		readRange: (path, offset, length) => capable(path, 'this plane serves no ranged read', (files, at) => files.readRange?.(at, offset, length)),
-		readlink: (path) => capable(path, 'this plane serves no readlink', (files, at) => files.readlink?.(at)),
-		readFileAtRevision: (path, revision, range) => capable(path, 'this file plane does not retain file revisions',
-			(files, at) => files.readFileAtRevision?.(at, revision, range)),
-		writeFileIfRevision: (path, data, expected) => capable(path, 'this file plane does not support revision-checked writes',
-			(files, at) => files.writeFileIfRevision?.(at, data, expected)),
+		readRange: (path, offset, length) => settle(capable(path, 'this plane serves no ranged read', (files, at) => files.readRange?.(at, offset, length))),
+		readlink: (path) => settle(capable(path, 'this plane serves no readlink', (files, at) => files.readlink?.(at))),
+		readFileAtRevision: (path, revision, range) => settle(capable(path, 'this file plane does not retain file revisions',
+			(files, at) => files.readFileAtRevision?.(at, revision, range))),
+		writeFileIfRevision: (path, data, expected) => settle(capable(path, 'this file plane does not support revision-checked writes',
+			(files, at) => files.writeFileIfRevision?.(at, data, expected))),
 		// A device's own write report, from the backend the write lands on; elsewhere the namespace writes and reports nothing.
 		async writeFileWithReport(path, data) {
 			const target = await on(path);
@@ -495,7 +500,7 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 			if (own?.writeFileWithReport !== undefined && route !== null && !readOnly) {
 				const report = own.writeFileWithReport.bind(own);
 
-				return heard({ source: own, rel: route.path, at: target.at }, data, () => report(route.path, data));
+				return settle(heard({ source: own, rel: route.path, at: target.at }, data, () => report(route.path, data)));
 			}
 
 			await write(target, data);
@@ -517,7 +522,7 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 				return settle(Effect.fail(new VfsError('ENOTSUP', 'this file plane does not support digest-checked writes', path)));
 			}
 
-			return heard({ source: own, rel: route.path, at: target.at }, data, () => replace(route.path, data, expected), (answer) => answer.ok);
+			return settle(heard({ source: own, rel: route.path, at: target.at }, data, () => replace(route.path, data, expected), (answer) => answer.ok));
 		},
 	};
 }
