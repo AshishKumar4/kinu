@@ -2781,8 +2781,6 @@ export class LocalAgentSession {
 
 
 
-export { serializeContentForHeads } from '@kinu.run/core';
-
 function jobRoster(jobs: readonly BackgroundJob[]): string {
   return jobs.map((job) => `${job.id} (${job.kind}${job.label ? `: ${job.label}` : ''})`).join(', ');
 }

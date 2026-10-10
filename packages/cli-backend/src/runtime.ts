@@ -169,12 +169,7 @@ function notesMemory(notes: ReturnType<typeof agentHomeFiles>, sql: SqlExecutor)
 
 /** The memory of the workspace whose database `db` is, as its memory tool reads and searches it. */
 export function workspaceMemory(db: Database): Memory {
-  return notesMemory(agentStateFiles(db), makeSql(db)).memory;
-}
-
-/** Main's home beside `db`, as real files. */
-export function agentStateFiles(db: Database): ReturnType<typeof agentHomeFiles> {
-  return workspaceHome(db);
+  return notesMemory(workspaceHome(db), makeSql(db)).memory;
 }
 
 /** Session payload reads for inspection, over the workspace's folder and own space. */
