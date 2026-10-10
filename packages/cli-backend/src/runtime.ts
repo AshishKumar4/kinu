@@ -669,7 +669,7 @@ async function buildCLIHeadRuntime(
     }),
   ];
 
-  const agentVfs = localFilePlane({ folder, space, views, checkpoints: parent.checkpoints });
+  const agentVfs = localFilePlane({ folder, space, views, checkpoints: parent.checkpoints, ...(writeObserver !== undefined && { observer: writeObserver }) });
   const reach = localFileReach({ folder, space }, parent.planes, agentVfs);
 
   // Heard on its own plane, and on its parent's under its own actor.

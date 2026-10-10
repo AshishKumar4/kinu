@@ -8,7 +8,7 @@ import { lstatSync, mkdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, 
 import * as fs from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { Effect } from 'effect';
-import type { CheckpointFiles, FileCheckpoints, FileReach, MountedVfs, PathPlanes, VfsDigestWrite, VfsMount } from '@kinu.run/core';
+import type { CheckpointFiles, FileCheckpoints, FileReach, MountedVfs, PathPlanes, VfsDigestWrite, VfsMount, WriteObserver } from '@kinu.run/core';
 import { agentHome, FOLDER_SUBTREE, MAIN_AGENT, sha256Hex, withMountTable, workspacePath } from '@kinu.run/core';
 import { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
 import { syscallError, toVfsError, type VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
@@ -181,6 +181,8 @@ export interface LocalFilePlane {
   readonly space: string;
   readonly views: readonly VfsMount[];
   readonly checkpoints: FileCheckpoints | undefined;
+  /** Hears a write that lands on the host past the namespace (a digest-checked one); the namespace's own it hears itself. */
+  readonly observer?: WriteObserver;
 }
 
 /** `composite`, not `namespace`: `withMountTable` reads a `namespace` member as the opener of a mounted namespace. */
@@ -208,7 +210,9 @@ export function localFilePlane(input: LocalFilePlane): LocalPlane {
     });
   }
 
-  const files = withMountTable({ namespace: async () => namespace, home: input.folder, writesParents: true }, views);
+  const files = withMountTable({
+    namespace: async () => namespace, home: input.folder, writesParents: true, ...(input.observer !== undefined && { observer: input.observer }),
+  }, views);
 
   const removable = (path: string, syscall: string): Effect.Effect<string, VfsError> => (workspacePath(path, input.folder) === input.folder
     ? Effect.fail(syscallError('EACCES', syscall, path, { detail: 'the workspace\'s folder cannot be removed' }))

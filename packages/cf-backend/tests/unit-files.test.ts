@@ -93,7 +93,7 @@ describe("writeExecutorFileOp", () => {
     expect(await writeExecutorFileOp(deps, "nimbus", "/home/main/a.bin", { bytes: bin })).toMatchObject({ ok: true });
     expect(written.get("/home/main/a.bin")).toEqual(bin);
 
-    expect(await writeExecutorFileOp(deps, "device", "/home/me/proj/b.bin", { bytes: bin })).toEqual({ ok: true });
+    expect(await writeExecutorFileOp(deps, "device", "/home/me/proj/b.bin", { bytes: bin })).toMatchObject({ ok: true });
     expect(written.get("/home/me/proj/b.bin")).toEqual(bin);
   });
 
