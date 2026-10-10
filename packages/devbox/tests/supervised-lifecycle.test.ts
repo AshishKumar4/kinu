@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, test } from 'bun:test';
 import { Devbox, gate, harness, SandboxFailure, type FakeSandbox } from './support/devbox-harness';
 import { handClock } from '../../test-utils/src/hand-clock';
 import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy, type StartClock } from '../src/lifecycle';
+import { Processes } from '../src/processes';
 
 const COMMAND = 'bun run server.ts';
 
@@ -324,4 +325,61 @@ describe('the fakes can fail, so the assertions above are not vacuous', () => {
     await expect(container.startProcess('x', { processId: 'p1' })).rejects.toThrow('lost');
     expect(container.processes.size).toBe(0);
   });
+});
+
+describe('queued native mutations belong to the kernel they observed', () => {
+  for (const operation of ['kill', 'write-record'] as const) {
+    test(`${operation} delivered after confirmed replacement leaves the successor untouched`, async () => {
+      const { box, container } = harness(Devbox);
+
+      await box.devboxStartup();
+      const native = container.handle();
+      const processId = 'kernel-successor';
+      const record = `/var/tmp/devbox/processes/${processId}/process.json`;
+      const paused = gate();
+      let queued = true;
+      let current = true;
+
+      if (operation === 'kill') await new Processes(native).start('exec sleep 7121', { processId });
+
+      const delayed = new Processes({
+        get running() { return native.running; },
+        exec: async (argv, options) => {
+          const inner = argv[3] === 'devbox-incarnation' ? argv.slice(5) : argv;
+
+          const selected = operation === 'kill' ? inner[3] === 'devbox-kill'
+            : inner[0] === '/usr/local/bin/sandbox-shim' && inner.includes(record);
+
+          if (queued && selected) {
+            queued = false;
+            paused.enter();
+            await paused.promise;
+          }
+
+          return native.exec(argv, options);
+        },
+      });
+
+      const obsolete = operation === 'kill' ? delayed.kill(processId, { current: () => current })
+        : delayed.start('exec sleep 7121', { processId, current: () => current });
+
+      const outcome = Promise.allSettled([obsolete]);
+
+      await paused.reached;
+
+      try {
+        current = false;
+        await container.destroy();
+        await box.devboxStartup();
+        await new Processes(native).start('exec sleep 7122', { processId });
+      } finally {
+        paused.release();
+        await outcome;
+      }
+
+      expect(container.processes.get(processId)?.command).toBe('exec sleep 7122');
+      expect(JSON.parse(container.files.get(record) ?? '{}').command).toBe('exec sleep 7122');
+      expect(container.kills).toEqual([]);
+    });
+  }
 });

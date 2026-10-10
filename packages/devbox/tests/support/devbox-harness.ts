@@ -403,6 +403,7 @@ export class FakeSandbox {
   stopFault: Error | undefined;
   destroys = 0;
   bootId: string | undefined;
+  #kernelGeneration = 0;
   containerStarts = 0;
   readonly startWaitOptions: unknown[] = [];
   /** Each platform start's options (D50). */
@@ -764,6 +765,7 @@ export class FakeSandbox {
   }
 
   #loseContainerLocalState(): void {
+    this.#kernelGeneration++;
     this.files.clear();
     this.binaryFiles.clear();
     this.directories.clear();
@@ -945,11 +947,33 @@ export class FakeSandbox {
     if (options.signal !== undefined) this.execSignals.push(options.signal);
     await this.#admitNative(options);
 
+    const protocol = this.#nativeProtocol(args, options);
+
+    if (protocol !== undefined) return protocol;
+
     // An untimed launch is `setsid -w /bin/bash -c` (D69); a raw exec is `/bin/bash -c`.
     const onHost = options.cwd?.includes(DEVBOX_SCRATCH_PREFIX) === true || args[0] === 'setsid' || args[3] === "kill-tree" || args[3] === "port-listeners"
       || args[3] === 'devbox-desktop';
 
     if (this.nativeExec !== undefined && onHost) return this.nativeExec(args, options);
+
+    const pid = this.#pid++;
+
+    return this.#nativeCommand(args, options, pid);
+  }
+
+  #nativeProtocol(args: string[], options: ContainerExecOptions): Promise<ExecProcess> | ExecProcess | undefined {
+    if (args[3] === 'devbox-incarnation-read') {
+      return processResult(Promise.resolve({ stdout: `fixture-kernel-${String(this.#kernelGeneration)}\n`, stderr: '', exitCode: 0 }), this.#pid++);
+    }
+
+    if (args[3] === 'devbox-incarnation') {
+      const current = `fixture-kernel-${String(this.#kernelGeneration)}`;
+
+      if (args[4] !== current) return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 125 }), this.#pid++);
+
+      return this.#native(args.slice(5), options);
+    }
 
     // `cat > <path>` fed on stdin: the bytes land in the file once the writer closes.
     if (options.stdin === 'pipe' && args[0] === '/bin/sh') {
@@ -973,8 +997,10 @@ export class FakeSandbox {
       return this.shim.exec(args);
     }
 
-    const pid = this.#pid++;
+    return undefined;
+  }
 
+  async #nativeCommand(args: string[], options: ContainerExecOptions, pid: number): Promise<ExecProcess> {
     // The restore deadline's process ends only when it is killed: a test that needs the deadline to
     // fall hands the box a hand clock rather than waiting out a duration.
     if (args[0] === '/bin/sleep') {
@@ -1054,17 +1080,27 @@ export class FakeSandbox {
     }
 
     if (args[3] === 'devbox-kill') {
-      const dir = args[4] ?? '';
-      const id = dir.split('/').at(-1) ?? '';
-      const row = this.processes.get(id);
-
-      if (this.files.has(`${dir}/process.json`) && !this.#unlaunched(dir) && !this.files.has(`${dir}/exit`)
-        && (row?.status === 'running' || row?.status === 'starting')) await this.killProcess(id);
-
-      return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
+      return this.#nativeKill(args, pid);
     }
 
     return this.#nativeProcessStatus(args.slice(4), pid);
+  }
+
+  async #nativeKill(args: string[], pid: number): Promise<ExecProcess> {
+    const dir = args[4] ?? '';
+    const expected = args[5] ?? '';
+
+    if (expected !== '' && this.files.get(`${dir}/pid`)?.trim() !== expected) {
+      return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
+    }
+
+    const id = dir.split('/').at(-1) ?? '';
+    const row = this.processes.get(id);
+
+    if (this.files.has(`${dir}/process.json`) && !this.#unlaunched(dir) && !this.files.has(`${dir}/exit`)
+      && (row?.status === 'running' || row?.status === 'starting')) await this.killProcess(id);
+
+    return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
   }
 
   #launched(dir: string, pid: number): void {
