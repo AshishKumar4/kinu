@@ -1,9 +1,9 @@
-import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Shipped workspace and facet bundles: isolated turns over one shared Nimbus file plane. */
 import { getAgentByName, type AgentContext } from 'agents';
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
-import { agentHome, JsonValueSchema, ownerCaller, runNodeAgent, toolsInWorkMode, type Clock } from '@kinu.run/core';
+import { agentHome, JsonValueSchema, ownerCaller, runNodeAgent, toolsInWorkMode, WORKSPACE_ROOT, type Clock } from '@kinu.run/core';
 import { narrowToolSurface } from '@kinu.run/core';
 import { handClock } from '@kinu.run/test-utils/hand-clock';
 import { diagnostics } from '@kinu.run/core/obs';
@@ -115,7 +115,7 @@ export class OrchestratorAgent extends ProductionOrchestrator {
     return {
       home,
       agentShell,
-      mainRead: await main.files.read(`${home}/a`),
+      mainRead: await readText(main.store({ home: WORKSPACE_ROOT }), `${home}/a`),
       mainCat: { exitCode: mainCat.exitCode, stdout: mainCat.stdout, stderr: mainCat.stderr },
       sameIsolate: (await facet.boot()) === bootId,
     };

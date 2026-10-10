@@ -107,7 +107,7 @@ import {
   buildModelCallEvent,
   type FactsStore,
   createAgentStores, type AgentConfigStore, type SetModelDeps, collectDynamicContext, subordinateDelegatesOf,
-  nimbusSessionFiles, agentArtifactDirectory, agentHome, MAIN_AGENT,
+  agentArtifactDirectory, agentHome, MAIN_AGENT,
   CHAT_SESSION_ID, type SessionTranscript,
   type SqlExecutor,
   agentsActionsFor, betaSwarms,
@@ -164,7 +164,7 @@ import {
   toolsInWorkMode, type TaskPlan, withTaskPlan, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
   type AgentInbox,
-  type NimbusSandboxHandle, childContextResolver,
+  childContextResolver,
 } from "@kinu.run/core";
 import {
   bindAgentSql, createCFRuntime, isCFRuntime, MODEL_SETTINGS,
@@ -201,7 +201,7 @@ import type { UserDO } from "./user/user-do";
 import type { McpToolSurface } from "./user/mcp-servers";
 import type { UserDoRpcMethod } from "./rpc-surface";
 import { isWorkspaceTerminal, WorkspaceTerminalInputSchema } from "@kinu.run/core";
-import type { WorkspaceTerminal } from "./workspace-host";
+import type { HostedBox, HostedWorkspace, WorkspaceTerminal } from "./workspace-host";
 import type { UserCaller } from "@kinu.run/core";
 import { sha256Hex } from '@kinu.run/core';
 import { attributeWorkspace, installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
@@ -579,7 +579,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** One Durable Object owns the workspace bytes: a top-level workspace DO serves from its own
    * storage; a facet actor returns a client onto that object. */
-  protected abstract workspaceBox(shellId: string): NimbusSandboxHandle;
+  protected abstract workspaceBox(shellId: string): HostedBox;
+  protected abstract workspaceServing(): ReturnType<HostedWorkspace['serving']>;
 
   protected scaffoldPath(): string { return 'scaffold/agent.js'; }
 
@@ -2204,7 +2205,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected readonly stores = createAgentStores(
     () => this.boundSql, () => this.actorHandle(), write => this.ctx.storage.transactionSync(write),
     async () => ({
-      vfs: nimbusSessionFiles(this.workspaceBox(this.shellId()), { home: WORKSPACE_ROOT, cred: CRED_SESSION_USER }),
+      vfs: this.workspaceBox(this.shellId()).store({ home: WORKSPACE_ROOT }),
       artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)),
     }),
   );
@@ -2550,14 +2551,14 @@ export abstract class ActorAgent extends Agent<Env> {
   protected readonly boxUse: WorkspaceBoxUse = { used: false };
 
   /**
-   * Records which running job's command holds each exposed sandbox port when that can move (a port exposed or
-   * withdrawn, a job detached or settled), so a listing reads a row and never the box. Only a box this activation
-   * used is asked, and one that is down is not read: the next exposure reads again.
+   * Records which running job's command holds each exposed port, the workspace's or the box's, when that can move (a
+   * port exposed, listened on or withdrawn, a job detached or settled), so a listing reads a row and never the box. Only
+   * a box this activation used is asked, and one that is down is not read: the next exposure reads again.
    */
   protected async servingMoved(): Promise<void> {
-    const holders = this._rt?.sandboxPortHolders() ?? null;
+    const holders = this._rt?.portHolders();
 
-    if (holders !== null) await recordServingJobs(this.jobs, holders);
+    if (holders !== undefined) await recordServingJobs(this.jobs, holders);
   }
   protected get config(): AgentConfigStore {
     return this.stores.config;
@@ -2832,6 +2833,7 @@ export abstract class ActorAgent extends Agent<Env> {
         ctx: this.ctx,
         holdLane: (body) => this.holdLane(body),
         workspaceBox: (shellId) => this.workspaceBox(shellId),
+        workspaceServing: () => this.workspaceServing(),
         acc: () => this.acc,
         getCliCwdForDevice: () => this.getCliCwdForDevice(),
         getCheckpointMetaForDevice: () => this.getCheckpointMetaForDevice(),

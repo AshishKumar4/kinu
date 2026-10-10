@@ -23,7 +23,6 @@ import type {
   DeployFakeRefusal, DeployFakeServedBuild, DeployFakeStall, DeployFakeState, DeployFakeWeight,
 } from './deploy-fake';
 import type { DeployInputs, DeployRunPhase, DeploySnapshot } from '@kinu.run/core/deploy';
-import type { FilesEioProbeDO } from './files-eio-probe';
 import type { ParkedWritesProbeDO } from './parked-writes-probe';
 import type { ComplexityProbeDO } from './complexity/complexity-probe';
 import type { EffectAtomicityProbeDO } from './effect-atomicity-probe';
@@ -435,7 +434,6 @@ declare global {
       DEVICE_LEDGER_PROBE: DurableObjectNamespace<DeviceLedgerProbeDO>;
       DEVICE_OUTPUT_HUB_PROBE: DurableObjectNamespace<DeviceOutputHubProbeDO>;
       DEVICE_OUTPUT_WORKSPACE_PROBE: DurableObjectNamespace<DeviceOutputWorkspaceProbeDO>;
-      FILES_EIO_PROBE: DurableObjectNamespace<FilesEioProbeDO>;
       PARKED_WRITES_PROBE: DurableObjectNamespace<ParkedWritesProbeDO>;
       COMPLEXITY_PROBE: DurableObjectNamespace<ComplexityProbeDO>;
       EFFECT_ATOMICITY_PROBE: DurableObjectNamespace<EffectAtomicityProbeDO>;

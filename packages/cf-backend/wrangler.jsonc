@@ -17,7 +17,10 @@
   "compatibility_flags": ["nodejs_compat", "new_module_registry"],
   // Durable Objects allow up to 300,000 ms of CPU per invocation (DO limits docs); the 30 s default killed
   // in-workspace commands measured at 32 s of CPU (kinu-logs/nimbus-integration/REPORT.md, 2026-09-23).
-  "limits": { "cpu_ms": 300000 },
+  // Nimbus 0.16 requires both of its facet maxima on the hosting Worker (@nimbus-sh/fabric MAX_FACET_CPU_MS,
+  // MAX_FACET_SUBREQUESTS; KINU-HANDOFF section 38): a facet's limits only lower its parent's, and under the default
+  // 10,000 subrequests a dev server's filesystem calls ran out within minutes. Named environments inherit `limits`.
+  "limits": { "cpu_ms": 300000, "subrequests": 10000000 },
   // Wrangler uploads the Worker's source maps with the version, and Cloudflare
   // remaps every uncaught exception's stack against them before it reaches
   // Workers Logs or a tail. Without this, a production stack trace names the one
@@ -240,6 +243,7 @@
   // agent so instead of handing back a URL that cannot resolve. It does NOT
   // disable either executor.
   "vars": {
+    "NIMBUS_RUNTIME_CATALOG_SHA256": "5c3b262d0a7c99376bccf3f2f21263f6b4450ceb716afc94a4279fd24f7ab600",
     "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/kinu-ai-gateway/workers-ai/v1",
     "PREVIEW_HOST_SUFFIX": "kinu.run",
     "CLI_PUBLIC_ORIGIN": "https://kinu.run",
@@ -388,9 +392,12 @@
   // were retired when storage moved to @kinu.run/devbox: no product source
   // reads them, and the secret census now refuses stale entries.
   // NIMBUS_RUNTIME_CACHE is the artifact store a HOSTED workspace installs its
-  // toolchain from: `catalog/v1.json`, `manifests/<name>-<version>.json` and
-  // content-addressed blobs under `blobs/<name>-<version>/<file>`
-  // (external/nimbus/packages/worker/src/runtime/runtime-catalog.ts:111-150).
+  // toolchain from: a catalog read by its digest, `catalog/sha256/<sha256>.json`,
+  // which pins `manifests/<name>-<version>.json`, which pin the content-addressed
+  // blobs under `blobs/<name>-<version>/<file>` (@nimbus-sh/worker
+  // dist/runtime/runtime-catalog.js). The var NIMBUS_RUNTIME_CATALOG_SHA256 names
+  // that catalog; without it `nimbus install` refuses, naming the var. Its value is
+  // the SHA-256 of the bucket's catalog/v1.json as read on 2026-10-10.
   // Measured 2026-08-17: this bucket exists on this account and IS seeded —
   // clang, python, ruby, bash, cpython. Without the binding the Worker throws
   // `NIMBUS_RUNTIME_CACHE binding missing`, which is why a hosted `python3` was
@@ -518,6 +525,7 @@
       // driven by the eval identity alone: DEV_USER_EMAIL names it, and the
       // `DEV_IDENTITY_SECRET` secret, staging's own, is its whole authority.
       "vars": {
+        "NIMBUS_RUNTIME_CATALOG_SHA256": "5c3b262d0a7c99376bccf3f2f21263f6b4450ceb716afc94a4279fd24f7ab600",
         "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/kinu-ai-gateway-staging/workers-ai/v1",
         "PREVIEW_HOST_SUFFIX": "staging.kinu.run",
         "CLI_PUBLIC_ORIGIN": "https://staging.kinu.run",

@@ -1,12 +1,15 @@
 /** Write attribution happens where a write lands: sibling heads run concurrently over the same files. */
 
+import { Effect } from 'effect';
 import type { CompositeVFS, Principal } from '@nimbus-sh/core/vfs/composite.js';
+import type { VfsContentRef, VfsWriteEvent } from '@nimbus-sh/core/vfs/vfs.js';
+import { attempt, diagnostics, settle, settleSync, toKinuError, type KinuError } from '../obs/index';
 
 export interface WriteEvent {
   readonly path: string;
   /** null when the path did not exist; absent when not asked for or `unread` is set. */
   readonly before?: string | Uint8Array | null;
-  /** Why an asked-for `before` is unknown. The change still landed. */
+  /** Why a side's bytes are unknown: a directory stood there, or they could not be read. The change still landed. */
   readonly unread?: 'directory' | 'unreadable';
   readonly after: string | Uint8Array | null;
 }
@@ -48,10 +51,96 @@ export interface WriteObserver {
   record(event: WriteEvent): void;
 }
 
-/** `observer` hears each write of a view `mine` names; answers the unsubscribe. */
+/** One side of a landed mutation: its bytes, nothing there, why its bytes are unknown, or not asked for. */
+type Side = Uint8Array | null | NonNullable<WriteEvent['unread']> | 'unasked';
+
+function unreadable(failure: KinuError, path: string): 'unreadable' {
+  diagnostics.failure('vfs.write_side_unread', failure, { path });
+
+  return 'unreadable';
+}
+
+/**
+ * Read while the callback holds the event, which Nimbus releases once it settles; held content reads at once. A file's
+ * bytes are read only when `asked`: an observer that already holds a path's baseline needs no second copy of it.
+ */
+function side(ref: VfsContentRef | null | undefined, path: string, asked: boolean): Side | Promise<Side> {
+  if (ref === null) return null;
+
+  // Not captured: the backend would not say what stood there.
+  if (ref === undefined) return 'unreadable';
+
+  if (ref.type === 'directory') return 'directory';
+
+  if (!asked) return 'unasked';
+  const doing = `reading what a write left at ${path}`;
+
+  return settleSync(Effect.match(Effect.try({ try: () => ref.read(), catch: (cause) => toKinuError({ doing, cause, otherwise: 'io' }) }), {
+    onFailure: (failure) => unreadable(failure, path),
+    onSuccess: (read): Side | Promise<Side> => (read instanceof Uint8Array ? read : awaited(read, doing, path)),
+  }));
+}
+
+/** Content the backend reads asynchronously, read while the event is held. */
+function awaited(pending: PromiseLike<Uint8Array>, doing: string, path: string): Promise<Side> {
+  return settle(Effect.match(attempt({ doing, otherwise: 'io' }, async () => pending), {
+    onFailure: (failure) => unreadable(failure, path),
+    onSuccess: (bytes): Side => bytes,
+  }));
+}
+
+const isBytes = (value: Side): value is Uint8Array | null => value === null || value instanceof Uint8Array;
+
+/** `path`'s change as the observer keeps it. A directory made, or kept, is no file's change; one removed is reported. */
+function recorded(observer: WriteObserver, path: string, before: Side, after: Side): void {
+  if ((before === null || before === 'directory') && after === 'directory') return;
+
+  if (before === null && after === null) return;
+  const baseline = observer.needsBaseline(path);
+  let unread: WriteEvent['unread'];
+
+  if (after === 'unreadable') unread = after;
+  else if (baseline && (before === 'directory' || before === 'unreadable')) unread = before;
+
+  // A directory where the file was is the file gone; a file whose bytes could not be read is still there.
+  let now: Uint8Array | null = null;
+
+  if (after === 'unreadable') now = new Uint8Array();
+  else if (isBytes(after)) now = after;
+
+  observer.record({ path, ...(baseline && isBytes(before) && { before }), ...(unread !== undefined && { unread }), after: now });
+}
+
+/**
+ * `observer` hears each mutation a view `mine` names, as Nimbus reports it once landed (`observeWrites`), its content
+ * read for those views alone; answers the unsubscribe. A rename is the source's removal and the destination's change.
+ */
 export function observeNamespace(namespace: CompositeVFS, observer: WriteObserver, mine: (writer: Principal) => boolean = () => true): () => void {
-  return namespace.observeWrites({
-    needsBaseline: (path, writer) => mine(writer) && observer.needsBaseline(path),
-    record: ({ principal: writer, ...event }) => { if (mine(writer)) observer.record(event); },
-  });
+  // Records keep commit order: Nimbus calls once per commit without waiting for the last call to settle.
+  let queue: Promise<void> | null = null;
+
+  return namespace.observeWrites((event: VfsWriteEvent) => {
+    if (!mine(event.principal)) return undefined;
+    const before = side(event.before, event.path, observer.needsBaseline(event.path));
+    const after = side(event.after, event.path, true);
+
+    const land = (was: Side, now: Side): void => {
+      if (event.oldPath !== undefined) recorded(observer, event.oldPath, now, null);
+      recorded(observer, event.path, was, now);
+    };
+
+    if (queue === null && !(before instanceof Promise) && !(after instanceof Promise)) {
+      land(before, after);
+
+      return undefined;
+    }
+
+    const queued: Promise<void> = (queue ?? Promise.resolve()).then(async () => { land(await before, await after); }).then(() => {
+      if (queue === queued) queue = null;
+    });
+
+    queue = queued;
+
+    return queued;
+  }, { wants: (_path, writer) => mine(writer) });
 }

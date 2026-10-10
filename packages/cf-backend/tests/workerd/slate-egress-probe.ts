@@ -106,7 +106,7 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
 
     const unmediated = processes(this.ctx, this.env).spawn(
       () => ({ readFile: async () => { throw new Error('This fixture has inline modules only'); } }),
-      { doId: this.ctx.id.toString(), pid: 900000, writerId },
+      { doId: this.ctx.id.toString(), pid: 900000, writerId, bindingKind: 'process' },
       { pid: 900000, writerId, workerKey: key, startArgs: {}, boot: { kind: 'code', code: {
         ...workerCompatibility, mainModule: 'unmediated.js', env: {},
         modules: { 'unmediated.js': `import { DurableObject } from 'cloudflare:workers';

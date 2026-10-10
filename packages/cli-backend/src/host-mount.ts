@@ -6,7 +6,7 @@ import type { VFS, VfsDirentType } from '@nimbus-sh/core/vfs/vfs.js';
 
 import { lstatSync, mkdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, type Dirent } from 'node:fs';
 import * as fs from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { Effect } from 'effect';
 import type { CheckpointFiles, FileCheckpoints, FileReach, MountedVfs, PathPlanes, VfsDigestWrite, VfsMount } from '@kinu.run/core';
 import { agentHome, FOLDER_SUBTREE, MAIN_AGENT, sha256Hex, withMountTable, workspacePath } from '@kinu.run/core';
@@ -223,33 +223,21 @@ export function localFilePlane(input: LocalFilePlane): LocalPlane {
   };
 }
 
-/** The folder and the own space are the agent's; past them, the user is asked. A link in either is judged by where it points. */
+/**
+ * The folder and the own space are the agent's; past them, the user is asked. The gate hands over the path the
+ * namespace resolved, its links followed as node:fs follows them; a root is matched as named and as its real path,
+ * since a mount point (the space) keeps its name while the folder's links resolve.
+ */
 export function localFileReach(input: Pick<LocalFilePlane, 'folder' | 'space'>, planes: PathPlanes, plane: Pick<LocalPlane, 'resolve'>): FileReach {
+  const roots = [input.folder, input.space].flatMap((root) => [root, tolerate(() => realpathSync(root), 'enoent') ?? root]);
+
   return {
     planes,
     resolve: (path, follow) => plane.resolve(path, { follow }),
     userRoots: () => [],
-    locate: (path, op) => {
-      const at = workspacePath(path, input.folder);
-      // A removal acts on the entry itself, so its own name is not followed.
-      const hostPath = op === 'delete' ? join(landing(dirname(at)), basename(at)) : landing(at);
-
-      return { hostPath, outside: ![input.folder, input.space].some((root) => withinRoot(landing(root), hostPath)) };
-    },
+    locate: (path) => ({ hostPath: path, outside: !roots.some((root) => withinRoot(root, path)) }),
     parksWrites: false,
   };
-}
-
-/** Where `path` lands on this machine: its links followed, as node:fs follows them, and what is not there yet as named. */
-function landing(path: string): string {
-  const real = tolerate(() => realpathSync(path), 'enoent');
-
-  if (real !== undefined) return real;
-
-  // A dangling link is written where it points; anything else missing lands under its nearest existing parent.
-  if (lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink() === true) return landing(resolve(dirname(path), readlinkSync(path)));
-
-  return dirname(path) === path ? path : join(landing(dirname(path)), basename(path));
 }
 
 function withinRoot(root: string, candidate: string): boolean {

@@ -6,7 +6,7 @@ import type { VFS as CoreVFS } from '@nimbus-sh/core/vfs/vfs.js';
 
 import type { AgentRuntime, ActorHandle, LLM, Schedule, Identity, SqlExecutor, SqlValue, RawSqlExec, FiberCtx, ExecutionRouter, TurnAccumulator, DeferredApprovalChannel, WriteObserver, ModelCallSink, ModelOperationSink, ResolvedTurnProfile, SlateCallResult, SlateOperation, ChildContextResolver, ContextTree } from "@kinu.run/core";
 import {
-  nimbusSessionFiles, nimbusSessionShell, createShellSession,
+  nimbusSessionShell, createShellSession,
   DefaultExecutionRouter, createNimbusWorkspaceExecutor,
   workspaceFilePlane, standardMounts, contextMount, skillsMount, type WorkspacePrincipal,
   sharedDriveMount, SHARED_DRIVE_UNCLAIMED, SHARED_DRIVE_UNBOUND, type MossaicVfs,
@@ -14,7 +14,7 @@ import {
   type ShellApprovalPolicy, type ShellApprovalMode, type ApprovalGrant,
   type EgressSecretBinding,
   createSandboxExecutor, createDeviceTunnelExecutor, type DeviceTransport,
-  type NimbusSandboxHandle,
+  type WorkspaceFiles,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore, createSqlFiber,
   createRoutedModelLane, routedLlm, bindRoute,
   createScaffoldSurface,
@@ -58,6 +58,7 @@ import { ownerCaller, type UserCaller } from "@kinu.run/core";
 import { adaptMemory, backfillMemoryVectors } from "@kinu.run/core";
 import { actorAffinity } from "@kinu.run/core";
 import { nimbusPreviewConfigured } from "./nimbus-route";
+import type { HostedBox, WorkspaceServing } from "./workspace-host";
 
 /**
  * Every logical actor in a workspace is built over the root object's `name` and `sql`; runtimes
@@ -72,7 +73,9 @@ export interface CFRuntimeAccess {
   holdLane<T>(body: () => Promise<T>): Promise<T>;
   /** One box per workspace: a child composing its own gets a second, empty filesystem
      *  (tests/unit-head-fork.test.ts). Actors are separated by `shellId` and credential. */
-  workspaceBox(shellId: string): NimbusSandboxHandle;
+  workspaceBox(shellId: string): HostedBox;
+  /** The workspace's exposed ports, the jobs listening on them, and the jobs it runs (`HostedWorkspace.serving`). */
+  workspaceServing(): Promise<WorkspaceServing>;
   /** Absent for facets without a budget ledger; the `workspace` provider then uses a private ledger. */
   readonly acc?: () => Pick<TurnAccumulator, 'files' | 'context'>;
   getCliCwdForDevice?(): string | null;
@@ -202,15 +205,17 @@ function userCredentialSourceFor(env: Env, actor: ActorRuntimeIdentity): UserCre
 
 export type CFRuntime = AgentRuntime & {
   /** Also what the parent-file RPC serves a fork, so a fork reads exactly its parent's bytes. */
-  localVfs: ReturnType<typeof nimbusSessionFiles>;
+  localVfs: WorkspaceFiles;
   /** `refreshStatus()` is awaited at turn start. */
   deviceTransport: DeviceTransport;
   vectorStore: import("@kinu.run/core").VectorStore;
   startupWork: Promise<void>;
   sandboxHandle: SandboxHandle | null;
-  /** Who holds the box's exposed ports, read without the executor's touch; null until this activation used its box:
-   *  a call activates the box's object, and only real use keeps a box alive (D56). */
-  sandboxPortHolders(): PortHolders | null;
+  /**
+   * Which job holds each exposed port, the workspace's and the box's, read without the executor's touch. The box is read
+   * only once this activation used it: a call activates the box's object, and only real use keeps a box alive (D56).
+   */
+  portHolders(): PortHolders;
 };
 
 /** Every runtime this backend builds carries a vector store (noop when unbound). */
@@ -269,13 +274,11 @@ export function createCFRuntime(
     : workspaceBox;
 
   // Workspace state belongs to the session user: a facet's uid could not create entries under `.kinu`.
-  const originVfs = nimbusSessionFiles(workspaceBox, { home: WORKSPACE_ROOT });
+  const originVfs = workspaceBox.store({ home: WORKSPACE_ROOT });
 
   // Both of the actor's planes or neither (see `workspaceExecution`). This unmounted tree keeps foreign
   // bytes out of memory and agent-state snapshots.
-  const baseWorkspaceVfs = hooks.workspaceExecution
-    ? nimbusSessionFiles(workspaceBox, hooks.workspaceExecution)
-    : originVfs;
+  const baseWorkspaceVfs = hooks.workspaceExecution ? workspaceBox.store(hooks.workspaceExecution) : originVfs;
 
   const memoryStore = new MemoryStore(originVfs, sql);
   memoryStore.ensureSchema();
@@ -579,14 +582,30 @@ export function createCFRuntime(
     deviceTransport,
     vectorStore,
     sandboxHandle,
-    sandboxPortHolders: () => {
-      const handle = sandboxHandle;
+    portHolders: () => {
+      const box = hooks.boxUse.used && previewSuffix !== undefined && sandboxHandle !== null ? { handle: sandboxHandle, suffix: previewSuffix } : null;
+      let workspace: Promise<WorkspaceServing> | undefined;
+      let sandbox: Promise<readonly number[]> | undefined;
+      const served = () => workspace ??= access.workspaceServing();
+      const boxed = () => sandbox ??= box === null ? Promise.resolve([]) : box.handle.getExposedPorts(box.suffix).then((rows) => rows.map((row) => row.port));
 
-      if (handle === null || !hooks.boxUse.used || previewSuffix === undefined) return null;
-
+      // A job's id names both planes: the box's listener carries it in its environment, a workspace process as its exec
+      // id. Each plane is asked for its own exposed ports only.
       return {
-        exposedPorts: async () => (await handle.getExposedPorts(previewSuffix)).map((row) => row.port),
-        holders: (ports) => handle.portListeners(JOB_STAMP_ENV, ports),
+        exposedPorts: async () => [...await boxed(), ...(await served()).held.map((held) => held.port)],
+        holders: async (ports) => {
+          const own = await boxed();
+          const listened = box === null ? [] : await box.handle.portListeners(JOB_STAMP_ENV, ports.filter((port) => own.includes(port)));
+
+          return listened === null ? null : [...listened, ...(await served()).held.filter((held) => ports.includes(held.port))];
+        },
+        // Unread, the box's facts stand: the workspace answers for its exposed ports and the jobs it runs a process for.
+        answersFor: async () => {
+          if (box !== null) return null;
+          const { held, jobs } = await served();
+
+          return (fact) => jobs.has(fact.job) || held.some((port) => port.port === fact.port);
+        },
       };
     },
   };

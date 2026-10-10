@@ -8,11 +8,12 @@ import * as v from 'valibot';
 import { fakeMossaic } from '@kinu.run/test-utils/mossaic';
 
 import { isVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
-import { removeTreeWithVfsOps, standardMounts, withMountTable, workspaceFilePlane, type VfsMount, type WorkspacePrincipal } from '../src/vfs/mounts';
+import { removeTree, standardMounts, withMountTable, workspaceFilePlane, type VfsMount, type WorkspacePrincipal } from '../src/vfs/mounts';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { mossaicVfs } from '../src/vfs/mossaic-vfs';
 import { deviceFiles, type DeviceFileScope, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import { createWorkspaceBundle } from './helpers';
+import { storeFiles } from '../src/vfs/nimbus-workspace';
 import type { JsonValue } from '../src/utils/json';
 import { agentCred, agentHome, agentTmpRoot, confineAgentTmp, provisionAgentHome } from '../src/vfs/agent-home';
 
@@ -496,34 +497,24 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		expect(await exists(device, '/home/dev/build')).toBe(false);
 	});
 
-	test('a mid-tree unlink failure stops the pass and reports both halves', async () => {
-		// KINU-013: removal stops at the first refusal and partitions the tree into removed and remaining.
+	test('a refused entry stays with the directories holding it, and the rest of the tree goes', async () => {
+		// KINU-013: a partial removal says what went and what stayed. Nimbus's walk goes on past a refusal, as `rm -r` does.
 		const base = fakeTree({
 			'/build/out.js': 'x',
 			'/build/deep/two.js': 'y',
 		});
 
 		const realUnlink = base.unlink.bind(base);
-		let calls = 0;
 
 		base.unlink = async (path) => {
-			calls += 1;
-
-			if (calls === 3) {
-				throw new VfsError('EACCES', 'held open', path);
-			}
+			if (path === '/build/out.js') throw new VfsError('EACCES', 'held open', path);
 
 			return realUnlink(path);
 		};
 
-		const removal = await removeTreeWithVfsOps(base, '/build');
-
-		if (removal.ok) throw new Error('expected a partial removal, got a completed one');
-
-		expect(removal.removed).toEqual(['/build/deep/two.js', '/build/deep']);
-		expect(removal.remaining).toEqual(['/build/out.js', '/build']);
-		expect(removal.failed.path).toBe('/build/out.js');
-		expect(await exists(base, '/build/deep/two.js')).toBe(false);
+		expect(await removeTree(base, '/build')).toMatchObject({
+			removed: ['/build/deep'], remaining: ['/build', '/build/out.js'], failed: { path: '/build/out.js' },
+		});
 		expect(await exists(base, '/build/deep')).toBe(false);
 		expect(await exists(base, '/build/out.js')).toBe(true);
 		expect(await exists(base, '/build')).toBe(true);
@@ -575,8 +566,19 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		expect(await exists(device, '/home/dev/build/out.js')).toBe(false);
 	});
 
-	test('removeTreeWithVfsOps names an absent path instead of quietly succeeding', async () => {
-		await expect(removeTreeWithVfsOps(fakeTree({}), '/gone')).rejects.toMatchObject({ code: 'ENOENT' });
+	test('a relative path removes the bare base\'s own tree, as it spells it', async () => {
+		const base = fakeTree({ 'build/out.js': 'x', 'build/deep/two.js': 'y', '/build/kept.js': 'rooted' });
+		const mounted = withMountTable(base, [mountOf('pc', fakeTree({}))]);
+
+		await mounted.removeRecursive('build');
+
+		expect(await exists(base, 'build/out.js')).toBe(false);
+		expect(await exists(base, 'build/deep/two.js')).toBe(false);
+		expect(await readText(base, '/build/kept.js')).toBe('rooted');
+	});
+
+	test('removing an absent path names it instead of quietly succeeding', async () => {
+		await expect(removeTree(fakeTree({}), '/gone')).rejects.toMatchObject({ code: 'ENOENT' });
 	});
 
 	test('an absent mount names its absence before a mutation can cross into it', async () => {
@@ -618,6 +620,58 @@ describe('a write on the workspace\'s namespace', () => {
 		expect(await bundle.shell.exec('cat /slates/keeper/package.json /home/main/notes/2026/today.md')).toMatchObject({ stdout: '{"main":"server.ts"}kept', exitCode: 0 });
 		await expect(writeText(files, '/etc/kinu/probe.conf', 'x')).rejects.toMatchObject({ code: 'EACCES' });
 		expect(await exists(files, '/etc/kinu')).toBe(false);
+	});
+});
+
+describe('a watched file tool on the workspace\'s namespace', () => {
+	// Nimbus reports every commit to the store, whoever made it: a head's review lists what its file tool wrote, not what
+	// its shell, its installs or its own state writes did under the same credential.
+	test('hears its own writes, not the shell\'s or the store\'s made as the same user', async () => {
+		const bundle = createWorkspaceBundle(new Database(':memory:'));
+		const heard: string[] = [];
+
+		const { files } = workspaceFilePlane(bundle, {
+			mounts: [], principal: {}, home: WORKSPACE_ROOT,
+			observer: { needsBaseline: () => true, record: (event) => { heard.push(event.path); } },
+		});
+
+		await writeText(files, '/home/main/by-tool.txt', 'tool');
+		await writeText(storeFiles(async () => (await bundle.session()).vfs, { home: WORKSPACE_ROOT }), '/home/main/by-store.txt', 'store');
+		expect(await bundle.shell.exec('echo shell > /home/main/by-shell.txt')).toMatchObject({ exitCode: 0 });
+		await writeText(files, '/home/main/by-tool.txt', 'tool again');
+
+		expect(heard).toEqual(['/home/main/by-tool.txt', '/home/main/by-tool.txt']);
+	});
+});
+
+describe('a device\'s own write report, on a watched plane', () => {
+	// A device writes with its own report (writeFileWithReport), past the namespace, and reports no writes itself: the
+	// head's review must still hear it, with what stood there before.
+	test('is heard with the bytes it replaced, as a namespace write is', async () => {
+		const bundle = createWorkspaceBundle(new Database(':memory:'));
+		const device = fakeTree({ '/notes.md': 'before' });
+
+		const reported = Object.assign(device, {
+			writeFileWithReport: async (path: string, data: Uint8Array) => {
+				await device.writeFile(path, data);
+
+				return null;
+			},
+		});
+
+		const heard: Array<{ path: string; before?: string | null; after: string | null }> = [];
+
+		const text = (value: string | Uint8Array | null | undefined) => (value instanceof Uint8Array ? new TextDecoder().decode(value) : value ?? null);
+
+		const { files } = workspaceFilePlane(bundle, {
+			mounts: [mountOf('pc', reported)], principal: {}, home: WORKSPACE_ROOT,
+			observer: { needsBaseline: () => true, record: (event) => { heard.push({ path: event.path, before: text(event.before), after: text(event.after) }); } },
+		});
+
+		await files.writeFileWithReport?.('/pc/notes.md', new TextEncoder().encode('after'));
+
+		expect(await readText(device, '/notes.md')).toBe('after');
+		expect(heard).toEqual([{ path: '/pc/notes.md', before: 'before', after: 'after' }]);
 	});
 });
 

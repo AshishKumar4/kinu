@@ -25,6 +25,8 @@ declare global {
     /** R2 store for hosted Nimbus runtimes (runtime-catalog.ts:117 calls `.get()`); absent ⇒ hosted
      *  `python3`/`ruby`/`clang` exit 127. */
     NIMBUS_RUNTIME_CACHE?: R2Bucket;
+    /** The digest of the catalog NIMBUS_RUNTIME_CACHE holds (wrangler.jsonc); absent, `nimbus install` refuses. */
+    NIMBUS_RUNTIME_CATALOG_SHA256?: string;
     LOADER: WorkerLoader;
     OrchestratorAgent: DurableObjectNamespace<OrchestratorAgent>;
     /** Per-user DO: profile + agent registry + credentials + defaults. */

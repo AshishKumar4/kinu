@@ -9,7 +9,7 @@ import * as v from 'valibot';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import type { HostedRuntime } from '@nimbus-sh/worker/workspace-host';
 import type { SqlDatabase, VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
-import type { NimbusSandboxHandle, NodeHomeHost, NodeIdentity } from '@kinu.run/core';
+import type { NimbusSandboxHandle, NodeHomeHost, NodeIdentity, RemoteSessionBox } from '@kinu.run/core';
 import {
   facetHomeProvisioner, facetHomeReleaser, nimbusSessionFiles, restoreAgentTmpConfinements,
   settleWorkspaceRoot, WORKSPACE_ROOT, actorHomeName, explorationActorKey } from '@kinu.run/core';
@@ -77,13 +77,6 @@ async function openOwner(): Promise<OwnerFixture> {
         stderr: result.stderr,
       };
     },
-    files: {
-      read: async () => { throw new Error('the owner box execs; it never falls back to the session user'); },
-      write: async () => { throw new Error('the owner box execs; it never falls back to the session user'); },
-      list: async () => { throw new Error('the owner box execs; it never falls back to the session user'); },
-      exists: async () => { throw new Error('the owner box execs; it never falls back to the session user'); },
-      delete: async () => { throw new Error('the owner box execs; it never falls back to the session user'); },
-    },
   };
 
   return {
@@ -92,7 +85,7 @@ async function openOwner(): Promise<OwnerFixture> {
   };
 }
 
-function sessionBoxFor(f: OwnerFixture, cred: VfsCred): NimbusSandboxHandle {
+function sessionBoxFor(f: OwnerFixture, cred: VfsCred): RemoteSessionBox {
   return credentialedSessionBox(f.runtime, cred);
 }
 
@@ -229,31 +222,42 @@ describe('every facet kind is one home namespace on the owner', () => {
   });
 });
 
-function originFilesBox(f: OwnerFixture): NimbusSandboxHandle {
+function originFilesBox(f: OwnerFixture): RemoteSessionBox {
   const view = f.workspace.vfs.as(ORIGIN);
+  const refuse = async (): Promise<never> => { throw new Error('the origin box acts as the origin only'); };
+
+  // Absent is null, as the session's own files answer it.
+  const present = <T>(read: () => T): T | null => {
+    try {
+      return read();
+    } catch (error) {
+      const code = v.safeParse(v.object({ code: v.string() }), error);
+
+      if (code.success && code.output.code === 'ENOENT') return null;
+      throw error;
+    }
+  };
+
+  const stat = async (path: string) => present(() => {
+    const found = view.stat(path);
+
+    return { type: found.type, size: found.size, mtime: found.mtime };
+  });
 
   return {
     ready: async () => undefined,
     exec: (command, options) => f.box.exec(command, options),
     files: {
-      read: async (path) => {
-        try {
-          return view.readFileString(path);
-        } catch (error) {
-          const code = v.safeParse(v.object({ code: v.string() }), error);
-
-          if (code.success && code.output.code === 'ENOENT') return null;
-          throw error;
-        }
-      },
-      write: async (path, content) => {
-        view.writeFile(path, content);
-      },
-      list: async (path) => view.readdir(path ?? '/').map((entry) => ({ name: entry.name })),
-      exists: async (path) => view.exists(path),
-      delete: async (path) => {
-        view.unlink(path);
-      },
+      as: () => { throw new Error('the origin box acts as the origin only'); },
+      readBytes: async (path) => present(() => view.readFile(path)),
+      readRange: async (path, offset, length) => present(() => view.readRange(path, offset, length)),
+      write: async (path, content) => { view.writeFile(path, content); },
+      list: async (path) => view.readdir(path ?? '/').map((entry) => ({ name: entry.name, type: entry.type })),
+      stat,
+      lstat: stat,
+      rename: refuse,
+      mkdir: async (path) => { view.mkdir(path, { recursive: true }); },
+      delete: async (path) => { view.unlink(path); },
     },
   };
 }

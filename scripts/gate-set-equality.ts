@@ -115,6 +115,11 @@ const DISCOVERY: ReadonlySet<string> = new Set([
  */
 export const NON_REPOSITORY_SCANS = new Map<string, string>([
   [
+    'scripts/evals-post.ts',
+    'reads only the per-task artifact directories armada map --artifacts extracted, as named in its JSON outcomes. '
+      + 'These are runtime evidence, not the repository population: their evals-* directories are preserved for Sol.',
+  ],
+  [
     'scripts/preflight.ts',
     'reads the OS temp directory for leaked test scratch. Not a repository path, and the whole '
     + 'point is to see what git never will.',

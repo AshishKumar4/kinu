@@ -29,10 +29,11 @@
  * hooks installed at all.
  */
 
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs';
-import { basename, dirname, join, relative, resolve } from 'node:path';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { cpus } from 'node:os';
 import * as v from 'valibot';
+import { EVAL_TASK_TIMEOUT_SECONDS } from '../evals/src/config';
 import { assertMeasured, finding } from './gate-ratchet';
 import { plantedInputs, readCensusLock } from './census-plants';
 import { DEADLINE_BLIND_SPOTS, DEADLINE_EXIT_CODE, runUnderDeadline, writeFully } from './deadline';
@@ -61,7 +62,7 @@ import { COST_TABLE, type CostTable, costRssMb, costThreads, readCosts } from '.
 import { PRODUCT_FLOW_ROWS } from './product-flow-rows';
 import { resourceCostFile, withResourceCosts } from './gate-cost';
 import {
-  armadaVerdict, parseRunnerTimings, readHostedCosts, readFileTimings, withRunnerCosts, writeVerdicts,
+  armadaVerdict, ciVerdictRow, parseRunnerTimings, readHostedCosts, readFileTimings, withRunnerCosts, writeVerdicts,
   type CIVerdict, type CIVerdictFile, type HostedCosts,
 } from './ci-verdicts';
 
@@ -1134,10 +1135,10 @@ export const LADDER: readonly Gate[] = [
       + 'that ships bytes staging never verified or that production cannot return from: each '
       + 'promote guard removed in turn fails its own test. And a deploy report that marks a red new '
       + 'or carried over against the wrong previous deploy, and a provider key printed by the step '
-      + 'that stores it, or one stored under a name no provider reads, evals dispatched from a branch that '
-      + 'does not hold the build, and a reset that stops '
-      + 'partway with no record, no barrier, or no way to finish it. And a version\'s uncaught exception, '
-      + 'platform kill, failed or owed effect, wake loop or idle wake left out of the deploy\'s findings. '
+      + 'that stores it, or one stored under a name no provider reads, evals started where the commit '
+      + 'is missing, and a reset that stops partway with no record, no barrier, or no way to finish it. '
+      + 'And a version\'s uncaught exception, platform kill, failed or owed effect, wake loop or idle wake '
+      + 'left out of the deploy\'s findings. '
       + 'And two deploys of one environment at once, or continuous staging deploying a tip a newer one '
       + 'passed, or one tip twice, or on another revision\'s install, and a promotion of an unverified build '
       + 'or a red one retried.',
@@ -1534,6 +1535,7 @@ export const LADDER: readonly Gate[] = [
     run: 'bun run evals',
     label: 'Eval suite',
     tier: 'evals',
+    deadline: { seconds: EVAL_TASK_TIMEOUT_SECONDS, why: 'orchestrates native armada work; the deployment harness decides trial silence.' },
     // MEASURED 2026-09-30 on kinu.run serving 2f660875cc: the four tasks' 40 trials, all
     // at once on Muse Spark, took 717s (kinu-logs/evals-fast/prod-muse-40), with no
     // provider wait. It is a floor, not the suite's runtime: a trial stops at its first
@@ -1548,11 +1550,11 @@ export const LADDER: readonly Gate[] = [
       + 'turn is checked black-box: the checker calls the slates the agent built over the slate '
       + 'RPC and compares every answer with its own reference implementation of the contract, so '
       + 'any correct build passes, and reads what a person would: the files, the task board, each '
-      + 'helper\'s runs, and each preview address fetched with no credential. Ten trials per '
-      + 'task, all at once. In CI (.github/workflows/evals.yml) the candidate on staging and the '
-      + 'promoted build on kinu.run run at once under the candidate\'s definitions, compared by a '
+      + 'helper\'s runs, and each preview address fetched with no credential. Five trials per '
+      + 'task, each trial its own armada map task, the candidate on staging and the '
+      + 'promoted build on kinu.run measured at once under the candidate\'s definitions, compared by a '
       + 'two-sided Fisher exact test (evals/src/comparison.ts), with infrastructure failures and '
-      + '429 waits reported apart from the agent\'s results; its Verdict job is what a promote reads.',
+      + '429 waits reported apart from the agent\'s results; its verdict file is what a promote reads.',
     blind: 'anything the tasks do not exercise, and a change smaller than ten trials can tell '
       + 'apart from noise. Its subject is the build the origin serves, not this checkout: '
       + '`bun run deploy:preflight` is what says whether the two are the same.',
@@ -2503,6 +2505,10 @@ export const LADDER: readonly Gate[] = [
     label: 'One trial of every eval task, on the deployment',
     evidence: 'evals',
     phase: 'soak',
+    deadline: { seconds: EVAL_TASK_TIMEOUT_SECONDS, why: 'the local command waits for native armada jobs; '
+      + 'the trial harness on the deployment, not an idle orchestrator, enforces the silence bound.' },
+    here: 'orchestrates the same native armada per-trial map as the statistics, with Kinu\'s explicit connection; '
+      + 'no model work happens on this machine.',
     alone: 'is the deploy\'s soak (L24): started once the deployment serves, never awaited, so a real model\'s minutes '
       + 'are outside the deploy\'s 20-minute wall and its red outside the deploy\'s verdict. Its subject is the DEPLOYED '
       + 'build, driven as eval-service on its own eval workspaces and seeded data, on the models the evals measure. No '
@@ -2516,8 +2522,8 @@ export const LADDER: readonly Gate[] = [
       + 'checks break on the deployment, reported in that deploy\'s report as a soak red with the trial\'s evidence '
       + 'beside it, and a trial that stops advancing, which its silence bound ends.',
     blind: 'a pass rate. One trial says nothing about a task that fails one time in three: the statistics are '
-      + '.github/workflows/evals.yml\'s, which the deploy dispatches against the same deployment and whose '
-      + 'Verdict a promotion waits for.',
+      + 'scripts/evals-map.ts\u2019s, which the deploy starts against the same deployment and whose '
+      + 'verdict a promotion waits for.',
     inputs: { kind: 'live', why: 'drives the DEPLOYED build as eval-service on the models the evals measure.' },
   },
 ];
@@ -2880,7 +2886,8 @@ export const PRODUCT_FLOWS_TIER_SCRIPT = 'scripts/product-flows-tier.sh';
 
 /** `bun --bun vitest run --config evals/vitest.config.ts …`: the eval suite's runner, as `bun run evals` spells it. */
 function runsEvalSuite(words: readonly string[]): boolean {
-  return words.slice(0, 4).join(' ') === 'bun --bun vitest run' && words[words.indexOf('--config') + 1] === EVALS_CONFIG;
+  return (words.length === 2 && words[0] === 'bun' && words[1] === 'scripts/evals-map.ts')
+    || (words.slice(0, 4).join(' ') === 'bun --bun vitest run' && words[words.indexOf('--config') + 1] === EVALS_CONFIG);
 }
 
 /**
@@ -3104,37 +3111,6 @@ function adoptDeployEntry(gate: Gate): string | undefined {
   process.env['BENCH_ARTIFACTS'] = dir;
 
   return dir;
-}
-
-/** A deploy row's evidence: written under `dir` in the checkout, carried back in its task's `artifacts` directory. */
-export interface Evidence {
-  readonly dir: string;
-  readonly artifacts: string;
-}
-
-/** A row's CI verdict, with its evidence when it declares some: the files, copied into its task's artifacts directory
- *  under the row's evidence name, which armada keeps whole and extracts beside the run's report. */
-export function ciVerdictRow(gate: Gate, outcome: { readonly exitCode: number; readonly seconds: number; readonly stdout: string; readonly stderr: string }, timings: CIVerdict['timings'], evidence: Evidence | undefined): CIVerdict {
-  const output = outcome.exitCode === 0 ? '' : outcome.stdout + outcome.stderr;
-  const row: CIVerdict = { run: gate.run, exitCode: outcome.exitCode, seconds: outcome.seconds, output, timings };
-
-  if (evidence === undefined || gate.evidence === undefined || !existsSync(evidence.dir)) return row;
-  const into = join(evidence.artifacts, gate.evidence);
-  const copied: string[] = [];
-
-  // The files the copy takes are the files the verdict names: the copy is the one walk of the evidence.
-  cpSync(evidence.dir, into, {
-    recursive: true,
-    filter: (source) => {
-      if (statSync(source).isFile()) copied.push(join(gate.evidence ?? '', relative(evidence.dir, source)));
-
-      return true;
-    },
-  });
-
-  if (copied.length > 0) row.artifacts = copied.sort();
-
-  return row;
 }
 
 /** `--deploy-phase=<phase>[,<phase>…]` as phases, or undefined when it names none or one that is not a phase. */

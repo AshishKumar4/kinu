@@ -234,7 +234,10 @@ describe('hosted workspace facets', () => {
  * instance properties are private), so `_fsOp` sends any op name, stamped with the binding's own pid.
  */
 async function fsOp(supervisor: SupervisorRPC, op: string, args: readonly string[]): Promise<boolean> {
-  return v.parse(v.boolean(), await supervisor['_fsOp'](op, args));
+  // Any op name at all, as the wire carries it: a method's parameters are compared both ways.
+  const wire: { _fsOp<T>(name: string, values: readonly string[]): Promise<T> } = supervisor;
+
+  return v.parse(v.boolean(), await wire._fsOp<boolean>(op, args));
 }
 
 describe('a hosted process is untrusted code: the host serves only what Nimbus serves', () => {
@@ -274,13 +277,10 @@ describe('hosted file reads report absence by code, not by message', () => {
   test('a non-absence failure still throws when its path contains ENOENT', async () => {
     // `ENOENT-probe` guards reading the VFS `code` rather than matching the message (EISDIR's text holds the substring).
     const actor = hostActor();
-    const files = actor.hosted.box('probe').files;
+    const files = actor.hosted.box('probe').store({ home: '/home/main' });
 
-    if (!files) throw new Error('the hosted box carries no files plane');
-
-    if (!files.mkdir) throw new Error('the hosted files plane carries no mkdir');
     await files.mkdir('/home/main/ENOENT-probe');
-    await expect(files.read('/home/main/ENOENT-probe')).rejects.toThrow('EISDIR');
-    await expect(files.read('/home/main/no-such-file')).resolves.toBeNull();
+    await expect(files.readFile('/home/main/ENOENT-probe')).rejects.toMatchObject({ code: 'EISDIR' });
+    await expect(files.readFile('/home/main/no-such-file')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

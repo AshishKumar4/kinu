@@ -209,4 +209,11 @@ const release: EvalPart = {
   }],
 };
 
-await defineTaskEval(defineEvalTask({ id: 'coding', mission: MISSION, parts: [combinators, release] }));
+await defineTaskEval(defineEvalTask({
+  id: 'coding',
+  modelCallPeak: {
+    calls: 6,
+    source: "GitHub run37880718948 candidate coding-trial-2/ledger.jsonl: peak6 recorded Muse operation intervals, paired by runId+operationId and fenced at the same run_end; two unmatched end rows mark incomplete coverage, not invented intervals.",
+  },
+  mission: MISSION, parts: [combinators, release]
+}));

@@ -4,7 +4,7 @@
  * Nimbus's hosted runtime (`composeHostedRuntime`); facets reach it through {@link createWorkspaceBoxClient}.
  */
 
-import { createWorkspace, workspaceBoxFiles, workspaceGenerationStorage } from '@kinu.run/core/workspace';
+import { createWorkspace, workspaceGenerationStorage } from '@kinu.run/core/workspace';
 import type { RuntimeSource, SupervisorOpResult, WorkspaceBundle } from '@kinu.run/core/workspace';
 import { jsonResultOrVoid, sha256Hex } from '@kinu.run/core';
 import type {
@@ -16,7 +16,7 @@ import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { ComposedFacetManager, HostedRuntime, HostedRuntimeOptions, HostedRuntimeTask, HostedSession, HostedSessionScope, WorkerRecipe } from '@nimbus-sh/worker/workspace-host';
-import { clearPortCapability, readPortReservation, readPortReservationByOwner, releasePortReservation } from '@nimbus-sh/worker/port-capability';
+import { clearPortCapability, listPortReservations, readPortReservation, readPortReservationByOwner, releasePortReservation } from '@nimbus-sh/worker/port-capability';
 import type { DurableApps } from '@kinu.run/core/slates';
 import * as v from 'valibot';
 import type { NimbusTasks } from './nimbus-tasks';
@@ -51,7 +51,7 @@ interface WorkspaceHostNamespace<Id> extends ObjectNamespace<Id, WorkspaceHostTa
 }
 
 /** Never the whole Env: that would put every binding inside a package manager. */
-export interface HostedWorkspaceEnv<Id> extends Pick<Env, 'LOADER' | 'NIMBUS_RUNTIME_CACHE'> {
+export interface HostedWorkspaceEnv<Id> extends Pick<Env, 'LOADER' | 'NIMBUS_RUNTIME_CACHE' | 'NIMBUS_RUNTIME_CATALOG_SHA256'> {
   readonly ASSETS?: Fetcher;
   readonly OrchestratorAgent: WorkspaceHostNamespace<Id>;
 }
@@ -61,7 +61,7 @@ type HostedRuntimeBindings<Id> = HostedRuntimeOptions['env'] & { readonly Orches
 /** Loaded on first composition, not at module eval, to keep cold start and the test pool loader clean. */
 interface HostedRuntimeModule {
   readonly composeHostedRuntime: (options: HostedRuntimeOptions) => Promise<HostedRuntime>;
-  readonly runtimeCatalogSource: (env: Pick<HostedRuntimeOptions['env'], 'NIMBUS_RUNTIME_CACHE'>) => RuntimeSource;
+  readonly runtimeCatalogSource: (env: Pick<HostedRuntimeOptions['env'], 'NIMBUS_RUNTIME_CACHE' | 'NIMBUS_RUNTIME_CATALOG_SHA256'>) => RuntimeSource;
 }
 
 let runtimeModule: Promise<HostedRuntimeModule> | null = null;
@@ -113,10 +113,25 @@ export interface WorkspaceTerminal {
   terminalClose(ws: TerminalSocket): void;
 }
 
+export interface WorkspaceServing {
+  readonly held: readonly { readonly port: number; readonly stamp: string | null }[];
+  readonly jobs: ReadonlySet<string>;
+}
+
+/** A box over the workspace this object hosts: its store is the database itself, so its files need no session call. */
+export interface HostedBox extends NimbusSandboxHandle {
+  store: WorkspaceBundle['files'];
+}
+
 export interface HostedWorkspace {
   readonly bundle: WorkspaceBundle;
   /** One agent's view: a named call runs in the runtime's named shell, keyed by `scope` and the name. */
-  box(scope: string): NimbusSandboxHandle;
+  box(scope: string): HostedBox;
+  /**
+   * Each exposed workspace port with the job whose process listens on it, by the exec id that process carries, and every
+   * job with a live process here.
+   */
+  serving(): Promise<WorkspaceServing>;
   /** Answered by the hosted runtime (host ops need it), for every name this object is opened under; a
      *  sibling is never a Kinu workspace, so nothing here claims an owner or writes a transcript. The envelope
      *  is a hosted process's own data: Nimbus's dispatcher is the one place that refuses an op it does not serve. */
@@ -208,11 +223,12 @@ function resolveSlateLaunch<Id>(deps: HostedWorkspaceDeps<Id>, recipe: WorkerRec
 export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): HostedWorkspace {
   const sql = deps.ctx.storage.sql;
   const catalog = deps.env.NIMBUS_RUNTIME_CACHE;
+  const catalogDigest = { NIMBUS_RUNTIME_CACHE: catalog, NIMBUS_RUNTIME_CATALOG_SHA256: deps.env.NIMBUS_RUNTIME_CATALOG_SHA256 };
 
-  // Only the R2 catalogue of this env; the module is read lazily.
+  // Only the R2 catalogue of this env, read by the digest it names; the module is read lazily.
   const runtimeSource: RuntimeSource | undefined = catalog === undefined ? undefined : {
-    list: async () => (await hostedRuntimeModule()).runtimeCatalogSource({ NIMBUS_RUNTIME_CACHE: catalog }).list(),
-    resolve: async (spec) => (await hostedRuntimeModule()).runtimeCatalogSource({ NIMBUS_RUNTIME_CACHE: catalog }).resolve(spec),
+    list: async () => (await hostedRuntimeModule()).runtimeCatalogSource(catalogDigest).list(),
+    resolve: async (spec) => (await hostedRuntimeModule()).runtimeCatalogSource(catalogDigest).resolve(spec),
   };
 
   const bundle = createWorkspace({
@@ -247,7 +263,7 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
           OrchestratorAgent: deps.env.OrchestratorAgent,
           LOADER: fabricLoader(deps.env.LOADER),
           ASSETS: deps.env.ASSETS,
-          NIMBUS_RUNTIME_CACHE: catalog,
+          ...catalogDigest,
         };
 
         const runtime = await composeHostedRuntime({
@@ -319,17 +335,35 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
     return { routed: true, capability, slate, capture, refused: null };
   };
 
-  const files = workspaceBoxFiles(async () => (await bundle.session()).vfs);
-
   return {
     bundle,
     supervisorOp: async (envelope) => (await runtime()).supervisorOp(envelope),
     session: async (scope) => (await runtime()).session(scope),
-    box: (scope) => workspaceBox({
-      runtime, ports: portRegistry, ctx: deps.ctx, files, scope, previewUrl: deps.previewUrl, previewGates,
-      mountTable: (mounts, principal) => bundle.mountTable(mounts, principal),
-      namespace: (principal) => bundle.namespace(principal),
+    box: (scope) => ({
+      ...workspaceBox({
+        runtime, ports: portRegistry, ctx: deps.ctx, scope, previewUrl: deps.previewUrl, previewGates, exposed: deps.onPortsChanged,
+        mountTable: (mounts, principal) => bundle.mountTable(mounts, principal),
+        namespace: (principal) => bundle.namespace(principal),
+      }),
+      store: (plane) => bundle.files(plane),
     }),
+    // A listing says which job serves a port; it is no authority over the port's exposure. A runtime this isolate never
+    // composed runs no process, so it answers nothing without booting the workspace.
+    serving: async () => {
+      if (composing === undefined) return { held: [], jobs: new Set() };
+      await composing;
+      const { processes } = await bundle.session();
+      const exposed = [...await listPortReservations(deps.ctx)].flatMap(([port, held]) => (held.capability === null ? [] : [port]));
+
+      return {
+        held: exposed.map((port) => {
+          const listener = portRegistry.get(port);
+
+          return { port, stamp: listener === undefined ? null : processes.get(listener.pid)?.execId ?? null };
+        }),
+        jobs: new Set(processes.getRunning().flatMap((entry) => (entry.execId === undefined ? [] : [entry.execId]))),
+      };
+    },
     facetManager: async () => (await compose()).facets,
     ports: async () => (await compose()).ports,
     terminal: async () => {
@@ -456,10 +490,11 @@ function workspaceBox(deps: {
   runtime: () => Promise<HostedRuntime>;
   ports: PortRegistry;
   ctx: DurableObjectState;
-  files: NimbusSandboxHandle['files'];
   scope: string;
   previewUrl(port: number, capability: string): Promise<WorkspacePreviewUrl>;
   previewGates(port: number, handle: string): Promise<PreviewGates>;
+  /** An exposure changed which ports are exposed; a withdrawal is the registry's own move. */
+  exposed: (() => void) | undefined;
   mountTable: NonNullable<NimbusSandboxHandle['mountTable']>;
   namespace: NonNullable<NimbusSandboxHandle['namespace']>;
 }): NimbusSandboxHandle {
@@ -487,7 +522,6 @@ function workspaceBox(deps: {
 
       return saved.success ? saved.output.cwd : null;
     },
-    files: deps.files,
     runtimes: {
       ensure: async (specs, options) => await jsonResultOrVoid((await runtime()).ensureRuntimes(Array.isArray(specs) ? [...specs] : [specs], options)),
       install: async (spec, options) => await jsonResultOrVoid((await runtime()).installRuntime(spec, options)),
@@ -510,6 +544,8 @@ function workspaceBox(deps: {
         }
 
         const gates = await deps.previewGates(port, exposed.capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH));
+
+        deps.exposed?.();
 
         return { port: exposed.port, pid: exposed.pid, capability: exposed.capability, url: answer.url, route: routeCheck(gates) };
       },

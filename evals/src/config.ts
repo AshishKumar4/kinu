@@ -76,6 +76,24 @@ function positiveInteger(env: Env, name: string, fallback: number): number {
   return value;
 }
 
+/** Project load ceiling on the one opencode-go bearer shared by both deployments' trial accounts.
+ * Twenty requests were measured clean on 2026-09-26 (93b6c02f1); the 340-trial burst in run
+ * 37726316713 was refused 429. This is a shared-key scheduling ceiling, not an advertised per-key
+ * provider quota: OpenCode Go publishes usage windows, not a concurrency limit. Splitting Kinu
+ * trial accounts or running both deployments does not give their common bearer another budget. */
+export const MUSE_CALLS_AT_ONCE = 20;
+
+/** Native map pools for equal measured call widths. Their jobs include both legs and share one budget:
+ * 9*1 + 1*2 + 1*3 + 1*6 = 20 calls, 12 trials at once for the full matrix. Each task definition
+ * records its own peak and evidence; a width queue never averages peaks or relies on queue order.
+ * Static allocation approved by Main, 2026-10-09, after the retained operation-overlap measurement. */
+export const EVAL_WIDTH_POOLS = { 1: 9, 2: 1, 3: 1, 6: 1 } as const;
+
+/** Infrastructure ceiling only: armada f8725d7 worker/src/job.ts JOB_DEADLINE_MS is six hours.
+ * Its protocol has no timeout maximum; do not confuse the retracted client `timeout 2400` probe
+ * with a platform wall. Harness silence still decides a hang, never elapsed trial time. */
+export const EVAL_TASK_TIMEOUT_SECONDS = 6 * 60 * 60;
+
 /**
  * How many trials of a task run at once: all of them, unless `KINU_EVAL_CONCURRENCY` caps it for a provider that
  * cannot hold them. A trial waits on its provider, not on this machine. Muse Spark met no provider wait with 20 trials

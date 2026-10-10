@@ -28,13 +28,13 @@ import {
   type ActorHost, type ActorToolsetDeps, type AgentsToolDeps,
   type BoundActor, type HeadInput,
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult, type HostedActor,
-  type LoopOrigin, type NimbusSandboxHandle, type NodeHomeHost,
+  type LoopOrigin, type NodeHomeHost,
   type SqlExec, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
   isSubordinateOrigin,
   whenActorTakesInput,
   type PlanEdit, type PlanReview, type PlanReviewResult, actorReadHandle,
 } from "@kinu.run/core";
-import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
+import { createHostedWorkspace, type HostedBox, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { agentFacet, agentStateShellId, AgentMemory, AgentStoreBroker, AgentWorkspaceHost, headDeltas, uiChunks, type AgentFacetPlacement } from "./agent-facets";
 import { agentCallsThrough, AgentIsolateSlots } from "./dynamic-worker-slots";
 import { providerBindingsOf, routedModelReads } from "./providers/agent-registry";
@@ -547,7 +547,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         this.broadcastToActor(null, JSON.stringify({ type: SLATES_CHANGED_EVENT, ids }));
         this.overviewChanged();
       },
-      onPortsChanged: () => { this.liveReadsMoved(['getExposedPorts', 'listSlates']); },
+      onPortsChanged: () => {
+        this.liveReadsMoved(['getExposedPorts', 'listSlates']);
+        this.detachOwned(Effect.promise(() => this.servingMoved()));
+      },
       ensureSlate: (owner) => this.slates.ensureDurable(owner),
       slateInvocation: (port, socket) => this.slates.slateInvocation(port, socket),
       ...(this.pictureCapture() !== null && {
@@ -589,7 +592,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
-  protected workspaceBox(shellId: string): NimbusSandboxHandle {
+  protected workspaceServing(): ReturnType<HostedWorkspace['serving']> {
+    return this.hostedWorkspace().serving();
+  }
+
+  protected workspaceBox(shellId: string): HostedBox {
     return this.hostedWorkspace().box(shellId);
   }
 
@@ -1092,6 +1099,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ownerUserId: () => this.getOwnerUserId(),
       capabilityToken: () => this.workspaceCapabilityToken(),
       workspaceBox: (shellId) => this.workspaceBox(shellId),
+      workspaceServing: () => this.workspaceServing(),
       homeHost: () => this.facetHomeHost(),
       homes: this.actorHomes,
       // The root's durable program is always readable because the root is this runtime;

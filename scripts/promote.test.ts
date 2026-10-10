@@ -6,7 +6,7 @@ import * as v from 'valibot';
 import { scratchDir } from '../packages/test-utils/src/scratch';
 import {
   adoptDownloads, adoptTarball, artifactDigest, downloadsServed, evalVerdictRefusal, imagesStagingNeverRan, planRollback, readDownloads,
-  verifyServing, type Promotion, type RunJob, type Verified,
+  readEvalsVerdict, verifyServing, type EvalVerdict, type Promotion, type Verified,
 } from './promote';
 import { ResetSchema, type Reset } from './reset';
 
@@ -285,18 +285,30 @@ describe('a rollback', () => {
   });
 });
 
-// THE STATISTICS GATE PRODUCTION: a staging build is promoted on its evals run's Verdict job, never on the run's own
+// THE STATISTICS GATE PRODUCTION: a staging build is promoted on its evals verdict file, never on a run's own
 // conclusion, which is green whenever the run finished, however its trials went.
 describe('the eval verdict a promotion waits for', () => {
-  const job = (name: string, status: string, conclusion: string | null): RunJob => ({ name, status, conclusion, html_url: `https://github.com/x/y/actions/runs/1/job/${name}` });
+  const verdict = (pass: boolean, reason: string): EvalVerdict => ({ pass, reason });
 
-  test('only a completed, green Verdict job lets a build through', () => {
-    const finished = [job('Plan', 'completed', 'success'), job('Evals', 'completed', 'success')];
+  test('only a passing verdict file lets a build through', () => {
+    expect(evalVerdictRefusal(verdict(true, '5/5 held on every task'), 'verified/abc.json')).toBeUndefined();
+    expect(evalVerdictRefusal(undefined, 'verified/abc.json')).toBe('no eval verdict yet: verified/abc.json names none');
+    expect(evalVerdictRefusal(verdict(false, 'coding fell 5/5 to 1/5'), 'verified/abc.json'))
+      .toBe('the eval verdict refuses: coding fell 5/5 to 1/5 (verified/abc.json)');
+  });
 
-    expect(evalVerdictRefusal([...finished, job('Verdict', 'completed', 'success')], 'evals run 1')).toBeUndefined();
-    expect(evalVerdictRefusal(finished, 'evals run 1')).toBe('no eval verdict yet: evals run 1 has no Verdict job');
-    expect(evalVerdictRefusal([...finished, job('Verdict', 'in_progress', null)], 'evals run 1')).toContain('still in_progress');
-    expect(evalVerdictRefusal([...finished, job('Verdict', 'completed', 'failure')], 'evals run 1')).toContain('the eval verdict is failure');
-    expect(evalVerdictRefusal([...finished, job('Verdict', 'completed', 'skipped')], 'evals run 1')).toContain('the eval verdict is skipped');
+  test('a completed pilot cannot authorize a promotion even if its comparison says pass', () => {
+    const dir = scratchDir('promote-evals-verdict');
+
+    mkdirSync(join(dir, 'comparison'), { recursive: true });
+    writeFileSync(join(dir, 'comparison', 'verdict.json'), JSON.stringify({ pass: true, reason: 'held' }));
+    writeFileSync(join(dir, 'run.json'), JSON.stringify({
+      definitions: 'abcdef1', candidateBuild: 'abcdef1', baselineBuild: 'abcdef2',
+      taskFiles: ['evals/tasks/chess.eval.ts', 'evals/tasks/swarm.eval.ts'], models: ['opencode-go/muse-spark-1.3-contributor'],
+      arms: ['product'], trials: 2, startedAt: 1, jobs: ['armada-job'], pool: 2,
+      queues: [{ calls: 2, pool: 1, job: 'armada-job', tasks: ['office'] }], pass: false,
+    }));
+
+    expect(() => readEvalsVerdict(dir, 'abcdef1')).toThrow('full statistical matrix');
   });
 });

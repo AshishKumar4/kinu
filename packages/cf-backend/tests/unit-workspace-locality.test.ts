@@ -10,7 +10,7 @@ import { createHostedWorkspace, type HostedWorkspace, type HostedWorkspaceEnv } 
 import { MemoryStore } from '@kinu.run/agent-utils/memory';
 import { fakeMossaic, sqlOver } from '@kinu.run/test-utils';
 import {
-  agentCred, agentIdentity, mossaicVfs, nimbusSessionFiles, provisionAgentHome, sharedDriveMount, workspaceSoul, workspaceFilePlane, WORKSPACE_ROOT,
+  agentCred, agentIdentity, mossaicVfs, provisionAgentHome, sharedDriveMount, workspaceSoul, workspaceFilePlane, WORKSPACE_ROOT,
   initWorkspaceActorTable, WORKSPACE_IDENTITY_DDL, writeWorkspaceSoul, type JsonValue,
 } from '@kinu.run/core';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -136,7 +136,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       .toBe('the bytes are here\n');
 
     // A memory note is stamped by its change time: a same-length rewrite with its mtime restored still moves it.
-    const plane = nimbusSessionFiles(workspace.box('main'), { home: WORKSPACE_ROOT });
+    const plane = workspace.box('main').store({ home: WORKSPACE_ROOT });
     const before = await plane.stat('memory/MEMORY.md', { follow: false });
     setSystemTime(Date.now() + 5_000);
 
@@ -196,7 +196,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const actor = actorObject();
     const open = await ownedSoul(actor);
     const workspace = open();
-    await workspace.box('agent:main').files.write('/home/main/SOUL.md', '# main edited this\n');
+    await writeText(workspace.box('agent:main').store({ home: WORKSPACE_ROOT }), '/home/main/SOUL.md', '# main edited this\n');
     expect(await workspaceSoul(workspace.bundle)).toBe('# main edited this\n');
 
     const session = await workspace.bundle.session();
@@ -250,8 +250,10 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     expect(await readText(workspace.bundle.vfs, 'proof/from-shell.txt'))
       .toBe('from the shell');
 
-    expect(await box.files.read('/home/main/proof/from-shell.txt')).toBe('from the shell');
-    expect(await box.files.exists('/home/main/proof/from-vfs.txt')).toBe(true);
+    const store = box.store({ home: WORKSPACE_ROOT });
+
+    expect(await readText(store, '/home/main/proof/from-shell.txt')).toBe('from the shell');
+    expect(await exists(store, '/home/main/proof/from-vfs.txt')).toBe(true);
   });
 
   test('the shell serves the file plane\'s mount points: /shared lists and reads through the same table', async () => {
@@ -756,6 +758,41 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     expect(redriven).toEqual(['keeper']);
     expect(kv.has('resident-launch:41')).toBe(false);
   });
+});
+
+// A dev server a job started reads as that job serving, as a sandbox job's does: Nimbus names each process by the exec
+// that started it (execId), and Kinu runs a job's command under the job's id.
+test('an exposed workspace port is served by the job whose process listens on it, and no other port is', async () => {
+  const actor = actorObject();
+  Object.assign(actor.ctx.storage, durableStorage(new Map<string, JsonValue>()));
+
+  const workspace = createHostedWorkspace({
+    tasks: HELD_NIMBUS_TASKS,
+    ctx: actor.ctx, env: workspaceBindings(),
+    previewUrl: async (_port, capability) => ({ url: `https://preview.test/${capability}/` }),
+  });
+
+  const session = await workspace.bundle.session();
+  const manager = (await workspace.facetManager()).manager;
+
+  // Each listener as `listen` makes one, its process named by the exec that started it where one did.
+  for (const [port, execId] of [[8090, 'bgjob-server'], [8091, undefined], [8092, 'bgjob-quiet']] as const) {
+    const pid = session.processes.spawn('slate', ['node', 'server.js'], SLATE_CWD, { longRunning: true, ...(execId !== undefined && { execId }) }).pid;
+    (await workspace.ports()).bindFacetStub(pid, { handleHttpRequest: async () => new Response('ok') });
+    await manager.registerPort(pid, port);
+  }
+
+  const ports = workspace.box('agent').ports;
+
+  if (ports?.expose === undefined) throw new Error('the workspace box has no port exposure');
+  await ports.expose(8090);
+  await ports.expose(8091);
+
+  const { held, jobs } = await workspace.serving();
+
+  expect(held).toEqual([{ port: 8090, stamp: 'bgjob-server' }, { port: 8091, stamp: null }]);
+  // The read answers for every job running here, the one that serves nothing it exposed included.
+  expect([...jobs].sort()).toEqual(['bgjob-quiet', 'bgjob-server']);
 });
 
 test('a port that starts or stops listening is heard by the workspace, which re-reads its pages\' port lists', async () => {

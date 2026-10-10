@@ -39,6 +39,7 @@ import assert from 'node:assert/strict';
 
 import { join } from 'node:path';
 import { build } from 'esbuild';
+import { nodeRequireAsImport } from '../../esbuild-node-require';
 import { Miniflare, NoOpLog } from 'miniflare';
 import * as v from 'valibot';
 import { parseJsonc } from '../../../../scripts/jsonc';
@@ -95,6 +96,8 @@ const bundle = await build({
   metafile: true,
   loader: { '.wasm': 'binary' },
   external: ['cloudflare:workers', 'cloudflare:sockets', 'node:*'],
+  // A CommonJS dependency's require of a built-in is an import of it here too, as production's bundler makes it.
+  plugins: [nodeRequireAsImport],
 });
 
 const workerScript = bundle.outputFiles[0].text;

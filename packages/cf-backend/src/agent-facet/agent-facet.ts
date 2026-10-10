@@ -9,7 +9,7 @@ import {
   encodeModelMessageValues, jsonResultOrVoid, readAgentArchivePage,
   type InspectedWork,
   type AgentOwnInspection, type AnsweredEvolutionHelper, type JsonValue, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage,
-  type NimbusSandboxHandle, type PositionPageRequest, type ProviderEnv, type SerializedMessage, type SubordinateInspectionResult,
+  type RemoteSessionBox, type PositionPageRequest, type ProviderEnv, type SerializedMessage, type SubordinateInspectionResult,
   servedContextTree, type ContextEditor, type ContextTreeRemote, type SpendLedger, type StepSpendSource, type TurnRequestIndex, type TurnRequestPage, type ConversationSearchHit, type ConversationScrollResult, type ConversationSummary,
   type SendState,
 } from '@kinu.run/core';
@@ -39,7 +39,7 @@ export interface AgentFacetEnv {
   readonly WORKERS_AI_VIA_BINDING?: string;
 }
 
-function sandboxHandle(sandbox: NimbusSandbox): NimbusSandboxHandle {
+function sandboxHandle(sandbox: NimbusSandbox): RemoteSessionBox {
   return {
     ready: () => sandbox.ready(),
     exec: (command, options) => sandbox.exec(command, options),
@@ -180,9 +180,9 @@ export interface AgentFacetCalls {
 export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFacetCalls {
   private readonly workspaceCalls = workspaceClient(this.env.WORKSPACE);
 
-  private box: NimbusSandboxHandle | undefined;
+  private box: RemoteSessionBox | undefined;
 
-  private stateBox: NimbusSandboxHandle | undefined;
+  private stateBox: RemoteSessionBox | undefined;
 
   private database: AgentDatabase | undefined;
 
@@ -198,14 +198,14 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return createAgentProviderRegistry({ ...deps, env: this.env });
   }
 
-  protected workspace(): NimbusSandboxHandle {
+  protected workspace(): RemoteSessionBox {
     this.box ??= sandboxHandle(Nimbus.fromSession((): NimbusSessionSurface => this.workspaceCalls.session())
       .sandbox(this.env.WORKSPACE_NAME, { shellId: this.env.SHELL_ID, root: this.env.HOME }));
 
     return this.box;
   }
 
-  private state(): NimbusSandboxHandle {
+  private state(): RemoteSessionBox {
     this.stateBox ??= sandboxHandle(Nimbus.fromSession((): NimbusSessionSurface => this.workspaceCalls.stateSession())
       .sandbox(this.env.WORKSPACE_NAME, { shellId: this.env.STATE_SHELL_ID }));
 

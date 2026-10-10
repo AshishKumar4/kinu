@@ -3,31 +3,24 @@
  * names the observe/stop calls, and a handle that cannot start one says so.
  */
 import { describe, expect, test } from "bun:test";
-import { createNimbusWorkspaceExecutor, nimbusSessionFiles, nimbusSessionShell, type NimbusSandboxHandle, type NimbusStartResult, WORKSPACE_ROOT } from "../src/index";
+import { createNimbusWorkspaceExecutor, nimbusSessionFiles, nimbusSessionShell, type RemoteSessionBox, type NimbusStartResult, WORKSPACE_ROOT } from "../src/index";
+import { sessionFilesOver } from "@kinu.run/test-utils/vfs";
 import { createTestRuntime } from "./helpers";
 
-const baseFiles: NimbusSandboxHandle["files"] = {
-  read: async () => null,
-  write: async () => {},
-  list: async () => [],
-  stat: async () => null,
-  exists: async () => false,
-  delete: async () => {},
-};
 
-function handleWith(start: () => Promise<NimbusStartResult>): NimbusSandboxHandle {
+function handleWith(start: () => Promise<NimbusStartResult>): RemoteSessionBox {
   return {
     ready: async () => {},
     exec: async (command: string) => ({
       command, success: true, stdout: "", stderr: "", exitCode: 0,
     }),
     startProcess: start,
-    files: baseFiles,
+    files: sessionFilesOver(),
   };
 }
 
 /** The hosted workspace over `box`, composed as cf-backend composes it. */
-function workspaceOver(box: NimbusSandboxHandle, runtimeCatalog?: boolean) {
+function workspaceOver(box: RemoteSessionBox, runtimeCatalog?: boolean) {
   const { rt } = createTestRuntime();
 
   return createNimbusWorkspaceExecutor({

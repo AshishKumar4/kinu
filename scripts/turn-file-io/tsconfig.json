@@ -1,0 +1,6 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "noEmit": true, "lib": ["ES2024", "DOM", "DOM.Iterable"], "jsx": "react-jsx", "types": ["@cloudflare/workers-types", "bun-types", "vite/client"] },
+  "include": ["*.ts", "*.d.ts", "../turn-file-io.ts", "../../packages/cf-backend/env.d.ts", "../../packages/cf-backend/src/slate-vendor.d.ts", "../../packages/core/src/prompts/markdown.d.ts"],
+  "exclude": ["staging.ts", "staging-cpu.ts"]
+}

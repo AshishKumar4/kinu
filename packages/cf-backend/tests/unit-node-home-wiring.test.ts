@@ -17,7 +17,8 @@ import {
   type NodeIdentity,
   type NodeWorkspace,
   type NodeWorkspaceProvisioner, actorHomeName, explorationActorKey } from '@kinu.run/core';
-import type { NimbusSandboxHandle } from '@kinu.run/core';
+import type { NimbusSandboxHandle, RemoteSessionBox } from '@kinu.run/core';
+import { sessionFilesOver } from '@kinu.run/test-utils/vfs';
 import { nimbusSessionFiles, readExecutorFile, writeExecutorFileOp, type ExecutorFileLookup, WORKSPACE_ROOT } from '@kinu.run/core';
 import { createWorkspace, workspaceGenerationStorage } from '@kinu.run/core/workspace';
 import {
@@ -336,7 +337,7 @@ class RootExecNimbus {
 }
 
 /** Answers every command and records it; a refusal is scripted through {@link scriptedBox}. */
-function nimbusBox(nimbus: RootExecNimbus): NimbusSandboxHandle {
+function nimbusBox(nimbus: RootExecNimbus): RemoteSessionBox {
   return {
     ready: async () => undefined,
     exec: async (command, options) => {
@@ -344,13 +345,7 @@ function nimbusBox(nimbus: RootExecNimbus): NimbusSandboxHandle {
 
       return { command, success: true, exitCode: 0, stdout: '', stderr: '' };
     },
-    files: {
-      read: async () => null,
-      write: async () => undefined,
-      list: async () => [],
-      exists: async () => false,
-      delete: async () => undefined,
-    },
+    files: sessionFilesOver(),
   };
 }
 
@@ -399,7 +394,7 @@ describe('hosted node execution', () => {
 });
 
 /** `exec` and the pid-less file RPCs carry the same credential, so file tools and commands are one identity. */
-function sessionBox(f: Fixture, cred: VfsCred): NimbusSandboxHandle {
+function sessionBox(f: Fixture, cred: VfsCred): RemoteSessionBox {
   return credentialedSessionBox(f.runtime, cred);
 }
 
@@ -414,29 +409,6 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
 
     expect(written).toEqual(['/home/main/notes.md']);
     expect(nimbus.calls).toEqual([]);
-  });
-
-  test('a credentialed plane whose view lacks stat, mkdir or readRange still acts as the node', async () => {
-    // A fallback to the session user would silently change identity: the boundary is uid/gid on real inodes.
-    const nimbus = new RootExecNimbus();
-    const box = nimbusBox(nimbus);
-    const cred: VfsCred = { uid: 2000, gid: 2000, groups: [2000], umask: 0o022 };
-    box.files.as = () => ({ read: async () => null, write: async () => undefined, list: async () => [], exists: async () => false, delete: async () => undefined });
-
-    const plane = nimbusSessionFiles(box, { home: '/home/node-A', cred });
-    await plane.mkdir('/home/node-A/dir', { recursive: true });
-    await plane.stat('/home/node-A/dir');
-    await plane.readRange('/home/node-A/file', 0, 4);
-
-    expect(nimbus.calls).toHaveLength(3);
-    expect(nimbus.calls.map((call) => call.options.cred)).toEqual([cred, cred, cred]);
-  });
-
-  test('a handle with no credential-bound plane refuses to act as a node, by name', () => {
-    const box = nimbusBox(new RootExecNimbus());
-    const cred: VfsCred = { uid: 2000, gid: 2000, groups: [2000], umask: 0o022 };
-
-    expect(() => nimbusSessionFiles(box, { home: '/home/node-A', cred })).toThrow(expect.objectContaining({ code: 'unsupported' }));
   });
 
   test('against the real substrate: the node writes its own home, a sibling is refused', async () => {

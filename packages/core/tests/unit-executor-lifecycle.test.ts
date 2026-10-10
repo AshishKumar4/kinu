@@ -10,10 +10,11 @@ import {
   nimbusSessionFiles,
   nimbusSessionShell,
   isSandboxTransientError,
-  type NimbusSandboxHandle,
+  type RemoteSessionBox,
   type SandboxHandle,
   WORKSPACE_ROOT,
 } from "../src/index";
+import { sessionFilesOver } from "@kinu.run/test-utils/vfs";
 
 function sandboxHandle(): SandboxHandle & { calls: string[]; execOptions: unknown[] } {
   const calls: string[] = [];
@@ -61,7 +62,7 @@ function sandboxHandle(): SandboxHandle & { calls: string[]; execOptions: unknow
   };
 }
 
-function nimbusBox(): NimbusSandboxHandle & { calls: string[]; execOptions: unknown[] } {
+function nimbusBox(): RemoteSessionBox & { calls: string[]; execOptions: unknown[] } {
   const calls: string[] = [];
   const execOptions: unknown[] = [];
 
@@ -85,32 +86,7 @@ function nimbusBox(): NimbusSandboxHandle & { calls: string[]; execOptions: unkn
         timestamp: Date.now(),
       };
     },
-    files: {
-      async read(path: string) {
-        calls.push(`read:${path}`);
-
-        return "hello";
-      },
-      async write(path: string, content: string | Uint8Array) {
-        calls.push(`write:${path}:${content instanceof Uint8Array ? content.byteLength : content}`);
-      },
-      async list(path: string) {
-        calls.push(`list:${path}`);
-
-        return [{ name: "a.txt", type: "file" }];
-      },
-      async exists(path: string) {
-        calls.push(`exists:${path}`);
-
-        return true;
-      },
-      async mkdir(path: string) {
-        calls.push(`mkdir:${path}`);
-      },
-      async delete(path: string) {
-        calls.push(`delete:${path}`);
-      },
-    },
+    files: sessionFilesOver(),
     runtimes: {
       async ensure(specs: string | string[]): Promise<undefined> {
         calls.push(`ensure:${Array.isArray(specs) ? specs.join(",") : specs}`);
@@ -161,7 +137,7 @@ function nimbusBox(): NimbusSandboxHandle & { calls: string[]; execOptions: unkn
 }
 
 /** The hosted workspace over a Nimbus box, composed as cf-backend composes it. */
-function nimbusWorkspace(box: NimbusSandboxHandle) {
+function nimbusWorkspace(box: RemoteSessionBox) {
   const { rt } = createTestRuntime();
 
   return createNimbusWorkspaceExecutor({

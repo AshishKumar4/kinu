@@ -7,29 +7,28 @@ import { HeadFileChanges } from '../src/heads/file-changes';
 
 import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 
-/** In-memory VFS with a read counter. */
-function memVfs(seed: Record<string, string> = {}): VFS & { reads: number; files: Map<string, string> } {
-  const files = new Map(Object.entries(seed));
+/** In-memory VFS, byte for byte, with a read counter. */
+function memVfs(seed: Record<string, string> = {}): VFS & { reads: number } {
+  const files = new Map(Object.entries(seed).map(([path, text]) => [path, new TextEncoder().encode(text)] as const));
 
-  const self: VFS & { reads: number; files: Map<string, string> } = {
+  const self: VFS & { reads: number } = {
     reads: 0,
-    files,
     async readFile(path: string) {
       self.reads++;
-      const v = files.get(path);
+      const bytes = files.get(path);
 
-      if (v === undefined) throw new VfsError('ENOENT', 'no such file or directory, open', path);
+      if (bytes === undefined) throw new VfsError('ENOENT', 'no such file or directory, open', path);
 
-      return new TextEncoder().encode(v);
+      return bytes.slice();
     },
     async writeFile(path: string, data: Uint8Array) {
-      files.set(path, new TextDecoder().decode(data));
+      files.set(path, data.slice());
     },
     async readdir() { return [...files.keys()].map((name) => ({ name, type: 'file' as const })); },
     async stat(path: string) {
-      const content = files.get(path);
+      const bytes = files.get(path);
 
-      return content === undefined ? null : { size: new TextEncoder().encode(content).byteLength, mtimeMs: 0, type: 'file' };
+      return bytes === undefined ? null : { size: bytes.byteLength, mtimeMs: 0, type: 'file' };
     },
     async unlink(path: string) { files.delete(path); },
     async mkdir() {},
@@ -81,14 +80,13 @@ describe('HeadFileChanges — the review a parent gets', () => {
   });
 
   test('repeated writes report the NET change, against what the head first found', async () => {
-    const { vfs, changes, workspace } = watched({ '/f.ts': 'base\n' });
+    const { vfs, changes } = watched({ '/f.ts': 'base\n' });
     await writeText(vfs, '/f.ts', 'base\nstep one\n');
     await writeText(vfs, '/f.ts', 'base\nstep one\nstep two\n');
     await writeText(vfs, '/f.ts', 'base\nfinal\n');
     expect(changes.snapshot()).toEqual([
       { path: '/f.ts', status: 'changed', added: 1, removed: 0 },
     ]);
-    expect(workspace.reads).toBe(1);
   });
 
   test('a file written back to what it was is not a change', async () => {

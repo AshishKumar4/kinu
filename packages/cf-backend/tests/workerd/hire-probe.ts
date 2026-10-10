@@ -7,7 +7,8 @@
 
 import { Agent, getAgentByName, type AgentContext } from 'agents';
 import * as v from 'valibot';
-import { actorReferenceOf, isSubordinateOrigin, ownerCaller, type ArchiveCursor, type Clock } from '@kinu.run/core';
+import { actorReferenceOf, isSubordinateOrigin, ownerCaller, WORKSPACE_ROOT, type ArchiveCursor, type Clock } from '@kinu.run/core';
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { handClock } from '@kinu.run/test-utils/hand-clock';
 import { diagnostics } from '@kinu.run/core/obs';
 import { sealRpcSurface, ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
@@ -71,7 +72,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
   /** The job's command ends: the file it waits on now exists in the workspace's home. */
   async openJobGate(): Promise<void> {
-    await this.workspaceBox(this.shellId()).files.write(JOB_GATE, 'open');
+    await writeText(this.workspaceBox(this.shellId()).store({ home: WORKSPACE_ROOT }), JOB_GATE, 'open');
   }
 
   /** What a restart does for a job whose lane row outlived its settle: re-deliver its wake. */

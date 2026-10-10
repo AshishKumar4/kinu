@@ -2,6 +2,7 @@
 // and on a lease `epoch` that `reclaim` bumps, which fences zombie executors (agent-core SPEC §5.3 / §10.3).
 // Rows are actor-owned; `*InWorkspace` reads are machine-wide (cap, wake instant) by contract.
 
+import type { ServingScope } from './serving';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { WorkMode } from '../types/turn';
@@ -256,10 +257,14 @@ export class BackgroundJobStore {
       ORDER BY job.created_at DESC LIMIT ${limit}`.map(toJob);
   }
 
-  /** Writes only changed rows: facts announce once. */
-  recordServingInWorkspace(holders: ReadonlyMap<string, number>): void {
+  /**
+   * Writes only changed rows: facts announce once. `scope` says which recorded facts `holders` answers for (null: all);
+   * a running job's fact outside it is kept, since nothing read its plane. A job no longer running loses its fact.
+   */
+  recordServingInWorkspace(holders: ReadonlyMap<string, number>, scope: ServingScope | null = null): void {
     this.actor.assertCurrent();
     const running = this.sql<{ actor_id: string; id: string }>`SELECT actor_id, id FROM background_jobs WHERE status='running'`;
+    const live = new Set(running.map((job) => `${job.actor_id}/${job.id}` as const));
 
     const wanted = new Map(running.flatMap((job) => {
       const port = holders.get(job.id);
@@ -268,10 +273,13 @@ export class BackgroundJobStore {
     }));
 
     for (const row of this.sql<{ actor_id: string; job_id: string; port: number }>`SELECT actor_id, job_id, port FROM background_job_serves`) {
-      const kept = wanted.get(`${row.actor_id}/${row.job_id}`);
+      const key = `${row.actor_id}/${row.job_id}` as const;
+      const kept = wanted.get(key);
 
-      if (kept?.port === row.port) wanted.delete(`${row.actor_id}/${row.job_id}`);
-      else if (kept === undefined) void this.sql`DELETE FROM background_job_serves WHERE actor_id=${row.actor_id} AND job_id=${row.job_id}`;
+      if (kept?.port === row.port) wanted.delete(key);
+      else if (kept === undefined && (!live.has(key) || scope === null || scope({ job: row.job_id, port: row.port }))) {
+        void this.sql`DELETE FROM background_job_serves WHERE actor_id=${row.actor_id} AND job_id=${row.job_id}`;
+      }
     }
 
     for (const job of wanted.values()) {

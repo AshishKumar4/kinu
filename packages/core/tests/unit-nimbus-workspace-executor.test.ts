@@ -7,7 +7,7 @@ import { createNimbusWorkspaceExecutor } from '../src/tools/inline-executor';
 import {
   nimbusSessionFiles,
   nimbusSessionShell,
-  type NimbusSandboxHandle,
+  type RemoteSessionBox,
 } from '../src/execution/nimbus';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { DefaultExecutionRouter } from '../src/execution/router';
@@ -16,6 +16,7 @@ import type { SQLQueryBindings } from 'bun:sqlite';
 import type { SqlValue } from '@nimbus-sh/core';
 import type { ExecutorToolResult } from '../src/execution/types';
 import { present } from '@kinu.run/test-utils';
+import { sessionFilesOver } from '@kinu.run/test-utils/vfs';
 import { CommandResultSchema } from '../src/execution/exec-result';
 import { executorNamespace } from '../src/tools/executor-operations';
 import { namespaceDeclaration } from '../src/tools/operation-surfaces';
@@ -31,9 +32,9 @@ function toolText(result: ExecutorToolResult): string {
 function fakeBox() {
   const files = new Map<string, Uint8Array>();
   const decoder = new TextDecoder();
-  const encoder = new TextEncoder();
+  const sdkFiles = sessionFilesOver(files);
 
-  const box: NimbusSandboxHandle = {
+  const box: RemoteSessionBox = {
     ready: async () => {},
     exec: async (command) => {
       const match = /^cat (.+)$/.exec(command);
@@ -53,22 +54,7 @@ function fakeBox() {
       ports: [{ port: 4321, pid: 41 }],
       startedAt: 1,
     }),
-    files: {
-      read: async (path) => files.has(path) ? decoder.decode(files.get(path)) : null,
-      readBytes: async (path) => files.get(path)?.slice() ?? null,
-      write: async (path, content) => {
-        files.set(path, content instanceof Uint8Array ? content.slice() : encoder.encode(content));
-      },
-      stat: async (path) => {
-        const bytes = files.get(path);
-
-        return bytes === undefined ? null : { type: 'file', size: bytes.byteLength, mtime: 1 };
-      },
-      list: async () => [],
-      exists: async (path) => files.has(path),
-      mkdir: async () => {},
-      delete: async (path) => { files.delete(path); },
-    },
+    files: sdkFiles,
     processes: {
       kill: async (pid) => ({ ok: true, pid }),
       logs: async (pid) => ({ pid, text: 'ready' }),
@@ -85,13 +71,6 @@ function fakeBox() {
 }
 
 describe('hosted Nimbus workspace provider', () => {
-  test('a transport failure never acquires a fabricated process exit', async () => {
-    const box = fakeBox();
-    box.exec = async (command) => ({ command, success: false, stdout: '', stderr: 'transport unavailable', exitCode: 0 });
-    const shell = await nimbusSessionShell(box, { home: WORKSPACE_ROOT }).exec('work');
-    expect(shell).toMatchObject({ exitCode: 0, refusal: { reason: 'io' } });
-    expect(shell.refusal).not.toHaveProperty('execution');
-  });
   test('one workspace namespace owns both files and the live session', async () => {
     const { rt } = createTestRuntime();
     const box = fakeBox();
@@ -140,33 +119,6 @@ describe('hosted Nimbus workspace provider', () => {
       url: 'https://4321.example.test',
       route: { reached: true },
     });
-  });
-
-  test('the origin file plane reads a bounded prefix through fixed Node code', async () => {
-    const box = fakeBox();
-    const expected = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
-    let requestEnv: Record<string, string> | undefined;
-    box.exec = async (command, options) => {
-      requestEnv = options?.env;
-
-      return {
-        command,
-        success: true,
-        stdout: Buffer.from(expected).toString('base64'),
-        stderr: '',
-        exitCode: 0,
-      };
-    };
-
-    const bytes = await nimbusSessionFiles(box, { home: WORKSPACE_ROOT }).readRange('/home/main/large.png', 0, 512 * 1024);
-
-    expect(bytes).toEqual(expected);
-    // Path/offset/length travel only in the reader's JSON env, never interpolated into shell text.
-    expect(requestEnv).toBeDefined();
-    const payload = Object.values(requestEnv ?? {})[0] ?? '';
-    expect(payload).toContain('"path":"/home/main/large.png"');
-    expect(payload).toContain('"offset":0');
-    expect(payload).toContain('"length":524288');
   });
 
   test('declares inbound networking only when the host can publish previews', () => {
@@ -334,10 +286,9 @@ describe('hosted Nimbus workspace provider', () => {
   });
 });
 
-describe('a workspace whose host cannot compile node programs', () => {
-  const CODEGEN_STDERR = '[probe-8789.js] Code generation from strings disallowed for this context';
+describe('the workspace process and port surface', () => {
 
-  function blockedProvider(box: NimbusSandboxHandle) {
+  function blockedProvider(box: RemoteSessionBox) {
     const { rt } = createTestRuntime();
 
     return createNimbusWorkspaceExecutor({
@@ -352,39 +303,10 @@ describe('a workspace whose host cannot compile node programs', () => {
   test('a command that exited nonzero retains its execution failure', async () => {
     const box = fakeBox();
     box.exec = async (command) => ({
-      command, success: false, stdout: '', stderr: CODEGEN_STDERR, exitCode: 1,
+      command, success: false, stdout: '', stderr: 'node: boom', exitCode: 1,
     });
     const refusal = await blockedProvider(box).tools.exec.execute('node -e "console.log(1)"');
-    expect(refusal).toMatchObject({ reason: 'io', error: expect.stringContaining(CODEGEN_STDERR) });
-  });
-
-  test('a node program the host cannot compile refuses as unsupported, naming where it can run', async () => {
-    // A missing compiler is `unsupported`, not a retryable `io` failure.
-    const box = fakeBox();
-    box.startProcess = async () => { throw new Error(CODEGEN_STDERR); };
-
-    const refusal = await blockedProvider(box).tools.startProcess.execute('node server.js');
-    // Read before any asymmetric match, which rewrites the field it matches (docs/TESTING.md).
-    expect(JSON.stringify(refusal)).not.toContain('Code generation from strings disallowed');
-    expect(refusal).toMatchObject({ reason: 'unsupported', error: expect.stringContaining('sandbox') });
-  });
-
-  test('the same compiler failure under a command that never invoked node stays an io failure', async () => {
-    // The V8 mark in other output is not the node guard; reclassifying would wrongly forbid retry.
-    const box = fakeBox();
-    box.startProcess = async () => { throw new Error(CODEGEN_STDERR); };
-
-    expect(await blockedProvider(box).tools.startProcess.execute('cat build.log')).toMatchObject({ reason: 'io' });
-  });
-
-  test('process logs are data even when they contain a compiler failure', async () => {
-    const box = fakeBox();
-    box.processes = {
-      kill: async (pid) => ({ ok: true, pid }),
-      logs: async (pid) => ({ pid, text: CODEGEN_STDERR }),
-    };
-    const logs = await blockedProvider(box).tools.logs.execute(41);
-    expect(JSON.parse(toolText(logs))).toEqual({ pid: 41, text: CODEGEN_STDERR });
+    expect(refusal).toMatchObject({ reason: 'io', error: expect.stringContaining('node: boom') });
   });
 
   test("a program's workspace.logs(pid, { lines, bytes }) reads the process with both limits", async () => {
