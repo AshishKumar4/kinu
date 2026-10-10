@@ -97,6 +97,20 @@ describe("writeExecutorFileOp", () => {
     expect(written.get("/home/me/proj/b.bin")).toEqual(bin);
   });
 
+  test("a file deleted while the owner was asked to replace it: the conflict names it gone, and the next Replace creates it", async () => {
+    const { deps, written } = makeDeps();
+    const bytes = new TextEncoder().encode("the owner's upload");
+    written.set("/home/main/a.txt", new TextEncoder().encode("was here"));
+    const shown = `sha256:${new Bun.CryptoHasher("sha256").update("was here").digest("hex")}`;
+
+    written.delete("/home/main/a.txt");
+    const gone = await writeExecutorFileOp(deps, "workspace", "/home/main/a.txt", { bytes, expectedRevision: shown });
+
+    if (!("conflict" in gone)) throw new Error("expected the conflict over the deleted file");
+    expect(await writeExecutorFileOp(deps, "workspace", "/home/main/a.txt", { bytes, expectedRevision: gone.revision })).toMatchObject({ ok: true });
+    expect(written.get("/home/main/a.txt")).toEqual(bytes);
+  });
+
   test("an unavailable environment surfaces its own honest reason", async () => {
     const { deps } = makeDeps({
       throwOn: /^\/workspace\//,
