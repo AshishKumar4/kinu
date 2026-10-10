@@ -62,6 +62,13 @@ interface Served {
 
 const ServedSchema = v.looseObject({ model: v.string(), reasoning_effort: v.optional(v.string()) });
 
+function modelOnEndpoint(modelId: string, baseURL: string) {
+  return withModelStack(createChatModel({
+    kind: 'openai-compat', name: 'openrouter', baseURL,
+    headers: { Authorization: 'Bearer test' }, modelId,
+  }), { provider: 'openrouter', modelId, lane: `openrouter/${modelId}` });
+}
+
 /** One endpoint for every model; `answerFor` decides each request from the model it names and how often it asked. */
 async function turn(
   answerFor: (model: string, seen: number) => Response,
@@ -88,10 +95,7 @@ async function turn(
   });
 
   // As the registry resolves it: the one stack around the provider's model.
-  const modelFor = (modelId: string) => withModelStack(createChatModel({
-    kind: 'openai-compat', name: 'openrouter', baseURL: `http://localhost:${String(server.port)}/v1`,
-    headers: { Authorization: 'Bearer test' }, modelId,
-  }), { provider: 'openrouter', modelId, lane: `openrouter/${modelId}` });
+  const modelFor = (modelId: string) => modelOnEndpoint(modelId, `http://localhost:${String(server.port)}/v1`);
 
   const tools: ToolSet = {
     run: tool({
@@ -287,16 +291,43 @@ describe('a failed call hands the turn down its fallback chain', () => {
 
   test('a model that failed over sits out its cooldown, then the next turn starts on it again', async () => {
     let now = 1_000_000;
+    let refuses = true;
+    const served: string[] = [];
     const cooldowns = createFallbackCooldowns(() => now);
+  
+    const server = Bun.serve({ port: 0, async fetch(request) {
+      const { model } = v.parse(ServedSchema, await request.json());
+  
+      served.push(model);
+  
+      return refuses && model === 'primary' ? refused(402) : answer('the serving model answered');
+    } });
 
-    await turn((model) => (model === 'primary' ? refused(402) : answer('from backup')), ['backup'], { cooldowns });
-    const parked = await turn(() => answer('from backup'), ['backup'], { cooldowns });
+    const endpoint = `http://localhost:${String(server.port)}/v1`;
+    const primary = modelOnEndpoint('primary', endpoint);
+    const backup = modelOnEndpoint('backup', endpoint);
 
-    expect(parked.served.map((entry) => entry.model)).toEqual(['backup']);
-    now += 5 * 60 * 1000 + 1;
-    const back = await turn(() => answer('from primary'), ['backup'], { cooldowns });
-
-    expect(back.served.map((entry) => entry.model)).toEqual(['primary']);
+    const call = async () => {
+      for await (const _event of runChat({
+        model: primary, modelContext: { id: 'openrouter/primary' }, modelSpec: 'openrouter/primary', cooldowns,
+        fallbacks: [{ spec: 'openrouter/backup', accepts: new Set<MediaModality>(),
+          window: { contextWindow: null, modelOutputLimit: null }, bind: () => ({ model: backup, provider: 'openrouter' }) }],
+        system: 'sys', history: [{ role: 'user', content: 'go' }], tools: {},
+      })) { /* consume the real call */ }
+    };
+  
+    try {
+      await call();
+      expect(served).toEqual(['primary', 'backup']);
+      served.length = 0;
+      refuses = false;
+      await call();
+      expect(served).toEqual(['backup']);
+      served.length = 0;
+      now += 5 * 60 * 1000 + 1;
+      await call();
+      expect(served).toEqual(['primary']);
+    } finally { await server.stop(true); }
   });
 
   test('a model that fails after streaming part of its answer fails the turn, as the person already saw that part', async () => {

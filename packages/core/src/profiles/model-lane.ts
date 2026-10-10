@@ -102,6 +102,10 @@ export function completeOnRoute(route: ModelRouteResolution, lane: RouteCallComp
 
 /** The route's model, then its configured chain, as a turn walks it; `invoke` is one call on the serving entry. */
 export async function onRoute<T>(route: ModelRouteResolution, lane: RouteWalk, invoke: (serving: ModelRouteResolution) => Promise<T>): Promise<T> {
+  // Capture before the first async identity read; a settings change during that read must make this call's refusal stale.
+  const notices = lane.refusals;
+  const since = notices?.changes() ?? 0;
+
   const chain = new FallbackRoute<ChainEntry>({
     modelSpec: route.model,
     fallbacks: route.fallbacks.map((fallback) => ({ spec: fallback.model, reasoningEffort: fallback.reasoningEffort })),
@@ -114,8 +118,6 @@ export async function onRoute<T>(route: ModelRouteResolution, lane: RouteWalk, i
   if (cooled !== undefined) chain.tried.push(cooled.spec);
 
   const refused: { readonly spec: string; readonly cause: unknown }[] = [];
-  const notices = lane.refusals;
-  const since = notices?.changes() ?? 0;
 
   const call = (serving: ChainEntry): Effect.Effect<T, KinuError> => Effect.tryPromise({
     try: () => invoke({ ...route, model: serving.spec, reasoningEffort: serving.reasoningEffort, retries: chain.callRetries }),
