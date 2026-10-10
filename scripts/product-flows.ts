@@ -22,7 +22,7 @@
  */
 import type { Browser, ElementHandle, Page } from 'puppeteer';
 import * as v from 'valibot';
-import { hostedActorSocketPath, SLATES_ROOT } from '@kinu.run/core';
+import { AccountMemoryProposalSchema, hostedActorSocketPath, SLATES_ROOT, type AccountMemoryProposal } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -772,8 +772,13 @@ const STACK_KEYS = `(() => {
 })()`;
 
 /** Presses the open card's answer named `words`. */
-function stackAnswer(words: string): string {
-  return `[...document.querySelectorAll('[data-attention-card] button')].find((button) => button.textContent?.trim() === ${JSON.stringify(words)})?.click()`;
+function stackAnswer(words: string, key: string): string {
+  return `[...document.querySelectorAll(${JSON.stringify(`[data-attention-card=${JSON.stringify(key)}] button`)})].find((button) => button.textContent?.trim() === ${JSON.stringify(words)})?.click()`;
+}
+
+async function openStackCard(page: Page, key: string): Promise<void> {
+  await page.evaluate(`document.querySelector(${JSON.stringify(`[data-attention-behind=${JSON.stringify(key)}]`)})?.click()`);
+  await until(page, 'the flow\'s own card open', `document.querySelector(${JSON.stringify(`[data-attention-card=${JSON.stringify(key)}]`)}) !== null`);
 }
 
 const CHAT_TEXT = `(document.querySelector('#chat')?.textContent ?? '')`;
@@ -790,16 +795,23 @@ export async function approvalsStackAtTheComposer(target: FlowTarget): Promise<A
     const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
 
     await sendAndSettle(page, APPROVALS_ASK);
-    await until(page, 'both parked commands stacked at the composer', `document.querySelector('[data-attention-stack]')?.getAttribute('data-attention-count') === '2'`);
-    const stacked = v.parse(v.array(v.string()), await page.evaluate(STACK_KEYS));
-    const openWords = v.parse(v.string(), await page.evaluate(`document.querySelector('[data-attention-card]')?.textContent ?? ''`));
+    // Actions belong to this fresh workspace; account-memory cards belong to every workspace of the account.
+    const actions = `${STACK_KEYS}.filter((key) => key.startsWith('action:'))`;
 
-    await page.evaluate(stackAnswer('Approve'));
-    await until(page, 'the next card opened', `document.querySelector('[data-attention-stack]')?.getAttribute('data-attention-count') === '1'`);
-    const afterFirst = v.parse(v.array(v.string()), await page.evaluate(STACK_KEYS));
+    await until(page, 'both of the flow\'s parked commands stacked', `${actions}.length === 2`);
+    const stacked = v.parse(v.tuple([v.string(), v.string()]), await page.evaluate(actions));
 
-    await page.evaluate(stackAnswer('Deny'));
-    await until(page, 'the stack cleared', `document.querySelector('[data-attention-stack]') === null`);
+    await openStackCard(page, stacked[0]);
+    const openWords = v.parse(v.string(), await page.evaluate(`document.querySelector(${JSON.stringify(`[data-attention-card=${JSON.stringify(stacked[0])}]`)})?.textContent ?? ''`));
+    const remaining = `${STACK_KEYS}.filter((key) => ${JSON.stringify(stacked)}.includes(key))`;
+
+    await page.evaluate(stackAnswer('Approve', stacked[0]));
+    await until(page, 'the flow\'s other card remains', `${remaining}.length === 1`);
+    const afterFirst = v.parse(v.array(v.string()), await page.evaluate(remaining));
+
+    await openStackCard(page, stacked[1]);
+    await page.evaluate(stackAnswer('Deny', stacked[1]));
+    await until(page, 'the flow\'s own stack cleared', `${remaining}.length === 0`);
     await until(page, 'both answers in the chat and heard by the agent', `${CHAT_TEXT}.includes('You approved') && ${CHAT_TEXT}.includes('You denied')`
       + ` && /${DECISION_HEARD}[^]*approved/u.test(${CHAT_TEXT}) && /${DECISION_HEARD}[^]*denied/u.test(${CHAT_TEXT})`);
     const said = v.parse(v.string(), await page.evaluate(CHAT_TEXT));
@@ -956,6 +968,32 @@ async function lastReply(page: Page, marker: string, answers: readonly string[])
 
 const RECALL_ANSWERS = [ACCOUNT_FACT.value, 'nowhere I know of'];
 
+async function flowMemoryProposals(target: FlowTarget, workspace: string, key: string): Promise<readonly AccountMemoryProposal[]> {
+  const response = await fetch(`${target.origin}/api/user/memory`, { headers: webHeaders(target.identity) });
+
+  if (!response.ok) throw new Error(`reading the flow's account-memory proposals answered ${String(response.status)}`);
+  const view = v.parse(v.object({ pending: v.array(AccountMemoryProposalSchema) }), await response.json());
+
+  return view.pending.filter((row) => row.origin.workspace === workspace && row.proposal.kind === 'fact' && row.proposal.key === key);
+}
+
+/** End only this workspace's fixture proposals; the shared account's other proposals stay pending. */
+async function clearFlowMemory(target: FlowTarget, workspace: string, key: string): Promise<void> {
+  const headers = webHeaders(target.identity);
+
+  for (const proposal of await flowMemoryProposals(target, workspace, key)) {
+    const declined = await fetch(`${target.origin}/api/user/memory/proposals/${encodeURIComponent(proposal.id)}`, {
+      method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ decision: 'decline' }),
+    });
+
+    if (!declined.ok && declined.status !== 404) throw new Error(`declining the flow's proposal answered ${String(declined.status)}`);
+  }
+
+  const forgotten = await fetch(`${target.origin}/api/user/memory/facts/${encodeURIComponent(key)}`, { method: 'DELETE', headers });
+
+  if (!forgotten.ok) throw new Error(`forgetting the flow's fixture fact answered ${String(forgotten.status)}`);
+}
+
 /**
  * Row: the owner says a fact about themselves in one workspace; its agent proposes it for the account; nothing another
  * workspace reads holds it until the owner accepts it in Settings → Memory; then another workspace's agent recalls it.
@@ -977,12 +1015,16 @@ export async function accountMemoryCrossesWorkspaces(target: FlowTarget): Promis
 
     await settings.goto(`${target.origin}/user/settings#memory`, { waitUntil: 'load' });
     await until(settings, 'Settings → Memory loaded', `document.querySelector('[data-account-memory]') !== null`);
-    const proposal = '[data-account-memory-proposal]';
 
-    await until(settings, 'the proposal in Settings → Memory', `[...document.querySelectorAll(${JSON.stringify(proposal)})].some((node) => node.textContent.includes(${JSON.stringify(ACCOUNT_FACT.key)}))`);
-    const offered = v.parse(v.string(), await settings.evaluate(`[...document.querySelectorAll(${JSON.stringify(proposal)})].find((node) => node.textContent.includes(${JSON.stringify(ACCOUNT_FACT.key)}))?.textContent ?? ''`));
+    const filed = (await flowMemoryProposals(target, said, ACCOUNT_FACT.key))[0];
 
-    await settings.evaluate(`[...document.querySelectorAll(${JSON.stringify(proposal)})].find((node) => node.textContent.includes(${JSON.stringify(ACCOUNT_FACT.key)}))?.querySelector('button')?.click()`);
+    if (filed === undefined) throw new Error('the flow\'s workspace filed no account-memory proposal');
+    const proposal = `[data-account-memory-proposal=${JSON.stringify(filed.id)}]`;
+
+    await until(settings, 'the flow\'s proposal in Settings → Memory', `document.querySelector(${JSON.stringify(proposal)}) !== null`);
+    const offered = v.parse(v.string(), await settings.evaluate(`document.querySelector(${JSON.stringify(proposal)})?.textContent ?? ''`));
+
+    await settings.evaluate(`document.querySelector(${JSON.stringify(proposal)})?.querySelector('button')?.click()`);
     await until(settings, 'the fact kept', `document.querySelector('[data-account-memory-fact=${JSON.stringify(ACCOUNT_FACT.key)}]') !== null`);
     await sendAndSettle(second, ACCOUNT_RECALL_ASK);
     const after = await lastReply(second, ACCOUNT_RECALL_REPLY, RECALL_ANSWERS);
@@ -990,8 +1032,7 @@ export async function accountMemoryCrossesWorkspaces(target: FlowTarget): Promis
 
     return { offered, before, after, viewerStatus: viewer.status };
   } finally {
-    // The account's fact goes with the row, so a rerun proposes it afresh.
-    await fetch(`${target.origin}/api/user/memory/facts/${ACCOUNT_FACT.key}`, { method: 'DELETE', headers: webHeaders(target.identity) });
+    await clearFlowMemory(target, said, ACCOUNT_FACT.key);
     await removeFlowWorkspace(target, said);
     await removeFlowWorkspace(target, asked);
   }
@@ -1011,7 +1052,6 @@ export interface StackMemoryVerdict {
  */
 export async function accountMemoryInTheStack(target: FlowTarget): Promise<StackMemoryVerdict> {
   const workspace = await createFlowWorkspace(target, 'stack-memory');
-  const card = `[data-attention-card^="memory:"]`;
 
   try {
     const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
@@ -1021,22 +1061,27 @@ export async function accountMemoryInTheStack(target: FlowTarget): Promise<Stack
     await sendAndSettle(page, STACK_RECALL_ASK);
     const before = await lastReply(page, STACK_RECALL_REPLY, answers);
 
-    await until(page, 'the proposal in the attention stack', `[...document.querySelectorAll('[data-attention-card], [data-attention-behind]')]`
-      + `.some((node) => (node.getAttribute('data-attention-card') ?? node.getAttribute('data-attention-behind') ?? '').startsWith('memory:'))`);
+    const filed = (await flowMemoryProposals(target, workspace, STACK_FACT.key))[0];
+
+    if (filed === undefined) throw new Error('the flow\'s workspace filed no stack-memory proposal');
+    const key = `memory:${filed.id}`;
+    const card = `[data-attention-card=${JSON.stringify(key)}]`;
+    const behind = `[data-attention-behind=${JSON.stringify(key)}]`;
+
+    await until(page, 'the flow\'s proposal in the attention stack', `document.querySelector(${JSON.stringify(`${card}, ${behind}`)}) !== null`);
     // Brought to the front if anything newer waits.
-    await page.evaluate(`document.querySelector('[data-attention-behind^="memory:"]')?.click()`);
+    await page.evaluate(`document.querySelector(${JSON.stringify(behind)})?.click()`);
     await until(page, 'the proposal open', `document.querySelector(${JSON.stringify(card)}) !== null`);
     const offered = v.parse(v.string(), await page.evaluate(`document.querySelector(${JSON.stringify(card)})?.textContent ?? ''`));
 
     await page.evaluate(`[...document.querySelectorAll(${JSON.stringify(`${card} button`)})].find((button) => button.textContent?.trim() === 'Keep for every workspace')?.click()`);
-    await until(page, 'the proposal gone from the stack', `document.querySelector('[data-attention-card^="memory:"], [data-attention-behind^="memory:"]') === null`);
+    await until(page, 'the flow\'s proposal gone from the stack', `document.querySelector(${JSON.stringify(`${card}, ${behind}`)}) === null`);
     await sendAndSettle(page, STACK_RECALL_ASK);
     const after = await lastReply(page, STACK_RECALL_REPLY, answers);
 
     return { offered, before, after };
   } finally {
-    // The account's fact goes with the row, so a rerun proposes it afresh.
-    await fetch(`${target.origin}/api/user/memory/facts/${STACK_FACT.key}`, { method: 'DELETE', headers: webHeaders(target.identity) });
+    await clearFlowMemory(target, workspace, STACK_FACT.key);
     await removeFlowWorkspace(target, workspace);
   }
 }
