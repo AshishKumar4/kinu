@@ -635,21 +635,22 @@ const NPM_COMMONJS = [
 async function bundledNpmCommonJs(): Promise<{ find: RegExp; replacement: string }[]> {
   const fromCore = createRequire(fileURLToPath(new URL('../../node_modules/@nimbus-sh/core/package.json', import.meta.url)));
   const into = fileURLToPath(new URL('../../node_modules/.cache/kinu/npm-commonjs/', import.meta.url));
+  const named = (specifier: string): string => specifier.replace(/[^a-z0-9.-]/gi, '_');
 
   mkdirSync(into, { recursive: true });
 
-  return await Promise.all(NPM_COMMONJS.map(async (specifier) => {
-    const built = await bundled({
-      entryPoints: [fromCore.resolve(specifier)], bundle: true, write: false, format: 'esm', platform: 'neutral',
-      mainFields: ['main'], ...probeRuntime, plugins: [nodeRequireAsImport], external: ['node:*'],
-    });
+  // One build, its shared modules split out: nopt's type table, which @npmcli/config extends, is one instance, as in
+  // the Worker's own bundle.
+  const built = await bundled({
+    entryPoints: Object.fromEntries(NPM_COMMONJS.map((specifier) => [named(specifier), fromCore.resolve(specifier)])),
+    outdir: into, splitting: true, bundle: true, write: false, format: 'esm', platform: 'neutral', outExtension: { '.js': '.mjs' },
+    mainFields: ['main'], ...probeRuntime, plugins: [nodeRequireAsImport], external: ['node:*'],
+  });
 
-    const file = `${into}${specifier.replace(/[^a-z0-9.-]/gi, '_')}.mjs`;
-    const exact = specifier.replace(/[.*+?^$()|[\]\\/]/g, '\\$&');
+  for (const output of built.outputFiles) writeWhole(output.path, output.text);
 
-    writeWhole(file, built.outputFiles[0]?.text ?? '');
-
-    return { find: new RegExp(`^${exact}$`), replacement: file };
+  return NPM_COMMONJS.map((specifier) => ({
+    find: new RegExp(`^${specifier.replace(/[.*+?^$()|[\]\\/]/g, '\\$&')}$`), replacement: `${into}${named(specifier)}.mjs`,
   }));
 }
 
