@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Cause, Effect } from "effect";
-import type { PlanDecisionOutcome, PlanReview, Rpc } from "@kinu.run/core";
+import { PlanDecisionOutcomeSchema, planHandoffShortfall, type PlanReview, type Rpc } from "@kinu.run/core";
+import * as v from "valibot";
 import { attempt, KinuError, renderThrownChain, settle } from "@kinu.run/core/obs";
 
 type PlanDecisionKind = "request_changes" | "approve";
@@ -44,14 +45,13 @@ export function usePlanDecision({ plan, editable, handoffPending, rpc, save, onE
     return settle(Effect.gen(function* () {
       if (editable && !(yield* attempt({ doing: "saving plan annotations", otherwise: "io" }, save))) return;
 
-      const result = yield* attempt({ doing: "deciding a plan review", otherwise: "io" }, () =>
-        rpc<PlanDecisionOutcome>("decidePlanReview", [plan.id, plan.revision, decision]));
+      const result = v.parse(PlanDecisionOutcomeSchema, yield* attempt({ doing: "deciding a plan review", otherwise: "io" }, () =>
+        rpc<unknown>("decidePlanReview", [plan.id, plan.revision, decision])));
 
       if (!result.ok) return yield* Effect.fail(new KinuError("bad_input", result.error));
+      const shortfall = planHandoffShortfall(result);
 
-      if (result.queued === false) {
-        onError(`Decision saved, but the next turn could not start${result.queueError ? `: ${result.queueError}` : "."}`);
-      }
+      if (shortfall !== null) onError(shortfall);
     }).pipe(
       // The owner reads the reason as the call gave it; `attempt`'s account of what the page was doing is ours.
       Effect.catchCause((cause) => Effect.sync(() => {

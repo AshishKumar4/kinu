@@ -7,6 +7,7 @@ import {
   type JsonObject, type JsonValue, type ReasoningEffort,
 } from '@kinu.run/core';
 import { CloudAgentClient } from '../src/cloud-agent-client';
+import { executeSlashCommand } from '../src/slash-commands';
 import { renderAccountSpendLines } from '../src/display';
 import { watchDeviceConsents } from '../src/consent-watch';
 import type { AgentClientEvent } from '../src/agent-client';
@@ -55,6 +56,11 @@ const SPEND_BEFORE_ACCOUNTS = {
   coverage: { calls: 3, measured: 3, reported: null, silent: [], partial: [] },
   offTurnShare: null,
   missions: [],
+};
+
+const PENDING_PLAN = {
+  id: 'plan-1', sessionId: 'default', revision: 2, content: '# Ship the fix', status: 'pending', annotations: [],
+  feedback: null, handoffAccepted: false, createdAt: 1, updatedAt: 1,
 };
 
 /** `serve` answers a socket frame as it lands, as the workspace object would; null leaves it to the test. */
@@ -117,6 +123,13 @@ function startMockAgentServer(options: ({
         }
 
         if (method === 'getReasoningEffort') return Response.json({ result: { effort: 'medium' } });
+
+        if (method === 'getActivePlanReview') return Response.json({ result: PENDING_PLAN });
+
+        // The verdict is recorded and the turn it hands off was refused, as `decideAndHandOff` answers it.
+        if (method === 'decidePlanReview') {
+          return Response.json({ result: { ok: true, plan: { ...PENDING_PLAN, status: 'approved' }, queued: false, queueError: 'the turn queue is full' } });
+        }
 
         if (method === 'getExecutors') return Response.json({ result: executors });
 
@@ -339,6 +352,16 @@ describe('CloudAgentClient protocol', () => {
     const client = newClient(mock);
     await expect(client.getReasoningEffort()).resolves.toBe('medium');
     await expect(client.setReasoningEffort('xhigh')).resolves.toEqual({ effort: 'xhigh' });
+    await client.close();
+  });
+
+  // 26244c765: the client's schema dropped `queued`, so the CLI said the agent was implementing a plan it never started.
+  test('an approval whose turn did not start says so, in the words the workspace gave', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+    const outcome = await executeSlashCommand(client, '/plan approve');
+
+    expect(outcome).toEqual({ kind: 'text', text: 'Approved plan plan-1 revision 2. Decision saved, but the next turn could not start: the turn queue is full' });
     await client.close();
   });
 

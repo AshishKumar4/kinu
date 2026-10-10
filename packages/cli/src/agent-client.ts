@@ -12,7 +12,7 @@ import type {
   AdmittedInstructionDecision,
   InstructionSourceRow, InstructionSourceView, Page, PageRequest, PositionCursor, PositionPageRequest,
   DeferredApproval, DeferredApprovalAnswer,
-  PlanReview, ReviewAnnotation, PlanReviewDecision, PlanReviewResult, WorkMode, AskingAgent, OwnerAnswer,
+  PlanReview, ReviewAnnotation, PlanDecisionOutcome, PlanReviewDecision, PlanReviewResult, WorkMode, AskingAgent, OwnerAnswer,
   SubordinateInspectionRequest, SubordinateInspectionResult, ChatHistoryEntry, WorkspaceSpend, WorkspaceWork,
   ModelTestResult, ContextFill,
 } from '@kinu.run/core';
@@ -301,8 +301,8 @@ export interface OwnerQuestionSurface {
 export interface PlanReviewSurface {
   active(): Promise<PlanReview | null>;
   saveAnnotations(id: string, revision: number, annotations: ReviewAnnotation[]): Promise<PlanReviewResult>;
-  /** Approving queues the implementation turn, which streams through `subscribe`. */
-  decide(id: string, revision: number, decision: PlanReviewDecision, feedback?: string): Promise<PlanReviewResult>;
+  /** Approving queues the implementation turn, which streams through `subscribe`; `queued` says whether it started. */
+  decide(id: string, revision: number, decision: PlanReviewDecision, feedback?: string): Promise<PlanDecisionOutcome>;
   dismiss(id: string, revision: number): Promise<PlanReviewResult>;
 }
 

@@ -57,6 +57,25 @@ export const PlanReviewSchema = v.object({
   createdAt: v.number(), updatedAt: v.number(),
 });
 
+/** The store's answer to a save, a dismissal or a submission, as it crosses a wire. */
+export const PlanReviewResultSchema: v.GenericSchema<unknown, PlanReviewResult> = v.variant('ok', [
+  v.object({ ok: v.literal(true), plan: PlanReviewSchema }),
+  v.object({ ok: v.literal(false), error: v.string(), plan: v.nullable(PlanReviewSchema) }),
+]);
+
+/** The answer to a decision, whole: `queued` says whether the turn it hands off was admitted. */
+export const PlanDecisionOutcomeSchema: v.GenericSchema<unknown, PlanDecisionOutcome> = v.variant('ok', [
+  v.object({ ok: v.literal(true), plan: PlanReviewSchema, queued: v.boolean(), queueError: v.optional(v.string()) }),
+  v.object({ ok: v.literal(false), error: v.string(), plan: v.nullable(PlanReviewSchema) }),
+]);
+
+/** What a recorded decision still owes, in words, or null once the turn it hands off was admitted. */
+export function planHandoffShortfall(outcome: PlanDecisionOutcome): string | null {
+  if (!outcome.ok || outcome.queued) return null;
+
+  return `Decision saved, but the next turn could not start${outcome.queueError === undefined ? '.' : `: ${outcome.queueError}`}`;
+}
+
 export function planReviewAwaitingDecision(
   review: Pick<PlanReview, 'status' | 'handoffAccepted'> | null | undefined,
 ): boolean {

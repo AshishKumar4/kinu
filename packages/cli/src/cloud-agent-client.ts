@@ -4,7 +4,7 @@ import {
   CHANGELOG_ENTRY_KINDS,
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   JsonValueSchema,
-  PlanReviewSchema,
+  PlanDecisionOutcomeSchema, PlanReviewResultSchema, PlanReviewSchema,
   AskingAgentSchema,
   ChatHistoryEntrySchema, SendStateSchema, type SendState,
   ORCHESTRATOR_AGENT_SLUG,
@@ -23,7 +23,7 @@ import { attempt, detach, diagnostics, renderThrownChain, settle, tolerate } fro
 import { Effect } from 'effect';
 import {
   AlternateTakeCandidateSchema, CheckpointAvailabilitySchema, FileCheckpointEntrySchema, FileRestorePlanSchema,
-  FileRestoreResultSchema, ReasoningEffortSchema, type FileCheckpointListing, type PlanReviewResult, type WorkspaceSpend,
+  FileRestoreResultSchema, ReasoningEffortSchema, type FileCheckpointListing, type WorkspaceSpend,
 } from '@kinu.run/core';
 import {
   ActivitySpendSchema,
@@ -99,11 +99,6 @@ const FileCheckpointListingSchema: v.GenericSchema<FileCheckpointListing> = v.ob
 
 /** Core's own `PlanReviewSchema`, so a forged annotation cannot arrive by a route the workspace UI lacks. */
 const CloudPlanReviewSchema = v.nullable(PlanReviewSchema);
-
-const CloudPlanReviewResultSchema: v.GenericSchema<unknown, PlanReviewResult> = v.variant('ok', [
-  v.object({ ok: v.literal(true), plan: PlanReviewSchema }),
-  v.object({ ok: v.literal(false), error: v.string(), plan: CloudPlanReviewSchema }),
-]);
 
 const CloudChatPageSchema = positionPageSchema(ChatHistoryEntrySchema);
 
@@ -383,14 +378,14 @@ export class CloudAgentClient implements AgentClient {
     this.plans = subordinateName ? null : {
       active: async () => v.parse(CloudPlanReviewSchema, await this.callRpc('getActivePlanReview', [])),
       saveAnnotations: async (id, revision, annotations) => v.parse(
-        CloudPlanReviewResultSchema,
+        PlanReviewResultSchema,
         await this.callRpc('savePlanReviewAnnotations', [id, revision, v.parse(JsonValueSchema, annotations)]),
       ),
       decide: async (id, revision, decision, feedback) => v.parse(
-        CloudPlanReviewResultSchema,
+        PlanDecisionOutcomeSchema,
         await this.callRpc('decidePlanReview', [id, revision, decision, feedback ?? null]),
       ),
-      dismiss: async (id, revision) => v.parse(CloudPlanReviewResultSchema, await this.callRpc('dismissPlanReview', [id, revision])),
+      dismiss: async (id, revision) => v.parse(PlanReviewResultSchema, await this.callRpc('dismissPlanReview', [id, revision])),
     };
   }
 
