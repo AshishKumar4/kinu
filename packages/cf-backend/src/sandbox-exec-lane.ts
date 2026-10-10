@@ -254,10 +254,11 @@ export function adaptCloudflareSandbox(
         ? { ...exposed, route: { reached: true } }
         : { ...exposed, route: { reached: false, gate: 'exposed' as const, detail: `the container holds no live exposure of port ${port} for this URL` } };
     })),
-    // Withdraw first: a revoked port the edge still admits is unsafe.
+    // Withdraw first: a revoked port the edge still admits is unsafe. The container's own revoke needs no readiness,
+    // and a container that keeps the exposure regardless serves nothing the edge admits.
     unexposePort: (port) => settle(Effect.gen(function* () {
       if (previews !== null) yield* callDevbox(() => previews.withdraw(port));
-      const removed = yield* onContainer(() => jsonResultOrVoid(handle.unexposePort(port)));
+      const removed = yield* callDevbox(() => jsonResultOrVoid(handle.unexposePort(port)));
       yield* recordPortsMoved(portsMoved);
 
       return removed;
@@ -266,6 +267,8 @@ export function adaptCloudflareSandbox(
     // listing stands: the record is already correct, unlike an unpublished URL in `exposePort`.
     // Not `onContainer`: a read never starts a container.
     getExposedPorts: (hostname) => settle(callDevbox(async () => {
+      // Before the read: a withdrawal after it outranks what it saw.
+      const observedAt = Date.now();
       const rows = await handle.getExposedPorts(hostname);
 
       if (previews !== null) {
@@ -276,7 +279,7 @@ export function adaptCloudflareSandbox(
           if (label === null || label.port !== row.port) return;
 
           try {
-            await index.refresh(row.port, label.token);
+            await index.refresh(row.port, label.token, observedAt);
           } catch (cause) {
             diagnostics.failure('preview.refresh_failed', toKinuError({
               doing: 'refreshing a published sandbox preview',
