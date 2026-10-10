@@ -4,8 +4,8 @@ import { MemoryStore } from "../src/memory/store";
 import { createTestDb, createMemoryVfs } from "./helpers";
 
 function createStore() {
-	const { sql } = createTestDb();
-	const store = new MemoryStore(createMemoryVfs(), sql);
+	const { sql, transactionSync } = createTestDb()
+	const store = new MemoryStore(createMemoryVfs(), sql, transactionSync);
 	store.ensureSchema();
 
 	return { store };
@@ -103,9 +103,9 @@ describe("MemoryStore.search reads its hits from their notes", () => {
 	});
 
 	test("a note deleted under the index leaves no hit", async () => {
-		const { sql } = createTestDb();
+		const { sql, transactionSync } = createTestDb()
 		const files = createMemoryVfs();
-		const store = new MemoryStore(files, sql);
+		const store = new MemoryStore(files, sql, transactionSync);
 		store.ensureSchema();
 		await note(store, "memory/gone.md", "postgres vacuum notes");
 		files.files.delete("memory/gone.md");

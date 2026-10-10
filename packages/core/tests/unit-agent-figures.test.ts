@@ -47,9 +47,9 @@ function recordHistory(main: ActorHandle, hired: ActorHandle, sql: SqlExecutor, 
 
         after(700 + (at % 17) * 97);
 
-        if (at % 23 === 0) agents.main.recorder.emit(runId, { type: 'step_finish', stepIndex });
-        else if (at % 11 === 0) agents.main.recorder.emit(runId, { type: 'step_finish', stepIndex, usage: { input, output, cacheRead } });
-        else agents.main.recorder.emit(runId, { type: 'step_finish', stepIndex, usage: { input, output, cacheRead }, usd: (input * 3 - cacheRead * 2.7 + output * 15) / 1_000_000 });
+        if (at % 23 === 0) agents.main.recorder.emit(runId, { type: 'step_finish', stepIndex, parts: [] });
+        else if (at % 11 === 0) agents.main.recorder.emit(runId, { type: 'step_finish', stepIndex, parts: [], usage: { input, output, cacheRead } });
+        else agents.main.recorder.emit(runId, { type: 'step_finish', stepIndex, parts: [], usage: { input, output, cacheRead }, usd: (input * 3 - cacheRead * 2.7 + output * 15) / 1_000_000 });
       }
 
       if (index % 10 === 9) {
@@ -59,7 +59,7 @@ function recordHistory(main: ActorHandle, hired: ActorHandle, sql: SqlExecutor, 
 
     if (index % 3 === 0) {
       turn(agents.hired, index, (runId) => {
-        agents.hired.recorder.emit(runId, { type: 'step_finish', stepIndex: 0, usage: { input: 50_000, output: 5_000, cacheRead: 1_000 }, usd: 0.4 });
+        agents.hired.recorder.emit(runId, { type: 'step_finish', stepIndex: 0, parts: [], usage: { input: 50_000, output: 5_000, cacheRead: 1_000 }, usd: 0.4 });
       });
     }
 
@@ -109,13 +109,13 @@ test("the cache EMA reads the newest 400 steps, so steps that reported no cache 
   const ema = () => readAgentFigures(sql, [main.actorId]).get(main.actorId)?.cacheEma;
 
   openTurnRun(recorder, 'sparse', { agentId: main.actorId, causedBy: 'chat', userMessage: 'sparse', turnIndex: 0 });
-  recorder.emit('sparse', { type: 'step_finish', stepIndex: 0, usage: { input: 1_000, cacheRead: 1_000 } });
+  recorder.emit('sparse', { type: 'step_finish', stepIndex: 0, parts: [], usage: { input: 1_000, cacheRead: 1_000 } });
   expect(ema()).toBe(1);
 
-  for (let stepIndex = 1; stepIndex <= 400; stepIndex += 1) recorder.emit('sparse', { type: 'step_finish', stepIndex });
+  for (let stepIndex = 1; stepIndex <= 400; stepIndex += 1) recorder.emit('sparse', { type: 'step_finish', stepIndex, parts: [] });
 
   // Read once at the end of the 400, and once a step at a time across them: the same window either way.
   expect(ema()).toBeNull();
-  recorder.emit('sparse', { type: 'step_finish', stepIndex: 401, usage: { input: 1_000, cacheRead: 0 } });
+  recorder.emit('sparse', { type: 'step_finish', stepIndex: 401, parts: [], usage: { input: 1_000, cacheRead: 0 } });
   expect(ema()).toBe(0);
 });

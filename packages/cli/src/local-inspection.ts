@@ -5,6 +5,7 @@ import {
   runOnExecutor,
   BUILTIN_TOOL_DESCRIPTIONS,
   BUILTIN_TOOLS,
+  getToolList,
   EventLog,
   HeadJournal,
   MctsSearchStore,
@@ -463,11 +464,16 @@ export function getLocalToolSurface(name: string): {
       name: toolName,
       description: BUILTIN_TOOL_DESCRIPTIONS[toolName],
     })),
-    crafted: tableExists(db, 'crafted_tools')
-      ? all<{ name: string; description: string }>(db, `SELECT name, description FROM crafted_tools ORDER BY name`)
-      : [],
+    crafted: localCraftedTools(db),
     executors: listLocalExecutors(),
   }));
+}
+
+/** Core's tool inventory over a workspace's database, opened read-only here; one made before any craft has none. */
+function localCraftedTools(db: SqliteDb): Array<{ name: string; description: string }> {
+  if (!tableExists(db, 'crafted_tools')) return [];
+
+  return getToolList(makeSql(db)).crafted.map(({ name, description }) => ({ name, description }));
 }
 
 export function listLocalTriggers(name: string): { triggers: TriggerRow[] } {
@@ -734,15 +740,7 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
 }
 
 function getLocalToolSummary(db: SqliteDb): LocalToolSummary {
-  const crafted = tableExists(db, 'crafted_tools')
-    ? all<{ name: string; description: string }>(db, `SELECT name, description FROM crafted_tools ORDER BY name`)
-    : [];
-
-  return {
-    builtIn: BUILTIN_TOOLS,
-    crafted,
-    executors: listLocalExecutors(),
-  };
+  return { builtIn: BUILTIN_TOOLS, crafted: localCraftedTools(db), executors: listLocalExecutors() };
 }
 
 const NOOP_ALARM: AlarmScheduler = {

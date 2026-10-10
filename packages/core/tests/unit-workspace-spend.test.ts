@@ -57,8 +57,8 @@ function headRig(subordinate = false) {
 /** A step with no `usage` is a provider that said nothing; totals must survive it. */
 function step(events: RunEventRecorder, usage: Usage, usd?: number): void {
   events.emit('run-1', usd === undefined
-    ? { type: 'step_finish', stepIndex: 0, usage }
-    : { type: 'step_finish', stepIndex: 0, usage, usd });
+    ? { type: 'step_finish', parts: [], stepIndex: 0, usage }
+    : { type: 'step_finish', parts: [], stepIndex: 0, usage, usd });
 }
 
 describe('workspaceSpend', () => {
@@ -446,9 +446,9 @@ describe('workspaceSpend — by the account that paid', () => {
       quota: { at, windows: [{ measure: 'requests', limit: 50, remaining, resetsAt: at + 60_000 }] },
     });
 
-    events.emit('run-1', { type: 'step_finish', stepIndex: 0, usage: { input: 900, output: 100 }, usd: 0.02, account: work(1_000, 40) });
-    events.emit('run-1', { type: 'step_finish', stepIndex: 1, usage: { input: 1_900, output: 100 }, usd: 0.03, account: work(2_000, 12) });
-    events.emit('run-1', { type: 'step_finish', stepIndex: 2, usage: { input: 50, output: 5 }, account: { provider: 'anthropic', name: 'main' } });
+    events.emit('run-1', { type: 'step_finish', parts: [], stepIndex: 0, usage: { input: 900, output: 100 }, usd: 0.02, account: work(1_000, 40) });
+    events.emit('run-1', { type: 'step_finish', parts: [], stepIndex: 1, usage: { input: 1_900, output: 100 }, usd: 0.03, account: work(2_000, 12) });
+    events.emit('run-1', { type: 'step_finish', parts: [], stepIndex: 2, usage: { input: 50, output: 5 }, account: { provider: 'anthropic', name: 'main' } });
     events.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'judge', usage: { input: 10, output: 1 } });
     events.emit(WORKSPACE_RUN_ID, buildModelCallEvent(
       { source: 'compaction', usage: { input: 300, output: 20 }, spec: 'anthropic@work/m', account: { provider: 'anthropic', name: 'work' } },

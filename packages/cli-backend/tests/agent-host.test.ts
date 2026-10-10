@@ -1127,7 +1127,7 @@ describe('LocalAgentHost', () => {
       }),
       modelInfo: async () => null,
       getAuth: async () => null,
-      credentialFor: async () => null,
+      attemptFor: async () => null,
       countInputTokens: async () => ({ kind: 'unsupported', provider: 'fake', reason: 'no endpoint behind the fake' }),
     };
 

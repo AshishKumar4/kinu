@@ -18,35 +18,7 @@ const TURN: CompletedTurn = {
 
 const TURN_JSON = projectJsonValue({ value: TURN });
 
-describe('a retired effect', () => {
-  // docs/EVOLUTION-REDESIGN.md §6: no turn owes `shadow_trial` or `auto_gepa`; a row an older build wrote must not stall its sequence.
-  test.each(['shadow_trial', 'auto_gepa'] as const)('an owed %s row completes unrun, and the sequence goes on', async (name) => {
-    const db = new Database(':memory:');
-    const sql = makeSql(db);
-    initTerminalEffectTable(makeExecRaw(db));
-    let after = 0;
-
-    const ledger = new TerminalEffectLedger({
-      sql, actor: testActorHandle(sql, { actorId: 'actor-a' }), now: () => 1_000,
-      effects: { craft_usage: terminalEffect({ input: v.object({}), runSync: () => { after += 1;
-
-        return { status: 'completed' }; } }) },
-      transaction: (body) => db.transaction(body)(),
-      scheduleRetry: async () => {},
-    });
-
-    const run = await ledger.run('seq', [
-      { name, scope: 'msg-1', input: { turn: TURN_JSON, trialContext: [], pendingVersion: 7 }, lane: 'inline' },
-      { name: 'craft_usage', scope: '', input: {}, lane: 'inline' },
-    ]);
-
-    await run.reported;
-    expect(sql<{ effect_name: string; status: string }>`SELECT effect_name, status FROM terminal_effects ORDER BY effect_name`)
-      .toEqual([{ effect_name: name, status: 'completed' }, { effect_name: 'craft_usage', status: 'completed' }].sort((x, y) => x.effect_name.localeCompare(y.effect_name)));
-    expect(after).toBe(1);
-    db.close();
-  });
-});
+;
 
 describe('turnRecordTerminalEffect', () => {
   const recorderOver = () => {

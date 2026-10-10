@@ -293,7 +293,7 @@ function sessionWithWindows(model: LanguageModel, windows: Readonly<Record<strin
   const modelResolver: LocalModelResolver = {
     normalizeSpecSync: (spec) => (spec === null || spec === undefined || spec.trim() === '' ? 'local/small' : spec.trim()),
     resolveModel: () => model,
-    credentialFor: async () => null,
+    attemptFor: async () => null,
     listProviders: async () => [],
     listModels: async () => ({ models: Object.keys(windows).map((spec) => ({ provider: 'local', id: spec.slice('local/'.length), label: spec })), failures: [] }),
     modelInfo: async (spec) => ({ id: spec ?? 'local/small', contextWindow: windows[spec ?? 'local/small'], modelOutputLimit: 4_000 }),

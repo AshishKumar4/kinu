@@ -358,7 +358,9 @@ export {
   type ChatEvent, type ChatFallback, type ChatOptions, type ChatToolOutput, type ObserveStream,
 } from './chat';
 
-export { createFallbackCooldowns, type FallbackCooldowns } from './providers/fallback-cooldown';
+export { ProviderPacer } from './providers/pacing';
+
+export type { ModelAttemptIdentity } from './providers/attempt-identity';
 
 // Extension seam (public plugin API)
 export {
@@ -1357,6 +1359,10 @@ export {
   PlanReviewActions,
   PlanReviewStore,
   PlanReviewSchema,
+  PlanReviewResultSchema,
+  PlanDecisionOutcomeSchema,
+  planHandoffShortfall,
+  planDecisionRefusal,
   admitReviewAnnotations,
   freshNotes,
   planAwaitingReply,
@@ -1394,6 +1400,7 @@ export {
 
 export {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
+  dataUrlRawBytes,
   DEV_IDENTITY_ACCOUNT_HEADER,
   DEV_IDENTITY_HEADER,
   EVAL_ACCOUNTS,
@@ -1527,6 +1534,7 @@ export {
   DEVICE_CONSENT_DENIED,
   DEVICE_CONSENT_UNANSWERED,
   DEVICE_CONNECT_DISCLOSURE,
+  issuedDeviceConnected,
   summarizeDeviceAction,
   type DeviceConsentDecision,
   type DeviceConsentAnswer,
@@ -1642,7 +1650,7 @@ export {
 } from './jobs/index';
 
 export {
-  TaskListStore, initTaskListTable, MAX_TASK_TITLE_CHARS,
+  TaskListStore, initTaskListTable, MAX_TASK_TITLE_CHARS, taskSettled, taskTreePhase,
   type AgentTask, type AgentTaskTree, type TaskStatus,
   type TaskAddResult, type TaskAddRejection,
 } from './tools/task-store';
@@ -2306,6 +2314,16 @@ export { messagesUpTo, turnRows } from './read-models/fork-count';
 export {
   turnLiveness, TURN_CLAIM_FRAME, TurnClaimFrameSchema, type TurnClaimState, type TurnLiveness,
 } from './read-models/turn-liveness';
+
+export {
+  createLiveRefreshAdmission, formatWorkspaceError, loadWorkspaceSnapshot, naturalList, readFailureText, refreshLiveResource,
+  SNAPSHOT_SEEDED_SOURCES, type ConsentResolutionReporter, type ErrorSource, type LiveRefreshAdmission, type LiveRefreshErrors,
+  type LiveRefreshReporter, type LiveRefreshSource, type LiveResourceRead, type SnapshotLoad, type WorkspaceErrors, type WorkspaceNotice,
+} from './read-models/workspace-reads';
+
+export {
+  SubordinateActivityEventSchema, WorkspaceBroadcastSchema, WorkspacePlanUpdatedFrameSchema, type MctsProgress, type WorkspaceBroadcast,
+} from './read-models/workspace-broadcasts';
 
 export { inspectWork, jobPhase, type InspectedWork } from './read-models/work-inspection';
 

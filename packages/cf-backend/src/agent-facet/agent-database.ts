@@ -6,7 +6,7 @@ import {
   actorReferenceOf, actorScaffoldPath, createActorHost, createScaffoldSurface, defaultLoopOrigin,
   initWorkspaceSchema, nimbusSessionFiles, recoverActorTurns, MissionGovernor, actorReadHandle, readSessionTranscript, readSubordinateInspection,
   drawnStep, getChatHistoryPage, inheritedContextFromTranscript, turnRequestIndex, turnRequestPage,
-  type TurnRequestIndex, type TurnRequestPage, ConversationSearchStore, RunEventRecorder, spendLedger, type SpendLedger, type StepSpendSource,
+  type TurnRequestIndex, type TurnRequestPage, RunEventRecorder, spendLedger, type SpendLedger, type StepSpendSource,
   readAgentFigures, NO_FIGURES, type AgentFigures,
   localContextTree, type ContextEditor, type ContextTree, type ConversationRecall,
   type ActorHandle, type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
@@ -111,7 +111,6 @@ export class AgentDatabase {
   }
 
   private priced: { readonly model: string; readonly pricing: ModelPricing | null } | null = null;
-  private recall: ConversationRecall | null = null;
   private execution: Executor | null = null;
 
   private readonly sql: SqlExecutor = <T,>(query: TemplateStringsArray, ...values: SqlValue[]): T[] =>
@@ -347,7 +346,9 @@ export class AgentDatabase {
 
     const actor = actorReadHandle(this.sql, record);
 
-    return { actor, transcript: readSessionTranscript(this.sql, actor, CHAT_SESSION_ID, null) };
+    // The workspace owner still holds this actor's retained home. Reading payloads needs no actor reacquisition.
+    return { actor, transcript: readSessionTranscript(this.sql, actor, CHAT_SESSION_ID,
+      async () => nimbusSessionFiles(this.workspace.agent(), { home: this.workspace.home })) };
   }
 
   async inspect(request: AgentOwnInspection): Promise<SubordinateInspectionResult> {
@@ -424,6 +425,7 @@ export class AgentDatabase {
    *  closed: fewer only when the ledger holds fewer. */
   async *runSteps(runId: string, before: number): AsyncGenerator<JsonObject[]> {
     const { eventRecorder } = this.actorHost().bindStores(this.reference()).stores;
+    const transcript = this.transcript();
     let at = -1;
 
     for (let step = 0; step < before; step += 1) {
@@ -431,7 +433,8 @@ export class AgentDatabase {
 
       if (next === null) return;
       at = next.at;
-      yield drawnStep(next.messages);
+      // A step's output is recorded by reference to its messages' parts: drawn as one message's content.
+      yield drawnStep([{ content: await transcript.parts(next.parts) }]);
     }
   }
 
@@ -483,12 +486,7 @@ export class AgentDatabase {
   }
 
   conversations(): ConversationRecall {
-    const reference = this.reference();
-
-    this.recall ??= new ConversationSearchStore(this.sql, this.actorHost().bindStores(reference).handle,
-      (sessionId) => this.actorHost().bindStores(reference).stores.history.transcript(sessionId));
-
-    return this.recall;
+    return this.actorHost().bindStores(this.reference()).stores.conversationSearch;
   }
 
   contextTree(editor: ContextEditor): ContextTree {

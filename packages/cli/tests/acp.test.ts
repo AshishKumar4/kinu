@@ -250,7 +250,7 @@ describe('kinu acp — prompt turn', () => {
 
   test('a turn its connection lost over ACP keeps the partial, then what the workspace recorded beyond it', async () => {
     const events: AgentClientEvent[] = [];
-    const stream = new CloudTurnStream((event) => events.push(event), () => {});
+    const stream = new CloudTurnStream((event) => events.push(event), { resolve: () => {}, reject: () => {} });
     stream.apply(JSON.stringify({ type: 'text-delta', delta: 'one, ' }));
     stream.apply(JSON.stringify({ type: 'finish-step' }));
     stream.apply(JSON.stringify({ type: 'text-delta', delta: 'tw' }));

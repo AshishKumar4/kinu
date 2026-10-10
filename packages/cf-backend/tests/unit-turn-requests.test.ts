@@ -81,12 +81,8 @@ describe('the context number a page reads back', () => {
     const recorder = new RunEventRecorder(main.sql, main.actor);
     const context = measureContext({ messages: [{ role: 'user', content: 'first prompt' }] });
     recorder.emit('measured-turn', { type: 'context_admitted', tokens: 80, contextWindow: 1_000 });
-    recorder.emit('measured-turn', {
-      type: 'step_finish', stepIndex: 1, usage: { input: 100 }, context, modelId: 'first-model', egress: 'relay',
-    });
-    recorder.emit('measured-turn', {
-      type: 'step_finish', stepIndex: 2, usage: { output: 5, cacheRead: 200 }, modelId: 'second-model',
-    });
+    recorder.emit('measured-turn', { type: 'step_finish', parts: [], stepIndex: 1, usage: { input: 100 }, context, modelId: 'first-model', egress: 'relay', });
+    recorder.emit('measured-turn', { type: 'step_finish', parts: [], stepIndex: 2, usage: { output: 5, cacheRead: 200 }, modelId: 'second-model', });
 
     // The measured step has left the telemetry sample, but still supplies the context number.
     const snapshot = await harness.agent.getActivitySnapshot({ steps: 1 });

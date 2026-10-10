@@ -2,7 +2,7 @@
 // sending is never cut, however long it runs. Driven through the model stack and the turn, on the catalog's bound.
 import { afterEach, describe, expect, jest, test } from 'bun:test';
 import * as v from 'valibot';
-import { createChatModel, createFallbackCooldowns, createProviderRegistry, runChat, type ChatEvent, type ChatFallback, type ModelCallDeps } from '../src/index';
+import { createChatModel, ProviderPacer, createProviderRegistry, runChat, type ChatEvent, type ChatFallback, type ModelCallDeps } from '../src/index';
 import { APICallError, streamText } from 'ai';
 import { asFetchFunction } from '../src/providers/fetch-shim';
 import { callRetries } from '../src/providers/middleware/retry';
@@ -83,7 +83,7 @@ function turnOver(primary: ScriptedStream) {
   const done = (async () => {
     for await (const event of runChat({
       model: model('primary'), modelContext: { id: 'stub/primary' }, modelSpec: 'stub/primary', fallbacks: [fallback],
-      cooldowns: createFallbackCooldowns(), system: 'sys', history: [{ role: 'user', content: 'go' }], tools: {},
+      pacer: new ProviderPacer(), system: 'sys', history: [{ role: 'user', content: 'go' }], tools: {},
     })) events.push(event);
   })();
 

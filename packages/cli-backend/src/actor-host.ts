@@ -12,25 +12,24 @@ type LocalActorHostDeps = Omit<ActorHostDeps, 'tracing' | 'runtimeFor' | 'filesF
 };
 
 export function createLocalActorHost(deps: LocalActorHostDeps): ActorHost {
+  const scaffoldFor: ActorHostDeps['scaffoldFor'] = async (bound) => {
+    const parent = deps.parentRuntimeFor(bound);
+
+    return await localActorScaffoldSource({ actor: bound.handle, sql: parent.storage.sql,
+      source: { path: actorScaffoldPath(bound.record), vfs: parent.agentStateVfs ?? parent.storage.vfs } });
+  };
+
   return createActorHost({
     ...deps,
     tracing: undefined,
     runtimeFor: async (bound, seat) => {
-      const runtime = await (seat.kind === 'actor' ? deps.actorRuntimeFor(bound, seat)
+      await scaffoldFor(bound);
+
+      return await (seat.kind === 'actor' ? deps.actorRuntimeFor(bound, seat)
         : buildLocalActorRuntime(deps.parentRuntimeFor(bound), bound, seat.kind, seat.writes));
-
-      await localActorScaffoldSource({ actor: bound.handle, sql: runtime.storage.sql,
-        source: { path: runtime.identity.scaffold.path, vfs: runtime.agentStateVfs ?? runtime.storage.vfs } });
-
-      return runtime;
     },
     filesFor: (bound) => deps.parentRuntimeFor(bound).filesForActor(bound.handle),
-    scaffoldFor: async (bound) => {
-      const parent = deps.parentRuntimeFor(bound);
-
-      return await localActorScaffoldSource({ actor: bound.handle, sql: parent.storage.sql,
-        source: { path: actorScaffoldPath(bound.record), vfs: parent.agentStateVfs ?? parent.storage.vfs } });
-    },
+    scaffoldFor,
     orchestrationFor: (bound) => {
       const orchestration = createLocalOrchestration({
         runtime: bound.runtime, history: bound.stores.history, stores: bound.stores,

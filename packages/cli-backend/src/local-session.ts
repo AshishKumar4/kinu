@@ -5,7 +5,7 @@
 
 import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
-import { ConversationSearchStore, historyTurnPairs, testModel, toolDescription, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
+import { historyTurnPairs, testModel, toolDescription, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
 import type { ActorHandle, JsonObject } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { resolve } from 'node:path';
@@ -1643,7 +1643,7 @@ export class LocalAgentSession {
       normalize: (spec) => this.profiles().normalizeSpec(spec),
       resolve: (spec) => (resolver ? resolver.resolveModel(spec, this.affinity()) : this.defaultModel('this static-model session')),
       ...(resolver && {
-        routed: { credentialFor: (spec) => resolver.credentialFor(spec), countInputTokens: (spec, request) => resolver.countInputTokens(spec, request) },
+        routed: { attemptFor: (spec) => resolver.attemptFor(spec), countInputTokens: (spec, request) => resolver.countInputTokens(spec, request) },
       }),
     };
   }
@@ -1992,7 +1992,7 @@ export class LocalAgentSession {
 
     return suggestWorkspaceTitle((system, prompt) => completeOnRoute(route, {
       llm: (resolution) => this.localRouteLlm(resolution, system),
-      ...(resolver !== null && { credentialOf: (spec: string) => resolver.credentialFor(spec) }),
+      ...(resolver !== null && { attemptOf: (spec: string) => resolver.attemptFor(spec) }),
       refusals: this.rt.refusals,
     }, prompt), mission);
   }
@@ -2588,7 +2588,7 @@ export class LocalAgentSession {
     const models: TurnModelSources = {
       catalog, normalize,
       resolve: (spec) => resolver?.resolveModel(spec, affinity) ?? this.defaultModel('a static-model actor'),
-      ...(resolver && { routed: { credentialFor: (spec: string) => resolver.credentialFor(spec),
+      ...(resolver && { routed: { attemptFor: (spec: string) => resolver.attemptFor(spec),
         countInputTokens: (spec: string, request: CountableRequest) => resolver.countInputTokens(spec, request) } }),
     };
 
@@ -2612,7 +2612,7 @@ export class LocalAgentSession {
         runId,
         sources: this.runActorSources(actor, runId, { extension: compaction.extension, models, report, operations }),
         infer: (input, inference) => runHeadInference(input, { ...inference, compaction: compaction.trigger }),
-        conversations: new ConversationSearchStore(actor.runtime.storage.sql, actor.handle, (sessionId) => actor.stores.history.transcript(sessionId)),
+        conversations: actor.stores.conversationSearch,
         jobs: { ports: this.loopJobPorts(), attach: (authority) => this.jobAuthorities.attach(authority) },
       },
     };
@@ -2701,7 +2701,7 @@ export class LocalAgentSession {
   }
 
   private ownConversations(): ConversationRecall {
-    return new ConversationSearchStore(this.rt.storage.sql, this.rt.actor, (sessionId) => this.stores.history.transcript(sessionId));
+    return this.stores.conversationSearch;
   }
 
   /** Tool deps with the effect-claim id as an argument; the id decides what a replay dedupes against. */

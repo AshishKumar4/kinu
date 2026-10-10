@@ -9,7 +9,6 @@ import {
   missionOf,
   workspaceSlug,
   type ReasoningEffort,
-  type SuggestedWorkspaceIdentity,
 } from '@kinu.run/core';
 import { ensureDefaultTier, loadActiveProfile } from './default-model';
 import { readDefaultTier } from './profiles';
@@ -75,11 +74,6 @@ export interface CreatedCliAgent {
   aliasPath?: string;
 }
 
-/** The slug derives from the id; the title is the mission's stand-in, which the workspace's first turn names through its owed `auto_title` effect. */
-export function suggestAgentIdentityFromMission(mission: string, id: string = crypto.randomUUID()): SuggestedWorkspaceIdentity {
-  return fallbackWorkspaceIdentity(mission, id);
-}
-
 export interface CreateCloudAgentFromMissionOptions {
   id?: string;
   create: (input: CreateCloudAgentInput) => Promise<CloudAgent>;
@@ -93,7 +87,7 @@ export async function createCloudAgentFromMission(
 
   const identity = userNamed
     ? { name: input.name, displayName: input.displayName ?? input.name }
-    : suggestAgentIdentityFromMission(input.purpose, options.id);
+    : fallbackWorkspaceIdentity(input.purpose, options.id ?? crypto.randomUUID());
 
   const createInput: CreateCloudAgentInput = {
     name: identity.name,

@@ -3,7 +3,7 @@ import { createTestRenderer } from '@opentui/core/testing';
 import { createRoot, flushSync } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
 
-import { HubOverlay, type TuiHubData, type TuiHubView } from '../src/tui/hubs';
+import { HubOverlay, workFromWorkspace, type TuiHubData, type TuiHubView } from '../src/tui/hubs';
 import { createMemoryTuiPreferenceStore } from './helpers/tui-preferences';
 import { TuiProductProvider } from '../src/tui/tui-shell';
 
@@ -119,3 +119,22 @@ describe('role, tier, and agent hubs', () => {
   });
 });
 
+
+// 26244c765: the TUI called a task running only when its parent was active, so a live subtask under an open parent
+// read as idle where Work in the browser showed it running.
+test('a task whose subtask is active is running in the hub, whatever its parent says', () => {
+  const owner = { actorId: 'actor-main', name: 'main', title: 'main', retired: false, path: [] };
+
+  const task = (id: string, status: 'open' | 'active' | 'done', subtasks: { id: string; status: 'open' | 'active' | 'done' }[]) => ({
+    id, parentId: null, title: id, status, updatedAt: 1, note: null,
+    subtasks: subtasks.map((sub) => ({ ...sub, parentId: id, title: sub.id, updatedAt: 1, note: null })),
+  });
+
+  const work = workFromWorkspace({ plans: [], tasks: [{ owner, plan: null, tasks: [
+    task('parent-open', 'open', [{ id: 'sub-active', status: 'active' }]),
+    task('parent-done', 'done', [{ id: 'sub-open', status: 'open' }]),
+    task('all-done', 'done', [{ id: 'sub-done', status: 'done' }]),
+  ] }] });
+
+  expect(work.map((entry) => [entry.title, entry.status])).toEqual([['parent-open', 'running'], ['parent-done', 'idle'], ['all-done', 'settled']]);
+});

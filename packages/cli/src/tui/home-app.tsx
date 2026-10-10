@@ -10,7 +10,6 @@ import {
   defaultCreateMode,
   isCloudAuthConfigured,
   isLocalModelConfigured,
-  suggestAgentIdentityFromMission,
 } from '../agent-create';
 import {
   listKnownAgents, listSidebarAgents, syncCloudAgentRefs, type CloudRefCollision,
@@ -23,7 +22,7 @@ import {
   type AgentMode,
 } from '../config';
 import { createConfiguredLocalModelResolver } from '../local-model-resolver';
-import { EMPTY_MODEL_MENU, normalizeModelMenu, specWithoutAccount, type AgentModelMenu } from '@kinu.run/core';
+import { EMPTY_MODEL_MENU, fallbackWorkspaceIdentity, normalizeModelMenu, specWithoutAccount, type AgentModelMenu } from '@kinu.run/core';
 import { requireInteractiveTerminal, TUI_EXIT_SIGNALS } from '../prompt';
 import { VERSION } from '../display';
 import { loadActiveProfile, updateDefaultTier } from '../default-model';
@@ -272,7 +271,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
 
       if (mode === 'local' && !localReady) return yield* Effect.die(new Error('Local workspaces need a model provider. Run kinu provider connect <provider>, or switch to cloud.'));
       // Cloud naming is server-side; a local agent's slug and stand-in title are picked here.
-      const identity = mode === 'local' ? suggestAgentIdentityFromMission(mission) : undefined;
+      const identity = mode === 'local' ? fallbackWorkspaceIdentity(mission, crypto.randomUUID()) : undefined;
 
       const created = yield* Effect.promise(async () => createCliAgent({
         ...opts,
@@ -728,7 +727,7 @@ function createDefaultOnboarding(
       const mode: AgentMode = location === 'cloud' || location === 'local' ? location : defaultCreateMode();
 
       const identity = mode === 'local'
-        ? suggestAgentIdentityFromMission(input.mission)
+        ? fallbackWorkspaceIdentity(input.mission, crypto.randomUUID())
         : null;
 
       const created = await createCliAgent({

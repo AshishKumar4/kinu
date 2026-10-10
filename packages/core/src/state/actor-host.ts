@@ -99,13 +99,15 @@ export interface ActorHost {
   hosted(this: void, reference: ActorReference): HostedActor | null;
   /** Any lifecycle state; builds no session. */
   describe(actorId: string): WorkspaceActor | null;
-  /** Stores without runtime or session; still refuses a retired or re-parented actor. */
+  /** Host-owned stores, independent of a runtime lease; refuses a retired or re-parented actor. */
   bindStores(this: void, reference: ActorReference): BoundActor;
   /** Reads retained source bytes without choosing an execution seat. */
   readScaffold(this: void, reference: ActorReference, version: number): Promise<string | null>;
   list(): readonly ActorReference[];
   /** Serialized per actor only. Abandoning the promise cancels nothing; use `session.interrupt()`. */
   run<T>(reference: ActorReference, seat: ActorSeat, work: (actor: HostedActor) => Promise<T>): Promise<T>;
+  /** Work on an already composed actor, serialized on the same queue; never chooses a different seat. */
+  runHosted<T>(reference: ActorReference, work: (actor: HostedActor) => Promise<T>): Promise<T>;
   /** Rows stay. Refused while a turn is in flight. */
   release(reference: ActorReference): void;
   releaseAll(): void;
@@ -166,6 +168,7 @@ function actorScopedTables(sql: SqlExecutor): readonly string[] {
 
 export function createActorHost(deps: ActorHostDeps): ActorHost {
   const slots = new Map<string, HostSlot>();
+  const bindings = new Map<string, { bound: BoundActor; fence: ReleaseFence }>();
   const ports = new Map<string, TemporaryAgentPort>();
   const opening = new Map<string, { readonly reference: ActorReference; readonly seat: ActorSeat }>();
 
@@ -214,6 +217,23 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     }
 
     return { bound: { ...binding, stores }, fence };
+  });
+
+  /** Job authorities and public readers outlive an idle runtime, but not their host or actor. */
+  const storeBinding = (reference: ActorReference) => Effect.gen(function* () {
+    const known = bindings.get(reference.actorId);
+
+    if (known !== undefined) {
+      deps.directory.validate(reference, deps.directory.storagePath(reference));
+      known.bound.handle.assertCurrent();
+
+      return known;
+    }
+
+    const created = yield* bind(reference);
+    bindings.set(reference.actorId, created);
+
+    return created;
   });
 
   const build = (reference: ActorReference, seat: ActorSeat): Effect.Effect<{ actor: HostedActor; fence: ReleaseFence }, KinuError> => Effect.gen(function* () {
@@ -312,6 +332,15 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     ? Effect.fail(new KinuError('missing', 'The actor is not hosted by this root.'))
     : Effect.succeed(slot)));
 
+  const queued = <T>(reference: ActorReference, work: (actor: HostedActor) => Promise<T>): Effect.Effect<T, KinuError> => Effect.gen(function* () {
+    const slot = yield* requireSlot(reference);
+    // A failed operation cannot poison this actor's queue; other actors have their own tails.
+    const result = slot.queue.then(() => work(slot.actor));
+    slot.queue = Promise.allSettled([result]);
+
+    return yield* Effect.promise(() => result);
+  });
+
   const released = (reference: ActorReference): Effect.Effect<void, KinuError> => Effect.gen(function* () {
     // The root's fence is read by its opener; only `releaseAll` (process end) may take it.
     if (reference.parentActorId === null) {
@@ -339,24 +368,20 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     acquire: (reference, seat) => settle(acquired(reference, seat)),
     hosted: (reference) => settleSync(Effect.map(slotFor(reference), (slot) => (slot && !slot.fence.released ? slot.actor : null))),
     describe: (actorId) => deps.directory.retained(actorId),
-    bindStores: (reference) => settleSync(Effect.map(bind(reference), ({ bound }) => bound)),
+    bindStores: (reference) => settleSync(Effect.map(storeBinding(reference), ({ bound }) => bound)),
     readScaffold: (reference, version) => settle(Effect.gen(function* () {
-      const { bound } = yield* bind(reference);
+      const { bound } = yield* storeBinding(reference);
       const source = yield* Effect.promise(() => deps.scaffoldFor(bound));
 
       return yield* Effect.promise(() => readVersionedScaffoldSource(source, version));
     })),
     list: () => [...slots.values()].filter((slot) => !slot.fence.released).map((slot) => slot.actor.reference),
     run: <T>(reference: ActorReference, seat: ActorSeat, work: (actor: HostedActor) => Promise<T>): Promise<T> => settle(Effect.gen(function* () {
-      const actor = yield* acquired(reference, seat);
-      const slot = yield* requireSlot(reference);
-      // The tail waits for settlement so a failure does not poison the next operation;
-      // the caller still receives the rejection.
-      const result = slot.queue.then(() => work(actor));
-      slot.queue = Promise.allSettled([result]);
+      yield* acquired(reference, seat);
 
-      return yield* Effect.promise(() => result);
+      return yield* queued(reference, work);
     })),
+    runHosted: <T>(reference: ActorReference, work: (actor: HostedActor) => Promise<T>): Promise<T> => settle(queued(reference, work)),
     release: (reference) => settleSync(released(reference)),
     temporary: (reference, portFor) => {
       const known = ports.get(reference.actorId);
@@ -372,6 +397,9 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     },
     releaseAll: () => {
       for (const slot of slots.values()) drop(slot);
+
+      for (const binding of bindings.values()) binding.fence.released = true;
+      bindings.clear();
       ports.clear();
     },
     retire: (parent, retirement) => settle(Effect.gen(function* () {
@@ -426,6 +454,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
       deps.directory.apply(parent, parentPath, {
         action: 'release', name: retirement.name, reference: retirement.reference,
       });
+      bindings.delete(retirement.reference.actorId);
     })),
     installedBuild: deps.installedBuild,
     ...(deps.workspace !== undefined && { workspace: deps.workspace }),

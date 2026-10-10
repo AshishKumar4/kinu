@@ -304,7 +304,7 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
 
       openTurnRun(eventRecorder, runId, { agentId: actor.actorId, causedBy: 'chat', userMessage: `question ${String(index)}`, turnIndex: index });
 
-      for (const stepIndex of [0, 1]) eventRecorder.emit(runId, { type: 'step_finish', stepIndex, usage: { input: 1_000, output: 50, cacheRead: 900 }, usd: 0.001 });
+      for (const stepIndex of [0, 1]) eventRecorder.emit(runId, { type: 'step_finish', stepIndex, parts: [], usage: { input: 1_000, output: 50, cacheRead: 900 }, usd: 0.001 });
       closeTurnRun(eventRecorder, runId, { turnIndex: index, ...classifyRunEnd({ completed: true, interrupted: false }) });
     };
 

@@ -2,10 +2,11 @@
 import { Suspense, useCallback, useEffect, useState, type ReactNode } from "react";
 import { GlobeIcon, NotePencilIcon, SparkleIcon } from "@phosphor-icons/react";
 import type { SlateSummary, PendingAction, PlanReview } from "@kinu.run/core";
-import type { WorkspacePlanArrival } from "@/hooks/use-kinu";
+import type { WorkspacePlanArrival } from "@/hooks/use-workspace-reads";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { FilesFocus, HeadDeltas } from "@kinu.run/core";
-import type { AgentStatus, ExecutorOutput, ReadMoves } from "@/hooks/use-kinu";
+import type { AgentStatus, ExecutorOutput } from "@/hooks/use-chat-owner";
+import type { ReadMoves } from "@/hooks/use-workspace-reads";
 import type { AsyncResource } from "@/hooks/use-async-resource";
 import { executorLabel, previewPortTitle, type ExecutorInfo, type InspectedWork } from "@kinu.run/core";
 import { Loader } from "@cloudflare/kumo";

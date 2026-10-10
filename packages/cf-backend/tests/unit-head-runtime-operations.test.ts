@@ -51,6 +51,7 @@ const neverHost: HostedActorSeams = {
     readScaffold() { throw new Error("mergeLLM read an actor's scaffold"); },
     list() { throw new Error('mergeLLM listed the hosted actors'); },
     run() { throw new Error('mergeLLM ran work as a hosted actor'); },
+    runHosted() { throw new Error('mergeLLM ran work on a composed actor'); },
     release() { throw new Error('mergeLLM released a hosted actor'); },
     releaseAll() { throw new Error('mergeLLM released every hosted actor'); },
     retire() { throw new Error('mergeLLM retired a hosted actor'); },

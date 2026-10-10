@@ -3,20 +3,21 @@ import { Cause, Effect } from 'effect';
 import { startTransition, useCallback, useEffect, useState } from "react";
 import { Button } from "@cloudflare/kumo";
 import { ClockCounterClockwiseIcon } from "@phosphor-icons/react";
+import { Loader } from "@cloudflare/kumo";
 import {
-  deviceHistoryNote, type FileCheckpointEntry, type FileCheckpointListing, type FileRestoreChange, type FileRestorePlan, type Rpc,
+  deviceHistoryNote, summarizeRestorePlan, type FileCheckpointEntry, type FileCheckpointListing, type FileRestoreChange, type FileRestorePlan, type Rpc,
 } from "@kinu.run/core";
 import { renderThrownChain, showing, detach, settle } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { Modal } from "@/components/ui/Modal";
 
-export interface DeviceRestorePlan {
+interface DeviceRestorePlan {
   entries: FileCheckpointEntry[];
   dirs: string[];
   files: FileRestoreChange[];
 }
 
-export function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestorePlan }: {
+function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestorePlan }: {
   messageId: string;
   rpc: Rpc;
   onClose: () => void;
@@ -123,6 +124,106 @@ export function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestor
           </p>
         )}
         {failure && <p className="text-xs p-danger leading-relaxed">{failure}</p>}
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * Reverting a turn: the dialog while `messageId` is set, then, when the device holds files from before the turn, their
+ * restore under a confirm of its own, after a safety snapshot. What the restore did is said through `onNotice`.
+ */
+export function TurnRevert({ messageId, rpc, onClose, onReverted, onNotice }: {
+  messageId: string | null;
+  rpc: Rpc;
+  onClose: () => void;
+  onReverted: () => void;
+  onNotice: (notice: string) => void;
+}) {
+  const [plan, setPlan] = useState<DeviceRestorePlan | null>(null);
+  const [restoring, setRestoring] = useState(false);
+
+  const restore = useCallback(() => detach(Effect.gen(function* () {
+    if (!plan) return;
+    setRestoring(true);
+
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      for (const entry of plan.entries) {
+        yield* Effect.promise(async () => rpc('restoreFileCheckpoint', [entry.dir, entry.id]));
+      }
+
+      onNotice(`Restored ${String(plan.files.length)} ${plan.files.length === 1 ? "file" : "files"}. Run restore again to undo it.`);
+      setPlan(null);
+    }), showing((chain) => {
+      onNotice(`Restore failed: ${chain}`);
+      setPlan(null);
+    })), Effect.sync(() => {
+      setRestoring(false);
+    }));
+  })), [plan, rpc, onNotice]);
+
+  return (
+    <>
+      {messageId !== null && <RevertTurnDialog messageId={messageId} rpc={rpc} onClose={onClose} onReverted={onReverted} onRestorePlan={setPlan} />}
+      {plan && <RestoreFilesModal plan={plan} busy={restoring} onCancel={() => setPlan(null)} onConfirm={restore} />}
+    </>
+  );
+}
+
+const RESTORE_PREVIEW_LIMIT = 12;
+
+const RESTORE_MARK = {
+  modify: { mark: "~", tone: "p-warning" },
+  create: { mark: "+", tone: "p-success" },
+  delete: { mark: "-", tone: "p-danger" },
+} satisfies Record<FileRestoreChange["kind"], { mark: string; tone: string }>;
+
+function RestoreFilesModal({ plan, busy, onCancel, onConfirm }: {
+  plan: DeviceRestorePlan; busy: boolean; onCancel: () => void; onConfirm: () => void;
+}) {
+  const { modified, created, deleted } = summarizeRestorePlan(plan.files);
+
+  const counts = [
+    modified ? `${modified} modified` : null,
+    created ? `${created} recreated` : null,
+    deleted ? `${deleted} removed` : null,
+  ].filter(Boolean).join(", ");
+
+  const shown = plan.files.slice(0, RESTORE_PREVIEW_LIMIT);
+
+  return (
+    <Modal
+      title="Restore device files to before this turn"
+      icon={<ClockCounterClockwiseIcon size={18} className="p-warning" />}
+      onClose={onCancel}
+      busy={busy}
+      footer={<>
+        <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
+        <FilledButton onClick={onConfirm} disabled={busy}>
+          {busy ? <><Loader size="sm" /><span className="ml-1">Restoring…</span></> : `Restore ${plan.files.length} file${plan.files.length === 1 ? "" : "s"}`}
+        </FilledButton>
+      </>}
+    >
+      <div className="space-y-2">
+        <p className="text-xs p-text-2 leading-relaxed">
+          This changes files under <span className="font-mono p-text">{plan.dirs.join(", ")}</span> on your
+          device: {counts}. Kinu creates a safety snapshot first. Restore again to undo this change.
+        </p>
+        <ul className="rounded-md border p-border p-elevated max-h-52 overflow-y-auto p-annotation">
+          {shown.map((f) => {
+            const { mark, tone } = RESTORE_MARK[f.kind];
+
+            return (
+              <li key={`${f.kind}:${f.path}`} className="flex gap-2 px-2.5 py-1 border-b p-border last:border-0">
+                <span className={`shrink-0 ${tone}`}>{mark}</span>
+                <span className="p-text-2 truncate" title={f.path}>{f.path}</span>
+              </li>
+            );
+          })}
+          {plan.files.length > shown.length && (
+            <li className="px-2.5 py-1 p-text-3">… {plan.files.length - shown.length} more</li>
+          )}
+        </ul>
       </div>
     </Modal>
   );

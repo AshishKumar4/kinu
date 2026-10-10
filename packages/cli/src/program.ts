@@ -409,7 +409,8 @@ export function buildProgram(): Command {
     .helpGroup(THIS_PC)
     .description('Connect this PC so your agents can run commands on it')
     .option('--label <name>', 'Name for this device (default: the hostname); skips the name prompt')
-    .action((opts: { label?: string }) => desktopCommand('connect', opts));
+    .option('--device <id>', 'The device a browser issued for this machine, from its connect command')
+    .action((opts: { label?: string; device?: string }) => desktopCommand('connect', opts));
 
   program
     .command('desktop [action]')

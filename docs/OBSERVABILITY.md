@@ -129,6 +129,18 @@ A turn's requests are rebuilt from what the session already keeps: each
 step's prepared request, the renders it names, and that step's `step_finish`
 row. Wire bytes are never stored, and this read stores nothing new.
 
+Finished-step events contain sealed part references and accounting, not a
+second copy of the native response. Owner-authorized `inspectSubordinate`
+with `view: 'step'`, `runId`, `eventIndex` and an optional `from` reads those
+references from the actor's canonical payload store, including retained
+helpers. It returns native message projections and `nextFrom`; pages use
+`run_events.page_bytes`, while one oversized message still ships whole as
+on the request inspector. Eval verification and artifact capture use this
+reader before teardown, so full tool inputs are not inferred from the
+ledger's digest. Saved transcript calls carry their exact run/event identity.
+The event-shape cutover requires reset deployment; old step bodies and
+partial-snapshot ledger readers are not supported.
+
 - Owner: `kinu debug <workspace> --turn <id> [--actor <id>]` writes every
   request, page by page, to an owner-only NDJSON file through `redactPayload`.
   `getTurnRequests` and `getTurnRequest` are `interactive` in

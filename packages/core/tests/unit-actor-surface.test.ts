@@ -29,7 +29,7 @@ function actorWith(input: { executors?: ExecutorProviderSurface[]; roleSwitch?: 
   return {
     executors: () => input.executors ?? [],
     web: { search: { search: unreached, fetch: unreached, render: unreached, screenshot: async () => SHOT }, files: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT }, browser: null },
-    memory: () => ({ memory: rt.memory, facts: stores.facts, actor: rt.actor, conversations: conversationsFor(rt, stores.history), vectorStore: null }),
+    memory: () => ({ memory: rt.memory, facts: stores.facts, actor: rt.actor, conversations: conversationsFor(rt), vectorStore: null }),
     files: () => ({ vfs: rt.toolFiles, home: rt.storage.home, planes: rt.planes, memory: rt.memory, ledger: new TurnFileLedger(), budget: new TurnContextBudget() }),
     tasks: () => ({ list: stores.taskList, config: stores.config, roleSwitch: input.roleSwitch ?? null }),
     db: stores.appData,

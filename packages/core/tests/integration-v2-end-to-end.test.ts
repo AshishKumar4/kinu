@@ -222,7 +222,7 @@ describe('v2 e2e: scaffold proposal and promotion', () => {
 });
 
 describe('v2 e2e: durable event log', () => {
-  test('emit through a turn lifecycle; replay via readSince', () => {
+  test('emit through a turn lifecycle; resume with the indexed reader', () => {
     const db = new Database(':memory:');
     initRunEventTables(makeExecRaw(db));
     const sql = makeSql(db);
@@ -231,9 +231,9 @@ describe('v2 e2e: durable event log', () => {
     const runId = 'run-test';
     recorder.emit(runId, { type: 'run_start', agentId: 'agent-1' });
     recorder.emit(runId, { type: 'turn_start', turnIndex: 0 });
-    recorder.emit(runId, { type: 'step_finish', stepIndex: 1, messages: [{ role: 'assistant', content: 'Working...' }] });
+    recorder.emit(runId, { type: 'step_finish', parts: [{ messageId: 'working', partNo: 0 }], stepIndex: 1 });
     recorder.emit(runId, { type: 'tool_call_end', name: 'search_memory', toolCallId: 'tc-1', durationMs: 50, outcome: { success: true } });
-    recorder.emit(runId, { type: 'step_finish', stepIndex: 2, messages: [{ role: 'assistant', content: 'Done.' }] });
+    recorder.emit(runId, { type: 'step_finish', parts: [{ messageId: 'done', partNo: 0 }], stepIndex: 2 });
     recorder.emit(runId, { type: 'turn_end', turnIndex: 0 });
     recorder.emit(runId, { type: 'run_end', reason: 'completed' });
 
@@ -246,7 +246,7 @@ describe('v2 e2e: durable event log', () => {
     expect(all[0].eventIndex).toBe(0);
     expect(all[6].eventIndex).toBe(6);
 
-    const resumed = recorder.readSince(runId, 3);
+    const resumed = recorder.read(runId, { since: 4 });
     expect(resumed.length).toBe(3);
     expect(resumed[0].eventIndex).toBe(4);
 

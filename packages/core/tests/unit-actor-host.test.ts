@@ -334,6 +334,29 @@ describe('one workspace database, many logical actors', () => {
     expect(fx.sql<{ n: number }>`SELECT COUNT(*) AS n FROM actor_turn_claims WHERE actor_id = ${ref.actorId}`[0]?.n).toBe(1);
   });
 
+  test.each([false, true])('host-owned job stores survive runtime release, acquired=%s', async (acquired) => {
+    const fx = build();
+    const ref = fx.child('job-owner', 'job-owner', 'agent');
+    const owned = fx.host.bindStores(ref);
+    const jobs = owned.stores.jobs;
+    jobs.create({ id: 'retained-job', kind: 'shell', workMode: 'build', now: 1 });
+    const runtime = acquired ? await fx.host.acquire(ref, { kind: 'actor' }) : null;
+
+    try {
+      fx.host.release(ref);
+      expect(jobs.settle('retained-job', 0, 'completed after the turn', 2)).toBe(true);
+      expect(fx.host.bindStores(ref).stores).toBe(owned.stores);
+
+      if (runtime !== null) expect(() => runtime.stores.jobs.settle('retained-job', 0, 'stale runtime', 3)).toThrow();
+
+      await fx.host.retire(fx.main, { reference: ref, name: 'job-owner', destroy: false, interrupt: false });
+      expect(() => jobs.settle('retained-job', 0, 'retired actor', 4)).toThrow();
+    } finally {
+      fx.host.releaseAll();
+      fx.db.close();
+    }
+  });
+
   test('a cached head cannot silently lose its write observer or become a node', async () => {
     const fx = build();
     const ref = fx.child('exp:captured-head', 'captured-head', 'swarm');

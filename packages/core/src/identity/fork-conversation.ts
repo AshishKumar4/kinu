@@ -129,7 +129,7 @@ export function localForkConversationTarget(sql: SqlExecutor, opts: LocalForkCon
 
       written(() => {
         // The search index keyed on old rows is stale (equal counts evade its rowid watermark); invalidate it.
-        invalidateConversationSearchIndex(sql);
+        invalidateConversationSearchIndex(sql, actorId);
         // The cut entry names the fork's context so a later fork at this boundary restores the same membership.
         void sql`
           UPDATE conversation_entries SET context_id = ${forkContext(sql, actorId, opts.now)}, context_revision = ${FORK_CONTEXT_REVISION}

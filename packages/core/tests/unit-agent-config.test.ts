@@ -265,17 +265,11 @@ describe('AgentConfigStore — every key has a write path', () => {
     (c) => { canonicalConversationId(c); },
   ];
 
-  /** Written through generic `set` from outside the store (memory-sync's Vectorize backfill). */
-  const GENERIC_WRITE_PATH: ReadonlyArray<string> = [
-    AGENT_CONFIG_KEYS.memoryVectorBackfillDone,
-    AGENT_CONFIG_KEYS.memoryVectorBackfillCursor,
-  ];
-
   test('no key is readable-but-unwritable', () => {
     const c = setup();
 
     for (const write of WRITERS) write(c);
-    const written = new Set([...Object.keys(c.all()), ...GENERIC_WRITE_PATH]);
+    const written = new Set(Object.keys(c.all()));
 
     const unwritable = Object.values(AGENT_CONFIG_KEYS).filter((k) => !written.has(k));
     expect(unwritable).toEqual([]);
@@ -286,7 +280,7 @@ describe('AgentConfigStore — every key has a write path', () => {
     const c = setup();
 
     for (const write of WRITERS.slice(1)) write(c);
-    const written = new Set([...Object.keys(c.all()), ...GENERIC_WRITE_PATH]);
+    const written = new Set(Object.keys(c.all()));
     expect(Object.values(AGENT_CONFIG_KEYS).filter((k) => !written.has(k)))
       .toEqual([AGENT_CONFIG_KEYS.model]);
   });

@@ -7,13 +7,14 @@ import * as v from 'valibot';
 import { withModelStack } from '../src/providers/wire-model';
 import { z } from 'zod';
 import {
-  createChatModel, createFallbackCooldowns, createOpenAICompatProvider, createProviderRegistry, runChat,
-  type FallbackCooldowns,
+  createChatModel, createOpenAICompatProvider, createProviderRegistry, runChat,
   type AuthResolution, type ChatEvent, type ChatFallback, type ModelCallDeps,
 } from '../src/index';
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 import type { MediaModality } from '../src/prompting/attachment-sanitizer';
 import { createMemoryVfs } from '@kinu.run/test-utils/vfs';
+import { ProviderPacer, providerPacer } from '../src/providers/pacing';
+import { attemptKey } from '../src/providers/attempt-identity';
 
 const SSE_HEADERS = { 'content-type': 'text/event-stream' };
 
@@ -62,13 +63,20 @@ interface Served {
 
 const ServedSchema = v.looseObject({ model: v.string(), reasoning_effort: v.optional(v.string()) });
 
+function modelOnEndpoint(modelId: string, baseURL: string) {
+  return withModelStack(createChatModel({
+    kind: 'openai-compat', name: 'openrouter', baseURL,
+    headers: { Authorization: 'Bearer test' }, modelId,
+  }), { provider: 'openrouter', modelId, lane: `openrouter/${modelId}` });
+}
+
 /** One endpoint for every model; `answerFor` decides each request from the model it names and how often it asked. */
 async function turn(
   answerFor: (model: string, seen: number) => Response,
   fallbacks: readonly string[],
   opts: {
     readonly retries?: number;
-    readonly cooldowns?: FallbackCooldowns;
+    readonly pacer?: ProviderPacer;
     readonly history?: ModelMessage[];
     /** Media each model takes, by id; the primary's reach the turn as its attachment policy. Unnamed: images. */
     readonly accepts?: Readonly<Record<string, ReadonlySet<MediaModality>>>;
@@ -88,10 +96,7 @@ async function turn(
   });
 
   // As the registry resolves it: the one stack around the provider's model.
-  const modelFor = (modelId: string) => withModelStack(createChatModel({
-    kind: 'openai-compat', name: 'openrouter', baseURL: `http://localhost:${String(server.port)}/v1`,
-    headers: { Authorization: 'Bearer test' }, modelId,
-  }), { provider: 'openrouter', modelId, lane: `openrouter/${modelId}` });
+  const modelFor = (modelId: string) => modelOnEndpoint(modelId, `http://localhost:${String(server.port)}/v1`);
 
   const tools: ToolSet = {
     run: tool({
@@ -117,7 +122,7 @@ async function turn(
   try {
     for await (const event of runChat({
       model: modelFor('primary'), modelContext: { id: 'openrouter/primary' }, modelSpec: 'openrouter/primary', fallbacks: chain,
-      cooldowns: opts.cooldowns ?? createFallbackCooldowns(), ...(opts.retries !== undefined && { retries: opts.retries }),
+      pacer: opts.pacer ?? new ProviderPacer(), ...(opts.retries !== undefined && { retries: opts.retries }),
       providerOptions: { openrouter: { reasoningEffort: 'low' } },
       attachments: { accepts: acceptsOf('primary'), vfs: createMemoryVfs().vfs },
       system: 'sys', history: opts.history ?? [{ role: 'user', content: 'go' }], tools,
@@ -287,16 +292,43 @@ describe('a failed call hands the turn down its fallback chain', () => {
 
   test('a model that failed over sits out its cooldown, then the next turn starts on it again', async () => {
     let now = 1_000_000;
-    const cooldowns = createFallbackCooldowns(() => now);
+    let refuses = true;
+    const served: string[] = [];
+    const pacer = new ProviderPacer({ now: () => now });
+  
+    const server = Bun.serve({ port: 0, async fetch(request) {
+      const { model } = v.parse(ServedSchema, await request.json());
+  
+      served.push(model);
+  
+      return refuses && model === 'primary' ? refused(402) : answer('the serving model answered');
+    } });
 
-    await turn((model) => (model === 'primary' ? refused(402) : answer('from backup')), ['backup'], { cooldowns });
-    const parked = await turn(() => answer('from backup'), ['backup'], { cooldowns });
+    const endpoint = `http://localhost:${String(server.port)}/v1`;
+    const primary = modelOnEndpoint('primary', endpoint);
+    const backup = modelOnEndpoint('backup', endpoint);
 
-    expect(parked.served.map((entry) => entry.model)).toEqual(['backup']);
-    now += 5 * 60 * 1000 + 1;
-    const back = await turn(() => answer('from primary'), ['backup'], { cooldowns });
-
-    expect(back.served.map((entry) => entry.model)).toEqual(['primary']);
+    const call = async () => {
+      for await (const _event of runChat({
+        model: primary, modelContext: { id: 'openrouter/primary' }, modelSpec: 'openrouter/primary', pacer,
+        fallbacks: [{ spec: 'openrouter/backup', accepts: new Set<MediaModality>(),
+          window: { contextWindow: null, modelOutputLimit: null }, bind: () => ({ model: backup, provider: 'openrouter' }) }],
+        system: 'sys', history: [{ role: 'user', content: 'go' }], tools: {},
+      })) { /* consume the real call */ }
+    };
+  
+    try {
+      await call();
+      expect(served).toEqual(['primary', 'backup']);
+      served.length = 0;
+      refuses = false;
+      await call();
+      expect(served).toEqual(['backup']);
+      served.length = 0;
+      now += 5 * 60 * 1000 + 1;
+      await call();
+      expect(served).toEqual(['primary']);
+    } finally { await server.stop(true); }
   });
 
   test('a model that fails after streaming part of its answer fails the turn, as the person already saw that part', async () => {
@@ -380,9 +412,9 @@ async function accountTurn(
 
   try {
     for await (const event of runChat({
-      model: registry.resolve(primary, deps), modelContext: { id: 'm' }, modelSpec: primary, fallbacks: chain, cooldowns: createFallbackCooldowns(),
+      model: registry.resolve(primary, deps), modelContext: { id: 'm' }, modelSpec: primary, fallbacks: chain, pacer: new ProviderPacer(),
       // A store the backend cannot reach, as a UserDO RPC failing after the 401.
-      credentialOf: opts.lookupFails ? () => Promise.reject(new Error('credential store unreachable')) : (spec) => registry.credentialFor(spec, deps),
+      attemptOf: opts.lookupFails ? () => Promise.reject(new Error('credential store unreachable')) : (spec) => registry.attemptFor(spec, deps),
       system: 'sys', history: [{ role: 'user', content: 'go' }], tools: {},
     })) events.push(event);
   } catch (error) {
@@ -398,6 +430,114 @@ const rateLimited = (retryAfterSeconds: number): Response => Response.json(
   { error: { message: 'rate limited' } },
   { status: 429, headers: { 'retry-after': String(retryAfterSeconds) } },
 );
+
+test.each([401, 429])('a renewed credential owns its HTTP %s refusal, not the prospective healthy login', async (status) => {
+  const served: string[] = [];
+  let token = 'Bearer healthy-A';
+
+  const server = Bun.serve({ port: 0, async fetch(request) {
+    const auth = request.headers.get('authorization') ?? '';
+    const body = v.parse(ServedSchema, await request.json());
+    served.push(`${body.model}:${auth}`);
+
+    if (body.model === 'backup') return answer('healthy A answered');
+
+    if (auth === 'Bearer healthy-A') return refused(401);
+    // The resolver may already point elsewhere when the answering request is classified.
+    token = 'Bearer healthy-A';
+
+    return status === 429 ? rateLimited(30) : refused(401);
+  } });
+
+  const baseURL = `http://localhost:${String(server.port)}/v1`;
+
+  const deps: ModelCallDeps = {
+    env: {}, sessionAffinity: 'renewal', workspaceAffinity: 'renewal', hasCredential: async () => true,
+    getAuth: async (_key, request) => {
+      if (request?.rejected !== undefined) token = 'Bearer refused-B';
+
+      return { headers: { Authorization: token }, baseURL };
+    },
+  };
+
+  const registry = createProviderRegistry();
+  registry.register(createOpenAICompatProvider());
+  const primary = 'openai-compat/primary';
+  const healthy = await registry.attemptFor(primary, deps);
+  const refusedIdentity = await registry.attemptFor(primary, { ...deps, getAuth: async () => ({ headers: { Authorization: 'Bearer refused-B' }, baseURL }) });
+
+  if (healthy === null || refusedIdentity === null) throw new Error('the registered provider has no attempt identity');
+
+  try {
+    for await (const _event of runChat({
+      model: registry.resolve(primary, deps), modelSpec: primary, modelContext: { id: 'primary' },
+      fallbacks: [{ spec: 'openai-compat/backup', accepts: new Set<MediaModality>(), window: { contextWindow: null, modelOutputLimit: null },
+        bind: () => ({ model: registry.resolve('openai-compat/backup', deps), provider: 'openai-compat' }) }],
+      system: 'sys', history: [{ role: 'user', content: 'go' }], tools: {},
+    })) { /* consume the real SDK and authenticated transport */ }
+
+    expect(served).toEqual(['primary:Bearer healthy-A', 'primary:Bearer refused-B', 'backup:Bearer healthy-A']);
+    expect(providerPacer.parked(attemptKey(healthy))).toBe(false);
+    expect(providerPacer.parked(attemptKey(refusedIdentity))).toBe(true);
+    expect(providerPacer.cooling(healthy.lane)).toBeNull();
+
+    if (status === 429) expect(providerPacer.cooling(refusedIdentity.lane)?.waitMs).toBeGreaterThan(0);
+  } finally { await server.stop(true); }
+});
+
+test.each(['credential', 'endpoint', 'equivalent'])('attempt cooldowns follow %s changes without guessing from spec text', async (replacement) => {
+  const served: string[] = [];
+  let changed = false;
+  let token = 'Bearer refused-login';
+
+  const server = Bun.serve({ port: 0, fetch(request) {
+    const key = request.headers.get('authorization') ?? '';
+
+    served.push(key);
+
+    return key === 'Bearer fallback-login' || changed ? answer('the current login answered') : rateLimited(30);
+  } });
+
+  const deps: ModelCallDeps = {
+    env: {}, sessionAffinity: 'fresh-credential', workspaceAffinity: 'fresh-credential',
+    getAuth: async (key) => ({ headers: { Authorization: key.endsWith('@backup') ? 'Bearer fallback-login' : token }, baseURL: `http://localhost:${String(server.port)}/${changed && replacement === 'endpoint' ? 'replacement' : 'v1'}` }),
+    hasCredential: async () => true,
+  };
+
+  const makeRegistry = () => {
+    const registry = createProviderRegistry();
+
+    registry.register(createOpenAICompatProvider());
+
+    return registry;
+  };
+
+  let registry = makeRegistry();
+  const primary = 'openai-compat/m';
+  const backup = 'openai-compat@backup/m';
+  const pacer = new ProviderPacer({ now: () => 0 });
+
+  const call = async () => {
+    for await (const _event of runChat({
+      model: registry.resolve(primary, deps), modelContext: { id: 'm' }, modelSpec: primary, pacer,
+      fallbacks: [{ spec: backup, accepts: new Set<MediaModality>(), window: { contextWindow: null, modelOutputLimit: null }, bind: () => ({ model: registry.resolve(backup, deps), provider: 'openai-compat' }) }],
+      system: 'sys', history: [{ role: 'user', content: 'go' }], tools: {},
+    })) { /* consume the real call */ }
+  };
+
+  try {
+    await call();
+    expect(served).toEqual(['Bearer refused-login', 'Bearer fallback-login']);
+    changed = replacement !== 'equivalent';
+
+    if (replacement !== 'credential') registry = makeRegistry();
+    else token = 'Bearer replacement-login';
+
+    await call();
+    expect(served.at(-1)).toBe(replacement === 'equivalent' ? 'Bearer fallback-login' : token);
+    expect(served.length).toBe(3);
+  } finally { await server.stop(true); }
+});
 
 describe('an account that hits its limit hands the turn to the next account of its chain', () => {
   test('a 429 inside a chain hands over at once, says why, and the next account does not wait out the first\'s cooldown', async () => {

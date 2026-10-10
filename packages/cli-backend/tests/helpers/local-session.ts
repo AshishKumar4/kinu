@@ -22,7 +22,7 @@ import * as v from 'valibot';
 export const resolverRest = {
   judgeCandidates: async () => [],
   getAuth: async () => null,
-  credentialFor: async () => null,
+  attemptFor: async () => null,
   countInputTokens: async () => ({
     kind: 'unsupported' as const,
     provider: 'fake',

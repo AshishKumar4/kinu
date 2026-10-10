@@ -29,7 +29,7 @@ import {
 } from './first-run';
 import { delivered, deliveredInLedger, finalAnswer, taskHires, type TaskHire } from './delegation-observation';
 import { ROOT } from '../../evals/src/helper-address';
-import { helperRecord, hirerHeard } from './hires';
+import { helperAnswer, helperRecord, hirerHeard } from './hires';
 import { openPublicSocket, type PublicSocket } from './public-socket';
 import {
   RELAY_MISSION, TREE_ASK as ASK, TREE_DEEP_WORD as DEEP, TREE_SHALLOW_WORD as SHALLOW, sayWordMission,
@@ -65,6 +65,7 @@ interface TreeRead {
   readonly shallow: TaskHire | undefined;
   readonly deep: TaskHire | undefined;
   readonly relayEvents: readonly RunEvent[];
+  readonly relayAnswer: string;
   readonly deepAnswer: string;
   readonly shallowAnswer: string;
   readonly history: readonly PublicMessage[];
@@ -77,14 +78,15 @@ async function readTree(room: PublicSocket, top: readonly TaskHire[], history: r
   const relayRecord = relay === undefined ? null : await helperRecord(room, ROOT, relay.agent);
   const relayEvents = relayRecord?.events ?? [];
   const [deep] = taskHires(relayEvents);
-  const deepAnswer = relayRecord === null || deep === undefined ? '' : finalAnswer((await helperRecord(room, relayRecord.address, deep.agent)).events);
-  const shallowAnswer = shallow === undefined ? '' : finalAnswer((await helperRecord(room, ROOT, shallow.agent)).events);
+  const deepAnswer = relayRecord === null || deep === undefined ? '' : await helperAnswer(room, relayRecord.address, deep.agent);
+  const shallowAnswer = shallow === undefined ? '' : await helperAnswer(room, ROOT, shallow.agent);
+  const relayAnswer = relayRecord === null ? '' : finalAnswer(relayRecord.events, relayRecord.messages);
 
-  return { top, relay, shallow, deep, relayEvents, deepAnswer, shallowAnswer, history };
+  return { top, relay, shallow, deep, relayEvents, relayAnswer, deepAnswer, shallowAnswer, history };
 }
 
 function treeSubgoals(tree: TreeRead): EvalSubgoal[] {
-  const { relay, shallow, deep, relayEvents, deepAnswer, shallowAnswer, history } = tree;
+  const { relay, shallow, deep, relayEvents, relayAnswer, deepAnswer, shallowAnswer, history } = tree;
   const relayed = relay === undefined ? null : delivered(history, ASK, relay.agent);
   const answered = shallow === undefined ? null : delivered(history, ASK, shallow.agent);
   const replies = [relayed?.reply ?? '', answered?.reply ?? ''].join(' ');
@@ -93,7 +95,7 @@ function treeSubgoals(tree: TreeRead): EvalSubgoal[] {
   const seen = [
     ...tree.top.map((hire) => `root hired ${hire.agent}`),
     ...(deep === undefined ? [] : [`${relay?.agent ?? ''} hired ${deep.agent}, which answered ${JSON.stringify(deepAnswer.slice(0, 40))}`]),
-    `${relay?.agent ?? 'no relay'} answered ${JSON.stringify(finalAnswer(relayEvents).slice(0, 40))}`,
+    `${relay?.agent ?? 'no relay'} answered ${JSON.stringify(relayAnswer.slice(0, 40))}`,
     `${shallow?.agent ?? 'no shallow helper'} answered ${JSON.stringify(shallowAnswer.slice(0, 40))}`,
   ].join('; ');
 
@@ -105,7 +107,7 @@ function treeSubgoals(tree: TreeRead): EvalSubgoal[] {
     },
     {
       what: 'deep-branch-climbed-both-levels',
-      reached: nested && finalAnswer(relayEvents) === DEEP && relayed !== null,
+      reached: nested && relayAnswer === DEEP && relayed !== null,
       detail: relayed === null ? `no answer from the relay reached the root: ${seen}` : `the relay's answer reached the root: ${JSON.stringify(relayed.text.slice(0, 200))}`,
     },
     {

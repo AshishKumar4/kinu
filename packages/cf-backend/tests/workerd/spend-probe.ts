@@ -41,21 +41,14 @@ export class SpendProbeDO extends DurableObject<Cloudflare.Env> {
     return new RunEventRecorder(this.sql, this.actor());
   }
 
-  /** `steps` carries a `messages` array: `step_finish` is the payload kind whose JSON walk is expensive. */
+  /** Step accounting references canonical parts instead of carrying a transcript body. */
   measure(steps: number, judges: number, silent: number): ProbeTally[] {
     const recorder = this.recorder();
 
-    const messages = [
-      { role: 'user' as const, content: 'x'.repeat(600) },
-      { role: 'assistant' as const, content: 'y'.repeat(1200) },
-    ];
-
     for (let i = 0; i < steps; i++) {
-      recorder.emit('run-1', {
-        type: 'step_finish', stepIndex: i, messages,
-        usage: { input: 1800, output: 240, cacheRead: 1600, neurons: 3.5 },
-        usd: 0.002,
-      });
+      recorder.emit('run-1', { type: 'step_finish', parts: [], stepIndex: i,
+      usage: { input: 1800, output: 240, cacheRead: 1600, neurons: 3.5 },
+      usd: 0.002, });
     }
 
     for (let i = 0; i < judges; i++) {

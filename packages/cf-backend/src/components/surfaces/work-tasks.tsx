@@ -1,7 +1,7 @@
 /** Read-only: the agent re-reads this plan every step, so an owner edit would swap it under a running turn. */
 import { Badge } from "@cloudflare/kumo";
 import { CircleIcon, CircleDashedIcon, CheckCircleIcon, ProhibitIcon, SparkleIcon } from "@phosphor-icons/react";
-import type { AgentTask, AgentTaskTree, PanelAgent, TaskStatus, WorkspaceWorkOwner } from "@kinu.run/core";
+import { taskSettled, type AgentTask, type AgentTaskTree, type PanelAgent, type TaskStatus, type WorkspaceWorkOwner } from "@kinu.run/core";
 
 const STATUS_META = {
   open: { icon: CircleDashedIcon, tone: "p-text-3", label: "Open", weight: "regular", text: "p-text-2" },
@@ -9,14 +9,6 @@ const STATUS_META = {
   done: { icon: CheckCircleIcon, tone: "p-success", label: "Done", weight: "fill", text: "p-text-3 line-through" },
   dropped: { icon: ProhibitIcon, tone: "p-text-3", label: "Dropped", weight: "regular", text: "p-text-3 line-through" },
 } satisfies Record<TaskStatus, { icon: typeof CircleIcon; tone: string; label: string; weight: "fill" | "regular"; text: string }>;
-
-function isSettled(status: TaskStatus): boolean {
-  return status === "done" || status === "dropped";
-}
-
-export function isClosedTree(task: AgentTaskTree): boolean {
-  return isSettled(task.status) && task.subtasks.every((sub) => isSettled(sub.status));
-}
 
 interface TaskOwnership {
   owner?: WorkspaceWorkOwner;
@@ -72,7 +64,7 @@ export function TaskTree({ task, grouped = false, owner, onOpenOwner }: { task: 
 
 export function PlanProgress({ tasks }: { tasks: AgentTaskTree[] }) {
   const rows = tasks.flatMap((task) => [task, ...task.subtasks]);
-  const remaining = rows.filter((task) => !isSettled(task.status));
+  const remaining = rows.filter((task) => !taskSettled(task.status));
   const active = remaining.filter((task) => task.status === "active");
   // Dropped items are out of the denominator: neither outstanding nor done.
   const counted = rows.filter((task) => task.status !== "dropped").length;
