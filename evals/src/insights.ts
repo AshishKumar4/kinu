@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, normalize } from 'node:path';
 import * as v from 'valibot';
 import { parseSync, Visitor, type VisitorObject } from 'oxc-parser';
-import { decodeModelMessageValues, JsonValueSchema, RunEventSchema, type JsonValue, type RunEvent } from '@kinu.run/core';
+import { JsonValueSchema, RunEventSchema, type JsonValue, type RunEvent } from '@kinu.run/core';
 import { redactJson } from './redact';
 import type { Assertion, HarnessRun } from './results';
 import type { TimelineEntry } from './timeline';
@@ -50,8 +50,7 @@ type HelperObservations = Map<string, HelperObservation>;
 
 const JsonObject = v.record(v.string(), JsonValueSchema);
 
-// The older build writes partial snapshots as well as completed steps; snapshots are not calls.
-const EvidenceEvent = v.union([RunEventSchema, v.object({ type: v.literal('step_partial'), runId: v.string() })]);
+const EvidenceEvent = RunEventSchema;
 
 const HelperRun = v.object({ status: v.string(), asked: v.optional(v.string()), userMessage: v.optional(v.nullable(v.string())) });
 
@@ -169,26 +168,7 @@ export function resultsRow(assertion: Assertion): string {
   return `${JSON.stringify(assertion, null, 2)}\n`;
 }
 
-function completeStep(owner: LedgerRun, step: Extract<RunEvent, { type: 'step_finish' }>, source: EvidenceLine): void {
-  owner.steps += 1;
 
-  for (const message of decodeModelMessageValues(step.messages ?? [])) {
-    if (message.role !== 'assistant' || v.is(v.string(), message.content)) continue;
-
-    for (const part of message.content) {
-      if (part.type !== 'tool-call') continue;
-
-      const input = v.safeParse(JsonValueSchema, part.input);
-      const call = owner.calls.find((candidate) => candidate.event.toolCallId === part.toolCallId);
-
-      if (input.success && call !== undefined) {
-        call.args = input.output;
-        call.complete = true;
-        call.evidence.push(source);
-      }
-    }
-  }
-}
 
 function recordProvider(event: EvidenceEvent, source: EvidenceLine, add: RecordFact): void {
   if (event.type === 'provider_wait') {
@@ -226,7 +206,7 @@ function ledgerRuns(rows: readonly Located<EvidenceEvent>[], add: RecordFact) {
     } else if (event.type === 'step_finish') {
       const owner = active.get(event.runId);
 
-      if (owner !== undefined) completeStep(owner, event, source);
+      if (owner !== undefined) owner.steps += 1;
     } else if (event.type === 'run_end') {
       const owner = active.get(event.runId);
 
@@ -518,6 +498,28 @@ export function extractInsights(assertion: Assertion, evidence: TrialEvidence): 
   const add: RecordFact = (kind, data, sources) => { facts.push({ kind, data: redactJson(data), evidence: refs(sources) }); };
 
   const { runs, calls } = ledgerRuns(jsonLines(evidence.ledger, 'ledger.jsonl', EvidenceEvent), add);
+
+  // Full inputs were materialized from the canonical store before teardown; event rows keep only their digest.
+  let after = Math.max(0, resultLines.findIndex((line) => line.trim() === '"events": ['));
+
+  for (const event of run.session.events) {
+    if (event.type !== 'tool_call') continue;
+    const line = lineOf(resultLines, 'type', 'tool_call', after);
+    after = line;
+
+    const identity = v.safeParse(v.object({ runId: v.string(), eventIndex: v.number() }), event.metadata);
+
+    if (!identity.success || event.arguments === undefined) continue;
+
+    const call = calls.find((candidate) => candidate.event.runId === identity.output.runId
+      && candidate.event.eventIndex === identity.output.eventIndex && candidate.event.toolCallId === event.id);
+
+    if (call !== undefined) {
+      call.args = event.arguments;
+      call.complete = true;
+      call.evidence.push({ file: 'results.json', line });
+    }
+  }
 
   recordTools(calls, add);
   recordRuns(runs, add);

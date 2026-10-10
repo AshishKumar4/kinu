@@ -1,4 +1,5 @@
 import * as v from 'valibot';
+import { JsonObjectSchema } from '../utils/json';
 import { RunEventRecorder, RunEventSchema, RUN_EVENT_LIMIT_MAX } from '../events/recorder';
 import { getRunSummaries } from '../read-models/runs';
 import { getChatHistoryPage } from '../read-models/status';
@@ -48,6 +49,8 @@ export const SubordinateInspectionRequestSchema = v.variant('view', [
   v.strictObject({ path: PathSchema, view: v.literal('history'), page: PositionPageRequestSchema, actor: ActorIdSchema }),
   v.strictObject({ path: PathSchema, view: v.literal('runs'), page: PageRequestSchema, actor: ActorIdSchema }),
   v.strictObject({ path: PathSchema, view: v.literal('events'), runId: v.pipe(v.string(), v.nonEmpty()), query: EventQuerySchema, actor: ActorIdSchema }),
+  v.strictObject({ path: PathSchema, view: v.literal('step'), runId: v.pipe(v.string(), v.nonEmpty()), eventIndex: IndexSchema,
+    from: v.optional(IndexSchema), actor: ActorIdSchema }),
 ]);
 
 export type SubordinateInspectionRequest = v.InferOutput<typeof SubordinateInspectionRequestSchema>;
@@ -69,6 +72,9 @@ const EventPageSchema: v.GenericSchema<Page<RunEvent, number>> = v.variant('stat
   v.object({ status: v.literal('end'), items: v.array(RunEventSchema) }),
 ]);
 
+export const StepOutputInspectionSchema = v.object({ view: v.literal('step'), path: PathSchema, runId: v.string(), eventIndex: IndexSchema,
+  messages: v.array(JsonObjectSchema), nextFrom: v.nullable(IndexSchema) });
+
 export const SubordinateInspectionResultSchema = v.variant('view', [
   v.object({ view: v.literal('plans'), path: PathSchema, page: pageSchema(PlanReviewSchema) }),
   v.object({ view: v.literal('plan'), path: PathSchema, plan: PlanReviewSchema }),
@@ -77,6 +83,7 @@ export const SubordinateInspectionResultSchema = v.variant('view', [
   v.object({ view: v.literal('history'), path: PathSchema, page: positionPageSchema(ChatHistoryEntrySchema) }),
   v.object({ view: v.literal('runs'), path: PathSchema, page: pageSchema(SummarySchema) }),
   v.object({ view: v.literal('events'), path: PathSchema, runId: v.string(), page: EventPageSchema }),
+  StepOutputInspectionSchema,
   v.object({ reason: v.picklist(ERROR_CODES), error: v.string(), view: v.literal('missing'), path: PathSchema }),
 ]);
 
@@ -158,6 +165,18 @@ export async function readSubordinateInspection(
         : { status: 'end', items } satisfies v.InferOutput<typeof EventPageSchema>;
 
       return { view: 'events', path, runId: request.runId, page };
+    }
+
+    case 'step': {
+      if (!tableExists(sql, 'run_events') || !tableExists(sql, 'session_messages')) return missingSubordinateHistory(path);
+
+      const event = new RunEventRecorder(sql, actor).read(request.runId, { since: request.eventIndex, limit: 1 })[0];
+
+      if (event?.type !== 'step_finish' || event.eventIndex !== request.eventIndex) return missingSubordinateHistory(path);
+
+      const output = await transcriptFor(actor).stepOutput(event.parts, request.from ?? 0);
+
+      return { view: 'step', path, runId: request.runId, eventIndex: event.eventIndex, ...output };
     }
   }
 }

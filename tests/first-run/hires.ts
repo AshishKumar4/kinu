@@ -5,7 +5,9 @@
  * inspector reaches it (`evals/src/helper-address.ts`).
  */
 import * as v from 'valibot';
-import { RunEventSchema, type JsonObject, type JsonValue, type RunEvent } from '../../packages/core/src/index';
+import { readStepMessages, type StepMessages } from '../../evals/src/transcript';
+import { finalAnswer } from './delegation-observation';
+import { JsonObjectSchema, RunEventSchema, type JsonObject, type JsonValue, type RunEvent } from '../../packages/core/src/index';
 import { helperAddress, type HelperAddress } from '../../evals/src/helper-address';
 import { ask, type PublicSocket } from './public-socket';
 
@@ -59,7 +61,7 @@ function at(address: HelperAddress, request: JsonObject): JsonValue {
 /** A hire's place for the inspector and its own ledger, by the name the roster of its hirer at `hirer` gives it. */
 export async function helperRecord(
   socket: PublicSocket, hirer: HelperAddress, agent: string,
-): Promise<{ readonly address: HelperAddress; readonly events: RunEvent[] }> {
+): Promise<{ readonly address: HelperAddress; readonly events: RunEvent[]; readonly messages: StepMessages }> {
   const roster = await inspect(socket, at(hirer, { view: 'children', page: { limit: 200 } }), ChildrenPageSchema);
   const row = roster.page.items.find((item) => item.name === agent);
 
@@ -76,5 +78,16 @@ export async function helperRecord(
     }
   }
 
-  return { address, events };
+  const messages = await readStepMessages(events, (step, from) => inspect(socket,
+    at(address, { view: 'step', runId: step.runId, eventIndex: step.eventIndex, from }),
+    v.object({ messages: v.array(JsonObjectSchema), nextFrom: v.nullable(v.number()) })));
+
+  return { address, events, messages };
+}
+
+/** A retained helper's finished answer, materialized from its own sealed output, not its hirer's chat. */
+export async function helperAnswer(socket: PublicSocket, hirer: HelperAddress, agent: string): Promise<string> {
+  const read = await helperRecord(socket, hirer, agent);
+
+  return finalAnswer(read.events, read.messages);
 }

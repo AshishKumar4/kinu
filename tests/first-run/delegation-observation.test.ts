@@ -1,8 +1,11 @@
 import { expect, test } from 'bun:test';
 import type { JsonValue, RunEvent } from '../../packages/core/src/index';
+import type { ModelMessage } from 'ai';
 import {
   delivered, deliveredInLedger, finalAnswer, observeDelegationRetirement, observeDurableHire, taskHires,
 } from './delegation-observation';
+
+const output = new Map<Extract<RunEvent, { type: 'step_finish' }>, readonly ModelMessage[]>();
 
 function call(runId: string, eventIndex: number, args: JsonValue, result: JsonValue): Extract<RunEvent, { type: 'tool_call_end' }> {
   return {
@@ -14,8 +17,11 @@ function call(runId: string, eventIndex: number, args: JsonValue, result: JsonVa
 
 /** One finished step, as `[runId, eventIndex, timestamp, reason]`, ending on `text`. */
 function finished([runId, eventIndex, timestamp, reason]: readonly [string, number, string, string], text: string): RunEvent {
-  return { type: 'step_finish', parts: [], runId, eventIndex, timestamp, stepIndex: eventIndex, reason,
-  messages: [{ role: 'assistant', content: [{ type: 'text', text }] }], };
+  const event: Extract<RunEvent, { type: 'step_finish' }> = { type: 'step_finish', parts: [{ messageId: `${runId}-${String(eventIndex)}`, partNo: 0 }], runId, eventIndex, timestamp, stepIndex: eventIndex, reason };
+
+  output.set(event, [{ role: 'assistant', content: [{ type: 'text', text }] }]);
+
+  return event;
 }
 
 const MISSION = 'Reply with exactly the word bramblelight and nothing else.';
@@ -84,9 +90,9 @@ test("an actor's final answer is its last finished turn's text, not a tool step'
     finished(['r2', 3, '2026-10-01T03:12:34.900Z', 'tool-calls'], 'Calling agents.'),
     finished(['r2', 5, '2026-10-01T03:12:34.950Z', 'stop'], 'emberfall'),
     finished(['r1', 1, '2026-10-01T03:12:29.000Z', 'tool-calls'], 'Calling agents.'),
-  ])).toBe('emberfall');
+  ], output)).toBe('emberfall');
 
-  expect(finalAnswer([])).toBe('');
+  expect(finalAnswer([], output)).toBe('');
 });
 
 test('the roster must contain the exact subordinate name, not a peer or substring', () => {

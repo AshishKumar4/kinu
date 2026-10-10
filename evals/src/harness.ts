@@ -15,7 +15,7 @@ import {
   type HarnessError, type TurnRun,
 } from './task';
 import { redact } from './redact';
-import { cutButCompleted, measure, toolFailures, toTranscript } from './transcript';
+import { cutButCompleted, measure, toolFailures, toTranscript, type StepMessages } from './transcript';
 import { TrialTimeline } from './timeline';
 import { EvalVerifier } from './verifier';
 import { duringTrial, trialCancel } from './cancel';
@@ -230,14 +230,16 @@ export async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeli
  * ended: nothing grades it, and the deploy's kill follows its cancel within seconds.
  */
 async function closeWorkspace(session: KinuPublicSession, evidence: readonly EvidenceReads[] | null, errors: HarnessError[], timeline: TrialTimeline): Promise<{
-  events: RunEvent[]; ledgers: ActorLedger[]; costUsd: number | undefined; workspace: WorkspaceEvidence;
+  events: RunEvent[]; ledgers: ActorLedger[]; output: StepMessages; costUsd: number | undefined; workspace: WorkspaceEvidence;
 }> {
   let events: RunEvent[] = [];
   let ledgers: ActorLedger[] = [];
+  let output: StepMessages = new Map();
   let costUsd: number | undefined;
 
   try {
     events = [...await timeline.span('ledger', () => session.runEvents())];
+    output = await timeline.span('canonical output', () => session.stepMessages(events));
     ledgers = await timeline.span('request usage', () => session.actorLedgers(events));
     costUsd = (await timeline.span('spend', () => session.spend())).total.usd;
   } catch (error) {
@@ -256,7 +258,7 @@ async function closeWorkspace(session: KinuPublicSession, evidence: readonly Evi
     errors.push({ name: message.includes(INFRA_FAILURE_MARKER) ? 'InfraError' : 'EvalCleanupError', message });
   }
 
-  return { events, ledgers, costUsd, workspace };
+  return { events, ledgers, output, costUsd, workspace };
 }
 
 /**
@@ -380,8 +382,8 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
 
       timeline.mark('close');
 
-      const { events, ledgers, costUsd, workspace } = session === undefined
-        ? { events: [], ledgers: [], costUsd: undefined, workspace: { files: new Map(), slates: null, data: [], unread: ['no workspace was opened'] } }
+      const { events, ledgers, output, costUsd, workspace } = session === undefined
+        ? { events: [], ledgers: [], output: new Map(), costUsd: undefined, workspace: { files: new Map(), slates: null, data: [], unread: ['no workspace was opened'] } }
         : await closeWorkspace(session, stop.aborted ? null : task.parts.flatMap((part) => part.evidence === undefined ? [] : [{ part: part.id, reads: part.evidence }]), errors, timeline);
 
       try {
@@ -407,7 +409,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
       const success = errors.length === 0 && turns.length === placed.length
         && turns.every((turn) => turn.outcome.status === 'completed') && checks.length > 0 && checks.every((check) => check.pass);
 
-      const transcript: TranscriptEvent[] = toTranscript(events);
+      const transcript: TranscriptEvent[] = toTranscript(events, output);
 
       if (attempted !== undefined && !events.some((event) => event.type === 'run_start' && event.userMessage === attempted)) {
         transcript.push({ type: 'message', role: 'user', content: attempted, metadata: { attempted: true } });

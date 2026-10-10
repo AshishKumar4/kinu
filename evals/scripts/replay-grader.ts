@@ -5,7 +5,7 @@ import { launchTestChrome } from '../../scripts/test-chrome';
 import { collectEvalTasks } from '../src/eval';
 import { SlateView, WorkspaceBrowser } from '../src/browser';
 import { EvalVerifier, type EvalCheckOutcome, type HelperWork, type ReachedRun, type VerifierSession } from '../src/verifier';
-import { openPublicSession, resolveWebIdentity, type WorkspaceWeb } from '../src/session';
+import { InspectionAnswerSchema, openPublicSession, resolveWebIdentity, type WorkspaceWeb } from '../src/session';
 import type { Sight } from '../src/sight';
 import { taskTurns } from '../src/task';
 import { redactJson } from '../src/redact';
@@ -128,7 +128,15 @@ async function offline(): Promise<void> {
  return Promise.resolve(); },
     runEvents: () => Promise.resolve(input.events),
     listSlates: absent, readBytes: absent, listFiles: absent, craftedTools: absent, memoryContent: absent,
-    memoryFacts: absent, workspaceWork: absent, inspect: absent, swarmRuns: () => Promise.resolve([]), execute: absent, exposedPorts: absent,
+    memoryFacts: absent, workspaceWork: absent,
+    inspect: async (request) => {
+      const row = input.rpc.find((call) => call.id === 'workspace' && call.method === 'inspectSubordinate' && JSON.stringify(call.args) === JSON.stringify([request]));
+
+      if (row === undefined) throw new Error('the replay has no saved canonical inspector page for this request');
+
+      return v.parse(InspectionAnswerSchema, row.answer);
+    },
+    swarmRuns: () => Promise.resolve([]), execute: absent, exposedPorts: absent,
   };
 
   const chrome = await launchTestChrome();

@@ -9,6 +9,8 @@ import { KinuError } from '../src/obs/error';
 import { McpToolError } from '../src/tools/mcp-error';
 import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
 import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
+import { readSubordinateInspection } from '../src/subordinates/inspection';
+import { makeSqlExec } from './helpers';
 
 const BUILTIN: ActorProgramIdentity = { kind: 'builtin', version: 0, digest: null, build: 'test' };
 
@@ -40,6 +42,14 @@ test('a sealed step stores canonical output references, not a second transcript 
 
     expect(event.parts.length).toBe(1);
     expect(await s.history.messages.materialize({ messageId: event.parts[0].messageId })).toEqual(message);
+
+    const read = await readSubordinateInspection({ sql: s.rt.storage.sql, raw: makeSqlExec(s.testSql.db), actor: s.rt.actor,
+      transcriptFor: () => s.history.transcript('default') }, { view: 'step', path: [], runId: event.runId, eventIndex: event.eventIndex });
+
+    if (read.view !== 'step') throw new Error('the inspector could not read sealed canonical output');
+
+    expect(read.messages).toEqual([{ role: 'assistant', content: [{ type: 'text', text }] }]);
+    expect(read.nextFrom).toBeNull();
   } finally { s.testSql.close(); }
 });
 

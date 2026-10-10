@@ -97,6 +97,8 @@ import * as v from 'valibot';
 import { Effect } from 'effect';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import type { ActorLedger } from './results';
+import { inspectedStepMessages, type StepMessageCache, type StepMessages } from './transcript';
+import { StepOutputInspectionSchema } from '../../packages/core/src/subordinates/inspection';
 import { helperAddress, ROOT, type HelperAddress } from './helper-address';
 
 import {
@@ -399,7 +401,8 @@ function pageOf<Item extends v.GenericSchema>(item: Item) {
 }
 
 /** The inspector's answers a check reads (`inspectSubordinate`): the lead's helpers and each helper's runs. */
-const InspectionAnswerSchema = v.variant('view', [
+export const InspectionAnswerSchema = v.variant('view', [
+  StepOutputInspectionSchema,
   v.object({ view: v.literal('children'), page: pageOf(v.object({
     name: v.string(), status: v.string(), lifetime: v.string(), actorReference: v.nullable(v.object({ actorId: v.string() })),
   })) }),
@@ -1749,6 +1752,13 @@ export class KinuPublicSession {
     events.sort(compareRunEventOrder);
 
     return events;
+  }
+
+  private readonly cachedStepMessages: StepMessageCache = new WeakMap();
+
+  /** Full native output comes from immutable canonical payloads, once, never from event JSON. */
+  stepMessages(events: readonly RunEvent[]): Promise<StepMessages> {
+    return inspectedStepMessages(events, (request) => this.inspect(request), this.cachedStepMessages);
   }
 
   /** Main's already-read ledger and every retained descendant's requests, through the public inspector's pages. */
