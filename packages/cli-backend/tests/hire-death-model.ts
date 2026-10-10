@@ -5,7 +5,7 @@ import { TestLanguageModelV2 } from './test-language-model';
 
 export const PROBE_LLM: LLMProviderConfig = { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' };
 
-/** The hire's task: what tells its calls from its hirer's. */
+/** The hire's task, also quoted in the hirer's report notification. */
 export const HIRE_DEATH_TASK = 'Summarise the ledger and report it.';
 
 const USAGE = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
@@ -38,7 +38,9 @@ export function hireDeathModel() {
     doStream: async (options) => {
       const prompt = JSON.stringify(options.prompt);
 
-      if (!prompt.includes(HIRE_DEATH_TASK)) return { stream: streamOf(answer('acknowledged')), response: { headers: {} } };
+      const reportingChild = options.tools?.some((tool) => tool.name === REPORT_TOOL) === true;
+
+      if (!reportingChild || !prompt.includes(HIRE_DEATH_TASK)) return { stream: streamOf(answer('acknowledged')), response: { headers: {} } };
       childCalls += 1;
 
       if (childCalls === 1) {

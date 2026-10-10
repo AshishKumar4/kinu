@@ -38,7 +38,7 @@ export async function sessionFixture(input: {
     try {
       if (input.main) return await seats.host.acquire({
         actorId: rt.actor.actorId, workspaceId: rt.actor.workspaceId, parentActorId: null,
-      });
+      }, { kind: 'actor' });
 
       return (await seats.seat('tester', 'agent')).actor;
     } finally { minted?.mockRestore(); }

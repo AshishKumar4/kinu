@@ -11,10 +11,10 @@ import { TestLanguageModelV2 } from './test-language-model';
 import type { LanguageModelV2Usage, LanguageModelV2StreamPart } from '@ai-sdk/provider';
 import type { TemporaryAgentPort } from '@kinu.run/core';
 import {
-  initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, Inbox, backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage, CHAT_SESSION_ID, drawnStep, type ModelInfo, type SqlExecutor, openWorkspaceMainActor, InstructionApprovalStore, instructionDigest, OUTPUT_CONTINUATION_EVENT, sha256Hex,
+  initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, Inbox, backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage, CHAT_SESSION_ID, drawnStep, type ModelInfo, type SqlExecutor, openWorkspaceMainActor, InstructionApprovalStore, instructionDigest, OUTPUT_CONTINUATION_EVENT, sha256Hex, serializeContentForHeads,
 } from '@kinu.run/core';
 import { createCLIRuntime, makeExecRaw, makeSql, type CLIRuntime } from '../src/runtime';
-import { LocalAgentSession, serializeContentForHeads, type SessionEvent } from '../src/local-session';
+import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { type LocalModelResolver } from '../src/model-resolver';
 import { resolverRest, namedSpec, textStream, type PromptMessage, fakeModel, historyCapturingModel, systemCapturingModel, workspaceRuntime, transcript, setup, setupWithResolver, kinds, turnStarts, isDynamicBlock, isWorkspaceInstructions, writeFocusedSkill, messageText, } from './helpers/local-session';
 

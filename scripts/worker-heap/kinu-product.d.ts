@@ -17,7 +17,7 @@ declare module 'kinu:product' {
     protected readonly delegatedTurns: { readonly actorRunners: ReadonlyMap<string, Promise<void>> };
     protected hostedSeams(): {
       readonly host: {
-        acquire(reference: ActorReference): Promise<HostedActor>;
+        acquire(reference: ActorReference, seat: { readonly kind: 'actor' | 'head' | 'node' }): Promise<HostedActor>;
         release(reference: ActorReference): void;
       };
       register(input: { readonly creationId: string }): Promise<ActorReference>;

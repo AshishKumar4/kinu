@@ -561,7 +561,8 @@ export {
 // open-38: one physical workspace SQLite for every logical actor.
 export {
   createActorHost, recoverActorTurns, childContextResolver, hostedChildTree, registeredParent,
-  type ActorHost, type ActorHostDeps, type BoundActor, type HostedActor,
+  type ActorHost,
+  type ActorSeat, type ActorHostDeps, type BoundActor, type HostedActor,
   type LoopSeed, type ActorRetirement, type ResumableActorTurn,
 } from './state/actor-host';
 
@@ -983,7 +984,7 @@ export { pumpScaffoldEvents } from './scaffold/event-pump';
 export { scaffoldChatTransform } from './scaffold/chat-transform';
 
 export {
-  getCurrentScaffoldVersion, readScaffoldVersion, readVersionedScaffoldSource, getPendingScaffold, applyPromotionDecision,
+  getCurrentScaffoldVersion, readScaffoldVersion, readVersionedScaffoldSource, getPendingScaffold, applyPromotionDecision, type VersionedScaffoldSource,
   type PendingScaffold, type ScaffoldDecisionEvents,
 } from './scaffold/versions';
 

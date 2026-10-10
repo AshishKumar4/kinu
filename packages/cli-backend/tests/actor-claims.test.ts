@@ -207,7 +207,7 @@ test('a source change after admission cannot alter the bytes the turn consumed',
 
   const recovery = await verifyClaimedProgram(
     claim,
-    (version) => readVersionedScaffoldSource(left.runtime, version),
+    readVersionedScaffoldSource.bind(undefined, { path: left.runtime.identity.scaffold.path, vfs: left.runtime.agentStateVfs ?? left.runtime.storage.vfs }),
     sha256Hex,
     await left.stores.claims.consumedContext('turn-src'),
   );
@@ -241,7 +241,7 @@ test('a cold reader recovers the claimed program identity and the exact context 
 
   const recovery = await verifyClaimedProgram(
     claim,
-    (version) => readVersionedScaffoldSource(left.runtime, version),
+    readVersionedScaffoldSource.bind(undefined, { path: left.runtime.identity.scaffold.path, vfs: left.runtime.agentStateVfs ?? left.runtime.storage.vfs }),
     sha256Hex,
     await cold.claims.consumedContext('turn-cold'),
   );

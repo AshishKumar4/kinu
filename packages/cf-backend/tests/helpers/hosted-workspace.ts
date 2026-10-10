@@ -161,7 +161,7 @@ export async function hostedWorkspace(
   };
 
   const host = createWorkspaceActorHost(seams);
-  rootRuntime = (await host.acquire(main)).runtime;
+  rootRuntime = (await host.acquire(main, { kind: 'actor' })).runtime;
 
   return {
     db, sql, host, directory, main,
@@ -175,7 +175,7 @@ export async function hostedWorkspace(
 
       if (loop) chosen.set(handle.actorId, loop);
 
-      return await host.acquire(actorReferenceOf(handle));
+      return await host.acquire(actorReferenceOf(handle), { kind: 'actor' });
     },
   };
 }

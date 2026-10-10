@@ -10,6 +10,7 @@ import type { LanguageModelV2CallOptions } from '@ai-sdk/provider';
 import {
   DynamicContextLedger,
   ExtensionHost,
+  HeadCapture, REAL_CLOCK,
   initWorkspaceSchema,
   runChat,
   type CompactionTrigger,
@@ -24,6 +25,7 @@ import {
 } from '@kinu.run/compaction';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession } from '../src/local-session';
+import { validSummary } from '../../compaction/tests/helpers';
 import { resolverRest } from './helpers/local-session';
 import { scratchPath, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 import * as v from 'valibot';
@@ -67,18 +69,24 @@ type PromptMessage = LanguageModelV2CallOptions['prompt'][number];
 interface CapturingModel {
   model: LanguageModel;
   prompts: PromptMessage[][];
+  summaries: PromptMessage[][];
 }
 
 function capturingModel(answer: () => string = () => 'ok'): CapturingModel {
   const prompts: PromptMessage[][] = [];
+  const summaries: PromptMessage[][] = [];
 
   const model = new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
-    doGenerate: async () => ({
-      content: [{ type: 'text', text: '## Decisions\n- the plan runs in order' }], finishReason: 'stop',
-      usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 }, warnings: [],
-    }),
+    doGenerate: async (options) => {
+      summaries.push(options.prompt);
+
+      return {
+        content: [{ type: 'text', text: validSummary('the plan runs in order') }], finishReason: 'stop',
+        usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 }, warnings: [],
+      };
+    },
     doStream: async (options) => {
       prompts.push(options.prompt);
 
@@ -98,7 +106,7 @@ function capturingModel(answer: () => string = () => 'ok'): CapturingModel {
     },
   });
 
-  return { model, prompts };
+  return { model, prompts, summaries };
 }
 
 function messageText(m: PromptMessage): string {
@@ -118,6 +126,58 @@ function ephemeralBlocks(prompt: PromptMessage[]): number[] {
 }
 
 describe('default compaction over the real storage plane', () => {
+  test('a hosted actor folds inherited history on its own model and retains its own spend', async () => {
+    const db = workspaceDatabase(scratchPath('actor-compaction-model', 'agent.db'));
+    const rt = createCLIRuntime(db, { cwd: scratchDir('actor-compaction-folder'), llm: { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'parent' } });
+    const parent = capturingModel();
+    const child = capturingModel();
+
+    const session = new LocalAgentSession({
+      rt, db, onEvent: () => {}, modelResolver: {
+        normalizeSpecSync: (spec) => spec?.trim() ?? 'fake/parent',
+        resolveModel: (spec) => spec === 'fake/child' ? child.model : parent.model,
+        listProviders: async () => [],
+        listModels: async () => ({ models: ['parent', 'child'].map((id) => ({ provider: 'fake', id, label: id })), failures: [] }),
+        modelInfo: async (spec) => ({ id: spec ?? 'fake/parent', label: 'model', contextWindow: 20_000 }),
+        ...resolverRest,
+      },
+    });
+
+    rt.actor.config.setLearning(false);
+
+    try {
+      await session.send('Remember the parent task.', { id: crypto.randomUUID() });
+      const before = parent.summaries.length;
+      const seat = await session.hostNode({ nodeId: 'own-compaction', rootId: 'compaction-tree', depth: 1 });
+      seat.actor.stores.config.setModel('fake/child');
+
+      const report = await seat.infer({
+        id: 'own-compaction', rootId: 'compaction-tree', parentId: null, depth: 1,
+        task: 'Continue the inherited plan.', rationale: 'Continue the inherited plan.', mode: 'build', inheritedContext: [],
+        mergeStrategy: 'synthesize', budget: { maxDepth: 0, spawnedAt: Date.now() }, loop: { kind: 'builtin' },
+      }, {
+        actor: seat.actor, runId: seat.runId, sources: seat.sources, tools: {},
+        opening: Array.from({ length: 24 }, (_, index): ModelMessage[] => [
+          { role: 'user', content: `Task ${String(index)}: retain the decisions in this plan.` },
+          { role: 'assistant', content: `Decision ${String(index)}: ${'x'.repeat(4_000)}` },
+        ]).flat(),
+        clock: REAL_CLOCK, capture: new HeadCapture(), isAborted: () => false,
+      });
+
+      const spend = seat.actor.stores.eventRecorder.read(seat.runId).filter((event) => event.type === 'model_call' && event.source === 'compaction');
+
+      expect(report.status).toBe('completed');
+      expect(child.summaries.length).toBeGreaterThan(0);
+      expect(parent.summaries.length).toBe(before);
+      expect(spend.length).toBeGreaterThan(0);
+      expect(spend.every((event) => event.type === 'model_call' && event.spec === 'fake/child')).toBe(true);
+      expect(session.listRuns().items.flatMap((run) => session.getRunEvents(run.runId)).some((event) => event.type === 'model_call' && event.source === 'compaction')).toBe(false);
+    } finally {
+      await session.end();
+      db.close();
+    }
+  });
+
   test('rewrite → VFS transcript read-back → durable replay → ledger reset on non-replay', async () => {
     const db = workspaceDatabase(scratchPath('compaction-integration', 'agent.db'), { create: true });
 

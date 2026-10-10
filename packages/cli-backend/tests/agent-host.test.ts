@@ -1523,6 +1523,14 @@ describe('LocalAgentHost', () => {
     const session = await host.acquire('root');
     const seat = await session.hostNode({ nodeId: 'advised-node', rootId: 'swarm-run', depth: 1 });
 
+    const shell = seat.actor.runtime.shell;
+
+    if (shell === undefined) throw new Error('the node must have its workspace shell');
+    const home = await shell.exec('printf "%s" "$HOME"');
+
+    expect(home.exitCode).toBe(0);
+    expect(home.stdout).toBe(process.env.HOME ?? '');
+
     const model = streamingModel('The probe succeeded.', (options) => { reviews.push(isReview(options)); });
 
     // The seat's own run, on its production sources and compaction; only the model is the suite's.
@@ -1536,6 +1544,20 @@ describe('LocalAgentHost', () => {
       clock: REAL_CLOCK, tools: {}, capture: new HeadCapture(), isAborted: () => false,
     });
 
+    const head = await session.hostHead({
+      id: 'branching-head', rootId: 'swarm-run', parentId: null, depth: 1,
+      task: 'Inspect the workspace.', rationale: 'Inspect the workspace.', mode: 'build', inheritedContext: [],
+      mergeStrategy: 'synthesize', budget: { maxDepth: 0, spawnedAt: Date.now() }, loop: { kind: 'builtin' },
+    }, new HeadCapture().files);
+
+    const headShell = head.actor.runtime.shell;
+
+    if (headShell === undefined) throw new Error('the head must have its own shell');
+    const headHome = await headShell.exec('printf "%s" "$HOME"');
+
+    expect(headHome.exitCode).toBe(0);
+    expect(headHome.stdout).not.toBe(home.stdout);
+    await head.release();
     await host.close();
     expect(report).toMatchObject({ status: 'completed', errorMessage: undefined });
     expect(reviews).toEqual([false]);

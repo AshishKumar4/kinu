@@ -48,6 +48,7 @@ import { SessionStream } from './session-stream';
 import { steerUserMessage } from './inbox';
 import { recordTurnResumed, sameBuildOf } from './turn-recovery-events';
 import { decideInterruptedTurn, type InterruptedTurnVerdict } from './turn-recovery';
+import { readVersionedScaffoldSource } from '../scaffold/versions';
 import type { ReportedTurn } from '../subordinates/turn-reports';
 import { lostToolCall } from '../tools/effect-claim';
 import { OwnerQuestionStore } from '../plans/owner-questions';
@@ -670,7 +671,8 @@ export class ActorSession {
     const active = this.requireTurn(lease);
 
     return settle(Effect.map(decideInterruptedTurn({
-      runtime: this.runtime, stores: { claims: this.options.claims, history: this.options.history }, runs: this.options.recording ?? null,
+      source: (version) => readVersionedScaffoldSource({ path: this.runtime.identity.scaffold.path, vfs: this.runtime.agentStateVfs ?? this.runtime.storage.vfs }, version),
+      stores: { claims: this.options.claims, history: this.options.history }, runs: this.options.recording ?? null,
       installedBuild: this.options.installedBuild, workspace: this.options.workspace ?? '', actor: this.runtime.identity.name,
       runId: lease.runId, claim: this.options.claims.read(lease.turnId),
       ...(this.options.answered !== undefined && { answered: this.options.answered }),
