@@ -113,6 +113,11 @@ export interface WorkspaceTerminal {
   terminalClose(ws: TerminalSocket): void;
 }
 
+export interface WorkspaceServing {
+  readonly held: readonly { readonly port: number; readonly stamp: string | null }[];
+  readonly jobs: ReadonlySet<string>;
+}
+
 /** A box over the workspace this object hosts: its store is the database itself, so its files need no session call. */
 export interface HostedBox extends NimbusSandboxHandle {
   store: WorkspaceBundle['files'];
@@ -122,8 +127,11 @@ export interface HostedWorkspace {
   readonly bundle: WorkspaceBundle;
   /** One agent's view: a named call runs in the runtime's named shell, keyed by `scope` and the name. */
   box(scope: string): HostedBox;
-  /** Each exposed workspace port and the job whose process listens on it, by the exec id that process carries. */
-  servingPorts(): Promise<readonly { readonly port: number; readonly stamp: string | null }[]>;
+  /**
+   * Each exposed workspace port with the job whose process listens on it, by the exec id that process carries, and every
+   * job with a live process here: the jobs this read answers for.
+   */
+  serving(): Promise<WorkspaceServing>;
   /** Answered by the hosted runtime (host ops need it), for every name this object is opened under; a
      *  sibling is never a Kinu workspace, so nothing here claims an owner or writes a transcript. The envelope
      *  is a hosted process's own data: Nimbus's dispatcher is the one place that refuses an op it does not serve. */
@@ -339,18 +347,22 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
       }),
       store: (plane) => bundle.files(plane),
     }),
-    // A listing says which job serves a port; it is no authority over the port's exposure.
-    servingPorts: async () => {
+    // A listing says which job serves a port; it is no authority over the port's exposure. A runtime this isolate never
+    // composed runs no process, so it answers nothing without booting the workspace.
+    serving: async () => {
+      if (composing === undefined) return { held: [], jobs: new Set() };
+      await composing;
+      const { processes } = await bundle.session();
       const exposed = [...await listPortReservations(deps.ctx)].flatMap(([port, held]) => (held.capability === null ? [] : [port]));
 
-      if (exposed.length === 0) return [];
-      const { processes } = await bundle.session();
+      return {
+        held: exposed.map((port) => {
+          const listener = portRegistry.get(port);
 
-      return exposed.map((port) => {
-        const listener = portRegistry.get(port);
-
-        return { port, stamp: listener === undefined ? null : processes.get(listener.pid)?.execId ?? null };
-      });
+          return { port, stamp: listener === undefined ? null : processes.get(listener.pid)?.execId ?? null };
+        }),
+        jobs: new Set(processes.getRunning().flatMap((entry) => (entry.execId === undefined ? [] : [entry.execId]))),
+      };
     },
     facetManager: async () => (await compose()).facets,
     ports: async () => (await compose()).ports,

@@ -50,7 +50,7 @@ export interface WorkspaceHostSeams {
   ownerUserId(): string | null;
   capabilityToken(): string | null;
   workspaceBox(shellId: string): HostedBox;
-  workspaceServing(): ReturnType<HostedWorkspace['servingPorts']>;
+  workspaceServing(): ReturnType<HostedWorkspace['serving']>;
   /** Root-owned uid-0 view, principal registry and uid table, so homes are provisioned in this isolate. */
   homeHost(): Promise<NodeHomeHost>;
   readonly homes: HostedActorHomes;

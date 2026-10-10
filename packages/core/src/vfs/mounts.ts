@@ -153,15 +153,36 @@ export interface PartialRemoval {
 	readonly failed: { readonly path: string; readonly cause: unknown };
 }
 
+/** `files` named from `/`, each call handed back the relative spelling a bare base keeps as its own. */
+function relativeSpelling(files: VFS): VFS {
+	const own = (path: string): string => path.slice(1);
+
+	return {
+		readFile: (path) => files.readFile(own(path)),
+		writeFile: (path, data) => files.writeFile(own(path), data),
+		readdir: (path) => files.readdir(own(path)),
+		stat: (path, options) => files.stat(own(path), options),
+		unlink: (path) => files.unlink(own(path)),
+		mkdir: (path, options) => files.mkdir(own(path), options),
+		...(files.rmdir !== undefined && { rmdir: (path: string) => files.rmdir?.(own(path)) }),
+	};
+}
+
 /** Removes `path` and what is under it by the plane's own removal, or Nimbus's walk where it has none; null: all of it went. */
 export async function removeTree(files: VFS, path: string): Promise<PartialRemoval | null> {
-	const removal: VfsRemoval | void = await (files.removeRecursive === undefined
-		? new CompositeVFS(files, { resolvesPaths: true }).removeRecursive(path)
-		: files.removeRecursive(path));
+	if (files.removeRecursive !== undefined) return partial(await files.removeRecursive(path), (at) => at);
+	const relative = path[0] !== '/';
+	const walked = new CompositeVFS(relative ? relativeSpelling(files) : files, { resolvesPaths: true });
 
+	return partial(await walked.removeRecursive(relative ? `/${path}` : path), (at) => (relative ? at.slice(1) : at));
+}
+
+function partial(removal: VfsRemoval | void, spelled: (path: string) => string): PartialRemoval | null {
 	const failed = removal?.failures[0];
 
-	return removal === undefined || failed === undefined ? null : { removed: removal.removed, remaining: removal.kept, failed: { path: failed.path, cause: failed.error } };
+	if (removal === undefined || failed === undefined) return null;
+
+	return { removed: removal.removed.map(spelled), remaining: removal.kept.map(spelled), failed: { path: spelled(failed.path), cause: failed.error } };
 }
 
 /** Shared by the composite plane's throw and the file manager's error value. */
@@ -212,15 +233,19 @@ export function workspaceFilePlane(box: NamespaceBox, input: {
 
 		const { principal, observer } = input;
 		const uid = (principal.cred ?? CRED_SESSION_USER).uid;
-		const mine = (writer: Principal): boolean => writer.cred?.uid === uid && writer.actor === principal.actor;
-		const unmount = box.mountTable(input.mounts, principal);
+		// The store reports every commit as its writer, a shell's and its installs' too; an observed file tool writes as an
+		// actor of its own, under the same mounts, so what it hears is its own writes.
+		const writer: WorkspacePrincipal = observer === undefined ? principal : { ...principal, actor: `${principal.actor ?? ''}#files` };
+		const mine = (made: Principal): boolean => made.cred?.uid === uid && made.actor === writer.actor;
+		const unmountShell = box.mountTable(input.mounts, principal);
+		const unmountWriter = writer === principal ? () => {} : box.mountTable(input.mounts, writer);
 
 		let view: Promise<CompositeVFS> | undefined;
 		let unobserve = (): void => {};
 
 		const namespace = box.namespace.bind(box);
 
-		const opened = (): Promise<CompositeVFS> => view ??= namespace(principal).then((ready) => {
+		const opened = (): Promise<CompositeVFS> => view ??= namespace(writer).then((ready) => {
 			if (observer !== undefined) unobserve = observeNamespace(ready, observer, mine);
 
 			return ready;
@@ -229,7 +254,7 @@ export function workspaceFilePlane(box: NamespaceBox, input: {
 		// The workspace's own files made a write's missing directories; its namespace does so as the principal.
 		const files = withMountTable({ namespace: opened, home: input.home, writesParents: true }, input.mounts);
 
-		return { files, unmount: () => { unobserve(); unmount(); } };
+		return { files, unmount: () => { unobserve(); unmountWriter(); unmountShell(); } };
 	}));
 }
 
@@ -286,7 +311,8 @@ function movable(files: CompositeVFS): MoveFs {
 /**
  * Where an operation on `at` lands, as Nimbus's `route` answers it, with the directories a write would make passing as
  * named. `route` refuses a missing ancestor with ENOENT (its lookup takes `creating`, the route does not: NIMBUS-ASKS
- * #32), so the nearest ancestor that is there is routed and the rest, which holds no link, is appended.
+ * #32), so the nearest ancestor that is there is routed and the rest appended. The first name appended may be a link
+ * whose target is not there yet: a write follows it, so the route does, and one the namespace cannot name is refused.
  */
 async function routeCreating(namespace: CompositeVFS, at: string, follow: boolean): Promise<VfsRoute> {
 	try {
@@ -297,6 +323,16 @@ async function routeCreating(namespace: CompositeVFS, at: string, follow: boolea
 
 		if (!isVfsError(cause, 'ENOENT') || cut < 0 || leaf === '..' || at === '/') throw cause;
 		const parent = await routeCreating(namespace, at.slice(0, cut) || '/', true);
+		const above = namespacePath(parent);
+		const named = above === '/' ? `/${leaf}` : `${above}/${leaf}`;
+
+		if (follow && (await namespace.stat(named, { follow: false }))?.type === 'symlink') {
+			const target = namespace.linkLeadsTo(named, await namespace.readlink(named));
+
+			if (target === null) throw cause;
+
+			return routeCreating(namespace, target, follow);
+		}
 
 		return { ...parent, path: parent.path === '/' ? `/${leaf}` : `${parent.path}/${leaf}` };
 	}
@@ -416,7 +452,7 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 			const target = await on(path);
 			const route = target.namespace === null ? null : await routeCreating(target.namespace, target.at, true);
 			const own: (VFS & CheckpointFiles) | null = route === null || route.point === '/' || route.path === '/' ? null : route.source;
-			const readOnly = declared.some((mount) => mount.readOnly === true && (mount.at ?? `/${mount.name}`) === route?.point);
+			const readOnly = target.namespace?.mounts().find((mount) => mount.point === route?.point)?.options.readOnly === true;
 
 			if (own?.writeFileWithReport !== undefined && route !== null && !readOnly) return own.writeFileWithReport(route.path, data);
 

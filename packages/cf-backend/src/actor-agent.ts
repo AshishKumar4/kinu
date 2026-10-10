@@ -580,7 +580,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** One Durable Object owns the workspace bytes: a top-level workspace DO serves from its own
    * storage; a facet actor returns a client onto that object. */
   protected abstract workspaceBox(shellId: string): HostedBox;
-  protected abstract workspaceServing(): ReturnType<HostedWorkspace['servingPorts']>;
+  protected abstract workspaceServing(): ReturnType<HostedWorkspace['serving']>;
 
   protected scaffoldPath(): string { return 'scaffold/agent.js'; }
 

@@ -788,7 +788,11 @@ test('an exposed workspace port is served by the job whose process listens on it
   await ports.expose(8090);
   await ports.expose(8091);
 
-  expect(await workspace.servingPorts()).toEqual([{ port: 8090, stamp: 'bgjob-server' }, { port: 8091, stamp: null }]);
+  const { held, jobs } = await workspace.serving();
+
+  expect(held).toEqual([{ port: 8090, stamp: 'bgjob-server' }, { port: 8091, stamp: null }]);
+  // The read answers for every job running here, the one that serves nothing it exposed included.
+  expect([...jobs].sort()).toEqual(['bgjob-quiet', 'bgjob-server']);
 });
 
 test('a port that starts or stops listening is heard by the workspace, which re-reads its pages\' port lists', async () => {

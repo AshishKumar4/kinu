@@ -51,8 +51,8 @@ export interface WriteObserver {
   record(event: WriteEvent): void;
 }
 
-/** One side of a landed mutation: its bytes, nothing there, or why its bytes are unknown. */
-type Side = Uint8Array | null | NonNullable<WriteEvent['unread']>;
+/** One side of a landed mutation: its bytes, nothing there, why its bytes are unknown, or not asked for. */
+type Side = Uint8Array | null | NonNullable<WriteEvent['unread']> | 'unasked';
 
 function unreadable(failure: KinuError, path: string): 'unreadable' {
   diagnostics.failure('vfs.write_side_unread', failure, { path });
@@ -60,14 +60,19 @@ function unreadable(failure: KinuError, path: string): 'unreadable' {
   return 'unreadable';
 }
 
-/** Read while the callback holds the event, which Nimbus releases once the callback settles; held content reads at once. */
-function side(ref: VfsContentRef | null | undefined, path: string): Side | Promise<Side> {
+/**
+ * Read while the callback holds the event, which Nimbus releases once it settles; held content reads at once. A file's
+ * bytes are read only when `asked`: an observer that already holds a path's baseline needs no second copy of it.
+ */
+function side(ref: VfsContentRef | null | undefined, path: string, asked: boolean): Side | Promise<Side> {
   if (ref === null) return null;
 
   // Not captured: the backend would not say what stood there.
   if (ref === undefined) return 'unreadable';
 
   if (ref.type === 'directory') return 'directory';
+
+  if (!asked) return 'unasked';
   const doing = `reading what a write left at ${path}`;
 
   try {
@@ -91,7 +96,7 @@ function recorded(observer: WriteObserver, path: string, before: Side, after: Si
   let unread: WriteEvent['unread'];
 
   if (after === 'unreadable') unread = after;
-  else if (baseline && !isBytes(before)) unread = before;
+  else if (baseline && (before === 'directory' || before === 'unreadable')) unread = before;
 
   // A directory where the file was is the file gone; a file whose bytes could not be read is still there.
   let now: Uint8Array | null = null;
@@ -112,8 +117,8 @@ export function observeNamespace(namespace: CompositeVFS, observer: WriteObserve
 
   return namespace.observeWrites((event: VfsWriteEvent) => {
     if (!mine(event.principal)) return undefined;
-    const before = side(event.before, event.path);
-    const after = side(event.after, event.path);
+    const before = side(event.before, event.path, observer.needsBaseline(event.path));
+    const after = side(event.after, event.path, true);
 
     const land = (was: Side, now: Side): void => {
       if (event.oldPath !== undefined) recorded(observer, event.oldPath, now, null);

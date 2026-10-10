@@ -58,7 +58,7 @@ import { ownerCaller, type UserCaller } from "@kinu.run/core";
 import { adaptMemory, backfillMemoryVectors } from "@kinu.run/core";
 import { actorAffinity } from "@kinu.run/core";
 import { nimbusPreviewConfigured } from "./nimbus-route";
-import type { HostedBox } from "./workspace-host";
+import type { HostedBox, WorkspaceServing } from "./workspace-host";
 
 /**
  * Every logical actor in a workspace is built over the root object's `name` and `sql`; runtimes
@@ -74,8 +74,8 @@ export interface CFRuntimeAccess {
   /** One box per workspace: a child composing its own gets a second, empty filesystem
      *  (tests/unit-head-fork.test.ts). Actors are separated by `shellId` and credential. */
   workspaceBox(shellId: string): HostedBox;
-  /** Each exposed workspace port and the job whose process listens on it (`HostedWorkspace.servingPorts`). */
-  workspaceServing(): Promise<readonly { readonly port: number; readonly stamp: string | null }[]>;
+  /** The workspace's exposed ports, the jobs listening on them, and the jobs it runs (`HostedWorkspace.serving`). */
+  workspaceServing(): Promise<WorkspaceServing>;
   /** Absent for facets without a budget ledger; the `workspace` provider then uses a private ledger. */
   readonly acc?: () => Pick<TurnAccumulator, 'files' | 'context'>;
   getCliCwdForDevice?(): string | null;
@@ -584,20 +584,22 @@ export function createCFRuntime(
     sandboxHandle,
     portHolders: () => {
       const box = hooks.boxUse.used && previewSuffix !== undefined && sandboxHandle !== null ? { handle: sandboxHandle, suffix: previewSuffix } : null;
-      let workspace: ReturnType<CFRuntimeAccess['workspaceServing']> | undefined;
+      let workspace: Promise<WorkspaceServing> | undefined;
+      let sandbox: Promise<readonly number[]> | undefined;
       const served = () => workspace ??= access.workspaceServing();
+      const boxed = () => sandbox ??= box === null ? Promise.resolve([]) : box.handle.getExposedPorts(box.suffix).then((rows) => rows.map((row) => row.port));
 
-      // A job's id names both: the box's listener carries it in its environment, the workspace's process as its exec id.
+      // A job's id names both planes: the box's listener carries it in its environment, a workspace process as its exec
+      // id. Each plane is asked for its own exposed ports only; a box this activation did not use answers for no job.
       return {
-        exposedPorts: async () => [
-          ...box === null ? [] : (await box.handle.getExposedPorts(box.suffix)).map((row) => row.port),
-          ...(await served()).map((held) => held.port),
-        ],
+        exposedPorts: async () => [...await boxed(), ...(await served()).held.map((held) => held.port)],
         holders: async (ports) => {
-          const boxed = box === null ? [] : await box.handle.portListeners(JOB_STAMP_ENV, ports);
+          const own = await boxed();
+          const listened = box === null ? [] : await box.handle.portListeners(JOB_STAMP_ENV, ports.filter((port) => own.includes(port)));
 
-          return boxed === null ? null : [...boxed, ...(await served()).filter((held) => ports.includes(held.port))];
+          return listened === null ? null : [...listened, ...(await served()).held.filter((held) => ports.includes(held.port))];
         },
+        answersFor: async () => (box === null ? (await served()).jobs : null),
       };
     },
   };

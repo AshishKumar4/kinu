@@ -592,8 +592,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
-  protected workspaceServing(): ReturnType<HostedWorkspace['servingPorts']> {
-    return this.hostedWorkspace().servingPorts();
+  protected workspaceServing(): ReturnType<HostedWorkspace['serving']> {
+    return this.hostedWorkspace().serving();
   }
 
   protected workspaceBox(shellId: string): HostedBox {

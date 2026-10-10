@@ -410,6 +410,7 @@ describe('a sandbox command a job takes', () => {
     const sandbox: PortHolders = {
       exposedPorts: async () => [SERVED],
       holders: async (ports) => (listening && ports.includes(SERVED) ? [{ port: SERVED, stamp }] : []),
+      answersFor: async () => null,
     };
 
     const settledRecords: Array<Promise<void>> = [];
