@@ -10,7 +10,7 @@ import {
   PackageIcon, SparkleIcon, CaretRightIcon, ShieldWarningIcon,
   NotePencilIcon, DatabaseIcon,
 } from "@phosphor-icons/react";
-import { hasWorkspaceWork, jobPhase, revealMisrepresenting, timeAgo, type InspectedWork } from "@kinu.run/core";
+import { hasWorkspaceWork, jobPhase, taskTreePhase, revealMisrepresenting, timeAgo, type InspectedWork } from "@kinu.run/core";
 import type { AgentTaskTree, ChangelogEntry, MemoryEntry, Omitted, OwnedPlan, PanelAgent, ParkedWriteReview, PendingAction, PendingActionKind, PlanPageRef, WorkspaceWork, WorkspaceWorkOwner } from "@kinu.run/core";
 import type { ReadMoves } from "@/hooks/use-kinu";
 import type { Rpc } from "@kinu.run/core";
@@ -19,7 +19,7 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { lastValue, useAsyncResource, type AsyncResource } from "@/hooks/use-async-resource";
 import { Section } from "./shared";
-import { HelperRow, isClosedTree, PlanProgress, TaskTree } from "./work-tasks";
+import { HelperRow, PlanProgress, TaskTree } from "./work-tasks";
 import { InspectedRow, JobCard } from "./work-jobs";
 import { ChangelogEntryCard, ChangelogFailure, useChangelog, type ChangelogView } from "./changelog-entries";
 import type { SurfaceKind } from "@kinu.run/core";
@@ -96,8 +96,8 @@ export function WorkTab({
     return [...rows(work?.tasks ?? []), ...rows(work?.plans ?? [])];
   }, [work]);
 
-  const openTasks = taskRows.filter(({ task }) => !isClosedTree(task));
-  const closedTasks = taskRows.filter(({ task }) => isClosedTree(task));
+  const openTasks = taskRows.filter(({ task }) => taskTreePhase(task) !== "settled");
+  const closedTasks = taskRows.filter(({ task }) => taskTreePhase(task) === "settled");
   const helpers = useMemo(() => (agents?.list ?? []).filter((agent) => agent.category === "background"), [agents]);
   const runningJobs = backgroundJobs.filter((job) => jobPhase(job, Date.now()) !== "settled");
   const settledJobs = backgroundJobs.filter((job) => jobPhase(job, Date.now()) === "settled");

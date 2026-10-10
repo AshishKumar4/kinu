@@ -1622,7 +1622,7 @@ export {
 } from './jobs/index';
 
 export {
-  TaskListStore, initTaskListTable, MAX_TASK_TITLE_CHARS,
+  TaskListStore, initTaskListTable, MAX_TASK_TITLE_CHARS, taskSettled, taskTreePhase,
   type AgentTask, type AgentTaskTree, type TaskStatus,
   type TaskAddResult, type TaskAddRejection,
 } from './tools/task-store';
