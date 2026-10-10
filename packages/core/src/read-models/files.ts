@@ -496,18 +496,22 @@ export function writeExecutorFileOp(
 const DIGEST_REVISION = 'sha256:';
 
 function observedBy(revision: VfsRevision | undefined): ObservedFile {
-  if (revision === undefined) return { kind: 'absent' };
+  // No token, or the one a conflict over a missing file names: the replace creates it, on any plane.
+  if (revision === undefined || String(revision) === String(ABSENT_TOKEN)) return { kind: 'absent' };
 
   return typeof revision === 'string' && revision.startsWith(DIGEST_REVISION)
     ? { kind: 'digest', sha256: revision.slice(DIGEST_REVISION.length) }
     : { kind: 'revision', revision };
 }
 
-/** What the file holds now, as the editor names it. Absent is revision 0, as Nimbus counts it. */
+/** A missing file's token: revision 0, as Nimbus counts one, whichever check the plane makes. */
+const ABSENT_TOKEN = 0;
+
+/** What the file holds now, as the editor names it. */
 function revisionOf(now: FileNow): VfsRevision {
   if ('revision' in now) return now.revision;
 
-  return now.sha256 === null ? 0 : `${DIGEST_REVISION}${now.sha256}`;
+  return now.sha256 === null ? ABSENT_TOKEN : `${DIGEST_REVISION}${now.sha256}`;
 }
 
 export function readExecutorFileBytes(
