@@ -2893,8 +2893,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Its chat's follow-up turns are owed in main's own isolate; everything else its settled turn owes, here. */
   private rosterParts(settled: HandedOffTurn, scoped: CompletedTurn, held: MainTurnFacts, mission: string | null): TerminalTurnParts {
     return {
-      // Over the row main's transcript persisted, so a cut turn's announcement replays from it.
-      turnEndExtensions: true,
+      // Over the row main's transcript persisted, so a cut turn's announcement replays from it; owed only when an
+      // extension here listens, as reading the answer back crosses into main's isolate for the whole turn.
+      turnEndExtensions: this.extensions.listens('onTurnEnd'),
       credited: settled.credited,
       // Main's own isolate saw its tools run, and recorded them in the turn it handed over.
       craftedToolsUsed: scoped.craftedToolsUsed ?? [],

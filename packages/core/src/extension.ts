@@ -111,6 +111,9 @@ function untilAborted<T>(pending: Promise<T>, signal: AbortSignal | undefined): 
   }));
 }
 
+/** The hooks an extension observes a turn by, each fired in registration order. */
+type ObservedHook = 'onTurnStart' | 'onToolCall' | 'onToolResult' | 'onStepEnd' | 'onTurnEnd';
+
 export class ExtensionHost {
   private readonly extensions: KinuExtension[] = [];
 
@@ -126,6 +129,11 @@ export class ExtensionHost {
 
   list(): readonly KinuExtension[] {
     return [...this.extensions];
+  }
+
+  /** Whether any registered extension implements `hook`: what feeds a hook nothing implements is not built. */
+  listens(hook: ObservedHook): boolean {
+    return this.extensions.some((ext) => ext[hook] !== undefined);
   }
 
   /** Throws on a name collision so a plugin never silently shadows another's tool. */
@@ -254,7 +262,7 @@ export class ExtensionHost {
   }
 
   private observe(
-    hook: 'onTurnStart' | 'onToolCall' | 'onToolResult' | 'onStepEnd' | 'onTurnEnd',
+    hook: ObservedHook,
     call: (ext: KinuExtension) => void | Promise<void>,
   ): Effect.Effect<void, KinuError> {
     return Effect.forEach(this.extensions, (ext) => (ext[hook] === undefined ? Effect.void : this.guardHook(hook, ext.name, () => call(ext))), { discard: true });

@@ -246,7 +246,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     // Heads still running: their reports arrive only after the claims are read.
     const reports: Array<ReturnType<typeof Promise.withResolvers<ScriptedHeadReport>>> = [];
 
-    const harness = cutAt('turn_end_extensions', 'before', {
+    const harness = cutAt('turn_record', 'before', {
       heads: () => {
         const report = Promise.withResolvers<ScriptedHeadReport>();
         reports.push(report);
@@ -363,6 +363,19 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     }
   });
 
+});
+
+describe("a main turn's close reads back only what something reads", () => {
+  /** No workspace extension implements `onTurnEnd`: announcing the turn read main's whole answer back across the
+   *  isolates and converted it for no one, 3 MB of a 150-step turn's close (worker-heap, 2026-10-10). */
+  test('a workspace no extension of which listens for turn end owes no announcement', async () => {
+    const harness = cutAt('turn_end_extensions', 'before');
+    turns(harness).open('u-unheard');
+    const [settled] = await Promise.allSettled([turns(harness).settle({ messageId: 'a-unheard' })]);
+
+    if (settled.status === 'rejected') throw settled.reason;
+    await until(() => disposition(harness, 'u-unheard', settled.value.messageId) === 'done', 'the sequence closed without the announcement');
+  });
 });
 
 /**

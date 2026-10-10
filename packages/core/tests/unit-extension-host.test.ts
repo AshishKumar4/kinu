@@ -368,6 +368,15 @@ describe('ExtensionHost', () => {
     expect(host.size).toBe(2);
   });
 
+  test('listens to a hook only once an extension implementing it is registered', () => {
+    const host = new ExtensionHost().register({ name: 'tools', registerTools: () => ({}) });
+
+    expect(host.listens('onTurnEnd')).toBe(false);
+    host.register({ name: 'ender', onTurnEnd: () => undefined });
+    expect(host.listens('onTurnEnd')).toBe(true);
+    expect(host.listens('onTurnStart')).toBe(false);
+  });
+
   test('tools() throws on a name collision so one plugin cannot shadow another', () => {
     const host = new ExtensionHost()
       .register({ name: 'a', registerTools: () => ({ dup: tool({ description: 'a', inputSchema: z.object({}) }) }) })
