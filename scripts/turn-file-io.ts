@@ -154,10 +154,11 @@ async function connectInspector(url: string): Promise<Inspector> {
   return {
     heap: async () => {
       const pending = Promise.withResolvers<HeapReply>();
-      replies.set(++id, pending.resolve);
-      socket.send(JSON.stringify({ id, method: 'Runtime.getHeapUsage' }));
+      const requestId = ++id;
+      replies.set(requestId, pending.resolve);
+      socket.send(JSON.stringify({ id: requestId, method: 'Runtime.getHeapUsage' }));
       const reply = await pending.promise;
-      replies.delete(id);
+      replies.delete(requestId);
 
       if (reply.result === undefined) throw new Error(`heap usage unavailable: ${reply.error?.message ?? 'no result'}`);
 
@@ -349,7 +350,14 @@ const peaks = new Map<string, number>();
 
 let sampling = false;
 
+let heapRead = Promise.resolve();
+
 async function sampleHeap(): Promise<void> {
+  heapRead = heapRead.then(readHeap);
+  await heapRead;
+}
+
+async function readHeap(): Promise<void> {
   const targets = v.parse(TargetsSchema, await (await fetch(`http://127.0.0.1:${String(inspectorPort)}/json`)).json());
 
   for (const target of targets.filter((entry) => entry.id.includes('kinu'))) {
