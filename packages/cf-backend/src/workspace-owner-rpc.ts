@@ -1,12 +1,12 @@
 /** Cross-workspace owner calls. Hosted actors share the root's isolate and workspace box, so their
  * file and execution operations need no owner RPC. */
 
+import { type SlateCaller } from '@kinu.run/core/slates';
 import type {
   BlueprintBundle, BlueprintFork, JsonValue, LiveShareRecord, OperationCaller, OperationListing, OperationResult, ShareViewerClaim, SlateAnswer,
   SlateCallRequest, SlateCallResult, SlateOperation, SlateShareRecord, SlateSurfaceResult,
 } from '@kinu.run/core';
 import type { BlueprintReading, ShareUser } from '@kinu.run/core/slates';
-import type { SlateCaller } from './slates/bindings';
 import type { ObjectNamespace } from '@kinu.run/core';
 
 /** Slate operations made as a caller; the browser's `@callable slate` mints the root caller locally. */

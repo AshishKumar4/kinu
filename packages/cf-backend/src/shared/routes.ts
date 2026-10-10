@@ -16,8 +16,8 @@ import type { AuthIdentity } from '../auth/session';
 import { deriveUserId } from '../auth/store';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { workspaceOwner } from '../workspace-owner-rpc';
-import { ROOT_SLATE_CALLER } from '../slates/bindings';
 import type { ErrorCode } from '@kinu.run/core/obs';
+import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { ownerGate, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
 
 /** Its own salt and info, so preview and blueprint tokens never verify each other. */

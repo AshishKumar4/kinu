@@ -4,7 +4,7 @@ import { toolExecute } from '@kinu.run/test-utils';
 import type { JsonValue } from '@kinu.run/core';
 import { orchestratorHarness, chatSessionTurns, workspaceFiles } from './helpers/actor-harness';
 import * as v from 'valibot';
-import { ROOT_SLATE_CALLER } from '../src/slates/bindings';
+import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 
 test('a real Plan turn reads files but cannot edit them, even after a Build turn starts', async () => {
   const { agent } = orchestratorHarness();

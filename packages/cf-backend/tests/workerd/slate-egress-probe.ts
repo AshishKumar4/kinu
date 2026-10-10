@@ -10,7 +10,7 @@ import { supervisorEsbuildService } from '@nimbus-sh/worker/facet-host';
 import { probeDurableApps, probeFacetManager } from './facet-manager';
 import { SlateHost } from '../../src/slates/host';
 import { initSlateBuildTable } from '@kinu.run/core/slates';
-import { ROOT_SLATE_CALLER, slateCallerKey } from '../../src/slates/bindings';
+import { ROOT_SLATE_CALLER, slateCallerKey } from '@kinu.run/core/slates';
 import { initWorkspaceSchema, type SqlValue, type WorkMode } from '@kinu.run/core';
 import { ContentRef } from '@agent-core/core';
 import { processes } from '@nimbus-sh/fabric/workerd-facet-host.js';

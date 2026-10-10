@@ -14,7 +14,7 @@ import { chatCompletion, wordByWordCompletion, GATEWAY_MODEL, openingOf, request
 import { createWorkspaceBundle } from '../../core/tests/helpers';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 import { recordedMcpToolCalls, resetRecordedMcp, seedMcpTools, seedMcpAnswer } from './helpers/agents-sdk';
-import { ROOT_SLATE_CALLER, type SlateCaller } from '../src/slates/bindings';
+import { ROOT_SLATE_CALLER, type SlateCaller } from '@kinu.run/core/slates';
 import { SlateId } from '@agent-core/core/slates';
 import { slateDirectory } from '@kinu.run/core/slates';
 import type { SqlDatabase, SqlRow, SqlValue as VendorSqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';

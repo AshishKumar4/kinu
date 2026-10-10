@@ -1,5 +1,6 @@
 import { Cause, Effect, Exit } from 'effect';
 import type { VfsDirent, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
+import { type SlateCaller, type SlateCallerHop } from '@kinu.run/core/slates';
 /**
  * Actor-agnostic substrate beneath every full-loop Kinu actor on the Cloudflare backend.
  * Tool gating is structural: a profile with no `team` deps gets no hiring actions on `agents`.
@@ -194,7 +195,6 @@ import type { AgentStoreBroker } from "./agent-facets";
 import type { CodemodeProvider, DeferredApprovalChannel, SlateRoute, SlateCallResult, SlateOperation, SlateReadModel, SlateSurfaceValue } from "@kinu.run/core";
 import { workspaceOwner } from "./workspace-owner-rpc";
 import { CRED_SESSION_USER } from "@nimbus-sh/core/runtime/os-contracts.js";
-import type { SlateCaller, SlateCallerHop } from "./slates/bindings";
 import type { SlateDispatchContext } from "./slates/host";
 import { diagnostics, KinuError, refusalOf, refusing, toKinuError, tolerate, type ErrorCode, type Refusal } from "@kinu.run/core/obs";
 import type { UserDO } from "./user/user-do";

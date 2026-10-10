@@ -1,11 +1,11 @@
 import { SlateId } from '@agent-core/core/slates';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { slateDirectory, type WorkspaceSlates } from '@kinu.run/core/slates';
+import { ROOT_SLATE_CALLER, type SlateCaller } from '@kinu.run/core/slates';
 import {
   addressedBlock, ephemeralSlateAddress, ephemeralSlateId, parseSlateProject, sha256Hex, type EphemeralSlateAddress, type SlateProject,
 } from '@kinu.run/core';
 import type { WorkspaceSession } from '@kinu.run/core/workspace';
-import { ROOT_SLATE_CALLER, type SlateCaller } from './bindings';
 
 /** The block an ephemeral slate's id names, and the author whose authority its page runs with; null when no authority
  *  can be lent to it here, and the page is drawn with nothing it can call. */

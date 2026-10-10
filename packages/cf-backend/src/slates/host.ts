@@ -4,6 +4,7 @@ import { WorkspaceId } from '@agent-core/core';
 import { SlateId, SlateVersionId } from '@agent-core/core/slates';
 import * as v from 'valibot';
 import { CRED_KERNEL, CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { ROOT_SLATE_CALLER, slateCallerKey, shareCaller, type SlateCaller } from '@kinu.run/core/slates';
 import {
   forgetSlateFiles, SlateFiles, SlateShareStore, WorkspaceSlateContentStore, SqliteSlateStateStore, SqliteSlateStore, WorkspaceBlueprints, WorkspaceSlates, slateDirectory,
   type BlueprintReading, type DurableAppIdentity, type DurableApps, type ShareUser,
@@ -29,7 +30,7 @@ import { ERROR_CODES, KinuError, classifyErrorCode, refusalOf, settle, toKinuErr
 import { Effect } from 'effect';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
 import { slateBatchStub } from './rpc-transport';
-import { ROOT_SLATE_CALLER, slateCallerKey, shareCaller, type SlateBinding, type SlateBindingProps, type SlateCaller } from './bindings';
+import { type SlateBinding, type SlateBindingProps } from './bindings';
 import { codemodeEgress } from '../codemode-egress';
 import { SlateSources, type MessageBlock, type SlateSource } from './sources';
 

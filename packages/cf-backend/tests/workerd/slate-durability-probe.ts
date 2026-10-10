@@ -13,7 +13,7 @@ import { handleNimbusPreviewHostRequest } from '../../src/nimbus-route';
 import { WORKSPACE_TERMINAL_PATH, WorkspaceTerminalOutputSchema, buildBuiltinTools, codemodeSurface, createDefaultWebSearchProvider, toolsInWorkMode } from '@kinu.run/core';
 import { narrowToolSurface } from '@kinu.run/core';
 import { listPortReservations } from '@nimbus-sh/worker/port-capability';
-import { ROOT_SLATE_CALLER } from '../../src/slates/bindings';
+import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { pictureKey, picturePrefix } from '../../src/slates/pictures';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { ownerCaller } from '@kinu.run/core';

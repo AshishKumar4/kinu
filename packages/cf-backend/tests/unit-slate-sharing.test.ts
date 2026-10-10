@@ -7,7 +7,7 @@ import {
 import { orchestratorHarness, workspaceFiles } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 import { resetRecordedMcp } from './helpers/agents-sdk';
-import { ROOT_SLATE_CALLER, type SlateCaller } from '../src/slates/bindings';
+import { ROOT_SLATE_CALLER, type SlateCaller } from '@kinu.run/core/slates';
 
 type Owner = ReturnType<typeof orchestratorHarness>;
 

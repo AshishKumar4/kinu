@@ -13,7 +13,8 @@ import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestra
 import { hostedActorPlacement } from '../../src/actor-hosting';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import { AgentWorkspaceRPC } from '../../src/agent-facets';
-import { ROOT_SLATE_CALLER, SlateBinding } from '../../src/slates/bindings';
+import { SlateBinding } from '../../src/slates/bindings';
+import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { createRuntimeExecutor, jobContextAnswers } from '../../src/codemode-sandbox';
 import { SLATE_STORAGE_BINDING, type SlateSurfaceResult } from '@kinu.run/core';
 import type { AgentFacet } from './agent-facet-probe-agent';

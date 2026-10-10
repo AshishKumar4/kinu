@@ -22,7 +22,7 @@ import { SlateId } from '@agent-core/core/slates';
 import { initSlateLiveShareTables, slateDirectory } from '@kinu.run/core/slates';
 import { SlateHost } from '../../src/slates/host';
 import { initSlateBuildTable } from '@kinu.run/core/slates';
-import { ROOT_SLATE_CALLER, type SlateCaller } from '../../src/slates/bindings';
+import { ROOT_SLATE_CALLER, type SlateCaller } from '@kinu.run/core/slates';
 import { slateBatchStub } from '../../src/slates/rpc-transport';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { asFetchFunction, callCodemodeMember, createDefaultWebSearchProvider, createWebCodemodeProvider, requireCodemodeMember } from '@kinu.run/core';

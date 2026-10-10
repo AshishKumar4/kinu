@@ -32,3 +32,5 @@ export { SlateLiveShareStore, initSlateLiveShareTables } from './live-shares';
 export { shareLiveSlate } from './live-sharing';
 
 export { SlateBuilds, initSlateBuildTable, slateImage, type FailingSlateBuild, type SlateBuildFailure, type SlateImage } from './builds';
+
+export { ROOT_SLATE_CALLER, shareCaller, slateCallerKey, type SlateCaller, type SlateCallerHop } from './caller';

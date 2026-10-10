@@ -1,5 +1,6 @@
 import { exists as nimbusExists, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 import { PLATFORM_CATALOG, GitHubFactSchema, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs } from '@kinu.run/core';
+import { ROOT_SLATE_CALLER, type SlateCaller } from '@kinu.run/core/slates';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -63,7 +64,6 @@ import { initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
 import { browserCamera, initSlatePictureTable, SlatePictures, type PictureCapture } from "./slates/pictures";
 import { initSlateBuildTable } from "@kinu.run/core/slates";
 import type { BlueprintReading, ShareUser } from "@kinu.run/core/slates";
-import { ROOT_SLATE_CALLER, type SlateCaller } from "./slates/bindings";
 import type { MessageBlock } from "./slates/sources";
 import {
   actorRetirementFor, createWorkspaceActorHost, hostedActorPlacement, HostedActorHomes, type WorkspaceHostSeams,

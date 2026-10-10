@@ -14,7 +14,7 @@ import {
 import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner, TEST_USER_ENV, type TestUserDO } from './helpers/user-do';
 import { resetRecordedMcp, seedMcpTools } from './helpers/agents-sdk';
-import { ROOT_SLATE_CALLER } from '../src/slates/bindings';
+import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { makeKv } from './helpers/kv';
 import { sharedPublicRoutes, sharedRoutes } from '../src/shared/routes';
 import { accountRoutes } from '../src/user/account-routes';
