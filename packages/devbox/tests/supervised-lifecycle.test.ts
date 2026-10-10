@@ -3,6 +3,8 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
 
 import { Devbox, gate, harness, SandboxFailure, type FakeSandbox } from './support/devbox-harness';
+import { handClock } from '../../test-utils/src/hand-clock';
+import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy, type StartClock } from '../src/lifecycle';
 
 const COMMAND = 'bun run server.ts';
 
@@ -12,9 +14,21 @@ const LOST = 'network connection lost';
 
 const REPAIR_ID = 'owed-server';
 
+class InterleavingBox extends Devbox {
+  readonly clock = handClock(1_000_000);
+
+  protected override get policy(): DevboxPolicy {
+    return { ...DEFAULT_DEVBOX_POLICY, attachBudgetMs: 1_000 };
+  }
+
+  protected override get startClock(): StartClock {
+    return this.clock;
+  }
+}
+
 /** The real startup records a refused native start; the still-running work directory stays operable for repair. */
 async function missingService() {
-  const made = harness(Devbox);
+  const made = harness(InterleavingBox);
 
   made.rows.set(`devbox:proc:${REPAIR_ID}`, { processId: REPAIR_ID, command: COMMAND, cwd: '/workspace', createdAt: 1 });
   made.container.startFaults.push({ error: new Error('native server start refused'), created: false });
@@ -44,86 +58,69 @@ describe('starting a supervised process reserves its id before the process exist
     expect(await reservations(box)).toEqual([first.processId]);
   });
 
-  test('start-stop-start cannot delete a held launch reservation or leave an unsupervised process', async () => {
-    const { box, container } = harness(Devbox);
-    const first = await box.startSupervised(COMMAND);
-    const nativeGet = container.getProcess.bind(container);
-    const paused = gate();
-    let held = true;
+  for (const entry of ['public start', 'same-container repair', 'late startup'] as const) {
+    test(`${entry} / stop / successor keeps one supervised generation and fences abandoned work`, async () => {
+      const { box, container, rows } = entry === 'same-container repair' ? await missingService() : harness(InterleavingBox);
+      let processId = REPAIR_ID;
 
-    container.processes.clear();
-    container.getProcess = async (id) => {
-      if (id === first.processId && held) {
-        held = false;
-        paused.enter();
-        await paused.promise;
+      if (entry === 'public start') {
+        processId = (await box.startSupervised(COMMAND)).processId;
+        container.processes.clear();
+      } else if (entry === 'late startup') {
+        rows.set(`devbox:proc:${processId}`, { processId, command: COMMAND, cwd: '/workspace', createdAt: 1 });
       }
 
-      return nativeGet(id);
-    };
+      const nativeGet = container.getProcess.bind(container);
+      const paused = gate();
+      let held = true;
 
-    const restarting = box.startSupervised(COMMAND);
+      container.getProcess = async (id) => {
+        if (id === processId && held) {
+          held = false;
+          paused.enter();
+          await paused.promise;
+        }
 
-    await paused.reached;
-    const stopping = box.stopSupervised(first.processId);
+        return nativeGet(id);
+      };
 
-    // Yield one event-loop turn for the stand-in's queued Promise work; no timer, duration or polling bound.
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    const next = box.startSupervised(COMMAND);
-    let whileHeld: readonly string[] = [];
+      let launching: Promise<unknown>;
 
-    try {
-      whileHeld = await reservations(box);
-    } finally {
-      paused.release();
-      await Promise.all([restarting, stopping, next]);
-    }
+      if (entry === 'public start') launching = box.startSupervised(COMMAND);
+      else if (entry === 'same-container repair') launching = box.attachNow();
+      else launching = box.devboxStartup();
 
-    const last = await next;
+      await paused.reached;
 
-    expect(last.processId).not.toBe(first.processId);
-    expect({ whileHeld, stopped: (await stopping).stopped, supervised: await reservations(box), live: [...container.processes.keys()] })
-      .toEqual({ whileHeld: [first.processId], stopped: true, supervised: [last.processId], live: [last.processId] });
-  });
-
-  test('same-container repair-stop-start cannot resurrect a stopped reservation as an unsupervised duplicate', async () => {
-    const { box, container } = await missingService();
-    const nativeGet = container.getProcess.bind(container);
-    const paused = gate();
-    let held = true;
-
-    container.getProcess = async (id) => {
-      if (id === REPAIR_ID && held) {
-        held = false;
-        paused.enter();
-        await paused.promise;
+      if (entry === 'late startup') {
+        expect(box.clock.armed()).toBeGreaterThan(0);
+        box.clock.tick();
+        await launching;
+        expect((await box.devboxState()).restoration).toBe('repair');
       }
 
-      return nativeGet(id);
-    };
+      const stopping = box.stopSupervised(processId);
 
-    const repairing = box.attachNow();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const next = box.startSupervised(COMMAND);
+      let whileHeld: readonly string[] = [];
 
-    await paused.reached;
-    const stopping = box.stopSupervised(REPAIR_ID);
+      try {
+        whileHeld = await reservations(box);
+      } finally {
+        paused.release();
+        await Promise.all([launching, stopping, next]);
+      }
 
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    const next = box.startSupervised(COMMAND);
-    let whileHeld: readonly string[] = [];
+      const last = await next;
 
-    try {
-      whileHeld = await reservations(box);
-    } finally {
-      paused.release();
-      await Promise.all([repairing, stopping, next]);
-    }
+      expect(last.processId).not.toBe(processId);
+      expect({ whileHeld, stopped: (await stopping).stopped, supervised: await reservations(box), live: [...container.processes.keys()] })
+        .toEqual({ whileHeld: [processId], stopped: true, supervised: [last.processId], live: [last.processId] });
 
-    const last = await next;
-
-    expect(last.processId).not.toBe(REPAIR_ID);
-    expect({ whileHeld, stopped: (await stopping).stopped, supervised: await reservations(box), live: [...container.processes.keys()] })
-      .toEqual({ whileHeld: [REPAIR_ID], stopped: true, supervised: [last.processId], live: [last.processId] });
-  });
+      if (entry === 'late startup') expect(container.starts.every((started) => started.processId !== processId)).toBe(true);
+    });
+  }
 
   test('repair rechecks a reservation withdrawn after its plan snapshot before native launch', async () => {
     const { box, container, storage } = await missingService();
