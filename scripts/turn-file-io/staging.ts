@@ -23,6 +23,8 @@ const resolved = resolvePublicSessionPlan('perf-turn-file-io', SCRIPTED_MODEL_SP
 
 if (resolved.kind !== 'ready') throw new Error(resolved.remedy);
 
+const allStarted = Date.now();
+
 const session = await resolved.plan.open({ subject: 'perf-turn-file-io', purpose: 'Measure platform turn and file I/O in this disposable workspace.', genesis: false });
 
 interface OperationSample { readonly label: string; readonly startedAt: number; readonly endedAt: number; readonly wallMs: number }
@@ -39,8 +41,6 @@ function rememberCpu(requests: Map<string, RuntimeCpu>, events: readonly Telemet
 }
 
 const measured: OperationSample[] = [];
-
-const allStarted = Date.now();
 
 const headers = webHeaders(resolved.plan.identity);
 
