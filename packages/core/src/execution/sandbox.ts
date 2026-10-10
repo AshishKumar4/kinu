@@ -14,6 +14,7 @@ import { shellQuote } from '../utils/shell';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import type { JsonValue } from '../utils/json';
 import { direntType } from '../vfs/dirent';
+import { sha256Hex } from '../safety/argument-digest';
 
 /** The container's working directory and default cwd; declared here because core must not depend on @kinu.run/devbox. */
 export const WORKSPACE_BACKUP_DIR = '/workspace';
@@ -829,7 +830,18 @@ export function sandboxFiles(
     },
 
     async writeFileIfDigest(path, data, expected) {
-      return await serving(path, 'open', () => handle.writeFileIfDigest(path, bytesToBase64(data), expected));
+      const wanted = sha256Hex(data);
+      let sent = false;
+
+      return await serving(path, 'open', async () => {
+        const resent = sent;
+
+        sent = true;
+        const answer = await handle.writeFileIfDigest(path, bytesToBase64(data), expected);
+
+        // A resend after a reply lost in transit finds its own bytes there: the first send landed, nothing changed it.
+        return resent && !answer.ok && answer.sha256 === wanted ? { ok: true, sha256: wanted } : answer;
+      });
     },
 
     async writeFile(path, data) {
