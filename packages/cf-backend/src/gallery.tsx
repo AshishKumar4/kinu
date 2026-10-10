@@ -1093,13 +1093,14 @@ function touchFixture(): Response {
 
 /** The account's own answers: Settings' frames whole, and on any page the owner's decision on a memory proposal. */
 function userFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response> | null {
+  const decided = galleryMemoryDecision(path, method, body);
+
+  if (decided !== null) return Promise.resolve(decided);
+
   if (ACCOUNT_FIXTURE_FRAMES.has(frame) && path.startsWith("/api/user/")) return userSettingsFixture(path, method, body);
   const memory = accountMemoryFixture(path, method);
 
-  if (memory !== null) return Promise.resolve(memory);
-  const decided = galleryMemoryDecision(path, method, body);
-
-  return decided === null ? null : Promise.resolve(decided);
+  return memory === null ? null : Promise.resolve(memory);
 }
 
 const galleryRequests: string[] = [];
