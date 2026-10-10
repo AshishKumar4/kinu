@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-09",
-  "files": 3142,
-  "functions": 82472,
+  "measuredAt": "2026-10-10",
+  "files": 3159,
+  "functions": 82786,
   "ceiling": 87,
   "line": 27,
   "inventory": [
@@ -70,10 +70,6 @@
       "complexity": 36
     },
     {
-      "key": "packages/core/src/tui/input-state.ts#reduceInput",
-      "complexity": 36
-    },
-    {
       "key": "scripts/bench-external.ts#readHarborTrial",
       "complexity": 35
     },
@@ -87,6 +83,10 @@
     },
     {
       "key": "packages/cli/src/config.ts#deriveLLMConfigFromProviderCredentials",
+      "complexity": 34
+    },
+    {
+      "key": "packages/core/src/tui/input-state.ts#reduceInput",
       "complexity": 34
     },
     {

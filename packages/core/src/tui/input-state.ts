@@ -48,6 +48,19 @@ export interface InputTransition {
   effects: InputEffect[];
 }
 
+/** Esc pressed again within the beat: walk back (once the turn settles, if one runs), or leave when there is nothing. */
+function secondEscape(state: InputState, now: number, hasUserMessages: boolean, busy: boolean): InputTransition {
+  if (hasUserMessages) {
+    return busy
+      ? { state: { ...state, escArmedAt: null, walkbackPending: true }, effects: [] }
+      : { state: { ...state, escArmedAt: null, walkbackOpen: true }, effects: [] };
+  }
+
+  return busy
+    ? { state: { ...state, escArmedAt: now }, effects: [{ kind: 'hint', text: 'Nothing to walk back to yet.' }] }
+    : { state: { ...state, escArmedAt: null }, effects: [{ kind: 'exit' }] };
+}
+
 export function reduceInput(state: InputState, event: InputMachineEvent): InputTransition {
   switch (event.type) {
     case 'turn-start':
@@ -94,31 +107,7 @@ export function reduceInput(state: InputState, event: InputMachineEvent): InputT
       const busy = state.activeTurns > 0;
       const armed = state.escArmedAt !== null && event.now - state.escArmedAt <= ESC_ESC_BEAT_MS;
 
-      if (armed) {
-        if (event.hasUserMessages) {
-          return busy
-            ? {
-                state: {
-                  ...state,
-                  escArmedAt: null,
-                  walkbackPending: true,
-                },
-                effects: [],
-              }
-            : {
-                state: {
-                  ...state,
-                  escArmedAt: null,
-                  walkbackOpen: true,
-                },
-                effects: [],
-              };
-        }
-
-        return busy
-          ? { state: { ...state, escArmedAt: event.now }, effects: [{ kind: 'hint', text: 'Nothing to walk back to yet.' }] }
-          : { state: { ...state, escArmedAt: null }, effects: [{ kind: 'exit' }] };
-      }
+      if (armed) return secondEscape(state, event.now, event.hasUserMessages, busy);
 
       if (busy) {
         const stopped = reduceInput(state, { type: 'interrupt', draft: event.draft });

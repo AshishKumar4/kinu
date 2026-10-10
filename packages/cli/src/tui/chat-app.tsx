@@ -560,11 +560,14 @@ function ChatScene({
       for (const problem of prompt.errors) addMessage({ role: 'system', content: problem });
 
       // Shown as sent; whether it steered the running turn is the client's answer once it lands, never a guess here.
-      sentRow = addMessage({
+      const sentMessage: Omit<DisplayMessage, 'id'> = {
         role: 'user',
         content: prompt.text,
         attachments: prompt.attached.length > 0 ? prompt.attached.map(describePromptAttachment) : undefined,
-      });
+        steered: false,
+      };
+
+      sentRow = addMessage(sentMessage);
       const text = [...localOutputsRef.current.splice(0), prompt.text].join('\n\n');
       const payload = prompt.files.length > 0 ? { text, files: prompt.files } : text;
       const sendOptions: AgentClientSendOptions = { cwd: process.cwd(), ...(mode !== undefined && { mode }) };

@@ -204,6 +204,13 @@ function entryHasDetails(entry: ChangelogEntryView): boolean {
     || entry.kind === 'fact' || entry.kind === 'tool';
 }
 
+/** The scaffold version an entry changed, as a diff below it while shown. */
+function EntryScaffoldDiff({ rpc, version, shown }: { rpc: Rpc; version: number | null | undefined; shown: boolean }) {
+  if (!shown || version == null) return null;
+
+  return <div className="mt-2"><ScaffoldVersionDiff rpc={rpc} version={version} readAgain={0} /></div>;
+}
+
 export interface ChangelogEntryCardProps {
   entry: ChangelogEntryView;
   grouped?: boolean;
@@ -301,9 +308,7 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
         </div>
       )}
 
-      {diffShown && entry.scaffoldVersion != null && (
-        <div className="mt-2"><ScaffoldVersionDiff rpc={rpc} version={entry.scaffoldVersion} readAgain={0} /></div>
-      )}
+      <EntryScaffoldDiff rpc={rpc} version={entry.scaffoldVersion} shown={diffShown} />
     </div>
   );
 }
