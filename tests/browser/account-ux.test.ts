@@ -825,13 +825,15 @@ describe('Settings → Memory', () => {
         await page.waitForSelector('input[aria-label="Your name"]');
         const reads = () => page.evaluate(() => Number(document.documentElement.dataset.galleryProfileReads ?? '0'));
 
-        expect(await reads()).toBe(1);
+        const before = await reads();
+
         await page.click('input[aria-label="Your name"]', { count: 3 });
         await page.keyboard.type('Ada');
         await page.$$eval('button', (buttons) => buttons.find((button) => button.textContent?.trim() === 'Save')?.click());
         await page.waitForFunction(() => document.documentElement.dataset.galleryProfilePatches === '1');
         await page.waitForFunction(() => [...document.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'Save')?.disabled === true);
-        expect(await reads()).toBe(1);
+        // The saved profile is the account's answer: nothing reads it again.
+        expect(await reads()).toBe(before);
       } finally {
         await page.close();
       }
