@@ -72,6 +72,14 @@ it('an edit that breaks a slate\'s build ships nothing: the agent is told where,
   expect([fixed.preview, fixed.serves, fixed.told]).toEqual(['builds', 'lilt-fixed', []]);
 });
 
+it('a slate is rebuilt when a file it imports from outside its own tree changes', async () => {
+  const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('imports'));
+  const at = { workspace: 'durability-imports', owner: 'durability-owner' };
+
+  expect(await subject.slateImport({ ...at, word: 'alpha', first: true })).toBe('alpha');
+  expect(await subject.slateImport({ ...at, word: 'beta', first: false })).toBe('beta');
+});
+
 it('a removed slate’s URL is dead even when a new app claims its port', async () => {
   const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('removed'));
 

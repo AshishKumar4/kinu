@@ -422,6 +422,36 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     };
   }
 
+  /**
+   * A slate whose class imports a workspace file outside its own tree, `/home/main/word.ts`: writes that file to say
+   * `word`, through the workspace as the agent writes, then asks the running slate what it says.
+   */
+  async slateImport(input: { workspace: string; owner: string; word: string; first: boolean }): Promise<string> {
+    const target = await this.workspaceTarget(input.workspace);
+
+    if (input.first) {
+      await this.claimWorkspace(target, input.workspace, input.owner);
+      await this.writeSlateFile(target, '/slates/imports/package.json', JSON.stringify({ main: 'server.ts', slate: { title: 'Imports' } }));
+      await this.writeSlateFile(target, '/slates/imports/server.ts', [
+        'import { SlateObject } from "kinu:slate";',
+        'import { word } from "/home/main/word.ts";',
+        'export class Slate extends SlateObject {',
+        '  async word() { return word; }',
+        '}',
+      ].join('\n'));
+    }
+
+    await target.runProgram([
+      'const path = "/home/main/word.ts";',
+      'if (await workspace.exists(path)) await workspace.readFile(path);',
+      `return await workspace.writeFile(path, ${JSON.stringify(`export const word = ${JSON.stringify(input.word)};\n`)});`,
+    ].join('\n'));
+
+    const called = await workspaceOwner(this.env, input.workspace).slateAs(ROOT_SLATE_CALLER, { op: 'call', id: 'imports', method: 'word' });
+
+    return called.ok ? v.parse(v.string(), called.value) : `refused: ${called.error}`;
+  }
+
   async portReservations(workspace: string): Promise<DurabilityReservation[]> {
     return (await this.workspaceTarget(workspace)).portReservations();
   }
