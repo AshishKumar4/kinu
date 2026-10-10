@@ -743,10 +743,23 @@ export class BackgroundJobRunner {
   }
 
   /** No wake: its reader is leaving. */
-  async retire(): Promise<JobRetirement> {
+  retire(): Promise<JobRetirement> {
+    return this.stopAll(this.deps.store.runningIds());
+  }
+
+  /**
+   * A head or node ended: its jobs' results have no reader left, so this runner's own jobs stop without a wake (a wake
+   * would restart stopped work). Scoped to `controllers`: the store is shared, and orphaned rows belong to
+   * `recoverOrphans()`. Each goes through {@link stop}, so work its external owner refuses to stop stays running.
+   */
+  cancelRunning(): Promise<JobRetirement> {
+    return this.stopAll([...this.controllers.keys()]);
+  }
+
+  private async stopAll(jobIds: readonly string[]): Promise<JobRetirement> {
     const retirement: JobRetirement = { stopped: [], refused: [] };
 
-    for (const jobId of this.deps.store.runningIds()) {
+    for (const jobId of jobIds) {
       const outcome = await this.stop(jobId);
 
       if (outcome === 'stopped') retirement.stopped.push(jobId);
@@ -787,21 +800,6 @@ export class BackgroundJobRunner {
     }
 
     return this.settleCancelled(jobId) ? 'stopped' : 'settled';
-  }
-
-  /**
-   * Stop: cancel this runner's jobs without a wake (a wake would restart stopped work). Scoped to
-   * `controllers`: the store is shared, and orphaned rows belong to `recoverOrphans()`.
-   */
-  cancelRunning(): string[] {
-    const cancelled: string[] = [];
-
-    // Deleting the current key during Map iteration is allowed.
-    for (const jobId of this.controllers.keys()) {
-      if (this.settleCancelled(jobId)) cancelled.push(jobId);
-    }
-
-    return cancelled;
   }
 
   private settleCancelled(jobId: string): boolean {

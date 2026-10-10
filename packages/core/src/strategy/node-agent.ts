@@ -454,7 +454,7 @@ async function runNodeLoop(
     };
   } finally {
     // Cancel this runner's jobs: their results have no reader left.
-    jobRunner.cancelRunning();
+    await jobRunner.cancelRunning();
     detach();
   }
 }
