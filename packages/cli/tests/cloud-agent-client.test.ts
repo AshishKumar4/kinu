@@ -924,14 +924,16 @@ describe('CloudAgentClient — Steer-as-Branch RPC contract', () => {
       const turn = client.send('hire a scout');
       const request = await firstChatRequest(mock);
 
+      // Frames arrive in order: once the one after it is read, a frame the client dropped is known to be dropped.
       mock.reply(frame);
+      mock.reply({ type: 'model_fallback', message: 'after' });
 
-      const reached = await waitFor(() => events
+      const reported = () => events
         .filter((e): e is Extract<AgentClientEvent, { type: 'broadcast' }> => e.type === 'broadcast')
-        .map((e) => e.event)
-        .find((e) => e.type === frame.type), what);
+        .map((e) => e.event);
 
-      expect(reached).toEqual(frame);
+      await waitFor(() => reported().find((e) => e.type === 'model_fallback'), 'the frame after it');
+      expect(reported().find((e) => e.type === frame.type)).toEqual(frame);
 
       mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'done' }, true));
       await turn;
