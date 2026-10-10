@@ -4,7 +4,7 @@
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { DEVICE_PROTOCOL_VERSION, DEVICE_UPDATE, decodeJsonValue, type JsonValue } from '@kinu.run/core';
+import { DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, DEVICE_UPDATE, decodeJsonValue, type JsonValue } from '@kinu.run/core';
 import { createTestUserDO, provisionTestWorkspace, testOwner, TEST_USER_ENV, type TestUserDO } from './helpers/user-do';
 import { CAPABLE_HELLO } from './helpers/device-harness';
 import { DEVICE_UPDATE_COPY } from '../src/hooks/use-device-roster';
@@ -361,6 +361,22 @@ describe('the Devices read model carries the version and the served build', () =
     harness.attachDevice(harness.deviceId);
     await harness.sendDeviceHello(hello({ version: SERVED, updateCheck: true }));
     expect((await devices(harness))[0]).toMatchObject({ connected: true, update: 'current' });
+  });
+
+  test('a daemon from before digest-checked writes stays connected and is offered the update; only such a write is refused', async () => {
+    const harness = await connected();
+    const before = DEVICE_FEATURES.filter((method) => method !== 'writeFileIfDigest');
+
+    await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true, protocolVersion: 2, features: before }));
+    expect((await devices(harness))[0]).toMatchObject({ connected: true, update: 'behind' });
+    expect(harness.devicePushes).toEqual([expect.objectContaining({ type: DEVICE_UPDATE, version: SERVED })]);
+
+    const workspace = { workspaceToken: await provisionTestWorkspace(harness, 'old-daemon-workspace') };
+    const sent = harness.deviceFrames.length;
+    const write = harness.userDO.deviceRpc(workspace, 'writeFileIfDigest', ['/home/me/a.txt', 'eA==', null, { encoding: 'base64' }], { agentName: 'old-daemon-workspace' });
+
+    await expect(write).rejects.toMatchObject({ code: 'unsupported', message: expect.stringContaining('kinu update') });
+    expect(harness.deviceFrames.length).toBe(sent);
   });
 
   test('a later HELLO without a version overwrites: the row says what THIS daemon said', async () => {
