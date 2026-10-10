@@ -25,8 +25,11 @@ export type ObservedFile =
   | { readonly kind: 'revision'; readonly revision: VfsRevision }
   | { readonly kind: 'digest'; readonly sha256: string };
 
-/** Which guarantee held: the plane's revision, or the read bytes' digest. */
-export type WriteGuarantee = 'revision' | 'digest';
+/**
+ * Which check held: the plane's revision, the read bytes' digest, or, for a create on the workspace store, that nothing
+ * was there just before (see `byAbsence`).
+ */
+export type WriteGuarantee = 'revision' | 'digest' | 'absence';
 
 /** What the file holds now, in the plane's own terms: its revision, or its bytes' digest (null: no file). */
 export type FileNow = { readonly revision: VfsRevision } | { readonly sha256: string | null };
@@ -50,7 +53,7 @@ export const FileChangedSchema = v.object({
 function changed(path: string, now: FileNow): FileRefusalError {
   let what = `revision ${String('revision' in now ? now.revision : '')}`;
 
-  if (!('revision' in now)) what = now.sha256 === null ? 'no file' : `content with sha256 ${now.sha256.slice(0, 12)}…`;
+  if (!('revision' in now)) what = now.sha256 === null ? 'no file' : `content with sha256 ${now.sha256.slice(0, 12)}...`;
 
   return new FileRefusalError('stale', `${path} changed since it was read: it now holds ${what}. Read it again before you replace it.`, {
     cause: { kind: 'file.changed', now },
@@ -97,6 +100,43 @@ function byDigest(vfs: VFS & CheckpointFiles, path: string, data: Uint8Array, ex
 }
 
 /**
+ * A create where nothing was read: revision 0, the versioned store's own "no file". Nimbus's composite resolves the path
+ * before its backend sees that revision and answers ENOENT for a missing file (Nimbus ask 36), so there, until it
+ * lands, the create checks that nothing is there and then writes plainly: a file another writer creates between the
+ * two is replaced. Every overwrite stays revision-checked.
+ */
+function byAbsence(vfs: VFS & CheckpointFiles, path: string, data: Uint8Array): Effect.Effect<ConditionalWrite | null, KinuError> {
+  return Effect.gen(function* () {
+    const check = vfs.writeFileIfRevision?.bind(vfs);
+
+    if (check === undefined) return null;
+
+    const created = yield* Effect.tryPromise({ try: async () => check(path, data, ABSENT_REVISION), catch: (cause) => ({ cause }) }).pipe(
+      Effect.catchIf(({ cause }) => isVfsError(cause) && cause.code === 'ENOENT', () => Effect.succeed('unexpressed' as const)),
+      Effect.catchIf(({ cause }) => isVfsError(cause) && cause.code === 'ENOTSUP', () => Effect.succeed(null)),
+      Effect.catch((failed) => Effect.die(failed.cause)),
+    );
+
+    if (created === null) return null;
+
+    if (created !== 'unexpressed') {
+      if (!created.ok) return yield* Effect.fail(changed(path, { revision: created.revision }));
+
+      return { guarantee: 'revision' as const, now: { revision: created.revision }, report: null };
+    }
+
+    if ((yield* Effect.promise(async () => vfs.stat(path))) !== null) {
+      return yield* Effect.fail(changed(path, { sha256: sha256Hex(yield* Effect.promise(async () => vfs.readFile(path))) }));
+    }
+
+    yield* Effect.promise(async () => vfs.writeFile(path, data));
+    const written = yield* Effect.promise(async () => vfs.stat(path));
+
+    return { guarantee: 'absence' as const, now: written?.revision === undefined ? { sha256: sha256Hex(data) } : { revision: written.revision }, report: null };
+  });
+}
+
+/**
  * `data` at `path`, only over what `observed` says was there: by the revision read where the plane checks one, else by
  * the read bytes' digest. A plane that makes neither check refuses; nothing ever writes unconditionally.
  */
@@ -126,7 +166,7 @@ export function writeConditionally(
 
     if (byDigestRead !== null) return byDigestRead;
 
-    const absentByRevision = observed.kind === 'absent' ? yield* byRevision(vfs, path, data, ABSENT_REVISION) : null;
+    const absentByRevision = observed.kind === 'absent' ? yield* byAbsence(vfs, path, data) : null;
 
     return absentByRevision ?? (yield* Effect.fail(UNSUPPORTED(path)));
   }));

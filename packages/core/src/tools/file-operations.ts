@@ -7,7 +7,7 @@ import { isVfsError, VfsError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs
 import { vfsAddressingHint } from '@kinu.run/agent-utils/vfs';
 import * as v from 'valibot';
 import { formatPath, resolvePath, type PathPlanes } from '../vfs/resolve';
-import { writeConditionally, type ObservedFile } from '../vfs/conditional-write';
+import { writeConditionally, type ObservedFile, type WriteGuarantee } from '../vfs/conditional-write';
 import type { CheckpointFiles, Memory, VfsWriteReport } from '../types/primitives';
 import type { TurnContextBudget } from '../context-budget';
 import { ensureDir, vfsDirname } from '../utils/vfs-helpers';
@@ -214,7 +214,7 @@ function fileOps(deps: FileDeps) {
    *  bytes land, so a later failure cannot leave the ledger denying content already on disk. */
   const persist = async (
     path: string, content: string, observe: (revision?: VfsRevision) => void, observed: ObservedFile,
-  ): Promise<VfsWriteReport | null> => {
+  ): Promise<{ readonly report: VfsWriteReport | null; readonly checked: WriteGuarantee }> => {
     const dir = vfsDirname(path);
 
     if (dir) await ensureDir(vfs, dir);
@@ -225,7 +225,7 @@ function fileOps(deps: FileDeps) {
 
     if (deps.memory && indexed) await deps.memory.index(indexed);
 
-    return written.report;
+    return { report: written.report, checked: written.guarantee };
   };
 
   /** The file as it is now, with the revision that names it where the plane versions its files; absent, none. */
@@ -358,10 +358,10 @@ function fileOps(deps: FileDeps) {
         if (refusal && reason) return failure(reason, refusal);
       }
 
-      let report: VfsWriteReport | null;
+      let landed: { readonly report: VfsWriteReport | null; readonly checked: WriteGuarantee };
 
       try {
-        report = await persist(path, content, (revision) => ledger.observeWhole(path, content, revision), observed);
+        landed = await persist(path, content, (revision) => ledger.observeWhole(path, content, revision), observed);
       } catch (err) {
         const vfsFail = await vfsFailure(vfs, { error: err }, 'write', path);
 
@@ -369,7 +369,8 @@ function fileOps(deps: FileDeps) {
       }
 
       return {
-        path, reference: referenceOf(path), bytes: content.length, action: existing === null ? 'created' as const : 'replaced' as const, ...undo(report),
+        path, reference: referenceOf(path), bytes: content.length, action: existing === null ? 'created' as const : 'replaced' as const,
+        checked: landed.checked, ...undo(landed.report),
         ...await slateBuild(deps, path),
       };
     },
@@ -416,10 +417,10 @@ function fileOps(deps: FileDeps) {
         return failure(outcome.reason, outcome.message);
       }
 
-      let report: VfsWriteReport | null;
+      let landed: { readonly report: VfsWriteReport | null; readonly checked: WriteGuarantee };
 
       try {
-        report = await persist(path, outcome.content, (writtenRevision) => ledger.observeEdited(path, current, outcome, writtenRevision), observed);
+        landed = await persist(path, outcome.content, (writtenRevision) => ledger.observeEdited(path, current, outcome, writtenRevision), observed);
       } catch (err) {
         const vfsFail = await vfsFailure(vfs, { error: err }, 'edit', path);
         ledger.recordEdit(path, vfsFail.reason);
@@ -432,7 +433,7 @@ function fileOps(deps: FileDeps) {
       return {
         path, reference: referenceOf(path),
         applied: outcome.applied.map((a) => ({ line: a.line, removedLines: a.removedLines, addedLines: a.addedLines })),
-        ...undo(report),
+        checked: landed.checked, ...undo(landed.report),
         ...await slateBuild(deps, path),
       };
     },

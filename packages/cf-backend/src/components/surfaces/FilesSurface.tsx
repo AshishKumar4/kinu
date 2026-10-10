@@ -24,15 +24,40 @@ import { useToggledSet } from "@/hooks/use-toggled-set";
 import { useFileDrop } from "@/hooks/use-file-drop";
 import { FileViewer } from "./FileViewer";
 import {
-  PLANE, entryRevision, nextTreeCache, putFileBytes, type CachedDir, type FileText,
+  FileWriteConflict, PLANE, entryRevision, nextTreeCache, putFileBytes, type CachedDir, type FileText,
 } from "@kinu.run/core";
+import type { VfsRevision } from "@nimbus-sh/core/vfs/vfs.js";
 import { composing } from "@/components/ui/form";
 
 interface DirectoryResponse { path?: string; entries?: DirEntry[]; error?: string }
 
 type WriteResult = { ok: true } | { error: string };
 
-interface UploadState { name: string; status: "uploading" | "error"; error?: string }
+/**
+ * An upload in flight, failed, or held: a file already there is replaced only when the owner says so (`exists`, with the
+ * revision it holds), and a change between the question and the answer asks again.
+ */
+type UploadState =
+  | { readonly name: string; readonly status: "uploading" }
+  | { readonly name: string; readonly status: "error"; readonly error: string }
+  | { readonly name: string; readonly status: "exists"; readonly file: File; readonly revision: VfsRevision };
+
+/** An upload over a file already there: replaced only on the owner's word. */
+function ReplacePrompt({ name, onReplace, onKeep }: { name: string; onReplace: () => void; onKeep: () => void }) {
+  return (
+    <div role="alertdialog" aria-label={`Replace ${name}?`} className="flex min-w-0 flex-1 items-center gap-2" data-upload-replace>
+      <WarningIcon size={12} className="p-warning shrink-0" />
+      <span className="p-text-2 truncate">Replace <span className="p-text">{name}</span>?</span>
+      <span className="p-text-3 hidden @[30rem]:inline truncate">A file with this name is already here.</span>
+      <span className="ml-auto flex shrink-0 gap-1">
+        <button type="button" data-upload-keep onClick={onKeep}
+          className="rounded px-2 py-0.5 p-text-2 hover:p-text p-row-hover focus-visible:ring-1 focus-visible:ring-[var(--c-accent)] outline-hidden">Cancel</button>
+        <button type="button" data-upload-confirm onClick={onReplace} autoFocus
+          className="rounded px-2 py-0.5 p-accent hover:underline focus-visible:ring-1 focus-visible:ring-[var(--c-accent)] outline-hidden">Replace</button>
+      </span>
+    </div>
+  );
+}
 
 const MOUNT_EXECUTOR: Record<string, string> = Object.fromEntries(
   Object.entries(MOUNT_EXECUTORS).map(([mount, executor]) => [mount.slice(1), executor]),
@@ -142,25 +167,41 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
     + `?executor=${encodeURIComponent(PLANE)}&path=${encodeURIComponent(full)}${download ? "&download=1" : ""}`,
   [agentName]);
 
+  /** One file: created only where none is, or, with `revision`, replacing exactly the file the owner chose to replace. */
+  const sendUpload = useCallback((f: File, revision?: VfsRevision) => Effect.catchCause(Effect.gen(function* () {
+    // Raw bytes over HTTP: no base64 inflation, no frame ceiling.
+    yield* Effect.promise(async () => putFileBytes(rawUrl(joinDir(path, f.name), false), f, revision));
+    setUploads((prev) => prev.filter((u) => u.name !== f.name));
+  }), (failed) => {
+    const conflict = Cause.squash(failed);
+
+    // A file is there, or changed since the owner was asked: they choose again, over what it holds now.
+    const held = (u: UploadState): UploadState => (conflict instanceof FileWriteConflict
+      ? { name: u.name, status: "exists", file: f, revision: conflict.currentRevision }
+      : { name: u.name, status: "error", error: renderThrownChain({ cause: conflict }) });
+
+    return Effect.sync(() => { setUploads((prev) => prev.map((u) => (u.name === f.name ? held(u) : u))); });
+  }), [path, rawUrl]);
+
   // Takes a materialized array: a live FileList empties when the input clears or the drop handler returns.
   const uploadFiles = useCallback((list: readonly File[]) => settle(Effect.gen(function* () {
     if (list.length === 0) return;
     setUploads(list.map((f) => ({ name: f.name, status: "uploading" as const })));
 
-    for (const f of list) {
-      yield* Effect.catchCause(Effect.gen(function* () {
-        // Raw bytes over HTTP: no base64 inflation, no frame ceiling.
-        yield* Effect.promise(async () => putFileBytes(rawUrl(joinDir(path, f.name), false), f));
-        setUploads((prev) => prev.filter((u) => u.name !== f.name));
-      }), showing((chain) => {
-        setUploads((prev) => prev.map((u) => u.name === f.name
-          ? { ...u, status: "error" as const, error: chain }
-          : u));
-      }));
-    }
+    for (const f of list) yield* sendUpload(f);
 
     yield* Effect.promise(async () => reloadListing());
-  })), [path, rawUrl, reloadListing]);
+  })), [reloadListing, sendUpload]);
+
+  const replaceUpload = useCallback((held: Extract<UploadState, { status: "exists" }>) => settle(Effect.gen(function* () {
+    setUploads((prev) => prev.map((u) => (u.name === held.name ? { name: u.name, status: "uploading" as const } : u)));
+    yield* sendUpload(held.file, held.revision);
+    yield* Effect.promise(async () => reloadListing());
+  })), [reloadListing, sendUpload]);
+
+  const keepExisting = useCallback((name: string) => {
+    setUploads((prev) => prev.filter((u) => u.name !== name));
+  }, []);
 
   const commitRename = useCallback((from: string, draft: string) => run(Effect.gen(function* () {
     const name = draft.trim();
@@ -368,10 +409,12 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
         >
           {err && <div className="p-danger px-3 py-1.5 break-words">{err}</div>}
           {uploads.map((u) => (
-            <div key={u.name} className="flex items-center gap-1.5 font-mono px-3 py-1">
-              {u.status === "uploading"
-                ? <><Loader size="sm" /><span className="p-text-2 truncate">{u.name}</span><span className="p-text-3">uploading…</span></>
-                : <><WarningIcon size={12} className="p-danger shrink-0" /><span className="p-text-2 truncate">{u.name}</span><span className="p-danger truncate">{u.error}</span></>}
+            <div key={u.name} className="flex items-center gap-1.5 font-mono px-3 py-1" data-upload={u.status}>
+              {u.status === "uploading" && <><Loader size="sm" /><span className="p-text-2 truncate">{u.name}</span><span className="p-text-3">uploading…</span></>}
+              {u.status === "error" && <><WarningIcon size={12} className="p-danger shrink-0" /><span className="p-text-2 truncate">{u.name}</span><span className="p-danger truncate">{u.error}</span></>}
+              {u.status === "exists" && (
+                <ReplacePrompt name={u.name} onReplace={() => detach(Effect.promise(() => replaceUpload(u)))} onKeep={() => keepExisting(u.name)} />
+              )}
             </div>
           ))}
           {loading && <div className="p-text-3 px-3 py-1.5">Loading…</div>}

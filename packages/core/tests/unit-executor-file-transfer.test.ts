@@ -133,7 +133,7 @@ describe("ExecutorFileUpload", () => {
     expect(plane.files.has("/f.bin")).toBe(false);
   });
 
-  test("conditional finalization preserves a newer write, while supported and unconditional writes complete", async () => {
+  test("finalization preserves a newer write: a replace lands only over the revision it names, and a create only where none is", async () => {
     const path = "/f.bin";
     const plane = makePlane({ [path]: new TextEncoder().encode("first") });
     await plane.vfs.writeFile(path, new TextEncoder().encode("newer"));
@@ -148,16 +148,20 @@ describe("ExecutorFileUpload", () => {
       .toEqual({ ok: true, revision: 3 });
     expect(new TextDecoder().decode(plane.files.get(path))).toBe("current");
 
-    const unconditional = new ExecutorFileUpload(plane.router, "workspace", path);
-    expect(await unconditional.chunk(0, new TextEncoder().encode("unconditional"), true))
-      .toEqual({ ok: true });
-    expect(new TextDecoder().decode(plane.files.get(path))).toBe("unconditional");
+    // No If-Match is a create: over a file already there it is the owner's to choose, so it is a conflict naming it.
+    const create = new ExecutorFileUpload(plane.router, "workspace", path);
+    expect(await create.chunk(0, new TextEncoder().encode("dropped over it"), true))
+      .toEqual({ conflict: true, revision: 3 });
+    expect(new TextDecoder().decode(plane.files.get(path))).toBe("current");
+
+    const fresh = new ExecutorFileUpload(plane.router, "workspace", "/new.bin");
+    expect(await fresh.chunk(0, new TextEncoder().encode("new"), true)).toEqual({ ok: true, revision: 1 });
   });
 
   test("writeExecutorFileOp round-trips what finalize assembled (the plane contract)", async () => {
     const plane = makePlane();
     const bytes = patternBytes(2 * MiB);
-    expect(await writeExecutorFileOp(plane.router, "workspace", "/g.bin", { bytes: bytes })).toEqual({ ok: true });
+    expect(await writeExecutorFileOp(plane.router, "workspace", "/g.bin", { bytes: bytes })).toEqual({ ok: true, revision: 1 });
     expect(await statExecutorFile(plane.router, "workspace", "/g.bin")).toEqual({ size: bytes.byteLength });
   });
 });

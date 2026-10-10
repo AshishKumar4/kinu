@@ -18,6 +18,8 @@ export const SlateBuildNoteSchema = described(v.strictObject({ slate: v.string()
 
 const Written = {
   path: v.string(), reference: described(v.string(), 'The file as results name it, root://path.'), undo: v.optional(described(v.string(), 'Why undo cannot restore this change.')),
+  checked: described(v.picklist(['revision', 'digest', 'absence']),
+    'What made sure no newer write was lost: the revision you read, the content you read, or, for a new file, that none was there.'),
   build: v.optional(SlateBuildNoteSchema),
 };
 
