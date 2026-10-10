@@ -278,8 +278,10 @@ export interface PublicTurnRecorder {
 export function recordPublicTurn(): PublicTurnRecorder {
   let settled: PublicTurn | null = null;
 
-  const stream = new CloudTurnStream(() => {}, (result) => {
-    settled = result;
+  // A recorded frame stream is a turn the workspace took; a refusal at its door never reaches this recorder.
+  const stream = new CloudTurnStream(() => {}, {
+    resolve: (result) => { settled = result; },
+    reject: (refusal) => { throw refusal; },
   });
 
   return {

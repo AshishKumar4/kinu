@@ -239,3 +239,13 @@ describe('a send that has not yet been answered', () => {
     expect(reduceInput(ran.state, { type: 'send-ended' }).effects).toEqual([{ kind: 'send-queued', text: 'next' }]);
   });
 });
+
+// 26244c765 review: /branch typed while a send waited on its answer launched a second send beside it.
+test('a branch with no turn to branch from waits behind a send still out, as a queued prompt does', () => {
+  const sending = run(initialInputState, { type: 'send-started' }, { type: 'branch', draft: 'try the other fix' });
+
+  expect(sending.effects).toEqual([{ kind: 'clear-input' }]);
+  expect(sending.state.queue).toEqual(['try the other fix']);
+  expect(run(initialInputState, { type: 'branch', draft: 'try the other fix' }).effects)
+    .toEqual([{ kind: 'send-queued', text: 'try the other fix' }, { kind: 'clear-input' }]);
+});

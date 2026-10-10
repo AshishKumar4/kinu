@@ -10,6 +10,7 @@ import {
   ORCHESTRATOR_AGENT_SLUG,
   hostedActorSocketPath,
   decodeJsonValue,
+  terminalChatError,
   parseJsonValue,
   type JsonObject,
   type JsonValue,
@@ -248,6 +249,8 @@ const SocketFrameSchema = v.objectWithRest({
   body: v.optional(v.string()),
   done: v.optional(v.boolean()),
   landed: v.optional(v.picklist(['mid-turn', 'turn'])),
+  /** Set only when the workspace refused the request at its door: it was never admitted as a turn. */
+  reason: v.optional(v.string()),
 }, JsonValueSchema);
 
 type SocketFrame = v.InferOutput<typeof SocketFrameSchema>;
@@ -476,8 +479,8 @@ export class CloudAgentClient implements AgentClient {
 
     const requestId = randomRequestId();
 
-    return await new Promise<AgentSendResult>((resolve) => {
-      const turn = new CloudTurnStream((event) => this.emit(event), resolve, { deferStart: steered ? text : null });
+    return await new Promise<AgentSendResult>((resolve, reject) => {
+      const turn = new CloudTurnStream((event) => this.emit(event), { resolve, reject }, { deferStart: steered ? text : null });
       this.activeTurns.set(requestId, turn);
 
       try {
@@ -503,9 +506,9 @@ export class CloudAgentClient implements AgentClient {
 
         ws.send(JSON.stringify(request));
       } catch (err) {
+        // The request never left: a failed send, not a turn that failed.
         this.activeTurns.delete(requestId);
-        this.emit({ type: 'error', message: renderThrownChain({ cause: err }) });
-        turn.settle(true);
+        turn.refused(renderThrownChain({ cause: err }));
       }
     });
   }
@@ -1021,6 +1024,15 @@ export class CloudAgentClient implements AgentClient {
       this.activeTurns.delete(id);
       const body = payload.body ?? '';
       const message = body === '' ? 'Cloud agent stream failed.' : body;
+      const ended = terminalChatError({ type: payload.type, error: true, done: payload.done, body: payload.body, reason: payload.reason });
+
+      // Refused at the door, the send was never admitted: it fails as a send, and no turn is said to have run.
+      if (ended?.refused === true) {
+        active.refused(message);
+
+        return;
+      }
+
       this.emit({ type: 'error', message });
       active.settle(true);
 

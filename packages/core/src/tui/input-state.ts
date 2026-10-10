@@ -74,6 +74,20 @@ function queued(state: InputState, text: string): InputTransition {
   return { state, effects: [{ kind: 'send-queued', text }] };
 }
 
+/** A redirect: beside the running turn, or, with none to branch from, the next prompt behind any send still out. */
+function branched(state: InputState, text: string): InputTransition {
+  if (!text) {
+    return state.activeTurns > 0
+      ? { state, effects: [{ kind: 'hint', text: 'Type the redirect first, then run the branch action.' }] }
+      : { state, effects: [] };
+  }
+
+  if (state.activeTurns > 0) return { state, effects: [{ kind: 'send-branch', text }, { kind: 'clear-input' }] };
+  const next = queued(state, text);
+
+  return { state: next.state, effects: next.state.queue.length > state.queue.length ? next.effects : [...next.effects, { kind: 'clear-input' }] };
+}
+
 /** Esc pressed again within the beat: walk back (once the turn settles, if one runs), or leave when there is nothing. */
 function secondEscape(state: InputState, now: number, hasUserMessages: boolean, busy: boolean): InputTransition {
   if (hasUserMessages) {
@@ -166,21 +180,8 @@ export function reduceInput(state: InputState, event: InputMachineEvent): InputT
     case 'queue':
       return queued(state, event.text.trim());
 
-    case 'branch': {
-      const text = event.draft.trim();
-
-      if (!text) {
-        return state.activeTurns > 0
-          ? { state, effects: [{ kind: 'hint', text: 'Type the redirect first, then run the branch action.' }] }
-          : { state, effects: [] };
-      }
-
-      if (state.activeTurns > 0) {
-        return { state, effects: [{ kind: 'send-branch', text }, { kind: 'clear-input' }] };
-      }
-
-      return { state, effects: [{ kind: 'send-queued', text }, { kind: 'clear-input' }] };
-    }
+    case 'branch':
+      return branched(state, event.draft.trim());
 
     case 'backspace': {
       const last = state.queue.at(-1);

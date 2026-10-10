@@ -18,12 +18,28 @@ export class CloudTurnStream {
   /** Turn-start owed only if the server answers with a stream; null once announced. */
   private deferredStart: string | null;
 
+  private readonly resolve: (result: AgentSendResult) => void;
+
+  private readonly reject: (refusal: Error) => void;
+
   constructor(
     private readonly emit: (event: AgentClientEvent) => void,
-    private readonly resolve: (result: AgentSendResult) => void,
+    send: { readonly resolve: (result: AgentSendResult) => void; readonly reject: (refusal: Error) => void },
     opts: { readonly deferStart: string | null } = { deferStart: null },
   ) {
+    this.resolve = send.resolve;
+    this.reject = send.reject;
     this.deferredStart = opts.deferStart;
+  }
+
+  /**
+   * The workspace refused the send before admitting it: the send fails in the workspace's words. A turn-start already
+   * announced for it is closed, so the count of running turns stays whole; a deferred one is never announced.
+   */
+  refused(message: string): void {
+    if (this.deferredStart === null) this.emit({ type: 'turn-end', turn: { text: '', toolCalls: [], steps: 0, durationMs: Date.now() - this.startedAt, hadError: true } });
+    this.deferredStart = null;
+    this.reject(new Error(message));
   }
 
   landedMidTurn(): void {

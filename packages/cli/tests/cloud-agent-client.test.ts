@@ -365,7 +365,29 @@ describe('CloudAgentClient protocol', () => {
     const client = newClient(mock);
     const outcome = await executeSlashCommand(client, '/plan approve');
 
-    expect(outcome).toEqual({ kind: 'text', text: 'Approved plan plan-1 revision 2. Decision saved, but the next turn could not start: the turn queue is full' });
+    // The decision is told as saved and the turn as not started, in the workspace's own reason; never as running.
+    const text = v.parse(v.object({ kind: v.literal('text'), text: v.string() }), outcome).text;
+
+    expect({ saved: text.includes('Approved plan plan-1 revision 2'), reason: text.includes('the turn queue is full'), running: /implementing it now/.test(text) })
+      .toEqual({ saved: true, reason: true, running: false });
+    await client.close();
+  });
+
+  // 26244c765 review: a send the workspace refused at its door resolved as a failed turn, so the TUI kept its row.
+  test('a send refused before admission fails as a send, in the workspace\'s words, with no turn left open', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+    const events: AgentClientEvent[] = [];
+    client.subscribe((event) => events.push(event));
+
+    const sent = client.send('ship the fix');
+    const request = await firstChatRequest(mock);
+
+    mock.reply({ type: CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE, id: request.id, body: 'This workspace is moving; try again shortly.', done: true, error: true, reason: 'unavailable' });
+
+    await expect(sent).rejects.toThrow('This workspace is moving; try again shortly.');
+    expect(events.filter((event) => event.type === 'error')).toEqual([]);
+    expect(events.filter((event) => event.type === 'turn-start').length).toBe(events.filter((event) => event.type === 'turn-end').length);
     await client.close();
   });
 
