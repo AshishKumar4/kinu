@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-09",
-  "files": 3142,
-  "functions": 82472,
+  "measuredAt": "2026-10-10",
+  "files": 3150,
+  "functions": 82792,
   "ceiling": 87,
   "line": 27,
   "inventory": [
@@ -287,10 +287,6 @@
     },
     {
       "key": "packages/core/src/orchestrator/session-stream.ts#SessionStream.writePart",
-      "complexity": 27
-    },
-    {
-      "key": "packages/core/src/orchestrator/turn-accumulator.ts#TurnAccumulator.writeStep",
       "complexity": 27
     },
     {

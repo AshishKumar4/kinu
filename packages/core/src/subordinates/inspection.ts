@@ -167,16 +167,19 @@ export async function readSubordinateInspection(
       return { view: 'events', path, runId: request.runId, page };
     }
 
-    case 'step': {
-      if (!tableExists(sql, 'run_events') || !tableExists(sql, 'session_messages')) return missingSubordinateHistory(path);
-
-      const event = new RunEventRecorder(sql, actor).read(request.runId, { since: request.eventIndex, limit: 1 })[0];
-
-      if (event?.type !== 'step_finish' || event.eventIndex !== request.eventIndex) return missingSubordinateHistory(path);
-
-      const output = await transcriptFor(actor).stepOutput(event.parts, request.from ?? 0);
-
-      return { view: 'step', path, runId: request.runId, eventIndex: event.eventIndex, ...output };
-    }
+    case 'step': return readStepInspection(sql, actor, transcriptFor, request);
   }
+}
+
+/** A sealed output read is independent of roster, plan and timeline projections. */
+async function readStepInspection(sql: SqlExecutor, actor: ActorHandle, transcriptFor: SubordinateInspectionSource['transcriptFor'], request: Extract<SubordinateInspectionRequest, { view: 'step' }>): Promise<SubordinateInspectionResult> {
+  if (!tableExists(sql, 'run_events') || !tableExists(sql, 'session_messages')) return missingSubordinateHistory(request.path);
+
+  const event = new RunEventRecorder(sql, actor).read(request.runId, { since: request.eventIndex, limit: 1 })[0];
+
+  if (event?.type !== 'step_finish' || event.eventIndex !== request.eventIndex) return missingSubordinateHistory(request.path);
+
+  const output = await transcriptFor(actor).stepOutput(event.parts, request.from ?? 0);
+
+  return { view: 'step', path: request.path, runId: request.runId, eventIndex: event.eventIndex, ...output };
 }
