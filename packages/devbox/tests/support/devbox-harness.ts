@@ -104,6 +104,8 @@ export interface FakeStorage {
   /** Park the NEXT read of one key: the ladder row's read before a decision, or its read
    *  inside the conditional write, to pin an interleaving the container calls cannot reach. */
   gateOn(key: string, held: Gate): void;
+  /** Park the next delete before its durable commit, to interleave a native termination with a plan snapshot. */
+  gateDeleteOn(key: string, held: Gate): void;
   /** Stands in for an attach failure: an ephemeral box's `attach()` cannot fail, and every later
    *  step reports instead of throwing, so a container fault cannot propagate past the ladder. */
   faultOn(key: string, error: Error): void;
@@ -122,6 +124,7 @@ interface AlarmModel {
 export function fakeStorage(): FakeStorage {
   const rows = new Map<string, StoredValue>();
   const gates: Record<string, Gate | undefined> = {};
+  const deleteGates: Record<string, Gate | undefined> = {};
   const alarm: AlarmModel = { at: null, scheduled: [] };
   const faults: Record<string, Error | undefined> = {};
   const listFaults = new Map<string, Error>();
@@ -168,6 +171,14 @@ export function fakeStorage(): FakeStorage {
       let removed = 0;
 
       for (const key of Array.isArray(keys) ? keys : [keys]) {
+        const held = deleteGates[key];
+
+        if (held !== undefined) {
+          deleteGates[key] = undefined;
+          held.enter();
+          await held.promise;
+        }
+
         if (rows.delete(key)) { removed++; keyVersions.set(key, (keyVersions.get(key) ?? -1) + 1); }
       }
 
@@ -310,6 +321,7 @@ export function fakeStorage(): FakeStorage {
     rows,
     handle,
     gateOn: (key, held) => { gates[key] = held; },
+    gateDeleteOn: (key, held) => { deleteGates[key] = held; },
     failListOn: (prefix, error) => { if (error === undefined) listFaults.delete(prefix); else listFaults.set(prefix, error); },
     faultOn: (key, error) => { faults[key] = error; },
   };
