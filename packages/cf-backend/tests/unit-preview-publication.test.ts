@@ -193,6 +193,20 @@ describe('a withdrawn port stays withdrawn, whatever the container still reports
     expect(await sandboxPreviewExposed(kv, claim)).toBe(false);
   });
 
+  test('a listing a second after a revoke the container did not answer does not carry the port back', async () => {
+    const kv = makeKv();
+    const { box } = portBox({ failRevoke: true });
+    setSystemTime(new Date('2026-03-01T12:00:00.000Z'));
+    await sandboxPreviewExposures(kv, SANDBOX_ID).publish(PORT, TOKEN);
+
+    await expect(lane(kv, box).unexposePort(PORT)).rejects.toThrow('container unreachable');
+    setSystemTime(new Date('2026-03-01T12:00:01.000Z'));
+    await lane(kv, box).getExposedPorts(SUFFIX);
+
+    expect(await sandboxPreviewExposed(kv, claim)).toBe(false);
+    setSystemTime();
+  });
+
   test('a listing that read the container before the withdrawal does not vouch for the port after it', async () => {
     const kv = makeKv();
     const { box } = portBox();
