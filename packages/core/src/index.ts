@@ -1687,7 +1687,7 @@ export { ActorSession, CLEAR_NEEDS_IDLE, type ActorSessionOptions, type ActorTur
 
 
 export {
-  ChatSession, type ChatSessionOptions, type ChatSessionPorts, type CompactOutcome, type ComposedRequest, type ChatTransport, type ChatTurnInput,
+  ChatSession, type ChatSessionOptions, type ChatSessionPorts, type OpenWork, type CompactOutcome, type ComposedRequest, type ChatTransport, type ChatTurnInput,
   type PreparedTurn, type TurnOpening, type OwedTerminalEffectsInput, type SessionEvent, type SendOptions, type SendLandingWaiter,
 } from './orchestrator/chat-session';
 

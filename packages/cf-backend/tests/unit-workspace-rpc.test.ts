@@ -30,6 +30,7 @@ const unusedWorkspace: AgentWorkspaceCalls = {
   owes: unused,
   birthContext: unused,
   steerSkills: unused,
+  openWork: unused,
   advise: unused,
   enqueueTurn: unused,
   executeTool: unused,

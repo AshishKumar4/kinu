@@ -99,7 +99,7 @@ export async function sessionFixture(input: {
       },
       owedTerminalEffects: () => [], terminal: () => terminal,
       driverGate: () => null,
-      taskList: () => actor.stores.taskList, hasPendingAsyncWake: () => false,
+      openWork: async () => ({ tasks: actor.stores.taskList.listOpen(), asyncWakePending: false }),
       steerSkills: async () => null, stillOwed: () => true,
       ...(input.cacheWarming !== undefined && { cacheWarming: input.cacheWarming(actor) }),
       ...input.ports,

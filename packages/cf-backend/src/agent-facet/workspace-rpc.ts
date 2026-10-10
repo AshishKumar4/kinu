@@ -116,6 +116,7 @@ export function workspaceClient(workspace: AgentWorkspaceCalls): AgentWorkspace 
     owes: (...args) => settle(workspaceRpcAnswer(workspace.owes(...args))),
     birthContext: (...args) => settle(workspaceRpcAnswer(workspace.birthContext(...args))),
     steerSkills: (...args) => settle(workspaceRpcAnswer(workspace.steerSkills(...args))),
+    openWork: () => settle(workspaceRpcAnswer(workspace.openWork())),
     advise: (...args) => settle(workspaceRpcAnswer(workspace.advise(...args))),
     enqueueTurn: (...args) => settle(workspaceRpcAnswer(workspace.enqueueTurn(...args))),
     executeTool: (...args) => settle(workspaceRpcAnswer(workspace.executeTool(...args))),

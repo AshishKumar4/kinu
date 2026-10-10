@@ -57,7 +57,8 @@ import { subordinateTurnContext } from '../subordinates/support';
 import { taskTurnEnding, type OwedReport, type TaskTurnEnding } from '../subordinates/temporary';
 import { SIGNALS_SEEN_METADATA_KEY, TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY, type SeenSplice } from '../read-models/background-event';
 import { TaskReminders, TASK_REMINDER_EVENT } from '../tasks/reminder';
-import type { TaskListStore } from '../tools/task-store';
+import type { AgentTaskTree } from '../tools/task-store';
+import type { ActiveRoster } from '../types/dynamic-context';
 import { inheritedAsModelMessage } from '../heads/head-inference';
 import type { SerializedMessage } from '../types/heads';
 import { sendStateOf, type SendState } from './send-state';
@@ -226,6 +227,12 @@ export interface ComposedRequest {
 /** `/compact` folded into Better Compact's summary, armed a server-side compaction, or found nothing to fold. */
 export type CompactOutcome = 'folded' | 'armed' | 'nothing';
 
+/** What an agent still has to do as a turn of its settles. */
+export interface OpenWork {
+  readonly tasks: ActiveRoster<AgentTaskTree>;
+  readonly asyncWakePending: boolean;
+}
+
 /** Each port is asked per call, never captured. */
 export interface ChatSessionPorts {
   /** Runs after the opening row and run are durable; a throw ends the turn as an error with one `turn-end`. */
@@ -250,10 +257,11 @@ export interface ChatSessionPorts {
   owed?(): void;
   /** The queue drained and no turn runs; absent where the process is the wake, as for {@link armTurnWake}. */
   quiet?(): void;
-  /** Read at commit, never captured earlier. */
-  taskList(): TaskListStore;
-  /** A reminder fired behind such work would race its wake. */
-  hasPendingAsyncWake(): boolean;
+  /**
+   * The agent's open tasks, and whether async work will wake it (a reminder fired behind it would race its wake): read
+   * as the turn settles, where its `tasks` tool writes and its jobs run, which may be another object's than its chat's.
+   */
+  openWork(): Promise<OpenWork>;
   steerSkills(text: string): Promise<string | null>;
   /** Asked at dequeue; false drops the turn. */
   stillOwed(metadata: JsonObject | undefined): boolean;
@@ -1390,6 +1398,9 @@ export class ChatSession {
       taskTurnEnding(runError === null, interrupted), fullText, () => this.transcript.narration(execution.outputPartReferences),
     ) ?? null;
 
+    // A turn that is the reminder never owes another.
+    const openWork = eventName === TASK_REMINDER_EVENT ? null : await this.ports.openWork();
+
     // One commit — see {@link commitTurn}.
     const commit = this.commitTurn({
       item,
@@ -1397,6 +1408,7 @@ export class ChatSession {
       event: eventName,
       assistantText: fullText,
       owedReport,
+      openWork,
       preparedAssistant,
       runError,
       end,
@@ -1484,6 +1496,8 @@ export class ChatSession {
     readonly event: string | undefined;
     readonly assistantText: string;
     readonly owedReport: OwedReport | null;
+    /** Null for a turn that owes no reminder. */
+    readonly openWork: OpenWork | null;
     readonly preparedAssistant: PreparedConversationEntry | null;
     readonly runError: string | null;
     /** Classified once by the caller — see `closeRun`. */
@@ -1518,15 +1532,17 @@ export class ChatSession {
       const status = input.end.reason;
       const turn = this.snapshotTurn(item, input.assistantText, messageId);
 
-      // Decided where the roster is frozen; a turn that is the reminder never owes another.
-      const taskReminder = input.event === TASK_REMINDER_EVENT
+      // Decided where the roster is frozen, over the work read as the turn settled.
+      const { openWork } = input;
+
+      const taskReminder = openWork === null
         ? null
         : this.taskReminders.decide({
-          open: this.ports.taskList().listOpen(),
+          open: openWork.tasks,
           assistantText: input.assistantText,
           workMode: this.actorSession.workMode,
           completed: runError === null,
-          asyncWakePending: this.ports.hasPendingAsyncWake(),
+          asyncWakePending: openWork.asyncWakePending,
         });
 
       // No answer row: the roster's contract is an empty id.

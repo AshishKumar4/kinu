@@ -585,9 +585,8 @@ export class LocalAgentSession {
         owedTerminalEffects: (input) => this.owedTerminalEffects(input),
         // Only the host knows the child's lifetime and whether the parent drove the turn.
         owedReport: async (ending, assistantText, narration) => await this.parentRelay?.owed(ending, assistantText, narration) ?? null,
-        taskList: () => this.taskList,
         // A running job's settle wakes the session; a reminder would race it.
-        hasPendingAsyncWake: () => this.jobs.listRunning(1).total > 0,
+        openWork: async () => ({ tasks: this.taskList.listOpen(), asyncWakePending: this.jobs.listRunning(1).total > 0 }),
         terminal: () => this.terminal,
         driverGate: () => this.driverGate?.() ?? null,
         steerSkills: (text) => steerSkillsBlock({

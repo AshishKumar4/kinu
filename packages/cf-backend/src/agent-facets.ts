@@ -89,6 +89,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   owes(next: number | null, holds: boolean) { return this.open(this.answers.owes(next, holds)); }
   birthContext(drainTurnId: string) { return this.open(this.answers.birthContext(drainTurnId)); }
   steerSkills(text: string, alreadyActive: readonly string[]) { return this.open(this.answers.steerSkills(text, alreadyActive)); }
+  openWork() { return this.open(this.answers.openWork()); }
   getAuth(key: string, opts?: AuthRequest) { return this.open(this.answers.getAuth(key, opts)); }
   listCredentials() { return this.open(this.answers.listCredentials()); }
   relayDevice(provider: RelayedProvider) { return this.open(this.answers.relayDevice(provider)); }
@@ -199,6 +200,7 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   owes(next: number | null, holds: boolean) { return this.owned((host) => host.owes(next, holds)); }
   birthContext(drainTurnId: string) { return this.owned((host) => host.birthContext(drainTurnId)); }
   steerSkills(text: string, alreadyActive: readonly string[]) { return this.owned((host) => host.steerSkills(text, alreadyActive)); }
+  openWork() { return this.owned((host) => host.openWork()); }
   getAuth(key: string, opts?: AuthRequest) { return this.owned((host) => host.getAuth(key, opts)); }
   listCredentials() { return this.owned((host) => host.listCredentials()); }
   relayDevice(provider: RelayedProvider) { return this.owned((host) => host.relayDevice(provider)); }

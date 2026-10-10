@@ -882,6 +882,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         limits: this.modelCatalog.window(),
         alreadyActive: new Set(alreadyActive),
       }),
+      // Its tasks tool and its jobs run here, over its own rows, main's as any agent's.
+      openWork: async () => {
+        const { stores } = this.agentBound(actorId);
+
+        return { tasks: stores.taskList.listOpen(), asyncWakePending: stores.jobs.listRunning(1).total > 0 };
+      },
       advise: (review) => this.agentTurns.advise(actorId, review),
       enqueueTurn: (input) => this.enqueueHostedTurn(this.actorHost().bindStores(actorReferenceOf(this.liveAgentOf(actorId))), input),
       executeTool: (call) => {

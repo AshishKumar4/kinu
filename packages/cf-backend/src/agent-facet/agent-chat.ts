@@ -112,9 +112,8 @@ export class FacetChat {
         driverGate: () => null,
         armTurnWake: (atMs) => this.tell(atMs),
         quiet: () => { this.atRest(); },
-        taskList: () => actor.stores.taskList,
-        // Its jobs run in the workspace, whose settle wakes it.
-        hasPendingAsyncWake: () => false,
+        // Its tasks tool and its jobs run in the workspace.
+        openWork: () => workspace.openWork(),
         steerSkills: (text) => workspace.steerSkills(text, this.activeSkills),
         stillOwed: (metadata) => planHandoffStillOwed(metadata, actor.stores.planReviews),
         birthContext: (drainTurnId) => workspace.birthContext(drainTurnId),

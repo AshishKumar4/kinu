@@ -215,6 +215,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           owes: (next, holds) => host.owes(next, holds),
           birthContext: (drainTurnId) => host.birthContext(drainTurnId),
           steerSkills: (text, alreadyActive) => host.steerSkills(text, alreadyActive),
+          openWork: () => host.openWork(),
           advise: (review) => host.advise(review),
           enqueueTurn: (input) => host.enqueueTurn(input),
           executeTool: (call) => host.executeTool(call),
