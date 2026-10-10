@@ -484,5 +484,23 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 
 			return null;
 		},
+		// The plane the path lands on compares and replaces in its own process; a plane that versions its files
+		// answers revision-checked writes instead.
+		writeFileIfDigest: (path, data, expected) => settle(Effect.gen(function* () {
+			const target = yield* Effect.promise(async () => landing(path));
+			const route = target.route;
+			// A mount's own files are Kinu's planes, which may carry the extras Nimbus does not name.
+			const source: (VFS & CheckpointFiles) | null | undefined = route?.source;
+
+			if (route?.readOnly === true) return yield* Effect.fail(new VfsError('EROFS', 'read-only file system', path));
+
+			const replace = source?.writeFileIfDigest?.bind(source);
+
+			if (route === null || route === undefined || replace === undefined) {
+				return yield* Effect.fail(new VfsError('ENOTSUP', 'this file plane does not support digest-checked writes', path));
+			}
+
+			return yield* Effect.promise(async () => replace(route.path, data, expected));
+		})),
 	};
 }

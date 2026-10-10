@@ -5,9 +5,11 @@ export const sandboxHandleLifecycle: Pick<
   SandboxHandle,
   | 'ensureReady' | 'startSupervisedProcess' | 'stopSupervisedProcess'
   | 'listSupervisedProcesses' | 'portToken' | 'notePortRemoved' | 'resize' | 'portListeners' | 'answerRest' | 'statFile'
+  | 'writeFileIfDigest'
 > = {
   ensureReady: async () => {},
   statFile: async () => { throw new Error('this fixture does not read native metadata'); },
+  writeFileIfDigest: async () => { throw new Error('this fixture does not replace files under a digest'); },
   startSupervisedProcess: async () => ({ processId: 'proc-1' }),
   stopSupervisedProcess: async () => ({ stopped: true }),
   listSupervisedProcesses: async () => [],

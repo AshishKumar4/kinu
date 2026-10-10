@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "versionRefusalClose": 4406,
   "methods": {
     "ping": {},
@@ -10,6 +10,7 @@
     "readFile": { "deviceView": true },
     "readRange": { "deviceView": true },
     "writeFile": { "deviceView": true },
+    "writeFileIfDigest": { "deviceView": true },
     "listFiles": { "deviceView": true },
     "statPath": { "deviceView": true },
     "unlinkPath": { "deviceView": true },

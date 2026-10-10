@@ -1,4 +1,7 @@
 import { exists, type VFS, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
+import { FileChangedSchema, writeConditionally, type FileNow, type ObservedFile } from '../vfs/conditional-write';
+import { sha256Hex } from '../safety/argument-digest';
+import type { CheckpointFiles } from '../types/primitives';
 import { normalizePath } from '@nimbus-sh/core/vfs/composite.js';
 /**
  * The file manager's read/write surface, one executor at a time, each in its own native paths
@@ -9,12 +12,12 @@ import {
   MOUNT_EXECUTORS, RESIDENT_TEXT_MAX_BYTES, listWithVfsOps,
   readBoundedWithVfsOps, keptByRemoval, partialTreeRemovalMessage, removeTreeWithVfsOps,
 } from '../vfs/mounts';
-import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { move } from '@nimbus-sh/core/vfs/move.js';
 import { inlineFileType } from './file-types';
 import { isSystemManaged } from '../vfs/workspace-path';
 
 import { Effect } from 'effect';
+import * as v from 'valibot';
 import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, settle, type Refusal } from '../obs/index';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { readBoundedStream } from '../http/http';
@@ -310,7 +313,7 @@ export class ExecutorFileDownload {
   }
 }
 
-function executorFiles(router: ExecutorFileLookup, executorId: string): VFS | null {
+function executorFiles(router: ExecutorFileLookup, executorId: string): (VFS & CheckpointFiles) | null {
   return router.getProvider(executorId)?.files ?? null;
 }
 
@@ -408,8 +411,8 @@ export function getExecutorFiles(
   })));
 }
 
-/** One file's text, bounded before it is read. A revision is returned only with native
- *  compare-and-write; size/mtime never grants edit authority. */
+/** One file's text, bounded before it is read. Its `revision` is what an edit is conditioned on (`writeConditionally`):
+ *  the plane's own revision where it versions files, else the digest of these bytes; size/mtime never grant it. */
 export function readExecutorFile(
   router: ExecutorFileLookup,
   executorId: string,
@@ -446,8 +449,10 @@ export function readExecutorFile(
     if (!result.truncated) {
       if (stat?.revision !== undefined && vfs.writeFileIfRevision !== undefined) {
         result.revision = stat.revision;
+      } else if (vfs.writeFileIfDigest !== undefined) {
+        result.revision = `${DIGEST_REVISION}${sha256Hex(bytes)}`;
       } else {
-        result.readOnlyReason = 'This file plane cannot protect an in-place edit from a newer write. Download it to edit safely.';
+        result.readOnlyReason = CONDITIONAL_WRITE_UNSUPPORTED;
       }
     }
 
@@ -455,7 +460,7 @@ export function readExecutorFile(
   })));
 }
 
-/** No expected revision writes unconditionally. */
+/** No expected revision creates the file, and refuses where one is already there. */
 export interface ExecutorFileWrite {
   readonly bytes: Uint8Array;
   readonly expectedRevision?: VfsRevision;
@@ -473,31 +478,36 @@ export function writeExecutorFileOp(
 
   if (!vfs) return Promise.resolve({ error: `Executor "${executorId}" has no file plane` });
   const { bytes, expectedRevision } = upload;
-  const conditional = vfs.writeFileIfRevision?.bind(vfs);
 
-  if (expectedRevision === undefined) {
-    return settle(orError(step(async (): Promise<ExecutorWriteResult> => {
-      await vfs.writeFile(path, bytes);
+  return settle(step(() => writeConditionally(vfs, path, bytes, observedBy(expectedRevision))).pipe(Effect.match({
+    onSuccess: (written): ExecutorWriteResult => ({ ok: true, revision: revisionOf(written.now) }),
+    onFailure: (failed): ExecutorWriteResult => {
+      const refused = failed.cause instanceof KinuError ? failed.cause : null;
+      const changed = v.safeParse(FileChangedSchema, refused?.cause);
 
-      return { ok: true };
-    })));
-  }
+      if (changed.success) return { conflict: true, revision: revisionOf(changed.output.now) };
 
-  if (conditional === undefined) {
-    return Promise.resolve({
-      unsupported: true,
-      error: CONDITIONAL_WRITE_UNSUPPORTED,
-    });
-  }
-
-  return settle(step(async () => conditional(path, bytes, expectedRevision)).pipe(Effect.match({
-    onSuccess: (result): ExecutorWriteResult => (result.ok
-      ? { ok: true, revision: result.revision }
-      : { conflict: true, revision: result.revision }),
-    onFailure: (failed): ExecutorWriteResult => (isVfsError(failed.cause) && failed.cause.code === 'ENOTSUP'
-      ? { unsupported: true, error: CONDITIONAL_WRITE_UNSUPPORTED }
-      : { error: renderThrownChain(failed) }),
+      return refused?.code === 'unsupported' ? { unsupported: true, error: CONDITIONAL_WRITE_UNSUPPORTED } : { error: renderThrownChain(failed) };
+    },
   })));
+}
+
+/** A digest stands in for a revision on a plane that keeps none: the owner's editor echoes it back as one. */
+const DIGEST_REVISION = 'sha256:';
+
+function observedBy(revision: VfsRevision | undefined): ObservedFile {
+  if (revision === undefined) return { kind: 'absent' };
+
+  return typeof revision === 'string' && revision.startsWith(DIGEST_REVISION)
+    ? { kind: 'digest', sha256: revision.slice(DIGEST_REVISION.length) }
+    : { kind: 'revision', revision };
+}
+
+/** What the file holds now, as the editor names it. Absent is revision 0, as Nimbus counts it. */
+function revisionOf(now: FileNow): VfsRevision {
+  if ('revision' in now) return now.revision;
+
+  return now.sha256 === null ? 0 : `${DIGEST_REVISION}${now.sha256}`;
 }
 
 export function readExecutorFileBytes(

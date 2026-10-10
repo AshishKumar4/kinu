@@ -13,7 +13,7 @@ import { sandboxPreviewLabelOf } from "@kinu.run/core";
 import type { SandboxPreviewExposures } from "@kinu.run/core";
 
 type ContainerOperations = Pick<KinuDevbox,
-  "execUntimed" | "execUntimedStream" | "killUntimed" | "releaseUntimed" | "resolveReadiness" | "readFile" | "writeFile" | "listFiles" | "statFile"
+  "execUntimed" | "execUntimedStream" | "killUntimed" | "releaseUntimed" | "resolveReadiness" | "readFile" | "writeFile" | "writeFileIfDigest" | "listFiles" | "statFile"
   | "deleteFile" | "exposePort" | "getExposedPorts" | "unexposePort" | "startSupervised"
   | "stopSupervised" | "listSupervised" | "portToken" | "notePortRemoved" | "resize" | "portListeners" | "answerRest">;
 
@@ -230,6 +230,7 @@ export function adaptCloudflareSandbox(
     readFile: (path, opts) => settle(onContainer(() => handle.readFile(path, opts))),
     writeFile: (path, content, opts) =>
       settle(onContainer(() => jsonResultOrVoid(handle.writeFile(path, content, opts)))),
+    writeFileIfDigest: (path, content, expected) => settle(onContainer(() => handle.writeFileIfDigest(path, content, expected))),
     listFiles: (path, opts) => settle(onContainer(() => handle.listFiles(path, opts))),
     statFile: (path, opts) => settle(onContainer(() => handle.statFile(path, opts))),
     deleteFile: (path) => settle(onContainer(() => jsonResultOrVoid(handle.deleteFile(path)))),

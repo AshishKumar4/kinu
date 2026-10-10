@@ -35,8 +35,8 @@ export const FILE_REFUSAL_REASONS = [
 ] as const satisfies readonly (FileEditFailure | 'unread' | 'stale')[];
 
 export class FileRefusalError extends KinuError {
-  constructor(readonly verdict: (typeof FILE_REFUSAL_REASONS)[number], message: string) {
-    super('bad_input', message);
+  constructor(readonly verdict: (typeof FILE_REFUSAL_REASONS)[number], message: string, options?: ErrorOptions) {
+    super('bad_input', message, options);
   }
 }
 

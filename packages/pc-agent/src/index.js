@@ -11,6 +11,63 @@ const os = require('node:os');
 
 const crypto = require('node:crypto');
 
+const sha256Of = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
+
+/**
+ * Writes `data` only if the file's bytes still hash to `expected` (null: only if no file is there). The compare and a
+ * temp-file-plus-rename replacement run here, in one synchronous step of this process, so no other write of this
+ * daemon interleaves, and a reader never sees half a file. Answers the new digest, or the one found (null: absent).
+ */
+/**
+ * A write frame: confined as a write and checkpointed as one, then `write` with the decoded bytes. An answer that wrote
+ * nothing (`ok: false`) carries no checkpoint note.
+ */
+function checkpointedWrite(msg, { requested, content, options }, checkpoints, write) {
+  const view = viewFromFrame(msg);
+  const confined = confinedDeviceViewPath(view, requested, 'write');
+  const covers = (candidate) => view.checkpointDirectory(candidate).why === null;
+
+  const verdict = checkpoints && msg.checkpoint
+    ? view.checkpointDirectory(hintedDir(msg.checkpoint) ?? checkpoints.workdirForPath(confined, covers))
+    : null;
+
+  const data = options?.encoding === 'base64' ? Buffer.from(String(content), 'base64') : Buffer.from(String(content));
+
+  return mutation(checkpoints, msg.checkpoint, coveredBy(verdict), (snapshot) => {
+    const answer = write(confined, data);
+
+    if (answer.ok === false) return answer;
+    const skipped = whyUncheckpointed(verdict, snapshot);
+
+    return skipped === null ? answer : { ...answer, uncheckpointed: skipped };
+  });
+}
+
+function replaceIfDigest(target, data, expected) {
+  let found = null;
+
+  try {
+    found = sha256Of(fs.readFileSync(target));
+  } catch (cause) {
+    if (cause.code !== 'ENOENT') throw cause;
+  }
+
+  if (found !== expected) return { ok: false, sha256: found };
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${crypto.randomBytes(6).toString('hex')}.kinu-write`);
+
+  try {
+    // A replaced file keeps its mode.
+    fs.writeFileSync(temporary, data, found === null ? undefined : { mode: fs.statSync(target).mode });
+    fs.renameSync(temporary, target);
+  } catch (cause) {
+    fs.rmSync(temporary, { force: true });
+    throw cause;
+  }
+
+  return { ok: true, sha256: sha256Of(data) };
+}
+
 const { spawn } = require('node:child_process');
 
 const sandbox = require('./sandbox.js');
@@ -2915,22 +2972,15 @@ function handle(msg, ws, ctx) {
       const bytes = readRangeBytes(confinedDeviceViewPath(viewFromFrame(msg), params[0], 'read'), offset, length);
       rpc(ws, id, { encoding: 'base64', content: bytes.toString('base64') });
     } else if (method === METHODS.writeFile) {
-      const options = params[2] ?? {};
-      const view = viewFromFrame(msg);
-      const confined = confinedDeviceViewPath(view, params[0], 'write');
-      const covers = (candidate) => view.checkpointDirectory(candidate).why === null;
-
-      const verdict = checkpoints && msg.checkpoint
-        ? view.checkpointDirectory(hintedDir(msg.checkpoint) ?? checkpoints.workdirForPath(confined, covers))
-        : null;
-
-      rpcWhenSettled(ws, id, mutation(checkpoints, msg.checkpoint, coveredBy(verdict), (snapshot) => {
+      rpcWhenSettled(ws, id, checkpointedWrite(msg, { requested: params[0], content: params[1], options: params[2] }, checkpoints, (confined, data) => {
         fs.mkdirSync(path.dirname(confined), { recursive: true });
-        fs.writeFileSync(confined, options.encoding === 'base64' ? Buffer.from(String(params[1]), 'base64') : params[1]);
-        const skipped = whyUncheckpointed(verdict, snapshot);
+        fs.writeFileSync(confined, data);
 
-        return skipped === null ? { success: true } : { success: true, uncheckpointed: skipped };
+        return { success: true };
       }));
+    } else if (method === METHODS.writeFileIfDigest) {
+      rpcWhenSettled(ws, id, checkpointedWrite(msg, { requested: params[0], content: params[1], options: params[3] }, checkpoints,
+        (confined, data) => replaceIfDigest(confined, data, params[2] ?? null)));
     } else if (method === METHODS.listFiles) {
       rpc(ws, id, listFilesAnswer(msg));
     } else if (method === METHODS.statPath) {

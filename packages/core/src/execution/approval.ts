@@ -150,6 +150,7 @@ export function withApprovalGatedFiles(
 
   const reported = vfs.writeFileWithReport?.bind(vfs);
   const conditional = vfs.writeFileIfRevision?.bind(vfs);
+  const digestChecked = vfs.writeFileIfDigest?.bind(vfs);
   const atRevision = vfs.readFileAtRevision?.bind(vfs);
   const readRange = vfs.readRange?.bind(vfs);
   const rename = vfs.rename?.bind(vfs);
@@ -160,6 +161,10 @@ export function withApprovalGatedFiles(
 
   if (conditional) {
     gated.writeFileIfRevision = (path, data, expected) => settle(asked('write', path, (absolute) => conditional(absolute, data, expected), data));
+  }
+
+  if (digestChecked) {
+    gated.writeFileIfDigest = (path, data, expected) => settle(asked('write', path, (absolute) => digestChecked(absolute, data, expected), data));
   }
 
   if (atRevision) gated.readFileAtRevision = (path, revision, range) => settle(asked('read', path, (absolute) => atRevision(absolute, revision, range)));

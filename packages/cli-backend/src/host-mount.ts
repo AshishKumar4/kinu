@@ -8,8 +8,8 @@ import { lstatSync, mkdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, 
 import * as fs from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { Effect } from 'effect';
-import type { FileCheckpoints, FileReach, MountedVfs, PathPlanes, VfsMount } from '@kinu.run/core';
-import { agentHome, FOLDER_SUBTREE, MAIN_AGENT, withMountTable, workspacePath } from '@kinu.run/core';
+import type { CheckpointFiles, FileCheckpoints, FileReach, MountedVfs, PathPlanes, VfsDigestWrite, VfsMount } from '@kinu.run/core';
+import { agentHome, FOLDER_SUBTREE, MAIN_AGENT, sha256Hex, withMountTable, workspacePath } from '@kinu.run/core';
 import { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
 import { syscallError, toVfsError, type VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { settle, tolerate, tolerateAsync } from '@kinu.run/core/obs';
@@ -35,7 +35,31 @@ function throwVfsError(input: { error: unknown; syscall: string; path: string })
   throw toVfsError(input.error, input.syscall, input.path);
 }
 
-type HostFiles = VFS & Required<Pick<VFS, 'readRange' | 'rmdir' | 'rename' | 'readlink'>>;
+type HostFiles = VFS & Required<Pick<VFS, 'readRange' | 'rmdir' | 'rename' | 'readlink'>> & Required<Pick<CheckpointFiles, 'writeFileIfDigest'>>;
+
+/**
+ * `data` at `path` only if its bytes still hash to `expected` (null: only if none is there), replaced through a temp file
+ * and a rename. The compare and the rename run back to back in this process; this host gives no lock against another
+ * process's write in that instant, and a reader never sees half a file.
+ */
+async function replaceIfDigest(path: string, data: Uint8Array, expected: string | null): Promise<VfsDigestWrite> {
+  const held = await tolerateAsync(() => fs.readFile(path), 'enoent');
+  const found = held === undefined ? null : sha256Hex(held);
+
+  if (found !== expected) return { ok: false, sha256: found };
+  await fs.mkdir(dirname(path), { recursive: true });
+  const temporary = join(dirname(path), `.${basename(path)}.${crypto.randomUUID()}.kinu-write`);
+
+  try {
+    await fs.writeFile(temporary, data, held === undefined ? undefined : { mode: (await fs.stat(path)).mode });
+    await fs.rename(temporary, path);
+  } finally {
+    // Renamed, it is gone already; a failed write or rename leaves none behind.
+    await fs.rm(temporary, { force: true });
+  }
+
+  return { ok: true, sha256: sha256Hex(data) };
+}
 
 async function hostIo<T>(syscall: string, path: string, op: () => Promise<T>): Promise<T> {
   try {
@@ -58,6 +82,11 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
         await fs.mkdir(dirname(path), { recursive: true });
         await fs.writeFile(path, data);
       });
+    },
+    async writeFileIfDigest(path, data, expected) {
+      await snapshot(path, 'file write');
+
+      return await hostIo('open', path, () => replaceIfDigest(path, data, expected));
     },
     readdir: (path) => hostIo('scandir', path, async () => (await fs.readdir(path, { withFileTypes: true }))
       .map((entry) => ({ name: entry.name, type: hostDirentType(entry) }))),
@@ -106,6 +135,7 @@ function rootedFiles(root: string, files: HostFiles): HostFiles {
   return {
     readFile: (path) => files.readFile(at(path)),
     writeFile: (path, data) => files.writeFile(at(path), data),
+    writeFileIfDigest: (path, data, expected) => files.writeFileIfDigest(at(path), data, expected),
     readdir: (path) => files.readdir(at(path)),
     stat: (path, options) => files.stat(at(path), options),
     unlink: (path) => files.unlink(at(path)),

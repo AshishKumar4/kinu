@@ -28,20 +28,6 @@ export interface ScannedFile {
 }
 
 /** A file's whole text. Keep the BOM so an edit can restore it; content identity is BOM-independent. */
-export function readFileText(vfs: VFS, path: string, revision?: VfsRevision): Promise<string> {
-  return settle(fileText(vfs, path, revision));
-}
-
-function fileText(vfs: VFS, path: string, revision?: VfsRevision): Effect.Effect<string> {
-  const historical = vfs.readFileAtRevision?.bind(vfs);
-
-  if (revision !== undefined && !historical) return Effect.die(syscallError('ENOTSUP', 'open', path, { detail: 'this file plane does not retain file revisions' }));
-
-  return Effect.map(Effect.promise(async () => (revision !== undefined && historical
-    ? historical.call(vfs, path, revision)
-    : vfs.readFile(path))), (bytes) => new TextDecoder('utf-8', { ignoreBOM: true }).decode(bytes));
-}
-
 function rangedChunk(read: () => Awaitable<Uint8Array>, first: boolean): Effect.Effect<Uint8Array | null> {
   return Effect.tryPromise({ try: async () => read(), catch: (cause) => ({ cause }) }).pipe(
     Effect.catch((failed) => (first && isVfsError(failed.cause) && failed.cause.code === 'ENOTSUP'
@@ -180,7 +166,7 @@ function unrangedText(vfs: VFS, path: string, size: number | null): Effect.Effec
     }
 
     if (size > RESIDENT_TEXT_MAX_BYTES) return yield* refuse(`${String(size)} bytes`);
-    const text = yield* fileText(vfs, path);
+    const text = new TextDecoder('utf-8', { ignoreBOM: true }).decode(yield* Effect.promise(async () => vfs.readFile(path)));
 
     // Budget is in bytes. UTF-8 never uses fewer bytes than characters, so the length check only bounds the exact one.
     if (text.length > RESIDENT_TEXT_MAX_BYTES) return yield* refuse(`${String(text.length)} characters`);

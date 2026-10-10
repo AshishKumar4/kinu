@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-09",
-  "files": 3142,
-  "functions": 82472,
+  "measuredAt": "2026-10-10",
+  "files": 3151,
+  "functions": 82748,
   "ceiling": 87,
   "line": 27,
   "inventory": [
@@ -58,10 +58,6 @@
       "complexity": 37
     },
     {
-      "key": "packages/pc-agent/src/index.js#handle",
-      "complexity": 37
-    },
-    {
       "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission>gen",
       "complexity": 36
     },
@@ -87,6 +83,10 @@
     },
     {
       "key": "packages/cli/src/config.ts#deriveLLMConfigFromProviderCredentials",
+      "complexity": 34
+    },
+    {
+      "key": "packages/pc-agent/src/index.js#handle",
       "complexity": 34
     },
     {

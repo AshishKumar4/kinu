@@ -5,7 +5,7 @@ import * as v from 'valibot';
 import { Effect } from 'effect';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus, PortExposureResult, PreviewRouteCheck, SandboxSize, SandboxSizes } from './types';
 import { callJob, createShellSession, machineShellCall, reportsCwd, shellExecOptions, type MachineShells } from './shell-session';
-import type { OutputSink } from '../types/primitives';
+import type { CheckpointFiles, OutputSink, VfsDigestWrite } from '../types/primitives';
 import { JOB_STAMP_ENV } from '../types/jobs';
 import { commandResult, commandResultAt, exposedPortText, type CommandResult } from './exec-result';
 import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, settle, tolerateAsync, toKinuError, type Refusal } from '../obs/index';
@@ -81,6 +81,8 @@ export interface SandboxHandle {
   readFile(path: string, opts?: { encoding?: 'utf-8' | 'base64' }):
     Promise<{ content?: string; encoding?: string; isBinary?: boolean; exitCode?: number }>;
   writeFile(path: string, content: string, opts?: { encoding?: 'utf-8' | 'base64' }): Promise<JsonValue | void>;
+  /** Lands `contentBase64` only over the bytes whose sha256 is `expected` (null: no file there), in one guest step. */
+  writeFileIfDigest(path: string, contentBase64: string, expected: string | null): Promise<VfsDigestWrite>;
   listFiles(path: string, opts?: { recursive?: boolean }):
     Promise<{ files: Array<SandboxFileMetadata & { name: string }> }>;
   /** Native stat; `follow: false` reads the entry itself, never its siblings. */
@@ -750,7 +752,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
  */
 export function sandboxFiles(
   handle: SandboxHandle, through: <T>(call: () => Promise<T>) => Promise<T> = (call) => call(),
-): VFS & Required<Pick<VFS, 'readRange'>> {
+): VFS & Required<Pick<VFS, 'readRange'>> & Required<Pick<CheckpointFiles, 'writeFileIfDigest'>> {
   const statOf = (stat: SandboxFileMetadata): VfsStat => {
     let type: VfsStat['type'] = 'file';
 
@@ -824,6 +826,10 @@ export function sandboxFiles(
       }
 
       return base64ToBytes(r.stdout ?? r.output ?? '');
+    },
+
+    async writeFileIfDigest(path, data, expected) {
+      return await serving(path, 'open', () => handle.writeFileIfDigest(path, bytesToBase64(data), expected));
     },
 
     async writeFile(path, data) {

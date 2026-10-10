@@ -326,6 +326,9 @@ export function createDeviceTunnelExecutor(
     writeFileWithReport(path, data) {
       return settle(dispatch(path, (view, native) => view.writeFileWithReport(native, data)));
     },
+    writeFileIfDigest(path, data, expected) {
+      return settle(dispatch(path, (view, native) => view.writeFileIfDigest(native, data, expected)));
+    },
     async readdir(path) {
       if (isFleetRoot(path)) return routes().map((route) => ({ name: route.segment, type: 'directory' }));
 
@@ -579,7 +582,13 @@ const ALWAYS_CONSENTED: DeviceFileConsent = {
 
 const AGENT_TMP_PATHS = ['/tmp', '/var/tmp'] as const;
 
-export type DeviceVFS = VFS & Required<Pick<CheckpointFiles, 'writeFileWithReport'>> & Pick<ExecutorProvider, 'homeDir'> & Required<Pick<VFS, 'readRange'>>;
+/** The daemon's answer to a digest-checked write. */
+const DeviceDigestWriteSchema = v.variant('ok', [
+  v.looseObject({ ok: v.literal(true), sha256: v.string() }),
+  v.object({ ok: v.literal(false), sha256: v.nullable(v.string()) }),
+]);
+
+export type DeviceVFS = VFS & Required<CheckpointFiles> & Pick<ExecutorProvider, 'homeDir'> & Required<Pick<VFS, 'readRange'>>;
 
 /** The machine's files in its own absolute paths: the daemon resolves root and path, this guard only rejects lexical
  *  escapes, and `homeDir` is HELLO's, never an `exec`'s. */
@@ -729,6 +738,21 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     writeFile: (path, data) => settle(Effect.asVoid(writeReported(path, data))),
 
     writeFileWithReport: (path, data) => settle(writeReported(path, data)),
+
+    // The daemon compares and replaces on the machine, in one step of its own process.
+    writeFileIfDigest: (path, data, expected) => settle(Effect.gen(function* () {
+      const root = yield* guarded(path, 'open');
+      const result = yield* call(DEVICE_METHOD.writeFileIfDigest, [path, bytesToBase64(data), expected, { encoding: 'base64', root }], path);
+      const answer = v.safeParse(DeviceDigestWriteSchema, result);
+
+      if (!answer.success) return yield* Effect.fail(new VfsError('EIO', `writeFileIfDigest failed on the device: ${JSON.stringify(result)}`, path));
+      const { output } = answer;
+
+      if (!output.ok) return { ok: false as const, sha256: output.sha256 };
+      const report = v.safeParse(WriteReportSchema, output);
+
+      return report.success ? { ok: true as const, sha256: output.sha256, report: report.output } : { ok: true as const, sha256: output.sha256 };
+    })),
 
     readdir: (path) => settle(Effect.gen(function* () {
       const step = yield* towardRoot(path);
