@@ -4,8 +4,8 @@
  * Nimbus's hosted runtime (`composeHostedRuntime`); facets reach it through {@link createWorkspaceBoxClient}.
  */
 
-import { createWorkspace, workspaceGenerationStorage } from '@kinu.run/core/workspace';
-import type { RuntimeSource, SupervisorOpResult, WorkspaceBundle } from '@kinu.run/core/workspace';
+import { createWorkspace, storeFiles, workspaceGenerationStorage } from '@kinu.run/core/workspace';
+import type { RuntimeSource, SupervisorOpResult, WorkspaceBundle, WorkspaceFiles } from '@kinu.run/core/workspace';
 import { jsonResultOrVoid, sha256Hex } from '@kinu.run/core';
 import type {
   NimbusExecResult, NimbusPortInfo, NimbusSandboxHandle, NimbusStartResult, PreviewRouteCheck, WorkspacePreviewUrl,
@@ -120,7 +120,8 @@ export interface WorkspaceServing {
 
 /** A box over the workspace this object hosts: its store is the database itself, so its files need no session call. */
 export interface HostedBox extends NimbusSandboxHandle {
-  store: WorkspaceBundle['files'];
+  /** The store as `cred` (default the session user) sees it, relative paths from `home` (`storeFiles`). */
+  store(plane: Parameters<typeof storeFiles>[1]): WorkspaceFiles;
 }
 
 export interface HostedWorkspace {
@@ -345,7 +346,7 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
         mountTable: (mounts, principal) => bundle.mountTable(mounts, principal),
         namespace: (principal) => bundle.namespace(principal),
       }),
-      store: (plane) => bundle.files(plane),
+      store: (plane) => storeFiles(async () => (await bundle.session()).vfs, plane),
     }),
     // A listing says which job serves a port; it is no authority over the port's exposure. A runtime this isolate never
     // composed runs no process, so it answers nothing without booting the workspace.

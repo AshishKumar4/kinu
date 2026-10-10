@@ -196,8 +196,6 @@ export type WorkspaceFiles = VFS & Required<Pick<VFS, 'readRange' | 'readlink' |
 
 export interface WorkspaceBundle {
   vfs: WorkspaceFiles;
-  /** {@link storeFiles} over this workspace's store. */
-  files(plane: { readonly home: string; readonly cred?: VfsCred }): WorkspaceFiles;
   shell: Shell;
   privileged(): Promise<WorkspacePrivileged>;
   /** Cached per uid and idempotent: a shell holds state (`cd`, exports). */
@@ -328,7 +326,6 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
 
   return {
     vfs: workspaceVfs(open),
-    files: (plane) => storeFiles(async () => (await open()).vfs, plane),
     shell: workspaceShell(open, (workspace) => workspace.fs, (workspace, command, options) => workspace.exec(command, options)),
     onFilesChanged(listener) {
       fileListeners.add(listener);

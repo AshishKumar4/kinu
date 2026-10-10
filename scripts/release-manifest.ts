@@ -65,6 +65,8 @@ export const VAR_POLICY = {
   EMAIL_DOMAIN: 'ours',
   CONTROL_PLANE_ACCESS_TEAM_DOMAIN: 'ours',
   CONTROL_PLANE_ACCESS_AUD: 'ours',
+  // The digest of the runtime catalog a release's NIMBUS_RUNTIME_CACHE holds: every deployment of it reads the same one.
+  NIMBUS_RUNTIME_CATALOG_SHA256: 'carried',
 } satisfies Record<string, VarPolicy>;
 
 function isClassifiedVar(name: string): name is keyof typeof VAR_POLICY {
