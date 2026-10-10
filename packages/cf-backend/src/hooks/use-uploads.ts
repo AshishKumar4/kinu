@@ -9,7 +9,7 @@ import type { VfsRevision } from "@nimbus-sh/core/vfs/vfs.js";
  * owner says so (`exists`, with the revision it holds), wherever they have browsed since, and a change between the
  * question and the answer asks again.
  */
-export type UploadState = { readonly target: string } & (
+type UploadState = { readonly target: string } & (
   | { readonly status: "uploading" }
   | { readonly status: "error"; readonly error: string }
   | { readonly status: "exists"; readonly file: File; readonly revision: VfsRevision });
