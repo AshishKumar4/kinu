@@ -378,6 +378,12 @@ try {
     const spent = cpu(pid) - cpuBefore;
 
     if (record && mode === 'time') stepTimings.push({ label: 'close', wallMs: finished - phaseWall - phaseExcluded, cpuMs: cpu(pid) - phaseCpu });
+
+    if (record && mode === 'heap') {
+      heapPhase = `step-${String(modelStep)}`;
+      await sampleHeap();
+    }
+
     measuring = false;
 
     if (record && mode === 'counts') phases.push(v.parse(CutSchema, JSON.parse(await ask('/cut?label=close&resume=0'))));
