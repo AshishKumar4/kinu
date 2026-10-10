@@ -51,7 +51,7 @@ interface WorkspaceHostNamespace<Id> extends ObjectNamespace<Id, WorkspaceHostTa
 }
 
 /** Never the whole Env: that would put every binding inside a package manager. */
-export interface HostedWorkspaceEnv<Id> extends Pick<Env, 'LOADER' | 'NIMBUS_RUNTIME_CACHE'> {
+export interface HostedWorkspaceEnv<Id> extends Pick<Env, 'LOADER' | 'NIMBUS_RUNTIME_CACHE' | 'NIMBUS_RUNTIME_CATALOG_SHA256'> {
   readonly ASSETS?: Fetcher;
   readonly OrchestratorAgent: WorkspaceHostNamespace<Id>;
 }
@@ -61,7 +61,7 @@ type HostedRuntimeBindings<Id> = HostedRuntimeOptions['env'] & { readonly Orches
 /** Loaded on first composition, not at module eval, to keep cold start and the test pool loader clean. */
 interface HostedRuntimeModule {
   readonly composeHostedRuntime: (options: HostedRuntimeOptions) => Promise<HostedRuntime>;
-  readonly runtimeCatalogSource: (env: Pick<HostedRuntimeOptions['env'], 'NIMBUS_RUNTIME_CACHE'>) => RuntimeSource;
+  readonly runtimeCatalogSource: (env: Pick<HostedRuntimeOptions['env'], 'NIMBUS_RUNTIME_CACHE' | 'NIMBUS_RUNTIME_CATALOG_SHA256'>) => RuntimeSource;
 }
 
 let runtimeModule: Promise<HostedRuntimeModule> | null = null;
@@ -208,11 +208,12 @@ function resolveSlateLaunch<Id>(deps: HostedWorkspaceDeps<Id>, recipe: WorkerRec
 export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): HostedWorkspace {
   const sql = deps.ctx.storage.sql;
   const catalog = deps.env.NIMBUS_RUNTIME_CACHE;
+  const catalogDigest = { NIMBUS_RUNTIME_CACHE: catalog, NIMBUS_RUNTIME_CATALOG_SHA256: deps.env.NIMBUS_RUNTIME_CATALOG_SHA256 };
 
-  // Only the R2 catalogue of this env; the module is read lazily.
+  // Only the R2 catalogue of this env, read by the digest it names; the module is read lazily.
   const runtimeSource: RuntimeSource | undefined = catalog === undefined ? undefined : {
-    list: async () => (await hostedRuntimeModule()).runtimeCatalogSource({ NIMBUS_RUNTIME_CACHE: catalog }).list(),
-    resolve: async (spec) => (await hostedRuntimeModule()).runtimeCatalogSource({ NIMBUS_RUNTIME_CACHE: catalog }).resolve(spec),
+    list: async () => (await hostedRuntimeModule()).runtimeCatalogSource(catalogDigest).list(),
+    resolve: async (spec) => (await hostedRuntimeModule()).runtimeCatalogSource(catalogDigest).resolve(spec),
   };
 
   const bundle = createWorkspace({
@@ -247,7 +248,7 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
           OrchestratorAgent: deps.env.OrchestratorAgent,
           LOADER: fabricLoader(deps.env.LOADER),
           ASSETS: deps.env.ASSETS,
-          NIMBUS_RUNTIME_CACHE: catalog,
+          ...catalogDigest,
         };
 
         const runtime = await composeHostedRuntime({

@@ -18,7 +18,7 @@ import type { ProcessFiles } from '@nimbus-sh/core/runtime/process-files.js';
 import type { RuntimePackage, RuntimeSource } from '@nimbus-sh/core/runtime/runtime-package.js';
 import type { FacetHost } from '@nimbus-sh/core/runtime/facet-host.js';
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
-import type { CommandResult, RunOptions } from '@nimbus-sh/core/substrate/lifo/sandbox/types.js';
+import type { CommandResult, RunOptions } from '@nimbus-sh/core/substrate/lifo/sandbox/run-command.js';
 import {
   agentIdentity, agentTmpRoot, confineAgentTmp, MAIN_AGENT, provisionAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
   settleWorkspaceSlates, provisionWorkspaceSoul,
@@ -140,7 +140,7 @@ function workspaceShell(open: () => Promise<NimbusWorkspace>, start: (workspace:
 /** Nimbus's one-shot exec runs as the session user; an agent's call runs as the agent's own process, in a shell built for it. */
 function agentCall(pid: number, env: Readonly<Record<string, string>>): ShellCall {
   return async (workspace, command, options) => {
-    const { runCommand } = await import('@nimbus-sh/core/substrate/lifo/sandbox/SandboxCommands.js');
+    const { runCommand } = await import('@nimbus-sh/core/substrate/lifo/sandbox/run-command.js');
     const shell = workspace.shellFor(pid, { cwd: options.cwd, env });
 
     try {

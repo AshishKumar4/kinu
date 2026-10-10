@@ -32,6 +32,7 @@ export class HeadFileChanges implements WriteObserver {
     if (existing) {
       existing.current = after.text;
       existing.binary ||= after.binary;
+      existing.unread ??= event.unread ?? null;
 
       return;
     }

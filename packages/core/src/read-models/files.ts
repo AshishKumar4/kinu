@@ -7,7 +7,7 @@ import { normalizePath } from '@nimbus-sh/core/vfs/composite.js';
 
 import {
   MOUNT_EXECUTORS, RESIDENT_TEXT_MAX_BYTES, listWithVfsOps,
-  readBoundedWithVfsOps, keptByRemoval, partialTreeRemovalMessage, removeTreeWithVfsOps,
+  readBoundedWithVfsOps, partialTreeRemovalMessage, removeTree,
 } from '../vfs/mounts';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { move } from '@nimbus-sh/core/vfs/move.js';
@@ -588,8 +588,7 @@ export function deleteExecutorPathOp(
       return { ok: true };
     }
 
-    const native = vfs.removeRecursive?.bind(vfs);
-    const kept = keptByRemoval(await (native ? native.call(vfs, path) : removeTreeWithVfsOps(vfs, path)));
+    const kept = await removeTree(vfs, path);
 
     if (kept !== null) {
       // No cause attached: the message already inlines it.

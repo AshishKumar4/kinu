@@ -34,49 +34,20 @@ fabric and worker, which is why nothing here pins it.
 Core imports fabric directly: `packages/core/src/events/outbox.ts` builds its
 outbox on `@nimbus-sh/fabric/outbox.js`.
 
-One Nimbus fix is patched in, across two packages. Core 0.15.0's rolldown
-build refuses any `tsconfigRaw` and compiles JSX to `React.createElement`
-whatever it is given, so a slate client, whose JSX needs the automatic runtime,
-does not compile; 0.14 bundled it to `react/jsx-runtime` imports (NIMBUS-ASKS
-#19, 2026-10-05). `patches/@nimbus-sh%2Fcore@0.15.0.patch` maps
-`tsconfigRaw.compilerOptions` onto rolldown's JSX transform in
-`runtime/rolldown-build`, in `src/` (Bun) and `dist/` (workerd): `react-jsx` and
-`react-jsxdev` to the automatic runtime from `jsxImportSource`, `react` to the
-classic one with its factories, and it still refuses any other option. It also
-splits `runtime/process-files`' `export const F_OK = 0, X_OK = 1, W_OK = 2, R_OK
-= 4;` into four declarations: vite 8's production build kept only the first
-declarator and failed on `X_OK` and `R_OK` (MISSING_EXPORT; NIMBUS-ASKS #21). The
-build facet runs a prebuilt copy of `runtime/rolldown-build`, a content-addressed asset of
-`@nimbus-sh/worker`, so `patches/@nimbus-sh%2Fworker@0.13.1.patch` carries the
-same change there and re-pins the asset's path, build id and SHA-256. Both go
-when core 0.15.1 ships the fix with a worker built from it; the browser-surface
-case in `packages/cf-backend/tests/workerd/slate-process.test.ts` holds the
-behaviour.
+No Nimbus package is patched (core 0.16.0, worker 0.14.0, 2026-10-10). The patches 0.15 needed are upstream:
+the rolldown build's JSX and tsconfig settings (NIMBUS-ASKS #19), `runtime/process-files`' access modes as four
+declarations, which Nimbus's publish gate now enforces for every package (#21), each build-facet call in a lane of
+its own, so one rolldown binding serves every Durable Object in an isolate (#22), `CompositeVFS.route(path, { follow })`
+(#23) and `observeWrites(observer, { wants })` (#24). The worker patch that ran launch prefetch builds one at a
+time is dropped too: worker 0.14 bounds each build's gathering, and the measurement is in AGENTS.md's Waste list.
 
-The worker patch also gives each Durable Object its own build-facet isolate
-(NIMBUS-ASKS #22, 2026-10-05). Worker 0.13.1 loads the build facet's code under
-one id per isolate, so every workspace in an isolate builds on one rolldown
-binding, whose event-loop pump, started by one workspace's build, ran another's
-plugin calls in the first one's context: "Cannot perform I/O on behalf of a
-different Durable Object", in 2 of 5 runs of `slate-durability.test.ts` and
-`slate-process.test.ts` in one process. `dist/facets/build-facet.js` adds the
-object's id to the loader id. It goes when a worker release keeps the binding
-from crossing objects.
-
-The core patch also gives `vfs/composite` two public methods Kinu's one file
-namespace needs (NIMBUS-ASKS #23 and #24, 2026-10-06), in `src/` and `dist/` with
-their declarations. `routeOf(path)` answers where a path lands for a view: the
-mount point, the backend as that principal sees it (null with the mount's reason
-where it is absent), the backend path after lexical `..`, and whether the mount
-is read-only, so the file tool reaches a device's own write report.
-`resolvePath(path, { follow, creating })` is the composite's own walk, every
-link resolved through the view's mounts, so the approval gate judges where a
-path lands rather than how it is spelled. And
-`observeWrites(observer)` tells an observer of every `writeFile`,
-`writeFileIfRevision`, `unlink` and `rename` that lands, from any view, with the
-bytes it replaced where the observer asks (a rename always carries the bytes
-it moved), so a head's file changes are attributed where the write lands. `packages/core/tests/unit-composite-patch.test.ts`
-holds all three. Each goes when core ships its ask.
+Kinu's file plane (`packages/core/src/vfs/mounts.ts`) is Kinu policy over that namespace: the mount declarations,
+whose principal's view a plane is, the bounded views, and one move rule (within a mount, Nimbus's `move`; across
+mounts, EXDEV). A device's write report is asked of the backend `route` names. `route` refuses a missing ancestor
+with ENOENT, though Nimbus's own lookup can pass one (`creating`), so a gate resolves a new nested path by routing its
+nearest existing ancestor (`routeCreating`, NIMBUS-ASKS #32). A head's file changes come
+from `observeWrites`, read while the event holds its content (`packages/core/src/vfs/write-events.ts`,
+`packages/core/tests/unit-namespace-writes.test.ts`).
 
 Core 0.12.0 and worker 0.10.0 carry what the earlier patches held: the
 read-only-open guards in core's `src/vfs/sqlite-vfs.ts` (D21, D22),

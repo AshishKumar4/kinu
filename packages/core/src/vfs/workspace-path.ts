@@ -18,7 +18,7 @@ export function isTreeRelativePath(path: string): boolean {
   return path !== '' && !path.startsWith('/') && path.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..');
 }
 
-/** As a process in `cwd` names it. Not `resolveVfsPath`: it keeps a leading `..` (NIMBUS-ASKS). */
+/** As a process in `cwd` names it, from `/`. Not `resolveVfsPath`, which answers without the leading `/`. */
 export function workspacePath(path: string, cwd: string): string {
   return normalizePath(path.startsWith('/') ? path : `${cwd}/${path}`);
 }

@@ -6,6 +6,7 @@ import type { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import type { ProcessFiles } from '@nimbus-sh/core/runtime/process-files.js';
 import type { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import type { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
+import { ISOLATE_NETWORK } from '@nimbus-sh/core';
 import { composeFacetManager, type ComposedFacetManager } from '@nimbus-sh/worker/workspace-host';
 
 export interface ProbeFacetManagerDeps {
@@ -21,6 +22,8 @@ export interface ProbeFacetManagerDeps {
 export function probeFacetManager(deps: ProbeFacetManagerDeps): ComposedFacetManager {
   const composed: ComposedFacetManager = composeFacetManager({
     ...deps,
+    // The probe's processes are its own traffic, as a host with no egress gives them.
+    network: () => ISOLATE_NETWORK,
     hooks: {
       onExternalExit: () => undefined,
       onSpawn: () => undefined,

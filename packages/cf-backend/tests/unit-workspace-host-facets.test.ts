@@ -234,7 +234,10 @@ describe('hosted workspace facets', () => {
  * instance properties are private), so `_fsOp` sends any op name, stamped with the binding's own pid.
  */
 async function fsOp(supervisor: SupervisorRPC, op: string, args: readonly string[]): Promise<boolean> {
-  return v.parse(v.boolean(), await supervisor['_fsOp'](op, args));
+  // Any op name at all, as the wire carries it: a method's parameters are compared both ways.
+  const wire: { _fsOp<T>(name: string, values: readonly string[]): Promise<T> } = supervisor;
+
+  return v.parse(v.boolean(), await wire._fsOp<boolean>(op, args));
 }
 
 describe('a hosted process is untrusted code: the host serves only what Nimbus serves', () => {

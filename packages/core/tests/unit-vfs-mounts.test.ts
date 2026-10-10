@@ -8,7 +8,7 @@ import * as v from 'valibot';
 import { fakeMossaic } from '@kinu.run/test-utils/mossaic';
 
 import { isVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
-import { removeTreeWithVfsOps, standardMounts, withMountTable, workspaceFilePlane, type VfsMount, type WorkspacePrincipal } from '../src/vfs/mounts';
+import { removeTree, standardMounts, withMountTable, workspaceFilePlane, type VfsMount, type WorkspacePrincipal } from '../src/vfs/mounts';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { mossaicVfs } from '../src/vfs/mossaic-vfs';
 import { deviceFiles, type DeviceFileScope, type DeviceTransport } from '../src/execution/device-tunnel-executor';
@@ -496,34 +496,24 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		expect(await exists(device, '/home/dev/build')).toBe(false);
 	});
 
-	test('a mid-tree unlink failure stops the pass and reports both halves', async () => {
-		// KINU-013: removal stops at the first refusal and partitions the tree into removed and remaining.
+	test('a refused entry stays with the directories holding it, and the rest of the tree goes', async () => {
+		// KINU-013: a partial removal says what went and what stayed. Nimbus's walk goes on past a refusal, as `rm -r` does.
 		const base = fakeTree({
 			'/build/out.js': 'x',
 			'/build/deep/two.js': 'y',
 		});
 
 		const realUnlink = base.unlink.bind(base);
-		let calls = 0;
 
 		base.unlink = async (path) => {
-			calls += 1;
-
-			if (calls === 3) {
-				throw new VfsError('EACCES', 'held open', path);
-			}
+			if (path === '/build/out.js') throw new VfsError('EACCES', 'held open', path);
 
 			return realUnlink(path);
 		};
 
-		const removal = await removeTreeWithVfsOps(base, '/build');
-
-		if (removal.ok) throw new Error('expected a partial removal, got a completed one');
-
-		expect(removal.removed).toEqual(['/build/deep/two.js', '/build/deep']);
-		expect(removal.remaining).toEqual(['/build/out.js', '/build']);
-		expect(removal.failed.path).toBe('/build/out.js');
-		expect(await exists(base, '/build/deep/two.js')).toBe(false);
+		expect(await removeTree(base, '/build')).toMatchObject({
+			removed: ['/build/deep'], remaining: ['/build', '/build/out.js'], failed: { path: '/build/out.js' },
+		});
 		expect(await exists(base, '/build/deep')).toBe(false);
 		expect(await exists(base, '/build/out.js')).toBe(true);
 		expect(await exists(base, '/build')).toBe(true);
@@ -575,8 +565,8 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		expect(await exists(device, '/home/dev/build/out.js')).toBe(false);
 	});
 
-	test('removeTreeWithVfsOps names an absent path instead of quietly succeeding', async () => {
-		await expect(removeTreeWithVfsOps(fakeTree({}), '/gone')).rejects.toMatchObject({ code: 'ENOENT' });
+	test('removing an absent path names it instead of quietly succeeding', async () => {
+		await expect(removeTree(fakeTree({}), '/gone')).rejects.toMatchObject({ code: 'ENOENT' });
 	});
 
 	test('an absent mount names its absence before a mutation can cross into it', async () => {
