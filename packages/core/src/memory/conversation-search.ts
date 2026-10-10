@@ -9,7 +9,7 @@ import * as v from 'valibot';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
 import { boundedInt } from '../utils/bounds';
 import { KinuError } from '../obs/error';
-import { settle, settleSync } from '../obs/effect';
+import { settle } from '../obs/effect';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { SessionTranscriptReader } from '../session/transcript';
@@ -243,20 +243,19 @@ export class ConversationSearchStore implements ConversationRecall {
     });
   }
 
-  private syncState(): Effect.Effect<SyncState, KinuError> {
-    return Effect.suspend(() => {
-      const state = this.sql<SyncState>`
-        SELECT actor_id, rev, purges, synced_rev, synced_purges, synced_rowid
-        FROM conversation_fts_state WHERE actor_id = ${this.actorId}`[0];
-
-      return state === undefined ? Effect.fail(new KinuError('io', 'the actor transcript index lost its sync state')) : Effect.succeed(state);
-    });
+  private syncState(): SyncState | undefined {
+    return this.sql<SyncState>`
+      SELECT actor_id, rev, purges, synced_rev, synced_purges, synced_rowid
+      FROM conversation_fts_state WHERE actor_id = ${this.actorId}`[0];
   }
 
   private sync(): Effect.Effect<void, KinuError> {
     return Effect.gen({ self: this }, function* () {
       for (;;) {
-        const state = yield* this.syncState();
+        const state = this.syncState();
+
+        if (state === undefined) return yield* new KinuError('io', 'the actor transcript index lost its sync state');
+
         const rebuild = state.purges !== state.synced_purges;
 
         if (!rebuild && state.rev === state.synced_rev) return;
@@ -277,10 +276,17 @@ export class ConversationSearchStore implements ConversationRecall {
         }
 
         let committed = false;
+        let missingState = false;
 
         this.transactionSync(() => {
           this.actor.assertCurrent();
-          const current = settleSync(this.syncState());
+          const current = this.syncState();
+
+          if (current === undefined) {
+            missingState = true;
+
+            return;
+          }
 
           // A purge changes canonical row identities; project that new generation rather than publishing stale text.
           if (current.purges !== state.purges) return;
@@ -304,6 +310,8 @@ export class ConversationSearchStore implements ConversationRecall {
             SET synced_rev = ${state.rev}, synced_purges = ${state.purges}, synced_rowid = ${synced}
             WHERE actor_id = ${this.actorId}`;
         });
+
+        if (missingState) return yield* new KinuError('io', 'the actor transcript index lost its sync state');
 
         if (committed) return;
       }

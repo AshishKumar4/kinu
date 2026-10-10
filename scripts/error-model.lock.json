@@ -1,9 +1,9 @@
 {
-  "measuredAt": "2026-10-09",
+  "measuredAt": "2026-10-10",
   "counts": {
     "packages/cf-backend/src/activation-gate.ts#throw": 1,
     "packages/cf-backend/src/actor-agent.ts#catch": 10,
-    "packages/cf-backend/src/actor-agent.ts#throw": 21,
+    "packages/cf-backend/src/actor-agent.ts#throw": 20,
     "packages/cf-backend/src/chat-transport.ts#catch": 2,
     "packages/cf-backend/src/chat-transport.ts#throw": 1,
     "packages/cf-backend/src/codemode-egress.ts#catch": 1,

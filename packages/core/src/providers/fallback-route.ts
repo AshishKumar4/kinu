@@ -74,50 +74,55 @@ export class FallbackRoute<E extends FallbackEntry> {
     return this.chain.length > 0 ? 0 : this.retries;
   }
 
-  private identity(spec: string | undefined, model?: LanguageModel): Promise<ModelAttemptIdentity | null> {
-    if (this.opts.attemptOf !== undefined && spec !== undefined) return settle(attemptOrUnknown(this.opts.attemptOf, spec));
+  private identity(spec: string | undefined, model?: LanguageModel): Effect.Effect<ModelAttemptIdentity | null> {
+    if (this.opts.attemptOf !== undefined && spec !== undefined) return attemptOrUnknown(this.opts.attemptOf, spec);
 
-    return model === undefined ? Promise.resolve(null) : modelAttempt(model);
+    return model === undefined ? Effect.succeed(null) : Effect.promise(() => modelAttempt(model));
   }
 
-  async cooledStart(): Promise<E | undefined> {
-    this.current = await this.identity(this.opts.modelSpec, this.opts.model);
+  cooledStart(): Promise<E | undefined> {
+    return settle(Effect.gen({ self: this }, function* () {
+      this.current = yield* this.identity(this.opts.modelSpec, this.opts.model);
 
-    if (this.current === null || !this.cooldowns.parked(attemptKey(this.current))) return undefined;
+      if (this.current === null || !this.cooldowns.parked(attemptKey(this.current))) return undefined;
 
-    for (let at = 0; at < this.chain.length; at++) {
-      const entry = this.chain[at];
-      const identity = await this.identity(entry.spec, entry.model);
+      for (let at = 0; at < this.chain.length; at++) {
+        const entry = this.chain[at];
+        const identity = yield* this.identity(entry.spec, entry.model);
 
-      if (identity !== null && this.cooldowns.parked(attemptKey(identity))) continue;
-      this.current = identity;
+        if (identity !== null && this.cooldowns.parked(attemptKey(identity))) continue;
+        this.current = identity;
 
-      return this.chain.splice(0, at + 1).at(-1);
-    }
+        return this.chain.splice(0, at + 1).at(-1);
+      }
 
-    return undefined;
+      return undefined;
+    }));
   }
 
   /** A 401 refuses its credential snapshot: aliases of that login are passed over, but a replacement is usable. */
-  async next(failure: CallFailure): Promise<E | undefined> {
-    if (!handsOver(failure)) return undefined;
+  next(failure: CallFailure): Promise<E | undefined> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (!handsOver(failure)) return undefined;
 
-    if (this.current !== null) this.cooldowns.park(attemptKey(this.current), statedRetryAfterMs({ cause: failure.cause }));
-    const { status } = providerFailureFacts({ cause: failure.cause });
-    const refused = status === 401 ? this.current?.credential ?? null : null;
+      if (this.current !== null) this.cooldowns.park(attemptKey(this.current), statedRetryAfterMs({ cause: failure.cause }));
 
-    for (let next = this.chain.shift(); next !== undefined; next = this.chain.shift()) {
-      const identity = await this.identity(next.spec, next.model);
+      const { status } = providerFailureFacts({ cause: failure.cause });
+      const refused = status === 401 ? this.current?.credential ?? null : null;
 
-      if (identity !== null && this.cooldowns.parked(attemptKey(identity)) && this.chain.length > 0) continue;
+      for (let next = this.chain.shift(); next !== undefined; next = this.chain.shift()) {
+        const identity = yield* this.identity(next.spec, next.model);
 
-      if (refused !== null && identity?.credential === refused) continue;
-      this.current = identity;
+        if (identity !== null && this.cooldowns.parked(attemptKey(identity)) && this.chain.length > 0) continue;
 
-      return next;
-    }
+        if (refused !== null && identity?.credential === refused) continue;
+        this.current = identity;
 
-    return undefined;
+        return next;
+      }
+
+      return undefined;
+    }));
   }
 
   exhausted(failure: CallFailure): Error {
