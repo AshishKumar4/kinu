@@ -5,7 +5,7 @@ import {
   CHAT_SESSION_ID, EventLog, EvolutionEngine, WorkspaceActorDirectory, runEventSinks, historyTurnPairs, conversationTurnPair, type ConversationTurnPair,
   actorReferenceOf, actorScaffoldPath, createActorHost, createScaffoldSurface, defaultLoopOrigin,
   initWorkspaceSchema, nimbusSessionFiles, recoverActorTurns, MissionGovernor, actorReadHandle, readSessionTranscript, readSubordinateInspection,
-  getChatHistoryPage, inheritedContextFromTranscript, turnRequestIndex, turnRequestPage,
+  drawnStep, getChatHistoryPage, inheritedContextFromTranscript, turnRequestIndex, turnRequestPage,
   type TurnRequestIndex, type TurnRequestPage, ConversationSearchStore, RunEventRecorder, spendLedger, type SpendLedger, type StepSpendSource,
   readAgentFigures, NO_FIGURES, type AgentFigures,
   localContextTree, type ContextEditor, type ContextTree, type ConversationRecall,
@@ -399,6 +399,16 @@ export class AgentDatabase {
       steps: eventRecorder.readRecentByType('step_finish', limit).flatMap((event) => (event.type === 'step_finish' ? [event] : [])),
       newestMeasured: eventRecorder.newestMeasuredStep(),
     };
+  }
+
+  /** The finished steps of its open turn `turnId`, drawn as a replay restates them; none when the turn open is another. */
+  openSteps(turnId: string): JsonObject[][] {
+    const { eventRecorder } = this.actorHost().bindStores(this.reference()).stores;
+    const open = eventRecorder.openTurn();
+
+    if (open?.turn.turnId !== turnId) return [];
+
+    return eventRecorder.finishedSteps(open.runId).map(({ messages }) => drawnStep(messages));
   }
 
   /** The metadata of its newest message from a person; null before any. */

@@ -41,10 +41,17 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
   let owed = false;
   /** The open turn's finished steps as the ledger records them, drawn. */
   const recorded: JsonObject[][] = [];
+  /** The turns the ledger was asked for, in order; it answers once `reading` settles. */
+  const asked: string[] = [];
+  let reading: () => Promise<void> = async () => {};
+
   const connections = new Map<string, Connection>();
   const frames = new Map<string, string[]>();
   /** Everything a socket was handed, in order: its sends and broadcasts that included it. */
   const received = new Map<string, string[]>();
+
+  /** Sockets that closed: a send to one fails as the platform's does. */
+  const closed = new Set<Connection>();
 
   /** Drivable by the SDK's protocol helpers; any other member throws, naming itself. */
   const connection = (id: string): Connection => {
@@ -52,7 +59,13 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
     const heard: string[] = [];
     frames.set(id, socketFrames);
     received.set(id, heard);
-    const socket = socketConnection({ id, send: (frame: string) => { socketFrames.push(frame); heard.push(frame); } });
+
+    const socket = socketConnection({ id, send: (frame: string) => {
+      if (closed.has(socket)) throw new TypeError('WebSocket send() after close');
+      socketFrames.push(frame);
+      heard.push(frame);
+    } });
+
     connections.set(id, socket);
 
     return socket;
@@ -60,7 +73,12 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
 
   const wire: ChatWire = {
     turnOwed: async () => owed,
-    steps: () => recorded,
+    steps: async (turnId) => {
+      asked.push(turnId);
+      await reading();
+
+      return recorded;
+    },
     broadcast: (message, exclude) => {
       broadcasts.push({ frame: v.parse(FrameSchema, JSON.parse(message)), exclude });
 
@@ -94,7 +112,11 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
 
       return new ChatWireTransport(wire);
     },
-    transport, broadcasts, history, reserved, recorded, sent: sent.items, taken: (count: number) => sent.until((items) => items.length >= count), connection, db,
+    /** The ledger's next answers wait on `read`, or fail with it. */
+    ledgerReads: (read: () => Promise<void>) => { reading = read; },
+    /** The socket closed under the transport: it hears nothing more. */
+    hangUp: (socket: Connection) => { closed.add(socket); },
+    transport, broadcasts, history, reserved, recorded, asked, sent: sent.items, taken: (count: number) => sent.until((items) => items.length >= count), connection, db,
     interrupts: () => interrupts,
     responses: () => broadcasts.filter((b) => b.frame.type === 'cf_agent_use_chat_response').map((b) => b.frame),
     connectionFrames: (id: string): string[] => frames.get(id) ?? [],
@@ -173,20 +195,60 @@ function chunks(parts: UIMessageChunk[]): ReadableStream<UIMessageChunk> {
 const turnStart = (turnId: string, messageId: string, carried: readonly string[] = [], finishedSteps = 0): SessionEvent =>
   ({ type: 'turn-start', kind: 'user', text: 'x', workMode: 'build', turnId, messageId, carried, finishedSteps });
 
-/** A tab's replay, a frame a line: `R ` marks a chunk of a step restated from the ledger, by the id it is drawn under. */
-function replayOf(frames: readonly string[]): string[] {
-  return frames.map((text) => v.parse(FrameSchema, JSON.parse(text))).filter((frame) => frame.replay === true).map((frame) => {
-    if (frame.replayComplete === true) return 'complete';
-    const chunk = v.parse(v.looseObject({ type: v.string(), id: v.optional(v.string()), delta: v.optional(v.string()), toolCallId: v.optional(v.string()) }), JSON.parse(frame.body ?? ''));
+/** An answer frame as a line: `R ` marks a chunk of a step restated from the ledger, by the id it is drawn under. */
+function answerLine(frame: v.InferOutput<typeof FrameSchema>): string {
+  if (frame.replayComplete === true) return 'complete';
 
-    return [chunk.id?.startsWith('restated:') === true ? 'R' : '', chunk.type, chunk.delta ?? '', chunk.toolCallId ?? ''].filter((word) => word !== '').join(' ');
-  });
+  if (frame.done === true) return 'done';
+  const chunk = v.parse(v.looseObject({ type: v.string(), id: v.optional(v.string()), delta: v.optional(v.string()), toolCallId: v.optional(v.string()) }), JSON.parse(frame.body ?? ''));
+
+  return [chunk.id?.startsWith('restated:') === true ? 'R' : '', chunk.type, chunk.delta ?? '', chunk.toolCallId ?? ''].filter((word) => word !== '').join(' ');
+}
+
+/** A tab's replay, a frame a line. */
+function replayOf(frames: readonly string[]): string[] {
+  return frames.map((text) => v.parse(FrameSchema, JSON.parse(text))).filter((frame) => frame.replay === true).map(answerLine);
+}
+
+/** Every answer frame a tab heard, in order, its replay's marked `replay`. */
+function answersHeard(frames: readonly string[]): string[] {
+  return frames.map((text) => v.parse(FrameSchema, JSON.parse(text))).filter((frame) => frame.type === 'cf_agent_use_chat_response')
+    .map((frame) => `${frame.replay === true ? 'replay ' : ''}${answerLine(frame)}`);
 }
 
 const STEP_ONE: UIMessageChunk[] = [
   { type: 'start-step' }, { type: 'text-start', id: 't0' }, { type: 'text-delta', id: 't0', delta: 'one' }, { type: 'text-end', id: 't0' },
   { type: 'finish-step' },
 ];
+
+/** A turn an eviction left after its first step, re-opened here, which tab `c2` joined: it acked its resume, and the ledger
+ *  read its replay waits on answers once released or refused. */
+async function joinedWhileLedgerReads() {
+  const h = harness();
+  await h.transport.onMessage(h.connection('c1'), chatRequest('req-1', 'hello'));
+  const revived = h.afterEviction();
+  h.recorded.push([{ type: 'text', text: 'one', state: 'done' }]);
+
+  const joining = h.connection('c2');
+  await revived.onConnect(joining);
+  await revived.deliver(turnStart('input-req-1', 'msg-1', [], 1));
+  const resuming = v.parse(FrameSchema, JSON.parse(h.connectionFrames('c2').find((text) => text.includes('cf_agent_stream_resuming')) ?? '{}'));
+  const read = Promise.withResolvers<void>();
+  const reading = Promise.withResolvers<void>();
+
+  h.ledgerReads(() => {
+    reading.resolve();
+
+    return read.promise;
+  });
+
+  const ack = JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: resuming.id });
+  const acked = revived.onMessage(joining, ack);
+
+  await reading.promise;
+
+  return { h, revived, joining, ack, acked, release: () => { read.resolve(); }, refuse: (cause: Error) => { read.reject(cause); } };
+}
 
 describe('ChatWireTransport', () => {
   test('a chat request hands the message to the loop under its own id and writes no row; a splice answers at once', async () => {
@@ -579,9 +641,9 @@ describe('ChatWireTransport', () => {
     await h.land(answered);
   });
 
-  // A joining tab's replay restates from the ledger each step it records whose last chunk went out, then the relay's
-  // chunks after them: the loop records a step beside the stream, so either can be ahead.
-  test('a joining tab hears a step the ledger records and the relay sent whole restated, then the relay\'s chunks after it', async () => {
+  // The relay holds every step of a turn this room opened at its first, each whole once it ends, and every kind of part:
+  // the ledger restates fewer, so it is not asked.
+  test('a joining tab hears a turn this room opened from the relay alone, though the ledger records its steps', async () => {
     const h = openRequest();
     const { answered } = await h.open(h.connection('c1'), 'req-1', 'hello');
     await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
@@ -592,9 +654,10 @@ describe('ChatWireTransport', () => {
     await h.transport.onConnect(joining);
     await h.transport.onMessage(joining, JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: 'req-1' }));
 
-    expect(replayOf(h.connectionFrames('c2'))).toEqual([
-      'start', 'start-step', 'R text-start', 'R text-delta one', 'R text-end', 'finish-step', 'start-step', 'text-start', 'text-delta tw', 'complete',
-    ]);
+    expect({ replay: replayOf(h.connectionFrames('c2')), asked: h.asked }).toEqual({
+      replay: ['start', 'start-step', 'text-start', 'text-delta one', 'text-end', 'finish-step', 'start-step', 'text-start', 'text-delta tw', 'complete'],
+      asked: [],
+    });
     await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: 'one', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
     await h.land(answered);
   });
@@ -684,6 +747,70 @@ describe('ChatWireTransport', () => {
       'start-step', 'tool-input-available call_1', 'tool-output-error call_1', 'finish-step',
       'start-step', 'text-start', 'text-delta three', 'complete',
     ]);
+  });
+
+  // The ledger is the agent's, a call away; the turn streams on meanwhile.
+  test('a tab joining a re-opened turn hears nothing live while its ledger is read, then its replay with what streamed meanwhile, then the rest live', async () => {
+    const { h, revived, acked, release } = await joinedWhileLedgerReads();
+
+    await revived.observe(chunks([{ type: 'start' }, { type: 'start-step' }, { type: 'text-start', id: 't1' }, { type: 'text-delta', id: 't1', delta: 'tw' }]));
+    const before = answersHeard(h.received('c2'));
+
+    release();
+    expect(await acked).toBe(true);
+    await revived.observe(chunks([{ type: 'text-delta', id: 't1', delta: 'o' }]));
+
+    expect({ before, after: answersHeard(h.received('c2')) }).toEqual({
+      before: [],
+      after: [
+        'replay start', 'replay start-step', 'replay R text-start', 'replay R text-delta one', 'replay R text-end', 'replay finish-step',
+        'replay start-step', 'replay text-start', 'replay text-delta tw', 'replay complete', 'text-delta o',
+      ],
+    });
+  });
+
+  test('a re-opened turn that ends while its ledger is read leaves the joining tab its end, and no replay', async () => {
+    const { h, revived, acked, release } = await joinedWhileLedgerReads();
+
+    await revived.deliver(turnEnd('hello'));
+    release();
+    await acked;
+
+    expect(answersHeard(h.received('c2'))).toEqual(['done']);
+  });
+
+  test("a re-opened turn whose agent cannot be asked for its ledger replays the relay's steps alone", async () => {
+    const { h, revived, acked, refuse } = await joinedWhileLedgerReads();
+
+    await revived.observe(chunks([{ type: 'start' }, { type: 'start-step' }, { type: 'text-start', id: 't1' }, { type: 'text-delta', id: 't1', delta: 'tw' }]));
+    refuse(new Error("the agent's isolate reset"));
+    await acked;
+
+    expect(replayOf(h.connectionFrames('c2'))).toEqual(['start', 'start-step', 'text-start', 'text-delta tw', 'complete']);
+  });
+
+  // A redial keeps the socket's id: the replay the closed socket was owed must not release the hold its redial took.
+  test('a tab that redials while its ledger is read is held from the live chunks until its own replay', async () => {
+    const { h, revived, joining, ack, acked, release } = await joinedWhileLedgerReads();
+
+    h.hangUp(joining);
+    revived.onClose(joining);
+    const redialled = h.connection('c2');
+    await revived.onConnect(redialled);
+    release();
+    await acked;
+    await revived.observe(chunks([{ type: 'start' }, { type: 'start-step' }]));
+    const before = answersHeard(h.received('c2'));
+
+    await revived.onMessage(redialled, ack);
+
+    expect({ before, after: answersHeard(h.received('c2')) }).toEqual({
+      before: [],
+      after: [
+        'replay start', 'replay start-step', 'replay R text-start', 'replay R text-delta one', 'replay R text-end', 'replay finish-step',
+        'replay start-step', 'replay complete',
+      ],
+    });
   });
 
   /** Owner report 2026-09-26, "reasoning-delta for missing reasoning part": the tab's reader throws on a delta whose

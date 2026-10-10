@@ -1,11 +1,11 @@
 /**
  * Core's {@link ChatTransport} over the SDK's `cf_agent_*` protocol, one room per actor tag. It writes no
  * row; the loop does. A tab that joins a turn in progress is replayed it over the SDK's documented resume
- * handshake (RESUME_REQUEST, RESUMING, ACK, replay frames, replayComplete): the steps the ledger records,
- * restated, then this relay's chunks after them. A turn an ended activation left open is re-driven by a later
- * one under a request id that activation mints. A tab that reconnects before the re-drive opens is told the turn
- * is pending (STREAM_PENDING, the SDK's #1784 frame) and told it is resuming once it opens. Where a send ended is
- * asked of the workspace (`awaitSend`), never read off this stream.
+ * handshake (RESUME_REQUEST, RESUMING, ACK, replay frames, replayComplete): the steps its agent's ledger recorded
+ * before this room opened the turn, restated, then this relay's chunks. A turn an ended activation left open is
+ * re-driven by a later one under a request id that activation mints. A tab that reconnects before the re-drive opens
+ * is told the turn is pending (STREAM_PENDING, the SDK's #1784 frame) and told it is resuming once it opens. Where a
+ * send ended is asked of the workspace (`awaitSend`), never read off this stream.
  */
 import type { Connection } from 'agents';
 import {
@@ -20,17 +20,18 @@ import {
   isWorkMode, INTERRUPTED_TURN, JsonValueSchema, UIMessageSchema,
   type ChatTransport, type JsonObject, type PromptFile, type SendLanding, type SendState, type SessionEvent, type WorkMode,
 } from '@kinu.run/core';
-import { attemptInItsWords, diagnostics, KinuError, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
+import { attempt, attemptInItsWords, diagnostics, KinuError, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
 
 export type ChatSocket = Pick<Connection, 'id' | 'send' | 'readyState'>;
 
-/** Every room replays a joiner the open turn: the steps its ledger records, then the relay's chunks after them. */
+/** Every room replays a joiner the open turn: the steps its ledger recorded before the room opened it, then the
+ *  relay's chunks. */
 export interface ChatWire {
   /** A turn this activation has not opened yet: the one an ended activation left open, or an acknowledged send. Asked of
    *  the agent's own isolate, which re-opens such a turn when it starts, before it has told this room. */
   turnOwed(): Promise<boolean>;
-  /** The open turn's finished steps as its ledger records them, drawn. */
-  steps(): readonly (readonly JsonObject[])[];
+  /** The finished steps of the open turn `turnId` as its agent's ledger records them, drawn; none once another is open. */
+  steps(turnId: string): Promise<readonly (readonly JsonObject[])[]>;
   broadcast(message: string, exclude?: string[]): void;
   /** The handshake asks by id before it replays to a replacement. */
   getConnection(id: string): ChatSocket | undefined;
@@ -139,6 +140,8 @@ interface LiveStream {
   /** Every chunk this turn relayed, in order, with its step: the steps finished before it, each with its deltas merged
    *  per part once it ends (`compactStep`). Dropped with the turn. */
   readonly relayed: RelayedChunk[];
+  /** The step this room opened it at: an isolate that ended finished the steps before, and only its ledger holds them. */
+  readonly firstStep: number;
   /** Steps whose last chunk went out, those before this activation included. */
   finished: number;
   /** Tabs already replayed it: told again by their own probe, they are not held back again. */
@@ -244,7 +247,7 @@ function restatedChunks(parts: readonly JsonObject[], step: number): UIMessageCh
 }
 
 export class ChatWireTransport implements ChatTransport, ChatRoom {
-  /** Tabs told a stream is resuming and not yet acknowledged: live chunks skip them until their replay. */
+  /** Tabs told a stream is resuming whose replay has not gone out: live chunks skip them until it has. */
   private readonly pendingResume = new Set<string>();
   /** Tabs told an owed turn is pending, each with the probe it asked under: told it is resuming when it opens. */
   private readonly parked = new Map<string, { readonly connection: ChatSocket; readonly probeId: string | undefined }>();
@@ -307,53 +310,65 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     this.parked.clear();
   }
 
-  /** Cut markers precede recorded replacements; later live chunks follow. */
-  private replay(connection: ChatSocket, requestId: string): void {
-    this.pendingResume.delete(connection.id);
-    const { wire, live } = this;
+  /** The steps before the room opened the turn, restated from its agent's ledger, then the relay's chunks, cut markers
+   *  among them; later live chunks follow. The tab is held from the live chunks until its replay goes out, so none runs
+   *  ahead of the parts the replay opens while the ledger is read. */
+  replay(connection: ChatSocket, requestId: string): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const { live } = this;
 
-    const frame = (fields: { body: string; replayComplete?: true; done: boolean }): string =>
-      JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: requestId, replay: true, ...fields });
+      const frame = (fields: { body: string; replayComplete?: true; done: boolean }): string =>
+        JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: requestId, replay: true, ...fields });
 
-    // A request that is no longer live settles; its answer is in the transcript frame.
-    if (live === null || live.requestId !== requestId) {
-      sendIfOpen(connection, frame({ body: '', done: true }));
+      // A request that is no longer live settles; its answer is in the transcript frame.
+      if (live === null || live.requestId !== requestId) {
+        this.pendingResume.delete(connection.id);
+        sendIfOpen(connection, frame({ body: '', done: true }));
 
-      return;
-    }
+        return;
+      }
 
-    live.joined.add(connection.id);
+      // A turn this room opened at its first step relayed every step itself. An agent that cannot be asked leaves the
+      // relay's steps replayed alone.
+      const recorded = live.firstStep === 0 ? [] : yield* attempt(
+        { doing: "reading a re-opened turn's finished steps from its agent's ledger", otherwise: 'unavailable' },
+        () => this.wire.steps(live.turnId),
+      ).pipe(Effect.catch((failure) => Effect.sync(() => {
+        diagnostics.failure('chat.replay_steps_unread', failure);
 
-    const recorded = wire.steps();
-    const restated = Math.min(recorded.length, live.finished);
-    const frames: string[] = [];
-    const cuts = new Map<number, string[]>();
+        return [];
+      })));
 
-    for (const { step, type, body } of live.relayed) {
-      if (step >= restated || type !== 'data-kinu-step-cut') continue;
-      const before = cuts.get(step) ?? [];
-      before.push(frame({ body, done: false }));
-      cuts.set(step, before);
-    }
+      const restated = recorded.slice(0, live.firstStep);
 
-    // Before anything is replayed, the relay's first chunk opens the message live.
-    if (restated > 0 || live.relayed.length > 0) frames.push(frame({ body: JSON.stringify({ type: 'start', messageId: live.messageId }), done: false }));
+      // Ended or replaced while its ledger answered: what ended it told the tabs it held.
+      if (this.live !== live) return;
+      const frames: string[] = [];
 
-    for (const [step, parts] of recorded.slice(0, restated).entries()) {
-      frames.push(...(cuts.get(step) ?? []));
+      // Before anything is replayed, the relay's first chunk opens the message live.
+      if (restated.length > 0 || live.relayed.length > 0) frames.push(frame({ body: JSON.stringify({ type: 'start', messageId: live.messageId }), done: false }));
 
-      for (const chunk of restatedChunks(parts, step)) frames.push(frame({ body: JSON.stringify(chunk), done: false }));
-    }
+      for (const [step, parts] of restated.entries()) {
+        for (const chunk of restatedChunks(parts, step)) frames.push(frame({ body: JSON.stringify(chunk), done: false }));
+      }
 
-    for (const { step, type, body } of live.relayed) {
-      if (step >= restated && type !== 'start') frames.push(frame({ body, done: false }));
-    }
+      for (const { type, body } of live.relayed) {
+        if (type !== 'start') frames.push(frame({ body, done: false }));
+      }
 
-    frames.push(frame({ body: '', done: false, replayComplete: true }));
+      frames.push(frame({ body: '', done: false, replayComplete: true }));
 
-    for (const sent of frames) {
-      if (!sendIfOpen(connection, sent)) return;
-    }
+      for (const [place, sent] of frames.entries()) {
+        if (!sendIfOpen(connection, sent)) return;
+
+        // Released as its replay goes out: a socket that closed while the ledger answered leaves alone the hold its
+        // redial under the same id took.
+        if (place === 0) {
+          this.pendingResume.delete(connection.id);
+          live.joined.add(connection.id);
+        }
+      }
+    }));
   }
 
   async onMessage(connection: ChatSocket, raw: string): Promise<boolean> {
@@ -376,7 +391,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         return;
 
       case 'stream-resume-ack':
-        this.replay(connection, event.id);
+        await this.replay(connection, event.id);
 
         return;
 
@@ -500,7 +515,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
     const live: LiveStream = {
       requestId, turnId: turn.turnId, carried, messageId: turn.messageId, open: new OpenParts(), relayed: [],
-      finished: turn.finishedSteps, joined: new Set(), broken: false, failure: null, spoke: false,
+      firstStep: turn.finishedSteps, finished: turn.finishedSteps, joined: new Set(), broken: false, failure: null, spoke: false,
     };
 
     this.live = live;

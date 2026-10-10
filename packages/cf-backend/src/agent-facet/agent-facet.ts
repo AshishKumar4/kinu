@@ -143,6 +143,9 @@ export interface AgentFacetCalls {
   runEventText(snapshot: AgentSnapshot, runId: string, query: RunEventQuery | null): Promise<StoredRunEvent[]>;
   /** Its newest model steps, for the activity its workspace's window reads. */
   steps(snapshot: AgentSnapshot, limit: number): Promise<AgentSteps>;
+  /** The finished steps of its open turn `turnId`, drawn, for a tab its room replays the turn to; none when the turn
+   *  open is another, or none is. */
+  openSteps(snapshot: AgentSnapshot, turnId: string): Promise<readonly (readonly JsonObject[])[]>;
   /** A turn's request and response by its answer's id, for a rating its workspace records; null for none. */
   turnPair(snapshot: AgentSnapshot, messageId: string): Promise<ConversationTurnPair | null>;
   /** The metadata of its newest message from a person, which its idle work mode reads; null before any. */
@@ -462,6 +465,10 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async steps(snapshot: AgentSnapshot, limit: number): Promise<AgentSteps> {
     return this.open(snapshot).steps(limit);
+  }
+
+  async openSteps(snapshot: AgentSnapshot, turnId: string): Promise<readonly (readonly JsonObject[])[]> {
+    return this.open(snapshot).openSteps(turnId);
   }
 
   async turnPair(snapshot: AgentSnapshot, messageId: string): Promise<ConversationTurnPair | null> {
