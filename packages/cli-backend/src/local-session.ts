@@ -2611,7 +2611,7 @@ export class LocalAgentSession {
         jobs: () => this.jobs,
         budget: () => this.budget,
         cancelTrigger: (id, caller) => this.cancelTrigger(id, caller),
-        armCompactNow: () => { this.compactionState.armCompaction(this.compactionKey()); },
+        armCompactNow: async () => { this.compactionState.armCompaction(this.compactionKey()); },
       }),
     };
   }

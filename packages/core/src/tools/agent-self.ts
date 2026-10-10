@@ -47,8 +47,8 @@ export interface AgentSelfHost {
   listBackgroundJobs(limit?: number): Promise<BackgroundJob[]>;
   getQuality(days?: number): Promise<QualityDay[]>;
   /** Arm the compaction ladder's forced rebuild for this session's NEXT turn
-   *  assembly — the same one-shot flag overflow recovery uses. */
-  armCompactNow(): void;
+   *  assembly — the same one-shot flag overflow recovery uses — where that assembly reads it. */
+  armCompactNow(): Promise<void>;
   /** Parks a proposed workspace for the owner; absent where no owner account can hold one (a local session). */
   readonly proposeWorkspace?: (proposal: WorkspaceProposalInput) => Effect.Effect<WorkspaceProposalReceipt, KinuError>;
 }
@@ -110,7 +110,7 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
     serve(AGENT.jobResult, async ({ jobId }) => formatJobRead(await host.jobResult(jobId))),
     serve(AGENT.backgroundJobs, async ({ limit }) => await host.listBackgroundJobs(limit)),
     serve(AGENT.compactNow, async () => {
-      host.armCompactNow();
+      await host.armCompactNow();
 
       return { armed: true as const, appliesAt: 'next-turn-assembly' as const };
     }),

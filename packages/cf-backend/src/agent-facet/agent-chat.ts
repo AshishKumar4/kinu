@@ -410,6 +410,11 @@ export class FacetChat {
     await this.terminal.modelSettingsChanged();
   }
 
+  /** The forced rebuild the next turn assembly takes, under the key it reads. */
+  armCompaction(): void {
+    this.trigger.state.armCompaction(this.trigger.key);
+  }
+
   /** The owner's Clear, refused while a turn runs; its compaction plan goes with the conversation. Answers why the
    *  emptied request went unmeasured, if it did. */
   async clear(): Promise<KinuError | null> {

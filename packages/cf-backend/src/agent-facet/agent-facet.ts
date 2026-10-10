@@ -120,6 +120,8 @@ export interface AgentFacetCalls {
   answer(snapshot: AgentSnapshot, messageId: string): Promise<AgentAnswer | null>;
   /** Its conversation's newest rows first, for a lane its workspace runs on it. */
   newestFirst(snapshot: AgentSnapshot, limit: number): Promise<readonly ConversationProjection[]>;
+  /** The compaction ladder's forced rebuild, armed for its next turn assembly in the state that assembly reads. */
+  armCompaction(snapshot: AgentSnapshot): Promise<void>;
   /** Its conversation as a fork of its workspace reads it: whether a message can be cut at, the cut's plan, a section's
    *  count, and its rows as JSON lines, pulled as the fork's frames are sent. */
   forkHas(snapshot: AgentSnapshot, messageId: string): Promise<boolean>;
@@ -392,6 +394,10 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async newestFirst(snapshot: AgentSnapshot, limit: number): Promise<readonly ConversationProjection[]> {
     return await this.open(snapshot).newestFirst(limit);
+  }
+
+  async armCompaction(snapshot: AgentSnapshot): Promise<void> {
+    return await settle(this.withChat(snapshot, (chat) => { chat.armCompaction(); }));
   }
 
   async forkHas(snapshot: AgentSnapshot, messageId: string): Promise<boolean> {

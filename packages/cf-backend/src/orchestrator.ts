@@ -2697,7 +2697,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       budget: () => this.budget,
       // Owner's revoke path; drops the webhook secret with the row.
       cancelTrigger: (id, caller) => this.cancelTrigger(id, caller),
-      armCompactNow: () => { this.compactionState.armCompaction(this.name); },
+      // Main's turns are assembled in its own isolate, which reads and clears the arm (D9).
+      armCompactNow: async () => {
+        const main = this.actorHandle().actorId;
+
+        await (await this.agentCalls(main)).armCompaction(this.agentSnapshot(main));
+      },
       proposeWorkspace: (proposal) => this.proposals.propose(proposal),
     });
   }

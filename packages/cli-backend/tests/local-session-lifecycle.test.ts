@@ -868,7 +868,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         jobResult: async () => null,
         listBackgroundJobs: async () => [],
         ...agentSelfRest,
-        armCompactNow: () => { arms++; },
+        armCompactNow: async () => { arms++; },
       })],
     })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [] });
 

@@ -110,6 +110,7 @@ export function agentCallsThrough(through: <A>(call: (isolate: AgentFacetCalls) 
     answerTexts: (...args) => settle(through((isolate) => isolate.answerTexts(...args))),
     answer: (...args) => settle(through((isolate) => isolate.answer(...args))),
     newestFirst: (...args) => settle(through((isolate) => isolate.newestFirst(...args))),
+    armCompaction: (...args) => settle(through((isolate) => isolate.armCompaction(...args))),
     forkHas: (...args) => settle(through((isolate) => isolate.forkHas(...args))),
     forkPlan: (...args) => settle(through((isolate) => isolate.forkPlan(...args))),
     forkCount: (...args) => settle(through((isolate) => isolate.forkCount(...args))),
