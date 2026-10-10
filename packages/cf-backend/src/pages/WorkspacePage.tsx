@@ -258,7 +258,8 @@ function ForkModal({
 }
 
 function NestedAgentColumn({ workspace, path, rpc, ids, input }: { workspace: string; path: string; rpc: Rpc; ids: AgentLinkIds; input: boolean }) {
-  const { resource, reload } = useAsyncResource(() => nestedAgent(rpc, path, ids), undefined, `${path}|${ids.actor ?? ""}|${ids.parent ?? ""}`);
+  const load = useCallback(() => nestedAgent(rpc, path, ids), [rpc, path, ids]);
+  const { resource, reload } = useAsyncResource(load, undefined, `${path}|${ids.actor ?? ""}|${ids.parent ?? ""}`);
 
   if (resource.status === "loading") return <div className="flex flex-1 items-center justify-center"><Loader size="sm" /></div>;
 

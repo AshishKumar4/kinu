@@ -1564,7 +1564,13 @@ const MESSAGES: UIMessage[] = [
 function galleryPlanInspection(request: SubordinateInspectionRequest, plans: readonly PlanReview[]) {
   if (request.view === 'plans') return { view: 'plans', path: request.path, page: { status: 'end', items: plans } };
 
-  if (request.view === 'children') return { view: 'children', path: request.path, page: { status: 'end', items: [] } };
+  if (request.view === 'children') {
+    // Counted: a nested agent's column reads its roster once per identity, never once per render.
+    const root = document.documentElement.dataset;
+    root.galleryChildrenReads = String(Number(root.galleryChildrenReads ?? '0') + 1);
+
+    return { view: 'children', path: request.path, page: { status: 'end', items: [] } };
+  }
 
   if (request.view === 'planTasks') return { view: 'planTasks', path: request.path, tasks: [] };
 

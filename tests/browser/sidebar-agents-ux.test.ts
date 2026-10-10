@@ -67,6 +67,30 @@ describe('the sidebar drills into a workspace\'s agents', () => {
     });
   });
 
+  // 26244c765: the nested column's loader was a fresh closure each render, and the read it keyed re-ran on every answer.
+  test('an agent nested under another opens on one read of its roster, which stays read', async () => {
+    await withGallery(async (gallery) => {
+      const page = await shell(gallery, 1280);
+      await page.waitForSelector('[data-agents-counter]');
+      await page.click('[data-agents-counter]');
+      await page.waitForFunction((list) => document.querySelector(list)?.closest('[inert]') === null, {}, LIST);
+      await still(page);
+      await page.click(`${LIST} [data-agent-row="a-check"]`);
+      await page.waitForFunction(() => Number(document.documentElement.dataset.galleryChildrenReads ?? '0') > 0);
+
+      const frames = () => page.evaluate(() => new Promise<number>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve(Number(document.documentElement.dataset.galleryChildrenReads ?? '0'))));
+      }));
+
+      const settled = await frames();
+
+      // One lookup reads its live parent's roster, and the kept one its hirer's: at most two reads, and then none.
+      expect(settled).toBeLessThanOrEqual(2);
+      expect(await frames()).toBe(settled);
+      await page.close();
+    });
+  });
+
   test('the bar\'s agents button opens the same list', async () => {
     await withGallery(async (gallery) => {
       const page = await shell(gallery, 1280);
