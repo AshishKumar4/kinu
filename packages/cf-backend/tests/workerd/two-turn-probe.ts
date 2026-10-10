@@ -24,8 +24,8 @@ import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestra
 import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB } from '../../src/wake-jobs';
 import { ROOT_SLATE_CALLER } from '../../src/slates/bindings';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
-import { meterInPlace, type MeteredTurn, type SqlMeter } from './sql-meter';
-import { Crossings, type CountedClass } from './crossings';
+import { meterInPlace, type MeteredTurn, type SqlMeter, type TurnCrossings } from './sql-meter';
+import { Crossings } from './crossings';
 import { AgentWorkspaceHost, AgentWorkspaceRPC } from '../../src/agent-facets';
 import { agentCallsThrough } from '../../src/dynamic-worker-slots';
 import { UserDO } from '../../src/user/user-do';
@@ -141,19 +141,15 @@ async function awaitSettled(target: { settleState(): Promise<SettleState> }): Pr
  * Calls into this worker while the meter runs: the relay main's isolate calls, the workspace host each relay call opens
  * and calls, and the account. Counted once per worker, for the one workspace a meter runs over.
  */
-const crossings = new Crossings();
+const crossings = new Crossings('relay.paceStep');
 
 /** The facet's calls as the workspace makes them. */
 const FACET_CALLS = Object.keys(agentCallsThrough(() => Effect.die('names only')));
 
-/** A class's own calls, its constructor and the members it keeps to itself left out. */
-function callsOf(owner: CountedClass, internal: readonly string[]): string[] {
-  return Object.getOwnPropertyNames(owner.prototype).filter((name) => name !== 'constructor' && !internal.includes(name));
-}
+// The relay and the host whole, but what each keeps to itself; the account by the surface it serves.
+crossings.countAll(AgentWorkspaceRPC, 'relay', ['host', 'owned']);
 
-crossings.count(AgentWorkspaceRPC, 'relay', callsOf(AgentWorkspaceRPC, ['host', 'owned']));
-
-crossings.count(AgentWorkspaceHost, 'host', callsOf(AgentWorkspaceHost, ['open']));
+crossings.countAll(AgentWorkspaceHost, 'host', ['open']);
 
 crossings.count(UserDO, 'account', USER_DO_RPC_SURFACE);
 
@@ -190,6 +186,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'drainRunClosed');
     Reflect.deleteProperty(this, 'meterBegin');
     Reflect.deleteProperty(this, 'meterEnd');
+    Reflect.deleteProperty(this, 'plantCrossings');
     Reflect.deleteProperty(this, 'settleState');
     Reflect.deleteProperty(this, 'sleepTimeNow');
     Reflect.deleteProperty(this, 'refuseReservations');
@@ -206,7 +203,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'liveTerminal');
     Reflect.deleteProperty(this, 'terminalState');
     Reflect.deleteProperty(this, 'alienEffect');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates', 'answerPageModes', 'cutTerminal', 'liveTerminal', 'terminalState', 'alienEffect']);
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'plantCrossings', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates', 'answerPageModes', 'cutTerminal', 'liveTerminal', 'terminalState', 'alienEffect']);
   }
 
   /** `query` over main's own isolate, where its conversation, sends, claims and runs are kept (D9). */
@@ -467,6 +464,22 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     const measuredMain = await main.meterEnd();
 
     return { workspace, main: measuredMain.cost, historyReads, crossings: { workspace: intoWorkspace, main: measuredMain.crossings } };
+  }
+
+  /**
+   * One extra call at each boundary the count covers: the workspace into main's isolate, the workspace into the account,
+   * main's isolate into the relay, and main's isolate into an RPC target the relay answers with. Each must show in the
+   * count, or a boundary is crossed unseen.
+   */
+  async plantCrossings(): Promise<void> {
+    const actorId = this.actorHandle().actorId;
+
+    await (await this.agentCalls(actorId)).newestFirst(this.agentSnapshot(actorId), 1);
+    const { stub, caller } = await this.userHub();
+
+    await stub.getCredentialsRevision(caller);
+    // Not a facet call the count covers: what it calls back into this worker is.
+    await (await this.agentFacetOf<ProbeAgentFacet>(actorId)).plantCrossings();
   }
 
   /** Each relay call opens the workspace's host: a crossing of its own. */
@@ -837,7 +850,7 @@ type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   & Pick<ProductionOrchestrator, 'getChangeNotes' | 'saveChangeNotes' | 'sendChangeNotes'>
   & Pick<ObservedOrchestrator, 'refuseReservations' | 'owedSends' | 'latestClaimOutcome' | 'recoveryPass'
   | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'answerSlates' | 'answerPageModes' | 'cutTerminal' | 'liveTerminal' | 'terminalState' | 'alienEffect' | 'inspectWork' | 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
-  | 'receivePeerThenEvict' | 'timerTickFinished' | 'runCauses' | 'drainRunClosed' | 'meterBegin' | 'meterEnd' | 'settleState'>;
+  | 'receivePeerThenEvict' | 'timerTickFinished' | 'runCauses' | 'drainRunClosed' | 'meterBegin' | 'meterEnd' | 'plantCrossings' | 'settleState'>;
 
 /** Sleeps past the interactive detach window, so the call detaches and settles out of turn. */
 const WAKE_RUN_SLEEP_MS = 40_000;
@@ -1073,7 +1086,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
    * A task turn of `steps` tool steps after one of the same shape, its calls counted into the workspace and into main's
    * isolate from enqueue to its sleep-time settle: the window the statement count is taken over.
    */
-  async turnCrossings(steps: number): Promise<MeteredTurn> {
+  async turnCrossings(steps: number): Promise<TurnCrossings> {
     const workspace = `crossings-${String(steps)}-${crypto.randomUUID()}`;
     const target: QueueTarget = await this.queueTarget(workspace);
     const caller = await ownerCaller(this.env);
@@ -1101,8 +1114,15 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     if (measured.status !== 'queued') throw new Error(`crossings: measured turn ${JSON.stringify(measured)}`);
     await awaitSleepTimeSettled(recording, workspace, 2);
     await awaitSettled(target);
+    const turn = await target.meterEnd();
+    // The workload, read where the model heard it: each tool step's call and the answer's, for both turns.
+    const modelCalls = (await this.httpCalls()).filter((call) => call.users.some((message) => message === `steps:${String(steps)}`)).length;
 
-    return await target.meterEnd();
+    await target.meterBegin();
+    await target.plantCrossings();
+    const planted = await target.meterEnd();
+
+    return { turn, modelCalls, planted: planted.crossings };
   }
 
   /** Only this worker's outbound handler routes to the control host, so no new Worker or binding. */

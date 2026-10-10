@@ -7,10 +7,10 @@ import { CHAT_SESSION_ID, SessionHistory, WorkspaceActorDirectory, type JsonObje
 import { seedTranscriptEntry } from '@kinu.run/test-utils/transcript';
 import { AgentFacet as ShippedAgentFacet } from '../../src/agent-facet/agent-facet';
 import { meterInPlace, type OperationCost, type SqlMeter } from './sql-meter';
-import { Crossings } from './crossings';
+import { Crossings, type PhasedCrossings } from './crossings';
 
-/** The calls the workspace makes into main's isolate while the meter runs. */
-const crossings = new Crossings();
+/** The calls the workspace makes into main's isolate while the meter runs, split at each step's grant. */
+const crossings = new Crossings('facet.step');
 
 /** Each facet call counted once: the isolate is cached by id, so its class serves every activation. */
 let counting = false;
@@ -47,10 +47,19 @@ export class AgentFacet extends ShippedAgentFacet {
   }
 
   /** Read once this isolate is idle, so the turn's tail here counts on every run. */
-  async meterEnd(): Promise<{ readonly cost: OperationCost; readonly crossings: Record<string, number> }> {
+  async meterEnd(): Promise<{ readonly cost: OperationCost; readonly crossings: PhasedCrossings }> {
     await crossings.aside(() => this.idle());
 
     return { cost: this.meter.end(null), crossings: crossings.end() };
+  }
+
+  /** One call this isolate makes into its workspace's relay, and one into an RPC target the relay answers with: each
+   *  must show in the workspace's count. */
+  async plantCrossings(): Promise<void> {
+    await this.env.WORKSPACE.logActivity([]);
+    const memory = await this.env.WORKSPACE.memory();
+
+    await memory.tail('MEMORY.md', 16);
   }
 
   /** `query` over this agent's own SQLite: its rows for a read, none for a statement. */

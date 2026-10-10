@@ -16,6 +16,7 @@ import { afterAll, expect, test } from 'vitest';
 import type { ComplexityProbeDO, OperationCost } from './complexity-probe';
 import { judge, steepest, type GrowthClass, type GrowthCounter, type GrowthFinding } from './growth';
 import { crossingTotal } from '../crossings';
+import type { MeteredTurn } from '../sql-meter';
 
 type Probe = DurableObjectStub<ComplexityProbeDO>;
 
@@ -327,34 +328,69 @@ test('a production turn runs no more statements than it was measured at, and ask
 
 /**
  * A task turn's calls across an isolate or object boundary, counted where each lands: the relay main's isolate calls
- * into, the workspace host that call opens and calls, the account, and main's isolate the workspace calls into (D9).
- * A one-step turn is its open, its close and a step; a step is the slope from it to a four-step turn. Measured
- * 2026-10-10 at b32ef0a7e (lane 6a52bffb0): 111 and 157, so 15.3 a step; before the isolate (d05ff368d, the perf probe)
- * a steady step crossed once. Design v2 §8 targets 3 a tool step (up `step`, the down grant, up `executeTool`); each
- * fold lowers these to what it measured.
+ * into, the workspace host each relay call opens and calls, the RPC targets either answers with (a memory, a Nimbus
+ * session, a context tree), the account, and main's isolate the workspace calls into (D9). Each side splits into its
+ * open, a phase a model step (from the step's pace), and the last step with the turn's close. A planted call at each
+ * boundary must show as one more crossing there, so the same call in a turn fails these bounds.
+ * Measured 2026-10-10 at 40db812715 (lane e881f2a3c), three runs alike: a four-step task turn opens in 39, steps in
+ * 19, 16, 14 and 14, and closes in 56 (158 in all; a one-step turn 112). A steady tool step is 14: its pace (relay,
+ * host, the facet's grant), its auth (relay, host, account), its tool (relay, host), its activity (relay, host) and
+ * four host openings. Before the isolate (d05ff368d) a steady step crossed once; design v2 §8 targets 3.
  */
-const TURN_CROSSINGS = 111;
+const CROSSINGS = { open: 39, step: 19, close: 56 } as const;
 
-const FOUR_STEP_CROSSINGS = 157;
+/** The planted calls (`ObservedOrchestrator.plantCrossings`), one at each boundary, each where it lands. */
+const PLANTED = {
+  workspace: ['account.getCredentialsRevision', 'relay.logActivity', 'AgentMemory.tail'],
+  main: ['facet.newestFirst'],
+} as const;
 
-test("a task turn crosses between the workspace and main's isolate no more than it was measured to", async () => {
+/** A turn's crossings by place, both sides summed: its open, each model step's, and its last step's with its close. */
+interface TurnPhases {
+  readonly open: number;
+  readonly steps: readonly number[];
+  readonly close: number;
+}
+
+function phasesOf(turn: MeteredTurn): TurnPhases {
+  const sides = [turn.crossings.workspace.phases, turn.crossings.main.phases];
+  const length = Math.max(...sides.map((phases) => phases.length));
+  const at = (index: number) => sides.reduce((sum, phases) => sum + crossingTotal(phases[index] ?? {}), 0);
+  const all = Array.from({ length }, (_, index) => at(index));
+
+  return { open: all[0] ?? 0, steps: all.slice(1, -1), close: all.at(-1) ?? 0 };
+}
+
+test("a task turn crosses between the workspace and main's isolate no more than it was measured to, at each place", async () => {
   // One after the other: the worker counts the calls landing in it, whichever workspace they are for.
   const crossingsOf = async (steps: number) => await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName(`crossings-${String(steps)}`)).turnCrossings(steps);
   const one = await crossingsOf(1);
   const four = await crossingsOf(4);
-  const total = (turn: typeof one) => crossingTotal(turn.crossings.workspace) + crossingTotal(turn.crossings.main);
-  const step = (total(four) - total(one)) / 3;
+  const phases = phasesOf(four.turn);
+  const total = (turn: MeteredTurn) => crossingTotal(turn.crossings.workspace.total) + crossingTotal(turn.crossings.main.total);
 
   reports.push([
-    `complexity: a task turn's crossings: one step ${String(total(one))} (at most ${String(TURN_CROSSINGS)}), four steps `
-      + `${String(total(four))} (at most ${String(FOUR_STEP_CROSSINGS)}), so ${step.toFixed(1)} a step`,
-    `  one step, into the workspace: ${JSON.stringify(one.crossings.workspace)}`,
-    `  one step, into main's isolate: ${JSON.stringify(one.crossings.main)}`,
-    `  four steps, into the workspace: ${JSON.stringify(four.crossings.workspace)}`,
-    `  four steps, into main's isolate: ${JSON.stringify(four.crossings.main)}`,
+    `complexity: a task turn's crossings, four tool steps: open ${String(phases.open)} (at most ${String(CROSSINGS.open)}), `
+      + `steps ${phases.steps.join(', ')} (each at most ${String(CROSSINGS.step)}), close ${String(phases.close)} `
+      + `(at most ${String(CROSSINGS.close)}); ${String(total(four.turn))} in all, one step ${String(total(one.turn))}`,
+    ...four.turn.crossings.workspace.phases.map((phase, index) => `  into the workspace, phase ${String(index)}: ${JSON.stringify(phase)}`),
+    ...four.turn.crossings.main.phases.map((phase, index) => `  into main's isolate, phase ${String(index)}: ${JSON.stringify(phase)}`),
+    `  planted: ${JSON.stringify(four.planted)}`,
   ].join('\n'));
-  expect(total(one)).toBeLessThanOrEqual(TURN_CROSSINGS);
-  expect(total(four)).toBeLessThanOrEqual(FOUR_STEP_CROSSINGS);
+  // Both turns of each workspace ran their steps: each tool step's call and the answer's.
+  expect([one.modelCalls, four.modelCalls]).toEqual([2 * 2, 2 * 5]);
+  // A phase a step on each side: the open, four tool steps, and the answer's step with the close.
+  expect([four.turn.crossings.workspace.phases.length, four.turn.crossings.main.phases.length]).toEqual([6, 6]);
+
+  for (const [side, entries] of Object.entries(PLANTED)) {
+    const planted = side === 'main' ? four.planted.main.total : four.planted.workspace.total;
+
+    for (const entry of entries) expect({ side, entry, crossed: planted[entry] ?? 0 }).toEqual({ side, entry, crossed: 1 });
+  }
+
+  expect(phases.open).toBeLessThanOrEqual(CROSSINGS.open);
+  expect(Math.max(...phases.steps)).toBeLessThanOrEqual(CROSSINGS.step);
+  expect(phases.close).toBeLessThanOrEqual(CROSSINGS.close);
 });
 
 // Runs after the subjects: the orchestrator subject fills `transportReads`.
