@@ -5,7 +5,7 @@ import { Meter, instrument, type Slice } from './meter';
 const meters = new WeakMap<object, Meter>();
 
 
-instrument(Product.prototype, 'facet', (receiver) => meters.get(receiver), ['workspace', 'state', 'open', 'prepared', 'withChat', 'models']);
+instrument(Product.prototype, 'facet', (receiver) => meters.get(receiver), { internal: ['workspace', 'state', 'open', 'prepared', 'withChat', 'models'] });
 
 export class AgentFacet extends Product {
   private readonly perfMeter: Meter;

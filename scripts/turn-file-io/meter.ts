@@ -1,6 +1,7 @@
 /** Probe-only SQL and RPC accounting. Snapshot queries do not pass through the SQL meter. */
 import { SqlMeter, type OperationCost } from '../../packages/cf-backend/tests/workerd/sql-meter';
 import * as v from 'valibot';
+import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 
 export interface Slice {
   readonly label: string;
@@ -32,19 +33,34 @@ export interface RpcReceiver { readonly constructor: Function }
 
 const MethodSchema = v.custom<Function>((value) => typeof value === 'function');
 
+const HostedSessionSchema = v.custom<HostedSession>((value) => typeof value === 'object' && value !== null && '_rpcReadFile' in value && typeof value._rpcReadFile === 'function');
+
+export interface InstrumentHooks {
+  readonly internal: readonly string[];
+  readonly session?: (returned: HostedSession, meter: Meter) => HostedSession;
+}
+
 /** Instruments actual receiver entries; no multiplier or source-code call-count estimate. */
-export function instrument(proto: RpcReceiver, prefix: string, owner: (receiver: RpcReceiver) => Meter | undefined, internal: readonly string[]): void {
+export function instrument(proto: RpcReceiver, prefix: string, owner: (receiver: RpcReceiver) => Meter | undefined, hooks: InstrumentHooks): void {
   for (const name of Object.getOwnPropertyNames(proto)) {
     const descriptor = Object.getOwnPropertyDescriptor(proto, name);
     const method: unknown = descriptor?.value;
 
-    if (name === 'constructor' || name.startsWith('perf') || internal.includes(name) || typeof method !== 'function') continue;
+    if (name === 'constructor' || name.startsWith('perf') || hooks.internal.includes(name) || typeof method !== 'function') continue;
     const callable = v.parse(MethodSchema, method);
 
     Object.defineProperty(proto, name, { ...descriptor, value: function (this: RpcReceiver, ...args: unknown[]) {
-      owner(this)?.rpc(`${prefix}.${name}`);
+      const meter = owner(this);
+      meter?.rpc(`${prefix}.${name}`);
+      const returned = callable.apply(this, args);
 
-      return callable.apply(this, args);
+      const session = hooks.session;
+
+      if (session !== undefined && meter !== undefined && (name === 'session' || name === 'stateSession')) {
+        return Promise.resolve(returned).then((answer) => session(v.parse(HostedSessionSchema, answer), meter));
+      }
+
+      return returned;
     } });
   }
 }

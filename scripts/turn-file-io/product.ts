@@ -1,11 +1,13 @@
 /** Built product, with measurement-only RPCs. The shipped bundle itself is not rewritten. */
-import { OrchestratorAgent as Product, AgentWorkspaceRPC as Relay } from 'kinu:product';
+import { OrchestratorAgent as Product, AgentWorkspaceRPC as Relay, UserDO as Account } from 'kinu:product';
 import type { AgentFacet as MeasuredFacet } from './facet';
 import { Meter, instrument, type Slice, type RpcReceiver } from './meter';
 import { JsonObjectSchema } from '@kinu.run/core';
 import type { Tool } from 'ai';
 import * as v from 'valibot';
 import type { ChatSession } from '@kinu.run/core';
+import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
+import { USER_DO_RPC_SURFACE } from '../../packages/cf-backend/src/rpc-surface';
 
 export * from 'kinu:product';
 
@@ -19,9 +21,32 @@ const hostsInstrumented = new WeakSet<object>();
 
 const relayMeters = new WeakMap<RpcReceiver, Meter>();
 
+const sessionMeters = new WeakMap<RpcReceiver, Meter>();
+
+const sessionsInstrumented = new WeakSet<RpcReceiver>();
+
+interface RpcWindow { meter: Meter | null }
+
+const activeRpc: RpcWindow = { meter: null };
+
+instrument(Account.prototype, 'account', () => activeRpc.meter ?? undefined,
+  { internal: Object.getOwnPropertyNames(Account.prototype).filter((name) => !USER_DO_RPC_SURFACE.includes(name)) });
+
+function countedSession(returned: HostedSession, meter: Meter): HostedSession {
+  sessionMeters.set(returned, meter);
+  const proto: RpcReceiver = Object.getPrototypeOf(returned);
+
+  if (!sessionsInstrumented.has(proto)) {
+    instrument(proto, 'nimbus', (receiver) => sessionMeters.get(receiver), { internal: Object.getOwnPropertyNames(proto).filter((name) => !name.startsWith('_rpc')) });
+    sessionsInstrumented.add(proto);
+  }
+
+  return returned;
+}
+
 const FetcherSchema = v.custom<Fetcher>((value) => typeof value === 'object' && value !== null && 'fetch' in value && typeof value.fetch === 'function');
 
-instrument(Relay.prototype, 'relay', (receiver) => relayMeters.get(receiver), ['host', 'owned']);
+instrument(Relay.prototype, 'relay', (receiver) => relayMeters.get(receiver), { internal: ['host', 'owned'] });
 
 export class AgentWorkspaceRPC extends Relay {
   constructor(...args: ConstructorParameters<typeof Relay>) {
@@ -63,7 +88,7 @@ export class OrchestratorAgent extends Product {
     const proto: RpcReceiver = Object.getPrototypeOf(host);
 
     if (!hostsInstrumented.has(proto)) {
-      instrument(proto, 'host', (receiver) => hostMeters.get(receiver), ['open']);
+      instrument(proto, 'host', (receiver) => hostMeters.get(receiver), { internal: ['open'], session: countedSession });
       hostsInstrumented.add(proto);
     }
 
@@ -82,16 +107,19 @@ export class OrchestratorAgent extends Product {
   async perfBegin(): Promise<void> {
     await (await this.perfFacet())?.perfBegin();
     this.perfMeter.begin();
+    activeRpc.meter = this.perfMeter;
   }
 
   async perfCut(label: string, resume: boolean): Promise<{ workspace: Slice; facet: Slice | null }> {
     const local = this.perfMeter.cut(label, false);
+    activeRpc.meter = null;
     const facet = await this.perfFacet();
     const cost = await facet?.perfCut(label, false);
 
     if (resume) {
       await facet?.perfBegin();
       this.perfMeter.begin();
+      activeRpc.meter = this.perfMeter;
     }
 
     return { workspace: local, facet: cost ?? null };
@@ -107,6 +135,12 @@ export class OrchestratorAgent extends Product {
     await this.chatLoop?.pumpPromise;
     await this.settleBackgroundTasks();
     await this.terminal.idle();
+  }
+
+  override runTaskFromMcp(text: string) {
+    this.perfMeter.rpc('workspace.runTaskFromMcp');
+
+    return super.runTaskFromMcp(text);
   }
 
   async perfWarmFiles(): Promise<void> { this.getRawToolsForWorkMode('build'); }
