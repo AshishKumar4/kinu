@@ -4091,17 +4091,20 @@ export abstract class ActorAgent extends Agent<Env> {
       const reach = narrowToolSurface(effectiveRoleCatalog(turn.profile.inputs.envelope.catalog)[turn.profile.profile.role.id]?.allowedTools);
       const declared = reach.allowsTool('eval') ? Object.fromEntries(Object.entries(external).filter(([name]) => reach.allowsTool(name))) : {};
 
-      // Until the facet binds the profile it assembled on, and again when a restarted workspace reads the turn anew.
-      surface.resolved(turn.profile.profile, reads.profileInputs, external, declared);
+      surface.reached(external, declared);
 
       // Eval declares the turn's external tools in the description it is built with, and the surface above was built
       // before this turn read them; a role imposing another mode (a planner on a Build message) runs that mode's tools.
       const { workMode } = turn.profile.profile;
       const current = Object.keys(declared).length === 0 && workMode === turn.input.mode ? tools : withToolText(this.actorToolsets(workMode).turn, this.turnArtifacts().tools);
+      const raw = this.actorToolsets(workMode).raw;
+
+      // Until the facet binds the profile it assembled on, and again when a restarted workspace reads the turn anew.
+      surface.resolved(turn.profile.profile, reads.profileInputs);
 
       return {
         tools: this.inFacetTurn(current, turn.taskPlan, surface),
-        raw: this.inFacetTurn(this.actorToolsets(workMode).raw, turn.taskPlan, surface),
+        raw: this.inFacetTurn(raw, turn.taskPlan, surface),
         sources: { ...sources, wiredToolNames: (mode) => [...sources.wiredToolNames(mode), ...Object.keys(external)] },
         ...(trial !== null && { trial }),
         surface,

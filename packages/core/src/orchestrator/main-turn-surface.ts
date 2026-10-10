@@ -30,7 +30,8 @@ export class TurnSurface {
   readonly evolutionEnabled: boolean;
   readonly planReply: ReplyToCommentToolDeps | undefined;
   readonly #actor: ActorReference;
-  #reach: { readonly inputs: ProfileAuthorityInputs; readonly external: ToolSet } | null = null;
+  #external: ToolSet = {};
+  #inputs: ProfileAuthorityInputs | null = null;
   #operation: OperationProfile | null = null;
   #declared: ToolSet = {};
 
@@ -53,20 +54,25 @@ export class TurnSurface {
     return this.#declared;
   }
 
-  /** The turn's reads resolved: its tools run under `profile` until main's isolate binds the one it assembled on. */
-  resolved(profile: ResolvedTurnProfile, inputs: ProfileAuthorityInputs, external: ToolSet, declared: ToolSet): void {
-    this.#reach = { inputs, external };
-    this.#operation = this.#capture(profile, inputs);
+  /** The turn's external tools were read: its eval declares and reaches `declared` of them until its profile is bound. */
+  reached(external: ToolSet, declared: ToolSet): void {
+    this.#external = external;
     this.#declared = declared;
+  }
+
+  /** The turn's reads resolved a profile: its tools run under it until main's isolate binds the one it assembled on. */
+  resolved(profile: ResolvedTurnProfile, inputs: ProfileAuthorityInputs): void {
+    this.#inputs = inputs;
+    this.#operation = this.#capture(profile, inputs);
   }
 
   /** The profile main's isolate assembled the turn on: its tools run under it, and its eval reaches what it allows. */
   bind(profile: ResolvedTurnProfile): void {
-    if (this.#reach === null) return;
+    if (this.#inputs === null) return;
     const allowed = new Set(profile.allowedTools);
 
-    this.#operation = this.#capture(profile, this.#reach.inputs);
-    this.#declared = allowed.has('eval') ? Object.fromEntries(Object.entries(this.#reach.external).filter(([name]) => allowed.has(name))) : {};
+    this.#operation = this.#capture(profile, this.#inputs);
+    this.#declared = allowed.has('eval') ? Object.fromEntries(Object.entries(this.#external).filter(([name]) => allowed.has(name))) : {};
   }
 
   #capture(profile: ResolvedTurnProfile, inputs: ProfileAuthorityInputs): OperationProfile {
