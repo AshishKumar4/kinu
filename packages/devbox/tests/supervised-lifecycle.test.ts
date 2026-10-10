@@ -53,8 +53,8 @@ describe('starting a supervised process reserves its id before the process exist
     await paused.reached;
     const stopping = box.stopSupervised(first.processId);
 
-    // Let stop's native/storage work reach its reservation claim before the successor is submitted.
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    // Yield one event-loop turn for the stand-in's queued Promise work; no timer, duration or polling bound.
+    await new Promise<void>((resolve) => setImmediate(resolve));
     const next = box.startSupervised(COMMAND);
     let whileHeld: readonly string[] = [];
 
