@@ -1773,6 +1773,8 @@ export {
 
 export { ModelCatalogSession, resolveEffectiveModelSpec, type ModelCatalogRead } from './orchestrator/model-catalog';
 
+export { turnAuthorship, type TurnAuthorship } from './orchestrator/turn-authorship';
+
 export {
   serializeContentForHeads, narrowInheritedRole,
   inheritedContextFromHistory, inheritedContextFromTranscript,

@@ -2,7 +2,7 @@
 import {
   CHAT_SESSION_ID, ChatSession, EventLog, HeadCapture, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TerminalTransitions,
   PlanReviewActions, announcementOf, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork,
-  planHandoffStillOwed, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, terminalEffect, OWNER_ANSWER_SIGNAL,
+  planHandoffStillOwed, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, terminalEffect, turnAuthorship,
   metadataTier, reportReadsNarration, subordinateTerminalEffects, withCompactionTrigger,
   bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpening, type JsonObject, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
@@ -29,12 +29,11 @@ export interface FacetChatDeps {
   readonly pacer: StepPacer;
 }
 
-/** A hirer's or the harness's turn runs in the hirer's lane, with `report`; the owner's, a plan's feedback or approval and
- *  the turn an answer resumes (the owner's decisions), in the owner's. */
-const OWNER_EVENTS: ReadonlySet<unknown> = new Set(['plan_feedback', 'plan_approved', OWNER_ANSWER_SIGNAL]);
-
+/** A hirer's or the harness's turn runs in the hirer's lane, with `report`; the owner's words and decisions, in the owner's. */
 function parentDrivenTurn(item: ChatTurnInput): boolean {
-  return item.kind === 'programmatic' && !OWNER_EVENTS.has(item.metadata?.kinuEvent);
+  const event = item.metadata?.kinuEvent;
+
+  return turnAuthorship({ kind: item.kind, ...(typeof event === 'string' && { event }) }) === 'hirer';
 }
 
 export class FacetChat {

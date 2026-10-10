@@ -75,7 +75,7 @@ import { ActorSession, type ActorTurnLease,
   actorNamespaces, SURFACE_POLICY, type SurfaceActor,
   type CodemodeProvider,
   agentRoleSwitch,
-  REPORT_TOOL, type ReportDeps,
+  REPORT_TOOL, turnAuthorship, type ReportDeps,
   type MissionGovernor,
   observeSystemPromptHash,
   type DynamicContext,
@@ -1589,7 +1589,8 @@ export class LocalAgentSession {
     const artifacts = turnArtifactBodies(this.rt.storage.sql, this.rt.actor, { ...opening, main: this.rt.actor.parentActorId === null });
     this.turnArtifacts = artifactOverrides(artifacts.bodies);
     // Set before anything reads the tool surface: the report gate is a property of this turn.
-    this.turnIsParentAssigned = item.kind === 'programmatic';
+    const event = item.metadata?.kinuEvent;
+    this.turnIsParentAssigned = turnAuthorship({ kind: item.kind, ...(typeof event === 'string' && { event }) }) === 'hirer';
     this.turnLearns = this.engine.recordsTurns;
     this.turnDriving = authoredTurnMetadata(item);
 
@@ -1672,7 +1673,7 @@ export class LocalAgentSession {
       },
       // Built into the turn's tool set by its gates, and outside the builtins, so named here.
       wiredToolNames: (mode) => [
-        ...(this.reportDeps !== null && item.kind === 'programmatic' ? [REPORT_TOOL] : []),
+        ...(this.reportGateOpen() ? [REPORT_TOOL] : []),
         ...(this.planSubmissionOpen(mode) ? [SUBMIT_PLAN_TOOL] : []),
         ...(this.planReplyOpen() ? [REPLY_TO_COMMENT_TOOL] : []),
         ...(this.askOwnerOpen() ? [ASK_OWNER_TOOL] : []),

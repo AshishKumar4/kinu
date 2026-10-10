@@ -33,11 +33,13 @@ function session(steps: readonly Step[], db = workspaceDatabase(scratchPath('own
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
   const requests: Prompt[] = [];
+  const offered: string[][] = [];
   let taken = 0;
 
   const model = scriptedTurnModel({ doGenerate: async (options) => {
     if ((options.tools ?? []).length === 0) return QUIET;
     requests.push(options.prompt.filter((message) => message.role !== 'system'));
+    offered.push((options.tools ?? []).map((tool) => tool.name));
     const step = steps[taken] ?? { answer: 'nothing left to do' };
     taken += 1;
 
@@ -51,7 +53,7 @@ function session(steps: readonly Step[], db = workspaceDatabase(scratchPath('own
 
   rt.actor.config.setLearning(false);
 
-  return { db, rt, agent: new LocalAgentSession({ rt, db, model, onEvent: () => {} }), requests };
+  return { db, rt, agent: new LocalAgentSession({ rt, db, model, onEvent: () => {} }), requests, offered };
 }
 
 /** The `ask_owner` call and its result in a request, and what follows the result. */
@@ -65,6 +67,32 @@ function askPair(prompt: Prompt) {
 const ANSWER: readonly OwnerAnswer[] = [{ id: 'units', selected: ['Integer cents'], note: 'Round half to even.' }];
 
 describe('LocalAgentSession: asking the owner', () => {
+  /** One rule decides whom a turn answers (design v2 §1.6). Every programmatic turn here was the hirer's, so the turn an
+   *  owner's answer resumed could `report` to whoever hired the agent. */
+  test("the turn an owner's answer resumes is the owner's, so an agent with a hirer is offered no report there", async () => {
+    const { db, agent, offered } = session([
+      { call: 'ask_owner', input: ASK },
+      { answer: 'Storing integer cents, rounding half to even.' },
+    ]);
+
+    agent.setReport({ report: async () => undefined });
+
+    try {
+      await agent.send('Migrate the ledger.', { id: crypto.randomUUID(), mode: 'build' });
+      const [open] = (await agent.listOwnerQuestions()).filter((asking) => asking.asked.status === 'open');
+
+      if (open === undefined) throw new Error('the ask left no open question');
+      await agent.answerOwnerQuestions(open.asked.id, ANSWER);
+      await agent.settleBackgroundWork();
+
+      expect(offered).toHaveLength(2);
+      expect(offered.map((names) => names.includes('report'))).toEqual([false, false]);
+    } finally {
+      await agent.end();
+      db.close();
+    }
+  });
+
   test('the turn ends on the ask; the answer is the call\'s result, and the model goes on from it with the prefix untouched', async () => {
     const { db, agent, requests } = session([
       { call: 'ask_owner', input: ASK },

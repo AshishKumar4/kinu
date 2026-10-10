@@ -253,6 +253,9 @@ describe("an agent the owner added asks them on the owner's turns", () => {
     expectOneCallOneResult(resumed, 'Integer cents');
     expect(resumed.after).toEqual([]);
     expect((await workspace.agent.listOwnerQuestions()).find((asking) => asking.actor === actorId)?.asked.status).toBe('answered');
+    // The answer's turn is the owner's (design v2 §1.6): an agent with a hirer is offered no `report` on it.
+    expect(sent[1]?.tools).toContain('"name":"ask_owner"');
+    expect(sent[1]?.tools).not.toContain('"name":"report"');
   });
 
   test("its open question stops waiting on the workspace's tile once the owner dismisses it", async () => {
