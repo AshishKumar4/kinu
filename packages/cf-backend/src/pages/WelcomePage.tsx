@@ -16,7 +16,7 @@ import { KinuLogo } from "@/components/ui/KinuLogo";
 import { DisplayNameField } from "@/components/account/DisplayNameField";
 import { ProvidersPanel } from "@/components/account/ProvidersPanel";
 import { DefaultModelField } from "@/components/account/DefaultModelField";
-import { McpServersPanel } from "@/components/account/McpServersPanel";
+import { McpServersSection } from "@/components/account/McpServersPanel";
 import { completeOnboarding, setDisplayName } from "@/lib/user-api";
 import { useAccount } from "@/hooks/use-account";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
@@ -216,7 +216,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
                 {s.id === 'tools' && (
                   <div className="space-y-4">
                     <p className="text-sm p-text-3">MCP servers give every agent you own their tools. Connect one now, or any time in settings.</p>
-                    {i <= reached && <McpServersPanel />}
+                    {i <= reached && <McpServersSection />}
                   </div>
                 )}
 

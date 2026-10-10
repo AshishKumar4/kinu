@@ -2,40 +2,17 @@ import { useState, type ReactNode } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
 import { PlugsConnectedIcon, PuzzlePieceIcon } from "@phosphor-icons/react";
 import { APP_ROUTES } from "@kinu.run/core";
-import {
-  listMcpServers, listMcpPresets,
-  type McpServerSummary,
-} from "@/lib/user-api";
-import { useAsyncResource, mapResource, lastValue, type AsyncResource } from "@/hooks/use-async-resource";
+import type { McpServerSummary } from "@/lib/user-api";
+import { mapResource, lastValue, type AsyncResource } from "@/hooks/use-async-resource";
+import { useMcpServers } from "@/hooks/use-mcp-servers";
+import { mcpServerStatus } from "@/components/plugins/mcp-status";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import {
-  PluginRow, PluginStatePill, PluginTile, type PluginStatus,
+  PluginRow, PluginStatePill, PluginTile,
 } from "@/components/plugins/PluginRow";
 import { McpPresetCards, presetBrand } from "@/components/plugins/McpPresetCards";
 import { BrandMark } from "@/components/ui/BrandMark";
 import { AccountPanelModal } from "@/components/account/AccountPanelModal";
-
-/** Polls only while a preset sign-in in another tab is pending. */
-const revalidateServers = (rows: McpServerSummary[] | null): number | null =>
-  rows?.some((s) => s.status === 'authenticating' || s.status === 'connecting'
-    || s.status === 'discovering') ? 5000 : null;
-
-function serverStatus(status: McpServerSummary['status']): PluginStatus {
-  switch (status) {
-    case 'ready':
-    case 'connected':
-      return { label: 'connected', tone: 'success' };
-    case 'authenticating':
-      return { label: 'auth needed', tone: 'warning' };
-    case 'connecting':
-    case 'discovering':
-      return { label: status, tone: 'warning' };
-    case 'failed':
-      return { label: 'failed', tone: 'danger' };
-    case 'unknown':
-      return { label: status, tone: 'neutral' };
-  }
-}
 
 function serverLine(server: McpServerSummary): string {
   if (server.error !== null) return server.error;
@@ -98,8 +75,8 @@ function PluginSection({ title, rows, onRetry, what, action, note, empty }: {
 }
 
 export default function PluginsPage() {
-  const servers = useAsyncResource(listMcpServers, revalidateServers);
-  const presets = useAsyncResource(listMcpPresets);
+  const mcp = useMcpServers();
+  const { servers, presets } = mcp;
   const [managing, setManaging] = useState(false);
 
   return (
@@ -129,7 +106,7 @@ export default function PluginsPage() {
           rows={mapResource(servers.resource, (rows) => rows
             .filter((server) => server.presetId === null)
             .map((server) => {
-              const status = serverStatus(server.status);
+              const status = mcpServerStatus(server.status);
 
               return (
                 <PluginRow key={server.id} name={server.name} description={serverLine(server)}
@@ -139,7 +116,7 @@ export default function PluginsPage() {
             }))}
         />
       </div>
-      {managing && <AccountPanelModal panel="mcp" returnTo={APP_ROUTES.plugins} onClose={() => setManaging(false)} />}
+      {managing && <AccountPanelModal panel="mcp" mcp={mcp} returnTo={APP_ROUTES.plugins} onClose={() => setManaging(false)} />}
     </div>
   );
 }

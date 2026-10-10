@@ -1,81 +1,40 @@
 /** MCP server panel. OAuth adds open `authUrl` in a tab; the callback returns here with `?mcp_auth=ok&server_id=...`. */
 import { Effect, Cause } from 'effect';
-import { startTransition, useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
-import {
-  PlugIcon, PlusIcon, TrashIcon, ArrowSquareOutIcon,
-  CheckIcon, WarningIcon, ClockClockwiseIcon,
-} from "@phosphor-icons/react";
-import {
-  listMcpServers, listMcpPresets, addMcpServer, removeMcpServer,
-  type McpPresetAvailability, type McpServerSummary, type McpTransport,
-} from "@/lib/user-api";
+import { PlugIcon, PlusIcon, TrashIcon, ArrowSquareOutIcon, CheckIcon, WarningIcon } from "@phosphor-icons/react";
+import { addMcpServer, removeMcpServer, type McpTransport } from "@/lib/user-api";
 import { McpPresetCards } from "@/components/plugins/McpPresetCards";
+import { PluginStatePill } from "@/components/plugins/PluginRow";
+import { mcpServerStatus } from "@/components/plugins/mcp-status";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
+import { LoadFailure } from "@/components/ui/LoadFailure";
 import { Choice, inputCls } from "@/components/ui/form";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
+import { lastValue } from "@/hooks/use-async-resource";
+import { useMcpServers, type McpServers } from "@/hooks/use-mcp-servers";
 import * as v from "valibot";
-import { renderThrownChain, showing, detach, settle } from '@kinu.run/core/obs';
+import { renderThrownChain, detach } from '@kinu.run/core/obs';
 
-const POLL_MS = 5000;
-
-function statusBadge(status: McpServerSummary['status']) {
-  switch (status) {
-    case 'ready':
-    case 'connected':
-      return { label: status, classes: 'p-badge-success', Icon: CheckIcon };
-    case 'authenticating':
-      return { label: 'auth needed', classes: 'p-badge-warning', Icon: ClockClockwiseIcon };
-    case 'connecting':
-    case 'discovering':
-      return { label: status, classes: 'p-badge-info', Icon: ClockClockwiseIcon };
-    case 'failed':
-      return { label: 'failed', classes: 'p-badge-danger', Icon: WarningIcon };
-    case 'unknown':
-      return { label: 'unknown', classes: 'p-card p-text-3', Icon: ClockClockwiseIcon };
-  }
+/** The panel over a read of its own, where no page around it shows the same servers. */
+export function McpServersSection() {
+  return <McpServersPanel mcp={useMcpServers()} />;
 }
 
-export function McpServersPanel() {
-  const [servers, setServers] = useState<McpServerSummary[]>([]);
-  const [presets, setPresets] = useState<McpPresetAvailability[] | undefined>(undefined);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
+export function McpServersPanel({ mcp }: { mcp: McpServers }) {
+  const { servers: read, presets } = mcp;
+  const { resource, reload } = read;
+  const servers = lastValue(resource) ?? [];
   const [showAdd, setShowAdd] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // Presets ride the same poll so a rotated app credential re-cards without a reload.
-  const refresh = useCallback((): void => {
-    setErr(null);
-    startTransition(() => settle(Effect.gen(function* () {
-      yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-        const rows = yield* Effect.promise(async () => listMcpServers());
-        setServers(rows);
-      }), showing(setErr)), Effect.sync(() => {
-        setLoading(false);
-      }));
-
-      // A presets failure keeps the cards' last answer and never takes the server list down.
-      return yield* Effect.catchCause(Effect.gen(function* () { setPresets(yield* Effect.promise(async () => listMcpPresets())); }), (failed) => Effect.sync(() => {
-        const cause = Cause.squash(failed); console.warn('mcp preset availability read failed:', renderThrownChain({ cause })); }));
-    })));
-  }, []);
-
-  useEffect(() => {
-    refresh();
-    pollRef.current = setInterval(refresh, POLL_MS);
-
-    return () => { if (pollRef.current !== null) clearInterval(pollRef.current); };
-  }, [refresh]);
 
   // Strip OAuth-return params so a reload doesn't show stale state.
   const authResult = searchParams.get('mcp_auth');
   const authError = searchParams.get('error');
   useEffect(() => {
     if (!authResult) return;
-    refresh();
+    reload();
 
     const t = setTimeout(() => {
       const next = new URLSearchParams(searchParams);
@@ -84,20 +43,20 @@ export function McpServersPanel() {
     }, 4000);
 
     return () => clearTimeout(t);
-  }, [authResult, refresh, searchParams, setSearchParams]);
+  }, [authResult, reload, searchParams, setSearchParams]);
 
   const { ask, dialog } = useConfirmation();
 
   const remove = useCallback((id: string, name: string) => ask({
     title: `Remove "${name}"?`, body: "All workspaces will lose access to its tools.", action: "Remove", failed: "Could not remove it",
-    run: async () => { await removeMcpServer(id); refresh(); },
-  }), [ask, refresh]);
+    run: async () => { await removeMcpServer(id); reload(); },
+  }), [ask, reload]);
 
   return (
     <div className="space-y-4">
       {dialog}
       <div className="space-y-0.5">
-        <McpPresetCards servers={servers} availability={presets} onChanged={refresh} />
+        <McpPresetCards servers={servers} availability={lastValue(presets.resource) ?? undefined} onChanged={reload} />
       </div>
 
       <div className="flex justify-end">
@@ -117,18 +76,18 @@ export function McpServersPanel() {
           <WarningIcon size={14} /> Authorization failed{authError ? `: ${authError}` : ''}.
         </div>
       )}
-      {err && <div className="p-card p-3 text-xs p-danger">{err}</div>}
+      {resource.status === "error" && <LoadFailure what="your MCP servers" message={resource.message} onRetry={reload} />}
 
       {showAdd && (
         <AddServerCard
           onCancel={() => setShowAdd(false)}
-          onAdded={() => { setShowAdd(false); refresh(); }}
+          onAdded={() => { setShowAdd(false); reload(); }}
         />
       )}
 
-      {loading && <div className="flex items-center justify-center py-12"><Loader size="base" /></div>}
+      {resource.status === "loading" && <div className="flex items-center justify-center py-12"><Loader size="base" /></div>}
 
-      {!loading && (servers.length === 0 ? (
+      {resource.status !== "loading" && (servers.length === 0 ? (
         <section className="p-card p-8 text-center space-y-2">
           <PlugIcon size={28} className="p-text-3 mx-auto" />
           <div className="text-sm font-medium">No MCP servers yet</div>
@@ -136,52 +95,46 @@ export function McpServersPanel() {
       ) : (
         <section className="p-card overflow-hidden">
           <div className="p-group text-xs">
-            {servers.map((s) => {
-              const badge = statusBadge(s.status);
-
-              return (
-                <div key={s.id} className="px-4 py-3" data-mcp-server={s.id}>
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
-                    <span className="p-row-text font-medium p-text">{s.name}</span>
-                    <span className={`inline-flex items-center gap-1 rounded-sm px-2 py-0.5 ${badge.classes}`}>
-                      <badge.Icon size={10} /> {badge.label}
-                    </span>
-                    <div className="ml-auto flex items-center gap-2">
-                      {s.authUrl && (
-                        <a
-                          href={s.authUrl} target="_blank" rel="noopener noreferrer"
-                          className="text-xs px-2 py-1 rounded-sm p-card p-card-hover flex items-center gap-1"
-                        >
-                          <ArrowSquareOutIcon size={11} /> Authorize
-                        </a>
-                      )}
-                      <button
-                        onClick={() => remove(s.id, s.name)}
-                        className="text-xs p-text-3 hover:p-danger flex items-center gap-1 px-2 py-1"
-                        title="Remove server"
+            {servers.map((s) => (
+              <div key={s.id} className="px-4 py-3" data-mcp-server={s.id}>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+                  <span className="p-row-text font-medium p-text">{s.name}</span>
+                  <PluginStatePill status={mcpServerStatus(s.status)} />
+                  <div className="ml-auto flex items-center gap-2">
+                    {s.authUrl && (
+                      <a
+                        href={s.authUrl} target="_blank" rel="noopener noreferrer"
+                        className="text-xs px-2 py-1 rounded-sm p-card p-card-hover flex items-center gap-1"
                       >
-                        <TrashIcon size={11} /> Remove
-                      </button>
-                    </div>
+                        <ArrowSquareOutIcon size={11} /> Authorize
+                      </a>
+                    )}
+                    <button
+                      onClick={() => remove(s.id, s.name)}
+                      className="text-xs p-text-3 hover:p-danger flex items-center gap-1 px-2 py-1"
+                      title="Remove server"
+                    >
+                      <TrashIcon size={11} /> Remove
+                    </button>
                   </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-x-2 p-annotation p-text-3">
-                    <span className="truncate max-w-full font-mono" title={s.serverUrl}>{s.serverUrl}</span>
-                    <span>·</span>
-                    <span>{s.transport}</span>
-                    <span>·</span>
-                    <span>
-                      {s.toolsCount} {s.toolsCount === 1 ? 'tool' : 'tools'}
-                      {s.allowedTools ? ` / ${s.allowedTools.length} allowed` : ''}
-                    </span>
-                  </div>
-                  {s.error && (
-                    <div className="mt-1 p-t-status p-danger" title={s.error}>
-                      {s.error}
-                    </div>
-                  )}
                 </div>
-              );
-            })}
+                <div className="mt-1 flex flex-wrap items-center gap-x-2 p-annotation p-text-3">
+                  <span className="truncate max-w-full font-mono" title={s.serverUrl}>{s.serverUrl}</span>
+                  <span>·</span>
+                  <span>{s.transport}</span>
+                  <span>·</span>
+                  <span>
+                    {s.toolsCount} {s.toolsCount === 1 ? 'tool' : 'tools'}
+                    {s.allowedTools ? ` / ${s.allowedTools.length} allowed` : ''}
+                  </span>
+                </div>
+                {s.error && (
+                  <div className="mt-1 p-t-status p-danger" title={s.error}>
+                    {s.error}
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         </section>
       ))}
