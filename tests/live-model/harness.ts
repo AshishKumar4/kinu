@@ -21,7 +21,7 @@ import {
   isBuiltinToolName, JsonObjectSchema, collectDynamicContext, currentDateForPrompt, DynamicContextLedger, readMemoryTail,
   projectJsonValue, failedToolOutcome, TaskListStore,
   BUILTIN_PROFILE_CATALOG, profileCatalogDigest, resolveAgentTurnProfile,
-  WORKSPACE_RUN_ID, ConversationSearchStore, BackgroundJobRunner, BACKGROUNDABLE_TOOLS, narrowToolSurface,
+  WORKSPACE_RUN_ID, BackgroundJobRunner, BACKGROUNDABLE_TOOLS, narrowToolSurface,
 } from '../../packages/core/src/index';
 import { renderThrownChain } from '../../packages/core/src/obs/index';
 import { synthesizeToolFallback } from '../../packages/core/src/utils/evidence-window';
@@ -152,7 +152,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
   // The live rungs measure swarms, which the eval accounts have turned on.
   const agents: AgentsToolDeps = { mode: 'build', swarm, swarms: true };
 
-  const conversations = new ConversationSearchStore(sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId));
+  const conversations = rt.stores.conversationSearch;
 
   // Eval's namespaces as the CLI session builds them (`actorNamespaces`): no browser session in this process.
   const surface: SurfaceActor = {

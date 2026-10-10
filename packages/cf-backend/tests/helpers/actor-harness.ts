@@ -33,7 +33,7 @@ import type { WorkspaceHostTarget } from '../../src/workspace-host';
 import {
   actorReferenceOf, announcementOf,
   type ActorHandle,
-  type ActorHost, type HostedActor, type SubordinateSeed,
+  type ActorHost, type ActorSeat, type HostedActor, type SubordinateSeed,
 } from '@kinu.run/core';
 import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest, actorAffinity,
@@ -1938,7 +1938,7 @@ export async function hostedSubordinateHarness(
   };
 
   const reference = await workspace.agent.observeSubordinateRuntime().spawn(seed);
-  const actor = await workspace.agent.observeActorHost().acquire(reference);
+  const actor = await workspace.agent.observeActorHost().acquire(reference, { kind: 'actor' });
 
   return { actor, workspace };
 }
@@ -1946,12 +1946,13 @@ export async function hostedSubordinateHarness(
 export async function hostedExplorationHarness(
   workspace: ActorHarness<HarnessOrchestratorAgent>,
   id: string,
+  seat: ActorSeat = { kind: 'actor' },
 ): Promise<HostedActorHarness> {
   const entry = await workspace.agent.actorDirectory({
     action: 'register', creationId: id, name: `exp:${id}`, origin: 'swarm', lifetime: 'task',
   });
 
-  const actor = await workspace.agent.observeActorHost().acquire(entry.reference);
+  const actor = await workspace.agent.observeActorHost().acquire(entry.reference, seat);
 
   return { actor, workspace };
 }
@@ -1960,7 +1961,7 @@ export async function hostedMainActor(
   workspace: ActorHarness<HarnessOrchestratorAgent>,
 ): Promise<HostedActorHarness> {
   const host = workspace.agent.observeActorHost();
-  const actor = await host.acquire(actorReferenceOf(workspace.agent.observeRuntime().actor));
+  const actor = await host.acquire(actorReferenceOf(workspace.agent.observeRuntime().actor), { kind: 'actor' });
 
   return { actor, workspace };
 }

@@ -3,8 +3,8 @@ import type { RunEvent } from '@kinu.run/core';
 import { measurePlanUsage, measurePromptUsage, steadyCacheP5, steadyCacheShare, type StepUsage } from './results';
 
 const events: [RunEvent, RunEvent] = [
-  { type: 'step_finish', runId: 'trial-run', eventIndex: 1, stepIndex: 1, timestamp: '2026-10-02T19:00:00Z', usage: { input: 100, cacheRead: 20, output: 10 } },
-  { type: 'step_finish', runId: 'trial-run', eventIndex: 2, stepIndex: 2, timestamp: '2026-10-02T19:00:01Z', usage: { input: 200, cacheRead: 180, output: 30 } },
+  { type: 'step_finish', parts: [], runId: 'trial-run', eventIndex: 1, stepIndex: 1, timestamp: '2026-10-02T19:00:00Z', usage: { input: 100, cacheRead: 20, output: 10 } },
+  { type: 'step_finish', parts: [], runId: 'trial-run', eventIndex: 2, stepIndex: 2, timestamp: '2026-10-02T19:00:01Z', usage: { input: 200, cacheRead: 180, output: 30 } },
 ];
 
 test('a trial records exact provider usage per request and Activity’s cache statistics', () => {
@@ -21,8 +21,8 @@ test('a trial records exact provider usage per request and Activity’s cache st
 
 test('a partial provider report keeps totals unknown, while reported cache zeros remain real samples', () => {
   const usage = measurePromptUsage([{ actor: 'main', events: [
-    { type: 'step_finish', runId: 'partial', eventIndex: 1, stepIndex: 1, timestamp: '2026-10-02T19:00:00Z', usage: { input: 100, cacheRead: 0, output: 0 } },
-    { type: 'step_finish', runId: 'partial', eventIndex: 2, stepIndex: 2, timestamp: '2026-10-02T19:00:01Z', usage: { input: 200 } },
+    { type: 'step_finish', parts: [], runId: 'partial', eventIndex: 1, stepIndex: 1, timestamp: '2026-10-02T19:00:00Z', usage: { input: 100, cacheRead: 0, output: 0 } },
+    { type: 'step_finish', parts: [], runId: 'partial', eventIndex: 2, stepIndex: 2, timestamp: '2026-10-02T19:00:01Z', usage: { input: 200 } },
   ] }]);
 
   expect(usage.inputTokens).toBe(300);
@@ -63,10 +63,8 @@ test('the steady cache leaves each actor\u2019s first request out, and its p5 na
 });
 
 test('a plan window is read from the first call\u2019s quota to the last call\u2019s, per account and window', () => {
-  const finish = (index: number, at: number, usedPercent: number): RunEvent => ({
-    type: 'step_finish', runId: 'run', eventIndex: index, stepIndex: index, timestamp: '2026-10-08T00:00:00Z',
-    account: { provider: 'chatgpt', name: 'owner', quota: { at, windows: [{ measure: 'primary', usedPercent }, { measure: 'tokens' }] } },
-  });
+  const finish = (index: number, at: number, usedPercent: number): RunEvent => ({ type: 'step_finish', parts: [], runId: 'run', eventIndex: index, stepIndex: index, timestamp: '2026-10-08T00:00:00Z',
+  account: { provider: 'chatgpt', name: 'owner', quota: { at, windows: [{ measure: 'primary', usedPercent }, { measure: 'tokens' }] } }, });
 
   expect(measurePlanUsage([{ actor: 'main', events: [finish(2, 2000, 14), finish(1, 1000, 12)] }, { actor: 'helper', events: [finish(3, 3000, 15)] }]))
     .toEqual([{ account: 'chatgpt@owner', measure: 'primary', from: 12, to: 15 }]);

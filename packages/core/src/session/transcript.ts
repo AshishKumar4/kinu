@@ -6,12 +6,16 @@ import type { PromptFile } from '../types/backend-host';
 import type { SqlExecutor } from '../types/primitives';
 import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { KinuError } from '../obs/error';
+import { encodeModelMessage } from './message-codec';
 import { type SessionMessages, SessionMessageReader, type ActorReadAuthority, type MessagePartReference, type MessageReference, type StoredPart } from './messages';
 import { type SessionPayloads, SessionPayloadReader, type SessionPayload } from './payload';
 import { rowText, turnAuthor, UIMessageSchema } from '../utils/ui-message';
 import type { Page, PositionCursor, PositionPageRequest } from './page';
 import type { ContextSelection } from './context';
 import { isServerCompaction } from '../providers/server-compaction';
+import { PLATFORM_CATALOG } from '../platform-catalog';
+
+const outputUtf8 = new TextEncoder();
 
 export interface ConversationPartReference extends MessagePartReference { textRange?: { readonly start: number; readonly length: number } }
 
@@ -206,6 +210,26 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     this.sessionId = stores.sessionId;
     this.messages = stores.messages;
     this.payloads = stores.payloads;
+  }
+
+  /** Native output projections from sealed event references, bounded as the existing request inspector pages are. */
+  async stepOutput(parts: readonly MessagePartReference[], from: number): Promise<{ messages: JsonObject[]; nextFrom: number | null }> {
+    const ids = [...new Set(parts.map((part) => part.messageId))];
+    const messages: JsonObject[] = [];
+    let bytes = 0;
+    let next = Math.min(from, ids.length);
+
+    for (; next < ids.length; next++) {
+      const message = encodeModelMessage(await this.messages.materialize({ messageId: ids[next] }));
+      const size = outputUtf8.encode(JSON.stringify(message)).byteLength;
+
+      // As on the request inspector, one oversized message still ships whole instead of losing its tool input.
+      if (messages.length > 0 && bytes + size > PLATFORM_CATALOG['run_events.page_bytes'].limit.value) break;
+      messages.push(message);
+      bytes += size;
+    }
+
+    return { messages, nextFrom: next < ids.length ? next : null };
   }
 
   async project(id: string): Promise<ConversationProjection | null> {

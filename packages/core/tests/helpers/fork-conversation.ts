@@ -173,7 +173,7 @@ export async function seedForkSource(workspace: TestWorkspace, opts: {
 
   if (memory.length > 0) await workspace.vfs.mkdir('memory', { recursive: true });
 
-  const index = new MemoryStore(workspace.vfs, workspace.sql);
+  const index = new MemoryStore(workspace.vfs, workspace.sql, write => workspace.db.transaction(write)());
 
   for (const file of memory) {
     await writeText(workspace.vfs, file.path, file.text);

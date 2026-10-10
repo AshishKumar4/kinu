@@ -101,7 +101,7 @@ test.each([...FAILOVERS])('a turn on $primary served by $fallback is cached for 
         normalize: (spec) => spec,
         resolve,
         routed: {
-          credentialFor: async (spec) => spec,
+          attemptFor: async (spec) => ({ lane: spec, modelId: spec, credential: spec, ref: spec }),
           countInputTokens: async () => ({ kind: 'unsupported', provider: 'fixture', reason: 'no count endpoint' }),
         },
       },

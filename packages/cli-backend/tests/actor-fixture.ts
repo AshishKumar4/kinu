@@ -7,8 +7,8 @@ import {
   type ActorHost, type AgentRuntime, type BroadcastEvent, type HostedActor, type HostedNodeSeat,
   type ActorHandle, type HeadInput, type NodeIdentity, type ProfileAuthorityInputs, type RunTurnSources,
   type SqlExec, type SqlValue, type WriteObserver,
-  DEFAULT_WORKERS_AI_MODEL_SPEC, WORKSPACE_ROOT, actorHomeName } from '@kinu.run/core';
-import { ConversationSearchStore, bindLocalActor, localActorDirectory, registerLocalActor, retireLocalActor } from '@kinu.run/core';
+  DEFAULT_WORKERS_AI_MODEL_SPEC, WORKSPACE_ROOT, actorHomeName, actorScaffoldPath } from '@kinu.run/core';
+import { bindLocalActor, localActorDirectory, registerLocalActor, retireLocalActor } from '@kinu.run/core';
 import { buildLocalActorRuntime, cleanupFacetScratch, makeSqlExec, type CLIRuntime } from '../src/runtime';
 import { modelWindow, type HeadInferenceDeps, type HeadSeat } from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
@@ -89,7 +89,7 @@ export async function createHeadRuntime(parent: CLIRuntime, id: string, observer
   // The per-kind runtime's release fence binds to the handle its binder issued, so bind once and pass it through.
   const handle = bindLocalActor(parent.storage.sql, binding);
 
-  return buildLocalActorRuntime(parent, { reference: binding.reference, handle }, observer);
+  return buildLocalActorRuntime(parent, { reference: binding.reference, handle }, 'head', observer);
 }
 
 /**
@@ -112,6 +112,7 @@ export function localTestActorHost(
 
       return parent.filesForActor(bound.handle);
     },
+    scaffoldFor: async (bound) => ({ path: actorScaffoldPath(bound.record), vfs: parent.agentStateVfs ?? parent.storage.vfs }),
     storage: {
       sql: parent.storage.sql,
       transactionSync: parent.storage.transactionSync,
@@ -119,7 +120,7 @@ export function localTestActorHost(
     },
     directory,
     installedBuild: null,
-    runtimeFor: (bound) => buildLocalActorRuntime(parent, bound, writes?.get(bound.reference.actorId)),
+    runtimeFor: (bound, seat) => buildLocalActorRuntime(parent, bound, seat.kind === 'node' ? 'node' : 'head', seat.writes ?? writes?.get(bound.reference.actorId)),
     loopFor: (bound) => ({ origin: defaultLoopOrigin(bound.record.origin), parent }),
     orchestrationFor: (bound) => ({
       host: {
@@ -154,7 +155,7 @@ export function headSeatFactory(
 
     const agentName = actorHomeName({ origin: 'swarm', name: binding.name, storageKey: binding.storageKey });
     writes?.set(binding.reference.actorId, observer);
-    const actor = await host.acquire(binding.reference);
+    const actor = await host.acquire(binding.reference, { kind: 'head', writes: observer });
 
     const authority = parent.profiles;
 
@@ -166,7 +167,7 @@ export function headSeatFactory(
       runId,
       sources: fixtureRunSources(actor, () => authority.inputs(), model, runId),
       infer: (headInput, inference) => runHeadInference(headInput, { ...inference, compaction }),
-      conversations: new ConversationSearchStore(actor.runtime.storage.sql, actor.handle, (sessionId) => actor.stores.history.transcript(sessionId)),
+      conversations: actor.stores.conversationSearch,
       // No workspace routes a fixture seat's jobs: nothing here cancels or recovers them.
       jobs: { ports: { jobOutput: () => {} }, attach: () => () => {} },
       release: async () => {
@@ -256,7 +257,7 @@ export function headLoopSeams(
     sources: fixtureRunSources(actor, async () => inputs, model, runId),
     compaction,
     infer: (headInput: HeadInput, inference: Omit<HeadInferenceDeps, 'compaction'>) => runHeadInference(headInput, { ...inference, compaction }),
-    conversations: new ConversationSearchStore(runtime.storage.sql, runtime.actor, (sessionId) => stores.history.transcript(sessionId)),
+    conversations: stores.conversationSearch,
     // No workspace routes a fixture seat's jobs: nothing here cancels or recovers them.
     jobs: { ports: { jobOutput: () => {} }, attach: () => () => {} },
   } satisfies Omit<HeadSeat, 'release'> & Pick<HeadInferenceDeps, 'compaction'>;
@@ -270,7 +271,7 @@ export function nodeSeatFactory(
     const binding = registerLocalActor(rt.actor, { name: explorationActorKey(node.nodeId), creationId: node.nodeId, origin: 'swarm', lifetime: 'task' });
     const handle = bindLocalActor(rt.storage.sql, binding);
     // The host requires the runtime and binding to share one handle. Swarm mode keeps the node off the branching-head runtime.
-    const runtime = await buildLocalActorRuntime(rt, { reference: actorReferenceOf(handle), handle }, undefined, true);
+    const runtime = await buildLocalActorRuntime(rt, { reference: actorReferenceOf(handle), handle }, 'node');
     const seams = headLoopSeams(rt, { runId, handle, runtime, model });
 
     return {

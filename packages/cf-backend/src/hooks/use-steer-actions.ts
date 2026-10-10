@@ -9,7 +9,7 @@ import type { ComposerNotice } from "@/components/Composer";
 import type { InlineSteer } from "@kinu.run/core";
 import { Cause, Effect } from "effect";
 import { KinuError, settle } from "@kinu.run/core/obs";
-import type { SendAdmission } from "@/hooks/use-kinu";
+import type { SendAdmission } from "@/hooks/use-chat-owner";
 
 /** One notice id for every line, so a new status replaces the old instead of stacking. */
 const NOTICE_ID = "steer";

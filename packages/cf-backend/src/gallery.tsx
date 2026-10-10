@@ -33,7 +33,8 @@ import {
 import Sidebar from "@/components/Sidebar";
 import Layout from "@/components/layout";
 import { ModelPicker } from "@/components/ModelPicker";
-import { Composer, useProviderWaitNotice, type ChatMode, type ComposerNotice } from "@/components/Composer";
+import { Composer, useProviderWaitNotice, type ComposerNotice } from "@/components/Composer";
+import type { WorkMode } from "@kinu.run/core";
 import { WorkspaceHeader, type ChatTab } from "@/components/WorkspaceHeader";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { BranchRunChip } from "@/components/AlternateTakes";
@@ -57,7 +58,8 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AgentsNavProvider } from "@/hooks/use-agents-nav";
 import { APP_ROUTES, rosterBucket, rosterMatches, WorkspaceOverviewSchema, type AgentTaskTree, type WorkspaceOverview } from "@kinu.run/core";
 import { CHUNK_FIXED_KEY, lazyRoute } from "@/lazy-route";
-import { useKinu, type SubordinateSnapshot } from "@/hooks/use-kinu";
+import { useKinu } from "@/hooks/use-kinu";
+import type { SubordinateSnapshot } from "@/hooks/use-chat-owner";
 import { primePageDeployedBuildSha } from "@kinu.run/core";
 import { ChatLiveTail, DeviceOfflineRow, MessageView, SteerBubble } from "@/components/MessageView";
 import { buildTranscript, profileCatalogCanonical } from "@kinu.run/core";
@@ -70,7 +72,7 @@ import { CreateWebhookModal, NewWebhookCard } from "@/components/WorkspaceAutoma
 import { AddServerCard } from "@/components/account/McpServersPanel";
 import { DevicesFrame, PluginsFrame, SetupModalFrame, WelcomeFrame, WorkspacesFrame } from "@/gallery-account";
 import { CharactersFrame } from "@/gallery-characters";
-import { AccountProvider } from "@/hooks/use-account";
+import { AccountProvider, useAccount } from "@/hooks/use-account";
 import { DrivePageFrame, DriveRoute, installDriveFixture } from "@/gallery-drive";
 import { driveDesignFrame } from "@/gallery-drive-design";
 import BlueprintPage from "@/pages/BlueprintPage";
@@ -93,7 +95,8 @@ import {
 import type { ActivitySnapshot, ExecutorCommandResult, ForkNode, MemoryEntry, Rpc } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { buildTree, type MctsRow } from "@kinu.run/core";
-import { formatWorkspaceError, type AgentStatus, type ExecutorOutput, type WorkspaceErrors } from "@/hooks/use-kinu";
+import type { AgentStatus, ExecutorOutput } from "@/hooks/use-chat-owner";
+import { formatWorkspaceError, type WorkspaceErrors } from "@kinu.run/core";
 import { lastValue, type AsyncResource } from "@/hooks/use-async-resource";
 import type { ExecutorInfo } from "@kinu.run/core";
 import type { DeploySnapshot } from "@kinu.run/core/deploy";
@@ -267,6 +270,9 @@ function pluginsFixture(path: string): Response | null {
   return null;
 }
 
+/** The account's name as last saved here. */
+let galleryDisplayName = "Owner";
+
 function accountProfileFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
   if (path === "/api/user/onboarding/complete" && method === "POST") {
     return fixtureJson({ onboardedAt: NOW });
@@ -284,16 +290,22 @@ function accountProfileFixture(path: string, method: string, body: BodyInit | nu
     const root = document.documentElement;
     root.dataset.galleryProfilePatches = String(Number(root.dataset.galleryProfilePatches ?? "0") + 1);
     const patch = v.safeParse(v.object({ displayName: v.string() }), JSON.parse(v.parse(v.string(), body)));
-    const displayName = patch.success ? patch.output.displayName : "Owner";
+
+    // Kept, so a later read answers the name saved, as the account does.
+    if (patch.success) galleryDisplayName = patch.output.displayName;
 
     return fixtureJson({
-      email: "owner@example.com", displayName,
+      email: "owner@example.com", displayName: galleryDisplayName,
       createdAt: NOW - 864e5, lastSeenAt: NOW,
       onboardedAt: ACCOUNT_ONBOARDED_AT, workspaceCount: ACCOUNT_WORKSPACE_COUNT,
     });
   }
 
   if (path === "/api/user/profile") {
+    // Counted: the shell reads the account once, and every view of it shares that read.
+    const root = document.documentElement;
+    root.dataset.galleryProfileReads = String(Number(root.dataset.galleryProfileReads ?? "0") + 1);
+
     // The wizard's profile step renders only without a display name: `&noname=1` answers that account.
     if (frame === "welcome" && new URLSearchParams(location.search).get("noname") === "1") {
       return fixtureJson({
@@ -303,7 +315,7 @@ function accountProfileFixture(path: string, method: string, body: BodyInit | nu
     }
 
     return fixtureJson({
-      email: "owner@example.com", displayName: "Owner", createdAt: NOW - 864e5, lastSeenAt: NOW,
+      email: "owner@example.com", displayName: galleryDisplayName, createdAt: NOW - 864e5, lastSeenAt: NOW,
       onboardedAt: ACCOUNT_ONBOARDED_AT, workspaceCount: ACCOUNT_WORKSPACE_COUNT,
     });
   }
@@ -526,14 +538,27 @@ function workspaceRosterFixture(path: string): Response | null {
   return url.pathname === "/api/user/workspaces" ? fixtureJson(rosterAnswer(url.searchParams)) : null;
 }
 
+/** `&presets=down`: reads of the deployment's apps fail until `gallery:presets-up`, as a cold Worker's might. */
+let presetsDown = new URLSearchParams(location.search).get("presets") === "down";
+
+window.addEventListener("gallery:presets-up", () => { presetsDown = false; });
+
+/** The deployment's apps, each read counted. */
+function mcpPresetsFixture(): Response {
+  const root = document.documentElement;
+  root.dataset.galleryPresetReads = String(Number(root.dataset.galleryPresetReads ?? "0") + 1);
+
+  if (presetsDown) return fixtureJson({ error: "the deployment's apps did not answer" }, 503);
+
+  return fixtureJson([
+    { id: "github", appConfigured: mcpSecrets.has("github") },
+    { id: "cloudflare", appConfigured: true },
+    { id: "google", appConfigured: mcpSecrets.has("google") },
+  ]);
+}
+
 function mcpServersFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
-  if (path === "/api/user/mcp/presets") {
-    return fixtureJson([
-      { id: "github", appConfigured: mcpSecrets.has("github") },
-      { id: "cloudflare", appConfigured: true },
-      { id: "google", appConfigured: mcpSecrets.has("google") },
-    ]);
-  }
+  if (path === "/api/user/mcp/presets") return mcpPresetsFixture();
 
   if (path === "/api/user/mcp/servers" && method === "POST") {
     const addBody = v.safeParse(GalleryMcpAddSchema, JSON.parse(v.parse(v.string(), body)));
@@ -705,14 +730,14 @@ const ACCOUNT_MEMORY_FIXTURE: JsonValue = {
     },
   ],
   notes: [{ id: "acn_1", content: "Invoices go to accounts@example.com on the first of each month.", origin: { by: "agent", workspace: "Support inbox", agent: "main" }, createdAt: NOW - 2 * 864e5 }],
-  pending: [{
-    id: "amp_1", proposal: { kind: "fact", key: "timezone", value: "Asia/Kolkata" },
-    origin: { by: "background", workspace: "Storefront" }, createdAt: NOW - 36e5,
-  }],
 };
 
+/** The read and the roster socket answer one list of proposals, as the user object does. */
 function accountMemoryFixture(path: string, method: string): Response | null {
-  return path === "/api/user/memory" && method === "GET" ? fixtureJson(ACCOUNT_MEMORY_FIXTURE) : null;
+  if (path !== "/api/user/memory" || method !== "GET") return null;
+  const memory = v.parse(v.looseObject({ facts: v.array(JsonValueSchema) }), ACCOUNT_MEMORY_FIXTURE);
+
+  return fixtureJson({ ...memory, facts: [...memory.facts, ...galleryKeptFacts], pending: galleryMemoryPending });
 }
 
 function accountComputerSizeFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
@@ -779,7 +804,20 @@ function galleryRegister(body: BodyInit | null | undefined): Response {
   if (connectFixtureMode === "fail-first" && galleryRegistrations.length === 1) return fixtureJson({ error: "the hub is busy" }, 503);
   connectRegistrations += 1;
 
-  return fixtureJson({ origin: location.origin, installCommand: GALLERY_CONNECT_COMMAND }, 201);
+  return fixtureJson({ origin: location.origin, installCommand: GALLERY_CONNECT_COMMAND, deviceId: GALLERY_ISSUED_DEVICE }, 201);
+}
+
+/** The device the fixture's connect issues; `&connect=other` has another machine of the account connect instead. */
+const GALLERY_ISSUED_DEVICE = "dev-issued";
+
+function galleryConnectDevice(id: string, label: string, connected: boolean) {
+  return {
+    id, label, os: "darwin", hostname: "owner-mac", connected,
+    createdAt: NOW, lastSeenAt: NOW, expiresAt: NOW + 864e5,
+    replacedAt: null,
+    revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
+    sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
+  };
 }
 
 function deviceConnectFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
@@ -790,14 +828,11 @@ function deviceConnectFixture(path: string, method: string, body: BodyInit | nul
     // On the document, not `window`: `dataset` is a typed string map, a global is not.
     document.documentElement.dataset.galleryRosterReads = String(connectRosterReads);
 
-    return fixtureJson(connectRegistrations === 0 ? [] : [{
-      id: "dev-arrived", label: "Owner PC", os: "darwin", hostname: "owner-mac",
-      connected: connectFixtureMode !== "stall",
-      createdAt: NOW, lastSeenAt: NOW, expiresAt: NOW + 864e5,
-      replacedAt: null,
-      revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
-      sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
-    }]);
+    if (connectRegistrations === 0) return fixtureJson([]);
+
+    const issued = galleryConnectDevice(GALLERY_ISSUED_DEVICE, "Owner PC", connectFixtureMode !== "stall" && connectFixtureMode !== "other");
+
+    return fixtureJson(connectFixtureMode === "other" ? [issued, galleryConnectDevice("dev-other", "Laptop", true)] : [issued]);
   }
 
   if (path === "/api/user/devices/consents" && method === "GET") return fixtureJson([]);
@@ -902,16 +937,43 @@ const galleryRosterSockets: GalleryRosterSocket[] = [];
 Object.assign(window, { galleryRosterSockets });
 
 /** `&memory=waiting`: one account-memory proposal waits on the owner, sent as a roster socket opens, as the user
- *  object sends it; deciding it (`POST /api/user/memory/proposals/:id`) sends what is left. */
-const MEMORY_WAITING = galleryQuery.get("memory") === "waiting";
+ *  object sends it; deciding it (`POST /api/user/memory/proposals/:id`) sends what is left. `&memory=timezone` waits
+ *  with another, older one, and `gallery:memory-proposal` files the first while the page is open. */
+const MEMORY_PROPOSALS = new Map<string, JsonValue>([
+  ["waiting", {
+    id: "amp_city", proposal: { kind: "fact", key: "owner_city", value: "Lisbon" },
+    origin: { by: "agent", workspace: "checkout-fixes", agent: "main" }, createdAt: NOW - 60_000,
+  }],
+  ["timezone", {
+    id: "amp_1", proposal: { kind: "fact", key: "timezone", value: "Asia/Kolkata" },
+    origin: { by: "background", workspace: "Storefront" }, createdAt: NOW - 36e5,
+  }],
+]);
 
-let galleryMemoryPending: JsonValue[] = MEMORY_WAITING ? [{
-  id: "amp_city", proposal: { kind: "fact", key: "owner_city", value: "Lisbon" },
-  origin: { by: "agent", workspace: "checkout-fixes", agent: "main" }, createdAt: NOW - 60_000,
-}] : [];
+const seededProposal = MEMORY_PROPOSALS.get(galleryQuery.get("memory") ?? "");
+
+let galleryMemoryPending: JsonValue[] = seededProposal === undefined ? [] : [seededProposal];
+
+window.addEventListener("gallery:memory-proposal", () => {
+  galleryMemoryPending = [...galleryMemoryPending, MEMORY_PROPOSALS.get("waiting") ?? null];
+
+  for (const socket of rosterSockets) galleryMemoryFrame(socket);
+});
 
 function galleryMemoryFrame(socket: EventTarget): void {
   socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ type: "account_memory", pending: galleryMemoryPending }) }));
+}
+
+/** The facts the owner kept from proposals here. */
+let galleryKeptFacts: JsonValue[] = [];
+
+function keptFact(proposal: JsonValue): JsonValue {
+  const { proposal: fact, origin } = v.parse(v.object({ proposal: v.object({ key: v.string(), value: v.string() }), origin: JsonValueSchema }), proposal);
+
+  return {
+    key: fact.key, value: fact.value, importance: 0.5, veracity: "stated", lastObservedAt: NOW, origin,
+    history: [{ forgotten: false, value: fact.value, origin, at: NOW }],
+  };
 }
 
 /** The owner's decision on a proposal, recorded (`data-gallery-memory-decisions`), then what is left sent to every page. */
@@ -923,7 +985,11 @@ function galleryMemoryDecision(path: string, method: string, body: BodyInit | nu
   const root = document.documentElement.dataset;
 
   root.galleryMemoryDecisions = `${root.galleryMemoryDecisions ?? ""}${decodeURIComponent(id)}:${decision} `;
-  galleryMemoryPending = galleryMemoryPending.filter((row) => v.parse(v.object({ id: v.string() }), row).id !== decodeURIComponent(id));
+  const decided = galleryMemoryPending.find((row) => v.parse(v.object({ id: v.string() }), row).id === decodeURIComponent(id));
+  galleryMemoryPending = galleryMemoryPending.filter((row) => row !== decided);
+
+  // A fact kept is a fact the next read answers, as the user object keeps it.
+  if (decision === "accept" && decided !== undefined) galleryKeptFacts = [...galleryKeptFacts, keptFact(decided)];
   queueMicrotask(() => { for (const socket of rosterSockets) galleryMemoryFrame(socket); });
 
   // The route's own answer, as written: its body is the wire's, not a result this gallery decides.
@@ -1027,10 +1093,14 @@ function touchFixture(): Response {
 
 /** The account's own answers: Settings' frames whole, and on any page the owner's decision on a memory proposal. */
 function userFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response> | null {
-  if (ACCOUNT_FIXTURE_FRAMES.has(frame) && path.startsWith("/api/user/")) return userSettingsFixture(path, method, body);
   const decided = galleryMemoryDecision(path, method, body);
 
-  return decided === null ? null : Promise.resolve(decided);
+  if (decided !== null) return Promise.resolve(decided);
+
+  if (ACCOUNT_FIXTURE_FRAMES.has(frame) && path.startsWith("/api/user/")) return userSettingsFixture(path, method, body);
+  const memory = accountMemoryFixture(path, method);
+
+  return memory === null ? null : Promise.resolve(memory);
 }
 
 const galleryRequests: string[] = [];
@@ -1564,7 +1634,13 @@ const MESSAGES: UIMessage[] = [
 function galleryPlanInspection(request: SubordinateInspectionRequest, plans: readonly PlanReview[]) {
   if (request.view === 'plans') return { view: 'plans', path: request.path, page: { status: 'end', items: plans } };
 
-  if (request.view === 'children') return { view: 'children', path: request.path, page: { status: 'end', items: [] } };
+  if (request.view === 'children') {
+    // Counted: a nested agent's column reads its roster once per identity, never once per render.
+    const root = document.documentElement.dataset;
+    root.galleryChildrenReads = String(Number(root.galleryChildrenReads ?? '0') + 1);
+
+    return { view: 'children', path: request.path, page: { status: 'end', items: [] } };
+  }
 
   if (request.view === 'planTasks') return { view: 'planTasks', path: request.path, tasks: [] };
 
@@ -3487,12 +3563,30 @@ const GEPA_DETAIL = {
   pareto: [{ candidateId: "cand_2b", instanceId: "i1", score: 0.81 }, { candidateId: "cand_2a", instanceId: "i3", score: 0.68 }],
 };
 
+const GEPA_OLDER_DETAIL = {
+  run: GEPA_RUNS[1],
+  candidates: [
+    { id: "cand_1a", parentId: null, aggregateScore: 0.52, scores: { i1: 0.5, i2: 0.49, i3: 0.57 }, createdAt: NOW - 12 * 864e5 },
+    { id: "cand_1c", parentId: "cand_1a", aggregateScore: 0.66, scores: { i1: 0.7, i2: 0.6, i3: 0.68 }, createdAt: NOW - 12 * 864e5 },
+  ],
+  pareto: [{ candidateId: "cand_1c", instanceId: "i1", score: 0.7 }],
+};
+
 const evolutionRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "getQuality") return rpcResult(QUALITY_DAYS).json<T>();
 
   if (method === "getGepaRuns") return rpcResult(GEPA_RUNS).json<T>();
 
-  if (method === "getGepaRun") return rpcResult(GEPA_DETAIL).json<T>();
+  if (method === "getGepaRun") {
+    const [runId] = v.parse(v.tuple([v.string()]), args);
+
+    // `&gepa=held`: the newer run's candidates wait for `gallery:release-gepa`, as a slow read would.
+    if (runId === "gepa_2" && new URLSearchParams(location.search).get("gepa") === "held") {
+      await new Promise((resolve) => { window.addEventListener("gallery:release-gepa", resolve, { once: true }); });
+    }
+
+    return rpcResult(runId === "gepa_2" ? GEPA_DETAIL : GEPA_OLDER_DETAIL).json<T>();
+  }
 
   if (method === "getFacts") return rpcResult([
     { key: "test.command", value: "bun test", confidence: 0.9, source: "project configuration", lastObservedAt: NOW - 50e5 },
@@ -3808,7 +3902,7 @@ const REFRESH_NOTICE: readonly ComposerNotice[] = [{
 /* The real composer over real draft/mode/model state; `notices` is a parameter so the status treatment can be reviewed. */
 function GalleryComposer({ notices = [] }: { notices?: readonly ComposerNotice[] }) {
   const [value, setValue] = useState("");
-  const [mode, setMode] = useState<ChatMode>("build");
+  const [mode, setMode] = useState<WorkMode>("build");
   const [model, setModel] = useState("anthropic/claude-opus-4");
 
   return (
@@ -4126,7 +4220,7 @@ function ChatLoadingFrame() {
 /* The real composer at reading width: at rest with a draft, mid-turn (Stop / Branch / Steer), and with a status row. */
 function ComposerFrame() {
   const [value, setValue] = useState("Ship the coupon fix behind a preview first.");
-  const [mode, setMode] = useState<ChatMode>("build");
+  const [mode, setMode] = useState<WorkMode>("build");
   const [model, setModel] = useState("anthropic/claude-opus-4");
   /* The thinking level travels with the model; the composer sizes the row, so the picker takes no width class. */
   const [effort, setEffort] = useState<ReasoningEffort | null>(null);
@@ -6194,7 +6288,7 @@ function AgentPanel(
   const banner = formatWorkspaceError(errors, lastValue(snapshot) !== null);
 
   return (
-    <section className="space-y-3 border-t p-border pt-6 first:border-0 first:pt-0">
+    <section data-gallery-panel={label} className="space-y-3 border-t p-border pt-6 first:border-0 first:pt-0">
       <div className="p-eyebrow">{label}</div>
       <GalleryComposer notices={banner
         ? [{ id: "load", tone: banner.severity === "blocking" ? "danger" : "warning",
@@ -6902,6 +6996,7 @@ function workspacePageFrame(): MountedFrame {
         <Routes>
           <Route path="/workspace/:agentId" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
           <Route path="/workspace/:agentId/agents/:subName" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
+          <Route path={APP_ROUTES.workspaceAgentPath} element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
           <Route path="/workspace/:agentId/:view" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
         </Routes>
       </>
@@ -6919,6 +7014,7 @@ function workspaceShellFrame(): MountedFrame {
         <Route element={<Layout />}>
           <Route path="/workspace/:agentId" element={<WorkspacePage />} />
           <Route path="/workspace/:agentId/agents/:subName" element={<WorkspacePage />} />
+          <Route path={APP_ROUTES.workspaceAgentPath} element={<WorkspacePage />} />
           <Route path="/workspace/:agentId/:view" element={<WorkspacePage />} />
           <Route path="*" element={<div className="h-full" data-gallery-blank />} />
         </Route>
@@ -6927,13 +7023,24 @@ function workspaceShellFrame(): MountedFrame {
   };
 }
 
-/** `&section=devices` goes through the router: the page reads the hash off `useLocation`. */
+/** Another reader of the shell's account, as the sidebar is: the name it holds, for a gate to compare with Settings'. */
+function AccountReader() {
+  const profile = lastValue(useAccount().profile);
+
+  return <output hidden data-gallery-account-name>{profile?.displayName ?? ""}</output>;
+}
+
+/** `&section=devices` goes through the router: the page reads the hash off `useLocation`. `&shell=1` draws it inside
+ *  the app's shell, beside another reader of the same account. */
 function userSettingsStateFrame(): MountedFrame {
-  const section = new URLSearchParams(location.search).get("section");
+  const query = new URLSearchParams(location.search);
+  const section = query.get("section");
 
   return {
     entries: [section === null ? "/user/settings" : `/user/settings#${section}`],
-    node: <div className="min-h-screen p-bg p-text"><UserSettingsPage /></div>,
+    node: query.get("shell") === "1"
+      ? <><AccountReader /><Routes><Route element={<Layout />}><Route path="/user/settings" element={<UserSettingsPage />} /></Route></Routes></>
+      : <div className="min-h-screen p-bg p-text"><UserSettingsPage /></div>,
   };
 }
 

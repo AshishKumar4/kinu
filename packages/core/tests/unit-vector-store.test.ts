@@ -152,6 +152,20 @@ describe('CloudflareVectorStore', () => {
     expect(hits[0]?.path).toBe('memory/MEMORY.md');
   });
 
+  test.each(['chunkId', 'hash', 'path', 'startLine', 'endLine'])('metadata missing %s is refused without an invented canonical hit', async (missing) => {
+    const { index, records } = makeMockIndex();
+    const store = createCloudflareVectorStore({ index, embedder: constEmbedder });
+    await store.upsertChunk({ id: 'current', path: 'memory/current.md', startLine: 1, endLine: 1, text: 'apples' });
+
+    const metadata = Object.fromEntries(Object.entries({
+      chunkId: 'remote', hash: 'digest', path: 'memory/remote.md', startLine: 1, endLine: 1,
+    }).filter(([key]) => key !== missing));
+
+    records.set('incomplete', { values: [1, 0, 0], metadata });
+
+    expect((await store.search('apples', 5)).map(hit => hit.id)).toEqual(['current']);
+  });
+
   test('upsertChunks (batched) inserts all + survives single embedBatch path', async () => {
     const { index } = makeMockIndex();
     const store = createCloudflareVectorStore({ index, embedder: constEmbedder });

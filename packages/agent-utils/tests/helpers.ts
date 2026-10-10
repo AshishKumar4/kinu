@@ -6,6 +6,7 @@ export interface TestDb {
 	db: Database;
 	sql: SqlExecutor;
 	execRaw: (ddl: string) => void;
+	transactionSync: (write: () => void) => void;
 }
 
 /** bun:sqlite-backed SqlExecutor with the backends' ArrayBuffer → Uint8Array coercion. */
@@ -30,7 +31,7 @@ export function createTestDb(): TestDb {
 		return [];
 	};
 
-	return { db, sql, execRaw: (ddl: string) => db.exec(ddl) };
+	return { db, sql, execRaw: (ddl: string) => db.exec(ddl), transactionSync: (write) => db.transaction(write)() };
 }
 
 /** A map-backed byte filesystem; the production filesystem lives in Nimbus. */

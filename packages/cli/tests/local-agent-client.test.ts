@@ -150,7 +150,7 @@ function fakeResolver(model: LanguageModel): LocalModelResolver {
         return trimmed === undefined || trimmed === '' ? 'fake/fake-model' : trimmed;
       },
     resolveModel: () => model,
-    credentialFor: async () => null,
+    attemptFor: async () => null,
     listProviders: async () => [{ id: 'fake', label: 'Fake', available: true }],
     listModels: async () => ({
       models: ['fake-model', 'big-model', 'pinned-model'].map((id) => ({ id, label: id, provider: 'fake' })), failures: [],

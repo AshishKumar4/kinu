@@ -5,9 +5,9 @@ import { MemoryStore } from "../src/memory/store";
 import { createTestDb, createMemoryVfs } from "./helpers";
 
 function createStore() {
-	const { sql, db } = createTestDb();
+	const { sql, db, transactionSync } = createTestDb();
 	const fs = createMemoryVfs();
-	const store = new MemoryStore(fs, sql);
+	const store = new MemoryStore(fs, sql, transactionSync);
 	store.ensureSchema();
 
 	return { sql, db, fs, store };
@@ -28,11 +28,11 @@ describe("MemoryStore.appendToFile", () => {
 	});
 
 	test("a non-ENOENT read failure propagates instead of overwriting the file", async () => {
-		const { sql } = createTestDb();
+		const { sql, transactionSync } = createTestDb()
 		const fs = createMemoryVfs({ "memory/MEMORY.md": "# precious notes" });
 		fs.readFile = async () => { throw new Error("EIO: the store is unreachable"); };
 
-		const store = new MemoryStore(fs, sql);
+		const store = new MemoryStore(fs, sql, transactionSync);
 		store.ensureSchema();
 
 		await expect(store.appendToFile("memory/MEMORY.md", "more")).rejects.toThrow("EIO: the store is unreachable");

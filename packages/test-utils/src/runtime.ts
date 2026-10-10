@@ -83,6 +83,7 @@ function emptyMemory(): Memory {
     index: async () => refuse('memory indexing', 'opts.memory'),
     search: async () => [],
     read: async () => null,
+    chunk: async () => null,
     tail: async () => null,
   };
 }

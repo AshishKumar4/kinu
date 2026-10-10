@@ -1,11 +1,10 @@
 /**
- * Zero-LLM FTS5 transcript search over every session. The index is derived and
- * disposable, fed from the canonical store by a rowid watermark; operations are async because entry
- * text is projected by `SessionTranscriptReader.project`.
+ * Actor-owned FTS5 transcript search across its sessions. The derived index uses per-actor revision and purge
+ * cursors; projection awaits outside an atomic publish, so readers never observe another actor's index or a half-build.
  */
 
 import { searchFts } from '@kinu.run/agent-utils/memory';
-import { Deferred, Effect } from 'effect';
+import { Effect } from 'effect';
 import * as v from 'valibot';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
 import { boundedInt } from '../utils/bounds';
@@ -80,22 +79,17 @@ interface SyncState { actor_id: string; rev: number; purges: number; synced_rev:
 function ensureIndexTables(sql: SqlExecutor): void {
   void sql`
     CREATE VIRTUAL TABLE IF NOT EXISTS conversation_fts USING fts5(
-      content, msg_id UNINDEXED, session_id UNINDEXED, role UNINDEXED, created_at UNINDEXED
+      content, actor_id UNINDEXED, msg_id UNINDEXED, session_id UNINDEXED, role UNINDEXED, created_at UNINDEXED
     )`;
-  // Shared hosts hold several actors in one database; a mismatched `actor_id` rebuilds the index.
   void sql`
     CREATE TABLE IF NOT EXISTS conversation_fts_state (
-      id INTEGER PRIMARY KEY CHECK (id = 1),
-      actor_id TEXT NOT NULL,
+      actor_id TEXT PRIMARY KEY NOT NULL,
       rev INTEGER NOT NULL DEFAULT 0,
       purges INTEGER NOT NULL DEFAULT 0,
       synced_rev INTEGER NOT NULL DEFAULT -1,
       synced_purges INTEGER NOT NULL DEFAULT -1,
       synced_rowid INTEGER NOT NULL DEFAULT 0
     )`;
-  void sql`
-    INSERT OR IGNORE INTO conversation_fts_state (id, actor_id, rev, purges, synced_rev, synced_purges, synced_rowid)
-    VALUES (1, ${''}, 0, 0, -1, -1, 0)`;
 }
 
 export interface ConversationRecall {
@@ -106,13 +100,13 @@ export interface ConversationRecall {
 
 export class ConversationSearchStore implements ConversationRecall {
   private ensured = false;
-  private syncing: Deferred.Deferred<void, KinuError> | null = null;
   private readonly actorId: string;
 
   constructor(
     private readonly sql: SqlExecutor,
     private readonly actor: ActorHandle,
     private readonly transcriptFor: (sessionId: string) => SessionTranscriptReader,
+    private readonly transactionSync: (write: () => void) => void,
   ) {
     this.actorId = actor.actorId;
   }
@@ -234,73 +228,93 @@ export class ConversationSearchStore implements ConversationRecall {
 
       if (!this.ensured) {
         ensureIndexTables(this.sql);
+        void this.sql`INSERT OR IGNORE INTO conversation_fts_state (actor_id) VALUES (${this.actorId})`;
         void this.sql`CREATE TRIGGER IF NOT EXISTS conversation_rev_entries_ai AFTER INSERT ON conversation_entries BEGIN
-          UPDATE conversation_fts_state SET rev = rev + 1 WHERE id = 1; END`;
+          INSERT INTO conversation_fts_state (actor_id, rev) VALUES (NEW.actor_id, 1)
+          ON CONFLICT(actor_id) DO UPDATE SET rev = rev + 1; END`;
         void this.sql`CREATE TRIGGER IF NOT EXISTS conversation_rev_entries_ad AFTER DELETE ON conversation_entries BEGIN
-          UPDATE conversation_fts_state SET rev = rev + 1, purges = purges + 1 WHERE id = 1; END`;
+          INSERT INTO conversation_fts_state (actor_id, rev, purges) VALUES (OLD.actor_id, 1, 1)
+          ON CONFLICT(actor_id) DO UPDATE SET rev = rev + 1, purges = purges + 1;
+          DELETE FROM conversation_fts WHERE actor_id = OLD.actor_id AND rowid = OLD.rowid; END`;
         this.ensured = true;
       }
 
-      return this.refreshIndex();
+      return this.sync();
     });
   }
 
-  /** One sync at a time: projection awaits, so interleaved syncs would double-index. A failed sync invalidates the index. */
-  private refreshIndex(): Effect.Effect<void, KinuError> {
-    const pending = this.syncing;
-
-    if (pending !== null) return Deferred.await(pending);
-    const run = Deferred.makeUnsafe<void, KinuError>();
-    this.syncing = run;
-
-    return this.sync().pipe(
-      Effect.onError(() => Effect.sync(() => invalidateConversationSearchIndex(this.sql))),
-      Effect.exit,
-      Effect.tap((exit) => Deferred.done(run, exit)),
-      Effect.flatten,
-      Effect.ensuring(Effect.andThen(Deferred.interrupt(run), Effect.sync(() => { this.syncing = null; }))),
-    );
+  private syncState(): SyncState | undefined {
+    return this.sql<SyncState>`
+      SELECT actor_id, rev, purges, synced_rev, synced_purges, synced_rowid
+      FROM conversation_fts_state WHERE actor_id = ${this.actorId}`[0];
   }
 
   private sync(): Effect.Effect<void, KinuError> {
     return Effect.gen({ self: this }, function* () {
-      const state = this.sql<SyncState>`
-        SELECT actor_id, rev, purges, synced_rev, synced_purges, synced_rowid
-        FROM conversation_fts_state WHERE id = 1`[0];
+      for (;;) {
+        const state = this.syncState();
 
-      if (state === undefined) return yield* new KinuError('io', 'the transcript search index lost its sync state');
-      const rebuild = state.actor_id !== this.actorId || state.purges !== state.synced_purges;
+        if (state === undefined) return yield* new KinuError('io', 'the actor transcript index lost its sync state');
 
-      if (!rebuild && state.rev === state.synced_rev) return;
+        const rebuild = state.purges !== state.synced_purges;
 
-      if (rebuild) void this.sql`DELETE FROM conversation_fts`;
-      const watermark = rebuild ? 0 : state.synced_rowid;
+        if (!rebuild && state.rev === state.synced_rev) return;
 
-      const rows = this.sql<EntryRow>`
-        SELECT id, session_id, role, recorded_at, rowid AS rid FROM conversation_entries
-        WHERE actor_id = ${this.actorId}
-          AND role IN ('user', 'assistant') AND rowid > ${watermark}
-        ORDER BY rowid ASC`;
+        const watermark = rebuild ? 0 : state.synced_rowid;
 
-      let synced = watermark;
+        const rows = this.sql<EntryRow>`
+          SELECT id, session_id, role, recorded_at, rowid AS rid FROM conversation_entries
+          WHERE actor_id = ${this.actorId} AND role IN ('user', 'assistant') AND rowid > ${watermark}
+          ORDER BY rowid ASC`;
 
-      for (const row of rows) {
-        const projected = yield* Effect.promise(() => this.transcriptFor(row.session_id).project(row.id));
+        const projections: { row: EntryRow; content: string }[] = [];
 
-        if (projected !== null) {
-          void this.sql`
-            INSERT INTO conversation_fts (content, msg_id, session_id, role, created_at)
-            VALUES (${projected.content}, ${row.id}, ${row.session_id}, ${row.role}, ${row.recorded_at})`;
+        for (const row of rows) {
+          const projected = yield* Effect.promise(() => this.transcriptFor(row.session_id).project(row.id));
+
+          if (projected !== null) projections.push({ row, content: projected.content });
         }
 
-        synced = row.rid;
-      }
+        let committed = false;
+        let missingState = false;
 
-      // Record the counters this sync read: writes landing during projection belong to the next pass.
-      void this.sql`
-        UPDATE conversation_fts_state
-        SET actor_id = ${this.actorId}, synced_rev = ${state.rev}, synced_purges = ${state.purges}, synced_rowid = ${synced}
-        WHERE id = 1`;
+        this.transactionSync(() => {
+          this.actor.assertCurrent();
+          const current = this.syncState();
+
+          if (current === undefined) {
+            missingState = true;
+
+            return;
+          }
+
+          // A purge changes canonical row identities; project that new generation rather than publishing stale text.
+          if (current.purges !== state.purges) return;
+          committed = true;
+
+          // Another refresh may have already published this snapshot, without any per-instance lock.
+          if (current.synced_purges === state.purges && current.synced_rev >= state.rev) return;
+
+          if (rebuild) void this.sql`DELETE FROM conversation_fts WHERE actor_id = ${this.actorId}`;
+
+          for (const { row, content } of projections) {
+            void this.sql`
+              INSERT OR REPLACE INTO conversation_fts (rowid, content, actor_id, msg_id, session_id, role, created_at)
+              VALUES (${row.rid}, ${content}, ${this.actorId}, ${row.id}, ${row.session_id}, ${row.role}, ${row.recorded_at})`;
+          }
+
+          const synced = Math.max(rebuild ? 0 : current.synced_rowid, rows[rows.length - 1]?.rid ?? watermark);
+
+          void this.sql`
+            UPDATE conversation_fts_state
+            SET synced_rev = ${state.rev}, synced_purges = ${state.purges}, synced_rowid = ${synced}
+            WHERE actor_id = ${this.actorId}`;
+        });
+
+        if (missingState) return yield* new KinuError('io', 'the actor transcript index lost its sync state');
+
+        if (committed) return;
+      }
     });
   }
 
@@ -311,6 +325,7 @@ export class ConversationSearchStore implements ConversationRecall {
              snippet(conversation_fts, 0, '[', ']', '...', ${SNIPPET_TOKENS}) AS snip
       FROM conversation_fts
       WHERE conversation_fts MATCH ${ftsQuery}
+        AND actor_id = ${this.actorId}
         AND role IN ('user', 'assistant')
       ORDER BY bm25(conversation_fts) ASC, rowid ASC
       LIMIT ${limit}`;
@@ -318,9 +333,9 @@ export class ConversationSearchStore implements ConversationRecall {
 }
 
 /** Called by every conversation mutation a rowid watermark cannot see (purge-and-reseed, reassignment, id reuse); the next refresh rebuilds. */
-export function invalidateConversationSearchIndex(sql: SqlExecutor): void {
+export function invalidateConversationSearchIndex(sql: SqlExecutor, actorId: string): void {
   ensureIndexTables(sql);
   void sql`
-    UPDATE conversation_fts_state
-    SET actor_id = ${''}, synced_rev = -1, synced_purges = -1, synced_rowid = 0 WHERE id = 1`;
+    INSERT INTO conversation_fts_state (actor_id, rev, purges) VALUES (${actorId}, 1, 1)
+    ON CONFLICT(actor_id) DO UPDATE SET rev = rev + 1, purges = purges + 1`;
 }

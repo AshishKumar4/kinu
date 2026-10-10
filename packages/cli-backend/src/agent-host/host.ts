@@ -24,7 +24,6 @@ import {
   subordinateDescendants,
   canonicalConversationId,
   childContextResolver, hostedChildTree,
-  createActorHost,
   createLocalPeerEndpoint,
   defaultLoopOrigin,
   samePeerGroup,
@@ -82,7 +81,7 @@ import { KinuError, attempt, diagnostics, refusalOf, settle, toKinuError, settle
 import { watchStatements } from '@kinu.run/core/identity';
 import {
   createCLIRuntime, makeSql, makeExecRaw, makeSqlExec, shareLocalWorkspacePlane,
-  buildLocalActorRuntime, cleanupFacetScratch, soulOf, writeTransaction,
+  cleanupFacetScratch, soulOf, writeTransaction,
   type CLIRuntime,
 } from '../runtime';
 import type { CLIOpenConfig } from '../open';
@@ -98,12 +97,12 @@ import {
 } from '@kinu.run/core';
 import {
   LocalAgentSession,
-  createLocalOrchestration,
   type LocalAgentSessionOpts,
-  type LocalOrchestration,
   type LocalParentRelay,
   type SessionEvent,
 } from '../local-session';
+import { createLocalActorHost } from '../actor-host';
+import type { LocalOrchestration } from '../orchestration';
 import type { LocalModelResolver } from '../model-resolver';
 import type { ProfileEnvelopeSource } from '../profile-authority';
 import type { McpServerConfig } from '../mcp';
@@ -266,7 +265,7 @@ export class LocalAgentHost {
     tree.driving += 1;
 
     try {
-      return { ran: true, value: await tree.host.run(entry.actor.reference, () => run()) };
+      return { ran: true, value: await tree.host.run(entry.actor.reference, { kind: 'actor' }, () => run()) };
     } finally {
       tree.driving -= 1;
 
@@ -439,7 +438,7 @@ export class LocalAgentHost {
       this.trees.set(name, tree);
 
       try {
-        const actor = await tree.host.acquire(actorReferenceOf(ws.rt.actor));
+        const actor = await tree.host.acquire(actorReferenceOf(ws.rt.actor), { kind: 'actor' });
 
         return await this.buildEntry({ key: name, name, ref, parentKey: null, tree, actor, ws });
       } catch (error) {
@@ -470,9 +469,7 @@ export class LocalAgentHost {
     const runtimes = new Map<string, CLIRuntime>([[ws.rt.actor.actorId, ws.rt]]);
     const orchestrations = new Map<string, LocalOrchestration>();
 
-    const host = createActorHost({
-      // The CLI has no tracer.
-      tracing: undefined,
+    const host = createLocalActorHost({
       storage: {
         sql,
         transactionSync: (write) => writeTransaction(db, write),
@@ -487,8 +484,9 @@ export class LocalAgentHost {
       advisorPort: (bound) => this.byActor.get(bound.reference.actorId)?.temporary ?? null,
       // Every hirer here, the root included, is an entry of this process.
       sayToParent: (child, signal) => this.sayToHirer(child, signal),
-      runtimeFor: (bound) => this.runtimeFor(runtimes, db, bound),
-      filesFor: (bound) => ws.rt.filesForActor(bound.handle),
+      actorRuntimeFor: (bound) => this.runtimeFor(runtimes, db, bound),
+      parentRuntimeFor: (bound) => bound.reference.parentActorId === null
+        ? ws.rt : this.requireActorEntry(bound.reference.parentActorId).ws.rt,
       loopFor: (bound) => {
         const parentId = bound.reference.parentActorId;
         const parentEntry = parentId === null ? null : this.requireActorEntry(parentId);
@@ -500,30 +498,24 @@ export class LocalAgentHost {
           parent: parentEntry === null ? null : parentEntry.ws.rt,
         };
       },
-      orchestrationFor: (bound) => {
+      sessionFor: (bound) => {
         const ownsSession = bound.record.origin !== 'swarm';
         const clientId = ownsSession ? bound.reference.actorId : bound.reference.parentActorId;
 
         if (clientId === null) throw new KinuError('missing', 'A reporting actor has no session to publish through.');
 
-        const orchestration = createLocalOrchestration({
-          runtime: bound.runtime,
-          history: bound.stores.history,
-          eventLog: new EventLog(hubSql, bound.handle),
-          // Reporting actors have no LocalAgentSession; resolve the parent's at call time because the host
-          // builds orchestration first.
-          session: () => this.requireActorEntry(clientId).session,
-          oneShot: false,
-        });
-
-        // Retained only for kinds that get a HostEntry; head/node orchestration dies with its seat.
-        if (ownsSession) {
+        return {
+          read: () => this.requireActorEntry(clientId).session,
+          turnInFlight: () => this.byActor.get(clientId)?.session.turnInFlight() ?? false,
+          closed: () => this.byActor.get(clientId)?.session.closed() ?? true,
+        };
+      },
+      oneShot: false,
+      orchestrationCreated: (bound, orchestration) => {
+        if (bound.record.origin !== 'swarm') {
           orchestrations.set(bound.reference.actorId, orchestration);
         }
-
-        return orchestration.deps;
       },
-      contextEvents: (bound) => bound.stores.eventRecorder,
       discardBytes: (record) => this.discardActorBytes(ws, record),
     });
 
@@ -552,14 +544,6 @@ export class LocalAgentHost {
     }
 
     const parent = this.requireActorEntry(parentId);
-
-    if (!isSubordinateOrigin(bound.record.origin)) {
-      // The observer the seater named, read off the parent entry's session: only the caller knows what
-      // watches this seat.
-      return await buildLocalActorRuntime(
-        parent.ws.rt, bound, parent.session.pendingWriteObserver(bound.reference.actorId),
-      );
-    }
 
     const binding = bindLocalActorReference(parent.ws.rt.actor, bound.reference);
     // The host's handle: the release fence is bound to this object.
@@ -789,7 +773,7 @@ export class LocalAgentHost {
     key: string,
   ): Promise<HostEntry> {
     const childName = binding.name;
-    const actor = await parent.tree.host.acquire(binding.reference);
+    const actor = await parent.tree.host.acquire(binding.reference, { kind: 'actor' });
 
     try {
       const rt = parent.tree.runtimes.get(binding.reference.actorId);
@@ -1301,7 +1285,7 @@ export class LocalAgentHost {
 
         if (inheritedModel) actor.config.setModel(inheritedModel);
       });
-      const actor = await tree.host.acquire(binding.reference);
+      const actor = await tree.host.acquire(binding.reference, { kind: 'actor' });
       const rt = tree.runtimes.get(binding.reference.actorId);
 
       if (!rt) throw new KinuError('missing', 'The created subordinate has no bound runtime.');

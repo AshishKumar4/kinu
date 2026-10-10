@@ -7,10 +7,11 @@ import { generateReported, type ModelCallSpend } from '@kinu.run/core';
 export function createModelSummarizer(
   getModel: () => LanguageModel,
   spend: ModelCallSpend,
+  spec?: () => string,
 ): (prompt: string, signal?: AbortSignal) => Promise<string> {
   return async (prompt, signal) => (await generateReported({
     model: getModel(),
     prompt,
     abortSignal: signal,
-  }, { spend })).text;
+  }, { spend, spec: spec?.() })).text;
 }

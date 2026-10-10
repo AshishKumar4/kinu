@@ -15,7 +15,7 @@ import { createCompletedTurnStore, initCompletedTurnTable } from '../src/evoluti
 describe('TurnAccumulator', () => {
   test('reset clears all accounting + stamps startedAt', () => {
     const a = new TurnAccumulator();
-    a.recordStep({ usage: { input: 5, output: 3 } });
+    a.recordStep({ usage: { input: 5, output: 3 } }, []);
     a.recordToolCall({ toolCallId: 'fixture-1', toolName: 'shell', success: true, output: 'ok' });
     // A failed call first, so a reset that forgot hadError leaks it.
     a.recordToolCall({ toolCallId: 'fixture-2', toolName: 'shell', success: false, reason: null, error: 'boom' });
@@ -108,8 +108,8 @@ describe('TurnAccumulator', () => {
   test('recordStep sums the turn field by field, leaving unreported fields absent', () => {
     const steps: number[] = [];
     const a = new TurnAccumulator({ onStepEvent: (e) => { steps.push(e.stepIndex); } });
-    a.recordStep({ usage: { input: 100, output: 40, cacheRead: 10 }, finishReason: 'tool-calls', toolCalls: [{ toolName: 'shell' }] });
-    a.recordStep({ usage: { input: 50, output: 20, cacheWrite: 30 }, finishReason: 'stop' });
+    a.recordStep({ usage: { input: 100, output: 40, cacheRead: 10 }, finishReason: 'tool-calls', toolCalls: [{ toolName: 'shell' }] }, []);
+    a.recordStep({ usage: { input: 50, output: 20, cacheWrite: 30 }, finishReason: 'stop' }, []);
     expect(a.stepCount).toBe(2);
     // Unreported stays absent, not zero.
     expect(a.usage).toEqual({ input: 150, output: 60, cacheRead: 10, cacheWrite: 30 });
@@ -119,9 +119,9 @@ describe('TurnAccumulator', () => {
 
   test('reportedUsage is the turn usage, or undefined when nothing was reported', () => {
     const a = new TurnAccumulator();
-    a.recordStep({ finishReason: 'stop' });
+    a.recordStep({ finishReason: 'stop' }, []);
     expect(a.reportedUsage()).toBeUndefined();
-    a.recordStep({ usage: { input: 12, output: 4, cacheRead: 8 } });
+    a.recordStep({ usage: { input: 12, output: 4, cacheRead: 8 } }, []);
     expect(a.reportedUsage()).toEqual({ input: 12, output: 4, cacheRead: 8 });
     a.reset(0);
     expect(a.reportedUsage()).toBeUndefined();
@@ -131,11 +131,11 @@ describe('TurnAccumulator', () => {
     const a = new TurnAccumulator();
     // Never reported is not reported zero.
     expect(a.lastPromptTokens).toBeUndefined();
-    a.recordStep({ usage: { input: 1_000, output: 40 } });
-    a.recordStep({ usage: { input: 1_450, output: 20 } });
-    a.recordStep({});
+    a.recordStep({ usage: { input: 1_000, output: 40 } }, []);
+    a.recordStep({ usage: { input: 1_450, output: 20 } }, []);
+    a.recordStep({}, []);
     expect(a.lastPromptTokens).toBe(1_450);
-    a.recordStep({ usage: { input: 0, output: 4 } });
+    a.recordStep({ usage: { input: 0, output: 4 } }, []);
     expect(a.lastPromptTokens).toBe(0);
     a.reset(1);
     expect(a.lastPromptTokens).toBeUndefined();
@@ -186,8 +186,8 @@ describe('TurnAccumulator', () => {
   test('a step without a finishReason reaches the step sink as undefined, not as "undefined"', () => {
     const reasons: Array<string | undefined> = [];
     const a = new TurnAccumulator({ onStepEvent: (e) => { reasons.push(e.reason); } });
-    a.recordStep({ finishReason: 'stop' });
-    a.recordStep({});
+    a.recordStep({ finishReason: 'stop' }, []);
+    a.recordStep({}, []);
     expect(reasons).toEqual(['stop', undefined]);
   });
 
@@ -197,7 +197,7 @@ describe('TurnAccumulator', () => {
     a.recordStep({
       usage: { input: 900, output: 40, cacheRead: 700, reasoning: 12 },
       response: { modelId: 'claude-sonnet-4.5' },
-    });
+    }, []);
     expect(events[0]?.usage).toEqual({ input: 900, output: 40, cacheRead: 700, reasoning: 12 });
     expect(events[0]?.modelId).toBe('claude-sonnet-4.5');
   });
@@ -205,14 +205,14 @@ describe('TurnAccumulator', () => {
   test('a step the provider reported nothing for carries no usage rather than zeros', () => {
     const events: Array<{ usage?: unknown }> = [];
     const a = new TurnAccumulator({ onStepEvent: (e) => { events.push(e); } });
-    a.recordStep({ finishReason: 'stop' });
+    a.recordStep({ finishReason: 'stop' }, []);
     expect(events[0]?.usage).toBeUndefined();
   });
 
   test('an unpriced model yields a step with no usd, never a blended guess', () => {
     const events: Array<{ usage?: Usage; usd?: number }> = [];
     const a = new TurnAccumulator({ onStepEvent: (e) => { events.push(e); } });
-    a.recordStep({ usage: { input: 100, output: 10 } });
+    a.recordStep({ usage: { input: 100, output: 10 } }, []);
     expect(events[0]?.usage).toEqual({ input: 100, output: 10 });
     expect(events[0]?.usd).toBeUndefined();
   });
@@ -232,12 +232,12 @@ describe('TurnAccumulator', () => {
     const a = new TurnAccumulator({ onStepEvent: (e) => { events.push(e); } }, governor);
 
     // A zero answer is a measurement, not silence.
-    a.recordStep({ usage: { input: 0, output: 0 } });
+    a.recordStep({ usage: { input: 0, output: 0 } }, []);
     expect(events[0]?.usage).toEqual({ input: 0, output: 0 });
     expect(a.reportedUsage()).toEqual({ input: 0, output: 0 });
     expect(governor.snapshot('nightly')[0]?.calls).toBe(1);
 
-    a.recordStep({ finishReason: 'stop' });
+    a.recordStep({ finishReason: 'stop' }, []);
     expect(events[1]?.usage).toBeUndefined();
     expect(governor.snapshot('nightly')[0]?.calls).toBe(1);
     expect(governor.snapshot('nightly')[0]?.spent.tokens).toBe(0);

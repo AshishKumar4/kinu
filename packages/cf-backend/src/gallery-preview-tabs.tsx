@@ -5,7 +5,8 @@ import { WorkspacePlanReferenceSchema, JsonValueSchema, type JsonValue, type Pla
 import * as v from 'valibot';
 import type { ExecutorInfo, Rpc } from '@kinu.run/core';
 import { INSPECTOR_DEFAULT_PX } from '@kinu.run/core/web/inspector-layout';
-import { useKinu, WorkspacePlanUpdatedFrameSchema } from '@/hooks/use-kinu';
+import { useKinu } from '@/hooks/use-kinu';
+import { WorkspacePlanUpdatedFrameSchema } from '@kinu.run/core';
 import { galleryServerPush } from '@/gallery-agent-stub';
 import type { SurfaceKind } from '@kinu.run/core';
 import { WorkSurface } from '@/components/surfaces/WorkSurface';

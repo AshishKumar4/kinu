@@ -66,9 +66,12 @@ async function galleryOpening(rpc: GalleryRpc): Promise<string> {
 		list("listSubordinates"), list("listPendingConsents"), list("listWorkspaceAgents"),
 	]);
 
+	// `&opening=bad-plan`: an opening whose plan this page cannot read, as a newer or broken server might send.
+	const badPlan = new URLSearchParams(location.search).get("opening") === "bad-plan" ? { activePlan: { id: 3 } } : {};
+
 	return JSON.stringify({
 		...v.parse(v.looseObject({}), snapshot),
-		pendingActions, backgroundJobs, inspectedWork, subordinates, pendingConsents, workspaceAgents,
+		pendingActions, backgroundJobs, inspectedWork, subordinates, pendingConsents, workspaceAgents, ...badPlan,
 	});
 }
 
