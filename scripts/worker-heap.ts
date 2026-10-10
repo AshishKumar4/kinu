@@ -23,6 +23,12 @@
  * planted in main's isolate at each turn's end, 2.1 MB over the step's turns, passed that gate and fails this one
  * (20261010040351-bbe46d65 and -78563353). Each isolate is now read and bounded on its own.
  *
+ * The long turn's allocation bound rose from 170 MB to 195 MB on 2026-10-10 because its read point moved, not the
+ * product: it was read as soon as the turn's call returned, which raced the turn's tail, and is now read at its
+ * settlement (main's isolate idle, the workspace's detached work and terminal effects joined, its sleep-time lane off).
+ * On the same product the old read gave 143-154 MB or 165-170 MB as the race fell (b9c667740, 5724b7472); at settlement
+ * it read 171.6-183.0 MB over 15 runs on 0d3f6491a. See {@link LONG_TURN_ALLOCATED_BOUND_BYTES}.
+ *
  * `--no-build` reads the existing `dist/kinu` (a deploy already built it).
  */
 
