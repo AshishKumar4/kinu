@@ -25,6 +25,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **Fast approval decisions are both acknowledged.** The scripted approval flow reads the current unanswered wakes together and matches their own fixture commands, so immediate Deny no longer erases the Approve acknowledgment. Earlier answered decisions and unrelated commands are not counted.
 - **Parallel product flows decide only their own cards.** The memory flows identify proposals by workspace and proposal id and decline any surviving fixture proposals during teardown. Approval-stack counts and clicks only the two actions from its fresh workspace, so another flow's account-memory proposal cannot change its count or consume its click.
 - **The account-memory flow waits for Memory, not a chat composer.** Settings navigation now uses a signed-in page and the Memory section's own ready state; the workspace-opening helper remains specific to workspace routes.
 - **Test browsers leave no Crashpad daemons behind.** Chrome 155's handlers daemonize outside the browser group and use a global report directory. Each test launch now owns its config directory and ends only handlers rooted there. Reporting is disabled without the testing flag's pipe-navigation crash; the global ownership scan is unchanged.

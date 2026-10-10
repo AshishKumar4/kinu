@@ -15,7 +15,7 @@ import worker, { MAX_BODY_BYTES } from '../../scripts/scripted-model-worker';
 import { SCRIPTED_CREDENTIAL, startScriptedModel } from '../../scripts/scripted-model';
 import { FALLBACK_ANSWER } from '../../scripts/scripted-protocol';
 import { tierModel } from '../../scripts/tier-model';
-import { HOME_ASK, HOME_BRIEF, HOME_REPORTED } from '../../scripts/flows-script';
+import { APPROVALS_ASK, DECISION_HEARD, HOME_ASK, HOME_BRIEF, HOME_REPORTED, PARKED_COMMANDS } from '../../scripts/flows-script';
 import { generateText, streamText } from 'ai';
 import { createOpenAICompatProvider, runSleepTimeCompute, type LLM } from '@kinu.run/core';
 import { SLEEP_TIME_PROMPT_OPENING } from '../../packages/core/src/utils/prompt-sections';
@@ -238,6 +238,37 @@ const ReplySchema = v.object({ choices: v.tuple([v.object({ message: v.object({
   content: v.nullish(v.string()),
   tool_calls: v.optional(v.array(v.object({ id: v.string(), function: v.object({ name: v.string(), arguments: v.string() }) }))),
 }) })]) });
+
+describe('the approval flow acknowledges only the current unanswered decisions', () => {
+  const approved = `APPROVED, still not run: re-issue once:\n  approved-id: ${PARKED_COMMANDS[1]}`;
+  const denied = `DENIED: do not re-issue:\n  denied-id: ${PARKED_COMMANDS[0]}`;
+  const parked = [{ role: 'user', content: APPROVALS_ASK }, { role: 'assistant', content: 'BOTH PARKED' }];
+
+  test('Approve then immediate Deny both reach the answer without re-issuing a command', async () => {
+    const answered = await reply([...parked, { role: 'user', content: approved }, { role: 'user', content: denied }]);
+
+    expect(answered.tool_calls).toBeUndefined();
+    expect(answered.content).toBe(`${DECISION_HEARD} approved denied`);
+  });
+
+  test('an approval acknowledged in an earlier answer is not counted by the next turn', async () => {
+    const answered = await reply([
+      ...parked, { role: 'user', content: approved }, { role: 'assistant', content: `${DECISION_HEARD} approved` },
+      { role: 'user', content: denied },
+    ]);
+
+    expect(answered.content).toBe(`${DECISION_HEARD} denied`);
+  });
+
+  test('a decision for a different fixture is not claimed by this flow', async () => {
+    const answered = await reply([
+      ...parked, { role: 'user', content: 'APPROVED, still not run: re-issue once:\n  foreign-id: echo unrelated' },
+      { role: 'user', content: denied },
+    ]);
+
+    expect(answered.content).toBe(`${DECISION_HEARD} denied`);
+  });
+});
 
 /** One request to the deployed tiers' Worker, as a hosted turn makes it: the conversation so far and the agent's tools. */
 async function reply(messages: readonly JsonObject[]): Promise<v.InferOutput<typeof ReplySchema>['choices'][0]['message']> {

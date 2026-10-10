@@ -425,12 +425,21 @@ function approvalsScript(request: ScriptedRequest, latest: string): ScriptedAnsw
 
   if (hire !== null) return hire;
 
-  // A decision's wake names what was approved and what denied (core safety/deferred-approval.ts `decisionWakeMessage`).
-  const approvedHeard = latest.includes('still not run: re-issue once');
-  const deniedHeard = latest.includes('DENIED: do not re-issue');
+  // A decision's wake names each command below its status (core safety/deferred-approval.ts `decisionWakeMessage`).
+  const heard = new Set<'approved' | 'denied'>();
 
-  if (approvedHeard || deniedHeard) {
-    return { text: [DECISION_HEARD, ...(approvedHeard ? ['approved'] : []), ...(deniedHeard ? ['denied'] : [])].join(' ') };
+  for (const text of request.unansweredUserTexts) {
+    let decision: 'approved' | 'denied' | null = null;
+
+    for (const line of text.split('\n')) {
+      if (line.includes('APPROVED, still not run: re-issue once:')) decision = 'approved';
+      else if (line.includes('DENIED: do not re-issue:')) decision = 'denied';
+      else if (decision !== null && PARKED_COMMANDS.some((command) => line.endsWith(command))) heard.add(decision);
+    }
+  }
+
+  if (heard.size > 0) {
+    return { text: [DECISION_HEARD, ...heard].join(' ') };
   }
 
   if (!latest.includes(APPROVALS_ASK)) return null;
