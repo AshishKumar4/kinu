@@ -822,7 +822,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       // Its own named shell, never the agent's: the session user's identity must not reach the agent's commands.
       stateSession: async () => await this.hostedWorkspace().session({ shellId: agentStateShellId(this.liveAgentOf(actorId).storageKey) }),
-      memory: () => new AgentMemory(async () => (await this.actorHost().acquire(actorReferenceOf(this.liveAgentOf(actorId)), { kind: 'actor' })).runtime.memory),
+      memory: () => new AgentMemory(async () => {
+        const reference = actorReferenceOf(this.liveAgentOf(actorId));
+        const actor = this.actorHost().hosted(reference) ?? await this.actorHost().acquire(reference, { kind: 'actor' });
+
+        return actor.runtime.memory;
+      }),
       program: (turnId, ...args) => this.agentTurns.program(actorId, turnId, ...args),
       traceTurn: (turnId, event) => this.agentTurns.trace(actorId, turnId, event),
       traceStream: (turnId, lines) => this.agentTurns.traceStream(actorId, turnId, headDeltas(lines)),
@@ -852,7 +857,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         await this.mainTurnSettled(settled);
       },
       hireAdvisor: async (advisor) => {
-        const { session } = await this.actorHost().acquire(actorReferenceOf(this.liveAgentOf(actorId)), { kind: 'actor' });
+        const reference = actorReferenceOf(this.liveAgentOf(actorId));
+        const { session } = this.actorHost().hosted(reference) ?? await this.actorHost().acquire(reference, { kind: 'actor' });
 
         await session.hireAdvisor(advisor);
       },

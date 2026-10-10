@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
-import { HeadCapture, REAL_CLOCK, type HeadInput, type HostedActor } from '@kinu.run/core';
+import { HeadCapture, REAL_CLOCK, sha256Hex, type HeadInput, type HostedActor } from '@kinu.run/core';
 import { scratchDir, scriptedTurnModel, workspaceDatabase } from '@kinu.run/test-utils';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
-import { workspaceHome } from '../src/runtime';
+import { workspaceHome, type CLIRuntime } from '../src/runtime';
 import { LocalAgentHost, type LocalAgentHostOptions } from '../src/agent-host/host';
 import { openWorkspaceCLI } from '../src/open';
 
@@ -20,6 +20,7 @@ async function reopenableWorkspace(label: string) {
   const dbPath = join(space, 'agent.db');
   const seed = workspaceDatabase(dbPath);
   const llm = { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'retained' };
+  const runtimes = new Map<string, CLIRuntime>();
 
   try {
     await createWorkspace(seed, { name: 'root', purpose: 'Recover retained work.', llm, home: workspaceHome(seed) });
@@ -30,17 +31,18 @@ async function reopenableWorkspace(label: string) {
   const options: LocalAgentHostOptions = {
     roster: () => [{ name: 'root', cwd: folder, workspaceId: 'recovery' }],
     dbPath: () => dbPath,
-    open: async (_ref, db, path) => {
+    open: async (ref, db, path) => {
       const openConfig = { llm, cwd: folder };
       const { rt } = await openWorkspaceCLI(db, path, openConfig);
 
       rt.actor.config.setLearning(false);
+      runtimes.set(ref.name, rt);
 
       return { rt, openConfig, staticModel: model };
     },
   };
 
-  return { options, folder };
+  return { options, folder, runtimes };
 }
 
 function head(id: string): HeadInput {
@@ -51,9 +53,11 @@ function head(id: string): HeadInput {
 
 async function interrupted(actor: HostedActor): Promise<void> {
   const context = actor.stores.history.context.selected() ?? actor.stores.history.context.initialize();
+  const version = await actor.runtime.identity.scaffold.version();
+  const source = await actor.runtime.identity.scaffold.read();
 
   await actor.stores.claims.admit({ runId: 'retained-run', turnId: 'retained-turn', workMode: 'build', context,
-    program: { kind: 'builtin', version: 0, digest: null, build: null } });
+    program: { kind: version === 0 ? 'builtin' : 'scaffold', version, digest: version === 0 ? null : sha256Hex(source), build: null } });
 }
 
 test('startup claim recovery leaves a restarted node available to re-drive on the workspace runtime', async () => {
@@ -71,6 +75,7 @@ test('startup claim recovery leaves a restarted node available to re-drive on th
     await resumed.recoverBackgroundJobs();
 
     const node = await resumed.hostNode({ nodeId: 'retained-node', rootId: 'retained-work', depth: 1 });
+    expect(node.actor.stores.claims.read('retained-turn')).toMatchObject({ status: 'admitted', outcome: null });
     const shell = node.actor.runtime.shell;
 
     if (shell === undefined) throw new Error('the re-driven node must have the workspace shell');
@@ -106,6 +111,7 @@ test('startup claim recovery leaves a restarted head available to re-drive with 
 
     const capture = new HeadCapture();
     const branch = await resumed.hostHead(head('retained-head'), capture.files);
+    expect(branch.actor.stores.claims.read('retained-turn')).toMatchObject({ status: 'admitted', outcome: null });
     await writeText(branch.actor.runtime.storage.vfs, join(workspace.folder, 'retained.txt'), 'retained change\n');
 
     const result = await branch.infer(head('retained-head'), {
@@ -149,5 +155,74 @@ test('in-flight and live acquisition cannot replace a head kind or drop its writ
     await branch.release();
   } finally {
     await host.close();
+  }
+});
+
+test('a child keeps the inherited loop but edits only its own scaffold, never its parent program', async () => {
+  const workspace = await reopenableWorkspace('scaffold-ownership');
+  const host = new LocalAgentHost(workspace.options);
+
+  try {
+    const owner = await host.acquire('root');
+    const parent = workspace.runtimes.get('root');
+
+    if (parent === undefined) throw new Error('the owner runtime must be open');
+    const inherited = 'export default async function main() { return "inherited parent loop"; }';
+
+    await writeText(parent.agentStateVfs ?? parent.storage.vfs, `${parent.identity.scaffold.path}.v0`, inherited);
+    await parent.identity.scaffold.write(inherited);
+    const node = await owner.hostNode({ nodeId: 'program-node', rootId: 'program-work', depth: 1 });
+
+    expect(await node.actor.runtime.identity.scaffold.read()).toBe(inherited);
+    const nodeEdit = 'export default async function main() { return "node edit"; }';
+    const nodeVersion = await node.actor.runtime.identity.scaffold.version();
+
+    await writeText(node.actor.runtime.agentStateVfs ?? node.actor.runtime.storage.vfs, `${node.actor.runtime.identity.scaffold.path}.v${nodeVersion}`, nodeEdit);
+    await node.actor.runtime.identity.scaffold.write(nodeEdit);
+    expect(await node.actor.runtime.identity.scaffold.read()).toBe(nodeEdit);
+    expect(await parent.identity.scaffold.read()).toBe(inherited);
+    const branchInput = { ...head('program-head'), loop: { kind: 'inherit' } } satisfies HeadInput;
+    const branch = await owner.hostHead(branchInput, new HeadCapture().files);
+
+    expect(await branch.actor.runtime.identity.scaffold.read()).toBe(inherited);
+    const headEdit = 'export default async function main() { return "head edit"; }';
+    const headVersion = await branch.actor.runtime.identity.scaffold.version();
+
+    await writeText(branch.actor.runtime.agentStateVfs ?? branch.actor.runtime.storage.vfs, `${branch.actor.runtime.identity.scaffold.path}.v${headVersion}`, headEdit);
+    await branch.actor.runtime.identity.scaffold.write(headEdit);
+    expect(await branch.actor.runtime.identity.scaffold.read()).toBe(headEdit);
+    expect(await parent.identity.scaffold.read()).toBe(inherited);
+    await branch.release();
+  } finally {
+    await host.close();
+  }
+});
+
+test('a retained child without its owned program bytes names the required local reset and leaves the parent files', async () => {
+  const workspace = await reopenableWorkspace('scaffold-reset');
+  const first = new LocalAgentHost(workspace.options);
+  const owner = await first.acquire('root');
+  const node = await owner.hostNode({ nodeId: 'old-program', rootId: 'old-layout', depth: 1 });
+  const program = node.actor.runtime.identity.scaffold;
+  const version = await program.version();
+  const files = node.actor.runtime.agentStateVfs ?? node.actor.runtime.storage.vfs;
+  const parent = workspace.runtimes.get('root');
+
+  if (parent === undefined) throw new Error('the owner runtime must be open');
+  const before = await parent.identity.scaffold.read();
+
+  await files.unlink(`${program.path}.v${version}`);
+  await files.unlink(program.path);
+  await first.close();
+  const cold = new LocalAgentHost(workspace.options);
+
+  try {
+    const reopened = await cold.acquire('root');
+    const result = await Promise.allSettled([reopened.hostNode({ nodeId: 'old-program', rootId: 'old-layout', depth: 1 })]);
+
+    expect(result).toEqual([{ status: 'rejected', reason: expect.objectContaining({ code: 'unsupported', message: expect.stringContaining('reset') }) }]);
+    expect(await workspace.runtimes.get('root')?.identity.scaffold.read()).toBe(before);
+  } finally {
+    await cold.close();
   }
 });

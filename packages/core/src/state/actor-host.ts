@@ -14,14 +14,14 @@ import type { StoredActorClaim } from '../orchestrator/actor-claims';
 import type { SessionFilePlane } from '../session/payload';
 import { actorReferenceOf, sameActorReference, type ActorHandle, type ActorReference } from '../identity/actor-handle';
 import { createAgentStores, type AgentStores } from './agent-stores';
-import { actorScaffoldPath, tracedActorKind, type WorkspaceActor, type WorkspaceActorDirectory } from '../identity/workspace-actors';
+import { tracedActorKind, type WorkspaceActor, type WorkspaceActorDirectory } from '../identity/workspace-actors';
 import { localContextTree, type ActorContextStores, type ChildContextResolver, type ContextTree } from '../vfs/context-plane';
 import type { ContextEventRecorder } from '../types/context-plane';
 import type { TemporaryAgentPort } from '../types/subordinates';
 import type { AgentSignal, SendOutcome } from '../types/signals';
 import { seedActorLoop, type LoopOrigin } from '../scaffold/bootstrap';
 import { decideInterruptedTurn } from '../orchestrator/turn-recovery';
-import { readVersionedScaffoldSource } from '../scaffold/versions';
+import { readVersionedScaffoldSource, type VersionedScaffoldSource } from '../scaffold/versions';
 import type { ReportedTurn } from '../subordinates/turn-reports';
 import type { WriteObserver } from '../vfs/write-events';
 import { diagnostics, flight, settle, settleSync, toKinuError, type AgentTracing } from '../obs/index';
@@ -77,6 +77,8 @@ export interface ActorHostDeps {
   readonly answered?: (turn: ReportedTurn) => boolean;
   runtimeFor(bound: BoundActor, seat: ActorSeat): AgentRuntime | Promise<AgentRuntime>;
   filesFor(bound: Pick<BoundActor, 'reference' | 'record' | 'handle'>): Promise<SessionFilePlane>;
+  /** Program bytes may live on a state plane distinct from session payloads and tools. */
+  scaffoldFor(bound: Pick<BoundActor, 'reference' | 'record' | 'handle'>): Promise<VersionedScaffoldSource>;
   /** Asked by the host so no hosted actor silently runs the shipped bootstrap loop. */
   loopFor(bound: BoundActor & { readonly runtime: AgentRuntime }): LoopSeed | Promise<LoopSeed>;
   /** Per actor: sharing the root's would let one actor's turn move another's state. */
@@ -362,18 +364,10 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     describe: (actorId) => deps.directory.retained(actorId),
     bindStores: (reference) => settleSync(Effect.map(bind(reference), ({ bound }) => bound)),
     readScaffold: (reference, version) => settle(Effect.gen(function* () {
-      const live = yield* slotFor(reference);
-
-      if (live !== null && !live.fence.released) {
-        const runtime = live.actor.runtime;
-
-        return yield* Effect.promise(() => readVersionedScaffoldSource({ path: runtime.identity.scaffold.path, vfs: runtime.agentStateVfs ?? runtime.storage.vfs }, version));
-      }
-
       const { bound } = yield* bind(reference);
-      const files = yield* Effect.promise(() => deps.filesFor(bound));
+      const source = yield* Effect.promise(() => deps.scaffoldFor(bound));
 
-      return yield* Effect.promise(() => readVersionedScaffoldSource({ path: actorScaffoldPath(bound.record), vfs: files.vfs }, version));
+      return yield* Effect.promise(() => readVersionedScaffoldSource(source, version));
     })),
     list: () => [...slots.values()].filter((slot) => !slot.fence.released).map((slot) => slot.actor.reference),
     run: <T>(reference: ActorReference, seat: ActorSeat, work: (actor: HostedActor) => Promise<T>): Promise<T> => settle(Effect.gen(function* () {

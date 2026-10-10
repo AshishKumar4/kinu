@@ -124,6 +124,11 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, in
 
       return { vfs: planeFor(bound.record.actorId), artifactDirectory: agentArtifactDirectory(`/actors/${bound.record.actorId}`) };
     },
+    scaffoldFor: async (bound) => {
+      if (bound.record.name === unreadableActor) throw new Error('actor file plane is unreadable');
+
+      return { path: actorScaffoldPath(bound.record), vfs: planeFor(bound.record.actorId) };
+    },
     runtimeFor: (bound) => {
       const plane = planeFor(bound.record.actorId);
 

@@ -220,6 +220,7 @@ export class AgentDatabase {
       answered: (turn) => new TurnReports(this.sql).answered(turn),
       runtimeFor: (bound) => this.runtime(bound, files),
       filesFor: async () => ({ vfs: files.agent(), artifactDirectory: snapshot.artifactDirectory }),
+      scaffoldFor: async (bound) => ({ path: actorScaffoldPath(bound.record), vfs: files.state() }),
       loopFor: (bound) => ({ origin: defaultLoopOrigin(bound.record.origin), parent: null }),
       orchestrationFor: (bound) => ({
         host: this.backendHost(),

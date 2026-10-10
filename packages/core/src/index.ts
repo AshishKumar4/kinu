@@ -973,7 +973,7 @@ export { pumpScaffoldEvents } from './scaffold/event-pump';
 export { scaffoldChatTransform } from './scaffold/chat-transform';
 
 export {
-  getCurrentScaffoldVersion, readScaffoldVersion, readVersionedScaffoldSource, getPendingScaffold, applyPromotionDecision,
+  getCurrentScaffoldVersion, readScaffoldVersion, readVersionedScaffoldSource, getPendingScaffold, applyPromotionDecision, type VersionedScaffoldSource,
   type PendingScaffold, type ScaffoldDecisionEvents,
 } from './scaffold/versions';
 

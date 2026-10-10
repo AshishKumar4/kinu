@@ -48,7 +48,12 @@ export function getCurrentScaffoldVersion(sql: SqlExecutor, actor: Pick<ActorHan
   return rows[0]?.version ?? null;
 }
 
-export async function readVersionedScaffoldSource(source: { readonly path: string; readonly vfs: VFS }, version: number): Promise<string | null> {
+export interface VersionedScaffoldSource {
+  readonly path: string;
+  readonly vfs: VFS;
+}
+
+export async function readVersionedScaffoldSource(source: VersionedScaffoldSource, version: number): Promise<string | null> {
   const versioned = `${source.path}.v${version}`;
 
   if (!await exists(source.vfs, versioned)) return null;

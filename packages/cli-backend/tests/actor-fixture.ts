@@ -7,7 +7,7 @@ import {
   type ActorHost, type AgentRuntime, type BroadcastEvent, type HostedActor, type HostedNodeSeat,
   type ActorHandle, type HeadInput, type NodeIdentity, type ProfileAuthorityInputs, type RunTurnSources,
   type SqlExec, type SqlValue, type WriteObserver,
-  DEFAULT_WORKERS_AI_MODEL_SPEC, WORKSPACE_ROOT, actorHomeName } from '@kinu.run/core';
+  DEFAULT_WORKERS_AI_MODEL_SPEC, WORKSPACE_ROOT, actorHomeName, actorScaffoldPath } from '@kinu.run/core';
 import { bindLocalActor, localActorDirectory, registerLocalActor, retireLocalActor } from '@kinu.run/core';
 import { buildLocalActorRuntime, cleanupFacetScratch, makeSqlExec, type CLIRuntime } from '../src/runtime';
 import { modelWindow, type HeadInferenceDeps, type HeadSeat } from '@kinu.run/core';
@@ -112,6 +112,7 @@ export function localTestActorHost(
 
       return parent.filesForActor(bound.handle);
     },
+    scaffoldFor: async (bound) => ({ path: actorScaffoldPath(bound.record), vfs: parent.agentStateVfs ?? parent.storage.vfs }),
     storage: {
       sql: parent.storage.sql,
       transactionSync: parent.storage.transactionSync,
