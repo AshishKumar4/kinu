@@ -19,7 +19,7 @@ import {
 } from '@kinu.run/compaction';
 import type {
   TurnContinuity, FiberCtx,
-  LLM, ModelCallReport, ModelCallSink, ModelRouteResolution, RouteModelBinding,
+  LLM, ModelCallReport, ModelCallSink, ModelRouteResolution, RouteModelBinding, CountableRequest,
   BackendHost, ProgrammaticTurn, EnqueueTurnResult, PromptFile, SendLanding, SendOptions, SendState,
   ActiveSkillSet, FactsStore,
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
@@ -2214,6 +2214,8 @@ export class LocalAgentSession {
     this.recordRunEvent({ type: 'budget_exhausted', ...refusal });
   }
 
+
+
   reportEvolutionEvent(event: { readonly type: string; readonly message: string }): void {
     this.emit({ type: 'evolution', event: event.type, message: event.message });
   }
@@ -2559,10 +2561,39 @@ export class LocalAgentSession {
     const actor = await this.actorHost.acquire(binding.reference, seat);
     const runId = this.chat.currentRunId ?? WORKSPACE_RUN_ID;
 
+    const resolver = this.modelResolver?.withCallScope?.({
+      accountFor: (provider) => actor.stores.config.getProviderAccounts()[provider]
+        ?? actor.session.profileInputs?.envelope.catalog.accounts?.[provider],
+      onProviderWait: (info) => actor.stores.eventRecorder.emit(runId, { type: 'provider_wait', ...info }),
+    }) ?? this.modelResolver;
+
+    const affinity = actorAffinity(actor.record);
+    const normalize = (spec: string | null) => this.profiles().normalizeSpec(spec);
+
+    const catalog = new ModelCatalogSession({
+      effectiveSpec: () => normalize(actor.session.profile?.tier.model ?? actor.stores.config.getModel()),
+      lookup: (spec) => resolver?.modelInfo(spec) ?? Promise.resolve(null),
+      measured: (spec) => actor.stores.eventRecorder.measuredWindow(spec),
+    });
+
+    const models: TurnModelSources = {
+      catalog, normalize,
+      resolve: (spec) => resolver?.resolveModel(spec, affinity) ?? this.defaultModel('a static-model actor'),
+      ...(resolver && { routed: { credentialFor: (spec: string) => resolver.credentialFor(spec),
+        countInputTokens: (spec: string, request: CountableRequest) => resolver.countInputTokens(spec, request) } }),
+    };
+
+    const operations = recordModelOperations(actor.stores.eventRecorder, () => currentOperationProfile(actor.handle)?.runId ?? runId);
+
+    const report: ModelCallSink = (call) => {
+      const spec = normalize(actor.session.profile?.tier.model ?? actor.stores.config.getModel());
+
+      actor.stores.eventRecorder.emit(currentOperationProfile(actor.handle)?.runId ?? runId,
+        buildModelCallEvent(call, { effectiveSpec: spec, pricing: catalog.pricing(spec) }));
+    };
+
     const compaction = hostedActorCompaction(actor, {
-      logger: compactionDiagnostics,
-      summarizer: () => this.ensureModelState(),
-      spend: { report: (report) => this.modelCallSink(report) },
+      logger: compactionDiagnostics, models, report: (_actor, call) => report(call), operations,
     });
 
     return {
@@ -2570,7 +2601,7 @@ export class LocalAgentSession {
       seat: {
         actor,
         runId,
-        sources: this.runActorSources(actor, runId, compaction.extension),
+        sources: this.runActorSources(actor, runId, { extension: compaction.extension, models, report, operations }),
         infer: (input, inference) => runHeadInference(input, { ...inference, compaction: compaction.trigger }),
         conversations: new ConversationSearchStore(actor.runtime.storage.sql, actor.handle, (sessionId) => actor.stores.history.transcript(sessionId)),
         jobs: { ports: this.loopJobPorts(), attach: (authority) => this.jobAuthorities.attach(authority) },
@@ -2588,14 +2619,14 @@ export class LocalAgentSession {
 
   /** Where a run actor's turns are assembled from: its own stores, pins and lineage, this workspace's
    *  instruction files and skills. It delegates nothing, so it advertises no agents actions. */
-  private runActorSources(actor: HostedActor, runId: string, compaction: CompactionExtension): RunTurnSources {
+  private runActorSources(actor: HostedActor, runId: string, compaction: { extension: CompactionExtension; models: TurnModelSources; report: ModelCallSink; operations: ModelOperationSink }): RunTurnSources {
     return {
       rt: actor.runtime,
       backend: 'cli-local',
       executors: () => actor.runtime.executionRouter?.listExecutors() ?? [],
       config: actor.stores.config,
       skills: vfsTurnSkills(actor.runtime.storage.vfs, actor.stores.config, this.instructionTrust),
-      models: this.turnModels(),
+      models: compaction.models,
       profileInputs: () => this.profiles().inputs(),
       ancestors: () => ancestorPins(actor.handle.parentActorId, { actorId: this.rt.actor.actorId, pins: this.config }, (id) => {
         const parent = this.actorHost.describe(id);
@@ -2611,11 +2642,11 @@ export class LocalAgentSession {
       identity: async () => ({ ...(await this.promptIdentity()), agent: actor.stores.config.getDisplayName() ?? actor.record.name }),
       artifacts: () => artifactOverrides(currentArtifacts(this.rt.storage.sql, actor.handle)),
       taskPlan: () => null,
-      conversationKey: () => conversationKey(this.conversation(), actor.record.actorId),
-      operations: this.modelOperations,
-      scaffoldSpend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
+      conversationKey: () => conversationKey(actorAffinity(actor.record).sessionAffinity, actor.record.actorId),
+      operations: compaction.operations,
+      scaffoldSpend: { source: 'scaffold', report: compaction.report, operations: compaction.operations },
       attachmentBudget: actor.session.orchestrator.acc.context,
-      extensions: () => [compaction],
+      extensions: () => [compaction.extension],
       dynamic: () => (profile, tools) => this.actorDynamicContext(actor, profile, tools),
       operation: (profile, inputs) => captureOperationProfile({ actor: actor.handle, profile, inputs, runId, turnId: null }),
     };
@@ -2747,6 +2778,8 @@ export class LocalAgentSession {
     return surface.turn;
   }
 }
+
+
 
 export { serializeContentForHeads } from '@kinu.run/core';
 

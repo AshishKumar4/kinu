@@ -1330,8 +1330,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // The hire's own ladder over its own files, as its turns compact in its isolate.
     const compaction = hostedActorCompaction(turn.actor, {
       logger: compactionDiagnostics,
-      summarizer: () => turn.model,
-      spend: { report: (report) => this.reportModelCall(report), operations: this.modelOperations },
+      models: { normalize: (spec) => spec || turn.profile.profile.tier.model, resolve: () => turn.model },
+      report: (_actor, report) => this.reportModelCall(report),
+      operations: this.modelOperations,
     });
 
     const swarm = this.swarmDeps(turn.runtime, () => turn.model, () => this.agentStores(turn.actor.handle.actorId).workingContext(), compaction.extension.compactShared);
