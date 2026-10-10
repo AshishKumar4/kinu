@@ -28,8 +28,17 @@ export interface VfsWriteReport {
   readonly uncheckpointed: Uncheckpointed;
 }
 
+/** A digest-checked write's answer: the bytes' new digest, or `ok: false` with the digest found (null: absent). */
+export type VfsDigestWrite = { readonly ok: true; readonly sha256: string; readonly report?: VfsWriteReport } | { readonly ok: false; readonly sha256: string | null };
+
 export interface CheckpointFiles {
   writeFileWithReport?(path: string, data: Uint8Array): Promise<VfsWriteReport | null>;
+  /**
+   * Writes `data` only if the file's current bytes hash to `expectedSha256Hex` (null: only if no file is there),
+   * atomically in the plane's own process: the compare and a temp-file-plus-rename replacement are one call, never a
+   * read then a write across a wire. Answers the new digest, or `ok: false` with the digest it found (null: absent).
+   */
+  writeFileIfDigest?(path: string, data: Uint8Array, expectedSha256Hex: string | null): Promise<VfsDigestWrite>;
 }
 
 export interface Storage {
