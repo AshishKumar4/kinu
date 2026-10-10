@@ -1,6 +1,5 @@
 import * as v from 'valibot';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
-import { tableExists } from '../identity/schema';
 import { parseStoredRunEvent } from '../events/recorder';
 import { summarizeSteps } from '../events/step-stats';
 import type { StepCost } from '../events/types';
@@ -17,8 +16,10 @@ const AGENT_STEP_WINDOW = 400;
 
 export const NO_FIGURES: AgentFigures = { activeMs: 0, cacheEma: null };
 
+/** Over a database whose workspace schema is initialized, as the workspace's and every agent's isolate's is: main's
+ *  isolate reads its own at every turn's end, where asking `sqlite_master` was a statement a turn. */
 export function readAgentFigures(sql: SqlExecutor, actorIds: readonly string[]): ReadonlyMap<string, AgentFigures> {
-  if (actorIds.length === 0 || !tableExists(sql, 'run_events')) return new Map();
+  if (actorIds.length === 0) return new Map();
 
   return new Map(actorIds.map((actorId) => [actorId, actorFigures(sql, actorId)]));
 }
