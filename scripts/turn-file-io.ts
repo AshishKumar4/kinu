@@ -8,7 +8,7 @@ import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { ownerCaller, type JsonObject } from '@kinu.run/core';
 import * as v from 'valibot';
 import { workersAiBinding, readAiRun, workersAiAnswer } from '../packages/cf-backend/tests/helpers/workers-ai-binding';
-import { buildAgentBundle } from '../packages/cf-backend/vite-agent-bundle';
+import { buildAgentBundle, writeWhole } from '../packages/cf-backend/vite-agent-bundle';
 import { readScriptedRequest, SCRIPTED_MODELS_BODY, scriptedBody, type ScriptedAnswer } from './scripted-protocol';
 import { SliceSchema } from './turn-file-io/meter';
 
@@ -165,6 +165,8 @@ const key = btoa('worker-heap-credential-key-32byt');
 
 const agent = buildAgentBundle(join(import.meta.dir, 'turn-file-io/facet.ts')).modules;
 
+writeWhole(join(resolve(dist, wrangler.assets.directory), '_agent/modules.json'), JSON.stringify(agent));
+
 const owner = await ownerCaller({ CREDENTIAL_ENCRYPTION_KEY: key });
 
 if (!('ownerToken' in owner)) throw new Error('probe setup needs an owner caller');
@@ -241,15 +243,6 @@ const mf = new Miniflare(convertV4MiniflareOptions({
     name: 'kinu', ...compat, modulesRoot: dist, modules: await productModules(), workerLoaders: { LOADER: {} },
     bindings: { ...wrangler.vars, CREDENTIAL_ENCRYPTION_KEY: key, PERF_ISOLATED: isolated ? '1' : '0' }, ai,
     assets: { binding: wrangler.assets.binding, directory: resolve(dist, wrangler.assets.directory) },
-    serviceBindings: { ASSETS: async (request: Request) => {
-      const path = new URL(request.url).pathname;
-
-      if (path === '/_agent/modules.json') return Response.json(agent);
-
-      if (path === '/_agent/compatibility.json') return Response.json(compat);
-
-      return new Response('not found', { status: 404 });
-    } },
     r2Buckets: wrangler.r2_buckets.map((bucket) => bucket.binding),
     kvNamespaces: wrangler.kv_namespaces.map((namespace) => namespace.binding),
     durableObjects: Object.fromEntries(wrangler.durable_objects.bindings.map((binding) => [binding.name, { className: binding.class_name, useSQLite: true }])),

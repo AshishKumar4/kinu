@@ -49,7 +49,7 @@ export class Meter {
   constructor(storage: SqlStorage) {
     const exec = storage.exec.bind(storage);
     this.sql = new SqlMeter({ exec, get databaseSize() { return storage.databaseSize; } });
-    storage.exec = (query, ...bindings) => this.sql.exec(query, ...bindings);
+    storage.exec = (query, ...bindings) => this.active ? this.sql.exec(query, ...bindings) : exec(query, ...bindings);
   }
 
   rpc(name: string): void {
