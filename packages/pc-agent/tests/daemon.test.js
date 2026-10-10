@@ -782,6 +782,54 @@ describe('daemon device path confinement', () => {
   });
 });
 
+describe('a write that names the bytes it replaces', () => {
+  const sha256 = (text) => require('node:crypto').createHash('sha256').update(text).digest('hex');
+
+  test('lands only over those bytes, and a write between the read and it is refused with what is there now', async () => {
+    const root = scratchDir('daemon-digest');
+    const file = path.join(root, 'notes.md');
+    fs.writeFileSync(file, 'read by the agent');
+    const ws = fakeWs();
+
+    // The owner saved over it after the agent read it.
+    fs.writeFileSync(file, 'saved by the owner');
+    handle({ id: 'stale', method: 'writeFileIfDigest', sandbox: scoped([root]), params: [file, 'the agent\'s rewrite', sha256('read by the agent'), {}] }, ws, {});
+
+    expect((await ws.response('stale')).result).toEqual({ ok: false, sha256: sha256('saved by the owner') });
+    expect(fs.readFileSync(file, 'utf8')).toBe('saved by the owner');
+
+    handle({ id: 'fresh', method: 'writeFileIfDigest', sandbox: scoped([root]), params: [file, 'the agent\'s rewrite', sha256('saved by the owner'), {}] }, ws, {});
+
+    expect((await ws.response('fresh')).result).toEqual({ ok: true, sha256: sha256('the agent\'s rewrite') });
+    expect(fs.readFileSync(file, 'utf8')).toBe('the agent\'s rewrite');
+    expect(fs.readdirSync(root)).toEqual(['notes.md']);
+  });
+
+  test('with no digest, creates the file only where none is', async () => {
+    const root = scratchDir('daemon-digest-create');
+    const file = path.join(root, 'new.md');
+    const ws = fakeWs();
+
+    handle({ id: 'create', method: 'writeFileIfDigest', sandbox: scoped([root]), params: [file, 'first', null, {}] }, ws, {});
+    expect((await ws.response('create')).result).toEqual({ ok: true, sha256: sha256('first') });
+
+    handle({ id: 'again', method: 'writeFileIfDigest', sandbox: scoped([root]), params: [file, 'second', null, {}] }, ws, {});
+    expect((await ws.response('again')).result).toEqual({ ok: false, sha256: sha256('first') });
+    expect(fs.readFileSync(file, 'utf8')).toBe('first');
+  });
+
+  test('stays inside the consented directory', async () => {
+    const root = scratchDir('daemon-digest-scope');
+    const outside = path.join(scratchDir('daemon-digest-outside'), 'x.md');
+    const ws = fakeWs();
+
+    handle({ id: 'escape', method: 'writeFileIfDigest', sandbox: scoped([root]), params: [outside, 'planted', null, {}] }, ws, {});
+
+    expect((await ws.response('escape')).error).toBeTruthy();
+    expect(fs.existsSync(outside)).toBe(false);
+  });
+});
+
 describe('daemon checkpoint protocol', () => {
   test('an exec frame with a checkpoint hint snapshots before running; restore round-trips', async () => {
     const { work, ctx } = setup();
