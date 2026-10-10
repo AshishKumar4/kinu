@@ -1943,7 +1943,7 @@ export {
   deliverOwedChangeNotes, owesChangeNotes,
 } from './read-models/change-notes';
 
-export type { ChangeNote, ChangeNotesCard, ChangeNotesMessage, ChangeNotesResult, NotedChanges } from './read-models/change-notes';
+export type { ChangeNote, ChangeNotesCard, ChangeNotesChat, ChangeNotesMessage, ChangeNotesResult, NotedChanges } from './read-models/change-notes';
 
 export type {
   ChangeBlock, ChangeBody, ChangePair, ChangeRow, ChangeSet, ChangeSpan, ChangeTreeRow,

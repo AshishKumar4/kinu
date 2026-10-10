@@ -184,7 +184,7 @@ import {
   LiveReadsNotice, readsMovedByFiles, readsOfTables, readsWrittenBy, ROSTER_READS, sameDeviceStatus, type LiveRead,
   CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline, restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult, type WorkspaceReviewResult,
-  initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes, deliverOwedChangeNotes, owesChangeNotes, type ChangeNotesMessage,
+  initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes, deliverOwedChangeNotes, owesChangeNotes, type ChangeNotesChat,
   type ChangeNotesResult, type NotedChanges, type ReviewAnnotation,
   diffLines, type DiffLine,
   getExecutorFiles, readExecutorFile, listEnvironments,
@@ -1978,7 +1978,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     this.deliverForkNotices();
-    await deliverOwedChangeNotes(this.rt, (message) => this.deliverChangeNotes(message), (failure) => {
+    await deliverOwedChangeNotes(this.rt, this.changeNotesChat, (failure) => {
       diagnostics.failure('change_notes.delivery_failed', failure);
     });
     await super.owedDeliveryWork();
@@ -4496,19 +4496,24 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   @callable()
   async sendChangeNotes(set: NotedChanges): Promise<ChangeNotesResult> {
-    return sendChangeNotes(this.rt, { value: set }, (message) => this.deliverChangeNotes(message));
+    return sendChangeNotes(this.rt, { value: set }, this.changeNotesChat);
   }
 
   /** Main's chat, in its own isolate, holds the card under the message's id; one it holds already is not sent again. */
-  private async deliverChangeNotes(message: ChangeNotesMessage): Promise<void> {
+  /** Main's chat, which notes cross to as one card under their message's id. */
+  private get changeNotesChat(): ChangeNotesChat {
     const main = this.actorHandle().actorId;
+    const holds = async (id: string) => (await (await this.agentCalls(main)).sendState(this.agentSnapshot(main), id)).status !== 'none';
 
-    await this.takeWords(main, async () => {
-      const calls = await this.agentCalls(main);
-
-      if ((await calls.sendState(this.agentSnapshot(main), message.id)).status !== 'none') return;
-      await calls.admit(this.agentSnapshot(main), { text: message.text, card: message.metadata }, { id: message.id });
-    });
+    return {
+      deliver: async (message) => {
+        await this.takeWords(main, async () => {
+          if (await holds(message.id)) return;
+          await (await this.agentCalls(main)).admit(this.agentSnapshot(main), { text: message.text, card: message.metadata }, { id: message.id });
+        });
+      },
+      holds,
+    };
   }
 
   /** Recent branching-head runs, grouped by root_id with heads, step traces and merged synthesis. */
