@@ -213,7 +213,15 @@ async function model(request: Request): Promise<Response> {
   const url = new URL(request.url);
 
   // Only the commands subject reaches the network: its clone and install are what it measures.
-  if (subject === 'commands' && COMMAND_HOSTS.includes(url.hostname)) return fetch(request);
+  if (subject === 'commands' && COMMAND_HOSTS.includes(url.hostname)) {
+    // Bun's fetch decodes the body and keeps its content-encoding, which workerd would then decode again.
+    const fetched = await fetch(request);
+    const headers = new Headers(fetched.headers);
+    headers.delete('content-encoding');
+    headers.delete('content-length');
+
+    return new Response(fetched.body, { status: fetched.status, statusText: fetched.statusText, headers });
+  }
 
   if (url.pathname === '/models') return new Response(SCRIPTED_MODELS_BODY);
 
@@ -423,10 +431,25 @@ try {
 
   const fileResults: object[] = [];
 
-  /** `expect` counts the samples whose tool answer holds the command's correct output. */
+  /**
+   * `expect` counts the samples whose tool answer holds the command's correct output; a failed call counts as
+   * incorrect, and the warm-up's wrong answer is printed so a red count names its cause.
+   */
   const measureOp = async (label: string, operation: (index: number) => Promise<string | void>, prepare?: () => Promise<void>, expect?: string) => {
+    const answered = async (index: number) => {
+      try {
+        return await operation(index);
+      } catch (error) {
+        return `failed: ${String(error)}`;
+      }
+    };
+
     await prepare?.();
-    await operation(-1);
+    const warm = await answered(-1);
+
+    if (expect !== undefined && !(typeof warm === 'string' && warm.includes(expect))) {
+      process.stdout.write(JSON.stringify({ event: 'file.unexpected', sha, label, answer: String(warm).slice(-1200) }) + '\n');
+    }
 
     const walls: number[] = [];
     const cpus: number[] = [];
@@ -437,7 +460,7 @@ try {
 
       const before = cpu(pid);
       const started = performance.now();
-      const answer = await operation(index);
+      const answer = await answered(index);
       walls.push(performance.now() - started);
       cpus.push(cpu(pid) - before);
 
