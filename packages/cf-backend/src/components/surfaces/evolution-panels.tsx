@@ -13,6 +13,9 @@ interface GepaCandidate { id: string; parentId: string | null; aggregateScore: n
 
 interface GepaRunDetail { run: GepaRunRow | null; candidates: GepaCandidate[]; pareto: Array<{ candidateId: string; instanceId: string; score: number }> }
 
+/** A running run is read again until it finishes. */
+const runningAgain = (detail: GepaRunDetail | null): number | null => (detail?.run?.status === "running" ? 5000 : null);
+
 function runDot(status: string): string {
   if (status === "completed") return "p-dot-success";
 
@@ -23,6 +26,8 @@ function runDot(status: string): string {
 
 export function GepaView({ rpc }: { rpc: Rpc }) {
   const [sel, setSel] = useState<string | null>(null);
+  // Each pick reads the run again: a running run's candidates and winner change under the same id.
+  const [picks, setPicks] = useState(0);
   const load = useCallback(() => rpc<GepaRunRow[]>("getGepaRuns", [20]), [rpc]);
   const { resource, reload } = useAsyncResource(load);
   const runs = lastValue(resource);
@@ -39,7 +44,7 @@ export function GepaView({ rpc }: { rpc: Rpc }) {
     <div className="space-y-3 animate-fade-in overflow-y-auto h-full">
       <div className="space-y-1">
         {runs.map((r) => (
-          <button key={r.runId} onClick={() => setSel(r.runId)}
+          <button key={r.runId} onClick={() => { setSel(r.runId); setPicks((made) => made + 1); }}
             className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left transition-colors ${sel === r.runId ? "p-fill" : "p-card-hover"}`}>
             <span className={`size-1.5 rounded-full shrink-0 ${runDot(r.status)}`} />
             <span className="p-row-text p-text-2 flex-1 truncate">{r.target} · {r.iterations} iters · {r.metricCalls} evals</span>
@@ -47,15 +52,16 @@ export function GepaView({ rpc }: { rpc: Rpc }) {
           </button>
         ))}
       </div>
-      {sel !== null && <GepaRunCandidates rpc={rpc} runId={sel} />}
+      {sel !== null && <GepaRunCandidates rpc={rpc} runId={sel} pick={picks} />}
     </div>
   );
 }
 
-/** The selected run's candidates, read for that run: a slower answer for a run no longer selected is never shown. */
-function GepaRunCandidates({ rpc, runId }: { rpc: Rpc; runId: string }) {
+/** The selected run's candidates, read for that pick of it and again while it runs: a slower answer for a run no
+ *  longer selected is never shown. */
+function GepaRunCandidates({ rpc, runId, pick }: { rpc: Rpc; runId: string; pick: number }) {
   const load = useCallback(() => rpc<GepaRunDetail>("getGepaRun", [runId]), [rpc, runId]);
-  const { resource, reload } = useAsyncResource(load, undefined, runId);
+  const { resource, reload } = useAsyncResource(load, runningAgain, `${runId}:${String(pick)}`);
   const detail = lastValue(resource);
 
   if (detail === null) {

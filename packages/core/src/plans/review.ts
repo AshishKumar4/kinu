@@ -257,12 +257,13 @@ export function freshNotes(notes: readonly ReviewAnnotation[]): ReviewAnnotation
  * which every reviewer renders before asking. Approving would drop this revision's own comments unread, so it waits
  * until they are sent back or deleted; a change request needs something to send.
  */
-export function planDecisionRefusal(notes: readonly ReviewAnnotation[], decision: PlanReviewDecision, feedback = ''): string | null {
+export function planDecisionRefusal(notes: readonly ReviewAnnotation[], decision: PlanReviewDecision, feedback?: string | null): string | null {
   const commented = freshNotes(notes).length > 0;
 
   if (decision === 'approve') return commented ? 'this revision has comments: send them back with Request changes, or delete them to approve' : null;
 
-  return commented || feedback.trim() !== '' ? null : 'a change request needs a comment or feedback';
+  // An RPC carries absent feedback as `null`.
+  return commented || (feedback ?? '').trim() !== '' ? null : 'a change request needs a comment or feedback';
 }
 
 function quoted(text: string): string {

@@ -53,11 +53,11 @@ type Busy = { readonly what: string } | null;
 /** Settings → Memory: what every workspace and agent of the account reads, what waits on the owner, and every revision. */
 export function AccountMemoryCard() {
   const { resource, reload } = useAsyncResource(getAccountMemory);
-  // What waits is the account's live list, the one the attention stack shows; until its socket answers, the read's.
+  // One read of the account's memory, read again on each frame the account's socket sends about what waits: the
+  // frame the attention stack shows. A socket that has dropped sends none, and the read stays the truth.
   const { accountProposals } = useWorkspaceRoster();
   const announced = useRef(accountProposals);
 
-  // A proposal filed or decided anywhere can change the kept facts and notes too, so they are read again.
   useEffect(() => {
     if (announced.current === accountProposals) return;
     announced.current = accountProposals;
@@ -84,7 +84,7 @@ export function AccountMemoryCard() {
         {(state) => (
           <div className="space-y-4" data-account-memory>
             {failure !== null && <div className="p-meta p-danger">{failure}</div>}
-            <Pending pending={accountProposals ?? state.pending} busy={busy} act={act} />
+            <Pending pending={state.pending} busy={busy} act={act} />
             <Facts state={state} busy={busy} act={act} />
             <Notes state={state} busy={busy} act={act} />
           </div>
