@@ -34,3 +34,5 @@ export { shareLiveSlate } from './live-sharing';
 export { SlateBuilds, initSlateBuildTable, slateImage, type FailingSlateBuild, type SlateBuildFailure, type SlateImage } from './builds';
 
 export { ROOT_SLATE_CALLER, shareCaller, slateCallerKey, type SlateCaller, type SlateCallerHop } from './caller';
+
+export { SlateProcesses, heldSlateKey, type RunningSlate, type SlateLaunch, type SlateProcessPorts, type RunnableSlateSource } from './processes';

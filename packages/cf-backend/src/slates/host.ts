@@ -10,7 +10,7 @@ import {
   type BlueprintReading, type DurableAppIdentity, type DurableApps, type ShareUser,
 } from '@kinu.run/core/slates';
 import { SlateLiveShareStore, initSlateLiveShareTables, shareLiveSlate } from '@kinu.run/core/slates';
-import { EphemeralSlates, initEphemeralSlateTable, SlateUsageStore, initSlateUsageTable, SlateBuilds, slateImage, type FailingSlateBuild } from '@kinu.run/core/slates';
+import { EphemeralSlates, initEphemeralSlateTable, SlateUsageStore, initSlateUsageTable, SlateBuilds, SlateProcesses, heldSlateKey, type FailingSlateBuild, type RunningSlate, type SlateLaunch } from '@kinu.run/core/slates';
 import {
   ingressAdmitted,
   parseSlateProject, slateIdFor, slateTitle, routeSlateStorageCall, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
@@ -85,14 +85,6 @@ export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained'> {
 }
 
 
-/**
- * The key a slate's process is held under: one per caller for a directory slate, and one per answer's page, whose
- * author's mode is read at each call rather than fixed by the process.
- */
-function heldKey(caller: SlateCaller, id: string): string {
-  return ephemeralSlateAddress(id) === null ? `${slateCallerKey(caller)}#${id}` : `page#${id}`;
-}
-
 /** A viewer's answer is JSON: routing refuses a viewer every streamed member, so a stream here is a routing fault. */
 function viewerAnswer(result: SlateSurfaceResult): SlateCallResult {
   if (!result.ok) return result;
@@ -105,9 +97,6 @@ function viewerAnswer(result: SlateSurfaceResult): SlateCallResult {
 /** The one surface every slate is given, as its process sees it. */
 const SLATE_SURFACE = 'workspace';
 
-/** Answers' pages that keep a process and a reservation at once; drawing another retires the least recently drawn. */
-const EPHEMERAL_SLATES_KEPT = 16;
-
 interface ViewerAdmission {
   readonly caller: SlateCaller;
   readonly invocation: string;
@@ -119,8 +108,6 @@ interface ViewerAdmission {
 
 /** A guest refusal crosses Cap'n Web as a plain Error with message `reason: error`. */
 const SLATE_REFUSAL_MESSAGE = new RegExp(`^(${ERROR_CODES.join('|')}): ([\\s\\S]*)$`);
-
-const SLATE_FILE = new RegExp(`^${SLATES_ROOT}/([^/]+)(?:/|$)`);
 
 function shareOutcome(response: Response): 'ok' | 'refused' | 'error' {
   if (response.ok) return 'ok';
@@ -144,19 +131,6 @@ export interface SlateAppCall {
   readonly viewer?: SlateViewer;
 }
 
-interface RunningSlate {
-  readonly key: string;
-  /** The source digest its image was built from: the last that built, while `broken` says why a newer one did not. */
-  readonly built: string;
-  readonly broken: string | null;
-  readonly revision: number;
-  readonly caller: SlateCaller;
-  readonly id: string;
-  readonly source: SlateSource;
-  readonly process: ResidentSlateProcess;
-  readonly app: DurableAppIdentity | null;
-}
-
 /**
  * One process per authored tree per caller, and one durable application per slate. The application's port and capability
  * persist in this object's storage, run as the workspace root and keep one facet SQLite until `remove`; other callers' processes are private and portless.
@@ -167,16 +141,7 @@ export class SlateHost {
   private readonly store: SqliteSlateStore;
   private readonly state: SqliteSlateStateStore;
   private readonly sourceRuntimes = new Map<string, WorkspaceSlates>();
-  private readonly running = new Map<string, RunningSlate>();
-  private readonly starting = new Map<string, Promise<RunningSlate>>();
-  private readonly revisions = new Map<string, number>();
-  /** Each slate's builds since it was last told a file it imports from outside its tree moved: part of what keys them. */
-  private readonly importsMoved = new Map<string, number>();
-  /** The files outside its tree each slate's served build read, and the slates that read each. */
-  private readonly readsOf = new Map<string, readonly string[]>();
-  private readonly readersOf = new Map<string, Set<string>>();
-  /** Slates whose latest source does not build: what it failed to read is not known, so any outside change may fix it. */
-  private readonly unbuilt = new Set<string>();
+  private readonly processes: SlateProcesses<SlateSource, ResidentSlateProcess>;
   private readonly live: SlateLiveShareStore;
   private readonly pages: EphemeralSlates;
   private readonly slateSources: SlateSources;
@@ -200,6 +165,21 @@ export class SlateHost {
     this.builds = new SlateBuilds(deps.ctx.storage.sql);
     this.slateSources = new SlateSources({
       project: (cred, id) => this.project(cred, id), trees: (cred) => this.sources(cred), host: deps,
+    });
+    this.processes = new SlateProcesses({
+      workspace: deps.workspace, builds: this.builds, pages: this.pages, apps: deps.apps,
+      resolve: (cred, id) => this.slateSources.resolve(cred, id),
+      digest: (cred, id, source) => this.slateSources.digest(cred, id, source),
+      build: async (caller, id, source) => this.resident.build({
+        owner: id, root: source.root, project: source.project, read: await this.slateSources.reader(caller.cred, source), cred: caller.cred,
+      }),
+      launch: (launch) => this.launch(launch),
+      // A socket-held invocation dies with the process that held it.
+      ended: (held) => {
+        for (const [invocationId, issued] of this.invocations) {
+          if (issued.held === held) this.invocations.delete(invocationId);
+        }
+      },
     });
   }
 
@@ -549,11 +529,7 @@ export class SlateHost {
     const revoked = this.live.revoke(share);
 
     // Invocations outlive the revoke so an in-flight viewer call is refused as 'no longer shared'.
-    for (const [key, running] of this.running) {
-      if (running.caller.share !== revoked.id) continue;
-      this.running.delete(key);
-      await running.process.stop();
-    }
+    await this.processes.stopWhere((running) => running.caller.share === revoked.id);
 
     return { ok: true, value: projectJsonValue({ value: revoked }) };
   }
@@ -733,12 +709,12 @@ export class SlateHost {
   /** The slate's served build, booted for `caller`, as `answer` reads it; a slate that cannot be served is refused. */
   private async answerServed(
     caller: SlateCaller, id: string, doing: 'build' | 'preview',
-    answer: (served: RunningSlate & { readonly app: DurableAppIdentity }) => Promise<JsonValue>,
+    answer: (served: RunningSlate<SlateSource, ResidentSlateProcess> & { readonly app: DurableAppIdentity }) => Promise<JsonValue>,
   ): Promise<SlateCallResult> {
     try {
       requireWorkModePermission(caller.workMode, false, 'Starting or exposing a slate preview');
 
-      return { ok: true, value: await answer(await this.served(id)) };
+      return { ok: true, value: await answer(await this.processes.served(ROOT_SLATE_CALLER, id)) };
     } catch (cause) {
       return { ok: false, ...refusalOf(toKinuError({ doing: 'slate ' + id + ' ' + doing, cause, otherwise: 'io' })) };
     }
@@ -761,15 +737,7 @@ export class SlateHost {
   }
 
   private async serve(id: string): Promise<DurableAppIdentity> {
-    return (await this.served(id)).app;
-  }
-
-  private async served(id: string): Promise<RunningSlate & { readonly app: DurableAppIdentity }> {
-    const running = await this.booted(ROOT_SLATE_CALLER, id);
-
-    if (running.app === null) throw new KinuError('io', `Slate ${id} is running without its durable application`);
-
-    return { ...running, app: running.app };
+    return (await this.processes.served(ROOT_SLATE_CALLER, id)).app;
   }
 
   /** Ends processes, the durable application, the authored tree and its storage; committed versions stay. */
@@ -778,11 +746,7 @@ export class SlateHost {
       const session = await this.deps.session();
       const root = slateDirectory(new SlateId(id));
 
-      for (const [held, running] of this.running) {
-        if (running.id !== id) continue;
-        this.running.delete(held);
-        await running.process.stop();
-      }
+      await this.processes.stopWhere((running) => running.id === id);
 
       const removed = await this.deps.apps.remove(id);
       const vfs = session.vfs.as(caller.cred);
@@ -793,8 +757,7 @@ export class SlateHost {
         this.state.forget(id);
         this.usage.forget(id);
         this.builds.forget(id);
-        this.noteReads(id, [], false);
-        this.importsMoved.delete(id);
+        this.processes.forget(id);
       });
       await this.deps.forgetPicture?.(id);
 
@@ -811,15 +774,13 @@ export class SlateHost {
    * from inside a hop. A socket's invocation is released by its close listener via `__host`.
    */
   slateInvocation(port: number, socket: boolean): { readonly value: string; release: () => void } | null {
-    for (const [held, running] of this.running) {
-      if (running.app?.port !== port) continue;
-      const value = crypto.randomUUID();
-      this.invocations.set(value, socket ? { id: running.id, chain: [], held } : { id: running.id, chain: [] });
+    const running = this.processes.onPort(port);
 
-      return { value, release: () => { this.invocations.delete(value); } };
-    }
+    if (running === null) return null;
+    const value = crypto.randomUUID();
+    this.invocations.set(value, socket ? { id: running.id, chain: [], held: running.held } : { id: running.id, chain: [] });
 
-    return null;
+    return { value, release: () => { this.invocations.delete(value); } };
   }
 
   private releaseInvocation(caller: SlateCaller, id: string, request: SlateCallRequest): SlateCallResult {
@@ -832,7 +793,7 @@ export class SlateHost {
     const issued = this.invocations.get(target);
     // Only the invocation this process holds, so it cannot retire another's lineage.
 
-    if (issued === undefined || issued.id !== id || issued.held !== heldKey(caller, id)) {
+    if (issued === undefined || issued.id !== id || issued.held !== heldSlateKey(caller, id)) {
       return { ok: false, ...refusalOf(toKinuError({ doing: `slate ${id} host call`, cause: new KinuError('denied', `Slate ${id} named app invocation ${target}, which this host is not running`), otherwise: 'io' })) };
     }
 
@@ -1011,163 +972,38 @@ export class SlateHost {
   }
 
   async ensure(caller: SlateCaller, id: string): Promise<ResidentSlateProcess> {
-    return (await this.booted(caller, id)).process;
+    return (await this.processes.booted(caller, id)).process;
   }
 
-  /** A stored answer's block runs as its author, whoever looks at it; its source is resolved once for the boot. */
-  private async booted(viewer: SlateCaller, id: string): Promise<RunningSlate> {
-    const source = await this.slateSources.resolve(viewer.cred, id);
-    const caller = source.kind === 'message' ? source.author : viewer;
-    const held = heldKey(caller, id);
-    const starting = this.starting.get(held);
+  /** A process for `launch`: the slate's bindings as its caller, and its outbound mediated as that caller's eval is. */
+  private async launch(launch: SlateLaunch<SlateSource>): Promise<ResidentSlateProcess> {
+    const { key, id, caller, source, image, app } = launch;
+    const globalOutbound = caller.workMode === 'plan' ? null : codemodeEgress({ workspace: this.deps.workspace, actor: await this.deps.browserActor(caller) });
 
-    if (starting !== undefined) return starting;
-    const boot = this.boot(caller, id, held, source).finally(() => { this.starting.delete(held); });
-    this.starting.set(held, boot);
-
-    return boot;
-  }
-
-  /** Ends a process this host started and the socket invocations it held. */
-  private async stopHeld(held: string): Promise<void> {
-    const running = this.running.get(held);
-
-    if (running === undefined) return;
-    this.running.delete(held);
-    await running.process.stop();
-
-    // A socket-held invocation dies with the process that held it.
-    for (const [invocationId, issued] of this.invocations) {
-      if (issued.held === held) this.invocations.delete(invocationId);
-    }
-  }
-
-  /** Only the answers' pages drawn most recently keep a process: the rest give up their process and reservation, and are
-   *  booted again if drawn again. */
-  private async keepPage(id: string): Promise<void> {
-    for (const retired of this.pages.drawn(id, Date.now(), EPHEMERAL_SLATES_KEPT)) {
-      for (const [other, running] of this.running) {
-        if (running.id === retired) await this.stopHeld(other);
-      }
-
-      await this.deps.apps.remove(retired);
-    }
-  }
-
-  private async boot(caller: SlateCaller, id: string, held: string, resolved: SlateSource): Promise<RunningSlate> {
-    for (let source = resolved; ; source = await this.slateSources.resolve(caller.cred, id)) {
-      const revision = this.revisions.get(id) ?? 0;
-      const { project, root } = source;
-      const globalOutbound = caller.workMode === 'plan' ? null : codemodeEgress({ workspace: this.deps.workspace, actor: await this.deps.browserActor(caller) });
-
-      if (caller.workMode === 'build' && globalOutbound === null) {
-        throw new KinuError('unsupported', 'Resident slate egress requires the shared outbound policy binding');
-      }
-
-      // The loader evaluates boot options only on a cache miss. This identity
-      // must not reuse an image created before outbound mediation was supplied.
-      const digest = `${await this.slateSources.digest(caller.cred, id, source)}:${String(this.importsMoved.get(id) ?? 0)}`;
-      const key = `slate:mediated:${this.deps.workspace}:${held}:${digest}`;
-      const running = this.running.get(held);
-
-      if (running?.key === key && await running.process.isRunning()) {
-        const refreshed = { ...running, revision };
-        this.running.set(held, refreshed);
-
-        return refreshed;
-      }
-
-      const read = await this.slateSources.reader(caller.cred, source);
-
-      // A source that does not compile ships nothing: the slate keeps the last build that did, and says why.
-      const { image, key: built, broken } = await slateImage({
-        builds: this.builds, slate: id, key: digest, cred: caller.cred, build: () => this.resident.build({ owner: id, root, project, read, cred: caller.cred }),
-      });
-
-      this.noteReads(id, image.reads ?? [], broken !== null);
-
-      if (running !== undefined && running.built === built && await running.process.isRunning()) {
-        const kept = { ...running, revision, broken };
-        this.running.set(held, kept);
-
-        return kept;
-      }
-
-      await this.stopHeld(held);
-
-      if (source.kind === 'message') await this.keepPage(id);
-      const bindings: Record<string, Fetcher<SlateBinding>> = {};
-
-      for (const name of [SLATE_SURFACE, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING]) {
-        const props: SlateBindingProps = { workspace: this.deps.workspace, id, name, caller };
-        bindings[name] = exports.SlateBinding({ props });
-      }
-
-      // Only the root's build process is the durable application; shares and Plan roots are private and must never
-      // attach to its facet. A block is only ever seen through its preview, so it always has one.
-      const app = source.kind === 'message' || (caller.share === undefined && caller.path.length === 0 && caller.workMode === 'build')
-        ? await this.deps.apps.ensure({ owner: id, preferredPort: project.slate.port })
-        : null;
-
-      const process = await this.resident.launch({
-        key, owner: id, root, project, read, cred: caller.cred, bindings, globalOutbound, app: app === null ? null : { port: app.port },
-      }, image);
-
-      if ((this.revisions.get(id) ?? 0) !== revision) { await process.stop(); continue; }
-
-      const started = { key, built, broken, revision, caller, id, source, process, app };
-      this.running.set(held, started);
-
-      return started;
-    }
-  }
-
-  /** What the build `id` now serves read outside its tree, and whether its latest source failed to build. */
-  private noteReads(id: string, reads: readonly string[], unbuilt: boolean): void {
-    for (const path of this.readsOf.get(id) ?? []) this.readersOf.get(path)?.delete(id);
-
-    this.readsOf.set(id, reads);
-
-    for (const path of reads) {
-      const readers = this.readersOf.get(path) ?? new Set<string>();
-
-      readers.add(id);
-      this.readersOf.set(path, readers);
+    if (caller.workMode === 'build' && globalOutbound === null) {
+      throw new KinuError('unsupported', 'Resident slate egress requires the shared outbound policy binding');
     }
 
-    if (unbuilt) this.unbuilt.add(id);
-    else this.unbuilt.delete(id);
+    const bindings: Record<string, Fetcher<SlateBinding>> = {};
+
+    for (const name of [SLATE_SURFACE, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING]) {
+      const props: SlateBindingProps = { workspace: this.deps.workspace, id, name, caller };
+      bindings[name] = exports.SlateBinding({ props });
+    }
+
+    const read = await this.slateSources.reader(caller.cred, source);
+
+    return await this.resident.launch({
+      key, owner: id, root: source.root, project: source.project, read, cred: caller.cred, bindings, globalOutbound,
+      app: app === null ? null : { port: app.port },
+    }, image);
   }
 
   filesChanged(paths: readonly string[]): string[] {
-    const ids = new Set<string>();
-    const imported = new Set<string>();
+    const ids = this.processes.filesChanged(paths);
 
-    for (const written of paths) {
-      const path = written.startsWith('/') ? written : `/${written}`;
-      const id = SLATE_FILE.exec(path)?.[1];
+    if (ids.length > 0) markStoreChanged(this.deps.ctx.storage.sql);
 
-      if (id !== undefined) {
-        ids.add(id);
-        continue;
-      }
-
-      for (const reader of [...this.readersOf.get(path) ?? [], ...this.unbuilt]) imported.add(reader);
-    }
-
-    // A file a build read moved: the next boot builds again, though the slate's own tree did not change.
-    for (const id of imported) {
-      this.importsMoved.set(id, (this.importsMoved.get(id) ?? 0) + 1);
-      ids.add(id);
-    }
-
-    for (const id of ids) this.revisions.set(id, (this.revisions.get(id) ?? 0) + 1);
-
-    this.builds.changed([...ids]);
-
-    if (ids.size > 0) markStoreChanged(this.deps.ctx.storage.sql);
-
-    return [...ids];
+    return ids;
   }
 }
-
