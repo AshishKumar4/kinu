@@ -42,11 +42,12 @@ import {
 } from './helpers/actor-harness';
 import { answeringGateway, chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion, type StubbedAiBinding } from './helpers/platform-gateway';
 import { abandonHarnessFibers } from './helpers/agents-sdk';
+import { agentDatabase, delayNextTurnEnd } from './helpers/agent-facets';
 import { socketConnection } from './helpers/bindings';
 
 const FrameSchema = v.looseObject({
   type: v.string(), id: v.optional(v.string()), body: v.optional(v.string()), done: v.optional(v.boolean()),
-  error: v.optional(v.boolean()), replayComplete: v.optional(v.boolean()),
+  error: v.optional(v.boolean()), replay: v.optional(v.boolean()), replayComplete: v.optional(v.boolean()),
 });
 
 type Frame = v.InferOutput<typeof FrameSchema>;
@@ -145,6 +146,11 @@ function socketOn(agent: HarnessOrchestratorAgent, id: string, hear: (raw: strin
   });
 
   return { socket, close: () => { open = false; } };
+}
+
+/** Once `tab` holds the open turn's replay whole. */
+async function replayedTo(tab: TabSocket): Promise<void> {
+  await act(async () => { await tab.heard.until((frames) => frames.some((frame) => frame.replayComplete === true)); });
 }
 
 /** Its root agent's isolate resets under a workspace that stays up, whose recovery wakes the next one: that isolate
@@ -620,10 +626,42 @@ test("a person's tab opened while its agent's isolate re-drives the turn draws t
   const view = await pane(tab);
 
   await tab.open(workspace.agent, 'tab-fresh');
-  await act(async () => { await tab.heard.until((frames) => frames.some((frame) => frame.replayComplete === true)); });
+  await replayedTo(tab);
   await tab.answered();
 
   expect(drawnSteps(view.shown())).toEqual(['echo 1: output-available', 'echo 2: output-available', 'echo 3: output-available']);
+  await view.close();
+});
+
+// The isolate's run closes with its commit, before its room hears the turn end: a tab joining in between is replayed the
+// steps before the reset from that closed run, by its id, then the relay's. Its transcript frame already holds the
+// committed answer, so the replay's own frames are what is judged.
+test("a person's tab that joins a re-driven turn whose run closed before its room heard it end is replayed every step once", async () => {
+  const count: Count = { held: 2, answer: null, holding: new AwaitedList<number>() };
+  const workspace = gatewayWorkspace(counting(count));
+  const main = workspace.agent.agentOf(workspaceMainActor(workspace.db).actorId);
+  await askedOnSocket(workspace, 'req-closed');
+
+  await count.holding.until((steps) => steps.includes(2));
+  count.held = 3;
+  count.answer = 'Counted to three.';
+  const ending = delayNextTurnEnd(main.storageKey);
+  await resetRootIsolate(workspace);
+  await ending.reached;
+  const OpenSchema = v.object({ n: v.number() });
+  const open = v.parse(OpenSchema, agentDatabase(workspace.db, main.storageKey).query('SELECT COUNT(*) AS n FROM open_turns').get()).n;
+  const tab = new TabSocket();
+  const view = await pane(tab);
+
+  await tab.open(workspace.agent, 'tab-late');
+  await replayedTo(tab);
+  ending.release();
+  await tab.answered();
+
+  expect({ open, replayed: calls(tab.heard.items.filter((frame) => frame.replay === true)), drawn: drawnSteps(view.shown()) }).toEqual({
+    open: 0, replayed: ['call_0', 'call_1', 'call_2'],
+    drawn: ['echo 1: output-available', 'echo 2: output-available', 'echo 3: output-available'],
+  });
   await view.close();
 });
 
@@ -661,7 +699,7 @@ test("a person's tab that reloads inside a turn draws its finished steps once ea
   const reloaded = new TabSocket();
   const again = await pane(reloaded);
   await reloaded.open(only.agent, 'tab-reloaded');
-  await act(async () => { await reloaded.heard.until((frames) => frames.some((frame) => frame.replayComplete === true)); });
+  await replayedTo(reloaded);
   await reloaded.answered();
 
   // Replayed and not relayed again: each call is heard once.

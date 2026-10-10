@@ -143,11 +143,10 @@ export interface AgentFacetCalls {
   runEventText(snapshot: AgentSnapshot, runId: string, query: RunEventQuery | null): Promise<StoredRunEvent[]>;
   /** Its newest model steps, for the activity its workspace's window reads. */
   steps(snapshot: AgentSnapshot, limit: number): Promise<AgentSteps>;
-  /** The finished steps of its open turn `turnId`, drawn, for a tab its room replays the turn to; none when the turn
-   *  open is another, or none is. */
-  /** The open turn's first `before` finished steps, drawn, as JSON lines pulled a step at a time: a long turn's
-   *  steps never cross as one value (`do.facet.rpc_bytes`). */
-  openSteps(snapshot: AgentSnapshot, turnId: string, before: number): Promise<ReadableStream<Uint8Array>>;
+  /** The first `before` finished steps of run `runId`, drawn, for a tab its room replays the run's turn to, as JSON
+   *  lines pulled a step at a time: a long turn's steps never cross as one value (`do.facet.rpc_bytes`). A recorded step
+   *  never changes, so the run may have closed since. */
+  runSteps(snapshot: AgentSnapshot, runId: string, before: number): Promise<ReadableStream<Uint8Array>>;
   /** A turn's request and response by its answer's id, for a rating its workspace records; null for none. */
   turnPair(snapshot: AgentSnapshot, messageId: string): Promise<ConversationTurnPair | null>;
   /** The metadata of its newest message from a person, which its idle work mode reads; null before any. */
@@ -474,8 +473,8 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return this.open(snapshot).steps(limit);
   }
 
-  async openSteps(snapshot: AgentSnapshot, turnId: string, before: number): Promise<ReadableStream<Uint8Array>> {
-    return jsonLineStream(this.open(snapshot).openSteps(turnId, before));
+  async runSteps(snapshot: AgentSnapshot, runId: string, before: number): Promise<ReadableStream<Uint8Array>> {
+    return jsonLineStream(this.open(snapshot).runSteps(runId, before));
   }
 
   async turnPair(snapshot: AgentSnapshot, messageId: string): Promise<ConversationTurnPair | null> {

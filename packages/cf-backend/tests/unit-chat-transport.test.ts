@@ -39,9 +39,9 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
   let interrupts = 0;
   /** Whether the ledger holds a turn no activation has opened here yet: one an eviction left open. */
   let owed = false;
-  /** The open turn's finished steps as the ledger records them, drawn. */
+  /** The re-opened turn's run's finished steps as the ledger records them, drawn. */
   const recorded: JsonObject[][] = [];
-  /** The turns the ledger was asked for, in order; it answers once `reading` settles. */
+  /** The runs the ledger was asked for, in order; it answers once `reading` settles. */
   const asked: string[] = [];
   let reading: () => Promise<void> = async () => {};
 
@@ -82,8 +82,8 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
 
   const wire: ChatWire = {
     turnOwed: async () => owed,
-    steps: async function* (turnId, before) {
-      asked.push(turnId);
+    steps: async function* (runId, before) {
+      asked.push(runId);
       await reading();
 
       yield* recorded.slice(0, before);
@@ -188,7 +188,7 @@ test('history materialization finishes before connect publication and chat admis
 test('turn completion waits for materialized history before publishing done', async () => {
   const pending = Promise.withResolvers<UIMessage[]>();
   const h = harness('turn', () => pending.promise);
-  await h.transport.openTurn({ turnId: 'background', messageId: 'answer', userTurn: false, carried: [], finishedSteps: 0 });
+  await h.transport.openTurn({ turnId: 'background', runId: 'run-background', messageId: 'answer', userTurn: false, carried: [], finishedSteps: 0 });
   const closing = h.transport.closeTurn();
 
   expect(h.responses()).toEqual([]);
@@ -203,8 +203,9 @@ function chunks(parts: UIMessageChunk[]): ReadableStream<UIMessageChunk> {
   return new ReadableStream({ start(controller) { for (const part of parts) controller.enqueue(part); controller.close(); } });
 }
 
+/** A turn's start; its steps before this activation are recorded in run `run-<turnId>`. */
 const turnStart = (turnId: string, messageId: string, carried: readonly string[] = [], finishedSteps = 0): SessionEvent =>
-  ({ type: 'turn-start', kind: 'user', text: 'x', workMode: 'build', turnId, messageId, carried, finishedSteps });
+  ({ type: 'turn-start', kind: 'user', text: 'x', workMode: 'build', turnId, messageId, carried, finishedSteps, runId: `run-${turnId}` });
 
 /** An answer frame as a line: `R ` marks a chunk of a step restated from the ledger, by the id it is drawn under. */
 function answerLine(frame: v.InferOutput<typeof FrameSchema>): string {
@@ -820,6 +821,51 @@ describe('ChatWireTransport', () => {
       'start', 'start-step', 'R text-start', 'R text-delta step 0', 'R text-end', 'finish-step',
       'start-step', 'R text-start', 'R text-delta step 1', 'R text-end', 'finish-step', 'complete',
     ]);
+  });
+
+  // The turn re-opened at a step its ledger must hold: a replay that drew fewer would tell the tab it holds the turn.
+  test.each([
+    ['holds fewer steps than', [[{ type: 'text', text: 'one', state: 'done' }]], 2],
+    ['holds none of the steps of', [], 1],
+  ])('a re-opened turn whose ledger %s the turn re-opened at is never replayed as complete: the tab redials', async (_, steps, finished) => {
+    const h = harness();
+    await h.transport.onMessage(h.connection('c1'), chatRequest('req-1', 'hello'));
+    const revived = h.afterEviction();
+
+    h.recorded.push(...steps);
+    const joining = h.connection('c2');
+    await revived.onConnect(joining);
+    await revived.deliver(turnStart('input-req-1', 'msg-1', [], finished));
+    const resuming = v.parse(FrameSchema, JSON.parse(h.connectionFrames('c2').find((text) => text.includes('cf_agent_stream_resuming')) ?? '{}'));
+    await revived.onMessage(joining, JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: resuming.id }));
+
+    expect({ complete: replayOf(h.connectionFrames('c2')).includes('complete'), closed: h.closedWith('c2'), asked: h.asked })
+      .toEqual({ complete: false, closed: 1013, asked: ['run-input-req-1'] });
+  });
+
+  // A redial keeps the socket's id: the closed socket's failed read must not release the hold its redial took since.
+  test("a redialled tab stays held from the live chunks when the closed socket's ledger read fails, until its own replay", async () => {
+    const { h, revived, joining, ack, acked, refuse } = await joinedWhileLedgerReads();
+
+    h.hangUp(joining);
+    revived.onClose(joining);
+    const redialled = h.connection('c2');
+    await revived.onConnect(redialled);
+    refuse(new Error("the agent's isolate reset"));
+    await acked;
+    await revived.observe(chunks([{ type: 'start' }, { type: 'start-step' }]));
+    const before = answersHeard(h.received('c2'));
+
+    h.ledgerReads(async () => {});
+    await revived.onMessage(redialled, ack);
+
+    expect({ before, after: answersHeard(h.received('c2')) }).toEqual({
+      before: [],
+      after: [
+        'replay start', 'replay start-step', 'replay R text-start', 'replay R text-delta one', 'replay R text-end', 'replay finish-step',
+        'replay start-step', 'replay complete',
+      ],
+    });
   });
 
   // A redial keeps the socket's id: the replay the closed socket was owed must not release the hold its redial took.

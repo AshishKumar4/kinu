@@ -401,13 +401,10 @@ export class AgentDatabase {
     };
   }
 
-  /** The first `before` finished steps of its open turn `turnId`, drawn as a replay restates them, read a step at a time;
-   *  none when the turn open is another. */
-  async *openSteps(turnId: string, before: number): AsyncGenerator<JsonObject[]> {
+  /** The first `before` finished steps of run `runId`, drawn as a replay restates them, read a step at a time, open or
+   *  closed: fewer only when the ledger holds fewer. */
+  async *runSteps(runId: string, before: number): AsyncGenerator<JsonObject[]> {
     const { eventRecorder } = this.actorHost().bindStores(this.reference()).stores;
-    const runId = eventRecorder.openRunOf(turnId);
-
-    if (runId === null) return;
     let at = -1;
 
     for (let step = 0; step < before; step += 1) {

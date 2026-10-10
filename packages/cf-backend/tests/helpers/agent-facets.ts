@@ -41,6 +41,25 @@ export function loseNextTurnEnd(storageKey: string): void {
   lostTurnEnds.add(storageKey);
 }
 
+/** A turn's end held on its way to the workspace: `reached` once it is held, and it goes on once released. */
+export interface DelayedTurnEnd {
+  readonly reached: Promise<void>;
+  readonly release: () => void;
+}
+
+const delayedTurnEnds = new Map<string, { readonly reached: () => void; readonly released: Promise<void> }>();
+
+/** The isolate under `storageKey` commits its next turn, and the end it tells the workspace waits on the way until
+ *  released. */
+export function delayNextTurnEnd(storageKey: string): DelayedTurnEnd {
+  const reached = Promise.withResolvers<void>();
+  const released = Promise.withResolvers<void>();
+
+  delayedTurnEnds.set(storageKey, { reached: reached.resolve, released: released.promise });
+
+  return { reached: reached.promise, release: released.resolve };
+}
+
 const lostHandoffs = new Set<string>();
 
 /** The isolate under `storageKey` hands its next settled turn to a workspace that is gone before it takes it. */
@@ -198,6 +217,13 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           chatEvent: (event) => host.chatEvent(event),
           turnEnded: async (event, figures) => {
             if (lostTurnEnds.delete(placement.storageKey)) return;
+            const delay = delayedTurnEnds.get(placement.storageKey);
+
+            if (delay !== undefined) {
+              delayedTurnEnds.delete(placement.storageKey);
+              delay.reached();
+              await delay.released;
+            }
 
             await host.turnEnded(event, figures);
           },

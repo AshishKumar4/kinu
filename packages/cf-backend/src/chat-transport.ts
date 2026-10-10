@@ -36,9 +36,9 @@ export interface ChatWire {
   /** A turn this activation has not opened yet: the one an ended activation left open, or an acknowledged send. Asked of
    *  the agent's own isolate, which re-opens such a turn when it starts, before it has told this room. */
   turnOwed(): Promise<boolean>;
-  /** The first `before` finished steps of the open turn `turnId` as its agent's ledger records them, drawn, a step at
-   *  a time; none once another is open. */
-  steps(turnId: string, before: number): AsyncIterable<readonly JsonObject[]>;
+  /** The first `before` finished steps of run `runId` as its agent's ledger records them, drawn, a step at a time; a
+   *  recorded step never changes, so the run may have closed since. Fewer only when the ledger holds fewer. */
+  steps(runId: string, before: number): AsyncIterable<readonly JsonObject[]>;
   broadcast(message: string, exclude?: string[]): void;
   /** The handshake asks by id before it replays to a replacement. */
   getConnection(id: string): ChatSocket | undefined;
@@ -139,6 +139,8 @@ function compactStep(relayed: RelayedChunk[], step: number): void {
 interface LiveStream {
   readonly requestId: string;
   readonly turnId: string;
+  /** The run whose ledger holds the steps before `firstStep`. */
+  readonly runId: string;
   /** Requests of the other messages a rerun carried, answered when it closes. */
   readonly carried: readonly string[];
   /** The answer's row id, on every provider call's `start`, so the answer stays one message. */
@@ -254,8 +256,12 @@ function restatedChunks(parts: readonly JsonObject[], step: number): UIMessageCh
 }
 
 export class ChatWireTransport implements ChatTransport, ChatRoom {
-  /** Tabs told a stream is resuming whose replay has not gone out: live chunks skip them until it has. */
-  private readonly pendingResume = new Set<string>();
+  /** Tabs told a stream is resuming whose replay has not gone out, each with its hold: live chunks skip them until it has.
+   *  A socket redialled under the same id takes a hold of its own, which the closed one's replay never releases. */
+  private readonly pendingResume = new Map<string, number>();
+
+  /** Holds taken so far, each hold's number. */
+  private holds = 0;
   /** Tabs told an owed turn is pending, each with the probe it asked under: told it is resuming when it opens. */
   private readonly parked = new Map<string, { readonly connection: ChatSocket; readonly probeId: string | undefined }>();
   private readonly requests = new Map<string, string>();
@@ -306,7 +312,12 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   private notifyResuming(connection: ChatSocket, live: LiveStream, probeId: string | undefined): void {
     const frame = { type: MessageType.CF_AGENT_STREAM_RESUMING, id: live.requestId, ...(probeId !== undefined && { probeId }) };
 
-    if (sendIfOpen(connection, JSON.stringify(frame)) && !live.joined.has(connection.id)) this.pendingResume.add(connection.id);
+    if (sendIfOpen(connection, JSON.stringify(frame)) && !live.joined.has(connection.id)) this.pendingResume.set(connection.id, ++this.holds);
+  }
+
+  /** Releases `id`'s hold if it is still `hold`: a replay never releases the hold a redial under its id took since. */
+  private release(id: string, hold: number | undefined): void {
+    if (this.pendingResume.get(id) === hold) this.pendingResume.delete(id);
   }
 
   quiet(): void {
@@ -319,18 +330,20 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
   /** The steps before the room opened the turn, restated from its agent's ledger as each is read, then the relay's
    *  chunks, cut markers among them; later live chunks follow. The tab is held from the live chunks until its replay is
-   *  complete, so none runs ahead of the parts the replay opens. A ledger that cannot be read leaves the replay
-   *  unfinished: the tab is told to reconnect and ask again, never that it holds the turn. */
+   *  complete, so none runs ahead of the parts the replay opens. A ledger that cannot be read, or holds fewer steps than
+   *  the turn opened at, leaves the replay unfinished: the tab is told to reconnect and ask again, never that it holds
+   *  the turn. */
   replay(connection: ChatSocket, requestId: string): Promise<void> {
     return settle(Effect.gen({ self: this }, function* () {
       const { live } = this;
+      const hold = this.pendingResume.get(connection.id);
 
       const frame = (fields: { body: string; replayComplete?: true; done: boolean }): string =>
         JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: requestId, replay: true, ...fields });
 
       // A request that is no longer live settles; its answer is in the transcript frame.
       if (live === null || live.requestId !== requestId) {
-        this.pendingResume.delete(connection.id);
+        this.release(connection.id, hold);
         sendIfOpen(connection, frame({ body: '', done: true }));
 
         return;
@@ -344,27 +357,33 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         const restated = yield* attempt({ doing: "replaying a re-opened turn's finished steps from its agent's ledger", otherwise: 'unavailable' }, async () => {
           let step = 0;
 
-          for await (const parts of this.wire.steps(live.turnId, live.firstStep)) {
+          for await (const parts of this.wire.steps(live.runId, live.firstStep)) {
             // Ended or replaced while its ledger answered: what ended it told the tabs it held.
-            if (this.live !== live) return false;
+            if (this.live !== live) return 'stopped';
 
-            if (step === 0 && !sendIfOpen(connection, opened)) return false;
+            if (step === 0 && !sendIfOpen(connection, opened)) return 'stopped';
 
-            for (const chunk of restatedChunks(parts, step)) if (!sendIfOpen(connection, frame({ body: JSON.stringify(chunk), done: false }))) return false;
+            for (const chunk of restatedChunks(parts, step)) if (!sendIfOpen(connection, frame({ body: JSON.stringify(chunk), done: false }))) return 'stopped';
             step += 1;
           }
 
-          return step > 0 || live.relayed.length === 0 || sendIfOpen(connection, opened);
-        }).pipe(Effect.catch((failure) => Effect.sync(() => {
+          return step === live.firstStep ? 'restated' : { short: step };
+        }).pipe(Effect.catch((failure) => Effect.succeed({ failure })));
+
+        if (restated === 'stopped' || this.live !== live) return;
+
+        if (restated !== 'restated') {
+          const failure = 'failure' in restated
+            ? restated.failure
+            : new KinuError('missing', `the ledger of run ${live.runId} holds ${String(restated.short)} of the ${String(live.firstStep)} steps the turn re-opened at`);
+
           diagnostics.failure('chat.replay_steps_unread', failure);
-          this.pendingResume.delete(connection.id);
-          // The tab redials and asks again; it never hears a replay it did not get as complete.
+          this.release(connection.id, hold);
+          // The tab redials and asks again; it never hears a replay it did not get whole.
           connection.close(REPLAY_RETRY_CODE, "the turn's earlier steps could not be read; reconnect to resume");
 
-          return false;
-        })));
-
-        if (!restated || this.live !== live) return;
+          return;
+        }
       } else if (live.relayed.length > 0 && !sendIfOpen(connection, opened)) return;
 
       for (const { type, body } of live.relayed) {
@@ -374,7 +393,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       // A socket that closed while the ledger answered never gets here, and leaves alone the hold its redial under the same
       // id took.
       if (!sendIfOpen(connection, frame({ body: '', done: false, replayComplete: true }))) return;
-      this.pendingResume.delete(connection.id);
+      this.release(connection.id, hold);
       live.joined.add(connection.id);
     }));
   }
@@ -505,7 +524,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   /** The stream answers under the admitting request (`turnId` is the opening row id), else under an id minted here:
    *  a turn this activation re-drives or opened itself, which a tab follows by the resume it is told of. */
   async openTurn(turn: {
-    readonly turnId: string; readonly messageId: string; readonly userTurn: boolean; readonly carried: readonly string[]; readonly finishedSteps: number;
+    readonly turnId: string; readonly runId: string; readonly messageId: string; readonly userTurn: boolean; readonly carried: readonly string[];
+    readonly finishedSteps: number;
   }): Promise<void> {
     const requestId = this.requests.get(turn.turnId) ?? crypto.randomUUID();
     this.requests.delete(turn.turnId);
@@ -522,7 +542,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     this.releaseWaiters();
 
     const live: LiveStream = {
-      requestId, turnId: turn.turnId, carried, messageId: turn.messageId, open: new OpenParts(), relayed: [],
+      requestId, turnId: turn.turnId, runId: turn.runId, carried, messageId: turn.messageId, open: new OpenParts(), relayed: [],
       firstStep: turn.finishedSteps, finished: turn.finishedSteps, joined: new Set(), broken: false, failure: null, spoke: false,
     };
 
@@ -561,7 +581,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     switch (event.type) {
       case 'turn-start':
         await this.openTurn({
-          turnId: event.turnId, messageId: event.messageId, userTurn: event.kind === 'user', carried: event.carried, finishedSteps: event.finishedSteps,
+          turnId: event.turnId, runId: event.runId, messageId: event.messageId, userTurn: event.kind === 'user', carried: event.carried,
+          finishedSteps: event.finishedSteps,
         });
 
         return;
@@ -575,7 +596,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
         live.relayed.push({ step: live.finished, type: chunk.type, body });
         this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body, done: false }),
-          this.pendingResume.size === 0 ? undefined : [...this.pendingResume]);
+          this.pendingResume.size === 0 ? undefined : [...this.pendingResume.keys()]);
 
         return;
       }
@@ -655,7 +676,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         live.relayed.push({ step: live.finished, type: chunk.type, body });
 
         // A joining tab reads it in its replay; sent now, it would run ahead of the parts the replay opens.
-        this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body, done: false }), this.pendingResume.size === 0 ? undefined : [...this.pendingResume]);
+        this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body, done: false }), this.pendingResume.size === 0 ? undefined : [...this.pendingResume.keys()]);
 
         if (chunk.type === 'finish-step') {
           compactStep(live.relayed, live.finished);
@@ -679,7 +700,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   private releaseWaiters(): void {
     const stale = this.live?.requestId ?? null;
 
-    for (const id of this.pendingResume) {
+    for (const id of this.pendingResume.keys()) {
       const connection = this.wire.getConnection(id);
 
       if (stale !== null && connection !== undefined) sendIfOpen(connection, doneFrame(stale, {}));

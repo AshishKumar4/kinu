@@ -123,7 +123,7 @@ export function agentCallsThrough(through: <A>(call: (isolate: AgentFacetCalls) 
     turnPair: (...args) => settle(through((isolate) => isolate.turnPair(...args))),
     standing: (...args) => settle(through((isolate) => isolate.standing(...args))),
     steps: (...args) => settle(through((isolate) => isolate.steps(...args))),
-    openSteps: (...args) => settle(through((isolate) => isolate.openSteps(...args))),
+    runSteps: (...args) => settle(through((isolate) => isolate.runSteps(...args))),
     listRuns: (...args) => settle(through((isolate) => isolate.listRuns(...args))),
     runSummaries: (...args) => settle(through((isolate) => isolate.runSummaries(...args))),
     runEvents: (...args) => settle(through((isolate) => isolate.runEvents(...args))),

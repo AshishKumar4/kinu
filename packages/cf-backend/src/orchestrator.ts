@@ -2492,8 +2492,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       turnOwed: async () => this.currentTurnOf(reference) !== null
         || (this.agentWakes.armed(actorId) && await (await facet()).owed(snapshot())),
       // A turn its isolate re-opened finished its first steps in an isolate that ended: its own ledger holds them.
-      steps: async function* (turnId, before) {
-        yield* jsonLines(await (await facet()).openSteps(snapshot(), turnId, before), DrawnStepSchema);
+      steps: async function* (runId, before) {
+        yield* jsonLines(await (await facet()).runSteps(snapshot(), runId, before), DrawnStepSchema);
       },
       getConnection: (id) => this.getConnection(id),
       broadcast: (message, exclude) => { this.broadcastToActor(room, message, exclude); },

@@ -84,8 +84,8 @@ export type SessionEvent =
       turnId: string; messageId: string;
       /** A rerun answers every leftover as one turn; a transport closes their requests with it. */
       carried: readonly string[];
-      /** Steps before this activation. */
-      finishedSteps: number }
+      /** Steps before this activation, each recorded in the ledger of run `runId`, the run the turn continues. */
+      finishedSteps: number; runId: string }
   | { type: 'step-cut'; stepIndex: number }
   | { type: 'text-delta'; delta: string }
   /** Shown live; never the answer, never stored. */
@@ -1199,7 +1199,7 @@ export class ChatSession {
 
     this.emit({
       type: 'turn-start', kind: item.kind, text: item.text, event, workMode: mode, turnId: this.turnId, messageId: this.messageId,
-      carried: (item.steerIds ?? []).filter((id) => id !== this.turnId), finishedSteps: item.continuation?.finishedSteps ?? 0,
+      carried: (item.steerIds ?? []).filter((id) => id !== this.turnId), finishedSteps: item.continuation?.finishedSteps ?? 0, runId: this.runId,
     });
 
     return { event, mode, turnId: this.turnId, runId: this.runId };
