@@ -15,7 +15,7 @@ import worker, { MAX_BODY_BYTES } from '../../scripts/scripted-model-worker';
 import { SCRIPTED_CREDENTIAL, startScriptedModel } from '../../scripts/scripted-model';
 import { FALLBACK_ANSWER } from '../../scripts/scripted-protocol';
 import { tierModel } from '../../scripts/tier-model';
-import { APPROVALS_ASK, DECISION_HEARD, HOME_ASK, HOME_BRIEF, HOME_REPORTED, PARKED_COMMANDS } from '../../scripts/flows-script';
+import { APPROVALS_ASK, DECISION_HEARD, HIRE_APPROVAL_ASK, HIRE_EXECUTED, HIRE_PARKED_COMMAND, HIRE_RAN, HOME_ASK, HOME_BRIEF, HOME_REPORTED, PARKED_COMMANDS } from '../../scripts/flows-script';
 import { generateText, streamText } from 'ai';
 import { createOpenAICompatProvider, runSleepTimeCompute, type LLM } from '@kinu.run/core';
 import { SLEEP_TIME_PROMPT_OPENING } from '../../packages/core/src/utils/prompt-sections';
@@ -268,6 +268,23 @@ describe('the approval flow acknowledges only the current unanswered decisions',
 
     expect(answered.content).toBe(`${DECISION_HEARD} denied`);
   });
+});
+
+test('the approved hire recognizes its explicit stdout witness, not Git diagnostics or the quoted command', async () => {
+  const opened = await reply([{ role: 'user', content: HIRE_APPROVAL_ASK }]);
+  const command = opened.tool_calls?.[0];
+
+  if (command === undefined) throw new Error('the hire fixture offered no gated shell command');
+
+  const invoke = (result: string) => reply([
+    { role: 'user', content: `APPROVED, still not run: re-issue once:\n  hire-id: ${HIRE_PARKED_COMMAND}` },
+    { role: 'assistant', content: 'Re-issuing the approved command.', tool_calls: [{ id: 'hire-call', type: 'function', function: command.function }] },
+    { role: 'tool', tool_call_id: 'hire-call', content: result },
+  ]);
+
+  expect((await invoke(`${HIRE_EXECUTED}\n\n--- stderr ---\ngit: unknown option`)).content).toBe(HIRE_RAN);
+  expect((await invoke(JSON.stringify({ reason: 'denied', error: `still queued: ${HIRE_PARKED_COMMAND}` }))).content).not.toBe(HIRE_RAN);
+  expect((await invoke('fatal: not a git repository')).content).not.toBe(HIRE_RAN);
 });
 
 /** One request to the deployed tiers' Worker, as a hosted turn makes it: the conversation so far and the agent's tools. */
