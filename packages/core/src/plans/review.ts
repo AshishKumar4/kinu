@@ -252,6 +252,19 @@ export function freshNotes(notes: readonly ReviewAnnotation[]): ReviewAnnotation
   return notes.filter((note) => note.revision === undefined);
 }
 
+/**
+ * Why `decision` cannot be made on a revision with these notes and this typed feedback, or null: the store's rule,
+ * which every reviewer renders before asking. Approving would drop this revision's own comments unread, so it waits
+ * until they are sent back or deleted; a change request needs something to send.
+ */
+export function planDecisionRefusal(notes: readonly ReviewAnnotation[], decision: PlanReviewDecision, feedback = ''): string | null {
+  const commented = freshNotes(notes).length > 0;
+
+  if (decision === 'approve') return commented ? 'this revision has comments: send them back with Request changes, or delete them to approve' : null;
+
+  return commented || feedback.trim() !== '' ? null : 'a change request needs a comment or feedback';
+}
+
 function quoted(text: string): string {
   const flat = text.replace(/\s+/gu, ' ').trim();
 
@@ -606,14 +619,14 @@ export class PlanReviewStore {
       return { ok: false, error: `plan revision is already ${current.status}`, plan: current };
     }
 
+    const refusal = planDecisionRefusal(current.annotations, decision, feedback);
+
+    if (refusal !== null) return { ok: false, error: refusal, plan: current };
+
     const note = feedback?.trim() ?? '';
     // A change request sends the revision's own comments, rendered here so every reviewer sends the same text.
     const sent = decision === 'request_changes' ? [reviewFeedbackText(current.annotations), note].filter(Boolean).join('\n\n') : note;
     const normalizedFeedback = sent === '' ? null : sent;
-
-    if (decision === 'request_changes' && !normalizedFeedback) {
-      return { ok: false, error: 'request_changes requires a comment or feedback', plan: current };
-    }
 
     const status: PlanReviewStatus = decision === 'approve' ? 'approved' : 'changes_requested';
     const now = this.now();

@@ -8,6 +8,7 @@ export {
   PlanReviewResultSchema,
   PlanDecisionOutcomeSchema,
   planHandoffShortfall,
+  planDecisionRefusal,
   applyPlanEdits,
   freshNotes,
   planAwaitingReply,

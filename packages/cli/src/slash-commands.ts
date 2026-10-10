@@ -581,10 +581,6 @@ async function planCommand({ client, command, arg, rest }: SlashContext): Promis
     if (!active) return { kind: 'text', text: 'No plan is waiting for you. Draft one with /plan <what to plan>.' };
     const feedback = args.join(' ').trim();
 
-    if (sub === 'changes' && !feedback) {
-      return { kind: 'text', text: 'Usage: /plan changes <feedback>. Say what has to change; the agent revises against it.' };
-    }
-
     const decided = await plans.decide(
       active.id, active.revision,
       sub === 'approve' ? 'approve' : 'request_changes',
