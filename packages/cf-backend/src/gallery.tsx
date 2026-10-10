@@ -6926,6 +6926,7 @@ function workspacePageFrame(): MountedFrame {
         <Routes>
           <Route path="/workspace/:agentId" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
           <Route path="/workspace/:agentId/agents/:subName" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
+          <Route path={APP_ROUTES.workspaceAgentPath} element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
           <Route path="/workspace/:agentId/:view" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
         </Routes>
       </>
@@ -6943,6 +6944,7 @@ function workspaceShellFrame(): MountedFrame {
         <Route element={<Layout />}>
           <Route path="/workspace/:agentId" element={<WorkspacePage />} />
           <Route path="/workspace/:agentId/agents/:subName" element={<WorkspacePage />} />
+          <Route path={APP_ROUTES.workspaceAgentPath} element={<WorkspacePage />} />
           <Route path="/workspace/:agentId/:view" element={<WorkspacePage />} />
           <Route path="*" element={<div className="h-full" data-gallery-blank />} />
         </Route>
