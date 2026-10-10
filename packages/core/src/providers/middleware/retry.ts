@@ -23,7 +23,7 @@ import { inAttempt, type Attempt } from './attempt';
 import { generateFromStream } from './stream-generate';
 import { abortableSleep, providerPacer, type ProviderPacer } from '../pacing';
 import type { ProviderWaitInfo } from '../types';
-import { attemptKey, recordAttemptFailure, withAttemptIdentity, type AttemptIdentityCapture } from '../attempt-identity';
+import { recordAttemptFailure, withAttemptIdentity, type AttemptIdentityCapture } from '../attempt-identity';
 
 /** Full-jitter backoff; unmeasured. */
 const BASE_DELAY_MS = 2_000;
@@ -225,7 +225,7 @@ class CallLane {
   constructor(private readonly lane: string | LaneLookup, private readonly capture: AttemptIdentityCapture) {}
 
   billed(): Effect.Effect<string> {
-    if (this.capture.identity !== null) return Effect.succeed(attemptKey(this.capture.identity));
+    if (this.capture.identity !== null) return Effect.succeed(this.capture.identity.lane);
 
     return typeof this.lane === 'string' ? Effect.succeed(this.lane) : Effect.promise(this.lane.billed);
   }

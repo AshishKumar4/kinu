@@ -93,13 +93,13 @@ export function reciprocalRankFusion<T extends { id: string }>(
 /** A cooldown, not a latch: the next use after it re-probes, so transient errors recover. */
 export const VECTOR_BACKEND_COOLDOWN_MS = 30_000;
 
-/** Every field optional: records may predate a field. */
+/** Current projection metadata: a reset reindexes every canonical note. */
 const ChunkMetadataSchema = v.object({
-  chunkId: v.optional(v.string()),
-  hash: v.optional(v.string()),
-  path: v.optional(v.string()),
-  startLine: v.optional(v.number()),
-  endLine: v.optional(v.number()),
+  chunkId: v.string(),
+  hash: v.string(),
+  path: v.string(),
+  startLine: v.number(),
+  endLine: v.number(),
 });
 
 /**
@@ -194,11 +194,11 @@ export function createCloudflareVectorStore(opts: {
 
           return [{
             // Verbatim chunk id matches the FTS5 hit id so RRF fuses them.
-            id: fields.chunkId ?? m.id,
-            path: fields.path ?? '',
-            startLine: fields.startLine ?? 0,
-            ...(fields.hash !== undefined && { hash: fields.hash }),
-            endLine: fields.endLine ?? 0,
+            id: fields.chunkId,
+            path: fields.path,
+            startLine: fields.startLine,
+            hash: fields.hash,
+            endLine: fields.endLine,
             score: m.score,
           }];
         });

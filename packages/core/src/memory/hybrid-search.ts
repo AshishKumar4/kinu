@@ -103,16 +103,15 @@ export function hybridSearch(
   
       if (outcome.kind !== 'answered' || rehydrate === undefined) return Effect.succeed(outcome);
   
-      return Effect.forEach(outcome.hits, (hit) => attempt(
-        { doing: 'validate a semantic candidate against canonical memory', otherwise: 'io' }, () => rehydrate(hit),
-      ).pipe(
-        Effect.catch((error) => Effect.sync(() => {
-          diagnostics.failure('memory.snippet_rehydrate_failed', error, { id: hit.id });
-  
-          return null;
-        })),
-        Effect.map((text) => text === null ? null : { ...hit, text }),
-      )).pipe(Effect.map((hits): SemanticOutcome => ({ kind: 'answered', hits: hits.flatMap((hit) => hit === null ? [] : [hit]) })));
+      return armOf(async () => {
+        const hits = await Promise.all(outcome.hits.map(async (hit) => {
+          const text = await rehydrate(hit);
+
+          return text === null ? null : { ...hit, text };
+        }));
+
+        return hits.flatMap((hit) => hit === null ? [] : [hit]);
+      }, 'validate semantic candidates against canonical memory', 'unavailable');
     }));
 
   const sharedFacts: Effect.Effect<readonly Fact[]> = accountFacts === undefined ? Effect.succeed([]) : attempt(

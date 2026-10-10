@@ -2,7 +2,7 @@
 
 import { withModelStack } from './wire-model';
 import { hashText } from '@kinu.run/agent-utils/memory';
-import { attemptKey, bindModelAttempt, captureModelAttempt, type ModelAttemptIdentity } from './attempt-identity';
+import { bindModelAttempt, captureModelAttempt, type ModelAttemptIdentity } from './attempt-identity';
 import type { LanguageModel } from 'ai';
 import type {
   AuthResolution, ModelCallDeps, ModelProvider, ProviderDeps, ProviderInfo, ModelInfo,
@@ -306,7 +306,7 @@ export function createProviderRegistry(): ProviderRegistry {
           } };
 
           return bindModelAttempt(withModelStack(provider.createModel(parsed.modelId, inference), {
-            provider: parsed.provider, modelId: parsed.modelId, lane: { route: routeOf(parsed, provider), billed: async () => attemptKey(await attempt()) },
+            provider: parsed.provider, modelId: parsed.modelId, lane: { route: routeOf(parsed, provider), billed: async () => (await attempt()).lane },
             ...(deps.onProviderWait !== undefined && { onWait: deps.onProviderWait }),
             ...(provider.streamsGenerate === true && { generateByStream: true }),
           }), attempt);

@@ -479,9 +479,9 @@ test.each([401, 429])('a renewed credential owns its HTTP %s refusal, not the pr
     expect(served).toEqual(['primary:Bearer healthy-A', 'primary:Bearer refused-B', 'backup:Bearer healthy-A']);
     expect(providerPacer.parked(attemptKey(healthy))).toBe(false);
     expect(providerPacer.parked(attemptKey(refusedIdentity))).toBe(true);
-    expect(providerPacer.cooling(attemptKey(healthy))).toBeNull();
+    expect(providerPacer.cooling(healthy.lane)).toBeNull();
 
-    if (status === 429) expect(providerPacer.cooling(attemptKey(refusedIdentity))?.waitMs).toBeGreaterThan(0);
+    if (status === 429) expect(providerPacer.cooling(refusedIdentity.lane)?.waitMs).toBeGreaterThan(0);
   } finally { await server.stop(true); }
 });
 

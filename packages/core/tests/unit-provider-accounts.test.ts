@@ -187,6 +187,30 @@ describe('which account a call spends', () => {
     expect({ sent, parked: parked.status === 'rejected' }).toEqual({ sent: 1, parked: true });
   });
 
+  test('different models on one login share its route-wide Retry-After', async () => {
+    let sent = 0;
+    const registry = createProviderRegistry();
+    registry.register(createOpenAICompatProvider('openai-compat:shared-limit'));
+
+    const deps: ModelCallDeps = {
+      env: {}, sessionAffinity: 'shared-limit', workspaceAffinity: 'shared-limit',
+      hasCredential: async () => true,
+      getAuth: async () => ({ headers: { Authorization: 'Bearer shared-login' }, baseURL: 'https://shared-limit.invalid/v1' }),
+      fetch: asFetchFunction(async () => {
+        sent++;
+
+        return new Response('limited', { status: 429, headers: { 'retry-after': '30' } });
+      }),
+    };
+
+    const call = (model: string) => generateText({ model: registry.resolve(`openai-compat:shared-limit/${model}`, deps),
+      prompt: 'go', maxRetries: 0, providerOptions: callRetries(0) });
+
+    await expect(call('first')).rejects.toThrow();
+    await expect(call('second')).rejects.toThrow();
+    expect(sent).toBe(1);
+  });
+
   test('a resolved model asks which account it bills on each call, so a changed default is not parked by the old one\'s wait', async () => {
     const KEYED = 'swap.bearer';
     let sent = 0;

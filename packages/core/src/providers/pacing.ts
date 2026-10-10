@@ -80,11 +80,14 @@ export class ProviderPacer {
     return untilMs;
   }
 
-  /** Selection and pacing consult the same refusal deadline. Non-rate refusals park without making retries wait. */
+  /** Selection is model-scoped; rate waits are lane-wide. Both are owned here and can only extend a deadline. */
   park(attempt: string, retryAfterMs: number | null): void {
-    if (this.parked(attempt)) return;
     const duration = retryAfterMs !== null && retryAfterMs > 0 ? retryAfterMs : 5 * 60 * 1000;
-    this.cooldowns.set(attempt, { untilMs: this.now() + duration, reason: undefined, wait: false });
+    const untilMs = this.now() + duration;
+    const previous = this.cooldowns.get(attempt);
+
+    if (previous !== undefined && previous.untilMs >= untilMs) return;
+    this.cooldowns.set(attempt, { untilMs, reason: previous?.reason, wait: previous?.wait ?? false });
   }
 
   parked(attempt: string): boolean {

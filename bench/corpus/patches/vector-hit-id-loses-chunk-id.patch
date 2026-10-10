@@ -6,9 +6,9 @@ index 0ee07c799..c7c257457 100644
  
            return [{
              // Verbatim chunk id matches the FTS5 hit id so RRF fuses them.
--            id: fields.chunkId ?? m.id,
+-            id: fields.chunkId,
 +            id: m.id,
-             path: fields.path ?? '',
-             startLine: fields.startLine ?? 0,
-             ...(fields.hash !== undefined && { hash: fields.hash }),
-             endLine: fields.endLine ?? 0,
+             path: fields.path,
+             startLine: fields.startLine,
+             hash: fields.hash,
+             endLine: fields.endLine,

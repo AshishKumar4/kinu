@@ -170,7 +170,7 @@ describe('hybridSearch', () => {
       });
 
       expect(out).toEqual([]);
-      expect(log.emitted.some((line) => line.event === 'memory.snippet_rehydrate_failed')).toBe(true);
+      expect(log.emitted.some((line) => line.event === 'memory.semantic_search_failed')).toBe(true);
     } finally {
       restore();
     }
@@ -194,6 +194,18 @@ describe('hybridSearch', () => {
       await expect(rehydrate(hit)).resolves.toBe('line1');
       expect(calls).toBe(2);
     });
+
+  test('failed canonical reads are unavailable, while verified deletions are an empty answer', async () => {
+    const unavailable = new Error('canonical memory could not be read');
+    const lexical: LexicalSearchFn = async () => { throw new Error('lexical unavailable'); };
+
+    const vectors = vectorStore([{ id: 'gone', path: 'gone.md', startLine: 1, endLine: 1, score: 1 }]);
+
+    await expect(hybridSearch('q', lexical, vectors, { rehydrate: async () => { throw unavailable; } })).rejects.toMatchObject({
+      errors: expect.arrayContaining([expect.objectContaining({ code: 'unavailable', cause: unavailable })]),
+    });
+    expect(await hybridSearch('q', lexical, vectors, { rehydrate: async () => null })).toEqual([]);
+  });
 
   test('a remembered fact surfaces as a fact-source hit, labelled by its key', async () => {
     const { facts } = createTestFactsStore();

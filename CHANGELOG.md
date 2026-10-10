@@ -27,6 +27,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 - **Memory changes survive a restart before semantic delivery.** The lexical index, file stamp and pending vector revisions commit together. Semantic results must still match the canonical chunk and hash, so a deleted or replaced note cannot return stale text during an outage.
 - **Renewed provider logins own their refusals.** Retry pacing and fallback selection use one deadline record and the credential that answered the actual send, rather than a prospective lookup that may already have changed.
+- **Rate waits hold every model on the same billed route.** Selection remains model-specific under the same refusal owner, overlapping refusals extend their deadlines, and failed canonical memory reads report unavailability instead of an empty corpus. Semantic metadata must match the current projection shape.
 - **Inspection preserves retained content and failure evidence.** Step output materializes media bytes, retired actors retain their read-only payload plane, denied file edits keep their counters, and repeated conversation searches reuse the actor's warm index.
 - **An idle hire's jobs keep their owner.** Public readers and job authorities retain host-owned stores after a turn releases its runtime. The released runtime still loses its write authority, and retiring the actor or closing its host revokes both lifetimes.
 
