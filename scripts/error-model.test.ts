@@ -300,6 +300,33 @@ export class Host {
   });
 });
 
+// React's positions are read by syntax, not by a file's extension: a hook's `.ts` module hands React an effect's
+// callback and a useCallback body as a component does, and a runner anywhere else in it is still a finding.
+test('a hook module\'s effect and callback may detach; its top level and plain functions may not', () => {
+  const HOOK = 'packages/fixture/src/hooks/use-reads.ts';
+
+  const source = `
+import { detach } from '../obs/index';
+detach(warm());
+export function useReads() {
+  useEffect(() => { detach(load()); }, []);
+  const reload = useCallback(() => { detach(load()); }, []);
+  return reload;
+}
+function refresh() {
+  detach(load());
+}
+`;
+
+  const only = 'detach runs only where its caller never awaits: a timer, a listener, or a function a component hands out';
+  const sites = bridgeSites(new Map([[HOOK, source]]));
+
+  expect({ react: sites.react, findings: sites.findings }).toEqual({
+    react: [`${HOOK}:5`, `${HOOK}:6`],
+    findings: [`${HOOK}:10: ${only}`, `${HOOK}:3: ${only}`],
+  });
+});
+
 test('React calls an intrinsic element\'s handler and an effect\'s, where only detach runs; it tracks a transition\'s or action\'s returned settle', () => {
   const TSX = 'packages/fixture/src/panel.tsx';
 
@@ -354,14 +381,12 @@ function helper() {
     routes: [],
     held: [],
     react: [
-      `${FILE}:11`, `${FILE}:7`, `${FILE}:8`, `${FILE}:9`, `${TSX}:11`, `${TSX}:13`, `${TSX}:14`, `${TSX}:17`, `${TSX}:17`, `${TSX}:19`, `${TSX}:20`,
-      `${TSX}:22`, `${TSX}:22`, `${TSX}:22`, `${TSX}:4`, `${TSX}:5`, `${TSX}:8`,
+      `${FILE}:11`, `${FILE}:4`, `${FILE}:5`, `${FILE}:7`, `${FILE}:8`, `${FILE}:9`, `${TSX}:11`, `${TSX}:13`, `${TSX}:14`, `${TSX}:17`, `${TSX}:17`,
+      `${TSX}:19`, `${TSX}:20`, `${TSX}:22`, `${TSX}:22`, `${TSX}:22`, `${TSX}:4`, `${TSX}:5`, `${TSX}:8`,
     ],
     findings: [
       `${FILE}:10: ${floats}`,
       `${FILE}:12: ${only}`,
-      `${FILE}:4: a runner returned outside an exported function or public member`,
-      `${FILE}:5: ${only}`,
       `${FILE}:6: ${floats}`,
       `${TSX}:12: ${midBody}`,
       `${TSX}:15: ${only}`,
