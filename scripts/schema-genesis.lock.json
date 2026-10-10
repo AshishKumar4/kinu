@@ -983,6 +983,7 @@
     "actor_id TEXT NOT NULL",
     "turn_id TEXT NOT NULL",
     "review_id TEXT",
+    "followup TEXT",
     "PRIMARY KEY (actor_id, turn_id)"
   ],
   "operator_requests@packages/core/src/events/recorder.ts": [

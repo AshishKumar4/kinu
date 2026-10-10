@@ -1012,6 +1012,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const event = ended?.event ?? null;
 
     this.agentTurns.chatClosed(actorId);
+    new TurnFences(this.boundSql).closed(actorId);
     // Its claim closed and its sequence opened in its own isolate.
     this.liveReadsMoved(readsOfTables(['actor_turn_claims', 'terminal_effects']));
 
@@ -2881,7 +2882,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ],
     });
     this.turnBranches.retire(settled.turnId);
-    new TurnFences(this.boundSql).settled(this.actorHandle().actorId, settled.turnId);
   }
 
   /** Built per use: the actor handle and the fast lane are this activation's. Main's conversation is its isolate's. */

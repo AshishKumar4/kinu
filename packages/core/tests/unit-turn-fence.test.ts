@@ -57,12 +57,12 @@ describe('TurnFences', () => {
     expect(fences().offer(actor, 't1', NOT_LEARNING)).toEqual(LEARNING);
   });
 
-  test("a settled turn's opening is refused at its epoch, and its retry, at the next, is a new execution", () => {
+  test("a closed turn's opening is refused at its epoch, and its retry, at the next, is a new execution", () => {
     const { actor, fences } = fenced();
 
     fences().open(actor, 't1', 1);
     fences().offer(actor, 't1', LEARNING);
-    fences().settled(actor, 't1');
+    fences().closed(actor);
 
     expect(fences().open(actor, 't1', 1)).toBe(false);
     expect(fences().open(actor, 't1', 2)).toBe(true);

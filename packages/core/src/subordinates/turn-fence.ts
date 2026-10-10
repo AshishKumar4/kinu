@@ -55,10 +55,11 @@ export class TurnFences {
     return offered?.facts_json == null ? facts : v.parse(TurnFactsSchema, JSON.parse(offered.facts_json));
   }
 
-  /** With the turn's terminal sequence, its facts durable in the handoff: ended, and its offer gone. A retry opens it
-   *  again at a newer epoch, as a new execution with an offer of its own. */
-  settled(actorId: string, turnId: string): void {
-    void this.sql`UPDATE actor_turn_fence SET ended_at = COALESCE(ended_at, ${Date.now()}), facts_json = NULL
-      WHERE actor_id = ${actorId} AND turn_id = ${turnId}`;
+  /** As any agent's turn closes, told or lost with its isolate: the turn it had open ended, its facts frozen in the
+   *  agent's store since its preparation, so its offer goes. A retry opens it again at a newer epoch, as a new execution
+   *  with an offer of its own; so does the agent's recovery of a turn whose end was lost. */
+  closed(actorId: string): void {
+    void this.sql`UPDATE actor_turn_fence SET ended_at = ${Date.now()}, facts_json = NULL
+      WHERE actor_id = ${actorId} AND ended_at IS NULL AND superseded_at IS NULL`;
   }
 }

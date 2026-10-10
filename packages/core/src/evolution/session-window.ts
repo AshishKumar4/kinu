@@ -78,12 +78,14 @@ export function initCompletedTurnTable(execRaw: RawSqlExec): void {
              ON completed_turns(actor_id, review, created_at)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_completed_turns_window
              ON completed_turns(actor_id, in_window, created_at)`);
-  // Each turn's opening and the parked review it grades, if any: kept for every turn, so a preparation replayed, after
-  // a reset or after a later turn, opens nothing again.
+  // Each turn's opening and the whole obligation it took, if any: the parked review it grades and the follow-up it grades
+  // it with, written in one statement. Kept for every turn, so a preparation replayed, after a reset or after a later
+  // turn, opens nothing again.
   execRaw(`CREATE TABLE IF NOT EXISTS opened_turns (
     actor_id  TEXT NOT NULL,
     turn_id   TEXT NOT NULL,
     review_id TEXT,
+    followup  TEXT,
     PRIMARY KEY (actor_id, turn_id)
   )`);
   // Both lifetimes end in a DELETE of replayable work, so tombstones are part
@@ -170,10 +172,11 @@ export interface CompletedTurnStore {
   /** Null when empty; the caller settles once the pass has run. */
   claim(): ClaimedWindow | null;
   /**
-   * `turnId`'s opening, once however often its preparation is replayed. It records the newest parked review as the one
-   * it grades, then claims that review with `grade.followup` on its row, so a death between the two, or before the
-   * review runs, leaves the same obligation for the replay or the stale-claim recovery. `grade` null opens without
-   * grading. Null when there is nothing (left) to grade.
+   * `turnId`'s opening, once however often its preparation is replayed. One statement records it with its obligation:
+   * the newest parked review no other opening took, and `grade.followup`. It then claims that review with the recorded
+   * follow-up. A death between the two leaves the obligation recorded: the replay claims it, and a later opening first
+   * queues it for the deferred lane, before it takes a review of its own. `grade` null opens without grading. Null when
+   * there is nothing (left) to grade.
    */
   openTurn(turnId: string, grade: { readonly followup: string | null } | null): PendingTurnReview | null;
   /** Demote parked reviews into the owed queue; the caller decides when a
@@ -304,18 +307,26 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
     openTurn(turnId, grade) {
       authorize();
 
-      if (grade === null) void sql`INSERT INTO opened_turns (actor_id, turn_id, review_id) VALUES (${actorId}, ${turnId}, NULL) ON CONFLICT (actor_id, turn_id) DO NOTHING`;
+      // An earlier opening that died before its claim: its obligation goes to the deferred lane with its own follow-up.
+      void sql`UPDATE completed_turns SET review = 'queued', followup = (SELECT o.followup FROM opened_turns o
+          WHERE o.actor_id = ${actorId} AND o.review_id = completed_turns.id)
+        WHERE actor_id = ${actorId} AND review = 'awaiting_followup'
+          AND id IN (SELECT review_id FROM opened_turns WHERE actor_id = ${actorId} AND turn_id <> ${turnId} AND review_id IS NOT NULL)`;
+
+      if (grade === null) void sql`INSERT INTO opened_turns (actor_id, turn_id, review_id, followup) VALUES (${actorId}, ${turnId}, NULL, NULL) ON CONFLICT (actor_id, turn_id) DO NOTHING`;
       else {
-        void sql`INSERT INTO opened_turns (actor_id, turn_id, review_id) VALUES (${actorId}, ${turnId}, (SELECT id FROM completed_turns
-          WHERE actor_id = ${actorId} AND review = 'awaiting_followup' ORDER BY created_at DESC, rowid DESC LIMIT 1)) ON CONFLICT (actor_id, turn_id) DO NOTHING`;
+        void sql`INSERT INTO opened_turns (actor_id, turn_id, review_id, followup) VALUES (${actorId}, ${turnId}, (SELECT id FROM completed_turns
+          WHERE actor_id = ${actorId} AND review = 'awaiting_followup' ORDER BY created_at DESC, rowid DESC LIMIT 1), ${grade.followup})
+          ON CONFLICT (actor_id, turn_id) DO NOTHING`;
       }
 
-      const graded = sql<{ review_id: string | null }>`SELECT review_id FROM opened_turns WHERE actor_id = ${actorId} AND turn_id = ${turnId}`[0]?.review_id;
+      const opened = sql<{ review_id: string | null; followup: string | null }>`SELECT review_id, followup FROM opened_turns WHERE actor_id = ${actorId} AND turn_id = ${turnId}`[0];
 
-      if (graded === undefined || graded === null || grade === null) return null;
+      if (opened === undefined || opened.review_id === null || grade === null) return null;
 
-      const row = sql<TurnRow>`UPDATE completed_turns SET review = 'claimed', followup = ${grade.followup}
-        WHERE actor_id = ${actorId} AND id = ${graded} AND review = 'awaiting_followup'
+      // The follow-up the opening recorded: a replay's words are the same turn's, and the first are its evidence.
+      const row = sql<TurnRow>`UPDATE completed_turns SET review = 'claimed', followup = ${opened.followup}
+        WHERE actor_id = ${actorId} AND id = ${opened.review_id} AND review = 'awaiting_followup'
         RETURNING id, turn, followup, created_at`[0];
 
       if (!row) return null;

@@ -588,6 +588,24 @@ describe('AgentOrchestrator — turn-outcome review dispatch', () => {
     expect(reviews).toEqual([{ turn: aTurn(0), followup: 'that was wrong' }]);
   });
 
+  /** Cut between the opening's record and its claim, and the turn abandoned: the next opening first sends the review
+   *  the cut one took to the deferred lane with that opening's follow-up, and grades only a review of its own. */
+  test("an opening cut before its claim, then a fresh owner turn, grades the cut one's review with the cut one's words", async () => {
+    const { engine, reviews, execRaw } = fakeEngine();
+    const { host } = fakeHost();
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+
+    orch.recordTurn(aTurn(0), 'conversation');
+    execRaw(`CREATE TRIGGER cut_claim BEFORE UPDATE ON completed_turns WHEN NEW.review = 'claimed'
+      BEGIN SELECT RAISE(ABORT, 'the isolate died'); END`);
+    expect(() => { orch.observeUserTurn('u-cut', 'that was wrong', 'conversation'); }).toThrow('the isolate died');
+    execRaw('DROP TRIGGER cut_claim');
+    orch.observeUserTurn('u-fresh', 'a new request', 'conversation');
+    await engine.runDeferredTurnReviews();
+
+    expect(reviews).toEqual([{ turn: aTurn(0), followup: 'that was wrong' }]);
+  });
+
   /** Cut after the claim, before its review ran: the stale-claim recovery runs the same review with its follow-up. */
   test('an opening whose review died before it ran leaves the review and its follow-up for the recovery', async () => {
     const { engine, reviews, store } = fakeEngine({ dying: { first: true } });
