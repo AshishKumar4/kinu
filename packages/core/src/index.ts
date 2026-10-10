@@ -634,6 +634,7 @@ export {
   temporaryRunSettles,
   taskTurnEnding,
   terminalTaskReport,
+  reportReadsNarration,
   type OwedReport,
   type SubordinateLifetime,
   type TemporaryAgentPort,

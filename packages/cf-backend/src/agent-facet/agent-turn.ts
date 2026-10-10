@@ -18,6 +18,22 @@ import type { StepPacer } from './step-pacer';
 import type { ChatTurnRequest } from '../agent-turns';
 import type { AgentHeadDelta, AgentReview, AgentTurnActivity, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, CacheWarmArm, OpenWork, PreparedAgentTurn } from '@kinu.run/core';
 
+/** The answer's metadata, unless the workspace reads the turn's narration before it can say it. One shape, not a union:
+ *  a stub's promise of a union is a union of promises. */
+export interface AnswerMetadataReply {
+  readonly owesNarration: boolean;
+  readonly metadata: JsonObject | null;
+}
+
+/** Asks without the narration first: a turn that changed no slate it did not show never reads it. */
+export async function answerMetadataOf(
+  workspace: Pick<AgentWorkspace, 'answerMetadata'>, turnId: string, narration: () => Promise<readonly string[]>,
+): Promise<JsonObject | null> {
+  const first = await workspace.answerMetadata(turnId, null);
+
+  return first.owesNarration ? (await workspace.answerMetadata(turnId, await narration())).metadata : first.metadata;
+}
+
 export interface AgentWorkspace {
   session(): NimbusSessionSurface;
   stateSession(): NimbusSessionSurface;
@@ -67,7 +83,9 @@ export interface AgentWorkspace {
   observe(lines: ReadableStream<Uint8Array>): Promise<void>;
   /** Calls the agent's `step` for the turn's waiting step, and answers once that step has ended (`StepPacer`). */
   paceStep(turnId: string): Promise<void>;
-  answerMetadata(turnId: string, narration: readonly string[]): Promise<JsonObject | null>;
+  /** The answer's metadata. The turn's narration names the slates its words promoted, read only when the turn changed
+   *  a slate it did not show: asked without it then, the workspace takes nothing and answers `owesNarration`. */
+  answerMetadata(turnId: string, narration: readonly string[] | null): Promise<AnswerMetadataReply>;
   getAuth(key: string, opts?: AuthRequest): Promise<AuthResolution | null>;
   listCredentials(): ReturnType<UserCredentialClient['listCredentials']>;
   relayDevice(provider: RelayedProvider): ReturnType<UserCredentialClient['relayDevice']>;
@@ -395,9 +413,10 @@ export async function runAgentTask(
 
   const transcript = actor.stores.history.transcript(CHAT_SESSION_ID);
   const completion = report.canonicalCompletion;
+  // The run's report carries its narration, so it is read whether or not the answer's metadata needs it.
   const narration = completion === undefined ? [] : await transcript.narration(answerParts(completion.outputPartReferences, completion.finalTextReference));
 
-  if (completion !== undefined) await database.answer(completion, await workspace.answerMetadata(completion.turnId, narration));
+  if (completion !== undefined) await database.answer(completion, await answerMetadataOf(workspace, completion.turnId, async () => narration));
   await spend.settled();
 
   return {

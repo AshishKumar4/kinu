@@ -75,7 +75,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   executeTool(call: AgentToolCall) { return this.open(this.answers.executeTool(call)); }
   observe(lines: ReadableStream<Uint8Array>) { return this.open(this.answers.observe(lines)); }
   paceStep(turnId: string) { return this.open(this.answers.paceStep(turnId)); }
-  answerMetadata(turnId: string, narration: readonly string[]) { return this.open(this.answers.answerMetadata(turnId, narration)); }
+  answerMetadata(turnId: string, narration: readonly string[] | null) { return this.open(this.answers.answerMetadata(turnId, narration)); }
   reportModelCall(report: ModelCallReport) { return this.open(this.answers.reportModelCall(report)); }
   reportModelOperation(event: ModelOperationEvent) { return this.open(this.answers.reportModelOperation(event)); }
   prepareChat(request: ChatTurnRequest) { return this.open(this.answers.prepareChat(request)); }
@@ -189,7 +189,7 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   executeTool(call: AgentToolCall) { return this.owned((host) => host.executeTool(call)); }
   observe(lines: ReadableStream<Uint8Array>) { return this.owned((host) => host.observe(lines)); }
   paceStep(turnId: string) { return this.owned((host) => host.paceStep(turnId)); }
-  answerMetadata(turnId: string, narration: readonly string[]) { return this.owned((host) => host.answerMetadata(turnId, narration)); }
+  answerMetadata(turnId: string, narration: readonly string[] | null) { return this.owned((host) => host.answerMetadata(turnId, narration)); }
   reportModelCall(report: ModelCallReport) { return this.owned((host) => host.reportModelCall(report)); }
   reportModelOperation(event: ModelOperationEvent) { return this.owned((host) => host.reportModelOperation(event)); }
   prepareChat(request: ChatTurnRequest) { return this.owned((host) => host.prepareChat(request)); }

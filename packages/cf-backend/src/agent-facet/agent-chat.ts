@@ -3,7 +3,7 @@ import {
   CHAT_SESSION_ID, ChatSession, EventLog, HeadCapture, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TerminalTransitions,
   PlanReviewActions, announcementOf, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork,
   planHandoffStillOwed, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, terminalEffect, OWNER_ANSWER_SIGNAL,
-  metadataTier, subordinateTerminalEffects, withCompactionTrigger,
+  metadataTier, reportReadsNarration, subordinateTerminalEffects, withCompactionTrigger,
   bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpening, type JsonObject, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
   type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalTurnFacts, type TerminalTurnParts,
@@ -14,7 +14,7 @@ import { attempt, diagnostics, hold, logged, settle, type KinuError } from '@kin
 import { Effect } from 'effect';
 import type { AgentDatabase } from './agent-database';
 import type { StepPacer } from './step-pacer';
-import { FacetSpend, facetTurnSources, facetTurnTools, type AgentWorkspace, type FacetModels, type LiveTurn } from './agent-turn';
+import { FacetSpend, answerMetadataOf, facetTurnSources, facetTurnTools, type AgentWorkspace, type FacetModels, type LiveTurn } from './agent-turn';
 
 /** The words reach the room on the turn's own stream, and a turn's end on its own call. */
 const ROOM_EVENTS: ReadonlySet<SessionEvent['type']> = new Set(['turn-start', 'step-cut', 'error', 'broadcast', 'history-reverted']);
@@ -102,11 +102,11 @@ export class FacetChat {
         prepareTurn: (item, lease, opening) => this.prepareTurn(item, lease, opening),
         composeRequest: () => this.composeRequest(),
         owedTerminalEffects: (input) => this.owedTerminalEffects(input),
-        answerMetadata: async (turnId, texts) => await workspace.answerMetadata(turnId, await texts()),
+        answerMetadata: async (turnId, texts) => await answerMetadataOf(workspace, turnId, texts),
         // What the turn already told its hirer is the agent's own record, so a reset of the workspace cannot repeat it.
         owedReport: async (ending, assistantText, narration) => await workspace.owedReport(
           { reports: this.deps.database.reports(this.session.currentTurnId ?? ''), ownerDriven: !this.parentDriven },
-          { ending, assistantText, narration: await narration() },
+          { ending, assistantText, narration: reportReadsNarration(ending) ? await narration() : [] },
         ),
         terminal: () => this.terminal,
         driverGate: () => null,

@@ -16,6 +16,7 @@ import {
   agentHistory, chatSessionTurns, gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, runDelegatedTask, storedChat, workspaceFiles,
   workspaceMainActor, mainDatabase,
 } from './helpers/actor-harness';
+import { narrationsHandedOver } from './helpers/agent-facets';
 import { scriptedGateway } from './helpers/platform-gateway';
 
 test('an answer carries each slate its turn wrote, once, and nothing else', async () => {
@@ -41,6 +42,23 @@ test('an answer carries each slate its turn wrote, once, and nothing else', asyn
   const answer = (await storedChat(harness)).filter((message) => message.role === 'assistant').at(-1);
 
   expect(slatesChanged({ metadata: answer?.metadata })).toEqual(['board', 'notes']);
+  // Its words could have promoted either slate, so the workspace read them, once.
+  expect(narrationsHandedOver(agent.agentOf(workspaceMainActor(harness.db).actorId).storageKey)).toHaveLength(1);
+});
+
+/** Read in main's isolate, a turn's narration walks every part of the turn: 3 MB of a 150-step turn's close went to
+ *  words that named no slate and reported no failed task (worker-heap, 2026-10-10). */
+test('an answer that changed no slate hands the workspace none of its words', async () => {
+  const harness = orchestratorHarness();
+  const { agent } = harness;
+
+  agent.harnessDrivingUserMessage('Say hi.', { kinuMode: 'build' });
+  const turns = chatSessionTurns(agent);
+
+  await turns.prepare({ messages: [{ role: 'user', content: 'Say hi.' }] });
+  await turns.settle({ messageId: 'a-unread', text: 'Hi.' });
+
+  expect(narrationsHandedOver(agent.agentOf(workspaceMainActor(harness.db).actorId).storageKey)).toEqual([]);
 });
 
 test('a slate written outside any turn is not claimed by the next answer', async () => {

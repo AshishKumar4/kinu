@@ -60,6 +60,17 @@ export function delayNextTurnEnd(storageKey: string): DelayedTurnEnd {
   return { reached: reached.promise, release: released.resolve };
 }
 
+const handedNarrations = new Map<string, (readonly string[])[]>();
+
+/** Each non-empty narration the isolate under `storageKey` handed its workspace, for an answer's metadata or a report. */
+export function narrationsHandedOver(storageKey: string): readonly (readonly string[])[] {
+  return handedNarrations.get(storageKey) ?? [];
+}
+
+function handNarration(storageKey: string, narration: readonly string[] | null): void {
+  if (narration !== null && narration.length > 0) handedNarrations.set(storageKey, [...narrationsHandedOver(storageKey), narration]);
+}
+
 const lostHandoffs = new Set<string>();
 
 /** The isolate under `storageKey` hands its next settled turn to a workspace that is gone before it takes it. */
@@ -227,7 +238,11 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
 
             await host.turnEnded(event, figures);
           },
-          owedReport: (...args) => host.owedReport(...args),
+          owedReport: (turn, ended) => {
+            handNarration(placement.storageKey, ended.narration);
+
+            return host.owedReport(turn, ended);
+          },
           parentReport: (report) => host.parentReport(report),
           autoTitle: (subject, title) => host.autoTitle(subject, title),
           turnSettled: async (settled) => {
@@ -254,7 +269,11 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
 
             return host.paceStep(turnId);
           },
-          answerMetadata: (turnId, narration) => host.answerMetadata(turnId, narration),
+          answerMetadata: (turnId, narration) => {
+            handNarration(placement.storageKey, narration);
+
+            return host.answerMetadata(turnId, narration);
+          },
           getAuth: (key, opts) => host.getAuth(key, opts),
           listCredentials: () => host.listCredentials(),
           relayDevice: (provider) => host.relayDevice(provider),

@@ -36,6 +36,7 @@ import {
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { agentFacet, agentStateShellId, AgentMemory, AgentStoreBroker, AgentWorkspaceHost, headDeltas, jsonLines, uiChunks, type AgentFacetPlacement } from "./agent-facets";
+import type { AnswerMetadataReply } from "./agent-facet/agent-turn";
 import { DrawnStepSchema } from "./chat-transport";
 import { agentCallsThrough, AgentIsolateSlots } from "./dynamic-worker-slots";
 import { providerBindingsOf, routedModelReads } from "./providers/agent-registry";
@@ -909,7 +910,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return this.tracing.invocation('rpc', `tool.${call.name}`, () => this.agentTurns.execute(actorId, call));
       },
       observe: async (lines) => { await this.chatRooms.hostedRoom(actorId)?.observe(uiChunks(lines)); },
-      answerMetadata: (turnId, narration) => this.takeTurnSlates(actorId, turnId, async () => narration),
+      answerMetadata: (turnId, narration) => this.takeTurnSlates(actorId, turnId, narration),
       reportModelCall: async (report) => { this.reportModelCall(report); },
       reportModelOperation: async (event) => { this.modelOperations(event); },
       getAuth: async (key, opts) => {
@@ -2818,8 +2819,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     for (const id of ids) held[kind].add(id);
   }
 
-  private async takeTurnSlates(actorId: string, turnId: string, texts: () => Promise<readonly string[]>): Promise<JsonObject | null> {
-    const taken = [`${actorId}:${turnId}`, `${actorId}:carried`].map((key) => {
+  /** Without the narration, takes nothing while a slate the turn changed went unshown: only its words can promote it. */
+  private async takeTurnSlates(actorId: string, turnId: string, narration: readonly string[] | null): Promise<AnswerMetadataReply> {
+    const keys = [`${actorId}:${turnId}`, `${actorId}:carried`];
+    const holding = keys.map((key) => this.turnSlates.get(key));
+
+    if (narration === null && slatesToPreview(holding.flatMap((slates) => [...slates?.changed ?? []]), new Set(holding.flatMap((slates) => [...slates?.shown ?? []])), []).length > 0) {
+      return { owesNarration: true, metadata: null };
+    }
+
+    const taken = keys.map((key) => {
       const held = this.turnSlates.get(key);
 
       this.turnSlates.delete(key);
@@ -2833,9 +2842,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const vfs = this.hostedWorkspace().bundle.vfs;
     const kept = [];
 
-    for (const id of slatesToPreview(new Set(changed), shown, await texts())) if (await nimbusExists(vfs, `${SLATES_ROOT}/${id}`)) kept.push(id);
+    for (const id of slatesToPreview(new Set(changed), shown, narration ?? [])) if (await nimbusExists(vfs, `${SLATES_ROOT}/${id}`)) kept.push(id);
 
-    return kept.length === 0 ? null : { [SLATES_CHANGED_METADATA_KEY]: kept };
+    return { owesNarration: false, metadata: kept.length === 0 ? null : { [SLATES_CHANGED_METADATA_KEY]: kept } };
   }
 
   /**
