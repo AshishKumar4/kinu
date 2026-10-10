@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import type { ToolSet } from 'ai';
 import { decodeJsonValue, type JsonValue, type ReviewAnnotation } from '@kinu.run/core';
-import { orchestratorHarness, chatSessionTurns, type ActorHarness, type HarnessOrchestratorAgent, mainDatabase } from './helpers/actor-harness';
+import { createRecordingLogger } from '@kinu.run/core/obs';
+import { orchestratorHarness, chatSessionTurns, tapDiagnostics, workspaceMainActor, type ActorHarness, type HarnessOrchestratorAgent, mainDatabase } from './helpers/actor-harness';
+import { failNextBroadcast } from './helpers/agent-facets';
 import { toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
@@ -199,6 +201,32 @@ describe('Plan mode tool lifecycle', () => {
       .map((frame) => `${String(frame.plan?.revision)}:${String(frame.plan?.status)}`);
 
     expect([...new Set(states)]).toEqual(['1:pending', '1:changes_requested', '2:pending', '2:approved']);
+  });
+
+  /** Plan deliveries share one serial lane; a broadcast that rejected was the lane's, and failed every later plan action. */
+  test('a plan update the workspace refuses to announce fails alone, and the next update is announced', async () => {
+    const harness = orchestratorHarness();
+    const agent = harness.agent;
+    const seen = recordWorkspaceMessages(agent);
+    const plan = await submittedPlan(agent, '# Plan\n\nFirst');
+
+    const note = (id: string): ReviewAnnotation => ({
+      id, blockId: 'paragraph-1', startOffset: 0, endOffset: 5, type: 'COMMENT', text: id, originalText: 'First', createdA: 1,
+    });
+
+    const log = createRecordingLogger();
+    const untap = tapDiagnostics(log);
+
+    try {
+      failNextBroadcast(agent.agentOf(workspaceMainActor(harness.db).actorId).storageKey);
+      await Promise.allSettled([agent.savePlanReviewAnnotations(plan.id, 1, [note('refused')])]);
+
+      expect(await agent.savePlanReviewAnnotations(plan.id, 1, [note('refused'), note('announced')])).toMatchObject({ ok: true });
+      expect(seen.filter((frame) => v.is(PlanUpdateSchema, frame) && JSON.stringify(frame).includes('announced'))).toHaveLength(1);
+      expect(log.emitted.filter((line) => line.event === 'plan.delivery_failed')).toHaveLength(1);
+    } finally {
+      untap();
+    }
   });
 
   test('a pending plan holds neither the owner\'s Auto message nor an event drain, and a dismiss lifts it', async () => {

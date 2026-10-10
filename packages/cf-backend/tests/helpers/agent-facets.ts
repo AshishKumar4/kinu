@@ -71,6 +71,13 @@ function handNarration(storageKey: string, narration: readonly string[] | null):
   if (narration !== null && narration.length > 0) handedNarrations.set(storageKey, [...narrationsHandedOver(storageKey), narration]);
 }
 
+const failedBroadcasts = new Set<string>();
+
+/** The workspace refuses the next broadcast the isolate under `storageKey` asks it to send. */
+export function failNextBroadcast(storageKey: string): void {
+  failedBroadcasts.add(storageKey);
+}
+
 const lostHandoffs = new Set<string>();
 
 /** The isolate under `storageKey` hands its next settled turn to a workspace that is gone before it takes it. */
@@ -225,7 +232,11 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           prepareTurn: (turnId) => host.prepareTurn(turnId),
           prepareChat: (request) => host.prepareChat(request),
           bindProfile: (turnId, profile) => host.bindProfile(turnId, profile),
-          chatEvent: (event) => host.chatEvent(event),
+          chatEvent: async (event) => {
+            if (event.type === 'broadcast' && failedBroadcasts.delete(placement.storageKey)) throw new Error('the workspace refused the broadcast');
+
+            await host.chatEvent(event);
+          },
           turnEnded: async (event, figures) => {
             if (lostTurnEnds.delete(placement.storageKey)) return;
             const delay = delayedTurnEnds.get(placement.storageKey);

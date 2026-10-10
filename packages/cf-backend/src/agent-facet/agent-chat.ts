@@ -12,6 +12,7 @@ import {
 import { createCompactionStateStore, type CompactionStateStore } from '@kinu.run/compaction';
 import { attempt, diagnostics, hold, logged, settle, type KinuError } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
+import { serialQueue } from '@kinu.run/agent-utils';
 import type { AgentDatabase } from './agent-database';
 import type { StepPacer } from './step-pacer';
 import { FacetSpend, answerMetadataOf, facetTurnSources, facetTurnTools, type AgentWorkspace, type FacetModels, type LiveTurn } from './agent-turn';
@@ -52,8 +53,12 @@ export class FacetChat {
   /** The turn's author-stamped metadata, which its tool calls carry: a plan it submits is judged by it. */
   private driving: JsonObject | undefined;
 
-  /** Each plan update in the order its transition happened, delivered as soon as it happened. */
-  private planDelivery: Promise<void> = Promise.resolve();
+  /** Each plan update in the order its transition happened, delivered as soon as it happened; a refused one is
+   *  reported alone and the next still goes. */
+  private readonly planDelivery = serialQueue();
+
+  /** The last update announced, delivered or reported: the lane is serial, so every earlier one has settled first. */
+  private announced: Promise<unknown> = Promise.resolve();
 
   /** Its own plan reviews, in its own store: the owner reviews them through its window (D9). */
   readonly plans: PlanReviewActions;
@@ -204,13 +209,14 @@ export class FacetChat {
   }
 
   private announcePlan(event: BroadcastEvent): void {
-    this.planDelivery = this.planDelivery.then(async () => { await this.deps.workspace.chatEvent({ type: 'broadcast', event }); });
+    this.announced = hold(logged('plan.delivery_failed', { doing: "announcing a plan update in the agent's window", otherwise: 'unavailable' },
+      () => this.planDelivery(async () => { await this.deps.workspace.chatEvent({ type: 'broadcast', event }); })));
   }
 
   /** A plan action, answered once each update it announced has reached the agent's window. */
   async planned<A>(act: (plans: PlanReviewActions) => A | Promise<A>): Promise<A> {
     const result = await act(this.plans);
-    await this.planDelivery;
+    await this.announced;
 
     return result;
   }
