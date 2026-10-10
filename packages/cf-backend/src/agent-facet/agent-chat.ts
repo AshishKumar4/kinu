@@ -1,4 +1,5 @@
 /** A non-main agent's chat in its own isolate (D9). */
+import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   CHAT_SESSION_ID, ChatSession, EventLog, HeadCapture, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TerminalTransitions,
   PlanReviewActions, announcementOf, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork,
@@ -57,12 +58,16 @@ export class FacetChat {
   /** The turn's author-stamped metadata, which its tool calls carry: a plan it submits is judged by it. */
   private driving: JsonObject | undefined;
 
-  /** Each plan update in the order its transition happened, delivered as soon as it happened; a refused one is
-   *  reported alone and the next still goes. */
+  /** Each plan update in the order its transition happened, delivered as soon as it happened; a refused one fails the
+   *  action that announced it alone, and the next still goes. */
   private readonly planDelivery = serialQueue();
 
-  /** The last update announced, delivered or reported: the lane is serial, so every earlier one has settled first. */
-  private announced: Promise<unknown> = Promise.resolve();
+  /** The deliveries of the updates each plan action announced, by the action whose call they ran in: an action may wait
+   *  on a turn that runs another (a decision on the plan its feedback turn revises). */
+  private readonly announcing = new AsyncLocalStorage<Promise<void>[]>();
+
+  /** The last update no plan action owned, delivered or reported. */
+  private unowned: Promise<unknown> = Promise.resolve();
 
   /** Its own plan reviews, in its own store: the owner reviews them through its window (D9). */
   readonly plans: PlanReviewActions;
@@ -215,15 +220,23 @@ export class FacetChat {
     };
   }
 
+  /** The update's delivery, owned by the plan action it ran in. One no action owns has no caller to answer: its refusal
+   *  is reported, and the chat is idle once it settled. */
   private announcePlan(event: BroadcastEvent): void {
-    this.announced = hold(logged('plan.delivery_failed', { doing: "announcing a plan update in the agent's window", otherwise: 'unavailable' },
-      () => this.planDelivery(async () => { await this.deps.workspace.chatEvent({ type: 'broadcast', event }); })));
+    const delivered = this.planDelivery(async () => { await this.deps.workspace.chatEvent({ type: 'broadcast', event }); });
+    const own = this.announcing.getStore();
+
+    if (own !== undefined) own.push(delivered);
+    else this.unowned = hold(logged('plan.delivery_failed', { doing: "announcing a plan update in the agent's window", otherwise: 'unavailable' }, () => delivered));
   }
 
-  /** A plan action, answered once each update it announced has reached the agent's window. */
+  /** A plan action, answered once each update it announced has reached the agent's window; an update refused there is
+   *  its failure, and the next action's updates are announced all the same. */
   async planned<A>(act: (plans: PlanReviewActions) => A | Promise<A>): Promise<A> {
-    const result = await act(this.plans);
-    await this.announced;
+    const own: Promise<void>[] = [];
+    const result = await this.announcing.run(own, async () => await act(this.plans));
+
+    await Promise.all(own);
 
     return result;
   }
@@ -338,6 +351,7 @@ export class FacetChat {
     }
 
     await this.resting;
+    await this.unowned;
     await this.spend.settled();
   }
 
