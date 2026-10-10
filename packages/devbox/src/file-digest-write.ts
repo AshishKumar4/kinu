@@ -9,17 +9,23 @@ const Reply = v.variant('ok', [
 
 export type DigestWrite = v.InferOutput<typeof Reply>;
 
+/** A write's name across its sends: a UUID, safe as a file name in the guest. */
+const OPERATION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+
 /**
  * Writes `data` at `path` only if the file's bytes hash to `expected` (null: only if no file is there). One guest
  * process reads the new bytes from stdin, compares, and replaces through a temp file and a rename, so the compare and
  * the write are the guest's own instant, and a reader never sees half a file.
  */
 export function writeFileIfDigest(
-  container: Pick<Container, 'exec'>, path: string, data: Uint8Array, expected: string | null,
+  container: Pick<Container, 'exec'>,
+  { path, data, expected, operation }: { readonly path: string; readonly data: Uint8Array; readonly expected: string | null; readonly operation: string },
 ): Effect.Effect<DigestWrite, DevboxError> {
   return Effect.gen(function* () {
     if (!path.startsWith('/') || path.includes('\0')) return yield* Effect.fail(new DevboxError('file', `a digest write needs an absolute path, not ${JSON.stringify(path)}`));
-    const writer = yield* attempt('io', () => container.exec(['python3', '-c', WRITE_IF_DIGEST, path, expected ?? ''], { stdin: 'pipe' }));
+
+    if (!OPERATION.test(operation)) return yield* Effect.fail(new DevboxError('file', `a digest write is named by a UUID, not ${JSON.stringify(operation)}`));
+    const writer = yield* attempt('io', () => container.exec(['python3', '-c', WRITE_IF_DIGEST, path, expected ?? '', operation], { stdin: 'pipe' }));
     const stdin = writer.stdin;
 
     if (stdin === null) return yield* Effect.fail(new DevboxError('io', 'the digest write took no stdin'));

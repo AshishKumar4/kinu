@@ -257,8 +257,8 @@ describe('a digest-checked write to the sandbox', () => {
 
 		const handle: SandboxHandle = {
 			...box,
-			async writeFileIfDigest(path, contentBase64, expected) {
-				const answer = await box.writeFileIfDigest(path, contentBase64, expected);
+			async writeFileIfDigest(path, contentBase64, expected, operation) {
+				const answer = await box.writeFileIfDigest(path, contentBase64, expected, operation);
 
 				if (dropped) return answer;
 				dropped = true;

@@ -82,8 +82,9 @@ export interface SandboxHandle {
   readFile(path: string, opts?: { encoding?: 'utf-8' | 'base64' }):
     Promise<{ content?: string; encoding?: string; isBinary?: boolean; exitCode?: number }>;
   writeFile(path: string, content: string, opts?: { encoding?: 'utf-8' | 'base64' }): Promise<JsonValue | void>;
-  /** Lands `contentBase64` only over the bytes whose sha256 is `expected` (null: no file there), in one guest step. */
-  writeFileIfDigest(path: string, contentBase64: string, expected: string | null): Promise<VfsDigestWrite>;
+  /** Lands `contentBase64` only over the bytes whose sha256 is `expected` (null: no file there), in one guest step.
+   *  `operation` names this write across every send of it. */
+  writeFileIfDigest(path: string, contentBase64: string, expected: string | null, operation: string): Promise<VfsDigestWrite>;
   listFiles(path: string, opts?: { recursive?: boolean }):
     Promise<{ files: Array<SandboxFileMetadata & { name: string }> }>;
   /** Native stat; `follow: false` reads the entry itself, never its siblings. */
@@ -831,13 +832,14 @@ export function sandboxFiles(
 
     async writeFileIfDigest(path, data, expected) {
       const wanted = sha256Hex(data);
+      const operation = crypto.randomUUID();
       let sent = false;
 
       return await serving(path, 'open', async () => {
         const resent = sent;
 
         sent = true;
-        const answer = await handle.writeFileIfDigest(path, bytesToBase64(data), expected);
+        const answer = await handle.writeFileIfDigest(path, bytesToBase64(data), expected, operation);
 
         // A resend after a reply lost in transit finds its own bytes there: the first send landed, nothing changed it.
         return resent && !answer.ok && answer.sha256 === wanted ? { ok: true, sha256: wanted } : answer;

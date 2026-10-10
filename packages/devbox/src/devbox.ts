@@ -2393,10 +2393,10 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /** A write that lands only over the bytes it names (`expected`: their sha256; null: no file there), compared and
-   *  replaced in one guest process (`file-digest-write.ts`). */
-  async writeFileIfDigest(path: string, contentBase64: string, expected: string | null) {
+   *  replaced in one guest process (`file-digest-write.ts`); `operation` names it across every send. */
+  async writeFileIfDigest(path: string, contentBase64: string, expected: string | null, operation: string) {
     return await settle(this.#claimed(pathScopes({ path, membership: true }),
-      writeFileIfDigestInGuest(this.#container(), path, Buffer.from(contentBase64, 'base64'), expected)).pipe(Effect.mapError(fileFault)));
+      writeFileIfDigestInGuest(this.#container(), { path, data: Buffer.from(contentBase64, 'base64'), expected, operation })).pipe(Effect.mapError(fileFault)));
   }
 
   /** `deleteFile` claims the subtree: a path can't reveal it is a directory, and a

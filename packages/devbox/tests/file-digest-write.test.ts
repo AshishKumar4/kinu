@@ -1,6 +1,6 @@
 // Runs the guest program at the native exec boundary: the compare and the replacement are one guest process.
 import { afterAll, expect, test } from 'bun:test';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, chmodSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -33,11 +33,11 @@ test('a write lands only over the bytes it names, in one guest process, keeping 
 
   // Saved over after the agent read it.
   writeFileSync(path, 'saved by the owner');
-  const stale = await settle(writeFileIfDigest(container, path, bytes('the rewrite'), sha256('read by the agent')));
+  const stale = await settle(writeFileIfDigest(container, { path, data: bytes('the rewrite'), expected: sha256('read by the agent'), operation: randomUUID() }));
 
   expect({ stale, now: readFileSync(path, 'utf8') }).toEqual({ stale: { ok: false, sha256: sha256('saved by the owner') }, now: 'saved by the owner' });
 
-  const fresh = await settle(writeFileIfDigest(container, path, bytes('the rewrite'), sha256('saved by the owner')));
+  const fresh = await settle(writeFileIfDigest(container, { path, data: bytes('the rewrite'), expected: sha256('saved by the owner'), operation: randomUUID() }));
 
   expect({ fresh, now: readFileSync(path, 'utf8'), mode: statSync(path).mode & 0o777, calls, left: readdirSync(root) })
     .toEqual({ fresh: { ok: true, sha256: sha256('the rewrite') }, now: 'the rewrite', mode: 0o640, calls: 2, left: ['notes.md'] });
@@ -46,7 +46,7 @@ test('a write lands only over the bytes it names, in one guest process, keeping 
 test('with no digest it creates the file, parents too, only where none is', async () => {
   const path = join(root, 'deep', 'er', 'new.md');
 
-  expect(await settle(writeFileIfDigest({ exec: pipeExec }, path, bytes('first'), null))).toEqual({ ok: true, sha256: sha256('first') });
-  expect(await settle(writeFileIfDigest({ exec: pipeExec }, path, bytes('second'), null))).toEqual({ ok: false, sha256: sha256('first') });
+  expect(await settle(writeFileIfDigest({ exec: pipeExec }, { path, data: bytes('first'), expected: null, operation: randomUUID() }))).toEqual({ ok: true, sha256: sha256('first') });
+  expect(await settle(writeFileIfDigest({ exec: pipeExec }, { path, data: bytes('second'), expected: null, operation: randomUUID() }))).toEqual({ ok: false, sha256: sha256('first') });
   expect(readFileSync(path, 'utf8')).toBe('first');
 });

@@ -230,7 +230,7 @@ export function adaptCloudflareSandbox(
     readFile: (path, opts) => settle(onContainer(() => handle.readFile(path, opts))),
     writeFile: (path, content, opts) =>
       settle(onContainer(() => jsonResultOrVoid(handle.writeFile(path, content, opts)))),
-    writeFileIfDigest: (path, content, expected) => settle(onContainer(() => handle.writeFileIfDigest(path, content, expected))),
+    writeFileIfDigest: (path, content, expected, operation) => settle(onContainer(() => handle.writeFileIfDigest(path, content, expected, operation))),
     listFiles: (path, opts) => settle(onContainer(() => handle.listFiles(path, opts))),
     statFile: (path, opts) => settle(onContainer(() => handle.statFile(path, opts))),
     deleteFile: (path) => settle(onContainer(() => jsonResultOrVoid(handle.deleteFile(path)))),
