@@ -223,11 +223,15 @@ describe('MCP presets', () => {
   // the deployment has no GitHub app; the manager had read them again every few seconds.
   test('a failed first read of the deployment\'s apps is asked again, and GitHub then offers its token', async () => {
     await withGallery(async (gallery) => {
-      const page = await freshPage(gallery, 'plugins&mcp-secrets=google&presets=fail-first', 'dark', 'desktop');
+      const page = await freshPage(gallery, 'plugins&mcp-secrets=google&presets=down', 'dark', 'desktop');
 
       try {
-        await page.waitForFunction(() => Number(document.documentElement.dataset.galleryPresetReads ?? '0') >= 2);
+        // Every read on mount fails; once the deployment answers, only a read made after can see it.
         await page.waitForSelector('[data-plugin-add][aria-label="Add GitHub"]');
+        const failed = await page.evaluate(() => Number(document.documentElement.dataset.galleryPresetReads ?? '0'));
+
+        await page.evaluate(() => { window.dispatchEvent(new Event('gallery:presets-up')); });
+        await page.waitForFunction((after) => Number(document.documentElement.dataset.galleryPresetReads ?? '0') > after, {}, failed);
         await page.click('[data-plugin-add][aria-label="Add GitHub"]');
         await page.waitForSelector('input[aria-label="Personal access token"]');
       } finally {

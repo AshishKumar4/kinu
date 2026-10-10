@@ -537,13 +537,17 @@ function workspaceRosterFixture(path: string): Response | null {
   return url.pathname === "/api/user/workspaces" ? fixtureJson(rosterAnswer(url.searchParams)) : null;
 }
 
-/** The deployment's apps; `&presets=fail-first`: the first read fails, as a cold Worker's might. Reads are counted. */
+/** `&presets=down`: reads of the deployment's apps fail until `gallery:presets-up`, as a cold Worker's might. */
+let presetsDown = new URLSearchParams(location.search).get("presets") === "down";
+
+window.addEventListener("gallery:presets-up", () => { presetsDown = false; });
+
+/** The deployment's apps, each read counted. */
 function mcpPresetsFixture(): Response {
   const root = document.documentElement;
-  const reads = Number(root.dataset.galleryPresetReads ?? "0") + 1;
-  root.dataset.galleryPresetReads = String(reads);
+  root.dataset.galleryPresetReads = String(Number(root.dataset.galleryPresetReads ?? "0") + 1);
 
-  if (reads === 1 && new URLSearchParams(location.search).get("presets") === "fail-first") return fixtureJson({ error: "the deployment's apps did not answer" }, 503);
+  if (presetsDown) return fixtureJson({ error: "the deployment's apps did not answer" }, 503);
 
   return fixtureJson([
     { id: "github", appConfigured: mcpSecrets.has("github") },
