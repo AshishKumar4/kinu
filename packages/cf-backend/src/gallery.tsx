@@ -705,14 +705,11 @@ const ACCOUNT_MEMORY_FIXTURE: JsonValue = {
     },
   ],
   notes: [{ id: "acn_1", content: "Invoices go to accounts@example.com on the first of each month.", origin: { by: "agent", workspace: "Support inbox", agent: "main" }, createdAt: NOW - 2 * 864e5 }],
-  pending: [{
-    id: "amp_1", proposal: { kind: "fact", key: "timezone", value: "Asia/Kolkata" },
-    origin: { by: "background", workspace: "Storefront" }, createdAt: NOW - 36e5,
-  }],
 };
 
+/** The read and the roster socket answer one list of proposals, as the user object does. */
 function accountMemoryFixture(path: string, method: string): Response | null {
-  return path === "/api/user/memory" && method === "GET" ? fixtureJson(ACCOUNT_MEMORY_FIXTURE) : null;
+  return path === "/api/user/memory" && method === "GET" ? fixtureJson({ ...v.parse(JsonObjectSchema, ACCOUNT_MEMORY_FIXTURE), pending: galleryMemoryPending }) : null;
 }
 
 function accountComputerSizeFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
@@ -912,13 +909,28 @@ const galleryRosterSockets: GalleryRosterSocket[] = [];
 Object.assign(window, { galleryRosterSockets });
 
 /** `&memory=waiting`: one account-memory proposal waits on the owner, sent as a roster socket opens, as the user
- *  object sends it; deciding it (`POST /api/user/memory/proposals/:id`) sends what is left. */
-const MEMORY_WAITING = galleryQuery.get("memory") === "waiting";
+ *  object sends it; deciding it (`POST /api/user/memory/proposals/:id`) sends what is left. `&memory=timezone` waits
+ *  with another, older one, and `gallery:memory-proposal` files the first while the page is open. */
+const MEMORY_PROPOSALS = new Map<string, JsonValue>([
+  ["waiting", {
+    id: "amp_city", proposal: { kind: "fact", key: "owner_city", value: "Lisbon" },
+    origin: { by: "agent", workspace: "checkout-fixes", agent: "main" }, createdAt: NOW - 60_000,
+  }],
+  ["timezone", {
+    id: "amp_1", proposal: { kind: "fact", key: "timezone", value: "Asia/Kolkata" },
+    origin: { by: "background", workspace: "Storefront" }, createdAt: NOW - 36e5,
+  }],
+]);
 
-let galleryMemoryPending: JsonValue[] = MEMORY_WAITING ? [{
-  id: "amp_city", proposal: { kind: "fact", key: "owner_city", value: "Lisbon" },
-  origin: { by: "agent", workspace: "checkout-fixes", agent: "main" }, createdAt: NOW - 60_000,
-}] : [];
+const seededProposal = MEMORY_PROPOSALS.get(galleryQuery.get("memory") ?? "");
+
+let galleryMemoryPending: JsonValue[] = seededProposal === undefined ? [] : [seededProposal];
+
+window.addEventListener("gallery:memory-proposal", () => {
+  galleryMemoryPending = [...galleryMemoryPending, MEMORY_PROPOSALS.get("waiting") ?? null];
+
+  for (const socket of rosterSockets) galleryMemoryFrame(socket);
+});
 
 function galleryMemoryFrame(socket: EventTarget): void {
   socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ type: "account_memory", pending: galleryMemoryPending }) }));

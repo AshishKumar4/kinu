@@ -772,7 +772,7 @@ describe('Settings → Memory', () => {
       mkdirSync(MEMORY_SHOTS, { recursive: true });
 
       for (const viewport of ['desktop', 'mobile'] as const) {
-        const page = await freshPage(gallery, 'usersettingsstate&section=memory', 'light', viewport);
+        const page = await freshPage(gallery, 'usersettingsstate&section=memory&memory=timezone', 'light', viewport);
 
         try {
           await page.waitForSelector('[data-account-memory]');
@@ -794,6 +794,23 @@ describe('Settings → Memory', () => {
         } finally {
           await page.close();
         }
+      }
+    });
+  });
+
+  // 26244c765: Settings kept its own copy of what waits, read once, so a proposal filed while it was open never showed.
+  test('a proposal filed while Settings is open joins what waits, as the attention stack shows it', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'usersettingsstate&section=memory&memory=timezone', 'light', 'desktop');
+
+      try {
+        await page.waitForSelector('[data-account-memory-proposal="amp_1"]');
+        await page.evaluate(() => { window.dispatchEvent(new Event('gallery:memory-proposal')); });
+        await page.waitForSelector('[data-account-memory-proposal="amp_city"]');
+        expect(await page.$$eval('[data-account-memory-proposal]', (rows) => rows.map((row) => row.getAttribute('data-account-memory-proposal'))))
+          .toEqual(['amp_1', 'amp_city']);
+      } finally {
+        await page.close();
       }
     });
   });
