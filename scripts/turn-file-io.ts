@@ -28,6 +28,8 @@ const isolated = sha !== 'd05ff368d';
 
 const samples = Number(option('samples', '30'));
 
+const COMMAND_HOSTS: readonly string[] = ['github.com', 'codeload.github.com', 'registry.npmjs.org'];
+
 const BuiltConfigSchema = v.object({
   compatibility_date: v.string(), compatibility_flags: v.array(v.string()), vars: v.record(v.string(), v.string()),
   assets: v.object({ binding: v.string(), directory: v.string() }),
@@ -209,6 +211,9 @@ async function model(request: Request): Promise<Response> {
   const entered = performance.now();
   const consumed = measuring ? cpu(enginePid) : 0;
   const url = new URL(request.url);
+
+  // Only the commands subject reaches the network: its clone and install are what it measures.
+  if (subject === 'commands' && COMMAND_HOSTS.includes(url.hostname)) return fetch(request);
 
   if (url.pathname === '/models') return new Response(SCRIPTED_MODELS_BODY);
 
@@ -414,35 +419,70 @@ try {
     })();
   }
 
-  if (subject === 'files') {
-    await ask('/seed');
-    const invoke = async (name: string, input: JsonObject) => await ask(`/tool?name=${name}`, input);
+  const invoke = async (name: string, input: JsonObject) => await ask(`/tool?name=${name}`, input);
 
-    const fileResults: object[] = [];
+  const fileResults: object[] = [];
 
-    const measureOp = async (label: string, operation: (index: number) => Promise<void>, prepare?: () => Promise<void>) => {
+  /** `expect` counts the samples whose tool answer holds the command's correct output. */
+  const measureOp = async (label: string, operation: (index: number) => Promise<string | void>, prepare?: () => Promise<void>, expect?: string) => {
+    await prepare?.();
+    await operation(-1);
+
+    const walls: number[] = [];
+    const cpus: number[] = [];
+    let correct = 0;
+
+    for (let index = 0; index < samples; index++) {
       await prepare?.();
-      await operation(-1);
 
-      const walls: number[] = [];
-      const cpus: number[] = [];
+      const before = cpu(pid);
+      const started = performance.now();
+      const answer = await operation(index);
+      walls.push(performance.now() - started);
+      cpus.push(cpu(pid) - before);
 
-      for (let index = 0; index < samples; index++) {
-        await prepare?.();
+      if (expect !== undefined && typeof answer === 'string' && answer.includes(expect)) correct++;
+    }
 
-        const before = cpu(pid);
-        const started = performance.now();
-        await operation(index);
-        walls.push(performance.now() - started);
-        cpus.push(cpu(pid) - before);
+    const quantile = (values: number[], p: number) => [...values].sort((a, b) => a - b)[Math.ceil(values.length * p) - 1];
 
-      }
-
-      const quantile = (values: number[], p: number) => [...values].sort((a, b) => a - b)[Math.ceil(values.length * p) - 1];
-      const result = { label, samples, wallP50Ms: quantile(walls, 0.5), wallP95Ms: quantile(walls, 0.95), cpuP50Ms: quantile(cpus, 0.5), cpuP95Ms: quantile(cpus, 0.95), cpuMeanMs: cpus.reduce((a, b) => a + b, 0) / samples };
-      fileResults.push(result);
-      process.stdout.write(JSON.stringify({ event: 'file', sha, ...result }) + '\n');
+    const result = {
+      label, samples, wallP50Ms: quantile(walls, 0.5), wallP95Ms: quantile(walls, 0.95), cpuP50Ms: quantile(cpus, 0.5), cpuP95Ms: quantile(cpus, 0.95),
+      cpuMeanMs: cpus.reduce((a, b) => a + b, 0) / samples, ...(expect !== undefined && { correct }),
     };
+
+    fileResults.push(result);
+    process.stdout.write(JSON.stringify({ event: 'file', sha, ...result }) + '\n');
+  };
+
+  const shell = async (command: string) => await invoke('shell', { command, runtime: 'workspace' });
+
+  if (subject === 'commands') {
+    await ask('/seed');
+    // Each expected answer is absent from its command's text, so an echoed command cannot pass for its output.
+    const node = (program: string) => `node -e ${JSON.stringify(program)}`;
+
+    await measureOp('process.out1m', () => shell(`${node("process.stdout.write('x'.repeat(1 << 20))")} | wc -c`), undefined, '1048576');
+    await measureOp('process.utf8.200k', () => shell(`${node("process.stdout.write('\\u00e9'.repeat(100000))")} | wc -c`), undefined, '200000');
+    await measureOp('process.pipe200k', () => shell(`${node('for (let i = 0; i < 200000; i++) console.log(i)')} | tail -1`), undefined, '199999');
+    await measureOp('process.stdin1m', () => shell(
+      `head -c 1048576 /dev/zero | ${node("let n = 0; process.stdin.on('data', (d) => { n += d.length; }).on('end', () => console.log('read=' + n))")}`,
+    ), undefined, 'read=1048576');
+    await measureOp('process.throws', () => shell(`${node("throw new Error('probe')")}; echo "exit=$?"`), undefined, 'exit=1');
+    await measureOp('git.clone', (index) => {
+      const at = `/home/main/perfio/clone-${String(index + 1)}`;
+
+      return shell(`git clone --depth 1 https://github.com/expressjs/express ${at} && echo "commits=$(git -C ${at} rev-list --count HEAD)"`);
+    }, undefined, 'commits=1');
+    await measureOp('npm.install', (index) => {
+      const at = `/home/main/perfio/npm-${String(index + 1)}`;
+
+      return shell(`mkdir -p ${at} && cd ${at} && echo '{"name":"probe","private":true}' > package.json`
+        + ` && npm install --no-audit --no-fund express@4.21.2 && echo "express=$(node -p "require('express/package.json').version")"`);
+    }, undefined, 'express=4.21.2');
+    measured.push(...fileResults);
+  } else if (subject === 'files') {
+    await ask('/seed');
 
     for (const bytes of [4096, 65536, 1048576]) {
       const path = `/home/main/perfio/read-${String(bytes)}.txt`;
