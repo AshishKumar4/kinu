@@ -5,7 +5,7 @@
 
 import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
-import { ConversationSearchStore, historyTurnPairs, sameActorReference, testModel, toolDescription, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
+import { ConversationSearchStore, historyTurnPairs, testModel, toolDescription, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
 import type { ActorHandle, JsonObject } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { resolve } from 'node:path';
@@ -30,7 +30,7 @@ import type {
   RunEvent, RunEventInput, RunEventQuery,
   FileCheckpointListing, FileRestorePlan, FileRestoreResult,
   CheckpointAvailability,
-  WorkMode, SessionHistory,
+  WorkMode,
 } from '@kinu.run/core';
 import { ActorSession, type ActorTurnLease,
   recoverActorTurns, TurnReports,
@@ -48,7 +48,7 @@ import { ActorSession, type ActorTurnLease,
   type RunEventRecorder,
   TriggerRegistry,
   createTimerTrigger, cancelTrigger, fireDueTriggers,
-  EvolutionEngine,
+  type EvolutionEngine,
   agentsActionsFor, betaSwarms, type ProfileCatalog,
   actorHomeName, explorationActorKey,
   type HeadSeat, type HostedNodeSeat, type NodeIdentity, type ModelPricing,
@@ -76,7 +76,7 @@ import { ActorSession, type ActorTurnLease,
   type CodemodeProvider,
   agentRoleSwitch,
   REPORT_TOOL, type ReportDeps,
-  MissionGovernor,
+  type MissionGovernor,
   observeSystemPromptHash,
   type DynamicContext,
   type RuntimeFacts,
@@ -127,8 +127,8 @@ import { ActorSession, type ActorTurnLease,
   WORKSPACE_RUN_ID,
   recordModelOperations, type ModelOperationSink,
   McpToolSurfaceCache, toolSurfaceTokens, type McpServedSurface, type McpSurfaceBudget,
-  createActorHost, defaultLoopOrigin,
-  type ActorHost, type AgentRuntime, type HostedActor, type SqlExec, type AgentOrchestratorDeps, type LoopOrigin, type WriteObserver,
+  defaultLoopOrigin,
+  type ActorHost, type ActorSeat, type HostedActor, type LoopOrigin, type WriteObserver,
   PlanReviewActions, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, ASK_OWNER_TOOL, planSubmissionReach, workModeUnderReview, authoredTurnMetadata, planHandoffStillOwed,
   type PlanDecisionOutcome, type PlanEdit, type PlanReview, type ReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult,
@@ -140,7 +140,9 @@ import { ActorSession, type ActorTurnLease,
 import {
   attempt, diagnostics, KinuError, renderThrownChain, settleSync, tolerate, toKinuError, detach, type Refusal,
 } from '@kinu.run/core/obs';
-import { buildLocalActorRuntime, cleanupFacetScratch, makeSqlExec, soulIn, writeTransaction, type CLIRuntime } from './runtime';
+import { cleanupFacetScratch, makeSqlExec, soulIn, writeTransaction, type CLIRuntime } from './runtime';
+import { createLocalActorHost } from './actor-host';
+import { createLocalOrchestration, type LocalOrchestration } from './orchestration';
 import { localActorDirectory, nodeWorkspace, registerLocalActor, retireLocalActor, type LocalActorBinding } from '@kinu.run/core';
 import { discoverAgentsMd } from './agents-md';
 import { OS_LEASE_PROCESS } from './agent-host/lease-process';
@@ -168,75 +170,9 @@ interface LocalHostedSession {
   readonly wakeHire?: (actorId: string, signal: AgentSignal) => Effect.Effect<void, KinuError>;
 }
 
-/**
- * One construction site for hosted and standalone orchestration. `orchestrationFor` runs before the
- * `ActorSession` exists, so every port resolves the driving session at call time.
- */
-export interface LocalOrchestration {
-  readonly deps: AgentOrchestratorDeps;
-  readonly engine: EvolutionEngine;
-  readonly budget: MissionGovernor;
-  readonly eventLog: EventLog;
-}
-
-export interface LocalOrchestrationInput {
-  readonly runtime: AgentRuntime;
-  readonly history: SessionHistory;
-  readonly eventLog: EventLog;
-  readonly session: () => LocalAgentSession;
-  /** This host runs one task turn and exits; it never starts the cadence. */
-  readonly oneShot: boolean;
-}
-
 type TurnAsked = Pick<ChatTurnInput, 'kind' | 'text' | 'metadata'>;
 
 const NEXT_OWNER_TURN: TurnAsked = { kind: 'user', text: '' };
-
-export function createLocalOrchestration(input: LocalOrchestrationInput): LocalOrchestration {
-  // Opt-in spend governor: no label means no cap.
-  const budget = new MissionGovernor({
-    actor: input.runtime.actor,
-    storage: input.runtime.storage,
-    // Null until the pricing lookup lands; the ledger then blends and says so.
-    pricing: (spec) => input.session().modelPricing(spec),
-    onExhausted: ({ error: _error, ...refusal }) => { input.session().reportBudgetRefusal(refusal); },
-  });
-
-  const engine = new EvolutionEngine(input.runtime, historyTurnPairs(input.history), {
-    // Review calls debit the reviewed turn's mission.
-    governor: budget,
-  });
-
-  engine.onEvent((event) => { input.session().reportEvolutionEvent(event); });
-
-  return {
-    engine,
-    budget,
-    eventLog: input.eventLog,
-    deps: {
-      host: {
-        broadcast: (event) => { input.session().emit({ type: 'broadcast', event }); },
-        enqueueTurn: (turn) => input.session().enqueueTurn(turn),
-        // A seat that is gone runs nothing and has ended: `settled`/`busy` can read it after host teardown.
-        // The cf seam (`seams.turnInFlight`) answers the same.
-        turnInFlight: () => seatRead(input, (session) => session.turnInFlight(), false),
-        closed: () => seatRead(input, (session) => session.closed(), true),
-        setTimer: (fn, ms) => { input.session().setTimer(fn, ms); },
-        reconcileDurableWake: null,
-      },
-      engine,
-      eventLog: input.eventLog,
-      budget,
-      oneShot: input.oneShot,
-      refinementLane: () => input.session().runRefinementLane(),
-      sinks: {
-        logActivity: (event, detail) => { input.session().logActivity(event, detail); },
-        onToolCallEvent: (ev) => input.session().recordActorStepEvent(input.runtime.actor, { type: 'tool_call_end', ...ev }),
-        onStepEvent: (ev) => input.session().recordActorStepEvent(input.runtime.actor, { type: 'step_finish', ...ev }),
-      },
-    },
-  };
-}
 
 type Writable<T> = { -readonly [Key in keyof T]: T[Key] };
 
@@ -313,15 +249,6 @@ export interface LocalAgentSessionOpts {
 /** A job fiber's checkpoint names its job. */
 const FiberJobSchema = v.looseObject({ jobId: v.string() });
 
-/** `read` of the seat, or `gone` once host teardown removed it. */
-function seatRead<T>(input: LocalOrchestrationInput, read: (session: LocalAgentSession) => T, gone: T): T {
-  try {
-    return read(input.session());
-  } catch (cause) {
-    if (cause instanceof KinuError && cause.code === 'missing') return gone;
-    throw cause;
-  }
-}
 
 
 export class LocalAgentSession {
@@ -350,14 +277,6 @@ export class LocalAgentSession {
   pendingLoopOrigin(actorId: string): LoopOrigin | undefined {
     return this.loopOrigins.get(actorId);
   }
-  /**
-   * Write observer for each seat, filled before `acquire` and read by `runtimeFor`. Do not add a
-   * parameter to `runtimeFor` for this. Cleared on release so the next seat cannot inherit it.
-   */
-  private readonly actorWrites = new Map<string, WriteObserver>();
-  /** Actor ids seated as swarm nodes (head rows with node mode). Never cleared: a repeat acquire
-   *  must take the same arm. */
-  private readonly nodeSeats = new Set<string>();
 
   get steering(): TurnSteering {
     return this.actorSession.orchestrator.steering;
@@ -484,8 +403,9 @@ export class LocalAgentSession {
     const orchestration = opts.hosted?.orchestration ?? createLocalOrchestration({
       runtime: this.rt,
       history: this.rt.stores.history,
+      stores: this.rt.stores,
       eventLog: new EventLog(hubSql, this.rt.actor),
-      session: () => this,
+      session: { read: () => this, turnInFlight: () => this.turnInFlight(), closed: () => this.closed() },
       oneShot: this.oneShot,
     });
 
@@ -540,7 +460,17 @@ export class LocalAgentSession {
     this.factsStore = stores.facts;
     this.eventRecorder = stores.eventRecorder;
 
-    this.actorHost = opts.hosted?.host ?? this.buildOwnActorHost(hubSql);
+    this.actorHost = opts.hosted?.host ?? createLocalActorHost({
+      storage: { sql: this.rt.storage.sql, transactionSync: (write) => this.rt.storage.transactionSync(write), exec: (query, ...bindings) => hubSql.exec(query, ...bindings) },
+      directory: localActorDirectory(this.rt.actor).directory,
+      installedBuild: null,
+      answered: (turn) => new TurnReports(this.rt.storage.sql).answered(turn),
+      actorRuntimeFor: () => this.rt,
+      parentRuntimeFor: () => this.rt,
+      sessionFor: () => ({ read: () => this, turnInFlight: () => this.turnInFlight(), closed: () => this.closed() }),
+      oneShot: this.oneShot,
+      loopFor: (bound) => ({ origin: this.loopOrigins.get(bound.reference.actorId) ?? defaultLoopOrigin(bound.record.origin), parent: this.rt }),
+    });
 
     const alarmScheduler: AlarmScheduler = {
       // Synchronous locally (a process timer); the seam is async because the cloud arm is a Durable
@@ -1430,9 +1360,9 @@ export class LocalAgentSession {
       installedBuild: this.actorHost.installedBuild,
       answered: (turn) => new TurnReports(this.rt.storage.sql).answered(turn),
       resumable: (limit) => this.actorHost.resumable(limit),
-      acquire: async (reference) => reference.actorId === this.rt.actor.actorId
+      acquire: async (reference, seat) => reference.actorId === this.rt.actor.actorId
         ? { runtime: this.rt, stores: this.stores, session: this.actorSession }
-        : await this.actorHost.acquire(reference),
+        : await this.actorHost.acquire(reference, seat),
     });
 
     diagnostics.event('actor.turns_recovered', {
@@ -2284,61 +2214,8 @@ export class LocalAgentSession {
     this.recordRunEvent({ type: 'budget_exhausted', ...refusal });
   }
 
-  recordActorStepEvent(actor: ActorHandle, event: Extract<RunEventInput, { type: 'tool_call_end' | 'step_finish' }>): void {
-    if (sameActorReference(actor, this.rt.actor)) {
-      const runId = this.chat.currentRunId;
-
-      if (runId !== null) this.eventRecorder.emit(runId, event);
-
-      return;
-    }
-
-    const hosted = this.actorHost.hosted(actor);
-    const claim = hosted?.session.turnClaim;
-
-    if (hosted === null || claim === undefined || claim === null) {
-      throw new KinuError('missing', 'A reporting actor has no active turn for its event.');
-    }
-
-    hosted.stores.eventRecorder.emit(claim.runId, event);
-  }
-
   reportEvolutionEvent(event: { readonly type: string; readonly message: string }): void {
     this.emit({ type: 'evolution', event: event.type, message: event.message });
-  }
-
-  /** The ActorHost for a session with no {@link LocalAgentHost} above it; it is the root of its tree. */
-  private buildOwnActorHost(hubSql: SqlExec): ActorHost {
-    const { directory } = localActorDirectory(this.rt.actor);
-
-    return createActorHost({
-      tracing: undefined,
-      storage: {
-        sql: this.rt.storage.sql,
-        transactionSync: (write) => this.rt.storage.transactionSync(write),
-        exec: (query, ...bindings) => hubSql.exec(query, ...bindings),
-      },
-      directory,
-      installedBuild: null,
-      answered: (turn) => new TurnReports(this.rt.storage.sql).answered(turn),
-      // The seater's observer if any; `nodeSeats` tells the builder a head row seats a node.
-      runtimeFor: (bound) => buildLocalActorRuntime(this.rt, bound, this.pendingWriteObserver(bound.reference.actorId), this.nodeSeats.has(bound.reference.actorId)),
-      filesFor: (bound) => this.rt.filesForActor(bound.handle),
-      orchestrationFor: (bound) => createLocalOrchestration({
-        runtime: bound.runtime,
-        history: bound.stores.history,
-        eventLog: new EventLog(hubSql, bound.handle),
-        // Heads and nodes run in this process, so this session is their fan-out and queue.
-        session: () => this,
-        oneShot: this.oneShot,
-      }).deps,
-      // A head inherits the parent's promoted program, making it a fork of this agent.
-      loopFor: (bound) => ({
-        origin: this.loopOrigins.get(bound.reference.actorId) ?? defaultLoopOrigin(bound.record.origin),
-        parent: this.rt,
-      }),
-      contextEvents: (bound) => bound.stores.eventRecorder,
-    });
   }
 
   /** Byte-stability telemetry: the system prompt should change only on soul/skill/model events. */
@@ -2632,15 +2509,13 @@ export class LocalAgentSession {
     // Both named before acquire: the host seeds the loop and builds the runtime while building the actor.
     const { binding, seat } = await this.seatRunActor(input.id, (actorId) => {
       this.loopOrigins.set(actorId, input.loop);
-      this.actorWrites.set(actorId, writes);
-    });
+    }, { kind: 'head', writes });
 
     return {
       ...seat,
       release: async () => {
         this.actorHost.release(binding.reference);
         this.loopOrigins.delete(binding.reference.actorId);
-        this.actorWrites.delete(binding.reference.actorId);
         await retireLocalActor(this.rt.actor, binding.name, binding.reference, async () => {
           const agentName = actorHomeName(binding);
 
@@ -2672,7 +2547,7 @@ export class LocalAgentSession {
   }
 
   /** One run actor's seat, for a head or a swarm node; `declare` runs before the host builds it. */
-  private async seatRunActor(creationId: string, declare: (actorId: string) => void): Promise<{
+  private async seatRunActor(creationId: string, declare: (actorId: string) => void, seat: ActorSeat): Promise<{
     readonly binding: LocalActorBinding;
     readonly seat: HostedNodeSeat;
   }> {
@@ -2681,7 +2556,7 @@ export class LocalAgentSession {
     });
 
     declare(binding.reference.actorId);
-    const actor = await this.actorHost.acquire(binding.reference);
+    const actor = await this.actorHost.acquire(binding.reference, seat);
     const runId = this.chat.currentRunId ?? WORKSPACE_RUN_ID;
 
     const compaction = hostedActorCompaction(actor, {
@@ -2703,19 +2578,12 @@ export class LocalAgentSession {
     };
   }
 
-  /** The write observer named for `actorId`. Public so `LocalAgentHost.runtimeFor` reads the same
-   *  slot, keeping one reader of {@link actorWrites}. */
-  pendingWriteObserver(actorId: string): WriteObserver | undefined {
-    return this.actorWrites.get(actorId);
-  }
-
   /**
    * Seat one swarm node as a logical actor; a factory per node (see core's `HostedNodeSeat`). No release:
    * retirement belongs to the owning search. Public so an eval can seat nodes through this session.
    */
   async hostNode(node: NodeIdentity): Promise<HostedNodeSeat> {
-    // Declared before the host builds it: only this slot marks a run actor as a node.
-    return (await this.seatRunActor(node.nodeId, (actorId) => { this.nodeSeats.add(actorId); })).seat;
+    return (await this.seatRunActor(node.nodeId, () => {}, { kind: 'node' })).seat;
   }
 
   /** Where a run actor's turns are assembled from: its own stores, pins and lineage, this workspace's

@@ -201,7 +201,7 @@ export async function admitHostedTask(
     };
   };
 
-  return await seams.host.run(reference, (actor) => settle(
+  return await seams.host.run(reference, { kind: 'actor' }, (actor) => settle(
     refusal(input.creationId !== undefined && input.creationId !== actor.record.creationId,
       () => new KinuError('denied', 'The birth assignment belongs to a different actor creation.'))
       .pipe(Effect.andThen(Effect.promise(() => admitAs(actor)))),
@@ -313,7 +313,7 @@ export function prepareHostedTurn(
 ): Promise<PreparedHostedTurn> {
   return settle(Effect.gen(function* () {
     const run = task.run;
-    const actor = run?.inference.actor ?? (yield* Effect.promise(() => seams.host.acquire(reference)));
+    const actor = run?.inference.actor ?? (yield* Effect.promise(() => seams.host.acquire(reference, { kind: 'actor' })));
     const { turn, model } = yield* hostedTaskTurn(seams, actor, task, run);
 
     // Only the owner's own words answer: the agent's naming and a restart's re-read prepare a turn of no words.
@@ -346,7 +346,7 @@ function ownerAnswersWait(seams: HostedActorSeams, actor: BoundActor): void {
 /** The raw tools a turn of the hosted actor's own would hold in `mode`: a retry of its job runs on them, as it. */
 export function hostedRetryTools(seams: HostedActorSeams, reference: ActorReference, mode: WorkMode, sequenceId: string): Promise<ToolSet> {
   return settle(Effect.gen(function* () {
-    const actor = yield* Effect.promise(() => seams.host.acquire(reference));
+    const actor = yield* Effect.promise(() => seams.host.acquire(reference, { kind: 'actor' }));
     const { turn } = yield* hostedTaskTurn(seams, actor, { body: '', mode, sequenceId, parentDriven: true, driving: undefined }, undefined);
 
     return (yield* Effect.promise(() => seams.taskProfile(turn))).raw;
@@ -469,7 +469,7 @@ export function hostedSubordinateRuntime(
     spawn: (input) => settle(registerChild(input, 'register').pipe(Effect.tap((reference) => Effect.promise(() =>
       // The child's own config rows only; the parent's roster row is core's (`createTeamToolDeps`),
       // one writer per fact.
-      seams.host.run(reference, (actor) => {
+      seams.host.run(reference, { kind: 'actor' }, (actor) => {
         actor.stores.config.setDisplayNameOrigin(input.displayName, input.nameOrigin);
         actor.stores.config.setRoleSelection(input.role);
         actor.stores.config.setAssignedTier(input.tier ?? null);
@@ -478,10 +478,10 @@ export function hostedSubordinateRuntime(
       }))))),
     cancelBirth: (input) => settle(registerChild(input, 'cancelCreation')),
     assign: (name, input) => settle(asHire(name, (reference) => admitHostedTask(seams, reference, { kind: 'task' as const, ...input }))),
-    status: (name) => settle(asHire(name, (reference) => seams.host.run(reference, async (actor) =>
+    status: (name) => settle(asHire(name, (reference) => seams.host.run(reference, { kind: 'actor' }, async (actor) =>
       readSubordinateLiveStatus(seams.exec, actor.handle)))),
     message: (name, content, mode) => settle(asHire(name, (reference) => admitHostedTask(seams, reference, { kind: 'message', body: content, mode }))),
-    rename: (name, displayName, nameOrigin) => settle(asHire(name, (reference) => seams.host.run(reference, async (actor) => {
+    rename: (name, displayName, nameOrigin) => settle(asHire(name, (reference) => seams.host.run(reference, { kind: 'actor' }, async (actor) => {
       actor.stores.config.setDisplayNameOrigin(displayName, nameOrigin);
     }))),
     /** Wipe removes rows, home and state subtree; archive keeps them. `observed` lets the host settle a live claim. */
@@ -589,9 +589,9 @@ export async function hostHead(seams: HostedActorSeams, input: HeadInput): Promi
     seat: async (_input, writes) => {
       const unwatch = seams.watchWrites(reference, writes);
 
-      return await settle(Effect.map(runActorSeat(seams, reference), (seat): HeadSeat => ({
+      return await settle(Effect.map(runActorSeat(seams, reference, 'head'), (seat): HeadSeat => ({
         ...seat,
-        queue: (body) => seams.host.run(reference, body),
+        queue: (body) => seams.host.run(reference, { kind: 'head' }, body),
         release: async () => {
           unwatch();
           await retire();
@@ -618,9 +618,9 @@ export async function hostHead(seams: HostedActorSeams, input: HeadInput): Promi
 }
 
 /** One run actor's turn seams, over its acquired actor. */
-function runActorSeat(seams: HostedActorSeams, reference: ActorReference): Effect.Effect<HostedNodeSeat, KinuError> {
+function runActorSeat(seams: HostedActorSeams, reference: ActorReference, kind: 'head' | 'node'): Effect.Effect<HostedNodeSeat, KinuError> {
   return Effect.gen(function* () {
-    const actor = yield* attempt({ doing: 'acquiring a hosted run actor', otherwise: 'io' }, () => seams.host.acquire(reference));
+    const actor = yield* attempt({ doing: 'acquiring a hosted run actor', otherwise: 'io' }, () => seams.host.acquire(reference, { kind }));
     const runtime = yield* cfRuntimeOf(actor, 'a hosted run');
 
     return {
@@ -643,7 +643,7 @@ export async function hostNodeSeat(
 ): Promise<HostedNodeSeat> {
   const { reference } = await hostRunActor(seams, { creationId: node.nodeId });
 
-  return await settle(runActorSeat(seams, reference));
+  return await settle(runActorSeat(seams, reference, 'node'));
 }
 
 /** A swarm node's `eval`, over the hosted actor the node runs as. */

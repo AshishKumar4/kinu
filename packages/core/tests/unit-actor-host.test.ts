@@ -179,7 +179,7 @@ function claimOf({ actorId, turnId, epoch, runId, context }: ClaimSeed): ActorTu
 describe('one workspace database, many logical actors', () => {
   test('learning switched off between turns stops the independent background pass', async () => {
     const fx = build(undefined, undefined, true);
-    const actor = await fx.host.acquire(fx.main);
+    const actor = await fx.host.acquire(fx.main, { kind: 'actor' });
 
     try {
       const lease = actor.session.beginTurn({ runId: 'run', turnId: 'turn' }, 'build', 0);
@@ -206,7 +206,7 @@ describe('one workspace database, many logical actors', () => {
 
   test('a learning change applies to the next turn, not the turn already opened', async () => {
     const fx = build(undefined, undefined, true);
-    const actor = await fx.host.acquire(fx.main);
+    const actor = await fx.host.acquire(fx.main, { kind: 'actor' });
 
     const policies = [
       { before: true, after: false, recorded: 1 },
@@ -244,7 +244,7 @@ describe('one workspace database, many logical actors', () => {
   ] as const) {
     test(`acquired actors keep step and turn learning separate: auto=${policy.automatic}, mode=${policy.mode}`, async () => {
       const fx = build(undefined, undefined, policy.automatic);
-      const main = await fx.host.acquire(fx.main);
+      const main = await fx.host.acquire(fx.main, { kind: 'actor' });
 
       const temporary = fx.directory.create({
         parent: main.handle, name: 'temporary', origin: 'agent', lifetime: 'task', creationId: 'temporary',
@@ -258,7 +258,7 @@ describe('one workspace database, many logical actors', () => {
 
       try {
         for (const expected of actors) {
-          const actor = await fx.host.acquire(expected.reference);
+          const actor = await fx.host.acquire(expected.reference, { kind: 'actor' });
 
           for (const index of [0, 1]) {
             const lease = actor.session.beginTurn({ runId: `run-${index}`, turnId: `turn-${index}` }, policy.mode, index);
@@ -287,7 +287,7 @@ describe('one workspace database, many logical actors', () => {
         const reopened = fx.rebuild();
 
         for (const expected of actors) {
-          expect((await reopened.host.acquire(expected.reference)).session.orchestrator.sessionTurnIndex).toBe(expected.turns);
+          expect((await reopened.host.acquire(expected.reference, { kind: 'actor' })).session.orchestrator.sessionTurnIndex).toBe(expected.turns);
         }
 
         reopened.host.releaseAll();
@@ -300,8 +300,8 @@ describe('one workspace database, many logical actors', () => {
 
   test('two hosted actors with the SAME turn id keep separate claims in one database', async () => {
     const fx = build();
-    const alpha = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'));
-    const beta = await fx.host.acquire(fx.child('beta', 'c-beta', 'agent'));
+    const alpha = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'), { kind: 'actor' });
+    const beta = await fx.host.acquire(fx.child('beta', 'c-beta', 'agent'), { kind: 'actor' });
     expect(alpha.handle.actorId).not.toBe(beta.handle.actorId);
 
     await alpha.stores.claims.admit({ runId: 'run-a', turnId: 'turn-1', workMode: 'build', program: BUILTIN, context: contextOf(alpha) });
@@ -317,7 +317,7 @@ describe('one workspace database, many logical actors', () => {
   test('a released actor stops authorising statements through the stores it handed out', async () => {
     const fx = build();
     const ref = fx.child('alpha', 'c-alpha', 'agent');
-    const alpha = await fx.host.acquire(ref);
+    const alpha = await fx.host.acquire(ref, { kind: 'actor' });
     const claims = alpha.stores.claims;
     await claims.admit({ runId: 'r', turnId: 't', workMode: 'build', program: BUILTIN, context: contextOf(alpha) });
     expect(claims.read('t')?.runId).toBe('r');
@@ -333,7 +333,7 @@ describe('one workspace database, many logical actors', () => {
     const fx = build();
     const [a, b, c] = [fx.child('alpha', 'c-alpha', 'agent'), fx.child('beta', 'c-beta', 'agent'), fx.child('gamma', 'c-gamma', 'agent')];
 
-    for (const ref of [a, b, c]) await fx.host.acquire(ref);
+    for (const ref of [a, b, c]) await fx.host.acquire(ref, { kind: 'actor' });
     fx.host.release(a);
     fx.host.release(a);
     await fx.host.retire(fx.main, { reference: b, name: 'beta', destroy: false, interrupt: false });
@@ -346,18 +346,18 @@ describe('one workspace database, many logical actors', () => {
   test('an actor whose build fails after its runtime exists lets that runtime go', async () => {
     const fx = build();
 
-    await expect(fx.host.acquire(fx.child('unorchestrated', 'c-un', 'agent'))).rejects.toThrow('orchestration failed');
+    await expect(fx.host.acquire(fx.child('unorchestrated', 'c-un', 'agent'), { kind: 'actor' })).rejects.toThrow('orchestration failed');
     expect(fx.released).toEqual(['unorchestrated']);
   });
 
   test('re-acquiring an actor does not revive the binding that was released', async () => {
     const fx = build();
     const ref = fx.child('alpha', 'c-alpha', 'agent');
-    const first = await fx.host.acquire(ref);
+    const first = await fx.host.acquire(ref, { kind: 'actor' });
     const staleClaims = first.stores.claims;
     fx.host.release(ref);
 
-    const second = await fx.host.acquire(ref);
+    const second = await fx.host.acquire(ref, { kind: 'actor' });
     expect(second.handle).not.toBe(first.handle);
     // The new binding works…
     await second.stores.claims.admit({ runId: 'r2', turnId: 't2', workMode: 'build', program: BUILTIN, context: contextOf(second) });
@@ -369,7 +369,7 @@ describe('one workspace database, many logical actors', () => {
   test('reading a retained actor starts nothing', async () => {
     const fx = build();
     const ref = fx.child('gone', 'c-gone', 'agent');
-    const hosted = await fx.host.acquire(ref);
+    const hosted = await fx.host.acquire(ref, { kind: 'actor' });
     await hosted.stores.claims.admit({ runId: 'r', turnId: 't', workMode: 'build', program: BUILTIN, context: contextOf(hosted) });
     fx.host.release(ref);
 
@@ -385,23 +385,23 @@ describe('one workspace database, many logical actors', () => {
     const fx = build();
     const a = fx.child('alpha', 'c-alpha', 'agent');
     const b = fx.child('beta', 'c-beta', 'agent');
-    await fx.host.acquire(a);
-    await fx.host.acquire(b);
+    await fx.host.acquire(a, { kind: 'actor' });
+    await fx.host.acquire(b, { kind: 'actor' });
     const order: string[] = [];
     const held = Promise.withResolvers<void>();
     const started = Promise.withResolvers<void>();
 
-    const first = fx.host.run(a, async () => {
+    const first = fx.host.run(a, { kind: 'actor' }, async () => {
       order.push('a1-start');
       started.resolve();
       await held.promise;
       order.push('a1-end');
     });
 
-    const second = fx.host.run(a, async () => { order.push('a2'); });
+    const second = fx.host.run(a, { kind: 'actor' }, async () => { order.push('a2'); });
     await started.promise;
     // Another actor's work runs while this one is parked.
-    await fx.host.run(b, async () => { order.push('b1'); });
+    await fx.host.run(b, { kind: 'actor' }, async () => { order.push('b1'); });
     expect(order).toEqual(['a1-start', 'b1']);
     held.resolve();
     await Promise.all([first, second]);
@@ -411,12 +411,12 @@ describe('one workspace database, many logical actors', () => {
   test('an abandoned caller does not cancel hosted work', async () => {
     const fx = build();
     const ref = fx.child('alpha', 'c-alpha', 'agent');
-    const hosted = await fx.host.acquire(ref);
+    const hosted = await fx.host.acquire(ref, { kind: 'actor' });
     const held = Promise.withResolvers<void>();
     let finished = false;
 
     // The caller starts work and walks away.
-    const work = fx.host.run(ref, async () => {
+    const work = fx.host.run(ref, { kind: 'actor' }, async () => {
       await held.promise;
       finished = true;
 
@@ -429,15 +429,15 @@ describe('one workspace database, many logical actors', () => {
     // Still hosted, still usable, never interrupted.
     expect(fx.host.hosted(ref)).not.toBeNull();
     expect(hosted.session.inFlight).toBe(false);
-    await expect(fx.host.run(ref, async () => 'again')).resolves.toBe('again');
+    await expect(fx.host.run(ref, { kind: 'actor' }, async () => 'again')).resolves.toBe('again');
   });
 
   test('destructive retirement refuses a stale alias and a stale epoch, then purges only that actor', async () => {
     const fx = build();
     const a = fx.child('alpha', 'c-alpha', 'agent');
     const b = fx.child('beta', 'c-beta', 'agent');
-    const alpha = await fx.host.acquire(a);
-    const beta = await fx.host.acquire(b);
+    const alpha = await fx.host.acquire(a, { kind: 'actor' });
+    const beta = await fx.host.acquire(b, { kind: 'actor' });
     const claim = await alpha.stores.claims.admit({ runId: 'r1', turnId: 'turn-1', workMode: 'build', program: BUILTIN, context: contextOf(alpha) });
     await beta.stores.claims.admit({ runId: 'r2', turnId: 'turn-1', workMode: 'build', program: BUILTIN, context: contextOf(beta) });
     alpha.stores.claims.settle(claim, 'completed');
@@ -463,7 +463,7 @@ describe('one workspace database, many logical actors', () => {
   test('a retained dismissal keeps the rows a purge would have taken', async () => {
     const fx = build();
     const a = fx.child('alpha', 'c-alpha', 'agent');
-    const alpha = await fx.host.acquire(a);
+    const alpha = await fx.host.acquire(a, { kind: 'actor' });
     await alpha.stores.claims.admit({ runId: 'r', turnId: 't', workMode: 'build', program: BUILTIN, context: contextOf(alpha) });
     alpha.stores.claims.settle(claimOf({ actorId: a.actorId, turnId: 't', epoch: 1, runId: 'r', context: contextOf(alpha) }), 'completed');
 
@@ -479,8 +479,8 @@ describe('one workspace database, many logical actors', () => {
     const fx = build();
     const a = fx.child('alpha', 'c-alpha', 'agent');
     const b = fx.child('beta', 'c-beta', 'agent');
-    const alpha = await fx.host.acquire(a);
-    const beta = await fx.host.acquire(b);
+    const alpha = await fx.host.acquire(a, { kind: 'actor' });
+    const beta = await fx.host.acquire(b, { kind: 'actor' });
     const program: ActorProgramIdentity = { kind: 'scaffold', version: 3, digest: 'digest-3', build: null };
     await alpha.stores.claims.admit({ runId: 'run-a', turnId: 'turn-live', workMode: 'build', program, context: contextOf(alpha) });
     const settled = await beta.stores.claims.admit({ runId: 'run-b', turnId: 'turn-done', workMode: 'build', program, context: contextOf(beta) });
@@ -498,7 +498,7 @@ describe('one workspace database, many logical actors', () => {
 
   test('recovery retains a verified claim as owed without claiming execution resumed', async () => {
     const fx = build();
-    const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'));
+    const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'), { kind: 'actor' });
     const source = 'export default async function main() { return "retained"; }';
     await writeText(actor.runtime.storage.vfs, `${actor.runtime.identity.scaffold.path}.v1`, source);
 
@@ -517,7 +517,7 @@ describe('one workspace database, many logical actors', () => {
 
   test('a claim whose request record is missing is settled once, not owed on every later wake', async () => {
     const fx = build();
-    const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'));
+    const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'), { kind: 'actor' });
     const source = 'export default async function main() { return "retained"; }';
     await writeText(actor.runtime.storage.vfs, `${actor.runtime.identity.scaffold.path}.v1`, source);
 
@@ -539,7 +539,7 @@ describe('one workspace database, many logical actors', () => {
    *  of `steps`, and left open there, as a run a memory or wall reset of its activation ended. */
   async function interruptedRuns(hostBuild?: string | null): Promise<{ actor: BoundActor; run: (steps: readonly number[], installedBuild?: string | null, cut?: 'provider' | 'work') => Promise<void>; fx: Fixture }> {
     const fx = build(undefined, undefined, false, hostBuild);
-    const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'));
+    const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'), { kind: 'actor' });
     const source = 'export default async function main() { return "retained"; }';
     await writeText(actor.runtime.storage.vfs, `${actor.runtime.identity.scaffold.path}.v1`, source);
     const program: ActorProgramIdentity = { kind: 'scaffold', version: 1, digest: sha256Hex(source), build: null };
@@ -651,7 +651,7 @@ describe('one workspace database, many logical actors', () => {
 
   test('recovery leaves an unreadable actor claim owed across repeated opens', async () => {
     const fx = build();
-    const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'));
+    const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'), { kind: 'actor' });
     await actor.stores.claims.admit({ runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: contextOf(actor), program: BUILTIN });
     const cold = build(fx.db, 'alpha');
 
@@ -666,7 +666,7 @@ describe('one workspace database, many logical actors', () => {
 
   test('recovery refuses changed program bytes once but does not settle a live actor', async () => {
     const fx = build();
-    const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'));
+    const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'), { kind: 'actor' });
     await actor.stores.claims.admit({
       runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: contextOf(actor),
       program: { kind: 'scaffold', version: 1, digest: sha256Hex('missing'), build: null },
@@ -685,7 +685,7 @@ describe('one workspace database, many logical actors', () => {
 
   test('recovery rechecks live ownership after awaited program verification', async () => {
     const fx = build();
-    const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'));
+    const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'), { kind: 'actor' });
     const path = `${actor.runtime.identity.scaffold.path}.v1`;
     await writeText(actor.runtime.storage.vfs, path, 'changed source');
     await actor.stores.claims.admit({
@@ -721,7 +721,7 @@ describe('one workspace database, many logical actors', () => {
 
   test('a claim whose consumed step has lost its list settles error once, and the failure names the request', async () => {
     const fx = build();
-    const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'));
+    const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'), { kind: 'actor' });
     const claim = await actor.stores.claims.admit({ runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: contextOf(actor), program: BUILTIN });
     const step = await actor.stores.claims.consume(claim, { index: 0, messages: [{ role: 'user', content: 'go' }] });
     // The row naming the step's list, which no request written before the requests lineage has.
@@ -748,8 +748,8 @@ describe('one workspace database, many logical actors', () => {
     const fx = build();
     const a = fx.child('alpha', 'c-alpha', 'agent');
     const b = fx.child('beta', 'c-beta', 'agent');
-    const alpha = await fx.host.acquire(a);
-    const beta = await fx.host.acquire(b);
+    const alpha = await fx.host.acquire(a, { kind: 'actor' });
+    const beta = await fx.host.acquire(b, { kind: 'actor' });
     await alpha.stores.claims.admit({ runId: 'r-a', turnId: 't-a', workMode: 'build', program: BUILTIN, context: contextOf(alpha) });
     await beta.stores.claims.admit({ runId: 'r-b', turnId: 't-b', workMode: 'build', program: BUILTIN, context: contextOf(beta) });
     // A table grown after the host was built: the purge reads its table set off the
@@ -776,7 +776,7 @@ describe('one workspace database, many logical actors', () => {
   test('a parent reaches its own children context stores and nobody else', async () => {
     const fx = build();
     const a = fx.child('alpha', 'c-alpha', 'agent');
-    await fx.host.acquire(a);
+    await fx.host.acquire(a, { kind: 'actor' });
 
     const resolver = childContextResolver({
       directory: fx.directory, parent: fx.directory.open(fx.main.actorId),

@@ -822,7 +822,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       // Its own named shell, never the agent's: the session user's identity must not reach the agent's commands.
       stateSession: async () => await this.hostedWorkspace().session({ shellId: agentStateShellId(this.liveAgentOf(actorId).storageKey) }),
-      memory: () => new AgentMemory(async () => (await this.actorHost().acquire(actorReferenceOf(this.liveAgentOf(actorId)))).runtime.memory),
+      memory: () => new AgentMemory(async () => (await this.actorHost().acquire(actorReferenceOf(this.liveAgentOf(actorId)), { kind: 'actor' })).runtime.memory),
       program: (turnId, ...args) => this.agentTurns.program(actorId, turnId, ...args),
       traceTurn: (turnId, event) => this.agentTurns.trace(actorId, turnId, event),
       traceStream: (turnId, lines) => this.agentTurns.traceStream(actorId, turnId, headDeltas(lines)),
@@ -852,7 +852,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         await this.mainTurnSettled(settled);
       },
       hireAdvisor: async (advisor) => {
-        const { session } = await this.actorHost().acquire(actorReferenceOf(this.liveAgentOf(actorId)));
+        const { session } = await this.actorHost().acquire(actorReferenceOf(this.liveAgentOf(actorId)), { kind: 'actor' });
 
         await session.hireAdvisor(advisor);
       },
@@ -922,7 +922,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         const parent = parentActorId === this.actorHandle().actorId
           ? this.actorSession
-          : (await this.actorHost().acquire(actorReferenceOf(this.actorDirectoryStore().open(parentActorId)))).session;
+          : (await this.actorHost().acquire(actorReferenceOf(this.actorDirectoryStore().open(parentActorId)), { kind: 'actor' })).session;
 
         return await parent.orchestrator.inbox.send(signal);
       },
@@ -1037,8 +1037,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ...host,
       // Main's turns are prepared here as any agent's (D9); its runtime and session are this object's own, and its loop
       // is seeded as every hosted actor's is, so its facet runs on the version it names.
-      acquire: async (reference) => {
-        if (reference.actorId !== this.actorHandle().actorId) return await host.acquire(reference);
+      acquire: async (reference, seat) => {
+        if (reference.actorId !== this.actorHandle().actorId) return await host.acquire(reference, seat);
         await seedActorLoop(this.rt, null, defaultLoopOrigin('system'));
 
         return { ...host.bindStores(reference), runtime: this.rt, session: this.actorSession };
@@ -1733,7 +1733,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** One hired agent's due reactions; failure rejects with a classified error. */
   drainHostedActor(reference: ActorReference): Promise<void> {
     return settle(attempt({ doing: 'draining a hired agent\'s reactions this wake was armed for', otherwise: 'io' }, async () => {
-      await (await this.actorHost().acquire(reference)).session.orchestrator.drainPendingEvents({ rethrow: true });
+      await (await this.actorHost().acquire(reference, { kind: 'actor' })).session.orchestrator.drainPendingEvents({ rethrow: true });
       this.releaseIdleHosted(reference);
     }));
   }
@@ -1898,7 +1898,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (!isSubordinateOrigin(record.origin)) return false;
 
-    for (const turn of recovered.stalled) await retireStalledTask(this.hostedSeams(), await this.actorHost().acquire(actorReferenceOf(record)), turn);
+    for (const turn of recovered.stalled) await retireStalledTask(this.hostedSeams(), await this.actorHost().acquire(actorReferenceOf(record), { kind: 'actor' }), turn);
 
     return recovered.stalled.some((turn) => turnIds.includes(turn.turnId));
   }
@@ -3712,8 +3712,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         installedBuild: host.installedBuild,
         workspace: this.workspaceName(),
         resumable: (limit) => host.resumable(limit).filter((turn) => turn.record.actorId === rootActorId),
-        acquire: async (reference) => {
-          const actor = await host.acquire(reference);
+        acquire: async (reference, seat) => {
+          const actor = await host.acquire(reference, seat);
 
           return {
             runtime: actor.runtime,
@@ -3789,7 +3789,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const record = this.actorHost().describe(actorId);
 
     if (record === null || record.retiringAt !== null || record.deletedAt !== null) return true;
-    const { session } = await this.actorHost().acquire(actorReferenceOf(record));
+    const { session } = await this.actorHost().acquire(actorReferenceOf(record), { kind: 'actor' });
 
     return await session.deliverAdvisorAnswers(async (helper, turnId) => await (await this.agentCalls(actorId)).deliverAdvice(this.agentSnapshot(actorId), helper, turnId));
   }

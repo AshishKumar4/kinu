@@ -256,7 +256,7 @@ export function hostedSeatsOver(input: {
 
     const actor = await host.acquire({
       actorId: handle.actorId, workspaceId: handle.workspaceId, parentActorId: handle.parentActorId,
-    });
+    }, { kind: origin === 'swarm' ? 'node' : 'actor' });
 
     const compaction = fixtureCompaction(actor.record.actorId);
 

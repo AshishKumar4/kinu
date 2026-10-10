@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-09",
-  "files": 3142,
-  "functions": 82472,
+  "measuredAt": "2026-10-10",
+  "files": 3151,
+  "functions": 82784,
   "ceiling": 87,
   "line": 27,
   "inventory": [
@@ -178,10 +178,6 @@
       "complexity": 29
     },
     {
-      "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.constructor",
-      "complexity": 29
-    },
-    {
       "key": "packages/cli/src/tui/onboarding.tsx#GuidedOnboarding>useKeyboard",
       "complexity": 29
     },
@@ -267,6 +263,10 @@
     },
     {
       "key": "packages/cf-backend/tests/workerd/deploy-fake.ts#api",
+      "complexity": 27
+    },
+    {
+      "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.constructor",
       "complexity": 27
     },
     {

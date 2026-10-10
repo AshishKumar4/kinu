@@ -89,7 +89,7 @@ export async function createHeadRuntime(parent: CLIRuntime, id: string, observer
   // The per-kind runtime's release fence binds to the handle its binder issued, so bind once and pass it through.
   const handle = bindLocalActor(parent.storage.sql, binding);
 
-  return buildLocalActorRuntime(parent, { reference: binding.reference, handle }, observer);
+  return buildLocalActorRuntime(parent, { reference: binding.reference, handle }, 'head', observer);
 }
 
 /**
@@ -119,7 +119,7 @@ export function localTestActorHost(
     },
     directory,
     installedBuild: null,
-    runtimeFor: (bound) => buildLocalActorRuntime(parent, bound, writes?.get(bound.reference.actorId)),
+    runtimeFor: (bound, seat) => buildLocalActorRuntime(parent, bound, seat.kind === 'node' ? 'node' : 'head', seat.writes ?? writes?.get(bound.reference.actorId)),
     loopFor: (bound) => ({ origin: defaultLoopOrigin(bound.record.origin), parent }),
     orchestrationFor: (bound) => ({
       host: {
@@ -154,7 +154,7 @@ export function headSeatFactory(
 
     const agentName = actorHomeName({ origin: 'swarm', name: binding.name, storageKey: binding.storageKey });
     writes?.set(binding.reference.actorId, observer);
-    const actor = await host.acquire(binding.reference);
+    const actor = await host.acquire(binding.reference, { kind: 'head', writes: observer });
 
     const authority = parent.profiles;
 
@@ -270,7 +270,7 @@ export function nodeSeatFactory(
     const binding = registerLocalActor(rt.actor, { name: explorationActorKey(node.nodeId), creationId: node.nodeId, origin: 'swarm', lifetime: 'task' });
     const handle = bindLocalActor(rt.storage.sql, binding);
     // The host requires the runtime and binding to share one handle. Swarm mode keeps the node off the branching-head runtime.
-    const runtime = await buildLocalActorRuntime(rt, { reference: actorReferenceOf(handle), handle }, undefined, true);
+    const runtime = await buildLocalActorRuntime(rt, { reference: actorReferenceOf(handle), handle }, 'node');
     const seams = headLoopSeams(rt, { runId, handle, runtime, model });
 
     return {

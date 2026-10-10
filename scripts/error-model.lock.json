@@ -1,9 +1,9 @@
 {
-  "measuredAt": "2026-10-09",
+  "measuredAt": "2026-10-10",
   "counts": {
     "packages/cf-backend/src/activation-gate.ts#throw": 1,
     "packages/cf-backend/src/actor-agent.ts#catch": 10,
-    "packages/cf-backend/src/actor-agent.ts#throw": 21,
+    "packages/cf-backend/src/actor-agent.ts#throw": 20,
     "packages/cf-backend/src/chat-transport.ts#catch": 2,
     "packages/cf-backend/src/chat-transport.ts#throw": 1,
     "packages/cf-backend/src/codemode-egress.ts#catch": 1,
@@ -96,9 +96,9 @@
     "packages/cli-backend/src/executor.ts#throw": 2,
     "packages/cli-backend/src/host-mount.ts#catch": 1,
     "packages/cli-backend/src/host-mount.ts#throw": 1,
-    "packages/cli-backend/src/local-session.ts#catch": 8,
+    "packages/cli-backend/src/local-session.ts#catch": 7,
     "packages/cli-backend/src/local-session.ts#promise-rejection": 1,
-    "packages/cli-backend/src/local-session.ts#throw": 9,
+    "packages/cli-backend/src/local-session.ts#throw": 7,
     "packages/cli-backend/src/mcp.ts#catch": 1,
     "packages/cli-backend/src/model-resolver.ts#throw": 1,
     "packages/cli-backend/src/oauth-store.ts#throw": 1,
