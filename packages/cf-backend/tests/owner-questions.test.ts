@@ -6,6 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { actorConnectionTag, JsonValueSchema, WORKSPACE_TITLE_SYSTEM_PROMPT, type JsonValue, type OwnerAnswer } from '@kinu.run/core';
+import { gatedTools, TURN_REACH } from '@kinu.run/test-utils';
 import { asPane } from './helpers/agents-sdk';
 import { createTestUserDO, provisionTestWorkspace } from './helpers/user-do';
 import {
@@ -71,6 +72,13 @@ function asksOnce(dies?: () => void): AskingModel {
   });
 
   return { gateway, sent };
+}
+
+const OfferedSchema = v.array(v.looseObject({ function: v.looseObject({ name: v.string() }) }));
+
+/** The names of the tools one request offered. */
+function offeredNames(request: Sent | undefined): string[] {
+  return request === undefined ? [] : v.parse(OfferedSchema, JSON.parse(request.tools)).map((tool) => tool.function.name);
 }
 
 const WireCallSchema = v.looseObject({ role: v.literal('assistant'), tool_calls: v.array(v.looseObject({ id: v.string(), function: v.looseObject({ name: v.string() }) })) });
@@ -162,6 +170,9 @@ describe('the workspace agent asks its owner', () => {
     // Nothing follows the answer: the model goes on from its own call.
     expect(resumed.after).toEqual([]);
     expect((await workspace.agent.listOwnerQuestions())[0]?.asked.status).toBe('answered');
+    // The workspace agent's reach, as the one table has it (design v2 §1.6).
+    expect(gatedTools(offeredNames(sent[0]))).toEqual([...TURN_REACH.ownerWords]);
+    expect(gatedTools(offeredNames(sent[1]))).toEqual([...TURN_REACH.ownerAnswer]);
   });
 
   test('work queued behind an open question outlives the isolate that acknowledged it', async () => {
@@ -253,9 +264,9 @@ describe("an agent the owner added asks them on the owner's turns", () => {
     expectOneCallOneResult(resumed, 'Integer cents');
     expect(resumed.after).toEqual([]);
     expect((await workspace.agent.listOwnerQuestions()).find((asking) => asking.actor === actorId)?.asked.status).toBe('answered');
-    // The answer's turn is the owner's (design v2 §1.6): an agent with a hirer is offered no `report` on it.
-    expect(sent[1]?.tools).toContain('"name":"ask_owner"');
-    expect(sent[1]?.tools).not.toContain('"name":"report"');
+    // A hire's reach, as the one table has it (design v2 §1.6): the answer's turn is the owner's, so it offers no `report`.
+    expect(gatedTools(offeredNames(sent[0]))).toEqual([...TURN_REACH.ownerWords]);
+    expect(gatedTools(offeredNames(sent[1]))).toEqual([...TURN_REACH.ownerAnswer]);
   });
 
   test("its open question stops waiting on the workspace's tile once the owner dismisses it", async () => {

@@ -159,7 +159,7 @@ import {
   resolveModelRoute, completeOnRoute, routedLlm, tierRefusals, type TierRefusals, type ModelRouteResolution,
   narrowToolSurface, effectiveRoleCatalog, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, requireCodemodeMember, inWorkMode,
   toolSurfaceTokens, McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
-  SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, ASK_OWNER_TOOL, OwnerAnswersSchema, REPORT_TOOL, planSubmissionReach,
+  SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, ASK_OWNER_TOOL, OwnerAnswersSchema, REPORT_TOOL, turnReach, type TurnReach,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ProfileCatalogEnvelope,
   toolsInWorkMode, type TaskPlan, withTaskPlan, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
@@ -704,14 +704,15 @@ export abstract class ActorAgent extends Agent<Env> {
     return connection === undefined ? null : actorFromConnectionTags(connection.tags);
   }
 
-  /** Whether this turn offers `submit_plan` in `mode` (core's `planSubmissionReach`). */
-  private submitsPlans(mode: WorkMode): boolean {
-    return planSubmissionReach(mode, this.turnDrivingMetadata());
+  /** What this agent's turn may reach in `mode`, decided by core's `turnReach` as every agent's is. It has no hirer, so
+   *  each of its turns runs in its owner's lane. */
+  private reach(mode: WorkMode): TurnReach {
+    return turnReach({ lane: 'owner', mode, driving: this.turnDrivingMetadata(), ownerSurface: true, awaitsReply: this.planReplyDeps() !== undefined });
   }
 
   /**
    * The reply tool's deps while the owner's sent-back review of main's plan awaits answers; absent otherwise. Main's
-   * plans are its isolate's, so the workspace asks it as main's turn opens (`OrchestratorAgent.hostedTaskProfile`).
+   * plans are its isolate's, so the workspace asks it as main's turn opens (`ActorCapabilities.for`).
    */
   protected planReplyDeps(): ReplyToCommentToolDeps | undefined {
     return this.mainTurn()?.planReply;
@@ -3758,12 +3759,13 @@ export abstract class ActorAgent extends Agent<Env> {
   /** One build per mode: the turn surface, and the raw one. */
   protected actorToolsets(mode: WorkMode, claimScope?: string): ActorToolsets {
     const actorDeps = this.actorToolDeps();
+    const reach = this.reach(mode);
     const profileKey = actorActiveTools(actorDeps).join(',');
     // Key includes crafted_tools quality (score filtering depends on recency) and the actor profile,
     // so an owner chat never reuses an assigned turn's upward-reporting surface.
     // Eval declares the turn's external tools in the description it is built with.
     const external = Object.keys(this.mainTurn()?.declared ?? {}).join(',');
-    const cacheKey = `${mode}:${profileKey}:${this.operationProfile()?.profile.digest ?? ''}:${this._craftCacheKey()}:${String(this._accountSwarms)}:${String(this.submitsPlans(mode))}:${String(actorDeps.replyToComment !== undefined)}:${external}`;
+    const cacheKey = `${mode}:${profileKey}:${this.operationProfile()?.profile.digest ?? ''}:${this._craftCacheKey()}:${String(this._accountSwarms)}:${String(reach.submitPlan)}:${String(reach.replyToComment)}:${external}`;
     const cached = this.toolsets.get(cacheKey);
 
     // Only the chat surface is cached; a scoped rollout's surface is built once per rollout.
@@ -3811,13 +3813,13 @@ export abstract class ActorAgent extends Agent<Env> {
         slateBuild: (slate) => this.slateBuild(slate),
       };
 
-      if (actorDeps.report) builtinDeps.report = actorDeps.report;
+      if (reach.report && actorDeps.report) builtinDeps.report = actorDeps.report;
 
-      if (actorDeps.submitPlan && this.submitsPlans(mode)) builtinDeps.submitPlan = actorDeps.submitPlan;
+      if (reach.submitPlan && actorDeps.submitPlan) builtinDeps.submitPlan = actorDeps.submitPlan;
 
-      if (actorDeps.replyToComment) builtinDeps.replyToComment = actorDeps.replyToComment;
+      if (reach.replyToComment && actorDeps.replyToComment) builtinDeps.replyToComment = actorDeps.replyToComment;
 
-      if (actorDeps.askOwner) builtinDeps.askOwner = true;
+      if (reach.askOwner && actorDeps.askOwner) builtinDeps.askOwner = true;
       const toolsets = buildActorTools(builtinDeps);
 
       if (claimScope === undefined) {
@@ -4060,7 +4062,8 @@ export abstract class ActorAgent extends Agent<Env> {
   /**
    * Main's turn as its facet asks for it (D9): its own tools and sources, read as its in-object turn read them. Its MCP
    * and extension tools are reached through eval, so the facet's profile admits them by name. Everything the turn's
-   * tools run under is its surface, which the turn holds until it ends.
+   * tools run under is its surface, which the turn holds until it ends. Reached only through `ActorCapabilities.for`'s
+   * temporary workspace-agent adapter, which design v2 step 7 folds away with the root's accumulator.
    */
   protected async mainTaskProfile(turn: HostedTaskTurn, planReply: ReplyToCommentToolDeps | undefined): Promise<HostedTaskProfile> {
     const driving = turn.driving ?? {};
@@ -4254,9 +4257,9 @@ export abstract class ActorAgent extends Agent<Env> {
       // MCP tools were admitted against the request's model in `readTurnInputs`.
       externalTools: async () => ({ ...extensionTools, ...reads.mcpTools }),
       wiredToolNames: (mode) => [
-        ...(turnActorDeps.submitPlan && this.submitsPlans(mode) ? [SUBMIT_PLAN_TOOL] : []),
-        ...(turnActorDeps.replyToComment ? [REPLY_TO_COMMENT_TOOL] : []),
-        ...(turnActorDeps.askOwner ? [ASK_OWNER_TOOL] : []),
+        ...(turnActorDeps.submitPlan && this.reach(mode).submitPlan ? [SUBMIT_PLAN_TOOL] : []),
+        ...(turnActorDeps.replyToComment && this.reach(mode).replyToComment ? [REPLY_TO_COMMENT_TOOL] : []),
+        ...(turnActorDeps.askOwner && this.reach(mode).askOwner ? [ASK_OWNER_TOOL] : []),
       ],
       // `agent` / `llm` are reachable only inside `eval`: derived from the providers wired for this mode.
       codemodeCapabilities: (mode) => codemodeCapabilitiesFor(this.ownNamespaces(mode)),

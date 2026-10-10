@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   CHAT_SESSION_ID, ChatSession, EventLog, HeadCapture, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TerminalTransitions,
   PlanReviewActions, announcementOf, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork,
-  planHandoffStillOwed, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, terminalEffect, turnAuthorship,
+  planHandoffStillOwed, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, terminalEffect, turnAuthorship, turnLane, type TurnAuthorship,
   actorPolicy, metadataTier, reportReadsNarration, subordinateTerminalEffects, withCompactionTrigger, type ActorPolicy,
   bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpening, type JsonObject, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
@@ -30,11 +30,11 @@ export interface FacetChatDeps {
   readonly pacer: StepPacer;
 }
 
-/** A hirer's or the harness's turn runs in the hirer's lane, with `report`; the owner's words and decisions, in the owner's. */
-function parentDrivenTurn(item: ChatTurnInput): boolean {
+/** Who wrote a turn: the owner's words and decisions are the owner's, every other programmatic turn its hirer's. */
+function authorshipOf(item: ChatTurnInput): TurnAuthorship {
   const event = item.metadata?.kinuEvent;
 
-  return turnAuthorship({ kind: item.kind, ...(typeof event === 'string' && { event }) }) === 'hirer';
+  return turnAuthorship({ kind: item.kind, ...(typeof event === 'string' && { event }) });
 }
 
 export class FacetChat {
@@ -188,7 +188,8 @@ export class FacetChat {
     const { actor, database, workspace } = this.deps;
     const plans = actor.stores.planReviews;
     // The one place a turn's lane is decided; the workspace rebuilds a turn from this, never from its id.
-    this.parentDriven = parentDrivenTurn(item);
+    // A hirer's turn runs in the hirer's lane, with `report`, only for an agent that has a hirer.
+    this.parentDriven = turnLane(this.policy, authorshipOf(item)) === 'hirer';
     this.driving = authoredTurnMetadata(item);
     // The owner's words while a plan awaits their decision are read as its review.
     const mode = workModeUnderReview(actor.session.workMode, this.driving, () => plans.getActive(CHAT_SESSION_ID));

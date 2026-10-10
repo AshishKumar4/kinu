@@ -1,7 +1,7 @@
 // The agent's questions to its owner on the local backend, read from the requests the model received: the turn ends on
 // the ask, and every later request carries the answer, the dismissal or the owner's message in its place.
 import { describe, test, expect } from 'bun:test';
-import { scratchPath, scriptedTurnModel, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
+import { gatedTools, scratchPath, scriptedTurnModel, scratchDir, TURN_REACH, workspaceDatabase } from '@kinu.run/test-utils';
 import { initWorkspaceSchema, OwnerQuestionStore, type JsonObject, type LLMProviderConfig, type OwnerAnswer } from '@kinu.run/core';
 import { settleSync } from '@kinu.run/core/obs';
 import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql } from '../src/runtime';
@@ -68,13 +68,14 @@ const ANSWER: readonly OwnerAnswer[] = [{ id: 'units', selected: ['Integer cents
 
 describe('LocalAgentSession: asking the owner', () => {
   /** One rule decides whom a turn answers (design v2 §1.6). Every programmatic turn here was the hirer's, so the turn an
-   *  owner's answer resumed could `report` to whoever hired the agent. */
-  test("the turn an owner's answer resumes is the owner's, so an agent with a hirer is offered no report there", async () => {
+   *  owner's answer resumed could `report` to whoever hired the agent. Its reach is the one table's, as the cloud's is. */
+  test("the turn an owner's answer resumes is the owner's, and its reach is the one table's", async () => {
     const { db, agent, offered } = session([
       { call: 'ask_owner', input: ASK },
       { answer: 'Storing integer cents, rounding half to even.' },
     ]);
 
+    // Wired to report, as a hire is: a root has no hirer, so each of its turns is the owner's lane, which never offers it.
     agent.setReport({ report: async () => undefined });
 
     try {
@@ -86,7 +87,8 @@ describe('LocalAgentSession: asking the owner', () => {
       await agent.settleBackgroundWork();
 
       expect(offered).toHaveLength(2);
-      expect(offered.map((names) => names.includes('report'))).toEqual([false, false]);
+      expect(gatedTools(offered[0] ?? [])).toEqual([...TURN_REACH.ownerWords]);
+      expect(gatedTools(offered[1] ?? [])).toEqual([...TURN_REACH.ownerAnswer]);
     } finally {
       await agent.end();
       db.close();

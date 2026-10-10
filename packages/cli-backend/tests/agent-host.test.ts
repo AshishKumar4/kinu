@@ -44,7 +44,7 @@ import {
   type LocalHostedAgent,
 } from '../src/agent-host';
 import { makeExecRaw, makeSql, makeSqlExec, makeWorkspaceSchemaSql, type CLIRuntime, workspaceHome } from '../src/runtime';
-import { AwaitedList, createMemoryVfs, present, readTranscriptRows, spawnTest, workspaceDatabase } from '@kinu.run/test-utils';
+import { AwaitedList, createMemoryVfs, gatedTools, present, readTranscriptRows, spawnTest, TURN_REACH, workspaceDatabase } from '@kinu.run/test-utils';
 import { openWorkspaceCLI } from '../src/open';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import type { LocalModelResolver } from '../src/model-resolver';
@@ -940,6 +940,8 @@ describe('LocalAgentHost', () => {
 
       // `programmatic` opens the child's `report` surface and is what the relay policy reads.
       expect(childTurns).toEqual([{ kind: 'programmatic', workMode: 'build', text: brief }]);
+      // A hire's assignment, as the one reach table has it (design v2 §1.6), on the CLI as on the cloud.
+      expect(gatedTools((childPrompts[0]?.tools ?? []).map((tool) => tool.name))).toEqual([...TURN_REACH.assignment]);
 
       // Exactly one user text mentions the brief and equals it; a wrapper would contain it too.
 

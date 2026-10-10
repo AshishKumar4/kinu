@@ -37,6 +37,7 @@ import {
 import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { agentFacet, agentStateShellId, AgentMemory, AgentStoreBroker, AgentWorkspaceHost, headDeltas, jsonLines, uiChunks, type AgentFacetPlacement } from "./agent-facets";
 import type { AnswerMetadataReply } from "./agent-facet/agent-turn";
+import { ActorCapabilities } from "./actor-capabilities";
 import { DrawnStepSchema } from "./chat-transport";
 import { agentCallsThrough, AgentIsolateSlots } from "./dynamic-worker-slots";
 import { providerBindingsOf, routedModelReads } from "./providers/agent-registry";
@@ -204,7 +205,7 @@ import {
   setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
   type EvolutionConfigView,
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
-  planAwaitingReply, planSubmissionReach, ASK_OWNER_TOOL,
+  planAwaitingReply, ASK_OWNER_TOOL,
   JsonValueSchema, type JsonValue, type JsonObject, type KinuEvent,
   EVENT_VARIANTS,
   boundEventQuery,
@@ -269,7 +270,7 @@ import type { ExposedPortList } from "@kinu.run/core";
 import {
   terminalEffect, declareTerminalRoster, isDefinitiveTerminalFailure, CompletedTurnSchema,
   branchesTerminalEffect,
-  type HandedOffTurn, type CompletedTurn, type TerminalEffectTable, type TerminalTurnFacts,
+  type HandedOffTurn, type CompletedTurn, type TerminalEffectTable, type TerminalTurnFacts, type TurnReach,
   type TerminalTurnParts,
 } from "@kinu.run/core";
 
@@ -1217,7 +1218,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       profile: (input) => this.actorProfile({ ...input, actor: input.actor.handle }),
       resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),
       priceAs: (actor, spec) => this.priceHostedModel(actor.handle, spec),
-      taskProfile: (turn) => this.hostedTaskProfile(turn),
+      taskProfile: async (turn) => await ActorCapabilities.for({
+        awaitsReply: async (asked) => await this.hostedPlanAwaitsReply(asked),
+        hosted: async (asked, reach) => await this.hostedCapabilities(asked, reach),
+        workspaceAgent: async (asked, reach) => await this.workspaceAgentCapabilities(asked, reach),
+      }, actorPolicy(turn.actor.record), turn),
       announce: () => { this.liveReadsMoved(ROSTER_READS); },
       // The root's turns run on this object's own chat loop, not its hosted slot.
       scheduleDrain: (actor) => {
@@ -1289,26 +1294,26 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
+  /** TEMPORARY adapter until design v2 step 7 ({@link CapabilityBuilders.workspaceAgent}): main's surface over the root's
+   *  accumulator, with the reach the one entry decided. */
+  private async workspaceAgentCapabilities(turn: HostedTaskTurn, reach: TurnReach): Promise<HostedTaskProfile> {
+    const planReply = reach.replyToComment ? { reply: async (comment: string, text: string) => await this.hostedPlanReply(turn, comment, text) } : undefined;
+
+    // Its questions park in its own isolate, as every agent's do: the stack asks it once its turn was offered the tool.
+    if (reach.askOwner) this.offerAskOwner(turn.actor.stores.config);
+
+    return await this.mainTaskProfile(turn, planReply);
+  }
+
   /**
    * Full `buildActorTools` surface over the actor's own runtime, minus `peers` (it would
    * escape the subtree); codemode built last; all calls wrapped into the run's capture.
    */
-  private async hostedTaskProfile(turn: HostedTaskTurn): Promise<HostedTaskProfile> {
-    if (actorPolicy(turn.actor.record).workspaceAgent) {
-      // Asked of main's isolate before its tools are built: whether the owner's sent-back review awaits its answers.
-      const awaitsReply = await this.hostedPlanAwaitsReply(turn);
-      const planReply = awaitsReply ? { reply: async (comment: string, text: string) => await this.hostedPlanReply(turn, comment, text) } : undefined;
-
-      // Its questions park in its own isolate, as every agent's do: the stack asks it once its turn was offered the tool.
-      this.offerAskOwner(turn.actor.stores.config);
-
-      return await this.mainTaskProfile(turn, planReply);
-    }
-
+  private async hostedCapabilities(turn: HostedTaskTurn, reach: TurnReach): Promise<HostedTaskProfile> {
     const webSearch = this.ownedModelServices.getWebSearchProvider();
 
-    // `report` belongs only to a parent-driven turn: an owner chat with this actor carries it neither natively nor in eval.
-    const report: ReportDeps | undefined = !turn.parentDriven ? undefined : {
+    // `report` belongs only to the hirer's lane: an owner chat with this actor carries it neither natively nor in eval.
+    const report: ReportDeps | undefined = !reach.report ? undefined : {
       report: async (input) => {
         const relayed = await publishSubordinateReport({ mode: turn.input.mode, reports: turn.reports }, {
           status: input.status, content: input.content, origin: 'report_tool',
@@ -1359,10 +1364,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       slateBuild: (slate) => this.slateBuildAs({ path: [{ name: turn.actor.record.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, slate),
       ...(report !== undefined && { report }),
       // The owner's own turns, and its plan's feedback turn; a hirer's turn is never asked for the owner's review.
-      ...(!turn.parentDriven && planSubmissionReach(turn.input.mode, turn.driving) && { submitPlan: { submit: async (edits) => await this.agentPlanSubmit(turn.actor.handle.actorId, edits, turn.driving) } }),
+      ...(reach.submitPlan && { submitPlan: { submit: async (edits) => await this.agentPlanSubmit(turn.actor.handle.actorId, edits, turn.driving) } }),
       // A person is the conversation partner only on the owner's turns; a hirer's question goes back in its report.
-      ...(!turn.parentDriven && { askOwner: this.offerAskOwner(turn.actor.stores.config) }),
-      ...(await this.hostedPlanAwaitsReply(turn) && { replyToComment: { reply: async (comment, text) => await this.hostedPlanReply(turn, comment, text) } }),
+      ...(reach.askOwner && { askOwner: this.offerAskOwner(turn.actor.stores.config) }),
+      ...(reach.replyToComment && { replyToComment: { reply: async (comment, text) => await this.hostedPlanReply(turn, comment, text) } }),
     };
 
     const built = buildActorTools(deps);

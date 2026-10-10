@@ -75,7 +75,7 @@ import { ActorSession, type ActorTurnLease,
   actorNamespaces, SURFACE_POLICY, type SurfaceActor,
   type CodemodeProvider,
   agentRoleSwitch,
-  REPORT_TOOL, turnAuthorship, type ReportDeps,
+  REPORT_TOOL, turnAuthorship, turnLane, turnReach, type ReportDeps, type TurnLane, type TurnReach,
   type MissionGovernor,
   observeSystemPromptHash,
   type DynamicContext,
@@ -129,7 +129,7 @@ import { ActorSession, type ActorTurnLease,
   McpToolSurfaceCache, toolSurfaceTokens, type McpServedSurface, type McpSurfaceBudget,
   defaultLoopOrigin,
   type ActorHost, type ActorSeat, type HostedActor, type LoopOrigin, type WriteObserver,
-  PlanReviewActions, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, ASK_OWNER_TOOL, planSubmissionReach, workModeUnderReview, authoredTurnMetadata, planHandoffStillOwed,
+  PlanReviewActions, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, ASK_OWNER_TOOL, workModeUnderReview, authoredTurnMetadata, planHandoffStillOwed,
   type PlanDecisionOutcome, type PlanEdit, type PlanReview, type ReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult,
   type AskingAgent,
@@ -337,7 +337,8 @@ export class LocalAgentSession {
   private readonly instructionTrust: InstructionTrustResolver =
     (path, content) => this.instructionApprovals.trustOf(path, content);
   /** Whether this turn came from the parent; gates the `report` surface. */
-  private turnIsParentAssigned = false;
+  /** Whose lane the running turn is: its hirer's only for an agent that has one (core's `turnLane`). */
+  private turnLaneOf: TurnLane = 'owner';
   /** The learning setting where the turn opened, as cf reads it: a change applies from the next turn. */
   private turnLearns = false;
 
@@ -1590,7 +1591,7 @@ export class LocalAgentSession {
     this.turnArtifacts = artifactOverrides(artifacts.bodies);
     // Set before anything reads the tool surface: the report gate is a property of this turn.
     const event = item.metadata?.kinuEvent;
-    this.turnIsParentAssigned = turnAuthorship({ kind: item.kind, ...(typeof event === 'string' && { event }) }) === 'hirer';
+    this.turnLaneOf = turnLane({ hirer: this.rt.actor.parentActorId }, turnAuthorship({ kind: item.kind, ...(typeof event === 'string' && { event }) }));
     this.turnLearns = this.engine.recordsTurns;
     this.turnDriving = authoredTurnMetadata(item);
 
@@ -2297,24 +2298,30 @@ export class LocalAgentSession {
     this.parentRelay = relay;
   }
 
-  /** A parent exists and the parent drove this turn; an owner-driven chat stays private. */
+  /** What the running turn may reach in `mode`, decided by core's `turnReach` as every host's turns are. The CLI shows
+   *  the owner a root's questions and plans alone; a subordinate's partner is its parent. */
+  private reach(mode: WorkMode): TurnReach {
+    return turnReach({
+      lane: this.turnLaneOf, mode, driving: this.turnDriving, ownerSurface: this.planReviewSurface(),
+      awaitsReply: this.planReviewSurface() && this.planActions.awaitingReply(this.turnDriving),
+    });
+  }
+
+  /** The hirer's lane, wired to its parent; an owner-driven chat stays private. */
   private reportGateOpen(): boolean {
-    return this.reportDeps !== null && this.turnIsParentAssigned;
+    return this.reportDeps !== null && this.reach('build').report;
   }
 
-  /** A root (only its plan has an owner) on a turn core's `planSubmissionReach` offers it. Cloud: `ActorAgent.submitsPlans`. */
   private planSubmissionOpen(mode: WorkMode): boolean {
-    return this.planReviewSurface() && planSubmissionReach(mode, this.turnDriving);
+    return this.reach(mode).submitPlan;
   }
 
-  /** A root, whose conversation partner is the owner; a subordinate's partner is its parent. Cloud: `OrchestratorAgent.actorToolDeps`. */
   private askOwnerOpen(): boolean {
-    return this.planReviewSurface();
+    return this.reach('build').askOwner;
   }
 
-  /** A root whose plan the owner sent back with comments the agent may answer. */
   private planReplyOpen(): boolean {
-    return this.planReviewSurface() && this.planActions.awaitingReply(this.turnDriving);
+    return this.reach('build').replyToComment;
   }
 
   /** The typed mode, under core's plan hold. Mirrors the cloud orchestrator's `workModeForMetadata`. */

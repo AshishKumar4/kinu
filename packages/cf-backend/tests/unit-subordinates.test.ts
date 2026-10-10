@@ -11,7 +11,7 @@ import {
   actorConnectionTag, BUILTIN_TOOLS, DEPS_GATED_TOOLS,
   observedOpEnum, REPORT_TOOL, SubordinateInspectionRequestSchema, type JsonValue, type Rpc, TASK_TURN_ENDINGS, terminalTaskReport,
 } from '@kinu.run/core';
-import { present } from '@kinu.run/test-utils';
+import { gatedTools, present, TURN_REACH } from '@kinu.run/test-utils';
 import { KeptTranscript } from '../src/components/KeptTranscript';
 import { HelperChatBase, MessageView } from '../src/components/MessageView';
 import { nestedAgent } from '@kinu.run/core';
@@ -105,6 +105,8 @@ describe('subordinate wiring', () => {
     expect(observedOpEnum(subTools.get('agents')?.inputSchema)).toContain('hire');
     expect(subTools.get('eval')?.description).toMatch(/^- report:/mu);
     expect(orchTools.eval?.description).not.toMatch(/^- report:/mu);
+    // A hire's assignment, as the one reach table has it (design v2 §1.6).
+    expect(gatedTools(subKeys)).toEqual([...TURN_REACH.assignment]);
   });
 
   test('every deps-gated tool core declares is answered by this backend', async () => {

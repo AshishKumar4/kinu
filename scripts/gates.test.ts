@@ -11,6 +11,8 @@ import {
   WranglerContainers, wranglerContainerClasses,
 } from './egress-interception';
 import { assertMeasured, reconcile, writeLock } from './gate-ratchet';
+import { censusOf, disagreements, readCensus } from './root-branches';
+import { readSources } from './sources';
 import { parseJsonc } from './jsonc';
 import { configuredScanner, judgeAdvisories } from './dependency-advisory-gate';
 import {
@@ -530,3 +532,40 @@ describe('native egress constraints — red in every governed direction', () => 
   }
 });
 
+
+describe('root-branches census (design v2 §9)', () => {
+  const source = (code: string): Map<string, string> => new Map([['packages/core/src/planted.ts', code]]);
+
+  test("lists every place the product decides by whether an agent is the workspace's own", () => {
+    expect(disagreements(censusOf(readSources()), readCensus())).toEqual([]);
+  });
+
+  test('finds each form of a root branch, by its enclosing declaration', () => {
+    const found = censusOf(source(`class Agent {
+  owns(actorId: string) { return actorId === this.actorHandle().actorId; }
+  roots(record: { parentActorId: string | null }) { return record.parentActorId === null; }
+  system(record: { origin: string }) { return record.origin === 'system'; }
+  placed(record: Row) { return actorPolicy(record).workspaceAgent; }
+  routes() { return ROUTES.workspaceAgent; }
+}`));
+
+    expect([...found]).toEqual([
+      ['packages/core/src/planted.ts#Agent.owns', 1], ['packages/core/src/planted.ts#Agent.roots', 1],
+      ['packages/core/src/planted.ts#Agent.system', 1], ['packages/core/src/planted.ts#Agent.placed', 1],
+    ]);
+  });
+
+  test('an unclassified branch, a stale entry and a moved count each disagree', () => {
+    const found = censusOf(source('function owns(id: string) { return id === this.actorHandle().actorId; }'));
+
+    expect(disagreements(found, {})).toEqual([
+      'packages/core/src/planted.ts#owns: 1 root branch(es) the list does not classify — add it as J (why it stays) or H (the step that removes it)',
+    ]);
+    expect(disagreements(new Map(), { 'packages/core/src/planted.ts#owns': { count: 1, kind: 'H', until: 'step 7', why: 'planted' } })).toEqual([
+      'packages/core/src/planted.ts#owns: listed, and no root branch reproduces it — remove the entry with the change that removed the branch',
+    ]);
+    expect(disagreements(found, { 'packages/core/src/planted.ts#owns': { count: 2, kind: 'J', why: 'planted' } })).toEqual([
+      'packages/core/src/planted.ts#owns: 1 root branch(es), the list says 2 — update its count with the change',
+    ]);
+  });
+});

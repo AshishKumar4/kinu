@@ -606,6 +606,8 @@ export {
 
 export { actorPolicy, type ActorPolicy } from './delegation/actor-policy';
 
+export { turnLane, turnReach, type TurnLane, type TurnReach } from './delegation/turn-reach';
+
 export { AGENTS_OPS, type AgentsOp } from './operations/agents';
 
 export { createAgentSelfProvider, type AgentSelfHost } from './tools/agent-self';
