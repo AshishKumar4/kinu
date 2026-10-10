@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { ClockCounterClockwiseIcon, NotebookIcon, SealCheckIcon } from "@phosphor-icons/react";
 import { Effect } from "effect";
 import * as v from "valibot";
@@ -6,10 +6,9 @@ import { JsonValueSchema, type AccountMemoryProposal, type JsonValue } from "@ki
 import { attempt, detach, renderThrownChain, tolerate } from "@kinu.run/core/obs";
 import { Card } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
-import { useAsyncResource } from "@/hooks/use-async-resource";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import {
-  decideAccountMemory, forgetAccountFact, forgetAccountNote, getAccountMemory, putAccountFact,
+  decideAccountMemory, forgetAccountFact, forgetAccountNote, putAccountFact,
   type AccountMemoryState, type MemoryOrigin,
 } from "../../lib/user-api";
 
@@ -52,17 +51,8 @@ type Busy = { readonly what: string } | null;
 
 /** Settings → Memory: what every workspace and agent of the account reads, what waits on the owner, and every revision. */
 export function AccountMemoryCard() {
-  const { resource, reload } = useAsyncResource(getAccountMemory);
-  // One read of the account's memory, read again on each frame the account's socket sends about what waits: the
-  // frame the attention stack shows. A socket that has dropped sends none, and the read stays the truth.
-  const { accountProposals } = useWorkspaceRoster();
-  const announced = useRef(accountProposals);
-
-  useEffect(() => {
-    if (announced.current === accountProposals) return;
-    announced.current = accountProposals;
-    reload();
-  }, [accountProposals, reload]);
+  // The shell's one account memory: what waits is the account socket's newest, the list the attention stack shows.
+  const { resource, reload } = useWorkspaceRoster().accountMemory;
   const [busy, setBusy] = useState<Busy>(null);
   const [failure, setFailure] = useState<string | null>(null);
 

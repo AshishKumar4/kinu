@@ -12,19 +12,22 @@ test('a self-tuning run shows its own candidates, though the run picked before i
 
     // The loaded panel; its Evolution section starts folded.
     const panel = '[data-gallery-panel^="Loaded — everything"]';
-    await page.$$eval(`${panel} button`, (buttons) => buttons.find((button) => button.textContent?.includes('Evolution'))?.click());
-    await page.waitForFunction((root) => [...document.querySelectorAll(`${root} button`)].some((button) => button.textContent?.includes('6 iters')), {}, panel);
+    await page.click(`${panel} [data-section="evolution"] > button[aria-expanded="false"]`);
+    await page.waitForSelector(`${panel} [data-gepa-run="gepa_2"]`);
 
-    const pick = (iterations: string) => page.$$eval(`${panel} button`, (buttons, label) => buttons.find((button) => button.textContent?.includes(label))?.click(), iterations);
-    const candidates = () => page.$$eval(`${panel} .font-mono.w-14`, (ids) => ids.map((id) => id.textContent));
-
-    await pick('6 iters');
-    await pick('4 iters');
-    await page.waitForFunction((root) => document.querySelector(root)?.textContent?.includes('cand_1c') === true, {}, panel);
+    // gepa_2's candidates are held; gepa_1, picked after it, answers first.
+    await page.click(`${panel} [data-gepa-run="gepa_2"]`);
+    await page.click(`${panel} [data-gepa-run="gepa_1"]`);
+    await page.waitForSelector(`${panel} [data-gepa-candidates="gepa_1"]`);
     await page.evaluate(() => { window.dispatchEvent(new Event('gallery:release-gepa')); });
     await page.evaluate(() => new Promise((resolve) => { requestAnimationFrame(() => requestAnimationFrame(resolve)); }));
 
-    expect(await candidates()).toEqual(['cand_1a', 'cand_1c']);
+    const shown = await page.$eval(`${panel} [data-gepa-candidates]`, (list) => ({
+      run: list.getAttribute('data-gepa-candidates'),
+      candidates: [...list.querySelectorAll('[data-gepa-candidate]')].map((row) => row.getAttribute('data-gepa-candidate')),
+    }));
+
+    expect(shown).toEqual({ run: 'gepa_1', candidates: ['cand_1a', 'cand_1c'] });
     await page.close();
   });
 });

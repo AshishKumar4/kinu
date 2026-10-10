@@ -511,8 +511,6 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
     [],
   );
 
-  const chatStreamReports = useRef(new Set<Promise<void>>());
-
   // Read live, never latched. A stream whose socket closes mid-answer ends in an error (agents 0.26,
   // `interruptChatStream`) that the reconnect's resume replaces, clearing useChat's error as it starts: while the socket
   // is down the turn is the SDK's to rejoin, not a failed one.
@@ -533,11 +531,9 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
   useEffect(() => {
     if (!standingStreamError) return;
     const failed = standingStreamError;
-    const reports = chatStreamReports.current;
 
-    let report: Promise<void> | null = null;
-
-    report = (async () => {
+    // Reported once per failure; a report that cannot be sent is a diagnostic, never the page's failure.
+    detach(Effect.promise(async () => {
       try {
         await reportChatStreamFailure(failed, subordinate === undefined ? "root" : "actor", {
           release: await pageDeployedBuildSha(),
@@ -545,11 +541,8 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
         });
       } catch (cause) {
         diagnostics.event("client_error.reporter_failed", { reason: renderThrownChain({ cause }) });
-      } finally {
-        if (report !== null) reports.delete(report);
       }
-    })();
-    reports.add(report);
+    }));
   }, [standingStreamError, subordinate]);
 
   // Version skew: /api/health's build sha compared on each reconnect. The baseline is per page
@@ -799,12 +792,12 @@ function useChatOwner(target: string | KinuActorAddress | undefined, extension: 
     const snap = await rpc<WorkspaceOpening>("getWorkspaceOpening", []);
 
     if (!isCurrent()) return;
+    // Decoded before anything is published: an opening whose plan does not decode fails whole, never half-loaded
+    // nor read as "no plan".
+    const loadedPlan = parseActivePlanReview({ value: snap.activePlan });
     setAgentStatus(snap.status);
 
     if (isSourceCurrent("plan")) {
-      // Strict: an opening whose plan does not decode fails as a load, never reads as "no plan".
-      const loadedPlan = parseActivePlanReview({ value: snap.activePlan });
-
       if (loadedPlan) knownPlans.current.add(`${loadedPlan.id}:${loadedPlan.revision}`);
       setActivePlan(loadedPlan);
     }

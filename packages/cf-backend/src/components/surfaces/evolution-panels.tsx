@@ -44,7 +44,7 @@ export function GepaView({ rpc }: { rpc: Rpc }) {
     <div className="space-y-3 animate-fade-in overflow-y-auto h-full">
       <div className="space-y-1">
         {runs.map((r) => (
-          <button key={r.runId} onClick={() => { setSel(r.runId); setPicks((made) => made + 1); }}
+          <button key={r.runId} data-gepa-run={r.runId} aria-pressed={sel === r.runId} onClick={() => { setSel(r.runId); setPicks((made) => made + 1); }}
             className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left transition-colors ${sel === r.runId ? "p-fill" : "p-card-hover"}`}>
             <span className={`size-1.5 rounded-full shrink-0 ${runDot(r.status)}`} />
             <span className="p-row-text p-text-2 flex-1 truncate">{r.target} · {r.iterations} iters · {r.metricCalls} evals</span>
@@ -74,7 +74,7 @@ function GepaRunCandidates({ rpc, runId, pick }: { rpc: Rpc; runId: string; pick
   const maxAgg = Math.max(0.0001, ...detail.candidates.map((c) => c.aggregateScore));
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2" data-gepa-candidates={runId}>
       <div className="p-meta p-text-3">{detail.candidates.length} candidates · {paretoIds.size} on the Pareto front · winner {detail.run?.winnerId?.slice(0, 8) ?? "—"}</div>
       <div className="space-y-1">
         {detail.candidates.map((c) => {
@@ -85,7 +85,7 @@ function GepaRunCandidates({ rpc, runId, pick }: { rpc: Rpc; runId: string; pick
           const barTone = onPareto ? "p-dot-info" : "p-dot-neutral";
 
           return (
-            <div key={c.id} className="flex items-center gap-2 p-meta">
+            <div key={c.id} data-gepa-candidate={c.id} className="flex items-center gap-2 p-meta">
               <span className={`font-mono shrink-0 w-14 truncate ${isWinner ? "p-success" : "p-text-3"}`}>{c.id.slice(0, 8)}</span>
               <div className="flex-1 h-2 rounded-full p-fill overflow-hidden" title={`95% CI ${ci.lo.toFixed(2)}–${ci.hi.toFixed(2)} over ${ci.n} instances`}>
                 <div className={`h-full ${isWinner ? "p-dot-success" : barTone}`} style={{ width: `${(c.aggregateScore / maxAgg) * 100}%` }} />

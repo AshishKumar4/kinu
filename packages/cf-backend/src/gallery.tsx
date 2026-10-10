@@ -71,7 +71,7 @@ import { CreateWebhookModal, NewWebhookCard } from "@/components/WorkspaceAutoma
 import { AddServerCard } from "@/components/account/McpServersPanel";
 import { DevicesFrame, PluginsFrame, SetupModalFrame, WelcomeFrame, WorkspacesFrame } from "@/gallery-account";
 import { CharactersFrame } from "@/gallery-characters";
-import { AccountProvider } from "@/hooks/use-account";
+import { AccountProvider, useAccount } from "@/hooks/use-account";
 import { DrivePageFrame, DriveRoute, installDriveFixture } from "@/gallery-drive";
 import { driveDesignFrame } from "@/gallery-drive-design";
 import BlueprintPage from "@/pages/BlueprintPage";
@@ -269,6 +269,9 @@ function pluginsFixture(path: string): Response | null {
   return null;
 }
 
+/** The account's name as last saved here. */
+let galleryDisplayName = "Owner";
+
 function accountProfileFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
   if (path === "/api/user/onboarding/complete" && method === "POST") {
     return fixtureJson({ onboardedAt: NOW });
@@ -286,10 +289,12 @@ function accountProfileFixture(path: string, method: string, body: BodyInit | nu
     const root = document.documentElement;
     root.dataset.galleryProfilePatches = String(Number(root.dataset.galleryProfilePatches ?? "0") + 1);
     const patch = v.safeParse(v.object({ displayName: v.string() }), JSON.parse(v.parse(v.string(), body)));
-    const displayName = patch.success ? patch.output.displayName : "Owner";
+
+    // Kept, so a later read answers the name saved, as the account does.
+    if (patch.success) galleryDisplayName = patch.output.displayName;
 
     return fixtureJson({
-      email: "owner@example.com", displayName,
+      email: "owner@example.com", displayName: galleryDisplayName,
       createdAt: NOW - 864e5, lastSeenAt: NOW,
       onboardedAt: ACCOUNT_ONBOARDED_AT, workspaceCount: ACCOUNT_WORKSPACE_COUNT,
     });
@@ -309,7 +314,7 @@ function accountProfileFixture(path: string, method: string, body: BodyInit | nu
     }
 
     return fixtureJson({
-      email: "owner@example.com", displayName: "Owner", createdAt: NOW - 864e5, lastSeenAt: NOW,
+      email: "owner@example.com", displayName: galleryDisplayName, createdAt: NOW - 864e5, lastSeenAt: NOW,
       onboardedAt: ACCOUNT_ONBOARDED_AT, workspaceCount: ACCOUNT_WORKSPACE_COUNT,
     });
   }
@@ -532,14 +537,23 @@ function workspaceRosterFixture(path: string): Response | null {
   return url.pathname === "/api/user/workspaces" ? fixtureJson(rosterAnswer(url.searchParams)) : null;
 }
 
+/** The deployment's apps; `&presets=fail-first`: the first read fails, as a cold Worker's might. Reads are counted. */
+function mcpPresetsFixture(): Response {
+  const root = document.documentElement;
+  const reads = Number(root.dataset.galleryPresetReads ?? "0") + 1;
+  root.dataset.galleryPresetReads = String(reads);
+
+  if (reads === 1 && new URLSearchParams(location.search).get("presets") === "fail-first") return fixtureJson({ error: "the deployment's apps did not answer" }, 503);
+
+  return fixtureJson([
+    { id: "github", appConfigured: mcpSecrets.has("github") },
+    { id: "cloudflare", appConfigured: true },
+    { id: "google", appConfigured: mcpSecrets.has("google") },
+  ]);
+}
+
 function mcpServersFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
-  if (path === "/api/user/mcp/presets") {
-    return fixtureJson([
-      { id: "github", appConfigured: mcpSecrets.has("github") },
-      { id: "cloudflare", appConfigured: true },
-      { id: "google", appConfigured: mcpSecrets.has("google") },
-    ]);
-  }
+  if (path === "/api/user/mcp/presets") return mcpPresetsFixture();
 
   if (path === "/api/user/mcp/servers" && method === "POST") {
     const addBody = v.safeParse(GalleryMcpAddSchema, JSON.parse(v.parse(v.string(), body)));
@@ -1056,6 +1070,9 @@ function touchFixture(): Response {
 /** The account's own answers: Settings' frames whole, and on any page the owner's decision on a memory proposal. */
 function userFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response> | null {
   if (ACCOUNT_FIXTURE_FRAMES.has(frame) && path.startsWith("/api/user/")) return userSettingsFixture(path, method, body);
+  const memory = accountMemoryFixture(path, method);
+
+  if (memory !== null) return Promise.resolve(memory);
   const decided = galleryMemoryDecision(path, method, body);
 
   return decided === null ? null : Promise.resolve(decided);
@@ -6981,13 +6998,24 @@ function workspaceShellFrame(): MountedFrame {
   };
 }
 
-/** `&section=devices` goes through the router: the page reads the hash off `useLocation`. */
+/** Another reader of the shell's account, as the sidebar is: the name it holds, for a gate to compare with Settings'. */
+function AccountReader() {
+  const profile = lastValue(useAccount().profile);
+
+  return <output hidden data-gallery-account-name>{profile?.displayName ?? ""}</output>;
+}
+
+/** `&section=devices` goes through the router: the page reads the hash off `useLocation`. `&shell=1` draws it inside
+ *  the app's shell, beside another reader of the same account. */
 function userSettingsStateFrame(): MountedFrame {
-  const section = new URLSearchParams(location.search).get("section");
+  const query = new URLSearchParams(location.search);
+  const section = query.get("section");
 
   return {
     entries: [section === null ? "/user/settings" : `/user/settings#${section}`],
-    node: <div className="min-h-screen p-bg p-text"><UserSettingsPage /></div>,
+    node: query.get("shell") === "1"
+      ? <><AccountReader /><Routes><Route element={<Layout />}><Route path="/user/settings" element={<UserSettingsPage />} /></Route></Routes></>
+      : <div className="min-h-screen p-bg p-text"><UserSettingsPage /></div>,
   };
 }
 

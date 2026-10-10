@@ -219,6 +219,23 @@ describe('MCP presets', () => {
     });
   });
 
+  // 26244c765 review: one failed read of the deployment's apps left GitHub's card asking to sign in for good, though
+  // the deployment has no GitHub app; the manager had read them again every few seconds.
+  test('a failed first read of the deployment\'s apps is asked again, and GitHub then offers its token', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'plugins&mcp-secrets=google&presets=fail-first', 'dark', 'desktop');
+
+      try {
+        await page.waitForFunction(() => Number(document.documentElement.dataset.galleryPresetReads ?? '0') >= 2);
+        await page.waitForSelector('[data-plugin-add][aria-label="Add GitHub"]');
+        await page.click('[data-plugin-add][aria-label="Add GitHub"]');
+        await page.waitForSelector('input[aria-label="Personal access token"]');
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
   // 26244c765: the manager kept its own list, so a server added there was missing from the page once it closed.
   test('a server added in the manager is on the page once the manager closes', async () => {
     await withGallery(async (gallery) => {

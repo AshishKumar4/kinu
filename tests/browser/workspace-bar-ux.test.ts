@@ -361,6 +361,20 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
     });
   });
 
+  // 26244c765 review: a plan the page could not read failed the opening only after its status was published, so the
+  // failed first read showed as a loaded workspace that could not refresh.
+  test('an opening whose plan cannot be read fails whole, as an opening that never loaded', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 800 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&opening=bad-plan`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-composer-root] [role="alert"]');
+
+      expect(await page.$eval('[data-composer-root] [role="alert"]', (alert) => alert.textContent ?? '')).toContain('Could not open this workspace');
+      await page.close();
+    });
+  });
+
   test('on a phone, a workspace that cannot connect still offers the menu', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();

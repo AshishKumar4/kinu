@@ -856,7 +856,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
   // The stack answers through the workspace's own calls on every pane: one queue, whichever pane asks. The account's
   // memory proposals come from the owner's user object, on the roster's socket the shell already holds.
   const { rpc: workspaceRpc, resolveConsent, refreshPendingActions } = state;
-  const { accountProposals } = useWorkspaceRoster();
+  const accountProposals = useWorkspaceRoster().accountMemory.pending;
 
   // The workspace agent's questions, for each call's record in the transcript.
   const asked = useMemo(() => askedBy(state.ownerQuestions, null), [state.ownerQuestions]);

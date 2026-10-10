@@ -819,10 +819,14 @@ describe('Settings → Memory', () => {
   // the old name until its own next read.
   test('Settings shows the shell\'s account, and a saved name is that account at once', async () => {
     await withGallery(async (gallery) => {
-      const page = await freshPage(gallery, 'usersettingsstate', 'light', 'desktop');
+      const page = await freshPage(gallery, 'usersettingsstate&shell=1', 'light', 'desktop');
 
       try {
         await page.waitForSelector('input[aria-label="Your name"]');
+        // Settings is one reader of the shell's account; no other surface shows the name, so the frame mounts one.
+        const held = () => page.$eval('[data-gallery-account-name]', (reader) => reader.textContent);
+
+        expect(await held()).toBe('Owner');
         const reads = () => page.evaluate(() => Number(document.documentElement.dataset.galleryProfileReads ?? '0'));
 
         const before = await reads();
@@ -832,8 +836,9 @@ describe('Settings → Memory', () => {
         await page.$$eval('button', (buttons) => buttons.find((button) => button.textContent?.trim() === 'Save')?.click());
         await page.waitForFunction(() => document.documentElement.dataset.galleryProfilePatches === '1');
         await page.waitForFunction(() => [...document.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'Save')?.disabled === true);
-        // The saved profile is the account's answer: nothing reads it again.
+        // The saved profile is the account's answer: nothing reads it again, and every reader holds it at once.
         expect(await reads()).toBe(before);
+        expect(await held()).toBe('Ada');
       } finally {
         await page.close();
       }

@@ -13,7 +13,7 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { Choice, inputCls } from "@/components/ui/form";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
 import { lastValue } from "@/hooks/use-async-resource";
-import { useMcpServers, type McpServers } from "@/hooks/use-mcp-servers";
+import { useMcpServers, useMcpWatch, type McpServers } from "@/hooks/use-mcp-servers";
 import * as v from "valibot";
 import { renderThrownChain, detach } from '@kinu.run/core/obs';
 
@@ -23,8 +23,11 @@ export function McpServersSection() {
 }
 
 export function McpServersPanel({ mcp }: { mcp: McpServers }) {
-  const { servers: read, presets } = mcp;
-  const { resource, reload } = read;
+  const { servers: read, presets, refresh: reload } = mcp;
+  const { resource } = read;
+
+  // Open, it reads servers and presets every few seconds, so a sign-in or a rotated credential elsewhere shows here.
+  useMcpWatch(mcp);
   const servers = lastValue(resource) ?? [];
   const [showAdd, setShowAdd] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
