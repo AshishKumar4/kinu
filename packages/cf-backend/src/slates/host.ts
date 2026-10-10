@@ -9,7 +9,7 @@ import {
   type BlueprintReading, type DurableAppIdentity, type DurableApps, type ShareUser,
 } from '@kinu.run/core/slates';
 import { SlateLiveShareStore, initSlateLiveShareTables, shareLiveSlate } from '@kinu.run/core/slates';
-import { EphemeralSlates, initEphemeralSlateTable, SlateUsageStore, initSlateUsageTable } from '@kinu.run/core/slates';
+import { EphemeralSlates, initEphemeralSlateTable, SlateUsageStore, initSlateUsageTable, SlateBuilds, slateImage, type FailingSlateBuild } from '@kinu.run/core/slates';
 import {
   ingressAdmitted,
   parseSlateProject, slateIdFor, slateTitle, routeSlateStorageCall, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
@@ -28,7 +28,6 @@ import type { KvStore } from '@kinu.run/agent-utils';
 import { ERROR_CODES, KinuError, classifyErrorCode, refusalOf, settle, toKinuError, type Refusal } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
-import { SlateBuilds, slateImage, type FailingSlateBuild } from './builds';
 import { slateBatchStub } from './rpc-transport';
 import { ROOT_SLATE_CALLER, slateCallerKey, shareCaller, type SlateBinding, type SlateBindingProps, type SlateCaller } from './bindings';
 import { codemodeEgress } from '../codemode-egress';

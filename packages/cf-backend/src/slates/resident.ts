@@ -10,7 +10,7 @@ import {
   SLATE_DRIVEN_MEMBERS, SLATE_METHOD_NAME_SOURCE, SLATE_PAGE_PREAMBLE, slateTitle, type SlateProcess, type SlateProject, slateAuthority,
 } from '@kinu.run/core';
 import { attempt, diagnostics, KinuError, renderCauseChain, settle } from '@kinu.run/core/obs';
-import { SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE } from '@kinu.run/core/slates';
+import { SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE, type SlateBuildFailure, type SlateImage } from '@kinu.run/core/slates';
 import { BROWSER_CLIENT_MODULE, BROWSER_PRELUDE, browserClientSource } from '../browser-prelude';
 
 interface SlateBootArtifacts {
@@ -43,18 +43,6 @@ export interface ResidentSlateDeps {
  * A slate's compiled modules and the files its runner serves, each held by digest in the facet image directory: what a
  * launch runs, and what a slate falls back to while a later edit fails to build.
  */
-export interface SlateImage {
-  readonly modules: Readonly<Record<string, string>>;
-  readonly client?: string;
-  readonly shell?: string;
-  /** The workspace files outside the slate's own tree the compiler read: a change to one is a change to the build. */
-  readonly reads?: readonly string[];
-}
-
-/** What a build that did not compile says: the compiler's own words, file and line among them. */
-export interface SlateBuildFailure {
-  readonly failed: string;
-}
 
 /** What a build reads: the authored tree, as its caller sees it. */
 export type SlateBuildInput = Pick<ResidentSlateBoot, 'owner' | 'root' | 'project' | 'read' | 'cred'>;

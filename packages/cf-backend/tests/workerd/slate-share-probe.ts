@@ -21,7 +21,7 @@ import {
 import { SlateId } from '@agent-core/core/slates';
 import { initSlateLiveShareTables, slateDirectory } from '@kinu.run/core/slates';
 import { SlateHost } from '../../src/slates/host';
-import { initSlateBuildTable } from '../../src/slates/builds';
+import { initSlateBuildTable } from '@kinu.run/core/slates';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '../../src/slates/bindings';
 import { slateBatchStub } from '../../src/slates/rpc-transport';
 import { renderThrownChain } from '@kinu.run/core/obs';

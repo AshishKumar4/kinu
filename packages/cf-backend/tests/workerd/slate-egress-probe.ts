@@ -9,7 +9,7 @@ import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { supervisorEsbuildService } from '@nimbus-sh/worker/facet-host';
 import { probeDurableApps, probeFacetManager } from './facet-manager';
 import { SlateHost } from '../../src/slates/host';
-import { initSlateBuildTable } from '../../src/slates/builds';
+import { initSlateBuildTable } from '@kinu.run/core/slates';
 import { ROOT_SLATE_CALLER, slateCallerKey } from '../../src/slates/bindings';
 import { initWorkspaceSchema, type SqlValue, type WorkMode } from '@kinu.run/core';
 import { ContentRef } from '@agent-core/core';

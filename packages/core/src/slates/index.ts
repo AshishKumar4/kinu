@@ -30,3 +30,5 @@ export type { DurableAppIdentity, DurableApps } from './durable-app';
 export { SlateLiveShareStore, initSlateLiveShareTables } from './live-shares';
 
 export { shareLiveSlate } from './live-sharing';
+
+export { SlateBuilds, initSlateBuildTable, slateImage, type FailingSlateBuild, type SlateBuildFailure, type SlateImage } from './builds';

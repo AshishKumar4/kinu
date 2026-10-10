@@ -8,9 +8,24 @@
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import { slateAuthority, type RawSqlExec, type SqlExec } from '@kinu.run/core';
-import { KinuError, settle } from '@kinu.run/core/obs';
-import type { SlateBuildFailure, SlateImage } from './resident';
+import type { RawSqlExec, SqlExec } from '../types/primitives';
+import { KinuError } from '../obs/error';
+import { settle } from '../obs/effect';
+import { slateAuthority } from './authority';
+
+/** A compiled slate: each module's content digest, the client bundle and page shell when it has a browser surface. */
+export interface SlateImage {
+  readonly modules: Readonly<Record<string, string>>;
+  readonly client?: string;
+  readonly shell?: string;
+  /** The workspace files outside the slate's own tree the compiler read: a change to one is a change to the build. */
+  readonly reads?: readonly string[];
+}
+
+/** What a build that did not compile says: the compiler's own words, file and line among them. */
+export interface SlateBuildFailure {
+  readonly failed: string;
+}
 
 export function initSlateBuildTable(execRaw: RawSqlExec): void {
   // Its rows were kept per slate alone, whoever compiled them: none is known to be whose, so none is kept.
