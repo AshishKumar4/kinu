@@ -29,7 +29,7 @@ export function isForkConversationSection(kind: ForkRowSection): kind is ForkCon
  * one fresh context, every sealed message the carried chat references (its streamed parts are its source run's), and
  * the closed questions its calls read.
  */
-export const FORK_CONVERSATION_RESETS: readonly ForkReset[] = [
+const FORK_CONVERSATION_RESETS: readonly ForkReset[] = [
   'conversation_entry_parts', 'conversation_entries',
   'context_memberships', 'actor_context_selection', 'context_revisions', 'actor_contexts',
   'stream_parts', 'session_messages', 'owner_questions',
