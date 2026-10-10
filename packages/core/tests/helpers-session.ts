@@ -12,7 +12,7 @@ import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import type { AgentTracing } from '../src/obs/agent-tracing';
 import type { RunTurnSources } from '../src/orchestrator/turn-assembly';
 import type { HostedActor } from '../src/state/actor-host';
-import type { CacheWarmingLane } from '../src/providers/cache-warming';
+import type { CacheWarming, CacheWarmingLane } from '../src/providers/cache-warming';
 import { fixtureCompaction, fixtureRunSources, hostedSeatsOver } from './helpers-actor-host';
 import { makeSqlExec } from './helpers';
 
@@ -101,7 +101,7 @@ export async function sessionFixture(input: {
       driverGate: () => null,
       openWork: async () => ({ tasks: actor.stores.taskList.listOpen(), asyncWakePending: false }),
       steerSkills: async () => null, stillOwed: () => true,
-      ...(input.cacheWarming !== undefined && { cacheWarming: input.cacheWarming(actor) }),
+      ...(input.cacheWarming !== undefined && { cacheWarming: warmingOver(input.cacheWarming(actor)) }),
       ...input.ports,
     },
   });
@@ -109,5 +109,14 @@ export async function sessionFixture(input: {
   return {
     chat, actor, events, seats,
     close: () => { chat.close(); seats.host.releaseAll(); testSql.close(); },
+  };
+}
+
+/** A lane in this process, as the session asks it: its answers are at hand. */
+function warmingOver(lane: CacheWarmingLane): CacheWarming {
+  return {
+    keptAliveUntil: async (lastRequestAt) => lane.keptAliveUntil(lastRequestAt),
+    noteRequest: async () => { lane.noteRequest(); },
+    armAfterTurn: async (input) => lane.armAfterTurn(input),
   };
 }

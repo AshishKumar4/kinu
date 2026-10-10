@@ -273,6 +273,23 @@ export interface CacheWarmSeams {
 }
 
 /** The warm lifecycle: arm after a turn, fire on a wake, re-arm or stop. */
+/** What a turn ended on, which a warm would replay: the model that served it and the request it last sent. */
+export interface CacheWarmArm {
+  readonly modelSpec: ModelSpec;
+  readonly retention: CacheRetention;
+  readonly lastRequest: { readonly body: unknown; readonly sentAt: number; readonly usage: Usage } | undefined;
+}
+
+/** A conversation's warming lane as its session tells it, wherever the lane runs: the session knows both instants. */
+export interface CacheWarming {
+  /** Until when the prompt cache stays warm for a request sent at `lastRequestAt`; null when nothing kept it. */
+  keptAliveUntil(lastRequestAt: number): Promise<number | null>;
+  /** A real provider request is starting. */
+  noteRequest(): Promise<void>;
+  /** Consider a warm for the request this turn ended on; null when the policy declined. */
+  armAfterTurn(input: CacheWarmArm): Promise<number | null>;
+}
+
 export class CacheWarmingLane {
   constructor(private readonly seams: CacheWarmSeams) {}
 
@@ -294,11 +311,7 @@ export class CacheWarmingLane {
    * Consider a warm for the request this turn ended on; null when the policy declined.
    * A declined turn also retires whatever was armed before it.
    */
-  armAfterTurn(input: {
-    readonly modelSpec: ModelSpec;
-    readonly retention: CacheRetention;
-    readonly lastRequest: { readonly body: unknown; readonly sentAt: number; readonly usage: Usage } | undefined;
-  }): number | null {
+  armAfterTurn(input: CacheWarmArm): number | null {
     // The captured body is the adapter's native arguments, `undefined` fields included; the wire sent their JSON form.
     const sent = input.lastRequest?.body;
     const body = sent === undefined ? null : readJsonObjectText(JSON.stringify(sent));

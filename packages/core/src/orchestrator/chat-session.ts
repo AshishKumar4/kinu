@@ -23,7 +23,7 @@ import { contextFill, type ContextFill } from '../read-models/context-fill';
 import { workModeForTurnMetadata } from '../prompting/surface';
 import { runOperationProfile } from '../profiles/operation';
 import type { ResolvedTurnProfile } from '../profiles';
-import type { CacheWarmingLane } from '../providers/cache-warming';
+import type { CacheWarming } from '../providers/cache-warming';
 import { DEFAULT_CACHE_RETENTION, parseModelSpec } from '../providers/types';
 import { serverCompactor, SERVER_COMPACTION_MIN_TOKENS } from '../providers/server-compaction';
 import type { ToolOutcome } from '../tools/outcome';
@@ -267,8 +267,9 @@ export interface ChatSessionPorts {
   stillOwed(metadata: JsonObject | undefined): boolean;
   /** Where the assignment lives in another database (a facet's hirer's). */
   birthContext?(drainTurnId: string): Promise<readonly SerializedMessage[]>;
-  /** The session drives it because both instants it needs are the session's; the policy is the lane's. */
-  readonly cacheWarming?: CacheWarmingLane;
+  /** The session drives it because both instants it needs are the session's; the policy is the lane's. Absent where
+   *  no durable wake can replay a warm between turns, as for {@link armTurnWake}: the CLI. */
+  readonly cacheWarming?: CacheWarming;
 }
 
 export interface ChatSessionOptions {
@@ -1319,7 +1320,7 @@ export class ChatSession {
 
     // Before this turn's request voids the lane.
     const lastRequestAt = this.actorSession.lastRequestAt();
-    const cacheKeptAliveUntil = lastRequestAt === null ? null : this.ports.cacheWarming?.keptAliveUntil(lastRequestAt) ?? null;
+    const cacheKeptAliveUntil = lastRequestAt === null ? null : await this.ports.cacheWarming?.keptAliveUntil(lastRequestAt) ?? null;
 
     const prepared = await this.ports.prepareTurn(input, lease, {
       answerId: this.messageId, cacheCold: this.actorSession.promptCacheCold(cacheKeptAliveUntil),
@@ -1339,7 +1340,7 @@ export class ChatSession {
     let streamed = partial !== null;
 
     // A real request voids any armed warm; the durable counter stops a mid-turn wake from adding a refresh.
-    this.ports.cacheWarming?.noteRequest();
+    await this.ports.cacheWarming?.noteRequest();
 
     const execution = await this.actorSession.execute(lease, {
       task: item.text,
@@ -1443,7 +1444,7 @@ export class ChatSession {
 
     try {
       // The lane decides whether the prefix is worth keeping.
-      this.armCacheWarm(prepared);
+      await this.armCacheWarm(prepared);
 
       this.closeRun(end, lease);
       // Core drives the settled turn's effects as one state machine; this backend supplies the bodies and
@@ -1476,13 +1477,13 @@ export class ChatSession {
 
   /** The warm replays the turn's last request to the model that served it, a fallback's where one did; no provider in
    *  the cache plan means nothing to keep warm. */
-  private armCacheWarm(prepared: PreparedTurn): void {
+  private async armCacheWarm(prepared: PreparedTurn): Promise<void> {
     const lane = this.ports.cacheWarming;
     const cache = prepared.execution.chat.cache;
     const lastRequest = this.actorSession.orchestrator.acc.lastRequest;
 
     if (lane === undefined || cache?.providerId === undefined || cache.modelId === undefined) return;
-    lane.armAfterTurn({
+    await lane.armAfterTurn({
       modelSpec: lastRequest?.fallback === undefined ? { provider: cache.providerId, modelId: cache.modelId } : parseModelSpec(lastRequest.fallback),
       retention: cache.retention ?? DEFAULT_CACHE_RETENTION,
       lastRequest,

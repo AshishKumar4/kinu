@@ -114,6 +114,12 @@ export class FacetChat {
         quiet: () => { this.atRest(); },
         // Its tasks tool and its jobs run in the workspace.
         openWork: () => workspace.openWork(),
+        // The lane that keeps its prompt cache warm is the workspace's, which holds the provider keys and the wake.
+        cacheWarming: {
+          keptAliveUntil: (lastRequestAt) => workspace.cacheKeptAliveUntil(lastRequestAt),
+          noteRequest: () => workspace.noteModelRequest(),
+          armAfterTurn: (input) => workspace.armCacheWarm(input),
+        },
         steerSkills: (text) => workspace.steerSkills(text, this.activeSkills),
         stillOwed: (metadata) => planHandoffStillOwed(metadata, actor.stores.planReviews),
         birthContext: (drainTurnId) => workspace.birthContext(drainTurnId),

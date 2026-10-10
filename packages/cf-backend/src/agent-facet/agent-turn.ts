@@ -16,7 +16,7 @@ import { compactionDiagnostics, hostedActorCompaction } from '@kinu.run/compacti
 import type { AgentDatabase } from './agent-database';
 import type { StepPacer } from './step-pacer';
 import type { ChatTurnRequest } from '../agent-turns';
-import type { AgentHeadDelta, AgentReview, AgentTurnActivity, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, OpenWork, PreparedAgentTurn } from '@kinu.run/core';
+import type { AgentHeadDelta, AgentReview, AgentTurnActivity, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, CacheWarmArm, OpenWork, PreparedAgentTurn } from '@kinu.run/core';
 
 export interface AgentWorkspace {
   session(): NimbusSessionSurface;
@@ -57,6 +57,10 @@ export interface AgentWorkspace {
   steerSkills(text: string, alreadyActive: readonly string[]): Promise<string | null>;
   /** Its open tasks and running jobs, where its tools wrote them. */
   openWork(): Promise<OpenWork>;
+  /** The workspace's lane that keeps its prompt cache warm (`CacheWarming`); one an agent has none of keeps nothing. */
+  cacheKeptAliveUntil(lastRequestAt: number): Promise<number | null>;
+  noteModelRequest(): Promise<void>;
+  armCacheWarm(input: CacheWarmArm): Promise<number | null>;
   advise(review: AgentReview): Promise<void>;
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult>;
   executeTool(call: AgentToolCall): Promise<AgentToolAnswer>;

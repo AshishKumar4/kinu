@@ -3,6 +3,7 @@
   "asymmetry ChatSessionPorts.answerMetadata#absent-in-cli",
   "asymmetry ChatSessionPorts.armTurnWake#absent-in-cli",
   "asymmetry ChatSessionPorts.birthContext#absent-in-cli",
+  "asymmetry ChatSessionPorts.cacheWarming#absent-in-cli",
   "asymmetry ChatSessionPorts.quiet#absent-in-cli",
   "asymmetry FileDeps.slateBuild#absent-in-cli",
   "asymmetry MemoryDeps.account#absent-in-cli",

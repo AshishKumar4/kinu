@@ -6,7 +6,9 @@ export {
   CacheWarmingLane,
   initCacheWarmTable,
   warmUsage,
+  type CacheWarmArm,
   type CacheWarmSeams,
+  type CacheWarming,
   type WarmOutcome,
 } from './cache-warming';
 

@@ -101,7 +101,7 @@ import {
   MissionGovernor, type MissionSeam, type MissionBudgetRefusal,
   normalizeUsage, priceCall, type Usage,
   generateReported, streamTextReported, type GenerateRequest, type StreamRequest,
-  WORKSPACE_RUN_ID, signalCardId, TurnReplies, type ModelCallReport, type ModelOperationSink, type ModelOperationEvent, type CacheWarmingLane,
+  WORKSPACE_RUN_ID, signalCardId, TurnReplies, type ModelCallReport, type ModelOperationSink, type ModelOperationEvent,
   recordModelOperations, type ProviderWaitInfo,
   // Prices a model_call row only when the rate belongs to that call's own model.
   buildModelCallEvent,
@@ -2272,12 +2272,6 @@ export abstract class ActorAgent extends Agent<Env> {
       usage,
       usd: this.priceAt(usage),
     });
-  }
-
-  /** Undefined for hosted actors: they have neither the workspace wake chain nor the conversation
-   *  whose prefix a refresh keeps alive. */
-  protected cacheWarmingLane(): CacheWarmingLane | undefined {
-    return undefined;
   }
 
   private _claimsObserved = false;

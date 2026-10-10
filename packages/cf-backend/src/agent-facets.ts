@@ -4,7 +4,7 @@ import type { UIMessageChunk } from 'ai';
 import * as v from 'valibot';
 import { decodeModelMessageValues, forkConversationRowSchema, relayedAnswer, remoteContextTree } from '@kinu.run/core';
 import type { ForkConversationPlan, ForkConversationSection, ForkConversationSource, ForkConversationTarget, ForkRows } from '@kinu.run/core';
-import type { AgentOwnInspection, ArchiveSqlCursor, ContextEditor, ContextTree, StepSpendSource, ConversationRecall, PositionPageRequest, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ProviderEnv, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
+import type { AgentOwnInspection, ArchiveSqlCursor, CacheWarmArm, ContextEditor, ContextTree, StepSpendSource, ConversationRecall, PositionPageRequest, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ProviderEnv, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import type { AgentWorkspace } from './agent-facet/agent-turn';
 import type { AdvisorRecoverySnapshot, AgentFigures, AgentTurnActivity, HandedOffTurn, ResolvedTurnProfile, AgentHeadDelta, AgentReview, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TurnRequestAt, ModelCallReport, ModelOperationEvent } from '@kinu.run/core';
@@ -90,6 +90,9 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   birthContext(drainTurnId: string) { return this.open(this.answers.birthContext(drainTurnId)); }
   steerSkills(text: string, alreadyActive: readonly string[]) { return this.open(this.answers.steerSkills(text, alreadyActive)); }
   openWork() { return this.open(this.answers.openWork()); }
+  cacheKeptAliveUntil(lastRequestAt: number) { return this.open(this.answers.cacheKeptAliveUntil(lastRequestAt)); }
+  noteModelRequest() { return this.open(this.answers.noteModelRequest()); }
+  armCacheWarm(input: CacheWarmArm) { return this.open(this.answers.armCacheWarm(input)); }
   getAuth(key: string, opts?: AuthRequest) { return this.open(this.answers.getAuth(key, opts)); }
   listCredentials() { return this.open(this.answers.listCredentials()); }
   relayDevice(provider: RelayedProvider) { return this.open(this.answers.relayDevice(provider)); }
@@ -201,6 +204,9 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   birthContext(drainTurnId: string) { return this.owned((host) => host.birthContext(drainTurnId)); }
   steerSkills(text: string, alreadyActive: readonly string[]) { return this.owned((host) => host.steerSkills(text, alreadyActive)); }
   openWork() { return this.owned((host) => host.openWork()); }
+  cacheKeptAliveUntil(lastRequestAt: number) { return this.owned((host) => host.cacheKeptAliveUntil(lastRequestAt)); }
+  noteModelRequest() { return this.owned((host) => host.noteModelRequest()); }
+  armCacheWarm(input: CacheWarmArm) { return this.owned((host) => host.armCacheWarm(input)); }
   getAuth(key: string, opts?: AuthRequest) { return this.owned((host) => host.getAuth(key, opts)); }
   listCredentials() { return this.owned((host) => host.listCredentials()); }
   relayDevice(provider: RelayedProvider) { return this.owned((host) => host.relayDevice(provider)); }

@@ -882,6 +882,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         limits: this.modelCatalog.window(),
         alreadyActive: new Set(alreadyActive),
       }),
+      // Only main's conversation is kept warm: no other agent has its wake chain.
+      cacheKeptAliveUntil: async (lastRequestAt) => this.warmingOf(actorId)?.keptAliveUntil(lastRequestAt) ?? null,
+      noteModelRequest: async () => { this.warmingOf(actorId)?.noteRequest(); },
+      armCacheWarm: async (input) => this.warmingOf(actorId)?.armAfterTurn(input) ?? null,
       // Its tasks tool and its jobs run here, over its own rows, main's as any agent's.
       openWork: async () => {
         const { stores } = this.agentBound(actorId);
@@ -2043,8 +2047,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this._cacheWarming;
   }
 
-  protected override cacheWarmingLane(): CacheWarmingLane {
-    return this.cacheWarming;
+  /** The lane keeping an agent's prompt cache warm: main's alone. */
+  private warmingOf(actorId: string): CacheWarmingLane | null {
+    return actorId === this.actorHandle().actorId ? this.cacheWarming : null;
   }
 
   protected get triggerRegistry(): TriggerRegistry {
