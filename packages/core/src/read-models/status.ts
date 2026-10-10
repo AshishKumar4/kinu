@@ -8,6 +8,7 @@ import { readForkLineage, type ForkLineageRow } from '../identity/fork';
 import { missionOf } from '../identity/soul';
 import { BUILTIN_TOOLS } from '../tools/registry';
 import { CRAFT_NEUTRAL_PRIOR } from '../craft/in-episode';
+import { CraftStore as SqlCraftStore } from '@kinu.run/agent-utils';
 import type { CraftStore } from '../types/agent-runtime';
 import type { SqlExecutor } from '../types/primitives';
 import type { ReasoningEffort } from '../providers/effort';
@@ -119,7 +120,11 @@ export async function getChatHistoryPage(
 
 export type ChatHistoryPage = Page<ChatHistoryEntry, PositionCursor>;
 
-export function getToolList(sql: SqlExecutor, craftStore: CraftStore) {
+/**
+ * The tools an agent has: the built-ins and what it crafted, each with its quality and use. `craftStore` defaults to a
+ * read of `sql`'s own table, as an inspection of a workspace the caller does not run reads it.
+ */
+export function getToolList(sql: SqlExecutor, craftStore: CraftStore = new SqlCraftStore(sql)) {
   const crafted = craftStore.list().map((t) => {
     const scoreRow = sql<{ score: number; uses: number }>`
       SELECT score, uses FROM crafted_tools WHERE name = ${t.name} LIMIT 1`;

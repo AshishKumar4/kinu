@@ -4,7 +4,7 @@ import type { LanguageModel } from 'ai';
 import { localFileLinks, type BranchStatusEvent, type FileLinks, type PathPlanes } from '@kinu.run/core';
 import type { AgentConfigStore, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView, StagedSkillResult, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspaceSpend, WorkspaceWork, ModelTestResult } from '@kinu.run/core';
 import type { WorkspaceInfo } from '@kinu.run/cli-backend';
-import { getChatHistoryPage, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, REAL_CLOCK, ToolOutcomeSchema, usageReported, type ProposerOutcome } from '@kinu.run/core';
+import { getChatHistoryPage, getToolList, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, REAL_CLOCK, ToolOutcomeSchema, usageReported, type ProposerOutcome } from '@kinu.run/core';
 import * as v from 'valibot';
 import { attempt, KinuError, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
@@ -428,10 +428,7 @@ export class LocalAgentClient implements AgentClient {
   async describeTools(): Promise<AgentToolSurface> {
     return {
       builtIn: this.session.describeTools(),
-      crafted: this.deps.rt.craftStore.list().map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-      })),
+      crafted: getToolList(this.deps.rt.storage.sql, this.deps.rt.craftStore).crafted.map(({ name, description }) => ({ name, description })),
     };
   }
 
