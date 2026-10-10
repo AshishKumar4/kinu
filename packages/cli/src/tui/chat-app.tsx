@@ -412,9 +412,11 @@ function ChatScene({
 
   const isProcessing = inputState.activeTurns > 0;
 
-  const addMessage = useCallback((msg: Omit<DisplayMessage, 'id'>) => {
+  const addMessage = useCallback((msg: Omit<DisplayMessage, 'id'>): string => {
     const id = `msg-${++msgIdRef.current}`;
     setMessages((prev) => [...prev, { ...msg, id }]);
+
+    return id;
   }, []);
 
 
@@ -553,6 +555,7 @@ function ChatScene({
     rememberPrompt(input);
     const generation = clientGenerationRef.current;
     clientActionCountRef.current += 1;
+    let sentRow: string | null = null;
 
     try {
       const prompt = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes, planes: client.planes ?? undefined });
@@ -560,16 +563,13 @@ function ChatScene({
       if (clientGenerationRef.current !== generation) return;
 
       for (const problem of prompt.errors) addMessage({ role: 'system', content: problem });
-      const steering = machineRef.current.activeTurns > 0;
 
-      const message: Omit<DisplayMessage, 'id'> = {
+      // Shown as sent; whether it steered the running turn is the client's answer once it lands, never a guess here.
+      sentRow = addMessage({
         role: 'user',
         content: prompt.text,
         attachments: prompt.attached.length > 0 ? prompt.attached.map(describePromptAttachment) : undefined,
-        steered: steering,
-      };
-
-      addMessage(message);
+      });
       const text = [...localOutputsRef.current.splice(0), prompt.text].join('\n\n');
       const payload = prompt.files.length > 0 ? { text, files: prompt.files } : text;
       const sendOptions: AgentClientSendOptions = { cwd: process.cwd(), ...(mode !== undefined && { mode }) };
@@ -577,9 +577,17 @@ function ChatScene({
       if (nextTier) sendOptions.tier = nextTier;
 
       setNextTier(null);
-      await client.send(payload, sendOptions);
+      const sent = await client.send(payload, sendOptions);
+      const shown = sentRow;
+
+      if (sent.landed === 'mid-turn') setMessages((prev) => prev.map((m) => (m.id === shown ? { ...m, steered: true } : m)));
     } catch (err) {
-      if (clientGenerationRef.current === generation) addError({ cause: err });
+      if (clientGenerationRef.current !== generation) return;
+      const unsent = sentRow;
+
+      // A send that failed was never admitted: its row goes, and the failure says why.
+      if (unsent !== null) setMessages((prev) => prev.filter((m) => m.id !== unsent));
+      addError({ cause: err });
     } finally {
       clientActionCountRef.current -= 1;
     }
