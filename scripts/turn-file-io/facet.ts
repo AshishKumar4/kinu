@@ -4,7 +4,8 @@ import { Meter, instrument, type Slice } from './meter';
 
 const meters = new WeakMap<object, Meter>();
 
-instrument(Product.prototype, 'facet', (receiver) => meters.get(receiver));
+
+instrument(Product.prototype, 'facet', (receiver) => meters.get(receiver), ['workspace', 'state', 'open', 'prepared', 'withChat', 'models']);
 
 export class AgentFacet extends Product {
   private readonly perfMeter: Meter;
@@ -16,6 +17,11 @@ export class AgentFacet extends Product {
   }
 
   async perfBegin(): Promise<void> { this.perfMeter.begin(); }
+
+  async perfJoin(): Promise<void> {
+    this.perfMeter.ignoreNextRpc('facet.idle');
+    await super.idle();
+  }
 
   async perfCut(label: string, resume: boolean): Promise<Slice> { return this.perfMeter.cut(label, resume); }
 }

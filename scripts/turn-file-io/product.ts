@@ -5,6 +5,7 @@ import { Meter, instrument, type Slice, type RpcReceiver } from './meter';
 import { JsonObjectSchema } from '@kinu.run/core';
 import type { Tool } from 'ai';
 import * as v from 'valibot';
+import type { ChatSession } from '@kinu.run/core';
 
 export * from 'kinu:product';
 
@@ -18,7 +19,7 @@ const hostsInstrumented = new WeakSet<object>();
 
 const relayMeters = new WeakMap<RpcReceiver, Meter>();
 
-instrument(Relay.prototype, 'relay', (receiver) => relayMeters.get(receiver));
+instrument(Relay.prototype, 'relay', (receiver) => relayMeters.get(receiver), ['host', 'owned']);
 
 export class AgentWorkspaceRPC extends Relay {
   constructor(...args: ConstructorParameters<typeof Relay>) {
@@ -32,6 +33,8 @@ export class AgentWorkspaceRPC extends Relay {
 
 export class OrchestratorAgent extends Product {
   private readonly perfMeter: Meter;
+  private perfCachedFacet: Fetcher<MeasuredFacet> | undefined;
+  protected declare readonly chatLoop: ChatSession | undefined;
 
   constructor(...args: ConstructorParameters<typeof Product>) {
     super(...args);
@@ -50,7 +53,7 @@ export class OrchestratorAgent extends Product {
     const proto: RpcReceiver = Object.getPrototypeOf(host);
 
     if (!hostsInstrumented.has(proto)) {
-      instrument(proto, 'host', (receiver) => hostMeters.get(receiver));
+      instrument(proto, 'host', (receiver) => hostMeters.get(receiver), ['open']);
       hostsInstrumented.add(proto);
     }
 
@@ -61,7 +64,9 @@ export class OrchestratorAgent extends Product {
     // Before f2fa713f7 main has no isolate. Its actor directory row is the placement authority.
     if (v.parse(v.object({ PERF_ISOLATED: v.string() }), this.env).PERF_ISOLATED !== '1') return null;
 
-    return await this.agentFacetOf<MeasuredFacet>(this.actorHandle().actorId);
+    this.perfCachedFacet ??= await this.agentFacetOf<MeasuredFacet>(this.actorHandle().actorId);
+
+    return this.perfCachedFacet;
   }
 
   async perfBegin(): Promise<void> {
@@ -84,6 +89,12 @@ export class OrchestratorAgent extends Product {
 
   async perfQuiet(): Promise<void> {
     this.config.setSleepTimeComputeEnabled(false);
+    await this.perfJoin();
+  }
+
+  async perfJoin(): Promise<void> {
+    await (await this.perfFacet())?.perfJoin();
+    await this.chatLoop?.pumpPromise;
     await this.settleBackgroundTasks();
     await this.terminal.idle();
   }
@@ -111,6 +122,7 @@ export class OrchestratorAgent extends Product {
   }
 
   async perfTool(name: string, input: string): Promise<string> {
+    this.acc.context.reset();
     const tool = this.getRawToolsForWorkMode('build')[name];
 
     if (tool?.execute === undefined) throw new Error(`tool ${name} is absent`);

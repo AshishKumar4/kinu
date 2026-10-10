@@ -36,7 +36,7 @@ export class PerfDriver extends DurableObject<DriverEnv> {
     const result = await target.runTaskFromMcp(text);
 
     if (result.status !== 'queued') throw new Error(`probe turn was ${result.status}`);
-    await target.perfQuiet();
+    await target.perfJoin();
   }
 
   async begin(workspace: string): Promise<void> {

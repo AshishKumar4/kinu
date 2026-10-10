@@ -33,12 +33,12 @@ export interface RpcReceiver { readonly constructor: Function }
 const MethodSchema = v.custom<Function>((value) => typeof value === 'function');
 
 /** Instruments actual receiver entries; no multiplier or source-code call-count estimate. */
-export function instrument(proto: RpcReceiver, prefix: string, owner: (receiver: RpcReceiver) => Meter | undefined): void {
+export function instrument(proto: RpcReceiver, prefix: string, owner: (receiver: RpcReceiver) => Meter | undefined, internal: readonly string[]): void {
   for (const name of Object.getOwnPropertyNames(proto)) {
     const descriptor = Object.getOwnPropertyDescriptor(proto, name);
     const method: unknown = descriptor?.value;
 
-    if (name === 'constructor' || name.startsWith('perf') || typeof method !== 'function') continue;
+    if (name === 'constructor' || name.startsWith('perf') || internal.includes(name) || typeof method !== 'function') continue;
     const callable = v.parse(MethodSchema, method);
 
     Object.defineProperty(proto, name, { ...descriptor, value: function (this: RpcReceiver, ...args: unknown[]) {
@@ -54,6 +54,7 @@ export class Meter {
   private active = false;
   private calls: Record<string, number> = {};
   private readonly real: SqlStorage['exec'];
+  private ignoredRpc: string | null = null;
 
   constructor(storage: SqlStorage) {
     const exec = storage.exec.bind(storage);
@@ -63,8 +64,14 @@ export class Meter {
   }
 
   rpc(name: string): void {
+    if (name === this.ignoredRpc) { this.ignoredRpc = null;
+
+ return; }
+
     if (this.active && !name.includes('perf')) this.calls[name] = (this.calls[name] ?? 0) + 1;
   }
+
+  ignoreNextRpc(name: string): void { this.ignoredRpc = name; }
 
   begin(): void {
     this.real('CREATE TABLE IF NOT EXISTS perf_write_audit (name TEXT, bytes INTEGER)');
