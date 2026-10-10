@@ -18,6 +18,7 @@ import { parseJsonValue, type JsonValue } from '../utils/json';
 import { classify, diagnostics, hold, renderThrownChain, toKinuError } from '../obs/index';
 import { silenceBoundMs } from '../platform-catalog';
 import { fmtSpan } from '../utils/format';
+import { executorLabel } from '../read-models/executors';
 import { Effect } from 'effect';
 
 /** Stamped by Kinu: `do.evict.no_signal` means the platform delivers no eviction notice. */
@@ -166,7 +167,7 @@ function describeJobInput(kind: string, input: JsonValue): string | undefined {
     const parsed = v.safeParse(RunJobInputSchema, input);
 
     if (parsed.success) {
-      const runtime = parsed.output.runtime ? `${parsed.output.runtime}: ` : '';
+      const runtime = parsed.output.runtime ? `${executorLabel(parsed.output.runtime)}: ` : '';
 
       return `${runtime}${parsed.output.command.slice(0, 80)}`;
     }

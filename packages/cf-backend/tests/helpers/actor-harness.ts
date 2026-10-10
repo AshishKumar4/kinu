@@ -16,12 +16,11 @@ import { convertArrayToReadableStream, MockLanguageModelV4 } from 'ai/test';
 import type { PreparedRequest, ScriptedAnswer, SettledTurn, TurnHarness } from './turn-harness';
 import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, BackendHost, Clock, ModelInfo, ModelRouteResolution, ActorToolsets } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
-import type { Refusal } from '@kinu.run/core/obs';
-import type { SessionTranscript, WorkspaceOverview } from '@kinu.run/core';
+import type { WorkspaceOverview } from '@kinu.run/core';
 import { OwnedModelServices } from '../../src/owned-model-services';
-import type { ChatTurnInput, ActorTurnLease, PreparedTurn, TurnOpening } from '@kinu.run/core';
+import type { HostedTaskProfile, HostedTaskTurn } from '../../src/hosted-actors';
 import type { ChatWireTransport } from '../../src/chat-transport';
-import { isWorkMode, workModeForTurnMetadata, ChatSession, ExtensionHost, type KinuExtension } from '@kinu.run/core';
+import { isWorkMode, workModeForTurnMetadata } from '@kinu.run/core';
 import { ActorClaimStore, admitSubordinateTask, agentArtifactDirectory, agentHome, CHAT_SESSION_ID, createParentWorkspaceVfs, EventLog, SubordinateRosterStore, MAIN_AGENT, openWorkspaceMainActor, SessionHistory, TerminalTransitions, WorkspaceActorDirectory } from '@kinu.run/core';
 import { present, sqlOver } from '@kinu.run/test-utils';
 import {
@@ -32,27 +31,26 @@ import type { UserProfile } from '../../src/user/profile';
 import type { McpToolCall } from '../../src/user/mcp-servers';
 import type { WorkspaceHostTarget } from '../../src/workspace-host';
 import {
-  actorReferenceOf,
+  actorReferenceOf, announcementOf,
   type ActorHandle,
   type ActorHost, type HostedActor, type SubordinateSeed,
 } from '@kinu.run/core';
 import {
-  BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest,
-  type AgentRuntime, type DynamicContext, type LLM,
+  BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest, actorAffinity,
+  type AgentRuntime, type LLM,
   type ProfileCatalog, type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
-  type RoleCatalog, type ResolvedTurnProfile, type SqlExecutor,
+  type RoleCatalog, type SqlExecutor,
   type TierAssignments,
-  composePrepareStep,
   BackgroundJobStore, parseJsonValue, type JsonValue,
   type WorkMode, type JsonObject, type SerializableToolDescriptor, renderSoulMarkdown,
   type HeadInput, type HeadReport, type HeadRuntime,
   type SleepTimeUpdate,
   type EgressSecretSummary,
 } from '@kinu.run/core';
-import { HARNESS_AGENT, harnessFibersRunning, harnessHolds, joinHarnessFibers, mockAgentsSdk, trackHarnessLane } from './agents-sdk';
+import { HARNESS_AGENT, harnessFibersRunning, harnessHolds, joinHarnessFibers, joinHarnessFibersOf, mockAgentsSdk, trackHarnessLane } from './agents-sdk';
 import { fleetPlaneForTest, fleetPointWritten, openAnalyticsWindowForTest, type FleetPoint } from './analytics-plane';
 import { inProcessWorkerLoader } from './worker-loader';
-import { agentDatabase, inProcessAgentFacets } from './agent-facets';
+import { agentDatabase, failNextAnswerWrite, inProcessAgentFacets, scriptConversationModel } from './agent-facets';
 import type { AgentFacetCalls } from '../../src/agent-facet/agent-facet';
 import { GATEWAY_MODEL, openingOf, platformGatewayEnv, type RecordedGatewayRun, type StubbedAiBinding } from './platform-gateway';
 import {
@@ -181,12 +179,16 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     return this.ctx;
   }
 
+  /** An isolate the loader refuses to open, for the agents it names. */
+  harnessIsolateRefusal: { readonly refuses: (actorId: string) => boolean; readonly error: Error } | null = null;
   /** Joined with the fibers and not with the keep-alives, as production's lanes were fibers before D11. */
   protected override holdLane<T>(body: () => Promise<T>): Promise<T> {
-    return trackHarnessLane(body());
+    return trackHarnessLane(body(), this);
   }
 
   protected override async agentIsolate(actorId: string): Promise<AgentFacetCalls> {
+    if (this.harnessIsolateRefusal?.refuses(actorId) === true) throw this.harnessIsolateRefusal.error;
+
     return this.harnessDynamicWorkers.counted(this.agentOf(actorId).storageKey, await this.harnessAgentIsolate(actorId));
   }
 
@@ -246,7 +248,14 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     return [...activationWorlds.get(this.ctx)?.aiGateway?.unanswered ?? []];
   }
 
-  modelFactory?: () => LanguageModel;
+  private _modelFactory: (() => LanguageModel) | undefined;
+  /** The model this object's own lanes run on, and main's turns in its own isolate, scripted under its conversation. */
+  get modelFactory(): (() => LanguageModel) | undefined { return this._modelFactory; }
+  set modelFactory(factory: (() => LanguageModel) | undefined) {
+    this._modelFactory = factory;
+    // Main's isolate routes its calls under its record's name, which is this workspace's.
+    scriptConversationModel(actorAffinity({ name: this.name, workspaceId: '' }).sessionAffinity, factory ?? null);
+  }
   override getModel(): LanguageModel {
     return this.modelFactory?.() ?? super.getModel();
   }
@@ -271,7 +280,30 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     if (inFlight) await chatSessionTurns(this).prepare({ messages: [{ role: 'user', content: 'a live turn' }] });
     else await chatSessionTurns(this).settle({ messageId: 'a live turn', text: 'done' });
   }
-  get harnessChatLoop(): ChatSession { return this.chatLoop; }
+  /** Main's chat, in its own isolate (D9): a turn is open there. */
+  harnessMainTurnInFlight(): boolean { return this.mainChatTurn() !== null; }
+  /** The owner's Stop of main's chat. */
+  harnessStopMain(): Promise<void> { return this.stopMainChat(); }
+  /** The owner's words to main, admitted as its window admits them; resolves once reserved. */
+  harnessAdmitMain(text: string, id: string, mode: WorkMode | undefined): Promise<void> {
+    return this.hostedAdmit(this.actorHandle().actorId, { text, files: [], id, mode: mode ?? 'build' });
+  }
+  /** Where an admitted send landed, once main's chat settled it. */
+  async harnessMainLanding(id: string): Promise<SendLanding> {
+    const state = await this.chatTransport.wire.awaitSend(id);
+
+    if (state.status === 'running' || state.status === 'settled') return state.landed;
+
+    throw new Error(`the send ${id} was handed back before a turn took it`);
+  }
+  /** Main's conversation as its window reads it. */
+  harnessMainHistory(): Promise<UIMessage[]> { return this.chatTransport.wire.history(); }
+  /** The model main's turns run on, in its isolate and on this object's own model lanes. */
+  /** Main's turns, in its own isolate, run on `factory`; this object's own lanes (a judge, a title) keep theirs, so a
+   *  turn parked at its model call never parks them. */
+  harnessScriptMainModel(factory: () => LanguageModel): void {
+    scriptConversationModel(actorAffinity({ name: this.name, workspaceId: '' }).sessionAffinity, factory);
+  }
   private profileHold: { readonly reached: () => void; readonly release: Promise<void> } | null = null;
   /** The next profile read (a measure's or a turn's composition) waits for `release`; resolves once it is waiting. */
   harnessHoldNextProfile(release: Promise<void>): Promise<void> {
@@ -298,25 +330,20 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     return queries;
   }
   harnessBear(ownerUserId: string): void { this.bearWorkspace(this.name, ownerUserId); }
-  /** The conversation a stated turn is admitted over. Applies only while the actor
-   *  holds no working history of its own. */
+  /** The conversation a stated turn is admitted over, in main's own isolate, which reopens over it. Applies only while
+   *  main holds no working history of its own. */
   async harnessSeedHistory(messages: readonly ModelMessage[]): Promise<void> {
-    const current = await this.actorSession.canonical.materialize();
+    const main = this.actorHandle().actorId;
 
-    if (current.entries.length > 0) return;
-    await this.actorSession.restoreHistory(messages);
-  }
-  get harnessTranscript(): SessionTranscript { return this.chatTranscript; }
-  harnessEnqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> { return this.chatLoop.enqueueTurn(input); }
-  /** The answer id the next turn is persisted under; consumed by the next admission. */
-  private _nextAnswerId: string | null = null;
-  harnessNameNextAnswer(messageId: string): void { this._nextAnswerId = messageId; }
-  protected override mintAnswerId(): string {
-    const named = this._nextAnswerId;
-    this._nextAnswerId = null;
+    // Any read through main's window copies its roster rows into its own database.
+    await this.harnessMainHistory();
+    const { actor, history } = agentHistory({ agent: this, db: present(activationStorage.get(this.ctx), 'the activation\'s storage') }, main);
 
-    return named ?? super.mintAnswerId();
+    if ((await history.materialize()).entries.length > 0) return;
+    await history.replaceHistory(messages, { author: actor.actorId, via: 'session', turnId: null, stage: false, assertOwner: () => {} });
+    this.harnessResetAgentIsolate(this.agentOf(main).storageKey);
   }
+  harnessEnqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> { return this.enqueueMainTurn(input); }
   /** The ids the loop started its last turn under, off the transport's event stream. */
   private _lastTurnStart: { turnId: string; messageId: string } | null = null;
   harnessLastTurnStart(): { turnId: string; messageId: string } | null { return this._lastTurnStart; }
@@ -344,15 +371,19 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     if (!this._observedTransport) {
       this._observedTransport = true;
       const deliver = transport.deliver.bind(transport);
+      const feed = this.replies.feed.bind(this.replies);
+
+      // Main's words reach this room as its isolate streams them, each fed to the replies it answers.
+      this.replies.feed = (turnId, delta) => {
+        this._deliveredText.push(delta);
+
+        for (const watcher of this._deliveryWatchers) watcher();
+
+        feed(turnId, delta);
+      };
 
       transport.deliver = (event) => {
         if (event.type === 'turn-start') this._lastTurnStart = { turnId: event.turnId, messageId: event.messageId };
-
-        if (event.type === 'text-delta') {
-          this._deliveredText.push(event.delta);
-
-          for (const watcher of this._deliveryWatchers) watcher();
-        }
 
         return deliver(event);
       };
@@ -362,17 +393,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
   private _observedTransport = false;
 
-  /** The next assistant row fails to write; the commit is one transaction, so nothing lands. */
+  /** Main's next assistant row fails to write; the commit is one transaction, so nothing lands. */
   harnessNextAnswerUndurable(): void {
-    const transcript = this.harnessTranscript;
-    const append = transcript.appendAssistant.bind(transcript);
-    Object.defineProperty(transcript, 'appendAssistant', {
-      configurable: true,
-      value: (row: Parameters<typeof append>[0]) => {
-        Reflect.deleteProperty(transcript, 'appendAssistant');
-        throw new Error(`the answer row ${row.id} could not be written`);
-      },
-    });
+    failNextAnswerWrite(this.agentOf(this.actorHandle().actorId).storageKey);
   }
 
   /** The child substrate, for lifecycle verbs without a roster row. */
@@ -515,68 +538,40 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
     return stated !== null && stated.metadata !== undefined ? stated.metadata : super.turnUserMetadata();
   }
-  /** The tools and history the loop handed the model for the last prepared turn,
-   *  before the step pipeline splices the dynamic block in. */
-  private _preparedTools: ToolSet = {};
+  /** The tools main's facet turns were handed, before its step pipeline splices the dynamic block in, by turn: a
+   *  measure of the next request prepares a turn of its own, on the actor's own tools. */
+  private readonly _preparedTools = new Map<string, ToolSet>();
+  private _lastPreparedTools: ToolSet = {};
   private _prepareFailure: Error | null = null;
-  /** The prepared turn's per-step dynamic block; null until prepared or after a refusal. */
-  private _preparedDynamic: ((profile: ResolvedTurnProfile, tools: ToolSet) => DynamicContext) | null = null;
-  private _preparedExtensions: readonly KinuExtension[] = [];
-  harnessPreparedTools(): ToolSet { return this._preparedTools; }
-  /** One model step's messages, composed as core's chat composes every step. */
-  async harnessStep(stepNumber: number, messages: readonly ModelMessage[]): Promise<ModelMessage[]> {
-    const profile = this.resolvedTurnProfile();
-    const dynamic = this._preparedDynamic;
-
-    if (profile === null || dynamic === null) throw new Error('a model step requires a prepared profile and tool surface');
-    // Backend per-turn extensions, then the orchestrator's (whose prepareStep takes mid-turn steers).
-    const extensions = new ExtensionHost();
-
-    for (const extension of this._preparedExtensions) extensions.register(extension);
-    extensions.register(this.orch.turnExtension);
-
-    const result = await composePrepareStep(
-      {
-        extensions,
-        dynamic: { ledger: this.actorSession.dynamic, snapshot: () => this.actorSession.stepContext(dynamic, profile, this._preparedTools) },
-        // The destination provider a cross-provider replay is re-keyed at.
-        destination: { providerId: this.promptModelContext().provider, modelId: this.promptModelContext().id },
-      },
-      { stepNumber, messages: [...messages], steps: [] },
-    );
-
-    return result?.messages ?? [...messages];
+  harnessPreparedTools(turnId?: string): ToolSet {
+    return (turnId === undefined ? undefined : this._preparedTools.get(announcementOf(turnId))) ?? this._lastPreparedTools;
   }
-  harnessAdmittedHistory(): readonly ModelMessage[] { return [...this.actorSession.history]; }
+  /** The working history main's turn was admitted over, as its isolate holds it. */
+  async harnessAdmittedHistory(): Promise<readonly ModelMessage[]> {
+    return await this.agentStores(this.actorHandle().actorId).workingContext();
+  }
   harnessTakePrepareFailure(): Error | null {
     const failure = this._prepareFailure;
     this._prepareFailure = null;
 
     return failure;
   }
-  protected override async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpening): Promise<PreparedTurn> {
+  protected override async mainTaskProfile(turn: HostedTaskTurn): Promise<HostedTaskProfile> {
     this._prepareFailure = null;
 
     try {
-      const native = await super.prepareTurn(item, lease, opening);
-      const additions = activationWorlds.get(this.ctx)?.turnExtensions;
+      const profile = await super.mainTaskProfile(turn);
 
-      const prepared = additions === undefined ? native : {
-        ...native, execution: { ...native.execution, extensions: [...native.execution.extensions, ...additions] },
-      };
+      this._preparedTools.set(turn.turnId, profile.tools);
+      this._lastPreparedTools = profile.tools;
 
-      this._preparedTools = prepared.execution.chat.tools ?? {};
-      this._preparedDynamic = prepared.execution.dynamic;
-      this._preparedExtensions = prepared.execution.extensions;
-
-      return prepared;
+      return profile;
     } catch (error) {
       this._prepareFailure = error instanceof Error ? error : new Error(String(error));
-      this._preparedDynamic = null;
       throw error;
     } finally {
-      // Handed to one turn only.
-      this._suppliedTools = null;
+      // Handed to one turn only: the one it opens, never a measure of the next request.
+      if (turn.opening !== undefined) this._suppliedTools = null;
     }
   }
   /** A tool surface replacing the actor's own for the requested mode; a rebuild
@@ -594,8 +589,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
   /** The scripted model the next turns run on; held, not consumed by one turn. */
   harnessSupplyTurnModel(model: LanguageModel): void {
-    const factory = () => model;
-    Object.defineProperty(this, 'modelFactory', { configurable: true, value: factory });
+    this.modelFactory = () => model;
     const turn = () => model;
     Object.defineProperty(this, 'turnModel', { configurable: true, value: turn });
   }
@@ -710,13 +704,11 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
       },
     };
   }
-  /** Refuse every send with "this process may not drive" until disarmed. */
-  private _driverRefusal: Refusal | null = null;
-  harnessRefuseDriving(refusal: Refusal | null): void { this._driverRefusal = refusal; }
-  protected override driverGate(): Refusal | null { return this._driverRefusal; }
-
-  /** The wake arm that resumes the loop after a restart. */
-  harnessResumeChatLoop(): void { this.resumeChatLoop(); }
+  /** Main's isolate restarts, and its wake reopens the turn it was inside. */
+  async harnessResumeMain(): Promise<void> {
+    this.harnessResetAgentIsolate(this.agentOf(this.actorHandle().actorId).storageKey);
+    await this.recoverStrandedTurn();
+  }
 
   /** Issue the workspace capability token as a claim does: one row. */
   harnessHoldsCapability(token: string): void {
@@ -728,7 +720,8 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     void this.sql`DELETE FROM workspace_capability`;
   }
 
-  harnessJoinDetachedFibers(): Promise<void> { return joinHarnessFibers(); }
+  /** This object's own detached fibers; its agents' isolates run theirs, a parked turn's among them. */
+  harnessJoinDetachedFibers(): Promise<void> { return joinHarnessFibersOf(this); }
 
 
   /** Every actor's open lanes, as the next activation would find them. */
@@ -901,13 +894,17 @@ export function scriptedSleepTime(agent: HarnessOrchestratorAgent, answer: Sleep
 
 export async function sentTurn(agent: HarnessOrchestratorAgent, text: string, id: string, mode?: WorkMode): Promise<void> {
   await agent.send(text, id, [], mode);
-  await agent.harnessChatLoop.pumpPromise;
+  await agent.harnessMainLanding(id);
+  await agent.harnessAgentsIdle();
 }
 
 /** One owner message to the main actor, its turn run to the end on the models the workspace catalog routes to. */
 export async function catalogTurn(agent: HarnessOrchestratorAgent, text: string): Promise<void> {
-  await agent.harnessChatLoop.send(text, { id: crypto.randomUUID() });
-  await agent.harnessChatLoop.pumpPromise;
+  const id = crypto.randomUUID();
+
+  await agent.harnessAdmitMain(text, id, undefined);
+  await agent.harnessMainLanding(id);
+  await agent.harnessAgentsIdle();
 }
 
 /** The main actor's profile-routed side lane (reflection), the path its judge and advisor calls take too. */
@@ -968,10 +965,29 @@ export function agentHistory(harness: Pick<ActorHarness<HarnessOrchestratorAgent
   return { actor, history: historyOver({ agent: harness.agent, db }, actor) };
 }
 
-export function storedChat(
+/** Main's own isolate's database, where its conversation, turns, runs, steers and plans are kept (D9); opened by any
+ *  read through its window. */
+export function mainDatabase(harness: Pick<ActorHarness<HarnessOrchestratorAgent>, 'agent' | 'db'>): Database {
+  return ownDatabase(harness, workspaceMainActor(harness.db).actorId);
+}
+
+/** Main as its own isolate's database holds it, to address its rows as core's stores do; opened through its window. */
+export async function mainRows(harness: Pick<ActorHarness<HarnessOrchestratorAgent>, 'agent' | 'db'>): Promise<{ readonly db: Database; readonly sql: SqlExecutor; readonly actor: ActorHandle }> {
+  await harness.agent.harnessMainHistory();
+  const db = mainDatabase(harness);
+
+  return { db, sql: sqlOver(db), actor: actorOver(db, workspaceMainActor(harness.db).actorId) };
+}
+
+/** An actor's conversation as its store holds it: main's, in its own isolate, unless another actor is named. */
+export async function storedChat(
   harness: Pick<ActorHarness<HarnessOrchestratorAgent>, 'agent' | 'db'>, actor?: ActorHandle,
 ): Promise<UIMessage[]> {
-  return historyOver(harness, actor).transcript(CHAT_SESSION_ID).history();
+  if (actor !== undefined) return await historyOver(harness, actor).transcript(CHAT_SESSION_ID).history();
+
+  await harness.agent.harnessMainHistory();
+
+  return await agentHistory(harness, workspaceMainActor(harness.db).actorId).history.transcript(CHAT_SESSION_ID).history();
 }
 
 /** A settled response's improvement lanes and advisor review ran: their rows completed, or the whole
@@ -1159,6 +1175,9 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
     };
 
     const script = async (options: ScriptedTurnOptions): Promise<ScriptedAnswer> => {
+      // Main's own isolate titles its chat on this model too: a title's request offers no tools and ends on the reply it
+      // names; a turn's, a continuation's included, offers its tools.
+      if ((options.tools ?? []).length === 0 && options.prompt.at(-1)?.role === 'assistant') return { messageId: 'a-title', text: 'A titled chat' };
       calls += 1;
 
       if (calls === 1) arrived.resolve(options);
@@ -1179,7 +1198,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
         const scripted = await script(options);
 
         if (scripted.status === 'aborted') {
-          agent.harnessChatLoop.stop();
+          await agent.harnessStopMain();
           throw Object.assign(new Error('aborted'), { name: 'AbortError' });
         }
 
@@ -1216,8 +1235,8 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
               }
 
               // The cut a Stop makes, which keeps queued steers queued.
-              return agent.harnessDelivered(text).then(() => {
-                agent.harnessChatLoop.stop();
+              return agent.harnessDelivered(text).then(async () => {
+                await agent.harnessStopMain();
                 controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' }));
               });
             },
@@ -1234,9 +1253,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
     const model = parkingModel(arrived, answer.promise);
     const factory = () => model;
     seamFactories.add(factory);
-    agent.modelFactory = factory;
-
-    if (answerId !== undefined) agent.harnessNameNextAnswer(answerId);
+    agent.harnessScriptMainModel(factory);
     const driving = agent.harnessTakeDrivingMessage(openedTurns.get(agent));
     const turnId = openedTurns.get(agent) ?? driving?.id;
     openedTurns.delete(agent);
@@ -1244,16 +1261,19 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
     const chosenMode = drivingMode.success && isWorkMode(drivingMode.output) ? drivingMode.output : undefined;
 
     // A stamped message (`kinuEvent`) is a programmatic turn admitted through the queue;
-    // a client's message is admitted under its own id and mode.
-    const waiter = Promise.withResolvers<SendLanding>();
+    // a client's message is admitted under its own id and mode, as main's window admits it.
+    const id = turnId ?? crypto.randomUUID();
     // A message to an in-flight turn is a steer: its admission is all a preparation sees.
-    const steer = driving?.stamped !== true && agent.harnessChatLoop.turnInFlight();
+    const steer = driving?.stamped !== true && agent.harnessMainTurnInFlight();
 
     const admitted: Promise<void> = driving?.stamped === true
-      ? agent.harnessEnqueueTurn({ text: driving.text, metadata: driving.metadata ?? {} }).then(() => agent.harnessChatLoop.pumpPromise).then(() => { waiter.resolve('turn'); })
-      : agent.harnessChatLoop.admit(text, { id: turnId ?? crypto.randomUUID(), ...(chosenMode !== undefined && { mode: chosenMode }) }, waiter);
+      ? agent.harnessEnqueueTurn({ text: driving.text, metadata: driving.metadata ?? {} }).then(() => undefined)
+      : agent.harnessAdmitMain(text, id, chosenMode);
 
-    const landed: Promise<SendLanding> = admitted.then(() => waiter.promise);
+    const landed: Promise<SendLanding> = driving?.stamped === true
+      ? admitted.then(() => agent.harnessAgentsIdle()).then(() => 'turn' as const)
+      : admitted.then(() => agent.harnessMainLanding(id));
+
     // A refused admission is an outcome the suite reads, not an unhandled rejection.
     const refused = (error: Error) => ({ refused: toKinuError({ doing: 'admitting the turn the suite asked for', cause: error, otherwise: 'unavailable' }) });
     const landing = landed.then((value) => ({ landing: value }), refused);
@@ -1268,7 +1288,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
 
     if ('landing' in outcome && outcome.landing === 'turn') {
       // No model call: a refused preparation surfaces as the rejection it was.
-      await agent.harnessChatLoop.pumpPromise;
+      await agent.harnessAgentsIdle();
       const failure = agent.harnessTakePrepareFailure();
 
       if (failure !== null) throw failure;
@@ -1282,14 +1302,14 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
       // A cut admission: the prepared turn is refused and rejects with the cut's reason.
       answer.resolve({ messageId: identity.messageId, status: 'aborted' });
       await landing;
-      await agent.harnessChatLoop.pumpPromise;
+      await agent.harnessAgentsIdle();
       throw signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason ?? 'the preparation was cut'));
     }
 
     const parked = {
       request: request === null
         ? { identity, messages: [], prompt: [], system: undefined, model, tools: {}, activeTools: undefined, providerOptions: undefined }
-        : requestView({ request, model, identity, tools: agent.harnessPreparedTools(), history: agent.harnessAdmittedHistory() }),
+        : requestView({ request, model, identity, tools: agent.harnessPreparedTools(identity.turnId), history: await agent.harnessAdmittedHistory() }),
       answer, landed, identity,
     };
 
@@ -1316,7 +1336,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
     try {
       parked.answer.resolve(answer);
       await parked.landed;
-      await agent.harnessChatLoop.pumpPromise;
+      await agent.harnessAgentsIdle();
     } finally {
       restore();
     }
@@ -1334,9 +1354,12 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
 
       // A suite-installed model runs the turn; the seam scripts 'ok' only when none was supplied.
       if (installed !== undefined && !seamFactories.has(installed)) {
-        const landing = await agent.harnessChatLoop.send(text, { id: crypto.randomUUID() });
-        await agent.harnessChatLoop.pumpPromise;
-        const last = (await agent.harnessTranscript.history()).at(-1);
+        const id = crypto.randomUUID();
+
+        await agent.harnessAdmitMain(text, id, undefined);
+        const landing = await agent.harnessMainLanding(id);
+        await agent.harnessAgentsIdle();
+        const last = (await agent.harnessMainHistory()).at(-1);
 
         return { status: landing === 'turn' ? 'completed' : 'skipped', message: last?.role === 'assistant' ? last : undefined };
       }
@@ -1344,8 +1367,8 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
       const parked = await admit(text, undefined, options?.signal);
       parked.answer.resolve({ messageId: parked.identity.messageId, text: 'ok' });
       const landing = await parked.landed;
-      await agent.harnessChatLoop.pumpPromise;
-      const last = (await agent.harnessTranscript.history()).at(-1);
+      await agent.harnessAgentsIdle();
+      const last = (await agent.harnessMainHistory()).at(-1);
 
       return { status: landing === 'turn' ? 'completed' : 'skipped', message: last?.role === 'assistant' ? last : undefined };
     },
@@ -1359,11 +1382,11 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
     },
 
     async drainEnqueued() {
-      await agent.harnessChatLoop.pumpPromise;
+      await agent.harnessAgentsIdle();
     },
 
     async runQueuedMessage() {
-      await agent.harnessChatLoop.pumpPromise;
+      await agent.harnessAgentsIdle();
     },
 
     async park() {
@@ -1372,14 +1395,14 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
       const model = parkingModel(arrived, answer.promise);
       const factory = () => model;
       seamFactories.add(factory);
-      agent.modelFactory = factory;
+      agent.harnessScriptMainModel(factory);
       const request = await arrived.promise;
       const started = agent.harnessLastTurnStart();
       const identity: SettledTurn = started ?? { turnId: '', messageId: '' };
-      const landed: Promise<SendLanding> = (agent.harnessChatLoop.pumpPromise ?? Promise.resolve()).then(() => 'turn' as const);
+      const landed: Promise<SendLanding> = agent.harnessAgentsIdle().then(() => 'turn' as const);
 
       const parked: ParkedTurn = {
-        request: requestView({ request, model, identity, tools: agent.harnessPreparedTools(), history: agent.harnessAdmittedHistory() }),
+        request: requestView({ request, model, identity, tools: agent.harnessPreparedTools(identity.turnId), history: await agent.harnessAdmittedHistory() }),
         answer, landed, identity,
       };
 
@@ -1394,15 +1417,15 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
       const model = parkingModel(arrived, answer.promise);
       const factory = () => model;
       seamFactories.add(factory);
-      agent.modelFactory = factory;
-      agent.harnessResumeChatLoop();
+      agent.harnessScriptMainModel(factory);
+      const resumed = agent.harnessResumeMain();
       const request = await arrived.promise;
       const started = agent.harnessLastTurnStart();
       const identity: SettledTurn = started ?? { turnId: '', messageId: '' };
-      const landed: Promise<SendLanding> = (agent.harnessChatLoop.pumpPromise ?? Promise.resolve()).then(() => 'turn' as const);
+      const landed: Promise<SendLanding> = resumed.then(() => agent.harnessAgentsIdle()).then(() => 'turn' as const);
 
       const parked: ParkedTurn = {
-        request: requestView({ request, model, identity, tools: agent.harnessPreparedTools(), history: agent.harnessAdmittedHistory() }),
+        request: requestView({ request, model, identity, tools: agent.harnessPreparedTools(identity.turnId), history: await agent.harnessAdmittedHistory() }),
         answer, landed, identity,
       };
 
@@ -1425,10 +1448,6 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
       const parked = await admit(text, undefined, input.signal);
 
       return parked.request;
-    },
-
-    async step(stepNumber, messages) {
-      return agent.harnessStep(stepNumber, messages);
     },
 
     async settle(answer) {
@@ -1492,11 +1511,16 @@ export function armedWakes(db: Database): { id: string; time: number; payload: J
   ).all().map((row) => ({ id: row.id, time: row.time, payload: row.payload === null ? null : parseJsonValue(row.payload) }));
 }
 
-/** The platform's delivery: the clock reaches the soonest wake, and the alarm drives it. The caller resets the clock. */
+/**
+ * The platform's delivery: the clock reaches the soonest wake, the workspace's own or an agent's isolate's (as a hand-off
+ * to main arms), and the alarm drives it. The caller resets the clock.
+ */
 export async function fireSoonestWake(agent: Pick<HarnessOrchestratorAgent, 'alarm'>, db: Database): Promise<void> {
-  const [soonest] = armedWakes(db);
+  const soonest = db.query("SELECT 1 FROM sqlite_master WHERE name = 'cf_agents_jobs'").get() === null ? null : db.query<{ time: number }, []>(
+    "SELECT time FROM cf_agents_jobs WHERE capability IN ('kinu-wakes', 'kinu-agent-wakes') ORDER BY time LIMIT 1",
+  ).get();
 
-  if (soonest === undefined) throw new Error('no wake is armed');
+  if (soonest === null) throw new Error('no wake is armed');
 
   setSystemTime(new Date(Math.max(soonest.time, Date.now())));
   await agent.alarm();
@@ -1548,7 +1572,6 @@ export interface HarnessActorWorld {
   freshScaffold?: boolean;
   /** The platform AI binding the gateway provider calls; a recording stub by default. */
   aiGateway?: StubbedAiBinding;
-  turnExtensions?: readonly KinuExtension[];
   /** The deployed build's version id at `env.CF_VERSION_METADATA`: a claim on the built-in program names it. Unset,
    *  the object runs on {@link HARNESS_BUILD}, as every deployed object runs on a named build; null runs it on none,
    *  for a test about a host that stamps no build. */

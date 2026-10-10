@@ -183,7 +183,7 @@ describe('the request the preview accepts', () => {
   });
 
   // codex.ts `chatgptSessionHeaders`: the backend caches under the session, which a workspace's conversations share.
-  test('every call carries its workspace as the session and its own conversation, which another conversation does not share', async () => {
+  test('a login that names no account keeps its workspace as the session; each conversation is its own', async () => {
     const api = openai(answered(), answered(), answered(), answered());
     const { deps } = signedIn(api.fetch);
     const provider = createChatGptProvider();
@@ -197,6 +197,24 @@ describe('the request the preview accepts', () => {
     expect(session).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
     expect([again, request]).toEqual([[session, conversation, request], conversation]);
     expect([hireSession === session, hireConversation === conversation, otherSession === session]).toEqual([true, false, false]);
+  });
+
+  test('a login that names its account is that account\'s session in every workspace, and another account\'s is not', async () => {
+    const api = openai(answered(), answered(), answered());
+    const token = (account: string) => `h.${Buffer.from(JSON.stringify({ 'https://api.openai.com/auth': { chatgpt_account_id: account } })).toString('base64url')}.s`;
+    const provider = createChatGptProvider();
+
+    const model = (account: string, workspaceAffinity: string) => provider.createModel('gpt-6.1-sol', {
+      ...signedIn(api.fetch).deps, workspaceAffinity, getAuth: async () => ({ headers: { Authorization: `Bearer ${token(account)}` } }),
+    });
+
+    for (const called of [model('acct-1', 'kinu-workspace-a'), model('acct-1', 'kinu-workspace-b'), model('acct-2', 'kinu-workspace-a')]) {
+      expect(await streamText({ model: called, maxRetries: 0, prompt: 'hello' }).text).toBe('ok');
+    }
+
+    const [[a] = [], [b] = [], [other] = []] = api.sent.map((sent) => sent.session);
+
+    expect([a === b, a === other]).toEqual([true, false]);
   });
 
   test('a call that wants one answer still streams, and the stream becomes that answer', async () => {
@@ -252,6 +270,52 @@ describe('what the plan route answers', () => {
     // The provider's own words reach the owner, not a sentence of Kinu's in their place, with the request id.
     expect(failed?.error).toMatchObject({ statusCode: status, isRetryable: false, message: expect.stringMatching(new RegExp(`^refused: ${code} .*request req_${code}`)) });
     expect(failed === null ? null : kinuCause(failed)?.code).toBe(kind);
+  });
+
+  // As the registry resolves it: the one stack, whose retry is the call's.
+  const stacked = (fetch: typeof globalThis.fetch) => withModelStack(createChatGptProvider().createModel('gpt-6.1-sol', signedIn(fetch).deps), {
+    provider: 'chatgpt', lane: 'chatgpt@main', sleep: async () => {},
+  });
+
+  /** A stream that opens and begins its reasoning and its message, then ends before any output or response.completed. */
+  const cutBeforeOutput = () => sse(
+    { type: 'response.created', response: RESPONSE },
+    { type: 'response.output_item.added', output_index: 0, item: { id: 'rs_1', type: 'reasoning', summary: [] } },
+    { type: 'response.output_item.added', output_index: 1, item: { ...MESSAGE, status: 'in_progress', content: [] } },
+  );
+
+  test('a stream that ends before its first output is retried as a refusal is, and the step holds one answer', async () => {
+    const api = openai(cutBeforeOutput(), answered());
+    const result = streamText({ model: stacked(api.fetch), prompt: 'hello', maxRetries: 0 });
+
+    expect(await result.text).toBe('ok');
+    expect(api.sent).toHaveLength(2);
+    expect((await result.steps).flatMap((step) => step.content.filter((part) => part.type === 'text').map((part) => part.text))).toEqual(['ok']);
+  });
+
+  test('a stream cut after its output began is not replayed: the step fails in ChatGPT\'s words', async () => {
+    const api = openai(sse(
+      { type: 'response.created', response: RESPONSE },
+      { type: 'response.output_item.added', output_index: 0, item: { ...MESSAGE, status: 'in_progress', content: [] } },
+      { type: 'response.output_text.delta', item_id: 'msg_1', output_index: 0, content_index: 0, delta: 'o' },
+    ), answered());
+
+    const failure = await streamFailure(stacked(api.fetch));
+
+    expect(api.sent).toHaveLength(1);
+    expect(kinuCause(failure)).toMatchObject({ message: 'ChatGPT ended the stream before response.completed' });
+  });
+
+  test('a usage limit before the first output is final: sent once, a budget refusal', async () => {
+    const api = openai(sse(
+      { type: 'response.created', response: RESPONSE },
+      { type: 'response.failed', response: { ...RESPONSE, status: 'failed', error: { code: 'subscription_sharing_usage_limit_exceeded', message: 'limit' } } },
+    ), answered());
+
+    const failure = await streamFailure(stacked(api.fetch));
+
+    expect(api.sent).toHaveLength(1);
+    expect(kinuCause(failure)?.code).toBe('budget');
   });
 
   test('the usage limit keeps OpenAI\'s words and names where the owner manages it', async () => {

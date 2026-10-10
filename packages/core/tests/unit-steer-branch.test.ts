@@ -18,6 +18,7 @@ import {
 } from '../src/steer-branch';
 import { branchesTerminalEffect } from '../src/orchestrator/terminal-effects';
 import { present } from '@kinu.run/test-utils';
+import { conversationTurnPair } from '../src/identity/conversation-store';
 
 function setup() {
   const ws = createTestWorkspace();
@@ -289,7 +290,7 @@ describe('recordTakePick over a branch-sourced set — the pipeline unchanged', 
       liveText: 'A-style answer', branchText: 'B-style answer',
     }), 'the recorded take set');
 
-    const record = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: set.candidates[1].nodeId });
+    const record = await recordTakePick(sql, actor, async (messageId) => await conversationTurnPair(transcript, messageId), { takeId: set.id, nodeId: set.candidates[1].nodeId });
     expect(record.changedAnswer).toBe(true);
     expect(record.chosen.text).toBe('B-style answer');
 
@@ -312,7 +313,7 @@ describe('recordTakePick over a branch-sourced set — the pipeline unchanged', 
       liveText: 'live answer', branchText: 'branch answer',
     }), 'the recorded take set');
 
-    const record = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: set.candidates[0].nodeId });
+    const record = await recordTakePick(sql, actor, async (messageId) => await conversationTurnPair(transcript, messageId), { takeId: set.id, nodeId: set.candidates[0].nodeId });
     expect(record.changedAnswer).toBe(false);
     expect(sql<{ score: number }>`SELECT score FROM turn_ratings`[0]?.score).toBe(4);
   });

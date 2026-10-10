@@ -7,7 +7,7 @@
 import { abortAllDurableObjects, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
-import { KINU_TIMER_JOB } from '../../src/wake-jobs';
+import { KINU_TIMER_JOB } from '../../../src/wake-jobs';
 import {
   CallRecordSchema,
   DiagnosticFailureSchema,
@@ -19,7 +19,7 @@ import {
   type DiagnosticFailure,
   type HttpCall,
   type PendingSteer,
-} from './two-turn-shapes';
+} from '../two-turn-shapes';
 
 const FailuresSchema = v.array(DiagnosticFailureSchema);
 
@@ -31,6 +31,11 @@ const ATTACHMENT_URL = 'data:image/png;base64,iVBORw0KGgo=';
 /** A new workspace's logo is drawn by its own model too; a test counting turns leaves that call out. */
 function drawsLogo(call: HttpCall): boolean {
   return call.users.some((message) => message.startsWith('Design the logo'));
+}
+
+/** What a call's conversation said, without the system prompt and the dynamic context blocks. */
+function spoken(call: HttpCall | undefined) {
+  return call?.conversation.filter((message) => message.role !== 'system' && !message.content.startsWith('<'));
 }
 
 function carriesAttachment(call: HttpCall): boolean {
@@ -47,15 +52,18 @@ describe('two real turns over the HTTP model seam', () => {
     // Its MCP caller got its answer at admission beside the held turn, as a mid-turn splice's caller does.
     expect(conversation.task?.status).toBe('queued');
 
-    // The signal waited with the sends genesis could not land, so it rides their rerun's first step.
-    expect(calls).toHaveLength(2);
+    // The sends genesis could not land rerun as one turn in main's isolate; the signal the workspace held through
+    // genesis is delivered once it ends, and answered behind them.
+    expect(calls).toHaveLength(3);
     const genesis = calls[0]?.users.find((message) => !message.startsWith('<'));
-    const rerun = calls[1]?.conversation.filter((message) => message.role !== 'system' && !message.content.startsWith('<'));
 
-    expect(rerun).toEqual([
+    expect(spoken(calls[1])).toEqual([
       { role: 'user', content: genesis },
       { role: 'assistant', content: `echo:${genesis}` },
       { role: 'user', content: 'QUEUE-A\n\nQUEUE-B' },
+    ]);
+    expect(spoken(calls[2])?.slice(3)).toEqual([
+      { role: 'assistant', content: 'echo:QUEUE-A\n\nQUEUE-B' },
       { role: 'user', content: 'QUEUE-PROGRAMMATIC' },
     ]);
   });
@@ -94,24 +102,22 @@ describe('two real turns over the HTTP model seam', () => {
     // A busy socket's pending_steers row drains once the turn settles; the durable-token proof is the cold arm.
   });
 
-  it('a peer event that arrives mid-genesis rides the rerun of the sends genesis could not land', async () => {
+  it('a peer event that arrives mid-genesis is answered after the rerun of the sends genesis could not land', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('peer-queue-driver'));
 
     const calls = v.parse(QueuedConversationSchema, await root.queuedConversation('peer')).http
       .filter((call) => call.model === 'probe-queue' && !drawsLogo(call));
 
-    // A message arriving behind a queued user turn rides that turn's first step, so the drain's
-    // brief is the rerun's second user message.
-    expect(calls).toHaveLength(2);
+    // The sends rerun as one turn in main's isolate; the event's drain is the workspace's, run once genesis ends.
+    expect(calls).toHaveLength(3);
     const genesis = calls[0]?.users.find((message) => !message.startsWith('<'));
-    const rerun = calls[1]?.conversation.filter((message) => message.role !== 'system' && !message.content.startsWith('<'));
 
-    expect(rerun).toEqual([
+    expect(spoken(calls[1])).toEqual([
       { role: 'user', content: genesis },
       { role: 'assistant', content: `echo:${genesis}` },
       { role: 'user', content: 'QUEUE-A\n\nQUEUE-B\n\nQUEUE-C' },
-      { role: 'user', content: expect.stringContaining('QUEUE-PROGRAMMATIC') },
     ]);
+    expect(spoken(calls[2])?.at(-1)).toEqual({ role: 'user', content: expect.stringContaining('QUEUE-PROGRAMMATIC') });
   });
   it('keeps a queued chat on its durable token through a cold reset and replay', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('cold-queue-driver'));
@@ -272,7 +278,8 @@ describe('two real turns over the HTTP model seam', () => {
     const left = [{ kind: 'turn', id: 'agent-turn', phase: 'blocked', attempt: null }, { kind: 'effect', id: 'retired', phase: 'blocked', attempt: 0 }];
     const brief = (rows: typeof work.after) => rows.map(({ kind, id, phase, attempt }) => ({ kind, id, phase, attempt }));
 
-    expect(brief(work.stranded), JSON.stringify(work)).toEqual([{ kind: 'turn', id: 'turn-stranded', phase: 'blocked', attempt: 2 }, ...left]);
+    // Main's stranded turn is its own isolate's, reported after what the workspace holds itself.
+    expect(brief(work.stranded), JSON.stringify(work)).toEqual([...left, { kind: 'turn', id: 'turn-stranded', phase: 'blocked', attempt: 2 }]);
     expect(work.stranded.map((row) => row.blocked === null)).toEqual([false, false, false]);
     expect(work.shown).toBe(true);
     expect(work.recovered).not.toBe('none');
@@ -318,12 +325,6 @@ describe('two real turns over the HTTP model seam', () => {
     expect(done.turnCalls).toBe(0);
     expect(done.answers).toBe(1);
     expect(done.runEnds).toEqual([{ runId: expect.any(String), reason: 'completed' }]);
-  });
-
-  it('a Changes-tab send the loop refuses to drive takes its card row with it', async () => {
-    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('notes-refused-driver'));
-
-    expect(await root.refusedChangeNotes()).toEqual({ sent: true, owed: { sends: 0, cards: 0 } });
   });
 
   it('splices a mid-turn attachment into the next model call as a file part', async () => {

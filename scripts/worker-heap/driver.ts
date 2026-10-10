@@ -17,6 +17,8 @@ interface WorkspaceRpc extends Rpc.DurableObjectBranded {
   hostHeads(tag: string, count: number): Promise<void>;
   /** `worker-heap/product.ts`'s probe RPC. */
   delegatedRunners(): Promise<number>;
+  /** `worker-heap/product.ts`'s probe RPC. */
+  quiesce(): Promise<void>;
 }
 
 interface AccountRpc extends Rpc.DurableObjectBranded {
@@ -64,6 +66,10 @@ export class HeapDriver extends DurableObject<DriverEnv> {
 
   async heads(workspace: string, tag: string, count: number): Promise<void> {
     await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).hostHeads(tag, count);
+  }
+
+  async quiesce(workspace: string): Promise<void> {
+    await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).quiesce();
   }
 }
 
@@ -274,6 +280,7 @@ export default {
 
     if (url.pathname === '/turn') await driver.turn(workspace, url.searchParams.get('text') ?? 'hello');
     else if (url.pathname === '/heads') await driver.heads(workspace, url.searchParams.get('tag') ?? 'head', Number(url.searchParams.get('count')));
+    else if (url.pathname === '/quiesce') await driver.quiesce(workspace);
     else await driver.setUp(workspace, url.searchParams.get('compat') === '1');
 
     return new Response(null, { status: 204 });

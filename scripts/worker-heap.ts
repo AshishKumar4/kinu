@@ -10,6 +10,12 @@
  * minified, 48.9 MB minified with ASCII-only output. esbuild's 11.9 MB wasm, then instantiated at load by a
  * static import, is outside V8's count; its absence is checked on the module graph instead.
  *
+ * Measured 2026-10-09 in workerd 1.20260930.2 (miniflare 5.20260926.0-alpha): setup now loads the workspace agent's
+ * own isolate, and the workspace hands the Worker Loader the agent bundle's 6.2 MB of module text, garbage once loaded.
+ * V8's uncollected count read 31.5 MB on 5681dfd92 (two runs) against 27.2-27.3 MB on e0cd7e435, which keeps the
+ * agent in this isolate, while the live heap fell from 28.9 MB to 28.3 MB. So the setup bound is read on the live heap,
+ * after the collection a heap snapshot makes, and is derived for that quantity: see {@link HEAP_AFTER_SETUP_BOUND_BYTES}.
+ *
  * `--no-build` reads the existing `dist/kinu` (a deploy already built it).
  */
 
@@ -32,12 +38,15 @@ const DIST = join(CF_BACKEND, 'dist/kinu');
 
 export const GATE = 'worker-heap';
 
-/** Measured 2026-10-07: 45.4 MB used on b0de8580f, where 15 dependents each bundled their own zod; 35.7-36.5 MB over 3
- *  runs on lane/memory-gap 9875bab49 with one; 26.4-26.5 MB on 871e789f1, where a module compiles when first imported
- *  (`new_module_registry`) and the slate vendor waits for a slate; 25.5-25.6 MB on a21347229, where a provider SDK
- *  loads with its first model; 24.4 MB on a9680b282, where core declares no import-time effects and passkeys and mail
- *  load their libraries per route. Plus 4 MB of room for the product to grow. */
-export const HEAP_AFTER_SETUP_BOUND_BYTES = 28_500_000;
+/** The live heap after setup, collected first. Measured 2026-10-09 on integration 44b13e946, three runs: 29.2, 28.9 and
+ *  29.2 MB live (27.5 MB used each). The highest, 29.2 MB, plus 4 MB of room for the product to grow.
+ *
+ *  Until 2026-10-09 this bounded the used heap, garbage included, at 28.5 MB: 45.4 MB used on b0de8580f, where 15
+ *  dependents each bundled their own zod; 35.7-36.5 MB over 3 runs on lane/memory-gap 9875bab49 with one; 26.4-26.5 MB
+ *  on 871e789f1, where a module compiles when first imported (`new_module_registry`) and the slate vendor waits for a
+ *  slate; 25.5-25.6 MB on a21347229, where a provider SDK loads with its first model; 24.4 MB on a9680b282, where core
+ *  declares no import-time effects and passkeys and mail load their libraries per route; plus the same 4 MB. */
+export const HEAP_AFTER_SETUP_BOUND_BYTES = 33_200_000;
 
 /** Measured 2026-09-26 at {@link STEP} (2.4 MB of answers): 9.8 MB live in the parked step; 7.3 MB once the Workers
  *  AI fetch stopped copying the request; 4.8 MB once our own prompt text left no character above U+00FF, so V8
@@ -54,7 +63,14 @@ export const STEP_LIVE_BOUND_BYTES = 5_500_000;
 
 /** Measured 2026-09-27 at {@link HEADS}: 7.7 MB on main 20cacf3423, every released head's runtime held by the
  *  workspace's mount table; 1.1 MB once release unmounts it: Nimbus's inode cache of the homes still on disk and
- *  code compiled for the heads, neither of them per released actor. */
+ *  code compiled for the heads, neither of them per released actor.
+ *
+ *  Since 2026-10-09 a full batch warms the path first, so code V8 tiers up while heads come and go is not read as
+ *  theirs (the first batch after five warm heads carried +397 compiled functions where integration 44b13e946 carried
+ *  +297), and two batches after it are each bounded, so a retention one batch hides shows in the next. The step's
+ *  workspace is quiesced before them: its compression pass, in flight in this isolate, read as 0.6 MB of one batch.
+ *  Each head's "sandbox.executor_registered" line stays live only because this gate attaches an inspector: its
+ *  retainer is the DevTools console's global handle, which V8 caps at 1000 messages; nothing of the product's holds it. */
 export const HEADS_RETAINED_BOUND_BYTES = 1_500_000;
 
 /** Measured 2026-09-27 at {@link HELPERS}: 0.8 MB on main 905d6665d4, each helper's chat room keeping its whole
@@ -377,8 +393,9 @@ async function inspect(port: number): Promise<{
   };
 }
 
-/** The swarm the release bound is about: WARM heads host every lazy module first, then COUNT come and go. */
-export const HEADS = { warm: 5, count: 200 } as const;
+/** The swarm the release bound is about: WARM heads host every lazy module and tier up the code they run first, then
+ *  COUNT come and go, twice, each batch bounded. */
+export const HEADS = { warm: 200, count: 200 } as const;
 
 /** The delegation the helper bound is about: the root hires COUNT task helpers, each working 4 pages of
  *  ANSWER_BYTES (`worker-heap/driver.ts`) before a one-word answer. */
@@ -398,14 +415,12 @@ const COMPAT_HOST = 'model.invalid';
 export const STEP = { turns: 12, answerBytes: 200_000 } as const;
 
 export interface HeapMeasurement {
-  /** Used heap after one workspace's claim and setup. */
-  readonly afterSetup: number;
   /** What a step parked on the model holds live beyond the idle workspace before it, at {@link STEP}. */
   readonly stepLive: number;
   /** What the idle workspace holds after {@link STEP}'s turns beyond right after setup. */
   readonly idleRetained: number;
-  /** What a workspace holds live after {@link HEADS} heads were hosted and released, beyond before them. */
-  readonly headsRetained: number;
+  /** What a workspace holds live after each of two batches of {@link HEADS} heads was hosted and released, beyond before it. */
+  readonly headsRetained: readonly number[];
   /** What a workspace holds live per finished task helper after {@link HELPERS} settle, beyond before them. */
   readonly perHelperRetained: number;
   /** What one running helper turn holds live, parked on its last working step, beyond the settled workspace. */
@@ -495,7 +510,6 @@ export async function measure(): Promise<HeapMeasurement> {
     const inspector = await inspect(port);
 
     try {
-      const afterSetup = await inspector.usedHeap();
       const setUp = await inspector.liveHeap();
       const setupMakeup = await inspector.makeup();
       await ask(`/model?answerBytes=${String(STEP.answerBytes)}`);
@@ -522,10 +536,16 @@ export async function measure(): Promise<HeapMeasurement> {
       await parked;
 
       await ask('/?workspace=heads');
+      // The step's workspace compresses its turns on a cadence of its own, in this isolate: none of it is the heads'.
+      await ask('/quiesce?workspace=heap');
       await ask(`/heads?workspace=heads&tag=warm&count=${String(HEADS.warm)}`);
-      const beforeHeads = await inspector.liveHeap();
-      await ask(`/heads?workspace=heads&tag=swarm&count=${String(HEADS.count)}`);
-      const headsRetained = await inspector.liveHeap() - beforeHeads;
+      const headsRetained: number[] = [];
+
+      for (const batch of ['swarm', 'swarm-again']) {
+        const beforeHeads = await inspector.liveHeap();
+        await ask(`/heads?workspace=heads&tag=${batch}&count=${String(HEADS.count)}`);
+        headsRetained.push(await inspector.liveHeap() - beforeHeads);
+      }
 
       await ask('/?workspace=long&compat=1');
       await ask(`/model?answerBytes=0&toolSteps=${String(LONG_TURN.steps - 1)}&stepBytes=${String(LONG_TURN.stepBytes)}`);
@@ -605,7 +625,7 @@ export async function measure(): Promise<HeapMeasurement> {
       await noRunners(0);
       await ask('/model?hires=0&nest=0');
 
-      return { afterSetup, stepLive: during - idle, idleRetained: idle - setUp, headsRetained, perHelperRetained, helperTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: lastLive - firstLive, longTurnAllocated, bindingTurnsAllocated, setupMakeup, live: { setUp, longTurnFirst: firstLive, longTurnLast: lastLive }, wide };
+      return { stepLive: during - idle, idleRetained: idle - setUp, headsRetained, perHelperRetained, helperTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: lastLive - firstLive, longTurnAllocated, bindingTurnsAllocated, setupMakeup, live: { setUp, longTurnFirst: firstLive, longTurnLast: lastLive }, wide };
     } finally {
       inspector.close();
     }
@@ -663,8 +683,8 @@ async function main(args: readonly string[]): Promise<number> {
 
   if (wasm.length > 0) findings.push(`index.js instantiates ${wasm.join(', ')} at load: a static import reaches it`);
 
-  if (measured.afterSetup > HEAP_AFTER_SETUP_BOUND_BYTES) {
-    findings.push(`used heap after setup ${mb(measured.afterSetup)} exceeds ${mb(HEAP_AFTER_SETUP_BOUND_BYTES)}`);
+  if (measured.live.setUp > HEAP_AFTER_SETUP_BOUND_BYTES) {
+    findings.push(`live heap after setup ${mb(measured.live.setUp)} exceeds ${mb(HEAP_AFTER_SETUP_BOUND_BYTES)}`);
   }
 
   if (measured.stepLive > STEP_LIVE_BOUND_BYTES) {
@@ -678,8 +698,10 @@ async function main(args: readonly string[]): Promise<number> {
     findings.push(`the idle workspace holds ${mb(measured.idleRetained)} after ${transcript()}, over ${mb(IDLE_RETAINED_BOUND_BYTES)}`);
   }
 
-  if (measured.headsRetained > HEADS_RETAINED_BOUND_BYTES) {
-    findings.push(`${String(HEADS.count)} released heads leave ${mb(measured.headsRetained)} live, over ${mb(HEADS_RETAINED_BOUND_BYTES)}`);
+  for (const retained of measured.headsRetained) {
+    if (retained > HEADS_RETAINED_BOUND_BYTES) {
+      findings.push(`${String(HEADS.count)} released heads leave ${mb(retained)} live, over ${mb(HEADS_RETAINED_BOUND_BYTES)}`);
+    }
   }
 
   if (measured.perHelperRetained > PER_HELPER_RETAINED_BOUND_BYTES) {
@@ -707,9 +729,9 @@ async function main(args: readonly string[]): Promise<number> {
   }
 
   // Every figure, red or green, so two runs compare.
-  console.log(`${GATE}: ${mb(measured.afterSetup)} used after setup, a parked step holds ${mb(measured.stepLive)} live at `
+  console.log(`${GATE}: ${mb(measured.live.setUp)} live after setup, a parked step holds ${mb(measured.stepLive)} live at `
     + `${transcript()}, the idle workspace holds ${mb(measured.idleRetained)} after them, `
-    + `${String(HEADS.count)} released heads leave ${mb(measured.headsRetained)}, a finished helper `
+    + `${String(HEADS.count)} released heads leave ${measured.headsRetained.map((bytes) => mb(bytes)).join(' then ')}, a finished helper `
     + `${mb(measured.perHelperRetained)}, a running helper turn ${mb(measured.helperTurnLive)}, a helper waiting on its `
     + `own hire ${mb(measured.waitingParentLive)}, a ${String(LONG_TURN.steps)}-step turn peaks at `
     + `${mb(measured.longTurnPeak)} used and grows ${mb(measured.longTurnGrowth)} live; no wasm on the static graph, every module ASCII, every request Latin-1`);

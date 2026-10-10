@@ -23,7 +23,7 @@
         "@types/node": "^25.9.1",
         "@vitest/coverage-istanbul": "^4.1.11",
         "agents": "^0.26.0",
-        "armada": "github:AshishKumar4/armada#f8725d7760164878a978795a2dd39ffa3bd60f9d",
+        "armada": "github:AshishKumar4/armada#9dd4ed627c5e76dc6965cae97d9b1df191fb484f",
         "aws4fetch": "^1.0.20",
         "bun": "canary",
         "chess.js": "^1.4.0",
@@ -232,6 +232,9 @@
         "acorn": "^8.17.0",
         "ai": "7.0.127",
         "effect": "4.0.0-rc.117",
+        "mdast-util-from-markdown": "2.0.3",
+        "mdast-util-gfm": "3.1.0",
+        "micromark-extension-gfm": "3.0.0",
         "valibot": "^1.4.1",
         "workers-ai-provider": "4.0.0",
         "zod": "^4.3.6",
@@ -1409,7 +1412,7 @@
 
     "ansis": ["ansis@4.4.0", "", {}, "sha512-9k3v7xcHwgdO/DruxGIg4HtjvlAZlcnsX/mzqUb1t3NkYnl9kK2UJ+Gq0io+vQf7iT//BD/HB/NBkUR1LWxoeA=="],
 
-    "armada": ["armada@github:AshishKumar4/armada#f8725d7", { "dependencies": { "valibot": "1.4.1" }, "bin": { "armada": "src/cli.ts" } }, "AshishKumar4-armada-f8725d7", "sha512-ZWI1O1b38CdZaANMzYod1KA3XQDAGHGGZSP5wX0A2I0aKP/dSDVMU01uB0CcMWGrtI20XXWKbJhB8s+zl8trRA=="],
+    "armada": ["armada@github:AshishKumar4/armada#9dd4ed6", { "dependencies": { "valibot": "1.4.1" }, "bin": { "armada": "src/cli.ts" } }, "AshishKumar4-armada-9dd4ed6", "sha512-BbW1URjuk0w9x0bIWEEmfGPDO3Gx38M/mcDzR+l2M1e6Jc6GFZKFtphqkstjYPj3IgJdYnn3gved8IwTGgRH3g=="],
 
     "asn1js": ["asn1js@3.0.10", "", { "dependencies": { "pvtsutils": "^1.3.6", "pvutils": "^1.1.5", "tslib": "^2.8.1" } }, "sha512-S2s3aOytiKdFRdulw2qPE51MzjzVOisppcVv7jVFR+Kw0kxwvFrDcYA0h7Ndqbmj0HkMIXYWaoj7fli8kgx1eg=="],
 

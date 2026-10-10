@@ -11,7 +11,7 @@ import { type ActorHandle, type SleepTimeUpdate, type CheckpointTurnMeta, type E
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { scratchDir, scratchPath, scriptedTurnModel, sqlOver, type ScriptedTurnResult, workspaceDatabase } from '@kinu.run/test-utils';
 import {
-  historyOver, orchestratorHarness, scriptedSleepTime, sentTurn, workspaceFiles, workspaceMainActor,
+  agentHistory, mainDatabase, orchestratorHarness, scriptedSleepTime, sentTurn, workspaceFiles, workspaceMainActor,
 } from '../helpers/actor-harness';
 import { deviceHarness, WORKSPACE } from '../helpers/device-harness';
 import { pcAgentDaemon } from '../helpers/pc-agent-daemon';
@@ -84,6 +84,9 @@ export interface SharedBackend {
   readonly files: VFS;
   /** The main actor's conversation store, as each backend records its turns. */
   readonly history: SessionHistory;
+  /** Where the main actor's conversation, its context, its plans and its turns' runs are kept: its own isolate's database
+   *  on cf, the one database on the CLI. */
+  readonly chat: { readonly sql: SqlExecutor; readonly actor: ActorHandle };
   /** Snapshot `dir` into the store this backend's checkpoint methods read, as a turn's first
    *  mutation there does: the owner's device for cf, this machine for the CLI. */
   readonly snapshot: (dir: string, turn: CheckpointTurnMeta) => Promise<void>;
@@ -160,13 +163,17 @@ async function cloudflare(opens: BackendOpening): Promise<SharedBackend> {
   const { agent, db } = harness;
   const gate = turnGate();
   agent.harnessSupplyTurnModel(gate.model);
+  // Main's conversation is its own isolate's: any read through its window opens that isolate's database.
+  await agent.getChatHistoryPage({ limit: 1 });
+  const main = agentHistory(harness, workspaceMainActor(db).actorId);
 
   return {
     name: 'cf',
     sql: sqlOver(db),
     actor: workspaceMainActor(db),
     files: workspaceFiles(agent),
-    history: historyOver(harness),
+    history: main.history,
+    chat: { sql: sqlOver(mainDatabase(harness)), actor: main.actor },
     snapshot: (dir, turn) => daemon.snapshot({ agent: WORKSPACE, dir, ...turn }),
     holdTurn: (text, mode) => gate.hold(() => sentTurn(agent, text, crypto.randomUUID(), mode)),
     sleepTime: (answer, enabled) => {
@@ -304,6 +311,7 @@ async function cli(opens: BackendOpening): Promise<SharedBackend> {
     actor: rt.actor,
     files: rt.ownFiles,
     history: rt.stores.history,
+    chat: { sql: rt.storage.sql, actor: rt.actor },
     snapshot: async (dir, turn) => {
       checkpoints.beginTurn(turn);
       await checkpoints.ensureCheckpoint(dir);

@@ -5,7 +5,7 @@ import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
   initEventsHubTables, EventLog, ReplyChannelStore,
-  AgentOrchestrator, EvolutionEngine, acceptInboundEmail,
+  AgentOrchestrator, EvolutionEngine, acceptInboundEmail, historyTurnPairs,
   type BackendHost,
   type SqlExec,
 } from '@kinu.run/core';
@@ -120,7 +120,7 @@ describe('the reply channel at its edges', () => {
     const { rt, stores } = createTestRuntime();
 
     const orch = new AgentOrchestrator({
-      host, eventLog: log, engine: new EvolutionEngine(rt, stores.history, { enabled: false }),
+      host, eventLog: log, engine: new EvolutionEngine(rt, historyTurnPairs(stores.history), { enabled: false }),
     });
 
     await orch.drainPendingEvents();

@@ -37,6 +37,7 @@
     "./hire-probe.ts",
     "./agent-facet-probe.ts",
     "./agent-facet-probe-agent.ts",
+    "./two-turn-probe-agent.ts",
     "./slate-egress-probe.ts"
   ]
 }

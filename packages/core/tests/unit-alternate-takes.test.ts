@@ -9,6 +9,7 @@ import {
 } from '../src/mcts/takes';
 import { seedTranscriptEntry, present } from '@kinu.run/test-utils';
 import { listTurnRatings } from '../src/evolution/ratings';
+import { conversationTurnPair } from '../src/identity/conversation-store';
 
 /** Production schema: the eval split reconstructs evidence from the message and run-event ledgers. */
 function setup() {
@@ -45,7 +46,7 @@ describe('recordTakePick — the preference signal', () => {
   test('picking the answered winner rates it high and moves nothing', async () => {
     const { sql, actor, history, transcript } = setup();
     const { set, win } = await capturedSet(sql, actor, history);
-    const result = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: win, scaffoldVersion: 3 });
+    const result = await recordTakePick(sql, actor, async (messageId) => await conversationTurnPair(transcript, messageId), { takeId: set.id, nodeId: win, scaffoldVersion: 3 });
     expect(result).toMatchObject({ changedAnswer: false });
 
     const rows = listTurnRatings(sql, actor);
@@ -60,7 +61,7 @@ describe('recordTakePick — the preference signal', () => {
   test('picking the branch rates the delivered answer low and re-points the set', async () => {
     const { sql, actor, history, transcript } = setup();
     const { set, alt } = await capturedSet(sql, actor, history);
-    const result = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: alt });
+    const result = await recordTakePick(sql, actor, async (messageId) => await conversationTurnPair(transcript, messageId), { takeId: set.id, nodeId: alt });
     expect(result).toMatchObject({ changedAnswer: true });
     expect(result.chosen.text).toBe('alternative approach');
 
@@ -74,16 +75,16 @@ describe('recordTakePick — the preference signal', () => {
   test('a re-pick leaves one effective rating per turn', async () => {
     const { sql, actor, history, transcript } = setup();
     const { set, alt } = await capturedSet(sql, actor, history);
-    await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: alt });
-    await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: alt });
+    await recordTakePick(sql, actor, async (messageId) => await conversationTurnPair(transcript, messageId), { takeId: set.id, nodeId: alt });
+    await recordTakePick(sql, actor, async (messageId) => await conversationTurnPair(transcript, messageId), { takeId: set.id, nodeId: alt });
     expect(listTurnRatings(sql, actor)).toHaveLength(1);
   });
 
   test('switching the pick re-points the set to the newly chosen take', async () => {
     const { sql, actor, history, transcript } = setup();
     const { set, win, alt } = await capturedSet(sql, actor, history);
-    await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: alt });
-    const switched = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: win });
+    await recordTakePick(sql, actor, async (messageId) => await conversationTurnPair(transcript, messageId), { takeId: set.id, nodeId: alt });
+    const switched = await recordTakePick(sql, actor, async (messageId) => await conversationTurnPair(transcript, messageId), { takeId: set.id, nodeId: win });
     expect(switched).toMatchObject({ changedAnswer: true });
     expect(latestAlternateTakeSet(sql, actor)).toMatchObject({ chosenNodeId: win, winnerNodeId: win });
     expect(listTurnRatings(sql, actor)).toHaveLength(1);
@@ -92,14 +93,14 @@ describe('recordTakePick — the preference signal', () => {
   test('rejects unknown take sets and non-candidate nodes', async () => {
     const { sql, actor, history, transcript } = setup();
     const { set, win } = await capturedSet(sql, actor, history);
-    await expect(recordTakePick(sql, actor, transcript, { takeId: 'take-nope', nodeId: win })).rejects.toThrow('Unknown take set');
-    await expect(recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: 'stranger' })).rejects.toThrow('not a candidate');
+    await expect(recordTakePick(sql, actor, async (messageId) => await conversationTurnPair(transcript, messageId), { takeId: 'take-nope', nodeId: win })).rejects.toThrow('Unknown take set');
+    await expect(recordTakePick(sql, actor, async (messageId) => await conversationTurnPair(transcript, messageId), { takeId: set.id, nodeId: 'stranger' })).rejects.toThrow('not a candidate');
   });
 
   test('the continuation prompt carries the task and the chosen take', async () => {
     const { sql, actor, history, transcript } = setup();
     const { set, alt } = await capturedSet(sql, actor, history);
-    const { chosen } = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: alt });
+    const { chosen } = await recordTakePick(sql, actor, async (messageId) => await conversationTurnPair(transcript, messageId), { takeId: set.id, nodeId: alt });
     const prompt = buildTakeContinuationPrompt(set, chosen);
     expect(prompt).toContain('the task');
     expect(prompt).toContain('alternative approach');

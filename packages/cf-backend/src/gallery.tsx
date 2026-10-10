@@ -25,8 +25,8 @@ import "virtual:kinu-theme.css";
 import "./index.css";
 import { KINU_MARK, MARK_IDS, mark, codenameFor, mintAgentName, WorkspaceTerminalInputSchema } from "@kinu.run/core";
 import { ephemeralSlateAddress, hostedActorSocketPath, mcpPresetById, READS_CHANGED_EVENT, readsWrittenBy, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
-import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT, PositionCursorSchema, sanitizeWorkspaceLogoSvg } from "@kinu.run/core";
-import type { AlternateTakeSet, ParkedWriteReview, ReasoningEffort, TakePickOutcome } from "@kinu.run/core";
+import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT, OwnerAnswersSchema, PositionCursorSchema, sanitizeWorkspaceLogoSvg } from "@kinu.run/core";
+import type { AlternateTakeSet, AskingAgent, OwnerAnswer, ParkedWriteReview, ReasoningEffort, TakePickOutcome } from "@kinu.run/core";
 import {
   approvalDocument, authDocument, installDocument, loginDocument,
 } from "@kinu.run/core";
@@ -715,8 +715,26 @@ function accountMemoryFixture(path: string, method: string): Response | null {
   return path === "/api/user/memory" && method === "GET" ? fixtureJson(ACCOUNT_MEMORY_FIXTURE) : null;
 }
 
+function accountComputerSizeFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
+  if (path !== "/api/user/config/sandbox_size") return null;
+
+  if (method === "GET") return fixtureJson(v.parse(JsonValueSchema, STUB.get(path)));
+
+  if (method === "PUT") {
+    const { value } = v.parse(v.object({ value: v.string() }), JSON.parse(v.parse(v.string(), body)));
+    const stored = { key: "sandbox_size", value };
+
+    STUB.set(path, stored);
+
+    return fixtureJson(v.parse(JsonValueSchema, stored));
+  }
+
+  return null;
+}
+
 const SETTINGS_SLICES: readonly SettingsSlice[] = [
   accountMemoryFixture,
+  accountComputerSizeFixture,
   accountProfileFixture,
   settingsSectionsFixture,
   workspaceRosterFixture,
@@ -1872,8 +1890,69 @@ const REFUSED_THREAD: UIMessage[] = [
   }),
 ];
 
+/** What the workspace's agent asked its owner: a single choice with previews, and a multiple choice. */
+const GALLERY_ASK = {
+  questions: [
+    {
+      id: "storage", header: "Money", question: "How should prices be stored once the coupon fix lands?", recommended: 0,
+      options: [
+        { label: "Integer cents", description: "Exact sums; every display divides by 100.", preview: "price_cents  INTEGER NOT NULL\n-- 1999 → $19.99\nSELECT price_cents / 100.0" },
+        { label: "Decimal(10,2)", description: "Reads as written; the ORM maps it to a string.", preview: "price  DECIMAL(10,2) NOT NULL\n-- 19.99\nSELECT price" },
+        { label: "Keep floats", description: "No migration now; rounding stays a risk.", preview: "price  REAL NOT NULL\n-- 19.990000000000002" },
+      ],
+    },
+    {
+      id: "checks", header: "Checks", question: "Which checks should run before the staging deploy?", multi: true,
+      options: [
+        { label: "Cart totals", description: "Every fixture cart sums to its receipt." },
+        { label: "Coupon stacking", description: "Two coupons on one cart, both orders." },
+        { label: "Old orders", description: "Orders placed before the migration still read." },
+      ],
+    },
+  ],
+};
+
+/** `&questions=open`: the questions wait in the stack; answering or dismissing them closes them, as the store would. */
+function galleryQuestions(): AskingAgent[] {
+  if (new URLSearchParams(location.search).get("questions") !== "open") return [];
+  const closed = document.documentElement.dataset.galleryQuestions;
+  const answers = v.parse(v.nullable(OwnerAnswersSchema), JSON.parse(document.documentElement.dataset.galleryAnswers ?? "null"));
+
+  return [{
+    agent: WORKSPACE_PAGE_NAME, actor: null,
+    asked: {
+      id: "q-1", actor: galleryActorId(WORKSPACE_PAGE_NAME), callId: "ask-1", turnId: "turn-ask", mode: "build", questions: GALLERY_ASK.questions,
+      status: closed === "answered" || closed === "dismissed" ? closed : "open", answers, askedAt: NOW - 2 * 60e3, closedAt: closed === undefined ? null : NOW,
+    },
+  }];
+}
+
+function galleryCloseQuestions(status: "answered" | "dismissed", answers: readonly OwnerAnswer[] | null): JsonValue {
+  const root = document.documentElement.dataset;
+
+  root.galleryQuestions = status;
+  root.galleryAnswers = JSON.stringify(answers);
+  queueMicrotask(() => { galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listOwnerQuestions"] })); });
+
+  return null;
+}
+
+/** `?transcript=asked`: the turn that asked, ending on its call. */
+const ASKED_THREAD: UIMessage[] = [
+  msg({ id: "ask-u1", role: "user", createdAt: NOW - 3 * 60e3, parts: [{ type: "text", text: "Fix the SAVE20 coupon and get it to staging." }] }),
+  msg({
+    id: "ask-a1", role: "assistant", createdAt: NOW - 2 * 60e3,
+    parts: [
+      { type: "text", text: "The 500 comes from coupons stored without a kind; the fix is ready. Two choices are yours before I deploy." },
+      { type: "tool-ask_owner", toolCallId: "ask-1", state: "input-available", input: GALLERY_ASK },
+    ],
+  }),
+];
+
 function seedFrameTranscript(transcript: string | null): void {
   if (transcript === "revert") seedGalleryChat(REVERT_THREAD);
+
+  if (transcript === "asked") seedGalleryChat(ASKED_THREAD);
 
   if (transcript === "refused") seedGalleryChat(REFUSED_THREAD);
 
@@ -2418,20 +2497,26 @@ const PARKED_ASKS: PendingAction[] = [
   { id: "park-publish", kind: "deferred_action", title: "Approve: a command the agent wants to run on workspace", detail: "npm publish --access public", at: NOW - 30_000 },
 ];
 
+/** The workspace's own plan awaiting review, as the queue lists it beside the work read's plan: `&asks=plan`. */
+const PLAN_ASKS: PendingAction[] = [{
+  id: `plan:${WORKSPACE_PAGE_NAME}:${galleryAgentPlan.id}:${String(galleryAgentPlan.revision)}`, kind: "plan_review",
+  title: "Review the plan: Repair the applyCoupon eligibility guard", detail: null, at: NOW - 300_000,
+  planRef: { owner: WORKSPACE_PAGE_NAME, id: galleryAgentPlan.id, revision: galleryAgentPlan.revision }, raisedBy: galleryActorId(WORKSPACE_PAGE_NAME),
+}];
+
 /** `&asks=mixed`: one of each kind that waits on the owner, and a version under trial that waits on nobody. */
 const MIXED_ASKS: PendingAction[] = [
   ...PARKED_ASKS,
   { id: "park-write", kind: "deferred_action", title: "Replace src/pricing-service.ts", detail: null, at: NOW - 150_000, write: { path: "src/pricing-service.ts" } },
   { id: "proposal-pricing", kind: "workspace_proposal", title: "Create workspace “Pricing watch”", detail: "Watch competitor pricing and note each change.", at: NOW - 240_000,
     proposal: { name: "Pricing watch", brief: "Watch competitor pricing and note each change.", soul: "# Pricing watch\n\nKeep notes short." } },
-  { id: "plan:main:pl-1:1", kind: "plan_review", title: "Review the plan: Repair the applyCoupon eligibility guard", detail: null, at: NOW - 300_000,
-    planRef: { owner: "main", id: "pl-1", revision: 1 }, raisedBy: galleryActorId(WORKSPACE_PAGE_NAME) },
+  ...PLAN_ASKS,
   { id: "plan:coupon-auditor:pa-1:1", kind: "plan_review", title: "Approve the plan · Audit every coupon rule", detail: "Submitted by coupon-auditor", at: NOW - 200_000,
     planRef: { owner: "coupon-auditor", id: "pa-1", revision: 1 }, raisedBy: galleryActorId("coupon-auditor") },
   { id: "scaffold-v8", kind: "scaffold_version", title: "Scaffold v8 is under trial", detail: "shorter tool preamble", at: NOW - 10_000 },
 ];
 
-const ASK_SETS = new Map([["two", PARKED_ASKS], ["mixed", MIXED_ASKS]]);
+const ASK_SETS = new Map([["two", PARKED_ASKS], ["mixed", MIXED_ASKS], ["plan", PLAN_ASKS]]);
 
 /** `&asksHold=1`: a read of the queue after the first decision waits for `gallery:release-asks`, as a slow one would. */
 const ASKS_HELD = new URLSearchParams(location.search).get("asksHold") === "1";
@@ -2653,6 +2738,9 @@ const ASYNC_PAGE_RPC = new Map<string, (args?: unknown[]) => Promise<JsonValue>>
   ["resolveDeviceConsent", galleryResolveConsent],
   ["listBackgroundJobs", galleryJobsRead],
   ["listPendingActions", galleryPendingActions],
+  ["listOwnerQuestions", async () => v.parse(JsonValueSchema, galleryQuestions())],
+  ["answerOwnerQuestions", async (args) => galleryCloseQuestions("answered", v.parse(v.tuple([v.string(), OwnerAnswersSchema]), args)[1])],
+  ["dismissOwnerQuestions", async () => galleryCloseQuestions("dismissed", null)],
   ["decidePlanReview", galleryDecidePlan],
   ["recoverStrandedTurn", galleryRecoverTurn],
 ]);
@@ -5174,12 +5262,14 @@ function WorkFrame() {
   const building = useBuildingJob();
   const lane = workLane(streaming ? null : params.get("lane"));
   const jobs = streaming ? [building, ...lane.jobs] : lane.jobs;
+  // Work opens a plan on its own page and the Work tab returns, as the workspace's column does.
+  const [surface, setSurface] = useState<SurfaceKind>("Work");
 
   return (
     <div className="p-bg min-h-screen flex justify-center">
       <div className="w-[430px] min-h-screen border-x p-border">
         <WorkSurface
-          surface="Work" onSurface={() => {}}
+          surface={surface} onSurface={setSurface}
           pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} memory={lane.memory} memoryContent=""
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}

@@ -50,7 +50,7 @@ describe('the connect card on a real terminal', () => {
 
   test('centers the connect card in the wide chat lane', async () => {
     const run = await runTuiInPty(entry, { cols: 160, steps: [{ wait: 'not now', timeout: 15 }] });
-    const border = run.screen.split('\n').find((line) => line.includes('╭─Let this agent use this computer?'));
+    const border = run.screen.split('\n').find((line) => line.includes('╭─Let this agent use this PC?'));
 
     if (border === undefined) throw new Error('connect card did not paint');
     expect(border.indexOf('╭')).toBe(60);

@@ -5,12 +5,12 @@
 // workspace's `acceptSandboxLifecycleIncident`, whose inbox turns are counted.
 import { describe, expect, test } from 'bun:test';
 import { Effect } from 'effect';
-import { CHAT_SESSION_ID, PROGRAMMATIC_MESSAGE_ID_PREFIX, createSandboxExecutor } from '@kinu.run/core';
+import { PROGRAMMATIC_MESSAGE_ID_PREFIX, createSandboxExecutor } from '@kinu.run/core';
 import type { DevboxIncident, IncidentDisposition } from '@kinu.run/devbox';
 import type { KinuDevbox } from '../src/kinu-devbox';
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
 import { lifecycleIncident } from '../src/sandbox-lifecycle';
-import { chatSessionTurns, historyOver, orchestratorHarness, unstartedOrchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { chatSessionTurns, orchestratorHarness, unstartedOrchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, storedChat } from './helpers/actor-harness';
 // Relative paths: the devbox package's container harness and its disk chain's contract.
 import type { DiskChain, DiskChainPorts } from '../../devbox/src/disk-chain';
 import type { StoredValue } from '../../devbox/src/storage';
@@ -76,7 +76,7 @@ const refused = (code: string): StartFault => ({ error: new SandboxFailure({ cod
 async function inboxTurns(): Promise<string[]> {
   if (workspace === undefined) return [];
   await chatSessionTurns(workspace.agent).drainEnqueued();
-  const stored = await historyOver(workspace).transcript(CHAT_SESSION_ID).history();
+  const stored = await storedChat(workspace);
 
   return stored
     .filter((message) => message.role === 'user' && message.id.startsWith(PROGRAMMATIC_MESSAGE_ID_PREFIX))

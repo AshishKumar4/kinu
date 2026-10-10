@@ -2,19 +2,19 @@
 import {
   CHAT_SESSION_ID, ChatSession, EventLog, HeadCapture, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TerminalTransitions,
   PlanReviewActions, announcementOf, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork,
-  planHandoffStillOwed, projectJsonValue,
+  planHandoffStillOwed, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, terminalEffect, OWNER_ANSWER_SIGNAL,
   metadataTier, subordinateTerminalEffects, withCompactionTrigger,
   bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
-  type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type JsonObject, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
+  type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpening, type JsonObject, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
   type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalTurnFacts, type TerminalTurnParts,
-  type ProviderEnv, type SessionEvent, type TurnAssemblyRequest, type WorkMode,
+  type SessionEvent, type TurnAssemblyRequest, type WorkMode, type OwnerQuestionStore,
 } from '@kinu.run/core';
 import { createCompactionStateStore, type CompactionStateStore } from '@kinu.run/compaction';
-import { attempt, diagnostics, hold, logged, settle } from '@kinu.run/core/obs';
+import { attempt, diagnostics, hold, logged, settle, type KinuError } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import type { AgentDatabase } from './agent-database';
 import type { StepPacer } from './step-pacer';
-import { FacetSpend, facetTurnSources, facetTurnTools, type AgentWorkspace, type LiveTurn } from './agent-turn';
+import { FacetSpend, facetTurnSources, facetTurnTools, type AgentWorkspace, type FacetModels, type LiveTurn } from './agent-turn';
 
 /** The words reach the room on the turn's own stream, and a turn's end on its own call. */
 const ROOM_EVENTS: ReadonlySet<SessionEvent['type']> = new Set(['turn-start', 'step-cut', 'error', 'broadcast', 'history-reverted']);
@@ -23,15 +23,17 @@ export interface FacetChatDeps {
   readonly actor: HostedActor;
   readonly database: AgentDatabase;
   readonly workspace: AgentWorkspace;
-  readonly providers: ProviderEnv;
+  readonly models: FacetModels;
   readonly storage: DurableObjectStorage;
   readonly pacer: StepPacer;
 }
 
-/** A hirer's or the harness's turn runs in the hirer's lane, with `report`; the owner's, and a plan's feedback or approval
- *  (the owner's decision), in the owner's. */
+/** A hirer's or the harness's turn runs in the hirer's lane, with `report`; the owner's, a plan's feedback or approval and
+ *  the turn an answer resumes (the owner's decisions), in the owner's. */
+const OWNER_EVENTS: ReadonlySet<unknown> = new Set(['plan_feedback', 'plan_approved', OWNER_ANSWER_SIGNAL]);
+
 function parentDrivenTurn(item: ChatTurnInput): boolean {
-  return item.kind === 'programmatic' && item.metadata?.kinuEvent !== 'plan_feedback' && item.metadata?.kinuEvent !== 'plan_approved';
+  return item.kind === 'programmatic' && !OWNER_EVENTS.has(item.metadata?.kinuEvent);
 }
 
 export class FacetChat {
@@ -55,6 +57,11 @@ export class FacetChat {
 
   /** Its own plan reviews, in its own store: the owner reviews them through its window (D9). */
   readonly plans: PlanReviewActions;
+
+  /** Its own questions to its owner, in its own store: the workspace's stack lists and answers them (D9). */
+  get questions(): OwnerQuestionStore {
+    return this.deps.actor.session.questions;
+  }
 
   private activeSkills: readonly string[] = [];
 
@@ -84,14 +91,15 @@ export class FacetChat {
       transaction: (body) => storage.transactionSync(body),
       transport: {
         deliver: (event) => {
-          if (event.type === 'turn-end') return workspace.turnEnded(event, deps.database.figures());
+          // Its last charge lands before its end is told: nothing the workspace reads of the turn can miss it.
+          if (event.type === 'turn-end') return this.charged().then(async () => { await workspace.turnEnded(event, deps.database.figures()); });
 
           return ROOM_EVENTS.has(event.type) ? workspace.chatEvent(event) : undefined;
         },
       },
       mintAnswerId: () => crypto.randomUUID(),
       ports: {
-        prepareTurn: (item, lease) => this.prepareTurn(item, lease),
+        prepareTurn: (item, lease, opening) => this.prepareTurn(item, lease, opening),
         composeRequest: () => this.composeRequest(),
         owedTerminalEffects: (input) => this.owedTerminalEffects(input),
         answerMetadata: async (turnId, texts) => await workspace.answerMetadata(turnId, await texts()),
@@ -115,17 +123,26 @@ export class FacetChat {
   }
 
   private async assemble(prepared: PreparedAgentTurn, turn: { readonly id: string; readonly mode: WorkMode; readonly runId: string }, asked: TurnAssemblyRequest, bind?: Parameters<typeof assembleActorTurn>[0]['settle']) {
-    const { actor, database, workspace, providers, pacer } = this.deps;
+    const { actor, database, workspace, models, pacer } = this.deps;
     const live: LiveTurn = { dynamic: prepared.dynamic };
 
     const tools = facetTurnTools(workspace, prepared, actor, {
       id: turn.id, mode: turn.mode, parentDriven: this.parentDriven, driving: this.driving, live, capture: new HeadCapture(), database,
     });
 
-    const { sources: bundle } = facetTurnSources({ actor, workspace, providers, prepared, spend: this.spend, live, runId: turn.runId, turnId: turn.id, pacer });
+    const { sources: bundle } = facetTurnSources({ actor, workspace, models, prepared, spend: this.spend, live, runId: turn.runId, turnId: turn.id, pacer });
+
+    // A chat turn under a mission of its workspace's spends there, as each model call is guarded and charged.
+    const { missionLabels } = prepared;
+
+    const mission = missionLabels === undefined ? null : this.missionCharges = missionGate({
+      labels: missionLabels,
+      port: { guard: async (seam, labels) => await workspace.guard(turn.id, seam, labels), debit: async (tokens, opts) => { await workspace.debit(turn.id, tokens, opts); } },
+    });
 
     return await assembleActorTurn({
       ...bundle,
+      ...(mission !== null && { budget: mission }),
       toolset: () => tools,
       externalTools: async () => ({}),
       // A measure between turns binds nothing: no turn is open to bind it to.
@@ -137,17 +154,31 @@ export class FacetChat {
     }, asked);
   }
 
-  private async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn> {
+  /** The running turn's charges to its workspace's missions, if it runs under any. */
+  private missionCharges: { settled(): Promise<void> } | null = null;
+
+  private async charged(): Promise<void> {
+    const charges = this.missionCharges;
+
+    this.missionCharges = null;
+    await charges?.settled();
+  }
+
+  private async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpening): Promise<PreparedTurn> {
     const { actor, database, workspace } = this.deps;
-    const mode = actor.session.workMode;
+    const plans = actor.stores.planReviews;
     // The one place a turn's lane is decided; the workspace rebuilds a turn from this, never from its id.
     this.parentDriven = parentDrivenTurn(item);
     this.driving = authoredTurnMetadata(item);
+    // The owner's words while a plan awaits their decision are read as its review.
+    const mode = workModeUnderReview(actor.session.workMode, this.driving, () => plans.getActive(CHAT_SESSION_ID));
     // The workspace reads the turn's sources for the tier it runs on, and the turn is assembled on that same tier.
     const explicitTier = metadataTier(item.metadata);
+    const taskPlan = approvedTaskPlan(item, plans);
 
     const prepared = await workspace.prepareChat({
-      turnId: lease.turnId, mode, userText: item.text, parentDriven: this.parentDriven, driving: this.driving, ...(explicitTier !== undefined && { explicitTier }),
+      turnId: lease.turnId, mode, userText: item.text, parentDriven: this.parentDriven, driving: this.driving, opening,
+      ...(explicitTier !== undefined && { explicitTier }), ...(taskPlan !== null && { taskPlan }),
     });
 
     database.prepare(lease.turnId, prepared);
@@ -163,7 +194,7 @@ export class FacetChat {
 
     return {
       execution: withCompactionTrigger(assembled.execution, state, key, historyLength),
-      sessionKey: key, contextWindow: assembled.window.contextWindow, historyLength,
+      sessionKey: key, contextWindow: assembled.window.contextWindow, historyLength, trial: prepared.trial ?? null,
     };
   }
 
@@ -187,9 +218,20 @@ export class FacetChat {
     return { execution: assembled.execution, profile: assembled.profile, sessionKey: this.trigger.key };
   }
 
-  /** As a CLI hire's: never sleep-time. */
+  /** As a CLI hire's: never sleep-time. The workspace's own agent owes its chat's follow-ups here and hands the rest of
+   *  its settled turn to the workspace, whose evolution, event log and titles its lanes are. */
   private owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[] {
     const { session } = this.deps.actor;
+
+    if (this.deps.actor.record.parentActorId === null) {
+      return declareHandoffRoster(chatTurnParts(input), {
+        turnId: this.session.currentTurnId ?? '', messageId: input.messageId, status: input.status, completed: input.completed,
+        workMode: session.workMode, userText: input.userText, assistantText: input.assistantText, event: input.event ?? null,
+        turn: projectJsonValue({ value: input.turn }), credited: input.credited, answeredDeliveries: [...input.answeredDeliveries],
+        reachableTools: [...input.reachableTools], recordedAt: Date.now(),
+      });
+    }
+
     const scoped = session.orchestrator.scopedTurn(input.turn);
 
     const facts: TerminalTurnFacts = {
@@ -243,6 +285,14 @@ export class FacetChat {
           applyTitle: (subject) => this.applyTitle(subject),
           sendReport: (report) => workspace.parentReport(report),
         }),
+        workspace_settle: terminalEffect({
+          input: HandedOffTurnSchema,
+          run: async (settled) => {
+            await workspace.turnSettled(settled);
+
+            return { status: 'completed' };
+          },
+        }),
       },
       now: () => Date.now(),
       transaction: (body) => storage.transactionSync(body),
@@ -276,6 +326,8 @@ export class FacetChat {
       this.session.reclaimStrandedEventDeliveries();
       await this.terminal.replayOwedAndRearm();
       await this.session.flushPendingDrains();
+      // An answer the isolate took and died before running: its turn is re-derived from the store.
+      this.session.resumeAnswered();
     }).pipe(
       Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('agent.wake_failed', failure); })),
       Effect.ensuring(Effect.sync(() => { this.session.pump(); })),
@@ -288,10 +340,10 @@ export class FacetChat {
     this.resting = hold(logged('agent.owed_report_failed', { doing: 'telling the workspace what an agent still owes', otherwise: 'unavailable' }, () => this.tell()));
   }
 
-  /** Once every answer of what it owes sent so far has landed: input acknowledged after it has no older answer behind it
-   *  that could cancel the workspace's arm for it. */
-  async told(): Promise<void> {
-    await this.telling;
+  /** Its input taken: what it owes now is told behind every answer it sent before, and has landed. An older rest cannot
+   *  cancel the workspace's arm for the input, and a turn the input ran and ended already leaves no arm behind. */
+  async taken(): Promise<void> {
+    await hold(logged('agent.owed_report_failed', { doing: 'telling the workspace what an agent owes for its input', otherwise: 'unavailable' }, () => this.tell()));
   }
 
   /** `at` asks for a wake no later than it. */
@@ -337,10 +389,10 @@ export class FacetChat {
 
   /** Down the fast tier's chain on the agent's own models, as every actor's title is named. */
   private async suggestTitle(mission: string): Promise<string | null> {
-    const { actor, workspace, providers, pacer } = this.deps;
+    const { actor, workspace, models, pacer } = this.deps;
     const workMode = actor.session.workMode;
     const prepared = await workspace.prepareChat({ turnId: null, mode: workMode, userText: '', parentDriven: false });
-    const { sources } = facetTurnSources({ actor, workspace, providers, prepared, spend: this.spend, live: { dynamic: prepared.dynamic }, runId: prepared.runId, turnId: 'title', pacer });
+    const { sources } = facetTurnSources({ actor, workspace, models, prepared, spend: this.spend, live: { dynamic: prepared.dynamic }, runId: prepared.runId, turnId: 'title', pacer });
     const inputs = await sources.profileInputs();
     const profile = resolveAgentTurnProfile({ ...inputs, ...ownProfileChoices(sources.config, inputs, sources.ancestors?.()), workMode, availableTools: [], activeSkills: [] });
     const route = resolveModelRoute('fast', profile);
@@ -352,15 +404,26 @@ export class FacetChat {
     }, prompt), mission);
   }
 
-  /** The workspace's model settings changed. */
+  /** The workspace's model settings changed: the next request is measured on them, and a refusal they fix may answer. */
   async modelSettingsChanged(): Promise<void> {
+    this.session.reviseContext({ counted: true });
     await this.terminal.modelSettingsChanged();
+  }
+
+  /** The owner's Clear, refused while a turn runs; its compaction plan goes with the conversation. Answers why the
+   *  emptied request went unmeasured, if it did. */
+  async clear(): Promise<KinuError | null> {
+    const unmeasured = await this.session.clear();
+
+    await this.trigger.state.plans.save(this.trigger.key, null);
+
+    return unmeasured;
   }
 
   /** The next instant to wake it, or none: a turn running or queued, or effects still closing, is looked at again a lap
    *  later. */
   private owed(): number | null {
-    const busy = this.session.turnOwed || this.terminal.closing || this.terminal.hasIncomplete();
+    const busy = this.session.turnOwed || this.terminal.closing || this.terminal.hasIncomplete() || this.questions.owedResumes().length > 0;
 
     // The workspace keeps one wake per agent, the latest it was told: a turn waiting out its backoff names its end.
     const next = Math.min(

@@ -176,7 +176,8 @@ function DismissPlan({ plan, rpc, readOnly, deciding, saving, onError }: {
   });
 
   return (
-    <Button type="button" size="sm" variant="ghost" onClick={() => detach(dismiss())} disabled={deciding !== null || saving || busy}>
+    // Stacked, it sits under the decisions: the quiet way out after the two that answer the plan.
+    <Button type="button" size="sm" variant="ghost" className="order-last self-center whitespace-nowrap @[36rem]:order-none @[36rem]:self-auto" onClick={() => detach(dismiss())} disabled={deciding !== null || saving || busy}>
       {busy ? <Loader size="sm" /> : "Dismiss"}
     </Button>
   );
@@ -526,29 +527,32 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
         />
       </div>
 
-      <footer data-plan-footer className="p-surface shrink-0 border-t p-border px-4 py-3">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+      {/* Laid out by its own width, not the window's: a plan reads in a column as narrow as a phone. Where the two
+          decisions do not fit side by side, Approve wraps above Request changes, each whole, rather than squeeze. */}
+      <footer data-plan-footer className="@container p-surface shrink-0 border-t p-border px-4 py-3">
+        <div className="flex flex-col gap-2 @[36rem]:flex-row @[36rem]:items-center">
           {error ? (
-            <p role="alert" className="p-notice-danger p-meta px-3 py-2 sm:mr-auto">{error}</p>
+            <p role="alert" className="p-notice-danger p-meta px-3 py-2 @[36rem]:mr-auto">{error}</p>
           ) : (
-            <p className="p-meta p-text-3 sm:mr-auto">
+            <p className="p-meta p-text-3 @[36rem]:mr-auto">
               {footerNote({ readOnly, editable, handoffPending, status: plan.status })}
             </p>
           )}
           <DismissPlan plan={plan} rpc={rpc} readOnly={readOnly} deciding={decisionBusy} saving={saving} onError={setError} />
           {editable && (
-            <div data-plan-decisions className="grid grid-cols-2 gap-2 sm:flex">
+            <div data-plan-decisions className="flex shrink-0 flex-wrap-reverse justify-end gap-2">
               <Button
                 type="button"
                 size="sm"
                 variant="secondary"
+                className="shrink-0 grow justify-center whitespace-nowrap @[36rem]:grow-0"
                 onClick={() => detach(Effect.promise(async () => decide("request_changes")))}
                 disabled={decisionBusy !== null || saving || written.length === 0}
               >
                 {decisionBusy === "request" ? <Loader size="sm" /> : "Request changes"}
               </Button>
               <FilledButton
-                className="w-full sm:w-auto"
+                className="grow justify-center whitespace-nowrap @[36rem]:grow-0"
                 onClick={() => detach(Effect.promise(async () => decide("approve")))}
                 disabled={decisionBusy !== null || saving || written.length > 0}
               >
@@ -558,6 +562,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
           )}
           {handoffPending && (
             <FilledButton
+              className="justify-center whitespace-nowrap"
               onClick={() => detach(Effect.promise(async () => decide(plan.status === "approved" ? "approve" : "request_changes")))}
               disabled={decisionBusy !== null || saving}
             >

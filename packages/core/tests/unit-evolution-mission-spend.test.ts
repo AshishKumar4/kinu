@@ -11,6 +11,7 @@ import { MissionGovernor } from '../src/mission-budget';
 import type { CompletedTurn } from '../src/evolution/types';
 import { listTurnRatings } from '../src/evolution/ratings';
 import type { AgentRuntime } from '../src/types/agent-runtime';
+import { historyTurnPairs } from '../src/identity/conversation-store';
 
 
 const FOLLOWUP = 'No — that rotates production keys. I said STAGING.';
@@ -61,7 +62,7 @@ function workspace() {
   return {
     rt: counted,
     governor,
-    engine: new EvolutionEngine(counted, stores.history, { governor }),
+    engine: new EvolutionEngine(counted, historyTurnPairs(stores.history), { governor }),
     calls: () => completions,
   };
 }

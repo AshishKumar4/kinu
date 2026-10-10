@@ -160,6 +160,7 @@ export function reassemble(frames: readonly ForkFrame[]) {
     lessons: frames.flatMap((frame) => (frame.kind === 'lessons' ? frame.rows : [])),
     toolLessons: frames.flatMap((frame) => (frame.kind === 'toolLessons' ? frame.rows : [])),
     facts: frames.flatMap((frame) => (frame.kind === 'facts' ? frame.rows : [])),
+    ownerQuestions: frames.flatMap((frame) => (frame.kind === 'ownerQuestions' ? frame.rows : [])),
     appTables: frames.flatMap((frame) => (frame.kind === 'appTables' ? frame.rows : [])),
     appRows: frames.flatMap((frame) => (frame.kind === 'appRows' ? frame.rows : [])),
     files: decode(files),

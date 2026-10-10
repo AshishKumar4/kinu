@@ -7,9 +7,9 @@
 import { abortAllDurableObjects, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { DELEGATION_MAX_DEPTH, ORCHESTRATOR_AGENT_SLUG, hostedActorSocketPath } from '@kinu.run/core';
-import { CHAIN_BOTTOM, CHILD_ANSWER, HIRE_MISSION, HIRE_PLAN_ASK, NEST_RELAY, type HireObservation, type LogRow } from './hire-shapes';
+import { CHAIN_BOTTOM, CHILD_ANSWER, HIRE_MISSION, HIRE_PLAN_ASK, NEST_RELAY, type HireObservation, type LogRow } from '../hire-shapes';
 import * as v from 'valibot';
-import { HireRosterSchema, hireSocket } from '../helpers/hire-socket';
+import { HireRosterSchema, hireSocket } from '../../helpers/hire-socket';
 
 /** Re-acquired per use: the id survives an eviction, a stub does not. */
 const probe = (workspace: string) => env.HIRE_PROBE.get(env.HIRE_PROBE.idFromName(workspace));

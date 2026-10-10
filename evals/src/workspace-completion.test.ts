@@ -513,7 +513,7 @@ describe('a job is waited on until it settles, never judged by its silence', () 
     expect(job.status).toBe('completed');
     expect(hand.now() - START).toBeGreaterThanOrEqual(10 * MINUTE);
     // One a minute while it ran: nine or ten, as the look at the tenth minute lands before or after the job settles.
-    expect(new Set(lines)).toEqual(new Set([`waiting on job ${job.id} (workspace: sleep 600; make) since ${new Date(job.createdAt).toISOString()}`]));
+    expect(new Set(lines)).toEqual(new Set([`waiting on job ${job.id} (${job.label}) since ${new Date(job.createdAt).toISOString()}`]));
     expect([9, 10]).toContain(lines.length);
   });
 
@@ -551,7 +551,7 @@ describe("the run's cancel ends a held turn, naming what held it", () => {
 
     if (job === undefined) throw new Error('the runner made no job');
     expect(job.status).toBe('running');
-    expect(cancelled.message).toBe(`cancelled by SIGTERM, held by running shell job ${job.id} (workspace: sleep 600; make) `
+    expect(cancelled.message).toBe(`cancelled by SIGTERM, held by running shell job ${job.id} (${job.label}) `
       + `for ${String(Math.round((hand.now() - job.createdAt) / 1000))} s`);
     expect(cancelled.heldBy).toEqual(['running shell job']);
     expect(hand.now() - START).toBeGreaterThanOrEqual(45 * MINUTE);

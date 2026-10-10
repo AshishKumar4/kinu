@@ -23,6 +23,7 @@ import {
 } from './tests/workerd/deploy-fake';
 import type { V4ModuleDefinition } from 'miniflare';
 import { builtinModules } from 'node:module';
+import { spawn } from 'node:child_process';
 import { promptText } from './vite-prompt-text';
 import { AGENT_BUNDLE_ENTRY, buildAgentBundle, workerCompatibility, writeWhole } from './vite-agent-bundle';
 import { readAiRun, workersAiAnswer, workersAiBinding } from './tests/helpers/workers-ai-binding';
@@ -284,7 +285,8 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           modules: probeModules('two-turn-probe.ts', probeRuntime),
           bindings: { DEV_USER_EMAIL: 'probe@local', WORKERS_AI_VIA_BINDING: 'on', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
           ai: await getTwoTurnAi(),
-          serviceBindings: { ASSETS: agentAssets() },
+          // Main's isolate is the shipped facet plus a read of its own SQLite, where its sends, claims and runs are kept.
+          serviceBindings: { ASSETS: agentAssets(fileURLToPath(new URL('./tests/workerd/two-turn-probe-agent.ts', import.meta.url))) },
           // Compat HTTP falls back to the
           // global fetch (owned-model-services passes no deps.fetch), which
           // routes to the Node-side fake; unknown hosts throw.
@@ -348,6 +350,8 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
 ['delete-all-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('delete-all-probe.ts'),
         durableObjects: { DELETE_ALL_PROBE: { className: 'DeleteAllProbeDO', useSQLite: true } } })],
 ['device-user-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('device-user-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { CREDENTIAL_ENCRYPTION_KEY: 'ZGV2aWNlLXVzZXItcHJvYmUtY3JlZGVudGlhbC1rZXk=' },
+        // Main's turns are its own isolate's, loaded from the agent bundle as the deployed Worker serves it.
+        serviceBindings: { ASSETS: agentAssets() },
         // The fake models and their control host, shared with the public surface's drives (files run one at a time).
         outboundService: probeOutbound,
         durableObjects: {
@@ -356,6 +360,8 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
         }, })],
 ['account-reset-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('account-reset-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
+        // Main's conversation is its own isolate's, loaded from the agent bundle as the deployed Worker serves it.
+        serviceBindings: { ASSETS: agentAssets() },
         outboundService: async (request) => {
           throw new Error('Unmatched test egress is disabled: ' + request.url);
         },
@@ -369,6 +375,8 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
            ...workerCompatibility, workerLoaders: { LOADER: {} },
           modules: probeModules('store-reset-probe.ts', { ...probeRuntime, keepNames: true }),
           bindings: { CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
+          // Main's conversation is its own isolate's, loaded from the agent bundle as the deployed Worker serves it.
+          serviceBindings: { ASSETS: agentAssets() },
           outboundService: async (request) => {
             throw new Error('Unmatched test egress is disabled: ' + request.url);
           },
@@ -379,6 +387,8 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           },
         })],
 ['addressed-name-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('addressed-name-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { CREDENTIAL_ENCRYPTION_KEY: 'YWRkcmVzc2VkLW5hbWUtcHJvYmUtY3JlZC1rZXktMzI=' },
+        // Main's conversation is its own isolate's, loaded from the agent bundle as the deployed Worker serves it.
+        serviceBindings: { ASSETS: agentAssets() },
         outboundService: async (request) => {
           throw new Error('Unmatched test egress is disabled: ' + request.url);
         },
@@ -447,6 +457,27 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
         })]
 ]);
 
+/** A fixture run in a workerd of its own, by node, so its Tail is read before that runtime is disposed. */
+async function realWorkerdOracle(args: readonly string[]): Promise<Response> {
+  const root = fileURLToPath(new URL('../..', import.meta.url));
+
+  const child = spawn('node', [...args], {
+    cwd: root, env: { ...process.env, MINIFLARE_WORKERD_PATH: `${root}/node_modules/workerd/bin/workerd` }, stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8').on('data', (chunk: string) => { stdout += chunk; });
+  child.stderr.setEncoding('utf8').on('data', (chunk: string) => { stderr += chunk; });
+
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    child.on('error', reject);
+    child.on('close', resolve);
+  });
+
+  return Response.json({ exitCode, stdout, stderr });
+}
+
 const runnerOptions = {
         ...workerCompatibility,
         // `useSQLite` mirrors `exports`' `storage: "sqlite"` (wrangler.jsonc); without it `ctx.storage.sql`
@@ -460,6 +491,10 @@ const runnerOptions = {
         serviceBindings: {
           // A slate's esbuild facet loads its adapter from ASSETS.
           ASSETS: nimbusAssets,
+          // This oracle must own its runtime: Tail completion is checked before mf.dispose(), not after the pool closes.
+          RELAY_LIFETIME: async () => await realWorkerdOracle(['packages/cf-backend/tests/fixtures/relay-rejected-workerd.mjs', 'session-factory-rejection', 'session-method-rejection', 'fulfilled-stream']),
+          // The relay's own host under a collection, in a runtime of its own whose Tail closes before disposal.
+          RELAY_HOST: async () => await realWorkerdOracle(['packages/cf-backend/tests/fixtures/relay-host-workerd.mjs', 'program-codemode-callback-pressure']),
           PUBLIC_SURFACE: { name: 'public-surface-probe' },
           HIRE_APP: { name: 'hire-probe' },
           // Node-side fake state is shared across workers; these entrypoints reset and read it.

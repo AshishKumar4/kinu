@@ -2,14 +2,15 @@
 import { describe, expect, test } from 'bun:test';
 import { ActorClaimStore, JsonValueSchema, measureContext, RunEventRecorder, type JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
-import { makeSql } from '../../core/tests/helpers';
 import {
-  catalogTurn, gatewayWorkspace, historyOver, workspaceMainActor, type ActorHarness, type HarnessOrchestratorAgent,
+  catalogTurn, gatewayWorkspace, historyOver, type ActorHarness, type HarnessOrchestratorAgent, mainRows, mainDatabase,
 } from './helpers/actor-harness';
 import { answeringGateway, requestOf, scriptedGateway } from './helpers/platform-gateway';
 
-function latestTurnId(harness: ActorHarness<HarnessOrchestratorAgent>): string {
-  const store = new ActorClaimStore(makeSql(harness.db), workspaceMainActor(harness.db), (write) => write(), historyOver(harness));
+async function latestTurnId(harness: ActorHarness<HarnessOrchestratorAgent>): Promise<string> {
+  // Main's turns are claimed in its own isolate.
+  const main = await mainRows(harness);
+  const store = new ActorClaimStore(main.sql, main.actor, (write) => write(), historyOver({ agent: harness.agent, db: main.db }, main.actor));
   const turn = store.latestTurn();
 
   if (turn === null) throw new Error('no turn was claimed');
@@ -74,7 +75,10 @@ function canonicalFromWire(message: v.InferOutput<typeof WireMessageSchema>): Ca
 describe('the context number a page reads back', () => {
   test('a later output-only step cannot relabel the measured input or supply its cache count', async () => {
     const harness = gatewayWorkspace(answeringGateway('Noted.'));
-    const recorder = new RunEventRecorder(makeSql(harness.db), workspaceMainActor(harness.db));
+    // Main's isolate holds turns once one has run there; the measured run below is written after it, as its newest.
+    await catalogTurn(harness.agent, 'first prompt');
+    const main = await mainRows(harness);
+    const recorder = new RunEventRecorder(main.sql, main.actor);
     const context = measureContext({ messages: [{ role: 'user', content: 'first prompt' }] });
     recorder.emit('measured-turn', { type: 'context_admitted', tokens: 80, contextWindow: 1_000 });
     recorder.emit('measured-turn', {
@@ -111,13 +115,15 @@ describe('the context number a page reads back', () => {
     await catalogTurn(harness.agent, 'Remember the word heron.');
     await catalogTurn(harness.agent, 'And the word egret.');
 
-    const gateRows = (): number[] => harness.db.query<{ tokens: number }, []>(
+    const gateRows = (): number[] => mainDatabase(harness).query<{ tokens: number }, []>(
       "SELECT json_extract(payload, '$.tokens') AS tokens FROM run_events WHERE type = 'context_admitted' ORDER BY rowid",
     ).all().map((row) => row.tokens);
 
-    const lastTurn = gateRows().at(-1) ?? 0;
+    const before = gateRows();
+    const lastTurn = before.at(-1) ?? 0;
     await harness.agent.clearConversation();
-    expect(gateRows()).toHaveLength(3);
+    // The clear measures the emptied request once, beside every request main's isolate measured (its title's too).
+    expect(gateRows()).toHaveLength(before.length + 1);
 
     const { fill } = await harness.agent.getActivitySnapshot();
     expect(fill).toMatchObject({ tokens: gateRows().at(-1), source: 'gate' });
@@ -131,7 +137,7 @@ describe('a turn read back request by request', () => {
     const gateway = scriptedGateway([{ tool: 'file', args: { op: 'write', path: '/workspace/notes.txt', content: 'hello' } }], 'All written.');
     const harness = gatewayWorkspace(gateway);
     await catalogTurn(harness.agent, 'Write hello to notes.txt.');
-    const turnId = latestTurnId(harness);
+    const turnId = await latestTurnId(harness);
 
     const index = await harness.agent.getTurnRequests(turnId);
     expect(index.claim?.status).toBe('settled');
@@ -162,7 +168,7 @@ describe('a turn read back request by request', () => {
     const harness = gatewayWorkspace(answeringGateway('Noted.'));
     await catalogTurn(harness.agent, `first ${'a'.repeat(200 * 1024)}`);
     await catalogTurn(harness.agent, `second ${'b'.repeat(200 * 1024)}`);
-    const turnId = latestTurnId(harness);
+    const turnId = await latestTurnId(harness);
     // The admission: the conversation as admitted, both long messages whole (a step's request carries them clamped).
     const step = (await harness.agent.getTurnRequests(turnId)).requests.find((row) => row.step === null);
 
@@ -185,7 +191,7 @@ describe('a turn read back request by request', () => {
   test('a support read lands in the owner\'s activity log with its stated reason', async () => {
     const harness = gatewayWorkspace(answeringGateway('Noted.'));
     await catalogTurn(harness.agent, 'Hello.');
-    const turnId = latestTurnId(harness);
+    const turnId = await latestTurnId(harness);
 
     const read = await harness.agent.supportReadTurn({ turnId, reason: 'support_ticket' });
 
@@ -199,6 +205,6 @@ describe('a turn read back request by request', () => {
     const harness = gatewayWorkspace(answeringGateway('Noted.'));
     await catalogTurn(harness.agent, 'Hello.');
 
-    await expect(harness.agent.getTurnRequests(latestTurnId(harness), crypto.randomUUID())).rejects.toThrow(/not registered/);
+    await expect(harness.agent.getTurnRequests(await latestTurnId(harness), crypto.randomUUID())).rejects.toThrow(/not registered/);
   });
 });

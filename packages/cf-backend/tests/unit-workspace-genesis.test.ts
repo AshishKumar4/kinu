@@ -6,13 +6,11 @@ import * as v from 'valibot';
 import {
   RunEventRecorder, SIGNAL_ID_METADATA_KEY, TERMINAL_EFFECT_RETRY_CEILING_MS, WORKSPACE_CREATED_EVENT, renderSoulMarkdown, summarizeSoul,
 } from '@kinu.run/core';
-import { sqlOver } from '@kinu.run/test-utils';
 import { MockLanguageModelV3 } from 'ai/test';
 import { createTestUserDO, testOwner } from './helpers/user-do';
 import type { ModelMessage } from 'ai';
 import {
-  orchestratorHarness, chatSessionTurns, seedMission, storedChat, workspaceMainActor, type ActorHarness, type HarnessOrchestratorAgent,
-} from './helpers/actor-harness';
+  orchestratorHarness, chatSessionTurns, seedMission, storedChat, type ActorHarness, type HarnessOrchestratorAgent, mainRows } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 
 const MISSION = 'Audit the OAuth callback flow and report what an attacker could reach.';
@@ -105,7 +103,8 @@ describe('the workspace takes its own first turn', () => {
     // Answered while the turn it started is still parked at its model call.
     expect(await harness.agent.beginGenesisTurn()).toEqual({ started: true });
     await next;
-    expect(new RunEventRecorder(sqlOver(harness.db), workspaceMainActor(harness.db)).unterminatedRuns()).toHaveLength(1);
+    const main = await mainRows(harness);
+    expect(new RunEventRecorder(main.sql, main.actor).unterminatedRuns()).toHaveLength(1);
     await turns.settle({ messageId: 'a-genesis', text: 'ok' });
     harness.db.close();
   });
@@ -172,8 +171,10 @@ describe('the workspace takes its own first turn', () => {
     const genesis = turns.park();
 
     expect(await harness.agent.beginGenesisTurn()).toEqual({ started: true });
-    await harness.agent.send('Summarize the incident timeline first.', 'm-first');
+    // Admitted by main's isolate, which reads the held measure before it answers: sent inside the hold, read after it.
+    const sent = harness.agent.send('Summarize the incident timeline first.', 'm-first');
     held.resolve();
+    await sent;
 
     const asked = requestText((await genesis).prompt);
     expect(asked).toContain('first turn');

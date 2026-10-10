@@ -4,6 +4,8 @@
  * one turn; restart replays pending sends and owed effects; an interrupted turn continues once, in its run.
  */
 
+import { answeredSummary, resumeMetadata, type OwnerAnswer } from '../plans/owner-questions';
+import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
 import type { TrialTurn } from '../evolution/trial-rules';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
@@ -230,6 +232,7 @@ export interface ChatSessionPorts {
   /** Never consumes an armed compaction. */
   composeRequest(): Promise<ComposedRequest>;
   owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[];
+  /** The turn's slates, stamped on its answer; absent where there are no slates (the CLI, `FileDeps.slate`). */
   answerMetadata?(turnId: string, texts: () => Promise<readonly string[]>): Promise<JsonObject | null>;
   /** The report this ending owes its caller; narration is read only if the report carries it. */
   owedReport?(ending: TaskTurnEnding, assistantText: string, narration: () => Promise<readonly string[]>): Promise<OwedReport | null>;
@@ -244,7 +247,7 @@ export interface ChatSessionPorts {
   armTurnWake?(atMs: number): Promise<void>;
   /** Owed until {@link quiet}. */
   owed?(): void;
-  /** The queue drained and no turn runs. */
+  /** The queue drained and no turn runs; absent where the process is the wake, as for {@link armTurnWake}. */
   quiet?(): void;
   /** Read at commit, never captured earlier. */
   taskList(): TaskListStore;
@@ -331,6 +334,9 @@ export class ChatSession {
   private turnId: string | null = null;
   /** Null for a user turn, whose row is durable from admission. */
   private openingRow: PreparedConversationEntry | null = null;
+
+  /** The asking turn the running turn continues from, while it is an answer's turn. */
+  private resumingAsk: string | null = null;
   private messageId = '';
   private turnTrial: TrialTurn | null = null;
   /** Armed only by a one-shot task turn (completion-gate.ts). */
@@ -491,6 +497,58 @@ export class ChatSession {
     this.pump();
 
     return promise;
+  }
+
+  /** As {@link enqueueTurn}, answered once the turn is queued unless admission already decided it: a caller in another
+   *  object, itself mid-settle, never waits out the turn it handed over. */
+  async queueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> {
+    const queued: EnqueueTurnResult = { status: 'queued' };
+
+    // An offer whose operator already spoke is consumed now: answered once queued, its caller would never hear the
+    // yield its dequeue decides.
+    if (await this.offerYields(input)) return { status: 'yielded' };
+
+    // An answer decided at admission resolves first; a turn still to run answers 'queued'.
+    return await Promise.race([this.enqueueTurn(input), Promise.resolve(queued)]);
+  }
+
+  /** Whether an offer that yields to the operator meets one who spoke first: a user turn queued, or one in the
+   *  conversation. It then never runs, and the yield is logged as its activity. */
+  private async offerYields(offer: { readonly yieldsToUserMessage?: boolean; readonly metadata?: JsonObject }): Promise<boolean> {
+    if (offer.yieldsToUserMessage !== true) return false;
+
+    if (!this.queue.some((queued) => queued.kind === 'user') && !(await this.transcript.operatorSpoke())) return false;
+    diagnostics.event('genesis.yielded_to_message', {
+      signal: v.is(v.string(), offer.metadata?.kinuEvent) ? offer.metadata.kinuEvent : 'unknown',
+    });
+    this.actorSession.orchestrator.logActivity('genesis.yielded_to_message');
+
+    return true;
+  }
+
+  /**
+   * Each answered question owes the turn that continues from its call. That turn has no input of its own: the
+   * answer is the call's result (`plans/owner-questions.ts`), so the model goes on from the call. It runs before
+   * what waited behind the question. Asked after an answer and at every wake, so an answer outlives the process.
+   */
+  resumeAnswered(): void {
+    const { questions } = this.actorSession;
+    let queued = false;
+
+    for (const owed of questions.owedResumes()) {
+      const identity = `owner-answer:${owed.turnId}`;
+
+      if (this.announcementOnDisk(identity)) questions.markResumed(owed.turnId);
+      else if (!this.ended && !this.announcementInFlight(identity)) {
+        this.queue.unshift({
+          text: answeredSummary(owed.asked), kind: 'programmatic', idempotencyKey: identity, metadata: resumeMetadata(owed), settle: () => {},
+        });
+        queued = true;
+      }
+    }
+
+    // Asked at every wake: one that owes nothing leaves the loop as it was.
+    if (queued) this.pump();
   }
 
   /** Its producer is told, and so is every caller that joined it: a turn restored after a reset has only joiners. */
@@ -655,6 +713,7 @@ export class ChatSession {
 
   /** Pending steers are dropped and returned so the surface can restore them. */
   interrupt(): string[] {
+    this.abandonQuestions();
     const returned = this.actorSession.interrupt();
     // The returned words' reservation is spent, or a restart would re-deliver them.
     const ids = returned.flatMap((steer) => steer.id === undefined ? [] : [steer.id]);
@@ -667,7 +726,44 @@ export class ChatSession {
 
   /** Unseen steers stay queued and rerun; {@link interrupt} hands them back instead. */
   stop(): void {
+    this.abandonQuestions();
     this.actorSession.stop();
+  }
+
+  /** The owner's answer: the asking call's result, and the turn that continues from it, owed once its step's every
+   *  question has closed. */
+  answerQuestions(id: string, answers: readonly OwnerAnswer[]): Effect.Effect<void, KinuError> {
+    return Effect.andThen(this.actorSession.questions.answer(id, answers), Effect.sync(() => { this.resumeAnswered(); }));
+  }
+
+  /** `id`'s questions closed unanswered: the agent reads that, and a sibling's answer may now be resumed. */
+  dismissQuestions(id: string): number {
+    const closed = this.actorSession.questions.close('dismissed', id).length;
+
+    this.resumeAnswered();
+
+    // What waited behind the questions may run now.
+    if (closed > 0) this.pump();
+
+    return closed;
+  }
+
+  /**
+   * Whether a queued item's obligation still stands at dequeue: its host's (a plan's handoff), and for an answer's
+   * turn, its asking turn's resume, which a Stop, a clear or the owner's message may have retired since it queued.
+   */
+  private stillOwed(item: QueueItem): boolean {
+    if (!this.ports.stillOwed(item.metadata)) return false;
+
+    if (item.metadata?.kinuEvent !== OWNER_ANSWER_SIGNAL) return true;
+    const asked = item.metadata.askTurn;
+
+    return this.actorSession.questions.owedResumes().some((owed) => owed.turnId === asked);
+  }
+
+  /** A Stop, a clear or a walk-back: nothing the agent asked is waited on or resumed; what waited behind it may run. */
+  private abandonQuestions(): void {
+    if (this.actorSession.questions.abandon() > 0) this.pump();
   }
 
   /** Only a running turn keyed under `prefix`. */
@@ -713,6 +809,8 @@ export class ChatSession {
   /** Queue and running turn define "in flight"; delivery is awaited so the redraw precedes the answer. */
   async revertTo(entryId: string): Promise<void> {
     await this.actorSession.revertConversation(this.sessionId, entryId, () => this.turnInFlight() ? Effect.fail(new KinuError('denied', REVERT_NEEDS_IDLE)) : Effect.void);
+    // An open question's call, or an answered one not yet resumed, ends the conversation: a walk-back removes it.
+    this.abandonQuestions();
     this.emit({ type: 'history-reverted', entryId });
     await this.flushEvents();
   }
@@ -720,6 +818,7 @@ export class ChatSession {
   /** Resolves once the emptied request is measured, with why not if the measure failed; the clear itself stands. */
   async clear(): Promise<KinuError | null> {
     await this.actorSession.clearConversation(this.sessionId, () => this.turnInFlight() ? Effect.fail(new KinuError('denied', CLEAR_NEEDS_IDLE)) : Effect.void);
+    this.abandonQuestions();
 
     return this.measureCleared();
   }
@@ -914,7 +1013,7 @@ export class ChatSession {
           break;
         }
 
-        const item = this.queue.shift();
+        const item = this.nextRunnable();
 
         if (item === undefined) break;
         // Checked per item, immediately before the turn runs. A refusal settles the item, so its producer
@@ -927,7 +1026,7 @@ export class ChatSession {
           continue;
         }
 
-        if (!this.ports.stillOwed(item.metadata)) {
+        if (!this.stillOwed(item)) {
           diagnostics.event('turn.no_longer_owed', {
             signal: v.is(v.string(), item.metadata?.kinuEvent) ? item.metadata.kinuEvent : 'unknown',
           });
@@ -935,14 +1034,8 @@ export class ChatSession {
           continue;
         }
 
-        // Checked at dequeue, never admission: somebody spoke first, so the offer is consumed.
-        if (item.yieldsToUserMessage === true
-          && (this.queue.some((queued) => queued.kind === 'user')
-            || await this.transcript.operatorSpoke())) {
-          diagnostics.event('genesis.yielded_to_message', {
-            signal: v.is(v.string(), item.metadata?.kinuEvent) ? item.metadata.kinuEvent : 'unknown',
-          });
-          this.actorSession.orchestrator.logActivity('genesis.yielded_to_message');
+        // Checked at dequeue: somebody spoke first, so the offer is consumed.
+        if (await this.offerYields(item)) {
           this.settleItem(item, null, true);
           continue;
         }
@@ -978,6 +1071,20 @@ export class ChatSession {
 
       if (!deferred) this.ports.quiet?.();
     }
+  }
+
+  /**
+   * The next item to run. A question to the owner holds the agent as a call to them would: while one is open, only the
+   * owner's message, an answer's turn or the asking turn re-opened runs, ahead of the work it holds, which keeps its order.
+   */
+  private nextRunnable(): QueueItem | undefined {
+    const runs = (item: QueueItem): boolean => item.kind === 'user' || item.continuation !== undefined || item.metadata?.kinuEvent === OWNER_ANSWER_SIGNAL;
+    const head = this.queue[0];
+
+    if (head === undefined || runs(head) || !this.actorSession.questions.hasOpen()) return this.queue.shift();
+    const at = this.queue.findIndex(runs);
+
+    return at < 0 ? undefined : this.queue.splice(at, 1)[0];
   }
 
   /** When the queue's head is a re-opened turn still inside its backoff, on a host whose wake can end it: that end. */
@@ -1046,6 +1153,15 @@ export class ChatSession {
 
     this.runId = item.continuation?.runId ?? `run-${crypto.randomUUID()}`;
     const inputReference = await this.actorSession.canonical.admitInput({ id: this.turnId, turnId: this.turnId, message: turnInputMessage(item), assertOwner: () => this.actorSession.runtime.actor.assertCurrent() });
+    const { questions } = this.actorSession;
+
+    // The owner wrote instead of choosing: their message answers the open questions, and the answers given ride it.
+    if (item.kind === 'user' && questions.mayWait()) {
+      questions.close('in_chat');
+      questions.retireResumes();
+    }
+
+    this.resumingAsk = event === OWNER_ANSWER_SIGNAL && v.is(v.string(), item.metadata?.askTurn) ? item.metadata.askTurn : null;
 
     const metadata = authoredTurnMetadata(item);
 
@@ -1243,6 +1359,7 @@ export class ChatSession {
       interrupted,
       ...(runError !== null && { errorText: runError }),
       lastFinishReason: this.actorSession.orchestrator.acc.lastFinishReason,
+      askedOwner: this.actorSession.orchestrator.acc.askedOwner,
     };
 
     const end = classifyRunEnd(facts);
@@ -1473,6 +1590,9 @@ export class ChatSession {
   /** Public rows contain references only; output bytes committed before this terminal transaction. */
   private persist(assistant: PreparedConversationEntry | null): void {
     if (this.openingRow !== null) this.transcript.appendUser(this.openingRow);
+
+    // Recorded with the turn it owed: a death before leaves the answer owed, and its turn is resumed again.
+    if (this.resumingAsk !== null) this.actorSession.questions.markResumed(this.resumingAsk);
 
     if (assistant !== null) this.transcript.appendAssistant(assistant);
   }

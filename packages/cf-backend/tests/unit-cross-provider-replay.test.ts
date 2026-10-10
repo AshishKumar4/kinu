@@ -38,11 +38,9 @@ const HISTORY: ModelMessage[] = [
   { role: 'user', content: 'are you sure' },
 ];
 
-/** Awaited: the pipeline becomes a Promise when an extension must finish I/O first. */
-async function stepMessages(
-  agent: HarnessOrchestratorAgent, messages: readonly ModelMessage[],
-): Promise<ModelMessage[]> {
-  return [...await chatSessionTurns(agent).step(0, messages)];
+/** The first request the turn's model was sent over `HISTORY`, as its step pipeline built it. */
+async function stepMessages(agent: HarnessOrchestratorAgent): Promise<ModelMessage[]> {
+  return [...(await chatSessionTurns(agent).prepare({ messages: [...HISTORY] })).prompt];
 }
 
 function pairing(messages: readonly ModelMessage[]) {
@@ -65,10 +63,7 @@ function pairing(messages: readonly ModelMessage[]) {
 describe('a hosted step whose history came from another provider', () => {
   test('is handed destination-neutral ids, still paired', async () => {
     const { agent } = orchestratorHarness();
-    // beforeStep refuses an unprepared turn: open it through beforeTurn, as production does.
-    await chatSessionTurns(agent).prepare({ messages: [...HISTORY] });
-
-    const carried = pairing(await stepMessages(agent, [...HISTORY]));
+    const carried = pairing(await stepMessages(agent));
 
     expect(carried.calls).toHaveLength(1);
     expect(carried.results).toEqual(carried.calls);
@@ -79,9 +74,7 @@ describe('a hosted step whose history came from another provider', () => {
 
   test('converts source reasoning to portable text and removes its signature', async () => {
     const { agent } = orchestratorHarness();
-    await chatSessionTurns(agent).prepare({ messages: [...HISTORY] });
-
-    const messages = await stepMessages(agent, [...HISTORY]);
+    const messages = await stepMessages(agent);
 
     const assistant = messages.find((message) =>
       message.role === 'assistant' && Array.isArray(message.content));
@@ -96,12 +89,9 @@ describe('a hosted step whose history came from another provider', () => {
     expect(JSON.stringify(HISTORY)).toContain(SOURCE_REASONING_SIGNATURE);
   });
 
-  test('pairs the same way on every step, so a re-issued request is stable', async () => {
-    const { agent } = orchestratorHarness();
-    await chatSessionTurns(agent).prepare({ messages: [...HISTORY] });
-
-    const first = pairing(await stepMessages(agent, [...HISTORY]));
-    const second = pairing(await stepMessages(agent, [...HISTORY]));
+  test('pairs the same way on every request, so a re-issued request is stable', async () => {
+    const first = pairing(await stepMessages(orchestratorHarness().agent));
+    const second = pairing(await stepMessages(orchestratorHarness().agent));
 
     expect(second).toEqual(first);
   });

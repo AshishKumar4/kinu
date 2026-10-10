@@ -1,6 +1,6 @@
 // What the public surface cannot drive: a name whose teardown is pending, a workspace's own authority when it hires a
 // workspace, and an account with no model it can serve. Role, model, effort and names are the workerd public-surface
-// journey's (tests/workerd/public-surface.test.ts).
+// journey's (tests/workerd/wide/public-surface.test.ts).
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {

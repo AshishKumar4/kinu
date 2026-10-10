@@ -7,14 +7,13 @@ import {
   openWorkspaceMainActor, RunEventRecorder, SESSION_UID, WORKSPACE_RUN_ID,
   INTERRUPTED_TURN, isJsonAnswer, type JsonValue, type SlateSurfaceResult, actorHomeName } from '@kinu.run/core';
 import { sqlOver } from '@kinu.run/test-utils';
-import { scriptedTurnModel } from '@kinu.run/test-utils/turn-model';
 import {
   catalogTurn, gatewayWorkspace, hostedSubordinateHarness, chatSessionTurns, orchestratorHarness, reactivateOrchestratorHarness, storedChat, workspaceFiles,
 } from './helpers/actor-harness';
 import { chatCompletion, wordByWordCompletion, GATEWAY_MODEL, openingOf, requestOf, stubAiBinding, textThenToolCompletion } from './helpers/platform-gateway';
 import { createWorkspaceBundle } from '../../core/tests/helpers';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
-import { joinHarnessFibers, recordedMcpToolCalls, resetRecordedMcp, seedMcpTools, seedMcpAnswer } from './helpers/agents-sdk';
+import { recordedMcpToolCalls, resetRecordedMcp, seedMcpTools, seedMcpAnswer } from './helpers/agents-sdk';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '../src/slates/bindings';
 import { SlateId } from '@agent-core/core/slates';
 import { slateDirectory } from '@kinu.run/core/slates';
@@ -717,18 +716,14 @@ test('a slate\'s agent.send delivers one inbox signal naming the slate', async (
   await files.mkdir('/slates/pager', { recursive: true });
   await writeText(files, '/slates/pager/package.json', JSON.stringify({ main: 'server.ts' }));
 
-  // The observable effect of `send` is the turn the inbox admits; the model is scripted so the turn commits.
-  actor.agent.modelFactory = () => scriptedTurnModel({ doGenerate: () => ({
-    content: [{ type: 'text', text: 'paged' }],
-    finishReason: { unified: 'stop', raw: undefined },
-    usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
-      outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
-  }) });
-
+  // The observable effect of `send` is the turn the inbox admits, read once main's isolate opens it.
+  const turns = chatSessionTurns(actor.agent);
+  const opened = turns.park();
   const call = (args: JsonValue[]) => surface(actor.agent, ROOT_SLATE_CALLER, 'pager')(['agent', 'send'], args);
 
   expect(await call([{ text: 'done', data: { count: 2 } }])).toEqual({ ok: true, value: { outcome: 'queued' } });
-  await joinHarnessFibers();
+  await opened;
+  await turns.settle({ messageId: 'a-paged', text: 'paged' });
   const admitted = (await storedChat(actor)).filter((message) => message.role === 'user');
   expect(admitted).toHaveLength(1);
   expect(admitted[0]).toMatchObject({

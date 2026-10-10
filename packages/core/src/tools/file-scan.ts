@@ -8,11 +8,12 @@ import { Effect } from 'effect';
 
 import { settle } from '../obs/index';
 import { Fnv1a64 } from '../utils/fnv1a';
+import { withoutBom } from '../utils/text';
 
 
 import { isVfsError, syscallError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { RESIDENT_TEXT_MAX_BYTES } from '../vfs/mounts';
-import { BOM, FILE_READ_LINE_CHARS, numberedLine, type SliceLine, type SliceWindow } from './file-edit';
+import { FILE_READ_LINE_CHARS, numberedLine, type SliceLine, type SliceWindow } from './file-edit';
 import { FileRefusalError } from '../types/file-edits';
 
 /** Bytes per ranged read (the scan's resident ceiling); intentionally smaller than `FILE_CHUNK_BYTES`. */
@@ -22,11 +23,11 @@ const SCAN_CHUNK_BYTES = 64 * 1024;
 export interface ScannedFile {
   readonly window: SliceWindow;
   readonly revision: VfsRevision | undefined;
-  /** `fnv1a64` of the entire text, BOM included; equals hashing a whole-file read. */
+  /** `fnv1a64` of the entire text without its leading BOM, as `readText` and the ledger name it. */
   readonly fingerprint: string;
 }
 
-/** A file's whole text. `ignoreBOM` keeps the BOM so the fingerprint matches string-returning planes. */
+/** A file's whole text. Keep the BOM so an edit can restore it; content identity is BOM-independent. */
 export function readFileText(vfs: VFS, path: string, revision?: VfsRevision): Promise<string> {
   return settle(fileText(vfs, path, revision));
 }
@@ -140,7 +141,7 @@ function feedRanges(
   path: string,
 ): Effect.Effect<boolean> {
   return Effect.gen(function* () {
-    // `ignoreBOM`: the mark belongs to the fingerprint.
+    // Keep the mark until feed normalizes both the display and the fingerprint together.
     const decode = new TextDecoder('utf-8', { ignoreBOM: true });
 
     for (let at = 0; ; ) {
@@ -202,7 +203,7 @@ function beginScan(opts: { offset?: number | undefined; limit?: number | undefin
   const { maxChars } = opts;
   const hash = new Fnv1a64();
 
-  /** The display stream drops one leading BOM so a copied first line matches `old_text`; the hash keeps it. */
+  /** Drop encoding metadata once, before both display and hashing, just as a whole-text read does. */
   let bomPending = true;
   let line = 1;
   let total = 0;
@@ -260,17 +261,15 @@ function beginScan(opts: { offset?: number | undefined; limit?: number | undefin
   return {
     feed(raw: string): void {
       if (raw.length === 0) return;
-      hash.update(raw);
 
       let text = raw;
 
       if (bomPending) {
         bomPending = false;
-
-        if (text.startsWith(BOM)) text = text.slice(1);
-
-        if (text.length === 0) return;
+        text = withoutBom(text);
       }
+
+      hash.update(text);
 
       for (let pos = 0; ; ) {
         const nl = text.indexOf('\n', pos);

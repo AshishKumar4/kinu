@@ -14,7 +14,7 @@ import { SlateInlineContext } from '../src/components/slates/context';
 import { MessageView } from '../src/components/MessageView';
 import {
   agentHistory, chatSessionTurns, gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, runDelegatedTask, storedChat, workspaceFiles,
-  workspaceMainActor,
+  workspaceMainActor, mainDatabase,
 } from './helpers/actor-harness';
 import { scriptedGateway } from './helpers/platform-gateway';
 
@@ -104,7 +104,7 @@ test("a write under an answered turn is previewed on the actor's next answer", a
   await turns.settle({ messageId: 'a-first', text: 'Started it.' });
 
   // A job the first turn detached keeps that turn's operation after its answer went out.
-  const answered = harness.db.query<{ turn_id: string }, []>("SELECT turn_id FROM conversation_entries WHERE role = 'assistant'").get();
+  const answered = mainDatabase(harness).query<{ turn_id: string }, []>("SELECT turn_id FROM conversation_entries WHERE role = 'assistant'").get();
 
   if (answered === null) throw new Error('the first answer was not recorded');
 
@@ -175,8 +175,8 @@ async function boardTurn(also: (tools: Awaited<ReturnType<ReturnType<typeof chat
 
 // Owner 2026-09-26: "if the agent itself also previews it, this doesn't trigger." Each way a turn can show the slate
 // leaves exactly one preview of it.
-test('an answer that writes the slate:// line itself gets no second preview', async () => {
-  const answer = await boardTurn(async () => {}, 'Added it.\n\nslate://board');
+test.each(['slate://board', '`slate://board`'])('an answer that writes %s itself gets no second preview', async (address) => {
+  const answer = await boardTurn(async () => {}, `Added it.\n\n${address}`);
 
   expect(slatesChanged({ metadata: answer?.metadata })).toEqual([]);
   expect(previewsDrawn(answer)).toEqual(['board']);

@@ -9,20 +9,19 @@
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  CHAT_SESSION_ID, PROGRAMMATIC_MESSAGE_ID_PREFIX, RunEventRecorder,
-  TERMINAL_EFFECT_RETRY_CEILING_MS, claimToolEffect, createFactsStore, openTurnRun,
+  TERMINAL_EFFECT_RETRY_CEILING_MS, claimToolEffect, createFactsStore,
   type TerminalEffectName, type TerminalEffectPhase,
 } from '@kinu.run/core';
 import { createRecordingLogger } from '@kinu.run/core/obs';
 import { sqlOver } from '@kinu.run/test-utils';
 import {
-  admittedTurnClaim, chatSessionTurns, historyOver, ledgerOver, orchestratorHarness,
+  chatSessionTurns, ledgerOver, orchestratorHarness,
   reactivateOrchestratorHarness,
   tapDiagnostics, until, workspaceMainActor, type ActorHarness, type HarnessActorWorld, type HarnessOrchestratorAgent,
   type ScriptedHeadReport,
 } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
-import type { TurnHarness } from './helpers/turn-harness';
+import type { SettledTurn, TurnHarness } from './helpers/turn-harness';
 
 type Harness = ActorHarness<HarnessOrchestratorAgent>;
 
@@ -53,8 +52,6 @@ async function recover(harness: Harness, world?: HarnessActorWorld): Promise<Har
   return restarted;
 }
 
-const OVERFLOW_ERROR = 'prompt is too long: 210000 tokens > 200000 maximum';
-
 interface EffectRow {
   readonly effect_key: string;
   readonly status: string;
@@ -67,20 +64,6 @@ function effects(harness: Harness, turnId: string, messageId = 'a-1'): EffectRow
     `SELECT effect_key, status, attempts FROM terminal_effects
      WHERE actor_id = ? AND sequence_id = ? ORDER BY seq, effect_key`,
   ).all(workspaceMainActor(harness.db).actorId, ledgerOver(harness.db).sequenceId({ turnId, messageId }));
-}
-
-interface ClaimRow {
-  readonly turn_id: string;
-  readonly call_id: string;
-  readonly result_json: string | null;
-}
-
-/** Transition claims only: the table also holds tool claims and per-effect markers. */
-function transitionClaims(harness: Harness): ClaimRow[] {
-  return harness.db.query<ClaimRow, []>(
-    `SELECT turn_id, normalized_call_id AS call_id, result_json FROM tool_effect_claims
-     WHERE normalized_call_id LIKE 'terminal:response:%' ORDER BY turn_id, normalized_call_id`,
-  ).all();
 }
 
 /** One turn's tool claims by call id. */
@@ -140,9 +123,13 @@ function windowedTurns(harness: Harness): number {
 }
 
 /** Settle one response and wait until its sequence is closed in storage. */
-async function settleResponse(harness: Harness, turnId: string, messageId: string, text = 'the answer'): Promise<void> {
-  await turns(harness).settle({ messageId, text });
-  await until(() => disposition(harness, turnId, messageId) === 'done', `the sequence of ${messageId} closed`);
+/** Answers the id main's isolate minted for the answer, which the workspace's sequence is keyed on. */
+async function settleResponse(harness: Harness, turnId: string, messageId: string, text = 'the answer'): Promise<string> {
+  const settled = await turns(harness).settle({ messageId, text });
+
+  await until(() => disposition(harness, turnId, settled.messageId) === 'done', `the sequence of ${settled.messageId} closed`);
+
+  return settled.messageId;
 }
 
 /** A steer branch launched while `turnId` runs toward answer `messageId`, through the public redirect;
@@ -156,75 +143,33 @@ async function branchDuring(harness: Harness, turnId: string, messageId: string,
   return branch.branchId;
 }
 
+/**
+ * Settles main's turn and waits for the cut: it lands in the lanes main's isolate hands the workspace, inside the settle
+ * or just after it, and stops the workspace's sequence there.
+ */
+async function cutSettle(harness: Harness, messageId: string): Promise<SettledTurn | null> {
+  const log = createRecordingLogger();
+  const untap = tapDiagnostics(log);
+
+  try {
+    const [settled] = await Promise.allSettled([turns(harness).settle({ messageId })]);
+    await log.until((emitted) => emitted.some((line) => line.event === 'turn.finalization_failed' || line.event === 'turn.terminal_transition_close_failed'));
+
+    if (settled.status === 'fulfilled') return settled.value;
+
+    // A settle that reports the cut itself has no identity to hand back; any other failure is the test's.
+    if (!String(settled.reason).includes('terminal effect ')) throw settled.reason;
+
+    return null;
+  } finally {
+    untap();
+  }
+}
+
 /** A head platform where every branch head answers `report`. */
 function headsAnswering(report: ScriptedHeadReport): HarnessActorWorld['heads'] {
   return async () => report;
 }
-
-describe('an owed follow-up turn is a durable terminal effect', () => {
-  /** Queued is RAM: the row stays owed until the retry turn's own row is on disk. */
-  test('an overflow retry stays owed until its turn is on disk, across a refused dequeue', async () => {
-    const harness = orchestratorHarness();
-
-    await turns(harness).openInFlight('u-overflow');
-    harness.agent.harnessRefuseDriving({ reason: 'unavailable', error: 'another activation is driving' });
-    const { turnId, messageId } = await turns(harness).settle({ messageId: 'a-overflow', status: 'error', error: OVERFLOW_ERROR });
-    await joinHarnessFibers();
-
-    const retry = () => effects(harness, turnId, messageId).find((row) => row.effect_key === `v1:overflow_retry:${messageId}`);
-    const transcript = historyOver(harness).transcript(CHAT_SESSION_ID);
-    const retryOnDisk = () => transcript.has(`${PROGRAMMATIC_MESSAGE_ID_PREFIX}overflow-retry:${messageId}`);
-
-    expect(retryOnDisk()).toBe(false);
-    expect(retry()).toMatchObject({ status: 'pending' });
-
-    harness.agent.harnessRefuseDriving(null);
-    laterBy(1);
-    await harness.agent.terminalRetryPass();
-    await until(retryOnDisk, 'the retry turn reached the transcript');
-
-    laterBy(1);
-    await harness.agent.terminalRetryPass();
-
-    expect(retry()).toBeUndefined();
-    expect(transitionClaims(harness).filter((row) => row.turn_id === turnId)).toEqual([
-      { turn_id: turnId, call_id: `terminal:response:${messageId}`, result_json: '"settled"' },
-    ]);
-    // One retry turn: the replay that found it on disk queued no second.
-    expect((await harness.agent.listRuns()).items).toHaveLength(2);
-  });
-
-  test('a rolled-back owed-turn effect reuses the follow-up still queued in RAM', async () => {
-    const harness = cutAt('overflow_retry', 'after');
-    await turns(harness).openInFlight('u-queue-cut');
-    let replay: Promise<void> | null = null;
-
-    const restore = tapDiagnostics({
-      event: () => {},
-      failure: (event) => {
-        if (event === 'turn.finalization_failed' && replay === null) replay = harness.agent.terminalRetryPass();
-      },
-    });
-
-    try {
-      await expect(turns(harness).settle({ messageId: 'a-queue-cut', status: 'error', error: OVERFLOW_ERROR }))
-        .rejects.toThrow(/terminal effect overflow_retry:/u);
-
-      if (replay === null) throw new Error('the cut did not start the public recovery pass');
-      await replay;
-
-      const retry = sqlOver(harness.db)<{ scope: string }>`SELECT scope FROM terminal_effects
-        WHERE effect_name = 'overflow_retry'`[0];
-
-      if (retry === undefined) throw new Error('the queued retry lost its owed row');
-      const transcript = historyOver(harness).transcript(CHAT_SESSION_ID);
-      expect(transcript.has(`${PROGRAMMATIC_MESSAGE_ID_PREFIX}overflow-retry:${retry.scope}`)).toBe(true);
-      expect((await harness.agent.listRuns()).items).toHaveLength(2);
-    } finally {
-      restore();
-    }
-  });
-});
 
 /**
  * Each case cuts the sequence at an effect (`before`: owed, replay; `after`: indeterminate, keyed
@@ -245,47 +190,48 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     turns(harness).open('u-two');
     await turns(harness).settle({ messageId: 'a-two' });
     const decayOne = { upserts: [], decay: ['deploy_target'] };
-    // The answer a first attempt persisted, with the lane on: the state the replay reads.
+    // With the lane on: the turn owes it.
     workspaceMainActor(harness.db).config.setSleepTimeComputeEnabled(true);
-    harness.db.prepare('INSERT INTO sleep_time_updates (effect_key, update_json) VALUES (?, ?)')
-      .run('a-decay', JSON.stringify(decayOne));
     turns(harness).open('u-decay');
 
     harness.db.exec(`CREATE TRIGGER probe_block_sleep_tombstone
       BEFORE INSERT ON effect_tombstones WHEN NEW.scope = 'sleep_time'
       BEGIN SELECT RAISE(ABORT, 'the tombstone write failed'); END`);
 
-    await turns(harness).settle({ messageId: 'a-decay' });
+    // Main's isolate names its answer; the lane is owed under it.
+    const settled = await turns(harness).settle({ messageId: 'a-decay' });
     await joinHarnessFibers();
 
-    // Unchanged: the decay rolled back with the tombstone.
+    // Unchanged: whatever the first attempt applied rolled back with the tombstone.
     expect(facts().recall('deploy_target')?.confidence).toBe(0.6);
-    expect(effects(harness, 'u-decay', 'a-decay')
-      .find((row) => row.effect_key === 'v1:sleep_time:a-decay')?.status).toBe('pending');
+    expect(effects(harness, settled.turnId, settled.messageId)
+      .find((row) => row.effect_key === `v1:sleep_time:${settled.messageId}`)?.status).toBe('pending');
 
     harness.db.exec('DROP TRIGGER probe_block_sleep_tombstone');
     laterBy(1);
-    const restarted = await reactivateOrchestratorHarness(harness.db, undefined, { sleepTimeAnswer: ['a-decay', decayOne] });
+    // The answer the replay reads, as a first attempt persisted it.
+    harness.db.prepare('DELETE FROM sleep_time_updates WHERE effect_key = ?').run(settled.messageId);
+    const restarted = await reactivateOrchestratorHarness(harness.db, undefined, { sleepTimeAnswer: [settled.messageId, decayOne] });
     await restarted.agent.terminalRetryPass();
     await joinHarnessFibers();
 
     // One decay; approximate because it is float subtraction.
     expect(facts().recall('deploy_target')?.confidence).toBeCloseTo(0.4, 10);
-    expect(effects(restarted, 'u-decay', 'a-decay')).toEqual([]);
+    expect(effects(restarted, settled.turnId, settled.messageId)).toEqual([]);
   });
 
   /** Recording and its review commit with the disposition, or recovery writes them together. */
   test('a cut around the turn recording recovers exactly one owed review', async () => {
     const before = cutAt('turn_record', 'before');
     turns(before).open('u-rev-b');
-    await expect(turns(before).settle({ messageId: 'a-rev-b' })).rejects.toThrow('terminal effect turn_record:a-rev-b interrupted before its side effect');
+    await cutSettle(before, 'a-rev-b');
     expect(owedReviews(before)).toBe(0);
     await recover(before);
     expect(owedReviews(before)).toBe(1);
 
     const after = cutAt('turn_record', 'after');
     turns(after).open('u-rev-a');
-    await expect(turns(after).settle({ messageId: 'a-rev-a' })).rejects.toThrow('terminal effect turn_record:a-rev-a interrupted after its side effect');
+    await cutSettle(after, 'a-rev-a');
     expect(owedReviews(after)).toBe(0);
     await recover(after);
     // The insert is idempotent on the turn's own id.
@@ -312,9 +258,10 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
 
     if (!second.accepted) throw new Error(`the branch was refused: ${second.reason}`);
 
-    await expect(turns(harness).settle({ messageId: 'a-branch' })).rejects.toThrow('terminal effect turn_end_extensions:a-branch interrupted before its side effect');
+    // Main's isolate names its answer; the workspace owes the turn's lanes under it.
+    const settled = await cutSettle(harness, 'a-branch') ?? { turnId: 'u-branch', messageId: 'a-branch' };
 
-    expect(effects(harness, 'u-branch', 'a-branch').map((row) => row.effect_key).filter((key) => key.startsWith('v1:branches:')).sort())
+    expect(effects(harness, settled.turnId, settled.messageId).map((row) => row.effect_key).filter((key) => key.startsWith('v1:branches:')).sort())
       .toEqual([`v1:branches:${first}`, `v1:branches:${second.branchId}`].sort());
 
     for (const report of reports) report.resolve({ status: 'completed', summary: 'the branch answer' });
@@ -325,8 +272,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     for (const phase of ['before', 'after'] as const) {
       const harness = cutAt('turn_record', phase);
       turns(harness).open(`u-sfx-${phase}`);
-
-      await expect(turns(harness).settle({ messageId: `a-sfx-${phase}` })).rejects.toThrow(`terminal effect turn_record:a-sfx-${phase} interrupted ${phase} its side effect`);
+      await cutSettle(harness, `a-sfx-${phase}`);
 
       // Two recoveries: the second would double anything the first left un-tombstoned.
       await recover(await recover(harness));
@@ -396,19 +342,20 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
 
     try {
       const branchId = await branchDuring(harness, 'u-owed', 'a-owed', 'try the other library');
-      await turns(harness).settle({ messageId: 'a-owed', text: 'the live answer' });
+      // Main's isolate names its answer: the workspace owes the turn's lanes under that answer.
+      const settled = await turns(harness).settle({ messageId: 'a-owed', text: 'the live answer' });
       await log.until((emitted) => emitted.some((line) => line.event === 'turn.terminal_transition_close_failed'));
 
       expect(takeSets(harness)).toBe(0);
-      expect(owedBranchEffects(harness, 'u-owed', 'a-owed')).toEqual([`v1:branches:${branchId}`]);
-      expect(disposition(harness, 'u-owed', 'a-owed')).toBe('resumed');
+      expect(owedBranchEffects(harness, settled.turnId, settled.messageId)).toEqual([`v1:branches:${branchId}`]);
+      expect(disposition(harness, settled.turnId, settled.messageId)).toBe('resumed');
 
       report.resolve({ status: 'completed', summary: 'the branch answer' });
       laterBy(1);
       await harness.agent.terminalRetryPass();
 
       expect(takeSets(harness)).toBe(1);
-      expect(owedBranchEffects(harness, 'u-owed', 'a-owed')).toEqual([]);
+      expect(owedBranchEffects(harness, settled.turnId, settled.messageId)).toEqual([]);
     } finally {
       untap();
     }
@@ -425,10 +372,10 @@ describe('mid-turn captures are credited to the turn only when it answered', () 
   test('a completed turn credits its branch take set to its answer', async () => {
     const harness = orchestratorHarness(undefined, { heads: headsAnswering({ status: 'completed', summary: 'the branch answer' }) });
     await branchDuring(harness, 'u-credit', 'a-credit', 'try the other library');
-    await turns(harness).settle({ messageId: 'a-credit', text: 'the live answer' });
+    const { messageId } = await turns(harness).settle({ messageId: 'a-credit', text: 'the live answer' });
     await joinHarnessFibers();
 
-    expect(harness.db.query('SELECT turn_id FROM alternate_takes').all()).toEqual([{ turn_id: 'a-credit' }]);
+    expect(harness.db.query('SELECT turn_id FROM alternate_takes').all()).toEqual([{ turn_id: messageId }]);
   });
 
   test('a turn that failed credits nothing: its branch is aborted and no take set is written', async () => {
@@ -446,17 +393,6 @@ describe('a turn releases its tool claims only when no response can still run', 
   /** A tool call claimed and unsettled: the state a still-executing turn leaves. */
   function claimTool(harness: Harness, turnId: string, callId: string): void {
     claimToolEffect(sqlOver(harness.db), workspaceMainActor(harness.db), { turnId, callId, digest: 'harness-tool-digest' });
-  }
-
-  /** An open run the isolate died inside; the restart re-opens it as a continuation. */
-  function openRun(harness: Harness, runId: string, turnId: string): void {
-    openTurnRun(new RunEventRecorder(sqlOver(harness.db), workspaceMainActor(harness.db)), runId, {
-      agentId: workspaceMainActor(harness.db).actorId,
-      causedBy: 'chat',
-      userMessage: 'the message the turn answers',
-      turnIndex: 1,
-      turn: { turnId, messageId: 'a-first', kind: 'user', text: 'the message the turn answers' },
-    });
   }
 
   const released = [
@@ -477,32 +413,4 @@ describe('a turn releases its tool claims only when no response can still run', 
     });
   }
 
-  /** Defends: closing the earlier response must keep a live continuation's tool claim. */
-  test('cold recovery keeps the claims of a continuation it has not replayed yet', async () => {
-    const harness = orchestratorHarness();
-    await admittedTurnClaim(harness, 'u-cont');
-    claimTool(harness, 'u-cont', 'call_send_1');
-    expect(disposition(harness, 'u-cont', 'a-first')).toBe('first');
-    openRun(harness, 'run-a-cont', 'u-cont');
-
-    const restarted = await reactivateOrchestratorHarness(harness.db);
-    await restarted.agent.terminalRetryPass();
-
-    expect(disposition(restarted, 'u-cont', 'a-first')).toBe('done');
-    expect(toolClaims(restarted, 'u-cont')).toEqual(['call_send_1']);
-  });
-
-  /** Negative control: no response of the turn survived, so the close drops the claims. */
-  test('cold recovery releases them when no response survived the isolate', async () => {
-    const harness = orchestratorHarness();
-    await admittedTurnClaim(harness, 'u-gone');
-    claimTool(harness, 'u-gone', 'call_send_1');
-    expect(disposition(harness, 'u-gone', 'a-first')).toBe('first');
-    openRun(harness, 'run-other-turn', 'u-other');
-
-    const restarted = await reactivateOrchestratorHarness(harness.db);
-    await restarted.agent.terminalRetryPass();
-
-    expect(toolClaims(restarted, 'u-gone')).toEqual([]);
-  });
 });

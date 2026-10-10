@@ -25,7 +25,7 @@ import {
   type LanguageModel, type ModelMessage, type ToolSet, type StepResult,
 } from 'ai';
 import {
-  EvolutionEngine,
+  EvolutionEngine, historyTurnPairs,
   type LLMProviderConfig,
   type CompletedTurn,
   type EvolutionEvent,
@@ -197,7 +197,7 @@ describe('E2E Lifecycle', () => {
     rt = target.runtime;
     db = target.db;
     events = [];
-    engine = new EvolutionEngine(rt, rt.stores.history, { enabled: true });
+    engine = new EvolutionEngine(rt, historyTurnPairs(rt.stores.history), { enabled: true });
     engine.onEvent(e => events.push(e));
     turns = [];
     callsPerTurn = [];

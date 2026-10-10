@@ -14,6 +14,7 @@ import type { DecisionPort } from '../src/providers/decision-model';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initScaffoldTables } from '../src/scaffold/schemas';
+import { historyTurnPairs } from '../src/identity/conversation-store';
 
 function makeTurn(overrides: Partial<CompletedTurn> = {}): CompletedTurn {
   return {
@@ -70,7 +71,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
       return complete(prompt);
     };
 
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
     const events: EvolutionEvent[] = [];
     engine.onEvent(e => events.push(e));
 
@@ -107,7 +108,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
 
     ratedAs(rt, 'accepted');
 
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
     const events: EvolutionEvent[] = [];
     engine.onEvent(e => events.push(e));
 
@@ -128,7 +129,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
     ratedAs(rt, 'corrected');
     void rt.storage.sql`INSERT INTO crafted_tools (name, score, uses, last_used_at)
         VALUES ('my_crafted_tool', 0.5, 1, ${Date.now()})`;
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
 
     const turn = makeTurn({
       toolCalls: [compactToolCall({ name: 'eval', args: {}, result: 'x' })],
@@ -147,7 +148,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
 
     void rt2.storage.sql`INSERT INTO crafted_tools (name, score, uses, last_used_at)
         VALUES ('my_crafted_tool', 0.5, 1, ${Date.now()})`;
-    const engine2 = new EvolutionEngine(rt2, stores2.history);
+    const engine2 = new EvolutionEngine(rt2, historyTurnPairs(stores2.history));
     await engine2.reviewTurn(makeTurn({
       toolCalls: [compactToolCall({ name: 'eval', args: {}, result: 'x' })],
       craftedToolsUsed: ['my_crafted_tool'],
@@ -163,7 +164,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
     // Crafted tools are codemode-only, so the EMA must come from the turn record.
     const { rt, stores } = createTestRuntime();
     ratedAs(rt, 'corrected');
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
     await engine.reviewTurn(makeTurn({
       toolCalls: [compactToolCall({ name: 'mcp__github__create_issue', args: {}, result: 'x' })],
       craftedToolsUsed: [],
@@ -182,7 +183,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
       return realComplete(prompt);
     };
 
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
     const events: EvolutionEvent[] = [];
     engine.onEvent(e => events.push(e));
 
@@ -195,7 +196,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
   test('no follow-up: no rating at all — an absent reply is not a neutral one', async () => {
     const { rt, stores } = createTestRuntime();
     const rated = ratedAs(rt, 'accepted');
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
     const events: EvolutionEvent[] = [];
     engine.onEvent(e => events.push(e));
 
@@ -230,7 +231,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
     const headless = createTestRuntime({ llmResponses: { 'Extract a reusable pattern': pattern } });
     ratedAs(headless.rt, 'accepted');
     const turn = makeTurn({ turnId: 'exec-promote', ...acted });
-    await new EvolutionEngine(headless.rt, headless.stores.history).reviewTurn(turn, null);
+    await new EvolutionEngine(headless.rt, historyTurnPairs(headless.stores.history)).reviewTurn(turn, null);
     expect(turn.feedback).toBeNull();
     expect(listTurnRatings(headless.rt.storage.sql, headless.rt.actor)).toEqual([]);
     expect(headless.rt.storage.sql<{ n: number }>`SELECT COUNT(*) AS n FROM crafted_tools`[0]?.n).toBe(0);
@@ -239,7 +240,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
     const asked = createTestRuntime({ llmResponses: { 'Extract a reusable pattern': pattern } });
     ratedAs(asked.rt, 'accepted');
 
-    await new EvolutionEngine(asked.rt, asked.stores.history).reviewTurn(
+    await new EvolutionEngine(asked.rt, historyTurnPairs(asked.stores.history)).reviewTurn(
       makeTurn({ turnId: 'graded-promote', ...acted }), 'perfect, thanks',
     );
     expect(asked.rt.storage.sql<{ name: string }>`SELECT name FROM crafted_tools`.map((r) => r.name))
@@ -249,7 +250,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
   test('a turn that errored with no reply writes nothing: no rating, no lesson', async () => {
     const { rt, stores } = createTestRuntime();
     ratedAs(rt, 'corrected');
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
 
     await engine.reviewTurn(makeTurn({
       turnId: 'exec-2', hadError: true,
@@ -263,7 +264,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
   test('a decision model failure records nothing and fails the review, to be retried', async () => {
     const { rt, stores } = createTestRuntime();
     rt.decide = async () => ({ answers: { satisfaction: { type: 'score', score: 2 } }, usage: { input: 0, output: 0 } });
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
     const turn = makeTurn();
 
     await expect(engine.reviewTurn(turn, 'hmm, interesting')).rejects.toThrow('left a rating question unanswered');
@@ -281,7 +282,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
       return 'unused';
     };
 
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
     await engine.applyExplicitFeedback('msg-1', 'positive');
 
     const turn = makeTurn();
@@ -321,7 +322,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
     });
 
     const turn = makeTurn();
-    await new EvolutionEngine(rt, stores.history).reviewTurn(turn, 'whatever text — the thumb already decided');
+    await new EvolutionEngine(rt, historyTurnPairs(stores.history)).reviewTurn(turn, 'whatever text — the thumb already decided');
 
     // This actor's own rating decides.
     expect(turn.feedback).toBe('positive');
@@ -337,7 +338,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
     let llmCalls = 0;
     const { rt, stores } = createTestRuntime();
     const rated = ratedAs(rt, 'accepted');
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
     rt.llm.complete = async () => {
       llmCalls++;
 
@@ -360,7 +361,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
 
   test('programmatic turn without errors: no rating, no evolution side effects', async () => {
     const { rt, stores } = createTestRuntime();
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
     const events: EvolutionEvent[] = [];
     engine.onEvent(e => events.push(e));
 
@@ -373,7 +374,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
   test('a later low rating corroborates a provisional lesson into the derived view', async () => {
     const { rt, stores } = createTestRuntime();
     ratedAs(rt, 'frustrated');
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
     recordLesson(rt.storage.sql, rt.actor, {
       turnIds: ['msg-1'], text: 'verify cluster names before acting',
       source: 'turn_reflection', status: 'provisional',
@@ -390,7 +391,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
 
   test('a late thumbs-down rates the turn and corroborates its lessons', async () => {
     const { rt, stores } = createTestRuntime();
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
     await seedTranscriptEntry(stores.history, 'default', { id: 'u1', message: { role: 'user', content: 'the task' }, origin: 'input' });
     await seedTranscriptEntry(stores.history, 'default', { id: 'a1', message: { role: 'assistant', content: 'the answer' }, origin: 'output' });
     recordLesson(rt.storage.sql, rt.actor, {
@@ -409,7 +410,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
   test('respects enabled=false config', async () => {
     const { rt, stores } = createTestRuntime();
     const rated = ratedAs(rt, 'corrected');
-    const engine = new EvolutionEngine(rt, stores.history, { enabled: false });
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history), { enabled: false });
     const events: EvolutionEvent[] = [];
     engine.onEvent(e => events.push(e));
 
@@ -428,7 +429,7 @@ describe('EvolutionEngine — Session-level', () => {
   test('reflects on a ≥3-turn window carrying negative signal (a corroborated session lesson)', async () => {
     const { rt, stores } = createTestRuntime();
     ratedAs(rt, 'corrected');
-    const engine = new EvolutionEngine(rt, stores.history, { lifetimeEvolutionInterval: 100 });
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history), { lifetimeEvolutionInterval: 100 });
     recordLesson(rt.storage.sql, rt.actor, {
       turnIds: ['w1'], text: 'Previous lesson content',
       source: 'turn_reflection', status: 'corroborated',
@@ -449,7 +450,7 @@ describe('EvolutionEngine — Session-level', () => {
   test('accepted streak lowers the cadence: an all-good window skips reflection', async () => {
     const { rt, stores } = createTestRuntime();
     ratedAs(rt, 'accepted');
-    const engine = new EvolutionEngine(rt, stores.history, { lifetimeEvolutionInterval: 100 });
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history), { lifetimeEvolutionInterval: 100 });
 
     const turns = [makeTurn({ turnId: 's1' }), makeTurn({ turnId: 's2' }), makeTurn({ turnId: 's3' })];
 
@@ -461,7 +462,7 @@ describe('EvolutionEngine — Session-level', () => {
 
   test('an errored window still reflects, but the self-scored lesson stays provisional', async () => {
     const { rt, stores } = createTestRuntime();
-    const engine = new EvolutionEngine(rt, stores.history, { lifetimeEvolutionInterval: 100 });
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history), { lifetimeEvolutionInterval: 100 });
     recordLesson(rt.storage.sql, rt.actor, {
       turnIds: ['seed'], text: 'Previous lesson content',
       source: 'turn_reflection', status: 'corroborated',
@@ -487,7 +488,7 @@ describe('EvolutionEngine — Session-level', () => {
     const events: EvolutionEvent[] = [];
 
     for (let i = 0; i < 5; i++) {
-      const engine = new EvolutionEngine(rt, stores.history, { lifetimeEvolutionInterval: 5 });
+      const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history), { lifetimeEvolutionInterval: 5 });
       engine.onEvent(e => events.push(e));
       await engine.onSessionComplete(window);
     }
@@ -503,7 +504,7 @@ describe('EvolutionEngine — Lifetime-level', () => {
     initSearchTables(rt.storage.execRaw);
     initScaffoldTables(rt.storage.execRaw);
 
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
 
     const events: EvolutionEvent[] = [];
     engine.onEvent(e => events.push(e));
@@ -529,7 +530,7 @@ describe('the turn-reflection prompt', () => {
       return complete(prompt);
     };
 
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
     await engine.reviewTurn(
       makeTurn({ steps: 41, durationMs: 372_000 }),
       'No — that rotates production keys. I said STAGING.',

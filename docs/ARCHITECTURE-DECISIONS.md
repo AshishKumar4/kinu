@@ -813,6 +813,37 @@ removed by `37a8d6c10` on 2026-09-30. Restore it from
 `98f64cde610869efc60ff072ff89e866bb5fd116` to replay that historical surface,
 not the six-axis swarm contract.
 
+Extended 2026-10-09: an outgoing WORKSPACE call is consumed by the facet's one
+Cloudflare adapter (`agent-facet/workspace-rpc.ts`). A rejected native RpcPromise
+is disposed after rejection; the original error remains the rejection. A fulfilled
+answer is not disposed there: streams and live session stubs still belong to their
+consumer. Nimbus's synchronous session surface first consumes its session factory,
+then each method call, so a failed factory creates no further pipelined call. The
+session surface forwards explicit owner disposal; a method's refusal does not close
+a fulfilled session. Chat, tools, pacing, credentials and memory use this same adapter.
+
+Measured with a Worker Loader Durable Object facet and a real Tail consumer on
+workerd 2026-09-30. Debugger controls on `5b166af79` (jobs
+`20261009183355-6c5db02f` / `20261009183400-d64f3c13`) kept three caught rejections
+hung until the runtime cancelled the relay; disposing the caller's original promise
+closed all three as `ok`. Disposing a host or method promise inside the relay did not
+fix it. A session-pipeline control on `3335244a0` showed that original-only and
+downstream-only disposal each left a failed factory hung; both closed it (job
+`20261009190056-d2d7425c`). A fulfilled session remained readable after its method
+refused and only that method's promise was disposed (job `20261009190101-d06cd29d`).
+
+The product-adapter oracle (`tests/fixtures/relay-rejected-workerd.mjs`) on
+`1d3be46ba`, plain mode, saw four exception Tails for chat rejection, a rejected
+workspace factory, workspace shutdown and a rejected session factory (armada
+`20261009191129-2a27583d`). With the adapter at `97198f929`, those four closed as
+`ok`, with unchanged error names, codes and messages; a refused method on a live
+session left it readable, and a fulfilled response's stream remained readable.
+All six Tails closed before runtime disposal (job `20261009191420-a2f5374c`). The
+workerd suite runs the rejected-session and live-ownership cases beside
+`relayed-answer.test.ts`; its former fulfilled-answer checks could not detect this
+rejected-promise lifetime. This addresses the lifetime behind the 40 hung
+AgentWorkspaceRPC invocations diagnosed on d930 and d05, not every possible hung request.
+
 D10. Each model step an agent's isolate takes runs under a call its workspace
 makes into it. Amends D9's "no call into the isolate is held open". Decided
 2026-10-08 on a probe and an incident (platform catalog `do.facet.cpu_ms`,

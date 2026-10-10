@@ -10,7 +10,7 @@
 //   packages/catalog/src/compat/rules/auth/anthropic.kdl and registry/engine/oauth-code.ts  the sign-in
 import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { jsonSchema, streamText, tool, type ModelMessage } from 'ai';
+import { APICallError, jsonSchema, streamText, tool, type ModelMessage } from 'ai';
 import * as v from 'valibot';
 import { createClaudeProvider, CLAUDE_CRED_KEY } from '../src/providers/claude';
 import { cacheableSystem, resolvePromptCacheStrategy } from '../src/prompting/cache-breakpoints';
@@ -187,7 +187,7 @@ describe('the Claude subscription wire', () => {
         sent.length = 0;
         await expect(turn(createClaudeProvider(), deps(transport, [login('sk-ant-oat01-retries')]), {
           maxRetries: 0, providerOptions: callRetries(retries),
-        })).rejects.toThrow('is rate-limiting this account');
+        })).rejects.toBeInstanceOf(APICallError);
         expect(sent).toEqual(Array.from({ length: retries + 1 }, () => false));
       }
     } finally {
@@ -289,6 +289,30 @@ describe('the Claude subscription wire', () => {
 
     expect(request.text.match(/"cache_control"/g)?.length).toBe(4);
     expect(system.map((block) => block.cache_control !== undefined)).toEqual([false, true, false]);
+  });
+
+  test('with the shared system part split off, the identity takes the end of system\'s breakpoint and the shared part keeps its own', async () => {
+    const { sent, fetchFn } = wire([sse]);
+    const marked = { anthropic: { cacheControl: { type: 'ephemeral', ttl: '1h' } } } as const;
+    const shared = 'You are Kinu. The guidance every workspace shares.';
+
+    const result = streamText({
+      model: createClaudeProvider().createModel('claude-opus-4-7', deps(fetchFn, [login('t')])),
+      instructions: cacheableSystem(`${shared}\n\nYou work in the workspace "Ledger".`, resolvePromptCacheStrategy('claude'), shared.length),
+      messages: [
+        { role: 'user', content: 'Please refactor the parser module into two files.', providerOptions: marked },
+        { role: 'assistant', content: 'Reading it first.' },
+        { role: 'user', content: 'Go on.', providerOptions: marked },
+      ],
+      tools: { read: tool(READ) },
+    });
+
+    await result.consumeStream();
+    const request = only(sent);
+    const system = v.parse(SystemBlocksSchema, request.body.system);
+
+    expect(request.text.match(/"cache_control"/g)?.length).toBe(4);
+    expect(system.map((block) => [block.text === shared, block.cache_control !== undefined])).toEqual([[false, false], [false, true], [true, true], [false, false]]);
   });
 
   test('a refusal naming a newer Claude Code release is retried once at that release, which the provider then keeps', async () => {

@@ -8,6 +8,7 @@ import { EvolutionEngine } from '../src/evolution/engine';
 import type { CompletedTurn } from '../src/evolution/types';
 import { listLessons, renderRecentLessons } from '../src/evolution/lessons';
 import { hasLowRating, listTurnRatings, recordTurnRating } from '../src/evolution/ratings';
+import { historyTurnPairs } from '../src/identity/conversation-store';
 
 function makeTurn(overrides: Partial<CompletedTurn> = {}): CompletedTurn {
   return {
@@ -33,7 +34,7 @@ describe('S5 — the corroborated lessons view survives a MEMORY.md reset', () =
       wrong: { type: 'choice', choice: 'misunderstood' },
     }, usage: { input: 0, output: 0 } });
 
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
 
     // A lesson rated by the user's reply is born corroborated, as a ledger row.
     await engine.reviewTurn(makeTurn(), 'no — you rotated production, not staging');

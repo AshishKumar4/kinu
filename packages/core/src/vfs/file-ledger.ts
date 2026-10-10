@@ -5,9 +5,9 @@ import type { VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
  */
 
 import { fnv1a64 } from '../utils/fnv1a';
-import { lineCount } from '../utils/text';
+import { lineCount, withoutBom } from '../utils/text';
 
-import type { FileEditOutcomeReason, FileEditSnapshot } from '../types/file-edits';
+import type { EditedSpan, FileEditOutcomeReason, FileEditSnapshot } from '../types/file-edits';
 import { countSharedWrite, newWriteAuthor } from '../obs/msg-counters';
 
 export type { FileEditOutcomeReason, FileEditSnapshot } from '../types/file-edits';
@@ -35,7 +35,10 @@ interface SeenContent {
   total: number;
 }
 
-/** `fingerprint` must be `fnv1a64` of the file's whole text. */
+/**
+ * The lines a read showed in full, `first` to `last`. A line the read cut is not in the range, whatever the read showed
+ * after it. `fingerprint` must be `fnv1a64` of the file's whole text without its leading BOM.
+ */
 export interface RangeObservation {
   readonly fingerprint: string;
   readonly first: number;
@@ -49,6 +52,30 @@ interface RangeCoverage {
   readonly coveredTo: number;
   readonly total: number;
   readonly revision?: VfsRevision;
+}
+
+/** Carry the first unseen character through ordered, non-overlapping replacements; only complete lines before it count. */
+function carriedCoverage(before: string, after: string, covered: number, spans: readonly EditedSpan[]): number {
+  let frontier = before.length - withoutBom(before).length;
+
+  for (let line = 0; line < covered; line++) frontier = before.indexOf('\n', frontier) + 1;
+  let shift = 0;
+
+  for (const span of spans) {
+    if (span.start > frontier) break;
+    // Authored text is known. If it replaces the frontier, the next unseen character is after this span.
+    frontier = Math.max(frontier, span.end);
+    shift += span.inserted - (span.end - span.start);
+  }
+
+  const edge = frontier + shift;
+
+  if (edge === after.length) return lineCount(withoutBom(after));
+  let lines = 0;
+
+  for (let at = after.indexOf('\n'); at !== -1 && at < edge; at = after.indexOf('\n', at + 1)) lines++;
+
+  return lines;
 }
 
 export class TurnFileLedger {
@@ -75,14 +102,15 @@ export class TurnFileLedger {
   }
 
   observeWhole(path: string, content: string, revision?: VfsRevision): void {
-    const total = lineCount(content);
+    const text = withoutBom(content);
+    const total = lineCount(text);
 
-    this.record(path, { fingerprint: fnv1a64(content), coveredTo: total, total, revision });
+    this.record(path, { fingerprint: fnv1a64(text), coveredTo: total, total, revision });
   }
 
   /**
    * Coverage extends only when [first, last] continues the prefix already read.
-   * `fingerprint` must be `fnv1a64` of the whole file text, never of the window or size/mtime.
+   * `fingerprint` must be `fnv1a64` of the whole file text without its leading BOM, never of the window or size/mtime.
    */
   observeRange(path: string, scan: RangeObservation): void {
     const existing = this.seen.get(scan.fingerprint);
@@ -92,15 +120,18 @@ export class TurnFileLedger {
     this.record(path, { fingerprint: scan.fingerprint, coveredTo, total: scan.total, revision: scan.revision });
   }
 
-  observeEdited(path: string, before: string, after: string, revision?: VfsRevision): void {
-    const previous = this.seen.get(fnv1a64(before));
-    const total = lineCount(after);
+  /** `spans` are ordered in the original text's coordinates, including its BOM and line endings. */
+  observeEdited(path: string, before: string, edited: { readonly content: string; readonly spans: readonly EditedSpan[] }, revision?: VfsRevision): void {
+    const { content: after, spans } = edited;
+    const previous = this.seen.get(fnv1a64(withoutBom(before)));
+    const text = withoutBom(after);
+    const total = lineCount(text);
 
     const covered = previous && previous.coveredTo >= previous.total
       ? total
-      : Math.min(previous?.coveredTo ?? 0, total);
+      : carriedCoverage(before, after, previous?.coveredTo ?? 0, spans);
 
-    this.record(path, { fingerprint: fnv1a64(after), coveredTo: covered, total, revision });
+    this.record(path, { fingerprint: fnv1a64(text), coveredTo: covered, total, revision });
   }
 
   private record(path: string, entry: RangeCoverage): void {
@@ -113,10 +144,11 @@ export class TurnFileLedger {
   }
 
   seenState(path: string, content: string, need: FileSeenNeed): FileSeenVerdict {
-    const entry = this.seen.get(fnv1a64(content));
+    const text = withoutBom(content);
+    const entry = this.seen.get(fnv1a64(text));
 
     if (!entry) {
-      return { state: this.seenPaths.has(path) ? 'stale' : 'never', coveredTo: 0, total: lineCount(content) };
+      return { state: this.seenPaths.has(path) ? 'stale' : 'never', coveredTo: 0, total: lineCount(text) };
     }
 
     const state: FileSeenState = need === 'whole' && entry.coveredTo < entry.total ? 'partial' : 'seen';

@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-08",
-  "files": 3095,
-  "functions": 80987,
+  "measuredAt": "2026-10-09",
+  "files": 3142,
+  "functions": 82472,
   "ceiling": 87,
   "line": 27,
   "inventory": [
@@ -230,10 +230,6 @@
       "complexity": 28
     },
     {
-      "key": "packages/core/src/orchestrator/terminal-roster.ts#declareTerminalRoster",
-      "complexity": 28
-    },
-    {
       "key": "packages/core/src/strategy/swarm-resume.ts#outcomeFacts",
       "complexity": 28
     },
@@ -262,10 +258,6 @@
       "complexity": 27
     },
     {
-      "key": "packages/cf-backend/src/components/surfaces/WorkSurface.tsx#WorkSurface",
-      "complexity": 27
-    },
-    {
       "key": "packages/cf-backend/src/components/ui/BrandMark.tsx#providerBrand",
       "complexity": 27
     },
@@ -279,10 +271,6 @@
     },
     {
       "key": "packages/cli/src/commands/debug.ts#summarizeRun",
-      "complexity": 27
-    },
-    {
-      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene>useCallback#28",
       "complexity": 27
     },
     {

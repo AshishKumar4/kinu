@@ -5,7 +5,7 @@ import { currentDateForPrompt, publishSubordinateReport, type ConversationRecall
 import type { LanguageModel, ModelMessage, Tool, ToolSet } from 'ai';
 import { EventLog, HeadCapture, titleActorFromMessage, spawnSeatedHead, admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus, receiveSubordinateEvent, subordinateRelaysTurnEnd, subordinateForkContext, type SubordinateInheritedContext, inheritedAsModelMessage, collectDynamicContext, explorationActorKey, headStatusUnsettled, storedHeadReportStatus, subordinateDelegatesOf, registeredParent, subordinateDescendants, actorReferenceOf, TEMPORARY_LIFETIME, terminalTaskReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, type ActorHost, type ActorReference, type BoundActor, type DelegationBudget, type DynamicContext, type HeadId, type HeadInput, type RunInference, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedActor, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff, type SubordinateLifetime, type SubordinateReportOrigin, type SubordinateReportHandoff, type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime, type SubordinateSeed, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
 import { attempt, KinuError, settle, settleSync } from '@kinu.run/core/obs';
-import type { AgentRuntime, HeadSeat, JsonObject, OwedReport, RunTurnSources } from '@kinu.run/core';
+import type { AgentRuntime, HeadSeat, JsonObject, OwedReport, RunTurnSources, TaskPlan, TrialTurn, TurnAssemblySources, TurnOpening } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { isCFRuntime, type CFRuntime } from './runtime';
 import { actorRetirementFor, type ActorRetirementRequest } from './actor-hosting';
@@ -27,13 +27,21 @@ export interface HostedTaskTurn {
   readonly capture: HeadCapture;
   readonly model: LanguageModel;
   readonly profile: ExplorationProfile;
+  /** Where the chat that admitted the turn opened it; main's trial segment keys on it. */
+  readonly opening?: TurnOpening;
+  readonly taskPlan?: TaskPlan;
 }
+
+/** Main answers its own tool names; an agent's are derived from its tools. */
+type HostedTurnSources = RunTurnSources & Partial<Pick<TurnAssemblySources, 'wiredToolNames' | 'codemodeCapabilities'>>;
 
 /** A hosted turn's tools, and where its turn is assembled from: the prompt's tool index is rendered from them. */
 export interface HostedTaskProfile {
   readonly tools: ToolSet;
   readonly raw: ToolSet;
-  readonly sources: RunTurnSources;
+  readonly sources: HostedTurnSources;
+  /** Main's live trial arm, when it runs one. */
+  readonly trial?: TrialTurn;
 }
 
 /** One workspace's host and directory, for every hosted kind. */
@@ -284,6 +292,8 @@ export interface HostedTurnRequest {
   /** A hirer's turn carries `report`; an owner's chat with the actor does not. */
   readonly parentDriven: boolean;
   readonly driving: JsonObject | undefined;
+  readonly opening?: TurnOpening;
+  readonly taskPlan?: TaskPlan;
   readonly run?: { readonly input: HeadInput; readonly inference: RunInference };
 }
 
@@ -291,8 +301,9 @@ export interface PreparedHostedTurn {
   readonly turn: HostedTaskTurn;
   readonly model: string;
   readonly tools: ToolSet;
-  readonly sources: RunTurnSources;
+  readonly sources: HostedTurnSources;
   readonly birthContext: readonly ModelMessage[];
+  readonly trial?: TrialTurn;
 }
 
 export function prepareHostedTurn(
@@ -315,12 +326,15 @@ export function prepareHostedTurn(
     return {
       turn, model, tools: profile.tools, sources: profile.sources,
       birthContext: run === undefined ? turn.input.inheritedContext.map(inheritedAsModelMessage) : [],
+      ...('trial' in profile && profile.trial !== undefined && { trial: profile.trial }),
     };
   }));
 }
 
-/** The owner writing to an agent that waits on input answers that wait, as a message from its hirer does. */
+/** The owner writing to an agent that waits on input answers that wait, as a message from its hirer does. The root
+ *  agent has no hirer to wait on. */
 function ownerAnswersWait(seams: HostedActorSeams, actor: BoundActor): void {
+  if (actor.record.parentActorId === null) return;
   const hirer = hostedHirer(seams, actor);
   const roster = seams.roster(hirer);
 
@@ -356,6 +370,8 @@ function hostedTaskTurn(
 
     const turn: HostedTaskTurn = {
       turnId: task.sequenceId, parentDriven: task.parentDriven, ...(task.driving !== undefined && { driving: task.driving }), actor, runtime, reports: { spoke: false, settled: false }, input,
+      ...(task.opening !== undefined && { opening: task.opening }),
+      ...(task.taskPlan !== undefined && { taskPlan: task.taskPlan }),
       capture: run?.inference.capture ?? new HeadCapture(),
       model: seams.resolveModel(model),
       profile: resolved,

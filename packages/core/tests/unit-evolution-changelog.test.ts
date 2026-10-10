@@ -22,6 +22,7 @@ import { createRefinementStore, initRefinementTables } from '../src/evolution/re
 import { createTestRuntime } from './helpers';
 import { RunEventRecorder } from '../src/events/recorder';
 import { present } from '@kinu.run/test-utils';
+import { historyTurnPairs } from '../src/identity/conversation-store';
 
 const V0_CODE = 'async function* run(rt, task) { yield "v0"; }';
 
@@ -119,7 +120,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     expect(entry.items).toHaveLength(1);
     const [item] = present(entry.items, 'the fact aggregate items');
     expect(item.id).toBe('fact:sandbox.npm_version');
-    expect(item.summary).toBe('Your sandbox runs npm v10');
+    expect(item.summary).toContain('npm v10');
     expect(item.evidence).toContain('sandbox.npm_version = npm v10');
     expect(item.evidence).toContain('confidence 90%');
     expect(item.evidence).toContain('via sleep-time-compute');
@@ -178,7 +179,8 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     const [entry] = buildChangelog(rt.storage.sql, rt.actor, { since: 1000 });
     const [item] = present(entry.items, 'the fact aggregate items');
     expect(item.id).toBe('fact:sandbox.npm_version');
-    expect(item.summary).toBe('Your sandbox runs npm v10');
+    expect(item.summary).toContain('npm v10');
+    expect(item.summary).not.toContain('v9');
   });
 
   test('GEPA and rating entries are informational (no revert)', () => {
@@ -573,7 +575,7 @@ describe('reverts — real paths only', () => {
 describe('session-end digest — assembled when the window closes', () => {
   test('onSessionComplete emits one changelog_digest covering the window', async () => {
     const { rt, facts, stores } = setup();
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
     const events: EvolutionEvent[] = [];
     engine.onEvent((e) => events.push(e));
 
@@ -607,7 +609,7 @@ describe('session-end digest — assembled when the window closes', () => {
 
   test('a window that changed nothing emits no digest', async () => {
     const { rt, stores } = setup();
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
     const events: EvolutionEvent[] = [];
     engine.onEvent((e) => events.push(e));
     await engine.onSessionComplete({

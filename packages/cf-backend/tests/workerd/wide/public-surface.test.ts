@@ -108,7 +108,8 @@ async function openPane(path: string): Promise<Pane> {
 
   const frames: string[] = [];
   const watchers: { readonly holds: (frame: v.InferOutput<typeof FrameSchema>) => boolean; readonly resolve: () => void }[] = [];
-  const rpcs = new Map<string, PromiseWithResolvers<unknown>>();
+  // An answer is held as what it was, refusal included, until the test reads it: one may arrive before its read.
+  const rpcs = new Map<string, PromiseWithResolvers<{ readonly result: unknown } | { readonly refused: Error }>>();
   const turns = new Map<string, PromiseWithResolvers<void>>();
 
   const waiter = <T>(held: Map<string, PromiseWithResolvers<T>>, id: string): PromiseWithResolvers<T> => {
@@ -116,6 +117,7 @@ async function openPane(path: string): Promise<Pane> {
 
     if (found !== undefined) return found;
     const fresh = Promise.withResolvers<T>();
+
     held.set(id, fresh);
 
     return fresh;
@@ -136,8 +138,8 @@ async function openPane(path: string): Promise<Pane> {
     if (!frame.success || frame.output.id === undefined) return;
 
     if (frame.output.type === 'rpc' && frame.output.success !== undefined) {
-      if (frame.output.success) waiter(rpcs, frame.output.id).resolve(frame.output.result);
-      else waiter(rpcs, frame.output.id).reject(new Error(`${frame.output.id} was refused: ${JSON.stringify(frame.output.error)}`));
+      if (frame.output.success) waiter(rpcs, frame.output.id).resolve({ result: frame.output.result });
+      else waiter(rpcs, frame.output.id).resolve({ refused: new Error(`${frame.output.id} was refused: ${JSON.stringify(frame.output.error)}`) });
 
       return;
     }
@@ -154,7 +156,7 @@ async function openPane(path: string): Promise<Pane> {
   });
 
   socket.addEventListener('close', () => {
-    for (const pending of rpcs.values()) pending.reject(new Error(`${path} closed before its rpc answered`));
+    for (const pending of rpcs.values()) pending.resolve({ refused: new Error(`${path} closed before its rpc answered`) });
 
     for (const pending of turns.values()) pending.reject(new Error(`${path} closed before its turn finished`));
   });
@@ -168,7 +170,13 @@ async function openPane(path: string): Promise<Pane> {
   return {
     send: (frame) => { socket.send(frame); },
     settled: async (requestId) => { await waiter(turns, requestId).promise; },
-    rpc: async (id, schema) => v.parse(schema, await waiter(rpcs, id).promise),
+    rpc: async (id, schema) => {
+      const answer = await waiter(rpcs, id).promise;
+
+      if ('refused' in answer) throw answer.refused;
+
+      return v.parse(schema, answer.result);
+    },
     responseIds: () => parsed()
       .filter((frame) => frame.type === CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE)
       .flatMap((frame) => frame.id === undefined ? [] : [frame.id]),

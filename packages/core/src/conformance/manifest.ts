@@ -4,7 +4,7 @@
  * against the real composition output in both directions. Test-plane only.
  */
 
-import { BUILTIN_TOOLS, SUBMIT_PLAN_TOOL } from '../tools/registry';
+import { ASK_OWNER_TOOL, BUILTIN_TOOLS, SUBMIT_PLAN_TOOL } from '../tools/registry';
 import type { BuiltinToolName } from '../tools/registry';
 import { AGENTS_OPS, type AgentsOp } from '../operations/agents';
 import { MEMORY } from '../operations/memory';
@@ -39,9 +39,10 @@ export const CONFORMANCE_PLANES = ['tool', 'agents-op', 'memory-op', 'producer']
 export type ConformancePlane = (typeof CONFORMANCE_PLANES)[number];
 
 export interface ConformanceManifest {
-  /** Keyed by the registry union and the plan review's submission, so a new tool cannot compile without a per-root
-   *  decision. `reply_to_comment` exists only on a sent-back review's turn, which no root's surface is observed on. */
-  readonly tool: Readonly<Record<BuiltinToolName | typeof SUBMIT_PLAN_TOOL, RootStatuses>>;
+  /** Keyed by the registry union, the plan review's submission and the owner's questions, so a new tool cannot compile
+   *  without a per-root decision. `reply_to_comment` exists only on a sent-back review's turn, which no root's surface
+   *  is observed on. */
+  readonly tool: Readonly<Record<BuiltinToolName | typeof SUBMIT_PLAN_TOOL | typeof ASK_OWNER_TOOL, RootStatuses>>;
   readonly 'agents-op': Readonly<Record<AgentsOp, RootStatuses>>;
   readonly 'memory-op': Readonly<Record<keyof typeof MEMORY, RootStatuses>>;
   /** Model producers whose client the root actually built. */
@@ -83,6 +84,12 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     submit_plan: {
       'cf-orchestrator': WIRED,
       'cf-subordinate': { absent: 'a delegated turn answers its parent through report; only the owner\'s own turns submit a plan for review' },
+      cli: WIRED,
+    },
+    // Where a person is the conversation partner: the owner's own turns. A delegated turn asks its hirer in its report.
+    ask_owner: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': { absent: 'a delegated turn answers its hirer through report; only the owner\'s own turns ask the owner' },
       cli: WIRED,
     },
   },
@@ -128,7 +135,7 @@ export interface ObservedSurface {
 
 /** Registry-closed planes, to tell "undeclared" from impossible states. */
 export const PLANE_UNIVERSE = {
-  tool: [...BUILTIN_TOOLS, SUBMIT_PLAN_TOOL],
+  tool: [...BUILTIN_TOOLS, SUBMIT_PLAN_TOOL, ASK_OWNER_TOOL],
   'agents-op': AGENTS_OPS,
   'memory-op': Object.keys(MEMORY),
   producer: CONFORMANCE_PRODUCERS,

@@ -45,7 +45,7 @@ import {
 import { describePromptAttachment, resolvePromptAttachments } from '../attachments';
 import { listSidebarAgents } from '../agent-list';
 import { watchDeviceConsents } from '../consent-watch';
-import { contextWindowForSpec, describeProviderError, EMPTY_MODEL_MENU, specWithoutAccount, turnFailure, type AgentModelEntry, type AgentModelMenu } from '@kinu.run/core';
+import { ASK_OWNER_TOOL, contextWindowForSpec, describeProviderError, EMPTY_MODEL_MENU, specWithoutAccount, turnFailure, type AgentModelEntry, type AgentModelMenu, type AskingAgent, type OwnerAnswer } from '@kinu.run/core';
 import { requireInteractiveTerminal, TUI_EXIT_SIGNALS } from '../prompt';
 import { loadActiveProfile } from '../default-model';
 import { canonicalProjectRoot } from '../config';
@@ -67,6 +67,7 @@ import {
   ModelPickerOverlay,
   PhaseLine,
   TakesOverlay,
+  QuestionsOverlay,
   SettingsOverlay,
   ThemePickerOverlay,
   type TuiSettingChoice,
@@ -110,7 +111,7 @@ import {
   type TuiAgentSource,
   type TuiAgentSummary,
 } from './tui-shell';
-import { detach, diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { attemptInItsWords, detach, diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { Effect, Result } from 'effect';
 import { readParkedNotice } from '../parked-actions';
 import { useKeyboard } from './use-keys';
@@ -148,6 +149,7 @@ export type ActiveSurface =
   | { kind: 'model'; menu: AgentModelMenu; loading: boolean; error: string | null }
   | { kind: 'changelog'; view: AgentChangelogView }
   | { kind: 'takes'; set: AlternateTakeSet }
+  | { kind: 'questions'; asking: AskingAgent }
   | { kind: 'subagent'; path: readonly string[]; label: string; actorId: string | null }
   | null;
 
@@ -164,6 +166,7 @@ function surfaceTitleFor(surface: ActiveSurface, walkbackOpen: boolean): string 
     case 'model': return 'Model picker ›';
     case 'changelog': return 'Changelog ›';
     case 'takes': return 'Takes ›';
+    case 'questions': return 'Questions ›';
     case 'subagent': return 'Subagent ›';
     case 'history': return 'Prompt history ›';
   }
@@ -202,6 +205,11 @@ function persistedTranscriptEvent(event: AgentClientEvent): boolean {
 }
 
 let globalExit: (() => Promise<void>) | null = null;
+
+/** The scene's own exit when it was given one, else the app's. */
+function leave(onExit: ChatAppOpts['onExit']): void | Promise<void> {
+  return onExit ? onExit() : globalExit?.();
+}
 
 export function ChatApp(props: ChatAppOpts) {
   return (
@@ -954,6 +962,22 @@ function ChatScene({
     }
   }, [client]);
 
+  const openQuestions = useCallback(async () => {
+    const open = (await client.questions?.list() ?? []).find((asking) => asking.asked.status === 'open');
+
+    if (open !== undefined) setActiveSurface((surface) => surface ?? { kind: 'questions', asking: open });
+  }, [client]);
+
+  /** A refused answer is said in the transcript; the questions stay open for `/answer`. */
+  const answerQuestions = useCallback((asking: AskingAgent, answers: readonly OwnerAnswer[]) => {
+    setActiveSurface(null);
+
+    return Effect.catch(
+      attemptInItsWords('unavailable', async () => client.questions?.answer(asking.asked.id, answers)),
+      (failure) => Effect.sync(() => addError({ cause: failure })),
+    );
+  }, [addError, client]);
+
   const selectModel = useCallback(async (spec: string) => {
     if (selectionPendingRef.current) return;
     setReady(false);
@@ -1056,6 +1080,10 @@ function ChatScene({
         setActiveSurface({ kind: 'takes', set: outcome.set });
 
         return;
+      case 'questions':
+        setActiveSurface({ kind: 'questions', asking: outcome.asking });
+
+        return;
       case 'model-set':
         setModelSpec(outcome.spec);
         addMessage({ role: 'system', content: `Model: ${outcome.spec}` });
@@ -1079,8 +1107,7 @@ function ChatScene({
 
         return;
       case 'exit':
-        if (onExit) await onExit();
-        else if (globalExit) await globalExit();
+        await leave(onExit);
 
         return;
       case 'model-picker':
@@ -1122,6 +1149,7 @@ function ChatScene({
           model: 'Model selection cancelled.',
           changelog: 'Changelog closed. Everything kept.',
           takes: 'Takes closed. The answered take stays.',
+          questions: 'The questions wait for you: /answer opens them again.',
           subagent: 'Subagent conversation closed.',
         } satisfies Record<NonNullable<ActiveSurface>['kind'], string>;
 
@@ -1158,9 +1186,7 @@ function ChatScene({
           addMessage({ role: 'system', content: 'Interrupting the active turn… (Esc again to walk back)' });
           break;
         case 'exit':
-          if (onExit) return onExit();
-
-          return globalExit?.();
+          return leave(onExit);
         case 'clear-input':
           setInputText('');
           break;
@@ -1368,8 +1394,11 @@ function ChatScene({
 
     if (event.turn.toolCalls.some((call) => call.name === 'agents')) await hintAlternateTakes();
 
+    // A turn that asked the owner opens its questions; Esc leaves them for /answer.
+    if (event.turn.toolCalls.some((call) => call.name === ASK_OWNER_TOOL)) await openQuestions();
+
     await inputEffects;
-  }, [addMessage, dispatchInput, hintAlternateTakes, runInputEffects, sealSegment, sealThinking, setTurnPhase, stream]);
+  }, [addMessage, dispatchInput, hintAlternateTakes, openQuestions, runInputEffects, sealSegment, sealThinking, setTurnPhase, stream]);
 
   const handleBroadcast = useCallback((event: Extract<AgentClientEvent, { type: 'broadcast' }>) => {
     const printed = v.safeParse(JobOutputFrameSchema, event.event);
@@ -2040,6 +2069,22 @@ function ChatScene({
           view={changelogView}
           terminal={{ width: sceneWidth, height }}
           onSelect={(entry) => detach(Effect.promise(() => revertChangelogEntry(entry)))}
+        />
+      );
+    }
+
+    if (activeSurface?.kind === 'questions') {
+      const { asking } = activeSurface;
+
+      return (
+        <QuestionsOverlay
+          asking={asking}
+          terminal={{ width: sceneWidth, height }}
+          onAnswer={(answers) => detach(answerQuestions(asking, answers))}
+          onChat={() => {
+            setActiveSurface(null);
+            addMessage({ role: 'system', content: 'Write your answer as a message; it answers the open questions.' });
+          }}
         />
       );
     }

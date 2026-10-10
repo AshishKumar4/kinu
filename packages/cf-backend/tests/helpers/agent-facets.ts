@@ -1,19 +1,64 @@
 /** An agent's isolate for bun suites: the shipped AgentFacet in this process over its own database. */
 import { Database } from 'bun:sqlite';
-import { WORKSPACE_ROOT } from '@kinu.run/core';
+import type { LanguageModel } from 'ai';
+import { MAIN_AGENT, WORKSPACE_ROOT } from '@kinu.run/core';
+import type { AgentProviderDeps, AgentProviderRegistry } from '../../src/providers/agent-registry';
 import type { AgentContext } from 'agents';
 import { AgentFacet, type AgentFacetCalls, type AgentFacetEnv } from '../../src/agent-facet/agent-facet';
 import { agentCallsThrough } from '../../src/dynamic-worker-slots';
-import { attempt } from '@kinu.run/core/obs';
+import { attemptInItsWords } from '@kinu.run/core/obs';
 import { AgentDatabase } from '../../src/agent-facet/agent-database';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import { agentStateShellId, type AgentFacetPlacement, type AgentWorkspaceHost } from '../../src/agent-facets';
+import { joinedOnlyByItself } from './agents-sdk';
 
 /**
  * Each workspace object's agents' databases, by storage key. A facet's storage is its object's, so an activation
  * over the same storage finds them, and another workspace, which may key an agent alike, never does.
  */
 const databases = new WeakMap<Database, Map<string, Database>>();
+
+/** Models a suite scripts, by the session (`actorAffinity`'s) their calls are routed under. */
+const scriptedModels = new Map<string, () => LanguageModel>();
+
+/** The shipped isolate, whose turns resolve a model a suite scripts for their conversation first. */
+class ScriptedModelFacet extends AgentFacet {
+  protected override models(deps: Omit<AgentProviderDeps, 'env'>): AgentProviderRegistry {
+    const registry = super.models(deps);
+
+    return { ...registry, resolveModel: (spec, conversation) => scriptedModels.get(conversation.sessionAffinity)?.() ?? registry.resolveModel(spec, conversation) };
+  }
+}
+
+/** Isolates whose next answer row fails to write, as a failed commit does. */
+const undurableAnswers = new Set<string>();
+
+/** The isolate under `storageKey` fails to write its next answer row; the commit is one transaction, so nothing lands. */
+export function failNextAnswerWrite(storageKey: string): void {
+  undurableAnswers.add(storageKey);
+}
+
+function withUndurableAnswers(ctx: AgentContext, storageKey: string): AgentContext {
+  const { sql } = ctx.storage;
+  const exec = sql.exec.bind(sql);
+
+  sql.exec = (query, ...bindings) => {
+    if (undurableAnswers.has(storageKey) && query.includes('INSERT INTO conversation_entries') && bindings.includes('assistant')) {
+      undurableAnswers.delete(storageKey);
+      throw new Error(`the answer row ${String(bindings[2])} could not be written`);
+    }
+
+    return exec(query, ...bindings);
+  };
+
+  return ctx;
+}
+
+/** Every model call routed under `conversation`, in any isolate, is answered by `model`; null answers it as shipped. */
+export function scriptConversationModel(conversation: string, model: (() => LanguageModel) | null): void {
+  if (model === null) scriptedModels.delete(conversation);
+  else scriptedModels.set(conversation, model);
+}
 
 export interface InProcessAgentFacets {
   open(placement: AgentFacetPlacement, workspace: AgentWorkspaceHost): Promise<AgentFacetCalls>;
@@ -53,7 +98,7 @@ export function agentDatabase(workspace: Database, storageKey: string): Database
 
   agents.set(storageKey, db);
   databases.set(workspace, agents);
-  new AgentDatabase(contextOver(db, storageKey).storage, { agent: unreachable, home: WORKSPACE_ROOT, state: unreachable, enqueueTurn: unreachable, turnInFlight: () => false, memory: unreachable, program: unreachable, sayToParent: unreachable });
+  new AgentDatabase(contextOver(db, storageKey).storage, { agent: unreachable, home: WORKSPACE_ROOT, state: unreachable, enqueueTurn: unreachable, broadcast: unreachable, turnInFlight: () => false, memory: unreachable, program: unreachable, sayToParent: unreachable, logActivity: unreachable });
 
   return db;
 }
@@ -66,6 +111,8 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
   const traceCalls: string[] = [];
 
   contextOver = makeCtx;
+  // A new workspace answers its model calls as shipped until its suite scripts them.
+  scriptedModels.clear();
 
   return {
     open: async (placement, host) => {
@@ -98,22 +145,25 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
 
   async function openFacet(placement: AgentFacetPlacement, host: AgentWorkspaceHost) {
       const db = agentDatabase(workspace(), placement.storageKey);
+      // The root agent's own turns relay too; a suite counting a node's calls counts the node's alone.
+      const counted = (call: string): void => { if (placement.home !== WORKSPACE_ROOT) traceCalls.push(call); };
+
       const session = await sessionOrFailure(host.session());
       const stateSession = await sessionOrFailure(host.stateSession());
 
       const env: AgentFacetEnv = {
         WORKSPACE: {
-          session,
-          stateSession,
-          memory: () => host.memory(),
+          session: async () => session(),
+          stateSession: async () => stateSession(),
+          memory: async () => host.memory(),
           program: (...args) => host.program(...args),
           traceTurn: (...args) => {
-            traceCalls.push('traceTurn');
+            counted('traceTurn');
 
             return host.traceTurn(...args);
           },
           traceStream: (...args) => {
-            traceCalls.push('traceStream');
+            counted('traceStream');
 
             return host.traceStream(...args);
           },
@@ -128,6 +178,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           owedReport: (...args) => host.owedReport(...args),
           parentReport: (report) => host.parentReport(report),
           autoTitle: (subject, title) => host.autoTitle(subject, title),
+          turnSettled: (settled) => host.turnSettled(settled),
           hireAdvisor: (advisor) => host.hireAdvisor(advisor),
           owes: (next, holds) => host.owes(next, holds),
           birthContext: (drainTurnId) => host.birthContext(drainTurnId),
@@ -137,7 +188,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           executeTool: (call) => host.executeTool(call),
           observe: (lines) => host.observe(lines),
           paceStep: (turnId) => {
-            traceCalls.push('paceStep');
+            counted('paceStep');
 
             return host.paceStep(turnId);
           },
@@ -148,6 +199,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           relayModelCall: (deviceId, callId, request) => host.relayModelCall(deviceId, callId, request),
           cancelModelRelay: (callId) => host.cancelModelRelay(callId),
           sayToParent: (signal) => host.sayToParent(signal),
+          logActivity: (lines) => host.logActivity(lines),
           reportModelCall: (report) => host.reportModelCall(report),
           reportModelOperation: (event) => host.reportModelOperation(event),
         },
@@ -158,11 +210,14 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
         ...placement.providers,
       };
 
-      const facet = new AgentFacet(makeCtx(db, placement.storageKey), env);
+      const facet = new ScriptedModelFacet(withUndurableAnswers(makeCtx(db, placement.storageKey), placement.storageKey), env);
+
+      if (placement.home === MAIN_AGENT) joinedOnlyByItself(facet);
       const lost = new AbortController();
 
-      // A reset isolate fails every call it still held, as a dropped RPC does.
-      const calls = agentCallsThrough((call) => attempt({ doing: "calling an agent's isolate", otherwise: 'io' }, () => untilLost(call(facet), lost.signal)));
+      // A reset isolate fails every call it still held, as a dropped RPC does; a refusal crosses in its own words, as an
+      // error thrown across an RPC does.
+      const calls = agentCallsThrough((call) => attemptInItsWords('io', () => untilLost(call(facet), lost.signal)));
 
       return { facet, calls, lost };
   }

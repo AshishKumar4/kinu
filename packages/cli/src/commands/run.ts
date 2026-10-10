@@ -4,7 +4,10 @@ import { listConfiguredAgentRefs, requireAuthConfig } from '../config';
 import { resolveAgentTarget, type AgentTarget } from '../agent-target';
 import { createAgentClient, type AgentClientFlags } from '../client-factory';
 import type { AgentClient, AgentClientEvent } from '../agent-client';
-import { decodeJsonValue, describeProviderError, JsonValueSchema, parseJsonObject, projectJsonValue, usageReported, ToolOutcomeSchema, type AgentRpcMethod, type JsonObject, type JsonValue } from '@kinu.run/core';
+import {
+  ASK_OWNER_TOOL, AskOwnerInputSchema, decodeJsonValue, describeProviderError, JsonValueSchema, parseJsonObject, projectJsonValue, usageReported,
+  ToolOutcomeSchema, type AgentRpcMethod, type JsonObject, type JsonValue,
+} from '@kinu.run/core';
 import * as v from 'valibot';
 import type { CliSessionOptions } from '../session';
 import { chatCommand } from './chat';
@@ -538,6 +541,23 @@ async function runLocalRpcCommand(name: string, cmd: JsonObject, client: AgentCl
   }
 }
 
+/** A run answers no question: it shows what the agent asked and where the owner answers it. */
+function printQuestions(args: JsonObject): void {
+  const asked = v.safeParse(AskOwnerInputSchema, args);
+
+  console.log('\nThe agent is asking you:');
+
+  for (const question of asked.success ? asked.output.questions : []) {
+    console.log(`  ${question.question}`);
+
+    for (const [index, option] of question.options.entries()) {
+      console.log(`    - ${option.label}${question.recommended === index ? ' (recommended)' : ''}${option.description === undefined ? '' : `: ${option.description}`}`);
+    }
+  }
+
+  console.log(DIM('It waits for your answer, which this command cannot give: answer it in the web app, or in `kinu chat` with /answer.'));
+}
+
 function renderRunEvent(event: AgentClientEvent): void {
   switch (event.type) {
     case 'text-delta':
@@ -549,7 +569,8 @@ function renderRunEvent(event: AgentClientEvent): void {
     case 'reasoning-delta':
       break;
     case 'tool-call':
-      printToolCall(event.toolName, event.args);
+      if (event.toolName === ASK_OWNER_TOOL) printQuestions(event.args);
+      else printToolCall(event.toolName, event.args);
       break;
     case 'tool-result':
       printToolResult(event.result, event);

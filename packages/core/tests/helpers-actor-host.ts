@@ -33,6 +33,7 @@ import type { AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrat
 import type { BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host';
 import type { Identity } from '../src/types/primitives';
 import type { TemporaryAgentPort } from '../src/types/subordinates';
+import { historyTurnPairs } from '../src/identity/conversation-store';
 
 type FixtureSeat = HostedNodeSeat;
 
@@ -205,7 +206,7 @@ export function hostedSeatsOver(input: {
       setTimer: (fn, ms) => { timers.push({ fn, ms }); },
     },
     // The real engine; auto-evolution off unless the suite opted in.
-    engine: new EvolutionEngine(bound.runtime, bound.stores.history, { enabled: input.autoEvolve === true }),
+    engine: new EvolutionEngine(bound.runtime, historyTurnPairs(bound.stores.history), { enabled: input.autoEvolve === true }),
     // This actor's own log: publishing into the root's rows would move another actor's turn.
     eventLog: new EventLog(exec, bound.handle),
   });

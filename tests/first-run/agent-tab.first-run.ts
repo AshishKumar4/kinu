@@ -49,6 +49,7 @@ import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
 import { ask, openPublicSocket, rpcDetail, type PublicSocket } from './public-socket';
+import { TAB_WHILE_WORKING, TAB_WORKING_ASK } from './asks';
 
 const SUITE = 'First-run · agent-tab';
 
@@ -73,6 +74,41 @@ const observations: EvalObservation[] = [];
  * on the first live drive, which reported only "expected model calls
  * expected, observed 0" over four decided subgoals.
  */
+/** Why typing into the window while it works failed, or nothing. */
+async function typedReply(tab: PublicSocket): Promise<string> {
+  const [typing] = await Promise.allSettled([tab.chat(TAB_WHILE_WORKING)]);
+
+  return typing.status === 'rejected' ? String(typing.reason) : '';
+}
+
+/**
+ * Words typed while the agent works. Its turn runs in its own isolate, whose word that it took them, and where they
+ * went, reaches only this window. The working ask's answer is slow, so the words follow the turn's open, which the
+ * window hears as the transcript it is sent.
+ */
+async function midTurnSendTold(tab: PublicSocket): Promise<EvalSubgoal> {
+  const turnOpened = tab.broadcast('cf_agent_chat_messages');
+  // Settled, not awaited: the words typed while it works are this subgoal's, whatever the ask itself answers.
+  const working = Promise.allSettled([tab.chat(TAB_WORKING_ASK)]);
+  const typed = await turnOpened ? await typedReply(tab) : 'the working ask\'s turn never opened in the window';
+
+  await working;
+
+  const told = tab.heard().flatMap(({ type, frame }) => {
+    const steer = type === 'steer_status' ? v.safeParse(SteerFrameSchema, frame) : null;
+
+    return steer?.success === true && steer.output.text === TAB_WHILE_WORKING ? [steer.output.status] : [];
+  });
+
+  const why = typed === '' ? '' : `; ${typed.slice(0, 300)}`;
+
+  return {
+    what: 'mid-turn-send-told',
+    reached: told[0] === 'queued' && told.slice(1).some((status) => status === 'landed' || status === 'turn'),
+    detail: told.length > 0 ? `the window was told ${told.join(' then ')}${why}` : `the window heard no steer_status for the words${why}`,
+  };
+}
+
 function announce(subgoals: readonly EvalSubgoal[]): readonly EvalSubgoal[] {
   for (const subgoal of subgoals) {
     console.warn(`    [agent-tab] ${subgoal.what}: ${subgoal.reached ? 'ok' : 'MISSED'} — ${subgoal.detail}`);
@@ -95,6 +131,9 @@ const SnapshotSchema = v.object({
 });
 
 const HistoryPageSchema = v.object({ status: v.string(), items: v.array(v.unknown()) });
+
+/** Where words typed mid-turn went, as the window hears it. */
+const SteerFrameSchema = v.object({ status: v.string(), text: v.string() });
 
 describe(SUITE, () => {
   // THE ROW MUST TERMINATE: the tier runs with testTimeout 0, so a read the
@@ -220,6 +259,8 @@ describe(SUITE, () => {
               ? `the agent answered: ${JSON.stringify(reply.slice(0, 240))}`
               : `no answer on the tab socket: ${replyFailure.slice(0, 300)}`,
           });
+
+          subgoals.push(await midTurnSendTold(tabSocket));
 
           return announce(subgoals);
         } finally {

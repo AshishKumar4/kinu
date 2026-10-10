@@ -5,7 +5,7 @@
 
 import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
-import { ConversationSearchStore, sameActorReference, testModel, toolDescription, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
+import { ConversationSearchStore, historyTurnPairs, sameActorReference, testModel, toolDescription, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
 import type { ActorHandle, JsonObject } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { resolve } from 'node:path';
@@ -129,9 +129,11 @@ import { ActorSession, type ActorTurnLease,
   McpToolSurfaceCache, toolSurfaceTokens, type McpServedSurface, type McpSurfaceBudget,
   createActorHost, defaultLoopOrigin,
   type ActorHost, type AgentRuntime, type HostedActor, type SqlExec, type AgentOrchestratorDeps, type LoopOrigin, type WriteObserver,
-  PlanReviewActions, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, planSubmissionReach, workModeUnderReview, authoredTurnMetadata, planHandoffStillOwed,
+  PlanReviewActions, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, ASK_OWNER_TOOL, planSubmissionReach, workModeUnderReview, authoredTurnMetadata, planHandoffStillOwed,
   type PlanDecisionOutcome, type PlanEdit, type PlanReview, type ReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult,
+  type AskingAgent,
+  type OwnerAnswer,
   ChatSession, CHAT_SESSION_ID, checkpointAvailability, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore,
   type ChatTurnInput, type CompactOutcome, type ComposedRequest, type ContextFill, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
 } from '@kinu.run/core';
@@ -200,7 +202,7 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
     onExhausted: ({ error: _error, ...refusal }) => { input.session().reportBudgetRefusal(refusal); },
   });
 
-  const engine = new EvolutionEngine(input.runtime, input.history, {
+  const engine = new EvolutionEngine(input.runtime, historyTurnPairs(input.history), {
     // Review calls debit the reviewed turn's mission.
     governor: budget,
   });
@@ -1024,7 +1026,7 @@ export class LocalAgentSession {
   /** Record the pick; a pick differing from the answered take queues a continuation turn. */
   async pickAlternateTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
     return pickAlternateTake(
-      { sql: this.rt.storage.sql, actor: this.rt.actor, history: this.stores.history, engine: this.engine, inbox: this.actorSession.orchestrator.inbox },
+      { sql: this.rt.storage.sql, actor: this.rt.actor, turnPair: historyTurnPairs(this.stores.history), engine: this.engine, inbox: this.actorSession.orchestrator.inbox },
       takeId, nodeId);
   }
 
@@ -1074,6 +1076,20 @@ export class LocalAgentSession {
     }
 
     return this.planActions.decideAndHandOff({ id, revision, decision, feedback }, (turn) => this.enqueueTurn(turn));
+  }
+
+  /** The agent's recent questions to the owner: the open ones wait in the stack. Cloud: `ActorAgent.listOwnerQuestions`. */
+  async listOwnerQuestions(): Promise<AskingAgent[]> {
+    return this.actorSession.questions.recent().map((asked) => ({ asked, agent: this.agentName(), actor: null }));
+  }
+
+  /** The owner's answer becomes the asking call's result, and the turn that continues from it is owed at once. */
+  async answerOwnerQuestions(id: string, answers: readonly OwnerAnswer[]): Promise<void> {
+    const refusal = this.driverGate?.() ?? null;
+
+    return settleSync(refusal
+      ? Effect.fail(new KinuError('denied', `${refusal.error}. Answer from the session driving the conversation.`))
+      : this.chat.answerQuestions(id, answers));
   }
 
   async dismissPlanReview(id: string, revision: number): Promise<PlanReviewResult> {
@@ -1502,8 +1518,8 @@ export class LocalAgentSession {
     }
 
     await this.terminal.replayOwedAndRearm();
-    // A replayed sequence can enqueue a turn; the advisor gate state travels in the row, not RAM.
-    this.chat.pump();
+    // An answer a previous process recorded and never resumed; it pumps, so a replayed sequence's turn starts too.
+    this.chat.resumeAnswered();
   }
 
   /** Re-drive an interrupted background job through core's shared resume gate over the raw surface,
@@ -1740,6 +1756,7 @@ export class LocalAgentSession {
         ...(this.reportDeps !== null && item.kind === 'programmatic' ? [REPORT_TOOL] : []),
         ...(this.planSubmissionOpen(mode) ? [SUBMIT_PLAN_TOOL] : []),
         ...(this.planReplyOpen() ? [REPLY_TO_COMMENT_TOOL] : []),
+        ...(this.askOwnerOpen() ? [ASK_OWNER_TOOL] : []),
       ],
       codemodeCapabilities: (mode) => codemodeCapabilitiesFor(this.codemodeProviders(mode)),
       agentsActions: (mode) => agentsActionsFor(this.agentsToolDeps(mode)),
@@ -2421,6 +2438,11 @@ export class LocalAgentSession {
     return this.planReviewSurface() && planSubmissionReach(mode, this.turnDriving);
   }
 
+  /** A root, whose conversation partner is the owner; a subordinate's partner is its parent. Cloud: `OrchestratorAgent.actorToolDeps`. */
+  private askOwnerOpen(): boolean {
+    return this.planReviewSurface();
+  }
+
   /** A root whose plan the owner sent back with comments the agent may answer. */
   private planReplyOpen(): boolean {
     return this.planReviewSurface() && this.planActions.awaitingReply(this.turnDriving);
@@ -2831,6 +2853,8 @@ export class LocalAgentSession {
     if (this.planReplyOpen()) {
       deps.replyToComment = { reply: (comment, text) => this.planActions.reply(comment, text, this.turnDriving) };
     }
+
+    if (this.askOwnerOpen()) deps.askOwner = true;
 
     return deps;
   }

@@ -9,6 +9,8 @@ import {
   DEPLOY_PHASES, GATE_DEADLINE_SECONDS, LADDER, deployOrder, type DeployPhase,
 } from "./ladder";
 import { CONTROL_PLANE_ACCESS_PATHS, deriveInfrastructure } from "./infra-manifest";
+import type { Deployment } from "./infra-cloudflare";
+import type { Reset } from "./reset";
 import { CONTROL_PLANE_API_ROUTE, CONTROL_PLANE_UI_ROUTE } from "../packages/cf-backend/src/control-plane/access-gate";
 import { isDocument, readRepositoryFile, trackedFiles } from "./sources";
 import * as v from "valibot";
@@ -107,6 +109,22 @@ fi
 if [ "$1" = "scripts/ladder.ts" ] && [ "$2" = "--deploy-phase=upload" ]; then
   printf '%s\\n' "\${KINU_INFRA_PHASE:-unset}" > "$KINU_DEPLOY_PHASE_LOG"
   printf '%s\\n' "\${KINU_INFRA_ENVIRONMENT:-unset}" > "$KINU_DEPLOY_INFRA_ENV_LOG"
+  printf '%s\\n' "\${KINU_RESET_RECORD-unset}" > "$KINU_DEPLOY_RECORD_LOG"
+  if [ -n "$KINU_DEPLOY_INFRA_PRELOAD" ]; then
+    (cd "${REPO_ROOT}" && PATH=/usr/local/bin:/usr/bin:/bin "${process.execPath}" --preload "$KINU_DEPLOY_INFRA_PRELOAD" "${join(REPO_ROOT, 'scripts/infra-verify.ts')}")
+    status=$?
+    printf '%s\\n' "$status" >> "$KINU_DEPLOY_INFRA_STATUS_LOG"
+    exit "$status"
+  fi
+fi
+if [ "$1" = "scripts/infra-verify.ts" ] && [ -n "$KINU_DEPLOY_INFRA_PRELOAD" ]; then
+  (cd "${REPO_ROOT}" && PATH=/usr/local/bin:/usr/bin:/bin "${process.execPath}" --preload "$KINU_DEPLOY_INFRA_PRELOAD" "${join(REPO_ROOT, 'scripts/infra-verify.ts')}" "$2")
+  status=$?
+  printf '%s\\n' "$status" >> "$KINU_DEPLOY_INFRA_STATUS_LOG"
+  exit "$status"
+fi
+if [ "$1" = "-e" ] && [ "$KINU_DEPLOY_UPLOAD_FIXTURE" = "1" ]; then
+  exec "${process.execPath}" "$@"
 fi
 if [ "$KINU_DEPLOY_KILL" = "$command_line" ]; then
   # SIGKILL this stub, the phase's runner: it then ends having published
@@ -118,10 +136,17 @@ if [ "$KINU_DEPLOY_FAIL" = "$command_line" ]; then
   exit 47
 fi
 if [[ "$1" == */scripts/release-build.ts ]]; then
+  [ "$KINU_DEPLOY_UPLOAD_FIXTURE" = "1" ] && exit 0
   exit 86
 fi
 if [[ "$1" == */scripts/reset.ts ]] && [ "$2" = "pending" ]; then
+  if [ -n "$KINU_DEPLOY_INFRA_PRELOAD" ]; then
+    (cd "${REPO_ROOT}" && PATH=/usr/local/bin:/usr/bin:/bin "${process.execPath}" --preload "$KINU_DEPLOY_INFRA_PRELOAD" "${join(REPO_ROOT, 'scripts/reset.ts')}" "\${@:2}")
+    exit $?
+  fi
   printf '%s\\n' "\${KINU_DEPLOY_PENDING_RESET:-none}"
+  # The newest reset of the Worker, pending or finished, into the file the deploy names.
+  if [ -n "$4" ]; then cp "$KINU_DEPLOY_NEWEST_RESET" "$4"; fi
 fi
 exit 0
 `;
@@ -153,6 +178,120 @@ interface DeployRun {
   readonly ciRed?: boolean;
   /** The reset the environment is still in: its placeholder serves and its build never uploaded. */
   readonly pendingReset?: string;
+  /** A KINU_RESET_RECORD already on the environment, which must never soften a deploy nobody asked to reset. */
+  readonly ambientRecord?: string;
+  readonly account?: DeployAccount;
+  readonly uploadRuns?: readonly UploadRun[];
+}
+
+interface UploadRun {
+  readonly says: string;
+  readonly status: number;
+}
+
+/** The Cloudflare observations at the CLI boundary, without touching an account. */
+interface DeployAccount {
+  readonly live: Deployment;
+  readonly reset: Reset;
+  readonly missingContainers: readonly string[];
+  readonly missingBuckets?: readonly string[];
+}
+
+function resetAccount(placeholder = false): DeployAccount {
+  const staging = deriveInfrastructure('staging');
+
+  const classes = staging.resources.filter((resource) => resource.kind === 'durable-object')
+    .map((resource) => ({ className: resource.name.slice(staging.worker.workerName.length + 1), namespace: `namespace-${resource.binding ?? ''}` }));
+
+  const reset: Reset = {
+    environment: 'staging', worker: staging.worker.workerName, tag: 'reset-20261009T164913Z', at: '2026-10-09T16:49:13.363Z',
+    placeholderVersion: '9c840710', state: 'done', classes,
+    applications: [{ name: 'kinu-kinudevbox-staging', id: 'a'.repeat(32) }],
+  };
+
+  const bindings = staging.worker.bindings.map((name) => {
+    const durable = classes.find((entry) => entry.namespace === `namespace-${name}`);
+
+    return durable === undefined ? { name, type: 'fixture', target: undefined, namespace: undefined }
+      : { name, type: 'durable_object_namespace', target: durable.className, namespace: durable.namespace };
+  });
+
+  return {
+    reset, missingContainers: reset.applications.map((application) => application.name),
+    live: { state: 'deployed', versionId: placeholder ? reset.placeholderVersion : '174af18c',
+      bindings: placeholder ? [{ name: 'CF_VERSION_METADATA', type: 'version_metadata', target: undefined, namespace: undefined }] : bindings },
+  };
+}
+
+function fixtureLogLines(file: string): string[] {
+  if (!existsSync(file)) return [];
+
+  return readFileSync(file, 'utf8').trimEnd().split('\n').filter(Boolean);
+}
+
+function accountFixture(fixture: string, pendingReset: string, account: DeployAccount | undefined) {
+  const newestReset = join(fixture, "newest-reset.json");
+  const preload = join(fixture, "account.ts");
+
+  writeFileSync(newestReset, JSON.stringify(account?.reset ?? {
+    environment: 'staging', worker: 'kinu-staging', tag: pendingReset === 'none' ? 'reset-20261009T164913Z' : pendingReset,
+    at: '2026-10-09T16:49:13.363Z', placeholderVersion: '9c840710', classes: [], applications: [], state: 'done',
+  }));
+
+  if (account !== undefined) {
+    const cloudflare = join(REPO_ROOT, 'scripts/infra-cloudflare.ts');
+
+    writeFileSync(preload, `
+import { mock } from 'bun:test';
+import * as cloudflare from ${JSON.stringify(cloudflare)};
+import { SUPPLY } from ${JSON.stringify(join(REPO_ROOT, 'scripts/infra-manifest.ts'))};
+const live: cloudflare.Deployment = ${JSON.stringify(account.live)};
+const present = (): cloudflare.Observation => ({ state: 'present', detail: 'fixture account' });
+mock.module(${JSON.stringify(cloudflare)}, () => ({
+  ...cloudflare, authenticated: present, deployment: () => live,
+  wrangler: () => ({ ok: true, stdout: ${JSON.stringify(JSON.stringify(account.reset))}, stderr: '', code: 0 }),
+  container: (name: string) => ${JSON.stringify(account.missingContainers)}.includes(name) ? { state: 'absent' } : present(),
+  r2: (name: string) => ${JSON.stringify(account.missingBuckets ?? [])}.includes(name) ? { state: 'absent' } : present(),
+  kvNamespace: present, vectorize: present, containerNamespace: present,
+  servesWorker: present, edgeResponds: present, wildcardDns: present, hostResolves: present,
+  emailRoutingToWorker: present, accessOrganization: present, accessApplication: present,
+  accessPolicies: present, accessScope: present,
+  secretNames: () => ({ ...present(), names: [...SUPPLY.keys()] }),
+}));
+`);
+  }
+
+  return { KINU_DEPLOY_NEWEST_RESET: newestReset, KINU_DEPLOY_INFRA_PRELOAD: account === undefined ? '' : preload };
+}
+
+function uploadFixture(fixture: string, uploadRuns: readonly UploadRun[] | undefined): void {
+  if (uploadRuns === undefined) return;
+  const build = join(fixture, 'packages', 'cf-backend', 'dist');
+  const downloads = join(build, 'client', 'downloads');
+
+  mkdirSync(join(build, 'kinu'), { recursive: true });
+  mkdirSync(downloads, { recursive: true });
+  mkdirSync(join(build, 'worker-release'));
+  mkdirSync(join(fixture, 'packages', 'cli'));
+  writeFileSync(join(fixture, 'packages', 'cli', 'package.json'), '{"version":"1.0.0"}');
+  writeFileSync(join(build, 'kinu', 'wrangler.json'), JSON.stringify({
+    targetEnvironment: 'staging', name: 'kinu-staging', vars: { CLI_PUBLIC_ORIGIN: 'https://fixture.invalid' },
+    r2_buckets: [{ binding: 'RELEASES_BUCKET', bucket_name: 'fixture-releases' }, { binding: 'BACKUP_BUCKET', bucket_name: 'fixture-backups' }],
+  }));
+
+  for (const file of ['kinu-version.json', 'release.json', 'kinu-worker-1.0.0+testsha.tar.gz.sha256',
+    ...['runtime-cpython', 'cli-darwin-arm64', 'cli-darwin-x64', 'cli-linux-arm64', 'cli-linux-x64']
+      .flatMap((platform) => [`kinu-${platform}.tar.gz`, `kinu-${platform}.tar.gz.sha256`])]) {
+    writeFileSync(join(downloads, file), 'fixture');
+  }
+
+  writeFileSync(join(build, 'worker-release', 'kinu-worker-1.0.0+testsha.tar.gz'), 'fixture');
+
+  for (const [index, result] of uploadRuns.entries()) {
+    writeFileSync(join(fixture, `upload.${String(index + 1)}.out`), result.says === 'success'
+      ? `KinuDevbox\nRead 1 files from the assets directory ${join(build, 'client')}\nVersion ID: 9b1f\n` : result.says);
+    writeFileSync(join(fixture, `upload.${String(index + 1)}.status`), String(result.status));
+  }
 }
 
 async function runDeploy({
@@ -168,6 +307,9 @@ async function runDeploy({
   ciAbsent = false,
   ciRed = false,
   pendingReset = "none",
+  ambientRecord = "",
+  account,
+  uploadRuns,
 }: DeployRun = {}) {
   const fixture = scratchDir("deploy-gate");
   // The deploy lock lives in the runtime directory: the fixture's own, so a real deploy on this machine never blocks
@@ -176,6 +318,9 @@ async function runDeploy({
   const log = join(fixture, "events.log");
   const phaseLog = join(fixture, "infra-phase.log");
   const infraEnvironmentLog = join(fixture, "infra-environment.log");
+  const recordLog = join(fixture, "infra-record.log");
+  const infraStatusLog = join(fixture, "infra-status.log");
+  const uploadArgv = join(fixture, "upload-argv.log");
 
   mkdirSync(join(fixture, "scripts"));
   mkdirSync(join(fixture, "node_modules", ".bin"), { recursive: true });
@@ -186,6 +331,13 @@ async function runDeploy({
     readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8"),
   );
   writeFileSync(join(fixture, "scripts", "repo-runtime.sh"), readFileSync(join(REPO_ROOT, "scripts", "repo-runtime.sh")));
+  writeFileSync(join(fixture, 'scripts', 'deploy-smoke.sh'), readFileSync(join(REPO_ROOT, 'scripts', 'deploy-smoke.sh')));
+
+  const uploadHelper = join(REPO_ROOT, 'scripts', 'deploy-upload.sh');
+
+  if (existsSync(uploadHelper)) writeFileSync(join(fixture, 'scripts', 'deploy-upload.sh'), readFileSync(uploadHelper));
+
+  uploadFixture(fixture, uploadRuns);
 
   executable(join(fixture, "node_modules", ".bin", "bun"), commandStub("bun"));
   executable(join(fixture, "bash"), commandStub("bash"));
@@ -206,8 +358,20 @@ if [ "$*" = "wrangler whoami" ]; then
   exit 0
 fi
 printf 'MUTATE npx %s\\n' "$*" >> "$KINU_DEPLOY_GATE_LOG"
+if [ "$KINU_DEPLOY_UPLOAD_FIXTURE" = "1" ]; then
+  if [ "$2" = "r2" ]; then exit 0; fi
+  if [ "$2" = "deploy" ]; then
+    printf '%s\\0' "$@" >> "$KINU_DEPLOY_UPLOAD_ARGV"
+    printf '\\n' >> "$KINU_DEPLOY_UPLOAD_ARGV"
+    run=$(wc -l < "$KINU_DEPLOY_UPLOAD_ARGV")
+    cat "$KINU_DEPLOY_ROOT/upload.$run.out"
+    exit "$(cat "$KINU_DEPLOY_ROOT/upload.$run.status")"
+  fi
+fi
 exit 87
 `);
+  executable(join(fixture, 'curl'), '#!/usr/bin/bash\nexit 7\n');
+  executable(join(fixture, 'node'), `#!/usr/bin/bash\nexec "${process.execPath}" "$@"\n`);
 
   const argv = [...held, "/usr/bin/bash", "scripts/deploy.sh"];
 
@@ -226,10 +390,16 @@ exit 87
       KINU_DEPLOY_PHASE_LOG: phaseLog,
       KINU_DEPLOY_PENDING_RESET: pendingReset,
       KINU_DEPLOY_INFRA_ENV_LOG: infraEnvironmentLog,
+      KINU_DEPLOY_RECORD_LOG: recordLog,
+      ...accountFixture(fixture, pendingReset, account),
+      KINU_DEPLOY_INFRA_STATUS_LOG: infraStatusLog,
+      KINU_DEPLOY_UPLOAD_FIXTURE: uploadRuns === undefined ? '0' : '1',
+      KINU_DEPLOY_UPLOAD_ARGV: uploadArgv,
       // Always set, so the assertion that the script overrides it is about the
       // script rather than about whichever shell ran the suite.
       KINU_INFRA_PHASE: ambientPhase,
       KINU_INFRA_ENVIRONMENT: ambientEnvironment,
+      KINU_RESET_RECORD: ambientRecord,
       KINU_DEPLOY_DIRTY: dirty ? "1" : "0",
       KINU_SCRIPTED_MODEL_KEY: scriptedKey,
       SKIP_E2E: "1",
@@ -240,9 +410,7 @@ exit 87
   });
 
 
-  const logged = existsSync(log)
-    ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean)
-    : [];
+  const logged = fixtureLogLines(log);
 
   // The report's own calls apart from the steps: what the deploy wrote into its report, each without the report's
   // directory, and a mark without the seconds it was reached at.
@@ -263,8 +431,12 @@ exit 87
     report,
     ci: logged.filter((event) => event.startsWith('bun scripts/ladder.ts --ci-')),
     stdout: run.stdout.toString(),
+    stderr: run.stderr.toString(),
     infraPhase,
     infraEnvironment,
+    infraRecord: existsSync(recordLog) ? readFileSync(recordLog, "utf8").trim() : null,
+    infraStatuses: fixtureLogLines(infraStatusLog).map(Number),
+    uploads: fixtureLogLines(uploadArgv).map((line) => line.split('\0').slice(0, -1)),
   };
 }
 
@@ -394,17 +566,78 @@ describe("deploy gate", () => {
     expect(wiped(redGate.events)).toEqual([]);
   });
 
-  // 2026-10-08: a staging reset stopped at its upload after the wipe. Its rerun with --reset failed the account gate on
-  // every class the wipe had deleted, and went through only with --bootstrap, which nothing said to pass.
-  test("a reset whose build never uploaded is finished by the next reset deploy, its pre-deploy phase the bootstrap one", async () => {
-    const resumed = await runDeploy({ option: "--reset", pendingReset: "reset-20261008T050500Z" });
-    const fresh = await runDeploy({ option: "--reset" });
+  // 2026-10-08: a staging reset stopped at its upload, its placeholder serving. 2026-10-09: its upload stored the
+  // version and stopped short of the container application. Both times the deploy it printed, `--reset` again, was
+  // refused by its own account gate on what the reset had deleted. A --reset deploy hands that gate the newest
+  // reset's record, which defers exactly what it deleted (infra.test.ts); no other deploy carries one.
+  test("reset recovery defers its absent container before upload and rejects it after upload", async () => {
+    const account = resetAccount();
+    const recovered = await runDeploy({ option: '--reset', account, uploadRuns: [{ says: 'success', status: 0 }] });
 
-    expect({
-      phase: resumed.infraPhase, asked: resumed.events.includes("bun scripts/reset.ts pending staging"),
-      planned: resumed.events.includes("bun scripts/reset.ts plan staging"), said: resumed.stdout.includes("RESET: finishing reset-20261008T050500Z"),
-    }).toEqual({ phase: "bootstrap", asked: true, planned: false, said: true });
-    expect({ phase: fresh.infraPhase, planned: fresh.events.includes("bun scripts/reset.ts plan staging") }).toEqual({ phase: "full", planned: true });
+    expect(recovered.infraStatuses, `${recovered.stdout}\n${recovered.stderr}`).toEqual([0, 1]);
+    expect(recovered.uploads).toHaveLength(1);
+    expect(recovered.events.some((event) => event.startsWith('bun scripts/promote.ts record'))).toBe(false);
+  });
+
+  test("a plain deploy with an old reset record still refuses its absent container", async () => {
+    const account = resetAccount();
+    const stale = join(scratchDir("stale-record"), "record.json");
+
+    writeFileSync(stale, JSON.stringify(account.reset));
+
+    const plain = await runDeploy({ ambientRecord: stale, account, uploadRuns: [{ says: 'success', status: 0 }] });
+
+    expect(plain.infraStatuses, plain.stdout).toEqual([1]);
+    expect(plain.uploads).toEqual([]);
+    expect(plain.events.some((event) => event.includes('release-build.ts') || event.startsWith('MUTATE '))).toBe(false);
+  });
+
+  test("reset recovery defers inert bindings only while its recorded placeholder serves", async () => {
+    const account = resetAccount(true);
+
+    if (account.live.state !== 'deployed') throw new Error('fixture has no live Worker');
+
+    const placeholder = await runDeploy({ option: '--reset', pendingReset: account.reset.tag, account });
+
+    expect(placeholder.infraStatuses, `${placeholder.stdout}\n${placeholder.stderr}`).toEqual([0]);
+    expect(placeholder.events).toContain(armadaBuild('staging'));
+
+    const unrelated = await runDeploy({ option: '--reset', account: {
+      ...account, live: { ...account.live, versionId: 'unrelated-placeholder' },
+    } });
+
+    expect(unrelated.infraStatuses, unrelated.stdout).toEqual([1]);
+    expect(unrelated.events).not.toContain(armadaBuild('staging'));
+  });
+
+  test("reset recovery cannot defer a class outside its record or a binding missing from an uploaded version", async () => {
+    const account = resetAccount();
+
+    if (account.live.state !== 'deployed') throw new Error('fixture has no live Worker');
+
+    for (const missing of ['UserDO', 'ASSETS']) {
+      const refused = await runDeploy({ option: '--reset', account: {
+        ...account, reset: { ...account.reset, classes: account.reset.classes.filter((entry) => entry.className !== 'UserDO') },
+        live: { ...account.live, bindings: account.live.bindings.filter((binding) => binding.name !== missing) },
+      } });
+
+      expect(refused.infraStatuses, refused.stdout).toEqual([1]);
+      expect(refused.events).not.toContain(armadaBuild('staging'));
+    }
+  });
+
+  test("reset recovery never borrows bootstrap for an unrecorded class or application", async () => {
+    const account = resetAccount(true);
+
+    for (const incomplete of [
+      { ...account, reset: { ...account.reset, classes: account.reset.classes.filter((entry) => entry.className !== 'UserDO') } },
+      { ...account, reset: { ...account.reset, applications: [] } },
+    ]) {
+      const refused = await runDeploy({ option: '--reset', pendingReset: account.reset.tag, account: incomplete });
+
+      expect(refused.infraStatuses, refused.stdout).toEqual([1]);
+      expect(refused.events).not.toContain(armadaBuild('staging'));
+    }
   });
 
   test("an ambient environment variable cannot point the account gate at the other deployment", async () => {
@@ -653,7 +886,7 @@ describe("deploy gate", () => {
     // this would be a phase some deploys skip, which is the whole thing `--bootstrap` must not become.
     const uploaded = 'if [ "${DEPLOY_PUBLISHED:-0}" = "1" ]; then';
     const invocation = '  if bun scripts/infra-verify.ts --phase=post-deploy; then';
-    const upload = 'if npx wrangler deploy "${KINU_WRANGLER_ARGS[@]}" 2>&1 | tee "$KINU_DEPLOY_LOG"; then';
+    const upload = 'if upload "$KINU_DEPLOY_LOG" npx wrangler deploy "${KINU_WRANGLER_ARGS[@]}"; then';
     expect(lines).toContain(uploaded);
     expect(lines).toContain(invocation);
     expect(lines).toContain(upload);
@@ -944,39 +1177,6 @@ describe("one deploy path", () => {
 
       expect(PER_PACKAGE_DEPLOY.exec(body)?.[0], `${label} deploys one package around the deploy script`)
         .toBeUndefined();
-    }
-  });
-
-  /** The one script that may publish. Every other shell script is a caller of
-   *  it, or of nothing. */
-  const SHELL_PUBLISHER = "scripts/deploy.sh";
-  const shellScripts = trackedFiles().filter((file) => file.endsWith(".sh"));
-
-  // Harness boundary: the script's executable lines, with whole-line `#`
-  // comments dropped — deploy.sh's own header names the publish in prose a dozen
-  // times, and so does the header of the archive builder beside it. Blind spot:
-  // a trailing `# wrangler deploy` comment reads as an invocation here, and a
-  // publish assembled from variables reads as none.
-  test("no shell script but the deploy script publishes", () => {
-    const commandLines = (file: string): string => readRepositoryFile(REPO_ROOT, file)
-      .split("\n")
-      .filter((line) => !line.trimStart().startsWith("#"))
-      .join("\n");
-
-    expect(shellScripts, "the enumerator stopped listing the deploy script").toContain(SHELL_PUBLISHER);
-    expect(shellScripts.length, "the shell corpus collapsed").toBeGreaterThan(5);
-    // Non-vacuity: the known publishing site is in the corpus, and this reading
-    // of it really does contain the publish this rule is about.
-    expect(commandLines(SHELL_PUBLISHER), "the deploy script stopped publishing")
-      .toContain("npx wrangler deploy");
-
-    for (const file of shellScripts) {
-      if (file === SHELL_PUBLISHER) continue;
-
-      for (const command of PUBLISH_COMMANDS) {
-        expect(commandLines(file), `${file} publishes with \`${command}\`; the deploy path is ${SHELL_PUBLISHER}`)
-          .not.toContain(command);
-      }
     }
   });
 
@@ -1667,5 +1867,47 @@ describe('the smoke test reads the version it deployed', () => {
     expect({ ...await smoke(route.url), asked: route.asked() }).toEqual({
       status: '200', by: '', finding: 'the worker artifact route answered 200 naming no version, so not as this deploy\'s version cfcb250f', asked: 1,
     });
+  });
+});
+
+// ── The upload, and the one retry wrangler asks for (deploy-upload.sh) ──
+
+/** Wrangler 4.145's last words on staging's reset deploy, 2026-10-09 (wrangler-2026-10-09_16-29-14_753.log, lines 4618
+ *  and 4806): the version uploaded, then its container application could not be applied after five 404s. */
+const RECORDED_PARTIAL_UPLOAD = 'Uploaded kinu-staging (31.90 sec)\n\n✘ [ERROR] The Worker version was deployed, but Wrangler could not '
+  + 'finish applying its Durable Object-managed Container application settings. Re-run the same `wrangler deploy` command to retry '
+  + 'and finish deployment.';
+
+describe('the upload runs again once, and only when wrangler asks for it', () => {
+  // The recovery wrangler defines for its own failure: the 2026-10-09 deploy that hit it stopped there, and its rerun
+  // was refused by the account gate. Wrangler 4.149 reads the version back the same way (docs/DEPLOYMENT.md).
+  test('the deploy replays the recorded wrangler recovery with identical arguments', async () => {
+    const replayed = await runDeploy({ uploadRuns: [{ says: RECORDED_PARTIAL_UPLOAD, status: 1 }, { says: 'success', status: 0 }] });
+
+    expect(replayed.uploads, replayed.stdout).toEqual([
+      ['wrangler', 'deploy', '--tag', 'testsha', '--message', 'kinu staging testsha'],
+      ['wrangler', 'deploy', '--tag', 'testsha', '--message', 'kinu staging testsha'],
+    ]);
+    expect(replayed.events).toContain('bun scripts/infra-verify.ts --phase=post-deploy');
+  });
+
+  test('a second refusal ends the upload: it is run twice, never a third time', async () => {
+    const refused = await runDeploy({ uploadRuns: [
+      { says: RECORDED_PARTIAL_UPLOAD, status: 1 }, { says: RECORDED_PARTIAL_UPLOAD, status: 1 }, { says: 'success', status: 0 },
+    ] });
+
+    expect(refused.uploads).toHaveLength(2);
+    expect(refused.status).not.toBe(0);
+    expect(refused.events).not.toContain('bun scripts/infra-verify.ts --phase=post-deploy');
+  });
+
+  test('any other failure is the upload\'s verdict, run once', async () => {
+    const refused = '✘ [ERROR] A request to the Cloudflare API (/accounts/a/workers/scripts/kinu-staging/versions) failed.';
+
+    const result = await runDeploy({ uploadRuns: [{ says: refused, status: 47 }, { says: 'success', status: 0 }] });
+
+    expect(result.uploads).toHaveLength(1);
+    expect(result.status).not.toBe(0);
+    expect(result.events).not.toContain('bun scripts/infra-verify.ts --phase=post-deploy');
   });
 });

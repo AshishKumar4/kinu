@@ -187,7 +187,7 @@ describe('the needs-you queue stays host-owned', () => {
 
 describe('what the inspector opens for on its own', () => {
   // #21: a "hello" turn's self-change note opened the inspector.
-  const nothing: PersonAsks = { pendingActions: [], pendingConsents: [], activePlan: null };
+  const nothing: PersonAsks = { pendingActions: [], pendingConsents: [], activePlan: null, ownerQuestions: [] };
 
   const plan = (status: PlanReview['status']): PlanReview => ({
     id: 'plan-1', sessionId: 's', revision: 1, content: '# Plan', status, annotations: [], feedback: null,
@@ -204,6 +204,19 @@ describe('what the inspector opens for on its own', () => {
 
     expect(needsTheUser({ ...nothing, pendingConsents: [consent] })).toBe(true);
     expect(needsTheUser({ ...nothing, activePlan: plan('pending') })).toBe(true);
+  });
+
+  test('a hosted agent\'s open question opens it, and a closed one does not', () => {
+    const asked = (status: 'open' | 'answered') => ({
+      agent: 'courier', actor: 'actor-courier',
+      asked: {
+        id: 'ask-1', actor: 'actor-courier', callId: 'c-1', turnId: 't-1', mode: 'build' as const, status, answers: null, askedAt: 1, closedAt: null,
+        questions: [{ id: 'units', question: 'Which unit?', options: [{ label: 'Cents' }, { label: 'Dollars' }] }],
+      },
+    });
+
+    expect([needsTheUser({ ...nothing, ownerQuestions: [asked('open')] }), needsTheUser({ ...nothing, ownerQuestions: [asked('answered')] })])
+      .toEqual([true, false]);
   });
 
   test('what the agent made, and a plan already decided, leave it where it is', () => {
@@ -255,7 +268,7 @@ describe('the attention stack the chat shows', () => {
   });
 
   test('holds exactly what holds the inspector open', () => {
-    const quiet = { pendingActions: [row('v8', 'scaffold_version', 1)], pendingConsents: [], activePlan: null };
+    const quiet = { pendingActions: [row('v8', 'scaffold_version', 1)], pendingConsents: [], activePlan: null, ownerQuestions: [] };
     const parkedOne = { ...quiet, pendingActions: [row('push', 'deferred_action', 1)] };
 
     expect([ownerAsks(quiet).length > 0, needsTheUser(quiet), ownerAsks(parkedOne).length > 0, needsTheUser(parkedOne)])

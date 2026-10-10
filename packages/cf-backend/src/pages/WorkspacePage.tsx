@@ -1,3 +1,4 @@
+import { AskedQuestionsContext, askedBy } from "@/components/QuestionCard";
 import { Effect, Cause } from 'effect';
 import { Fragment, createContext, startTransition, useContext, useState, useRef, useEffect, useCallback, useMemo, type RefObject } from "react";
 import { useParams, useLocation, Link, useMatch, useNavigate, useSearchParams } from "react-router-dom";
@@ -10,7 +11,7 @@ import {
 } from "@phosphor-icons/react";
 import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
-  isPlaceholderMission, ownerAsks, summarizeRestorePlan,
+  isPlaceholderMission, ownerAsks, planSurface, summarizeRestorePlan,
 } from "@kinu.run/core";
 import type { AlternateTakeSet, DiffAnchor, FileRestoreChange, PlanReview, Rpc, SignalCard, TakePickOutcome } from "@kinu.run/core";
 import type { UIMessage } from "ai";
@@ -551,6 +552,9 @@ function SubordinateChatColumn({
 
   // Its answers' blocks resolve in its own chat, once the pane knows whose that is.
   const answerChat = useMemo(() => (state.paneActorId === null ? undefined : { actorId: state.paneActorId }), [state.paneActorId]);
+  // Its own questions, from the workspace's read, for each call's record.
+  const questions = attention?.reads.questions;
+  const asked = useMemo(() => (state.paneActorId === null ? [] : askedBy(questions ?? [], state.paneActorId)), [questions, state.paneActorId]);
 
   const { thread } = chat;
   const repeats = useMemo(() => foldEventTurns(thread.entries.map(({ message }) => message)), [thread.entries]);
@@ -591,6 +595,7 @@ function SubordinateChatColumn({
   return (
     <div className="@container relative flex flex-col flex-1 min-h-0" data-agent-pane={`${workspace}/agents/${subName}`}>
       <ErrorBoundary label="Agent chat">
+        <AskedQuestionsContext.Provider value={asked}>
         <TranscriptViewport chat={chat} live={live} padClass="pt-5 pb-12"
           scroll={{ initialScroll: ui.savedScroll, onScrollPosition: ui.rememberScroll, settled: state.transcriptSeeded }}
           pending={<ConversationSkeleton />}
@@ -619,6 +624,7 @@ function SubordinateChatColumn({
             />
           )}
         </TranscriptViewport>
+        </AskedQuestionsContext.Provider>
       </ErrorBoundary>
 
       {!takesInput && <ViewOnlyBar running={live} onStop={stop} />}
@@ -865,11 +871,14 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
   const { rpc: workspaceRpc, resolveConsent, refreshPendingActions } = state;
   const { accountProposals } = useWorkspaceRoster();
 
+  // The workspace agent's questions, for each call's record in the transcript.
+  const asked = useMemo(() => askedBy(state.ownerQuestions, null), [state.ownerQuestions]);
+
   const attentionCalls = useMemo((): Omit<AttentionStackProps, "asks"> => ({
     rpc: workspaceRpc,
     resolveConsent,
     onDecided: refreshPendingActions,
-    onReview: () => show("Work"),
+    onReview: (plan) => show(planSurface(plan)),
     decideMemory: async (id, decision) => { await decideAccountMemory(id, decision); },
   }), [workspaceRpc, resolveConsent, refreshPendingActions, show]);
 
@@ -1162,7 +1171,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
             )}
             {shownNode === null && (subName ? (
               <AgentPlanWindowContext.Provider value={reviewed.showAgentWindow}>
-                <AttentionContext.Provider value={{ reads: state, stack: attentionCalls }}>
+                <AttentionContext.Provider value={{ reads: { ...state, questions: state.ownerQuestions }, stack: attentionCalls }}>
                   <AgentChatColumn key={subName} workspace={agentId} subName={subName} subordinates={state.subordinates} rpc={state.rpc} ids={linkIds}
                     input={shownAgent?.input ?? true} />
                 </AttentionContext.Provider>
@@ -1179,6 +1188,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
               </div>
             )}
             <ErrorBoundary label="Chat">
+            <AskedQuestionsContext.Provider value={asked}>
             <TranscriptViewport chat={chat} live={live} startFirst padClass="pt-7 pb-12"
               scroll={{ initialScroll: ui.savedScroll, onScrollPosition: ui.rememberScroll, settled: state.transcriptSeeded }}
               pending={<ConversationSkeleton />}
@@ -1239,6 +1249,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
                 />
               )}
             </TranscriptViewport>
+            </AskedQuestionsContext.Provider>
             </ErrorBoundary>
 
             <div className="p-composer-dock">
@@ -1254,7 +1265,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
                 onStop={handleStop}
                 onBranch={handleBranch}
                 attention={(
-                  <AttentionStack asks={ownerAsks({ ...state, accountProposals })} {...attentionCalls} />
+                  <AttentionStack asks={ownerAsks({ ...state, accountProposals, questions: state.ownerQuestions })} {...attentionCalls} />
                 )}
                 mode={{ value: ui.mode, onChange: setChatMode }}
                 attachments={{

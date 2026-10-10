@@ -1,6 +1,10 @@
 import type { AgentFigures } from '../read-models/agent-figures';
-import type { JSONSchema7, ModelMessage } from 'ai';
+import type { JSONSchema7, ModelMessage, UIMessage } from 'ai';
 import type { CompletedTurn } from '../evolution/types';
+import type { TrialTurn } from '../evolution/trial-rules';
+import type { ContextFill } from '../read-models/context-fill';
+import type { InlineSteer } from '../read-models/transcript';
+import type { RunEvent } from '../events/types';
 import type { DynamicContext } from '../prompting/volatile-context';
 import type { HeadCapture } from '../heads/head-inference';
 import type { HeadInput, HeadReport, HeadStep } from '../heads/types';
@@ -58,6 +62,8 @@ export interface PreparedAgentTurn {
   readonly tools: readonly AgentToolDescriptor[];
   readonly dynamic: DynamicContext;
   readonly reviewsTurns: boolean;
+  /** The live trial's arm the turn runs, when the workspace's own agent runs one; recorded with its completed turn. */
+  readonly trial?: TrialTurn;
   readonly missionLabels?: readonly string[];
   readonly trace: boolean;
   readonly resume: boolean;
@@ -140,4 +146,26 @@ export interface AgentRecovery {
 export interface AgentAnswerTexts {
   readonly texts: readonly string[];
   readonly workMode: WorkMode;
+}
+
+/** Where an agent's chat stands between turns, as its window and its workspace's tile read it. */
+export interface AgentStanding {
+  readonly messageCount: number;
+  readonly context: ContextFill | null;
+  readonly latestRun: { readonly status: string | null; readonly userMessage: string | null } | null;
+  /** Words sent into a running turn and not yet read by it. */
+  readonly pendingSteers: readonly InlineSteer[];
+}
+
+/** An agent's recent model steps, for the activity its window reads. */
+export interface AgentSteps {
+  readonly steps: readonly Extract<RunEvent, { type: 'step_finish' }>[];
+  /** The newest step whose usage the provider reported. */
+  readonly newestMeasured: Extract<RunEvent, { type: 'step_finish' }> | null;
+}
+
+/** One answer of an agent's whole: the message its transcript holds, and its content as a lane reads it. */
+export interface AgentAnswer {
+  readonly message: UIMessage;
+  readonly content: string;
 }

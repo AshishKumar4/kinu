@@ -127,16 +127,40 @@ export async function joinHarnessKeepAlives(agent: workersModule.DurableObject):
   while (open !== undefined && open.size > 0) await Promise.allSettled(open);
 }
 
-/** A lane's body (`ActorAgent.holdLane`), joined with the fibers. */
-export function trackHarnessLane<Result>(lane: Promise<Result>): Promise<Result> {
+/** A lane's body (`ActorAgent.holdLane`), joined with the fibers, and with `agent`'s own when it names its object. */
+export function trackHarnessLane<Result>(lane: Promise<Result>, agent?: workersModule.DurableObject): Promise<Result> {
   harnessFiberBodies.add(lane);
+  const own = agent === undefined ? undefined : harnessFiberBodiesOf.get(agent) ?? new Set<Promise<unknown>>();
 
-  return lane.finally(() => { harnessFiberBodies.delete(lane); });
+  if (agent !== undefined && own !== undefined) harnessFiberBodiesOf.set(agent, own.add(lane));
+
+  return lane.finally(() => {
+    harnessFiberBodies.delete(lane);
+    own?.delete(lane);
+  });
 }
 
 /** Resolves when every `runFiber` body and lane started so far has settled. */
 export async function joinHarnessFibers(): Promise<void> {
   while (harnessFiberBodies.size > 0) await Promise.all(harnessFiberBodies);
+}
+
+/** Objects whose fibers no suite-wide join waits on: the workspace's own agent's isolate, whose chat turn runs in a fiber a
+ *  suite parks at its model call, as the in-object turn it replaced was no fiber. */
+const unjoined = new WeakSet<object>();
+
+export function joinedOnlyByItself(agent: workersModule.DurableObject): void {
+  unjoined.add(agent);
+}
+
+/** Each object's own `runFiber` bodies: an agent's isolate is an object of its own, its turn's fiber among them. */
+const harnessFiberBodiesOf = new WeakMap<object, Set<Promise<unknown>>>();
+
+/** Resolves when every `runFiber` body `agent` itself started so far has settled. */
+export async function joinHarnessFibersOf(agent: workersModule.DurableObject): Promise<void> {
+  const bodies = harnessFiberBodiesOf.get(agent);
+
+  while (bodies !== undefined && bodies.size > 0) await Promise.all(bodies);
 }
 
 /**
@@ -329,13 +353,17 @@ export function mockAgentsSdk(): void {
           snapshot: null,
         });
 
-        harnessFiberBodies.add(body);
+        if (!unjoined.has(this)) harnessFiberBodies.add(body);
+        const own = harnessFiberBodiesOf.get(this) ?? new Set<Promise<unknown>>();
+
+        harnessFiberBodiesOf.set(this, own.add(body));
 
         try {
           return await body;
         } finally {
           harnessActiveFibers.delete(id);
           harnessFiberBodies.delete(body);
+          own.delete(body);
           sql.exec(`DELETE FROM cf_agents_runs WHERE id = ?`, id);
         }
       }
@@ -482,7 +510,7 @@ export function mockAgentsSdk(): void {
        *  Tests observing broadcasts override it on the instance (unit-mcts-broadcast.test.ts). */
       broadcast(_message: string | ArrayBuffer | ArrayBufferView, _without?: string[]): void {}
       /** Empty: workerd owns hibernating sockets (real one: `agents/dist/src-5W6JNKVb.js:3175`).
-       *  Recipient-set behaviour is measured in `tests/workerd/public-surface.test.ts`. */
+       *  Recipient-set behaviour is measured in `tests/workerd/wide/public-surface.test.ts`. */
       *getConnections(_tag?: string): Iterable<Connection> {}
       /** Registry SQL copied from `agents/dist/index.js` (table 5803, `_cf_resolveSubAgent` 5737,
        *  `hasSubAgent` 5870); the facet (`ctx.facets`) is workerd-only, so the stub throws. */

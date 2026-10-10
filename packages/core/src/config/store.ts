@@ -45,6 +45,10 @@ export const AGENT_CONFIG_KEYS = {
   liveTrials: 'live_trials',
   /** 'true' once an agent hosted in its own isolate has submitted a plan there: Work asks only those isolates (D9). */
   holdsPlans: 'holds_plans',
+  /** 'true' once the workspace's own agent ran a turn in its isolate: only then does that isolate hold runs or spend (D9). */
+  holdsTurns: 'holds_turns',
+  /** 'true' once an agent hosted in its own isolate has been offered `ask_owner` there: the stack asks only those isolates. */
+  holdsQuestions: 'holds_questions',
   /** 'false' stops this agent learning from its turns: no ratings, struggles, lessons, proposals or trials. On by default. */
   learning: 'learning',
   advisorMinSeverity: 'advisor_min_severity',
@@ -122,6 +126,10 @@ export interface AgentConfigStore {
   setLiveTrials(enabled: boolean): void;
   getHoldsPlans(): boolean;
   setHoldsPlans(): void;
+  getHoldsTurns(): boolean;
+  setHoldsTurns(): void;
+  getHoldsQuestions(): boolean;
+  setHoldsQuestions(): void;
   getLearning(): boolean;
   setLearning(enabled: boolean): void;
   getAdvisorEnabled(): boolean;
@@ -337,6 +345,10 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     setLiveTrials(enabled) { set(AGENT_CONFIG_KEYS.liveTrials, String(enabled)); },
     getHoldsPlans() { return get(AGENT_CONFIG_KEYS.holdsPlans) === 'true'; },
     setHoldsPlans() { set(AGENT_CONFIG_KEYS.holdsPlans, 'true'); },
+    getHoldsTurns() { return get(AGENT_CONFIG_KEYS.holdsTurns) === 'true'; },
+    setHoldsTurns() { set(AGENT_CONFIG_KEYS.holdsTurns, 'true'); },
+    getHoldsQuestions() { return get(AGENT_CONFIG_KEYS.holdsQuestions) === 'true'; },
+    setHoldsQuestions() { set(AGENT_CONFIG_KEYS.holdsQuestions, 'true'); },
     getLearning() { return get(AGENT_CONFIG_KEYS.learning) !== 'false'; },
     setLearning(enabled) { set(AGENT_CONFIG_KEYS.learning, String(enabled)); },
     getAdvisorEnabled() { return get(AGENT_CONFIG_KEYS.advisorEnabled) === 'true'; },

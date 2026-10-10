@@ -2,6 +2,13 @@
  * Every model's retry, once: a stated Retry-After is waited out up to a minute and shared with the lane's other calls,
  * an opening error or a silent attempt is backed off, and a call with no retries left hands over to the fallback chain.
  * A stream is bounded by silence, never by duration: each provider event, keepalives included, resets the bound.
+ *
+ * A stream's output is committed when its first output part leaves this layer: the SDK records it in the step, the
+ * chat loop shows it and keeps it (`persistStreamPart`), and a tool call it carries runs. Until then (the stream's
+ * start, the response's metadata, an empty text or reasoning opening) its parts are held, and a stream that fails,
+ * stalls or ends short is the same failure as a refused request, retried under the same count. After it, the failure
+ * reaches the step in the provider's own words, and the chain fails over from there: nothing replays output the step
+ * already holds.
  */
 import type { LanguageModelV4CallOptions, LanguageModelV4StreamPart, LanguageModelV4StreamResult, SharedV4ProviderOptions } from '@ai-sdk/provider';
 import { APICallError, type LanguageModelMiddleware } from 'ai';
@@ -78,7 +85,9 @@ type Opened<T> =
   | { readonly kind: 'failed'; readonly error: unknown }
   /** The provider refused before answering, a failure the retry classifies. */
   | { readonly kind: 'refused'; readonly error: unknown }
-  | { readonly kind: 'stall' | 'backoff' };
+  /** The stream failed before any output was committed: retried as a refusal is, unless the failure is final. */
+  | { readonly kind: 'cut'; readonly error: unknown }
+  | { readonly kind: 'stall' };
 
 /** One call to the provider; `last` once no retry is left. */
 type Open<T> = (last: boolean) => Promise<Opened<T>>;
@@ -146,7 +155,7 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
     let owned: number | null = null;
     let waits = 0;
 
-    const spendRetry = (spent: () => APICallError): Effect.Effect<void> => Effect.suspend(() => (++waits > retries ? Effect.die(spent()) : Effect.void));
+    const spendRetry = (spent: () => Error): Effect.Effect<void> => Effect.suspend(() => (++waits > retries ? Effect.die(spent()) : Effect.void));
 
     for (let attemptNumber = 1; ; attemptNumber++) {
       const checked = yield* lane.toCheck(pacer);
@@ -160,11 +169,11 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
 
       if (outcome.kind === 'failed') return yield* Effect.die(outcome.error);
 
-      if (outcome.kind !== 'refused') {
-        yield* spendRetry(() => stalled(policy.provider));
+      if (outcome.kind === 'stall' || (outcome.kind === 'cut' && !APICallError.isInstance(outcome.error))) {
+        yield* spendRetry(() => spentBy(outcome, policy.provider));
         const waitMs = Math.floor(random() * backoffCeiling(attemptNumber));
 
-        yield* reportWait(waitMs, attemptNumber, outcome.kind);
+        yield* reportWait(waitMs, attemptNumber, outcome.kind === 'stall' ? 'stall' : 'backoff');
         yield* Effect.promise(() => sleep(waitMs, signal));
         continue;
       }
@@ -199,7 +208,7 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
       const waitMs = retryAfter ?? Math.floor(random() * backoffCeiling(attemptNumber));
       const declared = pacer.declareWait(yield* lane.billed(), waitMs);
 
-      yield* spendRetry(() => handedOver({ provider: policy.provider, status: limit.status, resetsInMs: retryAfter ?? waitMs }));
+      yield* spendRetry(() => handedOver(policy.provider, waitMs, failure));
       owned = declared;
       warn(`[kinu] ${policy.provider} rate-limited: waiting ${fmtSpan(waitMs)} (attempt ${String(attemptNumber)})`);
       yield* reportWait(waitMs, attemptNumber, retryAfter !== null ? 'header' : 'backoff', limit.status);
@@ -261,7 +270,7 @@ function cooledDown(check: CooldownCheck): Effect.Effect<void> {
       if (waitMs > MAX_RETRY_DELAY_MS) return yield* Effect.die(waitTooLong({ provider: policy.provider, untilMs, nowMs: check.now(), reason }));
 
       if (untilMs !== check.owned) {
-        if (check.retries === 0) return yield* Effect.die(handedOver({ provider: policy.provider, status: null, resetsInMs: waitMs }));
+        if (check.retries === 0) return yield* Effect.die(handedOver(policy.provider, waitMs));
         yield* check.reportWait(waitMs, 0, 'cooldown');
       }
 
@@ -284,8 +293,11 @@ interface StreamAttempt {
   readonly caller: AbortSignal | undefined;
 }
 
-/** The first event decides: an error opens a backoff unless no retry is left; anything else is the answer, still read
- *  under the bound. Silence, on the wire as in the parts, past the bound abandons the attempt and aborts its request. */
+/**
+ * The first output part decides: an error, a failed read or silence before it ends the attempt unless no retry is left;
+ * an output part is the answer, still read under the bound. Silence, on the wire as in the parts, past the bound
+ * abandons the attempt and aborts its request.
+ */
 async function openStream(attempt: StreamAttempt): Promise<Opened<LanguageModelV4StreamResult>> {
   const started = Date.now();
   const silent = Promise.withResolvers<null>();
@@ -322,6 +334,13 @@ async function openStream(attempt: StreamAttempt): Promise<Opened<LanguageModelV
     if (bound.fired) return { kind: 'stall' };
     bound.hear();
 
+    // API failures, including the last, must become final in the common retry policy before the SDK sees them.
+    if (read.status === 'rejected' && (!attempt.last || APICallError.isInstance(read.reason))) {
+      bound.abandon();
+
+      return cutBeforeOutput(read.reason);
+    }
+
     if (read.status === 'rejected') return answered(opened, { bound, parts, held, keepRaw: attempt.keepRaw, ended: { reason: read.reason } });
 
     if (read.value === 'end') return answered(opened, { bound, parts, held, keepRaw: attempt.keepRaw, ended: 'closed' });
@@ -329,18 +348,28 @@ async function openStream(attempt: StreamAttempt): Promise<Opened<LanguageModelV
 
     held.push(part);
 
-    if (part.type === 'stream-start' || part.type === 'raw') continue;
+    if (BEFORE_OUTPUT.has(part.type)) continue;
 
-    if (part.type === 'error' && !attempt.last) {
+    if (part.type === 'error' && (!attempt.last || APICallError.isInstance(part.error))) {
       bound.abandon();
       await abandoned(parts.cancel());
 
-      return { kind: 'backoff' };
+      return cutBeforeOutput(part.error);
     }
 
     return answered(opened, { bound, parts, held, keepRaw: attempt.keepRaw, ended: null });
   }
 }
+
+/** A stream that failed before its output: final when the failure is, else retried as a refusal is. */
+function cutBeforeOutput(error: Extract<Opened<never>, { readonly kind: 'cut' }>['error']): Opened<never> {
+  const cut = { kind: 'cut', error } as const;
+
+  return finalFailure(cut) ? { kind: 'failed', error } : cut;
+}
+
+/** Parts that carry no output: held, so a stream that fails after them is retried as a refused request is. */
+const BEFORE_OUTPUT: ReadonlySet<LanguageModelV4StreamPart['type']> = new Set(['stream-start', 'raw', 'response-metadata', 'text-start', 'reasoning-start']);
 
 /** A stream's parts one at a time, then `end`. */
 interface Parts {
@@ -504,6 +533,20 @@ class SilenceBound {
   }
 }
 
+/** A failure no retry can mend: the provider's own final refusal, or Kinu's classification of a refusal as the owner's
+ *  to fix (a spent allowance, a refused sign-in, a bad request). A failure of any other shape, a dropped connection
+ *  or a provider's error event, is transient. */
+function finalFailure({ error }: Extract<Opened<never>, { readonly kind: 'cut' }>): boolean {
+  if (APICallError.isInstance(error)) return !error.isRetryable;
+
+  return error instanceof KinuError && error.code !== 'unavailable' && error.code !== 'timeout';
+}
+
+/** What a call that spent its retries on stalls or cut streams ends with. */
+function spentBy(outcome: Extract<Opened<never>, { readonly kind: 'stall' | 'cut' }>, provider: string): Error {
+  return outcome.kind === 'stall' ? stalled(provider) : new KinuError('unavailable', `the ${provider} stream failed before its output`, { cause: outcome.error });
+}
+
 function stalled(provider: string): APICallError {
   return new APICallError({
     message: `${provider} sent nothing for ${fmtSpan(silenceBoundMs('provider.stream.idle_ms'))}`,
@@ -525,16 +568,14 @@ function final(failure: APICallError): APICallError {
   });
 }
 
-function handedOver(input: { readonly provider: string; readonly status: number | null; readonly resetsInMs: number | null }): APICallError {
-  return new APICallError({
-    message: `${input.provider} is rate-limiting this account${input.status === null ? '' : ` (HTTP ${String(input.status)})`}`
-      + `${input.resetsInMs === null ? '' : `; it resets in ${fmtSpan(input.resetsInMs)}`}`,
-    url: input.provider,
-    requestBodyValues: undefined,
-    ...(input.status !== null && { statusCode: input.status }),
-    ...(input.resetsInMs !== null && { responseHeaders: { 'retry-after-ms': String(input.resetsInMs) } }),
-    isRetryable: false,
-  });
+/** A final refusal, with this layer's next-attempt delay separate from the provider's response. */
+function handedOver(provider: string, retryAfterMs: number, failure?: APICallError): APICallError & { readonly retryAfterMs: number } {
+  const refused = failure === undefined ? new APICallError({
+    message: `${provider} is cooling down after a refused request`,
+    url: provider, requestBodyValues: undefined, isRetryable: false,
+  }) : final(failure);
+
+  return Object.assign(refused, { cause: failure, retryAfterMs });
 }
 
 interface RateLimit {

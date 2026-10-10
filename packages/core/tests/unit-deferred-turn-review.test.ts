@@ -12,6 +12,7 @@ import { listLessons } from '../src/evolution/lessons';
 import { listTurnRatings, type TurnRating } from '../src/evolution/ratings';
 import type { DecisionPort } from '../src/providers/decision-model';
 import { MAX_TURN_REVIEWS_PER_OPEN } from '../src/evolution/session-window';
+import { historyTurnPairs } from '../src/identity/conversation-store';
 
 /** A reply read as a correction, as Clef answers one. */
 const CORRECTED: DecisionPort = async () => ({ answers: {
@@ -39,7 +40,7 @@ function workspace() {
   const { rt, stores } = createTestRuntime();
   Object.assign(rt, { decide: CORRECTED });
 
-  return { rt, engine: new EvolutionEngine(rt, stores.history) };
+  return { rt, engine: new EvolutionEngine(rt, historyTurnPairs(stores.history)) };
 }
 
 /** A rating minus the identity and clock a deferral legitimately changes. */
@@ -187,7 +188,7 @@ describe('EvolutionEngine.deferTurnReview — the one-shot turn-lane exit', () =
 
   test('with auto-evolution off nothing is deferred and nothing is drained', async () => {
     const { rt, stores } = createTestRuntime({ llmResponses: {} });
-    const engine = new EvolutionEngine(rt, stores.history, { enabled: false });
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history), { enabled: false });
     engine.deferTurnReview(makeTurn(), 'anything');
     expect(engine.sessionWindow.countQueuedReviews()).toBe(0);
     expect(await engine.runDeferredTurnReviews()).toEqual({ reviewed: 0, refused: [] });

@@ -9,7 +9,7 @@
 
 import type { Agent, AgentContext } from 'agents';
 import {
-  childContextResolver, localContextTree, type ContextEditor, type ContextTree, createActorHost, defaultLoopOrigin, runEventSinks, EvolutionEngine, EventLog, MissionGovernor,
+  childContextResolver, localContextTree, type ContextEditor, type ContextTree, createActorHost, defaultLoopOrigin, runEventSinks, EvolutionEngine, historyTurnPairs, EventLog, MissionGovernor,
   facetHomeProvisioner, facetHomeReleaser, actorHomeName, actorStateRoot,
   actorScaffoldPath, nimbusSessionFiles, agentArtifactDirectory, agentHome, MAIN_AGENT, type ActorHost,
   type ActorHostDeps, type ActorRetirement, type BoundActor, type ActorHandle, type ActorReference,
@@ -82,6 +82,7 @@ export interface WorkspaceHostSeams {
   logActivity(actorId: string, event: string, detail?: string): void;
   tracing(): AgentTracing;
   slate(actor: ActorHandle, operation: SlateOperation): Promise<SlateCallResult>;
+  slateBuild(actor: ActorHandle, slate: string): Promise<SlateCallResult>;
   /** The owner's needs-you queue: one per workspace, which each actor parks on as itself. */
   deferrals(actorId: string): DeferredApprovalChannel | undefined;
   refinementLane(bound: BoundActor & { readonly runtime: AgentRuntime }): () => Promise<void>;
@@ -202,6 +203,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         servingMoved: () => seams.servingMoved(),
         boxUse: seams.boxUse,
         slate: (operation) => seams.slate(bound.handle, operation),
+        slateBuild: (slate) => seams.slateBuild(bound.handle, slate),
         // The workspace's own actor's, or a hire's: a decision wakes either. A swarm head has none, as no drain resumes it.
         deferrals: () => (bound.record.origin === 'swarm' ? undefined : seams.deferrals(bound.handle.actorId)),
         // The chat's authority: a self-resolved profile could differ from the turn's and make a search unreproducible.
@@ -292,7 +294,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         pricing: (spec) => seams.pricing(spec ?? seams.hostedModel(handle)),
       });
 
-      const engine = new EvolutionEngine(runtime, stores.history, {
+      const engine = new EvolutionEngine(runtime, historyTurnPairs(stores.history), {
         transaction: (body) => { seams.ctx.storage.transactionSync(body); },
         // Review model calls debit the mission the reviewed turn ran under.
         governor: budget,

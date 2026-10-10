@@ -8,7 +8,7 @@ import { createRecordingLogger } from '@kinu.run/core/obs';
 import { scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import {
-  chatSessionTurns, fireSoonestWake, improvementLanesRan, nextTurn, orchestratorHarness, tapDiagnostics, until, workspaceFiles, type RecordedUserPlaneCalls,
+  chatSessionTurns, fireSoonestWake, improvementLanesRan, mainDatabase, nextTurn, orchestratorHarness, tapDiagnostics, until, workspaceFiles, type RecordedUserPlaneCalls,
 } from './helpers/actor-harness';
 import { ROOT_SLATE_CALLER } from '../src/slates/bindings';
 
@@ -43,6 +43,8 @@ test('an email and a timer turn reach the owner\'s MCP tool once a settled turn 
   // Each turn's first request says whether the tool was offered; an offered tool is called once through `eval`.
   const offered: boolean[] = [];
   const results: string[] = [];
+  // Resolved when a turn's model reads its tool's answer: main's turn runs in its isolate, across a relay.
+  const answeredTool = Promise.withResolvers<void>();
 
   agent.modelFactory = () => scriptedTurnModel({ doGenerate: (options) => {
     const prompt = JSON.stringify(options.prompt);
@@ -50,6 +52,7 @@ test('an email and a timer turn reach the owner\'s MCP tool once a settled turn 
 
     if (answered) {
       results.push(...options.prompt.flatMap((message) => (message.role === 'tool' ? message.content.map((part) => JSON.stringify(part)) : [])));
+      answeredTool.resolve();
 
       return said('found it');
     }
@@ -66,7 +69,8 @@ test('an email and a timer turn reach the owner\'s MCP tool once a settled turn 
 
   const logger = createRecordingLogger();
   const restore = tapDiagnostics(logger);
-  const settled = () => db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM terminal_effects WHERE status != 'completed'`).get()?.n === 0;
+  // Main's turns end in its own isolate (D9), where their terminal effects are kept.
+  const settled = () => mainDatabase({ agent, db }).query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM terminal_effects WHERE status != 'completed'`).get()?.n === 0;
 
   const email = async (n: number) => {
     await agent.acceptEmailDelivery({
@@ -102,7 +106,8 @@ test('an email and a timer turn reach the owner\'s MCP tool once a settled turn 
 
     // Warmed: the next timer turn is offered the tool and calls it.
     await timer(3);
-    await until(() => mcp.calls.length > 0 && results.length > 0, 'the timer turn called the tool');
+    await answeredTool.promise;
+    expect({ called: mcp.calls.length > 0, answered: results.length > 0 }).toEqual({ called: true, answered: true });
   } finally {
     restore();
   }

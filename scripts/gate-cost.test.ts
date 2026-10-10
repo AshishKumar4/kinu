@@ -1,7 +1,18 @@
 import { describe, expect, test } from 'bun:test';
-import { holdsCheckoutResource } from './gate-cost';
+import { scratchPath } from '@kinu.run/test-utils';
+import { holdsCheckoutResource, readCosts, writeCosts } from './gate-cost';
 
 const CHECKOUT = '/home/dev/Kinu-wt-lane/';
+
+test('rewriting a cost table preserves a local row\'s own machine beside remote rows', () => {
+  const path = scratchPath('gate-cost-machines', 'cost.json');
+  const cost = { wallSeconds: 1, cpuSeconds: 1, peakRssMb: 1, peakRunnable: 1, peakCpuThreads: 1, meanThreads: 1, samples: 1, loadAtStart: 0, exit: 0 };
+  const rows = { remote: cost, local: { ...cost, machine: 'local machine' } };
+
+  writeCosts({ measuredAt: 'fixture', machine: 'armada machine', method: 'fixture', rows }, path);
+  writeCosts(readCosts(path), path);
+  expect(readCosts(path).rows).toEqual(rows);
+});
 
 // `/proc/<pid>/cmdline` separates arguments with NUL.
 function argv(...words: string[]): string {

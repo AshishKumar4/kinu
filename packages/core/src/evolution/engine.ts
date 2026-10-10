@@ -33,8 +33,7 @@ import { updateCraftScores } from '../craft/ema';
 import { createCraftLedger, type CraftLedger } from '../craft/in-episode';
 import { recordRecoveryFinding, recoveryFindingText, type RecoveryFinding } from './recovery';
 import { effectAlreadyDone, recordEffectDone } from '../identity/effect-tombstones';
-import { conversationTurnPair } from '../identity/conversation-store';
-import { CHAT_SESSION_ID } from '../session/transcript-schema';
+import type { TurnPairReader } from '../identity/conversation-store';
 import {
   ADVISOR_DEDUPE_WINDOW, ADVISOR_EVENT_TYPE, AdvisorRowDataSchema, normalizeNote,
   type AdvisorNote, type AdvisorRowData,
@@ -73,7 +72,6 @@ const GeneralizedToolSchema = v.object({
   code: v.optional(v.string()),
 });
 
-import type { SessionHistory } from '../session/history';
 import type { AgentConfigStore } from '../config/store';
 import { diagnostics, toKinuError, KinuError } from '../obs/index';
 
@@ -138,7 +136,7 @@ function isPureLookupCall(call: Pick<ToolCallRecord, 'name' | 'op'>): boolean {
 
 export class EvolutionEngine {
   private readonly rt: AgentRuntime;
-  private readonly history: SessionHistory;
+  private readonly turnPair: TurnPairReader;
   private readonly config: EvolutionConfig;
   private readonly listeners: EvolutionListener[] = [];
   /** Also holds the durable closed-window count the lifetime timescale paces by. */
@@ -155,10 +153,10 @@ export class EvolutionEngine {
   private readonly learningScope = new AsyncLocalStorage<boolean>();
 
   constructor(
-    rt: AgentRuntime, history: SessionHistory, config: Partial<EvolutionConfig> = {},
+    rt: AgentRuntime, turnPair: TurnPairReader, config: Partial<EvolutionConfig> = {},
   ) {
     this.rt = rt;
-    this.history = history;
+    this.turnPair = turnPair;
     this.config = { ...DEFAULT_EVOLUTION_CONFIG, ...config };
     rt.actor.assertCurrent();
 
@@ -590,7 +588,7 @@ export class EvolutionEngine {
     }
 
     // A failed read is a fault: a row with blank texts would poison the bad and good turn sets.
-    const pair = await conversationTurnPair(this.history.transcript(CHAT_SESSION_ID), messageId);
+    const pair = await this.turnPair(messageId);
     recordTurnRating(this.rt.storage.sql, this.rt.actor, {
       ...thumbsRating(feedback),
       turnId: messageId,

@@ -85,7 +85,8 @@
 # storage, between the build and the upload, which then creates every class
 # `exports` declares (scripts/reset.ts). The Worker keeps its secrets and routes. The deploy
 # record names what was deleted. On production it asks for a typed confirmation
-# before anything runs.
+# before anything runs. A reset whose build never uploaded is finished by the next deploy with `--reset`,
+# whose pre-upload infrastructure phase defers exactly the rows that reset's record deleted.
 #
 # Idempotent: safe to re-run.
 set -uo pipefail
@@ -201,6 +202,10 @@ fi
 # an ambient value must never point a staging deploy's account check at
 # production's resources.
 export KINU_INFRA_ENVIRONMENT="$KINU_ENV"
+# The reset record `gate:infra` reads, which only a --reset deploy carries: the gate defers before the upload exactly
+# the rows that reset deleted (scripts/infra-verify.ts). ALWAYS ASSIGNED, like the phase: a record named by the shell
+# that launched a deploy nobody asked to reset must never soften its gate.
+export KINU_RESET_RECORD=""
 KINU_WORKER=""
 KINU_URL=""
 
@@ -216,11 +221,12 @@ if [ "$KINU_RESET" = "1" ]; then
     echo -e "${RED}A production reset is confirmed at a terminal, and this run has none. Nothing was deployed or deleted.${NC}"
     exit 1
   fi
-  # A reset whose build never uploaded left its placeholder serving and its classes gone: this deploy finishes it,
-  # and its pre-deploy phase is the bootstrap one, as the classes it creates cannot exist before it.
-  KINU_PENDING_RESET="$(bun "$KINU_ROOT/scripts/reset.ts" pending "$KINU_ENV")" || exit 1
+  # The newest reset's record, which step 2b's reset then writes over: a reset whose build never uploaded, its
+  # placeholder serving or its upload stopped short of a container application (2026-10-09), is finished by this
+  # deploy, and the gate defers exactly what that record deleted.
+  KINU_RESET_RECORD="$(mktemp -t kinu-reset.XXXXXX.json)"
+  KINU_PENDING_RESET="$(bun "$KINU_ROOT/scripts/reset.ts" pending "$KINU_ENV" "$KINU_RESET_RECORD")" || exit 1
   if [ "$KINU_PENDING_RESET" != "none" ]; then
-    KINU_BOOTSTRAP=1
     echo -e "${BOLD}RESET: finishing $KINU_PENDING_RESET, whose build never uploaded; $KINU_ENV serves its placeholder.${NC}"
   else
     echo -e "${BOLD}RESET: this deploy deletes every Durable Object of $KINU_ENV, with all its storage:${NC}"
@@ -262,14 +268,15 @@ KINU_WRANGLER_ARGS+=(--tag "$KINU_SHA" --message "kinu $KINU_ENV $KINU_SHA")
 # Temp log file — trap cleans up on any exit. A promotion that fails after its
 # upload leaves production serving the red build, and says how to undo it.
 KINU_DEPLOY_LOG=""
-KINU_RESET_RECORD=""
+# The reset record the deploy's record names, once step 2b's reset has started.
+KINU_RECORD_ARGS=()
 cleanup() {
   local status=$?
   [ -n "$KINU_DEPLOY_LOG" ] && rm -f "$KINU_DEPLOY_LOG"
   if [ "$status" -ne 0 ] && [ "${DEPLOY_PUBLISHED:-0}" = "1" ] && [ "$KINU_PROMOTE" = "1" ]; then
     echo -e "${RED}Production serves this red promotion. Return it to the build it took before: bun run deploy --rollback${NC}"
   fi
-  if [ "$status" -ne 0 ] && [ -n "$KINU_RESET_RECORD" ] && [ "${DEPLOY_PUBLISHED:-0}" != "1" ]; then
+  if [ "$status" -ne 0 ] && [ "${#KINU_RECORD_ARGS[@]}" -ne 0 ] && [ "${DEPLOY_PUBLISHED:-0}" != "1" ]; then
     echo -e "${RED}The reset ran and the build never uploaded: the reset lines above say what $KINU_WORKER serves and what was deleted. Deploy again with --reset: it finishes the reset from its record, or finds it done, and uploads the build.${NC}"
   fi
 }
@@ -513,6 +520,8 @@ smoke_red() {
 
 # The smoke's reads of this deploy's own version: `ours` and `not_ours`.
 source "$KINU_ROOT/scripts/deploy-smoke.sh"
+# The upload, and the one retry wrangler asks for: `upload`.
+source "$KINU_ROOT/scripts/deploy-upload.sh"
 
 publish_build() {
 echo ""
@@ -629,14 +638,12 @@ bun "$KINU_ROOT/scripts/devbox-tools.ts" check "$KINU_BACKUP_BUCKET" \
 # ── Step 2b: The reset ────────────────────────────────────────
 # After the build, so a red gate or a failed build deletes nothing; the upload
 # below is then the genesis deploy.
-KINU_RECORD_ARGS=()
 if [ "$KINU_RESET" = "1" ]; then
   echo ""
   echo -e "${BOLD}Step 2b: Resetting $KINU_WORKER${NC}"
-  KINU_RESET_RECORD="$(mktemp -t kinu-reset.XXXXXX.json)"
+  KINU_RECORD_ARGS=("$KINU_RESET_RECORD")
   bun "$KINU_ROOT/scripts/reset.ts" wipe "$KINU_ENV" "$KINU_RESET_RECORD" \
     || { publish_red "the reset failed; its lines in the deploy's output say what it deleted before it stopped, and a deploy with --reset finishes it from its record"; return 1; }
-  KINU_RECORD_ARGS=("$KINU_RESET_RECORD")
 fi
 
 # ── Step 3: Deploy Kinu ───────────────────────────────────────
@@ -646,7 +653,7 @@ KINU_DEPLOY_LOG="$(mktemp -t kinu-deploy.XXXXXX.log)"
 echo ""
 echo "Running: npx wrangler deploy ${KINU_WRANGLER_ARGS[*]} (log → $KINU_DEPLOY_LOG)"
 echo ""
-if npx wrangler deploy "${KINU_WRANGLER_ARGS[@]}" 2>&1 | tee "$KINU_DEPLOY_LOG"; then
+if upload "$KINU_DEPLOY_LOG" npx wrangler deploy "${KINU_WRANGLER_ARGS[@]}"; then
   DEPLOY_PUBLISHED=1
   # From when the version could answer: the start of what Step 5b reads.
   KINU_LIVE_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"

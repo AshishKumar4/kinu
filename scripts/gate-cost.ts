@@ -72,6 +72,8 @@ export function holdsCheckoutResource(process: { readonly command: string; reado
 }
 
 const RowCostSchema = v.object({
+  /** The measuring machine when it differs from the table's default, such as a deploy's local account probe. */
+  machine: v.optional(v.string()),
   /** Wall clock alone, seconds. Reported against the row's deadline rather than
    *  used for admission: a wall is not a measure of load. */
   wallSeconds: v.number(),

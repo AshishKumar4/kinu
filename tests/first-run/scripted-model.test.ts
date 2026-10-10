@@ -15,6 +15,7 @@ import worker, { MAX_BODY_BYTES } from '../../scripts/scripted-model-worker';
 import { SCRIPTED_CREDENTIAL, startScriptedModel } from '../../scripts/scripted-model';
 import { FALLBACK_ANSWER } from '../../scripts/scripted-protocol';
 import { tierModel } from '../../scripts/tier-model';
+import { HOME_ASK, HOME_BRIEF, HOME_REPORTED } from '../../scripts/flows-script';
 import { generateText, streamText } from 'ai';
 import { createOpenAICompatProvider, runSleepTimeCompute, type LLM } from '@kinu.run/core';
 import { SLEEP_TIME_PROMPT_OPENING } from '../../packages/core/src/utils/prompt-sections';
@@ -282,6 +283,22 @@ describe('the device job the first-run tier runs on a machine', () => {
 
 // A hire returns at once (cafab2bfc): each answer opens its hirer's next turn, and the cases' scripts answer that turn.
 describe('the first-run scripts answer the turn a helper\'s answer opens', () => {
+  test('the parent repeats the named hire home from its real drain report without running its own pwd', async () => {
+    const agent = 'harbour-lamps-keeper';
+    const home = `/home/${agent}`;
+    const report = answerArrives(agent, HOME_BRIEF, `HOME ${home}`);
+
+    const messages = [
+      ...hiredAndWaiting(HOME_ASK, { id: 'call_home', agent, mission: HOME_BRIEF }),
+      { role: 'user', content: report },
+    ];
+
+    const answered = await reply(messages);
+
+    expect(answered.tool_calls).toBeUndefined();
+    expect(answered.content).toBe(`${HOME_REPORTED} ${home}`);
+  });
+
   test('the delegation lead relays the word its helper answered', async () => {
     const mission = sayWordMission(DELEGATION_WORD);
 

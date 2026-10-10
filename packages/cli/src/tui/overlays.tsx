@@ -1,6 +1,6 @@
 import type { SelectOption, SelectRenderable } from '@opentui/core';
 import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
-import { filterModels, formatContextWindow, formatModelSpec, modelTestText, parseModelSpec, specWithoutAccount, takeEvidence, type AgentModelEntry, type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type ModelTestResult, type ProviderFailure, type ShellApprovalRequest } from '@kinu.run/core';
+import { executorLabel, filterModels, OTHER_OPTION, formatContextWindow, formatModelSpec, modelTestText, parseModelSpec, specWithoutAccount, takeEvidence, type AgentModelEntry, type AlternateTakeCandidate, type AlternateTakeSet, type AskingAgent, type ChangelogEntry, type OwnerAnswer, type ModelTestResult, type ProviderFailure, type ShellApprovalRequest } from '@kinu.run/core';
 import { CHANGE_KIND_GLYPH, TUI_COMPOSER_PLACEHOLDER, TUI_MARKS, clipText, literalText, SPINNER_FRAMES, meterText, type TurnMeter } from '@kinu.run/core/tui';
 import { filterCommands, type SlashCommandInfo } from '../slash-commands';
 import type { AgentChangelogView, ForkPoint } from '../agent-client';
@@ -841,7 +841,7 @@ export function DeviceConsentOverlay({ consent, terminal }: DeviceConsentOverlay
 
   return (
     <PaletteFrame
-      title="Use your computer?"
+      title="Use your PC?"
       width={layout.paletteWidth}
       height={layout.paletteHeight}
       left={position.left}
@@ -869,7 +869,7 @@ interface DeviceConnectOverlayProps {
 }
 
 function shellApprovalDetails(request: ShellApprovalRequest): string {
-  return `${shownCommand(request.command)}\nExecutor: ${request.executor}\n${request.review.hits.map((hit) => `${hit.rule}: ${hit.explanation}`).join('\n')}`;
+  return `${shownCommand(request.command)}\nExecutor: ${executorLabel(request.executor)}\n${request.review.hits.map((hit) => `${hit.rule}: ${hit.explanation}`).join('\n')}`;
 }
 
 export function shellApprovalCanApprove(request: ShellApprovalRequest, terminal: OverlayGeometry): boolean {
@@ -947,7 +947,7 @@ export function DeviceConnectOverlay({ prompt, terminal }: DeviceConnectOverlayP
 
   return (
     <PaletteFrame
-      title="Let this agent use this computer?"
+      title="Let this agent use this PC?"
       width={paletteWidth}
       height={paletteHeight}
       left={position.left}
@@ -966,12 +966,12 @@ export function DeviceConnectOverlay({ prompt, terminal }: DeviceConnectOverlayP
       {prompt.phase === 'connecting' && (
         <>
           <PaletteLine
-            text={prompt.session ? 'Connecting this computer for this session…' : 'Connecting this computer…'}
+            text={prompt.session ? 'Connecting this PC for this session…' : 'Connecting this PC…'}
             width={innerWidth}
             color={colors.text.primary}
           />
           <PaletteLine
-            text={`Waiting for this computer to answer${'.'.repeat(1 + (prompt.ticks % 3))}`}
+            text={`Waiting for this PC to answer${'.'.repeat(1 + (prompt.ticks % 3))}`}
             width={innerWidth}
             color={colors.intent.accent}
           />
@@ -1305,4 +1305,144 @@ function paletteRow(primary: string, suffix: string, width: number): string {
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
+}
+
+type QuestionChoice =
+  | { readonly kind: 'option'; readonly label: string }
+  | { readonly kind: 'other' }
+  | { readonly kind: 'done' }
+  | { readonly kind: 'chat' };
+
+/**
+ * The agent's questions, one at a time: Enter picks an option, or for a question that takes several toggles one and
+ * "Done" goes on. "Other" asks for the owner's own words, with whatever they ticked. "Answer in the chat" closes the
+ * overlay so the owner writes instead, which answers them there.
+ */
+export function QuestionsOverlay({ asking, terminal, onAnswer, onChat }: {
+  asking: AskingAgent;
+  terminal: OverlayGeometry;
+  onAnswer: (answers: readonly OwnerAnswer[]) => void;
+  onChat: () => void;
+}) {
+  const { colors } = useTuiTheme();
+  const { questions } = asking.asked;
+  const [at, setAt] = useState(0);
+  const [answers, setAnswers] = useState<readonly OwnerAnswer[]>([]);
+  const [picked, setPicked] = useState<readonly string[]>([]);
+  const [writing, setWriting] = useState(false);
+  const [written, setWritten] = useState('');
+  const question = questions[at];
+  const paletteWidth = boundedPaletteWidth(terminal, 0.62, 56, 100);
+  const innerWidth = Math.max(1, paletteWidth - 4);
+
+  if (question === undefined) return null;
+  const many = question.multi === true;
+
+  const choices: QuestionChoice[] = [
+    ...question.options.map((option): QuestionChoice => ({ kind: 'option', label: option.label })),
+    { kind: 'other' },
+    ...(many ? [{ kind: 'done' } as const] : []),
+    { kind: 'chat' },
+  ];
+
+  const options: SelectOption[] = choices.map((choice) => {
+    if (choice.kind === 'done') return { name: clipText(`Done (${String(picked.length)} chosen)`, innerWidth), description: '', value: choice };
+
+    if (choice.kind === 'chat') return { name: 'Answer in the chat instead', description: 'Write your own answer as a message', value: choice };
+
+    if (choice.kind === 'other') return { name: OTHER_OPTION, description: 'Write your own answer here', value: choice };
+    const index = question.options.findIndex((option) => option.label === choice.label);
+    const option = question.options[index];
+    const box = picked.includes(choice.label) ? '[x] ' : '[ ] ';
+    const mark = many ? box : '';
+
+    return {
+      name: clipText(`${mark}${choice.label}${question.recommended === index ? ' (Recommended)' : ''}`, innerWidth),
+      description: clipText(option?.description ?? '', innerWidth),
+      value: choice,
+    };
+  });
+
+  const next = (answer: OwnerAnswer): void => {
+    const all = [...answers, answer];
+
+    setWriting(false);
+    setWritten('');
+
+    if (at + 1 < questions.length) {
+      setAnswers(all);
+      setPicked([]);
+      setAt(at + 1);
+
+      return;
+    }
+
+    onAnswer(all);
+  };
+
+  const choose = (choice: QuestionChoice): void => {
+    if (choice.kind === 'chat') onChat();
+    else if (choice.kind === 'other') setWriting(true);
+    else if (choice.kind === 'done') next({ id: question.id, selected: [...picked] });
+    else if (!many) next({ id: question.id, selected: [choice.label] });
+    else setPicked(picked.includes(choice.label) ? picked.filter((label) => label !== choice.label) : [...picked, choice.label]);
+  };
+
+  const paletteHeight = Math.min(Math.max(options.length * 2 + 7, 12), Math.max(3, terminal.height - 2), 24);
+  const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
+  const header = question.header === undefined ? '' : `${question.header} · `;
+  const listHint = many ? 'Enter toggles · Done goes on · Esc later' : 'Enter answers · Esc later';
+  const hint = writing ? 'Enter sends your answer · empty goes back · Esc later' : listHint;
+
+  return (
+    <PaletteFrame title={`${asking.agent} asks · ${String(at + 1)} of ${String(questions.length)}`} width={paletteWidth} height={paletteHeight}
+      left={position.left} top={position.top}>
+      <PaletteLine text={clipText(`${header}${question.question}`, innerWidth)} width={innerWidth} color={colors.text.primary} />
+      <PaletteLine text={hint} width={innerWidth} color={colors.text.muted} />
+      {writing ? (
+        <input
+          key={`${question.id}-other`}
+          focused={true}
+          placeholder="Your answer"
+          onInput={setWritten}
+          onSubmit={() => {
+            const other = written.trim();
+
+            if (other === '') setWriting(false);
+            else next({ id: question.id, selected: many ? [...picked] : [], other });
+          }}
+          style={{
+            width: '100%',
+            backgroundColor: colors.background.recessed,
+            textColor: colors.text.primary,
+            focusedBackgroundColor: colors.background.recessed,
+            focusedTextColor: colors.text.strong,
+            placeholderColor: colors.text.muted,
+            cursorColor: colors.intent.accentStrong,
+          }}
+        />
+      ) : <select
+        key={question.id}
+        focused={true}
+        options={options}
+        selectedIndex={Math.max(0, question.recommended ?? 0)}
+        showDescription={true}
+        showScrollIndicator={true}
+        wrapSelection={true}
+        onSelect={selectAt(choices, choose)}
+        style={{
+          flexGrow: 1,
+          height: Math.max(3, paletteHeight - 6),
+          backgroundColor: colors.background.overlay,
+          textColor: colors.text.primary,
+          focusedBackgroundColor: colors.background.overlay,
+          focusedTextColor: colors.text.primary,
+          selectedBackgroundColor: colors.background.selection,
+          selectedTextColor: colors.text.strong,
+          descriptionColor: colors.text.muted,
+          selectedDescriptionColor: colors.intent.accentStrong,
+        }}
+      />}
+    </PaletteFrame>
+  );
 }

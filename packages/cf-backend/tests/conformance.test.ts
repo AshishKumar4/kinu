@@ -11,7 +11,7 @@ import {
 } from '@kinu.run/core';
 import {
   chatSessionTurns, gatewayWorkspace, hostedSubordinateHarness, improvementLanesRan, runDelegatedTask, until,
-  workspaceMainActor, type ActorHarness, type HarnessOrchestratorAgent,
+  workspaceMainActor, type ActorHarness, type HarnessOrchestratorAgent, mainDatabase,
 } from './helpers/actor-harness';
 import { chatCompletion, offeredTools, stubAiBinding } from './helpers/platform-gateway';
 import { present } from '@kinu.run/test-utils';
@@ -38,8 +38,9 @@ const OperationSchema = v.object({ source: v.string() });
 function producersRecorded(workspace: ActorHarness<HarnessOrchestratorAgent>): Set<string> {
   const producers = new Set<string>(CONFORMANCE_PRODUCERS);
 
-  return new Set(workspace.db.query<{ payload: string }, []>("SELECT payload FROM run_events WHERE type = 'model_call'")
-    .all()
+  // Main's turns record their calls in its own isolate; every other lane, in the workspace.
+  return new Set([workspace.db, mainDatabase(workspace)].flatMap((db) => db.query<{ payload: string }, []>("SELECT payload FROM run_events WHERE type = 'model_call'")
+    .all())
     .map((row) => v.parse(OperationSchema, JSON.parse(row.payload)).source)
     .filter((source) => producers.has(source)));
 }

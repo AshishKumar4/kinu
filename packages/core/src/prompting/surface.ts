@@ -11,7 +11,8 @@ import {
   type PromptModelProfile,
 } from './model-profile';
 import * as v from 'valibot';
-import type { TurnReason, WorkMode } from '../types/turn';
+import { TurnReasonSchema, type TurnReason, type WorkMode } from '../types/turn';
+import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
 import type { JsonObject } from '../utils/json';
 
 export type PromptBackend = 'cf' | 'cli-local';
@@ -31,6 +32,13 @@ export function turnReasonForMetadata(metadata: JsonObject | null | undefined): 
   const stamped = v.safeParse(KinuEventSchema, metadata);
 
   if (!stamped.success) return { provenance: 'chat' };
+
+  // The turn an answer starts runs for the asking turn's reason: it continues that turn, from its call.
+  if (stamped.output.kinuEvent === OWNER_ANSWER_SIGNAL) {
+    const asked = v.safeParse(v.object({ askedReason: TurnReasonSchema }), metadata);
+
+    return asked.success ? asked.output.askedReason : { provenance: 'chat' };
+  }
 
   if (stamped.output.kinuEvent !== 'background_job') return { provenance: 'signal', event: stamped.output.kinuEvent };
   const job = v.safeParse(JobWakeSchema, metadata);

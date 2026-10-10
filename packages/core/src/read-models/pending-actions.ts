@@ -3,12 +3,14 @@
  * Security: must never join `SLATE_READ_MODELS`: a Slate could draw a fake of this queue (`slates/read-models.ts`).
  */
 
+import type { AccountMemoryProposal } from '../memory/account';
 import type { DeferredApproval } from '../safety/deferred-approval';
 import { proposedSoul, type WorkspaceProposal } from '../safety/workspace-proposals';
 import { boundWriteOf } from '../safety/bound-write';
 import type { PendingConsent } from '../protocol';
 import type { PlanReview } from '../types/plans';
 import { planTitle } from '../plans/review';
+import type { AskingAgent } from '../plans/owner-questions';
 
 export type PendingActionKind =
   /** Decided here: the queue is this action's only home. */
@@ -43,6 +45,8 @@ export interface PersonAsks {
   readonly pendingActions: readonly PendingAction[];
   readonly pendingConsents: readonly PendingConsent[];
   readonly activePlan: PlanReview | null;
+  /** The workspace agent's and its hosted agents' questions; the open ones wait on the person. */
+  readonly ownerQuestions: readonly AskingAgent[];
 }
 
 /** Rows holding the person's work until they decide; the agent's own proposals and notes do not (#21). */
@@ -55,29 +59,24 @@ const HOLDS_THE_PERSON = {
   unseen_changes: false,
 } satisfies Record<PendingActionKind, boolean>;
 
-/** What the inspector opens for on its own: an action or a consent to approve, or a plan to review. */
+/** What the inspector opens for on its own: an action or a consent to approve, a plan to review, or a question. */
 export function needsTheUser(asks: PersonAsks): boolean {
   return asks.pendingActions.some((action) => HOLDS_THE_PERSON[action.kind])
     || asks.pendingConsents.length > 0
-    || asks.activePlan?.status === 'pending';
+    || asks.activePlan?.status === 'pending'
+    || asks.ownerQuestions.some((asking) => asking.asked.status === 'open');
 }
 
 /**
- * One thing waiting on the owner's answer: a queued row that holds them, or a machine's consent. `raisedBy`: the actor
- * whose ask it is, by id; null for the workspace's own.
+ * One thing waiting on the owner's answer: a queued row that holds them, a machine's consent, an account-memory
+ * proposal (the account's own record of it, held by the owner's user object), or an agent's questions. `raisedBy`: the
+ * actor whose ask it is, by id; null for the workspace's own.
  */
 export type OwnerAsk =
   | { readonly key: string; readonly at: number; readonly raisedBy: string | null; readonly kind: 'action'; readonly action: PendingAction }
   | { readonly key: string; readonly at: number; readonly raisedBy: null; readonly kind: 'consent'; readonly consent: PendingConsent }
-  | { readonly key: string; readonly at: number; readonly raisedBy: null; readonly kind: 'memory'; readonly memory: AccountAsk };
-
-/** An account-memory proposal as the owner's page holds it: what would be kept, who asked, and when. */
-export interface AccountAsk {
-  readonly id: string;
-  readonly proposal: { readonly kind: 'fact'; readonly key: string; readonly value: unknown } | { readonly kind: 'note'; readonly content: string };
-  readonly origin: { readonly by: string; readonly workspace?: string | undefined; readonly agent?: string | undefined } | null;
-  readonly createdAt: number;
-}
+  | { readonly key: string; readonly at: number; readonly raisedBy: null; readonly kind: 'memory'; readonly memory: AccountMemoryProposal }
+  | { readonly key: string; readonly at: number; readonly raisedBy: string | null; readonly kind: 'question'; readonly question: AskingAgent };
 
 /**
  * What the chat's attention stack shows, newest first: every row that holds the person (the rule
@@ -85,7 +84,10 @@ export interface AccountAsk {
  * proposals that hold nobody stay in Work. `raisedBy`: only that actor's asks, for its own pane.
  */
 export function ownerAsks(
-  asks: Pick<PersonAsks, 'pendingActions' | 'pendingConsents'> & { readonly accountProposals?: readonly AccountAsk[] | null },
+  asks: Pick<PersonAsks, 'pendingActions' | 'pendingConsents'> & {
+    readonly accountProposals?: readonly AccountMemoryProposal[] | null;
+    readonly questions?: readonly AskingAgent[] | null;
+  },
   { raisedBy }: { readonly raisedBy?: string } = {},
 ): OwnerAsk[] {
   const held: OwnerAsk[] = asks.pendingActions.filter((action) => HOLDS_THE_PERSON[action.kind])
@@ -98,7 +100,10 @@ export function ownerAsks(
   const memory: OwnerAsk[] = (asks.accountProposals ?? [])
     .map((proposal) => ({ key: `memory:${proposal.id}`, at: proposal.createdAt, raisedBy: null, kind: 'memory', memory: proposal }));
 
-  return [...held, ...consents, ...memory]
+  const questions: OwnerAsk[] = (asks.questions ?? []).filter((asking) => asking.asked.status === 'open')
+    .map((asking) => ({ key: `question:${asking.asked.id}`, at: asking.asked.askedAt, raisedBy: asking.actor, kind: 'question', question: asking }));
+
+  return [...held, ...consents, ...memory, ...questions]
     .filter((ask) => raisedBy === undefined || ask.raisedBy === raisedBy)
     .sort((a, b) => b.at - a.at || a.key.localeCompare(b.key));
 }

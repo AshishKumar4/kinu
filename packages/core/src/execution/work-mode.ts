@@ -70,9 +70,14 @@ export function toolsInWorkMode(mode: WorkMode, tools: ToolSet): ToolSet {
 
   for (const [name, entry] of Object.entries(tools)) {
     const execute = entry.execute;
-
-    if (execute === undefined) continue;
     const permitted = hasPlanPermission(entry);
+
+    // A tool with no executor runs nothing, so only whether Plan offers it is decided here.
+    if (execute === undefined) {
+      if (permitted) narrowed[name] = entry;
+      continue;
+    }
+
     narrowed[name] = {
       ...entry,
       execute: (input, options) => inWorkMode(mode, async () => {

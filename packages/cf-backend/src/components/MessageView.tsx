@@ -11,13 +11,14 @@ import {
   ThumbsUpIcon, ThumbsDownIcon,
 } from "@phosphor-icons/react";
 import { Link } from "react-router-dom";
+import { AskRecord } from "@/components/QuestionCard";
 import { isToolUIPart, getToolName } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
 import {
-  describeToolCall, rowText, summarizeToolCall,
+  describeToolCall, executorLabel, rowText, summarizeToolCall,
 } from "@kinu.run/core";
 import type { DiffAnchor, InlineSteer, JsonObject, JsonValue, PlacedSteer, ToolCallEffect } from "@kinu.run/core";
-import { changeNotesCard, slatesChanged } from "@kinu.run/core";
+import { ASK_OWNER_TOOL, changeNotesCard, slatesChanged } from "@kinu.run/core";
 import { FeedbackCard } from "@/components/surfaces/changes/FeedbackCard";
 import * as v from "valibot";
 import { diagnostics, renderThrownChain, detach } from "@kinu.run/core/obs";
@@ -288,7 +289,7 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
   const durationLabel = elapsed !== null && elapsed > 100 ? `${(elapsed / 1000).toFixed(1)}s` : null;
 
   const runtime = toolName === 'shell'
-    ? (jsonString(input, "runtime") ?? 'workspace')
+    ? executorLabel(jsonString(input, "runtime") ?? 'workspace')
     : null;
 
   const provisionErr = parseProvisionError(output);
@@ -347,8 +348,8 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
           <WrenchIcon size={12} className="p-warning mt-0.5 shrink-0" />
           <div className="space-y-1">
             <div>
-              The agent asked for the <code className="font-mono p-fill px-1 rounded-sm">{provisionErr.runtime}</code> runtime
-              but it isn't provisioned yet.
+              The agent asked for <span className="font-medium">{executorLabel(provisionErr.runtime)}</span>, which isn't
+              provisioned yet.
             </div>
             <div className="p-text-3">{provisionErr.message}</div>
             <div className="p-text-3">
@@ -420,6 +421,10 @@ function ToolCallFold({ parts, expandedCalls, onToggleCall }: {
 function ToolCallPart({ part, expanded, onToggleExpand }: { part: AnyToolPart; expanded: boolean; onToggleExpand: () => void }) {
   const output = partOutput(part);
   const input = partInput(part);
+
+  // A call the SDK refused asked nothing: it reads as any refused call does.
+  if (getToolName(part) === ASK_OWNER_TOOL && part.state !== "output-error") return <AskRecord callId={part.toolCallId} input={input} />;
+
   const previewUrl = extractPreviewUrl(output);
 
   return (

@@ -6,7 +6,7 @@ import { env } from 'cloudflare:workers';
 import { abortAllDurableObjects } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import * as v from 'valibot';
-import { REGISTRY_ENTRY, REGISTRY_HOST, REGISTRY_MANIFEST, REGISTRY_PKG } from './npm-registry-fake';
+import { REGISTRY_ENTRY, REGISTRY_HOST, REGISTRY_MANIFEST, REGISTRY_PKG } from '../npm-registry-fake';
 
 it('a slate survives eviction on its own URL', async () => {
   // A stub held across the reset is broken by it; the id survives, so re-acquire.

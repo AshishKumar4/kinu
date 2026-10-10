@@ -5,6 +5,7 @@ export const LIVE_READS = [
   'getExposedPorts', 'getToolDescriptions', 'listSlates', 'getEvolutionChangelog', 'listPendingActions',
   'getMemoryContent', 'getExecutors', 'listBackgroundJobs', 'getWorkspaceTabPresence', 'getActivePlanReview',
   'listWorkspaceWork', 'listWorkspaceAgents', 'listSubordinates', 'getQuality', 'getWorkspaceGitHub', 'inspectWork',
+  'listOwnerQuestions',
 ] as const;
 
 export type LiveRead = typeof LIVE_READS[number];
@@ -49,6 +50,7 @@ const READS_BY_TABLE: ReadonlyMap<string, readonly LiveRead[]> = new Map<string,
   ['workspace_proposals', QUEUE],
   ['proposed_tasks', QUEUE],
   ['plan_reviews', ['getActivePlanReview', 'getToolDescriptions', ...QUEUE, 'listWorkspaceWork', ...AGENTS]],
+  ['owner_questions', ['listOwnerQuestions', 'getWorkspaceTabPresence', ...AGENTS]],
   ['background_jobs', ['listBackgroundJobs', 'getWorkspaceTabPresence']],
   ['background_job_serves', ['listBackgroundJobs', 'getWorkspaceTabPresence']],
   ['agent_tasks', WORK],
@@ -73,6 +75,11 @@ const READS_BY_MEMBERSHIP: ReadonlyMap<string, readonly LiveRead[]> = new Map<st
 const WRITE = /\b(INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE(?:\s+OR\s+\w+)?|DELETE\s+FROM)\s+["`]?(\w+)/i;
 
 const NONE: readonly LiveRead[] = [];
+
+/** The reads that select from tables an agent's own isolate wrote, which this object's statements never touched (D9). */
+export function readsOfTables(tables: readonly string[]): readonly LiveRead[] {
+  return [...new Set(tables.flatMap((table) => READS_BY_TABLE.get(table) ?? NONE))];
+}
 
 export function readsWrittenBy(query: string): readonly LiveRead[] {
   const write = WRITE.exec(query);

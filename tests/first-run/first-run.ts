@@ -458,7 +458,7 @@ export const FIRST_RUN_DEFECTS = {
       + 'kept, not deleted".',
     missedBecause: '`agent-chats-persist` proves EMPLOYED agents keep their chats and never '
       + 'dismisses one, so it passes with the fix (e21207492) reverted. The pre-deploy half '
-      + 'arrived with the fix, in packages/cf-backend/tests/workerd/public-surface.test.ts; no '
+      + 'arrived with the fix, in packages/cf-backend/tests/workerd/wide/public-surface.test.ts; no '
       + 'deployed row read a dismissed agent\'s kept chat the way its pane reads it.',
     provedRedAt: '2eba2c1e5',
     redDirection: 'Run against 2eba2c1e5, the parent of e21207492, served by `vite dev` on '

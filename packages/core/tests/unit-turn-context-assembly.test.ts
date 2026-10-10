@@ -46,6 +46,26 @@ describe('assembleTurnMessages', () => {
     expect(transformSaw).toEqual(HISTORY);
   });
 
+  test('the transform sees each call paired with what it came to, so a summary folding the call keeps it', async () => {
+    let transformSaw: readonly ModelMessage[] = [];
+    const asked: ModelMessage = { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'ask_owner', input: {} }] };
+
+    const extensions = new ExtensionHost().register({
+      name: 'test.summary',
+      transformContext: async (ctx) => {
+        transformSaw = ctx.messages;
+
+        return undefined;
+      },
+    });
+
+    await assembleTurnMessages({
+      ...base(), history: [...HISTORY, asked], extensions, lostToolCall: () => ({ state: 'settled', result: 'The owner answered: cents' }),
+    });
+
+    expect(JSON.stringify(transformSaw.at(-1))).toContain('The owner answered: cents');
+  });
+
   test('the transform\'s result is what the turn assembles', async () => {
     const compacted: ModelMessage[] = [{ role: 'user', content: 'summary' }];
 

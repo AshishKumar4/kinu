@@ -1,3 +1,10 @@
+export {
+  AskingAgentSchema, OwnerAnswersSchema, OwnerQuestionStore,
+  type AskedQuestions, type AskingAgent, type OwnerAnswer, type QuestionStatus,
+} from './plans/owner-questions';
+
+export { AskOwnerInputSchema, OTHER_OPTION, OWNER_ANSWER_SIGNAL, type OwnerQuestion } from './types/owner-questions';
+
 export { initFiberTable, tableExists } from './identity/schema';
 
 export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult, type SubordinateChild } from './subordinates/inspection';
@@ -12,8 +19,8 @@ export { inspectDescendant, inspectSubordinateStorage, type AgentOwnInspection, 
 
 // Backend-neutral terminal-turn state machine: the DO and the CLI supply only effect bodies and a wake.
 export {
-  chatTurnParts, declareTerminalRoster,
-  type TerminalTurnFacts, type TerminalTurnParts,
+  chatTurnParts, declareTerminalRoster, declareHandoffRoster, HandedOffTurnSchema,
+  type HandedOffTurn, type TerminalTurnFacts, type TerminalTurnParts,
 } from './orchestrator/terminal-roster';
 
 export { SleepTimeLane, initSleepTimeUpdatesTable, type SleepTimeLaneDeps } from './orchestrator/sleep-time-lane';
@@ -29,7 +36,7 @@ export {
 } from './orchestrator/terminal-transition';
 
 export {
-  TerminalEffectLedger, initTerminalEffectTable, terminalEffect, chatTerminalEffects, subordinateTerminalEffects, branchesTerminalEffect,
+  TerminalEffectLedger, initTerminalEffectTable, terminalEffect, chatTerminalEffects, turnRecordingEffects, subordinateTerminalEffects, branchesTerminalEffect,
   terminalEffectKey, TerminalEffectInterrupt, isDefinitiveTerminalFailure,
   TERMINAL_EFFECT_RETRY_BASE_MS, TERMINAL_EFFECT_RETRY_CEILING_MS,
   RunEndReasonSchema,
@@ -108,8 +115,8 @@ export {
 export type { ForkFileSink } from './identity/fork-sink';
 
 export {
-  forkPointExists, answersForDrainTurns, conversationTurnPair,
-  type ConversationTurnPair,
+  forkPointExists, answersForDrainTurns, conversationTurnPair, historyTurnPairs,
+  type ConversationTurnPair, type TurnPairReader,
 } from './identity/conversation-store';
 
 export { CHAT_SESSION_ID } from './session/transcript-schema';
@@ -447,6 +454,7 @@ export {
   // A surface that prices a call must use this, exactly as the ledger debits it.
   priceCall,
   localMissionScope,
+  missionGate,
   listMissionSpend,
   type MissionBudgetPort,
   type MissionScope,
@@ -483,7 +491,7 @@ export {
   type ToolReach,
   type BuiltinToolName,
   type BuiltinToolSpec,
-  REPORT_TOOL, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, DEPS_GATED_TOOLS,
+  REPORT_TOOL, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, ASK_OWNER_TOOL, DEPS_GATED_TOOLS,
 } from './tools/registry';
 
 export {
@@ -636,6 +644,7 @@ export {
 } from './subordinates/depth';
 
 export {
+  askOwnerTool,
   buildBuiltinTools,
   codemodeSurface,
   type BuiltinToolDeps,
@@ -1179,7 +1188,7 @@ export {
 } from './memory/facts';
 
 export {
-  AccountMemoryStore, AccountProposalSchema, initAccountMemoryTables,
+  AccountMemoryStore, AccountMemoryProposalSchema, AccountProposalSchema, initAccountMemoryTables,
   type AccountMemory, type AccountMemoryProposal, type AccountMemoryView, type AccountNote, type AccountNoteHit, type AccountProposal,
   type AccountProposalFiling, type AccountProposer,
 } from './memory/account';
@@ -1335,6 +1344,7 @@ export {
   listPendingPlanReviews,
   workModeUnderReview,
   planHandoffStillOwed,
+  approvedTaskPlan,
   planReviewAwaitingDecision,
   planTitle,
   validatePlanEdits,
@@ -1789,7 +1799,7 @@ export {
 
 export { judgeAuthoredEdit, runProposer, SCAFFOLD_ARTIFACT, type ProposerOutcome } from './evolution/proposer';
 
-export { advanceTrial, runningTrial, startTrial, turnArtifactBodies } from './evolution/trials';
+export { advanceTrial, runningTrial, startTrial, turnArtifactBodies, type TurnArtifacts } from './evolution/trials';
 
 export { drawArm, type LiveTrial, type TrialArm, type TrialTurn, type TrialVerdict } from './evolution/trial-rules';
 
@@ -1911,7 +1921,7 @@ export type {
 } from './read-models/workspace-diff';
 
 export {
-  LIVE_READS, LiveReadsNotice, PAGE_KEEPALIVE, READS_CHANGED_EVENT, ROSTER_READS, readsMovedByFiles, readsWrittenBy,
+  LIVE_READS, LiveReadsNotice, PAGE_KEEPALIVE, READS_CHANGED_EVENT, ROSTER_READS, readsMovedByFiles, readsWrittenBy, readsOfTables,
   type LiveRead, type ReadsChangedFrame,
 } from './read-models/live-reads';
 
@@ -1994,7 +2004,7 @@ export type {
   NodeTranscriptView, NodeTranscriptCrumb, NodeTranscriptOrigin,
 } from './read-models/node-transcript';
 
-export { buildPendingActions, needsTheUser, ownerAsks, type AccountAsk, type OwnerAsk } from './read-models/pending-actions';
+export { buildPendingActions, needsTheUser, ownerAsks, type OwnerAsk } from './read-models/pending-actions';
 
 export { reviewParkedWrite, type ParkedWriteReview } from './read-models/write-preview';
 
@@ -2181,7 +2191,7 @@ export {
 } from './preview/preview-origin';
 
 export {
-  reconcilePreviewPorts,
+  previewPortTitle, reconcilePreviewPorts,
   type ExecutorPortRefresh, type ExposedPortList, type PinnedPreviewPort, type PreviewPortState,
 } from './preview/preview-ports';
 
@@ -2247,12 +2257,14 @@ export {
 } from './read-models/alternate-takes';
 
 export {
-  classifyProgrammaticTurn, delegatedTaskMetadata, messageSignalId, isSteeredMessage, endedMidWork, TURN_END_METADATA_KEY, turnFailure, TURN_FAILURE_METADATA_KEY, slatesChanged, SLATES_CHANGED_METADATA_KEY, SLATE_LINK, slatesToPreview, applySignalCard,
+  classifyProgrammaticTurn, delegatedTaskMetadata, messageSignalId, isSteeredMessage, endedMidWork, TURN_END_METADATA_KEY, turnFailure, TURN_FAILURE_METADATA_KEY, slatesChanged, SLATES_CHANGED_METADATA_KEY, slatesToPreview, applySignalCard,
   splicesSeenOn, SIGNALS_SEEN_METADATA_KEY, type SeenSplice,
   parseSignalCardEvent, parseDrainedEvents, eventVariantLabel, eventSourceLabel,
   metadataBroadcastEvent,
   type ClassifiedProgrammaticTurn, type SignalCard, type DrainedEvent,
 } from './read-models/background-event';
+
+export { linkProse, promoteSlateLinks, type MarkdownNode } from './read-models/markdown-links';
 
 export {
   appendHeadDelta, retireHeadDelta, deltaAsMessage, NO_HEAD_DELTAS,
@@ -2326,6 +2338,8 @@ export {
 } from './read-models/tool-call-grouping';
 
 export {
+  type PlanPageRef,
+  type PlanSurfaceKind,
   type SlateSurfaceKind,
   type SurfaceContent,
   type SurfaceKind,
@@ -2334,6 +2348,8 @@ export {
   SURFACES,
   landedSurface,
   openPortOf,
+  planOfSurface,
+  planSurface,
   pruneSlateReloads,
   surfaceHasContent,
 } from './read-models/surface-presence';
@@ -2569,6 +2585,6 @@ export {
 } from './mcp/servers';
 
 export type {
-  AgentTurnActivity, AgentCaptureDelta, AgentTurnOpening, AgentRecovery, AgentAnswerTexts, AgentReview, AgentSnapshot, AgentTurnTask, AgentToolAnswer,
+  AgentTurnActivity, AgentCaptureDelta, AgentTurnOpening, AgentRecovery, AgentAnswer, AgentAnswerTexts, AgentReview, AgentStanding, AgentSteps, AgentSnapshot, AgentTurnTask, AgentToolAnswer,
   AgentToolCall, AgentToolDescriptor, AgentHeadDelta, AgentTrace, AgentTurnEnd, PreparedAgentTurn, StoredRow, TurnRequestAt,
 } from './subordinates/agent-isolate';

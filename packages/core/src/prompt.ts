@@ -324,13 +324,34 @@ export function buildSystemPromptSync(
   rt: AgentRuntime,
   opts: SystemPromptOptions = {},
 ): string {
+  return systemPromptText(buildSystemPromptParts(rt, opts));
+}
+
+/**
+ * The system prompt in two parts: what every workspace's agent of this kind shares, then this workspace's and this
+ * agent's own. A marker strategy caches the shared part as a block of its own (`cacheableSystem`), so a new workspace's
+ * first request reads it.
+ */
+export interface SystemPromptParts {
+  readonly shared: string;
+  readonly own: string;
+}
+
+export function systemPromptText(parts: SystemPromptParts): string {
+  return [parts.shared, parts.own].filter(Boolean).join('\n\n');
+}
+
+export function buildSystemPromptParts(
+  rt: AgentRuntime,
+  opts: SystemPromptOptions = {},
+): SystemPromptParts {
   const surface = compilePromptSurface(opts);
   const render = sectionRenderer(opts.sectionOverrides);
   const lead = rt.actor.parentActorId === null && surface.agentsActions.includes('hire');
 
   // Prefix caching stops at the first differing byte: the core every workspace shares, then the lead doctrine
   // every workspace's own agent shares, then this workspace, then this agent.
-  return [
+  const shared = [
     renderOperatingGuidance(surface, render),
     // Execution doctrine before the tool index: a rule read after the menu is applied late.
     renderExecutorSection(surface, render),
@@ -347,6 +368,9 @@ export function buildSystemPromptSync(
       render(LEAD_INTERRUPTION, {}),
       render(LEAD_DELIVERY, {}),
     ] : []),
+  ];
+
+  const own = [
     renderPlanesSection(rt.planes, render),
     readSoulForPrompt(opts.soulOverride),
     // System placement carries only owner-approved (by digest) and built-in instructions; the rest ride the
@@ -360,5 +384,7 @@ export function buildSystemPromptSync(
     hasUnverifiedInstructions(opts) ? render(WORKSPACE_INSTRUCTIONS_SECTION, {}) : '',
     renderAgentNames(surface, render),
     renderRoleSection(surface, render),
-  ].filter(Boolean).join('\n\n');
+  ];
+
+  return { shared: shared.filter(Boolean).join('\n\n'), own: own.filter(Boolean).join('\n\n') };
 }

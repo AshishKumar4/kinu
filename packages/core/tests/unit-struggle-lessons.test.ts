@@ -11,6 +11,7 @@ import { chatTerminalEffects } from '../src/orchestrator/terminal-effects';
 import type { CompletedTurn } from '../src/evolution/types';
 import { applyStruggleLesson, listToolLessons, type Struggle } from '../src/evolution/struggles';
 import { createTestRuntime } from './helpers';
+import { historyTurnPairs } from '../src/identity/conversation-store';
 
 const LESSON = 'Name `path` in every edit call; edit refuses one without it.';
 
@@ -48,7 +49,7 @@ function engine(first: Answer) {
   const lessons = () => rt.storage.sql<{ id: string; revision: number; text: string; helpful: number; harmful: number; status: string }>`
     SELECT id, revision, text, helpful, harmful, status FROM tool_lessons ORDER BY created_at, id`;
 
-  const evolution = new EvolutionEngine(rt, stores.history);
+  const evolution = new EvolutionEngine(rt, historyTurnPairs(stores.history));
 
   return {
     rt, lessons, prompts, evolution,

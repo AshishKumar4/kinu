@@ -68,6 +68,7 @@ import type {
   ForkPoint,
   LocalSessionControls,
   PlanReviewSurface,
+  OwnerQuestionSurface,
 } from './agent-client';
 
 
@@ -182,6 +183,7 @@ export class LocalAgentClient implements AgentClient {
   readonly localControls: LocalSessionControls;
   readonly checkpoints: FileCheckpointSurface;
   readonly plans: PlanReviewSurface;
+  readonly questions: OwnerQuestionSurface;
   private readonly deps: LocalAgentClientDeps;
   readonly inlineAttachmentLimitBytes = LOCAL_MAX_INLINE_ATTACHMENT_BYTES;
   readonly planes: PathPlanes;
@@ -252,6 +254,10 @@ export class LocalAgentClient implements AgentClient {
       list: (limit, turnId) => this.session.listFileCheckpoints(limit, turnId),
       plan: (dir, id) => this.session.planFileRestore(dir, id),
       restore: (dir, id) => this.session.restoreFileCheckpoint(dir, id),
+    };
+    this.questions = {
+      list: () => this.session.listOwnerQuestions(),
+      answer: (id, answers) => this.session.answerOwnerQuestions(id, answers),
     };
     this.plans = {
       active: () => this.session.getActivePlanReview(),

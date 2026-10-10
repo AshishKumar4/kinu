@@ -35,6 +35,7 @@ import { initDeviceConsentRequestsTable } from '../safety/device-consent';
 import { initWorkspaceProposalsTable } from '../safety/workspace-proposals';
 import { initInstructionApprovalsTable } from '../safety/instruction-trust';
 import { initPlanReviewTable } from '../plans/review';
+import { initOwnerQuestionsTable } from '../plans/owner-questions';
 import { initGitHubActivityTable } from '../github/activity';
 import { initAlternateTakesTable } from '../mcts/takes';
 import { initMctsSearchTable } from '../mcts/search-store';
@@ -165,6 +166,7 @@ export function initActorStateSchema(db: WorkspaceSchemaSql): void {
   initDeviceConsentRequestsTable(execRaw);
   initWorkspaceProposalsTable(execRaw);
   initPlanReviewTable(execRaw);
+  initOwnerQuestionsTable(execRaw);
   initGitHubActivityTable(execRaw);
   // KINU-N028. A missing table must not fail open.
   initInstructionApprovalsTable(execRaw);

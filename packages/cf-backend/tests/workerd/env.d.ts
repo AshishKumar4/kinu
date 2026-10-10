@@ -103,7 +103,6 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   evalAbort(): Promise<{ receipt: string | null; alive: boolean }>;
   prepareChangeNotes(): Promise<ChangeNotesPrepared>;
   completeChangeNotes(workspace: string): Promise<ChangeNotesCompleted>;
-  refusedChangeNotes(): Promise<{ readonly sent: boolean; readonly owed: { readonly sends: number; readonly cards: number } }>;
   claimUnderRecovery(): Promise<ClaimUnderRecovery>;
   strandedWork(): Promise<StrandedWork>;
   agentHeldWork(): Promise<AgentHeldWork>;
@@ -415,6 +414,8 @@ interface DeployDoorProbeRpc extends Rpc.WorkerEntrypointBranded {
 declare global {
   namespace Cloudflare {
     interface Env {
+      RELAY_LIFETIME: Fetcher;
+      RELAY_HOST: Fetcher;
       SLATE_EGRESS_PROBE: DurableObjectNamespace<SlateEgressRpc>;
       RETENTION: DurableObjectNamespace<RetentionDO>;
       NEIGHBOUR: DurableObjectNamespace<NeighbourDO>;

@@ -4,6 +4,7 @@ import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from './actor-handle';
 import type { SessionTranscriptReader } from '../session/transcript';
+import type { SessionHistory } from '../session/history';
 
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
 
@@ -63,6 +64,14 @@ export async function answersForDrainTurns(
 }
 
 /** Named by its assistant entry id; a root answer has a null request. */
+/** A turn's request and response by its answer's id, wherever the conversation lives. */
+export type TurnPairReader = (messageId: string) => Promise<ConversationTurnPair | undefined>;
+
+/** The pairs of an actor's chat, held in this process. */
+export function historyTurnPairs(history: Pick<SessionHistory, 'transcript'>): TurnPairReader {
+  return async (messageId) => await conversationTurnPair(history.transcript(CHAT_SESSION_ID), messageId);
+}
+
 export async function conversationTurnPair(
   transcript: SessionTranscriptReader,
   messageId: string,

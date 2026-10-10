@@ -15,17 +15,21 @@ import {
 } from '@kinu.run/core';
 import { StepPacer } from './step-pacer';
 import { AgentDatabase } from './agent-database';
-import { runAgentTask, type AgentWorkspace } from './agent-turn';
+import { runAgentTask } from './agent-turn';
+import { createAgentProviderRegistry, type AgentProviderDeps, type AgentProviderRegistry } from '../providers/agent-registry';
 import { FacetChat } from './agent-chat';
+import { workspaceClient, type AgentWorkspaceCalls } from './workspace-rpc';
 import type {
-  AgentAnswerTexts, AgentRecovery, AgentSnapshot, AgentTurnEnd, AgentTurnTask, EnqueueTurnResult, ProgrammaticTurn, PromptFile, SendLanding, SendOptions, TurnRequestAt,
-  JsonObject, PlanDecisionOutcome, PlanEdit, PlanReview, PlanReviewDecision, PlanReviewResult, ReviewAnnotation,
+  AgentAnswer, AgentAnswerTexts, AgentStanding, AgentSteps, AgentRecovery, AgentSnapshot, ConversationProjection, ConversationTurnPair, AgentTurnEnd, AgentTurnTask, EnqueueTurnResult, ProgrammaticTurn, PromptFile, SendLanding, SendOptions, TurnRequestAt,
+  JsonObject, PlanDecisionOutcome, PlanEdit, PlanReview, PlanReviewDecision, PlanReviewResult, ReviewAnnotation, AskedQuestions, OwnerAnswer,
+  Page, PageRequest, RunEvent, RunEventQuery, RunListEntry, RunSummary, StoredRunEvent,
 } from '@kinu.run/core';
+import { getRunEvents, getRunEventText, getRunSummaries, listRuns } from '@kinu.run/core';
 
 export type { AgentWorkspace } from './agent-turn';
 
 export interface AgentFacetEnv {
-  readonly WORKSPACE: AgentWorkspace;
+  readonly WORKSPACE: AgentWorkspaceCalls;
   readonly WORKSPACE_NAME: string;
   readonly SHELL_ID: string;
   readonly HOME: string;
@@ -79,12 +83,16 @@ export interface PlanVerdict {
 export interface AgentSend {
   readonly text: string;
   readonly files?: readonly PromptFile[];
+  /** A card's stamp: it is its own turn, never a steer, and it renders from this. */
+  readonly card?: JsonObject;
 }
 
 export interface AgentFacetCalls {
   run(snapshot: AgentSnapshot, task: AgentTurnTask): Promise<AgentTurnEnd>;
   /** Answered once its chat has processed it. */
   enqueue(snapshot: AgentSnapshot, turn: ProgrammaticTurn): Promise<EnqueueTurnResult>;
+  /** Answered once the turn is queued: the workspace's own agent's wakes, handed over from inside the workspace's settles. */
+  queue(snapshot: AgentSnapshot, turn: ProgrammaticTurn): Promise<EnqueueTurnResult>;
   send(snapshot: AgentSnapshot, input: AgentSend, opts: SendOptions): Promise<SendLanding>;
   /** Resolves once its chat has reserved the words, not when they land. */
   admit(snapshot: AgentSnapshot, input: AgentSend, opts: SendOptions): Promise<void>;
@@ -92,15 +100,41 @@ export interface AgentFacetCalls {
   sendState(snapshot: AgentSnapshot, id: string): Promise<SendState>;
   awaitSend(snapshot: AgentSnapshot, id: string): Promise<SendState>;
   interruptChat(snapshot: AgentSnapshot): Promise<readonly string[]>;
+  /** The owner's Stop: unseen steers stay queued and rerun. */
+  stopChat(snapshot: AgentSnapshot): Promise<void>;
   /** What a reset left owed is taken up; the agent tells its workspace what is left once it rests. */
   wake(snapshot: AgentSnapshot): Promise<void>;
-  /** A refusal only the owner could fix, parked in the agent's own ledger, may answer now. */
+  /** The next request is measured on the new settings, and a refusal only the owner could fix may answer now. */
   modelSettingsChanged(snapshot: AgentSnapshot): Promise<void>;
+  /** The chat continues from before `entryId`; refused while a turn runs. */
+  revertTo(snapshot: AgentSnapshot, entryId: string): Promise<void>;
+  /** The owner's Clear; answers why the emptied request went unmeasured, if it did. */
+  clearConversation(snapshot: AgentSnapshot): Promise<string | null>;
   owed(snapshot: AgentSnapshot): Promise<boolean>;
   /** Its own turns and effects still owed, as the workspace's work read reports them. */
   owedWork(snapshot: AgentSnapshot): Promise<readonly InspectedWork[]>;
   /** One of its answers, as its `<slate-ui>` blocks are read from it; null for an id that names no answer of its own. */
   answerTexts(snapshot: AgentSnapshot, messageId: string): Promise<AgentAnswerTexts | null>;
+  /** One of its answers whole, for a lane its workspace runs on it; null for an id that names none. */
+  answer(snapshot: AgentSnapshot, messageId: string): Promise<AgentAnswer | null>;
+  /** Its conversation's newest rows first, for a lane its workspace runs on it. */
+  newestFirst(snapshot: AgentSnapshot, limit: number): Promise<readonly ConversationProjection[]>;
+  /** Where its chat stands between turns, for its window and its workspace's tile; `contextWindow` is its model's. */
+  standing(snapshot: AgentSnapshot, contextWindow: number | null): Promise<AgentStanding>;
+  /** Its runs, newest first, plain or folded with each run's provenance and usage, and one run's events; the workspace's
+   *  own agent's are its workspace's runs. */
+  listRuns(snapshot: AgentSnapshot, request: PageRequest | null): Promise<Page<RunListEntry>>;
+  runSummaries(snapshot: AgentSnapshot, request: PageRequest | null): Promise<Page<RunSummary>>;
+  runEvents(snapshot: AgentSnapshot, runId: string, query: RunEventQuery | null): Promise<RunEvent[]>;
+  runEventText(snapshot: AgentSnapshot, runId: string, query: RunEventQuery | null): Promise<StoredRunEvent[]>;
+  /** Its newest model steps, for the activity its workspace's window reads. */
+  steps(snapshot: AgentSnapshot, limit: number): Promise<AgentSteps>;
+  /** A turn's request and response by its answer's id, for a rating its workspace records; null for none. */
+  turnPair(snapshot: AgentSnapshot, messageId: string): Promise<ConversationTurnPair | null>;
+  /** The metadata of its newest message from a person, which its idle work mode reads; null before any. */
+  lastUserMetadata(snapshot: AgentSnapshot): Promise<JsonObject | null>;
+  /** The answer each drain turn gave, by drain turn id, for the replies its workspace owes. */
+  drainAnswers(snapshot: AgentSnapshot, drainTurnIds: readonly string[]): Promise<Readonly<Record<string, string>>>;
   /** A retirement waits on it. */
   idle(): Promise<void>;
   /** Runs the turn's waiting model step under this call, and answers once it has ended (`StepPacer`). */
@@ -136,9 +170,16 @@ export interface AgentFacetCalls {
   dismissPlanReview(snapshot: AgentSnapshot, id: string, revision: number): Promise<PlanReviewResult>;
   /** The feedback or approval turn is queued in its own chat. */
   decidePlanReview(snapshot: AgentSnapshot, verdict: PlanVerdict): Promise<PlanDecisionOutcome>;
+  /** Its questions to its owner, in its own store: asked on the owner's turns, answered from the workspace's stack. */
+  ownerQuestions(snapshot: AgentSnapshot): Promise<readonly AskedQuestions[]>;
+  /** The answer becomes the asking call's result, and the turn that continues from it is queued in its own chat. */
+  answerOwnerQuestions(snapshot: AgentSnapshot, id: string, answers: readonly OwnerAnswer[]): Promise<void>;
+  dismissOwnerQuestions(snapshot: AgentSnapshot, id: string): Promise<number>;
 }
 
 export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFacetCalls {
+  private readonly workspaceCalls = workspaceClient(this.env.WORKSPACE);
+
   private box: NimbusSandboxHandle | undefined;
 
   private stateBox: NimbusSandboxHandle | undefined;
@@ -152,15 +193,20 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   private readonly pacer = new StepPacer();
 
+  /** The registry this agent's turns resolve their models through, over its own providers. */
+  protected models(deps: Omit<AgentProviderDeps, 'env'>): AgentProviderRegistry {
+    return createAgentProviderRegistry({ ...deps, env: this.env });
+  }
+
   protected workspace(): NimbusSandboxHandle {
-    this.box ??= sandboxHandle(Nimbus.fromSession((): NimbusSessionSurface => this.env.WORKSPACE.session())
+    this.box ??= sandboxHandle(Nimbus.fromSession((): NimbusSessionSurface => this.workspaceCalls.session())
       .sandbox(this.env.WORKSPACE_NAME, { shellId: this.env.SHELL_ID, root: this.env.HOME }));
 
     return this.box;
   }
 
   private state(): NimbusSandboxHandle {
-    this.stateBox ??= sandboxHandle(Nimbus.fromSession((): NimbusSessionSurface => this.env.WORKSPACE.stateSession())
+    this.stateBox ??= sandboxHandle(Nimbus.fromSession((): NimbusSessionSurface => this.workspaceCalls.stateSession())
       .sandbox(this.env.WORKSPACE_NAME, { shellId: this.env.STATE_SHELL_ID }));
 
     return this.stateBox;
@@ -171,9 +217,12 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     this.database ??= new AgentDatabase(this.ctx.storage, {
       agent: () => this.workspace(), home: this.env.HOME, state: () => this.state(),
       enqueueTurn: (input) => this.enqueue(snapshot, input),
+      // A steer's fate rides its chat's events, in order with the turns it names.
+      broadcast: (event) => { this.held?.session.emit({ type: 'broadcast', event }); },
       turnInFlight: () => this.held?.session.turnInFlight() ?? false,
-      memory: () => this.env.WORKSPACE.memory(), program: (...args) => this.env.WORKSPACE.program(...args),
-      sayToParent: (signal) => this.env.WORKSPACE.sayToParent(signal),
+      memory: () => this.workspaceCalls.memory(), program: (...args) => this.workspaceCalls.program(...args),
+      sayToParent: (signal) => this.workspaceCalls.sayToParent(signal),
+      logActivity: (lines) => this.workspaceCalls.logActivity(lines),
     });
     this.database.adopt(snapshot);
 
@@ -183,11 +232,11 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   private async prepared(snapshot: AgentSnapshot): Promise<FacetChat> {
     const database = this.open(snapshot);
     // The workspace's program first: the actor is built on it.
-    const prepared = await this.env.WORKSPACE.prepareChat({ turnId: null, mode: 'build', userText: '', parentDriven: false });
+    const prepared = await this.workspaceCalls.prepareChat({ turnId: null, mode: 'build', userText: '', parentDriven: false });
 
     database.adopt({ ...snapshot, scaffold: [prepared.scaffold] });
     const actor = await database.acquire();
-    const chat = new FacetChat({ actor, database, workspace: this.env.WORKSPACE, providers: this.env, storage: this.ctx.storage, pacer: this.pacer });
+    const chat = new FacetChat({ actor, database, workspace: this.workspaceCalls, models: (deps) => this.models(deps), storage: this.ctx.storage, pacer: this.pacer });
 
     chat.session.measureSessionStart({ restored: chat.session.restoreHistory() });
     this.held = chat;
@@ -205,18 +254,28 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   }
 
   async run(snapshot: AgentSnapshot, task: AgentTurnTask): Promise<AgentTurnEnd> {
-    return await runAgentTask({ database: this.open(snapshot), workspace: this.env.WORKSPACE, providers: this.env, pacer: this.pacer }, task);
+    return await runAgentTask({ database: this.open(snapshot), workspace: this.workspaceCalls, models: (deps) => this.models(deps), pacer: this.pacer }, task);
   }
 
   async enqueue(snapshot: AgentSnapshot, turn: ProgrammaticTurn): Promise<EnqueueTurnResult> {
     return await settle(this.withChat(snapshot, (chat) => chat.session.enqueueTurn(turn)));
   }
 
+  async queue(snapshot: AgentSnapshot, turn: ProgrammaticTurn): Promise<EnqueueTurnResult> {
+    return await settle(this.withChat(snapshot, async (chat) => {
+      const queued = await chat.session.queueTurn(turn);
+
+      await chat.taken();
+
+      return queued;
+    }));
+  }
+
   async send(snapshot: AgentSnapshot, input: AgentSend, opts: SendOptions): Promise<SendLanding> {
     return await settle(this.withChat(snapshot, async (chat) => {
       const landing = await chat.session.send(input.files === undefined ? input.text : { text: input.text, files: input.files }, opts);
 
-      await chat.told();
+      await chat.taken();
 
       return landing;
     }));
@@ -224,8 +283,11 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async admit(snapshot: AgentSnapshot, input: AgentSend, opts: SendOptions): Promise<void> {
     return await settle(this.withChat(snapshot, async (chat) => {
-      await chat.session.admit(input.files === undefined ? input.text : { text: input.text, files: input.files }, opts);
-      await chat.told();
+      const words = input.files === undefined ? input.text : { text: input.text, files: input.files };
+
+      // A card's reservation has nothing of the workspace's to take in its transaction: the workspace takes its own after.
+      await chat.session.admit(words, input.card === undefined ? opts : { ...opts, metadata: input.card, consume: () => {} });
+      await chat.taken();
     }));
   }
 
@@ -251,6 +313,18 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async modelSettingsChanged(snapshot: AgentSnapshot): Promise<void> {
     return await settle(this.withChat(snapshot, (chat) => chat.modelSettingsChanged()));
+  }
+
+  async stopChat(snapshot: AgentSnapshot): Promise<void> {
+    return await settle(this.withChat(snapshot, (chat) => { chat.session.stop(); }));
+  }
+
+  async revertTo(snapshot: AgentSnapshot, entryId: string): Promise<void> {
+    return await settle(this.withChat(snapshot, (chat) => chat.session.revertTo(entryId)));
+  }
+
+  async clearConversation(snapshot: AgentSnapshot): Promise<string | null> {
+    return await settle(this.withChat(snapshot, async (chat) => (await chat.clear())?.message ?? null));
   }
 
   async submitPlan(snapshot: AgentSnapshot, edits: readonly PlanEdit[], driving: JsonObject | undefined): Promise<PlanReviewResult> {
@@ -281,12 +355,68 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return await settle(this.withChat(snapshot, (chat) => chat.planned((plans) => plans.decideAndHandOff(verdict, (turn) => chat.session.enqueueTurn(turn)))));
   }
 
+  async ownerQuestions(snapshot: AgentSnapshot): Promise<readonly AskedQuestions[]> {
+    return await settle(this.withChat(snapshot, (chat) => chat.questions.recent()));
+  }
+
+  async answerOwnerQuestions(snapshot: AgentSnapshot, id: string, answers: readonly OwnerAnswer[]): Promise<void> {
+    return await settle(Effect.flatMap(this.withChat(snapshot, (chat) => chat), (chat) => chat.session.answerQuestions(id, answers)));
+  }
+
+  async dismissOwnerQuestions(snapshot: AgentSnapshot, id: string): Promise<number> {
+    return await settle(this.withChat(snapshot, (chat) => chat.session.dismissQuestions(id)));
+  }
+
   async owed(snapshot: AgentSnapshot): Promise<boolean> {
     return await settle(this.withChat(snapshot, (chat) => chat.session.turnOwed));
   }
 
   async answerTexts(snapshot: AgentSnapshot, messageId: string): Promise<AgentAnswerTexts | null> {
     return await this.open(snapshot).answerTexts(messageId);
+  }
+
+  async answer(snapshot: AgentSnapshot, messageId: string): Promise<AgentAnswer | null> {
+    return await this.open(snapshot).answerOf(messageId);
+  }
+
+  async newestFirst(snapshot: AgentSnapshot, limit: number): Promise<readonly ConversationProjection[]> {
+    return await this.open(snapshot).newestFirst(limit);
+  }
+
+  async standing(snapshot: AgentSnapshot, contextWindow: number | null): Promise<AgentStanding> {
+    return this.open(snapshot).standing(contextWindow);
+  }
+
+  async listRuns(snapshot: AgentSnapshot, request: PageRequest | null): Promise<Page<RunListEntry>> {
+    return listRuns(this.open(snapshot).runs(), request?.cursor ?? null, request?.limit);
+  }
+
+  async runSummaries(snapshot: AgentSnapshot, request: PageRequest | null): Promise<Page<RunSummary>> {
+    return getRunSummaries(this.open(snapshot).runs(), request?.cursor ?? null, request?.limit);
+  }
+
+  async runEvents(snapshot: AgentSnapshot, runId: string, query: RunEventQuery | null): Promise<RunEvent[]> {
+    return getRunEvents(this.open(snapshot).runs(), runId, query ?? undefined);
+  }
+
+  async runEventText(snapshot: AgentSnapshot, runId: string, query: RunEventQuery | null): Promise<StoredRunEvent[]> {
+    return getRunEventText(this.open(snapshot).runs(), runId, query ?? undefined);
+  }
+
+  async steps(snapshot: AgentSnapshot, limit: number): Promise<AgentSteps> {
+    return this.open(snapshot).steps(limit);
+  }
+
+  async turnPair(snapshot: AgentSnapshot, messageId: string): Promise<ConversationTurnPair | null> {
+    return await this.open(snapshot).turnPair(messageId);
+  }
+
+  async lastUserMetadata(snapshot: AgentSnapshot): Promise<JsonObject | null> {
+    return await this.open(snapshot).lastUserMetadata();
+  }
+
+  async drainAnswers(snapshot: AgentSnapshot, drainTurnIds: readonly string[]): Promise<Readonly<Record<string, string>>> {
+    return await this.open(snapshot).drainAnswers(drainTurnIds);
   }
 
   async owedWork(snapshot: AgentSnapshot): Promise<readonly InspectedWork[]> {

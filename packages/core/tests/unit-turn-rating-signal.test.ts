@@ -9,6 +9,7 @@ import { EvolutionEngine } from '../src/evolution/engine';
 import type { CompletedTurn } from '../src/evolution/types';
 import type { DecisionPort } from '../src/providers/decision-model';
 import { createTestRuntime } from './helpers';
+import { historyTurnPairs } from '../src/identity/conversation-store';
 
 const REFLECTION = 'When the user names an API, call that API and no other.';
 
@@ -37,7 +38,7 @@ describe('a turn is judged by the user reply alone', () => {
     rt.craftStore.create({ name: 'export_report', description: 'exports', code: 'async () => "ok"' });
     const before = rt.storage.sql<{ score: number }>`SELECT score FROM crafted_tools WHERE name = 'export_report'`[0]?.score;
 
-    await new EvolutionEngine(rt, stores.history).reviewTurn(turn(), null);
+    await new EvolutionEngine(rt, historyTurnPairs(stores.history)).reviewTurn(turn(), null);
 
     expect(rt.storage.sql<{ score: number }>`SELECT score FROM crafted_tools WHERE name = 'export_report'`[0]?.score)
       .toBe(before);
@@ -47,7 +48,7 @@ describe('a turn is judged by the user reply alone', () => {
     const { rt, stores } = createTestRuntime({ llmResponses: { 'should be done differently next time': REFLECTION } });
     Object.assign(rt, { decide: decide(0.2, 0.95, 'misunderstood') });
 
-    await new EvolutionEngine(rt, stores.history).reviewTurn(turn(), 'No, I said the streaming API. Do it again.');
+    await new EvolutionEngine(rt, historyTurnPairs(stores.history)).reviewTurn(turn(), 'No, I said the streaming API. Do it again.');
 
     expect(rt.storage.sql<{ text: string; status: string }>`SELECT text, status FROM lessons`)
       .toEqual([{ text: REFLECTION, status: 'corroborated' }]);

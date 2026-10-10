@@ -2,12 +2,13 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import * as v from 'valibot';
 import { scratchDir } from '../packages/test-utils/src/scratch';
 import {
   adoptDownloads, adoptTarball, artifactDigest, downloadsServed, evalVerdictRefusal, imagesStagingNeverRan, planRollback, readDownloads,
   readEvalsVerdict, verifyServing, type EvalVerdict, type Promotion, type Verified,
 } from './promote';
-import type { Reset } from './reset';
+import { ResetSchema, type Reset } from './reset';
 
 /** A build's dist, as Vite and the release scripts leave it. */
 function dist(files: Readonly<Record<string, string>>): string {
@@ -247,6 +248,40 @@ describe('a rollback', () => {
     expect(planRollback(HISTORY, 'v4-red', 'now', reset('2026-09-27T00:00:00.000Z')))
       .toEqual({ refused: expect.stringContaining('reset-2026-09-27T00:00:00.000Z') });
     expect(planRollback(HISTORY, 'v4-red', 'now', reset('2026-09-25T00:00:00.000Z'))).toMatchObject({ target: promotion('v3') });
+  });
+
+  test('reads production\'s 2026-10-08 record and permits rollback only within its reset', () => {
+    // Production's stored record, captured before reset-deploy recovery changed the pre-upload gate.
+    const stored = v.parse(ResetSchema, JSON.parse(`{
+      "environment":"production","worker":"kinu","tag":"reset-20261008T141400Z",
+      "at":"2026-10-08T14:14:00.632Z","placeholderVersion":"07413ddd-7ce9-4373-8b7e-51f18bd6c497",
+      "classes":[
+        {"className":"CodexEgress","namespace":"9c57bda830d84e19b393dfa06be3b3db"},
+        {"className":"ControlPlaneDO","namespace":"1296283c2f3e410dac12e49a7b48020f"},
+        {"className":"DeployRunDO","namespace":"77289c3daf6042a598a436e5aa27732c"},
+        {"className":"KinuDevbox","namespace":"f98a35af684342a6863a34290d97457d"},
+        {"className":"MonitorDO","namespace":"8a630ca6558d48b9bdde91ccd6dc7929"},
+        {"className":"MossaicShardDO","namespace":"6975e6a6704f4cbeaf60dffb07630983"},
+        {"className":"MossaicUserDO","namespace":"803e03c29b82422b872034bb4658a5ca"},
+        {"className":"OrchestratorAgent","namespace":"5f50173b974d4ecab0896135de51bf09"},
+        {"className":"UserDO","namespace":"17ad06da85b64943ae393669afe6ac8c"}
+      ],
+      "applications":[
+        {"name":"kinu-kinudevbox","id":"f98a35af684342a6863a34290d97457d"},
+        {"name":"kinu-codexegress","id":"a03536bf-dcab-4248-ac9f-2f30dd0a9fee"}
+      ],
+      "state":"done","chains":{"bucket":"kinu-backups","prefix":"boxes/","objects":0}
+    }`));
+
+    const before = { ...promotion('before'), at: '2026-10-08T13:00:00.000Z' };
+    const after = { ...promotion('after'), at: '2026-10-08T15:00:00.000Z', reset: stored };
+    const current = { ...promotion('current'), at: '2026-10-09T12:00:00.000Z' };
+    const history = [before, after, current];
+
+    const rollback = planRollback(history, current.version, '2026-10-09T13:00:00.000Z', stored);
+
+    expect(rollback).toMatchObject({ target: after });
+    expect('refused' in planRollback(history, after.version, '2026-10-09T13:00:00.000Z', stored)).toBe(true);
   });
 });
 

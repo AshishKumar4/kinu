@@ -27,6 +27,7 @@ import { initEventsHubTables } from '../src/events/hub/schema';
 import type { RunEventInput } from '../src/events/types';
 import { createTestRuntime, makeExecRaw, makeSql, makeSqlExec } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';
+import { historyTurnPairs } from '../src/identity/conversation-store';
 
 function finding(overrides: Partial<RecoveryFinding> = {}): RecoveryFinding {
   return {
@@ -160,7 +161,7 @@ async function grindThenRecover(orch: AgentOrchestrator): Promise<void> {
 describe('the loop, through the production seams', () => {
   test('a recovery observed mid-turn is durable immediately and injectable on the very next step', async () => {
     const { rt, stores } = createTestRuntime();
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
     const events: EvolutionEvent[] = [];
     engine.onEvent((e) => events.push(e));
     const orch = new AgentOrchestrator({ host, engine, eventLog: eventLog() });
@@ -204,7 +205,7 @@ describe('the loop, through the production seams', () => {
 
   test('a finding recorded between two steps reaches the NEXT step\'s request — the episode improves while running', async () => {
     const { rt, stores } = createTestRuntime();
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
     const orch = new AgentOrchestrator({ host, engine, eventLog: eventLog() });
     // The per-step pipeline as both backends wire it.
     const ledger = new DynamicContextLedger();
@@ -239,7 +240,7 @@ describe('the loop, through the production seams', () => {
 
   test('the same finding twice in one episode is one row and one run-event entry per turn', async () => {
     const { rt, stores } = createTestRuntime();
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
     const orch = new AgentOrchestrator({ host, engine, eventLog: eventLog() });
 
     orch.beginTurn(Date.now());
@@ -253,7 +254,7 @@ describe('the loop, through the production seams', () => {
 
   test('with auto-evolution off, nothing is recorded at all — the bench arm measures the loop\'s absence', async () => {
     const { rt, stores } = createTestRuntime();
-    const engine = new EvolutionEngine(rt, stores.history, { enabled: false });
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history), { enabled: false });
     const orch = new AgentOrchestrator({ host, engine, eventLog: eventLog() });
 
     orch.beginTurn(Date.now());
@@ -264,7 +265,7 @@ describe('the loop, through the production seams', () => {
 
   test('the turn boundary clears the run record but never the ledger', async () => {
     const { rt, stores } = createTestRuntime();
-    const engine = new EvolutionEngine(rt, stores.history);
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
     const orch = new AgentOrchestrator({ host, engine, eventLog: eventLog() });
 
     orch.beginTurn(Date.now());

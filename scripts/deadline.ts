@@ -43,7 +43,7 @@ import { appendFileSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { tolerate } from '@kinu.run/core/obs';
-import { procFile, processStartTicks, procUid } from './process-owner';
+import { procFile, processStartTicks } from './process-owner';
 
 /** Seconds between SIGTERM at the bound and SIGKILL, for a child that ignores the first. */
 export const KILL_AFTER_SECONDS = 5;
@@ -176,11 +176,13 @@ export async function endLeftovers(mark: string): Promise<string[]> {
   for (const name of readdirSync('/proc')) {
     const pid = Number(name);
 
-    // A run's process started after this runner and holds an environment this user owns: one that
-    // raised its privileges has it owned by root, and the user's own systemd refuses the read.
+    // A privileged process's proc entries belong to root even when its real uid is ours. Select the process by
+    // status, then let the environ read's EACCES handling account for a capability this reader lacks.
     if (!Number.isSafeInteger(pid) || (processStartTicks(pid) ?? 0) < since) continue;
 
-    if (procUid(pid, 'environ') !== uid) continue;
+    const owner = /^Uid:\s*(\d+)/mu.exec(procFile(pid, 'status') ?? '')?.[1];
+
+    if (owner === undefined || Number(owner) !== uid) continue;
     const environ = await laidOut(pid, 'environ');
 
     if (environ !== undefined && `\0${environ}`.includes(entry)) {

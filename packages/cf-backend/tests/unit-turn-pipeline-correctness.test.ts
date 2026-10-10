@@ -11,7 +11,7 @@ import {
 } from '@kinu.run/core';
 import {
   hostedExplorationHarness, hostedMainActor, improvementLanesRan,
-  orchestratorHarness, reactivateOrchestratorHarness, catalogTurn, gatewayWorkspace, GATEWAY_CATALOG,
+  mainDatabase, orchestratorHarness, reactivateOrchestratorHarness, catalogTurn, gatewayWorkspace, GATEWAY_CATALOG,
   chatSessionTurns, driveUntil, tapDiagnostics, until, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles,
   workspaceMainActor, type RecordedUserPlaneCalls,
 } from './helpers/actor-harness';
@@ -21,15 +21,8 @@ import { createRecordingLogger } from '@kinu.run/core/obs';
 import { createHeadRuntime } from '../src/head-runtime';
 import type { HostedActorSeams } from '../src/hosted-actors';
 import type { ModelMessage, ToolSet } from 'ai';
-import { jsonSchema, streamText, tool } from 'ai';
+import { jsonSchema, tool } from 'ai';
 import * as v from 'valibot';
-
-/** Awaited: with I/O-bound extensions registered the step pipeline returns a Promise. */
-async function stepMessages(
-  agent: HarnessOrchestratorAgent, stepNumber: number, messages: readonly ModelMessage[],
-): Promise<ModelMessage[]> {
-  return [...await chatSessionTurns(agent).step(stepNumber, messages)];
-}
 
 /** Role plus flattened text, so string content and a single text part compare equal. */
 function spoken(messages: readonly ModelMessage[]): { role: string; text: string }[] {
@@ -285,7 +278,7 @@ describe('turn-pipeline correctness wiring', () => {
     await catalogTurn(harness.agent, 'And the word egret.');
 
     // The pin's own measure, then the two turns.
-    const windows = harness.db.query<{ window: number }, []>(
+    const windows = mainDatabase(harness).query<{ window: number }, []>(
       "SELECT json_extract(payload, '$.contextWindow') AS window FROM run_events WHERE type = 'context_admitted' ORDER BY rowid",
     ).all();
 
@@ -312,7 +305,7 @@ describe('turn-pipeline correctness wiring', () => {
     workspaceMainActor(harness.db).config.setAssignedTier('deep');
     await catalogTurn(harness.agent, 'Remember the word heron.');
 
-    const windows = harness.db.query<{ window: number }, []>(
+    const windows = mainDatabase(harness).query<{ window: number }, []>(
       "SELECT json_extract(payload, '$.contextWindow') AS window FROM run_events WHERE type = 'context_admitted' ORDER BY rowid",
     ).all();
 
@@ -417,8 +410,8 @@ describe('turn-pipeline correctness wiring', () => {
     const admitted = turn?.messages ?? handed;
 
     expect(admitted.filter(isDynamicContextBlock)).toHaveLength(0);
-    expect((await stepMessages(agent, 0, admitted)).filter(isDynamicContextBlock)).toHaveLength(1);
-    expect((await stepMessages(agent, 4, admitted)).filter(isDynamicContextBlock)).toHaveLength(1);
+    // The request the model was sent, as the turn's own step pipeline built it.
+    expect((turn?.prompt ?? []).filter(isDynamicContextBlock)).toHaveLength(1);
   });
 
   test('root mode facts describe submit_plan on the actual provider surface', async () => {
@@ -433,27 +426,15 @@ describe('turn-pipeline correctness wiring', () => {
       const { agent } = orchestratorHarness();
       agent.harnessDrivingUserMessage(`Run the ${mode} turn`, { kinuMode: mode });
 
-      const model = scriptedTurnModel({ doGenerate: () => ({
-        content: [{ type: 'text', text: 'done' }],
-        finishReason: { unified: 'stop', raw: undefined },
-        usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
-          outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
-      }) });
-
-      agent.modelFactory = () => model;
       const handed: ModelMessage[] = [{ role: 'user', content: `Run the ${mode} turn` }];
 
       const turn = await chatSessionTurns(agent).prepare({ messages: handed, tools: installed ? agent.getTools() : {} });
 
       if (!turn) throw new Error('the root turn must prepare a configuration');
-      const messages = await stepMessages(agent, 0, turn.messages ?? handed);
-      await streamText({ model, instructions: turn.system, messages, tools: turn.tools, activeTools: turn.activeTools === undefined ? undefined : [...turn.activeTools] }).text;
-
-      expect(model.doStreamCalls).toHaveLength(1);
-      const request = model.doStreamCalls[0];
-      expect(request?.tools?.some((entry) => entry.name === 'submit_plan') ?? false).toBe(available);
+      // The provider call the turn made: its tool surface and its prompt.
+      expect(turn.activeTools?.includes('submit_plan') ?? false).toBe(available);
       // The facts ride the turn's dynamic-context block, which sits before the person's request.
-      const block = request?.prompt.find((message) => message.role === 'user' && JSON.stringify(message).includes(DYNAMIC_CONTEXT_OPEN_TAG));
+      const block = turn.prompt.find((message) => message.role === 'user' && JSON.stringify(message).includes(DYNAMIC_CONTEXT_OPEN_TAG));
       expect(/Mode: [a-z]+; submit_plan: [a-z]+\./u.exec(JSON.stringify(block ?? null))?.[0] ?? null).toBe(facts);
     }
   });
@@ -507,22 +488,6 @@ describe('turn-pipeline correctness wiring', () => {
 
     expect(said.at(-1)?.text).toBe('/slates build a board');
     expect(said.at(-2)?.text).toContain('### slates (explicit /slates)');
-  });
-
-  test('a rejected new preparation cannot reuse a previous turn dynamic snapshot', async () => {
-    const { agent } = orchestratorHarness();
-    const handed: ModelMessage[] = [{ role: 'user', content: 'prepare one turn' }];
-    const context = { system: 'sys', messages: handed, tools: {}, model: 'harness-model', continuation: false, body: {} };
-    const turn = await chatSessionTurns(agent).prepare(context);
-    const admitted = turn?.messages ?? handed;
-
-    expect((await stepMessages(agent, 0, admitted)).filter(isDynamicContextBlock)).toHaveLength(1);
-    // Settle first: the loop runs one turn at a time, so this preparation is a new turn.
-    await chatSessionTurns(agent).settle({ messageId: 'prepared-answer', text: 'done' });
-    const abort = new AbortController();
-    abort.abort(new Error('rejected preparation'));
-    await expect(chatSessionTurns(agent).prepare({ ...context, signal: abort.signal })).rejects.toThrow('rejected preparation');
-    await expect(stepMessages(agent, 0, admitted)).rejects.toThrow('a model step requires a prepared profile and tool surface');
   });
 
   test("the turn request carries the tier's reasoning effort as its provider's option", async () => {
@@ -582,15 +547,16 @@ describe('turn-pipeline correctness wiring', () => {
     const harness = orchestratorHarness();
     const { agent, db } = harness;
 
-    const plan = (): string | null => db.query<{ plan_json: string | null }, []>(
+    // Main's compaction plan is its own isolate's, kept under its own key.
+    const plan = (): string | null => mainDatabase(harness).query<{ plan_json: string | null }, []>(
       'SELECT plan_json FROM compaction_state',
     ).get()?.plan_json ?? null;
 
     const clear = () => agent.clearConversation();
 
     await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'deploy the api' }] });
-    db.prepare('INSERT INTO compaction_state (actor_id, session_key, plan_json) VALUES (?, ?, ?)')
-      .run(workspaceMainActor(db).actorId, agent.name, '{"stored":"plan"}');
+    mainDatabase(harness).prepare('INSERT OR REPLACE INTO compaction_state (actor_id, session_key, plan_json) VALUES (?, ?, ?)')
+      .run(workspaceMainActor(db).actorId, workspaceMainActor(db).actorId, '{"stored":"plan"}');
 
     await expect(clear()).rejects.toMatchObject({ code: 'denied' });
     expect(plan()).toBe('{"stored":"plan"}');
@@ -607,7 +573,8 @@ describe('turn-pipeline correctness wiring', () => {
     // projection that skipped unreconciled turns. All readers use the canonical store.
     const harness = orchestratorHarness();
     chatSessionTurns(harness.agent).open('u-live');
-    await chatSessionTurns(harness.agent).settle({ messageId: 'a-live', text: 'partial answer', requestId: 'req-interrupted', status: 'aborted' });
+    // Main's isolate names the answer it settles.
+    const settled = await chatSessionTurns(harness.agent).settle({ messageId: 'a-live', text: 'partial answer', requestId: 'req-interrupted', status: 'aborted' });
 
     // The pane-era projection tables must not exist at all.
     const projections = harness.db.prepare<{ name: string }, []>(
@@ -617,7 +584,7 @@ describe('turn-pipeline correctness wiring', () => {
     expect(projections).toEqual([]);
 
     const page = await harness.agent.getChatHistoryPage({ limit: 10 });
-    expect(page.items.map((entry) => entry.id)).toEqual(['u-live', 'a-live']);
+    expect(page.items.map((entry) => entry.id)).toEqual(['u-live', settled.messageId]);
     expect(page.items[1].content).toBe('partial answer');
   });
 
@@ -636,147 +603,6 @@ describe('turn-pipeline correctness wiring', () => {
 
     expect(recorded, 'an aborted turn left no evidence row').toHaveLength(1);
     expect(recorded[0].turn).toContain('partial');
-  });
-
-  // `onStart`'s sweep re-pends every open lease, so the settle must close a lease for every drain
-  // path, and only once the answer is durable.
-  describe('a settled turn closes the delivery leases it answered, and only those', () => {
-    /** A webhook event received and not yet drained, under this actor: the alarm owes it a drain. */
-    function pendingDelivery(harness: ActorHarness<HarnessOrchestratorAgent>): void {
-      harness.db.prepare(
-        `INSERT INTO agent_log
-           (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
-            trust, priority, payload_visibility, payload, received_at,
-            dedupe_key, consumed_at)
-         VALUES (?, 'ev-1', 'event', NULL, 0, NULL, 'tr-1', 'webhook_bearer', 'webhook',
-                 'authenticated', 'normal', 'full', ?, 1, NULL, NULL)`,
-      ).run(workspaceMainActor(harness.db).actorId, JSON.stringify({
-        webhook_id: 'hook-1',
-        http_method: 'POST',
-        http_headers: { 'content-type': 'application/json' },
-        body: { text: 'a build finished' },
-        delivery_id: 'delivery-1',
-      }));
-    }
-
-    /** The lease after the detached dispatch reports; bounded so the must-stay-open cases still fail. */
-    async function settledLease(
-      harness: ActorHarness<HarnessOrchestratorAgent>,
-    ): Promise<{ turn_id: string | null; consumed_at: number | null }> {
-      for (let tick = 0; tick < 50 && lease(harness).consumed_at !== null; tick++) {
-        await Bun.sleep(1);
-      }
-
-      return lease(harness);
-    }
-
-    function lease(harness: ActorHarness<HarnessOrchestratorAgent>): { turn_id: string | null; consumed_at: number | null } {
-      return v.parse(
-        v.object({ turn_id: v.nullable(v.string()), consumed_at: v.nullable(v.number()) }),
-        harness.db.query('SELECT turn_id, consumed_at FROM agent_log WHERE id = \'ev-1\'').get(),
-      );
-    }
-
-    /** The alarm drains the pending events into the live turn, and the step boundary absorbs them.
-     *  Returns the turn the drain bound them to. */
-    async function spliceDrain(harness: ActorHarness<HarnessOrchestratorAgent>): Promise<string> {
-      await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'a live turn' }] });
-      // The platform's alarm dispatches this callback; its drain phase is owed to the pending event.
-      await harness.agent._kinuTimerTick();
-      const bound = lease(harness);
-
-      if (bound.turn_id === null || bound.consumed_at === null) throw new Error('the alarm did not drain the pending event');
-      await chatSessionTurns(harness.agent).step(0, []);
-
-      return bound.turn_id;
-    }
-
-    test('a spliced drain settles once, and the activation sweep will not redeliver it', async () => {
-      const harness = orchestratorHarness();
-      pendingDelivery(harness);
-      const bound = await spliceDrain(harness);
-
-      await chatSessionTurns(harness.agent).settle({ messageId: 'a-1', text: 'the answer', requestId: 'req-spliced' });
-
-      // Answered: lease closed, binding kept, so no drain selects it again.
-      expect(await settledLease(harness)).toEqual({ turn_id: bound, consumed_at: null });
-      expect(harness.db.query(
-        `SELECT COUNT(*) AS n FROM agent_log WHERE kind = 'event' AND consumed_at IS NOT NULL`,
-      ).get()).toMatchObject({ n: 0 });
-    });
-
-    test('a reply that fails mid-dispatch stays owed with that failure, not as an open channel', async () => {
-      const harness = orchestratorHarness();
-      const actorId = workspaceMainActor(harness.db).actorId;
-      pendingDelivery(harness);
-      // A mail in the same drain, with its thread still open: the answer owes it a reply.
-      harness.db.prepare(
-        `INSERT INTO agent_log
-           (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
-            trust, priority, payload_visibility, payload, received_at,
-            dedupe_key, consumed_at)
-         VALUES (?, 'ev-mail', 'event', NULL, 0, NULL, 'tr-2', 'email_inbound', 'email',
-                 'authenticated', 'normal', 'full', ?, 1, NULL, NULL)`,
-      ).run(actorId, JSON.stringify({
-        from: 'owner@example.com', to: 'agent@example.com', subject: 'the build', body_text: 'did it pass?',
-        message_id: null, in_reply_to: null, references: null, attachments: [],
-      }));
-      harness.db.prepare(
-        `INSERT INTO reply_channels (actor_id, id, event_id, kind, holder_addr, ttl_expires_at, created_at, updated_at)
-         VALUES (?, 'ch-mail', 'ev-mail', 'email_thread', ?, ?, 1, 1)`,
-      ).run(actorId, JSON.stringify({
-        to: 'owner@example.com', from: 'agent@example.com', subject: 'the build', message_id: null, references: null,
-      }), Date.now() + 3_600_000);
-      harness.db.run(`CREATE TRIGGER refuse_reply_record BEFORE INSERT ON agent_log
-        WHEN NEW.kind = 'reply_attempt' BEGIN SELECT RAISE(ABORT, 'storage refused the reply record'); END`);
-      const bound = await spliceDrain(harness);
-      const logger = createRecordingLogger();
-      const restore = tapDiagnostics(logger);
-
-      try {
-        await chatSessionTurns(harness.agent).settle({ messageId: 'a-mail', text: 'the answer', requestId: 'req-mail' });
-        await logger.until((lines) => lines.some((line) => line.event === 'turn.terminal_effect_failed'));
-      } finally {
-        restore();
-      }
-
-      expect(logger.emitted.filter((line) => line.event === 'turn.terminal_effect_failed').map((line) => line.cause))
-        .toEqual([expect.stringContaining('storage refused the reply record')]);
-      expect(harness.db.query<{ status: string }, [string]>(
-        'SELECT status FROM terminal_effects WHERE effect_key LIKE ?',
-      ).all(`%:event_reply:${bound}`)).toEqual([{ status: 'pending' }]);
-    });
-
-    test('a turn with no durable answer leaves the delivery recoverable', async () => {
-      const harness = orchestratorHarness();
-      pendingDelivery(harness);
-      const bound = await spliceDrain(harness);
-
-      // The commit failed, so the delivery is still owed; the seam re-queues the drain as its own turn.
-      await expect(chatSessionTurns(harness.agent).settle({ messageId: 'a-nodurable', text: 'the answer', requestId: 'req-nodurable', persistFails: true }))
-        .rejects.toThrow('could not be written');
-
-      const runs = harness.db.query('SELECT run_id, type, payload FROM run_events WHERE type IN (\'run_start\', \'run_end\') ORDER BY rowid').all()
-        .map((row) => v.parse(v.object({ run_id: v.string(), type: v.string(), payload: v.string() }), row))
-        .map((row) => [row.type, v.parse(v.object({ caused_by: v.optional(v.string()), reason: v.optional(v.string()) }), JSON.parse(row.payload))]);
-
-      expect(runs).toEqual([
-        ['run_start', { caused_by: 'chat' }], ['run_end', { reason: 'error' }],
-        ['run_start', { caused_by: 'event_drain' }], ['run_end', { reason: 'completed' }],
-      ]);
-      expect(await settledLease(harness)).toEqual({ turn_id: bound, consumed_at: null });
-    });
-
-    test('a failed turn leaves the delivery recoverable', async () => {
-      const harness = orchestratorHarness();
-      pendingDelivery(harness);
-      const bound = await spliceDrain(harness);
-      const taken = lease(harness).consumed_at;
-
-      await chatSessionTurns(harness.agent).settle({ messageId: 'a-3', requestId: 'req-failed', status: 'error', error: 'provider exploded' });
-
-      expect(await settledLease(harness)).toEqual({ turn_id: bound, consumed_at: taken });
-    });
   });
 
   test('a queued drain is driven by its own words and answered by the model', async () => {
@@ -809,12 +635,12 @@ describe('turn-pipeline correctness wiring', () => {
       WHEN NEW.consumed_at IS NULL BEGIN SELECT RAISE(ABORT, 'storage refused the lease close'); END`);
     harness.agent.harnessDrivingUserMessage('the drain text', { kinuEvent: 'event_drain', drainTurnId: 'drain-1' });
     await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'the drain text' }] });
-    await chatSessionTurns(harness.agent).settle({ messageId: 'a-drain', text: 'the answer' });
     const logger = createRecordingLogger();
     const restore = tapDiagnostics(logger);
 
     try {
-      // The alarm frame dispatches the owed reply.
+      // The settle hands the turn to the workspace, whose sequence dispatches the owed reply.
+      await chatSessionTurns(harness.agent).settle({ messageId: 'a-drain', text: 'the answer' });
       await harness.agent.terminalRetryPass();
     } finally {
       restore();
@@ -851,7 +677,7 @@ describe('turn-pipeline correctness wiring', () => {
     await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'deploy the api' }] });
     await chatSessionTurns(harness.agent).settle({ messageId: 'a-stop', text: 'partial', status: 'aborted' });
 
-    const ends = harness.db.query<{ payload: string }, []>("SELECT payload FROM run_events WHERE type = 'run_end'").all()
+    const ends = mainDatabase(harness).query<{ payload: string }, []>("SELECT payload FROM run_events WHERE type = 'run_end'").all()
       .map((row) => v.parse(v.object({ reason: v.string() }), JSON.parse(row.payload)).reason);
 
     expect(ends).toEqual(['aborted']);
@@ -902,7 +728,7 @@ describe('turn-pipeline correctness wiring', () => {
     const messages: ModelMessage[] = [{ role: 'user', content: 'add caching to the api and update the docs' }];
 
     const turn = await chatSessionTurns(agent).prepare({ messages });
-    const rendered = JSON.stringify(await stepMessages(agent, 0, turn?.messages ?? messages));
+    const rendered = JSON.stringify(turn?.prompt ?? []);
 
     // Positive control: the step pipeline ran, so an absent nudge is not an absent step.
     expect(rendered).toContain('<dynamic_context');

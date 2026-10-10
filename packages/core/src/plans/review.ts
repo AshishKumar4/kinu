@@ -18,6 +18,8 @@ import type {
 } from '../types/plans';
 import type { BackendHost, EnqueueTurnResult, ProgrammaticTurn } from '../types/backend-host';
 import { admitReviewAnnotations, byteLength, MAX_PLAN_ANNOTATIONS_BYTES } from './annotation-admission';
+import type { TaskPlan } from '../tools/task-plan-scope';
+import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
 
 export type {
   PlanAnnotationMathTarget, PlanAnnotationTextPosition, PlanDecisionOutcome, PlanEdit,
@@ -74,9 +76,9 @@ export function workModeUnderReview(
   return planReviewAwaitingDecision(active()) ? 'plan' : requested;
 }
 
-/** First non-empty line of the content, headings stripped. */
+/** First non-empty line of the content as plain text: its heading marks and code spans' backticks stripped. */
 export function planTitle(content: string): string {
-  return content.split('\n').find((line) => line.trim())?.replace(/^#+\s*/, '').trim() ?? 'Plan';
+  return content.split('\n').find((line) => line.trim())?.replace(/^#+\s*/, '').replace(/`([^`]*)`/g, '$1').trim() ?? 'Plan';
 }
 
 /** Pending plan reviews workspace-wide with owner name and id. Retired actors stay included: their undecided plan is still undecided. */
@@ -270,9 +272,9 @@ export function planSubmissionReach(mode: WorkMode, driving: JsonObject | undefi
   return mode === 'plan' || planSubmissionAllowed(driving);
 }
 
-/** The owner's own turn, or the feedback turn of their review: the only turns whose plan is the owner's to review. */
+/** The owner's own turn, the feedback turn of their review, or the turn their answer resumes: the owner's conversation. */
 function planSubmissionAllowed(driving: JsonObject | undefined): boolean {
-  return turnAuthor({ metadata: driving }) === 'operator' || driving?.kinuEvent === 'plan_feedback';
+  return turnAuthor({ metadata: driving }) === 'operator' || driving?.kinuEvent === 'plan_feedback' || driving?.kinuEvent === OWNER_ANSWER_SIGNAL;
 }
 
 /**
@@ -347,6 +349,32 @@ const PlanHandoffMetadataSchema = v.object({
   planId: v.string(),
   revision: v.number(),
 });
+
+const PlanApprovalMetadataSchema = v.looseObject({
+  kinuEvent: v.literal('plan_approved'), planId: v.string(),
+  revision: v.pipe(v.number(), v.integer(), v.minValue(1)), decision: v.literal('approve'),
+});
+
+/** The plan a turn implements when it is an approval's handoff, keyed as the decision minted it; honoured only while
+ *  the row still says approved. Null otherwise. */
+export function approvedTaskPlan(
+  item: { readonly kind: 'user' | 'programmatic'; readonly metadata?: JsonObject; readonly idempotencyKey?: string },
+  plans: Pick<PlanReviewStore, 'get'>,
+): TaskPlan | null {
+  const parsed = item.kind === 'programmatic' ? v.safeParse(PlanApprovalMetadataSchema, item.metadata) : null;
+
+  if (parsed?.success !== true) return null;
+  const { planId, revision } = parsed.output;
+  const prefix = `plan:${planId}:${String(revision)}:approve:`;
+  const key = item.idempotencyKey ?? '';
+
+  if (!key.startsWith(prefix) || !/^\d+$/.test(key.slice(prefix.length))) return null;
+  const plan = plans.get(planId, revision);
+
+  return plan?.status === 'approved' && plan.sessionId === CHAT_SESSION_ID
+    ? Object.freeze({ id: plan.id, revision: plan.revision, sessionId: plan.sessionId })
+    : null;
+}
 
 /** Owed while the plan row still holds that decision. */
 export function planHandoffStillOwed(

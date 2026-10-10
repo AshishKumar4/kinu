@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { ToolSet } from 'ai';
 import { decodeJsonValue, type JsonValue, type ReviewAnnotation } from '@kinu.run/core';
-import { orchestratorHarness, chatSessionTurns, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { orchestratorHarness, chatSessionTurns, type ActorHarness, type HarnessOrchestratorAgent, mainDatabase } from './helpers/actor-harness';
 import { toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
@@ -31,7 +31,7 @@ async function codemodeTool(
 function planStatus(harness: ActorHarness<HarnessOrchestratorAgent>, id: string, revision: number): string {
   return v.parse(
     v.object({ status: v.string() }),
-    harness.db.query('SELECT status FROM plan_reviews WHERE id = ? AND revision = ?').get(id, revision),
+    mainDatabase(harness).query('SELECT status FROM plan_reviews WHERE id = ? AND revision = ?').get(id, revision),
   ).status;
 }
 
@@ -226,7 +226,7 @@ describe('Plan mode tool lifecycle', () => {
     const plan = await submittedPlan(agent, '# Plan');
 
     // The acceptance write fails once, after the loop admitted and ran the turn.
-    harness.db.run(`CREATE TRIGGER lose_acceptance BEFORE UPDATE OF handoff_accepted ON plan_reviews
+    mainDatabase(harness).run(`CREATE TRIGGER lose_acceptance BEFORE UPDATE OF handoff_accepted ON plan_reviews
       WHEN NEW.handoff_accepted = 1 BEGIN SELECT RAISE(ABORT, 'actor interrupted after durable acceptance'); END`);
     expect(await agent.decidePlanReview(plan.id, 1, 'approve')).toMatchObject({
       ok: true,
@@ -234,7 +234,7 @@ describe('Plan mode tool lifecycle', () => {
       queueError: expect.stringContaining('actor interrupted after durable acceptance'),
       plan: { status: 'approved', handoffAccepted: false },
     });
-    harness.db.run('DROP TRIGGER lose_acceptance');
+    mainDatabase(harness).run('DROP TRIGGER lose_acceptance');
 
     expect(await agent.decidePlanReview(plan.id, 1, 'approve')).toMatchObject({
       ok: true,

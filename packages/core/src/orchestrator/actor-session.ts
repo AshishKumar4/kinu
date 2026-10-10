@@ -24,7 +24,7 @@ import {
 import type { RunEventRecorder } from '../events/recorder';
 import type { ContextEventRecorder } from '../types/context-plane';
 import type { ContextEntry, ContextSelection } from '../session/context';
-import type { JsonObject } from '../utils/json';
+import { projectJsonValue, type JsonObject } from '../utils/json';
 import { recoveryBackoffMs } from '../utils/recovery-backoff';
 import type { Usage } from '../usage';
 import type { ScaffoldBridgeOpts } from './scaffold-host';
@@ -50,6 +50,11 @@ import { recordTurnResumed, sameBuildOf } from './turn-recovery-events';
 import { decideInterruptedTurn, type InterruptedTurnVerdict } from './turn-recovery';
 import type { ReportedTurn } from '../subordinates/turn-reports';
 import { lostToolCall } from '../tools/effect-claim';
+import { OwnerQuestionStore } from '../plans/owner-questions';
+import { turnReasonForMetadata } from '../prompting/surface';
+import { metadataTier } from './turn-assembly';
+import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
+import { ASK_OWNER_TOOL } from '../tools/registry';
 import type { MessageReference, MessagePartReference, PreparedMessage } from '../session/messages';
 
 /** What the owner reads when a run a dead process left is not run on, by why recovery closed it. */
@@ -88,7 +93,7 @@ export interface ActorSessionOptions {
   readonly advisorPort?: () => TemporaryAgentPort | null;
   /** The profile's `input`: an actor that takes no input (a swarm node, an evolution agent) is not reviewed. */
   readonly reviewed?: boolean;
-  /** The completion gate has asked and not heard back, when the host keeps one. */
+  /** The completion gate has asked and not heard back, when the host keeps one: only the CLI's one-shot surface arms it. */
   readonly gateOpen?: () => boolean;
   readonly turns?: () => TurnTracing;
 }
@@ -202,12 +207,17 @@ export class ActorSession {
   readonly runtime: AgentRuntime;
   readonly orchestrator: AgentOrchestrator;
   readonly canonical: SessionHistory;
+  /** This actor's questions to its owner, in its own storage: the repair reads their answers synchronously. */
+  readonly questions: OwnerQuestionStore;
   /** Every rewrite of the model-visible stream resets it; its blocks are stored. */
   readonly dynamic = new DynamicContextLedger(true);
   private readonly messages: ModelMessage[] = [];
   private readonly landed: LandedSteerRow[] = [];
   private active: ActiveTurn | null = null;
   private mode: WorkMode = 'build';
+
+  /** The running turn's metadata: a question it asks keeps the tier and reason its answer's turn runs under. */
+  private turnMetadata: JsonObject | undefined;
   private restoration: Promise<void> = Promise.resolve();
 
   get currentTurnId(): string | null {
@@ -218,6 +228,7 @@ export class ActorSession {
     this.actorId = options.runtime.actor.actorId;
     this.runtime = options.runtime;
     this.canonical = options.history;
+    this.questions = new OwnerQuestionStore(options.runtime.storage.sql, options.runtime.actor);
 
     this.orchestrator = new AgentOrchestrator(options.orchestration, {
       onDrain: (steers, atStep) => this.landSteers(steers, atStep),
@@ -543,8 +554,11 @@ export class ActorSession {
       for (const [index, message] of (await input.birthContext(drainTurn.output)).entries()) await this.canonical.append({ id: `${lease.turnId}:birth:${index}`, message, origin: 'input', turnId: lease.turnId, assertOwner });
     }
 
-    const acceptedInput = await this.canonical.admitInput({ id: lease.turnId, message: input.message, turnId: lease.turnId, assertOwner });
-    this.canonical.activateInput(acceptedInput, lease.turnId, assertOwner);
+    // An answer's turn continues from the answered call: its row is the transcript's, never the model's.
+    if (input.item.metadata?.kinuEvent !== OWNER_ANSWER_SIGNAL) {
+      const acceptedInput = await this.canonical.admitInput({ id: lease.turnId, message: input.message, turnId: lease.turnId, assertOwner });
+      this.canonical.activateInput(acceptedInput, lease.turnId, assertOwner);
+    }
 
     const opened = await this.canonical.materialize();
     this.requireTurn(lease).context = opened;
@@ -579,6 +593,7 @@ export class ActorSession {
       claim: null, claimSettled: false, trace: null, startedAt: 0, ended: null,
     };
     this.mode = mode;
+    this.turnMetadata = metadata;
     this.landed.length = 0;
     this.orchestrator.beginTurn(startedAt, metadata);
     this.orchestrator.restrictTurnWorkMode(mode);
@@ -884,7 +899,19 @@ export class ActorSession {
       assertActive: input.assertActive,
       scaffoldStreamOptions: input.scaffoldStreamOptions,
       chat: { ...input.chat, tools, history: this.messages, signal: active.abort.signal, extensions,
-        lostToolCall: (call) => lostToolCall(this.runtime.storage.sql, this.runtime.actor, lease.turnId, call),
+        // An answered question is its call's result; any other unpaired call is an interrupted one.
+        lostToolCall: (call) => {
+          const answered = call.toolName === ASK_OWNER_TOOL ? this.questions.outcome({ toolCallId: call.toolCallId, input: projectJsonValue({ value: call.input }) }) : null;
+
+          return answered === null ? lostToolCall(this.runtime.storage.sql, this.runtime.actor, lease.turnId, call) : { state: 'settled', result: answered };
+        },
+        onAsk: (calls) => {
+          const metadata = this.turnMetadata;
+
+          this.questions.ask(calls, { turnId: lease.turnId, mode: this.mode, tier: metadataTier(metadata) ?? null, reason: turnReasonForMetadata(metadata) });
+          this.orchestrator.acc.askedOwner = true;
+        },
+        waitsOn: (call) => this.questions.waitsOn(call),
         measureContext: true, ...(active.trace !== null && { trace: active.trace }),
         persistStreamPart: part => stream.nativePart(part),
         persistStep: (record) => stream.nativeStep(record, () => this.recordStep(record)),

@@ -88,7 +88,7 @@ export const CONVERSATION_CASES: readonly SharedCase[] = [
   },
   {
     title: 'a fence refusing after the revert has forked rolls the whole transaction back',
-    async run({ history, sql, actor }) {
+    async run({ history, chat: { sql, actor } }) {
       await exchange(history, 'q-1', 'Name the release.', 'Aurora.');
       await exchange(history, 'q-2', 'Shorter.', 'Aur.');
       const before = contextRows(sql, actor);
