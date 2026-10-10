@@ -1,5 +1,5 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "noEmit": true, "types": ["bun", "node"], "lib": ["ES2024", "DOM", "DOM.Iterable"], "jsx": "react-jsx" },
-  "include": ["staging.ts", "../turn-file-io-model.ts", "../../packages/core/src/prompts/markdown.d.ts", "../../packages/cf-backend/src/slate-vendor.d.ts"]
+  "include": ["staging.ts", "staging-cpu.ts", "../turn-file-io-model.ts", "../../packages/core/src/prompts/markdown.d.ts", "../../packages/cf-backend/src/slate-vendor.d.ts"]
 }
