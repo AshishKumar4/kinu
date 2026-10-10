@@ -16,6 +16,12 @@ export class OrchestratorAgent extends Product {
     Reflect.deleteProperty(this, 'hostHeads');
     Reflect.deleteProperty(this, 'delegatedRunners');
     Reflect.deleteProperty(this, 'quiesce');
+    Reflect.deleteProperty(this, 'joinDetached');
+  }
+
+  /** What it has detached joined: setting a model tells each agent's isolate, which loads main's (D9). */
+  async joinDetached(): Promise<void> {
+    await this.settleBackgroundTasks();
   }
 
   /** Its sleep-time lane off, and what it has detached or still closing joined: a later phase's measurement in this

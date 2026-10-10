@@ -16,6 +16,13 @@
  * agent in this isolate, while the live heap fell from 28.9 MB to 28.3 MB. So the setup bound is read on the live heap,
  * after the collection a heap snapshot makes, and is derived for that quantity: see {@link HEAP_AFTER_SETUP_BOUND_BYTES}.
  *
+ * Since D9 main runs its model loop, transcript, claims and runs in that Worker Loader isolate, which workerd lists as
+ * an inspector target of its own. Until 2026-10-09 this gate read the workspace's isolate alone, so a step, a long
+ * turn and its churn moved out of every row: on 2ac877244 a parked step read 0.1 MB and the long turn grew 1.2 MB
+ * (armada 20261010033405-50dc7e76), while main's isolate, unread, grew 6.5 MB and allocated 95-104 MB. A megabyte
+ * planted in main's isolate at each turn's end, 2.1 MB over the step's turns, passed that gate and fails this one
+ * (20261010040351-bbe46d65 and -78563353). Each isolate is now read and bounded on its own.
+ *
  * `--no-build` reads the existing `dist/kinu` (a deploy already built it).
  */
 
@@ -41,17 +48,23 @@ export const GATE = 'worker-heap';
 /** The live heap after setup, collected first. Measured 2026-10-09 on integration 44b13e946, three runs: 29.2, 28.9 and
  *  29.2 MB live (27.5 MB used each). The highest, 29.2 MB, plus 4 MB of room for the product to grow.
  *
+ *  Main's isolate is read since 2026-10-09, once setup has joined the model change's detached call that loads it: on
+ *  2ac877244 over 3 runs, 10.8-10.9 MB live there and 29.5 MB in the workspace's (armada 20261010034927-e852fa06).
+ *  Each the highest plus the same 4 MB.
+ *
  *  Until 2026-10-09 this bounded the used heap, garbage included, at 28.5 MB: 45.4 MB used on b0de8580f, where 15
  *  dependents each bundled their own zod; 35.7-36.5 MB over 3 runs on lane/memory-gap 9875bab49 with one; 26.4-26.5 MB
  *  on 871e789f1, where a module compiles when first imported (`new_module_registry`) and the slate vendor waits for a
  *  slate; 25.5-25.6 MB on a21347229, where a provider SDK loads with its first model; 24.4 MB on a9680b282, where core
  *  declares no import-time effects and passkeys and mail load their libraries per route; plus the same 4 MB. */
-export const HEAP_AFTER_SETUP_BOUND_BYTES = 33_200_000;
+export const HEAP_AFTER_SETUP_BOUND_BYTES = { workspace: 33_500_000, main: 14_900_000 } as const;
 
 /** Measured 2026-09-26 at {@link STEP} (2.4 MB of answers): 9.8 MB live in the parked step; 7.3 MB once the Workers
  *  AI fetch stopped copying the request; 4.8 MB once our own prompt text left no character above U+00FF, so V8
- *  keeps the request JSON one byte per character. */
-export const STEP_LIVE_BOUND_BYTES = 5_500_000;
+ *  keeps the request JSON one byte per character. Since D9 the step runs in main's isolate: on 2ac877244, 0.1 MB in
+ *  the workspace's with main's unread; 0.2 MB there and 0.6 MB in main's over 3 runs once both are read
+ *  (armada 20261010034927-e852fa06). Snapshots of one isolate vary by 0.3 MB (the heads row's two batches). */
+export const STEP_LIVE_BOUND_BYTES = { workspace: 1_000_000, main: 1_500_000 } as const;
 
 /** Pre-header cost, measured 2026-09-29 with the native Ai binding and the same 12-answer transcript: 7.2 MB
  * live, including two serialized requests (2,466,160 and 2,466,104 bytes). The platform's
@@ -92,16 +105,20 @@ export const WAITING_PARENT_LIVE_BOUND_BYTES = 14_500_000;
  *  lane/memory-gap 871e789f1. V8 grows the old generation by a factor of what is live, so this row falls only as the
  *  live heap does. Measured 2026-10-01, after the setup, step and heads above in the same isolate: 98.4-104.5 MB
  *  used over 3 runs on lane/staging-fix-1 c7beb9ce1. The collector decides when garbage goes, hence the spread; this
- *  row trips only as the peak nears the 128 MB isolate, and the growth row below is the one that pins what a turn keeps. */
-export const LONG_TURN_PEAK_BOUND_BYTES = 115_000_000;
+ *  row trips only as the peak nears the 128 MB isolate, and the growth row below is the one that pins what a turn keeps.
+ *  Since D9 the turn's model loop runs in main's isolate, which has its own 128 MB: on 2ac877244, 41.9 MB in the
+ *  workspace's with main's unread; 41.1-44.0 MB there and 30.6-31.2 MB in main's over 3 runs once both are read. */
+export const LONG_TURN_PEAK_BOUND_BYTES = { workspace: 115_000_000, main: 115_000_000 } as const;
 
 /** Measured 2026-10-07 at {@link LONG_TURN}: 6.9-7.1 MB over 3 runs on b0de8580f, about 1 MB of it the chat room's relay
  *  of every chunk body and 2 MB workerd's open-pipe promise chains. Measured 2026-10-01: 2.9-6.8 MB over 7 runs on lane/staging-fix-1
  *  c7beb9ce1; 32.1-35.2 MB over 2 with each step's request body left on the AI SDK's record (98517e993 reverted), as
  *  production 2f660875cc ran.
  *  The `file stat` turn this row measured before read 7.7 MB for that defect against 3.6-4.0 MB: its requests shared
- *  the history's strings, where the hosted providers' path copies them for every request. */
-export const LONG_TURN_GROWTH_BOUND_BYTES = 8_500_000;
+ *  the history's strings, where the hosted providers' path copies them for every request.
+ *  Since D9 the turn's history is main's: on 2ac877244, 1.2 MB in the workspace's isolate with main's unread; 1.1 MB
+ *  there and 6.5 MB in main's over 3 runs once both are read (armada 20261010034927-e852fa06). */
+export const LONG_TURN_GROWTH_BOUND_BYTES = { workspace: 2_500_000, main: 8_000_000 } as const;
 
 /** Measured 2026-10-07 at {@link LONG_TURN}, sampled from its start to its settlement: 491-499 MB over 3 runs on
  *  b0de8580f, 351-362 MB on lane/memory-gap 9875bab49 once a tool's JSON Schema is built once and only a decode walks the
@@ -112,13 +129,18 @@ export const LONG_TURN_GROWTH_BOUND_BYTES = 8_500_000;
  *  once written events, render copies, frozen leaves and the context fill stop re-reading what they hold; 292.3-299.4 MB
  *  with the tool catalog (99cda9db0), 274.5-285.5 MB on c5c559cbe once steering, the context head's ids, settling, the
  *  sanitizer, the codec, the seal check, inline payloads, argument digests, span attributes and the agents sql stop
- *  copying or re-walking per step. The sampler's spread is about 15 MB; past this row, a per-step rebuild came back. */
-export const LONG_TURN_ALLOCATED_BOUND_BYTES = 300_000_000;
+ *  copying or re-walking per step. The sampler's spread is about 15 MB; past this row, a per-step rebuild came back.
+ *  Since D9 the turn runs in two isolates, of which this row read the workspace's alone until 2026-10-09: on 2ac877244
+ *  over 3 runs, 145.8-153.1 MB together, 47.7-50.8 MB in the workspace's and 95.0-104.3 MB in main's
+ *  (armada 20261010034927-e852fa06). A step moved from one isolate to the other is the same work. */
+export const LONG_TURN_ALLOCATED_BOUND_BYTES = 170_000_000;
 
 /** Measured 2026-09-26 at {@link STEP} before any copy fix: 13.5 MB, the transcript and, whole, the last request;
  *  11.1 MB (twice) on 2026-09-27 once the root's chat room no longer keeps each answer; 9.8-10.0 MB over 3 runs on
- *  integration 48fa23c62 (2026-09-30), 7.6-7.8 MB over 4 once a turn keeps its origin as a revision, not a clone. */
-export const IDLE_RETAINED_BOUND_BYTES = 8_800_000;
+ *  integration 48fa23c62 (2026-09-30), 7.6-7.8 MB over 4 once a turn keeps its origin as a revision, not a clone.
+ *  Since D9 the transcript is main's: on 2ac877244, 1.9 MB in the workspace's isolate with main's unread; 1.1 MB
+ *  there and 2.6-2.7 MB in main's over 3 runs once setup joins main's load and both are read. */
+export const IDLE_RETAINED_BOUND_BYTES = { workspace: 2_500_000, main: 4_000_000 } as const;
 
 const WranglerSchema = v.object({
   compatibility_date: v.string(),
@@ -265,7 +287,6 @@ function heapMakeup(snapshot: Snapshot): HeapMakeup {
   };
 }
 
-/** One inspector session on the product isolate. */
 interface ProfileNode {
   readonly callFrame: { readonly functionName: string; readonly url: string; readonly lineNumber: number };
   readonly selfSize: number;
@@ -313,19 +334,27 @@ function allocationSites(head: ProfileNode): Allocations {
   return { total, sites };
 }
 
-async function inspect(port: number): Promise<{
+interface Inspector {
   readonly usedHeap: () => Promise<number>;
   readonly liveHeap: () => Promise<number>;
   readonly makeup: () => Promise<HeapMakeup>;
   readonly sampleAllocations: () => Promise<void>;
   readonly allocations: () => Promise<Allocations>;
   readonly close: () => void;
-}> {
-  const targets = v.parse(TargetsSchema, await (await fetch(`http://127.0.0.1:${String(port)}/json`)).json());
-  const product = targets.find((target) => target.id === 'core:user:kinu');
+}
 
-  if (product === undefined) throw new Error(`worker-heap: no inspector target for the product among ${targets.map((t) => t.id).join(', ')}`);
-  const socket = new WebSocket(product.webSocketDebuggerUrl);
+/** One inspector session on the one isolate whose target id `picks` accepts. workerd lists each isolate it made,
+ *  a Worker Loader's too, as `<binding>:<loader key>` (server.c++ at v1.20260930.2, `WorkerLoaderNamespace::loadIsolate`
+ *  and `makeWorkerImpl`). */
+async function inspect(port: number, isolate: string, picks: (id: string) => boolean): Promise<Inspector> {
+  const targets = v.parse(TargetsSchema, await (await fetch(`http://127.0.0.1:${String(port)}/json`)).json());
+  const [target, ...more] = targets.filter((each) => picks(each.id));
+
+  if (target === undefined || more.length > 0) {
+    throw new Error(`worker-heap: no one inspector target for ${isolate} among ${targets.map((t) => t.id).join(', ')}`);
+  }
+
+  const socket = new WebSocket(target.webSocketDebuggerUrl);
   const opened = Promise.withResolvers<void>();
   const replies = new Map<number, (raw: string) => void>();
   let chunks: string[] = [];
@@ -414,11 +443,39 @@ const COMPAT_HOST = 'model.invalid';
 /** The step the heap bounds are about: TURNS turns of ANSWER_BYTES each, then one more parked on the model. */
 export const STEP = { turns: 12, answerBytes: 200_000 } as const;
 
+/** A figure in each isolate a root turn runs in: the workspace's, which every workspace object here shares, and main's
+ *  own Worker Loader isolate, which keeps its model loop, transcript, claims and runs (D9). Each has its own 128 MB.
+ *  Each workspace's main has an isolate of its own: the step's figures are its workspace's main, the long turn's its. */
+export interface Isolates<T> {
+  readonly workspace: T;
+  readonly main: T;
+}
+
+const ISOLATES = ['workspace', 'main'] as const;
+
+const ISOLATE_NAMES = { workspace: "the workspace's isolate", main: "main's isolate" } as const;
+
+/** Main's Worker Loader isolate (D9): its loader key carries its workspace's object id, and main is the one agent a
+ *  workspace has before it hires (`agent-facets.ts`, `agentFacet`). */
+function mainOf(workspace: string): (id: string) => boolean {
+  return (id) => id.startsWith('LOADER:') && id.includes(`:${workspace}:`);
+}
+
+/** `read` in each isolate, the workspace's first. */
+async function inEach<T>(sessions: Isolates<Inspector>, read: (session: Inspector) => Promise<T>): Promise<Isolates<T>> {
+  return { workspace: await read(sessions.workspace), main: await read(sessions.main) };
+}
+
+/** What each isolate holds beyond `before`. */
+function beyond(after: Isolates<number>, before: Isolates<number>): Isolates<number> {
+  return { workspace: after.workspace - before.workspace, main: after.main - before.main };
+}
+
 export interface HeapMeasurement {
   /** What a step parked on the model holds live beyond the idle workspace before it, at {@link STEP}. */
-  readonly stepLive: number;
+  readonly stepLive: Isolates<number>;
   /** What the idle workspace holds after {@link STEP}'s turns beyond right after setup. */
-  readonly idleRetained: number;
+  readonly idleRetained: Isolates<number>;
   /** What a workspace holds live after each of two batches of {@link HEADS} heads was hosted and released, beyond before it. */
   readonly headsRetained: readonly number[];
   /** What a workspace holds live per finished task helper after {@link HELPERS} settle, beyond before them. */
@@ -428,15 +485,15 @@ export interface HeapMeasurement {
   /** What a helper holds live while it waits on a helper of its own, with the root waiting on it, beyond settled. */
   readonly waitingParentLive: number;
   /** The most used heap (uncollected) read at any model call of {@link LONG_TURN}. */
-  readonly longTurnPeak: number;
+  readonly longTurnPeak: Isolates<number>;
   /** What {@link LONG_TURN} holds live at its last model call beyond its first. */
-  readonly longTurnGrowth: number;
-  readonly longTurnAllocated: Allocations;
-  readonly setupMakeup: HeapMakeup;
+  readonly longTurnGrowth: Isolates<number>;
+  readonly longTurnAllocated: Isolates<Allocations>;
+  readonly setupMakeup: Isolates<HeapMakeup>;
   /** Live (collected) heap: after setup, and at the long turn's first and last steps. */
-  readonly live: { readonly setUp: number; readonly longTurnFirst: number; readonly longTurnLast: number };
+  readonly live: { readonly setUp: Isolates<number>; readonly longTurnFirst: Isolates<number>; readonly longTurnLast: Isolates<number> };
   /** What {@link STEP}'s turns allocated on the Workers AI binding path, collected or not. */
-  readonly bindingTurnsAllocated: Allocations;
+  readonly bindingTurnsAllocated: Isolates<Allocations>;
   /** Each character above U+00FF in the requests, with the text before it; the scripted turns write none. */
   readonly wide: readonly string[];
 }
@@ -506,18 +563,22 @@ export async function measure(): Promise<HeapMeasurement> {
       return body;
     };
 
-    await ask('/?workspace=heap');
-    const inspector = await inspect(port);
+    const stepWorkspace = await ask('/?workspace=heap');
+    const sessions: Inspector[] = [];
 
     try {
-      const setUp = await inspector.liveHeap();
-      const setupMakeup = await inspector.makeup();
+      const workspace = await inspect(port, ISOLATE_NAMES.workspace, (id) => id === 'core:user:kinu');
+      sessions.push(workspace);
+      const stepIsolates = { workspace, main: await inspect(port, `${ISOLATE_NAMES.main} in the step's workspace`, mainOf(stepWorkspace)) };
+      sessions.push(stepIsolates.main);
+      const setUp = await inEach(stepIsolates, async (session) => await session.liveHeap());
+      const setupMakeup = await inEach(stepIsolates, async (session) => await session.makeup());
       await ask(`/model?answerBytes=${String(STEP.answerBytes)}`);
-      await inspector.sampleAllocations();
+      await inEach(stepIsolates, async (session) => { await session.sampleAllocations(); });
 
       for (let turn = 0; turn < STEP.turns; turn++) await ask(`/turn?workspace=heap&text=turn-${String(turn)}`);
-      const bindingTurnsAllocated = await inspector.allocations();
-      const idle = await inspector.liveHeap();
+      const bindingTurnsAllocated = await inEach(stepIsolates, async (session) => await session.allocations());
+      const idle = await inEach(stepIsolates, async (session) => await session.liveHeap());
       const answered = streamsOpened;
       await ask(`/model?answerBytes=${String(STEP.answerBytes)}&holding=1`);
       const parked = ask('/turn?workspace=heap&text=parked');
@@ -530,7 +591,7 @@ export async function measure(): Promise<HeapMeasurement> {
         await Bun.sleep(20);
       }
 
-      const during = await inspector.liveHeap();
+      const during = await inEach(stepIsolates, async (session) => await session.liveHeap());
       const { wide } = v.parse(waiting, JSON.parse(await ask(`/model?answerBytes=${String(STEP.answerBytes)}&holding=1`)));
       await ask(`/model?answerBytes=${String(STEP.answerBytes)}`);
       await parked;
@@ -542,32 +603,35 @@ export async function measure(): Promise<HeapMeasurement> {
       const headsRetained: number[] = [];
 
       for (const batch of ['swarm', 'swarm-again']) {
-        const beforeHeads = await inspector.liveHeap();
+        const beforeHeads = await workspace.liveHeap();
         await ask(`/heads?workspace=heads&tag=${batch}&count=${String(HEADS.count)}`);
-        headsRetained.push(await inspector.liveHeap() - beforeHeads);
+        headsRetained.push(await workspace.liveHeap() - beforeHeads);
       }
 
-      await ask('/?workspace=long&compat=1');
+      const longWorkspace = await ask('/?workspace=long&compat=1');
+      const longIsolates = { workspace, main: await inspect(port, `${ISOLATE_NAMES.main} in the long turn's workspace`, mainOf(longWorkspace)) };
+      sessions.push(longIsolates.main);
       await ask(`/model?answerBytes=0&toolSteps=${String(LONG_TURN.steps - 1)}&stepBytes=${String(LONG_TURN.stepBytes)}`);
-      await inspector.sampleAllocations();
+      await inEach(longIsolates, async (session) => { await session.sampleAllocations(); });
       const long = ask('/turn?workspace=long&text=long');
-      let longTurnPeak = 0;
-      let firstLive = 0;
-      let lastLive = 0;
+      let longTurnPeak = { workspace: 0, main: 0 };
+      let firstLive = { workspace: 0, main: 0 };
+      let lastLive = firstLive;
 
       // Each model call parks until released, so the read lands at every step of the turn.
       for (let step = 1; step <= LONG_TURN.steps; step++) {
         while (v.parse(v.object({ arrived: v.number() }), JSON.parse(await ask('/model'))).arrived < step) await Bun.sleep(2);
-        longTurnPeak = Math.max(longTurnPeak, await inspector.usedHeap());
+        const used = await inEach(longIsolates, async (session) => await session.usedHeap());
+        longTurnPeak = { workspace: Math.max(longTurnPeak.workspace, used.workspace), main: Math.max(longTurnPeak.main, used.main) };
 
-        if (step === 1) firstLive = await inspector.liveHeap();
+        if (step === 1) firstLive = await inEach(longIsolates, async (session) => await session.liveHeap());
 
-        if (step === LONG_TURN.steps) lastLive = await inspector.liveHeap();
+        if (step === LONG_TURN.steps) lastLive = await inEach(longIsolates, async (session) => await session.liveHeap());
         await ask(`/model?released=${String(step)}`);
       }
 
       await long;
-      const longTurnAllocated = await inspector.allocations();
+      const longTurnAllocated = await inEach(longIsolates, async (session) => await session.allocations());
 
       // A root turn returns once it has hired; its helpers' turns end with their runners, each after its release.
       const noRunners = async (left: number): Promise<void> => {
@@ -595,10 +659,10 @@ export async function measure(): Promise<HeapMeasurement> {
       await hire(HELPERS.warm);
       // A helper counts as answered before its final stream ends, so a snapshot waits for its runner to release too.
       await noRunners(0);
-      const beforeHelpers = await inspector.liveHeap();
+      const beforeHelpers = await workspace.liveHeap();
       await hire(HELPERS.count);
       await noRunners(0);
-      const settledHelpers = await inspector.liveHeap();
+      const settledHelpers = await workspace.liveHeap();
       const perHelperRetained = (settledHelpers - beforeHelpers) / HELPERS.count;
 
       // One helper held at its last working step: what a running helper turn holds beyond a settled one.
@@ -606,7 +670,7 @@ export async function measure(): Promise<HeapMeasurement> {
       const running = ask('/turn?workspace=helpers&text=HIRE-ROOT');
 
       while (!v.parse(v.object({ helperParked: v.boolean() }), JSON.parse(await ask('/model'))).helperParked) await Bun.sleep(50);
-      const helperTurnLive = await inspector.liveHeap() - settledHelpers;
+      const helperTurnLive = await workspace.liveHeap() - settledHelpers;
       await ask('/model?holdHelper=0');
       await running;
       await noRunners(0);
@@ -619,15 +683,15 @@ export async function measure(): Promise<HeapMeasurement> {
 
       // Waiting: the helper's turn ended with its hire's answer owed, so the held hire's runner is the only one left.
       await noRunners(1);
-      const waitingParentLive = await inspector.liveHeap() - settledHelpers;
+      const waitingParentLive = await workspace.liveHeap() - settledHelpers;
       await ask('/model?holdHelper=0');
       await nested;
       await noRunners(0);
       await ask('/model?hires=0&nest=0');
 
-      return { stepLive: during - idle, idleRetained: idle - setUp, headsRetained, perHelperRetained, helperTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: lastLive - firstLive, longTurnAllocated, bindingTurnsAllocated, setupMakeup, live: { setUp, longTurnFirst: firstLive, longTurnLast: lastLive }, wide };
+      return { stepLive: beyond(during, idle), idleRetained: beyond(idle, setUp), headsRetained, perHelperRetained, helperTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: beyond(lastLive, firstLive), longTurnAllocated, bindingTurnsAllocated, setupMakeup, live: { setUp, longTurnFirst: firstLive, longTurnLast: lastLive }, wide };
     } finally {
-      inspector.close();
+      for (const session of sessions) session.close();
     }
   } finally {
     await mf.dispose();
@@ -642,6 +706,11 @@ function printAllocations(workload: string, allocated: Allocations): void {
   console.log(`${GATE}: ${workload} allocated ${mb(allocated.total)}; most by`);
 
   for (const site of allocated.sites) console.log(`  ${mb(site.bytes).padStart(9)}  ${site.site}`);
+}
+
+/** A figure in the workspace's isolate, then in main's. */
+function inEachIsolate(figures: Isolates<number>): string {
+  return `${mb(figures.workspace)} (main's isolate ${mb(figures.main)})`;
 }
 
 function transcript(): string {
@@ -666,36 +735,56 @@ async function main(args: readonly string[]): Promise<number> {
   // One character above U+00FF stores a whole module's retained source two bytes per character.
   const wide = graph.filter((module) => module.endsWith('.js') && isWide(readFileSync(join(DIST, module), 'utf8')));
   const measured = await measure();
-  // A deployed object dies of allocation bursts, not only of what it keeps (platform-catalog `worker.memory_kill_is_burst_sensitive`),
-  // so each workload's churn is named by the code that makes it.
-  printAllocations(`the ${String(LONG_TURN.steps)}-step turn on the OpenAI-compatible path`, measured.longTurnAllocated);
-  printAllocations(`${transcript()} on the Workers AI binding`, measured.bindingTurnsAllocated);
-  console.log(`${GATE}: live heap ${mb(measured.live.setUp)} after setup, ${mb(measured.live.longTurnFirst)} at the long turn's first step, `
-    + `${mb(measured.live.longTurnLast)} at its last; it peaked at ${mb(measured.longTurnPeak)} used, garbage included`);
-  console.log(`${GATE}: the live heap after setup, by kind`);
+  const steps = `${String(LONG_TURN.steps)}-step turn`;
 
-  for (const each of measured.setupMakeup.kinds) console.log(`  ${mb(each.bytes).padStart(9)}  ${String(each.count).padStart(7)}  ${each.kind}`);
+  for (const isolate of ISOLATES) {
+    const where = ISOLATE_NAMES[isolate];
+    // A deployed object dies of allocation bursts, not only of what it keeps (platform-catalog `worker.memory_kill_is_burst_sensitive`),
+    // so each workload's churn is named by the code that makes it.
+    printAllocations(`the ${steps} on the OpenAI-compatible path, in ${where},`, measured.longTurnAllocated[isolate]);
+    printAllocations(`${transcript()} on the Workers AI binding, in ${where},`, measured.bindingTurnsAllocated[isolate]);
+    console.log(`${GATE}: in ${where}, live heap ${mb(measured.live.setUp[isolate])} after setup, ${mb(measured.live.longTurnFirst[isolate])} at the long `
+      + `turn's first step, ${mb(measured.live.longTurnLast[isolate])} at its last; it peaked at ${mb(measured.longTurnPeak[isolate])} used, garbage included`);
+    console.log(`${GATE}: the live heap after setup in ${where}, by kind`);
 
-  for (const each of measured.setupMakeup.strings) console.log(`  ${mb(each.bytes).padStart(9)}  one string: ${JSON.stringify(each.head)}`);
+    for (const each of measured.setupMakeup[isolate].kinds) console.log(`  ${mb(each.bytes).padStart(9)}  ${String(each.count).padStart(7)}  ${each.kind}`);
+
+    for (const each of measured.setupMakeup[isolate].strings) console.log(`  ${mb(each.bytes).padStart(9)}  one string: ${JSON.stringify(each.head)}`);
+  }
+
   const findings: string[] = [];
 
   if (wide.length > 0) findings.push(`${wide.join(', ')} carry characters outside ASCII, which V8 keeps two bytes each`);
 
   if (wasm.length > 0) findings.push(`index.js instantiates ${wasm.join(', ')} at load: a static import reaches it`);
 
-  if (measured.live.setUp > HEAP_AFTER_SETUP_BOUND_BYTES) {
-    findings.push(`live heap after setup ${mb(measured.live.setUp)} exceeds ${mb(HEAP_AFTER_SETUP_BOUND_BYTES)}`);
-  }
-
-  if (measured.stepLive > STEP_LIVE_BOUND_BYTES) {
-    findings.push(`a parked step holds ${mb(measured.stepLive)} live at ${transcript()}, over ${mb(STEP_LIVE_BOUND_BYTES)}`);
-  }
-
   // Our own prompt, tool and skill text: the owner's and the model's text may still carry such characters.
   for (const context of measured.wide) findings.push(`the request carries a character above U+00FF, so V8 keeps it two bytes each: ${JSON.stringify(context)}`);
 
-  if (measured.idleRetained > IDLE_RETAINED_BOUND_BYTES) {
-    findings.push(`the idle workspace holds ${mb(measured.idleRetained)} after ${transcript()}, over ${mb(IDLE_RETAINED_BOUND_BYTES)}`);
+  // Each isolate has its own 128 MB, so each is bounded on its own: a figure moved from one to the other moves to
+  // the other's bound.
+  for (const isolate of ISOLATES) {
+    const where = ISOLATE_NAMES[isolate];
+
+    if (measured.live.setUp[isolate] > HEAP_AFTER_SETUP_BOUND_BYTES[isolate]) {
+      findings.push(`live heap after setup in ${where} ${mb(measured.live.setUp[isolate])} exceeds ${mb(HEAP_AFTER_SETUP_BOUND_BYTES[isolate])}`);
+    }
+
+    if (measured.stepLive[isolate] > STEP_LIVE_BOUND_BYTES[isolate]) {
+      findings.push(`a parked step holds ${mb(measured.stepLive[isolate])} live in ${where} at ${transcript()}, over ${mb(STEP_LIVE_BOUND_BYTES[isolate])}`);
+    }
+
+    if (measured.idleRetained[isolate] > IDLE_RETAINED_BOUND_BYTES[isolate]) {
+      findings.push(`the idle workspace holds ${mb(measured.idleRetained[isolate])} in ${where} after ${transcript()}, over ${mb(IDLE_RETAINED_BOUND_BYTES[isolate])}`);
+    }
+
+    if (measured.longTurnGrowth[isolate] > LONG_TURN_GROWTH_BOUND_BYTES[isolate]) {
+      findings.push(`a ${steps} holds ${mb(measured.longTurnGrowth[isolate])} more live in ${where} at its last step than its first, over ${mb(LONG_TURN_GROWTH_BOUND_BYTES[isolate])}`);
+    }
+
+    if (measured.longTurnPeak[isolate] > LONG_TURN_PEAK_BOUND_BYTES[isolate]) {
+      findings.push(`a ${steps} peaks at ${mb(measured.longTurnPeak[isolate])} used in ${where}, over ${mb(LONG_TURN_PEAK_BOUND_BYTES[isolate])}`);
+    }
   }
 
   for (const retained of measured.headsRetained) {
@@ -716,26 +805,22 @@ async function main(args: readonly string[]): Promise<number> {
     findings.push(`a helper waiting on its own hire holds ${mb(measured.waitingParentLive)} live, over ${mb(WAITING_PARENT_LIVE_BOUND_BYTES)}`);
   }
 
-  if (measured.longTurnGrowth > LONG_TURN_GROWTH_BOUND_BYTES) {
-    findings.push(`a ${String(LONG_TURN.steps)}-step turn holds ${mb(measured.longTurnGrowth)} more live at its last step than its first, over ${mb(LONG_TURN_GROWTH_BOUND_BYTES)}`);
-  }
+  // The churn is the turn's work, wherever it runs.
+  const allocated = { workspace: measured.longTurnAllocated.workspace.total, main: measured.longTurnAllocated.main.total };
 
-  if (measured.longTurnAllocated.total > LONG_TURN_ALLOCATED_BOUND_BYTES) {
-    findings.push(`a ${String(LONG_TURN.steps)}-step turn allocates ${mb(measured.longTurnAllocated.total)}, over ${mb(LONG_TURN_ALLOCATED_BOUND_BYTES)}`);
-  }
-
-  if (measured.longTurnPeak > LONG_TURN_PEAK_BOUND_BYTES) {
-    findings.push(`a ${String(LONG_TURN.steps)}-step turn peaks at ${mb(measured.longTurnPeak)} used, over ${mb(LONG_TURN_PEAK_BOUND_BYTES)}`);
+  if (allocated.workspace + allocated.main > LONG_TURN_ALLOCATED_BOUND_BYTES) {
+    findings.push(`a ${steps} allocates ${mb(allocated.workspace + allocated.main)} across its isolates, ${inEachIsolate(allocated)}, over ${mb(LONG_TURN_ALLOCATED_BOUND_BYTES)}`);
   }
 
   // Every figure, red or green, so two runs compare.
-  console.log(`${GATE}: ${mb(measured.live.setUp)} live after setup, a parked step holds ${mb(measured.stepLive)} live at `
-    + `${transcript()}, the idle workspace holds ${mb(measured.idleRetained)} after them, `
+  console.log(`${GATE}: ${inEachIsolate(measured.live.setUp)} live after setup, a parked step holds ${inEachIsolate(measured.stepLive)} live at `
+    + `${transcript()}, the idle workspace holds ${inEachIsolate(measured.idleRetained)} after them, `
     + `${String(HEADS.count)} released heads leave ${measured.headsRetained.map((bytes) => mb(bytes)).join(' then ')}, a finished helper `
     + `${mb(measured.perHelperRetained)}, a running helper turn ${mb(measured.helperTurnLive)}, a helper waiting on its `
-    + `own hire ${mb(measured.waitingParentLive)}, a ${String(LONG_TURN.steps)}-step turn peaks at `
-    + `${mb(measured.longTurnPeak)} used and grows ${mb(measured.longTurnGrowth)} live; no wasm on the static graph, every module ASCII, every request Latin-1`);
-  console.log('  blind: garbage is sampled once per model call, so a spike inside a step is missed; transcripts shaped unlike these; and memory outside V8 (compiled wasm, SQLite pages)');
+    + `own hire ${mb(measured.waitingParentLive)}, a ${steps} peaks at ${inEachIsolate(measured.longTurnPeak)} used, grows `
+    + `${inEachIsolate(measured.longTurnGrowth)} live and allocates ${inEachIsolate(allocated)}; no wasm on the static graph, every module ASCII, every request Latin-1`);
+  console.log('  blind: garbage is sampled once per model call, so a spike inside a step is missed; transcripts shaped unlike these; a hired '
+    + 'helper\'s own Worker Loader isolate, where its turns run (the helper rows read the workspace\'s); and memory outside V8 (compiled wasm, SQLite pages)');
 
   if (findings.length > 0) {
     console.error(`${GATE}: ${String(findings.length)} finding(s)\n`);

@@ -19,6 +19,8 @@ interface WorkspaceRpc extends Rpc.DurableObjectBranded {
   delegatedRunners(): Promise<number>;
   /** `worker-heap/product.ts`'s probe RPC. */
   quiesce(): Promise<void>;
+  /** `worker-heap/product.ts`'s probe RPC. */
+  joinDetached(): Promise<void>;
 }
 
 interface AccountRpc extends Rpc.DurableObjectBranded {
@@ -40,8 +42,9 @@ interface DriverEnv {
 const OWNER = 'fedcba9876543210fedcba9876543211';
 
 export class HeapDriver extends DurableObject<DriverEnv> {
-  /** `compat`: the workspace runs on the OpenAI-compatible path, the one the hosted providers (OpenRouter, OpenCode Go) take. */
-  async setUp(workspace: string, compat: boolean): Promise<void> {
+  /** `compat`: the workspace runs on the OpenAI-compatible path, the one the hosted providers (OpenRouter, OpenCode Go) take.
+   *  Answers the workspace's object id, which names its agents' Worker Loader isolates. */
+  async setUp(workspace: string, compat: boolean): Promise<string> {
     const caller = { ownerToken: this.env.OWNER_TOKEN };
     const users = this.env.UserDO.get(this.env.UserDO.idFromName(OWNER));
     const agent = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace));
@@ -53,6 +56,10 @@ export class HeapDriver extends DurableObject<DriverEnv> {
 
     if (compat) await users.setCredential(caller, 'openai-compat.default', { kind: 'openai-compat', baseURL: `http://${this.env.COMPAT_HOST}`, apiKey: 'heap' });
     await agent.setModel(compat ? SCRIPTED_MODEL_SPEC : 'workers-ai/@cf/zai-org/glm-5.3');
+    // The model's change reaches main's isolate detached, and loads it: setup ends once it has.
+    await agent.joinDetached();
+
+    return agent.id.toString();
   }
 
   /** One root turn through the product's MCP entry, as a caller outside the page runs one. */
@@ -281,7 +288,7 @@ export default {
     if (url.pathname === '/turn') await driver.turn(workspace, url.searchParams.get('text') ?? 'hello');
     else if (url.pathname === '/heads') await driver.heads(workspace, url.searchParams.get('tag') ?? 'head', Number(url.searchParams.get('count')));
     else if (url.pathname === '/quiesce') await driver.quiesce(workspace);
-    else await driver.setUp(workspace, url.searchParams.get('compat') === '1');
+    else return new Response(await driver.setUp(workspace, url.searchParams.get('compat') === '1'));
 
     return new Response(null, { status: 204 });
   },
