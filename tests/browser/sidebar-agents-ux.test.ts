@@ -202,6 +202,35 @@ describe('who is at work, and who is who', () => {
     });
   });
 
+  // The owner, 2026-10-10: the tab mascots a step bigger, each wearing something picked at random but its own.
+  test('each agent wears its own accessory at every size, Main the crown, a few nothing, and the waiting dot over all', async () => {
+    await withGallery(async (gallery) => {
+      const page = await gallery.newPage();
+
+      try {
+        await page.goto(`${gallery.origin}/gallery.html?frame=characters`, { waitUntil: 'networkidle0' });
+        await page.waitForSelector('[data-mascot-size="32"] .p-mascot');
+
+        const worn = await page.evaluate(() => Object.fromEntries(['16', '32'].map((size) => [size,
+          [...document.querySelectorAll(`[data-mascot-size="${size}"] [data-mascot-state="idle"] .p-mascot`)]
+            .map((mascot) => mascot.getAttribute('data-accessory') ?? 'none')])));
+
+        // The dot is the last thing drawn, so nothing an agent wears covers it.
+        const dotLast = await page.$$eval('[data-mascot-state="waiting"] .p-mascot svg', (tiles) => tiles.every((tile) => tile.lastElementChild?.classList.contains('p-mascot-badge') === true));
+        // A tile takes the box it always took, so a tab's name loses nothing to it.
+        const boxes = await page.$$eval('[data-mascot-size="16"] .p-mascot', (mascots) => [...new Set(mascots.map((mascot) => mascot.getBoundingClientRect().width))]);
+
+        expect(worn['16']).toEqual(worn['32']);
+        expect(worn['16']?.[0]).toBe('crown');
+        expect(new Set(worn['16'])).toEqual(new Set(['crown', 'party', 'beanie', 'tophat', 'cap', 'bow', 'headphones', 'glasses', 'flower', 'none']));
+        expect(worn['16']?.slice(1).filter((accessory) => accessory === 'crown')).toEqual([]);
+        expect({ dotLast, boxes }).toEqual({ dotLast: true, boxes: [16] });
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
   test('agents at work with no tab spin on the All agents row and are counted on the bar\'s agents button', async () => {
     await withGallery(async (gallery) => {
       // The fixture's out-of-sight workers: the coupon auditor it hired, and two swarm workers.
