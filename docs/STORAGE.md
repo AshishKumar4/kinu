@@ -2,14 +2,15 @@
 
 A hosted workspace has one shared authority: its `OrchestratorAgent` Durable
 Object. Nimbus runs over that object's `ctx.storage.sql` and owns the workspace
-files and execution state. The workspace also keeps the roster, main's state,
-shared ledgers and tool execution. No shadow VFS or file sync path runs between
-agents.
+files and execution state. The workspace also keeps the roster, the shared
+ledgers (evolution, event log, jobs, tasks, missions), main's handed-over turns
+and the facts each kept from its preparation (`main_turn_facts`), and tool
+execution. No shadow VFS or file sync path runs between agents.
 
-Every non-main agent has an `AgentFacet` in a Worker Loader isolate, with its
-own SQLite for conversations, turn and effect claims, and run events. Hired,
-swarm and background agents use the same class and turn runner; their roster
-rows remain in `workspace_actors` in the workspace database. A selected
+Every agent, main included, has an `AgentFacet` in a Worker Loader isolate, with
+its own SQLite for its conversation, turn and effect claims, run events, plans
+and owner questions. Main, hired, swarm and background agents use the same class;
+their roster rows remain in `workspace_actors` in the workspace database. A selected
 scaffold row is handed to the facet before its turn, while the program's bytes
 remain on the shared agent-state file plane. Export visits each retained
 agent's database, including retired task agents. Only destruction wipes a

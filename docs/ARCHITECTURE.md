@@ -65,14 +65,14 @@ interception. [WORKSPACES.md](./WORKSPACES.md) holds the noun model;
 
 ## The actor hierarchy
 
-The workspace hosts main and the shared services; non-main turns run in facets:
+The workspace hosts the shared services; every agent's turns, main's included, run in its facet:
 
 ```mermaid
 graph TB
     A["Agent&lt;Env&gt;: agents SDK"]
     AA["ActorAgent (abstract)<br/>cf-backend/src/actor-agent.ts<br/>runtime · BackendHost · AgentOrchestrator<br/>ExtensionHost · ChatSession ports"]
     O["OrchestratorAgent<br/>agents: swarm · hire · msg · list · dismiss<br/>codemode: release · agent"]
-    H["AgentFacet<br/>subordinate · head · node · background<br/>own isolate and SQLite; workspace RPC for tools"]
+    H["AgentFacet<br/>main · subordinate · head · node · background<br/>own isolate and SQLite; workspace RPC for tools"]
     OMS["OwnedModelServices<br/>owner-scoped provider · model<br/>affinity · web search"]
 
     A --> AA
@@ -83,18 +83,23 @@ graph TB
 
 `ActorAgent` (`packages/cf-backend/src/actor-agent.ts`) extends the Agents SDK's
 `Agent<Env>` for SQL, sockets, schedules, and fibers. Core's `ActorSession` and
-`ChatSession` own inference and recovery. `ActorAgent` owns once what every
-full-loop actor needs: the Cloudflare runtime assembly, the `BackendHost`, the
-shared `AgentOrchestrator`, `ExtensionHost` plus compaction, prompt, model, and
-tool caches, and the ports `ChatSession` calls. A subclass supplies the abstract
-members (`getOwnerUserId`, `actorHandle`, `actorDirectory`, `actorKind`,
-`workspaceBox`, `actorToolDeps`, `engine`, `notifyOwner`,
-`delegationBudget`, `actorHost`, `actorDirectoryStore`, `hostedSeams`,
-`hostedChatWire`, `owedTerminalEffects`, `ownMission`,
-`persistAutoTitle`, `promptIdentity`, `transcriptFor`) and may override three
-hooks (`workspaceName`, `extraCodemodeProviders`, `isClientRpcMethodDenied`).
-One subclass exists: the orchestrator. Every other actor is a logical row the
-orchestrator's host acquires, not a class.
+`ChatSession` own inference and recovery, in each agent's isolate (`FacetChat`,
+`packages/cf-backend/src/agent-facet/agent-chat.ts`). `ActorAgent` owns once what
+the workspace serves every agent: the Cloudflare runtime assembly, the
+`BackendHost`, the shared `AgentOrchestrator`, `ExtensionHost` plus prompt, model,
+and tool caches, and main's tool surface. A subclass supplies the abstract
+members: the actor's identity and host (`getOwnerUserId`, `actorHandle`,
+`actorDirectory`, `actorKind`, `actorHost`, `actorDirectoryStore`,
+`hostedSeams`), its tools and policy (`workspaceBox`, `actorToolDeps`, `engine`,
+`notifyOwner`, `delegationBudget`, `ownMission`, `persistAutoTitle`,
+`promptIdentity`), and the ports every agent's isolate is reached through: its
+room (`mainChatWire`, `hostedChatWire`), its stores (`agentStores`,
+`readInheritedContext`, `transcriptFor`), its open turn (`mainChatTurn`,
+`mainChatSurface`) and its plans and questions (`hostedPlanReviews`,
+`hostedQuestions`). It may override three hooks (`workspaceName`,
+`extraCodemodeProviders`, `isClientRpcMethodDenied`). One subclass exists: the
+orchestrator. Every other actor is a logical row the orchestrator's host
+acquires, not a class.
 
 Tool gating is structural; no prompt decides it. The `agents` actions derive
 from the deps the profile wires (`actorAgentsActions` over core's
@@ -106,15 +111,21 @@ message. At the depth cap `teamProfile()` returns nothing, so the roster and the
 not a native tool: it is an orchestrator-only codemode provider, left out of the
 Plan-mode set. `submit_plan` exists only on an owner turn in Plan mode.
 
-Every non-main agent is a roster row in `workspace_actors` and runs its turns
-in an `AgentFacet` with its own Worker Loader isolate and SQLite (D8/D9).
-Hired agents, background evolution agents, branching heads, swarm nodes and
-steer branches use the same `runHeadInference` loop and facet queue. Main
-keeps its model loop and conversation in the workspace object.
+Every agent, main included, is a roster row in `workspace_actors` and runs its
+turns in an `AgentFacet` with its own Worker Loader isolate and SQLite (D8/D9).
+Main's chat, and each owner-facing agent's, runs core's `ChatSession` there
+(`FacetChat`); hired tasks, background evolution agents, branching heads, swarm
+nodes and steer branches use the `runHeadInference` loop and the facet queue.
 
-The workspace prepares profiles, prompts and tool surfaces. Every tool call
-returns through `AgentWorkspaceRPC`; the facet holds conversation, claims,
-effect claims and run events. A head keeps its accumulator tools and split
+The workspace prepares profiles, prompts and tool surfaces; main's tools run
+under the turn's `TurnSurface` (`packages/core/src/orchestrator/main-turn-surface.ts`),
+which `AgentTurns` holds with the open turn. Every tool call returns through
+`AgentWorkspaceRPC.executeTool`; the facet holds conversation, claims, effect
+claims and run events. Main's settled turn crosses back once, as the facet's
+durable `workspace_settle` effect: the workspace declares its roster
+(evolution, event log, titles, replies, branches, the fleet row) from that
+handoff and the facts it kept from the turn's preparation (`main_turn_facts`),
+never from what one activation held. A head keeps its accumulator tools and split
 callback in the workspace. A swarm node keeps its report, branch arbiter,
 background jobs and wake queue there too. Steps, live deltas and mission
 charges return over RPC; the completed turn returns its report and produced
@@ -126,8 +137,11 @@ Swarm actors have `exp:`-prefixed roster names, not a separate actor class.
 Their files, processes and ports remain on the workspace's one Nimbus plane,
 reached through the same credentialed session surface as hired agents.
 Retirement keeps a task agent's history; destruction deletes its facet.
-A workspace archive must include each retained non-main agent's database:
-a SQL-only copy of the workspace object is not the whole workspace.
+A workspace archive must include each retained agent's database, main's
+included: a SQL-only copy of the workspace object is not the whole workspace.
+A fork reads main's conversation from its isolate and lands it in the fork's
+(`ForkConversationSource` / `ForkConversationTarget`,
+`packages/core/src/identity/fork-conversation.ts`).
 
 `OwnedModelServices` prepares the workspace's model and tool services. Each
 facet builds the same provider registry and brokers credential requests

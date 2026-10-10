@@ -748,11 +748,24 @@ recover its own claims (stalled turns retire; the rest re-pend because their
 rows stay leased until the turn ends). The browser's socket stays in the workspace object; an
 agent's stream reaches it as short `observe` calls.
 Extended to main on 2026-10-07 (owner: "every actor's turn then runs one
-way"): main's turn and main's own stores move into main's facet (being
-built), and its tools reach the workspace through one `callOperation`. The build ships as a
-reset deployment, so main's facet starts empty, as a fresh workspace's does.
-Its socket, roster and shared stores stay in the workspace object, and a root
-tab's socket opening pre-warms main's isolate. Measured 2026-10-07 on the same
+way"): main's turn and main's own stores (conversation, claims, runs, plans,
+owner questions) moved into main's facet, and its tools reach the workspace
+through `AgentWorkspaceRPC.executeTool`, as every agent's do. The build ships
+as a reset deployment, so main's facet starts empty, as a fresh workspace's
+does. Its socket, roster and shared stores stay in the workspace object, and a
+root tab's socket opening pre-warms main's isolate. Main's settled turn is handed
+back as the facet's durable `workspace_settle` effect; the workspace declares
+the turn's evolution, event, title, reply, branch and fleet lanes from it and
+from the facts it kept from the turn's preparation (`main_turn_facts`). A fork
+reads and lands main's conversation through main's isolate. The figures below
+were measured on 2026-10-07, before main moved, comparing main's turn in the
+workspace object with a facet's turn on the same path; the shipped build is held
+by the tier's heap and statement gates, which read main's isolate beside the
+workspace's (`scripts/worker-heap.ts`, `tests/workerd/complexity/`): on
+2026-10-10 main's isolate held 10.8-10.9 MB live after setup, peaked at
+30.6-32.5 MB over the long turn and allocated 95-104 MB of the 146-153 MB the
+two isolates allocated together, and a production turn ran 376 statements in
+the workspace and 449 in main's isolate. Measured 2026-10-07 on the same
 150-step turn and provider path, 3 runs each (armada 20261007185121-975afb24):
 main's turn in the workspace object peaked at 88.6-90.7 MB and allocated
 379-385 MB; a facet's turn peaked at 58.9-69.5 MB and allocated 337-346 MB,
