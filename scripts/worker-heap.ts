@@ -111,8 +111,10 @@ export const CONCURRENT_AGENT_LIVE_BOUND_BYTES = 19_000_000;
 
 /** What the first turn of a workspace, parked mid-stream as {@link STEP}'s is, holds live beyond its setup: the cold
  *  step, before any turn warmed either isolate. Measured 2026-10-10 at 02dab8bc0, three runs alike: -0.5 MB in the
- *  workspace's (its setup's garbage collected first), 0.5 MB in main's; 1 MB of room above each. */
-export const COLD_STEP_LIVE_BOUND_BYTES = { workspace: 1_000_000, main: 1_500_000 } as const;
+ *  workspace's (its setup's garbage collected first), 0.5 MB in main's. Over 36 more runs that day main's read 0.5 MB
+ *  or 1.6 MB, both on 555bbf5c3 (2 of 15 at 1.6 MB) and on its successors (8 of 21), and the workspace's 0.3 MB at
+ *  most: the highest of each with 1 MB of room. */
+export const COLD_STEP_LIVE_BOUND_BYTES = { workspace: 1_300_000, main: 2_600_000 } as const;
 
 /** A turn whose model asks for {@link FAILING_STEPS} reads of files no workspace has: each workspace tool call rejects
  *  back across the port, which the gate counts in main's ledger rather than assumes (a turn may stop short). */
@@ -515,34 +517,20 @@ export async function measure(): Promise<HeapMeasurement> {
       await long;
       const longTurnAllocated = await inEach(longIsolates, async (session) => await session.allocations());
 
-      // Settled: no model call parked or arrived for half a second. The turn may stop before its failing steps are spent
-      // (the product gives up on a tool that keeps failing), so what is left of them is cleared after.
-      const QuietSchema = v.object({ calls: v.number(), parked: v.number() });
-
-      const modelQuiet = async (): Promise<void> => {
-        let last = -1;
-
-        for (;;) {
-          const state = v.parse(QuietSchema, JSON.parse(await ask('/model')));
-
-          if (state.parked === 0 && state.calls === last) break;
-          last = state.calls;
-          await Bun.sleep(500);
-        }
-
-        await ask('/model?failingSteps=0');
-      };
-
       // No longer stepping: a call that arrived past the long turn's last release (its sleep-time pass) is released, and
-      // the workspace settles before anything is read.
+      // main's isolate and the workspace settle before anything is read.
       await ask('/model?answerBytes=0&toolSteps=0&released=1000000');
-      await modelQuiet();
+      await ask('/main-idle?workspace=long');
       await ask('/quiesce?workspace=long');
       const failedBefore = v.parse(v.number(), JSON.parse(await ask('/failed-tool-calls?workspace=long')));
       const beforeFailing = await inEach(longIsolates, async (session) => await session.liveHeap());
       await ask(`/model?failingSteps=${String(FAILING_STEPS)}`);
       await ask('/turn?workspace=long&text=failing');
-      await modelQuiet();
+      // Read once the turn has ended in main's isolate, which it is running once its first failing call is answered;
+      // the asks a turn that stopped short left are cleared, so no later phase serves one.
+      await ask('/failing-started');
+      await ask('/main-idle?workspace=long');
+      await ask('/model?failingSteps=0');
       await ask('/quiesce?workspace=long');
       const failedPortRetained = beyond(await inEach(longIsolates, async (session) => await session.liveHeap()), beforeFailing);
       const failedPortCalls = v.parse(v.number(), JSON.parse(await ask('/failed-tool-calls?workspace=long'))) - failedBefore;

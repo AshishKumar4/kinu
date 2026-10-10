@@ -25,6 +25,8 @@ interface WorkspaceRpc extends Rpc.DurableObjectBranded {
   plant(isolate: 'workspace' | 'main', bytes: number): Promise<void>;
   /** `worker-heap/product.ts`'s probe RPC. */
   failedToolCalls(): Promise<number>;
+  /** `worker-heap/product.ts`'s probe RPC. */
+  mainIdle(): Promise<void>;
 }
 
 interface AccountRpc extends Rpc.DurableObjectBranded {
@@ -83,6 +85,10 @@ export class HeapDriver extends DurableObject<DriverEnv> {
     await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).plant(isolate, bytes);
   }
 
+  async mainIdle(workspace: string): Promise<void> {
+    await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).mainIdle();
+  }
+
   async failedToolCalls(workspace: string): Promise<number> {
     return await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).failedToolCalls();
   }
@@ -93,7 +99,7 @@ export class HeapDriver extends DurableObject<DriverEnv> {
 }
 
 /** What the model answers and whether it answers yet; module state, which the entrypoint and fetch share. */
-const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepBytes: 0, stepping: false, arrived: 0, released: 0, hires: 0, helpersAnswered: 0, holdHelper: false, helperParked: false, nest: false, failingSteps: 0 };
+const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepBytes: 0, stepping: false, arrived: 0, released: 0, hires: 0, helpersAnswered: 0, holdHelper: false, helperParked: false, nest: false, failingSteps: 0, failingAsked: 0 };
 
 /** Each character above U+00FF in `request`, with the text before it: one of them stores the whole request two bytes each. */
 function noteWide(request: string): void {
@@ -245,6 +251,7 @@ async function compatAnswer(body: string): Promise<Response> {
     else if (model.failingSteps > 0) {
       answer = { toolCall: { name: 'file', arguments: { op: 'read', path: `missing/step-${String(model.failingSteps)}.md` } } };
       model.failingSteps -= 1;
+      model.failingAsked += 1;
     }
   }
 
@@ -291,7 +298,11 @@ export default {
 
       if (url.searchParams.has('nest')) model.nest = url.searchParams.get('nest') === '1';
 
-      if (url.searchParams.has('failingSteps')) model.failingSteps = Number(url.searchParams.get('failingSteps'));
+      if (url.searchParams.has('failingSteps')) {
+        model.failingSteps = Number(url.searchParams.get('failingSteps'));
+
+        if (model.failingSteps > 0) model.failingAsked = 0;
+      }
 
       if (url.searchParams.has('hires')) {
         model.hires = Number(url.searchParams.get('hires'));
@@ -306,7 +317,10 @@ export default {
 
     if (url.pathname === '/failed-tool-calls') return Response.json(await driver.failedToolCalls(workspace));
 
-    if (url.pathname === '/turn') await driver.turn(workspace, url.searchParams.get('text') ?? 'hello');
+    // Polled as the holds above are: this stateless entry's requests cannot settle one another's promises.
+    if (url.pathname === '/failing-started') while (model.failingAsked === 0) await scheduler.wait(20);
+    else if (url.pathname === '/main-idle') await driver.mainIdle(workspace);
+    else if (url.pathname === '/turn') await driver.turn(workspace, url.searchParams.get('text') ?? 'hello');
     else if (url.pathname === '/heads') await driver.heads(workspace, url.searchParams.get('tag') ?? 'head', Number(url.searchParams.get('count')));
     else if (url.pathname === '/quiesce') await driver.quiesce(workspace);
     else if (url.pathname === '/plant') await driver.plant(workspace, v.parse(v.picklist(['workspace', 'main']), url.searchParams.get('isolate')), Number(url.searchParams.get('bytes')));

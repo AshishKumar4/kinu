@@ -16,6 +16,7 @@ const planted: Uint8Array[] = [];
 interface PlantingFacet extends Rpc.WorkerEntrypointBranded {
   plant(bytes: number): Promise<void>;
   failedToolCalls(): Promise<number>;
+  idle(): Promise<void>;
 }
 
 export class OrchestratorAgent extends Product {
@@ -28,6 +29,12 @@ export class OrchestratorAgent extends Product {
     Reflect.deleteProperty(this, 'joinDetached');
     Reflect.deleteProperty(this, 'plant');
     Reflect.deleteProperty(this, 'failedToolCalls');
+    Reflect.deleteProperty(this, 'mainIdle');
+  }
+
+  /** Once main's isolate runs no turn and closes none: its own idle, which the turn it runs ends. */
+  async mainIdle(): Promise<void> {
+    await (await this.agentFacetOf<PlantingFacet>(this.actorHandle().actorId)).idle();
   }
 
   /** Main's tool calls that came back failed, as its isolate's ledger records them. */
