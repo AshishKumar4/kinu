@@ -14,7 +14,7 @@ import * as v from 'valibot';
 import { scriptedTurnModel, type ModelStreamPart, type ScriptedTurnOptions, type ScriptedTurnResult } from '@kinu.run/test-utils/turn-model';
 import { convertArrayToReadableStream, MockLanguageModelV4 } from 'ai/test';
 import type { PreparedRequest, ScriptedAnswer, SettledTurn, TurnHarness } from './turn-harness';
-import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, BackendHost, Clock, ModelInfo, ModelRouteResolution, ActorToolsets } from '@kinu.run/core';
+import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, BackendHost, Clock, ModelInfo, ModelRouteResolution, ActorToolsets, ReplyToCommentToolDeps } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { WorkspaceOverview } from '@kinu.run/core';
 import { OwnedModelServices } from '../../src/owned-model-services';
@@ -556,11 +556,11 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
     return failure;
   }
-  protected override async mainTaskProfile(turn: HostedTaskTurn): Promise<HostedTaskProfile> {
+  protected override async mainTaskProfile(turn: HostedTaskTurn, planReply: ReplyToCommentToolDeps | undefined): Promise<HostedTaskProfile> {
     this._prepareFailure = null;
 
     try {
-      const profile = await super.mainTaskProfile(turn);
+      const profile = await super.mainTaskProfile(turn, planReply);
 
       this._preparedTools.set(turn.turnId, profile.tools);
       this._lastPreparedTools = profile.tools;

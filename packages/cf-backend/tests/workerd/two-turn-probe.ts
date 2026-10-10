@@ -735,8 +735,9 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
 
   private readonly mainTurnEnds = new Set<() => void>();
 
-  protected override mainFacetTurnEnded(): void {
-    super.mainFacetTurnEnded();
+  /** Main's turn opened or closed. */
+  protected override turnClaimChanged(): void {
+    super.turnClaimChanged();
 
     for (const ended of this.mainTurnEnds) ended();
   }

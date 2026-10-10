@@ -40,6 +40,7 @@ import { agentCallsThrough, AgentIsolateSlots } from "./dynamic-worker-slots";
 import { providerBindingsOf, routedModelReads } from "./providers/agent-registry";
 import { AgentTurns } from "./agent-turns";
 import { initMainTurnFactsTable, MainTurnFactsStore, type MainTurnFacts } from "./main-turn-facts";
+import type { TurnSurface } from "./turn-surface";
 import { AgentWakes } from "./agent-wakes";
 import type { AgentTurnActivity, AgentSnapshot, RunEventRecorder, StoredRow } from '@kinu.run/core';
 import type { SerializedMessage, WebSearchProvider } from '@kinu.run/core';
@@ -838,8 +839,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return await this.agentTurns.prepareChat(actorId, request);
       },
       bindProfile: async (turnId, profile) => {
-        // This object holds main's turn under its producer's identity (`announcementOf`), a programmatic one unprefixed.
-        if (actorId === this.actorHandle().actorId) this.bindFacetProfile(announcementOf(turnId), profile);
+        if (actorId === this.actorHandle().actorId) this.mainProfileBound(profile);
 
         return this.agentTurns.bindProfile(actorId, turnId, profile);
       },
@@ -998,7 +998,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.liveReadsMoved(readsOfTables(['actor_turn_claims', 'terminal_effects']));
 
     if (actorId === this.actorHandle().actorId) {
-      this.mainFacetTurnEnded();
       // Every signal held for it re-delivers, detached: none reached its isolate's steps. A lost end re-delivers
       // what the turn absorbed too, as an errored turn's does.
       this.orch.inbox.settle({ completed: event?.type === 'turn-end' && !event.turn.hadError });
@@ -1274,18 +1273,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    */
   private async hostedTaskProfile(turn: HostedTaskTurn): Promise<HostedTaskProfile> {
     if (turn.actor.handle.actorId === this.actorHandle().actorId) {
-      const awaitsReply = await this.hostedPlanAwaitsReply(turn);
-
       // Asked of main's isolate before its tools are built: whether the owner's sent-back review awaits its answers.
-      this.mainPlanReply = awaitsReply
-        ? { reply: async (comment, text) => await this.hostedPlanReply(turn, comment, text) }
-        : undefined;
+      const awaitsReply = await this.hostedPlanAwaitsReply(turn);
+      const planReply = awaitsReply ? { reply: async (comment: string, text: string) => await this.hostedPlanReply(turn, comment, text) } : undefined;
+
       // Its questions park in its own isolate, as every agent's do: the stack asks it once its turn was offered the tool.
       this.offerAskOwner(turn.actor.stores.config);
 
-      const profile = await this.mainTaskProfile(turn);
+      const profile = await this.mainTaskProfile(turn, planReply);
+      const { surface } = profile;
 
-      this.mainTurnFacts.opened(turn.turnId, { continuity: this._turnContinuity, evolutionEnabled: this._turnEvolutionEnabled });
+      if (surface !== undefined) this.mainTurnFacts.opened(turn.turnId, { continuity: surface.continuity, evolutionEnabled: surface.evolutionEnabled });
 
       return profile;
     }
@@ -2464,6 +2462,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   protected override mainChatTurn(): string | null {
     return this.agentTurns.currentTurn(this.actorHandle().actorId);
+  }
+
+  protected override mainChatSurface(): TurnSurface | null {
+    return this.agentTurns.surface(this.actorHandle().actorId);
   }
 
   /** `room` names the tabs that hear the agent: its own window's, or null for the workspace's. */
@@ -4102,8 +4104,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (result.ok) {
       // Crafted-tool retirement must drop the cached tool surface.
-      this._cachedTools = null;
-      this._cachedToolsKey = '';
+      this.invalidateTools();
     }
 
     return result;
@@ -4147,7 +4148,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       const id = newBranchId();
       // Read before the await: the branch charges the turn the owner redirected, not whichever runs next.
       const missionLabels = this.budget.scope;
-      const redirected = this.facetTurnId();
+      const redirected = this.mainTurn()?.turnId ?? null;
       const inheritedContext = yield* Effect.promise(async () => this.readInheritedContext());
       this._pendingBranches.push({
         id, task,
@@ -4267,7 +4268,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async setShellApprovalMode(mode: 'strict' | 'allow_all' | 'deny_all') {
     return setShellApprovalMode({
       config: this.config,
-      onChanged: () => { this._cachedTools = null; this._cachedToolsKey = ''; },
+      onChanged: () => { this.invalidateTools(); },
     }, mode);
   }
 
@@ -4358,8 +4359,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         if (names.length > 0) {
           updateCraftScores(this.boundSql, names, ratingQuality(thumbsRating(feedback).score));
           rescored = names.length;
-          this._cachedTools = null;
-          this._cachedToolsKey = '';
+          this.invalidateTools();
         }
       }
 
@@ -6385,8 +6385,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // An approval changes the next prompt and its `allowed_tools`, so the cached tool surface is dropped.
     if (result.ok) {
-      this._cachedTools = null;
-      this._cachedToolsKey = '';
+      this.invalidateTools();
     }
 
     return result;

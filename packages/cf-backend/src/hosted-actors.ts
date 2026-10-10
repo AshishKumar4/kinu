@@ -3,6 +3,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 
 import { currentDateForPrompt, publishSubordinateReport, type ConversationRecall, type HeadReport, isSubordinateOrigin, type SubordinateReportLedger, type ToolSurfaceNarrowing } from '@kinu.run/core';
 import type { LanguageModel, ModelMessage, Tool, ToolSet } from 'ai';
+import type { TurnSurface } from './turn-surface';
 import { EventLog, HeadCapture, titleActorFromMessage, spawnSeatedHead, admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus, receiveSubordinateEvent, subordinateRelaysTurnEnd, subordinateForkContext, type SubordinateInheritedContext, inheritedAsModelMessage, collectDynamicContext, explorationActorKey, headStatusUnsettled, storedHeadReportStatus, subordinateDelegatesOf, registeredParent, subordinateDescendants, actorReferenceOf, TEMPORARY_LIFETIME, terminalTaskReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, type ActorHost, type ActorReference, type BoundActor, type DelegationBudget, type DynamicContext, type HeadId, type HeadInput, type RunInference, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedActor, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff, type SubordinateLifetime, type SubordinateReportOrigin, type SubordinateReportHandoff, type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime, type SubordinateSeed, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
 import { attempt, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import type { AgentRuntime, HeadSeat, JsonObject, OwedReport, RunTurnSources, TaskPlan, TrialTurn, TurnAssemblySources, TurnOpening } from '@kinu.run/core';
@@ -42,6 +43,8 @@ export interface HostedTaskProfile {
   readonly sources: HostedTurnSources;
   /** Main's live trial arm, when it runs one. */
   readonly trial?: TrialTurn;
+  /** What main's tools run under through the turn, which the turn holds. */
+  readonly surface?: TurnSurface;
 }
 
 /** One workspace's host and directory, for every hosted kind. */
@@ -304,6 +307,7 @@ export interface PreparedHostedTurn {
   readonly sources: HostedTurnSources;
   readonly birthContext: readonly ModelMessage[];
   readonly trial?: TrialTurn;
+  readonly surface?: TurnSurface;
 }
 
 export function prepareHostedTurn(
@@ -327,6 +331,7 @@ export function prepareHostedTurn(
       turn, model, tools: profile.tools, sources: profile.sources,
       birthContext: run === undefined ? turn.input.inheritedContext.map(inheritedAsModelMessage) : [],
       ...('trial' in profile && profile.trial !== undefined && { trial: profile.trial }),
+      ...('surface' in profile && profile.surface !== undefined && { surface: profile.surface }),
     };
   }));
 }

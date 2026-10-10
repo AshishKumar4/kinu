@@ -9,6 +9,7 @@ import {
   type HeadInput, type RunInference, type HeadReport, type SqlExecutor, type MissionBudgetPort, type MissionGovernor, type Executor, readMissionLabels,
 } from '@kinu.run/core';
 import { prepareHostedTurn, type HostedActorSeams, type HostedTurnRequest, type PreparedHostedTurn } from './hosted-actors';
+import type { TurnSurface } from './turn-surface';
 import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentToolDescriptor, AgentTrace, AgentTurnEnd, Fact, JsonObject, PreparedAgentTurn, StoredRow, TaskPlan, TurnOpening } from '@kinu.run/core';
 
 export interface AgentTurnsDeps {
@@ -117,6 +118,13 @@ export class AgentTurns {
   /** The chat turn the agent last said it began and has not said it ended. */
   chatTurn(actorId: string): string | null {
     return this.chats.get(actorId) ?? null;
+  }
+
+  /** What that turn's tools run under, when its preparation gave it a surface. */
+  surface(actorId: string): TurnSurface | null {
+    const turnId = this.chats.get(actorId);
+
+    return turnId === undefined ? null : this.open.get(turnId)?.prepared?.surface ?? null;
   }
 
   chatClosed(actorId: string): void {
@@ -349,10 +357,12 @@ export class AgentTurns {
    *  resolution of their own. Answers the live block on it. */
   bindProfile(actorId: string, turnId: string, profile: ResolvedTurnProfile): DynamicContext {
     const turn = this.turn(actorId, turnId);
+    const prepared = this.prepared(turn);
 
     turn.profile = profile;
+    prepared.surface?.bind(profile);
 
-    return this.dynamic(turn, this.prepared(turn));
+    return this.dynamic(turn, prepared);
   }
 
   async advise(actorId: string, { turnId, turn: completed, reachable, mode }: AgentReview): Promise<void> {
