@@ -1,9 +1,9 @@
 /** Write attribution happens where a write lands: sibling heads run concurrently over the same files. */
 
-import { Effect } from 'effect';
+import { Effect, Semaphore } from 'effect';
 import type { CompositeVFS, Principal } from '@nimbus-sh/core/vfs/composite.js';
 import type { VfsContentRef, VfsWriteEvent } from '@nimbus-sh/core/vfs/vfs.js';
-import { attempt, diagnostics, settle, settleSync, toKinuError, type KinuError } from '../obs/index';
+import { attempt, diagnostics, settle, toKinuError, type KinuError } from '../obs/index';
 
 export interface WriteEvent {
   readonly path: string;
@@ -61,32 +61,24 @@ function unreadable(failure: KinuError, path: string): 'unreadable' {
 }
 
 /**
- * Read while the callback holds the event, which Nimbus releases once it settles; held content reads at once. A file's
- * bytes are read only when `asked`: an observer that already holds a path's baseline needs no second copy of it.
+ * Read while the callback holds the event, which Nimbus releases once it settles. A file's bytes are read only when
+ * `asked`: an observer that already holds a path's baseline needs no second copy of it.
  */
-function side(ref: VfsContentRef | null | undefined, path: string, asked: boolean): Side | Promise<Side> {
-  if (ref === null) return null;
+function side(ref: VfsContentRef | null | undefined, path: string, asked: boolean): Effect.Effect<Side> {
+  if (ref === null) return Effect.succeed(null);
 
   // Not captured: the backend would not say what stood there.
-  if (ref === undefined) return 'unreadable';
+  if (ref === undefined) return Effect.succeed('unreadable');
 
-  if (ref.type === 'directory') return 'directory';
+  if (ref.type === 'directory') return Effect.succeed('directory');
 
-  if (!asked) return 'unasked';
+  if (!asked) return Effect.succeed('unasked');
   const doing = `reading what a write left at ${path}`;
 
-  return settleSync(Effect.match(Effect.try({ try: () => ref.read(), catch: (cause) => toKinuError({ doing, cause, otherwise: 'io' }) }), {
-    onFailure: (failure) => unreadable(failure, path),
-    onSuccess: (read): Side | Promise<Side> => (read instanceof Uint8Array ? read : awaited(read, doing, path)),
-  }));
-}
-
-/** Content the backend reads asynchronously, read while the event is held. */
-function awaited(pending: PromiseLike<Uint8Array>, doing: string, path: string): Promise<Side> {
-  return settle(Effect.match(attempt({ doing, otherwise: 'io' }, async () => pending), {
-    onFailure: (failure) => unreadable(failure, path),
-    onSuccess: (bytes): Side => bytes,
-  }));
+  return Effect.try({ try: () => ref.read(), catch: (cause) => toKinuError({ doing, cause, otherwise: 'io' }) }).pipe(
+    Effect.flatMap((read): Effect.Effect<Uint8Array, KinuError> => (read instanceof Uint8Array ? Effect.succeed(read) : attempt({ doing, otherwise: 'io' }, async () => read))),
+    Effect.catch((failure) => Effect.sync((): Side => unreadable(failure, path))),
+  );
 }
 
 const isBytes = (value: Side): value is Uint8Array | null => value === null || value instanceof Uint8Array;
@@ -117,30 +109,16 @@ function recorded(observer: WriteObserver, path: string, before: Side, after: Si
  */
 export function observeNamespace(namespace: CompositeVFS, observer: WriteObserver, mine: (writer: Principal) => boolean = () => true): () => void {
   // Records keep commit order: Nimbus calls once per commit without waiting for the last call to settle.
-  let queue: Promise<void> | null = null;
+  const inOrder = Semaphore.makeUnsafe(1);
 
   return namespace.observeWrites((event: VfsWriteEvent) => {
     if (!mine(event.principal)) return undefined;
-    const before = side(event.before, event.path, observer.needsBaseline(event.path));
-    const after = side(event.after, event.path, true);
 
-    const land = (was: Side, now: Side): void => {
-      if (event.oldPath !== undefined) recorded(observer, event.oldPath, now, null);
-      recorded(observer, event.path, was, now);
-    };
+    return settle(inOrder.withPermits(1)(Effect.gen(function* () {
+      const [before, after] = yield* Effect.all([side(event.before, event.path, observer.needsBaseline(event.path)), side(event.after, event.path, true)]);
 
-    if (queue === null && !(before instanceof Promise) && !(after instanceof Promise)) {
-      land(before, after);
-
-      return undefined;
-    }
-
-    const queued: Promise<void> = (queue ?? Promise.resolve()).then(async () => { land(await before, await after); }).then(() => {
-      if (queue === queued) queue = null;
-    });
-
-    queue = queued;
-
-    return queued;
+      if (event.oldPath !== undefined) recorded(observer, event.oldPath, after, null);
+      recorded(observer, event.path, before, after);
+    })));
   }, { wants: (_path, writer) => mine(writer) });
 }
