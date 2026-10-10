@@ -5,7 +5,7 @@
  */
 import { expect, test } from 'bun:test';
 import { Effect } from 'effect';
-import { detach } from '@kinu.run/core/obs';
+import { attempt, detach, renderCauseChain, settle } from '@kinu.run/core/obs';
 import type { ServerWebSocket } from 'bun';
 import type { Browser, Page } from 'puppeteer';
 import { join } from 'node:path';
@@ -29,6 +29,10 @@ const OFFLINE = '<div class="p-notice-danger">Could not send to the turn: offlin
 
 /** A load that failed, as LoadFailure draws one. */
 const LOAD_FAILED = `<div class="p-danger"><span data-failure>Could not load this folder: ${UNCONFIGURED}</span><button>Retry</button></div>`;
+
+function socketPage(request: Request, server: { upgrade(request: Request): boolean }): Response | undefined {
+  return server.upgrade(request) ? undefined : new Response('<main></main>', { headers: { 'content-type': 'text/html' } });
+}
 
 async function blankPage(browser: Browser): Promise<Page> {
   const page = await browser.newPage();
@@ -84,6 +88,73 @@ test('a failure the page hides leaves the wait running', async () => {
     await show(page, OFFLINE, false);
     await polledTwice(page);
   });
+});
+
+test('a failed Files listing wins over settled markup and reports its RPC reply with the visible cause', async () => {
+  const cause = 'the fixture filesystem refused its directory listing';
+  const path = '/flow-listing-probe';
+
+  const server = Bun.serve({
+    hostname: '127.0.0.1', port: 0,
+    fetch: socketPage,
+    websocket: {
+      message(socket, raw) {
+        const ask = v.parse(v.object({ id: v.string(), method: v.string() }), JSON.parse(String(raw)));
+
+        socket.send(JSON.stringify({ type: 'rpc', id: ask.id, result: { path, error: cause } }));
+      },
+    },
+  });
+
+  try {
+    await withBrowser(async (browser) => {
+      const page = await blankPage(browser);
+
+      await page.goto(`http://127.0.0.1:${String(server.port)}/`);
+      const ledger = await frameLedger(page);
+
+      try {
+        await page.evaluate(async ({ url, directory, visibleCause }) => {
+          await new Promise<void>((resolve) => {
+            const socket = new WebSocket(url);
+
+            socket.onopen = () => { socket.send(JSON.stringify({ type: 'rpc', id: 'listing', method: 'getExecutorFiles', args: ['workspace', directory] })); };
+
+            socket.onmessage = () => {
+              const list = document.createElement('div');
+
+              list.setAttribute('data-files-list', '');
+
+              const error = document.createElement('div');
+              error.className = 'p-danger';
+              error.textContent = visibleCause;
+              list.append(error);
+              document.body.append(list);
+              socket.close();
+              resolve();
+            };
+          });
+        }, { url: `ws://127.0.0.1:${String(server.port)}/`, directory: path, visibleCause: cause });
+        await ledger.quietAfter('getExecutorFiles');
+
+        const outcome = await settle(Effect.result(attempt({ doing: 'waiting for the fixture listing', otherwise: 'io' },
+          () => until(page, 'the Files directory', `document.querySelector('[data-files-list]') !== null`))));
+
+        expect(outcome._tag).toBe('Failure');
+
+        if (outcome._tag !== 'Failure') throw new Error('a failed listing was accepted as settled');
+        const message = renderCauseChain(outcome.failure);
+
+        expect(message).toContain(cause);
+        expect(message).toContain('getExecutorFiles');
+        expect(message).toContain(path);
+      } finally {
+        await ledger.stop();
+      }
+    });
+  } finally {
+    await server.stop(true);
+  }
 });
 
 test('a wait on a turn\'s socket ends on the failure its page shows', async () => {
@@ -270,11 +341,7 @@ function snapshotServer(unanswered: 'close' | 'hold') {
   const server = Bun.serve({
     port: 0,
     hostname: '127.0.0.1',
-    fetch(request, bun) {
-      if (bun.upgrade(request)) return undefined;
-
-      return new Response('<main></main>', { headers: { 'content-type': 'text/html' } });
-    },
+    fetch: socketPage,
     websocket: {
       message(socket, raw) {
         const ask = v.parse(v.object({ id: v.string(), method: v.string() }), JSON.parse(String(raw)));

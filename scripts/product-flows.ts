@@ -22,7 +22,7 @@
  */
 import type { Browser, ElementHandle, Page } from 'puppeteer';
 import * as v from 'valibot';
-import { AccountMemoryProposalSchema, hostedActorSocketPath, SLATES_ROOT, type AccountMemoryProposal } from '@kinu.run/core';
+import { AccountMemoryProposalSchema, hostedActorSocketPath, JsonValueSchema, redactSecrets, SLATES_ROOT, type AccountMemoryProposal, type JsonValue } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -196,7 +196,15 @@ export const CHAT_IDLE = `[...document.querySelectorAll('#chat button')].some((e
  *  load that failed or a view that crashed draws in its place (`data-failure`).
  *  A Drive whose listing failed draws no section and no empty state, so a wait
  *  for either outlived the failure it showed (2026-09-24, 36 minutes). */
+const FILES_FAILURE = `(() => {
+  const error = document.querySelector('[data-files-list] > .p-danger');
+  const text = error?.getClientRects().length > 0 ? (error.textContent ?? '').trim() : '';
+  return text === '' ? null : 'a failed Files listing: ' + text;
+})()`;
+
 const DEAD_END = `(() => {
+  const files = ${FILES_FAILURE};
+  if (files !== null) return files;
   const script = ${FAILED_APP_SCRIPT};
   if (script !== null) return script;
   const failed = (window.__turnErrors ?? []).at(-1);
@@ -267,12 +275,14 @@ export async function named<Value>(what: string, wait: () => Promise<Value>): Pr
 export async function until(page: Page, what: string, condition: string): Promise<void> {
   await named(what, async () => {
     for (;;) {
-      const outcome = String(await (await page.waitForFunction(`(${condition}) ? 'reached' : ${DEAD_END}`, { polling: 100 })).jsonValue());
+      const outcome = String(await (await page.waitForFunction(`${FILES_FAILURE} ?? ((${condition}) ? 'reached' : ${DEAD_END})`, { polling: 100 })).jsonValue());
 
       if (outcome === 'reached') return;
 
       if (!(await reloadedAfterNetworkChange(page, what, outcome))) {
-        throw new Error(`waiting for ${what}, the page showed ${await explained(page, outcome)}`);
+        const evidence = outcome.startsWith('a failed Files listing:') ? await filesFailureAccount(page) : '';
+
+        throw new Error(`waiting for ${what}, the page showed ${await explained(page, outcome)}${evidence === '' ? '' : `; Files evidence: ${evidence}`}`);
       }
     }
   });
@@ -374,7 +384,20 @@ export async function sendAndSettle(page: Page, text: string): Promise<void> {
 
 const FrameSchema = v.object({
   type: v.string(), id: v.optional(v.string()), method: v.optional(v.string()), done: v.optional(v.boolean()),
+  args: v.optional(v.array(JsonValueSchema)), result: v.optional(JsonValueSchema), error: v.optional(JsonValueSchema),
 });
+
+const filesReplies = new WeakMap<Page, { args: readonly JsonValue[]; result?: JsonValue; error?: JsonValue }>();
+
+async function filesFailureAccount(page: Page): Promise<string> {
+  const visible = v.parse(v.object({ path: v.string(), listing: v.nullable(v.string()), error: v.nullable(v.string()) }), await page.evaluate(() => ({
+    path: location.pathname,
+    listing: document.querySelector('[data-files-list]')?.textContent ?? null,
+    error: document.querySelector('[data-files-list] > .p-danger')?.textContent ?? null,
+  })));
+
+  return redactSecrets(JSON.stringify({ getExecutorFiles: filesReplies.get(page) ?? null, visible }));
+}
 
 /** The page's socket traffic, read off its frames over CDP: the RPCs it asked,
  *  by id, which of them has had its final answer, and the kinds of frame the
@@ -402,7 +425,7 @@ export async function frameLedger(page: Page): Promise<FrameLedger> {
   await cdp.send('Page.enable');
 
   /** An ask is keyed by its socket and its id: ids restart per socket, so two sockets or two loads reuse them. */
-  interface Ask { readonly socket: string; readonly method: string }
+  interface Ask { readonly socket: string; readonly method: string; readonly args: readonly JsonValue[] }
 
   const asked = new Map<string, Ask>();
   const answered = new Set<string>();
@@ -447,6 +470,8 @@ export async function frameLedger(page: Page): Promise<FrameLedger> {
   cdp.on('Page.frameNavigated', (event: { frame: { parentId?: string } }) => {
     if (event.frame.parentId !== undefined) return;
 
+    filesReplies.delete(page);
+
     for (const socket of socketPaths.keys()) retiredSockets.add(socket);
 
     for (const [key, ask] of asked) {
@@ -470,7 +495,7 @@ export async function frameLedger(page: Page): Promise<FrameLedger> {
     tally(framesSent, socketPaths.get(event.requestId) ?? event.requestId);
 
     if (sent?.type === 'rpc' && sent.id !== undefined && sent.method !== undefined) {
-      asked.set(`${event.requestId} ${sent.id}`, { socket: event.requestId, method: sent.method });
+      asked.set(`${event.requestId} ${sent.id}`, { socket: event.requestId, method: sent.method, args: sent.args ?? [] });
     }
   });
   cdp.on('Network.webSocketFrameReceived', (event: { requestId: string; response?: { payloadData?: string } }) => {
@@ -484,7 +509,19 @@ export async function frameLedger(page: Page): Promise<FrameLedger> {
 
     // A streamed answer's chunks carry `done: false`; only its last frame, or
     // a plain answer, ends the ask.
-    if (received.type === 'rpc' && received.id !== undefined && received.done !== false) answered.add(`${event.requestId} ${received.id}`);
+    if (received.type === 'rpc' && received.id !== undefined && received.done !== false) {
+      const key = `${event.requestId} ${received.id}`;
+      const ask = asked.get(key);
+
+      if (ask?.method === 'getExecutorFiles') filesReplies.set(page, {
+        args: ask.args,
+        ...(received.result !== undefined && { result: received.result }),
+        ...(received.error !== undefined && { error: received.error }),
+      });
+
+      answered.add(key);
+    }
+
     check();
   });
   // A socket that closed will answer nothing more: its open asks are retired, as the page's own client rejects them.
@@ -529,9 +566,11 @@ export async function frameLedger(page: Page): Promise<FrameLedger> {
       arrived.clear();
       framesSent.clear();
       requests.clear();
+      filesReplies.delete(page);
     },
     stop: async () => {
       liveLedgers.delete(account);
+      filesReplies.delete(page);
       await cdp.detach();
     },
   };
@@ -1882,10 +1921,10 @@ function stripHas(name: string): string {
   return `document.querySelector(${JSON.stringify(`#inspector button[aria-label="${name}"]`)}) !== null`;
 }
 
-/** The Files tab has listed its directory: no "Loading…" row stands in the list. */
+/** The Files tab has listed its directory successfully: no loading row or visible listing failure. */
 const FILES_SETTLED = `(() => {
   const list = document.querySelector('[data-files-list]');
-  return list !== null && !(list.textContent ?? '').includes('Loading…');
+  return list !== null && ${FILES_FAILURE} === null && !(list.textContent ?? '').includes('Loading…');
 })()`;
 
 /** The names the Files tab lists, as its rows show them. */
@@ -1921,11 +1960,13 @@ export interface WrittenFileVerdict {
  */
 export async function writtenFileShowsInFilesAndChanges(target: FlowTarget): Promise<WrittenFileVerdict> {
   const workspace = await createFlowWorkspace(target, 'files-diffs');
+  let filesLedger: FrameLedger | null = null;
 
   try {
     const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
 
     await sendAndSettle(page, WRITE_FILE_ASK);
+    filesLedger = await frameLedger(page);
     await openInspector(page);
     await page.evaluate(stripTab('Files'));
     await until(page, "the Files tab's listing", FILES_SETTLED);
@@ -1951,10 +1992,13 @@ export async function writtenFileShowsInFilesAndChanges(target: FlowTarget): Pro
     await until(page, 'the reviewed change-set to empty', `${CHANGED_PATHS}.length === 0`);
     const afterReview = v.parse(v.array(v.string()), await page.evaluate(CHANGED_PATHS));
 
+    await filesLedger.stop();
+    filesLedger = null;
     await page.close();
 
     return { workspace, filesListed, changedPaths, afterReview };
   } finally {
+    await filesLedger?.stop();
     await removeFlowWorkspace(target, workspace);
   }
 }
