@@ -165,6 +165,16 @@ export class MemoryStore {
 		return { upserted, deletedIds };
 	}
 
+	/** Pending semantic references are hydrated from the current note and hash, never from a queued body. */
+	async chunksByIds(ids: readonly string[]): Promise<IndexedChunk[]> {
+		if (ids.length === 0) return [];
+
+		const rows = this.sql<ChunkRow>`SELECT id, path, start_line, end_line, hash FROM memory_note_chunks
+			WHERE id IN (SELECT value FROM json_each(${JSON.stringify(ids)})) ORDER BY id`;
+
+		return this.hydrateChunks(rows);
+	}
+
 	/** A backfill page; `next` is null after the last. */
 	async allChunksAfter(afterId: string, limit: number): Promise<{ readonly chunks: IndexedChunk[]; readonly next: string | null }> {
 		const rows = this.sql<ChunkRow>`
@@ -172,11 +182,15 @@ export class MemoryStore {
 			WHERE id > ${afterId} ORDER BY id LIMIT ${limit}
 		`;
 
-		const chunks = (await chunkTexts(rows, (path) => this.readFile(path))).flatMap(({ row, text }) => (text === null ? [] : [{
-			id: row.id, path: row.path, startLine: row.start_line, endLine: row.end_line, text,
-		}]));
+		const chunks = await this.hydrateChunks(rows);
 
 		return { chunks, next: rows.length < limit ? null : rows.at(-1)?.id ?? null };
+	}
+
+	private async hydrateChunks(rows: readonly ChunkRow[]): Promise<IndexedChunk[]> {
+		return (await chunkTexts(rows, (path) => this.readFile(path))).flatMap(({ row, text }) => text === null ? [] : [{
+			id: row.id, path: row.path, startLine: row.start_line, endLine: row.end_line, text,
+		}]);
 	}
 
 	async search(query: string, limit = 10, reindex: (path: string) => Promise<void> = async (path) => this.reindex(path)): Promise<MemorySearchResult[]> {

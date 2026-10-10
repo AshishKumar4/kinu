@@ -3,6 +3,8 @@ import { direntTypeOfStat } from '@nimbus-sh/core/vfs/dirent-type.js';
 /** Keeps the Vectorize index in step with the FTS5 memory store; separate from runtime.ts to stay dependency-light. */
 
 import { Effect } from 'effect';
+import { serialQueue } from '@kinu.run/agent-utils';
+import * as v from 'valibot';
 import { type AgentConfigStore } from '../config/store';
 import { type Memory } from '../types/primitives';
 import { type VectorStore } from './vector-store';
@@ -12,6 +14,65 @@ import { readTailWithVfsOps } from '../vfs/mounts';
 import { MEMORY_DIR } from './note';
 import type { MemoryStore, NoteStamp } from "@kinu.run/agent-utils/memory";
 import { diagnostics, settle, toKinuError } from "../obs/index";
+
+const PendingVectorsSchema = v.object({
+  revision: v.number(),
+  operations: v.record(v.string(), v.object({ kind: v.picklist(['upsert', 'delete']), revision: v.number() })),
+});
+
+const mirrorLanes = new WeakMap<AgentConfigStore, ReturnType<typeof serialQueue>>();
+
+function pendingVectors(config: AgentConfigStore): v.InferOutput<typeof PendingVectorsSchema> {
+  const stored = config.get(AGENT_CONFIG_KEYS.memoryVectorPending);
+
+  return stored === null ? { revision: 0, operations: {} } : v.parse(PendingVectorsSchema, JSON.parse(stored));
+}
+
+/** Persist references before any remote call: a cooldown or lost acknowledgment cannot consume a lexical delta. */
+function rememberVectors(config: AgentConfigStore, delta: { upserted: readonly { id: string }[]; deletedIds: readonly string[] }): void {
+  if (delta.upserted.length === 0 && delta.deletedIds.length === 0) return;
+
+  const pending = pendingVectors(config);
+  pending.revision += 1;
+
+  for (const id of delta.deletedIds) pending.operations[id] = { kind: 'delete', revision: pending.revision };
+
+  for (const chunk of delta.upserted) pending.operations[chunk.id] = { kind: 'upsert', revision: pending.revision };
+
+  config.set(AGENT_CONFIG_KEYS.memoryVectorPending, JSON.stringify(pending));
+}
+
+async function flushPendingVectors(store: MemoryStore, config: AgentConfigStore, vectors: VectorStore): Promise<void> {
+  let serial = mirrorLanes.get(config);
+
+  if (serial === undefined) {
+    serial = serialQueue();
+    mirrorLanes.set(config, serial);
+  }
+
+  await serial(async () => {
+    const pending = pendingVectors(config);
+    const ids = Object.keys(pending.operations);
+  
+    if (ids.length === 0) return;
+  
+    const upsert = ids.filter((id) => pending.operations[id].kind === 'upsert');
+    const fresh = await store.chunksByIds(upsert);
+    const current = new Set(fresh.map((chunk) => chunk.id));
+    const remove = ids.filter((id) => pending.operations[id].kind === 'delete' || !current.has(id));
+  
+    if (remove.length > 0) await vectors.deleteChunks(remove);
+  
+    if (fresh.length > 0) await vectors.upsertChunks(fresh);
+  
+    const remaining = pendingVectors(config);
+  
+    // A newer operation for the same id belongs to a later flush; idempotent acknowledgments clear only this snapshot.
+    for (const id of ids) if (remaining.operations[id]?.revision === pending.operations[id].revision) delete remaining.operations[id];
+  
+    config.set(AGENT_CONFIG_KEYS.memoryVectorPending, JSON.stringify(remaining));
+  });
+}
 
 /** Clearing the completeness marker and cursor hands the repair to the idempotent backfill. */
 function invalidateSemanticIndex(config: AgentConfigStore): void {
@@ -52,15 +113,19 @@ export function adaptMemory(
         // A note that is gone, or is no file, leaves the index with its chunks; an emptied one indexes to none.
         const delta = yield* Effect.promise(() => (note === null ? store.forgetFile(path) : store.indexFile(path, note.content, note.stamp)));
 
-        if (vectors === undefined || !vectors.store.available) return;
+        if (vectors === undefined) return;
+        rememberVectors(vectors.config, delta);
+
+        if (!vectors.store.available) {
+          invalidateSemanticIndex(vectors.config);
+
+          return;
+        }
+
         const vectorStore = vectors.store;
 
         yield* Effect.tryPromise({
-          try: async () => {
-            if (delta.deletedIds.length > 0) await vectorStore.deleteChunks(delta.deletedIds);
-
-            if (delta.upserted.length > 0) await vectorStore.upsertChunks(delta.upserted);
-          },
+          try: () => flushPendingVectors(store, vectors.config, vectorStore),
           catch: (cause) => toKinuError({ doing: 'syncing the memory chunk delta into the vector index', cause, otherwise: 'unavailable' }),
         }).pipe(Effect.catch((failure) => Effect.sync(() => {
           diagnostics.failure('memory.vector_sync_failed', failure, { path });
@@ -160,12 +225,15 @@ export async function backfillMemoryVectors(
 ): Promise<void> {
   if (!vectorStore.available) return;
 
+  await flushPendingVectors(store, config, vectorStore);
+
   if (config.get(AGENT_CONFIG_KEYS.memoryVectorBackfillDone) === 'true') return;
 
   const cursor = config.get(AGENT_CONFIG_KEYS.memoryVectorBackfillCursor) ?? '';
   const page = await store.allChunksAfter(cursor, cap);
 
-  if (page.chunks.length > 0) await vectorStore.upsertChunks(page.chunks);
+  rememberVectors(config, { upserted: page.chunks, deletedIds: [] });
+  await flushPendingVectors(store, config, vectorStore);
 
   if (page.next === null) {
     config.set(AGENT_CONFIG_KEYS.memoryVectorBackfillDone, 'true');
