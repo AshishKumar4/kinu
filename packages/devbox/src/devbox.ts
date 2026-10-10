@@ -858,7 +858,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       if (attached) {
         const reason = `[deadline -> repair] restoration did not settle inside the ${budgetMs}ms hook budget`;
-        await this.#settle({ phase: 'repair', incomplete: reason });
+        await this.#settle(settledRestoration([reason], 'pending'));
         await this.#record('process', reason);
       } else {
         const recoveryGeneration = this.#generation;
@@ -1260,7 +1260,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       if (active !== undefined && active.generation === generation) return await active.run;
 
       const retryBootStamp = this.#restoration.phase === 'repair'
-        && this.#restoration.incomplete.includes('the boot id stamp failed');
+        && this.#restoration.bootStamp !== 'done';
 
       const run = (async () => {
         const claim = await this.#claimRecovery();

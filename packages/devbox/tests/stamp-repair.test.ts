@@ -5,6 +5,18 @@
 // from an earlier boot is fenced by the kernel's boot id, not by this stamp (processes-image.test.ts).
 import { expect, test } from 'bun:test';
 import { chainBox } from './support/chain-box';
+import { settledRestoration, unreadyOf } from '../src/restoration';
+
+test('repair keeps typed boot-stamp obligations separate from its presentation', () => {
+  const failed = settledRestoration([], 'failed');
+  const pending = settledRestoration([], 'pending');
+
+  expect(failed).toMatchObject({ phase: 'repair', bootStamp: 'failed' });
+  expect(pending).toMatchObject({ phase: 'repair', bootStamp: 'pending' });
+  expect(unreadyOf(failed, false)).toBe('the boot id stamp failed');
+  expect(unreadyOf(pending, false)).toBe('the boot id stamp was kept for a settled restoration');
+  expect(settledRestoration([], 'done')).toMatchObject({ phase: 'attached' });
+});
 
 test('a final boot stamp that fails changes nothing a user or agent can see', async () => {
   const { box, container, rows } = chainBox();
