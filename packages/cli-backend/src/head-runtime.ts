@@ -3,18 +3,15 @@
 // (no per-head scratch database), so a head can take a claimed turn.
 
 import type { ToolSet } from 'ai';
-import {
-  type HeadRuntime, type HeadGrounding, type HeadInput, type HeadSeat,
-  type WebSearchProvider,
-  type RouteModelBinder, type ResolvedTurnProfile,
-  type PublishHeadStream,
-  type MissionGovernor, type ModelCallSink, type ModelOperationSink,
-  type HostedActor, type WriteObserver,
-  runHeadSplit, HeadController, REAL_CLOCK, type HeadJournal,
-  codemodeSurface, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, ConversationSearchStore,
-  headMergeLLM, spawnSeatedHead,
-  localMissionScope, type ToolSurfaceNarrowing,
-} from '@kinu.run/core';
+import { type HeadRuntime, type HeadGrounding, type HeadInput, type HeadSeat,
+type WebSearchProvider,
+type RouteModelBinder, type ResolvedTurnProfile,
+type PublishHeadStream,
+type MissionGovernor, type ModelCallSink, type ModelOperationSink,
+type HostedActor, type WriteObserver,
+runHeadSplit, HeadController, REAL_CLOCK, type HeadJournal,
+codemodeSurface, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, headMergeLLM, spawnSeatedHead,
+localMissionScope, type ToolSurfaceNarrowing, } from '@kinu.run/core'
 import type { CLIRuntime } from './runtime';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
 
@@ -77,7 +74,7 @@ export function hostedCodemodeTool(
   // A program here runs in this process, which holds no Browser Run socket client.
   const surface = hostedSurfaceActor(actor, {
     web: { search, files: actor.runtime.storage, browser: null },
-    conversations: new ConversationSearchStore(actor.runtime.storage.sql, actor.handle, (sessionId) => actor.stores.history.transcript(sessionId)),
+    conversations: actor.stores.conversationSearch,
     vectorStore: null,
   });
 

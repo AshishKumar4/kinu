@@ -1,21 +1,19 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** An agent's own SQLite, under the core stores; its roster rows are copies the workspace sends on each call. */
 import type { ModelMessage, UIMessage } from 'ai';
-import {
-  CHAT_SESSION_ID, EventLog, EvolutionEngine, WorkspaceActorDirectory, runEventSinks, historyTurnPairs, conversationTurnPair, type ConversationTurnPair,
-  actorReferenceOf, actorScaffoldPath, createActorHost, createScaffoldSurface, defaultLoopOrigin,
-  initWorkspaceSchema, nimbusSessionFiles, recoverActorTurns, MissionGovernor, actorReadHandle, readSessionTranscript, readSubordinateInspection,
-  getChatHistoryPage, inheritedContextFromTranscript, turnRequestIndex, turnRequestPage,
-  type TurnRequestIndex, type TurnRequestPage, ConversationSearchStore, RunEventRecorder, spendLedger, type SpendLedger, type StepSpendSource,
-  readAgentFigures, NO_FIGURES, type AgentFigures,
-  localContextTree, type ContextEditor, type ContextTree, type ConversationRecall,
-  type ActorHandle, type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
-  type SessionTranscriptReader, type SubordinateInspectionResult, type SubordinateReportLedger, type ModelPricing, type SqlExecutor,
-  type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
-  type Executor, type JsonObject, type NimbusSandboxHandle, type SqlValue, WORKSPACE_ROOT, cloudPlanes, answersForDrainTurns,
-  initPendingSendTables, initTerminalEffectTable, PendingSendStore, contextFill, announcementOf, classifyRunEnd, closeTurnRun, TurnReports,
-  PlanReviewStore, type PlanReview,
-} from '@kinu.run/core';
+import { CHAT_SESSION_ID, EventLog, EvolutionEngine, WorkspaceActorDirectory, runEventSinks, historyTurnPairs, conversationTurnPair, type ConversationTurnPair,
+actorReferenceOf, actorScaffoldPath, createActorHost, createScaffoldSurface, defaultLoopOrigin,
+initWorkspaceSchema, nimbusSessionFiles, recoverActorTurns, MissionGovernor, actorReadHandle, readSessionTranscript, readSubordinateInspection,
+getChatHistoryPage, inheritedContextFromTranscript, turnRequestIndex, turnRequestPage,
+type TurnRequestIndex, type TurnRequestPage, RunEventRecorder, spendLedger, type SpendLedger, type StepSpendSource,
+readAgentFigures, NO_FIGURES, type AgentFigures,
+localContextTree, type ContextEditor, type ContextTree, type ConversationRecall,
+type ActorHandle, type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
+type SessionTranscriptReader, type SubordinateInspectionResult, type SubordinateReportLedger, type ModelPricing, type SqlExecutor,
+type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
+type Executor, type JsonObject, type NimbusSandboxHandle, type SqlValue, WORKSPACE_ROOT, cloudPlanes, answersForDrainTurns,
+initPendingSendTables, initTerminalEffectTable, PendingSendStore, contextFill, announcementOf, classifyRunEnd, closeTurnRun, TurnReports,
+PlanReviewStore, type PlanReview, } from '@kinu.run/core'
 import { attempt, detach, diagnostics, hold, KinuError, logged, settle, settleSync } from '@kinu.run/core/obs';
 import { isDeepStrictEqual } from 'node:util';
 import { Effect } from 'effect';
@@ -110,7 +108,6 @@ export class AgentDatabase {
   }
 
   private priced: { readonly model: string; readonly pricing: ModelPricing | null } | null = null;
-  private recall: ConversationRecall | null = null;
   private execution: Executor | null = null;
 
   private readonly sql: SqlExecutor = <T,>(query: TemplateStringsArray, ...values: SqlValue[]): T[] =>
@@ -433,12 +430,7 @@ export class AgentDatabase {
   }
 
   conversations(): ConversationRecall {
-    const reference = this.reference();
-
-    this.recall ??= new ConversationSearchStore(this.sql, this.actorHost().bindStores(reference).handle,
-      (sessionId) => this.actorHost().bindStores(reference).stores.history.transcript(sessionId));
-
-    return this.recall;
+    return this.actorHost().bindStores(this.reference()).stores.conversationSearch;
   }
 
   contextTree(editor: ContextEditor): ContextTree {

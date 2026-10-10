@@ -5,7 +5,7 @@
 
 import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
-import { ConversationSearchStore, historyTurnPairs, sameActorReference, testModel, toolDescription, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
+import { historyTurnPairs, sameActorReference, testModel, toolDescription, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
 import type { ActorHandle, JsonObject } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { resolve } from 'node:path';
@@ -2709,7 +2709,7 @@ export class LocalAgentSession {
         runId,
         sources: this.runActorSources(actor, runId, compaction.extension),
         infer: (input, inference) => runHeadInference(input, { ...inference, compaction: compaction.trigger }),
-        conversations: new ConversationSearchStore(actor.runtime.storage.sql, actor.handle, (sessionId) => actor.stores.history.transcript(sessionId)),
+        conversations: actor.stores.conversationSearch,
         jobs: { ports: this.loopJobPorts(), attach: (authority) => this.jobAuthorities.attach(authority) },
       },
     };
@@ -2805,7 +2805,7 @@ export class LocalAgentSession {
   }
 
   private ownConversations(): ConversationRecall {
-    return new ConversationSearchStore(this.rt.storage.sql, this.rt.actor, (sessionId) => this.stores.history.transcript(sessionId));
+    return this.stores.conversationSearch;
   }
 
   /** Tool deps with the effect-claim id as an argument; the id decides what a replay dedupes against. */

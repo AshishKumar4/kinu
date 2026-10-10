@@ -25,7 +25,7 @@ import * as v from 'valibot';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime';
 import { makeSql, makeExecRaw, makeWorkspaceSchemaSql, createCLIRuntime, type CLIRuntime } from '../src/runtime';
 import { createHeadRuntime, headSeatFactory, localTestActorHost } from './actor-fixture';
-import { ConversationSearchStore, openLocalActor } from '@kinu.run/core';
+import { openLocalActor } from '@kinu.run/core';
 import { tierAuthority, toolSequenceModel } from './helpers/local-session';
 import { LocalAgentSession } from '../src/local-session';
 
@@ -560,7 +560,7 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
 
     const tools = buildHeadToolSet({
       input: aHeadInput(), capture, rt,
-      conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => stores.history.transcript(sessionId)),
+      conversations: stores.conversationSearch,
       codemodeTool: { description: 'x', inputSchema: {}, execute: async () => ({ result: 'unused' }) },
       webSearch: stubWeb,
       jobs: {

@@ -8,7 +8,7 @@ import {
   type ActorHandle, type HeadInput, type NodeIdentity, type ProfileAuthorityInputs, type RunTurnSources,
   type SqlExec, type SqlValue, type WriteObserver,
   DEFAULT_WORKERS_AI_MODEL_SPEC, WORKSPACE_ROOT, actorHomeName } from '@kinu.run/core';
-import { ConversationSearchStore, bindLocalActor, localActorDirectory, registerLocalActor, retireLocalActor } from '@kinu.run/core';
+import { bindLocalActor, localActorDirectory, registerLocalActor, retireLocalActor } from '@kinu.run/core';
 import { buildLocalActorRuntime, cleanupFacetScratch, makeSqlExec, type CLIRuntime } from '../src/runtime';
 import { modelWindow, type HeadInferenceDeps, type HeadSeat } from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
@@ -166,7 +166,7 @@ export function headSeatFactory(
       runId,
       sources: fixtureRunSources(actor, () => authority.inputs(), model, runId),
       infer: (headInput, inference) => runHeadInference(headInput, { ...inference, compaction }),
-      conversations: new ConversationSearchStore(actor.runtime.storage.sql, actor.handle, (sessionId) => actor.stores.history.transcript(sessionId)),
+      conversations: actor.stores.conversationSearch,
       // No workspace routes a fixture seat's jobs: nothing here cancels or recovers them.
       jobs: { ports: { jobOutput: () => {} }, attach: () => () => {} },
       release: async () => {
@@ -256,7 +256,7 @@ export function headLoopSeams(
     sources: fixtureRunSources(actor, async () => inputs, model, runId),
     compaction,
     infer: (headInput: HeadInput, inference: Omit<HeadInferenceDeps, 'compaction'>) => runHeadInference(headInput, { ...inference, compaction }),
-    conversations: new ConversationSearchStore(runtime.storage.sql, runtime.actor, (sessionId) => stores.history.transcript(sessionId)),
+    conversations: stores.conversationSearch,
     // No workspace routes a fixture seat's jobs: nothing here cancels or recovers them.
     jobs: { ports: { jobOutput: () => {} }, attach: () => () => {} },
   } satisfies Omit<HeadSeat, 'release'> & Pick<HeadInferenceDeps, 'compaction'>;

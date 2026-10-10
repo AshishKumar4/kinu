@@ -102,7 +102,7 @@ async function seeded() {
   await ws.vfs.writeFile('artifacts/logo.bin', bytes);
   await ws.vfs.mkdir('notes', { recursive: true });
   await writeText(ws.vfs, 'notes/plan.md', 'a plan with a "quote" and a \\ backslash');
-  await new ConversationSearchStore(ws.sql, actor, (sessionId) => history.transcript(sessionId)).search('sqlite');
+  await new ConversationSearchStore(ws.sql, actor, (sessionId) => history.transcript(sessionId), write => ws.db.transaction(write)()).search('sqlite');
 
   return { ...ws, bytes, actor, history };
 }
@@ -200,7 +200,7 @@ describe('workspace archive', () => {
 
     const restored = openWorkspaceMainActor(target.sql);
     const history = historyOver(target, restored);
-    const hits = await new ConversationSearchStore(target.sql, restored, (sessionId) => history.transcript(sessionId)).search('sqlite');
+    const hits = await new ConversationSearchStore(target.sql, restored, (sessionId) => history.transcript(sessionId), write => target.db.transaction(write)()).search('sqlite');
     expect(hits.length).toBe(5);
     // FTS shadow tables are rebuilt on the target, never carried as rows.
     expect(lines.some((l) => l.includes('"table":"conversation_fts_data"'))).toBe(false);
@@ -209,7 +209,7 @@ describe('workspace archive', () => {
     await seedTranscriptEntry(history, CHAT_SESSION_ID, {
       id: 'm5', origin: 'input', message: { role: 'user', content: 'local post-import' },
     });
-    const after = await new ConversationSearchStore(target.sql, restored, (sessionId) => history.transcript(sessionId)).search('post-import');
+    const after = await new ConversationSearchStore(target.sql, restored, (sessionId) => history.transcript(sessionId), write => target.db.transaction(write)()).search('post-import');
     expect(after.map((hit) => hit.messageId)).toEqual(['m5']);
   });
   test('the workspace capability secret is never in an archive', async () => {
@@ -427,7 +427,7 @@ const OWNER_TEXT = '# the owner wrote this\n';
     await seedTranscriptEntry(cloud, CHAT_SESSION_ID, {
       id: 'a1', origin: 'output', message: { role: 'assistant', content: 'cloud answer' },
     });
-    await new ConversationSearchStore(source.sql, openWorkspaceMainActor(source.sql), (sessionId) => cloud.transcript(sessionId)).search('cloud');
+    await new ConversationSearchStore(source.sql, openWorkspaceMainActor(source.sql), (sessionId) => cloud.transcript(sessionId), write => source.db.transaction(write)()).search('cloud');
 
     const lines = await writeWorkspaceArchive(source.archive, { workspace: 'cloud', source: 'cloud' });
     expect(lines.some((line) => line.includes('conversation_fts'))).toBe(false);
@@ -448,7 +448,7 @@ const OWNER_TEXT = '# the owner wrote this\n';
     await seedTranscriptEntry(history, CHAT_SESSION_ID, {
       id: 'u2', origin: 'input', message: { role: 'user', content: 'local continuation' },
     });
-    const continued = await new ConversationSearchStore(target.sql, landed, (sessionId) => history.transcript(sessionId)).search('local continuation');
+    const continued = await new ConversationSearchStore(target.sql, landed, (sessionId) => history.transcript(sessionId), write => target.db.transaction(write)()).search('local continuation');
     expect(continued.map((hit) => hit.messageId)).toEqual(['u2']);
   });
 });

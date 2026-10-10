@@ -1,12 +1,12 @@
 // ConversationSearchStore, seeded through `SessionHistory.record` so text reaches the index only via `transcript.project`.
 import { describe, test, expect } from 'bun:test';
 import { createTestRuntime } from './helpers';
-import { ConversationSearchStore, invalidateConversationSearchIndex } from '../src/index';
-import { seedTranscriptEntry, present } from '@kinu.run/test-utils';
+import { ConversationSearchStore, createAgentStores, invalidateConversationSearchIndex, type AgentStores, type SessionTranscriptReader } from '../src/index';
+import { createTestActorsOver, seedTranscriptEntry, present } from '@kinu.run/test-utils';
 
 function setup() {
   const { rt, stores } = createTestRuntime();
-  const store = new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => stores.history.transcript(sessionId));
+  const store = stores.conversationSearch;
   let seq = 0;
 
   const record = async (sessionId: string, role: 'user' | 'assistant', text: string): Promise<string> => {
@@ -22,7 +22,85 @@ function setup() {
   return { rt, store, record };
 }
 
+function heldProjection(history: AgentStores['history'], entered: () => void, release: Promise<void>): (sessionId: string) => SessionTranscriptReader {
+  return (sessionId) => {
+    const reader = history.transcript(sessionId);
+    const project = reader.project.bind(reader);
+
+    reader.project = async (id) => {
+      entered();
+      await release;
+
+      return await project(id);
+    };
+
+    return reader;
+  };
+}
+
 describe('ConversationSearchStore.search', () => {
+  test('interleaved actor projections cannot publish each other\'s private conversation', async () => {
+    const { rt, stores, db } = createTestRuntime();
+    const actors = createTestActorsOver(db, { name: rt.actor.name });
+    const peer = actors.sibling('search-peer');
+
+    const peerStores = createAgentStores(() => rt.storage.sql, () => peer, rt.storage.transactionSync,
+      async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/peer/.kinu/context' }));
+
+    await seedTranscriptEntry(stores.history, 'chat', { id: 'private-main', message: { role: 'user', content: 'shared confidential alpha' }, origin: 'input' });
+    await seedTranscriptEntry(peerStores.history, 'chat', { id: 'private-peer', message: { role: 'user', content: 'shared confidential beta' }, origin: 'input' });
+
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+
+    const mainSearch = new ConversationSearchStore(rt.storage.sql, rt.actor, heldProjection(stores.history, entered.resolve, release.promise), rt.storage.transactionSync);
+    const peerSearch = new ConversationSearchStore(rt.storage.sql, peer, (sessionId) => peerStores.history.transcript(sessionId), rt.storage.transactionSync);
+    const readingMain = mainSearch.search('shared');
+
+    try {
+      await entered.promise;
+
+      const peerHits = await peerSearch.search('shared');
+
+      release.resolve();
+
+      const mainHits = await readingMain;
+
+      expect(peerHits.map((hit) => hit.messageId)).toEqual(['private-peer']);
+      expect(mainHits.map((hit) => hit.messageId)).toEqual(['private-main']);
+    } finally {
+      release.resolve();
+      await readingMain;
+      db.close();
+    }
+  });
+
+  test('concurrent refreshes index one canonical row only once', async () => {
+    const { rt, stores, db } = createTestRuntime();
+
+    await seedTranscriptEntry(stores.history, 'chat', { id: 'one-entry', message: { role: 'user', content: 'unique indexed subject' }, origin: 'input' });
+
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+
+    const first = new ConversationSearchStore(rt.storage.sql, rt.actor, heldProjection(stores.history, entered.resolve, release.promise), rt.storage.transactionSync);
+    const second = new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => stores.history.transcript(sessionId), rt.storage.transactionSync);
+    const readingFirst = first.search('unique');
+
+    try {
+      await entered.promise;
+      await second.search('unique');
+      release.resolve();
+      await readingFirst;
+
+      expect(rt.storage.sql<{ count: number }>`SELECT COUNT(*) AS count FROM conversation_fts WHERE msg_id = 'one-entry'`[0]?.count).toBe(1);
+    } finally {
+      release.resolve();
+      await readingFirst;
+      db.close();
+    }
+  });
+
   test('ranks the denser match first and carries the entry\'s session, id and role', async () => {
     const { store, record } = setup();
     await record('a', 'assistant', 'postgres mentioned once in passing among many other words here');
@@ -141,11 +219,11 @@ describe('the derived index', () => {
     await record('chat', 'user', 'canonical subject matter');
     expect((await store.search('canonical')).length).toBe(1);
     // A projection row the rowid watermark cannot see; only invalidation clears it.
-    void rt.storage.sql`INSERT INTO conversation_fts (content, msg_id, session_id, role, created_at)
-      VALUES ('stale ghost text', 'ghost', 'chat', 'user', 1000)`;
+    void rt.storage.sql`INSERT INTO conversation_fts (content, actor_id, msg_id, session_id, role, created_at)
+      VALUES ('stale ghost text', ${rt.actor.actorId}, 'ghost', 'chat', 'user', 1000)`;
     expect((await store.search('ghost')).map((hit) => hit.messageId)).toEqual(['ghost']);
 
-    invalidateConversationSearchIndex(rt.storage.sql);
+    invalidateConversationSearchIndex(rt.storage.sql, rt.actor.actorId);
     expect(await store.search('ghost')).toEqual([]);
     expect((await store.search('canonical')).length).toBe(1);
   });

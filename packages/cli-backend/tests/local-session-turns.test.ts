@@ -1204,11 +1204,11 @@ describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
   });
 
   test('persisted turns are searchable through the conversation-search seam', async () => {
-    const { ConversationSearchStore } = await import('@kinu.run/core');
+
     const { rt, session } = setup('the staging deploy used wrangler version three');
     await session.send('how did we deploy to staging?', { id: crypto.randomUUID() });
 
-    const store = new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId));
+    const store = rt.stores.conversationSearch;
     const hits = await store.search('wrangler staging');
     expect(hits.length).toBeGreaterThan(0);
     expect(hits[0].conversationId).toBe('default');

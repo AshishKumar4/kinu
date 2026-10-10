@@ -4,7 +4,7 @@ import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
 import { asSchema } from 'ai';
 import * as v from 'valibot';
-import { createTestRuntime, conversationsFor, storesFor, actorJobsFor } from './helpers';
+import { createTestRuntime, conversationsFor, actorJobsFor } from './helpers';
 import { programCodemode } from './helpers-program';
 import {
   narrowToolSurface, codemodeCapabilitiesFor, TOOL_REACH,
@@ -258,11 +258,11 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
   test('memory.* dispatches through the SAME store the native `memory` tool reads/writes', async () => {
     const { rt } = createTestRuntime();
-    const { history } = storesFor(rt);
+    
 
     const provider = createMemoryCodemodeProvider(() => ({
       memory: rt.memory, actor: rt.actor,
-      conversations: conversationsFor(rt, history),
+      conversations: conversationsFor(rt),
     }));
 
     // No facts wired: remember/recall/forget are absent, as in the native tool.
@@ -274,12 +274,12 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
   test('memory.* exposes remember/recall/forget only when a FactsStore is wired, over the SAME store', async () => {
     const { rt } = createTestRuntime();
-    const { history } = storesFor(rt);
+    
     const { store, facts } = factsOverMap();
 
     const provider = createMemoryCodemodeProvider(() => ({
       memory: rt.memory, actor: rt.actor, facts,
-      conversations: conversationsFor(rt, history),
+      conversations: conversationsFor(rt),
     }));
 
     expect(Object.keys(provider.tools)).toContain('remember');

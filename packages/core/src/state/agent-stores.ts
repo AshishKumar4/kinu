@@ -15,11 +15,13 @@ import { PlanReviewStore } from '../plans/review';
 import { WORKSPACE_RUN_ID } from '../events/model-call';
 import { createAppDataStore, type AppDataStore } from '../tools/db-codemode';
 import { SessionHistory } from '../session/history';
+import { ConversationSearchStore } from '../memory/conversation-search';
 import type { SessionFilePlane } from '../session/payload';
 
 export interface AgentStores {
   readonly config: AgentConfigStore;
   readonly history: SessionHistory;
+  readonly conversationSearch: ConversationSearchStore;
   readonly facts: FactsStore;
   readonly taskList: TaskListStore;
   /** Also the live fork roster the dynamic context reads. */
@@ -45,6 +47,7 @@ export function createAgentStores(sql: () => SqlExecutor, actor: () => ActorHand
   let mctsSearchStore: MctsSearchStore | undefined;
   let appData: AppDataStore | undefined;
   let history: SessionHistory | undefined;
+  let conversationSearch: ConversationSearchStore | undefined;
 
   // Members reach siblings through `bundle` so each actor owns one instance of every store.
   const bundle: AgentStores = {
@@ -68,6 +71,9 @@ export function createAgentStores(sql: () => SqlExecutor, actor: () => ActorHand
     },
     get history(): SessionHistory {
       return history ??= new SessionHistory({ sql: sql(), actor: actor(), transactionSync, files });
+    },
+    get conversationSearch(): ConversationSearchStore {
+      return conversationSearch ??= new ConversationSearchStore(sql(), actor(), (sessionId) => bundle.history.transcript(sessionId), transactionSync);
     },
     get jobs(): BackgroundJobStore {
       return (jobs ??= new BackgroundJobStore(sql(), actor()));
