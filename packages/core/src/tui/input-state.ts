@@ -11,6 +11,8 @@ export interface InputState {
   walkbackOpen: boolean;
   /** A walk-back request waiting for every interrupted turn to settle. */
   walkbackPending: boolean;
+  /** Sends not yet answered, for an adapter that reports them: a queued prompt waits behind these as behind a turn. */
+  sending: number;
 }
 
 export const initialInputState: InputState = {
@@ -19,11 +21,15 @@ export const initialInputState: InputState = {
   queue: [],
   walkbackOpen: false,
   walkbackPending: false,
+  sending: 0,
 };
 
 export type InputMachineEvent =
   | { type: 'turn-start' }
   | { type: 'turn-settled' }
+  /** A send left, or was answered, admitted or refused: what waits behind it goes once nothing else runs. */
+  | { type: 'send-started' }
+  | { type: 'send-ended' }
   | { type: 'escape'; now: number; draft: string; hasUserMessages: boolean }
   /** Stop the running turn, from a key or a signal: what was queued behind it returns to the input, never fires. */
   | { type: 'interrupt'; draft: string }
@@ -48,6 +54,26 @@ export interface InputTransition {
   effects: InputEffect[];
 }
 
+/** The next queued prompt, sent once no turn runs and no send waits on an answer. */
+function released(state: InputState): InputTransition {
+  const [next, ...rest] = state.queue;
+
+  if (state.activeTurns > 0 || state.sending > 0 || next === undefined) return { state, effects: [] };
+
+  return { state: { ...state, queue: rest }, effects: [{ kind: 'send-queued', text: next }] };
+}
+
+/** A prompt asked to go after what runs: held while a turn runs or a send waits on an answer, else sent now. */
+function queued(state: InputState, text: string): InputTransition {
+  if (!text) return { state, effects: [] };
+
+  if (state.activeTurns > 0 || state.sending > 0) {
+    return { state: { ...state, queue: [...state.queue, text] }, effects: [{ kind: 'clear-input' }] };
+  }
+
+  return { state, effects: [{ kind: 'send-queued', text }] };
+}
+
 /** Esc pressed again within the beat: walk back (once the turn settles, if one runs), or leave when there is nothing. */
 function secondEscape(state: InputState, now: number, hasUserMessages: boolean, busy: boolean): InputTransition {
   if (hasUserMessages) {
@@ -70,28 +96,17 @@ export function reduceInput(state: InputState, event: InputMachineEvent): InputT
       const activeTurns = Math.max(0, state.activeTurns - 1);
 
       if (activeTurns === 0 && state.walkbackPending) {
-        return {
-          state: {
-            ...state,
-            activeTurns,
-            walkbackPending: false,
-            walkbackOpen: true,
-          },
-          effects: [],
-        };
+        return { state: { ...state, activeTurns, walkbackPending: false, walkbackOpen: true }, effects: [] };
       }
 
-      const [next, ...rest] = state.queue;
-
-      if (activeTurns === 0 && next !== undefined) {
-        return {
-          state: { ...state, activeTurns, queue: rest },
-          effects: [{ kind: 'send-queued', text: next }],
-        };
-      }
-
-      return { state: { ...state, activeTurns }, effects: [] };
+      return released({ ...state, activeTurns });
     }
+
+    case 'send-started':
+      return { state: { ...state, sending: state.sending + 1 }, effects: [] };
+
+    case 'send-ended':
+      return released({ ...state, sending: Math.max(0, state.sending - 1) });
 
     case 'escape': {
       if (state.walkbackOpen) {
@@ -148,20 +163,8 @@ export function reduceInput(state: InputState, event: InputMachineEvent): InputT
       return reduceInput(state, { type: 'queue', text: event.draft });
     }
 
-    case 'queue': {
-      const text = event.text.trim();
-
-      if (!text) return { state, effects: [] };
-
-      if (state.activeTurns > 0) {
-        return {
-          state: { ...state, queue: [...state.queue, text] },
-          effects: [{ kind: 'clear-input' }],
-        };
-      }
-
-      return { state, effects: [{ kind: 'send-queued', text }] };
-    }
+    case 'queue':
+      return queued(state, event.text.trim());
 
     case 'branch': {
       const text = event.draft.trim();

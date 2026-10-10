@@ -45,15 +45,14 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   let exiting = false;
   /** The TUI's input machine: turns counted by their events, and what waits behind them. */
   let machine = initialInputState;
-  /** Sends not yet answered: a turn is owed from the moment its send leaves. */
-  let sending = 0;
   /** Resolves the prompt loop's wait once no turn runs and none is owed. */
   let idle: (() => void) | null = null;
   let pendingPrefill: string | null = null;
   /** Answer lines to a consent question must not be read as steering input. */
   let consentAskPending = false;
 
-  const busy = () => machine.activeTurns > 0 || sending > 0;
+  // A send is owed a turn from the moment it leaves: the machine counts it until it is answered.
+  const busy = () => machine.activeTurns > 0 || machine.sending > 0;
 
   const settleIfIdle = () => {
     if (busy() || idle === null) return;
@@ -68,10 +67,15 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
 
     for (const effect of transition.effects) {
       if (effect.kind === 'interrupt') client.stop();
-      else if (effect.kind === 'set-input') pendingPrefill = effect.text;
+      // readline answers a written newline as Enter, so what was queued comes back as one line to edit and send.
+      else if (effect.kind === 'set-input') pendingPrefill = effect.text.replace(/\s*\n\s*/g, ' ');
       else if (effect.kind === 'hint') console.log(DIM(`  ${effect.text}`));
-      // The machine releases a queued prompt as a turn settles; it is sent once that event's handling has returned.
-      else if (effect.kind === 'send-queued') queueMicrotask(() => detach(Effect.promise(async () => runTurn(effect.text))));
+      // A released prompt is owed from now, so nothing queued after it overtakes it; it leaves once this event's
+      // handling has returned.
+      else if (effect.kind === 'send-queued') {
+        dispatch({ type: 'send-started' });
+        queueMicrotask(() => detach(Effect.promise(async () => runTurn(effect.text, undefined, true))));
+      }
       else if (effect.kind === 'send-branch' && !client.branch(effect.text, { cwd: process.cwd() })) {
         console.log(DIM('  ⧗ the turn just finished. Queued to send next.'));
         dispatch({ type: 'queue', text: effect.text });
@@ -234,25 +238,25 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     }
   };
 
-  const runTurn = async (input: string, mode?: WorkMode) => {
-    const resolved = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes, planes: client.planes ?? undefined });
-
-    for (const problem of resolved.errors) console.log(WARN(`  ${problem}`));
-
-    if (resolved.attached.length > 0) {
-      console.log(DIM(`  + ${resolved.attached.map(describePromptAttachment).join(' · ')}`));
-    }
-
-    headerPrinted = false;
-    interruptRequested = false;
-    sending += 1;
-    turnStatus.show('thinking');
-
-    const consentWatch = client.consents
-      ? watchTerminalConsents(client.consents, client.agentName, consentAsk)
-      : null;
+  /** `reserved`: the machine already counts this send, as it does one it released from the queue. */
+  const runTurn = async (input: string, mode?: WorkMode, reserved = false) => {
+    if (!reserved) dispatch({ type: 'send-started' });
+    let consentWatch: ReturnType<typeof watchTerminalConsents> | null = null;
 
     try {
+      const resolved = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes, planes: client.planes ?? undefined });
+
+      for (const problem of resolved.errors) console.log(WARN(`  ${problem}`));
+
+      if (resolved.attached.length > 0) {
+        console.log(DIM(`  + ${resolved.attached.map(describePromptAttachment).join(' · ')}`));
+      }
+
+      headerPrinted = false;
+      interruptRequested = false;
+      turnStatus.show('thinking');
+      consentWatch = client.consents ? watchTerminalConsents(client.consents, client.agentName, consentAsk) : null;
+
       await client.send(
         resolved.files.length > 0 ? { text: resolved.text, files: resolved.files } : resolved.text,
         { cwd: process.cwd(), ...(mode !== undefined && { mode }) },
@@ -262,10 +266,10 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
       console.log(`\n${formatFailure({ cause: err })}\n`);
     } finally {
       consentWatch?.stop();
-      sending -= 1;
       turnStatus.clear();
       console.log('\n');
-      settleIfIdle();
+      // Answered, admitted or refused: what waits behind it goes once nothing else runs.
+      dispatch({ type: 'send-ended' });
     }
   };
 

@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-10",
   "files": 3159,
-  "functions": 82786,
+  "functions": 82796,
   "ceiling": 87,
   "line": 27,
   "inventory": [
@@ -86,10 +86,6 @@
       "complexity": 34
     },
     {
-      "key": "packages/core/src/tui/input-state.ts#reduceInput",
-      "complexity": 34
-    },
-    {
       "key": "tests/first-run/share-capability-cut.first-run.ts#describe>liveTest>run",
       "complexity": 34
     },
@@ -103,6 +99,10 @@
     },
     {
       "key": "packages/core/src/events/hub/visibility.ts#briefForVariant",
+      "complexity": 32
+    },
+    {
+      "key": "packages/core/src/tui/input-state.ts#reduceInput",
       "complexity": 32
     },
     {
