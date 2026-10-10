@@ -263,9 +263,9 @@ describe('who is at work, and who is who', () => {
 
       try {
         await page.waitForSelector('[data-rail] [data-agents-counter]');
-        // What a find-in-page or a focus without preventScroll does to a match in the panel off to the side.
-        await page.$eval(`[data-rail] ${LIST} [data-agent-row="a-scout"]`, (row) => { row.scrollIntoView({ block: 'center', inline: 'center' }); });
         await page.click('[data-rail] [data-agents-counter]');
+        // Reached for as the slide starts, as a press, a find-in-page or a focus without preventScroll may.
+        await page.$eval(`[data-rail] ${LIST} [data-agent-row="a-scout"]`, (row) => { row.scrollIntoView({ block: 'center', inline: 'center' }); });
         await page.waitForFunction((list) => document.querySelector(list)?.closest('[inert]') === null, {}, `[data-rail] ${LIST}`);
         await still(page);
 
