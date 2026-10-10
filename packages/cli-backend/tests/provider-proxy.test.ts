@@ -3,6 +3,9 @@ import { describe, expect, test } from 'bun:test';
 import { generateText } from 'ai';
 import { asFetchFunction, type LLMProviderConfig } from '@kinu.run/core';
 import { createLocalModelResolver } from '../src/model-resolver';
+import { createCLIRuntime } from '../src/runtime';
+import { resolverModelPlane } from '../src/profile-authority';
+import { scratchDir, scratchPath, workspaceDatabase } from '@kinu.run/test-utils';
 
 const ORIGIN = 'https://kinu.example.com';
 
@@ -170,6 +173,43 @@ describe('web-UI-connected providers reach local agents', () => {
 });
 
 describe('what an unreachable account does and does not claim', () => {
+  test('a refreshed actor catalog reports an outage and observes revoked credentials when it recovers', async () => {
+    let available = true;
+    let revoked = false;
+    const transport = networkFetch({ credentials: [{ key: 'groq.bearer' }] });
+
+    const resolver = resolverWith(asFetchFunction(async (input, init) => {
+      const url = input instanceof Request ? input.url : input.toString();
+
+      if (url.endsWith('/api/user/ai/proxy/credentials')) {
+        if (!available) return new Response('listing unavailable', { status: 503 });
+
+        if (revoked) return Response.json({ credentials: [] });
+      }
+
+      return await transport(input, init);
+    }));
+
+    const db = workspaceDatabase(scratchPath('catalog-recovery', 'agent.db'));
+    const rt = createCLIRuntime(db, { cwd: scratchDir('catalog-recovery'), llm: LLM });
+    const authority = rt.profiles;
+
+    if (authority === undefined) throw new Error('the runtime must carry its profile authority');
+    authority.refine({ plane: resolverModelPlane(resolver) });
+
+    try {
+      expect((await authority.inputs()).provider.availableModels).toContain('groq/llama-3.3-70b');
+      available = false;
+      authority.refreshListing();
+      expect((await authority.inputs()).provider.unavailableProviders?.length ?? 0).toBeGreaterThan(0);
+      available = true;
+      revoked = true;
+      expect((await authority.inputs()).provider.availableModels).not.toContain('groq/llama-3.3-70b');
+    } finally {
+      db.close();
+    }
+  });
+
   test('a provider the proxy would never front reports its own honest reason', async () => {
     // The ChatGPT plan's token never leaves the machine that signed in, so a missing local sign-in is the whole answer.
     const resolver = resolverWith(networkFetch({ credentialsStatus: 503 }));

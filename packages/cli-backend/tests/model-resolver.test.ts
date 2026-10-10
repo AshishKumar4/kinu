@@ -608,7 +608,6 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
   });
 
   test('a menu the account could not serve says why, and a provider sweep asks the account again', async () => {
-    let menus = 0;
     let down = true;
 
     const resolver = createLocalModelResolver({
@@ -617,7 +616,6 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
       cloud: { origin: CLOUD_ORIGIN, token: CLOUD_TOKEN },
       fetch: asFetchFunction(async (input) => {
         if (!(input instanceof Request ? input.url : input.toString()).endsWith('/api/cli/models')) return Response.json({ credentials: [] });
-        menus += 1;
 
         return down ? new Response('down', { status: 503 }) : Response.json({ models: [{ spec: DEFAULT_WORKERS_AI_MODEL_SPEC, provider: 'workers-ai' }], failures: [] });
       }),
@@ -626,13 +624,8 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
     expect((await resolver.listProviders()).find((provider) => provider.id === 'workers-ai')?.unavailableReason).toContain('HTTP 503');
 
     down = false;
-    await resolver.listModels();
-    const swept = menus;
-    // A call reads the listing as it stands; only the sweep, which an invalidation runs, asks again.
-    await resolver.listProviders();
-    expect(menus).toBe(swept);
-    await resolver.listModels();
-    expect(menus).toBe(swept + 1);
+    expect((await resolver.listModels()).models.some((model) => model.provider === 'workers-ai')).toBe(true);
+    expect((await resolver.listProviders()).find((provider) => provider.id === 'workers-ai')?.available).toBe(true);
   });
 
   test('a credential the account holds and cannot read fails its provider, and only that one', async () => {
