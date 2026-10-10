@@ -4072,8 +4072,9 @@ export abstract class ActorAgent extends Agent<Env> {
     const driving = turn.driving ?? {};
     const item: ChatTurnInput = { kind: turnAuthor({ metadata: driving }) === 'operator' ? 'user' : 'programmatic', text: turn.input.task, metadata: driving };
 
+    // Its claims and settlement key on the id main's chat runs it under, a programmatic turn's prefix and all.
     const surface = new TurnSurface({
-      turnId: turn.turnId, actor: this.actorHandle(), item, continuity: readTurnContinuity(driving), planReply,
+      turnId: turn.chatTurnId ?? turn.turnId, actor: this.actorHandle(), item, continuity: readTurnContinuity(driving), planReply,
       // Read where the turn opens: the recorded turn carries it so a recovering host's engine cannot re-judge a turn it
       // did not run. `engine.enabled` is a live read that a mid-turn toggle could answer differently.
       evolutionEnabled: this.turnRecordsEvolution(workModeForTurnMetadata(authoredTurnMetadata({ kind: item.kind, metadata: driving }))),

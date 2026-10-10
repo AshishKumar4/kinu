@@ -269,7 +269,8 @@ export class AgentTurns {
     const turnId = request.turnId ?? crypto.randomUUID();
 
     const hosted: HostedTurnRequest = {
-      sequenceId: announcementOf(turnId), body: request.userText, mode: request.mode, parentDriven: request.parentDriven, driving: request.driving,
+      sequenceId: announcementOf(turnId), ...(request.turnId !== null && { chatTurnId: turnId }),
+      body: request.userText, mode: request.mode, parentDriven: request.parentDriven, driving: request.driving,
       ...(request.opening !== undefined && { opening: request.opening }),
       ...(request.taskPlan !== undefined && { taskPlan: request.taskPlan }),
     };

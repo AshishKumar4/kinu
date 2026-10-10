@@ -49,7 +49,7 @@ import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
 import { McpToolSurfaceSchema, ShareViewerClaimSchema, type ShareViewerClaim } from '@kinu.run/core';
 import {
-  AgentOpenTurns, AgentOwedWork, PROGRAMMATIC_MESSAGE_ID_PREFIX, announcementOf, RECOVERY_BACKOFF_CEILING_MS, type PromptFile, type AgentOpenTurn, CHAT_SESSION_ID, steerSkillsBlock, subordinateTurnContext, type SessionEvent, type SessionTranscript,
+  AgentOpenTurns, AgentOwedWork, PROGRAMMATIC_MESSAGE_ID_PREFIX, RECOVERY_BACKOFF_CEILING_MS, type PromptFile, type AgentOpenTurn, CHAT_SESSION_ID, steerSkillsBlock, subordinateTurnContext, type SessionEvent, type SessionTranscript,
 } from '@kinu.run/core';
 // Main actor's payload plane on both fork halves: the carried conversation references
 // payload files by absolute path, and the fork is a cut of the main actor's conversation.
@@ -1283,7 +1283,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       const { surface } = profile;
 
       if (surface !== undefined) {
-        this.mainTurnFacts.opened(turn.turnId, {
+        this.mainTurnFacts.opened(surface.turnId, {
           continuity: surface.continuity, evolutionEnabled: surface.evolutionEnabled, missionLabels: readMissionLabels(turn.driving),
         });
       }
@@ -2807,9 +2807,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * titles, replies and branches), declared and owed here once per turn, however often the handoff is repeated.
    */
   private async mainTurnSettled(settled: HandedOffTurn): Promise<void> {
-    // Prepared here under its producer's identity (`announcementOf`): the key its facts are held by.
-    const prepared = announcementOf(settled.turnId);
-    const held = this.mainTurnFacts.read(prepared);
+    // Prepared here under the id main's chat ran it under, which its facts and claims are kept by.
+    const held = this.mainTurnFacts.read(settled.turnId);
     const turn = v.parse(CompletedTurnSchema, settled.turn);
     // Its missions travel with every recording: the governor may hold another turn's by now, or none after a reset.
     const scoped: CompletedTurn = held.missionLabels.length === 0 ? turn : { ...turn, missionLabels: [...held.missionLabels] };
@@ -2828,7 +2827,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         { name: 'fleet_turn', scope: settled.messageId, lane: 'detached', input: { turn: facts.scopedTurn, completed: settled.completed } },
       ],
     });
-    this.mainTurnFacts.retire(prepared);
+    this.mainTurnFacts.retire(settled.turnId);
   }
 
   /** Built per use: the actor handle and the fast lane are this activation's. Main's conversation is its isolate's. */

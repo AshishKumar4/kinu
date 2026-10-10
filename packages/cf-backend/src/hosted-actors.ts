@@ -17,6 +17,9 @@ import { actorRetirementFor, type ActorRetirementRequest } from './actor-hosting
 export interface HostedTaskTurn {
   /** The turn's id: keys its claim and effects. */
   readonly turnId: string;
+  /** The id the agent's own chat runs the turn under, when a chat prepared it; `turnId` is its producer's
+   *  (`announcementOf`), which a programmatic turn's prefix is stripped from. */
+  readonly chatTurnId?: string;
   readonly parentDriven: boolean;
   /** The author-stamped metadata the agent admitted the turn under: what a plan it submits is judged by. */
   readonly driving?: JsonObject;
@@ -290,6 +293,8 @@ export interface HostedTurnRequest {
   readonly body: string;
   readonly mode: WorkMode;
   readonly sequenceId: string;
+  /** See {@link HostedTaskTurn.chatTurnId}. */
+  readonly chatTurnId?: string;
   readonly inheritedContext?: SubordinateInheritedContext;
   /** A hirer's turn carries `report`; an owner's chat with the actor does not. */
   readonly parentDriven: boolean;
@@ -373,7 +378,7 @@ function hostedTaskTurn(
     yield* Effect.promise(() => seams.priceAs(actor, model));
 
     const turn: HostedTaskTurn = {
-      turnId: task.sequenceId, parentDriven: task.parentDriven, ...(task.driving !== undefined && { driving: task.driving }), actor, runtime, reports: { spoke: false, settled: false }, input,
+      turnId: task.sequenceId, ...(task.chatTurnId !== undefined && { chatTurnId: task.chatTurnId }), parentDriven: task.parentDriven, ...(task.driving !== undefined && { driving: task.driving }), actor, runtime, reports: { spoke: false, settled: false }, input,
       ...(task.opening !== undefined && { opening: task.opening }),
       ...(task.taskPlan !== undefined && { taskPlan: task.taskPlan }),
       capture: run?.inference.capture ?? new HeadCapture(),
