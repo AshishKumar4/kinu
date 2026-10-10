@@ -886,7 +886,7 @@
     "corroborated_at INTEGER",
     "PRIMARY KEY (actor_id, id)"
   ],
-  "main_turn_facts@packages/cf-backend/src/main-turn-facts.ts": [
+  "main_turn_facts@packages/core/src/orchestrator/main-turn-facts.ts": [
     "actor_id TEXT NOT NULL",
     "turn_id TEXT NOT NULL",
     "continuity TEXT NOT NULL",

@@ -39,12 +39,16 @@ export {
   TerminalEffectLedger, initTerminalEffectTable, terminalEffect, chatTerminalEffects, turnRecordingEffects, subordinateTerminalEffects, branchesTerminalEffect,
   terminalEffectKey, TerminalEffectInterrupt, isDefinitiveTerminalFailure,
   TERMINAL_EFFECT_RETRY_BASE_MS, TERMINAL_EFFECT_RETRY_CEILING_MS,
-  RunEndReasonSchema, TurnContinuitySchema,
+  RunEndReasonSchema,
   type TerminalEffect, type TerminalEffectTable, type TerminalEffectName,
   type TerminalEffectOutcome, type TerminalEffectStatus, type TerminalEffectPhase,
   type TerminalEffectFault, type OwedEffect, type OwedTerminalEffect,
   type TerminalSequenceRun,
 } from './orchestrator/terminal-effects';
+
+export { initMainTurnFactsTable, MainTurnFactsStore, type MainTurnBranch, type MainTurnFacts } from './orchestrator/main-turn-facts';
+
+export { inTurnSurface, scopedTurnSurface, TurnSurface, type TurnSurfaceOpening } from './orchestrator/main-turn-surface';
 
 // Records that keyed work happened, kept after its row is retired.
 export {

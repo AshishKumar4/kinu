@@ -5,7 +5,9 @@
  * activation than the turn's; the turn's roster is declared from these, never from what one activation held.
  */
 import * as v from 'valibot';
-import { TurnContinuitySchema, type RawSqlExec, type SqlExecutor, type TurnContinuity } from '@kinu.run/core';
+import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import type { TurnContinuity } from './agent-orchestrator';
+import { TurnContinuitySchema } from './terminal-effects';
 
 export interface MainTurnBranch {
   readonly id: string;

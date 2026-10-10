@@ -6,11 +6,12 @@
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { ToolSet } from 'ai';
-import {
-  captureOperationProfile,
-  type ActorReference, type ChatTurnInput, type OperationProfile, type ProfileAuthorityInputs, type ReplyToCommentToolDeps,
-  type ResolvedTurnProfile, type TurnContinuity,
-} from '@kinu.run/core';
+import type { ActorReference } from '../identity/actor-handle';
+import { captureOperationProfile, type OperationProfile } from '../profiles/operation';
+import type { ProfileAuthorityInputs, ResolvedTurnProfile } from '../profiles/resolve';
+import type { ReplyToCommentToolDeps } from '../types/plans';
+import type { TurnContinuity } from './agent-orchestrator';
+import type { ChatTurnInput } from './chat-session';
 
 export interface TurnSurfaceOpening {
   readonly turnId: string;
