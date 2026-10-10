@@ -73,15 +73,15 @@ export class Meter {
   private calls: Record<string, number> = {};
   private readonly real: SqlStorage['exec'];
   private ignoredRpc: string | null = null;
-  private ran: { readonly query: string; readonly cursor: Pick<SqlStorageCursor, 'rowsRead'> }[] = [];
+  private ran: { readonly query: string; readonly cursor: Pick<SqlStorageCursor<Record<string, SqlStorageValue>>, 'rowsRead'> }[] = [];
 
   constructor(storage: SqlStorage) {
     const exec = storage.exec.bind(storage);
     this.real = exec;
     this.sql = new SqlMeter({ exec, get databaseSize() { return storage.databaseSize; } });
-    storage.exec = (query, ...bindings) => {
-      if (!this.active) return exec(query, ...bindings);
-      const cursor = this.sql.exec(query, ...bindings);
+    storage.exec = <Row extends Record<string, SqlStorageValue>>(query: string, ...bindings: unknown[]) => {
+      if (!this.active) return exec<Row>(query, ...bindings);
+      const cursor = this.sql.exec<Row>(query, ...bindings);
       this.ran.push({ query, cursor });
 
       return cursor;
