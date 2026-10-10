@@ -45,3 +45,16 @@ test('the same caller keeps its own last working build past an edit that does no
 
   expect(later).toEqual({ image: COMPILED, key: 'src-1', broken: 'syntax error' });
 });
+
+test('a restricted caller\'s refused build does not say the slate the owner is served is broken', async () => {
+  const slates = builds();
+
+  await expect(slateImage({
+    builds: slates, slate: 'board', key: 'src-1', cred: VIEWER,
+    build: async () => ({ failed: 'import /home/owner/secrets.ts: permission denied' }),
+  })).rejects.toMatchObject({ code: 'bad_input' });
+  await slateImage({ builds: slates, slate: 'board', key: 'src-1', cred: OWNER, build: async () => COMPILED });
+
+  expect(slates.failing(OWNER)).toEqual([]);
+  expect(slates.failing(VIEWER)).toEqual([{ slate: 'board', failure: 'import /home/owner/secrets.ts: permission denied' }]);
+});
