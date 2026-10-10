@@ -36,13 +36,14 @@ import type { Connection } from 'agents';
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
 import { AwaitedList } from '@kinu.run/test-utils';
+import { createRecordingLogger } from '@kinu.run/core/obs';
 import {
-  driveUntil, GATEWAY_CATALOG, gatewayWorkspace, ownDatabase, reactivateOrchestratorHarness, workspaceMainActor,
+  driveUntil, GATEWAY_CATALOG, gatewayWorkspace, ownDatabase, reactivateOrchestratorHarness, tapDiagnostics, workspaceMainActor,
   type HarnessOrchestratorAgent, type StartedHarness,
 } from './helpers/actor-harness';
 import { answeringGateway, chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion, type StubbedAiBinding } from './helpers/platform-gateway';
 import { abandonHarnessFibers } from './helpers/agents-sdk';
-import { agentDatabase, copyNextOpening, delayNextTurnEnd, loseNextOpeningAnswer } from './helpers/agent-facets';
+import { agentDatabase, copyNextOpening, copyNextTurnEnd, delayNextTurnEnd, loseNextOpeningAnswer } from './helpers/agent-facets';
 import { socketConnection } from './helpers/bindings';
 
 const FrameSchema = v.looseObject({
@@ -391,9 +392,9 @@ test('an opening of a turn older than its re-opening is refused, before and afte
   await count.holding.until((steps) => steps.includes(3));
 
   // Through each activation's own entry for the agent, as the agent's relay reaches it.
-  await expect((await workspace.agent.agentWorkspace(main)).prepareChat(opening)).rejects.toThrow('opened again at a later epoch');
+  await expect((await workspace.agent.agentWorkspace(main)).prepareChat(opening)).rejects.toThrow('is older than the agent');
   const restarted = await reactivateOrchestratorHarness(workspace.db);
-  await expect((await restarted.agent.agentWorkspace(main)).prepareChat(opening)).rejects.toThrow('opened again at a later epoch');
+  await expect((await restarted.agent.agentWorkspace(main)).prepareChat(opening)).rejects.toThrow('is older than the agent');
 });
 
 /** The turns the workspace's evolution window recorded. */
@@ -421,9 +422,9 @@ test("an opening of a turn delivered after the agent's next turn opened is refus
   const first = await copied;
   await askedAndAnswered(workspace, 'req-second');
 
-  await expect((await workspace.agent.agentWorkspace(main)).prepareChat(first)).rejects.toThrow('has ended');
+  await expect((await workspace.agent.agentWorkspace(main)).prepareChat(first)).rejects.toThrow('is older than the agent');
   const restarted = await reactivateOrchestratorHarness(workspace.db);
-  await expect((await restarted.agent.agentWorkspace(main)).prepareChat(first)).rejects.toThrow('has ended');
+  await expect((await restarted.agent.agentWorkspace(main)).prepareChat(first)).rejects.toThrow('is older than the agent');
 });
 
 /** The workspace keeps the facts it first offered a turn until the agent's copy is durable (design v2 §2): an isolate
@@ -446,6 +447,32 @@ test('a turn whose isolate died between its preparation and freezing its facts k
   await answered;
 
   await driveUntil(workspace, 'the turn was never recorded under the facts it opened with', () => recordedTurns(workspace) === 1);
+});
+
+/** The turn's end is its run's (design v3 B): an end delayed past the agent's next opening, delivered to the workspace
+ *  after it reset, is that earlier run's, and ends nothing of the run now open; the next turn opens as ever. */
+test("a turn's end delayed past the next turn's opening ends nothing, after the workspace resets", async () => {
+  const workspace = gatewayWorkspace(counting({ held: 0, answer: 'Done.', holding: new AwaitedList<number>() }));
+  const main = workspaceMainActor(workspace.db).actorId;
+  const copied = copyNextTurnEnd(workspace.agent.agentOf(main).storageKey);
+
+  await askedAndAnswered(workspace, 'req-first');
+  const firstEnd = await copied;
+  const restarted = await reactivateOrchestratorHarness(workspace.db);
+
+  await askedAndAnswered(restarted, 'req-second');
+  // Tapped after the reset: an activation installs its own sink.
+  const log = createRecordingLogger();
+  const untap = tapDiagnostics(log);
+
+  try {
+    await (await restarted.agent.agentWorkspace(main)).turnEnded(...firstEnd);
+
+    expect(log.emitted.filter((line) => line.event === 'agent.stale_turn_end')).toHaveLength(1);
+    await askedAndAnswered(restarted, 'req-third');
+  } finally {
+    untap();
+  }
 });
 
 test('an open web pane removes a cut step before the re-run streams', async () => {

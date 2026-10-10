@@ -199,12 +199,12 @@ export class FacetChat {
 
     const prepared = await workspace.prepareChat({
       turnId: lease.turnId, mode, userText: item.text, parentDriven: this.parentDriven, driving: this.driving, opening,
-      // The claim this opening runs under is the next after any a dead execution of the turn left.
-      epoch: (actor.stores.claims.read(lease.turnId)?.epoch ?? 0) + 1,
+      // Its run, which the turn's recovery continues and its Retry starts anew, and its place in this agent's sequence.
+      runId: lease.runId, seq: database.nextInSequence(),
       ...(explicitTier !== undefined && { explicitTier }), ...(taskPlan !== null && { taskPlan }),
     });
 
-    database.prepare(lease.turnId, prepared);
+    database.prepare({ turnId: lease.turnId, runId: lease.runId }, prepared);
     this.reviewsTurns = prepared.reviewsTurns;
 
     const assembled = await this.assemble(prepared, { id: lease.turnId, mode, runId: lease.runId }, { userText: item.text, workMode: mode, ...(explicitTier !== undefined && { explicitTier }) }, (profile, inputs) => {
@@ -256,7 +256,7 @@ export class FacetChat {
     const { session } = this.deps.actor;
 
     const turnId = this.session.currentTurnId ?? '';
-    const opened = this.deps.database.factsOf(turnId);
+    const opened = this.deps.database.factsOf(this.session.currentRunId ?? turnId);
 
     if (this.policy.workspaceAgent) {
       return declareHandoffRoster(chatTurnParts(input), {
@@ -389,7 +389,7 @@ export class FacetChat {
       const owed = this.owed();
 
       // Numbered as it leaves, in this agent's store: the workspace takes no report older than one it took.
-      return this.deps.workspace.owes(this.deps.database.nextReport(), at === undefined ? owed : Math.min(at, owed ?? Infinity), owed !== null || this.owedWork().length > 0);
+      return this.deps.workspace.owes(this.deps.database.nextInSequence(), at === undefined ? owed : Math.min(at, owed ?? Infinity), owed !== null || this.owedWork().length > 0);
     });
 
     this.telling = hold(attempt({ doing: 'telling the workspace what an agent still owes', otherwise: 'unavailable' }, () => told));

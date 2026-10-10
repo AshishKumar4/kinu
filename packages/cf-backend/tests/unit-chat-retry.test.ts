@@ -6,8 +6,9 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { AwaitedList } from '@kinu.run/test-utils';
 import { actorConnectionTag, agentHome, WORKSPACE_TITLE_SYSTEM_PROMPT } from '@kinu.run/core';
-import { gatewayWorkspace, storedChat, workspaceFiles, type HarnessOrchestratorAgent } from './helpers/actor-harness';
-import { copyNextOpening } from './helpers/agent-facets';
+import { driveUntil, gatewayWorkspace, storedChat, tapDiagnostics, workspaceFiles, workspaceMainActor, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { copyNextOpening, copyNextTurnEnd } from './helpers/agent-facets';
+import { createRecordingLogger } from '@kinu.run/core/obs';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 import { socketConnection } from './helpers/bindings';
@@ -380,6 +381,56 @@ describe('Retry on an answered turn', () => {
     expect(JSON.stringify(frames.items)).toContain('Answer 2.');
   });
 
+  /** A Retry is a new run (design v2 §2): it opens with what the workspace decides as it is asked, as a turn does. The
+   *  facts were kept by turn, first wins, so a Retry recorded nothing under learning turned on after the first answer. */
+  test("a Retry opens with the workspace's facts as they are when it is asked", async () => {
+    const { workspace } = answering();
+    const { agent } = workspace;
+    await workspace.started;
+    const config = workspaceMainActor(workspace.db).config;
+    const recorded = () => v.parse(v.object({ n: v.number() }), workspace.db.query('SELECT COUNT(*) AS n FROM completed_turns').get()).n;
+    const { wire, frames } = listen(agent);
+    const gate = agent.harnessChatGate();
+
+    config.setLearning(false);
+    await gate(wire, request('first', 'submit-message'));
+    await frames.until((sent) => done(sent, 'first').length > 0);
+    await agent.harnessAgentsIdle();
+    expect(recorded()).toBe(0);
+
+    config.setLearning(true);
+    await gate(wire, request('retry', 'regenerate-message'));
+    await frames.until((sent) => done(sent, 'retry').length > 0);
+    await driveUntil(workspace, 'the Retry was never recorded under the facts it opened with', () => recorded() === 1);
+  });
+
+  /** A Retry's run is a new execution: the answered run's end, delivered after the Retry opened, ends nothing of it. */
+  test("an answered run's end delivered after its Retry opened ends nothing", async () => {
+    const { workspace } = answering();
+    const { agent } = workspace;
+    await workspace.started;
+    const main = workspaceMainActor(workspace.db).actorId;
+    const copied = copyNextTurnEnd(agent.agentOf(main).storageKey);
+    const { wire, frames } = listen(agent);
+    const gate = agent.harnessChatGate();
+
+    await gate(wire, request('first', 'submit-message'));
+    await frames.until((sent) => done(sent, 'first').length > 0);
+    const firstEnd = await copied;
+
+    await gate(wire, request('retry', 'regenerate-message'));
+    await frames.until((sent) => done(sent, 'retry').length > 0);
+    const log = createRecordingLogger();
+    const untap = tapDiagnostics(log);
+
+    try {
+      await (await agent.agentWorkspace(main)).turnEnded(...firstEnd);
+      expect(log.emitted.filter((line) => line.event === 'agent.stale_turn_end')).toHaveLength(1);
+    } finally {
+      untap();
+    }
+  });
+
   /** The close is every agent's: a hired agent's fence stayed open after its turn, until its next turn opened. */
   test("a hosted agent's opening, delivered again once its turn ended, is refused", async () => {
     const { workspace } = answering();
@@ -398,6 +449,6 @@ describe('Retry on an answered turn', () => {
     await frames.until((sent) => done(sent, 'first').length > 0);
     await agent.harnessAgentsIdle();
 
-    await expect((await agent.agentWorkspace(actorId)).prepareChat(await copied)).rejects.toThrow('has ended');
+    await expect((await agent.agentWorkspace(actorId)).prepareChat(await copied)).rejects.toThrow('is older than the agent');
   });
 });

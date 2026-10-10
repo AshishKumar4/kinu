@@ -231,8 +231,11 @@ const turnStatements = new Map<number, { readonly workspace: OperationCost['tabl
  * 809 with the review's durability fixes, within the accepted 814, at both sizes over 3 runs on 9c6e5ba52: the
  * workspace's 390 (+2, the facts it first offered the turn's preparation, kept for an agent that dies before it froze
  * them, and the ended tombstone the turn's handoff writes on its fence).
+ * 810 with the review's third round, over 2 runs at both sizes on 5323f5588: the workspace's 391 (+1, an opening first
+ * queues the obligations of openings cut before their claim; the fence, one row an agent ordered by its sequence, opens
+ * in one statement where it took two, and ends a run in one).
  */
-const TURN_STATEMENTS = 809;
+const TURN_STATEMENTS = 810;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {

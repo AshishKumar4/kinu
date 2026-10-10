@@ -1,5 +1,5 @@
 /**
- * What the workspace decided as a turn opened, frozen in the agent's own store at the turn's preparation and carried in
+ * What the workspace decided as a turn opened, frozen in the agent's own store at its run's preparation and carried in
  * its handoff (design v2 §2): its continuity, whether it records evolution, and the missions it spends for. Neither a
  * reset of the agent's isolate before it settles nor one of the workspace before it takes the handoff changes them.
  * The branches its owner started while it ran are the workspace's, one row each from their admission.
@@ -20,24 +20,26 @@ export type TurnFacts = v.InferOutput<typeof TurnFactsSchema>;
 /** A turn that settles before the workspace prepared it opened with nothing of the workspace's. */
 const UNPREPARED_TURN_FACTS: TurnFacts = Object.freeze({ continuity: 'conversation', evolutionEnabled: false, missionLabels: [] });
 
+/** One row an execution: a run, which a turn's recovery continues and its Retry starts anew. */
 export function initTurnFactsTables(exec: RawSqlExec): void {
   exec(`CREATE TABLE IF NOT EXISTS actor_turn_facts (
-    actor_id TEXT NOT NULL, turn_id TEXT NOT NULL, facts_json TEXT NOT NULL,
-    PRIMARY KEY(actor_id,turn_id))`);
+    actor_id TEXT NOT NULL, run_id TEXT NOT NULL, facts_json TEXT NOT NULL,
+    PRIMARY KEY(actor_id,run_id))`);
 }
 
-/** An agent's turns' facts, in its own store beside its claims on them. */
+/** An agent's executions' facts, in its own store beside its claims on them. */
 export class TurnFactsStore {
   constructor(private readonly sql: SqlExecutor, private readonly actorId: string) {}
 
-  /** As the turn is prepared; a turn prepared again, after a reset or for a re-read, keeps what it first opened with. */
-  freeze(turnId: string, facts: TurnFacts): void {
-    void this.sql`INSERT INTO actor_turn_facts (actor_id, turn_id, facts_json) VALUES (${this.actorId}, ${turnId}, ${JSON.stringify(facts)})
-      ON CONFLICT (actor_id, turn_id) DO NOTHING`;
+  /** As the run is prepared; prepared again, by the turn's recovery or a re-read, it keeps what it first opened with. A
+   *  Retry is a new run, which opens with the facts of its own preparation. */
+  freeze(runId: string, facts: TurnFacts): void {
+    void this.sql`INSERT INTO actor_turn_facts (actor_id, run_id, facts_json) VALUES (${this.actorId}, ${runId}, ${JSON.stringify(facts)})
+      ON CONFLICT (actor_id, run_id) DO NOTHING`;
   }
 
-  of(turnId: string): TurnFacts {
-    const row = this.sql<{ facts_json: string }>`SELECT facts_json FROM actor_turn_facts WHERE actor_id = ${this.actorId} AND turn_id = ${turnId}`[0];
+  of(runId: string): TurnFacts {
+    const row = this.sql<{ facts_json: string }>`SELECT facts_json FROM actor_turn_facts WHERE actor_id = ${this.actorId} AND run_id = ${runId}`[0];
 
     return row === undefined ? UNPREPARED_TURN_FACTS : v.parse(TurnFactsSchema, JSON.parse(row.facts_json));
   }

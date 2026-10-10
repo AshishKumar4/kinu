@@ -92,7 +92,8 @@ export type SessionEvent =
   | { type: 'reasoning-delta'; delta: string }
   | { type: 'tool-call'; toolName: string; toolCallId: string; args: ToolCallArguments }
   | ({ type: 'tool-result'; toolName: string; toolCallId: string; result: string } & ToolOutcome)
-  | { type: 'turn-end'; turn: CompletedTurn }
+  // `runId` names the execution that ended: its recovery continues the run, its Retry starts another.
+  | { type: 'turn-end'; turn: CompletedTurn; runId: string }
   | { type: 'error'; message: string }
   | { type: 'evolution'; event: string; message: string }
   // Kept apart from `evolution`: an agent with learning off says no evolution while its jobs may still settle.
@@ -1248,7 +1249,7 @@ export class ChatSession {
       this.closeRun(end, lease);
       await this.recordFailure(end, lease);
       this.emit({ type: 'error', message });
-      this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, '') });
+      this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, ''), runId: lease.runId });
 
       return interrupted ? null : message;
     } finally {
@@ -1435,7 +1436,7 @@ export class ChatSession {
       await this.recordFailure(failed, lease);
       // Not durable, so the terminal event carries no final answer.
       this.emit({ type: 'error', message });
-      this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, '') });
+      this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, ''), runId: lease.runId });
 
       return;
     }
@@ -1456,7 +1457,7 @@ export class ChatSession {
       }
       finally { this.settlingDepth -= 1; }
 
-      this.emit({ type: 'turn-end', turn });
+      this.emit({ type: 'turn-end', turn, runId: lease.runId });
     } catch (err) {
       const message = renderThrownChain({ cause: err });
       this.actorSession.orchestrator.acc.hadError = true;
@@ -1471,7 +1472,7 @@ export class ChatSession {
       );
       // The answer is durable; only bookkeeping failed. The intent row stays: the transition may never have been claimed.
       this.emit({ type: 'error', message });
-      this.emit({ type: 'turn-end', turn });
+      this.emit({ type: 'turn-end', turn, runId: lease.runId });
     }
   }
 

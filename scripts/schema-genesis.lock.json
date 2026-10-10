@@ -110,19 +110,16 @@
   ],
   "actor_turn_facts@packages/core/src/orchestrator/turn-facts.ts": [
     "actor_id TEXT NOT NULL",
-    "turn_id TEXT NOT NULL",
+    "run_id TEXT NOT NULL",
     "facts_json TEXT NOT NULL",
-    "PRIMARY KEY(actor_id,turn_id)"
+    "PRIMARY KEY(actor_id,run_id)"
   ],
   "actor_turn_fence@packages/core/src/subordinates/turn-fence.ts": [
-    "actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id)",
+    "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)",
+    "seq INTEGER NOT NULL",
     "turn_id TEXT NOT NULL",
-    "epoch INTEGER NOT NULL",
-    "ended_at INTEGER",
-    "superseded_at INTEGER",
-    "cancelled_at INTEGER",
-    "facts_json TEXT",
-    "PRIMARY KEY (actor_id, turn_id)"
+    "run_id TEXT NOT NULL",
+    "facts_json TEXT"
   ],
   "agent_data_tables@packages/core/src/tools/db-codemode.ts": [
     "name TEXT PRIMARY KEY",
@@ -191,12 +188,12 @@
   "agent_owed_work@packages/core/src/subordinates/open-turns.ts": [
     "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)"
   ],
-  "agent_report_sequence@packages/core/src/subordinates/report-sequence.ts": [
-    "actor_id TEXT PRIMARY KEY",
-    "seq INTEGER NOT NULL"
-  ],
   "agent_reports@packages/core/src/subordinates/report-sequence.ts": [
     "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)",
+    "seq INTEGER NOT NULL"
+  ],
+  "agent_sequence@packages/core/src/subordinates/report-sequence.ts": [
+    "actor_id TEXT PRIMARY KEY",
     "seq INTEGER NOT NULL"
   ],
   "agent_tasks@packages/core/src/tools/task-store.ts": [

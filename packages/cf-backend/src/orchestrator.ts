@@ -986,7 +986,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** When main's running turn opened, as its room heard it. */
   private mainChatOpenedAt = 0;
 
+  /** An end delayed past the agent's later opening, a later turn's or its Retry's, is that earlier run's: it closes
+   *  nothing of the run now open, in its room or here. */
   private async hostedTurnEnded(actorId: string, event: SessionEvent, figures: AgentFigures): Promise<void> {
+    const runId = event.type === 'turn-end' ? event.runId : null;
+
+    if (!new TurnFences(this.boundSql).ended(actorId, runId)) {
+      diagnostics.event('agent.stale_turn_end', { actorId, runId: runId ?? '' });
+
+      return;
+    }
+
     await this.hostedChatEvent(actorId, event);
     await this.chatTurnClosed(actorId, { event, figures });
   }
@@ -1003,6 +1013,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (this.agentTurns.chatTurn(actorId) !== open) return;
     diagnostics.event('agent.turn_end_lost', { turnId: open });
+    new TurnFences(this.boundSql).ended(actorId, null);
     await this.chatRooms.hostedRoom(actorId)?.closeTurn();
     await this.chatTurnClosed(actorId, null);
   }
@@ -1012,7 +1023,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const event = ended?.event ?? null;
 
     this.agentTurns.chatClosed(actorId);
-    new TurnFences(this.boundSql).closed(actorId);
     // Its claim closed and its sequence opened in its own isolate.
     this.liveReadsMoved(readsOfTables(['actor_turn_claims', 'terminal_effects']));
 

@@ -332,7 +332,7 @@ export async function runAgentTask(
 ): Promise<AgentTurnEnd> {
   const prepared = await workspace.prepareTurn(task.sequenceId);
 
-  database.prepare(task.sequenceId, prepared);
+  database.prepare({ turnId: task.sequenceId, runId: prepared.runId }, prepared);
   const actor = await database.acquire();
   const live: LiveTurn = { dynamic: prepared.dynamic };
 

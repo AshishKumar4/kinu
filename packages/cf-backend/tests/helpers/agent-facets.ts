@@ -84,6 +84,20 @@ export async function copyNextOpening(storageKey: string): Promise<TurnOpeningRe
   return await copied.promise;
 }
 
+type TurnEndArgs = Parameters<AgentWorkspaceHost['turnEnded']>;
+
+const copiedTurnEnds = new Map<string, (args: TurnEndArgs) => void>();
+
+/** The next turn end the isolate under `storageKey` tells its workspace, as it told it, once it was told: a test
+ *  delivers it again, late. */
+export async function copyNextTurnEnd(storageKey: string): Promise<TurnEndArgs> {
+  const copied = Promise.withResolvers<TurnEndArgs>();
+
+  copiedTurnEnds.set(storageKey, copied.resolve);
+
+  return await copied.promise;
+}
+
 const lostOpeningAnswers = new Map<string, () => void>();
 
 /** The isolate under `storageKey` dies once the workspace has answered its next opening of a turn, before it reads the
@@ -303,6 +317,10 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
             }
 
             await host.turnEnded(event, figures);
+            const copy = copiedTurnEnds.get(placement.storageKey);
+
+            copiedTurnEnds.delete(placement.storageKey);
+            copy?.([event, figures]);
           },
           owedReport: (turn, ended) => {
             handNarration(placement.storageKey, ended.narration);

@@ -39,8 +39,10 @@ export interface ChatTurnRequest {
   readonly opening?: TurnOpening;
   /** The approved plan the turn implements, as the agent's own plan store reads it. */
   readonly taskPlan?: TaskPlan;
-  /** The epoch of the agent's claim this opening runs under: an opening below the turn's fence is refused. */
-  readonly epoch?: number;
+  /** The run this opening prepares (a recovery continues its run, a Retry starts one) and its place in the agent's
+   *  sequence: an opening older than the agent's newest is refused. */
+  readonly runId?: string;
+  readonly seq?: number;
 }
 
 interface OpenTurn {
@@ -270,9 +272,10 @@ export class AgentTurns {
   async prepareChat(actorId: string, request: ChatTurnRequest): Promise<PreparedAgentTurn> {
     const turnId = request.turnId ?? crypto.randomUUID();
 
-    // Delayed past the agent's later opening of the turn, or sent before the workspace reset: its execution is gone.
-    if (request.turnId !== null && request.epoch !== undefined && !new TurnFences(this.deps.sql).open(actorId, turnId, request.epoch)) {
-      return settleSync(Effect.fail(new KinuError('denied', `The turn ${turnId} has ended, was cancelled, or was opened again at a later epoch than ${String(request.epoch)}.`)));
+    // Delayed past the agent's later opening, or sent before the workspace reset: its execution is gone.
+    if (request.turnId !== null && request.runId !== undefined && request.seq !== undefined
+      && !new TurnFences(this.deps.sql).open(actorId, { turnId, runId: request.runId, seq: request.seq })) {
+      return settleSync(Effect.fail(new KinuError('denied', `The opening of turn ${turnId} (${String(request.seq)} in its agent's sequence) is older than the agent's newest.`)));
     }
 
     const hosted: HostedTurnRequest = {
@@ -432,13 +435,13 @@ export class AgentTurns {
     };
   }
 
-  /** A chat turn's facts as the workspace first offered them: the agent may die before it froze them, and its next
-   *  preparation must freeze the same, whatever changed here meanwhile. */
+  /** A chat run's facts as the workspace first offered them: the agent may die before it froze them, and its recovery
+   *  must freeze the same, whatever changed here meanwhile. */
   private offeredFacts(turn: OpenTurn, prepared: PreparedHostedTurn): TurnFacts {
     const facts = this.facts(turn, prepared);
     const { chatTurnId } = turn.request;
 
-    return chatTurnId === undefined ? facts : new TurnFences(this.deps.sql).offer(turn.reference.actorId, chatTurnId, facts);
+    return chatTurnId === undefined ? facts : new TurnFences(this.deps.sql).offer(turn.reference.actorId, facts);
   }
 
   /** Main's chat turn names its missions when it is prepared under any. */

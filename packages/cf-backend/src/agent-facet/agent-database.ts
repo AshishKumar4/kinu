@@ -14,7 +14,7 @@ import {
   type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
   type Executor, type JsonObject, type NimbusSandboxHandle, type SqlValue, WORKSPACE_ROOT, cloudPlanes, answersForDrainTurns,
   initPendingSendTables, initTerminalEffectTable, PendingSendStore, contextFill, announcementOf, classifyRunEnd, closeTurnRun, TurnReports,
-  PlanReviewStore, ReportSequence, TurnFactsStore, type PlanReview, type TurnFacts,
+  PlanReviewStore, AgentSequence, TurnFactsStore, type PlanReview, type TurnFacts,
   forkArtifactPath, localForkConversationSource, localForkConversationTarget, type ForkConversationSource, type ForkConversationTarget,
 } from '@kinu.run/core';
 import { attempt, detach, diagnostics, hold, KinuError, logged, settle, settleSync } from '@kinu.run/core/obs';
@@ -302,23 +302,24 @@ export class AgentDatabase {
     };
   }
 
-  /** The turn's facts are frozen with its first preparation: a later one, after a reset, finds them. */
-  prepare(turnId: string, prepared: PreparedAgentTurn): void {
+  /** The run's facts are frozen with its first preparation: a later one, its recovery's after a reset, finds them. */
+  prepare(ids: { readonly turnId: string; readonly runId: string }, prepared: PreparedAgentTurn): void {
     this.priced = { model: prepared.sources.model, pricing: prepared.pricing };
-    this.execution = { languages: prepared.languages, execute: (...args) => this.workspace.program(turnId, ...args) };
+    this.execution = { languages: prepared.languages, execute: (...args) => this.workspace.program(ids.turnId, ...args) };
     this.storage.transactionSync(() => {
       this.selectScaffold(prepared.scaffold);
-      this.turnFacts.freeze(turnId, prepared.facts);
+      this.turnFacts.freeze(ids.runId, prepared.facts);
     });
   }
 
-  nextReport(): number {
-    return new ReportSequence(this.sql, this.reference().actorId).next();
+  /** The next number of this agent's sequence, which orders its openings and reports at the workspace. */
+  nextInSequence(): number {
+    return new AgentSequence(this.sql, this.reference().actorId).next();
   }
 
-  /** What the workspace decided as the turn opened, as this isolate froze it then. */
-  factsOf(turnId: string): TurnFacts {
-    return this.turnFacts.of(turnId);
+  /** What the workspace decided as the run opened, as this isolate froze it then. */
+  factsOf(runId: string): TurnFacts {
+    return this.turnFacts.of(runId);
   }
 
   private get turnFacts(): TurnFactsStore {

@@ -11,7 +11,7 @@ export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateI
 
 export { AgentOpenTurns, AgentOwedWork, type AgentOpenTurn } from './subordinates/open-turns';
 
-export { AgentReports, ReportSequence } from './subordinates/report-sequence';
+export { AgentReports, AgentSequence } from './subordinates/report-sequence';
 
 export { TurnFences } from './subordinates/turn-fence';
 
