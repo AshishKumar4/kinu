@@ -13,6 +13,8 @@ export { AgentOpenTurns, AgentOwedWork, type AgentOpenTurn } from './subordinate
 
 export { AgentReports, ReportSequence } from './subordinates/report-sequence';
 
+export { TurnFences } from './subordinates/turn-fence';
+
 export { TurnReports, type ReportedTurn } from './subordinates/turn-reports';
 
 export { runEventSinks } from './orchestrator/run-event-sinks';

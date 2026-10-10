@@ -187,6 +187,8 @@ export class FacetChat {
 
     const prepared = await workspace.prepareChat({
       turnId: lease.turnId, mode, userText: item.text, parentDriven: this.parentDriven, driving: this.driving, opening,
+      // The claim this opening runs under is the next after any a dead execution of the turn left.
+      epoch: (actor.stores.claims.read(lease.turnId)?.epoch ?? 0) + 1,
       ...(explicitTier !== undefined && { explicitTier }), ...(taskPlan !== null && { taskPlan }),
     });
 

@@ -3,7 +3,7 @@ import { asSchema, type ToolSet } from 'ai';
 import { hold, KinuError, logged, settleSync } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import {
-  AgentOpenTurns, decodeModelMessageValues, encodeModelMessageValues, materializeTurnSources, callableToolNames, buildHeadMessages, hasPlanPermission, scaffoldProviders, runWorkModeInvocation, toolDescription,
+  AgentOpenTurns, TurnFences, decodeModelMessageValues, encodeModelMessageValues, materializeTurnSources, callableToolNames, buildHeadMessages, hasPlanPermission, scaffoldProviders, runWorkModeInvocation, toolDescription,
   BUILTIN_TOOL_NAMES, announcementOf, type TurnSurface,
   type ActorReference, type DynamicContext, type ModelPricing, type ResolvedTurnProfile, type TierId, type WorkMode,
   type HeadInput, type RunInference, type HeadReport, type SqlExecutor, type MissionBudgetPort, type MissionGovernor, type Executor, readMissionLabels,
@@ -39,6 +39,8 @@ export interface ChatTurnRequest {
   readonly opening?: TurnOpening;
   /** The approved plan the turn implements, as the agent's own plan store reads it. */
   readonly taskPlan?: TaskPlan;
+  /** The epoch of the agent's claim this opening runs under: an opening below the turn's fence is refused. */
+  readonly epoch?: number;
 }
 
 interface OpenTurn {
@@ -267,6 +269,11 @@ export class AgentTurns {
 
   async prepareChat(actorId: string, request: ChatTurnRequest): Promise<PreparedAgentTurn> {
     const turnId = request.turnId ?? crypto.randomUUID();
+
+    // Delayed past the agent's later opening of the turn, or sent before the workspace reset: its execution is gone.
+    if (request.turnId !== null && request.epoch !== undefined && !new TurnFences(this.deps.sql).open(actorId, turnId, request.epoch)) {
+      return settleSync(Effect.fail(new KinuError('denied', `The turn ${turnId} was opened again at a later epoch than ${String(request.epoch)}.`)));
+    }
 
     const hosted: HostedTurnRequest = {
       sequenceId: announcementOf(turnId), ...(request.turnId !== null && { chatTurnId: turnId }),

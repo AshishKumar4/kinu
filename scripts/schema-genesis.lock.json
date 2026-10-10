@@ -114,6 +114,13 @@
     "facts_json TEXT NOT NULL",
     "PRIMARY KEY(actor_id,turn_id)"
   ],
+  "actor_turn_fence@packages/core/src/subordinates/turn-fence.ts": [
+    "actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id)",
+    "turn_id TEXT NOT NULL",
+    "epoch INTEGER NOT NULL",
+    "cancelled_at INTEGER",
+    "PRIMARY KEY (actor_id, turn_id)"
+  ],
   "agent_data_tables@packages/core/src/tools/db-codemode.ts": [
     "name TEXT PRIMARY KEY",
     "scope TEXT NOT NULL CHECK(scope IN ('actor','workspace'))",

@@ -42,7 +42,7 @@ import {
 } from './helpers/actor-harness';
 import { answeringGateway, chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion, type StubbedAiBinding } from './helpers/platform-gateway';
 import { abandonHarnessFibers } from './helpers/agents-sdk';
-import { agentDatabase, delayNextTurnEnd } from './helpers/agent-facets';
+import { agentDatabase, copyNextOpening, delayNextTurnEnd } from './helpers/agent-facets';
 import { socketConnection } from './helpers/bindings';
 
 const FrameSchema = v.looseObject({
@@ -372,6 +372,29 @@ async function askedAndTwoSteps(tab: TabSocket, view: PaneView, agent: HarnessOr
 
   return { asked };
 }
+
+/** The workspace's fence on a turn (design v3 B): an opening under an older claim than one the running turn was opened
+ *  at again, delayed past that re-opening, is refused, and still is once the workspace has reset. */
+test('an opening of a turn older than its re-opening is refused, before and after the workspace resets', async () => {
+  const count: Count = { held: 2, answer: null, holding: new AwaitedList<number>() };
+  const workspace = gatewayWorkspace(counting(count));
+  const main = workspaceMainActor(workspace.db).actorId;
+  const copied = copyNextOpening(workspace.agent.agentOf(main).storageKey);
+  await askedOnSocket(workspace, 'req-fence');
+  const opening = await copied;
+
+  // Its isolate ends inside the third call; the one that re-opens the turn, at the next epoch, runs that step and is
+  // inside the next.
+  await count.holding.until((steps) => steps.includes(2));
+  count.held = 3;
+  await resetRootIsolate(workspace);
+  await count.holding.until((steps) => steps.includes(3));
+
+  // Through each activation's own entry for the agent, as the agent's relay reaches it.
+  await expect((await workspace.agent.agentWorkspace(main)).prepareChat(opening)).rejects.toThrow('opened again at a later epoch');
+  const restarted = await reactivateOrchestratorHarness(workspace.db);
+  await expect((await restarted.agent.agentWorkspace(main)).prepareChat(opening)).rejects.toThrow('opened again at a later epoch');
+});
 
 test('an open web pane removes a cut step before the re-run streams', async () => {
   const partial = new TextEncoder().encode(`data: ${JSON.stringify({

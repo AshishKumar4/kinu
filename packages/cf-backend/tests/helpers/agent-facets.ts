@@ -71,6 +71,19 @@ function handNarration(storageKey: string, narration: readonly string[] | null):
   if (narration !== null && narration.length > 0) handedNarrations.set(storageKey, [...narrationsHandedOver(storageKey), narration]);
 }
 
+type TurnOpeningRequest = Parameters<AgentWorkspaceHost['prepareChat']>[0];
+
+const copiedOpenings = new Map<string, (opening: TurnOpeningRequest) => void>();
+
+/** The next opening of a turn the isolate under `storageKey` sends, as it sent it: a test delivers it again, late. */
+export async function copyNextOpening(storageKey: string): Promise<TurnOpeningRequest> {
+  const copied = Promise.withResolvers<TurnOpeningRequest>();
+
+  copiedOpenings.set(storageKey, copied.resolve);
+
+  return await copied.promise;
+}
+
 const heldReports = new Map<string, (deliver: () => Promise<void>) => void>();
 
 /**
@@ -244,7 +257,16 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           guard: (...args) => host.guard(...args),
           debit: (...args) => host.debit(...args),
           prepareTurn: (turnId) => host.prepareTurn(turnId),
-          prepareChat: (request) => host.prepareChat(request),
+          prepareChat: (request) => {
+            const copy = copiedOpenings.get(placement.storageKey);
+
+            if (copy !== undefined && request.turnId !== null) {
+              copiedOpenings.delete(placement.storageKey);
+              copy(request);
+            }
+
+            return host.prepareChat(request);
+          },
           bindProfile: (turnId, profile) => host.bindProfile(turnId, profile),
           chatEvent: async (event) => {
             if (event.type === 'broadcast' && failedBroadcasts.delete(placement.storageKey)) throw new Error('the workspace refused the broadcast');
