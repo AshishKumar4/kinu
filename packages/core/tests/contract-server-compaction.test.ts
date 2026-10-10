@@ -104,7 +104,7 @@ describe('Anthropic server-side compaction', () => {
   test('the request after a compaction is measured from the summary on, and billed for both samplings', async () => {
     const acc = new TurnAccumulator();
 
-    await turn('claude-opus-4-7', [{ role: 'user', content: 'rename the parser' }], { persistStep: async (record) => { acc.writeNative(record)(); } });
+    await turn('claude-opus-4-7', [{ role: 'user', content: 'rename the parser' }], { persistStep: async (record) => { acc.writeNative(record, [])(); } });
 
     expect({ pressure: acc.lastPromptTokens, billed: acc.usage.input }).toEqual({ pressure: 25_000, billed: 205_000 });
   });

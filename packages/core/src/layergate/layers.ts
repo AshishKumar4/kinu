@@ -1684,10 +1684,10 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         observe: (s) => {
           const clean = new TurnAccumulator();
           clean.recordToolCall({ toolCallId: 'layer-clean', toolName: 'shell', input: { command: 'ls' }, success: true, output: 'ok' });
-          clean.recordStep({ usage: { input: 7, output: 3 } });
+          clean.recordStep({ usage: { input: 7, output: 3 } }, []);
           const failed = new TurnAccumulator();
           failed.recordToolCall({ toolCallId: 'layer-failed', toolName: 'shell', success: false, reason: null, error: 'exit 1' });
-          failed.recordStep({});
+          failed.recordStep({}, []);
 
           return {
             clean: s.snapshotCompletedTurn({ acc: clean, steering: new TurnSteering() }, {

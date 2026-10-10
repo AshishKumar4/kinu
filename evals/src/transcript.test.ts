@@ -18,8 +18,8 @@ function row(runId: string, body: { type: 'step_finish'; reason: string } | { ty
 function run(runId: string, steps: number, lastReason: string, ended: string): RunEvent[] {
   return [
     row(runId, { type: 'run_start' }),
-    ...Array.from({ length: steps - 1 }, () => row(runId, { type: 'step_finish', reason: 'tool-calls' })),
-    row(runId, { type: 'step_finish', reason: lastReason }),
+    ...Array.from({ length: steps - 1 }, () => row(runId, { type: 'step_finish', parts: [], reason: 'tool-calls' })),
+    row(runId, { type: 'step_finish', parts: [], reason: lastReason }),
     row(runId, { type: 'run_end', reason: ended }),
   ];
 }

@@ -161,10 +161,8 @@ test("a helper's own jobs are the RPC's actor, and a helper dismissed since the 
 });
 
 test('trial usage walks retained descendants and every run and event page without merging actor identities', async () => {
-  const step = (index: number, input: number, cacheRead: number, output: number) => ({
-    type: 'step_finish', runId: 'shared-run-id', eventIndex: index, stepIndex: index,
-    timestamp: `2026-10-02T19:00:0${String(index)}Z`, usage: { input, cacheRead, output },
-  } satisfies Extract<RunEvent, { type: 'step_finish' }>);
+  const step = (index: number, input: number, cacheRead: number, output: number) => ({ type: 'step_finish', parts: [], runId: 'shared-run-id', eventIndex: index, stepIndex: index,
+  timestamp: `2026-10-02T19:00:0${String(index)}Z`, usage: { input, cacheRead, output }, } satisfies Extract<RunEvent, { type: 'step_finish' }>);
 
   const child = (name: string) => ({ name, status: 'dismissed', lifetime: 'task', actorReference: { actorId: name } });
   const run = (runId: string) => ({ runId, startedAt: 10, status: 'completed', userMessage: 'work' });
@@ -858,7 +856,7 @@ test('a dropped send no turn took fails as the infrastructure, never as an answe
 /** The absorbing run's stream from `cursor`: from its start, one step and the stream ends; from that step, the run's end. */
 function absorbingRunStream(cursor: string): Response {
   const event: RunEvent = cursor === '0'
-    ? { type: 'step_finish', runId: 'absorbing', eventIndex: 1, timestamp: ABSORBING_START.timestamp, stepIndex: 1 }
+    ? { type: 'step_finish', parts: [], runId: 'absorbing', eventIndex: 1, timestamp: ABSORBING_START.timestamp, stepIndex: 1 }
     : ABSORBING_END;
 
   return new Response(`event: message\ndata: ${JSON.stringify(event)}\n\n`, {

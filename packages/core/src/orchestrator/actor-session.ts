@@ -1,5 +1,6 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import type { ModelMessage, ToolSet } from 'ai';
+
 import * as v from 'valibot';
 import { INTERRUPTED_TURN, measureTurnRequest, type ChatEvent, type ChatOptions, type StepRecord } from '../chat';
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -781,8 +782,8 @@ export class ActorSession {
       const events = this.turnEvents({ lease, active, profile, input, program, claim, stream, tally });
 
       for await (const event of events) {
-        await stream.observe(event);
-        this.tallyEvent(tally, event, active.abort.signal, event.source === 'native');
+        const parts = await stream.observe(event);
+        this.tallyEvent(tally, event, active.abort.signal, { native: event.source === 'native', parts });
         await emit(event);
       }
     } catch (cause) {
@@ -914,7 +915,7 @@ export class ActorSession {
         waitsOn: (call) => this.questions.waitsOn(call),
         measureContext: true, ...(active.trace !== null && { trace: active.trace }),
         persistStreamPart: part => stream.nativePart(part),
-        persistStep: (record) => stream.nativeStep(record, () => this.recordStep(record)),
+        persistStep: (record) => stream.nativeStep(record, (parts) => this.recordStep(record, parts)),
         stepPhase: (phase) => { if (phase === 'work') this.options.claims.working(claim); else this.options.claims.progressed(claim); },
         dynamicContext: {
           ledger: this.dynamic,
@@ -968,14 +969,14 @@ export class ActorSession {
     }));
   }
 
-  private tallyEvent(tally: TurnTally, event: ChatEvent, abort: AbortSignal, native: boolean): void {
+  private tallyEvent(tally: TurnTally, event: ChatEvent, abort: AbortSignal, output: { native: boolean; parts: readonly MessagePartReference[] }): void {
     switch (event.type) {
       case 'text-delta': this.orchestrator.acc.onFirstChunk(); tally.text += event.delta; break;
       case 'tool-call':
-        if (!native) tally.pending.push(event);
+        if (!output.native) tally.pending.push(event);
         break;
       case 'tool-result': {
-        if (native) break;
+        if (output.native) break;
         const args = this.callArgs(tally.pending, event.toolCallId);
         this.orchestrator.acc.recordResult(args, event);
         break;
@@ -990,7 +991,7 @@ export class ActorSession {
       case 'step-finish':
         tally.steps += 1;
 
-        if (!native) this.orchestrator.acc.recordBoundary(event);
+        if (!output.native) this.orchestrator.acc.recordBoundary(event, output.parts);
         break;
       case 'error': {
         this.orchestrator.acc.hadError = true;
@@ -1092,8 +1093,8 @@ export class ActorSession {
     return (index < 0 ? undefined : pending.splice(index, 1)[0])?.args ?? {};
   }
 
-  private recordStep(record: StepRecord): () => void {
-    const write = () => this.orchestrator.acc.writeNative(record);
+  private recordStep(record: StepRecord, parts: readonly MessagePartReference[]): () => void {
+    const write = () => this.orchestrator.acc.writeNative(record, parts);
     const collected = this.options.recording?.collect(write);
 
     if (collected === undefined) return write();

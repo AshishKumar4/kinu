@@ -231,9 +231,9 @@ describe('v2 e2e: durable event log', () => {
     const runId = 'run-test';
     recorder.emit(runId, { type: 'run_start', agentId: 'agent-1' });
     recorder.emit(runId, { type: 'turn_start', turnIndex: 0 });
-    recorder.emit(runId, { type: 'step_finish', stepIndex: 1, messages: [{ role: 'assistant', content: 'Working...' }] });
+    recorder.emit(runId, { type: 'step_finish', parts: [{ messageId: 'working', partNo: 0 }], stepIndex: 1 });
     recorder.emit(runId, { type: 'tool_call_end', name: 'search_memory', toolCallId: 'tc-1', durationMs: 50, outcome: { success: true } });
-    recorder.emit(runId, { type: 'step_finish', stepIndex: 2, messages: [{ role: 'assistant', content: 'Done.' }] });
+    recorder.emit(runId, { type: 'step_finish', parts: [{ messageId: 'done', partNo: 0 }], stepIndex: 2 });
     recorder.emit(runId, { type: 'turn_end', turnIndex: 0 });
     recorder.emit(runId, { type: 'run_end', reason: 'completed' });
 

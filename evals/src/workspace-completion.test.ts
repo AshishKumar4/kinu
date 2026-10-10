@@ -108,7 +108,7 @@ const at = (elapsed: number) => new Date(START + elapsed).toISOString();
 
 const start = (runId: string, elapsed = 0): RunEvent => ({ type: 'run_start', runId, eventIndex: 0, timestamp: at(elapsed), agentId: 'lead', caused_by: 'chat' });
 
-const step = (runId: string, elapsed: number, eventIndex: number): RunEvent => ({ type: 'step_finish', runId, eventIndex, timestamp: at(elapsed), stepIndex: eventIndex });
+const step = (runId: string, elapsed: number, eventIndex: number): RunEvent => ({ type: 'step_finish', parts: [], runId, eventIndex, timestamp: at(elapsed), stepIndex: eventIndex });
 
 const end = (runId: string, elapsed: number, eventIndex: number): RunEvent => ({ type: 'run_end', runId, eventIndex, timestamp: at(elapsed), reason: 'completed' });
 

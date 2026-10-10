@@ -1636,7 +1636,7 @@ export class ChatSession {
     const open = this.eventRecorder.openTurn();
 
     if (open === null) return;
-    const { runId, turn, steps, finishedSteps, usage } = open;
+    const { runId, turn, finishedSteps, usage } = open;
     const openOutputs = this.actorSession.canonical.openOutputs(runId);
 
     const item: QueueItem = {
@@ -1666,7 +1666,7 @@ export class ChatSession {
 
     this.emit({
       type: 'background', event: 'turn_reopened',
-      message: `continuing the turn the last process left: ${String(steps.length)} step${steps.length === 1 ? '' : 's'} kept`
+      message: `continuing the turn the last process left: ${String(finishedSteps)} step${finishedSteps === 1 ? '' : 's'} kept`
         + (openOutputs.length === 0 ? '' : `, resuming mid-step ${String(finishedSteps + 1)}`),
     });
 

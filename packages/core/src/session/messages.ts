@@ -13,7 +13,9 @@ export interface MessageReference { readonly messageId: string }
 
 export type MessageOrigin = 'input' | 'output' | 'edit' | 'context_transform' | 'render';
 
-export interface MessagePartReference { readonly messageId: string; readonly partNo: number }
+export const MessagePartReferenceSchema = v.object({ messageId: v.string(), partNo: v.pipe(v.number(), v.integer(), v.minValue(0)) });
+
+export type MessagePartReference = v.InferOutput<typeof MessagePartReferenceSchema>;
 
 const StoredPartFieldsSchema = v.object({
   partNo: v.number(),

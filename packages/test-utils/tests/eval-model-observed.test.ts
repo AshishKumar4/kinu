@@ -35,7 +35,7 @@ function steps(...modelIds: Array<string | undefined>): RunEvent[] {
   nextIndex = 0;
 
   return modelIds.map((modelId, step) =>
-    event({ type: 'step_finish', stepIndex: step, reason: 'stop', modelId }));
+    event({ type: 'step_finish', parts: [], stepIndex: step, reason: 'stop', modelId }));
 }
 
 /** One scored observation with a task_outcome row — admissible on its own. */

@@ -37,7 +37,7 @@ function cappedTrail(): RunEvent[] {
 
   for (let step = 0; step < 10; step += 1) {
     events.push(event({ type: 'tool_call_end', name: 'eval', toolCallId: `tc-${String(step)}` }));
-    events.push(event({ type: 'step_finish', stepIndex: step, reason: 'tool-calls' }));
+    events.push(event({ type: 'step_finish', parts: [], stepIndex: step, reason: 'tool-calls' }));
   }
 
   events.push(event({ type: 'turn_end', turnIndex: 0, usage: { input: 190_979, output: 6_016 } }));

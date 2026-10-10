@@ -2,15 +2,15 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
 /** Durable per-run event log; subscribers are notified synchronously after persisting. */
 
 import * as v from 'valibot';
-import type { ModelMessage } from 'ai';
-import { decodeModelMessageValues, encodeModelMessageValues } from '../session/message-codec';
+import { MessagePartReferenceSchema } from '../session/messages';
+import type { MessagePartReference } from '../session/messages';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import {
   CONTEXT_EDIT_BOUNDARIES, CONTEXT_EDIT_STATUSES, CONTEXT_EDIT_VIA,
   type OpenTurnIdentity, type RunEvent, type RunEventInput, type RunEventType,
 } from './types';
-import { JsonObjectSchema, JsonValueSchema, type JsonValue } from '../utils/json';
+import { JsonObjectSchema, JsonValueSchema } from '../utils/json';
 import { boundedInt, boundPageQuery } from '../utils/bounds';
 import { USAGE_FIELDS, UsageSchema, addUsage, type Usage } from '../usage';
 import { ESCALATION_OUTCOMES } from '../execution/escalation';
@@ -28,11 +28,11 @@ import { ToolOutcomeSchema } from '../types/tool-outcome';
 import { turnAuthor } from '../utils/ui-message';
 import { CallAccountSchema, QuotaSnapshotSchema } from '../providers/quota';
 
-/** Stored model messages validate against the AI SDK's own schema, not a hand-written copy. */
+/** Admission identity reopens the turn; all model output lives in canonical session payloads. */
 const OpenTurnIdentitySchema: v.GenericSchema<OpenTurnIdentity> = v.object({
   turnId: v.string(), messageId: v.string(), kind: v.picklist(['user', 'programmatic']), text: v.string(),
   metadata: v.optional(JsonObjectSchema), pendingSendId: v.optional(v.string()),
-  steerIds: v.optional(v.array(v.string())),
+  steerIds: v.optional(v.pipe(v.array(v.string()), v.readonly())),
 });
 
 const BaseFields = {
@@ -42,10 +42,10 @@ const BaseFields = {
 };
 
 const ContextCompositionSchema = v.object({
-  segments: v.array(v.object({
+  segments: v.pipe(v.array(v.object({
     plane: v.picklist(['system', 'tools', 'messages', 'ephemeral']),
     label: v.string(), chars: v.number(), items: v.number(),
-  })),
+  })), v.readonly()),
   measuredChars: v.number(),
   charsPerToken: v.number(),
   estimatedTokens: v.number(),
@@ -53,7 +53,7 @@ const ContextCompositionSchema = v.object({
 
 const HeadFileChangeSetSchema = v.object({
   id: v.string(),
-  changes: v.array(v.object({
+  changes: v.pipe(v.array(v.object({
     path: v.string(),
     status: v.picklist(['added', 'removed', 'changed']),
     added: v.number(),
@@ -61,7 +61,7 @@ const HeadFileChangeSetSchema = v.object({
     binary: v.optional(v.boolean()),
     directory: v.optional(v.boolean()),
     unreadable: v.optional(v.boolean()),
-  })),
+  })), v.readonly()),
 });
 
 /** For already-decoded values (e.g. over RPC); {@link parseStoredRunEvent} takes the stored string. */
@@ -76,7 +76,7 @@ export const RunEventSchema = v.variant('type', [
     result: v.optional(JsonValueSchema), error: v.optional(v.string()),
     durationMs: v.optional(v.number()), outcome: v.optional(ToolOutcomeSchema) }),
   v.object({ ...BaseFields, type: v.literal('step_finish'), stepIndex: v.number(),
-    reason: v.optional(v.string()), messages: v.optional(v.array(JsonValueSchema)),
+    reason: v.optional(v.string()), parts: v.pipe(v.array(MessagePartReferenceSchema), v.readonly()),
     usage: v.optional(UsageSchema), usd: v.optional(v.number()),
     modelId: v.optional(v.string()), context: v.optional(ContextCompositionSchema),
     account: v.optional(CallAccountSchema), egress: v.optional(v.string()) }),
@@ -102,8 +102,8 @@ export const RunEventSchema = v.variant('type', [
     headIds: v.array(v.string()), rationale: v.string() }),
   v.object({ ...BaseFields, type: v.literal('head_merge'), rootId: v.string(),
     headCount: v.number(), headsWithFindings: v.number(), totalTokens: v.optional(v.number()),
-    mergedNarrative: v.string(), fileChanges: v.array(HeadFileChangeSetSchema),
-    blindSpots: v.array(v.string()) }),
+    mergedNarrative: v.string(), fileChanges: v.pipe(v.array(HeadFileChangeSetSchema), v.readonly()),
+    blindSpots: v.pipe(v.array(v.string()), v.readonly()) }),
   v.object({ ...BaseFields, type: v.literal('head_abandoned'), rootId: v.string(),
     headCount: v.number(), abandoned: v.number(), rationale: v.string(), reason: v.string() }),
   v.object({ ...BaseFields, type: v.literal('scaffold_promotion'), fromVersion: v.number(), toVersion: v.number() }),
@@ -138,16 +138,16 @@ export const RunEventSchema = v.variant('type', [
     providerRevision: v.string(), unavailableProviders: v.number(),
     catalogVersion: v.number(), authority: v.picklist(['local', 'account']) }),
   v.object({ ...BaseFields, type: v.literal('completion_gate'), converted: v.boolean() }),
-  v.object({ ...BaseFields, type: v.literal('craft_cycle'), crafted: v.array(v.string()),
-    invoked: v.array(v.string()), reused: v.array(v.string()), returned: v.number(),
-    raised: v.number(), dropped: v.array(v.string()) }),
-  v.object({ ...BaseFields, type: v.literal('execution_recovery'), recoveries: v.array(v.object({
+  v.object({ ...BaseFields, type: v.literal('craft_cycle'), crafted: v.pipe(v.array(v.string()), v.readonly()),
+    invoked: v.pipe(v.array(v.string()), v.readonly()), reused: v.pipe(v.array(v.string()), v.readonly()), returned: v.number(),
+    raised: v.number(), dropped: v.pipe(v.array(v.string()), v.readonly()) }),
+  v.object({ ...BaseFields, type: v.literal('execution_recovery'), recoveries: v.pipe(v.array(v.object({
     tool: v.string(), failures: v.number(), failedSignature: v.string(),
-  })) }),
-  v.object({ ...BaseFields, type: v.literal('execution_escalation'), escalations: v.array(v.object({
+  })), v.readonly()) }),
+  v.object({ ...BaseFields, type: v.literal('execution_escalation'), escalations: v.pipe(v.array(v.object({
     runtime: v.string(), reason: v.nullable(v.string()),
     outcome: v.picklist(ESCALATION_OUTCOMES), count: v.number(),
-  })) }),
+  })), v.readonly()) }),
   v.object({ ...BaseFields, type: v.literal('budget_exhausted'),
     seam: v.picklist(['model_call', 'spawn']), label: v.string(), scope: v.string(),
     limit: v.object({ usd: v.optional(v.number()), tokens: v.optional(v.number()) }),
@@ -163,18 +163,12 @@ export const RunEventSchema = v.variant('type', [
   v.object({ ...BaseFields, type: v.literal('run_end'), reason: v.optional(v.string()), error: v.optional(v.string()) }),
 ]);
 
-/** Step messages are stored in the session codec's durable form. */
 type UnindexedEvent = RunEvent extends infer Event ? Event extends RunEvent ? Omit<Event, 'eventIndex'> : never : never;
 
 function stampRunEvent(input: RunEventInput, runId: string): UnindexedEvent {
   const base = { runId, timestamp: new Date().toISOString() };
 
-  if (input.type !== 'step_finish') return { ...input, ...base };
-  const { messages, ...rest } = input;
-
-  return messages === undefined
-    ? { ...rest, ...base }
-    : { ...rest, ...base, messages: encodeModelMessageValues(messages) };
+  return { ...input, ...base };
 }
 
 /** The single place a persisted event becomes typed; readers must not re-declare event shapes. */
@@ -584,7 +578,7 @@ export class RunEventRecorder {
     return event.type === 'step_finish' ? event : null;
   }
 
-  finishedSteps(runId: string): { readonly messages: readonly JsonValue[]; readonly usage: Usage | undefined }[] {
+  finishedSteps(runId: string): { readonly parts: readonly MessagePartReference[]; readonly usage: Usage | undefined }[] {
     this.actor.assertCurrent();
 
     const rows = this.sql<{ payload: string }>`
@@ -595,13 +589,8 @@ export class RunEventRecorder {
     return rows.flatMap((r) => {
       const event = parseStoredRunEvent(r.payload);
 
-      return event.type === 'step_finish' ? [{ messages: event.messages ?? [], usage: event.usage }] : [];
+      return event.type === 'step_finish' ? [{ parts: event.parts, usage: event.usage }] : [];
     });
-  }
-
-  /** Sealed-step output in run order. */
-  transcript(runId: string): ModelMessage[] {
-    return this.finishedSteps(runId).flatMap((step) => decodeModelMessageValues(step.messages));
   }
 
   /** The newest open turn's run, found through `open_turns`; null when no turn is open. */
@@ -638,7 +627,7 @@ export class RunEventRecorder {
   openTurn(): {
     readonly runId: string;
     readonly turn: OpenTurnIdentity;
-    readonly steps: ModelMessage[];
+    readonly parts: readonly MessagePartReference[];
     readonly finishedSteps: number;
     readonly usage: Usage;
   } | null {
@@ -660,7 +649,7 @@ export class RunEventRecorder {
     const recorded = this.finishedSteps(row.run_id);
 
     return {
-      runId: row.run_id, turn: start.turn, steps: recorded.flatMap((step) => decodeModelMessageValues(step.messages)), finishedSteps: recorded.length,
+      runId: row.run_id, turn: start.turn, parts: recorded.flatMap((step) => step.parts), finishedSteps: recorded.length,
       usage: recorded.reduce<Usage>((sum, step) => (step.usage === undefined ? sum : addUsage(sum, step.usage)), {}),
     };
   }

@@ -527,7 +527,7 @@ async function driveTurn(
   })) {
     if (event.type === 'step-finish') {
       steps.push(event.usage ?? {});
-      acc.recordBoundary(event);
+      acc.recordBoundary(event, []);
     }
   }
 

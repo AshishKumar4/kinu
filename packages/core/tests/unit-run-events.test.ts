@@ -443,9 +443,9 @@ describe('integration: after restart, indices resume correctly', () => {
 describe('RunEventRecorder.readRecentByType', () => {
   test('spans runs, filters in SQL, and returns oldest first', () => {
     const { recorder } = setup();
-    recorder.emit('run-1', { type: 'step_finish', stepIndex: 1 });
+    recorder.emit('run-1', { type: 'step_finish', parts: [], stepIndex: 1 });
     recorder.emit('run-1', { type: 'turn_end', turnIndex: 0 });
-    recorder.emit('run-2', { type: 'step_finish', stepIndex: 1 });
+    recorder.emit('run-2', { type: 'step_finish', parts: [], stepIndex: 1 });
     const steps = recorder.readRecentByType('step_finish');
     expect(steps.map((e) => e.runId)).toEqual(['run-1', 'run-2']);
     expect(steps.every((e) => e.type === 'step_finish')).toBe(true);
@@ -457,7 +457,7 @@ describe('RunEventRecorder.readRecentByType', () => {
 
     for (let i = 0; i < 10; i++) {
       recorder.emit('run-1', { type: 'turn_start', turnIndex: i });
-      recorder.emit('run-1', { type: 'step_finish', stepIndex: i });
+      recorder.emit('run-1', { type: 'step_finish', parts: [], stepIndex: i });
     }
 
     const steps = recorder.readRecentByType('step_finish', 3);
@@ -469,7 +469,7 @@ describe('RunEventRecorder.readRecentByType', () => {
     const { recorder } = setup();
 
     for (let i = 0; i < 40; i++) {
-      recorder.emit('run-1', { type: 'step_finish', stepIndex: i });
+      recorder.emit('run-1', { type: 'step_finish', parts: [], stepIndex: i });
     }
 
     expect(recorder.readRecentByType('step_finish', -1).length).toBe(1);
@@ -479,7 +479,7 @@ describe('RunEventRecorder.readRecentByType', () => {
     const { recorder } = setup();
 
     for (let i = 0; i < 250; i++) {
-      recorder.emit('run-1', { type: 'step_finish', stepIndex: i });
+      recorder.emit('run-1', { type: 'step_finish', parts: [], stepIndex: i });
     }
 
     expect(recorder.readRecentByType('step_finish', Number.NaN).length).toBe(200);
@@ -489,7 +489,7 @@ describe('RunEventRecorder.readRecentByType', () => {
     const { recorder } = setup();
 
     for (let i = 0; i < 40; i++) {
-      recorder.emit('run-1', { type: 'step_finish', stepIndex: i });
+      recorder.emit('run-1', { type: 'step_finish', parts: [], stepIndex: i });
     }
 
     expect(recorder.readRecentByType('step_finish', 2.7).length).toBe(2);
@@ -503,18 +503,15 @@ describe('RunEventRecorder.readRecentByType', () => {
 
   test('round-trips the usage and context a step carries', () => {
     const { recorder } = setup();
-    recorder.emit('run-1', {
-      type: 'step_finish',
-      stepIndex: 1,
-      usage: { input: 900, cacheRead: 700, output: 40 },
-      usd: 0.001,
-      context: {
-        segments: [{ plane: 'system', label: 'Soul', chars: 400, items: 1 }],
-        measuredChars: 400,
-        charsPerToken: 4,
-        estimatedTokens: 100,
-      },
-    });
+    recorder.emit('run-1', { type: 'step_finish', parts: [], stepIndex: 1,
+    usage: { input: 900, cacheRead: 700, output: 40 },
+    usd: 0.001,
+    context: {
+      segments: [{ plane: 'system', label: 'Soul', chars: 400, items: 1 }],
+      measuredChars: 400,
+      charsPerToken: 4,
+      estimatedTokens: 100,
+    }, });
     const [step] = recorder.readRecentByType('step_finish');
     expect(step?.type === 'step_finish' && step.usage?.cacheRead).toBe(700);
     expect(step?.type === 'step_finish' && step.context?.measuredChars).toBe(400);
@@ -527,9 +524,7 @@ describe('RunEventRecorder.spendByProducer', () => {
 
     // Past `readRecentByType`'s 200-row default: a total is a sum, not a sample.
     for (let i = 0; i < 450; i++) {
-      recorder.emit('run-1', {
-        type: 'step_finish', stepIndex: i, usage: { input: 10, output: 1 }, usd: 0.001,
-      });
+      recorder.emit('run-1', { type: 'step_finish', parts: [], stepIndex: i, usage: { input: 10, output: 1 }, usd: 0.001, });
     }
 
     const agent = recorder.spendByProducer().get('agent');
@@ -540,7 +535,7 @@ describe('RunEventRecorder.spendByProducer', () => {
 
   test('step_finish is the turn loop; every other producer names itself', () => {
     const { recorder } = setup();
-    recorder.emit('run-1', { type: 'step_finish', stepIndex: 0, usage: { input: 100, output: 10 } });
+    recorder.emit('run-1', { type: 'step_finish', parts: [], stepIndex: 0, usage: { input: 100, output: 10 } });
     recorder.emit(WORKSPACE_RUN_ID, {
       type: 'model_call', source: 'judge', usage: { input: 20, output: 2 },
     });
@@ -563,8 +558,8 @@ describe('RunEventRecorder.spendByProducer', () => {
     // A hired agent writes under its own actor_id; the workspace total must include it.
     const { recorder, sql } = setup();
     const hired = new RunEventRecorder(sql, testActorHandle(sql, { actorId: 'task-12qzhx' }));
-    recorder.emit('run-1', { type: 'step_finish', stepIndex: 0, usage: { input: 100, output: 10 }, usd: 0.01 });
-    hired.emit('run-9', { type: 'step_finish', stepIndex: 0, usage: { input: 40, output: 4 }, usd: 0.004 });
+    recorder.emit('run-1', { type: 'step_finish', parts: [], stepIndex: 0, usage: { input: 100, output: 10 }, usd: 0.01 });
+    hired.emit('run-9', { type: 'step_finish', parts: [], stepIndex: 0, usage: { input: 40, output: 4 }, usd: 0.004 });
     hired.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'fast', usage: { input: 5, output: 1 } });
 
     const spend = recorder.spendByProducer();
@@ -577,8 +572,8 @@ describe('RunEventRecorder.spendByProducer', () => {
 
   test('a field no call reported is absent from the sum, never a zero', () => {
     const { recorder } = setup();
-    recorder.emit('run-1', { type: 'step_finish', stepIndex: 0, usage: { input: 100, output: 10 } });
-    recorder.emit('run-1', { type: 'step_finish', stepIndex: 1, usage: { input: 200, output: 20 } });
+    recorder.emit('run-1', { type: 'step_finish', parts: [], stepIndex: 0, usage: { input: 100, output: 10 } });
+    recorder.emit('run-1', { type: 'step_finish', parts: [], stepIndex: 1, usage: { input: 200, output: 20 } });
 
     const agent = recorder.spendByProducer().get('agent');
     expect(agent?.usage).toEqual({ input: 300, output: 30 });
@@ -596,7 +591,7 @@ describe('RunEventRecorder.spendByProducer', () => {
       neurons: 0.5,
     };
 
-    recorder.emit('run-1', { type: 'step_finish', stepIndex: 0, usage: every, usd: 0.02 });
+    recorder.emit('run-1', { type: 'step_finish', parts: [], stepIndex: 0, usage: every, usd: 0.02 });
 
     const agent = recorder.spendByProducer().get('agent');
     expect(agent?.usage).toEqual(every);
@@ -805,12 +800,12 @@ describe('RunEventRecorder.openTurn — the continuation ledger', () => {
   test('the open run answers its turn and the finished steps', () => {
     const { recorder } = setup();
     recorder.emit('run-1', { type: 'run_start', agentId: 'a', turn });
-    recorder.emit('run-1', { type: 'step_finish', stepIndex: 1, messages: [{ role: 'assistant', content: 'think' }] });
+    recorder.emit('run-1', { type: 'step_finish', parts: [{ messageId: 'canonical-think', partNo: 0 }], stepIndex: 1 });
 
     const open = recorder.openTurn();
     expect(open?.runId).toBe('run-1');
     expect(open?.turn).toEqual(turn);
-    expect(open?.steps).toEqual([{ role: 'assistant', content: 'think' }]);
+    expect(open?.parts).toEqual([{ messageId: 'canonical-think', partNo: 0 }]);
     expect(open?.finishedSteps).toBe(1);
   });
 

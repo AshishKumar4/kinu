@@ -175,9 +175,15 @@ test('an output-limit continuation records each sealed step once across SDK call
     if (run === undefined) throw new Error('the turn left no run');
     const steps = session.getRunEvents(run.runId).filter((event) => event.type === 'step_finish');
 
-    expect(steps.map((event) => ({ step: event.stepIndex,
-      text: drawnStep(event.messages ?? []).flatMap((part) => part.type === 'text' ? [v.parse(v.string(), part.text)] : []).join(''),
-    }))).toEqual([{ step: 1, text: 'first half' }, { step: 2, text: 'second half' }]);
+    const output = await Promise.all(steps.map(async (event) => {
+      const ids = [...new Set(event.parts.map((part) => part.messageId))];
+      const messages = await Promise.all(ids.map((messageId) => rt.stores.history.messages.projection({ messageId })));
+
+      return { step: event.stepIndex,
+        text: drawnStep(messages).flatMap((part) => part.type === 'text' ? [v.parse(v.string(), part.text)] : []).join('') };
+    }));
+
+    expect(output).toEqual([{ step: 1, text: 'first half' }, { step: 2, text: 'second half' }]);
     expect(events.flatMap((event) => event.type === 'turn-end' ? [event.turn.steps] : [])).toEqual([2]);
   } finally { await session.end(); db.close(); }
 });

@@ -14,10 +14,8 @@ function call(runId: string, eventIndex: number, args: JsonValue, result: JsonVa
 
 /** One finished step, as `[runId, eventIndex, timestamp, reason]`, ending on `text`. */
 function finished([runId, eventIndex, timestamp, reason]: readonly [string, number, string, string], text: string): RunEvent {
-  return {
-    type: 'step_finish', runId, eventIndex, timestamp, stepIndex: eventIndex, reason,
-    messages: [{ role: 'assistant', content: [{ type: 'text', text }] }],
-  };
+  return { type: 'step_finish', parts: [], runId, eventIndex, timestamp, stepIndex: eventIndex, reason,
+  messages: [{ role: 'assistant', content: [{ type: 'text', text }] }], };
 }
 
 const MISSION = 'Reply with exactly the word bramblelight and nothing else.';

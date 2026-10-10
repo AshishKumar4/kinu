@@ -25,6 +25,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **Finished-step events reference canonical output instead of copying message bodies.** Sealing publishes part references and step accounting together; reopen reads the canonical transcript, not an event-body reconstruction. The public event type derives from its stored/RPC schema. The new event shape requires reset deployment and has no old-row reader.
 - **Conversation search belongs to the actor's stores.** Canonical projections publish atomically into actor-scoped FTS rows and cursors; interleaved searches no longer combine private actors' text or index a canonical row twice. Backend and CLI surfaces borrow the same owned store. The index shape change requires reset deployment.
 - **Event reads filter before decoding, and terminal effects use only the current vocabulary.** `read` uses the same indexed SQL type filter as `readText` instead of parsing unrelated rows. The unused resume reader and retired shadow/GEPA no-op dispatch paths are removed; stored old-build effects require the release's reset.
 - **Core store and compaction comments describe the current data model.** Removed the deleted recorder-cache claim and the lossless-binary-text claim; the diagnostic transcript still uses size placeholders for binary bodies.

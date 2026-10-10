@@ -2,7 +2,7 @@
 import { abortAllDurableObjects, env } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import * as v from 'valibot';
-import { DYNAMIC_CONTEXT_OPEN_TAG, RunEventSchema, drawnStep } from '@kinu.run/core';
+import { DYNAMIC_CONTEXT_OPEN_TAG, RunEventSchema } from '@kinu.run/core';
 import { ParityCompletedSchema, ParityPreparedSchema } from '../two-turn-shapes';
 
 const MessageSchema = v.object({ parts: v.array(v.looseObject({ type: v.string(), text: v.optional(v.string()) })) });
@@ -50,7 +50,15 @@ it('steering and a restarted turn preserve conversation order and each step inde
       if (assistant === undefined) throw new Error('a completed answer must be in the conversation');
 
       const text = v.parse(MessageSchema, JSON.parse(assistant.content)).parts.flatMap((part) => part.type === 'text' ? [part.text] : []).join('');
-      const replayed = steps.flatMap((record) => drawnStep(record.messages ?? []).flatMap((part) => part.type === 'text' ? [v.parse(v.string(), part.text)] : [])).join('');
+      const canonical = new Map(completed.end.canonicalParts.map((part) => [`${part.messageId}:${String(part.partNo)}`, part.value]));
+
+      const replayed = steps.flatMap((step) => step.parts).map((part) => {
+        const value = canonical.get(`${part.messageId}:${String(part.partNo)}`);
+
+        if (value === undefined) throw new Error('a step references output absent from the canonical store');
+
+        return v.parse(v.looseObject({ type: v.string(), text: v.optional(v.string()) }), JSON.parse(value));
+      }).flatMap((part) => part.type === 'text' ? [part.text ?? ''] : []).join('');
 
       expect(replayed).toBe(text);
     }

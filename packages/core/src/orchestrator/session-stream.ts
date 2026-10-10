@@ -3,7 +3,7 @@ import * as v from 'valibot';
 import { Effect } from 'effect';
 import type { ChatEvent, StepRecord } from '../chat';
 import { SessionHistory } from '../session/history';
-import type { ClaimFence, MessageReference, StoredPart, StreamPartInput, PreparedContent } from '../session/messages';
+import type { ClaimFence, MessageReference, MessagePartReference, StoredPart, StreamPartInput, PreparedContent } from '../session/messages';
 import type { SessionPayload } from '../session/payload';
 import { isParsedJsonObject, jsonObjectElements, projectJsonValue, type JsonObject } from '../utils/json';
 import { encodeModelMessage } from '../session/message-codec';
@@ -110,6 +110,7 @@ interface StreamContainer {
   /** Joins the working context when it seals; a render-only container never does. */
   readonly working: boolean;
   sealed: boolean;
+  sealedParts: readonly MessagePartReference[];
   readonly parts: Map<string, StreamPart>;
 }
 
@@ -209,7 +210,7 @@ export class SessionStream {
     return call;
   }
 
-  private async witnessCall(callId: string | null, write: Promise<void>): Promise<void> {
+  private async witnessCall<T>(callId: string | null, write: Promise<T>): Promise<T> {
     if (callId === null) return await write;
     const call = this.durableCall(callId);
     const [outcome] = await Promise.allSettled([write]);
@@ -217,7 +218,7 @@ export class SessionStream {
     if (outcome?.status === 'fulfilled') {
       call.held.resolve();
 
-      return;
+      return outcome.value;
     }
 
     call.failed = { reason: outcome?.reason };
@@ -312,7 +313,7 @@ export class SessionStream {
     }
   }
 
-  nativeStep(record: StepRecord, rows?: () => void | (() => void)): Promise<void> {
+  nativeStep(record: StepRecord, rows?: (parts: readonly MessagePartReference[]) => void | (() => void)): Promise<void> {
     this.nativeProducer = true;
 
     return this.exclusive(async () => {
@@ -330,13 +331,13 @@ export class SessionStream {
   }
 
   /** Scaffold-authored ChatEvents have no native stream; their explicit calls retain the same pairing rule. */
-  observe(event: ChatEvent): Promise<void> {
-    if (event.source === 'native') return Promise.resolve();
+  observe(event: ChatEvent): Promise<readonly MessagePartReference[]> {
+    if (event.source === 'native') return Promise.resolve([]);
 
     return this.witnessCall(event.type === 'tool-call' ? event.toolCallId : null, this.exclusive(() => this.observeScaffold(event)));
   }
 
-  private async observeScaffold(event: ChatEvent): Promise<void> {
+  private async observeScaffold(event: ChatEvent): Promise<readonly MessagePartReference[]> {
     if (this.nativeProducer) {
       // A native step the program cut off seals first: its messages and the program's never share an output slot.
       if ([this.assistant, this.tool, this.ui].some(container => container.reference !== null)) await this.sealStep(null);
@@ -356,18 +357,22 @@ export class SessionStream {
       await this.publish({ container: this.tool, key: `result:${event.toolCallId}`, descriptor: { type: 'tool-result', toolCallId: event.toolCallId, toolName: event.toolName, output }, delta: null });
       this.tick('settled');
     } else if (event.type === 'step-finish') {
-      await this.sealStep(event.responseMessages);
+      const parts = await this.sealStep(event.responseMessages);
       this.nextStep();
+
+      return parts;
     } else if (event.type === 'done') {
       await this.sealStep(event.responseMessages);
     }
+
+    return [];
   }
 
 
   private container(role: 'assistant' | 'tool', slot = role === 'assistant' ? 0 : 1): StreamContainer {
     const outputSlot = this.step * 3 + slot;
 
-    return { id: `${this.requestId}:${outputSlot}`, role, slot: outputSlot, reference: null, working: slot !== 2, sealed: false, parts: new Map() };
+    return { id: `${this.requestId}:${outputSlot}`, role, slot: outputSlot, reference: null, working: slot !== 2, sealed: false, sealedParts: [], parts: new Map() };
   }
 
   private nextStep(): void {
@@ -493,6 +498,7 @@ export class SessionStream {
   private sealContainer(container: StreamContainer, content: PreparedContent, envelope: JsonObject = {}): void {
     if (!container.working) {
       this.fenced(() => this.history.messages.seal(container.id, content, envelope));
+      container.sealedParts = content.parts.map((part) => ({ messageId: container.id, partNo: part.partNo }));
 
       return;
     }
@@ -507,10 +513,11 @@ export class SessionStream {
 
       return [...entries, { messageId: container.id, entryId: container.id, position: entries.length }];
     } });
+    container.sealedParts = content.parts.map((part) => ({ messageId: container.id, partNo: part.partNo }));
   }
 
   /** Prepare content first; seals and rows publish in one fenced commit. */
-  private async sealStep(cumulative: readonly ModelMessage[] | null, rows?: () => void | (() => void)): Promise<void> {
+  private async sealStep(cumulative: readonly ModelMessage[] | null, rows?: (parts: readonly MessagePartReference[]) => void | (() => void)): Promise<readonly MessagePartReference[]> {
     const seals: (() => void)[] = [];
     const bind: (() => void)[] = [];
     const finals = new Set<StreamContainer>();
@@ -547,20 +554,24 @@ export class SessionStream {
 
     const containers = [this.assistant, this.tool, this.ui];
     const references = containers.map((container) => container.reference);
+    const sealedParts = containers.map((container) => container.sealedParts);
+    let output: readonly MessagePartReference[] = [];
     let committed = false;
     let publish: void | (() => void);
 
     try {
       publish = this.fenced(() => {
-        const recorded = rows?.();
-
         for (const seal of seals) seal();
+        output = containers.filter((container) => container.working).flatMap((container) => container.sealedParts);
 
-        return recorded;
+        return rows?.(output);
       });
       committed = true;
     } finally {
-      if (!committed) for (const [index, container] of containers.entries()) container.reference = references[index] ?? null;
+      if (!committed) for (const [index, container] of containers.entries()) {
+        container.reference = references[index] ?? null;
+        container.sealedParts = sealedParts[index] ?? [];
+      }
     }
 
     for (const container of finals) container.sealed = true;
@@ -571,6 +582,8 @@ export class SessionStream {
     publish?.();
 
     if (cumulative !== null) this.completedMessageCount = cumulative.length;
+
+    return output;
   }
 
   /** Paired by {@link partIdentity}: the final message decides order and content; a streamed part it omits is kept in place. Disagreement is {@link STREAM_DIVERGED}, never a throw. */
