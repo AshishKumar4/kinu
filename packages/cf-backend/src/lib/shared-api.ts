@@ -4,29 +4,12 @@ import {
   BlueprintForkSchema, BlueprintViewSchema, SharedLibrarySchema, LiveShareCreatedSchema,
   type BlueprintFork, type BlueprintView, type JsonValue, type SharedLibrary, type LiveShareCreated, type LiveShareVisibility,
 } from '@kinu.run/core';
-import { tolerateAsync, settle } from '@kinu.run/core/obs';
-import { DEFAULT_CALL_TIMEOUT_MS } from 'agents/client';
+import { settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
+import { refusal, request, respond } from './http';
 
-const ErrorBody = v.object({ error: v.string() });
-
-async function errorDetail(res: Response): Promise<string> {
-  const parsed = v.safeParse(ErrorBody, await tolerateAsync(() => res.json(), 'malformed-input'));
-
-  return parsed.success ? parsed.output.error : '';
-}
-
-async function api<Schema extends v.GenericSchema>(schema: Schema, method: string, path: string, body?: JsonValue): Promise<v.InferOutput<Schema>> {
-  const res = await fetch(path, {
-    method,
-    headers: { 'content-type': 'application/json' },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-    signal: method === 'GET' ? AbortSignal.timeout(DEFAULT_CALL_TIMEOUT_MS) : undefined,
-  });
-
-  if (!res.ok) throw new Error(`${method} ${path} → ${res.status} ${await errorDetail(res)}`);
-
-  return v.parse(schema, await res.json());
+function api<Schema extends v.GenericSchema>(schema: Schema, method: string, path: string, body?: JsonValue): Promise<v.InferOutput<Schema>> {
+  return settle(request(schema, path, { method, ...(body !== undefined && { json: body }) }));
 }
 
 export function getSharedLibrary(): Promise<SharedLibrary> {
@@ -61,11 +44,11 @@ const MeSchema = v.object({ user: v.nullable(v.object({ email: v.string(), signe
 
 /** The signed-in session as `/api/auth/me` answers it; null when no one is signed in. */
 const signedIn = Effect.gen(function* () {
-  const res = yield* Effect.promise(async () => fetch('/api/auth/me', { signal: AbortSignal.timeout(DEFAULT_CALL_TIMEOUT_MS) }));
+  const res = yield* respond('/api/auth/me');
 
   if (res.status === 401) return null;
 
-  if (!res.ok) return yield* Effect.die(new Error(`GET /api/auth/me → ${res.status} ${yield* Effect.promise(async () => errorDetail(res))}`));
+  if (!res.ok) return yield* Effect.die(yield* refusal(res, 'GET', '/api/auth/me'));
 
   return v.parse(MeSchema, yield* Effect.promise(async () => res.json())).user;
 });

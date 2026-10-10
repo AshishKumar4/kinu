@@ -2,42 +2,16 @@
  * Typed client for `/api/drive/*`; the session rides the HttpOnly cookie.
  * Folders upload as one zip (core's `packZip`) so the object lands the whole set or none.
  */
-import { Data, Effect } from 'effect';
+import { Effect } from 'effect';
 import {
-  DriveListingSchema, MarkedSkillSchema, packZip, type DriveListing, type FileText, type JsonValue, type MarkedSkill,
+  DriveListingSchema, MarkedSkillSchema, packZip, type DriveListing, type FileText, type MarkedSkill,
 } from '@kinu.run/core';
-import { tolerateAsync, settle } from '@kinu.run/core/obs';
-import { DEFAULT_CALL_TIMEOUT_MS } from 'agents/client';
+import { settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
+import { refusal, request, respond, type HttpRequest } from './http';
 
-const ErrorBody = v.object({ error: v.string() });
-
-class DriveApiError extends Data.TaggedError('DriveApiError')<{ readonly message: string }> {
-  constructor(readonly status: number, message: string) {
-    super({ message });
-  }
-}
-
-async function failure(res: Response): Promise<DriveApiError> {
-  const parsed = v.safeParse(ErrorBody, await tolerateAsync(() => res.json(), 'malformed-input'));
-
-  return new DriveApiError(res.status, parsed.success ? parsed.output.error : `request failed (${String(res.status)})`);
-}
-
-async function api<Schema extends v.GenericSchema>(schema: Schema, method: string, path: string, init: RequestInit = {}): Promise<v.InferOutput<Schema>> {
-  const res = await fetch(`/api/drive${path}`, {
-    method,
-    signal: method === 'GET' ? AbortSignal.timeout(DEFAULT_CALL_TIMEOUT_MS) : undefined,
-    ...init,
-  });
-
-  if (!res.ok) throw await failure(res);
-
-  return v.parse(schema, await res.json());
-}
-
-function jsonBody(body: JsonValue): RequestInit {
-  return { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) };
+function api<Schema extends v.GenericSchema>(schema: Schema, method: string, path: string, init: Omit<HttpRequest, 'method'> = {}): Promise<v.InferOutput<Schema>> {
+  return settle(request(schema, `/api/drive${path}`, { method, ...init }));
 }
 
 const Ok = v.object({ ok: v.literal(true) });
@@ -62,11 +36,11 @@ export function listDrive(path: string): Promise<DriveListing> {
 }
 
 export async function makeFolder(path: string): Promise<void> {
-  await api(Ok, 'POST', '/folders', jsonBody({ path }));
+  await api(Ok, 'POST', '/folders', { json: { path } });
 }
 
 export async function renameEntry(from: string, to: string): Promise<void> {
-  await api(Ok, 'POST', '/rename', jsonBody({ from, to }));
+  await api(Ok, 'POST', '/rename', { json: { from, to } });
 }
 
 export async function deleteEntry(path: string): Promise<void> {
@@ -86,11 +60,11 @@ export async function uploadFolder(folder: string, files: readonly PickedFile[],
 }
 
 export function markAsSkill(path: string): Promise<MarkedSkill> {
-  return api(MarkedSkillSchema, 'POST', '/skills/mark', jsonBody({ path }));
+  return api(MarkedSkillSchema, 'POST', '/skills/mark', { json: { path } });
 }
 
 export function addSkillText(skill: string): Promise<MarkedSkill> {
-  return api(MarkedSkillSchema, 'POST', '/skills', jsonBody({ skill }));
+  return api(MarkedSkillSchema, 'POST', '/skills', { json: { skill } });
 }
 
 /** `name` is the folder's name, used as the skill's name when front matter states none. */
@@ -117,9 +91,9 @@ const PREVIEW_BYTES = 256 * 1024;
 /** A prefix of the file's text; no revision, so the viewer is read-only. */
 export function readDriveText(path: string, cap = PREVIEW_BYTES): Promise<FileText> {
   return settle(Effect.gen(function* () {
-    const res = yield* Effect.promise(async () => fetch(inlineUrl(path), { signal: AbortSignal.timeout(DEFAULT_CALL_TIMEOUT_MS) }));
+    const res = yield* respond(inlineUrl(path));
 
-    if (!res.ok) return yield* Effect.die((yield* Effect.promise(async () => failure(res))));
+    if (!res.ok) return yield* Effect.die(yield* refusal(res, 'GET', inlineUrl(path)));
 
     if (res.body === null) return { content: '' };
     const reader = res.body.getReader();

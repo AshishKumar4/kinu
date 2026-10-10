@@ -14,9 +14,10 @@ import {
 
 import { rosterBucket, rosterMatches, type AccountMemoryProposal } from "@kinu.run/core";
 import {
-  AccountMemoryFrameSchema, listWorkspaces, RosterFrameSchema, ROSTER_SOCKET_ROUTE, UserApiError,
+  AccountMemoryFrameSchema, listWorkspaces, RosterFrameSchema, ROSTER_SOCKET_ROUTE,
   type RosterCounts, type RosterEntry, type RosterFilterBucket, type RosterFrame, type RosterPage, type WorkspaceEntry,
 } from "@/lib/user-api";
+import { ApiError } from "@/lib/http";
 import { detach, renderThrownChain, tolerate, settleSync } from "@kinu.run/core/obs";
 
 const ROSTER_PAGE = 50;
@@ -220,7 +221,7 @@ function sessionRefused(): Effect.Effect<boolean> {
     onFailure: (failed) => {
       const cause = Cause.squash(failed);
 
-      return cause instanceof UserApiError && cause.status === 401;
+      return cause instanceof ApiError && cause.status === 401;
     },
   });
 }

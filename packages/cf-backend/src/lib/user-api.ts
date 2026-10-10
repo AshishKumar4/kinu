@@ -1,5 +1,5 @@
 /** Typed client for `/api/user/*`; the session rides the HttpOnly cookie (dev synthesizes DEV_USER_EMAIL server-side). */
-import { Cause, Data, Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 import {
   AccountMemoryProposalSchema, DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS, DEVICE_UPDATE_STATES,
   AccountUsageSchema, FactOriginSchema, ProfileCatalogEnvelopeSchema, REASONING_EFFORTS,
@@ -14,9 +14,9 @@ import {
   type RosterBucket,
   WorkspaceOverviewSchema,
 } from '@kinu.run/core';
-import { tolerateAsync, settle } from '@kinu.run/core/obs';
-import { DEFAULT_CALL_TIMEOUT_MS } from 'agents/client';
+import { settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
+import { ApiError, request } from './http';
 import type { BoxSize } from '@kinu.run/devbox/sizes';
 import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from '../sandbox-size';
 
@@ -50,7 +50,6 @@ export type ProviderFailure = v.InferOutput<typeof ProviderFailureSchema>;
 
 export type ModelMenu = v.InferOutput<typeof ModelMenuSchema>;
 
-const ErrorBodySchema = v.object({ error: v.optional(v.string()) });
 
 const OkSchema = v.object({ ok: v.boolean() });
 
@@ -117,13 +116,6 @@ const ModelMenuSchema = v.object({
 
 export type CliSetup = v.InferOutput<typeof CliSetupSchema>;
 
-/** '' when the body is not a JSON `{error}` envelope. */
-async function errorDetail(res: Response): Promise<string> {
-  const parsed = v.safeParse(ErrorBodySchema, await tolerateAsync(() => res.json(), 'malformed-input'));
-
-  return parsed.success ? parsed.output.error ?? '' : '';
-}
-
 /** The shaped payloads are named because a TypeScript interface never satisfies an index signature. */
 type RequestBody =
   | Record<string, JsonValue | undefined>
@@ -132,36 +124,10 @@ type RequestBody =
   | McpServerInput
   | { catalog: ProfileCatalog; expectedVersion: number };
 
-export class UserApiError extends Data.TaggedError('UserApiError')<{ readonly message: string }> {
-  constructor(message: string, readonly status: number) {
-    super({ message });
-    this.name = 'Error';
-  }
-}
-
 function api<Schema extends v.GenericSchema>(
   schema: Schema, method: string, path: string, body?: RequestBody,
 ): Effect.Effect<v.InferOutput<Schema>> {
-  return Effect.gen(function* () {
-    const ask = Effect.promise(() => fetch(`/api/user${path}`, {
-      method,
-      headers: { 'content-type': 'application/json' },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      // Reads only: an aborted mutation may already have landed server-side, making a timeout an ambiguous retry (KINU-073).
-      signal: method === 'GET' ? AbortSignal.timeout(DEFAULT_CALL_TIMEOUT_MS) : undefined,
-    }));
-
-    // Reads only: a write may have landed.
-    const res = yield* (method === 'GET' ? Effect.catchDefect(ask, (dropped) => (dropped instanceof TypeError ? ask : Effect.die(dropped))) : ask);
-
-    if (!res.ok) {
-      const detail = yield* Effect.promise(() => errorDetail(res));
-
-      return yield* Effect.die(new UserApiError(`${method} /api/user${path} → ${res.status} ${detail}`, res.status));
-    }
-
-    return v.parse(schema, yield* Effect.promise(() => res.json()));
-  });
+  return request(schema, `/api/user${path}`, { method, ...(body !== undefined && { json: body }) });
 }
 
 export const getProfile = () => settle(api(UserProfileSchema, 'GET', '/profile'));
@@ -212,7 +178,7 @@ export function touchWorkspace(name: string): Promise<boolean> {
     }), (failed) => Effect.gen(function* () {
       const error = Cause.squash(failed);
 
-      if (error instanceof UserApiError && error.status === 404) return false;
+      if (error instanceof ApiError && error.status === 404) return false;
 
       return yield* Effect.failCause(failed);
     }));
@@ -418,16 +384,7 @@ export type { ModelTestResult };
 
 export function testModel(spec: string, signal: AbortSignal): Promise<ModelTestResult> {
   return settle(Effect.gen(function* () {
-    const res = yield* Effect.promise(async () => fetch('/api/user/models/test', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ spec }),
-      signal,
-    }));
-
-    if (!res.ok) return yield* Effect.die(new Error(`POST /api/user/models/test → ${res.status} ${yield* Effect.promise(async () => errorDetail(res))}`));
-
-    return v.parse(ModelTestResultSchema, yield* Effect.promise(async () => res.json()));
+    return yield* request(ModelTestResultSchema, '/api/user/models/test', { method: 'POST', json: { spec }, signal });
   }));
 }
 
@@ -538,21 +495,7 @@ interface AgentRequest<Schema extends v.GenericSchema> {
 function agentApi<Schema extends v.GenericSchema>(
   { schema, method, agentName, path, body }: AgentRequest<Schema>,
 ): Effect.Effect<v.InferOutput<Schema>> {
-  return Effect.gen(function* () {
-    const res = yield* Effect.promise(() => fetch(`/api/workspaces/${encodeURIComponent(agentName)}${path}`, {
-      method,
-      headers: { 'content-type': 'application/json' },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    }));
-
-    if (!res.ok) {
-      const detail = yield* Effect.promise(() => errorDetail(res));
-
-      return yield* Effect.die(new Error(`${method} /api/workspaces/${agentName}${path} → ${res.status} ${detail}`));
-    }
-
-    return v.parse(schema, yield* Effect.promise(() => res.json()));
-  });
+  return request(schema, `/api/workspaces/${encodeURIComponent(agentName)}${path}`, { method, ...(body !== undefined && { json: body }) });
 }
 
 const CreateWebhookResultSchema = v.object({
