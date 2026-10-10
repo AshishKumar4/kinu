@@ -26,7 +26,7 @@
  * `--no-build` reads the existing `dist/kinu` (a deploy already built it).
  */
 
-import { cpSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { builtinModules } from 'node:module';
 import { createServer } from 'node:net';
@@ -481,7 +481,7 @@ export const PLANTED_BYTES = 4_000_000;
 
 /** The built assets with main's isolate swapped for the shipped facet plus `plant` (`tests/workerd/heap-plant-agent.ts`). */
 function plantingAssets(directory: string): string {
-  const assets = mkdtempSync(join(tmpdir(), 'worker-heap-assets-'));
+  const assets = mkdtempSync(join(tmpdir(), 'kinu-worker-heap-assets-'));
 
   cpSync(directory, assets, { recursive: true });
   writeFileSync(join(assets, '_agent/modules.json'), JSON.stringify(buildAgentBundle(join(CF_BACKEND, 'tests/workerd/heap-plant-agent.ts')).modules));
@@ -523,6 +523,8 @@ export async function measure(): Promise<HeapMeasurement> {
   const key = btoa('worker-heap-credential-key-32byt');
   const port = await freePort();
   const compat = { compatibilityDate: wrangler.compatibility_date, compatibilityFlags: wrangler.compatibility_flags };
+  // Removed with the run, below: one a run cut short is left to preflight, which counts `kinu-`.
+  const assets = plantingAssets(resolvePath(DIST, wrangler.assets.directory));
 
   let driver: Awaited<ReturnType<Miniflare['getWorker']>>;
 
@@ -548,7 +550,7 @@ export async function measure(): Promise<HeapMeasurement> {
       name: 'kinu', ...compat, modulesRoot: DIST, modules: await productModules(), workerLoaders: { LOADER: {} },
       bindings: { ...wrangler.vars, CREDENTIAL_ENCRYPTION_KEY: key },
       ai,
-      assets: { binding: wrangler.assets.binding, directory: plantingAssets(resolvePath(DIST, wrangler.assets.directory)) },
+      assets: { binding: wrangler.assets.binding, directory: assets },
       r2Buckets: wrangler.r2_buckets.map((bucket) => bucket.binding),
       kvNamespaces: wrangler.kv_namespaces.map((namespace) => namespace.binding),
       durableObjects: Object.fromEntries(wrangler.durable_objects.bindings.map((binding) =>
@@ -726,6 +728,7 @@ export async function measure(): Promise<HeapMeasurement> {
     }
   } finally {
     await mf.dispose();
+    rmSync(assets, { recursive: true, force: true });
   }
 }
 
@@ -751,6 +754,21 @@ function transcript(): string {
 /** UTF-8 spends one byte per character only when every character is ASCII. */
 function isWide(text: string): boolean {
   return Buffer.byteLength(text, 'utf8') !== text.length;
+}
+
+/** The gate reads each isolate it bounds: a buffer planted in one shows there, and not in the other. */
+function plantedFindings(planted: HeapMeasurement['planted']): string[] {
+  return ISOLATES.flatMap((isolate) => {
+    const other = isolate === 'workspace' ? 'main' : 'workspace';
+    const seen = planted[isolate];
+    const read = `${mb(seen[isolate])} there and ${mb(seen[other])} in ${ISOLATE_NAMES[other]}`;
+
+    console.log(`${GATE}: ${mb(PLANTED_BYTES)} planted in ${ISOLATE_NAMES[isolate]} read as ${read}`);
+
+    return seen[isolate] < PLANTED_BYTES * 0.9 || seen[other] > PLANTED_BYTES * 0.25
+      ? [`${mb(PLANTED_BYTES)} planted in ${ISOLATE_NAMES[isolate]} read as ${read}: the gate does not read that isolate alone`]
+      : [];
+  });
 }
 
 async function main(args: readonly string[]): Promise<number> {
@@ -783,21 +801,7 @@ async function main(args: readonly string[]): Promise<number> {
     for (const each of measured.setupMakeup[isolate].strings) console.log(`  ${mb(each.bytes).padStart(9)}  one string: ${JSON.stringify(each.head)}`);
   }
 
-  const findings: string[] = [];
-
-  // The gate reads each isolate it bounds: a buffer planted in one shows there, and not in the other.
-  for (const isolate of ISOLATES) {
-    const other = isolate === 'workspace' ? 'main' : 'workspace';
-    const seen = measured.planted[isolate];
-
-    const read = `${mb(seen[isolate])} there and ${mb(seen[other])} in ${ISOLATE_NAMES[other]}`;
-
-    console.log(`${GATE}: ${mb(PLANTED_BYTES)} planted in ${ISOLATE_NAMES[isolate]} read as ${read}`);
-
-    if (seen[isolate] < PLANTED_BYTES * 0.9 || seen[other] > PLANTED_BYTES * 0.25) {
-      findings.push(`${mb(PLANTED_BYTES)} planted in ${ISOLATE_NAMES[isolate]} read as ${read}: the gate does not read that isolate alone`);
-    }
-  }
+  const findings: string[] = [...plantedFindings(measured.planted)];
 
   if (wide.length > 0) findings.push(`${wide.join(', ')} carry characters outside ASCII, which V8 keeps two bytes each`);
 
