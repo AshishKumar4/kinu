@@ -1,9 +1,10 @@
+import type { ModelAttemptIdentity } from '../providers/attempt-identity';
 import type { LanguageModel } from 'ai';
 import type { ActorReference } from '../identity/actor-handle';
 import { Effect } from 'effect';
 import { diagnostics, KinuError, settle, toKinuError } from '../obs/index';
 import { accountOf, MAIN_ACCOUNT } from '../credentials/accounts';
-import { credentialOrUnknown, FallbackRoute, type CallFailure } from '../providers/fallback-route';
+import { attemptOrUnknown, FallbackRoute, type CallFailure } from '../providers/fallback-route';
 import { reasoningEffortOptions, type ProviderOptions, type ReasoningEffort } from '../providers/effort';
 import { generateReported, type GenerateRequest } from '../providers/model-invocation';
 import type { ModelCallSpend } from '../events/model-call';
@@ -18,7 +19,7 @@ import type { TierRefusal, TierRefusals } from '../types/refusals';
 
 /** What a route walk reads besides the route: which credential pays a spec, and where owner-fixable refusals are said. */
 export interface RouteWalk {
-  readonly credentialOf?: (spec: string) => Promise<string | null>;
+  readonly attemptOf?: (spec: string) => Promise<ModelAttemptIdentity | null>;
   readonly refusals?: TierRefusals;
 }
 
@@ -55,13 +56,13 @@ interface ChainEntry {
   readonly reasoningEffort: ReasoningEffort | null;
 }
 
-function asCalled(spec: string, credentialOf: RouteCallComponents['credentialOf']): Effect.Effect<string> {
+function asCalled(spec: string, attemptOf: RouteCallComponents['attemptOf']): Effect.Effect<string> {
   const parsed = parseModelSpec(spec);
 
-  if (credentialOf === undefined || parsed.account !== undefined) return Effect.succeed(spec);
+  if (attemptOf === undefined || parsed.account !== undefined) return Effect.succeed(spec);
 
-  return credentialOrUnknown(credentialOf, spec).pipe(Effect.map((key) => {
-    const account = key === null ? MAIN_ACCOUNT : accountOf(key);
+  return attemptOrUnknown(attemptOf, spec).pipe(Effect.map((identity) => {
+    const account = identity === null || identity.ref === null ? MAIN_ACCOUNT : accountOf(identity.ref);
 
     return account === MAIN_ACCOUNT ? spec : formatModelSpec({ ...parsed, account });
   }));
@@ -105,10 +106,10 @@ export async function onRoute<T>(route: ModelRouteResolution, lane: RouteWalk, i
     modelSpec: route.model,
     fallbacks: route.fallbacks.map((fallback) => ({ spec: fallback.model, reasoningEffort: fallback.reasoningEffort })),
     retries: route.retries,
-    ...(lane.credentialOf !== undefined && { credentialOf: lane.credentialOf }),
+    ...(lane.attemptOf !== undefined && { attemptOf: lane.attemptOf }),
   });
 
-  const cooled = chain.cooledStart();
+  const cooled = await chain.cooledStart();
 
   if (cooled !== undefined) chain.tried.push(cooled.spec);
 
@@ -128,11 +129,11 @@ export async function onRoute<T>(route: ModelRouteResolution, lane: RouteWalk, i
 
       if (ownerMustFix) refused.push({ spec: serving.spec, cause: error.cause });
 
-      const next = yield* Effect.promise(() => chain.next(serving.spec, failure));
+      const next = yield* Effect.promise(() => chain.next(failure));
 
       if (next === undefined) {
         if (ownerMustFix && notices !== undefined) {
-          const refusals: TierRefusal[] = yield* Effect.all(refused.map(({ spec, cause }) => asCalled(spec, lane.credentialOf).pipe(
+          const refusals: TierRefusal[] = yield* Effect.all(refused.map(({ spec, cause }) => asCalled(spec, lane.attemptOf).pipe(
             Effect.map((model) => ({ model, cause })),
           )));
 

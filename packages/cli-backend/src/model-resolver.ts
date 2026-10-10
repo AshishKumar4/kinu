@@ -1,3 +1,4 @@
+import type { ModelAttemptIdentity } from '@kinu.run/core';
 import { createChatModel, type LLMProviderConfig } from '@kinu.run/core';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID,
@@ -113,7 +114,7 @@ export interface LocalModelResolver {
   normalizeSpecSync(specOrNull?: string | null): string;
   /** `affinity`: the conversation and workspace the calls are routed and cached under (`actorAffinity`). */
   resolveModel(specOrNull: string | null | undefined, affinity: ModelAffinity): LanguageModel;
-  credentialFor(specOrNull?: string | null): Promise<string | null>;
+  attemptFor(specOrNull?: string | null): Promise<ModelAttemptIdentity | null>;
   listProviders(): Promise<ProviderInfo[]>;
   /** One broken credential never empties the menu. */
   listModels(): Promise<ModelMenu>;
@@ -319,8 +320,8 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     resolveModel(specOrNull, affinity) {
       return registry.resolve(normalizeSpecSync(specOrNull), { ...own, ...affinity });
     },
-    credentialFor(specOrNull) {
-      return registry.credentialFor(normalizeSpecSync(specOrNull), own);
+    attemptFor(specOrNull) {
+      return registry.attemptFor(normalizeSpecSync(specOrNull), own);
     },
     listProviders() {
       return registry.listProviders(own);

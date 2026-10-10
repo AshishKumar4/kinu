@@ -341,6 +341,8 @@ export {
 
 export { createFallbackCooldowns, type FallbackCooldowns } from './providers/fallback-cooldown';
 
+export type { ModelAttemptIdentity } from './providers/attempt-identity';
+
 // Extension seam (public plugin API)
 export {
   ExtensionHost,

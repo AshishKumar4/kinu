@@ -673,10 +673,10 @@ function createProfileLaneLLM(options: ProfileLaneOptions): LLM | undefined {
   return createRoutedModelLane(actor.actor, source, {
     resolveProfile,
     refusals,
-    credentialOf: (spec) => {
+    attemptOf: (spec) => {
       const agent = actorProviderRegistry(options, `Kinu (${source})`);
 
-      return agent.registry.credentialFor(agent.normalizeSpecSync(spec), agent.deps);
+      return agent.registry.attemptFor(agent.normalizeSpecSync(spec), agent.deps);
     },
     llm: (route) => routedLlm((serving) => {
       const registry = actorProviderRegistry(options, `Kinu (${source})`);

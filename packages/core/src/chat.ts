@@ -1,5 +1,7 @@
 /** Shared chat engine for server and CLI; returns the full ModelMessage array, tool calls and results included. */
 
+import type { ModelAttemptIdentity } from './providers/attempt-identity';
+import { modelAttempt } from './providers/attempt-identity';
 import { withToolResultImages } from './providers/tool-result-images';
 import {
   APICallError,
@@ -158,8 +160,8 @@ export interface ChatOptions {
   modelContext?: PromptModelContext;
   /** The turn model's spec, normalized as its fallbacks' are. */
   modelSpec: string;
-  /** A spec's stored credential; a 401 skips entries holding the refused one. */
-  credentialOf?: (spec: string) => Promise<string | null>;
+  /** The same resolved attempt as registry pacing; a 401 skips aliases of its refused credential snapshot. */
+  attemptOf?: (spec: string) => Promise<ModelAttemptIdentity | null>;
   retries?: number;
   cooldowns?: FallbackCooldowns;
   /** Provider-reported prompt tokens of the previous turn's final request, the measured compaction trigger. */
@@ -832,7 +834,28 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   let serving = assembly;
   let base = cache.messages;
 
-  const route = new FallbackRoute<ChatFallback>(opts);
+  const boundFallbacks = new Map<ChatFallback, ReturnType<ChatFallback['bind']>>();
+
+  const bindFallback = (fallback: ChatFallback): ReturnType<ChatFallback['bind']> => {
+    const existing = boundFallbacks.get(fallback);
+
+    if (existing !== undefined) return existing;
+
+    const bound = fallback.bind();
+
+    boundFallbacks.set(fallback, bound);
+
+    return bound;
+  };
+
+  const route = new FallbackRoute<ChatFallback>({ ...opts, attemptOf: opts.attemptOf ?? (async (spec) => {
+    if (spec === opts.modelSpec) return await modelAttempt(opts.model);
+
+    const fallback = opts.fallbacks?.find((entry) => entry.spec === spec);
+
+    return fallback === undefined ? null : modelAttempt(bindFallback(fallback).model);
+  }) });
+
   /** The fallback serving the turn, once one took over. */
   let servingFallback: string | undefined;
   let calls = 0;
@@ -1105,7 +1128,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   /** A fallback gets its own provider's cache, replay and options, and a request assembled for it: its window, its
    *  compaction and its attachment prices. */
   const takeOver = async (next: ChatFallback): Promise<void> => {
-    const bound = next.bind();
+    const bound = bindFallback(next);
     const served = next.window.contextWindow;
 
     serving = { ...assembly, model: next.spec, contextWindow: served };
@@ -1125,7 +1148,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     const outcome = yield* callModel([...base, ...responsePrefix], stepOffset, responsePrefix);
 
     if (outcome.failure === null) return outcome;
-    const next = await route.next(servingFallback ?? opts.modelSpec, outcome.failure);
+    const next = await route.next(outcome.failure);
 
     if (next === undefined) throw route.exhausted(outcome.failure);
     yield { type: 'model-fallback', from: current.spec, to: next.spec, reason: describeProviderError({ cause: outcome.failure.cause }), source: 'native' };
@@ -1138,7 +1161,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     return { ...rest, steps: [...outcome.steps, ...rest.steps], produced: [...outcome.produced, ...rest.produced] };
   };
 
-  const cooled = route.cooledStart();
+  const cooled = await route.cooledStart();
 
   if (cooled !== undefined) {
     yield { type: 'model-fallback', from: current.spec, to: cooled.spec, reason: `${current.spec} is cooling down after failing over`, source: 'native' };

@@ -151,6 +151,7 @@ export interface ProviderWaitInfo {
 export const PROVIDER_WAIT_SOURCES = ['header', 'backoff', 'cooldown', 'stall'] as const;
 
 export interface ProviderDeps {
+
   env: ProviderEnv;
   getAuth: AuthResolver;
   hasCredential: (key: string) => Promise<boolean>;

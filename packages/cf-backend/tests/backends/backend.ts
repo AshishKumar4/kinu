@@ -253,7 +253,7 @@ function scriptedResolver(model: LanguageModel): LocalModelResolver {
   return {
     normalizeSpecSync: (spec) => real.normalizeSpecSync(spec),
     resolveModel: () => model,
-    credentialFor: (spec) => real.credentialFor(spec),
+    attemptFor: (spec) => real.attemptFor(spec),
     listProviders: () => real.listProviders(),
     // The menu is the scripted model alone: a provider installed on the host (an `opencode` on PATH) never reaches a case.
     listModels: () => Promise.resolve({ models: [{ provider: NO_ENDPOINT.name, id: NO_ENDPOINT.model }], failures: [] }),

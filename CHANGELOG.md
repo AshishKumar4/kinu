@@ -25,6 +25,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **A replacement credential or endpoint is not parked by the previous attempt.** Retry pacing and fallback selection share a resolved route, model and credential-snapshot identity rather than using spec text for one of them. Identical login aliases share refusals, including across reconstructed registries; edited credentials and endpoints name fresh attempts.
 - **Memory vector updates survive cooldowns and failed writes.** Lexical changes queue durable, revisioned chunk references before contacting the semantic backend. Live sync and backfill share deletion/upsert acknowledgment, and hydrate current note text; recovery no longer leaves deleted vector chunks behind or consumes a newer update.
 - **Finished-step events reference canonical output instead of copying message bodies.** Sealing publishes part references and step accounting together; reopen reads the canonical transcript, not an event-body reconstruction. The public event type derives from its stored/RPC schema. The new event shape requires reset deployment and has no old-row reader.
 - **Conversation search belongs to the actor's stores.** Canonical projections publish atomically into actor-scoped FTS rows and cursors; interleaved searches no longer combine private actors' text or index a canonical row twice. Backend and CLI surfaces borrow the same owned store. The index shape change requires reset deployment.

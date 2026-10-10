@@ -382,7 +382,7 @@ async function accountTurn(
     for await (const event of runChat({
       model: registry.resolve(primary, deps), modelContext: { id: 'm' }, modelSpec: primary, fallbacks: chain, cooldowns: createFallbackCooldowns(),
       // A store the backend cannot reach, as a UserDO RPC failing after the 401.
-      credentialOf: opts.lookupFails ? () => Promise.reject(new Error('credential store unreachable')) : (spec) => registry.credentialFor(spec, deps),
+      attemptOf: opts.lookupFails ? () => Promise.reject(new Error('credential store unreachable')) : (spec) => registry.attemptFor(spec, deps),
       system: 'sys', history: [{ role: 'user', content: 'go' }], tools: {},
     })) events.push(event);
   } catch (error) {
@@ -398,6 +398,60 @@ const rateLimited = (retryAfterSeconds: number): Response => Response.json(
   { error: { message: 'rate limited' } },
   { status: 429, headers: { 'retry-after': String(retryAfterSeconds) } },
 );
+
+test.each(['credential', 'endpoint', 'equivalent'])('attempt cooldowns follow %s changes without guessing from spec text', async (replacement) => {
+  const served: string[] = [];
+  let changed = false;
+  let token = 'Bearer refused-login';
+
+  const server = Bun.serve({ port: 0, fetch(request) {
+    const key = request.headers.get('authorization') ?? '';
+
+    served.push(key);
+
+    return key === 'Bearer fallback-login' || changed ? answer('the current login answered') : rateLimited(30);
+  } });
+
+  const deps: ModelCallDeps = {
+    env: {}, sessionAffinity: 'fresh-credential', workspaceAffinity: 'fresh-credential',
+    getAuth: async (key) => ({ headers: { Authorization: key.endsWith('@backup') ? 'Bearer fallback-login' : token }, baseURL: `http://localhost:${String(server.port)}/${changed && replacement === 'endpoint' ? 'replacement' : 'v1'}` }),
+    hasCredential: async () => true,
+  };
+
+  const makeRegistry = () => {
+    const registry = createProviderRegistry();
+
+    registry.register(createOpenAICompatProvider());
+
+    return registry;
+  };
+
+  let registry = makeRegistry();
+  const primary = 'openai-compat/m';
+  const backup = 'openai-compat@backup/m';
+  const cooldowns = createFallbackCooldowns(() => 0);
+
+  const call = async () => {
+    for await (const _event of runChat({
+      model: registry.resolve(primary, deps), modelContext: { id: 'm' }, modelSpec: primary, cooldowns,
+      fallbacks: [{ spec: backup, accepts: new Set<MediaModality>(), window: { contextWindow: null, modelOutputLimit: null }, bind: () => ({ model: registry.resolve(backup, deps), provider: 'openai-compat' }) }],
+      system: 'sys', history: [{ role: 'user', content: 'go' }], tools: {},
+    })) { /* consume the real call */ }
+  };
+
+  try {
+    await call();
+    expect(served).toEqual(['Bearer refused-login', 'Bearer fallback-login']);
+    changed = replacement !== 'equivalent';
+
+    if (replacement !== 'credential') registry = makeRegistry();
+    else token = 'Bearer replacement-login';
+
+    await call();
+    expect(served.at(-1)).toBe(replacement === 'equivalent' ? 'Bearer fallback-login' : token);
+    expect(served.length).toBe(3);
+  } finally { await server.stop(true); }
+});
 
 describe('an account that hits its limit hands the turn to the next account of its chain', () => {
   test('a 429 inside a chain hands over at once, says why, and the next account does not wait out the first\'s cooldown', async () => {

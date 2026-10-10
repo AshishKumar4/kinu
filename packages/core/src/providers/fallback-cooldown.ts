@@ -5,24 +5,24 @@ import * as v from 'valibot';
 const UNSTATED_COOLDOWN_MS = 5 * 60 * 1000;
 
 export interface FallbackCooldowns {
-  park(spec: string, retryAfterMs: number | null): void;
-  parked(spec: string): boolean;
+  park(attempt: string, retryAfterMs: number | null): void;
+  parked(attempt: string): boolean;
 }
 
 export function createFallbackCooldowns(now: () => number = Date.now): FallbackCooldowns {
   const until = new Map<string, number>();
 
   return {
-    park: (spec, retryAfterMs) => {
-      until.set(spec, now() + (retryAfterMs === null || retryAfterMs <= 0 ? UNSTATED_COOLDOWN_MS : retryAfterMs));
+    park: (attempt, retryAfterMs) => {
+      until.set(attempt, now() + (retryAfterMs === null || retryAfterMs <= 0 ? UNSTATED_COOLDOWN_MS : retryAfterMs));
     },
-    parked: (spec) => {
-      const end = until.get(spec);
+    parked: (attempt) => {
+      const end = until.get(attempt);
 
       if (end === undefined) return false;
 
       if (end > now()) return true;
-      until.delete(spec);
+      until.delete(attempt);
 
       return false;
     },

@@ -1722,7 +1722,7 @@ export class LocalAgentSession {
       normalize: (spec) => this.profiles().normalizeSpec(spec),
       resolve: (spec) => (resolver ? resolver.resolveModel(spec, this.affinity()) : this.defaultModel('this static-model session')),
       ...(resolver && {
-        routed: { credentialFor: (spec) => resolver.credentialFor(spec), countInputTokens: (spec, request) => resolver.countInputTokens(spec, request) },
+        routed: { attemptFor: (spec) => resolver.attemptFor(spec), countInputTokens: (spec, request) => resolver.countInputTokens(spec, request) },
       }),
     };
   }
@@ -2071,7 +2071,7 @@ export class LocalAgentSession {
 
     return suggestWorkspaceTitle((system, prompt) => completeOnRoute(route, {
       llm: (resolution) => this.localRouteLlm(resolution, system),
-      ...(resolver !== null && { credentialOf: (spec: string) => resolver.credentialFor(spec) }),
+      ...(resolver !== null && { attemptOf: (spec: string) => resolver.attemptFor(spec) }),
       refusals: this.rt.refusals,
     }, prompt), mission);
   }

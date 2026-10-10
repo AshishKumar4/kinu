@@ -1,3 +1,4 @@
+import type { ModelAttemptIdentity } from '@kinu.run/core';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Local CLI runtime factory. Two file planes: agent state always lives in the
@@ -121,7 +122,7 @@ export interface CLIRuntime extends AgentRuntime {
   setModelForRoute?(factory: (resolution: ModelRouteResolution) => LLM): void;
   modelForRoute?: (resolution: ModelRouteResolution) => LLM;
   /** A facet's lanes share its parent's credential lookup and refusal notices. */
-  credentialOf?: (spec: string) => Promise<string | null>;
+  attemptOf?: (spec: string) => Promise<ModelAttemptIdentity | null>;
   /** The actor's one notice state for its runtime's life; the session's titling says through it too. */
   refusals: TierRefusals;
   /**
@@ -326,14 +327,14 @@ function buildCLIRuntime(
   const modelForRoute = (resolution: ModelRouteResolution): LLM =>
     modelRouteFactory(resolution);
 
-  const credentialOf = (spec: string): Promise<string | null> => localResolver().credentialFor(spec);
+  const attemptOf = (spec: string): Promise<ModelAttemptIdentity | null> => localResolver().attemptFor(spec);
   // A local session reads the owner's model settings as it opens; nothing changes them under it.
   const refusals = tierRefusals({ sql, actor, config: agentConfig, now: Date.now, settings: LOCAL_MODEL_SETTINGS, changes: () => 0 });
 
   const modelLanes = {
     resolveProfile: ensureProfile,
     llm: modelForRoute,
-    credentialOf,
+    attemptOf,
     refusals,
   };
 
@@ -514,7 +515,7 @@ function buildCLIRuntime(
     setModelOperations: (sink: ModelOperationSink | null) => { modelOperations = sink; },
     profiles,
     modelForRoute,
-    credentialOf,
+    attemptOf,
     refusals,
     setModelForRoute: (factory: (resolution: ModelRouteResolution) => LLM) => {
       modelRouteFactory = factory;
@@ -749,7 +750,7 @@ async function buildCLIHeadRuntime(
     runtimeOptions.modelLanes = {
       resolveProfile: parentProfile,
       llm: parentModelForRoute,
-      ...(parent.credentialOf !== undefined && { credentialOf: parent.credentialOf }),
+      ...(parent.attemptOf !== undefined && { attemptOf: parent.attemptOf }),
       refusals: parent.refusals,
     };
   }

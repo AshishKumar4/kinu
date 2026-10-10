@@ -3692,7 +3692,7 @@ export abstract class ActorAgent extends Agent<Env> {
       llm: (resolution) => routedLlm((serving) => this.modelForResolution(serving), resolution, {
         report: (report) => this.reportModelCall(report), operations: this.modelOperations,
       }, system),
-      credentialOf: (spec) => this.ownedModelServices.credentialFor(spec),
+      attemptOf: (spec) => this.ownedModelServices.attemptFor(spec),
       refusals: this.tierRefusals,
     }, prompt);
   }
