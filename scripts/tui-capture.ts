@@ -1,24 +1,34 @@
 /**
- * TUI screen capture harness.
+ * Capture the product's TUI components with scripted clients and a CLI renderer.
  *
- * Renders the real screens through the opentui test renderer — the same
- * renderer packages/cli/tests/tui.test.tsx measures the chrome with — and
- * writes one char frame per screen. The design-review workflow photographs
- * the current surface with it: pass a set name, compare sets side by side.
- *
- * Run: `bun scripts/tui-capture.ts <set>`   (default set: "current")
- * Output: ${TUI_CAPTURE_DIR:-/tmp/review-TuiRedesign2}/<set>/*.txt
+ * Run: bun scripts/tui-capture.ts <set> (default: current)
+ * Output: ${TUI_CAPTURE_DIR:-$TMPDIR/review-TuiRedesign2}/<set>/*.txt
  */
+import { once } from 'node:events';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { ReactElement } from 'react';
+import type { MockInput } from '@opentui/core/testing';
 import type { AlternateTakeSet } from '../packages/core/src/mcts/takes';
-import type { AgentSearchNode } from '../packages/cli/src/agent-client';
-import type { DisplayMessage } from '../packages/cli/src/tui/messages';
+import type { AgentSearchNode, AgentTranscriptMessage } from '../packages/cli/src/agent-client';
 
 const set = process.argv[2] ?? 'current';
 
-const outDir = `${process.env.TUI_CAPTURE_DIR ?? '/tmp/review-TuiRedesign2'}/${set}`;
+// Terminal setup and teardown write protocol bytes; keep them off the command's stdout.
+if (process.env.KINU_TUI_CAPTURE_WORKER !== '1') {
+  const worker = Bun.spawn([process.execPath, import.meta.path, set], {
+    env: { ...process.env, KINU_TUI_CAPTURE_WORKER: '1' },
+    stdin: 'ignore', stdout: 'ignore', stderr: 'inherit',
+  });
+
+  const code = await worker.exited;
+
+  if (code === 0) process.stdout.write(`captured ${set}: done\n`);
+  process.exit(code);
+}
+
+const outDir = join(process.env.TUI_CAPTURE_DIR ?? join(tmpdir(), 'review-TuiRedesign2'), set);
 
 mkdirSync(outDir, { recursive: true });
 
@@ -26,40 +36,11 @@ const MODEL = '@cf/deepseek-ai/deepseek-v4-pro-0813';
 
 const WORKSPACE = 'checkout';
 
-const SESSION = '20260821-checkout01';
+const home = mkdtempSync(join(tmpdir(), `kinu-tui-cap-${set}-`));
 
-function prepareHome(): string {
-  const home = mkdtempSync(join(tmpdir(), `kinu-tui-cap-${set}-`));
-
-  for (const name of ['checkout', 'pricing-guard', 'docs-sweep', 'infra-audit']) {
-    mkdirSync(join(home, name), { recursive: true });
-    writeFileSync(join(home, name, 'agent.db'), '');
-  }
-
-  writeFileSync(join(home, 'config.json'), `${JSON.stringify({
-    model: MODEL,
-    reasoningEffort: 'medium',
-    providers: { openai: { apiKey: 'sk-capture-fixture-not-a-real-key' } },
-    agents: {
-      checkout: {
-        name: 'checkout', mode: 'local', localName: 'checkout',
-        createdAt: '2026-08-18T09:00:00.000Z', updatedAt: '2026-08-21T09:00:00.000Z',
-      },
-      'pricing-guard': {
-        name: 'pricing-guard', mode: 'local', localName: 'pricing-guard',
-        createdAt: '2026-08-19T09:00:00.000Z', updatedAt: '2026-08-20T09:00:00.000Z',
-      },
-      'docs-sweep': {
-        name: 'docs-sweep', mode: 'local', localName: 'docs-sweep',
-        createdAt: '2026-08-19T10:00:00.000Z', updatedAt: '2026-08-20T11:00:00.000Z',
-      },
-    },
-  }, null, 2)}\n`);
-
-  return home;
-}
-
-const home = prepareHome();
+writeFileSync(join(home, 'config.json'), JSON.stringify({
+  providers: { openai: { apiKey: 'sk-capture-fixture-not-a-real-key' } },
+}));
 
 process.env.KINU_HOME = home;
 
@@ -67,127 +48,92 @@ process.env.KINU_BASE_URL = 'https://api.example.invalid/v1';
 
 process.env.KINU_AUTH = 'Bearer capture-fixture-not-a-real-key';
 
-// The CLI config module captures KINU_HOME at import time. Load every app
-// module only after the fixture home and endpoint are set.
-const { createTestRenderer } = await import('@opentui/core/testing');
+// Config captures KINU_HOME at import time.
+const { createCliRenderer } = await import('@opentui/core');
 
-const { createRoot } = await import('@opentui/react');
+const { createMockKeys } = await import('@opentui/core/testing');
 
-const React = await import('react');
+const { createRoot, flushSync } = await import('@opentui/react');
+
+const { createElement } = await import('react');
 
 const { HomeApp } = await import('../packages/cli/src/tui/home-app');
 
-const { MessageList } = await import('../packages/cli/src/tui/messages');
+const { ChatApp } = await import('../packages/cli/src/tui/chat-app');
 
 const { StatusBar } = await import('../packages/cli/src/tui/status-bar');
 
-const { PhaseLine, TakesOverlay, CommandHintOverlay } = await import('../packages/cli/src/tui/overlays');
+const { TuiProductProvider, agentSourceFromList } = await import('../packages/cli/src/tui/tui-shell');
 
-const { BUILTIN_TUI_THEMES, createThemeRegistry } = await import('../packages/cli/src/tui/theme');
+const { fakeClient, soloHub } = await import('../packages/cli/tests/helpers/chat-app-fixture');
 
-const captureColors = createThemeRegistry(BUILTIN_TUI_THEMES).get('kinu-dark').colors;
+const { createMemoryTuiPreferenceStore } = await import('../packages/cli/tests/helpers/tui-preferences');
 
-const { renderSearchTreeLines } = await import('../packages/cli/src/display');
+const workspaceSource = agentSourceFromList(() => ['checkout', 'pricing-guard', 'docs-sweep', 'infra-audit']
+  .map((name) => ({ name, label: name, mode: 'local' as const })));
 
-const { commandsForClient } = await import('../packages/cli/src/slash-commands');
+function captureRuntime() {
+  const preferenceStore = createMemoryTuiPreferenceStore();
+  preferenceStore.write({ ...preferenceStore.read(), theme: { mode: 'theme', themeId: 'kinu-dark' } });
 
-async function settle(renderOnce: () => Promise<void>, passes = 12): Promise<void> {
-  for (let i = 0; i < passes; i++) {
-    await renderOnce();
-    await Bun.sleep(8);
-  }
+  return { preferenceStore, colorCapability: 'truecolor' as const };
 }
 
-/** One capture: the file it lands in, the terminal it renders into, the tree
- *  it renders, and how many passes that tree needs to settle. */
+type WaitFor = (predicate: (frame: string) => boolean) => Promise<void>;
+
 interface Shot {
   readonly name: string;
   readonly width: number;
   readonly height: number;
-  readonly element: React.ReactElement;
-  readonly passes?: number;
+  readonly element: ReactElement;
+  readonly settled: (frame: string) => boolean;
+  readonly drive?: (input: MockInput, waitFor: WaitFor) => Promise<void>;
 }
 
-async function shoot({ name, width, height, element, passes = 12 }: Shot): Promise<void> {
-  const renderer = await createTestRenderer({ width, height, useThread: false, maxFps: Number.POSITIVE_INFINITY });
-  const root = createRoot(renderer.renderer);
+async function shoot({ name, width, height, element, settled, drive }: Shot): Promise<void> {
+  const renderer = await createCliRenderer({
+    width, height, bufferedOutput: 'memory', useThread: false,
+    exitOnCtrlC: false, exitSignals: [], externalOutputMode: 'passthrough',
+  });
+
+  const root = createRoot(renderer);
+
+  const frame = () => new TextDecoder().decode(renderer.currentRenderBuffer.getRealCharBytes(true));
+
+  const waitFor: WaitFor = async (predicate) => {
+    while (!predicate(frame())) await once(renderer, 'frame');
+  };
 
   try {
     root.render(element);
-    await settle(renderer.renderOnce, passes);
-    const frame = renderer.captureCharFrame();
-    writeFileSync(join(outDir, `${name}.txt`), frame.endsWith('\n') ? frame : `${frame}\n`);
+    renderer.start();
+    await waitFor(settled);
+
+    if (drive) await drive(createMockKeys(renderer), waitFor);
+    let captured = frame();
+
+    for (let quietFrames = 0; quietFrames < 2;) {
+      await once(renderer, 'frame');
+      const next = frame();
+      quietFrames = next === captured ? quietFrames + 1 : 0;
+      captured = next;
+    }
+
+    writeFileSync(join(outDir, `${name}.txt`), captured.endsWith('\n') ? captured : `${captured}\n`);
   } finally {
-    root.render(React.createElement('box'));
-    renderer.renderer.destroy();
+    flushSync(() => { root.unmount(); });
+    renderer.destroy();
   }
 }
 
-/* ── chat arrangement, exactly ChatApp's ─────────────────────────────── */
-function chatScreen(messages: readonly DisplayMessage[], phase: string | null, processing: boolean, overlay?: React.ReactElement): React.ReactElement {
-  const title = processing ? '⟳ processing…' : `${WORKSPACE} · ${SESSION} · Ctrl+P model ›`;
-
-  const placeholder = processing
-    ? 'Type to steer · Tab queues · Ctrl+B branches · Esc interrupts'
-    : 'Type a message or /help · Shift+Enter for a new line';
-
-  return React.createElement(
-    'box',
-    { flexDirection: 'column', style: { width: '100%', height: '100%', backgroundColor: captureColors.background.canvas } },
-    React.createElement(StatusBar, {
-      key: 'bar', name: WORKSPACE, mode: 'local' as const, model: MODEL,
-      reasoningEffort: 'medium' as const, connected: true,
-      contextTokens: 2300, contextWindow: 128_000, toolCount: 14, autoEvolve: false,
-    }),
-    React.createElement(
-      'scrollbox',
-      {
-        key: 'log',
-        focused: false,
-        stickyScroll: true,
-        stickyStart: 'bottom',
-        style: {
-          flexGrow: 1,
-          rootOptions: { backgroundColor: captureColors.background.canvas },
-          viewportOptions: { backgroundColor: captureColors.background.canvas },
-          contentOptions: { backgroundColor: captureColors.background.canvas },
-          scrollbarOptions: { trackOptions: { foregroundColor: captureColors.border.subtle, backgroundColor: captureColors.background.surface } },
-        },
-      },
-      React.createElement(MessageList, { key: 'list', messages: [...messages] }),
-      React.createElement(PhaseLine, { key: 'phase', label: phase }),
-    ),
-    React.createElement(
-      'box',
-      {
-        key: 'input',
-        style: { height: 3, border: true, borderStyle: 'single' as const, borderColor: processing ? captureColors.border.subtle : captureColors.border.default, backgroundColor: captureColors.background.surface, paddingLeft: 1 },
-        title,
-      },
-      React.createElement('text', { key: 't' }, placeholder),
-    ),
-    ...(overlay ? [overlay] : []),
-  );
-}
-
-const message = (id: string, role: DisplayMessage['role'], content: string, extra: Partial<DisplayMessage> = {}): DisplayMessage =>
-  ({ id, role, content, ...extra });
-
-const WELCOME: DisplayMessage[] = [message('w', 'system', 'Connected to checkout. Type a message or /help for commands.')];
-
-const MIDTURN: DisplayMessage[] = [
-  message('u1', 'user', 'The checkout tests are failing on main — find out why and fix it.'),
-  message('a1', 'assistant', 'Reading the failure first.', { live: true }),
-];
-
-const TOOLS: DisplayMessage[] = [
-  message('u1', 'user', 'Run the test suite, then summarize what is broken.'),
-  message('a1', 'assistant', 'Running the suite now.'),
-  message('t1', 'tool_call', '', { toolName: 'exec', args: '{"cmd":"bun test packages/checkout"}' }),
-  message('r1', 'tool_result', '37 pass\n2 fail\ntotals.ts:41 expected 1187, received 1204'),
-  message('t2', 'tool_call', '', { toolName: 'write_file', args: '{"path":"totals.ts"}' }),
-  message('r2', 'tool_result', JSON.stringify({ reason: 'denied', error: 'Writing outside this workspace needs approval.\nThe path /etc/hosts.conf is not inside the workspace.' })),
-  message('a2', 'assistant', 'Two failures share one cause: `lineTotal` counts shipping as taxable.\nA third-party refusal blocked a config write — not needed for the fix.'),
+const TOOLS: AgentTranscriptMessage[] = [
+  { id: 'u1', role: 'user', content: 'Run the test suite, then summarize what is broken.' },
+  { id: 'a1', role: 'assistant', content: 'Running the suite now.' },
+  { id: 't1', role: 'tool_call', content: '', toolName: 'exec', toolCallId: 'test', args: '{"cmd":"bun test packages/checkout"}' },
+  { id: 'r1', role: 'tool_result', toolName: 'exec', toolCallId: 'test', success: true, content: '37 pass\n2 fail\ntotals.ts:41 expected 1187, received 1204' },
+  { id: 't2', role: 'tool_call', content: '', toolName: 'write_file', toolCallId: 'write', args: '{"path":"totals.ts"}' },
+  { id: 'r2', role: 'tool_result', toolName: 'write_file', toolCallId: 'write', success: false, content: JSON.stringify({ reason: 'denied', error: 'Writing outside this workspace needs approval.\nThe path /etc/hosts.conf is not inside the workspace.' }) },
+  { id: 'a2', role: 'assistant', content: 'Two failures share one cause: `lineTotal` counts shipping as taxable.\nA third-party refusal blocked a config write — not needed for the fix.' },
 ];
 
 const TAKES_SET: AlternateTakeSet = {
@@ -212,64 +158,101 @@ const TREE_NODES: readonly AgentSearchNode[] = [
   { depth: 2, status: 'failed', value: 0.11, visits: 2, action: 'rerun-with-timeout' },
 ];
 
+function chat(history: readonly AgentTranscriptMessage[] = []) {
+  const agent = fakeClient({
+    name: WORKSPACE,
+    history: async () => [...history],
+    status: async () => ({
+      name: WORKSPACE, purpose: 'Own the checkout.', model: MODEL, reasoningEffort: 'medium',
+      toolCount: 14, autoEvolve: false,
+      context: { tokens: 2300, window: 128_000, source: 'provider', at: '2026-08-21T09:00:00.000Z' },
+    }),
+    listModels: async () => ({
+      models: [{ provider: 'cloudflare', label: 'DeepSeek V4 Pro', spec: MODEL, capabilities: ['tools', 'streaming'], contextWindow: 128_000 }],
+      failures: [],
+    }),
+  });
+
+  agent.client.latestTakes = async () => TAKES_SET;
+  agent.client.searchNodes = async () => [...TREE_NODES];
+
+  return {
+    agent,
+    element: createElement(ChatApp, {
+      client: agent.client, tui: captureRuntime(), workspaceSource,
+      hubData: soloHub(agent.client), readHub: async (target) => soloHub(target),
+    }),
+  };
+}
+
+const chatReady = (frame: string) => frame.includes('Send a message');
+
 try {
-  // Home, populated.
-  await shoot({
-    name: 'home-populated-88x28', width: 88, height: 28,
-    element: React.createElement(HomeApp, { opts: {} }), passes: 14,
-  });
-  await shoot({
-    name: 'home-populated-100x40', width: 100, height: 40,
-    element: React.createElement(HomeApp, { opts: {} }), passes: 14,
-  });
-
-  // Chat states.
-  await shoot({ name: 'chat-idle-88x28', width: 88, height: 28, element: chatScreen(WELCOME, null, false) });
-  await shoot({ name: 'chat-midturn-88x28', width: 88, height: 28, element: chatScreen(MIDTURN, 'writing', true) });
-  await shoot({ name: 'chat-tools-88x28', width: 88, height: 28, element: chatScreen(TOOLS, null, false) });
-  await shoot({ name: 'chat-tools-64x24', width: 64, height: 24, element: chatScreen(TOOLS, null, false) });
-  await shoot({
-    name: 'takes-88x28', width: 88, height: 28,
-    element: chatScreen(TOOLS, null, false, React.createElement(TakesOverlay, {
-      set: TAKES_SET,
-      terminal: { width: 88, height: 28 },
-      onSelect: () => {},
-    })),
-  });
-  await shoot({
-    name: 'tree-88x28', width: 88, height: 28,
-    element: chatScreen([
-      ...TOOLS,
-      message('tree', 'system', `MCTS Tree (${TREE_NODES.length} nodes):\n${renderSearchTreeLines(TREE_NODES).join('\n')}`),
-    ], null, false),
-  });
-
-  // Status bar across widths.
-  for (const width of [52, 72, 88, 120]) {
+  for (const [width, height] of [[88, 28], [100, 40]] as const) {
     await shoot({
-      name: `statusbar-${width}x6`, width, height: 6,
-      element: React.createElement(StatusBar, {
-        name: WORKSPACE, mode: 'local' as const, model: MODEL, reasoningEffort: 'high' as const,
-        connected: true, scaffoldVersion: 12, toolCount: 14, autoEvolve: false,
-        contextTokens: 2300, contextWindow: 128_000, branchCount: 2,
-      }),
+      name: `home-populated-${width}x${height}`, width, height,
+      element: createElement(HomeApp, { opts: { tui: captureRuntime(), workspaceSource } }),
+      settled: (frame) => frame.includes('Open a workspace') && frame.includes('Local workspace')
+        && (width < 100 || frame.includes('checkout')),
     });
   }
 
-  // Command hints palette.
+  await shoot({ name: 'chat-idle-88x28', width: 88, height: 28, element: chat().element, settled: chatReady });
+
+  const midturn = chat([{ id: 'u1', role: 'user', content: 'The checkout tests are failing on main — find out why and fix it.' }]);
   await shoot({
-    name: 'hints-80x24', width: 80, height: 24,
-    element: React.createElement(
-      'box',
-      { style: { width: '100%', height: '100%' } },
-      React.createElement(CommandHintOverlay, {
-        commands: commandsForClient({ localControls: null, consents: null, checkpoints: null, plans: null, questions: null }),
-        terminal: { width: 80, height: 24 },
-      }),
-    ),
+    name: 'chat-midturn-88x28', width: 88, height: 28, element: midturn.element, settled: chatReady,
+    drive: async (_input, waitFor) => {
+      midturn.agent.emit({ type: 'turn-start', kind: 'user', text: '' });
+      midturn.agent.emit({ type: 'text-delta', delta: 'Reading the failure first.' });
+      await waitFor((frame) => frame.includes('Reading the failure first.') && frame.includes('writing'));
+    },
   });
 
-  process.stdout.write(`captured ${set}: done\n`);
+  for (const [width, height] of [[88, 28], [64, 24]] as const) {
+    await shoot({
+      name: `chat-tools-${width}x${height}`, width, height,
+      element: chat(TOOLS).element,
+      settled: (frame) => chatReady(frame) && frame.includes('lineTotal'),
+    });
+  }
+
+  for (const [name, command, shown] of [
+    ['takes-88x28', '/takes', 'Alternate takes'],
+    ['tree-88x28', '/tree', 'Search tree (5 nodes)'],
+  ]) {
+    await shoot({
+      name, width: 88, height: 28, element: chat(TOOLS).element, settled: chatReady,
+      drive: async (input, waitFor) => {
+        await input.typeText(command);
+        input.pressEnter();
+        await waitFor((frame) => frame.includes(shown));
+      },
+    });
+  }
+
+  for (const width of [52, 72, 88, 120]) {
+    await shoot({
+      name: `statusbar-${width}x6`, width, height: 6,
+      element: createElement(TuiProductProvider, {
+        runtime: captureRuntime(),
+        children: createElement(StatusBar, {
+          name: WORKSPACE, mode: 'local', model: MODEL, reasoningEffort: 'high',
+          connected: true, scaffoldVersion: 12, toolCount: 14, autoEvolve: false,
+          contextTokens: 2300, contextWindow: 128_000, branchCount: 2,
+        }),
+      }),
+      settled: (frame) => frame.includes('kinu'),
+    });
+  }
+
+  await shoot({
+    name: 'hints-80x24', width: 80, height: 24, element: chat().element, settled: chatReady,
+    drive: async (input, waitFor) => {
+      await input.typeText('/');
+      await waitFor((frame) => frame.includes('Type to filter') && frame.includes('/status'));
+    },
+  });
 } finally {
   rmSync(home, { recursive: true, force: true });
 }

@@ -26,6 +26,15 @@ function resultOf(answer: string): JsonValue {
 
 
 describe('the db capability on Durable Object SQLite', () => {
+  test('a mid-batch actor revocation rolls back an observed write and its db_op evidence', async () => {
+    const run = await probe('revoked-mid-batch').revokedBatch();
+    expect(run.reason).not.toBeNull();
+    expect(run.beforeRevocation.rows).toEqual([{ actor: 'actor-fenced', key: 'first' }]);
+    expect(run.beforeRevocation.evidence).toEqual(['createTable:ledger:actor:0:null', 'insert:ledger:actor:1:2']);
+    expect(run.rows).toEqual([]);
+    expect(run.evidence).toEqual(['createTable:ledger:actor:0:null']);
+  });
+
   test('a program declares, writes, reads and counts over the workspace database', async () => {
     const run = await probe('crud').program(`
       // Record this run's ledger so a later turn can query it

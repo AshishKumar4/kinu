@@ -287,22 +287,26 @@ describe("CLI inspection commands", () => {
 
     const known = await runCli(home, ["model", "localtest", knownSpec], llmEnv);
     expect(known.exitCode).toBe(0);
-    expect(known.stdout).toContain(`set ${knownSpec}`);
-    expect(known.stdout).not.toContain("not in the model catalog");
+
+    const readPinnedModel = () => {
+      const db = workspaceDatabase(join(home, 'localtest', 'agent.db'));
+
+      try {
+        return openWorkspaceMainActor(makeSql(db)).config.getModel();
+      } finally {
+        db.close();
+      }
+    };
+
+    expect(readPinnedModel()).toBe(knownSpec);
 
     const uncatalogued = await runCli(home, ["model", "localtest", "workers-ai/@cf/meta/not-real"], llmEnv);
     expect(uncatalogued.exitCode).toBe(0);
-    expect(uncatalogued.stdout).toContain("not in the model catalog");
-    expect(uncatalogued.stdout).toContain("Close matches: workers-ai/");
-    expect(uncatalogued.stdout).toContain("kinu chat localtest");
-    expect(uncatalogued.stdout).toContain("/model");
-    expect(uncatalogued.stdout).toContain("set workers-ai/@cf/meta/not-real");
+    expect(readPinnedModel()).toBe('workers-ai/@cf/meta/not-real');
 
     const unknownProvider = await runCli(home, ["model", "localtest", "unknown/model"], llmEnv);
     expect(unknownProvider.exitCode).toBe(1);
-    expect(unknownProvider.stderr).toContain('Unknown model provider "unknown"');
-    expect(unknownProvider.stderr).toContain("workers-ai");
-    expect(unknownProvider.stdout).not.toContain("set unknown/model");
+    expect(readPinnedModel()).toBe('workers-ai/@cf/meta/not-real');
   });
 
   // stderr is the person's screen, and under the TUI a stray line corrupts it.

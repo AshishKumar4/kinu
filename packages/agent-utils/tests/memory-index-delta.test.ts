@@ -89,13 +89,40 @@ describe("canonical index publication", () => {
     expect(reopened.pendingProjection()).toEqual([]);
   });
 
-  test('acknowledging an old delivery cannot erase a newer change to the same chunk', async () => {
+  test('bounded projection deliveries contain every indexed chunk once and stale acknowledgements retain newer edits', async () => {
     const { store } = createStore();
-    await store.indexFile(PATH, 'first content');
-    const delivered = store.pendingProjection();
-    await store.indexFile(PATH, 'changed content');
-    store.ackProjection(delivered);
-    expect(store.pendingProjection()).toHaveLength(1);
-    expect(store.pendingProjection()[0].revision).toBeGreaterThan(delivered[0].revision);
+    const content = doc(60);
+    await store.writeFile(PATH, content);
+    const indexed = await store.indexFile(PATH, content);
+    const ids = indexed.upserted.map((chunk) => chunk.id);
+    expect(ids.length).toBeGreaterThan(2);
+    const delivered: string[] = [];
+
+    for (let offset = 0; offset < ids.length; offset += 2) {
+      const page = store.pendingProjection(2);
+      expect(page).toHaveLength(Math.min(2, ids.length - offset));
+      expect(page.every((entry) => entry.kind === 'upsert')).toBe(true);
+      const chunks = await store.chunksByIds(page.map((entry) => entry.id));
+      expect(chunks.map((chunk) => chunk.id).sort()).toEqual(page.map((entry) => entry.id).sort());
+      expect(chunks).toEqual(indexed.upserted.filter((chunk) => page.some((entry) => entry.id === chunk.id)).sort((a, b) => a.id.localeCompare(b.id)));
+      delivered.push(...page.map((entry) => entry.id));
+      store.ackProjection(page);
+    }
+
+    expect(delivered.sort()).toEqual(ids.sort());
+    expect(store.pendingProjection(2)).toEqual([]);
+
+    const changed = doc(60, 'y');
+    await store.writeFile(PATH, changed);
+    await store.indexFile(PATH, changed);
+    const stale = store.pendingProjection(2);
+    const latest = doc(60, 'z');
+    await store.writeFile(PATH, latest);
+    await store.indexFile(PATH, latest);
+    store.ackProjection(stale);
+    const retained = store.pendingProjection();
+    expect(retained.map((entry) => entry.id).sort()).toEqual(ids);
+    expect(retained.every((entry) => !stale.some((previous) => previous.id === entry.id) || entry.revision > (stale.find((previous) => previous.id === entry.id)?.revision ?? 0))).toBe(true);
+    expect((await store.chunksByIds(ids)).every((chunk) => chunk.text.includes('z'.repeat(40)))).toBe(true);
   });
 });

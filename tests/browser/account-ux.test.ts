@@ -5,6 +5,7 @@ import * as v from 'valibot';
 import { describe, expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
 import { ONBOARDING_STEPS } from '@kinu.run/core';
+import { sandboxSizeText } from '../../packages/cf-backend/src/lib/sandbox-size-text';
 
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 
@@ -225,6 +226,45 @@ describe('account panels', () => {
       }
 
       
+    });
+  });
+
+  test('the account computer size saves through its picker and survives reload', async () => {
+    await withGallery(async (gallery) => {
+      const control = '[aria-label="Default computer size"]';
+      const wanted = sandboxSizeText('small');
+
+      const page = await freshPage(gallery, 'usersettingsstate&section=sandbox', 'dark', 'desktop');
+
+      try {
+        await page.waitForSelector(control);
+        expect(await page.$eval(control, (node) => node.textContent?.trim())).not.toBe(wanted);
+        await page.click(control);
+        await page.waitForFunction(() => [...document.querySelectorAll('[role="option"]')].some((node) => node.checkVisibility()));
+
+        const option = await page.evaluateHandle((text) => [...document.querySelectorAll('[role="option"]')]
+          .find((node) => node.checkVisibility() && node.textContent?.trim() === text) ?? null, wanted);
+
+        const item = option.asElement();
+
+        if (item === null) throw new Error('the size picker did not offer the requested size');
+
+        await item.click();
+        await option.dispose();
+        await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+        await page.waitForFunction((selector) => {
+          const node = document.querySelector(selector);
+
+          return node !== null && !node.matches(':disabled') && node.getAttribute('aria-disabled') !== 'true';
+        }, {}, control);
+
+        expect(await page.$eval(control, (node) => node.textContent?.trim())).toBe(wanted);
+        expect(await page.$$eval('[role="alert"], [data-failure]', (nodes) => nodes.filter((node) => node.checkVisibility()).length)).toBe(0);
+        await page.reload({ waitUntil: 'load' });
+        await page.waitForSelector(control);
+        expect(await page.$eval(control, (node) => node.textContent?.trim())).toBe(wanted);
+        expect(await page.$$eval('[role="alert"], [data-failure]', (nodes) => nodes.filter((node) => node.checkVisibility()).length)).toBe(0);
+      } finally { await page.close(); }
     });
   });
 

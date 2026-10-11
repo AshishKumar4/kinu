@@ -5,7 +5,8 @@
  * asks it cites that agreement.
  */
 import { WORKSPACE_ROOT } from '@kinu.run/core';
-import { askOnce, type EvalTarget } from './target';
+import { askOnce } from './target';
+import { type EvalTarget } from './workspace-roster';
 
 const PICTURES = `${WORKSPACE_ROOT}/judge`;
 

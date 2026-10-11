@@ -50,7 +50,8 @@ import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
 import { ask, openPublicSocket, rpcDetail, type PublicSocket } from './public-socket';
-import { webHeaders, type PublicSessionPlan } from '../../evals/src/session';
+import { type PublicSessionPlan } from '../../evals/src/session';
+import { webHeaders } from '../../evals/src/workspace-roster';
 import { openBrowser, signedInPage } from '../../evals/src/browser';
 import type { TestChrome } from '../../scripts/test-chrome';
 

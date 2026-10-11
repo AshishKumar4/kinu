@@ -16,7 +16,7 @@ import { declaredSettings } from '../../scripts/browser-declarations';
 import { withBrowser } from '../../scripts/live-app-harness';
 import { DOCUMENT_FAULTS, recordScriptFailures } from '../../scripts/script-failures';
 import { launchTestChrome, type TestChrome } from '../../scripts/test-chrome';
-import { webHeaders, type PublicWebIdentity, type WorkspaceWeb } from './session';
+import { webHeaders, type PublicWebIdentity, type WorkspaceWeb } from './workspace-roster';
 import { appearance, type Appearance } from './appearance';
 import { look, type Press, type Sight } from './sight';
 

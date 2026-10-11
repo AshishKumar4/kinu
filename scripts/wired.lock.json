@@ -22,7 +22,6 @@
   "packages/cli/src/agent-create.ts#CreateCloudAgentFromMissionOptions.id (unsupplied-field)",
   "packages/cli/src/agent-create.ts#createCloudAgentFromMission (unreached-export)",
   "packages/cli/src/local-agent-client.ts#LocalAgentClient (unreached-export)",
-  "packages/cli/src/tui/chat-app.tsx#ChatApp (unreached-export)",
   "packages/cli/src/tui/streaming-buffer.ts#createStreamingBufferController (unreached-export)",
   "packages/compaction/src/codec.ts#kinuConventions (unreached-export)",
   "packages/core/src/advisor/review.ts#ADVISOR_HEADER (unreached-export)",

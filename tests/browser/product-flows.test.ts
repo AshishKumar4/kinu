@@ -11,7 +11,7 @@
  * `--flow=<id>`; Bun's native test filter selects its suite and never starts the other suites' hooks.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
-import { resolveWebIdentity } from '../../evals/src/session';
+import { resolveWebIdentity } from '../../evals/src/workspace-roster';
 import { withBrowser, withDevServer } from '../../scripts/live-app-harness';
 import { defaultToScriptedModel, registerScriptedModel, startScriptedModel } from '../../scripts/scripted-model';
 import { tierModel } from '../../scripts/tier-model';

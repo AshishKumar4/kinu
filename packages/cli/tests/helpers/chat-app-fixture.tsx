@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import { createTestRenderer } from '@opentui/core/testing';
+import { InputRenderable, TextareaRenderable } from '@opentui/core';
 import { createRoot, flushSync } from '@opentui/react';
 import { missingSubordinateHistory, type EvolutionConfigView } from '@kinu.run/core';
 
@@ -83,7 +84,7 @@ interface FakeClientOptions {
 
 export function fakeClient(options: FakeClientOptions) {
   const listeners = new Set<(event: AgentClientEvent) => void>();
-  const state = { closed: 0 };
+  const state = { closed: 0, connected: 0 };
   let evolution: EvolutionConfigView = { ...EVOLUTION };
   let shellApprovalHandler: Parameters<LocalSessionControls['setShellApprovalHandler']>[0] = null;
   const mode = options.mode ?? 'local';
@@ -119,7 +120,10 @@ export function fakeClient(options: FakeClientOptions) {
     inlineAttachmentLimitBytes: 1024,
     planes: null,
     fileLinks: { roots: [], href: () => null },
-    connect: options.connect ?? (async () => {}),
+    connect: async () => {
+      await options.connect?.();
+      state.connected += 1;
+    },
     subscribe: (listener) => {
       listeners.add(listener);
 
@@ -213,6 +217,7 @@ export async function mountChat(
   client: AgentClient,
   options: {
     tui?: ChatAppOpts['tui'];
+    workspaceSource?: TuiAgentSource;
     listWorkspaces?: () => FixtureWorkspace[];
     onWorkspaceSelect?: (name: string) => Promise<AgentClient>;
     hubData?: TuiHubData;
@@ -220,8 +225,9 @@ export async function mountChat(
     readHub?: ChatAppOpts['readHub'];
     onNewAgent?: ChatAppOpts['onNewAgent'];
     width?: number;
+    terminalOutput?: boolean;
     settled?: (frame: string) => boolean;
-    /** Kitty-protocol keys, for chords the legacy byte set cannot express (Shift+Enter, Ctrl+J distinct from Enter). */
+    /** False selects basic escape-byte keys; Kitty distinguishes Escape from a prefix and represents Ctrl+comma. */
     kittyKeyboard?: boolean;
     /** The TUI asked to quit (Esc on an empty, fresh session, or /exit). */
     onExit?: () => void;
@@ -232,12 +238,13 @@ export async function mountChat(
     height: 30,
     useThread: false,
     maxFps: Number.POSITIVE_INFINITY,
-    kittyKeyboard: options.kittyKeyboard === true,
+    kittyKeyboard: options.kittyKeyboard !== false,
+    ...(options.terminalOutput && { stdout: process.stdout, bufferedOutput: 'stdout' }),
   });
 
   const root = createRoot(testRenderer.renderer);
 
-  const workspaceSource: TuiAgentSource | undefined = options.listWorkspaces
+  const workspaceSource: TuiAgentSource | undefined = options.workspaceSource ?? (options.listWorkspaces
     ? {
         load: () => {
           const items = options.listWorkspaces?.() ?? [];
@@ -245,7 +252,7 @@ export async function mountChat(
           return { items, total: items.length, nextCursor: null };
         },
       }
-    : undefined;
+    : undefined);
 
   root.render(
     <ChatApp
@@ -263,7 +270,6 @@ export async function mountChat(
 
   const { renderer } = testRenderer;
 
-  /** The next rendered frame; only the renderer's teardown ends the wait otherwise. */
   const nextFrame = (what: string) => new Promise<void>((resolve, reject) => {
     const onFrame = () => {
       renderer.off('destroy', onDestroy);
@@ -279,7 +285,6 @@ export async function mountChat(
     renderer.once('destroy', onDestroy);
   });
 
-  /** Re-reads `predicate` after each rendered frame and the promise work it settled; no clock ends it. */
   const waitFor = async (what: string, predicate: () => boolean) => {
     await testRenderer.renderOnce();
 
@@ -289,15 +294,26 @@ export async function mountChat(
     }
   };
 
-  const settled = options.settled ?? ((view: string) => view.includes('Send a message'));
-  await waitFor('the chat surface to settle', () => settled(frame()));
+  const composerFocused = () => renderer.currentFocusedRenderable instanceof TextareaRenderable
+    && !(renderer.currentFocusedRenderable instanceof InputRenderable)
+    && renderer.currentFocusedRenderable.focused;
+
+  const filterFocused = () => renderer.currentFocusedRenderable instanceof InputRenderable
+    && renderer.currentFocusedRenderable.focused;
+
   mounted.push(() => {
     // `root.render()` builds a new container per call and destroy unmounts only the last one, so unmount
     // explicitly; on a concurrent root `unmount()` only schedules, so flush it before `destroy()`.
     flushSync(() => { root.unmount(); });
     testRenderer.renderer.destroy();
   });
+  await waitFor('the chat surface to settle', () => options.settled ? options.settled(frame()) : composerFocused());
 
-  return { ...testRenderer, frame, waitFor };
+  const mockInput = {
+    ...testRenderer.mockInput,
+    typeText: (text: string) => flushSync(() => testRenderer.mockInput.typeText(text)),
+  };
+
+  return { ...testRenderer, mockInput, frame, waitFor, composerFocused, filterFocused };
 }
 

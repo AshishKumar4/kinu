@@ -248,7 +248,7 @@ Six worktrees went (`Kinu-wt-delivery-seam`, `Kinu-wt-devbox-c3`, `Kinu-wt-devbo
 
 Eleven stash entries were tagged `archive/stash-<n>-<slug>-20260918` on their stash commits (the untracked third parent included) and the stash list was cleared. The list as it was is at `~/kinu-wip/prune-2026-09-18/stash-list.txt`.
 
-Remote: `origin/fix/devbox-decision` is a `main` ancestor and is deleted on the next push of `main`, which carries the new tags. `origin/feat/devbox-durability-next` is not the archived tip: on 2026-09-22 it points at `4f93d0507` (2026-09-07), whose 15 commits `main` lacks include 10 with no patch-equivalent in `archive/devbox-durability-next`. Tag that tip before deleting the remote branch. `origin/takeover/stabilize` (2026-09-03, eleven commits `main` lacks) was not assessed and stays. As of 2026-09-22 origin holds one `archive/*` tag, so the local tags above are the only copies.
+Remote: `origin/fix/devbox-decision` is a `main` ancestor and is deleted on the next push of `main`, which carries the new tags. `origin/feat/devbox-durability-next` is not the archived tip: on 2026-09-22 it points at `4f93d0507` (2026-09-07), whose 15 commits `main` lacks include 10 with no patch-equivalent in `archive/devbox-durability-next`. On 2026-10-11 that tip became the tag `archive/devbox-durability-next-remote` and the remote branch was deleted; its residue belongs to the storage strategy `46c320bc1` retired. `origin/takeover/stabilize` was assessed the same day: its nine commits are in `main` as the squash commits `0aae49f08` and `2f0afadf4`, and the remote branch was deleted untagged. As of 2026-09-22 origin holds one `archive/*` tag, so the local tags above are the only copies.
 
 ## Reproduce the test
 

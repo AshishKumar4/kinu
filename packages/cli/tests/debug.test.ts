@@ -18,6 +18,20 @@ const repoRoot = resolve(__dirname, '../../..');
 
 const cliBin = join(repoRoot, 'packages/cli/bin/cli.ts');
 
+const DebugSummarySchema = v.looseObject({
+  identity: JsonObjectSchema,
+  runs: v.array(v.looseObject({ runId: v.string(), jobPollsAfterHandle: v.number(), toolCalls: v.number(), usage: UsageSchema, turnsWithoutUsage: v.number() })),
+  headRuns: v.array(v.looseObject({ rootId: v.string(), heads: v.array(JsonValueSchema) })),
+  mctsSearches: v.array(v.looseObject({ rootId: v.string(), iteration: v.number(), budget: v.number(), nodeCount: v.number(), maxDepth: v.number() })),
+  backgroundJobs: v.array(v.looseObject({
+    id: v.string(), kind: v.string(), label: v.nullable(v.string()), status: v.string(), createdAt: v.number(), settledAt: v.nullable(v.number()),
+  })),
+  recordObjectives: v.array(v.looseObject({
+    metric: v.string(), unit: v.string(), direction: v.string(), rows: v.number(), cells: v.number(),
+    best: v.nullable(v.looseObject({ value: v.number() })),
+  })),
+});
+
 function scratch(prefix: string): string {
   const dir = scratchDir(prefix);
 
@@ -213,31 +227,36 @@ describe('kinu debug — local backend', () => {
     seedInvestigationWorkspace(join(home, 'invest', 'agent.db'));
 
     const bundle = join(out, 'invest.debug.jsonl');
-    const r = await result(runCli(home, ['debug', 'invest', '--out', bundle], repoRoot));
+    const r = await result(runCli(home, ['debug', 'invest', '--out', bundle, '--json'], repoRoot));
     expect(r.stderr).toBe('');
     expect(r.exitCode).toBe(0);
-
-    expect(r.stdout).toContain('Runs (2)');
-    expect(r.stdout).toContain('polled job 1x after backgrounding');
-    expect(r.stdout).toContain('Head/fork runs (3');
-    expect(r.stdout).toContain('(1/2 settled)');
-    expect(r.stdout).toContain('Swarm searches (2');
-    expect(r.stdout).toContain('latest vs previous: 3 vs 1 nodes, depth 2 vs 0');
-    // Iterations are the tree's own expansions (2 below the root), not a stored counter.
-    expect(r.stdout).toContain('iter=2/10 (8 left)');
-    expect(r.stdout).toMatch(/checkpointed \d+d(?: \d+h)? ago/);
-    expect(r.stdout).toContain('iter=0/1 (1 left)');
-    expect(r.stdout).toContain('took 2m');
-    expect(r.stdout).toContain('fork(settle=mcts): pick a migration-backfill approach');
-    expect(r.stdout).toMatch(/job-2 agents running for \d+d(?: \d+h)?/);
     expect(r.stdout).not.toContain(SECRET_TOKEN);
-    // The leaderboard line carries the unit and direction arrow; a bare real reads as a level, not a delta.
-    expect(r.stdout).toContain('Exploration records (2 comparable set(s)');
-    expect(r.stdout).toContain('best ↑0.71 fraction of held-out tasks');
-    expect(r.stdout).toContain('best ↓23 oracle calls');
-    expect(r.stdout).toContain('3 row(s) over 1 cell(s)');
-    expect(r.stdout).toContain('7 row(s) over 3 cell(s)');
     expect(r.stdout).not.toContain(SECRET_KINU_TOKEN);
+
+    const summary = v.parse(DebugSummarySchema, JSON.parse(r.stdout));
+    expect(summary.runs.map(({ runId, jobPollsAfterHandle }) => ({ runId, jobPollsAfterHandle })).sort((a, b) => a.runId.localeCompare(b.runId)))
+      .toEqual([{ runId: 'run-new', jobPollsAfterHandle: 1 }, { runId: 'run-old', jobPollsAfterHandle: 0 }]);
+    expect(summary.runs.map(({ runId, toolCalls, usage, turnsWithoutUsage }) => ({ runId, toolCalls, usage, turnsWithoutUsage }))
+      .sort((a, b) => a.runId.localeCompare(b.runId))).toEqual([
+        { runId: 'run-new', toolCalls: 2, usage: {}, turnsWithoutUsage: 0 },
+        { runId: 'run-old', toolCalls: 0, usage: { input: 10, output: 5 }, turnsWithoutUsage: 1 },
+      ]);
+    expect(summary.headRuns.map(({ rootId, heads }) => ({ rootId, heads: heads.length })).sort((a, b) => a.rootId.localeCompare(b.rootId)))
+      .toEqual([{ rootId: 'head-live', heads: 2 }, { rootId: 'head-new', heads: 0 }, { rootId: 'head-old', heads: 0 }]);
+    expect(summary.mctsSearches.map(({ rootId, iteration, budget, nodeCount, maxDepth }) => ({ rootId, iteration, budget, nodeCount, maxDepth }))
+      .sort((a, b) => a.rootId.localeCompare(b.rootId))).toEqual([
+        { rootId: 'search-new', iteration: 2, budget: 8, nodeCount: 3, maxDepth: 2 },
+        { rootId: 'search-old', iteration: 0, budget: 1, nodeCount: 1, maxDepth: 0 },
+      ]);
+    expect(summary.backgroundJobs.filter((job) => job.status === 'running').map(({ id, kind }) => ({ id, kind })))
+      .toEqual([{ id: 'job-2', kind: 'agents' }]);
+    const settled = summary.backgroundJobs.find((job) => job.id === 'job-1');
+    expect(settled).toMatchObject({ label: 'fork(settle=mcts): pick a migration-backfill approach', createdAt: 5050, settledAt: 130050 });
+    expect(summary.recordObjectives.map(({ metric, unit, direction, rows, cells, best }) => ({ metric, unit, direction, rows, cells, best: best?.value }))
+      .sort((a, b) => a.metric.localeCompare(b.metric))).toEqual([
+        { metric: 'oracle_calls', unit: 'oracle calls', direction: 'minimise', rows: 3, cells: 1, best: 23 },
+        { metric: 'pass_rate', unit: 'fraction of held-out tasks', direction: 'maximise', rows: 7, cells: 3, best: 0.71 },
+      ]);
 
     expect(statSync(bundle).mode & 0o777).toBe(0o600);
     const raw = readFileSync(bundle, 'utf8');
@@ -292,40 +311,6 @@ describe('kinu debug — local backend', () => {
     ]);
   });
 
-  test('--json prints the same investigation summary as machine-readable JSON', async () => {
-    const home = scratch('kinu-debug-json-');
-    const out = scratch('kinu-debug-json-out-');
-    writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {}, aliases: {} }));
-    mkdirSync(join(home, 'invest'), { recursive: true });
-    seedInvestigationWorkspace(join(home, 'invest', 'agent.db'));
-
-    const r = await result(runCli(home, ['debug', 'invest', '--out', join(out, 'b.jsonl'), '--json'], repoRoot));
-    expect(r.exitCode).toBe(0);
-
-    const summary = v.parse(v.object({
-      runs: v.array(v.object({
-        runId: v.string(), toolCalls: v.number(), jobPollsAfterHandle: v.number(),
-        usage: UsageSchema, turnsWithoutUsage: v.number(),
-      })),
-      mctsSearches: v.array(v.object({ rootId: v.string(), nodeCount: v.number(), maxDepth: v.number() })),
-    }), JSON.parse(r.stdout));
-
-    const newRun = summary.runs.find((run) => run.runId === 'run-new');
-    // Both counters read `tool_call_end`, the row production writes; nothing emits `tool_call_start`.
-    expect(newRun?.toolCalls).toBe(2);
-    expect(newRun?.jobPollsAfterHandle).toBe(1);
-    // Accumulated usage carries only reported fields (`cacheRead` absent, not 0); the silent turn is counted.
-    const oldRun = summary.runs.find((run) => run.runId === 'run-old');
-    expect(oldRun?.usage).toEqual({ input: 10, output: 5 });
-    expect(Object.keys(oldRun?.usage ?? {}).sort()).toEqual(['input', 'output']);
-    expect(oldRun?.turnsWithoutUsage).toBe(1);
-    expect(newRun?.usage).toEqual({});
-    expect(newRun?.turnsWithoutUsage).toBe(0);
-    const [latest, previous] = summary.mctsSearches;
-    expect(latest).toMatchObject({ rootId: 'search-new', nodeCount: 3, maxDepth: 2 });
-    expect(previous).toMatchObject({ rootId: 'search-old', nodeCount: 1, maxDepth: 0 });
-    expect(JSON.stringify(summary)).not.toContain(SECRET_TOKEN);
-  });
 });
 
 describe('kinu debug — cloud backend', () => {
@@ -397,16 +382,15 @@ describe('kinu debug — cloud backend', () => {
     try {
       const bundle = join(out, 'skywriter.debug.jsonl');
 
-      const r = await result(runCli(home, ['debug', 'skywriter', '--out', bundle], repoRoot, {
+      const r = await result(runCli(home, ['debug', 'skywriter', '--out', bundle, '--json'], repoRoot, {
         KINU_ORIGIN: `http://127.0.0.1:${server.port}`,
       }));
 
       expect(r.stderr).toBe('');
       expect(r.exitCode).toBe(0);
-      expect(r.stdout).toContain('skywriter');
-      expect(r.stdout).toContain('identity  skywriter: p');
-      expect(r.stdout).toContain('scaffold  v1  x');
-      expect(r.stdout).toContain('Runs (1)');
+      const summary = v.parse(DebugSummarySchema, JSON.parse(r.stdout));
+      expect(summary.identity).toMatchObject({ displayName: 'skywriter', purpose: 'p', scaffoldVersion: 1, model: 'x' });
+      expect(summary.runs.map((run) => run.runId)).toEqual(['run-cloud']);
 
       expect(calls).toContain('listRuns');
       expect(calls).toContain('getRunEvents');

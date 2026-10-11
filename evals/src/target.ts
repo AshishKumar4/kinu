@@ -2,18 +2,17 @@ import * as v from 'valibot';
 import { USER_AI_PROXY_PATH, type RunEvent } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { DeploymentAnswer, evalTargetVerdict, evalWorkspaceName, infraBoundary } from '@kinu.run/test-utils';
-import {
-  openPublicSession, resolveWebIdentity, webHeaders, type CatalogNeed, type KinuPublicSession, type PublicWebIdentity,
-} from './session';
+import { openPublicSession, type CatalogNeed, type KinuPublicSession } from './session';
+import { resolveWebIdentity, webHeaders, type EvalTarget } from './workspace-roster';
 import { REVIEW_LOGIN } from './config';
 import { reviewerCatalog, REVIEWER_ROLE_ID } from './reviewer';
+import { claimTrialAccount } from './slot';
 import type { SeedFile } from './task';
 import { answered, repliesTo, settle, TurnWatch } from './workspace-completion';
 
 type Env = Record<string, string | undefined>;
 
-/** Where trials run and as whom: the eval-service identity on the deployment, never a person's session. */
-export type EvalTarget = { readonly origin: string; readonly identity: PublicWebIdentity };
+
 
 /**
  * A named workspace setting applied when a trial's workspace opens. `product` changes nothing; an
@@ -74,6 +73,9 @@ export function openWorkspace(target: EvalTarget, request: {
     workspace: evalWorkspaceName(request.subject),
     purpose: request.mission,
     genesis: false,
+    ...(target.identity.account?.startsWith('trial-') && {
+      claim: (workspace: string) => claimTrialAccount(target, workspace, Date.now()),
+    }),
     llm: { name: 'eval', baseURL: `${target.origin}${USER_AI_PROXY_PATH}`, headers: {}, model: request.model },
     ...(request.role !== undefined && { role: request.role }),
     ...(request.catalog !== undefined && { catalog: request.catalog }),

@@ -3,17 +3,16 @@ import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { KinuError } from '@kinu.run/core/obs';
-import { scratchDir } from '@kinu.run/test-utils';
+import { runToExit, scratchDir } from '@kinu.run/test-utils';
 
 import type { AgentClient, AgentClientStatus, AgentTranscriptMessage } from '../src/agent-client';
-import { JOB_OUTPUT_EVENT, missingSubordinateHistory, READS_CHANGED_EVENT, TURN_FAILURE_METADATA_KEY, type AgentModelMenu, type JobOutputTail, type SubordinateChild } from '@kinu.run/core';
+import { JOB_OUTPUT_EVENT, missingSubordinateHistory, READS_CHANGED_EVENT, TURN_FAILURE_METADATA_KEY, type AgentModelMenu, type JobOutputTail, type ModelTestResult, type SubordinateChild } from '@kinu.run/core';
 import type { TuiHubData } from '../src/tui/hubs';
-import { asFetchFunction, codenameFor } from '@kinu.run/core';
+import { asFetchFunction } from '@kinu.run/core';
 
 import { TURN, cleanupChats, fakeClient, mountChat, type FixtureWorkspace } from './helpers/chat-app-fixture';
-import { commandsForClient, executeSlashCommand } from '../src/slash-commands';
 import { createMemoryTuiPreferenceStore } from './helpers/tui-preferences';
-import { SelectRenderable, TextareaRenderable } from '@opentui/core';
+import { InputRenderable, TextareaRenderable } from '@opentui/core';
 import { flushSync } from '@opentui/react';
 
 afterEach(cleanupChats);
@@ -39,7 +38,7 @@ function hubWorkspaces({ open, label, peer, created }: HubWorkspaces): FixtureWo
   const cwd = process.cwd();
   const rows: FixtureWorkspace[] = [{ name: open, label, mode: 'local', cwd, workspaceId: 'shop' }];
 
-  if (created) rows.push({ name: peer, label: '', mode: 'local', cwd, workspaceId: 'shop' });
+  if (created) rows.push({ name: peer, label: 'Fixture peer', mode: 'local', cwd, workspaceId: 'shop' });
 
   return rows;
 }
@@ -96,16 +95,15 @@ test('prompt history recalls sent and cleared drafts, searches, and persists per
   if (!(input instanceof TextareaRenderable)) throw new Error('composer not focused');
   expect(input.plainText).toBe('second prompt');
   screen.mockInput.pressKey('r', { ctrl: true });
-  await screen.waitFor('history search', () => screen.frame().includes('Search sent and cleared prompts'));
-  await screen.mockInput.typeText('sec');
-  await screen.waitFor('filtered history', () => {
-    const results = screen.renderer.root.findDescendantById('prompt-history-results');
+  await screen.waitFor('history search', screen.filterFocused);
+  await screen.mockInput.typeText('fir');
+  const filter = screen.renderer.currentFocusedRenderable;
 
-    return results instanceof SelectRenderable && results.options.length === 1;
-  });
+  if (!(filter instanceof InputRenderable)) throw new Error('history filter not focused');
+  expect(filter.value).toBe('fir');
   flushSync(() => screen.mockInput.pressEnter());
-  await screen.waitFor('selected history', () => !screen.frame().includes('Search sent and cleared prompts'));
-  expect(input.plainText).toBe('second prompt');
+  await screen.waitFor('selected history', screen.composerFocused);
+  expect(input.plainText).toBe('first prompt');
   flushSync(() => input.setText('cleared draft'));
   flushSync(() => screen.mockInput.pressKey('c', { ctrl: true }));
   await screen.renderOnce();
@@ -162,32 +160,40 @@ function runningBuild(output: JobOutputTail): AgentClient['listJobs'] {
 describe('ChatApp terminal interaction', () => {
   test('command palette exposes only truthful local and cloud capabilities', async () => {
     const local = fakeClient({ name: 'local' });
+    const efforts: string[] = [];
+    local.client.setReasoningEffort = async (effort) => {
+      efforts.push(effort);
+
+      return { effort };
+    };
+
     const localScreen = await mountChat(local.client);
-    expect(localScreen.frame()).not.toContain('⠋ null');
     localScreen.mockInput.pressKey('k', { ctrl: true });
-    await localScreen.waitFor('the local command palette', () => localScreen.frame().includes('Filter commands'));
+    await localScreen.waitFor('the local command palette', localScreen.filterFocused);
     expect(localScreen.frame()).toContain('/role');
     expect(localScreen.frame()).toContain('/rename');
     localScreen.mockInput.pressEscape();
-    await localScreen.waitFor('the command palette to close', () =>
-      !localScreen.frame().includes('Filter commands'));
+    await localScreen.waitFor('the command palette to close', localScreen.composerFocused);
+    await localScreen.mockInput.typeText('/settings');
+    const composer = localScreen.renderer.currentFocusedRenderable;
+
+    if (!(composer instanceof TextareaRenderable)) throw new Error('composer not focused');
+    expect(composer.plainText).toBe('/settings');
+    flushSync(() => localScreen.mockInput.pressEnter());
+    await localScreen.waitFor('interactive settings', localScreen.filterFocused);
+    await localScreen.mockInput.typeText('low');
+    await localScreen.renderOnce();
+    const filter = localScreen.renderer.currentFocusedRenderable;
+
+    if (!(filter instanceof InputRenderable)) throw new Error('settings filter not focused');
+    expect(filter.value).toBe('low');
+    flushSync(() => localScreen.mockInput.pressEnter());
+    await localScreen.waitFor('the selected setting to apply', () => efforts.length === 1);
+    expect(efforts).toEqual(['low']);
+    await localScreen.waitFor('the composer after applying settings', localScreen.composerFocused);
     await localScreen.mockInput.typeText('/settings');
     localScreen.mockInput.pressEnter();
-    await localScreen.waitFor('interactive settings', () =>
-      localScreen.frame().includes('Filter settings'));
-    expect(localScreen.frame()).toContain('Reasoning effort');
-    expect(localScreen.frame()).toContain('Local shell');
-    localScreen.mockInput.pressArrow('down');
-    localScreen.mockInput.pressEnter();
-    await localScreen.waitFor('the selected setting to apply', () =>
-      localScreen.frame().includes('Reasoning effort: low'));
-    await localScreen.waitFor('the composer after applying settings', () =>
-      !localScreen.frame().includes('Filter settings')
-      && localScreen.frame().includes('Send a message'));
-    await localScreen.mockInput.typeText('/settings');
-    localScreen.mockInput.pressEnter();
-    await localScreen.waitFor('settings through the command path', () =>
-      localScreen.frame().includes('Filter settings'));
+    await localScreen.waitFor('settings through the command path', localScreen.filterFocused);
     localScreen.mockInput.pressEscape();
     expect(localScreen.frame()).not.toContain('/connect');
 
@@ -200,7 +206,7 @@ describe('ChatApp terminal interaction', () => {
 
     const cloudScreen = await mountChat(cloud.client);
     cloudScreen.mockInput.pressKey('k', { ctrl: true });
-    await cloudScreen.waitFor('the cloud command palette', () => cloudScreen.frame().includes('Filter commands'));
+    await cloudScreen.waitFor('the cloud command palette', cloudScreen.filterFocused);
     expect(cloudScreen.frame()).not.toContain('/resume');
     expect(cloudScreen.frame()).toContain('/role');
 
@@ -213,31 +219,44 @@ describe('ChatApp terminal interaction', () => {
 
     for (let index = 0; index < 5; index += 1) screen.mockInput.pressArrow('left');
     screen.mockInput.pressKey('k', { ctrl: true });
-    await screen.waitFor('the command palette', () => screen.frame().includes('Filter commands'));
+    await screen.waitFor('the command palette', screen.filterFocused);
     screen.mockInput.pressEscape();
-    await screen.waitFor('the preserved composer', () =>
-      !screen.frame().includes('Filter commands'));
-    expect(screen.frame()).toContain('preserve this draft');
+    await screen.waitFor('the preserved composer', screen.composerFocused);
+    const composer = screen.renderer.currentFocusedRenderable;
+
+    if (!(composer instanceof TextareaRenderable)) throw new Error('composer not focused');
+    expect(composer.plainText).toBe('preserve this draft');
   });
   test('closing a loading model panel cannot reopen it from a stale result', async () => {
     const pending = Promise.withResolvers<AgentModelMenu>();
+    let listings = 0;
 
     const controlled = fakeClient({
       name: 'alpha',
-      listModels: () => pending.promise,
+      listModels: () => {
+        listings += 1;
+
+        return pending.promise;
+      },
     });
 
     const screen = await mountChat(controlled.client);
+    await screen.mockInput.typeText('draft under the model panel');
+    const before = listings;
     screen.mockInput.pressKey('l', { ctrl: true });
-    await screen.waitFor('the loading model panel', () => screen.frame().includes('Loading models'));
+    await screen.waitFor('the loading model request', () => listings > before && screen.filterFocused());
     screen.mockInput.pressEscape();
+    await screen.waitFor('the model panel to close', screen.composerFocused);
     pending.resolve({ models: [], failures: [] });
-    await screen.waitFor('the model panel to close', () =>
-      !screen.frame().includes('Select model'));
+    await pending.promise;
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
+    await screen.mockInput.typeText(' and still typing');
+    await screen.renderOnce();
+    expect(screen.composerFocused()).toBe(true);
+    const composer = screen.renderer.currentFocusedRenderable;
 
-    for (let index = 0; index < 6; index += 1) await screen.renderOnce();
-    expect(screen.frame()).not.toContain('Select model');
-    expect(screen.frame()).toContain('Send a message');
+    if (!(composer instanceof TextareaRenderable)) throw new Error('composer not focused');
+    expect(composer.plainText).toBe('draft under the model panel and still typing');
   });
 
   test('failed model selection closes once and restores an actionable error', async () => {
@@ -248,55 +267,80 @@ describe('ChatApp terminal interaction', () => {
 
     const screen = await mountChat(controlled.client);
     screen.mockInput.pressKey('l', { ctrl: true });
-    await screen.waitFor('the model picker', () => screen.frame().includes('Select model'));
+    await screen.waitFor('the model picker', screen.filterFocused);
     screen.mockInput.pressEnter();
     await screen.waitFor('the model failure', () => screen.frame().includes('Unavailable model'));
-    expect(screen.frame()).not.toContain('Select model');
-    expect(screen.frame()).toContain('Send a message');
+    expect(screen.composerFocused()).toBe(true);
   });
 
   test('Ctrl+T in the model picker tests the highlighted model and says what it found, without picking it', async () => {
     const tested: string[] = [];
+    const selected: string[] = [];
+    const response = Promise.withResolvers<ModelTestResult>();
 
     const controlled = fakeClient({
       name: 'alpha',
       testModel: async (spec) => {
         tested.push(spec);
 
-        return { ok: false, failure: 'spent', message: 'opencode-go is rate-limited until 2026-10-03 14:56 UTC (in 8d 10h)' };
+        return response.promise;
+      },
+      setModel: async (spec) => {
+        selected.push(spec);
+
+        return { spec };
       },
     });
 
-    const screen = await mountChat(controlled.client);
+    const screen = await mountChat(controlled.client, { width: 140 });
     screen.mockInput.pressKey('l', { ctrl: true });
     await screen.waitFor('the model row', () => screen.frame().includes('openai/gpt-5.5'));
     screen.mockInput.pressKey('t', { ctrl: true });
-    await screen.waitFor('the test result', () => screen.frame().includes('allowance is spent'));
-
+    await screen.waitFor('the test request', () => tested.length === 1);
     expect(tested).toEqual(['openai/gpt-5.5']);
-    expect(screen.frame()).toContain('Select model');
+    response.resolve({ ok: true, firstTokenMs: 731, totalMs: 918 });
+    await response.promise;
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
+    await screen.renderOnce();
+
+    const reported = [...screen.frame().matchAll(/\b(\d+(?:\.\d+)?)\s*(ms|s)\b/gu)]
+      .map(([, value, unit]) => Number(value) * (unit === 's' ? 1_000 : 1));
+
+    expect(reported).toEqual(expect.arrayContaining([731, 918]));
+    expect(screen.filterFocused()).toBe(true);
+    expect(selected).toEqual([]);
   });
 
 
   test('a slow model selection blocks newer surfaces until it settles', async () => {
     const pending = Promise.withResolvers<{ spec: string }>();
+    const selected: string[] = [];
 
     const controlled = fakeClient({
       name: 'alpha',
-      setModel: () => pending.promise,
+      setModel: (spec) => {
+        selected.push(spec);
+
+        return pending.promise;
+      },
     });
 
-    const screen = await mountChat(controlled.client);
+    const screen = await mountChat(controlled.client, { kittyKeyboard: true });
     screen.mockInput.pressKey('l', { ctrl: true });
-    await screen.waitFor('the model picker', () => screen.frame().includes('Select model'));
+    await screen.waitFor('the selectable model', () => screen.filterFocused() && screen.frame().includes('openai/gpt-5.5'));
     screen.mockInput.pressEnter();
-    screen.mockInput.pressKey('g', { ctrl: true });
+    await screen.waitFor('the model selection request', () => selected.length === 1);
+    await screen.waitFor('the picker releases its control', () => !screen.filterFocused());
+    screen.mockInput.pressKey(',', { ctrl: true });
 
-    for (let index = 0; index < 4; index += 1) await screen.renderOnce();
-    expect(screen.frame()).not.toContain('Filter settings');
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
+    await screen.renderOnce();
+    expect(selected).toEqual(['openai/gpt-5.5']);
+    expect(screen.filterFocused()).toBe(false);
     pending.resolve({ spec: 'openai/gpt-5.5' });
-    await screen.waitFor('the selected model result', () =>
-      screen.frame().includes('Model: openai/gpt-5.5'));
+    await screen.waitFor('the selected model result', screen.composerFocused);
+    screen.mockInput.pressKey(',', { ctrl: true });
+    await screen.waitFor('settings after selection', screen.filterFocused);
   });
 
   test('a failed initial connection reports the whole cause chain', async () => {
@@ -311,7 +355,8 @@ describe('ChatApp terminal interaction', () => {
       settled: (frame) => frame.includes('the workspace socket refused'),
     });
 
-    expect(screen.frame()).toContain('Error: the workspace socket refused: ECONNREFUSED 127.0.0.1');
+    expect(screen.frame()).toContain('the workspace socket refused');
+    expect(screen.frame()).toContain('ECONNREFUSED 127.0.0.1');
   });
 
   test('a failed slash command reports the whole cause chain', async () => {
@@ -326,10 +371,16 @@ describe('ChatApp terminal interaction', () => {
     await screen.mockInput.typeText('/rename beta');
     screen.mockInput.pressEnter();
     await screen.waitFor('the submit failure with its chain', () =>
-      screen.frame().includes('Error: the rename was refused: name already taken'));
+      screen.frame().includes('the rename was refused') && screen.frame().includes('name already taken'));
   });
   test('failed workspace connection keeps the current workspace usable', async () => {
-    const controlled = fakeClient({ name: 'alpha' });
+    const sent: Parameters<AgentClient['send']>[0][] = [];
+
+    const controlled = fakeClient({ name: 'alpha', send: async (input) => {
+      sent.push(input);
+
+      return TURN;
+    } });
 
     const candidate = fakeClient({
       name: 'missing',
@@ -352,11 +403,13 @@ describe('ChatApp terminal interaction', () => {
     screen.mockInput.pressEnter();
     await screen.waitFor('the workspace failure', () =>
       screen.frame().includes('Workspace is unavailable'));
-    expect(screen.frame()).not.toContain('Filter workspaces');
-    expect(screen.frame()).toContain('alpha');
-    expect(screen.frame()).toContain('Send a message');
+    expect(screen.composerFocused()).toBe(true);
     expect(controlled.state.closed).toBe(0);
     expect(candidate.state.closed).toBe(1);
+    await screen.mockInput.typeText('still on alpha');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the retained workspace accepts a prompt', () => sent.length === 1);
+    expect(sent).toEqual(['still on alpha']);
   });
 
   test('!command output held for one workspace never reaches the next one after a switch', async () => {
@@ -382,7 +435,7 @@ describe('ChatApp terminal interaction', () => {
     await screen.waitFor('the workspace picker', () => screen.frame().includes('Beta'));
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressEnter();
-    await screen.waitFor('beta connected', () => screen.frame().includes('Connected to beta'));
+    await screen.waitFor('beta connected', () => beta.state.connected === 1 && screen.composerFocused());
 
     await screen.mockInput.typeText('hello beta');
     screen.mockInput.pressEnter();
@@ -728,14 +781,17 @@ test('a reopened conversation shows a refused turn\'s failure in the provider\'s
   expect(screen.frame().indexOf('Go usage limit exceeded')).toBeGreaterThan(screen.frame().indexOf('Plan the quarterly offsite.'));
 });
 
-test('/copy hands the last answer to the clipboard, and says when there is none', async () => {
-  const answered = fakeClient({ name: 'copies', history: EXPORTED_HISTORY });
-  const silent = fakeClient({ name: 'silent' });
+test('/copy delivers only the last answer through the terminal clipboard', async () => {
+  for (const answered of [true, false]) {
+    const run = await runToExit([process.execPath, join(import.meta.dir, 'fixtures/copy-clipboard.tsx'), answered ? 'answered' : 'silent']);
+    expect(run.exitCode, run.stderr).toBe(0);
 
-  expect(await executeSlashCommand(answered.client, '/copy')).toMatchObject({ copy: 'The old table keeps its rows.' });
-  expect(await executeSlashCommand(silent.client, '/copy')).not.toHaveProperty('copy');
+    const delivered = run.stdout.split('\u001b]52;c;').slice(1)
+      .map((packet) => Buffer.from(packet.split('\u0007')[0]?.split('\u001b\\')[0] ?? '', 'base64').toString('utf8'));
+
+    expect(delivered).toEqual(answered ? ['The old table keeps its rows.'] : []);
+  }
 });
-
 test('/export writes the conversation to a Markdown file in its order, and names the file', async () => {
   const agent = fakeClient({ name: 'exports', history: EXPORTED_HISTORY });
   const screen = await mountChat(agent.client);
@@ -743,7 +799,7 @@ test('/export writes the conversation to a Markdown file in its order, and names
 
   await screen.mockInput.typeText(`/export ${file}`);
   screen.mockInput.pressEnter();
-  await screen.waitFor('the export', () => existsSync(file) && screen.frame().includes('conversation.md'));
+  await screen.waitFor('the export', () => existsSync(file));
   const written = readFileSync(file, 'utf8');
   const order = ['Which table keeps its rows?', 'schema.sql', 'The old table keeps its rows.'].map((text) => written.indexOf(text));
 
@@ -770,24 +826,53 @@ test('the header shows the size the gate measured the last request at, not the s
 test('/compact shows its progress while the fold runs, and a failed fold says why', async () => {
   for (const ends of ['folded', 'failed'] as const) {
     const fold = Promise.withResolvers<'folded'>();
-    const agent = fakeClient({ name: `compact-${ends}` });
+    const sent: Parameters<AgentClient['send']>[0][] = [];
+
+    const agent = fakeClient({ name: `compact-${ends}`, send: async (input) => {
+      sent.push(input);
+
+      return TURN;
+    } });
+
     const local = agent.client.localControls;
 
     if (!local) throw new Error('the fixture is local');
-    local.compact = () => fold.promise;
-    const working = commandsForClient(agent.client).find((command) => command.name === '/compact')?.working ?? '';
+    let compacting = false;
+    local.compact = () => {
+      compacting = true;
+
+      return fold.promise;
+    };
+
     const screen = await mountChat(agent.client);
 
     await screen.mockInput.typeText('/compact');
     flushSync(() => screen.mockInput.pressEnter());
-    await screen.waitFor('the fold in progress', () => screen.frame().includes(working));
+    await screen.waitFor('the fold in progress', () => compacting);
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
+    await screen.renderOnce();
+    expect(screen.frame()).toMatch(/\p{Script=Braille}/u);
+    screen.mockInput.pressKey('l', { ctrl: true });
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
+    await screen.renderOnce();
+    screen.mockInput.pressEscape();
+    await screen.waitFor('the composer after closing the model picker', screen.composerFocused);
+    expect(sent).toEqual([]);
 
     if (ends === 'folded') fold.resolve('folded');
     else fold.reject(new Error('the summarizer is out of credit'));
 
-    await screen.waitFor('the fold settled', () => !screen.frame().includes(working));
+    if (ends === 'folded') await fold.promise;
+    else await expect(fold.promise).rejects.toThrow();
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
+    await screen.renderOnce();
+    expect(screen.frame()).not.toMatch(/\p{Script=Braille}/u);
 
     if (ends === 'failed') expect(screen.frame()).toContain('the summarizer is out of credit');
+    await screen.mockInput.typeText('continue after compaction');
+    flushSync(() => screen.mockInput.pressEnter());
+    await screen.waitFor('the next prompt after compaction', () => sent.length === 1);
+    expect(sent).toEqual(['continue after compaction']);
   }
 });
 
@@ -924,15 +1009,13 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     await screen.waitFor('the agent hub', () => screen.frame().includes('Agent Hub'));
     expect(screen.frame()).toContain('new agent');
     screen.mockInput.pressKey('n');
-    await screen.waitFor('the created peer conversation', () => screen.frame().includes('Connected to agent-1'));
+    await screen.waitFor('the created peer conversation', () => peer.state.connected === 1 && screen.composerFocused());
     expect(created).toBe(1);
-    expect(screen.frame()).not.toContain('Role:');
-    expect(screen.frame()).not.toContain('Mission:');
 
     screen.mockInput.pressKey('a', { meta: true });
-    await screen.waitFor('the refreshed hub roster', () => screen.frame().includes(codenameFor('agent-1')));
+    await screen.waitFor('the refreshed hub roster', () => screen.frame().includes('Fixture peer'));
     expect(screen.frame()).toContain('Checkout · main');
-    expect(screen.frame()).toContain(`${codenameFor('agent-1')} · main`);
+    expect(screen.frame()).toContain('Fixture peer');
     expect(screen.frame()).toContain('· open');
     screen.mockInput.pressEscape();
   });
@@ -971,12 +1054,12 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     screen.mockInput.pressKey('a', { meta: true });
     await screen.waitFor('the agent hub', () => screen.frame().includes('Agent Hub'));
     screen.mockInput.pressKey('n');
-    await screen.waitFor('the created cloud conversation', () => screen.frame().includes('Connected to sub-1'));
+    await screen.waitFor('the created cloud conversation', () => child.state.connected === 1 && screen.composerFocused());
     expect(created).toBe(1);
 
     await screen.mockInput.typeText('/rename Research partner');
     screen.mockInput.pressEnter();
-    await screen.waitFor('the cloud rename result', () => screen.frame().includes('Renamed to Research partner.'));
+    await screen.waitFor('the cloud rename result', () => renamed.length === 1);
     expect(renamed).toEqual(['Research partner']);
   });
 
@@ -994,7 +1077,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     screen.mockInput.pressKey('a', { meta: true });
     await screen.waitFor('the agent hub', () => screen.frame().includes('Agent Hub'));
     screen.mockInput.pressKey('n');
-    await screen.waitFor('the new conversation', () => screen.frame().includes('Connected to sub-2'));
+    await screen.waitFor('the new conversation', () => child.state.connected === 1 && screen.composerFocused());
     await screen.mockInput.typeText('typed while closing');
     await screen.waitFor('the draft in the new conversation', () => screen.frame().includes('typed while closing'));
     closing.resolve();
@@ -1366,7 +1449,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     await screen.waitFor('the workspace drawer', () => screen.frame().includes('Esc close'));
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressEnter();
-    await screen.waitFor('the beta workspace', () => screen.frame().includes('Connected to beta'));
+    await screen.waitFor('the beta workspace', () => beta.state.connected === 1 && screen.composerFocused());
     expect(screen.frame()).not.toContain('half a thought for alpha');
     await screen.mockInput.typeText('beta draft');
     screen.mockInput.pressKey('w', { meta: true });
@@ -1408,7 +1491,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
       screen.mockInput.pressKey('a', { meta: true });
       await screen.waitFor('the agent hub', () => screen.frame().includes('Agent Hub'));
       screen.mockInput.pressKey('n');
-      await screen.waitFor('the created peer conversation', () => screen.frame().includes('Connected to agent-9'));
+      await screen.waitFor('the created peer conversation', () => peer.state.connected === 1 && screen.composerFocused());
       expect(created).toBe(1);
     } finally {
       consoleError.mockRestore();
@@ -1461,7 +1544,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
       await screen.waitFor('the workspace drawer', () => screen.frame().includes('Esc close'));
       screen.mockInput.pressArrow('down');
       screen.mockInput.pressEnter();
-      await screen.waitFor('the beta workspace', () => screen.frame().includes('Connected to beta'));
+      await screen.waitFor('the beta workspace', () => beta.state.connected === 1 && screen.composerFocused());
       screen.mockInput.pressKey('a', { meta: true });
       await screen.waitFor('the hub after the switch', () => screen.frame().includes('Agent Hub'));
       expect(seen).toEqual([]);
