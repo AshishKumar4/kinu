@@ -1,0 +1,52 @@
+{
+  "version": 2,
+  "versionRefusalClose": 4406,
+  "methods": {
+    "ping": {},
+    "cancel": {},
+    "execAck": {},
+    "exec": { "deviceView": true },
+    "ptyOpen": { "deviceView": true },
+    "readFile": { "deviceView": true },
+    "readRange": { "deviceView": true },
+    "writeFile": { "deviceView": true },
+    "listFiles": { "deviceView": true },
+    "statPath": { "deviceView": true },
+    "unlinkPath": { "deviceView": true },
+    "mkdirPath": { "deviceView": true },
+    "exists": { "deviceView": true },
+    "which": {},
+    "checkpointStatus": { "consentFree": true },
+    "checkpointList": { "consentFree": true, "checkpointStore": true },
+    "checkpointPlan": { "consentFree": true, "checkpointStore": true, "deviceView": true },
+    "checkpointRestore": { "checkpointStore": true, "deviceView": true },
+    "codexRelay": {},
+    "chatgptStatus": {},
+    "chatgptSignIn": {},
+    "chatgptSignOut": {}
+  },
+  "frames": {
+    "hello": "HELLO",
+    "ping": "ping",
+    "pong": "pong",
+    "rotate": "ROTATE",
+    "rotated": "ROTATE_ACK",
+    "execOutput": "EXEC_OUT",
+    "relayHead": "RELAY_HEAD",
+    "relayBody": "RELAY_BODY",
+    "ptyInput": "PTY_IN",
+    "ptyResize": "PTY_RESIZE",
+    "ptyOutput": "PTY_OUT",
+    "ptyExit": "PTY_EXIT"
+  },
+  "errors": {
+    "disconnected": "device_disconnected",
+    "noOwner": "device_no_owner",
+    "ambiguous": "device_ambiguous",
+    "unknownMethod": "unknown_method",
+    "sandboxUnavailable": "sandbox_unavailable",
+    "unresponsive": "device_unresponsive",
+    "protocolMismatch": "device_protocol_mismatch"
+  },
+  "updateRequired": "update the daemon (kinu update)"
+}
