@@ -11,7 +11,7 @@ import {
 } from '@kinu.run/core';
 import { USER_DO_RPC_SURFACE } from '../src/rpc-surface';
 import {
-  TEST_CREDENTIAL_ENCRYPTION_KEY, TEST_USER_ENV, sqlExec,
+  TEST_CREDENTIAL_ENCRYPTION_KEY, TEST_USER_ENV, createTestUserDO, sqlExec, testOwner,
 } from './helpers/user-do';
 
 const SECRET = ['sk_live_', '0123456789abcdefghij'].join('');
@@ -184,6 +184,20 @@ describe('key rotation', () => {
     });
 
     expect(await rewrapEgressSecrets({ sql: deps.sql, cipher: stranger, aad: deps.aad })).toBe(false);
+  });
+});
+
+describe('the owner object reads its vault against the grants a request carries', () => {
+  test('a granted secret is spent, and the same request without its grant is refused', async () => {
+    const { userDO } = createTestUserDO();
+    const owner = await testOwner();
+    const binding = await userDO.putEgressSecret(owner, STRIPE);
+    const facts = { host: 'api.stripe.com', url: 'https://api.stripe.com/v1/charges', headers: [['authorization', `Bearer ${binding.placeholder}`]] as const };
+
+    expect(await userDO.resolveEgressInjection(owner, facts, [{ rule: 'egress-secret:stripe', executor: 'sandbox' }]))
+      .toEqual({ kind: 'forward', substitutions: [{ placeholder: binding.placeholder, secret: SECRET }] });
+    expect(await userDO.resolveEgressInjection(owner, facts, [{ rule: 'egress-secret:stripe', executor: 'device' }]))
+      .toMatchObject({ kind: 'refuse' });
   });
 });
 

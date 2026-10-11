@@ -9,19 +9,19 @@ import { Hono } from 'hono';
 import { rawPath, rethrow, type FamilyEnv } from '../api/context';
 import {
   createScrubStream,
-  planEgress,
+  egressPlaceholdersIn,
   refusedHostname,
   scrubText,
   JsonValueSchema,
   type ContainerEventResult,
   type JsonValue,
+  type ApprovalGrant,
   type EgressRequestFacts,
-  type EgressSecretBinding,
   type ScrubReplacement,
 } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../orchestrator';
 import type { ObjectNamespace } from '@kinu.run/core';
-import { ownerCaller, type OwnerCapabilityEnv, type UserCaller } from '@kinu.run/core';
+import { OwnerCapabilityUnavailableError, ownerCaller, type OwnerCapabilityEnv, type UserCaller } from '@kinu.run/core';
 import type { EgressInjection, EgressInjectionResult } from '@kinu.run/core';
 import { kinuUserAgent, observeGitHub, reoriginateRequest, type GitHubFact, type GitHubRecorder } from '@kinu.run/core';
 import {
@@ -37,19 +37,17 @@ const CONTAINER_EVENT_PATH = '/v1/events';
 export interface KinuEgressParams {
   readonly workspaceName: string;
   readonly ownerUserId: string;
-  /** Owner's vault ∩ this workspace's approval grants, carrying no secret material; the hot path needs no approval round trip. */
-  readonly bindings: readonly EgressSecretBinding[];
+  /** The workspace's egress-secret grants (`egressGrants`): the vault is read against them only when a request asks. */
+  readonly grants: readonly ApprovalGrant[];
 }
 
-/** Parsed although trusted: a container configured by an older build may predate a field. */
+/** Parsed although trusted: a container configured by an older build reads as unconfigured until it is configured again. */
 const EgressParamsSchema = v.object({
   workspaceName: v.pipe(v.string(), v.minLength(1)),
   ownerUserId: v.pipe(v.string(), v.minLength(1)),
-  bindings: v.array(v.object({
-    id: v.pipe(v.string(), v.minLength(1)),
-    label: v.string(),
-    host: v.pipe(v.string(), v.minLength(1)),
-    placeholder: v.pipe(v.string(), v.minLength(1)),
+  grants: v.array(v.object({
+    rule: v.pipe(v.string(), v.minLength(1)),
+    executor: v.pipe(v.string(), v.minLength(1)),
   })),
 });
 
@@ -65,7 +63,7 @@ interface EgressVaultClient {
   resolveEgressInjection(
     caller: UserCaller,
     facts: EgressRequestFacts,
-    active: readonly EgressSecretBinding[],
+    grants: readonly ApprovalGrant[],
   ): Promise<EgressInjectionResult>;
 }
 
@@ -131,19 +129,15 @@ export function handleContainerEgress<Id>(
       headers: [...request.headers],
     };
 
-    const bindings = params.bindings;
-    // The vault plans the same way first; a request that names no secret needs no answer of it, so it costs no round trip.
-    const plan = planEgress(facts, bindings);
-
-    if (plan.kind === 'refuse') return refusal(plan.status, plan.reason);
-
-    if (plan.substitutions.length === 0) return yield* forwarded(request, url, [], github);
+    // A request that names no placeholder needs nothing of the vault, so it costs no round trip.
+    if (egressPlaceholdersIn(facts).size === 0) return yield* forwarded(request, url, [], github);
 
     // Use the stub, never copy it: `Object.assign` of a JSRPC stub yields `{}` (methods live behind a Proxy).
     const vault: EgressVaultClient = env.UserDO.get(env.UserDO.idFromName(params.ownerUserId));
 
+    // The vault reads its secrets against the grants as they stand, and plans: an unbound placeholder is refused there.
     const resolved = yield* Effect.matchCause(Effect.promise(async (): Promise<EgressInjectionResult> => vault.resolveEgressInjection(
-      await ownerCaller(env), facts, bindings,
+      await ownerCaller(env), facts, params.grants,
     )), {
       onSuccess: (answer) => ({ answer }),
       onFailure: (failed) => ({ refused: authorityFailure({ cause: Cause.squash(failed), host: url.hostname }) }),
@@ -316,6 +310,13 @@ function forwardUpstream(
  * not sent and a retry recovers. The cause chain stays in diagnostics only (operator detail).
  */
 function authorityFailure(input: { cause: unknown; host: string }): Response {
+  // A deployment that holds no root secret can open no vault: said as it is, since no retry will change it.
+  if (input.cause instanceof OwnerCapabilityUnavailableError) {
+    diagnostics.failure('egress.authority_unreachable', new KinuError('unavailable', input.cause.message), { host: input.host });
+
+    return refusal(503, `${input.cause.message} This request to ${input.host} names a vault secret, so it was not sent.`);
+  }
+
   const error = toKinuError({
     doing: 'asking the owner vault what this container may spend on its request',
     cause: input.cause,

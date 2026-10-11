@@ -12,7 +12,6 @@ import {
   sharedDriveMount, SHARED_DRIVE_UNCLAIMED, SHARED_DRIVE_UNBOUND, type MossaicVfs,
   withApprovalGatedShell, withApprovalGatedFiles, createInheritedApprovalPolicy, holdsGrant,
   type ShellApprovalPolicy, type ShellApprovalMode, type ApprovalGrant,
-  type EgressSecretBinding,
   createSandboxExecutor, createDeviceTunnelExecutor, type DeviceTransport,
   type WorkspaceFiles,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore, createSqlFiber,
@@ -137,24 +136,6 @@ function userDOStubFor(env: Env, actor: ActorRuntimeIdentity): RuntimeUserDOClie
   const namespace: RuntimeUserDONamespace = env.UserDO;
 
   return namespace.get(namespace.idFromName(userId));
-}
-
-/** An unreadable vault rejects: the sandbox handle memoizes this configuration, so an empty answer would
- *  strip every injectable secret for the handle's life. */
-async function listOwnerEgressVault(
-  env: Env, actor: ActorRuntimeIdentity,
-): Promise<EgressSecretBinding[]> {
-  const userId = actor.ownerUserId();
-
-  if (!userId) return [];
-  // Used, never copied (see `userDOStubFor`).
-  const vault: EgressVaultClient = env.UserDO.get(env.UserDO.idFromName(userId));
-
-  return [...await vault.listEgressSecrets(await ownerCaller(env))];
-}
-
-interface EgressVaultClient {
-  listEgressSecrets(caller: UserCaller): Promise<readonly EgressSecretBinding[]>;
 }
 
 async function ownerSandboxSize(env: Env, actor: ActorRuntimeIdentity): Promise<BoxSize | null> {
@@ -426,7 +407,6 @@ export function createCFRuntime(
         await sdk.configureEgress(kinuEgressParams({
           workspaceName: actor.workspaceName,
           ownerUserId: userId,
-          vault: await listOwnerEgressVault(env, actor),
           grants: actor.actor.config.getShellApprovalGrants(),
         }));
         // Unread, the box keeps its last default.

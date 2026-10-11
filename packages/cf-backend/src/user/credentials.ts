@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import {
-  type Credential, CLAUDE_CRED_KEY, CODEX_CRED_KEY, MAIN_ACCOUNT, accountCredentialKey, baseCredentialKey, claudeCodeFrom, createClaudeOAuthClient, createCodexOAuthClient, startClaudeSignIn, subscriptionIssuer, rotateLogin, usableLogin, type LoginRenewal, type SubscriptionIssuer, decodeCodexAccountId, tokensToCredential, type DeviceCodeStart, type JsonValue, type OAuthCredential, type EgressRequestFacts, type EgressSecretBinding, parseJsonValue, ownerCaller, type UserCaller, type ResolvedCaller, credentialToHeaders, refusedLogin, type AuthRequest, type AuthResolution, validateCredential, validateCredentialKey, createCredentialCipher, isSealedCredential, type CredentialCipher, listEgressSecrets, putEgressSecret, resolveEgressInjection, revokeEgressSecret, rewrapEgressSecrets, type EgressInjectionResult, type EgressSecretSummary, type EgressVaultDeps, type PutEgressSecretInput, revocationEndpointFor, revokeOAuthGrant, type UnrevokedGrant, isModelInferenceCredentialKey, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, accountIdFromCloudflareCredential, cloudflareAIGatewayId, cloudflareAccountsFromCredential, cloudflareWorkersAIBaseURL, fetchCloudflareAIGateways, isCloudflareAIGatewayId, isCloudflareCredentialExpiring, isCloudflareCredentialUsable, refreshCloudflareCredential, withCloudflareAccount, type CloudflareAccount, type CloudflareAIGatewaySummary,
+  type Credential, CLAUDE_CRED_KEY, CODEX_CRED_KEY, MAIN_ACCOUNT, accountCredentialKey, baseCredentialKey, claudeCodeFrom, createClaudeOAuthClient, createCodexOAuthClient, startClaudeSignIn, subscriptionIssuer, rotateLogin, usableLogin, type LoginRenewal, type SubscriptionIssuer, decodeCodexAccountId, tokensToCredential, type DeviceCodeStart, type JsonValue, type OAuthCredential, type EgressRequestFacts, type EgressSecretBinding, type ApprovalGrant, grantedEgressBindings, parseJsonValue, ownerCaller, type UserCaller, type ResolvedCaller, credentialToHeaders, refusedLogin, type AuthRequest, type AuthResolution, validateCredential, validateCredentialKey, createCredentialCipher, isSealedCredential, type CredentialCipher, listEgressSecrets, putEgressSecret, resolveEgressInjection, revokeEgressSecret, rewrapEgressSecrets, type EgressInjectionResult, type EgressSecretSummary, type EgressVaultDeps, type PutEgressSecretInput, revocationEndpointFor, revokeOAuthGrant, type UnrevokedGrant, isModelInferenceCredentialKey, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, accountIdFromCloudflareCredential, cloudflareAIGatewayId, cloudflareAccountsFromCredential, cloudflareWorkersAIBaseURL, fetchCloudflareAIGateways, isCloudflareAIGatewayId, isCloudflareCredentialExpiring, isCloudflareCredentialUsable, refreshCloudflareCredential, withCloudflareAccount, type CloudflareAccount, type CloudflareAIGatewaySummary,
 } from '@kinu.run/core';
 import { attempt, authoredRefusal, diagnostics, KinuError, renderThrownChain, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -520,16 +520,17 @@ export class UserCredentials {
   }
 
   /**
-   * `active` is already grant-filtered (consent); this decides destination per request.
-   * The outbound handler presents the owner capability.
+   * `grants` are the workspace's consent, read here against the vault as it stands; this decides destination per
+   * request. The outbound handler presents the owner capability, and asks only for a request that names a placeholder.
    */
   async resolveEgressInjection(
     caller: UserCaller,
     facts: EgressRequestFacts,
-    active: readonly EgressSecretBinding[],
+    grants: readonly ApprovalGrant[],
   ): Promise<EgressInjectionResult> {
     await this.host.requireTier(caller, 'egress_secrets.inject');
     await this.rewrapCredentials();
+    const active = grantedEgressBindings(listEgressSecrets(this.host.ctx.storage.sql), grants);
 
     return resolveEgressInjection(this.egressVaultDeps(await this.cipher()), facts, active);
   }

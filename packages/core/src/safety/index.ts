@@ -28,6 +28,8 @@ export { ParkedWriteFiles, type ParkedWriteFileOps } from './parked-write-files'
 export {
   EGRESS_PLACEHOLDER_PREFIX,
   PLACEHOLDER_BODY_LENGTH,
+  egressPlaceholdersIn,
+  egressGrants,
   grantedEgressBindings,
   isEgressPlaceholder,
   findEgressPlaceholders,

@@ -1440,6 +1440,8 @@ export {
   EGRESS_PLACEHOLDER_PREFIX,
   PLACEHOLDER_BODY_LENGTH,
   isEgressPlaceholder,
+  egressPlaceholdersIn,
+  egressGrants,
   grantedEgressBindings,
   findEgressPlaceholders,
   egressSecretRule,

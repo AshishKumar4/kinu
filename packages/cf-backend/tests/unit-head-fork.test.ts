@@ -151,20 +151,19 @@ describe('a head forks its parent workspace', () => {
     expect(restoresPerformed).toBe(0);
   });
 
-  test('an owner vault that cannot be read fails the operation, never configuring the container empty', async () => {
-    const unreadable = new Error('the owner object reset mid-call');
+  test('an owner vault that cannot be read does not stop the container being configured: only a secret needs it', async () => {
     configuredEgress.length = 0;
 
     const { rt } = await hostedHead({}, 'head-vault', {
-      warmConnections: [], failWarm: null, titles: [], failVault: unreadable,
+      warmConnections: [], failWarm: null, titles: [], failVault: new Error('the owner object reset mid-call'),
     });
 
     const handle = rt.sandboxHandle;
 
     if (!handle) throw new Error('a hosted head runtime rides the workspace container');
-    // An empty vault here would be memoized for the handle's life.
-    await expect(handle.exec('true')).rejects.toMatchObject({ _tag: 'KinuError', cause: unreadable });
-    expect(configuredEgress).toEqual([]);
+    await handle.exec('true');
+    // Grants, not bindings: the vault is read by the egress when a request names a placeholder.
+    expect(configuredEgress).toEqual([{ workspaceName: 'kinu-harness-parent', ownerUserId: expect.any(String), grants: [] }]);
   });
 
   /** Asserted as a pair: a refusal alone would also hold for a head with no file plane at all. */

@@ -9,7 +9,7 @@ import { USER_DO_RPC_SURFACE, USER_DO_STARTED_RPC, sealRpcSurface } from '../rpc
 import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from '../activation-gate';
 
 import {
-  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, ORCHESTRATOR_AGENT_SLUG, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type DeviceCodeStart, type JsonValue, type EgressRequestFacts, type EgressSecretBinding, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type EgressSecretSummary, type PutEgressSecretInput, type UnrevokedGrant, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, DEVICE_KEEPALIVE_PING, DEVICE_KEEPALIVE_PONG, DEVICE_TOKEN_ROTATION_ACK, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, } from '@kinu.run/core';
+  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, ORCHESTRATOR_AGENT_SLUG, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type DeviceCodeStart, type JsonValue, type EgressRequestFacts, type EgressSecretBinding, type ApprovalGrant, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type EgressSecretSummary, type PutEgressSecretInput, type UnrevokedGrant, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, DEVICE_KEEPALIVE_PING, DEVICE_KEEPALIVE_PONG, DEVICE_TOKEN_ROTATION_ACK, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, } from '@kinu.run/core';
 
 import { DurableObjectOAuthClientProvider, type AgentMcpOAuthProvider } from 'agents/mcp/do-oauth-client-provider';
 
@@ -303,8 +303,8 @@ export class UserDO extends Agent<Env> {
     return this.credentials.revokeEgressSecret(caller, id);
   }
 
-  resolveEgressInjection(caller: UserCaller, facts: EgressRequestFacts, active: readonly EgressSecretBinding[]): Promise<EgressInjectionResult> {
-    return this.credentials.resolveEgressInjection(caller, facts, active);
+  resolveEgressInjection(caller: UserCaller, facts: EgressRequestFacts, grants: readonly ApprovalGrant[]): Promise<EgressInjectionResult> {
+    return this.credentials.resolveEgressInjection(caller, facts, grants);
   }
 
   getCredentialEndpoint(caller: UserCaller, key: string): Promise<CredentialEndpoint | null> {

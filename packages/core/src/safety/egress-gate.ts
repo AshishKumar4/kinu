@@ -42,13 +42,22 @@ export interface EgressSecretBinding {
   readonly placeholder: string;
 }
 
+const EGRESS_SECRET_RULE_PREFIX = 'egress-secret:';
+
 /** Rule name a binding's approval is recorded under, reusing the approval gate's `(rule, executor)` grant machinery. */
 export function egressSecretRule(bindingId: string): string {
-  return `egress-secret:${bindingId}`;
+  return `${EGRESS_SECRET_RULE_PREFIX}${bindingId}`;
 }
 
 /** Executor egress grants are scoped to; the grant writer and the binding filter must agree on this string. */
 const EGRESS_EXECUTOR = 'sandbox';
+
+/** The grants that let an egress spend a vault secret: what it carries, so the vault can be read when a request asks. */
+export function egressGrants(grants: readonly ApprovalGrant[]): ApprovalGrant[] {
+  return grants
+    .filter((g) => g.executor === EGRESS_EXECUTOR && g.rule.startsWith(EGRESS_SECRET_RULE_PREFIX))
+    .map((g) => ({ rule: g.rule, executor: g.executor }));
+}
 
 /** Bindings `grants` allow; a vaulted binding without a grant is invisible to the container. */
 export function grantedEgressBindings(
@@ -93,6 +102,17 @@ export type EgressPlan =
   | { readonly kind: 'forward'; readonly substitutions: readonly EgressSubstitution[] }
   | { readonly kind: 'refuse'; readonly status: number; readonly reason: string };
 
+/** The placeholders a request names, in its URL or any header value: a request naming none is sent on as it is. */
+export function egressPlaceholdersIn(facts: EgressRequestFacts): Set<string> {
+  const present = new Set(findEgressPlaceholders(facts.url));
+
+  for (const [, value] of facts.headers) {
+    for (const found of findEgressPlaceholders(value)) present.add(found);
+  }
+
+  return present;
+}
+
 /**
  * Plan one outbound request against approved `active` bindings. Unknown placeholders are refused; requests
  * without placeholders forward untouched. Bodies are not scanned: a placeholder there leaves unsubstituted.
@@ -101,11 +121,7 @@ export function planEgress(
   facts: EgressRequestFacts,
   active: readonly EgressSecretBinding[],
 ): EgressPlan {
-  const present = new Set(findEgressPlaceholders(facts.url));
-
-  for (const [, value] of facts.headers) {
-    for (const found of findEgressPlaceholders(value)) present.add(found);
-  }
+  const present = egressPlaceholdersIn(facts);
 
   if (present.size === 0) return { kind: 'forward', substitutions: [] };
 

@@ -8,7 +8,7 @@ import type { KinuDevbox } from '../src/kinu-devbox';
 // Static: neither module reaches `cloudflare:email`, so neither needs the mock below.
 import { kinuEgressParams } from '../src/egress/configure';
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
-import type { EgressInjectionResult } from '@kinu.run/core';
+import type { ApprovalGrant, EgressInjectionResult, EgressRequestFacts, UserCaller } from '@kinu.run/core';
 import type { ContainerEgressEnv, ContainerEventResolver, KinuEgressParams } from '../src/egress/outbound';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { jsrpcStub } from './helpers/jsrpc-stub';
@@ -42,7 +42,7 @@ const BINDING: EgressSecretBinding = {
 };
 
 const PARAMS: KinuEgressParams = {
-  workspaceName: 'kinu-main', ownerUserId: 'user-1', bindings: [BINDING],
+  workspaceName: 'kinu-main', ownerUserId: 'user-1', grants: [{ rule: 'egress-secret:stripe', executor: 'sandbox' }],
 };
 
 /** `get` returns a `jsrpcStub`: the real binding is a Proxy, and a literal double hid a TypeError here. */
@@ -190,31 +190,81 @@ describe('the secret reaches the upstream and comes back scrubbed', () => {
 });
 
 describe('what the container is configured with', () => {
-  test('only GRANTED bindings are passed, so an ungranted placeholder is never learned', () => {
+  test('only the grants that spend a secret are carried, and no binding or placeholder', () => {
     const params = kinuEgressParams({
       workspaceName: 'kinu-main',
       ownerUserId: 'user-1',
-      vault: [BINDING, { id: 'prod-db', label: 'Prod DB', host: 'db.internal', placeholder: `${EGRESS_PLACEHOLDER_PREFIX}${'Z'.repeat(43)}` }],
-      grants: [{ rule: 'egress-secret:stripe', executor: 'sandbox' }],
+      grants: [
+        { rule: 'egress-secret:stripe', executor: 'sandbox' },
+        { rule: 'rm-rf', executor: 'sandbox' },
+        { rule: 'egress-secret:prod-db', executor: 'device' },
+      ],
     });
 
-    expect(params.bindings.map((b) => b.id)).toEqual(['stripe']);
-    expect(JSON.stringify(params)).not.toContain('prod-db');
-  });
-
-  test('a grant on another executor does not widen the container', () => {
-    const params = kinuEgressParams({
-      workspaceName: 'w', ownerUserId: 'u', vault: [BINDING],
-      grants: [{ rule: 'egress-secret:stripe', executor: 'device' }],
-    });
-
-    expect(params.bindings).toEqual([]);
+    expect(params.grants).toEqual([{ rule: 'egress-secret:stripe', executor: 'sandbox' }]);
+    expect(JSON.stringify(params)).not.toContain(EGRESS_PLACEHOLDER_PREFIX);
   });
 
   test('params are parsed, so a malformed configuration reads as unconfigured', () => {
     expect(parseEgressParams({ props: PARAMS })).toEqual(PARAMS);
     expect(parseEgressParams({ props: { workspaceName: 'w' } })).toBeUndefined();
     expect(parseEgressParams({ props: undefined })).toBeUndefined();
+  });
+
+  test('a configuration stored before grants replaced bindings reads as unconfigured, so nothing leaves unjudged', () => {
+    expect(parseEgressParams({ props: { workspaceName: 'w', ownerUserId: 'u', bindings: [BINDING] } })).toBeUndefined();
+  });
+});
+
+describe('the vault is read when a request names a secret, never before', () => {
+  test('a placeholder is planned by the vault against the grants the egress carries', async () => {
+    const asked: (readonly ApprovalGrant[])[] = [];
+    const upstream = captureFetch(() => new Response('ok'));
+
+    const env: ContainerEgressEnv<string> = {
+      UserDO: {
+        idFromName: (name: string) => name,
+        get: () => jsrpcStub({
+          resolveEgressInjection: async (_caller: UserCaller, _facts: EgressRequestFacts, grants: readonly ApprovalGrant[]): Promise<EgressInjectionResult> => {
+            asked.push(grants);
+
+            return { kind: 'forward', substitutions: [{ placeholder: PLACEHOLDER, secret: SECRET }] };
+          },
+        }),
+      },
+      CREDENTIAL_ENCRYPTION_KEY: 'a-test-credential-encryption-key-0123456789',
+    };
+
+    try {
+      const response = await handleContainerEgress(
+        new Request('https://api.stripe.com/v1/charges', { headers: { authorization: `Bearer ${PLACEHOLDER}` } }), env, PARAMS,
+      );
+
+      expect(response.status).toBe(200);
+      expect(asked).toEqual([PARAMS.grants]);
+      expect(upstream.seen[0]?.headers.get('authorization')).toBe(`Bearer ${SECRET}`);
+    } finally { upstream.restore(); }
+  });
+
+  test('a deployment with no root secret refuses only the request that names a secret, and says why', async () => {
+    const upstream = captureFetch(() => new Response('ok'));
+
+    const env: ContainerEgressEnv<string> = {
+      UserDO: { idFromName: (name: string) => name, get: () => { throw new Error('no vault is reached without a root secret'); } },
+    };
+
+    try {
+      const named = await handleContainerEgress(
+        new Request('https://api.stripe.com/v1/charges', { headers: { authorization: `Bearer ${PLACEHOLDER}` } }), env, PARAMS,
+      );
+
+      const plain = await handleContainerEgress(new Request('https://registry.npmjs.org/express'), env, PARAMS);
+
+      expect(named.status).toBe(503);
+      expect(await named.text()).toContain('CREDENTIAL_ENCRYPTION_KEY is not set');
+      expect(plain.status).toBe(200);
+      expect(upstream.seen.map((request) => request.url)).toEqual(['https://registry.npmjs.org/express']);
+    } finally { upstream.restore(); }
   });
 });
 
