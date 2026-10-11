@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { Effect } from "effect";
 import { present } from "@kinu.run/test-utils";
+import { KinuError, settle } from "../src/obs";
 import { sandboxHandleLifecycle } from "./helpers/sandbox-handle-lifecycle";
 import { executorNamespace } from "../src/tools/executor-operations";
 import { createTestRuntime } from "./helpers";
@@ -189,6 +191,16 @@ describe("executor lifecycle state", () => {
     expect(result).toBe("ok");
     expect(router.listExecutors().find((e) => e.name === "sandbox")?.active).toBe(true);
     expect(handle.calls).toEqual(["exec:echo ok"]);
+  });
+
+  test("a sandbox in use is one a call answered: a box that never came up, or a read of its record, is not", async () => {
+    const handle = { ...sandboxHandle(), exec: async () => settle(Effect.fail(new KinuError("unavailable", "this server runs no containers"))) };
+    const executor = createSandboxExecutor(handle, { previewHostSuffix: "kinu.example.test" });
+
+    expect(await executor.tools.exec.execute("echo ok")).toMatchObject({ error: expect.stringContaining("runs no containers") });
+    // Its record answers, but reading it is no use of the box.
+    expect(await executor.listExposedPorts?.()).toEqual([]);
+    expect(executor.getStatus?.()).toMatchObject({ active: false, status: "idle" });
   });
 
   test("sandbox without a preview suffix stays fully available for exec and files", async () => {

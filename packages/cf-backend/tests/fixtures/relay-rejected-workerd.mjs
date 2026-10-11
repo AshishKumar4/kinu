@@ -43,7 +43,12 @@ export class Client extends DurableObject {
     }
     try {
       if (mode === 'session-factory-rejection') return { answer: await workspace.session()._rpcReady() };
-      if (mode === 'fulfilled-stream') return { answer: await (await workspace.relayModelCall('', '', new Request('http://probe/'))).text() };
+      if (mode === 'fulfilled-stream') {
+        // Read through the held port, whose relay closes once the client lets the port go.
+        const answer = await (await workspace.relayModelCall('', '', new Request('http://probe/'))).text();
+        workspace[Symbol.dispose]?.();
+        return { answer };
+      }
       return { answer: await workspace.prepareChat({ mode }) };
     } catch (error) {
       return { failure: { code: error.code, name: error.name, message: error.message } };
@@ -127,7 +132,7 @@ const options = convertV4MiniflareOptions({ workers: [{
   serviceBindings: { SINK: async request => {
     const tail = await request.json();
 
-    if (['prepareChat', 'session', 'relayModelCall'].includes(tail.rpc)) { tails.push(tail); relayEnded.resolve(tail); }
+    if (['prepareChat', 'session', 'relayModelCall', 'port'].includes(tail.rpc)) { tails.push(tail); relayEnded.resolve(tail); }
 
     return new Response('kept');
   } },

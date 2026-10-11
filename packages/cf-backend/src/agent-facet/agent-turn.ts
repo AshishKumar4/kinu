@@ -189,10 +189,7 @@ const brokers = new WeakMap<AgentWorkspace, UserCredentialClient>();
 /** The isolate's credentials, held under their refresh rules (design v2 §8): a step asks its workspace for one only once
  *  it is older than {@link CREDENTIAL_HELD_MS}, or an upstream refused the one held, whichever turn of it asks. */
 function brokeredCredentials(workspace: AgentWorkspace): UserCredentialClient {
-  const known = brokers.get(workspace);
-
-  if (known !== undefined) return known;
-  const broker = heldCredentials(workspace);
+  const broker = brokers.get(workspace) ?? heldCredentials(workspace);
 
   brokers.set(workspace, broker);
 
