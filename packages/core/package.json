@@ -36,6 +36,7 @@
     "@kinu.run/agent-utils": "workspace:*",
     "@nimbus-sh/core": "0.17.0",
     "@nimbus-sh/fabric": "^0.12.0",
+    "@nimbus-sh/sdk": "^0.13.0",
     "@valibot/to-json-schema": "^1.8.0",
     "acorn": "^8.17.0",
     "ai": "7.0.127",

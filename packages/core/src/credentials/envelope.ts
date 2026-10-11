@@ -1,6 +1,7 @@
 /** Sealed envelope `pce1.<keyId>.<iv>.<ciphertext>` (AES-GCM, AAD binds DO id + record key) around `user_credentials.value`.
  *  One key, CREDENTIAL_ENCRYPTION_KEY: no default, no plaintext, and no retired key. A new key starts from reset stores. */
 import { Effect } from 'effect';
+import { base64UrlDecode } from '@nimbus-sh/sdk/oauth';
 import { KinuError } from '../obs/error';
 import { settle } from '../obs/effect';
 import { base64Url, hmacSha256Hex } from '../utils/crypto';
@@ -105,9 +106,9 @@ function opened(aad: string, stored: string, current: string): Effect.Effect<str
 
     const plaintext = yield* Effect.tryPromise({
       try: () => crypto.subtle.decrypt(
-        { name: 'AES-GCM', iv: unbase64url(ivPart), additionalData: utf8(aad) },
+        { name: 'AES-GCM', iv: Uint8Array.from(base64UrlDecode(ivPart)), additionalData: utf8(aad) },
         key.key,
-        unbase64url(ctPart),
+        Uint8Array.from(base64UrlDecode(ctPart)),
       ),
       catch: (cause) => ({ cause }),
     }).pipe(Effect.catch((failed) => Effect.fail(new KinuError('bad_input',
@@ -148,13 +149,4 @@ function deriveKey(secret: string): Promise<{ keyId: string; key: CryptoKey }> {
 
 function utf8(value: string): Uint8Array<ArrayBuffer> {
   return new TextEncoder().encode(value);
-}
-
-function unbase64url(value: string): Uint8Array<ArrayBuffer> {
-  const binary = atob(value.replace(/-/g, '+').replace(/_/g, '/'));
-  const bytes = new Uint8Array(binary.length);
-
-  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-
-  return bytes;
 }
