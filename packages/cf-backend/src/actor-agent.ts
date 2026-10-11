@@ -507,18 +507,13 @@ class HeldRead<A> {
   #held: Promise<A> | null = null;
 
   get(read: () => Promise<A>): Promise<A> {
-    const held = this.#held;
+    const held = this.#held ?? read();
 
-    if (held !== null) return held;
-    const reading = read();
+    this.#held = held;
 
-    this.#held = reading;
-
-    return reading.then(undefined, () => {
-      if (this.#held === reading) this.#held = null;
-
-      return reading;
-    });
+    return settle(attempt({ doing: 'reading what the account says', otherwise: 'unavailable' }, () => held).pipe(Effect.tapError(() => Effect.sync(() => {
+      if (this.#held === held) this.#held = null;
+    }))));
   }
 
   drop(): void {
