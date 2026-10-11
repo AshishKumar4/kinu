@@ -859,6 +859,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       prepareChat: async (request) => {
         this.admitWork();
 
+        // A turn opens: the account's reads are read again once, at its first need.
+        if (request.turnId !== null) this.accountReadsExpire();
+
         return await this.agentTurns.prepareChat(actorId, request);
       },
       bindProfile: async (turnId, profile) => {

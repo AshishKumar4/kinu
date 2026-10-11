@@ -502,6 +502,30 @@ export interface ProgramToolsetOptions {
   readonly ledgers?: TurnLedgers;
 }
 
+/** One read held until dropped; a failed read is not held, so the next need asks again. */
+class HeldRead<A> {
+  #held: Promise<A> | null = null;
+
+  get(read: () => Promise<A>): Promise<A> {
+    const held = this.#held;
+
+    if (held !== null) return held;
+    const reading = read();
+
+    this.#held = reading;
+
+    return reading.then(undefined, () => {
+      if (this.#held === reading) this.#held = null;
+
+      return reading;
+    });
+  }
+
+  drop(): void {
+    this.#held = null;
+  }
+}
+
 export abstract class ActorAgent extends Agent<Env> {
   // Actor profile: these members are the whole difference between actor kinds.
 
@@ -1045,11 +1069,11 @@ export abstract class ActorAgent extends Agent<Env> {
     getOwnerUserId: () => this.getOwnerUserId(),
     getUserCaller: () => this.userCaller(),
     // Asked of the same UserDO the registry reads, so a missed fan-out notification self-heals.
-    getCredentialsRevision: async () => {
+    getCredentialsRevision: () => this.heldRevision.get(async () => {
       const { stub, caller } = await this.userHub();
 
       return stub.getCredentialsRevision(caller);
-    },
+    }),
     onProviderWait: (info) => { this.noteProviderWait(info); },
     accountFor: (provider) => this.config.getProviderAccounts()[provider]
       ?? this.workspaceAgentHosted()?.session.profileInputs?.envelope.catalog.accounts?.[provider],
@@ -3400,10 +3424,27 @@ export abstract class ActorAgent extends Agent<Env> {
     });
   }
 
-  protected async profileCatalog(): Promise<ProfileCatalogEnvelope> {
-    const { stub, caller } = await this.userHub();
+  protected profileCatalog(): Promise<ProfileCatalogEnvelope> {
+    return this.heldCatalog.get(async () => {
+      const { stub, caller } = await this.userHub();
 
-    return stub.getWorkspaceProfileCatalog(caller);
+      return stub.getWorkspaceProfileCatalog(caller);
+    });
+  }
+
+  /**
+   * The account's reads a turn makes, held under their refresh rule (design v2 §3): read once a turn, at its first need,
+   * and dropped as a turn opens (`accountReadsExpire`) and as the account says its settings changed. A workspace at rest
+   * holds none past its next turn's open, so an edit the account did not fan out to it is read then.
+   */
+  private readonly heldRevision = new HeldRead<number>();
+
+  private readonly heldCatalog = new HeldRead<ProfileCatalogEnvelope>();
+
+  /** A turn opens: what the account said before it is read again at its first need. */
+  protected accountReadsExpire(): void {
+    this.heldRevision.drop();
+    this.heldCatalog.drop();
   }
 
   protected resolvedTurnProfile(): ResolvedTurnProfile | null {
@@ -4550,6 +4591,7 @@ export abstract class ActorAgent extends Agent<Env> {
     // Also drops the provider registry (caches per-agent OAuth refreshers) so a disconnected
     // provider stops being marked available.
     this.ownedModelServices.invalidate();
+    this.accountReadsExpire();
   }
 
   // All credentials live in UserDO; providers resolve auth headers through the UserDO stub at
