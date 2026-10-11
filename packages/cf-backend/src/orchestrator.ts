@@ -17,7 +17,7 @@ import {
   runExperienceAction, type ExperienceActionDeps, type ExperienceActionInput,
   ArchiveCursorSchema,
   createWorkspaceForkSink, createWorkspaceForkSource, workspaceSoul, workspaceArchiveStore, writeWorkspaceSoul,
-  explorationActorKey, collectDynamicContext, subordinateDelegatesOf,
+  explorationActorKey, collectDynamicContext, subordinateDelegatesOf, writesSnapshotRows,
   HeadController, REAL_CLOCK, runHeadSplit, SubordinateRosterStore,
   EventLog, actorReferenceOf, subordinateDescendants, TEMPORARY_LIFETIME,
   artifactOverrides, currentArtifacts,
@@ -37,7 +37,6 @@ import {
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { agentFacet, agentStateShellId, AgentMemory, AgentStoreBroker, AgentWorkspaceHost, headDeltas, jsonLines, uiChunks, type AgentFacetPlacement } from "./agent-facets";
-import { writesSnapshotRows } from "./snapshot-rows";
 import type { AnswerMetadataReply } from "./agent-facet/agent-turn";
 import { ActorCapabilities } from "./actor-capabilities";
 import { DrawnStepSchema } from "./chat-transport";
@@ -753,30 +752,43 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private _heldSnapshots: Map<string, Omit<AgentSnapshot, 'order'>> | undefined;
 
   agentSnapshot(actorId: string): AgentSnapshot {
-    this._heldSnapshots ??= new Map();
-    const held = this._heldSnapshots.get(actorId) ?? this.readSnapshot(actorId);
+    const heldSnapshots = this._heldSnapshots ?? new Map<string, Omit<AgentSnapshot, 'order'>>();
+    const known = heldSnapshots.get(actorId);
+    const read = known === undefined ? this.readSnapshot(actorId) : Effect.succeed(known);
 
-    this._heldSnapshots.set(actorId, held);
+    this._heldSnapshots = heldSnapshots;
 
-    return { ...held, order: { activation: this.snapshotActivation, seq: ++this.snapshotSeq } };
+    return settleSync(read.pipe(Effect.map((held) => {
+      heldSnapshots.set(actorId, held);
+
+      return { ...held, order: { activation: this.snapshotActivation, seq: ++this.snapshotSeq } };
+    })));
   }
 
-  private readSnapshot(actorId: string): Omit<AgentSnapshot, 'order'> {
-    const agent = this.agentOf(actorId);
-    const lineage: StoredRow[] = [];
+  private readSnapshot(actorId: string): Effect.Effect<Omit<AgentSnapshot, 'order'>, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const agent = this.agentOf(actorId);
+      const lineage: StoredRow[] = [];
 
-    // Each row names its parent: the walk reads one row a hop.
-    for (let step: string | null = actorId; step !== null;) {
-      const row: StoredRow | undefined = this.ctx.storage.sql.exec<StoredRow>('SELECT * FROM workspace_actors WHERE actor_id = ?', step).toArray()[0];
+      // Each row names its parent: the walk reads one row a hop.
+      for (let step: string | null = actorId; step !== null;) {
+        const row: StoredRow | undefined = this.ctx.storage.sql.exec<StoredRow>('SELECT * FROM workspace_actors WHERE actor_id = ?', step).toArray()[0];
 
-      if (row === undefined) return settleSync(Effect.fail(new KinuError('missing', `Agent ${actorId} has an ancestor the roster does not hold.`)));
-      lineage.unshift(row);
-      step = v.parse(v.nullable(v.string()), row.parent_actor_id);
-    }
+        if (row === undefined) return yield* Effect.fail(new KinuError('missing', `Agent ${actorId} has an ancestor the roster does not hold.`));
+        lineage.unshift(row);
+        step = v.parse(v.nullable(v.string()), row.parent_actor_id);
+      }
 
-    const identity = this.ctx.storage.sql.exec<StoredRow>('SELECT * FROM workspace_identity').toArray()[0];
+      const identity = this.ctx.storage.sql.exec<StoredRow>('SELECT * FROM workspace_identity').toArray()[0];
 
-    if (identity === undefined) return settleSync(Effect.fail(new KinuError('missing', 'The workspace has no durable identity to hand an agent.')));
+      if (identity === undefined) return yield* Effect.fail(new KinuError('missing', 'The workspace has no durable identity to hand an agent.'));
+
+      return this.snapshotRows(agent, lineage, identity);
+    });
+  }
+
+  private snapshotRows(agent: ReturnType<OrchestratorAgent['agentOf']>, lineage: StoredRow[], identity: StoredRow): Omit<AgentSnapshot, 'order'> {
+    const { actorId } = agent;
 
     const config = this.ctx.storage.sql.exec<StoredRow>(
       `SELECT * FROM actor_config WHERE actor_id IN (${lineage.map(() => '?').join(', ')})`, ...lineage.map((row) => row.actor_id),
