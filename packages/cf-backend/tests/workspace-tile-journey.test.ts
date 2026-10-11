@@ -86,14 +86,16 @@ describe("a workspace's tile on its owner's home", () => {
       await agent.installWorkspaceCapability('workspace-capability-token');
       await until(() => last()?.awaitsSettings === false, 'the first quiet settings-wait tile lands');
 
-      await agent.agentWorkspace(main).owes(null, true);
+      const reportedWork = await agent.agentWorkspace(main);
+
+      await reportedWork.owes(null, true);
       await until(() => last()?.awaitsSettings === true, 'a real owed-work report updates the owner');
       const reported = tiles.items.length;
 
-      await agent.agentWorkspace(main).owes(null, true);
+      await reportedWork.owes(null, true);
       await settled();
       expect(tiles.items).toHaveLength(reported);
-      await agent.agentWorkspace(main).owes(null, false);
+      await reportedWork.owes(null, false);
       await until(() => last()?.awaitsSettings === false, 'the cleared owed-work report updates the owner');
 
       // A prior activation's own effect ledger retained this refusal; the live idle fold must read it.

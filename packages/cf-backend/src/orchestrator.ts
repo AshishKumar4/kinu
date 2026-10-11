@@ -5670,10 +5670,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const inputs = await this.overviewInputs();
 
     const hostedBusy = this.actorHost().list().some((reference) => this.hostedTurnInFlight(reference));
-
-    const header = (await this.mainStanding()).latestRun;
+    const main = this.actorHandle().actorId;
+    // A tile is a stored projection, not a reason to open main's isolate. Handover is live even before a host is cached.
+    const header = this.config.getHoldsTurns() ? this.agentBound(main).stores.eventRecorder.latestRunHeader() : null;
     // A settled turn's leftovers still closing are its work, not a durable leftover.
-    const working = this._inFlight || hostedBusy || this.terminal.closing;
+    const working = this._inFlight || this.agentTurns.inFlight(main) || hostedBusy || this.terminal.closing;
 
     return buildWorkspaceOverview({
       ...inputs,
