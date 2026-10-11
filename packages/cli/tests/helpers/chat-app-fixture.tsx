@@ -84,7 +84,7 @@ interface FakeClientOptions {
 
 export function fakeClient(options: FakeClientOptions) {
   const listeners = new Set<(event: AgentClientEvent) => void>();
-  const state = { closed: 0 };
+  const state = { closed: 0, connected: 0 };
   let evolution: EvolutionConfigView = { ...EVOLUTION };
   let shellApprovalHandler: Parameters<LocalSessionControls['setShellApprovalHandler']>[0] = null;
   const mode = options.mode ?? 'local';
@@ -120,7 +120,10 @@ export function fakeClient(options: FakeClientOptions) {
     inlineAttachmentLimitBytes: 1024,
     planes: null,
     fileLinks: { roots: [], href: () => null },
-    connect: options.connect ?? (async () => {}),
+    connect: async () => {
+      await options.connect?.();
+      state.connected += 1;
+    },
     subscribe: (listener) => {
       listeners.add(listener);
 
@@ -289,6 +292,7 @@ export async function mountChat(
       await nextFrame(what);
       await new Promise<void>((resolve) => { process.nextTick(resolve); });
     }
+
   };
 
   const composerFocused = () => renderer.currentFocusedRenderable instanceof TextareaRenderable;

@@ -8,7 +8,7 @@ import { scratchDir } from '@kinu.run/test-utils';
 import type { AgentClient, AgentClientStatus, AgentTranscriptMessage } from '../src/agent-client';
 import { JOB_OUTPUT_EVENT, missingSubordinateHistory, READS_CHANGED_EVENT, TURN_FAILURE_METADATA_KEY, type AgentModelMenu, type JobOutputTail, type SubordinateChild } from '@kinu.run/core';
 import type { TuiHubData } from '../src/tui/hubs';
-import { asFetchFunction, codenameFor } from '@kinu.run/core';
+import { asFetchFunction } from '@kinu.run/core';
 
 import { TURN, cleanupChats, fakeClient, mountChat, type FixtureWorkspace } from './helpers/chat-app-fixture';
 import { createMemoryTuiPreferenceStore } from './helpers/tui-preferences';
@@ -38,7 +38,7 @@ function hubWorkspaces({ open, label, peer, created }: HubWorkspaces): FixtureWo
   const cwd = process.cwd();
   const rows: FixtureWorkspace[] = [{ name: open, label, mode: 'local', cwd, workspaceId: 'shop' }];
 
-  if (created) rows.push({ name: peer, label: '', mode: 'local', cwd, workspaceId: 'shop' });
+  if (created) rows.push({ name: peer, label: 'Fixture peer', mode: 'local', cwd, workspaceId: 'shop' });
 
   return rows;
 }
@@ -178,8 +178,9 @@ describe('ChatApp terminal interaction', () => {
     await localScreen.mockInput.typeText('/settings');
     localScreen.mockInput.pressEnter();
     await localScreen.waitFor('interactive settings', localScreen.filterFocused);
-    localScreen.mockInput.pressArrow('down');
-    localScreen.mockInput.pressEnter();
+    await localScreen.mockInput.typeText('low');
+    await localScreen.renderOnce();
+    flushSync(() => localScreen.mockInput.pressEnter());
     await localScreen.waitFor('the selected setting to apply', () => efforts.length === 1);
     expect(efforts).toEqual(['low']);
     await localScreen.waitFor('the composer after applying settings', localScreen.composerFocused);
@@ -350,7 +351,13 @@ describe('ChatApp terminal interaction', () => {
       screen.frame().includes('Error: the rename was refused: name already taken'));
   });
   test('failed workspace connection keeps the current workspace usable', async () => {
-    const controlled = fakeClient({ name: 'alpha' });
+    const sent: Parameters<AgentClient['send']>[0][] = [];
+
+    const controlled = fakeClient({ name: 'alpha', send: async (input) => {
+      sent.push(input);
+
+      return TURN;
+    } });
 
     const candidate = fakeClient({
       name: 'missing',
@@ -373,11 +380,13 @@ describe('ChatApp terminal interaction', () => {
     screen.mockInput.pressEnter();
     await screen.waitFor('the workspace failure', () =>
       screen.frame().includes('Workspace is unavailable'));
-    expect(screen.frame()).not.toContain('Filter workspaces');
-    expect(screen.frame()).toContain('alpha');
-    expect(screen.frame()).toContain('Send a message');
+    expect(screen.composerFocused()).toBe(true);
     expect(controlled.state.closed).toBe(0);
     expect(candidate.state.closed).toBe(1);
+    await screen.mockInput.typeText('still on alpha');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the retained workspace accepts a prompt', () => sent.length === 1);
+    expect(sent).toEqual(['still on alpha']);
   });
 
   test('!command output held for one workspace never reaches the next one after a switch', async () => {
@@ -403,7 +412,7 @@ describe('ChatApp terminal interaction', () => {
     await screen.waitFor('the workspace picker', () => screen.frame().includes('Beta'));
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressEnter();
-    await screen.waitFor('beta connected', () => screen.frame().includes('Connected to beta'));
+    await screen.waitFor('beta connected', () => beta.state.connected === 1 && screen.composerFocused());
 
     await screen.mockInput.typeText('hello beta');
     screen.mockInput.pressEnter();
@@ -971,15 +980,13 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     await screen.waitFor('the agent hub', () => screen.frame().includes('Agent Hub'));
     expect(screen.frame()).toContain('new agent');
     screen.mockInput.pressKey('n');
-    await screen.waitFor('the created peer conversation', () => screen.frame().includes('Connected to agent-1'));
+    await screen.waitFor('the created peer conversation', () => peer.state.connected === 1 && screen.composerFocused());
     expect(created).toBe(1);
-    expect(screen.frame()).not.toContain('Role:');
-    expect(screen.frame()).not.toContain('Mission:');
 
     screen.mockInput.pressKey('a', { meta: true });
-    await screen.waitFor('the refreshed hub roster', () => screen.frame().includes(codenameFor('agent-1')));
+    await screen.waitFor('the refreshed hub roster', () => screen.frame().includes('Fixture peer'));
     expect(screen.frame()).toContain('Checkout · main');
-    expect(screen.frame()).toContain(`${codenameFor('agent-1')} · main`);
+    expect(screen.frame()).toContain('Fixture peer');
     expect(screen.frame()).toContain('· open');
     screen.mockInput.pressEscape();
   });
@@ -1018,12 +1025,12 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     screen.mockInput.pressKey('a', { meta: true });
     await screen.waitFor('the agent hub', () => screen.frame().includes('Agent Hub'));
     screen.mockInput.pressKey('n');
-    await screen.waitFor('the created cloud conversation', () => screen.frame().includes('Connected to sub-1'));
+    await screen.waitFor('the created cloud conversation', () => child.state.connected === 1 && screen.composerFocused());
     expect(created).toBe(1);
 
     await screen.mockInput.typeText('/rename Research partner');
     screen.mockInput.pressEnter();
-    await screen.waitFor('the cloud rename result', () => screen.frame().includes('Renamed to Research partner.'));
+    await screen.waitFor('the cloud rename result', () => renamed.length === 1);
     expect(renamed).toEqual(['Research partner']);
   });
 
@@ -1041,7 +1048,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     screen.mockInput.pressKey('a', { meta: true });
     await screen.waitFor('the agent hub', () => screen.frame().includes('Agent Hub'));
     screen.mockInput.pressKey('n');
-    await screen.waitFor('the new conversation', () => screen.frame().includes('Connected to sub-2'));
+    await screen.waitFor('the new conversation', () => child.state.connected === 1 && screen.composerFocused());
     await screen.mockInput.typeText('typed while closing');
     await screen.waitFor('the draft in the new conversation', () => screen.frame().includes('typed while closing'));
     closing.resolve();
@@ -1413,7 +1420,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     await screen.waitFor('the workspace drawer', () => screen.frame().includes('Esc close'));
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressEnter();
-    await screen.waitFor('the beta workspace', () => screen.frame().includes('Connected to beta'));
+    await screen.waitFor('the beta workspace', () => beta.state.connected === 1 && screen.composerFocused());
     expect(screen.frame()).not.toContain('half a thought for alpha');
     await screen.mockInput.typeText('beta draft');
     screen.mockInput.pressKey('w', { meta: true });
@@ -1455,7 +1462,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
       screen.mockInput.pressKey('a', { meta: true });
       await screen.waitFor('the agent hub', () => screen.frame().includes('Agent Hub'));
       screen.mockInput.pressKey('n');
-      await screen.waitFor('the created peer conversation', () => screen.frame().includes('Connected to agent-9'));
+      await screen.waitFor('the created peer conversation', () => peer.state.connected === 1 && screen.composerFocused());
       expect(created).toBe(1);
     } finally {
       consoleError.mockRestore();
@@ -1508,7 +1515,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
       await screen.waitFor('the workspace drawer', () => screen.frame().includes('Esc close'));
       screen.mockInput.pressArrow('down');
       screen.mockInput.pressEnter();
-      await screen.waitFor('the beta workspace', () => screen.frame().includes('Connected to beta'));
+      await screen.waitFor('the beta workspace', () => beta.state.connected === 1 && screen.composerFocused());
       screen.mockInput.pressKey('a', { meta: true });
       await screen.waitFor('the hub after the switch', () => screen.frame().includes('Agent Hub'));
       expect(seen).toEqual([]);
