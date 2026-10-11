@@ -3,7 +3,7 @@
 import { describe, expect, test } from 'bun:test';
 import { carryKeyed, keyedHost, type CarriedSocket, type UpgradableSocket } from '../src/egress/keyed-socket';
 
-const KEY = Uint8Array.from({ length: 16 }, (_, at) => 0xa0 + at);
+const KEY = Uint8Array.of(0xa0, 0x32, 0xeb, 0x49, 0x04, 0xc7, 0x91, 0x55, 0xe2, 0x0d, 0x72, 0xaa, 0x08, 0xdf, 0x64, 0xb3);
 
 const text = (bytes: Uint8Array): string => new TextDecoder().decode(bytes);
 
