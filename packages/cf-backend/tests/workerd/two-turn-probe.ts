@@ -1009,18 +1009,24 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
   }
 
   /** A 500-delta turn after twenty answers of `priorDeltas` deltas, counted in the production orchestrator's own
-   *  SQLite and transcript reads, from enqueue to its sleep-time settle. */
+   *  SQLite and transcript reads, from enqueue to its sleep-time settle. The subject is Kinu's storage cost, not the
+   *  model: every lane, the background memory pass included, runs on the scripted model (the tiers' scripted-model
+   *  provider, scripts/tier-model.ts), so the rows the pass writes are deterministic. The Workers AI binding's own
+   *  behavior is measured by the suites whose subject it is. */
   async longTurnCost(priorDeltas: number): Promise<{ cost: OperationCost; historyReads: number }> {
     const workspace = `long-cost-${String(priorDeltas)}-${crypto.randomUUID()}`;
     const target: QueueTarget = await this.queueTarget(workspace);
     const caller = await ownerCaller(this.env);
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName('long-owner'));
-    await userDO.registerWorkspace(caller, workspace, 'Long');
+    await userDO.registerWorkspace(caller, workspace, 'Long', { nameOrigin: 'user' });
     const claim = await target.claimOwner('long-owner');
     await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
     await userDO.setCredential(caller, 'openai-compat.default', {
       kind: 'openai-compat', baseURL: 'http://fake-models.invalid/v1', apiKey: 'probe-fixture-key',
     });
+    const catalog = await userDO.getProfileCatalog(caller);
+
+    await userDO.putProfileCatalog(caller, { roles: {}, tiers: { default: { model: 'openai-compat/probe-long' }, fast: { model: 'openai-compat/probe-long' } } }, catalog.version);
     await target.setModel('openai-compat/probe-long');
     await this.httpReset();
     const recording = createWorkspaceRecording();
@@ -1043,10 +1049,10 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     await awaitSleepTimeSettled(recording, workspace, 21);
     await awaitSettled(target);
 
-    // A lost binding call fails the sleep-time pass, retried by its owed effect inside the window: a fixture fault, never a cost.
+    // A lost model call fails the sleep-time pass, retried by its owed effect inside the window: a fixture fault, never a cost.
     const lost = recording.of(workspace).filter((event) => event.event === 'memory.fact_compression_failed');
 
-    if (lost.length > 0) throw new Error(`long cost: the AI binding lost ${String(lost.length)} call(s): ${lost[0]?.cause ?? ''}`);
+    if (lost.length > 0) throw new Error(`long cost: the scripted model lost ${String(lost.length)} call(s): ${lost[0]?.cause ?? ''}`);
 
     return await target.meterEnd();
   }

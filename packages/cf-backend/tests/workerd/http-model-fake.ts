@@ -1,4 +1,5 @@
 import * as v from 'valibot';
+import { SLEEP_TIME_PROMPT_OPENING } from '../../../core/src/utils/prompt-sections';
 import { KILL_FILE, WAKE_MARKER, WakeHoldPlacementSchema, type CallRecord, type KillPoint, type WakeHoldPlacement } from './two-turn-shapes';
 import { aiLane, type AiRun } from '../helpers/workers-ai-binding';
 import { WORKERS_AI_MODELS_DEV } from '@kinu.run/test-utils/models-dev';
@@ -406,6 +407,12 @@ async function wakeBody(body: OutboundBody): Promise<Response> {
 
 function longBody(body: OutboundBody): Response {
   const users = (body.messages ?? []).filter((m) => m.role === 'user').map((m) => textOf(m.content));
+
+  // The background memory lane, scripted as the tiers' scripted model answers it (scripts/tier-model.ts): no change.
+  if (users[0]?.startsWith(SLEEP_TIME_PROMPT_OPENING) === true) {
+    return sseResponse([sseChunk({ content: JSON.stringify({ upserts: [], decay: [] }) }), sseChunk({ role: 'assistant' }, 'stop'), sseDone()]);
+  }
+
   const spec = users.filter((u) => u.startsWith('long:')).at(-1) ?? 'long:100';
   const deltas = Number.parseInt(spec.slice('long:'.length), 10);
   const chunks: string[] = [];

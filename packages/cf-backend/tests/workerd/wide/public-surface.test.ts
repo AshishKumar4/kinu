@@ -58,6 +58,14 @@ function rpcRequest(id: string, method: string, args: readonly JsonValue[]): str
   return JSON.stringify({ type: 'rpc', id, method, args: [...args] });
 }
 
+/** Titling and learning are not what these tests measure: the owner turns them off through the product's own calls, so no model quota is spent on them. */
+async function quietReflection(pane: Pane, name: string): Promise<void> {
+  pane.send(rpcRequest('quiet-name', 'setDisplayName', [name]));
+  await pane.rpc('quiet-name', v.object({ displayName: v.string() }));
+  pane.send(rpcRequest('quiet-learning', 'setEvolutionConfig', [{ learning: false }]));
+  await pane.rpc('quiet-learning', v.object({ learning: v.boolean() }));
+}
+
 /** By the SDK's own constant, so a rename there is a compile error rather than a silent hang. */
 function chatRequest(id: string, text: string): string {
   return JSON.stringify({
@@ -257,6 +265,8 @@ describe('the public surface, driven inside the pool', () => {
     });
 
     // Asserted by containment because the deployment normalizes a spec; a substitution would answer from another lane.
+    socket.send(rpcRequest('quiet-name', 'setDisplayName', [PROMPT]));
+    socket.send(rpcRequest('quiet-learning', 'setEvolutionConfig', [{ learning: false }]));
     socket.send(rpcRequest('pin', 'setModel', [PINNED_MODEL]));
     expect(v.parse(SetModelSchema, await pinned.promise).spec).toContain(PINNED_MODEL);
 
@@ -302,6 +312,7 @@ describe('two panes on one workspace object are two chat rooms', () => {
     const rootPath = `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(created.name)}`;
     const root = await openPane(rootPath);
 
+    await quietReflection(root, 'Pool Two Panes');
     root.send(rpcRequest('pin', 'setModel', [PINNED_MODEL]));
     expect((await root.rpc('pin', SetModelSchema)).spec).toContain(PINNED_MODEL);
 
@@ -351,6 +362,7 @@ async function workspaceWithTwoChats(name: string): Promise<{ rootPath: string; 
   const rootPath = `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(created.name)}`;
   const root = await openPane(rootPath);
 
+  await quietReflection(root, name);
   root.send(rpcRequest('pin', 'setModel', [PINNED_MODEL]));
   expect((await root.rpc('pin', SetModelSchema)).spec).toContain(PINNED_MODEL);
   root.send(rpcRequest('hire', 'createSubordinateAgent', []));
