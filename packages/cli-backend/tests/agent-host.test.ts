@@ -16,6 +16,7 @@ import * as v from 'valibot';
 import {
   BackgroundJobStore,
   backgroundJobWakeTrigger,
+  MAX_CONCURRENT_DETACHED_JOBS,
   openWorkspaceMainActor, SubordinateRosterStore,
   createTimerTrigger,
   initWorkspaceSchema,
@@ -149,6 +150,52 @@ function gatedFirstModel(): GatedModel {
   });
 
   return { model, started, release, calls: () => callCount };
+}
+
+/** The words a hire's held re-drive searches for: its nodes' model calls wait until the host closes. */
+const HELD_SEARCH = 'held search the hire is re-driving';
+
+/** The words the root's own search is asked with. */
+const ROOT_SEARCH = 'a quick search of the root';
+
+/**
+ * A model under which the root asks for a swarm search and every node answers at once, except a node of the hire's held
+ * search, whose call waits for the abort that closes its host.
+ */
+function heldSearchModel() {
+  const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+
+  return new TestLanguageModelV2({
+    provider: 'fake',
+    modelId: 'fake-model',
+    doStream: async (options) => {
+      const prompt = JSON.stringify(options.prompt);
+
+      if (prompt.includes(HELD_SEARCH)) {
+        await new Promise<never>((_resolve, reject) => {
+          options.abortSignal?.addEventListener('abort', () => { reject(new Error('the host closed')); });
+        });
+      }
+
+      // The root's own turn: its last message is the owner's ask, word for word; a node's names the task among more.
+      const last = options.prompt.at(-1);
+      const asked = last?.role === 'user' && last.content.some((part) => part.type === 'text' && part.text === ROOT_SEARCH);
+
+      const stream = asked ? new ReadableStream<LanguageModelV2StreamPart>({
+        start(controller) {
+          controller.enqueue({ type: 'stream-start', warnings: [] });
+          controller.enqueue({
+            type: 'tool-call', toolCallId: 'call-root-search', toolName: 'agents',
+            input: JSON.stringify({ op: 'swarm', task: ROOT_SEARCH, preset: 'ideate', branches: 1, depth: 1 }),
+          });
+          controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+          controller.close();
+        },
+      }) : textStream('ok', usage);
+
+      return { stream, response: { headers: {} } };
+    },
+  });
 }
 
 /** A subordinate that files a terminal `completed` report; the status must be the child's own word. */
@@ -736,6 +783,54 @@ describe('LocalAgentHost', () => {
       }
     });
   }
+
+  test('a hire\'s held re-drive counts against its root\'s job cap in one process, so the root\'s next search stays foreground', async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+    const refs = [{ name: 'root', cwd: project, workspaceId: 'proj' }];
+    const model = heldSearchModel();
+    const first = makeHost(state, model, refs);
+
+    await (await first.host.team('root')).create({ name: 'helper' });
+    await first.host.close();
+
+    const { host } = makeHost(state, model, refs);
+    const outcomes: string[] = [];
+
+    host.subscribe((agent, event) => {
+      if (agent === 'root' && event.type === 'background' && (event.event === 'bg_job_started' || event.event === 'bg_job_refused')) outcomes.push(event.event);
+    });
+
+    try {
+      const root = await host.acquire('root');
+      const db = workspaceDatabase(dbPath);
+      const sql = makeSql(db);
+      const rootId = openWorkspaceMainActor(sql).actorId;
+      const hire = db.query<{ actor_id: string }, []>('SELECT actor_id FROM workspace_actors WHERE parent_actor_id IS NOT NULL').get();
+
+      if (hire === null) throw new Error('the hire was not created');
+      // Interrupted long ago: re-driven, its next attempt is a minute out, and it is live work all that minute.
+      const input = JSON.stringify({ op: 'swarm', preset: 'ideate', task: HELD_SEARCH, branches: 1, depth: 1 });
+
+      db.query(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at, resume_attempts)
+        VALUES (?, 'bgjob-held', 'agents', 'build', 'running', ?, 1, 6)`).run(hire.actor_id, input);
+      db.query(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES (?, 'f-held', 'bg:agents', ?, 1)`)
+        .run(hire.actor_id, JSON.stringify({ phase: 'running', jobId: 'bgjob-held', kind: 'agents' }));
+      await host.acquire('root/helper');
+
+      for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS - 1; i++) {
+        db.query(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, created_at) VALUES (?, ?, 'shell', 'build', 'running', 1)`)
+          .run(rootId, `busy-${i}`);
+      }
+
+      db.close();
+      await root.send(ROOT_SEARCH, { id: crypto.randomUUID() });
+
+      expect(outcomes).toEqual(['bg_job_refused']);
+    } finally {
+      await host.close();
+    }
+  });
 
   test('a cli durable hire retains its working conversation after a cold restore', async () => {
     const { state, project } = makeRoots();
