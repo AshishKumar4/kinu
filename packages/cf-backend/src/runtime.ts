@@ -29,7 +29,7 @@ export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
 import { diagnostics, toKinuError, detach } from "@kinu.run/core/obs";
 import { Effect } from 'effect';
-import { kinuEgressParams } from "./egress/configure";
+import { kinuEgressParams, ownerEgressVault } from "./egress/configure";
 import { BOX_SIZES, BOX_SIZE_ORDER, DEFAULT_BOX_SIZE, type BoxSize } from "@kinu.run/devbox/sizes";
 import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from "./sandbox-size";
 import { driveBound, tenantDrive } from "./drive/tenant";
@@ -143,18 +143,10 @@ function userDOStubFor(env: Env, actor: ActorRuntimeIdentity): RuntimeUserDOClie
  *  strip every injectable secret for the handle's life. */
 async function listOwnerEgressVault(
   env: Env, actor: ActorRuntimeIdentity,
-): Promise<EgressSecretBinding[]> {
+): Promise<readonly EgressSecretBinding[]> {
   const userId = actor.ownerUserId();
 
-  if (!userId) return [];
-  // Used, never copied (see `userDOStubFor`).
-  const vault: EgressVaultClient = env.UserDO.get(env.UserDO.idFromName(userId));
-
-  return [...await vault.listEgressSecrets(await ownerCaller(env))];
-}
-
-interface EgressVaultClient {
-  listEgressSecrets(caller: UserCaller): Promise<readonly EgressSecretBinding[]>;
+  return userId ? await ownerEgressVault(env, userId) : [];
 }
 
 async function ownerSandboxSize(env: Env, actor: ActorRuntimeIdentity): Promise<BoxSize | null> {

@@ -7,8 +7,11 @@
 
 import {
   grantedEgressBindings,
+  ownerCaller,
   type ApprovalGrant,
   type EgressSecretBinding,
+  type OwnerCapabilityEnv,
+  type UserCaller,
 } from '@kinu.run/core';
 import type { KinuEgressParams } from './outbound';
 
@@ -26,4 +29,18 @@ export function kinuEgressParams(input: EgressConfigurationInput): KinuEgressPar
     // Ungranted bindings never reach the handler, so the container never learns their placeholders: consent gates visibility.
     bindings: grantedEgressBindings(input.vault, input.grants),
   };
+}
+
+interface EgressVaultClient {
+  listEgressSecrets(caller: UserCaller): Promise<readonly EgressSecretBinding[]>;
+}
+
+/** The owner's egress secrets, as bindings carrying no secret material; an unreadable vault rejects. */
+export async function ownerEgressVault(
+  env: OwnerCapabilityEnv & Pick<Env, 'UserDO'>, ownerUserId: string,
+): Promise<readonly EgressSecretBinding[]> {
+  // Used, never copied (see `userDOStubFor`).
+  const vault: EgressVaultClient = env.UserDO.get(env.UserDO.idFromName(ownerUserId));
+
+  return await vault.listEgressSecrets(await ownerCaller(env));
 }

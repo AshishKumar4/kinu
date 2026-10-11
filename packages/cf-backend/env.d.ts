@@ -7,6 +7,7 @@ import type { ControlPlaneDO } from "./src/control-plane/control-plane-do";
 import type { DeployRunDO } from "./src/deploy/deploy-do";
 import type { CodemodeEgress } from "./src/codemode-egress";
 import type { CodemodeLauncher } from "./src/codemode-sandbox";
+import type { KinuEgress } from "./src/server";
 import type { AgentWorkspaceRPC } from "./src/agent-facets";
 import type { SlateBinding } from "./src/slates/bindings";
 import type { MossaicShardDO, MossaicUserDO } from "./src/server";
@@ -146,6 +147,7 @@ declare global {
         AgentWorkspaceRPC: typeof AgentWorkspaceRPC;
         CodemodeEgress: typeof CodemodeEgress;
         CodemodeLauncher: typeof CodemodeLauncher;
+        KinuEgress: typeof KinuEgress;
         SlateBinding: typeof SlateBinding;
         default: ExportedHandler<Env>;
       };

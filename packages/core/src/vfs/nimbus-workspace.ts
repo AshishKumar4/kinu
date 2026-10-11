@@ -227,6 +227,11 @@ export interface WorkspaceOptions {
   fabric?: FabricComposition;
   /** Remote runtime catalog (e.g. R2); names it can satisfy become install-on-first-use stubs. */
   runtimeSource?: RuntimeSource;
+  /**
+   * Where every request and socket the workspace's commands and programs make goes out (`NimbusWorkspaceOptions.egress`),
+   * asked once as the workspace opens. Absent, or answering none, they use the isolate's own network.
+   */
+  egress?: () => Promise<NimbusCreation['egress']>;
 }
 
 /** Returns synchronously; the workspace boots lazily on its first operation. */
@@ -266,6 +271,10 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
     if (opts.runtimeFacets !== undefined) creation = { ...creation, facets: opts.runtimeFacets };
 
     if (opts.runtimeSource !== undefined) creation = { ...creation, runtimeSource: opts.runtimeSource };
+
+    const egress = await opts.egress?.();
+
+    if (egress !== undefined) creation = { ...creation, egress };
 
     const workspace = await shellOver(creation);
 
