@@ -1241,7 +1241,7 @@ export const PLATFORM_CATALOG = {
     trigger: 'connect() to localhost, or to a name resolving to 127/8, 10/8, 192.168/16 or 169.254/16',
     onBreach: 'the socket is refused at open; nothing is sent',
     observable: [{ context: 'socket.opened rejects', message: 'proxy request failed, cannot connect to the specified address' }],
-    firstPartySignal: false,
+    firstPartySignal: true,
     notes:
       'The resolved address is judged, not only a literal: 127.0.0.1.nip.io:22, 10.0.0.1.nip.io:22, 192.168.1.1.nip.io:5432 '
       + 'and 169.254.169.254.nip.io:8080 were refused while github.com:22 opened. Documented for addresses at '
@@ -1264,7 +1264,7 @@ export const PLATFORM_CATALOG = {
       { context: 'name resolving to a private address', message: 'error code: 1002' },
       { context: 'localhost or an IP literal', message: 'error code: 1003' },
     ],
-    firstPartySignal: false,
+    firstPartySignal: true,
     notes: '127.0.0.1.nip.io, 10.0.0.1.nip.io and 169.254.169.254.nip.io answered 1002; localhost and 127.0.0.1 answered 1003; '
       + 'example.com answered 200. Miniflare enforces none of it.',
   },

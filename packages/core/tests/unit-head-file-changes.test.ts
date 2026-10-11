@@ -89,6 +89,17 @@ describe('HeadFileChanges — the review a parent gets', () => {
     ]);
   });
 
+  // Nimbus reads only the sides asked for: the head's baseline once, each write's new bytes every time.
+  test('a path the head already holds is not read again for what it replaced', async () => {
+    const { vfs, changes, workspace } = watched({ '/f.ts': 'base\n' });
+    await writeText(vfs, '/f.ts', 'one\n');
+    await writeText(vfs, '/f.ts', 'two\n');
+    await writeText(vfs, '/f.ts', 'three\n');
+    expect(changes.snapshot()).toEqual([{ path: '/f.ts', status: 'changed', added: 1, removed: 1 }]);
+    // The first write's before and after, then each later write's after alone.
+    expect(workspace.reads).toBe(4);
+  });
+
   test('a file written back to what it was is not a change', async () => {
     const { vfs, changes } = watched({ '/f.ts': 'same\n' });
     await writeText(vfs, '/f.ts', 'different\n');

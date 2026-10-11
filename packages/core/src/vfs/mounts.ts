@@ -310,7 +310,7 @@ function movable(files: CompositeVFS): MoveFs {
 
 /**
  * Where an operation on `at` lands, the directories a write would make passing as named: Nimbus's lookup for
- * writeFile({ parents }), links and `..` included (`creating`, patched in until NIMBUS-ASKS #32 ships).
+ * writeFile({ parents }), links and `..` included (`creating`).
  */
 function routeCreating(namespace: CompositeVFS, at: string, follow: boolean): Promise<VfsRoute> {
 	return namespace.route(at, { follow, creating: true });
