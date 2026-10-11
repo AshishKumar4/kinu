@@ -41,7 +41,7 @@ export function Modal({ title, onClose, icon, children, footer, maxWidthClass = 
           <h3 className="text-base font-semibold p-text">{title}</h3>
         </div>
         {children}
-        {footer && <div className="flex justify-end gap-2 pt-1">{footer}</div>}
+        {footer && <div className="flex flex-wrap justify-end gap-2 pt-1">{footer}</div>}
       </div>
     </div>
   );
