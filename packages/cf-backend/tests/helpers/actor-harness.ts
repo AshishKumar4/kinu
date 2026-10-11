@@ -14,7 +14,7 @@ import * as v from 'valibot';
 import { scriptedTurnModel, type ModelStreamPart, type ScriptedTurnOptions, type ScriptedTurnResult } from '@kinu.run/test-utils/turn-model';
 import { convertArrayToReadableStream, MockLanguageModelV4 } from 'ai/test';
 import type { PreparedRequest, ScriptedAnswer, SettledTurn, TurnHarness } from './turn-harness';
-import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, Clock, ModelInfo, ModelRouteResolution, ActorToolsets, ReplyToCommentToolDeps } from '@kinu.run/core';
+import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, Clock, ModelInfo, ModelRouteResolution, ActorToolsets, ActorReach, TurnReach } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { WorkspaceOverview } from '@kinu.run/core';
 import { OwnedModelServices } from '../../src/owned-model-services';
@@ -57,6 +57,7 @@ import {
   TerminalEffectInterrupt,
   type TerminalEffectFault, type TerminalEffectName, type TerminalEffectPhase,
 } from '@kinu.run/core';
+import type { ProgramToolsetOptions } from '../../src/actor-agent';
 import { serveObject } from './programmatic-host';
 import { makeCtx, stubOf } from './platform-context';
 
@@ -242,7 +243,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     const hosted = this.actorHost().list().filter((reference) => this.actorHost().hosted(reference)?.session.inFlight === true
       || this.currentTurnOf(reference) !== null).length;
 
-    return hosted + (this._inFlight || this.actorSession.inFlight ? 1 : 0);
+    return hosted + (this._inFlight ? 1 : 0);
   }
 
   /** Actors whose turn waits inside a task hire: a task helper of theirs is still working. */
@@ -573,11 +574,13 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
     return failure;
   }
-  protected override async mainTaskProfile(turn: HostedTaskTurn, planReply: ReplyToCommentToolDeps | undefined): Promise<HostedTaskProfile> {
+  protected override async turnCapabilities(turn: HostedTaskTurn, reach: TurnReach, scope: ActorReach): Promise<HostedTaskProfile> {
+    // The workspace's program surface: the turns the suites read prepared tools of.
+    if (scope.surface !== 'program') return await super.turnCapabilities(turn, reach, scope);
     this._prepareFailure = null;
 
     try {
-      const profile = await super.mainTaskProfile(turn, planReply);
+      const profile = await super.turnCapabilities(turn, reach, scope);
 
       this._preparedTools.set(turn.turnId, profile.tools);
       this._lastPreparedTools = profile.tools;
@@ -595,13 +598,13 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    *  for another mode (a role imposing Plan) is the actor's own. */
   private _suppliedTools: ToolSet | null = null;
   harnessSupplyTools(tools: ToolSet | undefined): void { this._suppliedTools = tools ?? null; }
-  protected override actorToolsets(mode: WorkMode, claimScope?: string): ActorToolsets {
+  protected override programToolsets(mode: WorkMode, opts?: ProgramToolsetOptions): ActorToolsets {
     // The requested mode is the message's, never the operation a role bound over it.
     if (this._suppliedTools !== null && mode === workModeForTurnMetadata(this.turnUserMetadata())) {
       return { turn: this._suppliedTools, raw: this._suppliedTools };
     }
 
-    return super.actorToolsets(mode, claimScope);
+    return super.programToolsets(mode, opts);
   }
 
   /** The scripted model the next turns run on; held, not consumed by one turn. */

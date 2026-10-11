@@ -3,6 +3,7 @@ export * from './types';
 
 export {
   CacheWarmStore,
+  armedWarms,
   CacheWarmingLane,
   initCacheWarmTable,
   warmUsage,

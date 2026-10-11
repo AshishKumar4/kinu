@@ -294,7 +294,8 @@ export class HireOrchestrator extends ProductionOrchestrator {
    */
   async driveOwedWork(): Promise<void> {
     await this.terminalRetryPass();
-    await this.orch.drainPendingEvents({ rethrow: true });
+    // Every agent's due reactions, as the timer drains them.
+    await this._kinuTimerTick();
   }
 }
 

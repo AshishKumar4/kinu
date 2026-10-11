@@ -45,3 +45,24 @@ export function turnReach(input: {
     replyToComment: owner && input.awaitsReply,
   };
 }
+
+/** What an agent reaches by what it is, whatever the turn (design v2 §9): computed once from its policy, and read by the
+ *  one builder every agent's turn surface is made by. */
+export interface ActorReach {
+  /** Its programs' surface: the workspace's own (its memory, files, tasks, agents and self, its account), or a hire's,
+   *  confined to its web, files and state. */
+  readonly surface: 'program' | 'confined';
+  /** The workspace's external tools, its owner's MCP servers and its extensions, declared to its eval. */
+  readonly external: boolean;
+  /** The workspace's lanes: its owner's turns are evolution's verdicts and its fresh ones draw trial arms, it spends the
+   *  workspace's missions, its jobs are the workspace's, and the workspace's room streams its turns. */
+  readonly lanes: boolean;
+  /** Its owner's other workspaces, as peers. */
+  readonly peers: boolean;
+}
+
+export function actorReach(policy: Pick<ActorPolicy, 'workspaceAgent'>): ActorReach {
+  return policy.workspaceAgent
+    ? { surface: 'program', external: true, lanes: true, peers: true }
+    : { surface: 'confined', external: false, lanes: false, peers: false };
+}

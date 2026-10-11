@@ -19,7 +19,7 @@ import {
   createWorkspaceForkSink, createWorkspaceForkSource, workspaceSoul, workspaceArchiveStore, writeWorkspaceSoul,
   explorationActorKey, collectDynamicContext, subordinateDelegatesOf,
   HeadController, REAL_CLOCK, runHeadSplit, SubordinateRosterStore,
-  recoverActorTurns, EventLog, actorReferenceOf, subordinateDescendants, TEMPORARY_LIFETIME,
+  EventLog, actorReferenceOf, subordinateDescendants, TEMPORARY_LIFETIME,
   artifactOverrides, currentArtifacts,
   agentsActionsFor, agentsProfileContext, betaSwarms, buildActorTools, BACKGROUNDABLE_TOOLS,
   vfsTurnSkills, conversationKey, captureOperationProfile, type AgentRuntime, type RunTurnSources,
@@ -84,7 +84,6 @@ import { publishSubordinateReport, temporaryRunSettles, type ReportDeps } from "
 import type { ToolSet } from "ai";
 import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
-  seedActorLoop, defaultLoopOrigin,
 } from "@kinu.run/core";
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -93,7 +92,7 @@ import { openingList, TURN_CLAIM_FRAME, type AccountSpend, type ActivitySnapshot
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { teamPeers } from "./lib/workspace-roster";
 import { nextAlarmTime } from '@kinu.run/core';
-import { accountDeps, CacheWarmingLane, CacheWarmStore } from '@kinu.run/core';
+import { accountDeps, armedWarms, CacheWarmingLane, CacheWarmStore } from '@kinu.run/core';
 import {
   EvolutionEngine, initWorkspaceActorTable, WorkspaceActorDirectory, ChildActorOperationSchema, type ActorHandle, type ActorReference, type ChildActorOperation, type ActorDirectoryResult,
   readActivityLog, initActivationTable, listActivations, recordActivation, type Activation,
@@ -186,7 +185,7 @@ import {
   CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline, restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult, type WorkspaceReviewResult,
   initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes, deliverOwedChangeNotes, owesChangeNotes, type ChangeNotesChat,
-  initTurnBranchesTable, TurnBranchesStore, branchHeadId, type TurnSurface,
+  initTurnBranchesTable, TurnBranchesStore, branchHeadId, TurnSurface, inTurnSurface, turnAuthor, authoredTurnMetadata, workModeForTurnMetadata, type ActorReach, type ChatTurnInput,
   type ChangeNotesResult, type NotedChanges, type ReviewAnnotation,
   diffLines, type DiffLine,
   getExecutorFiles, readExecutorFile, listEnvironments,
@@ -221,6 +220,7 @@ import type { WorkspaceOwnerRpc } from './workspace-owner-rpc';
 import {
   ActorAgent,
   EVOLUTION_LANE_FIBER,
+  readTurnContinuity,
   type ActorDynamicContextExtras,
   type ActorToolDeps,
   type HostedOwnerQuestions, type HostedPlanReviews,
@@ -855,7 +855,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return await this.agentTurns.prepareChat(actorId, request);
       },
       bindProfile: async (turnId, profile) => {
-        if (actorId === this.actorHandle().actorId) this.mainProfileBound(profile);
+        this.boundProfiles.set(actorId, profile);
 
         return this.agentTurns.bindProfile(actorId, turnId, profile);
       },
@@ -892,8 +892,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         await this.closeLostChatTurn(actorId);
         this.releaseIdleHosted(actorReferenceOf(this.liveAgentOf(actorId)));
 
-        // Main's rest may come after the workspace's own close for its turn rested, while main's wake still held the chain.
-        if (actorId === this.actorHandle().actorId) await this.restWhenIdle();
+        // A rest may come after the workspace's own close for the agent's turn rested, while its wake still held the chain.
+        await this.restWhenIdle();
       },
       birthContext: async (drainTurnId) => subordinateTurnContext(new EventLog(this.boundExec(), this.agentBound(actorId).handle), drainTurnId),
       steerSkills: async (text, alreadyActive) => await steerSkillsBlock({
@@ -905,9 +905,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         alreadyActive: new Set(alreadyActive),
       }),
       // Only main's conversation is kept warm: no other agent has its wake chain.
-      cacheKeptAliveUntil: async (lastRequestAt) => this.warmingOf(actorId)?.keptAliveUntil(lastRequestAt) ?? null,
-      noteModelRequest: async () => { this.warmingOf(actorId)?.noteRequest(); },
-      armCacheWarm: async (input) => this.warmingOf(actorId)?.armAfterTurn(input) ?? null,
+      cacheKeptAliveUntil: async (lastRequestAt) => this.warmingOf(actorId).keptAliveUntil(lastRequestAt),
+      noteModelRequest: async () => { this.warmingOf(actorId).noteRequest(); },
+      armCacheWarm: async (input) => this.warmingOf(actorId).armAfterTurn(input),
       // Its tasks tool and its jobs run here, over its own rows, main's as any agent's.
       openWork: async () => {
         const { stores } = this.agentBound(actorId);
@@ -958,13 +958,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         if (parentActorId === null) return settleSync(Effect.fail(new KinuError('missing', 'A root actor has no hirer to tell.')));
 
-        const reference = actorReferenceOf(this.actorDirectoryStore().open(parentActorId));
-
-        const parent = parentActorId === this.actorHandle().actorId
-          ? this.actorSession
-          : (this.actorHost().hosted(reference) ?? await this.actorHost().acquire(reference, { kind: 'actor' })).session;
-
-        return await parent.orchestrator.signals.send(signal);
+        // Its hirer hears it as a delivery of its own, whichever agent hired it.
+        return await this.agentDeliveries(parentActorId).signals.send(signal);
       },
     }, this.deleting.signal);
   }
@@ -980,11 +975,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       this.overviewChanged();
       this.liveReadsMoved(readsOfTables(['actor_turn_claims']));
 
-      if (actorId === this.actorHandle().actorId) {
-        this.mainChatOpenedAt = Date.now();
-        this.config.setHoldsTurns();
-        this.turnClaimChanged();
-      }
+      this.chatOpenedAt.set(actorId, Date.now());
+      this.agentBound(actorId).stores.config.setHoldsTurns();
+      this.claimPresented(actorId);
 
       // The owner's words close the questions held open as the turn opens; none held, the next read is fresh.
       if (this.heldOpenQuestion(actorId) === true) this.hostedQuestionsMoved();
@@ -993,8 +986,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     await this.chatRooms.hostedRoom(actorId)?.deliver(event);
   }
 
-  /** When main's running turn opened, as its room heard it. */
-  private mainChatOpenedAt = 0;
+  /** When each agent's running turn opened, as its room heard it. */
+  private readonly chatOpenedAt = new Map<string, number>();
+
+  /** Presentation from the policy: the workspace's own tabs show the workspace agent's turn claim. */
+  private claimPresented(actorId: string): void {
+    if (actorPolicy(this.agentOf(actorId)).workspaceAgent) this.turnClaimChanged();
+  }
 
   /** An end delayed past the agent's later opening, a later turn's or its Retry's, is that earlier run's: it closes
    *  nothing of the run now open, in its room or here. */
@@ -1050,8 +1048,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // Its claim closed and its sequence opened in its own isolate.
     this.liveReadsMoved(readsOfTables(['actor_turn_claims', 'terminal_effects']));
 
-    if (actorId === this.actorHandle().actorId) this.turnClaimChanged();
-
+    this.claimPresented(actorId);
     this.overviewChanged();
 
     if (!this.liveActor(actorId)) return;
@@ -1119,14 +1116,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private withAgentFacets(host: ActorHost): ActorHost {
     return {
       ...host,
-      // Main's turns are prepared here as any agent's (D9); its runtime and session are this object's own, and its loop
-      // is seeded as every hosted actor's is, so its facet runs on the version it names.
-      acquire: async (reference, seat) => {
-        if (reference.actorId !== this.actorHandle().actorId) return await host.acquire(reference, seat);
-        await seedActorLoop(this.rt, null, defaultLoopOrigin('system'));
-
-        return { ...host.bindStores(reference), runtime: this.rt, session: this.actorSession };
-      },
+      // Every agent's turns are prepared here as hosted (D9): the workspace agent's over the workspace's own runtime and
+      // lanes, as its placement binds it (`actor-hosting.ts`).
+      acquire: async (reference, seat) => await host.acquire(reference, seat),
       retire: async (parent, retirement) => {
         const record = this.actorDirectoryStore().retained(retirement.reference.actorId);
         const own = record !== null && hostedActorPlacement(record).homeName !== null;
@@ -1188,6 +1180,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // The root's durable program is always readable because the root is this runtime;
       // `loopFor` explains why hosting is the wrong question.
       rootRuntime: () => this.rt,
+      workspaceAgentHome: () => ({ runtime: this.rt, orchestration: () => this.workspaceAgentOrchestration() }),
       contextTree: (actorId, editor) => this.agentStores(actorId).contextTree(editor),
       // Same profile authority an actor chat resolves through, so a role restriction narrows
       // a chat and a head identically; branches under an unresolved profile are unreproducible.
@@ -1262,8 +1255,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       priceAs: (actor, spec) => this.priceHostedModel(actor.handle, spec),
       taskProfile: async (turn) => await ActorCapabilities.for({
         awaitsReply: async (asked) => await this.hostedPlanAwaitsReply(asked),
-        hosted: async (asked, reach) => await this.hostedCapabilities(asked, reach),
-        workspaceAgent: async (asked, reach) => await this.workspaceAgentCapabilities(asked, reach),
+        build: async (asked, reach, scope) => await this.turnCapabilities(asked, reach, scope),
       }, actorPolicy(turn.actor.record), turn),
       announce: () => { this.liveReadsMoved(ROSTER_READS); },
       // Its durable wake drains it, whichever isolate holds it, and outlives a reset.
@@ -1327,22 +1319,46 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  /** TEMPORARY adapter until design v2 step 7 ({@link CapabilityBuilders.workspaceAgent}): main's surface over the root's
-   *  accumulator, with the reach the one entry decided. */
-  private async workspaceAgentCapabilities(turn: HostedTaskTurn, reach: TurnReach): Promise<HostedTaskProfile> {
+  /**
+   * Every agent's turn surface (design v2 §2), over its own hosted actor: the turn's surface it holds until it ends, its
+   * accounting opened where its tools run, its questions offered where it may ask them, and its tools run under its
+   * profile and plan. What it reaches by what it is (`scope`, core `actorReach`) names the surface its programs reach:
+   * the workspace's program surface, or a hire's confined one.
+   */
+  protected async turnCapabilities(turn: HostedTaskTurn, reach: TurnReach, scope: ActorReach): Promise<HostedTaskProfile> {
+    const driving = turn.driving ?? {};
+    const item: ChatTurnInput = { kind: turnAuthor({ metadata: driving }) === 'operator' ? 'user' : 'programmatic', text: turn.input.task, metadata: driving };
     const planReply = reach.replyToComment ? { reply: async (comment: string, text: string) => await this.hostedPlanReply(turn, comment, text) } : undefined;
+    // The workspace's lanes judge this agent's turns: its owner's turn is a verdict, a fresh one draws a trial arm.
+    const lanes = scope.lanes ? turn.actor.session.orchestrator : null;
 
     // Its questions park in its own isolate, as every agent's do: the stack asks it once its turn was offered the tool.
     if (reach.askOwner) this.offerAskOwner(turn.actor.stores.config);
 
-    return await this.mainTaskProfile(turn, planReply);
+    // Its claims and settlement key on the id its chat runs it under, a programmatic turn's prefix and all.
+    const surface = new TurnSurface({
+      turnId: turn.chatTurnId ?? turn.turnId, actor: turn.actor.reference, item, continuity: readTurnContinuity(driving), planReply,
+      // Read where the turn opens: the recorded turn carries it so a recovering host's engine cannot re-judge a turn it
+      // did not run. `engine.enabled` is a live read that a mid-turn toggle could answer differently.
+      evolutionEnabled: lanes !== null && this.turnRecordsEvolution(workModeForTurnMetadata(authoredTurnMetadata({ kind: item.kind, metadata: driving }))),
+    });
+
+    // Its tools are built under the turn they serve, before its chat holds it.
+    return await inTurnSurface(surface, async () => {
+      // A fresh turn opens its accounting here, where its tools run; a turn read again after a restart keeps it.
+      if (turn.opening !== undefined) turn.actor.session.orchestrator.beginTurn(Date.now(), driving);
+      const part = scope.surface === 'program' ? await this.programTurnSurface(turn, surface, lanes) : await this.confinedTurnSurface(turn, reach);
+      const run = { taskPlan: turn.taskPlan, surface, sql: turn.runtime.storage.sql };
+
+      return { ...part, tools: this.turnTools(part.tools, run), raw: this.turnTools(part.raw, run), surface };
+    });
   }
 
   /**
-   * Full `buildActorTools` surface over the actor's own runtime, minus `peers` (it would
-   * escape the subtree); codemode built last; all calls wrapped into the run's capture.
+   * A hire's confined surface: the full `buildActorTools` set over its own runtime, minus `peers` (it would escape the
+   * subtree); codemode built last over its confined namespaces; all calls recorded into the run's capture.
    */
-  private async hostedCapabilities(turn: HostedTaskTurn, reach: TurnReach): Promise<HostedTaskProfile> {
+  private async confinedTurnSurface(turn: HostedTaskTurn, reach: TurnReach): Promise<Omit<HostedTaskProfile, 'surface'>> {
     const webSearch = this.ownedModelServices.getWebSearchProvider();
 
     // `report` belongs only to the hirer's lane: an owner chat with this actor carries it neither natively nor in eval.
@@ -1492,7 +1508,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       skills: vfsTurnSkills(runtime.storage.vfs, actor.stores.config, trust),
       profileInputs: () => this.profileInputs(),
-      ancestors: () => this.ancestorProfiles(actor.handle),
+      ancestors: () => this.ancestorProfiles(actor.handle) ?? [],
       agentsActions: () => (agents === null ? [] : agentsActionsFor(agents)),
       temporaryAsk: () => agents?.team?.temporary !== undefined,
       // Read for this turn: the owner or any agent may have changed SOUL.md since main's last one.
@@ -1919,12 +1935,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   private _triggerRegistry: TriggerRegistry | null = null;
   private _replyChannels: ReplyChannelStore | null = null;
-  private _cacheWarming: CacheWarmingLane | null = null;
+  private readonly warmingLanes = new Map<string, CacheWarmingLane>();
 
   /** Wakes go through the Kinu timer job, never `setTimeout`: nothing in the isolate survives hibernation. */
-  protected get cacheWarming(): CacheWarmingLane {
-    this._cacheWarming ??= new CacheWarmingLane({
-      store: new CacheWarmStore(this.boundSql, this.actorHandle()),
+  /** The lane keeping an agent's prompt cache warm, keyed by the agent: its own row, its own wake. */
+  private warmingOf(actorId: string): CacheWarmingLane {
+    const held = this.warmingLanes.get(actorId);
+
+    if (held !== undefined) return held;
+
+    const lane = new CacheWarmingLane({
+      store: new CacheWarmStore(this.boundSql, this.agentBound(actorId).handle),
       // `armDurableWake` re-derives the soonest wake over every source, so the instant is not passed.
       wake: () => { this.armDurableWake(); },
       send: async ({ modelSpec, body }) => {
@@ -1941,12 +1962,29 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       now: () => Date.now(),
     });
 
-    return this._cacheWarming;
+    this.warmingLanes.set(actorId, lane);
+
+    return lane;
   }
 
-  /** The lane keeping an agent's prompt cache warm: main's alone. */
-  private warmingOf(actorId: string): CacheWarmingLane | null {
-    return actorId === this.actorHandle().actorId ? this.cacheWarming : null;
+  /** The soonest warm any live agent is owed. */
+  private nextWarmAt(): number | null {
+    const due = armedWarms(this.boundSql).filter((warm) => this.liveActor(warm.actorId)).map((warm) => warm.dueAt);
+
+    return due.length === 0 ? null : Math.min(...due);
+  }
+
+  /** Each live agent's warm owed by now, in turn; whether any was sent. */
+  private async runDueWarms(now: number): Promise<boolean> {
+    let warmed = false;
+
+    for (const warm of armedWarms(this.boundSql)) {
+      if (warm.dueAt > now || !this.liveActor(warm.actorId)) continue;
+
+      if (await this.warmingOf(warm.actorId).runDue(now) !== null) warmed = true;
+    }
+
+    return warmed;
   }
 
   protected get triggerRegistry(): TriggerRegistry {
@@ -2043,7 +2081,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       this.emailOutbox.nextRetryAt(),
       this.reactionsDueAt(now),
       nextEvolutionAnswerAt(this.boundSql, this.actorHandle().actorId),
-      this.cacheWarming.nextWarmAt(),
+      this.nextWarmAt(),
       // Sleep-time triggers (phase `alarm.sleep_time`); answers only while an unprocessed turn is recorded,
       // and the phase releases that record whenever it refuses.
       this.sleepTime.nextWakeAt(),
@@ -2240,18 +2278,22 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private rosterOf(parent: ActorHandle): SubordinateRosterStore {
-    return parent.actorId === this.actorHandle().actorId ? this.subordinateRoster : new SubordinateRosterStore(this.watchedExec, parent);
+    return new SubordinateRosterStore(this.watchedExec, parent);
   }
 
   protected override hostedWindowName(actorId: string): string | null {
     const directory = this.workspaceActors();
-    const rootId = this.actorHandle().actorId;
     const names: string[] = [];
+    let row = directory.retained(actorId);
 
-    for (let row = directory.retained(actorId); row?.actorId !== rootId; row = directory.retained(row.parentActorId ?? '')) {
-      if (row === null) return null;
+    // Its hirers' names down to it; the tree's root names no segment, its room being the workspace's.
+    while (row !== null && row.parentActorId !== null) {
       names.unshift(row.name);
+      row = directory.retained(row.parentActorId);
     }
+
+    // An ancestor gone: no path addresses it.
+    if (row === null) return null;
 
     return names.length === 0 ? null : names.join('/');
   }
@@ -2273,7 +2315,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return await this.agentStores(actor.actorId).inheritedContext();
   }
 
+  /** The agent as its window addresses it: a hire by the path its roster resolves, the tree's root by its own row. */
   private hostedReference(actorId: string): ActorReference | null {
+    const record = this.actorDirectoryStore().retained(actorId);
+
+    if (record === null) return null;
+
+    if (record.parentActorId === null) return actorReferenceOf(record);
     const path = this.hostedWindowName(actorId);
     const actor = path === null ? null : this.hostedTarget(path);
 
@@ -2606,13 +2654,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       sendState: async (id) => await (await facet()).sendState(snapshot(), id),
       awaitSend: async (id) => await (await facet()).awaitSend(snapshot(), id),
-      // Main's text streams into its room, never through its events: its first token is heard there.
-      ...(actorId === this.actorHandle().actorId && { firstText: () => { this.recordMainFirstToken(this.mainChatOpenedAt); } }),
+      // An agent's text streams into its room, never through its events: its first token is heard there.
+      firstText: () => { this.recordFirstToken(actorId, this.chatOpenedAt.get(actorId) ?? Date.now()); },
     };
   }
 
   protected override hostedPlanReviews(actorId: string): HostedPlanReviews | null {
-    if (actorId !== this.actorHandle().actorId && this.hostedReference(actorId) === null) return null;
+    if (this.hostedReference(actorId) === null) return null;
     const facet = () => this.agentCalls(actorId);
     const snapshot = () => this.agentSnapshot(actorId);
 
@@ -2945,6 +2993,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * titles, replies and branches), declared and owed here once per turn, however often the handoff is repeated.
    */
   private async mainTurnSettled(settled: HandedOffTurn): Promise<void> {
+    // Hosted before its effects run: they record the turn through its session.
+    const { session } = await this.workspaceAgent();
     // What the workspace decided as the turn opened, as main's isolate froze it then and handed it over.
     const held = settled.facts;
     const turn = v.parse(CompletedTurnSchema, settled.turn);
@@ -2960,7 +3010,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     await this.terminal.settle({
       transition: { turnId: settled.turnId, messageId: settled.messageId },
       declare: () => [
-        ...declareTerminalRoster(facts, this.rosterParts(settled, scoped, missionOf(this.getSoulText()))),
+        ...declareTerminalRoster(facts, this.rosterParts(settled, scoped, missionOf(this.getSoulText()), session.reviewsTurns)),
         // Its outcome the run's own: a tool that failed inside a turn that answered is not a failed turn.
         { name: 'fleet_turn', scope: settled.messageId, lane: 'detached', input: { turn: facts.scopedTurn, completed: settled.completed } },
       ],
@@ -2984,7 +3034,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Its chat's follow-up turns are owed in main's own isolate; everything else its settled turn owes, here. */
-  private rosterParts(settled: HandedOffTurn, scoped: CompletedTurn, mission: string | null): TerminalTurnParts {
+  private rosterParts(settled: HandedOffTurn, scoped: CompletedTurn, mission: string | null, reviewsTurns: boolean): TerminalTurnParts {
     return {
       // Over the row main's transcript persisted, so a cut turn's announcement replays from it; owed only when an
       // extension here listens, as reading the answer back crosses into main's isolate for the whole turn.
@@ -2996,7 +3046,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // Each with the task its head was started on, as the journal recorded it at the branch's start.
       branches: this.turnBranches.of(settled.turnId).map((id) => ({ id, task: this.headJournal.readHeadView(branchHeadId(id))?.task ?? '' })),
       // Owed only when the actor reviews turns, as the lane it replaced was started only then.
-      advisor: this.actorSession.reviewsTurns ? projectJsonValue({ value: this.advisorSnapshotFor(scoped, settled.reachableTools) }) : undefined,
+      advisor: reviewsTurns ? projectJsonValue({ value: this.advisorSnapshotFor(scoped, settled.reachableTools) }) : undefined,
       sleepTime: true,
       // The genesis turn owes the naming: the create stored a stand-in title, and no other turn replaces one.
       autoTitle: { mission, standIn: settled.event === WORKSPACE_CREATED_EVENT },
@@ -3456,13 +3506,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async inspectWork(): Promise<readonly InspectedWork[]> {
     const host = this.actorHost();
-    const rootActorId = this.actorHandle().actorId;
     const turns = host.resumable();
-    const actorName = (actorId: string) => actorId === rootActorId ? null : host.describe(actorId)?.name ?? actorId;
 
-    const running = (turn: (typeof turns)[number]) => turn.record.actorId === rootActorId
-      ? this._inFlight || this.actorSession.turnOpen
-      : host.hosted(turn.reference)?.session.turnOpen === true;
+    // Named by its path from the tree's root, which names the workspace's own work.
+    const actorName = (actorId: string) => {
+      const record = host.describe(actorId);
+
+      return record?.parentActorId === null ? null : record?.name ?? actorId;
+    };
+
+    const running = (turn: (typeof turns)[number]) => host.hosted(turn.reference)?.session.turnOpen === true;
 
     const { ledger } = this.terminal;
     const agentTurns = new AgentOpenTurns(this.boundSql).all();
@@ -3869,29 +3922,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       await this.runActorDirectory(pending.caller, pending.parentPath, { action: 'retire', name: pending.name, reference: pending.reference });
     }
 
-    // The alarm owns recovery authority. Core retains verified claims as owed,
-    // settles unverified ones indeterminate, and leaves live actors untouched.
-
-    await settleLogged('actor.turn_recovery_failed', { doing: 'rebuilding the hosted turns an eviction interrupted', otherwise: 'io' }, async () => {
-      const host = this.actorHost();
-      const rootActorId = this.actorHandle().actorId;
-      const rootIsLive = () => this._inFlight || this.actorSession.turnOpen;
-
-      await recoverActorTurns({
-        installedBuild: host.installedBuild,
-        workspace: this.workspaceName(),
-        resumable: (limit) => host.resumable(limit).filter((turn) => turn.record.actorId === rootActorId),
-        bindStores: (reference) => {
-          host.bindStores(reference);
-
-          // The live root's session and tabs observe claims through this store owner.
-          return { stores: this.stores };
-        },
-        readScaffold: host.readScaffold,
-        hosted: () => ({ session: { get turnOpen() { return rootIsLive(); } } }),
-      });
-    }, { workspace: this.name });
-
+    // Every agent's chat turns are claimed in its own isolate, which recovers them; this workspace recovers what its own
+    // isolates owe it.
     await this.recoverAgentTurns();
 
     return await super.maintenanceWork();
@@ -3945,7 +3977,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   // when this promise settles, so spans cannot cover both.
   /** A hosted hirer's answers reach its own session; a retired hirer's went with it. */
   protected override async deliverAdviceFor(actorId: string): Promise<boolean> {
-    if (actorId === this.actorHandle().actorId) return super.deliverAdviceFor(actorId);
     const record = this.actorHost().describe(actorId);
 
     if (record === null || record.retiringAt !== null || record.deletedAt !== null) return true;
@@ -4007,8 +4038,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // Sibling phase because `nextWakeAt` folds the warm row. The lane re-checks the request counter,
       // so a turn started after the arm suppresses the refresh.
       await tick.span('alarm.cache_warm', (span) => settle(Effect.catchCause(Effect.gen({ self: this }, function* () {
-        const warmed = yield* Effect.promise(() => this.cacheWarming.runDue(now));
-        span.setAttribute('kinu.cache_warmed', warmed !== null);
+        const warmed = yield* Effect.promise(() => this.runDueWarms(now));
+        span.setAttribute('kinu.cache_warmed', warmed);
       }), phaseFailed(span, { doing: 'refreshing the prompt-cache prefix this wake was armed for', otherwise: 'unavailable' }, (failure) => {
         diagnostics.failure('cache.warm_failed', failure);
       }))));
@@ -5286,9 +5317,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.operationCalls.get(callId)?.abort(new KinuError('cancelled', 'The caller cancelled the operation'));
   }
 
-  /** The workspace actor is reached as itself; any other by its live directory entry. */
-  private operationActor(actorId: string): ActorReference | null {
-    return actorId === this.actorHandle().actorId ? null : actorReferenceOf(this.liveAgentOf(actorId));
+  /** Every agent is reached by its live directory entry. */
+  private operationActor(actorId: string): ActorReference {
+    return actorReferenceOf(this.liveAgentOf(actorId));
   }
 
   /** The share route has already verified the request; admission and routing live on the slate host,
@@ -5716,7 +5747,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private turnClaimState(): TurnClaimState {
     const turnId = this.mainChatTurn();
 
-    return turnId === null ? { kind: 'settled' } : { kind: 'admitted', turnId, claimedAt: this.mainChatOpenedAt };
+    return turnId === null ? { kind: 'settled' } : { kind: 'admitted', turnId, claimedAt: this.chatOpenedAt.get(this.actorHandle().actorId) ?? 0 };
   }
 
   /** The root's tabs hear the claim when they connect ({@link ActorAgent}'s connect), and every change to it here. */

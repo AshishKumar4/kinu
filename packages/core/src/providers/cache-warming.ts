@@ -155,6 +155,13 @@ interface CacheWarmRow {
  *  a larger write would fail the arming turn. */
 const CACHE_WARM_MAX_BODY_BYTES = 1_000_000;
 
+/** Each agent's armed warm and when it is owed, in one read: the wake fold asks it for every agent at once. */
+export function armedWarms(sql: SqlExecutor): { readonly actorId: string; readonly dueAt: number }[] {
+  return sql<{ actor_id: string; due_at: number }>`
+    SELECT actor_id, due_at FROM cache_warm WHERE due_at IS NOT NULL AND armed_requests = requests`
+    .map((row) => ({ actorId: row.actor_id, dueAt: row.due_at }));
+}
+
 export class CacheWarmStore {
   constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle) {}
 

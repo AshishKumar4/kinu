@@ -606,7 +606,7 @@ export {
 
 export { actorPolicy, type ActorPolicy } from './delegation/actor-policy';
 
-export { turnLane, turnReach, type TurnLane, type TurnReach } from './delegation/turn-reach';
+export { actorReach, turnLane, turnReach, type ActorReach, type TurnLane, type TurnReach } from './delegation/turn-reach';
 
 export { AGENTS_OPS, type AgentsOp } from './operations/agents';
 
@@ -1696,7 +1696,7 @@ export type { WorkspaceWork, OwnedPlan, OwnedTask, WorkspaceWorkOwner } from './
 export { openingList, openingListOf, listedOn, type OpeningList } from './read-models/opening';
 
 export {
-  AgentOrchestrator, type AgentOrchestratorDeps,
+  AgentOrchestrator, improvementLanesOpen, type AgentOrchestratorDeps,
   type TurnContinuity,
 } from './orchestrator/agent-orchestrator';
 

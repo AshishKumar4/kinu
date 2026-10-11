@@ -1858,10 +1858,9 @@ export class LocalAgentSession {
           };
         },
       }),
-      ...chatTerminalEffects({ chat: () => this.chat, orchestrator: this.actorSession.orchestrator, engine: this.engine }),
+      ...chatTerminalEffects({ chat: () => this.chat, orchestrator: () => this.actorSession.orchestrator, engine: this.engine }),
       // The CLI's lanes run elsewhere (evolution on its own queue); subordinates only report.
       ...subordinateTerminalEffects({
-        orchestrator: this.actorSession.orchestrator,
         hireAdvisor: (advisor) => this.actorSession.hireAdvisor(advisor),
         // Awaited so a one-shot close joins it.
         applyTitle: (subject) => this.applyAutoTitle(subject),

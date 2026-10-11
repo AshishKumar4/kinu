@@ -16,7 +16,7 @@ import type { ActorHandle } from '../identity/actor-handle';
 import { writeActivityLog } from '../identity/activity-log';
 import { OWNER_FIXABLE_REFUSALS, providerRefusalCode, providerStatusOf } from '../providers/util';
 import { statedRetryAfterMs } from '../providers/fallback-cooldown';
-import type { AgentOrchestrator, TurnContinuity } from './agent-orchestrator';
+import { improvementLanesOpen, type AgentOrchestrator, type TurnContinuity } from './agent-orchestrator';
 import type { EvolutionEngine } from '../evolution/engine';
 import type { HeadJournal } from '../heads/journal';
 import { CompletedTurnSchema } from '../evolution/session-window';
@@ -197,7 +197,8 @@ function taskReminderTerminalEffect(queue: () => OwedTurnQueue): TerminalEffect 
 
 /** The recording, the lessons and the drain: owed where the actor's evolution tables and event log are. */
 export function turnRecordingEffects(deps: {
-  readonly orchestrator: Pick<AgentOrchestrator, 'recordTurn' | 'recordedTurn' | 'drainPendingEvents'>;
+  /** Read when an effect runs: the recording agent's session may be bound after this table is built. */
+  readonly orchestrator: () => Pick<AgentOrchestrator, 'recordTurn' | 'recordedTurn' | 'drainPendingEvents'>;
   readonly engine: Pick<EvolutionEngine, 'learnFromTurn'>;
 }): TerminalEffectTable {
   return {
@@ -210,7 +211,7 @@ export function turnRecordingEffects(deps: {
 /** The bodies every chat backend owes alike: the loop's follow-up turns, the recording, the lessons and the drain. */
 export function chatTerminalEffects(deps: {
   readonly chat: () => OwedTurnQueue;
-  readonly orchestrator: Pick<AgentOrchestrator, 'recordTurn' | 'recordedTurn' | 'drainPendingEvents'>;
+  readonly orchestrator: () => Pick<AgentOrchestrator, 'recordTurn' | 'recordedTurn' | 'drainPendingEvents'>;
   readonly engine: Pick<EvolutionEngine, 'learnFromTurn'>;
 }): TerminalEffectTable {
   return {
@@ -222,7 +223,6 @@ export function chatTerminalEffects(deps: {
 }
 
 export interface SubordinateEffectPorts {
-  readonly orchestrator: Pick<AgentOrchestrator, 'improvementLanesOpen'>;
   hireAdvisor(advisor: AdvisorRecoverySnapshot): Promise<void>;
   applyTitle(subject: string): Promise<void>;
   /** Absent with no hirer. */
@@ -243,7 +243,7 @@ export function subordinateTerminalEffects(ports: SubordinateEffectPorts): Termi
     advisor_review: terminalEffect({
       input: v.object({ status: RunEndReasonSchema, workMode: WorkModeSchema, advisor: AdvisorRecoverySnapshotSchema }),
       run: async ({ status, workMode, advisor }) => {
-        if (ports.orchestrator.improvementLanesOpen(status, workMode)) await ports.hireAdvisor(advisor);
+        if (improvementLanesOpen(status, workMode)) await ports.hireAdvisor(advisor);
 
         return { status: 'completed' };
       },
@@ -336,7 +336,7 @@ export function branchesTerminalEffect(deps: {
 
 /** The window append is idempotent on the message's identity. Continuity, mode and the evolution gate come off the row. A plan turn records nothing. */
 function turnRecordTerminalEffect(
-  orch: Pick<AgentOrchestrator, 'recordTurn' | 'recordedTurn'>,
+  orchestrator: () => Pick<AgentOrchestrator, 'recordTurn' | 'recordedTurn'>,
 ): TerminalEffect {
   return terminalEffect({
     input: v.object({
@@ -351,6 +351,8 @@ function turnRecordTerminalEffect(
 
       // Unkeyed for an empty id: every such response would share one key.
       const recordedId = keyedScope(messageId);
+      const orch = orchestrator();
+
       orch.recordTurn(
         orch.recordedTurn(status, v.parse(CompletedTurnSchema, turn)),
         continuity,
@@ -380,12 +382,12 @@ function turnLessonsTerminalEffect(engine: Pick<EvolutionEngine, 'learnFromTurn'
 
 /** Idempotent (PENDING, unbound rows only). Rethrows: `completed` over a half-bound batch strands the assignment. */
 function eventDrainTerminalEffect(
-  orch: Pick<AgentOrchestrator, 'drainPendingEvents'>,
+  orchestrator: () => Pick<AgentOrchestrator, 'drainPendingEvents'>,
 ): TerminalEffect {
   return terminalEffect({
     input: v.object({}),
     run: async () => {
-      await orch.drainPendingEvents({ rethrow: true });
+      await orchestrator().drainPendingEvents({ rethrow: true });
 
       return { status: 'completed' };
     },

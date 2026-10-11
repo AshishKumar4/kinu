@@ -324,9 +324,8 @@ export class FacetChat {
       sql: actor.runtime.storage.sql,
       actor: actor.handle,
       effects: {
-        ...chatTerminalEffects({ chat: () => this.session, orchestrator: actor.session.orchestrator, engine: { learnFromTurn: async () => {} } }),
+        ...chatTerminalEffects({ chat: () => this.session, orchestrator: () => actor.session.orchestrator, engine: { learnFromTurn: async () => {} } }),
         ...subordinateTerminalEffects({
-          orchestrator: actor.session.orchestrator,
           hireAdvisor: (advisor) => workspace.hireAdvisor(advisor),
           applyTitle: (subject) => this.applyTitle(subject),
           sendReport: (report) => workspace.parentReport(report),

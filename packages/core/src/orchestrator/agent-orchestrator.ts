@@ -91,6 +91,12 @@ export interface AgentOrchestratorDeps {
   refinementLane?: () => Promise<void>;
 }
 
+/** A turn's improvement lanes (evolution, the advisor) open on a completed turn outside Plan: read from the recorded
+ *  status and mode, so a replay on a fresh activation decides as the live turn did. */
+export function improvementLanesOpen(status: RunEndReason, workMode: WorkMode): boolean {
+  return status === 'completed' && workMode !== 'plan';
+}
+
 export class AgentOrchestrator {
   readonly acc: TurnAccumulator;
   readonly inbox: Inbox;
@@ -540,7 +546,7 @@ export class AgentOrchestrator {
   /** Completed-only improvement lanes (advisor review, auto-title) open only after a completed build turn. */
   improvementLanesOpen(status: RunEndReason, workMode?: WorkMode): boolean {
     // `workMode` is for a replay on a fresh activation; absent means the live turn.
-    return status === 'completed' && (workMode ?? this.activeWorkMode) !== 'plan';
+    return improvementLanesOpen(status, workMode ?? this.activeWorkMode);
   }
 
   /**

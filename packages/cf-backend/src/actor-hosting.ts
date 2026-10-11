@@ -19,7 +19,7 @@ import {
   type NodeHomeHost, type NodeWorkspace, type ProfileAuthorityInputs, type ProgrammaticTurn,
   type ResolvedTurnProfile, type SlateCallResult, type SlateOperation, type SqlExec,
   type SqlExecutor, type SqlValue, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory,
-  type WriteObserver, isSubordinateOrigin, type TierRefusals,
+  type WriteObserver, actorPolicy, isSubordinateOrigin, type TierRefusals,
 } from '@kinu.run/core';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { flight, KinuError, settle, type AgentTracing } from '@kinu.run/core/obs';
@@ -39,6 +39,12 @@ export interface WorkspaceHostSeams {
   currentTurn(reference: ActorReference): string | null;
   /** The root's own runtime: inheriting children read the retained program from it. */
   rootRuntime(): AgentRuntime;
+  /**
+   * The workspace agent's placement where the workspace object is its home: hosted over the workspace's own runtime, with
+   * the workspace's engine, event log, missions and host for its lanes. Absent where no object holds them (a fixture),
+   * so it is hosted as any agent is.
+   */
+  workspaceAgentHome?(): { readonly runtime: CFRuntime; readonly orchestration: () => AgentOrchestratorDeps };
   contextTree(actorId: string, editor: ContextEditor): ContextTree;
   readonly sql: SqlExecutor;
   /** Positional executor over the same database; the event log and archive reader need it. */
@@ -191,6 +197,10 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
     },
 
     runtimeFor: async (bound: BoundActor): Promise<AgentRuntime> => {
+      // Placement from the policy: the workspace agent lives in the workspace's own runtime, which its opener holds.
+      const workspaceHome = actorPolicy(bound.record).workspaceAgent ? seams.workspaceAgentHome?.() : undefined;
+
+      if (workspaceHome !== undefined) return workspaceHome.runtime;
       const held = runtimes.get(bound.handle);
 
       if (held) return held;
@@ -288,6 +298,10 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
 
     /** The actor's own event log, engine, governor and broadcast, never the root's objects. */
     orchestrationFor: (bound): AgentOrchestratorDeps => {
+      // Placement from the policy: the workspace agent's lanes are the workspace's.
+      const home = actorPolicy(bound.record).workspaceAgent ? seams.workspaceAgentHome?.() : undefined;
+
+      if (home !== undefined) return home.orchestration();
       const { runtime, stores, handle } = bound;
       stores.claims.observe(() => { seams.turnClaimChanged(); });
 
