@@ -126,114 +126,21 @@ index b6ce290..b84d9db 100644
        const __gate = __nimbusOutputGate();
        const __task = __rpcWriteChain.then(() => __gate).then(() => __supervisor.stderr(__bytes)).catch((e) => __onRpcDrop(__bytes.byteLength, e));
        __rpcWriteChain = __task.then(() => {}, () => {});
-diff --git a/dist/runtime/node-shims.js b/dist/runtime/node-shims.js
-index a78caf2..80bdc04 100644
---- a/dist/runtime/node-shims.js
-+++ b/dist/runtime/node-shims.js
-@@ -7780,6 +7780,10 @@ const __tlsMod = (() => {
-   const notImplemented = (option, why) => {
-     return nodeError(Error, 'ERR_OPTION_NOT_IMPLEMENTED', 'The ' + option + ' option is not implemented: ' + why);
-   };
-+  // Kinu patch (NIMBUS-ASKS #37): native sockets whose TLS session the
-+  // workspace's egress makes (egressConnect below): their plaintext is the
-+  // session's, so node:tls's startTls hands it over as it is.
-+  const egressCarried = new WeakSet();
-   const patchStartTls = (native) => {
-     if (startTlsPatched || !native) return;
-     startTlsPatched = true;
-@@ -7787,6 +7791,17 @@ const __tlsMod = (() => {
-     const original = proto.startTls;
-     Object.defineProperty(proto, 'startTls', { configurable: true, writable: true, value: function startTls(options) {
-       const token = tokens.get(this);
-+      if (token === undefined && egressCarried.has(this)) {
-+        const self = this;
-+        const carrier = carriers.get(this);
-+        if (carrier && carrier._handle && carrier._handle.socket === this) carrier._handle = null;
-+        return {
-+          opened: Promise.resolve(self.opened), closed: self.closed, readable: self.readable, writable: self.writable,
-+          secureTransport: 'on', upgraded: false,
-+          close: (...a) => self.close(...a),
-+          startTls() { throw new TypeError('Cannot startTls on a TLS socket.'); },
-+        };
-+      }
-       if (token === undefined) return Reflect.apply(original, this, arguments);
-       const self = this;
-       // workerd's TLSSocket has released the carrier's writer and reader and
-@@ -7892,20 +7907,61 @@ const __tlsMod = (() => {
-     };
-     return socket;
-   };
-+  // Kinu patch (NIMBUS-ASKS #37): under a workspace egress, a TLS socket's
-+  // carrier is a plaintext connection to
-+  // <host>[.s.<servername>].tls.nimbus-egress.invalid:<port> (each name as the
-+  // hex of its UTF-8, in labels of 62): the egress makes the TLS session with
-+  // the server and carries its plaintext. workerd carries no TLS over an
-+  // entrypoint's connect ("Incoming CONNECT with TLS not supported").
-+  const egressLabel = (name) => {
-+    let hex = '';
-+    for (const b of new TextEncoder().encode(name)) hex += (b < 16 ? '0' : '') + b.toString(16);
-+    return hex.match(/.{1,62}/g).join('.');
-+  };
-+  const egressConnect = (...args) => {
-+    let options = {}, cb;
-+    if (args[0] !== null && typeof args[0] === 'object') { options = { ...args[0] }; cb = args[1]; }
-+    else {
-+      options.port = args[0];
-+      let i = 1;
-+      if (typeof args[i] === 'string') options.host = args[i++];
-+      if (args[i] !== null && typeof args[i] === 'object') Object.assign(options, args[i++]);
-+      cb = args[i];
-+    }
-+    const host = options.host || 'localhost';
-+    const port = Number(options.port);
-+    if (options.socket) {
-+      throw notImplemented('options.socket', 'a TLS session over a socket the program opened is not made when the workspace network goes through an egress');
-+    }
-+    for (const name of ['cert', 'key', 'pfx', 'passphrase']) {
-+      if (options[name] !== undefined) {
-+        throw notImplemented('options.' + name, 'Nimbus presents no client certificate');
-+      }
-+    }
-+    if (!realNet) throw new Error('tls: node:net is not available');
-+    const servername = options.servername ?? host;
-+    const carrierHost = egressLabel(host) + (servername === host ? '' : '.s.' + egressLabel(servername)) + '.tls.nimbus-egress.invalid';
-+    __nimbusReplay?.effect('tls.connect ' + host + ':' + port);
-+    const raw = realNet.connect({ host: carrierHost, port, allowHalfOpen: options.allowHalfOpen === true });
-+    const name = () => {
-+      const native = raw._handle && raw._handle.socket;
-+      if (native) { egressCarried.add(native); carriers.set(native, raw); patchStartTls(native); }
-+    };
-+    name();
-+    raw.once('connect', name);
-+    const socket = real.connect({ ...options, host, port, socket: raw, servername }, cb);
-+    const destroy = socket.destroy;
-+    socket.destroy = function(...rest) {
-+      raw.destroy();
-+      return Reflect.apply(destroy, this, rest);
-+    };
-+    return socket;
-+  };
-   const connect = (...args) => {
--    // Under a workspace egress a TLS socket cannot be made: the egress's
--    // connect carries plain TCP only, and making the session here would go
--    // around it. The refusal names the limit; HTTPS by fetch is unaffected.
--    if (globalThis.__nimbusEgress === true) {
--      const refused = realNet ? new realNet.Socket() : null;
--      const error = nodeError(Error, 'ERR_NIMBUS_EGRESS_TLS', ${JSON.stringify(EGRESS_TLS_REFUSAL)});
--      if (!refused) throw error;
--      queueMicrotask(() => refused.destroy(error));
--      return refused;
--    }
--    const proxied = !!(__nimbusReplay && __nimbusReplay.outbound);
--    if (!proxied) __nimbusReplay?.effect("tls.connect " + describe(args));
--    const socket = proxied ? proxiedConnect(...args) : real.connect(...args);
-+    const proxied = Boolean(__nimbusReplay && __nimbusReplay.outbound);
-+    const egressed = globalThis.__nimbusEgress === true;
-+    if (!proxied && !egressed) __nimbusReplay?.effect("tls.connect " + describe(args));
-+    const socket = egressed ? egressConnect(...args) : proxied ? proxiedConnect(...args) : real.connect(...args);
-     let closed = false;
-     let hold = null;
-     socket.once('close', () => { closed = true; hold?.(false); });
+diff --git a/dist/node-shims-artifact.generated.js b/dist/node-shims-artifact.generated.js
+index 1d84cd3..4fa6bc0 100644
+--- a/dist/node-shims-artifact.generated.js
++++ b/dist/node-shims-artifact.generated.js
+@@ -10,8 +10,8 @@
+  */
+ /** dist/runtime/node-shims.js generateShimsCode() */
+ export const NODE_SHIMS_ENTRY = "/_assets/runtime/node-shims-20000170722e558a.js";
+-export const NODE_SHIMS_BUILD_ID = "20000170722e558a";
+-export const NODE_SHIMS_SHA256 = "20000170722e558ac6d009b9fe5c4cd054149097e659835e3304bb55cce3c6d8";
++export const NODE_SHIMS_BUILD_ID = "0123efc526245cfb";
++export const NODE_SHIMS_SHA256 = "0123efc526245cfbc1879c609be208fdf970dd2fed9aad3f6c7ab94c3b451ca4";
+ /** @nimbus-sh/core dist/_shared/vfs-write-ledger.js VFS_WRITE_LEDGER_SOURCE */
+ export const VFS_WRITE_LEDGER_ENTRY = "/_assets/runtime/vfs-write-ledger-6949e9269dc59d18.js";
+ export const VFS_WRITE_LEDGER_BUILD_ID = "6949e9269dc59d18";
 diff --git a/dist/runtime/stop-replay.js b/dist/runtime/stop-replay.js
 index c3123df..a4d6aa6 100644
 --- a/dist/runtime/stop-replay.js
@@ -262,3 +169,235 @@ index c3123df..a4d6aa6 100644
      // A synchronous read of stdin that wants bytes and finds \\\`available\\\`
      // (\\\`ended\\\`: no more will come): how many it returns, or -1 when it has
      // to wait for more.
+diff --git a/public/_assets/runtime/node-shims-20000170722e558a.js b/public/_assets/runtime/node-shims-20000170722e558a.js
+index 17121b5..1724f3e 100644
+--- a/public/_assets/runtime/node-shims-20000170722e558a.js
++++ b/public/_assets/runtime/node-shims-20000170722e558a.js
+@@ -12049,6 +12049,102 @@ const __tlsMod = (() => {
+   const notImplemented = (option, why) => {
+     return nodeError(Error, 'ERR_OPTION_NOT_IMPLEMENTED', 'The ' + option + ' option is not implemented: ' + why);
+   };
++  // Kinu patch (NIMBUS-ASKS #37): under a workspace egress the program's
++  // sockets reach the egress's connect(), which carries no TLS ("Incoming
++  // CONNECT with TLS not supported"), so the egress makes each TLS session
++  // and carries its plaintext. A TLS socket's carrier names
++  // <host>[.s.<servername>].tls.nimbus-egress.invalid:<port> (egressConnect);
++  // every other socket names <host>.k.<key>.tcp.nimbus-egress.invalid:<port>,
++  // <key> 16 random bytes, and a tls.connect({ socket }) over it (STARTTLS:
++  // pg, mysql2, nodemailer) writes <key> 'U' <n> <servername> and reads
++  // <key> 1 back, or <key> 0 <n:2> <reason>. Each name is the hex of its
++  // UTF-8, in labels of 62.
++  const egressCarried = new WeakSet();
++  const egressKeys = new WeakMap();
++  const egressLabel = (name) => {
++    let hex = '';
++    for (const b of new TextEncoder().encode(name)) hex += (b < 16 ? '0' : '') + b.toString(16);
++    return hex.match(/.{1,62}/g).join('.');
++  };
++  const egressKeyAt = (bytes, key) => {
++    for (let at = bytes.indexOf(key[0]); at >= 0 && at + key.length <= bytes.length; at = bytes.indexOf(key[0], at + 1)) {
++      let same = true;
++      for (let i = 1; i < key.length && same; i++) same = bytes[at + i] === key[i];
++      if (same) return at;
++    }
++    return -1;
++  };
++  const egressJoin = (first, second) => {
++    const joined = new Uint8Array(first.length + second.length);
++    joined.set(first);
++    joined.set(second, first.length);
++    return joined;
++  };
++  // The TLS session over a keyed socket, made by the egress: asked for once,
++  // and answered before anything the program writes over it is sent.
++  const egressStartTls = (native, options) => {
++    const key = egressKeys.get(native);
++    const name = new TextEncoder().encode(options && typeof options.expectedServerHostname === 'string' ? options.expectedServerHostname : '');
++    if (name.length > 255) throw new TypeError('tls: a servername longer than 255 bytes is not carried by the egress');
++    const writer = native.writable.getWriter();
++    const reader = native.readable.getReader();
++    let held = new Uint8Array(0);
++    const answered = (async () => {
++      const ask = new Uint8Array(key.length + 2 + name.length);
++      ask.set(key);
++      ask[key.length] = 0x55;
++      ask[key.length + 1] = name.length;
++      ask.set(name, key.length + 2);
++      await writer.write(ask);
++      for (;;) {
++        const at = egressKeyAt(held, key);
++        if (at >= 0 && held.length > at + key.length) {
++          if (held[at + key.length] === 1) { held = held.subarray(at + key.length + 1); return; }
++          const length = held.length >= at + key.length + 3 ? (held[at + key.length + 1] << 8) | held[at + key.length + 2] : -1;
++          if (length >= 0 && held.length >= at + key.length + 3 + length) {
++            throw new Error(new TextDecoder().decode(held.subarray(at + key.length + 3, at + key.length + 3 + length)));
++          }
++        }
++        const { value, done } = await reader.read();
++        if (done) throw new Error('the egress closed the connection before the TLS session was made');
++        held = egressJoin(held, value);
++      }
++    })();
++    answered.catch(() => {});
++    const opened = Promise.all([native.opened, answered]).then(([info]) => info);
++    opened.catch(() => {});
++    const readable = new ReadableStream({
++      type: 'bytes',
++      async pull(controller) {
++        await answered;
++        if (held.length > 0) {
++          const chunk = held;
++          held = new Uint8Array(0);
++          controller.enqueue(chunk);
++          return;
++        }
++        const { value, done } = await reader.read();
++        if (done) {
++          controller.close();
++          controller.byobRequest?.respond(0);
++          return;
++        }
++        controller.enqueue(value);
++      },
++      cancel(reason) { return reader.cancel(reason); },
++    });
++    const writable = new WritableStream({
++      async write(chunk) { await answered; await writer.write(chunk); },
++      close() { return writer.close(); },
++      abort(reason) { return writer.abort(reason); },
++    });
++    return {
++      opened, closed: native.closed, readable, writable,
++      secureTransport: 'on', upgraded: false,
++      close: (...a) => native.close(...a),
++      startTls() { throw new TypeError('Cannot startTls on a TLS socket.'); },
++    };
++  };
+   const patchStartTls = (native) => {
+     if (startTlsPatched || !native) return;
+     startTlsPatched = true;
+@@ -12056,6 +12152,18 @@ const __tlsMod = (() => {
+     const original = proto.startTls;
+     Object.defineProperty(proto, 'startTls', { configurable: true, writable: true, value: function startTls(options) {
+       const token = tokens.get(this);
++      if (token === undefined && egressCarried.has(this)) {
++        const self = this;
++        const carrier = carriers.get(this);
++        if (carrier && carrier._handle && carrier._handle.socket === this) carrier._handle = null;
++        return {
++          opened: Promise.resolve(self.opened), closed: self.closed, readable: self.readable, writable: self.writable,
++          secureTransport: 'on', upgraded: false,
++          close: (...a) => self.close(...a),
++          startTls() { throw new TypeError('Cannot startTls on a TLS socket.'); },
++        };
++      }
++      if (token === undefined && egressKeys.has(this)) return egressStartTls(this, options);
+       if (token === undefined) return Reflect.apply(original, this, arguments);
+       const self = this;
+       // workerd's TLSSocket has released the carrier's writer and reader and
+@@ -12161,20 +12269,81 @@ const __tlsMod = (() => {
+     };
+     return socket;
+   };
+-  const connect = (...args) => {
+-    // Under a workspace egress a TLS socket cannot be made: the egress's
+-    // connect carries plain TCP only, and making the session here would go
+-    // around it. The refusal names the limit; HTTPS by fetch is unaffected.
+-    if (globalThis.__nimbusEgress === true) {
+-      const refused = realNet ? new realNet.Socket() : null;
+-      const error = nodeError(Error, 'ERR_NIMBUS_EGRESS_TLS', "Nimbus: TLS sockets are not available when the workspace's network goes through an egress (a Fetcher's connect() carries plain TCP only); use fetch() or https for HTTPS");
+-      if (!refused) throw error;
+-      queueMicrotask(() => refused.destroy(error));
+-      return refused;
++  // Kinu patch (#37): a TLS socket under an egress. Its options are those
++  // workerd's node:tls takes: a client certificate is not presented, as there.
++  const egressConnect = (...args) => {
++    let options = {}, cb;
++    if (args[0] !== null && typeof args[0] === 'object') { options = { ...args[0] }; cb = args[1]; }
++    else {
++      options.port = args[0];
++      let i = 1;
++      if (typeof args[i] === 'string') options.host = args[i++];
++      if (args[i] !== null && typeof args[i] === 'object') Object.assign(options, args[i++]);
++      cb = args[i];
+     }
++    const host = options.host || 'localhost';
++    const port = Number(options.port);
++    if (!realNet) throw new Error('tls: node:net is not available');
++    const servername = options.servername ?? host;
++    const carrierHost = egressLabel(host) + (servername === host ? '' : '.s.' + egressLabel(servername)) + '.tls.nimbus-egress.invalid';
++    __nimbusReplay?.effect('tls.connect ' + host + ':' + port);
++    const raw = realNet.connect({ host: carrierHost, port, allowHalfOpen: options.allowHalfOpen === true });
++    const name = () => {
++      const native = raw._handle && raw._handle.socket;
++      if (native) { egressCarried.add(native); carriers.set(native, raw); patchStartTls(native); }
++    };
++    name();
++    raw.once('connect', name);
++    const socket = real.connect({ ...options, host, port, socket: raw, servername }, cb);
++    const destroy = socket.destroy;
++    socket.destroy = function(...rest) {
++      raw.destroy();
++      return Reflect.apply(destroy, this, rest);
++    };
++    return socket;
++  };
++  // Kinu patch (#37): every other socket a program opens under an egress is
++  // keyed, so a TLS session can later be asked for over it.
++  if (realNet && realNet.Socket && realNet.Socket.prototype && typeof realNet.Socket.prototype.connect === 'function') {
++    const plainConnect = realNet.Socket.prototype.connect;
++    Object.defineProperty(realNet.Socket.prototype, 'connect', { configurable: true, writable: true, value: function connect(...args) {
++      if (globalThis.__nimbusEgress !== true) return Reflect.apply(plainConnect, this, args);
++      const normalized = Array.isArray(args[0]) ? args[0] : null;
++      const first = normalized ? normalized[0] : args[0];
++      let options;
++      if (first !== null && typeof first === 'object') options = first;
++      else if (typeof first === 'number' || (typeof first === 'string' && /^[0-9]+$/.test(first))) {
++        options = { port: first };
++        if (typeof args[1] === 'string') options.host = args[1];
++        const cb = args.find((arg) => typeof arg === 'function');
++        args = cb ? [options, cb] : [options];
++      } else return Reflect.apply(plainConnect, this, args);
++      const host = options.host || 'localhost';
++      if (options.path !== undefined || /\.nimbus-(egress|net)\.invalid$/.test(host)) return Reflect.apply(plainConnect, this, args);
++      const key = crypto.getRandomValues(new Uint8Array(16));
++      let hex = '';
++      for (const b of key) hex += (b < 16 ? '0' : '') + b.toString(16);
++      const keyed = { ...options, host: egressLabel(host) + '.k.' + hex + '.tcp.nimbus-egress.invalid' };
++      if (normalized) normalized[0] = keyed;
++      else args[0] = keyed;
++      const result = Reflect.apply(plainConnect, this, args);
++      const name = () => {
++        const native = this._handle && this._handle.socket;
++        if (native && !egressKeys.has(native)) { egressKeys.set(native, key); patchStartTls(native); }
++      };
++      name();
++      this.once('connect', name);
++      return result;
++    } });
++  }
++  const connect = (...args) => {
+     const proxied = !!(__nimbusReplay && __nimbusReplay.outbound);
+-    if (!proxied) __nimbusReplay?.effect("tls.connect " + describe(args));
+-    const socket = proxied ? proxiedConnect(...args) : real.connect(...args);
++    const egressed = globalThis.__nimbusEgress === true;
++    // Over a socket the program opened (STARTTLS), workerd's node:tls asks
++    // that socket's startTls, which the egress answers for a keyed one.
++    const over = args[0] !== null && typeof args[0] === 'object' && args[0].socket !== undefined;
++    if (egressed ? over : !proxied) __nimbusReplay?.effect("tls.connect " + describe(args));
++    const socket = egressed ? (over ? real.connect(...args) : egressConnect(...args)) : proxied ? proxiedConnect(...args) : real.connect(...args);
+     let closed = false;
+     let hold = null;
+     socket.once('close', () => { closed = true; hold?.(false); });
+@@ -12211,10 +12380,7 @@ const __tlsMod = (() => {
+         counted.set(p, new Proxy(value, {
+           apply(target, self, args) { __nimbusReplay?.effect('tls.' + p); return Reflect.apply(target, self, args); },
+           construct(target, args, newTarget) {
+-            if (globalThis.__nimbusEgress === true) {
+-              throw nodeError(Error, 'ERR_NIMBUS_EGRESS_TLS', "Nimbus: TLS sockets are not available when the workspace's network goes through an egress (a Fetcher's connect() carries plain TCP only); use fetch() or https for HTTPS");
+-            }
+-            if (__nimbusReplay && __nimbusReplay.outbound) {
++            if (__nimbusReplay && __nimbusReplay.outbound && globalThis.__nimbusEgress !== true) {
+               throw notImplemented('tls.' + p, 'a TLS socket the program builds itself is not made in a program whose network goes through Nimbus (one started with its stdin open); use tls.connect');
+             }
+             __nimbusReplay?.effect('new tls.' + p);
