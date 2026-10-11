@@ -275,11 +275,16 @@ that stopped the loop. Every other clean end is `completed`.
   and re-derivable from live state, and because it is woven per model step no
   ladder stage ever sees it. What it frees is subtracted from the pressure the
   engine hears about, so relief there stands the rest of the ladder down.
-- The inbox (`kinu.inbox`, a `prepareStep` hook,
-  `packages/core/src/orchestrator/inbox.ts`) is the one way anything
-  asynchronous reaches the agent. A producer (event-hub drain, settled
-  background job, overflow retry, take pick, MCP task, the composer's own
-  message) calls `send()` and nothing else. A message sent while a turn runs is
+- What reaches an agent from outside its own isolate is a delivery
+  (`packages/core/src/subordinates/deliveries.ts`, decision D13): its producer
+  (a send, a signal, an event drain, an assignment, a run) commits an
+  `agent_deliveries` row with its source fact and arms the agent's wake, then
+  crosses `admit` once; the isolate's answer retires the row, and one that does
+  not cross stays owed to the wake. Inside the isolate, the inbox (`kinu.inbox`,
+  a `prepareStep` hook, `packages/core/src/orchestrator/inbox.ts`) is the one way
+  anything asynchronous reaches the agent's chat. A producer there (settled
+  background job, overflow retry, take pick, the composer's own message) calls
+  `send()` and nothing else. A message sent while a turn runs is
   spliced into its next step by the `StepInjections` math
   (`packages/core/src/prompting/step-injections.ts`). Sent while idle, it becomes
   the next turn through `BackendHost.enqueueTurn`. What a running turn never
@@ -357,7 +362,11 @@ Wake-ups beyond chat publish through a durable `EventLog`
 `consumed_at` column on `agent_log` leases delivery four ways: it is set when an
 event binds to a turn (`markConsumed`), cleared on completion
 (`markTurnCompleted`), released on abort or replan (`unbind`), and re-pended for
-stranded leases by a stale sweep (`unbindStale`). A `DrainScheduler`
+stranded leases by a stale sweep (`unbindStale`). The log is a record, never a
+queue: an ingress arms the workspace's durable wake, whose timer phase drains
+every agent's due events (`drainDueReactions`), each batch bound to its turn in
+the commit that owes it to the agent as a delivery; the turn's end closes the
+lease. On the CLI a `DrainScheduler`
 (`packages/core/src/orchestrator/drain-scheduler.ts`, 250 ms debounce)
 coalesces a burst into one programmatic turn instead of one turn per event.
 
