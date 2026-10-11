@@ -3067,22 +3067,30 @@ function readDeviceConfig(configPath = CONFIG_PATH) {
     throw new Error(`device config at ${configPath} is corrupt; re-run: kinu connect`, { cause: safeCause });
   }
 
-  const expectation = `device config at ${configPath} is missing its user, token or directory; re-run: kinu connect`;
-  const cfg = parseRecord(parsed, expectation);
-  const user = parseString(cfg.user, expectation);
-  const token = parseString(cfg.token, expectation);
-  const origin = cfg.origin === undefined ? undefined : trustedOrigin(parseString(cfg.origin, expectation), configPath);
-  // The directory `kinu connect` ran in, parsed HERE with everything else so
-  // the dial site sends a domain value rather than branching on a
-  // representation.
-  const root = parseString(cfg.root, expectation);
+  return parseDeviceConfig(parsed, configPath);
+}
 
-  if (user.length === 0 || token.length === 0) throw new Error(expectation);
-  const config = { ...cfg, user, token, root };
+/**
+ * The one schema of device.json, which the CLI reads with too: every field
+ * `kinu connect` writes, each a nonempty string; `origin` one this daemon will
+ * send its token to; `root`, the directory `kinu connect` ran in, absolute.
+ * Fields beyond these are kept, so a rotated token is written back with them.
+ */
+function parseDeviceConfig(value, configPath) {
+  const expectation = `device config at ${configPath} is missing its user, device, token, origin or directory; re-run: kinu connect`;
+  const cfg = parseRecord(value, expectation);
 
-  if (origin !== undefined) config.origin = origin;
+  const [user, device, token, origin, root] = ['user', 'device', 'token', 'origin', 'root'].map((field) => {
+    const text = parseString(cfg[field], expectation);
 
-  return config;
+    if (text.length === 0) throw new Error(expectation);
+
+    return text;
+  });
+
+  if (!path.isAbsolute(root)) throw new Error(`device config at ${configPath} names a directory that is not absolute; re-run: kinu connect`);
+
+  return { ...cfg, user, device, token, origin: trustedOrigin(origin, configPath), root };
 }
 
 /**
@@ -3850,9 +3858,7 @@ async function main() {
 
 /** The HTTP origin the device credentials trust. */
 function hubOrigin(cfg) {
-  const origin = cfg.origin ?? '';
-
-  return (origin === '' ? 'https://kinu.run' : origin).replace(/\/+$/, '');
+  return cfg.origin.replace(/\/+$/, '');
 }
 
 /**
@@ -3970,6 +3976,7 @@ module.exports = {
   createCheckpoints,
   CONFIG_PATH,
   readDeviceConfig,
+  parseDeviceConfig,
   startConnectLoop,
   getConnectTicket,
   persistRotatedToken,
