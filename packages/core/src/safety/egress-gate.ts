@@ -7,7 +7,7 @@ import { Effect } from 'effect';
 import { settleSync } from '../obs/effect';
 import type { ApprovalGrant } from './approval-gate';
 
-/** Version tag, so a stored binding from an older build is not mistaken for a secret. */
+/** Marks a placeholder, so a scan finds one inside any URL or header value and never mistakes a secret for one. */
 export const EGRESS_PLACEHOLDER_PREFIX = 'pxs1_';
 
 /** Exported for the vault's mint, whose output length the scanner below is the contract over. */

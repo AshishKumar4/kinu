@@ -482,13 +482,9 @@ class ObservedPortRegistry extends PortRegistry {
   }
 }
 
-/** `@nimbus-sh/worker`'s `SHELL_STATE_KEY_PREFIX`: no public call reads a named shell's directory. */
-const NAMED_SHELL_STATE_PREFIX = 'nimbus_programmatic_shell:';
-
 const NamedShellStateSchema = v.object({ cwd: v.pipe(v.string(), v.startsWith('/')) });
 
-/** Nimbus 0.15 keeps a named shell's state in the workspace's own SQLite; worker 0.13.1 moves an older key there on
- *  the box's first named call. Nimbus has no public read of it yet. */
+/** Where Nimbus keeps a named shell's state, in the workspace's own SQLite (core `SHELLS_TABLE`); it has no public read. */
 const NIMBUS_SHELLS_TABLE = 'vfs_shells';
 
 function namedShellCwd(sql: SqlStorage, id: string): string | null {
@@ -527,14 +523,7 @@ function workspaceBox(deps: {
     execStream: async (command, options) => await (await runtime()).execStream(command, named(options)),
     startProcess: async (command, options): Promise<NimbusStartResult> => await (await runtime()).startProcess(command, named(options)),
     runCode: async (code, options): Promise<NimbusExecResult> => await (await runtime()).runCode(code, named(options)),
-    shellCwd: async (name) => {
-      const kept = namedShellCwd(deps.ctx.storage.sql, shellId(name));
-
-      if (kept !== null) return kept;
-      const saved = v.safeParse(NamedShellStateSchema, await deps.ctx.storage.get(`${NAMED_SHELL_STATE_PREFIX}${shellId(name)}`));
-
-      return saved.success ? saved.output.cwd : null;
-    },
+    shellCwd: async (name) => namedShellCwd(deps.ctx.storage.sql, shellId(name)),
     runtimes: {
       ensure: async (specs, options) => await jsonResultOrVoid((await runtime()).ensureRuntimes(Array.isArray(specs) ? [...specs] : [specs], options)),
       install: async (spec, options) => await jsonResultOrVoid((await runtime()).installRuntime(spec, options)),

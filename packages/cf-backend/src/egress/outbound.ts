@@ -46,7 +46,7 @@ export interface KinuEgressParams {
   readonly ownerUserId: string;
 }
 
-/** Parsed although trusted: a container configured by an older build may carry fields this one no longer reads. */
+/** Parsed: `ctx.props` arrives untyped, and a configuration that is not this shape reads as unconfigured (no network). */
 const EgressParamsSchema = v.object({
   workspaceName: v.pipe(v.string(), v.minLength(1)),
   ownerUserId: v.pipe(v.string(), v.minLength(1)),
