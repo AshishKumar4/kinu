@@ -52,7 +52,8 @@ import type { LocalModelResolver } from '../src/model-resolver';
 import { TestLanguageModelV2 } from './test-language-model';
 import { leaseHolder } from './driver-lease-probe';
 import { hireDeathModel } from './hire-death-model';
-import { toolSequenceModel } from './helpers/local-session';
+import { swarmsOn, toolSequenceModel } from './helpers/local-session';
+import { staticModelPlane } from '../src/profile-authority';
 
 /** A roster row's lifetime is its actor's. */
 const ROSTER_LIFETIME = "(SELECT lifetime FROM workspace_actors WHERE actor_id = json_extract(actor_subordinates.actor_reference, '$.actorId')) AS lifetime";
@@ -500,6 +501,8 @@ interface TestHostExtras {
   advisor?: boolean;
   modelResolver?: LocalModelResolver;
   deferLiveReads?: (flush: () => void) => void;
+  /** "Beta: swarms" on for every workspace the host opens, as the session suites run it. */
+  swarms?: boolean;
 }
 
 function makeHost(
@@ -522,6 +525,8 @@ function makeHost(
       const hosted: LocalHostedAgent = { rt, openConfig, staticModel: model };
 
       if (extras.modelResolver) hosted.modelResolver = extras.modelResolver;
+
+      if (extras.swarms === true) hosted.profileAuthority = swarmsOn(rt, staticModelPlane());
 
       return hosted;
     },
@@ -789,12 +794,25 @@ describe('LocalAgentHost', () => {
     const dbPath = await seedAgent(state, 'root');
     const refs = [{ name: 'root', cwd: project, workspaceId: 'proj' }];
     const model = heldSearchModel();
-    const first = makeHost(state, model, refs);
+    const first = makeHost(state, model, refs, { swarms: true });
 
     await (await first.host.team('root')).create({ name: 'helper' });
     await first.host.close();
 
-    const { host } = makeHost(state, model, refs);
+    // Interrupted long ago: re-driven, its next attempt is a minute out, and it is live work all that minute.
+    const seeded = workspaceDatabase(dbPath);
+    const hire = seeded.query<{ actor_id: string }, []>('SELECT actor_id FROM workspace_actors WHERE parent_actor_id IS NOT NULL').get();
+
+    if (hire === null) throw new Error('the hire was not created');
+    const input = JSON.stringify({ op: 'swarm', preset: 'ideate', task: HELD_SEARCH, branches: 1, depth: 1 });
+
+    seeded.query(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at, resume_attempts)
+      VALUES (?, 'bgjob-held', 'agents', 'build', 'running', ?, 1, 6)`).run(hire.actor_id, input);
+    seeded.query(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES (?, 'f-held', 'bg:agents', ?, 1)`)
+      .run(hire.actor_id, JSON.stringify({ phase: 'running', jobId: 'bgjob-held', kind: 'agents' }));
+    seeded.close();
+
+    const { host } = makeHost(state, model, refs, { swarms: true });
     const outcomes: string[] = [];
 
     host.subscribe((agent, event) => {
@@ -806,16 +824,7 @@ describe('LocalAgentHost', () => {
       const db = workspaceDatabase(dbPath);
       const sql = makeSql(db);
       const rootId = openWorkspaceMainActor(sql).actorId;
-      const hire = db.query<{ actor_id: string }, []>('SELECT actor_id FROM workspace_actors WHERE parent_actor_id IS NOT NULL').get();
 
-      if (hire === null) throw new Error('the hire was not created');
-      // Interrupted long ago: re-driven, its next attempt is a minute out, and it is live work all that minute.
-      const input = JSON.stringify({ op: 'swarm', preset: 'ideate', task: HELD_SEARCH, branches: 1, depth: 1 });
-
-      db.query(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at, resume_attempts)
-        VALUES (?, 'bgjob-held', 'agents', 'build', 'running', ?, 1, 6)`).run(hire.actor_id, input);
-      db.query(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES (?, 'f-held', 'bg:agents', ?, 1)`)
-        .run(hire.actor_id, JSON.stringify({ phase: 'running', jobId: 'bgjob-held', kind: 'agents' }));
       await host.acquire('root/helper');
 
       for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS - 1; i++) {
@@ -828,6 +837,8 @@ describe('LocalAgentHost', () => {
 
       expect(outcomes).toEqual(['bg_job_refused']);
     } finally {
+      // Its search waits for its model until stopped: closing would otherwise wait out the settle grace.
+      await (await host.acquire('root/helper')).cancelBackgroundJob('bgjob-held');
       await host.close();
     }
   });
