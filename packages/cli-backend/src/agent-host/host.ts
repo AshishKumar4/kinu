@@ -1606,10 +1606,6 @@ function childRef(parent: HostEntry, childName: string): HostedAgentRef {
  * sleep through a subordinate's trigger.
  */
 function nextTriggerAt(db: Database): number | null {
-  const table = db.query(`SELECT name FROM sqlite_master WHERE type='table' AND name='triggers'`).get();
-
-  if (!table) return null;
-
   const row = db.query<{ next_fire_at: number | null }, []>(`
     SELECT MIN(next_fire_at) AS next_fire_at FROM triggers
     WHERE state = 'active' AND next_fire_at IS NOT NULL

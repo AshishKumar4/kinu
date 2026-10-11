@@ -288,6 +288,13 @@ export class UserProfileStore {
     return this.profileCatalogEnvelope(current.version, current.catalog);
   }
 
+  /** The catalog's version alone: a workspace compares it at each turn's open, and reads the catalog only once it moved. */
+  async getWorkspaceProfileCatalogVersion(caller: UserCaller): Promise<number> {
+    await this.host.requireTier(caller, 'profile.resolve');
+
+    return this.readProfileCatalogState().version;
+  }
+
   /** Shared workspaces may read the catalog; only an owner session may mutate it. */
   async getWorkspaceProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope> {
     await this.host.requireTier(caller, 'profile.resolve');

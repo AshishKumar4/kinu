@@ -101,7 +101,7 @@ export function describeLandedSteers(
     id: steer.id ?? `steer-${nanoid(12)}`,
     text: steer.text,
     atStep,
-    metadata: { [STEER_METADATA_KEY]: true, [STEER_STEP_METADATA_KEY]: atStep },
+    metadata: { [STEER_METADATA_KEY]: true, [STEER_STEP_METADATA_KEY]: atStep, [TURN_AUTHOR_METADATA_KEY]: 'operator' },
     ...(steer.files !== undefined && { files: steer.files }),
   }));
 }

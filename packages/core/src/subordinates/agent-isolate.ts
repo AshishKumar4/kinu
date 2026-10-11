@@ -64,6 +64,9 @@ export interface PreparedAgentTurn {
   readonly sources: TurnSourcesBundle;
   readonly pricing: ModelPricing | null;
   readonly accounts: Readonly<Record<string, string>>;
+  /** The account's credentials revision the turn opened under: credentials the isolate holds from another are read again.
+   *  Null for a preparation that opens no turn, which reads none. */
+  readonly credentialsRevision: number | null;
   readonly scaffold: StoredRow;
   readonly languages: readonly [string, ...string[]];
   /** A run's framing; absent for a chat turn. */

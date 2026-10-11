@@ -39,6 +39,10 @@ function workspace() {
   initEventsHubTables(exec);
   initRunEventTables(execRaw);
   initAgentFiguresTable(execRaw);
+  // The read model's tables, as the workspace's genesis creates them.
+  initDeferredApprovalsTable(execRaw);
+  initPlanReviewTable(execRaw);
+  initDeviceConsentRequestsTable(execRaw);
   const actors = createTestActors(sql, execRaw);
   new SubordinateRosterStore(exec, actors.main).ensureSchema();
 
@@ -188,8 +192,6 @@ describe('the Agents panel lists every agent in the workspace', () => {
     const claim = db.query(`INSERT INTO actor_turn_claims (actor_id, turn_id, run_id, epoch, work_mode, program_kind, program_version, outcome, claimed_at)
       VALUES (?, ?, 'run', 0, 'build', 'builtin', 1, ?, ?)`);
 
-    initDeferredApprovalsTable(makeExecRaw(db));
-    initPlanReviewTable(makeExecRaw(db));
     openTurn(alice);
     db.query(`INSERT INTO deferred_approvals (actor_id, id, command, reason, status, requested_at) VALUES (?, 'd1', 'rm -rf build', 'deletes files', 'queued', 1)`).run(alice.actorId);
     db.query(`INSERT INTO plan_reviews (actor_id, id, session_id, revision, content, status, created_at, updated_at) VALUES (?, 'p1', 's', 1, '# Plan', 'pending', 1, 1)`).run(main.actorId);
@@ -211,7 +213,6 @@ describe('the Agents panel lists every agent in the workspace', () => {
     const { db, read } = workspace();
     const main = async () => (await read()).find((agent) => agent.key === 'main')?.activity;
 
-    initDeviceConsentRequestsTable(makeExecRaw(db));
     db.query(`INSERT INTO device_consent_requests (consent_id, device_id, device_label, method, command, workspace_name, created_at, expires_at)
       VALUES ('c1', 'd1', 'laptop', 'exec', 'bun test', 'kiln', ?, ?)`).run(Date.now(), Date.now() + 60_000);
 

@@ -87,6 +87,9 @@ export class AgentDatabase {
 
   private host: ActorHost | undefined;
 
+  /** Its host's directory: rows an adoption replaces are read again there (`forget`). */
+  private directory: WorkspaceActorDirectory | undefined;
+
   private readonly stops = new Map<string, AbortController>();
 
   private lines: AgentTurnActivity[] = [];
@@ -170,6 +173,7 @@ export class AgentDatabase {
 
         for (const row of snapshot.scaffold) this.selectScaffold(row);
       });
+      this.directory?.forget(snapshot.lineage.map((row) => v.parse(v.string(), row.actor_id)));
     }
 
     this.snapshot = snapshot;
@@ -213,6 +217,8 @@ export class AgentDatabase {
       workspaceId: workspace.id,
       ownerUserId: workspace.owner_user_id,
     });
+
+    this.directory = directory;
 
     const files: AgentRuntimeFiles = {
       agent: () => nimbusSessionFiles(this.workspace.agent(), { home: this.workspace.home }),

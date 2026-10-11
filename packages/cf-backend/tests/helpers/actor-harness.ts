@@ -14,7 +14,7 @@ import * as v from 'valibot';
 import { scriptedTurnModel, type ModelStreamPart, type ScriptedTurnOptions, type ScriptedTurnResult } from '@kinu.run/test-utils/turn-model';
 import { convertArrayToReadableStream, MockLanguageModelV4 } from 'ai/test';
 import type { PreparedRequest, ScriptedAnswer, SettledTurn, TurnHarness } from './turn-harness';
-import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, Clock, ModelInfo, ModelRouteResolution, ActorToolsets, ActorReach, TurnReach } from '@kinu.run/core';
+import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, Clock, ModelInfo, ModelRouteResolution, ActorToolsets, ActorReach, TurnReach, PlanEdit, PlanReviewResult } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { WorkspaceOverview } from '@kinu.run/core';
 import { OwnedModelServices } from '../../src/owned-model-services';
@@ -200,6 +200,11 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   /** The world's clock, when it sets one: a job's foreground window then runs on the suite's time. */
   protected override jobClock(): Clock {
     return activationWorlds.get(this.ctx)?.jobClock ?? super.jobClock();
+  }
+
+  /** A plan the agent submits, as its Plan turn's tool submits it: into its own isolate. */
+  async harnessSubmitAgentPlan(actorId: string, edits: readonly PlanEdit[]): Promise<PlanReviewResult> {
+    return await this.agentPlanSubmit(actorId, edits, undefined);
   }
 
   /** Every agent's isolate at rest, as each answers for itself. */
@@ -1535,6 +1540,8 @@ export async function fireSoonestWake(agent: Pick<HarnessOrchestratorAgent, 'ala
 /** A recording owner-UserDO binding, in place of the refusing default. */
 export interface RecordedUserPlaneCalls {
   warmConnections: UserCaller[];
+  /** The account's settings revision a turn's open reads; unchanged (0, 0) unless a suite moves it. */
+  settingsRevision?: { readonly catalog: number; readonly credentials: number };
   /** The account's active workspaces, this one among them, as the peers tool reads them. */
   workspaces?: readonly { readonly name: string; readonly displayName: string }[];
   /** Set to make `userMcp_warmConnections` reject. */
@@ -1664,6 +1671,8 @@ export function makeEnv(
 
         const ownerPlane = {
           getWorkspaceTitle: async (): Promise<null> => null,
+          // The account's settings as a turn opens on them: unchanged unless a suite moves them.
+          getSettingsRevision: async () => ({ catalog: userPlane?.settingsRevision?.catalog ?? 0, credentials: userPlane?.settingsRevision?.credentials ?? 0 }),
           setWorkspaceDisplayName: async (
             _caller: UserCaller, _workspace: string, displayName: string,
           ): Promise<{ applied: boolean }> => {

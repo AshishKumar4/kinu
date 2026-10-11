@@ -25,7 +25,7 @@ describe('turnReach', () => {
 
   test("Build offers a plan only on the owner's conversation; Plan on any owner's-lane turn", () => {
     // A harness turn, as a job's wake is: the owner's lane of an agent with no hirer, and not the owner's conversation.
-    const wake = { kinuEvent: 'job_wake' };
+    const wake = { kinuEvent: 'job_wake', kinuAuthor: 'harness' };
 
     expect(turnReach({ ...owner, driving: wake }).submitPlan).toBe(false);
     expect(turnReach({ ...owner, driving: wake, mode: 'plan' }).submitPlan).toBe(true);
