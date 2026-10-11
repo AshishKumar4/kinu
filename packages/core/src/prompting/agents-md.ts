@@ -186,13 +186,14 @@ export async function discoverInstructionFiles(
 }
 
 /**
- * A Nimbus plane's port. A link is never followed: the plane cannot resolve one through its mounts (NIMBUS-ASKS 10).
- * The bytes read must be the ones sized, so the file is sized again after the read. A sandbox that cannot size a file
- * reports 0, and then only the second size is compared.
+ * A plane's port. A link is followed as the plane's own reader follows it, so only a file that reader could open is read;
+ * a plane whose stat still answers a link cannot follow one, and says so. The bytes read must be the ones sized, so the
+ * file is sized again after the read: a link moved to another file in between is another inode. A sandbox that cannot
+ * size a file reports 0, and then only the second size is compared.
  */
 function vfsInstructionProbe(files: VFS, path: string): () => Promise<InstructionFileProbe> {
   return async () => {
-    const sized = await files.stat(path, { follow: false });
+    const sized = await files.stat(path);
 
     if (sized === null || sized.type === 'directory') return null;
 
@@ -200,7 +201,7 @@ function vfsInstructionProbe(files: VFS, path: string): () => Promise<Instructio
 
     const read = async (): Promise<InstructionFileRead> => {
       const bytes = await tolerateAsync(async () => await files.readFile(path), 'enoent');
-      const after = await files.stat(path, { follow: false });
+      const after = await files.stat(path);
 
       const same = bytes !== undefined && after !== null && after.type === sized.type && after.size === sized.size
         && after.mtimeMs === sized.mtimeMs && after.ino === sized.ino && (sized.size === 0 || bytes.length === sized.size);
