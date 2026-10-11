@@ -1133,7 +1133,7 @@
     "recorded_at INTEGER NOT NULL",
     "PRIMARY KEY (slate_id, path)"
   ],
-  "slate_images@packages/cf-backend/src/slates/builds.ts": [
+  "slate_images@packages/core/src/slates/builds.ts": [
     "slate TEXT NOT NULL",
     "authority TEXT NOT NULL",
     "good_key TEXT",
