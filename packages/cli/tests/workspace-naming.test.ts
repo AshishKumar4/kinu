@@ -38,7 +38,7 @@ process.env.KINU_HOME = OFFERED_HOME;
 
 const { listKnownAgents } = await import('../src/agent-list');
 
-const { upsertAgentConfig, AGENT_HOME } = await import('../src/config');
+const { placeLocalWorkspace, AGENT_HOME } = await import('../src/config');
 
 if (inheritedHome === undefined) delete process.env.KINU_HOME;
 else process.env.KINU_HOME = inheritedHome;
@@ -125,7 +125,7 @@ async function seedUntitledWorkspace(project: string): Promise<string> {
     db.close();
   }
 
-  await upsertAgentConfig({ name: SLUG, mode: 'local', localName: SLUG, cwd: project, workspaceId: 'proj' });
+  await placeLocalWorkspace({ name: SLUG, cwd: project, workspaceId: 'proj' });
 
   return dbPath;
 }

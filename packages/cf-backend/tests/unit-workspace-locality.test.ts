@@ -494,12 +494,12 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     expect(redriven).toEqual(['slate-a']);
 
     // `missing` is the 404; every other refusal is a retryable 503 carrying it verbatim.
-    refusal = { reason: 'missing', error: 'gone' };
+    refusal = { success: false, reason: 'missing', error: 'gone' };
     expect((await workspace.routePreview(
       3000, capability.slice(0, 10), new Request('https://preview.test/'), '/',
     )).status).toBe(404);
 
-    refusal = { reason: 'bad_input', error: 'compile failed' };
+    refusal = { success: false, reason: 'bad_input', error: 'compile failed' };
 
     const refused = await workspace.routePreview(
       3000, capability.slice(0, 10), new Request('https://preview.test/'), '/',
@@ -679,7 +679,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       ensureSlate: async (owner) => {
         asked.push(owner);
 
-        return { reason: 'missing', error: `slate ${owner} durable app: ENOENT: slates/${owner}` };
+        return { success: false, reason: 'missing', error: `slate ${owner} durable app: ENOENT: slates/${owner}` };
       },
     });
 

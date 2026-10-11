@@ -162,17 +162,16 @@ export function buildAgentHubEntries(input: {
   current: { name: string; mode: 'local' | 'cloud' };
   currentEntry: TuiAgentHubEntry;
   subordinates: readonly TuiSubordinate[];
-  projectRoot: string;
 }): TuiAgentHubEntry[] {
-  const { items, current, currentEntry, projectRoot } = input;
+  const { items, current, currentEntry } = input;
   const currentRow = items.find((item) => item.name === current.name && item.mode === current.mode);
-  const groupKey = currentRow ? agentWorkspaceKey(currentRow, projectRoot) : null;
+  const groupKey = currentRow ? agentWorkspaceKey(currentRow) : null;
 
   const sameProject = current.mode === 'local' && currentRow !== undefined && groupKey !== null;
   const alone = currentRow === undefined ? [] : [currentRow];
 
   const members = sameProject
-    ? items.filter((item) => item.mode === 'local' && agentWorkspaceKey(item, projectRoot) === groupKey)
+    ? items.filter((item) => item.mode === 'local' && agentWorkspaceKey(item) === groupKey)
     : alone;
 
   const nestedUnder = (parentId: string, own: boolean, workspace: string, subordinates: readonly TuiSubordinate[]) =>

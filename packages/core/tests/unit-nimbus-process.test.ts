@@ -84,6 +84,7 @@ describe("nimbus startProcess — the process is alive when the call returns", (
     const out = await nimbus.tools.startProcess?.execute('node server.js');
     // `unsupported`, not `unavailable`: retrying cannot add a method to this handle.
     expect(out).toEqual({
+      success: false,
       reason: "unsupported",
       error: "Nimbus SDK handle does not expose startProcess",
     });

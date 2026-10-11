@@ -6,26 +6,23 @@ import {
   readWorkspaceDisplayName,
   requireAuthConfig,
   updateConfigFile,
-  type AgentMode,
   type KinuAgentConfig,
 } from './config';
 import { workspaceDisplayTitle } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { listCloudAgents, type CloudAgent } from './cloud-api';
 
-export interface ListedAgent {
+interface ListedAgentFields {
   name: string;
   label: string;
-  mode: AgentMode;
   /** Typed reason the title could not be read, so callers need not parse the label. */
   readError?: string;
-  localName?: string;
-  cloudName?: string;
-  /** The folder a local agent's ref records; cloud rows have none. */
-  cwd?: string;
-  /** Peers share the pair `{cwd, workspaceId}`. */
-  workspaceId?: string;
 }
+
+export type ListedAgent = ListedAgentFields & (
+  { mode: 'local'; localName: string; cwd: string; workspaceId: string; cloudName?: never }
+  | { mode: 'cloud'; cloudName: string; localName?: never; cwd?: never; workspaceId?: never }
+);
 
 interface AgentWorkspaceGroup<T extends ListedAgent = ListedAgent> {
   readonly cwd: string;
@@ -39,24 +36,13 @@ interface GroupedAgentWorkspaces<T extends ListedAgent = ListedAgent> {
   readonly remote: readonly T[];
 }
 
-/** Display-only fallback when a ref records no `workspaceId`; placement always stores the real id. */
-function workspaceIdForRoot(root: string): string {
-  const base = root.replace(/\/+$/u, '').split('/').at(-1) ?? '';
-
-  const candidate = base
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/gu, '-')
-    .replace(/^-+|-+$/gu, '');
-
-  return candidate === '' ? 'workspace' : candidate;
-}
-
 /** `null` for cloud, else the peers' `{cwd, workspaceId}` pair. */
-export function agentWorkspaceKey(agent: ListedAgent, projectRoot: string): string | null {
+export function agentWorkspaceKey(agent: Extract<ListedAgent, { mode: 'local' }>): string;
+export function agentWorkspaceKey(agent: ListedAgent): string | null;
+export function agentWorkspaceKey(agent: ListedAgent): string | null {
   if (agent.mode === 'cloud') return null;
-  const cwd = agent.cwd ?? projectRoot;
 
-  return `${cwd}\u0000${agent.workspaceId ?? workspaceIdForRoot(cwd)}`;
+  return `${agent.cwd}\u0000${agent.workspaceId}`;
 }
 
 /** Current project's workspaces first, then other projects, then cloud. Rows keep their order in a group. */
@@ -68,15 +54,14 @@ export function groupAgentWorkspaces<T extends ListedAgent>(
   const remote: T[] = [];
 
   for (const agent of agents) {
-    const key = agentWorkspaceKey(agent, projectRoot);
-
-    if (key === null) {
+    if (agent.mode === 'cloud') {
       remote.push(agent);
       continue;
     }
 
-    const cwd = agent.cwd ?? projectRoot;
-    const group = groups.get(key) ?? { cwd, workspaceId: key.slice(cwd.length + 1), agents: [] };
+    const key = agentWorkspaceKey(agent);
+    const cwd = agent.cwd;
+    const group = groups.get(key) ?? { cwd, workspaceId: agent.workspaceId, agents: [] };
     group.agents.push(agent);
     groups.set(key, group);
   }
@@ -104,22 +89,29 @@ function localDisplay(dirName: string): Pick<ListedAgent, 'label' | 'readError'>
 }
 
 /** Opens under the ref's config name when one exists, so aliases and cloud links stay attached. */
-function localRow(configured: KinuAgentConfig | undefined, dirName: string): ListedAgent {
+function localRow(configured: Extract<KinuAgentConfig, { mode: 'local' }>): ListedAgent {
   return {
-    name: configured?.name ?? dirName,
-    ...localDisplay(dirName),
+    name: configured.name,
+    ...localDisplay(configured.localName),
     mode: 'local',
-    localName: dirName,
-    cloudName: configured?.cloudName,
-    cwd: configured?.cwd,
-    workspaceId: configured?.workspaceId,
+    localName: configured.localName,
+    cwd: configured.cwd,
+    workspaceId: configured.workspaceId,
   };
 }
 
-function localRefsByDirName(refs: readonly KinuAgentConfig[]): Map<string, KinuAgentConfig> {
+function localRefsByDirName(refs: readonly KinuAgentConfig[]): Map<string, Extract<KinuAgentConfig, { mode: 'local' }>> {
   return new Map(refs
     .filter((agent) => agent.mode === 'local')
-    .map((agent) => [agent.localName ?? agent.name, agent]));
+    .map((agent) => [agent.localName, agent]));
+}
+
+function localRows(refs: ReadonlyMap<string, Extract<KinuAgentConfig, { mode: 'local' }>>, names: Iterable<string>): ListedAgent[] {
+  return [...names].flatMap((name) => {
+    const ref = refs.get(name);
+
+    return ref === undefined ? [] : [localRow(ref)];
+  });
 }
 
 /** The one roster `kinu list`, `kinu transcripts` and the chat picker all read. */
@@ -131,16 +123,16 @@ export function listLocalAgentNames(cwd = process.cwd()): string[] {
 export function listSidebarAgents(cwd = process.cwd()): ListedAgent[] {
   const refs = listConfiguredAgentRefs();
   const byDirName = localRefsByDirName(refs);
+  const localNames = new Set(listLocalAgentNames(cwd));
 
   return [
-    ...listLocalAgentNames(cwd).map((name) => localRow(byDirName.get(name), name)),
+    ...localRows(byDirName, localNames),
     ...refs
       .filter((agent) => agent.mode === 'cloud')
       .map((agent) => ({
         name: agent.name,
         label: workspaceDisplayTitle({ name: agent.name, displayName: agent.displayName }),
         mode: 'cloud' as const,
-        localName: agent.localName,
         cloudName: agent.cloudName,
       })),
   ];
@@ -152,7 +144,8 @@ export function reconcileAgentRefs(
   cloudAgents: readonly CloudAgent[],
 ): ListedAgent[] {
   const localConfig = localRefsByDirName(configuredAgents);
-  const local = [...new Set(localAgentNames)].map((name) => localRow(localConfig.get(name), name));
+  const localNames = new Set(localAgentNames);
+  const local = localRows(localConfig, localNames);
 
   const seenCloudNames = new Set<string>();
 
@@ -179,15 +172,12 @@ export function listKnownAgents(): ListedAgent[] {
 
   return [
     // The label comes from the workspace database, where renames and auto-titles land, not the `config.json` mirror.
-    ...[...placed].map((name) => localRow(byDirName.get(name), name)),
+    ...localRows(byDirName, placed),
     ...refs.filter((agent) => agent.mode === 'cloud').map((agent) => ({
       name: agent.name,
       label: workspaceDisplayTitle({ name: agent.name, displayName: agent.displayName }),
       mode: agent.mode,
-      localName: agent.localName,
       cloudName: agent.cloudName,
-      cwd: agent.cwd,
-      workspaceId: agent.workspaceId,
     })),
   ];
 }
@@ -217,7 +207,7 @@ export async function syncCloudAgentRefs(): Promise<CloudRefSync> {
     const next: Record<string, KinuAgentConfig> = {};
 
     for (const [name, agent] of Object.entries(current)) {
-      if (agent.mode === 'cloud' && !cloudNames.has(agent.cloudName ?? agent.name)) continue;
+      if (agent.mode === 'cloud' && !cloudNames.has(agent.cloudName)) continue;
       next[name] = agent;
     }
 
@@ -227,7 +217,7 @@ export async function syncCloudAgentRefs(): Promise<CloudRefSync> {
       if (existing?.mode === 'local') {
         collisions.push({
           name: agent.name,
-          localName: existing.localName ?? existing.name,
+          localName: existing.localName,
           cloudDisplayName: agent.displayName,
         });
         continue;
@@ -250,7 +240,7 @@ export async function syncCloudAgentRefs(): Promise<CloudRefSync> {
       for (const [alias, target] of Object.entries(config.aliases)) {
         const agent = next[target];
 
-        if (!agent || (agent.mode === 'cloud' && !cloudNames.has(agent.cloudName ?? agent.name))) {
+        if (!agent || (agent.mode === 'cloud' && !cloudNames.has(agent.cloudName))) {
           delete config.aliases[alias];
         }
       }

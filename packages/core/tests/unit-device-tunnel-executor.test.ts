@@ -368,6 +368,7 @@ describe('createDeviceTunnelExecutor', () => {
 
     // `io`, not `unavailable`: the device answered and its filesystem refused.
     expect(await createDeviceTunnelExecutor(t).tools.exec.execute('ls')).toEqual({
+      success: false,
       reason: 'io',
       error: 'device exec `ls`: permission denied',
     });

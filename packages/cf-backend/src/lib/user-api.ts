@@ -58,9 +58,8 @@ const UserProfileSchema = v.nullable(v.object({
   onboardedAt: v.nullable(v.number()),
   /** An account that already has a workspace is never sent through the wizard. */
   workspaceCount: v.number(),
-  /** Nav visibility only, decided by the function that guards `/api/control/*`; that gate answers for itself every request.
-   *  Optional so a client against an older Worker hides the nav entry instead of failing to parse. */
-  controlPlane: v.optional(v.boolean()),
+  /** Nav visibility only, decided by the function that guards `/api/control/*`; that gate answers for itself every request. */
+  controlPlane: v.boolean(),
 }));
 
 const WorkspaceEntrySchema = v.object({
@@ -194,13 +193,9 @@ const DeviceSandboxSchema = v.object({
   tier: v.picklist(DEVICE_TIERS),
   capability: v.picklist(DEVICE_SANDBOX_CAPABILITIES),
   reason: v.nullable(v.picklist(DEVICE_SANDBOX_REASONS)),
-  detail: v.optional(v.nullable(v.string()), null),
+  detail: v.nullable(v.string()),
   gpu: v.pipe(v.array(v.string()), v.readonly()),
 });
-
-/** Pre-sandbox rows: switch on by default, capability unproved (the same reading `parseSandboxCapability` gives silence). */
-const UNREPORTED_SANDBOX: v.InferOutput<typeof DeviceSandboxSchema> =
-  { tier: 'sandboxed', capability: 'files_only', reason: null, detail: null, gpu: [] };
 
 const UserDeviceSchema = v.object({
   id: v.string(), label: v.string(), os: v.nullable(v.string()), hostname: v.nullable(v.string()),
@@ -211,14 +206,14 @@ const UserDeviceSchema = v.object({
   replacedAt: v.nullable(v.number()),
   revokedAt: v.nullable(v.number()), unstoppedAt: v.nullable(v.number()),
   /** Revoked because its retired key came back: a copy exists. */
-  reuseDetectedAt: v.optional(v.nullable(v.number()), null),
-  wholeMachine: v.optional(v.boolean(), false),
+  reuseDetectedAt: v.nullable(v.number()),
+  wholeMachine: v.boolean(),
   /** Workspace-specific home and roots live on the runtime status, not here. */
-  sandbox: v.optional(DeviceSandboxSchema, UNREPORTED_SANDBOX),
-  version: v.optional(v.nullable(v.string()), null),
-  servedVersion: v.optional(v.nullable(v.string()), null),
-  update: v.optional(v.picklist(DEVICE_UPDATE_STATES), 'unreported'),
-  updateRefusal: v.optional(v.nullable(v.string()), null),
+  sandbox: DeviceSandboxSchema,
+  version: v.nullable(v.string()),
+  servedVersion: v.nullable(v.string()),
+  update: v.picklist(DEVICE_UPDATE_STATES),
+  updateRefusal: v.nullable(v.string()),
 });
 
 const RegisteredDeviceSchema = v.object({ origin: v.string(), installCommand: v.string(), deviceId: v.string() });

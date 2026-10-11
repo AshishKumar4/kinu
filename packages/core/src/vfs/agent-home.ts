@@ -10,7 +10,6 @@ import { settleSync } from '../obs/effect';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
-import { normalizeVfsPath } from '@nimbus-sh/core/vfs/path.js';
 import * as v from 'valibot';
 import { SOUL_FILE, SOUL_PATH } from '../identity/soul';
 import { parseActorKey } from '../identity/actor-key';
@@ -204,11 +203,8 @@ export function provisionAgentHome(root: HomeRootVfs, agentName: string, identit
   return agentHome(agentName);
 }
 
-export type RootMoveVfs = Pick<CredentialedVfs,
-  'exists' | 'isDirectory' | 'isSymlink' | 'readdir' | 'rename' | 'removeRecursive' | 'unlink' | 'stat' | 'chown' | 'chmod'>;
-
 /** Nimbus seeds the configured HOME (env.HOME is {@link WORKSPACE_ROOT}); `/home` holds every agent's, so root owns it. */
-export function settleWorkspaceRoot(kernel: Pick<RootMoveVfs, 'stat' | 'chown' | 'chmod'>): void {
+export function settleWorkspaceRoot(kernel: Pick<CredentialedVfs, 'stat' | 'chown' | 'chmod'>): void {
   const homes = kernel.stat('/home');
 
   if (homes.uid !== 0 || homes.gid !== 0 || (homes.mode & 0o7777) !== 0o755) {
@@ -248,20 +244,13 @@ export function provisionWorkspaceSoul(kernel: SoulVfs, content?: string | Uint8
   }));
 }
 
-export type SlatesMoveVfs = RootMoveVfs & Pick<CredentialedVfs, 'mkdir' | 'lstat' | 'getDefaultAcl' | 'setDefaultAcl'>;
+type SlatesRootVfs = Pick<CredentialedVfs, 'exists' | 'mkdir' | 'stat' | 'chown' | 'chmod' | 'getDefaultAcl' | 'setDefaultAcl'>;
 
 /**
  * Kernel-owned, group-shared, setgid, and registered with Nimbus as a shared directory (`register`: once per
- * engine boot, from trusted host init); the old root's slates move in once, after, so they are shared too.
+ * engine boot, from trusted host init).
  */
-export function settleWorkspaceSlates(kernel: SlatesMoveVfs, register: (path: string) => void): void {
-  if (kernel.isSymlink(SLATES_ROOT)) {
-    kernel.unlink(SLATES_ROOT);
-  } else if (kernel.exists(SLATES_ROOT) && !kernel.isDirectory(SLATES_ROOT)) {
-    // Moved aside, not deleted.
-    kernel.rename(SLATES_ROOT, freePath(kernel, `${WORKSPACE_ROOT}/slates-file`));
-  }
-
+export function settleWorkspaceSlates(kernel: SlatesRootVfs, register: (path: string) => void): void {
   if (!kernel.exists(SLATES_ROOT)) kernel.mkdir(SLATES_ROOT);
 
   const root = kernel.stat(SLATES_ROOT);
@@ -278,45 +267,6 @@ export function settleWorkspaceSlates(kernel: SlatesMoveVfs, register: (path: st
   }
 
   register(SLATES_ROOT);
-
-  // Registered, a chmod applies the sharing rule: what was made here while /slates was not shared joins it.
-  if (!shared) for (const { name } of kernel.readdir(SLATES_ROOT)) reshare(kernel, `${SLATES_ROOT}/${name}`);
-
-  const legacy = `${WORKSPACE_ROOT}/slates`;
-
-  if (kernel.isSymlink(legacy)) {
-    kernel.unlink(legacy);
-  } else if (kernel.isDirectory(legacy)) {
-    moveMissing(kernel, legacy, SLATES_ROOT);
-    kernel.removeRecursive(legacy);
-  }
-}
-
-function freePath(kernel: SlatesMoveVfs, base: string): string {
-  for (let suffix = 1; ; suffix += 1) {
-    const path = suffix === 1 ? base : `${base}-${String(suffix)}`;
-
-    if (!kernel.exists(path)) return path;
-  }
-}
-
-function reshare(kernel: SlatesMoveVfs, path: string): void {
-  const stat = kernel.lstat(path);
-
-  if (stat.type === 'symlink') return;
-  kernel.chmod(path, stat.mode & 0o7777);
-
-  if (stat.type === 'directory') for (const { name } of kernel.readdir(path)) reshare(kernel, `${path}/${name}`);
-}
-
-function moveMissing(kernel: RootMoveVfs, from: string, to: string): void {
-  for (const { name } of kernel.readdir(from)) {
-    const source = `${from}/${name}`;
-    const target = `${to}/${name}`;
-
-    if (!kernel.exists(target)) kernel.rename(normalizeVfsPath(source), normalizeVfsPath(target));
-    else if (kernel.isDirectory(source) && kernel.isDirectory(target)) moveMissing(kernel, source, target);
-  }
 }
 
 /** Make `/tmp` resolve to this agent's own tmp for this agent's uid. */

@@ -599,7 +599,7 @@ describe('workspace diff lifecycle', () => {
   });
 
   test('a failed git subcommand is an Output error, never an empty successful diff', async () => {
-    const responses: CommandResult[] = [{ reason: 'io', error: 'Error (exit 128)\nfatal: index corrupt' }];
+    const responses: CommandResult[] = [{ success: false, reason: 'io', error: 'Error (exit 128)\nfatal: index corrupt' }];
 
     const provider: ExecutorProvider = {
       name: 'sandbox', kind: 'sandbox', capabilities: new Set(['git']), filesOwner: 'agent',

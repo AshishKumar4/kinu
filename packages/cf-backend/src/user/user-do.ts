@@ -45,7 +45,7 @@ import { ShareCardJobs, type ReceivedShare } from './share-cards';
 import type { SqlRow, UserObjectHost } from './user-host';
 
 import {
-  type Admission, type AttemptBucket, type ChallengePurpose, type Grant, type NewBuiltinAccount, type NewInvite, type PasskeyAccount, type PasswordAccount, type PasswordHash, type PendingChallenge, type ListedAccount, type Reset, type SigningAccount,
+  type Admission, type AttemptBucket, type ChallengePurpose, type Grant, type NewBuiltinAccount, type NewInvite, type PasskeyAccount, type PasswordAccount, type PendingChallenge, type ListedAccount, type Reset, type SigningAccount,
 } from '@kinu.run/core/identity';
 
 const ROSTER_NUDGE_LANES = 4;
@@ -385,10 +385,6 @@ export class UserDO extends Agent<Env> {
 
   builtinReserveAttempt(caller: UserCaller, buckets: readonly AttemptBucket[]): Promise<number> {
     return this.sessions.builtinReserveAttempt(caller, buckets);
-  }
-
-  builtinReplacePassword(caller: UserCaller, userId: string, password: PasswordHash): Promise<void> {
-    return this.sessions.builtinReplacePassword(caller, userId, password);
   }
 
   builtinResetAccount(caller: UserCaller, grant: Grant): Promise<SigningAccount | null> {

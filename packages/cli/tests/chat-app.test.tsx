@@ -18,9 +18,9 @@ import { flushSync } from '@opentui/react';
 
 afterEach(cleanupChats);
 
-const ALPHA_LOCAL: FixtureWorkspace = { name: 'alpha', label: 'Alpha', mode: 'local' };
+const ALPHA_LOCAL: FixtureWorkspace = { name: 'alpha', label: 'Alpha', mode: 'local', localName: 'alpha', cwd: '/repo/shop', workspaceId: 'shop' };
 
-const BETA_LOCAL: FixtureWorkspace = { name: 'beta', label: 'Beta', mode: 'local' };
+const BETA_LOCAL: FixtureWorkspace = { name: 'beta', label: 'Beta', mode: 'local', localName: 'beta', cwd: '/repo/shop', workspaceId: 'shop' };
 
 const BETA_CLOUD: FixtureWorkspace = { name: 'beta', label: 'Beta', mode: 'cloud', cloudName: 'beta' };
 
@@ -37,9 +37,9 @@ interface HubWorkspaces {
 
 function hubWorkspaces({ open, label, peer, created }: HubWorkspaces): FixtureWorkspace[] {
   const cwd = process.cwd();
-  const rows: FixtureWorkspace[] = [{ name: open, label, mode: 'local', cwd, workspaceId: 'shop' }];
+  const rows: FixtureWorkspace[] = [{ name: open, label, mode: 'local', localName: open, cwd, workspaceId: 'shop' }];
 
-  if (created) rows.push({ name: peer, label: '', mode: 'local', cwd, workspaceId: 'shop' });
+  if (created) rows.push({ name: peer, label: '', mode: 'local', localName: peer, cwd, workspaceId: 'shop' });
 
   return rows;
 }

@@ -16,8 +16,9 @@ import {
   type JsonObject,
 } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
-import { listCloudDevices, type CloudDevice } from '../src/cloud-api';
+import { type CloudDevice } from '../src/cloud-api';
 import { describeDeviceSandbox } from '../src/device-connect';
+import { VERSION } from '../src/display';
 import { CloudAgentClient } from '../src/cloud-agent-client';
 import * as v from 'valibot';
 import DAEMON_SOURCE from '../../pc-agent/src/index.js' with { type: 'text' };
@@ -82,8 +83,8 @@ interface StubCloud {
 }
 
 interface StubCloudOptions {
-  /** Typed as the wire, not `CloudDevice`, so a case can serve an older hub's row. */
-  devices?: () => unknown[];
+  devices?: () => CloudDevice[];
+  deviceOrigin?: string;
   registerGate?: Promise<void>;
   registrationFailure?: { status: number; error: string };
   onRegister?: (body: { label?: string; replaces?: string }) => void;
@@ -129,7 +130,7 @@ function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
           deviceId: 'dev_1',
           token: 'device-token',
           userId: 'user_1',
-          origin: `http://localhost:${server.port}`,
+          origin: opts.deviceOrigin ?? `http://localhost:${server.port}`,
         });
       }
 
@@ -218,7 +219,7 @@ function connectedDevice(connected: boolean, overrides: Partial<CloudDevice> = {
 }
 
 function connectedResult(label = connectedDevice(true).label) {
-  return { kind: 'connected', deviceId: 'dev_1', label, sandbox: connectedDevice(true).sandbox, wholeMachine: false };
+  return { kind: 'connected', deviceId: 'dev_1', label, sandbox: connectedDevice(true).sandbox, wholeMachine: false, replacedLocalConfig: false };
 }
 
 
@@ -282,7 +283,7 @@ describe('device-connect prompt policy', () => {
     // This machine is the device its device.json names, whatever its hostname.
     const stub = startStubCloud({ devices: () => [connectedDevice(true, { id: 'dev_this', hostname: 'renamed-box' })] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
-    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', device: 'dev_this', token: 'pdt_this', origin: stub.origin }));
+    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', device: 'dev_this', token: 'pdt_this', origin: stub.origin, root: repoRoot }));
 
     const out = await runScript(home, `
       import { shouldOfferDeviceConnect } from './packages/cli/src/device-connect.ts';
@@ -393,7 +394,7 @@ describe('device-connect daemon lifecycle', () => {
     };
 
     // A device.json another deployment issued is that deployment's secret, and stays unsent.
-    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', token: 'pdt_other_hub', origin: 'https://other.example' }));
+    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', device: 'dev_other_hub', token: 'pdt_other_hub', origin: 'https://other.example', root: repoRoot }));
     await connect();
     await connect();
 
@@ -415,7 +416,7 @@ describe('device-connect daemon lifecycle', () => {
       const sleeper = Bun.spawn({ cmd: ['sleep', '30'] });
       sleepers.push(sleeper);
       writeFileSync(join(home, 'pc-agent.pid'), `${sleeper.pid}\n`, { mode: 0o600 });
-      writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', device: 'dev_this', token: 'pdt_this', origin: stub.origin }));
+      writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', device: 'dev_this', token: 'pdt_this', origin: stub.origin, root: repoRoot }));
 
       const out = await runScript(home, `
         import { connectDevice } from './packages/cli/src/device-connect.ts';
@@ -560,19 +561,7 @@ describe('the sandbox state the machine reported', () => {
     expect(line).not.toContain('Sandbox on');
   });
 
-  test('a device row from a hub too old to report the switch still lists', async () => {
-    const stub = startStubCloud({
-      devices: () => [{
-        id: 'dev_1', label: 'device', os: 'linux', hostname: 'box',
-        connected: true, createdAt: 0, lastSeenAt: null,
-      }],
-    });
 
-    const devices = await listCloudDevices(stub.origin, 'ptc_test');
-
-    expect(devices).toHaveLength(1);
-    expect(devices[0].sandbox).toEqual({ tier: 'sandboxed', capability: 'files_only', reason: null, detail: null, gpu: [] });
-  });
 });
 
 describe('device-connect install hardening', () => {
@@ -601,26 +590,41 @@ describe('device-connect install hardening', () => {
     expect(existsSync(join(home, POISON_MARKER))).toBe(false);
   });
 
-  test('a tampered daemon on disk is replaced by the bytes this CLI ships', async () => {
-    const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
+  test('kinu connect replaces a malformed local config and starts a working shipped daemon', async () => {
+    const hub = startUpdateHub({ served: VERSION, archive: new Uint8Array() });
+    updateHubs.push(hub);
+    const registrations: { label?: string; replaces?: string }[] = [];
+
+    const stub = startStubCloud({
+      deviceOrigin: hub.origin,
+      devices: () => [connectedDevice(hub.sockets.items.some((socket) => socket.closed === null))],
+      onRegister: (registration) => { registrations.push(registration); },
+    });
+
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+    daemonHomes.push(home);
     writeFileSync(join(home, 'pc-agent.js'), '// tampered daemon\n', { mode: 0o700 });
     writeFileSync(join(home, 'device.json'), '{"user":"old","token":"old-token","origin":"https://old.example"}\n', { mode: 0o600 });
 
-    const out = await runScript(home, `
-      import { connectDevice } from './packages/cli/src/device-connect.ts';
-      console.log(JSON.stringify(
-        await connectDevice({ origin: ${JSON.stringify(stub.origin)}, token: 'ptc_test' }, { session: true }),
-      ));
-      process.exit(0);
-    `);
-
-    expect(JSON.parse(out.trim())).toEqual(connectedResult());
+    const connected = spawnConnectInPty(home, 'reconnected', repoRoot);
+    await connected.waitFor('Link and start the daemon?');
+    await connected.send('y');
+    expect(await connected.proc.exited).toBe(0);
+    await connected.drained;
+    expect(stub.registrationRequests.items).toHaveLength(1);
+    expect(registrations).toEqual([{ label: 'reconnected' }]);
     expect(readFileSync(join(home, 'pc-agent.js'), 'utf-8')).toBe(DAEMON_SOURCE);
     expect(parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8')))
-      .toEqual({ user: 'user_1', device: 'dev_1', token: 'device-token', origin: stub.origin, root: repoRoot });
+      .toMatchObject({ user: 'user_1', device: 'dev_1', origin: hub.origin, root: repoRoot });
     expect(statSync(join(home, 'pc-agent.js')).mode & 0o777).toBe(0o700);
     expect(readdirSync(home).filter((entry) => entry.includes('.tmp-'))).toEqual([]);
+    const socket = hub.sockets.items[0];
+
+    if (socket === undefined) throw new Error('the installed daemon never connected');
+    socket.send({ id: 'reconnect-which', method: 'which', params: [['bash']] });
+    const reply = await socket.waitForReply('reconnect-which');
+    expect(reply.error).toBeUndefined();
+    expect(reply.result).toBeDefined();
   });
 
   test('publishes neither install file when the daemon cannot be replaced', async () => {
@@ -806,7 +810,7 @@ describe('device-connect install hardening', () => {
       process.exit(0);
     `);
 
-    expect(JSON.parse(out.trim())).toEqual({ result: { kind: 'cancelled', deviceId: 'dev_1' }, polls: 2 });
+    expect(JSON.parse(out.trim())).toEqual({ result: { kind: 'cancelled', deviceId: 'dev_1', replacedLocalConfig: false }, polls: 2 });
   });
 
   test('never signals an unrelated live process named by a stale pidfile', async () => {
@@ -875,7 +879,7 @@ describe('device daemon single-instance lock', () => {
 
     writeFileSync(
       join(home, 'device.json'),
-      `${JSON.stringify({ user: 'user_1', token: 'device-token', origin })}\n`,
+      `${JSON.stringify({ user: 'user_1', device: 'dev_1', token: 'device-token', origin, root: repoRoot })}\n`,
       { mode: 0o600 },
     );
 
@@ -959,6 +963,7 @@ describe('classic cloud chat connect prompt', () => {
           name: 'jarvis',
           mode: 'cloud',
           cloudName: 'jarvis',
+          displayName: 'Jarvis',
           purpose: 'Cloud agent',
           createdAt: new Date(0).toISOString(),
           updatedAt: new Date(0).toISOString(),
@@ -1052,44 +1057,43 @@ describe('classic cloud chat connect prompt', () => {
   });
 });
 
+function spawnPtyCommand(command: string, cwd = newProjectDir()) {
+  const proc = Bun.spawn({
+    cmd: ['script', '-qefc', command, '/dev/null'],
+    cwd,
+    stdin: 'pipe',
+    stdout: 'pipe',
+    stderr: 'pipe',
+    env: process.env,
+  });
+
+  return {
+    proc,
+    ...readProcessOutput(proc.stdout, (text) => Bun.stripANSI(text)),
+    async send(line: string): Promise<void> {
+      await proc.stdin.write(`${line}\n`);
+      await proc.stdin.flush();
+    },
+  };
+}
+
+function spawnConnectInPty(home: string, label?: string, cwd?: string) {
+  const cliBin = resolve(repoRoot, 'packages/cli/bin/cli.ts');
+  const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+
+  const command = [
+    `KINU_HOME=${quote(home)}`,
+    `KINU_INFLIGHT_ROOT=${quote(join(home, 'inflight'))}`,
+    quote(process.execPath),
+    quote(cliBin),
+    'connect',
+    ...(label === undefined ? [] : ['--label', quote(label)]),
+  ].join(' ');
+
+  return spawnPtyCommand(command, cwd);
+}
+
 describe('kinu connect waits on the daemon and says less', () => {
-  function spawnPtyCommand(command: string) {
-    const proc = Bun.spawn({
-      cmd: ['script', '-qefc', command, '/dev/null'],
-      cwd: newProjectDir(),
-      stdin: 'pipe',
-      stdout: 'pipe',
-      stderr: 'pipe',
-      env: process.env,
-    });
-
-    return {
-      proc,
-      ...readProcessOutput(proc.stdout, (text) => Bun.stripANSI(text)),
-      async send(line: string): Promise<void> {
-        await proc.stdin.write(`${line}\n`);
-        await proc.stdin.flush();
-      },
-    };
-  }
-
-  function spawnConnectInPty(home: string, label?: string) {
-    const cliBin = resolve(repoRoot, 'packages/cli/bin/cli.ts');
-    const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
-
-    const command = [
-      `KINU_HOME=${quote(home)}`,
-      `KINU_INFLIGHT_ROOT=${quote(join(home, 'inflight'))}`,
-      quote(process.execPath),
-      quote(cliBin),
-      'connect',
-      ...(label === undefined ? [] : ['--label', quote(label)]),
-    ].join(' ');
-
-    return spawnPtyCommand(command);
-  }
-
-
   test('the hub row reading connected ends the wait with the row label', async () => {
     // The stub reports label and typed name apart, so a success echoing the prompt input fails.
     let registered = false;

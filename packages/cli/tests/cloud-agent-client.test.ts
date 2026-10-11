@@ -48,13 +48,13 @@ afterEach(async () => {
   pendingReads.clear();
 });
 
-/** `getActivitySnapshot`'s spend as a deployment before 6de08b071 answers it: no `accounts`. */
-const SPEND_BEFORE_ACCOUNTS = {
+const SPEND = {
   producers: [],
   total: { calls: 3, callsWithoutUsage: 0, usage: { input: 1200, output: 300 }, usd: 0.01, unpricedCalls: 0 },
   coverage: { calls: 3, measured: 3, reported: null, silent: [], partial: [] },
   offTurnShare: null,
   missions: [],
+  accounts: [],
 };
 
 const PENDING_PLAN: JsonObject = {
@@ -125,7 +125,7 @@ function startMockAgentServer(options: ({
 
         if (method === 'getExecutors') return Response.json({ result: executors });
 
-        if (method === 'getActivitySnapshot') return Response.json({ result: { spend: SPEND_BEFORE_ACCOUNTS } });
+        if (method === 'getActivitySnapshot') return Response.json({ result: { spend: SPEND } });
 
         if (method === 'setReasoningEffort') return Response.json({ result: { ok: true, effort: args[0] ?? null } });
 
@@ -325,7 +325,7 @@ describe('CloudAgentClient protocol', () => {
     }
   });
 
-  test('spend from a server before per-account spend keeps its totals and says accounts are not reported', async () => {
+  test('spend carries totals and the current per-account listing', async () => {
     const mock = startMockAgentServer();
     const client = newClient(mock);
 
@@ -333,7 +333,7 @@ describe('CloudAgentClient protocol', () => {
       const spend = await client.workspaceSpend();
 
       expect([spend.total.calls, spend.total.usage]).toEqual([3, { input: 1200, output: 300 }]);
-      expect(renderAccountSpendLines(spend.accounts, Date.now())).toEqual(['Spend per account: this deployment does not report it.']);
+      expect(renderAccountSpendLines(spend.accounts, Date.now())).toEqual(['No model call has been recorded yet.']);
     } finally {
       await client.close();
     }

@@ -859,10 +859,10 @@ const homeScreenPrelude = (project: string, width = 100, height = 40, fetchStub?
           shopbot: {
             name: 'shopbot',
             mode: 'local',
-            displayName: 'Shop Bot',
             localName: 'shopbot',
             cwd: project,
             workspaceId: 'shop-floor',
+            identityId: 'ws-shopbot',
             createdAt: '2026-06-08T00:00:00.000Z',
             updatedAt: '2026-06-08T00:00:00.000Z',
           },
@@ -900,16 +900,7 @@ async function runHomeScreen(options: {
   const project = realpathSync(scratchDir('home-tui-project'));
   const stamp = new Date(0).toISOString();
 
-  const placed = Object.fromEntries((options.workspaces ?? []).map((name) => [name, {
-    name, mode: 'local', localName: name, cwd: project, workspaceId: 'proj', createdAt: stamp, updatedAt: stamp,
-  }]));
-
-  writeFileSync(resolve(home, 'config.json'), JSON.stringify({
-    model: 'openai/gpt-5.5',
-    providers: { openai: { apiKey: 'sk-test' } },
-    ...options.config,
-    agents: { ...placed, ...options.config?.agents },
-  }));
+  const placed: NonNullable<KinuConfig['agents']> = {};
 
   for (const name of options.workspaces ?? []) {
     mkdirSync(resolve(home, name));
@@ -917,11 +908,21 @@ async function runHomeScreen(options: {
     const db = workspaceDatabase(resolve(home, name, 'agent.db'), { create: true });
 
     try {
-      createCLIRuntime(db, { llm: null, agentName: name, cwd: project }).actor.config.setDisplayName(workspaceTitle(name));
+      const rt = createCLIRuntime(db, { llm: null, agentName: name, cwd: project });
+      rt.actor.config.setDisplayName(workspaceTitle(name));
+      const identityId = rt.actor.workspaceId;
+      placed[name] = { name, mode: 'local', localName: name, cwd: project, workspaceId: 'proj', identityId, createdAt: stamp, updatedAt: stamp };
     } finally {
       db.close();
     }
   }
+
+  writeFileSync(resolve(home, 'config.json'), JSON.stringify({
+    model: 'openai/gpt-5.5',
+    providers: { openai: { apiKey: 'sk-test' } },
+    ...options.config,
+    agents: { ...placed, ...options.config?.agents },
+  }));
 
   const env: NodeJS.ProcessEnv = { ...process.env, KINU_HOME: home, KINU_SKIP_DAEMON: '1' };
 

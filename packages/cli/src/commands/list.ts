@@ -34,7 +34,7 @@ export async function listCommand(): Promise<void> {
       };
     }
 
-    const name = agent.localName ?? agent.name;
+    const name = agent.localName;
 
     if (agent.readError !== undefined) {
       return {

@@ -4,7 +4,7 @@ import { realpathSync, writeFileSync, mkdirSync } from 'node:fs';
 
 import { join, resolve } from 'node:path';
 import { describe, expect, test } from 'bun:test';
-import { agentWorkspaceKey, groupAgentWorkspaces, reconcileAgentRefs, type ListedAgent } from '../src/agent-list';
+import { groupAgentWorkspaces, reconcileAgentRefs, type ListedAgent } from '../src/agent-list';
 import * as v from 'valibot';
 
 import { createCLIRuntime } from '@kinu.run/cli-backend';
@@ -19,8 +19,8 @@ describe('CLI cloud agent registry sync', () => {
         {
           name: 'localbot',
           mode: 'local',
-          displayName: 'Local Bot',
           localName: 'localbot',
+          cwd: '/repo/shop', workspaceId: 'shop', identityId: 'ws-localbot',
           createdAt: '2026-06-08T00:00:00.000Z',
           updatedAt: '2026-06-08T00:00:00.000Z',
         },
@@ -56,6 +56,7 @@ describe('CLI cloud agent registry sync', () => {
         localName: 'placed',
         cwd: '/repo/shop',
         workspaceId: 'shop',
+        identityId: 'ws-placed',
         createdAt: '2026-06-08T00:00:00.000Z',
         updatedAt: '2026-06-08T00:00:00.000Z',
       }],
@@ -67,7 +68,6 @@ describe('CLI cloud agent registry sync', () => {
       label: 'Untitled workspace',
       mode: 'local',
       localName: 'placed',
-      cloudName: undefined,
       cwd: '/repo/shop',
       workspaceId: 'shop',
     }]);
@@ -91,8 +91,8 @@ describe('CLI cloud agent registry sync', () => {
         localbot: {
           name: 'localbot',
           mode: 'local',
-          displayName: 'Local Bot',
           localName: 'localbot',
+          cwd: home, workspaceId: 'shop', identityId: 'ws-localbot',
           createdAt: '2026-06-08T00:00:00.000Z',
           updatedAt: '2026-06-08T00:00:00.000Z',
         },
@@ -137,7 +137,7 @@ describe('CLI cloud agent registry sync', () => {
 
     expect(parsed.config.agents.stale).toBeUndefined();
     expect(parsed.config.agents['web-agent']).toMatchObject({ mode: 'cloud', displayName: 'Web Agent' });
-    expect(parsed.config.agents.localbot).toMatchObject({ mode: 'local', displayName: 'Local Bot' });
+    expect(parsed.config.agents.localbot).toMatchObject({ mode: 'local' });
     expect(parsed.config.aliases).toEqual({ local: 'localbot' });
     expect(parsed.result.agents.map((agent) => `${agent.name}:${agent.mode}`)).toContain('web-agent:cloud');
     expect(parsed.result.collisions).toEqual([]);
@@ -156,10 +156,10 @@ describe('CLI cloud agent registry sync', () => {
         shopbot: {
           name: 'shopbot',
           mode: 'local',
-          displayName: 'Shop Bot',
           localName: 'shopbot',
           cwd: project,
           workspaceId: 'shop-floor',
+          identityId: 'ws-shopbot',
           createdAt: '2026-06-08T00:00:00.000Z',
           updatedAt: '2026-06-08T00:00:00.000Z',
         },
@@ -212,7 +212,6 @@ describe('CLI cloud agent registry sync', () => {
 
     expect(parsed.config.agents.shopbot).toMatchObject({
       mode: 'local',
-      displayName: 'Shop Bot',
       cwd: project,
       workspaceId: 'shop-floor',
     });
@@ -231,10 +230,9 @@ describe('CLI cloud agent registry sync', () => {
 describe('virtual workspace grouping', () => {
   const ROOT = '/repo/shop';
 
-  const row = (over: Partial<ListedAgent> & Pick<ListedAgent, 'name' | 'mode'>): ListedAgent => ({
-    label: over.name,
-    ...over,
-  });
+  const row = (over: Partial<ListedAgent> & Pick<ListedAgent, 'name' | 'mode'>): ListedAgent => over.mode === 'local'
+    ? { name: over.name, label: over.name, mode: 'local', localName: over.name, cwd: over.cwd ?? ROOT, workspaceId: over.workspaceId ?? 'shop' }
+    : { name: over.name, label: over.name, mode: 'cloud', cloudName: over.cloudName ?? over.name };
 
   test('peers group by their {cwd, workspaceId} pair; cloud rows keep their own bucket', () => {
     const grouped = groupAgentWorkspaces([
@@ -253,13 +251,6 @@ describe('virtual workspace grouping', () => {
     expect(grouped.remote.map((agent) => agent.name)).toEqual(['jarvis']);
   });
 
-  test('a placed row without a recorded workspaceId falls back to the directory slug, matching placement', () => {
-    expect(agentWorkspaceKey(row({ name: 'a', mode: 'local', cwd: '/repo/My Shop!' }), ROOT))
-      .toBe('/repo/My Shop!\u0000my-shop');
-    expect(agentWorkspaceKey(row({ name: 'a', mode: 'cloud' }), ROOT)).toBeNull();
-    const grouped = groupAgentWorkspaces([row({ name: 'a', mode: 'local', cwd: ROOT })], ROOT);
-    expect(grouped.workspaces).toEqual([{ cwd: ROOT, workspaceId: 'shop', agents: [row({ name: 'a', mode: 'local', cwd: ROOT })] }]);
-  });
 });
 
 describe('the sidebar roster for one directory', () => {
@@ -272,20 +263,21 @@ describe('the sidebar roster for one directory', () => {
     const otherDir = realpathSync(scratchDir('agent-picker-other'));
     const stamp = '2026-10-05T00:00:00.000Z';
 
-    const localRef = (name: string, cwd?: string) => ({
-      name, mode: 'local', localName: name, cwd, workspaceId: cwd === undefined ? undefined : 'proj', createdAt: stamp, updatedAt: stamp,
+    const localRef = (name: string, cwd: string) => ({
+      name, mode: 'local', localName: name, cwd, workspaceId: 'proj', identityId: `ws-${name}`, createdAt: stamp, updatedAt: stamp,
     });
 
     for (const name of ['kept', 'faraway', 'lost', 'oldbot']) {
       mkdirSync(join(home, name));
-      writeFileSync(join(home, name, 'agent.db'), '');
+      const db = workspaceDatabase(join(home, name, 'agent.db'));
+      createCLIRuntime(db, { llm: null, agentName: name, cwd: projectDir });
+      db.close();
     }
 
     writeFileSync(join(home, 'config.json'), JSON.stringify({
       agents: {
         lost: localRef('lost', join(otherDir, 'moved-away')),
         faraway: localRef('faraway', otherDir),
-        oldbot: localRef('oldbot'),
         jarvis: { name: 'jarvis', mode: 'cloud', cloudName: 'jarvis', displayName: 'Jarvis', createdAt: stamp, updatedAt: stamp },
         kept: localRef('kept', projectDir),
       },
@@ -308,13 +300,15 @@ describe('the sidebar roster for one directory', () => {
     const otherDir = realpathSync(scratchDir('agent-other'));
     const stamp = '2026-06-08T00:00:00.000Z';
 
-    const localRef = (name: string, cwd?: string, workspaceId?: string) => ({
-      name, mode: 'local', localName: name, cwd, workspaceId, createdAt: stamp, updatedAt: stamp,
+    const localRef = (name: string, cwd: string, workspaceId: string) => ({
+      name, mode: 'local', localName: name, cwd, workspaceId, identityId: `ws-${name}`, createdAt: stamp, updatedAt: stamp,
     });
 
     for (const name of ['lead', 'fixer', 'writer', 'faraway', 'oldbot', 'audit', 'stray']) {
       mkdirSync(join(home, name));
-      writeFileSync(join(home, name, 'agent.db'), '');
+      const db = workspaceDatabase(join(home, name, 'agent.db'));
+      createCLIRuntime(db, { llm: null, agentName: name, cwd: projectDir });
+      db.close();
     }
 
     const writerDb = workspaceDatabase(join(home, 'writer', 'agent.db'));
@@ -326,7 +320,6 @@ describe('the sidebar roster for one directory', () => {
         fixer: localRef('fixer', projectDir, 'shop'),
         writer: localRef('writer', projectDir, 'docs'),
         faraway: localRef('faraway', otherDir, 'other'),
-        oldbot: localRef('oldbot'),
         audit: { name: 'audit', mode: 'cloud', cloudName: 'audit', displayName: 'Audit', createdAt: stamp, updatedAt: stamp },
         jarvis: { name: 'jarvis', mode: 'cloud', cloudName: 'jarvis', displayName: 'Jarvis', createdAt: stamp, updatedAt: stamp },
       },
@@ -390,14 +383,16 @@ describe('the local roster is one function', () => {
 
     for (const name of ['alpha', 'beta', 'gamma']) {
       mkdirSync(join(home, name));
-      writeFileSync(join(home, name, 'agent.db'), '');
+      const db = workspaceDatabase(join(home, name, 'agent.db'));
+      createCLIRuntime(db, { llm: null, agentName: name, cwd: projectDir });
+      db.close();
     }
 
     const stamp = '2026-06-08T00:00:00.000Z';
 
     const placed = (name: string) => ({
       name, mode: 'local', localName: name, cwd: projectDir, workspaceId: 'shop',
-      createdAt: stamp, updatedAt: stamp,
+      identityId: `ws-${name}`, createdAt: stamp, updatedAt: stamp,
     });
 
     writeFileSync(join(home, 'config.json'), JSON.stringify({

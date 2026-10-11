@@ -112,7 +112,7 @@ describe('the public control still succeeds', () => {
   test('the refusal payload is the shared wire shape, never a bare string', () => {
     const refusal = present(judged('http://169.254.169.254/'), 'the metadata-address refusal');
 
-    expect(Object.keys(refusal)).toEqual(['reason', 'error']);
+    expect(Object.keys(refusal)).toEqual(['reason', 'error', 'success']);
     expect(refusal.reason).toBe('denied');
     expect(refusal.error.length).toBeGreaterThan(0);
   });

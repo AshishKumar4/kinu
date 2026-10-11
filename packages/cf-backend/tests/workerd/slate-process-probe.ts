@@ -34,7 +34,7 @@ export class SlateChainProbe extends WorkerEntrypoint {
     } catch (cause) {
       if (!(cause instanceof KinuError)) throw cause;
 
-      return { ok: false, reason: cause.code, error: cause.message };
+      return { ok: false, success: false, reason: cause.code, error: cause.message };
     }
   }
 }
@@ -113,7 +113,7 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     } catch (cause) {
       if (!(cause instanceof KinuError)) throw cause;
 
-      return { ok: false, reason: cause.code, error: cause.message };
+      return { ok: false, success: false, reason: cause.code, error: cause.message };
     }
   }
 

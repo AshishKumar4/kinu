@@ -309,10 +309,7 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
     run: (u, c) => u.builtinRegister(c, { userId: USER_ID, email: 'a@example.com', grant: { kind: 'none' } }),
   },
   { capability: 'builtin_accounts', name: 'builtinReserveAttempt', run: (u, c) => u.builtinReserveAttempt(c, [{ key: 'k', free: 1 }]) },
-  {
-    capability: 'builtin_accounts', name: 'builtinReplacePassword',
-    run: (u, c) => u.builtinReplacePassword(c, USER_ID, { hash: 'h', salt: 's', iterations: 1 }),
-  },
+
   { capability: 'builtin_accounts', name: 'builtinResetAccount', run: (u, c) => u.builtinResetAccount(c, { kind: 'none' }) },
   { capability: 'builtin_accounts', name: 'builtinApplyReset', run: (u, c) => u.builtinApplyReset(c, { grant: { kind: 'none' }, ended: 1 }) },
   { capability: 'builtin_accounts', name: 'builtinListAccounts', run: (u, c) => u.builtinListAccounts(c) },

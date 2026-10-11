@@ -90,7 +90,7 @@ function refusalFromThrown(input: { cause: unknown }): Refusal | null {
   const match = input.cause instanceof Error ? SLATE_REFUSAL_MESSAGE.exec(input.cause.message) : null;
   const reason = match === null ? undefined : v.safeParse(v.picklist(ERROR_CODES), match[1]);
 
-  return reason?.success === true && match !== null ? { reason: reason.output, error: match[2] } : null;
+  return reason?.success === true && match !== null ? refusalOf(new KinuError(reason.output, match[2])) : null;
 }
 
 export type { SlateAppCall };

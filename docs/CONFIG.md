@@ -67,7 +67,7 @@ The model spec decides which credential answers a turn. `resolveLLMConfig` gives
 | `providers.anthropic.apiKey` | Anthropic API key. |
 | `providers.openrouter.apiKey` | OpenRouter API key. |
 | `providers.chatgpt` | The ChatGPT plan's Sign in with ChatGPT login (`accessToken`, `refreshToken`, `expiresAt`, and `metadata` with the issued `clientId`, the verified identity and the granted `scopes`), written by `kinu provider connect chatgpt`. Signing out keeps `metadata.clientId` for the next sign-in. The machine's `ext_agent_host_id` is `chatgpt-host-id`, and the device daemon keeps its own sign-in in `pc-agent.chatgpt.json`. |
-| `providers.openaiCompat.<name>` | An OpenAI-compatible endpoint: `{baseURL, apiKey?, headers?, extraHeaders?}`. |
+| `providers.openaiCompat.<name>` | An OpenAI-compatible endpoint: `{baseURL, apiKey?, extraHeaders?}`. `extraHeaders` overrides the API key's `Authorization` header. |
 
 The Claude subscription provider stores nothing here. Kinu drives Anthropic's official `claude` binary, which owns its own login.
 

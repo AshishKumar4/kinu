@@ -2,20 +2,14 @@ import { exists, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** Command result projection and display formatting. Invocation status never comes from text. */
 
 import * as v from 'valibot';
-import { ERROR_CODES, KinuError, refusalOf, type Refusal } from '../obs/index';
+import { KinuError, refusalOf, RefusalSchema, type Refusal } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 import { FILE_REFUSAL_REASONS } from '../types/file-edits';
 import type { Uncheckpointed } from '../types/primitives';
 import type { ExecutorTool, PreviewRouteCheck } from './types';
 
-const RefusalSchema = v.object({
-  reason: v.picklist(ERROR_CODES),
-  error: v.string(),
-  execution: v.optional(v.object({ exitCode: v.number() })),
-});
-
 /** A file-plane verdict (`tools/file-tool.ts` `failure()`): unmet precondition, not an error class. */
-const FileVerdictSchema = v.object({ reason: v.picklist(FILE_REFUSAL_REASONS), error: v.string() });
+const FileVerdictSchema = v.object({ ...RefusalSchema.entries, reason: v.picklist(FILE_REFUSAL_REASONS) });
 
 /** The shape every transport settles a command into. */
 export interface ExecOutcome {
@@ -45,7 +39,7 @@ export function answeredRefusal(payload: JsonValue): Refusal | null {
   if (classified.success) return classified.output;
   const verdict = v.safeParse(FileVerdictSchema, payload);
 
-  if (verdict.success) return { reason: 'bad_input', error: `${verdict.output.reason}: ${verdict.output.error}` };
+  if (verdict.success) return refusalOf(new KinuError('bad_input', `${verdict.output.reason}: ${verdict.output.error}`));
 
   return null;
 }
@@ -59,7 +53,7 @@ export function commandResult(result: ExecOutcome): CommandResult {
   if (result.refusal !== undefined) return result.refusal;
   const output = formatExecResult(result);
 
-  return (result.exitCode ?? 0) === 0 ? output : { reason: 'io', error: output, execution: { exitCode: result.exitCode ?? 0 } };
+  return (result.exitCode ?? 0) === 0 ? output : refusalOf(new KinuError('io', output, { execution: { exitCode: result.exitCode ?? 0 } }));
 }
 
 /** As the shell tool answers the model: a command that ran says first where it started. Programs read `commandResult`. */

@@ -102,7 +102,6 @@ describe('CLI explicit endpoint options', () => {
 async function createLocalAgent(home: string, name: string): Promise<string> {
   const dir = join(home, name);
   mkdirSync(dir, { recursive: true });
-  const folder = placeLocalWorkspace(home, name);
   const db = workspaceDatabase(join(dir, "agent.db"));
 
   try {
@@ -143,7 +142,7 @@ async function createLocalAgent(home: string, name: string): Promise<string> {
     db.close();
   }
 
-  return folder;
+  return placeLocalWorkspace(home, name);
 }
 
 test("a genuinely unreadable workspace names its cause instead of hiding it", async () => {
@@ -152,7 +151,7 @@ test("a genuinely unreadable workspace names its cause instead of hiding it", as
   mkdirSync(dir, { recursive: true });
   // Not a database: the one condition that legitimately reaches the handler.
   writeFileSync(join(dir, "agent.db"), "this is not sqlite\n");
-  const folder = placeLocalWorkspace(home, "broken-ws");
+  const folder = placeLocalWorkspace(home, "broken-ws", 'ws-broken');
 
   // `kinu list` lists the workspaces placed in the folder it runs in.
   const list = await runToExit([process.execPath, cliBin, "list"], { cwd: folder, env: { ...process.env, KINU_HOME: home } });

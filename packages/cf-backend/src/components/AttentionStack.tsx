@@ -147,7 +147,7 @@ function ConsentBody({ consent }: { consent: PendingConsent }) {
 
 function MemoryBody({ memory }: { memory: AccountMemoryProposal }) {
   const { origin } = memory;
-  const by = origin.agent ?? (origin.by === "background" ? "Kinu, from what you said" : "An agent");
+  const by = origin.by === "background" ? "Kinu, from what you said" : origin.agent;
   const where = origin.workspace === undefined ? "" : ` in ${origin.workspace}`;
 
   return (

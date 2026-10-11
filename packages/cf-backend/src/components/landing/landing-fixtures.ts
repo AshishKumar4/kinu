@@ -70,6 +70,7 @@ export const LANDING_PROFILE: UserProfile = {
   lastSeenAt: NOW,
   onboardedAt: NOW - 90 * 864e5,
   workspaceCount: LANDING_ROSTER.total,
+  controlPlane: false,
 };
 
 export const CHECKOUT_FRAME_CAPTION = 'Sample workspace';

@@ -727,7 +727,7 @@ describe('malformed profile data fails loudly', () => {
       }),
     });
 
-    expectError(schemaInvalidInConfig.loadConfig, 'not a valid Kinu config');
+    expectError(schemaInvalidInConfig.loadConfig, 'is malformed');
   });
 });
 

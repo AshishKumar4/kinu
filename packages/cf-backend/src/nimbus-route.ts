@@ -30,7 +30,7 @@ export interface NimbusPreviewEnv<Id> extends PreviewSuffixEnv, LabelSignerEnv {
 }
 
 export function nimbusPreviewConfigured(env: PreviewSuffixEnv & LabelSignerEnv): boolean {
-  return previewHostSuffix(env) !== null && previewSigner.secrets(env).length > 0;
+  return previewHostSuffix(env) !== null && previewSigner.secret(env) !== undefined;
 }
 
 /** `v4`: a token keyed by the raw secret must not verify under the subkey. */
@@ -57,7 +57,7 @@ export function nimbusPreviewUrl(
     const suffix = previewHostSuffix(env);
 
     if (!suffix) return { unavailable: 'this deployment has no preview host (PREVIEW_HOST_SUFFIX is not set)' };
-    const secret = previewSigner.secrets(env)[0];
+    const secret = previewSigner.secret(env);
 
     if (!secret) return { unavailable: 'this deployment has no preview signing secret (CREDENTIAL_ENCRYPTION_KEY is not set)' };
     const refusal = workspaceAddressRefusal(workspaceName);
@@ -92,7 +92,7 @@ export async function handleNimbusPreviewHostRequest<Id>(
   if (!preview) return null;
   const { port, workspace, token, handle } = preview;
 
-  if (previewSigner.secrets(env).length === 0) {
+  if (previewSigner.secret(env) === undefined) {
     return new Response('Preview authentication is unavailable.', {
       status: 503,
       headers: { 'cache-control': 'no-store' },

@@ -12,6 +12,8 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Database } from 'bun:sqlite';
+import type { KinuConfig } from '../packages/cli/src/config';
 import type { AlternateTakeSet } from '../packages/core/src/mcts/takes';
 import type { AgentSearchNode } from '../packages/cli/src/agent-client';
 import type { DisplayMessage } from '../packages/cli/src/tui/messages';
@@ -28,40 +30,39 @@ const WORKSPACE = 'checkout';
 
 const SESSION = '20260821-checkout01';
 
-function prepareHome(): string {
+async function prepareHome(): Promise<string> {
   const home = mkdtempSync(join(tmpdir(), `kinu-tui-cap-${set}-`));
+  process.env.KINU_HOME = home;
+  const { createCLIRuntime } = await import('../packages/cli-backend/src/runtime');
+  const agents: NonNullable<KinuConfig['agents']> = {};
 
-  for (const name of ['checkout', 'pricing-guard', 'docs-sweep', 'infra-audit']) {
+  for (const { name, createdAt, updatedAt } of [
+    { name: 'checkout', createdAt: '2026-08-18T09:00:00.000Z', updatedAt: '2026-08-21T09:00:00.000Z' },
+    { name: 'pricing-guard', createdAt: '2026-08-19T09:00:00.000Z', updatedAt: '2026-08-20T09:00:00.000Z' },
+    { name: 'docs-sweep', createdAt: '2026-08-19T10:00:00.000Z', updatedAt: '2026-08-20T11:00:00.000Z' },
+  ]) {
     mkdirSync(join(home, name), { recursive: true });
-    writeFileSync(join(home, name, 'agent.db'), '');
+    const db = new Database(join(home, name, 'agent.db'));
+
+    try {
+      const rt = createCLIRuntime(db, { llm: null, agentName: name, cwd: home });
+      agents[name] = { name, mode: 'local', localName: name, cwd: home, workspaceId: 'capture', identityId: rt.actor.workspaceId, createdAt, updatedAt };
+    } finally {
+      db.close();
+    }
   }
 
   writeFileSync(join(home, 'config.json'), `${JSON.stringify({
     model: MODEL,
     reasoningEffort: 'medium',
     providers: { openai: { apiKey: 'sk-capture-fixture-not-a-real-key' } },
-    agents: {
-      checkout: {
-        name: 'checkout', mode: 'local', localName: 'checkout',
-        createdAt: '2026-08-18T09:00:00.000Z', updatedAt: '2026-08-21T09:00:00.000Z',
-      },
-      'pricing-guard': {
-        name: 'pricing-guard', mode: 'local', localName: 'pricing-guard',
-        createdAt: '2026-08-19T09:00:00.000Z', updatedAt: '2026-08-20T09:00:00.000Z',
-      },
-      'docs-sweep': {
-        name: 'docs-sweep', mode: 'local', localName: 'docs-sweep',
-        createdAt: '2026-08-19T10:00:00.000Z', updatedAt: '2026-08-20T11:00:00.000Z',
-      },
-    },
+    agents,
   }, null, 2)}\n`);
 
   return home;
 }
 
-const home = prepareHome();
-
-process.env.KINU_HOME = home;
+const home = await prepareHome();
 
 process.env.KINU_BASE_URL = 'https://api.example.invalid/v1';
 

@@ -344,7 +344,7 @@ describe('sequential-rebase', () => {
     const second = await memberOf(h.origin, 'n2', [{ path: 'shared.ts', base: 'V0\n', after: 'V1\n' }]);
 
     const report = await h.run('sequential-rebase', [first, second], {
-      reverify: async () => ({ reason: 'unsupported', error: 'no verifier for this unit' }),
+      reverify: async () => ({ success: false, reason: 'unsupported', error: 'no verifier for this unit' }),
     });
 
     const [, outcome] = report.outcomes;

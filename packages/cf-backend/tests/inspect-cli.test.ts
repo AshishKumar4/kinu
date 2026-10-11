@@ -68,7 +68,7 @@ let server: ReturnType<typeof Bun.serve> | undefined;
 const home = scratchDir('inspect-cli-home');
 
 /** Opens the local workspace `name` under `home` as a process would, sends `text` as its user, and closes it. */
-async function localTurn(name: string, text: string): Promise<void> {
+async function localTurn(name: string, text: string): Promise<string> {
   mkdirSync(join(home, name), { recursive: true });
   const db = workspaceDatabase(join(home, name, 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
@@ -80,6 +80,8 @@ async function localTurn(name: string, text: string): Promise<void> {
   try {
     await session.send(text, { id: crypto.randomUUID() });
     await session.settleBackgroundWork();
+
+    return rt.actor.workspaceId;
   } finally {
     await session.end();
     db.close();
@@ -99,9 +101,9 @@ beforeAll(async () => {
   const reviewedTurns = (): number => db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM evolution_events WHERE type = 'turn_complete'").get()?.n ?? 0;
   await agent.runTaskFromMcp(TASK);
   await driveUntil(workspace, 'the cloud turn never ended and was reviewed', () => ended() > 0 && reviewedTurns() > 0);
-  await localTurn('localtest', TASK);
+  const identityId = await localTurn('localtest', TASK);
   writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: { localtest: {
-    name: 'localtest', mode: 'local', localName: 'localtest', cwd: LOCAL_FOLDER, workspaceId: 'localtest', createdAt: '', updatedAt: '',
+    name: 'localtest', mode: 'local', localName: 'localtest', cwd: LOCAL_FOLDER, workspaceId: 'localtest', identityId, createdAt: '', updatedAt: '',
   } }, aliases: {} }));
 
   eventsOver(db).publish({ descriptor: {

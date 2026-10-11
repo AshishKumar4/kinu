@@ -822,7 +822,7 @@ describe('the onboarding gate routes on the account the profile describes', () =
     // before the wizard shipped — it must reach /workspace, never /welcome.
     const profile = {
       email: 'probe@kinu.run', displayName: 'Probe',
-      createdAt: 0, lastSeenAt: 0, onboardedAt: null,
+      createdAt: 0, lastSeenAt: 0, onboardedAt: null, controlPlane: false,
     };
 
     await withTestChrome(async (browser) => {

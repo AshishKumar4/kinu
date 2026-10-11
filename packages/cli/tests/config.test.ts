@@ -96,7 +96,7 @@ describe("CLI config safety", () => {
   });
 
   test("one invalid field is reported, not replaced by defaults that would read as a first run", async () => {
-    expect(await runInvalidFieldLoad()).toContain('is not a valid Kinu config');
+    expect(await runInvalidFieldLoad()).toContain('is malformed');
   });
 
   test("a published workspace is readable once its WAL sidecars are gone", () => {
@@ -198,16 +198,16 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
     expect(local).toMatchObject({ name: "openai-compat", baseURL: "http://localhost:11434/v1", model: "gpt-oss:20b" });
   });
 
-  test("an openai-compatible endpoint's headers: the key's Authorization over `headers`, `extraHeaders` over both", async () => {
+  test("an openai-compatible endpoint's extraHeaders overrides the API key's Authorization", async () => {
     const sends = async (compat: JsonObject, headers: Record<string, string>) => expect(await runResolveLLM({
       providers: { openaiCompat: { default: { baseURL: "http://localhost:11434/v1", ...compat } } },
     }, { defaultModel: "openai-compat/gpt-oss:20b" })).toEqual({ name: "openai-compat", baseURL: "http://localhost:11434/v1", headers, model: "gpt-oss:20b" });
 
     const base = { Authorization: "Bearer base", "X-Base": "b" };
 
-    await sends({ headers: base }, base);
-    await sends({ headers: base, apiKey: "k" }, { Authorization: "Bearer k", "X-Base": "b" });
-    await sends({ headers: base, apiKey: "k", extraHeaders: { Authorization: "Bearer extra" } }, { Authorization: "Bearer extra", "X-Base": "b" });
+    await sends({ extraHeaders: base }, base);
+    await sends({ apiKey: "k", extraHeaders: { "X-Base": "b" } }, { Authorization: "Bearer k", "X-Base": "b" });
+    await sends({ apiKey: "k", extraHeaders: base }, base);
   });
 
   test("a default tier on a BYO provider overrides the signed-in proxy", async () => {
@@ -371,7 +371,7 @@ async function runNameChecks(): Promise<NameCheck[]> {
     await check(() => agentDir("../outside"));
     await check(() => agentDir("bad/name"));
     await check(() => agentDir(".hidden"));
-    const withAlias = (alias) => () => upsertAgentConfig({ name: "jarvis", mode: "local", alias });
+    const withAlias = (alias) => () => upsertAgentConfig({ name: "jarvis", mode: "cloud", cloudName: "jarvis", displayName: "Jarvis", alias });
     await check(withAlias("jarvis"));
     await check(withAlias("jarvis-2"));
     await check(withAlias("../outside"));

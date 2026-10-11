@@ -144,8 +144,8 @@ describe('TUI product registries', () => {
 
   test('running and idle agents remain distinguishable in the navigator', async () => {
     const source = agentSourceFromList(() => [
-      { name: 'worker', label: 'worker', mode: 'local', status: 'running', cwd: '/tmp/kinu-activity-probe' },
-      { name: 'resting', label: 'resting', mode: 'local', status: 'idle', cwd: '/tmp/kinu-activity-probe' },
+      { name: 'worker', label: 'worker', mode: 'local', localName: 'worker', status: 'running', cwd: '/tmp/kinu-activity-probe', workspaceId: 'probe' },
+      { name: 'resting', label: 'resting', mode: 'local', localName: 'resting', status: 'idle', cwd: '/tmp/kinu-activity-probe', workspaceId: 'probe' },
     ]);
 
     function Probe() {

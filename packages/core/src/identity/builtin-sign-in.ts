@@ -35,24 +35,11 @@ export async function hashPassword(root: string, password: string): Promise<Pass
   return { hash: await derive(password, salt, root), salt, iterations: PASSWORD_ITERATIONS };
 }
 
-export interface PasswordCheck {
-  readonly matched: boolean;
-  readonly rehash: PasswordHash | null;
-}
-
-export async function checkPassword(roots: { current: string; previous: readonly string[] }, password: string, stored: PasswordAccount | null): Promise<PasswordCheck> {
+export async function checkPassword(root: string, password: string, stored: PasswordAccount | null): Promise<boolean> {
   // Unknown emails cost the same hash.
-  const current = await derive(password, stored?.salt ?? 'no-such-account', roots.current);
+  const current = await derive(password, stored?.salt ?? 'no-such-account', root);
 
-  if (stored === null) return { matched: false, rehash: null };
-
-  if (timingSafeEqual(current, stored.hash)) return { matched: true, rehash: null };
-
-  for (const key of roots.previous) {
-    if (timingSafeEqual(await derive(password, stored.salt, key), stored.hash)) return { matched: true, rehash: await hashPassword(roots.current, password) };
-  }
-
-  return { matched: false, rehash: null };
+  return stored !== null && timingSafeEqual(current, stored.hash);
 }
 
 function setupTokenMatches(secret: string | undefined, presented: string | null): boolean {

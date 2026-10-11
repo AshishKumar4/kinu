@@ -228,7 +228,7 @@ test('trial usage walks retained descendants and every run and event page withou
 
 test('executor RPC decoding preserves refusal provenance and successful refusal-shaped stdout', async () => {
   let response: JsonValue = { stdout: 'failed', stderr: 'remote error', exitCode: 1,
-    refusal: { reason: 'io', error: 'remote error', execution: { exitCode: 7 } } };
+    refusal: { success: false, reason: 'io', error: 'remote error', execution: { exitCode: 7 } } };
 
   const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: socketOnly,
     websocket: { message: answerRpcs(() => response) },

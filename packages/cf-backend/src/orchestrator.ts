@@ -5162,15 +5162,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async liveShareBundle(share: string, userId: string): Promise<SlateAnswer<BlueprintBundle>> {
     const record = await this.slates.controller.readLiveShareRecord(share);
 
-    if (!record.ok) return { ok: false, reason: record.reason, error: record.error };
+    if (!record.ok) return { ok: false, success: false, reason: record.reason, error: record.error };
     const { record: row } = record.value;
 
     if (row.visibility === 'users' && !this.slates.controller.liveShareAdmitsUser(row.id, userId)) {
-      return { ok: false, reason: 'missing', error: 'No such share' };
+      return { ok: false, success: false, reason: 'missing', error: 'No such share' };
     }
 
     if (row.grant.fork === false) {
-      return { ok: false, reason: 'denied', error: 'This share does not allow forking' };
+      return { ok: false, success: false, reason: 'denied', error: 'This share does not allow forking' };
     }
 
     return this.slates.controller.liveShareBundle(row);

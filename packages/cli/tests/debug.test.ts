@@ -390,7 +390,7 @@ describe('kinu debug — cloud backend', () => {
     writeFileSync(join(home, 'config.json'), JSON.stringify({
       origin: `http://127.0.0.1:${server.port}`,
       accessToken: 'ptc_stored_session',
-      agents: { skywriter: { name: 'skywriter', mode: 'cloud', cloudName: 'skywriter', createdAt: '', updatedAt: '' } },
+      agents: { skywriter: { name: 'skywriter', mode: 'cloud', cloudName: 'skywriter', displayName: 'Skywriter', createdAt: '', updatedAt: '' } },
       aliases: {},
     }));
 
@@ -455,7 +455,7 @@ describe('kinu debug --turn — one turn as the model received it', () => {
     writeFileSync(join(home, 'config.json'), JSON.stringify({
       origin: `http://127.0.0.1:${server.port}`,
       accessToken: 'ptc_stored_session',
-      agents: { skywriter: { name: 'skywriter', mode: 'cloud', cloudName: 'skywriter', createdAt: '', updatedAt: '' } },
+      agents: { skywriter: { name: 'skywriter', mode: 'cloud', cloudName: 'skywriter', displayName: 'Skywriter', createdAt: '', updatedAt: '' } },
       aliases: {},
     }));
 

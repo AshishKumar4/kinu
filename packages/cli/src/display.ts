@@ -264,9 +264,7 @@ export function renderSearchTreeLines(nodes: readonly AgentSearchNode[]): string
   });
 }
 
-export function renderAccountSpendLines(accounts: readonly AccountSpend[] | undefined, now: number): string[] {
-  if (accounts === undefined) return ['Spend per account: this deployment does not report it.'];
-
+export function renderAccountSpendLines(accounts: readonly AccountSpend[], now: number): string[] {
   if (accounts.length === 0) return ['No model call has been recorded yet.'];
 
   return ['By account · API-equivalent cost', ...accounts.flatMap((row) => {

@@ -90,19 +90,19 @@ export class KinuError extends Data.TaggedError('KinuError')<{
   }
 }
 
-/**
- * Refusal payload on a tool result, reason first. A type alias, not an interface: only aliases get
- * the implicit index signature needed to be returned as `JsonValue`.
- */
-export type Refusal = {
-  readonly reason: ErrorCode;
-  readonly error: string;
+/** The canonical refusal returned across tool and command boundaries. */
+export const RefusalSchema = v.object({
+  success: v.literal(false),
+  reason: v.picklist(ERROR_CODES),
+  error: v.string(),
   /** The exit the substrate already reported — a 127 must not read as any other `unavailable`. */
-  readonly execution?: { readonly exitCode: number };
-};
+  execution: v.optional(v.object({ exitCode: v.number() })),
+});
+
+export type Refusal = v.InferOutput<typeof RefusalSchema>;
 
 export function refusalOf(error: KinuError): Refusal {
-  const refusal = { reason: error.code, error: renderCauseChain(error) };
+  const refusal: Refusal = { reason: error.code, error: renderCauseChain(error), success: RefusalSchema.entries.success.literal };
 
   return error.execution === undefined ? refusal : { ...refusal, execution: error.execution };
 }

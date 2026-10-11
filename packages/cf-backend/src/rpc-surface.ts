@@ -109,7 +109,7 @@ const USER_DO_METHODS = [
   'builtinPasswordAccount',
   'builtinRecordPasskeyUse',
   'builtinRegister',
-  'builtinReplacePassword',
+
   'builtinReserveAttempt',
   'builtinResetAccount',
   'builtinSpendChallenge',

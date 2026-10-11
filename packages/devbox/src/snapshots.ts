@@ -1,5 +1,6 @@
 /** D65 lineage ownership: wake selection, publication, and deletion share one owner. */
 import * as v from 'valibot';
+import { attemptSync, settleSync } from './errors';
 import type { SnapshotRegistry } from './snapshot-registry';
 
 const SNAPSHOT_KEY = 'devbox:snapshot';
@@ -11,8 +12,8 @@ const WOKE_FROM_KEY = 'devbox:woke-from';
 const LIFE_MS = 29 * 24 * 60 * 60 * 1000;
 
 const Record = v.object({
-  id: v.string(), image: v.string(), chainRev: v.number(), takenAt: v.number(), lineage: v.optional(v.array(v.string()), []),
-  rootTakenAt: v.optional(v.number()),
+  id: v.string(), image: v.string(), chainRev: v.number(), takenAt: v.number(), lineage: v.array(v.string()),
+  rootTakenAt: v.number(),
 });
 
 interface Ports {
@@ -28,16 +29,18 @@ export class Snapshots {
   constructor(readonly ports: Ports) {}
 
   get record(): v.InferOutput<typeof Record> | null {
-    const held = v.safeParse(Record, this.ports.kv.get(SNAPSHOT_KEY));
+    const held = this.ports.kv.get(SNAPSHOT_KEY);
 
-    return held.success ? held.output : null;
+    if (held === undefined) return null;
+
+    return settleSync(attemptSync('io', () => v.parse(Record, held), 'Corrupt devbox snapshot record'));
   }
 
   wake(): string | undefined {
     const held = this.record;
     const rev = this.ports.chainRev();
 
-    if (held === null || held.image !== this.ports.base() || Date.now() - (held.rootTakenAt ?? held.takenAt) > LIFE_MS) return undefined;
+    if (held === null || held.image !== this.ports.base() || Date.now() - held.rootTakenAt > LIFE_MS) return undefined;
 
     return rev !== undefined && rev > held.chainRev ? undefined : held.id;
   }
@@ -55,7 +58,7 @@ export class Snapshots {
     if (parent === undefined) this.supersede();
     this.ports.kv.put(SNAPSHOT_KEY, {
       id: snapshot.id, image: this.ports.base(), chainRev: rev ?? 0, takenAt,
-      lineage: parent === undefined ? [] : [...parent.lineage, parent.id], rootTakenAt: parent === undefined ? takenAt : parent.rootTakenAt ?? parent.takenAt,
+      lineage: parent === undefined ? [] : [...parent.lineage, parent.id], rootTakenAt: parent === undefined ? takenAt : parent.rootTakenAt,
     });
   }
 
