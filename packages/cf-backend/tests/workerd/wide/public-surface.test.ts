@@ -7,10 +7,11 @@
 import { env } from 'cloudflare:test';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import {
-  ChatHistoryEntrySchema, ORCHESTRATOR_AGENT_SLUG, hostedActorSocketPath, pageSchema, positionPageSchema, workspaceSlug, type JsonValue,
+  ChatHistoryEntrySchema, ORCHESTRATOR_AGENT_SLUG, READS_CHANGED_EVENT, hostedActorSocketPath, pageSchema, positionPageSchema, workspaceSlug, type JsonValue,
 } from '@kinu.run/core';
 import { describe, expect, it, vi } from 'vitest';
 import * as v from 'valibot';
+import { PROBE_TITLE } from '../long-model-script';
 
 /** Loopback: the one host `authenticateRequest` accepts without an identity secret (auth/session.ts:200-213). */
 const ORIGIN = 'http://localhost';
@@ -118,7 +119,7 @@ interface Pane {
   /** Every frame heard, parsed, in arrival order. */
   heard(): v.InferOutput<typeof FrameSchema>[];
   /** Resolves once a frame `holds` has been heard. */
-  until(holds: (frame: v.InferOutput<typeof FrameSchema>) => boolean): Promise<void>;
+  until(holds: (frame: v.InferOutput<typeof FrameSchema>) => boolean, from?: number): Promise<void>;
   close(): void;
 }
 
@@ -210,8 +211,8 @@ async function openPane(path: string): Promise<Pane> {
     transcriptsCarrying: (text) => frames
       .filter((raw) => raw.includes(`"${CHAT_MESSAGE_TYPES.CHAT_MESSAGES}"`) && raw.includes(text)).length,
     heard: parsed,
-    until: async (holds) => {
-      if (parsed().some(holds)) return;
+    until: async (holds, from = 0) => {
+      if (parsed().slice(from).some(holds)) return;
       const { promise, resolve } = Promise.withResolvers<void>();
       watchers.push({ holds, resolve });
       await promise;
@@ -378,6 +379,19 @@ async function workspaceWithTwoChats(name: string): Promise<{ rootPath: string; 
 
   actor.send(chatRequest(ACTOR_MARKER, ACTOR_MARKER));
   await actor.settled(ACTOR_MARKER);
+
+  // The first hosted chat owes a title. A streamed reply used to abandon that effect while these tests stayed green.
+  // Read the published title, waking on the product's roster notifications rather than on a clock.
+  for (let attempt = 0; ; attempt++) {
+    const from = root.heard().length;
+    const id = `first-title-${String(attempt)}`;
+    root.send(rpcRequest(id, 'getActorSnapshot', [actorName]));
+    const titled = await root.rpc(id, v.object({ displayName: v.string() }));
+
+    if (titled.displayName === PROBE_TITLE) break;
+    await root.until(frame => frame.type === READS_CHANGED_EVENT, from);
+  }
+
   actor.close();
   root.close();
 

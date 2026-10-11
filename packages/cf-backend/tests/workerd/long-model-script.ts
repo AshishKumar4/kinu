@@ -3,7 +3,7 @@ import { sleepTimeScript } from '../../../../scripts/sleep-time-script';
 import { readScriptedRequest, scriptedBody, type ScriptedAnswer, type ScriptedRequest } from '../../../../scripts/scripted-protocol';
 
 /** The words a workspace's title is asked for, answered the way the product parses one. */
-const PROBE_TITLE = 'Long Probe';
+export const PROBE_TITLE = 'Long Probe';
 
 const titleScript = (request: ScriptedRequest): ScriptedAnswer | null => {
   if (request.streamed || request.available.length !== 0 || !request.system.startsWith(WORKSPACE_TITLE_SYSTEM_PROMPT)) return null;
