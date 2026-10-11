@@ -257,7 +257,7 @@ describe('the daemon relays model calls from the owner\'s machine', () => {
     hub = startHubBridge(harness);
     home = join(root, 'home');
     mkdirSync(home, { recursive: true });
-    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'user-1', token: registered.token, origin: hub.origin }), { mode: 0o600 });
+    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'user-1', device: registered.deviceId, token: registered.token, origin: hub.origin, root: home }), { mode: 0o600 });
     writeFileSync(join(home, 'pc-agent.chatgpt.json'), JSON.stringify(DEVICE_SIGN_IN), { mode: 0o600 });
     logPath = join(root, 'pc-agent.log');
 

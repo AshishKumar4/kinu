@@ -1,21 +1,36 @@
 /**
- * The daemon and its siblings as this repo ships them, read from disk: the CLI imports the daemon as a module (its
- * device.json schema), and Bun gives one file one loader, so a test never imports a daemon file as text.
+ * The daemon and its siblings as this repo ships them, staged into a scratch directory under the names they install
+ * as: the installer must land each one, byte for byte.
  */
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { scratchDir } from '@kinu.run/test-utils';
 
-const SOURCE = join(import.meta.dir, '..', '..', '..', 'pc-agent', 'src');
+/** Copies every file the daemon ships into `into`, the daemon as pc-agent.js. */
+function stageShippedDaemon(into: string): void {
+  const source = join(import.meta.dir, '..', '..', '..', 'pc-agent', 'src');
 
-const read = (name: string): string => readFileSync(join(SOURCE, name), 'utf8');
+  mkdirSync(into, { recursive: true });
 
-export const DAEMON_SOURCE = read('index.js');
+  for (const name of readdirSync(source)) {
+    if (name.endsWith('.d.ts') || !(name.endsWith('.js') || name.endsWith('.json'))) continue;
+    writeFileSync(join(into, name === 'index.js' ? 'pc-agent.js' : name), readFileSync(join(source, name)));
+  }
+}
 
-/** What the daemon requires beside itself: the installer must land each one, byte for byte. */
+const STAGED = scratchDir('shipped-daemon');
+
+stageShippedDaemon(STAGED);
+
+const staged = (name: string): string => readFileSync(join(STAGED, name), 'utf8');
+
+export const DAEMON_SOURCE = staged('pc-agent.js');
+
+/** What the daemon requires beside itself. */
 export const DAEMON_SIBLINGS = {
-  'chatgpt.js': read('chatgpt.js'),
-  'device-protocol.json': read('device-protocol.json'),
-  'pty.js': read('pty.js'),
-  'sandbox.js': read('sandbox.js'),
-  'update.js': read('update.js'),
+  'chatgpt.js': staged('chatgpt.js'),
+  'device-protocol.json': staged('device-protocol.json'),
+  'pty.js': staged('pty.js'),
+  'sandbox.js': staged('sandbox.js'),
+  'update.js': staged('update.js'),
 } as const;

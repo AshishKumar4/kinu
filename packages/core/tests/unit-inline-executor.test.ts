@@ -272,7 +272,7 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
 
   // The versioned store cannot yet create on revision 0 through its namespace (Nimbus ask 36): a create checks that
   // nothing is there, and every overwrite is checked by the revision read.
-  test('a create says it checked absence; an overwrite is checked by the revision read, and a peer\'s write refused', async () => {
+  test('a create is checked by revision 0, an overwrite is checked by the revision read, and a peer\'s write refused', async () => {
     const { rt, vfs } = buildPlane();
     let peer: (() => Promise<void>) | null = null;
     const check = present(vfs.writeFileIfRevision?.bind(vfs), 'the store\'s check');
@@ -294,7 +294,7 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
       home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: racing, ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory: rt.memory,
     }));
 
-    expect(await file({ op: 'write', path: 'plan.md', content: 'first\n' })).toMatchObject({ action: 'created', checked: 'absence' });
+    expect(await file({ op: 'write', path: 'plan.md', content: 'first\n' })).toMatchObject({ action: 'created', checked: 'revision' });
     await file({ op: 'read', path: 'plan.md' });
     expect(await file({ op: 'write', path: 'plan.md', content: 'second\n' })).toMatchObject({ action: 'replaced', checked: 'revision' });
 
