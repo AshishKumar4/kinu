@@ -309,39 +309,12 @@ function movable(files: CompositeVFS): MoveFs {
 }
 
 /**
- * Where an operation on `at` lands, as Nimbus's `route` answers it, with the directories a write would make passing as
- * named. `route` refuses a missing ancestor with ENOENT (its lookup takes `creating`, the route does not: NIMBUS-ASKS
- * #32), so the nearest ancestor that is there is routed and the rest appended. The first name appended may be a link
- * whose target is not there yet: a write follows it, so the route does, and one the namespace cannot name is refused.
+ * Where an operation on `at` lands, the directories a write would make passing as named: Nimbus's lookup for
+ * writeFile({ parents }), links and `..` included (`creating`, patched in until NIMBUS-ASKS #32 ships).
  */
-async function routeCreating(namespace: CompositeVFS, at: string, follow: boolean, hops = 0): Promise<VfsRoute> {
-	const cut = at.lastIndexOf('/');
-	const leaf = at.slice(cut + 1);
-
-	// As Nimbus's own lookup: the namespace answers a `..` (through links) and a chain of links past SYMLOOP_MAX.
-	if (cut < 0 || leaf === '..' || at === '/' || hops > SYMLOOP_MAX) return namespace.route(at, { follow });
-	const found = await tolerateAsync(() => namespace.route(at, { follow }), 'enoent');
-
-	if (found !== undefined) return found;
-	const parent = await routeCreating(namespace, at.slice(0, cut) || '/', true, hops);
-	const above = namespacePath(parent);
-	const named = above === '/' ? `/${leaf}` : `${above}/${leaf}`;
-
-	if (follow && (await namespace.stat(named, { follow: false }))?.type === 'symlink') {
-		const target = namespace.linkLeadsTo(named, await namespace.readlink(named));
-
-		// A link the namespace has no name for is refused as the route refused it; its own links read from their directory,
-		// spelled as written: the namespace walks their `..`.
-		if (target === null) return namespace.route(at, { follow });
-
-		return routeCreating(namespace, target.startsWith('/') ? target : `${above}/${target}`, follow, hops + 1);
-	}
-
-	return { ...parent, path: parent.path === '/' ? `/${leaf}` : `${parent.path}/${leaf}` };
+function routeCreating(namespace: CompositeVFS, at: string, follow: boolean): Promise<VfsRoute> {
+	return namespace.route(at, { follow, creating: true });
 }
-
-/** Links a lookup follows before it answers ELOOP (Linux's MAXSYMLINKS). */
-const SYMLOOP_MAX = 40;
 
 /** Whether `from` and `to` are on one mount, the directories a move would make passing as named. */
 async function sameMount(namespace: CompositeVFS, from: string, to: string): Promise<boolean> {
@@ -428,16 +401,8 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 		return op(files, at);
 	};
 
-	/** The plane's optional operation, or ENOTSUP with `reason` where a bare base has none; the namespace answers its own. */
-	const capable = <T>(path: string, reason: string, ask: (files: VFS, at: string) => Awaitable<T> | undefined): Effect.Effect<T, VfsError> => Effect.gen(function* () {
-		const { files, at } = yield* Effect.promise(() => on(path));
-		const answer = ask(files, at);
-
-		// Absent, not null: a backend's answer may itself be null.
-		if (answer === undefined) return yield* Effect.fail(new VfsError('ENOTSUP', reason, path));
-
-		return yield* Effect.promise(async () => answer);
-	});
+	/** ENOTSUP with `reason`: a bare base without the optional operation (the namespace answers its own). */
+	const unsupported = (path: string, reason: string): Effect.Effect<never, VfsError> => Effect.fail(new VfsError('ENOTSUP', reason, path));
 
 	return {
 		mounts: () => [...mounts],
@@ -489,12 +454,34 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 			return target.namespace === null ? target.at : namespacePath(await routeCreating(target.namespace, target.at, options?.follow ?? true));
 		},
 		// ENOTSUP, not EPERM: callers like the `file` scan fall back on this code; only `readBoundedWithVfsOps` may whole-read.
-		readRange: (path, offset, length) => settle(capable(path, 'this plane serves no ranged read', (files, at) => files.readRange?.(at, offset, length))),
-		readlink: (path) => settle(capable(path, 'this plane serves no readlink', (files, at) => files.readlink?.(at))),
-		readFileAtRevision: (path, revision, range) => settle(capable(path, 'this file plane does not retain file revisions',
-			(files, at) => files.readFileAtRevision?.(at, revision, range))),
-		writeFileIfRevision: (path, data, expected) => settle(capable(path, 'this file plane does not support revision-checked writes',
-			(files, at) => files.writeFileIfRevision?.(at, data, expected))),
+		async readRange(path, offset, length) {
+			const answer = await via(path, (files, at) => files.readRange?.(at, offset, length));
+
+			if (answer !== undefined) return answer;
+
+			return settle(unsupported(path, 'this plane serves no ranged read'));
+		},
+		async readlink(path) {
+			const answer = await via(path, (files, at) => files.readlink?.(at));
+
+			if (answer !== undefined) return answer;
+
+			return settle(unsupported(path, 'this plane serves no readlink'));
+		},
+		async readFileAtRevision(path, revision, range) {
+			const answer = await via(path, (files, at) => files.readFileAtRevision?.(at, revision, range));
+
+			if (answer !== undefined) return answer;
+
+			return settle(unsupported(path, 'this file plane does not retain file revisions'));
+		},
+		async writeFileIfRevision(path, data, expected) {
+			const answer = await via(path, (files, at) => files.writeFileIfRevision?.(at, data, expected));
+
+			if (answer !== undefined) return answer;
+
+			return settle(unsupported(path, 'this file plane does not support revision-checked writes'));
+		},
 		// A device's own write report, from the backend the write lands on; elsewhere the namespace writes and reports nothing.
 		async writeFileWithReport(path, data) {
 			const target = await on(path);
