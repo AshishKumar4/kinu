@@ -94,15 +94,15 @@ export default {
       };
       const line = (code) => (bytes) => { const at = text(bytes).search(new RegExp('^' + code + ' .*\\r\\n', 'm')); return at < 0 ? null : bytes.length; };
       await until(line('220'));
-      await writer.write(new TextEncoder().encode('EHLO kinu\r\n'));
+      await writer.write(new TextEncoder().encode('EHLO kinu\\r\\n'));
       await until(line('250'));
-      await writer.write(new TextEncoder().encode('STARTTLS\r\n'));
+      await writer.write(new TextEncoder().encode('STARTTLS\\r\\n'));
       await until(line('220'));
       await writer.write(Uint8Array.from([...key, 0x55, 0]));
       await until((bytes) => (bytes.length >= 17 ? 0 : null));
       if (heard[16] !== 1) return 'refused: ' + text(heard.subarray(19));
       heard = heard.subarray(17);
-      await writer.write(new TextEncoder().encode('EHLO kinu\r\n'));
+      await writer.write(new TextEncoder().encode('EHLO kinu\\r\\n'));
       await until(line('250'));
       return 'EHLO answered 250 over TLS';
     })().catch((error) => 'failed: ' + String(error)), 15000);
