@@ -28,7 +28,8 @@ import { type McpPresetAvailability, type McpServerSummary } from './mcp';
 import { acceptRosterSocket, isRosterSocket, unreportedWorkspaces, ROSTER_SOCKET_PATH, type RosterPage, type RosterQuery } from './roster';
 
 import { UserDrive, type DriveAnswer, type DriveChunkWrite } from './drive';
-import { DeviceHelloHeadSchema, DeviceHelloSchema, DeviceUpdateHelloSchema, UserDevices, type DeviceCancellationOutcome } from './devices';
+import { UserDevices, type DeviceCancellationOutcome } from './devices';
+import { DeviceHelloHeadSchema, DeviceHelloSchema, DeviceUpdateHelloSchema } from '@kinu.run/core';
 import { UserTerminals } from './terminals';
 import { UserChatGptSignIn, type ChatGptMachineSignIn, type ChatGptPlanStatus } from './chatgpt-sign-in';
 import { UserMcpServers, USER_MCP_CLIENT_NAME, type McpToolCall } from './mcp-servers';

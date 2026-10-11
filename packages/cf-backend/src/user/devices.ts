@@ -1,6 +1,7 @@
 import { Effect } from 'effect';
+import { DeviceHelloSchema, DeviceUpdateHelloSchema } from '@kinu.run/core';
 import {
-  DEVICE_PTY_OPEN_METHOD, type DeviceExecOutput, NO_DEVICE_CONNECTED, watchedOutput, SEVERAL_DEVICES_CONNECTED, codexEgressAllowed, chatgptEgressAllowed, type RelayedProvider, isWorkspaceName, nanoid, type DeviceCheckpointHint, type DeviceConsentRequest, type JsonObject, type JsonValue, CapabilityDeniedError, ownerCaller, type UserCaller, type ResolvedCaller, DeviceSocketHub, DeviceRequestLedger, type ClaimedDeviceRequest, type DeviceCancelOutcome, randomToken, sha256Hex, type DeviceChatGptStatus, DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED, DEVICE_TOKEN_ROTATION, DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, readBuildStamp, type BuildStamp, type DeviceUpdateFrame, type DeviceUpdateState, DEVICE_CANCEL_METHOD, DEVICE_EXEC_ACK_METHOD, parseDeviceCancelAnswer, nextDeviceRequestId, DEVICE_METHOD, DEVICE_FRAMES, DEVICE_ERRORS, deviceFailure, deviceMethodHas, type DeviceTunnel, DEVICE_TIERS, SANDBOX_UNAVAILABLE, effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause, summarizeDeviceAction, type DeviceConsentDecision, type DeviceStatus, type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
+  DEVICE_PTY_OPEN_METHOD, type DeviceExecOutput, NO_DEVICE_CONNECTED, watchedOutput, SEVERAL_DEVICES_CONNECTED, codexEgressAllowed, chatgptEgressAllowed, type RelayedProvider, isWorkspaceName, nanoid, type DeviceCheckpointHint, type DeviceConsentRequest, type JsonObject, type JsonValue, CapabilityDeniedError, ownerCaller, type UserCaller, type ResolvedCaller, DeviceSocketHub, DeviceRequestLedger, type ClaimedDeviceRequest, type DeviceCancelOutcome, randomToken, sha256Hex, type DeviceChatGptStatus, DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED, DEVICE_TOKEN_ROTATION, DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, readBuildStamp, type BuildStamp, type DeviceUpdateFrame, type DeviceUpdateState, DEVICE_CANCEL_METHOD, DEVICE_EXEC_ACK_METHOD, parseDeviceCancelAnswer, nextDeviceRequestId, DEVICE_METHOD, DEVICE_ERRORS, deviceFailure, deviceMethodHas, type DeviceTunnel, DEVICE_TIERS, SANDBOX_UNAVAILABLE, effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause, summarizeDeviceAction, type DeviceConsentDecision, type DeviceStatus, type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
 } from '@kinu.run/core';
 import { attemptInItsWords, diagnostics, KinuError, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -78,47 +79,7 @@ const CancelledRequestIdSchema = v.pipe(v.string(), v.minLength(1));
 /** RFC 1035: a name is at most 255 octets. */
 const HOSTNAME_MAX_LENGTH = 255;
 
-/** What every HELLO opens with: the protocol it speaks and the methods it answers, which decide the rest. */
-export const DeviceHelloHeadSchema = v.object({
-  type: v.literal(DEVICE_FRAMES.hello),
-  protocolVersion: v.number(),
-  features: v.array(v.string()),
-});
 
-/**
- * What a daemon on the protocol before this one is read for: whether, and to which build, it is pushed the update.
- * `version` is absent on a daemon with no build stamp, which is pushed nothing.
- */
-export const DeviceUpdateHelloSchema = v.object({
-  ...DeviceHelloHeadSchema.entries,
-  os: v.string(),
-  arch: v.string(),
-  version: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1))),
-  updateCheck: v.boolean(),
-});
-
-/** A current daemon's HELLO, every field it sends. */
-export const DeviceHelloSchema = v.object({
-  ...DeviceUpdateHelloSchema.entries,
-  hostname: v.string(),
-  /** The directory `kinu connect` ran in, and the machine's home.
-   *  Absolute or ignored: a relative path names nothing the hub can scope a call to. */
-  root: v.string(),
-  home: v.string(),
-  /** What the daemon proved at start. Words stay plain strings, narrowed by
-   *  `sandboxVerdictFromHello`; a picklist would reject the whole HELLO over one unknown word. */
-  sandbox: v.object({
-    capability: v.nullable(v.string()),
-    reason: v.nullable(v.string()),
-    reasonDetail: v.optional(v.nullable(v.string())),
-    gpu: v.array(v.string()),
-  }),
-  /** Where this machine keeps agent homes (`<home>/.kinu/agents`); the hub composes
-   *  `<agentRoot>/<workspace>/home` per exec and never guesses a path. */
-  agentRoot: v.string(),
-  /** The daemon's runtime (`Bun 1.4.2`); a refusal holds until it changes. */
-  runtime: v.pipe(v.string(), v.trim(), v.minLength(1)),
-});
 
 /** An object type rather than an interface, so it satisfies the row constraint `sqlx` puts
  *  on its result shape. */
