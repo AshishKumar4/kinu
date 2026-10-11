@@ -20,7 +20,6 @@ import {
   type ScrubReplacement,
 } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../orchestrator';
-import { carryKeyed, hexLabels, keyedHost } from './keyed-socket';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { OwnerCapabilityUnavailableError, ownerCaller, type OwnerCapabilityEnv, type UserCaller } from '@kinu.run/core';
 import type { EgressInjection, EgressInjectionResult } from '@kinu.run/core';
@@ -186,9 +185,11 @@ function tlsDestination(address: string): { readonly hostname: string; readonly 
   const [host, sni, ...rest] = plain.hostname.slice(0, -TLS_SOCKET_SUFFIX.length).split('.s.');
 
   const named = (labels: string | undefined): string | null => {
-    const bytes = hexLabels(labels);
+    const hex = labels?.split('.').join('') ?? '';
 
-    return bytes === null ? null : new TextDecoder().decode(bytes);
+    if (hex.length === 0 || hex.length % 2 !== 0 || !/^[0-9a-f]+$/.test(hex)) return null;
+
+    return new TextDecoder().decode(Uint8Array.from(hex.match(/../g) ?? [], (pair) => Number.parseInt(pair, 16)));
   };
 
   const hostname = named(host);
@@ -200,18 +201,15 @@ function tlsDestination(address: string): { readonly hostname: string; readonly 
 /**
  * A workspace program's socket (its egress's `connect`): the destination judged as a request's host is, then the bytes
  * piped both ways. A TLS socket (`tlsDestination`) has its session made here, with Kinu's own trust, and its plaintext
- * carried; a keyed one (`keyedHost`) as it is until it asks for TLS (`carryKeyed`); any other as it is. Kinu reads none
- * of it; a secret cannot be put into a stream it does not parse. A refused or unnamed destination closes the socket
- * before anything is sent.
+ * carried; any other is carried as it is. Kinu reads none of it; a secret cannot be put into a stream it does not parse.
+ * A refused or unnamed destination closes the socket before anything is sent.
  */
 export function handleEgressConnect(socket: Socket, params: KinuEgressParams | undefined): Promise<void> {
   return settle(Effect.gen(function* () {
     const opened = yield* attempt({ doing: 'reading where a workspace socket goes', otherwise: 'io' }, () => socket.opened);
     const address = opened.localAddress ?? '';
     const tls = tlsDestination(address);
-    const named = tls === null ? socketDestination(address) : null;
-    const keyed = named === null ? null : keyedHost(named.hostname);
-    const destination = tls ?? (keyed === null ? named : { hostname: keyed.hostname, port: named?.port ?? 0 });
+    const destination = tls ?? socketDestination(address);
     const refused = params === undefined || destination === null ? null : refusedHostname(destination.hostname);
 
     if (params === undefined || destination === null || refused !== null) {
@@ -224,12 +222,6 @@ export function handleEgressConnect(socket: Socket, params: KinuEgressParams | u
 
     const { connect } = yield* Effect.promise(() => import('cloudflare:sockets'));
     const target = { hostname: destination.hostname, port: destination.port };
-
-    if (keyed !== null) {
-      const server = connect(target, { allowHalfOpen: true, secureTransport: 'starttls' });
-
-      return yield* attempt({ doing: `carrying a socket to ${destination.hostname}`, otherwise: 'io' }, () => carryKeyed(socket, server, keyed.hostname, keyed.key));
-    }
 
     // A server named other than its host is checked by that name (workerd's own node:tls does the same).
     const renamed = tls !== null && tls.servername !== tls.hostname;
