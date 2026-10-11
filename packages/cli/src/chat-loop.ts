@@ -53,6 +53,8 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   let consentAskPending = false;
   /** Waiting approvals are asked at the start and after each turn, never over one; `later` waits for the next turn. */
   let approvalsDue = true;
+  /** The approvals being asked; a turn that starts takes the prompt back. */
+  let approvalPass: AbortController | null = null;
 
   // A send is owed a turn from the moment it leaves: the machine counts it until it is answered.
   const busy = () => machine.activeTurns > 0 || machine.sending > 0;
@@ -89,8 +91,14 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   };
 
   const onClientEvent = (event: AgentClientEvent) => {
-    if (event.type === 'turn-start') dispatch({ type: 'turn-start' });
-    else if (event.type === 'turn-end') dispatch({ type: 'turn-settled' });
+    if (event.type === 'turn-start') {
+      approvalPass?.abort();
+      dispatch({ type: 'turn-start' });
+    } else if (event.type === 'turn-end') {
+      approvalsDue = true;
+      dispatch({ type: 'turn-settled' });
+    }
+
     renderClientEvent({
       event, agentName: client.agentName, status: turnStatus,
       getHeader: () => headerPrinted, setHeader: (printed) => { headerPrinted = printed; },
@@ -281,7 +289,6 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
       console.log('\n');
       // Answered, admitted or refused: what waits behind it goes once nothing else runs.
       dispatch({ type: 'send-ended' });
-      approvalsDue = true;
     }
   };
 
@@ -338,7 +345,9 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
 
     if (approvalsDue && tty && client.approvals) {
       approvalsDue = false;
-      await askWaitingApprovals(client.approvals, lineApprovalPrompt(rl), new AbortController().signal);
+      approvalPass = new AbortController();
+      await askWaitingApprovals(client.approvals, lineApprovalPrompt(rl), approvalPass.signal);
+      approvalPass = null;
     }
 
     const prefill = pendingPrefill;
@@ -415,6 +424,8 @@ function lineApprovalPrompt(rl: readline.Interface): WaitingApprovalPrompt {
 
       while (!signal.aborted) {
         const answer = (await ask(rl, `${DIM(choices)} `, signal))?.trim().toLowerCase();
+
+        if (signal.aborted) return 'cancelled';
 
         if (answer === undefined || answer === 'l' || answer === 'later') return 'later';
 

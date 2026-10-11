@@ -891,24 +891,24 @@ export function ApprovalOverlay({ prompt, terminal }: { prompt: ApprovalPrompt; 
   const details = approvalDetails(prompt);
   const layout = deviceConsentLayout({ command: details }, terminal);
   const position = centeredPosition(terminal, layout.paletteWidth, layout.paletteHeight, 'center');
-  const canWait = prompt.kind === 'waiting';
-  const later = canWait ? ` · ${keybindings.hint('consent.later')} later` : '';
-  const deny = `${keybindings.hint('consent.deny')} deny${later}`;
-  const write = canWait && !terminalMayApprove(prompt.action);
-
+  const write = prompt.kind === 'waiting' && !terminalMayApprove(prompt.action);
   const approvable = approvalCanApprove(prompt, terminal);
+  const later = prompt.kind === 'waiting' ? ` · ${keybindings.hint('consent.later')} later` : '';
+  const approve = approvable ? `${keybindings.hint('consent.once')} approve · ${keybindings.hint('consent.always')} always allow · ` : '';
+  // The keys come first and the reason second, so a narrow palette never clips the answers it takes.
+  let why = 'Always allow grants these rules on this executor only.';
 
-  const answers = approvable
-    ? `${keybindings.hint('consent.once')} approve · ${keybindings.hint('consent.always')} always allow · ${deny}`
-    : `${write ? 'Approve a file write in the Kinu app, where its bytes show' : 'Enlarge the terminal to read it all'} · ${deny}`;
+  if (write) why = 'Approve a file write in the Kinu app, where its bytes show.';
+  else if (!approvable) why = 'Enlarge the terminal to read it all.';
 
   return (
     <PaletteFrame title={write ? 'Replace this file?' : 'Run this command?'} width={layout.paletteWidth} height={layout.paletteHeight} left={position.left} top={position.top}>
       <box style={{ width: '100%', height: layout.canApprove ? layout.commandRows : Math.max(1, layout.paletteHeight - 8) }}>
         <text wrapMode="word"><span fg={colors.text.strong}>{write ? details : `Command: ${details}`}</span></text>
       </box>
-      <PaletteLine text={answers} width={layout.innerWidth} color={approvable ? colors.intent.accentStrong : colors.intent.danger} />
-      <PaletteLine text="Always allow grants these rules on this executor only." width={layout.innerWidth} color={colors.text.muted} />
+      <PaletteLine text={`${approve}${keybindings.hint('consent.deny')} deny${later}`} width={layout.innerWidth}
+        color={approvable ? colors.intent.accentStrong : colors.intent.danger} />
+      <PaletteLine text={why} width={layout.innerWidth} color={approvable ? colors.text.muted : colors.intent.danger} />
     </PaletteFrame>
   );
 }

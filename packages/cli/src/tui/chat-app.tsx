@@ -73,7 +73,7 @@ import {
   WalkbackOverlay,
 } from './overlays';
 import { useDeviceConnectPrompt, type DeviceConnectPromptState } from './use-device-connect';
-import { useApprovals } from './use-approvals';
+import { useApprovals, type ApprovalPrompt } from './use-approvals';
 import {
   JobOutputFrameSchema, READS_CHANGED_EVENT, type BroadcastEvent, type WorkMode,
 } from '@kinu.run/core';
@@ -170,12 +170,14 @@ function anyOverlayOpen(input: {
   navigationOpen: boolean;
   walkbackOpen: boolean;
   pendingConsent: PendingDeviceConsent | null;
+  approval: ApprovalPrompt | null;
   deviceConnect: DeviceConnectPromptState | null;
 }): boolean {
   return input.activeSurface !== null
     || input.navigationOpen
     || input.walkbackOpen
     || input.pendingConsent !== null
+    || input.approval !== null
     || input.deviceConnect !== null;
 }
 
@@ -410,11 +412,11 @@ function ChatScene({
     addMessage({ role: 'system', content: kind === 'error' ? errorLine(message) : message });
   }, [addMessage]);
 
-  const otherOverlayOpen = anyOverlayOpen({
-    activeSurface, navigationOpen, walkbackOpen: inputState.walkbackOpen, pendingConsent, deviceConnect: deviceConnect.state,
-  });
+  const overlays = { activeSurface, navigationOpen, walkbackOpen: inputState.walkbackOpen, pendingConsent, deviceConnect: deviceConnect.state };
 
-  const approval = useApprovals(client, { running: isProcessing, askable: draft === '' && !otherOverlayOpen, note: approvalNote });
+  const approval = useApprovals(client, {
+    running: isProcessing, ready, draft, othersOpen: anyOverlayOpen({ ...overlays, approval: null }), note: approvalNote,
+  });
 
   const pasteNote = useCallback((content: string) => addMessage({ role: 'system', content }), [addMessage]);
 
@@ -1596,7 +1598,7 @@ function ChatScene({
     consentDecisionRef.current?.(decision);
   }, []);
 
-  const overlayOpen = otherOverlayOpen || approval.prompt !== null;
+  const overlayOpen = anyOverlayOpen({ ...overlays, approval: approval.prompt });
 
   useEffect(() => {
     if (!rendererInstance?.root) return;

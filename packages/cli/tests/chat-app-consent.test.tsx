@@ -284,10 +284,40 @@ describe('waiting approvals', () => {
     expect(parkedQueue.decided).toEqual([[['park-1'], 'always']]);
   });
 
+  test('a key pressed as one answer lands never answers the next, and a file write is not approved here', async () => {
+    const write = parked('park-2', `file write /home/main/notes.md sha256:${'a'.repeat(64)} over sha256:${'b'.repeat(64)}`);
+    const parkedQueue = queue([parked('park-1', 'ls -la'), write]);
+    const screen = await mountChat(fakeClient({ name: 'parked', approvals: parkedQueue.approvals }).client);
+
+    await screen.waitFor('the first waiting approval', () => screen.frame().includes('ls -la'));
+    // Both keys arrive before the first answer lands or the next prompt is drawn.
+    screen.mockInput.pressKey('o');
+    screen.mockInput.pressKey('o');
+    await screen.waitFor('the parked write, drawn next', () => screen.frame().includes('Replace this file?'));
+
+    expect(parkedQueue.decided).toEqual([[['park-1'], 'approved']]);
+  });
+
+  test('a file write offers only deny and later in the terminal', async () => {
+    const parkedQueue = queue([parked('park-1', `file write /home/main/notes.md sha256:${'a'.repeat(64)} over sha256:${'b'.repeat(64)}`)]);
+    const screen = await mountChat(fakeClient({ name: 'parked', approvals: parkedQueue.approvals }).client);
+
+    await screen.waitFor('the parked write', () => screen.frame().includes('Replace this file?'));
+    screen.mockInput.pressKey('o');
+    screen.mockInput.pressKey('a');
+    await screen.renderOnce();
+    expect(parkedQueue.decided).toEqual([]);
+    screen.mockInput.pressKey('n');
+    await screen.waitFor('the denial', () => parkedQueue.decided.length === 1);
+
+    expect(parkedQueue.decided).toEqual([[['park-1'], 'denied']]);
+  });
+
   test('a draft holds a newly parked command back, so no keystroke meant for it answers', async () => {
     const parkedQueue = queue([]);
     const agent = fakeClient({ name: 'parked', approvals: parkedQueue.approvals });
-    const screen = await mountChat(agent.client);
+    // Kitty keys, so Ctrl+C reaches the composer as its clear rather than the terminal's interrupt.
+    const screen = await mountChat(agent.client, { kittyKeyboard: true });
 
     await screen.mockInput.typeText('yes, and also');
     parkedQueue.waiting.push(parked('park-1', 'git push --force origin main'));
