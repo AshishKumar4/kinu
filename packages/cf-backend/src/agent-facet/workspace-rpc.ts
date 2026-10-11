@@ -110,7 +110,7 @@ class ConsumedMemory implements Memory {
  * workspace may have reset under it, and the next opens it again. A session, memory or a program's callbacks own live
  * capabilities: each opens its own host, which lets them go at its edge.
  */
-export function workspaceClient(workspace: AgentWorkspaceCalls): AgentWorkspace {
+export function workspaceClient(workspace: AgentWorkspaceCalls): AgentWorkspace & Disposable {
   let held: Promise<AgentWorkspacePort> | null = null;
 
   /** `owned`: the answer holds live content its consumer reads after (a relayed response's body), so its pipeline is
@@ -130,6 +130,14 @@ export function workspaceClient(workspace: AgentWorkspaceCalls): AgentWorkspace 
   });
 
   return {
+    // The port's own relay stays open while it is held: an isolate holds it for its life, and lets it go here.
+    [Symbol.dispose]: () => {
+      const opened = held;
+
+      held = null;
+
+      if (opened !== null) disposeWorkspaceRpc(opened);
+    },
     session: () => new WorkspaceSession(workspace.session()),
     stateSession: () => new WorkspaceSession(workspace.stateSession()),
     memory: () => new ConsumedMemory(workspace.memory()),
