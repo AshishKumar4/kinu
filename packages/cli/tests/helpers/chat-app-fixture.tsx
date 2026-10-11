@@ -227,7 +227,7 @@ export async function mountChat(
     width?: number;
     terminalOutput?: boolean;
     settled?: (frame: string) => boolean;
-    /** Kitty-protocol keys, for chords the legacy byte set cannot express (Shift+Enter, Ctrl+J distinct from Enter). */
+    /** False selects basic escape-byte keys; Kitty distinguishes Escape from a prefix and represents Ctrl+comma. */
     kittyKeyboard?: boolean;
     /** The TUI asked to quit (Esc on an empty, fresh session, or /exit). */
     onExit?: () => void;
@@ -238,7 +238,7 @@ export async function mountChat(
     height: 30,
     useThread: false,
     maxFps: Number.POSITIVE_INFINITY,
-    kittyKeyboard: options.kittyKeyboard === true,
+    kittyKeyboard: options.kittyKeyboard !== false,
     ...(options.terminalOutput && { stdout: process.stdout, bufferedOutput: 'stdout' }),
   });
 
@@ -270,12 +270,27 @@ export async function mountChat(
 
   const { renderer } = testRenderer;
 
+  const nextFrame = (what: string) => new Promise<void>((resolve, reject) => {
+    const onFrame = () => {
+      renderer.off('destroy', onDestroy);
+      resolve();
+    };
+
+    const onDestroy = () => {
+      renderer.off('frame', onFrame);
+      reject(new Error(`the renderer was destroyed while waiting for ${what}`));
+    };
+
+    renderer.once('frame', onFrame);
+    renderer.once('destroy', onDestroy);
+  });
+
   const waitFor = async (what: string, predicate: () => boolean) => {
-    try {
-      await testRenderer.renderOnce();
-      await testRenderer.waitFor(predicate);
-    } catch (cause) {
-      throw new Error(`the chat surface did not reach ${what}`, { cause });
+    await testRenderer.renderOnce();
+
+    while (!predicate()) {
+      await nextFrame(what);
+      await new Promise<void>((resolve) => { process.nextTick(resolve); });
     }
   };
 
