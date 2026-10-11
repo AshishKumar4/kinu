@@ -23,7 +23,6 @@ import * as v from 'valibot';
 import DAEMON_SOURCE from '../../pc-agent/src/index.js' with { type: 'text' };
 import SANDBOX_SOURCE from '../../pc-agent/src/sandbox.js' with { type: 'text' };
 import PTY_SOURCE from '../../pc-agent/src/pty.js' with { type: 'text' };
-import PROC_SOURCE from '../../pc-agent/src/proc.js' with { type: 'text' };
 import UPDATE_SOURCE from '../../pc-agent/src/update.js' with { type: 'text' };
 import CHATGPT_SOURCE from '../../pc-agent/src/chatgpt.js' with { type: 'text' };
 import DEVICE_PROTOCOL from '../../core/src/execution/device-protocol.json';
@@ -33,7 +32,7 @@ import { readProcessOutput, waitForDaemonPid } from './helpers/device-process';
 const repoRoot = resolve(__dirname, '../../..');
 
 /** What the daemon requires beside itself, as this repo ships it: the installer must land each one, byte for byte. */
-const DAEMON_SIBLINGS = { 'sandbox.js': SANDBOX_SOURCE, 'pty.js': PTY_SOURCE, 'proc.js': PROC_SOURCE, 'update.js': UPDATE_SOURCE, 'chatgpt.js': CHATGPT_SOURCE, 'device-protocol.json': JSON.stringify(DEVICE_PROTOCOL) } as const;
+const DAEMON_SIBLINGS = { 'sandbox.js': SANDBOX_SOURCE, 'pty.js': PTY_SOURCE, 'update.js': UPDATE_SOURCE, 'chatgpt.js': CHATGPT_SOURCE, 'device-protocol.json': JSON.stringify(DEVICE_PROTOCOL) } as const;
 
 function newProjectDir(): string {
   const dir = scratchDir('test-project');

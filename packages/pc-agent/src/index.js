@@ -17,7 +17,7 @@ const sandbox = require('./sandbox.js');
 
 const pty = require('./pty.js');
 
-const { createProcReader, procStat, procEntryGone } = require('./proc.js');
+const { createProcReader, procStat, procEntryGone } = pty;
 
 const update = require('./update.js');
 

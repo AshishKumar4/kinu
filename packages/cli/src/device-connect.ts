@@ -21,7 +21,6 @@ import { issuedDeviceConnected, waitForAnswer, type StoppableWaitOptions } from 
 import PC_AGENT_DAEMON_SOURCE from '../../pc-agent/src/index.js' with { type: 'text' };
 import PC_AGENT_SANDBOX_SOURCE from '../../pc-agent/src/sandbox.js' with { type: 'text' };
 import PC_AGENT_PTY_SOURCE from '../../pc-agent/src/pty.js' with { type: 'text' };
-import PC_AGENT_PROC_SOURCE from '../../pc-agent/src/proc.js' with { type: 'text' };
 import PC_AGENT_UPDATE_SOURCE from '../../pc-agent/src/update.js' with { type: 'text' };
 import DEVICE_PROTOCOL from '../../core/src/execution/device-protocol.json';
 import { DIM, VERSION } from './display';
@@ -43,14 +42,13 @@ const UPDATE_PENDING_PATH = join(AGENT_HOME, 'pc-agent.update-pending');
 const DAEMON_SIBLINGS: readonly { readonly name: string; readonly source: string }[] = [
   { name: 'sandbox.js', source: PC_AGENT_SANDBOX_SOURCE },
   { name: 'pty.js', source: PC_AGENT_PTY_SOURCE },
-  { name: 'proc.js', source: PC_AGENT_PROC_SOURCE },
   { name: 'update.js', source: PC_AGENT_UPDATE_SOURCE },
   { name: 'device-protocol.json', source: JSON.stringify(DEVICE_PROTOCOL) },
 ];
 
 /**
  * chatgpt.js is read, not imported as text: the CLI imports it as a module too, and Bun's bundler gives one
- * file one loader (21 of 40 builds failed). The release and the source tree put it beside its daemon.
+ * file one loader (21 of 40 builds failed). The release and the source tree put it beside their daemon.
  */
 function daemonSiblings(): readonly { readonly name: string; readonly source: string }[] {
   const file = [join(import.meta.dir, 'pc-agent', 'chatgpt.js'), join(import.meta.dir, '..', '..', 'pc-agent', 'src', 'chatgpt.js')].find(existsSync);

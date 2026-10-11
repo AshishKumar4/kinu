@@ -4,7 +4,7 @@ const { test, expect } = require('bun:test');
 
 const fs = require('node:fs');
 
-const { createProcReader, parseProcStat, procStat } = require('../src/proc.js');
+const { createProcReader, parseProcStat, procStat } = require('../src/pty.js');
 
 // Linux's comm is parenthesized but may itself hold parentheses, spaces and newlines.
 test('process identity and ownership fields are read after the full command name', () => {

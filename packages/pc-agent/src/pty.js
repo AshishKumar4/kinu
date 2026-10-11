@@ -113,6 +113,59 @@ function parseSessionName(value) {
 }
 
 /**
+ * One /proc reader for the daemon, its standalone command supervisor (which embeds this function's source) and the
+ * repository's runners. It lives here, in a module every installed updater already lands, so a successor daemon never
+ * requires a file an older updater does not copy.
+ * @param {typeof import('node:fs')} fs
+ */
+function createProcReader(fs) {
+  /** @param {Error} error */
+  function procEntryGone(error) {
+    return 'code' in error && (error.code === 'ENOENT' || error.code === 'ESRCH');
+  }
+
+  /** @param {number | string} pid @param {string} name @param {boolean} required */
+  function procFile(pid, name, required = false) {
+    try {
+      return fs.readFileSync(`/proc/${pid}/${name}`, 'utf8');
+    } catch (error) {
+      if (!required && error instanceof Error && procEntryGone(error)) return undefined;
+      throw error;
+    }
+  }
+
+  /** The command name can contain spaces, parentheses and newlines; only its final closing parenthesis separates fields.
+   * @param {string} text
+   */
+  function parseProcStat(text) {
+    const end = text.lastIndexOf(')');
+    const fields = text.slice(end + 2).trim().split(/\s+/);
+
+    return {
+      comm: text.slice(text.indexOf('(') + 1, end),
+      state: fields[0] ?? '',
+      ppid: Number(fields[1]),
+      group: Number(fields[2]),
+      session: Number(fields[3]),
+      cpuTicks: Number(fields[11]) + Number(fields[12]) + Number(fields[13]) + Number(fields[14]),
+      tasks: Number(fields[17]),
+      startTicks: fields[19] ?? '',
+    };
+  }
+
+  /** @param {number | string} pid @param {string} name @param {boolean} required */
+  function procStat(pid, name = 'stat', required = false) {
+    const text = procFile(pid, name, required);
+
+    return text === undefined ? undefined : parseProcStat(text);
+  }
+
+  return { procEntryGone, procFile, procStat, parseProcStat };
+}
+
+const { procEntryGone, procFile, procStat, parseProcStat } = createProcReader(require('node:fs'));
+
+/**
  * Every process group in the session `leader` leads, the leader's own first.
  *
  * A terminal's shell is a session leader, and each job it starts becomes its
@@ -133,7 +186,6 @@ function sessionGroups(leader, platform = process.platform) {
 
   if (platform !== 'linux') return groups;
   const fs = require('node:fs');
-  const { procStat } = require('./proc.js');
 
   for (const entry of fs.readdirSync('/proc', { withFileTypes: true })) {
     if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
@@ -348,4 +400,9 @@ module.exports = {
   TERMINAL_NAME,
   parseSessionName,
   parseAxis,
+  createProcReader,
+  procEntryGone,
+  procFile,
+  procStat,
+  parseProcStat,
 };
