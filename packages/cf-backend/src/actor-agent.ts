@@ -1015,7 +1015,8 @@ export abstract class ActorAgent extends Agent<Env> {
         this.liveReadsMoved(ROSTER_READS);
         this.broadcastSubordinateEvent({ ...report, kind: 'report' });
       },
-      onAdmitted: () => { this.orch.scheduleDrain(); },
+      // Its durable wake drains the report into a turn of its own, whichever isolate holds it.
+      onAdmitted: () => { this.durableWakeOwner()?.(); },
       evolutionAnswerStored: () => this.advice.owe(this.actorHandle().actorId),
       onEvolutionAnswer: () => { this.durableWakeOwner()?.(); },
       // A temporary child's answer belongs to the waiting `agents.ask` call, so the register gets
@@ -2450,9 +2451,9 @@ export abstract class ActorAgent extends Agent<Env> {
       // wakes with nobody connected, so spawn-shaped work detaches on unwatched turns too.
       policy: () => invocationBackgroundPolicy(this.turnSurface(), true),
       fiber: (name, fn) => this.rt.schedule.fiber(name, fn),
-      inbox: this.orch.signals,
+      inbox: this.workspaceAgentDeliveries().signals,
       eventLog: this.eventLog,
-      scheduleDrain: () => this.orch.scheduleDrain(),
+      scheduleDrain: () => { this.durableWakeOwner()?.(); },
 
       // Notify the owner (email on the orchestrator; skips silently when pieces are absent).
       notifySettled: (job) => {
@@ -3058,7 +3059,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** The one adapter between a slate's `agent.send` and the turn inbox. */
   private slateInbox(): AgentInbox {
-    return this.orch.signals;
+    return this.workspaceAgentDeliveries().signals;
   }
 
   /**

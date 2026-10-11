@@ -1266,17 +1266,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         workspaceAgent: async (asked, reach) => await this.workspaceAgentCapabilities(asked, reach),
       }, actorPolicy(turn.actor.record), turn),
       announce: () => { this.liveReadsMoved(ROSTER_READS); },
-      // The root's turns run on this object's own chat loop, not its hosted slot.
-      scheduleDrain: (actor) => {
-        if (actor.record.parentActorId === null) {
-          this.orch.scheduleDrain();
-
-          return;
-        }
-
-        // Its durable wake drains it, whichever session holds it, and outlives a reset.
-        this.armDurableWake();
-      },
+      // Its durable wake drains it, whichever isolate holds it, and outlives a reset.
+      scheduleDrain: () => { this.armDurableWake(); },
       deliver: (actor, admit) => this.commitDelivery(actor.reference.actorId, admit),
       hirerName: (actor) => this.hirerName(actor.record),
       jobSeat: (actorId) => ({ ports: this.workspaceJobPorts(actorId), attach: (authority) => this.jobAuthorities.attach(authority) }),
@@ -1744,9 +1735,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.actorHost().release(reference);
   }
 
-  private hostedReactionsDueAt(now: number): number | null {
-    const due = this.workspaceActors().list()
-      .filter((record) => isSubordinateOrigin(record.origin) && record.retiringAt === null)
+  /** The agents whose events drain to them: the workspace's own and every hire, each into a turn of its own. */
+  private reactingAgents(): WorkspaceActor[] {
+    return this.workspaceActors().list().filter((record) => record.retiringAt === null && (actorPolicy(record).workspaceAgent || isSubordinateOrigin(record.origin)));
+  }
+
+  private reactionsDueAt(now: number): number | null {
+    const due = this.reactingAgents()
       .map((record) => new EventLog(this.boundExec(), this.actorHost().bindStores(actorReferenceOf(record)).handle).nextPendingDrainAt(now) ?? Infinity);
 
     const at = Math.min(Infinity, ...due);
@@ -1754,10 +1749,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return Number.isFinite(at) ? at : null;
   }
 
-  private drainHostedReactions(now: number): Effect.Effect<void> {
+  private drainDueReactions(now: number): Effect.Effect<void> {
     return Effect.gen({ self: this }, function* () {
-      for (const record of this.workspaceActors().list()) {
-        if (!isSubordinateOrigin(record.origin) || record.retiringAt !== null) continue;
+      for (const record of this.reactingAgents()) {
         const reference = actorReferenceOf(record);
         const log = new EventLog(this.boundExec(), this.actorHost().bindStores(reference).handle);
         const dueAt = log.nextPendingDrainAt(now);
@@ -1765,18 +1759,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         if (dueAt === null || dueAt > now) continue;
 
         yield* Effect.tryPromise({
-          try: () => this.drainHostedActor(reference),
-          catch: (cause) => authoredRefusal({ doing: 'draining a hired agent', cause }),
+          try: () => this.drainAgent(reference),
+          catch: (cause) => authoredRefusal({ doing: 'draining an agent', cause }),
         }).pipe(Effect.catch((failure) => Effect.sync(() => {
-          diagnostics.failure('event.hosted_wake_drain_failed', failure, { workspace: this.name, actor: record.name });
+          diagnostics.failure('event.wake_drain_failed', failure, { workspace: this.name, actor: record.name });
         })));
       }
     });
   }
 
-  /** One hired agent's due reactions; failure rejects with a classified error. */
-  drainHostedActor(reference: ActorReference): Promise<void> {
-    return settle(attempt({ doing: 'draining a hired agent\'s reactions this wake was armed for', otherwise: 'io' }, async () => {
+  /** One agent's due reactions; failure rejects with a classified error. */
+  drainAgent(reference: ActorReference): Promise<void> {
+    return settle(attempt({ doing: 'draining an agent\'s reactions this wake was armed for', otherwise: 'io' }, async () => {
       // Its due events, bound to their turn in the commit that owes them to it: no session of it is opened here.
       const log = new EventLog(this.watchedExec, this.actorHost().bindStores(reference).handle);
 
@@ -1874,7 +1868,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       if (reconciledEventIds.length > 0) {
         diagnostics.event('event.deliveries_repended', { workspace: this.name, events: reconciledEventIds.length });
-        this.orch.scheduleDrain();
+        this.armDurableWake();
       }
     }, { workspace: this.name });
 
@@ -2033,7 +2027,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return await stub.hasPeerGrant(caller, senderAgentName, senderUserId);
       },
       scheduleDispatch: (at) => this.wakes.arm(KINU_TIMER_JOB, at),
-      onAdmitted: () => { this.orch.scheduleDrain(); },
+      onAdmitted: () => { this.armDurableWake(); },
     });
 
     return this._peerHub;
@@ -2047,8 +2041,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       this.triggerRegistry.list({ state: 'active' }).map((t) => t.next_fire_at),
       this.peerHub.nextRetryAt(),
       this.emailOutbox.nextRetryAt(),
-      this.eventLog.nextPendingDrainAt(now),
-      this.hostedReactionsDueAt(now),
+      this.reactionsDueAt(now),
       nextEvolutionAnswerAt(this.boundSql, this.actorHandle().actorId),
       this.cacheWarming.nextWarmAt(),
       // Sleep-time triggers (phase `alarm.sleep_time`); answers only while an unprocessed turn is recorded,
@@ -2888,7 +2881,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   // The reactor lives on the core AgentOrchestrator. Ingress uses the debounced
-  // `this.orch.scheduleDrain()`; the post-turn hook drains via `this.orch.drainPendingEvents()`.
+  // the durable wake, which drains every agent's due events into a delivery of its own.
 
   private readonly turnSlates = new Map<string, { readonly changed: Set<string>; readonly shown: Set<string> }>();
 
@@ -3554,7 +3547,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       link: (workspace) => `${this.env.CLI_PUBLIC_ORIGIN ?? ''}/workspace/${encodeURIComponent(workspace)}`,
       // Read through `this.orch` at delivery time, never captured, as the deferrals' inbox is.
-      inbox: { send: (signal) => this.orch.signals.send(signal) },
+      inbox: { send: (signal) => this.workspaceAgentDeliveries().signals.send(signal) },
       announce: () => { this.overviewChanged(); },
     });
   }
@@ -3763,7 +3756,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Starts every due notice; each attempt settles its own row, so none is started twice. */
   private deliverForkNotices(): void {
     const deliveries = forkNoticeDeliveries(this.forkNotices, {
-      send: (signal) => this.orch.signals.send(signal),
+      send: (signal) => this.workspaceAgentDeliveries().signals.send(signal),
       arm: (dueAt) => this.scheduleTerminalRetry(dueAt),
       workspace: this.name,
     }, Date.now());
@@ -3975,19 +3968,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // `nextWakeAt` folds `nextPendingDrainAt`, so pending events owe a drain here (D6). The condition
       // uses the same reader and clock as the re-arm so the two cannot disagree about whether it was due.
       await tick.span('alarm.event_drain', (span) => settle(Effect.gen({ self: this }, function* () {
-        const dueAt = this.eventLog.nextPendingDrainAt(now);
+        const dueAt = this.reactionsDueAt(now);
         span.setAttribute('kinu.drain_due', dueAt !== null && dueAt <= now);
-        yield* this.drainHostedReactions(now);
-
-        if (dueAt === null || dueAt > now) return;
-
-        // Rethrow so a selection failure fails this span; the re-arm below retries, since the fold still
-        // answers due.
-        yield* attempt({ doing: 'draining the reactions this wake was armed for', otherwise: 'io' },
-          () => this.orch.drainPendingEvents({ rethrow: true })).pipe(Effect.catch((failure) => Effect.sync(() => {
-          span.fail(failure);
-          diagnostics.failure('event.wake_drain_failed', failure);
-        })));
+        // Each agent's failure is its own: the re-arm below retries it, since the fold still answers due.
+        yield* this.drainDueReactions(now);
       })));
 
       await tick.span('alarm.evolution_answer', async (span) => {
@@ -4316,7 +4300,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async pickAlternateTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
     const outcome = await pickAlternateTake(
-      { sql: this.boundSql, actor: this.rt.actor, turnPair: (messageId) => this.mainTurnPair(messageId), engine: this.engine, inbox: this.orch.signals },
+      { sql: this.boundSql, actor: this.rt.actor, turnPair: (messageId) => this.mainTurnPair(messageId), engine: this.engine, inbox: this.workspaceAgentDeliveries().signals },
       takeId, nodeId);
 
     this.logActivity('take_pick', `${outcome.changedAnswer ? 'alternate' : 'delivered'} (${nodeId})`);
@@ -5098,7 +5082,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       if (!trimmed) return yield* new KinuError('bad_input', 'run_task requires non-empty text');
 
-      const outcome = yield* Effect.promise(async () => this.orch.signals.send({
+      const outcome = yield* Effect.promise(async () => this.workspaceAgentDeliveries().signals.send({
         kind: 'mcp', text: trimmed,
         metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator' },
       }));
@@ -5473,7 +5457,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (!signal) return { started: false };
     // The send admits the turn before its first await; only the wait is detached.
-    const sent = this.orch.signals.send(signal);
+    const sent = this.workspaceAgentDeliveries().signals.send(signal);
     this.detachOwned(logged('genesis.turn_failed', { doing: "taking the workspace's first turn", otherwise: 'unavailable' }, async () => { await this.keepAliveWhile(() => sent); }, { workspace: this.name }));
 
     return { started: true };
@@ -6556,7 +6540,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       vfs: this.rt.storage.vfs,
       secrets: this.webhookSecrets,
       sql: this.ctx.storage.sql,
-      onAdmitted: () => { this.orch.scheduleDrain(); },
+      onAdmitted: () => { this.armDurableWake(); },
     }, opts);
   }
 
@@ -6570,7 +6554,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       log: this.eventLog,
       vfs: this.rt.storage.vfs,
       launchingHeadTrust: 'self',
-      onAdmitted: () => { this.orch.scheduleDrain(); },
+      onAdmitted: () => { this.armDurableWake(); },
     }, body, Date.now());
   }
 
@@ -6586,7 +6570,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     return acceptSandboxLifecycleIncident({
       sql: this.boundSql,
-      inbox: this.orch.signals,
+      inbox: this.workspaceAgentDeliveries().signals,
       // The workspace name is the only dimension the lifecycle module cannot know.
       recordRecovery: (row) => { recordSandboxRecovery(this.env, { workspace: this.name, ...row }); },
       logActivity: (event, detail) => this.logActivity(event, detail),
@@ -6626,7 +6610,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       vfs: () => this.rt.storage.vfs,
       sql: this.ctx.storage.sql,
       ownerEmail: () => this.getOwnerEmail(),
-      onAdmitted: () => { this.orch.scheduleDrain(); },
+      onAdmitted: () => { this.armDurableWake(); },
     });
 
     return this._emailInbox;
