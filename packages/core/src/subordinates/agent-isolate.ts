@@ -1,4 +1,5 @@
 import type { AgentFigures } from '../read-models/agent-figures';
+import type { ContextMeasures } from '../events/recorder';
 import type { JSONSchema7, ModelMessage, UIMessage } from 'ai';
 import type { CompletedTurn } from '../evolution/types';
 import type { TrialTurn } from '../evolution/trial-rules';
@@ -158,6 +159,12 @@ export interface AgentStanding {
   readonly latestRun: { readonly status: string | null; readonly userMessage: string | null } | null;
   /** Words sent into a running turn and not yet read by it. */
   readonly pendingSteers: readonly InlineSteer[];
+}
+
+/** An agent's standing as it reports it with what it owes (design v2 §8): its context's raw measures, which the workspace
+ *  reads against the window it knows, in place of its fill. */
+export interface AgentStandingReport extends Omit<AgentStanding, 'context'> {
+  readonly measures: ContextMeasures;
 }
 
 /** An agent's recent model steps, for the activity its window reads. */

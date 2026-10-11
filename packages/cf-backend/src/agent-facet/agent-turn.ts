@@ -4,7 +4,7 @@ import {
   ASK_OWNER_TOOL, CHAT_SESSION_ID, actorAffinity, askOwnerTool, HeadCapture, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, withEffectReceipt, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan, imageModelOutput,
   type AuthRequest, type AuthResolution, type HandedOffTurn, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type JsonValue, type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
   turnSourcesFromBundle, captureOperationProfile, type ModelCallReport, type ModelOperationEvent,
-  type AdvisorRecoverySnapshot, type AgentFigures, type HostedActor, type OwedReport, type SerializedMessage, type SessionEvent,
+  type AdvisorRecoverySnapshot, type AgentFigures, type AgentStandingReport, type HostedActor, type OwedReport, type SerializedMessage, type SessionEvent,
   type SubordinateReportLedger, type SubordinateReportStatus, type TaskTurnEnding, type WorkMode, type ResolvedTurnProfile, type DynamicContext,
 } from '@kinu.run/core';
 
@@ -73,7 +73,8 @@ export interface AgentWorkspace {
   hireAdvisor(advisor: AdvisorRecoverySnapshot): Promise<void>;
   /** A facet sets no alarm: the instant it next needs waking, or none, and whether it holds owed work at all (a parked
    *  effect needs no wake but is still owed), replacing what it said before. */
-  owes(seq: number, next: number | null, holds: boolean): Promise<void>;
+  /** `standing`: the agent's standing as it reports it, which the workspace reads in place of asking. */
+  owes(seq: number, next: number | null, holds: boolean, standing: AgentStandingReport): Promise<void>;
   birthContext(drainTurnId: string): Promise<SerializedMessage[]>;
   steerSkills(text: string, alreadyActive: readonly string[]): Promise<string | null>;
   /** Its open tasks and running jobs, where its tools wrote them. */

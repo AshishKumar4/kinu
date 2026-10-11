@@ -58,7 +58,7 @@ import {
 // Main actor's payload plane on both fork halves: the carried conversation references
 // payload files by absolute path, and the fork is a cut of the main actor's conversation.
 import { agentArtifactDirectory, agentHome, MAIN_AGENT } from '@kinu.run/core';
-import type { AgentStanding } from '@kinu.run/core';
+import { contextFill, type AgentStanding, type AgentStandingReport } from '@kinu.run/core';
 import type { ChatWire } from './chat-transport';
 import { SLATE_SHARE_PATH, liveShareEntryPage, slateShareUrl, viewerEntryUrl } from './slate-share-route';
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
@@ -892,9 +892,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         await session.hireAdvisor(advisor);
       },
-      owes: async (seq, next, holds) => {
+      owes: async (seq, next, holds, standing) => {
         // Older than a report already taken from it: delayed past that one, or sent before a reset of either side.
         if (!new AgentReports(this.boundSql).accept(actorId, seq)) return;
+        this.reportedStandings.set(actorId, standing);
 
         // A retired agent's answer arms nothing: tearing it down ended its wake.
         if (!this.liveActor(actorId)) return await this.agentWakes.owes(actorId, null);
@@ -4163,14 +4164,28 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }));
   }
 
-  /** Read from main's isolate once it ran a turn; before, there is nothing there, and no isolate is opened to say so. */
+  /**
+   * Main's standing as its isolate last reported it with what it owes (its input taken, its rest), read against this
+   * workspace's window; asked of it only before it reported this activation. Before it ran a turn there is nothing there,
+   * and no isolate is opened to say so. Its context's fill moves within a turn; the report brings it at the turn's rest.
+   */
   private async mainStanding(): Promise<AgentStanding> {
     const main = this.actorHandle().actorId;
 
     if (!this.config.getHoldsTurns()) return { messageCount: 0, context: null, latestRun: null, pendingSteers: [] };
+    const reported = this.reportedStandings.get(main);
+
+    if (reported !== undefined) {
+      const { measures, ...standing } = reported;
+
+      return { ...standing, context: contextFill(measures, this.modelCatalog.contextWindow()) };
+    }
 
     return await (await this.agentCalls(main)).standing(this.agentSnapshot(main), this.modelCatalog.contextWindow());
   }
+
+  /** Each agent's standing as it last reported it this activation. */
+  private readonly reportedStandings = new Map<string, AgentStandingReport>();
 
   async getToolList() {
     return getToolList(this.boundSql);

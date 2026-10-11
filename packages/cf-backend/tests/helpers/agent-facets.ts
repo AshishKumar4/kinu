@@ -364,17 +364,17 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
             if (lostHandoffAnswers.delete(placement.storageKey)) throw new Error('the workspace took the handoff and was reset before it answered');
           },
           hireAdvisor: (advisor) => host.hireAdvisor(advisor),
-          owes: async (seq, next, holds) => {
+          owes: async (seq, next, holds, standing) => {
             const catching = heldReports.get(placement.storageKey);
 
             if (catching !== undefined && (holds || next !== null)) {
               heldReports.delete(placement.storageKey);
-              catching(async () => { await host.owes(seq, next, holds); });
+              catching(async () => { await host.owes(seq, next, holds, standing); });
 
               return;
             }
 
-            await host.owes(seq, next, holds);
+            await host.owes(seq, next, holds, standing);
           },
           birthContext: (drainTurnId) => host.birthContext(drainTurnId),
           steerSkills: (text, alreadyActive) => host.steerSkills(text, alreadyActive),

@@ -7,7 +7,7 @@ import type { ForkConversationPlan, ForkConversationSection, ForkConversationSou
 import type { AgentOwnInspection, ArchiveSqlCursor, CacheWarmArm, ContextEditor, ContextTree, StepSpendSource, ConversationRecall, PositionPageRequest, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ProviderEnv, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import type { AgentRunOutcome, AgentWorkspace } from './agent-facet/agent-turn';
-import type { AdvisorRecoverySnapshot, AgentFigures, AgentTurnActivity, HandedOffTurn, ResolvedTurnProfile, AgentHeadDelta, AgentReview, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TurnRequestAt, ModelCallReport, ModelOperationEvent } from '@kinu.run/core';
+import type { AdvisorRecoverySnapshot, AgentFigures, AgentStandingReport, AgentTurnActivity, HandedOffTurn, ResolvedTurnProfile, AgentHeadDelta, AgentReview, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TurnRequestAt, ModelCallReport, ModelOperationEvent } from '@kinu.run/core';
 import type { ChatTurnRequest } from './agent-turns';
 import { attempt, KinuError, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
@@ -99,7 +99,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   autoTitle(subject: string, title: string | null) { return this.open(() => this.answers.autoTitle(subject, title)); }
   turnSettled(settled: HandedOffTurn) { return this.open(() => this.answers.turnSettled(settled)); }
   hireAdvisor(advisor: AdvisorRecoverySnapshot) { return this.open(() => this.answers.hireAdvisor(advisor)); }
-  owes(seq: number, next: number | null, holds: boolean) { return this.open(() => this.answers.owes(seq, next, holds)); }
+  owes(seq: number, next: number | null, holds: boolean, standing: AgentStandingReport) { return this.open(() => this.answers.owes(seq, next, holds, standing)); }
   birthContext(drainTurnId: string) { return this.open(() => this.answers.birthContext(drainTurnId)); }
   steerSkills(text: string, alreadyActive: readonly string[]) { return this.open(() => this.answers.steerSkills(text, alreadyActive)); }
   openWork() { return this.open(() => this.answers.openWork()); }
@@ -220,7 +220,7 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   autoTitle(subject: string, title: string | null) { return this.owned((host) => host.autoTitle(subject, title)); }
   turnSettled(settled: HandedOffTurn) { return this.owned((host) => host.turnSettled(settled)); }
   hireAdvisor(advisor: AdvisorRecoverySnapshot) { return this.owned((host) => host.hireAdvisor(advisor)); }
-  owes(seq: number, next: number | null, holds: boolean) { return this.owned((host) => host.owes(seq, next, holds)); }
+  owes(seq: number, next: number | null, holds: boolean, standing: AgentStandingReport) { return this.owned((host) => host.owes(seq, next, holds, standing)); }
   birthContext(drainTurnId: string) { return this.owned((host) => host.birthContext(drainTurnId)); }
   steerSkills(text: string, alreadyActive: readonly string[]) { return this.owned((host) => host.steerSkills(text, alreadyActive)); }
   openWork() { return this.owned((host) => host.openWork()); }

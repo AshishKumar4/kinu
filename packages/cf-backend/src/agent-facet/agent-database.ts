@@ -22,7 +22,7 @@ import { attempt, detach, diagnostics, hold, KinuError, logged, settle, settleSy
 import { isDeepStrictEqual } from 'node:util';
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import type { AgentAnswer, AgentAnswerTexts, AgentStanding, AgentSteps, AgentTurnActivity, ConversationProjection, AgentRecovery, AgentSnapshot, PreparedAgentTurn, StoredRow, TurnRequestAt } from '@kinu.run/core';
+import type { AgentAnswer, AgentAnswerTexts, AgentStanding, AgentStandingReport, AgentSteps, AgentTurnActivity, ConversationProjection, AgentRecovery, AgentSnapshot, PreparedAgentTurn, StoredRow, TurnRequestAt } from '@kinu.run/core';
 import type { AgentWorkspace } from './agent-turn';
 
 const refused = (what: string) => Effect.fail(new KinuError('unsupported', `${what} runs in the workspace object, not in an agent's own isolate.`));
@@ -403,12 +403,19 @@ export class AgentDatabase {
 
   /** Where its chat stands between turns; `contextWindow` is the catalog's for its model. */
   standing(contextWindow: number | null): AgentStanding {
+    const { measures, ...standing } = this.standingReport();
+
+    return { ...standing, context: contextFill(measures, contextWindow) };
+  }
+
+  /** Its standing as it reports it with what it owes: the workspace reads it in place of asking. */
+  standingReport(): AgentStandingReport {
     const { actor, transcript } = this.readable();
     const { eventRecorder } = this.actorHost().bindStores(this.reference()).stores;
 
     return {
       messageCount: transcript.count(),
-      context: contextFill(eventRecorder.readContextMeasures(), contextWindow),
+      measures: eventRecorder.readContextMeasures(),
       latestRun: eventRecorder.latestRunHeader(),
       // A steer is a row bound to a turn; an unbound row is the chat's own send, already shown as a message.
       pendingSteers: new PendingSendStore(this.sql, actor.actorId).restore()
