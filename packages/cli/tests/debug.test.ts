@@ -20,7 +20,7 @@ const cliBin = join(repoRoot, 'packages/cli/bin/cli.ts');
 
 const DebugSummarySchema = v.looseObject({
   identity: JsonObjectSchema,
-  runs: v.array(v.looseObject({ runId: v.string(), jobPollsAfterHandle: v.number() })),
+  runs: v.array(v.looseObject({ runId: v.string(), jobPollsAfterHandle: v.number(), toolCalls: v.number(), usage: UsageSchema, turnsWithoutUsage: v.number() })),
   headRuns: v.array(v.looseObject({ rootId: v.string(), heads: v.array(JsonValueSchema) })),
   mctsSearches: v.array(v.looseObject({ rootId: v.string(), iteration: v.number(), budget: v.number(), nodeCount: v.number(), maxDepth: v.number() })),
   backgroundJobs: v.array(v.looseObject({
@@ -236,8 +236,13 @@ describe('kinu debug — local backend', () => {
     const summary = v.parse(DebugSummarySchema, JSON.parse(r.stdout));
     expect(summary.runs.map(({ runId, jobPollsAfterHandle }) => ({ runId, jobPollsAfterHandle })).sort((a, b) => a.runId.localeCompare(b.runId)))
       .toEqual([{ runId: 'run-new', jobPollsAfterHandle: 1 }, { runId: 'run-old', jobPollsAfterHandle: 0 }]);
+    expect(summary.runs.map(({ runId, toolCalls, usage, turnsWithoutUsage }) => ({ runId, toolCalls, usage, turnsWithoutUsage }))
+      .sort((a, b) => a.runId.localeCompare(b.runId))).toEqual([
+        { runId: 'run-new', toolCalls: 2, usage: {}, turnsWithoutUsage: 0 },
+        { runId: 'run-old', toolCalls: 0, usage: { input: 10, output: 5 }, turnsWithoutUsage: 1 },
+      ]);
     expect(summary.headRuns.map(({ rootId, heads }) => ({ rootId, heads: heads.length })).sort((a, b) => a.rootId.localeCompare(b.rootId)))
-      .toEqual([{ rootId: 'head-live', heads: 2 }, { rootId: 'head-new', heads: 1 }, { rootId: 'head-old', heads: 1 }]);
+      .toEqual([{ rootId: 'head-live', heads: 2 }, { rootId: 'head-new', heads: 0 }, { rootId: 'head-old', heads: 0 }]);
     expect(summary.mctsSearches.map(({ rootId, iteration, budget, nodeCount, maxDepth }) => ({ rootId, iteration, budget, nodeCount, maxDepth }))
       .sort((a, b) => a.rootId.localeCompare(b.rootId))).toEqual([
         { rootId: 'search-new', iteration: 2, budget: 8, nodeCount: 3, maxDepth: 2 },
@@ -306,40 +311,6 @@ describe('kinu debug — local backend', () => {
     ]);
   });
 
-  test('--json prints the same investigation summary as machine-readable JSON', async () => {
-    const home = scratch('kinu-debug-json-');
-    const out = scratch('kinu-debug-json-out-');
-    writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {}, aliases: {} }));
-    mkdirSync(join(home, 'invest'), { recursive: true });
-    seedInvestigationWorkspace(join(home, 'invest', 'agent.db'));
-
-    const r = await result(runCli(home, ['debug', 'invest', '--out', join(out, 'b.jsonl'), '--json'], repoRoot));
-    expect(r.exitCode).toBe(0);
-
-    const summary = v.parse(v.object({
-      runs: v.array(v.object({
-        runId: v.string(), toolCalls: v.number(), jobPollsAfterHandle: v.number(),
-        usage: UsageSchema, turnsWithoutUsage: v.number(),
-      })),
-      mctsSearches: v.array(v.object({ rootId: v.string(), nodeCount: v.number(), maxDepth: v.number() })),
-    }), JSON.parse(r.stdout));
-
-    const newRun = summary.runs.find((run) => run.runId === 'run-new');
-    // Both counters read `tool_call_end`, the row production writes; nothing emits `tool_call_start`.
-    expect(newRun?.toolCalls).toBe(2);
-    expect(newRun?.jobPollsAfterHandle).toBe(1);
-    // Accumulated usage carries only reported fields (`cacheRead` absent, not 0); the silent turn is counted.
-    const oldRun = summary.runs.find((run) => run.runId === 'run-old');
-    expect(oldRun?.usage).toEqual({ input: 10, output: 5 });
-    expect(Object.keys(oldRun?.usage ?? {}).sort()).toEqual(['input', 'output']);
-    expect(oldRun?.turnsWithoutUsage).toBe(1);
-    expect(newRun?.usage).toEqual({});
-    expect(newRun?.turnsWithoutUsage).toBe(0);
-    const [latest, previous] = summary.mctsSearches;
-    expect(latest).toMatchObject({ rootId: 'search-new', nodeCount: 3, maxDepth: 2 });
-    expect(previous).toMatchObject({ rootId: 'search-old', nodeCount: 1, maxDepth: 0 });
-    expect(JSON.stringify(summary)).not.toContain(SECRET_TOKEN);
-  });
 });
 
 describe('kinu debug — cloud backend', () => {

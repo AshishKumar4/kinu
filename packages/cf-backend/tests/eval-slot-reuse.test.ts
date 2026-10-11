@@ -22,7 +22,7 @@ test('trial preparation preserves a live slot, deletes stale workspaces and refu
   const identity: AuthIdentity = { userId, email, sub: 'eval', provider: 'dev', authTime: Date.now() };
   const UserDO = { idFromName: (name: string) => name, get: () => harness.userDO };
   const userEnv: UserRoutesEnv<string> = { UserDO, OrchestratorAgent: unreachableNamespace('OrchestratorAgent'), CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY };
-  const accountEnv: AccountRoutesEnv<string> = { UserDO, OrchestratorAgent: unreachableNamespace('OrchestratorAgent'), CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY };
+  const accountEnv: AccountRoutesEnv<string> = { UserDO, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY };
   const pending: Parameters<ExecutionContext['waitUntil']>[0][] = [];
   const ctx = { waitUntil: (promise: Parameters<ExecutionContext['waitUntil']>[0]) => { pending.push(promise); } };
   const user = serveFamily(userRoutes, { identity, ctx });
