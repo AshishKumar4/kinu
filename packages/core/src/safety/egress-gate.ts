@@ -180,28 +180,27 @@ interface ScrubScan {
   readonly keep: Uint8Array;
 }
 
-/** Scrub a byte stream without buffering it, holding at most the longest needle minus one byte; byte-level, since bodies need not be UTF-8. */
-export function createScrubStream(
-  replacements: readonly ScrubReplacement[],
-): TransformStream<Uint8Array, Uint8Array> {
+/** A replacement as bytes; scrubbing is byte-level, since bodies and frames need not be UTF-8. */
+interface ScrubNeedle {
+  readonly find: Uint8Array;
+  readonly to: Uint8Array;
+}
+
+function scrubNeedles(replacements: readonly ScrubReplacement[]): ScrubNeedle[] {
   const encoder = new TextEncoder();
 
-  const needles = replacements
-    .filter((r) => r.find.length > 0)
-    .map((r) => ({ find: encoder.encode(r.find), to: encoder.encode(r.replaceWith) }));
+  return replacements.filter((r) => r.find.length > 0).map((r) => ({ find: encoder.encode(r.find), to: encoder.encode(r.replaceWith) }));
+}
 
-  if (needles.length === 0) return new TransformStream();
-  const longest = Math.max(...needles.map((n) => n.find.length));
+function matchesAt(buf: Uint8Array, at: number, needle: Uint8Array): boolean {
+  for (let i = 0; i < needle.length; i += 1) if (buf[at + i] !== needle[i]) return false;
 
-  let carry = new Uint8Array(0);
+  return true;
+}
 
-  const matchesAt = (buf: Uint8Array, at: number, needle: Uint8Array): boolean => {
-    for (let i = 0; i < needle.length; i += 1) if (buf[at + i] !== needle[i]) return false;
-
-    return true;
-  };
-
-  const straddles = (buf: Uint8Array, at: number): boolean => needles.some((n) => {
+/** Scrub `buf`; unless `final`, stop where a needle may start past its end and hand that tail back. */
+function scanScrub(buf: Uint8Array, needles: readonly ScrubNeedle[], final: boolean): ScrubScan {
+  const straddles = (at: number): boolean => needles.some((n) => {
     const available = buf.length - at;
 
     if (available >= n.find.length) return false;
@@ -211,30 +210,57 @@ export function createScrubStream(
     return true;
   });
 
-  const scan = (buf: Uint8Array, final: boolean): ScrubScan => {
-    const out: Uint8Array[] = [];
-    let plainFrom = 0;
-    let i = 0;
+  const out: Uint8Array[] = [];
+  let plainFrom = 0;
+  let i = 0;
 
-    while (i < buf.length) {
-      const hit = needles.find((n) => i + n.find.length <= buf.length && matchesAt(buf, i, n.find));
+  while (i < buf.length) {
+    const hit = needles.find((n) => i + n.find.length <= buf.length && matchesAt(buf, i, n.find));
 
-      if (hit) {
-        if (i > plainFrom) out.push(buf.subarray(plainFrom, i));
-        out.push(hit.to);
-        i += hit.find.length;
-        plainFrom = i;
-        continue;
-      }
-
-      if (!final && straddles(buf, i)) break;
-      i += 1;
+    if (hit) {
+      if (i > plainFrom) out.push(buf.subarray(plainFrom, i));
+      out.push(hit.to);
+      i += hit.find.length;
+      plainFrom = i;
+      continue;
     }
 
-    if (i > plainFrom) out.push(buf.subarray(plainFrom, i));
+    if (!final && straddles(i)) break;
+    i += 1;
+  }
 
-    return { out, keep: final ? new Uint8Array(0) : buf.subarray(i) };
-  };
+  if (i > plainFrom) out.push(buf.subarray(plainFrom, i));
+
+  return { out, keep: final ? new Uint8Array(0) : buf.subarray(i) };
+}
+
+/** Replace every occurrence in a whole message (a WebSocket frame's payload), byte for byte. */
+export function scrubBytes(bytes: Uint8Array, replacements: readonly ScrubReplacement[]): Uint8Array {
+  const needles = scrubNeedles(replacements);
+
+  if (needles.length === 0) return bytes;
+  const { out } = scanScrub(bytes, needles, true);
+  const joined = new Uint8Array(out.reduce((total, piece) => total + piece.length, 0));
+  let at = 0;
+
+  for (const piece of out) {
+    joined.set(piece, at);
+    at += piece.length;
+  }
+
+  return joined;
+}
+
+/** Scrub a byte stream without buffering it, holding at most the longest needle minus one byte; byte-level, since bodies need not be UTF-8. */
+export function createScrubStream(
+  replacements: readonly ScrubReplacement[],
+): TransformStream<Uint8Array, Uint8Array> {
+  const needles = scrubNeedles(replacements);
+
+  if (needles.length === 0) return new TransformStream();
+  const longest = Math.max(...needles.map((n) => n.find.length));
+
+  let carry = new Uint8Array(0);
 
   const drain = (
     chunk: Uint8Array,
@@ -251,7 +277,7 @@ export function createScrubStream(
       buf.set(chunk, carry.length);
     }
 
-    const { out, keep } = scan(buf, final);
+    const { out, keep } = scanScrub(buf, needles, final);
     // Copied: `keep` may be a view over the caller's chunk.
     carry = keep.length > 0 ? new Uint8Array(keep) : new Uint8Array(0);
 

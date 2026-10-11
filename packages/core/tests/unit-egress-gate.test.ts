@@ -13,6 +13,7 @@ import {
   isEgressPlaceholder,
   planEgress,
   resolveInheritedGrants,
+  scrubBytes,
   scrubText,
   type ApprovalGrant,
   type EgressSecretBinding,
@@ -350,5 +351,15 @@ describe('scrubbing what comes back', () => {
     });
 
     expect(await new Response(source.pipeThrough(createScrubStream([]))).text()).toBe(SECRET);
+  });
+
+  // A WebSocket frame's payload is whole, and need not be text: the secret is found byte for byte, however often.
+  test('a binary message holding the secret, twice and back to back, carries the placeholder each time', () => {
+    const encoder = new TextEncoder();
+    const frame = Uint8Array.from([0xff, 0x00, ...encoder.encode(SECRET), ...encoder.encode(SECRET), 0x80]);
+
+    expect(scrubBytes(frame, REPLACEMENTS))
+      .toEqual(Uint8Array.from([0xff, 0x00, ...encoder.encode(STRIPE.placeholder), ...encoder.encode(STRIPE.placeholder), 0x80]));
+    expect(scrubBytes(frame, [])).toEqual(frame);
   });
 });

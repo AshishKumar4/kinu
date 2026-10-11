@@ -10,6 +10,7 @@ import { rawPath, rethrow, type FamilyEnv } from '../api/context';
 import {
   createScrubStream,
   egressPlaceholdersIn,
+  scrubBytes,
   refusedHostname,
   scrubText,
   JsonValueSchema,
@@ -297,9 +298,11 @@ function forwardUpstream(
 
     for (const [name, value] of upstream.headers) responseHeaders.set(name, scrubText(value, injected));
 
-    // An accepted WebSocket upgrade keeps its socket; its frames are the program's, as a TLS stream's bytes are.
-    if (upstream.status === 101) {
-      return new Response(null, { status: 101, statusText: scrubText(upstream.statusText, injected), headers: responseHeaders, webSocket: upstream.webSocket });
+    // An upgrade that spent a secret is relayed, so the server's frames and close reason reach the program scrubbed.
+    if (upstream.status === 101 && upstream.webSocket !== null) {
+      return new Response(null, {
+        status: 101, statusText: scrubText(upstream.statusText, injected), headers: responseHeaders, webSocket: scrubbedRelay(upstream.webSocket, injected),
+      });
     }
 
     return new Response(
@@ -307,6 +310,37 @@ function forwardUpstream(
       { status: upstream.status, statusText: scrubText(upstream.statusText, injected), headers: responseHeaders },
     );
   });
+}
+
+/** Close `socket` as its peer closed: a code that names no frame sent (1005) or a lost connection (1006, 1015) cannot be sent. */
+function closeAs(socket: WebSocket, code: number, reason: string): void {
+  if (socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) return;
+
+  if (code === 1005) socket.close();
+  else socket.close(code === 1006 || code === 1015 ? 1011 : code, reason);
+}
+
+/**
+ * The program's end of a WebSocket whose upgrade spent a secret: the server's text, binary frames and close reason are
+ * scrubbed with the request's pairs reversed, as a response body is; the program's frames go to the server as they are.
+ */
+function scrubbedRelay(server: WebSocket, injected: readonly ScrubReplacement[]): WebSocket {
+  const pair = new WebSocketPair();
+  const program = pair[0];
+  const relay = pair[1];
+
+  server.accept();
+  relay.accept();
+  server.addEventListener('message', (event) => {
+    relay.send(typeof event.data === 'string' ? scrubText(event.data, injected) : scrubBytes(new Uint8Array(event.data), injected));
+  });
+  relay.addEventListener('message', (event) => { server.send(event.data); });
+  server.addEventListener('close', (event) => { closeAs(relay, event.code, scrubText(event.reason, injected)); });
+  relay.addEventListener('close', (event) => { closeAs(server, event.code, event.reason); });
+  server.addEventListener('error', () => { closeAs(relay, 1011, 'the server\'s WebSocket failed'); });
+  relay.addEventListener('error', () => { closeAs(server, 1011, 'the program\'s WebSocket failed'); });
+
+  return program;
 }
 
 /**
