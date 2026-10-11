@@ -322,7 +322,7 @@ describe('two real turns over the HTTP model seam', () => {
     expect(done.effects).toEqual([]);
     expect(done.busy).toEqual([]);
     expect(done.logoCalls).toBe(1);
-    expect(done.turnCalls).toBe(0);
+    expect(done.turnCalls, JSON.stringify(done.calls.map(call => ({ model: call.model, stream: call.stream, users: call.users })))).toBe(0);
     expect(done.answers).toBe(1);
     expect(done.runEnds).toEqual([{ runId: expect.any(String), reason: 'completed' }]);
   });

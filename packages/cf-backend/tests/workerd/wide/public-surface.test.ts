@@ -11,7 +11,7 @@ import {
 } from '@kinu.run/core';
 import { describe, expect, it, vi } from 'vitest';
 import * as v from 'valibot';
-import { PROBE_TITLE } from '../long-model-script';
+import { PROBE_TITLE } from '../probe-model-script';
 
 /** Loopback: the one host `authenticateRequest` accepts without an identity secret (auth/session.ts:200-213). */
 const ORIGIN = 'http://localhost';
