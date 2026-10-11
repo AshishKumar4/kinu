@@ -184,10 +184,10 @@ const ConfigRowSchema = v.object({ actor_id: v.string(), key: v.string(), value:
 
 /**
  * Each actor's whole `actor_config`, held from one read: a key it lacks is unset, and its default needs no statement.
- * Every store over its executor reads through it and drops the actor's rows before it writes; the one other writer, an
- * isolate adopting its workspace's rows, says what it wrote ({@link adopt}).
+ * Every store over its executor reads through it and drops the actor's rows before it writes. The two other writers
+ * say so: an isolate adopting its workspace's rows ({@link adopt}), and a fork emptying its target ({@link configReplaced}).
  */
-export class ConfigCatalog implements ConfigReads {
+class ConfigCatalog implements ConfigReads {
   private readonly held = new Map<string, ReadonlyMap<string, string>>();
 
   constructor(private readonly sql: SqlExecutor) {}
@@ -215,6 +215,10 @@ export class ConfigCatalog implements ConfigReads {
 
   changed(actorId: string): void {
     this.held.delete(actorId);
+  }
+
+  clear(): void {
+    this.held.clear();
   }
 
   /** The rows of `actorIds`, those not held read in one statement. */
@@ -251,6 +255,11 @@ export function holdConfig(sql: SqlExecutor): ConfigCatalog {
   held.set(sql, catalog);
 
   return catalog;
+}
+
+/** A writer other than a store replaced `actor_config` rows through `sql`: a held catalog reads them again. */
+export function configReplaced(sql: SqlExecutor): void {
+  held.get(sql)?.clear();
 }
 
 export function createAgentConfigStore(sql: SqlExecutor, actorId: string, authorize: () => void): AgentConfigStore {

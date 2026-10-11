@@ -6,6 +6,7 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
 // unsettled claims from durable rows, with no timer or in-memory registry.
 
 import { KinuError } from '../obs/error';
+import { configReplaced } from '../config/store';
 import type { SqlExec, SqlExecutor, Storage } from '../types/primitives';
 import type { AgentRuntime } from '../types/agent-runtime';
 import { ActorSession } from '../orchestrator/actor-session';
@@ -489,6 +490,7 @@ function purgeActorRows(storage: Pick<Storage, 'sql' | 'transactionSync'> & SqlE
       storage.exec(`DELETE FROM "${table.replace(/"/g, '""')}" WHERE actor_id = ?`, actorId);
     }
   });
+  configReplaced(storage.sql);
   markStoreChanged(storage.sql);
 }
 

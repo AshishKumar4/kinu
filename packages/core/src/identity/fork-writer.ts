@@ -7,6 +7,7 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
 import type { SqlExecutor } from '../types/primitives';
 import { ForkStagingState } from './fork-staging';
 import { openWorkspaceMainActor, WorkspaceActorDirectory } from './workspace-actors';
+import { configReplaced } from '../config/store';
 import { KinuError } from '../obs/error';
 import { forkArtifactPath } from './fork-plan';
 import type { ForkSnapshotHead } from './fork-rows';
@@ -101,6 +102,7 @@ export class ForkTargetWriter {
     const actorId = this.actorId;
 
     for (const reset of FORK_WRITE_RESETS) emptied(this.target, reset, actorId);
+    configReplaced(this.target);
     const target = this.sectionTarget;
 
     for (const kind of FORK_ROW_SECTIONS) FORK_SECTIONS[kind].reset?.(target);
