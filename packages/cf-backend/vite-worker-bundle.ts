@@ -40,10 +40,8 @@ export function workerLoadCost(): Plugin {
           rolldownOptions: {
             output: {
               // Names survive bundling and both minify passes: DO classes, `Error.name`, `constructor.name` readers.
-              // Top-level names too: Nimbus sends a function's source (`fn.toString()`) to a facet whose preamble defines
-              // the module-level names it calls by their own spelling; mangled, npm install's facet called `x`.
               keepNames: true,
-              minify: { compress: { keepNames: { function: true, class: true } }, mangle: { keepNames: true, toplevel: false } },
+              minify: { compress: { keepNames: { function: true, class: true } }, mangle: { keepNames: true } },
             },
           },
         },

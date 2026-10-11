@@ -2,8 +2,7 @@
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { builtinModules } from 'node:module';
 import { basename, resolve } from 'node:path';
-import { build, stop } from 'esbuild';
-import { nodeRequireAsImport } from './esbuild-node-require';
+import { buildSync, stop } from 'esbuild';
 import type { Plugin } from 'vite';
 import { unstable_readConfig } from 'wrangler';
 import * as v from 'valibot';
@@ -23,14 +22,14 @@ const AGENT_BUNDLE_OUTPUT = resolve(import.meta.dirname, 'public/_agent');
  * The bundle as the module map a Worker Loader takes, `agent.js` its main module, and each module's source map. A
  * dynamic import is its own chunk, so code an agent's turn never imports is never compiled in its isolate.
  */
-export async function buildAgentBundle(entry: string = AGENT_BUNDLE_ENTRY) {
-  const result = await build({
+export function buildAgentBundle(entry: string = AGENT_BUNDLE_ENTRY) {
+  const result = buildSync({
     entryPoints: { agent: entry }, outdir: '/', splitting: true, chunkNames: 'chunk-[hash]', sourcemap: 'external',
     bundle: true, write: false, format: 'esm', platform: 'neutral', target: 'es2022',
     mainFields: ['module', 'main'], conditions: ['workerd', 'worker', 'browser'],
     minify: true, keepNames: true, charset: 'ascii', legalComments: 'none',
     alias: Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, `node:${name}`])),
-    external: ['cloudflare:*', 'node:*'], plugins: [nodeRequireAsImport],
+    external: ['cloudflare:*', 'node:*'],
   });
 
   const ascii = (text: string): string => text.replace(/[^\0-\x7f]/g, (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, '0')}`);
@@ -61,12 +60,12 @@ export function agentBundle(): Plugin {
     async buildStart() {
       if (built) return;
       mkdirSync(AGENT_BUNDLE_OUTPUT, { recursive: true });
-      const bundle = await buildAgentBundle();
+      const bundle = buildAgentBundle();
       writeWhole(resolve(AGENT_BUNDLE_OUTPUT, 'modules.json'), JSON.stringify(bundle.modules));
 
       for (const [name, map] of Object.entries(bundle.maps)) writeWhole(resolve(AGENT_BUNDLE_OUTPUT, name), map);
       writeWhole(resolve(AGENT_BUNDLE_OUTPUT, 'compatibility.json'), JSON.stringify(workerCompatibility));
-      // A build leaves esbuild's service process running for the life of the process that ran it.
+      // buildSync leaves esbuild's service process running for the life of the process that ran the build.
       await stop();
       built = true;
     },

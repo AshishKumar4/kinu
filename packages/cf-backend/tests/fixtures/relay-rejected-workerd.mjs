@@ -1,7 +1,7 @@
 // 2026-10-09, workerd 2026-09-30: debugger jobs 20261009183355-6c5db02f and 20261009183400-d64f3c13.
 // The Tail must close before Miniflare disposal; a loader Durable Object facet is the RPC consumer.
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
-import { build } from 'esbuild';
+import { buildSync } from 'esbuild';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -9,9 +9,6 @@ import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
-
-// A CommonJS dependency's require of a built-in is an import of it, as production's bundler makes it.
-const { nodeRequireAsImport } = await import(join(root, 'packages/cf-backend/esbuild-node-require.ts'));
 
 const dir = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), 'kinu-relay-rejected-'));
 
@@ -57,7 +54,7 @@ export class Client extends DurableObject {
 
 writeFileSync(join(dir, 'client.js'), client);
 
-await build({ entryPoints: [join(dir, 'client.js')], outfile: join(dir, 'client-bundle.js'), bundle: true, format: 'esm', platform: 'neutral', conditions: ['workerd', 'worker', 'browser'], mainFields: ['module', 'main'], external: ['node:*', 'cloudflare:*'], nodePaths: [join(root, 'node_modules')], logLevel: 'error', plugins: [nodeRequireAsImport] });
+buildSync({ entryPoints: [join(dir, 'client.js')], outfile: join(dir, 'client-bundle.js'), bundle: true, format: 'esm', platform: 'neutral', conditions: ['workerd', 'worker', 'browser'], mainFields: ['module', 'main'], external: ['node:*', 'cloudflare:*'], nodePaths: [join(root, 'node_modules')], logLevel: 'error' });
 
 const clientModule = readFileSync(join(dir, 'client-bundle.js'), 'utf8');
 
@@ -111,7 +108,7 @@ export default { async fetch(request, env) {
 
 writeFileSync(join(dir, 'worker.js'), worker);
 
-await build({ entryPoints: [join(dir, 'worker.js')], outfile: join(dir, 'bundle.js'), bundle: true, format: 'esm', platform: 'neutral', conditions: ['workerd', 'worker', 'browser'], mainFields: ['module', 'main'], external: ['node:*', 'cloudflare:*'], nodePaths: [join(root, 'node_modules')], logLevel: 'error', plugins: [nodeRequireAsImport] });
+buildSync({ entryPoints: [join(dir, 'worker.js')], outfile: join(dir, 'bundle.js'), bundle: true, format: 'esm', platform: 'neutral', conditions: ['workerd', 'worker', 'browser'], mainFields: ['module', 'main'], external: ['node:*', 'cloudflare:*'], nodePaths: [join(root, 'node_modules')], logLevel: 'error' });
 
 const options = convertV4MiniflareOptions({ workers: [{
   name: 'probe', modulesRoot: dir, modules: [{ type: 'ESModule', path: join(dir, 'bundle.js'), contents: readFileSync(join(dir, 'bundle.js'), 'utf8') }],

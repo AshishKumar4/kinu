@@ -9,8 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { cloudflareTest, getDurableObjectDesignators } from '@cloudflare/vitest-plugin';
-import { build as bundled, transform, type BuildOptions } from 'esbuild';
-import { nodeRequireAsImport } from './esbuild-node-require';
+import { buildSync, transform, type BuildOptions } from 'esbuild';
 import { buildSlateVendor, slateVendor } from './slate-vendor';
 import { configDefaults, defineConfig, type Plugin } from 'vitest/config';
 import type { UserConfig } from 'vite';
@@ -23,7 +22,7 @@ import {
   assetsOutbound, deployOutbound,
 } from './tests/workerd/deploy-fake';
 import type { V4ModuleDefinition } from 'miniflare';
-import { builtinModules, createRequire } from 'node:module';
+import { builtinModules } from 'node:module';
 import { spawn } from 'node:child_process';
 import { promptText } from './vite-prompt-text';
 import { AGENT_BUNDLE_ENTRY, buildAgentBundle, workerCompatibility, writeWhole } from './vite-agent-bundle';
@@ -116,47 +115,21 @@ const probeRuntime = {
   alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter(name => !name.startsWith('node:')).map(name => [name, 'node:' + name])) },
 } satisfies BuildOptions;
 
-/**
- * Every esbuild build this process makes, one at a time, as buildSync made them: builds take the require plugin, so
- * they run in esbuild's service, which held the peak of all running at once (seventeen probes killed it; probes beside
- * test-time agent bundles held 5.9 GiB, armada 2026-10-11). The service stays up: standardDecorators' transform uses it.
- */
-let esbuildTurns: Promise<void> = Promise.resolve();
-
-async function esbuildTurn<T>(work: () => Promise<T>): Promise<T> {
-  const before = esbuildTurns;
-  const done = Promise.withResolvers<void>();
-
-  esbuildTurns = done.promise;
-
-  try {
-    await before;
-
-    return await work();
-  } finally {
-    done.resolve();
-  }
-}
-
 /** A selected probe keeps its own entry and flags; unused probes perform no build. */
-async function probeModules(file: string, options: BuildOptions = {}): Promise<V4ModuleDefinition[]> {
-  return await esbuildTurn(() => builtProbe(file, options));
-}
-
-async function builtProbe(file: string, options: BuildOptions): Promise<V4ModuleDefinition[]> {
+function probeModules(file: string, options: BuildOptions = {}): V4ModuleDefinition[] {
   if (!vendorMaterialized && options.alias?.['virtual:kinu-slate-vendor'] !== undefined) {
     mkdirSync(dirname(slateVendorModulePath), { recursive: true });
     writeWhole(slateVendorModulePath, `export const workerCompatibility = ${JSON.stringify(workerCompatibility)};\nexport default ${JSON.stringify(buildSlateVendor())};\n`);
     vendorMaterialized = true;
   }
 
-  const built = (await bundled({
+  const built = buildSync({
     ...options,
     entryPoints: [fileURLToPath(new URL('./tests/workerd/' + file, import.meta.url))],
     outfile: fileURLToPath(new URL('./tests/workerd/.compiled/' + file.replace(/\.ts$/, '.js'), import.meta.url)),
     bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
-    external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' }, plugins: [nodeRequireAsImport],
-  })).outputFiles;
+    external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
+  }).outputFiles;
 
   return built.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm'))).map(output => ({
     type: output.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
@@ -165,7 +138,7 @@ async function builtProbe(file: string, options: BuildOptions): Promise<V4Module
 }
 
 // The agent bundles a probe's workspace loads into its agents' own isolates, served as the asset binding serves them.
-const agentBundles = new Map<string, Promise<string>>();
+const agentBundles = new Map<string, string>();
 
 function agentAssets(entry = AGENT_BUNDLE_ENTRY) {
   return async (request: Request): Promise<Response> => {
@@ -175,15 +148,14 @@ function agentAssets(entry = AGENT_BUNDLE_ENTRY) {
 
     if (path !== '/_agent/modules.json') return new Response('Not found', { status: 404 });
 
-    // The build itself is kept, so the requests that arrive while it runs wait for it rather than each starting one.
     let bundle = agentBundles.get(entry);
 
     if (bundle === undefined) {
-      bundle = esbuildTurn(() => buildAgentBundle(entry)).then((built) => JSON.stringify(built.modules));
+      bundle = JSON.stringify(buildAgentBundle(entry).modules);
       agentBundles.set(entry, bundle);
     }
 
-    return new Response(await bundle, { headers: { 'content-type': 'application/json' } });
+    return new Response(bundle, { headers: { 'content-type': 'application/json' } });
   };
 }
 
@@ -270,21 +242,21 @@ async function attributionOutbound(request: Request): Promise<Response> {
 type AuxiliaryWorker = NonNullable<NonNullable<Parameters<typeof getDurableObjectDesignators>[0]['miniflare']>['workers']>[number];
 
 const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
-['hosted-preview-probe', async () => ({ ...workerCompatibility, modules: await probeModules('preview-port-probe.ts'), durableObjects: { PREVIEW_PORT_PROBE: { className: 'PreviewPortProbeDO', useSQLite: true } }, })],
-['slate-actor-probe', async () => ({ workerLoaders: { LOADER: {} }, ...workerCompatibility, modules: await probeModules('slate-actor-probe.ts', probeRuntime), durableObjects: {
+['hosted-preview-probe', async () => ({ ...workerCompatibility, modules: probeModules('preview-port-probe.ts'), durableObjects: { PREVIEW_PORT_PROBE: { className: 'PreviewPortProbeDO', useSQLite: true } }, })],
+['slate-actor-probe', async () => ({ workerLoaders: { LOADER: {} }, ...workerCompatibility, modules: probeModules('slate-actor-probe.ts', probeRuntime), durableObjects: {
           SLATE_ACTOR_ROOT: { className: 'SlateActorProbeRoot', useSQLite: true },
         }, })],
 ["plan-announce-probe", async () => ({
           // Bound as `OrchestratorAgent` because production `workspaceOwner()` reads that name off `env`.
            ...workerCompatibility, workerLoaders: { LOADER: {} },
-          modules: await probeModules('plan-announce-probe.ts', { ...probeRuntime, keepNames: true }),
+          modules: probeModules('plan-announce-probe.ts', { ...probeRuntime, keepNames: true }),
           durableObjects: {
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
             USER_SOCKET_PROBE: { className: 'UserSocketProbeDO', useSQLite: true },
           },
         })],
-['slate-egress-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: await probeModules('slate-egress-probe.ts', probeRuntime), serviceBindings: { ASSETS: nimbusAssets }, durableObjects: { SLATE_EGRESS_PROBE: { className: 'SlateEgressProbe', useSQLite: true } },
+['slate-egress-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('slate-egress-probe.ts', probeRuntime), serviceBindings: { ASSETS: nimbusAssets }, durableObjects: { SLATE_EGRESS_PROBE: { className: 'SlateEgressProbe', useSQLite: true } },
         // Final transport only: the actual CodemodeEgress policy and resident
         // global fetch run above this mock. No unmatched request reaches a network.
         outboundService: async (request) => {
@@ -310,7 +282,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           // `env.AI` is the installed Workers AI binding, answered by request shape on the Node side.
           ...workerCompatibility,
           workerLoaders: { LOADER: {} },
-          modules: await probeModules('two-turn-probe.ts', probeRuntime),
+          modules: probeModules('two-turn-probe.ts', probeRuntime),
           bindings: { DEV_USER_EMAIL: 'probe@local', WORKERS_AI_VIA_BINDING: 'on', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
           ai: await getTwoTurnAi(),
           // Main's isolate is the shipped facet plus a read of its own SQLite, where its sends, claims and runs are kept.
@@ -332,7 +304,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           compatibilityDate: workerCompatibility.compatibilityDate,
           compatibilityFlags: workerCompatibility.compatibilityFlags,
           workerLoaders: { LOADER: {} },
-          modules: await probeModules('hire-probe.ts', probeRuntime),
+          modules: probeModules('hire-probe.ts', probeRuntime),
           bindings: { DEV_USER_EMAIL: 'probe@local', WORKERS_AI_VIA_BINDING: 'on', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
           ai: await getHireAi(),
           serviceBindings: { ASSETS: agentAssets() },
@@ -347,7 +319,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           // Nimbus port reservations live in workspace storage, so preview URLs survive
           // `abortAllDurableObjects()`.
            ...workerCompatibility, workerLoaders: { LOADER: {} },
-          modules: await probeModules('slate-durability-probe.ts', probeRuntime),
+          modules: probeModules('slate-durability-probe.ts', probeRuntime),
           // A removed slate takes its picture; with no `BROWSER`, nothing is photographed here.
           r2Buckets: ['SLATE_PICTURES'],
           bindings: {
@@ -367,7 +339,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
 ["slate-share-probe", async () => ({
           // `SlateBinding` resolves `env.OrchestratorAgent`, so the probe class is bound under that name too.
            ...workerCompatibility, workerLoaders: { LOADER: {} },
-          modules: await probeModules('slate-share-probe.ts', probeRuntime),
+          modules: probeModules('slate-share-probe.ts', probeRuntime),
           // The egress gate's Browser Run: a session answers where its CDP socket would.
           serviceBindings: { ASSETS: nimbusAssets, BROWSER: { name: 'slate-share-probe', entrypoint: 'FakeBrowserRun' } },
           durableObjects: {
@@ -375,9 +347,9 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
             OrchestratorAgent: { className: 'SlateShareProbeDO', useSQLite: true },
           },
         })],
-['delete-all-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: await probeModules('delete-all-probe.ts'),
+['delete-all-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('delete-all-probe.ts'),
         durableObjects: { DELETE_ALL_PROBE: { className: 'DeleteAllProbeDO', useSQLite: true } } })],
-['device-user-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: await probeModules('device-user-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { CREDENTIAL_ENCRYPTION_KEY: 'ZGV2aWNlLXVzZXItcHJvYmUtY3JlZGVudGlhbC1rZXk=' },
+['device-user-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('device-user-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { CREDENTIAL_ENCRYPTION_KEY: 'ZGV2aWNlLXVzZXItcHJvYmUtY3JlZGVudGlhbC1rZXk=' },
         // Main's turns are its own isolate's, loaded from the agent bundle as the deployed Worker serves it.
         serviceBindings: { ASSETS: agentAssets() },
         // The fake models and their control host, shared with the public surface's drives (files run one at a time).
@@ -387,7 +359,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           UserDO: { className: 'UserDO', useSQLite: true },
           OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
         }, })],
-['account-reset-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: await probeModules('account-reset-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
+['account-reset-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('account-reset-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
         // Main's conversation is its own isolate's, loaded from the agent bundle as the deployed Worker serves it.
         serviceBindings: { ASSETS: agentAssets() },
         outboundService: async (request) => {
@@ -401,7 +373,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
 ["store-reset-probe", async () => ({
           // The probe's `OrchestratorAgent` is the production class plus the one method that plants the old table.
            ...workerCompatibility, workerLoaders: { LOADER: {} },
-          modules: await probeModules('store-reset-probe.ts', { ...probeRuntime, keepNames: true }),
+          modules: probeModules('store-reset-probe.ts', { ...probeRuntime, keepNames: true }),
           bindings: { CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
           // Main's conversation is its own isolate's, loaded from the agent bundle as the deployed Worker serves it.
           serviceBindings: { ASSETS: agentAssets() },
@@ -414,7 +386,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
             UserDO: { className: 'UserDO', useSQLite: true },
           },
         })],
-['addressed-name-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: await probeModules('addressed-name-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { CREDENTIAL_ENCRYPTION_KEY: 'YWRkcmVzc2VkLW5hbWUtcHJvYmUtY3JlZC1rZXktMzI=' },
+['addressed-name-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('addressed-name-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { CREDENTIAL_ENCRYPTION_KEY: 'YWRkcmVzc2VkLW5hbWUtcHJvYmUtY3JlZC1rZXktMzI=' },
         // Main's conversation is its own isolate's, loaded from the agent bundle as the deployed Worker serves it.
         serviceBindings: { ASSETS: agentAssets() },
         outboundService: async (request) => {
@@ -425,7 +397,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
           UserDO: { className: 'UserDO', useSQLite: true },
         }, })],
-['agent-facet-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: await probeModules('agent-facet-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { WORKERS_AI_VIA_BINDING: 'on', CREDENTIAL_ENCRYPTION_KEY: 'YWdlbnQtZmFjZXQtcHJvYmUtY3JlZGVudGlhbC1rZXk=' },
+['agent-facet-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('agent-facet-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { WORKERS_AI_VIA_BINDING: 'on', CREDENTIAL_ENCRYPTION_KEY: 'YWdlbnQtZmFjZXQtcHJvYmUtY3JlZGVudGlhbC1rZXk=' },
         ai: await getHireAi(),
         serviceBindings: { ASSETS: agentAssets(fileURLToPath(new URL('./tests/workerd/agent-facet-probe-agent.ts', import.meta.url))) },
         outboundService: hireOutbound,
@@ -434,7 +406,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
           UserDO: { className: 'UserDO', useSQLite: true },
         }, })],
-['attribution-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: await probeModules('attribution-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { CREDENTIAL_ENCRYPTION_KEY: 'YXR0cmlidXRpb24tcHJvYmUtY3JlZC1rZXktMzJieXQ=' },
+['attribution-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('attribution-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { CREDENTIAL_ENCRYPTION_KEY: 'YXR0cmlidXRpb24tcHJvYmUtY3JlZC1rZXktMzJieXQ=' },
         outboundService: attributionOutbound,
         durableObjects: {
           ATTRIBUTION_PROBE: { className: 'AttributionProbeRoot', useSQLite: true },
@@ -448,7 +420,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           compatibilityDate: workerCompatibility.compatibilityDate,
           compatibilityFlags: workerCompatibility.compatibilityFlags,
           workerLoaders: { LOADER: {} },
-          modules: await probeModules('public-surface-probe.ts', { ...probeRuntime, keepNames: true }),
+          modules: probeModules('public-surface-probe.ts', { ...probeRuntime, keepNames: true }),
           // `DEV_USER_EMAIL` is the loopback identity; `WORKERS_AI_VIA_BINDING` puts its inference on `AI`.
           bindings: { DEV_USER_EMAIL: 'probe@local', WORKERS_AI_VIA_BINDING: 'on', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
           // The CLI device sign-in and its rate limits live in AUTH_KV (cli-scoped-socket).
@@ -464,7 +436,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
 ["deploy-probe", async () => ({
           // Self-deployment against real DO SQLite; every external host is the Node-side fake, unmatched throws.
            ...workerCompatibility,
-          modules: await probeModules('deploy-run-probe.ts', { conditions: ['workerd', 'worker', 'browser'], target: 'es2022' }),
+          modules: probeModules('deploy-run-probe.ts', { conditions: ['workerd', 'worker', 'browser'], target: 'es2022' }),
           // Root secrets are bound because a self-update's vault reads through to them.
           bindings: {
             CLI_PUBLIC_ORIGIN: DEPLOY_FAKE_CHANNEL,
@@ -634,39 +606,6 @@ const workerSelection: Reporter = {
   },
 };
 
-/**
- * Nimbus core's shell npm imports CommonJS packages the workers pool cannot load there: a require of a built-in, and of
- * a dependency nested under another (hosted-git-info's own lru-cache), are "Module not found". Each is bundled to one
- * ESM module, as the Worker's bundler makes it, and aliased (NIMBUS-ASKS #35).
- */
-const NPM_COMMONJS = [
-  'npm-package-arg', 'nopt', 'validate-npm-package-name', 'validate-npm-package-license', 'hosted-git-info',
-  '@npmcli/config/lib/definitions/index.js', '@npmcli/config/lib/env-replace.js', '@npmcli/config/lib/parse-field.js',
-  '@npmcli/config/lib/type-defs.js', '@npmcli/config/lib/type-description.js',
-];
-
-async function bundledNpmCommonJs(): Promise<{ find: RegExp; replacement: string }[]> {
-  const fromCore = createRequire(fileURLToPath(new URL('../../node_modules/@nimbus-sh/core/package.json', import.meta.url)));
-  const into = fileURLToPath(new URL('../../node_modules/.cache/kinu/npm-commonjs/', import.meta.url));
-  const named = (specifier: string): string => specifier.replace(/[^a-z0-9.-]/gi, '_');
-
-  mkdirSync(into, { recursive: true });
-
-  // One build, its shared modules split out: nopt's type table, which @npmcli/config extends, is one instance, as in
-  // the Worker's own bundle.
-  const built = await esbuildTurn(() => bundled({
-    entryPoints: Object.fromEntries(NPM_COMMONJS.map((specifier) => [named(specifier), fromCore.resolve(specifier)])),
-    outdir: into, splitting: true, bundle: true, write: false, format: 'esm', platform: 'neutral', outExtension: { '.js': '.mjs' },
-    mainFields: ['main'], ...probeRuntime, plugins: [nodeRequireAsImport], external: ['node:*'],
-  }));
-
-  for (const output of built.outputFiles) writeWhole(output.path, output.text);
-
-  return NPM_COMMONJS.map((specifier) => ({
-    find: new RegExp(`^${specifier.replace(/[.*+?^$()|[\]\\/]/g, '\\$&')}$`), replacement: `${into}${named(specifier)}.mjs`,
-  }));
-}
-
 const sharedTestOptions = {
     forceRerunTriggers: workerSourceTriggers() ?? configDefaults.forceRerunTriggers,
     // Asserts the pool actually started (adopted from cloudflare-os `test-setup/assert-workerd.ts`).
@@ -691,7 +630,6 @@ const sharedTestOptions = {
 } satisfies NonNullable<UserConfig['test']>;
 
 export default defineConfig({
-  resolve: { alias: await bundledNpmCommonJs() },
   plugins: [promptText(), slateVendor(), standardDecorators(), {
     name: 'kinu:workerd-bindings',
     configureVitest({ vitest }) {

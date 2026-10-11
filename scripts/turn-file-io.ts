@@ -4,7 +4,6 @@ import { join, resolve } from 'node:path';
 import { builtinModules } from 'node:module';
 import { createServer } from 'node:net';
 import { build } from 'esbuild';
-import { nodeRequireAsImport } from '../packages/cf-backend/esbuild-node-require';
 import { Miniflare, Response as MiniflareResponse, WebSocketPair, convertV4MiniflareOptions } from 'miniflare';
 import { PERF_SECRET, PERF_SECRET_HOST } from './turn-file-io/egress-secret';
 import { ownerCaller, type JsonObject } from '@kinu.run/core';
@@ -66,7 +65,7 @@ async function bundle(file: string): Promise<string> {
     entryPoints: [join(import.meta.dir, 'turn-file-io', file)], bundle: true, write: false, format: 'esm',
     platform: 'neutral', mainFields: ['module', 'main'], conditions: ['workerd', 'worker', 'browser'], target: 'es2022',
     alias: Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, `node:${name}`])),
-    external: ['cloudflare:*', 'node:*'], plugins: [nodeRequireAsImport, { name: 'product', setup: (plugin) => {
+    external: ['cloudflare:*', 'node:*'], plugins: [{ name: 'product', setup: (plugin) => {
       plugin.onResolve({ filter: /^kinu:product$/ }, () => ({ path: './index.js', external: true }));
     } }],
   });
@@ -270,7 +269,7 @@ const compat = { compatibilityDate: wrangler.compatibility_date, compatibilityFl
 
 const key = btoa('worker-heap-credential-key-32byt');
 
-const agent = (await buildAgentBundle(join(import.meta.dir, 'turn-file-io/facet.ts'))).modules;
+const agent = buildAgentBundle(join(import.meta.dir, 'turn-file-io/facet.ts')).modules;
 
 writeWhole(join(resolve(dist, wrangler.assets.directory), '_agent/modules.json'), JSON.stringify(agent));
 
