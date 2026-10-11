@@ -178,7 +178,7 @@ function liveConfigReads(sql: SqlExecutor): ConfigReads {
 }
 
 /** One `actor_config` row, as an isolate's snapshot carries it. */
-export type ConfigRow = { readonly actor_id: string; readonly key: string; readonly value: string };
+type ConfigRow = { readonly actor_id: string; readonly key: string; readonly value: string };
 
 const ConfigRowSchema = v.object({ actor_id: v.string(), key: v.string(), value: v.string() });
 
