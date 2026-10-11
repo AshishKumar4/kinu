@@ -148,7 +148,7 @@ export class EvolutionEngine {
      *  score crafted tools through one table. */
   readonly craftLedger: CraftLedger;
   /** A head or node the workspace does not evolve records nothing, whatever the setting. */
-  private readonly evolves: boolean;
+  readonly evolves: boolean;
   private recoveryPending = true;
   private readonly learningScope = new AsyncLocalStorage<boolean>();
 

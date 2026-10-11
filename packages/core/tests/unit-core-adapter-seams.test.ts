@@ -247,6 +247,7 @@ function seamOrchestrator(opts?: { enabled?: boolean }) {
 
   const engine: AgentOrchestratorDeps['engine'] = {
     enabled: opts?.enabled ?? true,
+    evolves: true,
     withTurnLearning: (body) => body(),
     get recordsTurns() { return this.enabled; },
     recoverInterruptedWork: () => {},

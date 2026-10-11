@@ -55,6 +55,7 @@ function fakeEngine(opts?: { enabled?: boolean; dying?: { first: boolean } }) {
 
   const engine: AgentOrchestratorDeps['engine'] = {
     enabled: opts?.enabled ?? true,
+    evolves: true,
     withTurnLearning: (body) => body(),
     get recordsTurns() { return this.enabled; },
     recoverInterruptedWork: () => {},

@@ -1872,12 +1872,12 @@ export class LocalAgentSession {
         applyTitle: (subject) => this.applyAutoTitle(subject),
         ...(relay !== null && { sendReport: (report) => relay.send(report) }),
       }),
-      // A root's evolution pass, after the turn's review, as the workspace object runs main's; a subordinate only reports.
+      // The turn's evolution pass, after its review, as the workspace object runs main's. Not joined at exit: the window
+      // it would close carries to the next session or the daemon.
       improvement_lanes: terminalEffect({
         input: v.object({ status: RunEndReasonSchema, turn: JsonValueSchema, workMode: WorkModeSchema }),
         runSync: ({ status, workMode }) => {
-          // Not joined at exit: the window it would close carries to the next session or the daemon.
-          if (this.parentRelay === null && improvementLanesOpen(status, workMode)) detach(Effect.promise(() => this.actorSession.orchestrator.settleEvolution()));
+          if (improvementLanesOpen(status, workMode)) this.actorSession.orchestrator.startEvolution();
 
           return { status: 'completed' };
         },

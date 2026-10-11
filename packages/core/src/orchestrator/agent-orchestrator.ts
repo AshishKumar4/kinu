@@ -50,6 +50,7 @@ export interface AgentOrchestratorDeps {
   engine: Pick<
     EvolutionEngine,
     | 'enabled'
+    | 'evolves'
     | 'withTurnLearning'
     | 'recordsTurns'
     | 'recoverInterruptedWork'
@@ -138,6 +139,8 @@ export class AgentOrchestrator {
   private readonly inFlight = new Map<Promise<void>, string>();
   /** Cadence lane latch: at most one pass, since `claim()` retires nothing until the pass settles. */
   private sessionEvolution: Promise<void> | null = null;
+  /** The pass `startEvolution` last started. Deliberately not joined by `settleTracked`. */
+  private evolution: Promise<void> = Promise.resolve();
   /** Cadence lane: trial-drain latch, separate from the window pass so trials never run twice
    *  and a no-op drain never hides a filled window. */
   private evolutionPass: Promise<void> | null = null;
@@ -305,13 +308,21 @@ export class AgentOrchestrator {
 
   /**
    * A settled turn's one cadence pass, after the turn lane: the pass reads the ratings and struggles the turn's review
-   * writes. Both hosts start it from the turn's improvement lanes. A one-shot host starts none; its window carries to
-   * the daemon. Never rejects.
+   * writes. Both hosts run it from the turn's improvement lanes, for an agent whose turns evolve. A one-shot host runs
+   * none; its window carries to the daemon. Never rejects.
    */
   async settleEvolution(): Promise<void> {
-    if (this.deps.oneShot) return;
+    if (this.deps.oneShot || !this.deps.engine.evolves) return;
     await this.settleTracked();
     await this.runDueSessionEvolution();
+  }
+
+  /** {@link settleEvolution} for a host that does not wait for it; a later turn's pass runs after this one. */
+  startEvolution(): void {
+    const previous = this.evolution;
+
+    this.evolution = settleLogged('orchestrator.detached_work_failed', { doing: 'run detached post-turn work', otherwise: 'unavailable' },
+      async () => { await previous; await this.settleEvolution(); }, { work: 'Session evolution' });
   }
 
   /**
