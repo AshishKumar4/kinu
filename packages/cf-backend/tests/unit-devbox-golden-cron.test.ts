@@ -43,7 +43,7 @@ test('snapshot deletion uses the deployment account even when its image is the m
 
   try {
     const made = harness(ManagedBox);
-    made.rows.set('devbox:snapshot', { id: snapshot, image: 'cloudflare/debian-trixie', chainRev: 0, takenAt: Date.now(), lineage: [] });
+    made.rows.set('devbox:snapshot', { id: snapshot, image: 'cloudflare/debian-trixie', chainRev: 0, takenAt: Date.now(), rootTakenAt: Date.now(), lineage: [] });
     await made.box.discardState();
     expect(requests.some(request => new URL(request.url).pathname.includes('/accounts/account-for-this-deployment/'))).toBe(true);
     // Its two tags, then its manifest by digest.

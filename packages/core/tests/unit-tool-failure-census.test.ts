@@ -655,7 +655,7 @@ describe('each executor tool files its own failure in the right part', () => {
     });
 
     const payload = await workspace.tools.exec.execute(42);
-    expect(payload).toEqual({ reason: 'bad_input', error: 'workspace.exec: command must be a string' });
+    expect(payload).toEqual({ success: false, reason: 'bad_input', error: 'workspace.exec: command must be a string' });
     expect(censusOf(call({ name: 'eval', toolCallId: 'handled', result: payload, outcome: { success: true } })).failures).toEqual([]);
   });
 

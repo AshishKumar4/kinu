@@ -270,7 +270,7 @@ describe('the refusal payload', () => {
   test('the classification LEADS, where no clamp can reach it', () => {
     // Seams bound tool results to a head slice, so key order is the contract.
     const refusal = refusalOf(new KinuError('unavailable', 'runtime_not_provisioned'));
-    expect(Object.keys(refusal)).toEqual(['reason', 'error']);
+    expect(Object.keys(refusal)).toEqual(['reason', 'error', 'success']);
     expect(JSON.stringify(refusal)).toStartWith('{"reason":');
   });
 

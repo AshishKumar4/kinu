@@ -150,7 +150,7 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
   "/api/user/profile": {
     email: "ashish@example.com", displayName: "Ashish",
     createdAt: NOW - 90 * 864e5, lastSeenAt: NOW, onboardedAt: NOW - 90 * 864e5,
-    workspaceCount: GALLERY_ROSTER.total,
+    workspaceCount: GALLERY_ROSTER.total, controlPlane: false,
   },
   // A ModelMenu, not a bare array.
   "/api/user/models": { models: MODEL_STUBS(), failures: [] },
@@ -161,7 +161,8 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
       connected: true, createdAt: NOW - 40 * 864e5, lastSeenAt: NOW - 90e3,
       expiresAt: NOW + 50 * 864e5,
       replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
-      sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
+      sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, detail: null, gpu: [] },
+      version: null, servedVersion: null, update: "unreported", updateRefusal: null,
     },
   ],
   "/api/user/devices/consents": [
@@ -297,7 +298,7 @@ function accountProfileFixture(path: string, method: string, body: BodyInit | nu
     return fixtureJson({
       email: "owner@example.com", displayName: galleryDisplayName,
       createdAt: NOW - 864e5, lastSeenAt: NOW,
-      onboardedAt: ACCOUNT_ONBOARDED_AT, workspaceCount: ACCOUNT_WORKSPACE_COUNT,
+      onboardedAt: ACCOUNT_ONBOARDED_AT, workspaceCount: ACCOUNT_WORKSPACE_COUNT, controlPlane: false,
     });
   }
 
@@ -310,13 +311,13 @@ function accountProfileFixture(path: string, method: string, body: BodyInit | nu
     if (frame === "welcome" && new URLSearchParams(location.search).get("noname") === "1") {
       return fixtureJson({
         email: "new@example.com", displayName: null, createdAt: NOW, lastSeenAt: NOW,
-        onboardedAt: null, workspaceCount: 0,
+        onboardedAt: null, workspaceCount: 0, controlPlane: false,
       });
     }
 
     return fixtureJson({
       email: "owner@example.com", displayName: galleryDisplayName, createdAt: NOW - 864e5, lastSeenAt: NOW,
-      onboardedAt: ACCOUNT_ONBOARDED_AT, workspaceCount: ACCOUNT_WORKSPACE_COUNT,
+      onboardedAt: ACCOUNT_ONBOARDED_AT, workspaceCount: ACCOUNT_WORKSPACE_COUNT, controlPlane: false,
     });
   }
 
@@ -651,27 +652,31 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
         replacedAt: null,
         revokedAt: revoked ? NOW : null, unstoppedAt: incident === "revoked" ? NOW : null,
         reuseDetectedAt: incident === "reused" ? NOW : null, wholeMachine: false,
+        version: null, servedVersion: null, update: "unreported", updateRefusal: null,
         sandbox: {
           tier: parseDeviceTier(localStorage.getItem("gallery-device-tier")),
-          capability: "sandboxed", reason: null, gpu: ["/dev/nvidia0"],
+          capability: "sandboxed", reason: null, detail: null, gpu: ["/dev/nvidia0"],
         },
       },
-      // `&devices=history`: a machine that refused an update, and one written before the registry recorded a sandbox.
+      // `&devices=history`: a refused update and a machine that has never connected.
       ...(new URLSearchParams(location.search).get("devices") === "history" ? [{
         id: "dev-3", label: "Lab box", os: "linux", hostname: "lab", connected: true, createdAt: NOW - 864e5, lastSeenAt: NOW, expiresAt: NOW + 864e5,
         replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
-        sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
+        sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, detail: null, gpu: [] },
         version: "0.2.0+older", servedVersion: "0.3.0+served", update: "refused", updateRefusal: "Bun 1.4.2 install failed: permission denied",
       }, {
         id: "dev-old", label: "Old box", os: "linux", hostname: "old", connected: false, createdAt: NOW - 90 * 864e5, lastSeenAt: null, expiresAt: null,
-        replacedAt: null, revokedAt: null, unstoppedAt: null,
+        replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
+        sandbox: { tier: "sandboxed", capability: "files_only", reason: null, detail: null, gpu: [] },
+        version: null, servedVersion: null, update: "unreported", updateRefusal: null,
       }] : []),
       ...(frame === "devices" ? [{
         id: "dev-2", label: "Owner laptop", os: "darwin", hostname: "ashish-mbp.local",
         connected: false, createdAt: NOW - 40 * 864e5, lastSeenAt: NOW - 7200e3, expiresAt: NOW + 50 * 864e5,
         replacedAt: null,
         revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: true,
-        sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
+        sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, detail: null, gpu: [] },
+        version: null, servedVersion: null, update: "unreported", updateRefusal: null,
       }] : []),
     ]);
   }
@@ -816,7 +821,8 @@ function galleryConnectDevice(id: string, label: string, connected: boolean) {
     createdAt: NOW, lastSeenAt: NOW, expiresAt: NOW + 864e5,
     replacedAt: null,
     revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
-    sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
+    sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, detail: null, gpu: [] },
+    version: null, servedVersion: null, update: "unreported", updateRefusal: null,
   };
 }
 

@@ -83,7 +83,7 @@ test('a host rejection resolves to the same discriminated refusal as a native fa
 test('recovered host failures retain each binding in the census without failing the program', async () => {
   const output = await withCodemodeProgram(async () => {
     const file = codemodeFunction('tools', 'file', async () => { throw new KinuError('unavailable', 'offline'); });
-    const command = codemodeFunction('workspace', 'exec', async () => ({ reason: 'io', error: 'failed', execution: { exitCode: 1 } }));
+    const command = codemodeFunction('workspace', 'exec', async () => ({ success: false, reason: 'io', error: 'failed', execution: { exitCode: 1 } }));
     const answers = await Promise.all([file({}), command('check')]);
     expect(answers).toEqual([
       { success: false, reason: 'unavailable', error: 'offline' },

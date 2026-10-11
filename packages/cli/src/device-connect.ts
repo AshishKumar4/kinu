@@ -356,7 +356,9 @@ function deviceOnOrigin(config: v.InferOutput<typeof LocalDeviceSchema>, origin:
   return config.origin.replace(/\/+$/, '') === origin.replace(/\/+$/, '') ? config : undefined;
 }
 
-const LocalDeviceSchema = v.object({ origin: v.string(), token: v.string(), device: v.string(), user: v.string(), root: v.string() });
+const DeviceConfigField = v.pipe(v.string(), v.nonEmpty());
+
+const LocalDeviceSchema = v.object({ origin: DeviceConfigField, token: DeviceConfigField, device: DeviceConfigField, user: DeviceConfigField, root: DeviceConfigField });
 
 function registerDeviceForConnect(auth: DeviceAuth, label: string | undefined, replaces: string | undefined, device: string | undefined) {
   return Effect.tryPromise({

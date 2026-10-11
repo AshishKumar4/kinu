@@ -102,7 +102,7 @@ export const RefusalSchema = v.object({
 export type Refusal = v.InferOutput<typeof RefusalSchema>;
 
 export function refusalOf(error: KinuError): Refusal {
-  const refusal: Refusal = { success: RefusalSchema.entries.success.literal, reason: error.code, error: renderCauseChain(error) };
+  const refusal: Refusal = { reason: error.code, error: renderCauseChain(error), success: RefusalSchema.entries.success.literal };
 
   return error.execution === undefined ? refusal : { ...refusal, execution: error.execution };
 }

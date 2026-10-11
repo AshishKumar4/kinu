@@ -604,14 +604,11 @@ describe('device-connect install hardening', () => {
     writeFileSync(join(home, 'pc-agent.js'), '// tampered daemon\n', { mode: 0o700 });
     writeFileSync(join(home, 'device.json'), '{"user":"old","token":"old-token","origin":"https://old.example"}\n', { mode: 0o600 });
 
-    const cliBin = resolve(repoRoot, 'packages/cli/bin/cli.ts');
-
-    const connected = await runToExit([process.execPath, cliBin, 'connect', '--label=reconnected'], {
-      cwd: repoRoot,
-      env: { ...process.env, KINU_HOME: home, KINU_INFLIGHT_ROOT: join(home, 'inflight') },
-    });
-
-    expect(connected.exitCode, connected.stderr).toBe(0);
+    const connected = spawnConnectInPty(home, 'reconnected', repoRoot);
+    await connected.waitFor('Link and start the daemon?');
+    await connected.send('y');
+    expect(await connected.proc.exited).toBe(0);
+    await connected.drained;
     expect(stub.registrationRequests.items).toHaveLength(1);
     const registration = v.parse(v.object({ replaces: v.optional(v.string()) }), await stub.registrationRequests.items[0].json());
     expect(registration.replaces).toBeUndefined();
@@ -1058,44 +1055,43 @@ describe('classic cloud chat connect prompt', () => {
   });
 });
 
+function spawnPtyCommand(command: string, cwd = newProjectDir()) {
+  const proc = Bun.spawn({
+    cmd: ['script', '-qefc', command, '/dev/null'],
+    cwd,
+    stdin: 'pipe',
+    stdout: 'pipe',
+    stderr: 'pipe',
+    env: process.env,
+  });
+
+  return {
+    proc,
+    ...readProcessOutput(proc.stdout, (text) => Bun.stripANSI(text)),
+    async send(line: string): Promise<void> {
+      await proc.stdin.write(`${line}\n`);
+      await proc.stdin.flush();
+    },
+  };
+}
+
+function spawnConnectInPty(home: string, label?: string, cwd?: string) {
+  const cliBin = resolve(repoRoot, 'packages/cli/bin/cli.ts');
+  const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+
+  const command = [
+    `KINU_HOME=${quote(home)}`,
+    `KINU_INFLIGHT_ROOT=${quote(join(home, 'inflight'))}`,
+    quote(process.execPath),
+    quote(cliBin),
+    'connect',
+    ...(label === undefined ? [] : ['--label', quote(label)]),
+  ].join(' ');
+
+  return spawnPtyCommand(command, cwd);
+}
+
 describe('kinu connect waits on the daemon and says less', () => {
-  function spawnPtyCommand(command: string) {
-    const proc = Bun.spawn({
-      cmd: ['script', '-qefc', command, '/dev/null'],
-      cwd: newProjectDir(),
-      stdin: 'pipe',
-      stdout: 'pipe',
-      stderr: 'pipe',
-      env: process.env,
-    });
-
-    return {
-      proc,
-      ...readProcessOutput(proc.stdout, (text) => Bun.stripANSI(text)),
-      async send(line: string): Promise<void> {
-        await proc.stdin.write(`${line}\n`);
-        await proc.stdin.flush();
-      },
-    };
-  }
-
-  function spawnConnectInPty(home: string, label?: string) {
-    const cliBin = resolve(repoRoot, 'packages/cli/bin/cli.ts');
-    const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
-
-    const command = [
-      `KINU_HOME=${quote(home)}`,
-      `KINU_INFLIGHT_ROOT=${quote(join(home, 'inflight'))}`,
-      quote(process.execPath),
-      quote(cliBin),
-      'connect',
-      ...(label === undefined ? [] : ['--label', quote(label)]),
-    ].join(' ');
-
-    return spawnPtyCommand(command);
-  }
-
-
   test('the hub row reading connected ends the wait with the row label', async () => {
     // The stub reports label and typed name apart, so a success echoing the prompt input fails.
     let registered = false;

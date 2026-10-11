@@ -216,7 +216,7 @@ describe("CLI behavior", () => {
         jarvis: {
           name: "jarvis",
           mode: "cloud",
-          cloudName: "jarvis",
+          cloudName: "jarvis", displayName: "Jarvis",
           purpose: "Cloud agent",
           createdAt: new Date(0).toISOString(),
           updatedAt: new Date(0).toISOString(),
@@ -241,7 +241,7 @@ describe("CLI behavior", () => {
         jarvis: {
           name: "jarvis",
           mode: "cloud",
-          cloudName: "jarvis",
+          cloudName: "jarvis", displayName: "Jarvis",
           alias: "jarvis",
           purpose: "Cloud agent",
           createdAt: new Date(0).toISOString(),
@@ -273,8 +273,8 @@ describe("kinu exec (headless)", () => {
     const stamp = new Date(0).toISOString();
     writeConfig(home, {
       agents: {
-        alpha: { name: "alpha", mode: "local", localName: "alpha", createdAt: stamp, updatedAt: stamp },
-        beta: { name: "beta", mode: "local", localName: "beta", createdAt: stamp, updatedAt: stamp },
+        alpha: { name: "alpha", mode: "local", localName: "alpha", cwd: home, workspaceId: "proj", identityId: "ws-alpha", createdAt: stamp, updatedAt: stamp },
+        beta: { name: "beta", mode: "local", localName: "beta", cwd: home, workspaceId: "proj", identityId: "ws-beta", createdAt: stamp, updatedAt: stamp },
       },
     });
 
@@ -418,7 +418,7 @@ describe("kinu exec (headless)", () => {
         origin: `http://127.0.0.1:${origin.port}`,
         accessToken: ["ptc_", "0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz"].join(""),
         agents: {
-          jarvis: { name: "jarvis", mode: "cloud", cloudName: "jarvis", createdAt: stamp, updatedAt: stamp },
+          jarvis: { name: "jarvis", mode: "cloud", cloudName: "jarvis", displayName: "Jarvis", createdAt: stamp, updatedAt: stamp },
         },
       });
 
