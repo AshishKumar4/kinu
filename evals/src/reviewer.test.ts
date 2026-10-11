@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { BUILTIN_PROFILE_CATALOG, JsonValueSchema, profileCatalogDigest, type RunEvent } from '@kinu.run/core';
+import { BUILTIN_PROFILE_CATALOG, JsonValueSchema, profileCatalogDigest, type JsonValue, type RunEvent } from '@kinu.run/core';
 import { REVIEW_LOGIN } from './config';
 import { reviewerCatalog, REVIEWER_ROLE_ID } from './reviewer';
 import { askOnce, reviewerModel } from './target';
@@ -47,6 +47,7 @@ function answeredReview(answer: { failure?: string; text?: string; wireError?: b
   const events: RunEvent[] = [];
   const history: { id: string; role: 'user' | 'assistant'; parts: { type: 'text'; text: string }[] }[] = [];
   let deleted = false;
+  let role: string | null = null;
 
   const server = Bun.serve({ port: 0, hostname: '127.0.0.1',
     async fetch(request, upgrading) {
@@ -77,7 +78,16 @@ function answeredReview(answer: { failure?: string; text?: string; wireError?: b
         init: v.optional(v.object({ body: v.string() })) }), JSON.parse(data.toString()));
 
       if (frame.method !== undefined) {
-        socket.send(rpcReplyFrame({ requestId: frame.id, result: frame.method === 'setModel' ? { spec: model } : [] }));
+        let result: JsonValue = [];
+
+        if (frame.method === 'setRole') {
+          role = v.parse(v.string(), frame.args[0]);
+          result = { role };
+        } else if (frame.method === 'setModel') {
+          result = { spec: model };
+        }
+
+        socket.send(rpcReplyFrame({ requestId: frame.id, result }));
 
         return;
       }
@@ -109,7 +119,7 @@ function answeredReview(answer: { failure?: string; text?: string; wireError?: b
     } },
   });
 
-  return { server, deleted: () => deleted,
+  return { server, deleted: () => deleted, role: () => role,
     ask: () => askOnce({ origin: server.url.origin, identity: { kind: 'loopback' } },
       { subject: 'review-fixture', mission: 'Exercise the reviewer answer boundary.', model, files: [], prompt: 'Read the evidence and answer.' }) };
 }
@@ -139,6 +149,9 @@ test('a failed ledger ends the review even if the wire marked completion, and a 
 
   const fixture = answeredReview({ text: '{"complete":true}' });
 
-  try { expect(await fixture.ask()).toBe('{"complete":true}'); }
+  try {
+    expect(await fixture.ask()).toBe('{"complete":true}');
+    expect(fixture.role()).toBe(REVIEWER_ROLE_ID);
+  }
   finally { await fixture.server.stop(true); }
 });

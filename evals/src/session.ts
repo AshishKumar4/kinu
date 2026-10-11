@@ -279,8 +279,10 @@ interface PublicSessionInput {
   readonly workspace: string;
   readonly purpose: string;
   readonly genesis?: boolean;
+  /** Admission after registration, before account or model settings are changed. */
+  readonly claim?: (workspace: string) => Promise<void>;
   readonly llm: LLMProviderConfig;
-  /** A catalog role the workspace is created in, which narrows its tools; absent is the account's default. */
+  /** A catalog role applied after admission, before any prompt; absent is the account's default. */
   readonly role?: string;
   /** What the workspace needs of its account's catalog besides Beta: swarms, such as its role's definition. */
   readonly catalog?: readonly CatalogNeed[];
@@ -293,7 +295,6 @@ interface CreateWorkspaceBody {
   name: string;
   displayName: string;
   purpose?: string;
-  role?: string;
 }
 
 const WorkspaceEntrySchema = v.object({
@@ -672,8 +673,6 @@ async function settleCatalog(origin: string, headers: Record<string, string>, ne
 export async function openPublicSession(input: PublicSessionInput): Promise<KinuPublicSession> {
   const headers = webHeaders(input.identity);
 
-  await infraBoundary(`PUT ${input.origin}/api/user/profile-catalog`, () => settleCatalog(input.origin, headers, [SWARMS_ON, ...input.catalog ?? []]));
-
   const created = await infraBoundary(
     `POST ${input.origin}/api/user/workspaces`,
     async () => {
@@ -690,8 +689,6 @@ export async function openPublicSession(input: PublicSessionInput): Promise<Kinu
       // the real mission is written over the socket below.
       if (input.genesis !== false) body.purpose = input.purpose;
 
-      if (input.role !== undefined) body.role = input.role;
-
       const response = await fetch(`${input.origin}/api/user/workspaces`, {
         method: 'POST',
         headers: { ...headers, 'content-type': 'application/json' },
@@ -704,10 +701,13 @@ export async function openPublicSession(input: PublicSessionInput): Promise<Kinu
 
   const session = new KinuPublicSession(input, created.name);
 
-  session.beat();
-
   try {
+    await input.claim?.(created.name);
+    session.beat();
+    await infraBoundary(`PUT ${input.origin}/api/user/profile-catalog`, () => settleCatalog(input.origin, headers, [SWARMS_ON, ...input.catalog ?? []]));
     await session.connect();
+
+    if (input.role !== undefined) await session.pinRole(input.role);
 
     if (input.genesis === false) {
       // `setSoul` is the soul surface's own callable, writing exactly the
@@ -979,6 +979,12 @@ export class KinuPublicSession {
     }
 
     return accepted;
+  }
+
+  async pinRole(role: string): Promise<void> {
+    const accepted = v.parse(v.object({ role: v.string() }), await this.rpc('setRole', [role])).role;
+
+    if (accepted !== role) throw new Error(`workspace ${this.workspace} selected role ${accepted} instead of ${role}`);
   }
 
   /**

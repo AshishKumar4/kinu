@@ -8,7 +8,7 @@ import { DeploymentAnswer, evalNameSlug, INFRA_FAILURE_MARKER } from '@kinu.run/
 import { gatherEvidence, writeEvidence, type EvidenceReads, type WorkspaceEvidence } from './evidence';
 import { HarnessRunSchema, measurePlanUsage, measurePromptUsage, type ActorLedger } from './results';
 import type { KinuPublicSession } from './session';
-import { claimTrialAccount, prepareTrialAccount } from './slot';
+import { prepareTrialAccount } from './slot';
 import { ARMS, deployedBuild, openWorkspace, type EvalArm } from './target';
 import { type EvalTarget } from './workspace-roster';
 import {
@@ -318,7 +318,6 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
             session = created;
             say(`workspace ${created.workspace} open on ${account}`);
 
-            await timeline.span('claim', () => claimTrialAccount(own, created.workspace, Date.now()));
             created.onChunk = (type) => {
               timeline.chunk(type);
 

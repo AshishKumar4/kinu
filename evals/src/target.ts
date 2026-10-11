@@ -6,6 +6,7 @@ import { openPublicSession, type CatalogNeed, type KinuPublicSession } from './s
 import { resolveWebIdentity, webHeaders, type EvalTarget } from './workspace-roster';
 import { REVIEW_LOGIN } from './config';
 import { reviewerCatalog, REVIEWER_ROLE_ID } from './reviewer';
+import { claimTrialAccount } from './slot';
 import type { SeedFile } from './task';
 import { answered, repliesTo, settle, TurnWatch } from './workspace-completion';
 
@@ -72,6 +73,9 @@ export function openWorkspace(target: EvalTarget, request: {
     workspace: evalWorkspaceName(request.subject),
     purpose: request.mission,
     genesis: false,
+    ...(target.identity.account?.startsWith('trial-') && {
+      claim: (workspace: string) => claimTrialAccount(target, workspace, Date.now()),
+    }),
     llm: { name: 'eval', baseURL: `${target.origin}${USER_AI_PROXY_PATH}`, headers: {}, model: request.model },
     ...(request.role !== undefined && { role: request.role }),
     ...(request.catalog !== undefined && { catalog: request.catalog }),

@@ -2,7 +2,7 @@
 import { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
 import { DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, parseJsonObject } from '@kinu.run/core';
-import { prepareTrialAccount } from '../../../evals/src/slot';
+import { claimTrialAccount, prepareTrialAccount } from '../../../evals/src/slot';
 import { listWorkspaces, webHeaders, type EvalTarget } from '../../../evals/src/workspace-roster';
 import { accountRoutes, type AccountRoutesEnv } from '../src/user/account-routes';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
@@ -102,6 +102,17 @@ test('trial preparation preserves a live slot, deletes stale workspaces and refu
     }
 
     expect(await listed()).toEqual([]);
+    await Promise.all([
+      prepareTrialAccount(target, Date.now()),
+      prepareTrialAccount(target, Date.now()),
+    ]);
+    await provisionTestWorkspace(harness, 'eval-race-zzzzzz');
+    await claimTrialAccount(target, 'eval-race-zzzzzz', Date.now());
+    await provisionTestWorkspace(harness, 'eval-race-aaaaaa');
+    await expect(claimTrialAccount(target, 'eval-race-aaaaaa', Date.now())).rejects.toThrow('eval-race-zzzzzz');
+    await expect(claimTrialAccount(target, 'eval-race-zzzzzz', Date.now())).rejects.toThrow('eval-race-aaaaaa');
+    await harness.userDO.removeWorkspace(owner, 'eval-race-aaaaaa', userId);
+    await expect(claimTrialAccount(target, 'eval-race-zzzzzz', Date.now())).resolves.toBeUndefined();
     expect(requests.every((request) => request.secret === 'eval-secret' && request.account === 'trial-7')).toBe(true);
     expect(requests.some((request) => request.path === '/api/user/held-rows')).toBe(true);
     await Promise.all(pending);

@@ -2,7 +2,7 @@
 // peers, messages, spawned workspaces, swarm publications and the experience library are all the account's. On
 // 2026-10-01 trials sharing eval-service listed each other as peers and messaged each other.
 //
-// A trial's slot is its place in the run's whole matrix: every task file of evals/tasks, sorted, then model, arm and
+// A trial's slot is its place in the run's whole matrix: every runner file, sorted, then model, arm and
 // trial. Each worker process works it out alone, and two trials of a run never share one. Before a trial opens, its
 // account is checked: a workspace another run marks live means the slot is taken, one a stopped run left is deleted,
 // and a row the trial could inherit stops it, named.
@@ -25,10 +25,10 @@ export type TrialPlace = {
 /** The trial's own account, `trial-<n>`. */
 export function trialSlot(place: TrialPlace): EvalAccount {
   const files = [...place.taskFiles].sort();
-  const taskAt = files.indexOf(`${place.task}.eval.ts`);
+  const taskAt = files.indexOf(place.task);
   const { models, arms, trials, firstSlot } = place.matrix;
 
-  if (taskAt === -1) throw new Error(`task ${place.task} is not evals/tasks/${place.task}.eval.ts, so it has no place in the run's matrix`);
+  if (taskAt === -1) throw new Error(`runner ${place.task} has no place in the run's matrix`);
   const needed = files.length * models.length * arms.length * trials;
   const half = EVAL_TRIAL_ACCOUNTS / 2;
   const slot = firstSlot - 1 + ((taskAt * models.length + models.indexOf(place.model)) * arms.length + arms.indexOf(place.arm)) * trials + place.trial;
@@ -44,7 +44,7 @@ export function trialSlot(place: TrialPlace): EvalAccount {
 /** Every trial account a matrix uses: the ones a deploy gives the eval provider keys. */
 export function trialAccounts(taskFiles: readonly string[], matrix: TrialPlace['matrix']): EvalAccount[] {
   return [...taskFiles].sort().flatMap((file) => matrix.models.flatMap((model) => matrix.arms.flatMap((arm) =>
-    Array.from({ length: matrix.trials }, (_, at) => trialSlot({ taskFiles, task: file.replace(/\.eval\.ts$/u, ''), matrix, model, arm, trial: at + 1 })))));
+    Array.from({ length: matrix.trials }, (_, at) => trialSlot({ taskFiles, task: file, matrix, model, arm, trial: at + 1 })))));
 }
 
 
@@ -98,33 +98,13 @@ export async function prepareTrialAccount(target: EvalTarget, now: number): Prom
 }
 
 
-/** After opening `own` on `target`'s account: a run that opened on it at the same moment with an earlier name keeps it. */
+/**
+ * A late, lexically earlier workspace cannot take an already claimed slot (red: 20261011193750-66fc10ae).
+ * Concurrent runs can both be refused; a visible failure is preferable to trials running on a contaminated account.
+ */
 export async function claimTrialAccount(target: EvalTarget, own: string, now: number): Promise<void> {
   const rival = (await listWorkspaces(target.origin, target.identity))
-    .find((workspace) => workspace.name < own && now - workspace.lastVisited < WORKSPACE_LEASE_MS);
+    .find((workspace) => workspace.name !== own && now - workspace.lastVisited < WORKSPACE_LEASE_MS);
 
-  if (rival !== undefined) throw new Error(`${accountOf(target)} was opened on by another run at the same moment (${rival.name})`);
-}
-
-const ReportAccountsSchema = v.looseObject({
-  testResults: v.array(v.looseObject({
-    assertionResults: v.array(v.looseObject({
-      meta: v.optional(v.looseObject({
-        harness: v.optional(v.looseObject({
-          run: v.looseObject({ session: v.looseObject({ metadata: v.looseObject({ account: v.string() }) }) }),
-        })),
-      })),
-    })),
-  })),
-});
-
-/** Why a report's trials could reach each other: the first account they shared rather than each acting as its own. */
-export function sharedAccounts(report: string): string | undefined {
-  const parsed = v.parse(ReportAccountsSchema, JSON.parse(report));
-
-  const shared = parsed.testResults.flatMap((file) => file.assertionResults)
-    .map((trial) => trial.meta?.harness?.run.session.metadata.account)
-    .find((account) => account !== undefined && !account.startsWith('trial-'));
-
-  return shared === undefined ? undefined : `its trials shared ${shared}, so they could reach each other`;
+  if (rival !== undefined) throw new Error(`${accountOf(target)} is occupied by another run's workspace ${rival.name}; ${own} cannot claim it`);
 }

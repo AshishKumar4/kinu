@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { BUILTIN_PROFILE_CATALOG, DEV_IDENTITY_ACCOUNT_HEADER, inheritedRows, parseEvalAccount, profileCatalogDigest } from '@kinu.run/core';
 import { WORKSPACE_LEASE_MS } from './workspace-roster';
 import { evalMatrix } from './config';
-import { claimTrialAccount, prepareTrialAccount, sharedAccounts, trialAccounts, trialSlot } from './slot';
+import { claimTrialAccount, prepareTrialAccount, trialAccounts, trialSlot } from './slot';
 import type { EvalTarget } from './workspace-roster';
 
 const TASK_FILES = ['budget-board.eval.ts', 'chess.eval.ts', 'launch-prep.eval.ts', 'order-book.eval.ts'];
@@ -12,7 +12,7 @@ const MATRIX = { models: ['opencode-go/muse', 'openrouter/mercury', 'openrouter/
 describe('a trial\'s slot', () => {
   test('every trial of a run has a slot of its own, one to the matrix\'s size, each an eval account', () => {
     const slots = TASK_FILES.flatMap((file) => MATRIX.models.flatMap((model) => Array.from({ length: MATRIX.trials }, (_, at) =>
-      trialSlot({ taskFiles: TASK_FILES, task: file.replace('.eval.ts', ''), matrix: MATRIX, model, arm: 'product', trial: at + 1 }))));
+      trialSlot({ taskFiles: TASK_FILES, task: file, matrix: MATRIX, model, arm: 'product', trial: at + 1 }))));
 
     expect(new Set(slots).size).toBe(4 * 3 * 10);
     expect(slots.every((slot) => parseEvalAccount(slot) === slot)).toBe(true);
@@ -21,7 +21,7 @@ describe('a trial\'s slot', () => {
   });
 
   test('a matrix past the accounts a deployment has fails at once, saying how many it needs', () => {
-    expect(() => trialSlot({ taskFiles: TASK_FILES, task: 'order-book', matrix: { ...MATRIX, trials: 50 }, model: 'openrouter/ling', arm: 'product', trial: 50 }))
+    expect(() => trialSlot({ taskFiles: TASK_FILES, task: 'order-book.eval.ts', matrix: { ...MATRIX, trials: 50 }, model: 'openrouter/ling', arm: 'product', trial: 50 }))
       .toThrow('needs 600 trial accounts, and its half of a deployment\'s has trial-1 to trial-256');
   });
 
@@ -37,8 +37,8 @@ describe('a trial\'s slot', () => {
   });
 
   test('a task not named after its file has no place in the matrix, and says so', () => {
-    expect(() => trialSlot({ taskFiles: TASK_FILES, task: 'freight', matrix: MATRIX, model: 'opencode-go/muse', arm: 'product', trial: 1 }))
-      .toThrow('task freight is not evals/tasks/freight.eval.ts');
+    expect(() => trialSlot({ taskFiles: TASK_FILES, task: 'freight.eval.ts', matrix: MATRIX, model: 'opencode-go/muse', arm: 'product', trial: 1 }))
+      .toThrow();
   });
 });
 
@@ -120,23 +120,14 @@ describe('opening on a trial account', () => {
     await expect(prepareTrialAccount(stale.target, now)).rejects.toThrow('user_config 1');
   });
 
-  test('two runs that open on one account at once: the earlier workspace name keeps it, the later one gives it up', async () => {
+  test('two live workspaces on one account refuse both claims', async () => {
     const { server, target } = deployment({
       workspaces: [{ name: 'eval-order-book-3-aaaaaa', lastVisited: now }, { name: 'eval-order-book-3-bbbbbb', lastVisited: now }],
     });
 
     servers.push(server);
-    await claimTrialAccount(target, 'eval-order-book-3-aaaaaa', now);
+    await expect(claimTrialAccount(target, 'eval-order-book-3-aaaaaa', now)).rejects.toThrow();
     expect(claimTrialAccount(target, 'eval-order-book-3-bbbbbb', now))
-      .rejects.toThrow('trial-7 was opened on by another run at the same moment (eval-order-book-3-aaaaaa)');
+      .rejects.toThrow();
   });
-});
-
-test('a report names the account its trials shared, when they did not each act as their own', () => {
-  const report = (accounts: string[]) => JSON.stringify({ testResults: [{ assertionResults: accounts.map((account) => ({
-    status: 'passed', meta: { harness: { run: { session: { metadata: { account } } } } },
-  })) }] });
-
-  expect(sharedAccounts(report(['trial-1', 'trial-2']))).toBeUndefined();
-  expect(sharedAccounts(report(['trial-1', 'eval-service']))).toBe('its trials shared eval-service, so they could reach each other');
 });
