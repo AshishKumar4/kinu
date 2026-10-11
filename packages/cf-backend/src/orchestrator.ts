@@ -539,6 +539,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * network.
    */
   private workspaceEgress(): WorkspaceEgress | undefined {
+    // A store refused at the reset runs nothing that reaches the network (its turns, chat and requests are refused), and
+    // its export reads files: it needs no egress, and its tables are not read for an owner.
+    if (this.storageRefusal !== undefined) return undefined;
     const ownerUserId = this.getOwnerUserId();
 
     if (ownerUserId === null) return undefined;
