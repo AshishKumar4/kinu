@@ -3,7 +3,7 @@ import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { KinuError } from '@kinu.run/core/obs';
-import { scratchDir } from '@kinu.run/test-utils';
+import { runToExit, scratchDir } from '@kinu.run/test-utils';
 
 import type { AgentClient, AgentClientStatus, AgentTranscriptMessage } from '../src/agent-client';
 import { JOB_OUTPUT_EVENT, missingSubordinateHistory, READS_CHANGED_EVENT, TURN_FAILURE_METADATA_KEY, type AgentModelMenu, type JobOutputTail, type SubordinateChild } from '@kinu.run/core';
@@ -761,30 +761,15 @@ test('a reopened conversation shows a refused turn\'s failure in the provider\'s
 
 test('/copy delivers only the last answer through the terminal clipboard', async () => {
   for (const answered of [true, false]) {
-    let reads = 0;
+    const run = await runToExit([process.execPath, join(import.meta.dir, 'fixtures/copy-clipboard.tsx'), answered ? 'answered' : 'silent']);
+    expect(run.exitCode, run.stderr).toBe(0);
 
-    const agent = fakeClient({ name: answered ? 'copies' : 'silent', history: async () => {
-      reads += 1;
+    const delivered = run.stdout.split('\u001b]52;c;').slice(1)
+      .map((packet) => Buffer.from(packet.split('\u0007')[0]?.split('\u001b\\')[0] ?? '', 'base64').toString('utf8'));
 
-      return answered ? EXPORTED_HISTORY() : [];
-    } });
-
-    const screen = await mountChat(agent.client);
-    const clipboard = spyOn(screen.renderer, 'copyToClipboardOSC52').mockReturnValue(true);
-    const before = reads;
-
-    try {
-      await screen.mockInput.typeText('/copy');
-      flushSync(() => screen.mockInput.pressEnter());
-      await screen.waitFor('the copy history read', () => reads > before);
-      await screen.waitFor('the copy action settled', screen.composerFocused);
-      expect(clipboard.mock.calls).toEqual(answered ? [['The old table keeps its rows.']] : []);
-    } finally {
-      clipboard.mockRestore();
-    }
+    expect(delivered).toEqual(answered ? ['The old table keeps its rows.'] : []);
   }
 });
-
 test('/export writes the conversation to a Markdown file in its order, and names the file', async () => {
   const agent = fakeClient({ name: 'exports', history: EXPORTED_HISTORY });
   const screen = await mountChat(agent.client);
