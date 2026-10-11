@@ -42,6 +42,7 @@ export {
   publicMessage,
   authoredRefusal,
   refusalOf,
+  RefusalSchema,
   refusedInput,
   renderCauseChain,
   renderThrownChain,

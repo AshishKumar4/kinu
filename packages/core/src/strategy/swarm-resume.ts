@@ -208,7 +208,7 @@ interface ReenteredSwarmNode {
   readonly depth: number;
   /** `search_nodes.observation` — the complete answer this node is. */
   readonly artifact: string;
-  /** Null for the root and for a node whose activation died between the two writes. */
+  /** Null for the root; a settled non-root node always has its record before its tree row. */
   readonly record: SwarmNodeRecord | null;
   /** Whether this member's work already reached the origin. */
   readonly merged: boolean;
@@ -568,9 +568,16 @@ export function harvestSwarm(deps: {
     SELECT id, parent_id, depth, observation FROM search_nodes
     WHERE actor_id = ${actorId} AND root_id = ${running.rootId} AND parent_id IS NOT NULL
     ORDER BY depth ASC, created_at ASC`) {
-      const outcome = records.get(row.id)?.outcome ?? null;
-
       if (unreadable.has(row.id)) continue;
+      const record = records.get(row.id);
+
+      if (record === undefined) {
+        diagnostics.failure('swarm.harvest_record_missing', new KinuError('io', 'Corrupt search node: its durable record is missing'), { nodeId: row.id });
+        unreadable.add(row.id);
+        continue;
+      }
+
+      const outcome = record.outcome;
       const artifact = row.observation.trim();
 
       if (outcome?.kind === 'incomplete' || artifact.length === 0) continue;

@@ -2,7 +2,7 @@ import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/struc
 import * as v from 'valibot';
 import { isPlaceholderMission } from './soul';
 import { Effect } from 'effect';
-import { settleSync, tolerate } from '../obs/index';
+import { KinuError, settleSync, tolerate } from '../obs/index';
 import type { AgentConfigStore } from '../config/store';
 import type { ActorHandle } from './actor-handle';
 
@@ -237,9 +237,11 @@ export function fallbackWorkspaceIdentity(mission: string, id: string): Suggeste
 /** Who a shown title came from: 'user' is never replaced automatically; 'auto' is system-written. Matches the `user_workspaces` CHECK. */
 export type NameOrigin = 'user' | 'auto';
 
-/** Only 'user' is the owner's; unknown legacy values count as 'auto'. */
 export function nameOriginOf(stored: string): NameOrigin {
-  return stored === 'user' ? 'user' : 'auto';
+  return settleSync(Effect.try({
+    try: () => v.parse(v.picklist(['user', 'auto']), stored),
+    catch: (cause) => new KinuError('io', 'Corrupt workspace name origin', { cause }),
+  }));
 }
 
 export interface WorkspaceTitleState {

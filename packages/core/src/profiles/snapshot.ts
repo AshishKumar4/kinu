@@ -5,13 +5,13 @@ import * as v from 'valibot';
 import { DECISION_MODELS } from '../providers/decision-model';
 
 import { NAMED_SWARM_PRESETS } from '../types/swarm';
-import { REASONING_EFFORTS, type ReasoningEffort } from '../providers/effort';
+import { REASONING_EFFORTS } from '../providers/effort';
 import type { WorkMode } from '../types/turn';
 import { TierIdSchema,
   ProfileAuthoritySchema, parseProfileValue,
   type RoleId, type TierId,
 } from './catalog';
-import { type TierFallback, type TierSource, type ResolvedTurnProfile } from './resolve';
+import { type TierSource, type ResolvedTurnProfile } from './resolve';
 
 /** Why each resolved slot carries the value it does. */
 export interface ProfileProvenance {
@@ -28,27 +28,14 @@ const ProvenanceSchema = v.strictObject({
 
 const LevelSchema = v.nullable(v.picklist(REASONING_EFFORTS));
 
-/** None before fallbacks existed; a bare spec before each carried its level. */
-const FallbacksSchema = v.optional(v.array(v.union([
-  v.string(),
-  v.strictObject({ model: v.string(), reasoningEffort: LevelSchema }),
-])), () => []);
-
-function withLevels<Slot extends { readonly reasoningEffort: ReasoningEffort | null; readonly fallbacks: readonly (string | TierFallback)[] }>(
-  slot: Slot,
-): Omit<Slot, 'fallbacks'> & { readonly fallbacks: readonly TierFallback[] } {
-  return {
-    ...slot,
-    fallbacks: slot.fallbacks.map((entry) => (v.is(v.string(), entry) ? { model: entry, reasoningEffort: slot.reasoningEffort } : entry)),
-  };
-}
+const FallbacksSchema = v.array(v.strictObject({ model: v.string(), reasoningEffort: LevelSchema }));
 
 /** Declared, not derived from {@link ResolvedTurnProfile}, so it keeps checking the frozen shape. */
-const TierSlotSchema = v.pipe(v.strictObject({
+const TierSlotSchema = v.strictObject({
   model: v.string(),
   reasoningEffort: LevelSchema,
   fallbacks: FallbacksSchema,
-}), v.transform(withLevels));
+});
 
 const ResolvedTurnProfileSchema = v.strictObject({
   role: v.strictObject({
@@ -57,14 +44,14 @@ const ResolvedTurnProfileSchema = v.strictObject({
     description: v.string(),
     instructions: v.string(),
   }),
-  tier: v.pipe(v.strictObject({
+  tier: v.strictObject({
     id: TierIdSchema,
     source: v.picklist(['explicit', 'role', 'default', 'workspace', 'actor']),
     model: v.string(),
     reasoningEffort: LevelSchema,
     fallbacks: FallbacksSchema,
-    replaced: v.optional(v.nullable(v.string()), null),
-  }), v.transform(withLevels)),
+    replaced: v.nullable(v.string()),
+  }),
   /** Per slot, so a snapshot missing one fails here rather than at a producer (model-route.ts). */
   tiers: v.strictObject({
     fast: TierSlotSchema,

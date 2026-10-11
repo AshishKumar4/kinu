@@ -352,8 +352,8 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       execute: async (...args: unknown[]): Promise<JsonValue> => {
         const parsed = v.safeParse(SlateOperationSchema, args[0]);
 
-        if (!parsed.success) return { success: false, ...refusalOf(new KinuError('bad_input',
-          'workspace.slates received an operation outside its members', { cause: new v.ValiError(parsed.issues) })) };
+        if (!parsed.success) return refusalOf(new KinuError('bad_input',
+          'workspace.slates received an operation outside its members', { cause: new v.ValiError(parsed.issues) }));
         requireSlateWorkMode(parsed.output, currentWorkMode());
         const result = await slate(parsed.output);
 

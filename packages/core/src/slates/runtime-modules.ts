@@ -57,17 +57,11 @@ const listeners = new Set();
 // Set once \`fit\` has started measuring; until then the page has not asked to be sized.
 let fitted = false;
 
-// The host names its own origin inside the context it composes; the referrer
-// is the fallback for older hosts. When neither says who the parent is,
-// outbound posts do not run and inbound context messages still apply.
-let hostOrigin = typeof context.origin === "string" ? context.origin : null;
-if (hostOrigin === null) {
-  try { hostOrigin = new URL(document.referrer).origin; } catch { /* stays null */ }
-}
+const hostOrigin = typeof context.origin === "string" && URL.canParse(context.origin)
+  && new URL(context.origin).origin === context.origin ? context.origin : null;
 
 window.addEventListener("message", (event) => {
-  if (event.source !== window.parent) return;
-  if (hostOrigin !== null && event.origin !== hostOrigin) return;
+  if (hostOrigin === null || event.source !== window.parent || event.origin !== hostOrigin) return;
   const message = event.data;
   if (message === null || typeof message !== "object" || message.kinu !== "${SLATE_HOST_CONTEXT_MESSAGE}") return;
   context = message.context;

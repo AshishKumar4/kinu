@@ -282,6 +282,7 @@ describe('the refusal payload', () => {
     });
 
     expect(refusalOf(failure)).toEqual({
+      success: false,
       reason: 'io',
       error: 'run `pytest` on sandbox: exec channel closed',
     });
@@ -289,6 +290,7 @@ describe('the refusal payload', () => {
 
   test('a reported exit survives the projection — the census reads 127, never `unavailable`', () => {
     expect(refusalOf(new KinuError('unavailable', 'no such command', { execution: { exitCode: 127 } }))).toEqual({
+      success: false,
       reason: 'unavailable',
       error: 'no such command',
       execution: { exitCode: 127 },
@@ -296,7 +298,7 @@ describe('the refusal payload', () => {
 
     // Without one, no field is invented.
     const plain = refusalOf(new KinuError('unavailable', 'runtime_not_provisioned'));
-    expect(plain).toEqual({ reason: 'unavailable', error: 'runtime_not_provisioned' });
+    expect(plain).toEqual({ success: false, reason: 'unavailable', error: 'runtime_not_provisioned' });
     expect('execution' in plain).toBe(false);
   });
 });

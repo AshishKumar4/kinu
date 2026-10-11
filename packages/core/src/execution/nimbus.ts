@@ -237,7 +237,7 @@ function nimbusFailure(input: { doing: string; cause: unknown }): KinuError {
 /** A transport failure is not evidence that a process exited with a made-up code. */
 function nimbusTransportRefusal(result: NimbusExecResult): Refusal | null {
   return !result.success && result.exitCode === 0
-    ? { reason: 'io', error: 'Nimbus execution did not report success: ' + formatExecResult(result) }
+    ? refusalOf(new KinuError('io', 'Nimbus execution did not report success: ' + formatExecResult(result)))
     : null;
 }
 

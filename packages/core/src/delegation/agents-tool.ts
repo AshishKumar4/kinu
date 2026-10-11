@@ -53,7 +53,7 @@ import { SWARMS_BETA_SETTING } from '../types/profile';
 import type { DelegationChoices } from '../types/dynamic-context';
 import { nanoid } from '../utils/nanoid';
 import {
-  KinuError, renderThrownChain, toKinuError, type ErrorCode, type Refusal, type TurnTrace,
+  KinuError, refusalOf, renderThrownChain, toKinuError, type ErrorCode, type Refusal, type TurnTrace,
 } from '../obs/index';
 import {
   delegationDepthRefusal,
@@ -761,10 +761,10 @@ const PLAN_KEEPS = {
 /** Whether this actor may run the operation now: unwired is `unsupported`, a durable roster change under Plan is
  *  `denied`, as is a search the account's beta withholds. */
 function opAdmission(offeredOps: readonly AgentsOp[], mode: WorkMode, op: AgentsOp, beta: string | null): Refusal | null {
-  if (beta !== null) return { reason: 'denied', error: beta };
+  if (beta !== null) return refusalOf(new KinuError('denied', beta));
 
   if (!offeredOps.includes(op)) {
-    return { reason: 'unsupported', error: `agents.${op} is not available here. Available: ${offeredOps.join(', ')}` };
+    return refusalOf(new KinuError('unsupported', `agents.${op} is not available here. Available: ${offeredOps.join(', ')}`));
   }
 
   return workModeRefusal(mode, PLAN_KEEPS[op], 'agents.' + op);

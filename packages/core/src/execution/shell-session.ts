@@ -1,4 +1,5 @@
 import * as v from 'valibot';
+import { KinuError, refusalOf } from '../obs/index';
 import { sha256Hex } from '../safety/argument-digest';
 import {
   ShellExecOptionsSchema, type OutputSink, type Shell, type ShellCallJob, type ShellExecOptions, type ShellExecResult,
@@ -29,7 +30,7 @@ export function callJob({ job, detached }: ShellExecOptions): ShellCallJob | und
 
 /** A name a detached job holds: the call did not run, and says by what. */
 export function busyShell(message: string): ShellExecResult {
-  return { stdout: '', stderr: message, exitCode: 1, refusal: { reason: 'unavailable', error: message } };
+  return { stdout: '', stderr: message, exitCode: 1, refusal: refusalOf(new KinuError('unavailable', message)) };
 }
 
 /** Where a machine starts a command, and keeps one agent's named shells: `~` is the machine's home. */

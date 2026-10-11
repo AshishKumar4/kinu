@@ -6,7 +6,6 @@ import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contr
 import { KinuError } from '../src/obs/error';
 import { SlateFiles, slateDirectory, type SlateFileTree } from '../src/slates/files';
 import { WorkspaceSlateContentStore } from '../src/slates/content';
-import { settleWorkspaceSlates } from '../src/vfs/agent-home';
 import { createTestWorkspace, createWorkspaceBundle, makeSqlExec } from './helpers';
 
 afterEach(() => { setSystemTime(); });
@@ -34,9 +33,7 @@ async function slatePlane() {
   const content = new WorkspaceSlateContentStore(session.vfs.as(CRED_KERNEL));
   const files = new SlateFiles(tree, content, makeSqlExec(ws.db), (body) => session.vfs.withTransaction(body));
 
-  const register = (path: string): void => { session.vfs.registerSharedDirectory(path); };
-
-  return { ws, vfs, kernel: session.vfs.as(CRED_KERNEL), register, files, counts };
+  return { ws, vfs, kernel: session.vfs.as(CRED_KERNEL), files, counts };
 }
 
 /** Moves the clock on, as between two requests: a write and a version never share a millisecond. */
@@ -89,8 +86,8 @@ test('a Slate tree restores binaries, executable modes, symlinks and empty direc
   }
 });
 
-test('a version taken before slates were shared restores and forks into a shared tree', async () => {
-  const { ws, vfs, kernel, register, files } = await slatePlane();
+test('a slate version restores and forks into a shared tree', async () => {
+  const { ws, vfs, files } = await slatePlane();
 
   try {
     const id = new SlateId('ledger');
@@ -98,13 +95,7 @@ test('a version taken before slates were shared restores and forks into a shared
     vfs.mkdir(`${directory}/src`, { recursive: true });
     vfs.writeFile(`${directory}/src/app.ts`, 'export const rows = 1;\n');
 
-    for (const [path, mode] of [[directory, 0o755], [`${directory}/src`, 0o755], [`${directory}/src/app.ts`, 0o644]] as const) {
-      kernel.chmod(path, mode);
-    }
-
     const version = files.capture(id);
-    kernel.chmod('/slates', 0o755);
-    settleWorkspaceSlates(kernel, register);
     vfs.writeFile(`${directory}/src/app.ts`, 'export const rows = 2;\n');
     files.transaction(() => files.restore(id, version));
     const fork = new SlateId('ledger-copy');

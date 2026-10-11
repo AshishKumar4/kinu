@@ -22,22 +22,13 @@ export function createWebhookSecretStore(sql: SqlExec): WebhookSecretStore {
       created_at INTEGER NOT NULL
     )`);
 
-  // Guarded: SQLite resolves `triggers` at prepare time, and a workspace without hub tables must
-  // still read its secrets.
-  const hasTriggers = sql.exec(
-    `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'triggers'`,
-  ).toArray().length > 0;
-
-  if (hasTriggers) {
-    // Not actor-scoped: `webhook_secrets` has no `actor_id`, so scoping would delete other actors'
-    // live secrets. Sound only because trigger ids are ULIDs, unique across actors.
-    sql.exec(`
-      DELETE FROM webhook_secrets
-      WHERE NOT EXISTS (
-        SELECT 1 FROM triggers t
-        WHERE t.id = webhook_secrets.trigger_id AND t.state != 'revoked'
-      )`);
-  }
+  // Trigger ids are unique across actors; secrets have no actor scope.
+  sql.exec(`
+    DELETE FROM webhook_secrets
+    WHERE NOT EXISTS (
+      SELECT 1 FROM triggers t
+      WHERE t.id = webhook_secrets.trigger_id AND t.state != 'revoked'
+    )`);
 
   return {
     async get(secretId) {

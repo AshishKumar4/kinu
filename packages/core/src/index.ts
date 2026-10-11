@@ -1072,7 +1072,7 @@ export {
   settleWorkspaceSlates,
   actorHomeName,
   MAIN_AGENT, AGENT_HOME_MODE, AGENT_TMP_MODE, SESSION_UID, AGENT_UID_FLOOR,
-  type AgentIdentity, type HomeRootVfs, type RootMoveVfs, type SlatesMoveVfs, type TmpConfiner,
+  type AgentIdentity, type HomeRootVfs, type TmpConfiner,
 } from './vfs/agent-home';
 
 export type {

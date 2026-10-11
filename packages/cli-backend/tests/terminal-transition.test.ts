@@ -250,7 +250,7 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
     // Core's in-flight guard is process-local; only the driver lease stops a second opener running the same rows.
     const rival = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
     rival.skipBackoff();
-    rival.setDriverGate(() => ({ reason: 'unavailable', error: 'another process is driving' }));
+    rival.setDriverGate(() => ({ success: false, reason: 'unavailable', error: 'another process is driving' }));
     await rival.recoverBackgroundJobs();
     await rival.settleBackgroundWork();
 
@@ -511,7 +511,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
 
     // Not the driver: each process finding this row would hire its own advisor.
     const rival = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
-    rival.setDriverGate(() => ({ reason: 'unavailable', error: 'another process is driving' }));
+    rival.setDriverGate(() => ({ success: false, reason: 'unavailable', error: 'another process is driving' }));
     await rival.recoverBackgroundJobs();
     await rival.settleBackgroundWork();
 

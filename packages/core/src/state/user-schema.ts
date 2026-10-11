@@ -349,8 +349,7 @@ export function initUserTables(sql: SqlExec): void {
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_cli_tokens_active ON user_cli_tokens (expires_at, revoked_at)`);
 
-  // Missing row means ask; 'allow'/'deny' are remembered. The device's own `tier` governs access;
-  // a legacy `scope` column may exist and is unused.
+  // Missing row means ask; 'allow'/'deny' are remembered. The device's own `tier` governs access.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS device_consent (
       agent_name  TEXT NOT NULL,

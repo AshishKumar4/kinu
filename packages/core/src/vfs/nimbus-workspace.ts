@@ -30,7 +30,7 @@ import { ShellExecOptionsSchema, type Shell, type ShellExecOptions } from '../ty
 import { WORKSPACE_ROOT, workspacePath } from './workspace-path';
 import { FORK_PIN_PREFIX } from '../identity/fork';
 import { ARCHIVE_PIN_PREFIX } from '../identity/archive';
-import { diagnostics, KinuError, tolerate, toKinuError } from '../obs/index';
+import { diagnostics, KinuError, refusalOf, tolerate, toKinuError } from '../obs/index';
 import { atVfsPath } from './errno';
 import type { VfsMount, WorkspacePrincipal } from './mounts';
 import type { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
@@ -108,7 +108,7 @@ function workspaceShell(open: () => Promise<NimbusWorkspace>, start: (workspace:
       const options = shellExecOptions({ value: stdinOrOptions });
 
       if (options?.name !== undefined) {
-        const refusal = { reason: 'unsupported' as const, error: 'this workspace keeps no named shells; run the command without a name' };
+        const refusal = refusalOf(new KinuError('unsupported', 'this workspace keeps no named shells; run the command without a name'));
 
         return { stdout: '', stderr: refusal.error, exitCode: 1, refusal };
       }

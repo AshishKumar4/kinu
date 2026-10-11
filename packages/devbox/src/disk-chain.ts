@@ -21,8 +21,8 @@ const Layer = v.object({
   key: v.string(), bytes: v.pipe(v.number(), v.safeInteger(), v.minValue(1)), committedAt: v.number(), digest: LayerDigest,
 });
 
-/** `saves`: how many saves the layer covers, from the boundary below it; a delta from before D77 covers one. */
-const Delta = v.object({ ...Layer.entries, saves: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(1)), 1) });
+/** `saves`: how many saves the layer covers, from the boundary below it. */
+const Delta = v.object({ ...Layer.entries, saves: v.pipe(v.number(), v.safeInteger(), v.minValue(1)) });
 
 export const DiskChainStateSchema = v.object({
   format: v.literal(DISK_CHAIN_FORMAT),
@@ -52,8 +52,6 @@ const KEEP_INVENTORY = `{ [ ! -e ${shellPath(NEXT_INVENTORY)} ] || mv ${shellPat
   + `&& mv ${shellPath(NEXT_INVENTORY_REV)} ${shellPath(INVENTORY_REV)}`;
 
 const CHANGES = `${RT}/disk-changes`;
-
-const STAGED_BY_AN_OLDER_IMAGE = `${RT}/disk-stage`;
 
 const PACK = `${RT}/disk-pack/layer.sqsh`;
 
@@ -171,7 +169,7 @@ function changesCommand(before: string, after: string): string {
   const deleted = `${CHANGES}.deleted`;
 
   return [
-    'set -e', `rm -rf ${shellPath(STAGED_BY_AN_OLDER_IMAGE)}`,
+    'set -e',
     `LC_ALL=C comm -z -13 ${shellPath(before)} ${shellPath(after)} | cut -z -f1 > ${shellPath(changed)}`,
     `cut -z -f1 ${shellPath(before)} > ${shellPath(`${deleted}.before`)} && cut -z -f1 ${shellPath(after)} > ${shellPath(`${deleted}.after`)}`,
     `LC_ALL=C comm -z -23 ${shellPath(`${deleted}.before`)} ${shellPath(`${deleted}.after`)} > ${shellPath(deleted)}`,
