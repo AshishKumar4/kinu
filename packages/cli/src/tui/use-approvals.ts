@@ -64,6 +64,8 @@ export function useApprovals(client: AgentClient, opts: {
   /** The drawn prompt a key already answered: set before the render that hides it, so a second key answers nothing. */
   const handled = useRef<DeferredApproval | null>(null);
   const sent = useRef<typeof chosen>(null);
+  /** Bumped as each answer completes: a read begun before it may still hold the answered row, so it is dropped. */
+  const answered = useRef(0);
   /** Bumped when a frame says the queue moved and after each answer, so the queue is read again. */
   const [moves, setMoves] = useState(0);
 
@@ -79,9 +81,10 @@ export function useApprovals(client: AgentClient, opts: {
 
     if (!approvals || !opts.ready || opts.running) return;
     let current = true;
+    const since = answered.current;
 
     detach(Effect.match(readWaitingApprovals(approvals), {
-      onSuccess: (actions) => { if (current) setWaiting({ client, actions }); },
+      onSuccess: (actions) => { if (current && since === answered.current) setWaiting({ client, actions }); },
       onFailure: (failure) => { if (current) note('error', renderThrownChain({ cause: failure })); },
     }));
 
@@ -98,10 +101,11 @@ export function useApprovals(client: AgentClient, opts: {
       onSuccess: (said) => { note('decided', said); },
       onFailure: (failure) => { note('error', renderThrownChain({ cause: failure })); },
     }), Effect.sync(() => {
-      // Answered or refused, the drawn row leaves; only a fresh read draws it again, as a prompt no key has answered.
+      // Answered or refused, the row leaves; only a read begun after this draws it again, as a prompt no key has answered.
+      answered.current += 1;
       handled.current = null;
       setWaiting((read) => (read?.client === chosen.client
-        ? { client: read.client, actions: read.actions.filter((queued) => queued !== chosen.action) }
+        ? { client: read.client, actions: read.actions.filter((queued) => queued.id !== chosen.action.id) }
         : read));
       setChosen(null);
       setMoves((count) => count + 1);

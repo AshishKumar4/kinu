@@ -316,16 +316,24 @@ describe('waiting approvals', () => {
 
   test('a refused answer leaves the chat usable and asks the row again once the queue reads', async () => {
     const parkedQueue = queue([parked('park-1', 'git push --force origin main')]);
-    let refusing = true;
+    let reachable = true;
+    let attempts = 0;
 
     const approvals: WaitingApprovalSurface = {
       list: async () => {
-        if (refusing && parkedQueue.decided.length > 0) throw new Error('the workspace is unreachable');
+        if (!reachable) throw new Error('the workspace is unreachable');
 
         return parkedQueue.approvals.list();
       },
       decide: async (ids, answer) => {
-        if (refusing) throw new Error('the workspace is unreachable');
+        attempts += 1;
+
+        // The first answer, and every read after it, are refused until the workspace answers again.
+        if (attempts === 1) {
+          reachable = false;
+
+          throw new Error('the workspace is unreachable');
+        }
 
         return parkedQueue.approvals.decide(ids, answer);
       },
@@ -337,9 +345,13 @@ describe('waiting approvals', () => {
     await screen.waitFor('the waiting approval', () => screen.frame().includes('git push --force origin main'));
     screen.mockInput.pressKey('o');
     await screen.waitFor('the refusal said', () => screen.frame().includes('the workspace is unreachable'));
+    await screen.mockInput.typeText('still here');
+    await screen.waitFor('the composer taking keys', () => screen.frame().includes('still here'));
     expect(screen.frame()).not.toContain('Run this command?');
 
-    refusing = false;
+    for (let left = 'still here'.length; left > 0; left -= 1) screen.mockInput.pressBackspace();
+
+    reachable = true;
     agent.emit({ type: 'broadcast', event: { type: 'reads_changed', reads: ['listPendingActions'] } });
     await screen.waitFor('the row asked again', () => screen.frame().includes('Run this command?'));
     screen.mockInput.pressKey('n');
