@@ -78,3 +78,19 @@ test('a repeated operation is answered what its first send did: a refused write 
   expect(await settle(writeFileIfDigest({ exec: pipeExec }, write))).toEqual(first);
   expect({ first, now: readFileSync(path, 'utf8') }).toEqual({ first: { ok: false, sha256: sha256('the rewrite') }, now: 'read' });
 });
+
+test('a write whose guest died after its rename and before its answer is answered landed when it is sent again', async () => {
+  const path = join(root, 'cut.md');
+  const write = { path, data: bytes('the rewrite'), expected: sha256('read'), operation: randomUUID() };
+  writeFileSync(path, 'read');
+
+  // The first send's guest is cut the moment its rename has published the bytes, before it records its answer.
+  const cut = (argv: string[], options?: ContainerExecOptions) => pipeExec(argv.map((arg, at) => (at === 2
+    ? arg.replace(/^answer\(\{'ok': True[^\n]*$/mu, 'os._exit(9)')
+    : arg)), options);
+
+  await expect(settle(writeFileIfDigest({ exec: cut }, write))).rejects.toMatchObject({ message: expect.stringContaining('exited 9') });
+  expect(readFileSync(path, 'utf8')).toBe('the rewrite');
+
+  expect(await settle(writeFileIfDigest({ exec: pipeExec }, write))).toEqual({ ok: true, sha256: sha256('the rewrite') });
+});
