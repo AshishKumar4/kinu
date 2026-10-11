@@ -224,7 +224,10 @@ export interface ShellSession {
   ran(name: string, cwd: string | null): void;
   /** A named call cut short: its shell may have moved after it, so it is unknown until a call reports. */
   lost(name: string): void;
-  /** One call at a time per name, and a name a detached job holds answers `busy` at once; unnamed calls never wait. */
+  /**
+   * One call at a time per name; unnamed calls never wait. A name a detached job holds answers `busy` at once, unless
+   * the shell frees a name when its job detaches ({@link ShellSessionOptions.detachFrees}): then the next call runs.
+   */
   hold<R>(name: string | undefined, job: ShellCallJob | undefined, call: () => Promise<R>, busy: (message: string) => R): Promise<R>;
 }
 
@@ -233,6 +236,8 @@ export interface ShellSessionOptions {
   readonly userRoots: () => readonly string[];
   /** A name's directory as an earlier process left it; null: unreadable. Absent: every name starts at home. */
   readonly stored?: (name: string) => Promise<string | null>;
+  /** The shell frees a name when its call's job detaches (Nimbus's `detach`): the job runs on, and keeps no name. */
+  readonly detachFrees?: boolean;
 }
 
 /** A call's session from its `cwd` option; an unresolvable one may be the user's. */
@@ -248,7 +253,7 @@ interface HeldName {
   job: { readonly id: string; readonly since: number } | null;
 }
 
-export function createShellSession({ home, userRoots, stored }: ShellSessionOptions): ShellSession {
+export function createShellSession({ home, userRoots, stored, detachFrees = false }: ShellSessionOptions): ShellSession {
   const directories = new Map<string, Promise<ShellCwd>>();
   const held = new Map<string, HeldName>();
   const unknown: ShellCwd = { home, cwd: home, mayBeUsers: true };
@@ -312,8 +317,13 @@ export function createShellSession({ home, userRoots, stored }: ShellSessionOpti
       const detached = Promise.withResolvers<void>();
       const mine: HeldName = { ended: ended.promise, detached: detached.promise, job: null };
 
+      const release = (): void => {
+        if (held.get(name) === mine) held.delete(name);
+      };
+
       const onDetach = (): void => {
-        if (job !== undefined) mine.job = { id: job.id, since: Date.now() };
+        if (detachFrees) release();
+        else if (job !== undefined) mine.job = { id: job.id, since: Date.now() };
 
         detached.resolve();
       };
@@ -327,7 +337,7 @@ export function createShellSession({ home, userRoots, stored }: ShellSessionOpti
         return await call();
       } finally {
         job?.detached.removeEventListener('abort', onDetach);
-        held.delete(name);
+        release();
         ended.resolve();
       }
     },

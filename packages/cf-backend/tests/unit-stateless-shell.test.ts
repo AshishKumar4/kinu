@@ -1,6 +1,7 @@
 /**
  * The workspace shell, as the agent's shell tool reaches it: every call is a fresh shell starting at its `cwd` or the
- * agent's home, side by side with any other; a `name` keeps its directory and exported variables, one call at a time.
+ * agent's home, side by side with any other; a `name` keeps its directory and exported variables, one call at a time,
+ * and a call gone on as a job frees its name (Nimbus `detach`).
  * Staging, 2026-10-02 (PassiveGull, live sandbox hang): the agent's one durable shell queued an `echo` 6,032 s behind
  * a `find`, and a `cd` from one call steered every later one. Fresh and named shells are the workerd slate-durability
  * journey's; a long command held open, on the job clock this harness moves, is this file's.
@@ -44,13 +45,14 @@ function answered(gateway: ReturnType<typeof shellModel>, asked: string): readon
 /** A process `ps` lists as still running; an entry's command can span lines, each entry opening on its pid. */
 const runningLine = (ps: string, command: string): boolean => ps.split(/\n(?=\s+\d+\s)/).some((entry) => entry.includes(command) && entry.includes('running'));
 
-test('a long command held open holds up no other call, its name answers busy, and a cancel stops it', async () => {
+test('a long command held open holds up no other call, its job frees its name, and a cancel stops it', async () => {
   const clock = handClock(Date.now());
 
   const gateway = shellModel({
-    serve: [{ command: 'sleep 600', name: 'server' }],
-    check: [{ command: 'echo independent' }, { command: 'echo again', name: 'server' }, { command: 'ps' }],
+    serve: [{ command: 'mkdir -p moved && cd moved && sleep 600', name: 'server' }],
+    check: [{ command: 'echo independent' }, { command: 'pwd', name: 'server' }, { command: 'ps' }],
     after: [{ command: 'ps', name: 'server' }],
+    ps: [{ command: 'ps' }],
   });
 
   const workspace = gatewayWorkspace(gateway, { jobClock: clock });
@@ -65,21 +67,31 @@ test('a long command held open holds up no other call, its name answers busy, an
   expect(job).toMatchObject({ kind: 'shell', status: 'running' });
   const jobId = job?.id ?? '';
 
-  // An unrelated call finishes while the long one runs; its name answers at once; `ps` still lists it.
+  // An unrelated call finishes while the long one runs; its name runs the next call at once, where the shell was before
+  // the job: the job's own `cd` is not kept. `ps` still lists the job.
   await catalogTurn(workspace.agent, 'check');
-  const [independent, busy, running] = answered(gateway, 'check');
+  const [independent, named, running] = answered(gateway, 'check');
 
   expect(independent).toBe(`cwd: ${WORKSPACE_ROOT}\nindependent\n`);
-  expect(busy).toContain(`shell server is busy with job ${jobId} since `);
+  expect(named).toBe(`cwd: ${WORKSPACE_ROOT}\n${WORKSPACE_ROOT}\n`);
   expect(runningLine(running ?? '', 'sleep 600')).toBe(true);
 
   expect(await workspace.agent.cancelBackgroundJob(jobId)).toEqual({ ok: true });
   expect((await workspace.agent.listBackgroundJobs()).find((listed) => listed.id === jobId)?.status).toBe('cancelled');
 
-  // The name is free again; its next call starts once the stopped command has ended, and nothing of it still runs.
+  // The name runs its next call at once, without waiting for the stopped command to leave; the command does stop.
   await catalogTurn(workspace.agent, 'after');
   const [after] = answered(gateway, 'after');
 
-  expect(after).toContain('sleep 600');
-  expect(runningLine(after ?? '', 'sleep 600')).toBe(false);
+  expect(after).toStartWith(`cwd: ${WORKSPACE_ROOT}\n`);
+
+  for (let looked = 1; ; looked += 1) {
+    await catalogTurn(workspace.agent, 'ps');
+    const [listed] = answered(gateway, 'ps');
+
+    if (!runningLine(listed ?? '', 'sleep 600')) break;
+
+    if (looked === 50) throw new Error(`the cancelled command still runs: ${listed ?? ''}`);
+    await Bun.sleep(100);
+  }
 });

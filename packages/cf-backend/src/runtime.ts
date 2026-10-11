@@ -316,6 +316,7 @@ export function createCFRuntime(
     home,
     userRoots: () => agentFileVfs.userRoots(),
     stored: async (name) => await sessionShell.cwd?.(name) ?? null,
+    detachFrees: true,
   });
 
   const planes = cloudPlanes(home);

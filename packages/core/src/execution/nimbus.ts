@@ -25,9 +25,9 @@ import type {
 /**
  * A command's options: the shared session contract's, as far as Kinu sets them. `cred` is host-injected only
  * ({@link NimbusExecOptionsSchema} omits it so an agent cannot choose uid 0); `shellId` names the transport's shell, which
- * a host keys per agent.
+ * a host keys per agent; `detach` frees that shell for its next call while the command runs on.
  */
-type NimbusExecOptions = Pick<SessionExecOptions, 'cwd' | 'env' | 'timeoutMs' | 'stdin' | 'cred' | 'shellId' | 'execId'>;
+type NimbusExecOptions = Pick<SessionExecOptions, 'cwd' | 'env' | 'timeoutMs' | 'stdin' | 'cred' | 'shellId' | 'execId' | 'detach'>;
 
 type NimbusRunCodeOptions = NimbusExecOptions & Pick<SessionRunCodeOptions, 'language' | 'install'>;
 
@@ -491,7 +491,7 @@ async function sessionCall(
   command: string, options: ShellExecOptions, place: { readonly home: string; readonly cred?: VfsCred }, shellCwd: ((name: string) => Promise<string | null>) | undefined,
 ): Promise<SessionCall> {
   const { home, cred } = place;
-  const { name, stdin, job } = options;
+  const { name, stdin, job, detached } = options;
   const kept = name === undefined ? null : await shellCwd?.(name) ?? null;
   const start = startIn(kept ?? home, options.cwd);
   // Absent option must be an absent key: the substrate reads `'cred' in options` to decide whether to inherit.
@@ -503,6 +503,9 @@ async function sessionCall(
   if (cred !== undefined) execOptions.cred = cred;
 
   if (job !== undefined) execOptions.execId = job;
+
+  // A job that outruns its window frees its shell for the next call; it runs on, and its later cd and exports are not kept.
+  if (name !== undefined && detached !== undefined) execOptions.detach = detached;
 
   // Absolute, so no `--`, which Nimbus's `cd` reads as a directory.
   return { run: moves ? `cd ${shellQuote(start)} || exit\n${command}` : command, execOptions, start };
