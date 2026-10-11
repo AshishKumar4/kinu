@@ -10,6 +10,7 @@ import {
   ownerCaller,
   type ApprovalGrant,
   type EgressSecretBinding,
+  type ObjectNamespace,
   type OwnerCapabilityEnv,
   type UserCaller,
 } from '@kinu.run/core';
@@ -36,8 +37,8 @@ interface EgressVaultClient {
 }
 
 /** The owner's egress secrets, as bindings carrying no secret material; an unreadable vault rejects. */
-export async function ownerEgressVault(
-  env: OwnerCapabilityEnv & Pick<Env, 'UserDO'>, ownerUserId: string,
+export async function ownerEgressVault<Id>(
+  env: OwnerCapabilityEnv & { readonly UserDO: ObjectNamespace<Id, EgressVaultClient> }, ownerUserId: string,
 ): Promise<readonly EgressSecretBinding[]> {
   // Used, never copied (see `userDOStubFor`).
   const vault: EgressVaultClient = env.UserDO.get(env.UserDO.idFromName(ownerUserId));
