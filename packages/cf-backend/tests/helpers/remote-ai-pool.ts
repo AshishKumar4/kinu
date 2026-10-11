@@ -5,8 +5,8 @@ import { closeRemoteWorkersAi, reopenRemoteWorkersAi } from './workers-ai-bindin
 /**
  * Ends Wrangler's remote proxy session with the Cloudflare pool, in the pool's own order (@cloudflare/vitest-plugin
  * pool `stop`): a worker disposes its Miniflare first, so no consumer of the session is left running, and only the
- * last worker to stop disposes the shared session. A worker that starts reopens it, and a worker that failed to start
- * holds no share of it.
+ * last worker to stop disposes the shared session. A worker holds its share while starting too, so another worker's
+ * stop cannot close the session underneath it. A failed start releases that share.
  */
 function tied(worker: PoolWorker, share: { running: number }): PoolWorker {
   const start = worker.start.bind(worker);
@@ -15,9 +15,16 @@ function tied(worker: PoolWorker, share: { running: number }): PoolWorker {
 
   worker.start = async () => {
     reopenRemoteWorkersAi();
-    await start();
     started = true;
     share.running += 1;
+    const [outcome] = await Promise.allSettled([start()]);
+
+    if (outcome.status === 'fulfilled') return;
+    started = false;
+    share.running -= 1;
+
+    if (share.running === 0) await closeRemoteWorkersAi();
+    throw outcome.reason;
   };
 
   worker.stop = async () => {
