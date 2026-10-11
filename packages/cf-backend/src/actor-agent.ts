@@ -1,4 +1,6 @@
 import { Cause, Effect, Exit } from 'effect';
+import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
+import { logDoCallRetry } from './obs/do-call-retry';
 import type { VfsDirent, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Actor-agnostic substrate beneath every full-loop Kinu actor on the Cloudflare backend.
@@ -43,7 +45,6 @@ import {
   type RpcFrame,
 } from "./cli/rpc-gate";
 import { codemodeSurface, hostedWindowMay, PAGE_KEEPALIVE, readsWrittenBy, requiredRpcAccess, ROSTER_READS, rpcMovesOverview, type LiveRead, type SqlExec } from "@kinu.run/core";
-import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { attempt, attemptInItsWords, createAgentTracing, hold, recording, renderThrownChain, type AgentTracing, settle, settleSync, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
 import {
@@ -1647,10 +1648,10 @@ export abstract class ActorAgent extends Agent<Env> {
     }
 
     try {
-      const { stub, caller } = await this.userHub();
+      const caller = await this.userCaller();
 
-      const verified = await retryTransientDO('verifySocketSession',
-        () => stub.verifySocketSession(caller, session.tokenHash));
+      const verified = await idempotent('verifySocketSession', () => this.requireOwnerUserDO(),
+        (stub) => stub.verifySocketSession(caller, session.tokenHash), { onRetry: logDoCallRetry });
 
       return verified.live ? null : SESSION_AUTHORITY_REVOKED;
     } catch (cause) {
@@ -1669,10 +1670,10 @@ export abstract class ActorAgent extends Agent<Env> {
     if (!bearer.readable) return 'This connection carries no readable authorization. Reconnect with: kinu auth';
 
     try {
-      const { stub, caller } = await this.userHub();
+      const caller = await this.userCaller();
 
-      const verified = await retryTransientDO('verifyCliSocketBearer',
-        () => stub.verifyCliSocketBearer(caller, bearer.tokenHash));
+      const verified = await idempotent('verifyCliSocketBearer', () => this.requireOwnerUserDO(),
+        (stub) => stub.verifyCliSocketBearer(caller, bearer.tokenHash), { onRetry: logDoCallRetry });
 
       if (verified.live && verified.generation <= bearer.generation) return null;
 

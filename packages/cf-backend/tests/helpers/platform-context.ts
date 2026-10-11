@@ -127,7 +127,7 @@ export function stubOf<T extends object>(target: T, served?: string[]): T {
   return new Proxy(target, {
     get: (held, name) => {
       // A stub is not a thenable: `await stub` yields the stub.
-      if (name === 'then') return undefined;
+      if (name === 'then' || name === Symbol.dispose) return undefined;
 
       if (!v.is(v.string(), name) || !rpcReachableFrom(held).includes(name)) return refuse(String(name));
 

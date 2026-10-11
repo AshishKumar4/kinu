@@ -6,12 +6,14 @@ import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
 import {
   err, ERROR_STATUS, FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, fileResponseHeaders, json,
-  pumpUploadChunks, retryTransientDO, safeJson, type DriveFailure, type DriveUploadTarget, type UserCaller,
+  pumpUploadChunks, safeJson, type DriveFailure, type DriveUploadTarget, type UserCaller,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 import type { UserDO } from '../user/user-do';
 import type { DriveAnswer } from '../user/drive';
 import { ownerGate, type ApiVariables, type FamilyEnv } from '../api/context';
+import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
+import { logDoCallRetry } from '../obs/do-call-retry';
 
 type DriveRouteObject = Pick<UserDO,
   | 'ensureProfile'
@@ -56,8 +58,10 @@ export const driveRoutes = new Hono<FamilyEnv<Env, DriveVariables>>();
 driveRoutes.use('/api/drive/*', ownerGate(), async (c, next) => {
   const identity = c.get('identity');
   const owner = c.get('owner');
-  const object: DriveRouteObject = c.env.UserDO.get(c.env.UserDO.idFromName(identity.userId));
-  await retryTransientDO('ensureProfile', () => object.ensureProfile(owner, identity.email, identity.displayName ?? undefined));
+  const userObject = c.env.UserDO.idFromName(identity.userId);
+  await idempotent('ensureProfile', () => c.env.UserDO.get(userObject),
+    (stub) => stub.ensureProfile(owner, identity.email, identity.displayName ?? undefined), { onRetry: logDoCallRetry });
+  const object: DriveRouteObject = c.env.UserDO.get(userObject);
   c.set('drive', { object, owner });
   await next();
 });

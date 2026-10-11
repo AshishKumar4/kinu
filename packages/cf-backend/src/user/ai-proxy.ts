@@ -1,6 +1,6 @@
 /** OpenAI-compatible proxy for CLI clients: `@cf/...` via Workers AI (direct under `WORKERS_AI_VIA_BINDING`), `{author}/{model}` via the user's gateway. */
 import { Hono } from 'hono';
-import { createUserDOAuthResolver, decisionRunOf, type UserCredentialClient } from '../providers/agent-registry';
+import { decisionRunOf, userCredentials, type UserCredentialClient } from '../providers/agent-registry';
 import type { OwnerCapabilityEnv, ProviderEnv, WorkersAIRunBinding } from '@kinu.run/core';
 import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from '@kinu.run/core';
 import { createCloudflareAIFetch, errorResponse, mapGatewayError } from '@kinu.run/core';
@@ -48,7 +48,8 @@ aiProxyRoutes.post(`${USER_AI_RUN_PATH}/*`, async (c) => {
   const body = tolerate(() => parseJsonObject(text), 'malformed-input') ?? null;
 
   if (body === null) return errorResponse(400, 'Body must be a JSON object.');
-  const run = decisionRunOf({ env: c.env, userDO: { stub: c.get('cli').userDO, caller: await ownerCaller(c.env) } });
+  const userId = c.get('cli').userId;
+  const run = decisionRunOf({ env: c.env, userDO: userCredentials(() => c.env.UserDO.get(c.env.UserDO.idFromName(userId)), await ownerCaller(c.env)) });
 
   return json({ body: decodeJsonValue({ value: await run(spec.slice('workers-ai/'.length), body) }) });
 });
@@ -68,14 +69,14 @@ aiProxyRoutes.get(`${USER_AI_PROXY_PATH}/models`, async (c) => {
 
 /** The APIs a gateway model is spoken to in (`gatewayWireModel`), each forwarded where `createCloudflareAIFetch` sends it. */
 for (const endpoint of ['chat/completions', 'responses', 'messages'] as const) {
-  aiProxyRoutes.post(`${USER_AI_PROXY_PATH}/${endpoint}`, (c) => settle(proxyCompletion(endpoint, c.req.raw, c.env, c.get('cli').userDO)));
+  aiProxyRoutes.post(`${USER_AI_PROXY_PATH}/${endpoint}`, (c) => settle(proxyCompletion(endpoint, c.req.raw, c.env, c.get('cli').userId)));
 }
 
 aiProxyRoutes.all(`${USER_AI_PROXY_PATH}/*`, beneath(USER_AI_PROXY_PATH, async (c) =>
   errorResponse(404, `No such AI proxy route: ${c.req.method} ${c.req.path.slice(USER_AI_PROXY_PATH.length)}`)));
 
 function proxyCompletion<Id>(
-  endpoint: 'chat/completions' | 'responses' | 'messages', request: Request, env: UserAIProxyEnv<Id>, userDO: UserCredentialClient,
+  endpoint: 'chat/completions' | 'responses' | 'messages', request: Request, env: UserAIProxyEnv<Id>, userId: string,
 ): Effect.Effect<Response> {
   return Effect.gen(function* () {
     const body = yield* Effect.promise(() => request.text());
@@ -103,7 +104,7 @@ function proxyCompletion<Id>(
     const aiFetch = createCloudflareAIFetch({
       credKey: workersAI ? CLOUDFLARE_OAUTH_CRED_KEY : CLOUDFLARE_AI_GATEWAY_CRED_KEY,
       provider: workersAI ? 'workers-ai' : 'my-gateway',
-      getAuth: createUserDOAuthResolver({ stub: userDO, caller: yield* Effect.promise(() => ownerCaller(env)) }),
+      getAuth: userCredentials(() => env.UserDO.get(env.UserDO.idFromName(userId)), yield* Effect.promise(() => ownerCaller(env))).getAuth,
       placeholder: PROXY_PLACEHOLDER,
       missingCredentialMessage: workersAI
         ? 'Connect Cloudflare in your Kinu user settings before using Workers AI models.'

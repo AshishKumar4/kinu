@@ -195,7 +195,7 @@ const OOM_SIGNATURES: readonly RegExp[] = [
   /exceededMemory/iu,
 ];
 
-export const OVERLOADED_SIGNATURE = /Durable Object is overloaded/iu;
+const OVERLOADED_SIGNATURE = /Durable Object is overloaded/iu;
 
 /**
  * Class of a caught value, or null when nothing pinned recognises it; callers supply the fallback.

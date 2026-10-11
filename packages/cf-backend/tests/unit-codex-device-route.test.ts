@@ -11,7 +11,7 @@ import {
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { mergePolicyProfile } from '@kinu.run/test-utils';
 import { createTestUserDO, testOwner, type DeviceFrame, type TestUserDO } from './helpers/user-do';
-import { createAgentProviderRegistry } from '../src/providers/agent-registry';
+import { createAgentProviderRegistry, userCredentials } from '../src/providers/agent-registry';
 
 /** A relay call's one parameter, as the daemon reads it. */
 const RelayRequestSchema = v.object({
@@ -88,7 +88,7 @@ async function rig(upstream: Upstream, beforeRelay?: (request: v.InferOutput<typ
   await harness.userDO.setCredential(owner, CODEX_CRED_KEY, { kind: 'oauth', accessToken: ACCESS_1, refreshToken: 'refresh-1' });
 
   const registry = createAgentProviderRegistry({
-    env: {}, userDO: { stub: harness.userDO, caller: owner },
+    env: {}, userDO: userCredentials(() => harness.userDO, owner),
     currentTurn: (actor) => (actor.actorId === 'main' ? liveTurn : null),
   });
 

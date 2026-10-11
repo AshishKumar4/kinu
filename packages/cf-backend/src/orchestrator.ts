@@ -39,7 +39,7 @@ import { createHostedWorkspace, type HostedBox, type HostedWorkspace, type Works
 import type { WorkspaceEgress } from "@nimbus-sh/core/_shared/workspace-network.js";
 import { agentFacet, agentStateShellId, AgentMemory, AgentStoreBroker, AgentWorkspaceHost, headDeltas, uiChunks, type AgentFacetPlacement } from "./agent-facets";
 import { agentCallsThrough, AgentIsolateSlots } from "./dynamic-worker-slots";
-import { providerBindingsOf, routedModelReads } from "./providers/agent-registry";
+import { providerBindingsOf, routedModelReads, userCredentials } from "./providers/agent-registry";
 import { AgentTurns } from "./agent-turns";
 import { AgentWakes } from "./agent-wakes";
 import type { AgentTurnActivity, AgentSnapshot, RunEventRecorder, StoredRow } from '@kinu.run/core';
@@ -840,6 +840,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (this.deleting.signal.aborted) return settleSync(Effect.fail(new KinuError('missing', 'This workspace was deleted.')));
     this.agentKey(actorId);
     const credentials = async () => await this.userHub();
+    const credentialReads = userCredentials(() => this.requireOwnerUserDO(), () => this.userCaller());
 
     return new AgentWorkspaceHost({
       session: async () => {
@@ -922,16 +923,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       answerMetadata: (turnId, narration) => this.takeTurnSlates(actorId, turnId, async () => narration),
       reportModelCall: async (report) => { this.reportModelCall(report); },
       reportModelOperation: async (event) => { this.modelOperations(event); },
-      getAuth: async (key, opts) => {
-        const { stub, caller } = await credentials();
-
-        return await stub.getAuth(caller, key, opts);
-      },
-      listCredentials: async () => {
-        const { stub, caller } = await credentials();
-
-        return await stub.listCredentials(caller);
-      },
+      getAuth: credentialReads.getAuth,
+      listCredentials: credentialReads.listCredentials,
       relayDevice: async (provider) => {
         const { stub, caller } = await credentials();
 

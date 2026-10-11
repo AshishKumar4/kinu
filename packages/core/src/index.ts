@@ -2157,8 +2157,6 @@ export { SWARM_PRESET_DOCTRINE } from './strategy/swarm';
 
 export { fmtPct, fmtSpan, fmtTokens, fmtUsd, formatBytes, shortAge, timeAgo } from './utils/format';
 
-export { classifyTransientDO, retryTransientDO, type DOTransientClass } from './utils/do-rpc';
-
 export { relayedAnswer } from './utils/relayed-answer';
 
 export { inheritedDescriptor, type RpcSurfaceSubject } from './utils/prototype-members';
