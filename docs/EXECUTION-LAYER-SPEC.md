@@ -297,8 +297,8 @@ An inbound port or a long-lived process alone does not select a container.
 The server runtime does. Hosted git already uses isomorphic-git. Local git
 work belongs on `device`. Docker and Python are absent from the probed
 container image; selecting that image does not install them. Container git
-needs the outbound interception path (`cf-backend/src/egress/configure.ts`,
-`egress/outbound.ts`), whose production state is not verified here;
+needs the outbound interception path (`cf-backend/src/egress/outbound.ts`,
+`KinuDevbox.configureEgress`), whose production state is not verified here;
 `scripts/egress-interception.ts` records it.
 
 A cold container costs about 2.8s, a warm call 0.22s, both measured on

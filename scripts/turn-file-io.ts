@@ -695,10 +695,12 @@ try {
     await measureOp('egress.push', (index) => {
       const at = `/home/main/perfio/epush-${String(index + 2)}`;
 
-      return shell(`mkdir -p ${at} && cd ${at} && git init -q && git config user.email p@perfio.test && git config user.name perfio && echo ${String(index)} > a.txt`
-        + ` && git add a.txt && git commit -q -m c${String(index + 2)} && git remote add origin https://${PERF_SECRET_HOST}/repo.git`
-        + ` && git push origin HEAD:refs/heads/b${String(index + 2)} 2>&1 | tail -2`);
-    }, undefined, '->');
+      const branch = `b${String(index + 2)}`;
+
+      return shell(`mkdir -p ${at} && cd ${at} && git init -q && git config user.email p@perfio.test && git config user.name perfio`
+        + ` && echo ${String(index)} > a.txt && git add a.txt && git commit -q -m ${branch} && git branch ${branch}`
+        + ` && git remote add origin https://${PERF_SECRET_HOST}/repo.git && git push origin ${branch} && echo pushed=${branch}`);
+    }, undefined, 'pushed=b');
     await measureOp('egress.inject', () => shell(`curl -sS -H "Authorization: Bearer ${placeholder}" https://${PERF_SECRET_HOST}/echo`), undefined, 'auth=secret');
     await measureOp('egress.npm', (index) => {
       const at = `/home/main/perfio/enpm-${String(index + 2)}`;
