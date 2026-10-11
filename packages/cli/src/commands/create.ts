@@ -1,4 +1,4 @@
-import { ensureAgentHome, pathHint, type AgentMode } from '../config';
+import { ensureAgentHome, type AgentMode } from '../config';
 import { createCliAgent, createLocalPeerAgent } from '../agent-create';
 import { ACCENT, DIM, OK, WARN, createSpinner, printCreatedCard, printFailure } from '../display';
 import { findUnusableModel, type LocalModelResolverOptions } from '../local-model-resolver';
@@ -6,7 +6,7 @@ import { ask, canPrompt } from '../prompt';
 
 export async function createCommand(name: string | undefined, opts: {
   purpose?: string; model?: string; baseUrl?: string; auth?: string;
-  mode?: string; alias?: string; aliasShim?: boolean; origin?: string;
+  mode?: string; origin?: string;
   join?: boolean;
 }): Promise<void> {
   ensureAgentHome();
@@ -26,24 +26,15 @@ export async function createCommand(name: string | undefined, opts: {
   const mode = await resolveMode(opts.mode, interactive);
   const purpose = opts.purpose ?? `A helpful AI assistant named ${named}.`;
 
-  const alias = opts.aliasShim === false
-    ? undefined
-    : opts.alias ?? (interactive ? await ask('Alias command', named) : named);
-
   if (mode === 'cloud') {
     const spinner = createSpinner('Creating cloud workspace…');
     spinner.start();
 
     try {
-      const created = await createCliAgent({ ...opts, name: named, purpose, mode, alias, allowInteractiveAuth: true });
+      await createCliAgent({ ...opts, name: named, purpose, mode, allowInteractiveAuth: true });
       spinner.stop('Cloud workspace created');
       console.log(`\n${OK('✓')} ${ACCENT(named)} ${DIM('cloud workspace')}`);
-
-      if (alias) console.log(`${DIM('Alias:')} ${ACCENT(alias)} ${DIM(created.aliasPath ?? '')}`);
-      const hint = pathHint();
-
-      if (hint) console.log(DIM(hint));
-      console.log(`\n${DIM('Run:')} ${ACCENT(alias === undefined || alias === '' ? `kinu run ${named}` : alias)} ${DIM('"do something"')}\n`);
+      console.log(`\n${DIM('Run:')} ${ACCENT(`kinu run ${named}`)} ${DIM('"do something"')}\n`);
     } catch (err) {
       spinner.fail('Create failed');
       printFailure({ cause: err });
@@ -57,13 +48,10 @@ export async function createCommand(name: string | undefined, opts: {
   spinner.start();
 
   try {
-    const created = await createCliAgent({ ...opts, name: named, purpose, mode, alias, allowInteractiveAuth: true });
+    const created = await createCliAgent({ ...opts, name: named, purpose, mode, allowInteractiveAuth: true });
     spinner.stop('Workspace created');
     printCreatedCard(named, purpose, created.model ?? opts.model ?? 'configured provider', created.dbPath ?? '');
     await warnUnusableModel(opts);
-    const hint = pathHint();
-
-    if (hint) console.log(DIM(hint));
   } catch (err) {
     spinner.fail('Create failed');
     printFailure({ cause: err });

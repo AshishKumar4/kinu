@@ -1,7 +1,4 @@
-import {
-  chmodSync, existsSync, readFileSync, mkdirSync, realpathSync, statSync,
-  writeFileSync, unlinkSync,
-} from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, realpathSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
 import {
@@ -20,9 +17,8 @@ import {
   type ModelInfo,
   type OpenAICompatCredential,
   type ProfileCatalogEnvelope,
-  shellQuote,
 } from '@kinu.run/core';
-import { KinuError, settleSync, tolerate } from '@kinu.run/core/obs';
+import { KinuError, settleSync } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import {
   makeSql, CLOUD_PROXY_PROVIDER_IDS,
@@ -48,37 +44,6 @@ export const BIN_DIR = join(AGENT_HOME, 'bin');
 
 const KINU_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
-const RESERVED_ALIASES = new Set([
-  'kinu',
-  'create',
-  'auth',
-  'whoami',
-  'logout',
-  'setup',
-  'provider',
-  'providers',
-  'run',
-  'exec',
-  'tokens',
-  'chat',
-  'status',
-  'effort',
-  'list',
-  'workspace',
-  'alias',
-  'unalias',
-  'aliases',
-  'transcripts',
-  'desktop',
-  'daemon',
-  'connect',
-  'export',
-  'import',
-  'update',
-  'uninstall',
-  'doctor',
-]);
-
 const DEFAULT_ORIGIN = 'https://kinu.run';
 
 export type KinuAgentConfig = v.InferOutput<typeof KinuAgentConfigSchema>;
@@ -99,7 +64,6 @@ const KinuAgentConfigSchema = v.object({
   mode: v.picklist(['local', 'cloud']),
   /** Cloud workspaces only; a local agent's title lives in its own database (`actor_config.display_name`). */
   displayName: v.optional(v.string()),
-  alias: v.optional(v.string()),
   localName: v.optional(v.string()),
   cloudName: v.optional(v.string()),
   /** Canonical project directory; the agent's file and shell plane binds here. */
@@ -149,7 +113,6 @@ const KinuConfigSchema = v.object({
     displayName: v.optional(v.nullable(v.string())),
   })),
   agents: v.optional(v.record(v.string(), KinuAgentConfigSchema)),
-  aliases: v.optional(StringMapSchema),
   updateCheck: v.optional(v.boolean()),
   updateCheckedAt: v.optional(v.number()),
   updateLatestSeen: v.optional(v.string()),
@@ -320,12 +283,11 @@ export function readWorkspaceDisplayName(dbPath: string): string | null {
 }
 
 /** A new local workspace's ref: the folder it works in, and its database's identity (`assertIdentityUnchanged`). */
-export async function placeLocalWorkspace(input: { name: string; cwd: string; workspaceId: string; alias?: string }): Promise<void> {
+export async function placeLocalWorkspace(input: { name: string; cwd: string; workspaceId: string }): Promise<void> {
   await upsertAgentConfig({
     name: input.name,
     mode: 'local',
     localName: input.name,
-    alias: input.alias,
     cwd: input.cwd,
     workspaceId: input.workspaceId,
     identityId: readWorkspaceIdentityId(agentDbPath(input.name)) ?? undefined,
@@ -467,10 +429,7 @@ export function resolveCloudSession(): LocalCloudSession | null {
 }
 
 export function resolveAgentRef(input: string): KinuAgentConfig | null {
-  const config = loadConfigFile();
-  const canonical = config.aliases?.[input] ?? input;
-
-  return config.agents?.[canonical] ?? null;
+  return loadConfigFile().agents?.[input] ?? null;
 }
 
 export function listConfiguredAgentRefs(): KinuAgentConfig[] {
@@ -480,8 +439,6 @@ export function listConfiguredAgentRefs(): KinuAgentConfig[] {
 
 export async function upsertAgentConfig(agent: Omit<KinuAgentConfig, 'createdAt' | 'updatedAt'> & Partial<Pick<KinuAgentConfig, 'createdAt' | 'updatedAt'>>): Promise<KinuAgentConfig> {
   validateAgentName(agent.name);
-
-  if (agent.alias) validateAliasName(agent.alias);
 
   if (agent.localName) validateAgentName(agent.localName);
 
@@ -508,88 +465,17 @@ export async function removeCloudAgentConfig(cloudName: string): Promise<boolean
   let removed = false;
   await updateConfigFile((config) => {
     const agents = config.agents ?? {};
-    const removedNames = new Set<string>();
 
     for (const [name, agent] of Object.entries(agents)) {
       if (agent.mode !== 'cloud' || (agent.cloudName ?? agent.name) !== cloudName) continue;
       delete agents[name];
-      removedNames.add(name);
       removed = true;
-    }
-
-    if (config.aliases) {
-      for (const [alias, target] of Object.entries(config.aliases)) {
-        if (removedNames.has(target)) delete config.aliases[alias];
-      }
     }
 
     config.agents = agents;
   });
 
   return removed;
-}
-
-async function setAliasConfig(agentName: string, alias: string): Promise<void> {
-  validateAgentName(agentName);
-  validateAliasName(alias);
-  await updateConfigFile((config) => {
-    config.aliases = { ...config.aliases, [alias]: agentName };
-    const existing = config.agents?.[agentName];
-
-    if (existing) {
-      config.agents = {
-        ...config.agents,
-        [agentName]: { ...existing, alias, updatedAt: new Date().toISOString() },
-      };
-    }
-  });
-}
-
-async function removeAliasConfig(alias: string): Promise<void> {
-  await updateConfigFile((config) => {
-    const agentName = config.aliases?.[alias];
-
-    if (config.aliases) delete config.aliases[alias];
-
-    if (agentName && config.agents?.[agentName]?.alias === alias) {
-      config.agents[agentName] = { ...config.agents[agentName], alias: undefined, updatedAt: new Date().toISOString() };
-    }
-  });
-}
-
-function aliasPath(alias: string): string {
-  validateAliasName(alias);
-
-  return join(BIN_DIR, alias);
-}
-
-export async function writeAliasShim(agentName: string, alias: string): Promise<string> {
-  validateAgentName(agentName);
-  validateAliasName(alias);
-  ensureBinDir();
-  const path = aliasPath(alias);
-
-  const script = `#!/usr/bin/env sh
-set -eu
-bin_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-exec "$bin_dir/kinu" run ${shellQuote(agentName)} "$@"
-`;
-
-  writeFileSync(path, script, { mode: 0o755 });
-  chmodSync(path, 0o755);
-  await setAliasConfig(agentName, alias);
-
-  return path;
-}
-
-export async function deleteAliasShim(alias: string): Promise<void> {
-  validateAliasName(alias);
-  tolerate(() => unlinkSync(aliasPath(alias)), 'enoent');
-  await removeAliasConfig(alias);
-}
-
-export function pathHint(): string | null {
-  return (process.env.PATH ?? '').split(':').includes(BIN_DIR) ? null : `Add ${BIN_DIR} to PATH for kinu aliases.`;
 }
 
 function validateIdentifier(value: string, noun: string): void {
@@ -604,14 +490,6 @@ function validateAgentName(name: string): void {
 
 export function validateWorkspaceId(workspaceId: string): void {
   validateIdentifier(workspaceId, 'Workspace id');
-}
-
-function validateAliasName(alias: string): void {
-  validateIdentifier(alias, 'Alias');
-
-  if (RESERVED_ALIASES.has(alias)) {
-    throw new Error(`Alias "${alias}" is reserved. Choose another alias.`);
-  }
 }
 
 /** Default endpoint for bare model ids, null when nothing derives one; see {@link requireLLMConfig}. */

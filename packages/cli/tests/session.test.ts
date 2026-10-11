@@ -1,13 +1,13 @@
 import { scratchDir } from '../../test-utils/src/scratch';
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, test } from "bun:test";
 import * as v from "valibot";
+import { runToExit } from "@kinu.run/test-utils";
 import {
   createCliSession,
-  findTranscriptPath,
-  listCliSessions,
+  listTranscripts,
 } from "../src/session";
 import { SessionRecorder } from "../src/session-recorder";
 import type { AgentClientEvent } from "../src/agent-client";
@@ -27,9 +27,9 @@ const RecordedEntrySchema = v.looseObject({
 
 /** What the recorder wrote, in file order, read from the JSONL artifact itself. */
 function recordedEntries(dir: string, id: string): Array<v.InferOutput<typeof RecordedEntrySchema>> {
-  const path = findTranscriptPath("jarvis", id, { transcriptDir: dir });
+  const path = listTranscripts("jarvis", { transcriptDir: dir }).find((info) => info.id === id)?.path;
 
-  if (path === null) throw new Error(`no transcript ${id}`);
+  if (path === undefined) throw new Error(`no transcript ${id}`);
 
   return readFileSync(path, "utf8").split("\n").filter(Boolean)
     .map((line) => v.parse(RecordedEntrySchema, JSON.parse(line)))
@@ -49,7 +49,7 @@ describe("CLI transcripts", () => {
     expect(next.id).not.toBe(session.id);
     expect(next.conversationId).toBe(conversationId);
 
-    const infos = listCliSessions("jarvis", { transcriptDir: dir });
+    const infos = listTranscripts("jarvis", { transcriptDir: dir });
     expect(infos.map((info) => info.id).sort()).toEqual([session.id, next.id].sort());
     expect(infos.every((info) => info.conversationId === conversationId)).toBe(true);
   });
@@ -60,8 +60,7 @@ describe("CLI transcripts", () => {
     expect(session.mode).toBe("none");
     expect(session.append("user", { text: "hello" })).toBeNull();
 
-    expect(listCliSessions("jarvis", { transcriptDir: dir })).toEqual([]);
-    expect(findTranscriptPath("jarvis", session.id, { transcriptDir: dir })).toBeNull();
+    expect(listTranscripts("jarvis", { transcriptDir: dir })).toEqual([]);
   });
 
   test("recorder persists text and tool calls in chronological order", () => {
@@ -116,40 +115,32 @@ describe("CLI transcripts", () => {
     expect(entries.at(-1)?.text).toBe("synthesized answer");
   });
 
-  test("skips malformed headers when listing and locating", () => {
+  test("skips malformed headers when listing", () => {
     const dir = tempTranscriptDir();
     const agentDir = join(dir, "jarvis");
     mkdirSync(agentDir, { recursive: true });
     writeFileSync(join(agentDir, "bad.jsonl"), `${JSON.stringify({ type: "session", version: 1 })}\n`);
 
-    expect(listCliSessions("jarvis", { transcriptDir: dir })).toEqual([]);
-    expect(findTranscriptPath("jarvis", "bad", { transcriptDir: dir })).toBe(agentDir + "/bad.jsonl");
+    expect(listTranscripts("jarvis", { transcriptDir: dir })).toEqual([]);
   });
 
-  test("locates one transcript by exact id or path, never by selection", () => {
+  test("kinu debug --transcripts lists a workspace's recorded runs and their files, signed out", async () => {
+    const home = scratchDir("debug-transcripts");
+    writeFileSync(join(home, "config.json"), JSON.stringify({
+      agents: { jarvis: { name: "jarvis", mode: "cloud", cloudName: "jarvis", createdAt: "", updatedAt: "" } },
+    }));
     const dir = tempTranscriptDir();
-    const agentDir = join(dir, "jarvis");
-    mkdirSync(agentDir, { recursive: true });
-    writeSession(agentDir, "20260101T000000-abc111", "conv-a");
+    const session = createCliSession("jarvis", { transcriptDir: dir });
+    session.append("user", { text: "why did the build fail" });
 
-    const byId = findTranscriptPath("jarvis", "20260101T000000-abc111", { transcriptDir: dir });
-    expect(byId).toBe(join(agentDir, "20260101T000000-abc111.jsonl"));
+    const proc = await runToExit(
+      [process.execPath, "packages/cli/bin/cli.ts", "debug", "jarvis", "--transcripts", "--transcript-dir", dir],
+      { cwd: resolve(__dirname, "../../.."), env: { ...process.env, KINU_HOME: home, KINU_TOKEN: "", NO_COLOR: "1" } },
+    );
 
-    if (byId === null) throw new Error("expected the seeded transcript path");
-    expect(findTranscriptPath("jarvis", byId, { transcriptDir: dir })).toBe(byId);
-    expect(findTranscriptPath("jarvis", "missing-id", { transcriptDir: dir })).toBeNull();
-    expect(findTranscriptPath("jarvis", "20260101", { transcriptDir: dir })).toBeNull();
+    expect(proc.exitCode, proc.stderr).toBe(0);
+    const listed = proc.stdout.split("\n").find((line) => line.includes(session.id)) ?? "";
+    expect(listed).toContain("why did the build fail");
+    expect(listed).toContain(String(session.path));
   });
 });
-
-function writeSession(agentDir: string, id: string, conversationId: string): void {
-  writeFileSync(join(agentDir, `${id}.jsonl`), `${JSON.stringify({
-    type: "session",
-    version: 1,
-    id,
-    agent: "jarvis",
-    cwd: process.cwd(),
-    startedAt: new Date().toISOString(),
-    conversationId,
-  })}\n`);
-}

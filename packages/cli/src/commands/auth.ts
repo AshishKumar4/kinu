@@ -82,7 +82,7 @@ export function logoutCommand(opts: { origin?: string }): Promise<void> {
     if (token) {
       const revoked = yield* Effect.catchCause(Effect.as(Effect.promise(() => logout(origin, token)), true), (failed) => Effect.gen(function* () {
         // The raw token is the only copy (the server stores a hash); deleting it would orphan a live 180-day bearer,
-        // so it stays pending for the next logout or `kinu sessions revoke --all`.
+        // so it stays pending for the next logout or `kinu auth revoke --all`.
         const reason = renderThrownChain({ cause: Cause.squash(failed) });
         console.error(`${WARN('!')} Could not revoke the session at ${origin} (${reason}); it may still be valid.`);
         yield* Effect.promise(() => updateConfigFile((current) => {
@@ -99,7 +99,7 @@ export function logoutCommand(opts: { origin?: string }): Promise<void> {
       if (!revoked) {
         yield* Effect.promise(() => bumpProviderRevision());
         console.log(`${WARN('!')} Not signed out: the session is still valid, and this PC keeps its token so a later logout can revoke it.`);
-        console.log(DIM(`Run \`kinu logout\` again once ${origin} is reachable, or revoke it with \`kinu sessions revoke\` from any PC.`));
+        console.log(DIM(`Run \`kinu logout\` again once ${origin} is reachable, or revoke it with \`kinu auth revoke\` from any PC.`));
 
         return;
       }
@@ -117,35 +117,31 @@ export function logoutCommand(opts: { origin?: string }): Promise<void> {
   }));
 }
 
-async function revokeSessionCommand(hash: string): Promise<void> {
-  const auth = requireAuthConfig();
-  await revokeCliSessionByHash(auth.origin, auth.token, hash);
-  console.log(`${OK('✓')} Session ${ACCENT(hash.slice(0, 12))}… revoked`);
-}
+const AUTH_USAGE = 'Usage: kinu auth [sessions | revoke <session> | revoke --all]';
 
-export function sessionsCommand(
-  action: string | undefined, hash: string | undefined,
+/** `kinu auth sessions` and `kinu auth revoke`: the account's CLI sign-ins, so a bearer stored only as a hash can be ended. */
+export function authSessionsCommand(
+  action: string, session: string | undefined, opts: { all?: boolean },
 ): Promise<void> {
   return settle(Effect.gen(function* () {
-    const sub = action ?? 'list';
+    const auth = requireAuthConfig();
 
-    if (sub === 'revoke') {
-      if (hash === undefined || hash === '--all') {
-        const auth = requireAuthConfig();
+    if (action === 'revoke') {
+      if (opts.all === true && session === undefined) {
         const result = yield* Effect.promise(async () => revokeAllCliSessions(auth.origin, auth.token));
         console.log(`${OK('✓')} Revoked ${ACCENT(String(result.revoked))} session(s)`);
 
         return;
       }
 
-      return yield* Effect.promise(async () => revokeSessionCommand(hash));
+      if (opts.all === true || session === undefined) return yield* Effect.die(new Error(AUTH_USAGE));
+      yield* Effect.promise(async () => revokeCliSessionByHash(auth.origin, auth.token, session));
+      console.log(`${OK('✓')} Session ${ACCENT(session.slice(0, 12))}… revoked`);
+
+      return;
     }
 
-    if (sub !== 'list') {
-      return yield* Effect.die(new Error('Usage: kinu sessions [list | revoke <hash> | revoke --all]'));
-    }
-
-    const auth = requireAuthConfig();
+    if (action !== 'sessions') return yield* Effect.die(new Error(AUTH_USAGE));
     const { sessions } = yield* Effect.promise(async () => listCliSessions(auth.origin, auth.token));
 
     if (sessions.length === 0) {
@@ -154,12 +150,12 @@ export function sessionsCommand(
       return;
     }
 
-    for (const session of sessions) {
-      console.log(`${ACCENT(session.tokenHash.slice(0, 16))}…  ${DIM(session.label)}`);
-      console.log(`  ${DIM('created')} ${formatWhen(session.createdAt)}  ${DIM('last used')} ${session.lastUsedAt ? formatWhen(session.lastUsedAt) : 'never'}  ${DIM('expires')} ${formatWhen(session.expiresAt)}`);
+    for (const live of sessions) {
+      console.log(`${ACCENT(live.tokenHash)}  ${DIM(live.label)}`);
+      console.log(`  ${DIM('created')} ${formatWhen(live.createdAt)}  ${DIM('last used')} ${live.lastUsedAt ? formatWhen(live.lastUsedAt) : 'never'}  ${DIM('expires')} ${formatWhen(live.expiresAt)}`);
     }
 
-    console.log(DIM('Revoke one: kinu sessions revoke <hash>   All: kinu sessions revoke --all'));
+    console.log(DIM('Revoke one: kinu auth revoke <session>   All: kinu auth revoke --all'));
   }));
 }
 

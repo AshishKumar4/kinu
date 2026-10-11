@@ -43,8 +43,8 @@ bun run dev
 ```bash
 curl -fsSL 'https://kinu.run/install.sh' | bash
 kinu setup
-kinu create jarvis --mode cloud --alias jarvis --purpose "A helpful coding assistant"
-jarvis "summarize this checkout"
+kinu create jarvis --mode cloud --purpose "A helpful coding assistant"
+kinu run jarvis "summarize this checkout"
 ```
 
 From source I run `bun run cli -- setup`, then `bun run cli -- ...`. Origin defaults to `https://kinu.run`. I use `--origin` or `KINU_ORIGIN` for alternate deployments only.
@@ -251,7 +251,7 @@ Rotating this secret revokes every webhook URL the deployment ever issued, all a
 openssl rand -base64 32 | bunx wrangler secret put WEBHOOK_ROUTE_SECRET
 ```
 
-After it, every external system that posts to a Kinu webhook needs the new URL. I read it from the triggers list: the Supervise Automations block, or `kinu triggers <workspace> list`, which prints the current URL for each webhook row. Trigger rows, secrets and delivery history are untouched; only the URL changes. I rotate on purpose (a leaked URL, an operator handover), not on a schedule.
+After it, every external system that posts to a Kinu webhook needs the new URL. I read it from the triggers list: the workspace's Settings → Automations block, or `kinu triggers <workspace> list`, which prints the current URL for each webhook row. Trigger rows, secrets and delivery history are untouched; only the URL changes. I rotate on purpose (a leaked URL, an operator handover), not on a schedule.
 
 #### Built-in sign-in (self-hosting without an OAuth app)
 

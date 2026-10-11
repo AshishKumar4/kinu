@@ -369,9 +369,8 @@ export const GLOBAL_ENVIRONMENT: ReadonlyArray<readonly [string, string]> = [
 export const HELP_EXAMPLES: ReadonlyArray<string> = [
   'kinu setup',
   'kinu provider connect chatgpt',
-  'kinu create jarvis --mode cloud --alias jarvis',
-  'jarvis "review this repo"',
-  'kinu transcripts jarvis',
+  'kinu create jarvis --mode cloud',
+  'kinu run jarvis "review this repo"',
   'kinu daemon status',
   'kinu connect',
 ];

@@ -103,7 +103,7 @@ function localDisplay(dirName: string): Pick<ListedAgent, 'label' | 'readError'>
   }
 }
 
-/** Opens under the ref's config name when one exists, so aliases and cloud links stay attached. */
+/** Opens under the ref's config name when one exists, so cloud links stay attached. */
 function localRow(configured: KinuAgentConfig | undefined, dirName: string): ListedAgent {
   return {
     name: configured?.name ?? dirName,
@@ -122,7 +122,7 @@ function localRefsByDirName(refs: readonly KinuAgentConfig[]): Map<string, KinuA
     .map((agent) => [agent.localName ?? agent.name, agent]));
 }
 
-/** The one roster `kinu list`, `kinu transcripts` and the chat picker all read. */
+/** The one roster `kinu list` and the chat picker read. */
 export function listLocalAgentNames(cwd = process.cwd()): string[] {
   return listAgentDirs(cwd);
 }
@@ -245,16 +245,6 @@ export async function syncCloudAgentRefs(): Promise<CloudRefSync> {
     }
 
     config.agents = next;
-
-    if (config.aliases) {
-      for (const [alias, target] of Object.entries(config.aliases)) {
-        const agent = next[target];
-
-        if (!agent || (agent.mode === 'cloud' && !cloudNames.has(agent.cloudName ?? agent.name))) {
-          delete config.aliases[alias];
-        }
-      }
-    }
   });
 
   return { agents: listKnownAgents(), collisions };

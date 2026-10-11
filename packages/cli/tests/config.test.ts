@@ -24,17 +24,6 @@ describe("CLI config safety", () => {
     ]);
   });
 
-  test("validates aliases as executable names", async () => {
-    // upsertAgentConfig refuses a bad or reserved alias before it reaches the config file.
-    const out = await runNameChecks();
-    expect(out.slice(5, 7).map((r) => r.ok)).toEqual([true, true]);
-    expect(out.slice(7, 9).map((r) => r.error)).toEqual([
-      expect.stringContaining("Alias must"),
-      expect.stringContaining("Alias must"),
-    ]);
-    expect(out[9].error).toContain("reserved");
-  });
-
   test("honors KINU_HOME before falling back to the OS home", async () => {
     const home = scratchDir("cli-home");
     const kinuHome = scratchDir("cli-config");
@@ -90,6 +79,47 @@ describe("CLI config safety", () => {
 
       expect({ exitCode: proc.exitCode, seen }).toEqual({ exitCode: 0, seen: ["/api/cli/me Bearer pta_ci"] });
       expect(proc.stdout).toContain("ci@example.com");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("kinu auth lists the account's CLI sessions and revokes one or all of them; a bare revoke ends none", async () => {
+    const hash = "a".repeat(64);
+    const seen: string[] = [];
+
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch(request) {
+        const { pathname } = new URL(request.url);
+        seen.push(`${request.method} ${pathname}`);
+
+        if (request.method === "GET") {
+          return Response.json({ sessions: [{ tokenHash: hash, label: "studio", createdAt: 1, expiresAt: 2, lastUsedAt: null }] });
+        }
+
+        return Response.json(pathname === "/api/cli/sessions" ? { ok: true, revoked: 2 } : { ok: true });
+      },
+    });
+
+    const env: NodeJS.ProcessEnv = {
+      ...process.env, KINU_HOME: scratchDir("cli-auth-sessions"), KINU_ORIGIN: `http://127.0.0.1:${String(server.port)}`, KINU_TOKEN: "ptc_owner", NO_COLOR: "1",
+    };
+
+    const auth = (args: string[]) => runToExit([process.execPath, "packages/cli/bin/cli.ts", "auth", ...args], { cwd: resolve(__dirname, "../../.."), env });
+
+    try {
+      const listed = await auth(["sessions"]);
+      expect(listed.exitCode, listed.stderr).toBe(0);
+      expect(listed.stdout).toContain(`${hash}  studio`);
+
+      expect((await auth(["revoke"])).exitCode).not.toBe(0);
+      expect((await auth(["revoke", hash])).exitCode).toBe(0);
+      const all = await auth(["revoke", "--all"]);
+      expect(all.exitCode, all.stderr).toBe(0);
+      expect(all.stdout).toContain("Revoked 2 session(s)");
+      expect(seen).toEqual(["GET /api/cli/sessions", `DELETE /api/cli/sessions/${hash}`, "DELETE /api/cli/sessions"]);
     } finally {
       await server.stop(true);
     }
@@ -360,7 +390,7 @@ async function runNameChecks(): Promise<NameCheck[]> {
   const kinuHome = scratchDir("cli-names");
 
   const script = `
-    import { agentDir, upsertAgentConfig } from './packages/cli/src/config.ts';
+    import { agentDir } from './packages/cli/src/config.ts';
     const results = [];
     const check = async (fn) => {
       try { await fn(); results.push({ ok: true, error: null }); }
@@ -371,12 +401,6 @@ async function runNameChecks(): Promise<NameCheck[]> {
     await check(() => agentDir("../outside"));
     await check(() => agentDir("bad/name"));
     await check(() => agentDir(".hidden"));
-    const withAlias = (alias) => () => upsertAgentConfig({ name: "jarvis", mode: "local", alias });
-    await check(withAlias("jarvis"));
-    await check(withAlias("jarvis-2"));
-    await check(withAlias("../outside"));
-    await check(withAlias("bad/name"));
-    await check(withAlias("kinu"));
     console.log(JSON.stringify(results));
   `;
 

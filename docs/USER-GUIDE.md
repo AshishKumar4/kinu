@@ -48,8 +48,8 @@ once you approve one, it is told and runs it under its own permissions.
 
 ```bash
 curl -fsSL 'https://kinu.run/install.sh' | bash
-kinu create jarvis --mode cloud --alias jarvis --purpose "My coding assistant"
-jarvis "what changed in this repo today?"
+kinu create jarvis --mode cloud --purpose "My coding assistant"
+kinu run jarvis "what changed in this repo today?"
 ```
 
 In an interactive terminal the installer runs `kinu setup`: a browser sign-in,
@@ -69,10 +69,6 @@ or for an endpoint only this machine can reach. The model decides which
 credential answers a turn: your account serves the models it hosts (`@cf/…`
 and proxied provider ids), and a local key serves everything else. When you
 are signed out, only local keys exist.
-
-`--alias jarvis` puts a `jarvis` command on your PATH that runs
-`kinu run jarvis`. In my experience this is what decides whether you use it
-every day.
 
 If something above goes wrong, run `kinu doctor` before you reinstall. It shows
 where the CLI lives, whether it is on your PATH, which origin it talks to, and
@@ -110,8 +106,8 @@ The commands I use most:
 | `/theme` | pick a theme with a live preview; by default the ink follows your terminal's own background |
 | `/role [id]` | show or switch this agent's active role |
 
-The CLI records a transcript of each run by default (`kinu transcripts` lists
-them). Transcripts are for diagnosing past runs; you cannot reopen one as a
+The CLI records a transcript of each run by default (`kinu debug <workspace>
+--transcripts` lists them). Transcripts are for diagnosing past runs; you cannot reopen one as a
 conversation. Your conversation lives in the workspace and loads when you open
 it. `--no-transcript` skips the record for one run, and
 `--transcript-dir <dir>` chooses where it goes.
@@ -197,8 +193,7 @@ what it could not count: calls the provider reported nothing for, and calls no
 catalog could price. So you can tell "everything reported" from "92%, with
 the embedder silent".
 
-On [kinu.run](https://kinu.run) a workspace has two views, Work and Supervise.
-Its tabs are Work (plans, jobs and decisions waiting on you), Changes (what
+On [kinu.run](https://kinu.run) a workspace's tabs are Work (plans, jobs and decisions waiting on you), Changes (what
 changed since you last marked it reviewed, when anything did, where a note on
 any line goes back to the agent), Files, Swarms, Agent (identity, memory,
 tools and what it changed about itself) and Env (executors, files and
@@ -284,8 +279,8 @@ Everything sits under `~/.kinu` (override with `KINU_HOME`):
 
 ```
 ~/.kinu/
-  config.json        account, providers, workspaces, aliases   → docs/CONFIG.md
-  bin/               the kinu command and your workspace aliases
+  config.json        account, providers, workspaces            → docs/CONFIG.md
+  bin/               the kinu command
   <workspace>/       one directory per LOCAL workspace
     agent.db         its entire state
   sessions/          recorded CLI sessions

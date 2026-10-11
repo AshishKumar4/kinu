@@ -5,7 +5,7 @@ Every CLI setting lives in one JSON file. `kinu setup`, `kinu auth`, `kinu provi
 ```
 ~/.kinu/                 mode 0700
   config.json               mode 0600, everything below
-  bin/                      the kinu command + your workspace alias shims
+  bin/                      the kinu command
   cli/                      the installed CLI build the launcher runs
   <workspace>/agent.db      one per LOCAL workspace: its entire state
   <workspace>/agent.db.partial
@@ -39,15 +39,12 @@ Every CLI setting lives in one JSON file. `kinu setup`, `kinu auth`, `kinu provi
 | `agents.<name>.mode` | `"cloud"` \| `"local"` | Where it lives. Decided at creation. |
 | `agents.<name>.cloudName` / `localName` | string | Its name on that side, when it differs from the key. |
 | `agents.<name>.displayName` | string | Cloud workspaces only: a cache of the title the server holds. A local workspace keeps its title in its own database. |
-| `agents.<name>.alias` | string | The alias shim created for it, if any. |
 | `agents.<name>.cwd` | string | For a local workspace placed in a project: the directory its file and shell plane binds to. |
 | `agents.<name>.workspaceId` / `identityId` | string | The virtual workspace label that groups it with its peers, and the `workspace_identity.id` of its database, so a reused name cannot silently point the entry at a different workspace. |
 | `agents.<name>.createdAt` / `updatedAt` | ISO date | Bookkeeping. |
-| `aliases` | map | `alias → workspace name`. `kinu alias` / `unalias` maintain it, and each alias also has a shim in `bin/`. |
 
-Workspace and alias names are `[A-Za-z0-9][A-Za-z0-9_-]{0,63}`, and an alias may
-not shadow a built-in command name. A cloud workspace name must also be a
-hostname label; [WORKSPACES.md](WORKSPACES.md) has that rule.
+Workspace names are `[A-Za-z0-9][A-Za-z0-9_-]{0,63}`. A cloud workspace name
+must also be a hostname label; [WORKSPACES.md](WORKSPACES.md) has that rule.
 
 ## Models
 

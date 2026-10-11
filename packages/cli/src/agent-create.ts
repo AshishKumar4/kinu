@@ -29,7 +29,6 @@ import {
   resolveLLMConfig,
   upsertAgentConfig,
   validateWorkspaceId,
-  writeAliasShim,
   type AgentMode,
 } from './config';
 import {
@@ -47,7 +46,6 @@ export interface CreateCliAgentInput {
   nameOrigin?: 'user' | 'auto';
   purpose: string;
   mode: AgentMode;
-  alias?: string;
   model?: string;
   baseUrl?: string;
   auth?: string;
@@ -71,7 +69,6 @@ export interface CreatedCliAgent {
   cwd?: string;
   workspaceId?: string;
   peers?: string[];
-  aliasPath?: string;
 }
 
 export interface CreateCloudAgentFromMissionOptions {
@@ -144,11 +141,9 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
       mode: 'cloud',
       displayName: agent.displayName,
       cloudName: agent.name,
-      alias: input.alias === '' ? undefined : input.alias,
     });
-    const aliasPath = input.alias ? await writeAliasShim(agent.name, input.alias) : undefined;
 
-    return { name: agent.name, displayName: agent.displayName, mode: 'cloud', purpose, cloudName: agent.name, aliasPath };
+    return { name: agent.name, displayName: agent.displayName, mode: 'cloud', purpose, cloudName: agent.name };
   }
 
   const name = input.name;
@@ -225,13 +220,12 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   // Any sidecar left under the partial name belongs to a name that no longer exists.
   discardPartialWorkspace(partial);
 
-  await placeLocalWorkspace({ name, cwd, workspaceId, alias: input.alias === '' ? undefined : input.alias });
-  const aliasPath = input.alias ? await writeAliasShim(name, input.alias) : undefined;
+  await placeLocalWorkspace({ name, cwd, workspaceId });
   ensureLocalDaemonRunning();
 
   return {
     name, displayName, mode: 'local', purpose, model: input.model ?? tier?.model,
-    dbPath, aliasPath, cwd, workspaceId, peers,
+    dbPath, cwd, workspaceId, peers,
   };
 }
 

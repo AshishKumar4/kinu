@@ -7,7 +7,6 @@ import * as v from 'valibot';
 
 const WorkspaceConfigSchema = v.object({
   agents: v.record(v.string(), v.looseObject({ mode: v.string() })),
-  aliases: v.record(v.string(), v.string()),
 });
 
 const repoRoot = resolve(__dirname, '../../..');
@@ -72,7 +71,6 @@ describe('kinu workspace delete', () => {
       const config = v.parse(WorkspaceConfigSchema, JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')));
       expect(config.agents['web-agent']).toBeUndefined();
       expect(config.agents.localbot).toMatchObject({ mode: 'local' });
-      expect(config.aliases).toEqual({ local: 'localbot' });
     } finally {
       await server.stop(true);
     }
@@ -126,7 +124,6 @@ function workspaceHome(origin: string): string {
         updatedAt: '2026-07-14T00:00:00.000Z',
       },
     },
-    aliases: { web: 'web-agent', local: 'localbot' },
   }, null, 2));
 
   return home;

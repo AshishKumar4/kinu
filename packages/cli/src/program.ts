@@ -8,14 +8,12 @@ import { createCommand } from './commands/create';
 import { acpCommand } from './commands/acp';
 import { chatCommand } from './commands/chat';
 import { execCommand, runCommand } from './commands/run';
-import { authCommand, logoutCommand, sessionsCommand, whoamiCommand } from './commands/auth';
-import { aliasCommand, aliasesCommand, unaliasCommand } from './commands/alias';
+import { authCommand, authSessionsCommand, logoutCommand, whoamiCommand } from './commands/auth';
 import { desktopCommand } from './commands/desktop';
 import { daemonCommand } from './commands/daemon';
 import { deployCommand } from './commands/deploy';
 import { setupCommand } from './commands/setup';
 import { providersCommand } from './commands/providers';
-import { transcriptsCommand } from './commands/transcripts';
 import { doctorCommand, uninstallCommand, updateCommand } from './commands/self';
 import { statusCommand } from './commands/status';
 import { listCommand } from './commands/list';
@@ -94,11 +92,14 @@ export function buildProgram(): Command {
     .action(providersCommand);
 
   program
-    .command('auth')
+    .command('auth [action] [session]')
     .helpGroup(ACCOUNT)
-    .description('Sign in to your Kinu account')
+    .description('Sign in to your Kinu account, or list its CLI sessions with `sessions` and end them with `revoke`')
     .option('--origin <url>', 'Kinu app origin')
-    .action(authCommand);
+    .option('--all', 'With revoke: end every CLI session of this account')
+    .action((action: string | undefined, session: string | undefined, opts: { origin?: string; all?: boolean }) => (
+      action === undefined ? authCommand(opts) : authSessionsCommand(action, session, opts)
+    ));
 
   program
     .command('whoami')
@@ -113,13 +114,6 @@ export function buildProgram(): Command {
     .description('Sign out and revoke this CLI session')
     .option('--origin <url>', 'Kinu app origin')
     .action(logoutCommand);
-
-  program
-    .command('sessions [action] [hash]')
-    .helpGroup(ACCOUNT)
-    .description('List or revoke CLI sessions')
-    .option('--origin <url>', 'Kinu app origin')
-    .action(sessionsCommand);
 
   program
     .command('tokens [action] [name]')
@@ -137,10 +131,8 @@ export function buildProgram(): Command {
       .description('Create a workspace')
       .option('--purpose <text>', 'Say what this workspace is for. It seeds SOUL.md')
       .option('--mode <mode>', 'Workspace mode: cloud or local')
-      .option('--alias <name>', 'Also create a shell command with this name that runs the workspace')
       .option('--origin <url>', 'Kinu app origin for first-use sign-in')
-      .option('--join', 'Add an agent to the workspace in this directory. It takes the workspace mission, so it needs no name or purpose')
-      .option('--no-alias-shim', 'Do not create the alias shell command'),
+      .option('--join', 'Add an agent to the workspace in this directory. It takes the workspace mission, so it needs no name or purpose'),
   ).action(createCommand);
 
   program
@@ -164,24 +156,6 @@ export function buildProgram(): Command {
     .description('Delete a cloud workspace for good')
     .option('-y, --yes', 'Skip the confirmation prompt')
     .action(workspaceDeleteCommand);
-
-  program
-    .command('alias <workspace> [alias]')
-    .helpGroup(WORKSPACES)
-    .description('Create a shell command that runs a workspace')
-    .action(aliasCommand);
-
-  program
-    .command('unalias <alias>')
-    .helpGroup(WORKSPACES)
-    .description('Remove a workspace\'s shell command')
-    .action(unaliasCommand);
-
-  program
-    .command('aliases')
-    .helpGroup(WORKSPACES)
-    .description('List workspace shell commands')
-    .action(aliasesCommand);
 
   program
     .command('export <name>')
@@ -244,15 +218,6 @@ export function buildProgram(): Command {
     .description('List a workspace\'s executors, or run a command in one')
     .option('--json', 'Print raw JSON')
     .action(executorsCommand);
-
-  program
-    .command('transcripts [agent]')
-    .helpGroup(RUNNING)
-    .description('List terminal transcripts recorded for diagnostics (they cannot be reopened as chats)')
-    .option('--transcript-dir <dir>', 'Where transcripts are stored')
-    .option('--path', 'Show transcript file paths')
-    .option('--show <idOrPath>', 'Show one transcript\'s file path')
-    .action(transcriptsCommand);
 
   program
     .command('stop <name>')
@@ -385,6 +350,8 @@ export function buildProgram(): Command {
     .option('--json', 'Print the summary as JSON instead of text')
     .option('--turn <id>', 'Write one turn\'s requests, as the model received them, instead of the whole bundle')
     .option('--actor <id>', 'With --turn: a hosted actor\'s id (default: the workspace\'s main actor)')
+    .option('--transcripts', 'List the terminal transcripts recorded for this workspace and their files, instead of the bundle')
+    .option('--transcript-dir <dir>', 'With --transcripts: where they are stored')
     .action(debugCommand);
 
   program
@@ -464,18 +431,14 @@ export function buildProgram(): Command {
 const COMMAND_EXAMPLES: ReadonlyArray<readonly [string, string]> = [
   ['setup', 'kinu setup --provider chatgpt'],
   ['provider', 'kinu provider connect openrouter'],
-  ['auth', 'kinu auth'],
+  ['auth', 'kinu auth sessions'],
   ['whoami', 'kinu whoami'],
   ['logout', 'kinu logout'],
-  ['sessions', 'kinu sessions revoke --all'],
   ['tokens', 'kinu tokens create --name ci --scopes workspace.read,workspace.exec'],
   ['create', 'kinu create jarvis --mode local --purpose "Keep this repo\'s tests green"'],
   ['list', 'kinu list'],
   ['status', 'kinu status jarvis'],
   ['workspace delete', 'kinu workspace delete jarvis'],
-  ['alias', 'kinu alias jarvis j'],
-  ['unalias', 'kinu unalias j'],
-  ['aliases', 'kinu aliases'],
   ['export', 'kinu export jarvis -o jarvis.kinu.jsonl'],
   ['import', 'kinu import jarvis.kinu.jsonl --name jarvis-copy'],
   ['run', 'kinu run jarvis "summarise yesterday\'s commits"'],
@@ -483,7 +446,6 @@ const COMMAND_EXAMPLES: ReadonlyArray<readonly [string, string]> = [
   ['acp', 'kinu acp jarvis'],
   ['exec', 'kinu exec -w jarvis --json "run the test suite and report failures"'],
   ['executors', 'kinu executors jarvis'],
-  ['transcripts', 'kinu transcripts jarvis --path'],
   ['stop', 'kinu stop jarvis'],
   ['model', 'kinu model jarvis anthropic/claude-sonnet-4-7'],
   ['effort', 'kinu effort jarvis high'],

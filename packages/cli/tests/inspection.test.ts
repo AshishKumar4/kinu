@@ -54,7 +54,7 @@ describe('CLI explicit endpoint options', () => {
       cwd, env: childEnv({ HOME: home, KINU_HOME: kinuHome, KINU_SKIP_DAEMON: '1', ...env }),
     });
 
-    const created = await run(['create', 'explicit-local', '--mode', 'local', '--no-alias-shim', '--purpose', 'Offline endpoint fixture', ...flags], extraEnv);
+    const created = await run(['create', 'explicit-local', '--mode', 'local', '--purpose', 'Offline endpoint fixture', ...flags], extraEnv);
     expect(created.exitCode, created.stderr).toBe(0);
 
     return { created, home: kinuHome, run };

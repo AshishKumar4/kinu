@@ -17,10 +17,9 @@ kinu <command> [options]
 | --- | --- |
 | [`kinu setup`](#kinu-setup) | Sign in to Kinu and pick a model provider for local workspaces |
 | [`kinu provider [action] [name] [account]`](#kinu-provider-action-name-account) | List, connect or disconnect model providers and their accounts, and pick each default account |
-| [`kinu auth`](#kinu-auth) | Sign in to your Kinu account |
+| [`kinu auth [action] [session]`](#kinu-auth-action-session) | Sign in to your Kinu account, or list its CLI sessions with `sessions` and end them with `revoke` |
 | [`kinu whoami`](#kinu-whoami) | Show which Kinu account you are signed in to |
 | [`kinu logout`](#kinu-logout) | Sign out and revoke this CLI session |
-| [`kinu sessions [action] [hash]`](#kinu-sessions-action-hash) | List or revoke CLI sessions |
 | [`kinu tokens [action] [name]`](#kinu-tokens-action-name) | List, create or revoke access tokens for CI |
 
 ### Workspaces
@@ -31,9 +30,6 @@ kinu <command> [options]
 | [`kinu list`](#kinu-list) | List your workspaces |
 | [`kinu status <name>`](#kinu-status-name) | Show a workspace's mission, model and evolution state |
 | [`kinu workspace delete <name>`](#kinu-workspace-delete-name) | Delete a cloud workspace for good |
-| [`kinu alias <workspace> [alias]`](#kinu-alias-workspace-alias) | Create a shell command that runs a workspace |
-| [`kinu unalias <alias>`](#kinu-unalias-alias) | Remove a workspace's shell command |
-| [`kinu aliases`](#kinu-aliases) | List workspace shell commands |
 | [`kinu export <name>`](#kinu-export-name) | Back up a workspace, local or cloud, to an archive file |
 | [`kinu import <file>`](#kinu-import-file) | Restore a workspace archive as a local workspace that works in the current folder |
 
@@ -46,7 +42,6 @@ kinu <command> [options]
 | [`kinu acp <name>`](#kinu-acp-name) | Serve a workspace over the Agent Client Protocol on stdio (Zed, JetBrains, neovim, Marimo) |
 | [`kinu exec [prompt...]`](#kinu-exec-prompt) | Run one task without the TUI and exit, for CI and scripts |
 | [`kinu executors <name> [executor] [command...]`](#kinu-executors-name-executor-command) | List a workspace's executors, or run a command in one |
-| [`kinu transcripts [agent]`](#kinu-transcripts-agent) | List terminal transcripts recorded for diagnostics (they cannot be reopened as chats) |
 | [`kinu stop <name>`](#kinu-stop-name) | Stop a cloud workspace's current work, or cancel a local workspace's background jobs |
 
 ### Configure
@@ -124,16 +119,17 @@ Also: `kinu providers`
 kinu provider connect openrouter
 ```
 
-### kinu auth
+### kinu auth [action] [session]
 
-Sign in to your Kinu account.
+Sign in to your Kinu account, or list its CLI sessions with `sessions` and end them with `revoke`.
 
 | Option | What it does |
 | --- | --- |
 | `--origin <url>` | Kinu app origin |
+| `--all` | With revoke: end every CLI session of this account |
 
 ```bash
-kinu auth
+kinu auth sessions
 ```
 
 ### kinu whoami
@@ -160,18 +156,6 @@ Sign out and revoke this CLI session.
 kinu logout
 ```
 
-### kinu sessions [action] [hash]
-
-List or revoke CLI sessions.
-
-| Option | What it does |
-| --- | --- |
-| `--origin <url>` | Kinu app origin |
-
-```bash
-kinu sessions revoke --all
-```
-
 ### kinu tokens [action] [name]
 
 List, create or revoke access tokens for CI.
@@ -194,10 +178,8 @@ Create a workspace.
 | --- | --- |
 | `--purpose <text>` | Say what this workspace is for. It seeds SOUL.md |
 | `--mode <mode>` | Workspace mode: cloud or local |
-| `--alias <name>` | Also create a shell command with this name that runs the workspace |
 | `--origin <url>` | Kinu app origin for first-use sign-in |
 | `--join` | Add an agent to the workspace in this directory. It takes the workspace mission, so it needs no name or purpose |
-| `--no-alias-shim` | Do not create the alias shell command |
 | `--model <id>` | Model ID (env: KINU_MODEL) |
 | `--base-url <url>` | Base URL of your own model endpoint (env: KINU_BASE_URL) |
 | `--auth <header>` | Auth header value for that endpoint (env: KINU_AUTH) |
@@ -238,30 +220,6 @@ Delete a cloud workspace for good.
 
 ```bash
 kinu workspace delete jarvis
-```
-
-### kinu alias <workspace> [alias]
-
-Create a shell command that runs a workspace.
-
-```bash
-kinu alias jarvis j
-```
-
-### kinu unalias <alias>
-
-Remove a workspace's shell command.
-
-```bash
-kinu unalias j
-```
-
-### kinu aliases
-
-List workspace shell commands.
-
-```bash
-kinu aliases
 ```
 
 ### kinu export <name>
@@ -367,20 +325,6 @@ List a workspace's executors, or run a command in one.
 
 ```bash
 kinu executors jarvis
-```
-
-### kinu transcripts [agent]
-
-List terminal transcripts recorded for diagnostics (they cannot be reopened as chats).
-
-| Option | What it does |
-| --- | --- |
-| `--transcript-dir <dir>` | Where transcripts are stored |
-| `--path` | Show transcript file paths |
-| `--show <idOrPath>` | Show one transcript's file path |
-
-```bash
-kinu transcripts jarvis --path
 ```
 
 ### kinu stop <name>
@@ -595,6 +539,8 @@ Save everything about a workspace to one file: identity, messages, runs and thei
 | `--json` | Print the summary as JSON instead of text |
 | `--turn <id>` | Write one turn's requests, as the model received them, instead of the whole bundle |
 | `--actor <id>` | With --turn: a hosted actor's id (default: the workspace's main actor) |
+| `--transcripts` | List the terminal transcripts recorded for this workspace and their files, instead of the bundle |
+| `--transcript-dir <dir>` | With --transcripts: where they are stored |
 
 ```bash
 kinu debug jarvis -o jarvis.debug.jsonl
@@ -724,9 +670,8 @@ These apply to every command.
 ```bash
 kinu setup
 kinu provider connect chatgpt
-kinu create jarvis --mode cloud --alias jarvis
-jarvis "review this repo"
-kinu transcripts jarvis
+kinu create jarvis --mode cloud
+kinu run jarvis "review this repo"
 kinu daemon status
 kinu connect
 ```

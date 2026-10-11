@@ -181,7 +181,7 @@ describe('kinu debug — redaction', () => {
   test('the bundle scrubs every planted secret shape but keeps the surrounding rows', async () => {
     const home = scratch('kinu-debug-redact-');
     const out = scratch('kinu-debug-redact-out-');
-    writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {}, aliases: {} }));
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {} }));
     mkdirSync(join(home, 'invest'), { recursive: true });
     seedInvestigationWorkspace(join(home, 'invest', 'agent.db'));
 
@@ -208,7 +208,7 @@ describe('kinu debug — local backend', () => {
   test('assembles identity, runs, heads, mcts searches and background jobs into one bundle, and never leaks the planted secret', async () => {
     const home = scratch('kinu-debug-local-');
     const out = scratch('kinu-debug-local-out-');
-    writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {}, aliases: {} }));
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {} }));
     mkdirSync(join(home, 'invest'), { recursive: true });
     seedInvestigationWorkspace(join(home, 'invest', 'agent.db'));
 
@@ -295,7 +295,7 @@ describe('kinu debug — local backend', () => {
   test('--json prints the same investigation summary as machine-readable JSON', async () => {
     const home = scratch('kinu-debug-json-');
     const out = scratch('kinu-debug-json-out-');
-    writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {}, aliases: {} }));
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {} }));
     mkdirSync(join(home, 'invest'), { recursive: true });
     seedInvestigationWorkspace(join(home, 'invest', 'agent.db'));
 
@@ -391,7 +391,6 @@ describe('kinu debug — cloud backend', () => {
       origin: `http://127.0.0.1:${server.port}`,
       accessToken: 'ptc_stored_session',
       agents: { skywriter: { name: 'skywriter', mode: 'cloud', cloudName: 'skywriter', createdAt: '', updatedAt: '' } },
-      aliases: {},
     }));
 
     try {
@@ -456,7 +455,6 @@ describe('kinu debug --turn — one turn as the model received it', () => {
       origin: `http://127.0.0.1:${server.port}`,
       accessToken: 'ptc_stored_session',
       agents: { skywriter: { name: 'skywriter', mode: 'cloud', cloudName: 'skywriter', createdAt: '', updatedAt: '' } },
-      aliases: {},
     }));
 
     try {

@@ -51,9 +51,7 @@ describe('cross-process config read-modify-write', () => {
       const { updateConfigFile } = await import(${CONFIG_TS});
       for (let i = 0; i < 25; i++) {
         await updateConfigFile((config) => {
-          const aliases = config.aliases ?? {};
-          aliases.count = String(Number(aliases.count ?? '0') + 1);
-          config.aliases = aliases;
+          config.providerRevision = (config.providerRevision ?? 0) + 1;
         });
       }
     `;
@@ -68,11 +66,11 @@ describe('cross-process config read-modify-write', () => {
 
     const final = await runIn(home, `
       const { loadConfigFile } = await import(${CONFIG_TS});
-      console.log(JSON.stringify(loadConfigFile().aliases));
+      console.log(JSON.stringify(loadConfigFile().providerRevision));
     `);
 
     expect(final.code).toBe(0);
-    expect(JSON.parse(final.stdout)).toEqual({ count: '50' });
+    expect(JSON.parse(final.stdout)).toBe(50);
   });
 
   test('a throwing mutator changes nothing and releases the lock', async () => {

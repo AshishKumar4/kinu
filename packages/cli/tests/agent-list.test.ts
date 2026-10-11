@@ -97,7 +97,6 @@ describe('CLI cloud agent registry sync', () => {
           updatedAt: '2026-06-08T00:00:00.000Z',
         },
       },
-      aliases: { old: 'stale', local: 'localbot' },
     }, null, 2));
 
     const script = `
@@ -131,14 +130,12 @@ describe('CLI cloud agent registry sync', () => {
       }),
       config: v.object({
         agents: v.record(v.string(), v.object({ mode: v.string(), displayName: v.optional(v.string()) })),
-        aliases: v.optional(v.record(v.string(), v.string())),
       }),
     }), JSON.parse(proc.stdout));
 
     expect(parsed.config.agents.stale).toBeUndefined();
     expect(parsed.config.agents['web-agent']).toMatchObject({ mode: 'cloud', displayName: 'Web Agent' });
     expect(parsed.config.agents.localbot).toMatchObject({ mode: 'local', displayName: 'Local Bot' });
-    expect(parsed.config.aliases).toEqual({ local: 'localbot' });
     expect(parsed.result.agents.map((agent) => `${agent.name}:${agent.mode}`)).toContain('web-agent:cloud');
     expect(parsed.result.collisions).toEqual([]);
   });
@@ -164,7 +161,6 @@ describe('CLI cloud agent registry sync', () => {
           updatedAt: '2026-06-08T00:00:00.000Z',
         },
       },
-      aliases: { shop: 'shopbot' },
     }, null, 2));
 
     const script = `
@@ -205,7 +201,6 @@ describe('CLI cloud agent registry sync', () => {
           cwd: v.optional(v.string()),
           workspaceId: v.optional(v.string()),
         })),
-        aliases: v.optional(v.record(v.string(), v.string())),
       }),
       placed: v.array(v.looseObject({ name: v.string(), workspaceId: v.string() })),
     }), JSON.parse(proc.stdout));
@@ -218,7 +213,6 @@ describe('CLI cloud agent registry sync', () => {
     });
     // `placedRef` requires mode 'local'; a mode flip would drop it from the scheduler roster.
     expect(parsed.placed.map((ref) => `${ref.name}@${ref.workspaceId}`)).toEqual(['shopbot@shop-floor']);
-    expect(parsed.config.aliases).toEqual({ shop: 'shopbot' });
     expect(parsed.result.collisions).toEqual([{
       name: 'shopbot',
       localName: 'shopbot',
@@ -380,60 +374,5 @@ describe('the sidebar roster for one directory', () => {
       'shop:fixer+lead',
     ]);
     expect(parsed.grouped.remote.map((agent) => `${agent.mode}:${agent.name}`)).toEqual(['cloud:audit', 'cloud:jarvis']);
-  });
-});
-
-describe('the local roster is one function', () => {
-  test('transcripts with no agent lists the set list shows locally', async () => {
-    const home = scratchDir('roster-home');
-    const projectDir = realpathSync(scratchDir('roster-proj'));
-
-    for (const name of ['alpha', 'beta', 'gamma']) {
-      mkdirSync(join(home, name));
-      writeFileSync(join(home, name, 'agent.db'), '');
-    }
-
-    const stamp = '2026-06-08T00:00:00.000Z';
-
-    const placed = (name: string) => ({
-      name, mode: 'local', localName: name, cwd: projectDir, workspaceId: 'shop',
-      createdAt: stamp, updatedAt: stamp,
-    });
-
-    writeFileSync(join(home, 'config.json'), JSON.stringify({
-      agents: { alpha: placed('alpha'), beta: placed('beta') },
-      aliases: {},
-    }));
-
-    // Both commands must print the same set: both read listLocalAgentNames.
-    const script = `
-      const { listCommand } = await import('./packages/cli/src/commands/list.ts');
-      const { transcriptsCommand } = await import('./packages/cli/src/commands/transcripts.ts');
-      process.chdir(${JSON.stringify(projectDir)});
-      const lines = [];
-      console.log = (...args) => { lines.push(args.map(String).join(' ')); };
-      await listCommand();
-      const listed = [...lines];
-      lines.length = 0;
-      await transcriptsCommand(undefined, {});
-      process.stdout.write(JSON.stringify({ listed, transcripted: lines }) + '\\n');
-    `;
-
-    const proc = await runToExit([process.execPath, '-e', script], {
-      cwd: repoRoot,
-      env: { ...process.env, KINU_HOME: home, NO_COLOR: '1' },
-    });
-
-    expect(proc.exitCode).toBe(0);
-
-    const parsed = v.parse(v.object({
-      listed: v.array(v.string()),
-      transcripted: v.array(v.string()),
-    }), JSON.parse(proc.stdout));
-
-    const names = (lines: string[]) => ['alpha', 'beta', 'gamma'].filter((name) => lines.some((line) => line.includes(name)));
-    // gamma's database has no ref, so no folder: neither command lists it.
-    expect(names(parsed.listed)).toEqual(['alpha', 'beta']);
-    expect(names(parsed.transcripted)).toEqual(names(parsed.listed));
   });
 });

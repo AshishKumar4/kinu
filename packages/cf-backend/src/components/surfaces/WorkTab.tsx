@@ -44,7 +44,7 @@ type DecidedHere = "deferred_action" | "workspace_proposal";
 const PENDING_HOME = {
   scaffold_version: { surface: "Agent", cta: "decide in Agent → Evolution" },
   unseen_changes: { surface: null, cta: null },
-  curriculum_task: { surface: null, cta: "decide in Supervise" },
+  curriculum_task: { surface: null, cta: null },
   // The row is the deep link: it opens the plan's own page.
   plan_review: { surface: null, cta: "open the review" },
 } satisfies Record<Exclude<PendingActionKind, DecidedHere>, { surface: SurfaceKind | null; cta: string | null }>;

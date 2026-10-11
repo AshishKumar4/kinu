@@ -252,8 +252,8 @@ never delivers a dropped row twice.
 A recorded CLI transcript is a terminal log, not cloud chat state.
 `AgentClient.history()` returns the active client's renderable messages. Local
 clients project their JSONL record; cloud clients page the Durable Object
-history. `kinu transcripts` (`packages/cli/src/commands/transcripts.ts`) lists
-JSONL records as diagnostics, not conversations to reopen.
+history. `kinu debug <workspace> --transcripts` (`packages/cli/src/commands/debug.ts`)
+lists JSONL records as diagnostics, not conversations to reopen.
 
 ## Walk-back fork
 

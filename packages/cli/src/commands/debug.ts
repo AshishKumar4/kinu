@@ -22,6 +22,7 @@ import { requireAuthConfig } from '../config';
 import { callAgentRpc } from '../cloud-api';
 import { ACCENT, DIM, ERR, OK, printJson, WARN } from '../display';
 import { asRecord, numberField, parsePositiveInt, stringField } from '../options';
+import { listTranscripts } from '../session';
 import {
   getLocalAgentInfo, getLocalChangelog, getLocalChatHistory, getLocalFacts,
   getLocalScaffoldVersions, listLocalGepaRuns, listLocalHeads, listLocalJobs,
@@ -37,6 +38,8 @@ interface DebugOpts {
   limit?: string;
   turn?: string;
   actor?: string;
+  transcripts?: boolean;
+  transcriptDir?: string;
 }
 
 const TurnRequestRowSchema = v.object({
@@ -583,6 +586,12 @@ export function debugCommand(name: string, opts: DebugOpts = {}): Promise<void> 
   return settle(Effect.gen(function* () {
     const target = resolveAgentTarget(name);
 
+    if (opts.transcripts === true) {
+      printTranscripts(target.name, opts.transcriptDir);
+
+      return;
+    }
+
     const source = target.mode === 'cloud'
       ? cloudDebugSource(target.cloudName, requireAuthConfig())
       : localDebugSource(target.localName);
@@ -593,6 +602,22 @@ export function debugCommand(name: string, opts: DebugOpts = {}): Promise<void> 
       turnId: opts.turn, actor: opts.actor, outPath: opts.out ?? `${target.name}.turn-${opts.turn}.jsonl`, json: opts.json === true,
     });
   }));
+}
+
+/** The terminal runs recorded for this workspace, newest first: diagnostic artifacts, never chats to reopen. */
+function printTranscripts(name: string, transcriptDir: string | undefined): void {
+  const transcripts = listTranscripts(name, { transcriptDir });
+
+  if (transcripts.length === 0) {
+    console.log(DIM(`No terminal transcripts recorded for ${name}.`));
+
+    return;
+  }
+
+  for (const transcript of transcripts) {
+    const first = transcript.firstUserText ? ` ${DIM('-')} ${transcript.firstUserText.replace(/\s+/g, ' ')}` : '';
+    console.log(`${ACCENT(transcript.id)} ${DIM(`${transcript.entries} entries`)}${first} ${DIM(transcript.path)}`);
+  }
 }
 
 function writeDebugBundle(target: DebugTarget, source: DebugSource, opts: DebugOpts): Effect.Effect<void> {
