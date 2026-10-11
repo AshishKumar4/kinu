@@ -802,7 +802,7 @@ try {
       process.stdout.write(JSON.stringify({ event: 'abort', sha, label: loop.label, settledMs, idleShare: idle, cpuShareAfter: after, answer: answer.slice(-300) }) + '\n');
     }
   } else if (subject === 'node-identity') {
-    const answer = await shell(node("console.log(JSON.stringify({ version: process.version, navigator: { userAgent: navigator.userAgent, hardwareConcurrency: navigator.hardwareConcurrency, language: navigator.language, languages: navigator.languages, platform: navigator.platform } }))"));
+    const answer = await shell(node("console.log(JSON.stringify({ version: process.version, locale: Intl.DateTimeFormat().resolvedOptions().locale, navigator: { userAgent: navigator.userAgent, hardwareConcurrency: navigator.hardwareConcurrency, language: navigator.language, languages: navigator.languages, platform: navigator.platform } }))"));
 
     process.stdout.write(JSON.stringify({ event: 'node-identity', sha, answer }) + '\n');
   } else if (subject === 'tcp' || subject === 'starttls') {
@@ -859,7 +859,7 @@ try {
 
     // EBI's public read-only databases; the password is the published one, handed in by the run, not committed.
     const pg = (ssl: string) => [
-      `const { Client } = require('pg'); const c = new Client({ host: 'hh-pgsql-public.ebi.ac.uk', user: 'reader', password: ${JSON.stringify(process.env.PERF_PG_PASSWORD ?? '')}, database: 'pfmegrnargs', ${ssl} connectionTimeoutMillis: 15000 });`,
+      `const { Client } = require('pg'); const c = new Client({ host: ${JSON.stringify(process.env.PERF_PG_HOST ?? 'hh-pgsql-public.ebi.ac.uk')}, port: ${process.env.PERF_PG_PORT ?? '5432'}, user: ${JSON.stringify(process.env.PERF_PG_USER ?? 'reader')}, password: ${JSON.stringify(process.env.PERF_PG_PASSWORD ?? '')}, database: ${JSON.stringify(process.env.PERF_PG_DATABASE ?? 'pfmegrnargs')}, ${ssl} connectionTimeoutMillis: 15000 });`,
       "c.connect().then(() => c.query('select 1 as one')).then((r) => { console.log('pg ' + r.rows[0].one + ' encrypted=' + Boolean(c.connection.stream.encrypted)); return c.end(); }).catch((e) => console.log('pg error ' + (e.code ?? '') + ' ' + e.message));",
     ].join(' ');
 
@@ -868,8 +868,8 @@ try {
 
     for (const [label, ssl] of [['mysql2, ssl', 'ssl: {},'], ['mysql2, no ssl', '']] as const) {
       report(label, await withPackage('/home/main/perfio/tcp-mysql', 'mysql2@3', [
-        `const c = require('mysql2').createConnection({ host: 'mysql-rfam-public.ebi.ac.uk', port: 4497, user: 'rfamro', database: 'Rfam', ${ssl} connectTimeout: 15000 });`,
-        "c.query('select 1 as one', (e, rows) => { console.log(e ? 'mysql error ' + (e.code ?? '') + ' ' + e.message : 'mysql ' + rows[0].one + ' encrypted=' + Boolean(c.stream && c.stream.encrypted)); c.end(); });",
+        `const c = require('mysql2').createConnection({ host: ${JSON.stringify(process.env.PERF_MYSQL_HOST ?? 'mysql-rfam-public.ebi.ac.uk')}, port: ${process.env.PERF_MYSQL_PORT ?? '4497'}, user: ${JSON.stringify(process.env.PERF_MYSQL_USER ?? 'rfamro')}, password: ${JSON.stringify(process.env.PERF_MYSQL_PASSWORD ?? '')}, database: ${JSON.stringify(process.env.PERF_MYSQL_DATABASE ?? 'Rfam')}, ${ssl} connectTimeout: 15000 });`,
+        "c.query('select 1 as one', (e, rows) => { if (e) { console.log('mysql error ' + (e.code ?? '') + ' ' + e.message); c.end(); return; } c.query(\"SHOW SESSION STATUS LIKE 'Ssl_cipher'\", (failure, status) => { console.log(failure ? 'mysql error ' + failure.message : 'mysql ' + rows[0].one + ' encrypted=' + Boolean(status[0].Value)); c.end(); }); });",
       ].join(' ')), 'mysql 1 encrypted=' + String(ssl !== ''));
     }
 
