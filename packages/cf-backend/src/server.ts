@@ -10,7 +10,7 @@ import { tracing, WorkerEntrypoint } from 'cloudflare:workers';
 import { adoptTracing } from '@nimbus-sh/platform/tracing.js';
 import {
   containerEventResolver, GitHubEgressRecorder, handleContainerEgress, handleContainerEvent, handleEgressConnect, parseEgressParams,
-  type KinuEgressParams,
+  workspaceGrants, type KinuEgressParams,
 } from './egress/outbound';
 import { ORCHESTRATOR_AGENT_SLUG } from "@kinu.run/core";
 import { diagnostics, settle, toKinuError, type ErrorCode, type KinuError, settleLogged } from "@kinu.run/core/obs";
@@ -73,7 +73,7 @@ export class KinuEgress extends WorkerEntrypoint<Env, KinuEgressParams> {
   override fetch(request: Request): Promise<Response> {
     const params = parseEgressParams(this.ctx);
 
-    return handleContainerEgress(request, this.env, params, params && new GitHubEgressRecorder(this.env, this.ctx, params.workspaceName));
+    return handleContainerEgress(request, this.env, params, { grants: workspaceGrants(this.env), github: params && new GitHubEgressRecorder(this.env, this.ctx, params.workspaceName) });
   }
 
   /** A workspace program's socket, TCP or TLS (`handleEgressConnect`); the container opens none (`enableInternet = false`). */

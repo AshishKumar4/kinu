@@ -267,7 +267,9 @@ export const SCRIPT_EXPORTS = {
     fetch: async (request: Request): Promise<Response> => {
       const { handleContainerEgress, parseEgressParams } = await import('../../src/egress/outbound');
 
-      return await handleContainerEgress(request, NO_VAULT, parseEgressParams({ props }));
+      return await handleContainerEgress(request, NO_VAULT, parseEgressParams({ props }), {
+        grants: async () => { throw new Error('no suite over this host reads workspace grants through the egress'); },
+      });
     },
     connect: (): never => { throw new Error('no suite over this host opens a socket through the egress'); },
   }),

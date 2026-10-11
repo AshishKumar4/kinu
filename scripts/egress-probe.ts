@@ -11,11 +11,11 @@ const ENTRY = `
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { handleContainerEgress, handleEgressConnect } from './packages/cf-backend/src/egress/outbound.ts';
 
-const PARAMS = { workspaceName: 'probe', ownerUserId: 'probe-owner', bindings: [] };
+const PARAMS = { workspaceName: 'probe', ownerUserId: 'probe-owner' };
 const VAULT_DOWN = { UserDO: { idFromName: (name) => name, get: () => { throw new Error('no request here names a secret'); } }, CREDENTIAL_ENCRYPTION_KEY: 'egress-probe-credential-key-0123456789' };
 
 export class Egress extends WorkerEntrypoint {
-  fetch(request) { return handleContainerEgress(request, VAULT_DOWN, PARAMS); }
+  fetch(request) { return handleContainerEgress(request, VAULT_DOWN, PARAMS, { grants: async () => [] }); }
   connect(socket) { return handleEgressConnect(socket, PARAMS); }
 }
 

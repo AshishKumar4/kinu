@@ -198,7 +198,7 @@ import {
   jobRedriveResumeGate, resumableForkRoots,
   type CancelWorkOutcome, type RetryOutcome,
   getAlwaysActiveSkills, getEvolutionConfig, getProviderAccounts, getReasoningEffort,
-  getShellApprovalMode, getShellApprovalGrants, revokeShellApprovalGrants,
+  getShellApprovalMode, getShellApprovalGrants, revokeShellApprovalGrants, egressGrants,
   setAlwaysActiveSkills, setEvolutionConfig,
   setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
   type EvolutionConfigView,
@@ -534,17 +534,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /**
    * The workspace's egress: its commands' and programs' requests and sockets leave through Kinu's, as the sandbox's do,
-   * minted with this workspace's owner and its grants as it opens. Nothing is asked of the owner's vault here: the
-   * egress asks it for a request that names a placeholder. A workspace with no owner keeps the isolate's own network.
+   * minted with this workspace's owner as it opens. Nothing is asked of the vault or the grants here: the egress asks
+   * for both (`egressGrants`) for a request that names a placeholder. A workspace with no owner keeps the isolate's own
+   * network.
    */
   private workspaceEgress(): WorkspaceEgress | undefined {
     const ownerUserId = this.getOwnerUserId();
 
     if (ownerUserId === null) return undefined;
 
-    return this.ctx.exports.KinuEgress({ props: kinuEgressParams({
-      workspaceName: this.name, ownerUserId, grants: getShellApprovalGrants(this.config).grants,
-    }) });
+    return this.ctx.exports.KinuEgress({ props: kinuEgressParams({ workspaceName: this.name, ownerUserId }) });
   }
 
   private hostedWorkspace(): HostedWorkspace {
@@ -3266,6 +3265,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return new Map([...readAgentFigures(this.boundSql, [main]), ...reportedAgentFigures(this.boundSql, actorIds.filter((actorId) => actorId !== main))]);
       },
     });
+  }
+
+  /** The grants that let this workspace's egress spend a vault secret, as they stand. Never `@callable`. */
+  async egressGrants(): Promise<ApprovalGrant[]> {
+    return egressGrants(getShellApprovalGrants(this.config).grants);
   }
 
   /** The devbox egress cannot name the agent, so nobody's. Never `@callable`. */

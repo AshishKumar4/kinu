@@ -162,8 +162,8 @@ describe('a head forks its parent workspace', () => {
 
     if (!handle) throw new Error('a hosted head runtime rides the workspace container');
     await handle.exec('true');
-    // Grants, not bindings: the vault is read by the egress when a request names a placeholder.
-    expect(configuredEgress).toEqual([{ workspaceName: 'kinu-harness-parent', ownerUserId: expect.any(String), grants: [] }]);
+    // Neither grants nor bindings: the egress reads both when a request names a placeholder.
+    expect(configuredEgress).toEqual([{ workspaceName: 'kinu-harness-parent', ownerUserId: expect.any(String) }]);
   });
 
   /** Asserted as a pair: a refusal alone would also hold for a head with no file plane at all. */

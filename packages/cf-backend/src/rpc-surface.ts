@@ -290,6 +290,7 @@ const ORCHESTRATOR_METHODS = [
   'abortExecutorFileDownload',
   'abortExecutorFileWrite',
   'acceptContainerEvent',
+  'egressGrants',
   'recordGitHubEgress',
   // Never `@callable`.
   'admitBlueprint',

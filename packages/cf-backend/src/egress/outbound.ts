@@ -37,18 +37,12 @@ const CONTAINER_EVENT_PATH = '/v1/events';
 export interface KinuEgressParams {
   readonly workspaceName: string;
   readonly ownerUserId: string;
-  /** The workspace's egress-secret grants (`egressGrants`): the vault is read against them only when a request asks. */
-  readonly grants: readonly ApprovalGrant[];
 }
 
-/** Parsed although trusted: a container configured by an older build reads as unconfigured until it is configured again. */
+/** Parsed although trusted: a container configured by an older build may carry fields this one no longer reads. */
 const EgressParamsSchema = v.object({
   workspaceName: v.pipe(v.string(), v.minLength(1)),
   ownerUserId: v.pipe(v.string(), v.minLength(1)),
-  grants: v.array(v.object({
-    rule: v.pipe(v.string(), v.minLength(1)),
-    executor: v.pipe(v.string(), v.minLength(1)),
-  })),
 });
 
 /** Undefined when the container is not configured yet; both handlers then refuse. */
@@ -82,6 +76,15 @@ export interface ContainerEgressEnv<Id> extends OwnerCapabilityEnv {
  */
 export type ContainerEventResolver = (workspaceName: string) => Promise<ContainerEventClient>;
 
+/**
+ * The workspace's egress-secret grants as they stand (`OrchestratorAgent.egressGrants`): asked only for a request that
+ * names a placeholder, so a grant made after the egress was minted is spent without a restart.
+ */
+export type WorkspaceGrants = (workspaceName: string) => Promise<readonly ApprovalGrant[]>;
+
+export const workspaceGrants = (env: Env): WorkspaceGrants =>
+  async (workspaceName) => await (await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, workspaceName)).egressGrants();
+
 export const containerEventResolver = (env: Env): ContainerEventResolver =>
   async (workspaceName) => await getAgentByName<Env, OrchestratorAgent>(
     env.OrchestratorAgent, workspaceName,
@@ -104,12 +107,18 @@ export class GitHubEgressRecorder implements GitHubRecorder {
   }
 }
 
+/** What the egress reads of the workspace it serves: its grants, asked for a placeholder; its GitHub work, recorded. */
+export interface EgressWorkspace {
+  readonly grants: WorkspaceGrants;
+  readonly github?: GitHubRecorder | undefined;
+}
+
 /** Catch-all for every host except the event channel. Only a request that carries a placeholder pays for substitution. */
 export function handleContainerEgress<Id>(
   request: Request,
   env: ContainerEgressEnv<Id>,
   params: KinuEgressParams | undefined,
-  github?: GitHubRecorder,
+  workspace: EgressWorkspace,
 ): Promise<Response> {
   return settle(Effect.gen(function* () {
     if (!params) {
@@ -130,14 +139,14 @@ export function handleContainerEgress<Id>(
     };
 
     // A request that names no placeholder needs nothing of the vault, so it costs no round trip.
-    if (egressPlaceholdersIn(facts).size === 0) return yield* forwarded(request, url, [], github);
+    if (egressPlaceholdersIn(facts).size === 0) return yield* forwarded(request, url, [], workspace.github);
 
     // Use the stub, never copy it: `Object.assign` of a JSRPC stub yields `{}` (methods live behind a Proxy).
     const vault: EgressVaultClient = env.UserDO.get(env.UserDO.idFromName(params.ownerUserId));
 
-    // The vault reads its secrets against the grants as they stand, and plans: an unbound placeholder is refused there.
+    // The workspace's grants and the vault's secrets as they stand; the vault plans, so an unbound placeholder is refused there.
     const resolved = yield* Effect.matchCause(Effect.promise(async (): Promise<EgressInjectionResult> => vault.resolveEgressInjection(
-      await ownerCaller(env), facts, params.grants,
+      await ownerCaller(env), facts, await workspace.grants(params.workspaceName),
     )), {
       onSuccess: (answer) => ({ answer }),
       onFailure: (failed) => ({ refused: authorityFailure({ cause: Cause.squash(failed), host: url.hostname }) }),
@@ -147,7 +156,7 @@ export function handleContainerEgress<Id>(
 
     if (resolved.answer.kind === 'refuse') return refusal(resolved.answer.status, resolved.answer.reason);
 
-    return yield* forwarded(request, url, resolved.answer.substitutions, github);
+    return yield* forwarded(request, url, resolved.answer.substitutions, workspace.github);
   }));
 }
 

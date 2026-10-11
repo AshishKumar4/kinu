@@ -407,7 +407,6 @@ export function createCFRuntime(
         await sdk.configureEgress(kinuEgressParams({
           workspaceName: actor.workspaceName,
           ownerUserId: userId,
-          grants: actor.actor.config.getShellApprovalGrants(),
         }));
         // Unread, the box keeps its last default.
         const [accountSize] = await Promise.allSettled([ownerSandboxSize(env, actor)]);
