@@ -261,6 +261,19 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     expect(readFileSync(file, 'utf8')).toBe('after the update');
   });
 
+  test('a build that ships a daemon file this one never had lands it, and comes up on it', async () => {
+    // The new daemon requires a module the running build does not ship: the archive's own file list says what lands.
+    const daemon = `${DAEMON_FILES['pc-agent.js']}\nrequire('./added.js');\n// build ${NEW}\n`;
+    const served = hub({ served: NEW, archive: await daemonArchive({ ...DAEMON_FILES, 'pc-agent.js': daemon, 'added.js': 'module.exports = {};\n' }, NEW) });
+    const home = installedMachine(served.origin, OLD);
+    startPipedDaemon(home, await releaseSigningEnv());
+
+    await served.sockets.until((hellos) => hellos[1] !== undefined);
+    expect(present(served.sockets.items[1], 'the successor HELLO').hello).toMatchObject({ version: NEW });
+    expect(installed(home, 'added.js')).toBe('module.exports = {};\n');
+    expect(installed(home, 'pc-agent.version').trim()).toBe(NEW);
+  });
+
   test('THE TROJAN PROBE: a hub-chosen checksum with no Kinu signature downloads nothing', async () => {
     // SECURITY-devices C1: an unsigned frame naming a trojaned tarball is refused before any byte is fetched.
     const served = hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW), signing: 'none' });
