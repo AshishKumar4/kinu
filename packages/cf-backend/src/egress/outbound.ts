@@ -20,6 +20,7 @@ import {
   type ScrubReplacement,
 } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../orchestrator';
+import { carryTls, TLS_CARRIER_HOST } from './tls-carrier';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { OwnerCapabilityUnavailableError, ownerCaller, type OwnerCapabilityEnv, type UserCaller } from '@kinu.run/core';
 import type { EgressInjection, EgressInjectionResult } from '@kinu.run/core';
@@ -185,64 +186,53 @@ function socketDestination(address: string): { readonly hostname: string; readon
   return { hostname: address.slice(0, cut), port };
 }
 
-/** The suffix a workspace program's TLS socket names: the session is made here (`tlsDestination`). */
-const TLS_SOCKET_SUFFIX = '.tls.nimbus-egress.invalid';
-
-/**
- * Where a TLS socket asks to go: `<host>[.s.<servername>].tls.nimbus-egress.invalid:<port>`, each name as the hex of its
- * UTF-8 in labels of at most 62 characters (Kinu's Nimbus patch, NIMBUS-ASKS #37). Null for any other address.
- */
-function tlsDestination(address: string): { readonly hostname: string; readonly port: number; readonly servername: string } | null {
-  const plain = socketDestination(address);
-
-  if (plain === null || !plain.hostname.endsWith(TLS_SOCKET_SUFFIX)) return null;
-  const [host, sni, ...rest] = plain.hostname.slice(0, -TLS_SOCKET_SUFFIX.length).split('.s.');
-
-  const named = (labels: string | undefined): string | null => {
-    const hex = labels?.split('.').join('') ?? '';
-
-    if (hex.length === 0 || hex.length % 2 !== 0 || !/^[0-9a-f]+$/.test(hex)) return null;
-
-    return new TextDecoder().decode(Uint8Array.from(hex.match(/../g) ?? [], (pair) => Number.parseInt(pair, 16)));
-  };
-
-  const hostname = named(host);
-  const servername = sni === undefined ? hostname : named(sni);
-
-  return hostname === null || servername === null || rest.length > 0 ? null : { hostname, port: plain.port, servername };
-}
-
 /**
  * A workspace program's socket (its egress's `connect`): the destination judged as a request's host is, then the bytes
- * piped both ways. A TLS socket (`tlsDestination`) has its session made here, with Kinu's own trust, and its plaintext
- * carried; any other is carried as it is. Kinu reads none of it; a secret cannot be put into a stream it does not parse.
- * A refused or unnamed destination closes the socket before anything is sent.
+ * piped both ways. A TLS carrier (`TLS_CARRIER_HOST`) names its host in its request, and its session is made here, with
+ * Kinu's own trust (`carryTls`); any other is carried as it is. Kinu reads none of the plaintext; a secret cannot be put
+ * into a stream it does not parse. A refused or unnamed destination closes the socket before anything is sent.
  */
 export function handleEgressConnect(socket: Socket, params: KinuEgressParams | undefined): Promise<void> {
   return settle(Effect.gen(function* () {
     const opened = yield* attempt({ doing: 'reading where a workspace socket goes', otherwise: 'io' }, () => socket.opened);
     const address = opened.localAddress ?? '';
-    const tls = tlsDestination(address);
-    const destination = tls ?? socketDestination(address);
-    const refused = params === undefined || destination === null ? null : refusedHostname(destination.hostname);
+    const destination = socketDestination(address);
 
-    if (params === undefined || destination === null || refused !== null) {
-      const reason = refused?.error ?? (params === undefined ? 'egress is not configured for this workspace yet' : `the socket names no usable destination (${address})`);
+    const refusedHere = (host: string, reason: string) => {
+      diagnostics.failure('egress.socket_refused', new KinuError('denied', reason), { host, seam: 'workspace-connect' });
+    };
 
-      diagnostics.failure('egress.socket_refused', new KinuError('denied', reason), { host: destination?.hostname ?? address, seam: 'workspace-connect' });
+    if (params === undefined || destination === null) {
+      refusedHere(address, params === undefined ? 'egress is not configured for this workspace yet' : `the socket names no usable destination (${address})`);
 
       return yield* attempt({ doing: `refusing a socket to ${address}`, otherwise: 'io' }, () => socket.close());
     }
 
     const { connect } = yield* Effect.promise(() => import('cloudflare:sockets'));
-    const target = { hostname: destination.hostname, port: destination.port };
 
-    // A server named other than its host is checked by that name (workerd's own node:tls does the same).
-    const renamed = tls !== null && tls.servername !== tls.hostname;
+    if (destination.hostname === TLS_CARRIER_HOST) {
+      return yield* attempt({ doing: `carrying a TLS socket to port ${String(destination.port)}`, otherwise: 'io' }, () => carryTls(socket, {
+        port: destination.port,
+        refused: (host) => {
+          const refused = refusedHostname(host);
 
-    const upstream = renamed
-      ? connect(target, { allowHalfOpen: true, secureTransport: 'starttls' }).startTls({ expectedServerHostname: tls.servername })
-      : connect(target, { allowHalfOpen: true, secureTransport: tls === null ? 'off' : 'on' });
+          if (refused !== null) refusedHere(host, refused.error);
+
+          return refused?.error ?? null;
+        },
+        connect: (target) => connect(target, { allowHalfOpen: true, secureTransport: 'starttls' }),
+      }));
+    }
+
+    const refused = refusedHostname(destination.hostname);
+
+    if (refused !== null) {
+      refusedHere(destination.hostname, refused.error);
+
+      return yield* attempt({ doing: `refusing a socket to ${address}`, otherwise: 'io' }, () => socket.close());
+    }
+
+    const upstream = connect({ hostname: destination.hostname, port: destination.port }, { allowHalfOpen: true, secureTransport: 'off' });
 
     // The program's end of input is not passed on: closing a workerd socket's writable ended its readable too, so a
     // client that half-closed after its request got no answer (scripts/egress-probe.ts, 2026-10-10). The server's own

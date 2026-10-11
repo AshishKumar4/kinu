@@ -49,17 +49,38 @@ export default {
       const first = await reader.read();
       return first.done ? 'ended empty' : text(first.value).split('\\r\\n')[0];
     })().catch((error) => 'failed: ' + String(error)), 10000);
-    // A TLS socket as Nimbus's patched node:tls names it: the egress makes the session and carries plaintext.
-    const marked = (name) => [...new TextEncoder().encode(name)].map((b) => b.toString(16).padStart(2, '0')).join('').match(/.{1,62}/g).join('.') + '.tls.nimbus-egress.invalid';
-    out.tls = await within((async () => {
-      const socket = egress.connect(marked('example.com') + ':443', { allowHalfOpen: true });
+    // A TLS socket as Nimbus's patched node:tls opens it: a carrier whose request names the host, answered 1 once the
+    // egress has made the session (or 0 and why), then plaintext.
+    const tlsCarrier = async (host, servername, payload) => {
+      const name = new TextEncoder().encode(host);
+      const sni = new TextEncoder().encode(servername);
+      const socket = egress.connect('tls.nimbus-egress.invalid:443', { allowHalfOpen: true });
       const writer = socket.writable.getWriter();
-      await writer.write(new TextEncoder().encode(http));
       const reader = socket.readable.getReader();
-      const first = await reader.read();
+      await writer.write(Uint8Array.from([0x54, name.length >> 8, name.length & 255, ...name, sni.length >> 8, sni.length & 255, ...sni]));
+      let heard = new Uint8Array(0);
+      while (heard.length < 1) {
+        const next = await reader.read();
+        if (next.done) return 'ended unanswered';
+        heard = Uint8Array.from([...heard, ...next.value]);
+      }
+      if (heard[0] !== 1) {
+        while (heard.length < 3 || heard.length < 3 + ((heard[1] << 8) | heard[2])) {
+          const next = await reader.read();
+          if (next.done) break;
+          heard = Uint8Array.from([...heard, ...next.value]);
+        }
+        return 'refused: ' + text(heard.subarray(3));
+      }
+      await writer.write(new TextEncoder().encode(payload));
+      const rest = heard.subarray(1);
+      const first = rest.length > 0 ? { done: false, value: rest } : await reader.read();
       return first.done ? 'ended empty' : text(first.value).split('\\r\\n')[0];
-    })().catch((error) => 'failed: ' + String(error)), 10000);
-    out.tlsPrivate = await within(exchange(egress.connect(marked('192.168.1.1') + ':443', { allowHalfOpen: true }), 'x').then((answer) => 'bytes:' + answer.length, (error) => 'closed: ' + String(error)), 5000);
+    };
+    out.tls = await within(tlsCarrier('example.com', '', http).catch((error) => 'failed: ' + String(error)), 10000);
+    out.tlsLongHost = await within(tlsCarrier('a'.repeat(63) + '.' + 'b'.repeat(63) + '.' + 'c'.repeat(63) + '.example.com', '', http).catch((error) => 'failed: ' + String(error)), 10000);
+    out.tlsWrongName = await within(tlsCarrier('example.com', 'not-example.invalid', http).catch((error) => 'failed: ' + String(error)), 10000);
+    out.tlsPrivate = await within(tlsCarrier('192.168.1.1', '', 'x').catch((error) => 'failed: ' + String(error)), 5000);
     out.websocket = await within((async () => {
       const response = await egress.fetch('https://echo.websocket.org/', { headers: { upgrade: 'websocket' } });
       if (response.webSocket === null) return 'status ' + response.status;
