@@ -21,7 +21,7 @@ import {
 } from './helpers/actor-harness';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { socketConnection } from './helpers/bindings';
-import { chatCompletion, openingOf, stubAiBinding } from './helpers/platform-gateway';
+import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
 mockAgentsSdk();
 
@@ -73,6 +73,8 @@ const MAPPING = 'Map the failure surface.';
 
 const NOTING = 'Note what the ledger is missing.';
 
+const PLANNING = 'Plan the ledger repair.';
+
 describe("a workspace's tile on its owner's home", () => {
   test('lands though the owner was away, follows work, decisions and children, and drops a child torn down', async () => {
     const tiles = new AwaitedList<WorkspaceOverview>();
@@ -84,9 +86,19 @@ describe("a workspace's tile on its owner's home", () => {
     const scoutAnswer = Promise.withResolvers<void>();
     const addedAsked = Promise.withResolvers<void>();
     const addedAnswer = Promise.withResolvers<void>();
+    let planned = false;
 
     const gateway = stubAiBinding(async (run) => {
       const opening = openingOf(run);
+      const said = JSON.stringify(requestOf(run).messages);
+
+      // Its Plan turn submits the plan with its own tool, once, then says so: a later turn of the same chat, whose opening
+      // is still the first words.
+      if (said.includes(PLANNING) && !planned) {
+        planned = true;
+
+        return toolCallCompletion(run, { tool: 'submit_plan', args: { edits: [{ start: 1, content: '# Repair the ledger' }] } }, 'call_plan');
+      }
 
       if (opening.includes(MAPPING)) {
         scoutAsked.resolve();
@@ -185,8 +197,8 @@ describe("a workspace's tile on its owner's home", () => {
       addedAnswer.resolve();
       await until(() => last()?.activity === 'idle', "the added agent's answered turn is pushed");
 
-      // The added agent submits a plan into its own isolate, as its Plan turn's tool does: a decision the tile counts.
-      expect((await agent.harnessSubmitAgentPlan(added.subordinate.actorId, [{ start: 1, content: '# Repair the ledger' }])).ok).toBe(true);
+      // The added agent's Plan turn submits a plan into its own isolate: a decision the tile counts.
+      await addedWindow('send', PLANNING, crypto.randomUUID(), [], 'plan');
       await until(() => last()?.decisionsWaiting === 1, "the child's plan is pushed");
       await tab('dismissSubordinate', added.name, false);
       await until(() => last()?.decisionsWaiting === 0, 'the retired child takes its plan from the tile');
