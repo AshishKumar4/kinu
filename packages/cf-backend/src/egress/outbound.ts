@@ -209,28 +209,28 @@ export function handleEgressConnect(socket: Socket, params: KinuEgressParams | u
       return yield* attempt({ doing: `refusing a socket to ${address}`, otherwise: 'io' }, () => socket.close());
     }
 
+    const refused = destination.hostname === TLS_CARRIER_HOST ? null : refusedHostname(destination.hostname);
+
+    if (refused !== null) {
+      refusedHere(destination.hostname, refused.error);
+
+      return yield* attempt({ doing: `refusing a socket to ${address}`, otherwise: 'io' }, () => socket.close());
+    }
+
     const { connect } = yield* Effect.promise(() => import('cloudflare:sockets'));
 
     if (destination.hostname === TLS_CARRIER_HOST) {
       return yield* attempt({ doing: `carrying a TLS socket to port ${String(destination.port)}`, otherwise: 'io' }, () => carryTls(socket, {
         port: destination.port,
         refused: (host) => {
-          const refused = refusedHostname(host);
+          const judged = refusedHostname(host);
 
-          if (refused !== null) refusedHere(host, refused.error);
+          if (judged !== null) refusedHere(host, judged.error);
 
-          return refused?.error ?? null;
+          return judged?.error ?? null;
         },
         connect: (target) => connect(target, { allowHalfOpen: true, secureTransport: 'starttls' }),
       }));
-    }
-
-    const refused = refusedHostname(destination.hostname);
-
-    if (refused !== null) {
-      refusedHere(destination.hostname, refused.error);
-
-      return yield* attempt({ doing: `refusing a socket to ${address}`, otherwise: 'io' }, () => socket.close());
     }
 
     const upstream = connect({ hostname: destination.hostname, port: destination.port }, { allowHalfOpen: true, secureTransport: 'off' });
