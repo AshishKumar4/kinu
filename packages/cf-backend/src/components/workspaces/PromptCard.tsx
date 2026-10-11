@@ -1,4 +1,4 @@
-import type { FormEvent, ReactNode } from "react";
+import { useEffect, useRef, type FormEvent, type ReactNode } from "react";
 import { Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { composing } from "@/components/ui/form";
@@ -24,6 +24,13 @@ export function PromptCard({ id, label, placeholder, action, value, onChange, on
   attachments?: AttachmentsControl;
 }) {
   const { dragOver, handlers } = useFileDrop(attachments?.onAdd ?? NO_DROP);
+  const field = useRef<HTMLTextAreaElement>(null);
+
+  // Ready to type into as the page opens, unless the reader is already typing elsewhere, in a modal opened before the
+  // page arrived: `autoFocus` would take the focus from it mid-word.
+  useEffect(() => {
+    if (document.activeElement === null || document.activeElement === document.body) field.current?.focus();
+  }, []);
 
   const submit = (event?: FormEvent): void => {
     event?.preventDefault();
@@ -49,7 +56,7 @@ export function PromptCard({ id, label, placeholder, action, value, onChange, on
           }}
           placeholder={placeholder}
           rows={4}
-          autoFocus
+          ref={field}
           disabled={busy}
           className="block min-h-[128px] w-full resize-none bg-transparent pb-4 pt-3 p-t-composer p-text outline-none focus-visible:!outline-none placeholder:p-text-3 disabled:opacity-60"
         />
