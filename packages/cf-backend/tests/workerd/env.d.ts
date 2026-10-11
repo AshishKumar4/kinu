@@ -300,6 +300,7 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   slateBuild(input: { workspace: string; owner: string; phase: 'good' | 'broken' | 'served' | 'fixed' }): Promise<{ wrote: string | null; preview: string; serves: string | null; told: string[] }>;
   programOnWhiteboard(input: { workspace: string; owner: string; program: string }): Promise<string>;
   slateImport(input: { workspace: string; owner: string; word: string; first: boolean }): Promise<string>;
+  slateExports(input: { workspace: string; owner: string; entry: 'a.js' | 'b.js'; first: boolean }): Promise<string>;
   craftedToolUnderShare(input: { workspace: string; owner: string }): Promise<{ owner: string; reached: string[]; viewer: string }>;
   forgetActivation(workspace: string): Promise<void>;
   pendingNimbusTasks(workspace: string): Promise<{ tasks: Array<{ id: string; time: number }>; alarm: number | null }>;

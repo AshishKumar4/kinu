@@ -80,6 +80,14 @@ it('a slate is rebuilt when a file it imports from outside its own tree changes'
   expect(await subject.slateImport({ ...at, word: 'beta', first: false })).toBe('beta');
 });
 
+it('a slate is rebuilt when a package it imports switches the entry its package.json exports', async () => {
+  const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('exports'));
+  const at = { workspace: 'durability-exports', owner: 'durability-owner' };
+
+  expect(await subject.slateExports({ ...at, entry: 'a.js', first: true })).toBe('alpha');
+  expect(await subject.slateExports({ ...at, entry: 'b.js', first: false })).toBe('beta');
+});
+
 it('a removed slate’s URL is dead even when a new app claims its port', async () => {
   const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('removed'));
 

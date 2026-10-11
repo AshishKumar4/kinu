@@ -13,6 +13,15 @@ import { KinuError } from '../obs/error';
 import { settle } from '../obs/effect';
 import { slateAuthority } from './authority';
 
+/**
+ * A workspace path outside the slate's own tree a compile looked at: a file it read, or a path it found missing (a
+ * module or package it probed for), which a later creation under it can change.
+ */
+export interface SlateBuildInput {
+  readonly path: string;
+  readonly missing: boolean;
+}
+
 /** A compiled slate: each module's content digest, the client bundle and page shell when it has a browser surface. */
 export interface SlateImage {
   readonly modules: Readonly<Record<string, string>>;
@@ -20,11 +29,15 @@ export interface SlateImage {
   readonly shell?: string;
   /** The workspace files outside the slate's own tree the compiler read: a change to one is a change to the build. */
   readonly reads?: readonly string[];
+  /** What the compile looked at outside the slate's own tree. */
+  readonly inputs?: readonly SlateBuildInput[];
 }
 
 /** What a build that did not compile says: the compiler's own words, file and line among them. */
 export interface SlateBuildFailure {
   readonly failed: string;
+  /** What the compile looked at before it failed, a missing import among them. */
+  readonly inputs?: readonly SlateBuildInput[];
 }
 
 export function initSlateBuildTable(execRaw: RawSqlExec): void {

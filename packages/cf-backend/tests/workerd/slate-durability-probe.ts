@@ -452,6 +452,41 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     return called.ok ? v.parse(v.string(), called.value) : `refused: ${called.error}`;
   }
 
+  /**
+   * A slate whose class imports `wordpkg` through `/home/main/user.ts`: the package's package.json `exports` names
+   * `entry`, one of two files that each export a different word. Answers the word the running slate says.
+   */
+  async slateExports(input: { workspace: string; owner: string; entry: 'a.js' | 'b.js'; first: boolean }): Promise<string> {
+    const target = await this.workspaceTarget(input.workspace);
+    const pkg = '/home/main/node_modules/wordpkg';
+
+    const write = (path: string, text: string) => target.runProgram([
+      `const path = ${JSON.stringify(path)};`,
+      'if (await workspace.exists(path)) await workspace.readFile(path);',
+      `return await workspace.writeFile(path, ${JSON.stringify(text)});`,
+    ].join('\n'));
+
+    if (input.first) {
+      await this.claimWorkspace(target, input.workspace, input.owner);
+      await write(`${pkg}/a.js`, 'export const word = "alpha";\n');
+      await write(`${pkg}/b.js`, 'export const word = "beta";\n');
+      await write('/home/main/user.ts', 'export { word } from "wordpkg";\n');
+      await this.writeSlateFile(target, '/slates/exports/package.json', JSON.stringify({ main: 'server.ts', slate: { title: 'Exports' } }));
+      await this.writeSlateFile(target, '/slates/exports/server.ts', [
+        'import { SlateObject } from "kinu:slate";',
+        'import { word } from "/home/main/user.ts";',
+        'export class Slate extends SlateObject {',
+        '  async word() { return word; }',
+        '}',
+      ].join('\n'));
+    }
+
+    await write(`${pkg}/package.json`, JSON.stringify({ name: 'wordpkg', type: 'module', exports: `./${input.entry}` }));
+    const called = await workspaceOwner(this.env, input.workspace).slateAs(ROOT_SLATE_CALLER, { op: 'call', id: 'exports', method: 'word' });
+
+    return called.ok ? v.parse(v.string(), called.value) : `refused: ${called.error}`;
+  }
+
   async portReservations(workspace: string): Promise<DurabilityReservation[]> {
     return (await this.workspaceTarget(workspace)).portReservations();
   }
