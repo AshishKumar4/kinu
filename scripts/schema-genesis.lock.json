@@ -120,7 +120,8 @@
     "turn_id TEXT NOT NULL",
     "run_id TEXT NOT NULL",
     "ended_at INTEGER",
-    "facts_json TEXT"
+    "facts_json TEXT",
+    "cancelled_at INTEGER"
   ],
   "agent_data_tables@packages/core/src/tools/db-codemode.ts": [
     "name TEXT PRIMARY KEY",
@@ -730,6 +731,11 @@
     "breach_json TEXT NOT NULL",
     "PRIMARY KEY (actor_id, objective_id, floor_digest)"
   ],
+  "facet_runs@packages/cf-backend/src/agent-facet/agent-facet.ts": [
+    "id TEXT PRIMARY KEY",
+    "task_json TEXT NOT NULL",
+    "ended INTEGER NOT NULL DEFAULT 0"
+  ],
   "fibers@packages/core/src/identity/schema.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",
@@ -923,15 +929,6 @@
     "created_at INTEGER NOT NULL",
     "corroborated_at INTEGER",
     "PRIMARY KEY (actor_id, id)"
-  ],
-  "main_turn_facts@packages/core/src/orchestrator/main-turn-facts.ts": [
-    "actor_id TEXT NOT NULL",
-    "turn_id TEXT NOT NULL",
-    "continuity TEXT NOT NULL",
-    "evolution_enabled INTEGER NOT NULL",
-    "mission_labels_json TEXT NOT NULL",
-    "branches_json TEXT NOT NULL",
-    "PRIMARY KEY (actor_id, turn_id)"
   ],
   "mcts_search_runs@packages/core/src/mcts/search-store.ts": [
     "actor_id TEXT NOT NULL",
@@ -1348,6 +1345,7 @@
     "normalized_call_id TEXT NOT NULL",
     "call_digest TEXT NOT NULL",
     "result_json TEXT",
+    "status TEXT NOT NULL DEFAULT 'started' CHECK (status IN ('started', 'settled', 'indeterminate'))",
     "PRIMARY KEY (actor_id, turn_id, normalized_call_id, call_digest)"
   ],
   "tool_lessons@packages/core/src/evolution/struggles.ts": [
