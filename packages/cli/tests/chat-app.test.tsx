@@ -175,14 +175,14 @@ describe('ChatApp terminal interaction', () => {
     expect(localScreen.frame()).toContain('/rename');
     localScreen.mockInput.pressEscape();
     await localScreen.waitFor('the command palette to close', localScreen.composerFocused);
-    await localScreen.mockInput.typeText('/settings');
+    await flushSync(() => localScreen.mockInput.typeText('/settings'));
     const composer = localScreen.renderer.currentFocusedRenderable;
 
     if (!(composer instanceof TextareaRenderable)) throw new Error('composer not focused');
     expect(composer.plainText).toBe('/settings');
-    localScreen.mockInput.pressEnter();
+    flushSync(() => localScreen.mockInput.pressEnter());
     await localScreen.waitFor('interactive settings', localScreen.filterFocused);
-    await localScreen.mockInput.typeText('low');
+    await flushSync(() => localScreen.mockInput.typeText('low'));
     await localScreen.renderOnce();
     const filter = localScreen.renderer.currentFocusedRenderable;
 
