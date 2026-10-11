@@ -45,21 +45,26 @@ export class AgentMemory extends RpcTarget implements Memory {
   async tail(path: string, bytes: number) { return await (await this.open()).tail(path, bytes); }
 }
 
+/** What a turn-bound call does: runs something of the turn, or settles what it did. */
+export type TurnCall = 'executes' | 'settles';
+
 export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswers {
   /**
    * `closed` aborts as the workspace is deleted: every call still open is refused then, so its relay hears an end.
    * `fenced` answers whether a call bound to a turn is the agent's current one: a turn a later opening superseded, or a
    * Stop cancelled, is refused before anything runs (design v2 §3).
    */
-  constructor(private readonly answers: AgentWorkspaceAnswers, private readonly closed: AbortSignal, private readonly fenced: (turnId: string) => boolean = () => true) {
+  constructor(private readonly answers: AgentWorkspaceAnswers, private readonly closed: AbortSignal, private readonly fenced: (turnId: string, call: TurnCall) => boolean = () => true) {
     super();
   }
 
-  private open<T>(answer: () => T | Promise<T>, turnId?: string): Promise<T> {
+  /** `call`: what a turn-bound call does. One that executes is refused for a turn a Stop cut off; one that settles what the
+   *  turn already did (its answer, its trace, its charges) is not, so the stopped turn closes. */
+  private open<T>(answer: () => T | Promise<T>, turnId?: string, call: TurnCall = 'settles'): Promise<T> {
     const refused = Promise.withResolvers<never>();
     const refuse = (): void => { refused.reject(this.closed.reason); };
 
-    if (turnId !== undefined && !this.fenced(turnId)) {
+    if (turnId !== undefined && !this.fenced(turnId, call)) {
       refused.reject(new KinuError('cancelled', `stale_epoch: turn ${turnId} is no longer this agent's current turn.`));
 
       return refused.promise;
@@ -74,19 +79,19 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   session() { return this.open(() => this.answers.session()); }
   stateSession() { return this.open(() => this.answers.stateSession()); }
   memory() { return this.answers.memory(); }
-  program(turnId: string, ...args: Parameters<Executor['execute']>) { return this.open(() => this.answers.program(turnId, ...args), turnId); }
+  program(turnId: string, ...args: Parameters<Executor['execute']>) { return this.open(() => this.answers.program(turnId, ...args), turnId, 'executes'); }
   traceTurn(turnId: string, event: AgentTrace) { return this.open(() => this.answers.traceTurn(turnId, event), turnId); }
   traceStream(turnId: string, lines: ReadableStream<Uint8Array>) { return this.open(() => this.answers.traceStream(turnId, lines), turnId); }
-  resume(turnId: string) { return this.open(() => this.answers.resume(turnId), turnId); }
-  guard(turnId: string, ...args: Parameters<MissionBudgetPort['guard']>) { return this.open(() => this.answers.guard(turnId, ...args), turnId); }
+  resume(turnId: string) { return this.open(() => this.answers.resume(turnId), turnId, 'executes'); }
+  guard(turnId: string, ...args: Parameters<MissionBudgetPort['guard']>) { return this.open(() => this.answers.guard(turnId, ...args), turnId, 'executes'); }
   debit(turnId: string, ...args: Parameters<MissionBudgetPort['debit']>) { return this.open(() => this.answers.debit(turnId, ...args), turnId); }
-  prepareTurn(turnId: string) { return this.open(() => this.answers.prepareTurn(turnId), turnId); }
+  prepareTurn(turnId: string) { return this.open(() => this.answers.prepareTurn(turnId), turnId, 'executes'); }
   advise(review: AgentReview) { return this.open(() => this.answers.advise(review)); }
   runEnded(id: string, outcome: AgentRunOutcome) { return this.open(() => this.answers.runEnded(id, outcome)); }
   enqueueTurn(input: ProgrammaticTurn) { return this.open(() => this.answers.enqueueTurn(input)); }
-  executeTool(call: AgentToolCall) { return this.open(() => this.answers.executeTool(call), call.turnId); }
+  executeTool(call: AgentToolCall) { return this.open(() => this.answers.executeTool(call), call.turnId, 'executes'); }
   observe(lines: ReadableStream<Uint8Array>) { return this.open(() => this.answers.observe(lines)); }
-  paceStep(turnId: string) { return this.open(() => this.answers.paceStep(turnId), turnId); }
+  paceStep(turnId: string) { return this.open(() => this.answers.paceStep(turnId), turnId, 'executes'); }
   answerMetadata(turnId: string, narration: readonly string[] | null) { return this.open(() => this.answers.answerMetadata(turnId, narration), turnId); }
   reportModelCall(report: ModelCallReport) { return this.open(() => this.answers.reportModelCall(report)); }
   reportModelOperation(event: ModelOperationEvent) { return this.open(() => this.answers.reportModelOperation(event)); }

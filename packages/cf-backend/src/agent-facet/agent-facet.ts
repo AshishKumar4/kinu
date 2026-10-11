@@ -8,7 +8,7 @@ import { attempt, attemptInItsWords, diagnostics, flight, hold, KinuError, rende
 import {
   encodeModelMessageValues, jsonResultOrVoid, readAgentArchivePage,
   type InspectedWork,
-  type AgentOwnInspection, type AnsweredEvolutionHelper, type JsonValue, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage,
+  type AgentOwnInspection, type JsonValue, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage,
   type NimbusSandboxHandle, type PositionPageRequest, type ProviderEnv, type SerializedMessage, type SubordinateInspectionResult,
   servedContextTree, type ContextEditor, type ContextTreeRemote, type SpendLedger, type StepSpendSource, type TurnRequestIndex, type TurnRequestPage, type ConversationSearchHit, type ConversationScrollResult, type ConversationSummary,
   type SendState, DeliverySchema, WorkModeSchema, type Delivery, type DeliveryAnswer,
@@ -163,7 +163,6 @@ export interface AgentFacetCalls {
   interrupt(snapshot: AgentSnapshot, turnId: string): Promise<void>;
   recover(snapshot: AgentSnapshot): Promise<AgentRecovery>;
   archivePage(snapshot: AgentSnapshot, cursor: ArchiveSqlCursor | null, maxBytes: number): Promise<ArchiveAgentPage>;
-  deliverAdvice(snapshot: AgentSnapshot, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean>;
   /** Its plan reviews, in its own store: submitted by its turn, under that turn's author-stamped metadata, and reviewed by
    *  the owner through its window. */
   submitPlan(snapshot: AgentSnapshot, edits: readonly PlanEdit[], driving: JsonObject | undefined): Promise<PlanReviewResult>;
@@ -592,9 +591,6 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return await this.open(snapshot).recover();
   }
 
-  async deliverAdvice(snapshot: AgentSnapshot, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean> {
-    return await (await this.open(snapshot).acquire()).session.sayAdvisorAnswer(helper, turnId);
-  }
 }
 
 const FacetRunRowSchema = v.object({ id: v.string(), task_json: v.string() });

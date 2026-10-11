@@ -143,6 +143,5 @@ export function agentCallsThrough(through: <A>(call: (isolate: AgentFacetCalls) 
     interrupt: (...args) => settle(through((isolate) => isolate.interrupt(...args))),
     recover: (...args) => settle(through((isolate) => isolate.recover(...args))),
     archivePage: (...args) => settle(through((isolate) => isolate.archivePage(...args))),
-    deliverAdvice: (...args) => settle(through((isolate) => isolate.deliverAdvice(...args))),
   };
 }

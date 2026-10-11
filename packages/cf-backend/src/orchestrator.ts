@@ -979,7 +979,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         // Its hirer hears it as a delivery of its own, whichever agent hired it.
         return await this.agentDeliveries(parentActorId).signals.send(signal);
       },
-    }, this.deleting.signal, (turnId) => this.agentTurns.fenceHolds(actorId, turnId));
+    }, this.deleting.signal, (turnId, call) => this.agentTurns.fenceHolds(actorId, turnId, call));
   }
 
   private agentBound(actorId: string): BoundActor {
@@ -1366,6 +1366,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // A fresh turn opens its accounting here, where its tools run; a turn read again after a restart keeps it.
       if (turn.opening !== undefined) turn.actor.session.orchestrator.beginTurn(Date.now(), driving);
       const part = scope.surface === 'program' ? await this.programTurnSurface(turn, surface, lanes) : await this.confinedTurnSurface(turn, reach);
+
+      // The confined surface reads nothing of its own: the profile its isolate resolved is its operation, until it binds.
+      if (scope.surface === 'confined') surface.resolved(turn.profile.profile, turn.profile.inputs);
       const run = { taskPlan: turn.taskPlan, surface, sql: turn.runtime.storage.sql };
 
       return { ...part, tools: this.turnTools(part.tools, run), raw: this.turnTools(part.raw, run), surface };
@@ -4016,7 +4019,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (record === null || record.retiringAt !== null || record.deletedAt !== null) return true;
     const { session } = await this.actorHost().acquire(actorReferenceOf(record), { kind: 'actor' });
 
-    return await session.deliverAdvisorAnswers(async (helper, turnId) => await (await this.agentCalls(actorId)).deliverAdvice(this.agentSnapshot(actorId), helper, turnId));
+    // Judged and recorded here, by the engine whose lane hired the advisor; said to the agent as a delivery of its own.
+    return await session.deliverAdvisorAnswers();
   }
 
   async _kinuTimerTick(): Promise<void> {
@@ -4882,7 +4886,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * still reach this object (a settled turn's effects read the registry with the workspace's capability), and only then
    * is every call revoked.
    */
-  private async quietAgents(): Promise<void> {
+  private quietAgents(): Promise<void> {
+    // One quiet, joined by every caller: a deletion's and its destroy's.
+    this.quieting ??= this.quietAgentsOnce();
+
+    return this.quieting;
+  }
+
+  private quieting: Promise<void> | null = null;
+
+  private async quietAgentsOnce(): Promise<void> {
     if (!this.admitting.signal.aborted) this.admitting.abort(new KinuError('missing', 'This workspace is being deleted.'));
 
     this.ctx.storage.transactionSync(() => {

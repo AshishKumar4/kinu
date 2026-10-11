@@ -8,6 +8,7 @@ import {
   type ActorReference, type DynamicContext, type ModelPricing, type ResolvedTurnProfile, type TierId, type WorkMode,
   type HeadInput, type RunInference, type HeadReport, type SqlExecutor, type MissionBudgetPort, type MissionGovernor, type Executor, readMissionLabels,
 } from '@kinu.run/core';
+import type { TurnCall } from './agent-facets';
 import { prepareHostedTurn, type HostedActorSeams, type HostedTurnRequest, type PreparedHostedTurn } from './hosted-actors';
 import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentToolDescriptor, AgentTrace, AgentTurnEnd, Fact, JsonObject, PreparedAgentTurn, StoredRow, TaskPlan, OpenedAt, TurnFacts, TurnOpening } from '@kinu.run/core';
 
@@ -124,8 +125,9 @@ export class AgentTurns {
    * superseded, or a Stop cancelled, is stale. A run (a head's) carries no opening and is not fenced here; a turn a
    * restarted workspace never opened is refused where it is looked up.
    */
-  fenceHolds(actorId: string, turnId: string): boolean {
-    if (this.cancelledTurns.has(turnId)) return false;
+  fenceHolds(actorId: string, turnId: string, call: TurnCall): boolean {
+    // A stopped turn closes: only what would run more of it is refused.
+    if (call === 'executes' && this.cancelledTurns.has(turnId)) return false;
     const fenced = this.open.get(turnId)?.fenced;
     const newest = this.newestOpening.get(actorId);
 

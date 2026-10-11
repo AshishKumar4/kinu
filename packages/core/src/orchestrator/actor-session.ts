@@ -434,13 +434,6 @@ export class ActorSession {
     return this.sayAdvice(note, turnId).then((said) => { if (said) port.forget(name); });
   }
 
-  /** The answer judged and, if it speaks, said here; true once nothing of it is owed. */
-  async sayAdvisorAnswer(helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean> {
-    const judged = helper.status === 'completed' ? this.judgedAdvice(helper.answer, turnId) : null;
-
-    return judged === null || !judged.spoken || await this.sayAdvice(judged.note, turnId);
-  }
-
   sayAdvice(note: AdvisorNote, turnId: string): Promise<boolean> {
     return settle(attempt({ doing: `saying the advisor's note on turn ${turnId}`, otherwise: 'unavailable' }, async () => {
       const sent = await sayAdvisorNote(note, {
