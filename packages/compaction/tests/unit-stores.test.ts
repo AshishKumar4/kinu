@@ -172,7 +172,7 @@ describe('createCompactionStateStore', () => {
     await store.plans.save('s1', snapshot('s1'));
     await store.plans.save('s1', null);
     expect(store.plans.load('s1')).toBeNull();
-    expect(store.loadPromptTokens('s1', 30)).toBe(12_345);
+    expect(store.takeTrigger('s1', 30).providerReportedTokens).toBe(12_345);
   });
 
   test('prompt-token updates never clobber the stored plan', async () => {
@@ -182,18 +182,18 @@ describe('createCompactionStateStore', () => {
     store.savePromptTokens('s1', 9_000, 30);
     store.savePromptTokens('s1', 11_000, 33);
     expect(store.plans.load('s1')).toEqual(snap);
-    expect(store.loadPromptTokens('s1', 33)).toBe(11_000);
+    expect(store.takeTrigger('s1', 33).providerReportedTokens).toBe(11_000);
   });
 
   test('a shrunken history voids the measurement; regrowth past it revalidates', () => {
     const { store } = stateRig();
     store.savePromptTokens('s1', 200_000, 120);
-    expect(store.loadPromptTokens('s1', 121)).toBe(200_000); // grew — valid
-    expect(store.loadPromptTokens('s1', 120)).toBe(200_000); // exact — valid
+    expect(store.takeTrigger('s1', 121).providerReportedTokens).toBe(200_000); // grew — valid
+    expect(store.takeTrigger('s1', 120).providerReportedTokens).toBe(200_000); // exact — valid
     // Shorter history: the measured one was rewritten (undo / restart truncation).
-    expect(store.loadPromptTokens('s1', 41)).toBeNull();
+    expect(store.takeTrigger('s1', 41)).toEqual({ trigger: 'auto' });
     store.savePromptTokens('s1', 3_000, 41);
-    expect(store.loadPromptTokens('s1', 41)).toBe(3_000);
+    expect(store.takeTrigger('s1', 41).providerReportedTokens).toBe(3_000);
   });
 
   test('sessions are isolated and invalid token values are ignored', () => {
@@ -201,10 +201,11 @@ describe('createCompactionStateStore', () => {
     store.savePromptTokens('s1', 100, 10);
     store.savePromptTokens('s2', 0, 10);
     store.savePromptTokens('s3', Number.NaN, 10);
-    expect(store.loadPromptTokens('s1', 10)).toBe(100);
-    expect(store.loadPromptTokens('s2', 10)).toBeNull();
-    expect(store.loadPromptTokens('s3', 10)).toBeNull();
-    expect(store.loadPromptTokens('missing', 10)).toBeNull();
+    expect(store.takeTrigger('s1', 10).providerReportedTokens).toBe(100);
+    // No measurement is an absent field, never a zero one.
+    expect(store.takeTrigger('s2', 10)).toEqual({ trigger: 'auto' });
+    expect(store.takeTrigger('s3', 10)).toEqual({ trigger: 'auto' });
+    expect(store.takeTrigger('missing', 10)).toEqual({ trigger: 'auto' });
   });
 
   // A non-JSON plan_json is corruption, not an absent plan; null would silently re-plan forever.
@@ -217,11 +218,11 @@ describe('createCompactionStateStore', () => {
 
   test('an armed compaction is consumed exactly once, in its own session (never loops)', () => {
     const { store } = stateRig();
-    expect(store.takeArmedCompaction('s1')).toBe(false);
+    expect(store.takeTrigger('s1', 0).trigger).toBe('auto');
     store.armCompaction('s1');
-    expect(store.takeArmedCompaction('s2')).toBe(false);
-    expect(store.takeArmedCompaction('s1')).toBe(true);
-    expect(store.takeArmedCompaction('s1')).toBe(false);
+    expect(store.takeTrigger('s2', 0).trigger).toBe('auto');
+    expect(store.takeTrigger('s1', 0).trigger).toBe('force');
+    expect(store.takeTrigger('s1', 0).trigger).toBe('auto');
   });
 
   test('arming force-compaction never clobbers the plan or the token signal', async () => {
@@ -231,10 +232,9 @@ describe('createCompactionStateStore', () => {
     store.savePromptTokens('s1', 9_000, 30);
     store.armCompaction('s1');
     expect(store.plans.load('s1')).toEqual(snap);
-    expect(store.loadPromptTokens('s1', 30)).toBe(9_000);
-    expect(store.takeArmedCompaction('s1')).toBe(true);
+    expect(store.takeTrigger('s1', 30)).toEqual({ trigger: 'force', providerReportedTokens: 9_000 });
     expect(store.plans.load('s1')).toEqual(snap);
-    expect(store.loadPromptTokens('s1', 30)).toBe(9_000);
+    expect(store.takeTrigger('s1', 30)).toEqual({ trigger: 'auto', providerReportedTokens: 9_000 });
   });
 
 });

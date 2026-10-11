@@ -37,7 +37,7 @@ import { callableToolNames, toolsForInvocation } from '../execution/work-mode';
 import type { WorkMode } from '../types/turn';
 import type { ActorExecutionInput } from './actor-session';
 import type { ModelCatalogSession } from './model-catalog';
-import { measureCompactionTrigger, type CompactionTriggerReader } from './turn-context';
+import type { CompactionTriggerReader } from './turn-context';
 import { activatedSkillsBlock, filterToolSetBySkills, resolveTurnSkills, splitTurnSkills, type TurnSkillSurface, type TurnSkillsConfig } from './turn-surface';
 
 export interface TurnModelSources {
@@ -288,7 +288,7 @@ function routedChat(models: TurnModelSources, spec: string, profile: ResolvedTur
 export function withCompactionTrigger(
   execution: Omit<ActorExecutionInput, 'task'>, state: CompactionTriggerReader, key: string, historyLength: number,
 ): Omit<ActorExecutionInput, 'task'> {
-  const measured = measureCompactionTrigger(state, key, historyLength);
+  const measured = state.takeTrigger(key, historyLength);
 
   return {
     ...execution,

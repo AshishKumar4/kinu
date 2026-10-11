@@ -67,12 +67,12 @@ export function fixtureCompaction(key = 'fixture-run'): HeadInferenceDeps['compa
   return {
     key,
     state: {
-      loadPromptTokens: (sessionKey, historyLength) => {
+      takeTrigger: (sessionKey, historyLength) => {
         const saved = tokens.get(sessionKey);
+        const trigger = armed.delete(sessionKey) ? 'force' : 'auto';
 
-        return saved !== undefined && saved.historyLength === historyLength ? saved.tokens : null;
+        return saved !== undefined && saved.historyLength === historyLength ? { trigger, providerReportedTokens: saved.tokens } : { trigger };
       },
-      takeArmedCompaction: (sessionKey) => armed.delete(sessionKey),
       savePromptTokens: (sessionKey, saved, historyLength) => { tokens.set(sessionKey, { tokens: saved, historyLength }); },
       armCompaction: (sessionKey) => { armed.add(sessionKey); },
     },

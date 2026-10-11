@@ -4,7 +4,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import { Database } from 'bun:sqlite';
-import { assembleTurnMessages, measureCompactionTrigger } from '../src/orchestrator/turn-context';
+import { assembleTurnMessages } from '../src/orchestrator/turn-context';
 import { ExtensionHost } from '../src/extension';
 import { createMemoryVFS } from './helpers';
 import type { MediaModality } from '../src/prompting/attachment-sanitizer';
@@ -141,54 +141,5 @@ describe('assembleTurnMessages', () => {
     // The transform saw the sanitized message, not the raw PDF part.
     expect(JSON.stringify(transformSaw)).not.toContain('base64,AAAA');
     expect(JSON.stringify(out)).not.toContain('base64,AAAA');
-  });
-});
-
-// The trigger fields of that same input, measured from the durable store.
-describe('measureCompactionTrigger', () => {
-  function reader(tokens: number | null, armed: boolean) {
-    const asked: Array<{ key: string; length: number }> = [];
-    let flag = armed;
-
-    return {
-      asked,
-      takes: 0,
-      loadPromptTokens(key: string, length: number): number | null {
-        asked.push({ key, length });
-
-        return tokens;
-      },
-      takeArmedCompaction(): boolean {
-        this.takes += 1;
-        const was = flag;
-        flag = false;
-
-        return was;
-      },
-    };
-  }
-
-  test('a measured size rides as a present field; the durable length is the bound', () => {
-    const state = reader(1234, false);
-    expect(measureCompactionTrigger(state, 'session-a', 42))
-      .toEqual({ trigger: 'auto', providerReportedTokens: 1234 });
-    expect(state.asked).toEqual([{ key: 'session-a', length: 42 }]);
-  });
-
-  test('no measurement is an ABSENT field, never a zero one', () => {
-    const measured = measureCompactionTrigger(reader(null, false), 'k', 7);
-    expect('providerReportedTokens' in measured).toBe(false);
-    expect(measured.trigger).toBe('auto');
-  });
-
-  test('a provider-reported zero is a measurement and survives as one', () => {
-    expect(measureCompactionTrigger(reader(0, false), 'k', 7).providerReportedTokens).toBe(0);
-  });
-
-  test('an armed rebuild is consumed exactly once per assembly, so it cannot loop', () => {
-    const state = reader(null, true);
-    expect(measureCompactionTrigger(state, 'k', 7).trigger).toBe('force');
-    expect(measureCompactionTrigger(state, 'k', 7).trigger).toBe('auto');
-    expect(state.takes).toBe(2);
   });
 });

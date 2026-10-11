@@ -79,31 +79,17 @@ function refuseOversizedRequest(tokens: number, limit: number): KinuError {
 
 /** Structural: the concrete store lives in @kinu.run/compaction, which depends on core. */
 export interface CompactionTriggerReader {
-  loadPromptTokens(sessionKey: string, historyLength: number): number | null;
-  takeArmedCompaction(sessionKey: string): boolean;
+  /**
+   * The trigger one assembly takes over `historyLength` durable messages, measured without runtime context. Taking it
+   * consumes a force arm, so it runs exactly once per assembly and a rebuild cannot loop. A measurement taken against a
+   * longer history is absent: history is append-only, so shorter means rewritten.
+   */
+  takeTrigger(sessionKey: string, historyLength: number): MeasuredCompactionTrigger;
 }
 
 export interface MeasuredCompactionTrigger {
   providerReportedTokens?: number;
   trigger: CompactionTrigger;
-}
-
-/** `durableLength` is measured without runtime context. `takeArmedCompaction` consumes the arm, so it runs
- *  exactly once per assembly. */
-export function measureCompactionTrigger(
-  state: CompactionTriggerReader,
-  sessionKey: string,
-  durableLength: number,
-): MeasuredCompactionTrigger {
-  const lastPromptTokens = state.loadPromptTokens(sessionKey, durableLength);
-
-  const measured: MeasuredCompactionTrigger = {
-    trigger: state.takeArmedCompaction(sessionKey) ? 'force' : 'auto',
-  };
-
-  if (lastPromptTokens !== null) measured.providerReportedTokens = lastPromptTokens;
-
-  return measured;
 }
 
 export function assembleTurnMessages(input: TurnContextInput): Promise<AssembledTurn> {
