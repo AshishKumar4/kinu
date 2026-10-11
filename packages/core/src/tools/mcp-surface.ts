@@ -11,7 +11,7 @@ import { KinuError, settle } from '../obs/index';
 import { permitInPlan } from '../execution/work-mode';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { withClampedToolResults, type ClampToolResultOptions } from './clamp';
-import { withEffectClaims, type EffectClaimDeps } from './effect-claim';
+import { withEffectReceipt, type EffectClaimDeps } from './effect-claim';
 import { mcpToolKey, suffixedMcpToolKey } from './mcp-naming';
 import { quoteUntrusted } from '../safety/untrusted-text';
 import { sha256Hex } from '../safety/argument-digest';
@@ -411,7 +411,7 @@ export function buildMcpToolSet(
 
   // Claim outermost (as in `buildActorTools`). No turn budget: only a program reads these, and what it hands the model
   // is charged as `eval`'s own.
-  return withEffectClaims(
+  return withEffectReceipt(
     withClampedToolResults(tools, { files: build.spill, producer: 'external_tool', maxChars: PROGRAM_RESULT_MAX_CHARS }),
     build.effectClaims,
     { safe: readOnly },

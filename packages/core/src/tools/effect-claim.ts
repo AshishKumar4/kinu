@@ -1,6 +1,9 @@
 /**
- * Tool-effect claims: a once-only row written before an externally visible effect and settled after it,
- * so a reset between effect and `tool_call_end` never replays the effect. Per-tool policy: tools/registry.ts (`replay`).
+ * One effect receipt (design v2 §4): a once-only row `(actor, canonical turn, normalized call, digest)` written before an
+ * externally visible effect, in the store the effect commits to, and `started`, `settled(result)` or `indeterminate`.
+ * A reset between effect and `tool_call_end` never replays the effect: a settled receipt answers a re-ask, and a started
+ * one found again is indeterminate, refused explicitly. A call whose effect commits in another store (a workspace tool,
+ * from an agent's isolate) re-asks that store, whose own receipt answers it. Per-tool policy: tools/registry.ts (`replay`).
  */
 
 import type { ToolSet } from 'ai';
@@ -34,6 +37,7 @@ export function initToolEffectClaimTable(execRaw: RawSqlExec): void {
     normalized_call_id TEXT NOT NULL,
     call_digest        TEXT NOT NULL,
     result_json        TEXT,
+    status             TEXT NOT NULL DEFAULT 'started' CHECK (status IN ('started', 'settled', 'indeterminate')),
     PRIMARY KEY (actor_id, turn_id, normalized_call_id, call_digest)
   )`);
   // Recovery reads only what never settled; the primary key leads with the turn, so it scanned every settled claim.
@@ -56,9 +60,13 @@ export function claimToolEffect(
     LIMIT 1`[0];
 
   if (existing) {
-    return existing.result_json === null
-      ? { kind: 'indeterminate' }
-      : { kind: 'settled', result: parseJsonValue(existing.result_json) };
+    if (existing.result_json !== null) return { kind: 'settled', result: parseJsonValue(existing.result_json) };
+
+    // Found started: whatever began it may or may not have taken effect.
+    void sql`UPDATE tool_effect_claims SET status = 'indeterminate'
+      WHERE actor_id=${actorId} AND turn_id=${key.turnId} AND normalized_call_id=${key.callId} AND call_digest=${key.digest}`;
+
+    return { kind: 'indeterminate' };
   }
 
   void sql`INSERT OR IGNORE INTO tool_effect_claims
@@ -74,7 +82,7 @@ export function settleToolEffect(
 ): boolean {
   actor.assertCurrent();
 
-  return sql`UPDATE tool_effect_claims SET result_json=${result}
+  return sql`UPDATE tool_effect_claims SET result_json=${result}, status = 'settled'
     WHERE actor_id=${actor.actorId} AND turn_id=${key.turnId}
       AND normalized_call_id=${key.callId} AND call_digest=${key.digest}
       AND result_json IS NULL RETURNING normalized_call_id`.length !== 0;
@@ -87,10 +95,13 @@ export interface EffectClaimDeps {
   /** Read at call time: a toolset is built once and used across many turns. */
   readonly turnId: () => string;
   readonly durable: (callId: string, signal?: AbortSignal) => Promise<void>;
+  /** Tools whose effect commits in another store, whose own receipt answers a re-ask: a started receipt here re-asks
+   *  it under the same call, rather than refusing. */
+  readonly elsewhere?: (name: string) => boolean;
 }
 
-/** Wraps every `claimed` tool; `safe` tools pass through untouched. Anything not proven safe is claimed. */
-export function withEffectClaims(
+/** Wraps every `claimed` tool in its receipt; `safe` tools pass through untouched. Anything not proven safe is claimed. */
+export function withEffectReceipt(
   tools: ToolSet,
   deps: EffectClaimDeps,
   opts?: { readonly safe?: ReadonlySet<string> },
@@ -121,7 +132,8 @@ export function withEffectClaims(
 
         if (claim.kind === 'settled') return claim.result;
 
-        if (claim.kind === 'indeterminate') return settle(Effect.fail(new KinuError('denied', indeterminateEffectMessage(name, key.callId))));
+        // Its effect's own store knows what became of it: asked again under the same call, its receipt answers.
+        if (claim.kind === 'indeterminate' && deps.elsewhere?.(name) !== true) return settle(Effect.fail(new KinuError('denied', indeterminateEffectMessage(name, key.callId))));
         const output = await execute(input, options);
         // Durable before published: the row must exist before the caller reads this value.
         settleToolEffect(

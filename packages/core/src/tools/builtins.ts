@@ -15,7 +15,7 @@ import {
 import { TaskListStore } from './task-store';
 import { withClampedToolResult } from './clamp';
 import { withCheckedInput, withCheckedInputs } from './tool-schema';
-import { withEffectClaims, type EffectClaimDeps } from './effect-claim';
+import { withEffectReceipt, type EffectClaimDeps } from './effect-claim';
 import { codemodeInputSchema } from './sandbox-contract';
 import { serveReport, type ReportDeps } from './report-operations';
 import { createFileTool } from './file-operations';
@@ -287,7 +287,7 @@ export function buildToolSurface(deps: ToolSurfaceDeps): ToolSet {
   }
 
   const finished = deps.post === undefined ? surface : { ...surface, ...withCheckedInputs(deps.post) };
-  const modeBound = toolsInWorkMode(deps.workMode ?? 'build', deps.effectClaims === undefined ? finished : withEffectClaims(finished, deps.effectClaims));
+  const modeBound = toolsInWorkMode(deps.workMode ?? 'build', deps.effectClaims === undefined ? finished : withEffectReceipt(finished, deps.effectClaims));
 
   return deps.wrapFinished === undefined ? modeBound : deps.wrapFinished(modeBound);
 }

@@ -7,7 +7,7 @@ import { jsonSchema, tool, type ToolExecutionOptions, type ToolSet } from 'ai';
 import {
   buildMcpToolSet, claimToolEffect, initToolEffectClaimTable,
   settleToolEffect, DEFAULT_TOOL_RESULT_MAX_CHARS, PLATFORM_CATALOG,
-  withEffectClaims, replayPolicyFor, settleUnpairedToolCalls, INTERRUPTED_TOOL_RESULT, type EffectClaimDeps, type JsonValue,
+  withEffectReceipt, replayPolicyFor, settleUnpairedToolCalls, INTERRUPTED_TOOL_RESULT, type EffectClaimDeps, type JsonValue,
   type SerializableToolDescriptor,
 } from '../src/index';
 import { createMemoryVfs } from '@kinu.run/test-utils';
@@ -67,7 +67,7 @@ describe('tool effect claims', () => {
   test('a claimed tool runs once and its replay returns the stored result', async () => {
     const { deps } = claimPlane();
     const { calls, tools } = countingTool();
-    const execute = toolExecute<{ to: string }, JsonValue>(withEffectClaims(tools, deps).run);
+    const execute = toolExecute<{ to: string }, JsonValue>(withEffectReceipt(tools, deps).run);
 
     const first = await execute({ to: 'ops@example.test' }, OPTIONS);
     const replayed = await execute({ to: 'ops@example.test' }, OPTIONS);
@@ -90,7 +90,7 @@ describe('tool effect claims', () => {
       }),
     };
 
-    const execute = toolExecute<{ to: string }, JsonValue>(withEffectClaims(tools, deps).run);
+    const execute = toolExecute<{ to: string }, JsonValue>(withEffectReceipt(tools, deps).run);
 
     // Claimed, then died unsettled: whether the effect landed is unknown.
     await expect(execute({ to: 'ops@example.test' }, OPTIONS)).rejects.toThrow('connection dropped');
@@ -104,7 +104,7 @@ describe('tool effect claims', () => {
     const { deps } = claimPlane();
     const { calls, tools } = countingTool();
     const durable = Promise.withResolvers<void>();
-    const execute = toolExecute<{ to: string }, JsonValue>(withEffectClaims(tools, { ...deps, durable: () => durable.promise }).run);
+    const execute = toolExecute<{ to: string }, JsonValue>(withEffectReceipt(tools, { ...deps, durable: () => durable.promise }).run);
 
     const modelCall = execute({ to: 'model@example.test' }, { toolCallId: 'call-m1', messages: [{ role: 'user', content: 'send it' }], context: undefined });
 
@@ -161,7 +161,7 @@ describe('tool effect claims', () => {
   test('a different call in the same turn is not a replay', async () => {
     const { deps } = claimPlane();
     const { calls, tools } = countingTool();
-    const execute = toolExecute<{ to: string }, JsonValue>(withEffectClaims(tools, deps).run);
+    const execute = toolExecute<{ to: string }, JsonValue>(withEffectReceipt(tools, deps).run);
 
     await execute({ to: 'a@example.test' }, OPTIONS);
     await execute({ to: 'b@example.test' }, OPTIONS);
@@ -174,7 +174,7 @@ describe('tool effect claims', () => {
     // Pins the identity columns: a default id for missing options would replay one call as another.
     const { sql, deps } = claimPlane('turn-7');
     const { tools } = countingTool();
-    const execute = toolExecute<{ to: string }, JsonValue>(withEffectClaims(tools, deps).run);
+    const execute = toolExecute<{ to: string }, JsonValue>(withEffectReceipt(tools, deps).run);
 
     await execute({ to: 'ops@example.test' }, { toolCallId: 'call-from-provider', messages: [], context: undefined });
 
@@ -193,7 +193,7 @@ describe('tool effect claims', () => {
       execute: async () => ({ hits: 0 }),
     });
 
-    const wrapped = withEffectClaims({ web: entry }, deps);
+    const wrapped = withEffectReceipt({ web: entry }, deps);
 
     expect(replayPolicyFor('web')).toBe('safe');
     expect(wrapped.web).toBe(entry);
@@ -224,7 +224,7 @@ describe('tool effect claims', () => {
       }),
     };
 
-    const execute = toolExecute<{ to: string }, JsonValue>(withEffectClaims(tools, deps).run);
+    const execute = toolExecute<{ to: string }, JsonValue>(withEffectReceipt(tools, deps).run);
 
     const inFlight = execute({ to: 'ops@example.test' }, OPTIONS);
     await started.promise;
