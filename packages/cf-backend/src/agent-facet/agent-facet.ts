@@ -4,7 +4,7 @@ import { DurableObject, RpcTarget } from 'cloudflare:workers';
 import { Nimbus, type NimbusSandbox, type NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
 import type { UIMessage } from 'ai';
 import { Effect } from 'effect';
-import { attemptInItsWords, flight, KinuError, settle } from '@kinu.run/core/obs';
+import { attemptInItsWords, flight, KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
 import {
   encodeModelMessageValues, jsonResultOrVoid, readAgentArchivePage,
   type InspectedWork,
@@ -294,8 +294,8 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
       // Closing: owed to its next start, so the crossing fails and the workspace's wake crosses it again.
       ? Effect.fail(new KinuError('unavailable', 'The agent is closing; the delivery is owed to its next start.'))
       : attemptInItsWords('io', () => chat.session.admitDelivery(v.parse(DeliverySchema, delivery))).pipe(
-        // Its own refusal is its answer, not a lost crossing.
-        Effect.catch((refusal) => Effect.succeed<DeliveryAnswer>({ refused: { code: refusal.code, message: refusal.message } })),
+        // Its own refusal is its answer, not a lost crossing: told with its whole cause chain.
+        Effect.catch((refusal) => Effect.succeed<DeliveryAnswer>({ refused: { code: refusal.code, message: renderThrownChain({ cause: refusal }) } })),
         Effect.tap(() => Effect.promise(() => chat.taken())),
       ))));
   }
