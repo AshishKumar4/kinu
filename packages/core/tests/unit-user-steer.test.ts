@@ -118,7 +118,7 @@ function setup(opts: {
 
   const accepted: string[] = [];
 
-  const inbox = new Inbox(host, {
+  const inbox = new Inbox(host, undefined, {
     onAccept: (acceptedSteer) => { accepted.push(acceptedSteer.id); },
     onDrain: (steers, atStep) => {
       drained.push({ steers: [...steers], atStep });
@@ -481,7 +481,7 @@ describe('Inbox — the user kind beside the event kind', () => {
       enqueueTurn: async () => { throw new Error('nothing to start'); },
       turnInFlight: () => true,
       setTimer: () => {},
-    }, { onAccept: () => { throw new Error('storage refused the row'); } });
+    }, undefined, { onAccept: () => { throw new Error('storage refused the row'); } });
 
     expect(() => refusing.send(steer('s2', 'refused'))).toThrow('storage refused the row');
     expect(await refusing.prepareStep(step(0, HISTORY))).toBeUndefined();

@@ -229,7 +229,7 @@ export interface DeliveryPort {
  * The events a delivery carries that its agent did not take go back: yielded to the owner's words, they are pending
  * again; refused, they wait for the drain something else starts. Taken, they are its turn's, and close with it.
  */
-function handBackCarried(eventLog: EventLog, delivery: Delivery, answer: Exclude<DeliveryAnswer, 'taken' | 'duplicate'>): void {
+export function handBackCarried(eventLog: EventLog, delivery: Delivery, answer: Exclude<DeliveryAnswer, 'taken' | 'duplicate'>): void {
   const drained = v.safeParse(v.string(), deliveryMetadata(delivery)?.drainTurnId);
 
   if (!drained.success) return;
@@ -256,6 +256,8 @@ export class InProcessDeliveries implements DeliveryPort {
     readonly eventLog: EventLog;
     readonly admit: (delivery: Delivery) => Promise<DeliveryAnswer>;
     readonly broadcast: (event: BroadcastEvent) => void;
+    /** Once the turn a taken delivery opened has settled: the process that handed it over runs it before it moves on. */
+    readonly settled?: (id: string) => Promise<void>;
   }) {
     this.signals = new DeliveryInbox({ deliver: (delivery) => this.deliver(delivery), broadcast: deps.broadcast });
   }
@@ -348,6 +350,8 @@ export class InProcessDeliveries implements DeliveryPort {
     deliveries.paid(this.deps.actorId, delivery.id);
 
     if (answer === 'yielded') handBackCarried(this.deps.eventLog, delivery, answer);
+
+    if (answer === 'taken') await this.deps.settled?.(delivery.id);
 
     return answer;
   }

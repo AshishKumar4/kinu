@@ -6,7 +6,6 @@ import {
   BackgroundJobRunner, JobNotResumable, MAX_CONCURRENT_DETACHED_JOBS, newJobId,
   type JobHarvester, type JobHolder, type JobResumer,
 } from '../src/jobs/runner';
-import { Inbox } from '../src/orchestrator/inbox';
 import {
   BackgroundJobStore, initBackgroundJobsTable, BACKGROUND_POLICY, DeviceRequestOwnership,
   type BackgroundPolicy, type BackgroundJob, type InvocationSurface,
@@ -18,7 +17,7 @@ import type { Schedule, SqlExecutor, SqlValue } from '../src/types/primitives';
 import type { JsonValue } from '../src/utils/json';
 import { executorLabel } from '../src/read-models/executors';
 import { makeSql, makeExecRaw, makeSqlExec, conversationsFor } from './helpers';
-import { createTestRuntime, createTestActors, toolExecute, workspaceDatabase } from '@kinu.run/test-utils';
+import { createTestRuntime, createTestActors, toolExecute, workspaceDatabase, hostDeliveries } from '@kinu.run/test-utils';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { inWorkMode } from '../src/execution/work-mode';
 import { createSqlFiber } from '../src/execution/fiber';
@@ -109,7 +108,7 @@ function setup(opts: {
   const policy = opts.policy;
 
   const runnerDeps = {
-    store, fiber, inbox: new Inbox(host), eventLog,
+    store, fiber, inbox: hostDeliveries(host).signals, eventLog,
     scheduleDrain: () => { drainSchedules++; },
     logActivity: (e: string, d?: string) => logs.push({ e, d }),
     onSettled: (job: BackgroundJob) => notified.push({ id: job.id, status: job.status }),
@@ -943,7 +942,7 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
         return 'done';
       };
 
-      return { store, settled, holder, runner: new BackgroundJobRunner({ store, fiber, inbox: new Inbox(fakeHost().host), resume, holder }) };
+      return { store, settled, holder, runner: new BackgroundJobRunner({ store, fiber, inbox: hostDeliveries(fakeHost().host).signals, resume, holder }) };
     };
 
     initBackgroundJobsTable(makeExecRaw(first));
@@ -1546,7 +1545,7 @@ describe('a fiber host that cannot start the run', () => {
       const worker = actors.sibling('worker');
       const store = new BackgroundJobStore(sql, worker);
       const { host } = fakeHost();
-      const runner = new BackgroundJobRunner({ store, fiber: createSqlFiber(sql, worker), inbox: new Inbox(host) });
+      const runner = new BackgroundJobRunner({ store, fiber: createSqlFiber(sql, worker), inbox: hostDeliveries(host).signals });
       const id = runner.create('think', { q: 1 }, 'build', new AbortController());
 
       actors.directory.apply(actors.main, [], {

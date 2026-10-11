@@ -676,6 +676,18 @@ export class ChatSession {
     if (input.kind === 'run') return settleSync(Effect.fail(new KinuError('unsupported', 'A run is not a turn of the chat; its host runs it.')));
 
     if (this.pendingSends.hasTurn(id) || this.announcementInFlight(id) || this.announcementOnDisk(id)) return 'duplicate';
+    const { inbox } = this.actorSession.orchestrator;
+
+    // A turn running: what happened reaches it at its next step, as before it was a delivery; an offer that yields to the
+    // owner's words waits for a turn of its own.
+    if (inbox.busy && input.yieldsToUserMessage !== true) {
+      const kind = v.safeParse(v.string(), input.metadata?.kinuEvent);
+      const landed = await inbox.send({ kind: kind.success ? kind.output : 'delivery', text: input.text, idempotencyKey: id, ...(input.metadata !== undefined && { metadata: input.metadata }) });
+
+      if (landed === 'mid-turn' || landed === 'queued') return 'taken';
+
+      return landed === 'yielded' ? 'yielded' : { refused: { code: 'unavailable', message: 'The running turn did not take the delivery.' } };
+    }
 
     const queued = await this.queueTurn({
       text: input.text, idempotencyKey: id, authorship: delivery.authorship,

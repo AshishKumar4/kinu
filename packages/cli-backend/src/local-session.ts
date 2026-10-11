@@ -567,7 +567,7 @@ export class LocalAgentSession {
       store: this.jobs,
       policy: () => opts.backgroundPolicy ?? BACKGROUND_POLICY.interactive,
       fiber: (name, fn) => this.trackFiber(name, fn),
-      inbox: this.actorSession.orchestrator.inbox,
+      inbox: this.actorSession.orchestrator.signals,
       eventLog: this.eventLog,
       scheduleDrain: () => this.actorSession.orchestrator.scheduleDrain(),
       logActivity: (event, detail) => this.emit({ type: 'background', event, message: detail ?? '' }),
@@ -955,7 +955,7 @@ export class LocalAgentSession {
   /** Record the pick; a pick differing from the answered take queues a continuation turn. */
   async pickAlternateTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
     return pickAlternateTake(
-      { sql: this.rt.storage.sql, actor: this.rt.actor, turnPair: historyTurnPairs(this.stores.history), engine: this.engine, inbox: this.actorSession.orchestrator.inbox },
+      { sql: this.rt.storage.sql, actor: this.rt.actor, turnPair: historyTurnPairs(this.stores.history), engine: this.engine, inbox: this.actorSession.orchestrator.signals },
       takeId, nodeId);
   }
 
@@ -1407,7 +1407,7 @@ export class LocalAgentSession {
 
     await reconcileInterruptedForks({
       journal: this.headJournal,
-      inbox: this.actorSession.orchestrator.inbox,
+      inbox: this.actorSession.orchestrator.signals,
       search: this.mctsSearchStore,
       runEvents: this.eventRecorder,
       liveRuns: () => this.chat.drivenRuns(),

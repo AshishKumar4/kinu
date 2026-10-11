@@ -149,7 +149,7 @@ export class AgentOrchestrator {
     this.acc = new TurnAccumulator(deps.sinks, deps.budget);
     this.craft = new CraftCycle(deps.engine.craftLedger, this.acc);
     this.turnEvolutionEnabled = deps.engine.enabled;
-    this.inbox = new Inbox(deps.host, steers);
+    this.inbox = new Inbox(deps.host, (e, d) => this.logActivity(e, d), steers);
     this.signals = deps.deliveries.signals;
     this.drains = new DrainScheduler(
       () => this.drainPendingEvents(),

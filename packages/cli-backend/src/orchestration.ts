@@ -43,6 +43,7 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
     transaction: (body) => input.runtime.storage.transactionSync(body),
     eventLog: input.eventLog,
     admit: (delivery) => input.session.read().admitDelivery(delivery),
+    settled: (id) => input.session.read().deliveredTurnSettled(id),
     broadcast: (event) => { input.session.read().emit({ type: 'broadcast', event }); },
   });
 

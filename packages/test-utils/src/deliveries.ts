@@ -1,11 +1,12 @@
-import { DeliveryInbox, type AgentOrchestratorDeps, type BackendHost, type Delivery, type DeliveryAnswer } from '@kinu.run/core';
+import { DeliveryInbox, handBackCarried, type AgentOrchestratorDeps, type BackendHost, type Delivery, type DeliveryAnswer, type EventLog } from '@kinu.run/core';
 
 /**
  * An agent's deliveries for a fixture whose chat is its host: each delivery is handed to `host.enqueueTurn` as the chat's
  * `admitDelivery` queues it (a programmatic turn under the delivery's id), with nothing owed in between. Words and runs
- * are a chat's and its host's, which a fixture over a bare host does not have.
+ * are a chat's and its host's, which a fixture over a bare host does not have. Given the agent's `eventLog`, what a
+ * delivery the host refused or yielded carried is handed back as production hands it back (core `handBackCarried`).
  */
-export function hostDeliveries(host: Pick<BackendHost, 'enqueueTurn' | 'broadcast'>): AgentOrchestratorDeps['deliveries'] {
+export function hostDeliveries(host: Pick<BackendHost, 'enqueueTurn' | 'broadcast'>, eventLog?: EventLog): AgentOrchestratorDeps['deliveries'] {
   const deliver = async (delivery: Delivery): Promise<DeliveryAnswer> => {
     const { input } = delivery;
 
@@ -27,12 +28,15 @@ export function hostDeliveries(host: Pick<BackendHost, 'enqueueTurn' | 'broadcas
     commit: async (bind) => {
       const delivery = bind();
 
-      if (delivery !== null) await deliver(delivery);
+      if (delivery === null) return;
+      const answer = await deliver(delivery);
+
+      if (eventLog !== undefined && answer !== 'taken' && answer !== 'duplicate') handBackCarried(eventLog, delivery, answer);
     },
   };
 }
 
 /** A fixture's orchestration deps with {@link hostDeliveries} over their own host. */
 export function withHostDeliveries(deps: Omit<AgentOrchestratorDeps, 'deliveries'>): AgentOrchestratorDeps {
-  return { ...deps, deliveries: hostDeliveries(deps.host) };
+  return { ...deps, deliveries: hostDeliveries(deps.host, deps.eventLog) };
 }

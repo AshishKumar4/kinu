@@ -333,6 +333,7 @@ export class Inbox implements AgentInbox {
 
   constructor(
     private readonly host: BackendHost,
+    private readonly logActivity?: (event: string, detail?: string) => void,
     private steers: UserSteerDeps = {},
   ) {}
 
@@ -366,22 +367,31 @@ export class Inbox implements AgentInbox {
    * so a collapsed re-delivery never opens a second, forever-pending card.
    */
   /**
-   * A person's words, landing in this chat: spliced into the running turn at its next step, or opening one. Every other
-   * signal is a delivery (design v2 §1), admitted to the chat as a turn of its own; this inbox takes none.
+   * What lands in this chat once admitted: a person's words, and what a delivery hands its running turn. Spliced into the
+   * running turn at its next step, or opening one. Producers reach it only through the agent's deliveries (design v2 §1):
+   * its chat's admission lands each here.
    */
   send(signal: AgentSignal): Promise<SendOutcome> {
     const cardId = signal.idempotencyKey ? signalCardId(signal.idempotencyKey) : `sig-${nanoid()}`;
     const delivered: DeliveredSignal = { ...signal, cardId };
-
-    if (!isUserSignal(delivered)) return settle(Effect.fail(new KinuError('bad_input', `A ${signal.kind} signal is a delivery; the inbox takes only a person's words.`)));
-
     // Read once, before any await.
-    if (!this.busy) return this.queueUsers([delivered], { idempotent: false });
-    this.steers.onAccept?.({ ...toUserSteer(delivered), id: delivered.user.id, mode: delivered.user.mode });
+    const { busy } = this;
+
+    if (isUserSignal(delivered)) {
+      if (!busy) return this.queueUsers([delivered], { idempotent: false });
+      this.steers.onAccept?.({ ...toUserSteer(delivered), id: delivered.user.id, mode: delivered.user.mode });
+      this.pending.push(delivered);
+      this.host.broadcast({
+        type: 'steer_status', status: 'queued', steerId: delivered.user.id, text: signal.text,
+      });
+
+      return Promise.resolve('mid-turn');
+    }
+
+    if (!busy) return this.queue(delivered);
     this.pending.push(delivered);
-    this.host.broadcast({
-      type: 'steer_status', status: 'queued', steerId: delivered.user.id, text: signal.text,
-    });
+    this.openCard(delivered, stepBody(delivered));
+    this.logActivity?.('signal_injected', `${signal.kind} -> live turn`);
 
     return Promise.resolve('mid-turn');
   }
