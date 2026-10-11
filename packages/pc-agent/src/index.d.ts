@@ -1,13 +1,11 @@
 /**
- * The daemon as the CLI takes it: its text, and the schema of its config.
+ * The daemon as the CLI calls into it: the schema of its config alone.
  *
- * `packages/cli/src/device-connect.ts` imports this file with
- * `{ type: 'text' }` and writes the bytes to `~/.kinu/pc-agent.js`, so the
- * daemon ships inside the CLI release and `kinu connect` downloads nothing.
- * Bun inlines the bytes when `scripts/build-cli-dist.sh` bundles the CLI, and
- * reads this file when Bun runs the CLI from source. It imports the module once
- * more for `parseDeviceConfig` alone, so device.json has one schema, the one
- * the daemon reads it by; requiring the module starts nothing.
+ * `packages/cli/src/device-connect.ts` imports `parseDeviceConfig`, so
+ * device.json has one schema, the one the daemon reads it by; requiring the
+ * module starts nothing. The bytes it installs as `~/.kinu/pc-agent.js` it
+ * reads from disk, beside the release or in the source tree: Bun gives one
+ * file one loader, so the daemon is never also imported as text.
  *
  * A declaration beside the file is what TypeScript resolves for a specifier
  * that names it: `index.js` is JavaScript, so without this the import is
@@ -15,9 +13,6 @@
  * equivalent — TypeScript consults a pattern only where normal resolution
  * finds nothing, and it finds this file.
  */
-declare const source: string;
-
-export default source;
 
 /** device.json as `kinu connect` writes it and the daemon reads it; fields beyond these are kept. */
 export interface DeviceConfig {

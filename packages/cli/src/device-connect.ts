@@ -4,7 +4,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { Effect } from 'effect';
@@ -17,12 +17,7 @@ import { AGENT_HOME, ensureAgentHome, loadConfigFile, requireAuthConfig, resolve
 import { listCloudDevices, registerCloudDevice, type CloudDevice, type CloudDeviceSandbox } from './cloud-api';
 import { readDaemonLogTail, rotateDaemonLogIfNeeded } from './daemon-log';
 import { issuedDeviceConnected, waitForAnswer, type StoppableWaitOptions } from '@kinu.run/core';
-import PC_AGENT_DAEMON_SOURCE from '../../pc-agent/src/index.js' with { type: 'text' };
 import { parseDeviceConfig, type DeviceConfig } from '../../pc-agent/src/index.js';
-import PC_AGENT_SANDBOX_SOURCE from '../../pc-agent/src/sandbox.js' with { type: 'text' };
-import PC_AGENT_PTY_SOURCE from '../../pc-agent/src/pty.js' with { type: 'text' };
-import PC_AGENT_UPDATE_SOURCE from '../../pc-agent/src/update.js' with { type: 'text' };
-import DEVICE_PROTOCOL from '../../core/src/execution/device-protocol.json';
 import { DIM, VERSION } from './display';
 
 const PID_PATH = join(AGENT_HOME, 'pc-agent.pid');
@@ -38,22 +33,24 @@ const VERSION_STAMP_PATH = join(AGENT_HOME, 'pc-agent.version');
 /** Written by the daemon while its successor starts; with a stale pidfile, the successor died and `.prev` last ran. */
 const UPDATE_PENDING_PATH = join(AGENT_HOME, 'pc-agent.update-pending');
 
-/** Every sibling the daemon `require`s. */
-const DAEMON_SIBLINGS: readonly { readonly name: string; readonly source: string }[] = [
-  { name: 'sandbox.js', source: PC_AGENT_SANDBOX_SOURCE },
-  { name: 'pty.js', source: PC_AGENT_PTY_SOURCE },
-  { name: 'update.js', source: PC_AGENT_UPDATE_SOURCE },
-  { name: 'device-protocol.json', source: JSON.stringify(DEVICE_PROTOCOL) },
-];
+interface DaemonFiles {
+  readonly daemon: string;
+  /** Every file the daemon requires beside itself. */
+  readonly siblings: readonly { readonly name: string; readonly source: string }[];
+}
 
 /**
- * chatgpt.js is read, not imported as text: the CLI imports it as a module too, and Bun's bundler gives one
- * file one loader (21 of 40 builds failed). The release and the source tree put it beside their daemon.
+ * The daemon and its siblings, read where the release or the source tree keeps them, never imported as text: the CLI
+ * imports the daemon (its device.json schema) and chatgpt.js as modules, and Bun gives one file one loader (21 of 40
+ * builds failed with chatgpt.js imported both ways). The release keeps them in `pc-agent/` beside the CLI as they
+ * install (scripts/build-cli-dist.sh); the source tree keeps the daemon as index.js, with declarations beside it.
  */
-function daemonSiblings(): readonly { readonly name: string; readonly source: string }[] {
-  const file = [join(import.meta.dir, 'pc-agent', 'chatgpt.js'), join(import.meta.dir, '..', '..', 'pc-agent', 'src', 'chatgpt.js')].find(existsSync);
+function daemonFiles(): DaemonFiles {
+  const release = join(import.meta.dir, 'pc-agent');
+  const [dir, daemon] = existsSync(join(release, 'pc-agent.js')) ? [release, 'pc-agent.js'] : [join(import.meta.dir, '..', '..', 'pc-agent', 'src'), 'index.js'];
+  const siblings = readdirSync(dir).filter((name) => name !== daemon && !name.endsWith('.d.ts') && (name.endsWith('.js') || name.endsWith('.json'))).sort();
 
-  return [...DAEMON_SIBLINGS, { name: 'chatgpt.js', source: readFileSync(file ?? join(import.meta.dir, 'pc-agent', 'chatgpt.js'), 'utf8') }];
+  return { daemon: readFileSync(join(dir, daemon), 'utf8'), siblings: siblings.map((name) => ({ name, source: readFileSync(join(dir, name), 'utf8') })) };
 }
 
 export const DAEMON_LOG_PATH = join(AGENT_HOME, 'pc-agent.log');
@@ -420,10 +417,11 @@ function installDaemonFiles(device: { origin: string; userId: string; deviceId: 
       root: process.cwd(),
     }, null, 2)}\n`;
 
-    const scriptTemporary = yield* stageInstallFile(SCRIPT_PATH, PC_AGENT_DAEMON_SOURCE, 0o700);
+    const files = yield* io('reading the daemon files this CLI ships', daemonFiles);
+    const scriptTemporary = yield* stageInstallFile(SCRIPT_PATH, files.daemon, 0o700);
 
     // Siblings ship with the release, never fetched.
-    const siblingTemporaries = yield* Effect.forEach(daemonSiblings(), (sibling) => Effect.map(
+    const siblingTemporaries = yield* Effect.forEach(files.siblings, (sibling) => Effect.map(
       stageInstallFile(join(AGENT_HOME, sibling.name), sibling.source, 0o700),
       (temporary) => ({ target: join(AGENT_HOME, sibling.name), temporary }),
     ));
