@@ -146,16 +146,17 @@ export class SlateBuilds {
    * The slates a build of which looked at one of `paths`: a file it read, or a missing path that one of `paths` now is
    * or lies under. Each such build is stale, and whether it builds is not yet known.
    */
-  moved(paths: readonly string[]): string[] {
+  moved(paths: readonly string[], only?: { readonly slate: string; readonly authority: string }): string[] {
     const stale = new Map<string, { readonly slate: string; readonly authority: string }>();
 
     for (const path of paths) {
       const above = ancestors(path);
       const marks = above.map(() => '?').join(', ');
+      const scoped = only === undefined ? '' : ' AND slate = ? AND authority = ?';
 
       const rows = this.db.exec(
-        `SELECT DISTINCT slate, authority FROM slate_build_inputs WHERE path = ? OR (missing = 1 AND path IN (${marks}))`,
-        path, ...above,
+        `SELECT DISTINCT slate, authority FROM slate_build_inputs WHERE (path = ? OR (missing = 1 AND path IN (${marks})))${scoped}`,
+        path, ...above, ...(only === undefined ? [] : [only.slate, only.authority]),
       ).toArray();
 
       for (const row of rows) {
@@ -233,7 +234,8 @@ export class SlateBuilds {
 /**
  * The image a slate runs from source `key` as `cred`: the one it builds with that credential, or, when that source does
  * not compile, the last that did with the same authority, with why the newer one did not. A source that fails again is
- * not compiled again. Refused when that authority never built it.
+ * not compiled again. Refused when that authority never built it. Null when something the build looked at changed while
+ * it ran: what it compiled is already stale, and is built again.
  */
 export function slateImage(input: {
   readonly builds: SlateBuilds;
@@ -241,20 +243,25 @@ export function slateImage(input: {
   readonly key: string;
   readonly cred: VfsCred;
   readonly build: () => Promise<SlateImage | SlateBuildFailure>;
-}): Promise<{ readonly image: SlateImage; readonly key: string; readonly broken: string | null }> {
+  /** The paths that changed while the build ran: one it looked at makes what it compiled stale before it is served. */
+  readonly changed?: () => readonly string[];
+}): Promise<{ readonly image: SlateImage; readonly key: string; readonly broken: string | null } | null> {
   return settle(Effect.gen(function* () {
     const { builds, slate, key } = input;
     const authority = slateAuthority(input.cred);
     const known = builds.failure(slate, authority, key);
     const built = known === null ? yield* Effect.promise(input.build) : { failed: known };
 
-    if (!('failed' in built)) {
-      builds.built(slate, authority, key, built);
+    if (!('failed' in built)) builds.built(slate, authority, key, built);
+    else if (known === null) builds.failed(slate, authority, key, built);
 
-      return { image: built, key, broken: null };
-    }
+    // Its inputs are known only now: a change to one while it compiled moves its generation, as a later one would.
+    const changed = known === null ? input.changed?.() ?? [] : [];
+    const stale = changed.length > 0 && builds.moved(changed, { slate, authority }).length > 0;
 
-    if (known === null) builds.failed(slate, authority, key, built);
+    if (stale) return null;
+
+    if (!('failed' in built)) return { image: built, key, broken: null };
     const good = builds.good(slate, authority);
 
     if (good === null) return yield* new KinuError('bad_input', built.failed);

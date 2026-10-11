@@ -469,18 +469,28 @@ interface SlateBuild {
 
 /**
  * `fs`, noting in `looked` every path a compile looks at: true where it asked whether the path exists and it did not.
- * The resolver's own reads count as the bundled files' do, so a package.json whose `exports` moves is a change.
+ * The resolver's own reads count as the bundled files' do, so a package.json whose `exports` moves is a change. A path
+ * found through a link is noted where the link leads too, so a file the tree links to from outside it is watched.
  */
-function looking(fs: EsbuildReadFs, looked: Map<string, boolean>): EsbuildReadFs {
-  const note = (path: string, missing: boolean) => {
-    const absolute = path.startsWith('/') ? path : `/${path}`;
+function looking(fs: NamespaceFs, looked: Map<string, boolean>): EsbuildReadFs {
+  const absolute = (path: string) => (path.startsWith('/') ? path : `/${path}`);
 
-    if (looked.get(absolute) !== false) looked.set(absolute, missing);
+  const mark = (path: string, missing: boolean) => {
+    if (looked.get(path) !== false) looked.set(path, missing);
+  };
+
+  const note = (path: string, missing: boolean) => {
+    mark(absolute(path), missing);
+
+    if (missing) return;
+    const target = fs.resolveSymlink(path);
+
+    if (target !== null && absolute(target) !== absolute(path)) mark(absolute(target), false);
   };
 
   return {
-    exists: async (path) => {
-      const found = await fs.exists(path);
+    exists: (path) => {
+      const found = fs.exists(path);
 
       note(path, !found);
 
@@ -492,14 +502,18 @@ function looking(fs: EsbuildReadFs, looked: Map<string, boolean>): EsbuildReadFs
       return fs.isDirectory(path);
     },
     readFile: (path) => {
+      const bytes = fs.readFile(path);
+
       note(path, false);
 
-      return fs.readFile(path);
+      return bytes;
     },
     readFileString: (path) => {
+      const text = fs.readFileString(path);
+
       note(path, false);
 
-      return fs.readFileString(path);
+      return text;
     },
   };
 }

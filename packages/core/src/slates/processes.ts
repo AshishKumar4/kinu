@@ -77,6 +77,8 @@ export class SlateProcesses<Source extends RunnableSlateSource, Process extends 
   private readonly running = new Map<string, RunningSlate<Source, Process>>();
   private readonly starting = new Map<string, Promise<RunningSlate<Source, Process>>>();
   private readonly revisions = new Map<string, number>();
+  /** The paths changed while each build in flight ran, in one set per build. */
+  private readonly building = new Set<Set<string>>();
 
   constructor(private readonly ports: SlateProcessPorts<Source, Process>) {}
 
@@ -132,6 +134,8 @@ export class SlateProcesses<Source extends RunnableSlateSource, Process extends 
     const own = absolute.flatMap((path) => SLATE_FILE.exec(path)?.[1] ?? []);
     const ids = new Set([...own, ...this.ports.builds.moved(absolute)]);
 
+    for (const changed of this.building) for (const path of absolute) changed.add(path);
+
     for (const id of ids) this.revisions.set(id, (this.revisions.get(id) ?? 0) + 1);
 
     this.ports.builds.changed([...new Set(own)]);
@@ -156,10 +160,19 @@ export class SlateProcesses<Source extends RunnableSlateSource, Process extends 
         return refreshed;
       }
 
+      const changed = new Set<string>();
+
+      this.building.add(changed);
+
       // A source that does not compile ships nothing: the slate keeps the last build that did, and says why.
-      const { image, key: built, broken } = await slateImage({
+      const imaged = await slateImage({
         builds: this.ports.builds, slate: id, key: digest, cred: caller.cred, build: () => this.ports.build(caller, id, source),
-      });
+        changed: () => [...changed],
+      }).finally(() => { this.building.delete(changed); });
+
+      // Something it read moved while it compiled: built again, under the generation that move gave it.
+      if (imaged === null) continue;
+      const { image, key: built, broken } = imaged;
 
       if (running !== undefined && running.built === built && await running.process.isRunning()) {
         const kept = { ...running, revision, broken };
