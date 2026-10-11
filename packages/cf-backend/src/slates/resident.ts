@@ -3,6 +3,7 @@ import * as v from 'valibot';
 import { FACET_IMAGE_DIR, facetImageDigest, facetImagePath } from '@nimbus-sh/fabric/process-fabric.js';
 import type { EsbuildReadFs, EsbuildService } from '@nimbus-sh/core/runtime/esbuild-service.js';
 import type { NamespaceFs } from '@nimbus-sh/core/runtime/process-files.js';
+import type { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
 import { CRED_KERNEL, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { ComposedFacetManager, LongRunningWorkerSpawnOptions } from '@nimbus-sh/worker/workspace-host';
 import type { WorkspaceSession } from '@kinu.run/core/workspace';
@@ -474,53 +475,34 @@ function parentOf(path: string): string {
   return at <= 0 ? '/' : path.slice(0, at);
 }
 
-/** `path` with its `.` and `..` segments folded. */
-function normalized(path: string): string {
-  const kept: string[] = [];
-
-  for (const segment of path.split('/')) {
-    if (segment === '..') kept.pop();
-    else if (segment !== '' && segment !== '.') kept.push(segment);
-  }
-
-  return `/${kept.join('/')}`;
-}
-
 /**
  * `fs`, noting in `looked` every path a compile looks at: true where it asked whether the path exists and it did not.
  * The resolver's own reads count as the bundled files' do, so a package.json whose `exports` moves is a change. A path
- * found through a link is noted where the link leads too, so a file the tree links to from outside it is watched.
+ * found through links is noted where they lead too, so a file the tree links to from outside it is watched, and so is
+ * the end of a chain of links not written yet. `namespace` is the same view as `fs`, asked where a path lands.
  */
-function looking(fs: NamespaceFs, looked: Map<string, boolean>): EsbuildReadFs {
+function looking(fs: NamespaceFs, namespace: CompositeVFS, looked: Map<string, boolean>): EsbuildReadFs {
   const absolute = (path: string) => (path.startsWith('/') ? path : `/${path}`);
 
   const mark = (path: string, missing: boolean) => {
     if (looked.get(path) !== false) looked.set(path, missing);
   };
 
-  // A missing path under a link that leads nowhere yet: where the link leads is missing too, and so is every directory
-  // above it not written yet, so writing the target is a change to what this compile found missing.
-  const dangling = (path: string) => {
-    for (let link = absolute(path); link !== '/'; link = parentOf(link)) {
-      if (!fs.isSymlink(link)) continue;
-      const to = fs.readlink(link);
+  // A missing path: where a write of it would land, by the namespace's own lookup with every link on the way followed,
+  // is missing too, and so is every directory above that not written yet. A lookup the namespace refuses (a loop, a
+  // file mid-path) leads nowhere a write could make, and the path itself is noted already.
+  const dangling = async (path: string) => {
+    const [landed] = await Promise.allSettled([(async () => namespace.mutationRoute(absolute(path), { follow: true, creating: true }))()]);
 
-      for (let at = normalized(`${to.startsWith('/') ? to : `${parentOf(link)}/${to}`}${absolute(path).slice(link.length)}`); at !== '/' && !fs.exists(at); at = parentOf(at)) {
-        mark(at, true);
-      }
+    if (landed.status === 'rejected') return;
 
-      return;
-    }
+    for (let at = landed.value.path; at !== '/' && !fs.exists(at); at = parentOf(at)) mark(at, true);
   };
 
   const note = (path: string, missing: boolean) => {
     mark(absolute(path), missing);
 
-    if (missing) {
-      dangling(path);
-
-      return;
-    }
+    if (missing) return;
 
     const target = fs.resolveSymlink(path);
 
@@ -528,10 +510,12 @@ function looking(fs: NamespaceFs, looked: Map<string, boolean>): EsbuildReadFs {
   };
 
   return {
-    exists: (path) => {
+    exists: async (path) => {
       const found = fs.exists(path);
 
       note(path, !found);
+
+      if (!found) await dangling(path);
 
       return found;
     },
@@ -688,7 +672,7 @@ export class ResidentSlateProcesses {
         }
       };
 
-      const build: SlateBuild = { bundler, root: input.root, entries: entriesDir, provision, fs: looking(session.filesystem.namespaceFs(input.cred), looked) };
+      const build: SlateBuild = { bundler, root: input.root, entries: entriesDir, provision, fs: looking(session.filesystem.namespaceFs(input.cred), session.filesystem.vfs.as(input.cred), looked) };
       const application = yield* serverModule(build, input.project);
       const { assets, shell } = yield* browserSurface(build, input.owner, input.project, (entry) => input.read(entry) ?? '');
 
