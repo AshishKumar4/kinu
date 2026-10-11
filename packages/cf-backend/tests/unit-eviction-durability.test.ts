@@ -193,7 +193,9 @@ describe('the post-turn lanes', () => {
     expect(notes(restarted)).toBe(1);
     expect(owedReview(restarted)).toBe(0);
     // The signal is keyed on the turn so a re-delivery collapses onto the row it already opened.
-    // Said once: one programmatic turn of main's carries the note, whatever id its isolate admitted it under.
+    // Said once: one programmatic turn of main's carries the note, whatever id its isolate admitted it under; main's
+    // isolate runs it when the wake the workspace armed for it fires.
+    await driveUntil(restarted, "main's isolate took the note", () => agentWakes(restarted.db).length === 0);
     expect((await programmaticTurns(restarted)).filter((turn) => turn.text.includes(ADVISOR_HEADER))).toHaveLength(1);
   });
 
