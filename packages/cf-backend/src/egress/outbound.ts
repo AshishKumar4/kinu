@@ -249,44 +249,6 @@ export function handleEgressConnect(socket: Socket, params: KinuEgressParams | u
   ));
 }
 
-/** Where a workspace program asked its TLS socket to go: `servername` defaults to the host. */
-export interface EgressTlsTarget {
-  readonly hostname: string;
-  readonly port: number;
-}
-
-/** A TLS socket's plaintext ends, as the program holds them: what it writes goes to the server, what it reads came back. */
-export interface EgressTlsStreams {
-  readonly readable: ReadableStream<Uint8Array>;
-  readonly writable: WritableStream<Uint8Array>;
-}
-
-/**
- * A workspace program's TLS socket, made here rather than in the isolate (NIMBUS-ASKS #37): the destination judged as a
- * request's host is, the session Kinu's own (`secureTransport: 'on'`, the host as its server name), and its plaintext
- * ends handed back for the program to write and read. Nimbus refuses a program's TLS socket under an egress until it
- * calls this; workerd carries no TLS over an entrypoint's `connect`.
- */
-export function handleEgressTls(target: EgressTlsTarget, params: KinuEgressParams | undefined): Promise<EgressTlsStreams> {
-  return settle(Effect.gen(function* () {
-    const refused = params === undefined ? null : refusedHostname(target.hostname);
-    const valid = Number.isInteger(target.port) && target.port > 0 && target.port <= 65_535;
-
-    if (params === undefined || refused !== null || !valid) {
-      const reason = refused?.error ?? (params === undefined ? 'egress is not configured for this workspace yet' : `port ${String(target.port)} is not a port`);
-
-      diagnostics.failure('egress.socket_refused', new KinuError('denied', reason), { host: target.hostname, seam: 'workspace-tls' });
-
-      return yield* new KinuError('denied', `a TLS socket to ${target.hostname} is refused: ${reason}`);
-    }
-
-    const { connect } = yield* Effect.promise(() => import('cloudflare:sockets'));
-    const upstream = connect({ hostname: target.hostname, port: target.port }, { secureTransport: 'on', allowHalfOpen: true });
-
-    return { readable: upstream.readable, writable: upstream.writable };
-  }));
-}
-
 /** One classifier refuses at three seams (container hop, `web.fetch`, codemode loopback); one event shape keeps them comparable. */
 function destinationRefusal(host: string, payload: Refusal): Response {
   const error = new KinuError('denied', payload.error);
