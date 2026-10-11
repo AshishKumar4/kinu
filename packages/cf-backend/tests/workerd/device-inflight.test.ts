@@ -182,6 +182,7 @@ async function machine(owner: string, workspace: string, answer: (frame: v.Infer
 
   socket.send(JSON.stringify({
     type: 'HELLO', protocolVersion: DEVICE_PROTOCOL_VERSION, features: [...DEVICE_FEATURES], os: 'linux', hostname: 'studio',
+    arch: 'x64', updateCheck: true, root: '/home/ashish/project', home: '/home/ashish',
     agentRoot: '/home/ashish/.kinu/agents', sandbox: { capability: 'sandboxed', reason: null, gpu: [] },
   }));
   await (hosted ? account(owner).hostWorkspace(workspace, deviceId) : account(owner).bindWorkspace(workspace, deviceId));
