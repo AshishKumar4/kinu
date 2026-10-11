@@ -778,6 +778,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   private snapshotSeq = 0;
 
+  private _owedWork: AgentOwedWork | null = null;
+
+  protected get owedWork(): AgentOwedWork {
+    return this._owedWork ??= new AgentOwedWork(this.boundSql);
+  }
+
   private _agentTurns: AgentTurns | null = null;
 
   protected get agentTurns(): AgentTurns {
@@ -903,7 +909,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         // A retired agent's answer arms nothing: tearing it down ended its wake.
         if (!this.liveActor(actorId)) return await this.agentWakes.owes(actorId, null);
-        new AgentOwedWork(this.boundSql).held(actorId, holds);
+        this.owedWork.held(actorId, holds);
         // A rest told while a delivery is owed it keeps the wake that crosses it.
         await this.agentWakes.owes(actorId, next ?? (this.deliveries.owes(actorId) ? Date.now() + RECOVERY_BACKOFF_CEILING_MS : null));
 
@@ -1159,7 +1165,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           // Retired: what it was owed and had not taken is cancelled with its wake.
           this.deliveries.cancel(record.actorId);
           await this.agentWakes.owes(record.actorId, null);
-          new AgentOwedWork(this.boundSql).held(record.actorId, false);
+          this.owedWork.held(record.actorId, false);
         }
 
         if (own && retirement.destroy) this.dropAgentFacet(record.storageKey);
@@ -3581,7 +3587,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private async owingAgentsWork(): Promise<InspectedWork[]> {
     const reported: InspectedWork[] = [];
 
-    await Promise.all(new AgentOwedWork(this.boundSql).all().filter((actorId) => this.liveActor(actorId)).map((actorId) => settleLogged(
+    await Promise.all(this.owedWork.all().filter((actorId) => this.liveActor(actorId)).map((actorId) => settleLogged(
       'subordinate.agent_work_unread',
       { doing: "reading what an agent's own isolate still owes", otherwise: 'io' },
       async () => { reported.push(...await (await this.agentCalls(actorId)).owedWork(this.agentSnapshot(actorId))); },
@@ -5854,7 +5860,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const main = this.actorHandle().actorId;
 
     // Its own last answer may hold work with no wake to come back for it, as a parked effect is held.
-    if (!this.agentWakes.armed(main) && !new AgentOwedWork(this.boundSql).all().includes(main)) return { recovered: 'none' };
+    if (!this.agentWakes.armed(main) && !this.owedWork.all().includes(main)) return { recovered: 'none' };
     // Its isolate decides each claim it holds and no turn of its runs, as an agent's do after a reset; then it takes up
     // what it still owes.
     await (await this.agentCalls(main)).recover(this.agentSnapshot(main));

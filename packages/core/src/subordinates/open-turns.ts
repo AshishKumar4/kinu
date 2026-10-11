@@ -19,21 +19,36 @@ export function initAgentOpenTurnsTable(execRaw: RawSqlExec): void {
  * agent's wake is when it next needs driving, and a parked effect needs none; this is whether it owes anything at all.
  */
 export class AgentOwedWork {
+  /** The table as this object last read or wrote it. One per database: it is the table's only writer, outside any
+   *  transaction, so after one read its own writes keep this exact. */
+  private holding: Set<string> | null = null;
+
   constructor(private readonly sql: SqlExecutor) {}
+
+  private holders(): Set<string> {
+    this.holding ??= new Set(this.sql<{ actor_id: string }>`SELECT actor_id FROM agent_owed_work`.map((row) => row.actor_id));
+
+    return this.holding;
+  }
 
   /** The agent's own answer, replacing what it said before. An unchanged answer writes nothing, so it moves no read:
    *  reading an agent's owed work can make it tell again, and that must not read again. */
   held(actorId: string, holds: boolean): void {
-    const holding = this.sql<{ actor_id: string }>`SELECT actor_id FROM agent_owed_work WHERE actor_id = ${actorId}`.length > 0;
+    const holders = this.holders();
 
-    if (holds === holding) return;
+    if (holds === holders.has(actorId)) return;
 
-    if (holds) void this.sql`INSERT INTO agent_owed_work (actor_id) VALUES (${actorId})`;
-    else void this.sql`DELETE FROM agent_owed_work WHERE actor_id = ${actorId}`;
+    if (holds) {
+      void this.sql`INSERT INTO agent_owed_work (actor_id) VALUES (${actorId})`;
+      holders.add(actorId);
+    } else {
+      void this.sql`DELETE FROM agent_owed_work WHERE actor_id = ${actorId}`;
+      holders.delete(actorId);
+    }
   }
 
   all(): readonly string[] {
-    return this.sql<{ actor_id: string }>`SELECT actor_id FROM agent_owed_work ORDER BY actor_id`.map((row) => row.actor_id);
+    return [...this.holders()].sort();
   }
 }
 
