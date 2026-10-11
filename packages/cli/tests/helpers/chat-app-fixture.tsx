@@ -225,6 +225,7 @@ export async function mountChat(
     readHub?: ChatAppOpts['readHub'];
     onNewAgent?: ChatAppOpts['onNewAgent'];
     width?: number;
+    terminalOutput?: boolean;
     settled?: (frame: string) => boolean;
     /** Kitty-protocol keys, for chords the legacy byte set cannot express (Shift+Enter, Ctrl+J distinct from Enter). */
     kittyKeyboard?: boolean;
@@ -238,6 +239,7 @@ export async function mountChat(
     useThread: false,
     maxFps: Number.POSITIVE_INFINITY,
     kittyKeyboard: options.kittyKeyboard === true,
+    ...(options.terminalOutput && { stdout: process.stdout, bufferedOutput: 'stdout' }),
   });
 
   const root = createRoot(testRenderer.renderer);
@@ -295,7 +297,9 @@ export async function mountChat(
 
   };
 
-  const composerFocused = () => renderer.currentFocusedRenderable instanceof TextareaRenderable;
+  const composerFocused = () => renderer.currentFocusedRenderable instanceof TextareaRenderable
+    && !(renderer.currentFocusedRenderable instanceof InputRenderable);
+
   const filterFocused = () => renderer.currentFocusedRenderable instanceof InputRenderable;
   await waitFor('the chat surface to settle', () => options.settled ? options.settled(frame()) : composerFocused());
   mounted.push(() => {
