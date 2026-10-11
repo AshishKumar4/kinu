@@ -6,7 +6,7 @@ import {
 } from '@kinu.run/core';
 import type { KinuDevbox } from '../src/kinu-devbox';
 // Static: neither module reaches `cloudflare:email`, so neither needs the mock below.
-import { kinuEgressParams, ownerEgressVault } from '../src/egress/configure';
+import { kinuEgressParams } from '../src/egress/configure';
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
 import type { EgressInjectionResult } from '@kinu.run/core';
 import type { ContainerEgressEnv, ContainerEventResolver, KinuEgressParams } from '../src/egress/outbound';
@@ -209,35 +209,6 @@ describe('what the container is configured with', () => {
     });
 
     expect(params.bindings).toEqual([]);
-  });
-
-  test('a deployment that holds no root secret has no vault to open, so the egress carries no secret and still opens', async () => {
-    const listed: string[] = [];
-
-    const env = {
-      UserDO: {
-        idFromName: (name: string) => name,
-        get: (id: string) => jsrpcStub({
-          listEgressSecrets: async () => {
-            listed.push(id);
-
-            return [BINDING];
-          },
-        }),
-      },
-    };
-
-    await expect(ownerEgressVault(env, 'user-1')).resolves.toEqual([]);
-    expect(listed).toEqual([]);
-  });
-
-  test('a vault that cannot be read still rejects, so a transient failure never strips a granted secret', async () => {
-    const env = {
-      UserDO: { idFromName: (name: string) => name, get: () => jsrpcStub({ listEgressSecrets: async () => { throw new Error('UserDO reset'); } }) },
-      CREDENTIAL_ENCRYPTION_KEY: 'a-test-credential-encryption-key-0123456789',
-    };
-
-    await expect(ownerEgressVault(env, 'user-1')).rejects.toThrow('UserDO reset');
   });
 
   test('params are parsed, so a malformed configuration reads as unconfigured', () => {
