@@ -898,7 +898,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       owes: async (seq, next, holds, standing) => {
         // Older than a report already taken from it: delayed past that one, or sent before a reset of either side.
-        if (!new AgentReports(this.boundSql).accept(actorId, seq)) return;
+        if (!new AgentReports(this.boundSql).accept(actorId, seq, standing)) return;
         this.reportedStandings.set(actorId, standing);
 
         // A retired agent's answer arms nothing: tearing it down ended its wake.
@@ -4176,7 +4176,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /**
    * Main's standing as its isolate last reported it with what it owes (its input taken, its rest), read against this
-   * workspace's window; asked of it only before it reported this activation. Before it ran a turn there is nothing there,
+   * workspace's window; asked of it only before it ever reported. Before it ran a turn there is nothing there,
    * and no isolate is opened to say so. Its context's fill moves within a turn; the report brings it at the turn's rest, so
    * a page's read of the number (`fresh`) asks the isolate.
    */
@@ -4184,7 +4184,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const main = this.actorHandle().actorId;
 
     if (!this.config.getHoldsTurns()) return { messageCount: 0, context: null, latestRun: null, pendingSteers: [] };
-    const reported = opts.fresh === true ? undefined : this.reportedStandings.get(main);
+    const reported = opts.fresh === true ? undefined : this.reportedStanding(main);
 
     if (reported !== undefined) {
       const { measures, ...standing } = reported;
@@ -4195,7 +4195,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return await (await this.agentCalls(main)).standing(this.agentSnapshot(main), this.modelCatalog.contextWindow());
   }
 
-  /** Each agent's standing as it last reported it this activation. */
+  /** The agent's standing as it last reported it: held as each report arrives, read from where its report was stored
+   *  after a cold start, so a background read never wakes the agent; none before its first report. */
+  private reportedStanding(actorId: string): AgentStandingReport | undefined {
+    const held = this.reportedStandings.get(actorId);
+
+    if (held !== undefined) return held;
+    const stored = new AgentReports(this.boundSql).standing(actorId);
+
+    if (stored === null) return undefined;
+    this.reportedStandings.set(actorId, stored);
+
+    return stored;
+  }
+
+  /** Each agent's standing as it last reported it, held as each report is stored. */
   private readonly reportedStandings = new Map<string, AgentStandingReport>();
 
   async getToolList() {
