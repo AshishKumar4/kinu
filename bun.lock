@@ -23,7 +23,7 @@
         "@types/node": "^25.9.1",
         "@vitest/coverage-istanbul": "^4.1.11",
         "agents": "^0.26.0",
-        "armada": "github:AshishKumar4/armada#9dd4ed627c5e76dc6965cae97d9b1df191fb484f",
+        "armada": "github:AshishKumar4/armada#b2bf6df719e64c0992f51e52d877af91d63b49e6",
         "aws4fetch": "^1.0.20",
         "bun": "canary",
         "chess.js": "^1.4.0",
@@ -1412,7 +1412,7 @@
 
     "ansis": ["ansis@4.4.0", "", {}, "sha512-9k3v7xcHwgdO/DruxGIg4HtjvlAZlcnsX/mzqUb1t3NkYnl9kK2UJ+Gq0io+vQf7iT//BD/HB/NBkUR1LWxoeA=="],
 
-    "armada": ["armada@github:AshishKumar4/armada#9dd4ed6", { "dependencies": { "valibot": "1.4.1" }, "bin": { "armada": "src/cli.ts" } }, "AshishKumar4-armada-9dd4ed6", "sha512-BbW1URjuk0w9x0bIWEEmfGPDO3Gx38M/mcDzR+l2M1e6Jc6GFZKFtphqkstjYPj3IgJdYnn3gved8IwTGgRH3g=="],
+    "armada": ["armada@github:AshishKumar4/armada#b2bf6df", { "dependencies": { "valibot": "1.4.1" }, "bin": { "armada": "src/cli.ts" } }, "AshishKumar4-armada-b2bf6df", "sha512-3cxmxY6uMPS4T0IuLY7VFpdiRE5hbVRZMPpKZf4Drc2iDQaRdDy8IiB5+BNF0BnNz2c62JJTGrTzdrtAJquqRA=="],
 
     "asn1js": ["asn1js@3.0.10", "", { "dependencies": { "pvtsutils": "^1.3.6", "pvutils": "^1.1.5", "tslib": "^2.8.1" } }, "sha512-S2s3aOytiKdFRdulw2qPE51MzjzVOisppcVv7jVFR+Kw0kxwvFrDcYA0h7Ndqbmj0HkMIXYWaoj7fli8kgx1eg=="],
 
