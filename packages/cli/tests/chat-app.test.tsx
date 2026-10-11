@@ -249,6 +249,7 @@ describe('ChatApp terminal interaction', () => {
     await screen.waitFor('the model panel to close', screen.composerFocused);
     pending.resolve({ models: [], failures: [] });
     await pending.promise;
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
     await screen.mockInput.typeText(' and still typing');
     await screen.renderOnce();
     expect(screen.composerFocused()).toBe(true);
