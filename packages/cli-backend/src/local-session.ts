@@ -6,7 +6,7 @@
 import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
 import { historyTurnPairs, testModel, toolDescription, workModeForTurnMetadata, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
-import type { ActorHandle, Delivery, DeliveryAnswer, JsonObject } from '@kinu.run/core';
+import type { ActorHandle, Delivery, DeliveryAnswer, InProcessDeliveries, JsonObject } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { resolve } from 'node:path';
 import type { LanguageModel, ToolSet } from 'ai';
@@ -411,6 +411,7 @@ export class LocalAgentSession {
     });
 
     this.host = orchestration.deps.host;
+    this.deliveries = orchestration.deliveries;
     this.budget = orchestration.budget;
     this.engine = orchestration.engine;
     this.eventLog = orchestration.eventLog;
@@ -1217,9 +1218,16 @@ export class LocalAgentSession {
   private mcpUnavailable: NonNullable<DynamicContextInput['unavailableMcp']> = [];
 
   /** Run pending drains now, bypassing debounce; the daemon's tick calls this before end(). */
-  flushPendingDrains(): Promise<void> {
-    return this.chat.flushPendingDrains();
+  /** Its due events handed to its chat, and the turns that opened run, before the caller (a daemon's tick, a pass) moves
+   *  on: outside the crossing, so no turn's own close waits on one queued behind it. */
+  async flushPendingDrains(): Promise<void> {
+    await this.chat.flushPendingDrains();
+
+    for (const id of this.deliveries.takenSince()) await this.deliveredTurnSettled(id);
   }
+
+  /** What this agent is owed and has been handed, as its orchestration commits it. */
+  private readonly deliveries: InProcessDeliveries;
 
   /** Once the turn its delivery `id` opened has settled: at once for one already run, or never taken. */
   deliveredTurnSettled(id: string): Promise<void> {

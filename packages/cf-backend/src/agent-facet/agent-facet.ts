@@ -8,7 +8,7 @@ import { attempt, attemptInItsWords, diagnostics, flight, hold, KinuError, rende
 import {
   encodeModelMessageValues, jsonResultOrVoid, readAgentArchivePage,
   type InspectedWork,
-  type AgentOwnInspection, type JsonValue, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage,
+  type AgentOwnInspection, type AnsweredEvolutionHelper, type JsonValue, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage,
   type NimbusSandboxHandle, type PositionPageRequest, type ProviderEnv, type SerializedMessage, type SubordinateInspectionResult,
   servedContextTree, type ContextEditor, type ContextTreeRemote, type SpendLedger, type StepSpendSource, type TurnRequestIndex, type TurnRequestPage, type ConversationSearchHit, type ConversationScrollResult, type ConversationSummary,
   type SendState, DeliverySchema, WorkModeSchema, type Delivery, type DeliveryAnswer,
@@ -143,6 +143,7 @@ export interface AgentFacetCalls {
   drainAnswers(snapshot: AgentSnapshot, drainTurnIds: readonly string[]): Promise<Readonly<Record<string, string>>>;
   /** A retirement waits on it. */
   idle(): Promise<void>;
+  deliverAdvice(snapshot: AgentSnapshot, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean>;
   /** Runs the turn's waiting model step under this call, and answers once it has ended (`StepPacer`). */
   step(turnId: string): Promise<void>;
   history(snapshot: AgentSnapshot, limit?: number): Promise<UIMessage[]>;
@@ -513,6 +514,11 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async owedWork(snapshot: AgentSnapshot): Promise<readonly InspectedWork[]> {
     return await settle(this.withChat(snapshot, (chat) => chat.owedWork()));
+  }
+
+  /** An advisor's answer on one of this agent's own turns, judged by this isolate's lane and said here. */
+  async deliverAdvice(snapshot: AgentSnapshot, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean> {
+    return await (await this.open(snapshot).acquire()).session.sayAdvisorAnswer(helper, turnId);
   }
 
   async idle(): Promise<void> {

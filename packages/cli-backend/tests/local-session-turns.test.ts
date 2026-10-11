@@ -1,7 +1,7 @@
 import { type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // LocalAgentSession over the real CLI runtime and a fake model: a user turn end to end.
 import { describe, test, expect } from 'bun:test';
-import { AwaitedList, present, scratchDir, scriptedAdvisorPort, scriptedTurnModel, hostDeliveries } from '@kinu.run/test-utils';
+import { AwaitedList, present, scratchDir, scriptedAdvisorPort, scriptedTurnModel } from '@kinu.run/test-utils';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
@@ -11,7 +11,7 @@ import { TestLanguageModelV2 } from './test-language-model';
 import type { LanguageModelV2Usage, LanguageModelV2StreamPart } from '@ai-sdk/provider';
 import type { TemporaryAgentPort } from '@kinu.run/core';
 import {
-  initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage, CHAT_SESSION_ID, drawnStep, type ModelInfo, type SqlExecutor, openWorkspaceMainActor, InstructionApprovalStore, instructionDigest, OUTPUT_CONTINUATION_EVENT, sha256Hex, serializeContentForHeads,
+  initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, Inbox, backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage, CHAT_SESSION_ID, drawnStep, type ModelInfo, type SqlExecutor, openWorkspaceMainActor, InstructionApprovalStore, instructionDigest, OUTPUT_CONTINUATION_EVENT, sha256Hex, serializeContentForHeads,
 } from '@kinu.run/core';
 import { createCLIRuntime, makeExecRaw, makeSql, type CLIRuntime } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
@@ -804,7 +804,7 @@ describe('LocalAgentSession — programmatic turns (reactor / background-job wak
     const runner = new BackgroundJobRunner({
       store,
       fiber: async (_name, fn) => fn({ stash: () => {}, snapshot: null }),
-      inbox: hostDeliveries(session.host).signals,
+      inbox: new Inbox(session.host),
       scheduleDrain: () => {},
     });
 

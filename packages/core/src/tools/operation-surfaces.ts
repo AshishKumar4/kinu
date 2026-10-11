@@ -88,7 +88,7 @@ function nativeCall(resolve: (input: JsonObject) => NativeCall | KinuError, said
       const job = readCallJob(options);
 
       const receipt = readTransactionalReceipt(options);
-      const { runSync } = call.served;
+      const runSync = call.served.runSync?.bind(call.served);
 
       // One synchronous local commit: run inside its receipt's transaction, the receipt and the result with it.
       if (receipt !== undefined && runSync !== undefined) {

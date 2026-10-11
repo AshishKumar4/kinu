@@ -1,5 +1,5 @@
 import { exists as nimbusExists, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
-import { PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, DeliveryInbox, pendingEventsDelivery, wordsRefusal, deliveryMetadata, handBackCarried, type Delivery, type DeliveryAnswer, type OwedAdmission, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs } from '@kinu.run/core';
+import { PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, DeliveryInbox, pendingEventsDelivery, wordsRefusal, deliveryMetadata, handBackCarried, actorReach, type Delivery, type DeliveryAnswer, type OwedAdmission, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, codemodeSurface, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type ToolSurfaceNarrowing, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs } from '@kinu.run/core';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -4017,8 +4017,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (record === null || record.retiringAt !== null || record.deletedAt !== null) return true;
     const { session } = await this.actorHost().acquire(actorReferenceOf(record), { kind: 'actor' });
 
-    // Judged and recorded here, by the engine whose lane hired the advisor; said to the agent as a delivery of its own.
-    return await session.deliverAdvisorAnswers();
+    // Reach from the policy: an agent the workspace's lanes judge has its advice judged and recorded here, by the engine that
+    // hired the advisor, and said to it as a delivery; any other agent's isolate judges its own and says it there.
+    if (actorReach(actorPolicy(record)).lanes) return await session.deliverAdvisorAnswers();
+
+    return await session.deliverAdvisorAnswers(async (helper, turnId) => await (await this.agentCalls(actorId)).deliverAdvice(this.agentSnapshot(actorId), helper, turnId));
   }
 
   async _kinuTimerTick(): Promise<void> {
@@ -4153,7 +4156,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       }));
 
       // Main's conversation and its measure are its own isolate's.
-      const standing = yield* Effect.promise(async () => await this.mainStanding());
+      const standing = yield* Effect.promise(async () => await this.mainStanding({ fresh: true }));
 
       return {
         ...status,
@@ -4168,13 +4171,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /**
    * Main's standing as its isolate last reported it with what it owes (its input taken, its rest), read against this
    * workspace's window; asked of it only before it reported this activation. Before it ran a turn there is nothing there,
-   * and no isolate is opened to say so. Its context's fill moves within a turn; the report brings it at the turn's rest.
+   * and no isolate is opened to say so. Its context's fill moves within a turn; the report brings it at the turn's rest, so
+   * a page's read of the number (`fresh`) asks the isolate.
    */
-  private async mainStanding(): Promise<AgentStanding> {
+  private async mainStanding(opts: { readonly fresh?: boolean } = {}): Promise<AgentStanding> {
     const main = this.actorHandle().actorId;
 
     if (!this.config.getHoldsTurns()) return { messageCount: 0, context: null, latestRun: null, pendingSteers: [] };
-    const reported = this.reportedStandings.get(main);
+    const reported = opts.fresh === true ? undefined : this.reportedStandings.get(main);
 
     if (reported !== undefined) {
       const { measures, ...standing } = reported;
@@ -5147,7 +5151,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // Null rather than a default: a share-of-window shown against a guessed
       // window would be a made-up percentage.
       contextWindow: this.modelCatalog.contextWindow(),
-      fill: (await this.mainStanding()).context,
+      fill: (await this.mainStanding({ fresh: true })).context,
       // Every step in the window, reporting or not: `summarizeSteps` counts the
       // silent ones into `stepsWithoutUsage` so the totals carry their own
       // denominator instead of quietly under-counting.

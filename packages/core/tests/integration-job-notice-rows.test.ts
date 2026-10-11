@@ -4,6 +4,7 @@ import { describe, test, expect } from 'bun:test';
 import type { Database } from 'bun:sqlite';
 import { BackgroundJobRunner, backgroundJobWakeTrigger } from '../src/jobs/runner';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
+import { Inbox } from '../src/orchestrator/inbox';
 import { EventLog, initEventsHubTables } from '../src/events/hub/index';
 import { getChatHistoryPage } from '../src/read-models/status';
 import { SessionHistory } from '../src/session/history';
@@ -13,7 +14,7 @@ import type { BackendHost } from '../src/types/backend-host';
 import type { Schedule } from '../src/types/primitives';
 import { createTestWorkspace, createWorkspaceBundle, makeSql, makeSqlExec } from './helpers';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
-import { seedTranscriptEntry, createTestActors, hostDeliveries } from '@kinu.run/test-utils';
+import { seedTranscriptEntry, createTestActors } from '@kinu.run/test-utils';
 
 const JOB = 'bgjob-y2vlvl1wbli9gan6sh78a';
 
@@ -61,7 +62,7 @@ function activation(db: Database) {
   const runner = new BackgroundJobRunner({
     store: new BackgroundJobStore(sql, openWorkspaceMainActor(sql)),
     fiber,
-    inbox: hostDeliveries(host).signals,
+    inbox: new Inbox(host),
     eventLog: new EventLog(makeSqlExec(db), openWorkspaceMainActor(sql)),
     scheduleDrain: () => {},
   });
@@ -172,7 +173,7 @@ describe('a settled background job announces itself once, and not as the owner',
   test('NEGATIVE CONTROL: the same delivery without an announcement identity duplicates', async () => {
     const ws = evictedWorkspace();
     const { host } = chatStore(ws.db);
-    const inbox = hostDeliveries(host).signals;
+    const inbox = new Inbox(host);
 
     for (let start = 0; start < 6; start++) {
       await inbox.send({ kind: 'background_job', text: `Background agents job ${JOB} completed.` });
@@ -188,7 +189,7 @@ describe('a settled background job announces itself once, and not as the owner',
     // `fork_interrupted` (heads/reconcile.ts) is an unkeyed writer; authorship is fixed at the seam.
     const ws = evictedWorkspace();
     const { host } = chatStore(ws.db);
-    await hostDeliveries(host).signals.send({
+    await new Inbox(host).send({
       kind: 'fork_interrupted',
       text: '23 head(s) across 6 fork run(s) were still marked running…',
     });
@@ -215,7 +216,7 @@ describe('a settled background job announces itself once, and not as the owner',
     const runner = new BackgroundJobRunner({
       store: new BackgroundJobStore(sql, openWorkspaceMainActor(sql)),
       fiber,
-      inbox: hostDeliveries(preempting).signals,
+      inbox: new Inbox(preempting),
       eventLog: new EventLog(makeSqlExec(ws.db), openWorkspaceMainActor(sql)),
       scheduleDrain: () => {},
     });

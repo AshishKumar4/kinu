@@ -389,11 +389,26 @@ export class Inbox implements AgentInbox {
     }
 
     if (!busy) return this.queue(delivered);
-    this.pending.push(delivered);
-    this.openCard(delivered, stepBody(delivered));
-    this.logActivity?.('signal_injected', `${signal.kind} -> live turn`);
+    this.splice(delivered);
 
     return Promise.resolve('mid-turn');
+  }
+
+  /** What a delivery hands a running turn, spliced at its next step; false with no turn running, when it waits for a
+   *  turn of its own. Never opens one: its chat's admission does that. */
+  landMidTurn(signal: AgentSignal): boolean {
+    const delivered: DeliveredSignal = { ...signal, cardId: signal.idempotencyKey ? signalCardId(signal.idempotencyKey) : `sig-${nanoid()}` };
+
+    if (isUserSignal(delivered) || !this.busy) return false;
+    this.splice(delivered);
+
+    return true;
+  }
+
+  private splice(delivered: DeliveredSignal): void {
+    this.pending.push(delivered);
+    this.openCard(delivered, stepBody(delivered));
+    this.logActivity?.('signal_injected', `${delivered.kind} -> live turn`);
   }
 
   /** Bound once, as the chat session is built, before any signal is accepted. */

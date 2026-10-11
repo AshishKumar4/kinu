@@ -698,17 +698,9 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
     await orch.drainPendingEvents();
     expect(await absorb(orch)).toHaveLength(0);
     expect(enqueued).toHaveLength(1);
-    expect(enqueued[0].metadata?.kinuEvent).toBe('event_drain');
-    // The queued path shows the same card.
-    const signalId = v.parse(v.string(), enqueued[0]?.metadata?.signalId);
-    expect(broadcasts).toEqual([{
-      type: 'signal_card', id: signalId, state: 'pending',
-      metadata: {
-        kinuEvent: 'event_drain', kinuAuthor: 'harness',
-        drainTurnId: expect.any(String),
-      },
-      text: enqueued[0].text,
-    }]);
+    // A delivery under the batch's own id: its turn's announcement, which its end closes the lease by.
+    expect(enqueued[0].metadata).toMatchObject({ kinuEvent: 'event_drain', drainTurnId: enqueued[0].idempotencyKey });
+    expect(broadcasts).toEqual([]);
   });
 
   test('an enqueue rejection re-pends the batch so the next drain retries it', async () => {

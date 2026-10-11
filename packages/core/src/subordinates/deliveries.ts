@@ -256,8 +256,6 @@ export class InProcessDeliveries implements DeliveryPort {
     readonly eventLog: EventLog;
     readonly admit: (delivery: Delivery) => Promise<DeliveryAnswer>;
     readonly broadcast: (event: BroadcastEvent) => void;
-    /** Once the turn a taken delivery opened has settled: the process that handed it over runs it before it moves on. */
-    readonly settled?: (id: string) => Promise<void>;
   }) {
     this.signals = new DeliveryInbox({ deliver: (delivery) => this.deliver(delivery), broadcast: deps.broadcast });
   }
@@ -265,6 +263,14 @@ export class InProcessDeliveries implements DeliveryPort {
   readonly commit = async (bind: () => Delivery | null): Promise<void> => {
     await this.owe(() => ({ value: undefined, delivery: bind() }));
   };
+
+  /** The deliveries taken since it was last asked, by id: a pass that handed them over runs their turns before it ends,
+   *  outside the crossing (a crossing made from a turn's own close never waits on the turn queued behind it). */
+  takenSince(): readonly string[] {
+    return this.taken.splice(0);
+  }
+
+  private readonly taken: string[] = [];
 
   /** What `admit` writes and the delivery it owes the agent, as one commit; then one crossing. */
   async owe<A>(admit: () => OwedAdmission<A>): Promise<A> {
@@ -351,7 +357,7 @@ export class InProcessDeliveries implements DeliveryPort {
 
     if (answer === 'yielded') handBackCarried(this.deps.eventLog, delivery, answer);
 
-    if (answer === 'taken') await this.deps.settled?.(delivery.id);
+    if (answer === 'taken') this.taken.push(delivery.id);
 
     return answer;
   }
