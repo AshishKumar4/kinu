@@ -3055,10 +3055,21 @@ function readDeviceConfig(configPath = CONFIG_PATH) {
     throw new Error(`could not read device config at ${configPath}`, { cause: err });
   }
 
-  let parsed;
+  return parseDeviceConfig(text, configPath);
+}
+
+/**
+ * The one schema of device.json, which the CLI reads it by too: JSON naming
+ * every field `kinu connect` writes, each a nonempty string; `origin` one this
+ * daemon will send its token to; `root`, the directory `kinu connect` ran in,
+ * absolute. Fields beyond these are kept, so a rotated token is written back
+ * with them. `text` is the file's contents; a parse error never echoes them.
+ */
+function parseDeviceConfig(text, configPath) {
+  let value;
 
   try {
-    parsed = JSON.parse(text);
+    value = JSON.parse(text);
   } catch (cause) {
     const safeCause = cause instanceof SyntaxError
       ? new Error('device config is not valid JSON')
@@ -3067,25 +3078,15 @@ function readDeviceConfig(configPath = CONFIG_PATH) {
     throw new Error(`device config at ${configPath} is corrupt; re-run: kinu connect`, { cause: safeCause });
   }
 
-  return parseDeviceConfig(parsed, configPath);
-}
-
-/**
- * The one schema of device.json, which the CLI reads with too: every field
- * `kinu connect` writes, each a nonempty string; `origin` one this daemon will
- * send its token to; `root`, the directory `kinu connect` ran in, absolute.
- * Fields beyond these are kept, so a rotated token is written back with them.
- */
-function parseDeviceConfig(value, configPath) {
   const expectation = `device config at ${configPath} is missing its user, device, token, origin or directory; re-run: kinu connect`;
   const cfg = parseRecord(value, expectation);
 
   const [user, device, token, origin, root] = ['user', 'device', 'token', 'origin', 'root'].map((field) => {
-    const text = parseString(cfg[field], expectation);
+    const named = parseString(cfg[field], expectation);
 
-    if (text.length === 0) throw new Error(expectation);
+    if (named.length === 0) throw new Error(expectation);
 
-    return text;
+    return named;
   });
 
   if (!path.isAbsolute(root)) throw new Error(`device config at ${configPath} names a directory that is not absolute; re-run: kinu connect`);

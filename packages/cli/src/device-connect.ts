@@ -8,7 +8,6 @@ import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFi
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { Effect } from 'effect';
-import * as v from 'valibot';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { isolatedBunArgs } from '@kinu.run/core';
 import { classify, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, settleSync, tolerate, toKinuError } from '@kinu.run/core/obs';
@@ -19,6 +18,7 @@ import { listCloudDevices, registerCloudDevice, type CloudDevice, type CloudDevi
 import { readDaemonLogTail, rotateDaemonLogIfNeeded } from './daemon-log';
 import { issuedDeviceConnected, waitForAnswer, type StoppableWaitOptions } from '@kinu.run/core';
 import PC_AGENT_DAEMON_SOURCE from '../../pc-agent/src/index.js' with { type: 'text' };
+import { parseDeviceConfig, type DeviceConfig } from '../../pc-agent/src/index.js';
 import PC_AGENT_SANDBOX_SOURCE from '../../pc-agent/src/sandbox.js' with { type: 'text' };
 import PC_AGENT_PTY_SOURCE from '../../pc-agent/src/pty.js' with { type: 'text' };
 import PC_AGENT_UPDATE_SOURCE from '../../pc-agent/src/update.js' with { type: 'text' };
@@ -319,7 +319,7 @@ function listDevicesForConnect(auth: DeviceAuth, doing: string): Effect.Effect<C
 
 /** This machine's registration on `origin`, as the daemon's `device.json` holds it: its token, which linking again
  *  replaces, and the device the hub issued it. */
-function localDevice(origin: string): Effect.Effect<v.InferOutput<typeof LocalDeviceSchema> | undefined, KinuError> {
+function localDevice(origin: string): Effect.Effect<DeviceConfig | undefined, KinuError> {
   return Effect.gen(function* () {
     const local = yield* readLocalDevice();
 
@@ -331,7 +331,7 @@ function localDevice(origin: string): Effect.Effect<v.InferOutput<typeof LocalDe
 
 type LocalDeviceRead =
   | { readonly kind: 'none' }
-  | { readonly kind: 'current'; readonly config: v.InferOutput<typeof LocalDeviceSchema> }
+  | { readonly kind: 'current'; readonly config: DeviceConfig }
   | { readonly kind: 'malformed'; readonly error: KinuError };
 
 function readLocalDevice(): Effect.Effect<LocalDeviceRead, KinuError> {
@@ -340,25 +340,21 @@ function readLocalDevice(): Effect.Effect<LocalDeviceRead, KinuError> {
 
     if (text === undefined) return { kind: 'none' };
 
-    const value = yield* io('reading this machine\'s device config JSON', () => tolerate(() => JSON.parse(text), 'malformed-input'));
-
-    if (value === undefined) return { kind: 'malformed', error: new KinuError('io', `device config at ${DEVICE_CONFIG_PATH} is corrupt; re-run: kinu connect`) };
-
-    const parsed = v.safeParse(LocalDeviceSchema, value);
-
-    return parsed.success
-      ? { kind: 'current', config: parsed.output }
-      : { kind: 'malformed', error: new KinuError('io', `device config at ${DEVICE_CONFIG_PATH} is missing its user, token or directory; re-run: kinu connect`) };
+    // The daemon's own schema: the CLI reads device.json as the daemon that runs on it will.
+    return yield* Effect.try({
+      try: () => parseDeviceConfig(text, DEVICE_CONFIG_PATH),
+      catch: (cause) => toKinuError({ doing: 'reading this machine\'s device config', cause, otherwise: 'io' }),
+    }).pipe(Effect.match({
+      onSuccess: (config): LocalDeviceRead => ({ kind: 'current', config }),
+      onFailure: (error): LocalDeviceRead => ({ kind: 'malformed', error }),
+    }));
   });
 }
 
-function deviceOnOrigin(config: v.InferOutput<typeof LocalDeviceSchema>, origin: string): v.InferOutput<typeof LocalDeviceSchema> | undefined {
+function deviceOnOrigin(config: DeviceConfig, origin: string): DeviceConfig | undefined {
   return config.origin.replace(/\/+$/, '') === origin.replace(/\/+$/, '') ? config : undefined;
 }
 
-const DeviceConfigField = v.pipe(v.string(), v.nonEmpty());
-
-const LocalDeviceSchema = v.object({ origin: DeviceConfigField, token: DeviceConfigField, device: DeviceConfigField, user: DeviceConfigField, root: DeviceConfigField });
 
 function registerDeviceForConnect(auth: DeviceAuth, label: string | undefined, replaces: string | undefined, device: string | undefined) {
   return Effect.tryPromise({
