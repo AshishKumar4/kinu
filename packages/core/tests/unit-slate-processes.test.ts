@@ -6,7 +6,7 @@ import { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { sqlStorageOver } from '../src/identity';
-import { initSlateBuildTable, SlateBuilds, type SlateBuildFailure, type SlateBuildInput, type SlateImage } from '../src/slates/builds';
+import { initSlateBuildTable, SlateBuilds, type SlateBuildFailure, type SlateBuildRead, type SlateImage } from '../src/slates/builds';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '../src/slates/caller';
 import { EphemeralSlates, initEphemeralSlateTable } from '../src/slates/ephemeral';
 import { SlateProcesses } from '../src/slates/processes';
@@ -17,11 +17,11 @@ type Source = { readonly kind: 'files'; readonly project: SlateProject; readonly
 interface Launched { readonly id: string; readonly port: number | null; readonly n: number; isRunning(): Promise<boolean>; stop(): Promise<void> }
 
 /** What a slate's compile does as one authority: its tree's digest, whether it compiles, and what it looked at. */
-interface Compile { tree: string; compiles: boolean; inputs: SlateBuildInput[] }
+interface Compile { tree: string; compiles: boolean; inputs: SlateBuildRead[] }
 
-const read = (path: string): SlateBuildInput => ({ path, missing: false });
+const read = (path: string): SlateBuildRead => ({ path, missing: false });
 
-const missing = (path: string): SlateBuildInput => ({ path, missing: true });
+const missing = (path: string): SlateBuildRead => ({ path, missing: true });
 
 /** A private caller of another authority, as a share's restricted viewer is. */
 const RESTRICTED: SlateCaller = { path: [], cred: { uid: 2000, gid: 2000, groups: [2000], umask: 0o022 }, workMode: 'build', share: 'share-1' };
@@ -48,7 +48,7 @@ function backend() {
       world.builds += 1;
       const { tree, compiles: ok, inputs } = as(id, caller.cred);
 
-      return ok ? { modules: { 'index.js': `image-${id}-${tree}` }, inputs, reads: inputs.filter((input) => !input.missing).map((input) => input.path) }
+      return ok ? { modules: { 'index.js': `image-${id}-${tree}` }, inputs }
         : { failed: `${id}/server.ts:1:1: Could not resolve`, inputs };
     },
     launch: async ({ id }) => {
