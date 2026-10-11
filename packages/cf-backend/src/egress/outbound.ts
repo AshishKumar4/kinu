@@ -189,7 +189,9 @@ function socketDestination(address: string): { readonly hostname: string; readon
 /**
  * A workspace program's plain socket (its egress's `connect`): the destination judged as a request's host is, then the
  * bytes piped both ways. Kinu reads none of it; a secret cannot be put into a stream it does not parse. A refused or
- * unnamed destination closes the socket before anything is sent.
+ * unnamed destination closes the socket before anything is sent. Kinu judges the name or literal the program gave; a name
+ * that resolves to a private address is refused by Cloudflare at connect (PLATFORM_CATALOG 'worker.connect.private_address',
+ * as fetch is by 'worker.fetch.private_address'), so the egress resolves nothing itself.
  */
 export function handleEgressConnect(socket: Socket, params: KinuEgressParams | undefined): Promise<void> {
   return settle(Effect.gen(function* () {

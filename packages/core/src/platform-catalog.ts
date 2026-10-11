@@ -1230,6 +1230,45 @@ export const PLATFORM_CATALOG = {
     conflictsWith: ['do.evict.no_signal'],
   },
 
+  'worker.connect.private_address': {
+    subject: "A Worker's connect() to a private, loopback or link-local address, or to a name that resolves to one",
+    limit: null,
+    origin: 'platform',
+    bounds: null,
+    evidence: 'observed-in-production',
+    provenance: '~/kinu-logs/research/egress-dnsprobe-2026-10-11.md §2',
+    date: '2026-10-11',
+    trigger: 'connect() to localhost, or to a name resolving to 127/8, 10/8, 192.168/16 or 169.254/16',
+    onBreach: 'the socket is refused at open; nothing is sent',
+    observable: [{ context: 'socket.opened rejects', message: 'proxy request failed, cannot connect to the specified address' }],
+    firstPartySignal: false,
+    notes:
+      'The resolved address is judged, not only a literal: 127.0.0.1.nip.io:22, 10.0.0.1.nip.io:22, 192.168.1.1.nip.io:5432 '
+      + 'and 169.254.169.254.nip.io:8080 were refused while github.com:22 opened. Documented for addresses at '
+      + 'https://developers.cloudflare.com/workers/runtime-apis/tcp-sockets/ (silent on names). Port 80 is refused for every '
+      + 'host. So Kinu\'s egress (packages/cf-backend/src/egress/outbound.ts) judges names and literals and leaves resolution '
+      + 'to the platform. Miniflare enforces none of it.',
+  },
+
+  'worker.fetch.private_address': {
+    subject: "A Worker's fetch() to a private or loopback address, or to a name that resolves to one",
+    limit: null,
+    origin: 'platform',
+    bounds: null,
+    evidence: 'observed-in-production',
+    provenance: '~/kinu-logs/research/egress-dnsprobe-2026-10-11.md §1',
+    date: '2026-10-11',
+    trigger: 'fetch() of a URL whose host resolves to a private address, or names localhost or an IP literal',
+    onBreach: 'Cloudflare answers 403 with a 1002 or 1003 error code; the request never reaches the address',
+    observable: [
+      { context: 'name resolving to a private address', message: 'error code: 1002' },
+      { context: 'localhost or an IP literal', message: 'error code: 1003' },
+    ],
+    firstPartySignal: false,
+    notes: '127.0.0.1.nip.io, 10.0.0.1.nip.io and 169.254.169.254.nip.io answered 1002; localhost and 127.0.0.1 answered 1003; '
+      + 'example.com answered 200. Miniflare enforces none of it.',
+  },
+
   'worker.simultaneous_connections': {
     subject: 'Connections simultaneously waiting for response headers, per invocation',
     limit: { value: 6, unit: 'count' },
