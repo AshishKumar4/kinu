@@ -6,8 +6,10 @@
 import type { Database } from 'bun:sqlite';
 import {
   createWorkspaceForkSink, FORK_FRAME_BYTES, ForkTargetWriter, ForkTransferReceiver, forkTransferFrames,
-  type ForkFileSource, type ForkFrame, type ForkFrameReply, type ForkResult, type ForkWriteTarget,
+  localForkConversationSource, localForkConversationTarget,
+  type ForkConversationSource, type ForkConversationTarget, type ForkFileSource, type ForkFrame, type ForkFrameReply, type ForkResult, type ForkWriteTarget,
 } from '../../src/index';
+import { forkArtifactPath } from '../../src/identity/fork-plan';
 import type { SqlExecutor } from '../../src/types/primitives';
 import { openWorkspaceMainActor } from '../../src/identity/workspace-actors';
 import { createAppDataStore, type AppDataStore } from '../../src/tools/db-codemode';
@@ -22,8 +24,26 @@ interface ForkStore {
   readonly forkSource: ForkFileSource;
 }
 
-/** A target's write options; the writer is handed the target's own `db` store. */
-export type ForkTargetOptions = Omit<ForkWriteTarget, 'appData'>;
+/** A target's write options; the writer is handed the target's own `db` store, and lands the conversation beside the
+ *  rest unless a suite names where. */
+export type ForkTargetOptions = Omit<ForkWriteTarget, 'appData' | 'conversation'> & { readonly conversation?: ForkConversationTarget };
+
+/** The main actor's conversation in `sql`, read as a fork source. */
+export function conversationIn(sql: SqlExecutor): ForkConversationSource {
+  return localForkConversationSource(sql, openWorkspaceMainActor(sql));
+}
+
+/** The fork's conversation landed in `sql`, beside the rest unless a suite keeps it apart; `owner` is the target
+ *  workspace's main actor, `sql`'s own by default. */
+export function conversationInto(
+  sql: SqlExecutor, target: Pick<ForkWriteTarget, 'artifactDirectory' | 'now'>, owner: SqlExecutor = sql,
+): ForkConversationTarget {
+  return localForkConversationTarget(sql, {
+    actorId: () => openWorkspaceMainActor(owner).actorId,
+    artifactPath: (relative) => forkArtifactPath(relative, target.artifactDirectory),
+    now: target.now ?? Date.now(),
+  });
+}
 
 /** The `db` tool's store as `workspace`'s main actor uses it. */
 export function appDataOf(workspace: Pick<ForkStore, 'sql' | 'db'>): AppDataStore {
@@ -40,6 +60,8 @@ interface Cut {
   readonly artifactDirectory?: string;
   readonly transferId?: string;
   readonly frameBytes?: number;
+  /** Where the source keeps the conversation; beside the rest unless a suite keeps it apart. */
+  readonly conversation?: ForkConversationSource;
 }
 
 export function receiverFor(tgt: TestWorkspace, target: ForkTargetOptions): ForkTransferReceiver {
@@ -47,7 +69,7 @@ export function receiverFor(tgt: TestWorkspace, target: ForkTargetOptions): Fork
 }
 
 export function writerFor(tgt: TestWorkspace, target: ForkTargetOptions): ForkTargetWriter {
-  return new ForkTargetWriter(tgt.sql, { ...target, appData: () => appDataOf(tgt).fork });
+  return new ForkTargetWriter(tgt.sql, { ...target, appData: () => appDataOf(tgt).fork, conversation: target.conversation ?? conversationInto(tgt.sql, target) });
 }
 
 /** Run one transfer into `receiver`: every frame that crossed, and the fork the commit published (null if none). */
@@ -56,7 +78,7 @@ export async function transfer(
 ): Promise<{ frames: ForkFrame[]; result: ForkResult | null }> {
   const stream = forkTransferFrames({
     sql: src.sql, actor: openWorkspaceMainActor(src.sql), vfs: src.forkSource, untilMessageId: cut.untilMessageId,
-    appData: appDataOf(src).fork,
+    appData: appDataOf(src).fork, conversation: cut.conversation ?? conversationIn(src.sql),
     artifactDirectory: cut.artifactDirectory ?? SOURCE_ARTIFACTS,
     transferId: cut.transferId ?? 'tx-1',
     frameBytes: cut.frameBytes ?? FORK_FRAME_BYTES,

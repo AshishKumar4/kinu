@@ -15,9 +15,8 @@ import type { SubordinateRosterEntry } from '../src/delegation/agents-tool';
 import { readWorkspaceAgents, type PanelAgent } from '../src/read-models/workspace-agents';
 import { OWNER_STOPPED } from '../src/heads/types';
 import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
-import { readAgentFigures } from '../src/read-models/agent-figures';
+import { initAgentFiguresTable, readAgentFigures } from '../src/read-models/agent-figures';
 import { EventLog, initEventsHubTables, type EmailPayload } from '../src/events/hub/index';
-import { admitSubordinateTask } from '../src/subordinates/support';
 import { initDeferredApprovalsTable } from '../src/safety/deferred-approval';
 import { initPlanReviewTable } from '../src/plans/review';
 import { initDeviceConsentRequestsTable } from '../src/safety/device-consent';
@@ -39,6 +38,7 @@ function workspace() {
   initActorClaimTables(execRaw);
   initEventsHubTables(exec);
   initRunEventTables(execRaw);
+  initAgentFiguresTable(execRaw);
   const actors = createTestActors(sql, execRaw);
   new SubordinateRosterStore(exec, actors.main).ensureSchema();
 
@@ -54,9 +54,10 @@ function workspace() {
     return child;
   };
 
-  const read = (queued = false): Promise<PanelAgent[]> => readWorkspaceAgents({
+  /** `queued`: the agents whose wake stands, each holding work it has not said it rests from. */
+  const read = (queued: readonly string[] = []): Promise<PanelAgent[]> => readWorkspaceAgents({
     sql, exec, root: actors.main, actors: actors.directory.list({ retired: true }),
-    figures: (actorIds) => readAgentFigures(sql, actorIds), queued,
+    figures: (actorIds) => readAgentFigures(sql, actorIds), queued: (actorId) => queued.includes(actorId),
   });
 
   const openTurn = (actor: ActorHandle): void => {
@@ -163,16 +164,15 @@ describe('the Agents panel lists every agent in the workspace', () => {
   test('an agent owed a turn it has not claimed reads working', async () => {
     const { exec, main, hire, read } = workspace();
     const helper = hire(main, 'counter-1', { lifetime: 'task' });
-    const activity = async (queued = false) => Object.fromEntries((await read(queued)).map((agent) => [agent.label, agent.activity]));
+    const activity = async (queued: readonly string[] = []) => Object.fromEntries((await read(queued)).map((agent) => [agent.label, agent.activity]));
 
     expect(await activity()).toEqual({ Main: 'idle', 'counter-1': 'idle' });
 
     // The lead's chat queued a turn (a job's wake) it has not claimed.
-    expect((await activity(true)).Main).toBe('working');
+    expect((await activity([main.actorId])).Main).toBe('working');
 
-    // The helper was handed a task its drain has not run.
-    admitSubordinateTask(new EventLog(exec, helper), { fromWorkspace: helper.workspaceId, kind: 'task', body: 'Count the files.', mode: 'build', now: Date.now() });
-    expect((await activity())['counter-1']).toBe('working');
+    // The helper was handed a task its turn has not claimed: its wake stands until it says it rests.
+    expect((await activity([helper.actorId]))['counter-1']).toBe('working');
 
     // An email reached the lead, and the drain that takes it has not run.
     new EventLog(exec, main).publish({ descriptor: { ingress: 'email_inbound', variant: 'email', sender_class: 'owner', payload: EMAIL }, now: Date.now() });

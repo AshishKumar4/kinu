@@ -246,16 +246,24 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(rows[1].content).toBe('hello there');
   });
 
-  test('a streamed answer holds one stream row per part while open and none once sealed, and the next step reads all of it', async () => {
-    // One stream row per open part, extended every 64 deltas, committed once at step end (D24). A row per token
-    // spent a Durable Object's 30 s CPU budget (2026-09-21, D23).
+  test('a streamed answer writes each flushed window once while open, holds none once sealed, and the next step reads all of it', async () => {
+    // One statement per flushed window, never per token: a row per token spent a Durable Object's 30 s CPU budget
+    // (2026-09-21, D23). Each window is its part's next row: extending one row rewrote all of it at every flush.
     const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
     const prompts: PromptMessage[][] = [];
     const words = Array.from({ length: 300 }, (_, i) => `w${i}`);
     const { db, rt } = workspaceRuntime();
     const streamRows = () => db.query<{ n: number }, []>('SELECT count(*) AS n FROM stream_parts').get()?.n ?? -1;
-    const answerRows = () => db.query<{ n: number }, []>("SELECT count(*) AS n FROM stream_parts WHERE message_id IN (SELECT message_id FROM session_messages WHERE origin = 'output')").get()?.n ?? -1;
-    let openRows = -1;
+    const OpenSchema = v.object({ parts: v.number(), text: v.nullable(v.string()) });
+
+    const answerOpen = () => v.parse(OpenSchema, db.query(`SELECT count(DISTINCT part_no) AS parts, group_concat(text, '') AS text
+      FROM (SELECT part_no, text FROM stream_parts WHERE message_id IN (SELECT message_id FROM session_messages WHERE origin = 'output')
+      ORDER BY part_no, segment)`).get());
+
+    /** The answer's stream rows as the model's 200th delta arrives. */
+    interface MidAnswer { open: v.InferOutput<typeof OpenSchema> | null }
+
+    const midAnswer: MidAnswer = { open: null };
 
     const model = new TestLanguageModelV2({
       provider: 'fake',
@@ -284,7 +292,7 @@ describe('LocalAgentSession.send — a user turn', () => {
                 return;
               }
 
-              if (at === 202 && openRows < 0) openRows = answerRows();
+              if (at === 202 && midAnswer.open === null) midAnswer.open = answerOpen();
               controller.enqueue(chunk);
             },
           }),
@@ -296,7 +304,11 @@ describe('LocalAgentSession.send — a user turn', () => {
     // No AGENTS.md over its directory: the turn's first step bears the block alone.
     const { session, events } = setup('unused', model, { rt, db, cwd: scratchDir('local-session-stream-rows') });
     await session.send('say a lot', { id: crypto.randomUUID() });
-    expect(openRows).toBe(1);
+    const answered = words.map((word) => `${word} `).join('');
+
+    // Mid-answer: one part, its windows in order, each written once, so they read back as the answer's beginning.
+    expect(midAnswer.open?.parts).toBe(1);
+    expect(answered.startsWith(midAnswer.open?.text ?? '-')).toBe(true);
     const turnId = turnStarts(events)[0]?.turnId;
     // The input, the block the turn's first step bore, then the answer: one output revision, not one per part.
     expect(db.query<{ cause: string }, [string]>('SELECT cause FROM context_revisions WHERE turn_id = ? ORDER BY revision').all(turnId ?? '').map((row) => row.cause))

@@ -77,6 +77,8 @@ const EXCLUDED_TABLES = {
   memory_note_chunks: true,
   memory_note_chunks_fts: true,
   memory_note_files: true,
+  // Folded from the run events the archive carries, up to a rowid a restore renumbers: the next read folds them again.
+  agent_figure_folds: true,
   memory_projection_updates: true,
 } satisfies Record<string, true>;
 

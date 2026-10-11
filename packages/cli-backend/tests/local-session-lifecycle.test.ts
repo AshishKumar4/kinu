@@ -88,6 +88,8 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       expect(await reopened.listDeferredApprovals()).toEqual([parked, sandboxAction]);
       expect(await reopened.decideDeferredApprovals([parked.id, sandboxAction.id, sandboxAction.id], 'approved'))
         .toEqual({ decided: [parked.id, sandboxAction.id] });
+      // The decision wakes the agent with a turn of its own; the grant is spent after it, outside any turn.
+      await reopened.flushPendingDrains();
       expect(executed).toEqual([]);
       await exec.execute(command);
       expect(executed).toEqual([command]);
@@ -868,7 +870,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         jobResult: async () => null,
         listBackgroundJobs: async () => [],
         ...agentSelfRest,
-        armCompactNow: () => { arms++; },
+        armCompactNow: async () => { arms++; },
       })],
     })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [] });
 

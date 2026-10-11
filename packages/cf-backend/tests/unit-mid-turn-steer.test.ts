@@ -12,7 +12,7 @@ import {
   driveUntil, gatewayWorkspace, mainDatabase, orchestratorHarness, reactivateOrchestratorHarness, chatSessionTurns, storedChat,
   type HarnessOrchestratorAgent, workspaceMainActor,
 } from './helpers/actor-harness';
-import { asPane } from './helpers/agents-sdk';
+import { asPane, joinHarnessFibers } from './helpers/agents-sdk';
 import { chatCompletion, openingOf, stubAiBinding } from './helpers/platform-gateway';
 import { present } from '@kinu.run/test-utils';
 
@@ -149,38 +149,32 @@ describe('a message typed while the agent is working', () => {
 });
 
 describe('stopping a turn with a steer still pending', () => {
-  test('keeps the text queued instead of handing it back', async () => {
+  // Stop means stop (design v3 C): words the turn never read go back to their composer, as any agent's do.
+  test('hands the unread text back to its composer', async () => {
     const h = steerHarness();
     await h.startTurn();
     await h.agent.send('change of plans', 'steer-change');
 
-    const outcome = await h.agent.cancelCurrentWork();
+    await h.agent.cancelCurrentWork();
+    await joinHarnessFibers();
 
-    expect(outcome).not.toHaveProperty('returnedSteers');
-    expect(steerFrames(h.frames).map((f) => f.status)).toEqual(['queued']);
+    expect(steerFrames(h.frames).map((f) => f.status)).toEqual(['queued', 'returned']);
   });
 
-  test('two queued steers become the next turn, in order, once the abort settles', async () => {
+  // Nothing queued before a Stop runs (design v3 C): two steers both go back, and no turn takes either.
+  test('two queued steers both go back to their composer, and no turn runs them', async () => {
     const h = steerHarness();
-    const turns = chatSessionTurns(h.agent);
     await h.startTurn();
     await h.agent.send('first', 'steer-first');
     await h.agent.send('second', 'steer-second');
     await h.agent.cancelCurrentWork();
+    await joinHarnessFibers();
 
-    const rerun = turns.park();
-    const stopped = turns.settle({ messageId: 'assistant-stop', text: 'partial', requestId: 'req-stop', status: 'aborted' });
-
-    expect((await rerun).identity.turnId).toBe('steer-first');
-    await turns.settle({ messageId: 'a-rerun', text: 'both done' });
-    await stopped;
-
-    const rerunRows = (await storedChat(h)).filter((message) => message.role === 'user').slice(-2);
-    expect(rerunRows.map((message) => [message.id, message.parts, turnAuthor(message)])).toEqual([
-      ['steer-first', [{ type: 'text', text: 'first' }], 'operator'],
-      ['steer-second', [{ type: 'text', text: 'second' }], 'operator'],
+    expect(steerFrames(h.frames).map((f) => `${f.steerId} ${f.status}`).sort((a, b) => a.localeCompare(b))).toEqual([
+      'steer-first queued', 'steer-first returned', 'steer-second queued', 'steer-second returned',
     ]);
-    expect(mainDatabase(h).query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get('steer-first')).toEqual({ work_mode: 'build' });
+    expect((await storedChat(h)).filter((message) => message.id === 'steer-first' || message.id === 'steer-second')).toEqual([]);
+    expect(mainDatabase(h).query('SELECT turn_id FROM actor_turn_claims WHERE turn_id IN (?, ?)').all('steer-first', 'steer-second')).toEqual([]);
   });
 });
 

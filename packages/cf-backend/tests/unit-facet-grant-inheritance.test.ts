@@ -8,7 +8,7 @@ import {
   type ApprovalGrant, type ShellApprovalMode,
 } from '@kinu.run/core';
 import { ORCHESTRATOR_RPC_SURFACE } from '../src/rpc-surface';
-import { hostedMainActor, hostedSubordinateHarness, orchestratorHarness, workspaceMainActor } from './helpers/actor-harness';
+import { agentSql, hostedAgain, hostedMainActor, hostedSubordinateHarness, orchestratorHarness, workspaceMainActor } from './helpers/actor-harness';
 
 /** A force-push reaches out, so the agent's own `sandbox` does not exempt it. */
 const GATED = 'git push --force origin main';
@@ -97,13 +97,18 @@ describe('reachability of the root policy read', () => {
     expect(parked.map((action) => [action.command, action.actor])).toEqual([[GATED, hire]]);
     await workspace.agent.decideDeferredApprovals(parked.map((action) => action.id), 'approved');
 
-    // Woken on its own durable queue, told to re-issue; the root is not.
-    const woken = workspace.db.query<{ actor_id: string }, [string]>(
-      "SELECT actor_id FROM agent_log WHERE variant = 'subordinate_task' AND payload LIKE ?",
-    ).all('%APPROVED, still not run%');
+    // Woken by a delivery of its own, told to re-issue; the root is not.
+    await workspace.agent.harnessAgentsIdle();
 
-    expect(woken.map((row) => row.actor_id)).toEqual([hire]);
-    expect((await shell.exec(GATED)).refusal).toBeUndefined();
+    const told = (actorId: string): number => agentSql(workspace, actorId)<{ n: number }>`
+      SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${actorId} AND type = 'run_start' AND payload LIKE ${'%APPROVED, still not run%'}`[0]?.n ?? 0;
+
+    expect({ hire: told(hire), root: told(workspaceMainActor(workspace.db).actorId) }).toEqual({ hire: 1, root: 0 });
+    // Its re-issue, from the same agent hosted again: the turn that woke it released the workspace's hold once it rested.
+    const again = (await hostedAgain(child)).runtime.shell;
+
+    if (!again) throw new Error('a hosted subordinate carries a shell');
+    expect((await again.exec(GATED)).refusal).toBeUndefined();
   });
 });
 

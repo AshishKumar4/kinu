@@ -16,7 +16,7 @@ import type { ActorHandle } from '../identity/actor-handle';
 import { writeActivityLog } from '../identity/activity-log';
 import { OWNER_FIXABLE_REFUSALS, providerRefusalCode, providerStatusOf } from '../providers/util';
 import { statedRetryAfterMs } from '../providers/fallback-cooldown';
-import type { AgentOrchestrator, TurnContinuity } from './agent-orchestrator';
+import { improvementLanesOpen, type AgentOrchestrator, type TurnContinuity } from './agent-orchestrator';
 import type { EvolutionEngine } from '../evolution/engine';
 import type { HeadJournal } from '../heads/journal';
 import { CompletedTurnSchema } from '../evolution/session-window';
@@ -35,7 +35,7 @@ import { TASK_REMINDER_EVENT, taskReminderIdempotencyKey } from '../tasks/remind
 export const RunEndReasonSchema = v.picklist(RUN_END_REASONS);
 
 /** Recorded rather than re-read: a fresh actor defaults to `conversation`. */
-const TurnContinuitySchema: v.GenericSchema<TurnContinuity> = v.union([
+export const TurnContinuitySchema: v.GenericSchema<TurnContinuity> = v.union([
   v.literal('conversation'), v.literal('independent_task'),
 ]);
 
@@ -92,6 +92,9 @@ const TERMINAL_EFFECT_NAMES = [
   'parent_report',
   // Detached: a turn whose lanes are another object's hands it the settled turn, which that object owes on its own.
   'workspace_settle',
+  // Detached: the fleet's row for a turn handed over, owed once as its sequence is first recorded however often the
+  // handoff repeats. An analytics write: a crash between it and its claim can write it twice, never lose it.
+  'fleet_turn',
 ] as const;
 
 export type TerminalEffectName = (typeof TERMINAL_EFFECT_NAMES)[number];
@@ -194,7 +197,9 @@ function taskReminderTerminalEffect(queue: () => OwedTurnQueue): TerminalEffect 
 
 /** The recording, the lessons and the drain: owed where the actor's evolution tables and event log are. */
 export function turnRecordingEffects(deps: {
-  readonly orchestrator: Pick<AgentOrchestrator, 'recordTurn' | 'recordedTurn' | 'drainPendingEvents'>;
+  /** Read when an effect runs: the recording agent's session may be bound after this table is built, as it is hosted. */
+  /** Null while the session is not bound: the effect stays owed, and replays once it is. */
+  readonly orchestrator: () => RecordingSession | null;
   readonly engine: Pick<EvolutionEngine, 'learnFromTurn'>;
 }): TerminalEffectTable {
   return {
@@ -207,7 +212,8 @@ export function turnRecordingEffects(deps: {
 /** The bodies every chat backend owes alike: the loop's follow-up turns, the recording, the lessons and the drain. */
 export function chatTerminalEffects(deps: {
   readonly chat: () => OwedTurnQueue;
-  readonly orchestrator: Pick<AgentOrchestrator, 'recordTurn' | 'recordedTurn' | 'drainPendingEvents'>;
+  /** Null while the session is not bound: the effect stays owed, and replays once it is. */
+  readonly orchestrator: () => RecordingSession | null;
   readonly engine: Pick<EvolutionEngine, 'learnFromTurn'>;
 }): TerminalEffectTable {
   return {
@@ -219,7 +225,6 @@ export function chatTerminalEffects(deps: {
 }
 
 export interface SubordinateEffectPorts {
-  readonly orchestrator: Pick<AgentOrchestrator, 'improvementLanesOpen'>;
   hireAdvisor(advisor: AdvisorRecoverySnapshot): Promise<void>;
   applyTitle(subject: string): Promise<void>;
   /** Absent with no hirer. */
@@ -240,7 +245,7 @@ export function subordinateTerminalEffects(ports: SubordinateEffectPorts): Termi
     advisor_review: terminalEffect({
       input: v.object({ status: RunEndReasonSchema, workMode: WorkModeSchema, advisor: AdvisorRecoverySnapshotSchema }),
       run: async ({ status, workMode, advisor }) => {
-        if (ports.orchestrator.improvementLanesOpen(status, workMode)) await ports.hireAdvisor(advisor);
+        if (improvementLanesOpen(status, workMode)) await ports.hireAdvisor(advisor);
 
         return { status: 'completed' };
       },
@@ -332,8 +337,14 @@ export function branchesTerminalEffect(deps: {
 }
 
 /** The window append is idempotent on the message's identity. Continuity, mode and the evolution gate come off the row. A plan turn records nothing. */
+/** What an effect over an agent's session says while the session is not bound yet. */
+const UNBOUND_SESSION = { status: 'owed', detail: "the recording agent's session is not bound yet" } as const;
+
+/** The recording agent's session, as its effects reach it. */
+type RecordingSession = Pick<AgentOrchestrator, 'recordTurn' | 'recordedTurn' | 'drainPendingEvents'>;
+
 function turnRecordTerminalEffect(
-  orch: Pick<AgentOrchestrator, 'recordTurn' | 'recordedTurn'>,
+  orchestrator: () => RecordingSession | null,
 ): TerminalEffect {
   return terminalEffect({
     input: v.object({
@@ -348,6 +359,9 @@ function turnRecordTerminalEffect(
 
       // Unkeyed for an empty id: every such response would share one key.
       const recordedId = keyedScope(messageId);
+      const orch = orchestrator();
+
+      if (orch === null) return UNBOUND_SESSION;
       orch.recordTurn(
         orch.recordedTurn(status, v.parse(CompletedTurnSchema, turn)),
         continuity,
@@ -377,11 +391,14 @@ function turnLessonsTerminalEffect(engine: Pick<EvolutionEngine, 'learnFromTurn'
 
 /** Idempotent (PENDING, unbound rows only). Rethrows: `completed` over a half-bound batch strands the assignment. */
 function eventDrainTerminalEffect(
-  orch: Pick<AgentOrchestrator, 'drainPendingEvents'>,
+  orchestrator: () => RecordingSession | null,
 ): TerminalEffect {
   return terminalEffect({
     input: v.object({}),
     run: async () => {
+      const orch = orchestrator();
+
+      if (orch === null) return UNBOUND_SESSION;
       await orch.drainPendingEvents({ rethrow: true });
 
       return { status: 'completed' };

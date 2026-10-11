@@ -15,6 +15,8 @@ import { env } from 'cloudflare:workers';
 import { afterAll, expect, test } from 'vitest';
 import type { ComplexityProbeDO, OperationCost } from './complexity-probe';
 import { judge, steepest, type GrowthClass, type GrowthCounter, type GrowthFinding } from './growth';
+import { crossingTotal } from '../crossings';
+import type { MeteredTurn } from '../sql-meter';
 
 type Probe = DurableObjectStub<ComplexityProbeDO>;
 
@@ -47,6 +49,18 @@ function diffsAt(size: number): Promise<{ readonly read: OperationCost; readonly
   return measured;
 }
 
+/** The orchestrator's measured turn at each size, counted in the workspace's SQLite and in main's isolate's, run once
+ *  for both subjects. */
+const longTurns = new Map<number, Promise<{ readonly workspace: OperationCost; readonly main: OperationCost; readonly historyReads: number }>>();
+
+function longTurnAt(size: number): Promise<{ readonly workspace: OperationCost; readonly main: OperationCost; readonly historyReads: number }> {
+  const measured = longTurns.get(size) ?? env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName(`long-cost-${String(size)}`)).longTurnCost(size);
+
+  longTurns.set(size, measured);
+
+  return measured;
+}
+
 const SUBJECTS: readonly Subject[] = [{
   name: 'activation, the open-turn lookup',
   unit: 'finished turns',
@@ -63,6 +77,14 @@ const SUBJECTS: readonly Subject[] = [{
   rows: { rowsRead: 'O(1)', rowsWritten: 'O(1)', statements: 'O(1)', rowsScanned: 'O(1)' },
   why: 'every wake tick asks it (`owedUntimedArms`): it reads the claims that never settled, never the settled claim '
     + 'each response leaves behind',
+}, {
+  name: "a turn's end, its agent's figures",
+  unit: 'turns before it',
+  sizes: [50, 300],
+  run: async (probe, size) => await probe.turnEndFigures(size),
+  rows: { rowsRead: 'O(1)', rowsWritten: 'O(1)', statements: 'O(1)', rowsScanned: 'O(1)' },
+  why: 'every turn\'s end reports its agent\'s tokens, dollars, active time and cache EMA (main\'s isolate at each of its '
+    + 'own): the totals the last read stored and the events since, never a join over every turn before it (2,999 rows at turn 300)',
 }, {
   name: 'session store, one turn',
   unit: 'turns of history',
@@ -88,16 +110,24 @@ const SUBJECTS: readonly Subject[] = [{
   unit: 'deltas in each earlier answer',
   sizes: [20, 2_000],
   run: async (_probe, size) => {
-    const measured = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName(`long-cost-${String(size)}`)).longTurnCost(size);
+    const measured = await longTurnAt(size);
 
     transportReads.set(size, measured.historyReads);
-    turnStatements.set(size, measured.cost.tables);
+    turnStatements.set(size, { workspace: measured.workspace.tables, main: measured.main.tables });
 
-    return measured.cost;
+    return measured.workspace;
   },
   rows: { rowsRead: 'O(1)', rowsWritten: 'O(1)', statements: 'O(1)', rowsScanned: 'O(1)' },
   why: 'the production turn path, chat transport included: the store subject above drives the pipeline directly, so '
     + 'per-delta work in the transport (a transcript read, a broadcast) shows only here',
+}, {
+  name: "main's isolate, the same turn",
+  unit: 'deltas in each earlier answer',
+  sizes: [20, 2_000],
+  run: async (_probe, size) => (await longTurnAt(size)).main,
+  rows: { rowsRead: 'O(1)', rowsWritten: 'O(1)', statements: 'O(1)', rowsScanned: 'O(1)' },
+  why: 'main keeps its model loop, transcript, turn claims and runs in its own isolate\'s SQLite (D9), so the turn\'s '
+    + 'session writes and its read of the earlier answers land there: sealed messages, never their deltas',
 }, {
   name: 'workspace Diffs, one read',
   unit: 'files in the workspace',
@@ -136,8 +166,8 @@ const SUBJECTS: readonly Subject[] = [{
 /** The chat transport's whole-transcript reads during the orchestrator subject's measured turn, by size. */
 const transportReads = new Map<number, number>();
 
-/** The orchestrator subject's measured turn, its statements by the tables they name, by size. */
-const turnStatements = new Map<number, OperationCost['tables']>();
+/** The orchestrator subject's measured turn, its statements by the tables they name in each isolate, by size. */
+const turnStatements = new Map<number, { readonly workspace: OperationCost['tables']; readonly main: OperationCost['tables'] }>();
 
 /**
  * Statements one production turn runs, measured 2026-09-27 on this subject: 5,087 at 7dd73e1ac9, 2,035 of them
@@ -175,8 +205,40 @@ const turnStatements = new Map<number, OperationCost['tables']>();
  * 382 once a turn's steps name the slates that do not build, read once per activation (+1). 384 once a turn records
  * whether a reset would cut it in a provider wait or in its step's own work (D12): its cut row at admission and the
  * phase each step enters (+2, measured at fd56c4de5).
+ * Since D9 main keeps its model loop, transcript, claims and runs in its own isolate, whose SQLite this count did not
+ * read: at 2ac877244 the workspace ran 376, green, while main's isolate ran 450 more, one of them asking
+ * `sqlite_master` for `run_events` at every turn's end. Both are counted since, at both sizes over 3 runs: 825, the
+ * workspace's 376 and main's 449 once its figures ask nothing. Most of main's re-read what the workspace reads too:
+ * its actor and identity rows (workspace_actors 133, workspace_identity 10) and its config (actor_config 56); then
+ * its claims and stream parts (65) and run events (31).
+ * 836 once main's isolate asks the workspace what it alone holds, at both sizes over 3 runs (194a6f8b8 against
+ * f1ee92551): the open tasks and running jobs its task reminder reads as the turn settles (agent_tasks +1,
+ * background_jobs +2; main's own agent_tasks -1), the warming lane each request and turn end tells (cache_warm +3),
+ * and the fleet row its handoff owes as an effect (terminal_effects +2). Each of those four calls resolves the agent's
+ * roster row twice on entry (workspace_actors +8); the activity log writes 4 fewer. The workspace's 388, main's 448.
+ * 835 once a stream part opens with its first window in the row it inserts (main's isolate -1, at both sizes).
+ * 801 once a turn's close neither reads its answer back to announce it to no extension (b65abe3ff) nor reads its
+ * narration for no slate and no failed task (8f78f86e9): the workspace's 380, main's 421, at both sizes over 3 runs
+ * on 380d7148e.
+ * 814 with the turn surface's durable facts (design v2 §2, v3 B), at both sizes over 3 runs on 9d7fb8edb, accepted on
+ * 2026-10-10 as a temporary cost of the fences and report sequence: this bound is back below 801 by the end of the
+ * design's step 7, when the root's accumulator and mirrored writes go, and is not raised again without the root's say. The
+ * workspace's 386: each of the turn's four reports checked against the newest taken (+4), the opening's key (+1), the
+ * turn's fence (+2), and its branches' rows where main_turn_facts kept three statements (-1). Main's 428: its four
+ * reports numbered (+4), its facts frozen and read back for the handoff (+2), its claim read for the opening's epoch (+1).
+ * 807 once an agent with no hirer asks the workspace for no report (ActorPolicy), at both sizes over 3 runs on
+ * ceb97fb8e: main's 419 (-9, the report's ledger reads), the workspace's 388 (+2, the policy's row reads).
+ * 809 with the review's durability fixes, within the accepted 814, at both sizes over 3 runs on 9c6e5ba52: the
+ * workspace's 390 (+2, the facts it first offered the turn's preparation, kept for an agent that dies before it froze
+ * them, and the ended tombstone the turn's handoff writes on its fence).
+ * 810 with the review's third round, over 2 runs at both sizes on 5323f5588: the workspace's 391 (+1, an opening first
+ * queues the obligations of openings cut before their claim; the fence, one row an agent ordered by its sequence, opens
+ * in one statement where it took two, and ends a run in one).
+ * 792 once the workspace agent is hosted and built like every agent (no second session over its stores), its signals
+ * are deliveries and its tools cross through a held port, at both sizes on 9b596e8d5-c5bab5d48: the workspace's 397, main's
+ * isolate's 395. Below the 801 the single-object turn ran in before the isolates.
  */
-const TURN_STATEMENTS = 384;
+const TURN_STATEMENTS = 792;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {
@@ -223,7 +285,8 @@ afterAll(() => {
     ...reports,
     'complexity: blind to',
     '  CPU, memory and wall time: a path that re-parses or copies in memory while its SQL stays flat is invisible;',
-    '  storage outside this object\'s SQLite (KV, R2, D1, another object\'s database, the model provider);',
+    '  storage outside the measured SQLite (KV, R2, D1, another object\'s database or a hired agent\'s isolate, the',
+    '    model provider): the orchestrator subjects count the workspace\'s and main\'s isolate\'s;',
     '  growth past the largest size measured, and growth hidden inside the exponent slack of a class;',
     '  which of the tables a statement names its rows came from: it is charged to all of them jointly, and a',
     '    trigger\'s rows to the statement that fired it;',
@@ -262,19 +325,114 @@ for (const subject of SUBJECTS) {
   });
 }
 
-// Runs after the subjects: the orchestrator subject fills `turnStatements`.
+// Runs after the subjects: the orchestrator subject fills `turnStatements`. Main's isolate is counted with the
+// workspace: moving a statement from one to the other does not make a turn cheaper.
 test('a production turn runs no more statements than it was measured at, and asks sqlite_master nothing', () => {
-  const totals = [...turnStatements.values()].map((tables) => ({
-    statements: Object.values(tables).reduce((sum, table) => sum + table.statements, 0),
-    schema: tables.sqlite_master?.statements ?? 0,
-  }));
+  const totals = [...turnStatements].map(([size, isolates]) => {
+    const [workspace = 0, main = 0] = [isolates.workspace, isolates.main]
+      .map((tables) => Object.values(tables).reduce((sum, table) => sum + table.statements, 0));
 
+    return { size, workspace, main, schema: (isolates.workspace.sqlite_master?.statements ?? 0) + (isolates.main.sqlite_master?.statements ?? 0) };
+  });
+
+  reports.push(`complexity: a production turn's statements, by size: ${totals.map((total) => `${String(total.size)}: `
+    + `${String(total.workspace)} in the workspace + ${String(total.main)} in main's isolate = ${String(total.workspace + total.main)}`).join('; ')}`
+    + `; at most ${String(TURN_STATEMENTS)} together`);
   expect(totals).toHaveLength(2);
 
   for (const total of totals) {
     expect(total.schema).toBe(0);
-    expect(total.statements).toBeLessThanOrEqual(TURN_STATEMENTS);
+    expect(total.workspace + total.main, `${String(total.workspace)} in the workspace, ${String(total.main)} in main's isolate`).toBeLessThanOrEqual(TURN_STATEMENTS);
   }
+});
+
+/**
+ * A task turn's calls across an isolate or object boundary, counted where each lands: the relay main's isolate calls
+ * into, the workspace host each relay call opens and calls, the RPC targets either answers with (a memory, a Nimbus
+ * session, a context tree), the account, and main's isolate the workspace calls into (D9). Each side splits into its
+ * open, a phase a model step (from the step's pace), and the last step with the turn's close. A planted call at each
+ * boundary must show as one more crossing there, so the same call in a turn fails these bounds.
+ * Measured 2026-10-10 at 40db812715 (lane e881f2a3c), three runs alike: a four-step task turn opens in 39, steps in
+ * 19, 16, 14 and 14, and closes in 56 (158 in all; a one-step turn 112). A steady tool step is 14: its pace (relay,
+ * host, the facet's grant), its auth (relay, host, account), its tool (relay, host), its activity (relay, host) and
+ * four host openings. Before the isolate (d05ff368d) a steady step crossed once; design v2 §8 targets 3.
+ * Counted again at f0fd1ee06 by entry alone, a receiver's calls on itself and a target's instances that never left
+ * the workspace not counted: the same figures, so no turn crossing was a helper. The planted session read was three
+ * crossings before (its `client()` and `cred()` counted, scratch 335c923de) and is one.
+ * The close is 55 once it no longer reads main's answer back to announce it to no extension (`facet.answer`,
+ * b65abe3ff), over 3 runs on 380d7148e; 52 once main, which has no hirer, asks for no report (`relay.owedReport`,
+ * `host.owedReport` and the host it opened), over 3 runs on ceb97fb8e.
+ * The open is 45 with integration ca673ae3f (measured at its merge 5e76f910e against a9e1039fd before it): the account's
+ * auth read as the turn's surface is built (`account.getAuth`, `relay.getAuth`, `host.getAuth`) and one more broadcast
+ * the turn's opening sends its room (`relay.chatEvent`, `host.chatEvent`), each through a host it opened. Deliveries
+ * cross as many times as the queue they replace (`facet.admit` for `facet.queue`).
+ * With the port (design v2 §3, §8), measured at 2a7fa152a on 2026-10-11: the isolate holds the workspace's host, so a
+ * call crosses once; its credentials are held, its activity rides its tool calls and its turn's end. A tool step is 3
+ * (`host.paceStep`, `facet.step`, `host.executeTool`), the first 4 with its room's start (`host.chatEvent`); the open is
+ * 25 and the close 21, by the account reads, room events, standing reports and settlement the phase lists show. The
+ * open loses one (`host.cacheKeptAliveUntil`) as a request's warming is one call. §8's 12 and 6 are not reached: the
+ * account's own reads (profile catalog, credentials revision, overview, MCP descriptors) and the room's events remain.
+ */
+const CROSSINGS = { open: 25, step: 4, close: 21 } as const;
+
+/**
+ * The planted calls (`ObservedOrchestrator.plantCrossings`), each counted once where it lands, and nothing else: the
+ * workspace into the account and into main's isolate; main's isolate into the relay, which opens the workspace's host
+ * and calls it, a real call nested in another; and into a memory and a Nimbus session the host answers with. The
+ * session's read calls `client()` and `cred()` on itself: helpers of the one call, never crossings of their own.
+ */
+const PLANTED = {
+  workspace: {
+    'account.getCredentialsRevision': 1, 'AgentMemory.tail': 1, 'HostedSession._rpcReadFile': 1,
+    'host.logActivity': 1, 'host.memory': 1, 'host.session': 1,
+    'relay.logActivity': 1, 'relay.memory': 1, 'relay.session': 1,
+    'workspace.agentWorkspace': 3,
+  },
+  main: { 'facet.newestFirst': 1 },
+} as const;
+
+/** A turn's crossings by place, both sides summed: its open, each model step's, and its last step's with its close. */
+interface TurnPhases {
+  readonly open: number;
+  readonly steps: readonly number[];
+  readonly close: number;
+}
+
+function phasesOf(turn: MeteredTurn): TurnPhases {
+  const sides = [turn.crossings.workspace.phases, turn.crossings.main.phases];
+  const length = Math.max(...sides.map((phases) => phases.length));
+  const at = (index: number) => sides.reduce((sum, phases) => sum + crossingTotal(phases[index] ?? {}), 0);
+  const all = Array.from({ length }, (_, index) => at(index));
+
+  return { open: all[0] ?? 0, steps: all.slice(1, -1), close: all.at(-1) ?? 0 };
+}
+
+test("a task turn crosses between the workspace and main's isolate no more than it was measured to, at each place", async () => {
+  // One after the other: the worker counts the calls landing in it, whichever workspace they are for.
+  const crossingsOf = async (steps: number) => await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName(`crossings-${String(steps)}`)).turnCrossings(steps);
+  const one = await crossingsOf(1);
+  const four = await crossingsOf(4);
+  const phases = phasesOf(four.turn);
+  const total = (turn: MeteredTurn) => crossingTotal(turn.crossings.workspace.total) + crossingTotal(turn.crossings.main.total);
+
+  reports.push([
+    `complexity: a task turn's crossings, four tool steps: open ${String(phases.open)} (at most ${String(CROSSINGS.open)}), `
+      + `steps ${phases.steps.join(', ')} (each at most ${String(CROSSINGS.step)}), close ${String(phases.close)} `
+      + `(at most ${String(CROSSINGS.close)}); ${String(total(four.turn))} in all, one step ${String(total(one.turn))}`,
+    ...four.turn.crossings.workspace.phases.map((phase, index) => `  into the workspace, phase ${String(index)}: ${JSON.stringify(phase)}`),
+    ...four.turn.crossings.main.phases.map((phase, index) => `  into main's isolate, phase ${String(index)}: ${JSON.stringify(phase)}`),
+    `  planted: ${JSON.stringify(four.planted)}`,
+  ].join('\n'));
+  // Both turns of each workspace ran their steps: each tool step's call and the answer's.
+  expect([one.modelCalls, four.modelCalls]).toEqual([2 * 2, 2 * 5]);
+  // A phase a step on each side: the open, four tool steps, and the answer's step with the close.
+  expect([four.turn.crossings.workspace.phases.length, four.turn.crossings.main.phases.length]).toEqual([6, 6]);
+
+  expect({ workspace: four.planted.workspace.total, main: four.planted.main.total }).toEqual(PLANTED);
+
+  expect(phases.open).toBeLessThanOrEqual(CROSSINGS.open);
+  expect(Math.max(...phases.steps)).toBeLessThanOrEqual(CROSSINGS.step);
+  expect(phases.close).toBeLessThanOrEqual(CROSSINGS.close);
 });
 
 // Runs after the subjects: the orchestrator subject fills `transportReads`.

@@ -1,7 +1,7 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** Shared tools and roster for non-main agents; their turns run in AgentFacet. */
 
-import { currentDateForPrompt, publishSubordinateReport, type ConversationRecall, type HeadReport, isSubordinateOrigin, type SubordinateReportLedger, type ToolSurfaceNarrowing } from '@kinu.run/core';
+import { actorPolicy, assignmentDelivery, currentDateForPrompt, publishSubordinateReport, type Delivery, type OwedAdmission, type ConversationRecall, type HeadReport, isSubordinateOrigin, type SubordinateReportLedger, type ToolSurfaceNarrowing, type TurnSurface } from '@kinu.run/core';
 import type { LanguageModel, ModelMessage, Tool, ToolSet } from 'ai';
 import { EventLog, HeadCapture, titleActorFromMessage, spawnSeatedHead, admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus, receiveSubordinateEvent, subordinateRelaysTurnEnd, subordinateForkContext, type SubordinateInheritedContext, inheritedAsModelMessage, collectDynamicContext, explorationActorKey, headStatusUnsettled, storedHeadReportStatus, subordinateDelegatesOf, registeredParent, subordinateDescendants, actorReferenceOf, TEMPORARY_LIFETIME, terminalTaskReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, type ActorHost, type ActorReference, type BoundActor, type DelegationBudget, type DynamicContext, type HeadId, type HeadInput, type RunInference, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedActor, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff, type SubordinateLifetime, type SubordinateReportOrigin, type SubordinateReportHandoff, type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime, type SubordinateSeed, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
 import { attempt, KinuError, settle, settleSync } from '@kinu.run/core/obs';
@@ -17,6 +17,9 @@ import { actorRetirementFor, type ActorRetirementRequest } from './actor-hosting
 export interface HostedTaskTurn {
   /** The turn's id: keys its claim and effects. */
   readonly turnId: string;
+  /** The id the agent's own chat runs the turn under, when a chat prepared it; `turnId` is its producer's
+   *  (`announcementOf`), which a programmatic turn's prefix is stripped from. */
+  readonly chatTurnId?: string;
   readonly parentDriven: boolean;
   /** The author-stamped metadata the agent admitted the turn under: what a plan it submits is judged by. */
   readonly driving?: JsonObject;
@@ -42,6 +45,8 @@ export interface HostedTaskProfile {
   readonly sources: HostedTurnSources;
   /** Main's live trial arm, when it runs one. */
   readonly trial?: TrialTurn;
+  /** What main's tools run under through the turn, which the turn holds. */
+  readonly surface?: TurnSurface;
 }
 
 /** One workspace's host and directory, for every hosted kind. */
@@ -93,8 +98,13 @@ export interface HostedActorSeams {
   /** The workspace's half of a node's job runner. */
   jobSeat(actorId: string): StepLoopJobSeat;
   retireJobs(actorId: string): Promise<JobRetirement>;
-  /** Arm the wake chain that reaches the delegation runners; the admitting request must not run it. */
-  armWake(): void;
+  /**
+   * What `admit` writes and the delivery it owes the actor, committed as one, then crossed once: the actor's wake is armed
+   * before the crossing, and crosses it again if this one does not reach it. Answers what `admit` answered.
+   */
+  deliver<A>(actor: BoundActor, admit: () => OwedAdmission<A>): Promise<A>;
+  /** Who assigns the actor its work, as its chat shows it. */
+  hirerName(actor: BoundActor): string;
   rederiveWake(): void;
   temporary(actor: BoundActor): TemporaryAgentPort;
   /** Inside the answer's transaction: the hirer's advisor answer is owed a delivery job. */
@@ -147,7 +157,7 @@ function hostedLifetime(record: WorkspaceActor): SubordinateLifetime {
 }
 
 /** Admit work and report the delivery branch; only this actor knows whether a turn is live. */
-export async function admitHostedTask(
+function admitHostedTask(
   seams: HostedActorSeams,
   reference: ActorReference,
   input: {
@@ -160,7 +170,7 @@ export async function admitHostedTask(
     readonly messageId?: string;
     readonly idempotencyKey?: string;
   },
-): Promise<{ id: string; admitted: boolean } & SubordinateHandoff> {
+): Effect.Effect<{ id: string; admitted: boolean } & SubordinateHandoff, KinuError> {
   const admitAs = async (actor: HostedActor): Promise<{ id: string; admitted: boolean } & SubordinateHandoff> => {
     const busy = seams.turnInFlight(actor.reference);
 
@@ -183,13 +193,18 @@ export async function admitHostedTask(
     if (input.idempotencyKey !== undefined) admission.idempotencyKey = input.idempotencyKey;
     const log = new EventLog(seams.exec, actor.handle);
     const brief = log.query({ variant: 'subordinate_task', limit: 1 }).length === 0;
-    const result = admitSubordinateTask(log, admission);
+
+    // Admitted and owed to the agent as one: the row is the record, the delivery what opens its turn.
+    const result = await seams.deliver(actor, () => {
+      const admitted = admitSubordinateTask(log, admission);
+      const delivery: Delivery | null = admitted.admitted ? assignmentDelivery(log, { id: admitted.id, body: input.body.trim(), mode: input.mode, from: seams.hirerName(actor) }) : null;
+
+      return { value: admitted, delivery };
+    });
 
     // The first work an agent is given is its brief: its stand-in title shows at once, before the turn that opens its
     // chat names it from the same words. A later message ("Continue") never titles it.
     if (result.admitted && brief && await titleActorFromMessage(actor.handle, input.body)) seams.announce(actor);
-
-    if (result.admitted) seams.armWake();
 
     return {
       ...result,
@@ -201,11 +216,9 @@ export async function admitHostedTask(
     };
   };
 
-  return await seams.host.run(reference, { kind: 'actor' }, (actor) => settle(
-    refusal(input.creationId !== undefined && input.creationId !== actor.record.creationId,
-      () => new KinuError('denied', 'The birth assignment belongs to a different actor creation.'))
-      .pipe(Effect.andThen(Effect.promise(() => admitAs(actor)))),
-  ));
+  return refusal(input.creationId !== undefined && input.creationId !== seams.directory.retained(reference.actorId)?.creationId,
+    () => new KinuError('denied', 'The birth assignment belongs to a different actor creation.'))
+    .pipe(Effect.andThen(Effect.promise(() => seams.host.run(reference, { kind: 'actor' }, admitAs))));
 }
 
 function hostedHirer(seams: HostedActorSeams, child: BoundActor): BoundActor {
@@ -288,6 +301,8 @@ export interface HostedTurnRequest {
   readonly body: string;
   readonly mode: WorkMode;
   readonly sequenceId: string;
+  /** See {@link HostedTaskTurn.chatTurnId}. */
+  readonly chatTurnId?: string;
   readonly inheritedContext?: SubordinateInheritedContext;
   /** A hirer's turn carries `report`; an owner's chat with the actor does not. */
   readonly parentDriven: boolean;
@@ -304,6 +319,7 @@ export interface PreparedHostedTurn {
   readonly sources: HostedTurnSources;
   readonly birthContext: readonly ModelMessage[];
   readonly trial?: TrialTurn;
+  readonly surface?: TurnSurface;
 }
 
 export function prepareHostedTurn(
@@ -327,6 +343,7 @@ export function prepareHostedTurn(
       turn, model, tools: profile.tools, sources: profile.sources,
       birthContext: run === undefined ? turn.input.inheritedContext.map(inheritedAsModelMessage) : [],
       ...('trial' in profile && profile.trial !== undefined && { trial: profile.trial }),
+      ...('surface' in profile && profile.surface !== undefined && { surface: profile.surface }),
     };
   }));
 }
@@ -334,7 +351,7 @@ export function prepareHostedTurn(
 /** The owner writing to an agent that waits on input answers that wait, as a message from its hirer does. The root
  *  agent has no hirer to wait on. */
 function ownerAnswersWait(seams: HostedActorSeams, actor: BoundActor): void {
-  if (actor.record.parentActorId === null) return;
+  if (actorPolicy(actor.record).hirer === null) return;
   const hirer = hostedHirer(seams, actor);
   const roster = seams.roster(hirer);
 
@@ -369,7 +386,7 @@ function hostedTaskTurn(
     yield* Effect.promise(() => seams.priceAs(actor, model));
 
     const turn: HostedTaskTurn = {
-      turnId: task.sequenceId, parentDriven: task.parentDriven, ...(task.driving !== undefined && { driving: task.driving }), actor, runtime, reports: { spoke: false, settled: false }, input,
+      turnId: task.sequenceId, ...(task.chatTurnId !== undefined && { chatTurnId: task.chatTurnId }), parentDriven: task.parentDriven, ...(task.driving !== undefined && { driving: task.driving }), actor, runtime, reports: { spoke: false, settled: false }, input,
       ...(task.opening !== undefined && { opening: task.opening }),
       ...(task.taskPlan !== undefined && { taskPlan: task.taskPlan }),
       capture: run?.inference.capture ?? new HeadCapture(),
@@ -386,7 +403,7 @@ function hostedTaskTurn(
 export function hostedOwedReport(
   seams: HostedActorSeams,
   actor: BoundActor,
-  turn: { readonly reports: SubordinateReportLedger; readonly ownerDriven: boolean },
+  turn: { readonly reports: SubordinateReportLedger; readonly ownerDriven: boolean; readonly taskId: string | null },
   ended: { readonly ending: TaskTurnEnding; readonly assistantText: string; readonly narration: readonly string[] },
 ): Promise<OwedReport | null> {
   return settle(Effect.gen(function* () {
@@ -398,7 +415,7 @@ export function hostedOwedReport(
 
     const terminal = yield* Effect.promise(() => terminalTaskReport({
       lifetime: hostedLifetime(actor.record), ending: ended.ending, assistantText: ended.assistantText,
-      delegating: taskAnswerIsLater({ roster: seams.roster(actor), log: new EventLog(seams.exec, actor.handle) }),
+      delegating: taskAnswerIsLater({ roster: seams.roster(actor), log: new EventLog(seams.exec, actor.handle), ...(turn.taskId !== null && { turnTaskId: turn.taskId }) }),
       narration: async () => ended.narration,
     }));
 
@@ -477,10 +494,10 @@ export function hostedSubordinateRuntime(
         return Promise.resolve();
       }))))),
     cancelBirth: (input) => settle(registerChild(input, 'cancelCreation')),
-    assign: (name, input) => settle(asHire(name, (reference) => admitHostedTask(seams, reference, { kind: 'task' as const, ...input }))),
+    assign: (name, input) => settle(resolve(name).pipe(Effect.flatMap((reference) => admitHostedTask(seams, reference, { kind: 'task' as const, ...input })))),
     status: (name) => settle(asHire(name, (reference) => seams.host.run(reference, { kind: 'actor' }, async (actor) =>
       readSubordinateLiveStatus(seams.exec, actor.handle)))),
-    message: (name, content, mode) => settle(asHire(name, (reference) => admitHostedTask(seams, reference, { kind: 'message', body: content, mode }))),
+    message: (name, content, mode) => settle(resolve(name).pipe(Effect.flatMap((reference) => admitHostedTask(seams, reference, { kind: 'message', body: content, mode })))),
     rename: (name, displayName, nameOrigin) => settle(asHire(name, (reference) => seams.host.run(reference, { kind: 'actor' }, async (actor) => {
       actor.stores.config.setDisplayNameOrigin(displayName, nameOrigin);
     }))),

@@ -8,6 +8,7 @@ import { nowMs } from '../utils/date';
 import { RUN_END_REASONS } from './turn-lifecycle';
 import { initSessionContextTables } from '../session/schema';
 import { initSessionTranscriptTables } from '../session/transcript-schema';
+import { initTurnFactsTables } from './turn-facts';
 import { sqlCheckList } from '../identity/schema';
 import type { ActorTurnProgram } from './actor-program';
 import type { SessionHistory } from '../session/history';
@@ -60,6 +61,7 @@ export function initActorClaimTables(exec: RawSqlExec): void {
     phase TEXT NOT NULL CHECK(phase IN ('provider','work')), phase_at INTEGER NOT NULL,
     work_cuts INTEGER NOT NULL, provider_cuts INTEGER NOT NULL,
     PRIMARY KEY(actor_id,turn_id))`);
+  initTurnFactsTables(exec);
   initSessionContextTables(exec);
   initSessionTranscriptTables(exec);
 }

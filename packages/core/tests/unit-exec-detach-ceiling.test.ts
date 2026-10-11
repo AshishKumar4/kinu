@@ -3,7 +3,7 @@
 import { describe, test, expect } from 'bun:test';
 import { jsonSchema, tool, type ToolSet } from 'ai';
 import * as v from 'valibot';
-import { toolExecute, createTestActorsOver, handClock, present } from '@kinu.run/test-utils';
+import { toolExecute, createTestActorsOver, handClock, present, hostDeliveries } from '@kinu.run/test-utils';
 import { createSandboxExecutor, type SandboxHandle } from '../src/execution/sandbox';
 import { createDeviceTunnelExecutor } from '../src/execution/device-tunnel-executor';
 import { createHubDeviceTransport, type DeviceHubClient } from '../src/execution/hub-device-transport';
@@ -19,7 +19,6 @@ import { followJobOutput, JOB_OUTPUT_EVENT, JobOutputFeeds, type JobOutputFrame,
 import { REAL_CLOCK } from '../src/types/clock';
 import { listBackgroundJobs } from '../src/read-models/background-jobs';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/index';
-import { Inbox } from '../src/orchestrator/inbox';
 import { EventLog, initEventsHubTables } from '../src/events/hub/index';
 import { Database } from 'bun:sqlite';
 import { conversationsFor, createTestRuntime, makeSql, makeExecRaw, makeSqlExec } from './helpers';
@@ -235,7 +234,7 @@ function wholeChainRunner(deps: (store: BackgroundJobStore) => Partial<Backgroun
   };
 
   const runner = new BackgroundJobRunner({
-    store, fiber, inbox: new Inbox(host), eventLog: new EventLog(hubSql, actor),
+    store, fiber, inbox: hostDeliveries(host).signals, eventLog: new EventLog(hubSql, actor),
     scheduleDrain: () => {}, logActivity: () => {},
     // A zero window: the crossing is decided by the command not having finished, not by waiting.
     policy: () => ({ ...BACKGROUND_POLICY.interactive, detachAfterMs: 0 }),

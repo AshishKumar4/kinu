@@ -505,6 +505,23 @@ describe('durable delegated turn opening', () => {
       testSql.close();
     }
   });
+
+  /** Restorations and admission share one serial lane; a rejection was the lane's, and refused every later admission. */
+  test('a restoration that rejects fails alone, and the next admission opens', async () => {
+    const { rt, testSql } = createTestRuntime();
+    const { session } = (await hostedSeatsOver({ rt, db: testSql.db }).seat('restoring', 'agent')).actor;
+
+    try {
+      testSql.db.exec(`CREATE TRIGGER probe_refuse_restore BEFORE INSERT ON session_messages WHEN NEW.origin = 'edit'
+        BEGIN SELECT RAISE(ABORT, 'the restoration failed'); END`);
+      await expect(session.restoreHistory([{ role: 'user', content: 'Restored prefix.' }])).rejects.toThrow('the restoration failed');
+      testSql.db.exec('DROP TRIGGER probe_refuse_restore');
+      await openDelegated(session, 'assignment-after', 'assignment-after', 'Birth prefix.');
+      expect(textsOf(session.history)).toEqual(['Birth prefix.', 'assignment-after']);
+    } finally {
+      testSql.close();
+    }
+  });
 });
 
 describe('head prompt + messages', () => {

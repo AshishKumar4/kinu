@@ -130,6 +130,16 @@ export function initPendingSendTables(execRaw: RawSqlExec): void {
     media_type TEXT NOT NULL,
     url        TEXT NOT NULL
   )`);
+  // A programmatic turn its producer heard queued, held until its turn settles: `id` is its idempotency key.
+  execRaw(`CREATE TABLE IF NOT EXISTS queued_turns (
+    seq           INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor_id      TEXT NOT NULL,
+    id            TEXT NOT NULL,
+    text          TEXT NOT NULL,
+    metadata_json TEXT,
+    yields        INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (actor_id, id)
+  )`);
 }
 
 /**
@@ -208,6 +218,43 @@ export class PendingSendStore {
       WHERE actor_id = ${this.actorId}
       ORDER BY seq ASC`;
   }
+
+  /** A programmatic turn, held before its producer hears it queued; a repeat of its key holds nothing new. */
+  reserveTurn(turn: { readonly id: string; readonly text: string; readonly metadata?: JsonObject; readonly yieldsToUserMessage?: boolean }): void {
+    const metadata = turn.metadata === undefined ? null : JSON.stringify(turn.metadata);
+
+    void this.sql`INSERT OR IGNORE INTO queued_turns (actor_id, id, text, metadata_json, yields)
+      VALUES (${this.actorId}, ${turn.id}, ${turn.text}, ${metadata}, ${turn.yieldsToUserMessage === true ? 1 : 0})`;
+  }
+
+  /** Whether a programmatic turn is held under `id`: a delivery repeated before its turn ran is the same one. */
+  hasTurn(id: string): boolean {
+    return this.sql<{ id: string }>`SELECT id FROM queued_turns WHERE actor_id = ${this.actorId} AND id = ${id}`.length > 0;
+  }
+
+  /** Its turn settled, ran or not: nothing of it is owed to a later process. */
+  retireTurn(id: string): void {
+    void this.sql`DELETE FROM queued_turns WHERE actor_id = ${this.actorId} AND id = ${id}`;
+  }
+
+  /** Every held programmatic turn, in the order its producers heard them queued. */
+  restoreTurns(): QueuedTurnRow[] {
+    return this.sql<{ id: string; text: string; metadata_json: string | null; yields: number }>`
+      SELECT id, text, metadata_json, yields FROM queued_turns WHERE actor_id = ${this.actorId} ORDER BY seq ASC`
+      .map((row) => ({
+        id: row.id, text: row.text,
+        ...(row.metadata_json !== null && { metadata: parseJsonObject(row.metadata_json) }),
+        ...(row.yields === 1 && { yieldsToUserMessage: true }),
+      }));
+  }
+}
+
+/** A programmatic turn its producer heard queued, as a later process restores it. */
+export interface QueuedTurnRow {
+  readonly id: string;
+  readonly text: string;
+  readonly metadata?: JsonObject;
+  readonly yieldsToUserMessage?: boolean;
 }
 
 /** One acknowledged send; `turnId` is null while idle-queued. */
@@ -319,6 +366,11 @@ export class Inbox implements AgentInbox {
    * The busy read and buffer push are synchronous. A signal with `idempotencyKey` derives its card id from it,
    * so a collapsed re-delivery never opens a second, forever-pending card.
    */
+  /**
+   * What lands in this chat once admitted: a person's words, and what a delivery hands its running turn. Spliced into the
+   * running turn at its next step, or opening one. Producers reach it only through the agent's deliveries (design v2 §1):
+   * its chat's admission lands each here.
+   */
   send(signal: AgentSignal): Promise<SendOutcome> {
     const cardId = signal.idempotencyKey ? signalCardId(signal.idempotencyKey) : `sig-${nanoid()}`;
     const delivered: DeliveredSignal = { ...signal, cardId };
@@ -337,11 +389,26 @@ export class Inbox implements AgentInbox {
     }
 
     if (!busy) return this.queue(delivered);
-    this.pending.push(delivered);
-    this.openCard(delivered, stepBody(delivered));
-    this.logActivity?.('signal_injected', `${signal.kind} -> live turn`);
+    this.splice(delivered);
 
     return Promise.resolve('mid-turn');
+  }
+
+  /** What a delivery hands a running turn, spliced at its next step; false with no turn running, when it waits for a
+   *  turn of its own. Never opens one: its chat's admission does that. */
+  landMidTurn(signal: AgentSignal): boolean {
+    const delivered: DeliveredSignal = { ...signal, cardId: signal.idempotencyKey ? signalCardId(signal.idempotencyKey) : `sig-${nanoid()}` };
+
+    if (isUserSignal(delivered) || !this.busy) return false;
+    this.splice(delivered);
+
+    return true;
+  }
+
+  private splice(delivered: DeliveredSignal): void {
+    this.pending.push(delivered);
+    this.openCard(delivered, stepBody(delivered));
+    this.logActivity?.('signal_injected', `${delivered.kind} -> live turn`);
   }
 
   /** Bound once, as the chat session is built, before any signal is accepted. */
@@ -706,3 +773,6 @@ function reportRedeliveryFailure(kind: string) {
     );
   };
 }
+
+/** The metadata a signal's own turn opens under: its event, its reply's drain, its author; a delivery's as the inbox's. */
+export { turnMetadata };

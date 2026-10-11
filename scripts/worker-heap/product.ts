@@ -9,6 +9,16 @@ export * from 'kinu:product';
 
 export { default } from 'kinu:product';
 
+/** Held for the isolate's life, as a leak would be. */
+const planted: Uint8Array[] = [];
+
+/** Main's isolate as the gate loads it (`packages/cf-backend/tests/workerd/heap-plant-agent.ts`). */
+interface PlantingFacet extends Rpc.WorkerEntrypointBranded {
+  plant(bytes: number): Promise<void>;
+  failedToolCalls(): Promise<number>;
+  idle(): Promise<void>;
+}
+
 export class OrchestratorAgent extends Product {
   constructor(...args: ConstructorParameters<typeof Product>) {
     super(...args);
@@ -16,6 +26,31 @@ export class OrchestratorAgent extends Product {
     Reflect.deleteProperty(this, 'hostHeads');
     Reflect.deleteProperty(this, 'delegatedRunners');
     Reflect.deleteProperty(this, 'quiesce');
+    Reflect.deleteProperty(this, 'joinDetached');
+    Reflect.deleteProperty(this, 'plant');
+    Reflect.deleteProperty(this, 'failedToolCalls');
+    Reflect.deleteProperty(this, 'mainIdle');
+  }
+
+  /** Once main's isolate runs no turn and closes none: its own idle, which the turn it runs ends. */
+  async mainIdle(): Promise<void> {
+    await (await this.agentFacetOf<PlantingFacet>(this.actorHandle().actorId)).idle();
+  }
+
+  /** Main's tool calls that came back failed, as its isolate's ledger records them. */
+  async failedToolCalls(): Promise<number> {
+    return await (await this.agentFacetOf<PlantingFacet>(this.actorHandle().actorId)).failedToolCalls();
+  }
+
+  /** `bytes` held in `isolate` for its life: the gate reads it back to prove it reads that isolate. */
+  async plant(isolate: 'workspace' | 'main', bytes: number): Promise<void> {
+    if (isolate === 'workspace') planted.push(new Uint8Array(bytes).fill(7));
+    else await (await this.agentFacetOf<PlantingFacet>(this.actorHandle().actorId)).plant(bytes);
+  }
+
+  /** What it has detached joined: setting a model tells each agent's isolate, which loads main's (D9). */
+  async joinDetached(): Promise<void> {
+    await this.settleBackgroundTasks();
   }
 
   /** Its sleep-time lane off, and what it has detached or still closing joined: a later phase's measurement in this
@@ -26,9 +61,9 @@ export class OrchestratorAgent extends Product {
     await this.terminal.idle();
   }
 
-  /** Hired agents with a delegated turn runner: one ends only after its turn's release has run. */
+  /** Hired agents still working, as the Agents panel reads them: one rests only after its turn's release has run. */
   async delegatedRunners(): Promise<number> {
-    return this.delegatedTurns.actorRunners.size;
+    return (await this.listWorkspaceAgents()).filter((agent) => agent.key !== 'main' && agent.activity === 'working').length;
   }
 
   /** Registers and acquires `count` heads, then releases each: what a swarm's settled nodes leave behind. */

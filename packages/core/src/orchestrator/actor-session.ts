@@ -2,6 +2,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import type { ModelMessage, ToolSet } from 'ai';
 
 import * as v from 'valibot';
+import { serialQueue } from '@kinu.run/agent-utils';
 import { INTERRUPTED_TURN, measureTurnRequest, type ChatEvent, type ChatOptions, type StepRecord } from '../chat';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ResolvedTurnProfile, ProfileAuthorityInputs } from '../profiles';
@@ -220,7 +221,9 @@ export class ActorSession {
 
   /** The running turn's metadata: a question it asks keeps the tier and reason its answer's turn runs under. */
   private turnMetadata: JsonObject | undefined;
-  private restoration: Promise<void> = Promise.resolve();
+
+  /** Restorations, and the admissions behind them, in order: a rejection is its own caller's, never the lane's. */
+  private readonly restorations = serialQueue();
 
   get currentTurnId(): string | null {
     return this.active?.lease.turnId ?? null;
@@ -442,7 +445,7 @@ export class ActorSession {
     return settle(attempt({ doing: `saying the advisor's note on turn ${turnId}`, otherwise: 'unavailable' }, async () => {
       const sent = await sayAdvisorNote(note, {
         turnId,
-        send: (signal) => this.orchestrator.inbox.send(signal),
+        send: (signal) => this.orchestrator.signals.send(signal),
         ...(this.options.advisor !== undefined && { actor: this.runtime.actor, parent: this.options.advisor.parent }),
       });
 
@@ -496,9 +499,8 @@ export class ActorSession {
   }
 
   private restoreAfterPending<T>(operation: () => Promise<T>): Promise<T> {
-    const pending = this.restoration.then(operation);
-    this.restoration = pending.then(() => {});
-    this.orchestrator.track(this.restoration, 'restoring actor context');
+    const pending = this.restorations(operation);
+    this.orchestrator.track(pending.then(() => undefined), 'restoring actor context');
 
     return pending;
   }
@@ -517,7 +519,7 @@ export class ActorSession {
     readonly messages: readonly ModelMessage[];
     readonly birthContext: () => Promise<readonly ModelMessage[]>;
   }): Promise<void> {
-    await this.restoration;
+    await this.restorations(async () => undefined);
 
     const assertOwner = this.preparingTurnFence(lease, 'delegated input requires a preparing turn');
 
@@ -545,7 +547,7 @@ export class ActorSession {
     readonly message: ModelMessage;
     readonly birthContext: (drainTurnId: string) => Promise<readonly ModelMessage[]>;
   }): Promise<void> {
-    await this.restoration;
+    await this.restorations(async () => undefined);
 
     const assertOwner = this.preparingTurnFence(lease, 'input must belong to a preparing turn');
 

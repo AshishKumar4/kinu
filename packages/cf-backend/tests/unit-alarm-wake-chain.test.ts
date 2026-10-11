@@ -9,9 +9,10 @@ import { createRecordingLogger } from '@kinu.run/core/obs';
 import { makeSql } from '../../core/tests/helpers';
 import {
   agentWakes, armedWakes, catalogTurn, fireSoonestWake, gatewayWorkspace, hostedSubordinateHarness, jobsOver, orchestratorHarness, chatSessionTurns, reactivateOrchestratorHarness,
-  runDelegatedTask, tapDiagnostics, until, seedOrphanFiber,
+  runDelegatedTask, tapDiagnostics, until, seedOrphanFiber, wakeForDelegatedTask,
 } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
+import { cutNextDelivery } from './helpers/agent-facets';
 import { present } from '@kinu.run/test-utils';
 import { answeringGateway, chatCompletion, openingOf, stubAiBinding } from './helpers/platform-gateway';
 import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB, type WakeJob } from '../src/wake-jobs';
@@ -65,31 +66,28 @@ function liveHead(db: Database, id: string): void {
   ).run(harnessActorId(db), id, `branch-${id}`, Date.now());
 }
 
-/** An assignment row's dispatch state and, once settled, the reason it was dismissed. */
-/** The rows one sweep pass re-pends (`ORPHAN_SEAL_MAX_ROWS`), and a backlog past it. */
-const LEASE_SWEEP_ROWS = 256;
+/** The rows one sweep pass settles (`ORPHAN_SEAL_MAX_ROWS`), and a backlog past it. */
+const SWEEP_ROWS = 256;
 
-const DEAD_LEASES = LEASE_SWEEP_ROWS + 40;
+const DEAD_BRANCHES = SWEEP_ROWS + 40;
 
-const LEASED = "SELECT COUNT(*) AS held FROM agent_log WHERE turn_id LIKE 'evt-dead-%' AND consumed_at IS NOT NULL";
+const RUNNING_BRANCHES = "SELECT COUNT(*) AS held FROM head_journal WHERE root_id LIKE 'branch-dead-%' AND status = 'running'";
 
-/** Assignments a dead activation had leased: each holds its drain turn's id, consumed a minute before this one began. */
-function seedDeadLeases(db: Database, count: number, actorId = 'gone-actor'): void {
+/** Branch heads a dead activation left running: each spawned a minute before this one began. */
+function seedDeadBranches(db: Database, count: number): void {
   const insert = db.prepare(
-    `INSERT INTO agent_log (actor_id, id, kind, turn_id, step_idx, variant, trace_id, payload, received_at, consumed_at)
-     VALUES (?, ?, 'event', ?, 0, 'subordinate_task', ?, '{"body":"brief"}', ?, ?)`,
+    `INSERT INTO head_journal (actor_id, id, root_id, depth, task, status, spawned_at)
+     VALUES (?, ?, ?, 0, 'take a branch', 'running', ?)`,
   );
 
   const at = Date.now() - 60_000;
 
-  for (let n = 0; n < count; n++) insert.run(actorId, `dead-task-${String(n)}`, `evt-dead-${String(n)}`, `trace-dead-${String(n)}`, at, at);
+  for (let n = 0; n < count; n++) insert.run(harnessActorId(db), `dead-${String(n)}`, `branch-dead-${String(n)}`, at);
 }
 
-function orphanRow(db: Database, id: string): { step_idx: number | null; dismissed: string | null } {
-  return present(db
-    .query<{ step_idx: number | null; dismissed: string | null }, [string]>(
-      `SELECT step_idx, json_extract(payload, '$.__dismissed.reason') AS dismissed FROM agent_log WHERE id = ?`)
-    .get(id), `the agent_log row ${id}`);
+/** What the workspace owes the agent and has not seen it take. */
+function owedTo(db: Database, actorId: string): number {
+  return present(db.query<{ n: number }, [string]>('SELECT COUNT(*) AS n FROM agent_deliveries WHERE actor_id = ?').get(actorId), 'a count').n;
 }
 
 describe('a refiner answer stored with no waiter', () => {
@@ -150,18 +148,16 @@ describe('a refiner answer stored with no waiter', () => {
 });
 
 describe('the workspace keeps exactly one wake per job', () => {
-  test('a beyond-budget backlog of dead leases arms the wake, and the wake drains it', async () => {
+  test('a beyond-budget backlog of dead branches arms the wake, and the wake drains it', async () => {
     const { agent, db, started } = orchestratorHarness();
     await started;
-    seedDeadLeases(db, DEAD_LEASES);
+    seedDeadBranches(db, DEAD_BRANCHES);
 
     await agent.activateActor();
-    await until(() => wakeArmed(db), 'the truncated lease sweep armed the maintenance wake');
-
-    expect(held(db, LEASED)).toBe(DEAD_LEASES - LEASE_SWEEP_ROWS);
+    await until(() => wakeArmed(db), 'the truncated branch sweep armed the maintenance wake');
 
     await agent.terminalRetryPass();
-    expect(held(db, LEASED)).toBe(0);
+    expect(held(db, RUNNING_BRANCHES)).toBe(0);
   });
 
   test('a quiet turn keeps the wake a truncated sweep still needs', async () => {
@@ -169,42 +165,17 @@ describe('the workspace keeps exactly one wake per job', () => {
     const workspace = gatewayWorkspace(answeringGateway('done'));
     const { agent, db } = workspace;
     await workspace.started;
-    seedDeadLeases(db, DEAD_LEASES);
+    seedDeadBranches(db, DEAD_BRANCHES);
 
     await agent.activateActor();
-    await until(() => wakeArmed(db), 'the truncated lease sweep armed the maintenance wake');
+    await until(() => wakeArmed(db), 'the truncated branch sweep armed the maintenance wake');
 
     await catalogTurn(agent, 'a turn over an unfinished sweep');
     await joinHarnessFibers();
 
     expect(wakeArmed(db)).toBe(true);
     await agent.terminalRetryPass();
-    expect(held(db, LEASED)).toBe(0);
-  });
-
-  test('a hired child shares the workspace wake, and its backlog drains through it', async () => {
-    // Hiring a child must not create a second wake: the root activation drains the shared database.
-    const workspace = orchestratorHarness();
-
-    const child = await hostedSubordinateHarness(workspace, {
-      name: 'wake-child',
-      displayName: 'Wake Child',
-      nameOrigin: 'user',
-      mission: 'share one wake',
-    });
-
-    const rootId = harnessActorId(workspace.db);
-    expect(child.actor.handle.actorId).not.toBe(rootId);
-    seedDeadLeases(workspace.db, DEAD_LEASES, child.actor.handle.actorId);
-
-    await workspace.agent.activateActor();
-    await until(() => wakeArmed(workspace.db), 'the truncated lease sweep armed the shared wake');
-
-    expect(held(workspace.db, LEASED)).toBe(DEAD_LEASES - LEASE_SWEEP_ROWS);
-    expect(armedAt(workspace.db, TERMINAL_RETRY_JOB)).toHaveLength(1);
-
-    await workspace.agent.terminalRetryPass();
-    expect(held(workspace.db, LEASED)).toBe(0);
+    expect(held(db, RUNNING_BRANCHES)).toBe(0);
   });
 
   // Review of 4028013fc, 2026-10-03: the root's runner kept a wake at a hire's deferred instant, yet could never recover a
@@ -473,73 +444,28 @@ describe('the workspace keeps exactly one wake per job', () => {
     expect(await fireArmedTick()).toBe(0);
   });
 
-  // eval-trajectory-evals-pu-eedw1v and warm-forge-4d6acc02, 2026-09-26: their only true arm was admittedDelegations, a
-  // task row for an actor the drain never visits, which woke each object every lap for days.
-  test('a task for an actor that is gone settles with a reason and stops owing a wake', async () => {
-    const { agent, db } = orchestratorHarness();
-    await agent.activateActor();
-    await joinHarnessFibers();
-
-    db.prepare(
-      `INSERT INTO agent_log (actor_id, id, kind, variant, trace_id, payload, received_at)
-       VALUES ('gone-actor', 'orphan-task', 'event', 'subordinate_task', 'trace-orphan', '{"body":"brief"}', ?)`,
-    ).run(Date.now());
-
-    await agent.terminalRetryPass();
-    await joinHarnessFibers();
-
-    expect(orphanRow(db, 'orphan-task')).toMatchObject({ step_idx: -2, dismissed: 'its actor is retired or gone' });
-    expect(wakeArmed(db)).toBe(false);
-  });
-
-  test('a task for a live actor no drain runs settles, never said to be for an actor that is gone', async () => {
-    const { agent, db } = orchestratorHarness();
-    await agent.activateActor();
-    await joinHarnessFibers();
-
-    // Any hosted actor can be handed a task; the drain runs hires only, so the root's settles undone.
-    const insert = db.prepare(
-      `INSERT INTO agent_log (actor_id, id, kind, variant, trace_id, payload, received_at)
-       VALUES (?, ?, 'event', 'subordinate_task', 'trace-unrun', '{"body":"brief"}', ?)`,
-    );
-
-    insert.run(harnessActorId(db), 'unrun-task', Date.now());
-    insert.run('gone-actor', 'gone-task', Date.now());
-
-    await agent.terminalRetryPass();
-    await joinHarnessFibers();
-
-    const [unrun, gone] = [orphanRow(db, 'unrun-task'), orphanRow(db, 'gone-task')];
-
-    expect([unrun.step_idx, gone.step_idx]).toEqual([-2, -2]);
-    // The live root's reason is its own, not the reason a gone actor's task is given.
-    expect(unrun.dismissed).not.toBe(gone.dismissed);
-  });
-
-  test('a task left for a retired hire settles, and a live hire\'s task still runs', async () => {
-    const { agent, db } = orchestratorHarness();
+  // eval-trajectory-evals-pu-eedw1v and warm-forge-4d6acc02, 2026-09-26: a task row for an actor nothing visited woke each
+  // object every lap for days. What an agent is owed rides its own wake, and retiring the agent cancels both.
+  test('what a retired agent was owed is cancelled with its wake, and nothing stays armed for it', async () => {
+    const harness = orchestratorHarness();
+    const { agent, db } = harness;
     await agent.activateActor();
     await joinHarnessFibers();
     await agent.setSoul('# Purpose\n\nDo each task asked.');
     const { subordinate: retired } = await agent.createSubordinateAgent();
-    const { subordinate: live } = await agent.createSubordinateAgent();
 
-    if (retired.actorId === null || live.actorId === null) throw new Error('the added agents have no actors');
+    if (retired.actorId === null) throw new Error('the added agent has no actor');
+    // Its crossing dies before the agent takes it: owed, with the agent's wake armed to cross it again.
+    cutNextDelivery(agent.agentOf(retired.actorId).storageKey, 'before-admit');
+    await wakeForDelegatedTask(harness, retired.actorId, 'brief');
+    expect(owedTo(db, retired.actorId)).toBe(1);
+    expect(agentWakes(db)).toContain(retired.actorId);
+
     await agent.dismissSubordinate(retired.name, true);
-
-    const insert = db.prepare(
-      `INSERT INTO agent_log (actor_id, id, kind, variant, trace_id, payload, payload_visibility, received_at)
-       VALUES (?, ?, 'event', 'subordinate_task', 'trace-left', '{"body":"brief","kinu_mode":"build"}', 'full', ?)`,
-    );
-
-    insert.run(retired.actorId, 'left-task', Date.now());
-    insert.run(live.actorId, 'live-task', Date.now());
-
-    await agent.terminalRetryPass();
     await joinHarnessFibers();
 
-    expect(orphanRow(db, 'left-task')).toMatchObject({ step_idx: -2, dismissed: 'its actor is retired or gone' });
-    expect(orphanRow(db, 'live-task').step_idx).not.toBe(-2);
+    expect(owedTo(db, retired.actorId)).toBe(0);
+    expect(agentWakes(db)).not.toContain(retired.actorId);
   });
 
   // eval-trajectory-evals-pu-eedw1v, 2026-09-22 to 26: one arm stayed true, each ~30 s the idle object was evicted
@@ -624,7 +550,7 @@ describe('the workspace keeps exactly one wake per job', () => {
     for (const line of named) {
       // `workspace` and `source` are what its fleet row keeps; the arm flags stay in the log.
       expect(line.fields).toMatchObject({
-        unfinishedHeads: true, admittedDelegations: false, sweeps: false, chatLoop: false,
+        unfinishedHeads: true, sweeps: false, chatLoop: false,
         workspace: first.name, source: 'unfinishedHeads',
       });
     }

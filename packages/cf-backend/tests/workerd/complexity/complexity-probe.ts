@@ -11,7 +11,7 @@ import { type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { DurableObject } from 'cloudflare:workers';
 import type { ModelMessage } from 'ai';
 import { SlateId } from '@agent-core/core/slates';
-import { ChangeSetCache, DynamicContextLedger, MAIN_AGENT, TerminalTransitions, WORKSPACE_IDENTITY_DDL, WorkspaceActorDirectory, agentArtifactDirectory, agentHome, composePrepareStep, createAgentStores, getWorkspaceDiff, initActorClaimTables, initAgentConfigTable, initCodemodeStateTable, initTerminalEffectTable, initToolEffectClaimTable, initWorkspaceActorTable, initWorkspaceSchema, classifyRunEnd, closeTurnRun, nimbusSessionFiles, openTurnRun, resetWorkspaceBaseline, settleWorkspaceSlates, standardMounts, withMountTable, type ActorHandle, type AgentStores, type NimbusSandboxHandle, type SqlExecutor, type SqlValue, type StepContextPlane, type StepPipeline, type WorkspaceBaselines, WORKSPACE_ROOT } from '@kinu.run/core';
+import { ChangeSetCache, DynamicContextLedger, MAIN_AGENT, TerminalTransitions, WORKSPACE_IDENTITY_DDL, WorkspaceActorDirectory, agentArtifactDirectory, agentHome, composePrepareStep, createAgentStores, getWorkspaceDiff, initActorClaimTables, initAgentConfigTable, initCodemodeStateTable, initTerminalEffectTable, initToolEffectClaimTable, initWorkspaceActorTable, initWorkspaceSchema, classifyRunEnd, closeTurnRun, nimbusSessionFiles, openTurnRun, readAgentFigures, resetWorkspaceBaseline, settleWorkspaceSlates, standardMounts, withMountTable, type ActorHandle, type AgentStores, type NimbusSandboxHandle, type SqlExecutor, type SqlValue, type StepContextPlane, type StepPipeline, type WorkspaceBaselines, WORKSPACE_ROOT } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { SlateFiles, WorkspaceSlateContentStore, slateDirectory } from '@kinu.run/core/slates';
 import { workspaceBoxFiles } from '@kinu.run/core/workspace';
@@ -288,6 +288,35 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
 
     return await this.meter.measure(async () => {
       if (eventRecorder.openTurn()?.runId !== `run-${String(runs)}`) throw new Error('the open turn was not found');
+
+      return null;
+    });
+  }
+
+  /** Subject: the figures a turn's end reports for its agent, after `turns` turns that each read theirs at their end. */
+  async turnEndFigures(turns: number): Promise<OperationCost> {
+    initWorkspaceSchema({ execRaw: this.execRaw, sql: this.executor, exec: this.sql, transactionSync: (write) => this.ctx.storage.transactionSync(write) });
+    const actor = this.main();
+    const { eventRecorder } = this.stores(actor);
+
+    const turn = (index: number): void => {
+      const runId = `run-${String(index)}`;
+
+      openTurnRun(eventRecorder, runId, { agentId: actor.actorId, causedBy: 'chat', userMessage: `question ${String(index)}`, turnIndex: index });
+
+      for (const stepIndex of [0, 1]) eventRecorder.emit(runId, { type: 'step_finish', stepIndex, parts: [], usage: { input: 1_000, output: 50, cacheRead: 900 }, usd: 0.001 });
+      closeTurnRun(eventRecorder, runId, { turnIndex: index, ...classifyRunEnd({ completed: true, interrupted: false }) });
+    };
+
+    for (let index = 0; index < turns; index += 1) {
+      turn(index);
+      readAgentFigures(this.executor, [actor.actorId]);
+    }
+
+    turn(turns);
+
+    return await this.meter.measure(async () => {
+      if (readAgentFigures(this.executor, [actor.actorId]).get(actor.actorId)?.tokens !== (turns + 1) * 2 * 1_050) throw new Error('the figures missed a step');
 
       return null;
     });

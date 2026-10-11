@@ -4,10 +4,6 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
   buildDrainBatch,
-  drainAssignments,
-  subordinateTurnContext,
-  type AdmittedAssignment,
-  type DrainAssignmentsOptions,
   EventLog,
   eventContentPath,
   initEventsHubTables,
@@ -1387,67 +1383,3 @@ describe('the structured handoff a report carries', () => {
 });
 
 /** The delegation runner. B10: one assignment row, one runner, one turn. */
-describe('drainAssignments', () => {
-  function assignedWorld(inheritedContext?: SerializedMessage[]) {
-    const { sql, actor } = makeWorld();
-    initEventsHubTables(sql);
-    const log = new EventLog(sql, actor);
-
-    const admission: Parameters<typeof admitSubordinateTask>[1] = {
-      fromWorkspace: 'kinu-main', kind: 'task', body: 'Audit the auth flow.', mode: 'build', now: NOW,
-    };
-
-    if (inheritedContext) admission.inheritedContext = { kind: 'fork', messages: inheritedContext };
-    admitSubordinateTask(log, admission);
-
-    return log;
-  }
-
-  test('two concurrent sweeps spend one assignment exactly once', async () => {
-    const forked: SerializedMessage[] = [
-      { id: 'u1', role: 'user', content: 'Fix auth.', createdAt: 1 },
-    ];
-
-    const log = assignedWorld(forked);
-    const ran: AdmittedAssignment[] = [];
-    const held = Promise.withResolvers<void>();
-
-    const sweep: DrainAssignmentsOptions = {
-      now: NOW, budget: 4, staleMs: 600_000,
-      run: async (task) => { ran.push(task); await held.promise; log.markTurnCompleted(task.turnId); },
-      onFailure: (cause) => { throw cause; },
-    };
-
-    // Both sweeps select before either resolves; binding is synchronous, so the second's `pending()` is empty.
-    const first = drainAssignments(log, sweep);
-    const second = drainAssignments(log, sweep);
-    held.resolve();
-    const [a, b] = await Promise.all([first, second]);
-
-    expect(ran.map((task) => task.body)).toEqual(['Audit the auth flow.']);
-    expect(a.consumed + b.consumed).toBe(1);
-
-    expect(subordinateTurnContext(log, ran[0]?.turnId ?? '')).toEqual(forked);
-
-    expect(log.hasOpenDrainLease()).toBe(false);
-    expect(log.pending({ variant: 'subordinate_task' })).toEqual([]);
-  });
-
-  test('a failed run leaves its lease open for a later sweep to re-pend', async () => {
-    const log = assignedWorld();
-    const failures: unknown[] = [];
-
-    const swept = await drainAssignments(log, {
-      now: NOW, budget: 4, staleMs: 600_000,
-      run: () => Promise.reject(new KinuError('unavailable', 'the model refused')),
-      onFailure: (cause) => { failures.push(cause); },
-    });
-
-    expect(swept).toEqual({ consumed: 1, truncated: false });
-    expect(failures).toHaveLength(1);
-
-    // The open lease is the retry: closing it drops the assignment; re-pending spins on the failure.
-    expect(log.hasOpenDrainLease()).toBe(true);
-    expect(log.pending({ variant: 'subordinate_task' })).toEqual([]);
-  });
-});

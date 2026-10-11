@@ -8,7 +8,7 @@ import {
   type ActorHost, type ActorReference, type AgentRuntime, type HostedActor, type LoopOrigin,
   type ProfileAuthorityInputs, type SqlExecutor,
 } from '@kinu.run/core';
-import { sqlOver } from '@kinu.run/test-utils';
+import { sqlOver, hostDeliveries } from '@kinu.run/test-utils';
 import { createAgentTracing, createRecordingTracer } from '@kinu.run/core/obs';
 import { makeExecRaw, makeSqlExec } from '../../../core/tests/helpers';
 import { makeEnv } from './actor-harness';
@@ -146,6 +146,8 @@ export async function hostedWorkspace(
     broadcast: () => undefined,
     turnClaimChanged: () => undefined,
     enqueueTurn: () => Promise.resolve({ status: 'queued' }),
+    // No chat here: what is delivered to an agent is taken as its host takes a queued turn.
+    deliveries: () => hostDeliveries({ broadcast: () => undefined, enqueueTurn: () => Promise.resolve({ status: 'queued' }) }),
     turnInFlight: () => false,
     setTimer: () => undefined,
     reconcileDurableWake: () => undefined,

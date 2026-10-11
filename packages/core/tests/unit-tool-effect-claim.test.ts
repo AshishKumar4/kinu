@@ -1,19 +1,22 @@
 /** Once-only claim in front of effectful tools (KINU-019), over real SQL. */
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
+import { Effect } from 'effect';
 import { createTestActors, createTestSql, present, toolExecute } from '@kinu.run/test-utils';
 import type { JsonObject } from '../src/utils/json';
 import { jsonSchema, tool, type ToolExecutionOptions, type ToolSet } from 'ai';
 import {
   buildMcpToolSet, claimToolEffect, initToolEffectClaimTable,
   settleToolEffect, DEFAULT_TOOL_RESULT_MAX_CHARS, PLATFORM_CATALOG,
-  withEffectClaims, replayPolicyFor, settleUnpairedToolCalls, INTERRUPTED_TOOL_RESULT, type EffectClaimDeps, type JsonValue,
+  withEffectReceipt, replayPolicyFor, settleUnpairedToolCalls, INTERRUPTED_TOOL_RESULT, type EffectClaimDeps, type JsonValue,
+  defineOperation, nativeTool, serveTransactional,
   type SerializableToolDescriptor,
 } from '../src/index';
 import { createMemoryVfs } from '@kinu.run/test-utils';
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { lostToolCall } from '../src/tools/effect-claim';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
+import { KinuError } from '../src/obs/index';
 
 /** `ToolSet`'s index type erases the registry's input type, so the call shape is restated once here. */
 function mcpCall(tools: ToolSet, name: string): (args: JsonObject, options: ToolExecutionOptions<unknown>) => Promise<JsonValue> {
@@ -25,13 +28,13 @@ function mcpCall(tools: ToolSet, name: string): (args: JsonObject, options: Tool
 
 /** The actor is fixed because a claim key is `(actor_id, turn, call, digest)`. */
 function claimPlane(turnId = 'turn-1') {
-  const { sql, execRaw } = createTestSql();
+  const { sql, execRaw, db } = createTestSql();
   initToolEffectClaimTable(execRaw);
   const actor = createTestActors(sql, execRaw).main;
   const scope = { turnId };
   const deps: EffectClaimDeps = { sql, actor, turnId: () => scope.turnId, durable: () => Promise.resolve() };
 
-  return { sql, actor, deps, scope };
+  return { sql, actor, deps, scope, db };
 }
 
 /** `jsonSchema<T>` so `tool()` infers INPUT; both tools share it because the claim digest covers these args. */
@@ -67,7 +70,7 @@ describe('tool effect claims', () => {
   test('a claimed tool runs once and its replay returns the stored result', async () => {
     const { deps } = claimPlane();
     const { calls, tools } = countingTool();
-    const execute = toolExecute<{ to: string }, JsonValue>(withEffectClaims(tools, deps).run);
+    const execute = toolExecute<{ to: string }, JsonValue>(withEffectReceipt(tools, deps).run);
 
     const first = await execute({ to: 'ops@example.test' }, OPTIONS);
     const replayed = await execute({ to: 'ops@example.test' }, OPTIONS);
@@ -90,7 +93,7 @@ describe('tool effect claims', () => {
       }),
     };
 
-    const execute = toolExecute<{ to: string }, JsonValue>(withEffectClaims(tools, deps).run);
+    const execute = toolExecute<{ to: string }, JsonValue>(withEffectReceipt(tools, deps).run);
 
     // Claimed, then died unsettled: whether the effect landed is unknown.
     await expect(execute({ to: 'ops@example.test' }, OPTIONS)).rejects.toThrow('connection dropped');
@@ -104,7 +107,7 @@ describe('tool effect claims', () => {
     const { deps } = claimPlane();
     const { calls, tools } = countingTool();
     const durable = Promise.withResolvers<void>();
-    const execute = toolExecute<{ to: string }, JsonValue>(withEffectClaims(tools, { ...deps, durable: () => durable.promise }).run);
+    const execute = toolExecute<{ to: string }, JsonValue>(withEffectReceipt(tools, { ...deps, durable: () => durable.promise }).run);
 
     const modelCall = execute({ to: 'model@example.test' }, { toolCallId: 'call-m1', messages: [{ role: 'user', content: 'send it' }], context: undefined });
 
@@ -161,7 +164,7 @@ describe('tool effect claims', () => {
   test('a different call in the same turn is not a replay', async () => {
     const { deps } = claimPlane();
     const { calls, tools } = countingTool();
-    const execute = toolExecute<{ to: string }, JsonValue>(withEffectClaims(tools, deps).run);
+    const execute = toolExecute<{ to: string }, JsonValue>(withEffectReceipt(tools, deps).run);
 
     await execute({ to: 'a@example.test' }, OPTIONS);
     await execute({ to: 'b@example.test' }, OPTIONS);
@@ -174,7 +177,7 @@ describe('tool effect claims', () => {
     // Pins the identity columns: a default id for missing options would replay one call as another.
     const { sql, deps } = claimPlane('turn-7');
     const { tools } = countingTool();
-    const execute = toolExecute<{ to: string }, JsonValue>(withEffectClaims(tools, deps).run);
+    const execute = toolExecute<{ to: string }, JsonValue>(withEffectReceipt(tools, deps).run);
 
     await execute({ to: 'ops@example.test' }, { toolCallId: 'call-from-provider', messages: [], context: undefined });
 
@@ -193,7 +196,7 @@ describe('tool effect claims', () => {
       execute: async () => ({ hits: 0 }),
     });
 
-    const wrapped = withEffectClaims({ web: entry }, deps);
+    const wrapped = withEffectReceipt({ web: entry }, deps);
 
     expect(replayPolicyFor('web')).toBe('safe');
     expect(wrapped.web).toBe(entry);
@@ -224,7 +227,7 @@ describe('tool effect claims', () => {
       }),
     };
 
-    const execute = toolExecute<{ to: string }, JsonValue>(withEffectClaims(tools, deps).run);
+    const execute = toolExecute<{ to: string }, JsonValue>(withEffectReceipt(tools, deps).run);
 
     const inFlight = execute({ to: 'ops@example.test' }, OPTIONS);
     await started.promise;
@@ -401,5 +404,53 @@ describe('tool effect claims', () => {
       expect(await call({}, { toolCallId: 'c1', messages: [], context: undefined })).toBe('lookup-2');
       expect(sql<{ n: number }>`SELECT count(*) AS n FROM tool_effect_claims`[0].n).toBe(0);
     });
+  });
+});
+
+describe('a transactional effect commits with its receipt', () => {
+  const RECORD = defineOperation({
+    ns: 'ledger', slate: false, name: 'record', help: 'Record one line.', impact: 'mutate',
+    input: v.strictObject({ line: v.string() }), output: v.strictObject({ id: v.number() }),
+  });
+
+  /** A native tool whose one operation writes a row in the store its receipt is kept in, synchronously; `fail` makes the
+   *  write's own commit refuse after it wrote. */
+  function ledgerPlane(fail: { now: boolean }) {
+    const plane = claimPlane();
+    const { db } = plane;
+
+    db.exec('CREATE TABLE ledger (id INTEGER PRIMARY KEY, line TEXT NOT NULL)');
+
+    const record = serveTransactional(RECORD, ({ line }) => Effect.suspend(() => {
+      const id = db.query<{ id: number }, [string]>('INSERT INTO ledger (line) VALUES (?) RETURNING id').get(line)?.id ?? 0;
+
+      return fail.now ? Effect.fail(new KinuError('io', 'the commit refused after the write')) : Effect.succeed({ id });
+    }));
+
+    const deps: EffectClaimDeps = { ...plane.deps, transaction: (body) => db.transaction(body)() };
+    const tools = withEffectReceipt({ ledger: nativeTool('A ledger.', [record]) }, deps);
+    const call = (callId: string) => toolExecute(present(tools.ledger, 'the ledger tool'))({ op: 'record', line: 'paid' }, { toolCallId: callId, messages: [], context: undefined });
+    const rows = (table: 'ledger' | 'tool_effect_claims') => db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM ${table}`).get()?.n ?? 0;
+
+    return { call, rows };
+  }
+
+  test('its receipt is settled with its result in the same commit, and a re-ask answers it without a second write', async () => {
+    const { call, rows } = ledgerPlane({ now: false });
+
+    expect(await call('c-1')).toEqual({ id: 1 });
+    expect(await call('c-1')).toEqual({ id: 1 });
+    expect({ ledger: rows('ledger'), receipts: rows('tool_effect_claims') }).toEqual({ ledger: 1, receipts: 1 });
+  });
+
+  test('one that fails rolls back its receipt with its write: no started receipt is left to refuse the retry', async () => {
+    const fail = { now: true };
+    const { call, rows } = ledgerPlane(fail);
+
+    expect(call('c-1')).rejects.toThrow('the commit refused after the write');
+    expect({ ledger: rows('ledger'), receipts: rows('tool_effect_claims') }).toEqual({ ledger: 0, receipts: 0 });
+
+    fail.now = false;
+    expect(await call('c-1')).toEqual({ id: 1 });
   });
 });

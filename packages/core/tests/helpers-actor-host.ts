@@ -1,5 +1,6 @@
 /** A real hosted actor per head and node over the caller's one workspace database, via the production
  *  directory, `createActorHost` and `seedActorLoop`; a mocked session would pass while writing no claim. */
+import { withHostDeliveries } from '@kinu.run/test-utils';
 import type { Database } from 'bun:sqlite';
 import { makeSqlExec, storesFor } from './helpers';
 import { WorkspaceJobAuthorities } from '../src/jobs/authorities';
@@ -193,7 +194,7 @@ export function hostedSeatsOver(input: {
     return { ...rt, actor: bound.handle, identity };
   };
 
-  const orchestrationFor = (bound: BoundActor & { readonly runtime: AgentRuntime }): AgentOrchestratorDeps => ({
+  const orchestrationFor = (bound: BoundActor & { readonly runtime: AgentRuntime }): AgentOrchestratorDeps => (withHostDeliveries({
     host: {
       broadcast: (event) => { broadcasts.push(event); },
       enqueueTurn: async (turn) => {
@@ -208,7 +209,7 @@ export function hostedSeatsOver(input: {
     engine: new EvolutionEngine(bound.runtime, historyTurnPairs(bound.stores.history), { enabled: input.autoEvolve === true }),
     // This actor's own log: publishing into the root's rows would move another actor's turn.
     eventLog: new EventLog(exec, bound.handle),
-  });
+  }));
 
   const tracing = input.tracing;
 

@@ -73,8 +73,9 @@ export interface CFRuntimeAccess {
   /** One box per workspace: a child composing its own gets a second, empty filesystem
      *  (tests/unit-head-fork.test.ts). Actors are separated by `shellId` and credential. */
   workspaceBox(shellId: string): NimbusSandboxHandle;
-  /** Absent for facets without a budget ledger; the `workspace` provider then uses a private ledger. */
-  readonly acc?: () => Pick<TurnAccumulator, 'files' | 'context'>;
+  /** Absent for facets without a budget ledger, or answering none before the agent is hosted; the `workspace` provider
+   *  then uses a private ledger. */
+  readonly acc?: () => Pick<TurnAccumulator, 'files' | 'context'> | undefined;
   getCliCwdForDevice?(): string | null;
   getCheckpointMetaForDevice?(): { turnId: string; sessionId: string } | null;
 }
@@ -396,8 +397,8 @@ export function createCFRuntime(
     inline: {
       vfs: toolFiles, files: agentFileVfs, memory, craftStore, shell, planes,
       sql,
-      ledger: () => access.acc?.().files,
-      budget: () => access.acc?.().context,
+      ledger: () => access.acc?.()?.files,
+      budget: () => access.acc?.()?.context,
       slate: hooks.slate,
       slateBuild: hooks.slateBuild,
     },

@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { jsonSchema, tool } from 'ai';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
-import { scriptedTurnModel, toolExecute } from '@kinu.run/test-utils';
+import { scriptedTurnModel, toolExecute, withHostDeliveries } from '@kinu.run/test-utils';
 import {
   ActorSession, EvolutionEngine, historyTurnPairs, WorkspaceActorDirectory, createAgentStores, profileCatalogDigest,
   resolveTurnProfile, verifyClaimedProgram, readVersionedScaffoldSource, sha256Hex,
@@ -73,7 +73,7 @@ async function workspace(): Promise<{ bind: (name: string) => Bound; rt: AgentRu
     const stores = createAgentStores(() => runtime.storage.sql, () => handle, runtime.storage.transactionSync, async () => ({ vfs: runtime.storage.vfs, artifactDirectory: `${WORKSPACE_ROOT}/actors/${handle.actorId}` }));
 
     const actor: ActorSession = new ActorSession({ history: stores.history, runtime, claims: stores.claims, installedBuild: null,
-    orchestration: {
+    orchestration: withHostDeliveries({
       engine: new EvolutionEngine(runtime, historyTurnPairs(stores.history), { enabled: false }), eventLog: new EventLog(eventSql, handle),
       host: {
         broadcast: () => {},
@@ -81,7 +81,7 @@ async function workspace(): Promise<{ bind: (name: string) => Bound; rt: AgentRu
         turnInFlight: () => actor.inFlight,
         setTimer: () => { throw new Error('this fixture must not schedule background work'); },
       },
-    }, });
+    }), });
 
     return { actor, runtime, stores, handle };
   };

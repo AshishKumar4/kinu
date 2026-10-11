@@ -2,14 +2,16 @@
 
 A hosted workspace has one shared authority: its `OrchestratorAgent` Durable
 Object. Nimbus runs over that object's `ctx.storage.sql` and owns the workspace
-files and execution state. The workspace also keeps the roster, main's state,
-shared ledgers and tool execution. No shadow VFS or file sync path runs between
-agents.
+files and execution state. The workspace also keeps the roster, the shared
+ledgers (evolution, event log, jobs, tasks, missions), main's handed-over turns
+and the branches the owner started during each (`turn_branches`), and tool
+execution. A turn's facts from its preparation are its agent's, frozen beside its
+claims (`actor_turn_facts`) and carried in its handoff. No shadow VFS or file sync path runs between agents.
 
-Every non-main agent has an `AgentFacet` in a Worker Loader isolate, with its
-own SQLite for conversations, turn and effect claims, and run events. Hired,
-swarm and background agents use the same class and turn runner; their roster
-rows remain in `workspace_actors` in the workspace database. A selected
+Every agent, main included, has an `AgentFacet` in a Worker Loader isolate, with
+its own SQLite for its conversation, turn and effect claims, run events, plans
+and owner questions. Main, hired, swarm and background agents use the same class;
+their roster rows remain in `workspace_actors` in the workspace database. A selected
 scaffold row is handed to the facet before its turn, while the program's bytes
 remain on the shared agent-state file plane. Export visits each retained
 agent's database, including retired task agents. Only destruction wipes a
@@ -526,7 +528,9 @@ its own DDL, all of it `IF NOT EXISTS`, all of it run from the same
 | Swarm node content | `swarm_node_records` (what a swarm re-entry reads) | `core/src/strategy/swarm-resume.ts` |
 | Live trials | `artifact_trials`, `trial_turns` | `core/src/evolution/trials.ts` |
 | Turn lifecycle | `actor_turn_claims` and the session tables above | `core/src/orchestrator/actor-claims.ts` |
-| Once-only effects | `tool_effect_claims`, `effect_tombstones` | `core/src/tools/effect-claim.ts`, `core/src/identity/effect-tombstones.ts` |
+| Deliveries and fences (D13) | `agent_deliveries` (what each agent is owed, until its isolate answers), `actor_turn_fence` (one row an agent: its newest opening, its run, `ended_at`, a Stop's `cancelled_at`) | `core/src/subordinates/deliveries.ts`, `core/src/subordinates/turn-fence.ts` |
+| Once-only effects | `tool_effect_claims` (a receipt: `started`, `settled` or `indeterminate`, kept where its effect commits), `effect_tombstones` | `core/src/tools/effect-claim.ts`, `core/src/identity/effect-tombstones.ts` |
+| Delivered runs (an agent's isolate) | `facet_runs` (a head's or node's run, until its end is reported) | `cf-backend/src/agent-facet/agent-facet.ts` |
 | Facts | `agent_facts`, `agent_fact_history` | `core/src/memory/facts.ts` |
 | Account memory (user object) | `agent_facts`, `agent_fact_history` under `ACCOUNT_FACTS_ACTOR`, `account_notes`, `account_memory_proposals` | `core/src/memory/account.ts`, `cf-backend/src/user/account-memory.ts` |
 | Conversation search | `conversation_fts` (derived FTS5 index) | `core/src/memory/conversation-search.ts`, created by the store on first use |

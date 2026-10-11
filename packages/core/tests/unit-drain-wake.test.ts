@@ -9,7 +9,7 @@ import {
   EventLog, initEventsHubTables, type IngressDescriptor,
 } from '../src/events/hub/index';
 import { initCompletedTurnTable, createCompletedTurnStore } from '../src/evolution/session-window';
-import { createTestActors, createTestActorsOver, createTestSql } from '@kinu.run/test-utils';
+import { createTestActors, createTestActorsOver, createTestSql, withHostDeliveries } from '@kinu.run/test-utils';
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host';
 import { makeSqlExec } from './helpers';
 import { EvolutionHelperStore } from '../src/identity/evolution-helpers';
@@ -144,7 +144,7 @@ describe('every drain path re-establishes the wake', () => {
     const log = newEventLog();
     const { host, durableArms, debounces, enqueued } = watchedHost();
     host.reconcileDurableWake = null;
-    const orch = new AgentOrchestrator({ host, engine: inertEngine(), eventLog: log });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine: inertEngine(), eventLog: log }));
     log.publish({ descriptor: webhook('derived-wake'), now: Date.now() });
     orch.scheduleDrain();
     expect(debounces).toHaveLength(1);
@@ -158,7 +158,7 @@ describe('every drain path re-establishes the wake', () => {
   test('admitting work arms the durable wake, not only the in-memory debounce', () => {
     const log = newEventLog();
     const { host, durableArms, debounces } = watchedHost();
-    const orch = new AgentOrchestrator({ host, engine: inertEngine(), eventLog: log });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine: inertEngine(), eventLog: log }));
 
     orch.scheduleDrain();
 
@@ -166,21 +166,21 @@ describe('every drain path re-establishes the wake', () => {
     expect(durableArms()).toBe(1);
   });
 
-  /** Counted from just before the refusal, to exclude the admission arm. */
-  test('a refused signal turn returns its events to pending AND re-arms the wake', async () => {
+  // A refusal is the agent's answer (design v2 §1): its events park, pending for the drain something else starts.
+  test('a refused signal turn parks its events: pending, waking nothing', async () => {
     const log = newEventLog();
     const now = Date.now();
     log.publish({ descriptor: webhook('d1'), now });
     const { host, enqueued, durableArms } = watchedHost({ refuse: true });
-    const orch = new AgentOrchestrator({ host, engine: inertEngine(), eventLog: log });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine: inertEngine(), eventLog: log }));
     const armsBefore = durableArms();
 
     await orch.drainPendingEvents();
 
     expect(enqueued).toHaveLength(1);
     expect(log.pending()).toHaveLength(1);
-    expect(log.nextPendingDrainAt(now)).not.toBeNull();
-    expect(durableArms()).toBeGreaterThan(armsBefore);
+    expect(log.nextPendingDrainAt(now)).toBeNull();
+    expect(durableArms()).toBe(armsBefore);
   });
 
   test('a signal turn that ran and failed parks its events: they wake nothing, and the next drain carries them', async () => {
@@ -188,7 +188,7 @@ describe('every drain path re-establishes the wake', () => {
     const now = Date.now();
     log.publish({ descriptor: webhook('d1'), now });
 
-    await new AgentOrchestrator({ host: watchedHost({ fail: true }).host, engine: inertEngine(), eventLog: log }).drainPendingEvents();
+    await new AgentOrchestrator(withHostDeliveries({ host: watchedHost({ fail: true }).host, engine: inertEngine(), eventLog: log })).drainPendingEvents();
 
     expect(log.pending()).toHaveLength(1);
     expect(log.nextPendingDrainAt(now)).toBeNull();
@@ -197,7 +197,7 @@ describe('every drain path re-establishes the wake', () => {
     expect(log.nextPendingDrainAt(now)).toBe(now);
     const accepting = watchedHost();
 
-    await new AgentOrchestrator({ host: accepting.host, engine: inertEngine(), eventLog: log }).drainPendingEvents();
+    await new AgentOrchestrator(withHostDeliveries({ host: accepting.host, engine: inertEngine(), eventLog: log })).drainPendingEvents();
 
     expect(accepting.enqueued).toHaveLength(1);
     expect(log.pending()).toEqual([]);
@@ -209,9 +209,9 @@ describe('every drain path re-establishes the wake', () => {
     const now = Date.now();
     log.publish({ descriptor: webhook('d1'), now });
 
-    const orch = new AgentOrchestrator({
+    const orch = new AgentOrchestrator(withHostDeliveries({
       host: watchedHost().host, engine: inertEngine(), eventLog: log,
-    });
+    }));
 
     await orch.drainPendingEvents();
 
@@ -248,7 +248,7 @@ describe('an evolution helper report on the rail belongs to its lane, not the pa
     const { host, enqueued } = watchedHost();
 
     expect(log.nextPendingDrainAt(now)).toBeNull();
-    await new AgentOrchestrator({ host, engine: inertEngine(), eventLog: log }).drainPendingEvents();
+    await new AgentOrchestrator(withHostDeliveries({ host, engine: inertEngine(), eventLog: log })).drainPendingEvents();
     expect(enqueued).toEqual([]);
   });
 
@@ -259,7 +259,7 @@ describe('an evolution helper report on the rail belongs to its lane, not the pa
     log.publish({ descriptor: report('researcher', 'build', 'Root cause found.'), now: now + 1 });
     const { host, enqueued } = watchedHost();
 
-    await new AgentOrchestrator({ host, engine: inertEngine(), eventLog: log }).drainPendingEvents();
+    await new AgentOrchestrator(withHostDeliveries({ host, engine: inertEngine(), eventLog: log })).drainPendingEvents();
     expect(enqueued).toHaveLength(1);
     expect(enqueued[0].metadata?.kinuMode).toBe('build');
     expect(enqueued[0].text).toContain('researcher');

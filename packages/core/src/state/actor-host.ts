@@ -281,7 +281,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
             const parentReference = actorReferenceOf(deps.directory.open(parentId));
             const parent = host.hosted(parentReference) ?? await host.acquire(parentReference, { kind: 'actor' });
 
-            return parent.session.orchestrator.inbox.send(signal);
+            return parent.session.orchestrator.signals.send(signal);
           },
         },
       });
@@ -342,11 +342,9 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
   });
 
   const released = (reference: ActorReference): Effect.Effect<void, KinuError> => Effect.gen(function* () {
-    // The root's fence is read by its opener; only `releaseAll` (process end) may take it.
-    if (reference.parentActorId === null) {
-      return yield* new KinuError('denied',
-        'The workspace root is not released individually; its runtime belongs to whoever opened the workspace.');
-    }
+    // The root's fence is read by its opener; only `releaseAll` (process end) may take it. Released at rest as any agent
+    // is, it stays: its runtime belongs to whoever opened the workspace.
+    if (reference.parentActorId === null) return;
 
     const slot = yield* slotFor(reference);
 

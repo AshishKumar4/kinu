@@ -3,26 +3,28 @@ import { type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 import { DurableObject, RpcTarget } from 'cloudflare:workers';
 import { Nimbus, type NimbusSandbox, type NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
 import type { UIMessage } from 'ai';
-import { Effect } from 'effect';
-import { flight, settle, type KinuError } from '@kinu.run/core/obs';
+import { Cause, Effect, Exit } from 'effect';
+import { attempt, attemptInItsWords, diagnostics, flight, hold, KinuError, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import {
   encodeModelMessageValues, jsonResultOrVoid, readAgentArchivePage,
   type InspectedWork,
   type AgentOwnInspection, type AnsweredEvolutionHelper, type JsonValue, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage,
   type NimbusSandboxHandle, type PositionPageRequest, type ProviderEnv, type SerializedMessage, type SubordinateInspectionResult,
   servedContextTree, type ContextEditor, type ContextTreeRemote, type SpendLedger, type StepSpendSource, type TurnRequestIndex, type TurnRequestPage, type ConversationSearchHit, type ConversationScrollResult, type ConversationSummary,
-  type SendState,
+  type SendState, DeliverySchema, WorkModeSchema, ActorOriginSchema, holdsChat, type Delivery, type DeliveryAnswer,
 } from '@kinu.run/core';
+import * as v from 'valibot';
 import { StepPacer } from './step-pacer';
 import { AgentDatabase } from './agent-database';
-import { runAgentTask } from './agent-turn';
+import { runAgentTask, type AgentRunOutcome } from './agent-turn';
 import { createAgentProviderRegistry, type AgentProviderDeps, type AgentProviderRegistry } from '../providers/agent-registry';
 import { FacetChat } from './agent-chat';
 import { workspaceClient, type AgentWorkspaceCalls } from './workspace-rpc';
 import type {
-  AgentAnswer, AgentAnswerTexts, AgentStanding, AgentSteps, AgentRecovery, AgentSnapshot, ConversationProjection, ConversationTurnPair, AgentTurnEnd, AgentTurnTask, EnqueueTurnResult, ProgrammaticTurn, PromptFile, SendLanding, SendOptions, TurnRequestAt,
+  AgentAnswer, AgentAnswerTexts, AgentStanding, AgentSteps, AgentRecovery, AgentSnapshot, ConversationProjection, ConversationTurnPair, AgentTurnTask, EnqueueTurnResult, ProgrammaticTurn, SendLanding, TurnRequestAt,
   JsonObject, PlanDecisionOutcome, PlanEdit, PlanReview, PlanReviewDecision, PlanReviewResult, ReviewAnnotation, AskedQuestions, OwnerAnswer,
   Page, PageRequest, RunEvent, RunEventQuery, RunListEntry, RunSummary, StoredRunEvent,
+  ForkConversationPlan, ForkConversationSection, ForkRowSection, ForkRows,
 } from '@kinu.run/core';
 import { getRunEvents, getRunEventText, getRunSummaries, listRuns } from '@kinu.run/core';
 
@@ -80,28 +82,15 @@ export interface PlanVerdict {
   readonly feedback?: string;
 }
 
-export interface AgentSend {
-  readonly text: string;
-  readonly files?: readonly PromptFile[];
-  /** A card's stamp: it is its own turn, never a steer, and it renders from this. */
-  readonly card?: JsonObject;
-}
-
 export interface AgentFacetCalls {
-  run(snapshot: AgentSnapshot, task: AgentTurnTask): Promise<AgentTurnEnd>;
-  /** Answered once its chat has processed it. */
-  enqueue(snapshot: AgentSnapshot, turn: ProgrammaticTurn): Promise<EnqueueTurnResult>;
-  /** Answered once the turn is queued: the workspace's own agent's wakes, handed over from inside the workspace's settles. */
-  queue(snapshot: AgentSnapshot, turn: ProgrammaticTurn): Promise<EnqueueTurnResult>;
-  send(snapshot: AgentSnapshot, input: AgentSend, opts: SendOptions): Promise<SendLanding>;
-  /** Resolves once its chat has reserved the words, not when they land. */
-  admit(snapshot: AgentSnapshot, input: AgentSend, opts: SendOptions): Promise<void>;
+  /** Resolves once its chat holds the delivery in its own store. */
+  admit(snapshot: AgentSnapshot, delivery: Delivery): Promise<DeliveryAnswer>;
+  landing(snapshot: AgentSnapshot, id: string): Promise<SendLanding>;
   retry(snapshot: AgentSnapshot, claim: (turnId: string) => void): Promise<SendLanding>;
   sendState(snapshot: AgentSnapshot, id: string): Promise<SendState>;
   awaitSend(snapshot: AgentSnapshot, id: string): Promise<SendState>;
   interruptChat(snapshot: AgentSnapshot): Promise<readonly string[]>;
   /** The owner's Stop: unseen steers stay queued and rerun. */
-  stopChat(snapshot: AgentSnapshot): Promise<void>;
   /** What a reset left owed is taken up; the agent tells its workspace what is left once it rests. */
   wake(snapshot: AgentSnapshot): Promise<void>;
   /** The next request is measured on the new settings, and a refusal only the owner could fix may answer now. */
@@ -119,6 +108,19 @@ export interface AgentFacetCalls {
   answer(snapshot: AgentSnapshot, messageId: string): Promise<AgentAnswer | null>;
   /** Its conversation's newest rows first, for a lane its workspace runs on it. */
   newestFirst(snapshot: AgentSnapshot, limit: number): Promise<readonly ConversationProjection[]>;
+  /** The compaction ladder's forced rebuild, armed for its next turn assembly in the state that assembly reads. */
+  armCompaction(snapshot: AgentSnapshot): Promise<void>;
+  /** Its conversation as a fork of its workspace reads it: whether a message can be cut at, the cut's plan, a section's
+   *  count, and its rows as JSON lines, pulled as the fork's frames are sent. */
+  forkHas(snapshot: AgentSnapshot, messageId: string): Promise<boolean>;
+  forkPlan(snapshot: AgentSnapshot, untilMessageId: string, artifactDirectory: string): Promise<ForkConversationPlan>;
+  forkCount(snapshot: AgentSnapshot, kind: ForkConversationSection, plan: ForkConversationPlan, artifactDirectory: string): Promise<number>;
+  forkRows(snapshot: AgentSnapshot, kind: ForkConversationSection, plan: ForkConversationPlan, artifactDirectory: string): Promise<ReadableStream<Uint8Array>>;
+  /** A fork of its workspace landing its conversation here, a batch at a time, then pointing the cut at its context;
+   *  carried payloads re-root under `artifactDirectory`. */
+  forkClear(snapshot: AgentSnapshot, artifactDirectory: string): Promise<void>;
+  forkStage<K extends ForkRowSection>(snapshot: AgentSnapshot, artifactDirectory: string, kind: K, rows: readonly ForkRows[K][]): Promise<void>;
+  forkPublish(snapshot: AgentSnapshot, artifactDirectory: string, cutMessageId: string): Promise<void>;
   /** Where its chat stands between turns, for its window and its workspace's tile; `contextWindow` is its model's. */
   standing(snapshot: AgentSnapshot, contextWindow: number | null): Promise<AgentStanding>;
   /** Its runs, newest first, plain or folded with each run's provenance and usage, and one run's events; the workspace's
@@ -129,6 +131,10 @@ export interface AgentFacetCalls {
   runEventText(snapshot: AgentSnapshot, runId: string, query: RunEventQuery | null): Promise<StoredRunEvent[]>;
   /** Its newest model steps, for the activity its workspace's window reads. */
   steps(snapshot: AgentSnapshot, limit: number): Promise<AgentSteps>;
+  /** The first `before` finished steps of run `runId`, drawn, for a tab its room replays the run's turn to, as JSON
+   *  lines pulled a step at a time: a long turn's steps never cross as one value (`do.facet.rpc_bytes`). A recorded step
+   *  never changes, so the run may have closed since. */
+  runSteps(snapshot: AgentSnapshot, runId: string, before: number): Promise<ReadableStream<Uint8Array>>;
   /** A turn's request and response by its answer's id, for a rating its workspace records; null for none. */
   turnPair(snapshot: AgentSnapshot, messageId: string): Promise<ConversationTurnPair | null>;
   /** The metadata of its newest message from a person, which its idle work mode reads; null before any. */
@@ -137,6 +143,7 @@ export interface AgentFacetCalls {
   drainAnswers(snapshot: AgentSnapshot, drainTurnIds: readonly string[]): Promise<Readonly<Record<string, string>>>;
   /** A retirement waits on it. */
   idle(): Promise<void>;
+  deliverAdvice(snapshot: AgentSnapshot, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean>;
   /** Runs the turn's waiting model step under this call, and answers once it has ended (`StepPacer`). */
   step(turnId: string): Promise<void>;
   history(snapshot: AgentSnapshot, limit?: number): Promise<UIMessage[]>;
@@ -157,7 +164,6 @@ export interface AgentFacetCalls {
   interrupt(snapshot: AgentSnapshot, turnId: string): Promise<void>;
   recover(snapshot: AgentSnapshot): Promise<AgentRecovery>;
   archivePage(snapshot: AgentSnapshot, cursor: ArchiveSqlCursor | null, maxBytes: number): Promise<ArchiveAgentPage>;
-  deliverAdvice(snapshot: AgentSnapshot, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean>;
   /** Its plan reviews, in its own store: submitted by its turn, under that turn's author-stamped metadata, and reviewed by
    *  the owner through its window. */
   submitPlan(snapshot: AgentSnapshot, edits: readonly PlanEdit[], driving: JsonObject | undefined): Promise<PlanReviewResult>;
@@ -175,6 +181,22 @@ export interface AgentFacetCalls {
   /** The answer becomes the asking call's result, and the turn that continues from it is queued in its own chat. */
   answerOwnerQuestions(snapshot: AgentSnapshot, id: string, answers: readonly OwnerAnswer[]): Promise<void>;
   dismissOwnerQuestions(snapshot: AgentSnapshot, id: string): Promise<number>;
+}
+
+/** `rows` as JSON lines, each pulled as its reader asks for it: none sits whole in either isolate. */
+function jsonLineStream<Row>(rows: AsyncIterable<Row>): ReadableStream<Uint8Array> {
+  const pulled = rows[Symbol.asyncIterator]();
+  const encoder = new TextEncoder();
+
+  return new ReadableStream<Uint8Array>({
+    pull: async (controller) => {
+      const next = await pulled.next();
+
+      if (next.done === true) controller.close();
+      else controller.enqueue(encoder.encode(`${JSON.stringify(next.value)}\n`));
+    },
+    cancel: async () => { await pulled.return?.(); },
+  });
 }
 
 export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFacetCalls {
@@ -217,6 +239,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     this.database ??= new AgentDatabase(this.ctx.storage, {
       agent: () => this.workspace(), home: this.env.HOME, state: () => this.state(),
       enqueueTurn: (input) => this.enqueue(snapshot, input),
+      admitDelivery: (delivery) => this.admit(snapshot, delivery),
       // A steer's fate rides its chat's events, in order with the turns it names.
       broadcast: (event) => { this.held?.session.emit({ type: 'broadcast', event }); },
       turnInFlight: () => this.held?.session.turnInFlight() ?? false,
@@ -234,7 +257,9 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     // The workspace's program first: the actor is built on it.
     const prepared = await this.workspaceCalls.prepareChat({ turnId: null, mode: 'build', userText: '', parentDriven: false });
 
-    database.adopt({ ...snapshot, scaffold: [prepared.scaffold] });
+    // The rows newest to reach it, not those this call carried: a call adopted while the program was asked for may have
+    // brought newer ones (the owner's model pin), and re-adopting older rows would put the old ones back.
+    database.adopt({ ...database.current(), scaffold: [prepared.scaffold] });
     const actor = await database.acquire();
     const chat = new FacetChat({ actor, database, workspace: this.workspaceCalls, models: (deps) => this.models(deps), storage: this.ctx.storage, pacer: this.pacer });
 
@@ -253,42 +278,33 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     });
   }
 
-  async run(snapshot: AgentSnapshot, task: AgentTurnTask): Promise<AgentTurnEnd> {
-    return await runAgentTask({ database: this.open(snapshot), workspace: this.workspaceCalls, models: (deps) => this.models(deps), pacer: this.pacer }, task);
-  }
 
+  /** A turn its own isolate queues: answered once its chat has processed it. */
   async enqueue(snapshot: AgentSnapshot, turn: ProgrammaticTurn): Promise<EnqueueTurnResult> {
     return await settle(this.withChat(snapshot, (chat) => chat.session.enqueueTurn(turn)));
   }
 
-  async queue(snapshot: AgentSnapshot, turn: ProgrammaticTurn): Promise<EnqueueTurnResult> {
-    return await settle(this.withChat(snapshot, async (chat) => {
-      const queued = await chat.session.queueTurn(turn);
+  /** A delivery from the workspace (design v2 §1): in this isolate's store before it is answered, which retires the
+   *  workspace's row; a repeat is answered `duplicate`. */
+  async admit(snapshot: AgentSnapshot, delivery: Delivery): Promise<DeliveryAnswer> {
+    const parsed = v.parse(DeliverySchema, delivery);
 
-      await chat.taken();
+    // A run is this isolate's to run beside its chat, never a turn of it.
+    if (parsed.input.kind === 'run') return this.admitRun(snapshot, parsed.id, parsed.input.task);
 
-      return queued;
-    }));
+    return await settle(Effect.flatMap(this.withChat(snapshot, (chat) => chat), (chat) => (chat.session.closing
+      // Closing: owed to its next start, so the crossing fails and the workspace's wake crosses it again.
+      ? Effect.fail(new KinuError('unavailable', 'The agent is closing; the delivery is owed to its next start.'))
+      : attemptInItsWords('io', () => chat.session.admitDelivery(v.parse(DeliverySchema, delivery))).pipe(
+        // Its own refusal is its answer, not a lost crossing: told with its whole cause chain.
+        Effect.catch((refusal) => Effect.succeed<DeliveryAnswer>({ refused: { code: refusal.code, message: renderThrownChain({ cause: refusal }) } })),
+        Effect.tap(() => Effect.promise(() => chat.taken())),
+      ))));
   }
 
-  async send(snapshot: AgentSnapshot, input: AgentSend, opts: SendOptions): Promise<SendLanding> {
-    return await settle(this.withChat(snapshot, async (chat) => {
-      const landing = await chat.session.send(input.files === undefined ? input.text : { text: input.text, files: input.files }, opts);
-
-      await chat.taken();
-
-      return landing;
-    }));
-  }
-
-  async admit(snapshot: AgentSnapshot, input: AgentSend, opts: SendOptions): Promise<void> {
-    return await settle(this.withChat(snapshot, async (chat) => {
-      const words = input.files === undefined ? input.text : { text: input.text, files: input.files };
-
-      // A card's reservation has nothing of the workspace's to take in its transaction: the workspace takes its own after.
-      await chat.session.admit(words, input.card === undefined ? opts : { ...opts, metadata: input.card, consume: () => {} });
-      await chat.taken();
-    }));
+  /** Where a person's words landed, once a turn took them: what their client is told. */
+  async landing(snapshot: AgentSnapshot, id: string): Promise<SendLanding> {
+    return await settle(this.withChat(snapshot, (chat) => chat.session.awaitLanding(id)));
   }
 
   async retry(snapshot: AgentSnapshot, claim: (turnId: string) => void): Promise<SendLanding> {
@@ -308,15 +324,60 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   }
 
   async wake(snapshot: AgentSnapshot): Promise<void> {
+    // A run a death cut off runs again: its workspace's caller still awaits its end.
+    for (const owed of this.runs().unended()) this.startRun(snapshot, owed.id, owed.task);
+
+    // A run's agent holds no chat to wake.
+    if (!holdsChat(v.parse(AgentOriginSchema, snapshot.lineage.at(-1)).origin)) return;
+
     return await settle(this.withChat(snapshot, (chat) => chat.wake()));
   }
 
-  async modelSettingsChanged(snapshot: AgentSnapshot): Promise<void> {
-    return await settle(this.withChat(snapshot, (chat) => chat.modelSettingsChanged()));
+  private runTable: FacetRuns | null = null;
+
+  private runs(): FacetRuns {
+    this.runTable ??= new FacetRuns(this.ctx.storage.sql);
+
+    return this.runTable;
   }
 
-  async stopChat(snapshot: AgentSnapshot): Promise<void> {
-    return await settle(this.withChat(snapshot, (chat) => { chat.session.stop(); }));
+
+  /** A delivered run (design v2 §1): in this isolate's store before it is answered, run to its end beside the chat, and its
+   *  end reported to the workspace, whose caller awaits it; a repeat is answered `duplicate`. */
+  private admitRun(snapshot: AgentSnapshot, id: string, task: AgentTurnTask): DeliveryAnswer {
+    if (!this.runs().admit(id, task)) return 'duplicate';
+    this.startRun(snapshot, id, task);
+
+    return 'taken';
+  }
+
+  private startRun(snapshot: AgentSnapshot, id: string, task: AgentTurnTask): void {
+    if (this.runsInFlight.has(id)) return;
+
+    const run = Effect.gen({ self: this }, function* () {
+      const exit = yield* Effect.exit(attempt({ doing: 'running a delivered task in its agent\'s isolate', otherwise: 'io' }, () => runAgentTask({
+        database: this.open(snapshot), workspace: this.workspaceCalls, models: (deps) => this.models(deps), pacer: this.pacer,
+      }, task)));
+
+      const outcome: AgentRunOutcome = Exit.isSuccess(exit)
+        ? { ended: exit.value }
+        : { refused: { code: toKinuError({ doing: 'running a delivered task', cause: Cause.squash(exit.cause), otherwise: 'io' }).code, message: renderThrownChain({ cause: Cause.squash(exit.cause) }) } };
+
+      yield* attempt({ doing: "reporting a delivered run's end to its workspace", otherwise: 'unavailable' }, () => this.workspaceCalls.runEnded(id, outcome));
+      this.runs().ended(id);
+    }).pipe(Effect.catch((failure) => Effect.sync(() => {
+      // Unreported: the next wake runs it again, and its caller hears that end.
+      diagnostics.failure('agent.run_report_failed', failure, { runId: id });
+    })), Effect.ensuring(Effect.sync(() => { this.runsInFlight.delete(id); })));
+
+    this.runsInFlight.set(id, hold(run));
+  }
+
+  /** The runs this isolate runs now, by id: a wake starts none twice, and its idle joins them. */
+  private readonly runsInFlight = new Map<string, Promise<unknown>>();
+
+  async modelSettingsChanged(snapshot: AgentSnapshot): Promise<void> {
+    return await settle(this.withChat(snapshot, (chat) => chat.modelSettingsChanged()));
   }
 
   async revertTo(snapshot: AgentSnapshot, entryId: string): Promise<void> {
@@ -383,6 +444,39 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return await this.open(snapshot).newestFirst(limit);
   }
 
+  async armCompaction(snapshot: AgentSnapshot): Promise<void> {
+    return await settle(this.withChat(snapshot, (chat) => { chat.armCompaction(); }));
+  }
+
+  async forkHas(snapshot: AgentSnapshot, messageId: string): Promise<boolean> {
+    return await this.open(snapshot).forkSource().has(messageId);
+  }
+
+  async forkPlan(snapshot: AgentSnapshot, untilMessageId: string, artifactDirectory: string): Promise<ForkConversationPlan> {
+    return await this.open(snapshot).forkSource().plan(untilMessageId, artifactDirectory);
+  }
+
+  async forkCount(snapshot: AgentSnapshot, kind: ForkConversationSection, plan: ForkConversationPlan, artifactDirectory: string): Promise<number> {
+    return await this.open(snapshot).forkSource().count(kind, plan, artifactDirectory);
+  }
+
+  async forkRows(snapshot: AgentSnapshot, kind: ForkConversationSection, plan: ForkConversationPlan, artifactDirectory: string): Promise<ReadableStream<Uint8Array>> {
+    // Pulled a row at a time as the fork's frames go out: the section never sits whole in either isolate.
+    return jsonLineStream(this.open(snapshot).forkSource().rows(kind, plan, artifactDirectory));
+  }
+
+  async forkClear(snapshot: AgentSnapshot, artifactDirectory: string): Promise<void> {
+    await this.open(snapshot).forkTarget(artifactDirectory).clear();
+  }
+
+  async forkStage<K extends ForkRowSection>(snapshot: AgentSnapshot, artifactDirectory: string, kind: K, rows: readonly ForkRows[K][]): Promise<void> {
+    await this.open(snapshot).forkTarget(artifactDirectory).stage(kind, rows);
+  }
+
+  async forkPublish(snapshot: AgentSnapshot, artifactDirectory: string, cutMessageId: string): Promise<void> {
+    await this.open(snapshot).forkTarget(artifactDirectory).publish(cutMessageId);
+  }
+
   async standing(snapshot: AgentSnapshot, contextWindow: number | null): Promise<AgentStanding> {
     return this.open(snapshot).standing(contextWindow);
   }
@@ -407,6 +501,10 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return this.open(snapshot).steps(limit);
   }
 
+  async runSteps(snapshot: AgentSnapshot, runId: string, before: number): Promise<ReadableStream<Uint8Array>> {
+    return jsonLineStream(this.open(snapshot).runSteps(runId, before));
+  }
+
   async turnPair(snapshot: AgentSnapshot, messageId: string): Promise<ConversationTurnPair | null> {
     return await this.open(snapshot).turnPair(messageId);
   }
@@ -423,8 +521,13 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return await settle(this.withChat(snapshot, (chat) => chat.owedWork()));
   }
 
+  /** An advisor's answer on one of this agent's own turns, judged by this isolate's lane and said here. */
+  async deliverAdvice(snapshot: AgentSnapshot, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean> {
+    return await (await this.open(snapshot).acquire()).session.sayAdvisorAnswer(helper, turnId);
+  }
+
   async idle(): Promise<void> {
-    await this.held?.idle();
+    await Promise.all([this.held?.idle(), ...this.runsInFlight.values()]);
   }
 
   async step(turnId: string): Promise<void> {
@@ -499,7 +602,36 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return await this.open(snapshot).recover();
   }
 
-  async deliverAdvice(snapshot: AgentSnapshot, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean> {
-    return await (await this.open(snapshot).acquire()).session.sayAdvisorAnswer(helper, turnId);
+}
+
+const FacetRunRowSchema = v.object({ id: v.string(), task_json: v.string() });
+
+/** The agent's own row, last in its lineage: its origin says whether it holds a chat. */
+const AgentOriginSchema = v.looseObject({ origin: ActorOriginSchema });
+
+const AgentTurnTaskSchema = v.object({ sequenceId: v.string(), body: v.string(), mode: WorkModeSchema });
+
+/** The runs delivered to this isolate, durable until each one's end is reported: a death between admitting one and
+ *  reporting its end leaves it here, for the next wake to run again. */
+class FacetRuns {
+  constructor(private readonly sql: SqlStorage) {
+    sql.exec('CREATE TABLE IF NOT EXISTS facet_runs (id TEXT PRIMARY KEY, task_json TEXT NOT NULL, ended INTEGER NOT NULL DEFAULT 0)');
+  }
+
+  /** False for one already admitted. */
+  admit(id: string, task: AgentTurnTask): boolean {
+    return this.sql.exec('INSERT OR IGNORE INTO facet_runs (id, task_json) VALUES (?, ?) RETURNING id', id, JSON.stringify(task)).toArray().length > 0;
+  }
+
+  ended(id: string): void {
+    this.sql.exec('UPDATE facet_runs SET ended = 1 WHERE id = ?', id);
+  }
+
+  unended(): { readonly id: string; readonly task: AgentTurnTask }[] {
+    return this.sql.exec('SELECT id, task_json FROM facet_runs WHERE ended = 0').toArray().map((raw) => {
+      const row = v.parse(FacetRunRowSchema, raw);
+
+      return { id: row.id, task: v.parse(AgentTurnTaskSchema, JSON.parse(row.task_json)) };
+    });
   }
 }

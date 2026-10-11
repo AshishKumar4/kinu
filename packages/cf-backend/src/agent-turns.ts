@@ -3,13 +3,14 @@ import { asSchema, type ToolSet } from 'ai';
 import { hold, KinuError, logged, settleSync } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import {
-  AgentOpenTurns, decodeModelMessageValues, encodeModelMessageValues, materializeTurnSources, callableToolNames, buildHeadMessages, hasPlanPermission, scaffoldProviders, runWorkModeInvocation, toolDescription,
-  BUILTIN_TOOL_NAMES, announcementOf,
+  AgentOpenTurns, TurnFences, decodeModelMessageValues, encodeModelMessageValues, materializeTurnSources, callableToolNames, buildHeadMessages, hasPlanPermission, scaffoldProviders, runWorkModeInvocation, toolDescription,
+  BUILTIN_TOOL_NAMES, announcementOf, type TurnSurface,
   type ActorReference, type DynamicContext, type ModelPricing, type ResolvedTurnProfile, type TierId, type WorkMode,
   type HeadInput, type RunInference, type HeadReport, type SqlExecutor, type MissionBudgetPort, type MissionGovernor, type Executor, readMissionLabels,
 } from '@kinu.run/core';
+import type { TurnCall } from './agent-facets';
 import { prepareHostedTurn, type HostedActorSeams, type HostedTurnRequest, type PreparedHostedTurn } from './hosted-actors';
-import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentToolDescriptor, AgentTrace, AgentTurnEnd, Fact, JsonObject, PreparedAgentTurn, StoredRow, TaskPlan, TurnOpening } from '@kinu.run/core';
+import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentToolDescriptor, AgentTrace, AgentTurnEnd, Fact, JsonObject, PreparedAgentTurn, StoredRow, TaskPlan, OpenedAt, TurnFacts, TurnOpening } from '@kinu.run/core';
 
 export interface AgentTurnsDeps {
   readonly sql: SqlExecutor;
@@ -39,6 +40,10 @@ export interface ChatTurnRequest {
   readonly opening?: TurnOpening;
   /** The approved plan the turn implements, as the agent's own plan store reads it. */
   readonly taskPlan?: TaskPlan;
+  /** The run this opening prepares (a recovery continues its run, a Retry starts one) and its place in the agent's
+   *  sequence: an opening older than the agent's newest is refused. */
+  readonly runId?: string;
+  readonly seq?: number;
 }
 
 interface OpenTurn {
@@ -50,6 +55,8 @@ interface OpenTurn {
   profile: ResolvedTurnProfile | null;
   /** The account's facts, read once when the turn is read, so every step's block is the same bytes. */
   accountFacts?: readonly Fact[];
+  /** The opening the workspace's fence admitted for it: what it offers and closes must still be that one. */
+  readonly fenced?: OpenedAt;
 }
 
 async function describe(tools: ToolSet): Promise<AgentToolDescriptor[]> {
@@ -66,9 +73,6 @@ export class AgentTurns {
 
   /** Each agent's chat turn as its room last heard it: a view for the overview, never an authority. */
   private readonly chats = new Map<string, string>();
-
-  /** Tasks handed to an agent's chat and not yet answered: its actor stays held while one is out. */
-  private readonly handing = new Map<string, number>();
 
   private readonly waiting = new Map<string, ReturnType<typeof Promise.withResolvers<void>>>();
 
@@ -110,22 +114,72 @@ export class AgentTurns {
     await hold(logged('agent.run_interrupt_failed', { doing: 'interrupting a run in its own isolate', otherwise: 'io' }, () => this.deps.interrupt(reference, turnId)));
   }
 
+  /** Each agent's newest opening the fence admitted this activation, by its place in the agent's sequence. */
+  private readonly newestOpening = new Map<string, number>();
+
+  /** Its turns a Stop cut off: a call bound to one is refused, whatever its opening. */
+  private readonly cancelledTurns = new Set<string>();
+
+  /**
+   * A call bound to `turnId` holds while the turn is the agent's current one (design v2 §3): one a later opening
+   * superseded, or a Stop cancelled, is stale. A run (a head's) carries no opening and is not fenced here; a turn a
+   * restarted workspace never opened is refused where it is looked up.
+   */
+  fenceHolds(actorId: string, turnId: string, call: TurnCall): boolean {
+    // A stopped turn closes: only what would run more of it is refused.
+    if (call === 'executes' && this.cancelledTurns.has(turnId)) return false;
+    const fenced = this.open.get(turnId)?.fenced;
+    const newest = this.newestOpening.get(actorId);
+
+    return fenced === undefined || newest === undefined || fenced.seq >= newest;
+  }
+
+  /** A Stop cut the turn off: nothing bound to it runs from here. */
+  cancelled(turnId: string): void {
+    this.cancelledTurns.add(turnId);
+  }
+
   chatOpened(actorId: string, turnId: string): void {
     this.chats.set(actorId, turnId);
   }
 
-  chatClosed(actorId: string): void {
+  /** The chat turn the agent last said it began and has not said it ended. */
+  chatTurn(actorId: string): string | null {
+    return this.chats.get(actorId) ?? null;
+  }
+
+  /** The agent's open chat turn and the opening the fence admitted for it. */
+  chatOpening(actorId: string): { readonly turnId: string; readonly fenced?: OpenedAt } | null {
+    const turnId = this.chats.get(actorId);
+    const fenced = turnId === undefined ? undefined : this.open.get(turnId)?.fenced;
+
+    return turnId === undefined ? null : { turnId, ...(fenced !== undefined && { fenced }) };
+  }
+
+  /** What that turn's tools run under, when its preparation gave it a surface. */
+  surface(actorId: string): TurnSurface | null {
     const turnId = this.chats.get(actorId);
 
-    this.chats.delete(actorId);
+    return turnId === undefined ? null : this.open.get(turnId)?.prepared?.surface ?? null;
+  }
 
-    if (turnId !== undefined) this.close(turnId);
+  /** Closes the agent's chat turn if it is still the opening `at` names; null closes whichever is open. A later
+   *  opening, the same turn's Retry included, stays open; a turn this activation read again after a restart carries no
+   *  opening of its own, and is the one the fence held open. */
+  chatClosed(actorId: string, at: OpenedAt | null): void {
+    const turnId = this.chats.get(actorId);
+    const fenced = turnId === undefined ? undefined : this.open.get(turnId)?.fenced;
+
+    if (turnId === undefined || (at !== null && fenced !== undefined && fenced.seq !== at.seq)) return;
+    this.chats.delete(actorId);
+    this.close(turnId);
   }
 
   private close(turnId: string): void {
     const turn = this.open.get(turnId);
 
     this.open.delete(turnId);
+    this.cancelledTurns.delete(turnId);
 
     if (turn === undefined || this.inFlight(turn.reference.actorId)) return;
     this.waiting.get(turn.reference.actorId)?.resolve();
@@ -154,20 +208,7 @@ export class AgentTurns {
   }
 
   inFlight(actorId: string): boolean {
-    return this.running(actorId) !== null || (this.handing.get(actorId) ?? 0) > 0;
-  }
-
-  async handOff<A>(actorId: string, work: () => Promise<A>): Promise<A> {
-    this.handing.set(actorId, (this.handing.get(actorId) ?? 0) + 1);
-
-    try {
-      return await work();
-    } finally {
-      const left = (this.handing.get(actorId) ?? 1) - 1;
-
-      if (left > 0) this.handing.set(actorId, left);
-      else this.handing.delete(actorId);
-    }
+    return this.running(actorId) !== null;
   }
 
   /** Its runs have ended and its own chat holds nothing. */
@@ -256,8 +297,18 @@ export class AgentTurns {
   async prepareChat(actorId: string, request: ChatTurnRequest): Promise<PreparedAgentTurn> {
     const turnId = request.turnId ?? crypto.randomUUID();
 
+    // Delayed past the agent's later opening, or sent before the workspace reset: its execution is gone.
+    if (request.turnId !== null && request.runId !== undefined && request.seq !== undefined
+      && !new TurnFences(this.deps.sql).open(actorId, { turnId, runId: request.runId, seq: request.seq })) {
+      return settleSync(Effect.fail(new KinuError('denied', `The opening of turn ${turnId} (${String(request.seq)} in its agent's sequence) is older than the agent's newest.`)));
+    }
+
+    // The agent's newest opening: a call bound to an older turn of its is stale from here (`fenceHolds`).
+    if (request.seq !== undefined) this.newestOpening.set(actorId, Math.max(request.seq, this.newestOpening.get(actorId) ?? request.seq));
+
     const hosted: HostedTurnRequest = {
-      sequenceId: announcementOf(turnId), body: request.userText, mode: request.mode, parentDriven: request.parentDriven, driving: request.driving,
+      sequenceId: announcementOf(turnId), ...(request.turnId !== null && { chatTurnId: turnId }),
+      body: request.userText, mode: request.mode, parentDriven: request.parentDriven, driving: request.driving,
       ...(request.opening !== undefined && { opening: request.opening }),
       ...(request.taskPlan !== undefined && { taskPlan: request.taskPlan }),
     };
@@ -266,20 +317,30 @@ export class AgentTurns {
       reference: this.deps.reference(actorId),
       request: hosted,
       ...(request.explicitTier !== undefined && { explicitTier: request.explicitTier }),
+      ...(request.seq !== undefined && { fenced: { seq: request.seq } }),
       prepared: null,
       profile: null,
     };
 
     if (request.turnId !== null) this.open.set(turnId, turn);
+    const prepared = await this.read(turn);
 
-    return await this.read(turn);
+    // Finished after a later opening took its place, or after its run ended: none of it is the agent's to freeze.
+    if (prepared === null) return settleSync(Effect.fail(new KinuError('denied', `The preparation of turn ${turnId} finished after a later opening of its agent.`)));
+
+    return prepared;
   }
 
   async prepare(actorId: string, turnId: string): Promise<PreparedAgentTurn> {
-    return await this.read(this.turn(actorId, turnId));
+    const prepared = await this.read(this.turn(actorId, turnId));
+
+    if (prepared === null) return settleSync(Effect.fail(new KinuError('denied', `The preparation of task ${turnId} finished after a later opening of its agent.`)));
+
+    return prepared;
   }
 
-  private async read(turn: OpenTurn): Promise<PreparedAgentTurn> {
+  /** Null when the opening it prepares was overtaken while it read: see {@link offeredFacts}. */
+  private async read(turn: OpenTurn): Promise<PreparedAgentTurn | null> {
     const prepared = await prepareHostedTurn(this.deps.seams(), turn.reference, turn.request);
     const run = turn.request.run?.inference;
 
@@ -307,6 +368,9 @@ export class AgentTurns {
     );
 
     const brief = run?.brief?.(callableToolNames(mode, prepared.tools));
+    const facts = this.offeredFacts(turn, prepared);
+
+    if (facts === null) return null;
 
     return {
       input,
@@ -325,6 +389,7 @@ export class AgentTurns {
       ...(prepared.trial !== undefined && { trial: prepared.trial }),
       ...(run?.mission !== undefined && { missionLabels: run.mission.labels }),
       ...(this.chatMission(turn.reference.actorId, turn).length > 0 && { missionLabels: this.chatMission(turn.reference.actorId, turn) }),
+      facts,
       trace: run?.reportStep !== undefined || run?.reportDelta !== undefined,
       resume: run?.resume !== undefined,
       reportMessages: run?.reportMessages !== undefined,
@@ -344,10 +409,12 @@ export class AgentTurns {
    *  resolution of their own. Answers the live block on it. */
   bindProfile(actorId: string, turnId: string, profile: ResolvedTurnProfile): DynamicContext {
     const turn = this.turn(actorId, turnId);
+    const prepared = this.prepared(turn);
 
     turn.profile = profile;
+    prepared.surface?.bind(profile);
 
-    return this.dynamic(turn, this.prepared(turn));
+    return this.dynamic(turn, prepared);
   }
 
   async advise(actorId: string, { turnId, turn: completed, reachable, mode }: AgentReview): Promise<void> {
@@ -396,6 +463,25 @@ export class AgentTurns {
     if (governor !== null) return { guard: async (seam, labels) => governor.guard(seam, labels), debit: async (tokens, opts) => { governor.debit(tokens, opts); } };
 
     return this.turn(actorId, turnId).request.run?.inference.mission?.port ?? null;
+  }
+
+  /** Main's surface decides its continuity and evolution gate; any other agent's turns continue its conversation. A run
+   *  spends for its own missions, a chat turn for those its driving message names. */
+  private facts(turn: OpenTurn, prepared: PreparedHostedTurn): TurnFacts {
+    const { surface } = prepared;
+
+    return {
+      continuity: surface?.continuity ?? 'conversation', evolutionEnabled: surface?.evolutionEnabled ?? false,
+      missionLabels: [...turn.request.run?.inference.mission?.labels ?? readMissionLabels(turn.request.driving)],
+    };
+  }
+
+  /** A chat run's facts as the workspace first offered them: the agent may die before it froze them, and its recovery
+   *  must freeze the same, whatever changed here meanwhile. */
+  private offeredFacts(turn: OpenTurn, prepared: PreparedHostedTurn): TurnFacts | null {
+    const facts = this.facts(turn, prepared);
+
+    return turn.fenced === undefined ? facts : new TurnFences(this.deps.sql).offer(turn.reference.actorId, turn.fenced, facts);
   }
 
   /** Main's chat turn names its missions when it is prepared under any. */

@@ -5,8 +5,8 @@
 
 import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
-import { historyTurnPairs, testModel, toolDescription, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
-import type { ActorHandle, JsonObject } from '@kinu.run/core';
+import { historyTurnPairs, testModel, toolDescription, workModeForTurnMetadata, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
+import type { ActorHandle, Delivery, DeliveryAnswer, InProcessDeliveries, JsonObject } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { resolve } from 'node:path';
 import type { LanguageModel, ToolSet } from 'ai';
@@ -75,7 +75,7 @@ import { ActorSession, type ActorTurnLease,
   actorNamespaces, SURFACE_POLICY, type SurfaceActor,
   type CodemodeProvider,
   agentRoleSwitch,
-  REPORT_TOOL, type ReportDeps,
+  REPORT_TOOL, turnAuthorship, turnLane, turnReach, type ReportDeps, type TurnLane, type TurnReach,
   type MissionGovernor,
   observeSystemPromptHash,
   type DynamicContext,
@@ -129,7 +129,7 @@ import { ActorSession, type ActorTurnLease,
   McpToolSurfaceCache, toolSurfaceTokens, type McpServedSurface, type McpSurfaceBudget,
   defaultLoopOrigin,
   type ActorHost, type ActorSeat, type HostedActor, type LoopOrigin, type WriteObserver,
-  PlanReviewActions, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, ASK_OWNER_TOOL, planSubmissionReach, workModeUnderReview, authoredTurnMetadata, planHandoffStillOwed,
+  PlanReviewActions, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, ASK_OWNER_TOOL, workModeUnderReview, authoredTurnMetadata, planHandoffStillOwed,
   type PlanDecisionOutcome, type PlanEdit, type PlanReview, type ReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult,
   type AskingAgent,
@@ -337,7 +337,8 @@ export class LocalAgentSession {
   private readonly instructionTrust: InstructionTrustResolver =
     (path, content) => this.instructionApprovals.trustOf(path, content);
   /** Whether this turn came from the parent; gates the `report` surface. */
-  private turnIsParentAssigned = false;
+  /** Whose lane the running turn is: its hirer's only for an agent that has one (core's `turnLane`). */
+  private turnLaneOf: TurnLane = 'owner';
   /** The learning setting where the turn opened, as cf reads it: a change applies from the next turn. */
   private turnLearns = false;
 
@@ -410,6 +411,7 @@ export class LocalAgentSession {
     });
 
     this.host = orchestration.deps.host;
+    this.deliveries = orchestration.deliveries;
     this.budget = orchestration.budget;
     this.engine = orchestration.engine;
     this.eventLog = orchestration.eventLog;
@@ -519,9 +521,19 @@ export class LocalAgentSession {
         owedTerminalEffects: (input) => this.owedTerminalEffects(input),
         // Only the host knows the child's lifetime and whether the parent drove the turn.
         owedReport: async (ending, assistantText, narration) => await this.parentRelay?.owed(ending, assistantText, narration) ?? null,
-        taskList: () => this.taskList,
+        // Its hirer waits on the work, not on a turn: one that ended without an answer is answered to it as blocked, keyed by
+        // the work.
+        unanswered: async (item, failure) => {
+          const relay = this.parentRelay;
+
+          if (relay === null || turnAuthorship(item) !== 'hirer' || item.idempotencyKey === undefined) return;
+          await relay.send({
+            text: `${this.rt.actor.name} failed to run its assigned turn: ${failure.message}`,
+            status: 'blocked', mode: workModeForTurnMetadata(item.metadata), sequenceId: item.idempotencyKey,
+          });
+        },
         // A running job's settle wakes the session; a reminder would race it.
-        hasPendingAsyncWake: () => this.jobs.listRunning(1).total > 0,
+        openWork: async () => ({ tasks: this.taskList.listOpen(), asyncWakePending: this.jobs.listRunning(1).total > 0 }),
         terminal: () => this.terminal,
         driverGate: () => this.driverGate?.() ?? null,
         steerSkills: (text) => steerSkillsBlock({
@@ -556,7 +568,7 @@ export class LocalAgentSession {
       store: this.jobs,
       policy: () => opts.backgroundPolicy ?? BACKGROUND_POLICY.interactive,
       fiber: (name, fn) => this.trackFiber(name, fn),
-      inbox: this.actorSession.orchestrator.inbox,
+      inbox: this.actorSession.orchestrator.signals,
       eventLog: this.eventLog,
       scheduleDrain: () => this.actorSession.orchestrator.scheduleDrain(),
       logActivity: (event, detail) => this.emit({ type: 'background', event, message: detail ?? '' }),
@@ -701,7 +713,7 @@ export class LocalAgentSession {
       store: new DeferredApprovalStore(this.rt.storage.sql, this.rt.actor),
       wake: (actorId, signal) => {
         if (actorId === this.rt.actor.actorId) {
-          return Effect.asVoid(attempt({ doing: 'waking this agent with the owner\'s decision', otherwise: 'io' }, () => this.actorSession.orchestrator.inbox.send(signal)));
+          return Effect.asVoid(attempt({ doing: 'waking this agent with the owner\'s decision', otherwise: 'io' }, () => this.actorSession.orchestrator.signals.send(signal)));
         }
 
         return wakeHire === undefined ? this.admitDecision(actorId, signal) : wakeHire(actorId, signal);
@@ -944,7 +956,7 @@ export class LocalAgentSession {
   /** Record the pick; a pick differing from the answered take queues a continuation turn. */
   async pickAlternateTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
     return pickAlternateTake(
-      { sql: this.rt.storage.sql, actor: this.rt.actor, turnPair: historyTurnPairs(this.stores.history), engine: this.engine, inbox: this.actorSession.orchestrator.inbox },
+      { sql: this.rt.storage.sql, actor: this.rt.actor, turnPair: historyTurnPairs(this.stores.history), engine: this.engine, inbox: this.actorSession.orchestrator.signals },
       takeId, nodeId);
   }
 
@@ -1059,6 +1071,11 @@ export class LocalAgentSession {
     return this.chat.enqueueTurn(input);
   }
 
+  /** A delivery for this agent (design v2 §1): in its chat's own store before it is answered. */
+  admitDelivery(delivery: Delivery): Promise<DeliveryAnswer> {
+    return this.chat.admitDelivery(delivery);
+  }
+
   turnInFlight(): boolean {
     return this.chat.turnInFlight();
   }
@@ -1161,6 +1178,7 @@ export class LocalAgentSession {
         actor: this.rt.actor,
         turnId: () => currentOperationProfile(this.rt.actor)?.turnId ?? this.chat.currentTurnId ?? WORKSPACE_RUN_ID,
         durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
+        transaction: (body) => this.rt.storage.transactionSync(body),
       },
       spill: this.rt.storage,
     }));
@@ -1200,8 +1218,20 @@ export class LocalAgentSession {
   private mcpUnavailable: NonNullable<DynamicContextInput['unavailableMcp']> = [];
 
   /** Run pending drains now, bypassing debounce; the daemon's tick calls this before end(). */
-  flushPendingDrains(): Promise<void> {
-    return this.chat.flushPendingDrains();
+  /** Its due events handed to its chat, and the turns that opened run, before the caller (a daemon's tick, a pass) moves
+   *  on: outside the crossing, so no turn's own close waits on one queued behind it. */
+  async flushPendingDrains(): Promise<void> {
+    await this.chat.flushPendingDrains();
+
+    for (const id of this.deliveries.takenSince()) await this.deliveredTurnSettled(id);
+  }
+
+  /** What this agent is owed and has been handed, as its orchestration commits it. */
+  private readonly deliveries: InProcessDeliveries;
+
+  /** Once the turn its delivery `id` opened has settled: at once for one already run, or never taken. */
+  deliveredTurnSettled(id: string): Promise<void> {
+    return this.chat.announcementSettled(id);
   }
 
   /** Call once at startup, before the recovery drain. */
@@ -1385,7 +1415,7 @@ export class LocalAgentSession {
 
     await reconcileInterruptedForks({
       journal: this.headJournal,
-      inbox: this.actorSession.orchestrator.inbox,
+      inbox: this.actorSession.orchestrator.signals,
       search: this.mctsSearchStore,
       runEvents: this.eventRecorder,
       liveRuns: () => this.chat.drivenRuns(),
@@ -1590,12 +1620,12 @@ export class LocalAgentSession {
     const artifacts = turnArtifactBodies(this.rt.storage.sql, this.rt.actor, { ...opening, main: this.rt.actor.parentActorId === null });
     this.turnArtifacts = artifactOverrides(artifacts.bodies);
     // Set before anything reads the tool surface: the report gate is a property of this turn.
-    this.turnIsParentAssigned = item.kind === 'programmatic';
+    this.turnLaneOf = turnLane({ hirer: this.rt.actor.parentActorId }, turnAuthorship(item));
     this.turnLearns = this.engine.recordsTurns;
     this.turnDriving = authoredTurnMetadata(item);
 
     // A user message grades the previous turn, unless this is a one-shot process.
-    if (item.kind === 'user') this.actorSession.orchestrator.observeUserTurn(item.text, this.turnContinuity);
+    if (item.kind === 'user') this.actorSession.orchestrator.observeUserTurn(lease.turnId, item.text, this.turnContinuity);
 
     if (item.kind === 'user' && this.oneShot) this.chat.completionGate.arm(item.text);
 
@@ -1673,7 +1703,7 @@ export class LocalAgentSession {
       },
       // Built into the turn's tool set by its gates, and outside the builtins, so named here.
       wiredToolNames: (mode) => [
-        ...(this.reportDeps !== null && item.kind === 'programmatic' ? [REPORT_TOOL] : []),
+        ...(this.reportGateOpen() ? [REPORT_TOOL] : []),
         ...(this.planSubmissionOpen(mode) ? [SUBMIT_PLAN_TOOL] : []),
         ...(this.planReplyOpen() ? [REPLY_TO_COMMENT_TOOL] : []),
         ...(this.askOwnerOpen() ? [ASK_OWNER_TOOL] : []),
@@ -1837,10 +1867,9 @@ export class LocalAgentSession {
           };
         },
       }),
-      ...chatTerminalEffects({ chat: () => this.chat, orchestrator: this.actorSession.orchestrator, engine: this.engine }),
+      ...chatTerminalEffects({ chat: () => this.chat, orchestrator: () => this.actorSession.orchestrator, engine: this.engine }),
       // The CLI's lanes run elsewhere (evolution on its own queue); subordinates only report.
       ...subordinateTerminalEffects({
-        orchestrator: this.actorSession.orchestrator,
         hireAdvisor: (advisor) => this.actorSession.hireAdvisor(advisor),
         // Awaited so a one-shot close joins it.
         applyTitle: (subject) => this.applyAutoTitle(subject),
@@ -2297,24 +2326,30 @@ export class LocalAgentSession {
     this.parentRelay = relay;
   }
 
-  /** A parent exists and the parent drove this turn; an owner-driven chat stays private. */
+  /** What the running turn may reach in `mode`, decided by core's `turnReach` as every host's turns are. The CLI shows
+   *  the owner a root's questions and plans alone; a subordinate's partner is its parent. */
+  private reach(mode: WorkMode): TurnReach {
+    return turnReach({
+      lane: this.turnLaneOf, mode, driving: this.turnDriving, ownerSurface: this.planReviewSurface(),
+      awaitsReply: this.planReviewSurface() && this.planActions.awaitingReply(this.turnDriving),
+    });
+  }
+
+  /** The hirer's lane, wired to its parent; an owner-driven chat stays private. */
   private reportGateOpen(): boolean {
-    return this.reportDeps !== null && this.turnIsParentAssigned;
+    return this.reportDeps !== null && this.reach('build').report;
   }
 
-  /** A root (only its plan has an owner) on a turn core's `planSubmissionReach` offers it. Cloud: `ActorAgent.submitsPlans`. */
   private planSubmissionOpen(mode: WorkMode): boolean {
-    return this.planReviewSurface() && planSubmissionReach(mode, this.turnDriving);
+    return this.reach(mode).submitPlan;
   }
 
-  /** A root, whose conversation partner is the owner; a subordinate's partner is its parent. Cloud: `OrchestratorAgent.actorToolDeps`. */
   private askOwnerOpen(): boolean {
-    return this.planReviewSurface();
+    return this.reach('build').askOwner;
   }
 
-  /** A root whose plan the owner sent back with comments the agent may answer. */
   private planReplyOpen(): boolean {
-    return this.planReviewSurface() && this.planActions.awaitingReply(this.turnDriving);
+    return this.reach('build').replyToComment;
   }
 
   /** The typed mode, under core's plan hold. Mirrors the cloud orchestrator's `workModeForMetadata`. */
@@ -2480,7 +2515,7 @@ export class LocalAgentSession {
         jobs: () => this.jobs,
         budget: () => this.budget,
         cancelTrigger: (id, caller) => this.cancelTrigger(id, caller),
-        armCompactNow: () => { this.compactionState.armCompaction(this.compactionKey()); },
+        armCompactNow: async () => { this.compactionState.armCompaction(this.compactionKey()); },
       }),
     };
   }
@@ -2706,6 +2741,7 @@ export class LocalAgentSession {
       effectClaims: {
         sql: this.rt.storage.sql, actor: this.rt.actor, turnId,
         durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
+        transaction: (body) => this.rt.storage.transactionSync(body),
       },
       // Shell approval lives at the execution seam (execution/approval.ts), not per toolset.
       // Budget state lives on the accumulator so this model-lifetime toolset reads the live turn.

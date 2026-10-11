@@ -1,7 +1,8 @@
 /**
  * A metered `SqlStorage`: every statement run while an operation is measured is counted by the tables it names,
  * with its cursor's `rowsRead` and `rowsWritten`, beside each table's row count and payload before and after.
- * The complexity pool meters its own stores with it, and the two-turn probe meters a production orchestrator's.
+ * The complexity pool meters its own stores with it, and the two-turn probe meters a production orchestrator's and
+ * its main agent's isolate's.
  */
 import * as v from 'valibot';
 
@@ -228,4 +229,31 @@ export class SqlMeter {
       this.started = null;
     }
   }
+}
+
+/** Meters `sql` in place: the platform refuses a wrapped state object, and a patched `exec` counts every caller. */
+export function meterInPlace(sql: SqlStorage) {
+  const unmetered = sql.exec.bind(sql);
+  const meter = new SqlMeter({ exec: unmetered, get databaseSize() { return sql.databaseSize; } });
+
+  sql.exec = (query, ...bindings) => meter.exec(query, ...bindings);
+
+  return { meter, unmetered };
+}
+
+import type { PhasedCrossings } from './crossings';
+
+/** A metered turn: statements in the workspace and in main's isolate, transcript reads, and the calls that crossed into each. */
+export interface MeteredTurn {
+  readonly workspace: OperationCost;
+  readonly main: OperationCost;
+  readonly historyReads: number;
+  readonly crossings: { readonly workspace: PhasedCrossings; readonly main: PhasedCrossings };
+}
+
+/** A metered task turn, the model calls both of its turns made, and the crossings of the planted calls alone. */
+export interface TurnCrossings {
+  readonly turn: MeteredTurn;
+  readonly modelCalls: number;
+  readonly planted: MeteredTurn['crossings'];
 }

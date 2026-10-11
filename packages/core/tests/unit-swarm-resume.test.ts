@@ -10,7 +10,7 @@ import { Database } from 'bun:sqlite';
 import type { LanguageModelV4Content } from '@ai-sdk/provider';
 import type { LanguageModel } from 'ai';
 import * as v from 'valibot';
-import { scriptedTurnModel, createTestActorsOver, unobservedSearchSeams, unobservedSpend } from '@kinu.run/test-utils';
+import { scriptedTurnModel, createTestActorsOver, unobservedSearchSeams, unobservedSpend, hostDeliveries } from '@kinu.run/test-utils';
 import { createTestRuntime, makeExecRaw, makeSql } from './helpers';
 import { MissionGovernor } from '../src/mission-budget';
 import { MctsSearchStore, initMctsSearchTable } from '../src/mcts/search-store';
@@ -22,7 +22,6 @@ import { createAgentsTool } from '../src/delegation/agents-operations';
 import { resumeBackgroundJob } from '../src/orchestrator/background-tools';
 import { BackgroundJobRunner } from '../src/jobs/runner';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
-import { Inbox } from '../src/orchestrator/inbox';
 import { ForkNotices, forkNoticeDeliveries, initForkNoticeTable } from '../src/heads/fork-notices';
 import { recoveryBackoffMs } from '../src/utils/recovery-backoff';
 import type { SendOutcome } from '../src/types/signals';
@@ -697,7 +696,7 @@ function idleAgent() {
     setTimer: () => {},
   };
 
-  return { enqueued, inbox: new Inbox(host) };
+  return { enqueued, inbox: hostDeliveries(host).signals };
 }
 
 const MISSION_LABEL = 'nightly';

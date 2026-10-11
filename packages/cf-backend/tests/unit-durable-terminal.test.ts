@@ -9,18 +9,20 @@
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  TERMINAL_EFFECT_RETRY_CEILING_MS, claimToolEffect, createFactsStore,
+  AgentOwedWork, TERMINAL_EFFECT_RETRY_CEILING_MS, claimToolEffect, createFactsStore,
   type TerminalEffectName, type TerminalEffectPhase,
 } from '@kinu.run/core';
 import { createRecordingLogger } from '@kinu.run/core/obs';
 import { sqlOver } from '@kinu.run/test-utils';
 import {
-  chatSessionTurns, ledgerOver, orchestratorHarness,
+  agentWakes, chatSessionTurns, driveUntil, ledgerOver, mainRows, orchestratorHarness,
   reactivateOrchestratorHarness,
   tapDiagnostics, until, workspaceMainActor, type ActorHarness, type HarnessActorWorld, type HarnessOrchestratorAgent,
   type ScriptedHeadReport,
 } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
+import { catchNextOwingReport, loseNextHandoff, loseNextHandoffAnswer } from './helpers/agent-facets';
+import { analyticsEngine } from './helpers/analytics-engine';
 import type { SettledTurn, TurnHarness } from './helpers/turn-harness';
 
 type Harness = ActorHarness<HarnessOrchestratorAgent>;
@@ -244,7 +246,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     // Heads still running: their reports arrive only after the claims are read.
     const reports: Array<ReturnType<typeof Promise.withResolvers<ScriptedHeadReport>>> = [];
 
-    const harness = cutAt('turn_end_extensions', 'before', {
+    const harness = cutAt('turn_record', 'before', {
       heads: () => {
         const report = Promise.withResolvers<ScriptedHeadReport>();
         reports.push(report);
@@ -363,12 +365,136 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
 
 });
 
+describe("an agent's reports reach its workspace newest first", () => {
+  /** Numbered in the agent's own store (design v3 B). A report main's isolate sent while it owed work, in flight past
+   *  the next activation's isolate driving that work and reporting itself at rest, armed main's wake again. */
+  test('a report delayed past a newer one changes nothing', async () => {
+    const harness = orchestratorHarness();
+    const main = workspaceMainActor(harness.db).actorId;
+    const storageKey = harness.agent.agentOf(main).storageKey;
+
+    const caught = catchNextOwingReport(storageKey);
+    loseNextHandoff(storageKey);
+    turns(harness).open('u-stale');
+    await Promise.allSettled([turns(harness).settle({ messageId: 'a-stale', text: 'the live answer' })]);
+    const deliverStale = await caught;
+
+    laterBy(1);
+    const restarted = await reactivateOrchestratorHarness(harness.db);
+    const owes = () => new AgentOwedWork(sqlOver(restarted.db)).all().includes(main) || agentWakes(restarted.db).includes(main);
+    const { db } = await mainRows(restarted);
+    const handedOver = () => db.query("SELECT 1 FROM terminal_effects WHERE effect_key LIKE 'v1:workspace_settle:%'").get() === null;
+
+    await driveUntil(restarted, 'main never handed its turn over and rested', () => handedOver() && !owes());
+    await restarted.agent.harnessAgentsIdle();
+    await deliverStale();
+    await joinHarnessFibers();
+
+    expect(owes()).toBe(false);
+  });
+});
+
+describe("a main turn's close reads back only what something reads", () => {
+  /** No workspace extension implements `onTurnEnd`: announcing the turn read main's whole answer back across the
+   *  isolates and converted it for no one, 3 MB of a 150-step turn's close (worker-heap, 2026-10-10). */
+  test('a workspace no extension of which listens for turn end owes no announcement', async () => {
+    const harness = cutAt('turn_end_extensions', 'before');
+    turns(harness).open('u-unheard');
+    const [settled] = await Promise.allSettled([turns(harness).settle({ messageId: 'a-unheard' })]);
+
+    if (settled.status === 'rejected') throw settled.reason;
+    await until(() => disposition(harness, 'u-unheard', settled.value.messageId) === 'done', 'the sequence closed without the announcement');
+  });
+});
+
+/**
+ * What the workspace decided as main's turn opened, and the branches its owner started during it, are the turn's roster
+ * inputs; main's isolate commits the answer and hands the turn over afterwards, and the workspace may be gone between.
+ */
+describe("a main turn's workspace facts outlive the activation that gathered them", () => {
+  test('a reset between the answer and its handoff keeps the branch and the evolution gate the turn opened with', async () => {
+    const world: HarnessActorWorld = { heads: headsAnswering({ status: 'completed', summary: 'the branch answer' }) };
+    const harness = orchestratorHarness(undefined, world);
+
+    await branchDuring(harness, 'u-reset', 'a-reset', 'try the other library');
+    loseNextHandoff(harness.agent.agentOf(workspaceMainActor(harness.db).actorId).storageKey);
+    await turns(harness).settle({ messageId: 'a-reset', text: 'the live answer' });
+    await joinHarnessFibers();
+
+    laterBy(1);
+    const restarted = await reactivateOrchestratorHarness(harness.db, undefined, { world });
+
+    await driveUntil(restarted, 'the handoff landed without the branch or the review its turn owed', () => takeSets(restarted) === 1 && owedReviews(restarted) === 1);
+  });
+
+  test('a turn handed over after its workspace reset is recorded under the missions it ran for', async () => {
+    const harness = orchestratorHarness();
+
+    harness.agent.harnessDrivingUserMessage('Tally the refunds.', { missionLabels: ['refunds'] });
+    loseNextHandoff(harness.agent.agentOf(workspaceMainActor(harness.db).actorId).storageKey);
+    await turns(harness).settle({ messageId: 'a-mission', text: 'the live answer' });
+    await joinHarnessFibers();
+
+    // The governor that scoped the turn as it ran is this activation's; the next one opens with none.
+    laterBy(1);
+    const restarted = await reactivateOrchestratorHarness(harness.db);
+
+    await driveUntil(restarted, 'the handed-over turn was never recorded', () => windowedTurns(restarted) === 1);
+
+    const RecordedSchema = v.object({ missionLabels: v.optional(v.array(v.string())) });
+    const recorded = restarted.db.query<{ turn: string }, []>('SELECT turn FROM completed_turns').all();
+
+    expect(recorded.map((row) => v.parse(RecordedSchema, JSON.parse(row.turn)).missionLabels)).toEqual([['refunds']]);
+  });
+
+  test("a handoff driven again after its workspace reset records main's turn on the fleet once", async () => {
+    const engine = analyticsEngine();
+    const world: HarnessActorWorld = { analytics: engine.bindings };
+    const harness = orchestratorHarness(undefined, world);
+    const fleetTurns = () => engine.tables.kinu_agent_metrics.filter((row) => Object.values(row).includes('turn.settled')).length;
+
+    // The workspace takes the handoff and is gone before main's isolate hears it did: the isolate hands it over again.
+    loseNextHandoffAnswer(harness.agent.agentOf(workspaceMainActor(harness.db).actorId).storageKey);
+    turns(harness).open('u-fleet');
+    await turns(harness).settle({ messageId: 'a-fleet', text: 'the live answer' });
+    await joinHarnessFibers();
+
+    laterBy(1);
+    const restarted = await reactivateOrchestratorHarness(harness.db, undefined, { world });
+    const { db } = await mainRows(restarted);
+    const OwedSchema = v.object({ n: v.number() });
+    const owedHandoffs = () => v.parse(OwedSchema, db.query("SELECT COUNT(*) AS n FROM terminal_effects WHERE effect_key LIKE 'v1:workspace_settle:%'").get()).n;
+
+    await driveUntil(restarted, 'main never handed its turn over again', () => owedHandoffs() === 0);
+
+    expect(fleetTurns()).toBe(1);
+  });
+});
+
 /**
  * Auto-continuations share the durable turn id, so claims are released only when no response can run.
  * `_inFlight` is clear after eviction; the surviving run row is the witness seeded here.
  */
 // Core's `creditedTurnId` decides; this pins that the orchestrator hands its verdict to the branch settle.
 describe('mid-turn captures are credited to the turn only when it answered', () => {
+  test("a steer branch starts from main's conversation as main's own isolate keeps it", async () => {
+    const inherited: string[] = [];
+
+    const harness = orchestratorHarness(undefined, {
+      heads: async (_task, context) => {
+        inherited.push(JSON.stringify(context));
+
+        return { status: 'completed', summary: 'the branch answer' };
+      },
+    });
+
+    turns(harness).open('u-before');
+    await turns(harness).settle({ messageId: 'a-before', text: 'The ledger keeps integer cents.' });
+    await branchDuring(harness, 'u-branch-context', 'a-branch-context', 'try the other library');
+
+    expect(inherited).toEqual([expect.stringContaining('The ledger keeps integer cents.')]);
+  });
+
   test('a completed turn credits its branch take set to its answer', async () => {
     const harness = orchestratorHarness(undefined, { heads: headsAnswering({ status: 'completed', summary: 'the branch answer' }) });
     await branchDuring(harness, 'u-credit', 'a-credit', 'try the other library');

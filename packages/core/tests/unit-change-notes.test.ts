@@ -3,10 +3,12 @@ import { Result } from 'effect';
 import { admitReviewAnnotations, MAX_PLAN_ANNOTATIONS_BYTES } from '../src/plans/annotation-admission';
 import { anchoredText, comparePaths, inReadingOrder } from '../src/read-models/change-view';
 import {
-  changeNotesCard, initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes, type ChangeNote, type ChangeNotesMessage, type NotedChanges,
+  changeNotesCard, deliverOwedChangeNotes, initChangeNotesTable, owesChangeNotes, readChangeNotes, saveChangeNotes, sendChangeNotes, type ChangeNotesChat,
+  type ChangeNote, type ChangeNotesMessage, type NotedChanges,
 } from '../src/read-models/change-notes';
 import type { DiffAnchor, GeneralNote, PassageNote } from '../src/types/plans';
 import { diffLines, fileDiff, parseGitDiff } from '../src/vfs/diff';
+import type { KinuError } from '../src/obs/index';
 import { createTestRuntime } from './helpers';
 
 const BASELINE = 'gen-4f1c9a';
@@ -37,6 +39,11 @@ const NOTES: readonly ChangeNote[] = [
 
 const WORKSPACE: NotedChanges = { source: 'workspace', label: 'Workspace', mode: 'vfs-baseline', trackedSince: Date.UTC(2026, 8, 24, 14, 14) };
 
+/** A chat that takes each message as `deliver` answers it, and holds what it was handed. */
+function chatOf(deliver: (message: ChangeNotesMessage) => Promise<void>, holds: (id: string) => Promise<boolean> = async () => false): ChangeNotesChat {
+  return { deliver, holds };
+}
+
 /** The message a source's notes become when sent, as the chat's admission takes it. */
 async function sent(notes: readonly ChangeNote[]): Promise<ChangeNotesMessage> {
   const { rt } = createTestRuntime();
@@ -44,13 +51,11 @@ async function sent(notes: readonly ChangeNote[]): Promise<ChangeNotesMessage> {
   saveChangeNotes(rt, WORKSPACE.source, { value: notes });
   const messages: ChangeNotesMessage[] = [];
 
-  // As the chat's admission does: `consume` runs in the transaction that reserves the message.
-  const result = await sendChangeNotes(rt, { value: WORKSPACE }, (message, consume) => {
-    consume();
+  const result = await sendChangeNotes(rt, { value: WORKSPACE }, chatOf((message) => {
     messages.push(message);
 
     return Promise.resolve();
-  });
+  }));
 
   if (!result.ok || messages[0] === undefined) throw new Error('the notes were not sent');
 
@@ -126,7 +131,7 @@ describe('notes on a change-set', () => {
     expect((await sent(NOTES)).id).not.toBe(message.id);
   });
 
-  test('the notes move in admission\'s transaction: one saved before admission answers is kept for the next send', async () => {
+  test('the notes are taken before they cross: one saved while the send is in flight is the next send\'s', async () => {
     const { rt } = createTestRuntime();
     initChangeNotesTable(rt.storage.execRaw);
     const [first, later] = [NOTES[3], NOTES[2]];
@@ -136,48 +141,74 @@ describe('notes on a change-set', () => {
     const answer = Promise.withResolvers<void>();
     const sentIds: string[][] = [];
 
-    const admit = (message: ChangeNotesMessage, consume: () => void, answered: Promise<void>): Promise<void> => {
-      consume();
+    const deliver = (message: ChangeNotesMessage, answered: Promise<void>): Promise<void> => {
       sentIds.push(changeNotesCard({ metadata: message.metadata })?.notes.map((each) => each.id) ?? []);
 
       return answered;
     };
 
-    const sending = sendChangeNotes(rt, { value: WORKSPACE }, (message, consume) => admit(message, consume, answer.promise));
+    const sending = sendChangeNotes(rt, { value: WORKSPACE }, chatOf((message) => deliver(message, answer.promise)));
 
-    // The operator writes another note before admission has answered.
+    // The operator writes another note before the chat has answered.
     expect(saveChangeNotes(rt, WORKSPACE.source, { value: [later] }).ok).toBe(true);
     answer.resolve();
 
     expect(await sending).toEqual({ ok: true, notes: [] });
     expect(readChangeNotes(rt, WORKSPACE.source)).toEqual([later]);
     // The next send carries the later note alone: each note is sent once.
-    expect(await sendChangeNotes(rt, { value: WORKSPACE }, (message, consume) => admit(message, consume, Promise.resolve()))).toMatchObject({ ok: true });
+    expect(await sendChangeNotes(rt, { value: WORKSPACE }, chatOf((message) => deliver(message, Promise.resolve())))).toMatchObject({ ok: true });
     expect(sentIds).toEqual([[first.id], [later.id]]);
+    expect(owesChangeNotes(rt)).toBe(false);
   });
 
-  test('a refused admission moves nothing, and consuming notes that changed refuses', async () => {
+  test('notes the chat did not take are a draft again; notes it may hold stay owed and are sent again once, under their id', async () => {
     const { rt } = createTestRuntime();
     initChangeNotesTable(rt.storage.execRaw);
-    const [clamp, deletion] = [NOTES[3], NOTES[1]];
+    const [clamp] = [NOTES[3]];
 
-    if (clamp === undefined || deletion === undefined) throw new Error('the fixture lost its notes');
+    if (clamp === undefined) throw new Error('the fixture lost its notes');
     saveChangeNotes(rt, WORKSPACE.source, { value: [clamp] });
 
-    await expect(sendChangeNotes(rt, { value: WORKSPACE }, () => Promise.reject(new Error('the workspace is closing'))))
-      .rejects.toThrow('the workspace is closing');
+    // Refused, whatever the refusal: a storage fault on the chat's reservation leaves it holding nothing.
+    await expect(sendChangeNotes(rt, { value: WORKSPACE }, chatOf(() => Promise.reject(new Error('reservation refused')))))
+      .rejects.toThrow('reservation refused');
     expect(readChangeNotes(rt, WORKSPACE.source).map((each) => each.id)).toEqual(['clamp']);
+    expect(owesChangeNotes(rt)).toBe(false);
 
-    // Notes saved between the read and the consume are not the ones the message carries: nothing is deleted.
-    const changed = sendChangeNotes(rt, { value: WORKSPACE }, (_message, consume) => {
-      saveChangeNotes(rt, WORKSPACE.source, { value: [clamp, deletion] });
-      consume();
+    // Taken, though the answer was lost: sent.
+    expect(await sendChangeNotes(rt, { value: WORKSPACE }, chatOf(() => Promise.reject(new Error('the answer was cut')), async () => true)))
+      .toEqual({ ok: true, notes: [] });
+    expect(readChangeNotes(rt, WORKSPACE.source)).toEqual([]);
+    expect(owesChangeNotes(rt)).toBe(false);
+
+    // Lost in transit, and the chat cannot say: taken from the draft, and owed.
+    saveChangeNotes(rt, WORKSPACE.source, { value: [clamp] });
+    const attempted: string[] = [];
+
+    await expect(sendChangeNotes(rt, { value: WORKSPACE }, chatOf((message) => {
+      attempted.push(message.id);
+
+      return Promise.reject(new Error('the workspace is closing'));
+    }, () => Promise.reject(new Error('the workspace is closing'))))).rejects.toThrow('the workspace is closing');
+    expect(readChangeNotes(rt, WORKSPACE.source)).toEqual([]);
+    expect(owesChangeNotes(rt)).toBe(true);
+
+    const delivered: ChangeNotesMessage[] = [];
+    const failures: KinuError[] = [];
+
+    const held = (message: ChangeNotesMessage): Promise<void> => {
+      delivered.push(message);
 
       return Promise.resolve();
-    });
+    };
 
-    await expect(changed).rejects.toThrow('the notes changed while they were being sent');
-    expect(readChangeNotes(rt, WORKSPACE.source).map((each) => each.id)).toEqual(['clamp', 'test']);
+    await deliverOwedChangeNotes(rt, chatOf(held), (failure) => { failures.push(failure); });
+    await deliverOwedChangeNotes(rt, chatOf(held), (failure) => { failures.push(failure); });
+
+    expect(failures).toEqual([]);
+    expect(delivered.map((message) => message.id)).toEqual(attempted);
+    expect(changeNotesCard({ metadata: delivered[0]?.metadata })?.notes.map((each) => each.id)).toEqual(['clamp']);
+    expect(owesChangeNotes(rt)).toBe(false);
   });
 
   test('notes written on different baselines name each file\'s own', async () => {

@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { jsonSchema, tool } from 'ai';
 import type { ModelMessage, ToolSet } from 'ai';
-import { scriptedTurnModel } from '@kinu.run/test-utils';
+import { scriptedTurnModel, withHostDeliveries } from '@kinu.run/test-utils';
 import {
   ActorSession, EvolutionEngine, historyTurnPairs, WorkspaceActorDirectory, profileCatalogDigest,
   resolveTurnProfile, requireBuild, createAgentStores, WORKSPACE_ROOT,
@@ -46,7 +46,7 @@ function sessions() {
     const enqueued: ProgrammaticTurn[] = [];
     const stores = createAgentStores(() => runtime.storage.sql, () => handle, runtime.storage.transactionSync, async () => ({ vfs: runtime.storage.vfs, artifactDirectory: `${WORKSPACE_ROOT}/actors/${handle.actorId}` }));
 
-    const actor: ActorSession = new ActorSession({ history: stores.history, runtime, claims: stores.claims, installedBuild: null, orchestration: {
+    const actor: ActorSession = new ActorSession({ history: stores.history, runtime, claims: stores.claims, installedBuild: null, orchestration: withHostDeliveries({
       engine: new EvolutionEngine(runtime, historyTurnPairs(stores.history), { enabled: false }), eventLog: new EventLog(eventSql, handle),
       host: {
         broadcast: event => { broadcasts.push(event); },
@@ -59,7 +59,7 @@ function sessions() {
         turnInFlight: () => actor.inFlight,
         setTimer: () => { throw new Error('this bounded actor fixture must not schedule background work'); },
       },
-    } });
+    }) });
 
     return { actor, broadcasts, claims: stores.claims, handle, enqueued };
   };

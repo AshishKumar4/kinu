@@ -416,6 +416,28 @@ function longBody(body: OutboundBody): Response {
   return sseResponse(chunks);
 }
 
+/** `steps:N`: a tool step at a time until the turn's N tool results came back, then one line of answer. */
+function stepsBody(body: OutboundBody): Response {
+  const messages = body.messages ?? [];
+  const asked = messages.map((m) => m.role === 'user' && textOf(m.content).startsWith('steps:')).lastIndexOf(true);
+  const steps = Number.parseInt(textOf(messages[asked]?.content).slice('steps:'.length), 10);
+  const done = messages.slice(asked + 1).filter((m) => m.role === 'tool').length;
+
+  if (done >= steps) return sseResponse([sseChunk({ content: 'echo:steps-done' }), sseChunk({ role: 'assistant' }, 'stop'), sseDone()]);
+
+  return sseResponse([
+    sseChunk({
+      tool_calls: [{
+        index: 0, id: `call_steps_${String(done + 1)}`, type: 'function',
+        // A listing every workspace has: the step's tool succeeds, so the turn's shape is its steps alone.
+        function: { name: 'file', arguments: JSON.stringify({ op: 'list', path: '/home' }) },
+      }],
+    }),
+    sseChunk({ role: 'assistant' }, 'tool_calls'),
+    sseDone(),
+  ]);
+}
+
 async function echoBody(body: OutboundBody): Promise<Response> {
   const users = (body.messages ?? []).filter((m) => m.role === 'user').map((m) => textOf(m.content));
   const text = users.filter((u) => !u.startsWith('<')).at(-1) ?? '';
@@ -587,6 +609,7 @@ async function modelsBody(): Promise<Response> {
       { id: 'probe-tools' },
       { id: 'probe-tools-only' },
       { id: 'probe-long' },
+      { id: 'probe-steps' },
       { id: 'probe-error' },
       { id: 'probe-queue' },
       { id: 'probe-parity' },
@@ -845,6 +868,7 @@ export async function probeOutbound(request: Request): Promise<Response> {
 
         case 'probe': return echoBody(body);
         case 'probe-long': return longBody(body);
+        case 'probe-steps': return stepsBody(body);
         case 'probe-parity': return parityBody(body);
         case 'probe-wake': return wakeBody(body);
         case 'probe-early-done': return earlyDoneBody();

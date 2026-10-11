@@ -1,7 +1,7 @@
 // AgentOrchestrator: evolution cadence and the event→turn reactor.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { createTestActors, createTestActorsOver, createTestSql } from '@kinu.run/test-utils';
+import { createTestActors, createTestActorsOver, createTestSql, withHostDeliveries } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
 import { RUN_END_REASONS, creditedTurnId } from '../src/orchestrator/turn-lifecycle';
@@ -33,7 +33,8 @@ function webhook(deliveryId: string, body: JsonObject = { x: 1 }): IngressDescri
   };
 }
 
-function fakeEngine(opts?: { enabled?: boolean }) {
+/** `dying.first` makes the first review die before it ran, as an isolate that ended inside it. */
+function fakeEngine(opts?: { enabled?: boolean; dying?: { first: boolean } }) {
   const reviews: Array<{ turn: CompletedTurn; followup: string | null }> = [];
   const sessions: number[] = [];
   const trials: number[] = [];
@@ -44,6 +45,11 @@ function fakeEngine(opts?: { enabled?: boolean }) {
   const observed: Array<{ names: string[]; quality: number }> = [];
 
   const reviewTurn = async (turn: CompletedTurn, followup: string | null): Promise<void> => {
+    if (opts?.dying?.first === true) {
+      opts.dying.first = false;
+      throw new Error('the isolate died inside the review');
+    }
+
     reviews.push({ turn, followup });
   };
 
@@ -89,7 +95,7 @@ function fakeEngine(opts?: { enabled?: boolean }) {
     },
   };
 
-  return { engine, reviews, sessions, crafted, observed, trials, sql, store };
+  return { engine, reviews, sessions, crafted, observed, trials, sql, execRaw, store };
 }
 
 function fakeHost(opts?: { activeTurn?: boolean }) {
@@ -129,7 +135,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
   test('session reflection fires every five turns — the shipped cadence', async () => {
     const { engine, sessions } = fakeEngine();
     const { host } = fakeHost();
-    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
 
     for (let i = 0; i < 12; i++) {
       orch.recordTurn(aTurn(i), 'conversation');
@@ -152,7 +158,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     });
 
     budget.declare('checkout-fixes', { tokens: 1_000_000 }, {});
-    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog(), budget });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog(), budget }));
 
     orch.beginTurn(Date.now(), { missionLabels: ['checkout-fixes'] });
     orch.recordTurn(aTurn(1, 'programmatic'), 'independent_task');
@@ -168,7 +174,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
   test('a partial window survives the session ending — it is not force-closed or graded', async () => {
     const { engine, reviews, sessions } = fakeEngine();
     const { host } = fakeHost();
-    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
 
     for (let i = 0; i < 2; i++) orch.recordTurn(aTurn(i), 'conversation');   // below the interval
     expect(sessions).toEqual([]);
@@ -190,7 +196,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
       sessions.push(session.turns.length);
     };
 
-    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
 
     for (let i = 0; i < 4; i++) orch.recordTurn(aTurn(i), 'conversation');
     orch.recordTurn(aTurn(4), 'conversation');
@@ -207,14 +213,14 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     const { engine, sessions } = fakeEngine();
     const { host } = fakeHost();
     const eventLog = newEventLog();
-    const oneShot = new AgentOrchestrator({ host, engine, eventLog, oneShot: true });
+    const oneShot = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog, oneShot: true }));
 
     for (let i = 0; i < 5; i++) oneShot.recordTurn(aTurn(i), 'independent_task');
     await oneShot.settleTracked();
     expect(sessions).toEqual([]);
     expect(oneShot.sessionTurnIndex).toBe(5);
 
-    const daemon = new AgentOrchestrator({ host, engine, eventLog });
+    const daemon = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog }));
     await daemon.runDueSessionEvolution();
     expect(sessions).toEqual([5]);
     expect(daemon.sessionTurnIndex).toBe(0);
@@ -225,7 +231,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     const { host } = fakeHost();
     // The exec process must not start work it cannot afford.
     engine.reviewTurn = () => new Promise<void>(() => {});
-    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog(), oneShot: true });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog(), oneShot: true }));
     orch.recordTurn(aTurn(0), 'independent_task');
 
     await orch.settleTracked();
@@ -240,7 +246,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     let reviewed = false;
     engine.reviewTurn = async () => { await gate.promise; reviewed = true; };
 
-    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
     orch.recordTurn(aTurn(0), 'independent_task');
 
     let settled = false;
@@ -258,12 +264,12 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     const { engine, reviews, store } = fakeEngine();
     const { host } = fakeHost();
     const eventLog = newEventLog();
-    const exec = new AgentOrchestrator({ host, engine, eventLog, oneShot: true });
+    const exec = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog, oneShot: true }));
     exec.recordTurn(aTurn(7), 'independent_task');
     await exec.settleTracked();
     expect(reviews).toEqual([]);
 
-    const next = new AgentOrchestrator({ host, engine, eventLog });
+    const next = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog }));
     expect(await next.runDeferredTurnReviews()).toEqual({ reviewed: 1, refused: [] });
     expect(reviews).toHaveLength(1);
     expect(reviews[0].turn.turnId).toBe('m7');
@@ -275,9 +281,9 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     const { engine, reviews, store } = fakeEngine();
     const { host } = fakeHost();
     const eventLog = newEventLog();
-    new AgentOrchestrator({ host, engine, eventLog, oneShot: true })
+    new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog, oneShot: true }))
       .recordTurn(aTurn(0), 'independent_task');
-    const nextExec = new AgentOrchestrator({ host, engine, eventLog, oneShot: true });
+    const nextExec = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog, oneShot: true }));
     expect(await nextExec.runDeferredTurnReviews()).toEqual({ reviewed: 0, refused: [] });
     expect(reviews).toEqual([]);
     expect(store.countQueuedReviews()).toBe(1);
@@ -287,15 +293,15 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     const { engine, reviews } = fakeEngine();
     const { host } = fakeHost();
     const eventLog = newEventLog();
-    const chat = new AgentOrchestrator({ host, engine, eventLog });
+    const chat = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog }));
     chat.recordTurn(aTurn(1), 'conversation');
 
     // A later one-shot process with a different task.
-    const exec = new AgentOrchestrator({ host, engine, eventLog, oneShot: true });
-    exec.observeUserTurn('unrelated next task', 'independent_task');
+    const exec = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog, oneShot: true }));
+    exec.observeUserTurn('u-1', 'unrelated next task', 'independent_task');
     await exec.settleTracked();
     expect(reviews).toEqual([]);
-    const next = new AgentOrchestrator({ host, engine, eventLog });
+    const next = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog }));
     await next.runDeferredTurnReviews();
     expect(reviews).toHaveLength(1);
     expect(reviews[0].followup).toBeNull();
@@ -304,7 +310,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
   test('settleTracked JOINS the turn lane until it settles — background work is never abandoned by the clock', async () => {
     const { engine } = fakeEngine();
     const { host } = fakeHost();
-    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
     // Evolution work is never abandoned on a clock.
     const gate = Promise.withResolvers<void>();
     let done = false;
@@ -324,10 +330,10 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
   test('with auto-evolution off, a turn leaves no evolution state at all', () => {
     const { engine, reviews, sessions } = fakeEngine({ enabled: false });
     const { host } = fakeHost();
-    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
 
     for (let i = 0; i < 5; i++) orch.recordTurn(aTurn(i), 'conversation');
-    orch.observeUserTurn('anything', 'conversation');
+    orch.observeUserTurn('u-2', 'anything', 'conversation');
     expect(sessions).toEqual([]);
     expect(reviews).toEqual([]);
     expect(orch.sessionTurnIndex).toBe(0);
@@ -340,7 +346,7 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
       for (const status of RUN_END_REASONS) {
         const { engine } = fakeEngine();
         const { host } = fakeHost();
-        const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+        const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
         orch.beginTurn(Date.now(), { kinuMode: workMode });
 
         expect(orch.improvementLanesOpen(status)).toBe(status === 'completed' && workMode === 'build');
@@ -393,7 +399,7 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
     const { host, enqueued } = fakeHost();
     const eventLog = newEventLog();
     eventLog.publish({ descriptor: webhook('d1'), now: 1 });
-    const orch = new AgentOrchestrator({ host, engine, eventLog });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog }));
     orch.beginTurn(Date.now(), {});
 
     await orch.drainPendingEvents();
@@ -409,7 +415,7 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
     for (const status of RUN_END_REASONS) {
       const { engine, store } = fakeEngine();
       const { host } = fakeHost();
-      const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+      const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
       orch.beginTurn(Date.now(), {});
       const stamped = orch.recordedTurn(status, aTurn(0));
       predicted.push(stamped.hadError);
@@ -425,7 +431,7 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
   test('recordTurn under one id twice leaves one window row and one cadence tick', () => {
     const { engine, store } = fakeEngine();
     const { host } = fakeHost();
-    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
     orch.beginTurn(Date.now(), {});
 
     orch.recordTurn(aTurn(0), 'conversation', { id: 'settle:msg-1' });
@@ -438,7 +444,7 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
   test('recordTurn with no id keeps minting rows — the CLI path is unchanged', () => {
     const { engine } = fakeEngine();
     const { host } = fakeHost();
-    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
     orch.beginTurn(Date.now(), {});
     orch.recordTurn(aTurn(0), 'conversation');
     orch.recordTurn(aTurn(0), 'conversation');
@@ -450,7 +456,7 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
     const { host, enqueued } = fakeHost();
     const eventLog = newEventLog();
     eventLog.publish({ descriptor: webhook('d1'), now: 1 });
-    const orch = new AgentOrchestrator({ host, engine, eventLog });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog }));
 
     await orch.drainPendingEvents();
     await orch.drainPendingEvents();
@@ -469,7 +475,7 @@ describe('AgentOrchestrator — the durable session window', () => {
 
     for (let i = 0; i < 5; i++) {
       const { host } = fakeHost();
-      last = new AgentOrchestrator({ host, engine, eventLog });
+      last = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog }));
       last.recordTurn(aTurn(i), 'conversation');
     }
 
@@ -482,10 +488,10 @@ describe('AgentOrchestrator — the durable session window', () => {
     const { engine, reviews } = fakeEngine();
     const eventLog = newEventLog();
     const { host } = fakeHost();
-    new AgentOrchestrator({ host, engine, eventLog }).recordTurn(aTurn(0), 'conversation');
+    new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog })).recordTurn(aTurn(0), 'conversation');
     expect(reviews).toHaveLength(0);
     // Continuing the conversation: this user message is turn 0's follow-up.
-    new AgentOrchestrator({ host, engine, eventLog }).observeUserTurn('that broke the build', 'conversation');
+    new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog })).observeUserTurn('u-3', 'that broke the build', 'conversation');
     expect(reviews).toEqual([{ turn: aTurn(0), followup: 'that broke the build' }]);
   });
 
@@ -493,13 +499,13 @@ describe('AgentOrchestrator — the durable session window', () => {
     const { engine, reviews } = fakeEngine();
     const eventLog = newEventLog();
     const { host } = fakeHost();
-    const exec = new AgentOrchestrator({ host, engine, eventLog, oneShot: true });
+    const exec = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog, oneShot: true }));
     exec.recordTurn(aTurn(0), 'independent_task');
     // Deferred rather than run: this process is about to exit.
     expect(reviews).toEqual([]);
-    new AgentOrchestrator({ host, engine, eventLog, oneShot: true })
-      .observeUserTurn('a completely different task', 'independent_task');
-    await new AgentOrchestrator({ host, engine, eventLog }).runDeferredTurnReviews();
+    new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog, oneShot: true }))
+      .observeUserTurn('u-4', 'a completely different task', 'independent_task');
+    await new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog })).runDeferredTurnReviews();
     expect(reviews).toEqual([{ turn: aTurn(0), followup: null }]);
   });
 
@@ -507,10 +513,10 @@ describe('AgentOrchestrator — the durable session window', () => {
     const { engine, reviews } = fakeEngine();
     const eventLog = newEventLog();
     const { host } = fakeHost();
-    new AgentOrchestrator({ host, engine, eventLog }).recordTurn(aTurn(0), 'conversation');
-    new AgentOrchestrator({ host, engine, eventLog, oneShot: true })
-      .observeUserTurn('unrelated task', 'independent_task');
-    await new AgentOrchestrator({ host, engine, eventLog }).runDeferredTurnReviews();
+    new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog })).recordTurn(aTurn(0), 'conversation');
+    new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog, oneShot: true }))
+      .observeUserTurn('u-5', 'unrelated task', 'independent_task');
+    await new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog })).runDeferredTurnReviews();
     expect(reviews).toEqual([{ turn: aTurn(0), followup: null }]);
   });
 });
@@ -519,31 +525,132 @@ describe('AgentOrchestrator — turn-outcome review dispatch', () => {
   test('the next user message grades the previous turn (Hermes-style forked review)', () => {
     const { engine, reviews } = fakeEngine();
     const { host } = fakeHost();
-    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
 
-    orch.observeUserTurn('first message', 'conversation');
+    orch.observeUserTurn('u-6', 'first message', 'conversation');
     expect(reviews).toHaveLength(0);
 
     orch.recordTurn(aTurn(0), 'conversation');
     expect(reviews).toHaveLength(0);
 
-    orch.observeUserTurn('actually, that was wrong', 'conversation');
+    orch.observeUserTurn('u-7', 'actually, that was wrong', 'conversation');
     expect(reviews).toEqual([{ turn: aTurn(0), followup: 'actually, that was wrong' }]);
 
-    orch.observeUserTurn('another message', 'conversation');
+    orch.observeUserTurn('u-8', 'another message', 'conversation');
     expect(reviews).toHaveLength(1);
+  });
+
+  /** One turn's opening grades one turn (design v2 §2): a preparation replayed after a reset took the next parked
+   *  review too, and graded it with words that never followed it. */
+  test("a turn's opening observed again grades nothing more", () => {
+    const { engine, reviews } = fakeEngine();
+    const { host } = fakeHost();
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
+
+    orch.recordTurn(aTurn(0), 'conversation');
+    orch.recordTurn(aTurn(1), 'conversation');
+    orch.observeUserTurn('u-next', 'that was wrong', 'conversation');
+    orch.observeUserTurn('u-next', 'that was wrong', 'conversation');
+
+    expect(reviews).toEqual([{ turn: aTurn(1), followup: 'that was wrong' }]);
+  });
+
+  test("a turn's opening replayed after a later turn opened grades nothing more", () => {
+    const { engine, reviews } = fakeEngine();
+    const { host } = fakeHost();
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
+
+    orch.recordTurn(aTurn(0), 'conversation');
+    orch.observeUserTurn('u-first', 'first follow-up', 'conversation');
+    orch.recordTurn(aTurn(1), 'conversation');
+    orch.observeUserTurn('u-second', 'second follow-up', 'conversation');
+    orch.recordTurn(aTurn(2), 'conversation');
+    orch.observeUserTurn('u-first', 'first follow-up', 'conversation');
+
+    expect(reviews).toEqual([{ turn: aTurn(0), followup: 'first follow-up' }, { turn: aTurn(1), followup: 'second follow-up' }]);
+  });
+
+  /** Cut between the opening's record and its claim (an isolate that died there): the replay grades the review the
+   *  opening named, not a newer one, with its follow-up. */
+  test('an opening cut after it named the review it grades grades that review on its replay', () => {
+    const { engine, reviews, execRaw } = fakeEngine();
+    const { host } = fakeHost();
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
+
+    orch.recordTurn(aTurn(0), 'conversation');
+    execRaw(`CREATE TRIGGER cut_claim BEFORE UPDATE ON completed_turns WHEN NEW.review = 'claimed'
+      BEGIN SELECT RAISE(ABORT, 'the isolate died'); END`);
+    expect(() => { orch.observeUserTurn('u-cut', 'that was wrong', 'conversation'); }).toThrow('the isolate died');
+    execRaw('DROP TRIGGER cut_claim');
+    orch.recordTurn(aTurn(1), 'conversation');
+    orch.observeUserTurn('u-cut', 'that was wrong', 'conversation');
+
+    expect(reviews).toEqual([{ turn: aTurn(0), followup: 'that was wrong' }]);
+  });
+
+  /** Cut between the opening's record and its claim, and the turn abandoned: the next opening first sends the review
+   *  the cut one took to the deferred lane with that opening's follow-up, and grades only a review of its own. */
+  test("an opening cut before its claim, then a fresh owner turn, grades the cut one's review with the cut one's words", async () => {
+    const { engine, reviews, execRaw } = fakeEngine();
+    const { host } = fakeHost();
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
+
+    orch.recordTurn(aTurn(0), 'conversation');
+    execRaw(`CREATE TRIGGER cut_claim BEFORE UPDATE ON completed_turns WHEN NEW.review = 'claimed'
+      BEGIN SELECT RAISE(ABORT, 'the isolate died'); END`);
+    expect(() => { orch.observeUserTurn('u-cut', 'that was wrong', 'conversation'); }).toThrow('the isolate died');
+    execRaw('DROP TRIGGER cut_claim');
+    orch.observeUserTurn('u-fresh', 'a new request', 'conversation');
+    await engine.runDeferredTurnReviews();
+
+    expect(reviews).toEqual([{ turn: aTurn(0), followup: 'that was wrong' }]);
+  });
+
+  /** Cut between the opening's record and its claim, and no owner turn after: recovery queues it with its follow-up. */
+  test("an opening cut before its claim, with no turn after it, is reviewed by recovery with the cut one's words", async () => {
+    const { engine, reviews, execRaw, store } = fakeEngine();
+    const { host } = fakeHost();
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
+
+    orch.recordTurn(aTurn(0), 'conversation');
+    execRaw(`CREATE TRIGGER cut_claim BEFORE UPDATE ON completed_turns WHEN NEW.review = 'claimed'
+      BEGIN SELECT RAISE(ABORT, 'the isolate died'); END`);
+    expect(() => { orch.observeUserTurn('u-cut', 'that was wrong', 'conversation'); }).toThrow('the isolate died');
+    execRaw('DROP TRIGGER cut_claim');
+
+    expect(store.resetStaleClaims()).toBe(1);
+    await engine.runDeferredTurnReviews();
+
+    expect(reviews).toEqual([{ turn: aTurn(0), followup: 'that was wrong' }]);
+  });
+
+  /** Cut after the claim, before its review ran: the stale-claim recovery runs the same review with its follow-up. */
+  test('an opening whose review died before it ran leaves the review and its follow-up for the recovery', async () => {
+    const { engine, reviews, store } = fakeEngine({ dying: { first: true } });
+    const { host } = fakeHost();
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
+
+    orch.recordTurn(aTurn(0), 'conversation');
+    orch.observeUserTurn('u-died', 'that was wrong', 'conversation');
+    await orch.settleTracked();
+    expect(reviews).toEqual([]);
+
+    store.resetStaleClaims();
+    await engine.runDeferredTurnReviews();
+
+    expect(reviews).toEqual([{ turn: aTurn(0), followup: 'that was wrong' }]);
   });
 
   test('programmatic turns review immediately with no follow-up and do not displace the pending user turn', () => {
     const { engine, reviews } = fakeEngine();
     const { host } = fakeHost();
-    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
 
     orch.recordTurn(aTurn(0), 'conversation');
     orch.recordTurn(aTurn(1, 'programmatic'), 'conversation'); // reactor/job-wake turn
     expect(reviews).toEqual([{ turn: aTurn(1, 'programmatic'), followup: null }]);
 
-    orch.observeUserTurn('follow-up for the USER turn', 'conversation');
+    orch.observeUserTurn('u-11', 'follow-up for the USER turn', 'conversation');
     expect(reviews[1]).toEqual({ turn: aTurn(0), followup: 'follow-up for the USER turn' });
   });
 });
@@ -555,7 +662,7 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
     log.publish({ descriptor: webhook('d2'), now: 2 });
     const { engine } = fakeEngine();
     const { host, enqueued } = fakeHost();
-    const orch = new AgentOrchestrator({ host, engine, eventLog: log });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: log }));
 
     await orch.drainPendingEvents();
     expect(enqueued).toHaveLength(1);
@@ -578,43 +685,7 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
   test('no pending events → no turn injected (idle reactor)', async () => {
     const { engine } = fakeEngine();
     const { host, enqueued } = fakeHost();
-    await new AgentOrchestrator({ host, engine, eventLog: newEventLog() }).drainPendingEvents();
-    expect(enqueued).toHaveLength(0);
-  });
-
-  test('an ACTIVE turn absorbs the batch mid-turn — no new turn is enqueued', async () => {
-    const log = newEventLog();
-    log.publish({ descriptor: webhook('d1'), now: 1 });
-    const { engine } = fakeEngine();
-    const { host, enqueued, broadcasts } = fakeHost({ activeTurn: true });
-    const orch = new AgentOrchestrator({ host, engine, eventLog: log });
-
-    await orch.drainPendingEvents();
-    expect(enqueued).toHaveLength(0);
-    await orch.drainPendingEvents();
-    const injected = await absorb(orch);
-    expect(injected).toHaveLength(1);
-    // Mid-turn: fold the events in, not stop.
-    expect(injected[0].stepText).toContain('arrived while you were working');
-    expect(injected[0].stepText).toContain('[webhook]');
-    // For the re-delivery fallback.
-    expect(injected[0].text).toContain('arrived while you were idle');
-    const replyTurnId = present(injected[0].replyTurnId, 'the reply turn the signal carries');
-    const bound = log.query({ turn_id: replyTurnId });
-    expect(bound.map((event) => event.id)).toHaveLength(1);
-    // The card exists from delivery; the step that takes the batch moves it to shown, at that step.
-    const cardId = broadcasts[0]?.id;
-    expect(broadcasts).toEqual([
-      {
-        type: 'signal_card', id: cardId, state: 'pending',
-        metadata: {
-          kinuEvent: 'event_drain', kinuAuthor: 'harness',
-          drainTurnId: replyTurnId,
-        },
-        text: injected[0].stepText,
-      },
-      { type: 'signal_card', id: cardId, state: 'shown', atStep: 0 },
-    ]);
+    await new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() })).drainPendingEvents();
     expect(enqueued).toHaveLength(0);
   });
 
@@ -623,21 +694,13 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
     log.publish({ descriptor: webhook('d1'), now: 1 });
     const { engine } = fakeEngine();
     const { host, enqueued, broadcasts } = fakeHost({ activeTurn: false });
-    const orch = new AgentOrchestrator({ host, engine, eventLog: log });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: log }));
     await orch.drainPendingEvents();
     expect(await absorb(orch)).toHaveLength(0);
     expect(enqueued).toHaveLength(1);
-    expect(enqueued[0].metadata?.kinuEvent).toBe('event_drain');
-    // The queued path shows the same card.
-    const signalId = v.parse(v.string(), enqueued[0]?.metadata?.signalId);
-    expect(broadcasts).toEqual([{
-      type: 'signal_card', id: signalId, state: 'pending',
-      metadata: {
-        kinuEvent: 'event_drain', kinuAuthor: 'harness',
-        drainTurnId: expect.any(String),
-      },
-      text: enqueued[0].text,
-    }]);
+    // A delivery under the batch's own id: its turn's announcement, which its end closes the lease by.
+    expect(enqueued[0].metadata).toMatchObject({ kinuEvent: 'event_drain', drainTurnId: enqueued[0].idempotencyKey });
+    expect(broadcasts).toEqual([]);
   });
 
   test('an enqueue rejection re-pends the batch so the next drain retries it', async () => {
@@ -655,7 +718,7 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
       return { status: 'queued' };
     };
 
-    const orch = new AgentOrchestrator({ host, engine, eventLog: log });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: log }));
 
     await orch.drainPendingEvents();
     expect(log.pending().map((event) => event.id)).toEqual([admitted.id]);
@@ -681,7 +744,7 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
       return { status: attempts === 1 ? 'skipped' : 'queued' };
     };
 
-    const orch = new AgentOrchestrator({ host, engine, eventLog: log });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: log }));
 
     await orch.drainPendingEvents();
     expect(log.pending().map((event) => event.id)).toEqual([admitted.id]);
@@ -697,7 +760,7 @@ describe('AgentOrchestrator.scheduleDrain — debounced ingress coalescing', () 
     const log = newEventLog();
     const { engine } = fakeEngine();
     const { host, enqueued, timers } = fakeHost();
-    const orch = new AgentOrchestrator({ host, engine, eventLog: log });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: log }));
 
     for (let i = 0; i < 3; i++) {
       log.publish({ descriptor: webhook(`d${i}`, { seq: i }), now: i + 1 });
@@ -718,7 +781,7 @@ describe('AgentOrchestrator.scheduleDrain — debounced ingress coalescing', () 
     const log = newEventLog();
     const { engine } = fakeEngine();
     const { host, enqueued, timers } = fakeHost();
-    const orch = new AgentOrchestrator({ host, engine, eventLog: log });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: log }));
 
     log.publish({ descriptor: webhook('a', { seq: 'a' }), now: 1 });
     orch.scheduleDrain();
@@ -732,7 +795,7 @@ describe('AgentOrchestrator.scheduleDrain — debounced ingress coalescing', () 
   test('a window firing with nothing pending injects no turn', async () => {
     const { engine } = fakeEngine();
     const { host, enqueued, timers } = fakeHost();
-    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
     orch.scheduleDrain();
     await timers[0].fn();
     expect(enqueued).toHaveLength(0);
@@ -752,7 +815,7 @@ describe('AgentOrchestrator — the in-episode evolution clock', () => {
   test('the turn extension is the seam — a crafted tool is scored mid-turn', async () => {
     const { engine, crafted, observed } = fakeEngine();
     const { host } = fakeHost();
-    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
     crafted.push('summarize');
     orch.beginTurn(Date.now());
 
@@ -768,7 +831,7 @@ describe('AgentOrchestrator — the in-episode evolution clock', () => {
   test('a stamped failure is scored against the tool through the same seam', async () => {
     const { engine, crafted, observed } = fakeEngine();
     const { host } = fakeHost();
-    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
     crafted.push('summarize');
     orch.beginTurn(Date.now());
 
@@ -784,7 +847,7 @@ describe('AgentOrchestrator — the in-episode evolution clock', () => {
   test('a tool that appeared during the turn is crafted, not pre-existing', async () => {
     const { engine, crafted, observed } = fakeEngine();
     const { host } = fakeHost();
-    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
     orch.beginTurn(Date.now());
 
     crafted.push('summarize');
@@ -802,7 +865,7 @@ describe('AgentOrchestrator — the in-episode evolution clock', () => {
   test('with auto-evolution off the in-episode clock records nothing', async () => {
     const { engine, crafted, observed } = fakeEngine({ enabled: false });
     const { host } = fakeHost();
-    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
     crafted.push('summarize');
     orch.beginTurn(Date.now());
 
@@ -815,7 +878,7 @@ describe('AgentOrchestrator — the in-episode evolution clock', () => {
   test('beginTurn clears the previous turn\'s craft record', async () => {
     const { engine, crafted } = fakeEngine();
     const { host } = fakeHost();
-    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
     crafted.push('summarize');
     orch.beginTurn(Date.now());
     await runBlock(orch, 'return await tools.summarize(1)');
@@ -830,7 +893,7 @@ describe('AgentOrchestrator — the in-episode evolution clock', () => {
   test('turn steering still observes the same calls through the shared seam', async () => {
     const { engine } = fakeEngine();
     const { host } = fakeHost();
-    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
     orch.beginTurn(Date.now());
 
     for (let i = 0; i < 3; i++) {

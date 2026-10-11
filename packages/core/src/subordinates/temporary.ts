@@ -38,6 +38,8 @@ export function taskAnswerIsLater(input: {
 }): boolean {
   return input.roster.list().some((hire) => hire.status === 'working' && hire.origin !== 'evolution')
     || input.log.pending({ variant: 'subordinate_task' }).some((row) => row.id !== input.turnTaskId)
+    // Delivered to it and not yet answered by a turn of its own: its answer is that turn's.
+    || input.log.openAssignments().some((id) => id !== input.turnTaskId)
     || input.log.pending({ variant: 'subordinate_report' }).length > 0;
 }
 
@@ -88,6 +90,11 @@ export function taskTurnEnding(completed: boolean, interrupted: boolean): TaskTu
   return interrupted ? 'interrupted' : 'errored';
 }
 
+/** Whether a terminal report reads the turn's narration: a task that did not answer is reported in its steps' words. */
+export function reportReadsNarration(ending: TaskTurnEnding): boolean {
+  return ending !== 'answered';
+}
+
 /** A child's terminal report: a task answer, any failure, a quiet Stop; null for a durable answer. */
 export async function terminalTaskReport(input: {
   readonly lifetime: SubordinateLifetime;
@@ -100,9 +107,9 @@ export async function terminalTaskReport(input: {
 }): Promise<OwedReport | null> {
   const text = input.assistantText.trim();
 
-  if (input.ending === 'answered' && (input.lifetime !== TEMPORARY_LIFETIME || input.delegating === true)) return null;
+  if (!reportReadsNarration(input.ending)) {
+    if (input.lifetime !== TEMPORARY_LIFETIME || input.delegating === true) return null;
 
-  if (input.ending === 'answered') {
     // An empty `answered` is `silent`: the content decides.
     return text.length > 0
       ? { status: 'completed', content: text }

@@ -1,9 +1,10 @@
 /** A non-main agent's chat in its own isolate (D9). */
+import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   CHAT_SESSION_ID, ChatSession, EventLog, HeadCapture, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TerminalTransitions,
   PlanReviewActions, announcementOf, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork,
-  planHandoffStillOwed, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, terminalEffect, OWNER_ANSWER_SIGNAL,
-  metadataTier, subordinateTerminalEffects, withCompactionTrigger,
+  planHandoffStillOwed, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, terminalEffect, turnAuthorship, turnLane, type TurnAuthorship,
+  actorPolicy, metadataTier, workModeForTurnMetadata, reportReadsNarration, subordinateTerminalEffects, withCompactionTrigger, type ActorPolicy,
   bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpening, type JsonObject, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
   type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalTurnFacts, type TerminalTurnParts,
@@ -12,9 +13,10 @@ import {
 import { createCompactionStateStore, type CompactionStateStore } from '@kinu.run/compaction';
 import { attempt, diagnostics, hold, logged, settle, type KinuError } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
+import { serialQueue } from '@kinu.run/agent-utils';
 import type { AgentDatabase } from './agent-database';
 import type { StepPacer } from './step-pacer';
-import { FacetSpend, facetTurnSources, facetTurnTools, type AgentWorkspace, type FacetModels, type LiveTurn } from './agent-turn';
+import { FacetSpend, answerMetadataOf, facetTurnSources, facetTurnTools, type AgentWorkspace, type FacetModels, type LiveTurn } from './agent-turn';
 
 /** The words reach the room on the turn's own stream, and a turn's end on its own call. */
 const ROOM_EVENTS: ReadonlySet<SessionEvent['type']> = new Set(['turn-start', 'step-cut', 'error', 'broadcast', 'history-reverted']);
@@ -28,12 +30,9 @@ export interface FacetChatDeps {
   readonly pacer: StepPacer;
 }
 
-/** A hirer's or the harness's turn runs in the hirer's lane, with `report`; the owner's, a plan's feedback or approval and
- *  the turn an answer resumes (the owner's decisions), in the owner's. */
-const OWNER_EVENTS: ReadonlySet<unknown> = new Set(['plan_feedback', 'plan_approved', OWNER_ANSWER_SIGNAL]);
-
-function parentDrivenTurn(item: ChatTurnInput): boolean {
-  return item.kind === 'programmatic' && !OWNER_EVENTS.has(item.metadata?.kinuEvent);
+/** Who wrote a turn: the owner's words and decisions are the owner's, every other programmatic turn its hirer's. */
+function authorshipOf(item: ChatTurnInput): TurnAuthorship {
+  return turnAuthorship(item);
 }
 
 export class FacetChat {
@@ -42,6 +41,11 @@ export class FacetChat {
   private readonly trigger: { readonly state: CompactionStateStore; readonly key: string };
 
   private readonly spend: FacetSpend;
+
+  /** What this agent is, from its row: its hierarchy and placement decide what its turns owe. */
+  private get policy(): ActorPolicy {
+    return actorPolicy(this.deps.actor.record);
+  }
 
   /** Whether an advisor reviews the turn running. */
   private reviewsTurns = false;
@@ -52,8 +56,16 @@ export class FacetChat {
   /** The turn's author-stamped metadata, which its tool calls carry: a plan it submits is judged by it. */
   private driving: JsonObject | undefined;
 
-  /** Each plan update in the order its transition happened, delivered as soon as it happened. */
-  private planDelivery: Promise<void> = Promise.resolve();
+  /** Each plan update in the order its transition happened, delivered as soon as it happened; a refused one fails the
+   *  action that announced it alone, and the next still goes. */
+  private readonly planDelivery = serialQueue();
+
+  /** The deliveries of the updates each plan action announced, by the action whose call they ran in: an action may wait
+   *  on a turn that runs another (a decision on the plan its feedback turn revises). */
+  private readonly announcing = new AsyncLocalStorage<Promise<void>[]>();
+
+  /** The last update no plan action owned, delivered or reported. */
+  private unowned: Promise<unknown> = Promise.resolve();
 
   /** Its own plan reviews, in its own store: the owner reviews them through its window (D9). */
   readonly plans: PlanReviewActions;
@@ -92,7 +104,7 @@ export class FacetChat {
       transport: {
         deliver: (event) => {
           // Its last charge lands before its end is told: nothing the workspace reads of the turn can miss it.
-          if (event.type === 'turn-end') return this.charged().then(async () => { await workspace.turnEnded(event, deps.database.figures()); });
+          if (event.type === 'turn-end') return this.charged().then(async () => { await workspace.turnEnded(event, deps.database.figures(), deps.database.takeActivity()); });
 
           return ROOM_EVENTS.has(event.type) ? workspace.chatEvent(event) : undefined;
         },
@@ -102,19 +114,36 @@ export class FacetChat {
         prepareTurn: (item, lease, opening) => this.prepareTurn(item, lease, opening),
         composeRequest: () => this.composeRequest(),
         owedTerminalEffects: (input) => this.owedTerminalEffects(input),
-        answerMetadata: async (turnId, texts) => await workspace.answerMetadata(turnId, await texts()),
+        answerMetadata: async (turnId, texts) => await answerMetadataOf(workspace, turnId, texts),
         // What the turn already told its hirer is the agent's own record, so a reset of the workspace cannot repeat it.
-        owedReport: async (ending, assistantText, narration) => await workspace.owedReport(
-          { reports: this.deps.database.reports(this.session.currentTurnId ?? ''), ownerDriven: !this.parentDriven },
-          { ending, assistantText, narration: await narration() },
-        ),
+        // An agent with no hirer owes no report, so it asks the workspace for none.
+        owedReport: async (ending, assistantText, narration) => (this.policy.hirer === null ? null : await workspace.owedReport(
+          {
+            reports: this.deps.database.reports(this.session.currentTurnId ?? ''), ownerDriven: !this.parentDriven,
+            taskId: this.parentDriven ? announcementOf(this.session.currentTurnId ?? '') : null,
+          },
+          { ending, assistantText, narration: reportReadsNarration(ending) ? await narration() : [] },
+        )),
+        // Its hirer waits on the work, not on a turn: one that ended without an answer is answered to it as blocked, keyed by
+        // the work.
+        unanswered: async (item, failure) => {
+          if (turnLane(this.policy, authorshipOf(item)) !== 'hirer' || item.idempotencyKey === undefined) return;
+          await workspace.parentReport({
+            text: `${this.deps.actor.record.name} failed to run its assigned turn: ${failure.message}`,
+            status: 'blocked', mode: workModeForTurnMetadata(item.metadata), sequenceId: item.idempotencyKey,
+          });
+        },
         terminal: () => this.terminal,
         driverGate: () => null,
         armTurnWake: (atMs) => this.tell(atMs),
         quiet: () => { this.atRest(); },
-        taskList: () => actor.stores.taskList,
-        // Its jobs run in the workspace, whose settle wakes it.
-        hasPendingAsyncWake: () => false,
+        // Its tasks tool and its jobs run in the workspace.
+        openWork: () => workspace.openWork(),
+        // The lane that keeps its prompt cache warm is the workspace's, which holds the provider keys and the wake.
+        cacheWarming: {
+          noteRequest: (lastRequestAt) => workspace.noteModelRequest(lastRequestAt),
+          armAfterTurn: (input) => workspace.armCacheWarm(input),
+        },
         steerSkills: (text) => workspace.steerSkills(text, this.activeSkills),
         stillOwed: (metadata) => planHandoffStillOwed(metadata, actor.stores.planReviews),
         birthContext: (drainTurnId) => workspace.birthContext(drainTurnId),
@@ -168,7 +197,8 @@ export class FacetChat {
     const { actor, database, workspace } = this.deps;
     const plans = actor.stores.planReviews;
     // The one place a turn's lane is decided; the workspace rebuilds a turn from this, never from its id.
-    this.parentDriven = parentDrivenTurn(item);
+    // A hirer's turn runs in the hirer's lane, with `report`, only for an agent that has a hirer.
+    this.parentDriven = turnLane(this.policy, authorshipOf(item)) === 'hirer';
     this.driving = authoredTurnMetadata(item);
     // The owner's words while a plan awaits their decision are read as its review.
     const mode = workModeUnderReview(actor.session.workMode, this.driving, () => plans.getActive(CHAT_SESSION_ID));
@@ -178,10 +208,12 @@ export class FacetChat {
 
     const prepared = await workspace.prepareChat({
       turnId: lease.turnId, mode, userText: item.text, parentDriven: this.parentDriven, driving: this.driving, opening,
+      // Its run, which the turn's recovery continues and its Retry starts anew, and its place in this agent's sequence.
+      runId: lease.runId, seq: database.nextInSequence(),
       ...(explicitTier !== undefined && { explicitTier }), ...(taskPlan !== null && { taskPlan }),
     });
 
-    database.prepare(lease.turnId, prepared);
+    database.prepare({ turnId: lease.turnId, runId: lease.runId }, prepared);
     this.reviewsTurns = prepared.reviewsTurns;
 
     const assembled = await this.assemble(prepared, { id: lease.turnId, mode, runId: lease.runId }, { userText: item.text, workMode: mode, ...(explicitTier !== undefined && { explicitTier }) }, (profile, inputs) => {
@@ -198,14 +230,23 @@ export class FacetChat {
     };
   }
 
+  /** The update's delivery, owned by the plan action it ran in. One no action owns has no caller to answer: its refusal
+   *  is reported, and the chat is idle once it settled. */
   private announcePlan(event: BroadcastEvent): void {
-    this.planDelivery = this.planDelivery.then(async () => { await this.deps.workspace.chatEvent({ type: 'broadcast', event }); });
+    const delivered = this.planDelivery(async () => { await this.deps.workspace.chatEvent({ type: 'broadcast', event }); });
+    const own = this.announcing.getStore();
+
+    if (own !== undefined) own.push(delivered);
+    else this.unowned = hold(logged('plan.delivery_failed', { doing: "announcing a plan update in the agent's window", otherwise: 'unavailable' }, () => delivered));
   }
 
-  /** A plan action, answered once each update it announced has reached the agent's window. */
+  /** A plan action, answered once each update it announced has reached the agent's window; an update refused there is
+   *  its failure, and the next action's updates are announced all the same. */
   async planned<A>(act: (plans: PlanReviewActions) => A | Promise<A>): Promise<A> {
-    const result = await act(this.plans);
-    await this.planDelivery;
+    const own: Promise<void>[] = [];
+    const result = await this.announcing.run(own, async () => await act(this.plans));
+
+    await Promise.all(own);
 
     return result;
   }
@@ -223,22 +264,26 @@ export class FacetChat {
   private owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[] {
     const { session } = this.deps.actor;
 
-    if (this.deps.actor.record.parentActorId === null) {
+    const turnId = this.session.currentTurnId ?? '';
+    const opened = this.deps.database.factsOf(this.session.currentRunId ?? turnId);
+
+    if (this.policy.workspaceAgent) {
       return declareHandoffRoster(chatTurnParts(input), {
-        turnId: this.session.currentTurnId ?? '', messageId: input.messageId, status: input.status, completed: input.completed,
+        turnId, messageId: input.messageId, status: input.status, completed: input.completed,
         workMode: session.workMode, userText: input.userText, assistantText: input.assistantText, event: input.event ?? null,
         turn: projectJsonValue({ value: input.turn }), credited: input.credited, answeredDeliveries: [...input.answeredDeliveries],
-        reachableTools: [...input.reachableTools], recordedAt: Date.now(),
+        reachableTools: [...input.reachableTools], recordedAt: Date.now(), facts: opened,
       });
     }
 
-    const scoped = session.orchestrator.scopedTurn(input.turn);
+    // A replay already carries the scope its first attempt recorded.
+    const scoped = input.turn.missionLabels !== undefined || opened.missionLabels.length === 0 ? input.turn : { ...input.turn, missionLabels: [...opened.missionLabels] };
 
     const facts: TerminalTurnFacts = {
       messageId: input.messageId,
       status: input.status,
       workMode: session.workMode,
-      continuity: 'conversation',
+      continuity: opened.continuity,
       completed: input.completed,
       userText: input.userText,
       assistantText: input.assistantText,
@@ -278,9 +323,8 @@ export class FacetChat {
       sql: actor.runtime.storage.sql,
       actor: actor.handle,
       effects: {
-        ...chatTerminalEffects({ chat: () => this.session, orchestrator: actor.session.orchestrator, engine: { learnFromTurn: async () => {} } }),
+        ...chatTerminalEffects({ chat: () => this.session, orchestrator: () => actor.session.orchestrator, engine: { learnFromTurn: async () => {} } }),
         ...subordinateTerminalEffects({
-          orchestrator: actor.session.orchestrator,
           hireAdvisor: (advisor) => workspace.hireAdvisor(advisor),
           applyTitle: (subject) => this.applyTitle(subject),
           sendReport: (report) => workspace.parentReport(report),
@@ -316,6 +360,7 @@ export class FacetChat {
     }
 
     await this.resting;
+    await this.unowned;
     await this.spend.settled();
   }
 
@@ -351,7 +396,11 @@ export class FacetChat {
     const told = this.telling.then(() => {
       const owed = this.owed();
 
-      return this.deps.workspace.owes(at === undefined ? owed : Math.min(at, owed ?? Infinity), owed !== null || this.owedWork().length > 0);
+      // Numbered as it leaves, in this agent's store: the workspace takes no report older than one it took.
+      return this.deps.workspace.owes(
+        this.deps.database.nextInSequence(), at === undefined ? owed : Math.min(at, owed ?? Infinity), owed !== null || this.owedWork().length > 0,
+        this.deps.database.standingReport(),
+      );
     });
 
     this.telling = hold(attempt({ doing: 'telling the workspace what an agent still owes', otherwise: 'unavailable' }, () => told));
@@ -408,6 +457,11 @@ export class FacetChat {
   async modelSettingsChanged(): Promise<void> {
     this.session.reviseContext({ counted: true });
     await this.terminal.modelSettingsChanged();
+  }
+
+  /** The forced rebuild the next turn assembly takes, under the key it reads. */
+  armCompaction(): void {
+    this.trigger.state.armCompaction(this.trigger.key);
   }
 
   /** The owner's Clear, refused while a turn runs; its compaction plan goes with the conversation. Answers why the

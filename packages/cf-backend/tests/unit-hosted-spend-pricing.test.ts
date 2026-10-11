@@ -28,6 +28,50 @@ function onTheFastTier(run: RecordedGatewayRun): boolean {
   return FAST_MODEL.endsWith(v.parse(QueryModelSchema, run.query).model);
 }
 
+/** A streamed step's one delta: its text, or the tool calls it makes. */
+interface StreamedDelta {
+  readonly content?: string;
+  readonly tool_calls?: ReadonlyArray<{ readonly index: number; readonly id: string; readonly type: 'function'; readonly function: { readonly name: string; readonly arguments: string } }>;
+}
+
+/** What the step's last frame reports it cost. */
+interface StreamedUsage {
+  readonly prompt_tokens: number;
+  readonly completion_tokens: number;
+  readonly total_tokens: number;
+  readonly prompt_tokens_details: { readonly cached_tokens: number };
+}
+
+/** One streamed step whose last frame reports `usage`, as the gateway's compat endpoint streams it. */
+function streamedStep(delta: StreamedDelta, finish: 'tool_calls' | 'stop', usage: StreamedUsage): Response {
+  const frames = [
+    { id: 'counted', model: 'harness', choices: [{ index: 0, delta, finish_reason: null }] },
+    { id: 'counted', model: 'harness', choices: [{ index: 0, delta: {}, finish_reason: finish }], usage },
+  ];
+
+  return new Response(frames.map((frame) => 'data: ' + JSON.stringify(frame) + '\n\n').join('') + 'data: [DONE]\n\n', {
+    headers: { 'content-type': 'text/event-stream' },
+  });
+}
+
+test("the agents panel reads main's tokens and cache from its own facet", async () => {
+  const gateway = stubAiBinding(() => streamedStep({ content: 'Counted.' }, 'stop', {
+    prompt_tokens: 2000, completion_tokens: 100, total_tokens: 2100, prompt_tokens_details: { cached_tokens: 1800 },
+  }));
+
+  const workspace = gatewayWorkspace(gateway);
+
+  workspace.agent.harnessCatalogModels({ [GATEWAY_MODEL]: { cost: { input: 2, output: 3, cacheRead: 0.5 } } });
+  await catalogTurn(workspace.agent, 'Count the parser paths.');
+  await workspace.agent.terminalRetryPass();
+  await joinHarnessFibers();
+
+  const main = (await workspace.agent.listWorkspaceAgents()).find((agent) => agent.category === 'main');
+
+  expect(main?.figures.tokens).toBe(2100);
+  expect(main?.figures.cacheEma).not.toBeNull();
+});
+
 test('a researcher hire\'s steps are priced at its fast tier\'s rate, not the root\'s', async () => {
   const gateway = stubAiBinding((run) => {
     if (onTheFastTier(run)) return chatCompletion(run, 'The tokenizer and the symbol table.');
@@ -89,18 +133,11 @@ for (const kind of ['hire', 'swarm'] as const) {
         ? { prompt_tokens: 1000, completion_tokens: 200, total_tokens: 1200, prompt_tokens_details: { cached_tokens: 0 } }
         : { prompt_tokens: 2000, completion_tokens: 100, total_tokens: 2100, prompt_tokens_details: { cached_tokens: 1800 } };
 
-      const delta = step === 0
+      const delta: StreamedDelta = step === 0
         ? { tool_calls: [{ index: 0, id: 'inspect', type: 'function', function: { name: 'tasks', arguments: '{"op":"list"}' } }] }
         : { content: 'Counted.' };
 
-      const frames = [
-        { id: 'counted', model: 'harness', choices: [{ index: 0, delta, finish_reason: null }] },
-        { id: 'counted', model: 'harness', choices: [{ index: 0, delta: {}, finish_reason: step === 0 ? 'tool_calls' : 'stop' }], usage },
-      ];
-
-      return new Response(frames.map((frame) => 'data: ' + JSON.stringify(frame) + '\n\n').join('') + 'data: [DONE]\n\n', {
-        headers: { 'content-type': 'text/event-stream' },
-      });
+      return streamedStep(delta, step === 0 ? 'tool_calls' : 'stop', usage);
     });
 
     const workspace = gatewayWorkspace(gateway);

@@ -7,6 +7,7 @@
 import { Agent, getAgentByName, getCurrentAgent, type AgentContext } from 'agents';
 import { subscribe } from 'agents/observability';
 import * as v from 'valibot';
+import { Effect } from 'effect';
 import {
   HOSTED_ACTOR_ID_HEADER, SLEEP_TIME_CADENCE, TerminalEffectInterrupt, hostedActorSocketPath, JsonValueSchema,
   type SlateAnswer, type TerminalEffectName, type TerminalEffectPhase,
@@ -23,7 +24,12 @@ import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestra
 import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB } from '../../src/wake-jobs';
 import { ROOT_SLATE_CALLER } from '../../src/slates/bindings';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
-import { SqlMeter, type OperationCost } from './sql-meter';
+import { meterInPlace, type MeteredTurn, type SqlMeter, type TurnCrossings } from './sql-meter';
+import { Crossings } from './crossings';
+import { AgentWorkspaceHost, AgentWorkspaceRPC } from '../../src/agent-facets';
+import { agentCallsThrough } from '../../src/dynamic-worker-slots';
+import { UserDO } from '../../src/user/user-do';
+import { USER_DO_RPC_SURFACE } from '../../src/rpc-surface';
 import type { AgentFacet as ProbeAgentFacet, SeededEntry } from './two-turn-probe-agent';
 import type {
   AgentLogEvent,
@@ -96,18 +102,6 @@ export * from '../../src/server';
 /** DO SQLite types columns as `ArrayBuffer | string | number | null`; refuse a blob at the read. */
 const textColumn = (value: SqlStorageValue): string => v.parse(v.string(), value);
 
-/** The production orchestrator plus fixture reads; adds no production method or state,
- *  only retains DurableObjectState to observe the durable send ledger. */
-/** Meters `sql` in place: the platform refuses a wrapped state object, and a patched `exec` counts every caller. */
-function meterInPlace(sql: SqlStorage) {
-  const unmetered = sql.exec.bind(sql);
-  const meter = new SqlMeter({ exec: unmetered, get databaseSize() { return sql.databaseSize; } });
-
-  sql.exec = (query, ...bindings) => meter.exec(query, ...bindings);
-
-  return { meter, unmetered };
-}
-
 const JobRowsSchema = v.array(v.looseObject({ id: v.string(), capability: v.string() }));
 
 /** What still runs in the object, by name, and its queued jobs as read now. */
@@ -141,6 +135,25 @@ async function awaitSettled(target: { settleState(): Promise<SettleState> }): Pr
   }
 }
 
+/** The production orchestrator plus fixture reads; adds no production method or state,
+ *  only retains DurableObjectState to observe the durable send ledger. */
+/**
+ * Calls into this worker while the meter runs: the relay main's isolate opens its port through (and calls that own live
+ * capabilities through), the workspace host that is its port, and the account. Counted once per worker, for the one
+ * workspace a meter runs over; a phase after the first starts with a step's pace, which crosses through the port.
+ */
+const crossings = new Crossings('host.paceStep');
+
+/** The facet's calls as the workspace makes them. */
+const FACET_CALLS = Object.keys(agentCallsThrough(() => Effect.die('names only')));
+
+// The relay and the host whole, but what each keeps to itself; the account by the surface it serves.
+crossings.countAll(AgentWorkspaceRPC, 'relay', ['host', 'owned']);
+
+crossings.countAll(AgentWorkspaceHost, 'host', ['open']);
+
+crossings.count(UserDO, 'account', USER_DO_RPC_SURFACE);
+
 export class ObservedOrchestrator extends ProductionOrchestrator {
   private readonly actorState: AgentContext;
   private readonly meter: SqlMeter;
@@ -148,6 +161,8 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   private readonly unmetered: SqlStorage['exec'];
   /** Transcript reads the chat transport made while the meter runs. */
   private historyReads: number | null = null;
+  /** Main's isolate while the meter runs, reached before the workspace's meter opens: the reach is the probe's, not the turn's. */
+  private meteredMain: Fetcher<ProbeAgentFacet> | null = null;
 
   constructor(ctx: AgentContext, env: ProbeEnv) {
     super(ctx, env);
@@ -160,7 +175,6 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'pendingSteers');
     Reflect.deleteProperty(this, 'pendingSteerFileRows');
     Reflect.deleteProperty(this, 'agentLogEvents');
-    Reflect.deleteProperty(this, 'inboxState');
     Reflect.deleteProperty(this, 'runEnds');
     Reflect.deleteProperty(this, 'seedStaleDrainEvent');
     Reflect.deleteProperty(this, 'runEventWake');
@@ -172,6 +186,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'drainRunClosed');
     Reflect.deleteProperty(this, 'meterBegin');
     Reflect.deleteProperty(this, 'meterEnd');
+    Reflect.deleteProperty(this, 'plantCrossings');
     Reflect.deleteProperty(this, 'settleState');
     Reflect.deleteProperty(this, 'sleepTimeNow');
     Reflect.deleteProperty(this, 'refuseReservations');
@@ -188,7 +203,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'liveTerminal');
     Reflect.deleteProperty(this, 'terminalState');
     Reflect.deleteProperty(this, 'alienEffect');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates', 'answerPageModes', 'cutTerminal', 'liveTerminal', 'terminalState', 'alienEffect']);
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'plantCrossings', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates', 'answerPageModes', 'cutTerminal', 'liveTerminal', 'terminalState', 'alienEffect']);
   }
 
   /** `query` over main's own isolate, where its conversation, sends, claims and runs are kept (D9). */
@@ -425,16 +440,53 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   }
 
   async meterBegin(): Promise<void> {
+    const main = await this.agentFacetOf<ProbeAgentFacet>(this.actorHandle().actorId);
+
+    await main.meterBegin(FACET_CALLS);
+    this.meteredMain = main;
     this.meter.begin();
+    crossings.begin();
     this.historyReads = 0;
   }
 
-  async meterEnd(): Promise<{ cost: OperationCost; historyReads: number }> {
+  /** The workspace's statements and those of main's isolate, which keeps its model loop, transcript, claims and runs (D9),
+   *  and the calls that crossed into each. */
+  async meterEnd(): Promise<MeteredTurn> {
     const historyReads = this.historyReads ?? 0;
+    const main = this.meteredMain;
 
     this.historyReads = null;
+    this.meteredMain = null;
 
-    return { cost: this.meter.end(null), historyReads };
+    if (main === null) throw new Error('the meter was not started');
+    const workspace = this.meter.end(null);
+    const intoWorkspace = crossings.end();
+    const measuredMain = await main.meterEnd();
+
+    return { workspace, main: measuredMain.cost, historyReads, crossings: { workspace: intoWorkspace, main: measuredMain.crossings } };
+  }
+
+  /**
+   * One extra call at each boundary the count covers: the workspace into main's isolate, the workspace into the account,
+   * main's isolate into the relay, and main's isolate into an RPC target the relay answers with. Each must show in the
+   * count, or a boundary is crossed unseen.
+   */
+  async plantCrossings(): Promise<void> {
+    const actorId = this.actorHandle().actorId;
+
+    await (await this.agentCalls(actorId)).newestFirst(this.agentSnapshot(actorId), 1);
+    const { stub, caller } = await this.userHub();
+
+    await stub.getCredentialsRevision(caller);
+    // Not a facet call the count covers: what it calls back into this worker is.
+    await (await this.agentFacetOf<ProbeAgentFacet>(actorId)).plantCrossings();
+  }
+
+  /** Each relay call opens the workspace's host: a crossing of its own. */
+  override agentWorkspace(actorId: string): AgentWorkspaceHost {
+    crossings.crossed('workspace.agentWorkspace');
+
+    return super.agentWorkspace(actorId);
   }
 
   private countedWire: ChatWire | null = null;
@@ -585,10 +637,6 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
       }));
   }
 
-  async inboxState(): Promise<{ busy: boolean }> {
-    return { busy: this.orch.inbox.busy };
-  }
-
   /** Read raw in table order, so the test's normalizer alone decides what "the same" means. */
   async parityRows(): Promise<ParityRows> {
     const sql = this.actorState.storage.sql;
@@ -641,7 +689,8 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
    *  the wire log, so a wake that never re-delivers hangs until the row's deadline. */
   async runEventWake(marker: string): Promise<void> {
     await this.owedDeliveryWork();
-    await this.orch.drainPendingEvents({ rethrow: true });
+    // Every agent's due reactions, as the timer drains them.
+    await this._kinuTimerTick();
     await fetch(`http://probe-control.invalid/log/until?marker=${encodeURIComponent(marker)}`);
   }
 
@@ -739,8 +788,9 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
 
   private readonly mainTurnEnds = new Set<() => void>();
 
-  protected override mainFacetTurnEnded(): void {
-    super.mainFacetTurnEnded();
+  /** Main's turn opened or closed. */
+  protected override turnClaimChanged(): void {
+    super.turnClaimChanged();
 
     for (const ended of this.mainTurnEnds) ended();
   }
@@ -800,8 +850,8 @@ type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   | 'createSubordinateAgent' | 'readWorkspaceFile'>
   & Pick<ProductionOrchestrator, 'getChangeNotes' | 'saveChangeNotes' | 'sendChangeNotes'>
   & Pick<ObservedOrchestrator, 'refuseReservations' | 'owedSends' | 'latestClaimOutcome' | 'recoveryPass'
-  | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'answerSlates' | 'answerPageModes' | 'cutTerminal' | 'liveTerminal' | 'terminalState' | 'alienEffect' | 'inspectWork' | 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
-  | 'receivePeerThenEvict' | 'timerTickFinished' | 'runCauses' | 'drainRunClosed' | 'meterBegin' | 'meterEnd' | 'settleState'>;
+  | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'answerSlates' | 'answerPageModes' | 'cutTerminal' | 'liveTerminal' | 'terminalState' | 'alienEffect' | 'inspectWork' | 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
+  | 'receivePeerThenEvict' | 'timerTickFinished' | 'runCauses' | 'drainRunClosed' | 'meterBegin' | 'meterEnd' | 'plantCrossings' | 'settleState'>;
 
 /** Sleeps past the interactive detach window, so the call detaches and settles out of turn. */
 const WAKE_RUN_SLEEP_MS = 40_000;
@@ -991,8 +1041,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
   }
 
   /** A 500-delta turn after twenty answers of `priorDeltas` deltas, counted in the production orchestrator's own
-   *  SQLite and transcript reads, from enqueue to its sleep-time settle. */
-  async longTurnCost(priorDeltas: number): Promise<{ cost: OperationCost; historyReads: number }> {
+   *  SQLite, in main's isolate's and in transcript reads, from enqueue to its sleep-time settle. */
+  async longTurnCost(priorDeltas: number): Promise<MeteredTurn> {
     const workspace = `long-cost-${String(priorDeltas)}-${crypto.randomUUID()}`;
     const target: QueueTarget = await this.queueTarget(workspace);
     const caller = await ownerCaller(this.env);
@@ -1031,6 +1081,49 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     if (lost.length > 0) throw new Error(`long cost: the AI binding lost ${String(lost.length)} call(s): ${lost[0]?.cause ?? ''}`);
 
     return await target.meterEnd();
+  }
+
+  /**
+   * A task turn of `steps` tool steps after one of the same shape, its calls counted into the workspace and into main's
+   * isolate from enqueue to its sleep-time settle: the window the statement count is taken over.
+   */
+  async turnCrossings(steps: number): Promise<TurnCrossings> {
+    const workspace = `crossings-${String(steps)}-${crypto.randomUUID()}`;
+    const target: QueueTarget = await this.queueTarget(workspace);
+    const caller = await ownerCaller(this.env);
+    const userDO = this.env.UserDO.get(this.env.UserDO.idFromName('crossings-owner'));
+    await userDO.registerWorkspace(caller, workspace, 'Crossings');
+    const claim = await target.claimOwner('crossings-owner');
+    await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
+    await userDO.setCredential(caller, 'openai-compat.default', {
+      kind: 'openai-compat', baseURL: 'http://fake-models.invalid/v1', apiKey: 'probe-fixture-key',
+    });
+    await target.setModel('openai-compat/probe-steps');
+    await this.httpReset();
+    const recording = createWorkspaceRecording();
+    setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
+
+    // The first turn opens main's isolate and fills the account's caches: a cost of the workspace's first turn, not of a turn.
+    const first = await target.runTaskFromMcp(`steps:${String(steps)}`);
+
+    if (first.status !== 'queued') throw new Error(`crossings: first turn ${JSON.stringify(first)}`);
+    await awaitSleepTimeSettled(recording, workspace, 1);
+    await awaitSettled(target);
+    await target.meterBegin();
+    const measured = await target.runTaskFromMcp(`steps:${String(steps)}`);
+
+    if (measured.status !== 'queued') throw new Error(`crossings: measured turn ${JSON.stringify(measured)}`);
+    await awaitSleepTimeSettled(recording, workspace, 2);
+    await awaitSettled(target);
+    const turn = await target.meterEnd();
+    // The workload, read where the model heard it: each tool step's call and the answer's, for both turns.
+    const modelCalls = (await this.httpCalls()).filter((call) => call.users.some((message) => message === `steps:${String(steps)}`)).length;
+
+    await target.meterBegin();
+    await target.plantCrossings();
+    const planted = await target.meterEnd();
+
+    return { turn, modelCalls, planted: planted.crossings };
   }
 
   /** Only this worker's outbound handler routes to the control host, so no new Worker or binding. */

@@ -7,7 +7,7 @@ import type {
 import type { EvictionProbeDO, WitnessDO } from './eviction-probe';
 import type { HireObservation } from './hire-shapes';
 import type { SpendProbeDO } from './spend-probe';
-import type { OperationCost } from './sql-meter';
+import type { MeteredTurn, OperationCost, TurnCrossings } from './sql-meter';
 import type { TerminalEffectProbeDO } from './terminal-effect-probe';
 import type { DeviceOutputHubProbeDO, DeviceOutputWorkspaceProbeDO } from './device-output-probe';
 import type { DbCapabilityProbeDO } from './db-capability-probe';
@@ -120,7 +120,8 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   firstChatAfterGenesis(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; inbox: { busy: boolean }; landed: string | null; transcript: Array<{ id: string; role: string }>; failures: Array<{ event: string; code: string; cause: string }> }>;
   parityPrepare(): Promise<ParityPrepared>;
   parityComplete(prepared: ParityPrepared): Promise<ParityCompleted>;
-  longTurnCost(priorDeltas: number): Promise<{ cost: OperationCost; historyReads: number }>;
+  longTurnCost(priorDeltas: number): Promise<MeteredTurn>;
+  turnCrossings(steps: number): Promise<TurnCrossings>;
   backgroundWakeConversation(): Promise<WakeDriveResult>;
   rawChat(): Promise<RawChatProbeResult>;
 }

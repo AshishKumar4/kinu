@@ -108,12 +108,35 @@
     "provider_cuts INTEGER NOT NULL",
     "PRIMARY KEY(actor_id,turn_id)"
   ],
+  "actor_turn_facts@packages/core/src/orchestrator/turn-facts.ts": [
+    "actor_id TEXT NOT NULL",
+    "run_id TEXT NOT NULL",
+    "facts_json TEXT NOT NULL",
+    "PRIMARY KEY(actor_id,run_id)"
+  ],
+  "actor_turn_fence@packages/core/src/subordinates/turn-fence.ts": [
+    "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)",
+    "seq INTEGER NOT NULL",
+    "turn_id TEXT NOT NULL",
+    "run_id TEXT NOT NULL",
+    "ended_at INTEGER",
+    "facts_json TEXT",
+    "cancelled_at INTEGER"
+  ],
   "agent_data_tables@packages/core/src/tools/db-codemode.ts": [
     "name TEXT PRIMARY KEY",
     "scope TEXT NOT NULL CHECK(scope IN ('actor','workspace'))",
     "columns TEXT NOT NULL",
     "created_by TEXT NOT NULL",
     "created_at INTEGER NOT NULL"
+  ],
+  "agent_deliveries@packages/core/src/subordinates/deliveries.ts": [
+    "seq INTEGER PRIMARY KEY AUTOINCREMENT",
+    "actor_id TEXT NOT NULL",
+    "id TEXT NOT NULL",
+    "input_json TEXT NOT NULL",
+    "authorship TEXT NOT NULL CHECK (authorship IN ('owner','hirer'))",
+    "UNIQUE (actor_id, id)"
   ],
   "agent_fact_history@packages/core/src/memory/facts.ts": [
     "actor_id TEXT NOT NULL",
@@ -137,6 +160,11 @@
     "veracity TEXT NOT NULL DEFAULT 'stated'",
     "origin_json TEXT",
     "PRIMARY KEY (actor_id, key)"
+  ],
+  "agent_figure_folds@packages/core/src/read-models/agent-figures.ts": [
+    "actor_id TEXT PRIMARY KEY",
+    "through INTEGER NOT NULL",
+    "totals TEXT NOT NULL"
   ],
   "agent_figures@packages/core/src/read-models/agent-figures.ts": [
     "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)",
@@ -169,6 +197,14 @@
   ],
   "agent_owed_work@packages/core/src/subordinates/open-turns.ts": [
     "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)"
+  ],
+  "agent_reports@packages/core/src/subordinates/report-sequence.ts": [
+    "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)",
+    "seq INTEGER NOT NULL"
+  ],
+  "agent_sequence@packages/core/src/subordinates/report-sequence.ts": [
+    "actor_id TEXT PRIMARY KEY",
+    "seq INTEGER NOT NULL"
   ],
   "agent_tasks@packages/core/src/tools/task-store.ts": [
     "actor_id TEXT NOT NULL",
@@ -309,6 +345,16 @@
     "model_id TEXT",
     "retention TEXT",
     "body TEXT"
+  ],
+  "change_notes_outbox@packages/core/src/read-models/change-notes.ts": [
+    "seq INTEGER PRIMARY KEY AUTOINCREMENT",
+    "actor_id TEXT NOT NULL",
+    "id TEXT NOT NULL",
+    "source TEXT NOT NULL",
+    "notes_json TEXT NOT NULL",
+    "text TEXT NOT NULL",
+    "metadata_json TEXT NOT NULL",
+    "UNIQUE (actor_id, id)"
   ],
   "change_notes@packages/core/src/read-models/change-notes.ts": [
     "actor_id TEXT NOT NULL",
@@ -685,6 +731,11 @@
     "breach_json TEXT NOT NULL",
     "PRIMARY KEY (actor_id, objective_id, floor_digest)"
   ],
+  "facet_runs@packages/cf-backend/src/agent-facet/agent-facet.ts": [
+    "id TEXT PRIMARY KEY",
+    "task_json TEXT NOT NULL",
+    "ended INTEGER NOT NULL DEFAULT 0"
+  ],
   "fibers@packages/core/src/identity/schema.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",
@@ -939,6 +990,13 @@
     "opened_at TEXT NOT NULL",
     "PRIMARY KEY (actor_id, run_id)"
   ],
+  "opened_turns@packages/core/src/evolution/session-window.ts": [
+    "actor_id TEXT NOT NULL",
+    "turn_id TEXT NOT NULL",
+    "review_id TEXT",
+    "followup TEXT",
+    "PRIMARY KEY (actor_id, turn_id)"
+  ],
   "operator_requests@packages/core/src/events/recorder.ts": [
     "actor_id TEXT PRIMARY KEY",
     "text TEXT NOT NULL"
@@ -1009,6 +1067,15 @@
     "proposed_at INTEGER NOT NULL",
     "status TEXT NOT NULL DEFAULT 'pending'",
     "PRIMARY KEY (actor_id, id)"
+  ],
+  "queued_turns@packages/core/src/orchestrator/inbox.ts": [
+    "seq INTEGER PRIMARY KEY AUTOINCREMENT",
+    "actor_id TEXT NOT NULL",
+    "id TEXT NOT NULL",
+    "text TEXT NOT NULL",
+    "metadata_json TEXT",
+    "yields INTEGER NOT NULL DEFAULT 0",
+    "UNIQUE (actor_id, id)"
   ],
   "refinement_lane_holds@packages/core/src/evolution/refinement.ts": [
     "actor_id TEXT PRIMARY KEY",
@@ -1280,6 +1347,7 @@
     "normalized_call_id TEXT NOT NULL",
     "call_digest TEXT NOT NULL",
     "result_json TEXT",
+    "status TEXT NOT NULL DEFAULT 'started' CHECK (status IN ('started', 'settled', 'indeterminate'))",
     "PRIMARY KEY (actor_id, turn_id, normalized_call_id, call_digest)"
   ],
   "tool_lessons@packages/core/src/evolution/struggles.ts": [
@@ -1321,6 +1389,12 @@
     "last_fire_at INTEGER",
     "fire_count INTEGER NOT NULL DEFAULT 0",
     "PRIMARY KEY (actor_id, id)"
+  ],
+  "turn_branches@packages/core/src/orchestrator/turn-facts.ts": [
+    "actor_id TEXT NOT NULL",
+    "turn_id TEXT NOT NULL",
+    "head_id TEXT NOT NULL",
+    "PRIMARY KEY(actor_id,turn_id,head_id)"
   ],
   "turn_craft_usage@packages/cf-backend/src/orchestrator.ts": [
     "actor_id TEXT NOT NULL",

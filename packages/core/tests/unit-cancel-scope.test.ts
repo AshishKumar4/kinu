@@ -8,13 +8,12 @@ import * as v from 'valibot';
 import { BackgroundJobRunner } from '../src/jobs/runner';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/index';
 import { EventLog, initEventsHubTables } from '../src/events/hub/index';
-import { Inbox } from '../src/orchestrator/inbox';
 import { cancelBackgroundJob, cancelCurrentWork } from '../src/read-models/background-jobs';
 import type { BackendHost } from '../src/types/backend-host';
 import type { Schedule } from '../src/types/primitives';
 import type { JsonValue } from '../src/utils/json';
 import { makeSql, makeExecRaw, makeSqlExec } from './helpers';
-import { createTestActorsOver } from '@kinu.run/test-utils';
+import { createTestActorsOver, hostDeliveries } from '@kinu.run/test-utils';
 
 /** A fiber running its body inline and exposing in-flight promises, so a test decides when settlement completes. */
 function inlineFiber() {
@@ -52,7 +51,7 @@ function scene() {
   const runner = new BackgroundJobRunner({
     store,
     fiber,
-    inbox: new Inbox(idleHost()),
+    inbox: hostDeliveries(idleHost()).signals,
     eventLog: new EventLog(hubSql, actor),
     scheduleDrain: () => {},
     logActivity: () => {},

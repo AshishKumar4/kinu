@@ -15,6 +15,7 @@ import type { WorkMode } from '../types/turn';
 import { JsonObjectSchema, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
 import { branchableToolCall, programSignal } from './outcome';
 import { readCallJob } from './call-job';
+import { readTransactionalReceipt, TRANSACTIONAL_CALL, type TransactionalCall } from './transactional-receipt';
 import { imageModelOutput } from './image-results';
 import type { TracedToolOptions } from '../obs/index';
 import {
@@ -58,7 +59,8 @@ interface NativeCall {
 
 const NamedOp = v.looseObject({ op: v.string() });
 
-/** A native tool over `resolve`, which finds the operation a call names. */
+/** A native tool over `resolve`, which finds the operation a call names. Its calls whose operation is one synchronous
+ *  local commit say so (`TRANSACTIONAL_CALL`), and run inside the receipt's transaction the call carries. */
 function nativeCall(resolve: (input: JsonObject) => NativeCall | KinuError, said: { readonly description: string; readonly parameters: JsonSchema }, members: readonly Served[]): Tool {
   const callOf = (sent: { readonly value: unknown }): NativeCall | KinuError => {
     const json = jsonOf('a tool call', sent);
@@ -85,6 +87,18 @@ function nativeCall(resolve: (input: JsonObject) => NativeCall | KinuError, said
       if (call instanceof KinuError) return await settle(Effect.fail(call));
       const job = readCallJob(options);
 
+      const receipt = readTransactionalReceipt(options);
+      const runSync = call.served.runSync?.bind(call.served);
+
+      // One synchronous local commit: run inside its receipt's transaction, the receipt and the result with it.
+      if (receipt !== undefined && runSync !== undefined) {
+        return receipt.commit(() => {
+          const ran = runSync(call.fields);
+
+          return ran.text ?? ran.value;
+        });
+      }
+
       const { value, text } = await call.served.run(call.fields, {
         callId: options.toolCallId, ...(options.abortSignal !== undefined && { signal: options.abortSignal }), ...(job !== undefined && { job }),
         ...(options.trace !== undefined && { trace: options.trace }), native: options,
@@ -95,7 +109,14 @@ function nativeCall(resolve: (input: JsonObject) => NativeCall | KinuError, said
     toModelOutput: imageModelOutput,
   });
 
-  return members.some(({ op }) => allowedInPlan(op)) ? permitInPlan(built) : built;
+  // Which calls are one synchronous local commit, read by the receipt before it starts one (`withEffectReceipt`).
+  const transactional: TransactionalCall = (input) => {
+    const call = callOf({ value: input });
+
+    return !(call instanceof KinuError) && call.served.runSync !== undefined;
+  };
+
+  return Object.assign(members.some(({ op }) => allowedInPlan(op)) ? permitInPlan(built) : built, { [TRANSACTIONAL_CALL]: transactional });
 }
 
 /** An operation's input as the AI SDK takes a tool's: its JSON Schema, held to the operation's own check. */

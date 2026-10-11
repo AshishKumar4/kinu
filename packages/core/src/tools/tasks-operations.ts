@@ -5,7 +5,7 @@ import type { AgentConfigStore } from '../config/store';
 import type { RoleId } from '../types/profile';
 import { KinuError } from '../obs/index';
 import type { CodemodeProvider } from '../types/codemode';
-import { serve, type Served } from '../operations/operation';
+import { serve, serveTransactional, type Served } from '../operations/operation';
 import { codemodeNamespace } from './operation-surfaces';
 import { TASK_STATUSES, TASKS } from '../operations/tasks';
 
@@ -27,16 +27,17 @@ export function serveTasks(taskList: TaskListStore, config: AgentConfigStore, ro
   };
 
   return [
-    serve(TASKS.add, async ({ titles, parent }) => {
+    // Each write is one synchronous commit in the agent's store: its receipt commits with it.
+    serveTransactional(TASKS.add, ({ titles, parent }) => Effect.sync(() => {
       const { added, rejected } = taskList.add(titles, parent ?? null, Date.now());
 
       return { added: added.map((task) => ({ id: task.id, title: task.title, parent: task.parentId })), rejected };
-    }),
-    serve(TASKS.update, ({ id, status }) => updated(id, { status }).pipe(Effect.map((task) => ({
+    })),
+    serveTransactional(TASKS.update, ({ id, status }) => updated(id, { status }).pipe(Effect.map((task) => ({
       // A parent closed over open children says how many.
       id: task.id, title: task.title, status: task.status, openSubtasks: status === 'done' ? taskList.countOpenSubtasks(task.id) : 0,
     })))),
-    serve(TASKS.note, ({ id, note }) => updated(id, { note }).pipe(Effect.map((task) => ({ id: task.id, title: task.title, status: task.status })))),
+    serveTransactional(TASKS.note, ({ id, note }) => updated(id, { note }).pipe(Effect.map((task) => ({ id: task.id, title: task.title, status: task.status })))),
     serve(TASKS.list, async () => {
       const listed = (task: { id: string; title: string; status: (typeof TASK_STATUSES)[number]; note: string | null }) => ({
         id: task.id, title: task.title, status: task.status, ...(task.note !== null && { note: task.note }),

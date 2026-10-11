@@ -4,7 +4,7 @@ import { exists, readText, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.j
 // only their own rows, through the production binder and directory.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { sqlOver, createMemoryVfs, createTestRuntime } from '@kinu.run/test-utils';
+import { sqlOver, createMemoryVfs, createTestRuntime, withHostDeliveries } from '@kinu.run/test-utils';
 import { makeSqlExec } from './helpers';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { actorScaffoldPath, WorkspaceActorDirectory, type WorkspaceActor } from '../src/identity/workspace-actors';
@@ -89,7 +89,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, in
     return orchestrationFor0(bound);
   };
 
-  const orchestrationFor0 = (bound: BoundActor & { runtime: AgentRuntime }): AgentOrchestratorDeps => ({
+  const orchestrationFor0 = (bound: BoundActor & { runtime: AgentRuntime }): AgentOrchestratorDeps => (withHostDeliveries({
     // Its own broadcast, event log and session window.
     host: {
       broadcast: () => { throw new Error(`${bound.record.name} broadcast outside a turn`); },
@@ -100,7 +100,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, in
     },
     engine: new EvolutionEngine(bound.runtime, historyTurnPairs(bound.stores.history), { enabled: automatic }),
     eventLog: new EventLog(exec, bound.handle),
-  });
+  }));
 
   // Memoized per actor so the session store and runtime address the same bytes.
   const planeFor = (actorId: string): VFS => {

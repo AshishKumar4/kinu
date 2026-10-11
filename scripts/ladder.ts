@@ -2226,6 +2226,27 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'runs the elan/lake toolchain over the Lean tree, a compiler the key does not version and a shell entry the resolver does not read.' },
   },
   {
+    run: 'bun test --timeout=0 tests/browser/live-app-root-turn.test.ts',
+    label: 'Live app in a browser: the root answers under the dev stack',
+    tier: 'ci',
+    // Measured 2026-10-10 on armada by `bun scripts/gate-cost-measure.ts --only=<this row>` at 177fc2cbc: 144.4 s wall,
+    // 331 CPU seconds, 5.0 GiB peak (scripts/gate-cost.json). The dev server's boot alone is 66.4 s of it (05f86f952).
+    // It does not catch Nimbus moving its staged-asset host: a build admitting the wrong one stayed green (b5cacd82d),
+    // which tests/unit-assets-hosts.test.ts in cf-backend catches.
+    seconds: 145,
+    catches: 'a root turn that cannot run under the product\'s own dev stack — `vite dev` in cf-backend, workerd with real '
+      + 'Durable Objects behind the real client in Chrome — which no other CI row boots: every other browser row serves a '
+      + 'frozen gallery bundle, and the deploy\'s live-app rows are the only others that load the root\'s isolate from the '
+      + 'agent bundle. The 2026-10-10 staging deploy of 26244c765 found its bundle refused by the dev server\'s host guard '
+      + '(a 403 for `assets.invalid`) on every live-app row, after CI had passed the commit. One workspace is made, its '
+      + 'own first turn and a sent turn are answered, and the answer stands as streamed after a reload.',
+    blind: 'everything the deploy\'s live-app rows measure beyond one answered turn: the live indicator, a socket dropped '
+      + 'mid-turn, a page opened mid-turn, plans, layout and the own-server rows. One viewport and a local scripted model; '
+      + 'a LOCAL dev server whose workerd and Durable Objects are not production\'s, so the edge, the deployed assets and '
+      + 'the real identity belong to `gate:first-run` after the publish.',
+    inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
+  },
+  {
     run: 'bun test --timeout=0 tests/browser/live-app-turns.test.ts',
     label: 'Live app in a browser: a running turn',
     tier: 'deploy',

@@ -19,6 +19,14 @@ interface WorkspaceRpc extends Rpc.DurableObjectBranded {
   delegatedRunners(): Promise<number>;
   /** `worker-heap/product.ts`'s probe RPC. */
   quiesce(): Promise<void>;
+  /** `worker-heap/product.ts`'s probe RPC. */
+  joinDetached(): Promise<void>;
+  /** `worker-heap/product.ts`'s probe RPC. */
+  plant(isolate: 'workspace' | 'main', bytes: number): Promise<void>;
+  /** `worker-heap/product.ts`'s probe RPC. */
+  failedToolCalls(): Promise<number>;
+  /** `worker-heap/product.ts`'s probe RPC. */
+  mainIdle(): Promise<void>;
 }
 
 interface AccountRpc extends Rpc.DurableObjectBranded {
@@ -40,8 +48,9 @@ interface DriverEnv {
 const OWNER = 'fedcba9876543210fedcba9876543211';
 
 export class HeapDriver extends DurableObject<DriverEnv> {
-  /** `compat`: the workspace runs on the OpenAI-compatible path, the one the hosted providers (OpenRouter, OpenCode Go) take. */
-  async setUp(workspace: string, compat: boolean): Promise<void> {
+  /** `compat`: the workspace runs on the OpenAI-compatible path, the one the hosted providers (OpenRouter, OpenCode Go) take.
+   *  Answers the workspace's object id, which names its agents' Worker Loader isolates. */
+  async setUp(workspace: string, compat: boolean): Promise<string> {
     const caller = { ownerToken: this.env.OWNER_TOKEN };
     const users = this.env.UserDO.get(this.env.UserDO.idFromName(OWNER));
     const agent = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace));
@@ -53,6 +62,10 @@ export class HeapDriver extends DurableObject<DriverEnv> {
 
     if (compat) await users.setCredential(caller, 'openai-compat.default', { kind: 'openai-compat', baseURL: `http://${this.env.COMPAT_HOST}`, apiKey: 'heap' });
     await agent.setModel(compat ? SCRIPTED_MODEL_SPEC : 'workers-ai/@cf/zai-org/glm-5.3');
+    // The model's change reaches main's isolate detached, and loads it: setup ends once it has.
+    await agent.joinDetached();
+
+    return agent.id.toString();
   }
 
   /** One root turn through the product's MCP entry, as a caller outside the page runs one. */
@@ -68,13 +81,25 @@ export class HeapDriver extends DurableObject<DriverEnv> {
     await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).hostHeads(tag, count);
   }
 
+  async plant(workspace: string, isolate: 'workspace' | 'main', bytes: number): Promise<void> {
+    await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).plant(isolate, bytes);
+  }
+
+  async mainIdle(workspace: string): Promise<void> {
+    await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).mainIdle();
+  }
+
+  async failedToolCalls(workspace: string): Promise<number> {
+    return await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).failedToolCalls();
+  }
+
   async quiesce(workspace: string): Promise<void> {
     await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).quiesce();
   }
 }
 
 /** What the model answers and whether it answers yet; module state, which the entrypoint and fetch share. */
-const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepBytes: 0, stepping: false, arrived: 0, released: 0, hires: 0, helpersAnswered: 0, holdHelper: false, helperParked: false, nest: false };
+const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepBytes: 0, stepping: false, arrived: 0, released: 0, hires: 0, helpersAnswered: 0, holdHelper: false, helperParked: false, nest: false, failingSteps: 0, failingAsked: 0 };
 
 /** Each character above U+00FF in `request`, with the text before it: one of them stores the whole request two bytes each. */
 function noteWide(request: string): void {
@@ -222,6 +247,12 @@ async function compatAnswer(body: string): Promise<Response> {
       : { text: 'done' };
 
     if (model.toolSteps > 0) model.toolSteps -= 1;
+    // Failing: each step reads a file no workspace has, so the workspace's tool call rejects back across the port.
+    else if (model.failingSteps > 0) {
+      answer = { toolCall: { name: 'file', arguments: { op: 'read', path: `missing/step-${String(model.failingSteps)}.md` } } };
+      model.failingSteps -= 1;
+      model.failingAsked += 1;
+    }
   }
 
   const out = compatBody(answer, asked);
@@ -232,6 +263,44 @@ async function compatAnswer(body: string): Promise<Response> {
 const AIRequestSchema = v.object({
   inputs: v.looseObject({ stream: v.optional(v.boolean()), messages: v.optional(v.array(v.record(v.string(), v.unknown()))) }),
 });
+
+/** The gate's script for the model, as `/model`'s parameters set it; answered with what the model has seen. */
+function scriptModel(asked: URLSearchParams): Response {
+  model.answerBytes = Number(asked.get('answerBytes') ?? model.answerBytes);
+  model.holding = asked.get('holding') === '1';
+
+  if (asked.has('toolSteps')) {
+    model.toolSteps = Number(asked.get('toolSteps'));
+    model.stepBytes = Number(asked.get('stepBytes') ?? 0);
+    model.stepping = model.toolSteps > 0;
+    model.arrived = 0;
+    model.released = 0;
+  }
+
+  if (asked.has('released')) model.released = Number(asked.get('released'));
+
+  // Released here, not when the held call next polls: the next phase's wait must not read this one's park.
+  if (asked.has('holdHelper')) {
+    model.holdHelper = asked.get('holdHelper') === '1';
+    model.helperParked &&= model.holdHelper;
+  }
+
+  if (asked.has('nest')) model.nest = asked.get('nest') === '1';
+
+  if (asked.has('failingSteps')) {
+    model.failingSteps = Number(asked.get('failingSteps'));
+
+    if (model.failingSteps > 0) model.failingAsked = 0;
+  }
+
+  if (asked.has('hires')) {
+    model.hires = Number(asked.get('hires'));
+    model.helpersAnswered = 0;
+    model.stepping = false;
+  }
+
+  return Response.json({ parked: model.parked, calls: model.calls, wide: [...model.wide], arrived: model.arrived, helpersAnswered: model.helpersAnswered, helperParked: model.helperParked, failingSteps: model.failingSteps });
+}
 
 export default {
   async fetch(request: Request, env: DriverEnv & { readonly HEAP_DRIVER: DurableObjectNamespace<HeapDriver> }): Promise<Response> {
@@ -245,43 +314,20 @@ export default {
     const workspace = url.searchParams.get('workspace') ?? 'heap';
     const driver = env.HEAP_DRIVER.get(env.HEAP_DRIVER.idFromName(workspace));
 
-    if (url.pathname === '/model') {
-      model.answerBytes = Number(url.searchParams.get('answerBytes') ?? model.answerBytes);
-      model.holding = url.searchParams.get('holding') === '1';
-
-      if (url.searchParams.has('toolSteps')) {
-        model.toolSteps = Number(url.searchParams.get('toolSteps'));
-        model.stepBytes = Number(url.searchParams.get('stepBytes') ?? 0);
-        model.stepping = model.toolSteps > 0;
-        model.arrived = 0;
-        model.released = 0;
-      }
-
-      if (url.searchParams.has('released')) model.released = Number(url.searchParams.get('released'));
-
-      // Released here, not when the held call next polls: the next phase's wait must not read this one's park.
-      if (url.searchParams.has('holdHelper')) {
-        model.holdHelper = url.searchParams.get('holdHelper') === '1';
-        model.helperParked &&= model.holdHelper;
-      }
-
-      if (url.searchParams.has('nest')) model.nest = url.searchParams.get('nest') === '1';
-
-      if (url.searchParams.has('hires')) {
-        model.hires = Number(url.searchParams.get('hires'));
-        model.helpersAnswered = 0;
-        model.stepping = false;
-      }
-
-      return Response.json({ parked: model.parked, calls: model.calls, wide: [...model.wide], arrived: model.arrived, helpersAnswered: model.helpersAnswered, helperParked: model.helperParked });
-    }
+    if (url.pathname === '/model') return scriptModel(url.searchParams);
 
     if (url.pathname === '/runners') return Response.json(await driver.runners(workspace));
 
-    if (url.pathname === '/turn') await driver.turn(workspace, url.searchParams.get('text') ?? 'hello');
+    if (url.pathname === '/failed-tool-calls') return Response.json(await driver.failedToolCalls(workspace));
+
+    // Polled as the holds above are: this stateless entry's requests cannot settle one another's promises.
+    if (url.pathname === '/failing-started') while (model.failingAsked === 0) await scheduler.wait(20);
+    else if (url.pathname === '/main-idle') await driver.mainIdle(workspace);
+    else if (url.pathname === '/turn') await driver.turn(workspace, url.searchParams.get('text') ?? 'hello');
     else if (url.pathname === '/heads') await driver.heads(workspace, url.searchParams.get('tag') ?? 'head', Number(url.searchParams.get('count')));
     else if (url.pathname === '/quiesce') await driver.quiesce(workspace);
-    else await driver.setUp(workspace, url.searchParams.get('compat') === '1');
+    else if (url.pathname === '/plant') await driver.plant(workspace, v.parse(v.picklist(['workspace', 'main']), url.searchParams.get('isolate')), Number(url.searchParams.get('bytes')));
+    else return new Response(await driver.setUp(workspace, url.searchParams.get('compat') === '1'));
 
     return new Response(null, { status: 204 });
   },

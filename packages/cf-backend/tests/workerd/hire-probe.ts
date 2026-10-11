@@ -275,7 +275,6 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
   async settled(): Promise<void> {
     await this.agentTurns.idle();
-    await this.delegatedTurns.idle();
 
     for (const actor of this.actorDirectoryStore().list()) {
       if (actor.parentActorId !== null && hostedActorPlacement(actor).homeName !== null) await (await this.agentCalls(actor.actorId)).idle();
@@ -295,7 +294,8 @@ export class HireOrchestrator extends ProductionOrchestrator {
    */
   async driveOwedWork(): Promise<void> {
     await this.terminalRetryPass();
-    await this.orch.drainPendingEvents({ rethrow: true });
+    // Every agent's due reactions, as the timer drains them.
+    await this._kinuTimerTick();
   }
 }
 

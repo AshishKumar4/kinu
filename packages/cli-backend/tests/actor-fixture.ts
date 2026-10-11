@@ -1,4 +1,5 @@
 import type { Database } from 'bun:sqlite';
+import { withHostDeliveries } from '@kinu.run/test-utils';
 import {
   ActorSession, EventLog, EvolutionEngine, historyTurnPairs, WorkspaceActorDirectory,
   BUILTIN_PROFILE_CATALOG, actorReferenceOf, createAgentStores, profileCatalogDigest,
@@ -122,7 +123,7 @@ export function localTestActorHost(
     installedBuild: null,
     runtimeFor: (bound, seat) => buildLocalActorRuntime(parent, bound, seat.kind === 'node' ? 'node' : 'head', seat.writes ?? writes?.get(bound.reference.actorId)),
     loopFor: (bound) => ({ origin: defaultLoopOrigin(bound.record.origin), parent }),
-    orchestrationFor: (bound) => ({
+    orchestrationFor: (bound) => (withHostDeliveries({
       host: {
         broadcast: (event) => { broadcasts.push(event); },
         enqueueTurn: async () => ({ status: 'skipped' }),
@@ -131,7 +132,7 @@ export function localTestActorHost(
       },
       engine: new EvolutionEngine(bound.runtime, historyTurnPairs(bound.stores.history), { enabled: false }),
       eventLog: new EventLog(exec, bound.handle),
-    }),
+    })),
     contextEvents: (bound) => bound.stores.eventRecorder,
   });
 }
@@ -217,7 +218,7 @@ export function headLoopSeams(
   const session: ActorSession = new ActorSession({ history: stores.history, runtime,
   claims: stores.claims,
   installedBuild: null,
-  orchestration: {
+  orchestration: withHostDeliveries({
     host: {
       broadcast: () => {},
       enqueueTurn: async () => ({ status: 'skipped' }),
@@ -226,7 +227,7 @@ export function headLoopSeams(
     },
     engine: new EvolutionEngine(rt, historyTurnPairs(stores.history), { enabled: false }),
     eventLog: new EventLog(execOver(rt), handle),
-  }, });
+  }), });
 
   const inputs: ProfileAuthorityInputs = {
     envelope: {

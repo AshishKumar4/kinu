@@ -201,7 +201,7 @@ and device connections in the UserDO.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/system-dark.svg">
-  <img alt="Browser and cloud TUI clients reach the Worker, which routes one Durable Object per workspace and one UserDO per account. Nimbus holds the workspace's own files; non-main agents run in per-agent facets. KinuDevbox uses platform snapshots and an R2 disk-chain backup. Models and connected devices are separate services." src="docs/diagrams/system.svg" width="900">
+  <img alt="Browser and cloud TUI clients reach the Worker, which routes one Durable Object per workspace and one UserDO per account. Nimbus holds the workspace's own files; every agent, main included, runs in a facet of its own. KinuDevbox uses platform snapshots and an R2 disk-chain backup. Models and connected devices are separate services." src="docs/diagrams/system.svg" width="900">
 </picture>
 
 Locally, I open `kinu` in a folder; the agent works there and keeps its own files

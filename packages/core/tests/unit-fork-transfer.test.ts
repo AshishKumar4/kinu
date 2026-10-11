@@ -23,7 +23,7 @@ import {
 } from './helpers/fork-conversation';
 import {
   appDataOf, deliver, reassemble, receiverFor as streamReceiverFor, sourceFrames, transfer, writerFor,
-  type ForkContent, type ForkTargetOptions,
+  conversationIn, conversationInto, type ForkContent, type ForkTargetOptions,
 } from './helpers/fork-stream';
 import { openWorkspaceMainActor, WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
@@ -265,6 +265,27 @@ describe('fork transfer receiver', () => {
     expect(frames.at(-1)?.kind).toBe('commit');
     expect(writer.staging.read()?.staged).toEqual(begin.counts);
     await drain(receiver, frames.slice(-1));
+    expect(isFork(tgt)).toBe(true);
+  });
+
+  test('a conversation kept apart from the workspace\'s state is read from its own store and lands in the target\'s own', async () => {
+    // Each side keeps its conversation in a store of its own, as an agent's isolate does: the workspace holds none.
+    const chat = await source();
+    const src = fresh();
+    const tgt = fresh();
+    const tgtChat = fresh();
+
+    await seedForkSource(src, { purpose: 'help with testing', craftedTools: [{ name: 'helper', description: 'utility', code: 'async (x) => x' }] });
+    const writer = writerFor(tgt, { ...OWNER, conversation: conversationInto(tgtChat.sql, OWNER, tgt.sql) });
+    const receiver = new ForkTransferReceiver(writer, createWorkspaceForkSink(tgt.bundle));
+
+    const { result } = await transfer(src, receiver, { untilMessageId: 'm3', conversation: conversationIn(chat.sql) });
+
+    expect(result).toMatchObject({ messagesCopied: 3, craftedToolsCopied: 1 });
+    expect(tgtChat.sql<{ id: string }>`SELECT id FROM conversation_entries ORDER BY position`.map((row) => row.id)).toEqual(['m1', 'm2', 'm3']);
+    expect(tgtChat.sql<{ c: number }>`SELECT COUNT(*) AS c FROM conversation_entries WHERE context_id IS NOT NULL`[0]?.c).toBe(1);
+    expect(tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM conversation_entries`[0]?.c).toBe(0);
+    expect(tgt.sql<{ name: string }>`SELECT name FROM crafted_tools`.map((row) => row.name)).toEqual(['helper']);
     expect(isFork(tgt)).toBe(true);
   });
 
@@ -872,7 +893,7 @@ describe('a fork holds one frame, never a whole file', () => {
     let peakRetainedHeapDelta = 0;
 
     const stream = forkTransferFrames({
-      sql: src.sql, actor: chat.actor, vfs: plane, artifactDirectory: SOURCE_ARTIFACTS, appData: appDataOf(src).fork,
+      sql: src.sql, actor: chat.actor, vfs: plane, artifactDirectory: SOURCE_ARTIFACTS, appData: appDataOf(src).fork, conversation: conversationIn(src.sql),
       untilMessageId: 'm1', transferId: 'tx-256m', frameBytes: FRAME,
     });
 

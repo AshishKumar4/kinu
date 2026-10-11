@@ -1,5 +1,5 @@
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
-import { afterEach, expect, test } from 'bun:test';
+import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import { accountCredentialKey, asFetchFunction, requestUrl } from '@kinu.run/core';
 import { OPENCODE_GO_CATALOG } from '@kinu.run/test-utils';
 import {
@@ -70,7 +70,16 @@ test("a turn an agent's isolate loses to its own reset runs again, the workspace
   await driveUntil(workspace, "the agent's model was never asked", () => asked === 1);
   workspace.agent.harnessResetAgentIsolate(workspace.db.query<{ key: string }, [string]>(
     'SELECT storage_key AS key FROM workspace_actors WHERE actor_id = ?').get(middleId)?.key ?? '');
-  await driveUntil(workspace, 'the lost turn never ran again', () => ended() > 0);
+
+  // Nothing tells the workspace its isolate went: the agent's wake, standing a lap ahead while it owed the task, comes due
+  // and takes the turn up.
+  try {
+    setSystemTime(new Date(Date.now() + 61_000));
+    await workspace.agent.alarm();
+    await driveUntil(workspace, 'the lost turn never ran again', () => ended() > 0);
+  } finally {
+    setSystemTime();
+  }
 
   expect(asked).toBe(2);
 });
@@ -127,7 +136,12 @@ test("a hired agent's model call to OpenCode Go names the agent's own conversati
 
   globalThis.fetch = asFetchFunction(async (input, init) => {
     if (requestUrl(input).includes('models.dev')) return Response.json(OPENCODE_GO_CATALOG);
-    sessions.push(new Headers(init?.headers).get('x-opencode-session'));
+
+    // The hire's own turn: its calls carry its brief and offer its tools. A title's offers none; the turn its hirer opens
+    // on hearing the hire failed carries the report.
+    const body = typeof init?.body === 'string' ? init.body : '';
+
+    if (body.includes('"tools"') && body.includes('Write it.') && !body.includes('[subordinate_report]')) sessions.push(new Headers(init?.headers).get('x-opencode-session'));
 
     return new Response('refused by the test', { status: 400 });
   });

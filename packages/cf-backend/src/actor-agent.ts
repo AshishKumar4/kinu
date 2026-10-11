@@ -55,7 +55,7 @@ import { convertToModelMessages } from "ai";
 import type { LanguageModel, ModelMessage, ToolSet } from "ai";
 
 import {
-  EvolutionEngine, recoverSubordinateLifecycles, actorReferenceOf, sameActorReference,
+  EvolutionEngine, recoverSubordinateLifecycles, actorReferenceOf,
   type ActorHandle, type ActorHost, type ActorReference, type ChildActorOperation,
   type ActorDirectoryResult, type HostedActor, type WorkspaceActorDirectory,
   type ScaffoldRunOptions,
@@ -81,7 +81,7 @@ import {
   type PromptFile, PromptFileSchema,
   // Shared turn lifecycle and run_end classifier, so neither backend chooses the string
   // (see turn-failure.ts).
-  TurnAccumulator, AgentOrchestrator, ActorSession, type AgentOrchestratorDeps, type BackendHost,
+  TurnAccumulator, AgentOrchestrator, improvementLanesOpen, DynamicContextLedger, actorPolicy, actorReach, type AgentOrchestratorDeps, type BackendHost,
   type ChatTurnInput, type ComposedRequest,
   type AgentsOp,
   type AgentsToolDeps,
@@ -101,7 +101,7 @@ import {
   MissionGovernor, type MissionSeam, type MissionBudgetRefusal,
   normalizeUsage, priceCall, type Usage,
   generateReported, streamTextReported, type GenerateRequest, type StreamRequest,
-  WORKSPACE_RUN_ID, signalCardId, TurnReplies, type ModelCallReport, type ModelOperationSink, type ModelOperationEvent, type CacheWarmingLane,
+  WORKSPACE_RUN_ID, signalCardId, TurnReplies, type ModelCallReport, type ModelOperationSink, type ModelOperationEvent,
   recordModelOperations, type ProviderWaitInfo,
   // Prices a model_call row only when the rate belongs to that call's own model.
   buildModelCallEvent,
@@ -121,7 +121,6 @@ import {
   type MctsSearchStore, readSearchTree, isSteerBranchRunId,
   EventLog,
   type ActiveSkillSet,
-  inheritedContextFromTranscript,
   type PlanDecisionOutcome,
   type PlanReview, type ReviewAnnotation,
   type PlanReviewDecision, type PlanReviewResult, type ReplyToCommentToolDeps, type SubmitPlanToolDeps, type AskingAgent, type OwnerAnswer,
@@ -153,13 +152,14 @@ import {
   JsonObjectSchema, JsonValueSchema, changeRoleAsOwner,
   agentsProfileContext, loadProfileAuthorityInputs,
   resolveAgentTurnProfile, resolveRoutingProfile, ownProfileChoices, ancestorPins, createAgentConfigStore, type PinnedProfile,
-  captureOperationProfile, currentOperationProfile, runOperationProfile, withOperationProfile, turnAuthor,
+  captureOperationProfile, currentOperationProfile, runOperationProfile, withOperationProfile,
+  inTurnSurface, scopedTurnSurface, TurnSurface,
   type OperationProfile,
   agentRoleSwitch, toolsNamespace, runWorkModeInvocation, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost, type CodemodeSurface,
   resolveModelRoute, completeOnRoute, routedLlm, tierRefusals, type TierRefusals, type ModelRouteResolution,
   narrowToolSurface, effectiveRoleCatalog, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, requireCodemodeMember, inWorkMode,
   toolSurfaceTokens, McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
-  SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, ASK_OWNER_TOOL, OwnerAnswersSchema, REPORT_TOOL, planSubmissionReach,
+  SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, ASK_OWNER_TOOL, OwnerAnswersSchema, REPORT_TOOL, turnReach, type TurnReach,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ProfileCatalogEnvelope,
   toolsInWorkMode, type TaskPlan, withTaskPlan, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
@@ -269,6 +269,9 @@ const ALARM_PROGRAM_WAIT_MS = Math.floor(PLATFORM_CATALOG['do.alarm.wall_ms'].li
 
 const CLI_AUTHORITY_REVOKED = 'This CLI authorization is invalid. Sign in again with: kinu auth';
 
+/** Main's chat surfaces kept: plan and build, each with and without its eval's external tools. */
+const TOOLSETS_KEPT = 4;
+
 
 /** Text-only: attachment parts are dropped here but still reach the model via
  * `host.defaultInference()` (see _transformInferenceResult). */
@@ -306,7 +309,7 @@ function readCliCwd(body?: JsonObject): string | null {
 
 /** CLI one-shot surfaces (`kinu exec`/`kinu run`) stamp `oneShot`: each is an independent
  * task, not a verdict on the previous turn. Everything else is a conversation. */
-function readTurnContinuity(body?: JsonObject): TurnContinuity {
+export function readTurnContinuity(body?: JsonObject): TurnContinuity {
   return body?.oneShot === true ? 'independent_task' : 'conversation';
 }
 
@@ -400,9 +403,9 @@ export interface UntimedArms {
   readonly pendingBirths?: boolean;
   readonly pendingDeletions?: boolean;
   readonly unsettledClaims?: boolean;
-  readonly admittedDelegations?: boolean;
   readonly agentTurns?: boolean;
   readonly chatLoop?: boolean;
+  readonly changeNotes?: boolean;
 }
 
 export interface ActorDynamicContextExtras {
@@ -489,6 +492,34 @@ async function reachedIn<A>(
 
 /** The evolution lane's `fibers` row name. */
 export const EVOLUTION_LANE_FIBER = 'evolution:settle';
+
+/** A turn's accounting ledgers, which its tools write and its settlement reads. */
+type TurnLedgers = Pick<TurnAccumulator, 'context' | 'files' | 'escalations'>;
+
+/** What a build of the workspace's program surface serves: a rollout's claims, a turn's ledgers. */
+export interface ProgramToolsetOptions {
+  readonly claimScope?: string;
+  readonly ledgers?: TurnLedgers;
+}
+
+/** One read held until dropped; a failed read is not held, so the next need asks again. */
+class HeldRead<A> {
+  #held: Promise<A> | null = null;
+
+  get(read: () => Promise<A>): Promise<A> {
+    const held = this.#held ?? read();
+
+    this.#held = held;
+
+    return settle(attempt({ doing: 'reading what the account says', otherwise: 'unavailable' }, () => held).pipe(Effect.tapError(() => Effect.sync(() => {
+      if (this.#held === held) this.#held = null;
+    }))));
+  }
+
+  drop(): void {
+    this.#held = null;
+  }
+}
 
 export abstract class ActorAgent extends Agent<Env> {
   // Actor profile: these members are the whole difference between actor kinds.
@@ -700,19 +731,18 @@ export abstract class ActorAgent extends Agent<Env> {
     return connection === undefined ? null : actorFromConnectionTags(connection.tags);
   }
 
-  /** Whether this turn offers `submit_plan` in `mode` (core's `planSubmissionReach`). */
-  private submitsPlans(mode: WorkMode): boolean {
-    return planSubmissionReach(mode, this.turnDrivingMetadata());
+  /** What this agent's turn may reach in `mode`, decided by core's `turnReach` as every agent's is. It has no hirer, so
+   *  each of its turns runs in its owner's lane; `deps` say whether its sent-back plan awaits its answers. */
+  private reach(mode: WorkMode, deps: ActorToolDeps): TurnReach {
+    return turnReach({ lane: 'owner', mode, driving: this.turnDrivingMetadata(), ownerSurface: true, awaitsReply: deps.replyToComment !== undefined });
   }
 
   /**
    * The reply tool's deps while the owner's sent-back review of main's plan awaits answers; absent otherwise. Main's
-   * plans are its isolate's, so the workspace asks it as main's turn opens (`OrchestratorAgent.hostedTaskProfile`).
+   * plans are its isolate's, so the workspace asks it as main's turn opens (`ActorCapabilities.for`).
    */
-  protected mainPlanReply: ReplyToCommentToolDeps | undefined = undefined;
-
   protected planReplyDeps(): ReplyToCommentToolDeps | undefined {
-    return this.mainPlanReply;
+    return this.mainTurn()?.planReply;
   }
 
   /** Every window reviews its agent's plans, in that agent's own isolate: the workspace's own window, main's (D9). */
@@ -1013,7 +1043,8 @@ export abstract class ActorAgent extends Agent<Env> {
         this.liveReadsMoved(ROSTER_READS);
         this.broadcastSubordinateEvent({ ...report, kind: 'report' });
       },
-      onAdmitted: () => { this.orch.scheduleDrain(); },
+      // Its durable wake drains the report into a turn of its own, whichever isolate holds it.
+      onAdmitted: () => { this.durableWakeOwner()?.(); },
       evolutionAnswerStored: () => this.advice.owe(this.actorHandle().actorId),
       onEvolutionAnswer: () => { this.durableWakeOwner()?.(); },
       // A temporary child's answer belongs to the waiting `agents.ask` call, so the register gets
@@ -1033,14 +1064,14 @@ export abstract class ActorAgent extends Agent<Env> {
     getOwnerUserId: () => this.getOwnerUserId(),
     getUserCaller: () => this.userCaller(),
     // Asked of the same UserDO the registry reads, so a missed fan-out notification self-heals.
-    getCredentialsRevision: async () => {
+    getCredentialsRevision: () => this.heldRevision.get(async () => {
       const { stub, caller } = await this.userHub();
 
       return stub.getCredentialsRevision(caller);
-    },
+    }),
     onProviderWait: (info) => { this.noteProviderWait(info); },
     accountFor: (provider) => this.config.getProviderAccounts()[provider]
-      ?? this.actorSession.profileInputs?.envelope.catalog.accounts?.[provider],
+      ?? this.workspaceAgentHosted()?.session.profileInputs?.envelope.catalog.accounts?.[provider],
     reportModelCall: (report) => { this.reportModelCall(report); },
     currentTurn: (reference) => this.currentTurnOf(reference),
   });
@@ -1060,9 +1091,9 @@ export abstract class ActorAgent extends Agent<Env> {
   /** The workspace timer's pass: every source a subclass folds into its next wake. */
   abstract _kinuTimerTick(): Promise<void>;
 
-  /** This actor's held advisor answers; a subclass hosting other actors routes theirs. */
-  protected deliverAdviceFor(actorId: string): Promise<boolean> {
-    return actorId === this.actorHandle().actorId ? this.actorSession.deliverAdvisorAnswers() : Promise.resolve(true);
+  /** An agent's held advisor answers, into its own isolate; the subclass that hosts agents delivers them. */
+  protected deliverAdviceFor(_actorId: string): Promise<boolean> {
+    return Promise.resolve(true);
   }
 
   constructor(ctx: AgentContext, env: Env) {
@@ -1238,7 +1269,9 @@ export abstract class ActorAgent extends Agent<Env> {
    *  its events drained here, where its evolution tables and event log are; its answer is read from its own isolate. */
   protected sharedTerminalEffects(): TerminalEffectTable {
     return {
-      ...turnRecordingEffects({ orchestrator: this.orch, engine: this.engine }),
+      // Hosted before any close of its runs (`replayOwedTerminals`, `mainTurnSettled`), so a replay after an activation reaches
+      // the workspace agent's session as a live turn does.
+      ...turnRecordingEffects({ orchestrator: () => this.hostedWorkspaceAgentOrchestrator(), engine: this.engine }),
       turn_end_extensions: terminalEffect({
         input: v.object({ messageId: v.string() }),
         // Replayed from the recorded message, not a live tree; the row stops a second announcement.
@@ -1282,7 +1315,7 @@ export abstract class ActorAgent extends Agent<Env> {
         runSync: ({ status, workMode }) => {
           this.warmUserMcpInBackground();
 
-          if (!this.orch.improvementLanesOpen(status, workMode)) {
+          if (!improvementLanesOpen(status, workMode)) {
             return { status: 'completed', detail: 'improvement lanes closed for this turn' };
           }
 
@@ -1297,7 +1330,7 @@ export abstract class ActorAgent extends Agent<Env> {
       advisor_review: terminalEffect({
         input: v.object({ status: RunEndReasonSchema, workMode: WorkModeSchema, advisor: AdvisorRecoverySnapshotSchema }),
         run: async ({ status, workMode, advisor }) => {
-          if (this.orch.improvementLanesOpen(status, workMode)) await this.actorSession.hireAdvisor(advisor);
+          if (improvementLanesOpen(status, workMode)) await (await this.workspaceAgent()).session.hireAdvisor(advisor);
 
           return { status: 'completed' };
         },
@@ -1405,6 +1438,8 @@ export abstract class ActorAgent extends Agent<Env> {
    * Subclasses prepend extra owed lanes here so all ride one durable wake.
    */
   protected async owedDeliveryWork(): Promise<void> {
+    // Its closes record through the workspace agent's session: hosted first, as a live close is.
+    await this.workspaceAgent();
     // Detached effects close in their own fiber: a title in its provider's backoff must not hold the wake's job.
     await this.terminal.replayOwedAndRearm();
   }
@@ -1432,23 +1467,13 @@ export abstract class ActorAgent extends Agent<Env> {
   protected terminalEffectFault: TerminalEffectFault | null = null;
 
   protected currentTurnOf(reference: ActorReference): string | null {
-    return sameActorReference(reference, actorReferenceOf(this.actorHandle()))
-      ? this.actorSession.currentTurnId
-      : this.actorHost().hosted(reference)?.session.currentTurnId ?? null;
+    return this.actorHost().hosted(reference)?.session.currentTurnId ?? null;
   }
 
   /** Read at the start of a terminal sequence and carried through: the loop's live turn becomes
    *  the next one as soon as it opens, so a detached re-read could close the wrong claim. */
   protected durableTurnId(): string | null {
     return this.mainChatTurn();
-  }
-
-  /**
-   * Cloudflare version metadata id, the only real build identity inside a DO; null when unbound.
-   * Never substitute the package version or a digest that would read back as verified.
-   */
-  private installedBuildIdentity(): string | null {
-    return this.env.CF_VERSION_METADATA?.id ?? null;
   }
 
   /** Uses `effectiveModelSpec`: the stored spec can be null or an un-normalized alias. */
@@ -1460,7 +1485,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * `parseModelSpec` throws on unknown shapes and `report.spec` comes from many producers, so a
    * malformed spec costs the row its dimensions rather than the caller its turn.
    */
-  private analyticsModelOf(spec: string): ModelDimensions {
+  protected analyticsModelOf(spec: string): ModelDimensions {
     if (!spec) return UNRESOLVED_MODEL;
 
     try {
@@ -1515,7 +1540,9 @@ export abstract class ActorAgent extends Agent<Env> {
     this._compaction ??= createActorCompaction({
       files: () => this.rt,
       state: this.compactionState,
-      ledger: this.actorSession.dynamic,
+      // The workspace's own compactions (a swarm's shared prefix) freeze nothing of a conversation: every agent's is its
+      // own isolate's, which compacts it there.
+      ledger: new DynamicContextLedger(true),
       logger: this.compactionLogger,
       summarizer: () => this.getModel(),
       spend: { report: (report) => this.reportModelCall(report), operations: this.modelOperations },
@@ -1694,26 +1721,30 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   private _rt: CFRuntime | null = null;
-  /**
-   * The workspace root's ActorSession; children build theirs in `actor-hosting.ts`.
-   * Built synchronously because `onStart` may not await.
-   */
-  private _actorSession: ActorSession | null = null;
-  protected get actorSession(): ActorSession {
-    this._actorSession ??= new ActorSession({
-      runtime: this.rt,
-      claims: this.claims,
-      history: this.stores.history,
-      installedBuild: this.installedBuildIdentity(),
-      workspace: this.workspaceName(),
-      events: this.stores.eventRecorder,
-      recording: this.stores.eventRecorder,
-      orchestration: this.orchestrationDeps(),
-      advisorPort: () => this.temporaryAgentPort(),
-      turns: () => this.tracing.turns({ id: this.actorHandle().actorId, kind: 'main' }),
-    });
 
-    return this._actorSession;
+  /** The workspace agent as every agent is hosted (`actor-hosting.ts`): its session over the workspace's own runtime
+   *  and lanes. */
+  protected async workspaceAgent(): Promise<HostedActor> {
+    return await this.actorHost().acquire(actorReferenceOf(this.actorHandle()), { kind: 'actor' });
+  }
+
+  /** The workspace agent, if hosted already. */
+  protected workspaceAgentHosted(): HostedActor | null {
+    return this.actorHost().hosted(actorReferenceOf(this.actorHandle()));
+  }
+
+  /** The workspace agent's turn accounting, in its hosted session as every agent's is in its own; before it is hosted,
+   *  this object's tools account into ledgers of their own. */
+  protected workspaceLedgers(): TurnLedgers {
+    return this.workspaceAgentHosted()?.session.orchestrator.acc ?? this.unhostedLedgers;
+  }
+
+  private readonly unhostedLedgers: TurnLedgers = new TurnAccumulator();
+
+  /** The workspace agent's orchestrator, which a synchronous effect reads: its caller hosts the agent first; unhosted, the
+   *  effect stays owed, to replay once it is. */
+  protected hostedWorkspaceAgentOrchestrator(): AgentOrchestrator | null {
+    return this.workspaceAgentHosted()?.session.orchestrator ?? null;
   }
 
   /** Each slate `agent.ask` reply, fed by main's own turns as they reach this object's room. */
@@ -1792,8 +1823,12 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Main's programmatic turns are handed to its chat, in its own isolate (D9). */
   protected abstract enqueueMainTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult>;
 
+  /** The workspace agent's deliveries: its signals, and its events bound to a turn, committed then crossed. */
+  protected abstract workspaceAgentDeliveries(): NonNullable<AgentOrchestratorDeps['deliveries']>;
+
   /** The owner's Stop of main's chat: unseen steers stay queued and rerun. */
-  protected abstract stopMainChat(): Promise<void>;
+  /** The owner's Stop of an agent: nothing it was owed or had queued runs after it. */
+  protected abstract stopAgent(actorId: string): Promise<void>;
 
   /** The owner's Clear of main's chat; answers why the emptied request went unmeasured, if it did. */
   protected abstract clearMainConversation(): Promise<string | null>;
@@ -1806,6 +1841,19 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** The chat turn main's isolate runs now, as its room heard it open; null between turns. */
   protected abstract mainChatTurn(): string | null;
+
+  /** What that turn's tools run under; null between turns. */
+  protected abstract mainChatSurface(): TurnSurface | null;
+
+  /** The turn main's tools run under now: the one their call or their build runs in, else the one main's chat holds. */
+  protected mainTurn(): TurnSurface | null {
+    return scopedTurnSurface() ?? this.mainChatSurface();
+  }
+
+  /** Every chat surface built so far reads state that changed. */
+  protected invalidateTools(): void {
+    this.toolsets.clear();
+  }
 
   /** A hosted agent's plan reviews, in its own isolate; null for a name this workspace holds no agent under. */
   protected abstract hostedPlanReviews(actorId: string): HostedPlanReviews | null;
@@ -1833,31 +1881,22 @@ export abstract class ActorAgent extends Agent<Env> {
 
   protected abstract liveReadsMoved(reads: readonly LiveRead[]): void;
 
-  protected get orch(): AgentOrchestrator { return this.actorSession.orchestrator; }
-
-  private orchestrationDeps(): AgentOrchestratorDeps {
+  /** The workspace agent's orchestration: the workspace's own engine, event log and missions, as its hosted session
+   *  binds it (`actor-hosting.ts`). */
+  protected workspaceAgentOrchestration(): AgentOrchestratorDeps {
     {
       return {
         host: this.host,
         engine: this.engine,
         eventLog: this.eventLog,
         budget: this.budget,
+        // The workspace agent runs in its own isolate: what this object hands it is a delivery (design v2 §1).
+        deliveries: this.workspaceAgentDeliveries(),
         // Runs on the single off-turn cadence pass, beside the promotion gate's trials; every actor wires it.
         refinementLane: async () => { await refinementPass(this.refinementDeps); },
         sinks: {
-          logActivity: (e, d) => {
-            // Measured from the turn's own start: user-visible first token, not a transport first byte.
-            if (e === 'first_chunk' && this.acc.startedAt > 0) {
-              recordTtftRow(this.env, {
-                workspace: this.workspaceName(),
-                agentKind: this.actorKind(),
-                ...this.analyticsModel(),
-                ttftMs: Date.now() - this.acc.startedAt,
-              });
-            }
-
-            this.logActivity(e, d);
-          },
+          // An agent's first token is heard where its room hears its text (`recordFirstToken`).
+          logActivity: (e, d) => { this.logActivity(e, d); },
           onToolCallEvent: (ev) => {
             // Record the fleet row first: the durable emit below can throw and must not cost the count.
             // Name, verdict and duration only; `args` and `result` carry user workspace content.
@@ -1882,8 +1921,6 @@ export abstract class ActorAgent extends Agent<Env> {
       };
     }
   }
-
-  protected get acc(): TurnAccumulator { return this.orch.acc; }
 
   /** Cumulative cap a scheduled run or fork opts into; costs nothing with no active label.
    * Public so the `agent.*` namespace uses the same object the enforcement seams hold. */
@@ -1973,8 +2010,10 @@ export abstract class ActorAgent extends Agent<Env> {
     const owner: AsyncTaskOwner = { promise: null };
     this._evolutionSettling = owner;
     owner.promise = hold(Effect.ensuring(Effect.catchCause(Effect.promise(() => this.rt.schedule.fiber(EVOLUTION_LANE_FIBER, async () => {
-      await this.orch.settleTracked();
-      await this.orch.runDueSessionEvolution();
+      const { orchestrator } = (await this.workspaceAgent()).session;
+
+      await orchestrator.settleTracked();
+      await orchestrator.runDueSessionEvolution();
     })), recording({ doing: 'settling the turn and session evolution lanes', otherwise: 'unavailable' }, (failure) => {
       diagnostics.failure('evolution.settle_failed', failure);
     })), Effect.sync(() => {
@@ -2152,8 +2191,9 @@ export abstract class ActorAgent extends Agent<Env> {
   }
   /** Debounces the last-active-executor write to one SQL upsert per executor per turn. */
   protected _executorsUsedThisTurn = new Set<string>();
-  protected _cachedTools: ActorToolsets | null = null;
-  protected _cachedToolsKey = "";
+  /** Main's chat surfaces by what they were built for; a turn whose eval reaches external tools and one whose eval does
+   *  not each find their own. */
+  private readonly toolsets = new Map<string, ActorToolsets>();
   // Cached against the content hash of UserDO's MCP descriptor surface, so closures rebuild
   // exactly when the durable rows differ from what this activation last served.
   private _mcpToolsCache: McpToolSurfaceCache<ToolSet> | null = null;
@@ -2185,7 +2225,8 @@ export abstract class ActorAgent extends Agent<Env> {
           actor: this.actorHandle(),
           sql: this.rt.storage.sql,
           turnId: () => currentOperationProfile(this.actorHandle())?.turnId ?? this.mainChatTurn() ?? WORKSPACE_RUN_ID,
-          durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
+          durable: async (callId, signal) => (await this.workspaceAgent()).session.durableCall(callId, signal),
+          transaction: (body) => this.ctx.storage.transactionSync(body),
         },
         spill: this.rt.storage,
       }));
@@ -2256,12 +2297,6 @@ export abstract class ActorAgent extends Agent<Env> {
       usage,
       usd: this.priceAt(usage),
     });
-  }
-
-  /** Undefined for hosted actors: they have neither the workspace wake chain nor the conversation
-   *  whose prefix a refresh keeps alive. */
-  protected cacheWarmingLane(): CacheWarmingLane | undefined {
-    return undefined;
   }
 
   private _claimsObserved = false;
@@ -2435,9 +2470,9 @@ export abstract class ActorAgent extends Agent<Env> {
       // wakes with nobody connected, so spawn-shaped work detaches on unwatched turns too.
       policy: () => invocationBackgroundPolicy(this.turnSurface(), true),
       fiber: (name, fn) => this.rt.schedule.fiber(name, fn),
-      inbox: this.orch.inbox,
+      inbox: this.workspaceAgentDeliveries().signals,
       eventLog: this.eventLog,
-      scheduleDrain: () => this.orch.scheduleDrain(),
+      scheduleDrain: () => { this.durableWakeOwner()?.(); },
 
       // Notify the owner (email on the orchestrator; skips silently when pieces are absent).
       notifySettled: (job) => {
@@ -2613,11 +2648,8 @@ export abstract class ActorAgent extends Agent<Env> {
     return '';
   }
 
-  /** Resolved once for the active turn; immutable. */
-  private _turnOperation: OperationProfile | null = null;
-
   private operationProfile(): OperationProfile | null {
-    return currentOperationProfile(this.actorHandle()) ?? (this._inFlight ? this._turnOperation : null);
+    return currentOperationProfile(this.actorHandle()) ?? this.mainTurn()?.operation ?? null;
   }
 
   /** The last profile a turn or a status read resolved. */
@@ -2636,10 +2668,8 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   private runningProfile(): ResolvedTurnProfile | null {
-    return this.operationProfile()?.profile ?? this._settledProfile;
+    return this.operationProfile()?.profile ?? this.boundProfiles.get(this.actorHandle().actorId) ?? this._settledProfile;
   }
-  /** Built in beforeTurn; read by the per-step dynamic context. */
-  private _turnExternalTools: ToolSet = {};
   /** Instruction trust (KINU-N028): one store over actor SQL, scoped to this workspace so a forked
    *  or copied root starts unapproved. */
   private _instructionApprovals: InstructionApprovalStore | null = null;
@@ -2731,21 +2761,14 @@ export abstract class ActorAgent extends Agent<Env> {
   /** A turn is running, read live from the loop; routes signals into the turn, keeps tool claims,
    * and reports the actor busy (forkAgent rejects with "agent busy"). */
   protected get _inFlight(): boolean { return this.mainChatTurn() !== null; }
-  /** Whether this turn records evolution state, captured at turn open; `engine.enabled` is a live
-   * read that a mid-turn toggle or a recovering host could answer differently. */
-  protected _turnEvolutionEnabled = false;
-  /** Core's derivation of the gate (`AgentOrchestrator.beginTurn`); the harness needs it for suites
-   * that drive `onChatResponse` with no turn to open. */
-  protected turnRecordsEvolution(): boolean {
-    return this.engine.recordsTurns && this.turnWorkMode() !== 'plan';
+  /** Core's derivation of the gate (`AgentOrchestrator.beginTurn`), for a turn opening on `mode`. */
+  protected turnRecordsEvolution(mode: WorkMode): boolean {
+    return this.engine.recordsTurns && mode !== 'plan';
   }
 
   protected readonly extensions = new ExtensionHost();
 
   protected _cliCwd: string | null = null;
-  /** Whether the current turn is a conversational reply or a one-shot task (`kinu exec`); read at
-   * turn end to decide if it may be parked awaiting a follow-up verdict. */
-  protected _turnContinuity: TurnContinuity = 'conversation';
 
   getCliCwdForDevice(): string | null {
     return this._cliCwd;
@@ -2832,7 +2855,8 @@ export abstract class ActorAgent extends Agent<Env> {
         ctx: this.ctx,
         holdLane: (body) => this.holdLane(body),
         workspaceBox: (shellId) => this.workspaceBox(shellId),
-        acc: () => this.acc,
+        // The workspace agent's turn accounting, in its hosted session, as every agent's is in its own.
+        acc: () => this.workspaceAgentHosted()?.session.orchestrator.acc,
         getCliCwdForDevice: () => this.getCliCwdForDevice(),
         getCheckpointMetaForDevice: () => this.getCheckpointMetaForDevice(),
       }, {
@@ -3055,7 +3079,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** The one adapter between a slate's `agent.send` and the turn inbox. */
   private slateInbox(): AgentInbox {
-    return this.orch.inbox;
+    return this.workspaceAgentDeliveries().signals;
   }
 
   /**
@@ -3198,9 +3222,13 @@ export abstract class ActorAgent extends Agent<Env> {
    * role leaves `requested`. `use` runs in that mode, while a hosted actor is held.
    */
   protected async withReachedOperations<A>(
-    actor: ActorReference | null, requested: WorkMode, use: (providers: readonly CodemodeProvider[]) => Promise<A>,
+    actor: ActorReference, requested: WorkMode, use: (providers: readonly CodemodeProvider[]) => Promise<A>,
   ): Promise<A> {
-    if (actor !== null) {
+    const record = this.actorHost().describe(actor.actorId);
+    const scope = record === null ? null : actorReach(actorPolicy(record));
+
+    // A hire reaches its own confined surface; an agent whose programs reach the workspace's program surface, that one.
+    if (scope === null || scope.surface === 'confined') {
       return await this.withHostedActor(actor, async (hosted) => {
         // An operation call is the agent's own, so it reaches the account as the agent's programs do; a slate's never does.
         const surface = hostedActorSurface(hosted, {
@@ -3216,10 +3244,12 @@ export abstract class ActorAgent extends Agent<Env> {
 
     const providers = actorNamespaces(this.surfaceActor(requested), SURFACE_POLICY.operations);
 
-    const mcp = await this.buildUserMcpTools(this.getRawToolsForWorkMode(requested), Promise.resolve(this.modelCatalog));
+    // Its external tools, where it reaches the workspace's.
+    const mcp = scope.external ? await this.buildUserMcpTools(this.getRawToolsForWorkMode(requested), Promise.resolve(this.modelCatalog)) : {};
     const authority = await this.slateAuthority(requested, providers, Object.keys(mcp));
+    const external = scope.external ? { ...this.extensions.tools(), ...mcp } : {};
 
-    return await reachedIn(authority, providers, { ...this.extensions.tools(), ...mcp, ...this.getRawToolsForWorkMode(authority.mode) }, use);
+    return await reachedIn(authority, providers, { ...external, ...this.getRawToolsForWorkMode(authority.mode) }, use);
   }
 
   /** Cold ordinary actors retain their existing opener; active run seats are used, never re-composed. */
@@ -3263,7 +3293,8 @@ export abstract class ActorAgent extends Agent<Env> {
         account: this.accountMemory({ by: 'agent', agent: this.actorHandle().name }),
       }),
       files: () => ({
-        vfs: this.rt.toolFiles, home: this.rt.storage.home, planes: this.rt.planes, memory: this.rt.memory, ledger: this.acc.files, budget: this.acc.context,
+        vfs: this.rt.toolFiles, home: this.rt.storage.home, planes: this.rt.planes, memory: this.rt.memory,
+        ledger: this.workspaceLedgers().files, budget: this.workspaceLedgers().context,
         slateBuild: (slate) => this.slateBuild(slate),
       }),
       // `this.taskList` is the store the turn's snapshot reads; the role switch is the native `tasks` tool's.
@@ -3393,10 +3424,27 @@ export abstract class ActorAgent extends Agent<Env> {
     });
   }
 
-  protected async profileCatalog(): Promise<ProfileCatalogEnvelope> {
-    const { stub, caller } = await this.userHub();
+  protected profileCatalog(): Promise<ProfileCatalogEnvelope> {
+    return this.heldCatalog.get(async () => {
+      const { stub, caller } = await this.userHub();
 
-    return stub.getWorkspaceProfileCatalog(caller);
+      return stub.getWorkspaceProfileCatalog(caller);
+    });
+  }
+
+  /**
+   * The account's reads a turn makes, held under their refresh rule (design v2 §3): read once a turn, at its first need,
+   * and dropped as a turn opens (`accountReadsExpire`) and as the account says its settings changed. A workspace at rest
+   * holds none past its next turn's open, so an edit the account did not fan out to it is read then.
+   */
+  private readonly heldRevision = new HeldRead<number>();
+
+  private readonly heldCatalog = new HeldRead<ProfileCatalogEnvelope>();
+
+  /** A turn opens: what the account said before it is read again at its first need. */
+  protected accountReadsExpire(): void {
+    this.heldRevision.drop();
+    this.heldCatalog.drop();
   }
 
   protected resolvedTurnProfile(): ResolvedTurnProfile | null {
@@ -3495,7 +3543,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
       if (record === null) return yield* new KinuError('missing', 'The actor is not registered in this workspace.');
 
-      for (let step: typeof record | null = record; step?.actorId !== this.actorHandle().actorId; step = directory.retained(step.parentActorId ?? '')) {
+      // Every agent up its hierarchy is a hire, to the tree's root, which hosts every chat below it.
+      for (let step: typeof record | null = record; step?.parentActorId !== null; step = directory.retained(step.parentActorId)) {
         if (step === null || !isSubordinateOrigin(step.origin)) return yield* new KinuError('denied', 'The actor id does not name a chat this workspace hosts.');
       }
     });
@@ -3586,7 +3635,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const turnId = this.durableTurnId();
 
     return await cancelCurrentWork({
-      cancelChats: () => this.stopMainChat(),
+      cancelChats: () => this.stopAgent(this.actorHandle().actorId),
       activeToolControllers: this.jobRunner.foreground,
       broadcast: (payload) => { this.broadcastToActor(null, payload); },
       stopDeviceCommands: turnId === null ? undefined : () => settle(Effect.catchCause(Effect.promise(async () => {
@@ -3749,7 +3798,7 @@ export abstract class ActorAgent extends Agent<Env> {
     this._turnT0 = performance.now();
     this.actorHandle();
 
-    const tools = this.actorToolsets(this.turnWorkMode()).turn;
+    const tools = this.programToolsets(this.turnWorkMode()).turn;
     const operation = this.operationProfile();
 
     return operation ? withOperationProfile(tools, operation) : tools;
@@ -3763,23 +3812,32 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   protected getRawToolsForWorkMode(mode: WorkMode, claimScope?: string): ToolSet {
-    return this.actorToolsets(mode, claimScope).raw;
+    return this.programToolsets(mode, { ...(claimScope !== undefined && { claimScope }) }).raw;
   }
 
   /** One build per mode: the turn surface, and the raw one. */
-  protected actorToolsets(mode: WorkMode, claimScope?: string): ActorToolsets {
+  /**
+   * The workspace's program surface, one build per mode: the turn surface, and the raw one. `ledgers` are the accounting
+   * the turn it serves keeps (the hosted agent's, in its session); built outside a turn, the workspace agent's own once it
+   * is hosted. `claimScope` keys a rollout's effects on the rollout.
+   */
+  protected programToolsets(mode: WorkMode, opts: ProgramToolsetOptions = {}): ActorToolsets {
+    const { claimScope } = opts;
+    const ledgers = opts.ledgers ?? this.workspaceLedgers();
     const actorDeps = this.actorToolDeps();
+    const reach = this.reach(mode, actorDeps);
     const profileKey = actorActiveTools(actorDeps).join(',');
     // Key includes crafted_tools quality (score filtering depends on recency) and the actor profile,
     // so an owner chat never reuses an assigned turn's upward-reporting surface.
-    const cacheKey = `${mode}:${profileKey}:${this.operationProfile()?.profile.digest ?? ''}:${this._craftCacheKey()}:${String(this._accountSwarms)}:${String(this.submitsPlans(mode))}:${String(actorDeps.replyToComment !== undefined)}`;
+    // Eval declares the turn's external tools in the description it is built with.
+    const external = Object.keys(this.mainTurn()?.declared ?? {}).join(',');
+    const cacheKey = `${mode}:${profileKey}:${this.operationProfile()?.profile.digest ?? ''}:${this._craftCacheKey()}:${String(this._accountSwarms)}:${String(reach.submitPlan)}:${String(reach.replyToComment)}:${external}:${ledgers === this.unhostedLedgers ? 'unhosted' : 'hosted'}`;
+    const cached = this.toolsets.get(cacheKey);
 
     // Only the chat surface is cached; a scoped rollout's surface is built once per rollout.
-    if (claimScope === undefined && this._cachedTools && cacheKey === this._cachedToolsKey) {
-      return this._cachedTools;
-    }
+    if (claimScope === undefined && cached !== undefined) return cached;
 
-    this.logActivity("gettools_rebuilding", `${this._cachedToolsKey} -> ${cacheKey}`);
+    this.logActivity("gettools_rebuilding", cacheKey);
 
     try {
       // No registry sync: the eval sandbox reads craftStore.list() fresh at every execute.
@@ -3798,17 +3856,18 @@ export abstract class ActorAgent extends Agent<Env> {
           turnId: claimScope === undefined
             ? () => currentOperationProfile(this.actorHandle())?.turnId ?? this.mainChatTurn() ?? WORKSPACE_RUN_ID
             : () => claimScope,
-          durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
+          durable: async (callId, signal) => (await this.workspaceAgent()).session.durableCall(callId, signal),
+          transaction: (body) => this.ctx.storage.transactionSync(body),
         },
         // The sandbox declares the finished native surface, so core builds it last over all other tools.
         codemode: (surface) => this.evalTool(surface, mode),
-        external: () => this._turnExternalTools,
+        external: () => this.mainTurn()?.declared ?? {},
         // Lives on the accumulator so the cached toolset keeps a stable reference and resets per turn.
-        contextBudget: this.acc.context,
+        contextBudget: ledgers.context,
         // Same ownership: rides the accumulator so the cached toolset sees the turn's ledger.
-        fileLedger: this.acc.files,
+        fileLedger: ledgers.files,
         // Turn-scoped like fileLedger; the settle spine writes the durable row.
-        escalations: this.acc.escalations,
+        escalations: ledgers.escalations,
         // Owner resolution stays lazy per action, so the cached toolset stays valid across claimOwner.
         agents: this.getAgentsToolDeps(mode),
         roleSwitch: agentRoleSwitch(() => this.operationProfile()?.inputs?.envelope ?? null),
@@ -3821,18 +3880,19 @@ export abstract class ActorAgent extends Agent<Env> {
         slateBuild: (slate) => this.slateBuild(slate),
       };
 
-      if (actorDeps.report) builtinDeps.report = actorDeps.report;
+      if (reach.report && actorDeps.report) builtinDeps.report = actorDeps.report;
 
-      if (actorDeps.submitPlan && this.submitsPlans(mode)) builtinDeps.submitPlan = actorDeps.submitPlan;
+      if (reach.submitPlan && actorDeps.submitPlan) builtinDeps.submitPlan = actorDeps.submitPlan;
 
-      if (actorDeps.replyToComment) builtinDeps.replyToComment = actorDeps.replyToComment;
+      if (reach.replyToComment && actorDeps.replyToComment) builtinDeps.replyToComment = actorDeps.replyToComment;
 
-      if (actorDeps.askOwner) builtinDeps.askOwner = true;
+      if (reach.askOwner && actorDeps.askOwner) builtinDeps.askOwner = true;
       const toolsets = buildActorTools(builtinDeps);
 
       if (claimScope === undefined) {
-        this._cachedTools = toolsets;
-        this._cachedToolsKey = cacheKey;
+        // A few surfaces, the oldest dropped: each turn's build reads its own external tools.
+        if (this.toolsets.size >= TOOLSETS_KEPT) this.toolsets.delete(this.toolsets.keys().next().value ?? '');
+        this.toolsets.set(cacheKey, toolsets);
       }
 
       this.logActivity("gettools_end", `rebuilt: ${Object.keys(toolsets.turn).length} tools`);
@@ -3907,15 +3967,14 @@ export abstract class ActorAgent extends Agent<Env> {
    * per child, so a shared seat would give a whole wave one claim ledger and one loop pointer.
    */
 
-  /**
-   * An actor's recent conversation (last N messages), handed to each spawned head as context.
-   * A hosted actor hiring its own child must pass its own transcript, not the workspace root's.
-   */
+  /** An actor's transcript as this object's stores bind it. */
   protected abstract transcriptFor(actor: ActorHandle): SessionTranscript;
 
-  protected readInheritedContext(actor: ActorHandle = this.actorHandle()): Promise<SerializedMessage[]> {
-    return inheritedContextFromTranscript(this.transcriptFor(actor));
-  }
+  /**
+   * An actor's recent conversation (last N messages), handed to each spawned head as context.
+   * A hosted actor hiring its own child must pass its own conversation, not the workspace root's.
+   */
+  protected abstract readInheritedContext(actor?: ActorHandle): Promise<SerializedMessage[]>;
 
   /**
    * Rebuilds AI-SDK tools from MCP descriptors; cache invalidates on descriptor content hash, and a
@@ -4037,138 +4096,80 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.hostedModels.get(actor.actorId);
   }
 
-  /** Source for `turnWorkMode`, `turnProvenance`, and `turnUserMetadata`. */
-  private _turnItem: ChatTurnInput | null = null;
-
   /**
-   * The workspace's half of opening one of main's turns: the turn's tools and reads, and the per-turn state its tools
-   * and terminal effects read. The history and the assembly over it are the chat's half. A turn read again after a
-   * restart (`opening` null) was already observed and runs no trial arm.
+   * The workspace's half of opening a turn on its program surface: the turn's tools and reads. The history and the
+   * assembly over it are the chat's half. A turn read again after a restart (`opening` null) was already observed and runs
+   * no trial arm; `lanes`, the orchestrator of an agent the workspace's lanes judge, is where its owner's turn is a verdict.
    */
-  private async openTurnSurface(item: ChatTurnInput, opening: TurnOpening | null): Promise<{ readonly tools: ToolSet; readonly reads: TurnReads; readonly trial: TurnArtifacts['trial'] }> {
-    this._turnItem = item;
+  private async openTurnSurface(surface: TurnSurface, opening: TurnOpening | null, lanes: AgentOrchestrator | null): Promise<{ readonly tools: ToolSet; readonly reads: TurnReads; readonly trial: TurnArtifacts['trial'] }> {
+    const { item } = surface;
     // Read once per turn: a live trial's arm holds for its whole segment, and the prompt prefix moves only with it.
 
     const artifacts = turnArtifactBodies(this.rt.storage.sql, this.actorHandle(), {
-      ...(opening ?? { answerId: '', cacheCold: false }), main: opening !== null && this.actorHandle().parentActorId === null,
+      ...(opening ?? { answerId: '', cacheCold: false }), main: opening !== null && lanes !== null,
     });
 
     this._turnArtifacts = artifactOverrides(artifacts.bodies);
 
-    // Clear the previous turn's profile before anything reads a mode: `turnWorkMode()` prefers the
-    // bound profile, and the tool build below is the first reader.
-    this._turnOperation = null;
     // The chat view, not the raw surface: a slow `run` must detach into a background job whose
     // settle wakes a turn, and that wrap lives here.
     const body = item.metadata ?? {};
-    const surface = await this.turnToolsAndReads(body);
-    const tools = withToolText(surface.tools, this._turnArtifacts.tools);
+    const read = await this.turnToolsAndReads(body);
+    const tools = withToolText(read.tools, this._turnArtifacts.tools);
     this._executorsUsedThisTurn.clear();
     this._cliCwd = readCliCwd(body);
-    this._turnContinuity = readTurnContinuity(body);
-    // Read where the turn opens: the recorded turn carries it so a recovering host's engine
-    // cannot re-judge a turn it did not run.
-    this._turnEvolutionEnabled = this.turnRecordsEvolution();
 
-    // A real user message is the verdict on the previous turn; programmatic turns
-    // (reactor / job wake) are not.
-    if (item.kind === 'user' && opening !== null) this.orch.observeUserTurn(item.text, this._turnContinuity);
+    // A real user message is the verdict on the previous turn; programmatic turns (reactor / job wake) are not. A turn
+    // read again after a restart is no opening; one opened again, as a preparation replayed, finds its own key.
+    if (item.kind === 'user' && opening !== null) lanes?.observeUserTurn(surface.turnId, item.text, surface.continuity);
     openAnalyticsWindow(this.env);
 
-    return { tools, reads: surface.reads, trial: artifacts.trial };
-  }
-
-  /** Main's turn in its own facet, as this workspace serves it: what its tools run under and may reach through eval. */
-  private _facetTurn: { readonly turnId: string; readonly inputs: ProfileAuthorityInputs; readonly external: ToolSet } | null = null;
-
-  /** The facet turn whose item this workspace holds, from its preparation through its settle. */
-  private _facetTurnId: string | null = null;
-
-  /** The item belongs to the turn only while the turn holds it (through settle). */
-  private turnItemLive(): boolean {
-    return this._facetTurnId !== null;
-  }
-
-  /** The facet turn whose item this workspace holds; null between them. */
-  protected facetTurnId(): string | null {
-    return this._facetTurnId;
-  }
-
-  /** Main's facet turn settled: its item, profile and reach are no longer the live turn's. */
-  protected mainFacetTurnEnded(): void {
-    this._facetTurnId = null;
-    this._facetTurn = null;
-    this._turnOperation = null;
+    return { tools, reads: read.reads, trial: artifacts.trial };
   }
 
   /**
-   * Main's turn as its facet asks for it (D9): its own tools and sources, read as its in-object turn read them. Its MCP
-   * and extension tools are reached through eval, so the facet's profile admits them by name.
+   * A turn on the workspace's program surface, as the agent's isolate asks for it (D9): its tools and sources, read as an
+   * in-object turn read them, under `surface`, which the caller holds and the turn holds until it ends. Its MCP and
+   * extension tools are reached through eval, so the isolate's profile admits them by name. Its tools come back
+   * unwrapped: the one builder wraps every agent's alike (`turnTools`).
    */
-  protected async mainTaskProfile(turn: HostedTaskTurn): Promise<HostedTaskProfile> {
-    const driving = turn.driving ?? {};
-    const item: ChatTurnInput = { kind: turnAuthor({ metadata: driving }) === 'operator' ? 'user' : 'programmatic', text: turn.input.task, metadata: driving };
-
-    this._facetTurnId = turn.turnId;
-
-    // A fresh turn opens main's accounting here, where its tools run; a turn read again after a restart keeps it.
-    if (turn.opening !== undefined) this.orch.beginTurn(Date.now(), driving);
-    const { tools, reads, trial } = await this.openTurnSurface(item, turn.opening ?? null);
-    const sources = this.turnSources({ tools, reads, requestedWorkMode: turn.input.mode, item });
+  protected async programTurnSurface(turn: HostedTaskTurn, surface: TurnSurface, lanes: AgentOrchestrator | null): Promise<Omit<HostedTaskProfile, 'surface'>> {
+    const { item } = surface;
+    const ledgers = turn.actor.session.orchestrator.acc;
+    const { tools, reads, trial } = await this.openTurnSurface(surface, turn.opening ?? null, lanes);
+    const sources = this.turnSources({ tools, reads, requestedWorkMode: turn.input.mode, item, surface });
     const external = await sources.externalTools(this.modelCatalog.window());
-
-    this._facetTurn = { turnId: turn.turnId, inputs: reads.profileInputs, external };
-    // Eval declares the turn's external tools in the description it is built with, and the surface was built before
-    // this turn read its MCP tools: one built on another turn's set is built again on this one's.
     // The profile the workspace resolved predates this read, so its role's own list says which external tools it may reach.
     const reach = narrowToolSurface(effectiveRoleCatalog(turn.profile.inputs.envelope.catalog)[turn.profile.profile.role.id]?.allowedTools);
     const declared = reach.allowsTool('eval') ? Object.fromEntries(Object.entries(external).filter(([name]) => reach.allowsTool(name))) : {};
-    const stale = Object.keys(declared).join('\0') !== Object.keys(this._turnExternalTools).join('\0');
 
-    this._turnExternalTools = declared;
+    surface.reached(external, declared);
 
-    if (stale) {
-      this._cachedTools = null;
-      this._cachedToolsKey = '';
-    }
-
-    const current = stale ? withToolText(this.getTools(), this.turnArtifacts().tools) : tools;
-    // Until the facet binds the profile it assembled on, and again when a restarted workspace reads the turn anew.
-    this._turnOperation = captureOperationProfile({ actor: this.actorHandle(), profile: turn.profile.profile, inputs: reads.profileInputs, runId: turn.turnId, turnId: turn.turnId });
-
-    // A role imposing another mode (a planner on a Build message) runs the turn on that mode's tools.
+    // Eval declares the turn's external tools in the description it is built with, and the surface above was built
+    // before this turn read them; a role imposing another mode (a planner on a Build message) runs that mode's tools.
     const { workMode } = turn.profile.profile;
-    const turnTools = workMode === turn.input.mode ? current : withToolText(this.actorToolsets(workMode).turn, this.turnArtifacts().tools);
+    const current = Object.keys(declared).length === 0 && workMode === turn.input.mode ? tools : withToolText(this.programToolsets(workMode, { ledgers }).turn, this.turnArtifacts().tools);
+    const raw = this.programToolsets(workMode, { ledgers }).raw;
+
+    // Until the facet binds the profile it assembled on, and again when a restarted workspace reads the turn anew.
+    surface.resolved(turn.profile.profile, reads.profileInputs);
 
     return {
-      tools: this.inFacetTurn(turnTools, turn.taskPlan),
-      raw: this.inFacetTurn(this.actorToolsets(workMode).raw, turn.taskPlan),
+      tools: current,
+      raw,
       sources: { ...sources, wiredToolNames: (mode) => [...sources.wiredToolNames(mode), ...Object.keys(external)] },
       ...(trial !== null && { trial }),
     };
   }
 
-  /** The profile main's facet assembled its turn on: its tools run under it, as an in-object turn's do. */
-  protected bindFacetProfile(turnId: string, profile: ResolvedTurnProfile): void {
-    const turn = this._facetTurn;
+  /** The profile each agent's isolate last assembled a turn on, kept for the status reads between its turns. */
+  protected readonly boundProfiles = new Map<string, ResolvedTurnProfile>();
 
-    if (turn?.turnId !== turnId) return;
-    this._settledProfile = profile;
-    this._turnOperation = captureOperationProfile({ actor: this.actorHandle(), profile, inputs: turn.inputs, runId: turnId, turnId });
-    this._turnExternalTools = this.declaredExternal(profile.allowedTools, turn.external);
-  }
-
-  /** The external tools a turn's eval declares and reaches: those its profile allows, when it allows eval. */
-  private declaredExternal(allowedTools: readonly string[], external: ToolSet): ToolSet {
-    const allowed = new Set(allowedTools);
-
-    return allowed.has('eval') ? Object.fromEntries(Object.entries(external).filter(([name]) => allowed.has(name))) : {};
-  }
-
-  /** Main's tools run under the profile its facet assembled on, and inside the approved plan it implements; each call is
-   *  a fleet row, as it was when its turn ran here. */
-  private inFacetTurn(tools: ToolSet, taskPlan: TaskPlan | undefined): ToolSet {
-    const held = taskPlan === undefined ? tools : withTaskPlan(tools, { sql: Object.freeze([this.boundSql, this.rt.storage.sql]), plan: taskPlan });
+  /** An agent's tools run under the profile its isolate assembled on, inside the approved plan it implements, over its
+   *  own store and the workspace's; each call is a fleet row. */
+  protected turnTools(tools: ToolSet, turn: { readonly taskPlan: TaskPlan | undefined; readonly surface: TurnSurface; readonly sql: SqlExecutor }): ToolSet {
+    const { taskPlan, surface } = turn;
+    const held = taskPlan === undefined ? tools : withTaskPlan(tools, { sql: Object.freeze([this.boundSql, turn.sql]), plan: taskPlan });
 
     return Object.fromEntries(Object.entries(held).map(([name, entry]) => {
       const { execute } = entry;
@@ -4180,7 +4181,7 @@ export abstract class ActorAgent extends Agent<Env> {
         let failed = true;
 
         try {
-          const result = await runOperationProfile(this._turnOperation, () => execute(input, options));
+          const result = await inTurnSurface(surface, () => runOperationProfile(surface.operation, () => execute(input, options)));
 
           failed = false;
 
@@ -4193,9 +4194,13 @@ export abstract class ActorAgent extends Agent<Env> {
     }));
   }
 
-  /** Main's first token as its window hears it, from the turn's own start. */
-  protected recordMainFirstToken(openedAt: number): void {
-    recordTtftRow(this.env, { workspace: this.workspaceName(), agentKind: this.actorKind(), ...this.analyticsModel(), ttftMs: Date.now() - openedAt });
+  /** An agent's first token as its window hears it, from its turn's own start, on the model its isolate assembled on. */
+  protected recordFirstToken(actorId: string, openedAt: number): void {
+    const model = this.boundProfiles.get(actorId)?.tier.model;
+
+    recordTtftRow(this.env, {
+      workspace: this.workspaceName(), agentKind: this.actorKind(), ...(model === undefined ? this.analyticsModel() : this.analyticsModelOf(model)), ttftMs: Date.now() - openedAt,
+    });
   }
 
   /** The turn's evolved text; between turns, the promoted text. */
@@ -4210,7 +4215,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const { tools, reads } = await this.turnToolsAndReads({});
     const history = await this.mainWorkingContext();
     const requestedWorkMode = await this.preparedWorkMode();
-    const assembled = await assembleActorTurn(this.turnSources({ tools, reads, requestedWorkMode, item: null }), this.turnRequest(history, requestedWorkMode, {}));
+    const assembled = await assembleActorTurn(this.turnSources({ tools, reads, requestedWorkMode, item: null, surface: this.mainTurn() }), this.turnRequest(history, requestedWorkMode, {}));
     this._settledProfile = assembled.profile;
 
     return { execution: assembled.execution, profile: assembled.profile, sessionKey: this.name };
@@ -4282,7 +4287,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Where this actor's turns are assembled from (core orchestrator/turn-assembly.ts); `reads` were fetched before
    *  the turn opened. */
-  private turnSources(input: { readonly tools: ToolSet; readonly reads: TurnReads; readonly requestedWorkMode: WorkMode; readonly item: ChatTurnInput | null }): TurnAssemblySources {
+  private turnSources(input: { readonly tools: ToolSet; readonly reads: TurnReads; readonly requestedWorkMode: WorkMode; readonly item: ChatTurnInput | null; readonly surface: TurnSurface | null }): TurnAssemblySources {
     const { reads } = input;
     // Deps-gated builtins (report) are wired only when this actor class wires them.
     const turnActorDeps = this.actorToolDeps();
@@ -4304,14 +4309,18 @@ export abstract class ActorAgent extends Agent<Env> {
       },
       profileInputs: async () => reads.profileInputs,
       choices: reads.choices,
-      toolset: (mode) => (mode === input.requestedWorkMode ? input.tools : this.actorToolsets(mode).turn),
+      toolset: (mode) => (mode === input.requestedWorkMode ? input.tools : this.programToolsets(mode).turn),
       // MCP tools were admitted against the request's model in `readTurnInputs`.
       externalTools: async () => ({ ...extensionTools, ...reads.mcpTools }),
-      wiredToolNames: (mode) => [
-        ...(turnActorDeps.submitPlan && this.submitsPlans(mode) ? [SUBMIT_PLAN_TOOL] : []),
-        ...(turnActorDeps.replyToComment ? [REPLY_TO_COMMENT_TOOL] : []),
-        ...(turnActorDeps.askOwner ? [ASK_OWNER_TOOL] : []),
-      ],
+      wiredToolNames: (mode) => {
+        const reach = this.reach(mode, turnActorDeps);
+
+        return [
+          ...(turnActorDeps.submitPlan && reach.submitPlan ? [SUBMIT_PLAN_TOOL] : []),
+          ...(turnActorDeps.replyToComment && reach.replyToComment ? [REPLY_TO_COMMENT_TOOL] : []),
+          ...(turnActorDeps.askOwner && reach.askOwner ? [ASK_OWNER_TOOL] : []),
+        ];
+      },
       // `agent` / `llm` are reachable only inside `eval`: derived from the providers wired for this mode.
       codemodeCapabilities: (mode) => codemodeCapabilitiesFor(this.ownNamespaces(mode)),
       agentsActions: () => actorAgentsActions(turnActorDeps, this._accountSwarms === true),
@@ -4325,11 +4334,11 @@ export abstract class ActorAgent extends Agent<Env> {
       budget: this.budget,
       operations: this.modelOperations,
       scaffoldSpend: { source: 'scaffold', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
-      attachmentBudget: this.acc.context,
+      attachmentBudget: this.workspaceLedgers().context,
       observeStream: (chunks) => this.chatTransport.observe(chunks),
       extensions: () => this.extensions.list(),
       accountFacts: () => this.accountFactsForTurn(),
-      dynamic: (turn) => (profile, tools) => this.dynamicContextSnapshot(profile, tools, turn),
+      dynamic: (turn) => (profile, tools) => this.dynamicContextSnapshot(profile, tools, turn, input.surface?.declared ?? {}),
       operation: (profile, inputs) => captureOperationProfile({
         actor: this.actorHandle(), profile, inputs, runId: this._currentRunId || WORKSPACE_RUN_ID, turnId: this.durableTurnId() ?? this._currentRunId,
       }),
@@ -4351,7 +4360,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * Nothing clock-derived: a wall-clock field would re-fingerprint the block every request.
    */
   protected dynamicContextSnapshot(
-    profile: Pick<ResolvedTurnProfile, 'workMode' | 'allowedTools' | 'tier'>, tools: ToolSet, turn: TurnMemoryReads,
+    profile: Pick<ResolvedTurnProfile, 'workMode' | 'allowedTools' | 'tier'>, tools: ToolSet, turn: TurnMemoryReads, externalTools: ToolSet,
   ): DynamicContext {
     const extras = this.extraDynamicContext();
     const { memoryTail, accountFacts } = turn;
@@ -4363,7 +4372,7 @@ export abstract class ActorAgent extends Agent<Env> {
       stores: this.stores,
       profile,
       tools,
-      externalTools: this._turnExternalTools,
+      externalTools,
       runtime: { backend: 'cf', model: this.promptModelContextFor(profile.tier.model), date: currentDateForPrompt() },
       turn: this.turnReason(),
       ...(activeSkills !== null && { activeSkills }),
@@ -4390,9 +4399,9 @@ export abstract class ActorAgent extends Agent<Env> {
     const programmatic = this.turnUserMessageEvent() !== null;
 
     // A landed steer means a human is watching from that step on, whatever drove the turn.
-    if (this.actorSession.landedSteers.length > 0) return 'interactive';
+    if ((this.workspaceAgentHosted()?.session.landedSteers.length ?? 0) > 0) return 'interactive';
 
-    return programmatic || this._turnContinuity === 'independent_task' ? 'one-shot' : 'interactive';
+    return programmatic || this.mainTurn()?.continuity === 'independent_task' ? 'one-shot' : 'interactive';
   }
 
   /** Read off the item the loop admitted; null for real chat turns. */
@@ -4411,7 +4420,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   protected async preparedWorkMode(): Promise<WorkMode> {
-    if (this.turnItemLive()) return this.turnWorkMode();
+    if (this.mainTurn() !== null) return this.turnWorkMode();
 
     return this.workModeForMetadata(await this.mainLastUserMetadata());
   }
@@ -4424,7 +4433,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Author-stamped, so the plan hold tells the owner's turn from the harness's. */
   protected turnDrivingMetadata(): JsonObject | undefined {
     const metadata = this.turnUserMetadata();
-    const item = this.turnItemLive() ? this._turnItem : null;
+    const item = this.mainTurn()?.item ?? null;
 
     return item === null ? metadata : authoredTurnMetadata({ kind: item.kind, metadata });
   }
@@ -4432,7 +4441,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Active turn metadata only. Idle operations await canonical metadata in
    *  preparedWorkMode before constructing their synchronous tool surface. */
   protected turnUserMetadata(): JsonObject | undefined {
-    const metadata = this.turnItemLive() ? this._turnItem?.metadata : undefined;
+    const metadata = this.mainTurn()?.item.metadata;
 
     if (metadata === undefined) return undefined;
     const parsed = v.safeParse(JsonObjectSchema, metadata);
@@ -4473,7 +4482,7 @@ export abstract class ActorAgent extends Agent<Env> {
     return {
       profile: resolveAgentTurnProfile({
         ...inputs,
-        ...ownProfileChoices(input.actor.config, inputs, input.actor.actorId === this.actorHandle().actorId ? undefined : this.ancestorProfiles(input.actor), {
+        ...ownProfileChoices(input.actor.config, inputs, this.ancestorProfiles(input.actor), {
           explicitTier: input.explicitTier,
         }),
         workMode: input.workMode,
@@ -4484,8 +4493,10 @@ export abstract class ActorAgent extends Agent<Env> {
     };
   }
 
-  /** Ancestors' own pins, nearest first, up to the root. */
-  protected ancestorProfiles(actor: ActorHandle): PinnedProfile[] {
+  /** Ancestors' own pins, nearest first, up to the root; none for an agent no one hired, whose own pins are the workspace's. */
+  protected ancestorProfiles(actor: ActorHandle): PinnedProfile[] | undefined {
+    if (actor.parentActorId === null) return undefined;
+
     return ancestorPins(actor.parentActorId, { actorId: this.actorHandle().actorId, pins: this.config }, (id) => {
       const parent = this.actorHost().describe(id);
 
@@ -4580,6 +4591,7 @@ export abstract class ActorAgent extends Agent<Env> {
     // Also drops the provider registry (caches per-agent OAuth refreshers) so a disconnected
     // provider stops being marked available.
     this.ownedModelServices.invalidate();
+    this.accountReadsExpire();
   }
 
   // All credentials live in UserDO; providers resolve auth headers through the UserDO stub at

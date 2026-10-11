@@ -1,7 +1,9 @@
 import type { AgentFigures } from '../read-models/agent-figures';
+import type { ContextMeasures } from '../events/recorder';
 import type { JSONSchema7, ModelMessage, UIMessage } from 'ai';
 import type { CompletedTurn } from '../evolution/types';
 import type { TrialTurn } from '../evolution/trial-rules';
+import type { TurnFacts } from '../orchestrator/turn-facts';
 import type { ContextFill } from '../read-models/context-fill';
 import type { InlineSteer } from '../read-models/transcript';
 import type { RunEvent } from '../events/types';
@@ -17,6 +19,13 @@ import type { SubordinateReportLedger } from './ingress';
 
 export type StoredRow = Readonly<Record<string, string | number | ArrayBuffer | null>>;
 
+/** Where a snapshot falls among those its workspace sent: calls reach an isolate in no promised order, so one read earlier
+ *  in the same activation is older than any it already adopted. */
+export interface SnapshotOrder {
+  readonly activation: string;
+  readonly seq: number;
+}
+
 export interface AgentSnapshot {
   readonly identity: StoredRow;
   readonly lineage: readonly StoredRow[];
@@ -25,6 +34,7 @@ export interface AgentSnapshot {
   readonly workspaceName: string;
   readonly installedBuild: string | null;
   readonly artifactDirectory: string;
+  readonly order: SnapshotOrder;
 }
 
 export interface AgentTurnOpening {
@@ -65,6 +75,8 @@ export interface PreparedAgentTurn {
   /** The live trial's arm the turn runs, when the workspace's own agent runs one; recorded with its completed turn. */
   readonly trial?: TrialTurn;
   readonly missionLabels?: readonly string[];
+  /** What the workspace decided as the turn opened; the agent keeps the first it is told for a turn. */
+  readonly facts: TurnFacts;
   readonly trace: boolean;
   readonly resume: boolean;
   readonly reportMessages: boolean;
@@ -155,6 +167,12 @@ export interface AgentStanding {
   readonly latestRun: { readonly status: string | null; readonly userMessage: string | null } | null;
   /** Words sent into a running turn and not yet read by it. */
   readonly pendingSteers: readonly InlineSteer[];
+}
+
+/** An agent's standing as it reports it with what it owes (design v2 §8): its context's raw measures, which the workspace
+ *  reads against the window it knows, in place of its fill. */
+export interface AgentStandingReport extends Omit<AgentStanding, 'context'> {
+  readonly measures: ContextMeasures;
 }
 
 /** An agent's recent model steps, for the activity its window reads. */

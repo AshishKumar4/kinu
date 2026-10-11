@@ -11,6 +11,13 @@ function workspaceRpcAnswer<T>(pending: Promise<T>): Effect.Effect<T> {
   return Effect.promise(() => pending).pipe(Effect.onError(() => Effect.sync(() => disposeWorkspaceRpc(pending))));
 }
 
+/** An answer that is data, read whole once it settles: its pipeline is released then too, so a turn's many calls hold
+ *  none of theirs open (2026-10-11, the worker-heap gate: main's isolate allocated 246.8 MB over a 150-step turn, 118.3 MB
+ *  once each was released). */
+function workspaceRpcData<T>(pending: Promise<T>): Effect.Effect<T> {
+  return workspaceRpcAnswer(pending).pipe(Effect.tap(() => Effect.sync(() => { disposeWorkspaceRpc(pending); })));
+}
+
 function disposeWorkspaceRpc<T>(pending: Promise<T>): void {
   // Worker RPC's Promise type omits this native method; ordinary in-isolate promises have no pipeline to release.
   if (Symbol.dispose in pending) {
@@ -24,7 +31,12 @@ export interface AgentWorkspaceCalls extends Omit<AgentWorkspace, 'session' | 's
   session(): Promise<NimbusSessionSurface>;
   stateSession(): Promise<NimbusSessionSurface>;
   memory(): Promise<Memory>;
+  /** The agent's port: its workspace's host, held across calls (design v2 §3). */
+  port(): Promise<AgentWorkspacePort>;
 }
+
+/** What crosses through the held port: every call whose answer is data, not a live capability. */
+export type AgentWorkspacePort = Omit<AgentWorkspaceCalls, 'session' | 'stateSession' | 'memory' | 'program' | 'port'>;
 
 /** Nimbus opens a synchronous session surface; its methods first consume the factory's own RpcPromise. */
 class WorkspaceSession implements NimbusSessionSurface {
@@ -92,45 +104,72 @@ class ConsumedMemory implements Memory {
   tail(...args: Parameters<Memory['tail']>) { return settle(this.call(memory => memory.tail(...args))); }
 }
 
-/** All outgoing WORKSPACE calls cross the same consumption boundary, including chat, tools, pacing and credentials. */
+/**
+ * All outgoing WORKSPACE calls cross the same consumption boundary, including chat, tools, pacing and credentials. Those
+ * whose answer is data cross once, through the agent's port, held across them; one that fails lets the port go, as its
+ * workspace may have reset under it, and the next opens it again. A session, memory or a program's callbacks own live
+ * capabilities: each opens its own host, which lets them go at its edge.
+ */
 export function workspaceClient(workspace: AgentWorkspaceCalls): AgentWorkspace {
+  let held: Promise<AgentWorkspacePort> | null = null;
+
+  /** `owned`: the answer holds live content its consumer reads after (a relayed response's body), so its pipeline is
+   *  the consumer's to release; any other answer is data, released as it settles. */
+  const viaPort = <T>(call: (port: AgentWorkspacePort) => Promise<T>, owned = false): Effect.Effect<T> => Effect.suspend(() => {
+    held ??= workspace.port();
+    const opened = held;
+
+    return workspaceRpcAnswer(opened).pipe(
+      Effect.flatMap((port) => (owned ? workspaceRpcAnswer(call(port)) : workspaceRpcData(call(port)))),
+      Effect.onError(() => Effect.sync(() => {
+        if (held !== opened) return;
+        held = null;
+        disposeWorkspaceRpc(opened);
+      })),
+    );
+  });
+
   return {
     session: () => new WorkspaceSession(workspace.session()),
     stateSession: () => new WorkspaceSession(workspace.stateSession()),
     memory: () => new ConsumedMemory(workspace.memory()),
     program: (...args) => settle(workspaceRpcAnswer(workspace.program(...args))),
-    traceTurn: (...args) => settle(workspaceRpcAnswer(workspace.traceTurn(...args))),
-    traceStream: (...args) => settle(workspaceRpcAnswer(workspace.traceStream(...args))),
-    resume: (...args) => settle(workspaceRpcAnswer(workspace.resume(...args))),
-    guard: (...args) => settle(workspaceRpcAnswer(workspace.guard(...args))),
-    debit: (...args) => settle(workspaceRpcAnswer(workspace.debit(...args))),
-    prepareTurn: (...args) => settle(workspaceRpcAnswer(workspace.prepareTurn(...args))),
-    bindProfile: (...args) => settle(workspaceRpcAnswer(workspace.bindProfile(...args))),
-    prepareChat: (...args) => settle(workspaceRpcAnswer(workspace.prepareChat(...args))),
-    chatEvent: (...args) => settle(workspaceRpcAnswer(workspace.chatEvent(...args))),
-    turnEnded: (...args) => settle(workspaceRpcAnswer(workspace.turnEnded(...args))),
-    turnSettled: (...args) => settle(workspaceRpcAnswer(workspace.turnSettled(...args))),
-    owedReport: (...args) => settle(workspaceRpcAnswer(workspace.owedReport(...args))),
-    parentReport: (...args) => settle(workspaceRpcAnswer(workspace.parentReport(...args))),
-    autoTitle: (...args) => settle(workspaceRpcAnswer(workspace.autoTitle(...args))),
-    hireAdvisor: (...args) => settle(workspaceRpcAnswer(workspace.hireAdvisor(...args))),
-    owes: (...args) => settle(workspaceRpcAnswer(workspace.owes(...args))),
-    birthContext: (...args) => settle(workspaceRpcAnswer(workspace.birthContext(...args))),
-    steerSkills: (...args) => settle(workspaceRpcAnswer(workspace.steerSkills(...args))),
-    advise: (...args) => settle(workspaceRpcAnswer(workspace.advise(...args))),
-    enqueueTurn: (...args) => settle(workspaceRpcAnswer(workspace.enqueueTurn(...args))),
-    executeTool: (...args) => settle(workspaceRpcAnswer(workspace.executeTool(...args))),
-    observe: (...args) => settle(workspaceRpcAnswer(workspace.observe(...args))),
-    paceStep: (...args) => settle(workspaceRpcAnswer(workspace.paceStep(...args))),
-    answerMetadata: (...args) => settle(workspaceRpcAnswer(workspace.answerMetadata(...args))),
-    getAuth: (...args) => settle(workspaceRpcAnswer(workspace.getAuth(...args))),
-    listCredentials: () => settle(workspaceRpcAnswer(workspace.listCredentials())),
-    relayDevice: (...args) => settle(workspaceRpcAnswer(workspace.relayDevice(...args))),
-    relayModelCall: (...args) => settle(workspaceRpcAnswer(workspace.relayModelCall(...args))),
-    cancelModelRelay: (...args) => settle(workspaceRpcAnswer(workspace.cancelModelRelay(...args))),
-    sayToParent: (...args) => settle(workspaceRpcAnswer(workspace.sayToParent(...args))),
-    logActivity: (...args) => settle(workspaceRpcAnswer(workspace.logActivity(...args))),
-    reportModelCall: (...args) => settle(workspaceRpcAnswer(workspace.reportModelCall(...args))),
-    reportModelOperation: (...args) => settle(workspaceRpcAnswer(workspace.reportModelOperation(...args))),
+    traceTurn: (...args) => settle(viaPort((port) => port.traceTurn(...args))),
+    traceStream: (...args) => settle(viaPort((port) => port.traceStream(...args))),
+    resume: (...args) => settle(viaPort((port) => port.resume(...args))),
+    guard: (...args) => settle(viaPort((port) => port.guard(...args))),
+    debit: (...args) => settle(viaPort((port) => port.debit(...args))),
+    prepareTurn: (...args) => settle(viaPort((port) => port.prepareTurn(...args))),
+    bindProfile: (...args) => settle(viaPort((port) => port.bindProfile(...args))),
+    prepareChat: (...args) => settle(viaPort((port) => port.prepareChat(...args))),
+    chatEvent: (...args) => settle(viaPort((port) => port.chatEvent(...args))),
+    turnEnded: (...args) => settle(viaPort((port) => port.turnEnded(...args))),
+    turnSettled: (...args) => settle(viaPort((port) => port.turnSettled(...args))),
+    owedReport: (...args) => settle(viaPort((port) => port.owedReport(...args))),
+    parentReport: (...args) => settle(viaPort((port) => port.parentReport(...args))),
+    autoTitle: (...args) => settle(viaPort((port) => port.autoTitle(...args))),
+    hireAdvisor: (...args) => settle(viaPort((port) => port.hireAdvisor(...args))),
+    owes: (...args) => settle(viaPort((port) => port.owes(...args))),
+    birthContext: (...args) => settle(viaPort((port) => port.birthContext(...args))),
+    steerSkills: (...args) => settle(viaPort((port) => port.steerSkills(...args))),
+    openWork: () => settle(viaPort((port) => port.openWork())),
+    noteModelRequest: (...args) => settle(viaPort((port) => port.noteModelRequest(...args))),
+    armCacheWarm: (...args) => settle(viaPort((port) => port.armCacheWarm(...args))),
+    advise: (...args) => settle(viaPort((port) => port.advise(...args))),
+    runEnded: (...args) => settle(viaPort((port) => port.runEnded(...args))),
+    enqueueTurn: (...args) => settle(viaPort((port) => port.enqueueTurn(...args))),
+    executeTool: (...args) => settle(viaPort((port) => port.executeTool(...args))),
+    observe: (...args) => settle(viaPort((port) => port.observe(...args))),
+    paceStep: (...args) => settle(viaPort((port) => port.paceStep(...args))),
+    answerMetadata: (...args) => settle(viaPort((port) => port.answerMetadata(...args))),
+    getAuth: (...args) => settle(viaPort((port) => port.getAuth(...args))),
+    listCredentials: () => settle(viaPort((port) => port.listCredentials())),
+    relayDevice: (...args) => settle(viaPort((port) => port.relayDevice(...args))),
+    relayModelCall: (...args) => settle(viaPort((port) => port.relayModelCall(...args), true)),
+    cancelModelRelay: (...args) => settle(viaPort((port) => port.cancelModelRelay(...args))),
+    sayToParent: (...args) => settle(viaPort((port) => port.sayToParent(...args))),
+    logActivity: (...args) => settle(viaPort((port) => port.logActivity(...args))),
+    reportModelCall: (...args) => settle(viaPort((port) => port.reportModelCall(...args))),
+    reportModelOperation: (...args) => settle(viaPort((port) => port.reportModelOperation(...args))),
   };
 }

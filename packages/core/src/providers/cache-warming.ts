@@ -155,6 +155,13 @@ interface CacheWarmRow {
  *  a larger write would fail the arming turn. */
 const CACHE_WARM_MAX_BODY_BYTES = 1_000_000;
 
+/** Each agent's armed warm and when it is owed, in one read: the wake fold asks it for every agent at once. */
+export function armedWarms(sql: SqlExecutor): { readonly actorId: string; readonly dueAt: number }[] {
+  return sql<{ actor_id: string; due_at: number }>`
+    SELECT actor_id, due_at FROM cache_warm WHERE due_at IS NOT NULL AND armed_requests = requests`
+    .map((row) => ({ actorId: row.actor_id, dueAt: row.due_at }));
+}
+
 export class CacheWarmStore {
   constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle) {}
 
@@ -273,12 +280,32 @@ export interface CacheWarmSeams {
 }
 
 /** The warm lifecycle: arm after a turn, fire on a wake, re-arm or stop. */
+/** What a turn ended on, which a warm would replay: the model that served it and the request it last sent. */
+export interface CacheWarmArm {
+  readonly modelSpec: ModelSpec;
+  readonly retention: CacheRetention;
+  readonly lastRequest: { readonly body: unknown; readonly sentAt: number; readonly usage: Usage } | undefined;
+}
+
+/** A conversation's warming lane as its session tells it, wherever the lane runs: the session knows both instants. */
+export interface CacheWarming {
+  /** A real provider request is starting: answers until when the prompt cache stayed warm for the one sent at
+   *  `lastRequestAt` (null when nothing kept it, or none was sent), read before this request voids the lane. */
+  noteRequest(lastRequestAt: number | null): Promise<number | null>;
+  /** Consider a warm for the request this turn ended on; null when the policy declined. */
+  armAfterTurn(input: CacheWarmArm): Promise<number | null>;
+}
+
 export class CacheWarmingLane {
   constructor(private readonly seams: CacheWarmSeams) {}
 
-  /** A real provider request is starting. */
-  noteRequest(): void {
+  /** A real provider request is starting: answers until when the cache stayed warm for the last one, read first. */
+  noteRequest(lastRequestAt: number | null = null): number | null {
+    const kept = lastRequestAt === null ? null : this.seams.store.keptAliveUntil(lastRequestAt);
+
     this.seams.store.noteRequest();
+
+    return kept;
   }
 
   keptAliveUntil(lastRequestAt: number): number | null {
@@ -294,11 +321,7 @@ export class CacheWarmingLane {
    * Consider a warm for the request this turn ended on; null when the policy declined.
    * A declined turn also retires whatever was armed before it.
    */
-  armAfterTurn(input: {
-    readonly modelSpec: ModelSpec;
-    readonly retention: CacheRetention;
-    readonly lastRequest: { readonly body: unknown; readonly sentAt: number; readonly usage: Usage } | undefined;
-  }): number | null {
+  armAfterTurn(input: CacheWarmArm): number | null {
     // The captured body is the adapter's native arguments, `undefined` fields included; the wire sent their JSON form.
     const sent = input.lastRequest?.body;
     const body = sent === undefined ? null : readJsonObjectText(JSON.stringify(sent));

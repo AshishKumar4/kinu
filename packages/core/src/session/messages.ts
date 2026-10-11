@@ -410,43 +410,43 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
 
   streamOpenPart(messageId: string, part: StreamPartInput): void {
     this.actor.assertCurrent();
+    const [first = ''] = part.text === undefined ? [] : segmented(part.text);
 
     const opened = this.sql<{ part_no: number }>`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,kind,stream_order,descriptor_json,descriptor_path,descriptor_digest,text,ended)
-      SELECT ${this.actor.actorId},${messageId},${part.partNo},0,${part.kind},${part.streamOrder},${part.descriptor.json},${part.descriptor.path},${part.descriptor.digest},'',0
+      SELECT ${this.actor.actorId},${messageId},${part.partNo},0,${part.kind},${part.streamOrder},${part.descriptor.json},${part.descriptor.path},${part.descriptor.digest},${first},0
       FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND sealed_at IS NULL RETURNING part_no`;
 
     if (opened.length === 0) throw new KinuError('denied', 'message is missing or sealed');
 
-    if (part.text !== undefined && part.text !== '') this.streamAppend(messageId, part.partNo, part.text);
+    if (part.text !== undefined && part.text.length > first.length) this.streamAppend(messageId, part.partNo, part.text.slice(first.length));
   }
 
-  /** With a `fence`, the append checks the turn's claim in its own statement; without one, the caller has. */
+  /** Each window is the part's next segment, so a flush writes its own text once: appending to the last segment
+   *  rewrote all of it at every flush, 66,579 bytes for a 2,390-byte answer. With a `fence`, the append checks the
+   *  turn's claim in its own statement; without one, the caller has. */
   streamAppend(messageId: string, partNo: number, text: string, fence: ClaimFence | null = null): void {
     this.actor.assertCurrent();
     const actorId = this.actor.actorId;
 
     for (const piece of segmented(text)) {
       // Two statements, not one with an optional clause: a store without claims has no claim table to name.
-      const extended = fence === null
-        ? this.sql<{ segment: number }>`UPDATE stream_parts SET text = text || ${piece}
-          WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0 AND length(text) + ${piece.length} <= ${STREAM_SEGMENT_CHARS}
+      const appended = fence === null
+        ? this.sql<{ segment: number }>`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,kind,stream_order,descriptor_json,descriptor_path,descriptor_digest,text,ended)
+          SELECT actor_id,message_id,part_no,segment + 1,kind,stream_order,NULL,NULL,NULL,${piece},0 FROM stream_parts
+          WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0
           AND segment=(SELECT MAX(segment) FROM stream_parts WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo}) RETURNING segment`
-        : this.sql<{ segment: number }>`UPDATE stream_parts SET text = text || ${piece}
-          WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0 AND length(text) + ${piece.length} <= ${STREAM_SEGMENT_CHARS}
+        : this.sql<{ segment: number }>`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,kind,stream_order,descriptor_json,descriptor_path,descriptor_digest,text,ended)
+          SELECT actor_id,message_id,part_no,segment + 1,kind,stream_order,NULL,NULL,NULL,${piece},0 FROM stream_parts
+          WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0
           AND segment=(SELECT MAX(segment) FROM stream_parts WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo})
           AND EXISTS (SELECT 1 FROM actor_turn_claims c WHERE c.actor_id=${actorId} AND c.turn_id=${fence.turnId} AND c.epoch=${fence.epoch} AND c.outcome IS NULL)
           RETURNING segment`;
 
-      if (extended.length > 0) continue;
-      // A stale claim is refused here, not by a new segment.
+      if (appended.length > 0) continue;
+      // A stale claim is refused here, not as a missing part.
       fence?.assert();
 
-      const last = this.sql<{ segment: number; ended: number; kind: string; stream_order: number }>`SELECT segment,ended,kind,stream_order FROM stream_parts
-        WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} ORDER BY segment DESC LIMIT 1`[0];
-
-      if (last === undefined || last.ended !== 0) throw new KinuError('denied', 'stream part is missing, sealed or ended');
-      void this.sql`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,kind,stream_order,descriptor_json,descriptor_path,descriptor_digest,text,ended)
-        VALUES(${actorId},${messageId},${partNo},${last.segment + 1},${last.kind},${last.stream_order},${null},${null},${null},${piece},0)`;
+      throw new KinuError('denied', 'stream part is missing, sealed or ended');
     }
   }
 
@@ -459,9 +459,13 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     if (written.length === 0) throw new KinuError('denied', 'stream part is missing or sealed');
   }
 
+  /** The last segment carries the end, the only one an append extends from: marking every segment rewrote the answer. */
   streamEnd(messageId: string, partNo: number): void {
     this.actor.assertCurrent();
-    const ended = this.sql<{ segment: number }>`UPDATE stream_parts SET ended=1 WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0 RETURNING segment`;
+    const actorId = this.actor.actorId;
+
+    const ended = this.sql<{ segment: number }>`UPDATE stream_parts SET ended=1 WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0
+      AND segment=(SELECT MAX(segment) FROM stream_parts WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo}) RETURNING segment`;
 
     if (ended.length === 0) throw new KinuError('denied', 'stream part is missing, sealed or ended');
   }

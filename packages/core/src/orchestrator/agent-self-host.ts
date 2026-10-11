@@ -20,7 +20,7 @@ export interface AgentSelfPorts {
   readonly jobs: () => BackgroundJobStore;
   readonly budget: () => MissionGovernor;
   readonly cancelTrigger: AgentSelfHost['cancelTrigger'];
-  readonly armCompactNow: () => void;
+  readonly armCompactNow: () => Promise<void>;
   /** The cloud's owner-approved workspace creation; a local session has none. */
   readonly proposeWorkspace?: AgentSelfHost['proposeWorkspace'];
 }

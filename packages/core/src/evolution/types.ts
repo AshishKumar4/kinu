@@ -46,6 +46,8 @@ export interface CompletedTurn {
   shownLessons?: readonly { readonly id: string; readonly revision: number }[];
   /** The live trial's arm the turn ran; its errors and steps are the trial's guardrails. */
   trial?: TrialTurn;
+  /** The turn ended on a question to its owner: its call waits for the answer, so no tool result records it. */
+  askedOwner?: boolean;
 }
 
 export interface CompletedSession {

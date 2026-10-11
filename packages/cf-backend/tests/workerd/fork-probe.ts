@@ -12,7 +12,7 @@ import {
   readForkLineage, missionOf, SOUL_FILE, SOUL_PATH, SessionHistory, summarizeSoul, WorkspaceActorDirectory, openWorkspaceMainActor,
   createAppDataStore, createFactsStore, recordLesson, RunEventRecorder, WORKSPACE_RUN_ID,
   type ActorHandle, type AppDataStore, type ForkFrame, type ForkFrameReply, type ForkLineageRow, type ForkResult, type ForkStaging, type SqlExecutor, type SqlValue,
-  WORKSPACE_ROOT,
+  WORKSPACE_ROOT, forkArtifactPath, localForkConversationSource, localForkConversationTarget,
 } from '@kinu.run/core';
 import { workspaceBoxFiles } from '@kinu.run/core/workspace';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
@@ -273,6 +273,7 @@ export class ForkSourceProbeDO extends ForkProbeDO {
       vfs: createWorkspaceForkSource(this.fileHost),
       artifactDirectory: PROBE_ARTIFACTS,
       appData: this.appData(openWorkspaceMainActor(this.sql)).fork,
+      conversation: localForkConversationSource(this.sql, openWorkspaceMainActor(this.sql)),
       untilMessageId: PROBE_CUT_MESSAGE_ID,
       transferId,
       frameBytes: PROBE_FRAME_BYTES,
@@ -404,6 +405,12 @@ export class ForkTargetProbeDO extends ForkProbeDO {
         artifactDirectory: PROBE_ARTIFACTS,
         transaction: (rows) => this.ctx.storage.transactionSync(rows),
         appData: () => this.appData(openWorkspaceMainActor(this.sql)).fork,
+        conversation: localForkConversationTarget(this.sql, {
+          actorId: () => openWorkspaceMainActor(this.sql).actorId,
+          artifactPath: (relative) => forkArtifactPath(relative, PROBE_ARTIFACTS),
+          now: Date.now(),
+          transaction: (write) => { this.ctx.storage.transactionSync(write); },
+        }),
       }),
       createWorkspaceForkSink(this.fileHost),
     );

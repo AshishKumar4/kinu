@@ -119,13 +119,13 @@ describe('the reconnect snapshot answers from durable rows, not from RAM', () =>
     expect(chips(await seeded.agent.getWorkspaceSnapshot()).steers).toEqual([]);
   });
 
-  test('a steer Stop kept stays queued, across the reconnect', async () => {
-    // Stop leaves the operator's words queued, so the chip survives; asserted across reactivation.
+  test('a steer Stop handed back stays gone, across the reconnect', async () => {
+    // Stop means stop (design v3 C): the operator's unread words go back to their composer, and no chip comes back.
     const { seeded } = await workspaceWithQueuedWork();
     await seeded.agent.cancelCurrentWork();
 
     const reconnected = await reactivateOrchestratorHarness(seeded.db);
 
-    expect(chips(await reconnected.agent.getWorkspaceSnapshot()).steers).toEqual([STEER]);
+    expect(chips(await reconnected.agent.getWorkspaceSnapshot()).steers).toEqual([]);
   });
 });

@@ -1,7 +1,7 @@
 /** An agent's isolate for bun suites: the shipped AgentFacet in this process over its own database. */
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
-import { MAIN_AGENT, WORKSPACE_ROOT } from '@kinu.run/core';
+import { MAIN_AGENT, WORKSPACE_ROOT, type AgentSnapshot } from '@kinu.run/core';
 import type { AgentProviderDeps, AgentProviderRegistry } from '../../src/providers/agent-registry';
 import type { AgentContext } from 'agents';
 import { AgentFacet, type AgentFacetCalls, type AgentFacetEnv } from '../../src/agent-facet/agent-facet';
@@ -32,6 +32,143 @@ class ScriptedModelFacet extends AgentFacet {
 
 /** Isolates whose next answer row fails to write, as a failed commit does. */
 const undurableAnswers = new Set<string>();
+
+/** Isolates whose next turn's end never reaches the workspace, as one whose isolate died after its commit. */
+const lostTurnEnds = new Set<string>();
+
+/** The isolate under `storageKey` commits its next turn, and the end it tells the workspace is lost on the way. */
+export function loseNextTurnEnd(storageKey: string): void {
+  lostTurnEnds.add(storageKey);
+}
+
+/** A call held on its way to the workspace: `reached` once it is held, and it goes on once released. */
+export interface HeldCall {
+  readonly reached: Promise<void>;
+  readonly release: () => void;
+}
+
+const delayedTurnEnds = new Map<string, { readonly reached: () => void; readonly released: Promise<void> }>();
+
+/** The isolate under `storageKey` commits its next turn, and the end it tells the workspace waits on the way until
+ *  released. */
+export function delayNextTurnEnd(storageKey: string): HeldCall {
+  const reached = Promise.withResolvers<void>();
+  const released = Promise.withResolvers<void>();
+
+  delayedTurnEnds.set(storageKey, { reached: reached.resolve, released: released.promise });
+
+  return { reached: reached.promise, release: released.resolve };
+}
+
+const handedNarrations = new Map<string, (readonly string[])[]>();
+
+/** Each non-empty narration the isolate under `storageKey` handed its workspace, for an answer's metadata or a report. */
+export function narrationsHandedOver(storageKey: string): readonly (readonly string[])[] {
+  return handedNarrations.get(storageKey) ?? [];
+}
+
+function handNarration(storageKey: string, narration: readonly string[] | null): void {
+  if (narration !== null && narration.length > 0) handedNarrations.set(storageKey, [...narrationsHandedOver(storageKey), narration]);
+}
+
+export type TurnOpeningRequest = Parameters<AgentWorkspaceHost['prepareChat']>[0];
+
+const copiedOpenings = new Map<string, (opening: TurnOpeningRequest) => void>();
+
+/** The next opening of a turn the isolate under `storageKey` sends, as it sent it: a test delivers it again, late. */
+export async function copyNextOpening(storageKey: string): Promise<TurnOpeningRequest> {
+  const copied = Promise.withResolvers<TurnOpeningRequest>();
+
+  copiedOpenings.set(storageKey, copied.resolve);
+
+  return await copied.promise;
+}
+
+type TurnEndArgs = Parameters<AgentWorkspaceHost['turnEnded']>;
+
+const copiedTurnEnds = new Map<string, (args: TurnEndArgs) => void>();
+
+/** The next turn end the isolate under `storageKey` tells its workspace, as it told it, once it was told: a test
+ *  delivers it again, late. */
+export async function copyNextTurnEnd(storageKey: string): Promise<TurnEndArgs> {
+  const copied = Promise.withResolvers<TurnEndArgs>();
+
+  copiedTurnEnds.set(storageKey, copied.resolve);
+
+  return await copied.promise;
+}
+
+const lostOpeningAnswers = new Map<string, () => void>();
+
+/** The isolate under `storageKey` dies once the workspace has answered its next opening of a turn, before it reads the
+ *  answer: the promise settles then. */
+export async function loseNextOpeningAnswer(storageKey: string): Promise<void> {
+  const answered = Promise.withResolvers<void>();
+
+  lostOpeningAnswers.set(storageKey, answered.resolve);
+
+  await answered.promise;
+}
+
+/** How the next delivery to an isolate is cut: before it reaches the isolate, or after the isolate took it and before
+ *  its answer reaches the workspace. */
+type DeliveryCut = 'before-admit' | 'after-admit';
+
+const deliveryCuts = new Map<string, DeliveryCut>();
+
+/** The next delivery the workspace crosses into the isolate under `storageKey` is cut at `at`, as a death there would. */
+export function cutNextDelivery(storageKey: string, at: DeliveryCut): void {
+  deliveryCuts.set(storageKey, at);
+}
+
+const restingAnswers = new Map<string, (release: () => void) => void>();
+
+/**
+ * The next time the isolate under `storageKey` answers that it owes nothing, the answer, its own as it was when asked, is
+ * held on its way back to the workspace: the promise settles with `release`, which lets it arrive.
+ */
+export async function holdNextRestingAnswer(storageKey: string): Promise<() => void> {
+  const held = Promise.withResolvers<() => void>();
+
+  restingAnswers.set(storageKey, held.resolve);
+
+  return await held.promise;
+}
+
+const heldReports = new Map<string, (deliver: () => Promise<void>) => void>();
+
+/**
+ * The next report the isolate under `storageKey` sends that it owes anything is caught in flight: the isolate goes on as
+ * if it was told, as one that died after sending would, and the report reaches the workspace only once `deliver`ed.
+ */
+export async function catchNextOwingReport(storageKey: string): Promise<() => Promise<void>> {
+  const caught = Promise.withResolvers<() => Promise<void>>();
+
+  heldReports.set(storageKey, caught.resolve);
+
+  return await caught.promise;
+}
+
+const failedBroadcasts = new Set<string>();
+
+/** The workspace refuses the next broadcast the isolate under `storageKey` asks it to send. */
+export function failNextBroadcast(storageKey: string): void {
+  failedBroadcasts.add(storageKey);
+}
+
+const lostHandoffs = new Set<string>();
+
+/** The isolate under `storageKey` hands its next settled turn to a workspace that is gone before it takes it. */
+export function loseNextHandoff(storageKey: string): void {
+  lostHandoffs.add(storageKey);
+}
+
+const lostHandoffAnswers = new Set<string>();
+
+/** The workspace takes the next settled turn the isolate under `storageKey` hands it, and is gone before it answers. */
+export function loseNextHandoffAnswer(storageKey: string): void {
+  lostHandoffAnswers.add(storageKey);
+}
 
 /** The isolate under `storageKey` fails to write its next answer row; the commit is one transaction, so nothing lands. */
 export function failNextAnswerWrite(storageKey: string): void {
@@ -98,7 +235,7 @@ export function agentDatabase(workspace: Database, storageKey: string): Database
 
   agents.set(storageKey, db);
   databases.set(workspace, agents);
-  new AgentDatabase(contextOver(db, storageKey).storage, { agent: unreachable, home: WORKSPACE_ROOT, state: unreachable, enqueueTurn: unreachable, broadcast: unreachable, turnInFlight: () => false, memory: unreachable, program: unreachable, sayToParent: unreachable, logActivity: unreachable });
+  new AgentDatabase(contextOver(db, storageKey).storage, { agent: unreachable, home: WORKSPACE_ROOT, state: unreachable, enqueueTurn: unreachable, admitDelivery: unreachable, broadcast: unreachable, turnInFlight: () => false, memory: unreachable, program: unreachable, sayToParent: unreachable, logActivity: unreachable });
 
   return db;
 }
@@ -157,6 +294,8 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           stateSession: async () => stateSession(),
           memory: async () => host.memory(),
           program: (...args) => host.program(...args),
+          // Its port is the same calls, held as the shipped client holds the workspace's host.
+          port: async () => env.WORKSPACE,
           traceTurn: (...args) => {
             counted('traceTurn');
 
@@ -171,19 +310,79 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           guard: (...args) => host.guard(...args),
           debit: (...args) => host.debit(...args),
           prepareTurn: (turnId) => host.prepareTurn(turnId),
-          prepareChat: (request) => host.prepareChat(request),
+          prepareChat: async (request) => {
+            const copy = copiedOpenings.get(placement.storageKey);
+
+            if (copy !== undefined && request.turnId !== null) {
+              copiedOpenings.delete(placement.storageKey);
+              copy(request);
+            }
+
+            const lost = lostOpeningAnswers.get(placement.storageKey);
+            const prepared = await host.prepareChat(request);
+
+            if (lost === undefined || request.turnId === null) return prepared;
+            lostOpeningAnswers.delete(placement.storageKey);
+            lost();
+
+            return await new Promise<never>(() => {});
+          },
           bindProfile: (turnId, profile) => host.bindProfile(turnId, profile),
-          chatEvent: (event) => host.chatEvent(event),
-          turnEnded: (event, figures) => host.turnEnded(event, figures),
-          owedReport: (...args) => host.owedReport(...args),
+          chatEvent: async (event) => {
+            if (event.type === 'broadcast' && failedBroadcasts.delete(placement.storageKey)) throw new Error('the workspace refused the broadcast');
+
+            await host.chatEvent(event);
+          },
+          turnEnded: async (event, figures, activity) => {
+            if (lostTurnEnds.delete(placement.storageKey)) return;
+            const delay = delayedTurnEnds.get(placement.storageKey);
+
+            if (delay !== undefined) {
+              delayedTurnEnds.delete(placement.storageKey);
+              delay.reached();
+              await delay.released;
+            }
+
+            await host.turnEnded(event, figures, activity);
+            const copy = copiedTurnEnds.get(placement.storageKey);
+
+            copiedTurnEnds.delete(placement.storageKey);
+            copy?.([event, figures, activity]);
+          },
+          owedReport: (turn, ended) => {
+            handNarration(placement.storageKey, ended.narration);
+
+            return host.owedReport(turn, ended);
+          },
           parentReport: (report) => host.parentReport(report),
           autoTitle: (subject, title) => host.autoTitle(subject, title),
-          turnSettled: (settled) => host.turnSettled(settled),
+          turnSettled: async (settled) => {
+            if (lostHandoffs.delete(placement.storageKey)) throw new Error('the workspace was reset before it took the handoff');
+
+            await host.turnSettled(settled);
+
+            if (lostHandoffAnswers.delete(placement.storageKey)) throw new Error('the workspace took the handoff and was reset before it answered');
+          },
           hireAdvisor: (advisor) => host.hireAdvisor(advisor),
-          owes: (next, holds) => host.owes(next, holds),
+          owes: async (seq, next, holds, standing) => {
+            const catching = heldReports.get(placement.storageKey);
+
+            if (catching !== undefined && (holds || next !== null)) {
+              heldReports.delete(placement.storageKey);
+              catching(async () => { await host.owes(seq, next, holds, standing); });
+
+              return;
+            }
+
+            await host.owes(seq, next, holds, standing);
+          },
           birthContext: (drainTurnId) => host.birthContext(drainTurnId),
           steerSkills: (text, alreadyActive) => host.steerSkills(text, alreadyActive),
+          openWork: () => host.openWork(),
+          noteModelRequest: (lastRequestAt) => host.noteModelRequest(lastRequestAt),
+          armCacheWarm: (input) => host.armCacheWarm(input),
           advise: (review) => host.advise(review),
+          runEnded: (id, outcome) => host.runEnded(id, outcome),
           enqueueTurn: (input) => host.enqueueTurn(input),
           executeTool: (call) => host.executeTool(call),
           observe: (lines) => host.observe(lines),
@@ -192,7 +391,11 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
 
             return host.paceStep(turnId);
           },
-          answerMetadata: (turnId, narration) => host.answerMetadata(turnId, narration),
+          answerMetadata: (turnId, narration) => {
+            handNarration(placement.storageKey, narration);
+
+            return host.answerMetadata(turnId, narration);
+          },
           getAuth: (key, opts) => host.getAuth(key, opts),
           listCredentials: () => host.listCredentials(),
           relayDevice: (provider) => host.relayDevice(provider),
@@ -219,7 +422,37 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
       // error thrown across an RPC does.
       const calls = agentCallsThrough((call) => attemptInItsWords('io', () => untilLost(call(facet), lost.signal)));
 
-      return { facet, calls, lost };
+      const heldWhenResting = async (snapshot: AgentSnapshot): Promise<boolean> => {
+        const answer = await calls.owed(snapshot);
+        const hold = answer ? undefined : restingAnswers.get(placement.storageKey);
+
+        if (hold === undefined) return answer;
+        restingAnswers.delete(placement.storageKey);
+        const released = Promise.withResolvers<void>();
+
+        hold(released.resolve);
+        await released.promise;
+
+        return answer;
+      };
+
+      // Untouched unless a hold waits: the answer arrives on the tick it always did.
+      const owed = (snapshot: AgentSnapshot): Promise<boolean> => (restingAnswers.has(placement.storageKey) ? heldWhenResting(snapshot) : calls.owed(snapshot));
+
+      const admit: AgentFacetCalls['admit'] = async (snapshot, delivery) => {
+        const cut = deliveryCuts.get(placement.storageKey);
+
+        deliveryCuts.delete(placement.storageKey);
+
+        if (cut === 'before-admit') throw new Error('the crossing died before the agent took the delivery');
+        const answered = await calls.admit(snapshot, delivery);
+
+        if (cut === 'after-admit') throw new Error("the crossing died after the agent took the delivery, before its answer");
+
+        return answered;
+      };
+
+      return { facet, calls: { ...calls, owed, admit }, lost };
   }
 }
 

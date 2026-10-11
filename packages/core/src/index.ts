@@ -11,6 +11,10 @@ export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateI
 
 export { AgentOpenTurns, AgentOwedWork, type AgentOpenTurn } from './subordinates/open-turns';
 
+export { AgentReports, AgentSequence } from './subordinates/report-sequence';
+
+export { TurnFences, type OpenedAt } from './subordinates/turn-fence';
+
 export { TurnReports, type ReportedTurn } from './subordinates/turn-reports';
 
 export { runEventSinks } from './orchestrator/run-event-sinks';
@@ -45,6 +49,12 @@ export {
   type TerminalEffectFault, type OwedEffect, type OwedTerminalEffect,
   type TerminalSequenceRun,
 } from './orchestrator/terminal-effects';
+
+export {
+  initTurnBranchesTable, TurnBranchesStore, TurnFactsSchema, TurnFactsStore, type TurnFacts,
+} from './orchestrator/turn-facts';
+
+export { inTurnSurface, scopedTurnSurface, TurnSurface, type TurnSurfaceOpening } from './orchestrator/main-turn-surface';
 
 // Records that keyed work happened, kept after its row is retired.
 export {
@@ -124,6 +134,15 @@ export { CHAT_SESSION_ID } from './session/transcript-schema';
 export {
   forkWorkspace, type ForkTransport, type ForkDriverDeps, type ForkOutcome,
 } from './identity/fork-driver';
+
+export {
+  isForkConversationSection, localForkConversationSource, localForkConversationTarget, forkConversationRowSchema,
+  type ForkConversationSource, type ForkConversationTarget,
+} from './identity/fork-conversation';
+
+export { FORK_CONVERSATION_SECTIONS, FORK_SECTIONS, type ForkConversationSection, type ForkRows } from './identity/fork-sections';
+
+export { forkArtifactPath, type ForkConversationPlan } from './identity/fork-plan';
 
 // Workspace archive: one backup format for both backends.
 export {
@@ -537,11 +556,9 @@ export { SubordinateInheritedContextSchema, type SubordinateInheritedContext } f
 
 export { subordinateForkContext, subordinateTurnContext } from './subordinates/support';
 
-export { drainAssignments, type AdmittedAssignment, type DrainAssignmentsOptions } from './subordinates/assignments';
-
 export { inheritedAsModelMessage } from './heads/head-inference';
 
-export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, isSubordinateOrigin, whenActorTakesInput, type ActorOrigin, type ActorProfile, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './identity/workspace-actors';
+export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, isSubordinateOrigin, holdsChat, whenActorTakesInput, ActorOriginSchema, type ActorOrigin, type ActorProfile, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './identity/workspace-actors';
 
 export type { AnsweredEvolutionHelper } from './identity/evolution-helpers';
 
@@ -589,6 +606,10 @@ export {
   type SurfaceActor, type SurfaceCall, type SurfacePolicy, type SurfaceWeb,
 } from './delegation/actor-surface';
 
+export { actorPolicy, type ActorPolicy } from './delegation/actor-policy';
+
+export { actorReach, turnLane, turnReach, type ActorReach, type TurnLane, type TurnReach } from './delegation/turn-reach';
+
 export { AGENTS_OPS, type AgentsOp } from './operations/agents';
 
 export { createAgentSelfProvider, type AgentSelfHost } from './tools/agent-self';
@@ -625,6 +646,7 @@ export {
   temporaryRunSettles,
   taskTurnEnding,
   terminalTaskReport,
+  reportReadsNarration,
   type OwedReport,
   type SubordinateLifetime,
   type TemporaryAgentPort,
@@ -634,7 +656,6 @@ export {
   type TemporaryRunRequest,
 } from './subordinates/temporary';
 
-export { DelegatedTurnRunners, type DelegatedTurnRunnerDeps } from './subordinates/delegated-turns';
 
 // The depth cap is derived per child, never stated by one.
 export {
@@ -670,7 +691,7 @@ export {
 // Applied inside buildActorTools; backends never wrap tools themselves.
 export {
   initToolEffectClaimTable, claimToolEffect, settleToolEffect,
-  withEffectClaims,
+  withEffectReceipt,
   type EffectClaimDeps, type ToolEffectClaim, type ToolEffectKey,
 } from './tools/effect-claim';
 
@@ -688,7 +709,7 @@ export {
 } from './tools/operation-surfaces';
 
 export {
-  defineOperation, serve, operationId, allowedInPlan, inputJsonSchema,
+  defineOperation, serve, serveTransactional, operationId, allowedInPlan, inputJsonSchema,
   type Operation, type OperationCall, type OperationResult, type Served, type Impact,
 } from './operations/operation';
 
@@ -1677,7 +1698,7 @@ export type { WorkspaceWork, OwnedPlan, OwnedTask, WorkspaceWorkOwner } from './
 export { openingList, openingListOf, listedOn, type OpeningList } from './read-models/opening';
 
 export {
-  AgentOrchestrator, type AgentOrchestratorDeps,
+  AgentOrchestrator, improvementLanesOpen, type AgentOrchestratorDeps,
   type TurnContinuity,
 } from './orchestrator/agent-orchestrator';
 
@@ -1685,7 +1706,7 @@ export { ActorSession, CLEAR_NEEDS_IDLE, type ActorSessionOptions, type ActorTur
 
 
 export {
-  ChatSession, type ChatSessionOptions, type ChatSessionPorts, type CompactOutcome, type ComposedRequest, type ChatTransport, type ChatTurnInput,
+  ChatSession, type ChatSessionOptions, type ChatSessionPorts, type OpenWork, type CompactOutcome, type ComposedRequest, type ChatTransport, type ChatTurnInput,
   type PreparedTurn, type TurnOpening, type OwedTerminalEffectsInput, type SessionEvent, type SendOptions, type SendLandingWaiter,
 } from './orchestrator/chat-session';
 
@@ -1768,6 +1789,12 @@ export {
 } from './orchestrator/turn-surface';
 
 export { ModelCatalogSession, resolveEffectiveModelSpec, type ModelCatalogRead } from './orchestrator/model-catalog';
+
+export { stampAuthorship, turnAuthorship, type TurnAuthorship } from './orchestrator/turn-authorship';
+
+export {
+  AgentDeliveries, DeliveryInbox, DeliverySchema, wordsRefusal, initAgentDeliveriesTable, pendingEventsDelivery, assignmentDelivery, deliveryMetadata, deliveredSignal, handBackCarried, InProcessDeliveries, type DeliveredAssignment, type DeliveryPort, type OwedAdmission, type Delivery, type DeliveryAnswer, type DeliveryInput, type TurnDeliveryInput,
+} from './subordinates/deliveries';
 
 export {
   serializeContentForHeads, narrowInheritedRole,
@@ -1942,9 +1969,10 @@ export {
 
 export {
   ALL_CHANGES_BLOCK, changeNoteAnchor, changeNotesCard, initChangeNotesTable, inNoteOrder, readChangeNotes, saveChangeNotes, sendChangeNotes,
+  deliverOwedChangeNotes, owesChangeNotes,
 } from './read-models/change-notes';
 
-export type { ChangeNote, ChangeNotesCard, ChangeNotesResult, NotedChanges } from './read-models/change-notes';
+export type { ChangeNote, ChangeNotesCard, ChangeNotesChat, ChangeNotesMessage, ChangeNotesResult, NotedChanges } from './read-models/change-notes';
 
 export type {
   ChangeBlock, ChangeBody, ChangePair, ChangeRow, ChangeSet, ChangeSpan, ChangeTreeRow,
@@ -2606,6 +2634,6 @@ export {
 } from './mcp/servers';
 
 export type {
-  AgentTurnActivity, AgentCaptureDelta, AgentTurnOpening, AgentRecovery, AgentAnswer, AgentAnswerTexts, AgentReview, AgentStanding, AgentSteps, AgentSnapshot, AgentTurnTask, AgentToolAnswer,
+  AgentTurnActivity, AgentCaptureDelta, AgentTurnOpening, AgentRecovery, AgentAnswer, AgentAnswerTexts, AgentReview, AgentStanding, AgentStandingReport, AgentSteps, AgentSnapshot, AgentTurnTask, AgentToolAnswer,
   AgentToolCall, AgentToolDescriptor, AgentHeadDelta, AgentTrace, AgentTurnEnd, PreparedAgentTurn, StoredRow, TurnRequestAt,
 } from './subordinates/agent-isolate';
