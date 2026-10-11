@@ -11,6 +11,7 @@
  * PostgreSQL's answer to an SSLRequest, a MySQL greeting offering TLS, and a text protocol's answer to STARTTLS, STLS or
  * AUTH TLS. A program that asks for TLS anywhere else is answered with why, and the connection closed.
  */
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 /** The two ends this carries between; workerd's `Socket` is one. */
 export interface CarriedSocket {
@@ -142,7 +143,7 @@ export async function carryKeyed(program: CarriedSocket, server: UpgradableSocke
   const at: CarryState = { gate: null, awaited: null, first: true, reading: false, upgrading: false };
 
   // The server's bytes to the program, one read at a time, none past a go-ahead until the program moves.
-  const down = (async () => {
+  const carrying = (async () => {
     for (;;) {
       if (at.gate !== null) await at.gate.passed;
       at.gate = null;
@@ -171,8 +172,13 @@ export async function carryKeyed(program: CarriedSocket, server: UpgradableSocke
     }
   })();
 
-  // A failed end takes the other with it, so the loop below is not left reading a program nobody answers.
-  down.catch(() => Promise.allSettled([program.close(), server.close()]));
+  // A failed end takes the other with it, so the loop below is not left reading a program nobody answers; what
+  // failed is answered by the close, as the program's next read sees it.
+  const down = (async () => {
+    const [carried] = await Promise.allSettled([carrying]);
+
+    if (carried.status === 'rejected') await Promise.allSettled([program.close(), server.close()]);
+  })();
 
   // The program's bytes to the server, watched for its key; an upgrade ends this loop and hands both ends to TLS.
   let held: Uint8Array | null = null;
@@ -232,10 +238,11 @@ export async function carryKeyed(program: CarriedSocket, server: UpgradableSocke
     // A server named other than its host is checked by that name (workerd's own node:tls does the same).
     const secure = servername === hostname ? server.startTls() : server.startTls({ expectedServerHostname: servername });
 
-    try {
-      await secure.opened;
-    } catch (error) {
-      await toProgram.write(answer(key, `the TLS session with ${servername} could not be made: ${String(error)}`));
+    const [opened] = await Promise.allSettled([secure.opened]);
+
+    if (opened.status === 'rejected') {
+      // The program is told why, in the answer it waits for, and both ends close.
+      await toProgram.write(answer(key, `the TLS session with ${servername} could not be made: ${renderThrownChain({ cause: opened.reason })}`));
       await Promise.allSettled([program.close(), secure.close()]);
 
       return;
