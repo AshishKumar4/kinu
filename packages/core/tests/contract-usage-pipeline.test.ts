@@ -99,7 +99,7 @@ function runOneTurn(recorder: RunEventRecorder, runId: string, steps: readonly U
   recorder.emit(runId, { type: 'turn_start', turnIndex: 0 });
 
   for (const usage of steps) {
-    acc.recordStep({ usage, response: { messages: [] }, finishReason: 'stop' });
+    acc.recordStep({ usage, finishReason: 'stop' }, []);
   }
 
   closeTurnRun(recorder, runId, { turnIndex: 0, usage: acc.reportedUsage(), reason: 'completed' });

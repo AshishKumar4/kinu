@@ -13,6 +13,7 @@ import {
   formatPlanWithLineNumbers,
   initPlanReviewTable,
   planAwaitingReply,
+  planDecisionRefusal,
   workModeUnderReview,
   validatePlanEdits,
   buildBuiltinTools,
@@ -338,6 +339,25 @@ describe('comments and their threads', () => {
 
     // Each comment reaches the agent with its id, which the reply tool names, and what it says or quotes.
     for (const said of ['c1', 'Which chart?', 'd1', 'Count the crabs', 'g1', 'Split it into two mornings.']) expect(text).toContain(said);
+  });
+
+  // 26244c765: the browser refused to approve over unsent comments while the store and the CLI approved and dropped them.
+  test('a revision with comments is not approved over them, and is sent back on its comments alone', () => {
+    const { store } = setup();
+    store.submit('default', [{ start: 1, content: PLAN }]);
+    expect(store.saveAnnotations('plan-1', 1, { value: COMMENTS }).ok).toBe(true);
+
+    expect(store.decide('plan-1', 1, 'approve')).toMatchObject({ ok: false, error: expect.stringContaining('this revision has comments') });
+    expect(store.decide('plan-1', 1, 'request_changes')).toMatchObject({ ok: true, plan: { status: 'changes_requested', feedback: expect.stringContaining('Which chart?') } });
+  });
+
+  test('a change request with nothing to send is refused in words, whether its feedback came absent or as null', () => {
+    const { store } = setup();
+    store.submit('default', [{ start: 1, content: PLAN }]);
+
+    expect(store.decide('plan-1', 1, 'request_changes')).toMatchObject({ ok: false, error: 'a change request needs a comment or feedback' });
+    // An RPC carries absent feedback as `null`, and the store asks the rule with what it was given.
+    expect(planDecisionRefusal([], 'request_changes', null)).toBe('a change request needs a comment or feedback');
   });
 
   test('the agent answers in a thread; the next revision carries it read-only, and the owner\'s reply there is sent back', async () => {

@@ -9,7 +9,8 @@ import {
 import Layout from "@/components/layout";
 import { WorkspaceHeader } from "@/components/WorkspaceHeader";
 import { MessageView } from "@/components/MessageView";
-import { Composer, type ChatMode } from "@/components/Composer";
+import { Composer } from "@/components/Composer";
+import type { WorkMode } from "@kinu.run/core";
 import { ModelPicker } from "@/components/ModelPicker";
 import { InspectorBar } from "@/components/surfaces/InspectorBar";
 import { ChangesPanel, LAYOUT_KEY } from "@/components/surfaces/changes/ChangesPanel";
@@ -504,7 +505,7 @@ const REPLY: UIMessage = {
 
 function ChatColumn({ wide, sent, onOpenNote }: { wide: boolean; sent: readonly ChangeNote[] | null; onOpenNote: (anchor: DiffAnchor | undefined) => void }) {
   const [value, setValue] = useState("");
-  const [mode, setMode] = useState<ChatMode>("build");
+  const [mode, setMode] = useState<WorkMode>("build");
   const [model, setModel] = useState("anthropic/claude-opus-4");
 
   return (

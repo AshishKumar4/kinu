@@ -8,14 +8,15 @@ import {
   NotePencilIcon, ArrowsClockwiseIcon,
   CaretDownIcon, CaretRightIcon,
 } from "@phosphor-icons/react";
-import type { ChangelogEntryKind, DiffLine } from "@kinu.run/core";
+import type { ChangelogEntryKind } from "@kinu.run/core";
 import * as v from "valibot";
 import type { Rpc } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { diagnostics, showing, toKinuError, detach, settle } from "@kinu.run/core/obs";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
+import { ScaffoldVersionDiff } from "./ScaffoldLineage";
 import {
-  DiffLines, CodeBlock,
+  CodeBlock,
   changelogFactKey, changelogToolName, withToolDetails,
   type ChangelogEntryView, type CraftedToolDetail,
 } from "./shared";
@@ -32,7 +33,6 @@ const CraftedToolListSchema = v.looseObject({
   }))),
 });
 
-interface ScaffoldDiff { version: number; previousVersion: number | null; added: number; removed: number; lines: DiffLine[] }
 
 const KIND_ICON = {
   scaffold: GitBranchIcon,
@@ -204,28 +204,11 @@ function entryHasDetails(entry: ChangelogEntryView): boolean {
     || entry.kind === 'fact' || entry.kind === 'tool';
 }
 
-function EntryScaffoldDiff({ diff, onRetry }: {
-  diff: AsyncResource<ScaffoldDiff> | null;
-  onRetry: () => void;
-}) {
-  if (diff === null) return null;
+/** The scaffold version an entry changed, as a diff below it while shown. */
+function EntryScaffoldDiff({ rpc, version, shown }: { rpc: Rpc; version: number | null | undefined; shown: boolean }) {
+  if (!shown || version == null) return null;
 
-  if (diff.status === "error") {
-    return <LoadFailure className="mt-2" what="this diff" message={diff.message} onRetry={onRetry} />;
-  }
-
-  if (diff.status === "loading") return <div className="flex justify-center py-3"><Loader size="sm" /></div>;
-
-  return (
-    <div className="mt-2 rounded-md border p-border overflow-hidden">
-      <div className="flex items-center gap-3 px-3 py-1.5 border-b p-border p-annotation p-text-3">
-        <span>v{diff.value.previousVersion ?? "∅"} → v{diff.value.version}</span>
-        <span className="p-success">+{diff.value.added}</span>
-        <span className="p-danger">−{diff.value.removed}</span>
-      </div>
-      <DiffLines lines={diff.value.lines} />
-    </div>
-  );
+  return <div className="mt-2"><ScaffoldVersionDiff rpc={rpc} version={version} readAgain={0} /></div>;
 }
 
 export interface ChangelogEntryCardProps {
@@ -239,27 +222,10 @@ export interface ChangelogEntryCardProps {
 export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReverted }: ChangelogEntryCardProps) {
   const [kept, setKept] = useState(false);
   const { busy, notice, revert } = useEntryRevert(entry.id, rpc, onReverted);
-  const [diff, setDiff] = useState<AsyncResource<ScaffoldDiff> | null>(null);
+  const [diffShown, setDiffShown] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
-  const toggleDiff = useCallback(() => detach(Effect.gen(function* () {
-    if (diff !== null) {
-      setDiff(null);
-
-      return;
-    }
-
-    if (entry.scaffoldVersion == null) return;
-    setDiff({ status: "loading" });
-
-    return yield* Effect.catchCause(Effect.gen(function* () {
-      const d = yield* Effect.promise(async () => rpc<ScaffoldDiff>("getScaffoldDiff", [entry.scaffoldVersion]));
-      setDiff(loadSucceeded(d));
-    }), (failed) => Effect.sync(() => {
-      const cause = Cause.squash(failed);
-      setDiff(loadFailed({ status: "loading" }, { cause }));
-    }));
-  })), [rpc, entry.scaffoldVersion, diff]);
+  const toggleDiff = useCallback(() => setDiffShown((shown) => !shown), []);
 
   const actions = entry.revert && !kept ? (
     <>
@@ -342,7 +308,7 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
         </div>
       )}
 
-      <EntryScaffoldDiff diff={diff} onRetry={toggleDiff} />
+      <EntryScaffoldDiff rpc={rpc} version={entry.scaffoldVersion} shown={diffShown} />
     </div>
   );
 }

@@ -9,7 +9,7 @@ import type { LocalOAuthStore } from './oauth-store';
 import type { Database } from 'bun:sqlite';
 import type { LocalActorConfig } from '@kinu.run/core';
 import { KinuError, settle } from '@kinu.run/core/obs';
-import { requireSchemaGenesis } from './schema-genesis';
+import { localActorScaffoldSource, requireSchemaGenesis } from './schema-genesis';
 
 export interface WorkspaceInfo {
   id: string;
@@ -62,6 +62,8 @@ export function openWorkspaceCLI(
     }
 
     const rt = createCLIRuntime(db, { ...config, agentName: identity.name });
+    yield* Effect.promise(() => localActorScaffoldSource({ actor: rt.actor, sql: rt.storage.sql,
+      source: { path: rt.identity.scaffold.path, vfs: rt.agentStateVfs ?? rt.storage.vfs } }));
 
     // The status fold every backend shares, scoped to `rt.actor` (a facet opens as its own actor), over the workspace's
     // SOUL.md in its own space: its agents edit it, and may have emptied it.

@@ -24,6 +24,20 @@ async function workspace(gallery: Gallery, viewport: keyof typeof VIEWPORTS): Pr
   return page;
 }
 
+/**
+ * Opens the sidebar's agents list and waits until a reader could press a row in it: drawn, not inert, and done sliding
+ * in. A row pressed before then is under a panel still off to the side (tiers, 2026-10-10: the press hit the list).
+ */
+async function openAgentsList(page: Page, scope: string): Promise<void> {
+  await page.click(`${scope} [data-agents-counter]`);
+  await page.waitForFunction((list) => {
+    const shown = document.querySelector(list);
+
+    return shown !== null && shown.closest('[inert]') === null
+      && document.getAnimations().every((animation) => !(animation instanceof CSSTransition) || animation.playState !== 'running');
+  }, {}, `${scope} [data-sidebar-agents]`);
+}
+
 /** Whether the chat area, not the work surface, holds the agent's pane, and a phone shows that area. */
 function chatShows(page: Page, pane: string): Promise<boolean> {
   return page.$eval(pane, (node) => {
@@ -43,7 +57,7 @@ describe('opening an agent shows its live chat in the main chat area', () => {
         // The list is the sidebar's: the rail's on a desktop, the drawer's on a phone.
         if (viewport === 'phone') await page.click('.p-bar-menu button');
 
-        await page.click(`${viewport === 'phone' ? '[data-drawer]' : '[data-rail]'} [data-agents-counter]`);
+        await openAgentsList(page, viewport === 'phone' ? '[data-drawer]' : '[data-rail]');
         await page.click(`${viewport === 'phone' ? '[data-drawer]' : '[data-rail]'} [data-agent-row="a-scout"]`);
         await page.waitForSelector(AUDITOR_PANE);
         await page.waitForFunction((pane, said) => document.querySelector(pane)?.textContent?.includes(said), {}, AUDITOR_PANE, AUDITOR_SAID);

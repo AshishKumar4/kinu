@@ -40,7 +40,7 @@ const LEDGER_EVENTS: readonly RunEvent[] = [
     result: 'Error (exit 1)\n--- stderr ---\n1 fail', durationMs: 900,
     outcome: { success: false, reason: null, execution: { exitCode: 1 } },
   },
-  { type: 'step_finish', runId: 'run-1', eventIndex: 4, timestamp: TIMESTAMP, stepIndex: 0, reason: 'tool-calls' },
+  { type: 'step_finish', parts: [], runId: 'run-1', eventIndex: 4, timestamp: TIMESTAMP, stepIndex: 0, reason: 'tool-calls' },
   {
     type: 'turn_end', runId: 'run-1', eventIndex: 5, timestamp: TIMESTAMP, turnIndex: 0,
     usage: { input: 1_200, output: 300 },
@@ -63,7 +63,7 @@ const LEDGER_EVENTS: readonly RunEvent[] = [
     outcome: { success: true },
   },
   { type: 'completion_gate', runId: 'run-1', eventIndex: 10, timestamp: TIMESTAMP, converted: false },
-  { type: 'step_finish', runId: 'run-1', eventIndex: 11, timestamp: TIMESTAMP, stepIndex: 1, reason: 'stop' },
+  { type: 'step_finish', parts: [], runId: 'run-1', eventIndex: 11, timestamp: TIMESTAMP, stepIndex: 1, reason: 'stop' },
   {
     type: 'turn_end', runId: 'run-1', eventIndex: 12, timestamp: TIMESTAMP, turnIndex: 1,
     usage: { input: 1_500, output: 220 },
@@ -100,10 +100,8 @@ describe('an episode keeps its evidence', () => {
   });
 
   test('the bound clips the slice and says so, never the count', () => {
-    const long = Array.from({ length: 1_203 }, (_, index): RunEvent => ({
-      type: 'step_finish', runId: 'run-9', eventIndex: index, timestamp: '2026-08-30T12:00:00.000Z', stepIndex: index,
-      reason: 'tool-calls',
-    }));
+    const long = Array.from({ length: 1_203 }, (_, index): RunEvent => ({ type: 'step_finish', parts: [], runId: 'run-9', eventIndex: index, timestamp: '2026-08-30T12:00:00.000Z', stepIndex: index,
+    reason: 'tool-calls', }));
 
     const provenance = projectRunEventProvenance(long);
     expect(provenance.totalEvents).toBe(1_203);

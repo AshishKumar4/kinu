@@ -4,9 +4,9 @@ import { MemoryStore } from "../src/memory/store";
 import { createTestDb, createMemoryVfs } from "./helpers";
 
 function createStore(seed: Record<string, string>) {
-	const { sql } = createTestDb();
+	const { sql, transactionSync } = createTestDb()
 	const fs = createMemoryVfs(seed);
-	const store = new MemoryStore(fs, sql);
+	const store = new MemoryStore(fs, sql, transactionSync);
 	store.ensureSchema();
 
 	return { fs, store };

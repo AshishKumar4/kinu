@@ -5,9 +5,7 @@
 import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { attempt, diagnostics } from '../obs/index';
-import type { AgentRuntime } from '../types/agent-runtime';
 import type { AgentStores } from '../state/agent-stores';
-import { readVersionedScaffoldSource } from '../scaffold/versions';
 import { sha256Hex } from '../safety/argument-digest';
 import { cutsThrough, verifyClaimedProgram, type ClaimOutcome, type ContextRevision, type StoredActorClaim } from './actor-claims';
 import { recordRecoverySettled, sameBuildOf } from './turn-recovery-events';
@@ -26,7 +24,8 @@ export type InterruptedTurnVerdict =
   | { readonly kind: 'closed'; readonly cause: 'settled' | ClosedBy };
 
 export interface InterruptedTurn {
-  readonly runtime: AgentRuntime;
+  /** Reads retained program bytes; recovery never needs a composed execution seat. */
+  readonly source: (version: number) => Promise<string | null>;
   readonly stores: Pick<AgentStores, 'claims' | 'history'>;
   /** Where a Stop is recorded (`stop_requested`); none read, none found. */
   readonly runs: Pick<RunEventRecorder, 'stopRequested'> | null;
@@ -78,7 +77,7 @@ export function decideInterruptedTurn(turn: InterruptedTurn): Effect.Effect<Inte
 
     const verdict = yield* Effect.promise(() => verifyClaimedProgram(
       claim,
-      (version) => readVersionedScaffoldSource(turn.runtime, version),
+      turn.source,
       (source) => sha256Hex(source),
       evidence.context,
     ));

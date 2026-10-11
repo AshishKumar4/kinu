@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import {
-  CONTEXT_CHECKPOINT_PREFIX, ExtensionHost, OPENAI_CRED_KEY, createChatModel, createFallbackCooldowns, createOpenAIProvider, runChat,
+  CONTEXT_CHECKPOINT_PREFIX, ExtensionHost, OPENAI_CRED_KEY, createChatModel, ProviderPacer, createOpenAIProvider, runChat,
   type TransformContext,
 } from '@kinu.run/core';
 import { createMockFetch, createTestRuntime } from '@kinu.run/test-utils';
@@ -716,7 +716,7 @@ describe('summaries', () => {
     for await (const _ of runChat({
       model: gpt, modelSpec: 'openai/gpt-5.5', modelContext: { id: 'openai/gpt-5.5', contextWindow: 200_000 },
       fallbacks: [{ spec: 'openai-compat/m', accepts: new Set(), window: { contextWindow: null, modelOutputLimit: null }, bind: () => ({ model: compat, provider: 'openai-compat' }) }],
-      cooldowns: createFallbackCooldowns(), extensions: new ExtensionHost().register(rig().extension),
+      pacer: new ProviderPacer(), extensions: new ExtensionHost().register(rig().extension),
       conversationKey: SESSION, system: 'sys', history: compacted, tools: {},
     })) { /* drain */ }
 

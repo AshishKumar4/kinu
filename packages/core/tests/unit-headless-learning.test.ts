@@ -200,7 +200,7 @@ describe('a headless actor runs the step clock only', () => {
       turnId: 'h1', sessionId: 'default', origin: 'user',
     });
 
-    const root = await seats.host.acquire(actorReferenceOf(rt.actor));
+    const root = await seats.host.acquire(actorReferenceOf(rt.actor), { kind: 'actor' });
     root.session.orchestrator.recordTurn(turn, 'conversation');
     root.session.orchestrator.observeUserTurn('the probe kept failing and you never changed its arguments', 'conversation');
     await root.session.orchestrator.settleTracked();

@@ -78,7 +78,7 @@ interface Subject {
 }
 
 async function subjects(fixture: HostedWorkspaceFixture): Promise<readonly Subject[]> {
-  const main = await fixture.host.acquire(fixture.main);
+  const main = await fixture.host.acquire(fixture.main, { kind: 'actor' });
   const hired = await fixture.hire(fixture.main, 'sub-hired-1', 'agent');
   const temporary = await fixture.hire(fixture.main, 'sub-temp-2', 'agent');
   const head = await fixture.hire(fixture.main, 'exp:head-a1', 'swarm');
@@ -157,7 +157,7 @@ describe('the promoted-loop contract holds for every full actor kind', () => {
 
     // Promote the parent twice: inheriting when only v1 exists cannot distinguish a copy from a fresh bootstrap.
     const fixture = await hostedWorkspace();
-    const main = await fixture.host.acquire(fixture.main);
+    const main = await fixture.host.acquire(fixture.main, { kind: 'actor' });
     await installVersion(fixture, main, 1, 'v1:root');
     await installVersion(fixture, main, 2, 'v2:root');
     const head = await fixture.hire(fixture.main, 'exp:head-b1', 'swarm');

@@ -3,7 +3,6 @@
 import { AwaitedList, awaitExit, killAndAwaitExit, recordedIn, runToExit } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { hostname } from 'node:os';
 
 import { join, resolve } from 'node:path';
 import type { Server, Subprocess } from 'bun';
@@ -280,8 +279,10 @@ describe('device-connect prompt policy', () => {
   });
 
   test('THIS machine connected suppresses the offer without re-fetching', async () => {
-    const stub = startStubCloud({ devices: () => [connectedDevice(true, { hostname: hostname() })] });
+    // This machine is the device its device.json names, whatever its hostname.
+    const stub = startStubCloud({ devices: () => [connectedDevice(true, { id: 'dev_this', hostname: 'renamed-box' })] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', device: 'dev_this', token: 'pdt_this', origin: stub.origin }));
 
     const out = await runScript(home, `
       import { shouldOfferDeviceConnect } from './packages/cli/src/device-connect.ts';
@@ -364,7 +365,7 @@ describe('device-connect daemon lifecycle', () => {
     expect(stub.hits.daemonScript).toBe(0);
     // runScript sets cwd to the repo root; the daemon reports it to the hub as the consented tree.
     const deviceConfig = parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8'));
-    expect(deviceConfig).toEqual({ user: 'user_1', token: 'device-token', origin: stub.origin, root: repoRoot });
+    expect(deviceConfig).toEqual({ user: 'user_1', device: 'dev_1', token: 'device-token', origin: stub.origin, root: repoRoot });
     expect(statSync(join(home, 'pc-agent.js')).mode & 0o777).toBe(0o700);
     expect(statSync(join(home, 'device.json')).mode & 0o777).toBe(0o600);
     expect(statSync(join(home, 'agents')).mode & 0o777).toBe(0o700);
@@ -399,30 +400,40 @@ describe('device-connect daemon lifecycle', () => {
     expect(bodies.map((body) => body.replaces)).toEqual([undefined, 'device-token']);
   });
 
-  test('session mode is a no-op while a daemon is already running', async () => {
-    const stub = startStubCloud({ devices: () => [connectedDevice(false)] });
-    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+  // 26244c765: "This PC is already connected" read any connected device of the account as this machine.
+  const running: Array<[string, CloudDevice[], boolean]> = [
+    ['its own device is not connected', [connectedDevice(false, { id: 'dev_this' })], false],
+    ['another machine of the account is connected', [connectedDevice(false, { id: 'dev_this' }), connectedDevice(true, { id: 'dev_other' })], false],
+    ['its own device is connected', [connectedDevice(true, { id: 'dev_this' })], true],
+  ];
 
-    const sleeper = Bun.spawn({ cmd: ['sleep', '30'] });
-    sleepers.push(sleeper);
-    writeFileSync(join(home, 'pc-agent.pid'), `${sleeper.pid}\n`, { mode: 0o600 });
+  for (const [what, devices, connected] of running) {
+    test(`session mode is a no-op while a daemon is already running; ${what}`, async () => {
+      const stub = startStubCloud({ devices: () => devices });
+      const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
 
-    const out = await runScript(home, `
-      import { connectDevice } from './packages/cli/src/device-connect.ts';
-      const result = await connectDevice({ origin: '${stub.origin}', token: 'ptc_test' }, { session: true });
-      console.log(JSON.stringify({ result }));
-    `);
+      const sleeper = Bun.spawn({ cmd: ['sleep', '30'] });
+      sleepers.push(sleeper);
+      writeFileSync(join(home, 'pc-agent.pid'), `${sleeper.pid}\n`, { mode: 0o600 });
+      writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', device: 'dev_this', token: 'pdt_this', origin: stub.origin }));
 
-    const { result } = v.parse(v.object({
-      result: v.object({ kind: v.string(), connected: v.boolean() }),
-    }), JSON.parse(out.trim()));
+      const out = await runScript(home, `
+        import { connectDevice } from './packages/cli/src/device-connect.ts';
+        const result = await connectDevice({ origin: '${stub.origin}', token: 'ptc_test' }, { session: true });
+        console.log(JSON.stringify({ result }));
+      `);
 
-    expect(result).toEqual({ kind: 'already-running', connected: false });
-    expect(stub.registrationRequests.items.length).toBe(0);
-    expect(stub.hits.daemonScript).toBe(0);
-    expect(sleeper.killed).toBe(false);
-    expect(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim()).toBe(String(sleeper.pid));
-  });
+      const { result } = v.parse(v.object({
+        result: v.object({ kind: v.string(), connected: v.boolean() }),
+      }), JSON.parse(out.trim()));
+
+      expect(result).toEqual({ kind: 'already-running', connected });
+      expect(stub.registrationRequests.items.length).toBe(0);
+      expect(stub.hits.daemonScript).toBe(0);
+      expect(sleeper.killed).toBe(false);
+      expect(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim()).toBe(String(sleeper.pid));
+    });
+  }
 });
 
 describe('the agent-home root the daemon reports', () => {
@@ -607,7 +618,7 @@ describe('device-connect install hardening', () => {
     expect(JSON.parse(out.trim())).toEqual(connectedResult());
     expect(readFileSync(join(home, 'pc-agent.js'), 'utf-8')).toBe(DAEMON_SOURCE);
     expect(parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8')))
-      .toEqual({ user: 'user_1', token: 'device-token', origin: stub.origin, root: repoRoot });
+      .toEqual({ user: 'user_1', device: 'dev_1', token: 'device-token', origin: stub.origin, root: repoRoot });
     expect(statSync(join(home, 'pc-agent.js')).mode & 0o777).toBe(0o700);
     expect(readdirSync(home).filter((entry) => entry.includes('.tmp-'))).toEqual([]);
   });

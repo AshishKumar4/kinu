@@ -1,33 +1,6 @@
-/** OMP "cooldown-expiry" (turn-recovery.ts 1623-1630, 2184-2240): Retry-After, else 5 min; per isolate. */
+/** Provider-declared retry delays, read without replacing the response's headers. */
 
 import * as v from 'valibot';
-
-const UNSTATED_COOLDOWN_MS = 5 * 60 * 1000;
-
-export interface FallbackCooldowns {
-  park(spec: string, retryAfterMs: number | null): void;
-  parked(spec: string): boolean;
-}
-
-export function createFallbackCooldowns(now: () => number = Date.now): FallbackCooldowns {
-  const until = new Map<string, number>();
-
-  return {
-    park: (spec, retryAfterMs) => {
-      until.set(spec, now() + (retryAfterMs === null || retryAfterMs <= 0 ? UNSTATED_COOLDOWN_MS : retryAfterMs));
-    },
-    parked: (spec) => {
-      const end = until.get(spec);
-
-      if (end === undefined) return false;
-
-      if (end > now()) return true;
-      until.delete(spec);
-
-      return false;
-    },
-  };
-}
 
 const WithHeadersSchema = v.looseObject({
   retryAfterMs: v.optional(v.number()),

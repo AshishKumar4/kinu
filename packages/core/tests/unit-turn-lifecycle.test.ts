@@ -241,7 +241,7 @@ describe('snapshotCompletedTurn', () => {
     const acc = new TurnAccumulator();
     acc.reset(Date.now() - 1_000);
     acc.recordToolCall({ toolCallId: 'fixture-2', toolName: 'shell', input: { command: 'ls' }, success: true, output: 'ok' });
-    acc.recordStep({});
+    acc.recordStep({}, []);
 
     const turn = snapshotCompletedTurn({ acc, steering: new TurnSteering() }, {
       userMessage: 'do it', assistantResponse: 'done', turnId: 't1', sessionId: 'default', origin: 'user',
@@ -259,7 +259,7 @@ describe('snapshotCompletedTurn', () => {
     const acc = new TurnAccumulator();
     acc.reset(Date.now());
     acc.recordToolCall({ toolCallId: 'fixture-3', toolName: 'shell', success: false, reason: null, error: 'exit 1' });
-    acc.recordStep({ usage: { input: 7, output: 3 } });
+    acc.recordStep({ usage: { input: 7, output: 3 } }, []);
 
     const turn = snapshotCompletedTurn({ acc, steering: new TurnSteering() }, {
       userMessage: 'u', assistantResponse: 'a', sessionId: 's', origin: 'programmatic',

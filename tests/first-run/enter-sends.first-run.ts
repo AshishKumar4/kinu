@@ -220,6 +220,7 @@ async function turnSettled(
   session: {
     history(): Promise<readonly { role: string; text: string; landedAtStep?: number }[]>;
     runEvents(): Promise<readonly RunEvent[]>;
+    stepMessages(events: readonly RunEvent[]): Promise<import('../../evals/src/transcript').StepMessages>;
   },
   marker: string,
 ): Promise<'replied' | { ended: string }> {
@@ -229,7 +230,9 @@ async function turnSettled(
     // A marker the TUI sent while a turn was live is spliced into that turn —
     // the settlement to await is the absorbing run's, and the splice step on
     // the marker's row keeps the run's own pre-landing work out of the window.
-    const outcome = firstRunTurnSettlement(await session.runEvents(), marker, {
+    const events = await session.runEvents();
+
+    const outcome = firstRunTurnSettlement(events, marker, await session.stepMessages(events), {
       splicedAtStep: firstRunSpliceStep(history, marker),
     });
 

@@ -1,9 +1,9 @@
 {
   "measuredAt": "2026-10-10",
-  "files": 3152,
-  "functions": 82840,
+  "files": 3174,
+  "functions": 83217,
   "ceiling": 87,
-  "line": 27,
+  "line": 26,
   "inventory": [
     {
       "key": "packages/core/src/strategy/swarm-run.ts#runSwarm",
@@ -26,10 +26,6 @@
       "complexity": 42
     },
     {
-      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
-      "complexity": 41
-    },
-    {
       "key": "packages/cli/src/tui/home-app.tsx#HomeScene",
       "complexity": 41
     },
@@ -39,6 +35,10 @@
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/PlanReviewView.tsx#PlanReviewView",
+      "complexity": 40
+    },
+    {
+      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
       "complexity": 40
     },
     {
@@ -67,10 +67,6 @@
     },
     {
       "key": "packages/core/src/bench/stats.ts#pairedBinaryComparison>gen",
-      "complexity": 36
-    },
-    {
-      "key": "packages/core/src/tui/input-state.ts#reduceInput",
       "complexity": 36
     },
     {
@@ -178,10 +174,6 @@
       "complexity": 29
     },
     {
-      "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.constructor",
-      "complexity": 29
-    },
-    {
       "key": "packages/cli/src/tui/onboarding.tsx#GuidedOnboarding>useKeyboard",
       "complexity": 29
     },
@@ -191,6 +183,10 @@
     },
     {
       "key": "packages/core/src/feedback/png.ts#sanitizePng",
+      "complexity": 29
+    },
+    {
+      "key": "packages/core/src/tui/input-state.ts#reduceInput",
       "complexity": 29
     },
     {
@@ -270,6 +266,10 @@
       "complexity": 27
     },
     {
+      "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.constructor",
+      "complexity": 27
+    },
+    {
       "key": "packages/cli/src/commands/debug.ts#summarizeRun",
       "complexity": 27
     },
@@ -287,10 +287,6 @@
     },
     {
       "key": "packages/core/src/orchestrator/session-stream.ts#SessionStream.writePart",
-      "complexity": 27
-    },
-    {
-      "key": "packages/core/src/orchestrator/turn-accumulator.ts#TurnAccumulator.writeStep",
       "complexity": 27
     },
     {
@@ -340,6 +336,126 @@
     {
       "key": "tools/oxlint/anti-slop/rules/no-widen-then-assert.ts#knownValueEvidence",
       "complexity": 27
+    },
+    {
+      "key": "evals/src/harness.ts#createKinuHarness>run>duringTrial",
+      "complexity": 26
+    },
+    {
+      "key": "evals/src/sight.ts#look",
+      "complexity": 26
+    },
+    {
+      "key": "packages/cf-backend/src/components/ProfileCatalogSettings.tsx#ProfileCatalogSettings",
+      "complexity": 26
+    },
+    {
+      "key": "packages/cf-backend/src/components/Sidebar.tsx#Sidebar",
+      "complexity": 26
+    },
+    {
+      "key": "packages/cf-backend/src/components/slates/InlineSlate.tsx#SlateCard",
+      "complexity": 26
+    },
+    {
+      "key": "packages/cf-backend/src/components/surfaces/ChangesSurface.tsx#ChangesSurface",
+      "complexity": 26
+    },
+    {
+      "key": "packages/cf-backend/src/gallery-preview-tabs.tsx#PreviewTabsGallery>useCallback>gen",
+      "complexity": 26
+    },
+    {
+      "key": "packages/cf-backend/src/gallery.tsx#settingsSectionsFixture",
+      "complexity": 26
+    },
+    {
+      "key": "packages/cf-backend/tests/workerd/fork-probe.ts#ForkSourceProbeDO.deliver",
+      "complexity": 26
+    },
+    {
+      "key": "packages/cli/src/slash-commands.ts#instructionsCommand",
+      "complexity": 26
+    },
+    {
+      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene>useCallback#30",
+      "complexity": 26
+    },
+    {
+      "key": "packages/cli/src/tui/onboarding.tsx#GuidedOnboarding",
+      "complexity": 26
+    },
+    {
+      "key": "packages/cli/src/tui/tui-shell.tsx#TuiShell>useKeyboard",
+      "complexity": 26
+    },
+    {
+      "key": "packages/compaction/src/extension.ts#compactionExtension>transformContext",
+      "complexity": 26
+    },
+    {
+      "key": "packages/core/src/identity/archive.ts#readWorkspaceArchivePage>gen",
+      "complexity": 26
+    },
+    {
+      "key": "packages/core/src/orchestrator/terminal-effects.ts#TerminalEffectLedger.attempt",
+      "complexity": 26
+    },
+    {
+      "key": "packages/core/src/prompting/volatile-context.ts#renderDynamicSections",
+      "complexity": 26
+    },
+    {
+      "key": "packages/core/src/safety/misevolution.ts#codeFacts>visit",
+      "complexity": 26
+    },
+    {
+      "key": "packages/core/src/session/message-codec.ts#sameStoredValue",
+      "complexity": 26
+    },
+    {
+      "key": "packages/core/src/strategy/fanin.ts#createLevelFanIn>fanInAtLevel",
+      "complexity": 26
+    },
+    {
+      "key": "packages/core/src/strategy/swarm.ts#resolveSwarm",
+      "complexity": 26
+    },
+    {
+      "key": "packages/core/tests/unit-deploy-flow.test.ts#FakeCloudflare.answer",
+      "complexity": 26
+    },
+    {
+      "key": "packages/core/tests/unit-fork-transfer.test.ts#framesFor",
+      "complexity": 26
+    },
+    {
+      "key": "scripts/devbox-container-tier.ts#main",
+      "complexity": 26
+    },
+    {
+      "key": "scripts/infra-verify.ts#audit",
+      "complexity": 26
+    },
+    {
+      "key": "scripts/ladder-closure.ts#deriveClosure",
+      "complexity": 26
+    },
+    {
+      "key": "scripts/patch-parity.ts#checkPackage",
+      "complexity": 26
+    },
+    {
+      "key": "scripts/syntax.ts#importUses>walk#2",
+      "complexity": 26
+    },
+    {
+      "key": "scripts/wired.ts#measureFields>walk#3",
+      "complexity": 26
+    },
+    {
+      "key": "tools/oxlint/anti-slop/rules/no-elapsed-work-deadline.ts#hasNoTimerAlternative",
+      "complexity": 26
     }
   ]
 }

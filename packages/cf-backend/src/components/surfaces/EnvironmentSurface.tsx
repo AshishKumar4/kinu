@@ -15,7 +15,7 @@ import {
   pickDefaultExecutor,
   type ExecutorInfo,
 } from "@kinu.run/core";
-import type { ExecutorOutput } from "@/hooks/use-kinu";
+import type { ExecutorOutput } from "@/hooks/use-chat-owner";
 import { lazyRoute } from "@/lazy-route";
 import type { TerminalPaneProps } from "@/components/TerminalPane";
 import { Loader } from "@cloudflare/kumo";

@@ -260,7 +260,7 @@ export const DECLARED = byFile([
       'a gallery fixture that mirrors SlateHost.preview\'s answer'],
     ['packages/cf-backend/src/gallery.tsx', ['accountProfileFixture', 'deviceRowsFixture', 'galleryFetch', 'data', 'savePlanReviewAnnotations', 'galleryAnnotationSave', 'previewSlate', 'slate', 'galleryPlanRpc', 'galleryRosterRpc', 'PICKER_TEST_RESULTS', 'galleryModelTest', 'slateRpc', 'approvalsRpc', 'filesRpc'],
       'gallery fixtures that mirror RPC, HTTP and model-test answers'],
-    ['packages/cf-backend/src/hooks/use-kinu.ts', ['dismissSubordinate'],
+    ['packages/cf-backend/src/hooks/use-workspace-reads.ts', ['dismissSubordinate'],
       'the dismissSubordinate RPC answer as the hook passes it on'],
     ['packages/cf-backend/src/mcp-server.ts', ['McpAgentClient'],
       'the saveNoteFromMcp RPC answer the MCP save_note tool returns'],
@@ -524,7 +524,7 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
         return;
       }
 
-      const caller = edgeCaller(node, file.endsWith('.tsx'));
+      const caller = edgeCaller(node);
 
       if (detachNames.has(raw.callee.name)) {
         if (caller === 'tracked') findings.push(`${site}: ${DETACH_DROPS_PENDING}`);
@@ -698,16 +698,17 @@ function heldIn(runner: SyntaxNode): SyntaxNode | undefined {
 type EdgeCaller = 'react' | 'tracked' | 'component';
 
 /**
- * Who calls the function a runner sits in: `react` for a caller that never awaits (a timer, a listener, or React's
- * positions in `.tsx`), `tracked` for React tracking the returned promise, `component` for a component's own surface
- * (`.tsx`), or null.
+ * Who calls the function a runner sits in: `react` for a caller that never awaits (a timer, a listener, or one of
+ * React's positions), `tracked` for React tracking the returned promise, `component` for a component's own surface, or
+ * null. React's positions are read by syntax, in whatever file they sit: a hook's `.ts` module hands React the same
+ * functions a component does.
  */
-function edgeCaller(runner: SyntaxNode, tsx: boolean): EdgeCaller | null {
+function edgeCaller(runner: SyntaxNode): EdgeCaller | null {
   const fn = heldIn(runner);
 
   if (neverAwaited(fn)) return 'react';
 
-  return tsx ? reactCaller(fn) : null;
+  return reactCaller(fn);
 }
 
 /** Whether a runner is a holder's whole argument, or the whole body of a callback that is one. */

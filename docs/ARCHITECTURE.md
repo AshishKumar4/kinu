@@ -323,8 +323,9 @@ sequenceDiagram
     Note over T: evolution runs async, never blocks the queue
 ```
 
-The browser side is `WorkspacePage.tsx` through `use-kinu.ts` (`useAgent` and
-`useAgentChat`) to the Agents SDK WebSocket transport. `ChatWireTransport`
+The browser side is `WorkspacePage.tsx` through `use-kinu.ts`, whose chat owner
+(`use-chat-owner.ts`: `useAgent` and `useAgentChat`) reaches the Agents SDK
+WebSocket transport. `ChatWireTransport`
 (`packages/cf-backend/src/chat-transport.ts`) maps the SDK's `cf_agent_*` chat
 protocol onto `ChatSession`: a chat request becomes one `ChatSession.send` per
 new message, a cancel becomes an interrupt, and the transport writes no row

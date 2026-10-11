@@ -1,8 +1,8 @@
 /** Tri-state fetch: a failed fetch must never render as an empty answer or an endless spinner. */
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as v from "valibot";
-import { Cause, Effect, type Exit } from "effect";
-import { hold } from "@kinu.run/core/obs";
+import { Cause, Effect } from "effect";
+import { detach } from "@kinu.run/core/obs";
 
 export type AsyncResource<T> =
   | { status: "loading" }
@@ -83,8 +83,6 @@ export function useAsyncResource<T>(
 
   // Only the newest run may write; a slow failing load must not overwrite its retry.
   const runId = useRef(0);
-  // Reloads overlap; every task is retained until it settles, and the run id decides which publishes.
-  const activeRuns = useRef(new Map<number, Promise<Exit.Exit<void>>>());
 
   // A task that settles after unmount must not publish into a retired resource.
   useEffect(() => () => {
@@ -98,17 +96,15 @@ export function useAsyncResource<T>(
       resource: beginLoad(previous.identity === identity ? previous.resource : { status: "loading" }),
     }));
 
-    const task = hold(Effect.gen(function* () {
-      // Held until the newest-run check below, so a superseded load publishes nothing.
-      const thrown = yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+    // A superseded load publishes nothing, its answer or its failure.
+    detach(Effect.gen(function* () {
+      const thrown = yield* Effect.catchCause(Effect.gen(function* () {
         const value = yield* Effect.promise(load);
 
         if (id === runId.current) setState({ identity, resource: loadSucceeded(value) });
 
         return null;
-      }), (failed) => Effect.succeed({ cause: Cause.squash(failed) })), Effect.sync(() => {
-        activeRuns.current.delete(id);
-      }));
+      }), (failed) => Effect.succeed({ cause: Cause.squash(failed) }));
 
       if (thrown === null || id !== runId.current) return;
       setState((previous) => ({
@@ -116,8 +112,6 @@ export function useAsyncResource<T>(
         resource: loadFailed(previous.identity === identity ? previous.resource : { status: "loading" }, thrown),
       }));
     }));
-
-    activeRuns.current.set(id, task);
   }, [identity, load]);
 
   useEffect(() => { run(); }, [run]);

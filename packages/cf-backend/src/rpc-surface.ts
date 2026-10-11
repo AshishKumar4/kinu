@@ -146,6 +146,7 @@ const USER_DO_METHODS = [
   'heldRows',
   'issueCliAgentConnectTicket',
   'issueDeviceConnectTicket',
+  'issueDeviceJoin',
   'listAIGateways',
   'listAccessTokens',
   'listActiveWorkspaces',

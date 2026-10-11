@@ -11,7 +11,7 @@ import type { Agent, AgentContext } from 'agents';
 import {
   childContextResolver, localContextTree, type ContextEditor, type ContextTree, createActorHost, defaultLoopOrigin, runEventSinks, EvolutionEngine, historyTurnPairs, EventLog, MissionGovernor,
   facetHomeProvisioner, facetHomeReleaser, actorHomeName, actorStateRoot,
-  actorScaffoldPath, nimbusSessionFiles, agentArtifactDirectory, agentHome, MAIN_AGENT, type ActorHost,
+  actorScaffoldPath, nimbusSessionFiles, agentArtifactDirectory, agentHome, MAIN_AGENT, WORKSPACE_ROOT, type ActorHost,
   type ActorHostDeps, type ActorRetirement, type BoundActor, type ActorHandle, type ActorReference,
   type AgentOrchestratorDeps, type AgentRuntime, type BackendHost, type BroadcastEvent,
   type ContextEventRecorder, type DeferredApprovalChannel, type EnqueueTurnResult, type LoopOrigin,
@@ -250,6 +250,8 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
 
       return runtime;
     },
+    scaffoldFor: async (bound) => ({ path: actorScaffoldPath(bound.record),
+      vfs: nimbusSessionFiles(seams.workspaceBox(hostedActorPlacement(bound.record).shellId), { home: WORKSPACE_ROOT }) }),
 
     /**
      * Heads and branches inherit the parent's promoted loop; hired subordinates start builtin.

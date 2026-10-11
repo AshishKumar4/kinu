@@ -25,7 +25,7 @@ export function prepareActorProgram(input: ScaffoldRunControl & {
     assertScaffoldActive(input);
 
     if (input.mode === 'plan' || input.version <= 0) return BUILTIN_PROGRAM;
-    const source = yield* Effect.promise(() => readVersionedScaffoldSource(input.runtime, input.version));
+    const source = yield* Effect.promise(() => readVersionedScaffoldSource({ path: input.runtime.identity.scaffold.path, vfs: input.runtime.agentStateVfs ?? input.runtime.storage.vfs }, input.version));
     assertScaffoldActive(input);
 
     if (source === null) return yield* new KinuError('missing', 'scaffold version ' + input.version + ' has no source');

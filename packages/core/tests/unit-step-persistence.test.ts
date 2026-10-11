@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { isStepCount, tool, type ModelMessage, type ToolSet } from 'ai';
+import { isStepCount, tool, type ToolSet } from 'ai';
 import { z } from 'zod';
 import { runChat, type ChatEvent, type StepRecord } from '../src/chat';
 import { MockLanguageModelV3 } from 'ai/test';
@@ -166,16 +166,17 @@ describe('a native step seals before its hook and ends on a recording failure', 
   });
 });
 
-test('a scaffold step with no response cannot rewind the durable cursor', () => {
-  const recorded: Array<ReadonlyArray<ModelMessage> | undefined> = [];
-  const acc = new TurnAccumulator({ onStepEvent: (event) => { recorded.push(event.messages); } });
-  const first: ModelMessage = { role: 'assistant', content: 'one' };
-  const second: ModelMessage = { role: 'assistant', content: 'two' };
-  acc.recordStep({ response: { messages: [first] } });
-  acc.recordStep({ response: { messages: [] } });
-  acc.recordStep({ response: { messages: [first, second] } });
+test('a boundary with no sealed output cannot invent or repeat another step\'s references', () => {
+  const steps: (readonly { messageId: string; partNo: number }[])[] = [];
+  const acc = new TurnAccumulator({ onStepEvent: (event) => { steps.push(event.parts); } });
+  const first = { messageId: 'first', partNo: 0 };
+  const second = { messageId: 'second', partNo: 0 };
 
-  expect(recorded).toEqual([[first], undefined, [second]]);
+  acc.recordStep({}, [first]);
+  acc.recordStep({}, []);
+  acc.recordStep({}, [second]);
+
+  expect(steps).toEqual([[first], [], [second]]);
 });
 
 test('each streamed step retains the breakdown of its own request', async () => {
