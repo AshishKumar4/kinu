@@ -137,7 +137,7 @@ describe('where a provider secret is written', () => {
       expect((await runStore(account, { local: false, endpoint: 'https://llm.example.com/v1', contextWindow: '131,072' })).exitCode).toBe(0);
       expect((await runStore(local, { local: true, endpoint: 'http://localhost:11434/v1', contextWindow: '131072' })).exitCode).toBe(0);
       expect(received).toEqual([{ path: '/api/cli/credentials/openai-compat.default', method: 'POST', auth: 'Bearer ptc_test_token',
-        body: { baseURL: 'https://llm.example.com/v1', apiKey: 'sk-or-secret', contextWindow: 131_072 } }]);
+        body: { kind: 'openai-compat', baseURL: 'https://llm.example.com/v1', apiKey: 'sk-or-secret', contextWindow: 131_072 } }]);
       expect(JSON.stringify(storedConfig(account))).not.toContain('sk-or-secret');
       expect(storedConfig(local).providers).toMatchObject({ openaiCompat: { default: { baseURL: 'http://localhost:11434/v1', apiKey: 'sk-or-secret', contextWindow: 131_072 } } });
     } finally {
@@ -153,7 +153,7 @@ describe('where a provider secret is written', () => {
       const res = await runStore(home, { local: false, endpoint: 'https://[2606:4700:4700::1111]/v1' });
       expect(res.exitCode, res.stdout).toBe(0);
       expect(received).toEqual([{ path: '/api/cli/credentials/openai-compat.default', method: 'POST', auth: 'Bearer ptc_test_token',
-        body: { baseURL: 'https://[2606:4700:4700::1111]/v1', apiKey: 'sk-or-secret' } }]);
+        body: { kind: 'openai-compat', baseURL: 'https://[2606:4700:4700::1111]/v1', apiKey: 'sk-or-secret' } }]);
       expect(JSON.stringify(storedConfig(home))).not.toContain('sk-or-secret');
     } finally {
       await server.stop(true);
