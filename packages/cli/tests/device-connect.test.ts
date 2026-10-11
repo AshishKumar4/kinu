@@ -593,10 +593,12 @@ describe('device-connect install hardening', () => {
   test('kinu connect replaces a malformed local config and starts a working shipped daemon', async () => {
     const hub = startUpdateHub({ served: VERSION, archive: new Uint8Array() });
     updateHubs.push(hub);
+    const registrations: { label?: string; replaces?: string }[] = [];
 
     const stub = startStubCloud({
       deviceOrigin: hub.origin,
       devices: () => [connectedDevice(hub.sockets.items.some((socket) => socket.closed === null))],
+      onRegister: (registration) => { registrations.push(registration); },
     });
 
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
@@ -610,8 +612,7 @@ describe('device-connect install hardening', () => {
     expect(await connected.proc.exited).toBe(0);
     await connected.drained;
     expect(stub.registrationRequests.items).toHaveLength(1);
-    const registration = v.parse(v.object({ replaces: v.optional(v.string()) }), await stub.registrationRequests.items[0].json());
-    expect(registration.replaces).toBeUndefined();
+    expect(registrations).toEqual([{ label: 'reconnected' }]);
     expect(readFileSync(join(home, 'pc-agent.js'), 'utf-8')).toBe(DAEMON_SOURCE);
     expect(parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8')))
       .toMatchObject({ user: 'user_1', device: 'dev_1', origin: hub.origin, root: repoRoot });
