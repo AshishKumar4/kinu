@@ -1,5 +1,5 @@
 /** Exact-built-bundle workerd measurements. Run only on armada; model inference is a zero-delay script outside workerd. */
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { builtinModules } from 'node:module';
 import { createServer } from 'node:net';
@@ -118,7 +118,59 @@ function workerdPid(): number {
 
 interface Inspector {
   heap(): Promise<number>;
+  /** Starts sampling this isolate's CPU; `stop` answers the profile. */
+  profile(): Promise<{ stop: () => Promise<CpuProfile> }>;
   close(): void;
+}
+
+const CpuProfileSchema = v.object({
+  nodes: v.array(v.object({
+    id: v.number(), callFrame: v.object({ functionName: v.string(), url: v.string(), lineNumber: v.number() }), children: v.optional(v.array(v.number())),
+  })),
+  samples: v.array(v.number()),
+  timeDeltas: v.array(v.number()),
+});
+
+type CpuProfile = v.InferOutput<typeof CpuProfileSchema>;
+
+const frameName = (frame: CpuProfile['nodes'][number]['callFrame']): string => `${frame.functionName || '(anon)'} ${frame.url.split('/').slice(-1)[0] ?? ''}:${String(frame.lineNumber)}`;
+
+/** Each function's time on the stack, itself or its callees, most first, counted once per sample however deep it recurs. */
+function inclusiveTimes(profile: CpuProfile): Array<[string, number]> {
+  const parent = new Map<number, number>();
+
+  for (const node of profile.nodes) for (const child of node.children ?? []) parent.set(child, node.id);
+  const byNode = new Map(profile.nodes.map((node) => [node.id, node]));
+  const totals = new Map<string, number>();
+
+  for (const [index, sample] of profile.samples.entries()) {
+    const seen = new Set<string>();
+
+    for (let at: number | undefined = sample; at !== undefined; at = parent.get(at)) {
+      const node = byNode.get(at);
+
+      if (node !== undefined) seen.add(frameName(node.callFrame));
+    }
+
+    for (const name of seen) totals.set(name, (totals.get(name) ?? 0) + (profile.timeDeltas[index] ?? 0) / 1000);
+  }
+
+  return [...totals].sort((left, right) => right[1] - left[1]);
+}
+
+/** Each function's own sampled time, most first: `name url-tail:line` and milliseconds. */
+function selfTimes(profile: CpuProfile): Array<[string, number]> {
+  const byNode = new Map(profile.nodes.map((node) => [node.id, node]));
+  const totals = new Map<string, number>();
+
+  for (const [index, sample] of profile.samples.entries()) {
+    const frame = byNode.get(sample)?.callFrame;
+    const key = frame === undefined ? '?' : frameName(frame);
+
+    totals.set(key, (totals.get(key) ?? 0) + (profile.timeDeltas[index] ?? 0) / 1000);
+  }
+
+  return [...totals].sort((left, right) => right[1] - left[1]);
 }
 
 async function connectInspector(url: string): Promise<Inspector> {
@@ -128,8 +180,20 @@ async function connectInspector(url: string): Promise<Inspector> {
   let id = 0;
   socket.addEventListener('open', () => { opened.resolve(); });
   socket.addEventListener('error', () => opened.reject(new Error(`inspector failed: ${url}`)));
+  const raw = new Map<number, (reply: string) => void>();
+
   socket.addEventListener('message', (event) => {
-    const parsed = v.safeParse(HeapReplySchema, JSON.parse(String(event.data)));
+    const message: unknown = JSON.parse(String(event.data));
+    const answered = v.safeParse(v.object({ id: v.number() }), message);
+
+    if (answered.success && raw.has(answered.output.id)) {
+      raw.get(answered.output.id)?.(String(event.data));
+      raw.delete(answered.output.id);
+
+      return;
+    }
+
+    const parsed = v.safeParse(HeapReplySchema, message);
 
     if (!parsed.success) return;
     const reply = parsed.output;
@@ -138,7 +202,25 @@ async function connectInspector(url: string): Promise<Inspector> {
   });
   await opened.promise;
 
+  /** The protocol's answer to `method`, as its JSON text. */
+  const call = async (method: string, params: Readonly<Record<string, number>> = {}): Promise<string> => {
+    const pending = Promise.withResolvers<string>();
+    const requestId = ++id;
+
+    raw.set(requestId, pending.resolve);
+    socket.send(JSON.stringify({ id: requestId, method, params }));
+
+    return await pending.promise;
+  };
+
   return {
+    profile: async () => {
+      await call('Profiler.enable');
+      await call('Profiler.setSamplingInterval', { interval: 50 });
+      await call('Profiler.start');
+
+      return { stop: async () => v.parse(v.object({ result: v.object({ profile: CpuProfileSchema }) }), JSON.parse(await call('Profiler.stop'))).result.profile };
+    },
     heap: async () => {
       const pending = Promise.withResolvers<HeapReply>();
       const requestId = ++id;
@@ -367,6 +449,39 @@ async function readHeap(): Promise<void> {
   }
 }
 
+/** `run` again under a CPU profile of every isolate it touches; the product's are printed. */
+async function profiled(workload: string, run: () => Promise<void>): Promise<void> {
+  // Every isolate the run touched, facets' included, not only the product's.
+  const targets = v.parse(TargetsSchema, await (await fetch(`http://127.0.0.1:${String(inspectorPort)}/json`)).json());
+
+  for (const target of targets) if (!inspectors.has(target.id)) inspectors.set(target.id, await connectInspector(target.webSocketDebuggerUrl));
+  const running = await Promise.all([...inspectors].map(async ([id, inspector]) => ({ id, profiler: await inspector.profile() })));
+  const started = performance.now();
+
+  await run();
+  const wall = performance.now() - started;
+
+  // The product's isolates only: the driver and Miniflare's entry are this harness's.
+  const keep = option('profile-dir', '');
+
+  for (const { id, profiler } of running) {
+    const profile = await profiler.stop();
+
+    if (keep !== '') writeFileSync(join(keep, `${workload}-${id.replace(/[^a-z0-9-]/gi, '_')}.cpuprofile`), JSON.stringify(profile));
+    const ranked = selfTimes(profile);
+    const busy = ranked.filter(([name]) => !name.startsWith('(idle)')).reduce((sum, [, ms]) => sum + ms, 0);
+
+    if (!id.includes('kinu') && !id.includes('facet') && !id.includes('loader')) continue;
+    process.stdout.write(`PROFILE ${workload} ${id.slice(-24)} wall=${wall.toFixed(0)}ms busy=${busy.toFixed(0)}ms\n`);
+
+    for (const [name, ms] of ranked.slice(0, 15)) process.stdout.write(`  self ${ms.toFixed(1).padStart(7)} ${name.slice(0, 70)}\n`);
+
+    for (const [name, ms] of inclusiveTimes(profile).slice(0, 24)) process.stdout.write(`  incl ${ms.toFixed(1).padStart(7)} ${name.slice(0, 70)}\n`);
+  }
+
+  process.stdout.write(`TARGETS ${running.map(({ id }) => id.slice(-24)).join(' | ')}\n`);
+}
+
 try {
   driver = await mf.getWorker('driver');
   await ask('/setup');
@@ -489,7 +604,27 @@ try {
 
   const node = (program: string) => `node -e ${JSON.stringify(program)}`;
 
-  if (subject === 'pipes') {
+  if (subject === 'profile') {
+    await ask('/seed');
+    const workload = option('profile', 'file');
+
+    const workloads = {
+      node: async () => { for (let index = 0; index < 20; index++) await shell(node("process.stdout.write('x')")); },
+      grep: async () => { for (let index = 0; index < 20; index++) await shell('grep -r -l needle /home/main/perfio/many'); },
+      stat: async () => { for (let index = 0; index < 200; index++) await shell('stat /home/main/perfio/read-4096.txt'); },
+      file: async () => { for (let index = 0; index < 200; index++) await invoke('file', { op: 'read', path: '/home/main/perfio/read-4096.txt' }); },
+    } satisfies Record<string, () => Promise<void>>;
+
+    const run = workload === 'node' || workload === 'grep' || workload === 'stat' ? workloads[workload] : workloads.file;
+
+    await run();
+
+    // Only the run, twice: what the product logs of it is the measurement.
+    if (option('cpu', '1') === '0') await run();
+    else await profiled(workload, run);
+
+    measured.push(...fileResults);
+  } else if (subject === 'pipes') {
     await ask('/seed');
 
     // A process's output through a pipe, by how many writes carry it, and as an agent's `npm test | tail` reads it.
