@@ -35,6 +35,8 @@ import {
   type PlanEdit, type PlanReview, type PlanReviewResult, actorReadHandle,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedBox, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
+import { kinuEgressParams } from "./egress/configure";
+import type { WorkspaceEgress } from "@nimbus-sh/core/_shared/workspace-network.js";
 import { agentFacet, agentStateShellId, AgentMemory, AgentStoreBroker, AgentWorkspaceHost, headDeltas, uiChunks, type AgentFacetPlacement } from "./agent-facets";
 import { agentCallsThrough, AgentIsolateSlots } from "./dynamic-worker-slots";
 import { providerBindingsOf, routedModelReads } from "./providers/agent-registry";
@@ -530,12 +532,28 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return rows;
   }
 
+  /**
+   * The workspace's egress: its commands' and programs' requests and sockets leave through Kinu's, as the sandbox's do,
+   * minted with this workspace's owner and its grants as it opens. Nothing is asked of the owner's vault here: the
+   * egress asks it for a request that names a placeholder. A workspace with no owner keeps the isolate's own network.
+   */
+  private workspaceEgress(): WorkspaceEgress | undefined {
+    const ownerUserId = this.getOwnerUserId();
+
+    if (ownerUserId === null) return undefined;
+
+    return this.ctx.exports.KinuEgress({ props: kinuEgressParams({
+      workspaceName: this.name, ownerUserId, grants: getShellApprovalGrants(this.config).grants,
+    }) });
+  }
+
   private hostedWorkspace(): HostedWorkspace {
     this._workspace ??= createHostedWorkspace({
       ctx: this.ctx,
       env: this.env,
       tasks: this.nimbusTasks,
       previewUrl: (port, capability) => nimbusPreviewUrl(this.env, this.name, port, capability),
+      egress: () => this.workspaceEgress(),
       onFilesChanged: (paths) => {
         this.changes.touched(paths);
         this.liveReadsMoved(readsMovedByFiles(paths));

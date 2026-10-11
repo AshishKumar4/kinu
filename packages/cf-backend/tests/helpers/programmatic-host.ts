@@ -238,6 +238,14 @@ export const OBJECT_NAMESPACE = {
   },
 };
 
+/** An owner vault no suite over this host reads: the egress asks it only for a request carrying a placeholder. */
+const NO_VAULT = {
+  UserDO: {
+    idFromName: (name: string) => name,
+    get: (): never => { throw new Error('no suite over this host reads an owner vault through the egress'); },
+  },
+};
+
 /**
  * This script's `ctx.exports`: workerd builds one per isolate and hands it to every object, and `@nimbus-sh/platform`
  * holds the first one it is shown for the whole isolate. Every stand-in ctx carries this object, so a bun process that
@@ -251,6 +259,18 @@ export const SCRIPT_EXPORTS = {
     waitUntil: () => { throw new Error('unexpected supervisor background work'); },
     passThroughOnException: () => { throw new Error('unexpected supervisor pass-through'); },
   }), { OrchestratorAgent: OBJECT_NAMESPACE }),
+  /**
+   * An owned workspace's egress (`KinuEgress` in src/server.ts) over the same handler and no vault, so a placeholder is
+   * refused. Loaded at its first request: `outbound` reaches `cloudflare:email` through `agents`, which a case mocks first.
+   */
+  KinuEgress: ({ props }: { readonly props: unknown }) => ({
+    fetch: async (request: Request): Promise<Response> => {
+      const { handleContainerEgress, parseEgressParams } = await import('../../src/egress/outbound');
+
+      return await handleContainerEgress(request, NO_VAULT, parseEgressParams({ props }));
+    },
+    connect: (): never => { throw new Error('no suite over this host opens a socket through the egress'); },
+  }),
 };
 
 /** The platform's view of a script's exports: a loopback factory per entrypoint name. */
