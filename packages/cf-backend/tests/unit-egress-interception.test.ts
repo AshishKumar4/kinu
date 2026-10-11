@@ -1,6 +1,6 @@
 // Defends credential injection without exposing the secret to a guest.
 // Native network policy and vault routing are also measured by gate:egress-interception.
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, mock, test } from 'bun:test';
 import {
   EGRESS_PLACEHOLDER_PREFIX, refusedHostname,
 } from '@kinu.run/core';
@@ -22,7 +22,7 @@ mockAgentsSdk();
 
 const {
   CONTAINER_EVENT_HOST,
-  handleContainerEgress, handleContainerEvent, handleEgressConnect, parseEgressParams,
+  handleContainerEgress, handleContainerEvent, handleEgressConnect, handleEgressTls, parseEgressParams,
 } = await import('../src/egress/outbound');
 
 const {
@@ -792,5 +792,67 @@ describe('a workspace program\'s TCP socket', () => {
     await handleEgressConnect(socket, PARAMS);
 
     expect(socket.wasClosed()).toBe(true);
+  });
+});
+
+/** Where the egress dialled, how, and which name it checked the server by. */
+interface Dialled {
+  hostname: string;
+  port: number;
+  secureTransport: string;
+  checked: string | null;
+}
+
+/** Every TLS dial this file's stand-in for `cloudflare:sockets` was asked for. */
+const dialled: Dialled[] = [];
+
+const opened = () => ({ readable: new ReadableStream<Uint8Array>(), writable: new WritableStream<Uint8Array>(), opened: Promise.resolve() });
+
+await mock.module('cloudflare:sockets', () => ({
+  connect: (target: { hostname: string; port: number }, options: { secureTransport: string }) => {
+    const record: Dialled = { ...target, secureTransport: options.secureTransport, checked: null };
+
+    dialled.push(record);
+
+    return {
+      ...opened(),
+      startTls: (tls: { expectedServerHostname: string }) => {
+        record.checked = tls.expectedServerHostname;
+
+        return opened();
+      },
+    };
+  },
+}));
+
+// A program's TLS socket arrives as Nimbus's connectTls call (NIMBUS-ASKS #44): the host is judged, then the session is
+// made here, checking the server by the program's servername where it named one other than the host, as Node does.
+describe('a workspace program\'s TLS socket', () => {
+  test.each(['127.0.0.1', '10.0.0.7', 'metadata.google.internal'])('to %p is refused before anything is dialled', async (hostname) => {
+    const emitted = await recordDiagnostics(async () => {
+      await expect(handleEgressTls({ hostname, port: 443 }, PARAMS)).rejects.toMatchObject({ code: 'denied' });
+    });
+
+    expect(emitted.map((line) => line.event)).toEqual(['egress.socket_refused']);
+  });
+
+  test('from an unconfigured workspace is refused, as its requests are', async () => {
+    await expect(handleEgressTls({ hostname: 'example.com', port: 443 }, undefined)).rejects.toMatchObject({ code: 'denied' });
+  });
+
+  describe('the session it makes', () => {
+    test('checks the host itself when the program named no other servername', async () => {
+      dialled.length = 0;
+      await handleEgressTls({ hostname: 'example.com', port: 443 }, PARAMS);
+
+      expect(dialled).toEqual([{ hostname: 'example.com', port: 443, secureTransport: 'on', checked: null }]);
+    });
+
+    test('presents and checks the program\'s servername on a connection to the host', async () => {
+      dialled.length = 0;
+      await handleEgressTls({ hostname: 'lb.example.com', port: 8443, servername: 'api.example.com' }, PARAMS);
+
+      expect(dialled).toEqual([{ hostname: 'lb.example.com', port: 8443, secureTransport: 'starttls', checked: 'api.example.com' }]);
+    });
   });
 });

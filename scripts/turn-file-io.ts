@@ -738,6 +738,16 @@ try {
     await measureOp('egress.tls', () => shell(node(
       "const s = require('tls').connect(443, 'example.com', () => s.write('HEAD / HTTP/1.0\\r\\nHost: example.com\\r\\n\\r\\n')); s.on('data', (d) => { console.log('tls=' + String(d).split(' ')[0]); s.destroy(); }); s.on('error', (e) => console.log('tls failed: ' + e.message))",
     )), undefined, 'tls=HTTP/1');
+
+    // A servername other than the host is presented and checked (NIMBUS-ASKS #44): right for the server, it connects;
+    // wrong for it, the session is refused, as Node refuses it.
+    const named = (label: string, servername: string) => node(
+      `const s = require('tls').connect({ port: 443, host: 'example.com', servername: '${servername}' }, () => s.write('HEAD / HTTP/1.0\\r\\nHost: ${servername}\\r\\n\\r\\n'));`
+      + ` s.on('data', (d) => { console.log('${label}=' + String(d).split(' ')[0]); s.destroy(); }); s.on('error', (e) => console.log('${label} refused: ' + e.message))`,
+    );
+
+    await measureOp('egress.tlsname', () => shell(named('tlsname', 'www.example.com')), undefined, 'tlsname=HTTP/1');
+    await measureOp('egress.tlswrongname', () => shell(named('tlswrongname', 'github.com')), undefined, 'tlswrongname refused');
     await measureOp('egress.wss', () => shell(node(
       "const w = new WebSocket('wss://echo.perfio.test/'); w.onopen = () => w.send('kinu-ws'); w.onmessage = (e) => { if (String(e.data) === 'kinu-ws') { console.log('ws=echoed'); w.close(); } }; w.onerror = (e) => console.log('ws failed: ' + (e.message ?? 'error'))",
     )), undefined, 'ws=echoed');
