@@ -1,6 +1,8 @@
 import { afterAll, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { BUILTIN_PROFILE_CATALOG, JsonValueSchema, profileCatalogDigest, type JsonValue, type RunEvent } from '@kinu.run/core';
+import { asFetchFunction, BUILTIN_PROFILE_CATALOG, createChatGptProvider, createProviderRegistry, JsonValueSchema, profileCatalogDigest,
+  resolveModelRoute, resolveTurnProfile, routedCallOptions, type JsonValue, type ModelCallDeps, type ReasoningEffort, type RunEvent } from '@kinu.run/core';
+import { generateText } from 'ai';
 import { REVIEW_LOGIN } from './config';
 import { reviewerCatalog, REVIEWER_ROLE_ID } from './reviewer';
 import { askOnce, reviewerModel } from './target';
@@ -38,6 +40,43 @@ test('the reviewer is a file-only Plan role, and its model falls back along no c
   if (written === null) throw new Error('nothing was written');
 
   expect(reviewerCatalog(model)(written)).toBeNull();
+});
+
+test.each(['max', 'xhigh'])('a reviewer request uses the highest effort its Sol model offers: %s', async (highest) => {
+  const model = REVIEW_LOGIN.spec;
+  const catalog = reviewerCatalog(model)(BUILTIN_PROFILE_CATALOG) ?? BUILTIN_PROFILE_CATALOG;
+  const levels: ReasoningEffort[] = highest === 'max' ? ['medium', 'xhigh', 'max'] : ['medium', 'xhigh'];
+
+  const profile = resolveTurnProfile({
+    envelope: { authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog },
+    provider: { revision: 'review-wire', availableModels: [model], reasoningEfforts: { 'chatgpt/gpt-6.1-sol': levels } },
+    roleId: REVIEWER_ROLE_ID, workspaceModel: model, workMode: 'plan', availableTools: ['file'], activeSkills: [],
+  });
+
+  const sent: string[] = [];
+
+  const deps: ModelCallDeps = {
+    env: {}, sessionAffinity: 'review-wire', workspaceAffinity: 'review-wire', hasCredential: async () => true,
+    getAuth: async () => ({ headers: { Authorization: 'Bearer fixture-reviewer' } }),
+    fetch: asFetchFunction(async (_input, init) => {
+      const body = v.parse(v.object({ reasoning: v.object({ effort: v.string() }) }), JSON.parse(v.parse(v.string(), init?.body)));
+      sent.push(body.reasoning.effort);
+      const message = { id: 'answer', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'reviewed', annotations: [] }] };
+
+      const response = { id: 'review', object: 'response', created_at: 1, model: 'gpt-6.1-sol', status: 'completed', output: [message],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } };
+
+      return new Response(`event: response.output_item.done\ndata: ${JSON.stringify({ type: 'response.output_item.done', output_index: 0, item: message })}\n\nevent: response.completed\ndata: ${JSON.stringify({ type: 'response.completed', response })}\n\n`,
+        { headers: { 'content-type': 'text/event-stream' } });
+    }),
+  };
+
+  const registry = createProviderRegistry();
+  registry.register(createChatGptProvider());
+  const route = resolveModelRoute('agent', profile);
+
+  await generateText({ model: registry.resolve(model, deps), prompt: 'Review the supplied evidence.', ...routedCallOptions(route, model) });
+  expect(sent).toEqual([highest]);
 });
 
 /** The public workspace routes and socket after a reviewer finishes, including the ledger's terminal cause. */

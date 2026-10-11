@@ -7,10 +7,11 @@
 import { env } from 'cloudflare:test';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import {
-  ChatHistoryEntrySchema, ORCHESTRATOR_AGENT_SLUG, hostedActorSocketPath, pageSchema, positionPageSchema, workspaceSlug, type JsonValue,
+  ChatHistoryEntrySchema, ORCHESTRATOR_AGENT_SLUG, READS_CHANGED_EVENT, hostedActorSocketPath, pageSchema, positionPageSchema, workspaceSlug, type JsonValue,
 } from '@kinu.run/core';
 import { describe, expect, it, vi } from 'vitest';
 import * as v from 'valibot';
+import { PROBE_TITLE } from '../long-model-script';
 
 /** Loopback: the one host `authenticateRequest` accepts without an identity secret (auth/session.ts:200-213). */
 const ORIGIN = 'http://localhost';
@@ -53,6 +54,33 @@ async function publicJson<T>(path: string, schema: v.GenericSchema<T>, init?: Re
   return v.parse(schema, JSON.parse(text));
 }
 
+const CatalogEnvelopeSchema = v.object({
+  version: v.number(),
+  catalog: v.looseObject({ tiers: v.optional(v.record(v.string(), v.looseObject({ model: v.string() }))) }),
+});
+
+/**
+ * The fixture credential routes the pinned model to the fake via the product's credential store, not a flag. Titling
+ * and memory reflection are not what these tests measure, so the owner's fast tier names the scripted model rather than
+ * spending Workers AI quota on them.
+ */
+async function storeFixtureAccount(): Promise<void> {
+  await publicJson(`/api/user/credentials/openai-compat.default`, v.object({ ok: v.boolean() }), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(FIXTURE_CREDENTIAL),
+  });
+
+  const current = await publicJson('/api/user/profile-catalog', CatalogEnvelopeSchema);
+  const catalog = { ...current.catalog, tiers: { ...current.catalog.tiers, fast: { model: 'openai-compat/probe-long' } } };
+
+  await publicJson('/api/user/profile-catalog', v.unknown(), {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ catalog, expectedVersion: current.version }),
+  });
+}
+
 /** The SDK exports no constant for the `rpc` type word, hence the literal. */
 function rpcRequest(id: string, method: string, args: readonly JsonValue[]): string {
   return JSON.stringify({ type: 'rpc', id, method, args: [...args] });
@@ -91,7 +119,7 @@ interface Pane {
   /** Every frame heard, parsed, in arrival order. */
   heard(): v.InferOutput<typeof FrameSchema>[];
   /** Resolves once a frame `holds` has been heard. */
-  until(holds: (frame: v.InferOutput<typeof FrameSchema>) => boolean): Promise<void>;
+  until(holds: (frame: v.InferOutput<typeof FrameSchema>) => boolean, from?: number): Promise<void>;
   close(): void;
 }
 
@@ -183,8 +211,8 @@ async function openPane(path: string): Promise<Pane> {
     transcriptsCarrying: (text) => frames
       .filter((raw) => raw.includes(`"${CHAT_MESSAGE_TYPES.CHAT_MESSAGES}"`) && raw.includes(text)).length,
     heard: parsed,
-    until: async (holds) => {
-      if (parsed().some(holds)) return;
+    until: async (holds, from = 0) => {
+      if (parsed().slice(from).some(holds)) return;
       const { promise, resolve } = Promise.withResolvers<void>();
       watchers.push({ holds, resolve });
       await promise;
@@ -196,11 +224,7 @@ async function openPane(path: string): Promise<Pane> {
 describe('the public surface, driven inside the pool', () => {
   it('creates a workspace over REST and answers one socket turn', async () => {
     // The fixture credential routes the pinned model to the fake via the product's credential store, not a flag.
-    await publicJson(`/api/user/credentials/openai-compat.default`, v.object({ ok: v.boolean() }), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(FIXTURE_CREDENTIAL),
-    });
+    await storeFixtureAccount();
 
     const created = await publicJson('/api/user/workspaces', WorkspaceEntrySchema, {
       method: 'POST',
@@ -287,11 +311,7 @@ describe('two panes on one workspace object are two chat rooms', () => {
    * (measured on main e59e99cb6). Asserts the recipient set in both directions, so a room that answers nothing cannot read as scoped.
    */
   it('keeps the root chat and a hosted actor chat on separate sockets', async () => {
-    await publicJson(`/api/user/credentials/openai-compat.default`, v.object({ ok: v.boolean() }), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(FIXTURE_CREDENTIAL),
-    });
+    await storeFixtureAccount();
 
     const created = await publicJson('/api/user/workspaces', WorkspaceEntrySchema, {
       method: 'POST',
@@ -336,11 +356,7 @@ describe('two panes on one workspace object are two chat rooms', () => {
 
 /** Every socket closed again, so what follows reads durable rows only. */
 async function workspaceWithTwoChats(name: string): Promise<{ rootPath: string; actorName: string; actorPath: string }> {
-  await publicJson(`/api/user/credentials/openai-compat.default`, v.object({ ok: v.boolean() }), {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(FIXTURE_CREDENTIAL),
-  });
+  await storeFixtureAccount();
 
   const created = await publicJson('/api/user/workspaces', WorkspaceEntrySchema, {
     method: 'POST',
@@ -363,6 +379,19 @@ async function workspaceWithTwoChats(name: string): Promise<{ rootPath: string; 
 
   actor.send(chatRequest(ACTOR_MARKER, ACTOR_MARKER));
   await actor.settled(ACTOR_MARKER);
+
+  // The first hosted chat owes a title. A streamed reply used to abandon that effect while these tests stayed green.
+  // Read the published title, waking on the product's roster notifications rather than on a clock.
+  for (let attempt = 0; ; attempt++) {
+    const from = root.heard().length;
+    const id = `first-title-${String(attempt)}`;
+    root.send(rpcRequest(id, 'getActorSnapshot', [actorName]));
+    const titled = await root.rpc(id, v.object({ displayName: v.string() }));
+
+    if (titled.displayName === PROBE_TITLE) break;
+    await root.until(frame => frame.type === READS_CHANGED_EVENT, from);
+  }
+
   actor.close();
   root.close();
 
@@ -486,9 +515,7 @@ describe('a workspace created over REST with a role, a model and an effort', () 
   };
 
   it('reaches the new workspace before its first turn, and a refused request leaves no workspace', async () => {
-    await publicJson(`/api/user/credentials/openai-compat.default`, v.object({ ok: v.boolean() }), {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(FIXTURE_CREDENTIAL),
-    });
+    await storeFixtureAccount();
 
     expect((await create({ name: 'pool-auditor', role: 'auditor', model: PINNED_MODEL, reasoningEffort: 'high' })).status).toBe(201);
     expect(await runsOn('pool-auditor')).toEqual({ roleId: 'auditor', model: PINNED_MODEL, effort: 'high', pinned: PINNED_MODEL });

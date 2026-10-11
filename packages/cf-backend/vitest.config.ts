@@ -26,7 +26,8 @@ import { builtinModules } from 'node:module';
 import { spawn } from 'node:child_process';
 import { promptText } from './vite-prompt-text';
 import { AGENT_BUNDLE_ENTRY, buildAgentBundle, workerCompatibility, writeWhole } from './vite-agent-bundle';
-import { readAiRun, workersAiAnswer, workersAiBinding } from './tests/helpers/workers-ai-binding';
+import { readAiRun, remoteWorkersAi, workersAiBinding, workersAiTestRunning } from './tests/helpers/workers-ai-binding';
+import { remoteAiPoolLifecycle } from './tests/helpers/remote-ai-pool';
 import type { Reporter } from 'vitest/reporters';
 import * as v from 'valibot';
 import { HELD_PROXY_MODEL } from './tests/workerd/ai-proxy-shapes';
@@ -37,21 +38,22 @@ import { workerSourceTriggers } from '../../scripts/worker-test-inputs';
 let hireAi: ReturnType<typeof workersAiBinding> | undefined;
 
 function getHireAi(): ReturnType<typeof workersAiBinding> {
-  hireAi ??= workersAiBinding(async (request) => workersAiAnswer(await readAiRun(request)));
+  hireAi ??= workersAiBinding(remoteWorkersAi);
 
   return hireAi;
 }
 
 let twoTurnAi: ReturnType<typeof workersAiBinding> | undefined;
 
+let twoTurnAiCalls = 0;
+
 /** The two-turn probe reads what the binding was asked through `/log`. */
 function getTwoTurnAi(): ReturnType<typeof workersAiBinding> {
   twoTurnAi ??= workersAiBinding(async (request) => {
-    const run = await readAiRun(request);
+    recordAiRun(await readAiRun(request.clone()));
+    twoTurnAiCalls++;
 
-    recordAiRun(run);
-
-    return workersAiAnswer(run);
+    return await remoteWorkersAi(request);
   });
 
   return twoTurnAi;
@@ -67,7 +69,7 @@ function getSurfaceAi(): ReturnType<typeof workersAiBinding> {
       return Response.json({ response: 'held' });
     }
 
-    return workersAiAnswer(await readAiRun(request));
+    return await remoteWorkersAi(request);
   });
 
   return surfaceAi;
@@ -279,7 +281,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           throw new Error('Unmatched test egress is disabled: ' + request.url);
         }, })],
 ["two-turn-probe", async () => ({
-          // `env.AI` is the installed Workers AI binding, answered by request shape on the Node side.
+          // `env.AI` is the installed binding, forwarded to Wrangler's remote Workers AI session.
           ...workerCompatibility,
           workerLoaders: { LOADER: {} },
           modules: probeModules('two-turn-probe.ts', probeRuntime),
@@ -585,7 +587,21 @@ const suiteWorkers = new Map([...requirements].map(([file, workers]) => [fileURL
 
 let selectedWorkers: AuxiliaryWorker[] = [];
 
+const aiCaseStarts = new Map<string, number>();
+
 const workerSelection: Reporter = {
+  onTestCaseReady(test) {
+    workersAiTestRunning(test.name);
+
+    if (test.module.moduleId.endsWith('/wide/two-turn.test.ts')) aiCaseStarts.set(test.id, twoTurnAiCalls);
+  },
+  onTestCaseResult(test) {
+    const began = aiCaseStarts.get(test.id);
+
+    if (began === undefined) return;
+    process.stdout.write(`Workers AI case requests: ${JSON.stringify({ test: test.name, calls: twoTurnAiCalls - began })}\n`);
+    aiCaseStarts.delete(test.id);
+  },
   async onTestRunStart(specifications) {
     const selected = new Set<string>();
 
@@ -648,7 +664,7 @@ export default defineConfig({
         workers: selectedWorkers,
       },
     };
-  })],
+  }), remoteAiPoolLifecycle()],
   test: {
     ...sharedTestOptions,
     include: ['tests/workerd/**/*.test.ts'],

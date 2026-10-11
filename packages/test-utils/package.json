@@ -12,6 +12,7 @@
     "./mossaic": "./src/mossaic.ts",
     "./hand-clock": "./src/hand-clock.ts",
     "./models-dev": "./src/models-dev.ts",
+    "./workers-ai-model-spec": "./src/workers-ai-model-spec.ts",
     "./transcript": "./src/transcript.ts",
     "./vfs": "./src/vfs.ts"
   },

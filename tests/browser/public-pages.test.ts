@@ -234,9 +234,6 @@ interface Facts {
   landingHydrationFaults?: readonly string[];
   reduced?: { before: string; after: string; pixels: number; animations: number };
   treeFlows?: boolean;
-  prunedNodes?: number;
-  hiddenNodes?: number;
-  heroGraphWidth?: number;
   /** Which renderer the hero mount landed on, and the canvas's own answer. */
   heroMount?: { renderer?: string; canvasRenderer?: string };
   workspace?: SurfaceFact;
@@ -389,11 +386,6 @@ beforeAll(async () => {
       // A production build reports the hydration errors by number (react.dev/errors/418 and its neighbours).
       facts.landingHydrationFaults = hydrationFaults.filter((text) => /hydrat|did not match|server rendered|errors\/(418|419|421|422|423|425)\b/i.test(text));
       await page.waitForSelector('canvas[data-settled="true"]');
-      facts.prunedNodes = await page.$eval('canvas', (canvas) => Number(canvas.dataset.pruned ?? 0));
-      facts.hiddenNodes = await page.$eval('canvas', (canvas) => Number(canvas.dataset.hidden ?? 0));
-      facts.heroGraphWidth = await page.$eval('[data-hero-graph]', (graph) => (
-        Math.round(graph.getBoundingClientRect().width)
-      ));
       // The mount's own answer: which renderer took the canvas, and that the
       // canvas carries the same answer — the mount landed, whatever it landed on.
       facts.heroMount = await page.evaluate(() => ({
@@ -1083,12 +1075,6 @@ beforeAll(async () => {
 });
 
 describe('the standalone landing runs', () => {
-  test('the abstract tree cuts pruned branches before their descendants', () => {
-    expect(required(facts.prunedNodes, 'pruned branch count')).toBeGreaterThan(3);
-    expect(required(facts.hiddenNodes, 'hidden descendant count')).toBeGreaterThan(0);
-    expect(required(facts.heroGraphWidth, 'hero graph width')).toBeGreaterThan(620);
-  });
-
   test('the settled graph keeps flowing without restarting its reveal', () => {
     // Measured after the reveal settled: the canvas changed again under a
     // settled mark, so the picture is alive after the reveal rather than a

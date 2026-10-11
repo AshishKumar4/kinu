@@ -1,8 +1,11 @@
+import { WORKERS_AI_FIXTURE_MODEL_ID } from '@kinu.run/test-utils/workers-ai-model-spec';
+
 /** models.dev's Workers AI rows for Kinu's preferred models, read 2026-10-05: the platform's live model list. */
 export const WORKERS_AI_MODELS_DEV = {
   'cloudflare-workers-ai': {
     id: 'cloudflare-workers-ai', name: 'Workers AI',
     models: {
+      [WORKERS_AI_FIXTURE_MODEL_ID]: { id: WORKERS_AI_FIXTURE_MODEL_ID, name: 'Llama 3.3 70B Instruct FP8 Fast', tool_call: true, reasoning: false, modalities: { input: ['text'] }, limit: { context: 24_000, output: 4_000 } },
       '@cf/zai-org/glm-5.3': { id: '@cf/zai-org/glm-5.3', name: 'Glm 5.3', tool_call: true, reasoning: true, reasoning_options: [{ type: 'effort', values: ['low', 'high', 'max'] }], modalities: { input: ['text'] }, limit: { context: 1_048_576, output: 1_048_576 } },
       '@cf/deepseek-ai/deepseek-v4-pro-0813': { id: '@cf/deepseek-ai/deepseek-v4-pro-0813', name: 'DeepSeek V4 Pro 0813', tool_call: true, reasoning: true, reasoning_options: [{ type: 'effort', values: ['none', 'low', 'high', 'max'] }], modalities: { input: ['text'] }, limit: { context: 1_048_576, output: 1_048_576 } },
       '@cf/moonshotai/kimi-k2.6': { id: '@cf/moonshotai/kimi-k2.6', name: 'Kimi K2.6', tool_call: true, reasoning: true, reasoning_options: [{ type: 'effort', values: ['none', 'high'] }], modalities: { input: ['text', 'image'] }, limit: { context: 262_144, output: 256_000 } },

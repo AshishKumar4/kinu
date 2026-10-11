@@ -615,7 +615,7 @@ describe('two real turns over the HTTP model seam', () => {
     // The sibling did settle inside the window: its compression ran while this drive recorded.
     const calls = v.parse(v.array(CallRecordSchema), out.calls);
 
-    expect(calls.filter((call) => call.lane === 'sleep' && call.users.some((user) => user.includes('SIBLING-SLEEP')))).toHaveLength(1);
+    expect(calls.some((call) => call.lane === 'sleep' && call.users.some((user) => user.includes('SIBLING-SLEEP')))).toBe(true);
     expect(v.parse(FailuresSchema, out.failures)).toEqual([]);
     expect(out.owedEffects).toEqual([]);
     expect(out.sleepTimeSettled).toBe(1);

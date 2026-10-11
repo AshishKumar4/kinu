@@ -25,6 +25,10 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **Eval reviews use the model's highest reasoning effort.** Reviewer and diagnosis workspaces select their own maximum-effort tier. The product catalog clamps that request to the model's supported levels without changing the account's default tier.
+- **Process readers use one Linux stat parser.** Runner cleanup, ownership checks, cost sampling, device terminals and standalone command supervisors share command-name handling and the vanished-process race contract. Required identity reads still fail when the process is gone.
+- **Workerd's Workers AI calls reach the real binding.** Wrangler's remote proxy uses the configured Cloudflare account and Armada's credential, retaining request headers and cancellation. Fixed rating, title and sleep-time replies are removed.
+
 - **Execution surfaces have one sandbox listing name.** The codemode namespace and its declaration use `readdir`; the duplicate `listFiles` alias is gone and all live callers migrated. The unused `nimbus` executor kind and consistency entry are removed; Nimbus still implements the durable workspace, not a separate runtime kind.
 - **Sandbox exposures use one native listener proof and integer ports.** Initial exposure and Devbox restore share the same listener command/parser; core calls the required Devbox proof instead of copying curl logic or treating a disconnected probe as an empty listener. Codemode and direct exposure/withdrawal use one integer-port contract.
 - **Boot repair does not parse its own explanation.** Restoration retains the boot stamp's typed obligation and missing-workload list. Same-container repair reads the obligation directly; readiness text is generated only when shown, so changing its wording cannot silently skip repair.
