@@ -21,7 +21,6 @@ import type { DurableApps } from '@kinu.run/core/slates';
 import * as v from 'valibot';
 import type { NimbusTasks } from './nimbus-tasks';
 
-/** `NIMBUS_SESSION` is deliberately not named: the class is gone (wrangler.jsonc migration `v3`). */
 const HOST_FABRIC_COMPOSITION: FabricComposition = {
   supervisorEntrypoint: 'SupervisorRPC',
   hostNamespace: 'OrchestratorAgent',
