@@ -1166,6 +1166,9 @@ export class ChatSession {
         // Before the item leaves the queue, so it still counts as in flight to a message sent meanwhile; and so the
         // turn's own measure is the newer.
         await this.revision;
+
+        // Closed: its actor may be released, and what is still queued stays owed to the next process.
+        if (this.ended) break;
         const reaskAt = this.reaskDeferredTo();
 
         // The re-opened turn waits out its backoff, and the wake that ends it asks again ({@link reaskDue}).

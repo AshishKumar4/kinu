@@ -82,8 +82,10 @@ function textAnswer(answer: string, usage: LanguageModelV2Usage) {
 }
 
 /** The advisor's task names what it is: a review of one finished turn. */
+/** The advisor's own call: the review is the task it was handed, its newest words. A hirer's roster may name that task
+ *  while the advisor still works, so a prompt that only mentions it is not one. */
 function isReview(options: LanguageModelV2CallOptions): boolean {
-  return JSON.stringify(options.prompt).includes('You are reviewing one finished turn');
+  return JSON.stringify(options.prompt.filter((message) => message.role === 'user').at(-1) ?? null).includes('You are reviewing one finished turn');
 }
 
 /** `review`, when given, is what a hired advisor on the same model answers its task with. */
