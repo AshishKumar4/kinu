@@ -8,7 +8,7 @@ import { ExecutorPortSchema } from './types';
 import { callJob, createShellSession, machineShellCall, reportsCwd, shellExecOptions, type MachineShells } from './shell-session';
 import type { OutputSink } from '../types/primitives';
 import { JOB_STAMP_ENV } from '../types/jobs';
-import { commandResult, commandResultAt, exposedPortText, type CommandResult } from './exec-result';
+import { commandResult, commandResultAt, exposedPortText, type CommandResult, type ExecOutcome } from './exec-result';
 import { classifyErrorCode, KinuError, refusalOf, renderThrownChain, settle, tolerateAsync, toKinuError, type Refusal } from '../obs/index';
 import { isVfsError, isVfsErrorCode, syscallError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { shellQuote } from '../utils/shell';
@@ -249,7 +249,9 @@ async function withSandboxRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<
 }
 
 function normalize(res: { stdout: string; stderr: string; exitCode: number; cwd?: string }): CommandResult {
-  return commandResult(res);
+  const outcome: ExecOutcome = { ...res };
+
+  return commandResult(outcome);
 }
 
 /** Worded distinctly from the adapter's own cancellation, which names the process it killed. */
