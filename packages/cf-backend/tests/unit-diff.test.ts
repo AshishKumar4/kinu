@@ -36,6 +36,83 @@ describe("diffLines", () => {
     expect(diffLines("x\ny", "")).toMatchObject({ added: 0, removed: 2 });
     expect(diffLines("", "")).toMatchObject({ added: 0, removed: 0, lines: [] });
   });
+
+  test("ambiguous changes use GNU placement with the same minimal totals", () => {
+    expect(diffLines("a\na", "b\na\nb")).toEqual({
+      lines: [
+        { kind: "add", text: "b" }, { kind: "ctx", text: "a" },
+        { kind: "del", text: "a" }, { kind: "add", text: "b" },
+      ],
+      added: 2, removed: 1,
+    });
+  });
+
+  test("every short binary-line edit has minimal totals and reconstructs both files", () => {
+    const cases = [""];
+
+    for (let length = 1; length <= 5; length++) {
+      for (let bits = 0; bits < 2 ** length; bits++) {
+        cases.push(Array.from({ length }, (_, i) => (bits & (1 << i)) === 0 ? "a" : "b").join("\n"));
+      }
+    }
+
+    const sequences = cases.map((text) => {
+      const lines = text === "" ? [] : text.split("\n");
+      const words = new Set([""]);
+
+      for (const line of lines) {
+        const extended = Array.from(words, (word) => word + line);
+
+        for (const word of extended) words.add(word);
+      }
+
+      return { text, lines, words };
+    });
+
+    for (const before of sequences) {
+      for (const after of sequences) {
+        const kept = Math.max(...[...before.words]
+          .filter((word) => after.words.has(word))
+          .map((word) => word.length));
+
+        const diff = diffLines(before.text, after.text);
+
+        expect({ added: diff.added, removed: diff.removed }).toEqual({ added: after.lines.length - kept, removed: before.lines.length - kept });
+        expect(diff.lines.filter((line) => line.kind !== "add").map((line) => line.text)).toEqual(before.lines);
+        expect(diff.lines.filter((line) => line.kind !== "del").map((line) => line.text)).toEqual(after.lines);
+      }
+    }
+  });
+
+  test.each([
+    { before: "alpha", after: "alpha\n", rows: ["ctx:alpha", "add:"], added: 1, removed: 0 },
+    { before: "alpha\n", after: "alpha", rows: ["ctx:alpha", "del:"], added: 0, removed: 1 },
+    { before: "alpha\n", after: "alpha\n", rows: ["ctx:alpha", "ctx:"], added: 0, removed: 0 },
+    { before: "alpha\n", after: "beta\n", rows: ["del:alpha", "add:beta", "ctx:"], added: 1, removed: 1 },
+    { before: "", after: "\n", rows: ["add:", "add:"], added: 2, removed: 0 },
+    { before: "\n", after: "", rows: ["del:", "del:"], added: 0, removed: 2 },
+    { before: "alpha\n\n", after: "alpha\n", rows: ["ctx:alpha", "ctx:", "del:"], added: 0, removed: 1 },
+    { before: "alpha\r\n", after: "alpha\n", rows: ["del:alpha\r", "add:alpha", "ctx:"], added: 1, removed: 1 },
+  ])("final empty items remain rows: $before to $after", ({ before, after, rows, added, removed }) => {
+    const diff = diffLines(before, after);
+
+    expect(diff.lines.map((line) => `${line.kind}:${line.text}`)).toEqual([...rows]);
+    expect({ added: diff.added, removed: diff.removed }).toEqual({ added, removed });
+    expect(diff.truncated).toBeUndefined();
+  });
+
+  test("line equality distinguishes lone surrogates as well as Unicode text", () => {
+    const diff = diffLines("\ud800\né\n\udc80", "\ud801\né\n\udc81");
+
+    expect(diff).toEqual({
+      lines: [
+        { kind: "del", text: "\ud800" }, { kind: "add", text: "\ud801" },
+        { kind: "ctx", text: "é" },
+        { kind: "del", text: "\udc80" }, { kind: "add", text: "\udc81" },
+      ],
+      added: 2, removed: 2,
+    });
+  });
 });
 
 describe("parseGitDiff", () => {
@@ -176,7 +253,7 @@ describe("parseGitDiff", () => {
   });
 });
 
-describe("diffLines cost bound", () => {
+describe("diffLines presentation bound", () => {
   /**
    * 256 KiB of 32-byte lines: the snapshot gate counts bytes, alignment cost is driven by lines.
    * Measured in workerd (local://v8-sizing-probe.md): a whole-file table peaks at +330 MiB, past
@@ -198,21 +275,19 @@ describe("diffLines cost bound", () => {
 
     const d = diffLines(before, after);
 
-    // Only the differing region is aligned: a 1x1 table, and exact.
     expect(d.added).toBe(1);
     expect(d.removed).toBe(1);
     expect(d.lines.length).toBe(MAX_LINES_PER_FILE);
     expect(d.truncated).toBe(true);
   });
 
-  test("a huge file whose every line differs is refused rather than aligned", () => {
-    // No shared head or tail: the bound is all that prevents a whole-file table.
-    const rewritten = Array.from({ length: LINES }, (_, i) => `${(i % 10) + 1}`.repeat(31)).join("\n");
+  test("a huge rewritten file is aligned while its carried rows stay bounded", () => {
+    const rewritten = Array.from({ length: LINES }, (_, i) => `rewritten ${i}`).join("\n");
 
     const d = diffLines(before, rewritten);
 
-    // Says so, rather than presenting an empty diff as "no changes".
-    expect(d.lines).toEqual([]);
+    expect(d.lines).toHaveLength(MAX_LINES_PER_FILE);
+    expect(d.lines[0]).toEqual({ kind: "del", text: body(0) });
     expect(d.truncated).toBe(true);
     expect(d.removed).toBe(LINES);
     expect(d.added).toBe(LINES);
@@ -232,8 +307,7 @@ describe("diffLines cost bound", () => {
     expect(d.truncated).toBe(true);
   });
 
-  test("a large newly added file is still readable — one empty side needs no table", () => {
-    // Workspace-birth shape: an empty baseline is answered exactly and cheaply, never refused.
+  test("a large newly added file is still readable", () => {
     const d = diffLines("", after);
 
     expect(d.added).toBe(LINES);

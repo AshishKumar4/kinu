@@ -437,19 +437,10 @@ describe('workspace diff lifecycle', () => {
     expect(told).toBe(4);
   });
 
-  test('the widest table the line bound allows fits an eighth of the silent-reset wall', () => {
-    // An eighth: the rest is the change-set's, the workspace state's and the runtime's. Raising the bound past this
-    // would let one alignment reset the object with no error. Six bytes a table element, rounded up from measurement
-    // so the bound errs small.
-    const table = (MAX_LINES_PER_FILE + 1) ** 2 * 6;
-
-    expect(table).toBeLessThanOrEqual(PLATFORM_CATALOG['do.isolate.reset_silent'].limit.value / 8);
-  });
-
   test('an appended log is diffed exactly, however long the file is', async () => {
     const { rt, workspace } = createTestRuntime();
     const baselines = await baselinesOf(rt, workspace);
-    // Under the admission gate but far over what whole-file alignment affords; only the differing region is aligned.
+    // Under the admission gate, with the append beyond the carried rows.
     const lines = 8000;
     const before = Array.from({ length: lines }, (_, i) => `${i % 10}`.repeat(9)).join('\n');
     await writeText(rt.storage.vfs, 'agent.log', before);
@@ -468,13 +459,34 @@ describe('workspace diff lifecycle', () => {
     expect(file.truncated).toBe(true);
   });
 
+  test('a changed middle over a thousand lines keeps unchanged lines out of the totals', async () => {
+    const { rt, workspace } = createTestRuntime();
+    const baselines = await baselinesOf(rt, workspace);
+    const before = Array.from({ length: 2500 }, (_, i) => `row ${i}`);
+    const after = [...before];
+    after[100] = 'rewritten start';
+    after[2100] = 'rewritten end';
+    await writeText(rt.storage.vfs, 'report.txt', before.join('\n'));
+    await resetWorkspaceBaseline(rt, baselines);
+    await writeText(rt.storage.vfs, 'report.txt', after.join('\n'));
+
+    const { files } = await getWorkspaceDiff(rt, baselines);
+
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatchObject({ path: 'report.txt', status: 'changed', added: 2, removed: 2, truncated: true });
+    expect(files[0].lines.slice(98, 104)).toEqual([
+      { kind: 'ctx', text: 'row 98' }, { kind: 'ctx', text: 'row 99' },
+      { kind: 'del', text: 'row 100' }, { kind: 'add', text: 'rewritten start' },
+      { kind: 'ctx', text: 'row 101' }, { kind: 'ctx', text: 'row 102' },
+    ]);
+  });
+
   test('a wholly rewritten long file is listed with true totals rather than dropped', async () => {
     const { rt, workspace } = createTestRuntime();
     const baselines = await baselinesOf(rt, workspace);
-    // No shared head or tail, so the differing region is the whole file and the bound applies.
     const lines = 8000;
-    const before = Array.from({ length: lines }, (_, i) => `${i % 10}`.repeat(9)).join('\n');
-    const after = Array.from({ length: lines }, (_, i) => `${(i % 10) + 1}`.repeat(9)).join('\n');
+    const before = Array.from({ length: lines }, (_, i) => `old ${i}`).join('\n');
+    const after = Array.from({ length: lines }, (_, i) => `new ${i}`).join('\n');
     await writeText(rt.storage.vfs, 'bundle.min.js', before);
     await resetWorkspaceBaseline(rt, baselines);
     await writeText(rt.storage.vfs, 'bundle.min.js', after);
@@ -486,8 +498,8 @@ describe('workspace diff lifecycle', () => {
     if (!file) throw new Error('the oversized file must still appear in the change-set');
     expect(file.status).toBe('changed');
     expect(file.truncated).toBe(true);
-    expect(file.lines).toEqual([]);
-    // Coarse but true: every line out, every line in.
+    expect(file.lines).toHaveLength(MAX_LINES_PER_FILE);
+    expect(file.lines[0]).toEqual({ kind: 'del', text: 'old 0' });
     expect(file.removed).toBe(lines);
     expect(file.added).toBe(lines);
   });
