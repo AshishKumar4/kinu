@@ -122,7 +122,6 @@ describe('opening on a trial account', () => {
 
   test('two runs that open on one account at once: the earlier workspace name keeps it, the later one gives it up', async () => {
     const { server, target } = deployment({
-      
       workspaces: [{ name: 'eval-order-book-3-aaaaaa', lastVisited: now }, { name: 'eval-order-book-3-bbbbbb', lastVisited: now }],
     });
 
