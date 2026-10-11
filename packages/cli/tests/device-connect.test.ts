@@ -963,6 +963,7 @@ describe('classic cloud chat connect prompt', () => {
           name: 'jarvis',
           mode: 'cloud',
           cloudName: 'jarvis',
+          displayName: 'Jarvis',
           purpose: 'Cloud agent',
           createdAt: new Date(0).toISOString(),
           updatedAt: new Date(0).toISOString(),
