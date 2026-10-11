@@ -627,6 +627,31 @@ describe('device-connect install hardening', () => {
     expect(reply.result).toBeDefined();
   });
 
+  test('kinu connect reads device.json as the daemon does: one its daemon would refuse is replaced, its token not reused', async () => {
+    const hub = startUpdateHub({ served: VERSION, archive: new Uint8Array() });
+    updateHubs.push(hub);
+    const registrations: { label?: string; replaces?: string }[] = [];
+
+    const stub = startStubCloud({
+      deviceOrigin: hub.origin,
+      devices: () => [connectedDevice(hub.sockets.items.some((socket) => socket.closed === null))],
+      onRegister: (registration) => { registrations.push(registration); },
+    });
+
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+    daemonHomes.push(home);
+    // Every field present, on this hub, but its directory relative: the daemon refuses it at start.
+    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'old', device: 'dev_old', token: 'old-token', origin: stub.origin, root: 'project' }), { mode: 0o600 });
+
+    const connected = spawnConnectInPty(home, 'reconnected', repoRoot);
+    await connected.waitFor('Link and start the daemon?');
+    await connected.send('y');
+    expect(await connected.proc.exited).toBe(0);
+    await connected.drained;
+    expect(registrations).toEqual([{ label: 'reconnected' }]);
+    expect(parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8'))).toMatchObject({ device: 'dev_1', root: repoRoot });
+  });
+
   test('publishes neither install file when the daemon cannot be replaced', async () => {
     const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
