@@ -172,6 +172,11 @@ interface LocalHostedSession {
   readonly jobsDriven: Set<string>;
 }
 
+/** The jobs a session's runners drive: its host tree's set, or, for a session outside a host, its own. */
+function drivenJobs(hosted: LocalHostedSession | undefined): Set<string> {
+  return hosted?.jobsDriven ?? new Set();
+}
+
 type TurnAsked = Pick<ChatTurnInput, 'kind' | 'text' | 'metadata'>;
 
 const NEXT_OWNER_TURN: TurnAsked = { kind: 'user', text: '' };
@@ -555,7 +560,7 @@ export class LocalAgentSession {
     this.deferrals = this.workspaceQueue(opts.hosted);
 
     this.rt.setApprovalDeferrals?.(this.deferrals.channelFor(this.rt.actor.actorId));
-    this.jobsDrivenHere = opts.hosted?.jobsDriven ?? new Set();
+    this.jobsDrivenHere = drivenJobs(opts.hosted);
     this.jobHolder = processJobHolder(this.rt.storage, OS_LEASE_PROCESS);
     this.jobRunner = new BackgroundJobRunner({
       store: this.jobs,
