@@ -395,8 +395,8 @@ async function model(request: Request): Promise<Response | MiniflareResponse> {
   const consumed = measuring ? cpu(enginePid) : 0;
   const url = new URL(request.url);
 
-  // Only the commands and egress subjects reach the network: their clone and install are what they measure.
-  if ((subject === 'commands' || subject === 'egress') && COMMAND_HOSTS.includes(url.hostname)) return await passedThrough(request);
+  // Only the commands, egress and tcp subjects reach the network: their clone and install are what they measure.
+  if ((subject === 'commands' || subject === 'egress' || subject === 'tcp') && COMMAND_HOSTS.includes(url.hostname)) return await passedThrough(request);
 
   if (subject === 'egress' && url.hostname === PERF_SECRET_HOST) return await gitServer(request);
 
