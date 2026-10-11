@@ -709,7 +709,7 @@ export {
 } from './tools/operation-surfaces';
 
 export {
-  defineOperation, serve, operationId, allowedInPlan, inputJsonSchema,
+  defineOperation, serve, serveTransactional, operationId, allowedInPlan, inputJsonSchema,
   type Operation, type OperationCall, type OperationResult, type Served, type Impact,
 } from './operations/operation';
 

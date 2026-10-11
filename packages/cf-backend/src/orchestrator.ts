@@ -1413,6 +1413,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         sql: turn.runtime.storage.sql,
         turnId: () => turn.turnId,
         durable: (callId, signal) => turn.actor.session.durableCall(callId, signal),
+        // A hire's store is this object's: its receipt and a transactional effect commit as one here.
+        transaction: (body) => this.ctx.storage.transactionSync(body),
       },
       codemode: (surface) => factory.toolFor(surface, scope),
       agents,

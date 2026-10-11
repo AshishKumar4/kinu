@@ -2202,6 +2202,7 @@ export abstract class ActorAgent extends Agent<Env> {
           sql: this.rt.storage.sql,
           turnId: () => currentOperationProfile(this.actorHandle())?.turnId ?? this.mainChatTurn() ?? WORKSPACE_RUN_ID,
           durable: async (callId, signal) => (await this.workspaceAgent()).session.durableCall(callId, signal),
+          transaction: (body) => this.ctx.storage.transactionSync(body),
         },
         spill: this.rt.storage,
       }));
@@ -3815,6 +3816,7 @@ export abstract class ActorAgent extends Agent<Env> {
             ? () => currentOperationProfile(this.actorHandle())?.turnId ?? this.mainChatTurn() ?? WORKSPACE_RUN_ID
             : () => claimScope,
           durable: async (callId, signal) => (await this.workspaceAgent()).session.durableCall(callId, signal),
+          transaction: (body) => this.ctx.storage.transactionSync(body),
         },
         // The sandbox declares the finished native surface, so core builds it last over all other tools.
         codemode: (surface) => this.evalTool(surface, mode),

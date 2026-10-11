@@ -66,10 +66,45 @@ export interface OperationResult {
 export interface Served {
   readonly op: Operation;
   run(input: JsonValue, call: OperationCall): Promise<OperationResult>;
+  /** Present for an operation whose effect is one synchronous local commit (design v3 D): run inside its receipt's
+   *  transaction, so the receipt, the effect and the result commit as one. */
+  readonly runSync?: (input: JsonValue) => OperationResult;
 }
 
 export function defineOperation<const I extends OperationInput, const O extends v.GenericSchema>(op: Operation<I, O>): Operation<I, O> {
   return op;
+}
+
+/** An operation's output as JSON carries it (a field set to undefined is absent), and as text where it says it so. */
+function resultOf<Op extends Operation>(op: Op, output: OperationOut<Op>): OperationResult {
+  const value = projectJsonValue({ value: output });
+
+  return op.text === undefined ? { value } : { value, text: op.text(output) };
+}
+
+/**
+ * An operation whose effect is one synchronous local commit: no await between its reads and its writes. Its receipt can
+ * commit with it in one transaction, so a started receipt for it cannot outlive a death; it is served async as well.
+ */
+export function serveTransactional<Op extends Operation>(op: Op, run: (input: OperationIn<Op>) => Effect.Effect<OperationOut<Op>, KinuError>): Served {
+  return new TransactionalServed(op, run);
+}
+
+class TransactionalServed<Op extends Operation> implements Served {
+  constructor(readonly op: Op, private readonly effect: (input: OperationIn<Op>) => Effect.Effect<OperationOut<Op>, KinuError>) {}
+
+  async run(input: JsonValue): Promise<OperationResult> {
+    return this.runSync(input);
+  }
+
+  runSync(input: JsonValue): OperationResult {
+    const { op } = this;
+
+    requireWorkModePermission(currentWorkMode(), allowedInPlan(op), operationId(op));
+    const parsed = v.safeParse(op.input, input);
+
+    return settleSync((parsed.success ? this.effect(parsed.output) : Effect.fail(inputRefusal(op, input, parsed.issues))).pipe(Effect.map((output) => resultOf(op, output))));
+  }
 }
 
 export function serve<Op extends Operation>(op: Op, run: OperationRun<Op>): Served {
@@ -80,12 +115,7 @@ export function serve<Op extends Operation>(op: Op, run: OperationRun<Op>): Serv
       const parsed = v.safeParse(op.input, input);
       const answered = parsed.success ? run(parsed.output, call) : Effect.fail(inputRefusal(op, input, parsed.issues));
 
-      return await settle((Effect.isEffect(answered) ? answered : Effect.promise(() => answered)).pipe(Effect.map((output) => {
-        // As JSON carries it: a field set to undefined is absent.
-        const value = projectJsonValue({ value: output });
-
-        return op.text === undefined ? { value } : { value, text: op.text(output) };
-      })));
+      return await settle((Effect.isEffect(answered) ? answered : Effect.promise(() => answered)).pipe(Effect.map((output) => resultOf(op, output))));
     },
   };
 }

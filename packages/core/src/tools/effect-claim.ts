@@ -14,6 +14,7 @@ import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { parseJsonValue, projectJsonValue, type JsonValue } from '../utils/json';
 import { replayPolicyFor } from './registry';
+import { isTransactionalCall, TRANSACTIONAL_RECEIPT_OPTION, TransactionalReceipt, type ReceiptCommit } from './transactional-receipt';
 
 /** `turnId` is the durable turn id (the opening message), not the per-attempt run id, so a recovery matches. */
 export interface ToolEffectKey {
@@ -95,6 +96,9 @@ export interface EffectClaimDeps {
   /** Read at call time: a toolset is built once and used across many turns. */
   readonly turnId: () => string;
   readonly durable: (callId: string, signal?: AbortSignal) => Promise<void>;
+  /** One synchronous commit in the store the receipt is kept in: a call whose effect is one local commit runs inside it
+   *  with its receipt (design v2 §4), so its receipt is settled or absent, never started. */
+  readonly transaction?: <A>(body: () => A) => A;
   /** Tools whose effect commits in another store, whose own receipt answers a re-ask: a started receipt here re-asks
    *  it under the same call, rather than refusing. Cloud only: an agent's isolate runs its workspace's tools there; the
    *  CLI runs every tool in the process that keeps its receipt. */
@@ -129,6 +133,19 @@ export function withEffectReceipt(
 
         // A program's own call streams no part.
         if (options.messages.length > 0) await deps.durable(options.toolCallId, options.abortSignal);
+        const { transaction } = deps;
+
+        // One synchronous local commit: its receipt, effect and result commit as one, inside the call.
+        if (transaction !== undefined && isTransactionalCall(entry, projectJsonValue({ value: input }))) {
+          const receipt = new TransactionalReceipt((run) => transaction(() => committedOnce(deps, key, name, run)));
+          const output = await execute(input, Object.assign({}, options, { [TRANSACTIONAL_RECEIPT_OPTION]: receipt }));
+
+          // A wrapper that did not hand the receipt on ran it outside: its result is recorded after, as any call's is.
+          if (!receipt.committed) settleToolEffect(deps.sql, deps.actor, key, JSON.stringify(projectJsonValue({ value: output })));
+
+          return output;
+        }
+
         const claim = claimToolEffect(deps.sql, deps.actor, key);
 
         if (claim.kind === 'settled') return claim.result;
@@ -147,6 +164,21 @@ export function withEffectReceipt(
   }
 
   return claimed;
+}
+
+/** Inside the transaction: a settled receipt answers; a started one cannot exist for a transactional effect, which rolls
+ *  back with it, and is refused if found; else the receipt, the effect and its result are written together. */
+function committedOnce(deps: EffectClaimDeps, key: ToolEffectKey, name: string, run: () => JsonValue): ReceiptCommit {
+  const claim = claimToolEffect(deps.sql, deps.actor, key);
+
+  if (claim.kind === 'settled') return { kind: 'answered', output: claim.result };
+
+  if (claim.kind === 'indeterminate') return { kind: 'refused', failure: new KinuError('denied', indeterminateEffectMessage(name, key.callId)) };
+  const output = run();
+
+  settleToolEffect(deps.sql, deps.actor, key, JSON.stringify(projectJsonValue({ value: output })));
+
+  return { kind: 'answered', output };
 }
 
 function indeterminateEffectMessage(name: string, callId: string): string {
