@@ -61,7 +61,7 @@ const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: '/changelog', description: 'Review what the agent changed about itself; revert one by number', usage: '/changelog [revert <n>]', run: changelogCommand },
   { name: '/refine', description: 'Review fixes staged from corrected turns; approve or reject each', usage: '/refine [now|show <n> <edit>|approve <n> <edit> <digest>|reject <n> <edit> <digest>]', run: refineCommand },
   { name: '/takes', description: 'Compare the latest alternate takes; pick one by number', usage: '/takes [n]', run: takesCommand },
-  { name: '/tree', description: 'Show the swarm search tree', aliases: ['/swarm'], run: treeCommand },
+  { name: '/tree', description: 'Show the swarm search tree', run: treeCommand },
   { name: '/jobs', description: 'List background jobs', run: jobsCommand },
   { name: '/connect', description: 'Connect this PC so the agent can run commands on it', requires: 'consents', run: connectCommand },
   { name: '/stop', description: 'Stop the running turn', run: stopCommand },

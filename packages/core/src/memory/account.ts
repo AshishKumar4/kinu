@@ -79,7 +79,10 @@ export interface AccountNote {
 export const AccountMemoryProposalSchema = v.object({
   id: v.string(),
   proposal: AccountProposalSchema,
-  origin: FactOriginSchema,
+  origin: v.variant('by', [
+    v.object({ ...AccountProposerSchema.options[0].entries, workspace: v.optional(v.string()) }),
+    v.object({ ...AccountProposerSchema.options[1].entries, workspace: v.optional(v.string()) }),
+  ]),
   createdAt: v.number(),
 });
 

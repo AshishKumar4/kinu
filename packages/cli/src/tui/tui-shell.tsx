@@ -75,10 +75,10 @@ export interface TuiSubordinate {
   readonly task?: string;
 }
 
-export interface TuiAgentSummary extends ListedAgent {
+export type TuiAgentSummary = ListedAgent & {
   readonly status?: TuiAgentStatus;
   readonly subordinates?: readonly TuiSubordinate[];
-}
+};
 
 export interface TuiAgentPage {
   readonly items: readonly TuiAgentSummary[];
@@ -101,7 +101,7 @@ export interface TuiAgentRoster {
 
 const EMPTY_AGENT_PAGE: TuiAgentPage = Object.freeze({ items: Object.freeze([]), total: 0, nextCursor: null });
 
-export function agentSourceFromList(list: () => readonly ListedAgent[]): TuiAgentSource {
+export function agentSourceFromList(list: () => readonly TuiAgentSummary[]): TuiAgentSource {
   return {
     load(cursor) {
       return settleSync(Effect.gen(function* () {
@@ -297,8 +297,8 @@ function agentRowKey(agent: Pick<ListedAgent, 'name' | 'mode'>): string {
   return `agent:${agent.mode}:${agent.name}`;
 }
 
-function workspaceRowKey(agent: ListedAgent, projectRoot: string): string {
-  return agent.mode === 'cloud' ? 'remote' : `ws:${agentWorkspaceKey(agent, projectRoot)}`;
+function workspaceRowKey(agent: ListedAgent): string {
+  return agent.mode === 'cloud' ? 'remote' : `ws:${agentWorkspaceKey(agent)}`;
 }
 
 function buildSidebarRows(
@@ -441,7 +441,7 @@ export function TuiShell(props: TuiShellProps) {
 
     if (item === undefined) return;
     syncedCurrentAgent.current = currentKey;
-    const container = workspaceRowKey(item, projectRoot);
+    const container = workspaceRowKey(item);
 
     if (container === 'remote') setRemoteExpanded(true);
     else setCollapsedWorkspaces((collapsed) => collapsed.filter((key) => key !== container));
@@ -590,7 +590,7 @@ export function TuiShell(props: TuiShellProps) {
     if (action === 'modal.collapse') {
       event.preventDefault();
 
-      if (selected.kind === 'agent') applySelection(workspaceRowKey(selected.agent, projectRoot));
+      if (selected.kind === 'agent') applySelection(workspaceRowKey(selected.agent));
       else if (selected.kind === 'workspace' && selected.expanded) toggleWorkspace(selected.key);
       else if (selected.kind === 'remote' && selected.expanded) setRemoteExpanded(false);
 

@@ -39,8 +39,8 @@ export function resolveAgentTarget(input: string, opts: ResolveAgentTargetOption
         requestedName: input,
         name: ref.name,
         mode: ref.mode,
-        cloudName: ref.cloudName ?? ref.name,
-        localName: ref.localName ?? ref.name,
+        cloudName: ref.mode === 'cloud' ? ref.cloudName : ref.name,
+        localName: ref.mode === 'local' ? ref.localName : ref.name,
         cwd: ref.cwd,
         workspaceId: ref.workspaceId,
       };
@@ -67,7 +67,7 @@ export function resolveAgentTarget(input: string, opts: ResolveAgentTargetOption
  *  key — the one way an unconfigured name can have two real candidates. */
 function sameCloudWorkspace(input: string): KinuAgentConfig | null {
   return listConfiguredAgentRefs()
-    .find((agent) => agent.mode === 'cloud' && (agent.cloudName ?? agent.name) === input) ?? null;
+    .find((agent) => agent.mode === 'cloud' && agent.cloudName === input) ?? null;
 }
 
 function bareTarget(input: string, mode: AgentMode): AgentTarget {

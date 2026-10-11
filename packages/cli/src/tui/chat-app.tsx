@@ -396,7 +396,7 @@ function ChatScene({
 
   // The agent hub: what it shows, read for the open workspace and moved by the frames that name its reads.
   const { hub, live: hubLive, shownRoster, answered, reset: resetHub, jobOutput: hubJobOutput, readsChanged: hubReadsChanged } = useHub({
-    client, seed: hubData, readHub, view: hubView, roster, label: status?.name, running: isProcessing, projectRoot, messages,
+    client, seed: hubData, readHub, view: hubView, roster, label: status?.name, running: isProcessing, messages,
   });
 
   const addMessage = useCallback((msg: Omit<DisplayMessage, 'id'>): string => {
@@ -654,7 +654,7 @@ function ChatScene({
   }, [addError, addMessage, client, dispatchInput, forgetSessionTurn, onClientChange, setInputText]);
 
   const switchWorkspace = useCallback(async (
-    workspace: TuiAgentSummary,
+    workspace: Pick<TuiAgentSummary, 'name' | 'label' | 'mode'>,
     preparedClient?: AgentClient,
   ) => {
     if (!preparedClient && workspace.name === client.agentName && workspace.mode === client.mode) {

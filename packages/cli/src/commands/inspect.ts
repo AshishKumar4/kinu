@@ -1,5 +1,5 @@
 import { Effect } from 'effect';
-import { settle } from '@kinu.run/core/obs';
+import { KinuError, settle } from '@kinu.run/core/obs';
 import {
   decodeJsonValue, JsonArraySchema, JsonValueSchema,
   QualityDaySchema, renderQualitySeries, SPEND_SOURCE_LABEL, usageTotal,
@@ -534,7 +534,7 @@ function printData(data: JsonValue, opts: InspectOpts): void {
 }
 
 /** Every producer answers a bare list of rows; any other shape is a backend/formatter mismatch and fails loudly. */
-function printRows(data: JsonValue, opts: InspectOpts, format: (item: JsonValue) => string): Effect.Effect<void> {
+function printRows(data: JsonValue, opts: InspectOpts, format: (item: JsonValue) => string): Effect.Effect<void, KinuError> {
   return Effect.gen(function* () {
     if (opts.json) {
       printJson(data);
@@ -554,7 +554,10 @@ function printRows(data: JsonValue, opts: InspectOpts, format: (item: JsonValue)
       return;
     }
 
-    for (const item of rows.output) console.log(format(item));
+    for (const item of rows.output) console.log(yield* Effect.try({
+      try: () => format(item),
+      catch: (cause) => new KinuError('io', 'Corrupt inspection row', { cause }),
+    }));
   });
 }
 
@@ -566,32 +569,30 @@ function printPretty(data: JsonValue): void {
 }
 
 function formatEventRow(item: JsonValue): string {
-  const row = asRecord({ value: item }, 'value');
+  const row = v.parse(v.object({ id: v.string(), variant: v.string(), ingress: v.string(), received_at: v.number() }), item);
 
-  return `${ACCENT(stringField(row, 'id') ?? 'event')} ${stringField(row, 'variant') ?? ''} ${DIM(stringField(row, 'ingress') ?? '')} ${formatDate(row.received_at ?? row.receivedAt)}`;
+  return `${ACCENT(row.id)} ${row.variant} ${DIM(row.ingress)} ${formatDate(row.received_at)}`;
 }
 
 function formatTimelineRow(item: JsonValue): string {
-  const row = asRecord({ value: item }, 'value');
-  const label = stringField(row, 'label') ?? stringField(row, 'message') ?? stringField(row, 'kind') ?? stringField(row, 'id') ?? 'entry';
+  const row = v.parse(v.object({ ts: v.number(), kind: v.string(), label: v.string() }), item);
 
-  return `${formatDate(row.ts ?? row.received_at ?? row.created_at)} ${ACCENT(stringField(row, 'kind') ?? stringField(row, 'type') ?? 'event')} ${DIM(label.slice(0, 120))}`;
+  return `${formatDate(row.ts)} ${ACCENT(row.kind)} ${DIM(row.label.slice(0, 120))}`;
 }
 
 /** Head runs and GEPA runs render the same row under different field names. */
 interface RunRowFields {
   readonly id: string;
-  readonly fallbackId: string;
   readonly purpose: readonly [string, string];
 }
 
-const HEAD_RUN_ROW: RunRowFields = { id: 'rootId', fallbackId: 'head', purpose: ['task', 'rationale'] };
+const HEAD_RUN_ROW: RunRowFields = { id: 'rootId', purpose: ['task', 'rationale'] };
 
-const GEPA_RUN_ROW: RunRowFields = { id: 'runId', fallbackId: 'gepa', purpose: ['target', 'stopReason'] };
+const GEPA_RUN_ROW: RunRowFields = { id: 'runId', purpose: ['target', 'stopReason'] };
 
 function formatRunRow(item: JsonValue, fields: RunRowFields): string {
   const row = asRecord({ value: item }, 'value');
-  const id = stringField(row, fields.id) ?? stringField(row, 'id') ?? fields.fallbackId;
+  const id = v.parse(v.pipe(v.string(), v.nonEmpty()), row[fields.id]);
   const purpose = stringField(row, fields.purpose[0]) ?? stringField(row, fields.purpose[1]) ?? '';
 
   return `${ACCENT(id)} ${stringField(row, 'status') ?? ''} ${DIM(purpose.slice(0, 100))}`;

@@ -152,7 +152,7 @@ test("a genuinely unreadable workspace names its cause instead of hiding it", as
   mkdirSync(dir, { recursive: true });
   // Not a database: the one condition that legitimately reaches the handler.
   writeFileSync(join(dir, "agent.db"), "this is not sqlite\n");
-  const folder = placeLocalWorkspace(home, "broken-ws");
+  const folder = placeLocalWorkspace(home, "broken-ws", 'ws-broken');
 
   // `kinu list` lists the workspaces placed in the folder it runs in.
   const list = await runToExit([process.execPath, cliBin, "list"], { cwd: folder, env: { ...process.env, KINU_HOME: home } });

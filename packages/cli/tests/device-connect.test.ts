@@ -16,7 +16,7 @@ import {
   type JsonObject,
 } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
-import { listCloudDevices, type CloudDevice } from '../src/cloud-api';
+import { type CloudDevice } from '../src/cloud-api';
 import { describeDeviceSandbox } from '../src/device-connect';
 import { CloudAgentClient } from '../src/cloud-agent-client';
 import * as v from 'valibot';
@@ -82,8 +82,7 @@ interface StubCloud {
 }
 
 interface StubCloudOptions {
-  /** Typed as the wire, not `CloudDevice`, so a case can serve an older hub's row. */
-  devices?: () => unknown[];
+  devices?: () => CloudDevice[];
   registerGate?: Promise<void>;
   registrationFailure?: { status: number; error: string };
   onRegister?: (body: { label?: string; replaces?: string }) => void;
@@ -282,7 +281,7 @@ describe('device-connect prompt policy', () => {
     // This machine is the device its device.json names, whatever its hostname.
     const stub = startStubCloud({ devices: () => [connectedDevice(true, { id: 'dev_this', hostname: 'renamed-box' })] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
-    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', device: 'dev_this', token: 'pdt_this', origin: stub.origin }));
+    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', device: 'dev_this', token: 'pdt_this', origin: stub.origin, root: repoRoot }));
 
     const out = await runScript(home, `
       import { shouldOfferDeviceConnect } from './packages/cli/src/device-connect.ts';
@@ -393,7 +392,7 @@ describe('device-connect daemon lifecycle', () => {
     };
 
     // A device.json another deployment issued is that deployment's secret, and stays unsent.
-    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', token: 'pdt_other_hub', origin: 'https://other.example' }));
+    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', device: 'dev_other_hub', token: 'pdt_other_hub', origin: 'https://other.example', root: repoRoot }));
     await connect();
     await connect();
 
@@ -415,7 +414,7 @@ describe('device-connect daemon lifecycle', () => {
       const sleeper = Bun.spawn({ cmd: ['sleep', '30'] });
       sleepers.push(sleeper);
       writeFileSync(join(home, 'pc-agent.pid'), `${sleeper.pid}\n`, { mode: 0o600 });
-      writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', device: 'dev_this', token: 'pdt_this', origin: stub.origin }));
+      writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', device: 'dev_this', token: 'pdt_this', origin: stub.origin, root: repoRoot }));
 
       const out = await runScript(home, `
         import { connectDevice } from './packages/cli/src/device-connect.ts';
@@ -560,19 +559,7 @@ describe('the sandbox state the machine reported', () => {
     expect(line).not.toContain('Sandbox on');
   });
 
-  test('a device row from a hub too old to report the switch still lists', async () => {
-    const stub = startStubCloud({
-      devices: () => [{
-        id: 'dev_1', label: 'device', os: 'linux', hostname: 'box',
-        connected: true, createdAt: 0, lastSeenAt: null,
-      }],
-    });
 
-    const devices = await listCloudDevices(stub.origin, 'ptc_test');
-
-    expect(devices).toHaveLength(1);
-    expect(devices[0].sandbox).toEqual({ tier: 'sandboxed', capability: 'files_only', reason: null, detail: null, gpu: [] });
-  });
 });
 
 describe('device-connect install hardening', () => {
@@ -875,7 +862,7 @@ describe('device daemon single-instance lock', () => {
 
     writeFileSync(
       join(home, 'device.json'),
-      `${JSON.stringify({ user: 'user_1', token: 'device-token', origin })}\n`,
+      `${JSON.stringify({ user: 'user_1', device: 'dev_1', token: 'device-token', origin, root: repoRoot })}\n`,
       { mode: 0o600 },
     );
 

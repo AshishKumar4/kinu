@@ -22,7 +22,7 @@ import {
   type ProfileCatalogEnvelope,
   shellQuote,
 } from '@kinu.run/core';
-import { KinuError, settleSync, tolerate } from '@kinu.run/core/obs';
+import { attempt, KinuError, settle, settleSync, tolerate } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import {
   makeSql, CLOUD_PROXY_PROVIDER_IDS,
@@ -94,23 +94,24 @@ export type LocalOAuthSession = v.InferOutput<typeof LocalOAuthSessionSchema>;
 
 const StringMapSchema = v.record(v.string(), v.string());
 
-const KinuAgentConfigSchema = v.object({
+const AgentRefFields = {
   name: v.string(),
-  mode: v.picklist(['local', 'cloud']),
-  /** Cloud workspaces only; a local agent's title lives in its own database (`actor_config.display_name`). */
-  displayName: v.optional(v.string()),
   alias: v.optional(v.string()),
-  localName: v.optional(v.string()),
-  cloudName: v.optional(v.string()),
-  /** Canonical project directory; the agent's file and shell plane binds here. */
-  cwd: v.optional(v.string()),
-  /** Label grouping peer agents inside `cwd`, never a directory: state stays at `~/.kinu/<name>`. */
-  workspaceId: v.optional(v.string()),
-  /** `workspace_identity.id` of the addressed database, so a reused name cannot re-point the ref. */
-  identityId: v.optional(v.string()),
   createdAt: v.string(),
   updatedAt: v.string(),
-});
+};
+
+const KinuAgentConfigSchema = v.variant('mode', [
+  v.object({
+    ...AgentRefFields, mode: v.literal('local'), localName: v.string(),
+    cwd: v.string(), workspaceId: v.string(), identityId: v.string(),
+    cloudName: v.optional(v.never()), displayName: v.optional(v.never()),
+  }),
+  v.object({
+    ...AgentRefFields, mode: v.literal('cloud'), cloudName: v.string(), displayName: v.string(),
+    localName: v.optional(v.never()), cwd: v.optional(v.never()), workspaceId: v.optional(v.never()), identityId: v.optional(v.never()),
+  }),
+]);
 
 const McpServerConfigSchema = v.object({
   command: v.string(),
@@ -119,10 +120,9 @@ const McpServerConfigSchema = v.object({
   timeoutMs: v.optional(v.number()),
 });
 
-const OpenAiCompatConfigSchema = v.object({
+const OpenAiCompatConfigSchema = v.strictObject({
   baseURL: v.string(),
   apiKey: v.optional(v.string()),
-  headers: v.optional(StringMapSchema),
   extraHeaders: v.optional(StringMapSchema),
   contextWindow: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
 });
@@ -231,7 +231,7 @@ export interface LocalAgentRef {
 /** Null without a recorded folder that still exists: such a workspace is listed nowhere and refused at open. */
 function placedRef(agent: KinuAgentConfig): LocalAgentRef | null {
   if (agent.mode !== 'local' || !agent.cwd || !agent.workspaceId || !existsSync(agent.cwd)) return null;
-  const name = agent.localName ?? agent.name;
+  const name = agent.localName;
 
   if (!KINU_IDENTIFIER_RE.test(name)) return null;
 
@@ -279,25 +279,22 @@ export function listAgentDirs(cwd = process.cwd()): string[] {
   return listLocalRefs(cwd).map((ref) => ref.name);
 }
 
-function readWorkspaceIdentityId(dbPath: string): string | null {
-  if (!existsSync(dbPath)) return null;
-  // Read-write although nothing writes: a WAL database needs its `-shm`, and a readonly connection may not build one.
-  const db = new Database(dbPath);
+function readWorkspaceIdentityId(dbPath: string): Effect.Effect<string, KinuError> {
+  return Effect.try({
+    try: () => {
+      // A WAL database needs its -shm, so the connection is read-write.
+      const db = new Database(dbPath);
 
-  try {
-    const present = db.query<{ n: number }, []>(
-      `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'workspace_identity'`,
-    ).get();
+      try {
+        const row = db.query<{ id: string }, []>(`SELECT id FROM workspace_identity LIMIT 1`).get();
 
-    if (!present || present.n === 0) return null;
-    const row = db.query<{ id: string }, []>(`SELECT id FROM workspace_identity LIMIT 1`).get();
-
-    if (row?.id) return row.id;
-
-    return null;
-  } finally {
-    db.close();
-  }
+        return v.parse(v.object({ id: v.pipe(v.string(), v.nonEmpty()) }), row).id;
+      } finally {
+        db.close();
+      }
+    },
+    catch: (cause) => new KinuError('io', `${dbPath} has a corrupt workspace identity. Reinstall the local workspace.`, { cause }),
+  });
 }
 
 /** The only label source for local agents; config.json holds no copy, so renames cannot drift. */
@@ -307,12 +304,6 @@ export function readWorkspaceDisplayName(dbPath: string): string | null {
   const db = new Database(dbPath);
 
   try {
-    const present = db.query<{ n: number }, []>(
-      `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'actor_config'`,
-    ).get();
-
-    if (!present || present.n === 0) return null;
-
     return openWorkspaceMainActor(makeSql(db)).config.getDisplayName();
   } finally {
     db.close();
@@ -320,16 +311,19 @@ export function readWorkspaceDisplayName(dbPath: string): string | null {
 }
 
 /** A new local workspace's ref: the folder it works in, and its database's identity (`assertIdentityUnchanged`). */
-export async function placeLocalWorkspace(input: { name: string; cwd: string; workspaceId: string; alias?: string }): Promise<void> {
-  await upsertAgentConfig({
-    name: input.name,
-    mode: 'local',
-    localName: input.name,
-    alias: input.alias,
-    cwd: input.cwd,
-    workspaceId: input.workspaceId,
-    identityId: readWorkspaceIdentityId(agentDbPath(input.name)) ?? undefined,
-  });
+export function placeLocalWorkspace(input: { name: string; cwd: string; workspaceId: string; alias?: string }): Promise<void> {
+  return settle(Effect.gen(function* () {
+    const identityId = yield* readWorkspaceIdentityId(agentDbPath(input.name));
+    yield* attempt({ doing: 'placing a local workspace', otherwise: 'io' }, async () => upsertAgentConfig({
+      name: input.name,
+      mode: 'local',
+      localName: input.name,
+      alias: input.alias,
+      cwd: input.cwd,
+      workspaceId: input.workspaceId,
+      identityId,
+    }));
+  }));
 }
 
 export class MissingLocalWorkspaceError extends Error {
@@ -350,7 +344,7 @@ export function resolveLocalAgent(input: string): LocalAgentRef {
     throw new Error(`"${input}" is a cloud workspace; this needs a local one.`);
   }
 
-  const name = ref?.localName ?? ref?.name ?? input;
+  const name = ref === null ? input : ref.localName;
 
   if (!existsSync(agentDbPath(name))) throw new MissingLocalWorkspaceError(name);
   const placed = ref ? placedRef(ref) : null;
@@ -359,33 +353,31 @@ export function resolveLocalAgent(input: string): LocalAgentRef {
     return settleSync(Effect.fail(new KinuError('missing', `Workspace "${name}" has no folder; create a new one from the folder it should work in.`)));
   }
 
-  assertIdentityUnchanged(ref, placed);
-
-  return placed;
+  return settleSync(Effect.map(assertIdentityUnchanged(ref, placed), () => placed));
 }
 
 /** A changed identity means the name was reused; continuing would attach history to a different workspace. */
-function assertIdentityUnchanged(agent: KinuAgentConfig, ref: LocalAgentRef): void {
-  if (!agent.identityId) return;
-  const actual = readWorkspaceIdentityId(ref.dbPath);
+function assertIdentityUnchanged(agent: Extract<KinuAgentConfig, { mode: 'local' }>, ref: LocalAgentRef): Effect.Effect<void, KinuError> {
+  return Effect.gen(function* () {
+    const actual = yield* readWorkspaceIdentityId(ref.dbPath);
 
-  if (actual === null || actual === agent.identityId) return;
-  throw new Error(
-    `Workspace "${ref.name}" at ${ref.dbPath} is not the one recorded for ${ref.cwd}: `
-    + `expected identity ${agent.identityId}, found ${actual}. `
-    + 'Rename one of them, or remove the stale entry from ~/.kinu/config.json.',
-  );
+    if (actual === agent.identityId) return;
+
+    return yield* new KinuError('io',
+      `Workspace "${ref.name}" at ${ref.dbPath} is not the one recorded for ${ref.cwd}: `
+      + `expected identity ${agent.identityId}, found ${actual}. `
+      + 'Rename one of them, or remove the stale entry from ~/.kinu/config.json.',
+    );
+  });
 }
 
 export function loadConfigFile(): KinuConfig {
   if (!existsSync(CONFIG_PATH)) return {};
 
-  try {
-    return v.parse(KinuConfigSchema, JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')));
-  } catch (error) {
-    // Defaulting would discard the whole file over one bad field and look like a first run.
-    throw new Error(`${CONFIG_PATH} is not a valid Kinu config; fix or remove it.`, { cause: error });
-  }
+  return settleSync(Effect.try({
+    try: () => v.parse(KinuConfigSchema, JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'))),
+    catch: (cause) => new KinuError('io', `${CONFIG_PATH} is malformed. Remove it and reconnect with kinu setup.`, { cause }),
+  }));
 }
 
 function writeConfigFileUnlocked(config: KinuConfig): void {
@@ -478,7 +470,12 @@ export function listConfiguredAgentRefs(): KinuAgentConfig[] {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export async function upsertAgentConfig(agent: Omit<KinuAgentConfig, 'createdAt' | 'updatedAt'> & Partial<Pick<KinuAgentConfig, 'createdAt' | 'updatedAt'>>): Promise<KinuAgentConfig> {
+type AgentConfigWrite = (
+  Omit<Extract<KinuAgentConfig, { mode: 'local' }>, 'createdAt' | 'updatedAt'>
+  | Omit<Extract<KinuAgentConfig, { mode: 'cloud' }>, 'createdAt' | 'updatedAt'>
+) & Partial<Pick<KinuAgentConfig, 'createdAt' | 'updatedAt'>>;
+
+export async function upsertAgentConfig(agent: AgentConfigWrite): Promise<KinuAgentConfig> {
   validateAgentName(agent.name);
 
   if (agent.alias) validateAliasName(agent.alias);
@@ -492,12 +489,12 @@ export async function upsertAgentConfig(agent: Omit<KinuAgentConfig, 'createdAt'
   let saved!: KinuAgentConfig;
   await updateConfigFile((config) => {
     const existing = config.agents?.[agent.name];
-    saved = {
+    saved = v.parse(KinuAgentConfigSchema, {
       ...existing,
       ...agent,
       createdAt: agent.createdAt ?? existing?.createdAt ?? now,
       updatedAt: now,
-    };
+    });
     config.agents = { ...config.agents, [agent.name]: saved };
   });
 
@@ -511,7 +508,7 @@ export async function removeCloudAgentConfig(cloudName: string): Promise<boolean
     const removedNames = new Set<string>();
 
     for (const [name, agent] of Object.entries(agents)) {
-      if (agent.mode !== 'cloud' || (agent.cloudName ?? agent.name) !== cloudName) continue;
+      if (agent.mode !== 'cloud' || agent.cloudName !== cloudName) continue;
       delete agents[name];
       removedNames.add(name);
       removed = true;
@@ -710,15 +707,13 @@ export function resolveProviderCredentials(): LocalProviderCredentials {
   };
 }
 
-/** The config's two header bags as core's one credential: the key's Authorization over `headers`, `extraHeaders` over both. */
+/** `extraHeaders` overrides the API key's Authorization, as core's credential contract declares. */
 function compatCredential(compat: v.InferOutput<typeof OpenAiCompatConfigSchema>): OpenAICompatCredential {
-  const base = Object.entries(compat.headers ?? {}).filter(([name]) => compat.apiKey === undefined || name.toLowerCase() !== 'authorization');
-
   return {
     kind: 'openai-compat',
     baseURL: compat.baseURL,
     ...(compat.apiKey !== undefined && { apiKey: compat.apiKey }),
-    extraHeaders: { ...Object.fromEntries(base), ...compat.extraHeaders },
+    extraHeaders: compat.extraHeaders,
     ...(compat.contextWindow !== undefined && { contextWindow: compat.contextWindow }),
   };
 }
