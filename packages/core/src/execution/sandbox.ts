@@ -282,15 +282,20 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
   const names = createShellSession({ home: WORKSPACE_BACKUP_DIR, userRoots: () => [] });
   const connected = handle != null;
   const previews = previewHostSuffix !== undefined && previewHostSuffix.length > 0;
+  // In use once a call through it answered: a box that never came up (a server that runs no containers, a start that
+  // failed), or whose first call is still out, is not one an agent works in, so nothing reads it as one (AGENTS.md
+  // discovery reads an active box's file at each turn's open).
   let active = false;
 
   const touch = async <T>(fn: () => Promise<T>): Promise<T> => {
+    const answer = await fn();
+
     if (!active) {
       active = true;
       activated?.();
     }
 
-    return fn();
+    return answer;
   };
 
   /** One exposure path: Devbox owns listener proof; a failed probe is a real failure, never evidence of absence. */
@@ -502,8 +507,9 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
         if (!previewHostSuffix) return previewsUnconfigured();
 
         try {
-          // The tool is listPorts, the verb both executors declare.
-          const ports = await withSandboxRetry(() => touch(() => handle.getExposedPorts(previewHostSuffix)));
+          // The tool is listPorts, the verb both executors declare. A read of the box's record, which never starts it,
+          // so no use of the box.
+          const ports = await withSandboxRetry(() => handle.getExposedPorts(previewHostSuffix));
 
           return JSON.stringify((ports ?? []).map(p => ({ port: p.port, status: p.status, url: p.url })));
         } catch (err) {
@@ -692,7 +698,8 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
 
     async listExposedPorts() {
       if (!handle || !previewHostSuffix) return [];
-      const ports = await withSandboxRetry(() => touch(() => handle.getExposedPorts(previewHostSuffix)));
+      // A read of the box's record, which never starts it: no use of the box.
+      const ports = await withSandboxRetry(() => handle.getExposedPorts(previewHostSuffix));
 
       return (ports ?? []).map(p => ({
         port: p.port,
