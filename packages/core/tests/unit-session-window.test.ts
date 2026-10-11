@@ -3,6 +3,7 @@ import { compactToolCall } from '../src/evolution/tool-call-record';
 import { describe, test, expect } from 'bun:test';
 import { createTestActors, createTestSql, present } from '@kinu.run/test-utils';
 import { initCompletedTurnTable, createCompletedTurnStore, type CompletedTurnStore } from '../src/evolution/session-window';
+import { recordEffectDone } from '../src/identity/effect-tombstones';
 import type { CompletedTurn } from '../src/evolution/types';
 import type { JsonObject } from '../src/utils/json';
 import type { SqlExecutor } from '../src/types/primitives';
@@ -196,7 +197,6 @@ describe('SessionWindow — durability past the row', () => {
     present(win.claim(), 'the claimed window').settle();
     const taken = win.takeQueuedReviews(5);
     expect(taken.reviews).toHaveLength(1);
-    win.recordReviewRan(taken.reviews[0].id);
     win.settleReview(taken.reviews[0].id);
     // The row is gone, so `ON CONFLICT(id)` has nothing to conflict with.
     expect(rowCount(sql, actor)).toBe(0);
@@ -209,11 +209,11 @@ describe('SessionWindow — durability past the row', () => {
   });
 
   test('a claimed review whose work already ran is settled by recovery, not re-queued', () => {
-    const { win } = open();
+    const { sql, actor, win } = open();
     win.append(aTurn(0), { awaitsFollowup: false, now: 1 });
     const id = win.takeQueuedReviews(5).reviews[0].id;
-    // reviewTurn's writes landed, then eviction before the lease settled.
-    win.recordReviewRan(id);
+    // The review settled its tombstone, then the process died before the lease's own statement.
+    recordEffectDone(sql, actor, { scope: 'turn_review', key: id });
 
     expect(win.resetStaleClaims()).toBe(0);
     expect(win.countQueuedReviews()).toBe(0);
@@ -231,10 +231,10 @@ describe('SessionWindow — durability past the row', () => {
   });
 
   test('a released row whose work had already run is settled rather than offered', () => {
-    const { win } = open();
+    const { sql, actor, win } = open();
     win.append(aTurn(0), { awaitsFollowup: false, now: 1 });
     const id = win.takeQueuedReviews(5).reviews[0].id;
-    win.recordReviewRan(id);
+    recordEffectDone(sql, actor, { scope: 'turn_review', key: id });
     // Another lane put the lease back; the review still must not run twice.
     win.releaseQueuedReview(id);
 

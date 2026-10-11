@@ -184,10 +184,8 @@ export interface CompletedTurnStore {
    *  created at or before it, so a replayed old task cannot demote a newer
    *  turn's review. Returns the count. */
   expireAwaitingReviews(opts?: { before?: number }): number;
+  /** The review's side effects landed: its tombstone, then its lease, so recovery never re-runs a review that ran. */
   settleReview(rowId: string): void;
-  /** The review's side effects landed. Separate from the lease so recovery does
-   *  not re-run a review that finished before {@link settleReview}. Idempotent. */
-  recordReviewRan(rowId: string): void;
   /** With `storedRowId`, the existing row becomes the owed review rather than a copy. */
   enqueueReview(
     turn: CompletedTurn,
@@ -271,7 +269,6 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
 
       // Same synchronous pass, so nothing observes the row without its tombstone.
       if (opts.id !== undefined) recordEffectDone(sql, actor, { scope: APPEND_SCOPE, key: opts.id });
-      sweepSettled();
 
       return id;
     },
@@ -316,16 +313,20 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
       authorize();
       queueCutObligations(turnId);
 
-      if (grade === null) void sql`INSERT INTO opened_turns (actor_id, turn_id, review_id, followup) VALUES (${actorId}, ${turnId}, NULL, NULL) ON CONFLICT (actor_id, turn_id) DO NOTHING`;
-      else {
-        void sql`INSERT INTO opened_turns (actor_id, turn_id, review_id, followup) VALUES (${actorId}, ${turnId}, (SELECT id FROM completed_turns
-          WHERE actor_id = ${actorId} AND review = 'awaiting_followup' ORDER BY created_at DESC, rowid DESC LIMIT 1), ${grade.followup})
-          ON CONFLICT (actor_id, turn_id) DO NOTHING`;
+      if (grade === null) {
+        void sql`INSERT INTO opened_turns (actor_id, turn_id, review_id, followup) VALUES (${actorId}, ${turnId}, NULL, NULL) ON CONFLICT (actor_id, turn_id) DO NOTHING`;
+
+        return null;
       }
 
-      const opened = sql<{ review_id: string | null; followup: string | null }>`SELECT review_id, followup FROM opened_turns WHERE actor_id = ${actorId} AND turn_id = ${turnId}`[0];
+      // A replay's no-op update returns the opening as it was first recorded.
+      const opened = sql<{ review_id: string | null; followup: string | null }>`INSERT INTO opened_turns (actor_id, turn_id, review_id, followup)
+        VALUES (${actorId}, ${turnId}, (SELECT id FROM completed_turns
+          WHERE actor_id = ${actorId} AND review = 'awaiting_followup' ORDER BY created_at DESC, rowid DESC LIMIT 1), ${grade.followup})
+        ON CONFLICT (actor_id, turn_id) DO UPDATE SET review_id = opened_turns.review_id
+        RETURNING review_id, followup`[0];
 
-      if (opened === undefined || opened.review_id === null || grade === null) return null;
+      if (opened === undefined || opened.review_id === null) return null;
 
       // The follow-up the opening recorded: a replay's words are the same turn's, and the first are its evidence.
       const row = sql<TurnRow>`UPDATE completed_turns SET review = 'claimed', followup = ${opened.followup}
@@ -350,10 +351,6 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
       void sql`UPDATE completed_turns SET review = 'done'
         WHERE actor_id = ${actorId} AND id = ${rowId}`;
       sweepSettled();
-    },
-
-    recordReviewRan(rowId) {
-      recordEffectDone(sql, actor, { scope: REVIEW_SCOPE, key: rowId });
     },
 
     expireAwaitingReviews(opts) {
@@ -429,8 +426,6 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
           WHERE actor_id = ${actorId} AND id = ${row.id}`;
         reviews.push({ id: row.id, turn, followup: row.followup, queuedAt: row.created_at });
       }
-
-      sweepSettled();
 
       return { reviews, refused };
     },

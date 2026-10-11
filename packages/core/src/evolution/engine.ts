@@ -529,8 +529,6 @@ export class EvolutionEngine {
      */
   async runStoredTurnReview(rowId: string, turn: CompletedTurn, followup: string | null): Promise<void> {
     await this.reviewTurn(turn, followup);
-    // Before the lease settles, leaving a one-step crash window.
-    this.sessionWindow.recordReviewRan(rowId);
     this.sessionWindow.settleReview(rowId);
   }
 
@@ -567,8 +565,6 @@ export class EvolutionEngine {
         continue;
       }
 
-      // Before the lease settles, leaving a one-step crash window.
-      this.sessionWindow.recordReviewRan(row.id);
       this.sessionWindow.settleReview(row.id);
       reviewed++;
     }
@@ -676,11 +672,11 @@ export class EvolutionEngine {
     const { actor } = this.rt;
 
     try {
-      advanceTrial(sql, actor);
+      const looked = runningTrial(sql, actor);
+      const undecided = looked !== null && advanceTrial(sql, actor, looked) === null ? looked : null;
+      const trial = undecided ?? (this.agentConfig.getLiveTrials() ? startTrial(sql, actor) : null);
 
-      if (this.agentConfig.getLiveTrials()) startTrial(sql, actor);
-
-      if (runningTrial(sql, actor) !== null || this.rt.decide === undefined) return;
+      if (trial !== null || this.rt.decide === undefined) return;
       const outcome = await runProposer({ rt: this.rt, decide: this.rt.decide, reflect: this.rt.judgeModel ?? this.rt.llm, now: Date.now() });
 
       if (outcome.kind === 'searched') {

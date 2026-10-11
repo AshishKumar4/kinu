@@ -145,11 +145,8 @@ function plumbingVerdict(why: string): TrialVerdict {
   };
 }
 
-/** One look at the running trial; the decision, when one is due, settles it and writes its changelog entry. */
-export function advanceTrial(sql: SqlExecutor, actor: ActorHandle, now = nowMs()): TrialVerdict | null {
-  const trial = runningTrial(sql, actor);
-
-  if (trial === null) return null;
+/** One look at the running `trial`; the decision, when one is due, settles it and writes its changelog entry. */
+export function advanceTrial(sql: SqlExecutor, actor: ActorHandle, trial: LiveTrial, now = nowMs()): TrialVerdict | null {
   const version: ArtifactVersion | null = artifactVersion(sql, actor, trial.artifactId, trial.version);
   const parent = version?.parent === null || version?.parent === undefined ? null : artifactVersion(sql, actor, trial.artifactId, version.parent);
 
