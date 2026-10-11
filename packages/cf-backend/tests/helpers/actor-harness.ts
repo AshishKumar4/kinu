@@ -18,6 +18,7 @@ import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, Cloc
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { WorkspaceOverview } from '@kinu.run/core';
 import { OwnedModelServices } from '../../src/owned-model-services';
+import { bindAgentSql } from '../../src/runtime';
 import { hostedSubordinateRuntime, type HostedTaskProfile, type HostedTaskTurn } from '../../src/hosted-actors';
 import type { ChatWireTransport } from '../../src/chat-transport';
 import { isWorkMode, workModeForTurnMetadata } from '@kinu.run/core';
@@ -1057,6 +1058,16 @@ export function seedOrphanFiber(db: Database, name: string, snapshot: JsonValue)
 /** A hired actor's handle over the object's stored rows, whether or not it is hosted now. */
 export function actorOver(db: Database, actorId: string): ActorHandle {
   const sql = sqlOver(db);
+  const [identity] = sql<{ id: string; owner_user_id: string | null }>`SELECT id, owner_user_id FROM workspace_identity`;
+
+  if (identity === undefined) throw new Error('the workspace has no identity row');
+
+  return new WorkspaceActorDirectory(sql, { workspaceId: identity.id, ownerUserId: identity.owner_user_id }).open(actorId);
+}
+
+/** An actor's handle over its workspace's own SQL, as the workspace's stores write: what it holds of their rows moves. */
+export function actorOverWorkspace(agent: HarnessOrchestratorAgent, actorId: string): ActorHandle {
+  const sql = bindAgentSql(agent);
   const [identity] = sql<{ id: string; owner_user_id: string | null }>`SELECT id, owner_user_id FROM workspace_identity`;
 
   if (identity === undefined) throw new Error('the workspace has no identity row');

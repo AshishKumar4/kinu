@@ -24,6 +24,7 @@ import { Effect } from 'effect';
 import * as v from 'valibot';
 import type { AgentAnswer, AgentAnswerTexts, AgentStanding, AgentStandingReport, AgentSteps, AgentTurnActivity, ConversationProjection, AgentRecovery, AgentSnapshot, PreparedAgentTurn, StoredRow, TurnRequestAt } from '@kinu.run/core';
 import type { AgentWorkspace } from './agent-turn';
+import { writesSnapshotRows } from '../snapshot-rows';
 
 const refused = (what: string) => Effect.fail(new KinuError('unsupported', `${what} runs in the workspace object, not in an agent's own isolate.`));
 
@@ -118,8 +119,15 @@ export class AgentDatabase {
   private priced: { readonly model: string; readonly pricing: ModelPricing | null } | null = null;
   private execution: Executor | null = null;
 
-  private readonly sql: SqlExecutor = <T,>(query: TemplateStringsArray, ...values: SqlValue[]): T[] =>
-    this.storage.sql.exec<Extract<T, Record<string, SqlStorageValue>>>(query.join('?'), ...values).toArray();
+  private readonly sql: SqlExecutor = <T,>(query: TemplateStringsArray, ...values: SqlValue[]): T[] => {
+    // Before it runs: a statement that throws may still have written.
+    if (writesSnapshotRows(query)) this.adopted = null;
+
+    return this.storage.sql.exec<Extract<T, Record<string, SqlStorageValue>>>(query.join('?'), ...values).toArray();
+  };
+
+  /** The rows this database was last made to hold, as the workspace sent them; null once it wrote one of them itself. */
+  private adopted: string | null = null;
 
   constructor(
     private readonly storage: DurableObjectStorage,
@@ -156,6 +164,15 @@ export class AgentDatabase {
 
     if (held !== undefined && held.activation === snapshot.order.activation && snapshot.order.seq < held.seq) return;
 
+    // The rows it was last made to hold, unwritten since: nothing to read or write.
+    const rows = JSON.stringify([snapshot.identity, snapshot.lineage, snapshot.config, snapshot.scaffold]);
+
+    if (rows === this.adopted) {
+      this.snapshot = snapshot;
+
+      return;
+    }
+
     const unchanged = holds(this.storage, 'workspace_identity', snapshot.identity)
       && snapshot.lineage.every((row) => holds(this.storage, 'workspace_actors', row) && holdsConfig(this.storage, row.actor_id ?? null, snapshot.config))
       && snapshot.scaffold.every((row) => holds(this.storage, 'scaffold_versions', row));
@@ -176,6 +193,7 @@ export class AgentDatabase {
       this.directory?.forget(snapshot.lineage.map((row) => v.parse(v.string(), row.actor_id)));
     }
 
+    this.adopted = rows;
     this.snapshot = snapshot;
   }
 
@@ -213,10 +231,11 @@ export class AgentDatabase {
     const snapshot = this.current();
     const { workspace } = this.identity();
 
+    // Its rows are written here only by adoption, which says which it replaced.
     const directory = new WorkspaceActorDirectory(this.sql, {
       workspaceId: workspace.id,
       ownerUserId: workspace.owner_user_id,
-    });
+    }, { holdRows: true });
 
     this.directory = directory;
 
