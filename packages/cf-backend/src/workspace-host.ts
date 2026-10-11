@@ -421,10 +421,11 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
       const invocation = deps.slateInvocation?.(port, upgrade) ?? null;
 
       if (invocation !== null) publicRequest.headers.set('x-slate-call', invocation.value);
-      const { facets } = await compose();
+      // The runtime's own route: it readies the runtime first, and a visitor's request is a client's to it.
+      const routed = await runtime();
 
       try {
-        const response = await facets.apps.routeCapabilityPort(port, capability, publicRequest, pathname);
+        const response = await routed.routeCapabilityPort(port, capability, publicRequest, pathname);
 
         // A 101 only opens the socket: the process's close listener releases the invocation.
         if (response.status !== 101) invocation?.release();
