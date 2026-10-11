@@ -2,7 +2,7 @@
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readdirSync, writeFileSync, mkdirSync, chmodSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir, userInfo } from 'node:os';
+import { tmpdir } from 'node:os';
 
 async function run(command: string, args: readonly string[], env = process.env): Promise<void> {
   const child = spawn(command, args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -71,8 +71,8 @@ try {
     mkdirSync(mysqlData);
     await run('mariadb-install-db', ['--no-defaults', `--datadir=${mysqlData}`, '--auth-root-authentication-method=normal', '--skip-test-db']);
 
-    const mysql = spawn('mariadbd', [
-      '--no-defaults', `--user=${userInfo().username}`, `--datadir=${mysqlData}`, `--socket=${mysqlSocket}`, `--pid-file=${join(root, 'mysql.pid')}`,
+    const mysql = spawn('/usr/sbin/mariadbd', [
+      '--no-defaults', `--datadir=${mysqlData}`, `--socket=${mysqlSocket}`, `--pid-file=${join(root, 'mysql.pid')}`,
       '--bind-address=127.0.0.1', `--port=${String(mysqlPort)}`, `--ssl-ca=${ca}`, `--ssl-cert=${certificate}`, `--ssl-key=${key}`, '--skip-log-bin',
     ], { stdio: ['ignore', 'ignore', 'pipe'] });
 
