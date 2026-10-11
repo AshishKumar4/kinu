@@ -126,6 +126,114 @@ index b6ce290..b84d9db 100644
        const __gate = __nimbusOutputGate();
        const __task = __rpcWriteChain.then(() => __gate).then(() => __supervisor.stderr(__bytes)).catch((e) => __onRpcDrop(__bytes.byteLength, e));
        __rpcWriteChain = __task.then(() => {}, () => {});
+diff --git a/dist/runtime/node-shims.js b/dist/runtime/node-shims.js
+index a78caf2..80bdc04 100644
+--- a/dist/runtime/node-shims.js
++++ b/dist/runtime/node-shims.js
+@@ -7780,6 +7780,10 @@ const __tlsMod = (() => {
+   const notImplemented = (option, why) => {
+     return nodeError(Error, 'ERR_OPTION_NOT_IMPLEMENTED', 'The ' + option + ' option is not implemented: ' + why);
+   };
++  // Kinu patch (NIMBUS-ASKS #37): native sockets whose TLS session the
++  // workspace's egress makes (egressConnect below): their plaintext is the
++  // session's, so node:tls's startTls hands it over as it is.
++  const egressCarried = new WeakSet();
+   const patchStartTls = (native) => {
+     if (startTlsPatched || !native) return;
+     startTlsPatched = true;
+@@ -7787,6 +7791,17 @@ const __tlsMod = (() => {
+     const original = proto.startTls;
+     Object.defineProperty(proto, 'startTls', { configurable: true, writable: true, value: function startTls(options) {
+       const token = tokens.get(this);
++      if (token === undefined && egressCarried.has(this)) {
++        const self = this;
++        const carrier = carriers.get(this);
++        if (carrier && carrier._handle && carrier._handle.socket === this) carrier._handle = null;
++        return {
++          opened: Promise.resolve(self.opened), closed: self.closed, readable: self.readable, writable: self.writable,
++          secureTransport: 'on', upgraded: false,
++          close: (...a) => self.close(...a),
++          startTls() { throw new TypeError('Cannot startTls on a TLS socket.'); },
++        };
++      }
+       if (token === undefined) return Reflect.apply(original, this, arguments);
+       const self = this;
+       // workerd's TLSSocket has released the carrier's writer and reader and
+@@ -7892,20 +7907,61 @@ const __tlsMod = (() => {
+     };
+     return socket;
+   };
++  // Kinu patch (NIMBUS-ASKS #37): under a workspace egress, a TLS socket's
++  // carrier is a plaintext connection to
++  // <host>[.s.<servername>].tls.nimbus-egress.invalid:<port> (each name as the
++  // hex of its UTF-8, in labels of 62): the egress makes the TLS session with
++  // the server and carries its plaintext. workerd carries no TLS over an
++  // entrypoint's connect ("Incoming CONNECT with TLS not supported").
++  const egressLabel = (name) => {
++    let hex = '';
++    for (const b of new TextEncoder().encode(name)) hex += (b < 16 ? '0' : '') + b.toString(16);
++    return hex.match(/.{1,62}/g).join('.');
++  };
++  const egressConnect = (...args) => {
++    let options = {}, cb;
++    if (args[0] !== null && typeof args[0] === 'object') { options = { ...args[0] }; cb = args[1]; }
++    else {
++      options.port = args[0];
++      let i = 1;
++      if (typeof args[i] === 'string') options.host = args[i++];
++      if (args[i] !== null && typeof args[i] === 'object') Object.assign(options, args[i++]);
++      cb = args[i];
++    }
++    const host = options.host || 'localhost';
++    const port = Number(options.port);
++    if (options.socket) {
++      throw notImplemented('options.socket', 'a TLS session over a socket the program opened is not made when the workspace network goes through an egress');
++    }
++    for (const name of ['cert', 'key', 'pfx', 'passphrase']) {
++      if (options[name] !== undefined) {
++        throw notImplemented('options.' + name, 'Nimbus presents no client certificate');
++      }
++    }
++    if (!realNet) throw new Error('tls: node:net is not available');
++    const servername = options.servername ?? host;
++    const carrierHost = egressLabel(host) + (servername === host ? '' : '.s.' + egressLabel(servername)) + '.tls.nimbus-egress.invalid';
++    __nimbusReplay?.effect('tls.connect ' + host + ':' + port);
++    const raw = realNet.connect({ host: carrierHost, port, allowHalfOpen: options.allowHalfOpen === true });
++    const name = () => {
++      const native = raw._handle && raw._handle.socket;
++      if (native) { egressCarried.add(native); carriers.set(native, raw); patchStartTls(native); }
++    };
++    name();
++    raw.once('connect', name);
++    const socket = real.connect({ ...options, host, port, socket: raw, servername }, cb);
++    const destroy = socket.destroy;
++    socket.destroy = function(...rest) {
++      raw.destroy();
++      return Reflect.apply(destroy, this, rest);
++    };
++    return socket;
++  };
+   const connect = (...args) => {
+-    // Under a workspace egress a TLS socket cannot be made: the egress's
+-    // connect carries plain TCP only, and making the session here would go
+-    // around it. The refusal names the limit; HTTPS by fetch is unaffected.
+-    if (globalThis.__nimbusEgress === true) {
+-      const refused = realNet ? new realNet.Socket() : null;
+-      const error = nodeError(Error, 'ERR_NIMBUS_EGRESS_TLS', ${JSON.stringify(EGRESS_TLS_REFUSAL)});
+-      if (!refused) throw error;
+-      queueMicrotask(() => refused.destroy(error));
+-      return refused;
+-    }
+-    const proxied = !!(__nimbusReplay && __nimbusReplay.outbound);
+-    if (!proxied) __nimbusReplay?.effect("tls.connect " + describe(args));
+-    const socket = proxied ? proxiedConnect(...args) : real.connect(...args);
++    const proxied = Boolean(__nimbusReplay && __nimbusReplay.outbound);
++    const egressed = globalThis.__nimbusEgress === true;
++    if (!proxied && !egressed) __nimbusReplay?.effect("tls.connect " + describe(args));
++    const socket = egressed ? egressConnect(...args) : proxied ? proxiedConnect(...args) : real.connect(...args);
+     let closed = false;
+     let hold = null;
+     socket.once('close', () => { closed = true; hold?.(false); });
 diff --git a/dist/runtime/stop-replay.js b/dist/runtime/stop-replay.js
 index c3123df..a4d6aa6 100644
 --- a/dist/runtime/stop-replay.js

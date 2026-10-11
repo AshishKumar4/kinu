@@ -177,16 +177,45 @@ function socketDestination(address: string): { readonly hostname: string; readon
   return { hostname: address.slice(0, cut), port };
 }
 
+/** The suffix a workspace program's TLS socket names: the session is made here (`tlsDestination`). */
+const TLS_SOCKET_SUFFIX = '.tls.nimbus-egress.invalid';
+
 /**
- * A workspace program's TCP socket (its egress's `connect`): the destination judged as a request's host is, then the
- * bytes piped both ways as they are. Kinu reads none of them; a secret cannot be put into a stream it does not parse.
+ * Where a TLS socket asks to go: `<host>[.s.<servername>].tls.nimbus-egress.invalid:<port>`, each name as the hex of its
+ * UTF-8 in labels of at most 62 characters (Kinu's Nimbus patch, NIMBUS-ASKS #37). Null for any other address.
+ */
+function tlsDestination(address: string): { readonly hostname: string; readonly port: number; readonly servername: string } | null {
+  const plain = socketDestination(address);
+
+  if (plain === null || !plain.hostname.endsWith(TLS_SOCKET_SUFFIX)) return null;
+  const [host, sni, ...rest] = plain.hostname.slice(0, -TLS_SOCKET_SUFFIX.length).split('.s.');
+
+  const named = (labels: string | undefined): string | null => {
+    const hex = labels?.split('.').join('') ?? '';
+
+    if (hex.length === 0 || hex.length % 2 !== 0 || !/^[0-9a-f]+$/.test(hex)) return null;
+
+    return new TextDecoder().decode(Uint8Array.from(hex.match(/../g) ?? [], (pair) => Number.parseInt(pair, 16)));
+  };
+
+  const hostname = named(host);
+  const servername = sni === undefined ? hostname : named(sni);
+
+  return hostname === null || servername === null || rest.length > 0 ? null : { hostname, port: plain.port, servername };
+}
+
+/**
+ * A workspace program's socket (its egress's `connect`): the destination judged as a request's host is, then the bytes
+ * piped both ways. A TLS socket (`tlsDestination`) has its session made here, with Kinu's own trust, and its plaintext
+ * carried; any other is carried as it is. Kinu reads none of it; a secret cannot be put into a stream it does not parse.
  * A refused or unnamed destination closes the socket before anything is sent.
  */
 export function handleEgressConnect(socket: Socket, params: KinuEgressParams | undefined): Promise<void> {
   return settle(Effect.gen(function* () {
     const opened = yield* attempt({ doing: 'reading where a workspace socket goes', otherwise: 'io' }, () => socket.opened);
     const address = opened.localAddress ?? '';
-    const destination = socketDestination(address);
+    const tls = tlsDestination(address);
+    const destination = tls ?? socketDestination(address);
     const refused = params === undefined || destination === null ? null : refusedHostname(destination.hostname);
 
     if (params === undefined || destination === null || refused !== null) {
@@ -198,7 +227,14 @@ export function handleEgressConnect(socket: Socket, params: KinuEgressParams | u
     }
 
     const { connect } = yield* Effect.promise(() => import('cloudflare:sockets'));
-    const upstream = connect(destination, { allowHalfOpen: true });
+    const target = { hostname: destination.hostname, port: destination.port };
+
+    // A server named other than its host is checked by that name (workerd's own node:tls does the same).
+    const renamed = tls !== null && tls.servername !== tls.hostname;
+
+    const upstream = renamed
+      ? connect(target, { allowHalfOpen: true, secureTransport: 'starttls' }).startTls({ expectedServerHostname: tls.servername })
+      : connect(target, { allowHalfOpen: true, secureTransport: tls === null ? 'off' : 'on' });
 
     // The program's end of input is not passed on: closing a workerd socket's writable ended its readable too, so a
     // client that half-closed after its request got no answer (scripts/egress-probe.ts, 2026-10-10). The server's own
