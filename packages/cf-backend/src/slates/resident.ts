@@ -475,24 +475,35 @@ function parentOf(path: string): string {
   return at <= 0 ? '/' : path.slice(0, at);
 }
 
+/** What a compile looked at: each path, missing or found, and whether every write that could change it is one of them. */
+interface Looked {
+  readonly paths: Map<string, boolean>;
+  /** A link on the way, or a lookup the namespace refused: a write elsewhere could change how it resolves. */
+  unobserved: boolean;
+  /** Paths asked about whose answer has not come: one left when the compile ends threw (a loop, an absent mount). */
+  readonly asking: Set<string>;
+}
+
 /**
  * `fs`, noting in `looked` every path a compile looks at: true where it asked whether the path exists and it did not.
  * The resolver's own reads count as the bundled files' do, so a package.json whose `exports` moves is a change. A path
- * found through links is noted where they lead too, so a file the tree links to from outside it is watched, and so is
- * the end of a chain of links not written yet. `namespace` is the same view as `fs`, asked where a path lands.
+ * found through links is noted where they lead too, and a missing one where a write of it would land, by the
+ * namespace's own lookup (`namespace` is the same view as `fs`). The links on the way are not reported by that lookup,
+ * so a path resolved through any, or one the lookup refuses, leaves the compile `unobserved`.
  */
-function looking(fs: NamespaceFs, namespace: CompositeVFS, looked: Map<string, boolean>): EsbuildReadFs {
+function looking(fs: NamespaceFs, namespace: CompositeVFS, looked: Looked): EsbuildReadFs {
   const absolute = (path: string) => (path.startsWith('/') ? path : `/${path}`);
 
   const mark = (path: string, missing: boolean) => {
-    if (looked.get(path) !== false) looked.set(path, missing);
+    if (looked.paths.get(path) !== false) looked.paths.set(path, missing);
   };
 
-  // A missing path: where a write of it would land, by the namespace's own lookup with every link on the way followed,
-  // is missing too, and so is every directory above that not written yet. A lookup the namespace refuses (a loop, a
-  // file mid-path) leads nowhere a write could make, and the path itself is noted already.
+  // A missing path, and where a write of it would land with every link followed, and every directory above that not
+  // written yet: a lexical path is watched whole; one through links, or refused, is not.
   const dangling = async (path: string) => {
     const [landed] = await Promise.allSettled([(async () => namespace.mutationRoute(absolute(path), { follow: true, creating: true }))()]);
+
+    if (landed.status === 'rejected' || landed.value.path !== absolute(path)) looked.unobserved = true;
 
     if (landed.status === 'rejected') return;
 
@@ -506,13 +517,19 @@ function looking(fs: NamespaceFs, namespace: CompositeVFS, looked: Map<string, b
 
     const target = fs.resolveSymlink(path);
 
-    if (target !== null && absolute(target) !== absolute(path)) mark(absolute(target), false);
+    if (target === null || absolute(target) === absolute(path)) return;
+    looked.unobserved = true;
+    mark(absolute(target), false);
   };
 
   return {
     exists: async (path) => {
+      // Marked before it is asked: a lookup that throws (a loop, an absent mount) is still what this compile looked at.
+      mark(absolute(path), true);
+      looked.asking.add(path);
       const found = fs.exists(path);
 
+      looked.asking.delete(path);
       note(path, !found);
 
       if (!found) await dangling(path);
@@ -631,7 +648,7 @@ export class ResidentSlateProcesses {
    * words, so its caller can keep serving the last image that did.
    */
   build(input: SlateBuildInput): Promise<SlateImage | SlateBuildFailure> {
-    const looked = new Map<string, boolean>();
+    const looked: Looked = { paths: new Map(), unobserved: false, asking: new Set() };
 
     return settle(Effect.catchIf(Effect.gen({ self: this }, function* () {
       const session = yield* Effect.promise(async () => this.deps.session());
@@ -707,10 +724,10 @@ export class ResidentSlateProcesses {
       return {
         modules: digests,
         ...(shell !== undefined && client !== undefined && { client: yield* held(client.contents), shell: yield* held(shell) }),
-        inputs: inputsOf(looked, input.root),
+        inputs: inputsOf(looked.paths, input.root),
       };
     }), (error): error is KinuError => error instanceof KinuError && error.code === 'bad_input', (error) => Effect.succeed({
-      failed: renderCauseChain(error), inputs: inputsOf(looked, input.root),
+      failed: renderCauseChain(error), inputs: inputsOf(looked.paths, input.root), ...((looked.unobserved || looked.asking.size > 0) && { unobserved: true as const }),
     })));
   }
 

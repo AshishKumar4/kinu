@@ -36,6 +36,11 @@ export interface SlateBuildFailure {
   readonly failed: string;
   /** What the compile looked at before it failed, a missing import among them. */
   readonly inputs?: readonly SlateBuildRead[];
+  /**
+   * Its resolution went through links, or a lookup the namespace refused, so a write that would make it build may
+   * touch nothing it recorded: it is reported, and never stands in for compiling the same source again.
+   */
+  readonly unobserved?: true;
 }
 
 export function initSlateBuildTable(execRaw: RawSqlExec): void {
@@ -114,12 +119,13 @@ export class SlateBuilds {
     this.#failing.clear();
   }
 
-  /** The source `key` did not compile as `authority`: what it looked at joins what the image still served looked at. */
+  /** The source `key` did not compile as `authority`: what it looked at joins what the image still served looked at. A
+   *  failure whose dependencies were not all observed is reported without a key, so the next boot compiles again. */
   failed(slate: string, authority: string, key: string, failure: SlateBuildFailure): void {
     this.db.exec(
       `INSERT INTO slate_images (slate, authority, failed_key, failure) VALUES (?, ?, ?, ?)
        ON CONFLICT (slate, authority) DO UPDATE SET failed_key = excluded.failed_key, failure = excluded.failure`,
-      slate, authority, key, failure.failed,
+      slate, authority, failure.unobserved === true ? null : key, failure.failed,
     );
     this.looked(slate, authority, failure.inputs ?? []);
     this.#failing.clear();
