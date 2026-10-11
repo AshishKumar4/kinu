@@ -21,7 +21,6 @@ import {
   type ScrubReplacement,
 } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../orchestrator';
-import { carryTls, TLS_CARRIER_HOST } from './tls-carrier';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { OwnerCapabilityUnavailableError, ownerCaller, type OwnerCapabilityEnv, type UserCaller } from '@kinu.run/core';
 import type { EgressInjection, EgressInjectionResult } from '@kinu.run/core';
@@ -188,10 +187,9 @@ function socketDestination(address: string): { readonly hostname: string; readon
 }
 
 /**
- * A workspace program's socket (its egress's `connect`): the destination judged as a request's host is, then the bytes
- * piped both ways. A TLS carrier (`TLS_CARRIER_HOST`) names its host in its request, and its session is made here, with
- * Kinu's own trust (`carryTls`); any other is carried as it is. Kinu reads none of the plaintext; a secret cannot be put
- * into a stream it does not parse. A refused or unnamed destination closes the socket before anything is sent.
+ * A workspace program's plain socket (its egress's `connect`): the destination judged as a request's host is, then the
+ * bytes piped both ways. Kinu reads none of it; a secret cannot be put into a stream it does not parse. A refused or
+ * unnamed destination closes the socket before anything is sent.
  */
 export function handleEgressConnect(socket: Socket, params: KinuEgressParams | undefined): Promise<void> {
   return settle(Effect.gen(function* () {
@@ -209,7 +207,7 @@ export function handleEgressConnect(socket: Socket, params: KinuEgressParams | u
       return yield* attempt({ doing: `refusing a socket to ${address}`, otherwise: 'io' }, () => socket.close());
     }
 
-    const refused = destination.hostname === TLS_CARRIER_HOST ? null : refusedHostname(destination.hostname);
+    const refused = refusedHostname(destination.hostname);
 
     if (refused !== null) {
       refusedHere(destination.hostname, refused.error);
@@ -218,21 +216,6 @@ export function handleEgressConnect(socket: Socket, params: KinuEgressParams | u
     }
 
     const { connect } = yield* Effect.promise(() => import('cloudflare:sockets'));
-
-    if (destination.hostname === TLS_CARRIER_HOST) {
-      return yield* attempt({ doing: `carrying a TLS socket to port ${String(destination.port)}`, otherwise: 'io' }, () => carryTls(socket, {
-        port: destination.port,
-        refused: (host) => {
-          const judged = refusedHostname(host);
-
-          if (judged !== null) refusedHere(host, judged.error);
-
-          return judged?.error ?? null;
-        },
-        connect: (target) => connect(target, { allowHalfOpen: true, secureTransport: 'starttls' }),
-      }));
-    }
-
     const upstream = connect({ hostname: destination.hostname, port: destination.port }, { allowHalfOpen: true, secureTransport: 'off' });
 
     // The program's end of input is not passed on: closing a workerd socket's writable ended its readable too, so a
@@ -246,6 +229,49 @@ export function handleEgressConnect(socket: Socket, params: KinuEgressParams | u
     // A socket either end resets is the program's to see; the egress has nothing left to answer.
     Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('egress.socket_ended', failure, { seam: 'workspace-connect' }); })),
   ));
+}
+
+/**
+ * A workspace program's TLS socket (its egress's `connectTls`, which Nimbus calls since a Fetcher's `connect` carries
+ * no TLS): the host judged as a request's is, the session made here with Kinu's own trust, presenting and checking the
+ * program's servername where it named one other than the host, and its plaintext handed back. A refused host, or a
+ * session that cannot be made, rejects with why: the program's socket fails with it.
+ */
+export function handleEgressTls(target: EgressTlsTarget, params: KinuEgressParams | undefined): Promise<EgressTlsStreams> {
+  return settle(Effect.gen(function* () {
+    const refused = params === undefined ? 'egress is not configured for this workspace yet' : refusedHostname(target.hostname)?.error ?? null;
+
+    if (refused !== null) {
+      diagnostics.failure('egress.socket_refused', new KinuError('denied', refused), { host: target.hostname, seam: 'workspace-tls' });
+
+      return yield* new KinuError('denied', refused);
+    }
+
+    const { connect } = yield* Effect.promise(() => import('cloudflare:sockets'));
+    const destination = { hostname: target.hostname, port: target.port };
+
+    const secure = target.servername === undefined
+      ? connect(destination, { allowHalfOpen: true, secureTransport: 'on' })
+      : connect(destination, { allowHalfOpen: true, secureTransport: 'starttls' }).startTls({ expectedServerHostname: target.servername });
+
+    yield* attempt({ doing: `making the TLS session with ${target.servername ?? target.hostname}`, otherwise: 'io' }, () => secure.opened);
+
+    return { readable: secure.readable, writable: secure.writable };
+  }));
+}
+
+/** Where a program's TLS socket goes (Nimbus's `WorkspaceEgressTls.connectTls` target). */
+export interface EgressTlsTarget {
+  readonly hostname: string;
+  readonly port: number;
+  /** The name to present and check the server by, when the program named one other than the host. */
+  readonly servername?: string;
+}
+
+/** The plaintext of a TLS session the egress made. */
+export interface EgressTlsStreams {
+  readonly readable: ReadableStream<Uint8Array>;
+  readonly writable: WritableStream<Uint8Array>;
 }
 
 /** One classifier refuses at three seams (container hop, `web.fetch`, codemode loopback); one event shape keeps them comparable. */
