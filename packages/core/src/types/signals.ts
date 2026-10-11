@@ -39,6 +39,8 @@ export interface AgentSignal {
   readonly metadata?: Readonly<JsonObject> | undefined;
   /** An offered move, not an event: the host yields it to an admitted operator message. */
   readonly yieldsToUserMessage?: boolean | undefined;
+  /** A task handed in, not what happened: a turn of its own whatever runs, never read at a running turn's step. */
+  readonly opensTurn?: boolean | undefined;
   /** Judging and rendering only; delivery never routes on it. */
   readonly severity?: AdvisorSeverity | undefined;
   /**

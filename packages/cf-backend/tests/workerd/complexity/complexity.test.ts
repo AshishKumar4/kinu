@@ -370,10 +370,25 @@ test('a production turn runs no more statements than it was measured at, and ask
  * call crosses once; its credentials are held, its activity rides its tool calls and its turn's end. A tool step is 3
  * (`host.paceStep`, `facet.step`, `host.executeTool`), the first 4 with its room's start (`host.chatEvent`); the open is
  * 25 and the close 21, by the account reads, room events, standing reports and settlement the phase lists show. The
- * open loses one (`host.cacheKeptAliveUntil`) as a request's warming is one call. §8's 12 and 6 are not reached: the
- * account's own reads (profile catalog, credentials revision, overview, MCP descriptors) and the room's events remain.
+ * open loses one (`host.cacheKeptAliveUntil`) as a request's warming is one call.
+ * 17 and 16, over 3 runs on 3425a1e7a's tree with the reads below held: the isolate's credentials are held across its
+ * turns (`host.getAuth`, `account.getAuth`, -2), the account's profile catalog and credentials revision until it fans out
+ * a change or 5 minutes pass (`account.getWorkspaceProfileCatalog`, `account.getCredentialsRevision`, -2), and its
+ * standing rides each report it sends (`facet.standing`, gone). §8's 12 and 6 are not reached. What remains, by name:
+ * the open's account reads the turn's prompt is built from (`accountMemory_facts`, `deviceRuntimeStatus`,
+ * `userMcp_toolDescriptors`, `AgentMemory.tail`: four values a turn shows that the account changes without telling the
+ * workspace), the owner's tile (`putWorkspaceOverview`, twice at each end: the tile reads working as the turn opens and
+ * at rest as it ends), the room's three events at the open (`host.chatEvent`: the card pending, the turn's start, the card
+ * shown, each heard by tabs as it happens), the profile the isolate assembled on (`host.bindProfile`), the request's
+ * warming and its operation record (`host.noteModelRequest`, `host.reportModelOperation`), the UI stream
+ * (`host.observe`), the two reports of what it owes (`host.owes`: input taken, then running), the preparation itself
+ * (`host.prepareChat`) and the delivery (`facet.admit`). The close: its answer's slates and narration
+ * (`host.answerMetadata`), the warming it arms, its open tasks for the reminder (`host.openWork`), its operation
+ * record, its end (`host.turnEnded`) and handoff (`host.turnSettled`), its two reports (running, rest), the tile twice,
+ * the title's registry read (`account.getWorkspaceTitle`) and the MCP warm (`account.userMcp_warmConnections`), and the
+ * transcript frame the room is sent at its close (`facet.history`, `facet.newestFirst`).
  */
-const CROSSINGS = { open: 25, step: 4, close: 21 } as const;
+const CROSSINGS = { open: 17, step: 4, close: 16 } as const;
 
 /**
  * The planted calls (`ObservedOrchestrator.plantCrossings`), each counted once where it lands, and nothing else: the

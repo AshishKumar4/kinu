@@ -503,12 +503,18 @@ export interface ProgramToolsetOptions {
 }
 
 /** One read held until dropped; a failed read is not held, so the next need asks again. */
+/** Bounded as an isolate's credentials are (`agent-turn.ts`): an edit the account did not fan out is read this soon. */
+const ACCOUNT_READ_HELD_MS = 5 * 60_000;
+
 class HeldRead<A> {
   #held: Promise<A> | null = null;
+  #at = 0;
 
   get(read: () => Promise<A>): Promise<A> {
+    if (Date.now() - this.#at >= ACCOUNT_READ_HELD_MS) this.#held = null;
     const held = this.#held ?? read();
 
+    if (this.#held !== held) this.#at = Date.now();
     this.#held = held;
 
     return settle(attempt({ doing: 'reading what the account says', otherwise: 'unavailable' }, () => held).pipe(Effect.tapError(() => Effect.sync(() => {
@@ -3433,9 +3439,9 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /**
-   * The account's reads a turn makes, held under their refresh rule (design v2 §3): read once a turn, at its first need,
-   * and dropped as a turn opens (`accountReadsExpire`) and as the account says its settings changed. A workspace at rest
-   * holds none past its next turn's open, so an edit the account did not fan out to it is read then.
+   * The account's reads a turn makes, held under their refresh rule (design v2 §3, §8): read at a turn's first need, and
+   * dropped as the account says its settings changed (`accountReadsExpire`) or once {@link ACCOUNT_READ_HELD_MS} old, so an
+   * edit the account did not fan out to it is read that soon.
    */
   private readonly heldRevision = new HeldRead<number>();
 

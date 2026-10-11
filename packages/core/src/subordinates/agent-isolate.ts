@@ -21,7 +21,7 @@ export type StoredRow = Readonly<Record<string, string | number | ArrayBuffer | 
 
 /** Where a snapshot falls among those its workspace sent: calls reach an isolate in no promised order, so one read earlier
  *  in the same activation is older than any it already adopted. */
-export interface SnapshotOrder {
+interface SnapshotOrder {
   readonly activation: string;
   readonly seq: number;
 }

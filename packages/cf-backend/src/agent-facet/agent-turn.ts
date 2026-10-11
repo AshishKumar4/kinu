@@ -183,9 +183,23 @@ const AGENT_CALLER = { workspaceToken: '' };
  *  held here is refreshed before it could expire; an upstream's refusal refreshes it at once. */
 const CREDENTIAL_HELD_MS = 5 * 60_000;
 
+/** Each workspace client's broker: the isolate's turns share the credentials one of them read. */
+const brokers = new WeakMap<AgentWorkspace, UserCredentialClient>();
+
 /** The isolate's credentials, held under their refresh rules (design v2 §8): a step asks its workspace for one only once
- *  it is older than {@link CREDENTIAL_HELD_MS}, or an upstream refused the one held. */
+ *  it is older than {@link CREDENTIAL_HELD_MS}, or an upstream refused the one held, whichever turn of it asks. */
 function brokeredCredentials(workspace: AgentWorkspace): UserCredentialClient {
+  const known = brokers.get(workspace);
+
+  if (known !== undefined) return known;
+  const broker = heldCredentials(workspace);
+
+  brokers.set(workspace, broker);
+
+  return broker;
+}
+
+function heldCredentials(workspace: AgentWorkspace): UserCredentialClient {
   const held = new Map<string, { readonly at: number; readonly auth: AuthResolution | null }>();
 
   return {

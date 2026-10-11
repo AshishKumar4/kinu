@@ -137,11 +137,13 @@ test("a hired agent's model call to OpenCode Go names the agent's own conversati
   globalThis.fetch = asFetchFunction(async (input, init) => {
     if (requestUrl(input).includes('models.dev')) return Response.json(OPENCODE_GO_CATALOG);
 
-    // The hire's own turn: its calls carry its brief and offer its tools. A title's offers none; the turn its hirer opens
-    // on hearing the hire failed carries the report.
+    // The hire's own turn: its calls to OpenCode Go carry its brief and offer its tools. A title's offers none; the turn its
+    // hirer opens on hearing the hire failed carries the report, and the hirer's own model may not be this one at all.
     const body = typeof init?.body === 'string' ? init.body : '';
 
-    if (body.includes('"tools"') && body.includes('Write it.') && !body.includes('[subordinate_report]')) sessions.push(new Headers(init?.headers).get('x-opencode-session'));
+    if (body.includes(MODEL.slice('opencode-go/'.length)) && body.includes('"tools"') && body.includes('Write it.') && !body.includes('[subordinate_report]')) {
+      sessions.push(new Headers(init?.headers).get('x-opencode-session'));
+    }
 
     return new Response('refused by the test', { status: 400 });
   });
