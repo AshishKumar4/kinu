@@ -1721,7 +1721,7 @@ function waitForFile(file, signal) {
 /**
  * Resolves once the supervisor of `dir` is gone, or `signal` aborts. It holds `life` open for writing from its spawn,
  * so a reader opened while that end is held is hung up when the supervisor exits, and one opened after finds no
- * writer at all. A record from a supervisor older than `life` has nothing to watch.
+ * writer at all. A directory with no `life` has no supervisor: it was never spawned, or has removed it.
  */
 async function supervisorExit(dir, signal) {
   let fd;
@@ -1729,7 +1729,7 @@ async function supervisorExit(dir, signal) {
   try {
     fd = fs.openSync(path.join(dir, 'life'), fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
   } catch (err) {
-    if (err && err.code === 'ENOENT') return new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+    if (err && err.code === 'ENOENT') return;
     throw err;
   }
 
@@ -3071,23 +3071,20 @@ function readDeviceConfig(configPath = CONFIG_PATH) {
     throw new Error(`device config at ${configPath} is corrupt; re-run: kinu connect`, { cause: safeCause });
   }
 
-  const expectation = `device config at ${configPath} is missing its user or token; re-run: kinu connect`;
+  const expectation = `device config at ${configPath} is missing its user, token or directory; re-run: kinu connect`;
   const cfg = parseRecord(parsed, expectation);
   const user = parseString(cfg.user, expectation);
   const token = parseString(cfg.token, expectation);
   const origin = cfg.origin === undefined ? undefined : trustedOrigin(parseString(cfg.origin, expectation), configPath);
   // The directory `kinu connect` ran in, parsed HERE with everything else so
   // the dial site sends a domain value rather than branching on a
-  // representation. Absent on a config written before it existed, and absent
-  // is what the hub reads as "this device named no directory".
-  const root = cfg.root === undefined ? undefined : parseString(cfg.root, expectation);
+  // representation.
+  const root = parseString(cfg.root, expectation);
 
   if (user.length === 0 || token.length === 0) throw new Error(expectation);
-  const config = { ...cfg, user, token };
+  const config = { ...cfg, user, token, root };
 
   if (origin !== undefined) config.origin = origin;
-
-  if (root !== undefined) config.root = root;
 
   return config;
 }

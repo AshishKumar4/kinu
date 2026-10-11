@@ -256,7 +256,7 @@ describe('daemon startup hardening', () => {
 
   test('a device config naming a plaintext origin off this machine is refused before any token is sent', () => {
     const configPath = path.join(DEVICE_HOME, 'origin-device.json');
-    const config = (origin) => JSON.stringify({ user: 'user-1', token: `pdt_${'a'.repeat(32)}`, origin });
+    const config = (origin) => JSON.stringify({ user: 'user-1', token: `pdt_${'a'.repeat(32)}`, origin, root: '/home/u/project' });
 
     for (const origin of ['http://kinu.example', 'ftp://kinu.example', 'http://192.0.2.10:8787', 'not a url']) {
       fs.writeFileSync(configPath, config(origin), { mode: 0o600 });
@@ -268,6 +268,13 @@ describe('daemon startup hardening', () => {
       fs.writeFileSync(configPath, config(origin), { mode: 0o600 });
       expect(readDeviceConfig(configPath).origin).toBe(origin);
     }
+  });
+
+  test('a device config naming no directory is refused: the machine connects again to name one', () => {
+    const configPath = path.join(DEVICE_HOME, 'rootless-device.json');
+
+    fs.writeFileSync(configPath, JSON.stringify({ user: 'user-1', token: `pdt_${'a'.repeat(32)}`, origin: 'https://kinu.run' }), { mode: 0o600 });
+    expect(() => readDeviceConfig(configPath)).toThrow('missing its user, token or directory; re-run: kinu connect');
   });
 
   test('redacts rejected device credentials from ticket exchange failures', async () => {

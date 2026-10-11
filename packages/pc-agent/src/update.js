@@ -417,11 +417,8 @@ function createUpdater(opts) {
   async function apply(frame) {
     // The files on disk may already be this build: a successor that died
     // before connecting, and the next UPDATE for the same version. Nothing is
-    // downloaded again, and `.prev` — the last build that ran — is kept;
-    // unless a sibling is missing, which an older daemon's landing leaves.
-    const complete = layout.siblings.every((name) => fs.existsSync(path.join(layout.deviceHome, name)));
-
-    if (readVersionStamp(layout.deviceHome) !== frame.version || !complete) {
+    // downloaded again, and `.prev` — the last build that ran — is kept.
+    if (readVersionStamp(layout.deviceHome) !== frame.version) {
       const work = fs.mkdtempSync(path.join(layout.deviceHome, 'pc-agent.update-'));
 
       try {
@@ -507,12 +504,12 @@ function createUpdater(opts) {
   };
 }
 
-// The runtime. An older daemon's updater starts its successor on the Bun it had, so this build can wake on a Bun
-// older than the one it was tested on; it leaves that Bun the way the launcher does, before it claims anything.
+// The runtime. An updater starts its successor on the Bun it runs on, so a build can wake on a Bun older than the one
+// it was tested on; it leaves that Bun the way the launcher does, before it claims anything.
 
 /**
  * Core's `KINU_BUN_VERSION` and `bunResolutionShell` (packages/core/src/cli/bun-runtime.ts), carried as text: the
- * daemon ships as files of its own, and an older daemon's updater lands only the files it knows.
+ * daemon ships as files of its own, and an updater lands only the files its own build names.
  * `unit-install-script.test.ts` holds this rendering equal to core's, whose version the repository's
  * `packageManager` pin holds.
  */
