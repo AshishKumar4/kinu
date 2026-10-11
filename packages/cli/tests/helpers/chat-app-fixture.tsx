@@ -270,31 +270,12 @@ export async function mountChat(
 
   const { renderer } = testRenderer;
 
-  /** The next rendered frame; only the renderer's teardown ends the wait otherwise. */
-  const nextFrame = (what: string) => new Promise<void>((resolve, reject) => {
-    const onFrame = () => {
-      renderer.off('destroy', onDestroy);
-      resolve();
-    };
-
-    const onDestroy = () => {
-      renderer.off('frame', onFrame);
-      reject(new Error(`the renderer was destroyed while waiting for ${what}`));
-    };
-
-    renderer.once('frame', onFrame);
-    renderer.once('destroy', onDestroy);
-  });
-
-  /** Re-reads `predicate` after each rendered frame and the promise work it settled; no clock ends it. */
   const waitFor = async (what: string, predicate: () => boolean) => {
-    await testRenderer.renderOnce();
-
-    while (!predicate()) {
-      await nextFrame(what);
-      await new Promise<void>((resolve) => { process.nextTick(resolve); });
+    try {
+      await testRenderer.waitFor(predicate);
+    } catch (cause) {
+      throw new Error(`the chat surface did not reach ${what}`, { cause });
     }
-
   };
 
   const composerFocused = () => renderer.currentFocusedRenderable instanceof TextareaRenderable
