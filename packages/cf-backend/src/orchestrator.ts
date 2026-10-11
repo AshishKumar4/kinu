@@ -557,6 +557,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       previewUrl: (port, capability) => nimbusPreviewUrl(this.env, this.name, port, capability),
       egress: () => this.workspaceEgress(),
       onFilesChanged: (paths) => {
+        if (this.deleting.signal.aborted) return;
         this.changes.touched(paths);
         this.liveReadsMoved(readsMovedByFiles(paths));
         const ids = this.slates.filesChanged(paths);
