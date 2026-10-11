@@ -1,9 +1,11 @@
 /** @jsxImportSource @opentui/react */
 import { afterEach, describe, expect, test } from 'bun:test';
+import { flushSync } from '@opentui/react';
 
 import { cleanupChats, fakeClient, mountChat } from './helpers/chat-app-fixture';
 import { deviceConsentCanApprove } from '../src/tui/overlays';
-import { executorLabel, type ShellApprovalRequest, type ShellApprovalOutcome } from '@kinu.run/core';
+import { executorLabel, type DeferredApproval, type DeferredApprovalAnswer, type ShellApprovalRequest, type ShellApprovalOutcome } from '@kinu.run/core';
+import type { WaitingApprovalSurface } from '../src/agent-client';
 
 afterEach(cleanupChats);
 
@@ -242,5 +244,63 @@ describe('ChatApp consent ownership', () => {
     // Counting UTF-16 units would read 39 emoji as four rows and refuse.
     expect(deviceConsentCanApprove({ command: '😀'.repeat(39) }, { width: 100, height: 11 })).toBe(true);
     expect(deviceConsentCanApprove({ command: '😀'.repeat(40) }, { width: 100, height: 11 })).toBe(false);
+  });
+});
+
+describe('waiting approvals', () => {
+  function parked(id: string, command: string): DeferredApproval {
+    return { id, actor: 'actor-main', command, executor: 'sandbox', reason: 'Approval review: gate\n- force push (gate): rewrites history', status: 'queued', requestedAt: 1, decidedAt: null };
+  }
+
+  /** The workspace's queue as both backends serve it: a decided row leaves it. */
+  function queue(initial: DeferredApproval[]) {
+    const waiting = [...initial];
+    const decided: Array<readonly [string[], DeferredApprovalAnswer]> = [];
+
+    const approvals: WaitingApprovalSurface = {
+      list: async () => waiting.filter((action) => !decided.some(([ids]) => ids.includes(action.id))),
+      decide: async (ids, answer) => {
+        decided.push([ids, answer]);
+
+        return { decided: ids };
+      },
+    };
+
+    return { waiting, decided, approvals };
+  }
+
+  test('the chat asks each parked command with the web\'s answers, and later leaves the rest waiting', async () => {
+    const parkedQueue = queue([parked('park-1', 'git push --force origin main'), parked('park-2', 'rm -rf build')]);
+    const screen = await mountChat(fakeClient({ name: 'parked', approvals: parkedQueue.approvals }).client);
+
+    await screen.waitFor('the first waiting approval', () => screen.frame().includes('git push --force origin main'));
+    expect(screen.frame()).toContain('Run this command?');
+    expect(screen.frame()).toContain('rewrites history');
+    screen.mockInput.pressKey('a');
+    await screen.waitFor('the second waiting approval', () => screen.frame().includes('rm -rf build'));
+    screen.mockInput.pressKey('l');
+    await screen.waitFor('the prompt put off', () => !screen.frame().includes('Run this command?'));
+
+    expect(parkedQueue.decided).toEqual([[['park-1'], 'always']]);
+  });
+
+  test('a draft holds a newly parked command back, so no keystroke meant for it answers', async () => {
+    const parkedQueue = queue([]);
+    const agent = fakeClient({ name: 'parked', approvals: parkedQueue.approvals });
+    const screen = await mountChat(agent.client);
+
+    await screen.mockInput.typeText('yes, and also');
+    parkedQueue.waiting.push(parked('park-1', 'git push --force origin main'));
+    agent.emit({ type: 'broadcast', event: { type: 'reads_changed', reads: ['listPendingActions'] } });
+    await screen.mockInput.typeText(' y');
+    await screen.renderOnce();
+    expect(screen.frame()).not.toContain('Run this command?');
+
+    flushSync(() => screen.mockInput.pressKey('c', { ctrl: true }));
+    await screen.waitFor('the waiting approval once the composer is empty', () => screen.frame().includes('git push --force origin main'));
+    screen.mockInput.pressKey('n');
+    await screen.waitFor('the denial', () => parkedQueue.decided.length === 1);
+
+    expect(parkedQueue.decided).toEqual([[['park-1'], 'denied']]);
   });
 });

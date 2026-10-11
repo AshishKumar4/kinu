@@ -60,9 +60,9 @@ import {
   CommandPaletteOverlay,
   DeviceConnectOverlay,
   DeviceConsentOverlay,
-  ShellApprovalOverlay,
+  ApprovalOverlay,
+  approvalCanApprove,
   PromptHistoryOverlay,
-  shellApprovalCanApprove,
   ModelPickerOverlay,
   PhaseLine,
   TakesOverlay,
@@ -73,9 +73,9 @@ import {
   WalkbackOverlay,
 } from './overlays';
 import { useDeviceConnectPrompt, type DeviceConnectPromptState } from './use-device-connect';
-import { useShellApproval } from './use-shell-approval';
+import { useApprovals } from './use-approvals';
 import {
-  JobOutputFrameSchema, READS_CHANGED_EVENT, type BroadcastEvent, type ShellApprovalRequest, type WorkMode,
+  JobOutputFrameSchema, READS_CHANGED_EVENT, type BroadcastEvent, type WorkMode,
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { useComposerPaste } from './use-composer-paste';
@@ -108,8 +108,7 @@ import {
   type TuiAgentSummary,
 } from './tui-shell';
 import { attemptInItsWords, detach, diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
-import { Effect, Result } from 'effect';
-import { readParkedNotice } from '../parked-actions';
+import { Effect } from 'effect';
 import { useKeyboard } from './use-keys';
 
 /** `local-peer` opens in place; `cloud-additional` runs server-side and is announced. */
@@ -171,14 +170,12 @@ function anyOverlayOpen(input: {
   navigationOpen: boolean;
   walkbackOpen: boolean;
   pendingConsent: PendingDeviceConsent | null;
-  shellApproval: ShellApprovalRequest | null;
   deviceConnect: DeviceConnectPromptState | null;
 }): boolean {
   return input.activeSurface !== null
     || input.navigationOpen
     || input.walkbackOpen
     || input.pendingConsent !== null
-    || input.shellApproval !== null
     || input.deviceConnect !== null;
 }
 
@@ -238,7 +235,6 @@ function ChatScene({
   const [navigationOpen, setNavigationOpen] = useState(false);
   // A cloud walk-back fork swaps in a sibling client mid-session.
   const [client, setClient] = useState(initialClient);
-  const shellApproval = useShellApproval(client);
   const [messages, setMessages] = useState<DisplayMessage[]>(() => [welcomeMessage(client.agentName)]);
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
@@ -410,29 +406,15 @@ function ChatScene({
     addMessage({ role: 'system', content: errorLine(renderThrownChain(failure)) });
   }, [addMessage]);
 
-  const parkedSeenRef = useRef(new Set<string>());
-  const parkedReadRef = useRef<Promise<void> | null>(null);
+  const approvalNote = useCallback((kind: 'decided' | 'error', message: string) => {
+    addMessage({ role: 'system', content: kind === 'error' ? errorLine(message) : message });
+  }, [addMessage]);
 
-  const noteParked = useCallback(() => {
-    const controls = client.localControls;
+  const otherOverlayOpen = anyOverlayOpen({
+    activeSurface, navigationOpen, walkbackOpen: inputState.walkbackOpen, pendingConsent, deviceConnect: deviceConnect.state,
+  });
 
-    if (!controls) return;
-
-    const previous = parkedReadRef.current;
-
-    parkedReadRef.current = (async () => {
-      await previous;
-      const read = await readParkedNotice(controls, parkedSeenRef.current);
-
-      if (Result.isFailure(read)) addError({ cause: read.failure });
-      else if (read.success !== null) addMessage({ role: 'system', content: read.success });
-    })();
-  }, [addError, addMessage, client]);
-
-  useEffect(() => {
-    parkedSeenRef.current = new Set();
-    noteParked();
-  }, [noteParked]);
+  const approval = useApprovals(client, { running: isProcessing, askable: draft === '' && !otherOverlayOpen, note: approvalNote });
 
   const pasteNote = useCallback((content: string) => addMessage({ role: 'system', content }), [addMessage]);
 
@@ -1293,7 +1275,10 @@ function ChatScene({
     }
 
     if (event.event.type === READS_CHANGED_EVENT) {
-      hubReadsChanged(event.event.reads ?? []);
+      const reads = event.event.reads ?? [];
+      hubReadsChanged(reads);
+
+      if (reads.includes('listPendingActions')) approval.queueMoved();
 
       return;
     }
@@ -1304,12 +1289,6 @@ function ChatScene({
 
       // No true number: the recorded one is the cleared conversation's too.
       if (measured === null) setStatus((current) => current === null ? current : { ...current, context: null });
-
-      return;
-    }
-
-    if (event.event.type === 'pending_actions_changed') {
-      noteParked();
 
       return;
     }
@@ -1340,7 +1319,7 @@ function ChatScene({
 
     // The settle/error line is the takes affordance; running state lives in the status bar.
     if (branchStatus.status !== 'running') addMessage({ role: 'system', content: describeBranchStatus(branchStatus) });
-  }, [addMessage, noteParked, sealSegment, setBranchTasks]);
+  }, [addMessage, approval.queueMoved, sealSegment, setBranchTasks]);
 
   const handleClientEvent = useCallback(async (event: AgentClientEvent) => {
     switch (event.type) {
@@ -1617,10 +1596,7 @@ function ChatScene({
     consentDecisionRef.current?.(decision);
   }, []);
 
-  const overlayOpen = anyOverlayOpen({
-    activeSurface, navigationOpen, walkbackOpen: inputState.walkbackOpen,
-    pendingConsent, shellApproval: shellApproval.pending, deviceConnect: deviceConnect.state,
-  });
+  const overlayOpen = otherOverlayOpen || approval.prompt !== null;
 
   useEffect(() => {
     if (!rendererInstance?.root) return;
@@ -1732,13 +1708,11 @@ function ChatScene({
   useKeyboard((key) => detach(Effect.promise(async () => {
     draftEditing.changed();
 
-    if (shellApproval.pending) {
+    if (approval.prompt) {
       key.preventDefault();
-      const decision = consentKeyDecision(key, keyDispatcher, shellApprovalCanApprove(shellApproval.pending, { width: sceneWidth, height }));
+      const decision = consentKeyDecision(key, keyDispatcher, approvalCanApprove(approval.prompt, { width: sceneWidth, height }));
 
-      if (decision === 'once') shellApproval.decide('allow');
-      else if (decision === 'always') shellApproval.decide('allow_always');
-      else if (decision === 'deny') shellApproval.decide('deny');
+      if (decision !== null) approval.answer(decision);
 
       return;
     }
@@ -2084,7 +2058,7 @@ function ChatScene({
       {activeOverlay()}
       {pendingConsent && <DeviceConsentOverlay consent={pendingConsent} terminal={{ width: sceneWidth, height }} />}
       {deviceConnect.state && <DeviceConnectOverlay prompt={deviceConnect.state} terminal={{ width: sceneWidth, height }} />}
-      {shellApproval.pending && <ShellApprovalOverlay request={shellApproval.pending} terminal={{ width: sceneWidth, height }} />}
+      {approval.prompt && <ApprovalOverlay prompt={approval.prompt} terminal={{ width: sceneWidth, height }} />}
     </box>
     </TuiShell>
   );

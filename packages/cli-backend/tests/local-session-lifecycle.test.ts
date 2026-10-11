@@ -78,7 +78,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     if (!sandboxAction) throw new Error('sandbox command was not queued');
 
     expect(executed).toEqual([]);
-    expect(events.items).toContainEqual({ type: 'broadcast', event: { type: 'pending_actions_changed' } });
+    expect(events.items).toContainEqual({ type: 'broadcast', event: { type: 'reads_changed', reads: expect.arrayContaining(['listPendingActions']) } });
     await session.end();
 
     rt.actor.config.setLearning(false);

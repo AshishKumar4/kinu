@@ -11,6 +11,7 @@ import type {
   LocalSessionControls,
   PlanReviewSurface,
   OwnerQuestionSurface,
+  WaitingApprovalSurface,
 } from '../../src/agent-client';
 import type { AgentModelMenu } from '@kinu.run/core';
 import { createCliSession } from '../../src/session';
@@ -68,6 +69,7 @@ interface FakeClientOptions {
   localControls?: LocalSessionControls;
   plans?: PlanReviewSurface | null;
   questions?: OwnerQuestionSurface | null;
+  approvals?: WaitingApprovalSurface | null;
   listModels?: () => Promise<AgentModelMenu>;
   testModel?: AgentClient['testModel'];
   send?: AgentClient['send'];
@@ -95,6 +97,7 @@ export function fakeClient(options: FakeClientOptions) {
     consents: options.consents ?? null,
     plans: options.plans ?? null,
     questions: options.questions ?? null,
+    approvals: options.approvals ?? null,
     localControls: mode === 'local' ? (options.localControls ?? {
       getAlwaysActiveSkills: () => [],
       setAlwaysActiveSkills: () => {},
@@ -105,8 +108,6 @@ export function fakeClient(options: FakeClientOptions) {
 
         return () => { shellApprovalHandler = null; };
       },
-      listDeferredApprovals: async () => [],
-      decideDeferredApprovals: async () => ({ decided: [] }),
       listModelProviders: async () => [],
       listInstructionApprovals: async () => ({ status: 'end' as const, items: [] }),
       readInstructionApproval: async () => null,

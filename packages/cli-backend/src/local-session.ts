@@ -124,7 +124,7 @@ import { ActorSession, type ActorTurnLease,
   getEvolutionChangelog, markChangelogSeen, pickAlternateTake,
   type EvolutionChangelogView,
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
-  WORKSPACE_RUN_ID,
+  WORKSPACE_RUN_ID, READS_CHANGED_EVENT, readsOfTables,
   recordModelOperations, type ModelOperationSink,
   McpToolSurfaceCache, toolSurfaceTokens, type McpServedSurface, type McpSurfaceBudget,
   defaultLoopOrigin,
@@ -713,7 +713,8 @@ export class LocalAgentSession {
 
         this.eventRecorder.emit(runId ?? WORKSPACE_RUN_ID, { type: 'approval_consumed', ...record });
       },
-      announce: () => { this.host.broadcast({ type: 'pending_actions_changed' }); },
+      // The frame a cloud workspace sends for the same rows, so every terminal re-reads the queue one way.
+      announce: () => { this.host.broadcast({ type: READS_CHANGED_EVENT, reads: readsOfTables(['deferred_approvals']) }); },
       writes: null,
     });
   }

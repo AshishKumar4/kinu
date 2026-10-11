@@ -61,6 +61,7 @@ function fakeClient(opts: FakeOptions = {}): Fake {
     checkpoints: null,
     plans: null,
     questions: null,
+    approvals: null,
     localControls: {
       getAlwaysActiveSkills: () => [],
       setAlwaysActiveSkills: () => {},
@@ -72,8 +73,6 @@ function fakeClient(opts: FakeOptions = {}): Fake {
         return () => { state.approval = null; };
       },
       listModelProviders: async () => [],
-      listDeferredApprovals: async () => [],
-      decideDeferredApprovals: async () => ({ decided: [] }),
       listInstructionApprovals: async () => ({ status: 'end' as const, items: [] }),
       readInstructionApproval: async () => null,
       approveInstruction: async () => ({ ok: true as const, path: '', digest: '' }),

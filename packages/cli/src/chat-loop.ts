@@ -9,6 +9,7 @@ import { forkCandidates, type AgentClient, type AgentClientEvent } from './agent
 import { describeBranchStatus, executeSlashCommand, isBranchStatusEvent, performUndo, renderPlanReview, renderStatusLines, renderTakesText, type SlashOutcome } from './slash-commands';
 import { describePromptAttachment, resolvePromptAttachments } from './attachments';
 import { watchTerminalConsents } from './consent-watch';
+import { askWaitingApprovals, terminalMayApprove, waitingApprovalDetails, type WaitingApprovalPrompt } from './waiting-approvals';
 import {
   connectDevice,
   defaultDeviceName,
@@ -50,6 +51,8 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   let pendingPrefill: string | null = null;
   /** Answer lines to a consent question must not be read as steering input. */
   let consentAskPending = false;
+  /** Waiting approvals are asked at the start and after each turn, never over one; `later` waits for the next turn. */
+  let approvalsDue = true;
 
   // A send is owed a turn from the moment it leaves: the machine counts it until it is answered.
   const busy = () => machine.activeTurns > 0 || machine.sending > 0;
@@ -278,6 +281,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
       console.log('\n');
       // Answered, admitted or refused: what waits behind it goes once nothing else runs.
       dispatch({ type: 'send-ended' });
+      approvalsDue = true;
     }
   };
 
@@ -331,6 +335,12 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
 
   while (!exiting) {
     await settled();
+
+    if (approvalsDue && tty && client.approvals) {
+      approvalsDue = false;
+      await askWaitingApprovals(client.approvals, lineApprovalPrompt(rl), new AbortController().signal);
+    }
+
     const prefill = pendingPrefill;
     pendingPrefill = null;
     const line = await ask(rl, promptLabel(), undefined, prefill ?? undefined);
@@ -388,6 +398,38 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   }
 
   await onExit();
+}
+
+/** Line mode's form of the one approval prompt: the web's three answers, plus leaving it waiting. */
+function lineApprovalPrompt(rl: readline.Interface): WaitingApprovalPrompt {
+  return {
+    present: async (action, signal) => {
+      const approvable = terminalMayApprove(action);
+      console.log(`\n${WARN('An agent is waiting for your approval')}`);
+
+      for (const line of waitingApprovalDetails(action).split('\n')) console.log(`  ${line}`);
+
+      const choices = approvable
+        ? '[y] approve · [a] always allow · [n] deny · [l] later ›'
+        : 'Approve a file write in the Kinu app, where its bytes show · [n] deny · [l] later ›';
+
+      while (!signal.aborted) {
+        const answer = (await ask(rl, `${DIM(choices)} `, signal))?.trim().toLowerCase();
+
+        if (answer === undefined || answer === 'l' || answer === 'later') return 'later';
+
+        if (answer === 'n' || answer === 'no') return 'denied';
+
+        if (approvable && (answer === 'y' || answer === 'yes')) return 'approved';
+
+        if (approvable && (answer === 'a' || answer === 'always')) return 'always';
+        console.log(DIM(approvable ? '  Answer y, a, n or l.' : '  Answer n or l.'));
+      }
+
+      return 'cancelled';
+    },
+    note: (kind, message) => { console.log(kind === 'error' ? `${ERR('error')} ${message}` : DIM(`  ${message}`)); },
+  };
 }
 
 /** Resolves null on EOF/close (piped input ends cleanly) and on abort. Settling always detaches listeners. */

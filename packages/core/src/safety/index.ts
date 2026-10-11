@@ -85,6 +85,7 @@ export {
   initDeferredApprovalsTable,
   DEFERRED_APPROVAL_SIGNAL,
   DENIAL_STANDING_MS,
+  DeferredApprovalSchema,
   type DeferredApproval,
   type DeferredApprovalStatus,
   type DeferredApprovalAnswer,

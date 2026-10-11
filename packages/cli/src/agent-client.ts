@@ -276,8 +276,6 @@ export interface LocalSessionControls {
   setShellApprovalMode(mode: ShellApprovalMode): ShellApprovalMode;
   /** ACP session/request_permission. Local only: a cloud turn has no synchronous path back here. */
   setShellApprovalHandler(handler: ShellApprovalHandler | null): () => void;
-  listDeferredApprovals(): Promise<DeferredApproval[]>;
-  decideDeferredApprovals(ids: string[], decision: DeferredApprovalAnswer): Promise<{ decided: string[] }>;
   listModelProviders(): Promise<Array<{ id: string; available: boolean; unavailableReason?: string }>>;
   /** Instruction-file trust (KINU-N028). Local only: signed out there is no cloud owner. */
   listInstructionApprovals(request?: PageRequest): Promise<Page<InstructionSourceRow>>;
@@ -287,6 +285,14 @@ export interface LocalSessionControls {
   /** Resolves with why the emptied request could not be measured, or null once its number is recorded. */
   clearConversation(): Promise<KinuError | null>;
   compact(): Promise<CompactOutcome>;
+}
+
+/** The commands a workspace's agents parked on the owner; both backends serve core's `DeferredApprovalQueue`, the
+ *  rows and answers the web's consent cards decide. */
+export interface WaitingApprovalSurface {
+  /** Oldest first. */
+  list(): Promise<DeferredApproval[]>;
+  decide(ids: string[], decision: DeferredApprovalAnswer): Promise<{ decided: string[] }>;
 }
 
 /** The owner's answers to the agent's questions; both backends serve core's `OwnerQuestionStore`. */
@@ -316,6 +322,8 @@ export interface AgentClient {
   readonly plans: PlanReviewSurface | null;
   /** Null where the agent's conversation partner is not the owner (a subordinate's window). */
   readonly questions: OwnerQuestionSurface | null;
+  /** Null where the agent's conversation partner is not the owner (a subordinate's window). */
+  readonly approvals: WaitingApprovalSurface | null;
   /** Rename this conversation's agent when the backend exposes a complete
    * owner-authoritative path. Root cloud workspaces keep the web sidebar path. */
   readonly rename?: (displayName: string) => Promise<{ name: string; displayName: string }>;

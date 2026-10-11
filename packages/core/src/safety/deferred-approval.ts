@@ -61,6 +61,14 @@ export interface DeferredApproval {
   readonly decidedAt: number | null;
 }
 
+const DeferredApprovalStatusSchema = v.picklist(['queued', 'approved', 'denied', 'spent']);
+
+/** A parked action as a surface across a wire reads it: the cloud terminal asks its workspace for the queue. */
+export const DeferredApprovalSchema = v.object({
+  id: v.string(), actor: v.string(), command: v.string(), executor: v.string(), reason: v.string(),
+  status: DeferredApprovalStatusSchema, requestedAt: v.number(), decidedAt: v.nullable(v.number()),
+}) satisfies v.GenericSchema<DeferredApproval>;
+
 /** What the gate learns about a command; `run` has already spent the grant and names the spend. */
 export type DeferredApprovalVerdict =
   | { readonly outcome: 'run'; readonly action: DeferredApproval; readonly spend: ApprovalSpend }
@@ -76,7 +84,7 @@ interface Row {
 interface SpendRow extends Row { spend_seq: number }
 
 function toAction(r: Row): DeferredApproval {
-  const status = v.safeParse(v.picklist(['queued', 'approved', 'denied', 'spent']), r.status);
+  const status = v.safeParse(DeferredApprovalStatusSchema, r.status);
 
   return {
     id: r.id,

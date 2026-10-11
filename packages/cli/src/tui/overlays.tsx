@@ -5,6 +5,8 @@ import { CHANGE_KIND_GLYPH, TUI_COMPOSER_PLACEHOLDER, TUI_MARKS, clipText, liter
 import { filterCommands, type SlashCommandInfo } from '../slash-commands';
 import type { AgentChangelogView, ForkPoint } from '../agent-client';
 import type { DeviceConnectPromptState } from './use-device-connect';
+import type { ApprovalPrompt } from './use-approvals';
+import { terminalMayApprove, waitingApprovalDetails } from '../waiting-approvals';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { createKeyDispatcher, useKeybindingRegistry, type TuiActionId } from './actions';
 import {
@@ -872,27 +874,41 @@ function shellApprovalDetails(request: ShellApprovalRequest): string {
   return `${shownCommand(request.command)}\nExecutor: ${executorLabel(request.executor)}\n${request.review.hits.map((hit) => `${hit.rule}: ${hit.explanation}`).join('\n')}`;
 }
 
-export function shellApprovalCanApprove(request: ShellApprovalRequest, terminal: OverlayGeometry): boolean {
-  return deviceConsentCanApprove({ command: shellApprovalDetails(request) }, terminal);
+function approvalDetails(prompt: ApprovalPrompt): string {
+  return prompt.kind === 'live' ? shellApprovalDetails(prompt.request) : waitingApprovalDetails(prompt.action);
 }
 
-export function ShellApprovalOverlay({ request, terminal }: { request: ShellApprovalRequest; terminal: OverlayGeometry }) {
+/** Never from an unseen tail, and never a file write, whose bytes only the web shows. */
+export function approvalCanApprove(prompt: ApprovalPrompt, terminal: OverlayGeometry): boolean {
+  return (prompt.kind === 'live' || terminalMayApprove(prompt.action))
+    && deviceConsentCanApprove({ command: approvalDetails(prompt) }, terminal);
+}
+
+/** The one approval prompt: the running turn's command, or one an agent parked, with the web's three answers. */
+export function ApprovalOverlay({ prompt, terminal }: { prompt: ApprovalPrompt; terminal: OverlayGeometry }) {
   const { colors } = useTuiTheme();
   const keybindings = useKeybindingRegistry();
-  const details = shellApprovalDetails(request);
+  const details = approvalDetails(prompt);
   const layout = deviceConsentLayout({ command: details }, terminal);
   const position = centeredPosition(terminal, layout.paletteWidth, layout.paletteHeight, 'center');
+  const canWait = prompt.kind === 'waiting';
+  const later = canWait ? ` · ${keybindings.hint('consent.later')} later` : '';
+  const deny = `${keybindings.hint('consent.deny')} deny${later}`;
+  const write = canWait && !terminalMayApprove(prompt.action);
+
+  const approvable = approvalCanApprove(prompt, terminal);
+
+  const answers = approvable
+    ? `${keybindings.hint('consent.once')} approve · ${keybindings.hint('consent.always')} always allow · ${deny}`
+    : `${write ? 'Approve a file write in the Kinu app, where its bytes show' : 'Enlarge the terminal to read it all'} · ${deny}`;
 
   return (
-    <PaletteFrame title="Run this command?" width={layout.paletteWidth} height={layout.paletteHeight} left={position.left} top={position.top}>
+    <PaletteFrame title={write ? 'Replace this file?' : 'Run this command?'} width={layout.paletteWidth} height={layout.paletteHeight} left={position.left} top={position.top}>
       <box style={{ width: '100%', height: layout.canApprove ? layout.commandRows : Math.max(1, layout.paletteHeight - 8) }}>
-        <text wrapMode="word"><span fg={colors.text.strong}>Command: {details}</span></text>
+        <text wrapMode="word"><span fg={colors.text.strong}>{write ? details : `Command: ${details}`}</span></text>
       </box>
-      <PaletteLine text={layout.canApprove
-        ? `${keybindings.hint('consent.once')} approve once · ${keybindings.hint('consent.always')} remember grant · ${keybindings.hint('consent.deny')} deny`
-        : `Enlarge the terminal to read it all · ${keybindings.hint('consent.deny')} deny`}
-        width={layout.innerWidth} color={layout.canApprove ? colors.intent.accentStrong : colors.intent.danger} />
-      <PaletteLine text="Remember grants these rules on this executor only." width={layout.innerWidth} color={colors.text.muted} />
+      <PaletteLine text={answers} width={layout.innerWidth} color={approvable ? colors.intent.accentStrong : colors.intent.danger} />
+      <PaletteLine text="Always allow grants these rules on this executor only." width={layout.innerWidth} color={colors.text.muted} />
     </PaletteFrame>
   );
 }
