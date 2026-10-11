@@ -9,8 +9,43 @@ const PREFIX = 'devbox-contracts/';
 
 const Run = v.pipe(v.string(), v.regex(/^dc\d{14}[a-f0-9]{5}$/u));
 
+export const ContractOwnerSchema = v.object({
+  job: v.pipe(v.string(), v.nonEmpty()),
+  index: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
+  attempt: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
+  vessel: v.pipe(v.string(), v.nonEmpty()),
+  statusUrl: v.pipe(v.string(), v.nonEmpty()),
+  /** Job-scoped, status-only capability. Kept only in the private ledger, never report artifacts. */
+  statusToken: v.pipe(v.string(), v.nonEmpty()),
+});
+
+export type ContractOwner = v.InferOutput<typeof ContractOwnerSchema>;
+
+const TaskStatus = v.object({
+  job: v.string(), index: v.number(), attempt: v.number(),
+  running: v.array(v.object({ vessel: v.string(), attempt: v.number() })),
+});
+
+/** Every physical copy remains in armada's run list until its process/container is gone. */
+export function contractRunEnded(owner: ContractOwner, status: v.InferOutput<typeof TaskStatus>): boolean {
+  if (status.job !== owner.job || status.index !== owner.index || status.attempt < owner.attempt) throw new Error('armada task status does not describe the recorded fixture owner');
+
+  return !status.running.some(run => run.vessel === owner.vessel && run.attempt === owner.attempt);
+}
+
+export function contractOwner(env: Readonly<Record<string, string | undefined>>): ContractOwner {
+  const parsed = v.safeParse(ContractOwnerSchema, {
+    job: env['ARMADA_JOB_ID'], index: Number(env['ARMADA_INDEX']), attempt: Number(env['ARMADA_ATTEMPT']),
+    vessel: env['ARMADA_VESSEL'], statusUrl: env['ARMADA_STATUS_URL'], statusToken: env['ARMADA_STATUS_TOKEN'],
+  });
+
+  if (!parsed.success) throw new Error('Devbox contracts require armada task identity and its scoped status capability');
+
+  return parsed.output;
+}
+
 export const ContractTeardownSchema = v.object({
-  schema: v.literal('devbox-contracts/teardown@1'),
+  schema: v.literal('devbox-contracts/teardown@2'),
   run: Run,
   worker: v.string(),
   app: v.string(),
@@ -20,8 +55,7 @@ export const ContractTeardownSchema = v.object({
   origin: v.optional(v.string()),
   snapshots: v.array(v.string()),
   applicationIds: v.array(v.string()),
-  /** Armada's enforced task wall, from the checkout's .armada.json, not an inactivity guess. */
-  notAfter: v.pipe(v.number(), v.safeInteger()),
+  owner: ContractOwnerSchema,
 });
 
 export type ContractTeardown = v.InferOutput<typeof ContractTeardownSchema>;
@@ -29,12 +63,15 @@ export type ContractTeardown = v.InferOutput<typeof ContractTeardownSchema>;
 export interface ContractLedger {
   put(manifest: ContractTeardown): Promise<void>;
   remove(run: string): Promise<void>;
-  pending(now: number): Promise<readonly ContractTeardown[]>;
+  pending(): Promise<readonly ContractTeardown[]>;
 }
 
-/** Only records of this fixture kind qualify, and a live platform-bounded task is never replayed. */
-export function expiredContracts(manifests: readonly ContractTeardown[], now: number): readonly ContractTeardown[] {
-  return manifests.filter(manifest => now > manifest.notAfter).sort((left, right) => left.notAfter - right.notAfter);
+export async function contractOwnerEnded(owner: ContractOwner, query: (url: string, init: RequestInit) => Promise<Response> = fetch): Promise<boolean> {
+  const response = await query(`${owner.statusUrl}/${String(owner.index)}`, { headers: { authorization: `Bearer ${owner.statusToken}` } });
+
+  if (!response.ok) throw new Error(`armada fixture owner ${owner.job}/${String(owner.index)} status answered ${String(response.status)}; its lifetime is unknown`);
+
+  return contractRunEnded(owner, v.parse(TaskStatus, await response.json()));
 }
 
 export function contractLedger(deps: {
@@ -65,7 +102,7 @@ export function contractLedger(deps: {
     remove: async run => {
       await request(key(run), { method: 'DELETE' });
     },
-    pending: async now => {
+    pending: async () => {
       const manifests: ContractTeardown[] = [];
 
       for (const object of await residue.listObjects(CONTRACT_TEARDOWN_BUCKET)) {
@@ -77,10 +114,11 @@ export function contractLedger(deps: {
         const manifest = v.parse(ContractTeardownSchema, await response.json());
 
         if (object !== key(manifest.run)) throw new Error(`contract teardown key does not name its recorded run: ${object}`);
-        manifests.push(manifest);
+
+        if (await contractOwnerEnded(manifest.owner)) manifests.push(manifest);
       }
 
-      return expiredContracts(manifests, now);
+      return manifests;
     },
   };
 }

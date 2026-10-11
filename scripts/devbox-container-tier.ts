@@ -9,9 +9,8 @@ import * as v from 'valibot';
 import { copyPinnedTools } from './devbox-tools';
 import { requireEqual, tierIdentity } from './fixtures/devbox-e2e/oracle';
 import { completeTeardown } from './fixtures/devbox-e2e/teardown';
-import { CONTRACT_TEARDOWN_BUCKET, contractLedger } from './fixtures/devbox-e2e/ledger';
+import { CONTRACT_TEARDOWN_BUCKET, ContractTeardownSchema, contractLedger, contractOwner } from './fixtures/devbox-e2e/ledger';
 import type { ContractLedger } from './fixtures/devbox-e2e/ledger';
-import armadaConfig from '../.armada.json';
 import { r2 } from './infra-cloudflare';
 import { deployedConfig } from './infra-manifest';
 import { r2ResiduePlane, drainBucketResidue } from './bench-devbox-fixture';
@@ -110,10 +109,8 @@ function recoveryReport(argument: number) {
   if (argument === -1) return undefined;
 
   return v.parse(v.object({
-    run: v.pipe(v.string(), v.regex(/^dc\d{14}[a-f0-9]{5}$/u)), origin: v.optional(v.string()), declared: v.string(),
-    snapshots: v.array(v.string()), steps: v.array(v.object({ contract: v.string(), ms: v.number(), detail: v.unknown() })),
-    notAfter: v.optional(v.pipe(v.number(), v.safeInteger())), applicationIds: v.optional(v.array(v.string()), []),
-    worker: v.optional(v.string()), app: v.optional(v.string()), bucket: v.optional(v.string()), boxes: v.optional(v.array(v.string())),
+    ...ContractTeardownSchema.entries,
+    steps: v.array(v.object({ contract: v.string(), ms: v.number(), detail: v.unknown() })),
   }), JSON.parse(readFileSync(process.argv[argument + 1] ?? '', 'utf8')));
 }
 
@@ -139,10 +136,8 @@ function fixturePlan(recovering: ReturnType<typeof recoveryReport>) {
   // The last is a box only the desktop's check opens, so it opens on a fresh box.
   const names = recovering?.boxes ?? [box, `${box}-native`, `${box}-disk`, 'devbox-golden', `${box}-desktop`];
   const app = recovering?.app ?? `${worker}-contractbox`;
-  // This is the platform hard wall passed by armada run, not the row's silence deadline.
-  const notAfter = recovering?.notAfter ?? Date.now() + armadaConfig.task.timeout * 1_000;
 
-  return { run, worker, bucket, box, names, app, notAfter };
+  return { run, worker, bucket, box, names, app };
 }
 
 function prepareLedger() {
@@ -170,7 +165,7 @@ function prepareLedger() {
 async function recoverContracts(ledger: ContractLedger, scratch: string): Promise<Step[]> {
   const recovered: Step[] = [];
 
-  for (const abandoned of await ledger.pending(Date.now())) {
+  for (const abandoned of await ledger.pending()) {
     const directory = join(scratch, abandoned.run);
 
     mkdirSync(directory, { recursive: true });
@@ -179,8 +174,12 @@ async function recoverContracts(ledger: ContractLedger, scratch: string): Promis
     writeFileSync(recovery, JSON.stringify({ ...abandoned, steps: [] }));
     const replay = Bun.spawn([process.execPath, import.meta.path, '--cleanup-report', recovery], { cwd: REPO, env: process.env, stdout: 'inherit', stderr: 'inherit' });
 
-    if (await replay.exited !== 0) throw new Error(`unfinished contract teardown ${abandoned.run} failed; no new fixture was created`);
-    recovered.push({ contract: 'recovered-teardown', ms: 0, detail: { run: abandoned.run, notAfter: abandoned.notAfter } });
+    try {
+      if (await replay.exited !== 0) throw new Error(`unfinished contract teardown ${abandoned.run} failed; no new fixture was created`);
+      const { job, index, attempt, vessel } = abandoned.owner;
+
+      recovered.push({ contract: 'recovered-teardown', ms: 0, detail: { run: abandoned.run, owner: { job, index, attempt, vessel } } });
+    } finally { rmSync(recovery, { force: true }); }
   }
 
   return recovered;
@@ -190,7 +189,10 @@ async function main(): Promise<void> {
   const identity = tierIdentity(process.env);
   const recoveryArgument = process.argv.indexOf('--cleanup-report');
   const recovering = recoveryReport(recoveryArgument);
-  const { run, worker, bucket, box, names, app, notAfter } = fixturePlan(recovering);
+  const { run, worker, bucket, box, names, app } = fixturePlan(recovering);
+  const owner = recovering?.owner ?? contractOwner(process.env);
+  const { job, index, attempt, vessel, statusUrl } = owner;
+  const reportedOwner = { job, index, attempt, vessel, statusUrl };
   const scratch = recovering === undefined ? mkdtempSync(join(tmpdir(), 'kinu-devbox-contracts-')) : dirname(process.argv[recoveryArgument + 1] ?? '');
   process.env['WRANGLER_LOG_PATH'] = join(scratch, 'wrangler');
   const { token, rest } = fixtureTokens();
@@ -207,8 +209,8 @@ async function main(): Promise<void> {
   const dirtyDigest = createHash('sha256').update(spawnSync('git', ['diff', 'HEAD'], { cwd: REPO }).stdout).digest('hex');
 
   const writeReport = async () => {
-    await ledger.put({ schema: 'devbox-contracts/teardown@1', run, worker, app, bucket, boxes: names, declared, origin, snapshots: [...snapshots], applicationIds: [...applicationIds], notAfter });
-    const contents = JSON.stringify({ run, worker, app, bucket, boxes: names, box, declared, origin, revision, dirtyDigest, steps, snapshots: [...snapshots], applicationIds: [...applicationIds], notAfter, cleanupErrors }, null, 2);
+    await ledger.put({ schema: 'devbox-contracts/teardown@2', run, worker, app, bucket, boxes: names, declared, origin, snapshots: [...snapshots], applicationIds: [...applicationIds], owner });
+    const contents = JSON.stringify({ run, worker, app, bucket, boxes: names, box, declared, origin, revision, dirtyDigest, steps, snapshots: [...snapshots], applicationIds: [...applicationIds], owner: reportedOwner, cleanupErrors }, null, 2);
     writeFileSync(report, contents);
     const evidence = process.env['BENCH_ARTIFACTS'];
 
@@ -591,7 +593,7 @@ async function main(): Promise<void> {
 
 if (import.meta.main) {
   if (process.env['ARMADA_INDEX'] === undefined) {
-    process.stderr.write(`Devbox contracts require armada: armada map --commit=HEAD --times=1 --timeout=${String(armadaConfig.task.timeout)} --secrets=DEVBOX_REGISTRY_TOKEN,KINU_CLOUDFLARE_API_TOKEN,R2_ACCESS_KEY_ID,R2_SECRET_ACCESS_KEY,KINU_EVAL_STAGING_WEB_IDENTITY -- bun run gate:devbox-e2e\n`);
+    process.stderr.write('Devbox contracts require armada: armada map --connection="$HOME/.config/armada/armada-kinu.json" --commit=HEAD --times=1 --secrets=DEVBOX_REGISTRY_TOKEN,KINU_CLOUDFLARE_API_TOKEN,R2_ACCESS_KEY_ID,R2_SECRET_ACCESS_KEY,KINU_EVAL_STAGING_WEB_IDENTITY -- bun run gate:devbox-e2e\n');
     process.exitCode = 1;
   } else await main();
 }
