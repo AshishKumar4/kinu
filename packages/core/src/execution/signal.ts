@@ -1,8 +1,8 @@
 /**
  * Cancellation convention: callers pass a trailing `{ signal }` to an executor's `exec`.
- * Sandbox and laptop kill the work before rejecting; Nimbus has no kill, so it stops
- * waiting and rejects saying the remote command may still finish. Never attach that
- * message to a transport that could have killed the work.
+ * A transport with a kill capability ends the work before rejecting. Only a transport
+ * that can stop waiting but cannot kill may say the remote command can still finish;
+ * never attach that message to one that actually ended the work.
  */
 import * as v from 'valibot';
 

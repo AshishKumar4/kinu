@@ -235,6 +235,17 @@ function streamedAnswer(kind: string | undefined, step: number, deltas: number):
   return { text: kind === 'prior' || kind === 'long' ? Array.from({ length: deltas }, (_, index) => `w${String(index)} `).join('') : 'ok' };
 }
 
+/** What a measured run records as a streamed model step opens: its timing, a heap sample, or a counts cut. */
+async function measureStep(step: number, entered: number, consumed: number): Promise<void> {
+  const label = step === 0 ? 'open' : `step-${String(step)}`;
+
+  if (mode === 'time') stepTimings.push({ label, wallMs: entered - phaseWall - phaseExcluded, cpuMs: consumed - phaseCpu });
+
+  if (mode === 'heap') await sampleHeap();
+
+  if (mode === 'counts') phases.push(v.parse(CutSchema, JSON.parse(await ask(`/cut?label=${label}&resume=1`))));
+}
+
 async function model(request: Request): Promise<Response> {
   const entered = performance.now();
   const consumed = measuring ? cpu(enginePid) : 0;
@@ -255,15 +266,7 @@ async function model(request: Request): Promise<Response> {
   const [kind, deltasText = '0'] = currentText.split(':');
   const step = asked.streamed ? modelStep++ : 0;
 
-  if (measuring && asked.streamed) {
-    if (mode === 'time') stepTimings.push({ label: step === 0 ? 'open' : `step-${String(step)}`, wallMs: entered - phaseWall - phaseExcluded, cpuMs: consumed - phaseCpu });
-
-    if (mode === 'heap') await sampleHeap();
-  }
-
-  if (measuring && mode === 'counts' && asked.streamed) {
-    phases.push(v.parse(CutSchema, JSON.parse(await ask(`/cut?label=${step === 0 ? 'open' : `step-${String(step)}`}&resume=1`))));
-  }
+  if (measuring && asked.streamed) await measureStep(step, entered, consumed);
 
   const answer: ScriptedAnswer = asked.streamed ? streamedAnswer(kind, step, Number(deltasText)) : { text: 'Perf' };
   const out = scriptedBody(answer, asked);

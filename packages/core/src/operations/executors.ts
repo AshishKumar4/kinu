@@ -4,6 +4,7 @@
  * Each executor is its own namespace on its own plane, so each member is its own operation.
  */
 import * as v from 'valibot';
+import { ExecutorPortSchema } from '../execution/types';
 import { CRAFTED_TOOL_BODY, WORKSPACE_FILE_BINDINGS } from '../types/codemode';
 import { defineOperation, type Impact, type Operation } from './operation';
 
@@ -12,8 +13,6 @@ const described = <S extends v.GenericSchema>(schema: S, text: string) => v.pipe
 const Path = described(v.pipe(v.string(), v.nonEmpty()), 'Relative paths resolve at the executor\'s home.');
 
 const Command = v.pipe(v.string(), v.nonEmpty());
-
-const Port = v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(65_535));
 
 const Text = v.string();
 
@@ -77,10 +76,10 @@ export const WORKSPACE = {
     input: v.strictObject({ pid: v.number(), lines: v.optional(v.number()), bytes: v.optional(v.number()) }),
   }),
   exposePort: ws({
-    name: 'exposePort', impact: 'administer', input: v.strictObject({ port: Port }), output: Text,
+    name: 'exposePort', impact: 'administer', input: v.strictObject({ port: ExecutorPortSchema }), output: Text,
     help: 'A public URL for a port a process serves, then whether it was reached.',
   }),
-  unexposePort: ws({ name: 'unexposePort', help: 'Withdraw a port\'s public URL.', impact: 'administer', input: v.strictObject({ port: Port }), output: Text }),
+  unexposePort: ws({ name: 'unexposePort', help: 'Withdraw a port\'s public URL.', impact: 'administer', input: v.strictObject({ port: ExecutorPortSchema }), output: Text }),
   listPorts: ws({ name: 'listPorts', help: 'The exposed ports and their URLs.', impact: 'observe', input: v.strictObject({}), output: Text }),
   installRuntime: ws({ name: 'installRuntime', help: 'Install a language runtime, by spec.', impact: 'administer', input: v.strictObject({ spec: v.pipe(v.string(), v.nonEmpty()) }), output: Text }),
   listRuntimes: ws({ name: 'listRuntimes', help: 'The installed language runtimes.', impact: 'observe', input: v.strictObject({}), output: Text }),
@@ -97,11 +96,10 @@ export const SANDBOX = {
       + 'A sandbox restored after it slept keeps its source and lockfiles but not node_modules or build output: after a failed '
       + 'import there, run `bun install` once.',
   }),
-  listFiles: sb({
-    name: 'listFiles', help: 'A directory\'s entries; the working directory when no path is given.', impact: 'observe',
+  readdir: sb({
+    name: 'readdir', help: 'A directory\'s entries; the working directory when no path is given.', impact: 'observe',
     input: v.strictObject({ path: v.optional(v.string()) }), output: Text,
   }),
-  readdir: sb({ name: 'readdir', help: 'As listFiles.', impact: 'observe', input: v.strictObject({ path: v.optional(v.string()) }), output: Text }),
   deleteFile: sb({ name: 'deleteFile', help: 'Delete a file in the sandbox.', impact: 'mutate', input: v.strictObject({ path: Path }), output: Text }),
   exists: sb({ name: 'exists', help: '"true" or "false".', impact: 'observe', input: v.strictObject({ path: Path }), output: Text }),
   startProcess: sb({
@@ -116,9 +114,9 @@ export const SANDBOX = {
   }),
   exposePort: sb({
     name: 'exposePort', help: 'A public URL for a port the sandbox serves.', impact: 'administer',
-    input: v.strictObject({ port: Port, name: v.optional(v.string()) }), output: Text,
+    input: v.strictObject({ port: ExecutorPortSchema, name: v.optional(v.string()) }), output: Text,
   }),
-  unexposePort: sb({ name: 'unexposePort', help: 'Withdraw a port\'s public URL.', impact: 'administer', input: v.strictObject({ port: Port }), output: Text }),
+  unexposePort: sb({ name: 'unexposePort', help: 'Withdraw a port\'s public URL.', impact: 'administer', input: v.strictObject({ port: ExecutorPortSchema }), output: Text }),
   listPorts: sb({ name: 'listPorts', help: 'The exposed ports and their URLs.', impact: 'observe', input: v.strictObject({}), output: Text }),
 } as const;
 

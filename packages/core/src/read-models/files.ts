@@ -43,7 +43,7 @@ interface RuntimeConsistency {
 }
 
 const CONSISTENCY: RuntimeConsistency = {
-  workspace: 'durable', parent: 'durable', sandbox: 'ephemeral', nimbus: 'ephemeral', device: 'live-shared',
+  workspace: 'durable', parent: 'durable', sandbox: 'ephemeral', device: 'live-shared',
 };
 
 export interface ExecutorRowLookup {

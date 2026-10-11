@@ -26,9 +26,10 @@ ranged read that would turn that absence into an I/O failure.
 | `device` | Cloudflare over the device tunnel (`createDeviceTunnelExecutor`); the CLI registers none, because there the machine is the workspace | a separate user machine |
 | `parent` | CLI head runtimes only (`createParentExecutor`) | another workspace authority |
 
-Every registration lives in backend `runtime.ts`. `ExecutorKind` has five
-kinds: `nimbus` underlies `createNimbusWorkspaceExecutor` but is never its own
-namespace. Cloudflare registers no `parent`; only a CLI head does.
+Every registration lives in backend `runtime.ts`. `ExecutorKind` has four
+kinds: workspace, sandbox, device and parent. Nimbus implements the workspace through
+`createNimbusWorkspaceExecutor`; it is not a separate runtime kind or namespace.
+Cloudflare registers no `parent`; only a CLI head does.
 
 `ParentWorkspaceHandle` (`core/src/execution/parent.ts`) is the parent
 interface. The hosted file half uses Durable Object RPC through
@@ -408,5 +409,6 @@ consent, and credentials in provider or transport, never prompt prose.
 Register once in backend runtime assembly. Test files, shell state, process
 lifecycle, previews, reconstruction, teardown, errors, and the absence of
 silent fallback. Update the existing prompt, status, and UI source of truth,
-never a second provider list. The reusable `nimbus` kind and Core factory are
-extension points; Cloudflare registers one Nimbus environment.
+never a second provider list. The core workspace factory is the extension point;
+Cloudflare registers one Nimbus-backed workspace environment. Sandbox directory listing
+is `readdir({ path? })` on both its runtime and declared surfaces; no `listFiles` alias remains.

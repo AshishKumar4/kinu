@@ -1,6 +1,6 @@
 /**
  * A write over a file on the user's machine parks on its bytes while nobody answers, and the owner's answer performs
- * exactly that write. Driven through the hosted main actor's real file tool and device executor, the orchestrator's
+ * exactly that write. Driven through the hosted main actor's real file tool and mounted workspace, the orchestrator's
  * needs-you queue and a daemon-shaped device socket; a new file on the machine is the agent's to make.
  */
 import { afterEach, expect, test } from 'bun:test';

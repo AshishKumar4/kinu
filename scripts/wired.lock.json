@@ -254,7 +254,6 @@
   "packages/core/src/workspace-birth.ts#WorkspaceBirthConfig.scaffold (unsupplied-field)",
   "packages/devbox/src/incidents.ts#reapDeliveredIncidents (unreached-export)",
   "packages/devbox/src/lifecycle.ts#INCIDENT_STAGES (unreached-export)",
-  "packages/devbox/src/lifecycle.ts#healthProbeCommand (unreached-export)",
   "packages/devbox/src/operation-lanes.ts#canonicalPath (unreached-export)",
   "packages/devbox/src/operation-lanes.ts#scopesOverlap (unreached-export)"
 ]

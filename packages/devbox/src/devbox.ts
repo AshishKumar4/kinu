@@ -2,7 +2,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { Files, SandboxFileError } from '@cloudflare/sandbox';
-import { Processes, CONTAINER_TRUST_ENV, END_TREE } from "./processes";
+import { Processes, isProcessLive, CONTAINER_TRUST_ENV, END_TREE } from "./processes";
 import { nativeStartClock } from './native-clock';
 import type { DevboxExecOptions, ExecResult, ReadOptions, FileResult, ListFilesOptions, FileMetadata, GatewayBindings } from './contracts';
 import { listFiles as readDirectory } from './file-listing';
@@ -25,6 +25,7 @@ import { Deferred, Effect, Result } from 'effect';
 import {
   DEFAULT_DEVBOX_POLICY,
   generatePortToken,
+  healthProbeCommand,
   healthProbeSilent,
   describeThrown as describe,
   type LateStartFailure,
@@ -55,7 +56,8 @@ import {
   type RestProcess,
   type RunningForRest,
 } from './lifecycle';
-import { createCheckpointLane, createResourceLane, heldUntilDrained, pathScopes, portScope, processScope, type ResourceScope } from './operation-lanes';
+import { createCheckpointLane, createResourceLane, heldUntilDrained, pathScopes, portScope, type ResourceScope } from './operation-lanes';
+import { SupervisedProcesses } from './supervised-processes';
 import { DevboxError, attempt, attemptSync, settle, settleSync, startOverrun, startInterrupted, chainAdvanced, type DevboxErrorCode } from './errors';
 import { execRecords } from './exec-stream';
 import { BOX_SIZE_ORDER, BoxSizeSchema, DEFAULT_BOX_SIZE, instanceOf, type BoxSize, type ResizeOutcome } from './sizes';
@@ -154,7 +156,6 @@ const CONTAINER_STOP_INTERVAL_MS = 100;
 
 
 /** All durable keys share the `devbox:` prefix so a host's own keys cannot collide with them. */
-const PROC_SPEC_PREFIX = 'devbox:proc:';
 
 const PORT_SPEC_PREFIX = 'devbox:port:';
 
@@ -236,9 +237,6 @@ const RECOVERY_ACTION_KEY = 'devbox:recovery-action';
  *  across eviction without a durable write per call. */
 const INTERACTION_PERSIST_INTERVAL_MS = 30_000;
 
-function isProcessLive(status: string): boolean {
-  return status === 'starting' || status === 'running';
-}
 
 /** A restore step's `onLate`: the race already answered `late`, so its eventual outcome is only logged. */
 function logLate(step: string): (failure: LateStartFailure) => void {
@@ -859,7 +857,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       if (attached) {
         const reason = `[deadline -> repair] restoration did not settle inside the ${budgetMs}ms hook budget`;
-        await this.#settle({ phase: 'repair', incomplete: reason });
+        await this.#settle(settledRestoration([reason], 'pending'));
         await this.#record('process', reason);
       } else {
         const recoveryGeneration = this.#generation;
@@ -1261,7 +1259,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       if (active !== undefined && active.generation === generation) return await active.run;
 
       const retryBootStamp = this.#restoration.phase === 'repair'
-        && this.#restoration.incomplete.includes('the boot id stamp failed');
+        && this.#restoration.bootStamp !== 'done';
 
       const run = (async () => {
         const claim = await this.#claimRecovery();
@@ -1516,21 +1514,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     for (const spec of plan.start) {
       if (!this.#owns(generation)) return superseded;
 
-      // `super`, not the public override: that waits on `ensureReady()` and claims a lane, so the
-      // restoration would wait for itself and could take a lane a gate-blocked caller holds.
       const started = await steps.run(
-        async () => {
-          // The walk is re-runnable (`attachNow()` repairs an incomplete restore), so a live process
-          // under the id is reused: a second start would put two processes on one port.
-          const existing = await this.#processes().get(spec.processId);
-
-          if (existing !== null && isProcessLive(existing.status)) return existing;
-
-          return await this.#processes().start(spec.command, {
-            cwd: spec.cwd ?? DEVBOX_WORKDIR,
-            processId: spec.processId,
-          });
-        },
+        (current) => this.#supervised().run({ kind: 'restore', spec }, { generation, current }),
         logLate(`process ${spec.processId}`),
       );
 
@@ -1826,6 +1811,19 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       return await this.#execute(command, { cwd: DEVBOX_WORKDIR, ...options });
     })));
+  }
+
+  /** The same native listener command/parser used during restore; core receives evidence, not a curl protocol. */
+  probePort(port: number): Promise<boolean> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+        return yield* Effect.fail(new DevboxError('invalid-input', `invalid port ${String(port)}`));
+      }
+
+      const answer = yield* attempt('io', () => this.exec(healthProbeCommand(port), { cwd: DEVBOX_WORKDIR }));
+
+      return !healthProbeSilent(answer.stdout);
+    }));
   }
 
   /** No deadline; the SDK's process lane lost output (D37). */
@@ -2165,36 +2163,12 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   /** Durable spec row is written before the process starts and is idempotent on (command, cwd):
    *  a re-issue restarts under the same id; a failed start keeps the row for `stopSupervised`. */
   async startSupervised(command: string, cwd?: string): Promise<{ processId: string }> {
-    return await settle(this.#withActiveCaller(attempt("io", async () => {
-      await this.ensureReady();
-      const workDir = cwd ?? DEVBOX_WORKDIR;
+    return await settle(this.#withActiveCaller(Effect.gen({ self: this }, function* () {
+      yield* attempt('io', () => this.ensureReady());
+      const result = yield* attempt('process', () => this.#supervised().run({ kind: 'start', command, cwd: cwd ?? DEVBOX_WORKDIR }));
 
-      const reserved = (await this.#procSpecs())
-        .find(spec => spec.command === command && spec.cwd === workDir);
-
-      const spec: SupervisedProcessSpec = reserved ?? {
-        processId: crypto.randomUUID(),
-        command,
-        cwd: workDir,
-        createdAt: Date.now(),
-      };
-
-      if (reserved === undefined) {
-        await this.ctx.storage.put(`${PROC_SPEC_PREFIX}${spec.processId}`, spec);
-      } else {
-        const existing = await this.#processes().get(spec.processId);
-
-        if (existing !== null && isProcessLive(existing.status)) {
-          return { processId: spec.processId };
-        }
-      }
-
-      await this.#processes().start(command, {
-        cwd: workDir,
-        processId: spec.processId,
-      });
-
-      return { processId: spec.processId };
+      return result.kind === 'started' ? { processId: result.process.id }
+        : yield* Effect.fail(new DevboxError('cancelled', 'supervised start was superseded'));
     })));
   }
 
@@ -2202,30 +2176,13 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   stopSupervised(processId: string): Promise<{ stopped: boolean }> {
     return settle(attempt('io', async () => {
       const arrived = this.#teardowns;
+      await this.#ensureReady(arrived);
+      const result = await this.#supervised().run({ kind: 'stop', processId });
 
-      return await this.#resources.run(processScope(processId), () => this.#stopSupervised(processId, arrived));
+      this.stampInteraction();
+
+      return { stopped: result.kind === 'stopped' && result.stopped };
     }));
-  }
-
-  async #stopSupervised(processId: string, arrived: number): Promise<{ stopped: boolean }> {
-    await this.#ensureReady(arrived);
-    let thrown: { readonly cause: unknown } | undefined;
-
-    try {
-      await this.#processes().kill(processId);
-    } catch (error) {
-      thrown = { cause: error };
-    }
-
-    if (thrown === undefined) {
-      await this.ctx.storage.delete(`${PROC_SPEC_PREFIX}${processId}`);
-    } else {
-      await this.#record('process', describe(thrown), { processId });
-    }
-
-    this.stampInteraction();
-
-    return { stopped: thrown === undefined };
   }
 
   /** A spec with no live row is not running: restoration has not started it yet, or its start
@@ -2905,7 +2862,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   async #procSpecs(): Promise<readonly SupervisedProcessSpec[]> {
-    return [...(await this.ctx.storage.list<SupervisedProcessSpec>({ prefix: PROC_SPEC_PREFIX })).values()];
+    return this.#supervised().list();
   }
 
   async #portSpecs(): Promise<readonly PortExposureSpec[]> {
@@ -3004,6 +2961,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   #fileClient: Files | undefined;
   #processClient: Processes | undefined;
+  #supervisedClient: SupervisedProcesses | undefined;
   enableInternet = true;
 
   #container(): Container {
@@ -3017,6 +2975,13 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   #files(): Files { return this.#fileClient ??= new Files(this.#container()); }
   #processes(): Processes { return this.#processClient ??= new Processes(this.#container()); }
+
+  #supervised(): SupervisedProcesses {
+    return this.#supervisedClient ??= new SupervisedProcesses({
+      storage: this.ctx.storage, lane: this.#resources, native: () => this.#processes(), generation: () => this.#generation,
+      failedStop: (processId, cause) => this.#record('process', describe({ cause }), { processId }),
+    });
+  }
 
   async #execute(command: string, options: DevboxExecOptions = {}): Promise<ExecResult> {
     return decoded(await (await launch(this.#container(), ['/bin/bash', '-c', command], options)).output());
@@ -3095,10 +3060,14 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   async startProcess(command: string, options: { cwd?: string; processId?: string } = {}) {
-    return settle(this.#withActiveCaller(attempt("io", async () => {
-      await this.ensureReady();
+    return settle(this.#withActiveCaller(Effect.gen({ self: this }, function* () {
+      yield* attempt('io', () => this.ensureReady());
 
-      return this.#processes().start(command, { cwd: options.cwd, processId: options.processId ?? crypto.randomUUID() });
+      const result = yield* attempt('process', () => this.#supervised().run({ kind: 'native-start', command, cwd: options.cwd ?? DEVBOX_WORKDIR,
+        processId: options.processId ?? crypto.randomUUID() }));
+
+      return result.kind === 'started' ? result.process
+        : yield* Effect.fail(new DevboxError('cancelled', 'native start was superseded'));
     })));
   }
 
@@ -3108,7 +3077,15 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   async listProcesses() { return settle(this.#withActiveCaller(attempt("io", async () => { await this.ensureReady();
 
  return this.#processes().list(); }))); }
-  async killProcess(id: string): Promise<void> { return settle(this.#withActiveCaller(attempt("io", async () => { await this.ensureReady(); await this.#processes().kill(id); }))); }
+  async killProcess(id: string): Promise<void> {
+    return settle(this.#withActiveCaller(Effect.gen({ self: this }, function* () {
+      yield* attempt('io', () => this.ensureReady());
+
+      const result = yield* attempt('process', () => this.#supervised().run({ kind: 'native-stop', processId: id }));
+
+      if (result.kind === 'stale') return yield* Effect.fail(new DevboxError('cancelled', 'native stop was superseded'));
+    })));
+  }
 
   async #readFile(path: string, options: ReadOptions = {}): Promise<FileResult> {
     const response = await this.#files().readFile(path);
