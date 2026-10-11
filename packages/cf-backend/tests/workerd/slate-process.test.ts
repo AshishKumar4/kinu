@@ -394,3 +394,11 @@ it('a build refused through two links to a file not written yet is built again o
   // Where the whole chain leads, and the directory above it not written yet.
   expect(seen.missing).toEqual(expect.arrayContaining(['/home/chained/future/lib.ts', '/home/chained/future']));
 });
+
+it.each(['alias', 'obstruction', 'loop'] as const)('a refusal cached through a %s outside the tree is built again once that is repaired', async (repair) => {
+  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName(`repair-${repair}`));
+  const seen = await subject.repairedRefusal(repair);
+
+  console.log(`slate-refusal-retry ${repair}: ${seen.ms.toFixed(1)} ms`);
+  expect(seen).toMatchObject({ first: 'refused', second: 'built' });
+});

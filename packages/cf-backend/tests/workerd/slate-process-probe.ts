@@ -14,7 +14,7 @@ import {
   initSlateStateTable, parseSlateProject, slateAuthority, issuedSlateInvocation, routeSlateCall, slateStorageCall,
   type JsonValue, type SlateCallResult, type SlateInvocation,
 } from '@kinu.run/core';
-import { SlateBuilds, SqliteSlateStateStore, initSlateBuildTable } from '@kinu.run/core/slates';
+import { SlateBuilds, SqliteSlateStateStore, initSlateBuildTable, slateImage } from '@kinu.run/core/slates';
 import { KinuError, renderThrownChain } from '@kinu.run/core/obs';
 import { ResidentSlateProcesses, type ResidentSlateProcess } from '../../src/slates/resident';
 import { slateBatchStub } from '../../src/slates/rpc-transport';
@@ -242,6 +242,89 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
       stale,
       second: 'failed' in second ? second.failed : 'built',
     };
+  }
+
+  /**
+   * A slate whose `lib.ts` reaches outside its tree through a resolution that cannot build yet, refused through the
+   * build cache as the host asks it; then the resolution is repaired outside the tree, the host is told what was
+   * written, and the cache is asked again. `alias`: lib.ts links to alias.ts, which links to a file not written, and
+   * alias.ts is replaced by a link to a written library. `obstruction`: lib.ts links under a regular file, which is
+   * replaced by a directory holding the library. `loop`: lib.ts links under a pair of links that point at each other,
+   * one replaced by a directory holding the library. Answers each attempt's outcome and how long the second took.
+   */
+  async repairedRefusal(repair: 'alias' | 'obstruction' | 'loop'): Promise<{ readonly first: string; readonly second: string; readonly ms: number }> {
+    const files = this.vfs.as(CRED_KERNEL);
+    const root = `/slates/repair-${repair}`;
+    const outside = `/home/repair-${repair}`;
+    const library = 'export const word = "repaired";\n';
+
+    files.mkdir(root, { recursive: true });
+    files.writeFile(`${root}/server.ts`, 'import { SlateObject } from "kinu:slate";\nimport { word } from "./lib.ts";\nexport class Slate extends SlateObject { word() { return word; } }\n');
+    files.mkdir(outside, { recursive: true });
+
+    // A directory where the obstruction or the loop stood, holding the library.
+    const replaceWithLibrary = (at: string) => () => {
+      files.unlink(at);
+      files.mkdir(at);
+      files.writeFile(`${at}/lib.ts`, library);
+
+      return [at, `${at}/lib.ts`];
+    };
+
+    const written = ((): () => string[] => {
+      switch (repair) {
+        case 'alias': {
+          files.symlink(`${outside}/alias.ts`, `${root}/lib.ts`);
+          files.symlink(`${outside}/future.ts`, `${outside}/alias.ts`);
+
+          return () => {
+            files.writeFile(`${outside}/real.ts`, library);
+            files.unlink(`${outside}/alias.ts`);
+            files.symlink(`${outside}/real.ts`, `${outside}/alias.ts`);
+
+            return [`${outside}/real.ts`, `${outside}/alias.ts`];
+          };
+        }
+
+        case 'obstruction': {
+          files.writeFile(`${outside}/block`, 'a file where a directory belongs\n');
+          files.symlink(`${outside}/block/lib.ts`, `${root}/lib.ts`);
+
+          return replaceWithLibrary(`${outside}/block`);
+        }
+
+        case 'loop': {
+          files.symlink(`${outside}/b`, `${outside}/a`);
+          files.symlink(`${outside}/a`, `${outside}/b`);
+          files.symlink(`${outside}/a/lib.ts`, `${root}/lib.ts`);
+
+          return replaceWithLibrary(`${outside}/a`);
+        }
+      }
+    })();
+
+    const sql = this.ctx.storage.sql;
+
+    initSlateBuildTable((ddl) => { sql.exec(ddl); });
+    const builds = new SlateBuilds(sql);
+    const authored = this.vfs.as(CRED_SESSION_USER);
+    const slate = `repair-${repair}`;
+
+    const attempt = async () => (await Promise.allSettled([slateImage({
+      builds, slate, key: 'v1', cred: CRED_SESSION_USER,
+      build: () => this.resident.build({
+        owner: slate, root, project: parseSlateProject({ main: 'server.ts' }), cred: CRED_SESSION_USER,
+        read: (entry) => (authored.exists(`${root}/${entry}`) ? authored.readFileString(`${root}/${entry}`) : null),
+      }),
+    })]))[0].status === 'fulfilled' ? 'built' : 'refused';
+
+    const first = await attempt();
+
+    builds.moved(written());
+    const started = performance.now();
+    const second = await attempt();
+
+    return { first, second, ms: performance.now() - started };
   }
 
   async facetImages(): Promise<string[]> {
