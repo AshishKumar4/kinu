@@ -93,7 +93,7 @@ function installedMachine(origin: string, stamp: string | null, config: JsonObje
   for (const [name, source] of Object.entries(files)) writeFileSync(join(home, name), source, { mode: 0o700 });
 
   if (stamp !== null) writeFileSync(join(home, 'pc-agent.version'), `${stamp}\n`, { mode: 0o600 });
-  writeFileSync(join(home, 'device.json'), `${JSON.stringify({ user: 'user_1', token: `pdt_${'a'.repeat(32)}`, origin, root: home })}\n`, { mode: 0o600 });
+  writeFileSync(join(home, 'device.json'), `${JSON.stringify({ user: 'user_1', device: 'device_1', token: `pdt_${'a'.repeat(32)}`, origin, root: home })}\n`, { mode: 0o600 });
   writeFileSync(join(home, 'config.json'), `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
 
   return home;

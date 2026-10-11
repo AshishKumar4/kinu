@@ -256,7 +256,7 @@ describe('daemon startup hardening', () => {
 
   test('a device config naming a plaintext origin off this machine is refused before any token is sent', () => {
     const configPath = path.join(DEVICE_HOME, 'origin-device.json');
-    const config = (origin) => JSON.stringify({ user: 'user-1', token: `pdt_${'a'.repeat(32)}`, origin, root: '/home/u/project' });
+    const config = (origin) => JSON.stringify({ user: 'user-1', device: 'device-1', token: `pdt_${'a'.repeat(32)}`, origin, root: '/home/u/project' });
 
     for (const origin of ['http://kinu.example', 'ftp://kinu.example', 'http://192.0.2.10:8787', 'not a url']) {
       fs.writeFileSync(configPath, config(origin), { mode: 0o600 });
@@ -270,11 +270,22 @@ describe('daemon startup hardening', () => {
     }
   });
 
-  test('a device config naming no directory is refused: the machine connects again to name one', () => {
-    const configPath = path.join(DEVICE_HOME, 'rootless-device.json');
+  test('a device config is read whole or refused: every field kinu connect writes, nonempty, and an absolute directory', () => {
+    const configPath = path.join(DEVICE_HOME, 'partial-device.json');
+    const whole = { user: 'user-1', device: 'device-1', token: `pdt_${'a'.repeat(32)}`, origin: 'https://kinu.run', root: '/home/u/project' };
 
-    fs.writeFileSync(configPath, JSON.stringify({ user: 'user-1', token: `pdt_${'a'.repeat(32)}`, origin: 'https://kinu.run' }), { mode: 0o600 });
-    expect(() => readDeviceConfig(configPath)).toThrow('missing its user, token or directory; re-run: kinu connect');
+    fs.writeFileSync(configPath, JSON.stringify(whole), { mode: 0o600 });
+    expect(readDeviceConfig(configPath)).toMatchObject(whole);
+
+    for (const field of Object.keys(whole)) {
+      for (const partial of [{ ...whole, [field]: undefined }, { ...whole, [field]: '' }]) {
+        fs.writeFileSync(configPath, JSON.stringify(partial), { mode: 0o600 });
+        expect(() => readDeviceConfig(configPath)).toThrow('re-run: kinu connect');
+      }
+    }
+
+    fs.writeFileSync(configPath, JSON.stringify({ ...whole, root: 'project' }), { mode: 0o600 });
+    expect(() => readDeviceConfig(configPath)).toThrow('re-run: kinu connect');
   });
 
   test('redacts rejected device credentials from ticket exchange failures', async () => {
@@ -1289,7 +1300,7 @@ describe('daemon process under Bun against a local hub', () => {
   const DAEMON_PATH = path.join(__dirname, '..', 'src', 'index.js');
 
   function makeConfig(root, origin) {
-    const config = { user: 'user-1', token: `pdt_${'a'.repeat(32)}`, origin };
+    const config = { user: 'user-1', device: 'device-1', token: `pdt_${'a'.repeat(32)}`, origin, root };
     const configPath = path.join(root, 'device.json');
     fs.writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });
 
