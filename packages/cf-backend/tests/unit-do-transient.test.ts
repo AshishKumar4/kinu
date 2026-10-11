@@ -103,6 +103,19 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
     expect(reads).toEqual(['live-storage-retry', 'live-storage-retry']);
   });
 
+  test('a platform retryable flag is honored without a literal overload refusal', async () => {
+    const reads: string[] = [];
+
+    const result = await claimOwnedWorkspace(envWith({
+      dropHasWorkspace: 1,
+      membershipError: Object.assign(new Error('Durable Object iſ overloaded.'), { retryable: true }),
+      registryReads: reads,
+    }), USER, 'flagged-nonliteral-overload');
+
+    expect(Result.isSuccess(result)).toBe(true);
+    expect(reads).toEqual(['flagged-nonliteral-overload', 'flagged-nonliteral-overload']);
+  });
+
   test('overload anywhere in an ownership failure vetoes another delivery', async () => {
     const failures = [
       new Error('Durable Object reset because its code was updated.', { cause: Object.assign(new Error('refused'), { overloaded: true }) }),
