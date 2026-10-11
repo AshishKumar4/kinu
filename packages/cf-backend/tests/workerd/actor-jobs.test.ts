@@ -170,10 +170,14 @@ const NodeJobSchema = v.object({ actorId: v.string(), status: v.string(), summar
 it("the workspace's cancel of a swarm node's job ends the node's command, and the node is told", async () => {
   const workspace = 'swarm-job-cancel-workspace';
   const facets = env.AGENT_FACET_PROBE.get(env.AGENT_FACET_PROBE.idFromName('swarm-job-cancel'));
-  const ran = await facets.swarmJobNode(workspace);
+  const [watched, ran] = (await facets.swarmJobNode(workspace)).tee();
+  // A node that ends, or fails, before its job's window is armed never arms it: its answer says why, not a hang.
+  const ended = new Response(watched).text().then((answer) => ({ answer }));
 
   // The node's call is in its window, the first wait its workspace's job clock was handed; then it outruns it.
-  await facets.jobWindowArmed(workspace, 1);
+  const early = await Promise.race([facets.jobWindowArmed(workspace, 1).then(() => null), ended]);
+
+  if (early !== null) throw new Error(`the node ended before its job's window was armed: ${early.answer}`);
   await facets.outrunJobWindow(workspace);
   const [job] = (await facets.jobRows(workspace)).filter((row) => row.status === 'running');
 

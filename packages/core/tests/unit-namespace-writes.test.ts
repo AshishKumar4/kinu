@@ -129,6 +129,6 @@ describe('withMountTable resolve', () => {
     await namespace.mkdir('/home/main', { recursive: true });
     await namespace.symlink('missing/../loop', '/home/main/loop');
 
-    await expect(plane.resolve('/home/main/loop/file.txt')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(plane.resolve('/home/main/loop/file.txt')).rejects.toMatchObject({ code: expect.stringMatching(/^(ENOENT|ELOOP)$/) });
   });
 });

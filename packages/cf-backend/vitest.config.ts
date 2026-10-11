@@ -117,18 +117,30 @@ const probeRuntime = {
 } satisfies BuildOptions;
 
 /**
- * One probe build at a time, as buildSync ran them: each bundles most of the Worker, and seventeen at once in one
- * esbuild service grew it until it died ("The service was stopped").
+ * Every esbuild build this process makes, one at a time, as buildSync made them: builds take the require plugin, so
+ * they run in esbuild's service, which held the peak of all running at once (seventeen probes killed it; probes beside
+ * test-time agent bundles held 5.9 GiB, armada 2026-10-11). The service stays up: standardDecorators' transform uses it.
  */
-let probeBuilds: Promise<unknown> = Promise.resolve();
+let esbuildTurns: Promise<void> = Promise.resolve();
+
+async function esbuildTurn<T>(work: () => Promise<T>): Promise<T> {
+  const before = esbuildTurns;
+  const done = Promise.withResolvers<void>();
+
+  esbuildTurns = done.promise;
+
+  try {
+    await before;
+
+    return await work();
+  } finally {
+    done.resolve();
+  }
+}
 
 /** A selected probe keeps its own entry and flags; unused probes perform no build. */
 async function probeModules(file: string, options: BuildOptions = {}): Promise<V4ModuleDefinition[]> {
-  const turn = probeBuilds.then(() => builtProbe(file, options), () => builtProbe(file, options));
-
-  probeBuilds = turn;
-
-  return await turn;
+  return await esbuildTurn(() => builtProbe(file, options));
 }
 
 async function builtProbe(file: string, options: BuildOptions): Promise<V4ModuleDefinition[]> {
@@ -153,7 +165,7 @@ async function builtProbe(file: string, options: BuildOptions): Promise<V4Module
 }
 
 // The agent bundles a probe's workspace loads into its agents' own isolates, served as the asset binding serves them.
-const agentBundles = new Map<string, string>();
+const agentBundles = new Map<string, Promise<string>>();
 
 function agentAssets(entry = AGENT_BUNDLE_ENTRY) {
   return async (request: Request): Promise<Response> => {
@@ -163,14 +175,15 @@ function agentAssets(entry = AGENT_BUNDLE_ENTRY) {
 
     if (path !== '/_agent/modules.json') return new Response('Not found', { status: 404 });
 
+    // The build itself is kept, so the requests that arrive while it runs wait for it rather than each starting one.
     let bundle = agentBundles.get(entry);
 
     if (bundle === undefined) {
-      bundle = JSON.stringify((await buildAgentBundle(entry)).modules);
+      bundle = esbuildTurn(() => buildAgentBundle(entry)).then((built) => JSON.stringify(built.modules));
       agentBundles.set(entry, bundle);
     }
 
-    return new Response(bundle, { headers: { 'content-type': 'application/json' } });
+    return new Response(await bundle, { headers: { 'content-type': 'application/json' } });
   };
 }
 
@@ -641,11 +654,11 @@ async function bundledNpmCommonJs(): Promise<{ find: RegExp; replacement: string
 
   // One build, its shared modules split out: nopt's type table, which @npmcli/config extends, is one instance, as in
   // the Worker's own bundle.
-  const built = await bundled({
+  const built = await esbuildTurn(() => bundled({
     entryPoints: Object.fromEntries(NPM_COMMONJS.map((specifier) => [named(specifier), fromCore.resolve(specifier)])),
     outdir: into, splitting: true, bundle: true, write: false, format: 'esm', platform: 'neutral', outExtension: { '.js': '.mjs' },
     mainFields: ['main'], ...probeRuntime, plugins: [nodeRequireAsImport], external: ['node:*'],
-  });
+  }));
 
   for (const output of built.outputFiles) writeWhole(output.path, output.text);
 
