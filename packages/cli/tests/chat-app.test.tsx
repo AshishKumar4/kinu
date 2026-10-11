@@ -12,7 +12,7 @@ import { asFetchFunction } from '@kinu.run/core';
 
 import { TURN, cleanupChats, fakeClient, mountChat, type FixtureWorkspace } from './helpers/chat-app-fixture';
 import { createMemoryTuiPreferenceStore } from './helpers/tui-preferences';
-import { InputRenderable, SelectRenderable, TextareaRenderable } from '@opentui/core';
+import { InputRenderable, TextareaRenderable } from '@opentui/core';
 import { flushSync } from '@opentui/react';
 
 afterEach(cleanupChats);
@@ -97,11 +97,10 @@ test('prompt history recalls sent and cleared drafts, searches, and persists per
   screen.mockInput.pressKey('r', { ctrl: true });
   await screen.waitFor('history search', screen.filterFocused);
   await screen.mockInput.typeText('fir');
-  await screen.waitFor('filtered history', () => {
-    const results = screen.renderer.root.findDescendantById('prompt-history-results');
+  const filter = screen.renderer.currentFocusedRenderable;
 
-    return results instanceof SelectRenderable && results.options.length === 1;
-  });
+  if (!(filter instanceof InputRenderable)) throw new Error('history filter not focused');
+  expect(filter.value).toBe('fir');
   flushSync(() => screen.mockInput.pressEnter());
   await screen.waitFor('selected history', screen.composerFocused);
   expect(input.plainText).toBe('first prompt');
@@ -245,7 +244,7 @@ describe('ChatApp terminal interaction', () => {
     await screen.mockInput.typeText('draft under the model panel');
     const before = listings;
     screen.mockInput.pressKey('l', { ctrl: true });
-    await screen.waitFor('the loading model request', () => listings > before);
+    await screen.waitFor('the loading model request', () => listings > before && screen.filterFocused());
     screen.mockInput.pressEscape();
     pending.resolve({ models: [], failures: [] });
     await screen.waitFor('the model panel to close', screen.composerFocused);
@@ -319,6 +318,7 @@ describe('ChatApp terminal interaction', () => {
     screen.mockInput.pressKey('l', { ctrl: true });
     await screen.waitFor('the model picker', screen.filterFocused);
     screen.mockInput.pressEnter();
+    await screen.waitFor('the model selection request', () => selected.length === 1);
     screen.mockInput.pressKey(',', { ctrl: true });
 
     for (let index = 0; index < 4; index += 1) await screen.renderOnce();
@@ -836,9 +836,11 @@ test('/compact shows its progress while the fold runs, and a failed fold says wh
     if (ends === 'folded') fold.resolve('folded');
     else fold.reject(new Error('the summarizer is out of credit'));
 
-    await screen.waitFor('the fold settled', screen.composerFocused);
-
-    if (ends === 'failed') expect(screen.frame()).toContain('the summarizer is out of credit');
+    if (ends === 'failed') {
+      await screen.waitFor('the reported fold refusal', () => screen.frame().includes('the summarizer is out of credit'));
+    } else {
+      await fold.promise;
+    }
   }
 });
 

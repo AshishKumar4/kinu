@@ -99,7 +99,7 @@ describe('ChatApp consent ownership', () => {
     const screen = await mountChat(controlled.client);
     await screen.mockInput.typeText('/settings');
     screen.mockInput.pressEnter();
-    await screen.waitFor('settings below consent', () => screen.frame().includes('Filter settings'));
+    await screen.waitFor('settings below consent', screen.filterFocused);
     controlled.emit({ type: 'turn-start', kind: 'user', text: 'run the suite' });
     await screen.waitFor('the consent overlay', () => screen.frame().includes('Use your PC?'));
     await screen.mockInput.typeText('hidden draft');
@@ -112,7 +112,7 @@ describe('ChatApp consent ownership', () => {
     screen.mockInput.pressKey('n');
     await screen.waitFor('the consent decision', () => decisions.length === 1);
     expect(decisions).toEqual(['deny']);
-    expect(screen.frame()).toContain('Filter settings');
+    await screen.waitFor('the settings control after consent', screen.filterFocused);
   });
 
 
@@ -139,13 +139,13 @@ describe('ChatApp consent ownership', () => {
     const screen = await mountChat(controlled.client);
     await screen.mockInput.typeText('/settings');
     screen.mockInput.pressEnter();
-    await screen.waitFor('settings below consent', () => screen.frame().includes('Filter settings'));
+    await screen.waitFor('settings below consent', screen.filterFocused);
     controlled.emit({ type: 'turn-start', kind: 'user', text: 'run the suite' });
     await screen.waitFor('consent above settings', () => screen.frame().includes('Use your PC?'));
     screen.mockInput.pressEnter();
     await screen.waitFor('the one-time approval', () => decisions.length === 1);
     expect(decisions).toEqual(['once']);
-    expect(screen.frame()).toContain('Filter settings');
+    await screen.waitFor('the settings control after consent', screen.filterFocused);
     expect(screen.frame()).not.toContain('Select model');
   });
   test('an unseen consent tail cannot be approved', async () => {
