@@ -125,7 +125,6 @@ interface CarryState {
   gate: GoAheadGate | null;
   awaited: 'byte' | 'line' | null;
   first: boolean;
-  reading: boolean;
   upgrading: boolean;
 }
 
@@ -139,8 +138,8 @@ export async function carryKeyed(program: CarriedSocket, server: UpgradableSocke
   const toServer = server.writable.getWriter();
   const fromServer = server.readable.getReader();
   // Shared by the two directions: `gate` holds the server's reader after a go-ahead, `awaited` is the answer the
-  // program's last write asked for, `reading` is true while a read of the server is pending.
-  const at: CarryState = { gate: null, awaited: null, first: true, reading: false, upgrading: false };
+  // program's last write asked for. Only a parked reader at a go-ahead may be handed to TLS.
+  const at: CarryState = { gate: null, awaited: null, first: true, upgrading: false };
 
   // The server's bytes to the program, one read at a time, none past a go-ahead until the program moves.
   const carrying = (async () => {
@@ -149,9 +148,7 @@ export async function carryKeyed(program: CarriedSocket, server: UpgradableSocke
       at.gate = null;
 
       if (at.upgrading) return;
-      at.reading = true;
       const { value, done } = await fromServer.read();
-      at.reading = false;
 
       if (done) {
         await toProgram.close();
@@ -219,11 +216,11 @@ export async function carryKeyed(program: CarriedSocket, server: UpgradableSocke
 
     at.upgrading = true;
 
-    if (ask[0] !== ASK_TLS || at.reading) {
+    if (ask[0] !== ASK_TLS || at.gate === null) {
       const refusal = ask[0] !== ASK_TLS
         ? 'the egress was asked for something it does not make'
         : 'Kinu\'s egress makes STARTTLS right after a PostgreSQL, MySQL or text-protocol (SMTP, IMAP, POP3, FTP) go-ahead; '
-          + 'this connection\'s server was being read when TLS was asked for';
+          + 'this connection\'s server gave no go-ahead when TLS was asked for';
 
       await toProgram.write(answer(key, refusal));
       await Promise.allSettled([program.close(), server.close()]);
