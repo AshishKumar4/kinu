@@ -295,9 +295,12 @@ export async function mountChat(
   };
 
   const composerFocused = () => renderer.currentFocusedRenderable instanceof TextareaRenderable
-    && !(renderer.currentFocusedRenderable instanceof InputRenderable);
+    && !(renderer.currentFocusedRenderable instanceof InputRenderable)
+    && renderer.currentFocusedRenderable.focused;
 
-  const filterFocused = () => renderer.currentFocusedRenderable instanceof InputRenderable;
+  const filterFocused = () => renderer.currentFocusedRenderable instanceof InputRenderable
+    && renderer.currentFocusedRenderable.focused;
+
   mounted.push(() => {
     // `root.render()` builds a new container per call and destroy unmounts only the last one, so unmount
     // explicitly; on a concurrent root `unmount()` only schedules, so flush it before `destroy()`.

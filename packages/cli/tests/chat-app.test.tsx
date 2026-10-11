@@ -12,7 +12,7 @@ import { asFetchFunction } from '@kinu.run/core';
 
 import { TURN, cleanupChats, fakeClient, mountChat, type FixtureWorkspace } from './helpers/chat-app-fixture';
 import { createMemoryTuiPreferenceStore } from './helpers/tui-preferences';
-import { SelectRenderable, TextareaRenderable } from '@opentui/core';
+import { InputRenderable, SelectRenderable, TextareaRenderable } from '@opentui/core';
 import { flushSync } from '@opentui/react';
 
 afterEach(cleanupChats);
@@ -176,10 +176,18 @@ describe('ChatApp terminal interaction', () => {
     localScreen.mockInput.pressEscape();
     await localScreen.waitFor('the command palette to close', localScreen.composerFocused);
     await localScreen.mockInput.typeText('/settings');
+    const composer = localScreen.renderer.currentFocusedRenderable;
+
+    if (!(composer instanceof TextareaRenderable)) throw new Error('composer not focused');
+    expect(composer.plainText).toBe('/settings');
     localScreen.mockInput.pressEnter();
     await localScreen.waitFor('interactive settings', localScreen.filterFocused);
     await localScreen.mockInput.typeText('low');
     await localScreen.renderOnce();
+    const filter = localScreen.renderer.currentFocusedRenderable;
+
+    if (!(filter instanceof InputRenderable)) throw new Error('settings filter not focused');
+    expect(filter.value).toBe('low');
     flushSync(() => localScreen.mockInput.pressEnter());
     await localScreen.waitFor('the selected setting to apply', () => efforts.length === 1);
     expect(efforts).toEqual(['low']);
