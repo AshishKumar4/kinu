@@ -5187,8 +5187,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       if (!trimmed) return yield* new KinuError('bad_input', 'run_task requires non-empty text');
 
+      // A task, as the operator's message is: a turn of its own, never spliced into one already running.
       const outcome = yield* Effect.promise(async () => this.workspaceAgentDeliveries().signals.send({
-        kind: 'mcp', text: trimmed,
+        kind: 'mcp', text: trimmed, opensTurn: true,
         metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator' },
       }));
 

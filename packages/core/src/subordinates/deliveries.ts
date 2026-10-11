@@ -180,6 +180,7 @@ export class DeliveryInbox implements AgentInbox {
       input: {
         kind: 'turn', text: signal.text, metadata,
         ...(signal.stepText !== undefined && { stepText: signal.stepText }),
+        ...(signal.opensTurn === true && { opensTurn: true }),
         ...(signal.yieldsToUserMessage === true && { yieldsToUserMessage: true }),
       },
       authorship: 'hirer',
