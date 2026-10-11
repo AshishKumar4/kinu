@@ -246,8 +246,8 @@ describe('ChatApp terminal interaction', () => {
     screen.mockInput.pressKey('l', { ctrl: true });
     await screen.waitFor('the loading model request', () => listings > before && screen.filterFocused());
     screen.mockInput.pressEscape();
-    pending.resolve({ models: [], failures: [] });
     await screen.waitFor('the model panel to close', screen.composerFocused);
+    pending.resolve({ models: [], failures: [] });
 
     for (let index = 0; index < 6; index += 1) await screen.renderOnce();
     expect(screen.composerFocused()).toBe(true);
@@ -316,7 +316,7 @@ describe('ChatApp terminal interaction', () => {
 
     const screen = await mountChat(controlled.client, { kittyKeyboard: true });
     screen.mockInput.pressKey('l', { ctrl: true });
-    await screen.waitFor('the model picker', screen.filterFocused);
+    await screen.waitFor('the selectable model', () => screen.filterFocused() && screen.frame().includes('openai/gpt-5.5'));
     screen.mockInput.pressEnter();
     await screen.waitFor('the model selection request', () => selected.length === 1);
     await screen.waitFor('the picker releases its control', () => !screen.filterFocused());
