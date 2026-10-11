@@ -51,7 +51,7 @@ export interface DeviceFleetEntry {
   readonly sandbox?: DeviceSandboxStatus;
   /** Toolchain answer, or null when never asked or unable to answer (not the same as absent tools). */
   readonly toolchain?: DeviceToolchain | null;
-  /** The directory named at `kinu connect`: the base tier's whole reach. Null from older daemons. */
+  /** The directory named at `kinu connect`: the base tier's whole reach. Null when it is not an absolute path. */
   readonly consentedRoot?: string | null;
   /** This machine's home, as reported on HELLO. */
   readonly deviceHome?: string | null;
@@ -221,7 +221,7 @@ export interface DeviceStatus {
   /** Whether this caller's workspace holds an action grant on the connected device, so the model
    *  knows if its first call raises the consent card. Absent = unknown / no device / non-workspace caller. */
   workspaceGranted?: boolean;
-  /** The directory named at `kinu connect`. Null from older daemons: the base tier then fails closed. */
+  /** The directory named at `kinu connect`. Null when it is not an absolute path: the base tier then fails closed. */
   consentedRoot?: string | null;
   /** The machine's home as reported on HELLO, so the hub never runs a command to learn it. */
   deviceHome?: string | null;
