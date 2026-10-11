@@ -97,10 +97,6 @@ const chatgpt = require('./chatgpt.js');
 
 const { runToExit } = update;
 
-/** The names this daemon requires beside itself — the four requires above
- *  — for the updater to land a newer set of. */
-const DAEMON_SIBLINGS = ['sandbox.js', 'pty.js', 'update.js', 'chatgpt.js', 'device-protocol.json'];
-
 const HOME_SETTING = process.env.KINU_HOME?.trim() ?? '';
 
 const DEVICE_HOME = path.resolve(HOME_SETTING === '' ? path.join(os.homedir(), '.kinu') : HOME_SETTING);
@@ -3680,7 +3676,6 @@ async function main() {
     layout: {
       deviceHome: DEVICE_HOME,
       daemonPath: __filename,
-      siblings: DAEMON_SIBLINGS,
       runtime: process.execPath,
     },
     origin: HTTP_ORIGIN,

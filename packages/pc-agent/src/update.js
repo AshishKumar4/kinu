@@ -270,19 +270,20 @@ function restoreFile(target) {
 /**
  * Take the daemon files out of the unpacked archive and land them, in the
  * order the CLI's own install uses: every sibling before the daemon that
- * requires it, the stamp after the daemon it describes. The pre-landing `.new`
- * files are written for every name first, so a missing file is found before
- * anything moves.
+ * requires it, the stamp after the daemon it describes. The siblings are the
+ * files the new build ships beside its daemon, so a file the running build
+ * never had lands too. The pre-landing `.new` files are written for every name
+ * first, so a missing daemon is found before anything moves. Answers what
+ * landed: the siblings, and those of them this home did not have before.
  */
 function landDaemonFiles(layout, extracted, version) {
   const source = path.join(extracted, ARCHIVE_DAEMON_DIR);
-  const names = [...layout.siblings, path.basename(layout.daemonPath)];
+  const daemon = path.basename(layout.daemonPath);
 
-  for (const name of names) {
-    const file = path.join(source, name);
-
-    if (!fs.existsSync(file)) throw new Error(`the archive carries no ${name} for the daemon`);
-  }
+  if (!fs.existsSync(path.join(source, daemon))) throw new Error(`the archive carries no ${daemon} for the daemon`);
+  const siblings = fs.readdirSync(source).filter((name) => name !== daemon && name !== VERSION_STAMP).sort();
+  const fresh = siblings.filter((name) => !fs.existsSync(path.join(layout.deviceHome, name)));
+  const names = [...siblings, daemon];
 
   const shipped = readVersionStamp(source);
 
@@ -294,10 +295,12 @@ function landDaemonFiles(layout, extracted, version) {
 
   writeAtomically(`${path.join(layout.deviceHome, VERSION_STAMP)}.new`, `${version}\n`, 0o600);
 
-  for (const name of layout.siblings) landFile(path.join(layout.deviceHome, name));
+  for (const name of siblings) landFile(path.join(layout.deviceHome, name));
   landFile(layout.daemonPath);
   landFile(path.join(layout.deviceHome, VERSION_STAMP));
   syncDirectory(layout.deviceHome);
+
+  return { siblings, fresh };
 }
 
 /** The landed daemon, run once: it loads its siblings and prints its stamp. */
@@ -316,12 +319,19 @@ async function selftest(layout) {
   return String(stdout).trim();
 }
 
-/** Undo a landing whose daemon failed its selftest: daemon first, so no
- *  moment leaves a newer daemon beside older siblings. */
-function rollBack(layout) {
+/** Undo a landing (`landed`, as landDaemonFiles answered it) whose daemon
+ *  failed: daemon first, so no moment leaves a newer daemon beside older
+ *  siblings; a sibling the build added is removed, the rest go back to `.prev`. */
+function rollBack(layout, landed) {
   restoreFile(layout.daemonPath);
 
-  for (const name of layout.siblings) restoreFile(path.join(layout.deviceHome, name));
+  for (const name of landed.siblings) {
+    const file = path.join(layout.deviceHome, name);
+
+    if (landed.fresh.includes(name)) fs.rmSync(file, { force: true });
+    else restoreFile(file);
+  }
+
   restoreFile(path.join(layout.deviceHome, VERSION_STAMP));
   syncDirectory(layout.deviceHome);
 }
@@ -362,8 +372,8 @@ function lifelineClosed(stream) {
 /**
  * The updater for one daemon process.
  *
- * `layout` names what this daemon is: its home, its file, its siblings, the
- * runtime it runs on. `origin` is the HTTP origin the credentials trust.
+ * `layout` names what this daemon is: its home, its file, the runtime it
+ * runs on. `origin` is the HTTP origin the credentials trust.
  * `spawnFn` and `fetchFn` are the two seams: the process that starts the
  * successor and the origin that serves the archive.
  */
@@ -374,6 +384,9 @@ function createUpdater(opts) {
 
   let pending = false;
   let inProgress = false;
+  // What the last landing put in place, for a rollback: the same build landed
+  // again answers the same files.
+  let landed = { siblings: [], fresh: [] };
 
   function startSuccessor(version) {
     writeAtomically(path.join(layout.deviceHome, UPDATE_PENDING_MARKER), `${version}\n`, 0o600);
@@ -404,7 +417,7 @@ function createUpdater(opts) {
       }
 
       (async () => {
-        rollBack(layout);
+        rollBack(layout, landed);
         clearPendingMarker(layout.deviceHome);
         await reclaim?.();
         log(`device.update_rolled_back version=${version}`);
@@ -423,7 +436,7 @@ function createUpdater(opts) {
 
       try {
         await extractArchive(await downloadVerified(fetchFn, origin, frame), work);
-        landDaemonFiles(layout, work, frame.version);
+        landed = landDaemonFiles(layout, work, frame.version);
       } finally {
         fs.rmSync(work, { recursive: true, force: true });
       }
@@ -434,12 +447,12 @@ function createUpdater(opts) {
     try {
       reported = await selftest(layout);
     } catch (err) {
-      rollBack(layout);
+      rollBack(layout, landed);
       throw new Error('the landed daemon failed its selftest; the previous build was restored', { cause: err });
     }
 
     if (reported !== frame.version) {
-      rollBack(layout);
+      rollBack(layout, landed);
       throw new Error(`the landed daemon reports ${reported}, not ${frame.version}; the previous build was restored`);
     }
 
