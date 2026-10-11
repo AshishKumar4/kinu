@@ -4369,6 +4369,10 @@ Medians (min–max), ms:
 - 18 GB has no row: its base save ran out of disk on the Medium box's
   20 GB (`mksquashfs`: no space left), before either arm differed.
 
+2026-10-11 (`b81fbc551`): the pre-D77 delta branch is deleted; a reset deletes
+every chain (`scripts/reset.ts:383-394`), and every current delta writes its
+paths list (`packages/devbox/src/disk-delta.ts:177-179`).
+
 D78. The tools tarball is built on armada, and this machine builds no
 Devbox artifact with Docker (2026-10-07, m1966b). D66's golden installs
 the pinned tools tarball onto `cloudflare/debian-trixie`; D72 kept the
