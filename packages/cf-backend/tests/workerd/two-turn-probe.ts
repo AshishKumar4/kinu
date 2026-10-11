@@ -2,7 +2,8 @@
  * Two-turn probe: the real OrchestratorAgent drives two full Think turns over the HTTP model fake, with the installed
  * remote Workers AI binding answering the lanes that call it (rating, title, sleep-time judge). Defends (2026-09-08):
  * a transcript count naming a missing column, and the second turn's request dropping the
- * message that started it.
+ * message that started it. The one exception is `longTurnCost`: its subject is Kinu's storage cost, not the model, so
+ * it runs every lane on the scripted model (the tiers' scripted-model provider) to keep the rows it writes deterministic.
  */
 import { Agent, getAgentByName, getCurrentAgent, type AgentContext } from 'agents';
 import { subscribe } from 'agents/observability';
