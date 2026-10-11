@@ -17,7 +17,7 @@ type Source = { readonly kind: 'files'; readonly project: SlateProject; readonly
 interface Launched { readonly id: string; readonly port: number | null; readonly n: number; isRunning(): Promise<boolean>; stop(): Promise<void> }
 
 /** What a slate's compile does as one authority: its tree's digest, whether it compiles, and what it looked at. */
-interface Compile { tree: string; compiles: boolean; inputs: SlateBuildRead[] }
+interface Compile { tree: string; compiles: boolean; inputs: SlateBuildRead[]; entered?: () => void; paused?: Promise<void> }
 
 const read = (path: string): SlateBuildRead => ({ path, missing: false });
 
@@ -46,7 +46,10 @@ function backend() {
     digest: async (cred, id) => as(id, cred).tree,
     build: async (caller, id): Promise<SlateImage | SlateBuildFailure> => {
       world.builds += 1;
-      const { tree, compiles: ok, inputs } = as(id, caller.cred);
+      const { tree, compiles: ok, inputs, entered, paused } = as(id, caller.cred);
+
+      entered?.();
+      await paused;
 
       return ok ? { modules: { 'index.js': `image-${id}-${tree}` }, inputs }
         : { failed: `${id}/server.ts:1:1: Could not resolve`, inputs };
@@ -128,4 +131,22 @@ test('a restricted caller\'s build does not drop what the owner\'s build read', 
 
   expect(processes.filesChanged(['/home/main/word.ts'])).toEqual(['board']);
   expect((await processes.booted(owner, 'board')).process.n).toBe(3);
+});
+
+test('a file first read by a build still in flight, changed before it returns, is built again before anything launches', async () => {
+  const { processes, compiles, world } = backend();
+  const { promise: paused, resolve: resume } = Promise.withResolvers<void>();
+  const { promise: compiling, resolve: entered } = Promise.withResolvers<void>();
+
+  compiles.set('board', { tree: 'v1', compiles: true, inputs: [read('/home/main/dep.ts')], entered, paused });
+  const booting = processes.booted(ROOT_SLATE_CALLER, 'board');
+
+  // The compile has read dep.ts at v1; v2 is written while it is still bundling.
+  await compiling;
+  expect(processes.filesChanged(['/home/main/dep.ts'])).toEqual([]);
+  compiles.set('board', { tree: 'v1', compiles: true, inputs: [read('/home/main/dep.ts')] });
+  resume();
+
+  expect((await booting).process.n).toBe(1);
+  expect(world).toEqual({ builds: 2, launches: 1 });
 });

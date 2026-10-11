@@ -219,6 +219,7 @@ interface HireProbeRpc extends Rpc.DurableObjectBranded {
 }
 
 interface SlateProcessProbeRpc extends Rpc.DurableObjectBranded {
+  linkedBuildInputs(): Promise<string[]>;
   start(start?: {
     source?: string; bindChain?: boolean; cred?: VfsCred;
     browser?: string; project?: Record<string, JsonValue>; app?: { port: number } | null;

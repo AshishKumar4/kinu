@@ -162,6 +162,28 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
       : { ...boot, bindings: { __storage: storageStub } });
   }
 
+  /**
+   * The paths a build of `/slates/linked` looked at outside its tree, where its `lib.ts` is a link to `/home/linked/lib.ts`
+   * and its class imports `./lib.ts`.
+   */
+  async linkedBuildInputs(): Promise<string[]> {
+    const files = this.vfs.as(CRED_KERNEL);
+
+    files.mkdir('/home/linked', { recursive: true });
+    files.writeFile('/home/linked/lib.ts', 'export const word = "linked";\n');
+    files.mkdir('/slates/linked', { recursive: true });
+    files.writeFile('/slates/linked/server.ts', 'import { SlateObject } from "kinu:slate";\nimport { word } from "./lib.ts";\nexport class Slate extends SlateObject { word() { return word; } }\n');
+    files.symlink('/home/linked/lib.ts', '/slates/linked/lib.ts');
+    const authored = this.vfs.as(CRED_SESSION_USER);
+
+    const built = await this.resident.build({
+      owner: 'linked', root: '/slates/linked', project: parseSlateProject({ main: 'server.ts' }), cred: CRED_SESSION_USER,
+      read: (entry) => (authored.exists(`/slates/linked/${entry}`) ? authored.readFileString(`/slates/linked/${entry}`) : null),
+    });
+
+    return (built.inputs ?? []).filter((input) => !input.missing).map((input) => input.path);
+  }
+
   async facetImages(): Promise<string[]> {
     const kernel = this.vfs.as(CRED_KERNEL);
 

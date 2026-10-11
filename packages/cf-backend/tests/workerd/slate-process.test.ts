@@ -370,3 +370,9 @@ it('Slate compilation requires Nimbus credentialed EsbuildService reads', async 
 
   expect(grouped.code).toBe('bad_input');
 });
+
+it('a build sees a file its tree links to from outside it', async () => {
+  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('linked-inputs'));
+
+  expect(await subject.linkedBuildInputs()).toContain('/home/linked/lib.ts');
+});
