@@ -274,6 +274,18 @@ function pluginsFixture(path: string): Response | null {
 let galleryDisplayName = "Owner";
 
 function accountProfileFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
+  if (path === "/api/user/config/sandbox_size") {
+    if (method === "GET") return fixtureJson({ key: "sandbox_size", value: localStorage.getItem("gallery-computer-size") });
+
+    if (method === "PUT") {
+      const { value } = v.parse(v.object({ value: v.string() }), JSON.parse(v.parse(v.string(), body)));
+
+      localStorage.setItem("gallery-computer-size", value);
+
+      return fixtureJson({ ok: true });
+    }
+  }
+
   if (path === "/api/user/onboarding/complete" && method === "POST") {
     return fixtureJson({ onboardedAt: NOW });
   }
@@ -740,26 +752,8 @@ function accountMemoryFixture(path: string, method: string): Response | null {
   return fixtureJson({ ...memory, facts: [...memory.facts, ...galleryKeptFacts], pending: galleryMemoryPending });
 }
 
-function accountComputerSizeFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
-  if (path !== "/api/user/config/sandbox_size") return null;
-
-  if (method === "GET") return fixtureJson(v.parse(JsonValueSchema, STUB.get(path)));
-
-  if (method === "PUT") {
-    const { value } = v.parse(v.object({ value: v.string() }), JSON.parse(v.parse(v.string(), body)));
-    const stored = { key: "sandbox_size", value };
-
-    STUB.set(path, stored);
-
-    return fixtureJson(v.parse(JsonValueSchema, stored));
-  }
-
-  return null;
-}
-
 const SETTINGS_SLICES: readonly SettingsSlice[] = [
   accountMemoryFixture,
-  accountComputerSizeFixture,
   accountProfileFixture,
   settingsSectionsFixture,
   workspaceRosterFixture,
