@@ -10,13 +10,6 @@ import { CLOUDFLARE_OAUTH_CRED_KEY, cloudflareClientAuth, type CloudflareOAuthEn
 import { CHATGPT_CRED_KEY } from './chatgpt';
 import { CHATGPT_REVOKE_URL, chatgptRegistrationOf } from './chatgpt-sign-in';
 
-/** Where a disconnect can also end the grant itself, by the provider's name; a key absent here can only be disconnected. */
-const REVOKING_PROVIDER = new Map([[CODEX_CRED_KEY, 'OpenAI'], [CHATGPT_CRED_KEY, 'OpenAI'], [CLOUDFLARE_OAUTH_CRED_KEY, 'Cloudflare']]);
-
-export function revokingProviderOf(key: string): string | null {
-  return REVOKING_PROVIDER.get(key) ?? null;
-}
-
 export interface RevocationEndpoint {
   /** Named in a refusal, so the owner knows whose words they read. */
   readonly provider: string;
@@ -26,19 +19,26 @@ export interface RevocationEndpoint {
   readonly issuedClient?: true;
 }
 
+/** The one list of keys a disconnect can also revoke at their provider; a key absent here can only be disconnected. */
+const REVOCATION = new Map<string, { readonly provider: string; readonly endpoint: (env: CloudflareOAuthEnv) => Omit<RevocationEndpoint, 'provider'> | null }>([
+  [CODEX_CRED_KEY, { provider: 'OpenAI', endpoint: () => ({ url: 'https://auth.openai.com/api/accounts/oauth/revoke', client: { fields: { client_id: CODEX_CLIENT_ID }, headers: {} } }) }],
+  [CHATGPT_CRED_KEY, { provider: 'OpenAI', endpoint: () => ({ url: CHATGPT_REVOKE_URL, client: { fields: {}, headers: {} }, issuedClient: true }) }],
+  [CLOUDFLARE_OAUTH_CRED_KEY, { provider: 'Cloudflare', endpoint: (env) => {
+    const client = cloudflareClientAuth(env);
+
+    return client === null ? null : { url: 'https://dash.cloudflare.com/oauth2/revoke', client };
+  } }],
+]);
+
+export function revokingProviderOf(key: string): string | null {
+  return REVOCATION.get(key)?.provider ?? null;
+}
+
 export function revocationEndpointFor(key: string, env: CloudflareOAuthEnv): RevocationEndpoint | null {
-  const provider = revokingProviderOf(key);
+  const revocation = REVOCATION.get(key);
+  const endpoint = revocation?.endpoint(env) ?? null;
 
-  if (provider === null) return null;
-
-  if (key === CODEX_CRED_KEY) {
-    return { provider, url: 'https://auth.openai.com/api/accounts/oauth/revoke', client: { fields: { client_id: CODEX_CLIENT_ID }, headers: {} } };
-  }
-
-  if (key === CHATGPT_CRED_KEY) return { provider, url: CHATGPT_REVOKE_URL, client: { fields: {}, headers: {} }, issuedClient: true };
-  const client = key === CLOUDFLARE_OAUTH_CRED_KEY ? cloudflareClientAuth(env) : null;
-
-  return client === null ? null : { provider, url: 'https://dash.cloudflare.com/oauth2/revoke', client };
+  return revocation === undefined || endpoint === null ? null : { provider: revocation.provider, ...endpoint };
 }
 
 export type RevocationFailures = readonly KinuError[];
