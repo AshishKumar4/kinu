@@ -238,7 +238,10 @@ describe('the vault is read when a request names a secret, never before', () => 
     const upstream = captureFetch(() => new Response('ok'));
 
     const env: ContainerEgressEnv<string> = {
-      UserDO: { idFromName: (name: string) => name, get: () => { throw new Error('no vault is reached without a root secret'); } },
+      UserDO: {
+        idFromName: (name: string) => name,
+        get: () => jsrpcStub({ resolveEgressInjection: async () => { throw new Error('no vault is reached without a root secret'); } }),
+      },
     };
 
     try {
