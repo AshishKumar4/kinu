@@ -235,8 +235,9 @@ describe('ChatApp terminal interaction', () => {
 
     const screen = await mountChat(controlled.client);
     await screen.mockInput.typeText('draft under the model panel');
+    const before = listings;
     screen.mockInput.pressKey('l', { ctrl: true });
-    await screen.waitFor('the loading model request', () => listings === 1);
+    await screen.waitFor('the loading model request', () => listings > before);
     screen.mockInput.pressEscape();
     pending.resolve({ models: [], failures: [] });
     await screen.waitFor('the model panel to close', screen.composerFocused);
@@ -306,7 +307,7 @@ describe('ChatApp terminal interaction', () => {
       },
     });
 
-    const screen = await mountChat(controlled.client);
+    const screen = await mountChat(controlled.client, { kittyKeyboard: true });
     screen.mockInput.pressKey('l', { ctrl: true });
     await screen.waitFor('the model picker', screen.filterFocused);
     screen.mockInput.pressEnter();
