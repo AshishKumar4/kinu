@@ -1,7 +1,7 @@
 // Kinu's workspace egress in workerd, called as Nimbus would call it: a fake caller in the same Worker reaches
 // `ctx.exports.KinuEgress`-shaped entrypoint by loopback and opens a TCP socket, a TLS session (`connectTls`, as Nimbus
-// 0.17 asks it for a program's TLS socket) and a WebSocket through it.
-// Needs the internet (example.com, echo.websocket.org). Run: bun scripts/egress-probe.ts
+// 0.17 asks it for a program's TLS socket), a STARTTLS session over a keyed socket and a WebSocket through it.
+// Needs the internet (example.com, smtp.gmail.com:587, echo.websocket.org). Run: bun scripts/egress-probe.ts
 import { builtinModules } from 'node:module';
 import { join } from 'node:path';
 import { build } from 'esbuild';
@@ -77,6 +77,38 @@ export default {
       socket.close();
       return 'status ' + response.status + ', echoed ' + messages.includes('egress-probe');
     })().catch((error) => 'failed: ' + String(error)), 10000);
+    // STARTTLS over a keyed socket, as the patched node:net names it and node:tls asks: SMTP's EHLO, STARTTLS, then the
+    // ask, the egress's answer, and EHLO again over the session the egress made.
+    out.starttls = await within((async () => {
+      const key = crypto.getRandomValues(new Uint8Array(16));
+      const hex = (bytes) => [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
+      const socket = egress.connect(hex(new TextEncoder().encode('smtp.gmail.com')) + '.k.' + hex(key) + '.tcp.nimbus-egress.invalid:587', { allowHalfOpen: true });
+      const writer = socket.writable.getWriter();
+      const reader = socket.readable.getReader();
+      let heard = new Uint8Array(0);
+      const until = async (done) => {
+        for (;;) {
+          const found = done(heard);
+          if (found !== null) { heard = heard.subarray(found); return; }
+          const next = await reader.read();
+          if (next.done) throw new Error('ended after ' + JSON.stringify(text(heard)));
+          heard = Uint8Array.from([...heard, ...next.value]);
+        }
+      };
+      const line = (code) => (bytes) => { const at = text(bytes).search(new RegExp('^' + code + ' .*\\r\\n', 'm')); return at < 0 ? null : bytes.length; };
+      await until(line('220'));
+      await writer.write(new TextEncoder().encode('EHLO kinu\\r\\n'));
+      await until(line('250'));
+      await writer.write(new TextEncoder().encode('STARTTLS\\r\\n'));
+      await until(line('220'));
+      await writer.write(Uint8Array.from([...key, 0x55, 0]));
+      await until((bytes) => (bytes.length >= 17 ? 0 : null));
+      if (heard[16] !== 1) return 'refused: ' + text(heard.subarray(19));
+      heard = heard.subarray(17);
+      await writer.write(new TextEncoder().encode('EHLO kinu\\r\\n'));
+      await until(line('250'));
+      return 'EHLO answered 250 over TLS';
+    })().catch((error) => 'failed: ' + String(error)), 15000);
     out.https = await within(egress.fetch('https://example.com/').then((response) => 'status ' + response.status, (error) => 'failed: ' + String(error)), 10000);
     return Response.json(out);
   },

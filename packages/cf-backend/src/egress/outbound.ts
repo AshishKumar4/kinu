@@ -20,6 +20,7 @@ import {
   type EgressRequestFacts,
   type ScrubReplacement,
 } from '@kinu.run/core';
+import { carryKeyed, keyedHost } from './keyed-socket';
 import type { OrchestratorAgent } from '../orchestrator';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { OwnerCapabilityUnavailableError, ownerCaller, type OwnerCapabilityEnv, type UserCaller } from '@kinu.run/core';
@@ -188,7 +189,9 @@ function socketDestination(address: string): { readonly hostname: string; readon
 
 /**
  * A workspace program's plain socket (its egress's `connect`): the destination judged as a request's host is, then the
- * bytes piped both ways. Kinu reads none of it; a secret cannot be put into a stream it does not parse. A refused or
+ * bytes piped both ways; a keyed one as they are until the program asks for TLS over it (`carryKeyed`, STARTTLS), whose
+ * session is made here on the same server connection. Kinu reads none of it; a secret cannot be put into a stream it
+ * does not parse. A refused or
  * unnamed destination closes the socket before anything is sent. Kinu judges the name or literal the program gave; a name
  * that resolves to a private address is refused by Cloudflare at connect (PLATFORM_CATALOG 'worker.connect.private_address',
  * as fetch is by 'worker.fetch.private_address'), so the egress resolves nothing itself.
@@ -197,7 +200,10 @@ export function handleEgressConnect(socket: Socket, params: KinuEgressParams | u
   return settle(Effect.gen(function* () {
     const opened = yield* attempt({ doing: 'reading where a workspace socket goes', otherwise: 'io' }, () => socket.opened);
     const address = opened.localAddress ?? '';
-    const destination = socketDestination(address);
+    const named = socketDestination(address);
+    // A keyed socket (`keyedHost`) goes where its name says, and may ask for TLS over it later (`carryKeyed`).
+    const keyed = named === null ? null : keyedHost(named.hostname);
+    const destination = keyed === null || named === null ? named : { hostname: keyed.hostname, port: named.port };
 
     const refusedHere = (host: string, reason: string) => {
       diagnostics.failure('egress.socket_refused', new KinuError('denied', reason), { host, seam: 'workspace-connect' });
@@ -218,6 +224,13 @@ export function handleEgressConnect(socket: Socket, params: KinuEgressParams | u
     }
 
     const { connect } = yield* Effect.promise(() => import('cloudflare:sockets'));
+
+    if (keyed !== null) {
+      const server = connect({ hostname: destination.hostname, port: destination.port }, { allowHalfOpen: true, secureTransport: 'starttls' });
+
+      return yield* attempt({ doing: `carrying a socket to ${destination.hostname}`, otherwise: 'io' }, () => carryKeyed(socket, server, keyed.hostname, keyed.key));
+    }
+
     const upstream = connect({ hostname: destination.hostname, port: destination.port }, { allowHalfOpen: true, secureTransport: 'off' });
 
     // The program's end of input is not passed on: closing a workerd socket's writable ended its readable too, so a

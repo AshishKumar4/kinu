@@ -1,3 +1,17 @@
+diff --git a/dist/hosted/commands.js b/dist/hosted/commands.js
+index fcd0460..376d8dd 100644
+--- a/dist/hosted/commands.js
++++ b/dist/hosted/commands.js
+@@ -818,7 +818,8 @@ export async function registerHostedCommands(self, workspace) {
+                         setUmask: identity.setUmask,
+                     },
+                     runAs: runAsProcess,
+-                    signal: stop.signal,
++                    // Kinu patch (NIMBUS-ASKS #42): the caller's signal (a Stop) as well as this child's own.
++                    signal: options?.signal ? AbortSignal.any([options.signal, stop.signal]) : stop.signal,
+                 });
+                 exitCode = result.exitCode;
+                 return result;
 diff --git a/dist/hosted/runtime.js b/dist/hosted/runtime.js
 index 6fdca7b..4d2c358 100644
 --- a/dist/hosted/runtime.js
@@ -29,7 +43,7 @@ index 6fdca7b..4d2c358 100644
              appendScrollback(options.ctx, data, Date.now());
              persistShellState(options.ctx, { cwd: this.shell.getCwd(), env: this.shell.getEnv() });
 diff --git a/dist/node-shims-artifact.generated.js b/dist/node-shims-artifact.generated.js
-index c7484dc..7c8bebb 100644
+index c7484dc..b356276 100644
 --- a/dist/node-shims-artifact.generated.js
 +++ b/dist/node-shims-artifact.generated.js
 @@ -10,8 +10,8 @@
@@ -38,8 +52,8 @@ index c7484dc..7c8bebb 100644
  export const NODE_SHIMS_ENTRY = "/_assets/runtime/node-shims-6e7186f468bae50a.js";
 -export const NODE_SHIMS_BUILD_ID = "6e7186f468bae50a";
 -export const NODE_SHIMS_SHA256 = "6e7186f468bae50a826c0f3cb45e002865b543cdc5f531dd34ae32ce565e5ab2";
-+export const NODE_SHIMS_BUILD_ID = "b2472c0887552324";
-+export const NODE_SHIMS_SHA256 = "b2472c088755232491d7ed06ea33d8edb0dd5ef8c690e6db9487d12b03cb0f55";
++export const NODE_SHIMS_BUILD_ID = "4d00397397c3694e";
++export const NODE_SHIMS_SHA256 = "4d00397397c3694eb23121c6d14d943262d9db65735eb01c5066cf257e63d8fd";
  /** @nimbus-sh/core dist/_shared/vfs-write-ledger.js VFS_WRITE_LEDGER_SOURCE */
  export const VFS_WRITE_LEDGER_ENTRY = "/_assets/runtime/vfs-write-ledger-676daf190edbf75d.js";
  export const VFS_WRITE_LEDGER_BUILD_ID = "676daf190edbf75d";
@@ -270,10 +284,50 @@ index 939dfa9..52928dc 100644
                  catch (error) {
                      if (error instanceof TypeError && error.message === 'The RPC receiver does not implement the method "connectTls".') {
 diff --git a/public/_assets/runtime/node-shims-6e7186f468bae50a.js b/public/_assets/runtime/node-shims-6e7186f468bae50a.js
-index c031ebc..6cb0946 100644
+index c031ebc..283eef4 100644
 --- a/public/_assets/runtime/node-shims-6e7186f468bae50a.js
 +++ b/public/_assets/runtime/node-shims-6e7186f468bae50a.js
-@@ -11231,7 +11231,7 @@ const __diagChannelMod = __nativeBuiltin("diagnostics_channel");
+@@ -351,6 +351,18 @@ function __nimbusNetworkGate() {
+ // or not the process wrote anything yet, and the socket opens once the session
+ // answered and what the process wrote before it is published
+ // (ProcessFsClient.rawSocket); refused when the session was not told.
++// Kinu patch (NIMBUS-ASKS #46): every plain socket a program opens under a
++// workspace egress is keyed, so a TLS session can later be asked for over it
++// (STARTTLS: pg, mysql2, nodemailer). It names
++// <hex(host)>.k.<hex(key)>.tcp.nimbus-egress.invalid:<port>, each name the hex
++// of its UTF-8 in labels of 62, <key> 16 random bytes; this holds each keyed
++// net.Socket's key and the host it named.
++const __nimbusEgressKeys = new WeakMap();
++const __nimbusEgressLabel = (name) => {
++  let hex = '';
++  for (const b of new TextEncoder().encode(name)) hex += (b < 16 ? '0' : '') + b.toString(16);
++  return hex.match(/.{1,62}/g).join('.');
++};
+ function __nimbusRawSocket() {
+   let bound = null;
+   try { bound = typeof __supervisor !== "undefined" ? __supervisor : null; } catch {}
+@@ -384,6 +396,20 @@ function __nimbusRawSocket() {
+       // Already connecting: the native connect refuses it, opening nothing.
+       if (this.connecting) return Reflect.apply(__nativeConnect, this, args);
+       __nativeConnectChecks((Array.isArray(args[0]) ? args[0] : __realNet._normalizeArgs(args))[0]);
++      // Kinu patch (#46): keyed under an egress, as above.
++      if (globalThis.__nimbusEgress === true) {
++        const normalized = Array.isArray(args[0]) ? args[0] : __realNet._normalizeArgs(args);
++        const options = normalized[0];
++        const host = options.host || 'localhost';
++        if (options.path === undefined && !/\.nimbus-(egress|net)\.invalid$/.test(host)) {
++          const key = crypto.getRandomValues(new Uint8Array(16));
++          let hex = '';
++          for (const b of key) hex += (b < 16 ? '0' : '') + b.toString(16);
++          normalized[0] = { ...options, host: __nimbusEgressLabel(host) + '.k.' + hex + '.tcp.nimbus-egress.invalid' };
++          args = [normalized];
++          __nimbusEgressKeys.set(this, { key, host });
++        }
++      }
+       if (globalThis.__nimbusEgress === true) {
+         const socket = this;
+         let state = __egressSocketHolds.get(socket);
+@@ -11231,7 +11257,7 @@ const __diagChannelMod = __nativeBuiltin("diagnostics_channel");
  // ──  tls module (W3: forward to workerd, override createServer) ─────
  // ═══════════════════════════════════════════════════════════════════════
  
@@ -282,7 +336,7 @@ index c031ebc..6cb0946 100644
    let options = {}, callback;
    if (args[0] !== null && typeof args[0] === 'object') { options = { ...args[0] }; callback = args[1]; }
    else {
-@@ -11249,9 +11249,10 @@ function __nimbusEgressTlsConnect(real, net, args, notImplemented) {
+@@ -11249,9 +11275,10 @@ function __nimbusEgressTlsConnect(real, net, args, notImplemented) {
      const bound = previous?._handle?.options;
      const host = options.host ?? bound?.host ?? previous?._host ?? 'localhost';
      const port = Number(options.port ?? bound?.port);
@@ -295,26 +349,128 @@ index c031ebc..6cb0946 100644
    };
    let reader, writer, resource;
    let endedRead = false, endedWrite = false, stopped = false;
-@@ -11473,7 +11474,7 @@ const __tlsMod = (() => {
+@@ -11356,6 +11383,88 @@ const __tlsMod = (() => {
+   const notImplemented = (option, why) => {
+     return nodeError(Error, 'ERR_OPTION_NOT_IMPLEMENTED', 'The ' + option + ' option is not implemented: ' + why);
+   };
++  // Kinu patch (#46): the native sockets of keyed sockets a program asked
++  // TLS over, by their key.
++  const keyedNatives = new WeakMap();
++  const egressKeyAt = (bytes, key) => {
++    for (let at = bytes.indexOf(key[0]); at >= 0 && at + key.length <= bytes.length; at = bytes.indexOf(key[0], at + 1)) {
++      let same = true;
++      for (let i = 1; i < key.length && same; i++) same = bytes[at + i] === key[i];
++      if (same) return at;
++    }
++    return -1;
++  };
++  const egressJoin = (first, second) => {
++    const joined = new Uint8Array(first.length + second.length);
++    joined.set(first);
++    joined.set(second, first.length);
++    return joined;
++  };
++  // The TLS session over a keyed socket, made by the egress: asked for once,
++  // and answered before anything the program writes over it is sent.
++  const egressStartTls = (native, options) => {
++    const key = keyedNatives.get(native);
++    const name = new TextEncoder().encode(options && typeof options.expectedServerHostname === 'string' ? options.expectedServerHostname : '');
++    if (name.length > 255) throw new TypeError('tls: a servername longer than 255 bytes is not carried by the egress');
++    const writer = native.writable.getWriter();
++    const reader = native.readable.getReader();
++    let held = new Uint8Array(0);
++    const answered = (async () => {
++      const ask = new Uint8Array(key.length + 2 + name.length);
++      ask.set(key);
++      ask[key.length] = 0x55;
++      ask[key.length + 1] = name.length;
++      ask.set(name, key.length + 2);
++      await writer.write(ask);
++      for (;;) {
++        const at = egressKeyAt(held, key);
++        if (at >= 0 && held.length > at + key.length) {
++          if (held[at + key.length] === 1) { held = held.subarray(at + key.length + 1); return; }
++          const length = held.length >= at + key.length + 3 ? (held[at + key.length + 1] << 8) | held[at + key.length + 2] : -1;
++          if (length >= 0 && held.length >= at + key.length + 3 + length) {
++            throw new Error(new TextDecoder().decode(held.subarray(at + key.length + 3, at + key.length + 3 + length)));
++          }
++        }
++        const { value, done } = await reader.read();
++        if (done) throw new Error('the egress closed the connection before the TLS session was made');
++        held = egressJoin(held, value);
++      }
++    })();
++    answered.catch(() => {});
++    const opened = Promise.all([native.opened, answered]).then(([info]) => info);
++    opened.catch(() => {});
++    const readable = new ReadableStream({
++      type: 'bytes',
++      async pull(controller) {
++        await answered;
++        if (held.length > 0) {
++          const chunk = held;
++          held = new Uint8Array(0);
++          controller.enqueue(chunk);
++          return;
++        }
++        const { value, done } = await reader.read();
++        if (done) {
++          controller.close();
++          controller.byobRequest?.respond(0);
++          return;
++        }
++        controller.enqueue(value);
++      },
++      cancel(reason) { return reader.cancel(reason); },
++    });
++    const writable = new WritableStream({
++      async write(chunk) { await answered; await writer.write(chunk); },
++      close() { return writer.close(); },
++      abort(reason) { return writer.abort(reason); },
++    });
++    return {
++      opened, closed: native.closed, readable, writable,
++      secureTransport: 'on', upgraded: false,
++      close: (...a) => native.close(...a),
++      startTls() { throw new TypeError('Cannot startTls on a TLS socket.'); },
++    };
++  };
+   const patchStartTls = (native) => {
+     if (startTlsPatched || !native) return;
+     startTlsPatched = true;
+@@ -11363,6 +11472,7 @@ const __tlsMod = (() => {
+     const original = proto.startTls;
+     Object.defineProperty(proto, 'startTls', { configurable: true, writable: true, value: function startTls(options) {
+       const token = tokens.get(this);
++      if (token === undefined && keyedNatives.has(this)) return egressStartTls(this, options);
+       if (token === undefined) return Reflect.apply(original, this, arguments);
+       const self = this;
+       // workerd's TLSSocket has released the carrier's writer and reader and
+@@ -11469,11 +11579,26 @@ const __tlsMod = (() => {
+     };
+     return socket;
+   };
++  // Kinu patch (#46): TLS over a keyed socket. workerd's node:tls takes the
++  // socket over and asks its native socket's startTls, answered by the egress
++  // (egressStartTls); the server is the host the socket named.
++  const keyedConnect = (previous, keyed, options, cb) => {
++    const name = () => {
++      const native = previous._handle && previous._handle.socket;
++      if (native) { keyedNatives.set(native, keyed.key); patchStartTls(native); }
++    };
++    name();
++    if (previous.connecting) previous.once('connect', name);
++    return real.connect({ ...options, host: options.host ?? keyed.host, servername: options.servername ?? keyed.host }, cb);
++  };
+   const connect = (...args) => {
      const proxied = !!(__nimbusReplay && __nimbusReplay.outbound);
      const egressed = globalThis.__nimbusEgress === true;
      if (egressed || !proxied) __nimbusReplay?.effect("tls.connect " + describe(args));
 -    const socket = egressed ? __nimbusEgressTlsConnect(real, realNet, args, notImplemented)
-+    const socket = egressed ? __nimbusEgressTlsConnect(real, realNet, args)
++    const over = egressed && args[0] !== null && typeof args[0] === 'object' ? args[0].socket : undefined;
++    const keyed = over === undefined ? undefined : __nimbusEgressKeys.get(over);
++    const socket = keyed !== undefined ? keyedConnect(over, keyed, args[0], args[1])
++      : egressed ? __nimbusEgressTlsConnect(real, realNet, args)
        : proxied ? proxiedConnect(...args) : real.connect(...args);
      let closed = false;
      let hold = null;
-diff --git a/dist/hosted/commands.js b/dist/hosted/commands.js
-index fcd0460..376d8dd 100644
---- a/dist/hosted/commands.js
-+++ b/dist/hosted/commands.js
-@@ -818,7 +818,8 @@ export async function registerHostedCommands(self, workspace) {
-                         setUmask: identity.setUmask,
-                     },
-                     runAs: runAsProcess,
--                    signal: stop.signal,
-+                    // Kinu patch (NIMBUS-ASKS #42): the caller's signal (a Stop) as well as this child's own.
-+                    signal: options?.signal ? AbortSignal.any([options.signal, stop.signal]) : stop.signal,
-                 });
-                 exitCode = result.exitCode;
-                 return result;
