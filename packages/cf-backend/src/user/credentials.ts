@@ -285,7 +285,6 @@ export class UserCredentials {
 
   /** Writes nothing, so {@link commitCredential} can be paired with a fence read in one turn. */
   async sealCredential(key: string, cred: Credential): Promise<string> {
-
     return (await this.cipher()).seal(this.credentialAad(key), JSON.stringify(cred));
   }
 
