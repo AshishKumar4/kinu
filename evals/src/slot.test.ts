@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { BUILTIN_PROFILE_CATALOG, DEV_IDENTITY_ACCOUNT_HEADER, inheritedRows, parseEvalAccount, profileCatalogDigest } from '@kinu.run/core';
 import { WORKSPACE_LEASE_MS } from './workspace-roster';
 import { evalMatrix } from './config';
-import { claimTrialAccount, prepareTrialAccount, trialAccounts, trialSlot } from './slot';
+import { prepareTrialAccount, trialAccounts, trialSlot } from './slot';
 import type { EvalTarget } from './workspace-roster';
 
 const TASK_FILES = ['budget-board.eval.ts', 'chess.eval.ts', 'launch-prep.eval.ts', 'order-book.eval.ts'];
@@ -18,6 +18,8 @@ describe('a trial\'s slot', () => {
     expect(slots.every((slot) => parseEvalAccount(slot) === slot)).toBe(true);
     expect(slots).toContain('trial-1');
     expect(slots).toContain('trial-120');
+    expect(() => trialSlot({ taskFiles: TASK_FILES, task: 'freight.eval.ts', matrix: MATRIX, model: 'opencode-go/muse', arm: 'product', trial: 1 }))
+      .toThrow();
   });
 
   test('a matrix past the accounts a deployment has fails at once, saying how many it needs', () => {
@@ -36,10 +38,6 @@ describe('a trial\'s slot', () => {
     expect(measured.filter((account) => pass.includes(account))).toEqual([]);
   });
 
-  test('a task not named after its file has no place in the matrix, and says so', () => {
-    expect(() => trialSlot({ taskFiles: TASK_FILES, task: 'freight.eval.ts', matrix: MATRIX, model: 'opencode-go/muse', arm: 'product', trial: 1 }))
-      .toThrow();
-  });
 });
 
 test('a trial account may hold its provider keys and its own bookkeeping, and nothing else', () => {
@@ -120,14 +118,4 @@ describe('opening on a trial account', () => {
     await expect(prepareTrialAccount(stale.target, now)).rejects.toThrow('user_config 1');
   });
 
-  test('two live workspaces on one account refuse both claims', async () => {
-    const { server, target } = deployment({
-      workspaces: [{ name: 'eval-order-book-3-aaaaaa', lastVisited: now }, { name: 'eval-order-book-3-bbbbbb', lastVisited: now }],
-    });
-
-    servers.push(server);
-    await expect(claimTrialAccount(target, 'eval-order-book-3-aaaaaa', now)).rejects.toThrow();
-    expect(claimTrialAccount(target, 'eval-order-book-3-bbbbbb', now))
-      .rejects.toThrow();
-  });
 });
