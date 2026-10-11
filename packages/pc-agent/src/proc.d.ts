@@ -1,5 +1,11 @@
 import type * as fs from 'node:fs';
 
+// The CLI imports this module twice: its BYTES, to install beside the daemon (the default export, a
+// text import), and its API, which the repository runners share (the named exports).
+declare const source: string;
+
+export default source;
+
 export interface ProcStat {
   readonly comm: string;
   readonly state: string;

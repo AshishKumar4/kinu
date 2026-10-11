@@ -13,6 +13,7 @@ import { DEVICE_TOKEN_ROTATION, generateReleaseSigningKey, signRelease, type Sig
 import DAEMON_SOURCE from '../../../pc-agent/src/index.js' with { type: 'text' };
 import SANDBOX_SOURCE from '../../../pc-agent/src/sandbox.js' with { type: 'text' };
 import PTY_SOURCE from '../../../pc-agent/src/pty.js' with { type: 'text' };
+import PROC_SOURCE from '../../../pc-agent/src/proc.js' with { type: 'text' };
 import UPDATE_SOURCE from '../../../pc-agent/src/update.js' with { type: 'text' };
 import CHATGPT_SOURCE from '../../../pc-agent/src/chatgpt.js' with { type: 'text' };
 import DEVICE_PROTOCOL from '../../../core/src/execution/device-protocol.json';
@@ -21,7 +22,7 @@ export const DAEMON_FILES = {
   'pc-agent.js': DAEMON_SOURCE,
   'sandbox.js': SANDBOX_SOURCE,
   'pty.js': PTY_SOURCE,
-  'proc.js': readFileSync(new URL('../../../pc-agent/src/proc.js', import.meta.url), 'utf8'),
+  'proc.js': PROC_SOURCE,
   'update.js': UPDATE_SOURCE,
   'chatgpt.js': CHATGPT_SOURCE,
   'device-protocol.json': JSON.stringify(DEVICE_PROTOCOL),
