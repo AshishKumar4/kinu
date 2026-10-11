@@ -5971,7 +5971,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return buildWorkspaceOverview({
       ...inputs,
       working,
-      ...(!working && { awaitsSettings: this.awaitsSettings() }),
+      awaitsSettings: working || this.awaitsSettings(),
       // Read only when idle: a working tile shows Working whatever is owed.
       unfinished: !working && (this.owedUntimedWork() || this.workOwedAt() !== null),
       latestRun: header === null ? null : { status: header.status, task: header.userMessage },

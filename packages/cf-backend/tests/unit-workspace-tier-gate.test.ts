@@ -138,7 +138,7 @@ const GATED_CALLS: GatedCall[] = [
   {
     capability: 'workspaces.overview_self',
     name: 'putWorkspaceOverview',
-    run: (u, c) => u.putWorkspaceOverview(c, WORKSPACE, { activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [], shares: [] }),
+    run: (u, c) => u.putWorkspaceOverview(c, WORKSPACE, { activity: 'idle', awaitsSettings: false, decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [], shares: [] }),
   },
 
   { capability: 'peers.grants', name: 'hasPeerGrant', run: (u, c) => u.hasPeerGrant(c, 'scout', 'b'.repeat(32)) },
@@ -472,9 +472,7 @@ describe('a registered workspace reaches the whole surface', () => {
       users: ['pat@example.test'], visibility: 'users' as const, fork: true,
     };
 
-    await harness.userDO.putWorkspaceOverview({ workspaceToken: harness.otherToken }, OTHER_WORKSPACE, {
-      activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [], shares: [shared],
-    });
+    await harness.userDO.putWorkspaceOverview({ workspaceToken: harness.otherToken }, OTHER_WORKSPACE, { activity: 'idle', awaitsSettings: false, decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [], shares: [shared] });
 
     const sharesOf = (page: RosterPage) => page.entries.find((entry) => entry.name === OTHER_WORKSPACE)?.overview?.shares;
 

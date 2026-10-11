@@ -18,7 +18,7 @@ import { createTestUserDO, provisionTestWorkspace, TEST_CREDENTIAL_ENCRYPTION_KE
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
-const QUIET: WorkspaceOverview = { activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [], shares: [] };
+const QUIET: WorkspaceOverview = { activity: 'idle', awaitsSettings: false, decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [], shares: [] };
 
 const FrameSchema = v.object({
   type: v.literal('workspace'),
@@ -115,7 +115,7 @@ describe('the pushed tile', () => {
   });
 });
 
-describe('workspaces from before tiles existed', () => {
+describe('workspaces whose first tile has not landed', () => {
   test('one roster read asks each for its tile, four at a time, so Needs you is right; the next read asks none', async () => {
     const names = ['ledger', 'notes', 'budget', 'garden', 'plans', 'music'];
     const callers = new Map<string, UserCaller>();

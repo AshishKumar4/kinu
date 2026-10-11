@@ -196,7 +196,7 @@ export class UserWorkspaces {
       `SELECT w.name, w.display_name, w.created_at FROM user_workspaces w
        LEFT JOIN workspace_overviews o ON o.name = w.name
        WHERE w.delete_pending = 0 AND w.create_pending = 0
-         ${filter?.awaitsSettings ? "AND (o.activity = 'working' OR json_extract(o.overview, '$.awaitsSettings') IS NOT 0)" : ''}
+         ${filter?.awaitsSettings ? "AND (o.name IS NULL OR o.activity = 'working' OR json_extract(o.overview, '$.awaitsSettings') = 1)" : ''}
        ORDER BY w.last_visited DESC`,
     ).map((r) => ({ name: r.name, displayName: r.display_name, createdAt: r.created_at }));
   }

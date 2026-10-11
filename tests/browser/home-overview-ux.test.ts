@@ -148,10 +148,7 @@ describe('the home workspace cards', () => {
       try {
         const readsBefore = (await asked(page)).length;
 
-        await setOverview(page, 'email-triage', {
-          activity: 'working', decisionsWaiting: 0, hasUpdates: false,
-          latestRun: { status: null, task: "Answer this week's refund requests" }, slates: [],
-        });
+        await setOverview(page, 'email-triage', { activity: 'working', awaitsSettings: false, decisionsWaiting: 0, hasUpdates: false, latestRun: { status: null, task: "Answer this week's refund requests" }, slates: [], shares: [] });
         await page.waitForFunction(
           () => [...document.querySelectorAll('section[aria-label="Recent workspaces"] a')]
             .some((row) => (row.textContent ?? '').includes('Support inbox') && (row.textContent ?? '').includes('Working')),

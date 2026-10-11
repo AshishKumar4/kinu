@@ -18,12 +18,12 @@ const WorkspaceOverviewRunSchema = v.object({
   task: v.nullable(v.string()),
 });
 
-/** `picture`: the latest capture's digest. Defaults read older tiles. */
+/** `picture`: the latest capture's digest; visibility is the current shared reach or null. */
 const WorkspaceOverviewSlateSchema = v.object({
   id: v.string(),
   title: v.string(),
   picture: v.nullable(v.string()),
-  visibility: v.optional(v.nullable(LiveShareVisibilitySchema), null),
+  visibility: v.nullable(LiveShareVisibilitySchema),
 });
 
 const WorkspaceOverviewShareSchema = v.object({
@@ -44,9 +44,9 @@ export const WorkspaceOverviewSchema = v.object({
   hasUpdates: v.boolean(),
   latestRun: v.nullable(WorkspaceOverviewRunSchema),
   slates: v.array(WorkspaceOverviewSlateSchema),
-  shares: v.optional(v.array(WorkspaceOverviewShareSchema), []),
-  /** A known settings-wait obligation; absent on an old or working tile, so account fanout stays conservative. */
-  awaitsSettings: v.optional(v.boolean()),
+  shares: v.array(WorkspaceOverviewShareSchema),
+  /** The current settings notification obligation; working workspaces remain conservative. */
+  awaitsSettings: v.boolean(),
 });
 
 export type WorkspaceOverview = v.InferOutput<typeof WorkspaceOverviewSchema>;
@@ -58,8 +58,8 @@ export type WorkspaceOverviewShare = v.InferOutput<typeof WorkspaceOverviewShare
 export interface WorkspaceOverviewInputs {
   readonly working: boolean;
   readonly unfinished: boolean;
-  /** Folded live only when idle: working workspaces always receive a settings notification. */
-  readonly awaitsSettings?: boolean;
+  /** Read live when idle; a working workspace conservatively retains its settings notification obligation. */
+  readonly awaitsSettings: boolean;
   readonly pendingActions: readonly PendingAction[];
   readonly pendingConsents: readonly PendingDeviceConsent[];
   readonly activePlan: { readonly status: PlanReviewStatus } | null;
@@ -115,7 +115,7 @@ export function buildWorkspaceOverview(inputs: WorkspaceOverviewInputs): Workspa
     activity: activityOf(inputs.working, inputs.unfinished),
     decisionsWaiting,
     hasUpdates,
-    ...(inputs.awaitsSettings !== undefined && { awaitsSettings: inputs.awaitsSettings }),
+    awaitsSettings: inputs.awaitsSettings,
 
     latestRun: inputs.latestRun === null
       ? null

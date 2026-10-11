@@ -49,7 +49,7 @@ export const LANDING_CHATS: readonly PanelAgent[] = [
 ];
 
 /** Served by the `landing.tsx` fetch shim; the frame's workspace is first so the rail marks it open. */
-const QUIET = { activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latestRun: null } as const;
+const QUIET = { activity: 'idle', awaitsSettings: false, decisionsWaiting: 0, hasUpdates: false, latestRun: null } as const;
 
 export const LANDING_ROSTER = {
   entries: [

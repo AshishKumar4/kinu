@@ -116,7 +116,7 @@ function cliRequest(token: string, method = 'GET', body?: ProfileCatalogWriteReq
 describe('browser profile catalog route', () => {
   test('a model settings edit leaves an idle workspace asleep unless its persisted overview waits on settings', async () => {
     const { harness, env } = await setup();
-    const quiet: WorkspaceOverview = { activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [], shares: [] };
+    const quiet: WorkspaceOverview = { activity: 'idle', awaitsSettings: false, decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [], shares: [] };
     const awakened: string[] = [];
     const ctx = workerContext();
 
@@ -135,16 +135,13 @@ describe('browser profile catalog route', () => {
     };
 
     try {
-      for (const name of ['idle', 'awaiting', 'working', 'unknown', 'unpushed']) {
+      for (const name of ['idle', 'awaiting', 'working', 'unpushed']) {
         const token = await provisionTestWorkspace(harness, name);
 
         if (name === 'unpushed') continue;
-        await harness.userDO.putWorkspaceOverview({ workspaceToken: token }, name, { ...quiet, activity: name === 'working' ? 'working' : 'idle' });
-
-        if (name === 'unknown') continue;
-        // The authoritative persisted tile is the fanout input, independent of the producer's current schema.
-        harness.db.prepare('UPDATE workspace_overviews SET overview = ? WHERE name = ?')
-          .run(JSON.stringify({ ...quiet, activity: name === 'working' ? 'working' : 'idle', awaitsSettings: name === 'awaiting' }), name);
+        await harness.userDO.putWorkspaceOverview({ workspaceToken: token }, name, {
+          ...quiet, activity: name === 'working' ? 'working' : 'idle', awaitsSettings: name === 'awaiting',
+        });
       }
 
       const response = handled(await serveFamily(userRoutes, { identity: IDENTITY, ctx })(userRequest('PUT', {
@@ -154,7 +151,7 @@ describe('browser profile catalog route', () => {
       await Promise.all(ctx.retained);
       expect(response.status).toBe(200);
       expect(validateProfileCatalogEnvelope({ value: await response.json() }).version).toBe(1);
-      expect(awakened.sort()).toEqual(['awaiting', 'unknown', 'unpushed', 'working']);
+      expect(awakened.sort()).toEqual(['awaiting', 'unpushed', 'working']);
     } finally { harness.close(); }
   });
 
