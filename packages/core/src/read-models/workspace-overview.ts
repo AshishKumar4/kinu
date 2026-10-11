@@ -9,7 +9,7 @@ import type { PendingDeviceConsent } from '../safety/device-consent';
 import type { PlanReviewStatus } from '../types/plans';
 import { workspaceDisplayTitle } from './workspace-title';
 import { LiveShareVisibilitySchema, type LiveShareVisibility } from '../slates/live-share-visibility';
-import { SHARE_KINDS } from '../slates/sharing';
+import { SlateShareCardSchema, type SlateShareCard } from '../slates/sharing';
 
 const TASK_PREVIEW_MAX = 240;
 
@@ -26,17 +26,6 @@ const WorkspaceOverviewSlateSchema = v.object({
   visibility: v.optional(v.nullable(LiveShareVisibilitySchema), null),
 });
 
-const WorkspaceOverviewShareSchema = v.object({
-  kind: v.picklist(SHARE_KINDS),
-  share: v.string(),
-  slate: v.string(),
-  title: v.string(),
-  description: v.string(),
-  createdAt: v.number(),
-  users: v.array(v.string()),
-  visibility: v.optional(LiveShareVisibilitySchema),
-  fork: v.optional(v.boolean()),
-});
 
 export const WorkspaceOverviewSchema = v.object({
   activity: v.picklist(['working', 'unfinished', 'idle']),
@@ -44,14 +33,14 @@ export const WorkspaceOverviewSchema = v.object({
   hasUpdates: v.boolean(),
   latestRun: v.nullable(WorkspaceOverviewRunSchema),
   slates: v.array(WorkspaceOverviewSlateSchema),
-  shares: v.optional(v.array(WorkspaceOverviewShareSchema), []),
+  shares: v.optional(v.array(SlateShareCardSchema), []),
 });
 
 export type WorkspaceOverview = v.InferOutput<typeof WorkspaceOverviewSchema>;
 
 export type WorkspaceOverviewSlate = v.InferOutput<typeof WorkspaceOverviewSlateSchema>;
 
-export type WorkspaceOverviewShare = v.InferOutput<typeof WorkspaceOverviewShareSchema>;
+export type WorkspaceOverviewShare = SlateShareCard;
 
 export interface WorkspaceOverviewInputs {
   readonly working: boolean;

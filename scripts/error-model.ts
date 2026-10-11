@@ -272,6 +272,8 @@ export const DECLARED = byFile([
       'workspace DO RPC answers (callable methods and DO-to-DO calls) read by the UI, the CLI and other objects'],
     ['packages/cf-backend/src/slates/host.ts', ['blueprintAnswer', 'readLiveShareRecord', 'unshare', 'operation', 'sharing', 'savePage', 'answerServed', 'releaseInvocation', 'surfaceCall', 'run', 'call', 'remove'],
       '`SlateAnswer`, the slate host\'s refusal-as-value over DO RPC'],
+    ['packages/core/src/slates/controller.ts', ['answer', 'answered', 'operation'],
+      '`SlateAnswer`, the slate controller\'s refusal-as-value over DO RPC'],
     ['packages/core/src/slates/share-viewers.ts', ['viewerAnswer', 'call'],
       '`SlateCallResult`, a viewer call\'s refusal-as-value over DO RPC, and the share ledger\'s recorded `ok`'],
     ['packages/core/src/slates/state.ts', ['slateStorageCall'],

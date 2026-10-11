@@ -233,7 +233,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
         url: async (port) => ({ url: `https://${String(port)}.preview.test/` }),
       },
       browserActor: async (caller) => (caller.share === undefined ? PROBE_ACTOR : null),
-      catalog: async () => ({ mcp: MCP, slates: Object.keys(await this.host.projects(ROOT_SLATE_CALLER)) }),
+      catalog: async () => ({ mcp: MCP, slates: Object.keys(await this.host.controller.projects(ROOT_SLATE_CALLER)) }),
       shareUrl: async (handle) => `https://${handle}.share.test/`,
       shareEntry: () => null,
       // No AUTH_KV binding, as on a deployment without it; the spend bound is real.
@@ -312,8 +312,8 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     files.rename(`${home}/server.ts`, `${dir}/server.ts`);
     main.writeFile(`${dir}/package.json`, manifest('Widgets, reviewed'));
     main.writeFile(`${dir}/server.ts`, server(4));
-    const preview = await this.host.operation(hire, { op: 'preview', id: 'widgets' });
-    const removed = await this.host.operation(hire, { op: 'remove', id: 'widgets' });
+    const preview = await this.host.controller.operation(hire, { op: 'preview', id: 'widgets' });
+    const removed = await this.host.controller.operation(hire, { op: 'remove', id: 'widgets' });
 
     return { preview, removed, left: this.vfs.as(CRED_KERNEL).exists(dir) };
   }
@@ -357,7 +357,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     await this.drive('kitesurf');
     const before = browserRunDials;
 
-    const created = v.parse(v.object({ ok: v.literal(true), value: v.object({ share: v.object({ handle: v.string() }) }) }), await this.host.operation(ROOT_SLATE_CALLER, {
+    const created = v.parse(v.object({ ok: v.literal(true), value: v.object({ share: v.object({ handle: v.string() }) }) }), await this.host.controller.operation(ROOT_SLATE_CALLER, {
       op: 'share', id: 'driver', visibility: 'public', approved: approved.map((member) => ({ slate: 'driver', namespace: 'web', member })),
     }));
 
@@ -389,7 +389,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       root: ROOT_SLATE_CALLER, plan: { ...ROOT_SLATE_CALLER, workMode: 'plan' }, hire: { ...ROOT_SLATE_CALLER, path: [{ name: 'helper' }] },
     };
 
-    return this.host.operation(callers[as], v.parse(SlateOperationSchema, input));
+    return this.host.controller.operation(callers[as], v.parse(SlateOperationSchema, input));
   }
 
   /** A call a share's viewer makes with no invocation: the share must name the running call it rides. */
@@ -409,25 +409,25 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     await this.exerciseBoard();
     this.ownersOwn = this.processes.getRunning().length;
 
-    return this.host.operation(ROOT_SLATE_CALLER, {
+    return this.host.controller.operation(ROOT_SLATE_CALLER, {
       op: 'share', id: SLATE_ID, visibility: 'public', approved: approved.map((granted) => ({ slate: SLATE_ID, ...granted })),
     });
   }
 
   /** Publishes the board as a blueprint and imports it back as a fork, as a forker's workspace admits one. */
   async importBlueprint(): Promise<{ fork: string; running: number }> {
-    const committed = await this.host.operation(ROOT_SLATE_CALLER, { op: 'commit', id: SLATE_ID });
+    const committed = await this.host.controller.operation(ROOT_SLATE_CALLER, { op: 'commit', id: SLATE_ID });
 
     if (!committed.ok) throw new Error(`${committed.reason}: ${committed.error}`);
     const version = v.parse(v.object({ id: v.string() }), committed.value).id;
-    const published = await this.host.operation(ROOT_SLATE_CALLER, { op: 'publish', id: SLATE_ID, version, include: [] });
+    const published = await this.host.controller.operation(ROOT_SLATE_CALLER, { op: 'publish', id: SLATE_ID, version, include: [] });
 
     if (!published.ok) throw new Error(`${published.reason}: ${published.error}`);
     const share = v.parse(v.object({ share: v.object({ id: v.string() }) }), published.value).share.id;
-    const bundle = await this.host.blueprintBundle(share);
+    const bundle = await this.host.controller.blueprintBundle(share);
 
     if (!bundle.ok) throw new Error(`${bundle.reason}: ${bundle.error}`);
-    const fork = await this.host.admitBlueprint(bundle.value);
+    const fork = await this.host.controller.admitBlueprint(bundle.value);
 
     if (!fork.ok) throw new Error(`${fork.reason}: ${fork.error}`);
 
@@ -435,7 +435,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   }
 
   async liveShares(): Promise<SlateCallResult> {
-    return this.host.operation(ROOT_SLATE_CALLER, { op: 'liveShares' });
+    return this.host.controller.operation(ROOT_SLATE_CALLER, { op: 'liveShares' });
   }
 
   /** The app hop, over one batch. */
@@ -476,7 +476,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       const before = v.is(v.string(), raw) ? raw : JSON.stringify(raw ?? null);
 
       if (change === 'revoke') {
-        await this.host.operation(ROOT_SLATE_CALLER, { op: 'unshare', share });
+        await this.host.controller.operation(ROOT_SLATE_CALLER, { op: 'unshare', share });
       } else {
         const governor = this.governor();
         governor.declare(shareSpendLabel(share), { usd: SHARE_SPEND_CAP_USD_PER_DAY });
@@ -552,11 +552,11 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   }
 
   async requests(share: string): Promise<SlateCallResult> {
-    return this.host.operation(ROOT_SLATE_CALLER, { op: 'viewerRequests', share });
+    return this.host.controller.operation(ROOT_SLATE_CALLER, { op: 'viewerRequests', share });
   }
 
   async revoke(share: string): Promise<SlateCallResult> {
-    return this.host.operation(ROOT_SLATE_CALLER, { op: 'unshare', share });
+    return this.host.controller.operation(ROOT_SLATE_CALLER, { op: 'unshare', share });
   }
 
   /** Whether every process a share started has stopped; the owner's own, from exercising the board, keep running. */

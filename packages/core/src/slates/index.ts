@@ -38,3 +38,5 @@ export { ROOT_SLATE_CALLER, shareCaller, slateCallerKey, type SlateCaller, type 
 export { SlateProcesses, heldSlateKey, type RunningSlate, type SlateLaunch, type SlateProcessPorts, type RunnableSlateSource } from './processes';
 
 export { SlateShareViewers, type SlateShareViewersDeps, type ViewerAdmission, type ViewerRun } from './share-viewers';
+
+export { SlateController, type SlateAppCall, type SlateApps, type SlateClassProcess, type SlateControllerPorts } from './controller';

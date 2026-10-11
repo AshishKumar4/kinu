@@ -21,7 +21,7 @@ import type { SlateProject } from './project';
 /** Where a slate comes from, as far as running it goes: its directory, or a stored answer's page run as its author. */
 export type RunnableSlateSource =
   | { readonly kind: 'files'; readonly project: SlateProject; readonly root: string }
-  | { readonly kind: 'message'; readonly project: SlateProject; readonly root: string; readonly author: SlateCaller };
+  | { readonly kind: 'message'; readonly project: SlateProject; readonly root: string; readonly author: SlateCaller; readonly html: string };
 
 /** What a process is started from: the slate, the caller it runs for, its image, and the application it serves. */
 export interface SlateLaunch<Source> {

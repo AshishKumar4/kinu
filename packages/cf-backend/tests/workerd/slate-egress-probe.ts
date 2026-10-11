@@ -88,7 +88,7 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
   }
 
   async publicPlanCall() {
-    const result = await this.host.operation({ ...ROOT_SLATE_CALLER, workMode: 'plan' }, { op: 'call', id: 'network', method: 'example' });
+    const result = await this.host.controller.operation({ ...ROOT_SLATE_CALLER, workMode: 'plan' }, { op: 'call', id: 'network', method: 'example' });
 
     return result.ok ? { ok: true } : { ok: false, reason: result.reason };
   }
@@ -97,7 +97,7 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
     this.prepare();
 
     const committed = v.parse(v.object({ ok: v.literal(true), value: v.object({ source: v.string() }) }),
-      await this.host.operation(ROOT_SLATE_CALLER, { op: 'commit', id: 'network' }));
+      await this.host.controller.operation(ROOT_SLATE_CALLER, { op: 'commit', id: 'network' }));
 
     const digest = new ContentRef(committed.value.source).digest.value;
     // Models a cached image whose key omits the egress policy; a mediated start must not reuse it.

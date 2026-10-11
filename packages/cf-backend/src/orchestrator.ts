@@ -551,7 +551,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         this.liveReadsMoved(['getExposedPorts', 'listSlates']);
         this.detachOwned(Effect.promise(() => this.servingMoved()));
       },
-      ensureSlate: (owner) => this.slates.ensureDurable(owner),
+      ensureSlate: (owner) => this.slates.controller.ensureDurable(owner),
       slateInvocation: (port, socket) => this.slates.slateInvocation(port, socket),
       ...(this.pictureCapture() !== null && {
         pictures: {
@@ -584,7 +584,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       workspace: this.name, bucket,
       url: async (port, token) => (await nimbusPreviewUrl(this.env, this.name, port, token)).url ?? null,
       slates: async () => {
-        const listing = await this.slates.list(ROOT_SLATE_CALLER);
+        const listing = await this.slates.controller.list(ROOT_SLATE_CALLER);
 
         return new Set([...listing.slates, ...listing.problems].map((slate) => slate.id));
       },
@@ -1977,7 +1977,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         return deafInbox ? [deafInbox] : [];
       },
-      failingSlates: () => this.slates.failingBuilds().map(({ slate, failure }) => `${slate}: ${failure}`),
+      failingSlates: () => this.slates.controller.failingBuilds().map(({ slate, failure }) => `${slate}: ${failure}`),
     };
   }
 
@@ -4998,21 +4998,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** The owner's browser acting on its own workspace, as the root caller. */
   @callable() async slate(operation: SlateOperation): Promise<SlateCallResult> {
-    return this.slates.operation(this.slateCaller(), operation);
+    return this.slates.controller.operation(this.slateCaller(), operation);
   }
 
   /** An actor of this workspace acting as itself; DO-only, like `workspaceBoxOp`. */
   async slateAs(caller: SlateCaller, operation: SlateOperation): Promise<SlateCallResult> {
-    return this.slates.operation(caller, operation);
+    return this.slates.controller.operation(caller, operation);
   }
 
   override async slateBuild(slate: string): Promise<SlateCallResult> {
-    return this.slates.build(this.slateCaller(), slate);
+    return this.slates.controller.build(this.slateCaller(), slate);
   }
 
   /** Whether a slate still builds, for an actor of this workspace acting as itself; DO-only, like `slateAs`. */
   async slateBuildAs(caller: SlateCaller, slate: string): Promise<SlateCallResult> {
-    return this.slates.build(caller, slate);
+    return this.slates.controller.build(caller, slate);
   }
 
   /** Names only, never surfaces: the graph shows what a slate has reached; each call is still decided as it comes. */
@@ -5029,7 +5029,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     return {
       mcp: [...mcpServers.entries()].map(([server, group]) => ({ server, title: group.title, tools: group.tools })),
-      slates: Object.keys(await this.slates.projects(ROOT_SLATE_CALLER)),
+      slates: Object.keys(await this.slates.controller.projects(ROOT_SLATE_CALLER)),
     };
   }
 
@@ -5152,7 +5152,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** The share row re-read through the S6 gate, plus title and description from the slate's package.json. */
   async readLiveShare(share: string): Promise<SlateAnswer<{ record: LiveShareRecord; title: string; description: string }>> {
-    return this.slates.readLiveShareRecord(share);
+    return this.slates.controller.readLiveShareRecord(share);
   }
 
   /**
@@ -5160,12 +5160,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * `public` for anyone signed in. Skeleton is the running slate's tree.
    */
   async liveShareBundle(share: string, userId: string): Promise<SlateAnswer<BlueprintBundle>> {
-    const record = await this.slates.readLiveShareRecord(share);
+    const record = await this.slates.controller.readLiveShareRecord(share);
 
     if (!record.ok) return { ok: false, reason: record.reason, error: record.error };
     const { record: row } = record.value;
 
-    if (row.visibility === 'users' && !this.slates.liveShareAdmitsUser(row.id, userId)) {
+    if (row.visibility === 'users' && !this.slates.controller.liveShareAdmitsUser(row.id, userId)) {
       return { ok: false, reason: 'missing', error: 'No such share' };
     }
 
@@ -5173,40 +5173,40 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       return { ok: false, reason: 'denied', error: 'This share does not allow forking' };
     }
 
-    return this.slates.liveShareBundle(row);
+    return this.slates.controller.liveShareBundle(row);
   }
 
   /** DO-only, like the blueprint twin, for the same reason. */
   async shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<LiveShareRecord>> {
-    return this.slates.shareLiveWith(share, users);
+    return this.slates.controller.shareLiveWith(share, users);
   }
 
   @callable() async listSlates() {
-    return this.slates.list(ROOT_SLATE_CALLER);
+    return this.slates.controller.list(ROOT_SLATE_CALLER);
   }
 
   // Blueprints cross workspaces, so these four are DO-only: the app host verifies viewer, address and
   // forker ownership before calling, and no browser stub reaches them.
 
   async readBlueprint(share: string): Promise<SlateAnswer<BlueprintReading>> {
-    return this.slates.readBlueprint(share);
+    return this.slates.controller.readBlueprint(share);
   }
 
   async blueprintBundle(share: string): Promise<SlateAnswer<BlueprintBundle>> {
-    return this.slates.blueprintBundle(share);
+    return this.slates.controller.blueprintBundle(share);
   }
 
   async shareBlueprintWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<SlateShareRecord>> {
-    return this.slates.shareBlueprintWith(share, users);
+    return this.slates.controller.shareBlueprintWith(share, users);
   }
 
   /** Admits into this workspace as a new slate that calls this workspace's own surface; nothing runs. */
   async admitBlueprint(bundle: BlueprintBundle): Promise<SlateAnswer<BlueprintFork>> {
-    return this.slates.admitBlueprint(bundle);
+    return this.slates.controller.admitBlueprint(bundle);
   }
 
   @callable() async previewSlate(id: string): Promise<SlateCallResult> {
-    return this.slates.preview(ROOT_SLATE_CALLER, id);
+    return this.slates.controller.preview(ROOT_SLATE_CALLER, id);
   }
 
   @callable() async getToolDescriptions() {
@@ -5630,13 +5630,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const [activePlan, listing, hostedPlans, questions] = await Promise.all([
       this.getActivePlanReview(),
-      this.slates.list(ROOT_SLATE_CALLER),
+      this.slates.controller.list(ROOT_SLATE_CALLER),
       this.hostedPlans(),
       this.questionsAsked(),
     ]);
 
     const pictures = this.pictures.digests();
-    const shares = await this.slates.shareCards(new Map(listing.slates.map((slate) => [slate.id, slate.title])));
+    const shares = await this.slates.controller.shareCards(new Map(listing.slates.map((slate) => [slate.id, slate.title])));
 
     const inputs = {
       pendingActions: this.pendingActions(hostedPlans),
@@ -5988,7 +5988,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const listing = provider.listExposedPorts;
     // A port a slate's application holds is called by the slate's title, never by its number.
-    const titles = executorId === 'workspace' ? this.slates.portTitles() : Promise.resolve(new Map<number, string>());
+    const titles = executorId === 'workspace' ? this.slates.controller.portTitles() : Promise.resolve(new Map<number, string>());
 
     return settle(Effect.matchCause(Effect.promise(async () => Promise.all([listing.call(provider), titles])), {
       onSuccess: ([ports, titled]) => ({ ports: ports.map(({ port, name, url }) => ({ port, url, name: name ?? titled.get(port) })) }),
