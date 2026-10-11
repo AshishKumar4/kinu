@@ -140,6 +140,7 @@ export class SessionContext {
 
   /** Selection and membership from one synchronous read boundary; the selection already names the head. */
   snapshot() {
+    this.actor.assertCurrent();
     const head = this.headOf(null) ?? emptyProbe(this.initialize());
 
     return { selection: head.selection, entries: this.keptHead(head).entries };
